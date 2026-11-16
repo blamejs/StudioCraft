@@ -1,13 +1,14 @@
 //! The ffmpeg process behind a recording or a stream.
 //!
-//! ffmpeg reads NV12 frames on its standard input and 48 kHz stereo `f32` samples over a
-//! localhost TCP connection it opens to StudioCraft. Both inputs are timed by count (frames at
+//! ffmpeg reads NV12 frames on its standard input and 48 kHz stereo `f32` samples from a pipe
+//! given to it as its standard output handle (`pipe:1`). Only the ffmpeg process holds the read
+//! end of either pipe, so no other process on the computer can receive the pictures or the
+//! sound. Both inputs are timed by count (frames at
 //! the output rate, samples at 48 kHz), so the writer threads keep the counts in step with the
 //! master clock: a missing frame is filled by repeating the previous one, a late frame is
 //! dropped, and a gap in the audio is filled with silence.
 
 use std::io::{BufRead, BufReader, Read, Write};
-use std::net::{TcpListener, TcpStream};
 use std::path::Path;
 use std::process::{Child, ChildStdin, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -28,8 +29,6 @@ use studiocraft_plugin::{OutputJob, OutputStatus, PluginError};
 /// by repeating frames or inserting silence. The rest of a longer gap in both streams (the
 /// computer was suspended) is skipped in both.
 const MAX_FILL_S: f64 = 5.0;
-/// How long ffmpeg may take to connect for audio.
-const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 /// How long ffmpeg may take to finish its file or stream after the inputs end.
 const FINISH_TIMEOUT: Duration = Duration::from_secs(20);
 /// Idle wait of the writer threads when their queue is empty.
@@ -38,9 +37,8 @@ const IDLE: Duration = Duration::from_millis(2);
 #[derive(Default)]
 struct Shared {
     stop: AtomicBool,
-    /// ffmpeg has exited, so it will not connect for audio any more.
-    exited: AtomicBool,
-    connected: AtomicBool,
+    /// ffmpeg has taken the first audio.
+    started: AtomicBool,
     /// Late frames dropped by the writer (queue overflows are counted by the queue).
     late: AtomicU64,
     failure: Mutex<Option<String>>,
@@ -100,8 +98,9 @@ pub struct Writer {
     finished: Option<OutputStatus>,
 }
 
-/// The arguments before the codec options: both inputs and the stream mapping.
-pub fn input_args(job: &OutputJob, audio_port: u16) -> Vec<String> {
+/// The arguments before the codec options: both inputs and the stream mapping. Video comes on
+/// ffmpeg's standard input and audio on the pipe given to it as its standard output.
+pub fn input_args(job: &OutputJob) -> Vec<String> {
     let v = job.video;
     let mut a: Vec<String> =
         ["-hide_banner", "-nostdin", "-y", "-loglevel", "error", "-progress", "pipe:2", "-stats_period", "0.5"].map(String::from).to_vec();
@@ -109,7 +108,7 @@ pub fn input_args(job: &OutputJob, audio_port: u16) -> Vec<String> {
     a.extend(["-video_size".into(), format!("{}x{}", v.width, v.height), "-framerate".into(), format!("{}/{}", v.fps_num, v.fps_den.max(1))]);
     a.extend(["-thread_queue_size", "64", "-i", "pipe:0"].map(String::from));
     a.extend(["-f".into(), "f32le".into(), "-ar".into(), job.sample_rate.to_string(), "-ac".into(), CHANNELS.to_string()]);
-    a.extend(["-thread_queue_size".into(), "64".into(), "-i".into(), format!("tcp://127.0.0.1:{audio_port}")]);
+    a.extend(["-thread_queue_size", "64", "-i", "pipe:1"].map(String::from));
     a.extend(["-map", "0:v:0", "-map", "1:a:0"].map(String::from));
     a
 }
@@ -126,11 +125,14 @@ impl Writer {
         if !Path::new(&job.ffmpeg).is_file() {
             return Err(PluginError::Unavailable(format!("ffmpeg was not found at {}", job.ffmpeg.display())));
         }
-        let listener = TcpListener::bind(("127.0.0.1", 0)).map_err(|e| PluginError::Failed(format!("no local port for audio: {e}")))?;
-        let port = listener.local_addr().map_err(PluginError::failed)?.port();
+        let (audio_reader, audio_pipe) = std::io::pipe().map_err(|e| PluginError::Failed(format!("no pipe for audio: {e}")))?;
         let mut cmd = ffmpeg::command(&job.ffmpeg);
-        cmd.args(input_args(job, port)).args(codec_args).args(output_args).stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::piped());
-        let mut child = cmd.spawn().map_err(|e| PluginError::Failed(format!("ffmpeg could not be started: {e}")))?;
+        cmd.args(input_args(job)).args(codec_args).args(output_args).stdin(Stdio::piped()).stdout(Stdio::from(audio_reader)).stderr(Stdio::piped());
+        let spawned = cmd.spawn();
+        // The command holds this process's copy of the audio pipe's read end. Dropping it leaves
+        // ffmpeg the only reader, so a write fails once ffmpeg has exited.
+        drop(cmd);
+        let mut child = spawned.map_err(|e| PluginError::Failed(format!("ffmpeg could not be started: {e}")))?;
         let (stdin, stderr) = (child.stdin.take(), child.stderr.take());
         let (Some(stdin), Some(stderr)) = (stdin, stderr) else {
             let _ = child.kill();
@@ -150,7 +152,7 @@ impl Writer {
         let started = started.and_then(|t| {
             threads.push(t);
             let (q, sh) = (Arc::clone(&audio), Arc::clone(&shared));
-            spawn("encoder audio", Box::new(move || write_audio(&listener, &q, &sh, start)))
+            spawn("encoder audio", Box::new(move || write_audio(audio_pipe, &q, &sh, start)))
         });
         let started = started.and_then(|t| {
             threads.push(t);
@@ -161,7 +163,6 @@ impl Writer {
             Ok(t) => threads.push(t),
             Err(e) => {
                 shared.stop.store(true, Ordering::Relaxed);
-                shared.exited.store(true, Ordering::Relaxed);
                 let _ = child.kill();
                 return Err(e);
             }
@@ -190,7 +191,7 @@ impl Writer {
         if let Some(code) = exited {
             return OutputStatus::Failed(self.ended_message(code));
         }
-        if self.shared.connected.load(Ordering::Relaxed) { OutputStatus::Running } else { OutputStatus::Starting }
+        if self.shared.started.load(Ordering::Relaxed) { OutputStatus::Running } else { OutputStatus::Starting }
     }
 
     fn ended_message(&self, code: std::process::ExitStatus) -> String {
@@ -214,15 +215,9 @@ impl Writer {
         let writers_running = |threads: &[JoinHandle<()>]| threads.iter().take(2).any(|t| !t.is_finished());
         let writers_deadline = Instant::now() + FINISH_TIMEOUT;
         while writers_running(&self.threads) && Instant::now() < writers_deadline {
-            if self.child.try_lock().ok().and_then(|mut c| c.try_wait().ok().flatten()).is_some() {
-                self.shared.exited.store(true, Ordering::Relaxed);
-            }
             std::thread::sleep(Duration::from_millis(20));
         }
         let stuck = writers_running(&self.threads);
-        if stuck {
-            self.shared.exited.store(true, Ordering::Relaxed);
-        }
         if stuck && let Ok(mut c) = self.child.lock() {
             let _ = c.kill();
             let _ = c.wait();
@@ -395,32 +390,8 @@ fn write_video(mut stdin: ChildStdin, q: &Fifo<Arc<PooledFrame>>, shared: &Share
     // Dropping stdin ends ffmpeg's video input.
 }
 
-fn accept(listener: &TcpListener, shared: &Shared) -> Option<TcpStream> {
-    listener.set_nonblocking(true).ok()?;
-    // A stop does not end the wait: ffmpeg needs the audio connection to finish a short file.
-    let deadline = Instant::now() + CONNECT_TIMEOUT;
-    while Instant::now() < deadline && !shared.exited.load(Ordering::Relaxed) {
-        match listener.accept() {
-            Ok((s, _)) => {
-                let _ = s.set_nonblocking(false);
-                let _ = s.set_nodelay(true);
-                return Some(s);
-            }
-            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => std::thread::sleep(Duration::from_millis(5)),
-            Err(_) => return None,
-        }
-    }
-    None
-}
-
-fn write_audio(listener: &TcpListener, q: &Fifo<PooledBlock>, shared: &Shared, start: Tick) {
-    let Some(mut sock) = accept(listener, shared) else {
-        if !shared.stop.load(Ordering::Relaxed) {
-            shared.fail("ffmpeg did not connect for audio".into());
-        }
-        return;
-    };
-    shared.connected.store(true, Ordering::Relaxed);
+/// Writes the audio blocks to `sink`, the write end of ffmpeg's audio pipe, until a stop.
+fn write_audio(mut sink: impl Write, q: &Fifo<PooledBlock>, shared: &Shared, start: Tick) {
     let rate = f64::from(SAMPLE_RATE);
     let mut written: i64 = 0;
     let mut bytes: Vec<u8> = Vec::with_capacity(BLOCK_FRAMES * CHANNELS * 4);
@@ -438,7 +409,7 @@ fn write_audio(listener: &TcpListener, q: &Fifo<PooledBlock>, shared: &Shared, s
         let Some(mut gap) = audio_step(secs, written, frames, rate, shared) else { continue };
         while gap > 0 {
             let frames = gap.min(BLOCK_FRAMES as i64) as usize;
-            if sock.write_all(&silence[..frames * CHANNELS * 4]).is_err() {
+            if sink.write_all(&silence[..frames * CHANNELS * 4]).is_err() {
                 shared.fail("ffmpeg stopped reading audio".into());
                 return;
             }
@@ -447,14 +418,15 @@ fn write_audio(listener: &TcpListener, q: &Fifo<PooledBlock>, shared: &Shared, s
         }
         bytes.clear();
         bytes.extend(block.samples.iter().flat_map(|s| s.to_le_bytes()));
-        if sock.write_all(&bytes).is_err() {
+        if sink.write_all(&bytes).is_err() {
             shared.fail("ffmpeg stopped reading audio".into());
             return;
         }
+        shared.started.store(true, Ordering::Relaxed);
         written += (block.samples.len() / CHANNELS) as i64;
     }
-    let _ = sock.flush();
-    let _ = sock.shutdown(std::net::Shutdown::Write);
+    // Dropping the write end ends ffmpeg's audio input.
+    let _ = sink.flush();
 }
 
 fn read_log(stderr: impl Read, shared: &Shared, stats: &EncoderStats) {
@@ -593,6 +565,44 @@ mod tests {
         read_log(&b"rtmp://x/app/live_abc123: Connection refused\n"[..], &shared, &stats);
         assert_eq!(shared.last_message.lock().unwrap().as_str(), "rtmp://x/app/***: Connection refused");
         assert_eq!(redact("no key here", ""), "no key here");
+    }
+
+    #[test]
+    fn audio_reaches_ffmpeg_on_a_pipe_and_no_port_is_opened() {
+        let x264 = crate::encoders::all().into_iter().next().unwrap();
+        let job = OutputJob {
+            video: studiocraft_plugin::VideoFormat { width: 64, height: 48, fps_num: 10, fps_den: 1, pixel: PixelFormat::Nv12 },
+            sample_rate: SAMPLE_RATE,
+            video_encoder: Arc::new(x264),
+            video_encoder_settings: studiocraft_plugin::Settings::new(),
+            rate: studiocraft_plugin::RateControl::Bitrate { kbps: 500, keyframe_s: 2 },
+            audio_bitrate_kbps: 128,
+            ffmpeg: "ffmpeg".into(),
+            stats: Arc::new(EncoderStats::default()),
+            start: Tick(0),
+        };
+        let args = input_args(&job);
+        let inputs: Vec<&str> = args.windows(2).filter(|w| w[0] == "-i").map(|w| w[1].as_str()).collect();
+        assert_eq!(inputs, ["pipe:0", "pipe:1"]);
+        assert!(!args.iter().any(|a| a.contains("tcp:") || a.contains("udp:") || a.contains("127.0.0.1")), "{args:?}");
+    }
+
+    #[test]
+    fn audio_is_written_to_the_pipe_it_is_given() {
+        let shared = Shared::default();
+        let q = Fifo::new(4);
+        let blocks = studiocraft_media::audio::block_pool();
+        let mut block = blocks.take();
+        block.samples.clear();
+        block.samples.extend((0..BLOCK_FRAMES * CHANNELS).map(|i| i as f32));
+        block.pts = Tick(0);
+        q.push(block);
+        shared.stop.store(true, Ordering::Relaxed);
+        let mut sink = Vec::new();
+        write_audio(&mut sink, &q, &shared, Tick(0));
+        assert_eq!(sink.len(), BLOCK_FRAMES * CHANNELS * 4);
+        assert_eq!(sink[4..8], 1.0f32.to_le_bytes());
+        assert!(shared.started.load(Ordering::Relaxed));
     }
 
     #[test]
