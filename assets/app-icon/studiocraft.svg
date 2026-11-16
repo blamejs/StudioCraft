@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <title>StudioCraft</title>
+  <defs>
+    <linearGradient id="field" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#26282f"/>
+      <stop offset="1" stop-color="#15161a"/>
+    </linearGradient>
+  </defs>
+  <rect x="0" y="0" width="512" height="512" rx="112" fill="url(#field)"/>
+  <rect x="96" y="116" width="320" height="224" rx="40" fill="none" stroke="#efe9dc" stroke-width="28"/>
+  <path d="M240 340 h32 v40 h-32 z" fill="#efe9dc"/>
+  <rect x="180" y="370" width="152" height="26" rx="13" fill="#efe9dc"/>
+  <circle cx="256" cy="228" r="48" fill="#d9483b"/>
+  <path d="M169.4 178 A100 100 0 0 0 169.4 278" fill="none" stroke="#efe9dc" stroke-width="22" stroke-linecap="round"/>
+  <path d="M342.6 178 A100 100 0 0 1 342.6 278" fill="none" stroke="#efe9dc" stroke-width="22" stroke-linecap="round"/>
+</svg>

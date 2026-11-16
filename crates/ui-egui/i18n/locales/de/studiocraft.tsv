@@ -1,0 +1,268 @@
+# StudioCraft, German.
+# Columns: context, source text, translation. Rows not listed here show in English.
+@id	language.name	Deutsch
+	`{shortcut}`: {error}	`{shortcut}`: {error}
+	A recording or stream is running. Exiting stops it; a recording is finished and saved first.	Eine Aufnahme oder ein Stream läuft. Beim Beenden wird er gestoppt; eine Aufnahme wird vorher abgeschlossen und gespeichert.
+	About StudioCraft	Über StudioCraft
+	About {app}	Über {app}
+	Add	Hinzufügen
+	Add a filter to change how this source looks or sounds.	Mit einem Filter ändern Sie, wie diese Quelle aussieht oder klingt.
+	Add a scene	Szene hinzufügen
+	Add a source	Quelle hinzufügen
+	Add Scene	Szene hinzufügen
+	Alignment	Ausrichtung
+	Apply	Anwenden
+	Attack (ms)	Ansprechzeit (ms)
+	Audio bitrate	Audio-Bitrate
+	Audio input capture	Audioeingang aufnehmen
+	Audio Mixer	Audiomixer
+	Audio output capture	Audioausgang aufnehmen
+	Audio source actions	Aktionen für Audioquellen
+	available	verfügbar
+	Available Encoders	Verfügbare Encoder
+	Background	Hintergrund
+	Brightness	Helligkeit
+	Browse…	Durchsuchen…
+	Cancel	Abbrechen
+	Canvas size	Leinwandgröße
+	Capture rate (frames per second)	Aufnahmerate (Bilder pro Sekunde)
+	Center	Mitte
+	Center to Screen	Auf dem Bildschirm zentrieren
+	Check for updates at start	Beim Start nach Updates suchen
+	Check for Updates…	Nach Updates suchen…
+	Close	Schließen
+	Close below (dB)	Schließen unter (dB)
+	Color	Farbe
+	Color correction	Farbkorrektur
+	Community	Community
+	Contrast	Kontrast
+	CPU usage preset (faster uses less CPU)	CPU-Voreinstellung (schneller braucht weniger CPU)
+	Credits	Mitwirkende
+	Cut	Schnitt
+	Cut to Program	Schnitt zum Programm
+	Default	Standard
+	Defaults	Standardwerte
+	Device	Gerät
+	Direction	Richtung
+	Discord Server	Discord-Server
+	Display	Bildschirm
+	Display capture	Bildschirmaufnahme
+	dropped {dropped}  lagged {lagged}	verworfen {dropped}  verspätet {lagged}
+	Duplicate	Duplizieren
+	Duplicate…	Duplizieren…
+	Duration	Dauer
+	Edit	Bearbeiten
+	Enabled	Aktiviert
+	Encoder queue	Encoder-Warteschlange
+	Ending Stream…	Stream wird beendet…
+	Existing Source	Vorhandene Quelle
+	Exit	Beenden
+	Exit StudioCraft?	StudioCraft beenden?
+	Export…	Exportieren…
+	Fade	Überblenden
+	Fade over 300 ms	Über 300 ms überblenden
+	Fade through color	Über eine Farbe überblenden
+	Failed: {error}	Fehlgeschlagen: {error}
+	ffmpeg (set its location in Settings › Output) was not found	ffmpeg wurde nicht gefunden (den Ort unter Einstellungen › Ausgabe festlegen)
+	ffmpeg on the PATH	ffmpeg aus dem PATH
+	ffmpeg program	ffmpeg-Programm
+	File	Datei
+	Filters for '{name}'	Filter für „{name}“
+	Filters…	Filter…
+	Finishing Recording…	Aufnahme wird abgeschlossen…
+	Fit to Screen	An den Bildschirm anpassen
+	Font	Schrift
+	Font family	Schriftfamilie
+	Format	Format
+	Frame time (average)	Bildzeit (Durchschnitt)
+	Frame time (last)	Bildzeit (zuletzt)
+	Frames drawn	Gezeichnete Bilder
+	Frames drawn late	Verspätet gezeichnete Bilder
+	Frames encoded	Kodierte Bilder
+	Frames per second	Bilder pro Sekunde
+	Frames skipped by encoders	Von Encodern übersprungene Bilder
+	Free software under the MIT or Apache 2.0 license.	Freie Software unter der MIT- oder Apache-2.0-Lizenz.
+	From the bottom	Von unten
+	From the left	Von links
+	From the right	Von rechts
+	From the top	Von oben
+	Full-Screen Interface	Vollbildoberfläche
+	Gain	Verstärkung
+	Gain (dB)	Verstärkung (dB)
+	General	Allgemein
+	Go Live	Live gehen
+	Height	Höhe
+	Help	Hilfe
+	Hide	Ausblenden
+	High	Hoch
+	Hold (ms)	Haltezeit (ms)
+	Hotkeys	Tastenkürzel
+	Image	Bild
+	Import…	Importieren…
+	Key color	Schlüsselfarbe
+	Key color spill reduction	Farbsaum der Schlüsselfarbe verringern
+	Keyframe interval	Keyframe-Abstand
+	Language	Sprache
+	Left	Links
+	Licenses	Lizenzen
+	LIVE	LIVE
+	Live, {time}	Live, {time}
+	Lock (it can't be moved in the preview)	Sperren (in der Vorschau nicht verschiebbar)
+	Lock Preview	Vorschau sperren
+	Loop	Endlos abspielen
+	Maximize	Maximieren
+	Media file	Mediendatei
+	Media files	Mediendateien
+	Minimize	Minimieren
+	Move the scene down	Szene nach unten verschieben
+	Move the scene up	Szene nach oben verschieben
+	Move the source down	Quelle nach unten verschieben
+	Move the source up	Quelle nach oben verschieben
+	Mute	Stumm
+	Name	Name
+	New Profile	Neues Profil
+	New…	Neu…
+	No audio sources are heard in this scene.	In dieser Szene ist keine Audioquelle zu hören.
+	No contributors listed yet	Noch keine Mitwirkenden eingetragen
+	No filters yet.	Noch keine Filter.
+	No graphics device: the preview is off	Kein Grafikgerät: Die Vorschau ist aus
+	No sources in this scene. Add one with +.	Diese Szene hat keine Quellen. Fügen Sie eine mit + hinzu.
+	Noise gate	Rauschsperre
+	not in this ffmpeg	nicht in diesem ffmpeg
+	OK	OK
+	Opacity (%)	Deckkraft (%)
+	Open above (dB)	Öffnen über (dB)
+	Order	Reihenfolge
+	Outline color	Konturfarbe
+	Outline width	Konturbreite
+	Output	Ausgabe
+	Output Controls	Ausgabesteuerung
+	Output size	Ausgabegröße
+	Picture file	Bilddatei
+	Pictures	Bilder
+	Preferences…	Einstellungen…
+	Preset (higher is slower and better)	Voreinstellung (höher ist langsamer und besser)
+	Presets	Voreinstellungen
+	Preview: {name}	Vorschau: {name}
+	Primary display	Hauptbildschirm
+	Profile	Profil
+	Program: {name}	Programm: {name}
+	Properties	Eigenschaften
+	Properties for '{name}'	Eigenschaften von „{name}“
+	Properties…	Eigenschaften…
+	Quality	Qualität
+	Quit	Beenden
+	Read the displays, windows and devices again	Bildschirme, Fenster und Geräte neu einlesen
+	REC	REC
+	Record	Aufnehmen
+	Record and stream scenes built from your screen, windows, cameras, pictures, text and sound.	Nehmen Sie Szenen aus Bildschirm, Fenstern, Kameras, Bildern, Text und Ton auf und streamen Sie sie.
+	Recording	Aufnahme
+	Recording folder	Aufnahmeordner
+	Recording, {time}	Aufnahme, {time}
+	Recordings	Aufnahmen
+	Redo	Wiederholen
+	Refresh Lists	Listen aktualisieren
+	Release (ms)	Abklingzeit (ms)
+	Remove	Entfernen
+	Remove Selected Source	Ausgewählte Quelle entfernen
+	Remove the selected scene	Ausgewählte Szene entfernen
+	Remove the selected source from the scene	Ausgewählte Quelle aus der Szene entfernen
+	Rename	Umbenennen
+	Rename…	Umbenennen…
+	Report an Issue	Problem melden
+	Reset Docks	Docks zurücksetzen
+	Reset Transform	Transformation zurücksetzen
+	Resize the dock strip	Größe des Dock-Bereichs ändern
+	Resize the docks	Größe der Docks ändern
+	Restore	Wiederherstellen
+	Right	Rechts
+	Rotate 90° Clockwise	90° im Uhrzeigersinn drehen
+	Rotate 90° Counterclockwise	90° gegen den Uhrzeigersinn drehen
+	Running	Läuft
+	Saturation	Sättigung
+	Scene Collection	Szenensammlung
+	Scene {n}	Szene {n}
+	Scenes	Szenen
+	Send the preview to the program	Vorschau ins Programm übernehmen
+	Server	Server
+	Settings	Einstellungen
+	Show	Einblenden
+	Show Recordings	Aufnahmen anzeigen
+	Show Scene {n}	Szene {n} zeigen
+	Show Settings Folder	Einstellungsordner anzeigen
+	Similarity	Ähnlichkeit
+	Size	Größe
+	Smoothness	Glättung
+	Software (x264)	Software (x264)
+	Source Code	Quellcode
+	Source Properties	Quelleneigenschaften
+	Sources	Quellen
+	Start or Stop Recording	Aufnahme starten oder stoppen
+	Start or Stop Streaming	Stream starten oder stoppen
+	Start Recording	Aufnahme starten
+	Start Streaming	Stream starten
+	Starting…	Wird gestartet…
+	Stats	Statistik
+	Status Bar	Statusleiste
+	Stop and Exit	Stoppen und beenden
+	Stop Recording	Aufnahme stoppen
+	Stop Streaming	Stream stoppen
+	Stopped	Gestoppt
+	Stopping…	Wird gestoppt…
+	Stream	Stream
+	Stream key	Stream-Schlüssel
+	Stretch to Screen	Auf den Bildschirm strecken
+	Studio	Studio
+	Studio Mode	Studiomodus
+	StudioCraft is available under either license, at your option.	StudioCraft steht nach Ihrer Wahl unter einer der beiden Lizenzen.
+	Swipe	Wischen
+	Switch at once	Sofort umschalten
+	System ({language})	System ({language})
+	Takes effect the next time StudioCraft starts.	Wirkt beim nächsten Start von StudioCraft.
+	Text	Text
+	The interface fonts Inter and JetBrains Mono are under the SIL Open Font License 1.1.	Die Schriften der Oberfläche, Inter und JetBrains Mono, stehen unter der SIL Open Font License 1.1.
+	The licenses of the third-party crates StudioCraft uses are checked by `cargo xtask licenses`.	Die Lizenzen der Crates von Drittanbietern, die StudioCraft nutzt, prüft `cargo xtask licenses`.
+	This filter has no settings.	Dieser Filter hat keine Einstellungen.
+	this is not supported on this system yet	das wird auf diesem System noch nicht unterstützt
+	Tools	Werkzeuge
+	Transition	Übergang
+	Transition Controls	Übergangssteuerung
+	Transition settings	Übergangseinstellungen
+	Transition to Program	Übergang zum Programm
+	Type shortcuts such as Ctrl+1 or Shift+F5; separate several with commas.	Geben Sie Kürzel wie Ctrl+1 oder Shift+F5 ein; trennen Sie mehrere durch Kommas.
+	Undo	Rückgängig
+	Updates	Updates
+	Use system title bar	Titelleiste des Systems verwenden
+	Username	Benutzername
+	Version {version} ({os} {arch})	Version {version} ({os} {arch})
+	Video	Video
+	Video bitrate	Video-Bitrate
+	Video encoder	Video-Encoder
+	Video settings can't change while recording or streaming.	Während einer Aufnahme oder eines Streams lassen sich die Videoeinstellungen nicht ändern.
+	View	Ansicht
+	Website	Website
+	Width	Breite
+	Window	Fenster
+	Window capture	Fensteraufnahme
+	Your Videos folder	Ihr Videos-Ordner
+	{encoder} (not in this ffmpeg)	{encoder} (nicht in diesem ffmpeg)
+	{program} did not report its version	{program} hat keine Version gemeldet
+	{status} · {mb} MB	{status} · {mb} MB
+@msg	A plug-in could not be loaded: {error}	Ein Plug-in konnte nicht geladen werden: {error}
+@msg	Could not check for updates: {error}	Die Suche nach Updates ist fehlgeschlagen: {error}
+@msg	Exported the scene collection to {path}	Szenensammlung nach {path} exportiert
+@msg	Imported the scene collection `{name}`	Szenensammlung `{name}` importiert
+@msg	No file dialog could be shown: {error}	Es konnte kein Dateidialog angezeigt werden: {error}
+@msg	Recording saved to {path}	Aufnahme gespeichert unter {path}
+@msg	The compositor thread could not start: {error}	Der Compositor-Thread konnte nicht starten: {error}
+@msg	The preferences could not be saved: {error}	Die Einstellungen konnten nicht gespeichert werden: {error}
+@msg	The profile could not be saved: {error}	Das Profil konnte nicht gespeichert werden: {error}
+@msg	The recording could not be finished	Die Aufnahme konnte nicht abgeschlossen werden
+@msg	The recording could not be finished: {error}	Die Aufnahme konnte nicht abgeschlossen werden: {error}
+@msg	The recording stopped: {error}	Die Aufnahme wurde abgebrochen: {error}
+@msg	The scene collection could not be saved: {error}	Die Szenensammlung konnte nicht gespeichert werden: {error}
+@msg	The stream could not be finished	Der Stream konnte nicht abgeschlossen werden
+@msg	The stream could not be finished: {error}	Der Stream konnte nicht abgeschlossen werden: {error}
+@msg	The stream ended	Der Stream wurde beendet
+@msg	The stream stopped: {error}	Der Stream wurde abgebrochen: {error}
+menu	Transform	Transformieren

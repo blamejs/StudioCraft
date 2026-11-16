@@ -1,0 +1,22 @@
+[package]
+name = "studiocraft-cli"
+description = "StudioCraft command line: control client, MCP server, scene collection checks and a timing run"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[[bin]]
+name = "studiocraft-cli"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+studiocraft-model = { workspace = true }
+studiocraft-engine = { workspace = true }
+studiocraft-render = { workspace = true }
+studiocraft-studio = { workspace = true }
+studiocraft-mcp = { workspace = true }
+serde_json = { workspace = true }

@@ -1,0 +1,28 @@
+[package]
+name = "studiocraft-mcp"
+description = "StudioCraft's MCP server: tools and resources over an in-process studio or a running app's control channel"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+studiocraft-model.workspace = true
+studiocraft-engine.workspace = true
+studiocraft-render.workspace = true
+studiocraft-studio.workspace = true
+craft-mcp.workspace = true
+craft-jsonrpc.workspace = true
+craft-control-protocol.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+log.workspace = true
+# Pictures in render_preview results.
+base64.workspace = true
+
+[dev-dependencies]
+# Reading the pictures render_preview returns.
+image.workspace = true
+
+[lints]
+workspace = true

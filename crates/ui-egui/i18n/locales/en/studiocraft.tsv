@@ -1,0 +1,302 @@
+# StudioCraft's English source text: one row per string the window looks up.
+# Columns: context, source text, translation (here the source text again).
+# This catalog is not embedded. The other locales translate these rows.
+	`{shortcut}`: {error}	`{shortcut}`: {error}
+	A recording or stream is running. Exiting stops it; a recording is finished and saved first.	A recording or stream is running. Exiting stops it; a recording is finished and saved first.
+	About StudioCraft	About StudioCraft
+	About {app}	About {app}
+	Add	Add
+	Add a filter to change how this source looks or sounds.	Add a filter to change how this source looks or sounds.
+	Add a scene	Add a scene
+	Add a source	Add a source
+	Add Scene	Add Scene
+	Alignment	Alignment
+	AMD AMF H.264	AMD AMF H.264
+	Apache 2.0	Apache 2.0
+	Apply	Apply
+	Attack (ms)	Attack (ms)
+	Audio bitrate	Audio bitrate
+	Audio input capture	Audio input capture
+	Audio Mixer	Audio Mixer
+	Audio output capture	Audio output capture
+	Audio source actions	Audio source actions
+	AV1	AV1
+	available	available
+	Available Encoders	Available Encoders
+	Background	Background
+	Brightness	Brightness
+	Browse…	Browse…
+	Cancel	Cancel
+	Canvas size	Canvas size
+	Capture rate (frames per second)	Capture rate (frames per second)
+	Center	Center
+	Center to Screen	Center to Screen
+	Check for updates at start	Check for updates at start
+	Check for Updates…	Check for Updates…
+	Chroma key	Chroma key
+	Close	Close
+	Close below (dB)	Close below (dB)
+	Color	Color
+	Color correction	Color correction
+	Community	Community
+	Contrast	Contrast
+	CPU usage preset (faster uses less CPU)	CPU usage preset (faster uses less CPU)
+	Credits	Credits
+	Cut	Cut
+	Cut to Program	Cut to Program
+	Default	Default
+	Defaults	Defaults
+	Device	Device
+	Direction	Direction
+	Discord Server	Discord Server
+	Display	Display
+	Display capture	Display capture
+	Docks	Docks
+	dropped {dropped}  lagged {lagged}	dropped {dropped}  lagged {lagged}
+	Duplicate	Duplicate
+	Duplicate…	Duplicate…
+	Duration	Duration
+	Edit	Edit
+	Enabled	Enabled
+	Encoder queue	Encoder queue
+	Ending Stream…	Ending Stream…
+	Existing Source	Existing Source
+	Exit	Exit
+	Exit StudioCraft?	Exit StudioCraft?
+	Export…	Export…
+	Fade	Fade
+	Fade over 300 ms	Fade over 300 ms
+	Fade through color	Fade through color
+	Failed: {error}	Failed: {error}
+	fast	fast
+	faster	faster
+	ffmpeg (set its location in Settings › Output) was not found	ffmpeg (set its location in Settings › Output) was not found
+	ffmpeg on the PATH	ffmpeg on the PATH
+	ffmpeg program	ffmpeg program
+	File	File
+	Filters for '{name}'	Filters for '{name}'
+	Filters…	Filters…
+	Finishing Recording…	Finishing Recording…
+	Fit to Screen	Fit to Screen
+	Font	Font
+	Font family	Font family
+	Format	Format
+	Frame time (average)	Frame time (average)
+	Frame time (last)	Frame time (last)
+	Frames drawn	Frames drawn
+	Frames drawn late	Frames drawn late
+	Frames encoded	Frames encoded
+	Frames per second	Frames per second
+	Frames skipped by encoders	Frames skipped by encoders
+	Free software under the MIT or Apache 2.0 license.	Free software under the MIT or Apache 2.0 license.
+	From the bottom	From the bottom
+	From the left	From the left
+	From the right	From the right
+	From the top	From the top
+	Full-Screen Interface	Full-Screen Interface
+	Gain	Gain
+	Gain (dB)	Gain (dB)
+	Gamma	Gamma
+	General	General
+	Go Live	Go Live
+	H.264	H.264
+	Height	Height
+	Help	Help
+	Hide	Hide
+	High	High
+	Hold (ms)	Hold (ms)
+	Hotkeys	Hotkeys
+	Image	Image
+	Import…	Import…
+	Intel Quick Sync H.264	Intel Quick Sync H.264
+	Inter (SIL OFL 1.1)	Inter (SIL OFL 1.1)
+	JetBrains Mono (SIL OFL 1.1)	JetBrains Mono (SIL OFL 1.1)
+	kbps	kbps
+	Key color	Key color
+	Key color spill reduction	Key color spill reduction
+	Keyframe interval	Keyframe interval
+	Language	Language
+	Left	Left
+	Licenses	Licenses
+	LIVE	LIVE
+	Live, {time}	Live, {time}
+	Lock (it can't be moved in the preview)	Lock (it can't be moved in the preview)
+	Lock Preview	Lock Preview
+	Loop	Loop
+	Maximize	Maximize
+	Media file	Media file
+	Media files	Media files
+	medium	medium
+	Minimize	Minimize
+	MIT	MIT
+	Move the scene down	Move the scene down
+	Move the scene up	Move the scene up
+	Move the source down	Move the source down
+	Move the source up	Move the source up
+	ms	ms
+	Mute	Mute
+	Name	Name
+	New Profile	New Profile
+	New…	New…
+	No audio sources are heard in this scene.	No audio sources are heard in this scene.
+	No contributors listed yet	No contributors listed yet
+	No filters yet.	No filters yet.
+	No graphics device: the preview is off	No graphics device: the preview is off
+	No sources in this scene. Add one with +.	No sources in this scene. Add one with +.
+	Noise gate	Noise gate
+	not in this ffmpeg	not in this ffmpeg
+	NVIDIA NVENC H.264	NVIDIA NVENC H.264
+	NVIDIA NVENC HEVC	NVIDIA NVENC HEVC
+	OK	OK
+	Opacity (%)	Opacity (%)
+	Open above (dB)	Open above (dB)
+	Order	Order
+	Outline color	Outline color
+	Outline width	Outline width
+	Output	Output
+	Output Controls	Output Controls
+	Output size	Output size
+	P1	P1
+	P2	P2
+	P3	P3
+	P4	P4
+	P5	P5
+	P6	P6
+	P7	P7
+	Picture file	Picture file
+	Pictures	Pictures
+	Preferences…	Preferences…
+	Preset (higher is slower and better)	Preset (higher is slower and better)
+	Presets	Presets
+	Preview: {name}	Preview: {name}
+	Primary display	Primary display
+	Profile	Profile
+	Program: {name}	Program: {name}
+	Properties	Properties
+	Properties for '{name}'	Properties for '{name}'
+	Properties…	Properties…
+	Quality	Quality
+	Quit	Quit
+	Read the displays, windows and devices again	Read the displays, windows and devices again
+	REC	REC
+	Record	Record
+	Record and stream scenes built from your screen, windows, cameras, pictures, text and sound.	Record and stream scenes built from your screen, windows, cameras, pictures, text and sound.
+	Recording	Recording
+	Recording folder	Recording folder
+	Recording, {time}	Recording, {time}
+	Recordings	Recordings
+	Redo	Redo
+	Refresh Lists	Refresh Lists
+	Release (ms)	Release (ms)
+	Remove	Remove
+	Remove Selected Source	Remove Selected Source
+	Remove the selected scene	Remove the selected scene
+	Remove the selected source from the scene	Remove the selected source from the scene
+	Rename	Rename
+	Rename…	Rename…
+	Report an Issue	Report an Issue
+	Reset Docks	Reset Docks
+	Reset Transform	Reset Transform
+	Resize the dock strip	Resize the dock strip
+	Resize the docks	Resize the docks
+	Restore	Restore
+	Right	Right
+	Rotate 90° Clockwise	Rotate 90° Clockwise
+	Rotate 90° Counterclockwise	Rotate 90° Counterclockwise
+	Running	Running
+	s	s
+	Saturation	Saturation
+	Scene Collection	Scene Collection
+	Scene {n}	Scene {n}
+	Scenes	Scenes
+	Send the preview to the program	Send the preview to the program
+	Server	Server
+	Settings	Settings
+	Show	Show
+	Show Recordings	Show Recordings
+	Show Scene {n}	Show Scene {n}
+	Show Settings Folder	Show Settings Folder
+	Similarity	Similarity
+	Size	Size
+	Smoothness	Smoothness
+	Software (x264)	Software (x264)
+	Source Code	Source Code
+	Source Properties	Source Properties
+	Sources	Sources
+	Start or Stop Recording	Start or Stop Recording
+	Start or Stop Streaming	Start or Stop Streaming
+	Start Recording	Start Recording
+	Start Streaming	Start Streaming
+	Starting…	Starting…
+	Stats	Stats
+	Status Bar	Status Bar
+	Stop and Exit	Stop and Exit
+	Stop Recording	Stop Recording
+	Stop Streaming	Stop Streaming
+	Stopped	Stopped
+	Stopping…	Stopping…
+	Stream	Stream
+	Stream key	Stream key
+	Stretch to Screen	Stretch to Screen
+	Studio	Studio
+	Studio Mode	Studio Mode
+	StudioCraft is available under either license, at your option.	StudioCraft is available under either license, at your option.
+	superfast	superfast
+	Swipe	Swipe
+	Switch at once	Switch at once
+	System ({language})	System ({language})
+	Takes effect the next time StudioCraft starts.	Takes effect the next time StudioCraft starts.
+	Text	Text
+	The interface fonts Inter and JetBrains Mono are under the SIL Open Font License 1.1.	The interface fonts Inter and JetBrains Mono are under the SIL Open Font License 1.1.
+	The licenses of the third-party crates StudioCraft uses are checked by `cargo xtask licenses`.	The licenses of the third-party crates StudioCraft uses are checked by `cargo xtask licenses`.
+	This filter has no settings.	This filter has no settings.
+	this is not supported on this system yet	this is not supported on this system yet
+	Tools	Tools
+	Transition	Transition
+	Transition Controls	Transition Controls
+	Transition settings	Transition settings
+	Transition to Program	Transition to Program
+	Type shortcuts such as Ctrl+1 or Shift+F5; separate several with commas.	Type shortcuts such as Ctrl+1 or Shift+F5; separate several with commas.
+	ultrafast	ultrafast
+	Undo	Undo
+	Updates	Updates
+	Use system title bar	Use system title bar
+	Username	Username
+	Version {version} ({os} {arch})	Version {version} ({os} {arch})
+	veryfast	veryfast
+	Video	Video
+	Video bitrate	Video bitrate
+	Video encoder	Video encoder
+	Video settings can't change while recording or streaming.	Video settings can't change while recording or streaming.
+	View	View
+	Website	Website
+	Width	Width
+	Window	Window
+	Window capture	Window capture
+	Windows Media Foundation H.264	Windows Media Foundation H.264
+	Your Videos folder	Your Videos folder
+	{db} dB	{db} dB
+	{encoder} (not in this ffmpeg)	{encoder} (not in this ffmpeg)
+	{fps} fps  {ms} ms	{fps} fps  {ms} ms
+	{ms} ms	{ms} ms
+	{n} kbps	{n} kbps
+	{program} did not report its version	{program} did not report its version
+	{status} · {mb} MB	{status} · {mb} MB
+@msg	A plug-in could not be loaded: {error}	A plug-in could not be loaded: {error}
+@msg	Could not check for updates: {error}	Could not check for updates: {error}
+@msg	Exported the scene collection to {path}	Exported the scene collection to {path}
+@msg	Imported the scene collection `{name}`	Imported the scene collection `{name}`
+@msg	No file dialog could be shown: {error}	No file dialog could be shown: {error}
+@msg	Recording saved to {path}	Recording saved to {path}
+@msg	The compositor thread could not start: {error}	The compositor thread could not start: {error}
+@msg	The preferences could not be saved: {error}	The preferences could not be saved: {error}
+@msg	The profile could not be saved: {error}	The profile could not be saved: {error}
+@msg	The recording could not be finished	The recording could not be finished
+@msg	The recording could not be finished: {error}	The recording could not be finished: {error}
+@msg	The recording stopped: {error}	The recording stopped: {error}
+@msg	The scene collection could not be saved: {error}	The scene collection could not be saved: {error}
+@msg	The stream could not be finished	The stream could not be finished
+@msg	The stream could not be finished: {error}	The stream could not be finished: {error}
+@msg	The stream ended	The stream ended
+@msg	The stream stopped: {error}	The stream stopped: {error}
+menu	Transform	Transform

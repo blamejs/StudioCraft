@@ -1,0 +1,15 @@
+[package]
+name = "studiocraft-model"
+description = "StudioCraft's data model: scenes, sources, scene items, transforms, profiles and settings schemas, with versioned serialization"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }

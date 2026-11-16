@@ -1,0 +1,28 @@
+[package]
+name = "studiocraft-render"
+description = "The GPU compositor: draws scenes, filters and transitions, and converts frames for encoders"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+studiocraft-model.workspace = true
+studiocraft-media.workspace = true
+studiocraft-plugin.workspace = true
+wgpu.workspace = true
+bytemuck.workspace = true
+pollster.workspace = true
+crossbeam-queue.workspace = true
+thiserror.workspace = true
+log.workspace = true
+
+[dev-dependencies]
+criterion.workspace = true
+
+[[bench]]
+name = "compositor"
+harness = false
+
+[lints]
+workspace = true

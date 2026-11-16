@@ -1,0 +1,24 @@
+[package]
+name = "studiocraft-sources"
+description = "Built-in sources and filters: color, image, text, media file, display and window capture, audio devices"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+studiocraft-model.workspace = true
+studiocraft-media.workspace = true
+studiocraft-plugin.workspace = true
+studiocraft-platform.workspace = true
+craft-image-codecs.workspace = true
+craft-font-catalog.workspace = true
+ab_glyph.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+image.workspace = true
+studiocraft-render.workspace = true
+
+[lints]
+workspace = true

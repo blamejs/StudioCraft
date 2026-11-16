@@ -1,0 +1,13 @@
+# Names for the About window.
+#
+# Everyone who contributes is credited by GitHub username. To show a name as well, add your own
+# entry below in your own pull request. Never add an entry for someone else.
+#
+#   [people.your-github-username]
+#   real_name = "Your Name"        # shown when the viewer picks "Real name"
+#   display_name = "Nickname"      # shown when the viewer picks "Display name"
+#   sync_github_name = true        # use the name on your public GitHub profile as display name
+#
+# To remove your names, delete your entry in a pull request.
+
+[people]

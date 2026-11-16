@@ -1,0 +1,48 @@
+[package]
+name = "studiocraft-ui-egui"
+description = "StudioCraft's window: menus, preview, docks, properties and settings, on egui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+studiocraft-model = { workspace = true }
+studiocraft-media = { workspace = true }
+studiocraft-plugin = { workspace = true }
+studiocraft-engine = { workspace = true }
+studiocraft-render = { workspace = true }
+studiocraft-platform = { workspace = true }
+studiocraft-studio = { workspace = true }
+egui = { workspace = true }
+egui-wgpu = { workspace = true }
+eframe = { workspace = true, features = ["wgpu", "x11", "wayland"] }
+wgpu = { workspace = true }
+craft-ui = { workspace = true }
+craft-menu = { workspace = true }
+craft-keymap = { workspace = true }
+craft-settings = { workspace = true }
+craft-dialogs = { workspace = true }
+craft-atomic = { workspace = true }
+craft-quit = { workspace = true }
+# Help › Check for Updates, the check at start and the update prompt.
+craft-update = { workspace = true }
+# The menu strip as the title bar when the app draws the window frame.
+craft-window = { workspace = true }
+serde ={ workspace = true }
+serde_json = { workspace = true }
+log = { workspace = true }
+# The face table type for the fonts build.rs embeds from CRAFT_FONTS_DIR.
+craft-fonts-build = { workspace = true }
+# Interface translations, from the catalogs build.rs embeds from i18n/locales and CRAFT_I18N_DIR.
+craft-i18n = { workspace = true }
+
+[build-dependencies]
+# `subset` cuts the CJK interface faces to the characters of the embedded catalogs.
+craft-fonts-build = { workspace = true, features = ["subset"] }
+
+[dev-dependencies]
+egui = { workspace = true, features = ["default_fonts"] }

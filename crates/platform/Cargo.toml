@@ -1,0 +1,20 @@
+[package]
+name = "studiocraft-platform"
+description = "Operating-system services: display, window and audio capture, and finding ffmpeg"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+studiocraft-media.workspace = true
+thiserror.workspace = true
+
+# Capture uses xcap (displays, windows) and cpal (audio devices, and output loopback through WASAPI
+# on Windows). Other systems build without them and report capture as unavailable.
+[target.'cfg(any(windows, target_os = "macos"))'.dependencies]
+xcap.workspace = true
+cpal.workspace = true
+
+[lints]
+workspace = true

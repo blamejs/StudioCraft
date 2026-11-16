@@ -1,0 +1,27 @@
+[package]
+name = "studiocraft-engine"
+description = "StudioCraft engine: commands with stable ids, undo and redo, source threads, the audio mixer thread and the frame scheduler"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+studiocraft-model = { workspace = true }
+studiocraft-media = { workspace = true }
+studiocraft-plugin = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+log = { workspace = true }
+
+[build-dependencies]
+# The contributor table: contributors/people.toml and contributors/contributors.json.
+toml = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+toml = { workspace = true }

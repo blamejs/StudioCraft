@@ -1,0 +1,210 @@
+use std::path::{Path, PathBuf};
+use std::process::Stdio;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+
+use studiocraft_media::Tick;
+use studiocraft_media::audio::{BLOCK_FRAMES, BLOCK_SAMPLES, block_pool};
+use studiocraft_media::clock::tick_of;
+use studiocraft_media::pool::Pool;
+use studiocraft_media::stats::EncoderStats;
+use studiocraft_media::video::{PixelFormat, VideoFrame};
+use studiocraft_platform::ffmpeg;
+use studiocraft_plugin::VideoFormat;
+
+use super::*;
+
+#[test]
+fn stream_urls_join_server_and_key() {
+    assert_eq!(stream_url("rtmp://live.example.com/app/", "abc").unwrap(), "rtmp://live.example.com/app/abc");
+    assert_eq!(stream_url(" rtmps://x/app ", "").unwrap(), "rtmps://x/app");
+    assert!(stream_url("http://x", "k").is_err());
+    assert!(stream_url("rtmp://x", "a b").is_err());
+}
+
+#[test]
+fn a_stream_needs_an_h264_encoder() {
+    use studiocraft_plugin::Encoder;
+    let streamable: Vec<&str> = encoders::all().iter().filter(|e| e.streams()).map(|e| e.id()).collect();
+    assert!(streamable.contains(&"x264") && !streamable.contains(&"nvenc_hevc"), "{streamable:?}");
+    let Some(hevc) = encoders::all().into_iter().find(|e| e.id() == "nvenc_hevc") else { panic!("no HEVC encoder") };
+    let mut j = job(PathBuf::from("no-such-ffmpeg"), RateControl::Bitrate { kbps: 1000, keyframe_s: 2 });
+    j.video_encoder = Arc::new(hevc);
+    let Err(e) = Stream.start(&Settings::new().with("server", "rtmp://127.0.0.1:9/live"), j) else { panic!("the stream started") };
+    assert!(e.to_string().contains("H.264"), "{e}");
+}
+
+#[test]
+fn containers_follow_the_extension() {
+    assert_eq!(container_for(Path::new("a/b.MKV")).unwrap(), "matroska");
+    assert_eq!(container_for(Path::new("b.mp4")).unwrap(), "mp4");
+    assert!(container_for(Path::new("b.avi")).is_err());
+}
+
+#[test]
+fn lossless_recordings_keep_lossless_audio_in_every_container() {
+    assert_eq!(lossless_audio_codec("matroska"), "flac");
+    assert_eq!(lossless_audio_codec("mp4"), "alac");
+    assert_eq!(lossless_audio_codec("mov"), "alac");
+    let Ok(program) = ffmpeg::locate("") else { return };
+    for ext in ["mkv", "mp4", "mov"] {
+        let dir = temp_dir(&format!("lossless-{ext}"));
+        let file = dir.join(format!("take.{ext}"));
+        let mut out =
+            Recording.start(&Settings::new().with("path", file.to_string_lossy().as_ref()), job(program.clone(), RateControl::Lossless)).unwrap();
+        feed(out.as_ref(), 0.5);
+        let r = out.stop();
+        let (_, has_audio) = probe(&program, &file);
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(r.is_ok(), "{ext}: {r:?}");
+        assert!(has_audio, "{ext}");
+    }
+}
+
+fn job(program: PathBuf, rate: RateControl) -> OutputJob {
+    let x264 = encoders::all().into_iter().next().unwrap();
+    OutputJob {
+        video: VideoFormat { width: 64, height: 48, fps_num: 10, fps_den: 1, pixel: PixelFormat::Nv12 },
+        sample_rate: 48_000,
+        video_encoder: Arc::new(x264),
+        video_encoder_settings: Settings::new().with("preset", "ultrafast"),
+        rate,
+        audio_bitrate_kbps: 128,
+        ffmpeg: program,
+        stats: Arc::new(EncoderStats::default()),
+        start: Tick(0),
+    }
+}
+
+/// Feed `seconds` of gray frames at 10 per second and a tone, stamped as the pipeline would.
+fn feed(out: &dyn OutputInstance, seconds: f64) {
+    let frames = Pool::new(8, VideoFrame::default);
+    let blocks = block_pool();
+    let (video, audio) = (out.video(), out.audio());
+    let total_blocks = (seconds * 48_000.0 / BLOCK_FRAMES as f64) as u64;
+    let mut sent_frames = 0u64;
+    for b in 0..total_blocks {
+        let t = b as f64 * BLOCK_FRAMES as f64 / 48_000.0;
+        let mut block = blocks.take();
+        block.samples.clear();
+        block.samples.extend((0..BLOCK_SAMPLES).map(|i| ((i as f32) * 0.05).sin() * 0.2));
+        block.pts = tick_of(Duration::from_secs_f64(t));
+        audio.push(block);
+        while (sent_frames as f64) / 10.0 <= t {
+            let mut f = frames.take();
+            assert!(f.reshape(64, 48, PixelFormat::Nv12));
+            f.data.fill(128);
+            f.pts = tick_of(Duration::from_secs_f64(sent_frames as f64 / 10.0));
+            video.push(Arc::new(f));
+            sent_frames += 1;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
+/// Decoded video frames in `file`, and whether it has audio.
+fn probe(program: &Path, file: &Path) -> (u64, bool) {
+    let count = |map: &str| {
+        let out = ffmpeg::command(program)
+            .args(["-hide_banner", "-v", "error", "-i"])
+            .arg(file)
+            .args(["-map", map, "-f", "null", "-progress", "pipe:1", "-"])
+            .stdin(Stdio::null())
+            .stderr(Stdio::null())
+            .output()
+            .unwrap();
+        let text = String::from_utf8_lossy(&out.stdout).to_string();
+        (out.status.success(), text)
+    };
+    let (ok, text) = count("0:v:0");
+    assert!(ok, "the video decodes");
+    let frames = text.lines().rev().filter_map(|l| l.strip_prefix("frame=")).find_map(|v| v.trim().parse().ok()).unwrap_or(0);
+    (frames, count("0:a:0").0)
+}
+
+fn temp_dir(name: &str) -> PathBuf {
+    let dir = std::env::temp_dir().join(format!("studiocraft-{name}-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    dir
+}
+
+#[test]
+fn records_a_playable_file_with_video_and_audio() {
+    // Machines without ffmpeg pass without checking.
+    let Ok(program) = ffmpeg::locate("") else { return };
+    let dir = temp_dir("record");
+    let file = dir.join("take.mkv");
+    let j = job(program.clone(), RateControl::Quality(23));
+    let stats = Arc::clone(&j.stats);
+    let mut out = Recording.start(&Settings::new().with("path", file.to_string_lossy().as_ref()), j).unwrap();
+    feed(out.as_ref(), 1.5);
+    assert!(matches!(out.status(), OutputStatus::Running), "{:?}", out.status());
+    out.stop().unwrap();
+    assert_eq!(out.status(), OutputStatus::Stopped);
+    let (frames, has_audio) = probe(&program, &file);
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!((13..=17).contains(&frames), "{frames} frames for 1.5 s at 10 per second");
+    assert!(has_audio);
+    assert!(stats.frames.load(std::sync::atomic::Ordering::Relaxed) >= 13);
+}
+
+#[test]
+fn a_recording_stopped_at_once_is_still_finished() {
+    let Ok(program) = ffmpeg::locate("") else { return };
+    let dir = temp_dir("record-at-once");
+    let file = dir.join("take.mkv");
+    let mut out = Recording.start(&Settings::new().with("path", file.to_string_lossy().as_ref()), job(program, RateControl::Quality(23))).unwrap();
+    // A tenth of a second, stopped before ffmpeg has had time to connect for audio.
+    feed(out.as_ref(), 0.1);
+    let r = out.stop();
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(r.is_ok(), "{r:?}");
+}
+
+#[test]
+fn a_bad_destination_is_reported() {
+    let Ok(program) = ffmpeg::locate("") else { return };
+    let j = job(program, RateControl::Bitrate { kbps: 500, keyframe_s: 2 });
+    // Nothing listens on port 9 of this machine.
+    let mut out = Stream.start(&Settings::new().with("server", "rtmp://127.0.0.1:9/live").with("key", "k"), j).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(15);
+    while !matches!(out.status(), OutputStatus::Failed(_)) && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    assert!(matches!(out.status(), OutputStatus::Failed(_)), "{:?}", out.status());
+    assert!(out.stop().is_err());
+}
+
+#[test]
+fn streams_over_rtmp_to_a_local_server() {
+    let Ok(program) = ffmpeg::locate("") else { return };
+    let dir = temp_dir("stream");
+    let received = dir.join("received.flv");
+    let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+    let url = format!("rtmp://127.0.0.1:{port}/live");
+    let mut server = ffmpeg::command(&program)
+        .args(["-hide_banner", "-v", "error", "-y", "-listen", "1", "-i"])
+        .arg(format!("{url}/secret"))
+        .args(["-c", "copy", "-f", "flv"])
+        .arg(&received)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    std::thread::sleep(Duration::from_millis(700));
+    let j = job(program.clone(), RateControl::Bitrate { kbps: 500, keyframe_s: 1 });
+    let mut out = Stream.start(&Settings::new().with("server", url.as_str()).with("key", "secret"), j).unwrap();
+    assert_eq!(out.target(), url, "the key is not shown");
+    feed(out.as_ref(), 1.5);
+    out.stop().unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while server.try_wait().unwrap().is_none() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let _ = server.kill();
+    let (frames, has_audio) = probe(&program, &received);
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(frames >= 10, "{frames}");
+    assert!(has_audio);
+}

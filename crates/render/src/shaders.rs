@@ -1,0 +1,124 @@
+//! WGSL for the compositor's passes. Every pass reads one 64-byte uniform slot (`u`) at a
+//! dynamic offset in one buffer written once per frame.
+
+/// Shared by every module: the uniform slot and the full-canvas triangle.
+const COMMON: &str = r"
+struct Slot { a: vec4<f32>, b: vec4<f32>, c: vec4<f32>, d: vec4<f32> }
+@group(0) @binding(0) var<uniform> u: Slot;
+
+struct VOut { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> }
+
+// One triangle covering the target; uv (0, 0) is the top-left corner.
+@vertex fn vs_full(@builtin(vertex_index) vi: u32) -> VOut {
+    let x = f32((vi << 1u) & 2u);
+    let y = f32(vi & 2u);
+    var o: VOut;
+    o.pos = vec4<f32>(x * 2.0 - 1.0, 1.0 - y * 2.0, 0.0, 1.0);
+    o.uv = vec2<f32>(x, y);
+    return o;
+}
+";
+
+/// Items: a textured quad placed by four corners in clip space.
+///
+/// `a` = corners 0 and 1, `b` = corners 2 and 3 (clockwise from the top left), `c` = the texture
+/// rectangle (u0, v0, u1, v1), `d.x` = 1 when the texture holds straight alpha, `d.y` = opacity.
+const ITEM: &str = r"
+@group(1) @binding(0) var tex: texture_2d<f32>;
+@group(1) @binding(1) var samp: sampler;
+
+@vertex fn vs_item(@builtin(vertex_index) vi: u32) -> VOut {
+    var corner = array<u32, 6>(0u, 1u, 2u, 0u, 2u, 3u);
+    let k = corner[vi];
+    var o: VOut;
+    var p = u.a.xy;
+    var t = u.c.xy;
+    if k == 1u { p = u.a.zw; t = vec2<f32>(u.c.z, u.c.y); }
+    if k == 2u { p = u.b.xy; t = u.c.zw; }
+    if k == 3u { p = u.b.zw; t = vec2<f32>(u.c.x, u.c.w); }
+    o.pos = vec4<f32>(p, 0.0, 1.0);
+    o.uv = t;
+    return o;
+}
+
+@fragment fn fs_item(v: VOut) -> @location(0) vec4<f32> {
+    // Keep the linear filter inside the crop: texels cut away never blend into the edge.
+    let half = 0.5 / vec2<f32>(textureDimensions(tex));
+    let lo = u.c.xy + half;
+    let hi = u.c.zw - half;
+    let uv = clamp(v.uv, min(lo, hi), max(lo, hi));
+    var c = textureSample(tex, samp, uv);
+    if u.d.x > 0.5 { c = vec4<f32>(c.rgb * c.a, c.a); }
+    return c * u.d.y;
+}
+";
+
+/// Filter passes: `a` = the source rectangle, `b.xy` = the output size in pixels, `b.z` = 1 when
+/// the input holds straight alpha, `c` and `d` = the filter's parameters.
+const EFFECT_HEAD: &str = r"
+@group(1) @binding(0) var tex: texture_2d<f32>;
+@group(1) @binding(1) var samp: sampler;
+";
+
+const EFFECT_MAIN: &str = r"
+@fragment fn fs_effect(v: VOut) -> @location(0) vec4<f32> {
+    var c = textureSample(tex, samp, mix(u.a.xy, u.a.zw, v.uv));
+    if u.b.z > 0.5 { c = vec4<f32>(c.rgb * c.a, c.a); }
+    return effect(c, v.uv, u.b.xy, u.c, u.d);
+}
+";
+
+/// Transitions: `a.x` = progress, `b` = the transition's parameters.
+const TRANSITION_HEAD: &str = r"
+@group(1) @binding(0) var from_tex: texture_2d<f32>;
+@group(1) @binding(1) var to_tex: texture_2d<f32>;
+@group(1) @binding(2) var samp: sampler;
+";
+
+const TRANSITION_MAIN: &str = r"
+@fragment fn fs_transition(v: VOut) -> @location(0) vec4<f32> {
+    let a = textureSample(from_tex, samp, v.uv);
+    let b = textureSample(to_tex, samp, v.uv);
+    return transition(a, b, v.uv, clamp(u.a.x, 0.0, 1.0), u.b);
+}
+";
+
+/// RGB to NV12 (BT.709, limited range). The luma pass draws at the output size; the chroma pass
+/// draws at half size and averages the four pixels under each sample through the linear sampler.
+const NV12: &str = r"
+@group(1) @binding(0) var tex: texture_2d<f32>;
+@group(1) @binding(1) var samp: sampler;
+
+fn luma(c: vec3<f32>) -> f32 {
+    return dot(c, vec3<f32>(0.2126, 0.7152, 0.0722));
+}
+
+@fragment fn fs_y(v: VOut) -> @location(0) vec4<f32> {
+    let c = textureSample(tex, samp, v.uv).rgb;
+    return vec4<f32>((16.0 + 219.0 * luma(c)) / 255.0, 0.0, 0.0, 1.0);
+}
+
+@fragment fn fs_uv(v: VOut) -> @location(0) vec4<f32> {
+    let c = textureSample(tex, samp, v.uv).rgb;
+    let y = luma(c);
+    let cb = (128.0 + 224.0 * (c.b - y) / 1.8556) / 255.0;
+    let cr = (128.0 + 224.0 * (c.r - y) / 1.5748) / 255.0;
+    return vec4<f32>(cb, cr, 0.0, 1.0);
+}
+";
+
+pub fn item() -> String {
+    format!("{COMMON}{ITEM}")
+}
+
+pub fn effect(body: &str) -> String {
+    format!("{COMMON}{EFFECT_HEAD}{body}\n{EFFECT_MAIN}")
+}
+
+pub fn transition(body: &str) -> String {
+    format!("{COMMON}{TRANSITION_HEAD}{body}\n{TRANSITION_MAIN}")
+}
+
+pub fn nv12() -> String {
+    format!("{COMMON}{NV12}")
+}

@@ -1,0 +1,467 @@
+//! StudioCraft's files in its configuration folder: the preferences (`config.toml`, through
+//! craft-settings), the scene collections (`scenes/<name>.json`) and the profiles
+//! (`profiles/<name>.json`). Without a folder (tests, `--no-prefs`) everything is kept in memory.
+
+use std::collections::BTreeMap;
+use std::io::Read;
+use std::path::{Path, PathBuf};
+use std::time::Instant;
+
+use craft_keymap::Overrides;
+use craft_settings::{Location, SettingsStore};
+use serde::{Deserialize, Serialize};
+use studiocraft_model::format::{MAX_FILE_BYTES, read_collection, read_profile, write_collection, write_profile};
+use studiocraft_model::{Profile, SceneCollection};
+
+/// Which docks are shown, and the sizes set by dragging the dock strip's edges. A size of 0 is not
+/// set and uses the default in [`crate::strip`]; Docks › Reset Docks sets them all back to 0.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Docks {
+    pub scenes: bool,
+    pub sources: bool,
+    pub mixer: bool,
+    pub transitions: bool,
+    pub controls: bool,
+    /// The dock strip's height in points.
+    pub height: f32,
+    /// The widths of the Scenes and Sources docks in points; the Audio Mixer takes the rest.
+    pub scenes_width: f32,
+    pub sources_width: f32,
+}
+
+impl Default for Docks {
+    fn default() -> Self {
+        Self { scenes: true, sources: true, mixer: true, transitions: true, controls: true, height: 0.0, scenes_width: 0.0, sources_width: 0.0 }
+    }
+}
+
+/// The preferences in `config.toml`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Prefs {
+    /// The scene collection open last.
+    pub collection: String,
+    /// The profile in use last.
+    pub profile: String,
+    pub docks: Docks,
+    pub stats: bool,
+    pub status_bar: bool,
+    /// Items in the preview can't be moved or resized with the mouse.
+    pub lock_preview: bool,
+    /// Shortcuts changed from their defaults.
+    pub hotkeys: Overrides,
+    /// The interface language: `auto` (the system's) or a language code. Read it with
+    /// [`Prefs::language`].
+    pub language: String,
+    /// Look for a newer release when the app starts.
+    pub check_updates: bool,
+    /// Keep the desktop's title bar where the app would draw its own. Read when the window
+    /// opens, so a change takes effect at the next start.
+    pub system_title_bar: bool,
+}
+
+impl Default for Prefs {
+    fn default() -> Self {
+        Self {
+            collection: DEFAULT_NAME.into(),
+            profile: DEFAULT_NAME.into(),
+            docks: Docks::default(),
+            stats: false,
+            status_bar: true,
+            lock_preview: false,
+            hotkeys: Overrides::new(),
+            language: crate::i18n::AUTO.into(),
+            check_updates: true,
+            system_title_bar: false,
+        }
+    }
+}
+
+impl Prefs {
+    /// The Language setting: `auto`, or the code of a language this build offers. A code this
+    /// build does not offer reads as `auto`.
+    pub fn language(&self) -> &str {
+        crate::i18n::normalize(&self.language)
+    }
+}
+
+impl craft_settings::Settings for Prefs {
+    const APP_ID: &'static str = "studiocraft";
+    const SCHEMA_VERSION: u32 = 1;
+}
+
+/// The name of the first collection and profile.
+pub const DEFAULT_NAME: &str = "Untitled";
+
+const SCENES: &str = "scenes";
+const PROFILES: &str = "profiles";
+
+enum Files {
+    Dir(PathBuf),
+    Memory(BTreeMap<(String, String), String>),
+}
+
+pub struct Store {
+    prefs: SettingsStore<Prefs>,
+    files: Files,
+}
+
+/// Why a collection or profile name can't be used as a file name.
+pub fn check_name(name: &str) -> Result<(), String> {
+    const RESERVED: [&str; 22] = [
+        "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5",
+        "LPT6", "LPT7", "LPT8", "LPT9",
+    ];
+    let trimmed = name.trim();
+    if trimmed.is_empty() || trimmed.chars().count() > 100 {
+        return Err("a name needs 1 to 100 characters".into());
+    }
+    if trimmed != name || name.ends_with('.') {
+        return Err("a name can't start or end with a space, or end with a period".into());
+    }
+    if let Some(c) = name.chars().find(|c| c.is_control() || "<>:\"/\\|?*".contains(*c)) {
+        return Err(format!("a name can't contain {c:?}"));
+    }
+    // Windows reserves a device name followed by any extension too (`CON.txt`).
+    let stem = name.split('.').next().unwrap_or(name).trim_end();
+    if RESERVED.iter().any(|r| r.eq_ignore_ascii_case(stem)) {
+        return Err(format!("`{name}` is reserved by the system"));
+    }
+    Ok(())
+}
+
+/// The text of the file at `path`. A file larger than the saved formats accept is refused before
+/// it is read into memory.
+fn read_bounded(path: &Path) -> Result<String, String> {
+    let file = std::fs::File::open(path).map_err(|e| e.to_string())?;
+    let max = u64::try_from(MAX_FILE_BYTES).unwrap_or(u64::MAX);
+    let too_large = || format!("a saved file can be at most {} MB", MAX_FILE_BYTES >> 20);
+    if file.metadata().map_err(|e| e.to_string())?.len() > max {
+        return Err(too_large());
+    }
+    let mut text = String::new();
+    // The file can grow between the size check and the read; read at most one byte past the cap.
+    file.take(max.saturating_add(1)).read_to_string(&mut text).map_err(|e| e.to_string())?;
+    if text.len() > MAX_FILE_BYTES {
+        return Err(too_large());
+    }
+    Ok(text)
+}
+
+impl Store {
+    /// The store in the configuration folder craft-settings chooses (`STUDIOCRAFT_CONFIG_DIR`
+    /// overrides it), and problems found loading the preferences.
+    pub fn open(location: Location) -> (Store, Vec<String>) {
+        let (prefs, report) = SettingsStore::<Prefs>::open(location);
+        let mut problems: Vec<String> = report.section_errors.iter().map(|e| format!("{e:?}")).collect();
+        if let Some(moved) = &report.broken_moved_to {
+            problems.push(format!("the damaged settings file was moved to {}", moved.display()));
+        }
+        let files = match prefs.dir() {
+            Some(dir) => Files::Dir(dir.to_path_buf()),
+            None => Files::Memory(BTreeMap::new()),
+        };
+        (Store { prefs, files }, problems)
+    }
+
+    /// A store that reads and writes nothing.
+    pub fn memory() -> Store {
+        Store::open(Location::Memory).0
+    }
+
+    pub fn dir(&self) -> Option<&Path> {
+        match &self.files {
+            Files::Dir(d) => Some(d),
+            Files::Memory(_) => None,
+        }
+    }
+
+    pub fn prefs(&self) -> &Prefs {
+        self.prefs.get()
+    }
+
+    pub fn update(&mut self, f: impl FnOnce(&mut Prefs)) {
+        self.prefs.update(f);
+    }
+
+    /// Save the preferences when they changed a moment ago; when to call again.
+    pub fn tick(&mut self) -> Option<Instant> {
+        self.prefs.tick(Instant::now()).next_deadline
+    }
+
+    pub fn flush(&mut self) -> Result<(), String> {
+        self.prefs.flush().map_err(|e| e.to_string())
+    }
+
+    fn list(&self, kind: &str) -> Vec<String> {
+        let mut names: Vec<String> = match &self.files {
+            Files::Dir(d) => std::fs::read_dir(d.join(kind))
+                .map(|rd| {
+                    rd.filter_map(Result::ok)
+                        .filter_map(|e| {
+                            let p = e.path();
+                            (p.extension().is_some_and(|x| x == "json")).then(|| p.file_stem().map(|s| s.to_string_lossy().into_owned())).flatten()
+                        })
+                        .collect()
+                })
+                .unwrap_or_default(),
+            Files::Memory(m) => m.keys().filter(|(k, _)| k == kind).map(|(_, n)| n.clone()).collect(),
+        };
+        names.sort_by_key(|n| n.to_lowercase());
+        names
+    }
+
+    fn read(&self, kind: &str, name: &str) -> Result<String, String> {
+        check_name(name)?;
+        match &self.files {
+            Files::Dir(d) => {
+                let path = d.join(kind).join(format!("{name}.json"));
+                read_bounded(&path).map_err(|e| format!("{}: {e}", path.display()))
+            }
+            Files::Memory(m) => m.get(&(kind.to_string(), name.to_string())).cloned().ok_or_else(|| format!("there is no `{name}`")),
+        }
+    }
+
+    fn write(&mut self, kind: &str, name: &str, text: String) -> Result<(), String> {
+        check_name(name)?;
+        match &mut self.files {
+            Files::Dir(d) => {
+                let folder = d.join(kind);
+                std::fs::create_dir_all(&folder).map_err(|e| format!("{}: {e}", folder.display()))?;
+                let path = folder.join(format!("{name}.json"));
+                craft_atomic::atomic_write(&path, text.as_bytes()).map_err(|e| format!("{}: {e}", path.display()))
+            }
+            Files::Memory(m) => {
+                m.insert((kind.to_string(), name.to_string()), text);
+                Ok(())
+            }
+        }
+    }
+
+    fn remove(&mut self, kind: &str, name: &str) -> Result<(), String> {
+        check_name(name)?;
+        match &mut self.files {
+            Files::Dir(d) => {
+                let path = d.join(kind).join(format!("{name}.json"));
+                match std::fs::remove_file(&path) {
+                    Ok(()) => Ok(()),
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+                    Err(e) => Err(format!("{}: {e}", path.display())),
+                }
+            }
+            Files::Memory(m) => {
+                m.remove(&(kind.to_string(), name.to_string()));
+                Ok(())
+            }
+        }
+    }
+
+    /// Give the file `old` the name `new`, in one step: also on a disk that ignores case, where
+    /// `Show` and `show` name one file.
+    fn rename(&mut self, kind: &str, old: &str, new: &str) -> Result<(), String> {
+        check_name(old)?;
+        check_name(new)?;
+        let taken = || format!("`{new}` already exists");
+        match &mut self.files {
+            Files::Dir(d) => {
+                let (from, to) = (d.join(kind).join(format!("{old}.json")), d.join(kind).join(format!("{new}.json")));
+                // A file named exactly `new` is another one (a disk that tells case apart can hold
+                // both `Show` and `show`); it is never replaced.
+                let target = std::ffi::OsString::from(format!("{new}.json"));
+                let entries = std::fs::read_dir(d.join(kind)).map_err(|e| format!("{}: {e}", d.join(kind).display()))?;
+                if new != old && entries.flatten().any(|e| e.file_name() == target) {
+                    return Err(taken());
+                }
+                std::fs::rename(&from, &to).map_err(|e| format!("{}: {e}", from.display()))
+            }
+            Files::Memory(m) => {
+                if new != old && m.contains_key(&(kind.to_string(), new.to_string())) {
+                    return Err(taken());
+                }
+                let text = m.remove(&(kind.to_string(), old.to_string())).ok_or_else(|| format!("there is no `{old}`"))?;
+                m.insert((kind.to_string(), new.to_string()), text);
+                Ok(())
+            }
+        }
+    }
+
+    pub fn rename_collection(&mut self, old: &str, new: &str) -> Result<(), String> {
+        self.rename(SCENES, old, new)
+    }
+
+    pub fn rename_profile(&mut self, old: &str, new: &str) -> Result<(), String> {
+        self.rename(PROFILES, old, new)
+    }
+
+    pub fn collections(&self) -> Vec<String> {
+        self.list(SCENES)
+    }
+
+    pub fn load_collection(&self, name: &str) -> Result<SceneCollection, String> {
+        let text = self.read(SCENES, name)?;
+        let mut c = read_collection(&text, "Scene").map_err(|e| format!("{name}: {e}"))?;
+        c.name = name.to_string();
+        Ok(c)
+    }
+
+    pub fn save_collection(&mut self, c: &SceneCollection) -> Result<(), String> {
+        let text = write_collection(c).map_err(|e| e.to_string())?;
+        self.write(SCENES, &c.name, text)
+    }
+
+    pub fn remove_collection(&mut self, name: &str) -> Result<(), String> {
+        self.remove(SCENES, name)
+    }
+
+    pub fn profiles(&self) -> Vec<String> {
+        self.list(PROFILES)
+    }
+
+    pub fn load_profile(&self, name: &str) -> Result<Profile, String> {
+        let text = self.read(PROFILES, name)?;
+        let mut p = read_profile(&text).map_err(|e| format!("{name}: {e}"))?;
+        p.name = name.to_string();
+        Ok(p)
+    }
+
+    pub fn save_profile(&mut self, p: &Profile) -> Result<(), String> {
+        let text = write_profile(p).map_err(|e| e.to_string())?;
+        self.write(PROFILES, &p.name, text)
+    }
+
+    pub fn remove_profile(&mut self, name: &str) -> Result<(), String> {
+        self.remove(PROFILES, name)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn names_must_be_file_names() {
+        assert!(check_name("Gaming").is_ok());
+        assert!(check_name("Late show 2").is_ok());
+        assert!(check_name("Concert.v2").is_ok());
+        for bad in ["", " lead", "trail ", "dot.", "a/b", "a:b", "con", "CON.txt", "nul.tar.gz", "Com1 .x", "x\u{7}"] {
+            assert!(check_name(bad).is_err(), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn collections_and_profiles_round_trip_in_memory() {
+        let mut s = Store::memory();
+        let mut c = SceneCollection::new("Show", "Intro");
+        c.scenes[0].name = "Intro".into();
+        s.save_collection(&c).unwrap();
+        assert_eq!(s.collections(), ["Show"]);
+        assert_eq!(s.load_collection("Show").unwrap().scenes[0].name, "Intro");
+        s.remove_collection("Show").unwrap();
+        assert!(s.collections().is_empty());
+
+        let p = Profile { name: "Stream".into(), ..Profile::default() };
+        s.save_profile(&p).unwrap();
+        assert_eq!(s.load_profile("Stream").unwrap(), p);
+    }
+
+    #[test]
+    fn a_rename_never_replaces_another_file() {
+        let mut s = Store::memory();
+        s.save_collection(&SceneCollection::new("Show", "Intro")).unwrap();
+        s.save_collection(&SceneCollection::new("show", "Other")).unwrap();
+        assert!(s.rename_collection("Show", "show").is_err());
+        assert_eq!(s.load_collection("show").unwrap().scenes[0].name, "Other");
+        assert!(s.load_collection("Show").is_ok());
+    }
+
+    #[test]
+    fn collections_round_trip_in_a_folder() {
+        let dir = std::env::temp_dir().join(format!("studiocraft-store-{}", std::process::id()));
+        let (mut s, problems) = Store::open(Location::Dir(dir.clone()));
+        assert!(problems.is_empty(), "{problems:?}");
+        let c = SceneCollection::new("B", "Scene");
+        s.save_collection(&c).unwrap();
+        s.save_collection(&SceneCollection::new("a", "Scene")).unwrap();
+        assert_eq!(s.collections(), ["a", "B"]);
+        assert!(dir.join("scenes").join("B.json").exists());
+        s.update(|p| p.collection = "B".into());
+        s.flush().unwrap();
+        let (again, _) = Store::open(Location::Dir(dir.clone()));
+        assert_eq!(again.prefs().collection, "B");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_oversized_saved_file_is_refused_before_it_is_read() {
+        let dir = std::env::temp_dir().join(format!("studiocraft-store-oversized-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let (s, _) = Store::open(Location::Dir(dir.clone()));
+        let scenes = dir.join(SCENES);
+        std::fs::create_dir_all(&scenes).unwrap();
+        let file = std::fs::File::create(scenes.join("Big.json")).unwrap();
+        file.set_len(u64::try_from(MAX_FILE_BYTES).unwrap() + 1).unwrap();
+        drop(file);
+        let e = s.load_collection("Big").unwrap_err();
+        assert!(e.contains("can be at most 64 MB"), "{e}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_system_title_bar_setting_is_kept_across_a_restart() {
+        let dir = std::env::temp_dir().join(format!("studiocraft-store-title-bar-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let (mut s, _) = Store::open(Location::Dir(dir.clone()));
+        assert!(!s.prefs().system_title_bar, "off by default");
+        for on in [true, false] {
+            s.update(|p| p.system_title_bar = on);
+            s.flush().unwrap();
+            let (again, problems) = Store::open(Location::Dir(dir.clone()));
+            assert!(problems.is_empty(), "{problems:?}");
+            assert_eq!(again.prefs().system_title_bar, on);
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn dock_sizes_are_kept_across_a_restart() {
+        let dir = std::env::temp_dir().join(format!("studiocraft-store-dock-sizes-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let (mut s, _) = Store::open(Location::Dir(dir.clone()));
+        assert_eq!((s.prefs().docks.height, s.prefs().docks.scenes_width, s.prefs().docks.sources_width), (0.0, 0.0, 0.0));
+        s.update(|p| {
+            p.docks.height = 236.5;
+            p.docks.scenes_width = 280.0;
+            p.docks.sources_width = 412.0;
+            p.docks.mixer = false;
+        });
+        s.flush().unwrap();
+        let (mut again, problems) = Store::open(Location::Dir(dir.clone()));
+        assert!(problems.is_empty(), "{problems:?}");
+        assert_eq!(again.prefs().docks, s.prefs().docks);
+        // Clearing the sizes is kept too: the defaults come back after the next start.
+        again.update(|p| p.docks = Docks { mixer: false, ..Docks::default() });
+        again.flush().unwrap();
+        let (third, _) = Store::open(Location::Dir(dir.clone()));
+        assert_eq!(third.prefs().docks, Docks { mixer: false, ..Docks::default() });
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_damaged_dock_size_reads_as_the_default() {
+        let dir = std::env::temp_dir().join(format!("studiocraft-store-dock-damaged-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let (mut s, _) = Store::open(Location::Dir(dir.clone()));
+        s.update(|p| {
+            p.docks.height = f32::NAN;
+            p.docks.scenes_width = -40.0;
+            p.docks.sources_width = f32::INFINITY;
+        });
+        s.flush().unwrap();
+        let (again, _) = Store::open(Location::Dir(dir.clone()));
+        let d = again.prefs().docks;
+        assert_eq!(crate::strip::height(800.0, d.height), 200.0);
+        assert_eq!(crate::strip::widths(1280.0, &[0, 1, 2], [d.scenes_width, d.sources_width]), [300.0, 340.0, 638.0]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}

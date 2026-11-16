@@ -1,0 +1,163 @@
+[workspace]
+resolver = "3"
+members = [".", "crates/*", "apps/*", "xtask"]
+# `cargo build` and `cargo run` at the root build the desktop app and the libraries; `cargo xtask ci`
+# covers the whole workspace with `--workspace`.
+default-members = [".", "crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+
+[workspace.dependencies]
+# internal
+studiocraft-model = { path = "crates/model" }
+studiocraft-media = { path = "crates/media" }
+studiocraft-plugin = { path = "crates/plugin" }
+studiocraft-engine = { path = "crates/engine" }
+studiocraft-render = { path = "crates/render" }
+studiocraft-platform = { path = "crates/platform" }
+studiocraft-sources = { path = "crates/sources" }
+studiocraft-outputs = { path = "crates/outputs" }
+studiocraft-studio = { path = "crates/studio" }
+studiocraft-ui-egui = { path = "crates/ui-egui" }
+studiocraft-mcp = { path = "crates/mcp" }
+
+# foundation
+thiserror = "2"
+serde = { version = "1", features = ["derive", "rc"] }
+serde_json = { version = "1", features = ["float_roundtrip"] }
+log = "0.4"
+# Pictures in control replies.
+base64 = "0.22"
+# Bounded lock-free queues between the capture, compositor, mixer and encoder threads.
+crossbeam-queue = "0.3"
+# Local time for recording file names.
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+# The user's Videos folder for recordings.
+dirs = "7"
+criterion = { version = "0.8", default-features = false, features = ["cargo_bench_support"] }
+# contributors/people.toml, read by the engine's build script.
+toml = "1"
+
+# gpu (the wgpu eframe and egui-wgpu use)
+wgpu = "30"
+bytemuck = { version = "1", features = ["derive"] }
+pollster = "0.4"
+
+# media inputs
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "bmp", "gif", "webp"] }
+ab_glyph = "0.2"
+# Audio devices: input capture, and output (loopback) capture on Windows.
+cpal = "0.16"
+# Display and window capture.
+xcap = "0.9"
+
+# ui
+egui = "0.37"
+eframe = { version = "0.37", default-features = false }
+egui-wgpu = "0.37"
+
+# Shared Craft crates: storytold/craft-libs, MIT OR Apache-2.0, pinned to one rev.
+craft-ui = { git = "https://github.com/storytold/craft-libs", rev = "1b00186ae02901f164aa3d6243c5929f14422496", features = ["serde"] }
+craft-menu = { git = "https://github.com/storytold/craft-libs", rev = "1b00186ae02901f164aa3d6243c5929f14422496" }
+craft-keymap = { git = "https://github.com/storytold/craft-libs", rev = "1b00186ae02901f164aa3d6243c5929f14422496", features = ["egui"] }
+craft-settings = { git = "https://github.com/storytold/craft-libs", rev = "1b00186ae02901f164aa3d6243c5929f14422496" }
+craft-dialogs = { git = "https://github.com/storytold/craft-libs", rev = "1b00186ae02901f164aa3d6243c5929f14422496" }
+craft-quit = { git = "https://github.com/storytold/craft-libs", rev = "1b00186ae02901f164aa3d6243c5929f14422496", features = ["egui"] }
+craft-mcp = { git = "https://github.com/storytold/craft-libs", rev = "1b00186ae02901f164aa3d6243c5929f14422496" }
+craft-control-protocol = { git = "https://github.com/storytold/craft-libs", rev = "1b00186ae02901f164aa3d6243c5929f14422496" }
+craft-jsonrpc = { git = "https://github.com/storytold/craft-libs", rev = "1b00186ae02901f164aa3d6243c5929f14422496" }
+craft-time = { git = "https://github.com/storytold/craft-libs", rev = "1b00186ae02901f164aa3d6243c5929f14422496" }
+craft-font-catalog = { git = "https://github.com/storytold/craft-libs", rev = "1b00186ae02901f164aa3d6243c5929f14422496" }
+craft-image-codecs = { git = "https://github.com/storytold/craft-libs", rev = "1b00186ae02901f164aa3d6243c5929f14422496" }
+craft-atomic = { git = "https://github.com/storytold/craft-libs", rev = "1b00186ae02901f164aa3d6243c5929f14422496" }
+craft-fonts-build = { git = "https://github.com/storytold/craft-libs", rev = "1b00186ae02901f164aa3d6243c5929f14422496" }
+craft-i18n = { git = "https://github.com/storytold/craft-libs", rev = "1b00186ae02901f164aa3d6243c5929f14422496" }
+# Help › Check for Updates, the check at start and finishing an update the app installed itself.
+craft-update = { git = "https://github.com/storytold/craft-libs", rev = "1b00186ae02901f164aa3d6243c5929f14422496", features = ["egui"] }
+# Who draws the window frame (the desktop or the app), and the menu strip as the title bar.
+craft-window = { git = "https://github.com/storytold/craft-libs", rev = "1b00186ae02901f164aa3d6243c5929f14422496", features = ["egui"] }
+
+# egui 0.37 and winit: the suite's forks (storytold/egui, storytold/winit), as craft-libs pins them.
+[patch.crates-io]
+ecolor = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
+emath = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
+epaint = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
+epaint_default_fonts = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
+egui = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
+egui-winit = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
+egui-wgpu = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
+egui_glow = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
+eframe = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
+winit = { git = "https://github.com/storytold/winit.git", rev = "a517b3846ee8457d84ee4975110bfda6797c44dc" }
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+dbg_macro = "warn"
+# StudioCraft never crashes: shipped code returns `Result`/`Option` instead of panicking
+# (AGENTS.md › Never crash). Tests may unwrap (clippy.toml).
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+todo = "deny"
+unimplemented = "deny"
+unreachable = "deny"
+too_many_arguments = "allow"
+type_complexity = "allow"
+
+[package]
+name = "studiocraft"
+description = "StudioCraft: an open-source recording and live-streaming studio (desktop app)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+default-run = "studiocraft"
+
+[lints]
+workspace = true
+
+[dependencies]
+studiocraft-engine = { workspace = true }
+studiocraft-studio = { workspace = true }
+studiocraft-ui-egui = { workspace = true }
+eframe = { workspace = true, features = ["wgpu", "default_fonts", "accesskit", "clipboard", "x11", "wayland"] }
+egui = { workspace = true }
+craft-keymap = { workspace = true }
+craft-settings = { workspace = true }
+craft-control-protocol = { workspace = true }
+# Finishes an update when the app is started as the update helper.
+craft-update = { workspace = true }
+# Decides at start whether the app draws its own title bar.
+craft-window = { workspace = true }
+serde_json = { workspace = true }
+log = { workspace = true }
+# The --screenshot picture.
+image = { workspace = true }
+base64 = { workspace = true }
+
+[profile.dev.package."*"]
+opt-level = 2
+debug = false
+
+[profile.dev]
+opt-level = 1
+debug = "line-tables-only"
+
+# Pixel and sample loops: keep debug builds real-time.
+[profile.dev.package.studiocraft-render]
+opt-level = 3
+
+[profile.dev.package.studiocraft-media]
+opt-level = 3
+
+[profile.dev.package.studiocraft-sources]
+opt-level = 3
+
+[profile.release]
+lto = "thin"
+codegen-units = 1

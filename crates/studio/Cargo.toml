@@ -1,0 +1,29 @@
+[package]
+name = "studiocraft-studio"
+description = "The running studio: sources, mixer, compositor, transitions, recording and streaming behind one command interface"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+studiocraft-model.workspace = true
+studiocraft-media.workspace = true
+studiocraft-plugin.workspace = true
+studiocraft-engine.workspace = true
+studiocraft-render.workspace = true
+studiocraft-platform.workspace = true
+studiocraft-sources.workspace = true
+studiocraft-outputs.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+log.workspace = true
+chrono.workspace = true
+dirs.workspace = true
+# Scene collection files are replaced in one step.
+craft-atomic.workspace = true
+# Still captures for render previews, encoded as PNG.
+image.workspace = true
+
+[lints]
+workspace = true

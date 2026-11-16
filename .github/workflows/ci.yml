@@ -1,0 +1,28 @@
+name: CI
+
+# Runs `cargo xtask ci` for every push to main and every pull request, through the suite's shared
+# gate workflow.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# A newer push to a pull request branch cancels its older run; every push to main runs to the end.
+concurrency:
+  group: ci-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  gate:
+    # Pinned to craft-common-actions main at 2026-11-16T01:19Z; move the pin to take later changes.
+    uses: storytold/craft-common-actions/.github/workflows/gate.yml@59d1ecc4ea15ab59f8d60d38b147d5016c1f1385
+    with:
+      timeout-minutes: 90
+      packages: >-
+        pkg-config libxkbcommon-dev libwayland-dev libx11-dev libxcb1-dev libxcursor-dev
+        libxrandr-dev libxi-dev libfontconfig1-dev libfreetype-dev mesa-vulkan-drivers
+        libasound2-dev libpipewire-0.3-dev libclang-dev libgbm-dev libegl-dev
