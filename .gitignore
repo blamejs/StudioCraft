@@ -1,4 +1,7 @@
 /target
+# The craft-fonts and craft-i18n checkouts that CI makes for CRAFT_FONTS_DIR and CRAFT_I18N_DIR
+/craft-fonts/
+/craft-i18n/
 *.png.tmp
 .exceptd/
 .test-output/

@@ -5,6 +5,10 @@ use std::path::{Path, PathBuf};
 /// Folders never scanned.
 const SKIP_DIRS: &[&str] = &["target", ".git", "node_modules", ".cargo"];
 
+/// Folders at the top of `root` never scanned: the craft-fonts and craft-i18n checkouts that CI
+/// makes inside the workspace (also listed in `.gitignore`).
+const SKIP_ROOT_DIRS: &[&str] = &["craft-fonts", "craft-i18n"];
+
 /// Every file under `root`, relative, with `/` separators.
 pub fn files(root: &Path) -> Vec<String> {
     fn walk(root: &Path, dir: &Path, out: &mut Vec<String>) {
@@ -13,7 +17,7 @@ pub fn files(root: &Path) -> Vec<String> {
             let p: PathBuf = e.path();
             let name = e.file_name().to_string_lossy().into_owned();
             if p.is_dir() {
-                if !SKIP_DIRS.contains(&name.as_str()) {
+                if !SKIP_DIRS.contains(&name.as_str()) && !(dir == root && SKIP_ROOT_DIRS.contains(&name.as_str())) {
                     walk(root, &p, out);
                 }
             } else if let Ok(rel) = p.strip_prefix(root) {
@@ -128,5 +132,19 @@ mod tests {
         let files = vec!["assets/icon.png".to_string(), "src/main.rs".to_string()];
         assert_eq!(unlisted_assets(&files, "nothing"), ["assets/icon.png"]);
         assert!(unlisted_assets(&files, "- `assets/icon.png`: drawn for StudioCraft").is_empty());
+    }
+
+    #[test]
+    fn the_scan_skips_the_ci_checkouts_and_build_output() {
+        let root = std::env::temp_dir().join(format!("studiocraft-xtask-scan-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        for f in ["assets/icon.png", "craft-fonts/fonts/A.ttf", "craft-i18n/de.tsv", "target/debug/b.png", "docs/craft-fonts/c.png"] {
+            let p = root.join(f);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(&p, b"x").unwrap();
+        }
+        let listed = files(&root);
+        let _ = std::fs::remove_dir_all(&root);
+        assert_eq!(listed, ["assets/icon.png", "docs/craft-fonts/c.png"]);
     }
 }
