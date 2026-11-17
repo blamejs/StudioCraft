@@ -93,12 +93,14 @@ impl Xy {
         Xy { x, y }
     }
 
-    /// XYZ with Y = 1, or `None` when `y` is not above 0 or a coordinate is not finite.
+    /// XYZ with Y = 1, or `None` when `y` is not above 0, a coordinate is not finite, or `y` is
+    /// so small that X or Z overflows.
     pub fn to_xyz(self) -> Option<[f64; 3]> {
         if !(self.x.is_finite() && self.y.is_finite() && self.y > 0.0) {
             return None;
         }
-        Some([self.x / self.y, 1.0, (1.0 - self.x - self.y) / self.y])
+        let xyz = [self.x / self.y, 1.0, (1.0 - self.x - self.y) / self.y];
+        xyz.iter().all(|v| v.is_finite()).then_some(xyz)
     }
 
     /// The chromaticity of an XYZ triple, or `None` when X + Y + Z is not above 0.
@@ -274,6 +276,8 @@ mod tests {
     fn hostile_whites_and_primaries_do_not_produce_nan() {
         assert_eq!(Xy::new(0.3, 0.0).to_xyz(), None);
         assert_eq!(Xy::new(f64::NAN, 0.3).to_xyz(), None);
+        assert_eq!(Xy::new(0.3, 1e-320).to_xyz(), None);
+        assert_eq!(bradford(Xy::new(0.3, 1e-320), D65), Mat3::IDENTITY);
         assert_eq!(Xy::from_xyz([0.0, 0.0, 0.0]), None);
         assert_eq!(bradford(Xy::new(0.3, 0.0), D65), Mat3::IDENTITY);
         assert_eq!(bradford(D65, Xy::new(f64::INFINITY, 0.3)), Mat3::IDENTITY);
