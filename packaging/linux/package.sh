@@ -53,6 +53,8 @@ if [[ "$SKIP_BUILD" = 0 ]] && [[ -n "${GITHUB_ACTIONS:-}" ]] && command -v apt-g
 fi
 
 if [[ "$SKIP_BUILD" = 0 ]]; then
+  # shellcheck source=pipewire-headers.sh
+  . "$HERE/pipewire-headers.sh"
   (cd "$ROOT" && cargo build --release --locked -p studiocraft -p studiocraft-cli --bins)
 fi
 BIN="$CARGO_TARGET_DIR/release"

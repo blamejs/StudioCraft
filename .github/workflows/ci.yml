@@ -1,7 +1,7 @@
 name: CI
 
-# Runs `cargo xtask ci` for every push to main and every pull request, through the suite's shared
-# gate workflow.
+# Runs `cargo xtask ci`, and a check on the release build hosts, for every push to main and every
+# pull request, through the suite's shared gate workflow.
 on:
   push:
     branches: [main]
@@ -26,3 +26,21 @@ jobs:
         pkg-config libxkbcommon-dev libwayland-dev libx11-dev libxcb1-dev libxcursor-dev
         libxrandr-dev libxi-dev libfontconfig1-dev libfreetype-dev mesa-vulkan-drivers
         libasound2-dev libpipewire-0.3-dev libclang-dev libgbm-dev libegl-dev
+
+  # Checks that the app compiles on the hosts the release builds on (Ubuntu 22.04 and Windows),
+  # with the locked dependencies and the PipeWire headers packaging/linux/package.sh uses.
+  release-hosts:
+    uses: storytold/craft-common-actions/.github/workflows/gate.yml@59d1ecc4ea15ab59f8d60d38b147d5016c1f1385
+    with:
+      timeout-minutes: 60
+      os: '["ubuntu-22.04","windows-latest"]'
+      targets: ""
+      tools: ""
+      command: >-
+        . packaging/linux/pipewire-headers.sh &&
+        cargo check --locked -p studiocraft -p studiocraft-cli --bins
+      windows-command: cargo check --locked -p studiocraft -p studiocraft-cli --bins
+      packages: >-
+        pkg-config libxkbcommon-dev libwayland-dev libx11-dev libxcb1-dev libxcursor-dev
+        libxrandr-dev libxi-dev libfontconfig1-dev libfreetype-dev libasound2-dev
+        libpipewire-0.3-dev libclang-dev libgbm-dev libegl-dev
