@@ -372,6 +372,12 @@
 @msg	The hardware encoder tests could not run: {error}	Testy hardwarových kodérů nelze spustit: {error}
 @msg	{encoder} stopped working; the next start tries another encoder	{encoder} přestal fungovat; při dalším spuštění se zkusí jiný kodér
 	{program} did not report its version	{program} neohlásil svou verzi
+	Automatic (fastest)	Automaticky (nejrychlejší)
+	Drawing with {adapter}	Kreslí se pomocí {adapter}
+	Graphics adapter	Grafický adaptér
+	Hardware acceleration	Hardwarová akcelerace
+	Power saving	Úspora energie
+	Software (slower)	Softwarově (pomalejší)
 	Compact (small files)	Kompaktní (malé soubory)
 	Duplicate Profile	Duplikovat profil
 	Duplicate Scene Collection	Duplikovat kolekci scén
@@ -387,6 +393,15 @@
 	Unlock	Odemknout
 	Unmute	Zrušit ztlumení
 @msg	A plug-in could not be loaded: {error}	Zásuvný modul nelze načíst: {error}
+@msg	Drawing again on {adapter}	Znovu se kreslí pomocí {adapter}
+@msg	No graphics device could be opened again: {error}	Grafické zařízení nelze znovu otevřít: {error}
+@msg	No graphics hardware can be used; drawing in software, which is slower	Grafický hardware nelze použít; kreslí se softwarově, což je pomalejší
+@msg	No software graphics adapter is available; using the automatic choice	Softwarový grafický adaptér není k dispozici; použije se automatická volba
+@msg	Nothing can be drawn until StudioCraft starts again	Dokud se StudioCraft znovu nespustí, nelze nic kreslit
+@msg	The graphics adapter {adapter} could not be opened: {error}	Grafický adaptér {adapter} nelze otevřít: {error}
+@msg	The graphics adapter {adapter} is not available; using the automatic choice	Grafický adaptér {adapter} není k dispozici; použije se automatická volba
+@msg	The graphics device stopped working {count} times; drawing in software	Grafické zařízení přestalo fungovat ({count}×); kreslí se softwarově
+@msg	The graphics device stopped working: {error}	Grafické zařízení přestalo fungovat: {error}
 @msg	Audio monitoring could not start: {error}	Odposlech zvuku nelze spustit: {error}
 @msg	Audio monitoring stopped: {error}	Odposlech zvuku se zastavil: {error}
 @msg	Could not check for updates: {error}	Aktualizace nelze vyhledat: {error}

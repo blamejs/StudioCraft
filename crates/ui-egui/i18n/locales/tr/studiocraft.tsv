@@ -373,6 +373,12 @@
 @msg	{encoder} stopped working; the next start tries another encoder	{encoder} çalışmayı bıraktı; bir sonraki başlatmada başka bir kodlayıcı denenecek
 	{program} did not report its version	{program} sürümünü bildirmedi
 	s	sn
+	Automatic (fastest)	Otomatik (en hızlı)
+	Drawing with {adapter}	{adapter} ile çiziliyor
+	Graphics adapter	Grafik bağdaştırıcısı
+	Hardware acceleration	Donanım hızlandırma
+	Power saving	Güç tasarrufu
+	Software (slower)	Yazılım (daha yavaş)
 	Compact (small files)	Kompakt (küçük dosyalar)
 	Duplicate Profile	Profili Çoğalt
 	Duplicate Scene Collection	Sahne Koleksiyonunu Çoğalt
@@ -388,6 +394,15 @@
 	Unlock	Kilidi Aç
 	Unmute	Sesi aç
 @msg	A plug-in could not be loaded: {error}	Bir eklenti yüklenemedi: {error}
+@msg	Drawing again on {adapter}	Yeniden {adapter} ile çiziliyor
+@msg	No graphics device could be opened again: {error}	Hiçbir grafik aygıtı yeniden açılamadı: {error}
+@msg	No graphics hardware can be used; drawing in software, which is slower	Grafik donanımı kullanılamıyor; yazılımla çiziliyor, bu daha yavaştır
+@msg	No software graphics adapter is available; using the automatic choice	Yazılım grafik bağdaştırıcısı yok; otomatik seçim kullanılıyor
+@msg	Nothing can be drawn until StudioCraft starts again	StudioCraft yeniden başlatılana kadar hiçbir şey çizilemez
+@msg	The graphics adapter {adapter} could not be opened: {error}	{adapter} grafik bağdaştırıcısı açılamadı: {error}
+@msg	The graphics adapter {adapter} is not available; using the automatic choice	{adapter} grafik bağdaştırıcısı kullanılamıyor; otomatik seçim kullanılıyor
+@msg	The graphics device stopped working {count} times; drawing in software	Grafik aygıtı {count} kez çalışmayı durdurdu; yazılımla çiziliyor
+@msg	The graphics device stopped working: {error}	Grafik aygıtı çalışmayı durdurdu: {error}
 @msg	Audio monitoring could not start: {error}	Ses izleme başlatılamadı: {error}
 @msg	Audio monitoring stopped: {error}	Ses izleme durdu: {error}
 @msg	Could not check for updates: {error}	Güncellemeler denetlenemedi: {error}
