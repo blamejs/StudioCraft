@@ -84,9 +84,11 @@ type Retired = Fifo<Vec<Input>>;
 /// The final mix's loudness readings, as the mixer thread last published them.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct LoudnessReading {
-    /// Momentary loudness (the last 400 ms), LUFS; −∞ for silence.
+    /// Momentary loudness (the last 400 ms), LUFS; −∞ for silence and for the first 400 ms
+    /// after the start or a reset.
     pub momentary_lufs: f64,
-    /// Short-term loudness (the last 3 s), LUFS; −∞ for silence.
+    /// Short-term loudness (the last 3 s), LUFS; −∞ for silence and for the first 3 s after the
+    /// start or a reset.
     pub short_term_lufs: f64,
     /// Gated integrated loudness since the start or the last reset, LUFS; −∞ until a block
     /// passes the gates.
@@ -95,11 +97,22 @@ pub struct LoudnessReading {
     pub range_lu: f64,
     /// Highest true peak since the start or the last reset, dBTP; −∞ for silence.
     pub true_peak_dbtp: f64,
+    /// How many times the mixer has published readings: a reading with the same generation as
+    /// an earlier one is the same reading. 0 before the first block.
+    pub generation: u64,
 }
 
-/// Loudness readings shared between the mixer thread and the interface, without locks.
+/// How many times [`Loudness::load`] spins for a consistent set of readings before it yields
+/// the thread between tries. The mixer writes for well under a microsecond about 47 times a
+/// second, so a reader almost never needs a second try.
+const LOUDNESS_LOAD_SPINS: usize = 64;
+
+/// Loudness readings shared between the mixer thread and the interface, without locks. The
+/// readings are published as one set: `seq` is odd while the mixer writes them, and a reader
+/// that sees it change reads again.
 #[derive(Debug)]
 pub struct Loudness {
+    seq: AtomicU64,
     momentary: AtomicU64,
     short_term: AtomicU64,
     integrated: AtomicU64,
@@ -112,6 +125,7 @@ impl Default for Loudness {
     fn default() -> Self {
         let silent = f64::NEG_INFINITY.to_bits();
         Loudness {
+            seq: AtomicU64::new(0),
             momentary: AtomicU64::new(silent),
             short_term: AtomicU64::new(silent),
             integrated: AtomicU64::new(silent),
@@ -123,7 +137,28 @@ impl Default for Loudness {
 }
 
 impl Loudness {
+    /// The readings the mixer last published, all from the same block.
     pub fn load(&self) -> LoudnessReading {
+        let mut tries = 0usize;
+        loop {
+            let before = self.seq.load(Ordering::Acquire);
+            if before.is_multiple_of(2) {
+                let reading = self.read_fields(before / 2);
+                std::sync::atomic::fence(Ordering::Acquire);
+                if self.seq.load(Ordering::Relaxed) == before {
+                    return reading;
+                }
+            }
+            tries = tries.saturating_add(1);
+            if tries < LOUDNESS_LOAD_SPINS {
+                std::hint::spin_loop();
+            } else {
+                std::thread::yield_now();
+            }
+        }
+    }
+
+    fn read_fields(&self, generation: u64) -> LoudnessReading {
         let get = |a: &AtomicU64| f64::from_bits(a.load(Ordering::Relaxed));
         LoudnessReading {
             momentary_lufs: get(&self.momentary),
@@ -131,21 +166,32 @@ impl Loudness {
             integrated_lufs: get(&self.integrated),
             range_lu: get(&self.range),
             true_peak_dbtp: get(&self.true_peak),
+            generation,
         }
     }
 
-    /// Ask the mixer to start the meter again before its next block.
+    /// Ask the mixer to start every reading again (momentary, short-term, integrated, loudness
+    /// range and true peak) before its next block.
     pub fn request_reset(&self) {
         self.reset.store(true, Ordering::Relaxed);
     }
 
+    /// Publish the meter's readings. Only the mixer thread calls this.
     fn store(&self, m: &LoudnessMeter) {
-        let set = |a: &AtomicU64, v: f64| a.store(v.to_bits(), Ordering::Relaxed);
-        set(&self.momentary, m.momentary());
-        set(&self.short_term, m.short_term());
-        set(&self.integrated, m.integrated());
-        set(&self.range, m.loudness_range());
-        set(&self.true_peak, m.true_peak_dbtp());
+        self.publish([m.momentary(), m.short_term(), m.integrated(), m.loudness_range(), m.true_peak_dbtp()]);
+    }
+
+    /// Publish momentary, short-term, integrated, range and true peak as one set. Only one thread
+    /// may publish.
+    fn publish(&self, values: [f64; 5]) {
+        let seq = self.seq.load(Ordering::Relaxed);
+        self.seq.store(seq.wrapping_add(1), Ordering::Relaxed);
+        std::sync::atomic::fence(Ordering::Release);
+        let fields = [&self.momentary, &self.short_term, &self.integrated, &self.range, &self.true_peak];
+        for (a, v) in fields.into_iter().zip(values) {
+            a.store(v.to_bits(), Ordering::Relaxed);
+        }
+        self.seq.store(seq.wrapping_add(2), Ordering::Release);
     }
 }
 
@@ -338,7 +384,7 @@ impl MixState {
         clip(&mut self.mix);
         self.master.store(measure(&self.mix, 1.0));
         if self.loudness.reset.swap(false, Ordering::Relaxed) {
-            self.meter.reset();
+            self.meter.reset_program();
         }
         self.meter.process_interleaved(&self.mix);
         self.loudness.store(&self.meter);
@@ -566,7 +612,7 @@ mod tests {
         let a = Arc::new(AudioOut::default());
         m.apply(MixerCmd::Inputs(vec![input(1, &a, 1.0, true).0]));
         let mut at = 0;
-        // 20 s
+        // 470 blocks of 1024 frames at 48 kHz: 10 s.
         play_tone(&mut m, &a, 10f32.powf(-23.0 / 20.0), 470, &mut at);
         let r = m.loudness.load();
         for v in [r.momentary_lufs, r.short_term_lufs, r.integrated_lufs] {
@@ -574,10 +620,14 @@ mod tests {
         }
         assert!((r.true_peak_dbtp - -23.0).abs() < 0.2, "{r:?}");
         assert!(r.range_lu.abs() < 0.1, "{r:?}");
+        assert_eq!(r.generation, 470, "one publication per block");
     }
 
+    /// A reset starts every reading again: the true peak of a −6 dB tone gives way to that of a
+    /// −20 dB one, and the momentary and integrated readings wait for a full 400 ms of the new
+    /// program before they read its level.
     #[test]
-    fn a_reset_starts_the_program_measurements_again() {
+    fn a_reset_starts_every_reading_again() {
         let mixer = Mixer::detached();
         let mut m = MixState::new(Arc::new(Levels::default()));
         m.loudness = Arc::clone(mixer.loudness());
@@ -585,11 +635,45 @@ mod tests {
         m.apply(MixerCmd::Inputs(vec![input(1, &a, 1.0, true).0]));
         let mut at = 0;
         play_tone(&mut m, &a, 0.5, 100, &mut at);
-        assert!(mixer.loudness().load().integrated_lufs.is_finite());
-        mixer.loudness().request_reset();
-        play_tone(&mut m, &a, 0.0, 1, &mut at);
         let r = mixer.loudness().load();
-        assert_eq!((r.integrated_lufs, r.true_peak_dbtp, r.momentary_lufs), (f64::NEG_INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY), "{r:?}");
+        assert!((r.momentary_lufs - -6.0).abs() < 0.2 && (r.true_peak_dbtp - -6.0).abs() < 0.2, "{r:?}");
+        mixer.loudness().request_reset();
+        // 5 blocks: 5120 frames, one 100 ms step of the new program.
+        play_tone(&mut m, &a, 0.1, 5, &mut at);
+        let r = mixer.loudness().load();
+        assert_eq!((r.integrated_lufs, r.momentary_lufs), (f64::NEG_INFINITY, f64::NEG_INFINITY), "{r:?}");
+        assert!((r.true_peak_dbtp - -20.0).abs() < 0.2, "{r:?}");
+        // 25 blocks in all: more than 400 ms.
+        play_tone(&mut m, &a, 0.1, 20, &mut at);
+        let r = mixer.loudness().load();
+        assert!((r.momentary_lufs - -20.0).abs() < 0.2 && (r.integrated_lufs - -20.0).abs() < 0.2, "{r:?}");
+    }
+
+    /// A reader that runs while the mixer publishes gets readings from one block: every
+    /// published set here holds its generation in all five fields.
+    #[test]
+    fn a_reader_never_sees_two_blocks_mixed() {
+        let loudness = Arc::new(Loudness::default());
+        let writer = {
+            let loudness = Arc::clone(&loudness);
+            std::thread::spawn(move || {
+                for g in 1..=200_000u32 {
+                    loudness.publish([f64::from(g); 5]);
+                }
+            })
+        };
+        let mut seen = 0;
+        while !writer.is_finished() {
+            let r = loudness.load();
+            let all = [r.momentary_lufs, r.short_term_lufs, r.integrated_lufs, r.range_lu, r.true_peak_dbtp];
+            if r.generation > 0 {
+                assert!(all.iter().all(|&v| v == r.generation as f64), "{r:?}");
+            }
+            assert!(r.generation >= seen, "{r:?}");
+            seen = r.generation;
+        }
+        writer.join().unwrap();
+        assert_eq!(loudness.load().generation, 200_000);
     }
 
     #[test]

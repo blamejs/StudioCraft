@@ -185,6 +185,10 @@ pub struct LoudnessMeter {
     max_short_term: f64,
     integrated_hist: Histogram,
     lra_hist: Histogram,
+    /// The program readings, recomputed from the histograms at each 100 ms step.
+    integrated: f64,
+    relative_threshold: f64,
+    loudness_range: f64,
     sample_peak: Vec<f32>,
     true_peak: Vec<f32>,
     bank: PolyphaseBank,
@@ -218,6 +222,9 @@ impl LoudnessMeter {
             max_short_term: f64::NEG_INFINITY,
             integrated_hist: Histogram::new(),
             lra_hist: Histogram::new(),
+            integrated: f64::NEG_INFINITY,
+            relative_threshold: f64::NEG_INFINITY,
+            loudness_range: 0.0,
             sample_peak: vec![0.0; channels],
             true_peak: vec![0.0; channels],
             bank: PolyphaseBank::new(true_peak_factor(sample_rate)),
@@ -241,18 +248,31 @@ impl LoudnessMeter {
         }
     }
 
-    /// Clear all measurements and filter state.
+    /// Clear all measurements and filter state, for a new program that does not continue the
+    /// audio fed so far.
     pub fn reset(&mut self) {
-        self.integrated_hist.clear();
-        self.lra_hist.clear();
         self.filt.iter_mut().for_each(|(a, b)| {
             a.reset();
             b.reset()
         });
+        self.reset_program();
+    }
+
+    /// Clear every measurement (momentary, short-term, their maximums, integrated loudness,
+    /// loudness range, sample peak and true peak) but keep the K-weighting filter state, for a
+    /// new program that continues a live stream: the loudness readings do not see a filter
+    /// transient. The true-peak interpolator starts empty, so samples from before the reset do
+    /// not count for the new program.
+    pub fn reset_program(&mut self) {
+        self.interp.iter_mut().for_each(Interpolator::reset);
+        self.integrated_hist.clear();
+        self.lra_hist.clear();
+        self.integrated = f64::NEG_INFINITY;
+        self.relative_threshold = f64::NEG_INFINITY;
+        self.loudness_range = 0.0;
         self.acc.iter_mut().for_each(|a| *a = 0.0);
         self.sample_peak.iter_mut().for_each(|p| *p = 0.0);
         self.true_peak.iter_mut().for_each(|p| *p = 0.0);
-        self.interp.iter_mut().for_each(Interpolator::reset);
         self.sub_pos = 0;
         self.ring = [(0.0, 0); ST_SUBBLOCKS];
         self.ring_pos = 0;
@@ -344,25 +364,32 @@ impl LoudnessMeter {
             }
             s / (k * sub_len) as f64
         };
-        let em = window(M_SUBBLOCKS, &self.ring, self.ring_pos, self.sub_len);
-        let es = window(ST_SUBBLOCKS, &self.ring, self.ring_pos, self.sub_len);
-        self.momentary = energy_to_lufs(em);
-        self.short_term = energy_to_lufs(es);
+        // A window reads −∞ until it holds a full 400 ms or 3 s of audio: a reading over a
+        // part-filled ring would count the empty sub-blocks as silence and read low.
         if self.subblocks_seen >= M_SUBBLOCKS as u64 {
+            let em = window(M_SUBBLOCKS, &self.ring, self.ring_pos, self.sub_len);
+            self.momentary = energy_to_lufs(em);
             self.integrated_hist.add(em);
             self.max_momentary = self.max_momentary.max(self.momentary);
+            self.integrated = self.compute_integrated();
+            self.relative_threshold = self.compute_relative_threshold();
         }
         if self.subblocks_seen >= ST_SUBBLOCKS as u64 {
+            let es = window(ST_SUBBLOCKS, &self.ring, self.ring_pos, self.sub_len);
+            self.short_term = energy_to_lufs(es);
             self.lra_hist.add(es);
             self.max_short_term = self.max_short_term.max(self.short_term);
+            self.loudness_range = self.compute_loudness_range();
         }
     }
 
-    /// Momentary loudness (last 400 ms), LUFS; updated every 100 ms. −∞ for silence.
+    /// Momentary loudness (last 400 ms), LUFS; updated every 100 ms. −∞ for silence and for the
+    /// first 400 ms after the meter is made or reset.
     pub fn momentary(&self) -> f64 {
         self.momentary
     }
-    /// Short-term loudness (last 3 s), LUFS; updated every 100 ms.
+    /// Short-term loudness (last 3 s), LUFS; updated every 100 ms. −∞ for silence and for the
+    /// first 3 s after the meter is made or reset.
     pub fn short_term(&self) -> f64 {
         self.short_term
     }
@@ -375,8 +402,13 @@ impl LoudnessMeter {
         self.max_short_term
     }
 
-    /// Gated integrated loudness (BS.1770-4), LUFS. −∞ if nothing passed the gates.
+    /// Gated integrated loudness (BS.1770-4), LUFS. −∞ if nothing passed the gates. The value is
+    /// computed once per 100 ms gating step, so reading it does not scan the histogram.
     pub fn integrated(&self) -> f64 {
+        self.integrated
+    }
+
+    fn compute_integrated(&self) -> f64 {
         let h = &self.integrated_hist;
         match h.relative_gate_bin(-10.0).and_then(|b| h.mean_energy_from(b)) {
             Some((e, _)) => energy_to_lufs(e),
@@ -386,14 +418,23 @@ impl LoudnessMeter {
 
     /// Relative gate threshold used for the integrated loudness (LUFS).
     pub fn relative_threshold(&self) -> f64 {
+        self.relative_threshold
+    }
+
+    fn compute_relative_threshold(&self) -> f64 {
         match self.integrated_hist.mean_energy_from(0) {
             Some((e, _)) => energy_to_lufs(e) - 10.0,
             None => f64::NEG_INFINITY,
         }
     }
 
-    /// Loudness range (EBU Tech 3342), LU. 0 when too little signal.
+    /// Loudness range (EBU Tech 3342), LU. 0 when too little signal. The value is computed once
+    /// per 100 ms step, so reading it does not scan the histogram.
     pub fn loudness_range(&self) -> f64 {
+        self.loudness_range
+    }
+
+    fn compute_loudness_range(&self) -> f64 {
         let h = &self.lra_hist;
         let Some(start) = h.relative_gate_bin(-20.0) else { return 0.0 };
         let n: u64 = h.count[start..].iter().sum();
@@ -806,6 +847,47 @@ mod tests {
         let x = segments(1000.0, sr, &[(5.0, -30.0)]);
         m.process(&[&x, &x]);
         assert!((m.integrated() + 30.0).abs() < 0.1);
+    }
+
+    /// A program reset between a full-scale tone and silence leaves a true peak of 0: the old
+    /// samples still in the true-peak filter do not count for the new program.
+    #[test]
+    fn a_program_reset_does_not_carry_the_old_true_peak() {
+        let sr = 48_000.0;
+        let x = segments(997.0, sr, &[(0.5, 0.0)]);
+        let mut m = LoudnessMeter::new(sr, 2);
+        m.process(&[&x, &x]);
+        assert!(m.true_peak() > 0.9, "{}", m.true_peak());
+        m.reset_program();
+        let silence = vec![0.0f32; 4_800];
+        m.process(&[&silence, &silence]);
+        assert_eq!(m.true_peak(), 0.0);
+    }
+
+    /// The momentary and short-term windows read −∞ until they hold 400 ms and 3 s of audio,
+    /// instead of a low value over a part-filled window, and read the level once they are full.
+    #[test]
+    fn the_windows_read_nothing_until_they_are_full() {
+        let sr = 48_000.0;
+        let x = segments(1000.0, sr, &[(4.0, -23.0)]);
+        let sub = 4_800;
+        let mut m = LoudnessMeter::new(sr, 2);
+        m.process(&[&x[..3 * sub], &x[..3 * sub]]);
+        assert_eq!(m.momentary(), f64::NEG_INFINITY);
+        m.process(&[&x[3 * sub..4 * sub], &x[3 * sub..4 * sub]]);
+        assert!((m.momentary() + 23.0).abs() < 0.1, "M {}", m.momentary());
+        m.process(&[&x[4 * sub..29 * sub], &x[4 * sub..29 * sub]]);
+        assert_eq!(m.short_term(), f64::NEG_INFINITY);
+        m.process(&[&x[29 * sub..30 * sub], &x[29 * sub..30 * sub]]);
+        assert!((m.short_term() + 23.0).abs() < 0.1, "S {}", m.short_term());
+        // A program reset in the middle of the stream starts the windows again.
+        m.reset_program();
+        m.process(&[&x[30 * sub..33 * sub], &x[30 * sub..33 * sub]]);
+        assert_eq!(m.momentary(), f64::NEG_INFINITY);
+        assert_eq!((m.integrated(), m.loudness_range(), m.short_term()), (f64::NEG_INFINITY, 0.0, f64::NEG_INFINITY));
+        m.process(&[&x[33 * sub..34 * sub], &x[33 * sub..34 * sub]]);
+        assert!((m.momentary() + 23.0).abs() < 0.1, "M {}", m.momentary());
+        assert!((m.integrated() + 23.0).abs() < 0.1, "I {}", m.integrated());
     }
 
     #[test]

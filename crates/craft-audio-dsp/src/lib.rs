@@ -17,8 +17,10 @@
 //!
 //! Conventions: audio is **planar f32** (`&mut [&mut [f32]]`, one slice per channel, all the same
 //! length). `process` never allocates; all buffers are sized at construction. Parameters may be
-//! changed between blocks and are smoothed per sample, so the output is independent of how the
-//! stream is cut into blocks. Recursive state is flushed to zero when it decays below ~1e-30 so
+//! changed between blocks. Some are smoothed per sample when they change (gains, mix amounts and
+//! equalizer bands among them); others, such as a compressor's threshold, ratio, knee and times or
+//! a limiter's ceiling and release, take effect from the next sample. With the parameters held
+//! still, the output does not depend on how the stream is cut into blocks. Recursive state is flushed to zero when it decays below ~1e-30 so
 //! denormals never appear (no FTZ/DAZ CPU flags needed, which keeps the crate `unsafe`-free and
 //! portable to wasm).
 //!
@@ -165,7 +167,8 @@ pub trait AudioEffect: Send {
     /// Parameter descriptions (same as the registry entry's).
     fn params(&self) -> &'static [ParamSpec];
     /// Set a parameter by id; the value is clamped to its range. Returns `false` for unknown ids.
-    /// Takes effect smoothly from the next processed sample.
+    /// Takes effect from the next processed sample. Gains, mix amounts and equalizer bands move to
+    /// the new value smoothly; the crate documentation lists which other parameters change at once.
     fn set_param(&mut self, id: &str, value: f32) -> bool;
     /// Current (target) value of a parameter.
     fn param(&self, id: &str) -> Option<f32>;

@@ -527,8 +527,9 @@ impl Studio {
         self.mixer.loudness().load()
     }
 
-    /// Start the integrated loudness, loudness range and true peak of the final mix again from
-    /// the next block.
+    /// Start every loudness reading of the final mix again from the next block: momentary,
+    /// short-term, integrated, loudness range and true peak. The momentary and short-term
+    /// readings are −∞ until 400 ms and 3 s of the new program have played.
     pub fn reset_loudness(&self) {
         self.mixer.loudness().request_reset();
     }

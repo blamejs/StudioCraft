@@ -31,8 +31,13 @@ and contains no `unsafe` code.
 
 Audio is planar `f32`: one slice per channel, all the same length. `AudioEffect::process`,
 `process_keyed`, `set_param` and `reset` do not allocate; every buffer is sized when the effect is
-created. Parameter changes are smoothed per sample, so the output does not depend on the block
-size. Non-finite input samples do not leave an effect's state at NaN.
+created. When a parameter changes, gains, mix amounts and equalizer bands move to the new value
+per sample. Other parameters, such as a compressor's threshold, ratio, knee and times or a
+limiter's ceiling and release, take effect from the next sample. With the parameters held still,
+the output does not depend on the block size. The convolution reverb is the one effect whose
+`process` call can take much longer than a block: after a change to its impulse, room size or
+damping, the next call rebuilds the impulse's partitions in buffers sized when the effect was
+created. Non-finite input samples do not leave an effect's state at NaN.
 
 Constructors clamp the sample rate to `MIN_SAMPLE_RATE ..= MAX_SAMPLE_RATE` (1 kHz to 1.536 MHz,
 with 48 kHz for a non-finite rate) and the channel count to `1 ..= MAX_CHANNELS` (64).
@@ -60,6 +65,23 @@ The items the crate exports are its API. Removing or changing one is a breaking 
 the major version (the minor version while it is below 1.0). Effect ids and parameter ids are part
 of the API, because hosts save them in their files.
 
+## Origin
+
+The crate combines two crates from the ArtCraft apps, with changes:
+
+- [storytold/filmcraft](https://github.com/storytold/filmcraft) `crates/audio-dsp` at
+  `3f137a7ed420cac79b32145f5243b7f98b31f71c`: the `AudioEffect` trait, the effects and their
+  registry, the loudness meter, panning, resampling, time stretch, offset search and ducking.
+- [storytold/soundcraft](https://github.com/storytold/soundcraft) `crates/dsp` at
+  `648ed9db9a0e98cc55643babffac381521a556c8`: the tail length, offline mode, events, saved state
+  and editor parts of the trait.
+
+`NOTICE` keeps the copyright notices of both projects.
+
 ## License
 
 MIT OR Apache-2.0.
+
+Copyright (c) 2026 ArtCraft Team and the FilmCraft contributors.
+Copyright (c) 2026 ArtCraft Team and the SoundCraft contributors.
+Copyright (c) 2026 The StudioCraft contributors.
