@@ -32,6 +32,8 @@ craft-quit = { workspace = true }
 craft-update = { workspace = true }
 # The menu strip as the title bar when the app draws the window frame.
 craft-window = { workspace = true }
+# View › Scopes: the waveform, parade, histogram and vectorscopes of the program copy.
+craft-scopes = { workspace = true }
 serde ={ workspace = true }
 serde_json = { workspace = true }
 log = { workspace = true }

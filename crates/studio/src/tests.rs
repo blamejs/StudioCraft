@@ -244,6 +244,42 @@ fn captures_the_program_picture() {
 }
 
 #[test]
+fn scope_copies_keep_the_canvas_shape_and_stay_even() {
+    assert_eq!(scope_size((1920, 1080), 480, 270), (480, 270));
+    assert_eq!(scope_size((1080, 1920), 480, 270), (150, 270));
+    assert_eq!(scope_size((1000, 1000), 480, 270), (270, 270));
+    assert_eq!(scope_size((321, 181), 480, 270), (478, 270));
+    assert_eq!(scope_size((u32::MAX, 1), 480, 270), (480, 2));
+    assert_eq!(scope_size((0, 0), 0, 0), (2, 2));
+}
+
+#[test]
+fn the_scope_feed_receives_small_copies_of_the_program() {
+    let mut s = headless();
+    let sink = Arc::new(Fifo::new(4));
+    s.set_scope_feed(Some(ScopeFeed { sink: Arc::clone(&sink), max_width: 48, max_height: 27 }));
+    let Some(gpu) = shared_gpu() else {
+        eprintln!("no graphics device; skipped");
+        return;
+    };
+    let mut s = studio_with(Some(gpu), SceneCollection::new("Test", "Scene"), small_profile());
+    s.set_scope_feed(Some(ScopeFeed { sink: Arc::clone(&sink), max_width: 48, max_height: 27 }));
+    s.tick();
+    // Each capture waits for a compositor frame, which also sends the scopes their copy.
+    let mut got = None;
+    for _ in 0..50 {
+        s.capture(View::Program, Duration::from_secs(5)).unwrap();
+        got = sink.pop();
+        if got.is_some() {
+            break;
+        }
+    }
+    let f = got.expect("a scope frame arrived");
+    assert_eq!((f.width, f.height), (48, 26), "320 × 180 fitted into 48 × 27 and made even");
+    s.set_scope_feed(None);
+}
+
+#[test]
 fn a_settled_program_shows_the_new_scene_and_its_source() {
     let Some(gpu) = shared_gpu() else {
         eprintln!("no graphics device; skipped");

@@ -106,6 +106,8 @@
 	Help	Help
 	Hide	Hide
 	High	High
+	Histogram	Histogram
+	HLS vectorscope	HLS vectorscope
 	Hold (ms)	Hold (ms)
 	Hotkeys	Hotkeys
 	Image	Image
@@ -165,6 +167,7 @@
 	P5	P5
 	P6	P6
 	P7	P7
+	Parade	Parade
 	Picture file	Picture file
 	Pictures	Pictures
 	Preferences…	Preferences…
@@ -211,6 +214,8 @@
 	Scene Collection	Scene Collection
 	Scene {n}	Scene {n}
 	Scenes	Scenes
+	Scope Type	Scope Type
+	Scopes	Scopes
 	Send the preview to the program	Send the preview to the program
 	Server	Server
 	Settings	Settings
@@ -253,6 +258,8 @@
 	Text	Text
 	The interface fonts Inter and JetBrains Mono are under the SIL Open Font License 1.1.	The interface fonts Inter and JetBrains Mono are under the SIL Open Font License 1.1.
 	The licenses of the third-party crates StudioCraft uses are checked by `cargo xtask licenses`.	The licenses of the third-party crates StudioCraft uses are checked by `cargo xtask licenses`.
+	The scope could not be computed: {error}	The scope could not be computed: {error}
+	The scopes need a graphics device to read the program.	The scopes need a graphics device to read the program.
 	This filter has no settings.	This filter has no settings.
 	this is not supported on this system yet	this is not supported on this system yet
 	Tint	Tint
@@ -274,12 +281,15 @@
 	Video encoder	Video encoder
 	Video settings can't change while recording or streaming.	Video settings can't change while recording or streaming.
 	View	View
+	Waiting for the program picture…	Waiting for the program picture…
+	Waveform	Waveform
 	Website	Website
 	Width	Width
 	Window	Window
 	Window capture	Window capture
 	Windows Media Foundation H.264	Windows Media Foundation H.264
 	Your Videos folder	Your Videos folder
+	YUV vectorscope	YUV vectorscope
 	{db} dB	{db} dB
 	{encoder} (not in this ffmpeg)	{encoder} (not in this ffmpeg)
 	{fps} fps  {ms} ms	{fps} fps  {ms} ms
@@ -300,6 +310,7 @@
 @msg	The recording could not be finished: {error}	The recording could not be finished: {error}
 @msg	The recording stopped: {error}	The recording stopped: {error}
 @msg	The scene collection could not be saved: {error}	The scene collection could not be saved: {error}
+@msg	The scopes could not start: {error}	The scopes could not start: {error}
 @msg	The stream could not be finished	The stream could not be finished
 @msg	The stream could not be finished: {error}	The stream could not be finished: {error}
 @msg	The stream ended	The stream ended

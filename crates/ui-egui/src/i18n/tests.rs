@@ -129,6 +129,7 @@ fn every_label_drawn_in_the_pseudo_locale_went_through_translation() {
     a.open_filters(source);
     a.perform(&ctx, &CommandRef::with_params("filter.add", json!({"source": source, "kind": "color_correction"}))).unwrap();
     a.perform(&ctx, &CommandRef::new("view.stats")).unwrap();
+    a.perform(&ctx, &CommandRef::new("view.scopes")).unwrap();
     a.perform(&ctx, &CommandRef::new("app.about")).unwrap();
     a.perform(&ctx, &CommandRef::new("app.licenses")).unwrap();
     a.encoders = Some(vec![("H.264".into(), "libx264".into(), true), ("AV1".into(), "libsvtav1".into(), false)]);

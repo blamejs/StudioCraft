@@ -29,6 +29,8 @@ pub const UI_COMMANDS: &[(&str, &str)] = &[
     ("file.show_recordings", "Show Recordings"),
     ("file.show_settings_folder", "Show Settings Folder"),
     ("view.stats", "Stats"),
+    ("view.scopes", "Scopes"),
+    ("scopes.kind", "Scope Type"),
     ("view.status_bar", "Status Bar"),
     ("view.fullscreen", "Full-Screen Interface"),
     ("view.lock_preview", "Lock Preview"),
@@ -79,6 +81,7 @@ pub fn ui_params(id: &str) -> &'static str {
     match id {
         "profile.switch" | "collection.switch" => "name: string",
         "collection.import" | "collection.export" => "path?: string",
+        "scopes.kind" => "kind: string (waveform, parade, histogram, vectorscopeYuv or vectorscopeHls)",
         _ => "",
     }
 }
@@ -118,6 +121,7 @@ pub fn catalog() -> Vec<Bindable> {
         bindable(c("selection.fit"), "Fit to Screen", &["Cmd+F"]),
         bindable(c("selection.reset"), "Reset Transform", &["Cmd+R"]),
         bindable(c("view.stats"), "Stats", &[]).toggle(),
+        bindable(c("view.scopes"), "Scopes", &[]).toggle(),
         bindable(c("view.fullscreen"), "Full-Screen Interface", &["F11"]).toggle(),
         bindable(c("view.lock_preview"), "Lock Preview", &[]).toggle(),
         bindable(c("app.settings"), "Settings", &[]),
@@ -203,6 +207,7 @@ pub fn menu_bar(s: &MenuState) -> MenuBar {
             Node::Separator,
             check("studio.toggle", "Studio Mode"),
             check("view.stats", "Stats"),
+            check("view.scopes", "Scopes"),
             check("view.status_bar", "Status Bar"),
         ],
     )

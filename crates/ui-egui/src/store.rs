@@ -46,6 +46,11 @@ pub struct Prefs {
     pub profile: String,
     pub docks: Docks,
     pub stats: bool,
+    /// View › Scopes is open.
+    pub scopes: bool,
+    /// The scope the Scopes window shows: `waveform`, `parade`, `histogram`, `vectorscopeYuv` or
+    /// `vectorscopeHls`. Another value reads as `waveform`.
+    pub scope_kind: String,
     pub status_bar: bool,
     /// Items in the preview can't be moved or resized with the mouse.
     pub lock_preview: bool,
@@ -68,6 +73,8 @@ impl Default for Prefs {
             profile: DEFAULT_NAME.into(),
             docks: Docks::default(),
             stats: false,
+            scopes: false,
+            scope_kind: "waveform".into(),
             status_bar: true,
             lock_preview: false,
             hotkeys: Overrides::new(),

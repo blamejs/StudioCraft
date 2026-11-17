@@ -276,6 +276,40 @@ fn encoders_receive_nv12_frames_in_order() {
 }
 
 #[test]
+fn the_scope_copy_runs_beside_the_encoders_at_its_own_size() {
+    let Some(mut c) = compositor(32, 16) else { return };
+    let white = solid([255, 255, 255, 255], 16, 16);
+    c.set_plan(Arc::new(Plan { program: SceneDesc { items: vec![item(1, &white, at(0.0, 0.0))] }, ..Plan::default() }));
+    let (enc, scope) = (Arc::new(Fifo::new(16)), Arc::new(Fifo::new(16)));
+    c.set_encode(Some(EncodeTarget { width: 32, height: 16, sinks: vec![Arc::clone(&enc)] }));
+    c.set_scope(Some(EncodeTarget { width: 8, height: 4, sinks: vec![Arc::clone(&scope)] }));
+    let lost = AtomicU64::new(0);
+    for i in 0..4 {
+        c.frame(Tick(i * 100), &lost);
+        c.finish(&lost);
+    }
+    let frames: Vec<_> = std::iter::from_fn(|| scope.pop()).collect();
+    assert_eq!(frames.len() + c.scope_skipped() as usize, 4);
+    assert!(!frames.is_empty());
+    let f = &frames[0];
+    assert_eq!((f.width, f.height, f.format), (8, 4, PixelFormat::Nv12));
+    // Left half white, right half black, in limited range.
+    assert!(f.data[1].abs_diff(235) <= 2 && f.data[6].abs_diff(16) <= 2, "{:?}", &f.data[..8]);
+    assert!(enc.pop().is_some_and(|e| (e.width, e.height) == (32, 16)), "the encoders keep their own size");
+    // Stopping the scope copy leaves the encoders running.
+    c.set_scope(None);
+    c.frame(Tick(500), &lost);
+    c.finish(&lost);
+    assert!(scope.pop().is_none());
+    // The count of skipped copies reaches the app through RenderShared.
+    let shared = RenderShared::default();
+    c.scope_skipped.store(7, Ordering::Relaxed);
+    c.run(&shared, Tick(600));
+    c.finish(&shared.readback_lost);
+    assert_eq!(shared.scope_skipped.load(Ordering::Relaxed), 7);
+}
+
+#[test]
 fn unpremultiply_restores_straight_alpha() {
     let mut px = [128, 64, 0, 128, 10, 20, 30, 0, 255, 0, 0, 255];
     unpremultiply(&mut px);
