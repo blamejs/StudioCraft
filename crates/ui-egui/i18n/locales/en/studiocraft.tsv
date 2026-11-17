@@ -17,6 +17,7 @@
 	Apache 2.0	Apache 2.0
 	Apply	Apply
 	Attack (ms)	Attack (ms)
+	Audio	Audio
 	Audio bitrate	Audio bitrate
 	Audio input capture	Audio input capture
 	Audio Mixer	Audio Mixer
@@ -58,6 +59,7 @@
 	Cut to Program	Cut to Program
 	Default	Default
 	Defaults	Defaults
+	Delays this source's audio, to line it up with its picture	Delays this source's audio, to line it up with its picture
 	Device	Device
 	Direction	Direction
 	Discord Server	Discord Server
@@ -300,6 +302,7 @@
 	superfast	superfast
 	Swipe	Swipe
 	Switch at once	Switch at once
+	Sync offset	Sync offset
 	System ({language})	System ({language})
 	Takes effect the next time StudioCraft starts.	Takes effect the next time StudioCraft starts.
 	Temperature (K)	Temperature (K)

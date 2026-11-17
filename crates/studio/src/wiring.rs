@@ -57,6 +57,7 @@ pub(crate) struct Wiring {
     video_filters: HashMap<FilterId, VideoFilter>,
     mix: Option<Vec<MixKey>>,
     gains: HashMap<SourceId, (f32, bool)>,
+    offsets: HashMap<SourceId, u32>,
 }
 
 impl Wiring {
@@ -146,7 +147,8 @@ impl Wiring {
     }
 
     /// Mixer commands that bring it in line with the collection: a new set of inputs when the
-    /// sources, their filters or the program scene changed, else only volume and mute changes.
+    /// sources, their filters or the program scene changed, else only volume, mute and sync offset
+    /// changes.
     pub(crate) fn mixer_inputs(
         &mut self,
         c: &SceneCollection,
@@ -178,15 +180,20 @@ impl Wiring {
             })
             .collect();
         let gains: HashMap<SourceId, (f32, bool)> = audio_sources.iter().map(|(s, _)| (s.id, (s.audio.gain, s.audio.muted))).collect();
+        let offsets: HashMap<SourceId, u32> = audio_sources.iter().map(|(s, _)| (s.id, s.audio.sync_offset_ms)).collect();
         levels.retain(|id, _| gains.contains_key(id));
 
         if self.mix.as_ref() == Some(&key) {
-            let cmds: Vec<MixerCmd> = gains
+            let mut cmds: Vec<MixerCmd> = gains
                 .iter()
                 .filter(|(id, g)| self.gains.get(id) != Some(g))
                 .map(|(id, (gain, muted))| MixerCmd::Gain { source: *id, gain: *gain, muted: *muted })
                 .collect();
+            cmds.extend(
+                offsets.iter().filter(|(id, ms)| self.offsets.get(id) != Some(ms)).map(|(id, ms)| MixerCmd::SyncOffset { source: *id, ms: *ms }),
+            );
             self.gains = gains;
+            self.offsets = offsets;
             return (!cmds.is_empty()).then_some(cmds);
         }
 
@@ -208,10 +215,12 @@ impl Wiring {
                 active: k.active,
                 levels: lv,
                 filters,
+                sync_offset_ms: s.audio.sync_offset_ms,
             });
         }
         self.mix = Some(key);
         self.gains = gains;
+        self.offsets = offsets;
         Some(vec![MixerCmd::Inputs(inputs)])
     }
 }
@@ -246,6 +255,24 @@ mod tests {
         let [MixerCmd::Inputs(inputs)] = cmds.as_slice() else { panic!("{} commands", cmds.len()) };
         let input = inputs.iter().find(|i| i.source == first);
         assert!(input.zip(new_queue).is_some_and(|(i, q)| Arc::ptr_eq(&i.audio, &q)));
+    }
+
+    #[test]
+    fn a_changed_sync_offset_reaches_the_mixer_without_a_new_input_list() {
+        let registry = builtin_registry(&Arc::new(RwLock::new(String::new()))).unwrap();
+        let mut sources = SourceSet::new(MasterClock::new());
+        let (mut wiring, mut levels, mut notices) = (Wiring::default(), HashMap::new(), Vec::new());
+        let mut c = default_collection("Test");
+        sources.sync(&c, &registry);
+        let mic = c.global_audio.first().copied().unwrap_or_else(|| panic!("the default collection has global audio"));
+        c.source_mut(mic).unwrap().audio.sync_offset_ms = 120;
+        let Some(cmds) = wiring.mixer_inputs(&c, &registry, &sources, &mut levels, &mut notices) else { panic!("no inputs") };
+        let [MixerCmd::Inputs(inputs)] = cmds.as_slice() else { panic!("{} commands", cmds.len()) };
+        assert_eq!(inputs.iter().find(|i| i.source == mic).map(|i| i.sync_offset_ms), Some(120));
+        c.source_mut(mic).unwrap().audio.sync_offset_ms = 300;
+        let cmds = wiring.mixer_inputs(&c, &registry, &sources, &mut levels, &mut notices).unwrap_or_default();
+        assert!(matches!(cmds.as_slice(), [MixerCmd::SyncOffset { source, ms: 300 }] if *source == mic), "{} commands", cmds.len());
+        assert!(wiring.mixer_inputs(&c, &registry, &sources, &mut levels, &mut notices).is_none(), "nothing changed");
     }
 
     /// A source's size follows its enabled crop and pad filters in order, and a disabled one or

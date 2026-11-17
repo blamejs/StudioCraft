@@ -29,6 +29,8 @@
     {"name": "channels", "group": "audio", "value": 2, "code": "media::audio::CHANNELS", "estimated": true},
     {"name": "audio block", "group": "audio", "value": 1024, "unit": "frames", "code": "media::audio::BLOCK_FRAMES", "estimated": true},
     {"name": "blocks queued per output", "group": "audio", "value": 4, "unit": "blocks", "code": "engine::mixer::MAX_QUEUED_BLOCKS", "estimated": true},
+    {"name": "audio sync offset", "group": "audio", "value": 0, "unit": "ms", "code": "model::collection::AudioState::default", "estimated": true},
+    {"name": "longest audio sync offset", "group": "audio", "value": 5000, "unit": "ms", "code": "model::collection::MAX_SYNC_OFFSET_MS", "estimated": true},
     {"name": "meter floor", "group": "audio", "value": -60, "unit": "dB", "code": "media::mix::METER_FLOOR_DB", "estimated": true},
     {"name": "meter yellow zone from", "group": "audio", "value": -20, "unit": "dB", "code": "ui-egui::docks::METER_YELLOW_DB", "estimated": true},
     {"name": "meter red zone from", "group": "audio", "value": -9, "unit": "dB", "code": "ui-egui::docks::METER_RED_DB", "estimated": true},

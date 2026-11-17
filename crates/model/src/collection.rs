@@ -22,18 +22,24 @@ pub struct FilterConfig {
     pub settings: Settings,
 }
 
-/// Volume and mute of a source's audio.
+/// Volume, mute and sync offset of a source's audio.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AudioState {
     /// Linear gain, 0 to 1 (the fader's 0 dB is 1).
     pub gain: f32,
     pub muted: bool,
+    /// How long the mixer delays the source's audio, in milliseconds, 0 to
+    /// [`MAX_SYNC_OFFSET_MS`].
+    pub sync_offset_ms: u32,
 }
+
+/// Longest audio sync offset accepted, in milliseconds.
+pub const MAX_SYNC_OFFSET_MS: u32 = 5_000;
 
 impl Default for AudioState {
     fn default() -> Self {
-        Self { gain: 1.0, muted: false }
+        Self { gain: 1.0, muted: false, sync_offset_ms: 0 }
     }
 }
 
@@ -286,6 +292,9 @@ impl SceneCollection {
             self.preview_scene = None;
         }
         self.transition.duration_ms = self.transition.duration_ms.min(MAX_TRANSITION_MS);
+        for s in &mut self.sources {
+            s.audio.sync_offset_ms = s.audio.sync_offset_ms.min(MAX_SYNC_OFFSET_MS);
+        }
     }
 }
 

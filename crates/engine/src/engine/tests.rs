@@ -258,6 +258,30 @@ fn volume_and_mute() {
 }
 
 #[test]
+fn sync_offset() {
+    let mut e = engine();
+    let o = run(&mut e, "source.add", json!({"kind": "mic", "name": "Mic"})).unwrap();
+    let src: SourceId = serde_json::from_value(o.result["source"].clone()).unwrap();
+    run(&mut e, "source.sync_offset", json!({"source": "Mic", "ms": 250})).unwrap();
+    assert_eq!(e.collection().source(src).unwrap().audio.sync_offset_ms, 250);
+    e.seal_history();
+    run(&mut e, "source.sync_offset", json!({"source": src, "ms": 5000})).unwrap();
+    for bad in [json!(5001), json!(-1), json!(12.5), json!("late"), json!(u64::MAX)] {
+        assert!(run(&mut e, "source.sync_offset", json!({"source": "Mic", "ms": bad})).is_err(), "{bad}");
+    }
+    assert_eq!(e.collection().source(src).unwrap().audio.sync_offset_ms, 5000, "a refused offset changes nothing");
+    assert!(run(&mut e, "source.sync_offset", json!({"source": "Mic"})).is_err(), "the offset is required");
+    assert!(!run(&mut e, "source.sync_offset", json!({"source": "Mic", "ms": 5000})).unwrap().changed, "the same offset is no change");
+    run(&mut e, "edit.undo", json!({})).unwrap();
+    assert_eq!(e.collection().source(src).unwrap().audio.sync_offset_ms, 250);
+    add_color(&mut e, "Video");
+    assert!(
+        matches!(run(&mut e, "source.sync_offset", json!({"source": "Video", "ms": 10})), Err(EngineError::Invalid(m)) if m.contains("no audio"))
+    );
+    assert!(matches!(run(&mut e, "source.sync_offset", json!({"source": "ghost", "ms": 10})), Err(EngineError::NoSource(_))));
+}
+
+#[test]
 fn filters_match_what_the_source_produces() {
     let mut e = engine();
     add_color(&mut e, "Video");
@@ -400,6 +424,7 @@ fn every_spec_is_reachable() {
             "source.settings" => json!({"source": 1, "settings": {}}),
             "source.volume" => json!({"source": 1, "gain": 0.5}),
             "source.mute" => json!({"source": 1, "muted": true}),
+            "source.sync_offset" => json!({"source": 1, "ms": 100}),
             "item.remove" | "item.duplicate" => json!({"item": 1}),
             "item.move" => json!({"item": 1, "to": "up"}),
             "item.transform" => json!({"item": 1, "transform": {}}),

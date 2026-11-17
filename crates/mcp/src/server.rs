@@ -25,7 +25,7 @@ one and command_batch runs several. A typical flow is scene_add, then source_add
 render_preview to look at the result and doc_inspect to read ids back. Studio mode keeps a preview scene and a program scene; \
 studio_transition moves the preview to the program. record_start and record_stop control the recording, stream_start and \
 stream_stop the stream to the configured RTMP server, replay_start, replay_stop and replay_save the replay buffer, and \
-output_status reports all three. prompts/list has ready-made workflows \
+output_status reports all three. source_audio sets a source's audio sync offset. prompts/list has ready-made workflows \
 (build_scene, lower_third, check_collection), completion/complete finishes a command id, a scene or source name or a plug-in kind, \
 and studiocraft://scene/{id}, studiocraft://source/{id}, studiocraft://command/{id} and studiocraft://plugin/{kind} read one thing \
 at a time instead of the whole scene collection; scenes and sources are named by id or by name.";

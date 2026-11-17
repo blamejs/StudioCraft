@@ -1402,10 +1402,13 @@ impl StudioApp {
         let mut i = 0;
         while i < self.properties.len() {
             let mut open = true;
-            let (cmd, b) = self.properties[i].show(ctx, &self.studio, &mut open);
+            let (cmd, b, audio) = self.properties[i].show(ctx, &self.studio, &mut open);
             let source = self.properties[i].source;
             if let Some(params) = cmd {
                 acts.push(Act::Run(CommandRef::with_params("source.settings", params)));
+            }
+            for (id, params) in audio {
+                acts.push(Act::run(id, params));
             }
             if let Some(b) = b {
                 let key = b.key.clone();

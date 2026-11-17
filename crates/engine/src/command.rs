@@ -120,6 +120,9 @@ pub enum Command {
     SourceVolume { source: SourceRef, gain: f32 },
     #[serde(rename = "source.mute")]
     SourceMute { source: SourceRef, muted: bool },
+    /// How long the mixer delays the source's audio, in milliseconds.
+    #[serde(rename = "source.sync_offset")]
+    SourceSyncOffset { source: SourceRef, ms: i64 },
 
     #[serde(rename = "item.remove")]
     ItemRemove {
@@ -270,6 +273,7 @@ impl Command {
             Command::SourceSettings { .. } => "source.settings",
             Command::SourceVolume { .. } => "source.volume",
             Command::SourceMute { .. } => "source.mute",
+            Command::SourceSyncOffset { .. } => "source.sync_offset",
             Command::ItemRemove { .. } => "item.remove",
             Command::ItemDuplicate { .. } => "item.duplicate",
             Command::ItemMove { .. } => "item.move",
@@ -352,6 +356,7 @@ const SPECS: &[CommandSpec] = &[
     spec("source.settings", "Source Properties", "source: id or name, settings: object", Undo::Undoable),
     spec("source.volume", "Set Volume", "source: id or name, gain: 0..1", Undo::Undoable),
     spec("source.mute", "Mute", "source: id or name, muted: bool", Undo::Undoable),
+    spec("source.sync_offset", "Set Sync Offset", "source: id or name, ms: 0..5000 milliseconds the audio is delayed", Undo::Undoable),
     spec("item.remove", "Remove Source from Scene", "item: id or source name, scene?", Undo::Undoable),
     spec("item.duplicate", "Duplicate Source", "item: id or source name, scene?", Undo::Undoable),
     spec("item.move", "Move Source", "item, scene?, to: up|down|top|bottom|{to: index}", Undo::Undoable),

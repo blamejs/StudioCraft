@@ -15,6 +15,7 @@
 	Alpha mask (color channel)	Alphamaske (Farbkanal)
 	Apply	Anwenden
 	Attack (ms)	Ansprechzeit (ms)
+	Audio	Audio
 	Audio bitrate	Audio-Bitrate
 	Audio input capture	Audioeingang aufnehmen
 	Audio Mixer	Audiomixer
@@ -52,6 +53,7 @@
 	Cut to Program	Schnitt zum Programm
 	Default	Standard
 	Defaults	Standardwerte
+	Delays this source's audio, to line it up with its picture	Verzögert den Ton dieser Quelle, damit er zum Bild passt
 	Device	Gerät
 	Direction	Richtung
 	Discord Server	Discord-Server
@@ -259,6 +261,7 @@
 	StudioCraft is available under either license, at your option.	StudioCraft steht nach Ihrer Wahl unter einer der beiden Lizenzen.
 	Swipe	Wischen
 	Switch at once	Sofort umschalten
+	Sync offset	Synchronisationsversatz
 	System ({language})	System ({language})
 	Takes effect the next time StudioCraft starts.	Wirkt beim nächsten Start von StudioCraft.
 	Temperature (K)	Farbtemperatur (K)

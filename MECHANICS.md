@@ -48,6 +48,7 @@ in both files.
 | Channels | 2 | `media::audio::CHANNELS` | estimated |
 | Block size | 1024 frames | `media::audio::BLOCK_FRAMES` | estimated |
 | Blocks queued per output | 4 | `engine::mixer::MAX_QUEUED_BLOCKS` | estimated |
+| Audio sync offset | 0 ms (0 to 5000 ms) | `model::collection::AudioState`, `model::collection::MAX_SYNC_OFFSET_MS` | estimated |
 | Meter floor | −60 dB | `media::mix::METER_FLOOR_DB` | estimated |
 | Meter yellow zone from | −20 dB | `ui-egui::docks::METER_YELLOW_DB` | estimated |
 | Meter red zone from | −9 dB | `ui-egui::docks::METER_RED_DB` | estimated |

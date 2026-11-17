@@ -49,8 +49,11 @@ build for `wasm32-unknown-unknown`:
 - **Source threads.** Each source runs on its own thread (`engine::host`). It publishes video
   frames into a `VideoOut` slot and audio blocks into a bounded lock-free queue.
 - **Mixer thread.** The mixer (`engine::mixer`) pulls one 1024-frame block (48 kHz stereo `f32`)
-  from every audible source, applies the audio filters, gain, mute and scene-change fades, and
-  measures peak and RMS levels. It pushes the mix to every output's bounded queue. The clipped mix
+  from every audible source, delays it by the source's sync offset, applies the audio filters,
+  gain, mute and scene-change fades, and measures peak and RMS levels. Each input's delay line
+  holds 5 s of audio (the longest offset) and is allocated with the input list on the sending
+  thread; a new input list takes over the delay lines of the sources it keeps, so their delayed
+  audio still plays. It pushes the mix to every output's bounded queue. The clipped mix
   also feeds a `craft-audio-dsp` loudness meter (momentary, short-term, integrated, loudness range
   and true peak), whose readings the mixer publishes after every block without locks.
 - **Compositor thread.** The scheduler (`engine::scheduler`) wakes on the master clock's frame ticks.
