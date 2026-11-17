@@ -577,7 +577,8 @@ impl Studio {
 
     /// Start the hardware encoder tests for `kind` on their own thread, each test with the
     /// arguments the output will run the encoder with.
-    fn test_hardware(&mut self, kind: OutputKind, planned: &Plan, program: PathBuf, offered: Vec<String>) {
+    /// Test the hardware encoders for `kind`'s start: the `hardware` choice's, or `named` alone.
+    fn test_hardware(&mut self, kind: OutputKind, planned: &Plan, program: PathBuf, offered: Vec<String>, named: Option<&'static str>) {
         let v = self.profile.video.sanitized();
         let fps = f64::from(v.fps_num) / f64::from(v.fps_den.max(1));
         let registry = Arc::clone(self.engine.registry());
@@ -593,7 +594,7 @@ impl Studio {
         let vendor = self.gpu.as_ref().and_then(|g| g.adapter()).map_or(0, |a| a.vendor);
         let stream = kind == OutputKind::Streaming;
         let lossless = planned.rate == RateControl::Lossless;
-        let preference = self.profile.output.hardware_encoder.clone();
+        let preference = named.map_or_else(|| self.profile.output.hardware_encoder.clone(), String::from);
         // A test passed before another output took an encoder says nothing about a second session.
         let encoding = self.outputs.active.values().any(|a| a.hardware.is_some());
         let cache = if encoding { Arc::new(self.outputs.probes.without_outcomes()) } else { Arc::clone(&self.outputs.probes) };
@@ -686,11 +687,13 @@ impl Studio {
         let program = if encoder.ffmpeg().is_some() || encoder.id() == HARDWARE {
             let program = ffmpeg::locate(&self.profile.output.ffmpeg_path).map_err(|e| StudioError::Output(e.to_string()))?;
             let offered = self.outputs.encoders.entry(program.clone()).or_insert_with(|| ffmpeg::encoders(&program)).clone();
-            if encoder.id() == HARDWARE {
+            // A VA-API encoder chosen by name is tested too, to find the render node it encodes on.
+            let vaapi = craft_hwenc::candidate(encoder.id()).filter(|c| c.api == craft_hwenc::Api::Vaapi).map(|c| c.id);
+            if encoder.id() == HARDWARE || vaapi.is_some() {
                 let Some((id, run, notice)) = self.outputs.resolved.remove(&kind) else {
                     // The tests can take seconds each, so they run on their own thread, and
                     // `finish_hardware_tests` starts the output when they end.
-                    self.test_hardware(kind, &planned, program, offered);
+                    self.test_hardware(kind, &planned, program, offered, vaapi);
                     return Ok(());
                 };
                 planned.encoder_settings = encoder_settings(&self.profile, kind, &id);

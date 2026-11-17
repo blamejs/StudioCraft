@@ -637,6 +637,23 @@ fn the_outputs_stop_when_the_device_is_lost() {
 }
 
 #[test]
+fn a_vaapi_encoder_chosen_by_name_is_tested_for_its_render_node() {
+    let dir = std::env::temp_dir().join(format!("studiocraft-vaapi-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let fake = dir.join("ffmpeg-not-a-program");
+    std::fs::write(&fake, b"not a program").unwrap();
+    let mut p = Profile::default();
+    p.output.ffmpeg_path = fake.to_string_lossy().into_owned();
+    p.output.video_encoder = "vaapi_h264".into();
+    p.output.folder = dir.to_string_lossy().into_owned();
+    let mut s = studio_with(Some(noop_gpu()), SceneCollection::new("Test", "Scene"), p);
+    s.start_output(OutputKind::Recording).unwrap();
+    assert!(s.testing_hardware(OutputKind::Recording));
+    s.stop_output(OutputKind::Recording);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn hardware_encoder_tests_run_off_the_calling_thread_and_a_second_toggle_cancels_them() {
     // A file that is not a program: every test finds no ffmpeg at once.
     let dir = std::env::temp_dir().join(format!("studiocraft-hwenc-{}", std::process::id()));
