@@ -64,12 +64,16 @@ pub fn device_list(kind: DeviceKind, nodes: &[Node], default: Option<&str>) -> V
 }
 
 /// Pass the interleaved 32-bit float samples in the `size` bytes at `offset` in a buffer's `bytes`
-/// to `deliver`, converted in `scratch`. Bytes outside the buffer and a part frame at the end are
-/// left out, and a sample that is not a finite number becomes silence. A buffer larger than
+/// to `deliver`, converted in `scratch`. The offset is taken modulo the buffer's length, as the
+/// PipeWire chunk description says. Bytes past the end of the buffer and a part frame at the end
+/// are left out, and a sample that is not a finite number becomes silence. A buffer larger than
 /// `scratch`'s capacity is delivered in whole frames that fit it, so `scratch` does not grow
 /// unless it cannot hold one frame.
 pub fn deliver_samples(bytes: &[u8], offset: u32, size: u32, channels: u16, scratch: &mut Vec<f32>, mut deliver: impl FnMut(&[f32])) {
-    let start = usize::try_from(offset).unwrap_or(usize::MAX).min(bytes.len());
+    if bytes.is_empty() {
+        return;
+    }
+    let start = usize::try_from(offset).map_or(0, |o| o % bytes.len());
     let end = start.saturating_add(usize::try_from(size).unwrap_or(usize::MAX)).min(bytes.len());
     let Some(region) = bytes.get(start..end) else { return };
     let frame = 4 * usize::from(channels.max(1));
@@ -184,9 +188,13 @@ mod tests {
         assert_eq!(delivered(&b, 8, 8, 2, &mut scratch), [vec![0.25, -0.25]]);
         // A size past the end of the buffer reads to the end.
         assert_eq!(delivered(&b, 8, u32::MAX, 2, &mut scratch), [vec![0.25, -0.25]]);
-        // An offset past the end reads nothing.
-        assert!(delivered(&b, 64, 16, 2, &mut scratch).is_empty());
+        // An offset is taken modulo the buffer's length.
+        assert_eq!(delivered(&b, 16, 8, 2, &mut scratch), [vec![0.5, -0.5]]);
+        assert_eq!(delivered(&b, 24, 8, 2, &mut scratch), [vec![0.25, -0.25]]);
+        assert_eq!(delivered(&b, 64, 16, 2, &mut scratch), [vec![0.5, -0.5, 0.25, -0.25]]);
+        // u32::MAX % 16 is 15, which leaves less than a frame.
         assert!(delivered(&b, u32::MAX, u32::MAX, 2, &mut scratch).is_empty());
+        assert!(delivered(&[], 16, 16, 2, &mut scratch).is_empty());
     }
 
     #[test]
