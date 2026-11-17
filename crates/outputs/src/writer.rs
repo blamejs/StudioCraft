@@ -44,6 +44,8 @@ struct Shared {
     /// Late frames dropped by the writer (queue overflows are counted by the queue).
     late: AtomicU64,
     failure: Mutex<Option<String>>,
+    /// When `failure` was set.
+    failed_at: Mutex<Option<Instant>>,
     /// The last line ffmpeg reported that was not progress.
     last_message: Mutex<String>,
     /// The first [`COMPONENT_LINES`] such lines from ffmpeg's components (`[h264_nvenc @ …] …`),
@@ -150,6 +152,20 @@ fn log_read(threads: &[JoinHandle<()>]) -> bool {
     threads.last().is_none_or(JoinHandle::is_finished)
 }
 
+/// How long a writer's failure waits for ffmpeg's error lines while ffmpeg still runs.
+const FAILURE_GRACE: Duration = Duration::from_secs(2);
+
+/// Whether a writer's failure is reported. A failure the writer found itself (`since` is `None`)
+/// is reported at once. A pipe failure `since` ago is reported once the log thread has read
+/// ffmpeg's last lines, or after [`FAILURE_GRACE`] when ffmpeg still runs (it can keep reading
+/// another pipe).
+fn failure_ready(exited: bool, log_read: bool, since: Option<Duration>) -> bool {
+    match since {
+        None => true,
+        Some(since) => log_read || (!exited && since >= FAILURE_GRACE),
+    }
+}
+
 /// A writer's `failure` (ffmpeg stopped reading its input) with the components' error lines and
 /// ffmpeg's last line, which say why when an encoder or its device failed.
 fn failure_text(shared: &Shared, failure: String) -> String {
@@ -171,6 +187,19 @@ impl Shared {
         if let Ok(mut f) = self.failure.lock()
             && f.is_none()
         {
+            *f = Some(message);
+        }
+    }
+
+    /// [`Shared::fail`] for a pipe ffmpeg stopped reading; ffmpeg's error lines that say why may
+    /// still come.
+    fn fail_pipe(&self, message: String) {
+        if let Ok(mut f) = self.failure.lock()
+            && f.is_none()
+        {
+            if let Ok(mut at) = self.failed_at.lock() {
+                *at = Some(Instant::now());
+            }
             *f = Some(message);
         }
     }
@@ -279,12 +308,11 @@ impl Writer {
         }
         self.stats.queued.store(self.video.len() as u64, Ordering::Relaxed);
         self.stats.dropped.store(self.video.dropped() + self.shared.late.load(Ordering::Relaxed), Ordering::Relaxed);
-        // When ffmpeg has exited, its last lines say why; a failure is then reported once the log
-        // thread (the last thread) has read them. A failure while ffmpeg runs is reported at once.
         let exited = self.child.try_lock().ok().and_then(|mut c| c.try_wait().ok().flatten());
-        let log_read = exited.is_none() || log_read(&self.threads);
+        let log_read = log_read(&self.threads);
+        let since = self.shared.failed_at.lock().ok().and_then(|at| *at).map(|at| at.elapsed());
         if let Some(f) = self.shared.failure.lock().ok().and_then(|f| f.clone())
-            && log_read
+            && failure_ready(exited.is_some(), log_read, since)
         {
             return OutputStatus::Failed(failure_text(&self.shared, f));
         }
@@ -359,7 +387,7 @@ impl Writer {
             Err(e) => Err(e),
         };
         // A writer thread can fail while it finishes its queue after the stop.
-        let failed_writing = self.shared.failure.lock().ok().and_then(|f| f.clone());
+        let failed_writing = self.shared.failure.lock().ok().and_then(|f| f.clone()).map(|f| failure_text(&self.shared, f));
         let result = match (failed_before, failed_writing, result) {
             (OutputStatus::Failed(e), _, _) | (_, Some(e), _) => Err(PluginError::Failed(e)),
             (_, None, r) => r,
@@ -493,12 +521,12 @@ fn write_video(mut stdin: impl Write, q: &Fifo<Arc<PooledFrame>>, shared: &Share
         let fill = last.clone().unwrap_or_else(|| Arc::clone(&frame));
         for _ in 0..n {
             if !write(&mut stdin, &fill) {
-                shared.fail("ffmpeg stopped reading video".into());
+                shared.fail_pipe("ffmpeg stopped reading video".into());
                 return;
             }
         }
         if !write(&mut stdin, &frame) {
-            shared.fail("ffmpeg stopped reading video".into());
+            shared.fail_pipe("ffmpeg stopped reading video".into());
             return;
         }
         next = after;
@@ -527,7 +555,7 @@ fn write_audio(mut sink: impl Write, q: &Fifo<PooledBlock>, shared: &Shared, sta
         while gap > 0 {
             let frames = gap.min(BLOCK_FRAMES as i64) as usize;
             if sink.write_all(&silence[..frames * CHANNELS * 4]).is_err() {
-                shared.fail("ffmpeg stopped reading audio".into());
+                shared.fail_pipe("ffmpeg stopped reading audio".into());
                 return;
             }
             written += frames as i64;
@@ -536,7 +564,7 @@ fn write_audio(mut sink: impl Write, q: &Fifo<PooledBlock>, shared: &Shared, sta
         bytes.clear();
         bytes.extend(block.samples.iter().flat_map(|s| s.to_le_bytes()));
         if sink.write_all(&bytes).is_err() {
-            shared.fail("ffmpeg stopped reading audio".into());
+            shared.fail_pipe("ffmpeg stopped reading audio".into());
             return;
         }
         shared.started.store(true, Ordering::Relaxed);
@@ -864,5 +892,10 @@ mod tests {
         }
         assert!(log_read(&threads));
         assert!(log_read(&[]));
+        assert!(!failure_ready(false, false, Some(Duration::ZERO)), "ffmpeg may still log why");
+        assert!(failure_ready(false, false, Some(FAILURE_GRACE)), "ffmpeg runs on, reading another pipe");
+        assert!(!failure_ready(true, false, Some(FAILURE_GRACE * 10)), "ffmpeg exited: its last lines come");
+        assert!(failure_ready(true, true, Some(Duration::ZERO)));
+        assert!(failure_ready(false, false, None), "a frame of the wrong size is reported at once");
     }
 }
