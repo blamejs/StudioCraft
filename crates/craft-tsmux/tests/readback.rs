@@ -7,7 +7,7 @@ mod common;
 
 use common::*;
 use craft_media::mpegts::{self, Codec as Demuxed, StreamId};
-use craft_tsmux::{Codec, Config, MAX_PCR_INTERVAL, Muxer, Stream};
+use craft_tsmux::{Av1Config, Codec, Config, Error, Frame, MAX_PCR_INTERVAL, Muxer, OpusMapping, Stream};
 
 const DELAY: i64 = 63_000;
 
@@ -41,7 +41,7 @@ fn round_trip(cfg: Config, streams: &[Stream], items: &mut [Item], want: &[Demux
         for (n, (u, i)) in units.iter().zip(&mine).enumerate() {
             assert_eq!(u.pts, Some(i.pts), "stream {k} unit {n}");
             assert_eq!(u.dts.or(u.pts), Some(i.dts), "stream {k} unit {n}");
-            if streams[k].codec.is_video() {
+            if streams[k].codec.is_video() && !matches!(want[k], Demuxed::Unknown(_)) {
                 assert_eq!(u.key, i.key, "stream {k} unit {n}");
             }
             assert_eq!(file.read_unit(&ts, k, n).unwrap(), i.expect, "stream {k} unit {n}");
@@ -165,6 +165,168 @@ fn timestamps_run_past_the_33_bit_wrap() {
         items.push(Item { stream: 1, expect: opus_unit(&p), data: p, pts: t, dts: t, key: true });
     }
     round_trip(Config::default(), &streams, &mut items, &[Demuxed::H264, Demuxed::Unknown(6)]);
+}
+
+#[test]
+fn eac3_mpeg1_video_and_mpeg4_part2() {
+    let streams =
+        [Stream::new(0x100, Codec::Mpeg1Video), Stream::new(0x101, Codec::Eac3).with_language(*b"spa"), Stream::new(0x102, Codec::Mpeg4Part2)];
+    let mut items = Vec::new();
+    for k in 0..50i64 {
+        let key = k % 12 == 0;
+        let data = mpeg2(key, (k % 12) as u16, if key { 4000 } else { 900 }, k as u8);
+        let t = 100_000 + k * 3600;
+        items.push(Item { stream: 0, expect: data.clone(), data, pts: t, dts: t, key });
+        let data = mpeg4(key, if key { 3000 } else { 600 }, k as u8);
+        items.push(Item { stream: 2, expect: data.clone(), data, pts: t, dts: t, key });
+    }
+    for k in 0..60i64 {
+        let f = eac3(k as u8);
+        let t = 100_000 + k * 2880;
+        items.push(Item { stream: 1, expect: f.clone(), data: f, pts: t, dts: t, key: true });
+    }
+    round_trip(Config::default(), &streams, &mut items, &[Demuxed::Mpeg1Video, Demuxed::Eac3, Demuxed::Unknown(0x10)]);
+}
+
+#[test]
+fn av1_reads_back_as_its_obus() {
+    let config = Av1Config::from_av1c(&[0x81, 0x08, 0x0C, 0x00]).unwrap();
+    let streams = [Stream::new(0x100, Codec::Av1(config)), Stream::new(0x101, Codec::Opus { channels: 2 })];
+    let mut tus = Vec::new();
+    let mut m = Muxer::new(Vec::new(), Config::default(), &streams).unwrap();
+    for k in 0..60i64 {
+        let key = k % 30 == 0;
+        let tu = av1(key, if key { 20_000 } else { 300 + (k as usize * 113) % 3000 }, k as u8);
+        let t = 90_000 + k * 3000;
+        m.write_frame(0, &Frame { data: &tu, pts: t, dts: None, key }).unwrap();
+        m.write_frame(1, &Frame { data: &[0xFC, k as u8 | 1], pts: t, dts: None, key: true }).unwrap();
+        tus.push((tu, t));
+    }
+    let ts = m.finish().unwrap();
+    check_packets(&ts, 0x100, 3600 * 300);
+    let file = mpegts::open(&ts).unwrap();
+    assert!(file.warnings.is_empty(), "{:?}", file.warnings);
+    assert_eq!(file.streams[0].codec, Demuxed::Unknown(6));
+    assert_eq!(file.streams[0].stream_type, 0x06);
+    let units = &file.streams[0].units;
+    assert_eq!(units.len(), tus.len());
+    for (n, (u, (tu, t))) in units.iter().zip(&tus).enumerate() {
+        assert_eq!(u.pts, Some(*t));
+        let es = file.read_unit(&ts, 0, n).unwrap();
+        assert_eq!(av1_unescape(&es), av1_without_delimiters(tu), "unit {n}");
+    }
+}
+
+#[test]
+fn opus_with_an_explicit_mapping_and_trims() {
+    let mapping = OpusMapping { channels: 3, family: 255, streams: 3, coupled: 0, mapping: [0, 1, 2, 0, 0, 0, 0, 0] };
+    let streams = [Stream::new(0x100, Codec::OpusMapped(mapping))];
+    let mut m = Muxer::new(Vec::new(), Config::default(), &streams).unwrap();
+    let mut want = Vec::new();
+    for k in 0..20i64 {
+        // three streams of 20 ms: two self-delimited packets, then the last one
+        let au = [0xFC, 1, 0x55, 0xFC, 1, 0x66, 0xFC, 0x77];
+        let trim = if k == 0 { craft_tsmux::OpusTrim { start: 312, end: 0 } } else { Default::default() };
+        let t = 90_000 + k * 1800;
+        m.write_frame_with_trim(0, &Frame { data: &au, pts: t, dts: None, key: true }, trim).unwrap();
+        let mut unit = if k == 0 { vec![0x7F, 0xF0, 8] } else { vec![0x7F, 0xE0, 8] };
+        if k == 0 {
+            unit.extend_from_slice(&312u16.to_be_bytes());
+        }
+        unit.extend_from_slice(&au);
+        want.push(unit);
+    }
+    let ts = m.finish().unwrap();
+    let file = mpegts::open(&ts).unwrap();
+    assert!(file.warnings.is_empty(), "{:?}", file.warnings);
+    assert_eq!(file.streams[0].units.len(), want.len());
+    for (n, w) in want.iter().enumerate() {
+        assert_eq!(&file.read_unit(&ts, 0, n).unwrap(), w);
+    }
+}
+
+#[test]
+fn a_discontinuity_reads_back_in_both_time_bases() {
+    let streams = [Stream::new(0x100, Codec::H264), Stream::new(0x101, Codec::AacAdts)];
+    let mut m = Muxer::new(Vec::new(), Config::default(), &streams).unwrap();
+    let mut want: [Vec<(Vec<u8>, i64)>; 2] = Default::default();
+    for (part, start) in [(0, 900_000i64), (1, 200_000)] {
+        if part == 1 {
+            m.discontinuity();
+        }
+        for k in 0..30i64 {
+            let data = h264(k == 0, false, 400, k as u8);
+            let t = start + k * 3000;
+            m.write_frame(0, &Frame { data: &data, pts: t, dts: None, key: k == 0 }).unwrap();
+            want[0].push((with_aud(Codec::H264, &data), t));
+            let f = adts(100, k as u8);
+            m.write_frame(1, &Frame { data: &f, pts: t, dts: None, key: true }).unwrap();
+            want[1].push((f, t));
+        }
+    }
+    let ts = m.finish().unwrap();
+    let file = mpegts::open(&ts).unwrap();
+    for (k, w) in want.iter().enumerate() {
+        let units = &file.streams[k].units;
+        assert_eq!(units.len(), w.len(), "stream {k}");
+        for (n, (u, (bytes, t))) in units.iter().zip(w).enumerate() {
+            assert_eq!(u.pts.map(|p| p.rem_euclid(1 << 33)), Some(*t), "stream {k} unit {n}");
+            assert_eq!(&file.read_unit(&ts, k, n).unwrap(), bytes, "stream {k} unit {n}");
+        }
+    }
+}
+
+/// An output that fails on its third write call.
+struct Flaky {
+    fail_on: Option<usize>,
+    calls: usize,
+    data: Vec<u8>,
+}
+
+impl std::io::Write for Flaky {
+    fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
+        self.calls += 1;
+        if Some(self.calls) == self.fail_on {
+            return Err(std::io::Error::other("upload failed"));
+        }
+        self.data.extend_from_slice(b);
+        Ok(b.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+#[test]
+fn the_output_after_an_io_error_reads_on_its_own() {
+    let streams = [Stream::new(0x100, Codec::H264), Stream::new(0x101, Codec::Ac3)];
+    let mut m = Muxer::new(Flaky { fail_on: Some(3), calls: 0, data: Vec::new() }, Config::default(), &streams).unwrap();
+    let mut after = [0usize; 2];
+    let mut failed = false;
+    for k in 0..60i64 {
+        let t = 90_000 + k * 3000;
+        let data = h264(k % 30 == 0, false, 2000, k as u8);
+        for (s, frame) in
+            [(0, Frame { data: &data, pts: t, dts: None, key: k % 30 == 0 }), (1, Frame { data: &ac3(k as u8), pts: t, dts: None, key: true })]
+        {
+            match m.write_frame(s, &frame) {
+                Ok(()) if failed => after[s] += 1,
+                Ok(()) => {}
+                Err(Error::Io(_)) if !failed => {
+                    failed = true;
+                    m.replace_writer(Flaky { fail_on: None, calls: 0, data: Vec::new() });
+                }
+                Err(e) => panic!("{e}"),
+            }
+        }
+    }
+    assert!(failed);
+    let ts = m.finish().unwrap().data;
+    let file = mpegts::open(&ts).unwrap();
+    assert!(file.warnings.is_empty(), "{:?}", file.warnings);
+    // every frame written after the error reads back
+    assert_eq!(file.streams[1].units.len(), after[1]);
+    assert_eq!(file.streams[0].units.len(), after[0]);
 }
 
 #[test]

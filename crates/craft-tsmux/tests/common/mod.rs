@@ -94,6 +94,107 @@ pub fn mp3(low: bool, seed: u8) -> Vec<u8> {
     v
 }
 
+/// An E-AC-3 sync frame: independent substream 0, 256 bytes, 48 kHz, six blocks, 2/0, bsid 16.
+pub fn eac3(seed: u8) -> Vec<u8> {
+    let mut v = vec![0x0B, 0x77, 0x00, 0x7F, 0x34, 0x80];
+    fill(&mut v, 256, seed);
+    v
+}
+
+/// An MPEG-4 Part 2 frame: a visual object sequence, visual object, video object layer and an
+/// I-VOP, or a P-VOP alone.
+pub fn mpeg4(key: bool, size: usize, seed: u8) -> Vec<u8> {
+    let mut v = if key {
+        vec![0, 0, 1, 0xB0, 0x01, 0, 0, 1, 0xB5, 0x09, 0, 0, 1, 0x00, 0, 0, 1, 0x20, 0x00, 0x84, 0x40, 0, 0, 1, 0xB6, 0x10]
+    } else {
+        vec![0, 0, 1, 0xB6, 0x50]
+    };
+    fill(&mut v, size, seed);
+    v
+}
+
+pub fn leb128(mut n: usize, v: &mut Vec<u8>) {
+    loop {
+        let b = (n & 0x7F) as u8;
+        n >>= 7;
+        if n == 0 {
+            v.push(b);
+            return;
+        }
+        v.push(b | 0x80);
+    }
+}
+
+/// An AV1 temporal unit in the low overhead format: a temporal delimiter, a sequence header on
+/// keyframes, and a frame OBU whose payload holds sequences that need emulation prevention.
+pub fn av1(key: bool, size: usize, seed: u8) -> Vec<u8> {
+    let mut v = vec![0x12, 0x00];
+    if key {
+        v.extend_from_slice(&[0x0A, 0x05, 0x00, 0x00, 0x00, 0x02, 0x7F]);
+    }
+    let mut payload = vec![0, 0, 1, 0, 0, 3, 0, 0, 0];
+    fill(&mut payload, size, seed);
+    v.push(0x32);
+    leb128(payload.len(), &mut v);
+    v.extend_from_slice(&payload);
+    v
+}
+
+/// The OBUs of a temporal unit without its temporal delimiters.
+pub fn av1_without_delimiters(tu: &[u8]) -> Vec<u8> {
+    let mut out = Vec::new();
+    let mut at = 0;
+    while at < tu.len() {
+        let h = tu[at];
+        let mut i = at + 1 + usize::from(h & 4 != 0);
+        let (mut size, mut shift) = (0usize, 0);
+        loop {
+            let b = tu[i];
+            i += 1;
+            size |= usize::from(b & 0x7F) << shift;
+            shift += 7;
+            if b & 0x80 == 0 {
+                break;
+            }
+        }
+        if (h >> 3) & 0x0F != 2 {
+            out.extend_from_slice(&tu[at..i + size]);
+        }
+        at = i + size;
+    }
+    out
+}
+
+/// Takes the start codes and emulation prevention bytes out of an AV1 PES payload, checking
+/// that no 0x000000, 0x000001 or 0x000002 appears inside an OBU and that every 0x000003 is
+/// followed by 0x00 to 0x03.
+pub fn av1_unescape(es: &[u8]) -> Vec<u8> {
+    assert!(es.starts_with(&[0, 0, 1]));
+    let mut out = Vec::new();
+    let (mut zeros, mut i) = (0, 0);
+    while i < es.len() {
+        if zeros == 0 && es[i..].starts_with(&[0, 0, 1]) {
+            i += 3;
+            continue;
+        }
+        let b = es[i];
+        i += 1;
+        if zeros >= 2 {
+            assert!(b >= 3, "0x0000{b:02X} inside an OBU");
+            zeros = 0;
+            if b == 3 {
+                assert!(es.get(i).is_some_and(|&n| n <= 3), "0x000003 followed by a byte that needs no escape");
+                continue;
+            }
+            out.push(b);
+            continue;
+        }
+        zeros = if b == 0 { zeros + 1 } else { 0 };
+        out.push(b);
+    }
+    out
+}
+
 /// The Opus control header and packet the demuxer gives back for an Opus frame.
 pub fn opus_unit(packet: &[u8]) -> Vec<u8> {
     let mut v = vec![0x7F, 0xE0];

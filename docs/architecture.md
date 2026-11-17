@@ -28,8 +28,12 @@ crate in the same layer. `cargo xtask layers` checks this against the table in
 | app | `studiocraft-cli` | `send` for one control request, `mcp` for the MCP server on standard input and output (headless, or `--connect <port>` to the app), `check` for scene collection files and `bench` for the timing run. |
 | tool | `xtask` | `cargo xtask` checks. |
 
-`studiocraft-model`, `studiocraft-plugin` and `craft-tsmux` have no operating-system or GPU
-dependency. `cargo xtask wasm` checks that they build for `wasm32-unknown-unknown`.
+These crates have no operating-system or GPU dependency, and `cargo xtask wasm` checks that they
+build for `wasm32-unknown-unknown`:
+
+- `studiocraft-model`
+- `studiocraft-plugin`
+- `craft-tsmux`
 
 ## Threads and data flow
 
