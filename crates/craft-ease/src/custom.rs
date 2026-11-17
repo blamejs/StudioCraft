@@ -278,14 +278,28 @@ impl CustomEase {
             Handle::Out => p.out = off,
         }
         c.clamp_handles();
-        if let Some(p) = c.points.get_mut(i).filter(|p| p.smooth && i > 0 && i + 1 < n) {
-            let (moved, other) = match which {
-                Handle::In => (p.h_in, &mut p.out),
-                Handle::Out => (p.out, &mut p.h_in),
-            };
-            let dir = moved.normalized();
-            if dir != Vec2::ZERO {
-                *other = -dir * other.length().max(1e-3);
+        if i > 0 && i + 1 < n {
+            let (prev, next) = (c.points.get(i - 1)?.at.x, c.points.get(i + 1)?.at.x);
+            if let Some(p) = c.points.get_mut(i).filter(|p| p.smooth) {
+                let at = p.at;
+                let (moved, other, x_reach) = match which {
+                    Handle::In => (p.h_in, &mut p.out, next - at.x),
+                    Handle::Out => (p.out, &mut p.h_in, prev - at.x),
+                };
+                let dir = -moved.normalized();
+                if dir != Vec2::ZERO {
+                    // Shortened to stay within reach along `dir`, so the clamp below does not
+                    // turn it out of line.
+                    let mut len = other.length().max(1e-3);
+                    if dir.x != 0.0 {
+                        len = len.min((x_reach / dir.x).max(0.0));
+                    }
+                    if dir.y != 0.0 {
+                        let y_reach = if dir.y > 0.0 { MAX_EASE_Y - at.y } else { -MAX_EASE_Y - at.y };
+                        len = len.min((y_reach / dir.y).max(0.0));
+                    }
+                    *other = dir * len;
+                }
             }
         }
         c.clamp_handles();

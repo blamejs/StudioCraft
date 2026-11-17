@@ -509,6 +509,37 @@ fn point_edits_keep_time_running_forwards() {
     assert!(c.remove(0).is_none() && c.remove(3).is_none());
 }
 
+/// Whether a smooth inner point's handles are in line (or one of them has no length).
+fn in_line(p: &EasePoint) -> bool {
+    let (a, b) = (p.h_in, p.out);
+    a.length() < 1e-9 || b.length() < 1e-9 || (a.normalized().dot(b.normalized()) + 1.0).abs() < 1e-9
+}
+
+/// Turning a smooth point's other handle keeps it in line even where it has less room on its
+/// side than its length: it is shortened along the line instead of clamped out of it.
+#[test]
+fn a_smooth_point_keeps_its_handles_in_line_near_a_neighbor() {
+    let c = CustomEase::new(vec![
+        EasePoint { at: Vec2::ZERO, h_in: Vec2::ZERO, out: Vec2::new(0.3, 0.0), smooth: false },
+        EasePoint { at: Vec2::new(0.9, 0.5), h_in: Vec2::new(-0.3, 0.0), out: Vec2::new(0.1, 0.3), smooth: true },
+        EasePoint { at: Vec2::new(1.0, 1.0), h_in: Vec2::new(-0.05, 0.0), out: Vec2::ZERO, smooth: false },
+    ]);
+    let d = c.move_handle(1, Handle::In, Vec2::new(0.5, 0.1)).unwrap();
+    let p = d.points()[1];
+    assert!(p.smooth && p.out.length() > 0.05 && in_line(&p), "{p:?}");
+    assert!(p.out.x <= 0.1 + 1e-12, "{p:?}");
+    assert_forwards(&d);
+    // The same near the y limit.
+    let e = CustomEase::new(vec![
+        EasePoint { at: Vec2::ZERO, h_in: Vec2::ZERO, out: Vec2::ZERO, smooth: false },
+        EasePoint { at: Vec2::new(0.5, 9.9), h_in: Vec2::new(-0.2, 0.0), out: Vec2::new(0.2, 0.0), smooth: true },
+        EasePoint { at: Vec2::new(1.0, 1.0), h_in: Vec2::ZERO, out: Vec2::ZERO, smooth: false },
+    ]);
+    let f = e.move_handle(1, Handle::Out, Vec2::new(0.6, 9.0)).unwrap();
+    let q = f.points()[1];
+    assert!(q.h_in.length() > 0.05 && in_line(&q) && q.at.y + q.h_in.y <= MAX_EASE_Y + 1e-12, "{q:?}");
+}
+
 /// Every segment's x control points lie between its ends, so x never decreases.
 fn assert_forwards(c: &CustomEase) {
     let pts = c.points();
@@ -540,7 +571,8 @@ fn x_stays_monotonic_after_any_edit() {
         let n = c.points().len();
         let i = (rnd() * n as f64) as usize % n;
         let to = Vec2::new(rnd() * 1.6 - 0.3, rnd() * 30.0 - 15.0);
-        let next = match (rnd() * 6.0) as u32 {
+        let op = (rnd() * 6.0) as u32;
+        let next = match op {
             0 => c.insert_at(rnd()).map(|r| r.0),
             1 => c.move_point(i, to),
             2 => c.move_handle(i, Handle::In, to),
@@ -556,6 +588,11 @@ fn x_stays_monotonic_after_any_edit() {
         };
         if let Some(d) = next {
             assert_forwards(&d);
+            if matches!(op, 2 | 3)
+                && let Some(p) = d.points().get(i).filter(|p| p.smooth)
+            {
+                assert!(in_line(p), "{p:?}");
+            }
             c = d;
         }
     }
