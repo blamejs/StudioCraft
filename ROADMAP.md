@@ -56,16 +56,16 @@
   actions, separated by 1-point dividers. The strip is 200 points tall, or 30% of the window when
   that is less. Dragging its top edge outside the header actions, or a divider, resizes it, and a
   right-click on a dock's title moves the dock left or right, or undocks it into a window of its
-  own. The sizes, the order and the undocked windows' places are kept until Docks › Reset Docks.
+  own. The sizes, the order and the undocked windows' places are kept until Docks › Reset Docks,
+  and Docks › Save Dock Layout… keeps them under a name to put back later from Docks › Layouts.
 - Interface fonts through `craft-ui`'s font stack: Inter for text, Inter SemiBold for titles and
   JetBrains Mono for readouts, then the craft-fonts faces when `CRAFT_FONTS_DIR` is set, then
   egui's built-in faces. The menus' check and radio marks draw with or without `CRAFT_FONTS_DIR`.
 
 ## Next
 
-1. **Docks.** Save dock layouts.
-2. **Translations.** A `studiocraft.tsv` catalog for every other locale craft-i18n has, and
+1. **Translations.** A `studiocraft.tsv` catalog for every other locale craft-i18n has, and
    right-to-left layout for Arabic and Hebrew.
-3. **Multiple outputs.** Several streams at once, and a virtual camera.
-4. **Web build.** The model and plugin crates already build for WebAssembly; a browser editor for
+2. **Multiple outputs.** Several streams at once, and a virtual camera.
+3. **Web build.** The model and plugin crates already build for WebAssembly; a browser editor for
    scene collections is the first step.

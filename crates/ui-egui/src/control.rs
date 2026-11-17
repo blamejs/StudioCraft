@@ -81,6 +81,7 @@ impl StudioApp {
             "dock.mixer" => on(p.docks.mixer),
             "dock.transitions" => on(p.docks.transitions),
             "dock.controls" => on(p.docks.controls),
+            "dock.layout_apply" | "dock.layout_remove" => ItemState { enabled: !p.dock_layouts.is_empty(), checked: None },
             "profile.remove" => ItemState { enabled: self.profiles.len() > 1, checked: None },
             "collection.remove" => ItemState { enabled: self.collections.len() > 1, checked: None },
             _ => ItemState::default(),
@@ -90,11 +91,13 @@ impl StudioApp {
     /// The menu bar as the window shows it: laid out for this platform, with shortcuts and the
     /// current enabled and checked states.
     pub(crate) fn laid_menu(&self) -> MenuBar {
+        let layouts = self.store.prefs().dock_layout_names();
         let s = commands::MenuState {
             collections: &self.collections,
             collection: &self.studio.collection().name,
             profiles: &self.profiles,
             profile: &self.studio.profile().name,
+            layouts: &layouts,
         };
         let mut bar = commands::menu_bar(&s);
         craft_menu::apply_keymap(&mut bar, &self.keymap);
@@ -162,11 +165,19 @@ impl StudioApp {
         let mut nodes = &menu.children;
         for (k, label) in rest.iter().enumerate() {
             let last = k + 1 == rest.len();
-            let found = nodes.iter().find(|n| match n {
-                Node::Item(it) => same_label(&it.label, label),
-                Node::Submenu { label: l, .. } => same_label(l, label),
-                Node::Separator | Node::Standard { .. } => false,
-            });
+            // A label written exactly as the menu shows it wins over one that matches only with
+            // three dots for an ellipsis, so names such as `A…` and `A...` both stay reachable.
+            let matches = |exact: bool| {
+                move |n: &&Node| {
+                    let shown = match n {
+                        Node::Item(it) => it.label.as_str(),
+                        Node::Submenu { label: l, .. } => l.as_str(),
+                        Node::Separator | Node::Standard { .. } => return false,
+                    };
+                    if exact { shown == *label } else { same_label(shown, label) }
+                }
+            };
+            let found = nodes.iter().find(matches(true)).or_else(|| nodes.iter().find(matches(false)));
             match found {
                 Some(Node::Item(it)) if last => {
                     if !it.enabled {
@@ -285,6 +296,7 @@ impl StudioApp {
             "docks": docks,
             "floating_docks": floating,
             "dock_strip": strip,
+            "dock_layouts": self.store.prefs().dock_layout_names(),
             "output_bar": self.output_bar.json(),
             "preview": preview,
             "studio_mode": self.studio.engine().studio_mode(),

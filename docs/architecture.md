@@ -252,6 +252,12 @@ dragged widths are saved in `config.toml` with the docks' visibility and order, 
 undocked, and where their windows were moved to and the sizes they were given. Docks › Reset Docks clears them and puts every
 dock back in the strip in its first order.
 
+Docks › Save Dock Layout… (`dock.layout_save`) asks for a name and keeps every one of those dock
+settings under it in `config.toml`'s `dock_layouts`. Docks › Layouts (`dock.layout_apply`) puts
+them back, and Docks › Remove Layout (`dock.layout_remove`) deletes one. Names follow the rules
+for profile names and are compared without regard to case, so saving under a name that is taken
+replaces that layout. At most 32 layouts are kept; a settings file with more keeps the first 32.
+
 `ui-egui/src/fonts.rs` builds the font stack with `craft-ui`'s `UiFonts`: Inter Regular for the
 proportional family, Inter SemiBold for the `semibold` family (dock, section and dialog titles) and
 JetBrains Mono for the monospace family, all embedded from `assets/fonts`. The craft-fonts faces

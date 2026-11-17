@@ -15,6 +15,7 @@
 	Alpha mask (alpha channel)	Alphamaske (Alphakanal)
 	Alpha mask (color channel)	Alphamaske (Farbkanal)
 	Apply	Anwenden
+	Apply Dock Layout	Dock-Layout anwenden
 	Attack (ms)	Ansprechzeit (ms)
 	Audio	Audio
 	Audio bitrate	Audio-Bitrate
@@ -133,6 +134,7 @@
 	Limit height	Höhe begrenzen
 	Limit width	Breite begrenzen
 	Linear	Linear
+	Layouts	Layouts
 	LIVE	LIVE
 	Live, {time}	Live, {time}
 	Lock (it can't be moved in the preview)	Sperren (in der Vorschau nicht verschiebbar)
@@ -166,6 +168,7 @@
 	No graphics device: the preview is off	Kein Grafikgerät: Die Vorschau ist aus
 	No sources in this scene. Add one with +.	Diese Szene hat keine Quellen. Fügen Sie eine mit + hinzu.
 	Noise gate	Rauschsperre
+	None	Keine
 	not in this ffmpeg	nicht in diesem ffmpeg
 	OK	OK
 	Opacity (%)	Deckkraft (%)
@@ -204,6 +207,8 @@
 	Refresh Lists	Listen aktualisieren
 	Release (ms)	Abklingzeit (ms)
 	Remove	Entfernen
+	Remove Dock Layout	Dock-Layout entfernen
+	Remove Layout	Layout entfernen
 	Remove Selected Source	Ausgewählte Quelle entfernen
 	Remove the selected scene	Ausgewählte Szene entfernen
 	Remove the selected source from the scene	Ausgewählte Quelle aus der Szene entfernen
@@ -229,6 +234,8 @@
 	Rotate 90° Counterclockwise	90° gegen den Uhrzeigersinn drehen
 	Running	Läuft
 	Saturation	Sättigung
+	Save Dock Layout	Dock-Layout speichern
+	Save Dock Layout…	Dock-Layout speichern…
 	Save Replay	Replay speichern
 	Scene Collection	Szenensammlung
 	Scene {n}	Szene {n}

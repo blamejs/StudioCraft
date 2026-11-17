@@ -694,6 +694,84 @@ fn names(v: &Value) -> Vec<String> {
 }
 
 #[test]
+fn a_saved_dock_layout_puts_every_dock_back_as_it_was() {
+    let mut a = app();
+    let ctx = egui::Context::default();
+    let size = egui::vec2(1280.0, 800.0);
+    run(&mut a, &ctx, "dock.mixer", json!({})).unwrap();
+    run(&mut a, &ctx, "dock.move", json!({"dock": "scenes", "to": "right"})).unwrap();
+    run(&mut a, &ctx, "dock.float", json!({"dock": "sources", "floating": true})).unwrap();
+    a.store.update(|p| {
+        p.docks.place_window(1, [400.0, 250.0], [360.0, 240.0]);
+    });
+    for _ in 0..2 {
+        frame_at(&mut a, &ctx, size);
+    }
+    let r = run(&mut a, &ctx, "dock.layout_save", json!({"name": "Talk"})).unwrap();
+    assert_eq!(r, json!({"saved": "Talk", "replaced": false}));
+    let saved = a.store().prefs().docks;
+
+    run(&mut a, &ctx, "dock.reset", json!({})).unwrap();
+    for _ in 0..2 {
+        frame_at(&mut a, &ctx, size);
+    }
+    assert_eq!(names(&a.ui_inspect(&ctx)["docks"]), ["scenes", "sources", "mixer"]);
+
+    let r = run(&mut a, &ctx, "dock.layout_apply", json!({"name": "talk"})).unwrap();
+    assert_eq!(r, json!({"applied": "Talk"}));
+    for _ in 0..2 {
+        frame_at(&mut a, &ctx, size);
+    }
+    assert_eq!(a.store().prefs().docks, saved);
+    let v = a.ui_inspect(&ctx);
+    assert_eq!(names(&v["docks"]), ["scenes"]);
+    assert_eq!(names(&v["floating_docks"]), ["sources"]);
+    let window = rect_of(&v["floating_docks"][0]["rect"]);
+    assert_eq!((window.min, window.size()), (egui::pos2(400.0, 250.0), egui::vec2(360.0, 240.0)));
+    assert_eq!(v["dock_layouts"], json!(["Talk"]));
+    let state = |a: &StudioApp, id: &str| a.item_state(id).enabled;
+    assert!(state(&a, "dock.layout_apply") && state(&a, "dock.layout_remove"));
+
+    // Errors: an unknown layout, a missing or wrong name, and a name the prompt would refuse.
+    for (id, bad) in [
+        ("dock.layout_apply", json!({"name": "Game"})),
+        ("dock.layout_apply", json!({})),
+        ("dock.layout_remove", json!({"name": "Game"})),
+        ("dock.layout_save", json!({"name": 3})),
+        ("dock.layout_save", json!({"name": ""})),
+        ("dock.layout_save", json!({"name": "a/b"})),
+    ] {
+        assert!(run(&mut a, &ctx, id, bad.clone()).is_err(), "{id} {bad}");
+    }
+    assert_eq!(a.store().prefs().dock_layout_names(), ["Talk"]);
+
+    // Without a name the window asks for one.
+    let r = run(&mut a, &ctx, "dock.layout_save", json!({})).unwrap();
+    assert_eq!(r, json!({"asking": true}));
+    assert_eq!(a.ui_inspect(&ctx)["dialogs"]["prompt"]["title"], json!("Save Dock Layout"));
+    a.answer_dialog(&ctx, true, Some("Game")).unwrap();
+    assert_eq!(a.store().prefs().dock_layout_names(), ["Talk", "Game"]);
+
+    // The menu reaches each layout, also two whose names differ only by an ellipsis.
+    for name in ["x\u{2026}y", "x...y"] {
+        run(&mut a, &ctx, "dock.layout_save", json!({ "name": name })).unwrap();
+    }
+    for name in ["x\u{2026}y", "x...y", "Game"] {
+        let cmd = a.menu_command(&format!("Docks > Layouts > {name}")).unwrap();
+        assert_eq!((cmd.id.as_str(), cmd.params), ("dock.layout_apply", json!({ "name": name })));
+    }
+    for name in ["x\u{2026}y", "x...y"] {
+        run(&mut a, &ctx, "dock.layout_remove", json!({ "name": name })).unwrap();
+    }
+
+    let r = run(&mut a, &ctx, "dock.layout_remove", json!({"name": "TALK"})).unwrap();
+    assert_eq!(r, json!({"removed": "TALK"}));
+    run(&mut a, &ctx, "dock.layout_remove", json!({"name": "Game"})).unwrap();
+    assert_eq!(a.ui_inspect(&ctx)["dock_layouts"], json!([]));
+    assert!(!state(&a, "dock.layout_apply") && !state(&a, "dock.layout_remove"));
+}
+
+#[test]
 fn dock_float_moves_a_dock_into_a_window_and_back() {
     let mut a = app();
     let ctx = egui::Context::default();
@@ -1107,7 +1185,7 @@ fn link_queries_run_in_the_engine() {
     assert_eq!(one, json!({"url": studiocraft_engine::links::ISSUES}));
     assert_eq!(run(&mut a, &ctx, "app.info", json!({})).unwrap(), studiocraft_engine::links::info());
     let names = a.collections.clone();
-    let bar = commands::menu_bar(&commands::MenuState { collections: &names, collection: "", profiles: &names, profile: "" });
+    let bar = commands::menu_bar(&commands::MenuState { collections: &names, collection: "", profiles: &names, profile: "", layouts: &[] });
     let help = bar.menus.into_iter().find(|m| m.title == "Help").unwrap();
     let ids: Vec<String> = help
         .children
