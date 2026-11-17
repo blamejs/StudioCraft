@@ -1,0 +1,410 @@
+# StudioCraft, Turkish.
+# Columns: context, source text, translation. Rows not listed here show in English.
+@id	language.name	Türkçe
+	a camera was not found	kamera bulunamadı
+	A recording, stream or replay buffer is running. Exiting stops it; a recording is finished and saved first, and the replay buffer's unsaved video is lost.	Bir kayıt, yayın veya tekrar arabelleği çalışıyor. Çıkış bunları durdurur; kayıt önce tamamlanıp kaydedilir, tekrar arabelleğindeki kaydedilmemiş video ise kaybolur.
+	About StudioCraft	StudioCraft Hakkında
+	About {app}	{app} Hakkında
+	Add	Ekle
+	Add a filter to change how this source looks or sounds.	Bu kaynağın görüntüsünü veya sesini değiştirmek için bir filtre ekleyin.
+	Add a scene	Sahne ekle
+	Add a source	Kaynak ekle
+	Add Scene	Sahne Ekle
+	Alignment	Hizalama
+	Alpha mask (alpha channel)	Alfa maskesi (alfa kanalı)
+	Alpha mask (color channel)	Alfa maskesi (renk kanalı)
+	Apply	Uygula
+	Apply Dock Layout	Panel Düzenini Uygula
+	Attack (ms)	Atak (ms)
+	Audio	Ses
+	Audio bitrate	Ses bit hızı
+	Audio input capture	Ses girişi yakalama
+	Audio Mixer	Ses Mikseri
+	Audio output capture	Ses çıkışı yakalama
+	Audio source actions	Ses kaynağı işlemleri
+	available	kullanılabilir
+	Available Encoders	Kullanılabilir Kodlayıcılar
+	Background	Arka plan
+	Balanced	Dengeli
+	Blend (add)	Karıştır (topla)
+	Blend (multiply)	Karıştır (çarp)
+	Blend (subtract)	Karıştır (çıkar)
+	Bottom	Alt
+	Brightness	Parlaklık
+	Browse…	Gözat…
+	Camera	Kamera
+	camera access is not allowed in the system's privacy settings	sistemin gizlilik ayarlarında kamera erişimine izin verilmiyor
+	Cancel	İptal
+	Canvas size	Tuval boyutu
+	Capture rate (frames per second)	Yakalama hızı (saniyedeki kare)
+	Ceiling (dB)	Tavan (dB)
+	Center	Orta
+	Center to Screen	Ekranda Ortala
+	Check for updates at start	Açılışta güncellemeleri denetle
+	Check for Updates…	Güncellemeleri Denetle…
+	Choose in the system picker	Sistem seçicisinde seç
+	Chroma key	Kroma anahtarı
+	Close	Kapat
+	Close below (dB)	Kapanma eşiği (dB)
+	Color	Renk
+	Color correction	Renk düzeltme
+	Color key	Renk anahtarı
+	Community	Topluluk
+	Compressor	Sıkıştırıcı
+	Contrast	Kontrast
+	could not connect to the PipeWire sound server	PipeWire ses sunucusuna bağlanılamadı
+	CPU usage preset (faster uses less CPU)	CPU kullanım ön ayarı (daha hızlı olan daha az CPU kullanır)
+	Credits	Emeği Geçenler
+	Crop and pad	Kırp ve doldur
+	Crop or pad each edge	Her kenarı kırp veya doldur
+	Cut	Kesme
+	Cut to Program	Programa Anında Geç
+	Default	Varsayılan
+	Defaults	Varsayılanlar
+	Delays this source's audio, to line it up with its picture	Bu kaynağın sesini görüntüyle eşitlemek için geciktirir
+	Device	Aygıt
+	Direction	Yön
+	Discord Server	Discord Sunucusu
+	Display	Ekran
+	Display capture	Ekran yakalama
+	Dock in the Strip	Şeride Yerleştir
+	Docks	Paneller
+	dropped {dropped}  lagged {lagged}	atlanan {dropped}  geciken {lagged}
+	Duplicate	Çoğalt
+	Duplicate…	Çoğalt…
+	Duration	Geçiş süresi
+	Ease in	Yavaş başla
+	Ease in and out	Yavaş başla ve bitir
+	Ease out	Yavaş bitir
+	Easing	Yumuşatma
+	Edit	Düzen
+	Enabled	Etkin
+	Encoder queue	Kodlayıcı kuyruğu
+	Ending Stream…	Yayın Bitiriliyor…
+	Equalizer	Ekolayzır
+	Existing Source	Mevcut Kaynak
+	Exit	Çıkış
+	Exit StudioCraft?	StudioCraft'tan çıkılsın mı?
+	Export…	Dışa Aktar…
+	Fade	Solma
+	Fade over 300 ms	300 ms içinde yumuşak geçiş yap
+	Fade through color	Renk üzerinden solma
+	Failed: {error}	Başarısız: {error}
+	ffmpeg (set its location in Settings › Output) was not found	ffmpeg bulunamadı (konumunu Ayarlar › Çıkış bölümünde belirleyin)
+	ffmpeg on the PATH	PATH üzerindeki ffmpeg
+	ffmpeg program	ffmpeg programı
+	File	Dosya
+	Filters for '{name}'	'{name}' için filtreler
+	Filters…	Filtreler…
+	Finishing Recording…	Kayıt Tamamlanıyor…
+	Fit to Screen	Ekrana Sığdır
+	Font	Yazı tipi
+	Font family	Yazı tipi ailesi
+	Format	Biçim
+	Frame time (average)	Kare süresi (ortalama)
+	Frame time (last)	Kare süresi (son)
+	Frames drawn	Çizilen kareler
+	Frames drawn late	Geç çizilen kareler
+	Frames encoded	Kodlanan kareler
+	Frames per second	Saniyedeki kare
+	Frames skipped by encoders	Kodlayıcıların atladığı kareler
+	Free software under the MIT or Apache 2.0 license.	MIT veya Apache 2.0 lisansı altında özgür yazılım.
+	From the bottom	Alttan
+	From the left	Soldan
+	From the right	Sağdan
+	From the top	Üstten
+	Full-Screen Interface	Tam Ekran Arayüz
+	Gain	Kazanç
+	Gain (dB)	Kazanç (dB)
+	Gamma	Gama
+	General	Genel
+	Go Live	Yayına Geç
+	H.264 (built in)	H.264 (yerleşik)
+	Height	Yükseklik
+	Help	Yardım
+	Hide	Gizle
+	High	Yüksek
+	High (dB)	Tiz (dB)
+	Histogram	Histogram
+	HLS vectorscope	HLS vektörskop
+	Hold (ms)	Tutma (ms)
+	Horizontal speed (px/s)	Yatay hız (px/sn)
+	Hotkeys	Kısayol Tuşları
+	Image	Resim
+	Image mask	Resim maskesi
+	Import…	İçe Aktar…
+	Key color	Anahtar rengi
+	Key color spill reduction	Anahtar renk sızıntısını azaltma
+	Keyframe interval	Anahtar kare aralığı
+	Language	Dil
+	Left	Sol
+	Licenses	Lisanslar
+	Limit height	Yüksekliği sınırla
+	Limit width	Genişliği sınırla
+	Limiter	Sınırlayıcı
+	Linear	Doğrusal
+	LIVE	CANLI
+	Layouts	Düzenler
+	Live, {time}	Canlı, {time}
+	Lock (it can't be moved in the preview)	Kilitle (önizlemede taşınamaz)
+	Lock Preview	Önizlemeyi Kilitle
+	Loop	Döngü
+	Low (dB)	Bas (dB)
+	Maximize	Ekranı Kapla
+	Media file	Medya dosyası
+	Media files	Medya dosyaları
+	Mid (dB)	Orta (dB)
+	Minimize	Simge Durumuna Küçült
+	Mode	Mod
+	Monitor and output	İzle ve çıkışa ver
+	Monitor off	İzleme kapalı
+	Monitor only (left out of recordings and streams)	Yalnızca izle (kayıtlara ve yayınlara gönderilmez)
+	Monitoring	İzleme
+	Monitoring device	İzleme aygıtı
+	Move Dock	Paneli Taşı
+	Move Left	Sola Taşı
+	Move Right	Sağa Taşı
+	Move the scene down	Sahneyi aşağı taşı
+	Move the scene up	Sahneyi yukarı taşı
+	Move the source down	Kaynağı aşağı taşı
+	Move the source up	Kaynağı yukarı taşı
+	Mute	Sesi kapat
+	Name	Ad
+	New Profile	Yeni Profil
+	New…	Yeni…
+	No audio sources are heard in this scene.	Bu sahnede duyulan bir ses kaynağı yok.
+	No contributors listed yet	Henüz listelenen katkıda bulunan yok
+	No filters yet.	Henüz filtre yok.
+	No graphics device: the preview is off	Grafik aygıtı yok: önizleme kapalı
+	No sources in this scene. Add one with +.	Bu sahnede kaynak yok. + ile bir tane ekleyin.
+	Noise gate	Gürültü kapısı
+	None	Yok
+	not in this ffmpeg	bu ffmpeg'de yok
+	Opacity (%)	Opaklık (%)
+	Open above (dB)	Açılma eşiği (dB)
+	Order	Sıra
+	Outline color	Dış çizgi rengi
+	Outline width	Dış çizgi kalınlığı
+	Output	Çıkış
+	Output Controls	Çıkış Denetimleri
+	Output gain (dB)	Çıkış kazancı (dB)
+	Output size	Çıkış boyutu
+	Parade	Parade
+	Picture file	Resim dosyası
+	Pictures	Resimler
+	Plays this source on the monitoring device chosen in Settings › Audio	Bu kaynağı Ayarlar › Ses bölümünde seçilen izleme aygıtında çalar
+	Preferences…	Tercihler…
+	Preset (higher is slower and better)	Ön ayar (yüksek olan daha yavaş ve daha iyidir)
+	Presets	Ön ayarlar
+	Preview: {name}	Önizleme: {name}
+	Primary display	Birincil ekran
+	Profile	Profil
+	Program: {name}	Program: {name}
+	Properties	Özellikler
+	Properties for '{name}'	'{name}' özellikleri
+	Properties…	Özellikler…
+	Quality	Kalite
+	Quit	Çık
+	Ratio	Oran
+	Read the displays, windows and devices again	Ekranları, pencereleri ve aygıtları yeniden tara
+	Reading the lists…	Listeler okunuyor…
+	Record	Kayıt
+	Record and stream scenes built from your screen, windows, cameras, pictures, text and sound.	Ekranınız, pencereleriniz, kameralarınız, resimleriniz, metin ve sesten oluşan sahneleri kaydedin ve yayınlayın.
+	Recording	Kayıt
+	Recording folder	Kayıt klasörü
+	Recording, {time}	Kayıt, {time}
+	Recordings	Kayıtlar
+	Redo	Yinele
+	Refresh Lists	Listeleri Yenile
+	Release (ms)	Bırakma (ms)
+	Remove	Kaldır
+	Remove Dock Layout	Panel Düzenini Kaldır
+	Remove Layout	Düzeni Kaldır
+	Remove Selected Source	Seçili Kaynağı Kaldır
+	Remove the selected scene	Seçili sahneyi kaldır
+	Remove the selected source from the scene	Seçili kaynağı sahneden kaldır
+	Rename	Yeniden Adlandır
+	Rename…	Yeniden Adlandır…
+	Replay	Tekrar
+	REPLAY	TEKRAR
+	Replay buffer	Tekrar arabelleği
+	Replay Buffer	Tekrar Arabelleği
+	Replay buffer length	Tekrar arabelleği uzunluğu
+	Replay buffer memory limit	Tekrar arabelleği bellek sınırı
+	Replay buffer, {time}	Tekrar arabelleği, {time}
+	Replay length (seconds)	Tekrar uzunluğu (saniye)
+	Replay memory limit (MB)	Tekrar bellek sınırı (MB)
+	Report an Issue	Sorun Bildir
+	Reset Docks	Panelleri Sıfırla
+	Reset Transform	Dönüşümü Sıfırla
+	Resize the dock strip	Panel şeridini yeniden boyutlandır
+	Resize the docks	Panelleri yeniden boyutlandır
+	Restore	Geri Yükle
+	Right	Sağ
+	Rotate 90° Clockwise	Saat Yönünde 90° Döndür
+	Rotate 90° Counterclockwise	Saat Yönünün Tersine 90° Döndür
+	Running	Çalışıyor
+	Saturation	Doygunluk
+	Save Dock Layout	Panel Düzenini Kaydet
+	Save Dock Layout…	Panel Düzenini Kaydet…
+	Save Replay	Tekrarı Kaydet
+	Scene Collection	Sahne Koleksiyonu
+	Scene {n}	Sahne {n}
+	Scenes	Sahneler
+	Scope Type	Video Ölçümü Türü
+	Scopes	Video Ölçümleri
+	Scroll	Kaydırma
+	Send the preview to the program	Önizlemeyi programa gönder
+	Server	Sunucu
+	Settings	Ayarlar
+	sharing stopped	paylaşım durdu
+	Sharpen	Keskinleştir
+	Sharpness	Keskinlik
+	Show	Göster
+	Show an area	Bir alan göster
+	Show Recordings	Kayıtları Göster
+	Show Scene {n}	Sahne {n} Göster
+	Show Settings Folder	Ayarlar Klasörünü Göster
+	Similarity	Benzerlik
+	Size	Boyut
+	Smoothness	Yumuşaklık
+	Software (x264)	Yazılım (x264)
+	Source Code	Kaynak Kodu
+	Source Properties	Kaynak Özellikleri
+	Sources	Kaynaklar
+	Sources set to monitoring in their Properties window play on this device.	Özellikler penceresinde izlemeye ayarlanan kaynaklar bu aygıtta çalınır.
+	Speed	Hız
+	Start or Stop Recording	Kaydı Başlat veya Durdur
+	Start or Stop Replay Buffer	Tekrar Arabelleğini Başlat veya Durdur
+	Start or Stop Streaming	Yayını Başlat veya Durdur
+	Start Recording	Kaydı Başlat
+	Start Replay Buffer	Tekrar Arabelleğini Başlat
+	Start Streaming	Yayını Başlat
+	Starting…	Başlatılıyor…
+	Stats	İstatistikler
+	Status Bar	Durum Çubuğu
+	Stop and Exit	Durdur ve Çık
+	Stop Recording	Kaydı Durdur
+	Stop Replay Buffer	Tekrar Arabelleğini Durdur
+	Stop Streaming	Yayını Durdur
+	Stopped	Durduruldu
+	Stopping Replay Buffer…	Tekrar Arabelleği Durduruluyor…
+	Stopping…	Durduruluyor…
+	Stream	Yayın
+	Stream key	Yayın anahtarı
+	Stretch image	Resmi esnet
+	Stretch to Screen	Ekrana Esnet
+	Studio	Stüdyo
+	Studio Mode	Stüdyo Modu
+	StudioCraft is available under either license, at your option.	StudioCraft'ı bu iki lisanstan dilediğiniz biriyle kullanabilirsiniz.
+	Swipe	Kaydırma geçişi
+	Switch at once	Hemen geç
+	Sync offset	Ses gecikmesi
+	System ({language})	Sistem ({language})
+	Takes effect the next time StudioCraft starts.	StudioCraft bir sonraki açılışında geçerli olur.
+	Temperature (K)	Sıcaklık (K)
+	Text	Metin
+	the audio capture could not start	ses yakalama başlatılamadı
+	the audio capture thread stopped	ses yakalama iş parçacığı durdu
+	the audio format could not be described	ses biçimi tanımlanamadı
+	the audio stream ended	ses akışı sona erdi
+	the audio stream failed	ses akışında hata oluştu
+	the camera capture could not start	kamera yakalama başlatılamadı
+	the camera is in use by another camera source	kamera başka bir kamera kaynağı tarafından kullanılıyor
+	the camera is still closing	kamera hâlâ kapanıyor
+	the camera offers no format StudioCraft reads	kamera StudioCraft'ın okuyabildiği bir biçim sunmuyor
+	the camera sends frames that cannot be read	kamera okunamayan kareler gönderiyor
+	the camera sent no picture	kamera görüntü göndermedi
+	the camera stopped	kamera durdu
+	the camera stopped sending pictures	kamera görüntü göndermeyi bıraktı
+	the camera stopped unexpectedly	kamera beklenmedik şekilde durdu
+	the choice in the system picker was canceled	sistem seçicisindeki seçim iptal edildi
+	the desktop has no screen-cast portal	masaüstünde ekran paylaşım portalı yok
+	The interface fonts Inter and JetBrains Mono are under the SIL Open Font License 1.1.	Arayüz yazı tipleri Inter ve JetBrains Mono, SIL Open Font License 1.1 altındadır.
+	The licenses of the third-party crates StudioCraft uses are checked by `cargo xtask licenses`.	StudioCraft'ın kullandığı üçüncü taraf crate'lerin lisansları `cargo xtask licenses` ile denetlenir.
+	The scope could not be computed: {error}	Video ölçümü hesaplanamadı: {error}
+	The scopes need a graphics device to read the program.	Video ölçümleri için program görüntüsünü okuyacak bir grafik aygıtı gerekir.
+	the screen capture could not start	ekran yakalama başlatılamadı
+	the screen capture failed	ekran yakalamada hata oluştu
+	This filter has no settings.	Bu filtrenin ayarı yok.
+	this is not supported on this system yet	bu sistemde henüz desteklenmiyor
+	Threshold (dB)	Eşik (dB)
+	Tint	Renk tonu
+	Tools	Araçlar
+	Top	Üst
+	Transition	Geçiş
+	Transition Controls	Geçiş Denetimleri
+	Transition settings	Geçiş ayarları
+	Transition to Program	Programa Geçiş
+	Type	Tür
+	Type shortcuts such as Ctrl+1 or Shift+F5; separate several with commas.	Ctrl+1 veya Shift+F5 gibi kısayolları yazın; birden fazlasını virgülle ayırın.
+	Undo	Geri Al
+	Undock	Yerinden Çıkar
+	Updates	Güncellemeler
+	Use system title bar	Sistem başlık çubuğunu kullan
+	Username	Kullanıcı adı
+	Version {version} ({os} {arch})	Sürüm {version} ({os} {arch})
+	Vertical speed (px/s)	Dikey hız (px/sn)
+	Video	Video
+	Video bitrate	Video bit hızı
+	Video encoder	Video kodlayıcı
+	Video settings can't change while recording, streaming or running the replay buffer.	Kayıt, yayın veya tekrar arabelleği çalışırken video ayarları değiştirilemez.
+	View	Görünüm
+	waiting for a choice in the system picker	sistem seçicisinde seçim bekleniyor
+	waiting for the camera	kamera bekleniyor
+	Waiting for the program picture…	Program görüntüsü bekleniyor…
+	waiting to open the camera again	kameranın yeniden açılması bekleniyor
+	Waveform	Dalga biçimi
+	Website	Web Sitesi
+	Width	Genişlik
+	Window	Pencere
+	Window capture	Pencere yakalama
+	Your Videos folder	Videolar klasörünüz
+	YUV vectorscope	YUV vektörskop
+	{device} (not connected)	{device} (bağlı değil)
+	{encoder} (not in this ffmpeg)	{encoder} (bu ffmpeg'de yok)
+	{program} did not report its version	{program} sürümünü bildirmedi
+	s	sn
+	Compact (small files)	Kompakt (küçük dosyalar)
+	Duplicate Profile	Profili Çoğalt
+	Duplicate Scene Collection	Sahne Koleksiyonunu Çoğalt
+	Lossless (very large files)	Kayıpsız (çok büyük dosyalar)
+	Move Down	Aşağı Taşı
+	Move to Bottom	En Alta Taşı
+	Move to Top	En Üste Taşı
+	Move Up	Yukarı Taşı
+	New Scene Collection	Yeni Sahne Koleksiyonu
+	Pristine (large files)	Kusursuz (büyük dosyalar)
+	Rename Profile	Profili Yeniden Adlandır
+	Rename Scene Collection	Sahne Koleksiyonunu Yeniden Adlandır
+	Unlock	Kilidi Aç
+	Unmute	Sesi aç
+@msg	A plug-in could not be loaded: {error}	Bir eklenti yüklenemedi: {error}
+@msg	Audio monitoring could not start: {error}	Ses izleme başlatılamadı: {error}
+@msg	Audio monitoring stopped: {error}	Ses izleme durdu: {error}
+@msg	Could not check for updates: {error}	Güncellemeler denetlenemedi: {error}
+@msg	Exported the scene collection to {path}	Sahne koleksiyonu {path} konumuna dışa aktarıldı
+@msg	Imported the scene collection `{name}`	`{name}` sahne koleksiyonu içe aktarıldı
+@msg	No file dialog could be shown: {error}	Dosya iletişim kutusu gösterilemedi: {error}
+@msg	Recording saved to {path}	Kayıt {path} konumuna kaydedildi
+@msg	Replay saved to {path}	Tekrar {path} konumuna kaydedildi
+@msg	The compositor thread could not start: {error}	Birleştirici iş parçacığı başlatılamadı: {error}
+@msg	The preferences could not be saved: {error}	Tercihler kaydedilemedi: {error}
+@msg	The profile could not be saved: {error}	Profil kaydedilemedi: {error}
+@msg	The recording could not be finished	Kayıt tamamlanamadı
+@msg	The recording could not be finished: {error}	Kayıt tamamlanamadı: {error}
+@msg	The recording stopped: {error}	Kayıt durdu: {error}
+@msg	The replay buffer could not be stopped	Tekrar arabelleği durdurulamadı
+@msg	The replay buffer could not be stopped: {error}	Tekrar arabelleği durdurulamadı: {error}
+@msg	The replay buffer stopped	Tekrar arabelleği durdu
+@msg	The replay buffer stopped: {error}	Tekrar arabelleği durdu: {error}
+@msg	The replay could not be saved	Tekrar kaydedilemedi
+@msg	The replay could not be saved: {error}	Tekrar kaydedilemedi: {error}
+@msg	The scene collection could not be saved: {error}	Sahne koleksiyonu kaydedilemedi: {error}
+@msg	The scopes could not start: {error}	Video ölçümleri başlatılamadı: {error}
+@msg	The stream could not be finished	Yayın bitirilemedi
+@msg	The stream could not be finished: {error}	Yayın bitirilemedi: {error}
+@msg	The stream ended	Yayın sona erdi
+@msg	The stream stopped: {error}	Yayın durdu: {error}
+@msg	ffmpeg at {path} was not found	{path} konumundaki ffmpeg bulunamadı
+menu	Transform	Dönüştür
