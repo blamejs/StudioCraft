@@ -1,0 +1,395 @@
+# StudioCraft, Japanese.
+# Columns: context, source text, translation. Rows not listed here show in English.
+@id	language.name	日本語
+	a camera was not found	カメラが見つかりません
+	A recording, stream or replay buffer is running. Exiting stops it; a recording is finished and saved first, and the replay buffer's unsaved video is lost.	録画、配信、またはリプレイバッファーが動作中です。終了すると停止します。録画は終了処理を行って保存しますが、リプレイバッファーの未保存の映像は失われます。
+	About StudioCraft	StudioCraft について
+	About {app}	{app} について
+	Add	追加
+	Add a filter to change how this source looks or sounds.	フィルターを追加して、このソースの映像や音声を変更します。
+	Add a scene	シーンを追加
+	Add a source	ソースを追加
+	Add Scene	シーンを追加
+	Alignment	文字揃え
+	Alpha mask (alpha channel)	アルファマスク (アルファチャンネル)
+	Alpha mask (color channel)	アルファマスク (カラーチャンネル)
+	Apply	適用
+	Apply Dock Layout	ドックレイアウトを適用
+	Attack (ms)	アタック (ms)
+	Audio	音声
+	Audio bitrate	音声ビットレート
+	Audio input capture	音声入力キャプチャ
+	Audio Mixer	音声ミキサー
+	Audio output capture	音声出力キャプチャ
+	Audio source actions	音声ソースの操作
+	available	利用可能
+	Available Encoders	利用可能なエンコーダー
+	Background	背景
+	Balanced	バランス
+	Blend (add)	ブレンド (加算)
+	Blend (multiply)	ブレンド (乗算)
+	Blend (subtract)	ブレンド (減算)
+	Bottom	下
+	Brightness	明るさ
+	Browse…	参照…
+	Camera	カメラ
+	camera access is not allowed in the system's privacy settings	システムのプライバシー設定でカメラへのアクセスが許可されていません
+	Cancel	キャンセル
+	Canvas size	キャンバスサイズ
+	Capture rate (frames per second)	キャプチャレート (フレーム/秒)
+	Ceiling (dB)	上限 (dB)
+	Center	中央
+	Center to Screen	画面の中央に配置
+	Check for updates at start	起動時にアップデートを確認
+	Check for Updates…	アップデートを確認…
+	Choose in the system picker	システムの選択画面で選ぶ
+	Chroma key	クロマキー
+	Close	閉じる
+	Close below (dB)	この値未満で閉じる (dB)
+	Color	色
+	Color correction	色補正
+	Color key	カラーキー
+	Community	コミュニティ
+	Compressor	コンプレッサー
+	Contrast	コントラスト
+	could not connect to the PipeWire sound server	PipeWire サウンドサーバーに接続できませんでした
+	CPU usage preset (faster uses less CPU)	CPU 使用率プリセット (速いほど CPU の使用量が少なくなります)
+	Credits	クレジット
+	Crop and pad	切り抜きと余白
+	Crop or pad each edge	各辺を切り抜くか余白を加えます
+	Cut	カット
+	Cut to Program	プログラムへカット
+	Default	既定
+	Defaults	既定値
+	Delays this source's audio, to line it up with its picture	このソースの音声を遅らせて映像と合わせます
+	Device	デバイス
+	Direction	方向
+	Discord Server	Discord サーバー
+	Display	ディスプレイ
+	Display capture	ディスプレイキャプチャ
+	Dock in the Strip	ストリップにドッキング
+	Docks	ドック
+	dropped {dropped}  lagged {lagged}	エンコード落ち {dropped}  描画遅れ {lagged}
+	Duplicate	複製
+	Duplicate…	複製…
+	Duration	切り替え時間
+	Ease in	イーズイン
+	Ease in and out	イーズインアウト
+	Ease out	イーズアウト
+	Easing	イージング
+	Edit	編集
+	Enabled	有効
+	Encoder queue	エンコーダーキュー
+	Ending Stream…	配信を終了しています…
+	Equalizer	イコライザー
+	Existing Source	既存のソース
+	Exit	終了
+	Exit StudioCraft?	StudioCraft を終了しますか？
+	Export…	書き出し…
+	Fade	フェード
+	Fade over 300 ms	300 ms でフェード
+	Fade through color	色を挟んでフェード
+	Failed: {error}	失敗しました: {error}
+	ffmpeg (set its location in Settings › Output) was not found	ffmpeg が見つかりませんでした (場所は 設定 › 出力 で指定します)
+	ffmpeg on the PATH	PATH 上の ffmpeg
+	ffmpeg program	ffmpeg プログラム
+	File	ファイル
+	Filters for '{name}'	「{name}」のフィルター
+	Filters…	フィルター…
+	Finishing Recording…	録画の終了処理中…
+	Fit to Screen	画面に合わせる
+	Font	フォント
+	Font family	フォントファミリー
+	Format	形式
+	Frame time (average)	フレーム時間 (平均)
+	Frame time (last)	フレーム時間 (直近)
+	Frames drawn	描画したフレーム
+	Frames drawn late	遅れて描画したフレーム
+	Frames encoded	エンコードしたフレーム
+	Frames per second	フレームレート
+	Frames skipped by encoders	エンコーダーがスキップしたフレーム
+	Free software under the MIT or Apache 2.0 license.	MIT または Apache 2.0 ライセンスのフリーソフトウェアです。
+	From the bottom	下から
+	From the left	左から
+	From the right	右から
+	From the top	上から
+	Full-Screen Interface	インターフェイスを全画面表示
+	Gain	ゲイン
+	Gain (dB)	ゲイン (dB)
+	Gamma	ガンマ
+	General	一般
+	Go Live	配信開始
+	H.264 (built in)	H.264 (内蔵)
+	Height	高さ
+	Help	ヘルプ
+	Hide	非表示
+	High	高域
+	High (dB)	高域 (dB)
+	Histogram	ヒストグラム
+	HLS vectorscope	HLS ベクトルスコープ
+	Hold (ms)	ホールド (ms)
+	Horizontal speed (px/s)	水平方向の速度 (px/秒)
+	Hotkeys	ホットキー
+	Image	画像
+	Image mask	画像マスク
+	Import…	読み込み…
+	Key color	キー色
+	Key color spill reduction	キー色のスピル除去
+	Keyframe interval	キーフレーム間隔
+	Language	言語
+	Left	左
+	Licenses	ライセンス
+	Limit height	高さを制限
+	Limit width	幅を制限
+	Limiter	リミッター
+	Linear	リニア
+	LIVE	ライブ
+	Layouts	レイアウト
+	Live, {time}	配信中、{time}
+	Lock (it can't be moved in the preview)	ロック (プレビューで移動できなくなります)
+	Lock Preview	プレビューをロック
+	Loop	ループ
+	Low (dB)	低域 (dB)
+	Maximize	最大化
+	Media file	メディアファイル
+	Media files	メディアファイル
+	Mid (dB)	中域 (dB)
+	Minimize	最小化
+	Mode	モード
+	Monitor and output	モニタリングと出力
+	Monitor off	モニタリングしない
+	Monitor only (left out of recordings and streams)	モニタリングのみ (録画・配信には含めません)
+	Monitoring	モニタリング
+	Monitoring device	モニタリングデバイス
+	Move Dock	ドックを移動
+	Move Left	左へ移動
+	Move Right	右へ移動
+	Move the scene down	シーンを下へ移動
+	Move the scene up	シーンを上へ移動
+	Move the source down	ソースを下へ移動
+	Move the source up	ソースを上へ移動
+	Mute	ミュート
+	Name	名前
+	New Profile	新しいプロファイル
+	New…	新規…
+	No audio sources are heard in this scene.	このシーンで聞こえる音声ソースはありません。
+	No contributors listed yet	貢献者はまだ記載されていません
+	No filters yet.	フィルターはまだありません。
+	No graphics device: the preview is off	グラフィックデバイスがないため、プレビューはオフです
+	No sources in this scene. Add one with +.	このシーンにはソースがありません。+ で追加してください。
+	Noise gate	ノイズゲート
+	None	なし
+	not in this ffmpeg	この ffmpeg にはありません
+	Opacity (%)	不透明度 (%)
+	Open above (dB)	この値を超えると開く (dB)
+	Order	順序
+	Outline color	輪郭の色
+	Outline width	輪郭の幅
+	Output	出力
+	Output Controls	出力コントロール
+	Output gain (dB)	出力ゲイン (dB)
+	Output size	出力サイズ
+	Parade	パレード
+	Picture file	画像ファイル
+	Pictures	画像
+	Plays this source on the monitoring device chosen in Settings › Audio	このソースを 設定 › 音声 で選んだモニタリングデバイスで再生します
+	Preferences…	環境設定…
+	Preset (higher is slower and better)	プリセット (高いほど遅くなり、品質が上がります)
+	Presets	プリセット
+	Preview: {name}	プレビュー: {name}
+	Primary display	メインディスプレイ
+	Profile	プロファイル
+	Program: {name}	プログラム: {name}
+	Properties	プロパティ
+	Properties for '{name}'	「{name}」のプロパティ
+	Properties…	プロパティ…
+	Quality	品質
+	Quit	終了
+	Ratio	圧縮比
+	Read the displays, windows and devices again	ディスプレイ、ウィンドウ、デバイスを読み込み直します
+	Reading the lists…	一覧を読み込んでいます…
+	Record	録画
+	Record and stream scenes built from your screen, windows, cameras, pictures, text and sound.	画面、ウィンドウ、カメラ、画像、テキスト、音声から作ったシーンを録画・配信します。
+	Recording	録画
+	Recording folder	録画フォルダー
+	Recording, {time}	録画中、{time}
+	Recordings	録画
+	Redo	やり直し
+	Refresh Lists	一覧を更新
+	Release (ms)	リリース (ms)
+	Remove	削除
+	Remove Dock Layout	ドックレイアウトを削除
+	Remove Layout	レイアウトを削除
+	Remove Selected Source	選択したソースを削除
+	Remove the selected scene	選択したシーンを削除
+	Remove the selected source from the scene	選択したソースをシーンから削除
+	Rename	名前を変更
+	Rename…	名前を変更…
+	Replay	リプレイ
+	REPLAY	リプレイ
+	Replay buffer	リプレイバッファー
+	Replay Buffer	リプレイバッファー
+	Replay buffer length	リプレイバッファーの長さ
+	Replay buffer memory limit	リプレイバッファーのメモリ上限
+	Replay buffer, {time}	リプレイバッファー、{time}
+	Replay length (seconds)	リプレイの長さ (秒)
+	Replay memory limit (MB)	リプレイのメモリ上限 (MB)
+	Report an Issue	問題を報告
+	Reset Docks	ドックをリセット
+	Reset Transform	変形をリセット
+	Resize the dock strip	ドックストリップのサイズを変更
+	Resize the docks	ドックのサイズを変更
+	Restore	元のサイズに戻す
+	Right	右
+	Rotate 90° Clockwise	時計回りに 90° 回転
+	Rotate 90° Counterclockwise	反時計回りに 90° 回転
+	Running	実行中
+	Saturation	彩度
+	Save Dock Layout	ドックレイアウトを保存
+	Save Dock Layout…	ドックレイアウトを保存…
+	Save Replay	リプレイを保存
+	Scene Collection	シーンコレクション
+	Scene {n}	シーン {n}
+	Scenes	シーン
+	Scope Type	スコープの種類
+	Scopes	スコープ
+	Scroll	スクロール
+	Send the preview to the program	プレビューをプログラムに送ります
+	Server	サーバー
+	Settings	設定
+	sharing stopped	共有が停止しました
+	Sharpen	シャープ
+	Sharpness	シャープネス
+	Show	表示
+	Show an area	範囲を指定して表示
+	Show Recordings	録画ファイルを表示
+	Show Scene {n}	シーン {n} を表示
+	Show Settings Folder	設定フォルダーを表示
+	Similarity	類似度
+	Size	サイズ
+	Smoothness	滑らかさ
+	Software (x264)	ソフトウェア (x264)
+	Source Code	ソースコード
+	Source Properties	ソースのプロパティ
+	Sources	ソース
+	Sources set to monitoring in their Properties window play on this device.	プロパティウィンドウでモニタリングに設定したソースは、このデバイスで再生されます。
+	Speed	速度
+	Start or Stop Recording	録画の開始/停止
+	Start or Stop Replay Buffer	リプレイバッファーの開始/停止
+	Start or Stop Streaming	配信の開始/停止
+	Start Recording	録画を開始
+	Start Replay Buffer	リプレイバッファーを開始
+	Start Streaming	配信を開始
+	Starting…	開始しています…
+	Stats	統計
+	Status Bar	ステータスバー
+	Stop and Exit	停止して終了
+	Stop Recording	録画を停止
+	Stop Replay Buffer	リプレイバッファーを停止
+	Stop Streaming	配信を停止
+	Stopped	停止中
+	Stopping Replay Buffer…	リプレイバッファーを停止しています…
+	Stopping…	停止しています…
+	Stream	配信
+	Stream key	ストリームキー
+	Stretch image	画像を引き伸ばす
+	Stretch to Screen	画面に合わせて引き伸ばす
+	Studio	スタジオ
+	Studio Mode	スタジオモード
+	StudioCraft is available under either license, at your option.	StudioCraft は、どちらかのライセンスを選んで利用できます。
+	Swipe	スワイプ
+	Switch at once	すぐに切り替え
+	Sync offset	同期オフセット
+	System ({language})	システム ({language})
+	Takes effect the next time StudioCraft starts.	次回 StudioCraft を起動したときに反映されます。
+	Temperature (K)	色温度 (K)
+	Text	テキスト
+	the audio capture could not start	音声キャプチャを開始できませんでした
+	the audio capture thread stopped	音声キャプチャのスレッドが停止しました
+	the audio format could not be described	音声形式の情報を処理できませんでした
+	the audio stream ended	音声ストリームが終了しました
+	the audio stream failed	音声ストリームでエラーが発生しました
+	the camera capture could not start	カメラキャプチャを開始できませんでした
+	the camera is in use by another camera source	カメラは別のカメラソースで使用中です
+	the camera is still closing	カメラはまだ終了処理中です
+	the camera offers no format StudioCraft reads	このカメラには StudioCraft が対応する映像形式がありません
+	the camera sends frames that cannot be read	カメラから読み取れないフレームが送られています
+	the camera sent no picture	カメラから映像が送られませんでした
+	the camera stopped	カメラが停止しました
+	the camera stopped sending pictures	カメラが映像の送信を停止しました
+	the camera stopped unexpectedly	カメラが予期せず停止しました
+	the choice in the system picker was canceled	システムの選択画面での選択がキャンセルされました
+	the desktop has no screen-cast portal	デスクトップに画面共有ポータルがありません
+	The interface fonts Inter and JetBrains Mono are under the SIL Open Font License 1.1.	インターフェイスのフォント Inter と JetBrains Mono は SIL Open Font License 1.1 で提供されています。
+	The licenses of the third-party crates StudioCraft uses are checked by `cargo xtask licenses`.	StudioCraft が使用するサードパーティークレートのライセンスは `cargo xtask licenses` で確認されます。
+	The scope could not be computed: {error}	スコープを計算できませんでした: {error}
+	The scopes need a graphics device to read the program.	スコープでプログラム映像を読み取るにはグラフィックデバイスが必要です。
+	the screen capture could not start	画面キャプチャを開始できませんでした
+	the screen capture failed	画面キャプチャでエラーが発生しました
+	This filter has no settings.	このフィルターには設定がありません。
+	this is not supported on this system yet	このシステムではまだサポートされていません
+	Threshold (dB)	しきい値 (dB)
+	Tint	色合い
+	Tools	ツール
+	Top	上
+	Transition	トランジション
+	Transition Controls	トランジションコントロール
+	Transition settings	トランジションの設定
+	Transition to Program	プログラムへトランジション
+	Type	種類
+	Type shortcuts such as Ctrl+1 or Shift+F5; separate several with commas.	Ctrl+1 や Shift+F5 のようにショートカットを入力します。複数ある場合はカンマで区切ります。
+	Undo	元に戻す
+	Undock	ドッキング解除
+	Updates	アップデート
+	Use system title bar	システムのタイトルバーを使用
+	Username	ユーザー名
+	Version {version} ({os} {arch})	バージョン {version} ({os} {arch})
+	Vertical speed (px/s)	垂直方向の速度 (px/秒)
+	Video	映像
+	Video bitrate	映像ビットレート
+	Video encoder	映像エンコーダー
+	Video settings can't change while recording, streaming or running the replay buffer.	録画中、配信中、リプレイバッファーの実行中は映像の設定を変更できません。
+	View	表示
+	waiting for a choice in the system picker	システムの選択画面での選択を待っています
+	waiting for the camera	カメラを待っています
+	Waiting for the program picture…	プログラムの映像を待っています…
+	waiting to open the camera again	カメラをもう一度開くのを待っています
+	Waveform	波形
+	Website	ウェブサイト
+	Width	幅
+	Window	ウィンドウ
+	Window capture	ウィンドウキャプチャ
+	Your Videos folder	ビデオフォルダー
+	YUV vectorscope	YUV ベクトルスコープ
+	{device} (not connected)	{device} (未接続)
+	{encoder} (not in this ffmpeg)	{encoder} (この ffmpeg にはありません)
+	{program} did not report its version	{program} がバージョンを返しませんでした
+@msg	A plug-in could not be loaded: {error}	プラグインを読み込めませんでした: {error}
+@msg	Audio monitoring could not start: {error}	音声モニタリングを開始できませんでした: {error}
+@msg	Audio monitoring stopped: {error}	音声モニタリングが停止しました: {error}
+@msg	Could not check for updates: {error}	アップデートを確認できませんでした: {error}
+@msg	Exported the scene collection to {path}	シーンコレクションを {path} に書き出しました
+@msg	Imported the scene collection `{name}`	シーンコレクション `{name}` を読み込みました
+@msg	No file dialog could be shown: {error}	ファイルダイアログを表示できませんでした: {error}
+@msg	Recording saved to {path}	録画を {path} に保存しました
+@msg	Replay saved to {path}	リプレイを {path} に保存しました
+@msg	The compositor thread could not start: {error}	合成スレッドを開始できませんでした: {error}
+@msg	The preferences could not be saved: {error}	環境設定を保存できませんでした: {error}
+@msg	The profile could not be saved: {error}	プロファイルを保存できませんでした: {error}
+@msg	The recording could not be finished	録画を完了できませんでした
+@msg	The recording could not be finished: {error}	録画を完了できませんでした: {error}
+@msg	The recording stopped: {error}	録画が停止しました: {error}
+@msg	The replay buffer could not be stopped	リプレイバッファーを停止できませんでした
+@msg	The replay buffer could not be stopped: {error}	リプレイバッファーを停止できませんでした: {error}
+@msg	The replay buffer stopped	リプレイバッファーが停止しました
+@msg	The replay buffer stopped: {error}	リプレイバッファーが停止しました: {error}
+@msg	The replay could not be saved	リプレイを保存できませんでした
+@msg	The replay could not be saved: {error}	リプレイを保存できませんでした: {error}
+@msg	The scene collection could not be saved: {error}	シーンコレクションを保存できませんでした: {error}
+@msg	The scopes could not start: {error}	スコープを開始できませんでした: {error}
+@msg	The stream could not be finished	配信を終了できませんでした
+@msg	The stream could not be finished: {error}	配信を終了できませんでした: {error}
+@msg	The stream ended	配信が終了しました
+@msg	The stream stopped: {error}	配信が停止しました: {error}
+@msg	ffmpeg at {path} was not found	{path} の ffmpeg が見つかりませんでした
+menu	Transform	変形

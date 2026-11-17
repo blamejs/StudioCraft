@@ -576,6 +576,7 @@ fn the_catalogs_in_the_tree_are_offered_and_switch_the_menus() {
         ("es", "Español", "Editar"),
         ("fr", "Français", "Édition"),
         ("it", "Italiano", "Modifica"),
+        ("ja", "日本語", "編集"),
         ("nl", "Nederlands", "Bewerken"),
         ("pl", "Polski", "Edycja"),
         ("pt-br", "Português (Brasil)", "Editar"),
