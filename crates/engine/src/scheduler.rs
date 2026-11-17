@@ -4,15 +4,18 @@
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::thread::JoinHandle;
 use std::time::Instant;
 
 use studiocraft_media::FrameRate;
 use studiocraft_media::clock::{MasterClock, PaceTick, Pacer};
 use studiocraft_media::stats::RenderStats;
 
-/// A running frame thread; dropping it stops the thread after its current frame.
+/// A running frame thread; dropping it stops the thread after its current frame and waits for it
+/// to end, so no frame is still drawing while the process exits.
 pub struct Scheduler {
     stop: Arc<AtomicBool>,
+    thread: Option<JoinHandle<()>>,
 }
 
 impl Scheduler {
@@ -23,22 +26,29 @@ impl Scheduler {
     {
         let stop = Arc::new(AtomicBool::new(false));
         let s = Arc::clone(&stop);
-        std::thread::Builder::new().name(name.into()).spawn(move || {
+        let thread = std::thread::Builder::new().name(name.into()).spawn(move || {
             let mut pacer = Pacer::new(clock, rate);
             while !s.load(Ordering::Relaxed) {
                 let t = pacer.wait();
+                if s.load(Ordering::Relaxed) {
+                    break;
+                }
                 let start = Instant::now();
                 frame(t);
                 stats.record(start.elapsed(), t.skipped);
             }
         })?;
-        Ok(Scheduler { stop })
+        Ok(Scheduler { stop, thread: Some(thread) })
     }
 }
 
 impl Drop for Scheduler {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::Relaxed);
+        if let Some(t) = self.thread.take() {
+            // A frame that panicked has already ended the thread.
+            let _ = t.join();
+        }
     }
 }
 
@@ -63,5 +73,23 @@ mod tests {
         let frames = n.load(Ordering::Relaxed);
         assert!((10..=30).contains(&frames), "{frames}");
         assert_eq!(stats.frames.load(Ordering::Relaxed), frames);
+    }
+
+    #[test]
+    fn dropping_waits_for_the_frame_thread_to_end() {
+        let alive = Arc::new(());
+        let held = Arc::clone(&alive);
+        let (tx, rx) = std::sync::mpsc::channel();
+        let s = Scheduler::spawn("test stop", MasterClock::new(), FrameRate::new(1000, 1), Arc::new(RenderStats::default()), move |_| {
+            let _ = (&held, tx.send(()));
+        })
+        .unwrap();
+        // A frame has run, so the thread is in its loop.
+        rx.recv().unwrap();
+        drop(s);
+        // The thread has ended and dropped the frame closure with it.
+        assert_eq!(Arc::strong_count(&alive), 1);
+        while rx.try_recv().is_ok() {}
+        assert_eq!(rx.try_recv(), Err(std::sync::mpsc::TryRecvError::Disconnected));
     }
 }
