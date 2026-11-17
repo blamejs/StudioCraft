@@ -1,9 +1,11 @@
 //! Forms built from a plug-in's [`SettingsSchema`], and the Properties and Filters windows.
 
-use std::sync::{Arc, mpsc};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use egui::{Color32, Ui};
 use serde_json::{Value, json};
+use studiocraft_media::queue::Latest;
 use studiocraft_model::collection::MAX_SYNC_OFFSET_MS;
 use studiocraft_model::{AudioState, FieldKind, FilterId, MonitorMode, PathMode, SettingsSchema, SourceId};
 use studiocraft_plugin::{FilterTarget, Registry, Settings};
@@ -171,7 +173,7 @@ type Reader = Arc<dyn Fn(&Settings) -> SettingsSchema + Send + Sync>;
 /// A schema being read on its own thread. A window reads one schema at a time: a read asked for
 /// while one runs starts when that one ends, and the reply of the earlier one is dropped.
 struct Reading {
-    reply: mpsc::Receiver<SettingsSchema>,
+    reply: Arc<Reply>,
     /// Another read was asked for while this one ran.
     again: bool,
     /// The fields after this index stay locked until the reply arrives.
@@ -181,6 +183,34 @@ struct Reading {
     /// settings from before that change; when they change elsewhere meanwhile, the change made
     /// elsewhere is kept instead.
     base: Option<Settings>,
+}
+
+/// Where a read leaves its schema.
+#[derive(Default)]
+struct Reply {
+    schema: Latest<SettingsSchema>,
+    /// Set after the schema is left, or when the read stopped without one.
+    done: AtomicBool,
+}
+
+impl Reply {
+    /// The schema once the read has ended: `Some(None)` when it stopped without one.
+    fn ended(&self) -> Option<Option<SettingsSchema>> {
+        if let Some(schema) = self.schema.take() {
+            return Some(Some(schema));
+        }
+        // The schema is left before `done` is set, so it is seen once `done` is.
+        self.done.load(Ordering::Acquire).then(|| self.schema.take())
+    }
+}
+
+/// Sets [`Reply::done`] when the read ends, also when the reader panics.
+struct Ends(Arc<Reply>);
+
+impl Drop for Ends {
+    fn drop(&mut self) {
+        self.0.done.store(true, Ordering::Release);
+    }
 }
 
 /// The Properties window of one source.
@@ -225,17 +255,18 @@ impl Properties {
     }
 
     fn start(&mut self, after: Option<usize>, base: Option<Settings>) {
-        let (tx, reply) = mpsc::sync_channel(1);
-        let here = tx.clone();
+        let reply = Arc::new(Reply::default());
+        let ends = Ends(reply.clone());
         let reader = self.reader.clone();
         let settings = self.settings.clone();
         let started = std::thread::Builder::new().name("studiocraft-properties".into()).spawn(move || {
-            // The window may have closed or asked again; then nobody is waiting.
-            let _ = tx.send(reader(&settings));
+            // The window may have closed or asked again; then nobody takes it.
+            ends.0.schema.publish(reader(&settings));
         });
         if started.is_err() {
             // No thread could be started: read here. The reply is taken like any other.
-            let _ = here.try_send((self.reader)(&self.settings));
+            reply.schema.publish((self.reader)(&self.settings));
+            reply.done.store(true, Ordering::Release);
         }
         self.reading = Some(Reading { reply, again: false, after, base });
     }
@@ -243,12 +274,8 @@ impl Properties {
     /// Take a schema that has arrived. When a change made in the window waited for it, the
     /// source's settings from before that change.
     fn poll(&mut self) -> Option<Settings> {
-        let schema = match self.reading.as_ref()?.reply.try_recv() {
-            Ok(schema) => Some(schema),
-            Err(mpsc::TryRecvError::Empty) => return None,
-            // The read stopped without a schema; the window keeps what it has.
-            Err(mpsc::TryRecvError::Disconnected) => None,
-        };
+        // A read that stopped without a schema leaves the window with what it has.
+        let schema = self.reading.as_ref()?.reply.ended()?;
         self.deliver(schema).flatten()
     }
 
@@ -574,6 +601,8 @@ impl Filters {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::mpsc;
+
     use studiocraft_model::{ChoiceOption, Field};
 
     use super::*;
@@ -622,7 +651,13 @@ mod tests {
     /// Wait for the read in progress and take its schema; whether the settings are to be sent.
     fn finish(p: &mut Properties) -> bool {
         loop {
-            let schema = p.reading.as_ref().expect("a read in progress").reply.recv().ok();
+            let reply = p.reading.as_ref().expect("a read in progress").reply.clone();
+            let schema = loop {
+                if let Some(schema) = reply.ended() {
+                    break schema;
+                }
+                std::thread::yield_now();
+            };
             if let Some(base) = p.deliver(schema) {
                 return base.is_some();
             }
