@@ -25,5 +25,9 @@ craft-atomic.workspace = true
 # Still captures for render previews, encoded as PNG.
 image.workspace = true
 
+[dev-dependencies]
+# The noop backend opens devices without a GPU in the device-loss tests.
+wgpu = { workspace = true, features = ["noop"] }
+
 [lints]
 workspace = true

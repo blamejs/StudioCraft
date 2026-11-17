@@ -16,7 +16,7 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::mpsc::{RecvTimeoutError, sync_channel};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
 use studiocraft_engine::host::SourceSet;
@@ -31,6 +31,7 @@ use studiocraft_media::video::PooledFrame;
 use studiocraft_media::{FrameRate, Tick};
 use studiocraft_model::{Profile, SceneCollection, SceneId, Settings, SourceId, VideoSettings};
 use studiocraft_plugin::{PluginError, Registry};
+use studiocraft_render::device::{Recovery, RecoveryPolicy};
 use studiocraft_render::{CanvasViews, CaptureRequest, Compositor, Gpu, RenderShared};
 use studiocraft_sources::FfmpegSetting;
 
@@ -113,6 +114,27 @@ impl Notice {
     }
 }
 
+/// What to tell the user about the graphics adapter choice, as a notice the interface translates.
+pub fn gpu_notice(n: &studiocraft_render::device::Notice) -> Notice {
+    use studiocraft_render::device::Notice as N;
+    match n {
+        N::AdapterMissing(key) => {
+            Notice::new("The graphics adapter {adapter} is not available; using the automatic choice", vec![("adapter", key.name.clone())], true)
+        }
+        N::NoSoftwareAdapter => Notice::new("No software graphics adapter is available; using the automatic choice", vec![], true),
+        N::SoftwareOnly => Notice::new("No graphics hardware can be used; drawing in software, which is slower", vec![], true),
+        N::DeviceFailed { adapter, error } => Notice::new(
+            "The graphics adapter {adapter} could not be opened: {error}",
+            vec![("adapter", adapter.clone()), ("error", error.clone())],
+            true,
+        ),
+        N::SoftwareAfterLosses(count) => {
+            Notice::new("The graphics device stopped working {count} times; drawing in software", vec![("count", count.to_string())], true)
+        }
+        other => Notice::plain(other.to_string(), true),
+    }
+}
+
 /// Every plug-in StudioCraft ships with.
 pub fn builtin_registry(ffmpeg: &FfmpegSetting) -> Result<Registry, PluginError> {
     use studiocraft_render::transitions::{Cut, Fade, FadeThroughColor, Swipe};
@@ -155,6 +177,19 @@ struct Video {
     _scheduler: Scheduler,
 }
 
+/// How often [`Studio::tick`] looks for a lost graphics device while nothing else polls it.
+const GPU_PROBE: Duration = Duration::from_secs(1);
+/// How long after a failed attempt the studio tries again to open a graphics device.
+const GPU_RETRY: Duration = Duration::from_secs(10);
+
+/// The graphics device was lost.
+struct GpuLoss {
+    /// Why, as wgpu said.
+    why: String,
+    /// When to try opening another device; `None` when the studio cannot (the window's device).
+    retry_at: Option<Instant>,
+}
+
 /// A scene transition running in the program.
 #[derive(Clone)]
 struct Running {
@@ -173,6 +208,14 @@ pub struct Studio {
     /// Meter levels of each audio source, kept across mixer rebuilds.
     levels: HashMap<SourceId, Arc<Levels>>,
     gpu: Option<Gpu>,
+    /// When the studio last polled the device for a loss.
+    gpu_probed: Instant,
+    /// Set while the device is lost.
+    gpu_loss: Option<GpuLoss>,
+    /// What to open after a loss of a device the studio opened.
+    recovery: Option<Recovery>,
+    /// When the studio started, the time base of `recovery`.
+    started: Instant,
     video: Option<Video>,
     render_stats: Arc<RenderStats>,
     profile: Profile,
@@ -227,6 +270,10 @@ impl Studio {
             }
         };
         let shown_program = collection.program_scene;
+        let recovery = gpu.as_ref().and_then(Gpu::preference).map(|p| Recovery::new(p.clone(), RecoveryPolicy::default()));
+        let now = Instant::now();
+        // The first tick looks for a loss at once.
+        let probed = now.checked_sub(GPU_PROBE).unwrap_or(now);
         let mut s = Studio {
             engine: Engine::new(collection, registry),
             clock,
@@ -234,6 +281,10 @@ impl Studio {
             mixer,
             levels: HashMap::new(),
             gpu,
+            gpu_probed: probed,
+            gpu_loss: None,
+            recovery,
+            started: now,
             video: None,
             render_stats: Arc::new(RenderStats::default()),
             profile,
@@ -358,6 +409,7 @@ impl Studio {
     /// Housekeeping once per interface frame: finished transitions, output status, new canvas
     /// textures, errors from the compositor.
     pub fn tick(&mut self) {
+        self.watch_gpu();
         if self.engine.revision() != self.seen_revision {
             self.refresh();
         }
@@ -386,6 +438,76 @@ impl Studio {
         for id in events.removed {
             self.mixer.send(MixerCmd::RemoveOutput { id });
         }
+    }
+
+    /// Notice a lost graphics device and stop drawing with it. A device the studio opened is
+    /// opened again, with [`Recovery`]'s preference: the same one, and software after repeated
+    /// losses. The window's device is left to the window ([`Studio::gpu_lost`]).
+    fn watch_gpu(&mut self) {
+        let Some(gpu) = &self.gpu else { return };
+        if self.gpu_loss.is_none() {
+            if self.gpu_probed.elapsed() >= GPU_PROBE {
+                gpu.poll();
+                self.gpu_probed = Instant::now();
+            }
+            let Some(why) = gpu.lost() else { return };
+            let retry_at = gpu.can_reopen().then(Instant::now);
+            self.video = None;
+            self.notices.push(Notice::new("The graphics device stopped working: {error}", vec![("error", why.clone())], true));
+            if let Some(r) = &mut self.recovery {
+                let step = r.lost(self.started.elapsed());
+                if let Some(n) = &step.notice {
+                    self.notices.push(gpu_notice(n));
+                }
+            }
+            self.gpu_loss = Some(GpuLoss { why, retry_at });
+            // Nothing is drawn until a new device replaces it, which may not happen at all, so
+            // the outputs stop instead of running on without a picture. A device the studio
+            // opened is opened again below.
+            for kind in [OutputKind::Recording, OutputKind::Streaming, OutputKind::Replay] {
+                self.stop_output(kind);
+            }
+        }
+        let Some(gpu) = &self.gpu else { return };
+        let Some(loss) = &mut self.gpu_loss else { return };
+        let (Some(at), Some(recovery)) = (loss.retry_at, &self.recovery) else { return };
+        if Instant::now() < at {
+            return;
+        }
+        match gpu.reopen(recovery.preference()) {
+            Ok((new, notices)) => {
+                let name = new.adapter().map_or_else(String::new, |a| a.name.clone());
+                self.notices.extend(notices.iter().map(gpu_notice));
+                self.notices.push(Notice::new("Drawing again on {adapter}", vec![("adapter", name)], false));
+                self.gpu = Some(new);
+                self.gpu_loss = None;
+                self.restart_video();
+            }
+            Err(e) => {
+                self.notices.push(Notice::new("No graphics device could be opened again: {error}", vec![("error", e.to_string())], true));
+                loss.retry_at = Some(Instant::now() + GPU_RETRY);
+            }
+        }
+    }
+
+    /// Why the graphics device the studio draws with was lost, while it is. Nothing is drawn
+    /// until a new device arrives: the studio opens one itself when it opened the lost one, and
+    /// the window has to replace its own with [`Studio::set_gpu`].
+    pub fn gpu_lost(&self) -> Option<&str> {
+        self.gpu_loss.as_ref().map(|l| l.why.as_str())
+    }
+
+    /// The graphics device the studio draws with.
+    pub fn gpu(&self) -> Option<&Gpu> {
+        self.gpu.as_ref()
+    }
+
+    /// Draw with `gpu` from now on (or nothing without one), restarting the compositor.
+    pub fn set_gpu(&mut self, gpu: Option<Gpu>) {
+        self.recovery = gpu.as_ref().and_then(Gpu::preference).map(|p| Recovery::new(p.clone(), RecoveryPolicy::default()));
+        self.gpu = gpu;
+        self.gpu_loss = None;
+        self.restart_video();
     }
 
     /// Bring sources, the mixer and the compositor in line with the collection, and start a
@@ -470,7 +592,8 @@ impl Studio {
     /// (Re)start the compositor at the profile's canvas size and frame rate.
     fn restart_video(&mut self) {
         self.video = None;
-        let Some(gpu) = self.gpu.clone() else { return };
+        // A lost device draws nothing until a new one replaces it.
+        let Some(gpu) = self.gpu.clone().filter(|g| !g.is_lost()) else { return };
         let vs = self.profile.video.sanitized();
         let compositor = match Compositor::new(gpu, vs.base_width, vs.base_height) {
             Ok(c) => c,

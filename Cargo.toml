@@ -29,6 +29,7 @@ studiocraft-mcp = { path = "crates/mcp" }
 craft-color-transform = { path = "crates/craft-color-transform" }
 craft-scopes = { path = "crates/craft-scopes" }
 craft-audio-dsp = { path = "crates/craft-audio-dsp" }
+craft-gpu-device = { path = "crates/craft-gpu-device" }
 
 # foundation
 thiserror = "2"
@@ -160,6 +161,7 @@ workspace = true
 [dependencies]
 studiocraft-engine = { workspace = true }
 studiocraft-studio = { workspace = true }
+studiocraft-render = { workspace = true }
 studiocraft-ui-egui = { workspace = true }
 eframe = { workspace = true, features = ["wgpu", "default_fonts", "accesskit", "clipboard", "x11", "wayland"] }
 egui = { workspace = true }

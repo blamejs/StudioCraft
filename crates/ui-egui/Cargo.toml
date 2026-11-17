@@ -48,3 +48,6 @@ craft-fonts-build = { workspace = true, features = ["subset"] }
 
 [dev-dependencies]
 egui = { workspace = true, features = ["default_fonts"] }
+# The noop backend lists an adapter without a GPU in the adapter selection tests.
+wgpu = { workspace = true, features = ["noop"] }
+pollster = { workspace = true }

@@ -378,7 +378,22 @@
 	Rename Scene Collection	장면 모음 이름 바꾸기
 	Unlock	잠금 해제
 	Unmute	음소거 해제
+	Automatic (fastest)	자동 (가장 빠름)
+	Drawing with {adapter}	{adapter}(으)로 그리는 중
+	Graphics adapter	그래픽 어댑터
+	Hardware acceleration	하드웨어 가속
+	Power saving	절전
+	Software (slower)	소프트웨어 (느림)
 @msg	A plug-in could not be loaded: {error}	플러그인을 불러올 수 없습니다: {error}
+@msg	Drawing again on {adapter}	{adapter}(으)로 다시 그리는 중
+@msg	No graphics device could be opened again: {error}	그래픽 장치를 다시 열 수 없습니다: {error}
+@msg	No graphics hardware can be used; drawing in software, which is slower	그래픽 하드웨어를 사용할 수 없어 소프트웨어로 그립니다(더 느림)
+@msg	No software graphics adapter is available; using the automatic choice	소프트웨어 그래픽 어댑터가 없어 자동 선택을 사용합니다
+@msg	Nothing can be drawn until StudioCraft starts again	StudioCraft를 다시 시작할 때까지 아무것도 그릴 수 없습니다
+@msg	The graphics adapter {adapter} could not be opened: {error}	그래픽 어댑터 {adapter}을(를) 열 수 없습니다: {error}
+@msg	The graphics adapter {adapter} is not available; using the automatic choice	그래픽 어댑터 {adapter}을(를) 사용할 수 없어 자동 선택을 사용합니다
+@msg	The graphics device stopped working {count} times; drawing in software	그래픽 장치가 {count}번 작동을 멈춰 소프트웨어로 그립니다
+@msg	The graphics device stopped working: {error}	그래픽 장치가 작동을 멈췄습니다: {error}
 @msg	Audio monitoring could not start: {error}	오디오 모니터링을 시작할 수 없습니다: {error}
 @msg	Audio monitoring stopped: {error}	오디오 모니터링이 중지되었습니다: {error}
 @msg	Could not check for updates: {error}	업데이트를 확인할 수 없습니다: {error}

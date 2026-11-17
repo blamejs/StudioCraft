@@ -373,6 +373,12 @@
 	{n} kbps	{n} kb/s
 	{program} did not report its version	{program} n'a pas indiqué sa version
 	{status} · {mb} MB	{status} · {mb} Mo
+	Automatic (fastest)	Automatique (le plus rapide)
+	Drawing with {adapter}	Rendu avec {adapter}
+	Graphics adapter	Carte graphique
+	Hardware acceleration	Accélération matérielle
+	Power saving	Économie d'énergie
+	Software (slower)	Logiciel (plus lent)
 	Compact (small files)	Compacte (petits fichiers)
 	Duplicate Profile	Dupliquer le profil
 	Duplicate Scene Collection	Dupliquer la collection de scènes
@@ -388,6 +394,15 @@
 	Unlock	Déverrouiller
 	Unmute	Rétablir le son
 @msg	A plug-in could not be loaded: {error}	Un plug-in n'a pas pu être chargé : {error}
+@msg	Drawing again on {adapter}	Rendu rétabli avec {adapter}
+@msg	No graphics device could be opened again: {error}	Aucun périphérique graphique n'a pu être rouvert : {error}
+@msg	No graphics hardware can be used; drawing in software, which is slower	Aucun matériel graphique n'est utilisable ; rendu logiciel, plus lent
+@msg	No software graphics adapter is available; using the automatic choice	Aucune carte graphique logicielle n'est disponible ; choix automatique utilisé
+@msg	Nothing can be drawn until StudioCraft starts again	Rien ne peut être affiché avant le redémarrage de StudioCraft
+@msg	The graphics adapter {adapter} could not be opened: {error}	La carte graphique {adapter} n'a pas pu être ouverte : {error}
+@msg	The graphics adapter {adapter} is not available; using the automatic choice	La carte graphique {adapter} n'est pas disponible ; choix automatique utilisé
+@msg	The graphics device stopped working {count} times; drawing in software	Le périphérique graphique a cessé de fonctionner {count} fois ; rendu logiciel
+@msg	The graphics device stopped working: {error}	Le périphérique graphique a cessé de fonctionner : {error}
 @msg	Audio monitoring could not start: {error}	L'écoute audio n'a pas pu démarrer : {error}
 @msg	Audio monitoring stopped: {error}	L'écoute audio s'est arrêtée : {error}
 @msg	Could not check for updates: {error}	Impossible de rechercher les mises à jour : {error}

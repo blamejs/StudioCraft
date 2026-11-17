@@ -1,5 +1,6 @@
 //! The Settings window: General, Stream, Output, Audio, Video and Hotkeys, edited on a copy of
-//! the profile, the Language setting and the update check at start, applied with OK or Apply.
+//! the profile, the Language setting, the update check at start and the graphics adapter (in the
+//! Video tab's Hardware acceleration section), applied with OK or Apply.
 
 use std::collections::BTreeMap;
 
@@ -10,7 +11,10 @@ use studiocraft_model::{Profile, RecordingFormat, RecordingQuality, ReplaySettin
 use studiocraft_platform::audio::{DeviceInfo, DeviceKind};
 use studiocraft_plugin::{Availability, EncoderEnv, EncoderKind, Registry, Settings};
 
-use crate::i18n::{self, I18N};
+use studiocraft_render::device::{Candidate, Preference};
+
+use crate::hardware;
+use crate::i18n::{self, I18N, Msg};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Tab {
@@ -53,6 +57,15 @@ pub struct SettingsWindow {
     pub(crate) ffmpeg_version: Result<String, String>,
     /// The output devices the system listed when the window opened.
     output_devices: Vec<DeviceInfo>,
+    /// The Graphics adapter setting.
+    pub graphics_adapter: Preference,
+    /// The adapters the window's graphics instance lists.
+    pub adapters: Vec<Candidate>,
+    /// The adapter the window draws with now, when it is known.
+    pub drawing_with: Option<String>,
+    /// What the user was told about the adapter the window opened on (a missing adapter, a
+    /// fallback to software).
+    pub gpu_notices: Vec<Msg>,
 }
 
 /// The settings OK or Apply puts in force.
@@ -66,6 +79,8 @@ pub struct Apply {
     pub check_updates: bool,
     /// The "Use system title bar" setting.
     pub system_title_bar: bool,
+    /// The Graphics adapter setting.
+    pub graphics_adapter: Preference,
 }
 
 /// What the window asks for this frame.
@@ -174,6 +189,10 @@ impl SettingsWindow {
             offered,
             ffmpeg_version,
             output_devices: studiocraft_platform::audio::devices(DeviceKind::Output),
+            graphics_adapter: Preference::Auto,
+            adapters: Vec::new(),
+            drawing_with: None,
+            gpu_notices: Vec::new(),
         }
     }
 
@@ -412,6 +431,41 @@ impl SettingsWindow {
         });
         ui.add_space(8.0);
         ui.weak(tl!("Video settings can't change while recording, streaming or running the replay buffer."));
+        ui.add_space(12.0);
+        self.hardware(ui);
+    }
+
+    /// The Hardware acceleration section of the Video tab.
+    fn hardware(&mut self, ui: &mut Ui) {
+        ui.label(RichText::new(tl!("Hardware acceleration")).strong());
+        ui.add_space(4.0);
+        let listed = &self.adapters;
+        let chosen = &mut self.graphics_adapter;
+        egui::Grid::new("hardware-grid").num_columns(2).spacing([12.0, 8.0]).show(ui, |ui| {
+            ui.label(tl!("Graphics adapter"));
+            ui.vertical(|ui| {
+                craft_ui::ComboBox::from_id_salt("graphics-adapter").selected_text(hardware::label(chosen, listed)).width(320.0).show_ui(ui, |ui| {
+                    let mut choices = hardware::choices(listed);
+                    if !choices.contains(chosen) {
+                        choices.push(chosen.clone());
+                    }
+                    for c in choices {
+                        let text = hardware::label(&c, listed);
+                        ui.selectable_value(chosen, c, text);
+                    }
+                });
+                ui.label(RichText::new(tl!("Takes effect the next time StudioCraft starts.")).small().weak());
+            });
+            ui.end_row();
+            if let Some(name) = &self.drawing_with {
+                ui.label("");
+                ui.weak(craft_i18n::fmt(tl!("Drawing with {adapter}"), &[("adapter", name)]));
+                ui.end_row();
+            }
+        });
+        for n in &self.gpu_notices {
+            ui.colored_label(ui.visuals().warn_fg_color, n.shown());
+        }
     }
 
     fn hotkeys(&mut self, ui: &mut Ui) {
@@ -473,6 +527,7 @@ impl SettingsWindow {
                                 language: self.language.clone(),
                                 check_updates: self.check_updates,
                                 system_title_bar: self.system_title_bar,
+                                graphics_adapter: self.graphics_adapter.clone(),
                             });
                             out.close |= ok;
                         }
@@ -536,6 +591,32 @@ mod tests {
         let mut out = ctx.run_ui(egui::RawInput::default(), |ui| w.audio(ui));
         out.textures_delta.clear();
         assert_eq!(w.draft.audio.monitoring_device, DEFAULT_AUDIO_DEVICE, "drawing the tab changes nothing");
+    }
+
+    #[test]
+    fn the_video_tab_lists_the_graphics_adapters_and_keeps_the_choice() {
+        let ctx = egui::Context::default();
+        let mut w = SettingsWindow::new(&Profile::default(), &crate::commands::keymap(Overrides::new()), Tab::Video, i18n::AUTO, true);
+        w.graphics_adapter = Preference::LowPower;
+        w.drawing_with = Some("GPU".into());
+        w.gpu_notices = vec![hardware::notice_msg(&studiocraft_render::device::Notice::SoftwareOnly)];
+        let mut out = ctx.run_ui(egui::RawInput::default(), |ui| w.video(ui));
+        let texts: Vec<String> = out
+            .shapes
+            .iter()
+            .filter_map(|s| match &s.shape {
+                egui::Shape::Text(t) => Some(t.galley.text().to_string()),
+                _ => None,
+            })
+            .collect();
+        out.textures_delta.clear();
+        for wanted in [tl!("Hardware acceleration"), tl!("Graphics adapter"), tl!("Power saving")] {
+            assert!(texts.iter().any(|t| t == wanted), "{wanted} in {texts:?}");
+        }
+        assert!(texts.iter().any(|t| t.contains("GPU")), "{texts:?}");
+        let notice = w.gpu_notices[0].shown();
+        assert!(texts.contains(&notice), "the notice is shown: {texts:?}");
+        assert_eq!(w.graphics_adapter, Preference::LowPower, "drawing the tab changes nothing");
     }
 
     #[test]

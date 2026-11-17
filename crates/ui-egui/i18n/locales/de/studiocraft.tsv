@@ -348,6 +348,12 @@
 	{encoder} (not in this ffmpeg)	{encoder} (nicht in diesem ffmpeg)
 	{program} did not report its version	{program} hat keine Version gemeldet
 	{status} · {mb} MB	{status} · {mb} MB
+	Automatic (fastest)	Automatisch (am schnellsten)
+	Drawing with {adapter}	Zeichnet mit {adapter}
+	Graphics adapter	Grafikadapter
+	Hardware acceleration	Hardwarebeschleunigung
+	Power saving	Energiesparen
+	Software (slower)	Software (langsamer)
 	Compact (small files)	Kompakt (kleine Dateien)
 	Duplicate Profile	Profil duplizieren
 	Duplicate Scene Collection	Szenensammlung duplizieren
@@ -363,6 +369,15 @@
 	Unlock	Entsperren
 	Unmute	Stummschaltung aufheben
 @msg	A plug-in could not be loaded: {error}	Ein Plug-in konnte nicht geladen werden: {error}
+@msg	Drawing again on {adapter}	Zeichnet wieder mit {adapter}
+@msg	No graphics device could be opened again: {error}	Es konnte kein Grafikgerät wieder geöffnet werden: {error}
+@msg	No graphics hardware can be used; drawing in software, which is slower	Keine Grafikhardware nutzbar; es wird in Software gezeichnet, was langsamer ist
+@msg	No software graphics adapter is available; using the automatic choice	Kein Software-Grafikadapter verfügbar; die automatische Auswahl wird verwendet
+@msg	Nothing can be drawn until StudioCraft starts again	Bis StudioCraft neu startet, kann nichts gezeichnet werden
+@msg	The graphics adapter {adapter} could not be opened: {error}	Der Grafikadapter {adapter} konnte nicht geöffnet werden: {error}
+@msg	The graphics adapter {adapter} is not available; using the automatic choice	Der Grafikadapter {adapter} ist nicht verfügbar; die automatische Auswahl wird verwendet
+@msg	The graphics device stopped working {count} times; drawing in software	Das Grafikgerät ist {count}-mal ausgefallen; es wird in Software gezeichnet
+@msg	The graphics device stopped working: {error}	Das Grafikgerät ist ausgefallen: {error}
 @msg	Audio monitoring could not start: {error}	Das Abhören konnte nicht starten: {error}
 @msg	Audio monitoring stopped: {error}	Das Abhören wurde beendet: {error}
 @msg	Could not check for updates: {error}	Die Suche nach Updates ist fehlgeschlagen: {error}

@@ -10,6 +10,7 @@ publish = false
 studiocraft-model.workspace = true
 studiocraft-media.workspace = true
 studiocraft-plugin.workspace = true
+craft-gpu-device.workspace = true
 wgpu.workspace = true
 bytemuck.workspace = true
 pollster.workspace = true
@@ -19,6 +20,8 @@ log.workspace = true
 
 [dev-dependencies]
 criterion.workspace = true
+# The noop backend opens devices without a GPU in the device-loss tests.
+wgpu = { workspace = true, features = ["noop"] }
 
 [[bench]]
 name = "compositor"

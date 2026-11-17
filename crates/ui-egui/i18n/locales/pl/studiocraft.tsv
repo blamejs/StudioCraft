@@ -363,6 +363,12 @@
 	{device} (not connected)	{device} (niepodłączone)
 	{encoder} (not in this ffmpeg)	{encoder} (brak w tym ffmpeg)
 	{program} did not report its version	{program} nie podał swojej wersji
+	Automatic (fastest)	Automatycznie (najszybciej)
+	Drawing with {adapter}	Rysowanie za pomocą {adapter}
+	Graphics adapter	Karta graficzna
+	Hardware acceleration	Przyspieszenie sprzętowe
+	Power saving	Oszczędzanie energii
+	Software (slower)	Programowo (wolniej)
 	Compact (small files)	Kompaktowa (małe pliki)
 	Duplicate Profile	Duplikuj profil
 	Duplicate Scene Collection	Duplikuj kolekcję scen
@@ -378,6 +384,15 @@
 	Unlock	Odblokuj
 	Unmute	Wyłącz wyciszenie
 @msg	A plug-in could not be loaded: {error}	Nie można wczytać wtyczki: {error}
+@msg	Drawing again on {adapter}	Ponowne rysowanie za pomocą {adapter}
+@msg	No graphics device could be opened again: {error}	Nie można ponownie otworzyć urządzenia graficznego: {error}
+@msg	No graphics hardware can be used; drawing in software, which is slower	Nie można użyć sprzętu graficznego; rysowanie programowe, które jest wolniejsze
+@msg	No software graphics adapter is available; using the automatic choice	Brak programowej karty graficznej; używany jest wybór automatyczny
+@msg	Nothing can be drawn until StudioCraft starts again	Nic nie zostanie narysowane, dopóki StudioCraft nie uruchomi się ponownie
+@msg	The graphics adapter {adapter} could not be opened: {error}	Nie można otworzyć karty graficznej {adapter}: {error}
+@msg	The graphics adapter {adapter} is not available; using the automatic choice	Karta graficzna {adapter} jest niedostępna; używany jest wybór automatyczny
+@msg	The graphics device stopped working {count} times; drawing in software	Urządzenie graficzne przestało działać {count} razy; rysowanie programowe
+@msg	The graphics device stopped working: {error}	Urządzenie graficzne przestało działać: {error}
 @msg	Audio monitoring could not start: {error}	Nie można uruchomić odsłuchu: {error}
 @msg	Audio monitoring stopped: {error}	Odsłuch został zatrzymany: {error}
 @msg	Could not check for updates: {error}	Nie można sprawdzić aktualizacji: {error}

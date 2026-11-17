@@ -354,6 +354,12 @@
 	{device} (not connected)	{device} (niet aangesloten)
 	{encoder} (not in this ffmpeg)	{encoder} (niet in deze ffmpeg)
 	{program} did not report its version	{program} heeft geen versie gemeld
+	Automatic (fastest)	Automatisch (snelste)
+	Drawing with {adapter}	Tekent met {adapter}
+	Graphics adapter	Grafische adapter
+	Hardware acceleration	Hardwareversnelling
+	Power saving	Energiebesparing
+	Software (slower)	Software (langzamer)
 	Compact (small files)	Compact (kleine bestanden)
 	Duplicate Profile	Profiel dupliceren
 	Duplicate Scene Collection	Scèneverzameling dupliceren
@@ -369,6 +375,15 @@
 	Unlock	Ontgrendelen
 	Unmute	Dempen opheffen
 @msg	A plug-in could not be loaded: {error}	Een plug-in kon niet worden geladen: {error}
+@msg	Drawing again on {adapter}	Tekent weer met {adapter}
+@msg	No graphics device could be opened again: {error}	Er kon geen grafisch apparaat opnieuw worden geopend: {error}
+@msg	No graphics hardware can be used; drawing in software, which is slower	Er is geen bruikbare grafische hardware; er wordt in software getekend, wat langzamer is
+@msg	No software graphics adapter is available; using the automatic choice	Er is geen grafische softwareadapter beschikbaar; de automatische keuze wordt gebruikt
+@msg	Nothing can be drawn until StudioCraft starts again	Er kan niets worden getekend totdat StudioCraft opnieuw start
+@msg	The graphics adapter {adapter} could not be opened: {error}	De grafische adapter {adapter} kon niet worden geopend: {error}
+@msg	The graphics adapter {adapter} is not available; using the automatic choice	De grafische adapter {adapter} is niet beschikbaar; de automatische keuze wordt gebruikt
+@msg	The graphics device stopped working {count} times; drawing in software	Het grafische apparaat is {count} keer uitgevallen; er wordt in software getekend
+@msg	The graphics device stopped working: {error}	Het grafische apparaat is uitgevallen: {error}
 @msg	Audio monitoring could not start: {error}	Meeluisteren kon niet starten: {error}
 @msg	Audio monitoring stopped: {error}	Meeluisteren is gestopt: {error}
 @msg	Could not check for updates: {error}	Kon niet op updates controleren: {error}

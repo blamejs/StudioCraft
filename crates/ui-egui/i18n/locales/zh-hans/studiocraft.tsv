@@ -378,7 +378,22 @@
 	Rename Scene Collection	重命名场景集合
 	Unlock	解锁
 	Unmute	取消静音
+	Automatic (fastest)	自动（最快）
+	Drawing with {adapter}	正在使用 {adapter} 绘制
+	Graphics adapter	图形适配器
+	Hardware acceleration	硬件加速
+	Power saving	节能
+	Software (slower)	软件（较慢）
 @msg	A plug-in could not be loaded: {error}	无法加载插件：{error}
+@msg	Drawing again on {adapter}	已重新使用 {adapter} 绘制
+@msg	No graphics device could be opened again: {error}	无法重新打开图形设备：{error}
+@msg	No graphics hardware can be used; drawing in software, which is slower	无法使用图形硬件；改用软件绘制，速度较慢
+@msg	No software graphics adapter is available; using the automatic choice	没有可用的软件图形适配器；改用自动选择
+@msg	Nothing can be drawn until StudioCraft starts again	在 StudioCraft 重新启动之前无法绘制
+@msg	The graphics adapter {adapter} could not be opened: {error}	无法打开图形适配器 {adapter}：{error}
+@msg	The graphics adapter {adapter} is not available; using the automatic choice	图形适配器 {adapter} 不可用；改用自动选择
+@msg	The graphics device stopped working {count} times; drawing in software	图形设备已停止工作 {count} 次；改用软件绘制
+@msg	The graphics device stopped working: {error}	图形设备已停止工作：{error}
 @msg	Audio monitoring could not start: {error}	无法开始音频监听：{error}
 @msg	Audio monitoring stopped: {error}	音频监听已停止：{error}
 @msg	Could not check for updates: {error}	无法检查更新：{error}

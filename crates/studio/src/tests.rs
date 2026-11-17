@@ -569,3 +569,78 @@ fn collections_are_saved_to_and_opened_from_a_path() {
     assert_eq!(other.collection(), &before, "a failed open keeps the collection");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A device on wgpu's noop backend, which opens without a GPU.
+fn noop_gpu() -> Gpu {
+    let mut desc = wgpu::InstanceDescriptor::new_without_display_handle();
+    desc.backends = wgpu::Backends::NOOP;
+    desc.backend_options.noop = wgpu::NoopBackendOptions { enable: true, ..Default::default() };
+    Gpu::open_on(wgpu::Instance::new(desc), &studiocraft_render::device::Preference::Software).unwrap().0
+}
+
+#[test]
+fn a_lost_device_the_studio_opened_is_opened_again() {
+    let gpu = noop_gpu();
+    let mut s = studio_with(Some(gpu.clone()), SceneCollection::new("Test", "Scene"), Profile::default());
+    s.take_notices();
+    gpu.device.destroy();
+    s.tick();
+    let notices = s.take_notices();
+    let templates: Vec<&str> = notices.iter().map(|n| n.template).collect();
+    assert!(templates.contains(&"The graphics device stopped working: {error}"), "{templates:?}");
+    assert!(templates.contains(&"Drawing again on {adapter}"), "{templates:?}");
+    let now = s.gpu().unwrap();
+    assert!(!now.is_lost(), "a new device draws");
+    assert!(gpu.is_lost());
+    assert!(s.gpu_lost().is_none());
+}
+
+#[test]
+fn a_lost_window_device_waits_for_the_window() {
+    // A device the studio did not open, like the window's.
+    let opened = noop_gpu();
+    let gpu = Gpu::new(opened.device.clone(), opened.queue.clone());
+    assert!(!gpu.can_reopen());
+    let mut s = studio_with(Some(gpu.clone()), SceneCollection::new("Test", "Scene"), Profile::default());
+    s.take_notices();
+    gpu.device.destroy();
+    s.tick();
+    assert!(s.gpu_lost().is_some(), "the loss is reported");
+    assert!(s.views().is_none(), "nothing is drawn with the lost device");
+    let stopped = s.take_notices().iter().filter(|n| n.template == "The graphics device stopped working: {error}").count();
+    assert_eq!(stopped, 1);
+    s.tick();
+    assert!(s.take_notices().is_empty(), "the loss is reported once");
+    // a video change does not start drawing on the lost device
+    let mut p = Profile::default();
+    p.video.base_width = 640;
+    p.video.base_height = 360;
+    assert!(s.set_profile(p).is_ok());
+    assert!(s.views().is_none(), "no compositor is made on the lost device");
+    s.set_gpu(Some(noop_gpu()));
+    assert!(s.gpu_lost().is_none(), "a new device replaces it");
+}
+
+#[test]
+fn the_outputs_stop_when_the_device_is_lost() {
+    // the window's device, and one the studio opened and opens again
+    for window in [true, false] {
+        let opened = noop_gpu();
+        let gpu = if window { Gpu::new(opened.device.clone(), opened.queue.clone()) } else { opened };
+        let mut s = studio_with(Some(gpu.clone()), SceneCollection::new("Test", "Scene"), Profile::default());
+        s.start_output(OutputKind::Replay).unwrap();
+        assert!(s.output(OutputKind::Replay).is_some_and(|o| o.active));
+        gpu.device.destroy();
+        s.tick();
+        assert!(s.output(OutputKind::Replay).is_none_or(|o| !o.active), "no output runs on without a picture (window {window})");
+    }
+}
+
+#[test]
+fn graphics_notices_name_the_adapter_and_the_count() {
+    use studiocraft_render::device::Notice as N;
+    let n = gpu_notice(&N::SoftwareAfterLosses(3));
+    assert_eq!(n.text(), "The graphics device stopped working 3 times; drawing in software");
+    let failed = gpu_notice(&N::DeviceFailed { adapter: "GPU".into(), error: "out of memory".into() });
+    assert_eq!(failed.text(), "The graphics adapter GPU could not be opened: out of memory");
+}

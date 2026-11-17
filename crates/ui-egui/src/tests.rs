@@ -168,6 +168,129 @@ fn the_settings_window_starts_from_the_saved_title_bar_setting() {
 }
 
 #[test]
+fn a_new_graphics_adapter_choice_is_saved_and_forgets_the_old_losses() {
+    use studiocraft_render::device::Preference;
+    let mut a = app();
+    a.store.update(|p| {
+        p.graphics_adapter = Preference::LowPower;
+        p.graphics_losses = vec![1, 2];
+    });
+    a.set_window_gpu(Preference::LowPower, vec![tmsg!("Nothing can be drawn until StudioCraft starts again")], false);
+    a.open_settings(crate::settings::Tab::Video);
+    let w = a.settings.as_mut().unwrap();
+    assert_eq!(w.graphics_adapter, Preference::LowPower, "the window starts from the saved choice");
+    assert_eq!(w.gpu_notices.len(), 1, "and shows what the user was told at start");
+    let apply = |a: &mut StudioApp, choice: Preference| {
+        let w = a.settings.as_ref().unwrap();
+        a.apply_settings(crate::settings::Apply {
+            profile: w.draft.clone(),
+            overrides: a.keymap.overrides().clone(),
+            language: w.language.clone(),
+            check_updates: w.check_updates,
+            system_title_bar: w.system_title_bar,
+            graphics_adapter: choice,
+        })
+    };
+    // the same choice keeps the losses
+    assert!(apply(&mut a, Preference::LowPower));
+    assert_eq!(a.store.prefs().graphics_losses, [1, 2]);
+    assert!(apply(&mut a, Preference::Software));
+    assert_eq!(a.store.prefs().graphics_adapter, Preference::Software);
+    assert!(a.store.prefs().graphics_losses.is_empty());
+    assert!(!a.relaunch_requested(), "nothing was lost");
+}
+
+#[test]
+fn a_lost_window_device_does_not_start_the_app_again_when_saving_fails() {
+    use craft_settings::Location;
+    use studiocraft_render::device::Preference;
+    // a settings folder that is a file, so nothing can be saved in it
+    let blocked = std::env::temp_dir().join(format!("studiocraft-unsaved-{}", std::process::id()));
+    std::fs::write(&blocked, b"not a folder").unwrap();
+    let (store, _) = Store::open(Location::Dir(blocked.clone()));
+    let mut a = StudioApp::boot(store, None, Vec::new());
+    let ctx = egui::Context::default();
+    let gpu = window_gpu(wgpu::DeviceType::DiscreteGpu);
+    a.studio.set_gpu(Some(gpu.clone()));
+    a.set_window_gpu(Preference::Auto, Vec::new(), true);
+    frame(&mut a, &ctx, vec![]);
+    gpu.device.destroy();
+    a.studio.gpu().unwrap().poll();
+    frame(&mut a, &ctx, vec![]);
+    assert!(!a.relaunch_requested(), "the window stays open with the unsaved work");
+    assert!(!a.exit_confirmed);
+    let _ = std::fs::remove_file(&blocked);
+}
+
+#[test]
+fn a_device_loss_is_seen_while_the_window_is_hidden() {
+    use studiocraft_render::device::Preference;
+    let mut a = app();
+    let ctx = egui::Context::default();
+    let gpu = window_gpu(wgpu::DeviceType::DiscreteGpu);
+    a.studio.set_gpu(Some(gpu.clone()));
+    a.set_window_gpu(Preference::Auto, Vec::new(), true);
+    frame(&mut a, &ctx, vec![]);
+    gpu.device.destroy();
+    a.studio.gpu().unwrap().poll();
+    // a hidden window gets `logic` calls and no frames
+    a.logic(&ctx);
+    assert!(a.relaunch_requested());
+    assert_eq!(a.store.prefs().graphics_losses.len(), 1);
+    a.logic(&ctx);
+    frame(&mut a, &ctx, vec![]);
+    assert_eq!(a.store.prefs().graphics_losses.len(), 1, "one loss is counted once");
+}
+
+/// A window device on wgpu's noop adapter, shown to the app as `device_type`.
+fn window_gpu(device_type: wgpu::DeviceType) -> Gpu {
+    let mut desc = wgpu::InstanceDescriptor::new_without_display_handle();
+    desc.backends = wgpu::Backends::NOOP;
+    desc.backend_options.noop = wgpu::NoopBackendOptions { enable: true, ..Default::default() };
+    let (opened, _) = Gpu::open_on(wgpu::Instance::new(desc), &studiocraft_render::device::Preference::Software).unwrap();
+    let mut adapter = opened.adapter().cloned().unwrap();
+    adapter.device_type = device_type;
+    Gpu::new(opened.device.clone(), opened.queue.clone()).with_adapter(adapter)
+}
+
+#[test]
+fn a_lost_window_device_starts_the_app_again_unless_that_would_end_the_same_way() {
+    use studiocraft_render::device::Preference;
+    use wgpu::DeviceType::{Cpu, DiscreteGpu};
+    let ctx = egui::Context::default();
+    let now = crate::hardware::now_secs();
+    // (adapter drawn on, preference opened with, earlier losses, may start itself) -> starts again
+    for (kind, opened_with, earlier, may, again) in [
+        (DiscreteGpu, Preference::Auto, vec![], true, true),
+        (DiscreteGpu, Preference::Auto, vec![], false, false),
+        // a third loss moves the next start to software
+        (DiscreteGpu, Preference::Auto, vec![now - 20, now - 10], true, true),
+        // software asked for on a machine without a software adapter
+        (DiscreteGpu, Preference::Software, vec![], true, true),
+        (DiscreteGpu, Preference::Software, vec![now - 20, now - 10], true, false),
+        (Cpu, Preference::Auto, vec![], true, false),
+    ] {
+        let mut a = app();
+        a.store.update(|p| p.graphics_losses = earlier.clone());
+        let gpu = window_gpu(kind);
+        a.studio.set_gpu(Some(gpu.clone()));
+        a.set_window_gpu(opened_with.clone(), Vec::new(), may);
+        frame(&mut a, &ctx, vec![]);
+        assert!(!a.relaunch_requested() && a.store.prefs().graphics_losses.len() == earlier.len());
+        gpu.device.destroy();
+        // the studio notices the loss on its next probe
+        a.studio.gpu().unwrap().poll();
+        frame(&mut a, &ctx, vec![]);
+        let case = format!("{kind:?}, opened for {opened_with:?}, {} earlier losses, may start itself {may}", earlier.len());
+        assert_eq!(a.relaunch_requested(), again, "{case}");
+        assert_eq!(a.exit_confirmed, again, "{case}");
+        assert_eq!(a.store.prefs().graphics_losses.len(), earlier.len() + 1, "the loss is kept for the next start: {case}");
+        frame(&mut a, &ctx, vec![]);
+        assert_eq!(a.store.prefs().graphics_losses.len(), earlier.len() + 1, "one loss is counted once: {case}");
+    }
+}
+
+#[test]
 fn scene_shortcuts_switch_scenes() {
     let mut a = app();
     let ctx = egui::Context::default();
