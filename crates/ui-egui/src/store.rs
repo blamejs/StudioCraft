@@ -285,7 +285,15 @@ impl Prefs {
 
 impl craft_settings::Settings for Prefs {
     const APP_ID: &'static str = "studiocraft";
-    const SCHEMA_VERSION: u32 = 1;
+    /// Version 2 adds `docks.mixer_width` and `docks.order`.
+    const SCHEMA_VERSION: u32 = 2;
+
+    /// Version 1 to 2: a version 1 file has neither key, so the docks keep their saved sizes and
+    /// read the Audio Mixer's width and the order as their defaults. The file is left as it is.
+    fn migrate(from: u32, doc: &mut craft_settings::DocumentMut) -> Result<(), craft_settings::MigrateError> {
+        let _ = (from, doc);
+        Ok(())
+    }
 }
 
 /// The name of the first collection and profile.
@@ -641,6 +649,27 @@ mod tests {
         again.flush().unwrap();
         let (third, _) = Store::open(Location::Dir(dir.clone()));
         assert_eq!(third.prefs().docks, Docks { mixer: false, ..Docks::default() });
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_version_1_config_keeps_its_dock_settings_and_is_saved_as_version_2() {
+        let dir = std::env::temp_dir().join(format!("studiocraft-store-prefs-v1-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let v1 = "schema_version = 1\n\n[docks]\nmixer = false\nheight = 240.0\nscenes_width = 250.0\nsources_width = 310.0\n";
+        std::fs::write(dir.join("config.toml"), v1).unwrap();
+        let (mut s, _) = Store::open(Location::Dir(dir.clone()));
+        let d = s.prefs().docks;
+        let want = Docks { mixer: false, height: 240.0, scenes_width: 250.0, sources_width: 310.0, ..Docks::default() };
+        assert_eq!(d, want);
+        assert_eq!((d.mixer_width, d.order()), (0.0, DOCK_ORDER), "the keys version 1 lacks read as their defaults");
+        s.update(|p| p.docks.height = 250.0);
+        s.flush().unwrap();
+        let text = std::fs::read_to_string(dir.join("config.toml")).unwrap();
+        assert!(text.contains("schema_version = 2"), "{text}");
+        let (again, _) = Store::open(Location::Dir(dir.clone()));
+        assert_eq!(again.prefs().docks, Docks { height: 250.0, ..want });
         let _ = std::fs::remove_dir_all(&dir);
     }
 
