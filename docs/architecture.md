@@ -50,6 +50,15 @@ build for `wasm32-unknown-unknown`:
   The compositor (`render`) uploads changed source frames, draws the program scene (and the preview
   scene in studio mode) into a ring of 3 GPU textures, and converts the program to NV12 for the
   encoders. The window registers the ring's texture views with egui, so frames stay on the GPU.
+  While View › Scopes is open, the compositor also converts the program to a second NV12 copy of
+  at most 480 × 270 and sends it to the window's scopes queue. The copy is drawn with linear
+  filtering and its chroma is at half width and half height, so a hard edge in the program shows on
+  the scopes as intermediate levels.
+- **Scopes thread.** While View › Scopes is open, the window hands the newest program copy to the
+  scopes thread (`ui-egui/src/scopes.rs`) when the thread is idle. The thread computes and paints
+  the chosen scope with `craft-scopes` into buffers it keeps and makes the texture image. The window
+  moves the image into its texture. The window and the thread share bounded lock-free queues and
+  atomic flags, and the thread parks while it has nothing to do.
 - **Output threads.** Each recording or stream runs an ffmpeg process with one writer thread for
   video and one for audio.
 - **Window thread.** The window reads `Studio` state, runs commands, and shows statistics.

@@ -25,6 +25,7 @@ studiocraft-ui-egui = { path = "crates/ui-egui" }
 studiocraft-mcp = { path = "crates/mcp" }
 # Shared crates built here before they move to craft-libs.
 craft-color-transform = { path = "crates/craft-color-transform" }
+craft-scopes = { path = "crates/craft-scopes" }
 
 # foundation
 thiserror = "2"

@@ -5122,6 +5122,7 @@ dependencies = [
  "craft-keymap",
  "craft-menu",
  "craft-quit",
+ "craft-scopes",
  "craft-settings",
  "craft-ui",
  "craft-update",
