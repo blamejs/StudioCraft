@@ -39,6 +39,7 @@ pub const UI_COMMANDS: &[(&str, &str)] = &[
     ("dock.mixer", "Audio Mixer"),
     ("dock.controls", "Output Controls"),
     ("dock.transitions", "Transition Controls"),
+    ("dock.move", "Move Dock"),
     ("dock.reset", "Reset Docks"),
     ("profile.new", "New Profile…"),
     ("profile.duplicate", "Duplicate Profile…"),
@@ -82,6 +83,7 @@ pub fn ui_params(id: &str) -> &'static str {
         "profile.switch" | "collection.switch" => "name: string",
         "collection.import" | "collection.export" => "path?: string",
         "scopes.kind" => "kind: string (waveform, parade, histogram, vectorscopeYuv or vectorscopeHls)",
+        "dock.move" => "dock: string (scenes, sources or mixer), to: string (left or right)",
         _ => "",
     }
 }

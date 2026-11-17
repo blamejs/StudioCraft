@@ -625,6 +625,70 @@ fn dragging_the_strip_edge_and_a_divider_saves_the_sizes_and_reset_clears_them()
     assert_eq!(rect_of(&a.ui_inspect(&ctx)["dock_strip"]["rect"]).height(), 200.0);
 }
 
+fn dock_order(a: &StudioApp, ctx: &egui::Context) -> Vec<String> {
+    let v = a.ui_inspect(ctx);
+    v["docks"].as_array().unwrap_or(&Vec::new()).iter().filter_map(|d| d["dock"].as_str().map(str::to_string)).collect()
+}
+
+#[test]
+fn dock_move_rearranges_the_strip_and_reset_puts_it_back() {
+    let mut a = app();
+    let ctx = egui::Context::default();
+    let size = egui::vec2(1280.0, 800.0);
+    frame_at(&mut a, &ctx, size);
+    let r = run(&mut a, &ctx, "dock.move", json!({"dock": "mixer", "to": "left"})).unwrap();
+    assert_eq!(r, json!({"moved": true, "order": ["scenes", "mixer", "sources"]}));
+    frame_at(&mut a, &ctx, size);
+    assert_eq!(dock_order(&a, &ctx), ["scenes", "mixer", "sources"]);
+    let widths: Vec<f32> = a.ui_inspect(&ctx)["docks"].as_array().unwrap_or(&Vec::new()).iter().map(|d| rect_of(&d["rect"]).width()).collect();
+    assert_eq!(widths, [300.0, 400.0, 578.0], "Sources is last and takes the rest");
+    let before = a.store().prefs().docks;
+    let r = run(&mut a, &ctx, "dock.move", json!({"dock": "scenes", "to": "left"})).unwrap();
+    assert_eq!(r["moved"], json!(false), "the first dock cannot move left");
+    assert_eq!(a.store().prefs().docks, before, "nothing changed");
+    // A hidden dock is passed over.
+    run(&mut a, &ctx, "dock.mixer", json!({})).unwrap();
+    run(&mut a, &ctx, "dock.move", json!({"dock": "scenes", "to": "right"})).unwrap();
+    run(&mut a, &ctx, "dock.mixer", json!({})).unwrap();
+    frame_at(&mut a, &ctx, size);
+    assert_eq!(dock_order(&a, &ctx), ["mixer", "sources", "scenes"]);
+    for bad in [json!({"dock": "stats", "to": "left"}), json!({"dock": "mixer", "to": "up"}), json!({"dock": "mixer"}), json!({"to": "left"})] {
+        assert!(run(&mut a, &ctx, "dock.move", bad.clone()).is_err(), "{bad}");
+    }
+    run(&mut a, &ctx, "dock.reset", json!({})).unwrap();
+    frame_at(&mut a, &ctx, size);
+    assert_eq!(dock_order(&a, &ctx), ["scenes", "sources", "mixer"]);
+}
+
+/// A right-click at `at`, one step per frame.
+fn right_click(at: egui::Pos2) -> [Vec<Event>; 3] {
+    let b = |pressed| Event::PointerButton { pos: at, button: egui::PointerButton::Secondary, pressed, modifiers: Modifiers::NONE };
+    [vec![Event::PointerMoved(at)], vec![b(true)], vec![b(false)]]
+}
+
+#[test]
+fn a_right_click_on_a_dock_title_opens_the_dock_menu() {
+    let mut a = app();
+    let ctx = egui::Context::default();
+    let size = egui::vec2(1280.0, 800.0);
+    for _ in 0..2 {
+        frame_at(&mut a, &ctx, size);
+    }
+    let v = a.ui_inspect(&ctx);
+    let title = rect_of(&v["docks"][1]["title"]);
+    let body = rect_of(&v["docks"][1]["rect"]);
+    assert!(title.width() > 0.0 && body.contains(title.center()), "{title:?} in {body:?}");
+    for events in right_click(egui::pos2(body.center().x, body.bottom() - 10.0)) {
+        frame_with(&mut a, &ctx, size, events);
+    }
+    assert!(!egui::Popup::is_any_open(&ctx), "a right-click below the header opens no dock menu");
+    for events in right_click(title.center()) {
+        frame_with(&mut a, &ctx, size, events);
+    }
+    frame_at(&mut a, &ctx, size);
+    assert!(egui::Popup::is_any_open(&ctx), "the dock menu is open");
+}
+
 #[test]
 fn a_press_on_a_header_action_under_the_strip_edge_runs_the_action() {
     let mut a = app();

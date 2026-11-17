@@ -714,6 +714,26 @@ impl StudioApp {
             "dock.mixer" => return Ok(self.toggle_pref(|p| &mut p.docks.mixer)),
             "dock.transitions" => return Ok(self.toggle_pref(|p| &mut p.docks.transitions)),
             "dock.controls" => return Ok(self.toggle_pref(|p| &mut p.docks.controls)),
+            "dock.move" => {
+                let name = Self::param_str(cmd, "dock")?;
+                let i = control::DOCK_NAMES
+                    .iter()
+                    .position(|n| *n == name)
+                    .and_then(|i| u8::try_from(i).ok())
+                    .ok_or_else(|| format!("`dock.move`: unknown dock `{name}` (one of {})", control::DOCK_NAMES.join(", ")))?;
+                let left = match Self::param_str(cmd, "to")? {
+                    "left" => true,
+                    "right" => false,
+                    to => return Err(format!("`dock.move`: `to` is `left` or `right`, not `{to}`")),
+                };
+                let mut docks = self.store.prefs().docks;
+                let moved = docks.shift(i, left);
+                if moved {
+                    self.store.update(|p| p.docks = docks);
+                }
+                let order: Vec<&str> = docks.order().iter().filter_map(|i| control::DOCK_NAMES.get(usize::from(*i)).copied()).collect();
+                return Ok(json!({"moved": moved, "order": order}));
+            }
             "dock.reset" => self.store.update(|p| p.docks = store::Docks::default()),
             "profile.new" => self.ask_name(Named::NewProfile, ""),
             "profile.duplicate" => {
@@ -1238,7 +1258,7 @@ impl StudioApp {
     fn docks(&mut self, ui: &mut Ui, acts: &mut Vec<Act>) {
         let d = self.store.prefs().docks;
         // The transition and output controls are in the output bar; Docks shows or hides them there.
-        let shown: Vec<u8> = [(d.scenes, 0u8), (d.sources, 1), (d.mixer, 2)].iter().filter(|(on, _)| *on).map(|(_, i)| *i).collect();
+        let shown = d.shown();
         // The header actions where the last frame drew them, for the shields over them below.
         let shields: Vec<egui::Rect> = self.dock_rects.iter().flat_map(|(_, _, drawn)| drawn.actions.iter().map(|(_, r)| *r)).collect();
         self.dock_rects.clear();
@@ -1254,12 +1274,13 @@ impl StudioApp {
         let window = ctx.viewport_rect().height();
         let height = strip::height(window, d.height);
         let handle_style = ResizeHandleStyle { hovered: palette.line_strong, dragged: palette.accent, focused: palette.focus };
-        let mut st = docks::DockState { selected: self.selected, renaming: &mut self.renaming, meters: &mut self.meters, dt };
+        let mut st =
+            docks::DockState { selected: self.selected, renaming: &mut self.renaming, meters: &mut self.meters, dt, place: (0, shown.len()) };
         let studio = &self.studio;
         let rects = &mut self.dock_rects;
-        let saved = [d.scenes_width, d.sources_width];
-        // Widths after a divider moved this frame, by dock index (Scenes, Sources).
-        let mut new_widths: Option<[f32; 2]> = None;
+        let saved = d.widths();
+        // Widths after a divider moved this frame, by dock index.
+        let mut new_widths: Option<[f32; 3]> = None;
         let most = strip::max_height(window);
         let panel = egui::Panel::bottom("docks").exact_size(height).show_separator_line(false).frame(egui::Frame::NONE.fill(palette.surface)).show(
             ui,
@@ -1292,6 +1313,7 @@ impl StudioApp {
                     let mut col =
                         ui.new_child(egui::UiBuilder::new().id_salt(("dock", *i)).max_rect(rect).layout(egui::Layout::top_down(egui::Align::Min)));
                     col.set_clip_rect(rect.intersect(ui.clip_rect()));
+                    st.place = (k, shown.len());
                     let drawn = match i {
                         0 => docks::scenes(&mut col, studio, &mut st, acts),
                         1 => docks::sources(&mut col, studio, &mut st, acts),
@@ -1344,9 +1366,10 @@ impl StudioApp {
         let new_height = (r.delta != 0.0).then(|| strip::height(window, height - r.delta));
         if new_widths.is_some() || new_height.is_some_and(|h| h != height) {
             self.store.update(|p| {
-                if let Some([a, b]) = new_widths {
+                if let Some([a, b, c]) = new_widths {
                     p.docks.scenes_width = a;
                     p.docks.sources_width = b;
+                    p.docks.mixer_width = c;
                 }
                 if let Some(h) = new_height {
                     p.docks.height = h;

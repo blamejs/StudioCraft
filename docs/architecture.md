@@ -238,13 +238,14 @@ Controls show and hide the two groups.
 dock has a 24-point header from `kit/panel_header.rs`, with the title on the left and the dock's
 actions on the right, and no footer. The header keeps its actions when the dock is narrow and
 shortens the title instead. `ui-egui/src/strip.rs` sizes the strip: 200 points tall, or 30% of the
-window's height when that is less, and never under 120 points. Scenes and Sources are 300 and 340
-points wide by default and the Audio Mixer takes the rest; no column is narrower than 200 points
-while the window has room. The strip's top edge and the 1-point dividers between docks are
+window's height when that is less, and never under 120 points. Scenes, Sources and Audio Mixer are
+300, 340 and 400 points wide by default, and the last shown dock takes the rest; no column is
+narrower than 200 points while the window has room. A right-click on a dock's title offers Move
+Left and Move Right (`dock.move`), which pass over hidden docks. The strip's top edge and the 1-point dividers between docks are
 `craft-ui` `ResizeHandle`s with 8-point hit bands. The header actions take a press or a drag
 that starts on them, so the top edge resizes only from outside the actions. A dragged height (up to 45% of the window) and
-dragged widths are saved in `config.toml` with the docks' visibility, and Docks › Reset Docks
-clears them.
+dragged widths are saved in `config.toml` with the docks' visibility and order, and Docks › Reset
+Docks clears them and puts the docks back in their first order.
 
 `ui-egui/src/fonts.rs` builds the font stack with `craft-ui`'s `UiFonts`: Inter Regular for the
 proportional family, Inter SemiBold for the `semibold` family (dock, section and dialog titles) and

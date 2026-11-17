@@ -121,4 +121,5 @@ in both files.
 | Changes merged into one undo step | same key within 750 ms | `engine::history::COALESCE` | estimated |
 | Scene shortcuts | Ctrl+1 to Ctrl+9 | `ui-egui::commands::SCENE_HOTKEYS` | estimated |
 | Autosave after a change | 800 ms | `ui-egui::AUTOSAVE` | estimated |
+| Dock widths when none is set (the last shown dock takes the rest) | Scenes 300, Sources 340, Audio Mixer 400 points | `ui-egui::strip::DEFAULT_WIDTHS` | estimated |
 | Status notices shown | 8 s (errors 24 s) | `ui-egui::NOTICE_S` | estimated |
