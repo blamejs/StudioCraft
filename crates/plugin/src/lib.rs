@@ -67,6 +67,12 @@ pub trait Plugin: Send + Sync {
     }
     /// The settings and how the properties window shows them.
     fn schema(&self) -> SettingsSchema;
+    /// The schema for a plug-in set up as `settings`, for lists that depend on another setting
+    /// (the formats of the chosen camera). New settings are checked against it.
+    fn schema_for(&self, settings: &Settings) -> SettingsSchema {
+        let _ = settings;
+        self.schema()
+    }
     /// Settings written by version `from` brought up to [`Plugin::version`].
     fn migrate(&self, from: u32, settings: Settings) -> Settings {
         let _ = from;

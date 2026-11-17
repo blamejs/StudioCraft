@@ -217,6 +217,7 @@ error -32602. A command that fails is a tool result with `isError: true` and the
 | `collection_open` | `path` | Replaces the scene collection with the one in the file. The undo history starts empty. |
 | `collection_save` | `path` | Writes the scene collection to the file, replacing any file at that path. |
 | `app_links` | none | The community links (`app.links`). |
+| `source_schema` | `kind`, `settings?` | `source.schema`: the source plug-in's settings fields with the choices the system offers now. For `camera`, the `device` field lists the connected cameras and the `format` field the formats of the camera that `settings.device` names. |
 | `record_start` | none | `record.start`, then the recording's state from `document.inspect`. Nothing happens when a recording already runs. |
 | `record_stop` | none | `record.stop`, then the recording's state. |
 | `stream_start` | none | `stream.start`, then the stream's state. Marked `openWorldHint: true`. The headless backend refuses it without `--allow-streaming`. |

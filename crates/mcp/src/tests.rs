@@ -13,7 +13,7 @@ use crate::{Backend, Headless, MAX_BATCH_STEPS, McpError, Remote, Roots, Server,
 
 const TOKEN: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
-const TOOLS: [&str; 25] = [
+const TOOLS: [&str; 26] = [
     "command_list",
     "command_run",
     "command_batch",
@@ -31,6 +31,7 @@ const TOOLS: [&str; 25] = [
     "collection_open",
     "collection_save",
     "app_links",
+    "source_schema",
     "record_start",
     "record_stop",
     "stream_start",
@@ -221,6 +222,18 @@ fn source_add_with_an_unknown_kind_is_a_tool_error() {
     let doc = ok_json(&call(&mut s, "doc_inspect", json!({})));
     let items = doc["collection"]["scenes"][0]["items"].as_array().unwrap();
     assert!(items.iter().any(|i| i["transform"]["rotation"] == json!(15.0)), "{doc}");
+}
+
+#[test]
+fn source_schema_lists_a_camera_sources_fields() {
+    let mut s = server();
+    let r = ok_json(&call(&mut s, "source_schema", json!({"kind": "camera", "settings": {"device": "Desk\u{1f}1"}})));
+    let fields = r["schema"]["fields"].as_array().unwrap();
+    let keys: Vec<&str> = fields.iter().filter_map(|f| f["key"].as_str()).collect();
+    assert_eq!(keys, ["device", "format"], "{r}");
+    assert_eq!(fields[1]["kind"]["options"][0]["value"], "", "the default format comes first");
+    assert!(error_text(&call(&mut s, "source_schema", json!({"kind": "hologram"}))).contains("hologram"));
+    error_text(&call(&mut s, "source_schema", json!({})));
 }
 
 #[test]

@@ -1,6 +1,6 @@
 [package]
 name = "studiocraft-platform"
-description = "Operating-system services: display, window and audio capture, and finding ffmpeg"
+description = "Operating-system services: display, window, camera and audio capture, and finding ffmpeg"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -9,6 +9,9 @@ publish = false
 [dependencies]
 studiocraft-media.workspace = true
 thiserror.workspace = true
+# Frames from capture threads to the source thread.
+crossbeam-queue.workspace = true
+zune-jpeg.workspace = true
 
 # Capture uses xcap (displays, windows) and cpal (audio devices, and output loopback through WASAPI
 # on Windows). Linux captures through PipeWire. Other systems build without them and report capture
@@ -17,9 +20,17 @@ thiserror.workspace = true
 xcap.workspace = true
 cpal.workspace = true
 
+[target.'cfg(windows)'.dependencies]
+nokhwa = { workspace = true, features = ["input-msmf"] }
+comedy.workspace = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+nokhwa = { workspace = true, features = ["input-avfoundation"] }
+nokhwa-bindings-macos.workspace = true
+
 # PipeWire's registry, metadata and streams; serde_json reads the default-device metadata. Displays
 # and windows come from the screen-cast portal (ashpd, run by pollster on the capture thread) as
-# PipeWire streams, handed to the source thread through crossbeam queues.
+# PipeWire streams, handed to the source thread through crossbeam queues. Cameras go through V4L2.
 [target.'cfg(target_os = "linux")'.dependencies]
 pipewire.workspace = true
 serde_json.workspace = true
@@ -27,11 +38,12 @@ ashpd.workspace = true
 futures-channel.workspace = true
 futures-util.workspace = true
 pollster.workspace = true
-crossbeam-queue.workspace = true
+nokhwa = { workspace = true, features = ["input-v4l"] }
+v4l.workspace = true
 
 [dev-dependencies]
 serde_json.workspace = true
-crossbeam-queue.workspace = true
+jpeg-encoder.workspace = true
 
 [lints]
 workspace = true

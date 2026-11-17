@@ -21,6 +21,14 @@ in both files.
 | Largest side of a video filter's output | 8192 px | `plugin::filter::MAX_EFFECT_SIDE` | estimated |
 | Largest side of a Linux display or window capture | 8192 px | `platform::portal::MAX_SIDE` | estimated |
 | Spare frames a Linux display or window capture reuses | 2 | `platform::screen_frames::SPARE_FRAMES` | estimated |
+| Spare frames a camera capture reuses | 2 | `platform::screen_frames::SPARE_FRAMES` | estimated |
+| Camera format when none is chosen | the largest picture up to 1920 × 1080 at 30 fps or more | `platform::camera::default_format` | estimated |
+| Camera frames in a row that cannot be read before the capture fails | 30 | `platform::camera::BAD_FRAMES` | estimated |
+| Cameras whose formats are remembered while they are busy | 32 | `platform::camera::KNOWN_CAMERAS` | estimated |
+| Camera YUV to RGB conversion | BT.601, studio range (Y 16 to 235) | `platform::camera_frames::rgb` | ITU-R BT.601 |
+| Wait before a failed camera is opened again | 2 s | `sources::camera::REOPEN` | estimated |
+| Time without a new camera frame before the camera counts as lost | 5 s | `sources::camera::STALL` | estimated |
+| Camera polling rate when no format is chosen | 60 per second | `sources::camera::DEFAULT_FPS` | estimated |
 | Crop and pad edges and area | 0 px each (the whole source) | `sources::filters::CropPad` | estimated |
 | Color key similarity and smoothness | 400 and 80 (1 to 1000, thousandths of RGB distance) | `sources::filters::ColorKey` | estimated |
 | Color key default key color | #00ff00 | `sources::filters::COLOR_KEY_DEFAULT` | estimated |

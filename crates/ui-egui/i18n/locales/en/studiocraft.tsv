@@ -2,6 +2,7 @@
 # Columns: context, source text, translation (here the source text again).
 # This catalog is not embedded. The other locales translate these rows.
 	`{shortcut}`: {error}	`{shortcut}`: {error}
+	a camera was not found	a camera was not found
 	A recording, stream or replay buffer is running. Exiting stops it; a recording is finished and saved first, and the replay buffer's unsaved video is lost.	A recording, stream or replay buffer is running. Exiting stops it; a recording is finished and saved first, and the replay buffer's unsaved video is lost.
 	About StudioCraft	About StudioCraft
 	About {app}	About {app}
@@ -34,6 +35,8 @@
 	Bottom	Bottom
 	Brightness	Brightness
 	Browse…	Browse…
+	Camera	Camera
+	camera access is not allowed in the system's privacy settings	camera access is not allowed in the system's privacy settings
 	Cancel	Cancel
 	Canvas size	Canvas size
 	Capture rate (frames per second)	Capture rate (frames per second)
@@ -322,6 +325,15 @@
 	the audio format could not be described	the audio format could not be described
 	the audio stream ended	the audio stream ended
 	the audio stream failed	the audio stream failed
+	the camera capture could not start	the camera capture could not start
+	the camera is in use by another camera source	the camera is in use by another camera source
+	the camera is still closing	the camera is still closing
+	the camera offers no format StudioCraft reads	the camera offers no format StudioCraft reads
+	the camera sends frames that cannot be read	the camera sends frames that cannot be read
+	the camera sent no picture	the camera sent no picture
+	the camera stopped	the camera stopped
+	the camera stopped sending pictures	the camera stopped sending pictures
+	the camera stopped unexpectedly	the camera stopped unexpectedly
 	the choice in the system picker was canceled	the choice in the system picker was canceled
 	the desktop has no screen-cast portal	the desktop has no screen-cast portal
 	The interface fonts Inter and JetBrains Mono are under the SIL Open Font License 1.1.	The interface fonts Inter and JetBrains Mono are under the SIL Open Font License 1.1.
@@ -356,7 +368,9 @@
 	Video settings can't change while recording, streaming or running the replay buffer.	Video settings can't change while recording, streaming or running the replay buffer.
 	View	View
 	waiting for a choice in the system picker	waiting for a choice in the system picker
+	waiting for the camera	waiting for the camera
 	Waiting for the program picture…	Waiting for the program picture…
+	waiting to open the camera again	waiting to open the camera again
 	Waveform	Waveform
 	Website	Website
 	Width	Width

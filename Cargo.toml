@@ -67,6 +67,17 @@ cpal = "0.16"
 xcap = "0.9"
 # Audio devices on Linux, through the PipeWire sound server.
 pipewire = "=0.10.1"
+# Cameras: Media Foundation on Windows, AVFoundation on macOS and V4L2 on Linux. Each system's
+# backend is a feature, set in crates/platform.
+nokhwa = { version = "=0.10.11", default-features = false }
+# Reading a macOS camera's formats without changing its active format; the version nokhwa uses.
+nokhwa-bindings-macos = "=0.2.4"
+# COM set up on each Windows thread that uses Media Foundation.
+comedy = "=0.2.0"
+# Telling a Linux camera's picture nodes from its metadata nodes; the version nokhwa uses.
+v4l = { version = "=0.14.0", default-features = false, features = ["v4l2"] }
+# Camera frames sent as MJPEG.
+zune-jpeg = "=0.5.15"
 # Display and window capture on Linux, through the desktop's screen-cast portal.
 ashpd = { version = "=0.14.0", default-features = false, features = ["async-io", "pipewire", "screencast"] }
 # Ending a pending portal request when its capture is dropped.
@@ -181,6 +192,9 @@ opt-level = 3
 opt-level = 3
 
 [profile.dev.package.studiocraft-sources]
+opt-level = 3
+
+[profile.dev.package.studiocraft-platform]
 opt-level = 3
 
 [profile.release]

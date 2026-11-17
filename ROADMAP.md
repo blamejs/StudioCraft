@@ -3,8 +3,10 @@
 ## Working now
 
 - Scenes, sources, scene items with move, resize, rotate, lock and visibility, and undo.
-- Built-in sources: color, image, text, media file, display capture, window capture, audio input
-  and desktop audio.
+- Built-in sources: color, image, text, media file, display capture, window capture, camera, audio
+  input and desktop audio.
+- Camera capture on Windows (Media Foundation), macOS (AVFoundation) and Linux (V4L2), with the
+  camera and its format (size, frame rate and pixel encoding) chosen in the source's Properties.
 - Audio input and desktop audio capture on Linux through the PipeWire sound server. The device
   lists show PipeWire's devices with the default first.
 - Display and window capture on Linux through the desktop's screen-cast portal and PipeWire. The
@@ -60,10 +62,9 @@
 
 ## Next
 
-1. **Camera source.** Video capture devices on every system.
-2. **Docks.** Undock, rearrange and save dock layouts.
-3. **Translations.** A `studiocraft.tsv` catalog for every other locale craft-i18n has, and
+1. **Docks.** Undock, rearrange and save dock layouts.
+2. **Translations.** A `studiocraft.tsv` catalog for every other locale craft-i18n has, and
    right-to-left layout for Arabic and Hebrew.
-4. **Multiple outputs.** Several streams at once, and a virtual camera.
-5. **Web build.** The model and plugin crates already build for WebAssembly; a browser editor for
+3. **Multiple outputs.** Several streams at once, and a virtual camera.
+4. **Web build.** The model and plugin crates already build for WebAssembly; a browser editor for
    scene collections is the first step.

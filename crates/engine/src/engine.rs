@@ -199,6 +199,11 @@ impl Engine {
             }
             Command::AppInfo {} => Ok(Outcome { changed: false, runtime: None, result: links::info() }),
             Command::PluginList {} => Ok(Outcome { changed: false, runtime: None, result: self.registry.describe() }),
+            Command::SourceSchema { kind, settings } => {
+                let schema = self.registry.source(&kind)?.schema_for(&settings.unwrap_or_default());
+                let result = serde_json::to_value(schema).map_err(|e| EngineError::Invalid(e.to_string()))?;
+                Ok(Outcome { changed: false, runtime: None, result: json!({"schema": result}) })
+            }
             cmd => self.edit(cmd),
         }
     }
@@ -371,7 +376,7 @@ impl Engine {
                     None => c.unique_source_name(plugin.name()),
                 };
                 let settings = settings.unwrap_or_default();
-                let schema = plugin.schema();
+                let schema = plugin.schema_for(&settings);
                 check_settings(&schema, &settings, None)?;
                 let settings = schema.normalize(&settings);
                 let source = SourceId(c.alloc_id());
@@ -414,7 +419,7 @@ impl Engine {
                 // Settings of a plug-in this build lacks are kept as given.
                 s.settings = match self.registry.source(&s.kind) {
                     Ok(p) => {
-                        let schema = p.schema();
+                        let schema = p.schema_for(&settings);
                         check_settings(&schema, &settings, Some(&s.settings))?;
                         schema.normalize(&settings)
                     }
@@ -663,15 +668,22 @@ fn unique_name(name: &str, taken: impl Fn(&str) -> bool) -> Result<String, Engin
 }
 
 /// An error naming each value in `given` that `schema` does not accept. A value equal to the one
-/// in `current` is not checked again.
+/// in `current` is not checked again, except a choice after a choice that changed, since the
+/// options of a later choice can depend on an earlier one. An omitted value counts as its
+/// default, which it becomes when the settings are saved.
 fn check_settings(schema: &SettingsSchema, given: &Settings, current: Option<&Settings>) -> Result<(), EngineError> {
     let mut changed = Settings::default();
+    let mut choice_changed = false;
     for f in &schema.fields {
-        if let Some(v) = given.get(&f.key)
-            && current.and_then(|c| c.get(&f.key)) != Some(v)
+        let is_choice = matches!(f.kind, studiocraft_model::FieldKind::Choice { .. });
+        let value = given.get(&f.key);
+        let differs = current.and_then(|c| c.get(&f.key)) != Some(value.unwrap_or(&f.default));
+        if let Some(v) = value
+            && (differs || (is_choice && choice_changed))
         {
             changed.set(&f.key, v.clone());
         }
+        choice_changed |= is_choice && differs;
     }
     let problems = schema.problems(&changed);
     if problems.is_empty() { Ok(()) } else { Err(EngineError::Invalid(problems.join("; "))) }

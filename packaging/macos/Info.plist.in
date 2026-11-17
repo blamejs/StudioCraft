@@ -45,6 +45,9 @@
   <!-- macOS shows this the first time StudioCraft opens an audio input source. -->
   <key>NSMicrophoneUsageDescription</key>
   <string>StudioCraft records and streams audio from the inputs you add to a scene.</string>
+  <!-- macOS shows this the first time StudioCraft lists or opens a camera. -->
+  <key>NSCameraUsageDescription</key>
+  <string>StudioCraft records and streams video from the cameras you add to a scene.</string>
   <key>NSHumanReadableCopyright</key>
   <string>Copyright © the StudioCraft contributors. MIT OR Apache-2.0.</string>
 </dict>
