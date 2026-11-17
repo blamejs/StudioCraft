@@ -1,0 +1,17 @@
+[package]
+name = "craft-tsmux"
+description = "MPEG-2 transport stream writer: PAT and PMT, PES packets for H.264, HEVC, MPEG-2 video, AAC, Opus, AC-3 and MPEG audio, PCR and continuity counters, to any io::Write"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+
+[dev-dependencies]
+# The transport stream demuxer the tests read the output back with.
+craft-media = { git = "https://github.com/storytold/craft-libs", rev = "7780b4f58ec3d56b1f908c8fa3b1258fabae3880", default-features = false, features = ["mpegts"] }
+proptest = "1"
