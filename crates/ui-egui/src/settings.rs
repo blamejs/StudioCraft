@@ -1,10 +1,12 @@
 //! The Settings window: General, Stream, Output, Video and Hotkeys, edited on a copy of the
 //! profile, the Language setting and the update check at start, applied with OK or Apply.
 
+use std::collections::BTreeMap;
+
 use craft_keymap::{Binding, CommandRef, Keymap, Overrides};
 use egui::{RichText, Ui};
 use studiocraft_model::{Profile, RecordingFormat, RecordingQuality};
-use studiocraft_plugin::Registry;
+use studiocraft_plugin::{Availability, EncoderEnv, EncoderKind, Registry, Settings};
 
 use crate::i18n::{self, I18N};
 
@@ -180,17 +182,39 @@ impl SettingsWindow {
         ok.then_some(out)
     }
 
-    /// The video encoder list; `streaming` lists only the encoders a stream can carry.
+    /// The video encoder list; `streaming` lists only the encoders a stream can carry. Encoders the
+    /// output cannot run are left out, and ones the ffmpeg program does not list are shown disabled.
     fn encoder_combo(ui: &mut Ui, id: &str, registry: &Registry, offered: &[String], value: &mut String, streaming: bool) {
         let name = registry.encoder(value).map_or_else(|_| value.clone(), |e| tl!(e.name()).to_string());
+        let env = EncoderEnv::ffmpeg(offered);
         craft_ui::ComboBox::from_id_salt(id).selected_text(name).width(260.0).show_ui(ui, |ui| {
-            for e in registry.encoders().iter().filter(|e| !streaming || e.streams()) {
-                let available = offered.is_empty() || offered.iter().any(|c| c == e.ffmpeg_codec());
+            for e in registry.encoders().iter().filter(|e| e.kind() == EncoderKind::Video && (!streaming || e.streams())) {
+                let availability = e.availability(&env);
+                if availability == Availability::NotRunHere {
+                    continue;
+                }
+                let available = availability.can_start();
                 let name = tl!(e.name());
                 let text = if available { name.to_string() } else { craft_i18n::fmt(tl!("{encoder} (not in this ffmpeg)"), &[("encoder", name)]) };
                 ui.add_enabled_ui(available, |ui| ui.selectable_value(value, e.id().to_string(), text));
             }
         });
+    }
+
+    /// A grid row with the settings of the video encoder `encoder`, when it has any. Its values
+    /// are saved under its id once the user changes one; until then its defaults apply.
+    fn encoder_form(ui: &mut Ui, id: &str, registry: &Registry, encoder: &str, saved: &mut BTreeMap<String, Settings>) {
+        let Ok(e) = registry.encoder(encoder) else { return };
+        let schema = e.schema();
+        if schema.fields.is_empty() {
+            return;
+        }
+        let mut settings = saved.get(encoder).cloned().unwrap_or_default();
+        ui.label("");
+        if crate::forms::form(ui, egui::Id::unique(id), &schema, &mut settings).changed {
+            saved.insert(encoder.to_string(), settings);
+        }
+        ui.end_row();
     }
 
     fn general(&mut self, ui: &mut Ui) {
@@ -240,6 +264,7 @@ impl SettingsWindow {
             ui.label(tl!("Video encoder"));
             Self::encoder_combo(ui, "stream-encoder", registry, &self.offered, &mut s.video_encoder, true);
             ui.end_row();
+            Self::encoder_form(ui, "stream-encoder-settings", registry, &s.video_encoder, &mut s.encoder_settings);
             ui.label(tl!("Keyframe interval"));
             ui.add(egui::DragValue::new(&mut s.keyframe_interval_s).range(1..=20).suffix(format!(" {}", tl!("s"))));
             ui.end_row();
@@ -282,6 +307,7 @@ impl SettingsWindow {
             ui.label(tl!("Video encoder"));
             Self::encoder_combo(ui, "record-encoder", registry, &self.offered, &mut o.video_encoder, false);
             ui.end_row();
+            Self::encoder_form(ui, "record-encoder-settings", registry, &o.video_encoder, &mut o.encoder_settings);
             ui.label(tl!("ffmpeg program"));
             ui.horizontal(|ui| {
                 let r = ui.add(egui::TextEdit::singleline(&mut o.ffmpeg_path).hint_text(tl!("ffmpeg on the PATH")).desired_width(240.0));

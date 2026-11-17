@@ -35,6 +35,46 @@ fn a_stream_needs_an_h264_encoder() {
 }
 
 #[test]
+fn an_audio_encoder_is_refused_as_the_video_encoder() {
+    use studiocraft_plugin::{Codec, Encoder, FfmpegEncoder};
+    struct Aac;
+    impl Plugin for Aac {
+        fn id(&self) -> &'static str {
+            "aac"
+        }
+        fn name(&self) -> &'static str {
+            "AAC"
+        }
+        fn schema(&self) -> SettingsSchema {
+            SettingsSchema::default()
+        }
+    }
+    impl FfmpegEncoder for Aac {
+        fn ffmpeg_codec(&self) -> &'static str {
+            "aac"
+        }
+        fn ffmpeg_args(&self, _: &Settings, _: RateControl, _: f64) -> Result<Vec<String>, PluginError> {
+            Ok(vec!["-c:v".into(), "aac".into()])
+        }
+    }
+    impl Encoder for Aac {
+        fn codec(&self) -> Codec {
+            Codec::Aac
+        }
+        fn ffmpeg(&self) -> Option<&dyn FfmpegEncoder> {
+            Some(self)
+        }
+    }
+    assert!(Aac.streams(), "FLV carries AAC audio");
+    let mut j = job(PathBuf::from("no-such-ffmpeg"), RateControl::Bitrate { kbps: 1000, keyframe_s: 2 });
+    j.video_encoder = Arc::new(Aac);
+    let Err(e) = codec_args(&j, None) else { panic!("an audio encoder gave video arguments") };
+    assert!(e.to_string().contains("AAC is not a video encoder"), "{e}");
+    let Err(e) = Stream.start(&Settings::new().with("server", "rtmp://127.0.0.1:9/live"), j) else { panic!("the stream started") };
+    assert!(e.to_string().contains("H.264"), "{e}");
+}
+
+#[test]
 fn containers_follow_the_extension() {
     assert_eq!(container_for(Path::new("a/b.MKV")).unwrap(), "matroska");
     assert_eq!(container_for(Path::new("b.mp4")).unwrap(), "mp4");
