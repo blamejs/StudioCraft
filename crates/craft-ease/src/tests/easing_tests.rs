@@ -647,6 +647,32 @@ fn a_sampled_ease_is_always_valid() {
     assert_eq!(SampledEase::try_new("x", "p", "e", vec![0.2, 0.5, 0.9]).unwrap().values(), &[0.0, 0.5, 1.0]);
 }
 
+/// Thinning a table picks evenly spread samples, first and last included, for any length a
+/// `usize` can hold (a 32-bit target overflows `k · (n − 1)` from about 4.2 million values).
+#[test]
+fn thinning_a_huge_table_does_not_overflow() {
+    use crate::sampled::thinned;
+    let last = MAX_EASE_SAMPLES - 1;
+    for n in [MAX_EASE_SAMPLES + 1, 5_000_000, usize::MAX / 3, usize::MAX] {
+        assert_eq!(thinned(0, n), 0);
+        assert_eq!(thinned(last, n), n - 1, "{n}");
+        assert!(thinned(last / 2, n) >= (n - 1) / 2 - 1 && thinned(last / 2, n) <= (n - 1) / 2, "{n}");
+        assert!((1..=last).all(|k| thinned(k, n) > thinned(k - 1, n)), "{n}");
+    }
+}
+
+/// Invisible format characters do not count as a name, so a name of only those shows as
+/// "Sampled ease"; they are taken out of a visible name too.
+#[test]
+fn a_sampled_ease_name_of_invisible_characters_is_no_name() {
+    let blank: String = "\u{200b}\u{200d}\u{feff}\u{2060}\u{ad}".repeat(13);
+    assert_eq!(SampledEase::new(&blank, "p", "e", vec![0.0, 1.0]).name(), "Sampled ease");
+    assert_eq!(SampledEase::new(" \u{200b} Bounce\u{200d}y \u{feff}", "p", "e", vec![0.0, 1.0]).name(), "Bouncey");
+    // A visible name longer than the limit keeps its first 64 characters, after leading padding.
+    let padded = format!("{}{}", " \u{200b}".repeat(100), "a".repeat(80));
+    assert_eq!(SampledEase::new(&padded, "p", "e", vec![0.0, 1.0]).name(), "a".repeat(64));
+}
+
 #[test]
 fn a_sampled_ease_round_trips_through_the_file_format_and_survives_bad_files() {
     let e = Easing::Sampled(Arc::new(steps()));

@@ -24,7 +24,8 @@ fn a_physical_spring_ease_matches_the_closed_form() {
         let (w, z) = ((k / m).sqrt(), c / (2.0 * (k * m).sqrt()));
         assert!((spring.omega() - w).abs() < 1e-12 && (spring.damping() - z).abs() < 1e-12);
         let rate = if z < 1.0 { z * w } else { w / (z + (z * z - 1.0).sqrt()) };
-        let settle = ((if z < 1.0 { 6.9 } else { 9.2 }) / rate).clamp(0.05, 10.0);
+        let lead = if z < 1.0 { (6.9 - 0.5 * (1.0 - z * z).ln()).min(9.2) } else { 9.2 };
+        let settle = (lead / rate).clamp(0.05, 10.0);
         assert!((spring.settle_time() - settle).abs() < 1e-12);
         let ease = Easing::Spring(SpringEase { mass: m, stiffness: k, damping: c });
         // A spring cut short at 10 seconds has what it is still off taken out evenly.
@@ -36,6 +37,20 @@ fn a_physical_spring_ease_matches_the_closed_form() {
         }
         // It ends within 0.1 % (0.2 % for the slower lead factor) of 1 before the jump to 1.
         assert!((ease.apply(0.999_999) - 1.0).abs() < 2e-3, "{m} {k} {c}");
+    }
+}
+
+/// A spring just under critical damping is within about 0.1 % of 1 just before the end, so the
+/// ease does not jump when it reaches 1.
+#[test]
+fn a_nearly_critical_spring_ease_ends_without_a_jump() {
+    for z in [0.5, 0.9, 0.99, 0.999, 0.9999, 1.0 - 2e-4] {
+        let s = Spring::new(1.0, z).unwrap();
+        let end = s.ease(1.0 - 1e-9);
+        assert!((end - 1.0).abs() < 1.1e-3, "ζ {z}: {end}");
+        // The bound holds after the settle time too, not only at it.
+        let late = 1.0 + s.response(-1.0, 0.0, 1.5 * s.settle_time()).0;
+        assert!((late - 1.0).abs() < 1.1e-3, "ζ {z} later: {late}");
     }
 }
 

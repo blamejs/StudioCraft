@@ -60,14 +60,18 @@ file with more than `MAX_TRACK_KEYS` keys while it reads.
 ## Details
 
 - Values are `f64` throughout.
+- The `serde` feature reads and writes `Easing` (spring eases included) and `Track`.
+  `MotionPath`, `Spring` and `SpringState` are not serialized.
 - Serialized eases keep their form: presets are strings such as `"QuadIn"`, and `Classic`,
   `CubicBezier`, `Custom` and `Sampled` are one-key objects. `Hold` and `Spring` are the last
-  variants.
+  variants. A track is read from its fields by name or in order.
 - `Easing::apply` returns exactly 0 and 1 at the ends for every variant, and `+∞` gives 1.
 - `CubicBezier` keeps y1 and y2 within ±10 when it is evaluated. Its solver inverts the curve
   with both handles at full reach in closed form, and otherwise stops within 1e-12 of the span
   in at most 64 steps.
-- A sampled ease with no name is named "Sampled ease". Reading a file keeps the first 65,536
+- A sampled ease's name drops control characters, bidirectional overrides and invisible format
+  characters such as zero-width spaces. A sampled ease with no name left is named "Sampled ease".
+  Reading a file keeps the first 65,536
   entries of a custom ease's points or a sampled ease's values and skips the rest.
 - `Track` takes `Easing::Hold` for held keys and treats −0 and +0 as one time. It samples keys
   at opposite ends of the `f64` range without overflow, and returns `EaseError::Overflow` when
@@ -79,4 +83,5 @@ file with more than `MAX_TRACK_KEYS` keys while it reads.
   A segment whose handles lie on its chord is treated as a straight line.
 - `Spring::from_physical(mass, stiffness, damping)` takes a mass, a stiffness and a damping
   coefficient. A spring ease that is still moving after 10 seconds has the distance it is still
-  off taken out evenly over the ease, so it reaches 1 without a jump.
+  off taken out evenly over the ease, so it reaches 1 without a jump. Any other spring ease is
+  within about 0.1 % of 1 just before it reaches 1.

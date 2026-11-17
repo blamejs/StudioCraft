@@ -87,8 +87,10 @@ impl Spring {
     pub fn settle_time(&self) -> f64 {
         let (w, z) = (self.omega, self.zeta);
         // The slowest mode's decay rate; e^−6.9 is 0.1 %, and a critically or over-damped
-        // spring's larger lead factor needs about 9.2.
-        let (rate, k) = if z < 1.0 { (z * w, 6.9) } else { (w / (z + (z * z - 1.0).sqrt()), 9.2) };
+        // spring's larger lead factor needs about 9.2. Released from rest, an under-damped
+        // spring's offset stays within e^−ζωt · min(1/√(1 − ζ²), 1 + ζωt), so its lead factor
+        // grows by ln(1/√(1 − ζ²)) up to the critical spring's 9.2.
+        let (rate, k) = if z < 1.0 { (z * w, (6.9 - 0.5 * (1.0 - z * z).ln()).min(9.2)) } else { (w / (z + (z * z - 1.0).sqrt()), 9.2) };
         let settle = if rate > 1e-6 { (k / rate).clamp(0.05, MAX_SETTLE) } else { MAX_SETTLE };
         if settle.is_finite() { settle } else { MAX_SETTLE }
     }

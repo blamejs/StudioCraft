@@ -254,8 +254,16 @@ mod serde_impl {
                     }
                     Track::from_keys(keys.unwrap_or_default()).map_err(A::Error::custom)
                 }
+                /// Formats that write a struct as its fields in order.
+                fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Track<T>, A::Error> {
+                    let keys = seq.next_element::<Keys<T>>()?.ok_or_else(|| A::Error::invalid_length(0, &self))?.0;
+                    if seq.next_element::<serde::de::IgnoredAny>()?.is_some() {
+                        return Err(A::Error::invalid_length(2, &self));
+                    }
+                    Track::from_keys(keys).map_err(A::Error::custom)
+                }
             }
-            d.deserialize_map(V(PhantomData))
+            d.deserialize_struct("Track", &["keys"], V(PhantomData))
         }
     }
 }

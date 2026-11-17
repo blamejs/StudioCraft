@@ -178,6 +178,36 @@ fn transitions_blend_the_two_scenes_over_time() {
     assert!(close(pixel(&px, 16, 8, 8), [191, 0, 64, 255]), "{:?}", pixel(&px, 16, 8, 8));
 }
 
+/// An ease that passes 1 before the end (Back Out) keeps the transition drawn until its duration
+/// ends, and its shader receives `t` clamped to 1 meanwhile. The test shader shows the old scene
+/// at `t = 1` and a gray it can only draw for `t` above 1, so the new scene appears only when
+/// the transition stops being drawn.
+#[test]
+fn an_overshooting_ease_keeps_the_transition_drawn_until_it_ends() {
+    let Some(mut c) = compositor(16, 16) else { return };
+    let red = solid([255, 0, 0, 255], 16, 16);
+    let blue = solid([0, 0, 255, 255], 16, 16);
+    let desc = TransitionDesc {
+        from: SceneDesc { items: vec![item(1, &red, at(0.0, 0.0))] },
+        key: "test.old_scene".into(),
+        wgsl: "fn transition(a: vec4<f32>, b: vec4<f32>, uv: vec2<f32>, t: f32, p: vec4<f32>) -> vec4<f32> { return select(a, vec4<f32>(0.5, 0.5, 0.5, 1.0), t > 1.0); }",
+        params: [0.0; 4],
+        start: Tick(1000),
+        duration: Tick(1000),
+        ease: Easing::BackOut,
+    };
+    // 70 % of the way through, Back Out gives about 1.08.
+    assert!(desc.progress(Tick(1700)) > 1.05, "{}", desc.progress(Tick(1700)));
+    let plan = Plan { program: SceneDesc { items: vec![item(2, &blue, at(0.0, 0.0))] }, transition: Some(desc), preview: None };
+    let px = draw(&mut c, plan.clone(), Tick(1700));
+    let errors = c.take_errors();
+    assert!(errors.is_empty(), "{errors:?}");
+    assert!(close(pixel(&px, 16, 8, 8), [255, 0, 0, 255]), "{:?}", pixel(&px, 16, 8, 8));
+    // After the end only the new scene is drawn.
+    let px = draw(&mut c, plan, Tick(2000));
+    assert!(close(pixel(&px, 16, 8, 8), [0, 0, 255, 255]), "{:?}", pixel(&px, 16, 8, 8));
+}
+
 #[test]
 fn every_built_in_transition_compiles() {
     use crate::transitions::{Cut, FadeThroughColor, Swipe};

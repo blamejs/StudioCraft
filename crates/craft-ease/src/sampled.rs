@@ -72,17 +72,31 @@ fn ease_id(s: &str) -> String {
     s.chars().filter(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-')).take(MAX_EASE_ID).collect()
 }
 
-/// A name as kept: control characters and bidirectional overrides removed, trimmed, at most
-/// [`MAX_EASE_NAME`] characters; `None` when nothing is left.
+/// A name as kept: control characters, bidirectional overrides and invisible format characters
+/// (zero-width spaces and joiners, word joiners, the byte-order mark, soft hyphens) removed,
+/// trimmed, at most [`MAX_EASE_NAME`] characters; `None` when nothing is left.
 fn ease_name(name: &str) -> Option<String> {
     let n: String = name
-        .trim()
         .chars()
-        .filter(|c| !c.is_control() && !matches!(c, '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}'))
+        .filter(|c| {
+            !c.is_control()
+                && !matches!(
+                    c,
+                    '\u{ad}' | '\u{180e}' | '\u{200b}'..='\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2060}'..='\u{2069}' | '\u{feff}'
+                )
+        })
+        .skip_while(|c| c.is_whitespace())
         .take(MAX_EASE_NAME)
         .collect();
     let n = n.trim().to_string();
     (!n.is_empty()).then_some(n)
+}
+
+/// The index of the `k`th of [`MAX_EASE_SAMPLES`] samples spread evenly over `n` values,
+/// computed in 128 bits so a long table cannot overflow a 32-bit `usize`.
+pub(crate) fn thinned(k: usize, n: usize) -> usize {
+    let i = (k as u128) * (n.saturating_sub(1) as u128) / ((MAX_EASE_SAMPLES - 1) as u128);
+    usize::try_from(i).unwrap_or(usize::MAX)
 }
 
 impl SampledEase {
@@ -92,7 +106,7 @@ impl SampledEase {
     pub fn new(name: &str, plugin: &str, ease: &str, mut values: Vec<f64>) -> SampledEase {
         if values.len() > MAX_EASE_SAMPLES {
             let n = values.len();
-            values = (0..MAX_EASE_SAMPLES).filter_map(|k| values.get(k * (n - 1) / (MAX_EASE_SAMPLES - 1)).copied()).collect();
+            values = (0..MAX_EASE_SAMPLES).filter_map(|k| values.get(thinned(k, n)).copied()).collect();
         }
         if values.len() < 2 {
             values = vec![0.0, 1.0];

@@ -11,7 +11,7 @@ workspace = true
 
 [features]
 default = ["serde"]
-# Reading and writing eases, tracks and paths with serde.
+# Reading and writing eases (spring eases included) and tracks with serde.
 serde = ["dep:serde"]
 
 [dependencies]

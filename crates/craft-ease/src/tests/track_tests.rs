@@ -140,3 +140,15 @@ fn tracks_round_trip_through_files_and_bad_files_are_refused() {
     let err = serde_json::from_str::<Track<f32>>(&big).unwrap_err().to_string();
     assert!(err.contains("more than 100000 keys"), "{err}");
 }
+
+/// Formats that write a struct as its fields in order (rather than by name) read a track too,
+/// through the same checks.
+#[test]
+fn tracks_read_from_formats_that_write_fields_in_order() {
+    let t: Track<f64> = serde_json::from_str(r#"[[{"time":2,"value":1},{"time":1,"value":0,"ease":"QuadIn"}]]"#).unwrap();
+    assert_eq!(t.keys().iter().map(|k| (k.time, k.value)).collect::<Vec<_>>(), [(1.0, 0.0), (2.0, 1.0)]);
+    assert_eq!(t.keys()[0].ease, Easing::QuadIn);
+    assert!(serde_json::from_str::<Track<f64>>(r#"[[{"time":1,"value":1},{"time":1,"value":0}]]"#).is_err());
+    assert!(serde_json::from_str::<Track<f64>>("[]").is_err());
+    assert!(serde_json::from_str::<Track<f64>>("[[], 1]").is_err());
+}

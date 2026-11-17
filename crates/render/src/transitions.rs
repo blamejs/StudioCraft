@@ -4,7 +4,7 @@ use studiocraft_model::{ChoiceOption, Field, FieldKind, Settings, SettingsSchema
 use studiocraft_plugin::{Easing, Plugin, Transition, easing_field, easing_from};
 
 /// The Easing setting's key and default for Fade and Fade through color.
-const FADE_EASING: (&str, &str) = ("easing", "linear");
+const FADE_EASING: (&str, &str) = ("fade_easing", "linear");
 /// The Easing setting's key and default for Swipe: a smoothstep, as it has always moved. Its
 /// key is its own, so a Fade's easing does not carry over when the transition changes.
 const SWIPE_EASING: (&str, &str) = ("swipe_easing", "ease_in_out");
@@ -155,20 +155,24 @@ mod tests {
         assert_eq!(Fade.easing(&none), Easing::Linear);
         assert_eq!(FadeThroughColor.easing(&none), Easing::Linear);
         assert_eq!(Cut.easing(&none), Easing::Linear);
-        let s = Settings::default().with("easing", "ease_out");
+        let s = Settings::default().with("fade_easing", "ease_out");
         assert_eq!(Fade.easing(&s), Easing::QuadOut);
-        assert_eq!(FadeThroughColor.easing(&Settings::default().with("easing", "ease_in")), Easing::QuadIn);
+        assert_eq!(FadeThroughColor.easing(&Settings::default().with("fade_easing", "ease_in")), Easing::QuadIn);
+        // A generic key another transition might use does not move the built-in fades.
+        assert_eq!(Fade.easing(&Settings::default().with("easing", "ease_in")), Easing::Linear);
         // Swipe keeps its own choice, so a Fade's easing left in the settings does not move it.
         assert_eq!(Swipe.easing(&s), Swipe.easing(&none));
         assert_eq!(Swipe.easing(&s.clone().with("swipe_easing", "ease_in")), Easing::QuadIn);
         // A value from an older or edited file that is not a choice takes the default.
-        let odd = Settings::default().with("easing", "wobble").with("swipe_easing", "wobble");
+        let odd = Settings::default().with("fade_easing", "wobble").with("swipe_easing", "wobble");
         assert_eq!(Fade.easing(&odd), Easing::Linear);
         assert_eq!(Swipe.easing(&odd), Swipe.easing(&none));
         // Each eased transition offers the setting, with its default.
-        for (schema, key, default) in
-            [(Fade.schema(), "easing", "linear"), (FadeThroughColor.schema(), "easing", "linear"), (Swipe.schema(), "swipe_easing", "ease_in_out")]
-        {
+        for (schema, key, default) in [
+            (Fade.schema(), "fade_easing", "linear"),
+            (FadeThroughColor.schema(), "fade_easing", "linear"),
+            (Swipe.schema(), "swipe_easing", "ease_in_out"),
+        ] {
             let f = schema.fields.iter().find(|f| f.key == key).unwrap();
             assert_eq!(f.label, "Easing");
             assert_eq!(f.default.as_str(), Some(default));
