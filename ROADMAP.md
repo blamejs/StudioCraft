@@ -6,7 +6,7 @@
 - Built-in sources: color, image, text, media file, display capture, window capture, audio input
   and desktop audio.
 - Filters: color correction with white balance by temperature and tint, chroma key, crop and pad,
-  gain, noise gate, compressor, limiter and a three-band equalizer.
+  sharpen, gain, noise gate, compressor, limiter and a three-band equalizer.
 - Transitions: cut, fade, fade through a color and swipe, with an Easing setting on the fades and
   the swipe. Studio mode with quick transitions.
 - The View › Scopes window: a waveform, an RGB parade, a histogram, and the YUV and HLS
@@ -51,7 +51,7 @@
 1. **Capture on Linux.** Display and window capture through PipeWire portals, and audio devices
    through ALSA or PipeWire.
 2. **Camera source.** Video capture devices on every system.
-3. **More filters.** Scroll, sharpen, color key and image mask.
+3. **More filters.** Scroll, color key and image mask.
 4. **Replay buffer.** Keep the last N seconds in memory and save them on a shortcut.
 5. **Audio monitoring.** Play a source to a chosen output device, and per-source audio offset.
 6. **Docks.** Undock, rearrange and save dock layouts.

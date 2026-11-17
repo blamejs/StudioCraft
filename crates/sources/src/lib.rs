@@ -59,6 +59,7 @@ pub fn register_all(reg: &mut Registry, ffmpeg: &FfmpegSetting) -> Result<(), Pl
     reg.register_filter(Arc::new(filters::ColorCorrection))?;
     reg.register_filter(Arc::new(filters::ChromaKey))?;
     reg.register_filter(Arc::new(filters::CropPad))?;
+    reg.register_filter(Arc::new(filters::Sharpen))?;
     Ok(())
 }
 
