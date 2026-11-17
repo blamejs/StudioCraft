@@ -1,7 +1,11 @@
 //! Forms built from a plug-in's [`SettingsSchema`], and the Properties and Filters windows.
 
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use egui::{Color32, Ui};
 use serde_json::{Value, json};
+use studiocraft_media::queue::Latest;
 use studiocraft_model::collection::MAX_SYNC_OFFSET_MS;
 use studiocraft_model::{AudioState, FieldKind, FilterId, MonitorMode, PathMode, SettingsSchema, SourceId};
 use studiocraft_plugin::{FilterTarget, Registry, Settings};
@@ -29,9 +33,18 @@ fn color_text(c: [u8; 4]) -> String {
 
 /// Edit `settings` against `schema`; the values the schema does not list are kept.
 pub fn form(ui: &mut Ui, id: egui::Id, schema: &SettingsSchema, settings: &mut Settings) -> FormEvent {
+    form_locked(ui, id, schema, settings, usize::MAX)
+}
+
+/// [`form`] with the fields after index `locked_after` shown but not editable.
+fn form_locked(ui: &mut Ui, id: egui::Id, schema: &SettingsSchema, settings: &mut Settings, locked_after: usize) -> FormEvent {
     let mut ev = FormEvent::default();
     egui::Grid::new(id).num_columns(2).spacing([12.0, 6.0]).striped(false).show(ui, |ui| {
-        for field in &schema.fields {
+        for (index, field) in schema.fields.iter().enumerate() {
+            if index == locked_after.saturating_add(1) {
+                // Every later row is disabled too.
+                ui.disable();
+            }
             ui.label(tl!(&field.label));
             let key = field.key.as_str();
             let current = settings.get(key).cloned().unwrap_or_else(|| field.default.clone());
@@ -153,47 +166,204 @@ fn choice_text(key: &str, current: &Value, options: &[studiocraft_model::ChoiceO
     }
 }
 
+/// Reads a source's schema for some settings. It can take a while: a camera that has not been
+/// read before is opened to list its formats.
+type Reader = Arc<dyn Fn(&Settings) -> SettingsSchema + Send + Sync>;
+
+/// A schema being read on its own thread. A window reads one schema at a time: a read asked for
+/// while one runs starts when that one ends, and the reply of the earlier one is dropped.
+struct Reading {
+    reply: Arc<Reply>,
+    /// Another read was asked for while this one ran.
+    again: bool,
+    /// The fields after this index stay locked until the reply arrives.
+    after: Option<usize>,
+    /// A change made in the window waits for the reply: a later choice that the new lists do not
+    /// offer goes back to its default, and then the settings are sent. Holds the source's
+    /// settings from before that change; when they change elsewhere meanwhile, the change made
+    /// elsewhere is kept instead.
+    base: Option<Settings>,
+}
+
+/// Where a read leaves its schema.
+#[derive(Default)]
+struct Reply {
+    schema: Latest<SettingsSchema>,
+    /// Set after the schema is left, or when the read stopped without one.
+    done: AtomicBool,
+}
+
+impl Reply {
+    /// The schema once the read has ended: `Some(None)` when it stopped without one.
+    fn ended(&self) -> Option<Option<SettingsSchema>> {
+        if let Some(schema) = self.schema.take() {
+            return Some(Some(schema));
+        }
+        // The schema is left before `done` is set, so it is seen once `done` is.
+        self.done.load(Ordering::Acquire).then(|| self.schema.take())
+    }
+}
+
+/// Sets [`Reply::done`] when the read ends, also when the reader panics.
+struct Ends(Arc<Reply>);
+
+impl Drop for Ends {
+    fn drop(&mut self) {
+        self.0.done.store(true, Ordering::Release);
+    }
+}
+
 /// The Properties window of one source.
 pub struct Properties {
     pub source: SourceId,
-    /// Read when the window opened (lists of displays, windows and devices are read then), and
+    /// Read when the window opens (lists of displays, windows and devices are read then), and
     /// again when a choice changes, since one list can depend on another (a camera's formats).
+    /// Empty until the first read ends.
     schema: SettingsSchema,
+    loaded: bool,
     settings: Settings,
+    reader: Reader,
+    reading: Option<Reading>,
 }
 
 impl Properties {
     pub fn open(studio: &Studio, source: SourceId) -> Option<Properties> {
         let s = studio.collection().source(source)?;
-        let schema = studio.registry().source(&s.kind).ok()?.schema_for(&s.settings);
-        Some(Properties { source, schema, settings: s.settings.clone() })
+        let plugin = studio.registry().source(&s.kind).ok()?;
+        Some(Properties::with_reader(source, s.settings.clone(), Arc::new(move |s: &Settings| plugin.schema_for(s))))
     }
 
-    /// Show `settings` that changed outside the window, reading the schema again when a choice
-    /// changed. The values are kept as they are.
-    fn take(&mut self, settings: Settings, schema: impl Fn(&Settings) -> SettingsSchema) {
-        let choice_changed =
-            self.schema.fields.iter().any(|f| matches!(f.kind, FieldKind::Choice { .. }) && settings.get(&f.key) != self.settings.get(&f.key));
-        self.settings = settings;
-        if choice_changed {
-            self.schema = schema(&self.settings);
+    fn with_reader(source: SourceId, settings: Settings, reader: Reader) -> Properties {
+        let mut p = Properties { source, schema: SettingsSchema::default(), loaded: false, settings, reader, reading: None };
+        p.read(None, None);
+        p
+    }
+
+    /// Read the schema for the current settings on another thread, once the read in progress
+    /// ends. Its locks and waiting change carry over.
+    fn read(&mut self, after: Option<usize>, base: Option<Settings>) {
+        if let Some(r) = &mut self.reading {
+            r.after = match (r.after, after) {
+                (Some(a), Some(b)) => Some(a.min(b)),
+                (a, b) => a.or(b),
+            };
+            r.base = r.base.take().or(base);
+            r.again = true;
+            return;
+        }
+        self.start(after, base);
+    }
+
+    fn start(&mut self, after: Option<usize>, base: Option<Settings>) {
+        let reply = Arc::new(Reply::default());
+        let ends = Ends(reply.clone());
+        let reader = self.reader.clone();
+        let settings = self.settings.clone();
+        let started = std::thread::Builder::new().name("studiocraft-properties".into()).spawn(move || {
+            // The window may have closed or asked again; then nobody takes it.
+            ends.0.schema.publish(reader(&settings));
+        });
+        if started.is_err() {
+            // No thread could be started: read here. The reply is taken like any other.
+            reply.schema.publish((self.reader)(&self.settings));
+            reply.done.store(true, Ordering::Release);
+        }
+        self.reading = Some(Reading { reply, again: false, after, base });
+    }
+
+    /// Take a schema that has arrived. When a change made in the window waited for it, the
+    /// source's settings from before that change.
+    fn poll(&mut self) -> Option<Settings> {
+        // A read that stopped without a schema leaves the window with what it has.
+        let schema = self.reading.as_ref()?.reply.ended()?;
+        self.deliver(schema).flatten()
+    }
+
+    /// A read ended with `schema`. `None` when the next read has started, otherwise what
+    /// [`Properties::poll`] returns.
+    fn deliver(&mut self, schema: Option<SettingsSchema>) -> Option<Option<Settings>> {
+        let r = self.reading.take()?;
+        if r.again {
+            // The lists were read for settings the window no longer shows.
+            self.start(r.after, r.base);
+            return None;
+        }
+        self.arrive(schema, r.after, r.base.is_some());
+        Some(r.base)
+    }
+
+    fn arrive(&mut self, schema: Option<SettingsSchema>, after: Option<usize>, reset: bool) {
+        if let Some(schema) = schema {
+            self.schema = schema;
+        }
+        self.loaded = true;
+        if reset {
+            self.reset_after(after);
         }
     }
 
-    /// Read the schema again after the form changed `before` into the current settings. When a
-    /// choice changed, a later choice whose value the new lists do not offer goes back to its
-    /// default.
-    fn follow_choice(&mut self, schema: impl Fn(&Settings) -> SettingsSchema, before: &Settings) {
-        let choice = |f: &&studiocraft_model::Field| matches!(f.kind, FieldKind::Choice { .. });
-        let Some(at) = self.schema.fields.iter().position(|f| choice(&f) && before.get(&f.key) != self.settings.get(&f.key)) else { return };
-        self.schema = schema(&self.settings);
-        for f in self.schema.fields.iter().skip(at + 1) {
+    /// Set every choice after index `after` that the lists do not offer back to its default.
+    fn reset_after(&mut self, after: Option<usize>) {
+        let Some(at) = after else { return };
+        for f in self.schema.fields.iter().skip(at.saturating_add(1)) {
             if let (FieldKind::Choice { options }, Some(v)) = (&f.kind, self.settings.get(&f.key))
                 && !options.iter().any(|o| o.value == *v)
             {
                 self.settings.set(&f.key, f.default.clone());
             }
         }
+    }
+
+    /// When the window closes while a change waits for its lists, the change is sent without
+    /// them: the choices after the one changed go back to their defaults, which every list
+    /// offers. Returns the settings to send.
+    fn close(&mut self, current: &Settings) -> Option<Value> {
+        let r = self.reading.take()?;
+        if r.base.as_ref() != Some(current) {
+            // Nothing waits, or the settings changed elsewhere since.
+            return None;
+        }
+        for f in self.schema.fields.iter().skip(r.after?.saturating_add(1)) {
+            if matches!(f.kind, FieldKind::Choice { .. }) {
+                self.settings.set(&f.key, f.default.clone());
+            }
+        }
+        Some(self.command())
+    }
+
+    /// The index of the first choice whose value differs between `a` and `b`.
+    fn changed_choice(&self, a: &Settings, b: &Settings) -> Option<usize> {
+        self.schema.fields.iter().position(|f| matches!(f.kind, FieldKind::Choice { .. }) && a.get(&f.key) != b.get(&f.key))
+    }
+
+    /// Show `settings` that changed outside the window, reading the schema again when a choice
+    /// changed. The values are kept as they are.
+    fn take(&mut self, settings: Settings) {
+        if !self.loaded {
+            // The first lists are still being read, for the settings before this change.
+            let changed = settings != self.settings;
+            self.settings = settings;
+            if changed {
+                self.read(None, None);
+            }
+            return;
+        }
+        let at = self.changed_choice(&settings, &self.settings);
+        self.settings = settings;
+        if at.is_some() {
+            self.read(at, None);
+        }
+    }
+
+    /// Read the schema again after the form changed `before` into the current settings, which
+    /// were `base` in the source. When a choice changed, the change waits for the new lists
+    /// (true): a later choice whose value they do not offer goes back to its default, and the
+    /// settings are sent once they arrive.
+    fn follow_choice(&mut self, before: &Settings, base: &Settings) -> bool {
+        // Another change made while the window waits is sent with it.
+        let Some(at) = self.changed_choice(before, &self.settings) else { return self.reading.as_ref().is_some_and(|r| r.base.is_some()) };
+        self.read(Some(at), Some(base.clone()));
+        true
     }
 
     /// Point a path field at a chosen file.
@@ -216,29 +386,43 @@ impl Properties {
         };
         let has_audio = studio.registry().source(&src.kind).is_ok_and(|p| p.caps().audio);
         let mut audio = Vec::new();
-        if src.settings != self.settings && !ctx.egui_is_using_pointer() && !ctx.egui_wants_keyboard_input() {
+        let mut out = (None, None);
+        // A change that waited is sent unless the settings changed elsewhere meanwhile; then the
+        // change made elsewhere is shown instead.
+        if self.poll().is_some_and(|base| base == src.settings) {
+            out.0 = Some(self.command());
+        }
+        // The source's settings once this frame's commands have run: a change that starts
+        // waiting in this frame is compared with them.
+        let base = if out.0.is_some() { self.settings.clone() } else { src.settings.clone() };
+        let waiting = self.reading.as_ref().is_some_and(|r| r.base.is_some());
+        if out.0.is_none() && !waiting && src.settings != self.settings && !ctx.egui_is_using_pointer() && !ctx.egui_wants_keyboard_input() {
             // Undo, a script or the control channel changed them.
-            if let Ok(p) = studio.registry().source(&src.kind) {
-                self.take(src.settings.clone(), |s| p.schema_for(s));
-            }
+            self.take(src.settings.clone());
         }
         let title = craft_i18n::fmt(tl!("Properties for '{name}'"), &[("name", &src.name)]);
         let error = studio.source_error(self.source);
-        let mut out = (None, None);
         let mut refresh = false;
+        let locked_after = match &self.reading {
+            Some(Reading { after: Some(at), .. }) => *at,
+            _ => usize::MAX,
+        };
         let window = egui::Window::new(title).id(egui::Id::unique(("properties", self.source.0))).open(open).resizable(true).default_width(440.0);
         window.show(ctx, |ui| {
             if let Some(e) = &error {
                 ui.colored_label(ui.visuals().error_fg_color, crate::i18n::Msg::plain(e.to_string()).shown());
                 ui.separator();
             }
+            if self.reading.is_some() {
+                ui.horizontal(|ui| {
+                    ui.spinner();
+                    ui.weak(tl!("Reading the lists…"));
+                });
+            }
             egui::ScrollArea::vertical().max_height(420.0).show(ui, |ui| {
                 let before = self.settings.clone();
-                let ev = form(ui, egui::Id::unique(("props-form", self.source.0)), &self.schema, &mut self.settings);
-                if ev.changed {
-                    if let Ok(p) = studio.registry().source(&src.kind) {
-                        self.follow_choice(|s| p.schema_for(s), &before);
-                    }
+                let ev = form_locked(ui, egui::Id::unique(("props-form", self.source.0)), &self.schema, &mut self.settings, locked_after);
+                if ev.changed && !self.follow_choice(&before, &base) {
                     out.0 = Some(self.command());
                 }
                 out.1 = ev.browse;
@@ -249,20 +433,23 @@ impl Properties {
             });
             ui.separator();
             ui.horizontal(|ui| {
-                if ui.button(tl!("Defaults")).clicked() {
+                // Until the first lists arrive there are no defaults to go back to.
+                if ui.add_enabled(self.loaded, egui::Button::new(tl!("Defaults"))).clicked() {
                     let before = std::mem::replace(&mut self.settings, self.schema.defaults());
-                    if let Ok(p) = studio.registry().source(&src.kind) {
-                        self.follow_choice(|s| p.schema_for(s), &before);
+                    if !self.follow_choice(&before, &base) {
+                        out.0 = Some(self.command());
                     }
-                    out.0 = Some(self.command());
                 }
                 if ui.button(tl!("Refresh Lists")).on_hover_text(tl!("Read the displays, windows and devices again")).clicked() {
                     refresh = true;
                 }
             });
         });
-        if refresh && let Ok(p) = studio.registry().source(&src.kind) {
-            self.schema = p.schema_for(&self.settings);
+        if refresh {
+            self.read(None, None);
+        }
+        if !*open && let Some(cmd) = self.close(&base) {
+            out.0 = Some(cmd);
         }
         (out.0, out.1, audio)
     }
@@ -414,6 +601,8 @@ impl Filters {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::mpsc;
+
     use studiocraft_model::{ChoiceOption, Field};
 
     use super::*;
@@ -459,24 +648,52 @@ mod tests {
         ])
     }
 
+    /// Wait for the read in progress and take its schema; whether the settings are to be sent.
+    fn finish(p: &mut Properties) -> bool {
+        loop {
+            let reply = p.reading.as_ref().expect("a read in progress").reply.clone();
+            let schema = loop {
+                if let Some(schema) = reply.ended() {
+                    break schema;
+                }
+                std::thread::yield_now();
+            };
+            if let Some(base) = p.deliver(schema) {
+                return base.is_some();
+            }
+        }
+    }
+
+    /// A Properties window over [`camera`] whose first lists have arrived.
+    fn opened(start: &Settings) -> Properties {
+        let mut p = Properties::with_reader(SourceId(1), start.clone(), Arc::new(camera));
+        assert!(!finish(&mut p), "opening sends nothing");
+        p
+    }
+
     #[test]
     fn a_new_device_reads_its_formats_and_drops_one_it_does_not_offer() {
         let start = Settings::new().with("device", "a").with("format", "hd");
-        let mut p = Properties { source: SourceId(1), schema: camera(&start), settings: start.clone() };
+        let mut p = opened(&start);
         p.settings.set("format", "");
-        p.follow_choice(camera, &start);
+        assert!(p.follow_choice(&start, &start));
+        assert!(finish(&mut p));
         p.settings.set("format", "hd");
         let before = p.settings.clone();
         p.settings.set("device", "b");
-        p.follow_choice(camera, &before);
+        assert!(p.follow_choice(&before, &before), "the change waits for the new device's formats");
+        assert_eq!(p.reading.as_ref().and_then(|r| r.after), Some(0), "the format is locked meanwhile");
+        assert_eq!(p.settings.str("format"), Some("hd"));
+        assert!(finish(&mut p), "and is sent once they arrive");
         assert_eq!(p.settings.str("format"), Some(""), "the new device does not offer hd");
         let FieldKind::Choice { options } = &p.schema.fields[1].kind else { panic!("format is a choice") };
         assert_eq!(options[1].value, json!("sd"));
         // A change to a later field keeps the earlier ones.
         let gone = Settings::new().with("device", "c").with("format", "");
-        let mut p = Properties { source: SourceId(1), schema: camera(&gone), settings: gone.clone() };
+        let mut p = opened(&gone);
         p.settings.set("format", "sd");
-        p.follow_choice(camera, &gone);
+        assert!(p.follow_choice(&gone, &gone));
+        assert!(finish(&mut p));
         assert_eq!(p.settings.str("device"), Some("c"), "an absent device is kept");
         assert_eq!(p.settings.str("format"), Some("sd"));
     }
@@ -484,11 +701,138 @@ mod tests {
     #[test]
     fn a_device_changed_by_undo_or_a_script_lists_its_formats() {
         let start = Settings::new().with("device", "b").with("format", "sd");
-        let mut p = Properties { source: SourceId(1), schema: camera(&start), settings: start.clone() };
-        p.take(Settings::new().with("device", "a").with("format", "hd"), camera);
+        let mut p = opened(&start);
+        p.take(Settings::new().with("device", "a").with("format", "hd"));
+        assert!(!finish(&mut p), "a change made elsewhere is not sent back");
         let FieldKind::Choice { options } = &p.schema.fields[1].kind else { panic!("format is a choice") };
         assert_eq!(options[1].value, json!("hd"), "the formats of the device the settings now name");
         assert_eq!(p.settings.str("format"), Some("hd"), "the values are kept");
+    }
+
+    #[test]
+    fn the_lists_are_read_off_the_window_thread() {
+        let window = std::thread::current().id();
+        let readers = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let (open_gate, gate) = mpsc::channel::<()>();
+        let gate = std::sync::Mutex::new(gate);
+        let seen = readers.clone();
+        let reader: Reader = Arc::new(move |s: &Settings| {
+            seen.lock().unwrap().push(std::thread::current().id());
+            // A slow camera: the read ends when the test lets it.
+            let _ = gate.lock().unwrap().recv();
+            camera(s)
+        });
+        open_gate.send(()).unwrap();
+        let mut p = Properties::with_reader(SourceId(1), Settings::new().with("device", "a"), reader);
+        finish(&mut p);
+        assert_eq!(readers.lock().unwrap().len(), 1);
+        assert!(readers.lock().unwrap().iter().all(|t| *t != window), "the lists are not read on the window's thread");
+        // While a read is held up, the window has the lists it had and does not wait.
+        p.take(Settings::new().with("device", "b"));
+        assert!(p.poll().is_none(), "nothing has arrived yet");
+        assert!(p.reading.is_some(), "the read is still running");
+        let FieldKind::Choice { options } = &p.schema.fields[1].kind else { panic!("format is a choice") };
+        assert_eq!(options[1].value, json!("hd"), "the earlier lists stay shown");
+        open_gate.send(()).unwrap();
+        finish(&mut p);
+        let FieldKind::Choice { options } = &p.schema.fields[1].kind else { panic!("format is a choice") };
+        assert_eq!(options[1].value, json!("sd"));
+    }
+
+    #[test]
+    fn a_reply_to_a_replaced_read_is_dropped() {
+        let (open_gate, gate) = mpsc::channel::<()>();
+        let gate = std::sync::Mutex::new(gate);
+        // Device "a" is slow to give its formats; device "b" answers at once.
+        let reader: Reader = Arc::new(move |s: &Settings| {
+            if s.str("device") == Some("a") {
+                let _ = gate.lock().unwrap().recv();
+            }
+            camera(s)
+        });
+        let start = Settings::new().with("device", "b").with("format", "sd");
+        let mut p = Properties::with_reader(SourceId(1), start.clone(), reader);
+        finish(&mut p);
+        p.settings.set("device", "a");
+        assert!(p.follow_choice(&start, &start));
+        let before = p.settings.clone();
+        p.settings.set("device", "b");
+        assert!(p.follow_choice(&before, &start));
+        // The slow read of "a" ends first; its lists are not the ones the window now needs.
+        open_gate.send(()).unwrap();
+        assert!(finish(&mut p));
+        let FieldKind::Choice { options } = &p.schema.fields[1].kind else { panic!("format is a choice") };
+        assert_eq!(options[1].value, json!("sd"), "the formats of the device chosen last");
+        assert_eq!(p.settings.str("format"), Some("sd"));
+        assert!(p.poll().is_none(), "no later reply replaces them");
+    }
+
+    /// A reader for [`camera`] that waits until the test sends on the returned channel.
+    fn held() -> (mpsc::Sender<()>, Reader) {
+        let (open_gate, gate) = mpsc::channel::<()>();
+        let gate = std::sync::Mutex::new(gate);
+        let reader: Reader = Arc::new(move |s: &Settings| {
+            let _ = gate.lock().unwrap().recv();
+            camera(s)
+        });
+        (open_gate, reader)
+    }
+
+    #[test]
+    fn a_change_made_elsewhere_while_the_first_lists_are_read_reads_them_again() {
+        let (open_gate, reader) = held();
+        let mut p = Properties::with_reader(SourceId(1), Settings::new().with("device", "b"), reader);
+        p.take(Settings::new().with("device", "a"));
+        open_gate.send(()).unwrap();
+        open_gate.send(()).unwrap();
+        finish(&mut p);
+        let FieldKind::Choice { options } = &p.schema.fields[1].kind else { panic!("format is a choice") };
+        assert_eq!(options[1].value, json!("hd"), "the formats of the device the settings name now");
+    }
+
+    #[test]
+    fn a_waiting_change_records_the_settings_it_was_made_on() {
+        let start = Settings::new().with("device", "b").with("format", "sd");
+        let (open_gate, reader) = held();
+        open_gate.send(()).unwrap();
+        let mut p = Properties::with_reader(SourceId(1), start.clone(), reader);
+        finish(&mut p);
+        p.settings.set("device", "a");
+        assert!(p.follow_choice(&start, &start));
+        open_gate.send(()).unwrap();
+        // The reply is polled the way the window polls it.
+        let base = loop {
+            if let Some(base) = p.poll() {
+                break base;
+            }
+            assert!(p.reading.is_some(), "the read is still running");
+            std::thread::yield_now();
+        };
+        assert_eq!(base, start, "compared with the source's settings before the change is sent");
+        assert_eq!(p.settings.str("format"), Some(""), "the new device does not offer sd");
+    }
+
+    #[test]
+    fn closing_the_window_while_a_change_waits_sends_it_with_default_choices_after_it() {
+        let start = Settings::new().with("device", "b").with("format", "sd");
+        let (open_gate, reader) = held();
+        open_gate.send(()).unwrap();
+        let mut p = Properties::with_reader(SourceId(1), start.clone(), reader);
+        finish(&mut p);
+        p.settings.set("device", "a");
+        assert!(p.follow_choice(&start, &start));
+        let sent = p.close(&start).expect("the waiting change is sent");
+        assert_eq!(sent["settings"]["device"], json!("a"));
+        assert_eq!(sent["settings"]["format"], json!(""), "a format every camera offers");
+        // When the settings changed elsewhere meanwhile, the change made elsewhere is kept.
+        let mut p = Properties::with_reader(SourceId(1), start.clone(), held().1);
+        p.reading = None;
+        p.loaded = true;
+        p.schema = camera(&start);
+        p.settings.set("device", "a");
+        assert!(p.follow_choice(&start, &start));
+        assert_eq!(p.close(&Settings::new().with("device", "b")), None);
+        drop(open_gate);
     }
 
     #[test]
