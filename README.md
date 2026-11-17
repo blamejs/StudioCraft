@@ -18,7 +18,8 @@ and Linux.
   and Linux. The camera source captures webcams and capture cards through Media Foundation on
   Windows, AVFoundation on macOS and V4L2 on Linux. Its Properties window lists the cameras and
   the chosen camera's formats (picture size, frame rate and pixel encoding: MJPEG, YUYV, NV12,
-  gray, RGB or BGR; on macOS, YUYV only). With Format at Default, the camera opens at its largest picture up to
+  gray, RGB or BGR; on macOS, YUYV only). The window reads these lists in the background and
+  shows "Reading the lists…" meanwhile. With Format at Default, the camera opens at its largest picture up to
   1920 × 1080 at 30 fps or more. A saved camera that is not plugged in shows as "(not
   connected)". A camera that is missing, in use by another program, unplugged or sending nothing
   for 5 seconds is reported in the Properties window and opened again every 2 seconds. One camera

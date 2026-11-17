@@ -101,7 +101,14 @@ build for `wasm32-unknown-unknown`:
   A camera that a capture of the app has open is not opened again to read its formats; it lists
   the formats read when the capture opened it. A camera that another program holds open lists the
   formats it offered when it was last read, for up to 32 cameras. The engine checks a choice
-  again when a choice before it changed, so a format kept from another camera is refused.
+  again when a choice before it changed, so a format kept from another camera is refused. The
+  Properties window (`ui-egui::forms`) reads every schema on its own thread and shows "Reading
+  the lists…" until it arrives. While a choice's new lists are read, the fields after it are
+  locked, and the change is sent once they arrive, with a later choice they do not offer set back
+  to its default. The window reads one schema at a time: a read asked for while one runs starts
+  when it ends, and the earlier reply is dropped. Closing the window while a change waits sends
+  the change with the choices after it at their defaults. When the source's settings change
+  elsewhere while a change waits, the change made elsewhere is kept.
 - **Mixer thread.** The mixer (`engine::mixer`) pulls one 1024-frame block (48 kHz stereo `f32`)
   from every audible source, delays it by the source's sync offset, applies the audio filters,
   gain, mute and scene-change fades, and measures peak and RMS levels. Each input's delay line
