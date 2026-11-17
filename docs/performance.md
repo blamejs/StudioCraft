@@ -43,35 +43,42 @@ start of drawing to the end of submitting it to the GPU.
 
 ### Built-in H.264 encoder
 
-Measured on 2026-11-17 on Linux (AMD EPYC 9R14, 128 hardware threads, so the encoder ran on 126),
-release build. `cargo run --release -p studiocraft-encode --example encode_bench -- 3` codes 3
-seconds of moving pictures per case after one second of warm-up, in quality mode at level 23. The
-share of real time is the time spent coding over the length of the video; a recording keeps up
-only while it is under 100%.
+Measured on 2026-11-17 on Linux (AMD EPYC 9R14, 128 hardware threads), release build.
+`cargo run --release -p studiocraft-encode --example encode_bench -- 3 <threads>` codes 3 seconds
+of moving pictures per case after one second of warm-up, in quality mode at level 23. The frames
+cycle through one second of different pictures. A recording runs the encoder on the computer's
+hardware threads minus two, so 6 threads stands for an 8-thread computer and 14 threads for a
+16-thread one; the other cores of this machine were idle. The table gives the share of real time:
+the time spent coding over the length of the video. A recording keeps up only while it is under
+100%; one that stays above it fails after the video falls 10 seconds behind the sound.
 
-| Size | Frame rate | Preset | Frames coded per second | Share of real time |
-| --- | --- | --- | --- | --- |
-| 1280×720 | 30 | Speed | 100.8 | 30% |
-| 1280×720 | 30 | Balanced | 67.4 | 45% |
-| 1280×720 | 30 | Quality | 42.9 | 70% |
-| 1280×720 | 60 | Speed | 105.8 | 57% |
-| 1280×720 | 60 | Balanced | 71.0 | 84% |
-| 1280×720 | 60 | Quality | 42.9 | 140% |
-| 1920×1080 | 30 | Speed | 64.5 | 46% |
-| 1920×1080 | 30 | Balanced | 36.6 | 82% |
-| 1920×1080 | 30 | Quality | 27.4 | 109% |
-| 1920×1080 | 60 | Speed | 66.2 | 91% |
-| 1920×1080 | 60 | Balanced | 42.9 | 140% |
-| 1920×1080 | 60 | Quality | 28.8 | 208% |
+| Size | Frame rate | Preset | 6 threads | 14 threads | 126 threads |
+| --- | --- | --- | --- | --- | --- |
+| 1280×720 | 30 | Speed | 42% | 25% | 30% |
+| 1280×720 | 30 | Balanced | 72% | 40% | 45% |
+| 1280×720 | 30 | Quality | 133% | 70% | 74% |
+| 1280×720 | 60 | Speed | 92% | 50% | 56% |
+| 1280×720 | 60 | Balanced | 158% | 77% | 87% |
+| 1280×720 | 60 | Quality | 265% | 132% | 142% |
+| 1920×1080 | 30 | Speed | 92% | 45% | 49% |
+| 1920×1080 | 30 | Balanced | 164% | 74% | 74% |
+| 1920×1080 | 30 | Quality | 294% | 130% | 107% |
+| 1920×1080 | 60 | Speed | 174% | 86% | 88% |
+| 1920×1080 | 60 | Balanced | 320% | 154% | 133% |
+| 1920×1080 | 60 | Quality | 571% | 256% | 223% |
 
-On this machine, 1080p at 60 fps keeps up on the Speed preset only, and 1080p at 30 fps on Speed
-and Balanced. Speed is the encoder's default preset.
+With 6 threads, 720p at 30 fps keeps up on Speed and Balanced, and 1080p at 30 fps and 720p at
+60 fps keep up on Speed only, near the limit. 1080p at 60 fps does not keep up on any preset. With
+14 threads or more, 1080p at 60 fps keeps up on Speed only, and 1080p at 30 fps on Speed and
+Balanced. More than 14 threads gives little: the encoder splits a picture into at most one slice
+per four rows of macroblocks (17 slices at 1080p, 12 at 720p). Speed is the encoder's default
+preset.
 
 ## Measuring
 
 - Run the criterion benches with `cargo bench -p <crate>`.
 - Run the timing run with `cargo run --release -p studiocraft-cli -- bench <seconds>`.
-- Run the encoder bench with `cargo run --release -p studiocraft-encode --example encode_bench -- <seconds>`.
+- Run the encoder bench with `cargo run --release -p studiocraft-encode --example encode_bench -- <seconds> [<threads>]`.
 - In the app, View › Stats shows the same counters while you work.
 
 Record new baselines here when a change moves them by more than 10%.

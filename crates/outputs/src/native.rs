@@ -13,13 +13,17 @@
 //!   recording fails.
 //!
 //! The encoders hand packets to the file thread through a queue. The packets in the queue and
-//! those the file thread holds back come to at most [`QUEUE_BYTES`] bytes, and the queue spans at
-//! most [`QUEUE_SPAN_NS`] nanoseconds of media. An encoder that finds no room waits for up to
-//! [`DISK_WAIT`], and then the recording fails.
+//! those the file thread holds back come to at most [`QUEUE_BYTES`] bytes (a single packet larger
+//! than that is let through alone), and the queue spans at most [`QUEUE_SPAN_NS`] nanoseconds of
+//! media. An encoder that finds no room waits for up to [`DISK_WAIT`], and then the recording
+//! fails.
 //!
-//! The file thread writes each cluster of the file whole, and every cluster starts at a keyframe.
-//! The size of the segment is written last. A recording that is not finished (the app was ended,
-//! or finishing took longer than [`FINISH_TIMEOUT`]) still plays up to its last whole cluster.
+//! The file thread writes each cluster of the file whole. The first cluster starts with the
+//! encoder's delay of the sound, just before the first keyframe; every later cluster starts at a
+//! video keyframe, so a cluster spans at most the keyframe interval (at most
+//! [`RECORDING_KEYFRAME_S`] seconds). The size of the segment is written last. A recording that
+//! is not finished (the app was ended, or finishing took longer than [`FINISH_TIMEOUT`]) still
+//! plays up to its last whole cluster.
 
 use std::collections::VecDeque;
 use std::fs::File;
@@ -33,12 +37,13 @@ use std::time::{Duration, Instant};
 use craft_media::matroska::{Color, MkvWriter, MuxOptions, TrackKind, TrackSpec};
 use crossbeam_queue::ArrayQueue;
 use studiocraft_encode::AacSession;
+use studiocraft_encode::h264::RECORDING_KEYFRAME_S;
 use studiocraft_media::Tick;
 use studiocraft_media::audio::{BLOCK_FRAMES, CHANNELS, PooledBlock, SAMPLE_RATE};
 use studiocraft_media::queue::Fifo;
 use studiocraft_media::stats::EncoderStats;
 use studiocraft_media::video::{PixelFormat, PooledFrame};
-use studiocraft_plugin::{OutputJob, OutputStatus, Packet, PluginError, VideoParams, VideoSession};
+use studiocraft_plugin::{OutputJob, OutputStatus, Packet, PluginError, RateControl, VideoParams, VideoSession};
 
 use crate::writer::{FINISH_TIMEOUT, IDLE, Timeline, audio_step, seconds_since, video_step};
 
@@ -92,17 +97,15 @@ impl PacketQueue {
     /// to be written, any packet is taken, so one packet larger than the limit still gets through.
     fn try_push(&self, item: Item) -> Result<(), Item> {
         let _ = self.taken_ns.compare_exchange(i64::MIN, item.order_ns, Ordering::Relaxed, Ordering::Relaxed);
-        if self.bytes.load(Ordering::SeqCst) != 0 {
-            let bytes = self.bytes.load(Ordering::Relaxed).saturating_add(item.data.len());
-            let span = item.order_ns.saturating_sub(self.taken_ns.load(Ordering::Relaxed));
-            if bytes > self.max_bytes || span > self.max_span_ns {
-                return Err(item);
-            }
-        }
-        // Count the bytes before the packet can be taken, so `written` never subtracts bytes that
-        // were not added yet.
         let len = item.data.len();
-        self.bytes.fetch_add(len, Ordering::SeqCst);
+        let span = item.order_ns.saturating_sub(self.taken_ns.load(Ordering::Relaxed));
+        // The limit is checked and the bytes are counted in one step, so the two encoder threads
+        // cannot both pass the check and go past the limit together. The bytes are counted before
+        // the packet can be taken, so `written` never subtracts bytes that were not added yet.
+        let room = |bytes: usize| (bytes == 0 || (bytes.saturating_add(len) <= self.max_bytes && span <= self.max_span_ns)).then_some(bytes + len);
+        if self.bytes.try_update(Ordering::SeqCst, Ordering::SeqCst, room).is_err() {
+            return Err(item);
+        }
         self.q.push(item).inspect_err(|_| {
             self.bytes.fetch_sub(len, Ordering::SeqCst);
         })
@@ -136,6 +139,9 @@ struct Shared {
     late: AtomicU64,
     /// Whether the video and the audio encoder thread are still running, by [`Track`].
     producing: [AtomicBool; 2],
+    /// A failure is recorded in [`Shared::failure`]; the encoder threads test this for each
+    /// frame and block instead of taking the lock.
+    failed: AtomicBool,
     failure: Mutex<Option<String>>,
     /// Where the two encoder threads are; see [`crate::writer`].
     timeline: Mutex<Timeline>,
@@ -151,6 +157,7 @@ impl Shared {
             started: AtomicBool::new(false),
             late: AtomicU64::new(0),
             producing: [AtomicBool::new(true), AtomicBool::new(true)],
+            failed: AtomicBool::new(false),
             failure: Mutex::new(None),
             timeline: Mutex::new(Timeline::default()),
             packets,
@@ -164,6 +171,12 @@ impl Shared {
         if f.is_none() {
             *f = Some(message);
         }
+        self.failed.store(true, Ordering::SeqCst);
+    }
+
+    /// Whether the encoders stop: the recording is abandoned or has failed.
+    fn halted(&self) -> bool {
+        self.abandon.load(Ordering::SeqCst) || self.failed.load(Ordering::SeqCst)
     }
 
     fn failure(&self) -> Option<String> {
@@ -301,6 +314,15 @@ impl Native {
         }
         if v.pixel != PixelFormat::Nv12 {
             return Err(PluginError::Failed("the built-in encoders take NV12 frames".into()));
+        }
+        // A cluster ends at a keyframe, so the keyframe interval bounds what a file cut short loses
+        // and what the writer holds in memory.
+        if let RateControl::Bitrate { keyframe_s, .. } = job.rate
+            && keyframe_s > RECORDING_KEYFRAME_S
+        {
+            return Err(PluginError::Failed(format!(
+                "an MKV recording through the built-in encoders needs a keyframe at least every {RECORDING_KEYFRAME_S} seconds, not every {keyframe_s}"
+            )));
         }
         let params = VideoParams { width: v.width, height: v.height, fps_num: v.fps_num, fps_den: v.fps_den, rate: job.rate };
         let session = job.video_encoder.open(&job.video_encoder_settings, &params)?;
@@ -456,7 +478,7 @@ fn encode_video(
     let mut last: Option<Arc<PooledFrame>> = None;
     let mut out = Vec::new();
     'frames: loop {
-        if shared.abandon.load(Ordering::SeqCst) || shared.failure().is_some() {
+        if shared.halted() {
             return;
         }
         let Some(frame) = q.pop() else {
@@ -513,7 +535,7 @@ fn encode_audio(mut session: AacSession, q: &Fifo<PooledBlock>, shared: &Shared,
         true
     };
     loop {
-        if shared.abandon.load(Ordering::SeqCst) || shared.failure().is_some() {
+        if shared.halted() {
             return;
         }
         let Some(block) = q.pop() else {

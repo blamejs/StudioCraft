@@ -127,6 +127,18 @@ fn bitrate_mode_has_a_fixed_group_of_pictures_and_no_b_frames() {
 }
 
 #[test]
+fn bitrates_and_keyframe_intervals_outside_their_ranges_are_refused() {
+    for (kbps, keyframe_s) in [(0, 2), (99, 2), (200_001, 2), (u32::MAX, 2), (800, 0), (800, 21)] {
+        let rate = RateControl::Bitrate { kbps, keyframe_s };
+        assert!(config(&Settings::new(), &params(64, 48, rate)).is_err(), "{kbps} kbps, {keyframe_s} s");
+    }
+    for (kbps, keyframe_s) in [(100, 1), (200_000, 20)] {
+        let c = config(&Settings::new(), &params(64, 48, RateControl::Bitrate { kbps, keyframe_s })).unwrap();
+        assert_eq!((c.rate, c.keyint), (Rate::Cbr { kbps }, 30 * keyframe_s));
+    }
+}
+
+#[test]
 fn quality_mode_keeps_a_keyframe_every_two_seconds() {
     let c = config(&Settings::new(), &VideoParams { fps_num: 60_000, fps_den: 1001, ..params(64, 48, RateControl::Quality(80)) }).unwrap();
     assert_eq!(c.keyint, 120);

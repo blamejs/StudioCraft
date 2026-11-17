@@ -315,4 +315,5 @@
 @msg	The stream could not be finished: {error}	The stream could not be finished: {error}
 @msg	The stream ended	The stream ended
 @msg	The stream stopped: {error}	The stream stopped: {error}
+@msg	ffmpeg at {path} was not found	ffmpeg at {path} was not found
 menu	Transform	Transform

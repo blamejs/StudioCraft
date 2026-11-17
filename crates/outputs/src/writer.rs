@@ -10,7 +10,7 @@
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::Path;
-use std::process::{Child, ChildStdin, Stdio};
+use std::process::{Child, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
@@ -350,10 +350,11 @@ pub(crate) fn audio_step(secs: f64, written: i64, frames: i64, rate: f64, timeli
     Some(gap)
 }
 
-fn write_video(mut stdin: ChildStdin, q: &Fifo<Arc<PooledFrame>>, shared: &Shared, stats: &EncoderStats, start: Tick, fps: f64, frame_bytes: usize) {
+/// Writes the frames to `stdin`, ffmpeg's video input, until a stop.
+fn write_video(mut stdin: impl Write, q: &Fifo<Arc<PooledFrame>>, shared: &Shared, stats: &EncoderStats, start: Tick, fps: f64, frame_bytes: usize) {
     let mut next = 0u64;
     let mut last: Option<Arc<PooledFrame>> = None;
-    let write = |stdin: &mut ChildStdin, f: &PooledFrame| -> bool {
+    let write = |stdin: &mut dyn Write, f: &PooledFrame| -> bool {
         let ok = stdin.write_all(&f.data).is_ok();
         if ok {
             stats.frames.fetch_add(1, Ordering::Relaxed);
@@ -607,6 +608,27 @@ mod tests {
         assert_eq!(sink.len(), BLOCK_FRAMES * CHANNELS * 4);
         assert_eq!(sink[4..8], 1.0f32.to_le_bytes());
         assert!(shared.started.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn a_frame_of_the_wrong_size_fails_the_recording_and_is_not_written() {
+        let shared = Shared::default();
+        let stats = EncoderStats::default();
+        let q = Fifo::new(4);
+        let frames = studiocraft_media::pool::Pool::new(4, studiocraft_media::video::VideoFrame::default);
+        for (n, (w, h)) in [(64u32, 48u32), (32, 24)].into_iter().enumerate() {
+            let mut f = frames.take();
+            assert!(f.reshape(w, h, PixelFormat::Nv12));
+            f.pts = studiocraft_media::clock::tick_of(Duration::from_millis(100 * n as u64));
+            q.push(Arc::new(f));
+        }
+        shared.stop.store(true, Ordering::Relaxed);
+        let frame_bytes = PixelFormat::Nv12.frame_bytes(64, 48).unwrap();
+        let mut sink = Vec::new();
+        write_video(&mut sink, &q, &shared, &stats, Tick(0), 10.0, frame_bytes);
+        assert_eq!(sink.len(), frame_bytes, "only the frame of the output's size is written");
+        let failure = shared.failure.lock().unwrap().clone().unwrap_or_default();
+        assert!(failure.contains("does not have the output's size"), "{failure:?}");
     }
 
     #[test]

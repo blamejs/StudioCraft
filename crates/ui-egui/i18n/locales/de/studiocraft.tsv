@@ -270,4 +270,5 @@
 @msg	The stream could not be finished: {error}	Der Stream konnte nicht abgeschlossen werden: {error}
 @msg	The stream ended	Der Stream wurde beendet
 @msg	The stream stopped: {error}	Der Stream wurde abgebrochen: {error}
+@msg	ffmpeg at {path} was not found	ffmpeg unter {path} wurde nicht gefunden
 menu	Transform	Transformieren

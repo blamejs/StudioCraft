@@ -146,6 +146,31 @@ fn a_file_cut_short_plays_up_to_its_last_whole_part() {
     }
 }
 
+#[test]
+fn a_bitrate_recording_has_a_keyframe_every_two_seconds_and_plays_when_cut() {
+    let path = temp_file("cut-bitrate");
+    let Err(e) = Native::start(&job(RateControl::Bitrate { kbps: 800, keyframe_s: 3 }), &path) else {
+        panic!("a recording with a keyframe every 3 s started")
+    };
+    assert!(e.to_string().contains("at least every 2 seconds"), "{e}");
+    let j = job(RateControl::Bitrate { kbps: 800, keyframe_s: 2 });
+    let mut n = Native::start(&j, &path).unwrap();
+    let sent = feed(&n.video(), &n.audio(), 5.0);
+    n.stop().unwrap();
+    let file = std::fs::read(&path).unwrap();
+    let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    let (tracks, [whole, _]) = packets(&file);
+    assert_eq!(whole.len() as u64, sent);
+    let keyframes: Vec<i64> = whole.iter().filter(|p| p.1).map(|p| p.0).collect();
+    assert_eq!(keyframes, [0, 2_000_000_000, 4_000_000_000], "a cluster, and so what a cut loses, spans at most 2 s");
+    for cut in [file.len() / 2, file.len() * 9 / 10, file.len() - 1] {
+        let (_, [video, audio]) = packets(&file[..cut]);
+        assert!(video.len() >= 10 && !audio.is_empty() && video[0].1, "cut at {cut}: {} frames", video.len());
+        let lumas = decode(&tracks[0].codec_private, &video);
+        assert_eq!(lumas.len(), video.len(), "cut at {cut}");
+    }
+}
+
 /// A video encoder whose sessions wait in `encode` until the test lets them go.
 struct Stuck(Mutex<Option<mpsc::Receiver<()>>>);
 
@@ -234,11 +259,13 @@ fn a_full_queue_that_stays_full_fails_the_recording() {
     assert!(shared.send(item(Track::Video, 0, 10)));
     assert!(!shared.send(item(Track::Video, 1, 10)));
     assert_eq!(shared.failure().as_deref(), Some("the disk or an encoder could not keep up with the recording"));
+    assert!(shared.halted(), "the encoders see the failure");
     let shared = Shared::new(PacketQueue::new(10, QUEUE_SPAN_NS), Duration::from_secs(60));
     assert!(shared.send(item(Track::Video, 0, 10)));
     shared.abandon.store(true, Ordering::SeqCst);
     assert!(!shared.send(item(Track::Video, 1, 10)), "an abandoned recording does not wait");
     assert_eq!(shared.failure(), None);
+    assert!(shared.halted());
 }
 
 #[test]

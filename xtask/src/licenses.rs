@@ -25,8 +25,6 @@ pub const ALLOWED: &[&str] = &[
     "Ubuntu-font-1.0",
     // The Independent JPEG Group license, a BSD-style license.
     "IJG",
-    // The University of Illinois/NCSA Open Source License, a BSD-style license.
-    "NCSA",
 ];
 
 /// Packages accepted under a license that is not in [`ALLOWED`], each with the license and the
@@ -34,6 +32,10 @@ pub const ALLOWED: &[&str] = &[
 pub const EXCEPTIONS: &[(&str, &str, &str)] = &[
     // MPL-2.0 is a file-level license; `dirs-sys` (through `craft-settings`) depends on it.
     ("option-ext", "MPL-2.0", "dirs-sys"),
+    // NCSA is a BSD-style license. `rav1e` depends on `libfuzzer-sys` only in fuzzing builds, and
+    // `rav1e` is an optional dependency of `craft-video` that no StudioCraft crate enables;
+    // `cargo metadata` lists both because `Cargo.lock` does.
+    ("libfuzzer-sys", "(MIT OR Apache-2.0) AND NCSA", "rav1e"),
 ];
 
 fn excepted(name: &str, license: &str) -> bool {
@@ -89,7 +91,7 @@ mod tests {
         assert!(!permissive("MIT AND GPL-2.0"));
         assert!(!permissive("MPL-2.0"));
         assert!(permissive("(MIT OR Apache-2.0) AND OFL-1.1 AND Ubuntu-font-1.0"));
-        assert!(permissive("(MIT OR Apache-2.0) AND NCSA"));
+        assert!(!permissive("(MIT OR Apache-2.0) AND NCSA"));
     }
 
     #[test]
@@ -97,5 +99,7 @@ mod tests {
         assert!(excepted("option-ext", "MPL-2.0"));
         assert!(!excepted("option-ext", "GPL-3.0-only"));
         assert!(!excepted("other-crate", "MPL-2.0"));
+        assert!(excepted("libfuzzer-sys", "(MIT OR Apache-2.0) AND NCSA"));
+        assert!(!excepted("other-crate", "(MIT OR Apache-2.0) AND NCSA"), "NCSA is accepted for libfuzzer-sys alone");
     }
 }

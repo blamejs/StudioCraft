@@ -6,8 +6,9 @@
 //! - A size that is not a multiple of 16 is coded at the next multiple and cropped back.
 //! - A picture may have at most [`MAX_MACROBLOCKS`] macroblocks, the limit of the highest level.
 //! - Quality mode is constant quality with a keyframe every [`RECORDING_KEYFRAME_S`] seconds and up
-//!   to two B-frames. Bitrate mode is constant bitrate with the requested keyframe interval, no
-//!   B-frames and no extra keyframes at scene cuts, so a stream has a fixed group of pictures.
+//!   to two B-frames. Bitrate mode is constant bitrate ([`KBPS`]) with the requested keyframe
+//!   interval ([`KEYFRAME_S`]), no B-frames and no extra keyframes at scene cuts, so a stream has a
+//!   fixed group of pictures. A bitrate or interval outside those ranges is an error.
 //! - The encoder runs on `available_parallelism() - 2` threads (at least one), leaving cores to
 //!   the compositor, capture and mixer threads.
 
@@ -23,6 +24,10 @@ pub const MAX_SIDE: u32 = 16_384;
 /// Seconds between keyframes in quality mode. A Matroska file starts its clusters at keyframes, so
 /// a recording cut short loses at most about this much.
 pub const RECORDING_KEYFRAME_S: u32 = 2;
+/// The bitrates bitrate mode takes, in kbit/s: the range Settings › Stream offers.
+pub const KBPS: std::ops::RangeInclusive<u32> = 100..=200_000;
+/// The keyframe intervals bitrate mode takes, in seconds.
+pub const KEYFRAME_S: std::ops::RangeInclusive<u32> = 1..=20;
 /// The preset values, fastest first.
 pub const PRESETS: [&str; 3] = ["speed", "balanced", "quality"];
 
@@ -97,8 +102,18 @@ pub fn config(settings: &Settings, params: &VideoParams) -> Result<EncoderConfig
             c.keyint = gop(RECORDING_KEYFRAME_S);
         }
         RateControl::Bitrate { kbps, keyframe_s } => {
-            c.rate = Rate::Cbr { kbps: kbps.max(1) };
-            c.keyint = gop(keyframe_s.clamp(1, 20));
+            if !KBPS.contains(&kbps) {
+                return Err(PluginError::Failed(format!("the video bitrate {kbps} kbps is outside {} to {} kbps", KBPS.start(), KBPS.end())));
+            }
+            if !KEYFRAME_S.contains(&keyframe_s) {
+                return Err(PluginError::Failed(format!(
+                    "the keyframe interval of {keyframe_s} seconds is outside {} to {} seconds",
+                    KEYFRAME_S.start(),
+                    KEYFRAME_S.end()
+                )));
+            }
+            c.rate = Rate::Cbr { kbps };
+            c.keyint = gop(keyframe_s);
             c.bframes = 0;
             c.scenecut = false;
         }

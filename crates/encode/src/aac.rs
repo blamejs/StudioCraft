@@ -14,6 +14,8 @@ pub const KBPS: std::ops::RangeInclusive<u32> = 32..=512;
 /// A running AAC encoder.
 pub struct AacSession {
     core: Core,
+    /// The bitrate in bit/s.
+    bps: u32,
     /// One block split into its channels.
     planar: Vec<Vec<f32>>,
 }
@@ -24,7 +26,7 @@ impl AacSession {
         let bps = kbps.clamp(*KBPS.start(), *KBPS.end()) * 1000;
         let core = Core::new(EncoderConfig::cbr(SAMPLE_RATE, CHANNELS, bps))
             .map_err(|e| PluginError::Failed(format!("the AAC encoder could not start at {bps} bit/s: {e}")))?;
-        Ok(AacSession { core, planar: vec![Vec::new(); CHANNELS] })
+        Ok(AacSession { core, bps, planar: vec![Vec::new(); CHANNELS] })
     }
 
     /// The `AudioSpecificConfig` a container stores with the track.
@@ -39,10 +41,7 @@ impl AacSession {
 
     /// The bitrate in bit/s.
     pub fn bitrate(&self) -> u32 {
-        match self.core.config().mode {
-            craft_audio::aac::BitrateMode::Cbr(b) => b,
-            _ => 0,
-        }
+        self.bps
     }
 
     /// Encode interleaved samples (left, right, left, ...); the access units that are ready are
