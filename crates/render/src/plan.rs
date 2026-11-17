@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use studiocraft_media::Tick;
 use studiocraft_model::{SourceId, Transform};
-use studiocraft_plugin::{VideoEffect, VideoOut};
+use studiocraft_plugin::{Easing, VideoEffect, VideoOut};
 
 /// One visible item of a scene.
 #[derive(Clone)]
@@ -36,16 +36,24 @@ pub struct TransitionDesc {
     /// When the transition started and how long it runs, on the master clock.
     pub start: Tick,
     pub duration: Tick,
+    /// How time through the duration becomes the shader's progress.
+    pub ease: Easing,
 }
 
 impl TransitionDesc {
-    /// Progress at `now`, 0 to 1.
+    /// Progress at `now` after the ease: 0 at the start, 1 at the end and after it.
     pub fn progress(&self, now: Tick) -> f32 {
         if self.duration.0 <= 0 {
             return 1.0;
         }
         let t = now.0.saturating_sub(self.start.0) as f64 / self.duration.0 as f64;
-        t.clamp(0.0, 1.0) as f32
+        self.ease.apply(t.clamp(0.0, 1.0)) as f32
+    }
+
+    /// Whether the transition is still drawn at `now`: until its duration has passed, whatever
+    /// value the ease gives on the way.
+    pub fn running(&self, now: Tick) -> bool {
+        now.0.saturating_sub(self.start.0) < self.duration.0
     }
 }
 
@@ -73,11 +81,56 @@ mod tests {
 
     #[test]
     fn transition_progress_is_clamped() {
-        let t = TransitionDesc { from: SceneDesc::default(), key: "fade".into(), wgsl: "", params: [0.0; 4], start: Tick(100), duration: Tick(200) };
+        let t = TransitionDesc {
+            from: SceneDesc::default(),
+            key: "fade".into(),
+            wgsl: "",
+            params: [0.0; 4],
+            start: Tick(100),
+            duration: Tick(200),
+            ease: Easing::Linear,
+        };
         assert_eq!(t.progress(Tick(0)), 0.0);
         assert_eq!(t.progress(Tick(200)), 0.5);
         assert_eq!(t.progress(Tick(900)), 1.0);
         let instant = TransitionDesc { duration: Tick(0), ..t };
         assert_eq!(instant.progress(Tick(0)), 1.0);
+    }
+
+    #[test]
+    fn transition_progress_follows_the_ease() {
+        let t = TransitionDesc {
+            from: SceneDesc::default(),
+            key: "fade".into(),
+            wgsl: "",
+            params: [0.0; 4],
+            start: Tick(100),
+            duration: Tick(200),
+            ease: Easing::QuadIn,
+        };
+        assert_eq!(t.progress(Tick(200)), 0.25);
+        assert_eq!(t.progress(Tick(100)), 0.0);
+        assert_eq!(t.progress(Tick(300)), 1.0);
+        assert_eq!(t.progress(Tick(1_000_000)), 1.0);
+        let out = TransitionDesc { ease: Easing::QuadOut, ..t };
+        assert_eq!(out.progress(Tick(200)), 0.75);
+    }
+
+    #[test]
+    fn a_transition_runs_for_its_duration_whatever_its_ease_gives() {
+        let t = TransitionDesc {
+            from: SceneDesc::default(),
+            key: "fade".into(),
+            wgsl: "",
+            params: [0.0; 4],
+            start: Tick(100),
+            duration: Tick(200),
+            ease: Easing::BackOut,
+        };
+        // Back Out passes 1 before the end and comes back to it.
+        assert!(t.progress(Tick(250)) >= 1.0, "{}", t.progress(Tick(250)));
+        assert!(t.running(Tick(250)) && t.running(Tick(100)) && t.running(Tick(299)));
+        assert!(!t.running(Tick(300)) && !t.running(Tick(1_000_000)));
+        assert!(!TransitionDesc { duration: Tick(0), ..t }.running(Tick(100)));
     }
 }

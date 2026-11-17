@@ -7,7 +7,7 @@ use studiocraft_media::Tick;
 use studiocraft_media::queue::Fifo;
 use studiocraft_media::video::PixelFormat;
 use studiocraft_model::{Crop, SourceId, Transform, Vec2};
-use studiocraft_plugin::{Plugin, Transition, VideoContent, VideoEffect, VideoOut};
+use studiocraft_plugin::{Easing, Plugin, Transition, VideoContent, VideoEffect, VideoOut};
 
 use super::*;
 use crate::transitions::Fade;
@@ -163,14 +163,19 @@ fn transitions_blend_the_two_scenes_over_time() {
         params: [0.0; 4],
         start: Tick(1000),
         duration: Tick(1000),
+        ease: Easing::Linear,
     };
-    let plan = Plan { program: SceneDesc { items: vec![item(2, &blue, at(0.0, 0.0))] }, transition: Some(fade), preview: None };
+    let plan = Plan { program: SceneDesc { items: vec![item(2, &blue, at(0.0, 0.0))] }, transition: Some(fade.clone()), preview: None };
     let px = draw(&mut c, plan.clone(), Tick(1500));
     let errors = c.take_errors();
     assert!(errors.is_empty(), "{errors:?}");
     assert!(close(pixel(&px, 16, 8, 8), [128, 0, 128, 255]), "{:?}", pixel(&px, 16, 8, 8));
-    let px = draw(&mut c, plan, Tick(5000));
+    let px = draw(&mut c, plan.clone(), Tick(5000));
     assert!(close(pixel(&px, 16, 8, 8), [0, 0, 255, 255]));
+    // Eased in, halfway through the time is a quarter of the way through the blend.
+    let eased = Plan { transition: Some(TransitionDesc { ease: Easing::QuadIn, ..fade }), ..plan };
+    let px = draw(&mut c, eased, Tick(1500));
+    assert!(close(pixel(&px, 16, 8, 8), [191, 0, 64, 255]), "{:?}", pixel(&px, 16, 8, 8));
 }
 
 #[test]
@@ -179,8 +184,15 @@ fn every_built_in_transition_compiles() {
     let Some(mut c) = compositor(16, 16) else { return };
     let builtins: [&dyn Transition; 4] = [&Cut, &Fade, &FadeThroughColor, &Swipe];
     for t in builtins {
-        let desc =
-            TransitionDesc { from: SceneDesc::default(), key: t.id().into(), wgsl: t.shader(), params: [0.0; 4], start: Tick(0), duration: Tick(10) };
+        let desc = TransitionDesc {
+            from: SceneDesc::default(),
+            key: t.id().into(),
+            wgsl: t.shader(),
+            params: [0.0; 4],
+            start: Tick(0),
+            duration: Tick(10),
+            ease: Easing::Linear,
+        };
         draw(&mut c, Plan { transition: Some(desc), ..Plan::default() }, Tick(5));
         let errors = c.take_errors();
         assert!(errors.is_empty(), "{}: {errors:?}", t.id());

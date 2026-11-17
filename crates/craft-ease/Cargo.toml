@@ -1,0 +1,21 @@
+[package]
+name = "craft-ease"
+description = "Easing curves, keyed tracks, motion paths and springs for animation: named eases, cubic Bezier and speed/influence eases, editable custom curves, sampled tables, hold keys, constant-speed Bezier paths and an O(1) damped spring"
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[lints]
+workspace = true
+
+[features]
+default = ["serde"]
+# Reading and writing eases, tracks and paths with serde.
+serde = ["dep:serde"]
+
+[dependencies]
+serde = { version = "1", features = ["derive", "rc"], optional = true }
+
+[dev-dependencies]
+serde_json = "1"
