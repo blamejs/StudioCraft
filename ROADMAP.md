@@ -17,6 +17,9 @@
   yet.
 - Recording to MKV with the built-in H.264 and AAC encoders, without ffmpeg (H.264 (built in) in
   Settings › Output, with a Speed, Balanced or Quality preset).
+- The replay buffer: the built-in H.264 and AAC encoders keep the last 5 to 3600 seconds in memory,
+  within a memory limit of 32 to 16384 MB (Settings › Output), and File › Save Replay or a
+  shortcut writes them to an MKV file while the buffer keeps running.
 - Recording to MKV, MP4 or MOV, Lossless recording, and RTMP streaming, through an external ffmpeg.
   The encoder's settings, such as the x264 and NVENC presets, are set in Settings › Output and
   Settings › Stream.
@@ -52,11 +55,10 @@
 1. **Capture on Linux.** Display and window capture through PipeWire portals, and audio devices
    through ALSA or PipeWire.
 2. **Camera source.** Video capture devices on every system.
-3. **Replay buffer.** Keep the last N seconds in memory and save them on a shortcut.
-4. **Audio monitoring.** Play a source to a chosen output device, and per-source audio offset.
-5. **Docks.** Undock, rearrange and save dock layouts.
-6. **Translations.** A `studiocraft.tsv` catalog for every other locale craft-i18n has, and
+3. **Audio monitoring.** Play a source to a chosen output device, and per-source audio offset.
+4. **Docks.** Undock, rearrange and save dock layouts.
+5. **Translations.** A `studiocraft.tsv` catalog for every other locale craft-i18n has, and
    right-to-left layout for Arabic and Hebrew.
-7. **Multiple outputs.** Several streams at once, and a virtual camera.
-8. **Web build.** The model and plugin crates already build for WebAssembly; a browser editor for
+6. **Multiple outputs.** Several streams at once, and a virtual camera.
+7. **Web build.** The model and plugin crates already build for WebAssembly; a browser editor for
    scene collections is the first step.

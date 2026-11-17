@@ -1,4 +1,4 @@
-//! Starting and stopping the recording and the stream.
+//! Starting and stopping the recording, the stream and the replay buffer, and saving replays.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -12,7 +12,8 @@ use studiocraft_media::audio::SAMPLE_RATE;
 use studiocraft_media::queue::Fifo;
 use studiocraft_media::stats::EncoderStats;
 use studiocraft_media::video::{PixelFormat, PooledFrame};
-use studiocraft_model::{Profile, Settings};
+use studiocraft_model::{Profile, RecordingQuality, Settings};
+use studiocraft_outputs::replay::MAX_SAVES;
 use studiocraft_platform::ffmpeg;
 use studiocraft_plugin::{
     Availability, Encoder, EncoderEnv, EncoderKind, OutputInstance, OutputJob, OutputStatus, PluginError, RateControl, VideoFormat,
@@ -20,11 +21,13 @@ use studiocraft_plugin::{
 
 use crate::{Notice, Studio, StudioError};
 
-/// The two outputs.
+/// The outputs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum OutputKind {
     Recording,
     Streaming,
+    /// The replay buffer: the newest seconds kept in memory until a save writes them to a file.
+    Replay,
 }
 
 impl OutputKind {
@@ -32,6 +35,7 @@ impl OutputKind {
         match self {
             OutputKind::Recording => "recording",
             OutputKind::Streaming => "stream",
+            OutputKind::Replay => "replay buffer",
         }
     }
 }
@@ -79,10 +83,17 @@ struct Stopping {
     handle: JoinHandle<Result<(), PluginError>>,
 }
 
+/// A replay being written to its file.
+struct Saving {
+    path: PathBuf,
+    handle: JoinHandle<Result<(), PluginError>>,
+}
+
 #[derive(Default)]
 pub(crate) struct Outputs {
     active: HashMap<OutputKind, Active>,
     stopping: Vec<Stopping>,
+    saving: Vec<Saving>,
     next_id: u64,
     /// Video encoders each ffmpeg program offers, asked once per program.
     encoders: HashMap<PathBuf, Vec<String>>,
@@ -94,8 +105,11 @@ pub(crate) struct Outputs {
 /// ran.
 fn finish_notice(kind: OutputKind, target: &str, failed: bool, r: Result<(), PluginError>) -> Option<Notice> {
     match r {
-        Ok(()) if kind == OutputKind::Recording => Some(Notice::new("Recording saved to {path}", vec![("path", target.to_string())], false)),
-        Ok(()) => Some(Notice::new("The stream ended", Vec::new(), false)),
+        Ok(()) => Some(match kind {
+            OutputKind::Recording => Notice::new("Recording saved to {path}", vec![("path", target.to_string())], false),
+            OutputKind::Streaming => Notice::new("The stream ended", Vec::new(), false),
+            OutputKind::Replay => Notice::new("The replay buffer stopped", Vec::new(), false),
+        }),
         Err(e) if failed => {
             log::warn!("{} ended with an error: {e}", kind.noun());
             None
@@ -104,6 +118,7 @@ fn finish_notice(kind: OutputKind, target: &str, failed: bool, r: Result<(), Plu
             let template = match kind {
                 OutputKind::Recording => "The recording could not be finished: {error}",
                 OutputKind::Streaming => "The stream could not be finished: {error}",
+                OutputKind::Replay => "The replay buffer could not be stopped: {error}",
             };
             Some(Notice::new(template, vec![("error", e.to_string())], true))
         }
@@ -197,6 +212,7 @@ impl Outputs {
             let template = match kind {
                 OutputKind::Recording => "The recording stopped: {error}",
                 OutputKind::Streaming => "The stream stopped: {error}",
+                OutputKind::Replay => "The replay buffer stopped: {error}",
             };
             ev.notices.push(Notice::new(template, vec![("error", e.to_string())], true));
             if let Some(id) = self.stop(kind, true) {
@@ -214,12 +230,32 @@ impl Outputs {
                     let template = match s.kind {
                         OutputKind::Recording => "The recording could not be finished",
                         OutputKind::Streaming => "The stream could not be finished",
+                        OutputKind::Replay => "The replay buffer could not be stopped",
                     };
                     ev.notices.push(Notice::new(template, Vec::new(), true));
                 }
             }
         }
+        let (saved, writing): (Vec<_>, Vec<_>) = self.saving.drain(..).partition(|s| s.handle.is_finished());
+        self.saving = writing;
+        for s in saved {
+            ev.notices.push(save_notice(&s.path, s.handle.join()));
+        }
         ev
+    }
+
+    /// Replays still being written.
+    pub(crate) fn saving(&self) -> usize {
+        self.saving.len()
+    }
+
+    /// An error while [`MAX_SAVES`] replays are being written: each one holds its packets in
+    /// memory until its file is written.
+    fn check_save_room(&self) -> Result<(), StudioError> {
+        if self.saving.len() >= MAX_SAVES {
+            return Err(StudioError::Output(format!("{MAX_SAVES} replays are already being saved; try again when one is done")));
+        }
+        Ok(())
     }
 
     /// Finish everything before the app closes.
@@ -230,6 +266,18 @@ impl Outputs {
         for s in self.stopping.drain(..) {
             let _ = s.handle.join();
         }
+        for s in self.saving.drain(..) {
+            let _ = s.handle.join();
+        }
+    }
+}
+
+/// The notice for a replay whose save to `path` ended with `r` (`Err` when its thread panicked).
+fn save_notice(path: &Path, r: std::thread::Result<Result<(), PluginError>>) -> Notice {
+    match r {
+        Ok(Ok(())) => Notice::new("Replay saved to {path}", vec![("path", path.display().to_string())], false),
+        Ok(Err(e)) => Notice::new("The replay could not be saved: {error}", vec![("error", e.to_string())], true),
+        Err(_) => Notice::new("The replay could not be saved", Vec::new(), true),
     }
 }
 
@@ -237,8 +285,17 @@ impl Outputs {
 /// return its path. The file is created only under a name that no file has yet, so two recordings
 /// started in the same second get different files. The folder is created when it is missing.
 pub fn recording_path(folder: &Path, extension: &str) -> std::io::Result<PathBuf> {
+    named_path(folder, "", extension)
+}
+
+/// [`recording_path`] for a saved replay: the name starts with `Replay `.
+pub fn replay_path(folder: &Path) -> std::io::Result<PathBuf> {
+    named_path(folder, "Replay ", "mkv")
+}
+
+fn named_path(folder: &Path, prefix: &str, extension: &str) -> std::io::Result<PathBuf> {
     std::fs::create_dir_all(folder)?;
-    let stamp = chrono::Local::now().format("%Y-%m-%d %H-%M-%S").to_string();
+    let stamp = format!("{prefix}{}", chrono::Local::now().format("%Y-%m-%d %H-%M-%S"));
     for n in 1..1000 {
         let path = if n == 1 { folder.join(format!("{stamp}.{extension}")) } else { folder.join(format!("{stamp} ({n}).{extension}")) };
         match std::fs::OpenOptions::new().write(true).create_new(true).open(&path) {
@@ -294,8 +351,24 @@ fn plan(p: &Profile, kind: OutputKind) -> Plan {
             },
             audio_kbps: p.stream.audio_bitrate_kbps,
         },
+        OutputKind::Replay => {
+            let r = p.replay.sanitized();
+            Plan {
+                output_id: "replay",
+                settings: Settings::new().with("seconds", r.seconds).with("memory_mb", r.memory_mb),
+                // The replay buffer runs the built-in encoder, with its settings from Settings › Output.
+                encoder_id: REPLAY_ENCODER.into(),
+                encoder_settings: p.output.encoder_settings.get(REPLAY_ENCODER).cloned().unwrap_or_default(),
+                // The recording's quality; the built-in encoder has no lossless mode, so Lossless keeps High.
+                rate: RateControl::Quality(p.output.quality.quality_level().or(RecordingQuality::High.quality_level()).unwrap_or(23)),
+                audio_kbps: 192,
+            }
+        }
     }
 }
+
+/// The video encoder the replay buffer runs.
+const REPLAY_ENCODER: &str = "h264";
 
 impl Plan {
     /// The job that runs `encoder` with this plan's encoder settings, rate and audio bitrate.
@@ -315,16 +388,16 @@ impl Plan {
 }
 
 /// Where the output `kind` can run encoders, when the ffmpeg program listed `offered` (empty when
-/// that list could not be read): recordings also run the built-in ones.
+/// that list could not be read): recordings and the replay buffer also run the built-in ones.
 fn encoder_env(offered: &[String], kind: OutputKind) -> EncoderEnv<'_> {
-    EncoderEnv { builtin: kind == OutputKind::Recording, ..EncoderEnv::ffmpeg(offered) }
+    EncoderEnv { builtin: kind != OutputKind::Streaming, ..EncoderEnv::ffmpeg(offered) }
 }
 
 /// Whether the output `kind` can start with `encoder`, when the ffmpeg program listed `offered`
 /// (empty when that list could not be read).
 fn check_encoder(encoder: &dyn Encoder, offered: &[String], kind: OutputKind) -> Result<(), StudioError> {
     let tab = match kind {
-        OutputKind::Recording => "Output",
+        OutputKind::Recording | OutputKind::Replay => "Output",
         OutputKind::Streaming => "Stream",
     };
     if encoder.kind() != EncoderKind::Video {
@@ -399,7 +472,7 @@ impl Studio {
                 settings = settings.with("path", path.to_string_lossy().as_ref());
                 Some(path)
             }
-            OutputKind::Streaming => None,
+            OutputKind::Streaming | OutputKind::Replay => None,
         };
         let instance = match output.start(&settings, job) {
             Ok(instance) => instance,
@@ -417,6 +490,44 @@ impl Studio {
         self.outputs.active.insert(kind, Active { id, instance, stats, started: Instant::now(), target });
         self.update_encode_target();
         Ok(())
+    }
+
+    /// Write what the replay buffer holds to a new file in the recording folder, on a thread of
+    /// its own; the buffer keeps running. [`Studio::tick`] reports the result as a notice.
+    pub(crate) fn save_replay(&mut self) -> Result<(), StudioError> {
+        let Some(active) = self.outputs.active.get(&OutputKind::Replay) else {
+            return Err(StudioError::Output("the replay buffer is not running; start it first".into()));
+        };
+        self.outputs.check_save_room()?;
+        let folder = recording_folder(&self.profile.output.folder);
+        let path =
+            replay_path(&folder).map_err(|e| StudioError::Output(format!("no file for the replay could be made in {}: {e}", folder.display())))?;
+        let clip = match active.instance.replay() {
+            Ok(clip) => clip,
+            Err(e) => {
+                let _ = std::fs::remove_file(&path);
+                return Err(e.into());
+            }
+        };
+        let for_thread = path.clone();
+        let handle = std::thread::Builder::new().name("save replay".into()).spawn(move || {
+            let r = clip.write(&for_thread);
+            if r.is_err() {
+                // The empty file reserved for the name, when the write did not get to it.
+                let _ = std::fs::remove_file(&for_thread);
+            }
+            r
+        });
+        match handle {
+            Ok(handle) => {
+                self.outputs.saving.push(Saving { path, handle });
+                Ok(())
+            }
+            Err(e) => {
+                let _ = std::fs::remove_file(&path);
+                Err(StudioError::Output(format!("no thread to save the replay: {e}")))
+            }
+        }
     }
 }
 
@@ -535,6 +646,80 @@ mod tests {
         let audio = Builtin(studiocraft_plugin::Codec::Aac);
         let Err(StudioError::Output(m)) = check_encoder(&audio, &listed, OutputKind::Recording) else { panic!("an audio encoder started as video") };
         assert_eq!(m, "Built-in is not a video encoder; choose another encoder in Settings › Output");
+    }
+
+    #[test]
+    fn the_replay_buffer_runs_the_built_in_encoder_with_the_profile_s_settings() {
+        let mut p = Profile { replay: studiocraft_model::ReplaySettings { seconds: 90, memory_mb: 2048 }, ..Profile::default() };
+        p.output.video_encoder = "x264".into();
+        p.output.encoder_settings.insert("h264".into(), Settings::new().with("keyframe_s", 1));
+        p.output.quality = RecordingQuality::Compact;
+        let r = plan(&p, OutputKind::Replay);
+        assert_eq!((r.output_id, r.encoder_id.as_str(), r.audio_kbps), ("replay", "h264", 192));
+        assert_eq!(r.settings, Settings::new().with("seconds", 90).with("memory_mb", 2048));
+        assert_eq!(r.encoder_settings, Settings::new().with("keyframe_s", 1));
+        assert_eq!(r.rate, RateControl::Quality(RecordingQuality::Compact.quality_level().unwrap()));
+        p.output.quality = RecordingQuality::Lossless;
+        assert_eq!(plan(&p, OutputKind::Replay).rate, RateControl::Quality(RecordingQuality::High.quality_level().unwrap()));
+        let mut registry = studiocraft_plugin::Registry::new();
+        studiocraft_outputs::register_all(&mut registry).unwrap();
+        let h264 = registry.encoder("h264").unwrap();
+        assert!(check_encoder(h264.as_ref(), &[], OutputKind::Replay).is_ok());
+        assert!(registry.output("replay").is_ok());
+    }
+
+    #[test]
+    fn saved_replays_are_reported_when_their_file_is_written() {
+        let dir = std::env::temp_dir().join(format!("studiocraft-replays-{}", std::process::id()));
+        let path = replay_path(&dir).unwrap();
+        let name = path.file_name().unwrap().to_string_lossy().into_owned();
+        assert!(name.starts_with("Replay ") && name.ends_with(".mkv"), "{name}");
+        assert_ne!(replay_path(&dir).unwrap(), path, "two saves in the same second get two names");
+        let mut o = Outputs::default();
+        o.saving.push(Saving { path: path.clone(), handle: std::thread::spawn(|| Ok(())) });
+        o.saving.push(Saving { path: dir.join("b.mkv"), handle: std::thread::spawn(|| Err(PluginError::Failed("no space left".into()))) });
+        let mut notices = Vec::new();
+        while o.saving() > 0 {
+            notices.extend(o.poll().notices);
+            std::thread::yield_now();
+        }
+        let mut texts: Vec<(String, bool)> = notices.iter().map(|n| (n.text(), n.error)).collect();
+        texts.sort();
+        assert_eq!(
+            texts,
+            [(format!("Replay saved to {}", path.display()), false), ("The replay could not be saved: no space left".to_string(), true)]
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn replays_being_written_are_limited() {
+        let mut o = Outputs::default();
+        let (go, wait) = std::sync::mpsc::channel::<()>();
+        let wait = Arc::new(Mutex::new(wait));
+        for n in 0..MAX_SAVES {
+            assert!(o.check_save_room().is_ok(), "save {n}");
+            let wait = Arc::clone(&wait);
+            let handle = std::thread::spawn(move || {
+                let _ = wait.lock().map(|w| w.recv());
+                Ok(())
+            });
+            o.saving.push(Saving { path: PathBuf::from(format!("{n}.mkv")), handle });
+        }
+        let Err(StudioError::Output(m)) = o.check_save_room() else { panic!("a ninth replay was written at once") };
+        assert_eq!(m, "8 replays are already being saved; try again when one is done");
+        // One write finishes, and its place is free again once the studio has reported it.
+        go.send(()).unwrap();
+        while o.saving() == MAX_SAVES {
+            let _ = o.poll();
+            std::thread::yield_now();
+        }
+        assert!(o.check_save_room().is_ok());
+        for _ in 1..MAX_SAVES {
+            go.send(()).unwrap();
+        }
+        o.stop_all_blocking();
+        assert_eq!(o.saving(), 0);
     }
 
     #[test]

@@ -71,7 +71,12 @@ build for `wasm32-unknown-unknown`:
   (built in) runs a video encode thread, an audio encode thread and a file thread that writes the
   Matroska file (`outputs/src/native.rs`). The encode threads hand packets to the file thread
   through a queue that holds at most 64 MiB and 3 s of media. In both, the video and audio threads
-  share their timeline through one 128-bit atomic word.
+  share their timeline through one 128-bit atomic word. The replay buffer (`outputs/src/replay.rs`)
+  runs the same three threads, and its third thread keeps the packets in a ring bounded by length
+  and bytes instead of writing a file. A save hands the ring thread a one-slot queue through a
+  bounded lock-free queue, and the ring thread puts a copy of its packet list, which shares the
+  packet bytes, in that slot. A `save replay` thread per save writes the clip to its MKV file, and
+  `Studio::tick` reports each finished save.
 - **Window thread.** The window reads `Studio` state, runs commands, and shows statistics.
 
 One `MasterClock` (`media::clock`) drives the frame scheduler, the mixer and every timestamp.
@@ -102,7 +107,9 @@ inside the ffmpeg program returns its `FfmpegEncoder` form from `Encoder::ffmpeg
 ffmpeg the codec and its arguments. An encoder without that form is built in: `Encoder::open`
 starts its `VideoSession`, which takes NV12 frames and returns packets. A built-in encoder runs only
 in an output that runs built-in encoders. The recording output runs built-in and ffmpeg encoders,
-and with a built-in encoder it writes MKV files only. The stream output runs ffmpeg encoders only.
+and with a built-in encoder it writes MKV files only. The replay buffer output (plug-in id
+`replay`) runs the built-in encoders only, and its `OutputInstance::replay` returns a
+`ReplayClip` that writes the buffer's packets to a file. The stream output runs ffmpeg encoders only.
 `studiocraft-encode` holds the built-in H.264 encoder (`studiocraft_encode::H264`, plug-in id
 `h264`) and the AAC encoder (`studiocraft_encode::AacSession`) that built-in recordings use for
 sound.

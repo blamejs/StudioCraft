@@ -34,7 +34,7 @@ use studiocraft_render::{CanvasViews, CaptureRequest, Compositor, Gpu, RenderSha
 use studiocraft_sources::FfmpegSetting;
 
 pub use files::FileError;
-pub use outputs::{OutputKind, OutputState, recording_folder, recording_path};
+pub use outputs::{OutputKind, OutputState, recording_folder, recording_path, replay_path};
 pub use studiocraft_render::{Capture, View};
 
 /// Why something the user asked for did not happen. Shown to the user as is.
@@ -293,6 +293,10 @@ impl Studio {
                 RuntimeAction::StartStreaming => self.start_output(OutputKind::Streaming)?,
                 RuntimeAction::StopStreaming => self.stop_output(OutputKind::Streaming),
                 RuntimeAction::ToggleStreaming => self.toggle_output(OutputKind::Streaming)?,
+                RuntimeAction::StartReplay => self.start_output(OutputKind::Replay)?,
+                RuntimeAction::StopReplay => self.stop_output(OutputKind::Replay),
+                RuntimeAction::ToggleReplay => self.toggle_output(OutputKind::Replay)?,
+                RuntimeAction::SaveReplay => self.save_replay()?,
                 RuntimeAction::OpenSettings => ui = Some(UiAction::OpenSettings),
                 RuntimeAction::Exit => ui = Some(UiAction::Exit),
             }
@@ -596,7 +600,7 @@ impl Studio {
     pub fn set_profile(&mut self, profile: Profile) -> Result<(), StudioError> {
         let video_changed = profile.video.sanitized() != self.profile.video.sanitized();
         if video_changed && self.outputs.any_active() {
-            return Err(StudioError::Output("stop recording and streaming before changing the video settings".into()));
+            return Err(StudioError::Output("stop recording, streaming and the replay buffer before changing the video settings".into()));
         }
         if let Ok(mut f) = self.ffmpeg.write() {
             f.clone_from(&profile.output.ffmpeg_path);
@@ -626,6 +630,14 @@ impl Studio {
         if let Some(o) = v.as_object_mut() {
             o.insert("recording".into(), output(OutputKind::Recording));
             o.insert("streaming".into(), output(OutputKind::Streaming));
+            let mut replay = output(OutputKind::Replay);
+            if let Some(r) = replay.as_object_mut() {
+                r.insert("saving".into(), json!(self.outputs.saving()));
+                if let Some(s) = self.output(OutputKind::Replay).filter(|s| s.active) {
+                    r.insert("bytes".into(), json!(s.bytes));
+                }
+            }
+            o.insert("replay".into(), replay);
             o.insert("transitioning".into(), json!(self.transition.is_some()));
             o.insert(
                 "stats".into(),

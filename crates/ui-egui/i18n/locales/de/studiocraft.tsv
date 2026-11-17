@@ -2,7 +2,7 @@
 # Columns: context, source text, translation. Rows not listed here show in English.
 @id	language.name	Deutsch
 	`{shortcut}`: {error}	`{shortcut}`: {error}
-	A recording or stream is running. Exiting stops it; a recording is finished and saved first.	Eine Aufnahme oder ein Stream läuft. Beim Beenden wird er gestoppt; eine Aufnahme wird vorher abgeschlossen und gespeichert.
+	A recording, stream or replay buffer is running. Exiting stops it; a recording is finished and saved first, and the replay buffer's unsaved video is lost.	Eine Aufnahme, ein Stream oder der Replay-Puffer läuft. Beim Beenden wird er gestoppt; eine Aufnahme wird vorher abgeschlossen und gespeichert, und das nicht gespeicherte Video des Replay-Puffers geht verloren.
 	About StudioCraft	Über StudioCraft
 	About {app}	Über {app}
 	Add	Hinzufügen
@@ -131,6 +131,7 @@
 	Lock Preview	Vorschau sperren
 	Loop	Endlos abspielen
 	Maximize	Maximieren
+	MB	MB
 	Media file	Mediendatei
 	Media files	Mediendateien
 	Minimize	Minimieren
@@ -190,6 +191,15 @@
 	Remove the selected source from the scene	Ausgewählte Quelle aus der Szene entfernen
 	Rename	Umbenennen
 	Rename…	Umbenennen…
+	Replay	Replay
+	REPLAY	REPLAY
+	Replay buffer	Replay-Puffer
+	Replay Buffer	Replay-Puffer
+	Replay buffer length	Länge des Replay-Puffers
+	Replay buffer memory limit	Speichergrenze des Replay-Puffers
+	Replay buffer, {time}	Replay-Puffer, {time}
+	Replay length (seconds)	Replay-Länge (Sekunden)
+	Replay memory limit (MB)	Replay-Speichergrenze (MB)
 	Report an Issue	Problem melden
 	Reset Docks	Docks zurücksetzen
 	Reset Transform	Transformation zurücksetzen
@@ -201,6 +211,7 @@
 	Rotate 90° Counterclockwise	90° gegen den Uhrzeigersinn drehen
 	Running	Läuft
 	Saturation	Sättigung
+	Save Replay	Replay speichern
 	Scene Collection	Szenensammlung
 	Scene {n}	Szene {n}
 	Scenes	Szenen
@@ -224,16 +235,20 @@
 	Sources	Quellen
 	Speed	Geschwindigkeit
 	Start or Stop Recording	Aufnahme starten oder stoppen
+	Start or Stop Replay Buffer	Replay-Puffer starten oder stoppen
 	Start or Stop Streaming	Stream starten oder stoppen
 	Start Recording	Aufnahme starten
+	Start Replay Buffer	Replay-Puffer starten
 	Start Streaming	Stream starten
 	Starting…	Wird gestartet…
 	Stats	Statistik
 	Status Bar	Statusleiste
 	Stop and Exit	Stoppen und beenden
 	Stop Recording	Aufnahme stoppen
+	Stop Replay Buffer	Replay-Puffer stoppen
 	Stop Streaming	Stream stoppen
 	Stopped	Gestoppt
+	Stopping Replay Buffer…	Replay-Puffer wird gestoppt…
 	Stopping…	Wird gestoppt…
 	Stream	Stream
 	Stream key	Stream-Schlüssel
@@ -270,7 +285,7 @@
 	Video	Video
 	Video bitrate	Video-Bitrate
 	Video encoder	Video-Encoder
-	Video settings can't change while recording or streaming.	Während einer Aufnahme oder eines Streams lassen sich die Videoeinstellungen nicht ändern.
+	Video settings can't change while recording, streaming or running the replay buffer.	Während einer Aufnahme, eines Streams oder des Replay-Puffers lassen sich die Videoeinstellungen nicht ändern.
 	View	Ansicht
 	Website	Website
 	Width	Breite
@@ -288,12 +303,19 @@
 @msg	Imported the scene collection `{name}`	Szenensammlung `{name}` importiert
 @msg	No file dialog could be shown: {error}	Es konnte kein Dateidialog angezeigt werden: {error}
 @msg	Recording saved to {path}	Aufnahme gespeichert unter {path}
+@msg	Replay saved to {path}	Replay gespeichert unter {path}
 @msg	The compositor thread could not start: {error}	Der Compositor-Thread konnte nicht starten: {error}
 @msg	The preferences could not be saved: {error}	Die Einstellungen konnten nicht gespeichert werden: {error}
 @msg	The profile could not be saved: {error}	Das Profil konnte nicht gespeichert werden: {error}
 @msg	The recording could not be finished	Die Aufnahme konnte nicht abgeschlossen werden
 @msg	The recording could not be finished: {error}	Die Aufnahme konnte nicht abgeschlossen werden: {error}
 @msg	The recording stopped: {error}	Die Aufnahme wurde abgebrochen: {error}
+@msg	The replay buffer could not be stopped	Der Replay-Puffer konnte nicht gestoppt werden
+@msg	The replay buffer could not be stopped: {error}	Der Replay-Puffer konnte nicht gestoppt werden: {error}
+@msg	The replay buffer stopped	Der Replay-Puffer wurde gestoppt
+@msg	The replay buffer stopped: {error}	Der Replay-Puffer wurde abgebrochen: {error}
+@msg	The replay could not be saved	Das Replay konnte nicht gespeichert werden
+@msg	The replay could not be saved: {error}	Das Replay konnte nicht gespeichert werden: {error}
 @msg	The scene collection could not be saved: {error}	Die Szenensammlung konnte nicht gespeichert werden: {error}
 @msg	The stream could not be finished	Der Stream konnte nicht abgeschlossen werden
 @msg	The stream could not be finished: {error}	Der Stream konnte nicht abgeschlossen werden: {error}

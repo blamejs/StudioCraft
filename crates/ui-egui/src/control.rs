@@ -5,6 +5,7 @@ use craft_keymap::CommandRef;
 use craft_menu::{ItemState, LayoutOptions, MenuBar, Node, Target};
 use serde_json::{Value, json};
 use studiocraft_engine::command::Undo;
+use studiocraft_studio::OutputKind;
 
 use crate::{APP_NAME, StudioApp, commands};
 
@@ -71,6 +72,8 @@ impl StudioApp {
             "view.lock_preview" => on(p.lock_preview),
             "view.fullscreen" => on(self.fullscreen),
             "studio.toggle" => on(engine.studio_mode()),
+            "replay.toggle" => on(self.studio.output(OutputKind::Replay).is_some_and(|s| s.active)),
+            "replay.save" => ItemState { enabled: self.studio.output(OutputKind::Replay).is_some_and(|s| s.active), checked: None },
             "dock.scenes" => on(p.docks.scenes),
             "dock.sources" => on(p.docks.sources),
             "dock.mixer" => on(p.docks.mixer),
@@ -184,7 +187,8 @@ impl StudioApp {
         Ok(json!({"command": cmd.id, "result": result}))
     }
 
-    /// Whether the window is asking to confirm closing while a recording or stream runs.
+    /// Whether the window is asking to confirm closing while a recording, stream or replay buffer
+    /// runs.
     pub fn confirming_exit(&self) -> bool {
         self.confirm_exit
     }

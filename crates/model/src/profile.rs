@@ -194,7 +194,36 @@ impl StreamSettings {
     }
 }
 
-/// A named set of video, audio, output and stream settings.
+/// How much the replay buffer keeps in memory.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ReplaySettings {
+    /// Seconds of the newest video and sound a saved replay holds.
+    pub seconds: u32,
+    /// Most megabytes of encoded video and sound kept; past it the oldest go first.
+    pub memory_mb: u32,
+}
+
+impl ReplaySettings {
+    /// The lengths the replay buffer takes, in seconds.
+    pub const SECONDS: std::ops::RangeInclusive<u32> = 5..=3600;
+    /// The memory limits the replay buffer takes, in megabytes.
+    pub const MEMORY_MB: std::ops::RangeInclusive<u32> = 32..=16_384;
+
+    /// These settings with each value brought into its range.
+    pub fn sanitized(self) -> Self {
+        let clamp = |v: u32, r: std::ops::RangeInclusive<u32>| v.clamp(*r.start(), *r.end());
+        Self { seconds: clamp(self.seconds, Self::SECONDS), memory_mb: clamp(self.memory_mb, Self::MEMORY_MB) }
+    }
+}
+
+impl Default for ReplaySettings {
+    fn default() -> Self {
+        Self { seconds: 20, memory_mb: 512 }
+    }
+}
+
+/// A named set of video, audio, output, stream and replay buffer settings.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Profile {
@@ -203,6 +232,7 @@ pub struct Profile {
     pub audio: AudioSettings,
     pub output: OutputSettings,
     pub stream: StreamSettings,
+    pub replay: ReplaySettings,
 }
 
 #[cfg(test)]

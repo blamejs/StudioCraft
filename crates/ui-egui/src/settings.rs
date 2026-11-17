@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 
 use craft_keymap::{Binding, CommandRef, Keymap, Overrides};
 use egui::{RichText, Ui};
-use studiocraft_model::{Profile, RecordingFormat, RecordingQuality};
+use studiocraft_model::{Profile, RecordingFormat, RecordingQuality, ReplaySettings};
 use studiocraft_plugin::{Availability, EncoderEnv, EncoderKind, Registry, Settings};
 
 use crate::i18n::{self, I18N};
@@ -319,6 +319,13 @@ impl SettingsWindow {
                 Err(e) => ui.colored_label(ui.visuals().error_fg_color, crate::i18n::Msg::plain(e.as_str()).shown()),
             };
             ui.end_row();
+            let r = &mut self.draft.replay;
+            ui.label(tl!("Replay buffer length"));
+            ui.add(egui::DragValue::new(&mut r.seconds).range(ReplaySettings::SECONDS).suffix(format!(" {}", tl!("s"))));
+            ui.end_row();
+            ui.label(tl!("Replay buffer memory limit"));
+            ui.add(egui::DragValue::new(&mut r.memory_mb).range(ReplaySettings::MEMORY_MB).speed(16.0).suffix(format!(" {}", tl!("MB"))));
+            ui.end_row();
         });
     }
 
@@ -360,7 +367,7 @@ impl SettingsWindow {
             ui.end_row();
         });
         ui.add_space(8.0);
-        ui.weak(tl!("Video settings can't change while recording or streaming."));
+        ui.weak(tl!("Video settings can't change while recording, streaming or running the replay buffer."));
     }
 
     fn hotkeys(&mut self, ui: &mut Ui) {

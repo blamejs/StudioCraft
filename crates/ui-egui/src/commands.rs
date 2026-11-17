@@ -112,6 +112,8 @@ pub fn catalog() -> Vec<Bindable> {
         bindable(c("edit.redo"), "Redo", &["Cmd+Y", "Cmd+Shift+Z"]),
         bindable(c("record.toggle"), "Start or Stop Recording", &[]),
         bindable(c("stream.toggle"), "Start or Stop Streaming", &[]),
+        bindable(c("replay.toggle"), "Start or Stop Replay Buffer", &[]),
+        bindable(c("replay.save"), "Save Replay", &[]),
         bindable(c("studio.toggle"), "Studio Mode", &[]).toggle(),
         bindable(c("studio.transition"), "Transition to Program", &[]),
         bindable(CommandRef::with_params("studio.transition", json!({"kind": "cut"})), "Cut to Program", &[]),
@@ -163,6 +165,9 @@ pub fn menu_bar(s: &MenuState) -> MenuBar {
         title("File"),
         vec![
             item("file.show_recordings", "Show Recordings"),
+            Node::Separator,
+            Node::Item(Item::new(CommandRef::new("replay.toggle"), crate::i18n::command_label("replay.toggle", "Replay Buffer")).check(false)),
+            item("replay.save", "Save Replay"),
             Node::Separator,
             item("app.settings", "Settings"),
             item("file.show_settings_folder", "Show Settings Folder"),

@@ -210,6 +210,11 @@ impl Headless {
                 let folder = recording_folder(&self.studio.profile().output.folder);
                 self.allowed(&folder, Access::Write)?;
             }
+            // A saved replay goes to the recording folder too.
+            Command::ReplaySave {} => {
+                let folder = recording_folder(&self.studio.profile().output.folder);
+                self.allowed(&folder, Access::Write)?;
+            }
             Command::SourceAdd { kind, settings: Some(settings), .. } => {
                 if let Ok(plugin) = registry.source(kind) {
                     self.check_paths(&plugin.schema(), settings)?;

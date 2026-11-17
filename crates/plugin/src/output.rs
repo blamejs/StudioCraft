@@ -1,6 +1,6 @@
-//! Outputs: recordings and streams.
+//! Outputs: recordings, streams and the replay buffer.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use studiocraft_media::Tick;
@@ -66,4 +66,17 @@ pub trait OutputInstance: Send {
     fn target(&self) -> String;
     /// Ask it to finish and wait (bounded) until the file or stream is closed.
     fn stop(&mut self) -> Result<(), PluginError>;
+    /// What the output keeps in memory now, to be written to a file while it keeps running. Only
+    /// a replay buffer keeps anything; other outputs return an error.
+    fn replay(&self) -> Result<Box<dyn ReplayClip>, PluginError> {
+        Err(PluginError::Unavailable("only the replay buffer keeps what it encodes".into()))
+    }
+}
+
+/// The video and sound a replay buffer held when it was asked for them. Writing the clip does not
+/// stop or slow the replay buffer, and a clip can still be written after the buffer stops.
+pub trait ReplayClip: Send {
+    /// Write the clip to `path`, replacing any file there. It can take a while, so it runs on a
+    /// thread of its own. A file that could not be written whole is removed.
+    fn write(self: Box<Self>, path: &Path) -> Result<(), PluginError>;
 }

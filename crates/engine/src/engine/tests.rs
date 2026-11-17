@@ -331,6 +331,10 @@ fn runtime_commands_are_handed_to_the_app() {
         ("stream.start", RuntimeAction::StartStreaming),
         ("stream.stop", RuntimeAction::StopStreaming),
         ("stream.toggle", RuntimeAction::ToggleStreaming),
+        ("replay.start", RuntimeAction::StartReplay),
+        ("replay.stop", RuntimeAction::StopReplay),
+        ("replay.toggle", RuntimeAction::ToggleReplay),
+        ("replay.save", RuntimeAction::SaveReplay),
         ("app.settings", RuntimeAction::OpenSettings),
         ("app.exit", RuntimeAction::Exit),
     ] {

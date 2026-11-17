@@ -1,13 +1,15 @@
-//! Recording and streaming.
+//! Recording, streaming and the replay buffer.
 //!
 //! With an ffmpeg encoder, both outputs run an ffmpeg process ([`writer`]): a recording writes a
 //! Matroska, MP4 or QuickTime file, and a stream sends FLV over RTMP or RTMPS. With the built-in
 //! H.264 encoder, a recording writes a Matroska file from this process ([`native`]). The video
 //! encoders ffmpeg offers are plug-ins ([`encoders`]), and so is the built-in one
-//! ([`studiocraft_encode::H264`]).
+//! ([`studiocraft_encode::H264`]). The replay buffer ([`replay`]) runs the built-in encoders and
+//! keeps their newest packets in memory until a save writes them to a Matroska file.
 
 pub mod encoders;
 pub mod native;
+pub mod replay;
 pub mod writer;
 
 use std::path::Path;
@@ -22,10 +24,12 @@ use studiocraft_plugin::{EncoderKind, Output, OutputInstance, OutputJob, OutputS
 use crate::native::Native;
 use crate::writer::{Writer, audio_args};
 
-/// Register both outputs and every video encoder: the ffmpeg ones, then the built-in one.
+/// Register the recording, the stream, the replay buffer and every video encoder: the ffmpeg
+/// ones, then the built-in one.
 pub fn register_all(reg: &mut Registry) -> Result<(), PluginError> {
     reg.register_output(Arc::new(Recording))?;
     reg.register_output(Arc::new(Stream))?;
+    reg.register_output(Arc::new(replay::Replay))?;
     for e in encoders::all() {
         reg.register_encoder(Arc::new(e))?;
     }

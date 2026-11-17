@@ -167,6 +167,14 @@ pub fn face(kind: OutputKind, state: Option<&OutputState>) -> Face {
             tl!("LIVE"),
             tl!("Live, {time}"),
         ),
+        OutputKind::Replay => (
+            tl!("Replay"),
+            tid!("replay.start", "Start Replay Buffer"),
+            tid!("replay.stop", "Stop Replay Buffer"),
+            tl!("Stopping Replay Buffer…"),
+            tl!("REPLAY"),
+            tl!("Replay buffer, {time}"),
+        ),
     };
     let make = |state, label: &str, timer: Option<String>, tip: &str, name: String| Face { state, label: label.into(), timer, tip: tip.into(), name };
     match state {
@@ -500,6 +508,9 @@ mod tests {
         assert_eq!((stopping.state, stopping.tip.as_str()), (OnAirState::Stopping, "Finishing Recording…"));
         let failed = face(OutputKind::Streaming, Some(&state(false, false, OutputStatus::Failed("refused".into()), 2)));
         assert_eq!((failed.state, failed.label.as_str()), (OnAirState::Idle, "Go Live"));
+        let replay = face(OutputKind::Replay, Some(&state(true, false, OutputStatus::Running, 61)));
+        assert_eq!((replay.label.as_str(), replay.tip.as_str(), replay.name.as_str()), ("REPLAY", "Stop Replay Buffer", "Replay buffer, 00:01:01"));
+        assert_eq!(face(OutputKind::Replay, None).tip, "Start Replay Buffer");
     }
 
     #[test]
