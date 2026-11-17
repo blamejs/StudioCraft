@@ -50,7 +50,9 @@ build for `wasm32-unknown-unknown`:
   frames into a `VideoOut` slot and audio blocks into a bounded lock-free queue.
 - **Mixer thread.** The mixer (`engine::mixer`) pulls one 1024-frame block (48 kHz stereo `f32`)
   from every audible source, applies the audio filters, gain, mute and scene-change fades, and
-  measures peak and RMS levels. It pushes the mix to every output's bounded queue.
+  measures peak and RMS levels. It pushes the mix to every output's bounded queue. The clipped mix
+  also feeds a `craft-audio-dsp` loudness meter (momentary, short-term, integrated, loudness range
+  and true peak), whose readings the mixer publishes after every block without locks.
 - **Compositor thread.** The scheduler (`engine::scheduler`) wakes on the master clock's frame ticks.
   The compositor (`render`) uploads changed source frames, draws the program scene (and the preview
   scene in studio mode) into a ring of 3 GPU textures, and converts the program to NV12 for the
@@ -77,6 +79,13 @@ A new source, filter, transition, encoder or output is a type that implements th
 in `studiocraft-plugin`. The type is registered in a `Registry` (see
 `studiocraft_sources::register` and `studiocraft_outputs::register`). The window builds its
 property forms from each plugin's `SettingsSchema`, so a new plugin does not need window code.
+
+An encoder names the codec it writes (`Encoder::codec`: H.264, HEVC or AAC). An encoder that runs
+inside the ffmpeg program returns its `FfmpegEncoder` form from `Encoder::ffmpeg`, which gives
+ffmpeg the codec and its arguments. An encoder without that form is built in, and runs only in an
+output that runs built-in encoders; the recording and stream outputs run ffmpeg encoders only.
+`Encoder::availability` reports whether an output can run an encoder, and the output start check,
+the Settings encoder lists and Tools › Available Encoders use it.
 
 Each saved source and filter records its plugin's `kind_version`. When a plugin's version is
 higher, `Plugin::migrate` updates the saved settings when the collection loads.

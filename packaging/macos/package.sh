@@ -11,7 +11,7 @@
 #                         which Gatekeeper rejects on other Macs. In CI, import-cert.sh sets it.
 #   MACOS_KEYCHAIN        the keychain that holds the identity (optional)
 # Notarization needs a real identity and all three of APPLE_ID, APPLE_PASSWORD (an app-specific
-# password) and APPLE_TEAM_ID.
+# password) and APPLE_TEAM_ID. NOTARY_TIMEOUT_MINUTES (default 80) limits the wait for Apple.
 set -euo pipefail
 # shellcheck source=../env.sh
 . "$(dirname "${BASH_SOURCE[0]}")/../env.sh"
@@ -43,6 +43,14 @@ APP="$WORK/StudioCraft.app"
 DMG="$DIST/studiocraft-$VERSION-macos-$ARCH.dmg"
 CLI_ZIP="$DIST/studiocraft-cli-$VERSION-macos-$ARCH.zip"
 
+# Every notarization in this run waits until the same deadline: NOTARY_TIMEOUT_MINUTES (default 80)
+# after the script starts. The release job stops after 90 minutes, and that limit includes the build.
+NOTARY_TIMEOUT_MINUTES="${NOTARY_TIMEOUT_MINUTES-80}"
+if ! [[ "$NOTARY_TIMEOUT_MINUTES" =~ ^[1-9][0-9]{0,3}$ ]]; then
+  echo "NOTARY_TIMEOUT_MINUTES must be a whole number of minutes from 1 to 9999, not '$NOTARY_TIMEOUT_MINUTES'" >&2
+  exit 2
+fi
+NOTARY_DEADLINE=$(($(date +%s) + NOTARY_TIMEOUT_MINUTES * 60))
 NOTARIZE=0
 if [[ "$IDENTITY" = "-" ]]; then
   warn "macOS: no MACOS_SIGN_IDENTITY, so the app is signed ad hoc and not notarized"
@@ -89,21 +97,71 @@ stapler_retry() {
   done
 }
 
+notary() {
+  xcrun notarytool "$@" --apple-id "$APPLE_ID" --password "$APPLE_PASSWORD" --team-id "$APPLE_TEAM_ID"
+}
+
+# Prints one key of a JSON file, or nothing when the key is missing. plutil reads no data from a
+# pipe, and it prints its errors on stdout.
+json_value() {
+  local value
+  if value="$(plutil -extract "$2" raw -o - "$1" 2>/dev/null)"; then printf '%s' "$value"; fi
+}
+
 notarize() {
-  local file="$1" out id status
-  echo "==> notarizing $(basename "$file")"
-  out="$(xcrun notarytool submit "$file" --apple-id "$APPLE_ID" --password "$APPLE_PASSWORD" \
-    --team-id "$APPLE_TEAM_ID" --wait --timeout 1h --output-format json)" || true
-  echo "$out"
-  id="$(printf '%s' "$out" | plutil -extract id raw -o - - 2>/dev/null || true)"
-  status="$(printf '%s' "$out" | plutil -extract status raw -o - - 2>/dev/null || true)"
-  if [[ "$status" != "Accepted" ]]; then
-    if [[ -n "$id" ]]; then
-      xcrun notarytool log "$id" --apple-id "$APPLE_ID" --password "$APPLE_PASSWORD" --team-id "$APPLE_TEAM_ID" || true
-    fi
-    echo "error: notarization of $(basename "$file") failed (status: ${status:-unknown})" >&2
+  local file="$1" name out err id status remaining
+  name="$(basename "$file")"
+  out="$WORK/notary-$name.json"
+  err="$WORK/notary-$name.err"
+  echo "==> notarizing $name"
+  if ! notary submit "$file" --output-format json >"$out" 2>"$err"; then
+    cat "$out" "$err" >&2
+    echo "error: notarytool submit failed for $name" >&2
     exit 1
   fi
+  id="$(json_value "$out" id)"
+  if [[ -z "$id" ]]; then
+    cat "$out" "$err" >&2
+    echo "error: notarytool submit returned no submission id for $name" >&2
+    exit 1
+  fi
+  echo "submission id: $id"
+  # notarytool wait reports no status after a timeout or a dropped connection; notarytool info then
+  # reads it. While the submission is in progress or the status is unknown, the wait starts again
+  # until the deadline.
+  while :; do
+    remaining=$((NOTARY_DEADLINE - $(date +%s)))
+    status=""
+    if [[ "$remaining" -gt 0 ]]; then
+      notary wait "$id" --timeout "${remaining}s" --output-format json >"$out" 2>"$err" || true
+      cat "$out"
+      echo
+      status="$(json_value "$out" status)"
+    fi
+    if [[ -z "$status" ]]; then
+      notary info "$id" --output-format json >"$out" 2>>"$err" || true
+      cat "$out"
+      echo
+      status="$(json_value "$out" status)"
+    fi
+    if [[ -n "$status" ]] && [[ "$status" != "In Progress" ]]; then break; fi
+    if [[ "$(date +%s)" -ge "$NOTARY_DEADLINE" ]]; then break; fi
+    sleep 30
+  done
+  case "$status" in
+    Accepted) ;;
+    "In Progress")
+      echo "error: notarization of $name (submission $id) was still in progress at the deadline;" \
+        "check it with notarytool info $id and run the release again once it is accepted" >&2
+      exit 1
+      ;;
+    *)
+      cat "$err" >&2
+      notary log "$id" || true
+      echo "error: notarization of $name (submission $id) failed (status: ${status:-unknown})" >&2
+      exit 1
+      ;;
+  esac
 }
 
 # Retries hdiutil, which sometimes fails on CI runners with "Resource busy".

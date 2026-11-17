@@ -33,8 +33,17 @@ the repository's `release` environment:
 | --- | --- |
 | macOS (signing and notarization) | `APPLE_CERTIFICATE` (base64 `.p12`), `APPLE_CERTIFICATE_PASSWORD`, `KEYCHAIN_PASSWORD`, `APPLE_ID`, `APPLE_PASSWORD` (app-specific password), `APPLE_TEAM_ID` |
 | Windows, with a certificate file | `WINDOWS_CERTIFICATE` (base64 `.pfx`), `WINDOWS_CERTIFICATE_PASSWORD` |
-| Windows, with Azure Trusted Signing | `AZURE_TENANT_ID`, `AZURE_CLIENT_ID`, `AZURE_CLIENT_SECRET`, `AZURE_SIGNING_ENDPOINT`, `AZURE_SIGNING_ACCOUNT`, `AZURE_CERT_PROFILE` |
+| Windows, with Azure Artifact Signing (formerly Trusted Signing) | `AZURE_TENANT_ID`, `AZURE_CLIENT_ID`, `AZURE_CLIENT_SECRET`, `AZURE_SIGNING_ENDPOINT`, `AZURE_SIGNING_ACCOUNT`, `AZURE_CERT_PROFILE` |
 | Linux packages and `SHA256SUMS.txt` (optional) | `LINUX_SIGNING_KEY` (ASCII-armored OpenPGP secret key without a passphrase) |
+
+`packaging/windows/sign.ps1` signs `studiocraft.exe`, `studiocraft-cli.exe` and the `.msi`. It
+uses the certificate file when `WINDOWS_CERTIFICATE` is set, and otherwise Azure Artifact Signing
+when all six Azure secrets are set. On macOS, `packaging/macos/package.sh` signs the app,
+`studiocraft-cli` and the disk image, and notarizes them when the Apple secrets are set. On Linux,
+`LINUX_SIGNING_KEY` signs the `.rpm` packages, the Flatpak bundle and `SHA256SUMS.txt`.
+
+The release workflow builds Windows `x64` and `arm64`, macOS `universal`, and Linux `x86_64` and
+`aarch64`. It does not build the FreeBSD, `riscv64` or WebAssembly files.
 
 Actions › Release › Run workflow runs the same build from any branch. The `version` input
 overrides `Cargo.toml` for that run, and `dry-run` builds and checks without a draft. A run that
