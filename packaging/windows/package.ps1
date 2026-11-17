@@ -84,24 +84,8 @@ Copy-Item (Join-Path $Root 'LICENSE-MIT'), (Join-Path $Root 'LICENSE-APACHE') $S
 
 & (Join-Path $PSScriptRoot 'sign.ps1') (Join-Path $Stage 'studiocraft.exe') (Join-Path $Stage 'studiocraft-cli.exe')
 
-# The installer's icon: an .ico that holds the PNG icons from assets/app-icon/hicolor as they are.
-$Icon = Join-Path $Work 'studiocraft.ico'
-$sizes = 16, 24, 32, 48, 64, 128, 256
-$images = foreach ($s in $sizes) { , [IO.File]::ReadAllBytes((Join-Path $Root "assets\app-icon\hicolor\${s}x${s}\apps\ai.storyteller.studiocraft.png")) }
-$ico = New-Object IO.MemoryStream
-$w = New-Object IO.BinaryWriter($ico)
-$w.Write([UInt16]0); $w.Write([UInt16]1); $w.Write([UInt16]$sizes.Count)
-$offset = 6 + 16 * $sizes.Count
-for ($i = 0; $i -lt $sizes.Count; $i++) {
-  $dim = if ($sizes[$i] -ge 256) { 0 } else { $sizes[$i] }
-  $w.Write([byte]$dim); $w.Write([byte]$dim); $w.Write([byte]0); $w.Write([byte]0)
-  $w.Write([UInt16]1); $w.Write([UInt16]32)
-  $w.Write([UInt32]$images[$i].Length); $w.Write([UInt32]$offset)
-  $offset += $images[$i].Length
-}
-foreach ($img in $images) { $w.Write($img) }
-$w.Flush()
-[IO.File]::WriteAllBytes($Icon, $ico.ToArray())
+# The installer's icon.
+$Icon = Join-Path $Root 'assets\app-icon\studiocraft.ico'
 
 # ---- MSI --------------------------------------------------------------------------------------
 $Msi = Join-Path $Dist "studiocraft-$Version-windows-$Arch.msi"

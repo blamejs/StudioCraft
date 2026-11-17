@@ -180,17 +180,7 @@ hdiutil_retry() {
 echo "==> assembling $APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$WORK/bin/studiocraft" "$APP/Contents/MacOS/StudioCraft"
-# The icon set is made from the 512 px macOS icon.
-ICONSET="$WORK/StudioCraft.iconset"
-mkdir -p "$ICONSET"
-for size in 16 32 128 256 512; do
-  sips -z "$size" "$size" "$ROOT/assets/app-icon/studiocraft-macos-512.png" --out "$ICONSET/icon_${size}x${size}.png" >/dev/null
-  double=$((size * 2))
-  if [[ "$double" -le 512 ]]; then
-    sips -z "$double" "$double" "$ROOT/assets/app-icon/studiocraft-macos-512.png" --out "$ICONSET/icon_${size}x${size}@2x.png" >/dev/null
-  fi
-done
-iconutil -c icns -o "$APP/Contents/Resources/StudioCraft.icns" "$ICONSET"
+cp "$ROOT/assets/app-icon/studiocraft.icns" "$APP/Contents/Resources/StudioCraft.icns"
 sed -e "s/@VERSION@/$VERSION/g" -e "s/@SHORT_VERSION@/$SHORT_VERSION/g" \
   -e "s/@BUILD_SHA@/${STUDIOCRAFT_BUILD_SHA:-unknown}/g" \
   "$HERE/Info.plist.in" >"$APP/Contents/Info.plist"

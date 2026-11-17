@@ -1,6 +1,5 @@
 //! StudioCraft's app icon: the window icon, the picture in the update prompt and the icon of the
-//! menu entry written beside an AppImage. The source drawing and every size are in
-//! `assets/app-icon`.
+//! menu entry written beside an AppImage. Every size and format is in `assets/app-icon`.
 
 /// The 128 px icon. The update prompt shows it, and the updater installs it as
 /// `icons/hicolor/128x128/apps/ai.storyteller.studiocraft.png` next to an AppImage's menu entry.
@@ -35,7 +34,72 @@ mod tests {
         ("256x256", include_bytes!("../../../assets/app-icon/hicolor/256x256/apps/ai.storyteller.studiocraft.png"), 256),
         ("512x512", include_bytes!("../../../assets/app-icon/hicolor/512x512/apps/ai.storyteller.studiocraft.png"), 512),
         ("macos-512", include_bytes!("../../../assets/app-icon/studiocraft-macos-512.png"), 512),
+        ("1024", include_bytes!("../../../assets/app-icon/studiocraft-1024.png"), 1024),
     ];
+
+    /// The Windows installer's icon.
+    const ICO: &[u8] = include_bytes!("../../../assets/app-icon/studiocraft.ico");
+    /// The macOS bundle icon.
+    const ICNS: &[u8] = include_bytes!("../../../assets/app-icon/studiocraft.icns");
+
+    fn u16_le(b: &[u8], at: usize) -> u16 {
+        u16::from_le_bytes([b[at], b[at + 1]])
+    }
+
+    fn u32_le(b: &[u8], at: usize) -> u32 {
+        u32::from_le_bytes([b[at], b[at + 1], b[at + 2], b[at + 3]])
+    }
+
+    fn u32_be(b: &[u8], at: usize) -> u32 {
+        u32::from_be_bytes([b[at], b[at + 1], b[at + 2], b[at + 3]])
+    }
+
+    #[test]
+    fn the_ico_holds_every_windows_size_as_a_png() {
+        assert_eq!((u16_le(ICO, 0), u16_le(ICO, 2)), (0, 1), "an icon resource");
+        let count = usize::from(u16_le(ICO, 4));
+        let mut sides = Vec::new();
+        for i in 0..count {
+            let entry = 6 + 16 * i;
+            let size = u32_le(ICO, entry + 8) as usize;
+            let offset = u32_le(ICO, entry + 12) as usize;
+            let icon = decode(&ICO[offset..offset + size]);
+            let side = if ICO[entry] == 0 { 256 } else { u32::from(ICO[entry]) };
+            assert_eq!((icon.width, icon.height), (side, side), "entry {i}");
+            sides.push(side);
+        }
+        assert_eq!(sides, [16, 24, 32, 48, 64, 128, 256]);
+    }
+
+    #[test]
+    fn the_icns_holds_every_iconset_size_as_a_png() {
+        assert_eq!(&ICNS[..4], b"icns");
+        assert_eq!(u32_be(ICNS, 4) as usize, ICNS.len());
+        let mut found = Vec::new();
+        let mut at = 8;
+        while at < ICNS.len() {
+            let kind = std::str::from_utf8(&ICNS[at..at + 4]).expect("an ASCII type code");
+            let len = u32_be(ICNS, at + 4) as usize;
+            let icon = decode(&ICNS[at + 8..at + len]);
+            assert_eq!(icon.width, icon.height, "{kind}");
+            found.push((kind.to_string(), icon.width));
+            at += len;
+        }
+        let expected = [
+            ("icp4", 16),
+            ("icp5", 32),
+            ("icp6", 64),
+            ("ic07", 128),
+            ("ic08", 256),
+            ("ic09", 512),
+            ("ic10", 1024),
+            ("ic11", 32),
+            ("ic12", 64),
+            ("ic13", 256),
+            ("ic14", 512),
+        ];
+        assert_eq!(found, expected.map(|(k, s)| (k.to_string(), s)));
+    }
 
     fn decode(png: &[u8]) -> egui::IconData {
         eframe::icon_data::from_png_bytes(png).expect("the icon decodes as a PNG")
@@ -47,10 +111,11 @@ mod tests {
             let icon = decode(png);
             assert_eq!((icon.width, icon.height), (*side, *side), "{name}");
             assert_eq!(icon.rgba.len(), (side * side * 4) as usize, "{name}");
-            // The rounded tile leaves the corners transparent and fills the middle.
+            // The rounded tile leaves the corners transparent and covers the middle. The drawing
+            // stores its tile at alpha 253 and 254, so the middle is checked as nearly opaque.
             let alpha = |x: u32, y: u32| icon.rgba[((y * side + x) * 4 + 3) as usize];
             assert!(alpha(0, 0) < 32, "{name}: the corner is transparent");
-            assert_eq!(alpha(side / 2, side / 2), 255, "{name}: the middle is opaque");
+            assert!(alpha(side / 2, side / 2) >= 250, "{name}: the middle is covered");
         }
     }
 

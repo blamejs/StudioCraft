@@ -72,7 +72,6 @@ sed -e "s/@VERSION@/$VERSION/g" -e "s/@DATE@/$STUDIOCRAFT_BUILD_DATE/g" \
   "$HERE/$APP_ID.metainfo.xml.in" >"$STAGE/usr/share/metainfo/$APP_ID.metainfo.xml"
 mkdir -p "$STAGE/usr/share/icons"
 cp -R "$ROOT/assets/app-icon/hicolor" "$STAGE/usr/share/icons/"
-install -Dm644 "$ROOT/assets/app-icon/studiocraft.svg" "$STAGE/usr/share/icons/hicolor/scalable/apps/$APP_ID.svg"
 mkdir -p "$STAGE/usr/share/doc/studiocraft"
 copy_docs "$STAGE/usr/share/doc/studiocraft"
 
