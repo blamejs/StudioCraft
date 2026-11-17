@@ -577,6 +577,7 @@ fn the_catalogs_in_the_tree_are_offered_and_switch_the_menus() {
         ("fr", "Français", "Édition"),
         ("it", "Italiano", "Modifica"),
         ("nl", "Nederlands", "Bewerken"),
+        ("pl", "Polski", "Edycja"),
         ("pt-br", "Português (Brasil)", "Editar"),
     ] {
         let l = I18N.from_code(code).unwrap_or_else(|| panic!("{code} is embedded"));
