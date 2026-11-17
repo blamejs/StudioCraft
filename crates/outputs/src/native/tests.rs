@@ -12,7 +12,7 @@ use studiocraft_plugin::{Codec, Encoder, Output, Plugin, RateControl, VideoForma
 use super::*;
 use crate::Recording;
 
-fn job(rate: RateControl) -> OutputJob {
+pub(crate) fn job(rate: RateControl) -> OutputJob {
     OutputJob {
         video: VideoFormat { width: 64, height: 48, fps_num: 10, fps_den: 1, pixel: PixelFormat::Nv12 },
         sample_rate: SAMPLE_RATE,
@@ -26,7 +26,7 @@ fn job(rate: RateControl) -> OutputJob {
     }
 }
 
-fn temp_file(name: &str) -> PathBuf {
+pub(crate) fn temp_file(name: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!("studiocraft-native-{name}-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     dir.join("take.mkv")
@@ -36,16 +36,38 @@ fn temp_file(name: &str) -> PathBuf {
 /// tone, stamped as the pipeline would. Each frame waits for room in the video queue, so none is
 /// dropped.
 fn feed(video: &Fifo<Arc<PooledFrame>>, audio: &Fifo<PooledBlock>, seconds: f64) -> u64 {
+    Feeder::default().feed(video, audio, seconds)
+}
+
+/// [`feed`] in parts: each call goes on where the last one ended.
+#[derive(Default)]
+pub(crate) struct Feeder {
+    blocks: u64,
+    frames: u64,
+}
+
+impl Feeder {
+    /// Feed `seconds` more; the number of frames sent by every call so far.
+    pub(crate) fn feed(&mut self, video: &Fifo<Arc<PooledFrame>>, audio: &Fifo<PooledBlock>, seconds: f64) -> u64 {
+        let total_blocks = self.blocks + (seconds * f64::from(SAMPLE_RATE) / BLOCK_FRAMES as f64) as u64;
+        self.frames = feed_blocks(video, audio, self.blocks..total_blocks, self.frames);
+        self.blocks = total_blocks;
+        self.frames
+    }
+}
+
+fn feed_blocks(video: &Fifo<Arc<PooledFrame>>, audio: &Fifo<PooledBlock>, range: std::ops::Range<u64>, mut sent: u64) -> u64 {
     let frames = Pool::new(16, VideoFrame::default);
     let blocks = block_pool();
-    let total_blocks = (seconds * f64::from(SAMPLE_RATE) / BLOCK_FRAMES as f64) as u64;
-    let mut sent = 0u64;
-    for b in 0..total_blocks {
+    for b in range {
         let t = b as f64 * BLOCK_FRAMES as f64 / f64::from(SAMPLE_RATE);
         let mut block = blocks.take();
         block.samples.clear();
         block.samples.extend((0..BLOCK_SAMPLES).map(|i| ((i as f32) * 0.05).sin() * 0.2));
         block.pts = tick_of(Duration::from_secs_f64(t));
+        while audio.len() >= 64 {
+            std::thread::yield_now();
+        }
         audio.push(block);
         while (sent as f64) / 10.0 <= t {
             while video.len() >= 4 {
@@ -64,7 +86,7 @@ fn feed(video: &Fifo<Arc<PooledFrame>>, audio: &Fifo<PooledBlock>, seconds: f64)
 }
 
 /// The packets of `file`, by track, as (presentation time, keyframe, data).
-fn packets(file: &[u8]) -> (Vec<craft_media::matroska::Track>, [Vec<(i64, bool, Vec<u8>)>; 2]) {
+pub(crate) fn packets(file: &[u8]) -> (Vec<craft_media::matroska::Track>, [Vec<(i64, bool, Vec<u8>)>; 2]) {
     let mut d = Demuxer::from_slice(file).unwrap();
     let tracks = d.tracks().to_vec();
     let mut by_track = [Vec::new(), Vec::new()];
@@ -76,7 +98,7 @@ fn packets(file: &[u8]) -> (Vec<craft_media::matroska::Track>, [Vec<(i64, bool, 
 
 /// Decode `video` (in file order) with the `avcC` record `avc`; the luma of each picture's first
 /// sample, in display order.
-fn decode(avc: &[u8], video: &[(i64, bool, Vec<u8>)]) -> Vec<u8> {
+pub(crate) fn decode(avc: &[u8], video: &[(i64, bool, Vec<u8>)]) -> Vec<u8> {
     let mut dec = craft_video::h264::decode::Decoder::from_avcc(avc).unwrap();
     let mut pictures = Vec::new();
     for (pts, _, data) in video {

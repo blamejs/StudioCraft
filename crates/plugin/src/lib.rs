@@ -12,7 +12,7 @@
 //! | [`Filter`] | the compositor (video) or mixer (audio) thread | a GPU [`VideoEffect`] pass, or processed audio |
 //! | [`Transition`] | the compositor thread | a GPU blend between two scenes |
 //! | [`Encoder`] | an output's encoder thread, or inside its ffmpeg process | packets ([`VideoSession`]), or codec arguments for a rate control |
-//! | [`Output`] | its own thread ([`OutputInstance`]) | a recording file or a stream |
+//! | [`Output`] | its own thread ([`OutputInstance`]) | a recording file, a stream, or the replay buffer's clips |
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 mod encoder;
@@ -27,7 +27,7 @@ pub use encoder::{Availability, Codec, Encoder, EncoderEnv, EncoderKind, FfmpegE
 pub use filter::{
     Animation, AnimationStep, EffectImage, Filter, FilterInstance, FilterTarget, MAX_EFFECT_SIDE, Reframe, VIDEO_EFFECT_PARAMS, VideoEffect,
 };
-pub use output::{Output, OutputInstance, OutputJob, OutputStatus, VideoFormat};
+pub use output::{Output, OutputInstance, OutputJob, OutputStatus, ReplayClip, VideoFormat};
 pub use registry::Registry;
 pub use source::{AudioOut, Pace, Source, SourceCaps, SourceInstance, SourceIo, VideoContent, VideoOut};
 pub use studiocraft_model::{Settings, SettingsSchema};

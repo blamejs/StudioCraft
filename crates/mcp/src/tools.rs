@@ -288,9 +288,38 @@ fn studio_tool_definitions() -> Vec<Value> {
         ),
         tool("stream_stop", "Stop streaming", "Stop the stream, as Stop Streaming does. Returns the stream's state.", json!({}), &[], PUBLISHES),
         tool(
+            "replay_start",
+            "Start the replay buffer",
+            "Start keeping the last seconds of the program in memory (length and memory limit in Settings › Output), as Start Replay \
+             Buffer does. It runs the built-in encoders. Returns the replay buffer's state. Nothing happens when it already runs.",
+            json!({}),
+            &[],
+            RECORDS,
+        ),
+        tool(
+            "replay_stop",
+            "Stop the replay buffer",
+            "Stop the replay buffer and drop what it holds, as Stop Replay Buffer does. Replays being saved are still written. Returns the \
+             replay buffer's state.",
+            json!({}),
+            &[],
+            RECORDS,
+        ),
+        tool(
+            "replay_save",
+            "Save a replay",
+            "Write what the replay buffer holds to a new MKV file in the recording folder, as Save Replay does; the buffer keeps running. \
+             The file is written in the background, and output_status counts the saves still being written. An error when the replay \
+             buffer is not running or holds nothing yet.",
+            json!({}),
+            &[],
+            ADDS,
+        ),
+        tool(
             "output_status",
-            "Recording and stream state",
-            "Whether the recording and the stream run, with each one's status, file or server, and seconds since it started.",
+            "Recording, stream and replay buffer state",
+            "Whether the recording, the stream and the replay buffer run, with each one's status, file or server, and seconds since it \
+             started; for the replay buffer also the bytes it holds and the saves still being written.",
             json!({}),
             &[],
             READS,
@@ -402,8 +431,8 @@ fn ui_tool_definitions() -> Vec<Value> {
         tool(
             "app_quit",
             "Quit the app",
-            "Close the window as File > Exit does. While a recording or stream runs, the window asks first and the result's `confirming` is \
-             true.",
+            "Close the window as File > Exit does. While a recording, stream or replay buffer runs, the window asks first and the result's \
+             `confirming` is true.",
             json!({}),
             &[],
             RUNS,
@@ -707,11 +736,11 @@ fn transition_set(b: &mut dyn Backend, args: &Args) -> Result<Value, McpError> {
     Ok(text(&result))
 }
 
-/// The recording's and the stream's state from `document.inspect`.
+/// The recording's, the stream's and the replay buffer's state from `document.inspect`.
 fn outputs(b: &mut dyn Backend) -> Result<Value, McpError> {
     let state = b.call("document.inspect", json!({"detail": "summary"}))?;
     let pick = |key: &str| state.get(key).cloned().unwrap_or_else(|| json!({"active": false}));
-    Ok(json!({"recording": pick("recording"), "streaming": pick("streaming")}))
+    Ok(json!({"recording": pick("recording"), "streaming": pick("streaming"), "replay": pick("replay")}))
 }
 
 /// Run an output command, then report the output's state.
@@ -748,6 +777,9 @@ fn dispatch(b: &mut dyn Backend, name: &str, args: &Args) -> Result<Value, McpEr
         "record_stop" => output_command(b, "record.stop", "recording"),
         "stream_start" => output_command(b, "stream.start", "streaming"),
         "stream_stop" => output_command(b, "stream.stop", "streaming"),
+        "replay_start" => output_command(b, "replay.start", "replay"),
+        "replay_stop" => output_command(b, "replay.stop", "replay"),
+        "replay_save" => output_command(b, "replay.save", "replay"),
         "output_status" => Ok(text(&outputs(b)?)),
         other => Err(McpError::Invalid(format!("there is no tool `{other}`"))),
     }

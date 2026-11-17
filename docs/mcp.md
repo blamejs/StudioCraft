@@ -124,7 +124,8 @@ flags. The two flags keep the headless backend's file access inside the folders 
   `file` of an `image` or `media` source), whichever tool runs them.
 - Every file a call writes must lie inside a write root: `collection_save`, and the recording
   folder (Settings › Output, or the Videos folder when it is empty) for `record_start`,
-  `record.start` and a `record.toggle` that would start a recording.
+  `record.start` and a `record.toggle` that would start a recording, and for `replay_save` and
+  `replay.save`.
 - Each flag may be given more than once; a path inside any root of its kind is allowed. Each root
   must be an existing folder. A kind of access with no root of its own is not granted.
 - A path is made absolute against the server's working directory and its links are followed. For a
@@ -219,7 +220,10 @@ error -32602. A command that fails is a tool result with `isError: true` and the
 | `record_stop` | none | `record.stop`, then the recording's state. |
 | `stream_start` | none | `stream.start`, then the stream's state. Marked `openWorldHint: true`. The headless backend refuses it without `--allow-streaming`. |
 | `stream_stop` | none | `stream.stop`, then the stream's state. Marked `openWorldHint: true`. |
-| `output_status` | none | The `recording` and `streaming` entries of `document.inspect`: `active`, `status`, `target` (the file or server) and `seconds`. |
+| `replay_start` | none | `replay.start`, then the replay buffer's state. Nothing happens when it already runs. |
+| `replay_stop` | none | `replay.stop`, then the replay buffer's state. Replays being saved are still written. |
+| `replay_save` | none | `replay.save`: writes what the replay buffer holds to a new MKV file in the recording folder in the background, then the replay buffer's state. An error when the replay buffer is not running or holds nothing yet. |
+| `output_status` | none | The `recording`, `streaming` and `replay` entries of `document.inspect`: `active`, `status`, `target` (the file or server) and `seconds`. The `replay` entry also has `saving` (replays still being written) and, while it runs, `bytes` (the bytes it holds). |
 
 `transform` is an object with `position` `{x, y}` (the top-left corner in canvas pixels), `scale`
 `{x, y}` (1 is the source's own size), `rotation` in degrees and `crop` `{left, top, right,
@@ -245,7 +249,7 @@ the wrong type or out of range is error -32602 (a string `x`, for example, is no
 | `ui_menu_list` | none | `ui.menu.list`: the menu bar as a tree. |
 | `ui_menu_invoke` | `path` | `ui.menu.invoke`, for example `Scene Collection > New...`. An unknown path, a submenu or a disabled item is an error. |
 | `ui_dialog` | `answer: ok \| cancel`, `text?` | `ui.dialog`: answers the open name prompt or the exit confirmation as its buttons do. `ok` presses OK, or Stop and Exit; `cancel` presses Cancel. `text` replaces the name in a name prompt first. A name the prompt refuses is an error and the prompt stays open. |
-| `app_quit` | none | `app.quit`: closes the window as File › Exit does. While a recording or stream runs, the window asks first and the result's `confirming` is `true`. |
+| `app_quit` | none | `app.quit`: closes the window as File › Exit does. While a recording, stream or replay buffer runs, the window asks first and the result's `confirming` is `true`. |
 
 The earlier `studio_state`, `studio_commands` and `studio_run` tools have been removed. Use
 `doc_inspect`, `command_list` and `command_run` instead.

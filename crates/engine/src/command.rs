@@ -54,6 +54,10 @@ pub enum RuntimeAction {
     StartStreaming,
     StopStreaming,
     ToggleStreaming,
+    StartReplay,
+    StopReplay,
+    ToggleReplay,
+    SaveReplay,
     OpenSettings,
     Exit,
 }
@@ -209,6 +213,14 @@ pub enum Command {
     StreamStop {},
     #[serde(rename = "stream.toggle")]
     StreamToggle {},
+    #[serde(rename = "replay.start")]
+    ReplayStart {},
+    #[serde(rename = "replay.stop")]
+    ReplayStop {},
+    #[serde(rename = "replay.toggle")]
+    ReplayToggle {},
+    #[serde(rename = "replay.save")]
+    ReplaySave {},
     #[serde(rename = "app.settings")]
     OpenSettings {},
     #[serde(rename = "app.exit")]
@@ -281,6 +293,10 @@ impl Command {
             Command::StreamStart {} => "stream.start",
             Command::StreamStop {} => "stream.stop",
             Command::StreamToggle {} => "stream.toggle",
+            Command::ReplayStart {} => "replay.start",
+            Command::ReplayStop {} => "replay.stop",
+            Command::ReplayToggle {} => "replay.toggle",
+            Command::ReplaySave {} => "replay.save",
             Command::OpenSettings {} => "app.settings",
             Command::Exit {} => "app.exit",
             Command::AppLinks { .. } => "app.links",
@@ -359,6 +375,10 @@ const SPECS: &[CommandSpec] = &[
     spec("stream.start", "Start Streaming", "", Undo::NotUndoable),
     spec("stream.stop", "Stop Streaming", "", Undo::NotUndoable),
     spec("stream.toggle", "Start or Stop Streaming", "", Undo::NotUndoable),
+    spec("replay.start", "Start Replay Buffer", "", Undo::NotUndoable),
+    spec("replay.stop", "Stop Replay Buffer", "", Undo::NotUndoable),
+    spec("replay.toggle", "Start or Stop Replay Buffer", "", Undo::NotUndoable),
+    spec("replay.save", "Save Replay", "", Undo::NotUndoable),
     spec("app.settings", "Settings", "", Undo::NotUndoable),
     spec("app.exit", "Exit", "", Undo::NotUndoable),
     spec("app.links", "Community Links", "link?: discord|website|github|issues", Undo::NotUndoable),

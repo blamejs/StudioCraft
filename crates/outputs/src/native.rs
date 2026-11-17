@@ -24,6 +24,9 @@
 //! [`RECORDING_KEYFRAME_S`] seconds). The size of the segment is written last. A recording that
 //! is not finished (the app was ended, or finishing took longer than [`FINISH_TIMEOUT`]) still
 //! plays up to its last whole cluster.
+//!
+//! The replay buffer ([`crate::replay`]) runs the same two encoder threads; its third thread keeps
+//! the packets in memory instead of writing them ([`Sink`]).
 
 use std::collections::VecDeque;
 use std::fs::File;
@@ -60,24 +63,50 @@ const NS: i128 = 1_000_000_000;
 
 /// The file's tracks, in the order the file lists them.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Track {
+pub(crate) enum Track {
     Video = 0,
     Audio = 1,
 }
 
 /// One packet on its way to the file.
-struct Item {
-    track: Track,
+pub(crate) struct Item {
+    pub(crate) track: Track,
     /// When the packet is written relative to the other track: its decoding time, or for a
     /// video keyframe its presentation time.
-    order_ns: i64,
-    pts_ns: i64,
-    keyframe: bool,
-    data: Vec<u8>,
+    pub(crate) order_ns: i64,
+    pub(crate) pts_ns: i64,
+    pub(crate) keyframe: bool,
+    pub(crate) data: Vec<u8>,
+}
+
+/// Where the third thread puts the packets, in file order: a Matroska file, or the replay
+/// buffer's memory.
+pub(crate) trait Sink: Send {
+    /// Take the next packet.
+    fn write(&mut self, item: Item) -> Result<(), String>;
+    /// Called on every turn of the thread's loop, also when no packet came.
+    fn poll(&mut self) {}
+    /// Both encoders have ended and every packet was written.
+    fn finish(self: Box<Self>) -> Result<(), String>;
+}
+
+/// A recording's file.
+struct FileSink(Mux);
+
+impl Sink for FileSink {
+    fn write(&mut self, item: Item) -> Result<(), String> {
+        self.0
+            .write_frame(item.track as usize, item.pts_ns, item.keyframe, &item.data, None)
+            .map_err(|e| format!("the recording could not be written: {e}"))
+    }
+    fn finish(self: Box<Self>) -> Result<(), String> {
+        let mut w = self.0.finish().map_err(|e| format!("the recording could not be finished: {e}"))?;
+        w.flush().map_err(|e| format!("the recording could not be finished: {e}"))
+    }
 }
 
 /// Packets from the two encoder threads to the file thread, bounded by bytes and media time.
-struct PacketQueue {
+pub(crate) struct PacketQueue {
     q: ArrayQueue<Item>,
     /// Bytes of the packets in the queue and of those the file thread has taken and not yet
     /// written ([`PacketQueue::written`]).
@@ -89,7 +118,7 @@ struct PacketQueue {
 }
 
 impl PacketQueue {
-    fn new(max_bytes: usize, max_span_ns: i64) -> Self {
+    pub(crate) fn new(max_bytes: usize, max_span_ns: i64) -> Self {
         PacketQueue { q: ArrayQueue::new(4096), bytes: AtomicUsize::new(0), taken_ns: AtomicI64::new(i64::MIN), max_bytes, max_span_ns }
     }
 
@@ -276,7 +305,7 @@ fn samples_ns(n: i64) -> i64 {
 }
 
 /// The file's tracks: H.264 video (`avc` is its `avcC` record) and AAC audio.
-fn tracks(job: &OutputJob, avc: Vec<u8>, aac: &AacSession) -> Vec<TrackSpec> {
+pub(crate) fn tracks(job: &OutputJob, avc: Vec<u8>, aac: &AacSession) -> Vec<TrackSpec> {
     let v = job.video;
     let mut video = TrackSpec::new(TrackKind::Video, "V_MPEG4/ISO/AVC");
     video.codec_private = avc;
@@ -306,10 +335,28 @@ pub struct Native {
 impl Native {
     /// Open the encoders for `job` and start writing a Matroska file at `path`.
     pub fn start(job: &OutputJob, path: &Path) -> Result<Native, PluginError> {
-        Self::start_with(job, path, PacketQueue::new(QUEUE_BYTES, QUEUE_SPAN_NS), DISK_WAIT)
+        Self::start_file(job, path, PacketQueue::new(QUEUE_BYTES, QUEUE_SPAN_NS), DISK_WAIT)
     }
 
-    fn start_with(job: &OutputJob, path: &Path, packets: PacketQueue, disk_wait: Duration) -> Result<Native, PluginError> {
+    fn start_file(job: &OutputJob, path: &Path, packets: PacketQueue, disk_wait: Duration) -> Result<Native, PluginError> {
+        let open = |tracks: Vec<TrackSpec>| -> Result<Box<dyn Sink>, PluginError> {
+            let file = File::create(path).map_err(|e| PluginError::Failed(format!("{} could not be written: {e}", path.display())))?;
+            let out = Counted { inner: BufWriter::with_capacity(1 << 20, file), pos: 0, stats: Arc::clone(&job.stats) };
+            let opts = MuxOptions { writing_app: writing_app(), ..MuxOptions::default() };
+            let mux = MkvWriter::new(out, tracks, opts).map_err(|e| PluginError::Failed(format!("{} could not be written: {e}", path.display())))?;
+            Ok(Box::new(FileSink(mux)))
+        };
+        Self::start_with(job, open, packets, disk_wait)
+    }
+
+    /// Open the encoders for `job` and start them, with the packets going to the sink `open`
+    /// makes from the file's tracks.
+    pub(crate) fn start_with(
+        job: &OutputJob,
+        open: impl FnOnce(Vec<TrackSpec>) -> Result<Box<dyn Sink>, PluginError>,
+        packets: PacketQueue,
+        disk_wait: Duration,
+    ) -> Result<Native, PluginError> {
         let v = job.video;
         if job.sample_rate != SAMPLE_RATE {
             return Err(PluginError::Failed(format!("the built-in encoders take audio at {SAMPLE_RATE} Hz, not {} Hz", job.sample_rate)));
@@ -329,11 +376,7 @@ impl Native {
         let params = VideoParams { width: v.width, height: v.height, fps_num: v.fps_num, fps_den: v.fps_den, rate: job.rate };
         let session = job.video_encoder.open(&job.video_encoder_settings, &params)?;
         let aac = AacSession::new(job.audio_bitrate_kbps)?;
-        let file = File::create(path).map_err(|e| PluginError::Failed(format!("{} could not be written: {e}", path.display())))?;
-        let out = Counted { inner: BufWriter::with_capacity(1 << 20, file), pos: 0, stats: Arc::clone(&job.stats) };
-        let opts = MuxOptions { writing_app: format!("StudioCraft {}", env!("CARGO_PKG_VERSION")), ..MuxOptions::default() };
-        let mux = MkvWriter::new(out, tracks(job, session.codec_private(), &aac), opts)
-            .map_err(|e| PluginError::Failed(format!("{} could not be written: {e}", path.display())))?;
+        let sink = open(tracks(job, session.codec_private(), &aac))?;
 
         let fps = f64::from(v.fps_num) / f64::from(v.fps_den.max(1));
         let video = Arc::new(Fifo::new((fps.ceil() as usize).clamp(8, 240)));
@@ -352,7 +395,7 @@ impl Native {
         let started = started.and_then(|t| {
             threads.push(t);
             let sh = Arc::clone(&shared);
-            spawn("encoder file", Box::new(move || write_file(mux, &sh)))
+            spawn("encoder file", Box::new(move || write_file(sink, &sh)))
         });
         match started {
             Ok(t) => threads.push(t),
@@ -599,18 +642,19 @@ fn next_item(pending: &mut [VecDeque<Item>; 2], ended: [bool; 2]) -> Result<Opti
     Ok(pending[pick].pop_front())
 }
 
-fn write_file(mut mux: Mux, shared: &Shared) {
+fn write_file(mut sink: Box<dyn Sink>, shared: &Shared) {
     let _writing = Writing(shared);
     let mut pending: [VecDeque<Item>; 2] = [VecDeque::new(), VecDeque::new()];
-    let write = |mux: &mut Mux, item: Item| -> Result<(), String> {
-        mux.write_frame(item.track as usize, item.pts_ns, item.keyframe, &item.data, None)
-            .map_err(|e| format!("the recording could not be written: {e}"))?;
-        if item.track == Track::Audio {
+    let write = |sink: &mut Box<dyn Sink>, item: Item| -> Result<(), String> {
+        let audio = item.track == Track::Audio;
+        sink.write(item)?;
+        if audio {
             shared.started.store(true, Ordering::Relaxed);
         }
         Ok(())
     };
     loop {
+        sink.poll();
         if shared.abandon.load(Ordering::SeqCst) {
             // Dropping the writer writes out what it has buffered, without finishing the file.
             return;
@@ -639,7 +683,7 @@ fn write_file(mut mux: Mux, shared: &Shared) {
                 }
             };
             let len = item.data.len();
-            let wrote = write(&mut mux, item);
+            let wrote = write(&mut sink, item);
             shared.packets.written(len);
             if let Err(e) = wrote {
                 shared.fail(e);
@@ -655,11 +699,15 @@ fn write_file(mut mux: Mux, shared: &Shared) {
             std::thread::sleep(IDLE);
         }
     }
-    let finished = mux.finish().map_err(|e| e.to_string()).and_then(|mut w| w.flush().map_err(|e| e.to_string()));
-    if let Err(e) = finished {
-        shared.fail(format!("the recording could not be finished: {e}"));
+    if let Err(e) = sink.finish() {
+        shared.fail(e);
     }
 }
 
+/// The name a file written by the built-in encoders gives for the program that wrote it.
+pub(crate) fn writing_app() -> String {
+    format!("StudioCraft {}", env!("CARGO_PKG_VERSION"))
+}
+
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

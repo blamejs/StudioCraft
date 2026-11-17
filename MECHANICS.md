@@ -82,6 +82,12 @@ in both files.
 | Built-in recording packet queue | 64 MiB and 3 s of media | `outputs::native::QUEUE_BYTES`, `outputs::native::QUEUE_SPAN_NS` | estimated |
 | Built-in recording encoder lag before it fails | 10 s | `outputs::native::MAX_LAG_NS` | estimated |
 | Recording file name | `YYYY-MM-DD HH-MM-SS.<ext>` | `studio::outputs::recording_path` | estimated |
+| Replay buffer length | 20 s (5 to 3600 s) | `model::profile::ReplaySettings` | estimated |
+| Replay buffer memory limit | 512 MB (32 to 16384 MB) | `model::profile::ReplaySettings` | estimated |
+| Replay buffer encoders | H.264 (built in) at the recording's quality (High for Lossless), AAC at 192 kbps | `studio::outputs::plan` | estimated |
+| Replays saved at once (waiting for the buffer or being written) | 8 | `outputs::replay::MAX_SAVES` | estimated |
+| Replay save wait for the buffer's packets | 5 s | `outputs::replay::ANSWER_WAIT` | estimated |
+| Saved replay file name | `Replay YYYY-MM-DD HH-MM-SS.mkv` | `studio::outputs::replay_path` | estimated |
 
 ## Editing
 

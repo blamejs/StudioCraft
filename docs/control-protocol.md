@@ -23,7 +23,7 @@ answer.
 | --- | --- | --- |
 | `engine.execute` | `{"command": "<id>", "params"?: {...}}` | The command's result. |
 | `engine.commands` | `{"filter"?: "<text>"}` | Every command, or those whose id or label contains `filter` (case is ignored). |
-| `document.inspect` | `{"detail"?: "summary" \| "full"}` | The scene collection, studio mode, recording and stream state, frame statistics and canvas. `summary` (the default) leaves out the `settings` of sources, filters and the transition. |
+| `document.inspect` | `{"detail"?: "summary" \| "full"}` | The scene collection, studio mode, recording, stream and replay buffer state (`recording`, `streaming`, `replay`), frame statistics and canvas. `summary` (the default) leaves out the `settings` of sources, filters and the transition. |
 | `render.preview` | `{"view"?: "program" \| "preview", "max_side"?: 0-4096}` | `{"width", "height", "png_base64"}`: a PNG of the program, or of the preview in studio mode. |
 | `ui.inspect` | none | The window's layout and open dialogs (see below). |
 | `ui.menu.list` | none | The menu bar as the window shows it, as a tree. |
@@ -34,7 +34,7 @@ answer.
 | `ui.type` | `{"text": "..."}` | `{"queued": true}` |
 | `ui.dialog` | `{"answer": "ok" \| "cancel", "text"?: "..."}` | `{"dialog", "closed": true}`: `dialog` is `prompt` (with the accepted `name` after OK) or `confirm_exit` (with `exiting`). |
 | `ui.screenshot` | `{"max_side"?: 0-4096}` | `{"width", "height", "png_base64"}`: a PNG of the whole window. |
-| `app.quit` | none | `{"confirming": bool}`: whether the window asks first because a recording or stream runs. |
+| `app.quit` | none | `{"confirming": bool}`: whether the window asks first because a recording, stream or replay buffer runs. |
 
 The older method names still work. `run` is `engine.execute` and `commands` is
 `engine.commands`. `state` returns the full `document.inspect` result together with a `ui` object
@@ -81,8 +81,8 @@ fails when no picture arrives within the 30 second answer limit. At most 8 scree
 at once. `render.preview` waits up to 5 seconds for the compositor; without a graphics device it
 fails with "nothing is drawn: the studio runs without a graphics device".
 
-`app.quit` closes the window as File › Exit does. While a recording or stream runs, the window
-asks for confirmation first, and the reply's `confirming` is `true`.
+`app.quit` closes the window as File › Exit does. While a recording, stream or replay buffer runs,
+the window asks for confirmation first, and the reply's `confirming` is `true`.
 
 `ui.dialog` answers the open name prompt (New Profile, Rename Scene Collection and the others) or
 the exit confirmation as its buttons do. `ok` presses OK in the name prompt and Stop and Exit in

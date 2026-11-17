@@ -490,8 +490,13 @@ impl StudioApp {
         }
     }
 
+    /// Whether the recording, the stream or the replay buffer runs or is stopping.
+    fn outputs_running(&self) -> bool {
+        [OutputKind::Recording, OutputKind::Streaming, OutputKind::Replay].iter().any(|k| self.studio.output(*k).is_some())
+    }
+
     fn request_exit(&mut self, ctx: &egui::Context) {
-        let busy = [OutputKind::Recording, OutputKind::Streaming].iter().any(|k| self.studio.output(*k).is_some());
+        let busy = self.outputs_running();
         if busy && !self.exit_confirmed {
             self.confirm_exit = true;
         } else {
@@ -1360,6 +1365,7 @@ impl StudioApp {
         let notice = self.notices.back().map(|(n, _)| (n.msg.shown(), n.error));
         let rec = self.studio.output(OutputKind::Recording);
         let live = self.studio.output(OutputKind::Streaming);
+        let replay = self.studio.output(OutputKind::Replay);
         let height = theme::sizes(ui.ctx()).bar_status;
         let line = theme::palette(ui.ctx()).line;
         let frame = egui::Frame::side_top_panel(ui.style()).inner_margin(egui::Margin::symmetric(8, 0));
@@ -1376,7 +1382,7 @@ impl StudioApp {
                     ui.separator();
                     let (dropped, lagged) = (stats.encoder_dropped.to_string(), stats.lagged.to_string());
                     ui.monospace(craft_i18n::fmt(tl!("dropped {dropped}  lagged {lagged}"), &[("dropped", &dropped), ("lagged", &lagged)]));
-                    for (s, tag) in [(live, tl!("LIVE")), (rec, tl!("REC"))] {
+                    for (s, tag) in [(live, tl!("LIVE")), (rec, tl!("REC")), (replay, tl!("REPLAY"))] {
                         if let Some(s) = s.filter(|s| s.active) {
                             ui.separator();
                             let t = s.elapsed.as_secs();
@@ -1489,7 +1495,9 @@ impl StudioApp {
                         ui.monospace(v);
                         ui.end_row();
                     }
-                    for (kind, label) in [(OutputKind::Recording, "Recording"), (OutputKind::Streaming, "Stream")] {
+                    for (kind, label) in
+                        [(OutputKind::Recording, "Recording"), (OutputKind::Streaming, "Stream"), (OutputKind::Replay, "Replay buffer")]
+                    {
                         if let Some(o) = self.studio.output(kind) {
                             ui.label(tl!(label));
                             let mb = format!("{:.1}", o.bytes as f64 / 1e6);
@@ -1603,8 +1611,8 @@ impl StudioApp {
             }
         }
 
-        // An update never starts while a recording or stream runs.
-        let idle = [OutputKind::Recording, OutputKind::Streaming].iter().all(|k| self.studio.output(*k).is_none());
+        // An update never starts while a recording, stream or replay buffer runs.
+        let idle = !self.outputs_running();
         match updates_ui::show(&mut self.updates, ctx, idle) {
             updates_ui::Asked::Nothing => {}
             updates_ui::Asked::OpenUrl(url) => {
@@ -1656,7 +1664,9 @@ impl StudioApp {
             let mut choice = None;
             egui::Modal::new(egui::Id::unique("confirm-exit")).show(ctx, |ui| {
                 ui.heading(tl!("Exit StudioCraft?"));
-                ui.label(tl!("A recording or stream is running. Exiting stops it; a recording is finished and saved first."));
+                ui.label(tl!(
+                    "A recording, stream or replay buffer is running. Exiting stops it; a recording is finished and saved first, and the replay buffer's unsaved video is lost."
+                ));
                 ui.horizontal(|ui| {
                     if ui.button(tl!("Stop and Exit")).clicked() {
                         choice = Some(true);
@@ -1715,7 +1725,7 @@ impl StudioApp {
     /// Before the frame: a close request waits for confirmation while an output runs.
     pub fn logic(&mut self, ctx: &egui::Context) {
         if ctx.input(|i| i.viewport().close_requested()) {
-            let busy = [OutputKind::Recording, OutputKind::Streaming].iter().any(|k| self.studio.output(*k).is_some());
+            let busy = self.outputs_running();
             if busy && !self.exit_confirmed {
                 ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
                 self.confirm_exit = true;

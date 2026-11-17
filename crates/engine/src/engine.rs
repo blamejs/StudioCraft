@@ -179,6 +179,10 @@ impl Engine {
             Command::StreamStart {} => Ok(Outcome::runtime(RuntimeAction::StartStreaming)),
             Command::StreamStop {} => Ok(Outcome::runtime(RuntimeAction::StopStreaming)),
             Command::StreamToggle {} => Ok(Outcome::runtime(RuntimeAction::ToggleStreaming)),
+            Command::ReplayStart {} => Ok(Outcome::runtime(RuntimeAction::StartReplay)),
+            Command::ReplayStop {} => Ok(Outcome::runtime(RuntimeAction::StopReplay)),
+            Command::ReplayToggle {} => Ok(Outcome::runtime(RuntimeAction::ToggleReplay)),
+            Command::ReplaySave {} => Ok(Outcome::runtime(RuntimeAction::SaveReplay)),
             Command::OpenSettings {} => Ok(Outcome::runtime(RuntimeAction::OpenSettings)),
             Command::Exit {} => Ok(Outcome::runtime(RuntimeAction::Exit)),
             // Queries: no history step, no revision bump, no change to the dirty flag.

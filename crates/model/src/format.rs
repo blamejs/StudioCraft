@@ -46,7 +46,7 @@ pub struct FileFormat {
 pub const COLLECTION: FileFormat = FileFormat { name: "studiocraft.scene-collection", version: 1, migrations: &[] };
 
 /// Profiles.
-pub const PROFILE: FileFormat = FileFormat { name: "studiocraft.profile", version: 2, migrations: &[profile_v1_to_v2] };
+pub const PROFILE: FileFormat = FileFormat { name: "studiocraft.profile", version: 3, migrations: &[profile_v1_to_v2, profile_v2_to_v3] };
 
 /// Profile version 1 to 2: the recording and the stream each keep the settings of their video
 /// encoders (`encoder_settings`, empty until the user changes one).
@@ -57,6 +57,14 @@ fn profile_v1_to_v2(data: &mut Value) -> Result<(), String> {
             s.entry("encoder_settings").or_insert_with(|| json!({}));
         }
     }
+    Ok(())
+}
+
+/// Profile version 2 to 3: the replay buffer's length and memory limit (`replay`), at 20 seconds
+/// and 512 MB.
+fn profile_v2_to_v3(data: &mut Value) -> Result<(), String> {
+    let data = data.as_object_mut().ok_or("the profile is not an object")?;
+    data.entry("replay").or_insert_with(|| json!({"seconds": 20, "memory_mb": 512}));
     Ok(())
 }
 
@@ -134,10 +142,12 @@ pub fn write_profile(p: &Profile) -> Result<String, FormatError> {
     PROFILE.write(p)
 }
 
-/// A profile from a file's text, migrated, with video settings brought into range.
+/// A profile from a file's text, migrated, with video and replay buffer settings brought into
+/// range.
 pub fn read_profile(text: &str) -> Result<Profile, FormatError> {
     let mut p: Profile = PROFILE.read(text)?;
     p.video = p.video.sanitized();
+    p.replay = p.replay.sanitized();
     Ok(p)
 }
 
@@ -147,7 +157,11 @@ mod tests {
 
     /// Every version ever written, oldest first: `(version, text)`. A new version adds a line.
     const COLLECTION_FIXTURES: &[(u32, &str)] = &[(1, include_str!("../fixtures/collection-v1.json"))];
-    const PROFILE_FIXTURES: &[(u32, &str)] = &[(1, include_str!("../fixtures/profile-v1.json")), (2, include_str!("../fixtures/profile-v2.json"))];
+    const PROFILE_FIXTURES: &[(u32, &str)] = &[
+        (1, include_str!("../fixtures/profile-v1.json")),
+        (2, include_str!("../fixtures/profile-v2.json")),
+        (3, include_str!("../fixtures/profile-v3.json")),
+    ];
 
     fn covers_every_version(format: &FileFormat, fixtures: &[(u32, &str)]) {
         assert_eq!(format.migrations.len() as u32, format.version - 1, "{}: one migration per version step", format.name);
@@ -190,6 +204,21 @@ mod tests {
         other.output.video_encoder = "nvenc_h264".into();
         assert_eq!(other.output.video_encoder_settings(), crate::Settings::new(), "another encoder does not take x264's preset");
         assert_eq!(read_profile(&write_profile(&p).unwrap()).unwrap(), p);
+    }
+
+    #[test]
+    fn profiles_keep_the_replay_buffer_settings() {
+        for (v, text) in &PROFILE_FIXTURES[..2] {
+            let p = read_profile(text).unwrap();
+            assert_eq!(p.replay, crate::ReplaySettings { seconds: 20, memory_mb: 512 }, "version {v} gets the defaults");
+        }
+        let (_, v3) = PROFILE_FIXTURES[2];
+        let p = read_profile(v3).unwrap();
+        assert_eq!(p.replay, crate::ReplaySettings { seconds: 45, memory_mb: 1024 });
+        assert_eq!(read_profile(&write_profile(&p).unwrap()).unwrap(), p);
+        let wild = v3.replace("\"seconds\": 45", "\"seconds\": 1").replace("\"memory_mb\": 1024", "\"memory_mb\": 999999");
+        let p = read_profile(&wild).unwrap();
+        assert_eq!(p.replay, crate::ReplaySettings { seconds: 5, memory_mb: 16_384 }, "values out of range are brought into it");
     }
 
     #[test]

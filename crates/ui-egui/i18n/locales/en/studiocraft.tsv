@@ -2,7 +2,7 @@
 # Columns: context, source text, translation (here the source text again).
 # This catalog is not embedded. The other locales translate these rows.
 	`{shortcut}`: {error}	`{shortcut}`: {error}
-	A recording or stream is running. Exiting stops it; a recording is finished and saved first.	A recording or stream is running. Exiting stops it; a recording is finished and saved first.
+	A recording, stream or replay buffer is running. Exiting stops it; a recording is finished and saved first, and the replay buffer's unsaved video is lost.	A recording, stream or replay buffer is running. Exiting stops it; a recording is finished and saved first, and the replay buffer's unsaved video is lost.
 	About StudioCraft	About StudioCraft
 	About {app}	About {app}
 	Add	Add
@@ -152,6 +152,7 @@
 	Loop	Loop
 	Low (dB)	Low (dB)
 	Maximize	Maximize
+	MB	MB
 	Media file	Media file
 	Media files	Media files
 	medium	medium
@@ -227,6 +228,15 @@
 	Remove the selected source from the scene	Remove the selected source from the scene
 	Rename	Rename
 	Rename…	Rename…
+	Replay	Replay
+	REPLAY	REPLAY
+	Replay buffer	Replay buffer
+	Replay Buffer	Replay Buffer
+	Replay buffer length	Replay buffer length
+	Replay buffer memory limit	Replay buffer memory limit
+	Replay buffer, {time}	Replay buffer, {time}
+	Replay length (seconds)	Replay length (seconds)
+	Replay memory limit (MB)	Replay memory limit (MB)
 	Report an Issue	Report an Issue
 	Reset Docks	Reset Docks
 	Reset Transform	Reset Transform
@@ -239,6 +249,7 @@
 	Running	Running
 	s	s
 	Saturation	Saturation
+	Save Replay	Save Replay
 	Scene Collection	Scene Collection
 	Scene {n}	Scene {n}
 	Scenes	Scenes
@@ -264,16 +275,20 @@
 	Sources	Sources
 	Speed	Speed
 	Start or Stop Recording	Start or Stop Recording
+	Start or Stop Replay Buffer	Start or Stop Replay Buffer
 	Start or Stop Streaming	Start or Stop Streaming
 	Start Recording	Start Recording
+	Start Replay Buffer	Start Replay Buffer
 	Start Streaming	Start Streaming
 	Starting…	Starting…
 	Stats	Stats
 	Status Bar	Status Bar
 	Stop and Exit	Stop and Exit
 	Stop Recording	Stop Recording
+	Stop Replay Buffer	Stop Replay Buffer
 	Stop Streaming	Stop Streaming
 	Stopped	Stopped
+	Stopping Replay Buffer…	Stopping Replay Buffer…
 	Stopping…	Stopping…
 	Stream	Stream
 	Stream key	Stream key
@@ -316,7 +331,7 @@
 	Video	Video
 	Video bitrate	Video bitrate
 	Video encoder	Video encoder
-	Video settings can't change while recording or streaming.	Video settings can't change while recording or streaming.
+	Video settings can't change while recording, streaming or running the replay buffer.	Video settings can't change while recording, streaming or running the replay buffer.
 	View	View
 	Waiting for the program picture…	Waiting for the program picture…
 	Waveform	Waveform
@@ -342,12 +357,19 @@
 @msg	Imported the scene collection `{name}`	Imported the scene collection `{name}`
 @msg	No file dialog could be shown: {error}	No file dialog could be shown: {error}
 @msg	Recording saved to {path}	Recording saved to {path}
+@msg	Replay saved to {path}	Replay saved to {path}
 @msg	The compositor thread could not start: {error}	The compositor thread could not start: {error}
 @msg	The preferences could not be saved: {error}	The preferences could not be saved: {error}
 @msg	The profile could not be saved: {error}	The profile could not be saved: {error}
 @msg	The recording could not be finished	The recording could not be finished
 @msg	The recording could not be finished: {error}	The recording could not be finished: {error}
 @msg	The recording stopped: {error}	The recording stopped: {error}
+@msg	The replay buffer could not be stopped	The replay buffer could not be stopped
+@msg	The replay buffer could not be stopped: {error}	The replay buffer could not be stopped: {error}
+@msg	The replay buffer stopped	The replay buffer stopped
+@msg	The replay buffer stopped: {error}	The replay buffer stopped: {error}
+@msg	The replay could not be saved	The replay could not be saved
+@msg	The replay could not be saved: {error}	The replay could not be saved: {error}
 @msg	The scene collection could not be saved: {error}	The scene collection could not be saved: {error}
 @msg	The scopes could not start: {error}	The scopes could not start: {error}
 @msg	The stream could not be finished	The stream could not be finished

@@ -13,7 +13,7 @@ use crate::{Backend, Headless, MAX_BATCH_STEPS, McpError, Remote, Roots, Server,
 
 const TOKEN: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
-const TOOLS: [&str; 21] = [
+const TOOLS: [&str; 24] = [
     "command_list",
     "command_run",
     "command_batch",
@@ -34,6 +34,9 @@ const TOOLS: [&str; 21] = [
     "record_stop",
     "stream_start",
     "stream_stop",
+    "replay_start",
+    "replay_stop",
+    "replay_save",
     "output_status",
 ];
 
@@ -1028,6 +1031,37 @@ fn record_start_is_held_to_the_write_roots() {
     let mut s = Server::new(Box::new(h)).unwrap();
     let text = error_text(&call(&mut s, "record_start", json!({})));
     assert!(!text.contains("write roots"), "{text}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn replay_tools_report_the_replay_buffer() {
+    let mut s = server();
+    let state = outputs(&mut s);
+    assert_eq!(state["replay"]["active"], false, "{state}");
+    assert_eq!(state["replay"]["saving"], 0, "{state}");
+    assert_eq!(ok_json(&call(&mut s, "replay_stop", json!({})))["replay"]["active"], false);
+    let text = error_text(&call(&mut s, "replay_save", json!({})));
+    assert_eq!(text, StudioError::Output("the replay buffer is not running; start it first".into()).to_string());
+    // Without a graphics device the replay buffer does not start.
+    let text = error_text(&call(&mut s, "replay_start", json!({})));
+    assert_eq!(text, StudioError::Output("nothing can be recorded or streamed without the graphics device".into()).to_string());
+    assert_eq!(outputs(&mut s)["replay"]["active"], false);
+}
+
+#[test]
+fn replay_save_is_held_to_the_write_roots() {
+    let dir = root_folders("replay-roots");
+    let roots = Roots::new(&[dir.join("in")], &[dir.join("out")]).unwrap();
+    let mut h = Headless::with_options(None, ServerOptions { allow_streaming: false, roots: Some(roots) }).unwrap();
+    let mut profile = h.studio().profile().clone();
+    profile.output.folder = text_of(&dir.join("outside"));
+    h.studio_mut().set_profile(profile).unwrap();
+    let mut s = Server::new(Box::new(h)).unwrap();
+    for (tool, args) in [("replay_save", json!({})), ("command_run", json!({"id": "replay.save"}))] {
+        let text = error_text(&call(&mut s, tool, args));
+        assert!(text.contains("outside the write roots"), "{tool}: {text}");
+    }
     let _ = std::fs::remove_dir_all(&dir);
 }
 

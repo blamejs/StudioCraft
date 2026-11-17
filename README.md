@@ -45,6 +45,12 @@ and Linux.
   and streams. Settings › Output and Settings › Stream show the chosen encoder's settings, such as
   the x264 and NVENC presets. Tools › Available Encoders lists H.264 (built in) and the encoders the
   installed `ffmpeg` offers, and says when `ffmpeg` was not found.
+- **Replay buffer.** File › Replay Buffer keeps the last seconds of the program in memory with the
+  built-in H.264 and AAC encoders, and File › Save Replay writes them to an MKV file named
+  `Replay <date> <time>.mkv` in the recording folder while the buffer keeps running. Settings ›
+  Output sets the length (5 to 3600 seconds, 20 by default) and the memory limit (32 to 16384 MB,
+  512 by default). Start or Stop Replay Buffer and Save Replay can be given shortcuts in Settings ›
+  Hotkeys, and the status bar shows REPLAY with the time it has run.
 - **Profiles and scene collections.** Keep several sets of stream and output settings, and several
   sets of scenes, and switch between them from the menu bar.
 - **Shortcuts.** Change the shortcuts in Settings › Hotkeys.
