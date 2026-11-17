@@ -7,6 +7,9 @@ which holds the frame color tags, the Y'CbCr matrices and the sRGB, PQ and HLG t
 functions. It depends on `craft-color` and `serde` only, contains no `unsafe` code, and builds for
 `wasm32-unknown-unknown`. The per-pixel functions take `f32` and do not allocate.
 
+`craft-cms` has its own 3×3 matrix and Bradford helpers (`craft_cms::math`) for ICC work in the
+D50 connection space. `Mat3` converts to and from their row-major `[[f64; 3]; 3]` with `From`.
+
 License: MIT OR Apache-2.0.
 
 ## Contents
@@ -34,7 +37,8 @@ License: MIT OR Apache-2.0.
   finite or is beyond ±1e6. A saved curve is read back through the same constructor, so a file
   cannot give it mismatched arrays.
 - `Lut1::from_fn` and `MonotoneCurve::to_lut` build at most 65 536 entries.
-- Luminances are clamped to 0..10 000 nits.
+- Luminances are clamped to 0..10 000 nits. A target peak that is NaN or not above 0 gives an
+  EETF and a `ToneMap` that pass values through.
 
 ## Tests
 

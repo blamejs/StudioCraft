@@ -68,6 +68,19 @@ impl Mat3 {
     }
 }
 
+/// A row-major array, the form `craft_cms::math::Mat3` takes.
+impl From<[[f64; 3]; 3]> for Mat3 {
+    fn from(m: [[f64; 3]; 3]) -> Mat3 {
+        Mat3(m)
+    }
+}
+
+impl From<Mat3> for [[f64; 3]; 3] {
+    fn from(m: Mat3) -> [[f64; 3]; 3] {
+        m.0
+    }
+}
+
 /// A CIE 1931 xy chromaticity.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Xy {
@@ -103,10 +116,10 @@ pub const D65: Xy = Xy::new(0.3127, 0.3290);
 /// CIE illuminant D50, the ICC profile connection space white.
 pub const D50: Xy = Xy::new(0.3457, 0.3585);
 
-/// An RGB color space: three primaries and a white point.
-#[derive(Clone, Copy, Debug, PartialEq)]
+/// An RGB color space: three primaries and a white point. A space read at run time (from a
+/// file's primaries or a stream's mastering metadata) is built with a struct literal.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct RgbSpace {
-    pub name: &'static str,
     pub r: Xy,
     pub g: Xy,
     pub b: Xy,
@@ -114,17 +127,15 @@ pub struct RgbSpace {
 }
 
 /// The ITU-R BT.709 primaries, which sRGB (IEC 61966-2-1) shares.
-pub const SRGB: RgbSpace = RgbSpace { name: "BT.709 / sRGB", r: Xy::new(0.64, 0.33), g: Xy::new(0.30, 0.60), b: Xy::new(0.15, 0.06), white: D65 };
+pub const SRGB: RgbSpace = RgbSpace { r: Xy::new(0.64, 0.33), g: Xy::new(0.30, 0.60), b: Xy::new(0.15, 0.06), white: D65 };
 /// ITU-R BT.601, 625-line systems.
-pub const REC601_625: RgbSpace = RgbSpace { name: "BT.601 625", r: Xy::new(0.64, 0.33), g: Xy::new(0.29, 0.60), b: Xy::new(0.15, 0.06), white: D65 };
+pub const REC601_625: RgbSpace = RgbSpace { r: Xy::new(0.64, 0.33), g: Xy::new(0.29, 0.60), b: Xy::new(0.15, 0.06), white: D65 };
 /// ITU-R BT.601, 525-line systems.
-pub const REC601_525: RgbSpace =
-    RgbSpace { name: "BT.601 525", r: Xy::new(0.630, 0.340), g: Xy::new(0.310, 0.595), b: Xy::new(0.155, 0.070), white: D65 };
+pub const REC601_525: RgbSpace = RgbSpace { r: Xy::new(0.630, 0.340), g: Xy::new(0.310, 0.595), b: Xy::new(0.155, 0.070), white: D65 };
 /// ITU-R BT.2020 (and BT.2100).
-pub const REC2020: RgbSpace = RgbSpace { name: "BT.2020", r: Xy::new(0.708, 0.292), g: Xy::new(0.170, 0.797), b: Xy::new(0.131, 0.046), white: D65 };
+pub const REC2020: RgbSpace = RgbSpace { r: Xy::new(0.708, 0.292), g: Xy::new(0.170, 0.797), b: Xy::new(0.131, 0.046), white: D65 };
 /// The DCI-P3 primaries with a D65 white (SMPTE EG 432-1).
-pub const DISPLAY_P3: RgbSpace =
-    RgbSpace { name: "P3 D65", r: Xy::new(0.680, 0.320), g: Xy::new(0.265, 0.690), b: Xy::new(0.150, 0.060), white: D65 };
+pub const DISPLAY_P3: RgbSpace = RgbSpace { r: Xy::new(0.680, 0.320), g: Xy::new(0.265, 0.690), b: Xy::new(0.150, 0.060), white: D65 };
 
 impl From<Primaries> for RgbSpace {
     fn from(p: Primaries) -> RgbSpace {
@@ -218,7 +229,7 @@ mod tests {
         for (space, want) in [(SRGB, [0.2126, 0.7152, 0.0722]), (REC2020, [0.2627, 0.6780, 0.0593])] {
             let l = space.luma();
             for i in 0..3 {
-                assert!((l[i] - want[i]).abs() < 1e-4, "{} {l:?}", space.name);
+                assert!((l[i] - want[i]).abs() < 1e-4, "{space:?} {l:?}");
             }
         }
     }
@@ -267,8 +278,19 @@ mod tests {
         assert_eq!(bradford(Xy::new(0.3, 0.0), D65), Mat3::IDENTITY);
         assert_eq!(bradford(D65, Xy::new(f64::INFINITY, 0.3)), Mat3::IDENTITY);
         assert_eq!(bradford_xyz([-1.0, 1.0, 1.0], [0.95, 1.0, 1.09]), Mat3::IDENTITY);
-        let flat = RgbSpace { name: "flat", r: Xy::new(0.2, 0.2), g: Xy::new(0.3, 0.3), b: Xy::new(0.4, 0.4), white: D65 };
+        let flat = RgbSpace { r: Xy::new(0.2, 0.2), g: Xy::new(0.3, 0.3), b: Xy::new(0.4, 0.4), white: D65 };
         assert_eq!(flat.to_xyz(), Mat3::IDENTITY);
         assert_eq!(Mat3([[f64::NAN; 3]; 3]).inverse(), None);
+    }
+
+    /// A space built from primaries read at run time saves and loads, and its matrix converts
+    /// to and from a plain array.
+    #[test]
+    fn spaces_save_and_load() {
+        let read = RgbSpace { r: Xy::new(0.7, 0.29), g: Xy::new(0.16, 0.8), b: Xy::new(0.13, 0.05), white: D50 };
+        let json = serde_json::to_string(&read).unwrap();
+        assert_eq!(serde_json::from_str::<RgbSpace>(&json).unwrap(), read);
+        let m: [[f64; 3]; 3] = read.to_xyz().into();
+        assert_eq!(Mat3::from(m), read.to_xyz());
     }
 }

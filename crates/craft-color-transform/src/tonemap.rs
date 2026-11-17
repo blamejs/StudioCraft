@@ -46,13 +46,18 @@ impl Eetf {
     ///
     /// A target peak at or below the source black would put every output at the source black
     /// or above it; the source black then reads as 0. A target black above the target peak
-    /// reads as the target peak.
+    /// reads as the target peak. A target peak that is NaN or not above 0 names no display, and
+    /// the EETF then passes values through.
     pub fn new(src_black: f64, src_peak: f64, dst_black: f64, dst_peak: f64) -> Eetf {
+        let pb = pq(sane(src_black));
+        let pass = Eetf { pb, span: 0.0, min_lum: 0.0, max_lum: 1.0, ks: 1.0, slope: 1.0 };
+        if dst_peak.is_nan() || dst_peak <= 0.0 {
+            return pass;
+        }
         let (dst_peak, pw) = (sane(dst_peak), pq(sane(src_peak)));
         let dst_black = sane(dst_black).min(dst_peak);
-        let pb = pq(sane(src_black));
         if pw <= pb {
-            return Eetf { pb, span: 0.0, min_lum: 0.0, max_lum: 1.0, ks: 1.0, slope: 1.0 };
+            return pass;
         }
         let pb = if pq(dst_peak) <= pb { 0.0 } else { pb };
         let span = pw - pb;
@@ -322,5 +327,17 @@ mod tests {
         assert!(e.is_identity());
         assert_eq!(e.apply_pq(0.3), 0.3);
         assert!(Eetf::new(0.0, 1000.0, 0.0, 100.0).apply_pq(f64::NAN).is_nan());
+    }
+
+    /// A target peak that is NaN, 0 or negative passes the picture through instead of turning it
+    /// black.
+    #[test]
+    fn a_missing_target_peak_passes_values_through() {
+        for peak in [f64::NAN, 0.0, -100.0, f64::NEG_INFINITY] {
+            let tm = ToneMap::new(1000.0, peak);
+            assert!(tm.is_identity(), "{peak}");
+            assert_eq!(tm.apply([0.8, 0.5, 0.1]), [0.8, 0.5, 0.1], "{peak}");
+            assert!(Eetf::new(0.0, 1000.0, 0.0, peak).is_identity(), "{peak}");
+        }
     }
 }

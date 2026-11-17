@@ -165,14 +165,20 @@ fn effect(color: vec4<f32>, uv: vec2<f32>, size: vec2<f32>, p0: vec4<f32>, p1: v
 
 /// White balance, brightness, contrast, saturation, gamma and opacity.
 ///
-/// Temperature and tint name the light the picture was taken under; the filter makes it look as
-/// if it were taken under light at [`NEUTRAL_TEMPERATURE`] with no tint (Bradford adaptation in
-/// linear light, `craft_color_transform::cct`). Lower temperatures cool the picture, and a
-/// positive tint adds magenta.
+/// Temperature and tint name the light the picture was taken under; the filter makes a surface
+/// lit by that light come out neutral in BT.709 / sRGB, whose white is D65 (Bradford adaptation
+/// in linear light, `craft_color_transform::cct::wb_matrix`). Lower temperatures cool the
+/// picture, and a positive tint adds magenta. At [`NEUTRAL_TEMPERATURE`] and [`NEUTRAL_TINT`],
+/// the defaults, the filter leaves colors alone. Channels that the correction pushes above 1
+/// clip, so under a strong correction the brightest whites take on the correction's color.
 pub struct ColorCorrection;
 
-/// The temperature at which the color correction filter leaves colors alone.
-pub const NEUTRAL_TEMPERATURE: f64 = 6500.0;
+/// The temperature of D65 as `cct::xy_to_temp_tint` reads it, to the nearest kelvin: the
+/// filter's default.
+pub const NEUTRAL_TEMPERATURE: f64 = 6502.0;
+/// The tint of D65 (above the Planckian locus) as `cct::xy_to_temp_tint` reads it, to one
+/// decimal: the filter's default.
+pub const NEUTRAL_TINT: f64 = 9.5;
 
 impl Plugin for ColorCorrection {
     fn id(&self) -> &'static str {
@@ -188,7 +194,7 @@ impl Plugin for ColorCorrection {
             float_field("brightness", "Brightness", -1.0, 1.0, 0.01, 0.0),
             float_field("saturation", "Saturation", -1.0, 5.0, 0.01, 0.0),
             float_field("temperature", "Temperature (K)", 2000.0, 12000.0, 50.0, NEUTRAL_TEMPERATURE),
-            float_field("tint", "Tint", -100.0, 100.0, 1.0, 0.0),
+            float_field("tint", "Tint", -100.0, 100.0, 0.5, NEUTRAL_TINT),
             float_field("opacity", "Opacity (%)", 0.0, 100.0, 1.0, 100.0),
         ])
     }
@@ -205,11 +211,21 @@ impl Filter for ColorCorrection {
     }
 }
 
-/// The white balance matrix for the filter's settings, in linear BT.709 / sRGB.
+/// A setting clamped to `min..=max`. A missing value reads as `default`; settings hold JSON
+/// numbers, so a NaN or infinite value is stored as no value and reads as `default` too.
+fn ranged(s: &Settings, key: &str, default: f64, min: f64, max: f64) -> f64 {
+    s.f64(key).map_or(default, |v| v.clamp(min, max))
+}
+
+/// The white balance matrix for the filter's settings, in linear BT.709 / sRGB. The defaults
+/// give the identity.
 fn white_balance(s: &Settings) -> Mat3 {
-    let temperature = f64::from(float(s, "temperature", NEUTRAL_TEMPERATURE)).clamp(2000.0, 12000.0);
-    let tint = f64::from(float(s, "tint", 0.0)).clamp(-100.0, 100.0);
-    cct::white_balance(&SRGB, (temperature, tint), (NEUTRAL_TEMPERATURE, 0.0))
+    let temperature = ranged(s, "temperature", NEUTRAL_TEMPERATURE, 2000.0, 12000.0);
+    let tint = ranged(s, "tint", NEUTRAL_TINT, -100.0, 100.0);
+    if (temperature, tint) == (NEUTRAL_TEMPERATURE, NEUTRAL_TINT) {
+        return Mat3::IDENTITY;
+    }
+    cct::wb_matrix(&SRGB, cct::temp_tint_to_xy(temperature, tint))
 }
 
 fn color_correction_params(s: &Settings) -> Params {
@@ -400,28 +416,50 @@ mod tests {
         let s = ColorCorrection.schema().defaults().with("temperature", 3200.0).with("tint", 10.0);
         let p = color_correction_params(&s);
         assert_eq!(p[5], 1.0);
-        assert_eq!(matrix_of(&p), cct::white_balance(&SRGB, (3200.0, 10.0), (NEUTRAL_TEMPERATURE, 0.0)).to_f32());
-        // A gray card lit by 3200 K light: the corrected card has the color of one lit at 6500 K.
-        let card = |t: f64| SRGB.from_xyz().apply(cct::temp_tint_to_xy(t, 0.0).to_xyz().unwrap());
-        let m = white_balance(&ColorCorrection.schema().defaults().with("temperature", 3200.0));
-        let (out, want) = (m.apply(card(3200.0)), card(NEUTRAL_TEMPERATURE));
-        for i in 0..3 {
-            assert!((out[i] - want[i]).abs() < 1e-9, "{out:?} {want:?}");
+        assert_eq!(matrix_of(&p), cct::wb_matrix(&SRGB, cct::temp_tint_to_xy(3200.0, 10.0)).to_f32());
+    }
+
+    /// A gray card lit by the light that temperature and tint name comes out neutral.
+    #[test]
+    fn a_gray_card_under_the_set_light_comes_out_neutral() {
+        for (t, tint) in [(2000.0, 0.0), (3200.0, 10.0), (5600.0, -25.0), (6500.0, 0.0), (9000.0, 40.0), (12000.0, -100.0)] {
+            let m = white_balance(&ColorCorrection.schema().defaults().with("temperature", t).with("tint", tint));
+            let card = SRGB.from_xyz().apply(cct::temp_tint_to_xy(t, tint).to_xyz().unwrap());
+            let out = m.apply(card);
+            assert!((out[0] - out[1]).abs() < 1e-6 && (out[1] - out[2]).abs() < 1e-6, "{t} K {tint}: {out:?}");
         }
-        // The 3200 K card is orange; after the correction blue is no longer the weakest channel
-        // by far.
-        assert!(card(3200.0)[2] < 0.5 * card(3200.0)[0] && out[2] > 0.9 * out[0], "{out:?}");
+    }
+
+    /// The defaults are D65's own temperature and tint: the identity, and settings next to them
+    /// give a matrix next to the identity.
+    #[test]
+    fn the_default_white_balance_is_d65() {
+        let (t, tint) = cct::xy_to_temp_tint(SRGB.white);
+        assert!((t - NEUTRAL_TEMPERATURE).abs() <= 0.5 && (tint - NEUTRAL_TINT).abs() <= 0.05, "{t} {tint}");
+        // The tint slider snaps to its steps from its minimum; the default is one of them.
+        let schema = ColorCorrection.schema();
+        let Some(FieldKind::Float { min, step, .. }) = schema.field("tint").map(|f| &f.kind) else { panic!("no tint field") };
+        assert_eq!(((NEUTRAL_TINT - min) / step).fract(), 0.0);
+        let defaults = schema.defaults();
+        assert_eq!(white_balance(&defaults), Mat3::IDENTITY);
+        let near = white_balance(&defaults.with("temperature", NEUTRAL_TEMPERATURE + 1.0));
+        assert!(near.0.iter().flatten().zip(Mat3::IDENTITY.0.iter().flatten()).all(|(a, b)| (a - b).abs() < 1e-3), "{near:?}");
     }
 
     #[test]
-    fn hostile_white_balance_settings_read_as_their_nearest_value() {
+    fn hostile_white_balance_settings_read_as_the_default_or_the_range_end() {
         let defaults = ColorCorrection.schema().defaults();
-        assert_eq!(color_correction_params(&defaults.clone().with("temperature", f64::NAN))[5], 0.0);
-        let low = color_correction_params(&defaults.clone().with("temperature", -1.0e9));
-        assert_eq!(low, color_correction_params(&defaults.clone().with("temperature", 2000.0)));
-        let high = color_correction_params(&defaults.clone().with("tint", 1.0e9));
-        assert_eq!(high, color_correction_params(&defaults.with("tint", 100.0)));
-        assert!(high.iter().all(|v| v.is_finite()));
+        let neutral = color_correction_params(&defaults);
+        let at = |key: &str, v: f64| color_correction_params(&defaults.clone().with(key, v));
+        for (key, low, high) in [("temperature", 2000.0, 12000.0), ("tint", -100.0, 100.0)] {
+            // Values that are not finite are stored as no value.
+            for v in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+                assert_eq!(at(key, v), neutral, "{key} {v}");
+            }
+            assert_eq!(at(key, -1.0e9), at(key, low));
+            assert_eq!(at(key, 1.0e9), at(key, high));
+            assert!(at(key, 1.0e300).iter().all(|v| v.is_finite()));
+        }
     }
 
     /// The shader's white balance (sRGB decode, matrix, encode) gives the colors the matrix
@@ -441,7 +479,9 @@ mod tests {
         let s = ColorCorrection.schema().defaults().with("temperature", 3200.0).with("tint", -20.0);
         let effect = ColorCorrection.create(&s).unwrap().video_effect().unwrap();
         let m = white_balance(&s);
-        for rgba in [[230, 150, 90, 255], [128, 128, 128, 255], [20, 200, 60, 255]] {
+        // White leaves the matrix with a blue channel above 1, which clips.
+        assert!(m.apply([1.0; 3])[2] > 1.0, "{:?}", m.apply([1.0; 3]));
+        for rgba in [[230, 150, 90, 255], [128, 128, 128, 255], [20, 200, 60, 255], [255, 255, 255, 255]] {
             let video = Arc::new(VideoOut::default());
             video.publish(VideoContent::Solid { rgba, width: 4, height: 4 });
             let item = ItemDesc { source: SourceId(1), video, transform: Default::default(), effects: vec![effect] };

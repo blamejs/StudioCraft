@@ -161,13 +161,13 @@ mod tests {
 
     #[test]
     fn white_is_l1_and_grays_have_no_chroma_in_every_space() {
-        let d50 = crate::RgbSpace { name: "D50 test", white: D50, ..SRGB };
+        let d50 = crate::RgbSpace { white: D50, ..SRGB };
         for space in [SRGB, REC2020, d50] {
             let ok = OkLab::for_space(&space);
             let w = ok.from_rgb([1.0, 1.0, 1.0]);
-            assert!((w[0] - 1.0).abs() < 2e-4 && w[1].abs() < 2e-4 && w[2].abs() < 2e-4, "{} {w:?}", space.name);
+            assert!((w[0] - 1.0).abs() < 2e-4 && w[1].abs() < 2e-4 && w[2].abs() < 2e-4, "{space:?} {w:?}");
             let g = ok.from_rgb([0.18, 0.18, 0.18]);
-            assert!(g[1].abs() < 2e-4 && g[2].abs() < 2e-4, "{} {g:?}", space.name);
+            assert!(g[1].abs() < 2e-4 && g[2].abs() < 2e-4, "{space:?} {g:?}");
         }
     }
 
@@ -188,7 +188,7 @@ mod tests {
 
     #[test]
     fn a_space_that_does_not_exist_does_not_produce_nan() {
-        let bad = crate::RgbSpace { name: "bad", r: Xy::new(0.3, 0.0), ..SRGB };
+        let bad = crate::RgbSpace { r: Xy::new(0.3, 0.0), ..SRGB };
         let ok = OkLab::for_space(&bad);
         assert!(ok.from_rgb([0.5, 0.5, 0.5]).iter().all(|v| v.is_finite()));
     }
