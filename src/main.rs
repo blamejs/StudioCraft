@@ -23,7 +23,7 @@ use std::process::ExitCode;
 use std::sync::{Arc, OnceLock};
 
 use craft_settings::Location;
-use studiocraft_render::device::Preference;
+use studiocraft_render::device::{Notice, Preference};
 use studiocraft_ui_egui::hardware;
 use studiocraft_ui_egui::store::Store;
 use studiocraft_ui_egui::{APP_NAME, BUNDLE_ID, StudioApp};
@@ -152,7 +152,11 @@ fn run(args: Args, raw: Vec<std::ffi::OsString>) -> Result<(), String> {
             app.install_fonts(&cc.egui_ctx);
             app.set_update_checks(update_checks);
             app.set_title_bar(buttons);
-            let notices = after_losses.iter().chain(picked.get().into_iter().flatten()).map(hardware::notice_msg).collect();
+            let picked = picked.get().map_or(&[][..], Vec::as_slice);
+            // A run in software after Automatic could not open the window says so, unless no
+            // software adapter was found and the window draws on hardware after all.
+            let fell_back = (software_once && !picked.contains(&Notice::NoSoftwareAdapter)).then_some(Notice::SoftwareOnly);
+            let notices = after_losses.iter().chain(&fell_back).chain(picked).map(hardware::notice_msg).collect();
             app.set_window_gpu(adapter, notices, may_relaunch);
             Ok(Box::new(Shell { app, harness, control, relaunch_args: raw }))
         }),

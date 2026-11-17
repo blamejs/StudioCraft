@@ -444,16 +444,16 @@ impl Studio {
     /// opened again, with [`Recovery`]'s preference: the same one, and software after repeated
     /// losses. The window's device is left to the window ([`Studio::gpu_lost`]).
     fn watch_gpu(&mut self) {
-        let Some(gpu) = self.gpu.clone() else { return };
+        let Some(gpu) = &self.gpu else { return };
         if self.gpu_loss.is_none() {
             if self.gpu_probed.elapsed() >= GPU_PROBE {
                 gpu.poll();
                 self.gpu_probed = Instant::now();
             }
             let Some(why) = gpu.lost() else { return };
+            let retry_at = gpu.can_reopen().then(Instant::now);
             self.video = None;
             self.notices.push(Notice::new("The graphics device stopped working: {error}", vec![("error", why.clone())], true));
-            let retry_at = gpu.can_reopen().then(Instant::now);
             if let Some(r) = &mut self.recovery {
                 let step = r.lost(self.started.elapsed());
                 if let Some(n) = &step.notice {
@@ -468,6 +468,7 @@ impl Studio {
                 self.stop_output(kind);
             }
         }
+        let Some(gpu) = &self.gpu else { return };
         let Some(loss) = &mut self.gpu_loss else { return };
         let (Some(at), Some(recovery)) = (loss.retry_at, &self.recovery) else { return };
         if Instant::now() < at {
