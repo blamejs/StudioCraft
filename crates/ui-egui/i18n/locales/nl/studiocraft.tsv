@@ -353,6 +353,14 @@
 	YUV vectorscope	YUV-vectorscoop
 	{device} (not connected)	{device} (niet aangesloten)
 	{encoder} (not in this ffmpeg)	{encoder} (niet in deze ffmpeg)
+	Hardware encoder	Hardware-encoder
+	Automatic (the first that passes a test)	Automatisch (de eerste die een test doorstaat)
+	Software only	Alleen software
+	Used by recordings and streams whose encoder is Hardware. Automatic tests each hardware encoder with one frame and uses x264 when none works.	Gebruikt door opnamen en streams waarvan de encoder Hardware is. Automatisch test elke hardware-encoder met één beeld en gebruikt x264 als er geen werkt.
+	Hardware (set in Settings › Video)	Hardware (ingesteld in Instellingen › Video)
+@msg	No hardware encoder passed its test; using {encoder}	Geen hardware-encoder heeft zijn test doorstaan; {encoder} wordt gebruikt
+@msg	The hardware encoder tests could not run: {error}	De tests van de hardware-encoders konden niet worden uitgevoerd: {error}
+@msg	{encoder} stopped working; the next start tries another encoder	{encoder} werkt niet meer; bij de volgende start wordt een andere encoder geprobeerd
 	{program} did not report its version	{program} heeft geen versie gemeld
 	Automatic (fastest)	Automatisch (snelste)
 	Drawing with {adapter}	Tekent met {adapter}

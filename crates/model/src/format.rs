@@ -78,7 +78,7 @@ fn collection_v2_to_v3(data: &mut Value) -> Result<(), String> {
 
 /// Profiles.
 pub const PROFILE: FileFormat =
-    FileFormat { name: "studiocraft.profile", version: 4, migrations: &[profile_v1_to_v2, profile_v2_to_v3, profile_v3_to_v4] };
+    FileFormat { name: "studiocraft.profile", version: 5, migrations: &[profile_v1_to_v2, profile_v2_to_v3, profile_v3_to_v4, profile_v4_to_v5] };
 
 /// Profile version 1 to 2: the recording and the stream each keep the settings of their video
 /// encoders (`encoder_settings`, empty until the user changes one).
@@ -107,6 +107,17 @@ fn profile_v3_to_v4(data: &mut Value) -> Result<(), String> {
     let audio = data.entry("audio").or_insert_with(|| json!({}));
     if let Value::Object(a) = audio {
         a.entry("monitoring_device").or_insert_with(|| json!(crate::profile::DEFAULT_AUDIO_DEVICE));
+    }
+    Ok(())
+}
+
+/// Profile version 4 to 5: the Hardware video encoder chooses automatically
+/// (`output.hardware_encoder`, `auto`).
+fn profile_v4_to_v5(data: &mut Value) -> Result<(), String> {
+    let data = data.as_object_mut().ok_or("the profile is not an object")?;
+    let output = data.entry("output").or_insert_with(|| json!({}));
+    if let Value::Object(o) = output {
+        o.entry("hardware_encoder").or_insert_with(|| json!("auto"));
     }
     Ok(())
 }
@@ -209,6 +220,7 @@ mod tests {
         (2, include_str!("../fixtures/profile-v2.json")),
         (3, include_str!("../fixtures/profile-v3.json")),
         (4, include_str!("../fixtures/profile-v4.json")),
+        (5, include_str!("../fixtures/profile-v5.json")),
     ];
 
     fn covers_every_version(format: &FileFormat, fixtures: &[(u32, &str)]) {
@@ -321,6 +333,18 @@ mod tests {
         assert_eq!(read_profile(&omitted).unwrap().audio.monitoring_device, crate::profile::DEFAULT_AUDIO_DEVICE, "an omitted device is the default");
         let wrong = v4.replace("\"Headphones (USB)\"", "7");
         assert!(matches!(read_profile(&wrong), Err(FormatError::Data(_))), "a device that is not a name refuses the file");
+    }
+
+    #[test]
+    fn profiles_keep_the_hardware_encoder() {
+        for (v, text) in &PROFILE_FIXTURES[..4] {
+            let p = read_profile(text).unwrap();
+            assert_eq!(p.output.hardware_encoder, "auto", "version {v} chooses automatically");
+        }
+        let (_, v5) = PROFILE_FIXTURES[4];
+        let p = read_profile(v5).unwrap();
+        assert_eq!(p.output.hardware_encoder, "nvenc_hevc");
+        assert_eq!(read_profile(&write_profile(&p).unwrap()).unwrap(), p);
     }
 
     #[test]

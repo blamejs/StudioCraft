@@ -362,6 +362,14 @@
 	YUV vectorscope	Vectorscópio YUV
 	{device} (not connected)	{device} (não conectado)
 	{encoder} (not in this ffmpeg)	{encoder} (ausente neste ffmpeg)
+	Hardware encoder	Codificador por hardware
+	Automatic (the first that passes a test)	Automático (o primeiro que passa em um teste)
+	Software only	Somente software
+	Used by recordings and streams whose encoder is Hardware. Automatic tests each hardware encoder with one frame and uses x264 when none works.	Usado por gravações e transmissões cujo codificador é Hardware. Automático testa cada codificador por hardware com um quadro e usa x264 quando nenhum funciona.
+	Hardware (set in Settings › Video)	Hardware (definido em Configurações › Vídeo)
+@msg	No hardware encoder passed its test; using {encoder}	Nenhum codificador por hardware passou no teste; usando {encoder}
+@msg	The hardware encoder tests could not run: {error}	Não foi possível executar os testes dos codificadores por hardware: {error}
+@msg	{encoder} stopped working; the next start tries another encoder	{encoder} parou de funcionar; o próximo início tentará outro codificador
 	{program} did not report its version	{program} não informou sua versão
 	Automatic (fastest)	Automático (mais rápido)
 	Drawing with {adapter}	Desenhando com {adapter}

@@ -363,6 +363,14 @@
 	YUV vectorscope	Vektorskop YUV
 	{device} (not connected)	{device} (nepřipojeno)
 	{encoder} (not in this ffmpeg)	{encoder} (v tomto ffmpeg chybí)
+	Hardware encoder	Hardwarový kodér
+	Automatic (the first that passes a test)	Automaticky (první, který projde testem)
+	Software only	Pouze software
+	Used by recordings and streams whose encoder is Hardware. Automatic tests each hardware encoder with one frame and uses x264 when none works.	Používají ho nahrávky a vysílání, jejichž kodér je Hardware. Automaticky otestuje každý hardwarový kodér jedním snímkem a použije x264, když žádný nefunguje.
+	Hardware (set in Settings › Video)	Hardware (nastavený v Nastavení › Video)
+@msg	No hardware encoder passed its test; using {encoder}	Žádný hardwarový kodér neprošel testem; používá se {encoder}
+@msg	The hardware encoder tests could not run: {error}	Testy hardwarových kodérů nelze spustit: {error}
+@msg	{encoder} stopped working; the next start tries another encoder	{encoder} přestal fungovat; při dalším spuštění se zkusí jiný kodér
 	{program} did not report its version	{program} neohlásil svou verzi
 	Compact (small files)	Kompaktní (malé soubory)
 	Duplicate Profile	Duplikovat profil

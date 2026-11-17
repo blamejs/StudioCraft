@@ -411,6 +411,25 @@
 	{db} dB	{db} dB
 	{device} (not connected)	{device} (not connected)
 	{encoder} (not in this ffmpeg)	{encoder} (not in this ffmpeg)
+	Hardware encoder	Hardware encoder
+	Automatic (the first that passes a test)	Automatic (the first that passes a test)
+	Software only	Software only
+	Used by recordings and streams whose encoder is Hardware. Automatic tests each hardware encoder with one frame and uses x264 when none works.	Used by recordings and streams whose encoder is Hardware. Automatic tests each hardware encoder with one frame and uses x264 when none works.
+	Hardware (set in Settings › Video)	Hardware (set in Settings › Video)
+	NVIDIA NVENC AV1	NVIDIA NVENC AV1
+	AMD AMF HEVC	AMD AMF HEVC
+	AMD AMF AV1	AMD AMF AV1
+	Intel Quick Sync HEVC	Intel Quick Sync HEVC
+	Intel Quick Sync AV1	Intel Quick Sync AV1
+	Windows Media Foundation HEVC	Windows Media Foundation HEVC
+	VideoToolbox H.264	VideoToolbox H.264
+	VideoToolbox HEVC	VideoToolbox HEVC
+	VA-API H.264	VA-API H.264
+	VA-API HEVC	VA-API HEVC
+	VA-API AV1	VA-API AV1
+@msg	No hardware encoder passed its test; using {encoder}	No hardware encoder passed its test; using {encoder}
+@msg	The hardware encoder tests could not run: {error}	The hardware encoder tests could not run: {error}
+@msg	{encoder} stopped working; the next start tries another encoder	{encoder} stopped working; the next start tries another encoder
 	{fps} fps  {ms} ms	{fps} fps  {ms} ms
 	{ms} ms	{ms} ms
 	{n} kbps	{n} kbps

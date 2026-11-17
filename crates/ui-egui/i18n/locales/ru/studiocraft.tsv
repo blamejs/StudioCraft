@@ -363,6 +363,14 @@
 	YUV vectorscope	Вектороскоп YUV
 	{device} (not connected)	{device} (не подключено)
 	{encoder} (not in this ffmpeg)	{encoder} (нет в этой сборке ffmpeg)
+	Hardware encoder	Аппаратный кодировщик
+	Automatic (the first that passes a test)	Автоматически (первый, прошедший проверку)
+	Software only	Только программный
+	Used by recordings and streams whose encoder is Hardware. Automatic tests each hardware encoder with one frame and uses x264 when none works.	Используется записями и трансляциями с кодировщиком «Аппаратный». «Автоматически» проверяет каждый аппаратный кодировщик на одном кадре и использует x264, если ни один не работает.
+	Hardware (set in Settings › Video)	Аппаратный (задаётся в Настройки › Видео)
+@msg	No hardware encoder passed its test; using {encoder}	Ни один аппаратный кодировщик не прошёл проверку; используется {encoder}
+@msg	The hardware encoder tests could not run: {error}	Не удалось выполнить проверку аппаратных кодировщиков: {error}
+@msg	{encoder} stopped working; the next start tries another encoder	{encoder} перестал работать; при следующем запуске будет выбран другой кодировщик
 	{program} did not report its version	Не удалось получить версию программы {program}
 	kbps	кбит/с
 	{n} kbps	{n} кбит/с

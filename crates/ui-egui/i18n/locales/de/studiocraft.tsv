@@ -346,6 +346,14 @@
 	Your Videos folder	Ihr Videos-Ordner
 	{device} (not connected)	{device} (nicht verbunden)
 	{encoder} (not in this ffmpeg)	{encoder} (nicht in diesem ffmpeg)
+	Hardware encoder	Hardware-Encoder
+	Automatic (the first that passes a test)	Automatisch (der erste, der einen Test besteht)
+	Software only	Nur Software
+	Used by recordings and streams whose encoder is Hardware. Automatic tests each hardware encoder with one frame and uses x264 when none works.	Gilt für Aufnahmen und Streams, deren Encoder „Hardware“ ist. „Automatisch“ testet jeden Hardware-Encoder mit einem Bild und verwendet x264, wenn keiner funktioniert.
+	Hardware (set in Settings › Video)	Hardware (in Einstellungen › Video festgelegt)
+@msg	No hardware encoder passed its test; using {encoder}	Kein Hardware-Encoder hat seinen Test bestanden; {encoder} wird verwendet
+@msg	The hardware encoder tests could not run: {error}	Die Tests der Hardware-Encoder konnten nicht laufen: {error}
+@msg	{encoder} stopped working; the next start tries another encoder	{encoder} funktioniert nicht mehr; beim nächsten Start wird ein anderer Encoder versucht
 	{program} did not report its version	{program} hat keine Version gemeldet
 	{status} · {mb} MB	{status} · {mb} MB
 	Automatic (fastest)	Automatisch (am schnellsten)

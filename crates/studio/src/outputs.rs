@@ -6,6 +6,7 @@ use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
+use craft_hwenc::{Cancel, Candidate, Choice, Error as HwError, FfmpegProber, Input, Os, Preference, ProbeCache, Prober, Target, Vendor};
 use studiocraft_engine::mixer::MixerCmd;
 use studiocraft_media::Tick;
 use studiocraft_media::audio::SAMPLE_RATE;
@@ -13,6 +14,7 @@ use studiocraft_media::queue::Fifo;
 use studiocraft_media::stats::EncoderStats;
 use studiocraft_media::video::{PixelFormat, PooledFrame};
 use studiocraft_model::{Profile, RecordingQuality, Settings};
+use studiocraft_outputs::encoders::HARDWARE;
 use studiocraft_outputs::replay::MAX_SAVES;
 use studiocraft_platform::ffmpeg;
 use studiocraft_plugin::{
@@ -73,7 +75,25 @@ struct Active {
     stats: Arc<EncoderStats>,
     started: Instant,
     target: String,
+    /// The hardware encoder it runs, chosen by the `hardware` choice or by name.
+    hardware: Option<HardwareRun>,
 }
+
+/// A hardware encoder an output runs, chosen through the `hardware` encoder or by name.
+#[derive(Clone, Debug, PartialEq)]
+struct HardwareRun {
+    candidate: &'static Candidate,
+    /// The ffmpeg program it runs in.
+    program: PathBuf,
+    /// Whether the automatic choice picked it.
+    auto: bool,
+}
+
+/// The longest one test encode of a hardware encoder may take.
+const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// The notice when the hardware encoder tests could not run at all.
+const TESTS_FAILED: &str = "The hardware encoder tests could not run: {error}";
 
 struct Stopping {
     kind: OutputKind,
@@ -99,6 +119,36 @@ pub(crate) struct Outputs {
     encoders: HashMap<PathBuf, Vec<String>>,
     /// Notices of outputs stopped on the calling thread, for the next [`Outputs::poll`].
     finished: Vec<Option<Notice>>,
+    /// The hardware encoders' test results for this session.
+    probes: Arc<ProbeCache>,
+    /// Held by a running test, so tests for two outputs do not hold an encoder at once.
+    probing: Arc<Mutex<()>>,
+    /// How often the graphics device changed; a test for an earlier device is not used.
+    device_changes: u64,
+    /// Outputs waiting for their hardware encoder tests, which run on their own thread.
+    testing: HashMap<OutputKind, Testing>,
+    /// Canceled tests whose threads may still run; the next tests wait for them, so two
+    /// ffmpeg tests do not hold an encoder at once.
+    canceled: Vec<JoinHandle<Result<Resolved, StudioError>>>,
+    /// Hardware choices whose tests finished, for the start that follows.
+    resolved: HashMap<OutputKind, Resolved>,
+}
+
+/// What [`resolve_hardware`] gives: the encoder id, the hardware encoder when it is one, and a
+/// notice.
+type Resolved = (String, Option<HardwareRun>, Option<Notice>);
+
+/// Hardware encoder tests running for an output that is about to start.
+struct Testing {
+    cancel: Cancel,
+    handle: JoinHandle<Result<Resolved, StudioError>>,
+    started: Instant,
+    /// The profile the tests ran for; a result for another profile is not used.
+    profile: Profile,
+    /// [`Outputs::device_changes`] when the tests started.
+    device: u64,
+    /// Whether another output held a hardware encoder when the tests started.
+    beside_encoder: bool,
 }
 
 /// The notice for an output whose stop returned `r`; none for a failure already shown while it
@@ -160,6 +210,17 @@ impl Outputs {
                 bytes: a.stats.bytes.load(std::sync::atomic::Ordering::Relaxed),
             });
         }
+        if let Some(t) = self.testing.get(&kind) {
+            // Waiting for the hardware encoder tests: the next toggle cancels the start.
+            return Some(OutputState {
+                active: false,
+                stopping: false,
+                status: OutputStatus::Starting,
+                target: String::new(),
+                elapsed: t.started.elapsed(),
+                bytes: 0,
+            });
+        }
         self.stopping.iter().find(|s| s.kind == kind).map(|s| OutputState {
             active: false,
             stopping: true,
@@ -200,21 +261,28 @@ impl Outputs {
     /// Finished stops and failed outputs.
     pub(crate) fn poll(&mut self) -> Events {
         let mut ev = Events::default();
-        let failed: Vec<(OutputKind, String)> = self
+        let failed: Vec<(OutputKind, String, Option<HardwareRun>)> = self
             .active
             .iter()
             .filter_map(|(k, a)| match a.instance.status() {
-                OutputStatus::Failed(e) => Some((*k, e)),
+                OutputStatus::Failed(e) => Some((*k, e, a.hardware.clone())),
                 _ => None,
             })
             .collect();
-        for (kind, e) in failed {
+        for (kind, e, hardware) in failed {
             let template = match kind {
                 OutputKind::Recording => "The recording stopped: {error}",
                 OutputKind::Streaming => "The stream stopped: {error}",
                 OutputKind::Replay => "The replay buffer stopped: {error}",
             };
             ev.notices.push(Notice::new(template, vec![("error", e.to_string())], true));
+            if let Some(hw) = hardware.filter(|hw| encoder_failed(hw.candidate, &e)) {
+                self.probes.mark_failed(&hw.program, hw.candidate, e.clone());
+                if hw.auto {
+                    let args = vec![("encoder", hw.candidate.name.to_string())];
+                    ev.notices.push(Notice::new("{encoder} stopped working; the next start tries another encoder", args, true));
+                }
+            }
             if let Some(id) = self.stop(kind, true) {
                 ev.removed.push(id);
                 ev.sinks_changed = true;
@@ -258,8 +326,27 @@ impl Outputs {
         Ok(())
     }
 
+    /// Forget the hardware encoders' test results after the graphics device changed; the next
+    /// start tests them again.
+    pub(crate) fn forget_hardware_tests(&mut self) {
+        // Tests still running for the old device write to the old cache, and their outputs
+        // are tested again.
+        self.probes = Arc::default();
+        self.device_changes += 1;
+    }
+
     /// Finish everything before the app closes.
     pub(crate) fn stop_all_blocking(&mut self) {
+        // A canceled test stops its ffmpeg at once.
+        for t in self.testing.values() {
+            t.cancel.cancel();
+        }
+        for (_, t) in self.testing.drain() {
+            let _ = t.handle.join();
+        }
+        for h in self.canceled.drain(..) {
+            let _ = h.join();
+        }
         for (_, mut a) in self.active.drain() {
             let _ = a.instance.stop();
         }
@@ -415,9 +502,66 @@ fn check_encoder(encoder: &dyn Encoder, offered: &[String], kind: OutputKind) ->
     }
 }
 
+/// Whether an output's failure `error` came from the hardware encoder `candidate`: ffmpeg names the
+/// encoder in its messages, or the error is one a missing device gives. A full session is not the
+/// encoder's fault: it can have a free session at the next start.
+fn encoder_failed(candidate: &Candidate, error: &str) -> bool {
+    match craft_hwenc::classify(error) {
+        craft_hwenc::Outcome::Busy(_) => false,
+        craft_hwenc::Outcome::NoDevice(_) => true,
+        _ => error.contains(candidate.ffmpeg_codec),
+    }
+}
+
+/// What the `hardware` encoder runs: the encoder id, the hardware encoder when it is one, and a
+/// notice when the automatic choice fell back to software. `preference` is the profile's
+/// hardware encoder setting and `vendor` the graphics adapter's PCI vendor id. A stream takes
+/// H.264 only; a recording takes the named encoder's codec, and the automatic choice uses H.264.
+/// A `lossless` recording only uses an encoder that can run losslessly.
+fn resolve_hardware(
+    preference: &str,
+    vendor: u32,
+    stream: bool,
+    lossless: bool,
+    prober: &dyn Prober,
+    cache: &ProbeCache,
+    cancel: &Cancel,
+) -> Result<(String, Option<HardwareRun>, Option<Notice>), StudioError> {
+    let preference = Preference::parse(preference);
+    let auto = preference == Preference::Auto;
+    let codec = match &preference {
+        Preference::Named(id) if !stream => craft_hwenc::candidate(id).map_or(craft_hwenc::Codec::H264, |c| c.codec),
+        _ => craft_hwenc::Codec::H264,
+    };
+    let target = Target { vendor: Vendor::from_pci_id(vendor), os: Os::current(), codec, input: Input::Nv12, lossless };
+    match craft_hwenc::resolve(&preference, target, prober, cache, cancel) {
+        Ok(Choice::Hardware(c)) => Ok((c.id.to_string(), Some(HardwareRun { candidate: c, program: prober.program().to_path_buf(), auto }), None)),
+        Ok(Choice::Software { tried }) => {
+            for (c, outcome) in &tried {
+                log::info!("{} was not used: {outcome}", c.name);
+            }
+            let notice = (auto && !tried.is_empty()).then(|| {
+                Notice::new("No hardware encoder passed its test; using {encoder}", vec![("encoder", "Software (x264)".to_string())], false)
+            });
+            Ok((SOFTWARE_ENCODER.to_string(), None, notice))
+        }
+        Err(HwError::Canceled) => Err(StudioError::Output("the hardware encoder tests were canceled".into())),
+        Err(e) => Err(StudioError::Output(format!("{e}; choose another hardware encoder in Settings › Video"))),
+    }
+}
+
+/// The encoder the `hardware` choice falls back to.
+const SOFTWARE_ENCODER: &str = "x264";
+
+/// The saved settings of encoder `id` for the output `kind`.
+fn encoder_settings(p: &Profile, kind: OutputKind, id: &str) -> Settings {
+    let saved = if kind == OutputKind::Streaming { &p.stream.encoder_settings } else { &p.output.encoder_settings };
+    saved.get(id).cloned().unwrap_or_default()
+}
+
 impl Studio {
     pub(crate) fn toggle_output(&mut self, kind: OutputKind) -> Result<(), StudioError> {
-        if self.outputs.active.contains_key(&kind) {
+        if self.outputs.active.contains_key(&kind) || self.outputs.testing.contains_key(&kind) {
             self.stop_output(kind);
             Ok(())
         } else {
@@ -425,7 +569,97 @@ impl Studio {
         }
     }
 
+    /// Whether `kind` waits for its hardware encoder tests.
+    #[cfg(test)]
+    pub(crate) fn testing_hardware(&self, kind: OutputKind) -> bool {
+        self.outputs.testing.contains_key(&kind)
+    }
+
+    /// Start the hardware encoder tests for `kind` on their own thread, each test with the
+    /// arguments the output will run the encoder with.
+    fn test_hardware(&mut self, kind: OutputKind, planned: &Plan, program: PathBuf, offered: Vec<String>) {
+        let v = self.profile.video.sanitized();
+        let fps = f64::from(v.fps_num) / f64::from(v.fps_den.max(1));
+        let registry = Arc::clone(self.engine.registry());
+        let args: HashMap<&'static str, Vec<String>> = craft_hwenc::CANDIDATES
+            .iter()
+            .filter_map(|c| {
+                let encoder = registry.encoder(c.id).ok()?;
+                let a = encoder.ffmpeg()?.ffmpeg_args(&encoder_settings(&self.profile, kind, c.id), planned.rate, fps).ok()?;
+                Some((c.id, a))
+            })
+            .collect();
+        let prober = FfmpegProber::new(program, offered).with_timeout(PROBE_TIMEOUT).with_encode_args(Box::new(move |c, _| args.get(c.id).cloned()));
+        let vendor = self.gpu.as_ref().and_then(|g| g.adapter()).map_or(0, |a| a.vendor);
+        let stream = kind == OutputKind::Streaming;
+        let lossless = planned.rate == RateControl::Lossless;
+        let preference = self.profile.output.hardware_encoder.clone();
+        // A test passed before another output took an encoder says nothing about a second session.
+        let encoding = self.outputs.active.values().any(|a| a.hardware.is_some());
+        let cache = if encoding { Arc::new(self.outputs.probes.without_outcomes()) } else { Arc::clone(&self.outputs.probes) };
+        let cancel = Cancel::new();
+        let c = cancel.clone();
+        let earlier = std::mem::take(&mut self.outputs.canceled);
+        let probing = Arc::clone(&self.outputs.probing);
+        let handle = std::thread::Builder::new().name("hardware-encoder-tests".into()).spawn(move || {
+            for h in earlier {
+                let _ = h.join();
+            }
+            let _one_at_a_time = probing.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            resolve_hardware(&preference, vendor, stream, lossless, &prober, &cache, &c)
+        });
+        match handle {
+            Ok(handle) => {
+                let device = self.outputs.device_changes;
+                let t = Testing { cancel, handle, started: Instant::now(), profile: self.profile.clone(), device, beside_encoder: encoding };
+                self.outputs.testing.insert(kind, t);
+            }
+            Err(e) => self.notices.push(Notice::new(TESTS_FAILED, vec![("error", e.to_string())], true)),
+        }
+    }
+
+    /// Start each output whose hardware encoder tests ended, or show why it could not start. A
+    /// test thread that panicked gives [`TESTS_FAILED`].
+    pub(crate) fn finish_hardware_tests(&mut self) {
+        self.outputs.canceled.retain(|h| !h.is_finished());
+        let done: Vec<OutputKind> = self.outputs.testing.iter().filter(|(_, t)| t.handle.is_finished()).map(|(k, _)| *k).collect();
+        for kind in done {
+            let Some(t) = self.outputs.testing.remove(&kind) else { continue };
+            let canceled = t.cancel.is_canceled();
+            let encoding = self.outputs.active.values().any(|a| a.hardware.is_some());
+            if !canceled && (t.profile != self.profile || t.device != self.outputs.device_changes || (encoding && !t.beside_encoder)) {
+                // The settings or the graphics device changed while the tests ran, or another
+                // output took an encoder since: test again.
+                if let Err(e) = self.start_output(kind) {
+                    self.notices.push(Notice::plain(e.to_string(), true));
+                }
+                continue;
+            }
+            match t.handle.join() {
+                Ok(Ok(resolved)) if !canceled => {
+                    self.outputs.resolved.insert(kind, resolved);
+                    if let Err(e) = self.start_output(kind) {
+                        self.outputs.resolved.remove(&kind);
+                        self.notices.push(Notice::plain(e.to_string(), true));
+                    }
+                }
+                Ok(Ok(_)) => {}
+                Ok(Err(e)) => {
+                    if !canceled {
+                        self.notices.push(Notice::plain(e.to_string(), true));
+                    }
+                }
+                Err(_) => self.notices.push(Notice::new(TESTS_FAILED, vec![("error", "the test thread stopped unexpectedly".to_string())], true)),
+            }
+        }
+    }
+
     pub(crate) fn stop_output(&mut self, kind: OutputKind) {
+        if let Some(t) = self.outputs.testing.remove(&kind) {
+            // The thread ends at its next check of the flag; its result is dropped.
+            t.cancel.cancel();
+            self.outputs.canceled.push(t.handle);
+        }
         if let Some(id) = self.outputs.stop(kind, false) {
             self.mixer.send(MixerCmd::RemoveOutput { id });
             self.update_encode_target();
@@ -433,7 +667,7 @@ impl Studio {
     }
 
     pub(crate) fn start_output(&mut self, kind: OutputKind) -> Result<(), StudioError> {
-        if self.outputs.active.contains_key(&kind) {
+        if self.outputs.active.contains_key(&kind) || self.outputs.testing.contains_key(&kind) {
             return Ok(());
         }
         if self.outputs.stopping.iter().any(|s| s.kind == kind) {
@@ -445,13 +679,33 @@ impl Studio {
         if kind == OutputKind::Streaming && self.profile.stream.server.trim().is_empty() {
             return Err(StudioError::Output("set a server in Settings › Stream first".into()));
         }
-        let planned = plan(&self.profile, kind);
+        let mut planned = plan(&self.profile, kind);
         let registry = Arc::clone(self.engine.registry());
-        let encoder = registry.encoder(&planned.encoder_id)?;
-        let program = if encoder.ffmpeg().is_some() {
+        let mut encoder = registry.encoder(&planned.encoder_id)?;
+        let mut hardware = None;
+        let program = if encoder.ffmpeg().is_some() || encoder.id() == HARDWARE {
             let program = ffmpeg::locate(&self.profile.output.ffmpeg_path).map_err(|e| StudioError::Output(e.to_string()))?;
-            let offered = self.outputs.encoders.entry(program.clone()).or_insert_with(|| ffmpeg::encoders(&program));
-            check_encoder(encoder.as_ref(), offered, kind)?;
+            let offered = self.outputs.encoders.entry(program.clone()).or_insert_with(|| ffmpeg::encoders(&program)).clone();
+            if encoder.id() == HARDWARE {
+                let Some((id, run, notice)) = self.outputs.resolved.remove(&kind) else {
+                    // The tests can take seconds each, so they run on their own thread, and
+                    // `finish_hardware_tests` starts the output when they end.
+                    self.test_hardware(kind, &planned, program, offered);
+                    return Ok(());
+                };
+                planned.encoder_settings = encoder_settings(&self.profile, kind, &id);
+                encoder = registry.encoder(&id)?;
+                planned.encoder_id = id;
+                hardware = run;
+                self.notices.extend(notice);
+            }
+            check_encoder(encoder.as_ref(), &offered, kind)?;
+            if hardware.is_none()
+                && let Some(candidate) = craft_hwenc::candidate(encoder.id())
+            {
+                // Chosen by name: a failure while it runs still counts against it.
+                hardware = Some(HardwareRun { candidate, program: program.clone(), auto: false });
+            }
             program
         } else {
             // A built-in encoder runs without the ffmpeg program.
@@ -487,7 +741,7 @@ impl Studio {
         let id = self.outputs.next_id;
         self.mixer.send(MixerCmd::AddOutput { id, queue: instance.audio() });
         let target = instance.target();
-        self.outputs.active.insert(kind, Active { id, instance, stats, started: Instant::now(), target });
+        self.outputs.active.insert(kind, Active { id, instance, stats, started: Instant::now(), target, hardware });
         self.update_encode_target();
         Ok(())
     }
@@ -533,9 +787,208 @@ impl Studio {
 
 #[cfg(test)]
 mod tests {
+    use studiocraft_media::audio::PooledBlock;
     use studiocraft_plugin::Plugin;
 
     use super::*;
+
+    /// A prober that answers every test with one outcome and counts the tests.
+    struct FakeProber(craft_hwenc::Outcome, std::sync::atomic::AtomicUsize);
+
+    impl Prober for FakeProber {
+        fn program(&self) -> &Path {
+            Path::new("fake-ffmpeg")
+        }
+        fn probe(&self, _: &'static Candidate, _: Input, cancel: &Cancel) -> craft_hwenc::Outcome {
+            self.1.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            if self.0 == craft_hwenc::Outcome::Canceled {
+                cancel.cancel();
+            }
+            self.0.clone()
+        }
+    }
+
+    fn fake(outcome: craft_hwenc::Outcome) -> FakeProber {
+        FakeProber(outcome, std::sync::atomic::AtomicUsize::new(0))
+    }
+
+    #[test]
+    fn the_hardware_choice_takes_a_working_encoder_or_falls_back_to_x264_with_a_notice() {
+        let cache = ProbeCache::new();
+        let works = fake(craft_hwenc::Outcome::Works);
+        let (id, run, notice) = resolve_hardware("auto", 0x10de, false, false, &works, &cache, &Cancel::new()).unwrap();
+        let first = craft_hwenc::auto_order(Vendor::Nvidia, Os::current(), craft_hwenc::Codec::H264);
+        match first.first() {
+            Some(c) => {
+                assert_eq!(id, c.id);
+                assert_eq!(run, Some(HardwareRun { candidate: c, program: PathBuf::from("fake-ffmpeg"), auto: true }));
+                assert!(notice.is_none());
+            }
+            None => assert_eq!(id, "x264", "no hardware API on this system"),
+        }
+        let none = fake(craft_hwenc::Outcome::NoDevice("no device".into()));
+        let (id, run, notice) = resolve_hardware("auto", 0x10de, false, false, &none, &ProbeCache::new(), &Cancel::new()).unwrap();
+        assert_eq!((id.as_str(), run), ("x264", None));
+        if !first.is_empty() {
+            assert_eq!(notice.map(|n| n.template), Some("No hardware encoder passed its test; using {encoder}"));
+        }
+        let (id, _, notice) = resolve_hardware("software", 0x10de, false, false, &works, &ProbeCache::new(), &Cancel::new()).unwrap();
+        assert_eq!(id, "x264");
+        assert!(notice.is_none(), "choosing software is not a fallback");
+    }
+
+    #[test]
+    fn a_named_hardware_encoder_that_fails_or_a_canceled_test_stops_the_start_with_a_clear_error() {
+        let Some(c) = craft_hwenc::auto_order(Vendor::Nvidia, Os::current(), craft_hwenc::Codec::H264).first().copied() else { return };
+        let busy = fake(craft_hwenc::Outcome::Busy("incompatible client key".into()));
+        let Err(StudioError::Output(e)) = resolve_hardware(c.id, 0x10de, false, false, &busy, &ProbeCache::new(), &Cancel::new()) else {
+            panic!("an error expected")
+        };
+        assert!(
+            e.starts_with(&format!("{} did not pass its test encode", c.name)) && e.ends_with("choose another hardware encoder in Settings › Video"),
+            "{e}"
+        );
+        let canceled = fake(craft_hwenc::Outcome::Canceled);
+        let Err(StudioError::Output(e)) = resolve_hardware("auto", 0x10de, false, false, &canceled, &ProbeCache::new(), &Cancel::new()) else {
+            panic!("an error expected")
+        };
+        assert_eq!(e, "the hardware encoder tests were canceled");
+        assert_eq!(canceled.1.load(std::sync::atomic::Ordering::SeqCst), 1, "no test runs after the cancel");
+    }
+
+    #[test]
+    fn lossless_recordings_and_streams_only_take_encoders_that_can_do_them() {
+        let works = fake(craft_hwenc::Outcome::Works);
+        // An AMD adapter puts AMF or VA-API first, but neither runs losslessly.
+        let (id, run, _) = resolve_hardware("auto", 0x1002, false, true, &works, &ProbeCache::new(), &Cancel::new()).unwrap();
+        match run {
+            Some(run) => assert!(run.candidate.lossless() && run.candidate.id == id, "{id}"),
+            None => assert_eq!(id, "x264"),
+        }
+        let Some(hevc) = craft_hwenc::candidate("nvenc_hevc").filter(|c| c.runs_on(Os::current())) else { return };
+        let (id, _, _) = resolve_hardware(hevc.id, 0x10de, false, false, &works, &ProbeCache::new(), &Cancel::new()).unwrap();
+        assert_eq!(id, "nvenc_hevc", "a recording takes HEVC");
+        let Err(StudioError::Output(e)) = resolve_hardware(hevc.id, 0x10de, true, false, &works, &ProbeCache::new(), &Cancel::new()) else {
+            panic!("a stream takes H.264 only")
+        };
+        assert!(e.starts_with("NVIDIA NVENC HEVC writes another codec"), "{e}");
+        let amf = craft_hwenc::candidate("amf_h264").filter(|c| c.runs_on(Os::current()));
+        if let Some(amf) = amf {
+            let Err(StudioError::Output(e)) = resolve_hardware(amf.id, 0x1002, false, true, &works, &ProbeCache::new(), &Cancel::new()) else {
+                panic!("AMF has no lossless mode")
+            };
+            assert!(e.starts_with("AMD AMF H.264 cannot record losslessly"), "{e}");
+        }
+    }
+
+    #[test]
+    fn only_failures_from_the_encoder_count_against_it() {
+        let nvenc = craft_hwenc::candidate("nvenc_h264").unwrap();
+        assert!(encoder_failed(nvenc, "ffmpeg stopped: [h264_nvenc @ 0000021] Failed locking bitstream buffer"));
+        assert!(encoder_failed(nvenc, "ffmpeg stopped: Cannot load nvcuda.dll"));
+        assert!(!encoder_failed(nvenc, "ffmpeg stopped: Connection reset by peer"), "a network error is not the encoder's");
+        let busy = "ffmpeg stopped: [h264_nvenc @ 0000021] OpenEncodeSessionEx failed: incompatible client key (21)";
+        assert!(!encoder_failed(nvenc, busy), "a full session is tried again at the next start");
+    }
+
+    /// An output that failed while it ran.
+    struct FailedOutput;
+
+    impl OutputInstance for FailedOutput {
+        fn video(&self) -> Arc<Fifo<Arc<PooledFrame>>> {
+            Arc::new(Fifo::new(1))
+        }
+        fn audio(&self) -> Arc<Fifo<PooledBlock>> {
+            Arc::new(Fifo::new(1))
+        }
+        fn status(&self) -> OutputStatus {
+            OutputStatus::Failed("ffmpeg stopped: [h264_mf @ 01] could not set output type".into())
+        }
+        fn target(&self) -> String {
+            String::new()
+        }
+        fn stop(&mut self) -> Result<(), PluginError> {
+            // An error, as from a failed ffmpeg: its notice was shown while it ran.
+            Err(PluginError::Failed("ffmpeg stopped".into()))
+        }
+    }
+
+    #[test]
+    fn a_new_graphics_device_forgets_the_hardware_encoder_tests() {
+        let mut o = Outputs::default();
+        let nvenc = craft_hwenc::candidate("nvenc_h264").unwrap();
+        let prober = FfmpegProber::new("ffmpeg", Vec::new());
+        o.probes.mark_failed(Path::new("ffmpeg"), nvenc, "no device");
+        let old = Arc::clone(&o.probes);
+        o.forget_hardware_tests();
+        assert_eq!(o.probes.get(&prober, nvenc, craft_hwenc::Input::Nv12), None);
+        // A test still running for the old device writes to the old cache.
+        old.mark_failed(Path::new("ffmpeg"), nvenc, "old device");
+        assert_eq!(o.probes.get(&prober, nvenc, craft_hwenc::Input::Nv12), None);
+        assert_eq!(o.device_changes, 1, "tests started before the change are run again");
+    }
+
+    #[test]
+    fn shutting_down_cancels_and_waits_for_the_hardware_encoder_tests() {
+        let mut o = Outputs::default();
+        let cancel = Cancel::new();
+        let seen = cancel.clone();
+        let ended = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let done = Arc::clone(&ended);
+        let handle = std::thread::spawn(move || {
+            // Stands for a test encode that runs until it is canceled.
+            for _ in 0..10_000_000 {
+                if seen.is_canceled() {
+                    done.store(true, std::sync::atomic::Ordering::SeqCst);
+                    return Err(StudioError::Output("canceled".into()));
+                }
+                std::thread::yield_now();
+            }
+            Err(StudioError::Output("never canceled".into()))
+        });
+        let t = Testing { cancel, handle, started: Instant::now(), profile: Profile::default(), device: 0, beside_encoder: false };
+        o.testing.insert(OutputKind::Recording, t);
+        // A test canceled earlier, still finishing.
+        let finished = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let f = Arc::clone(&finished);
+        o.canceled.push(std::thread::spawn(move || {
+            for _ in 0..100_000 {
+                std::thread::yield_now();
+            }
+            f.store(true, std::sync::atomic::Ordering::SeqCst);
+            Err(StudioError::Output("canceled".into()))
+        }));
+        o.stop_all_blocking();
+        assert!(ended.load(std::sync::atomic::Ordering::SeqCst), "the test ended through its cancel before the shutdown returned");
+        assert!(finished.load(std::sync::atomic::Ordering::SeqCst), "the shutdown waited for the canceled test");
+        assert!(o.canceled.is_empty());
+        assert!(o.testing.is_empty());
+        assert!(o.state(OutputKind::Recording).is_none());
+    }
+
+    #[test]
+    fn a_hardware_encoder_that_fails_while_recording_is_skipped_for_the_session() {
+        let mf = craft_hwenc::candidate("mf_h264").unwrap();
+        let mut o = Outputs::default();
+        let program = PathBuf::from("fake-ffmpeg");
+        let hardware = Some(HardwareRun { candidate: mf, program: program.clone(), auto: true });
+        let active = Active {
+            id: 1,
+            instance: Box::new(FailedOutput),
+            stats: Arc::new(EncoderStats::default()),
+            started: Instant::now(),
+            target: String::new(),
+            hardware,
+        };
+        o.active.insert(OutputKind::Recording, active);
+        let ev = o.poll();
+        let templates: Vec<_> = ev.notices.iter().map(|n| n.template).collect();
+        assert_eq!(templates, ["The recording stopped: {error}", "{encoder} stopped working; the next start tries another encoder"]);
+        let prober = fake(craft_hwenc::Outcome::Works);
+        assert_eq!(prober.program(), program);
+        assert!(matches!(o.probes.get(&prober, mf, Input::Nv12), Some(craft_hwenc::Outcome::Failed(_))));
+        assert!(o.active.is_empty());
+    }
 
     #[test]
     fn recording_names_do_not_overwrite() {

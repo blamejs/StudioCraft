@@ -139,6 +139,10 @@ pub struct OutputSettings {
     pub encoder_settings: BTreeMap<String, Settings>,
     /// The ffmpeg program; empty means `ffmpeg` on the `PATH`.
     pub ffmpeg_path: String,
+    /// What the `hardware` video encoder of recordings and streams runs: `auto` (the first
+    /// hardware encoder that passes a one-frame test, else x264), `software`, or a hardware
+    /// encoder's plug-in id.
+    pub hardware_encoder: String,
 }
 
 impl Default for OutputSettings {
@@ -150,6 +154,7 @@ impl Default for OutputSettings {
             video_encoder: "x264".into(),
             encoder_settings: BTreeMap::new(),
             ffmpeg_path: String::new(),
+            hardware_encoder: "auto".into(),
         }
     }
 }

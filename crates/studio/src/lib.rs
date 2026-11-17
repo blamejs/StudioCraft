@@ -428,6 +428,7 @@ impl Studio {
             }
         }
         self.monitor.poll(&self.mixer, &mut self.notices);
+        self.finish_hardware_tests();
         let events = self.outputs.poll();
         for n in events.notices {
             self.notices.push(n);
@@ -481,6 +482,7 @@ impl Studio {
                 self.notices.push(Notice::new("Drawing again on {adapter}", vec![("adapter", name)], false));
                 self.gpu = Some(new);
                 self.gpu_loss = None;
+                self.outputs.forget_hardware_tests();
                 self.restart_video();
             }
             Err(e) => {
@@ -507,6 +509,7 @@ impl Studio {
         self.recovery = gpu.as_ref().and_then(Gpu::preference).map(|p| Recovery::new(p.clone(), RecoveryPolicy::default()));
         self.gpu = gpu;
         self.gpu_loss = None;
+        self.outputs.forget_hardware_tests();
         self.restart_video();
     }
 

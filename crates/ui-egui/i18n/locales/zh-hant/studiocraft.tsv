@@ -363,6 +363,14 @@
 	YUV vectorscope	YUV 向量示波器
 	{device} (not connected)	{device}（未連接）
 	{encoder} (not in this ffmpeg)	{encoder}（此 ffmpeg 中沒有）
+	Hardware encoder	硬體編碼器
+	Automatic (the first that passes a test)	自動（第一個通過測試的）
+	Software only	僅軟體
+	Used by recordings and streams whose encoder is Hardware. Automatic tests each hardware encoder with one frame and uses x264 when none works.	用於編碼器為「硬體」的錄影和直播。「自動」會用一個畫格測試每個硬體編碼器，都無法使用時改用 x264。
+	Hardware (set in Settings › Video)	硬體（在「設定 › 視訊」中設定）
+@msg	No hardware encoder passed its test; using {encoder}	沒有硬體編碼器通過測試；改用 {encoder}
+@msg	The hardware encoder tests could not run: {error}	無法執行硬體編碼器測試：{error}
+@msg	{encoder} stopped working; the next start tries another encoder	{encoder} 已停止運作；下次開始時將嘗試其他編碼器
 	{program} did not report its version	{program} 未回報其版本
 	Compact (small files)	精簡（檔案較小）
 	Duplicate Profile	複製設定檔

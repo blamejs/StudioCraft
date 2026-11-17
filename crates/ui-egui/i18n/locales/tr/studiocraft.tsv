@@ -363,6 +363,14 @@
 	YUV vectorscope	YUV vektörskop
 	{device} (not connected)	{device} (bağlı değil)
 	{encoder} (not in this ffmpeg)	{encoder} (bu ffmpeg'de yok)
+	Hardware encoder	Donanım kodlayıcı
+	Automatic (the first that passes a test)	Otomatik (testi geçen ilk kodlayıcı)
+	Software only	Yalnızca yazılım
+	Used by recordings and streams whose encoder is Hardware. Automatic tests each hardware encoder with one frame and uses x264 when none works.	Kodlayıcısı Donanım olan kayıtlar ve yayınlar kullanır. Otomatik, her donanım kodlayıcıyı tek kareyle test eder ve hiçbiri çalışmazsa x264 kullanır.
+	Hardware (set in Settings › Video)	Donanım (Ayarlar › Video'da belirlenir)
+@msg	No hardware encoder passed its test; using {encoder}	Hiçbir donanım kodlayıcı testi geçemedi; {encoder} kullanılıyor
+@msg	The hardware encoder tests could not run: {error}	Donanım kodlayıcı testleri çalıştırılamadı: {error}
+@msg	{encoder} stopped working; the next start tries another encoder	{encoder} çalışmayı bıraktı; bir sonraki başlatmada başka bir kodlayıcı denenecek
 	{program} did not report its version	{program} sürümünü bildirmedi
 	s	sn
 	Compact (small files)	Kompakt (küçük dosyalar)

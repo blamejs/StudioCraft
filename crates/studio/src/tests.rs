@@ -637,6 +637,52 @@ fn the_outputs_stop_when_the_device_is_lost() {
 }
 
 #[test]
+fn hardware_encoder_tests_run_off_the_calling_thread_and_a_second_toggle_cancels_them() {
+    // A file that is not a program: every test finds no ffmpeg at once.
+    let dir = std::env::temp_dir().join(format!("studiocraft-hwenc-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let fake = dir.join("ffmpeg-not-a-program");
+    std::fs::write(&fake, b"not a program").unwrap();
+    let mut p = Profile::default();
+    p.output.ffmpeg_path = fake.to_string_lossy().into_owned();
+    p.output.video_encoder = "hardware".into();
+    p.output.folder = dir.to_string_lossy().into_owned();
+    let mut s = studio_with(Some(noop_gpu()), SceneCollection::new("Test", "Scene"), p);
+    s.start_output(OutputKind::Recording).unwrap();
+    assert!(s.testing_hardware(OutputKind::Recording), "the start returns while the tests run");
+    let waiting = s.output(OutputKind::Recording).unwrap();
+    assert!(!waiting.active && waiting.status == studiocraft_plugin::OutputStatus::Starting, "the output bar shows Starting");
+    while s.testing_hardware(OutputKind::Recording) {
+        s.tick();
+        std::thread::yield_now();
+    }
+    let notices = s.take_notices();
+    assert!(notices.iter().any(|n| n.template == "No hardware encoder passed its test; using {encoder}"), "{notices:?}");
+    s.stop_output(OutputKind::Recording);
+    s.take_notices();
+    s.toggle_output(OutputKind::Recording).unwrap();
+    assert!(s.testing_hardware(OutputKind::Recording));
+    s.toggle_output(OutputKind::Recording).unwrap();
+    assert!(!s.testing_hardware(OutputKind::Recording), "a second toggle cancels the tests");
+    s.tick();
+    assert!(s.output(OutputKind::Recording).is_none_or(|o| !o.active), "a canceled start records nothing");
+    assert!(s.take_notices().iter().all(|n| n.template != "No hardware encoder passed its test; using {encoder}"));
+    // A setting changed while the tests run: the result for the old setting is not used.
+    s.toggle_output(OutputKind::Recording).unwrap();
+    let mut software = s.profile().clone();
+    software.output.hardware_encoder = "software".into();
+    s.set_profile(software).unwrap();
+    while s.testing_hardware(OutputKind::Recording) {
+        s.tick();
+        std::thread::yield_now();
+    }
+    let notices = s.take_notices();
+    assert!(notices.iter().all(|n| n.template != "No hardware encoder passed its test; using {encoder}"), "{notices:?}");
+    s.stop_output(OutputKind::Recording);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn graphics_notices_name_the_adapter_and_the_count() {
     use studiocraft_render::device::Notice as N;
     let n = gpu_notice(&N::SoftwareAfterLosses(3));
