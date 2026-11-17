@@ -61,6 +61,10 @@
 - Interface fonts through `craft-ui`'s font stack: Inter for text, Inter SemiBold for titles and
   JetBrains Mono for readouts, then the craft-fonts faces when `CRAFT_FONTS_DIR` is set, then
   egui's built-in faces. The menus' check and radio marks draw with or without `CRAFT_FONTS_DIR`.
+- Settings › Video › Hardware acceleration: the graphics adapter (Automatic, Power saving,
+  Software or a listed adapter), used from the next start, with a notice when the chosen adapter
+  is missing or the app fell back to software. After a device loss the app starts again on a new
+  device, and after 3 losses in 10 minutes it draws in software.
 
 ## Next
 
@@ -69,7 +73,5 @@
 2. **Multiple outputs.** Several streams at once, and a virtual camera.
 3. **Web build.** The model and plugin crates already build for WebAssembly; a browser editor for
    scene collections is the first step.
-4. **Hardware acceleration.** A graphics adapter choice in Settings with a software fallback and
-   recovery after a device loss (`craft-gpu-device` holds the choice and the device handling),
-   color conversion and scaling on the GPU, hardware encoders checked and chosen automatically,
-   and frames that stay on the GPU from capture to the encoder.
+4. **Hardware acceleration.** Color conversion and scaling on the GPU, hardware encoders checked
+   and chosen automatically, and frames that stay on the GPU from capture to the encoder.

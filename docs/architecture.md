@@ -148,6 +148,16 @@ build for `wasm32-unknown-unknown`:
   at most 480 × 270 and sends it to the window's scopes queue. The copy is drawn with linear
   filtering and its chroma is at half width and half height, so a hard edge in the program shows on
   the scopes as intermediate levels.
+  The window opens its device on the adapter Settings › Video › Hardware acceleration names
+  (`graphics_adapter` in `config.toml`), through `craft-gpu-device`'s `pick`. When the window's
+  device is lost, the app saves everything, notes the loss in `graphics_losses` and starts again;
+  after 3 losses in 10 minutes it starts on a software adapter. A device the app opened without a
+  window (`Gpu::open`) is opened again in place, with no restart. When the chosen adapter cannot
+  open the window, the setting becomes Automatic and the app starts again; when Automatic cannot,
+  the app starts once more in software for that run (`STUDIOCRAFT_GPU_SOFTWARE` is set for it).
+  A session started with `--no-prefs` or `--control` does not start itself again; the status bar
+  asks the user to restart. An uncaptured wgpu error counts as a loss. When a device is lost, the
+  recording, the stream and the replay buffer stop, the compositor is closed and nothing is drawn.
 - **Scopes thread.** While View › Scopes is open, the window hands the newest program copy to the
   scopes thread (`ui-egui/src/scopes.rs`) when the thread is idle. The thread computes and paints
   the chosen scope with `craft-scopes` into buffers it keeps and makes the texture image. The window

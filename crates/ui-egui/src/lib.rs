@@ -14,6 +14,7 @@ pub mod credits;
 mod docks;
 pub mod fonts;
 mod forms;
+pub mod hardware;
 mod icons;
 pub mod kit;
 mod output_bar;
@@ -40,6 +41,7 @@ use serde_json::{Value, json};
 use studiocraft_media::mix::MeterBallistics;
 use studiocraft_model::{ItemId, Profile, SceneCollection, SceneId, SettingsSchema, SourceId, Transform, Vec2};
 use studiocraft_render::Gpu;
+use studiocraft_render::device::{Candidate, Preference};
 use studiocraft_studio::files::read_collection_file;
 use studiocraft_studio::{OutputKind, Studio, UiAction, builtin_registry, default_collection};
 
@@ -143,6 +145,23 @@ const AUTOSAVE: Duration = Duration::from_millis(800);
 /// How far the dock strip's top-edge hit band reaches above and below its 1 point line.
 const EDGE_HIT_MARGIN: f32 = 3.5;
 
+/// The window's graphics device: the adapter preference it opened with, and what happens after
+/// it is lost.
+#[derive(Default)]
+struct WindowGpu {
+    /// The preference the window opened with: the saved one, or software after repeated losses.
+    opened_with: Preference,
+    /// What the user was told about the adapter the window opened on.
+    notices: Vec<Msg>,
+    /// After a loss the app may start itself again: its settings are kept on disk and no script
+    /// drives the window.
+    may_relaunch: bool,
+    /// The loss of the current device was handled.
+    loss_seen: bool,
+    /// The window closes so that the app starts again on a new device.
+    relaunch: bool,
+}
+
 pub struct StudioApp {
     studio: Studio,
     store: Store,
@@ -213,6 +232,9 @@ pub struct StudioApp {
     /// The interface language [`Self::install_fonts`] last built the fonts for; `None` until it
     /// runs. The fonts are built again when the language changes.
     fonts_for: Option<craft_i18n::Lang>,
+    window_gpu: WindowGpu,
+    /// Whether [`Self::logic`] ticked the studio since the last frame was drawn.
+    ticked_in_logic: bool,
 }
 
 impl StudioApp {
@@ -256,7 +278,7 @@ impl StudioApp {
                 (default_collection(&free_name(&collection_name, |n| existing.iter().any(|c| c.eq_ignore_ascii_case(n)))), true)
             }
         };
-        let gpu = render.as_ref().map(|rs| Gpu::new(rs.device.clone(), rs.queue.clone()));
+        let gpu = render.as_ref().map(|rs| Gpu::new(rs.device.clone(), rs.queue.clone()).with_adapter(Candidate::of(&rs.adapter, None)));
         let studio = Studio::new(gpu, collection, profile, Arc::new(registry), ffmpeg);
         store.update(|p| {
             p.profile = studio.profile().name.clone();
@@ -310,6 +332,8 @@ impl StudioApp {
             updates: updates_ui::Runtime::default(),
             title_bar: None,
             fonts_for: None,
+            window_gpu: WindowGpu::default(),
+            ticked_in_logic: false,
         };
         if new_collection {
             app.collection_on_disk = app.save_collection();
@@ -342,6 +366,51 @@ impl StudioApp {
     /// Whether the app draws the window frame.
     pub fn draws_title_bar(&self) -> bool {
         self.title_bar.is_some()
+    }
+
+    /// The window opened its graphics device for `opened_with` ([`hardware::startup`]), and the
+    /// user is told `notices` about the choice. With `may_relaunch` a lost device closes the
+    /// window so that the app starts again ([`StudioApp::relaunch_requested`]). It does not when
+    /// the window drew on a software adapter, or opened for software and has now lost its device
+    /// [`hardware::KEPT_LOSSES`] times in the recovery window (a machine with no software
+    /// adapter), since starting again would end the same way; the status bar then asks the user to
+    /// restart.
+    pub fn set_window_gpu(&mut self, opened_with: Preference, notices: Vec<Msg>, may_relaunch: bool) {
+        for n in &notices {
+            self.notify(n.clone(), true);
+        }
+        self.window_gpu = WindowGpu { opened_with, notices, may_relaunch, loss_seen: false, relaunch: false };
+    }
+
+    /// Whether the window closed because its graphics device was lost and the app should start
+    /// again. Everything was saved before it closed.
+    pub fn relaunch_requested(&self) -> bool {
+        self.window_gpu.relaunch
+    }
+
+    /// After the window's graphics device was lost: record the loss for [`hardware::startup`],
+    /// and close the window to start again, or ask the user to restart (see
+    /// [`StudioApp::set_window_gpu`]).
+    fn watch_window_gpu(&mut self, ctx: &egui::Context) {
+        if self.window_gpu.loss_seen || self.studio.gpu_lost().is_none() || self.studio.gpu().is_some_and(Gpu::can_reopen) {
+            return;
+        }
+        self.window_gpu.loss_seen = true;
+        let now = hardware::now_secs();
+        self.store.update(|p| hardware::record_loss(&mut p.graphics_losses, now));
+        // The adapter the window drew with, not the one asked for: a software request on a
+        // machine without a software adapter draws on hardware.
+        let on_software = self.studio.gpu().and_then(Gpu::adapter).is_some_and(Candidate::is_software);
+        let no_way_out = self.window_gpu.opened_with == Preference::Software && hardware::repeated_losses(&self.store.prefs().graphics_losses, now);
+        // The window closes without asking, so only once everything was saved; otherwise the
+        // status bar says what could not be saved and the window stays open.
+        if self.window_gpu.may_relaunch && !on_software && !no_way_out && self.save_all() {
+            self.window_gpu.relaunch = true;
+            self.exit_confirmed = true;
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+        } else {
+            self.notify(tmsg!("Nothing can be drawn until StudioCraft starts again"), true);
+        }
     }
 
     pub fn keymap(&self) -> &Keymap {
@@ -507,7 +576,38 @@ impl StudioApp {
             let p = self.store.prefs();
             let mut w = SettingsWindow::new(self.studio.profile(), &self.keymap, tab, p.language(), p.check_updates);
             w.system_title_bar = p.system_title_bar;
+            w.graphics_adapter = p.graphics_adapter.clone();
+            w.adapters = self.render.as_ref().map(|rs| rs.available_adapters.iter().map(|a| Candidate::of(a, None)).collect()).unwrap_or_default();
+            w.drawing_with = self.studio.gpu().and_then(Gpu::adapter).map(|a| a.name.clone());
+            w.gpu_notices = self.window_gpu.notices.clone();
             self.settings = Some(w);
+        }
+    }
+
+    /// Put the settings OK or Apply gave in force; whether the studio took them (it refuses video
+    /// changes while an output runs, and then nothing is applied).
+    fn apply_settings(&mut self, a: settings::Apply) -> bool {
+        match self.studio.set_profile(a.profile) {
+            Ok(()) => {
+                self.save_profile();
+                self.keymap.set_overrides(a.overrides.clone());
+                self.store.update(|p| {
+                    p.hotkeys = a.overrides;
+                    p.check_updates = a.check_updates;
+                    p.system_title_bar = a.system_title_bar;
+                    if p.graphics_adapter != a.graphics_adapter {
+                        // Losses on the old choice say nothing about the new one.
+                        p.graphics_adapter = a.graphics_adapter;
+                        p.graphics_losses.clear();
+                    }
+                });
+                self.set_language(&a.language);
+                true
+            }
+            Err(e) => {
+                self.notify(e.to_string(), true);
+                false
+            }
         }
     }
 
@@ -1138,9 +1238,9 @@ impl StudioApp {
         if self.fonts_for.is_some_and(|l| l != i18n::lang()) {
             self.install_fonts(ctx);
         }
-        self.studio.tick();
-        for n in self.studio.take_notices() {
-            self.notify(Msg::new(n.template, n.args), n.error);
+        // eframe calls `logic` before each drawn frame, and also while the window is hidden.
+        if !std::mem::take(&mut self.ticked_in_logic) {
+            self.tick_studio(ctx);
         }
         let now = Instant::now();
         let revision = self.studio.engine().revision();
@@ -1652,25 +1752,7 @@ impl StudioApp {
             }
             // Settings the studio refuses (video changes while an output runs) apply nothing, and
             // the window stays open with the edits.
-            let mut refused = false;
-            if let Some(a) = out.apply {
-                match self.studio.set_profile(a.profile) {
-                    Ok(()) => {
-                        self.save_profile();
-                        self.keymap.set_overrides(a.overrides.clone());
-                        self.store.update(|p| {
-                            p.hotkeys = a.overrides;
-                            p.check_updates = a.check_updates;
-                            p.system_title_bar = a.system_title_bar;
-                        });
-                        self.set_language(&a.language);
-                    }
-                    Err(e) => {
-                        self.notify(e.to_string(), true);
-                        refused = true;
-                    }
-                }
-            }
+            let refused = out.apply.is_some_and(|a| !self.apply_settings(a));
             if out.close && !refused {
                 self.settings = None;
             }
@@ -1923,8 +2005,20 @@ impl StudioApp {
         ctx.request_repaint();
     }
 
-    /// Before the frame: a close request waits for confirmation while an output runs.
+    /// Tick the studio, show its notices and check the window's device.
+    fn tick_studio(&mut self, ctx: &egui::Context) {
+        self.studio.tick();
+        for n in self.studio.take_notices() {
+            self.notify(Msg::new(n.template, n.args), n.error);
+        }
+        self.watch_window_gpu(ctx);
+    }
+
+    /// Before the frame: the studio ticks, and a close request waits for confirmation while an
+    /// output runs.
     pub fn logic(&mut self, ctx: &egui::Context) {
+        self.tick_studio(ctx);
+        self.ticked_in_logic = true;
         if ctx.input(|i| i.viewport().close_requested()) {
             let busy = self.outputs_running();
             if busy && !self.exit_confirmed {

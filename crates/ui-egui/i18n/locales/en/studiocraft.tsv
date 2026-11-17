@@ -402,7 +402,22 @@
 	{n} kbps	{n} kbps
 	{program} did not report its version	{program} did not report its version
 	{status} · {mb} MB	{status} · {mb} MB
+	Automatic (fastest)	Automatic (fastest)
+	Drawing with {adapter}	Drawing with {adapter}
+	Graphics adapter	Graphics adapter
+	Hardware acceleration	Hardware acceleration
+	Power saving	Power saving
+	Software (slower)	Software (slower)
 @msg	A plug-in could not be loaded: {error}	A plug-in could not be loaded: {error}
+@msg	Drawing again on {adapter}	Drawing again on {adapter}
+@msg	No graphics device could be opened again: {error}	No graphics device could be opened again: {error}
+@msg	No graphics hardware can be used; drawing in software, which is slower	No graphics hardware can be used; drawing in software, which is slower
+@msg	No software graphics adapter is available; using the automatic choice	No software graphics adapter is available; using the automatic choice
+@msg	Nothing can be drawn until StudioCraft starts again	Nothing can be drawn until StudioCraft starts again
+@msg	The graphics adapter {adapter} could not be opened: {error}	The graphics adapter {adapter} could not be opened: {error}
+@msg	The graphics adapter {adapter} is not available; using the automatic choice	The graphics adapter {adapter} is not available; using the automatic choice
+@msg	The graphics device stopped working {count} times; drawing in software	The graphics device stopped working {count} times; drawing in software
+@msg	The graphics device stopped working: {error}	The graphics device stopped working: {error}
 @msg	Audio monitoring could not start: {error}	Audio monitoring could not start: {error}
 @msg	Audio monitoring stopped: {error}	Audio monitoring stopped: {error}
 @msg	Could not check for updates: {error}	Could not check for updates: {error}

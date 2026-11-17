@@ -363,7 +363,22 @@
 	{device} (not connected)	{device} (não conectado)
 	{encoder} (not in this ffmpeg)	{encoder} (ausente neste ffmpeg)
 	{program} did not report its version	{program} não informou sua versão
+	Automatic (fastest)	Automático (mais rápido)
+	Drawing with {adapter}	Desenhando com {adapter}
+	Graphics adapter	Adaptador gráfico
+	Hardware acceleration	Aceleração de hardware
+	Power saving	Economia de energia
+	Software (slower)	Software (mais lento)
 @msg	A plug-in could not be loaded: {error}	Não foi possível carregar um plug-in: {error}
+@msg	Drawing again on {adapter}	Desenhando novamente com {adapter}
+@msg	No graphics device could be opened again: {error}	Não foi possível abrir de novo um dispositivo gráfico: {error}
+@msg	No graphics hardware can be used; drawing in software, which is slower	Nenhum hardware gráfico pode ser usado; desenhando por software, que é mais lento
+@msg	No software graphics adapter is available; using the automatic choice	Nenhum adaptador gráfico por software está disponível; usando a escolha automática
+@msg	Nothing can be drawn until StudioCraft starts again	Nada pode ser desenhado até o StudioCraft iniciar novamente
+@msg	The graphics adapter {adapter} could not be opened: {error}	Não foi possível abrir o adaptador gráfico {adapter}: {error}
+@msg	The graphics adapter {adapter} is not available; using the automatic choice	O adaptador gráfico {adapter} não está disponível; usando a escolha automática
+@msg	The graphics device stopped working {count} times; drawing in software	O dispositivo gráfico parou de funcionar {count} vezes; desenhando por software
+@msg	The graphics device stopped working: {error}	O dispositivo gráfico parou de funcionar: {error}
 @msg	Audio monitoring could not start: {error}	Não foi possível iniciar o monitoramento de áudio: {error}
 @msg	Audio monitoring stopped: {error}	O monitoramento de áudio parou: {error}
 @msg	Could not check for updates: {error}	Não foi possível procurar atualizações: {error}

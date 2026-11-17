@@ -500,8 +500,18 @@ impl Compositor {
         self.scope_skipped.load(Ordering::Relaxed)
     }
 
-    /// Apply what the app published, then draw a frame.
+    /// Apply what the app published, then draw a frame. On a lost device nothing is applied or
+    /// drawn, and every capture is answered with the loss.
     pub fn run(&mut self, shared: &RenderShared, now: Tick) {
+        if let Some(why) = self.gpu.lost() {
+            while let Some(req) = shared.captures.pop() {
+                self.waiting.push(req);
+            }
+            for req in self.waiting.drain(..) {
+                let _ = req.reply.try_send(Err(RenderError::Device(format!("the graphics device was lost: {why}"))));
+            }
+            return;
+        }
         if let Some((w, h)) = shared.canvas.take() {
             let generation = self.generation;
             self.set_canvas(w, h);
@@ -538,6 +548,9 @@ impl Compositor {
 
     /// The newest picture of `view` with straight alpha. Waits for the GPU.
     pub fn capture(&self, view: View) -> Result<Capture, RenderError> {
+        if let Some(why) = self.gpu.lost() {
+            return Err(RenderError::Device(format!("the graphics device was lost: {why}")));
+        }
         let mut rgba = match view {
             View::Program => self.read_program()?,
             View::Preview => self.read_preview()?.ok_or_else(|| RenderError::Device("no preview picture has been drawn".into()))?,
@@ -621,7 +634,7 @@ impl Compositor {
             }
         }
         if self.nv12.is_some() || self.scope_nv12.is_some() {
-            let _ = self.gpu.device.poll(wgpu::PollType::Poll);
+            self.gpu.poll();
         }
         if let Some(n) = &mut self.nv12 {
             n.collect(readback_lost);
@@ -696,7 +709,7 @@ impl Compositor {
     /// Wait until the GPU has finished every frame submitted so far, and hand finished
     /// read-backs to the encoders.
     pub fn finish(&mut self, readback_lost: &AtomicU64) {
-        let _ = self.gpu.device.poll(wgpu::PollType::wait_indefinitely());
+        let _ = self.gpu.wait();
         if let Some(n) = &mut self.nv12 {
             n.collect(readback_lost);
         }
@@ -768,7 +781,7 @@ fn read_rgba(gpu: &Gpu, texture: &wgpu::Texture, width: u32, height: u32) -> Res
     buffer.map_async(wgpu::MapMode::Read, .., move |r| {
         let _ = tx.try_send(r.is_ok());
     });
-    gpu.device.poll(wgpu::PollType::wait_indefinitely()).map_err(|e| RenderError::Device(e.to_string()))?;
+    gpu.wait()?;
     // Another thread polling the same device (the window) may run the callback instead of this
     // poll, so the result can arrive a moment after the poll returns.
     if rx.recv_timeout(MAP_WAIT) != Ok(true) {

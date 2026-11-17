@@ -364,7 +364,22 @@
 	{device} (not connected)	{device} (未接続)
 	{encoder} (not in this ffmpeg)	{encoder} (この ffmpeg にはありません)
 	{program} did not report its version	{program} がバージョンを返しませんでした
+	Automatic (fastest)	自動 (最速)
+	Drawing with {adapter}	{adapter} で描画中
+	Graphics adapter	グラフィックアダプター
+	Hardware acceleration	ハードウェアアクセラレーション
+	Power saving	省電力
+	Software (slower)	ソフトウェア (低速)
 @msg	A plug-in could not be loaded: {error}	プラグインを読み込めませんでした: {error}
+@msg	Drawing again on {adapter}	{adapter} で描画を再開しました
+@msg	No graphics device could be opened again: {error}	グラフィックデバイスを再び開けませんでした: {error}
+@msg	No graphics hardware can be used; drawing in software, which is slower	使用できるグラフィックハードウェアがありません。ソフトウェアで描画するため低速です
+@msg	No software graphics adapter is available; using the automatic choice	ソフトウェアのグラフィックアダプターがありません。自動選択を使用します
+@msg	Nothing can be drawn until StudioCraft starts again	StudioCraft を再起動するまで描画できません
+@msg	The graphics adapter {adapter} could not be opened: {error}	グラフィックアダプター {adapter} を開けませんでした: {error}
+@msg	The graphics adapter {adapter} is not available; using the automatic choice	グラフィックアダプター {adapter} は使用できません。自動選択を使用します
+@msg	The graphics device stopped working {count} times; drawing in software	グラフィックデバイスが {count} 回停止しました。ソフトウェアで描画します
+@msg	The graphics device stopped working: {error}	グラフィックデバイスが停止しました: {error}
 @msg	Audio monitoring could not start: {error}	音声モニタリングを開始できませんでした: {error}
 @msg	Audio monitoring stopped: {error}	音声モニタリングが停止しました: {error}
 @msg	Could not check for updates: {error}	アップデートを確認できませんでした: {error}

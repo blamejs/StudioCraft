@@ -12,6 +12,7 @@ use craft_settings::{Location, SettingsStore};
 use serde::{Deserialize, Serialize};
 use studiocraft_model::format::{MAX_FILE_BYTES, read_collection, read_profile, write_collection, write_profile};
 use studiocraft_model::{Profile, SceneCollection};
+use studiocraft_render::device::Preference;
 
 /// Which docks are shown, their order in the dock strip, and the sizes set by dragging the dock
 /// strip's edges. A size of 0 is not set and uses the default in [`crate::strip`]; Docks › Reset
@@ -354,6 +355,41 @@ pub struct Prefs {
     /// Keep the desktop's title bar where the app would draw its own. Read when the window
     /// opens, so a change takes effect at the next start.
     pub system_title_bar: bool,
+    /// The graphics adapter the window draws with (Settings › Video › Hardware acceleration).
+    /// Read when the window opens. A value this build cannot read is the automatic choice.
+    pub graphics_adapter: Preference,
+    /// When the window's graphics device was last lost, in seconds since 1970, oldest first (at
+    /// most [`crate::hardware::KEPT_LOSSES`] are kept, and a longer list reads as its last ones). A
+    /// value this build cannot read is empty.
+    #[serde(deserialize_with = "bounded_losses")]
+    pub graphics_losses: Vec<u64>,
+}
+
+/// The last [`crate::hardware::KEPT_LOSSES`] entries of a list of loss times, without holding the
+/// rest.
+fn bounded_losses<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<u64>, D::Error> {
+    use serde::de::{SeqAccess, Visitor};
+
+    struct Losses;
+
+    impl<'de> Visitor<'de> for Losses {
+        type Value = Vec<u64>;
+        fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+            f.write_str("a list of times")
+        }
+        fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Self::Value, A::Error> {
+            let mut out = std::collections::VecDeque::with_capacity(crate::hardware::KEPT_LOSSES + 1);
+            while let Some(t) = seq.next_element::<u64>()? {
+                out.push_back(t);
+                if out.len() > crate::hardware::KEPT_LOSSES {
+                    out.pop_front();
+                }
+            }
+            Ok(out.into())
+        }
+    }
+
+    d.deserialize_seq(Losses)
 }
 
 impl Default for Prefs {
@@ -372,6 +408,8 @@ impl Default for Prefs {
             language: crate::i18n::AUTO.into(),
             check_updates: true,
             system_title_bar: false,
+            graphics_adapter: Preference::Auto,
+            graphics_losses: Vec::new(),
         }
     }
 }
@@ -762,6 +800,49 @@ mod tests {
             assert!(problems.is_empty(), "{problems:?}");
             assert_eq!(again.prefs().system_title_bar, on);
         }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_graphics_adapter_and_its_losses_are_kept_and_a_bad_value_reads_as_auto() {
+        use studiocraft_render::device::AdapterKey;
+        let dir = std::env::temp_dir().join(format!("studiocraft-store-gpu-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let (mut s, _) = Store::open(Location::Dir(dir.clone()));
+        assert_eq!(s.prefs().graphics_adapter, Preference::Auto, "automatic by default");
+        let key = AdapterKey {
+            name: "GPU".into(),
+            backend: "vulkan".into(),
+            vendor: 0x10de,
+            device: 0x2684,
+            pci_bus_id: "0000:01:00.0".into(),
+            driver: "NVIDIA".into(),
+        };
+        for p in [Preference::Adapter(key), Preference::Software, Preference::LowPower] {
+            s.update(|prefs| {
+                prefs.graphics_adapter = p.clone();
+                prefs.graphics_losses = vec![10, 20];
+            });
+            s.flush().unwrap();
+            let (again, problems) = Store::open(Location::Dir(dir.clone()));
+            assert!(problems.is_empty(), "{problems:?}");
+            assert_eq!(again.prefs().graphics_adapter, p);
+            assert_eq!(again.prefs().graphics_losses, [10, 20]);
+        }
+        let config = std::fs::read_dir(&dir).unwrap().flatten().map(|e| e.path()).find(|p| p.extension().is_some_and(|x| x == "toml")).unwrap();
+        // a value of the wrong kind, and a table from a later build
+        for adapter in ["graphics_adapter = \"quantum\"\n", "[graphics_adapter]\nkind = \"quantum\"\n"] {
+            std::fs::write(&config, format!("language = \"de\"\ngraphics_losses = \"often\"\n\n{adapter}")).unwrap();
+            let (bad, _) = Store::open(Location::Dir(dir.clone()));
+            assert_eq!(bad.prefs().graphics_adapter, Preference::Auto, "{adapter}");
+            assert!(bad.prefs().graphics_losses.is_empty(), "{adapter}");
+            assert_eq!(bad.prefs().language, "de", "the other settings are kept: {adapter}");
+        }
+        // a long list reads as its last entries
+        let long: Vec<String> = (1..=10_000).map(|t| t.to_string()).collect();
+        std::fs::write(&config, format!("graphics_losses = [{}]\n", long.join(", "))).unwrap();
+        let (many, _) = Store::open(Location::Dir(dir.clone()));
+        assert_eq!(many.prefs().graphics_losses, [9_998, 9_999, 10_000]);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

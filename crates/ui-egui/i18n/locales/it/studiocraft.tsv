@@ -360,7 +360,22 @@
 	{device} (not connected)	{device} (non collegato)
 	{encoder} (not in this ffmpeg)	{encoder} (non presente in questo ffmpeg)
 	{program} did not report its version	{program} non ha indicato la sua versione
+	Automatic (fastest)	Automatico (il più veloce)
+	Drawing with {adapter}	Disegno con {adapter}
+	Graphics adapter	Scheda grafica
+	Hardware acceleration	Accelerazione hardware
+	Power saving	Risparmio energetico
+	Software (slower)	Software (più lento)
 @msg	A plug-in could not be loaded: {error}	Impossibile caricare un plug-in: {error}
+@msg	Drawing again on {adapter}	Disegno ripreso con {adapter}
+@msg	No graphics device could be opened again: {error}	Impossibile riaprire un dispositivo grafico: {error}
+@msg	No graphics hardware can be used; drawing in software, which is slower	Nessun hardware grafico utilizzabile; il disegno avviene via software, più lento
+@msg	No software graphics adapter is available; using the automatic choice	Nessuna scheda grafica software disponibile; viene usata la scelta automatica
+@msg	Nothing can be drawn until StudioCraft starts again	Non è possibile disegnare nulla finché StudioCraft non viene riavviato
+@msg	The graphics adapter {adapter} could not be opened: {error}	Impossibile aprire la scheda grafica {adapter}: {error}
+@msg	The graphics adapter {adapter} is not available; using the automatic choice	La scheda grafica {adapter} non è disponibile; viene usata la scelta automatica
+@msg	The graphics device stopped working {count} times; drawing in software	Il dispositivo grafico ha smesso di funzionare {count} volte; il disegno avviene via software
+@msg	The graphics device stopped working: {error}	Il dispositivo grafico ha smesso di funzionare: {error}
 @msg	Audio monitoring could not start: {error}	Impossibile avviare l'ascolto audio: {error}
 @msg	Audio monitoring stopped: {error}	L'ascolto audio si è interrotto: {error}
 @msg	Could not check for updates: {error}	Impossibile cercare aggiornamenti: {error}

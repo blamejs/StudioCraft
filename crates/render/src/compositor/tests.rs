@@ -602,3 +602,26 @@ fn a_frame_answers_waiting_captures() {
     assert!(preview_rx.try_recv().unwrap().is_err(), "no preview outside studio mode");
     assert!(shared.captures.is_empty());
 }
+
+#[test]
+fn a_lost_device_answers_captures_with_an_error_and_takes_no_new_targets() {
+    // a device of its own on wgpu's noop adapter, since this one is destroyed
+    let mut desc = wgpu::InstanceDescriptor::new_without_display_handle();
+    desc.backends = wgpu::Backends::NOOP;
+    desc.backend_options.noop = wgpu::NoopBackendOptions { enable: true, ..Default::default() };
+    let (gpu, _) = Gpu::open_on(wgpu::Instance::new(desc), &crate::device::Preference::Software).unwrap();
+    let mut c = Compositor::new(gpu.clone(), 32, 16).unwrap();
+    let shared = RenderShared::default();
+    gpu.device.destroy();
+    gpu.poll();
+    assert!(gpu.is_lost());
+    shared.canvas.publish((64, 32));
+    let (tx, rx) = std::sync::mpsc::sync_channel(1);
+    assert!(shared.captures.push(CaptureRequest { view: View::Program, reply: tx }).is_ok());
+    c.run(&shared, Tick(0));
+    let err = rx.try_recv().unwrap().unwrap_err();
+    assert!(err.to_string().contains("lost"), "{err}");
+    assert!(c.capture(View::Program).is_err());
+    assert_eq!(c.size(), (32, 16), "no canvas is made on a lost device");
+    assert!(shared.captures.is_empty());
+}

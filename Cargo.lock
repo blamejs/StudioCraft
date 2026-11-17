@@ -5655,6 +5655,7 @@ dependencies = [
  "log",
  "serde_json",
  "studiocraft-engine",
+ "studiocraft-render",
  "studiocraft-studio",
  "studiocraft-ui-egui",
 ]
@@ -5789,6 +5790,7 @@ name = "studiocraft-render"
 version = "0.1.0"
 dependencies = [
  "bytemuck",
+ "craft-gpu-device",
  "criterion",
  "crossbeam-queue",
  "log",
@@ -5839,6 +5841,7 @@ dependencies = [
  "studiocraft-render",
  "studiocraft-sources",
  "thiserror 2.0.21",
+ "wgpu",
 ]
 
 [[package]]
@@ -5861,6 +5864,7 @@ dependencies = [
  "egui",
  "egui-wgpu",
  "log",
+ "pollster 0.4.0",
  "serde",
  "serde_json",
  "studiocraft-engine",
