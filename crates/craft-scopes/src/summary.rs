@@ -4,7 +4,7 @@
 use craft_color::rgb_to_ycbcr;
 use serde::Serialize;
 
-use crate::{Grid, Matrix, Signal, Vectorscope, Waveform, angle_deg, red_angle};
+use crate::{Grid, MAX_VECTOR_SIZE, Matrix, Signal, Vectorscope, Waveform, angle_deg, red_angle};
 
 /// Minimum, maximum and mean of a set of levels (percent).
 #[derive(Clone, Copy, Debug, PartialEq, Serialize)]
@@ -168,7 +168,11 @@ pub fn peaks(v: &Vectorscope, n: usize, min_share: f32) -> Vec<Peak> {
 }
 
 /// Sparse cells of a vectorscope re-binned to `size`² (for a coarse numeric picture): `[x, y, count]`.
+/// A vectorscope larger than [`MAX_VECTOR_SIZE`] gives no cells.
 pub fn coarse(v: &Vectorscope, size: usize) -> Vec<[u32; 3]> {
+    if v.size > MAX_VECTOR_SIZE {
+        return Vec::new();
+    }
     let size = size.clamp(1, v.size.max(1));
     let mut out = vec![0u32; size * size];
     for y in 0..v.size {

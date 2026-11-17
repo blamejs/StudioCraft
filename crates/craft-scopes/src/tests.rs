@@ -549,6 +549,7 @@ fn hand_built_values_past_the_caps_paint_nothing() {
     let v = Vectorscope { size: usize::MAX, ..Vectorscope::default() };
     assert_eq!(paint::vectorscope_into(&v, [1.0; 3], 1.0, true, &mut scratch, &mut out), (0, 0));
     assert!(out.is_empty());
+    assert!(summary::coarse(&v, usize::MAX).is_empty());
     let g = Grid { name: "Y", cols: usize::MAX, rows: usize::MAX, data: Vec::new() };
     out.push(1);
     assert_eq!(paint::grids_into(&[(&g, [1.0; 3])], 1.0, 1.0, &mut scratch, &mut out), (0, 0));
