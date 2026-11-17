@@ -90,7 +90,9 @@ it, up to 8192 pixels a side. The compositor draws each pass into the top-left c
 filter textures as large as the largest pass, and the scene item takes the size of the last pass.
 `Studio::source_size` applies the same passes, so the window's selection box matches the picture.
 A pass reads its input through `input_at`, which returns transparent pixels outside the input, or
-`input_pixel`, which reads at a pixel position clamped to the input's edges.
+`input_pixel`, which reads at a pixel position clamped to the input's edges. A pass can also carry
+an `EffectImage`, a picture the compositor uploads once and binds in group 2 for `image_at`; the
+compositor releases it when no pass in the plan uses it.
 
 An encoder names the codec it writes (`Encoder::codec`: H.264, HEVC or AAC). An encoder that runs
 inside the ffmpeg program returns its `FfmpegEncoder` form from `Encoder::ffmpeg`, which gives

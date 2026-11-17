@@ -22,6 +22,8 @@ in both files.
 | Crop and pad edges and area | 0 px each (the whole source) | `sources::filters::CropPad` | estimated |
 | Color key similarity and smoothness | 400 and 80 (1 to 1000, thousandths of RGB distance) | `sources::filters::ColorKey` | estimated |
 | Color key default key color | #00ff00 | `sources::filters::COLOR_KEY_DEFAULT` | estimated |
+| Largest side of an image mask picture | 8192 px | `plugin::filter::MAX_EFFECT_SIDE` | estimated |
+| Image mask luma weights (color channel) | 0.2126, 0.7152, 0.0722 (BT.709) | `sources::filters::ImageMask` | estimated |
 | Sharpen Sharpness | 0.08 (0 to 1) | `sources::filters::SHARPEN_DEFAULT` | estimated |
 | Sharpen gain at Sharpness 1 | 4 × the difference from the 8 neighbors' average | `sources::filters::SHARPEN_GAIN` | estimated |
 

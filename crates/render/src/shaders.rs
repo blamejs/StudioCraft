@@ -89,6 +89,19 @@ fn input_pixel(px: vec2<f32>) -> vec4<f32> {
 }
 ";
 
+/// Filter passes with a picture beside their input: the picture and its sampler in group 2.
+const EFFECT_IMAGE_HEAD: &str = r"
+@group(2) @binding(0) var image_tex: texture_2d<f32>;
+@group(2) @binding(1) var image_samp: sampler;
+
+// The picture's premultiplied color at `st` (0 to 1 across it); transparent outside it.
+fn image_at(st: vec2<f32>) -> vec4<f32> {
+    let c = textureSampleLevel(image_tex, image_samp, clamp(st, vec2<f32>(0.0), vec2<f32>(1.0)), 0.0);
+    let inside = all(st >= vec2<f32>(0.0)) && all(st <= vec2<f32>(1.0));
+    return select(vec4<f32>(0.0), c, inside);
+}
+";
+
 const EFFECT_MAIN: &str = r"
 @fragment fn fs_effect(v: VOut) -> @location(0) vec4<f32> {
     return effect(input_at(mix(u.a.xy, u.a.zw, v.uv)), v.uv, u.b.xy, u.c, u.d);
@@ -140,6 +153,10 @@ pub fn item() -> String {
 
 pub fn effect(body: &str) -> String {
     format!("{COMMON}{EFFECT_HEAD}{body}\n{EFFECT_MAIN}")
+}
+
+pub fn effect_with_image(body: &str) -> String {
+    format!("{COMMON}{EFFECT_HEAD}{EFFECT_IMAGE_HEAD}{body}\n{EFFECT_MAIN}")
 }
 
 pub fn transition(body: &str) -> String {
