@@ -42,7 +42,7 @@
   the license texts.
 - Interface translations from StudioCraft's own catalogs in `crates/ui-egui/i18n/locales`, merged
   with the shared `craft-i18n` catalogs when `CRAFT_I18N_DIR` is set, with a Language setting in
-  Settings › General. English, French, German and Spanish are built in.
+  Settings › General. English, French, German, Italian and Spanish are built in.
 - Help › Check for Updates…, a check at start (Settings › General › Check for updates at start, on
   by default) and finishing an update the app installed itself, through `craft-update`.
 - The app icon in `assets/app-icon`: the window icon, the picture in the update prompt and the icon
