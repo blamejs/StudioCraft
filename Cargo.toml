@@ -26,6 +26,7 @@ studiocraft-ui-egui = { path = "crates/ui-egui" }
 studiocraft-mcp = { path = "crates/mcp" }
 # Shared crates built here before they move to craft-libs.
 craft-color-transform = { path = "crates/craft-color-transform" }
+craft-scopes = { path = "crates/craft-scopes" }
 
 # foundation
 thiserror = "2"
@@ -53,6 +54,8 @@ pollster = "0.4"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "bmp", "gif", "webp"] }
 # Tests only: writes the subsampled four-component JPEGs the image source reads.
 jpeg-encoder = "0.6"
+# Tests only: random inputs for the readers and writers.
+proptest = "1"
 ab_glyph = "0.2"
 # Audio devices: input capture, and output (loopback) capture on Windows.
 cpal = "0.16"
@@ -81,6 +84,8 @@ craft-color = { git = "https://github.com/storytold/craft-libs", rev = "7780b4f5
 craft-atomic = { git = "https://github.com/storytold/craft-libs", rev = "7780b4f58ec3d56b1f908c8fa3b1258fabae3880" }
 craft-fonts-build = { git = "https://github.com/storytold/craft-libs", rev = "7780b4f58ec3d56b1f908c8fa3b1258fabae3880" }
 craft-i18n = { git = "https://github.com/storytold/craft-libs", rev = "7780b4f58ec3d56b1f908c8fa3b1258fabae3880" }
+# Tests only: the demuxers that read back what the writers here produce.
+craft-media = { git = "https://github.com/storytold/craft-libs", rev = "7780b4f58ec3d56b1f908c8fa3b1258fabae3880", default-features = false }
 # Help › Check for Updates, the check at start and finishing an update the app installed itself.
 craft-update = { git = "https://github.com/storytold/craft-libs", rev = "7780b4f58ec3d56b1f908c8fa3b1258fabae3880", features = ["egui"] }
 # Who draws the window frame (the desktop or the app), and the menu strip as the title bar.

@@ -30,6 +30,8 @@ and Linux.
 - **Shortcuts.** Change the shortcuts in Settings › Hotkeys.
 - **Statistics.** View › Stats shows the frame count, late frames, frame times, encoded and
   skipped frames, the encoder queue, and the size of the running recording or stream.
+- **Scopes.** View › Scopes shows a waveform, an RGB parade, a histogram, or the YUV or HLS
+  vectorscope of the program output. The `scopes.kind` command picks the scope.
 - **Scene collection files.** Scene Collection › Import… and Export… read and write a scene
   collection as a file.
 - **Language.** Settings › General › Language picks the interface language, or follows the system

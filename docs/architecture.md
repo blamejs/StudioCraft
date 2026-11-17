@@ -14,6 +14,7 @@ crate in the same layer. `cargo xtask layers` checks this against the table in
 | --- | --- | --- |
 | L0 | `studiocraft-model` | Scenes, sources, scene items, transforms, profiles, settings schemas, and the versioned file format with its migrations. |
 | L0 | `studiocraft-media` | The master clock, frame pacing, video frame and audio block types, buffer pools, bounded lock-free queues, mixing and level meters. |
+| L0 | `craft-tsmux` | The MPEG-2 transport stream writer: PAT and PMT, PES packets, PCR and continuity counters, written to any `io::Write`. It depends on no StudioCraft crate. |
 | L0 | `craft-color-transform` | RGB spaces and Bradford adaptation, white balance by temperature and tint, OkLab and OkLCh, monotone tone curves and lookup tables, and PQ tone mapping. It depends on no StudioCraft crate. |
 | L0 | `craft-scopes` | Video scope maths: the waveform, parade, histogram and vectorscopes of a borrowed RGBA8 or NV12 frame, their numeric summaries and trace images. It depends on no StudioCraft crate. |
 | L0 | `craft-ease` | Easing curves, keyed tracks, constant-speed Bezier motion paths and damped springs. It depends on no StudioCraft crate. |
@@ -30,9 +31,15 @@ crate in the same layer. `cargo xtask layers` checks this against the table in
 | app | `studiocraft-cli` | `send` for one control request, `mcp` for the MCP server on standard input and output (headless, or `--connect <port>` to the app), `check` for scene collection files and `bench` for the timing run. |
 | tool | `xtask` | `cargo xtask` checks. |
 
-`studiocraft-model`, `studiocraft-plugin`, `craft-color-transform`, `craft-scopes` and
-`craft-ease` have no operating-system or GPU dependency. `cargo xtask wasm` checks that they
-build for `wasm32-unknown-unknown`.
+These crates have no operating-system or GPU dependency, and `cargo xtask wasm` checks that they
+build for `wasm32-unknown-unknown`:
+
+- `studiocraft-model`
+- `studiocraft-plugin`
+- `craft-tsmux`
+- `craft-color-transform`
+- `craft-scopes`
+- `craft-ease`
 
 ## Threads and data flow
 
@@ -45,6 +52,15 @@ build for `wasm32-unknown-unknown`.
   The compositor (`render`) uploads changed source frames, draws the program scene (and the preview
   scene in studio mode) into a ring of 3 GPU textures, and converts the program to NV12 for the
   encoders. The window registers the ring's texture views with egui, so frames stay on the GPU.
+  While View › Scopes is open, the compositor also converts the program to a second NV12 copy of
+  at most 480 × 270 and sends it to the window's scopes queue. The copy is drawn with linear
+  filtering and its chroma is at half width and half height, so a hard edge in the program shows on
+  the scopes as intermediate levels.
+- **Scopes thread.** While View › Scopes is open, the window hands the newest program copy to the
+  scopes thread (`ui-egui/src/scopes.rs`) when the thread is idle. The thread computes and paints
+  the chosen scope with `craft-scopes` into buffers it keeps and makes the texture image. The window
+  moves the image into its texture. The window and the thread share bounded lock-free queues and
+  atomic flags, and the thread parks while it has nothing to do.
 - **Output threads.** Each recording or stream runs an ffmpeg process with one writer thread for
   video and one for audio.
 - **Window thread.** The window reads `Studio` state, runs commands, and shows statistics.

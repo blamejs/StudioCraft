@@ -35,10 +35,14 @@ pub struct RenderShared {
     pub canvas: Latest<(u32, u32)>,
     /// Start, change or stop converting frames for encoders.
     pub encode: Latest<Option<EncodeTarget>>,
+    /// Start, change or stop the small NV12 copy of the program that the scopes read.
+    pub scope: Latest<Option<EncodeTarget>>,
     /// New canvas textures for the interface, published after a resize.
     pub views: Latest<Arc<CanvasViews>>,
     /// Frames encoders never received because the read-back fell behind.
     pub readback_lost: AtomicU64,
+    /// Program copies the scopes never received because their read-back fell behind.
+    pub scope_skipped: AtomicU64,
     /// Shader and device errors for the interface to show.
     pub errors: Fifo<RenderError>,
     /// Still captures waiting for the next frame. A full queue refuses new requests.
@@ -54,8 +58,10 @@ impl Default for RenderShared {
             plan: Latest::new(),
             canvas: Latest::new(),
             encode: Latest::new(),
+            scope: Latest::new(),
             views: Latest::new(),
             readback_lost: AtomicU64::new(0),
+            scope_skipped: AtomicU64::new(0),
             errors: Fifo::new(16),
             captures: ArrayQueue::new(CAPTURE_SLOTS),
         }
@@ -251,6 +257,10 @@ pub struct Compositor {
     sources: HashMap<SourceId, SourceTex>,
     plan: Arc<Plan>,
     nv12: Option<Nv12>,
+    /// The scopes' copy of the program, converted like the encoders' at a smaller size.
+    scope_nv12: Option<Nv12>,
+    /// Frames the scopes did not get because their read-back fell behind.
+    scope_skipped: AtomicU64,
     frame_no: u64,
     errors: Vec<RenderError>,
     /// Captures asked for before this frame's plan was taken: they are answered with this frame.
@@ -289,6 +299,8 @@ impl Compositor {
             sources: HashMap::new(),
             plan: Arc::new(Plan::default()),
             nv12: None,
+            scope_nv12: None,
+            scope_skipped: AtomicU64::new(0),
             frame_no: 0,
             errors: Vec::new(),
             waiting: Vec::with_capacity(CAPTURE_SLOTS),
@@ -365,14 +377,17 @@ impl Compositor {
 
     /// Start, change or stop converting frames for encoders.
     pub fn set_encode(&mut self, target: Option<EncodeTarget>) {
-        self.nv12 = match (target, self.nv12.take()) {
-            (None, _) => None,
-            (Some(t), Some(mut n)) if (n.width, n.height) == ((t.width + 1) & !1, (t.height + 1) & !1) => {
-                n.set_sinks(t.sinks);
-                Some(n)
-            }
-            (Some(t), _) => Some(Nv12::new(&self.gpu.device, t)),
-        };
+        self.nv12 = retarget(&self.gpu.device, self.nv12.take(), target);
+    }
+
+    /// Start, change or stop the scopes' NV12 copy of the program.
+    pub fn set_scope(&mut self, target: Option<EncodeTarget>) {
+        self.scope_nv12 = retarget(&self.gpu.device, self.scope_nv12.take(), target);
+    }
+
+    /// Frames the scopes' copy skipped because all its read-back buffers were in flight.
+    pub fn scope_skipped(&self) -> u64 {
+        self.scope_skipped.load(Ordering::Relaxed)
     }
 
     /// Apply what the app published, then draw a frame.
@@ -387,6 +402,9 @@ impl Compositor {
         if let Some(e) = shared.encode.take() {
             self.set_encode(e);
         }
+        if let Some(s) = shared.scope.take() {
+            self.set_scope(s);
+        }
         // A capture asked for after the plan is taken waits for the next frame, so it shows every
         // change published before it was asked for.
         while let Some(req) = shared.captures.pop() {
@@ -399,6 +417,7 @@ impl Compositor {
             shared.errors.push(e);
         }
         self.frame(now, &shared.readback_lost);
+        shared.scope_skipped.store(self.scope_skipped(), Ordering::Relaxed);
         let mut waiting = std::mem::take(&mut self.waiting);
         for req in waiting.drain(..) {
             // A caller that gave up has dropped its receiver; nothing waits for the answer.
@@ -421,7 +440,9 @@ impl Compositor {
     pub fn frame(&mut self, now: Tick, readback_lost: &AtomicU64) {
         self.frame_no += 1;
         let plan = Arc::clone(&self.plan);
-        let mut slots = 4u64;
+        // A uniform slot for each item and effect, and one for each fixed pass: the transition and
+        // the encoders' and the scopes' NV12 conversions.
+        let mut slots = u64::from(plan.transition.is_some()) + u64::from(self.nv12.is_some()) + u64::from(self.scope_nv12.is_some());
         for item in plan.items() {
             slots += 1 + item.effects.len() as u64;
             self.sync_source(item);
@@ -473,23 +494,9 @@ impl Compositor {
             qi = Some(i);
         }
 
-        let mut copied = false;
-        if let Some(n) = &mut self.nv12 {
-            if n.has_room() {
-                let off = self.uniforms.push(&[0.0; 16]);
-                for (pipe, view) in [(&self.pipes.nv12_y, &n.y_view), (&self.pipes.nv12_uv, &n.uv_view)] {
-                    let mut pass = begin(&mut enc, view, Some(wgpu::Color::BLACK));
-                    pass.set_pipeline(pipe);
-                    pass.set_bind_group(0, &self.uniforms.bind, &[off]);
-                    pass.set_bind_group(1, &program.bind, &[]);
-                    pass.draw(0..3, 0..1);
-                }
-                n.copy(&mut enc, now);
-                copied = true;
-            } else {
-                readback_lost.fetch_add(1, Ordering::Relaxed);
-            }
-        }
+        let copied = self.nv12.as_mut().is_some_and(|n| convert(n, &self.pipes, &mut self.uniforms, &mut enc, program, now, readback_lost));
+        let scope_copied =
+            self.scope_nv12.as_mut().is_some_and(|n| convert(n, &self.pipes, &mut self.uniforms, &mut enc, program, now, &self.scope_skipped));
 
         self.uniforms.flush(&self.gpu.queue);
         self.gpu.queue.submit([enc.finish()]);
@@ -497,12 +504,19 @@ impl Compositor {
         if let Some(i) = qi {
             self.views.preview.publish(i);
         }
-        if let Some(n) = &mut self.nv12 {
-            if copied {
+        for (n, copied) in [(&mut self.nv12, copied), (&mut self.scope_nv12, scope_copied)] {
+            if copied && let Some(n) = n {
                 n.submitted();
             }
+        }
+        if self.nv12.is_some() || self.scope_nv12.is_some() {
             let _ = self.gpu.device.poll(wgpu::PollType::Poll);
+        }
+        if let Some(n) = &mut self.nv12 {
             n.collect(readback_lost);
+        }
+        if let Some(n) = &mut self.scope_nv12 {
+            n.collect(&self.scope_skipped);
         }
     }
 
@@ -573,7 +587,50 @@ impl Compositor {
         if let Some(n) = &mut self.nv12 {
             n.collect(readback_lost);
         }
+        if let Some(n) = &mut self.scope_nv12 {
+            n.collect(&self.scope_skipped);
+        }
     }
+}
+
+/// `current` sending to `target`'s sinks when it already has `target`'s size, else a new converter,
+/// or none without a target.
+fn retarget(device: &wgpu::Device, current: Option<Nv12>, target: Option<EncodeTarget>) -> Option<Nv12> {
+    match (target, current) {
+        (None, _) => None,
+        (Some(t), Some(mut n)) if (n.width, n.height) == ((t.width + 1) & !1, (t.height + 1) & !1) => {
+            n.set_sinks(t.sinks);
+            Some(n)
+        }
+        (Some(t), _) => Some(Nv12::new(device, t)),
+    }
+}
+
+/// Record `n`'s two conversion passes from `program` and its copy into a free read-back buffer;
+/// whether it was recorded. With every buffer in flight the frame is skipped and counted in `lost`.
+fn convert(
+    n: &mut Nv12,
+    pipes: &Pipes,
+    uniforms: &mut Uniforms,
+    enc: &mut wgpu::CommandEncoder,
+    program: &Target,
+    now: Tick,
+    lost: &AtomicU64,
+) -> bool {
+    if !n.has_room() {
+        lost.fetch_add(1, Ordering::Relaxed);
+        return false;
+    }
+    let off = uniforms.push(&[0.0; 16]);
+    for (pipe, view) in [(&pipes.nv12_y, &n.y_view), (&pipes.nv12_uv, &n.uv_view)] {
+        let mut pass = begin(enc, view, Some(wgpu::Color::BLACK));
+        pass.set_pipeline(pipe);
+        pass.set_bind_group(0, &uniforms.bind, &[off]);
+        pass.set_bind_group(1, &program.bind, &[]);
+        pass.draw(0..3, 0..1);
+    }
+    n.copy(enc, now);
+    true
 }
 
 fn read_rgba(gpu: &Gpu, texture: &wgpu::Texture, width: u32, height: u32) -> Result<Vec<u8>, RenderError> {
