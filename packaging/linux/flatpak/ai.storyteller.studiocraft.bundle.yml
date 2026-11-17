@@ -26,6 +26,8 @@ finish-args:
   - --share=network
   # The wgpu canvas and preview.
   - --device=dri
+  # Camera sources open the V4L2 nodes in /dev.
+  - --device=all
   # Audio input and desktop audio, through the PulseAudio socket that PipeWire also serves.
   - --socket=pulseaudio
   # Display and window capture on Wayland go through the screen-cast portal and PipeWire.

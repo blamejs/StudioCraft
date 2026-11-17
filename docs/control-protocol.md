@@ -141,6 +141,15 @@ The engine command `plugin.list` also only reads. It returns every registered pl
 `hevc` or `aac`) and `builtin`. `builtin` is `false` for an encoder that runs inside the ffmpeg program,
 and only such an encoder has `ffmpeg_codec`.
 
+The engine command `source.schema` also only reads. With `{"kind": "camera", "settings":
+{"device": "..."}}` it returns `{"schema": ...}`, the source's settings fields with the lists the
+system offers now: for a camera, the connected cameras and the formats of the camera that
+`settings.device` names. `settings` may be left out. `source.add` and `source.settings` check new
+values against the schema for the settings they are given, so a camera format must be one the
+chosen camera offers. A camera's `device` is its name and the system's id joined by U+001F, and its
+`format` is written as `1280x720@30:MJPG` (width, height, frames per second and a four-character
+code: `MJPG`, `YUYV`, `NV12`, `GREY`, `RGB3` or `BGR3`), or `""` for the camera's default.
+
 ```sh
 studiocraft-cli send 9876 engine.execute '{"command": "app.links", "params": {"link": "issues"}}'
 ```

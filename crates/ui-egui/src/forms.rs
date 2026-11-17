@@ -115,7 +115,7 @@ pub fn form(ui: &mut Ui, id: egui::Id, schema: &SettingsSchema, settings: &mut S
                     r
                 }
                 FieldKind::Choice { options } => {
-                    let selected = options.iter().find(|o| o.value == current).map_or_else(|| current.to_string(), |o| tl!(&o.label).to_string());
+                    let selected = choice_text(key, &current, options);
                     let mut picked: Option<Value> = None;
                     craft_ui::ComboBox::from_id_salt((id, key)).selected_text(selected).width(280.0).show_ui(ui, |ui| {
                         for o in options {
@@ -140,10 +140,24 @@ pub fn form(ui: &mut Ui, id: egui::Id, schema: &SettingsSchema, settings: &mut S
     ev
 }
 
+/// What a choice field shows for `current`. A saved device that is not in the list shows its name
+/// (the part before U+001F, which separates a camera's name from its id) as not connected.
+fn choice_text(key: &str, current: &Value, options: &[studiocraft_model::ChoiceOption]) -> String {
+    match (options.iter().find(|o| o.value == *current), current.as_str()) {
+        (Some(o), _) => tl!(&o.label).to_string(),
+        (None, Some(id)) if key == "device" && !id.is_empty() => {
+            let name = id.split('\u{1f}').next().unwrap_or(id);
+            craft_i18n::fmt(tl!("{device} (not connected)"), &[("device", name)])
+        }
+        (None, _) => current.to_string(),
+    }
+}
+
 /// The Properties window of one source.
 pub struct Properties {
     pub source: SourceId,
-    /// Read when the window opened (lists of displays, windows and devices are read then).
+    /// Read when the window opened (lists of displays, windows and devices are read then), and
+    /// again when a choice changes, since one list can depend on another (a camera's formats).
     schema: SettingsSchema,
     settings: Settings,
 }
@@ -151,8 +165,35 @@ pub struct Properties {
 impl Properties {
     pub fn open(studio: &Studio, source: SourceId) -> Option<Properties> {
         let s = studio.collection().source(source)?;
-        let schema = studio.registry().source(&s.kind).ok()?.schema();
+        let schema = studio.registry().source(&s.kind).ok()?.schema_for(&s.settings);
         Some(Properties { source, schema, settings: s.settings.clone() })
+    }
+
+    /// Show `settings` that changed outside the window, reading the schema again when a choice
+    /// changed. The values are kept as they are.
+    fn take(&mut self, settings: Settings, schema: impl Fn(&Settings) -> SettingsSchema) {
+        let choice_changed =
+            self.schema.fields.iter().any(|f| matches!(f.kind, FieldKind::Choice { .. }) && settings.get(&f.key) != self.settings.get(&f.key));
+        self.settings = settings;
+        if choice_changed {
+            self.schema = schema(&self.settings);
+        }
+    }
+
+    /// Read the schema again after the form changed `before` into the current settings. When a
+    /// choice changed, a later choice whose value the new lists do not offer goes back to its
+    /// default.
+    fn follow_choice(&mut self, schema: impl Fn(&Settings) -> SettingsSchema, before: &Settings) {
+        let choice = |f: &&studiocraft_model::Field| matches!(f.kind, FieldKind::Choice { .. });
+        let Some(at) = self.schema.fields.iter().position(|f| choice(&f) && before.get(&f.key) != self.settings.get(&f.key)) else { return };
+        self.schema = schema(&self.settings);
+        for f in self.schema.fields.iter().skip(at + 1) {
+            if let (FieldKind::Choice { options }, Some(v)) = (&f.kind, self.settings.get(&f.key))
+                && !options.iter().any(|o| o.value == *v)
+            {
+                self.settings.set(&f.key, f.default.clone());
+            }
+        }
     }
 
     /// Point a path field at a chosen file.
@@ -177,7 +218,9 @@ impl Properties {
         let mut audio = Vec::new();
         if src.settings != self.settings && !ctx.egui_is_using_pointer() && !ctx.egui_wants_keyboard_input() {
             // Undo, a script or the control channel changed them.
-            self.settings = src.settings.clone();
+            if let Ok(p) = studio.registry().source(&src.kind) {
+                self.take(src.settings.clone(), |s| p.schema_for(s));
+            }
         }
         let title = craft_i18n::fmt(tl!("Properties for '{name}'"), &[("name", &src.name)]);
         let error = studio.source_error(self.source);
@@ -190,8 +233,12 @@ impl Properties {
                 ui.separator();
             }
             egui::ScrollArea::vertical().max_height(420.0).show(ui, |ui| {
+                let before = self.settings.clone();
                 let ev = form(ui, egui::Id::unique(("props-form", self.source.0)), &self.schema, &mut self.settings);
                 if ev.changed {
+                    if let Ok(p) = studio.registry().source(&src.kind) {
+                        self.follow_choice(|s| p.schema_for(s), &before);
+                    }
                     out.0 = Some(self.command());
                 }
                 out.1 = ev.browse;
@@ -203,7 +250,10 @@ impl Properties {
             ui.separator();
             ui.horizontal(|ui| {
                 if ui.button(tl!("Defaults")).clicked() {
-                    self.settings = self.schema.defaults();
+                    let before = std::mem::replace(&mut self.settings, self.schema.defaults());
+                    if let Ok(p) = studio.registry().source(&src.kind) {
+                        self.follow_choice(|s| p.schema_for(s), &before);
+                    }
                     out.0 = Some(self.command());
                 }
                 if ui.button(tl!("Refresh Lists")).on_hover_text(tl!("Read the displays, windows and devices again")).clicked() {
@@ -212,7 +262,7 @@ impl Properties {
             });
         });
         if refresh && let Ok(p) = studio.registry().source(&src.kind) {
-            self.schema = p.schema();
+            self.schema = p.schema_for(&self.settings);
         }
         (out.0, out.1, audio)
     }
@@ -388,6 +438,57 @@ mod tests {
         out.textures_delta.clear();
         assert!(!changed);
         assert_eq!(settings.str("extra"), Some("kept"));
+    }
+
+    #[test]
+    fn a_saved_device_that_is_absent_shows_as_not_connected() {
+        let options = [ChoiceOption::new("", "Default"), ChoiceOption::new("Desk\u{1f}1", "Desk")];
+        assert_eq!(choice_text("device", &json!("Desk\u{1f}1"), &options), "Desk");
+        let gone = craft_i18n::fmt(tl!("{device} (not connected)"), &[("device", "Room")]);
+        assert_eq!(choice_text("device", &json!("Room\u{1f}2"), &options), gone, "the name without the id");
+        assert_eq!(choice_text("device", &json!("Room"), &options), craft_i18n::fmt(tl!("{device} (not connected)"), &[("device", "Room")]));
+        assert_eq!(choice_text("mode", &json!("x"), &options), "\"x\"", "other fields show the value");
+    }
+
+    /// A schema whose `format` choices are those of the chosen `device`.
+    fn camera(s: &Settings) -> SettingsSchema {
+        let formats: &[&str] = if s.str("device") == Some("a") { &["", "hd"] } else { &["", "sd"] };
+        SettingsSchema::new(vec![
+            Field::new("device", "Device", FieldKind::Choice { options: vec![ChoiceOption::new("a", "A"), ChoiceOption::new("b", "B")] }, ""),
+            Field::new("format", "Format", FieldKind::Choice { options: formats.iter().map(|f| ChoiceOption::new(*f, *f)).collect() }, ""),
+        ])
+    }
+
+    #[test]
+    fn a_new_device_reads_its_formats_and_drops_one_it_does_not_offer() {
+        let start = Settings::new().with("device", "a").with("format", "hd");
+        let mut p = Properties { source: SourceId(1), schema: camera(&start), settings: start.clone() };
+        p.settings.set("format", "");
+        p.follow_choice(camera, &start);
+        p.settings.set("format", "hd");
+        let before = p.settings.clone();
+        p.settings.set("device", "b");
+        p.follow_choice(camera, &before);
+        assert_eq!(p.settings.str("format"), Some(""), "the new device does not offer hd");
+        let FieldKind::Choice { options } = &p.schema.fields[1].kind else { panic!("format is a choice") };
+        assert_eq!(options[1].value, json!("sd"));
+        // A change to a later field keeps the earlier ones.
+        let gone = Settings::new().with("device", "c").with("format", "");
+        let mut p = Properties { source: SourceId(1), schema: camera(&gone), settings: gone.clone() };
+        p.settings.set("format", "sd");
+        p.follow_choice(camera, &gone);
+        assert_eq!(p.settings.str("device"), Some("c"), "an absent device is kept");
+        assert_eq!(p.settings.str("format"), Some("sd"));
+    }
+
+    #[test]
+    fn a_device_changed_by_undo_or_a_script_lists_its_formats() {
+        let start = Settings::new().with("device", "b").with("format", "sd");
+        let mut p = Properties { source: SourceId(1), schema: camera(&start), settings: start.clone() };
+        p.take(Settings::new().with("device", "a").with("format", "hd"), camera);
+        let FieldKind::Choice { options } = &p.schema.fields[1].kind else { panic!("format is a choice") };
+        assert_eq!(options[1].value, json!("hd"), "the formats of the device the settings now name");
+        assert_eq!(p.settings.str("format"), Some("hd"), "the values are kept");
     }
 
     #[test]

@@ -1,5 +1,6 @@
 //! The parts of Linux screen capture that need no desktop: copying a stream buffer into a frame, and
-//! handing the newest frame from the stream thread to the source thread.
+//! handing the newest frame from the stream thread to the source thread. Camera capture hands its
+//! frames over the same way on every system.
 
 use std::sync::atomic::{AtomicU8, Ordering};
 
@@ -7,6 +8,7 @@ use crossbeam_queue::ArrayQueue;
 use studiocraft_media::video::{PixelFormat, VideoFrame};
 
 /// The byte order of a 4-byte pixel in a stream buffer. The `x` layouts carry no alpha.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Layout {
     Rgba,
@@ -18,6 +20,7 @@ pub enum Layout {
 /// Copy a `width` x `height` picture with rows `stride` bytes apart, starting `offset` bytes into
 /// `bytes` (modulo its length) and `size` bytes long, into `frame`. A layout without alpha is made opaque. Returns
 /// `false` and leaves `frame` alone when the picture does not fit in the buffer.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 pub fn copy_frame(bytes: &[u8], offset: u32, size: u32, stride: i32, width: u32, height: u32, layout: Layout, frame: &mut VideoFrame) -> bool {
     let (Ok(w), Ok(h), Ok(stride)) = (usize::try_from(width), usize::try_from(height), usize::try_from(stride)) else { return false };
     let Some(row) = w.checked_mul(4) else { return false };
@@ -127,6 +130,11 @@ impl FrameSlot {
     /// A frame for the stream thread to fill: a spare one, or a new one when there is none.
     pub fn spare(&self) -> VideoFrame {
         self.spare.pop().unwrap_or_default()
+    }
+
+    /// Give back a frame from [`FrameSlot::spare`] that was not filled.
+    pub fn recycle(&self, frame: VideoFrame) {
+        let _ = self.spare.push(frame);
     }
 
     /// Publish a filled frame.

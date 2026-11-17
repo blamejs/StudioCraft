@@ -46,7 +46,9 @@ pub fn parse_target(target: &str) -> Result<SocketAddr, McpError> {
 fn is_read_only(method: &str, params: &Value) -> bool {
     match method {
         "document.inspect" | "engine.commands" | "commands" | "state" | "render.preview" | "ui.inspect" | "ui.menu.list" | "ui.screenshot" => true,
-        "engine.execute" | "run" => matches!(params.get("command").and_then(Value::as_str), Some("app.links" | "app.info" | "plugin.list")),
+        "engine.execute" | "run" => {
+            matches!(params.get("command").and_then(Value::as_str), Some("app.links" | "app.info" | "plugin.list" | "source.schema"))
+        }
         _ => false,
     }
 }
@@ -216,6 +218,7 @@ mod tests {
     fn read_only_methods_are_listed() {
         assert!(is_read_only("document.inspect", &json!({})));
         assert!(is_read_only("engine.execute", &json!({"command": "app.links"})));
+        assert!(is_read_only("engine.execute", &json!({"command": "source.schema"})));
         assert!(!is_read_only("engine.execute", &json!({"command": "scene.add"})));
         assert!(!is_read_only("ui.click", &json!({})));
     }

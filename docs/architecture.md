@@ -22,7 +22,7 @@ crate in the same layer. `cargo xtask layers` checks this against the table in
 | L1 | `studiocraft-plugin` | The `Source`, `Filter`, `Transition`, `Encoder` and `Output` traits and the `Registry` they are registered in. |
 | L2 | `studiocraft-engine` | Commands with stable ids, undo and redo, source threads, the audio mixer thread and the frame scheduler. |
 | L2 | `studiocraft-render` | The wgpu compositor: scenes, filters, transitions, and frame conversion for encoders. |
-| L2 | `studiocraft-platform` | Display, window and audio capture, locating ffmpeg, and opening folders and links. |
+| L2 | `studiocraft-platform` | Display, window, camera and audio capture, locating ffmpeg, and opening folders and links. |
 | L2 | `studiocraft-encode` | The built-in encoders: H.264 video from NV12 frames and AAC audio from the mixer's blocks. |
 | L3 | `studiocraft-sources` | The built-in sources and filters. |
 | L3 | `studiocraft-outputs` | Recording and streaming through an ffmpeg process, Matroska recording through the built-in encoders, and the video encoders. |
@@ -70,6 +70,38 @@ build for `wasm32-unknown-unknown`:
   the request. Once the stream runs, the portal thread waits for the capture to be dropped, the
   session to close or the stream to end, then closes a pipe the stream loop watches and closes the
   portal session.
+- **Camera capture threads.** A camera source (`sources::camera`) opens a
+  `platform::camera::CameraCapture`, which starts a thread of its own. That thread lists the
+  cameras, picks the saved one (the same name and system id, then the same id unless it is a
+  Linux device node, then the same name),
+  reads its formats and opens it through the `nokhwa` crate: Media Foundation on Windows,
+  AVFoundation on macOS and V4L2 on Linux. On Linux only the V4L2 nodes that can capture video
+  are listed. The camera handle stays on that thread. Each frame is converted into a spare frame
+  of the same `FrameSlot` the screen captures use: YUYV and NV12 to RGBA with the BT.601
+  studio-range formulas, gray and RGB to RGBA, BGR to BGRA, and MJPEG decoded with `zune-jpeg` at
+  the size in its own header (an MJPEG frame without Huffman tables uses the standard ones). An
+  uncompressed frame longer than its tight size is read with the row stride V4L2 reports on
+  Linux, and elsewhere with the stride its length gives; on Windows RGB24 frames arrive last row
+  first; on macOS each frame's own size and encoding are used, the library's frame queue is
+  emptied at every frame, and only YUYV formats are offered; the thread copies such frames tight and top
+  row first into a reused buffer. On Windows every thread that uses Media Foundation sets up COM
+  (`comedy`): each capture thread for its stream's life, and a short-lived thread for each camera
+  list or format read. A frame that cannot be converted goes back to the spares; 30
+  in a row fail the capture. A panic inside the camera library is caught and reported as an
+  error. A missing or busy camera, a format the camera does not offer, a failed stream, or no new
+  frame for 5 s (the first frame included) clears the picture and is reported to the source,
+  which opens the camera again after 2 s while the rest of the app keeps running. Dropping the
+  capture sets a stop flag; the thread sees it after its current frame, stops the stream and
+  ends. A camera is reserved for one capture thread at a time: a second camera source showing the
+  same camera reports "the camera is in use by another camera source". A thread can wait on a
+  camera that sends nothing; until it ends, a new capture of that camera fails with "the camera is
+  still closing" and the source tries again. The source's settings schema depends on its settings
+  (`Plugin::schema_for`): the Format list holds the formats of the chosen camera. On macOS the
+  formats are read from the device (`nokhwa-bindings-macos`) without changing its active format.
+  A camera that a capture of the app has open is not opened again to read its formats; it lists
+  the formats read when the capture opened it. A camera that another program holds open lists the
+  formats it offered when it was last read, for up to 32 cameras. The engine checks a choice
+  again when a choice before it changed, so a format kept from another camera is refused.
 - **Mixer thread.** The mixer (`engine::mixer`) pulls one 1024-frame block (48 kHz stereo `f32`)
   from every audible source, delays it by the source's sync offset, applies the audio filters,
   gain, mute and scene-change fades, and measures peak and RMS levels. Each input's delay line
@@ -244,6 +276,8 @@ the window buttons sit where the desktop puts them. `src/titlebar.rs` makes the 
 - **Native macOS menu bar.** The menu is drawn in the window on every system.
 - **Capture on Linux.** Display, window and audio device capture on Linux use the `ashpd` and
   `pipewire` crates directly in `studiocraft-platform`. Windows and macOS use `xcap` and `cpal`.
+- **Cameras.** Camera capture on every system uses the `nokhwa` crate directly in
+  `studiocraft-platform`, with `v4l` on Linux and `zune-jpeg` for MJPEG frames.
 - **Encoding.** Streams, MP4 and MOV recordings, Lossless recordings, and recordings with x264 or a
   hardware encoder need an ffmpeg program installed separately. StudioCraft runs it as a process
   and does not link it. MKV recordings with H.264 (built in) use the `craft-video` H.264 encoder

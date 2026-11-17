@@ -8,6 +8,7 @@
 //! | `media` | a video or audio file, played through ffmpeg |
 //! | `display_capture` | a display |
 //! | `window_capture` | one program window |
+//! | `camera` | a video capture device, such as a webcam or a capture card |
 //! | `audio_input` | a microphone or line input |
 //! | `audio_output` | what a speaker or headphone device plays (Windows) |
 //!
@@ -15,6 +16,7 @@
 //! `chroma_key`, `color_key`, `crop_pad`, `sharpen`, `image_mask`, `scroll` (video).
 
 mod audio;
+mod camera;
 mod capture;
 mod color;
 pub mod filters;
@@ -31,6 +33,7 @@ use studiocraft_model::Settings;
 use studiocraft_plugin::{AudioOut, PluginError, Registry};
 
 pub use audio::{AudioInput, AudioOutput};
+pub use camera::CameraSource;
 pub use capture::{DisplayCapture, WindowCapture};
 pub use color::ColorSource;
 pub use image::ImageSource;
@@ -49,6 +52,7 @@ pub fn register_all(reg: &mut Registry, ffmpeg: &FfmpegSetting) -> Result<(), Pl
     reg.register_source(Arc::new(MediaSource::new(Arc::clone(ffmpeg))))?;
     reg.register_source(Arc::new(DisplayCapture))?;
     reg.register_source(Arc::new(WindowCapture))?;
+    reg.register_source(Arc::new(CameraSource))?;
     reg.register_source(Arc::new(AudioInput))?;
     reg.register_source(Arc::new(AudioOutput))?;
     reg.register_filter(Arc::new(filters::Gain))?;
@@ -117,7 +121,7 @@ mod tests {
         let ffmpeg = FfmpegSetting::default();
         register_all(&mut reg, &ffmpeg).unwrap();
         assert!(register_all(&mut reg, &ffmpeg).is_err(), "a second registration is refused");
-        for id in ["color", "image", "text", "media", "display_capture", "window_capture", "audio_input", "audio_output"] {
+        for id in ["color", "image", "text", "media", "display_capture", "window_capture", "camera", "audio_input", "audio_output"] {
             assert!(reg.source(id).is_ok(), "{id}");
         }
     }

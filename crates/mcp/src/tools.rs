@@ -284,6 +284,18 @@ fn studio_tool_definitions() -> Vec<Value> {
         ),
         tool("app_links", "Community links", "StudioCraft's community, website, source and issue links.", json!({}), &[], READS),
         tool(
+            "source_schema",
+            "Source settings fields",
+            "The settings fields of a source plug-in, with the choices this system offers now: for `camera`, the connected cameras, and \
+             the formats of the camera that `settings.device` names.",
+            json!({
+                "kind": {"type": "string", "description": "The source plug-in id, for example camera."},
+                "settings": {"type": "object", "description": "Settings the lists depend on, such as the camera's device."},
+            }),
+            &["kind"],
+            READS,
+        ),
+        tool(
             "record_start",
             "Start recording",
             "Start recording the program to a new file in the recording folder (Settings › Output), as Start Recording does. Returns the \
@@ -835,6 +847,10 @@ fn dispatch(b: &mut dyn Backend, name: &str, args: &Args) -> Result<Value, McpEr
         "collection_open" => Ok(text(&b.call("collection.open", json!({"path": req_str(args, "path")?}))?)),
         "collection_save" => Ok(text(&b.call("collection.save", json!({"path": req_str(args, "path")?}))?)),
         "app_links" => Ok(text(&run(b, "app.links", json!({}))?)),
+        "source_schema" => {
+            req_str(args, "kind")?;
+            Ok(text(&run(b, "source.schema", pick(args, &["kind", "settings"]))?))
+        }
         "record_start" => output_command(b, "record.start", "recording"),
         "record_stop" => output_command(b, "record.stop", "recording"),
         "stream_start" => output_command(b, "stream.start", "streaming"),

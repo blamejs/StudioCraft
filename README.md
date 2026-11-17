@@ -1,7 +1,7 @@
 # StudioCraft
 
 StudioCraft records and live-streams scenes. A scene is a stack of sources: displays, windows,
-pictures, text, colors, media files and audio devices. You arrange the sources on
+cameras, pictures, text, colors, media files and audio devices. You arrange the sources on
 a canvas, switch between scenes with transitions, mix the audio, and record to a file or stream to
 an RTMP server.
 
@@ -13,9 +13,17 @@ and Linux.
 - **Scenes and sources.** Add, rename, duplicate, reorder and remove scenes and sources. Drag,
   resize and rotate sources in the preview with snapping to the canvas edges and center. Lock a
   source so it can't be moved, or lock the whole preview.
-- **Built-in sources.** Color, image, text, media file, display capture, window capture, audio
-  input and audio output (desktop audio). Display and window capture work on Windows, macOS and
-  Linux. Audio input and output capture work on Windows and Linux, and audio input capture on
+- **Built-in sources.** Color, image, text, media file, display capture, window capture, camera,
+  audio input and audio output (desktop audio). Display and window capture work on Windows, macOS
+  and Linux. The camera source captures webcams and capture cards through Media Foundation on
+  Windows, AVFoundation on macOS and V4L2 on Linux. Its Properties window lists the cameras and
+  the chosen camera's formats (picture size, frame rate and pixel encoding: MJPEG, YUYV, NV12,
+  gray, RGB or BGR; on macOS, YUYV only). With Format at Default, the camera opens at its largest picture up to
+  1920 × 1080 at 30 fps or more. A saved camera that is not plugged in shows as "(not
+  connected)". A camera that is missing, in use by another program, unplugged or sending nothing
+  for 5 seconds is reported in the Properties window and opened again every 2 seconds. One camera
+  shows in one camera source at a time. On macOS
+  the system asks for camera access the first time a camera is listed. Audio input and output capture work on Windows and Linux, and audio input capture on
   macOS. On Linux, audio capture goes through the PipeWire sound server and lists its devices by
   their descriptions. Display and window capture on Linux go through the desktop's screen-cast
   portal (`xdg-desktop-portal` with a backend for your desktop): the display or window is chosen in

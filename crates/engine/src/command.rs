@@ -241,6 +241,14 @@ pub enum Command {
     AppInfo {},
     #[serde(rename = "plugin.list")]
     PluginList {},
+    /// The settings fields of a source plug-in set up as `settings`, with the lists that depend on
+    /// them (a camera's formats) read for those settings.
+    #[serde(rename = "source.schema")]
+    SourceSchema {
+        kind: String,
+        #[serde(default)]
+        settings: Option<Settings>,
+    },
 }
 
 impl Command {
@@ -311,6 +319,7 @@ impl Command {
             Command::AppLinks { .. } => "app.links",
             Command::AppInfo {} => "app.info",
             Command::PluginList {} => "plugin.list",
+            Command::SourceSchema { .. } => "source.schema",
         }
     }
 
@@ -395,6 +404,7 @@ const SPECS: &[CommandSpec] = &[
     spec("app.links", "Community Links", "link?: discord|website|github|issues", Undo::NotUndoable),
     spec("app.info", "About StudioCraft Info", "", Undo::NotUndoable),
     spec("plugin.list", "List Plug-ins", "", Undo::NotUndoable),
+    spec("source.schema", "Source Settings Fields", "kind: plug-in id, settings?", Undo::NotUndoable),
 ];
 
 /// Every command's description.
@@ -419,6 +429,8 @@ mod tests {
             Command::AppLinks { link: None },
             Command::AppInfo {},
             Command::PluginList {},
+            Command::SourceSchema { kind: "camera".into(), settings: None },
+            Command::SourceSchema { kind: "camera".into(), settings: Some(Settings::new().with("device", "Desk")) },
         ];
         for c in samples {
             let v = serde_json::to_value(&c).unwrap();

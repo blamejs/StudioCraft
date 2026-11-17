@@ -421,9 +421,65 @@ fn link_and_info_queries_change_nothing() {
     assert!(plugins.result["sources"][0]["schema"]["fields"].is_array(), "{}", plugins.result);
     assert_eq!(plugins.result["transitions"][1]["id"], "cut");
     assert_eq!(plugins.result["filters"][0]["target"], "audio");
+    let schema = run(&mut e, "source.schema", json!({"kind": "color"})).unwrap();
+    assert!(!schema.changed && schema.runtime.is_none());
+    assert_eq!(schema.result["schema"]["fields"][0]["key"], "width", "{}", schema.result);
+    assert!(run(&mut e, "source.schema", json!({"kind": "nope"})).is_err());
+    assert!(run(&mut e, "source.schema", json!({})).is_err(), "the kind is required");
     assert_eq!(e.revision(), rev);
     assert!(!e.is_dirty());
     assert_eq!(e.undo_label(), undo);
+}
+
+/// A source whose `mode` choices depend on its `device`.
+struct DeviceSource;
+impl Plugin for DeviceSource {
+    fn id(&self) -> &'static str {
+        "device"
+    }
+    fn name(&self) -> &'static str {
+        "Device"
+    }
+    fn schema(&self) -> SettingsSchema {
+        self.schema_for(&Settings::new())
+    }
+    fn schema_for(&self, s: &Settings) -> SettingsSchema {
+        let mut modes = vec![studiocraft_model::ChoiceOption::new("", "Default")];
+        if s.str("device") == Some("b") {
+            modes.push(studiocraft_model::ChoiceOption::new("hd", "HD"));
+        }
+        SettingsSchema::new(vec![
+            Field::new("device", "Device", FieldKind::Choice { options: vec![studiocraft_model::ChoiceOption::new("b", "B")] }, ""),
+            Field::new("mode", "Mode", FieldKind::Choice { options: modes }, ""),
+        ])
+    }
+}
+impl Source for DeviceSource {
+    fn caps(&self) -> SourceCaps {
+        SourceCaps { video: true, audio: false }
+    }
+    fn create(&self, _: &Settings, _: &SourceIo) -> Result<Box<dyn SourceInstance>, PluginError> {
+        Err(PluginError::Unavailable("test".into()))
+    }
+}
+
+#[test]
+fn settings_are_checked_against_the_schema_for_those_settings() {
+    let mut r = Registry::new();
+    r.register_source(Arc::new(DeviceSource)).unwrap();
+    let mut e = Engine::new(SceneCollection::new("Test", "Scene"), Arc::new(r));
+    assert!(run(&mut e, "source.add", json!({"kind": "device", "settings": {"mode": "hd"}})).is_err(), "no device offers hd");
+    let o = run(&mut e, "source.add", json!({"kind": "device", "name": "Cam", "settings": {"device": "b", "mode": "hd"}})).unwrap();
+    assert!(o.changed);
+    run(&mut e, "source.settings", json!({"source": "Cam", "settings": {"device": "b", "mode": ""}})).unwrap();
+    assert!(run(&mut e, "source.settings", json!({"source": "Cam", "settings": {"device": "", "mode": "hd"}})).is_err());
+    run(&mut e, "source.settings", json!({"source": "Cam", "settings": {"device": "b", "mode": "hd"}})).unwrap();
+    let kept = run(&mut e, "source.settings", json!({"source": "Cam", "settings": {"device": "", "mode": "hd"}}));
+    assert!(kept.is_err(), "a mode kept from another device is checked against the new one");
+    let omitted = run(&mut e, "source.settings", json!({"source": "Cam", "settings": {"mode": "hd"}}));
+    assert!(omitted.is_err(), "an omitted device becomes the default one, which offers no hd");
+    let schema = run(&mut e, "source.schema", json!({"kind": "device", "settings": {"device": "b"}})).unwrap();
+    assert_eq!(schema.result["schema"]["fields"][1]["kind"]["options"][1]["value"], "hd", "{}", schema.result);
 }
 
 #[test]
@@ -445,7 +501,7 @@ fn every_spec_is_reachable() {
             "scene.duplicate" => json!({"scene": 1}),
             "scene.move" => json!({"scene": 1, "to": "up"}),
             "scene.select_index" => json!({"index": 1}),
-            "source.add" => json!({"kind": "color"}),
+            "source.add" | "source.schema" => json!({"kind": "color"}),
             "source.add_existing" => json!({"source": 1}),
             "source.rename" => json!({"source": 1, "name": "x"}),
             "source.settings" => json!({"source": 1, "settings": {}}),
