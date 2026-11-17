@@ -610,6 +610,7 @@ fn the_catalogs_in_the_tree_are_offered_and_switch_the_menus() {
         ("pt-br", "Português (Brasil)", "Editar"),
         ("ru", "Русский", "Правка"),
         ("tr", "Türkçe", "Düzen"),
+        ("uk", "Українська", "Редагування"),
         ("zh-hans", "简体中文", "编辑"),
         ("zh-hant", "繁體中文", "編輯"),
     ] {
