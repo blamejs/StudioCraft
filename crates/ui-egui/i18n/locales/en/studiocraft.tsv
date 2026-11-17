@@ -251,11 +251,13 @@
 	Switch at once	Switch at once
 	System ({language})	System ({language})
 	Takes effect the next time StudioCraft starts.	Takes effect the next time StudioCraft starts.
+	Temperature (K)	Temperature (K)
 	Text	Text
 	The interface fonts Inter and JetBrains Mono are under the SIL Open Font License 1.1.	The interface fonts Inter and JetBrains Mono are under the SIL Open Font License 1.1.
 	The licenses of the third-party crates StudioCraft uses are checked by `cargo xtask licenses`.	The licenses of the third-party crates StudioCraft uses are checked by `cargo xtask licenses`.
 	This filter has no settings.	This filter has no settings.
 	this is not supported on this system yet	this is not supported on this system yet
+	Tint	Tint
 	Tools	Tools
 	Transition	Transition
 	Transition Controls	Transition Controls

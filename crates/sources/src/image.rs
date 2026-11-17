@@ -129,6 +129,41 @@ mod tests {
         assert_eq!(f.data, [255, 0, 0, 255, 0, 0, 255, 128]);
     }
 
+    /// CMYK JPEGs whose cyan component is sampled below the black one, in each layout the
+    /// encoder writes, decode to an opaque picture of the stored size or give an error; none of
+    /// them stops the source with a panic.
+    #[test]
+    fn decodes_four_component_jpegs_whose_first_component_is_subsampled() {
+        use jpeg_encoder::{ColorType, Encoder, SamplingFactor as S};
+        let dir = std::env::temp_dir().join(format!("studiocraft-image-cmyk-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut results = Vec::new();
+        for (s, progressive) in
+            [(S::F_2_2, true), (S::R_4_2_0, true), (S::F_4_1, false), (S::F_4_2, false), (S::F_2_4, false), (S::R_4_1_1, false), (S::R_4_1_0, false)]
+        {
+            for (w, h) in [(1u16, 1u16), (9, 1), (1, 9), (17, 13), (40, 40)] {
+                let inks: Vec<u8> = (0..usize::from(w) * usize::from(h)).flat_map(|_| [30u8, 90, 150, 210]).collect();
+                let mut out = Vec::new();
+                let mut e = Encoder::new(&mut out, 100);
+                e.set_sampling_factor(s);
+                e.set_progressive(progressive);
+                e.encode(&inks, w, h, ColorType::Cmyk).unwrap();
+                let path = dir.join(format!("cmyk-{s:?}-{progressive}-{w}x{h}.jpg"));
+                std::fs::write(&path, &out).unwrap();
+                results.push((format!("{s:?} progressive {progressive} {w}x{h}"), (u32::from(w), u32::from(h)), load(&path)));
+            }
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+        let decoded = results.iter().filter(|r| r.2.is_ok()).count();
+        assert!(decoded >= 20, "{decoded} of {} decoded", results.len());
+        for (name, size, r) in results {
+            let Ok((w, h, rgba)) = r else { continue };
+            assert_eq!((w, h), size, "{name}");
+            assert_eq!(rgba.len(), size.0 as usize * size.1 as usize * 4, "{name}");
+            assert!(rgba.as_chunks::<4>().0.iter().all(|p| p[3] == 255), "{name}");
+        }
+    }
+
     #[test]
     fn a_file_that_cannot_be_read_replaces_the_earlier_picture_with_nothing() {
         let dir = std::env::temp_dir().join(format!("studiocraft-image-stale-{}", std::process::id()));
