@@ -204,6 +204,15 @@ fn clamp_signal_controls_out_of_range_values() {
     assert_eq!((h.r[255], h.above[0], h.b[0], h.below[2]), (8, 8, 8, 8));
     let h = histogram(&s, &off);
     assert_eq!((h.r[255], h.above[0], h.b[0], h.below[2]), (0, 8, 0, 8));
+    // with clamping, the histogram's luma comes from the clamped R'G'B', as the waveform's does
+    let hot = Signal::from_fn(1, 1, |_, _| [2.0, -1.0, 0.0]);
+    let rows = waveform(&hot, WaveformType::Luma, &on).trace("Y").unwrap().rows_in(0);
+    let hh = histogram(&hot, &on);
+    assert_eq!(hh.y.iter().position(|&c| c > 0), rows.first().copied());
+    // and the luma of the sample as it is still counts as out of range
+    assert_eq!((hh.below[3], hh.above[3]), (1, 0));
+    let white = histogram(&Signal::from_fn(1, 1, |_, _| [2.0; 3]), &on);
+    assert_eq!((white.y[255], white.above[3]), (1, 1));
     // waveform: clamped onto the top row, or plotted above 100 % within −10..110
     let w = waveform(&s, WaveformType::Rgb, &on);
     assert_eq!(w.trace("R").unwrap().rows_in(0), vec![255]);

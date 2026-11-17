@@ -746,18 +746,23 @@ pub fn histogram_into(s: &Signal, p: &Params, out: &mut Histogram) {
     out.samples = u32::try_from(s.len()).unwrap_or(u32::MAX);
     for &[r, g, b] in &s.rgb {
         let y = rgb_to_ycbcr(r, g, b, p.matrix)[0];
-        for (i, v) in [r, g, b, y].into_iter().enumerate() {
-            match bin_of(v) {
+        // With clamping, the luma bin comes from the clamped R'G'B', as on the waveform; `below`
+        // and `above` count the luma of the sample as it is.
+        let y_bin = if p.clamp {
+            let [cr, cg, cb] = [r, g, b].map(|v| v.clamp(0.0, 1.0));
+            rgb_to_ycbcr(cr, cg, cb, p.matrix)[0]
+        } else {
+            y
+        };
+        for (i, (v, at)) in [(r, r), (g, g), (b, b), (y, y_bin)].into_iter().enumerate() {
+            if !v.is_nan() && bin_of(v).is_none() {
+                let side = if v < 0.0 { &mut out.below[i] } else { &mut out.above[i] };
+                *side = side.saturating_add(1);
+            }
+            match bin_of(at) {
                 Some(k) => out.count(i, k),
-                None if v.is_nan() => {}
-                None => {
-                    let low = v < 0.0;
-                    let side = if low { &mut out.below[i] } else { &mut out.above[i] };
-                    *side = side.saturating_add(1);
-                    if p.clamp {
-                        out.count(i, if low { 0 } else { BINS - 1 });
-                    }
-                }
+                None if at.is_nan() || !p.clamp => {}
+                None => out.count(i, if at < 0.0 { 0 } else { BINS - 1 }),
             }
         }
     }
