@@ -187,6 +187,13 @@ fn checked_choice<'a>(s: &Settings, key: &str, default: &'a str, options: &[&'a 
         .ok_or_else(|| PluginError::Failed(format!("`{key}` must be one of {}, not {raw}", options.join(", "))))
 }
 
+/// A color setting (`#rrggbb` or `#rrggbbaa`): the default when the key is missing, and an error
+/// when the value is not a color.
+fn checked_color(s: &Settings, key: &str, default: [u8; 4]) -> Result<[u8; 4], PluginError> {
+    let Some(raw) = s.get(key) else { return Ok(default) };
+    s.color(key).ok_or_else(|| PluginError::Failed(format!("`{key}` must be a color such as #00ff00, not {raw}")))
+}
+
 // The audio processing below splits a block into a left and a right buffer.
 const _: () = assert!(CHANNELS == 2, "DspFilter assumes stereo blocks");
 
@@ -533,6 +540,85 @@ fn chroma_key_params(s: &Settings) -> Params {
     p
 }
 
+const COLOR_KEY: &str = r"
+fn effect(color: vec4<f32>, uv: vec2<f32>, size: vec2<f32>, p0: vec4<f32>, p1: vec4<f32>) -> vec4<f32> {
+    // p0: the key color, brightness. p1: similarity, smoothness, contrast factor, gamma
+    // exponent. extra_params()[0].x: opacity.
+    let a = color.a;
+    if a <= 0.0 { return vec4<f32>(0.0); }
+    let c = max(color.rgb / a, vec3<f32>(0.0));
+    let mask = clamp((distance(c, p0.rgb) - p1.x) / max(p1.y, 0.0001), 0.0, 1.0);
+    var o = pow(c, vec3<f32>(p1.w));
+    o = clamp((o - 0.5) * p1.z + 0.5 + p0.w, vec3<f32>(0.0), vec3<f32>(1.0));
+    let na = a * mask * extra_params()[0].x;
+    return vec4<f32>(o * na, na);
+}
+";
+
+/// Makes the pixels close to one color transparent, measured as the distance between the two
+/// colors in RGB (each channel from 0 to 1): pixels within Similarity / 1000 are keyed out, and
+/// the next Smoothness / 1000 fades back in. The pixels left are adjusted by Gamma, Contrast and
+/// Brightness and drawn at Opacity.
+pub struct ColorKey;
+
+/// The default key color, green.
+pub const COLOR_KEY_DEFAULT: [u8; 4] = [0, 255, 0, 255];
+
+impl Plugin for ColorKey {
+    fn id(&self) -> &'static str {
+        "color_key"
+    }
+    fn name(&self) -> &'static str {
+        "Color key"
+    }
+    fn schema(&self) -> SettingsSchema {
+        SettingsSchema::new(vec![
+            Field::new("key_color", "Key color", FieldKind::Color, "#00ff00ff"),
+            Field::new("similarity", "Similarity", FieldKind::Int { min: 1, max: 1000 }, 400),
+            Field::new("smoothness", "Smoothness", FieldKind::Int { min: 1, max: 1000 }, 80),
+            float_field("opacity", "Opacity (%)", 0.0, 100.0, 1.0, 100.0),
+            float_field("contrast", "Contrast", -1.0, 1.0, 0.01, 0.0),
+            float_field("brightness", "Brightness", -1.0, 1.0, 0.01, 0.0),
+            float_field("gamma", "Gamma", -1.0, 1.0, 0.01, 0.0),
+        ])
+    }
+}
+
+impl Filter for ColorKey {
+    fn target(&self) -> FilterTarget {
+        FilterTarget::Video
+    }
+    fn create(&self, settings: &Settings) -> Result<Box<dyn FilterInstance>, PluginError> {
+        Effect::create("color_key", COLOR_KEY, color_key_params, settings)
+    }
+}
+
+fn color_key_params(s: &Settings) -> Result<(Params, Reframe), PluginError> {
+    let [r, g, b, _] = checked_color(s, "key_color", COLOR_KEY_DEFAULT)?;
+    let similarity = checked_int(s, "similarity", 400, 1, 1000)?;
+    let smoothness = checked_int(s, "smoothness", 80, 1, 1000)?;
+    let opacity = checked(s, "opacity", 100.0, 0.0, 100.0, false)?;
+    let contrast = checked(s, "contrast", 0.0, -1.0, 1.0, false)?;
+    let brightness = checked(s, "brightness", 0.0, -1.0, 1.0, false)?;
+    let gamma = checked(s, "gamma", 0.0, -1.0, 1.0, false)?;
+    // The same curves as color correction.
+    let contrast = if contrast < 0.0 { 1.0 + contrast } else { 1.0 + 3.0 * contrast };
+    let exponent = if gamma >= 0.0 { 1.0 / (1.0 + gamma) } else { 1.0 - gamma };
+    let mut p = [0.0; VIDEO_EFFECT_PARAMS];
+    p[..9].copy_from_slice(&[
+        f32::from(r) / 255.0,
+        f32::from(g) / 255.0,
+        f32::from(b) / 255.0,
+        brightness as f32,
+        similarity as f32 / 1000.0,
+        smoothness as f32 / 1000.0,
+        contrast as f32,
+        exponent as f32,
+        (opacity / 100.0) as f32,
+    ]);
+    Ok((p, Reframe::None))
+}
+
 const CROP_PAD: &str = r"
 fn effect(color: vec4<f32>, uv: vec2<f32>, size: vec2<f32>, p0: vec4<f32>, p1: vec4<f32>) -> vec4<f32> {
     // The compositor places the input; padding arrives transparent.
@@ -690,7 +776,7 @@ impl FilterInstance for Effect {
 
 /// Every built-in video filter's effect with default settings, for checking that they compile.
 pub fn builtin_video_effects() -> Vec<VideoEffect> {
-    [&ColorCorrection as &dyn Filter, &ChromaKey, &CropPad, &Sharpen]
+    [&ColorCorrection as &dyn Filter, &ChromaKey, &ColorKey, &CropPad, &Sharpen]
         .iter()
         .filter_map(|f| f.create(&f.schema().defaults()).ok().and_then(|i| i.video_effect()))
         .collect()
@@ -1103,9 +1189,91 @@ mod tests {
         }
     }
 
+    fn color_key(s: Settings) -> VideoEffect {
+        ColorKey.create(&s).unwrap().video_effect().unwrap()
+    }
+
+    /// Green, red and a green 0.439 from the key: within Similarity 400 the pixel is keyed out,
+    /// in the next 80 it fades, and beyond that it stays.
+    #[test]
+    fn color_key_keys_out_the_colors_near_the_key() {
+        let row = [[0, 255, 0, 255], [255, 0, 0, 255], [0, 143, 0, 255]];
+        let near = |got: [u8; 4], want: [u8; 4]| got.iter().zip(want).all(|(a, b)| a.abs_diff(b) <= 3);
+        let Some(px) = draw_frame(&row, 3, 1, vec![color_key(Settings::new())]) else { return };
+        // Drawn over black: a keyed-out pixel shows black.
+        assert!(near(canvas_pixel(&px, 0, 0), [0, 0, 0, 255]), "{:?}", canvas_pixel(&px, 0, 0));
+        assert!(near(canvas_pixel(&px, 1, 0), [255, 0, 0, 255]), "{:?}", canvas_pixel(&px, 1, 0));
+        // (0.4392 - 0.4) / 0.08 = 0.49 of 143.
+        assert!(near(canvas_pixel(&px, 2, 0), [0, 70, 0, 255]), "{:?}", canvas_pixel(&px, 2, 0));
+        // Keyed on red instead, green stays and red goes.
+        let Some(px) = draw_frame(&row, 3, 1, vec![color_key(Settings::new().with("key_color", "#ff0000"))]) else { return };
+        assert!(near(canvas_pixel(&px, 0, 0), [0, 255, 0, 255]) && near(canvas_pixel(&px, 1, 0), [0, 0, 0, 255]));
+    }
+
+    /// The pixels left are adjusted and drawn at Opacity.
+    #[test]
+    fn color_key_adjusts_the_pixels_it_keeps() {
+        let near = |got: [u8; 4], want: [u8; 4]| got.iter().zip(want).all(|(a, b)| a.abs_diff(b) <= 3);
+        let row = [[255, 0, 0, 255], [64, 64, 64, 255]];
+        let s = Settings::new().with("opacity", 50.0).with("brightness", 0.2);
+        let Some(px) = draw_frame(&row, 2, 1, vec![color_key(s)]) else { return };
+        // Red with 0.2 added is (1, 0.2, 0.2), at half opacity over black.
+        assert!(near(canvas_pixel(&px, 0, 0), [128, 26, 26, 255]), "{:?}", canvas_pixel(&px, 0, 0));
+        // Gamma 1 takes the square root: 0.251 becomes 0.501.
+        let Some(px) = draw_frame(&row, 2, 1, vec![color_key(Settings::new().with("gamma", 1.0))]) else { return };
+        assert!(near(canvas_pixel(&px, 1, 0), [128, 128, 128, 255]), "{:?}", canvas_pixel(&px, 1, 0));
+    }
+
+    #[test]
+    fn color_key_reads_its_settings() {
+        let (p, reframe) = color_key_params(&Settings::new()).unwrap();
+        assert_eq!(reframe, Reframe::None);
+        assert_eq!(p[..9], [0.0, 1.0, 0.0, 0.0, 0.4, 0.08, 1.0, 1.0, 1.0]);
+        assert_eq!(color_key_params(&ColorKey.schema().defaults()).unwrap(), (p, reframe));
+        let s = Settings::new()
+            .with("key_color", "#3366ff80")
+            .with("similarity", 1000)
+            .with("smoothness", 1)
+            .with("opacity", 25.0)
+            .with("contrast", 1.0)
+            .with("brightness", -1.0)
+            .with("gamma", -1.0);
+        let (p, _) = color_key_params(&s).unwrap();
+        assert_eq!(p[..9], [0.2, 0.4, 1.0, -1.0, 1.0, 0.001, 4.0, 2.0, 0.25]);
+        let (p, _) = color_key_params(&Settings::new().with("contrast", -0.5)).unwrap();
+        assert_eq!(p[6], 0.5);
+    }
+
+    #[test]
+    fn color_key_rejects_bad_settings_and_keeps_the_last_good_ones() {
+        use serde_json::{Value, json};
+        let bad: [(&str, Value); 13] = [
+            ("key_color", json!("green")),
+            ("key_color", json!("#00ff0")),
+            ("key_color", json!(65280)),
+            ("similarity", json!(0)),
+            ("similarity", json!(1001)),
+            ("similarity", json!(400.5)),
+            ("smoothness", json!("80")),
+            ("opacity", json!(100.5)),
+            ("opacity", json!(-1)),
+            ("contrast", json!(1.1)),
+            ("brightness", json!(-1.5)),
+            ("gamma", json!(2)),
+            ("gamma", Value::from(f64::NAN)),
+        ];
+        for (key, v) in bad {
+            let s = Settings::new().with(key, v.clone());
+            assert!(ColorKey.create(&s).is_err(), "{key} = {v}");
+            let mut f = ColorKey.create(&Settings::new().with("similarity", 500)).unwrap();
+            assert!(f.update(&s).is_err(), "{key} = {v}");
+            assert_eq!(f.video_effect().map(|e| e.params[4]), Some(0.5), "{key} = {v}: the last good settings stay");
+        }
+    }
+
     #[test]
     fn video_filters_have_effects_and_audio_filters_do_not() {
-        assert_eq!(builtin_video_effects().len(), 4);
+        assert_eq!(builtin_video_effects().len(), 5);
         assert!(Gain.create(&Settings::new()).unwrap().video_effect().is_none());
         let neutral = color_correction_params(&ColorCorrection.schema().defaults());
         let mut want = [0.0; VIDEO_EFFECT_PARAMS];
