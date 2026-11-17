@@ -24,7 +24,9 @@ use studiocraft_engine::scheduler::Scheduler;
 use studiocraft_engine::{Command, Engine, EngineError, RuntimeAction};
 use studiocraft_media::clock::{MasterClock, tick_of};
 use studiocraft_media::mix::{BlockLevels, Levels};
+use studiocraft_media::queue::Fifo;
 use studiocraft_media::stats::{EncoderStats, RenderStats, Snapshot};
+use studiocraft_media::video::PooledFrame;
 use studiocraft_media::{FrameRate, Tick};
 use studiocraft_model::{Profile, SceneCollection, SceneId, Settings, SourceId, VideoSettings};
 use studiocraft_plugin::{PluginError, Registry};
@@ -181,6 +183,26 @@ pub struct Studio {
     seen_revision: u64,
     outputs: outputs::Outputs,
     notices: Vec<Notice>,
+    /// Where the scopes' copy of the program goes, and the largest size it is drawn at.
+    scope_feed: Option<ScopeFeed>,
+}
+
+/// The queue the compositor sends the scopes' NV12 copy of the program to, and the largest size
+/// of that copy. The copy keeps the canvas's shape.
+#[derive(Clone)]
+pub struct ScopeFeed {
+    pub sink: Arc<Fifo<Arc<PooledFrame>>>,
+    pub max_width: u32,
+    pub max_height: u32,
+}
+
+/// The largest even size with the shape of `canvas` that fits in `max_w` × `max_h` (at least 2 × 2).
+pub fn scope_size(canvas: (u32, u32), max_w: u32, max_h: u32) -> (u32, u32) {
+    let (cw, ch) = (u64::from(canvas.0.max(1)), u64::from(canvas.1.max(1)));
+    let (mw, mh) = (u64::from(max_w.max(2)), u64::from(max_h.max(2)));
+    let (w, h) = if cw * mh > ch * mw { (mw, ch * mw / cw) } else { (cw * mh / ch, mh) };
+    let even = |v: u64| (v.min(u64::from(u32::MAX)) as u32 & !1).max(2);
+    (even(w), even(h))
 }
 
 impl Studio {
@@ -218,6 +240,7 @@ impl Studio {
             seen_revision: 0,
             outputs: outputs::Outputs::default(),
             notices: Vec::new(),
+            scope_feed: None,
         };
         s.restart_video();
         s.refresh();
@@ -433,6 +456,7 @@ impl Studio {
                 self.video = Some(Video { shared, views, _scheduler: scheduler });
                 self.publish();
                 self.update_encode_target();
+                self.update_scope_target();
             }
             Err(e) => self.notices.push(Notice::new("The compositor thread could not start: {error}", vec![("error", e.to_string())], true)),
         }
@@ -606,6 +630,23 @@ impl Studio {
         let sinks = self.outputs.video_sinks();
         let target = (!sinks.is_empty()).then(|| studiocraft_render::EncodeTarget { width: vs.output_width, height: vs.output_height, sinks });
         v.shared.encode.publish(target);
+    }
+
+    /// Send the compositor's small NV12 copy of the program to `feed`, or stop it with `None`.
+    /// Without a graphics device no copy is made.
+    pub fn set_scope_feed(&mut self, feed: Option<ScopeFeed>) {
+        self.scope_feed = feed;
+        self.update_scope_target();
+    }
+
+    fn update_scope_target(&mut self) {
+        let Some(v) = &self.video else { return };
+        let canvas = self.canvas();
+        let target = self.scope_feed.as_ref().map(|f| {
+            let (width, height) = scope_size(canvas, f.max_width, f.max_height);
+            studiocraft_render::EncodeTarget { width, height, sinks: vec![Arc::clone(&f.sink)] }
+        });
+        v.shared.scope.publish(target);
     }
 }
 

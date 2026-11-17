@@ -79,6 +79,50 @@ fn frames_draw_in_both_modes() {
 }
 
 #[test]
+fn view_scopes_opens_the_window_and_its_scope_is_a_command() {
+    let mut a = app();
+    let ctx = egui::Context::default();
+    assert_eq!(a.hud()["ui"]["scopes"], json!({"open": false, "kind": "waveform", "computed": 0}));
+    assert_eq!(run(&mut a, &ctx, "view.scopes", json!({})), Ok(json!({"on": true})));
+    assert!(a.scopes.is_some(), "the scopes thread runs while the window is open");
+    assert_eq!(a.item_state("view.scopes").checked, Some(true));
+    assert_eq!(run(&mut a, &ctx, "scopes.kind", json!({"kind": "vectorscopeHls"})), Ok(json!({"kind": "vectorscopeHls"})));
+    assert_eq!(a.store().prefs().scope_kind, "vectorscopeHls");
+    let err = run(&mut a, &ctx, "scopes.kind", json!({"kind": "oscilloscope"})).unwrap_err();
+    assert!(err.contains("unknown scope") && err.contains("waveform"), "{err}");
+    assert!(run(&mut a, &ctx, "scopes.kind", json!({})).is_err(), "the kind is required");
+    assert_eq!(a.store().prefs().scope_kind, "vectorscopeHls", "a refused kind changes nothing");
+    frame(&mut a, &ctx, vec![]);
+    assert_eq!(a.hud()["ui"]["scopes"]["kind"], json!("vectorscopeHls"));
+    assert_eq!(run(&mut a, &ctx, "view.scopes", json!({})), Ok(json!({"on": false})));
+    assert!(a.scopes.is_none(), "closing the window stops the thread");
+    frame(&mut a, &ctx, vec![]);
+}
+
+#[test]
+fn the_scopes_window_shows_the_picture_the_thread_computed() {
+    use studiocraft_media::pool::Pool;
+    use studiocraft_media::video::{FramePool, PixelFormat, VideoFrame};
+    let mut a = app();
+    let ctx = egui::Context::default();
+    run(&mut a, &ctx, "view.scopes", json!({})).unwrap();
+    let pool: Arc<FramePool> = Pool::new(2, VideoFrame::default);
+    let mut f = pool.take();
+    assert!(f.reshape(32, 16, PixelFormat::Nv12));
+    f.data.fill(128);
+    // Stand in for the compositor: hand one copy over, and wait for the thread's picture.
+    let s = a.scopes.as_mut().unwrap();
+    s.feed_queue().push(Arc::new(f));
+    s.pump(scopes::kind_of("waveform"));
+    assert!(s.wait());
+    frame(&mut a, &ctx, vec![]);
+    let s = a.scopes.as_ref().unwrap();
+    assert_eq!(s.latest.as_ref().map(|p| (p.width, p.height)), Some((32, 256)));
+    assert!(s.texture.is_some() && !s.fresh, "the window uploaded the picture");
+    assert_eq!(a.hud()["ui"]["scopes"]["computed"], json!(1));
+}
+
+#[test]
 fn the_menu_strip_is_the_title_bar_when_the_app_draws_the_frame() {
     let mut a = app();
     assert!(!a.draws_title_bar(), "the desktop draws the frame by default");

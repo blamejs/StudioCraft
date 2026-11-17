@@ -18,6 +18,7 @@ mod icons;
 pub mod kit;
 mod output_bar;
 mod preview;
+mod scopes;
 mod settings;
 pub mod store;
 pub mod strip;
@@ -164,6 +165,8 @@ pub struct StudioApp {
     /// The Licenses window, with the license it shows.
     licenses: Option<credits::License>,
     encoders: Option<Vec<(String, String, bool)>>,
+    /// The Scopes window's feed and thread while it is open.
+    scopes: Option<scopes::Scopes>,
     confirm_exit: bool,
     exit_confirmed: bool,
     /// A close was canceled because the scene collection could not be saved; the next one goes ahead.
@@ -265,6 +268,7 @@ impl StudioApp {
             credit_names: credits::NameMode::default(),
             licenses: None,
             encoders: None,
+            scopes: None,
             confirm_exit: false,
             exit_confirmed: false,
             close_despite_failed_save: false,
@@ -427,6 +431,11 @@ impl StudioApp {
                     "updates_open": self.updates.window_open || self.updates.updater.prompt_open(),
                     "docks": p.docks,
                     "stats": p.stats,
+                    "scopes": {
+                        "open": p.scopes,
+                        "kind": scopes::kind_of(&p.scope_kind).name(),
+                        "computed": self.scopes.as_ref().map_or(0, |s| s.computed),
+                    },
                     "status_bar": p.status_bar,
                     "lock_preview": p.lock_preview,
                     "profile": self.studio.profile().name,
@@ -565,6 +574,87 @@ impl StudioApp {
         json!({"on": now})
     }
 
+    /// Start the scopes thread and the program copy while View › Scopes is on, and stop both when
+    /// it is off. A thread that cannot start turns the setting off again.
+    fn sync_scopes(&mut self) {
+        let on = self.store.prefs().scopes;
+        if on && self.scopes.is_none() {
+            match scopes::Scopes::start() {
+                Ok(s) => {
+                    self.studio.set_scope_feed(Some(s.feed()));
+                    self.scopes = Some(s);
+                }
+                Err(e) => {
+                    self.store.update(|p| p.scopes = false);
+                    self.notify(tmsg!("The scopes could not start: {error}", error = e), true);
+                }
+            }
+        } else if !on && self.scopes.is_some() {
+            self.studio.set_scope_feed(None);
+            self.scopes = None;
+        }
+    }
+
+    /// The Scopes window: the chosen scope of the program output, computed on the scopes thread.
+    fn scopes_window(&mut self, ctx: &egui::Context, acts: &mut Vec<Act>) {
+        self.sync_scopes();
+        let kind = scopes::kind_of(&self.store.prefs().scope_kind);
+        let has_gpu = self.render.is_some();
+        let Some(s) = &mut self.scopes else { return };
+        s.pump(kind);
+        if s.fresh
+            && let Some(p) = &s.latest
+        {
+            s.fresh = false;
+            if p.width > 0 && p.height > 0 && p.rgba.len() == p.width * p.height * 4 {
+                let image = egui::ColorImage::from_rgba_premultiplied([p.width, p.height], &p.rgba);
+                match &mut s.texture {
+                    Some(t) => t.set(image, egui::TextureOptions::LINEAR),
+                    None => s.texture = Some(ctx.load_texture("scopes", image, egui::TextureOptions::LINEAR)),
+                }
+            }
+        }
+        let mut open = true;
+        egui::Window::new(tid!("view.scopes", "Scopes")).id(egui::Id::unique("scopes")).open(&mut open).default_width(520.0).show(ctx, |ui| {
+            craft_ui::ComboBox::from_id_salt("scope-kind").selected_text(tl!(kind.label())).show_ui(ui, |ui| {
+                for k in scopes::MENU_ORDER {
+                    if ui.selectable_label(k == kind, tl!(k.label())).clicked() && k != kind {
+                        acts.push(Act::run("scopes.kind", json!({"kind": k.name()})));
+                    }
+                }
+            });
+            let latest = s.latest.as_ref().filter(|p| p.kind == kind);
+            match latest {
+                None if !has_gpu => {
+                    ui.weak(tl!("The scopes need a graphics device to read the program."));
+                }
+                None => {
+                    ui.weak(tl!("Waiting for the program picture…"));
+                }
+                Some(p) => match &p.histogram {
+                    Some(h) => scopes::draw_histogram(ui, h),
+                    None => {
+                        if let Some(t) = &s.texture {
+                            let width = ui.available_width().max(64.0);
+                            let height = (width * p.height as f32 / p.width.max(1) as f32).min(420.0);
+                            let (rect, _) = ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::hover());
+                            ui.painter().rect_filled(rect, 0.0, Color32::BLACK);
+                            let uv = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0));
+                            ui.painter().image(t.id(), rect, uv, Color32::WHITE);
+                        }
+                    }
+                },
+            }
+            if let Some(e) = &s.error {
+                ui.colored_label(Color32::from_rgb(220, 90, 80), craft_i18n::fmt(tl!("The scope could not be computed: {error}"), &[("error", e)]));
+            }
+        });
+        if !open {
+            self.store.update(|p| p.scopes = false);
+            self.sync_scopes();
+        }
+    }
+
     fn selection_transform(&mut self, f: impl FnOnce(Transform, (u32, u32), (u32, u32)) -> Transform) -> Result<Value, String> {
         let (item, source, t) = self.selection().ok_or("select a source first")?;
         let native = self.studio.source_size(source).ok_or("the source has not shown a picture yet")?;
@@ -587,6 +677,22 @@ impl StudioApp {
                 studiocraft_platform::shell::open_folder(&dir).map_err(|e| e.to_string())?;
             }
             "view.stats" => return Ok(self.toggle_pref(|p| &mut p.stats)),
+            "view.scopes" => {
+                let r = self.toggle_pref(|p| &mut p.scopes);
+                self.sync_scopes();
+                return Ok(r);
+            }
+            "scopes.kind" => {
+                let name = Self::param_str(cmd, "kind")?;
+                let kind = craft_scopes::ScopeKind::from_name(name).ok_or_else(|| {
+                    let known: Vec<&str> = craft_scopes::ScopeKind::ALL.iter().map(|k| k.name()).collect();
+                    format!("`scopes.kind`: unknown scope `{name}` (one of {})", known.join(", "))
+                })?;
+                if scopes::kind_of(&self.store.prefs().scope_kind) != kind {
+                    self.store.update(|p| p.scope_kind = kind.name().to_string());
+                }
+                return Ok(json!({"kind": kind.name()}));
+            }
             "view.status_bar" => return Ok(self.toggle_pref(|p| &mut p.status_bar)),
             "view.lock_preview" => return Ok(self.toggle_pref(|p| &mut p.lock_preview)),
             "view.fullscreen" => {
@@ -1378,6 +1484,8 @@ impl StudioApp {
                 self.store.update(|p| p.stats = false);
             }
         }
+
+        self.scopes_window(ctx, acts);
 
         if let Some(list) = &self.encoders {
             let mut open = true;

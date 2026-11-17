@@ -42,6 +42,11 @@ dependency. `cargo xtask wasm` checks that they build for `wasm32-unknown-unknow
   The compositor (`render`) uploads changed source frames, draws the program scene (and the preview
   scene in studio mode) into a ring of 3 GPU textures, and converts the program to NV12 for the
   encoders. The window registers the ring's texture views with egui, so frames stay on the GPU.
+  While View › Scopes is open, the compositor also converts the program to a second NV12 copy of
+  at most 480 × 270 and sends it to the window's scopes queue.
+- **Scopes thread.** While View › Scopes is open, the window hands the newest program copy to the
+  scopes thread (`ui-egui/src/scopes.rs`), which computes and paints the chosen scope with
+  `craft-scopes` into buffers it keeps. The window uploads the finished picture.
 - **Output threads.** Each recording or stream runs an ffmpeg process with one writer thread for
   video and one for audio.
 - **Window thread.** The window reads `Studio` state, runs commands, and shows statistics.
