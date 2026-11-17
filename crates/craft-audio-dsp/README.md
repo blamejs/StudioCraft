@@ -71,10 +71,11 @@ The crate combines two crates from the ArtCraft apps, with changes:
 
 - [storytold/filmcraft](https://github.com/storytold/filmcraft) `crates/audio-dsp` at
   `3f137a7ed420cac79b32145f5243b7f98b31f71c`: the `AudioEffect` trait, the effects and their
-  registry, the loudness meter, panning, resampling, time stretch, offset search and ducking.
+  registry, the loudness meter, the streaming resampler, time stretch, offset search and ducking.
 - [storytold/soundcraft](https://github.com/storytold/soundcraft) `crates/dsp` at
   `648ed9db9a0e98cc55643babffac381521a556c8`: the tail length, offline mode, events, saved state
-  and editor parts of the trait.
+  and editor parts of the trait, the maximizer, dither, panning, the signal generator and the
+  offline resampler.
 
 `NOTICE` keeps the copyright notices of both projects.
 
