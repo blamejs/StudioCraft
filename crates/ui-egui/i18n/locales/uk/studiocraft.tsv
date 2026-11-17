@@ -381,6 +381,12 @@
 	{ms} ms	{ms} мс
 	ms	мс
 	s	с
+	Automatic (fastest)	Автоматично (найшвидше)
+	Drawing with {adapter}	Малювання через {adapter}
+	Graphics adapter	Графічний адаптер
+	Hardware acceleration	Апаратне прискорення
+	Power saving	Енергозбереження
+	Software (slower)	Програмно (повільніше)
 	Compact (small files)	Компактна (малі файли)
 	Duplicate Profile	Дублювати профіль
 	Duplicate Scene Collection	Дублювати колекцію сцен
@@ -396,6 +402,15 @@
 	Unlock	Розблокувати
 	Unmute	Увімкнути звук
 @msg	A plug-in could not be loaded: {error}	Не вдалося завантажити модуль: {error}
+@msg	Drawing again on {adapter}	Малювання знову йде через {adapter}
+@msg	No graphics device could be opened again: {error}	Не вдалося знову відкрити графічний пристрій: {error}
+@msg	No graphics hardware can be used; drawing in software, which is slower	Графічне обладнання недоступне; малювання йде програмно, це повільніше
+@msg	No software graphics adapter is available; using the automatic choice	Програмний графічний адаптер недоступний; використовується автоматичний вибір
+@msg	Nothing can be drawn until StudioCraft starts again	Малювання неможливе до перезапуску StudioCraft
+@msg	The graphics adapter {adapter} could not be opened: {error}	Не вдалося відкрити графічний адаптер {adapter}: {error}
+@msg	The graphics adapter {adapter} is not available; using the automatic choice	Графічний адаптер {adapter} недоступний; використовується автоматичний вибір
+@msg	The graphics device stopped working {count} times; drawing in software	Графічний пристрій перестав працювати (разів: {count}); малювання йде програмно
+@msg	The graphics device stopped working: {error}	Графічний пристрій перестав працювати: {error}
 @msg	Audio monitoring could not start: {error}	Не вдалося почати прослуховування: {error}
 @msg	Audio monitoring stopped: {error}	Прослуховування зупинено: {error}
 @msg	Could not check for updates: {error}	Не вдалося перевірити оновлення: {error}

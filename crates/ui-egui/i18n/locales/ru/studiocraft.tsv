@@ -381,6 +381,12 @@
 	{ms} ms	{ms} мс
 	ms	мс
 	s	с
+	Automatic (fastest)	Автоматически (быстрее всего)
+	Drawing with {adapter}	Отрисовка через {adapter}
+	Graphics adapter	Графический адаптер
+	Hardware acceleration	Аппаратное ускорение
+	Power saving	Энергосбережение
+	Software (slower)	Программно (медленнее)
 	Compact (small files)	Компактное (маленькие файлы)
 	Duplicate Profile	Дублировать профиль
 	Duplicate Scene Collection	Дублировать коллекцию сцен
@@ -396,6 +402,15 @@
 	Unlock	Разблокировать
 	Unmute	Включить звук
 @msg	A plug-in could not be loaded: {error}	Не удалось загрузить модуль: {error}
+@msg	Drawing again on {adapter}	Отрисовка снова идёт через {adapter}
+@msg	No graphics device could be opened again: {error}	Не удалось снова открыть графическое устройство: {error}
+@msg	No graphics hardware can be used; drawing in software, which is slower	Графическое оборудование недоступно; отрисовка идёт программно, это медленнее
+@msg	No software graphics adapter is available; using the automatic choice	Программный графический адаптер недоступен; используется автоматический выбор
+@msg	Nothing can be drawn until StudioCraft starts again	Отрисовка невозможна до перезапуска StudioCraft
+@msg	The graphics adapter {adapter} could not be opened: {error}	Не удалось открыть графический адаптер {adapter}: {error}
+@msg	The graphics adapter {adapter} is not available; using the automatic choice	Графический адаптер {adapter} недоступен; используется автоматический выбор
+@msg	The graphics device stopped working {count} times; drawing in software	Графическое устройство перестало работать (раз: {count}); отрисовка идёт программно
+@msg	The graphics device stopped working: {error}	Графическое устройство перестало работать: {error}
 @msg	Audio monitoring could not start: {error}	Не удалось начать прослушивание: {error}
 @msg	Audio monitoring stopped: {error}	Прослушивание остановлено: {error}
 @msg	Could not check for updates: {error}	Не удалось проверить обновления: {error}

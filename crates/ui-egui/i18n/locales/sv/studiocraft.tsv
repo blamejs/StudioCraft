@@ -372,6 +372,12 @@
 @msg	The hardware encoder tests could not run: {error}	Testerna av hårdvarukodarna kunde inte köras: {error}
 @msg	{encoder} stopped working; the next start tries another encoder	{encoder} slutade fungera; nästa start provar en annan kodare
 	{program} did not report its version	{program} rapporterade inte sin version
+	Automatic (fastest)	Automatiskt (snabbast)
+	Drawing with {adapter}	Ritar med {adapter}
+	Graphics adapter	Grafikkort
+	Hardware acceleration	Hårdvaruacceleration
+	Power saving	Energisparläge
+	Software (slower)	Programvara (långsammare)
 	Compact (small files)	Kompakt (små filer)
 	Duplicate Profile	Duplicera profil
 	Duplicate Scene Collection	Duplicera scensamling
@@ -387,6 +393,15 @@
 	Unlock	Lås upp
 	Unmute	Ljud på
 @msg	A plug-in could not be loaded: {error}	Ett insticksprogram kunde inte läsas in: {error}
+@msg	Drawing again on {adapter}	Ritar igen med {adapter}
+@msg	No graphics device could be opened again: {error}	Ingen grafikenhet kunde öppnas igen: {error}
+@msg	No graphics hardware can be used; drawing in software, which is slower	Ingen grafikhårdvara kan användas; ritar med programvara, vilket är långsammare
+@msg	No software graphics adapter is available; using the automatic choice	Det finns inget programvarubaserat grafikkort; använder det automatiska valet
+@msg	Nothing can be drawn until StudioCraft starts again	Inget kan ritas förrän StudioCraft startas igen
+@msg	The graphics adapter {adapter} could not be opened: {error}	Grafikkortet {adapter} kunde inte öppnas: {error}
+@msg	The graphics adapter {adapter} is not available; using the automatic choice	Grafikkortet {adapter} är inte tillgängligt; använder det automatiska valet
+@msg	The graphics device stopped working {count} times; drawing in software	Grafikenheten slutade fungera {count} gånger; ritar med programvara
+@msg	The graphics device stopped working: {error}	Grafikenheten slutade fungera: {error}
 @msg	Audio monitoring could not start: {error}	Medhörningen kunde inte starta: {error}
 @msg	Audio monitoring stopped: {error}	Medhörningen stoppades: {error}
 @msg	Could not check for updates: {error}	Kunde inte söka efter uppdateringar: {error}

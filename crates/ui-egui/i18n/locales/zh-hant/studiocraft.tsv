@@ -372,6 +372,12 @@
 @msg	The hardware encoder tests could not run: {error}	無法執行硬體編碼器測試：{error}
 @msg	{encoder} stopped working; the next start tries another encoder	{encoder} 已停止運作；下次開始時將嘗試其他編碼器
 	{program} did not report its version	{program} 未回報其版本
+	Automatic (fastest)	自動（最快）
+	Drawing with {adapter}	正在使用 {adapter} 繪製
+	Graphics adapter	圖形介面卡
+	Hardware acceleration	硬體加速
+	Power saving	省電
+	Software (slower)	軟體（較慢）
 	Compact (small files)	精簡（檔案較小）
 	Duplicate Profile	複製設定檔
 	Duplicate Scene Collection	複製場景集合
@@ -387,6 +393,15 @@
 	Unlock	解除鎖定
 	Unmute	取消靜音
 @msg	A plug-in could not be loaded: {error}	無法載入外掛程式：{error}
+@msg	Drawing again on {adapter}	已重新使用 {adapter} 繪製
+@msg	No graphics device could be opened again: {error}	無法重新開啟圖形裝置：{error}
+@msg	No graphics hardware can be used; drawing in software, which is slower	無法使用圖形硬體；改用軟體繪製，速度較慢
+@msg	No software graphics adapter is available; using the automatic choice	沒有可用的軟體圖形介面卡；改用自動選擇
+@msg	Nothing can be drawn until StudioCraft starts again	在 StudioCraft 重新啟動之前無法繪製
+@msg	The graphics adapter {adapter} could not be opened: {error}	無法開啟圖形介面卡 {adapter}：{error}
+@msg	The graphics adapter {adapter} is not available; using the automatic choice	圖形介面卡 {adapter} 無法使用；改用自動選擇
+@msg	The graphics device stopped working {count} times; drawing in software	圖形裝置已停止運作 {count} 次；改用軟體繪製
+@msg	The graphics device stopped working: {error}	圖形裝置已停止運作：{error}
 @msg	Audio monitoring could not start: {error}	無法開始音訊監聽：{error}
 @msg	Audio monitoring stopped: {error}	音訊監聽已停止：{error}
 @msg	Could not check for updates: {error}	無法檢查更新：{error}
