@@ -27,20 +27,40 @@ jobs:
         libxrandr-dev libxi-dev libfontconfig1-dev libfreetype-dev mesa-vulkan-drivers
         libasound2-dev libpipewire-0.3-dev libclang-dev libgbm-dev libegl-dev
 
-  # Checks that the app compiles on the hosts the release builds on (Ubuntu 22.04 and Windows),
-  # with the locked dependencies and the PipeWire headers packaging/linux/package.sh uses.
+  # Checks that the app compiles on the hosts the release builds on (Windows and Ubuntu 22.04),
+  # with the locked dependencies.
   release-hosts:
     uses: storytold/craft-common-actions/.github/workflows/gate.yml@59d1ecc4ea15ab59f8d60d38b147d5016c1f1385
     with:
       timeout-minutes: 60
-      os: '["ubuntu-22.04","windows-latest"]'
+      os: '["windows-latest"]'
       targets: ""
       tools: ""
-      command: >-
-        . packaging/linux/pipewire-headers.sh &&
-        cargo check --locked -p studiocraft -p studiocraft-cli --bins
-      windows-command: cargo check --locked -p studiocraft -p studiocraft-cli --bins
-      packages: >-
-        pkg-config libxkbcommon-dev libwayland-dev libx11-dev libxcb1-dev libxcursor-dev
-        libxrandr-dev libxi-dev libfontconfig1-dev libfreetype-dev libasound2-dev
-        libpipewire-0.3-dev libclang-dev libgbm-dev libegl-dev
+      command: cargo check --locked -p studiocraft -p studiocraft-cli --bins
+
+  # The shared gate needs Python 3.11 (tomllib), which Ubuntu 22.04 does not have, so this leg runs
+  # here. It builds with the PipeWire headers packaging/linux/package.sh uses.
+  release-host-linux:
+    name: release-hosts / check (ubuntu-22.04)
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+    env:
+      CARGO_TERM_COLOR: always
+      CARGO_INCREMENTAL: 0
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install the build packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config libxkbcommon-dev libwayland-dev libx11-dev libxcb1-dev libxcursor-dev \
+            libxrandr-dev libxi-dev libfontconfig1-dev libfreetype-dev libasound2-dev \
+            libpipewire-0.3-dev libclang-dev libgbm-dev libegl-dev
+      - name: Install Rust
+        run: rustup toolchain install stable --profile minimal && rustup default stable
+      - name: Check
+        run: |
+          . packaging/linux/pipewire-headers.sh
+          cargo check --locked -p studiocraft -p studiocraft-cli --bins
