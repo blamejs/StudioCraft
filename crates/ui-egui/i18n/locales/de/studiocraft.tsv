@@ -52,6 +52,10 @@
 	Duplicate	Duplizieren
 	Duplicate…	Duplizieren…
 	Duration	Dauer
+	Ease in	Langsam beginnen
+	Ease in and out	Langsam beginnen und enden
+	Ease out	Langsam enden
+	Easing	Beschleunigung
 	Edit	Bearbeiten
 	Enabled	Aktiviert
 	Encoder queue	Encoder-Warteschlange
@@ -107,6 +111,7 @@
 	Language	Sprache
 	Left	Links
 	Licenses	Lizenzen
+	Linear	Linear
 	LIVE	LIVE
 	Live, {time}	Live, {time}
 	Lock (it can't be moved in the preview)	Sperren (in der Vorschau nicht verschiebbar)

@@ -57,6 +57,10 @@
 	Duplicate	Duplicate
 	Duplicate…	Duplicate…
 	Duration	Duration
+	Ease in	Ease in
+	Ease in and out	Ease in and out
+	Ease out	Ease out
+	Easing	Easing
 	Edit	Edit
 	Enabled	Enabled
 	Encoder queue	Encoder queue
@@ -122,6 +126,7 @@
 	Language	Language
 	Left	Left
 	Licenses	Licenses
+	Linear	Linear
 	LIVE	LIVE
 	Live, {time}	Live, {time}
 	Lock (it can't be moved in the preview)	Lock (it can't be moved in the preview)

@@ -83,6 +83,7 @@ impl Wiring {
                 params: t.params(settings),
                 start,
                 duration,
+                ease: t.easing(settings),
             })
         });
         Plan { program, transition, preview }
