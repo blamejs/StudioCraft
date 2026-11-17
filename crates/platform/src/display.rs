@@ -28,12 +28,15 @@ pub struct DisplayCapture {
 }
 
 impl DisplayCapture {
-    /// Capture the display with `id`; an empty or unknown id captures the primary display.
+    /// Capture the display with `id`; an empty or unknown id captures the primary display. On
+    /// Linux this opens the desktop's picker and returns without waiting for the choice.
     pub fn open(id: &str) -> Result<DisplayCapture, PlatformError> {
         Ok(DisplayCapture { inner: imp::Capture::open(id)? })
     }
 
-    /// The current picture into `frame` (RGBA).
+    /// The current picture into `frame` (RGBA, or BGRA on Linux). On Linux the picture arrives
+    /// once a display has been chosen in the desktop's picker. Until then this returns
+    /// [`PlatformError::Waiting`], and while the screen does not change [`PlatformError::Unchanged`].
     pub fn grab(&mut self, frame: &mut VideoFrame) -> Result<(), PlatformError> {
         self.inner.grab(frame)
     }
@@ -93,7 +96,34 @@ mod imp {
     }
 }
 
-#[cfg(not(any(windows, target_os = "macos")))]
+/// On Linux the desktop's picker chooses the display, so the list is empty and every id opens the
+/// picker.
+#[cfg(target_os = "linux")]
+mod imp {
+    use studiocraft_media::video::VideoFrame;
+
+    use super::DisplayInfo;
+    use crate::PlatformError;
+    use crate::portal::{Kind, PortalCapture};
+
+    pub fn displays() -> Vec<DisplayInfo> {
+        Vec::new()
+    }
+
+    pub struct Capture(PortalCapture);
+
+    impl Capture {
+        pub fn open(_id: &str) -> Result<Capture, PlatformError> {
+            Ok(Capture(PortalCapture::open(Kind::Display)?))
+        }
+
+        pub fn grab(&mut self, frame: &mut VideoFrame) -> Result<(), PlatformError> {
+            self.0.grab(frame)
+        }
+    }
+}
+
+#[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
 mod imp {
     use studiocraft_media::video::VideoFrame;
 

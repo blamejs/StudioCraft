@@ -55,6 +55,21 @@ build for `wasm32-unknown-unknown`:
   dropped. Listing Linux devices reads the PipeWire registry and the `default` metadata object and
   waits at most 2 s for the server. A failed or ended stream and a lost server connection are
   reported to the source, which reopens the device; the rest of the app keeps running.
+- **Screen capture threads.** On Linux a display or window capture (`platform::portal`) starts a
+  thread that asks the desktop's screen-cast portal for one monitor or window, so the desktop shows
+  its own picker while the source thread keeps running. The portal hands over a PipeWire stream,
+  which a second thread reads. It copies each picture, row by row without the row padding, into a
+  spare frame and publishes it through `platform::screen_frames::FrameSlot`: two lock-free queues
+  hold the newest frame and up to 2 spares, so a picture the source has not taken yet is replaced
+  by the newer one and neither thread waits for the other. The stream takes 4-byte RGB formats up
+  to 8192 px a side and follows a resize with the next buffer. A canceled picker, or a session the
+  desktop closes when sharing is stopped from its own controls, clears the picture, and the source
+  does not open the picker again until its settings change. A desktop without the portal, a portal
+  that returns no stream, a failed stream and a lost PipeWire connection are reported and tried
+  again after 2 s. A capture dropped while the picker is open closes the portal session, which ends
+  the request. Once the stream runs, the portal thread waits for the capture to be dropped, the
+  session to close or the stream to end, then closes a pipe the stream loop watches and closes the
+  portal session.
 - **Mixer thread.** The mixer (`engine::mixer`) pulls one 1024-frame block (48 kHz stereo `f32`)
   from every audible source, delays it by the source's sync offset, applies the audio filters,
   gain, mute and scene-change fades, and measures peak and RMS levels. Each input's delay line
@@ -227,9 +242,8 @@ the window buttons sit where the desktop puts them. `src/titlebar.rs` makes the 
 ## Needs without a shared crate yet
 
 - **Native macOS menu bar.** The menu is drawn in the window on every system.
-- **Display and window capture on Linux.** Display and window capture use `xcap` on Windows and
-  macOS only. On Linux these sources report that capture is unavailable. Audio device capture on
-  Linux uses the `pipewire` crate in `studiocraft-platform`.
+- **Capture on Linux.** Display, window and audio device capture on Linux use the `ashpd` and
+  `pipewire` crates directly in `studiocraft-platform`. Windows and macOS use `xcap` and `cpal`.
 - **Encoding.** Streams, MP4 and MOV recordings, Lossless recordings, and recordings with x264 or a
   hardware encoder need an ffmpeg program installed separately. StudioCraft runs it as a process
   and does not link it. MKV recordings with H.264 (built in) use the `craft-video` H.264 encoder

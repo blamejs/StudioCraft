@@ -7,6 +7,8 @@
   and desktop audio.
 - Audio input and desktop audio capture on Linux through the PipeWire sound server. The device
   lists show PipeWire's devices with the default first.
+- Display and window capture on Linux through the desktop's screen-cast portal and PipeWire. The
+  display or window is chosen in the desktop's picker when the source starts.
 - Filters: color correction with white balance by temperature and tint, chroma key, color key,
   crop and pad, image mask, scroll, sharpen, gain, noise gate, compressor, limiter and a
   three-band equalizer.
@@ -58,12 +60,10 @@
 
 ## Next
 
-1. **Capture on Linux.** Display and window capture through PipeWire portals, and audio devices
-   through ALSA or PipeWire.
-2. **Camera source.** Video capture devices on every system.
-3. **Docks.** Undock, rearrange and save dock layouts.
-4. **Translations.** A `studiocraft.tsv` catalog for every other locale craft-i18n has, and
+1. **Camera source.** Video capture devices on every system.
+2. **Docks.** Undock, rearrange and save dock layouts.
+3. **Translations.** A `studiocraft.tsv` catalog for every other locale craft-i18n has, and
    right-to-left layout for Arabic and Hebrew.
-5. **Multiple outputs.** Several streams at once, and a virtual camera.
-6. **Web build.** The model and plugin crates already build for WebAssembly; a browser editor for
+4. **Multiple outputs.** Several streams at once, and a virtual camera.
+5. **Web build.** The model and plugin crates already build for WebAssembly; a browser editor for
    scene collections is the first step.
