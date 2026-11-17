@@ -27,11 +27,14 @@ and Linux.
 - **Audio mixer.** Peak and RMS meters with peak hold, a volume fader in dB, and mute for every
   audible source.
 - **Recording and streaming.** MKV, MP4 or MOV recordings at four quality levels, and RTMP streams
-  at a constant bitrate. Encoding runs in a separately installed `ffmpeg` with the software x264
-  encoder or a hardware encoder (NVIDIA NVENC, AMD AMF, Intel Quick Sync, Windows Media Foundation).
-  The built-in H.264 and AAC encoders record MKV files without `ffmpeg`.
-  Settings › Output and Settings › Stream show the chosen encoder's settings, such as the x264 and
-  NVENC presets. Tools › Available Encoders lists which encoders the installed `ffmpeg` offers.
+  at a constant bitrate. With the H.264 (built in) encoder, StudioCraft records MKV files at the
+  Compact, High and Pristine levels without `ffmpeg`, using its own H.264 and AAC encoders and a
+  Speed, Balanced or Quality preset. MP4 and MOV recordings, Lossless recordings and streams run in a
+  separately installed `ffmpeg` with the software x264 encoder or a hardware encoder (NVIDIA NVENC,
+  AMD AMF, Intel Quick Sync, Windows Media Foundation). x264 is the default encoder for recordings
+  and streams. Settings › Output and Settings › Stream show the chosen encoder's settings, such as
+  the x264 and NVENC presets. Tools › Available Encoders lists H.264 (built in) and the encoders the
+  installed `ffmpeg` offers, and says when `ffmpeg` was not found.
 - **Profiles and scene collections.** Keep several sets of stream and output settings, and several
   sets of scenes, and switch between them from the menu bar.
 - **Shortcuts.** Change the shortcuts in Settings › Hotkeys.
@@ -103,7 +106,8 @@ CRAFT_I18N_DIR=/path/to/craft-i18n CRAFT_FONTS_DIR=/path/to/craft-fonts cargo ru
 ```
 
 Streaming, and recording with an encoder other than H.264 (built in), need `ffmpeg` on the
-`PATH`, or its location in Settings › Output.
+`PATH`, or its location in Settings › Output. Recording uses x264 until H.264 (built in) is chosen
+in Settings › Output.
 
 ## Running
 

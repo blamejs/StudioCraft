@@ -63,6 +63,14 @@ in both files.
 | Default encoder | software x264 | `model::profile::OutputSettings::default` | estimated |
 | x264 preset | veryfast | `outputs::encoders::VideoEncoder::schema` | estimated |
 | NVENC preset | P5 | `outputs::encoders::VideoEncoder::schema` | estimated |
+| H.264 (built in) preset | Speed (of Speed, Balanced and Quality) | `encode::h264::H264::schema` | estimated |
+| H.264 (built in) keyframe interval in recordings | 2 s | `encode::h264::RECORDING_KEYFRAME_S` | estimated |
+| H.264 (built in) bitrates | 100 to 200,000 kbps | `encode::h264::KBPS` | estimated |
+| H.264 (built in) keyframe intervals at a constant bitrate | 1 to 20 s | `encode::h264::KEYFRAME_S` | estimated |
+| Largest H.264 picture | 139,264 macroblocks | `encode::h264::MAX_MACROBLOCKS` | ITU-T H.264 Table A-1 (level 6.2) |
+| Built-in AAC bitrates | 32 to 512 kbps | `encode::aac::KBPS` | estimated |
+| Built-in recording packet queue | 64 MiB and 3 s of media | `outputs::native::QUEUE_BYTES`, `outputs::native::QUEUE_SPAN_NS` | estimated |
+| Built-in recording encoder lag before it fails | 10 s | `outputs::native::MAX_LAG_NS` | estimated |
 | Recording file name | `YYYY-MM-DD HH-MM-SS.<ext>` | `studio::outputs::recording_path` | estimated |
 
 ## Editing

@@ -63,8 +63,10 @@ The packaging scripts are in `packaging/`:
 | `packaging/linux/package.sh` | the `.AppImage`, `.deb`, `.rpm` and `.tar.gz` |
 | `packaging/linux/flatpak-bundle.sh` | the `.flatpak`, from the Linux `.tar.gz` |
 
-Each writes to `dist/release/`. Recording and streaming run a separately installed `ffmpeg`, which
-none of the packages include, and the Flatpak sandbox cannot run one installed on the system.
+Each writes to `dist/release/`. Streaming, and recording with an encoder other than H.264 (built
+in), run a separately installed `ffmpeg`, which none of the packages include, and the Flatpak
+sandbox cannot run one installed on the system. Every package, the Flatpak included, records MKV
+files with H.264 (built in) without `ffmpeg`.
 
 ## File names
 

@@ -14,8 +14,11 @@
 - Audio mixer with meters, faders and mute. The mixer measures the final mix's loudness
   (momentary, short-term, integrated, loudness range and true peak); the window does not show it
   yet.
-- Recording to MKV, MP4 or MOV, and RTMP streaming, through an external ffmpeg. The encoder's
-  settings, such as the x264 and NVENC presets, are set in Settings › Output and Settings › Stream.
+- Recording to MKV with the built-in H.264 and AAC encoders, without ffmpeg (H.264 (built in) in
+  Settings › Output, with a Speed, Balanced or Quality preset).
+- Recording to MKV, MP4 or MOV, Lossless recording, and RTMP streaming, through an external ffmpeg.
+  The encoder's settings, such as the x264 and NVENC presets, are set in Settings › Output and
+  Settings › Stream.
 - Profiles, scene collections, rebindable shortcuts, the stats window, the control channel and the
   MCP server.
 - MCP window tools when the server is connected to the app (`studiocraft-cli mcp --connect
