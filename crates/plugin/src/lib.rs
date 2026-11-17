@@ -73,6 +73,12 @@ pub trait Plugin: Send + Sync {
         let _ = settings;
         self.schema()
     }
+    /// A value that changes when the devices the schema lists change (a camera plugged in or
+    /// out), quick enough to read every few seconds. `None` when the lists do not change on
+    /// their own.
+    fn lists_stamp(&self) -> Option<u64> {
+        None
+    }
     /// Settings written by version `from` brought up to [`Plugin::version`].
     fn migrate(&self, from: u32, settings: Settings) -> Settings {
         let _ = from;

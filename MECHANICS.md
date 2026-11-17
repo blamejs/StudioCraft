@@ -31,6 +31,7 @@ in both files.
 | Wait for a Linux gray camera frame, for the first frame and after a 500 ms wait ran out, before the capture fails | 5 s | `platform::camera_gray::READ_WAIT` | estimated |
 | Camera YUV to RGB conversion | BT.601, studio range (Y 16 to 235) | `platform::camera_frames::rgb` | ITU-R BT.601 |
 | Wait before a failed camera is opened again | 2 s | `sources::camera::REOPEN` | estimated |
+| How often an open Properties window looks for devices plugged in or out | 3 s | `ui-egui::forms::WATCH` | estimated |
 | Time without a new camera frame before the camera counts as lost | 5 s | `sources::camera::STALL` | estimated |
 | Camera polling rate when no format is chosen | 60 per second | `sources::camera::DEFAULT_FPS` | estimated |
 | Crop and pad edges and area | 0 px each (the whole source) | `sources::filters::CropPad` | estimated |
