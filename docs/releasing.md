@@ -3,6 +3,56 @@
 A StudioCraft release is a GitHub release in `blamejs/StudioCraft`. The in-app updater (Help › Check for Updates) and the Craft launcher read the release's
 files by name, so every file follows one pattern.
 
+## Making a release
+
+`.github/workflows/release.yml` calls the suite's shared release workflow
+(`storytold/craft-common-actions`, `.github/workflows/release.yml`, pinned to one commit). It builds
+the Windows, macOS and Linux files, writes `SHA256SUMS.txt`, and creates or updates a draft
+GitHub release named `StudioCraft v<version>`, tagged `v<version>`.
+
+1. Set the version on `main` through a pull request. It is `[workspace.package] version` in the
+   root `Cargo.toml`:
+
+   ```sh
+   cargo xtask version                 # prints the current version, for example 0.1.0
+   cargo xtask version set 0.2.0       # or 0.2.0-rc.1; changes Cargo.toml and Cargo.lock
+   ```
+
+2. Merge or fast-forward `main` into the `release` branch and push it. The workflow starts on the
+   push.
+3. When the run finishes, open the draft on the Releases page, check its files, and publish it.
+   A version with a pre-release part (`-rc.1`) is marked as a pre-release.
+
+Another push to `release` before the draft is published rebuilds the same draft. Once it is
+published, the next release needs a new version.
+
+The macOS and Windows jobs on the `release` branch stop unless their signing secrets are set in
+the repository's `release` environment:
+
+| Platform | Secrets |
+| --- | --- |
+| macOS (signing and notarization) | `APPLE_CERTIFICATE` (base64 `.p12`), `APPLE_CERTIFICATE_PASSWORD`, `KEYCHAIN_PASSWORD`, `APPLE_ID`, `APPLE_PASSWORD` (app-specific password), `APPLE_TEAM_ID` |
+| Windows, with a certificate file | `WINDOWS_CERTIFICATE` (base64 `.pfx`), `WINDOWS_CERTIFICATE_PASSWORD` |
+| Windows, with Azure Trusted Signing | `AZURE_TENANT_ID`, `AZURE_CLIENT_ID`, `AZURE_CLIENT_SECRET`, `AZURE_SIGNING_ENDPOINT`, `AZURE_SIGNING_ACCOUNT`, `AZURE_CERT_PROFILE` |
+| Linux packages and `SHA256SUMS.txt` (optional) | `LINUX_SIGNING_KEY` (ASCII-armored OpenPGP secret key without a passphrase) |
+
+Actions › Release › Run workflow runs the same build from any branch. The `version` input
+overrides `Cargo.toml` for that run, and `dry-run` builds and checks without a draft. A run that
+is not on `release` leaves the files without signing secrets unsigned. Every night a dry run on
+`main` builds everything except macOS.
+
+The packaging scripts are in `packaging/`:
+
+| Script | Writes |
+| --- | --- |
+| `packaging/windows/package.ps1 -Arch x64` | the `.msi` and `-portable.zip` |
+| `packaging/macos/package.sh --arch universal` | the `.dmg` and the `studiocraft-cli` zip |
+| `packaging/linux/package.sh` | the `.AppImage`, `.deb`, `.rpm` and `.tar.gz` |
+| `packaging/linux/flatpak-bundle.sh` | the `.flatpak`, from the Linux `.tar.gz` |
+
+Each writes to `dist/release/`. Recording and streaming run a separately installed `ffmpeg`, which
+none of the packages include, and the Flatpak sandbox cannot run one installed on the system.
+
 ## File names
 
 ```
@@ -67,8 +117,10 @@ icon. The constants are `BUNDLE_ID` and `APP_ID` in `crates/ui-egui/src/lib.rs`.
 
 The icon files are in `assets/app-icon`, and `ASSETS.md` lists each one. A Linux or FreeBSD
 package installs each file in `assets/app-icon/hicolor/<size>/apps/` as
-`share/icons/hicolor/<size>/apps/ai.storyteller.studiocraft.png`, for every size from 16 to 512.
-The repository has no package scripts yet.
+`share/icons/hicolor/<size>/apps/ai.storyteller.studiocraft.png`, for every size from 16 to 512,
+and `studiocraft.svg` as `share/icons/hicolor/scalable/apps/ai.storyteller.studiocraft.svg`. The
+macOS package makes its `.icns` from `studiocraft-macos-512.png`, and the Windows package makes
+the installer's `.ico` from the PNG files.
 The app sets its window icon itself (`crates/ui-egui/src/app_icon.rs`), and the updater installs
 the 128 px icon beside the menu entry it writes for an AppImage.
 

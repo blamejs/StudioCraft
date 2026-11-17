@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The StudioCraft installer (WiX v5), built by packaging/windows/package.ps1, which passes
+     Version (numeric X.Y.Z), BinDir (the signed executables) and IconPath. -->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs" xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui">
+  <Package Name="StudioCraft" Manufacturer="StudioCraft contributors" Version="$(var.Version)" UpgradeCode="B96BF52A-A120-423C-BFD8-F1AB81F0DD4C" Scope="perMachine" Compressed="yes" Language="1033">
+    <SummaryInformation Description="StudioCraft recording and streaming studio" Manufacturer="StudioCraft contributors" />
+    <!-- Pre-releases of one X.Y.Z share an MSI version, so a same-version upgrade replaces one with
+         the next. -->
+    <MajorUpgrade AllowSameVersionUpgrades="yes" DowngradeErrorMessage="A newer version of StudioCraft is already installed." />
+    <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
+
+    <Icon Id="StudioCraftIcon.ico" SourceFile="$(var.IconPath)" />
+    <Property Id="ARPPRODUCTICON" Value="StudioCraftIcon.ico" />
+    <Property Id="ARPURLINFOABOUT" Value="https://github.com/blamejs/StudioCraft" />
+    <Property Id="ARPHELPLINK" Value="https://github.com/blamejs/StudioCraft/issues" />
+
+    <StandardDirectory Id="ProgramFiles6432Folder">
+      <Directory Id="INSTALLFOLDER" Name="StudioCraft" />
+    </StandardDirectory>
+    <StandardDirectory Id="ProgramMenuFolder" />
+
+    <Feature Id="Main" Title="StudioCraft" Level="1">
+      <ComponentGroupRef Id="StudioCraftFiles" />
+    </Feature>
+    <ui:WixUI Id="WixUI_InstallDir" InstallDirectory="INSTALLFOLDER" />
+    <UI>
+      <!-- The license page is skipped: Welcome goes straight to the folder page. -->
+      <Publish Dialog="WelcomeDlg" Control="Next" Event="NewDialog" Value="InstallDirDlg" Order="2" Condition="NOT Installed" />
+      <Publish Dialog="InstallDirDlg" Control="Back" Event="NewDialog" Value="WelcomeDlg" Order="2" Condition="NOT Installed" />
+    </UI>
+  </Package>
+
+  <Fragment>
+    <ComponentGroup Id="StudioCraftFiles" Directory="INSTALLFOLDER">
+      <Component Id="StudioCraftApp" Guid="F2880495-70CB-471F-8C92-ACE36BD5E86D">
+        <File Id="StudioCraftExe" Source="$(var.BinDir)\studiocraft.exe" KeyPath="yes">
+          <Shortcut Id="StartMenuShortcut" Directory="ProgramMenuFolder" Name="StudioCraft" Description="StudioCraft recording and streaming studio" WorkingDirectory="INSTALLFOLDER" Advertise="yes" Icon="StudioCraftIcon.ico" IconIndex="0" />
+        </File>
+        <!-- Win+R "studiocraft" and the "Open with" list find the app through these keys. -->
+        <RegistryValue Root="HKLM" Key="Software\Microsoft\Windows\CurrentVersion\App Paths\studiocraft.exe" Value="[#StudioCraftExe]" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\Applications\studiocraft.exe" Name="FriendlyAppName" Value="StudioCraft" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\StudioCraft" Name="InstallDir" Value="[INSTALLFOLDER]" Type="string" />
+      </Component>
+      <Component Id="StudioCraftCli" Guid="B1D12A0B-2B9C-4665-8BD1-D4A14E373490">
+        <File Id="StudioCraftCliExe" Source="$(var.BinDir)\studiocraft-cli.exe" KeyPath="yes" />
+      </Component>
+      <Component Id="StudioCraftDocs">
+        <File Id="StudioCraftLicenseMit" Source="$(var.BinDir)\LICENSE-MIT" KeyPath="yes" />
+        <File Id="StudioCraftLicenseApache" Source="$(var.BinDir)\LICENSE-APACHE" />
+      </Component>
+    </ComponentGroup>
+  </Fragment>
+</Wix>
