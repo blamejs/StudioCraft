@@ -116,8 +116,13 @@ fn arc(p: &[Vec2; 4], a: f64, b: f64) -> f64 {
 
 /// Whether control point `c` lies on the segment `a`–`b` (within rounding).
 fn on_chord(a: Vec2, c: Vec2, b: Vec2) -> bool {
-    let d = b - a;
-    let v = c - a;
+    let (mut d, mut v) = (b - a, c - a);
+    // Scaled to the largest component first, so squaring coordinates near 1e154 and above does
+    // not overflow and make a curve look straight.
+    let scale = d.x.abs().max(d.y.abs()).max(v.x.abs()).max(v.y.abs());
+    if scale.is_finite() && scale > 0.0 {
+        (d, v) = (Vec2::new(d.x / scale, d.y / scale), Vec2::new(v.x / scale, v.y / scale));
+    }
     let dd = d.dot(d);
     if dd <= 0.0 {
         // A segment of zero length is straight when its handles sit on its point.

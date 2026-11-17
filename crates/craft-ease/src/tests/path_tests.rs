@@ -120,6 +120,20 @@ fn bad_paths_are_refused() {
     assert_eq!((still.length(), still.point_at(0.5), still.direction_at_length(1.0)), (0.0, Vec2::new(3.0, 4.0), Vec2::ZERO));
 }
 
+/// A curve with huge coordinates (whose squares overflow) is walked as the same curve scaled,
+/// not taken for a straight line.
+#[test]
+fn a_huge_curve_is_not_taken_for_a_straight_line() {
+    let shape = |k: f64| MotionPath::new(&[Vec2::ZERO, Vec2::new(0.0, k), Vec2::new(0.0, k), Vec2::new(2.0 * k, 0.0)]).unwrap();
+    let (small, huge) = (shape(1.0), shape(1e154));
+    for i in 0..=10 {
+        let t = i as f64 / 10.0;
+        let (a, b) = (small.point_at(t), huge.point_at(t));
+        assert!((b.x / 1e154 - a.x).abs() < 1e-9 && (b.y / 1e154 - a.y).abs() < 1e-9, "{t}: {a:?} vs {b:?}");
+    }
+    assert!(huge.point_at(0.5).y > 5e153, "{:?}", huge.point_at(0.5));
+}
+
 #[test]
 fn a_long_path_finds_its_segment_by_binary_search() {
     let anchors: Vec<Vec2> = (0..=MAX_PATH_SEGMENTS).map(|i| Vec2::new(i as f64, ((i as f64) * 0.1).sin())).collect();
