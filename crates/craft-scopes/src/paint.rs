@@ -8,7 +8,7 @@
 //! The `*_into` functions write into buffers the caller keeps ([`Scratch`] and the output `Vec`),
 //! so painting the same size again does not allocate.
 
-use crate::{Grid, Vectorscope};
+use crate::{Grid, MAX_ROWS, MAX_SIGNAL_W, MAX_VECTOR_SIZE, Vectorscope};
 
 /// Intensity 0..1 of a cell holding `count` samples (`reference` = a full cell, `gain` = the
 /// Brightness setting).
@@ -43,9 +43,10 @@ pub fn grids(layers: &[(&Grid, [f32; 3])], reference: f32, gain: f32) -> (usize,
     (w, h, out)
 }
 
-/// [`grids`] into `out` (resized to `w * h * 4`), returning `(w, h)`.
+/// [`grids`] into `out` (resized to `w * h * 4`), returning `(w, h)`. A first grid wider than
+/// [`MAX_SIGNAL_W`] or taller than [`MAX_ROWS`] paints nothing and gives `(0, 0)`.
 pub fn grids_into(layers: &[(&Grid, [f32; 3])], reference: f32, gain: f32, scratch: &mut Scratch, out: &mut Vec<u8>) -> (usize, usize) {
-    let Some((first, _)) = layers.first() else {
+    let Some((first, _)) = layers.first().filter(|(g, _)| g.cols <= MAX_SIGNAL_W && g.rows <= MAX_ROWS) else {
         out.clear();
         return (0, 0);
     };
@@ -102,8 +103,13 @@ pub fn vectorscope(v: &Vectorscope, col: [f32; 3], gain: f32, colorize: bool) ->
     (w, h, out)
 }
 
-/// [`vectorscope`] into `out` (resized to `size² * 4`), returning `(size, size)`.
+/// [`vectorscope`] into `out` (resized to `size² * 4`), returning `(size, size)`. A vectorscope
+/// larger than [`MAX_VECTOR_SIZE`] paints nothing and gives `(0, 0)`.
 pub fn vectorscope_into(v: &Vectorscope, col: [f32; 3], gain: f32, colorize: bool, scratch: &mut Scratch, out: &mut Vec<u8>) -> (usize, usize) {
+    if v.size > MAX_VECTOR_SIZE {
+        out.clear();
+        return (0, 0);
+    }
     let n = v.size;
     let cells = n.saturating_mul(n);
     let reference = (v.samples as f32 / 64.0).max(1.0);

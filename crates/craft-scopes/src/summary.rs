@@ -106,7 +106,7 @@ pub fn trace_columns(w: &Waveform, g: &Grid, buckets: usize) -> Vec<Option<Level
                 for row in 0..g.rows {
                     let n = g.at(col, row);
                     if n > 0 {
-                        a.add(w.level(row, g.rows) * 100.0, n as u64);
+                        a.add(w.level(row) * 100.0, n as u64);
                     }
                 }
             }

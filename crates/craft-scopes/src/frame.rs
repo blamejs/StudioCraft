@@ -7,6 +7,7 @@ use craft_color::{Matrix, Range};
 
 /// A frame borrowed from its owner (a readback buffer, a decoder, a capture). Strides are in bytes.
 #[derive(Clone, Copy, Debug)]
+#[non_exhaustive]
 pub enum Frame<'a> {
     /// R'G'B'A, 4 bytes per pixel, `stride` bytes per row (at least `width * 4`). Alpha is ignored.
     Rgba8 { width: usize, height: usize, stride: usize, data: &'a [u8] },
@@ -17,6 +18,7 @@ pub enum Frame<'a> {
 
 /// Why a [`Frame`] cannot be read.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum FrameError {
     /// A row stride shorter than one row of samples.
     Stride { plane: &'static str, stride: usize, needed: usize },

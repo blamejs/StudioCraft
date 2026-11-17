@@ -232,8 +232,8 @@ fn nan_and_empty_signals_do_not_panic() {
     for clamp in [true, false] {
         let p = Params { clamp, ..Params::default() };
         for k in ScopeKind::ALL {
-            let _ = compute(k, &s, &p, WaveformType::Yc, ParadeType::RgbWhite);
-            let _ = compute(k, &Signal::default(), &p, WaveformType::Rgb, ParadeType::Rgb);
+            let _ = compute(k, &s, &Params { waveform: WaveformType::Yc, parade: ParadeType::RgbWhite, ..p });
+            let _ = compute(k, &Signal::default(), &p);
         }
     }
     assert!(summary::channel_stats(&Signal::default(), Matrix::Bt709).is_none());
@@ -293,8 +293,9 @@ fn names_round_trip() {
         assert_eq!(serde_json::to_value(k).unwrap(), serde_json::Value::from(k.name()));
     }
     assert_eq!(ScopeKind::from_name("vectorscope"), Some(ScopeKind::VectorscopeYuv));
-    assert_eq!(WaveformType::from_name("YC no Chroma"), Some(WaveformType::YcNoChroma));
-    assert_eq!(ParadeType::from_name("rgb-white"), Some(ParadeType::RgbWhite));
+    assert_eq!(WaveformType::from_name("Luma and chroma, chroma hidden"), Some(WaveformType::YcNoChroma));
+    assert_eq!(WaveformType::from_name("ycNoChroma"), Some(WaveformType::YcNoChroma));
+    assert_eq!(ParadeType::from_name("rgb and luma"), Some(ParadeType::RgbWhite));
     assert_eq!(ColorSpace::from_name("709"), Some(ColorSpace::Rec709));
     assert_eq!(ColorSpace::from_name("Rec. 2100"), Some(ColorSpace::Rec2100));
     assert_eq!(Scale::from_name("8 bit"), Some(Scale::Bits8));
@@ -467,7 +468,7 @@ fn into_functions_match_the_allocating_ones_and_keep_their_buffers() {
         vectorscope_hls_into(s, &p, &mut v);
         let layers: Vec<(&Grid, [f32; 3])> = w.traces.iter().map(|t| (t, [1.0; 3])).collect();
         paint::grids_into(&layers, 10.0, 1.0, &mut scratch, &mut img);
-        compute_into(ScopeKind::Parade, s, &p, WaveformType::Rgb, ParadeType::RgbWhite, &mut c);
+        compute_into(ScopeKind::Parade, s, &Params { parade: ParadeType::RgbWhite, ..p }, &mut c);
         (s.rgb.as_ptr(), w.traces[1].data.as_ptr(), h.y.as_ptr(), v.data.as_ptr(), img.as_ptr(), w.clone(), h.clone(), v.clone(), c.clone())
     };
     let first = run(&mut s);
@@ -476,12 +477,13 @@ fn into_functions_match_the_allocating_ones_and_keep_their_buffers() {
     assert_eq!(second.5, waveform(&s, WaveformType::Yc, &p));
     assert_eq!(second.6, histogram(&s, &p));
     assert_eq!(second.7, vectorscope_hls(&s, &p));
-    assert_eq!(second.8, compute(ScopeKind::Parade, &s, &p, WaveformType::Rgb, ParadeType::RgbWhite));
+    assert_eq!(second.8, compute(ScopeKind::Parade, &s, &Params { parade: ParadeType::RgbWhite, ..p }));
     // switching kinds keeps working and gives the same result as a fresh compute
     let mut c = Computed::default();
+    let lp = Params { waveform: WaveformType::Luma, parade: ParadeType::Yuv, ..p };
     for k in [ScopeKind::Parade, ScopeKind::Histogram, ScopeKind::VectorscopeYuv, ScopeKind::VectorscopeHls, ScopeKind::Waveform, ScopeKind::Parade] {
-        compute_into(k, &s, &p, WaveformType::Luma, ParadeType::Yuv, &mut c);
-        assert_eq!(c, compute(k, &s, &p, WaveformType::Luma, ParadeType::Yuv), "{k:?}");
+        compute_into(k, &s, &lp, &mut c);
+        assert_eq!(c, compute(k, &s, &lp), "{k:?}");
     }
 }
 
@@ -536,6 +538,23 @@ fn hostile_params_and_signals_stay_bounded() {
     assert!(summary::coarse(&empty, 0).is_empty());
     assert!(summary::peaks(&empty, 5, 0.0).is_empty());
     assert_eq!(empty.at(0, 0), 0);
+}
+
+#[test]
+fn hand_built_values_past_the_caps_paint_nothing() {
+    let huge = Signal::from_fn(usize::MAX, 2, |_, _| [0.5; 3]);
+    assert_eq!((huge.w, huge.h, huge.len()), (MAX_SIGNAL_W, 2, 2 * MAX_SIGNAL_W));
+    let mut scratch = paint::Scratch::default();
+    let mut out = vec![1u8; 4];
+    let v = Vectorscope { size: usize::MAX, ..Vectorscope::default() };
+    assert_eq!(paint::vectorscope_into(&v, [1.0; 3], 1.0, true, &mut scratch, &mut out), (0, 0));
+    assert!(out.is_empty());
+    let g = Grid { name: "Y", cols: usize::MAX, rows: usize::MAX, data: Vec::new() };
+    out.push(1);
+    assert_eq!(paint::grids_into(&[(&g, [1.0; 3])], 1.0, 1.0, &mut scratch, &mut out), (0, 0));
+    assert!(out.is_empty());
+    let tall = Grid { name: "Y", cols: 4, rows: MAX_ROWS + 1, data: Vec::new() };
+    assert_eq!(paint::grids_into(&[(&tall, [1.0; 3])], 1.0, 1.0, &mut scratch, &mut out), (0, 0));
 }
 
 // ------------------------------------------------------------------------------------ HDR
@@ -623,7 +642,7 @@ fn perf_scopes_at_1080p() {
     ] {
         let t = std::time::Instant::now();
         for _ in 0..reps {
-            compute_into(k, &s, &p, wt, pt, &mut c);
+            compute_into(k, &s, &Params { waveform: wt, parade: pt, ..p }, &mut c);
             std::hint::black_box(&c);
         }
         println!("{k:?} {wt:?}/{pt:?}: {:.3} ms", t.elapsed().as_secs_f64() * 1000.0 / reps as f64);
