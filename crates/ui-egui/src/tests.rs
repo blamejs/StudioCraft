@@ -689,6 +689,270 @@ fn a_right_click_on_a_dock_title_opens_the_dock_menu() {
     assert!(egui::Popup::is_any_open(&ctx), "the dock menu is open");
 }
 
+fn names(v: &Value) -> Vec<String> {
+    v.as_array().unwrap_or(&Vec::new()).iter().filter_map(|d| d["dock"].as_str().map(str::to_string)).collect()
+}
+
+#[test]
+fn dock_float_moves_a_dock_into_a_window_and_back() {
+    let mut a = app();
+    let ctx = egui::Context::default();
+    let size = egui::vec2(1280.0, 800.0);
+    frame_at(&mut a, &ctx, size);
+    let r = run(&mut a, &ctx, "dock.float", json!({"dock": "scenes", "floating": true})).unwrap();
+    assert_eq!(r, json!({"floating": true, "changed": true}));
+    for _ in 0..2 {
+        frame_at(&mut a, &ctx, size);
+    }
+    let v = a.ui_inspect(&ctx);
+    assert_eq!(names(&v["docks"]), ["sources", "mixer"]);
+    assert_eq!(names(&v["floating_docks"]), ["scenes"]);
+    let widths: Vec<f32> = v["docks"].as_array().unwrap_or(&Vec::new()).iter().map(|d| rect_of(&d["rect"]).width()).collect();
+    assert_eq!(widths, [340.0, 939.0], "the strip lays out the docks left in it");
+    let window = rect_of(&v["floating_docks"][0]["rect"]);
+    assert!(window.width() >= 200.0 && window.height() >= 120.0, "{window:?}");
+    assert!(egui::Rect::from_min_size(egui::Pos2::ZERO, size).contains_rect(window), "{window:?}");
+    let saved = a.store().prefs().docks.window_pos[0];
+    assert_eq!(saved, [window.min.x, window.min.y], "the window's place is saved");
+
+    let r = run(&mut a, &ctx, "dock.float", json!({"dock": "scenes", "floating": true})).unwrap();
+    assert_eq!(r["changed"], json!(false));
+    let r = run(&mut a, &ctx, "dock.move", json!({"dock": "scenes", "to": "right"})).unwrap();
+    assert_eq!(r["moved"], json!(false), "a dock in a window does not move in the strip");
+    for bad in [json!({"dock": "scenes"}), json!({"dock": "scenes", "floating": "yes"}), json!({"dock": "stats", "floating": true})] {
+        assert!(run(&mut a, &ctx, "dock.float", bad.clone()).is_err(), "{bad}");
+    }
+
+    // A hidden floating dock draws no window, and shows in it again.
+    run(&mut a, &ctx, "dock.scenes", json!({})).unwrap();
+    frame_at(&mut a, &ctx, size);
+    assert!(names(&a.ui_inspect(&ctx)["floating_docks"]).is_empty());
+    run(&mut a, &ctx, "dock.scenes", json!({})).unwrap();
+    frame_at(&mut a, &ctx, size);
+    assert_eq!(names(&a.ui_inspect(&ctx)["floating_docks"]), ["scenes"]);
+
+    run(&mut a, &ctx, "dock.float", json!({"dock": "scenes", "floating": false})).unwrap();
+    frame_at(&mut a, &ctx, size);
+    let v = a.ui_inspect(&ctx);
+    assert_eq!(names(&v["docks"]), ["scenes", "sources", "mixer"]);
+    assert!(names(&v["floating_docks"]).is_empty());
+}
+
+#[test]
+fn every_dock_can_float_and_reset_puts_them_back() {
+    let mut a = app();
+    let ctx = egui::Context::default();
+    let size = egui::vec2(1280.0, 800.0);
+    for dock in ["scenes", "sources", "mixer"] {
+        run(&mut a, &ctx, "dock.float", json!({"dock": dock, "floating": true})).unwrap();
+    }
+    for _ in 0..2 {
+        frame_at(&mut a, &ctx, size);
+    }
+    let v = a.ui_inspect(&ctx);
+    assert!(v["dock_strip"].is_null(), "no strip without docks in it");
+    assert_eq!(names(&v["floating_docks"]), ["scenes", "sources", "mixer"]);
+    run(&mut a, &ctx, "dock.reset", json!({})).unwrap();
+    frame_at(&mut a, &ctx, size);
+    let v = a.ui_inspect(&ctx);
+    assert_eq!(names(&v["docks"]), ["scenes", "sources", "mixer"]);
+    assert!(names(&v["floating_docks"]).is_empty());
+    assert_eq!(a.store().prefs().docks, crate::store::Docks::default());
+}
+
+#[test]
+fn dragging_a_floating_dock_by_its_header_moves_its_window_and_saves_the_place() {
+    let mut a = app();
+    let ctx = egui::Context::default();
+    let size = egui::vec2(1280.0, 800.0);
+    run(&mut a, &ctx, "dock.float", json!({"dock": "mixer", "floating": true})).unwrap();
+    for _ in 0..2 {
+        frame_at(&mut a, &ctx, size);
+    }
+    let v = a.ui_inspect(&ctx);
+    let before = rect_of(&v["floating_docks"][0]["rect"]);
+    let header = rect_of(&v["floating_docks"][0]["title"]);
+    let from = header.center();
+    for events in drag(from, from + egui::vec2(200.0, 150.0)) {
+        frame_with(&mut a, &ctx, size, events);
+    }
+    frame_at(&mut a, &ctx, size);
+    let after = rect_of(&a.ui_inspect(&ctx)["floating_docks"][0]["rect"]);
+    assert_eq!(after.min, before.min + egui::vec2(200.0, 150.0), "{before:?} -> {after:?}");
+    assert_eq!(a.store().prefs().docks.window_pos[2], [after.min.x, after.min.y]);
+
+    // A drag that starts in the dock's body does not move the window.
+    let from = egui::pos2(after.center().x, after.bottom() - 12.0);
+    for events in drag(from, from + egui::vec2(-150.0, -100.0)) {
+        frame_with(&mut a, &ctx, size, events);
+    }
+    frame_at(&mut a, &ctx, size);
+    assert_eq!(rect_of(&a.ui_inspect(&ctx)["floating_docks"][0]["rect"]).min, after.min);
+
+    // The title that moves the window still opens the dock's menu.
+    let title = rect_of(&a.ui_inspect(&ctx)["floating_docks"][0]["title"]);
+    assert!(!egui::Popup::is_any_open(&ctx));
+    for events in right_click(title.center()) {
+        frame_with(&mut a, &ctx, size, events);
+    }
+    frame_at(&mut a, &ctx, size);
+    assert!(egui::Popup::is_any_open(&ctx), "the floating dock's menu is open");
+
+    // A new window, as after a restart, opens where the dock was moved to.
+    let mut b = app();
+    let docks = a.store().prefs().docks;
+    b.store.update(|p| p.docks = docks);
+    let ctx = egui::Context::default();
+    for _ in 0..2 {
+        frame_at(&mut b, &ctx, size);
+    }
+    assert_eq!(rect_of(&b.ui_inspect(&ctx)["floating_docks"][0]["rect"]).min, after.min);
+}
+
+#[test]
+fn a_smaller_main_window_does_not_change_a_floating_dock_s_saved_place() {
+    let mut a = app();
+    let ctx = egui::Context::default();
+    a.store.update(|p| {
+        p.docks.floating[2] = true;
+        p.docks.place_window(2, [900.0, 500.0], [300.0, 200.0]);
+    });
+    let big = egui::vec2(1280.0, 800.0);
+    for _ in 0..2 {
+        frame_at(&mut a, &ctx, big);
+    }
+    assert_eq!(rect_of(&a.ui_inspect(&ctx)["floating_docks"][0]["rect"]).min, egui::pos2(900.0, 500.0));
+    let small = egui::vec2(900.0, 600.0);
+    for _ in 0..3 {
+        frame_at(&mut a, &ctx, small);
+    }
+    let pushed = rect_of(&a.ui_inspect(&ctx)["floating_docks"][0]["rect"]);
+    assert!(egui::Rect::from_min_size(egui::Pos2::ZERO, small).contains_rect(pushed), "egui keeps it on screen: {pushed:?}");
+    assert_eq!(a.store().prefs().docks.window_pos(2), Some([900.0, 500.0]), "the saved place is kept");
+    for _ in 0..3 {
+        frame_at(&mut a, &ctx, big);
+    }
+    assert_eq!(rect_of(&a.ui_inspect(&ctx)["floating_docks"][0]["rect"]).min, egui::pos2(900.0, 500.0), "it goes back");
+
+    // The same after a restart in the smaller main window, with a resize while it is small.
+    let mut b = app();
+    let docks = a.store().prefs().docks;
+    b.store.update(|p| p.docks = docks);
+    let ctx_b = egui::Context::default();
+    for _ in 0..3 {
+        frame_at(&mut b, &ctx_b, small);
+    }
+    let pushed = rect_of(&b.ui_inspect(&ctx_b)["floating_docks"][0]["rect"]);
+    let corner = pushed.max - egui::vec2(2.0, 2.0);
+    for events in drag(corner, corner - egui::vec2(20.0, 20.0)) {
+        frame_with(&mut b, &ctx_b, small, events);
+    }
+    for _ in 0..2 {
+        frame_at(&mut b, &ctx_b, small);
+    }
+    assert_eq!(b.store().prefs().docks.window_pos(2), Some([900.0, 500.0]), "a resize keeps the saved place");
+    for _ in 0..3 {
+        frame_at(&mut b, &ctx_b, big);
+    }
+    assert_eq!(rect_of(&b.ui_inspect(&ctx_b)["floating_docks"][0]["rect"]).min, egui::pos2(900.0, 500.0), "it goes back after a restart");
+
+    // A window larger than the main window keeps its saved size too.
+    run(&mut a, &ctx, "dock.reset", json!({})).unwrap();
+    a.store.update(|p| {
+        p.docks.floating[2] = true;
+        p.docks.place_window(2, [100.0, 100.0], [800.0, 500.0]);
+    });
+    for _ in 0..3 {
+        frame_at(&mut a, &ctx, egui::vec2(600.0, 400.0));
+    }
+    let squeezed = rect_of(&a.ui_inspect(&ctx)["floating_docks"][0]["rect"]);
+    assert_eq!(a.store().prefs().docks.window_size[2], [800.0, 500.0], "drawn at {squeezed:?}");
+    // A click inside the squeezed dock is not a resize.
+    for events in drag(squeezed.center(), squeezed.center()) {
+        frame_with(&mut a, &ctx, egui::vec2(600.0, 400.0), events);
+    }
+    frame_at(&mut a, &ctx, egui::vec2(600.0, 400.0));
+    assert_eq!(a.store().prefs().docks.window_size[2], [800.0, 500.0]);
+}
+
+#[test]
+fn dragging_a_floating_dock_s_corner_resizes_it_and_saves_the_size() {
+    let mut a = app();
+    let ctx = egui::Context::default();
+    let size = egui::vec2(1280.0, 800.0);
+    a.store.update(|p| {
+        p.docks.floating[0] = true;
+        p.docks.place_window(0, [200.0, 150.0], [300.0, 200.0]);
+    });
+    for _ in 0..2 {
+        frame_at(&mut a, &ctx, size);
+    }
+    let before = rect_of(&a.ui_inspect(&ctx)["floating_docks"][0]["rect"]);
+    let corner = before.max - egui::vec2(2.0, 2.0);
+    for events in drag(corner, corner + egui::vec2(60.0, 40.0)) {
+        frame_with(&mut a, &ctx, size, events);
+    }
+    frame_at(&mut a, &ctx, size);
+    let after = rect_of(&a.ui_inspect(&ctx)["floating_docks"][0]["rect"]);
+    assert_eq!(after.size(), before.size() + egui::vec2(60.0, 40.0), "{before:?} -> {after:?}");
+    assert_eq!(a.store().prefs().docks.window_size[0], [after.width(), after.height()]);
+    assert_eq!(a.store().prefs().docks.window_pos(0), Some([200.0, 150.0]));
+
+    // A resize inward by more than the edge's grab width is saved too.
+    let corner = after.max - egui::vec2(2.0, 2.0);
+    for events in drag(corner, corner - egui::vec2(40.0, 30.0)) {
+        frame_with(&mut a, &ctx, size, events);
+    }
+    for _ in 0..2 {
+        frame_at(&mut a, &ctx, size);
+    }
+    let smaller = rect_of(&a.ui_inspect(&ctx)["floating_docks"][0]["rect"]);
+    assert_eq!(smaller.size(), after.size() - egui::vec2(40.0, 30.0), "{after:?} -> {smaller:?}");
+    assert_eq!(a.store().prefs().docks.window_size[0], [smaller.width(), smaller.height()]);
+    let after = smaller;
+
+    // A drag on the left edge does not move the window's corner.
+    let edge = egui::pos2(after.left() + 1.0, after.center().y);
+    for events in drag(edge, edge - egui::vec2(50.0, 0.0)) {
+        frame_with(&mut a, &ctx, size, events);
+    }
+    for _ in 0..2 {
+        frame_at(&mut a, &ctx, size);
+    }
+    assert_eq!(rect_of(&a.ui_inspect(&ctx)["floating_docks"][0]["rect"]).min, after.min);
+    assert_eq!(a.store().prefs().docks.window_pos(0), Some([200.0, 150.0]));
+}
+
+#[test]
+fn a_floating_dock_opens_at_its_saved_size_and_keeps_it() {
+    let mut a = app();
+    let ctx = egui::Context::default();
+    let size = egui::vec2(1280.0, 800.0);
+    a.store.update(|p| {
+        p.docks.floating[1] = true;
+        p.docks.place_window(1, [300.0, 200.0], [520.0, 330.0]);
+    });
+    for _ in 0..4 {
+        frame_at(&mut a, &ctx, size);
+    }
+    let window = rect_of(&a.ui_inspect(&ctx)["floating_docks"][0]["rect"]);
+    assert_eq!(window.min, egui::pos2(300.0, 200.0));
+    assert_eq!(window.size(), egui::vec2(520.0, 330.0));
+    assert_eq!(a.store().prefs().docks.window_size[1], [520.0, 330.0], "the saved size does not drift from frame to frame");
+
+    // A floating window made before any size was saved saves the size it opened at.
+    run(&mut a, &ctx, "dock.float", json!({"dock": "scenes", "floating": true})).unwrap();
+    for _ in 0..2 {
+        frame_at(&mut a, &ctx, size);
+    }
+    let saved = a.store().prefs().docks.window_size[0];
+    assert_eq!(saved, [crate::strip::DEFAULT_WIDTHS[0], crate::strip::DEFAULT_HEIGHT]);
+    for _ in 0..2 {
+        frame_at(&mut a, &ctx, size);
+    }
+    assert_eq!(a.store().prefs().docks.window_size[0], saved);
+}
+
 #[test]
 fn a_press_on_a_header_action_under_the_strip_edge_runs_the_action() {
     let mut a = app();

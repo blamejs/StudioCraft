@@ -11,6 +11,8 @@ use crate::{APP_NAME, StudioApp, commands};
 
 /// The docks in the order they are laid out, by the names `ui.inspect` reports.
 pub(crate) const DOCK_NAMES: [&str; 3] = ["scenes", "sources", "mixer"];
+/// The docks' titles in English, in the same order.
+pub(crate) const DOCK_TITLES: [&str; 3] = ["Scenes", "Sources", "Audio Mixer"];
 
 /// Longest menu path accepted, in bytes.
 pub const MAX_MENU_PATH: usize = 1024;
@@ -239,20 +241,18 @@ impl StudioApp {
     /// and the notices.
     pub fn ui_inspect(&self, ctx: &egui::Context) -> Value {
         let window = ctx.viewport_rect();
-        let docks: Vec<Value> = self
-            .dock_rects
-            .iter()
-            .map(|(i, r, d)| {
-                json!({
-                    "dock": DOCK_NAMES.get(*i).copied().unwrap_or("unknown"),
-                    "rect": rect(*r),
-                    "header": rect(d.header),
-                    "title": rect(d.title),
-                    "title_truncated": d.truncated,
-                    "actions": d.actions.iter().rev().map(|(name, r)| json!({"name": name, "rect": rect(*r)})).collect::<Vec<_>>(),
-                })
+        let dock = |(i, r, d): &(usize, egui::Rect, crate::docks::Drawn)| {
+            json!({
+                "dock": DOCK_NAMES.get(*i).copied().unwrap_or("unknown"),
+                "rect": rect(*r),
+                "header": rect(d.header),
+                "title": rect(d.title),
+                "title_truncated": d.truncated,
+                "actions": d.actions.iter().rev().map(|(name, r)| json!({"name": name, "rect": rect(*r)})).collect::<Vec<_>>(),
             })
-            .collect();
+        };
+        let docks: Vec<Value> = self.dock_rects.iter().map(dock).collect();
+        let floating: Vec<Value> = self.floating_rects.iter().map(dock).collect();
         let d = self.store.prefs().docks;
         let strip = self.dock_strip.map(|r| {
             json!({
@@ -283,6 +283,7 @@ impl StudioApp {
                 "updates": self.updates.window_open || self.updates.updater.prompt_open(),
             },
             "docks": docks,
+            "floating_docks": floating,
             "dock_strip": strip,
             "output_bar": self.output_bar.json(),
             "preview": preview,

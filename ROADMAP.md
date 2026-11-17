@@ -55,15 +55,15 @@
 - The dock strip: Scenes, Sources and Audio Mixer under 24-point headers that hold each dock's
   actions, separated by 1-point dividers. The strip is 200 points tall, or 30% of the window when
   that is less. Dragging its top edge outside the header actions, or a divider, resizes it, and a
-  right-click on a dock's title moves the dock left or right. The sizes and the order are kept
-  until Docks › Reset Docks.
+  right-click on a dock's title moves the dock left or right, or undocks it into a window of its
+  own. The sizes, the order and the undocked windows' places are kept until Docks › Reset Docks.
 - Interface fonts through `craft-ui`'s font stack: Inter for text, Inter SemiBold for titles and
   JetBrains Mono for readouts, then the craft-fonts faces when `CRAFT_FONTS_DIR` is set, then
   egui's built-in faces. The menus' check and radio marks draw with or without `CRAFT_FONTS_DIR`.
 
 ## Next
 
-1. **Docks.** Undock and save dock layouts.
+1. **Docks.** Save dock layouts.
 2. **Translations.** A `studiocraft.tsv` catalog for every other locale craft-i18n has, and
    right-to-left layout for Arabic and Hebrew.
 3. **Multiple outputs.** Several streams at once, and a virtual camera.

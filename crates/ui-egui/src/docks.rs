@@ -22,8 +22,9 @@ pub struct DockState<'a> {
     pub meters: &'a mut HashMap<SourceId, MeterBallistics>,
     /// Seconds since the meters were last advanced.
     pub dt: f32,
-    /// The place of the dock being drawn among the shown docks, and how many are shown.
-    pub place: (usize, usize),
+    /// The place of the dock being drawn among the docks in the strip, and how many are in the
+    /// strip; `None` for a dock in a window of its own.
+    pub place: Option<(usize, usize)>,
 }
 
 /// What a dock's header drew, for `ui.inspect`: its rectangle, the room its title had, the name
@@ -34,6 +35,9 @@ pub struct Drawn {
     pub title: Rect,
     pub actions: Vec<(&'static str, Rect)>,
     pub truncated: bool,
+    /// How far the title of a dock in a window of its own was dragged this frame; zero in the
+    /// strip.
+    pub grab: egui::Vec2,
 }
 
 /// A dock's header; `title` is English and shown translated. `add` adds the actions from right to
@@ -48,22 +52,38 @@ fn header(ui: &mut Ui, title: &str, add: impl FnOnce(&mut Ui, &mut Vec<(&'static
         add(ui, &mut actions);
         actions
     });
-    Drawn { header: r.rect, title: r.title, actions: r.inner, truncated: r.truncated }
+    Drawn { header: r.rect, title: r.title, actions: r.inner, truncated: r.truncated, grab: egui::Vec2::ZERO }
 }
 
-/// The menu a right-click on a dock's title opens: Move Left and Move Right, which run
-/// `dock.move` for `dock` (its name in `control::DOCK_NAMES`). The first shown dock cannot move
-/// left and the last cannot move right.
-fn dock_menu(ui: &mut Ui, drawn: &Drawn, dock: &'static str, place: (usize, usize), acts: &mut Vec<Act>) {
-    let (k, n) = place;
-    let r = ui.interact(drawn.title, ui.scope_id().with(("dock-title", dock)), Sense::click());
+/// The menu a right-click on a dock's title opens, for `dock` (its name in
+/// `control::DOCK_NAMES`). A dock in the strip offers Move Left and Move Right (`dock.move`; the
+/// first dock cannot move left and the last cannot move right) and Undock; a dock in a window of
+/// its own offers Dock in the Strip (both `dock.float`). The title of a dock in a window of its
+/// own is also the window's drag handle, and `drawn.grab` gets how far it was dragged.
+fn dock_menu(ui: &mut Ui, drawn: &mut Drawn, dock: &'static str, place: Option<(usize, usize)>, acts: &mut Vec<Act>) {
+    // In the strip the title takes clicks only, so a drag there still reaches the strip's top edge.
+    let sense = if place.is_some() { Sense::click() } else { Sense::click_and_drag() };
+    let r = ui.interact(drawn.title, ui.scope_id().with(("dock-title", dock)), sense);
+    drawn.grab = r.drag_delta();
     r.context_menu(|ui| {
+        let Some((k, n)) = place else {
+            if ui.button(tl!("Dock in the Strip")).clicked() {
+                acts.push(Act::run("dock.float", json!({"dock": dock, "floating": false})));
+                ui.close();
+            }
+            return;
+        };
         if ui.add_enabled(k > 0, egui::Button::new(tl!("Move Left"))).clicked() {
             acts.push(Act::run("dock.move", json!({"dock": dock, "to": "left"})));
             ui.close();
         }
         if ui.add_enabled(k + 1 < n, egui::Button::new(tl!("Move Right"))).clicked() {
             acts.push(Act::run("dock.move", json!({"dock": dock, "to": "right"})));
+            ui.close();
+        }
+        ui.separator();
+        if ui.button(tl!("Undock")).clicked() {
+            acts.push(Act::run("dock.float", json!({"dock": dock, "floating": true})));
             ui.close();
         }
     });
@@ -109,7 +129,7 @@ pub fn scenes(ui: &mut Ui, studio: &Studio, st: &mut DockState, acts: &mut Vec<A
     let edit = studio.engine().edit_scene();
     let program = c.program_scene;
     let studio_mode = studio.engine().studio_mode();
-    let drawn = header(ui, "Scenes", |ui, a| {
+    let mut drawn = header(ui, "Scenes", |ui, a| {
         let index = c.scene_index(edit).unwrap_or(0);
         if action(ui, a, "down", Icon::Down, "Move the scene down", index + 1 < c.scenes.len()) {
             acts.push(Act::run("scene.move", json!({"scene": edit, "to": "down"})));
@@ -124,7 +144,7 @@ pub fn scenes(ui: &mut Ui, studio: &Studio, st: &mut DockState, acts: &mut Vec<A
             acts.push(Act::run("scene.add", json!({})));
         }
     });
-    dock_menu(ui, &drawn, "scenes", st.place, acts);
+    dock_menu(ui, &mut drawn, "scenes", st.place, acts);
     let area = egui::ScrollArea::vertical().id_salt("scenes").auto_shrink([false, false]);
     area.show(&mut body(ui), |ui| {
         for (i, scene) in c.scenes.iter().enumerate() {
@@ -215,7 +235,7 @@ pub fn sources(ui: &mut Ui, studio: &Studio, st: &mut DockState, acts: &mut Vec<
     let edit = studio.engine().edit_scene();
     let scene = c.scene(edit);
     let sel = st.selected.and_then(|id| scene.and_then(|s| s.item(id)));
-    let drawn = header(ui, "Sources", |ui, a| {
+    let mut drawn = header(ui, "Sources", |ui, a| {
         if action(ui, a, "properties", Icon::Gear, "Properties", sel.is_some())
             && let Some(it) = sel
         {
@@ -240,7 +260,7 @@ pub fn sources(ui: &mut Ui, studio: &Studio, st: &mut DockState, acts: &mut Vec<
         let r = icons::menu_sized(ui, Icon::Plus, tl!("Add a source"), size, scene.is_some(), |ui| add_source_menu(ui, studio, edit, acts));
         a.push(("add", r.rect));
     });
-    dock_menu(ui, &drawn, "sources", st.place, acts);
+    dock_menu(ui, &mut drawn, "sources", st.place, acts);
     let Some(scene) = scene else { return drawn };
     let area = egui::ScrollArea::vertical().id_salt("sources").auto_shrink([false, false]);
     area.show(&mut body(ui), |ui| {
@@ -391,8 +411,8 @@ fn gain_text(gain: f32) -> String {
 }
 
 pub fn mixer(ui: &mut Ui, studio: &Studio, st: &mut DockState, acts: &mut Vec<Act>) -> Drawn {
-    let drawn = header(ui, "Audio Mixer", |_, _| ());
-    dock_menu(ui, &drawn, "mixer", st.place, acts);
+    let mut drawn = header(ui, "Audio Mixer", |_, _| ());
+    dock_menu(ui, &mut drawn, "mixer", st.place, acts);
     let c = studio.collection();
     let program: Vec<SourceId> = c.scene(c.program_scene).map(|s| s.items.iter().map(|i| i.source).collect()).unwrap_or_default();
     let audio: Vec<_> = c
