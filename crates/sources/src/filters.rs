@@ -4,8 +4,8 @@ use craft_audio_dsp::{AudioEffect, create_effect};
 use craft_color_transform::{Mat3, SRGB, cct};
 use studiocraft_media::audio::{BLOCK_FRAMES, CHANNELS, SAMPLE_RATE};
 use studiocraft_media::mix::{from_db, to_db};
-use studiocraft_model::{Field, FieldKind, Settings, SettingsSchema};
-use studiocraft_plugin::{Filter, FilterInstance, FilterTarget, Plugin, PluginError, VIDEO_EFFECT_PARAMS, VideoEffect};
+use studiocraft_model::{ChoiceOption, Field, FieldKind, Settings, SettingsSchema};
+use studiocraft_plugin::{Filter, FilterInstance, FilterTarget, MAX_EFFECT_SIDE, Plugin, PluginError, Reframe, VIDEO_EFFECT_PARAMS, VideoEffect};
 
 /// A video filter's shader parameters.
 type Params = [f32; VIDEO_EFFECT_PARAMS];
@@ -150,22 +150,41 @@ struct DspSetting {
 }
 
 impl DspSetting {
-    /// The setting's value: the default when the key is missing, and an error when the value is
-    /// not a number (settings store a NaN or infinite number as `null`), is not a whole number
-    /// for a whole-number setting, or is outside the range.
+    /// The setting's value, read by [`checked`].
     fn read(&self, s: &Settings) -> Result<f32, PluginError> {
-        let Some(raw) = s.get(self.key) else { return Ok(self.default as f32) };
-        let Some(v) = raw.as_f64().filter(|v| v.is_finite()) else {
-            return Err(PluginError::Failed(format!("`{}` must be a number, not {raw}", self.key)));
-        };
-        if self.int && v.fract() != 0.0 {
-            return Err(PluginError::Failed(format!("`{}` must be a whole number, not {v}", self.key)));
-        }
-        if !(self.min..=self.max).contains(&v) {
-            return Err(PluginError::Failed(format!("`{}` is {v}; it must be from {} to {}", self.key, self.min, self.max)));
-        }
-        Ok(v as f32)
+        checked(s, self.key, self.default, self.min, self.max, self.int).map(|v| v as f32)
     }
+}
+
+/// A number setting: the default when the key is missing, and an error when the value is not a
+/// number (settings store a NaN or infinite number as `null`), is not a whole number for a
+/// whole-number setting, or is outside `min..=max`.
+fn checked(s: &Settings, key: &str, default: f64, min: f64, max: f64, int: bool) -> Result<f64, PluginError> {
+    let Some(raw) = s.get(key) else { return Ok(default) };
+    let Some(v) = raw.as_f64().filter(|v| v.is_finite()) else {
+        return Err(PluginError::Failed(format!("`{key}` must be a number, not {raw}")));
+    };
+    if int && v.fract() != 0.0 {
+        return Err(PluginError::Failed(format!("`{key}` must be a whole number, not {v}")));
+    }
+    if !(min..=max).contains(&v) {
+        return Err(PluginError::Failed(format!("`{key}` is {v}; it must be from {min} to {max}")));
+    }
+    Ok(v)
+}
+
+/// A whole-number setting from `min` to `max`, read by [`checked`].
+fn checked_int(s: &Settings, key: &str, default: i64, min: i64, max: i64) -> Result<i64, PluginError> {
+    checked(s, key, default as f64, min as f64, max as f64, true).map(|v| v as i64)
+}
+
+/// A choice setting: the default when the key is missing, and an error when the value is not
+/// one of `options`.
+fn checked_choice<'a>(s: &Settings, key: &str, default: &'a str, options: &[&'a str]) -> Result<&'a str, PluginError> {
+    let Some(raw) = s.get(key) else { return Ok(default) };
+    raw.as_str()
+        .and_then(|v| options.iter().find(|o| **o == v).copied())
+        .ok_or_else(|| PluginError::Failed(format!("`{key}` must be one of {}, not {raw}", options.join(", "))))
 }
 
 // The audio processing below splits a block into a left and a right buffer.
@@ -407,9 +426,7 @@ impl Filter for ColorCorrection {
         FilterTarget::Video
     }
     fn create(&self, settings: &Settings) -> Result<Box<dyn FilterInstance>, PluginError> {
-        let mut f = Effect { key: "color_correction", wgsl: COLOR_CORRECTION, params: [0.0; VIDEO_EFFECT_PARAMS], read: color_correction_params };
-        f.update(settings)?;
-        Ok(Box::new(f))
+        Effect::create("color_correction", COLOR_CORRECTION, |s| Ok((color_correction_params(s), Reframe::None)), settings)
     }
 }
 
@@ -495,9 +512,7 @@ impl Filter for ChromaKey {
         FilterTarget::Video
     }
     fn create(&self, settings: &Settings) -> Result<Box<dyn FilterInstance>, PluginError> {
-        let mut f = Effect { key: "chroma_key", wgsl: CHROMA_KEY, params: [0.0; VIDEO_EFFECT_PARAMS], read: chroma_key_params };
-        f.update(settings)?;
-        Ok(Box::new(f))
+        Effect::create("chroma_key", CHROMA_KEY, |s| Ok((chroma_key_params(s), Reframe::None)), settings)
     }
 }
 
@@ -518,27 +533,109 @@ fn chroma_key_params(s: &Settings) -> Params {
     p
 }
 
+const CROP_PAD: &str = r"
+fn effect(color: vec4<f32>, uv: vec2<f32>, size: vec2<f32>, p0: vec4<f32>, p1: vec4<f32>) -> vec4<f32> {
+    // The compositor places the input; padding arrives transparent.
+    return color;
+}
+";
+
+/// Takes pixels off a source's edges or adds transparent pixels around it, or shows one area of
+/// it. The source's size becomes the filter's output size, in every scene that shows it.
+///
+/// In the "edges" mode, a positive Left, Top, Right or Bottom takes that many pixels off the
+/// side and a negative one adds that many transparent pixels. In the "area" mode, X and Y are
+/// the top-left corner of the area shown and Width and Height its size; 0 reaches to the
+/// source's right or bottom edge, and parts of the area outside the source are transparent.
+/// Neither side of the output is longer than [`MAX_EFFECT_SIDE`] pixels.
+pub struct CropPad;
+
+/// The modes of [`CropPad`].
+const CROP_PAD_MODES: &[&str] = &["edges", "area"];
+const SIDE: i64 = MAX_EFFECT_SIDE as i64;
+
+impl Plugin for CropPad {
+    fn id(&self) -> &'static str {
+        "crop_pad"
+    }
+    fn name(&self) -> &'static str {
+        "Crop and pad"
+    }
+    fn schema(&self) -> SettingsSchema {
+        let int = |key: &str, label: &str, min: i64| Field::new(key, label, FieldKind::Int { min, max: SIDE }, 0);
+        SettingsSchema::new(vec![
+            Field::new(
+                "mode",
+                "Mode",
+                FieldKind::Choice { options: vec![ChoiceOption::new("edges", "Crop or pad each edge"), ChoiceOption::new("area", "Show an area")] },
+                "edges",
+            ),
+            int("left", "Left", -SIDE),
+            int("top", "Top", -SIDE),
+            int("right", "Right", -SIDE),
+            int("bottom", "Bottom", -SIDE),
+            int("x", "X", 0),
+            int("y", "Y", 0),
+            int("width", "Width", 0),
+            int("height", "Height", 0),
+        ])
+    }
+}
+
+impl Filter for CropPad {
+    fn target(&self) -> FilterTarget {
+        FilterTarget::Video
+    }
+    fn create(&self, settings: &Settings) -> Result<Box<dyn FilterInstance>, PluginError> {
+        Effect::create("crop_pad", CROP_PAD, crop_pad_frame, settings)
+    }
+}
+
+fn crop_pad_frame(s: &Settings) -> Result<(Params, Reframe), PluginError> {
+    let mode = checked_choice(s, "mode", "edges", CROP_PAD_MODES)?;
+    // Every setting is checked, whichever mode reads it, so a bad value is never kept unseen.
+    let edge = |key: &str| checked_int(s, key, 0, -SIDE, SIDE).map(|v| v as i32);
+    let (left, top, right, bottom) = (edge("left")?, edge("top")?, edge("right")?, edge("bottom")?);
+    let area = |key: &str| checked_int(s, key, 0, 0, SIDE).map(|v| v as u32);
+    let (x, y, width, height) = (area("x")?, area("y")?, area("width")?, area("height")?);
+    let reframe = if mode == "area" { Reframe::Area { x, y, width, height } } else { Reframe::Edges { left, top, right, bottom } };
+    Ok(([0.0; VIDEO_EFFECT_PARAMS], reframe))
+}
+
+/// Reads a video filter's pass from its settings.
+type ReadPass = fn(&Settings) -> Result<(Params, Reframe), PluginError>;
+
 /// A video filter that is one GPU pass with parameters read from its settings.
 struct Effect {
     key: &'static str,
     wgsl: &'static str,
     params: Params,
-    read: fn(&Settings) -> Params,
+    reframe: Reframe,
+    read: ReadPass,
+}
+
+impl Effect {
+    fn create(key: &'static str, wgsl: &'static str, read: ReadPass, s: &Settings) -> Result<Box<dyn FilterInstance>, PluginError> {
+        let mut f = Effect { key, wgsl, params: [0.0; VIDEO_EFFECT_PARAMS], reframe: Reframe::None, read };
+        f.update(s)?;
+        Ok(Box::new(f))
+    }
 }
 
 impl FilterInstance for Effect {
+    /// A rejected update leaves the pass as it was.
     fn update(&mut self, s: &Settings) -> Result<(), PluginError> {
-        self.params = (self.read)(s);
+        (self.params, self.reframe) = (self.read)(s)?;
         Ok(())
     }
     fn video_effect(&self) -> Option<VideoEffect> {
-        Some(VideoEffect { key: self.key, wgsl: self.wgsl, params: self.params })
+        Some(VideoEffect { reframe: self.reframe, ..VideoEffect::new(self.key, self.wgsl, self.params) })
     }
 }
 
 /// Every built-in video filter's effect with default settings, for checking that they compile.
 pub fn builtin_video_effects() -> Vec<VideoEffect> {
-    [&ColorCorrection as &dyn Filter, &ChromaKey]
+    [&ColorCorrection as &dyn Filter, &ChromaKey, &CropPad]
         .iter()
         .filter_map(|f| f.create(&f.schema().defaults()).ok().and_then(|i| i.video_effect()))
         .collect()
@@ -755,9 +852,123 @@ mod tests {
         assert!(errors.is_empty(), "{errors:?}");
     }
 
+    fn crop_pad(s: &Settings) -> Result<Reframe, PluginError> {
+        CropPad.create(s).map(|f| f.video_effect().map_or(Reframe::None, |e| e.reframe))
+    }
+
+    #[test]
+    fn crop_and_pad_reads_edges_and_areas() {
+        let defaults = CropPad.schema().defaults();
+        assert_eq!(crop_pad(&defaults).unwrap(), Reframe::Edges { left: 0, top: 0, right: 0, bottom: 0 });
+        assert_eq!(crop_pad(&defaults).unwrap().size((640, 360)), (640, 360), "the defaults keep the size");
+        assert_eq!(crop_pad(&Settings::new()).unwrap(), crop_pad(&defaults).unwrap(), "missing settings read as the defaults");
+        let edges = defaults.clone().with("left", 10).with("top", -20).with("right", 30).with("bottom", -40);
+        assert_eq!(crop_pad(&edges).unwrap(), Reframe::Edges { left: 10, top: -20, right: 30, bottom: -40 });
+        assert_eq!(crop_pad(&edges).unwrap().size((640, 360)), (600, 420));
+        // The area mode reads X, Y, Width and Height and leaves the edges alone.
+        let area = edges.with("mode", "area").with("x", 100).with("y", 50).with("width", 320).with("height", 0);
+        assert_eq!(crop_pad(&area).unwrap(), Reframe::Area { x: 100, y: 50, width: 320, height: 0 });
+        assert_eq!(crop_pad(&area).unwrap().size((640, 360)), (320, 310));
+        // The range ends are accepted.
+        let side = i64::from(MAX_EFFECT_SIDE);
+        for (key, v) in [("left", -side), ("bottom", side), ("x", side), ("height", side), ("width", 0)] {
+            assert!(crop_pad(&Settings::new().with(key, v)).is_ok(), "{key} {v}");
+        }
+    }
+
+    #[test]
+    fn crop_and_pad_rejects_bad_settings_and_keeps_the_last_good_ones() {
+        let side = i64::from(MAX_EFFECT_SIDE);
+        let bad = [
+            ("left", serde_json::json!(side + 1)),
+            ("top", serde_json::json!(-side - 1)),
+            ("right", serde_json::json!(1.5)),
+            ("bottom", serde_json::json!("ten")),
+            ("x", serde_json::json!(-1)),
+            ("width", serde_json::Value::from(f64::NAN)),
+            ("height", serde_json::json!(1e300)),
+            ("mode", serde_json::json!("middle")),
+            ("mode", serde_json::json!(1)),
+        ];
+        for (key, value) in bad {
+            let s = Settings::new().with(key, value.clone());
+            assert!(CropPad.create(&s).is_err(), "{key} {value}");
+            let mut f = CropPad.create(&Settings::new().with("left", 4)).unwrap();
+            assert!(f.update(&s).is_err(), "{key} {value}");
+            let kept = f.video_effect().map(|e| e.reframe);
+            assert_eq!(kept, Some(Reframe::Edges { left: 4, top: 0, right: 0, bottom: 0 }), "{key} {value}");
+        }
+        // A bad value is an error in either mode.
+        assert!(crop_pad(&Settings::new().with("mode", "area").with("left", side + 1)).is_err());
+        assert!(crop_pad(&Settings::new().with("x", -5)).is_err());
+    }
+
+    /// The schema's ranges are the ones the filter accepts.
+    #[test]
+    fn crop_and_pad_accepts_what_its_schema_offers() {
+        let schema = CropPad.schema();
+        for field in &schema.fields {
+            match &field.kind {
+                FieldKind::Int { min, max } => {
+                    for v in [*min, *max] {
+                        assert!(crop_pad(&Settings::new().with(&field.key, v)).is_ok(), "{} {v}", field.key);
+                    }
+                    for v in [min - 1, max + 1] {
+                        assert!(crop_pad(&Settings::new().with(&field.key, v)).is_err(), "{} {v}", field.key);
+                    }
+                }
+                FieldKind::Choice { options } => {
+                    let values: Vec<&str> = options.iter().filter_map(|o| o.value.as_str()).collect();
+                    assert_eq!(values, CROP_PAD_MODES);
+                }
+                _ => panic!("{} has an unexpected kind", field.key),
+            }
+        }
+    }
+
+    /// Crop and pad on the GPU: a 4 x 1 picture of red, green, blue and white with a column off
+    /// the left and one transparent column added on the right draws green, blue, white and the
+    /// item under it.
+    #[test]
+    fn crop_and_pad_draws_the_reframed_picture() {
+        use std::sync::Arc;
+        use std::sync::atomic::AtomicU64;
+
+        use studiocraft_media::Tick;
+        use studiocraft_media::video::PixelFormat;
+        use studiocraft_model::{SourceId, Transform, Vec2};
+        use studiocraft_plugin::{VideoContent, VideoOut};
+        use studiocraft_render::{Compositor, ItemDesc, Plan, SceneDesc};
+
+        let Some(gpu) = gpu() else { return };
+        let mut c = Compositor::new(gpu, 40, 16).unwrap();
+        let video = Arc::new(VideoOut::default());
+        let mut f = video.frame();
+        assert!(f.reshape(4, 1, PixelFormat::Rgba8));
+        f.data.copy_from_slice(&[255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 255, 255]);
+        video.publish(VideoContent::Frame(f));
+        let effect = CropPad.create(&Settings::new().with("left", 1).with("right", -1)).unwrap().video_effect().unwrap();
+        let back = Arc::new(VideoOut::default());
+        back.publish(VideoContent::Solid { rgba: [255, 0, 255, 255], width: 40, height: 16 });
+        let under = ItemDesc { source: SourceId(2), video: back, transform: Transform::default(), effects: vec![] };
+        let t = Transform { scale: Vec2::new(10.0, 10.0), ..Transform::default() };
+        let item = ItemDesc { source: SourceId(1), video, transform: t, effects: vec![effect] };
+        c.set_plan(Arc::new(Plan { program: SceneDesc { items: vec![under, item] }, ..Plan::default() }));
+        c.frame(Tick(0), &AtomicU64::new(0));
+        assert!(c.take_errors().is_empty());
+        let px = c.read_program().unwrap();
+        let at = |x: usize, y: usize| &px[(y * 40 + x) * 4..(y * 40 + x) * 4 + 4];
+        // The 4 x 1 picture is drawn 10 times larger with linear filtering, so a pixel near a
+        // column's middle takes up to a few percent of the next column.
+        for (x, want) in [(4, [0, 255, 0, 255]), (14, [0, 0, 255, 255]), (24, [255, 255, 255, 255]), (35, [255, 0, 255, 255])] {
+            assert!(at(x, 5).iter().zip(want).all(|(a, b)| a.abs_diff(b) <= 16), "x {x}: {:?}", at(x, 5));
+        }
+        assert!(at(5, 13).iter().zip([255, 0, 255, 255]).all(|(a, b)| a.abs_diff(b) <= 3), "the picture is 10 pixels tall");
+    }
+
     #[test]
     fn video_filters_have_effects_and_audio_filters_do_not() {
-        assert_eq!(builtin_video_effects().len(), 2);
+        assert_eq!(builtin_video_effects().len(), 3);
         assert!(Gain.create(&Settings::new()).unwrap().video_effect().is_none());
         let neutral = color_correction_params(&ColorCorrection.schema().defaults());
         let mut want = [0.0; VIDEO_EFFECT_PARAMS];

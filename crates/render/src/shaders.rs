@@ -1,9 +1,9 @@
-//! WGSL for the compositor's passes. Every pass reads one 128-byte uniform slot (`u`) at a
+//! WGSL for the compositor's passes. Every pass reads one 144-byte uniform slot (`u`) at a
 //! dynamic offset in one buffer written once per frame.
 
 /// Shared by every module: the uniform slot and the full-canvas triangle.
 const COMMON: &str = r"
-struct Slot { a: vec4<f32>, b: vec4<f32>, c: vec4<f32>, d: vec4<f32>, e: vec4<f32>, f: vec4<f32>, g: vec4<f32>, h: vec4<f32> }
+struct Slot { a: vec4<f32>, b: vec4<f32>, c: vec4<f32>, d: vec4<f32>, e: vec4<f32>, f: vec4<f32>, g: vec4<f32>, h: vec4<f32>, i: vec4<f32> }
 @group(0) @binding(0) var<uniform> u: Slot;
 
 struct VOut { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> }
@@ -53,9 +53,11 @@ const ITEM: &str = r"
 }
 ";
 
-/// Filter passes: `a` = the source rectangle, `b.xy` = the output size in pixels, `b.z` = 1 when
-/// the input holds straight alpha, `c` to `h` = the filter's parameters. `c` and `d` reach
-/// `effect` as `p0` and `p1`; `extra_params()` returns `e` to `h` as the columns of a matrix.
+/// Filter passes: `a` = the rectangle of `tex` under the output, `b.xy` = the output size in
+/// pixels, `b.z` = 1 when the input holds straight alpha, `c` to `h` = the filter's parameters,
+/// `i.xy` = the input's extent in `tex` (the input starts at the top-left corner) and `i.zw` =
+/// the input's size in pixels. `c` and `d` reach `effect` as `p0` and `p1`; `extra_params()`
+/// returns `e` to `h` as the columns of a matrix.
 const EFFECT_HEAD: &str = r"
 @group(1) @binding(0) var tex: texture_2d<f32>;
 @group(1) @binding(1) var samp: sampler;
@@ -63,13 +65,33 @@ const EFFECT_HEAD: &str = r"
 fn extra_params() -> mat4x4<f32> {
     return mat4x4<f32>(u.e, u.f, u.g, u.h);
 }
+
+fn input_size() -> vec2<f32> {
+    return u.i.zw;
+}
+
+// The input's premultiplied color at `st` in `tex`; transparent outside the input. The linear
+// filter stays inside the input, so texels beyond it never blend into its edge.
+fn input_at(st: vec2<f32>) -> vec4<f32> {
+    let half = 0.5 / vec2<f32>(textureDimensions(tex));
+    let lo = half;
+    let hi = max(u.i.xy - half, lo);
+    var c = textureSampleLevel(tex, samp, clamp(st, lo, hi), 0.0);
+    if u.b.z > 0.5 { c = vec4<f32>(c.rgb * c.a, c.a); }
+    let inside = all(st >= vec2<f32>(0.0)) && all(st <= u.i.xy);
+    return select(vec4<f32>(0.0), c, inside);
+}
+
+// The input's color at pixel position `px` (pixel centers at .5), clamped to its edges.
+fn input_pixel(px: vec2<f32>) -> vec4<f32> {
+    let size = max(input_size(), vec2<f32>(1.0));
+    return input_at(clamp(px, vec2<f32>(0.5), size - 0.5) / size * u.i.xy);
+}
 ";
 
 const EFFECT_MAIN: &str = r"
 @fragment fn fs_effect(v: VOut) -> @location(0) vec4<f32> {
-    var c = textureSample(tex, samp, mix(u.a.xy, u.a.zw, v.uv));
-    if u.b.z > 0.5 { c = vec4<f32>(c.rgb * c.a, c.a); }
-    return effect(c, v.uv, u.b.xy, u.c, u.d);
+    return effect(input_at(mix(u.a.xy, u.a.zw, v.uv)), v.uv, u.b.xy, u.c, u.d);
 }
 ";
 

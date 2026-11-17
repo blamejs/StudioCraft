@@ -18,6 +18,8 @@ in both files.
 | Frame rate | 30 fps | `model::profile::VideoSettings::default` | estimated |
 | Largest canvas side | 8192 px | `render::compositor::MAX_CANVAS` | estimated |
 | Compositor texture ring | 3 frames | `render::compositor::RING_LEN` | estimated |
+| Largest side of a video filter's output | 8192 px | `plugin::filter::MAX_EFFECT_SIDE` | estimated |
+| Crop and pad edges and area | 0 px each (the whole source) | `sources::filters::CropPad` | estimated |
 
 ## Transitions
 

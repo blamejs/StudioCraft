@@ -25,6 +25,7 @@
 	Available Encoders	Available Encoders
 	Background	Background
 	Balanced	Balanced
+	Bottom	Bottom
 	Brightness	Brightness
 	Browse…	Browse…
 	Cancel	Cancel
@@ -45,6 +46,8 @@
 	Contrast	Contrast
 	CPU usage preset (faster uses less CPU)	CPU usage preset (faster uses less CPU)
 	Credits	Credits
+	Crop and pad	Crop and pad
+	Crop or pad each edge	Crop or pad each edge
 	Cut	Cut
 	Cut to Program	Cut to Program
 	Default	Default
@@ -145,6 +148,7 @@
 	Mid (dB)	Mid (dB)
 	Minimize	Minimize
 	MIT	MIT
+	Mode	Mode
 	Move the scene down	Move the scene down
 	Move the scene up	Move the scene up
 	Move the source down	Move the source down
@@ -234,6 +238,7 @@
 	Server	Server
 	Settings	Settings
 	Show	Show
+	Show an area	Show an area
 	Show Recordings	Show Recordings
 	Show Scene {n}	Show Scene {n}
 	Show Settings Folder	Show Settings Folder
@@ -279,6 +284,7 @@
 	Threshold (dB)	Threshold (dB)
 	Tint	Tint
 	Tools	Tools
+	Top	Top
 	Transition	Transition
 	Transition Controls	Transition Controls
 	Transition settings	Transition settings
@@ -303,6 +309,8 @@
 	Window	Window
 	Window capture	Window capture
 	Windows Media Foundation H.264	Windows Media Foundation H.264
+	X	X
+	Y	Y
 	Your Videos folder	Your Videos folder
 	YUV vectorscope	YUV vectorscope
 	{db} dB	{db} dB
