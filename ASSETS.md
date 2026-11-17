@@ -21,7 +21,8 @@ The font files are the upstream releases, unmodified:
 | `assets/fonts/JetBrainsMono-Regular.ttf` | JetBrains Mono 2.305 | `e6fd0d7e91550b3ed2b735d4312474362c4716edc4fc0577a0f61ed782d5aed1` |
 
 The app icon is an engraving-style panda seated on a rounded purple tile. It is the project
-owner's original drawing, a 1254 x 1254 raster. `studiocraft-1024.png` is the drawing cropped to
+owner's original drawing, a 1254 x 1254 raster whose tile is fully opaque in flat purple
+(128, 66, 129); only the anti-aliased edge of the tile is partly transparent. `studiocraft-1024.png` is the drawing cropped to
 its tile and scaled to 1024 x 1024; every other file is scaled from the drawing with Lanczos
 resampling, as 8-bit RGBA with no text or time chunks. The PNG files and `studiocraft.ico` show
 the tile filling the canvas. `studiocraft-macos-512.png` and `studiocraft.icns` follow Apple's

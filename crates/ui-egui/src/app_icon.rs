@@ -111,11 +111,30 @@ mod tests {
             let icon = decode(png);
             assert_eq!((icon.width, icon.height), (*side, *side), "{name}");
             assert_eq!(icon.rgba.len(), (side * side * 4) as usize, "{name}");
-            // The rounded tile leaves the corners transparent and covers the middle. The drawing
-            // stores its tile at alpha 253 and 254, so the middle is checked as nearly opaque.
+            // The rounded tile leaves the corners transparent and covers the middle.
             let alpha = |x: u32, y: u32| icon.rgba[((y * side + x) * 4 + 3) as usize];
             assert!(alpha(0, 0) < 32, "{name}: the corner is transparent");
-            assert!(alpha(side / 2, side / 2) >= 250, "{name}: the middle is covered");
+            assert_eq!(alpha(side / 2, side / 2), 255, "{name}: the middle is opaque");
+        }
+    }
+
+    #[test]
+    fn every_icon_size_is_opaque_well_inside_the_tile() {
+        for (name, png, side) in FILES {
+            let icon = decode(png);
+            // The macOS file holds the tile at 824/1024 of the side; the others fill the canvas.
+            let tile = if name.starts_with("macos") { f64::from(*side) * 824.0 / 1024.0 } else { f64::from(*side) };
+            let radius = 0.4 * tile;
+            let center = f64::from(*side) / 2.0;
+            for y in 0..*side {
+                for x in 0..*side {
+                    let (dx, dy) = (f64::from(x) + 0.5 - center, f64::from(y) + 0.5 - center);
+                    if dx * dx + dy * dy <= radius * radius {
+                        let alpha = icon.rgba[((y * side + x) * 4 + 3) as usize];
+                        assert_eq!(alpha, 255, "{name}: pixel ({x}, {y}) inside the tile is opaque");
+                    }
+                }
+            }
         }
     }
 
