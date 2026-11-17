@@ -509,6 +509,20 @@ fn point_edits_keep_time_running_forwards() {
     assert!(c.remove(0).is_none() && c.remove(3).is_none());
 }
 
+#[test]
+fn point_edits_reject_an_index_past_the_end() {
+    let c = wave();
+    let to = Vec2::new(0.5, 0.5);
+    for i in [4, usize::MAX - 1, usize::MAX] {
+        assert!(c.remove(i).is_none(), "remove({i})");
+        assert!(c.move_point(i, to).is_none(), "move_point({i})");
+        assert!(c.set_smooth(i, true).is_none() && c.set_smooth(i, false).is_none(), "set_smooth({i})");
+        assert!(c.move_handle(i, Handle::In, to).is_none() && c.move_handle(i, Handle::Out, to).is_none(), "move_handle({i})");
+        assert!(c.segment(i).is_none(), "segment({i})");
+    }
+    assert!(CustomEase::linear().remove(usize::MAX).is_none());
+}
+
 /// Whether a smooth inner point's handles are in line (or one of them has no length).
 fn in_line(p: &EasePoint) -> bool {
     let (a, b) = (p.h_in, p.out);

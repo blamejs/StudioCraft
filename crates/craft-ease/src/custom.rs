@@ -251,7 +251,7 @@ impl CustomEase {
     /// neighbors' so time keeps running forwards. `None` for an end, a missing point or a
     /// non-finite `to`.
     pub fn move_point(&self, i: usize, to: Vec2) -> Option<CustomEase> {
-        if i == 0 || i + 1 >= self.points.len() || !to.is_finite() {
+        if i == 0 || i >= self.points.len().saturating_sub(1) || !to.is_finite() {
             return None;
         }
         let (lo, hi) = (self.points.get(i - 1)?.at.x, self.points.get(i + 1)?.at.x);
@@ -308,7 +308,7 @@ impl CustomEase {
 
     /// Removes point `i` (not an end). `None` for an end or a missing point.
     pub fn remove(&self, i: usize) -> Option<CustomEase> {
-        if i == 0 || i + 1 >= self.points.len() {
+        if i == 0 || i >= self.points.len().saturating_sub(1) {
             return None;
         }
         let mut pts = self.points.clone();
@@ -317,9 +317,13 @@ impl CustomEase {
     }
 
     /// Makes point `i` smooth (its handles in line with its neighbors' chord, a third of the way
-    /// to each) or a corner (its handles on the point, so the curve turns sharply there).
+    /// to each) or a corner (its handles on the point, so the curve turns sharply there). `None`
+    /// for a missing point.
     pub fn set_smooth(&self, i: usize, smooth: bool) -> Option<CustomEase> {
         let n = self.points.len();
+        if i >= n {
+            return None;
+        }
         let prev = if i == 0 { None } else { self.points.get(i - 1).map(|p| p.at) };
         let next = self.points.get(i + 1).map(|p| p.at);
         let mut c = self.clone();
