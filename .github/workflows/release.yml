@@ -1,7 +1,8 @@
 name: Release
 
 # Builds the release files through the suite's shared release workflow and attaches them to a draft
-# GitHub release named v<version>, with <version> from [workspace.package] in Cargo.toml.
+# GitHub release named v<version>, with <version> from [workspace.package] in Cargo.toml. The
+# shared workflow writes SHA256SUMS.txt, and the checksums job below adds SHA3-512SUMS.txt.
 #
 # - A push to the `release` branch builds a release. On that branch the macOS and Windows builds
 #   stop unless their signing secrets are set in the repository's `release` environment.
@@ -66,3 +67,80 @@ jobs:
       AZURE_SIGNING_ACCOUNT: ${{ secrets.AZURE_SIGNING_ACCOUNT }}
       AZURE_CERT_PROFILE: ${{ secrets.AZURE_CERT_PROFILE }}
       LINUX_SIGNING_KEY: ${{ secrets.LINUX_SIGNING_KEY }}
+
+  # Adds SHA3-512SUMS.txt to the draft release. It hashes the files that the draft release lists in
+  # SHA256SUMS.txt, as published (after the Linux packages are signed), and on the release branch
+  # signs it with LINUX_SIGNING_KEY as the shared workflow signs SHA256SUMS.txt.
+  checksums:
+    name: SHA3-512 checksums
+    needs: release
+    if: ${{ !(github.event_name == 'schedule' || inputs.dry-run == true) }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment: release
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GH_REPO: ${{ github.repository }}
+      TAG: v${{ needs.release.outputs.version }}
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
+        with:
+          egress-policy: audit
+      - name: Check openssl's SHA3-512 against the FIPS 202 test vector
+        run: |
+          set -euo pipefail
+          expected=b751850b1a57168a5693cd924b6b096e08f621827444f70d884f5d0240d2712e10e116e9192af3c91a7ec57647e3934057340b4cf408d5a56592f8274eec53f0
+          actual="$(printf abc | openssl dgst -sha3-512 -r | cut -d' ' -f1)"
+          if [ "$actual" != "$expected" ]; then
+            echo "::error::openssl SHA3-512 of \"abc\" is $actual, expected $expected"
+            exit 1
+          fi
+      - name: Import the Linux signing key
+        id: key
+        uses: storytold/craft-common-actions/actions/import-signing-key@59d1ecc4ea15ab59f8d60d38b147d5016c1f1385
+        with:
+          key: ${{ github.ref == 'refs/heads/release' && secrets.LINUX_SIGNING_KEY || '' }}
+      - name: Download the draft release's files
+        run: gh release download "$TAG" --dir assets
+      - name: Write SHA3-512SUMS.txt
+        working-directory: assets
+        run: |
+          set -euo pipefail
+          sha256sum --check --strict SHA256SUMS.txt
+          # Every file in the release except the checksum files and their signatures is listed.
+          for f in *; do
+            case "$f" in SHA256SUMS.txt | SHA256SUMS.txt.asc | SHA3-512SUMS.txt | SHA3-512SUMS.txt.asc) continue ;; esac
+            if ! awk -v f="$f" '$2 == f { found = 1 } END { exit !found }' SHA256SUMS.txt; then
+              echo "::error::$f is in the release but not in SHA256SUMS.txt"
+              exit 1
+            fi
+          done
+          awk '{ print $2 }' SHA256SUMS.txt | while read -r f; do
+            printf '%s  %s\n' "$(openssl dgst -sha3-512 -r -- "$f" | cut -d' ' -f1)" "$f"
+          done >SHA3-512SUMS.txt
+          if [ "$(wc -l <SHA3-512SUMS.txt)" != "$(wc -l <SHA256SUMS.txt)" ]; then
+            echo "::error::SHA3-512SUMS.txt and SHA256SUMS.txt list different numbers of files"
+            exit 1
+          fi
+          cat SHA3-512SUMS.txt
+      - name: Sign SHA3-512SUMS.txt
+        if: steps.key.outputs.enabled == 'true'
+        working-directory: assets
+        run: |
+          gpg --batch --yes --local-user "$SIGNING_FPR" --armor --detach-sign -o SHA3-512SUMS.txt.asc SHA3-512SUMS.txt
+          gpgv --quiet --keyring "$SIGNING_PUBKEY" SHA3-512SUMS.txt.asc SHA3-512SUMS.txt
+      - name: Attach SHA3-512SUMS.txt to the draft release
+        working-directory: assets
+        run: |
+          set -euo pipefail
+          files=(SHA3-512SUMS.txt)
+          if [ -f SHA3-512SUMS.txt.asc ]; then files+=(SHA3-512SUMS.txt.asc); fi
+          gh release upload "$TAG" --clobber -- "${files[@]}"
+          {
+            echo "SHA3-512SUMS.txt for $TAG:"
+            echo
+            sed 's/^/    /' SHA3-512SUMS.txt
+          } >>"$GITHUB_STEP_SUMMARY"
