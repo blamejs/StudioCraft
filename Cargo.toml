@@ -39,6 +39,8 @@ log = "0.4"
 base64 = "0.22"
 # Bounded lock-free queues between the capture, compositor, mixer and encoder threads.
 crossbeam-queue = "0.3"
+# A 128-bit atomic for the position the two recording writers share.
+portable-atomic = "1"
 # Local time for recording file names.
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 # The user's Videos folder for recordings.

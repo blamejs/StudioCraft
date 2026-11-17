@@ -5396,6 +5396,7 @@ dependencies = [
  "craft-video",
  "crossbeam-queue",
  "log",
+ "portable-atomic",
  "studiocraft-encode",
  "studiocraft-media",
  "studiocraft-model",

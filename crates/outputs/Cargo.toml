@@ -15,6 +15,7 @@ studiocraft-encode.workspace = true
 craft-media = { workspace = true, features = ["matroska"] }
 crossbeam-queue.workspace = true
 log.workspace = true
+portable-atomic.workspace = true
 
 [dev-dependencies]
 # Independent decoders read back what a built-in recording writes.

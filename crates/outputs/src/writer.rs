@@ -16,6 +16,7 @@ use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
+use portable_atomic::AtomicU128;
 use studiocraft_media::Tick;
 use studiocraft_media::audio::{BLOCK_FRAMES, CHANNELS, PooledBlock, SAMPLE_RATE};
 use studiocraft_media::clock::duration_of;
@@ -47,24 +48,82 @@ struct Shared {
     last_message: Mutex<String>,
     /// Text never logged or shown: the stream key.
     secret: String,
-    /// Where the two writers are. Each writer places and fills under this lock, so a gap they
-    /// both see is skipped once.
-    timeline: Mutex<Timeline>,
+    /// Where the two writers are.
+    timeline: Timeline,
 }
 
-/// Seconds of output each writer has written, and seconds of long gaps skipped so far. Both
-/// writers place what they write `skipped` seconds earlier, so a gap that one of them skips is
-/// skipped in both and they stay in step.
+/// Where the two writers are, as one word ([`Place`]) that a writer reads and changes in one step.
+/// Both writers place what they write [`Place::skipped`] seconds earlier, so a gap that one of
+/// them skips is skipped in both and they stay in step.
+///
+/// A step reads the word, places its frame or block, and commits the new word with a
+/// compare-and-swap. When the other writer has committed in the meantime, the commit fails and
+/// the step places its frame or block again, so a gap that both writers see is skipped once.
+/// On aarch64, and on x86_64 processors with `cmpxchg16b`, the 128-bit compare-and-swap is
+/// lock-free, so neither writer waits for the other.
 #[derive(Default)]
-pub(crate) struct Timeline {
-    skipped: f64,
-    video_out: f64,
-    audio_out: f64,
+pub(crate) struct Timeline(AtomicU128);
+
+/// The nanoseconds of long gaps skipped so far (the high 64 bits of a [`Timeline`]) and the
+/// nanoseconds of output the audio writer has written past the video writer (the low 64 bits,
+/// negative when the video writer is ahead). Each writer knows its own position and finds the
+/// other's from the difference.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Place {
+    skipped_ns: u64,
+    audio_ahead_ns: i64,
 }
 
-/// `timeline`, also after a writer thread panicked while holding it.
-fn lock(timeline: &Mutex<Timeline>) -> std::sync::MutexGuard<'_, Timeline> {
-    timeline.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+impl Place {
+    fn unpack(word: u128) -> Place {
+        Place { skipped_ns: (word >> 64) as u64, audio_ahead_ns: word as u64 as i64 }
+    }
+
+    fn pack(self) -> u128 {
+        (u128::from(self.skipped_ns) << 64) | u128::from(self.audio_ahead_ns as u64)
+    }
+
+    fn skipped(self) -> f64 {
+        self.skipped_ns as f64 / 1e9
+    }
+
+    /// `self` after `skip` more seconds are skipped and the audio writer moves `audio_ns`
+    /// nanoseconds further ahead of the video writer (negative when the video writer moves).
+    fn moved(self, skip: f64, audio_ns: i64) -> Place {
+        let skip_ns = u64::try_from(ns(skip)).unwrap_or(0);
+        Place { skipped_ns: self.skipped_ns.saturating_add(skip_ns), audio_ahead_ns: self.audio_ahead_ns.saturating_add(audio_ns) }
+    }
+}
+
+/// `secs` in whole nanoseconds.
+fn ns(secs: f64) -> i64 {
+    (secs * 1e9).round() as i64
+}
+
+/// The whole frames or samples in `count`, which comes from a position rounded to the
+/// nanosecond and can fall short of a whole count by up to half a nanosecond's worth (0.000024 of
+/// a sample at 48 kHz).
+fn whole(count: f64) -> f64 {
+    (count + 1e-3).floor()
+}
+
+impl Timeline {
+    /// The word, to pass to [`Timeline::commit`].
+    fn read(&self) -> u128 {
+        self.0.load(Ordering::Acquire)
+    }
+
+    /// Stores `next` if the word still holds `seen`. `false` when the other writer has committed
+    /// since `seen` was read; nothing is changed then.
+    fn commit(&self, seen: u128, next: Place) -> bool {
+        self.0.compare_exchange(seen, next.pack(), Ordering::AcqRel, Ordering::Acquire).is_ok()
+    }
+
+    /// Seconds skipped so far.
+    #[cfg(test)]
+    fn skipped(&self) -> f64 {
+        Place::unpack(self.read()).skipped()
+    }
 }
 
 /// `line` with every occurrence of `secret` replaced by `***`.
@@ -84,7 +143,7 @@ impl Shared {
     /// Seconds skipped so far.
     #[cfg(test)]
     fn skipped(&self) -> f64 {
-        lock(&self.timeline).skipped
+        self.timeline.skipped()
     }
 }
 
@@ -312,22 +371,28 @@ fn audio_gap(ahead: i64, max_fill: i64) -> (i64, i64) {
 /// slot is already written, otherwise the copies of the previous frame to write first and the
 /// slot after this frame. A gap is filled up to [`MAX_FILL_S`] past what the audio writer has
 /// written, so a gap in the pictures alone is filled whole; the rest is skipped in both writers.
-pub(crate) fn video_step(secs: f64, next: u64, fps: f64, timeline: &Mutex<Timeline>) -> Option<(u64, u64)> {
-    let mut tl = lock(timeline);
-    let index = ((secs - tl.skipped) * fps).round();
-    if index < 0.0 {
-        return None;
-    }
-    let index = index as u64;
-    let limit = ((tl.audio_out + MAX_FILL_S) * fps) as u64;
-    match slot(index, next, limit.saturating_sub(next)) {
-        Slot::Drop => None,
-        Slot::Fill(n) => {
-            let excess = index - next - n;
-            tl.skipped += excess as f64 / fps;
-            let after = index - excess + 1;
-            tl.video_out = after as f64 / fps;
-            Some((n, after))
+pub(crate) fn video_step(secs: f64, next: u64, fps: f64, timeline: &Timeline) -> Option<(u64, u64)> {
+    loop {
+        let seen = timeline.read();
+        let place = Place::unpack(seen);
+        let index = ((secs - place.skipped()) * fps).round();
+        if index < 0.0 {
+            return None;
+        }
+        let index = index as u64;
+        let own_ns = ns(next as f64 / fps);
+        let audio_out = own_ns.saturating_add(place.audio_ahead_ns) as f64 / 1e9;
+        let limit = whole((audio_out + MAX_FILL_S) * fps) as u64;
+        match slot(index, next, limit.saturating_sub(next)) {
+            Slot::Drop => return None,
+            Slot::Fill(n) => {
+                let excess = index - next - n;
+                let after = index - excess + 1;
+                let moved = ns(after as f64 / fps).saturating_sub(own_ns);
+                if timeline.commit(seen, place.moved(excess as f64 / fps, -moved)) {
+                    return Some((n, after));
+                }
+            }
         }
     }
 }
@@ -336,18 +401,24 @@ pub(crate) fn video_step(secs: f64, next: u64, fps: f64, timeline: &Mutex<Timeli
 /// frames are written: `None` when it is too late, otherwise the frames of silence to write
 /// first. A gap is filled up to [`MAX_FILL_S`] past what the video writer has written; the rest is
 /// skipped in both writers.
-pub(crate) fn audio_step(secs: f64, written: i64, frames: i64, rate: f64, timeline: &Mutex<Timeline>) -> Option<i64> {
-    let mut tl = lock(timeline);
-    let pos = ((secs - tl.skipped) * rate).round() as i64;
-    let ahead = pos - written;
-    if ahead < -(BLOCK_FRAMES as i64) {
-        return None;
+pub(crate) fn audio_step(secs: f64, written: i64, frames: i64, rate: f64, timeline: &Timeline) -> Option<i64> {
+    loop {
+        let seen = timeline.read();
+        let place = Place::unpack(seen);
+        let pos = ((secs - place.skipped()) * rate).round() as i64;
+        let ahead = pos - written;
+        if ahead < -(BLOCK_FRAMES as i64) {
+            return None;
+        }
+        let own_ns = ns(written as f64 / rate);
+        let video_out = own_ns.saturating_sub(place.audio_ahead_ns) as f64 / 1e9;
+        let limit = whole((video_out + MAX_FILL_S) * rate) as i64;
+        let (gap, skipped) = audio_gap(ahead, (limit - written).max(0));
+        let moved = ns((written + gap + frames) as f64 / rate).saturating_sub(own_ns);
+        if timeline.commit(seen, place.moved(skipped as f64 / rate, moved)) {
+            return Some(gap);
+        }
     }
-    let limit = ((tl.video_out + MAX_FILL_S) * rate) as i64;
-    let (gap, skipped) = audio_gap(ahead, (limit - written).max(0));
-    tl.skipped += skipped as f64 / rate;
-    tl.audio_out = (written + gap + frames) as f64 / rate;
-    Some(gap)
 }
 
 /// Writes the frames to `stdin`, ffmpeg's video input, until a stop.
@@ -550,6 +621,61 @@ mod tests {
             let _ = video.join().unwrap();
             assert!((shared.skipped() - 7.0).abs() < 0.1, "skipped {} s of a 12 s gap", shared.skipped());
         }
+    }
+
+    #[test]
+    fn a_step_placed_before_the_other_writer_skipped_is_placed_again() {
+        let (fps, rate, block) = (30.0, f64::from(SAMPLE_RATE), BLOCK_FRAMES as i64);
+        let timeline = Timeline::default();
+        // The sound has 4 seconds written and no picture has come yet.
+        let mut written = 0i64;
+        while written < 4 * i64::from(SAMPLE_RATE) {
+            written += audio_step(written as f64 / rate, written, block, rate, &timeline).unwrap() + block;
+        }
+        // Both resume at 13 s: the audio writer reads the timeline, and then the video writer
+        // fills 5 seconds past the sound and skips the other 4 before the audio writer commits.
+        let seen = timeline.read();
+        let fill = ((4.0 + MAX_FILL_S) * fps) as u64;
+        assert_eq!(video_step(13.0, 0, fps, &timeline), Some((fill, fill + 1)));
+        assert!((timeline.skipped() - 4.0).abs() < 1e-3, "{}", timeline.skipped());
+        let late = Place::unpack(seen).moved(4.0, 1_000_000_000);
+        assert!(!timeline.commit(seen, late), "a commit from the earlier read is refused");
+        assert!((timeline.skipped() - 4.0).abs() < 1e-3, "a refused commit changes nothing: {}", timeline.skipped());
+        // Placed again, the block sees the skip and where the pictures are now, so the gap up to
+        // the block (about 5 seconds) is filled and nothing more is skipped.
+        assert_eq!(audio_step(13.0, written, block, rate, &timeline), Some(9 * i64::from(SAMPLE_RATE) - written));
+        assert!((timeline.skipped() - 4.0).abs() < 1e-3, "the gap is skipped once: {}", timeline.skipped());
+    }
+
+    #[test]
+    fn a_gap_that_ends_on_the_fill_limit_is_filled_whole() {
+        let (fps, rate) = (30.0, f64::from(SAMPLE_RATE));
+        let timeline = Timeline::default();
+        // The sound has one frame's time written (1,600 samples), so pictures are filled up to
+        // 5 seconds past it: 151 frames.
+        assert_eq!(audio_step(0.0, 0, 1600, rate, &timeline), Some(0));
+        assert_eq!(video_step(5.0 + 1.0 / fps, 0, fps, &timeline), Some((151, 152)));
+        assert_eq!(timeline.skipped(), 0.0);
+        // The same at the sound's side: 31 frames of pictures, so sound is filled up to 5 seconds
+        // past them: 289,600 samples.
+        let timeline = Timeline::default();
+        assert_eq!(video_step(30.0 / fps, 0, fps, &timeline), Some((30, 31)));
+        assert_eq!(audio_step(6.0 + 1.0 / fps, 0, 1024, rate, &timeline), Some(289_600));
+        assert_eq!(timeline.skipped(), 0.0);
+    }
+
+    #[test]
+    fn skipped_time_keeps_its_fractions_and_range() {
+        let fps = 30.0;
+        let mut place = Place::unpack(0);
+        for _ in 0..1000 {
+            place = place.moved(1.0 / fps, 0);
+        }
+        assert!((place.skipped() - 1000.0 / fps).abs() < 1e-6, "1000 skips of one frame: {} s", place.skipped());
+        let days = 60.0 * 86_400.0;
+        assert!((place.moved(days, 0).skipped() - place.skipped() - days).abs() < 1e-3, "a skip of 60 days is counted whole");
+        let far = Place { skipped_ns: u64::MAX - 1, audio_ahead_ns: -5 };
+        assert_eq!(Place::unpack(far.pack()), far);
     }
 
     #[test]

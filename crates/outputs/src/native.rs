@@ -146,7 +146,7 @@ struct Shared {
     failed: AtomicBool,
     failure: Mutex<Option<String>>,
     /// Where the two encoder threads are; see [`crate::writer`].
-    timeline: Mutex<Timeline>,
+    timeline: Timeline,
     packets: PacketQueue,
     disk_wait: Duration,
 }
@@ -161,7 +161,7 @@ impl Shared {
             producing: [AtomicBool::new(true), AtomicBool::new(true)],
             failed: AtomicBool::new(false),
             failure: Mutex::new(None),
-            timeline: Mutex::new(Timeline::default()),
+            timeline: Timeline::default(),
             packets,
             disk_wait,
         }
