@@ -565,10 +565,14 @@ struct Sink<W> {
     cap: usize,
     /// Whole packets the output has taken.
     packets: u64,
+    /// A mark that moves with every packet built and every batch dropped after an error, so
+    /// the muxer can tell whether given packets are still the last ones the output gets.
+    pushed: u64,
 }
 
 impl<W: Write> Sink<W> {
     fn push(&mut self, p: &[u8; PACKET_SIZE]) -> io::Result<()> {
+        self.pushed += 1;
         self.batch.extend_from_slice(p);
         if self.batch.len() >= self.cap { self.drain() } else { Ok(()) }
     }
@@ -593,6 +597,9 @@ impl<W: Write> Sink<W> {
             }
         }
         self.packets += (done / PACKET_SIZE) as u64;
+        if r.is_err() && done < self.batch.len() {
+            self.pushed += 1;
+        }
         self.batch.clear();
         r
     }
@@ -646,6 +653,9 @@ pub struct Muxer<W: Write> {
     clock: Option<i64>,
     last_pcr: Option<i64>,
     last_psi: Option<i64>,
+    /// [`Sink::pushed`] right after the last PAT and PMT; `None` once something else may follow
+    /// them.
+    psi_end: Option<u64>,
     psi_forced: bool,
     /// The next frame or advance writes a PCR whatever the interval (a new writer).
     pcr_forced: bool,
@@ -708,7 +718,7 @@ impl<W: Write> Muxer<W> {
         };
         let cap = usize::from(cfg.batch_packets) * PACKET_SIZE;
         Ok(Self {
-            sink: Sink { out, batch: Vec::with_capacity(cap), cap, packets: 0 },
+            sink: Sink { out, batch: Vec::with_capacity(cap), cap, packets: 0, pushed: 0 },
             cfg,
             streams: streams
                 .iter()
@@ -724,6 +734,7 @@ impl<W: Write> Muxer<W> {
             clock: None,
             last_pcr: None,
             last_psi: None,
+            psi_end: None,
             psi_forced: false,
             pcr_forced: false,
             stats: Stats::default(),
@@ -752,6 +763,8 @@ impl<W: Write> Muxer<W> {
     /// The output, for writing between packets. With [`Config::hold_packets`] set, call
     /// [`Muxer::flush`] first so no held packet follows what is written here.
     pub fn get_mut(&mut self) -> &mut W {
+        // what the caller writes may separate the last tables from the next keyframe
+        self.psi_end = None;
         &mut self.sink.out
     }
 
@@ -957,10 +970,11 @@ impl<W: Write> Muxer<W> {
 
         let clock = self.clock.map_or(t, |c| c.max(t));
         self.clock = Some(clock);
-        let psi_before = self.stats.psi;
         self.fill_pcr(clock)?;
-        // a keyframe needs the tables in front of it once: not again when the gap just got them
-        self.psi_if_due(clock, frame.key && codec.is_video() && self.stats.psi == psi_before)?;
+        // a keyframe needs the tables right in front of it: not again when they are the last
+        // packets written, but again when PCRs filling a gap came after them
+        let tables_last = self.psi_end == Some(self.sink.pushed);
+        self.psi_if_due(clock, frame.key && codec.is_video() && !tables_last)?;
         let mut pcr = None;
         if self.pcr_on == PcrOn::Stream(index) {
             if self.pcr_forced || self.last_pcr.is_none_or(|l| clock > l) {
@@ -1010,6 +1024,7 @@ impl<W: Write> Muxer<W> {
             section_packets(&mut self.sink, 0, &mut self.pat_cc, &self.pat)?;
             section_packets(&mut self.sink, self.cfg.pmt_pid, &mut self.pmt_cc, &self.pmt)?;
             self.last_psi = Some(clock);
+            self.psi_end = Some(self.sink.pushed);
             self.psi_forced = false;
             self.stats.psi += 1;
         }

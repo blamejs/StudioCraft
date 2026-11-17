@@ -237,6 +237,50 @@ fn psi_repeats_on_keyframes_and_new_writers() {
 }
 
 #[test]
+fn a_keyframe_after_a_gap_follows_the_tables_directly() {
+    let ts = mux(Config::default(), &[Stream::new(0x100, Codec::H264)], |m| {
+        m.write_frame(0, &Frame { data: &h264(true), pts: 90_000, dts: None, key: true }).unwrap();
+        // the gap reaches past the table interval and several PCR intervals
+        m.write_frame(0, &Frame { data: &h264(true), pts: 110_000, dts: None, key: true }).unwrap();
+    });
+    let pk = walk(&ts);
+    let keys: Vec<usize> = pk.iter().enumerate().filter(|(_, p)| p.pid == 0x100 && p.rai).map(|(i, _)| i).collect();
+    assert_eq!(keys.len(), 2);
+    for k in keys {
+        assert_eq!((pk[k - 2].pid, pk[k - 1].pid), (0, 0x1000), "the PAT and PMT right before the keyframe at packet {k}");
+    }
+    assert!(pk.iter().any(|p| p.pid == 0x100 && !p.payload), "PCR-only packets fill the gap");
+    // a packet the caller writes between the tables and a keyframe brings the tables again
+    let mut null = [0xFF; PACKET_SIZE];
+    null[..4].copy_from_slice(&[0x47, 0x1F, 0xFF, 0x10]);
+    let cfg = Config { pcr_interval: 9_000, psi_interval: 3_600, ..Config::default() };
+    let ts = mux(cfg, &[Stream::new(0x100, Codec::H264)], |m| {
+        m.advance(90_000).unwrap();
+        // the tables fall due here and the PCR does not, so the tables are the last packets
+        m.advance(93_600).unwrap();
+        m.get_mut().extend_from_slice(&null);
+        m.write_frame(0, &Frame { data: &h264(true), pts: 93_600, dts: None, key: true }).unwrap();
+    });
+    let pk = walk(&ts);
+    let k = pk.iter().position(|p| p.pid == 0x100 && p.rai).unwrap();
+    assert_eq!((pk[k - 3].pid, pk[k - 2].pid, pk[k - 1].pid), (0x1FFF, 0, 0x1000));
+}
+
+#[test]
+fn tables_lost_with_a_failed_write_come_again_before_a_keyframe() {
+    let cfg = Config { pcr_interval: 9_000, psi_interval: 3_600, ..Config::default() };
+    // the second write fails: the one at the end of the second advance
+    let mut m = Muxer::new(Flaky { fail_on: Some(2), calls: 0, data: Vec::new() }, cfg, &[Stream::new(0x100, Codec::H264)]).unwrap();
+    m.advance(90_000).unwrap();
+    // the tables fall due and are dropped with the failed batch
+    assert!(matches!(m.advance(93_600), Err(Error::Io(_))));
+    m.write_frame(0, &Frame { data: &h264(true), pts: 93_600, dts: None, key: true }).unwrap();
+    let pk = walk(&m.finish().unwrap().data);
+    let k = pk.iter().position(|p| p.pid == 0x100 && p.rai).unwrap();
+    assert_eq!((pk[k - 2].pid, pk[k - 1].pid), (0, 0x1000));
+}
+
+#[test]
 fn every_new_segment_carries_a_pcr() {
     for pcr_pid in [None, Some(0x1F0)] {
         let mut m = Muxer::new(Vec::new(), Config { pcr_pid, ..Config::default() }, &[Stream::new(0x100, Codec::H264)]).unwrap();
