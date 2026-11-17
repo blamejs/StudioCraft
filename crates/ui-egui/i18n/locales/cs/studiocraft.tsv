@@ -1,0 +1,409 @@
+# StudioCraft, Czech.
+# Columns: context, source text, translation. Rows not listed here show in English.
+@id	language.name	Čeština
+	a camera was not found	kamera nebyla nalezena
+	A recording, stream or replay buffer is running. Exiting stops it; a recording is finished and saved first, and the replay buffer's unsaved video is lost.	Probíhá nahrávání, vysílání nebo běží vyrovnávací paměť záznamu. Ukončením se zastaví; nahrávka se nejprve dokončí a uloží, neuložené video z vyrovnávací paměti záznamu se ztratí.
+	About StudioCraft	O aplikaci StudioCraft
+	About {app}	O aplikaci {app}
+	Add	Přidat
+	Add a filter to change how this source looks or sounds.	Přidejte filtr, který změní obraz nebo zvuk tohoto zdroje.
+	Add a scene	Přidat scénu
+	Add a source	Přidat zdroj
+	Add Scene	Přidat scénu
+	Alignment	Zarovnání
+	Alpha mask (alpha channel)	Maska alfa (kanál alfa)
+	Alpha mask (color channel)	Maska alfa (barevný kanál)
+	Apply	Použít
+	Apply Dock Layout	Použít rozvržení panelů
+	Attack (ms)	Náběh (ms)
+	Audio	Zvuk
+	Audio bitrate	Datový tok zvuku
+	Audio input capture	Zachytávání zvukového vstupu
+	Audio Mixer	Zvukový mixér
+	Audio output capture	Zachytávání zvukového výstupu
+	Audio source actions	Akce zvukových zdrojů
+	available	k dispozici
+	Available Encoders	Dostupné kodéry
+	Background	Pozadí
+	Balanced	Vyvážené
+	Blend (add)	Prolnutí (sčítání)
+	Blend (multiply)	Prolnutí (násobení)
+	Blend (subtract)	Prolnutí (odčítání)
+	Bottom	Dole
+	Brightness	Jas
+	Browse…	Procházet…
+	Camera	Kamera
+	camera access is not allowed in the system's privacy settings	přístup ke kameře není povolen v nastavení soukromí systému
+	Cancel	Zrušit
+	Canvas size	Velikost plátna
+	Capture rate (frames per second)	Rychlost zachytávání (snímků za sekundu)
+	Ceiling (dB)	Horní mez (dB)
+	Center	Na střed
+	Center to Screen	Vystředit na obrazovku
+	Check for updates at start	Při spuštění hledat aktualizace
+	Check for Updates…	Vyhledat aktualizace…
+	Choose in the system picker	Vybrat v systémovém dialogu
+	Chroma key	Chroma key
+	Close	Zavřít
+	Close below (dB)	Práh zavření (dB)
+	Color	Barva
+	Color correction	Korekce barev
+	Color key	Barevný klíč
+	Community	Komunita
+	Compressor	Kompresor
+	Contrast	Kontrast
+	could not connect to the PipeWire sound server	nelze se připojit ke zvukovému serveru PipeWire
+	CPU usage preset (faster uses less CPU)	Předvolba využití CPU (rychlejší využívá méně CPU)
+	Credits	Poděkování
+	Crop and pad	Oříznutí a doplnění okrajů
+	Crop or pad each edge	Oříznout nebo doplnit každý okraj
+	Cut	Střih
+	Cut to Program	Střih do programu
+	Default	Výchozí
+	Defaults	Výchozí hodnoty
+	Delays this source's audio, to line it up with its picture	Zpozdí zvuk tohoto zdroje, aby odpovídal obrazu
+	Device	Zařízení
+	Direction	Směr
+	Discord Server	Server Discord
+	Display	Obrazovka
+	Display capture	Zachytávání obrazovky
+	Dock in the Strip	Ukotvit do pruhu
+	Docks	Panely
+	dropped {dropped}  lagged {lagged}	vynecháno {dropped}  opožděno {lagged}
+	Duplicate	Duplikovat
+	Duplicate…	Duplikovat…
+	Duration	Délka přechodu
+	Ease in	Pozvolný začátek
+	Ease in and out	Pozvolný začátek i konec
+	Ease out	Pozvolný konec
+	Easing	Průběh přechodu
+	Edit	Úpravy
+	Enabled	Zapnuto
+	Encoder queue	Fronta kodéru
+	Ending Stream…	Ukončování vysílání…
+	Equalizer	Ekvalizér
+	Existing Source	Existující zdroj
+	Exit	Ukončit
+	Exit StudioCraft?	Ukončit StudioCraft?
+	Export…	Exportovat…
+	Fade	Prolínačka
+	Fade over 300 ms	Prolínačka za 300 ms
+	Fade through color	Prolínačka přes barvu
+	Failed: {error}	Selhalo: {error}
+	ffmpeg (set its location in Settings › Output) was not found	ffmpeg nebyl nalezen (jeho umístění nastavte v Nastavení › Výstup)
+	ffmpeg on the PATH	ffmpeg z PATH
+	ffmpeg program	Program ffmpeg
+	File	Soubor
+	Filters for '{name}'	Filtry pro „{name}“
+	Filters…	Filtry…
+	Finishing Recording…	Dokončování nahrávky…
+	Fit to Screen	Přizpůsobit obrazovce
+	Font	Písmo
+	Font family	Rodina písma
+	Format	Formát
+	Frame time (average)	Průměrná doba snímku
+	Frame time (last)	Doba posledního snímku
+	Frames drawn	Vykreslené snímky
+	Frames drawn late	Opožděně vykreslené snímky
+	Frames encoded	Zakódované snímky
+	Frames per second	Snímků za sekundu
+	Frames skipped by encoders	Snímky vynechané kodéry
+	Free software under the MIT or Apache 2.0 license.	Svobodný software pod licencí MIT nebo Apache 2.0.
+	From the bottom	Zdola
+	From the left	Zleva
+	From the right	Zprava
+	From the top	Shora
+	Full-Screen Interface	Rozhraní na celou obrazovku
+	Gain	Zesílení
+	Gain (dB)	Zesílení (dB)
+	Gamma	Gama
+	General	Obecné
+	Go Live	Zahájit vysílání
+	H.264 (built in)	H.264 (vestavěný)
+	Height	Výška
+	Help	Nápověda
+	Hide	Skrýt
+	High	Vysoká
+	High (dB)	Výšky (dB)
+	Histogram	Histogram
+	HLS vectorscope	Vektorskop HLS
+	Hold (ms)	Doba podržení (ms)
+	Horizontal speed (px/s)	Vodorovná rychlost (px/s)
+	Hotkeys	Klávesové zkratky
+	Image	Obrázek
+	Image mask	Obrazová maska
+	Import…	Importovat…
+	Key color	Barva klíče
+	Key color spill reduction	Potlačení zbytků klíčové barvy
+	Keyframe interval	Interval klíčových snímků
+	Language	Jazyk
+	Left	Vlevo
+	Licenses	Licence
+	Limit height	Omezit výšku
+	Limit width	Omezit šířku
+	Limiter	Limiter
+	Linear	Lineární
+	LIVE	ŽIVĚ
+	Layouts	Rozvržení
+	Live, {time}	Živě, {time}
+	Lock (it can't be moved in the preview)	Zamknout (v náhledu ho nelze přesunout)
+	Lock Preview	Zamknout náhled
+	Loop	Opakovat
+	Low (dB)	Basy (dB)
+	Maximize	Maximalizovat
+	Media file	Mediální soubor
+	Media files	Mediální soubory
+	Mid (dB)	Středy (dB)
+	Minimize	Minimalizovat
+	Mode	Režim
+	Monitor and output	Odposlech a výstup
+	Monitor off	Odposlech vypnut
+	Monitor only (left out of recordings and streams)	Pouze odposlech (vynecháno z nahrávek a vysílání)
+	Monitoring	Odposlech
+	Monitoring device	Zařízení pro odposlech
+	Move Dock	Přesunout panel
+	Move Left	Přesunout doleva
+	Move Right	Přesunout doprava
+	Move the scene down	Posunout scénu dolů
+	Move the scene up	Posunout scénu nahoru
+	Move the source down	Posunout zdroj dolů
+	Move the source up	Posunout zdroj nahoru
+	Mute	Ztlumit
+	Name	Název
+	New Profile	Nový profil
+	New…	Nový…
+	No audio sources are heard in this scene.	V této scéně není slyšet žádný zvukový zdroj.
+	No contributors listed yet	Zatím nejsou uvedeni žádní přispěvatelé
+	No filters yet.	Zatím žádné filtry.
+	No graphics device: the preview is off	Žádné grafické zařízení: náhled je vypnutý
+	No sources in this scene. Add one with +.	V této scéně nejsou žádné zdroje. Přidejte zdroj pomocí +.
+	Noise gate	Šumová brána
+	None	Žádné
+	not in this ffmpeg	v tomto ffmpeg chybí
+	Opacity (%)	Neprůhlednost (%)
+	Open above (dB)	Práh otevření (dB)
+	Order	Pořadí
+	Outline color	Barva obrysu
+	Outline width	Šířka obrysu
+	Output	Výstup
+	Output Controls	Ovládání výstupu
+	Output gain (dB)	Výstupní zesílení (dB)
+	Output size	Velikost výstupu
+	Parade	Kanály vedle sebe
+	Picture file	Soubor obrázku
+	Pictures	Obrázky
+	Plays this source on the monitoring device chosen in Settings › Audio	Přehrává tento zdroj na zařízení pro odposlech zvoleném v Nastavení › Zvuk
+	Preferences…	Předvolby…
+	Preset (higher is slower and better)	Předvolba (vyšší je pomalejší a kvalitnější)
+	Presets	Předvolby
+	Preview: {name}	Náhled: {name}
+	Primary display	Hlavní obrazovka
+	Profile	Profil
+	Program: {name}	Program: {name}
+	Properties	Vlastnosti
+	Properties for '{name}'	Vlastnosti „{name}“
+	Properties…	Vlastnosti…
+	Quality	Kvalita
+	Quit	Ukončit
+	Ratio	Poměr
+	Read the displays, windows and devices again	Znovu načíst obrazovky, okna a zařízení
+	Reading the lists…	Načítání seznamů…
+	Record	Nahrávat
+	Record and stream scenes built from your screen, windows, cameras, pictures, text and sound.	Nahrávejte a vysílejte scény složené z obrazovky, oken, kamer, obrázků, textu a zvuku.
+	Recording	Nahrávání
+	Recording folder	Složka nahrávek
+	Recording, {time}	Nahrávání, {time}
+	Recordings	Nahrávky
+	Redo	Znovu
+	Refresh Lists	Obnovit seznamy
+	Release (ms)	Uvolnění (ms)
+	Remove	Odebrat
+	Remove Dock Layout	Odebrat rozvržení panelů
+	Remove Layout	Odebrat rozvržení
+	Remove Selected Source	Odebrat vybraný zdroj
+	Remove the selected scene	Odebrat vybranou scénu
+	Remove the selected source from the scene	Odebrat vybraný zdroj ze scény
+	Rename	Přejmenovat
+	Rename…	Přejmenovat…
+	Replay	Zpětný záznam
+	REPLAY	ZPĚTNÝ ZÁZNAM
+	Replay buffer	Vyrovnávací paměť zpětného záznamu
+	Replay Buffer	Vyrovnávací paměť zpětného záznamu
+	Replay buffer length	Délka vyrovnávací paměti zpětného záznamu
+	Replay buffer memory limit	Limit paměti pro vyrovnávací paměť zpětného záznamu
+	Replay buffer, {time}	Vyrovnávací paměť zpětného záznamu, {time}
+	Replay length (seconds)	Délka zpětného záznamu (sekundy)
+	Replay memory limit (MB)	Paměťový limit zpětného záznamu (MB)
+	Report an Issue	Nahlásit problém
+	Reset Docks	Obnovit rozvržení panelů
+	Reset Transform	Obnovit transformaci
+	Resize the dock strip	Změnit velikost pruhu panelů
+	Resize the docks	Změnit velikost panelů
+	Restore	Obnovit
+	Right	Vpravo
+	Rotate 90° Clockwise	Otočit o 90° po směru hodinových ručiček
+	Rotate 90° Counterclockwise	Otočit o 90° proti směru hodinových ručiček
+	Running	Běží
+	Saturation	Sytost
+	Save Dock Layout	Uložit rozvržení panelů
+	Save Dock Layout…	Uložit rozvržení panelů…
+	Save Replay	Uložit zpětný záznam
+	Scene Collection	Kolekce scén
+	Scene {n}	Scéna {n}
+	Scenes	Scény
+	Scope Type	Typ měřiče
+	Scopes	Měřiče obrazu
+	Scroll	Posun
+	Send the preview to the program	Poslat náhled do programu
+	Server	Server
+	Settings	Nastavení
+	sharing stopped	sdílení bylo zastaveno
+	Sharpen	Doostření
+	Sharpness	Ostrost
+	Show	Zobrazit
+	Show an area	Zobrazit oblast
+	Show Recordings	Zobrazit nahrávky
+	Show Scene {n}	Zobrazit scénu {n}
+	Show Settings Folder	Zobrazit složku nastavení
+	Similarity	Podobnost
+	Size	Velikost
+	Smoothness	Hladkost
+	Software (x264)	Softwarový (x264)
+	Source Code	Zdrojový kód
+	Source Properties	Vlastnosti zdroje
+	Sources	Zdroje
+	Sources set to monitoring in their Properties window play on this device.	Zdroje, které mají v okně Vlastnosti nastavený odposlech, hrají na tomto zařízení.
+	Speed	Rychlost
+	Start or Stop Recording	Spustit nebo zastavit nahrávání
+	Start or Stop Replay Buffer	Spustit nebo zastavit vyrovnávací paměť záznamu
+	Start or Stop Streaming	Spustit nebo zastavit vysílání
+	Start Recording	Spustit nahrávání
+	Start Replay Buffer	Spustit vyrovnávací paměť záznamu
+	Start Streaming	Spustit vysílání
+	Starting…	Spouštění…
+	Stats	Statistiky
+	Status Bar	Stavový řádek
+	Stop and Exit	Zastavit a ukončit
+	Stop Recording	Zastavit nahrávání
+	Stop Replay Buffer	Zastavit vyrovnávací paměť záznamu
+	Stop Streaming	Zastavit vysílání
+	Stopped	Zastaveno
+	Stopping Replay Buffer…	Zastavování vyrovnávací paměti záznamu…
+	Stopping…	Zastavování…
+	Stream	Vysílání
+	Stream key	Klíč vysílání
+	Stretch image	Roztáhnout obrázek
+	Stretch to Screen	Roztáhnout na obrazovku
+	Studio	Studio
+	Studio Mode	Režim studia
+	StudioCraft is available under either license, at your option.	StudioCraft můžete používat podle kterékoli z těchto licencí, podle své volby.
+	Swipe	Přisunutí
+	Switch at once	Přepnout okamžitě
+	Sync offset	Posun synchronizace
+	System ({language})	Systém ({language})
+	Takes effect the next time StudioCraft starts.	Projeví se při příštím spuštění StudioCraft.
+	Temperature (K)	Teplota (K)
+	Text	Text
+	the audio capture could not start	zachytávání zvuku nelze spustit
+	the audio capture thread stopped	vlákno zachytávání zvuku se zastavilo
+	the audio format could not be described	nepodařilo se zjistit formát zvuku
+	the audio stream ended	zvukový stream skončil
+	the audio stream failed	zvukový stream selhal
+	the camera capture could not start	zachytávání z kamery nelze spustit
+	the camera is in use by another camera source	kameru používá jiný zdroj kamery
+	the camera is still closing	kamera se stále zavírá
+	the camera offers no format StudioCraft reads	kamera nenabízí žádný formát, který StudioCraft umí číst
+	the camera sends frames that cannot be read	kamera posílá snímky, které nelze přečíst
+	the camera sent no picture	kamera neposlala žádný obraz
+	the camera stopped	kamera se zastavila
+	the camera stopped sending pictures	kamera přestala posílat obraz
+	the camera stopped unexpectedly	kamera se neočekávaně zastavila
+	the choice in the system picker was canceled	výběr v systémovém dialogu byl zrušen
+	the desktop has no screen-cast portal	pracovní prostředí nemá portál pro sdílení obrazovky
+	The interface fonts Inter and JetBrains Mono are under the SIL Open Font License 1.1.	Písma rozhraní Inter a JetBrains Mono jsou pod licencí SIL Open Font License 1.1.
+	The licenses of the third-party crates StudioCraft uses are checked by `cargo xtask licenses`.	Licence crate knihoven třetích stran, které StudioCraft používá, kontroluje `cargo xtask licenses`.
+	The scope could not be computed: {error}	Nepodařilo se vypočítat údaje měřiče: {error}
+	The scopes need a graphics device to read the program.	Měřiče obrazu potřebují ke čtení výstupního obrazu grafické zařízení.
+	the screen capture could not start	zachytávání obrazovky nelze spustit
+	the screen capture failed	zachytávání obrazovky selhalo
+	This filter has no settings.	Tento filtr nemá žádná nastavení.
+	this is not supported on this system yet	v tomto systému zatím není podporováno
+	Threshold (dB)	Práh (dB)
+	Tint	Odstín
+	Tools	Nástroje
+	Top	Nahoře
+	Transition	Přechod
+	Transition Controls	Ovládání přechodu
+	Transition settings	Nastavení přechodu
+	Transition to Program	Přechod do programu
+	Type	Typ
+	Type shortcuts such as Ctrl+1 or Shift+F5; separate several with commas.	Zadejte zkratky, například Ctrl+1 nebo Shift+F5; více zkratek oddělte čárkami.
+	Undo	Zpět
+	Undock	Uvolnit
+	Updates	Aktualizace
+	Use system title bar	Použít systémové záhlaví okna
+	Username	Uživatelské jméno
+	Version {version} ({os} {arch})	Verze {version} ({os} {arch})
+	Vertical speed (px/s)	Svislá rychlost (px/s)
+	Video	Video
+	Video bitrate	Datový tok videa
+	Video encoder	Kodér videa
+	Video settings can't change while recording, streaming or running the replay buffer.	Nastavení videa nelze měnit během nahrávání, vysílání nebo běhu vyrovnávací paměti záznamu.
+	View	Zobrazení
+	waiting for a choice in the system picker	čekání na výběr v systémovém dialogu
+	waiting for the camera	čekání na kameru
+	Waiting for the program picture…	Čekání na obraz programu…
+	waiting to open the camera again	čekání na opětovné otevření kamery
+	Waveform	Průběh signálu
+	Website	Web
+	Width	Šířka
+	Window	Okno
+	Window capture	Zachytávání okna
+	Your Videos folder	Vaše složka Videa
+	YUV vectorscope	Vektorskop YUV
+	{device} (not connected)	{device} (nepřipojeno)
+	{encoder} (not in this ffmpeg)	{encoder} (v tomto ffmpeg chybí)
+	{program} did not report its version	{program} neohlásil svou verzi
+	Compact (small files)	Kompaktní (malé soubory)
+	Duplicate Profile	Duplikovat profil
+	Duplicate Scene Collection	Duplikovat kolekci scén
+	Lossless (very large files)	Bezeztrátová (velmi velké soubory)
+	Move Down	Posunout dolů
+	Move to Bottom	Přesunout na konec
+	Move to Top	Přesunout na začátek
+	Move Up	Posunout nahoru
+	New Scene Collection	Nová kolekce scén
+	Pristine (large files)	Bezchybná (velké soubory)
+	Rename Profile	Přejmenovat profil
+	Rename Scene Collection	Přejmenovat kolekci scén
+	Unlock	Odemknout
+	Unmute	Zrušit ztlumení
+@msg	A plug-in could not be loaded: {error}	Zásuvný modul nelze načíst: {error}
+@msg	Audio monitoring could not start: {error}	Odposlech zvuku nelze spustit: {error}
+@msg	Audio monitoring stopped: {error}	Odposlech zvuku se zastavil: {error}
+@msg	Could not check for updates: {error}	Aktualizace nelze vyhledat: {error}
+@msg	Exported the scene collection to {path}	Kolekce scén byla exportována do {path}
+@msg	Imported the scene collection `{name}`	Kolekce scén `{name}` byla importována
+@msg	No file dialog could be shown: {error}	Dialog pro výběr souboru nelze zobrazit: {error}
+@msg	Recording saved to {path}	Nahrávka byla uložena do {path}
+@msg	Replay saved to {path}	Zpětný záznam byl uložen do {path}
+@msg	The compositor thread could not start: {error}	Vlákno skládání obrazu nelze spustit: {error}
+@msg	The preferences could not be saved: {error}	Předvolby nelze uložit: {error}
+@msg	The profile could not be saved: {error}	Profil nelze uložit: {error}
+@msg	The recording could not be finished	Nahrávku nelze dokončit
+@msg	The recording could not be finished: {error}	Nahrávku nelze dokončit: {error}
+@msg	The recording stopped: {error}	Nahrávání se zastavilo: {error}
+@msg	The replay buffer could not be stopped	Vyrovnávací paměť záznamu nelze zastavit
+@msg	The replay buffer could not be stopped: {error}	Vyrovnávací paměť záznamu nelze zastavit: {error}
+@msg	The replay buffer stopped	Vyrovnávací paměť záznamu se zastavila
+@msg	The replay buffer stopped: {error}	Vyrovnávací paměť záznamu se zastavila: {error}
+@msg	The replay could not be saved	Zpětný záznam nelze uložit
+@msg	The replay could not be saved: {error}	Zpětný záznam nelze uložit: {error}
+@msg	The scene collection could not be saved: {error}	Kolekci scén nelze uložit: {error}
+@msg	The scopes could not start: {error}	Měřiče obrazu nelze spustit: {error}
+@msg	The stream could not be finished	Vysílání nelze ukončit
+@msg	The stream could not be finished: {error}	Vysílání nelze ukončit: {error}
+@msg	The stream ended	Vysílání skončilo
+@msg	The stream stopped: {error}	Vysílání se zastavilo: {error}
+@msg	ffmpeg at {path} was not found	ffmpeg v umístění {path} nebyl nalezen
+menu	Transform	Transformace
