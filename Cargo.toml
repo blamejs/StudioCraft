@@ -12,6 +12,7 @@ license = "MIT OR Apache-2.0"
 
 [workspace.dependencies]
 # internal
+craft-ease = { path = "crates/craft-ease" }
 studiocraft-model = { path = "crates/model" }
 studiocraft-media = { path = "crates/media" }
 studiocraft-plugin = { path = "crates/plugin" }

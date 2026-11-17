@@ -1146,6 +1146,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-ease"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "craft-font-catalog"
 version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=7780b4f58ec3d56b1f908c8fa3b1258fabae3880#7780b4f58ec3d56b1f908c8fa3b1258fabae3880"
@@ -5054,6 +5062,7 @@ dependencies = [
 name = "studiocraft-plugin"
 version = "0.1.0"
 dependencies = [
+ "craft-ease",
  "serde_json",
  "studiocraft-media",
  "studiocraft-model",
