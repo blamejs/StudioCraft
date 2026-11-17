@@ -11,7 +11,7 @@
 
 use std::fmt;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, OnceLock};
 
 #[cfg(not(target_arch = "wasm32"))]
 use std::time::{Duration, Instant};
@@ -72,10 +72,18 @@ impl fmt::Display for Fault {
 /// The message an out-of-memory [`Fault::Error`] carries (wgpu's `Error::OutOfMemory`).
 pub const OUT_OF_MEMORY: &str = "Out of Memory";
 
+/// The state wgpu's callbacks write and callers read, without a lock: flags in atomics and each
+/// fault's text in a [`OnceLock`], whose `get` does not wait. A `set` that races another `set`
+/// of the same slot waits only for that one store.
 #[derive(Default)]
 struct Inner {
     faulted: AtomicBool,
-    fault: Mutex<Option<Fault>>,
+    /// The first device loss.
+    lost: OnceLock<String>,
+    /// An out-of-memory error was seen.
+    out_of_memory: AtomicBool,
+    /// The first other error.
+    error: OnceLock<String>,
     errors: AtomicU64,
     /// wgpu itself reported the device lost (see [`DeviceHealth::device_lost`]).
     device_lost: AtomicBool,
@@ -153,13 +161,14 @@ impl DeviceHealth {
     /// and a later out-of-memory error replaces another error, so a caller can still free memory
     /// and recover after a validation error in the same frame.
     pub fn mark(&self, fault: Fault) {
-        let mut slot = self.0.fault.lock().unwrap_or_else(PoisonError::into_inner);
-        let replace = match slot.as_ref() {
-            None => true,
-            Some(old) => !old.is_lost() && (fault.is_lost() || (fault.is_out_of_memory() && !old.is_out_of_memory())),
-        };
-        if replace {
-            *slot = Some(fault);
+        if fault.is_out_of_memory() {
+            self.0.out_of_memory.store(true, Ordering::Release);
+        } else {
+            // A slot already set keeps its first text.
+            let _ = match fault {
+                Fault::Lost(text) => self.0.lost.set(text),
+                Fault::Error(text) => self.0.error.set(text),
+            };
         }
         self.0.faulted.store(true, Ordering::Release);
     }
@@ -174,7 +183,13 @@ impl DeviceHealth {
         if self.is_ok() {
             return None;
         }
-        self.0.fault.lock().unwrap_or_else(PoisonError::into_inner).clone()
+        if let Some(text) = self.0.lost.get() {
+            return Some(Fault::Lost(text.clone()));
+        }
+        if self.0.out_of_memory.load(Ordering::Acquire) {
+            return Some(Fault::Error(OUT_OF_MEMORY.into()));
+        }
+        self.0.error.get().map(|text| Fault::Error(text.clone()))
     }
 
     /// Uncaptured wgpu errors seen so far.
@@ -442,6 +457,21 @@ mod tests {
         h.mark(Fault::Error(OUT_OF_MEMORY.into()));
         assert!(h.fault().is_some_and(|f| f.is_lost()));
         assert!(!Fault::Lost("out of memory".into()).is_out_of_memory());
+    }
+
+    #[test]
+    fn marks_from_several_threads_keep_the_loss() {
+        let h = DeviceHealth::new();
+        let threads: Vec<_> = (0..8)
+            .map(|i| {
+                let h = h.clone();
+                std::thread::spawn(move || h.mark(if i == 5 { Fault::Lost("reset".into()) } else { Fault::Error(format!("e{i}")) }))
+            })
+            .collect();
+        for t in threads {
+            t.join().unwrap();
+        }
+        assert_eq!(h.fault(), Some(Fault::Lost("reset".into())));
     }
 
     #[test]
