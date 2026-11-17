@@ -82,7 +82,7 @@ struct PacketQueue {
     /// Bytes of the packets in the queue and of those the file thread has taken and not yet
     /// written ([`PacketQueue::written`]).
     bytes: AtomicUsize,
-    /// Decoding time of the last packet taken, or of the first one queued before any was taken.
+    /// Order time of the newest packet taken, or of the first one queued before any was taken.
     taken_ns: AtomicI64,
     max_bytes: usize,
     max_span_ns: i64,
@@ -114,7 +114,9 @@ impl PacketQueue {
     /// Take the oldest packet. Its bytes count against the limit until [`PacketQueue::written`].
     fn pop(&self) -> Option<Item> {
         let item = self.q.pop()?;
-        self.taken_ns.store(item.order_ns, Ordering::Relaxed);
+        // The two streams arrive interleaved, so a packet taken can be older than one taken
+        // before it; the span counts from the newest.
+        self.taken_ns.fetch_max(item.order_ns, Ordering::Relaxed);
         Some(item)
     }
 

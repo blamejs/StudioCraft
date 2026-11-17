@@ -251,6 +251,13 @@ fn the_packet_queue_is_bounded_by_bytes_and_by_media_time() {
     assert!(q.try_push(item(Track::Audio, 3_000_000_001, 1)).is_err(), "the span counts from the last packet taken");
     assert!(q.pop().is_some());
     assert!(q.try_push(item(Track::Audio, 3_000_000_001, 1)).is_ok(), "the span counts from the last packet taken");
+    // Sound ahead of the pictures: a late video packet taken after newer sound does not move
+    // the span's start back.
+    let q = PacketQueue::new(1 << 20, 3_000_000_000);
+    assert!(q.try_push(item(Track::Audio, 5_000_000_000, 1)).is_ok());
+    assert!(q.try_push(item(Track::Video, 2_000_000_000, 1)).is_ok());
+    assert!(q.pop().is_some() && q.pop().is_some());
+    assert!(q.try_push(item(Track::Audio, 5_500_000_000, 1)).is_ok(), "the span counts from the newest packet taken");
 }
 
 #[test]
