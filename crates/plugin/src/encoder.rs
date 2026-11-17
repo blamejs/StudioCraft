@@ -4,7 +4,8 @@
 //! program the user installs, and describes itself as the codec arguments that program takes
 //! ([`Encoder::ffmpeg`], [`FfmpegEncoder`]). Hardware encoders (NVENC, AMF, Quick Sync, Media
 //! Foundation) are ffmpeg encoders whose arguments name ffmpeg's hardware codec. An encoder without
-//! an ffmpeg form is built in, and runs only where the output says it can ([`EncoderEnv::builtin`]).
+//! an ffmpeg form is built in: it runs in the app's own process as a [`VideoSession`]
+//! ([`Encoder::open`]), and only where the output says it can ([`EncoderEnv::builtin`]).
 
 use studiocraft_model::Settings;
 
@@ -100,6 +101,37 @@ impl Availability {
     }
 }
 
+/// What a built-in video encoder is opened for: NV12 frames of this size at this rate.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct VideoParams {
+    pub width: u32,
+    pub height: u32,
+    pub fps_num: u32,
+    pub fps_den: u32,
+    pub rate: RateControl,
+}
+
+/// One compressed picture. `pts` and `dts` count frames from the first frame given to the session.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Packet {
+    pub data: Vec<u8>,
+    pub pts: i64,
+    pub dts: i64,
+    pub keyframe: bool,
+}
+
+/// A running built-in video encoder. Frames go in display order and packets come out in decoding
+/// order.
+pub trait VideoSession: Send {
+    /// The setup bytes a container stores with the track (for H.264 the `avcC` record).
+    fn codec_private(&self) -> Vec<u8>;
+    /// Encode `nv12`, a tightly packed NV12 frame of the opened size, shown at frame `pts`. The
+    /// packets that are ready are appended to `out`.
+    fn encode(&mut self, nv12: &[u8], pts: i64, out: &mut Vec<Packet>) -> Result<(), PluginError>;
+    /// Append the packets the encoder still holds to `out`. No frame can follow.
+    fn flush(&mut self, out: &mut Vec<Packet>);
+}
+
 /// An encoder that runs inside the ffmpeg program.
 pub trait FfmpegEncoder {
     /// The ffmpeg codec this encoder uses (checked against `ffmpeg -encoders` before a start).
@@ -118,6 +150,12 @@ pub trait Encoder: Plugin {
     /// The ffmpeg form of this encoder; `None` for a built-in encoder.
     fn ffmpeg(&self) -> Option<&dyn FfmpegEncoder> {
         None
+    }
+    /// Start a built-in video encoder with `settings` (its schema's values) for `params`. An
+    /// ffmpeg encoder has no session of its own.
+    fn open(&self, settings: &Settings, params: &VideoParams) -> Result<Box<dyn VideoSession>, PluginError> {
+        let _ = (settings, params);
+        Err(PluginError::Unavailable(format!("{} runs only inside the ffmpeg program", self.name())))
     }
     /// Whether this encoder can run in an output that offers `env`.
     fn availability(&self, env: &EncoderEnv) -> Availability {

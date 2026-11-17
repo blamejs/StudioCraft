@@ -189,6 +189,76 @@ fn records_a_playable_file_with_video_and_audio() {
 }
 
 #[test]
+fn a_built_in_recording_plays_in_ffmpeg() {
+    // An independent player reads the file the built-in encoders write; machines without ffmpeg
+    // pass without checking.
+    let Ok(program) = ffmpeg::locate("") else { return };
+    let dir = temp_dir("record-built-in");
+    let file = dir.join("take.mkv");
+    let mut j = job(PathBuf::new(), RateControl::Quality(23));
+    j.video_encoder = Arc::new(studiocraft_encode::H264);
+    j.video_encoder_settings = Settings::new();
+    let mut out = Recording.start(&Settings::new().with("path", file.to_string_lossy().as_ref()), j).unwrap();
+    feed(out.as_ref(), 1.5);
+    out.stop().unwrap();
+    let (frames, has_audio) = probe(&program, &file);
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!((13..=17).contains(&frames), "{frames} frames for 1.5 s at 10 per second");
+    assert!(has_audio);
+}
+
+#[test]
+fn the_built_in_encoder_is_listed_after_the_ffmpeg_ones() {
+    use studiocraft_plugin::Encoder;
+    let mut reg = Registry::new();
+    register_all(&mut reg).unwrap();
+    let ids: Vec<&str> = reg.encoders().iter().map(|e| e.id()).collect();
+    assert_eq!(ids.last(), Some(&"h264"), "{ids:?}");
+    let h264 = reg.encoder("h264").unwrap();
+    assert!(h264.ffmpeg().is_none());
+    assert_eq!(reg.describe()["encoders"].as_array().and_then(|a| a.last()).map(|e| e["builtin"].clone()), Some(true.into()));
+    let params = studiocraft_plugin::VideoParams { width: 64, height: 48, fps_num: 30, fps_den: 1, rate: RateControl::Quality(23) };
+    for e in encoders::all() {
+        let Err(err) = e.open(&Settings::new(), &params) else { panic!("{} opened a session", e.id()) };
+        assert!(matches!(err, PluginError::Unavailable(_)) && err.to_string().contains("inside the ffmpeg program"), "{err}");
+    }
+}
+
+#[test]
+fn a_stream_refuses_the_built_in_encoder() {
+    let mut j = job(PathBuf::from("no-such-ffmpeg"), RateControl::Bitrate { kbps: 1000, keyframe_s: 2 });
+    j.video_encoder = Arc::new(studiocraft_encode::H264);
+    let Err(e) = Stream.start(&Settings::new().with("server", "rtmp://127.0.0.1:9/live"), j) else { panic!("the stream started") };
+    assert!(e.to_string().contains("records files only"), "{e}");
+}
+
+#[test]
+fn a_frame_of_another_size_fails_the_recording() {
+    let mut jobs = Vec::new();
+    let mut built_in = job(PathBuf::new(), RateControl::Quality(23));
+    built_in.video_encoder = Arc::new(studiocraft_encode::H264);
+    built_in.video_encoder_settings = Settings::new();
+    jobs.push(("built-in", built_in));
+    // The ffmpeg writer is checked where ffmpeg is installed.
+    if let Ok(program) = ffmpeg::locate("") {
+        jobs.push(("ffmpeg", job(program, RateControl::Quality(23))));
+    }
+    for (name, j) in jobs {
+        let dir = temp_dir(&format!("record-wrong-size-{name}"));
+        let file = dir.join("take.mkv");
+        let mut out = Recording.start(&Settings::new().with("path", file.to_string_lossy().as_ref()), j).unwrap();
+        let frames = Pool::new(1, VideoFrame::default);
+        let mut f = frames.take();
+        assert!(f.reshape(32, 24, PixelFormat::Nv12));
+        out.video().push(Arc::new(f));
+        let r = out.stop();
+        let _ = std::fs::remove_dir_all(&dir);
+        let Err(e) = r else { panic!("{name}: the recording finished") };
+        assert!(e.to_string().contains("does not have the output's size"), "{name}: {e}");
+    }
+}
+
+#[test]
 fn a_recording_stopped_at_once_is_still_finished() {
     let Ok(program) = ffmpeg::locate("") else { return };
     let dir = temp_dir("record-at-once");

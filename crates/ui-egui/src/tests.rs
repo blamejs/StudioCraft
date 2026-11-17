@@ -420,6 +420,28 @@ fn profiles_keep_their_own_settings() {
 }
 
 #[test]
+fn available_encoders_lists_the_built_in_one_without_ffmpeg() {
+    let mut a = app();
+    let ctx = egui::Context::default();
+    let dir = temp_dir("no-ffmpeg");
+    let mut p = a.studio().profile().clone();
+    p.output.ffmpeg_path = dir.join("ffmpeg-missing").to_string_lossy().into_owned();
+    a.studio.set_profile(p).unwrap();
+    run(&mut a, &ctx, "tools.encoders", json!({})).unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
+    let list = a.encoders.clone().unwrap();
+    assert!(list.iter().any(|(name, _, ok)| name == "H.264 (built in)" && *ok), "{list:?}");
+    assert!(list.iter().filter(|(name, _, _)| name != "H.264 (built in)").all(|(_, _, ok)| !ok), "{list:?}");
+    let missing = a.encoders_ffmpeg.clone().map(|m| (m.english(), m.shown_in(&crate::i18n::I18N, crate::i18n::I18N.from_code("de").unwrap())));
+    let (english, german) = missing.unwrap_or_default();
+    assert!(english.starts_with("ffmpeg at ") && english.contains("ffmpeg-missing") && english.ends_with(" was not found"), "{english:?}");
+    assert!(german.contains("ffmpeg-missing") && german.ends_with("wurde nicht gefunden"), "{german:?}");
+    // Without a configured path the error's own text is shown, and its plain row translates it.
+    let unset = Msg::plain("ffmpeg (set its location in Settings › Output) was not found");
+    assert!(unset.shown_in(&crate::i18n::I18N, crate::i18n::I18N.from_code("de").unwrap()).starts_with("ffmpeg wurde nicht gefunden"));
+}
+
+#[test]
 fn dock_and_view_toggles_flip_the_preferences() {
     let mut a = app();
     let ctx = egui::Context::default();

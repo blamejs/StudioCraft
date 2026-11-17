@@ -19,6 +19,7 @@ studiocraft-plugin = { path = "crates/plugin" }
 studiocraft-engine = { path = "crates/engine" }
 studiocraft-render = { path = "crates/render" }
 studiocraft-platform = { path = "crates/platform" }
+studiocraft-encode = { path = "crates/encode" }
 studiocraft-sources = { path = "crates/sources" }
 studiocraft-outputs = { path = "crates/outputs" }
 studiocraft-studio = { path = "crates/studio" }
@@ -38,6 +39,8 @@ log = "0.4"
 base64 = "0.22"
 # Bounded lock-free queues between the capture, compositor, mixer and encoder threads.
 crossbeam-queue = "0.3"
+# A 128-bit atomic for the position the two recording writers share.
+portable-atomic = "1"
 # Local time for recording file names.
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 # The user's Videos folder for recordings.
@@ -85,12 +88,15 @@ craft-color = { git = "https://github.com/storytold/craft-libs", rev = "7780b4f5
 craft-atomic = { git = "https://github.com/storytold/craft-libs", rev = "7780b4f58ec3d56b1f908c8fa3b1258fabae3880" }
 craft-fonts-build = { git = "https://github.com/storytold/craft-libs", rev = "7780b4f58ec3d56b1f908c8fa3b1258fabae3880" }
 craft-i18n = { git = "https://github.com/storytold/craft-libs", rev = "7780b4f58ec3d56b1f908c8fa3b1258fabae3880" }
-# Tests only: the demuxers that read back what the writers here produce.
-craft-media = { git = "https://github.com/storytold/craft-libs", rev = "7780b4f58ec3d56b1f908c8fa3b1258fabae3880", default-features = false }
+# The Matroska writer for recordings, and in tests the demuxers that read back what the writers here produce.
+craft-media ={ git = "https://github.com/storytold/craft-libs", rev = "7780b4f58ec3d56b1f908c8fa3b1258fabae3880", default-features = false }
 # Help › Check for Updates, the check at start and finishing an update the app installed itself.
 craft-update = { git = "https://github.com/storytold/craft-libs", rev = "7780b4f58ec3d56b1f908c8fa3b1258fabae3880", features = ["egui"] }
 # Who draws the window frame (the desktop or the app), and the menu strip as the title bar.
 craft-window = { git = "https://github.com/storytold/craft-libs", rev = "7780b4f58ec3d56b1f908c8fa3b1258fabae3880", features = ["egui"] }
+# The built-in H.264 encoder (and its decoder, for tests) and the AAC encoder.
+craft-video = { git = "https://github.com/storytold/craft-libs", rev = "7780b4f58ec3d56b1f908c8fa3b1258fabae3880", default-features = false, features = ["h264-encode", "threads"] }
+craft-audio = { git = "https://github.com/storytold/craft-libs", rev = "7780b4f58ec3d56b1f908c8fa3b1258fabae3880", default-features = false, features = ["aac-encode"] }
 
 # egui 0.37 and winit: the suite's forks (storytold/egui, storytold/winit), as craft-libs pins them.
 [patch.crates-io]

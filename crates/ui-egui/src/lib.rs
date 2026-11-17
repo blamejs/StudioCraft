@@ -165,6 +165,8 @@ pub struct StudioApp {
     /// The Licenses window, with the license it shows.
     licenses: Option<credits::License>,
     encoders: Option<Vec<(String, String, bool)>>,
+    /// Why the Available Encoders window lists no ffmpeg encoder: the ffmpeg program was not found.
+    encoders_ffmpeg: Option<Msg>,
     /// The Scopes window's feed and thread while it is open.
     scopes: Option<scopes::Scopes>,
     confirm_exit: bool,
@@ -268,6 +270,7 @@ impl StudioApp {
             credit_names: credits::NameMode::default(),
             licenses: None,
             encoders: None,
+            encoders_ffmpeg: None,
             scopes: None,
             confirm_exit: false,
             exit_confirmed: false,
@@ -747,9 +750,17 @@ impl StudioApp {
                 }
             },
             "tools.encoders" => {
-                let found = studiocraft_platform::ffmpeg::locate(&self.studio.profile().output.ffmpeg_path).map_err(|e| e.to_string())?;
-                let offered = studiocraft_platform::ffmpeg::encoders(&found);
-                let env = studiocraft_plugin::EncoderEnv::ffmpeg(&offered);
+                // Without the ffmpeg program only the built-in encoders are available, and the
+                // window says why.
+                let configured = self.studio.profile().output.ffmpeg_path.trim().to_string();
+                let (offered, missing) = match studiocraft_platform::ffmpeg::locate(&configured) {
+                    Ok(found) => (studiocraft_platform::ffmpeg::encoders(&found), None),
+                    Err(_) if !configured.is_empty() => (Vec::new(), Some(tmsg!("ffmpeg at {path} was not found", path = configured))),
+                    Err(e) => (Vec::new(), Some(Msg::plain(e.to_string()))),
+                };
+                self.encoders_ffmpeg = missing;
+                // Recordings run the built-in encoders.
+                let env = studiocraft_plugin::EncoderEnv { builtin: true, ..studiocraft_plugin::EncoderEnv::ffmpeg(&offered) };
                 let list = self
                     .studio
                     .registry()
@@ -757,7 +768,8 @@ impl StudioApp {
                     .iter()
                     .map(|e| {
                         let codec = e.ffmpeg().map_or(e.codec().id(), |f| f.ffmpeg_codec());
-                        // Only an encoder this ffmpeg is known to run is listed as available.
+                        // Only a built-in encoder, or one this ffmpeg is known to run, is listed as
+                        // available.
                         let ok = e.availability(&env) == studiocraft_plugin::Availability::Ready;
                         (e.name().to_string(), codec.to_string(), ok)
                     })
@@ -1496,7 +1508,11 @@ impl StudioApp {
 
         if let Some(list) = &self.encoders {
             let mut open = true;
+            let missing = self.encoders_ffmpeg.as_ref().map(Msg::shown);
             egui::Window::new(tid!("tools.encoders", "Available Encoders")).id(egui::Id::unique("encoders")).open(&mut open).show(ctx, |ui| {
+                if let Some(missing) = missing {
+                    ui.colored_label(ui.visuals().warn_fg_color, missing);
+                }
                 egui::Grid::new("enc-grid").num_columns(3).striped(true).show(ui, |ui| {
                     for (name, codec, ok) in list {
                         ui.label(tl!(name));

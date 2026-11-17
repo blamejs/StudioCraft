@@ -21,6 +21,7 @@
 	available	verfügbar
 	Available Encoders	Verfügbare Encoder
 	Background	Hintergrund
+	Balanced	Ausgewogen
 	Brightness	Helligkeit
 	Browse…	Durchsuchen…
 	Cancel	Abbrechen
@@ -95,6 +96,7 @@
 	Gain (dB)	Verstärkung (dB)
 	General	Allgemein
 	Go Live	Live gehen
+	H.264 (built in)	H.264 (integriert)
 	Height	Höhe
 	Help	Hilfe
 	Hide	Ausblenden
@@ -202,6 +204,7 @@
 	Source Code	Quellcode
 	Source Properties	Quelleneigenschaften
 	Sources	Quellen
+	Speed	Geschwindigkeit
 	Start or Stop Recording	Aufnahme starten oder stoppen
 	Start or Stop Streaming	Stream starten oder stoppen
 	Start Recording	Aufnahme starten
@@ -272,4 +275,5 @@
 @msg	The stream could not be finished: {error}	Der Stream konnte nicht abgeschlossen werden: {error}
 @msg	The stream ended	Der Stream wurde beendet
 @msg	The stream stopped: {error}	Der Stream wurde abgebrochen: {error}
+@msg	ffmpeg at {path} was not found	ffmpeg unter {path} wurde nicht gefunden
 menu	Transform	Transformieren

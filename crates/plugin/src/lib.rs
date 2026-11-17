@@ -11,7 +11,7 @@
 //! | [`Source`] | its own thread ([`SourceInstance`]) | video frames into a mailbox, audio blocks into a queue |
 //! | [`Filter`] | the compositor (video) or mixer (audio) thread | a GPU [`VideoEffect`] pass, or processed audio |
 //! | [`Transition`] | the compositor thread | a GPU blend between two scenes |
-//! | [`Encoder`] | inside an output's encoder process | codec arguments for a rate control |
+//! | [`Encoder`] | an output's encoder thread, or inside its ffmpeg process | packets ([`VideoSession`]), or codec arguments for a rate control |
 //! | [`Output`] | its own thread ([`OutputInstance`]) | a recording file or a stream |
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
@@ -23,7 +23,7 @@ mod source;
 mod transition;
 
 pub use craft_ease::Easing;
-pub use encoder::{Availability, Codec, Encoder, EncoderEnv, EncoderKind, FfmpegEncoder, RateControl};
+pub use encoder::{Availability, Codec, Encoder, EncoderEnv, EncoderKind, FfmpegEncoder, Packet, RateControl, VideoParams, VideoSession};
 pub use filter::{Filter, FilterInstance, FilterTarget, VIDEO_EFFECT_PARAMS, VideoEffect};
 pub use output::{Output, OutputInstance, OutputJob, OutputStatus, VideoFormat};
 pub use registry::Registry;

@@ -25,6 +25,7 @@ pub const TABLE: &[(&str, Class)] = &[
     ("engine", Class::Layer(2)),
     ("render", Class::Layer(2)),
     ("platform", Class::Layer(2)),
+    ("encode", Class::Layer(2)),
     ("sources", Class::Layer(3)),
     ("outputs", Class::Layer(3)),
     ("studio", Class::Layer(4)),

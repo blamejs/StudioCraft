@@ -23,8 +23,9 @@ crate in the same layer. `cargo xtask layers` checks this against the table in
 | L2 | `studiocraft-engine` | Commands with stable ids, undo and redo, source threads, the audio mixer thread and the frame scheduler. |
 | L2 | `studiocraft-render` | The wgpu compositor: scenes, filters, transitions, and frame conversion for encoders. |
 | L2 | `studiocraft-platform` | Display, window and audio capture, locating ffmpeg, and opening folders and links. |
+| L2 | `studiocraft-encode` | The built-in encoders: H.264 video from NV12 frames and AAC audio from the mixer's blocks. |
 | L3 | `studiocraft-sources` | The built-in sources and filters. |
-| L3 | `studiocraft-outputs` | Recording and streaming through an ffmpeg process, and the video encoders. |
+| L3 | `studiocraft-outputs` | Recording and streaming through an ffmpeg process, Matroska recording through the built-in encoders, and the video encoders. |
 | L4 | `studiocraft-studio` | The running studio: sources, mixer, compositor, transitions and outputs behind one command interface. |
 | L5 | `studiocraft-ui-egui` | The window: menus, preview, docks, properties, filters and settings. |
 | L5 | `studiocraft-mcp` | The MCP server: its tools, resources, resource templates, prompts and completions, a studio in the same process without a window (with its file roots and streaming gate), and the control channel client that sends calls to the app. |

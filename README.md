@@ -29,6 +29,7 @@ and Linux.
 - **Recording and streaming.** MKV, MP4 or MOV recordings at four quality levels, and RTMP streams
   at a constant bitrate. Encoding runs in a separately installed `ffmpeg` with the software x264
   encoder or a hardware encoder (NVIDIA NVENC, AMD AMF, Intel Quick Sync, Windows Media Foundation).
+  The built-in H.264 and AAC encoders record MKV files without `ffmpeg`.
   Settings › Output and Settings › Stream show the chosen encoder's settings, such as the x264 and
   NVENC presets. Tools › Available Encoders lists which encoders the installed `ffmpeg` offers.
 - **Profiles and scene collections.** Keep several sets of stream and output settings, and several
@@ -101,7 +102,8 @@ repository is used. Both paths must be absolute.
 CRAFT_I18N_DIR=/path/to/craft-i18n CRAFT_FONTS_DIR=/path/to/craft-fonts cargo run --release
 ```
 
-Recording and streaming need `ffmpeg` on the `PATH`, or its location in Settings › Output.
+Streaming, and recording with an encoder other than H.264 (built in), need `ffmpeg` on the
+`PATH`, or its location in Settings › Output.
 
 ## Running
 

@@ -1,6 +1,6 @@
 [package]
 name = "studiocraft-outputs"
-description = "Recording and streaming through an ffmpeg process, and the video encoders it offers"
+description = "Recording and streaming through an ffmpeg process with the video encoders it offers, and Matroska recording through the built-in encoders"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -11,7 +11,16 @@ studiocraft-model.workspace = true
 studiocraft-media.workspace = true
 studiocraft-plugin.workspace = true
 studiocraft-platform.workspace = true
+studiocraft-encode.workspace = true
+craft-media = { workspace = true, features = ["matroska"] }
+crossbeam-queue.workspace = true
 log.workspace = true
+portable-atomic.workspace = true
+
+[dev-dependencies]
+# Independent decoders read back what a built-in recording writes.
+craft-video = { workspace = true, features = ["h264-decode"] }
+craft-audio = { workspace = true, features = ["aac-decode"] }
 
 [lints]
 workspace = true
