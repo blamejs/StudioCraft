@@ -132,10 +132,10 @@ icon. The constants are `BUNDLE_ID` and `APP_ID` in `crates/ui-egui/src/lib.rs`.
 
 The icon files are in `assets/app-icon`, and `ASSETS.md` lists each one. A Linux or FreeBSD
 package installs each file in `assets/app-icon/hicolor/<size>/apps/` as
-`share/icons/hicolor/<size>/apps/ai.storyteller.studiocraft.png`, for every size from 16 to 512,
-and `studiocraft.svg` as `share/icons/hicolor/scalable/apps/ai.storyteller.studiocraft.svg`. The
-macOS package makes its `.icns` from `studiocraft-macos-512.png`, and the Windows package makes
-the installer's `.ico` from the PNG files.
+`share/icons/hicolor/<size>/apps/ai.storyteller.studiocraft.png`, for every size from 16 to 512.
+The icon is a raster drawing, so the packages install no scalable icon. The macOS package copies
+`studiocraft.icns` into the app bundle as `StudioCraft.icns`, and the Windows package uses
+`studiocraft.ico` as the installer's icon.
 The app sets its window icon itself (`crates/ui-egui/src/app_icon.rs`), and the updater installs
 the 128 px icon beside the menu entry it writes for an AppImage.
 
