@@ -360,6 +360,20 @@
 	Hardware acceleration	Hardwareversnelling
 	Power saving	Energiebesparing
 	Software (slower)	Software (langzamer)
+	Compact (small files)	Compact (kleine bestanden)
+	Duplicate Profile	Profiel dupliceren
+	Duplicate Scene Collection	Scèneverzameling dupliceren
+	Lossless (very large files)	Verliesvrij (zeer grote bestanden)
+	Move Down	Omlaag
+	Move to Bottom	Helemaal omlaag
+	Move to Top	Helemaal omhoog
+	Move Up	Omhoog
+	New Scene Collection	Nieuwe scèneverzameling
+	Pristine (large files)	Onberispelijk (grote bestanden)
+	Rename Profile	Naam van profiel wijzigen
+	Rename Scene Collection	Naam van scèneverzameling wijzigen
+	Unlock	Ontgrendelen
+	Unmute	Dempen opheffen
 @msg	A plug-in could not be loaded: {error}	Een plug-in kon niet worden geladen: {error}
 @msg	Drawing again on {adapter}	Tekent weer met {adapter}
 @msg	No graphics device could be opened again: {error}	Er kon geen grafisch apparaat opnieuw worden geopend: {error}

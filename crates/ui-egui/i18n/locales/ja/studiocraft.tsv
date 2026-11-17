@@ -370,6 +370,20 @@
 	Hardware acceleration	ハードウェアアクセラレーション
 	Power saving	省電力
 	Software (slower)	ソフトウェア (低速)
+	Compact (small files)	コンパクト (小さいファイル)
+	Duplicate Profile	プロファイルを複製
+	Duplicate Scene Collection	シーンコレクションを複製
+	Lossless (very large files)	ロスレス (非常に大きいファイル)
+	Move Down	下へ移動
+	Move to Bottom	最後へ移動
+	Move to Top	先頭へ移動
+	Move Up	上へ移動
+	New Scene Collection	新しいシーンコレクション
+	Pristine (large files)	最高品質 (大きいファイル)
+	Rename Profile	プロファイル名を変更
+	Rename Scene Collection	シーンコレクション名を変更
+	Unlock	ロックを解除
+	Unmute	ミュートを解除
 @msg	A plug-in could not be loaded: {error}	プラグインを読み込めませんでした: {error}
 @msg	Drawing again on {adapter}	{adapter} で描画を再開しました
 @msg	No graphics device could be opened again: {error}	グラフィックデバイスを再び開けませんでした: {error}

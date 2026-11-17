@@ -354,6 +354,20 @@
 	Hardware acceleration	Hardwarebeschleunigung
 	Power saving	Energiesparen
 	Software (slower)	Software (langsamer)
+	Compact (small files)	Kompakt (kleine Dateien)
+	Duplicate Profile	Profil duplizieren
+	Duplicate Scene Collection	Szenensammlung duplizieren
+	Lossless (very large files)	Verlustfrei (sehr große Dateien)
+	Move Down	Nach unten verschieben
+	Move to Bottom	Ganz nach unten verschieben
+	Move to Top	Ganz nach oben verschieben
+	Move Up	Nach oben verschieben
+	New Scene Collection	Neue Szenensammlung
+	Pristine (large files)	Originalgetreu (große Dateien)
+	Rename Profile	Profil umbenennen
+	Rename Scene Collection	Szenensammlung umbenennen
+	Unlock	Entsperren
+	Unmute	Stummschaltung aufheben
 @msg	A plug-in could not be loaded: {error}	Ein Plug-in konnte nicht geladen werden: {error}
 @msg	Drawing again on {adapter}	Zeichnet wieder mit {adapter}
 @msg	No graphics device could be opened again: {error}	Es konnte kein Grafikgerät wieder geöffnet werden: {error}

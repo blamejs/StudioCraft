@@ -369,6 +369,20 @@
 	Hardware acceleration	Przyspieszenie sprzętowe
 	Power saving	Oszczędzanie energii
 	Software (slower)	Programowo (wolniej)
+	Compact (small files)	Kompaktowa (małe pliki)
+	Duplicate Profile	Duplikuj profil
+	Duplicate Scene Collection	Duplikuj kolekcję scen
+	Lossless (very large files)	Bezstratna (bardzo duże pliki)
+	Move Down	Przenieś w dół
+	Move to Bottom	Przenieś na dół
+	Move to Top	Przenieś na górę
+	Move Up	Przenieś w górę
+	New Scene Collection	Nowa kolekcja scen
+	Pristine (large files)	Nieskazitelna (duże pliki)
+	Rename Profile	Zmień nazwę profilu
+	Rename Scene Collection	Zmień nazwę kolekcji scen
+	Unlock	Odblokuj
+	Unmute	Wyłącz wyciszenie
 @msg	A plug-in could not be loaded: {error}	Nie można wczytać wtyczki: {error}
 @msg	Drawing again on {adapter}	Ponowne rysowanie za pomocą {adapter}
 @msg	No graphics device could be opened again: {error}	Nie można ponownie otworzyć urządzenia graficznego: {error}

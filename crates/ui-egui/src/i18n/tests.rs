@@ -460,6 +460,33 @@ fn every_literal_the_macros_look_up_has_an_english_row() {
     assert!(missing.is_empty(), "literals with no row in i18n/locales/en/studiocraft.tsv:\n{}", missing.join("\n"));
 }
 
+/// Labels that reach `tl!` through a variable: the move items of the Scenes and Sources menus, the
+/// recording qualities, the titles of the name prompts, and the other states of the buttons in
+/// the Sources and Audio Mixer docks.
+#[test]
+fn every_label_chosen_at_run_time_has_an_english_row() {
+    use crate::Named;
+    use studiocraft_model::RecordingQuality;
+    let mut labels: Vec<&str> = crate::docks::MOVES.iter().map(|(_, l)| *l).collect();
+    labels.extend(RecordingQuality::ALL.map(crate::settings::quality_label));
+    labels.extend(
+        [
+            Named::NewProfile,
+            Named::DuplicateProfile,
+            Named::RenameProfile,
+            Named::NewCollection,
+            Named::DuplicateCollection,
+            Named::RenameCollection,
+            Named::SaveDockLayout,
+        ]
+        .map(Named::title),
+    );
+    labels.extend(["Hide", "Show", "Lock (it can't be moved in the preview)", "Unlock", "Mute", "Unmute"]);
+    let en = english();
+    let missing: Vec<String> = labels.iter().filter(|l| !en.contains(&(String::new(), l.to_string()))).map(|l| format!("\t{l}\t{l}")).collect();
+    assert!(missing.is_empty(), "labels with no row in i18n/locales/en/studiocraft.tsv:\n{}", missing.join("\n"));
+}
+
 /// The settings that list what the system has (devices, a camera's formats, displays, windows):
 /// their option labels are names from the system, apart from the fixed first entries, which have
 /// their own rows.
@@ -577,9 +604,11 @@ fn the_catalogs_in_the_tree_are_offered_and_switch_the_menus() {
         ("fr", "Français", "Édition"),
         ("it", "Italiano", "Modifica"),
         ("ja", "日本語", "編集"),
+        ("ko", "한국어", "편집"),
         ("nl", "Nederlands", "Bewerken"),
         ("pl", "Polski", "Edycja"),
         ("pt-br", "Português (Brasil)", "Editar"),
+        ("zh-hans", "简体中文", "编辑"),
     ] {
         let l = I18N.from_code(code).unwrap_or_else(|| panic!("{code} is embedded"));
         assert_eq!(I18N.name(l), name);

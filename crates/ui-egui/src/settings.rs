@@ -147,6 +147,16 @@ fn device_name(id: &str, listed: &[DeviceInfo]) -> String {
 }
 
 /// The name of a Language setting in the picker.
+/// The English name of a recording quality in the Output tab.
+pub(crate) fn quality_label(q: RecordingQuality) -> &'static str {
+    match q {
+        RecordingQuality::Compact => "Compact (small files)",
+        RecordingQuality::High => "High",
+        RecordingQuality::Pristine => "Pristine (large files)",
+        RecordingQuality::Lossless => "Lossless (very large files)",
+    }
+}
+
 fn language_name(code: &str) -> String {
     if code == i18n::AUTO {
         let system = I18N.name(I18N.system_lang()).to_string();
@@ -327,14 +337,7 @@ impl SettingsWindow {
             });
             ui.end_row();
             ui.label(tl!("Quality"));
-            let label = |q: RecordingQuality| {
-                tl!(match q {
-                    RecordingQuality::Compact => "Compact (small files)",
-                    RecordingQuality::High => "High",
-                    RecordingQuality::Pristine => "Pristine (large files)",
-                    RecordingQuality::Lossless => "Lossless (very large files)",
-                })
-            };
+            let label = |q: RecordingQuality| tl!(quality_label(q));
             craft_ui::ComboBox::from_id_salt("quality").selected_text(label(o.quality)).width(260.0).show_ui(ui, |ui| {
                 for q in RecordingQuality::ALL {
                     ui.selectable_value(&mut o.quality, q, label(q));
