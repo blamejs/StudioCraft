@@ -1449,7 +1449,8 @@ impl StudioApp {
                 .resizable(true)
                 .default_size(size)
                 .min_size(egui::vec2(strip::MIN_WIDTH, strip::MIN_HEIGHT));
-            if let Some(at) = self.dock_window_at[k].or_else(|| d.window_pos(i).map(|[x, y]| egui::pos2(x, y))) {
+            let kept = self.dock_window_at[k].or_else(|| d.window_pos(i).map(|[x, y]| egui::pos2(x, y)));
+            if let Some(at) = kept {
                 window = window.current_pos(at);
             }
             let shown = window.show(ctx, |ui| {
@@ -1483,7 +1484,7 @@ impl StudioApp {
             // `dock_window_at` is where the user put the window. egui may draw it further in when
             // the main window is smaller; that does not change the place that is kept. A window that
             // cannot be moved resizes only from its right and bottom edges, so a resize keeps it.
-            let at = if delta != egui::Vec2::ZERO { rect.min + delta } else { self.dock_window_at[k].unwrap_or(rect.min) };
+            let at = if delta != egui::Vec2::ZERO { rect.min + delta } else { kept.unwrap_or(rect.min) };
             self.dock_window_at[k] = Some(at);
             if delta != egui::Vec2::ZERO || resized {
                 self.dock_window_touched[k] = true;

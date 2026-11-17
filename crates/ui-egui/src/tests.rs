@@ -834,6 +834,28 @@ fn a_smaller_main_window_does_not_change_a_floating_dock_s_saved_place() {
     }
     assert_eq!(rect_of(&a.ui_inspect(&ctx)["floating_docks"][0]["rect"]).min, egui::pos2(900.0, 500.0), "it goes back");
 
+    // The same after a restart in the smaller main window, with a resize while it is small.
+    let mut b = app();
+    let docks = a.store().prefs().docks;
+    b.store.update(|p| p.docks = docks);
+    let ctx_b = egui::Context::default();
+    for _ in 0..3 {
+        frame_at(&mut b, &ctx_b, small);
+    }
+    let pushed = rect_of(&b.ui_inspect(&ctx_b)["floating_docks"][0]["rect"]);
+    let corner = pushed.max - egui::vec2(2.0, 2.0);
+    for events in drag(corner, corner - egui::vec2(20.0, 20.0)) {
+        frame_with(&mut b, &ctx_b, small, events);
+    }
+    for _ in 0..2 {
+        frame_at(&mut b, &ctx_b, small);
+    }
+    assert_eq!(b.store().prefs().docks.window_pos(2), Some([900.0, 500.0]), "a resize keeps the saved place");
+    for _ in 0..3 {
+        frame_at(&mut b, &ctx_b, big);
+    }
+    assert_eq!(rect_of(&b.ui_inspect(&ctx_b)["floating_docks"][0]["rect"]).min, egui::pos2(900.0, 500.0), "it goes back after a restart");
+
     // A window larger than the main window keeps its saved size too.
     run(&mut a, &ctx, "dock.reset", json!({})).unwrap();
     a.store.update(|p| {
