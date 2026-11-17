@@ -16,8 +16,10 @@ use crate::nv12::{EncodeTarget, Nv12};
 use crate::plan::{ItemDesc, Plan, SceneDesc};
 use crate::{CANVAS_FORMAT, CANVAS_VIEW_FORMAT, Gpu, RenderError, shaders};
 
+/// Values in one uniform slot.
+const SLOT_FLOATS: usize = 32;
 /// Size of one uniform slot.
-const SLOT_BYTES: u64 = 64;
+const SLOT_BYTES: u64 = SLOT_FLOATS as u64 * 4;
 /// Canvas textures per ring: the interface reads the newest while the compositor draws the next.
 const RING_LEN: usize = 3;
 /// Frames between sweeps of textures whose source is gone.
@@ -223,10 +225,10 @@ impl Uniforms {
         self.staging.clear();
     }
 
-    /// Add a slot; its dynamic offset.
-    fn push(&mut self, slot: [f32; 16]) -> u32 {
+    /// Add a slot of up to `SLOT_FLOATS` values (the rest are 0); its dynamic offset.
+    fn push(&mut self, slot: &[f32]) -> u32 {
         let offset = self.staging.len();
-        self.staging.extend_from_slice(bytemuck::cast_slice(&slot));
+        self.staging.extend_from_slice(bytemuck::cast_slice(&slot[..slot.len().min(SLOT_FLOATS)]));
         self.staging.resize(offset + self.stride as usize, 0);
         offset as u32
     }
@@ -475,7 +477,7 @@ impl Compositor {
                 let mut slot = [0.0; 16];
                 slot[0] = progress;
                 slot[4..8].copy_from_slice(&t.params);
-                let off = self.uniforms.push(slot);
+                let off = self.uniforms.push(&slot);
                 let mut pass = begin(&mut enc, &program.view, None);
                 pass.set_pipeline(pipe);
                 pass.set_bind_group(0, &self.uniforms.bind, &[off]);
@@ -619,7 +621,7 @@ fn convert(
         lost.fetch_add(1, Ordering::Relaxed);
         return false;
     }
-    let off = uniforms.push([0.0; 16]);
+    let off = uniforms.push(&[0.0; 16]);
     for (pipe, view) in [(&pipes.nv12_y, &n.y_view), (&pipes.nv12_uv, &n.uv_view)] {
         let mut pass = begin(enc, view, Some(wgpu::Color::BLACK));
         pass.set_pipeline(pipe);
@@ -725,7 +727,7 @@ fn draw_scene(ctx: &Ctx<'_>, uniforms: &mut Uniforms, enc: &mut wgpu::CommandEnc
         let t = item.transform.sanitized();
         let [c0, c1, c2, c3] = t.corners(st.native).map(clip);
         let slot = [c0[0], c0[1], c1[0], c1[1], c2[0], c2[1], c3[0], c3[1], uv[0], uv[1], uv[2], uv[3], straight, 1.0, 0.0, 0.0];
-        let off = uniforms.push(slot);
+        let off = uniforms.push(&slot);
         pass.set_bind_group(0, &uniforms.bind, &[off]);
         pass.set_bind_group(1, bind, &[]);
         pass.draw(0..6, 0..1);
@@ -759,10 +761,10 @@ fn run_effects(
     let mut ran = false;
     for e in effects {
         let Some(Some(pipe)) = pipes.effects.get(e.key) else { continue };
-        let mut slot = [0.0; 16];
+        let mut slot = [0.0; SLOT_FLOATS];
         slot[..8].copy_from_slice(&[0.0, 0.0, 1.0, 1.0, w as f32, h as f32, straight, 0.0]);
         slot[8..].copy_from_slice(&e.params);
-        let off = uniforms.push(slot);
+        let off = uniforms.push(&slot);
         let mut pass = begin(enc, &fx.views[out], Some(wgpu::Color::TRANSPARENT));
         pass.set_pipeline(pipe);
         pass.set_bind_group(0, &uniforms.bind, &[off]);

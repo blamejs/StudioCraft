@@ -23,7 +23,7 @@ mod source;
 mod transition;
 
 pub use encoder::{Availability, Codec, Encoder, EncoderEnv, EncoderKind, FfmpegEncoder, RateControl};
-pub use filter::{Filter, FilterInstance, FilterTarget, VideoEffect};
+pub use filter::{Filter, FilterInstance, FilterTarget, VIDEO_EFFECT_PARAMS, VideoEffect};
 pub use output::{Output, OutputInstance, OutputJob, OutputStatus, VideoFormat};
 pub use registry::Registry;
 pub use source::{AudioOut, Pace, Source, SourceCaps, SourceInstance, SourceIo, VideoContent, VideoOut};
