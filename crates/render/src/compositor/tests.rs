@@ -534,6 +534,22 @@ fn encoders_receive_nv12_frames_in_order() {
 }
 
 #[test]
+fn an_output_larger_than_the_device_allows_is_an_error_not_a_converter() {
+    let Some(mut c) = compositor(32, 16) else { return };
+    let sink = Arc::new(Fifo::new(4));
+    c.set_encode(Some(EncodeTarget { width: 1 << 20, height: 8, sinks: vec![Arc::clone(&sink)] }));
+    let errors = c.take_errors();
+    assert!(errors.iter().any(|e| e.to_string().contains("frames for the encoders cannot be converted")), "{errors:?}");
+    let lost = AtomicU64::new(0);
+    c.frame(Tick(0), &lost);
+    c.finish(&lost);
+    assert!(sink.pop().is_none());
+    // A size the device holds starts the conversion.
+    c.set_encode(Some(EncodeTarget { width: 16, height: 8, sinks: vec![Arc::clone(&sink)] }));
+    assert!(c.take_errors().is_empty());
+}
+
+#[test]
 fn the_scope_copy_runs_beside_the_encoders_at_its_own_size() {
     let Some(mut c) = compositor(32, 16) else { return };
     let white = solid([255, 255, 255, 255], 16, 16);

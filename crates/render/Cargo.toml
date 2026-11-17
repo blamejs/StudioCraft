@@ -11,6 +11,7 @@ studiocraft-model.workspace = true
 studiocraft-media.workspace = true
 studiocraft-plugin.workspace = true
 craft-gpu-device.workspace = true
+craft-gpu-yuv.workspace = true
 wgpu.workspace = true
 bytemuck.workspace = true
 pollster.workspace = true
