@@ -602,6 +602,61 @@ fn crop_pad_frame(s: &Settings) -> Result<(Params, Reframe), PluginError> {
     Ok(([0.0; VIDEO_EFFECT_PARAMS], reframe))
 }
 
+const SHARPEN: &str = r"
+fn effect(color: vec4<f32>, uv: vec2<f32>, size: vec2<f32>, p0: vec4<f32>, p1: vec4<f32>) -> vec4<f32> {
+    // p0.x: how many times the difference from the eight neighbors' average is added.
+    let px = uv * size;
+    var sum = vec4<f32>(0.0);
+    for (var dy = -1; dy <= 1; dy++) {
+        for (var dx = -1; dx <= 1; dx++) {
+            if dx != 0 || dy != 0 {
+                sum += input_pixel(px + vec2<f32>(f32(dx), f32(dy)));
+            }
+        }
+    }
+    let rgb = color.rgb + (color.rgb - sum.rgb / 8.0) * p0.x;
+    return vec4<f32>(clamp(rgb, vec3<f32>(0.0), vec3<f32>(color.a)), color.a);
+}
+";
+
+/// Makes edges in a source's picture crisper: each pixel moves away from the average of its
+/// eight neighbors by [`SHARPEN_GAIN`] times Sharpness. Pixels on the picture's edge count
+/// themselves in place of the neighbors outside it. Transparency is unchanged.
+pub struct Sharpen;
+
+/// How many times the difference from the neighbors' average a Sharpness of 1 adds.
+pub const SHARPEN_GAIN: f64 = 4.0;
+/// The default Sharpness.
+pub const SHARPEN_DEFAULT: f64 = 0.08;
+
+impl Plugin for Sharpen {
+    fn id(&self) -> &'static str {
+        "sharpen"
+    }
+    fn name(&self) -> &'static str {
+        "Sharpen"
+    }
+    fn schema(&self) -> SettingsSchema {
+        SettingsSchema::new(vec![float_field("sharpness", "Sharpness", 0.0, 1.0, 0.01, SHARPEN_DEFAULT)])
+    }
+}
+
+impl Filter for Sharpen {
+    fn target(&self) -> FilterTarget {
+        FilterTarget::Video
+    }
+    fn create(&self, settings: &Settings) -> Result<Box<dyn FilterInstance>, PluginError> {
+        Effect::create("sharpen", SHARPEN, sharpen_params, settings)
+    }
+}
+
+fn sharpen_params(s: &Settings) -> Result<(Params, Reframe), PluginError> {
+    let sharpness = checked(s, "sharpness", SHARPEN_DEFAULT, 0.0, 1.0, false)?;
+    let mut p = [0.0; VIDEO_EFFECT_PARAMS];
+    p[0] = (sharpness * SHARPEN_GAIN) as f32;
+    Ok((p, Reframe::None))
+}
+
 /// Reads a video filter's pass from its settings.
 type ReadPass = fn(&Settings) -> Result<(Params, Reframe), PluginError>;
 
@@ -635,7 +690,7 @@ impl FilterInstance for Effect {
 
 /// Every built-in video filter's effect with default settings, for checking that they compile.
 pub fn builtin_video_effects() -> Vec<VideoEffect> {
-    [&ColorCorrection as &dyn Filter, &ChromaKey, &CropPad]
+    [&ColorCorrection as &dyn Filter, &ChromaKey, &CropPad, &Sharpen]
         .iter()
         .filter_map(|f| f.create(&f.schema().defaults()).ok().and_then(|i| i.video_effect()))
         .collect()
@@ -966,9 +1021,91 @@ mod tests {
         assert!(at(5, 13).iter().zip([255, 0, 255, 255]).all(|(a, b)| a.abs_diff(b) <= 3), "the picture is 10 pixels tall");
     }
 
+    /// A `w` x `h` RGBA frame drawn at the top-left of a 16 x 16 canvas through `effects`; the
+    /// canvas as RGBA rows. `None` without a graphics adapter.
+    fn draw_frame(pixels: &[[u8; 4]], w: u32, h: u32, effects: Vec<VideoEffect>) -> Option<Vec<u8>> {
+        use std::sync::Arc;
+        use std::sync::atomic::AtomicU64;
+
+        use studiocraft_media::Tick;
+        use studiocraft_media::video::PixelFormat;
+        use studiocraft_model::{SourceId, Transform};
+        use studiocraft_plugin::{VideoContent, VideoOut};
+        use studiocraft_render::{Compositor, ItemDesc, Plan, SceneDesc};
+
+        let mut c = Compositor::new(gpu()?, 16, 16).unwrap();
+        let video = Arc::new(VideoOut::default());
+        let mut f = video.frame();
+        assert!(f.reshape(w, h, PixelFormat::Rgba8));
+        for (dst, src) in f.data.as_chunks_mut::<4>().0.iter_mut().zip(pixels) {
+            dst.copy_from_slice(src);
+        }
+        video.publish(VideoContent::Frame(f));
+        let item = ItemDesc { source: SourceId(1), video, transform: Transform::default(), effects };
+        c.set_plan(Arc::new(Plan { program: SceneDesc { items: vec![item] }, ..Plan::default() }));
+        c.frame(Tick(0), &AtomicU64::new(0));
+        assert!(c.take_errors().is_empty());
+        Some(c.read_program().unwrap())
+    }
+
+    fn canvas_pixel(px: &[u8], x: usize, y: usize) -> [u8; 4] {
+        let i = (y * 16 + x) * 4;
+        [px[i], px[i + 1], px[i + 2], px[i + 3]]
+    }
+
+    /// Gray 100, 200, 100 in a row: the middle pixel's eight neighbors (the row above and below
+    /// are the row itself at the edge) average 125, and its own value moves away from that.
+    #[test]
+    fn sharpen_moves_each_pixel_away_from_its_neighbors() {
+        let gray = |v: u8| [v, v, v, 255];
+        let row = [gray(100), gray(200), gray(100)];
+        let sharpen = |s: f64| Sharpen.create(&Settings::new().with("sharpness", s)).unwrap().video_effect().unwrap();
+        let Some(px) = draw_frame(&row, 3, 1, vec![sharpen(0.1)]) else { return };
+        // Gain 0.4: 200 + 0.4 × (200 − 125) = 230, and 100 + 0.4 × (100 − 137.5) = 85.
+        let near = |got: [u8; 4], want: u8| got[..3].iter().all(|c| c.abs_diff(want) <= 2) && got[3] == 255;
+        assert!(near(canvas_pixel(&px, 1, 0), 230), "{:?}", canvas_pixel(&px, 1, 0));
+        assert!(near(canvas_pixel(&px, 0, 0), 85), "{:?}", canvas_pixel(&px, 0, 0));
+        assert!(near(canvas_pixel(&px, 2, 0), 85), "{:?}", canvas_pixel(&px, 2, 0));
+        // At 0 the picture is unchanged, and a strong setting clips at white and black.
+        let Some(px) = draw_frame(&row, 3, 1, vec![sharpen(0.0)]) else { return };
+        assert!(near(canvas_pixel(&px, 1, 0), 200) && near(canvas_pixel(&px, 0, 0), 100));
+        let Some(px) = draw_frame(&row, 3, 1, vec![sharpen(1.0)]) else { return };
+        assert!(near(canvas_pixel(&px, 1, 0), 255) && near(canvas_pixel(&px, 0, 0), 0), "{:?}", &px[..12]);
+    }
+
+    /// A flat picture stays flat, and transparency is kept.
+    #[test]
+    fn sharpen_leaves_flat_areas_and_alpha_alone() {
+        let flat = [[40, 120, 200, 128]; 9];
+        let effect = Sharpen.create(&Settings::new().with("sharpness", 1.0)).unwrap().video_effect().unwrap();
+        let Some(px) = draw_frame(&flat, 3, 3, vec![effect]) else { return };
+        // Drawn over black at half opacity.
+        let want = [20, 60, 100, 255];
+        for (x, y) in [(0, 0), (1, 1), (2, 2)] {
+            let got = canvas_pixel(&px, x, y);
+            assert!(got.iter().zip(want).all(|(a, b)| a.abs_diff(b) <= 2), "({x}, {y}): {got:?}");
+        }
+    }
+
+    #[test]
+    fn sharpen_rejects_settings_outside_its_range() {
+        assert_eq!(sharpen_params(&Settings::new()).unwrap().0[0], (SHARPEN_DEFAULT * SHARPEN_GAIN) as f32);
+        assert_eq!(sharpen_params(&Sharpen.schema().defaults()).unwrap(), sharpen_params(&Settings::new()).unwrap());
+        for v in [0.0, 1.0] {
+            assert!(Sharpen.create(&Settings::new().with("sharpness", v)).is_ok());
+        }
+        for bad in [serde_json::json!(1.01), serde_json::json!(-0.1), serde_json::json!("sharp"), serde_json::Value::from(f64::NAN)] {
+            let s = Settings::new().with("sharpness", bad.clone());
+            assert!(Sharpen.create(&s).is_err(), "{bad}");
+            let mut f = Sharpen.create(&Settings::new().with("sharpness", 0.5)).unwrap();
+            assert!(f.update(&s).is_err(), "{bad}");
+            assert_eq!(f.video_effect().map(|e| e.params[0]), Some(2.0), "{bad}: the last good setting stays");
+        }
+    }
+
     #[test]
     fn video_filters_have_effects_and_audio_filters_do_not() {
-        assert_eq!(builtin_video_effects().len(), 3);
+        assert_eq!(builtin_video_effects().len(), 4);
         assert!(Gain.create(&Settings::new()).unwrap().video_effect().is_none());
         let neutral = color_correction_params(&ColorCorrection.schema().defaults());
         let mut want = [0.0; VIDEO_EFFECT_PARAMS];

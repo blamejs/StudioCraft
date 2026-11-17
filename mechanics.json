@@ -10,6 +10,8 @@
     {"name": "compositor texture ring", "group": "video", "value": 3, "unit": "frames", "code": "render::compositor::RING_LEN", "estimated": true},
     {"name": "largest side of a video filter's output", "group": "video", "value": 8192, "unit": "px", "code": "plugin::filter::MAX_EFFECT_SIDE", "estimated": true},
     {"name": "crop and pad edges and area", "group": "video", "value": 0, "unit": "px", "code": "sources::filters::CropPad", "estimated": true},
+    {"name": "sharpen sharpness", "group": "video", "value": 0.08, "code": "sources::filters::SHARPEN_DEFAULT", "estimated": true},
+    {"name": "sharpen gain at sharpness 1", "group": "video", "value": 4, "code": "sources::filters::SHARPEN_GAIN", "estimated": true},
     {"name": "default transition", "group": "transitions", "value": "fade", "code": "model::collection::TransitionConfig::default", "estimated": true},
     {"name": "transition duration", "group": "transitions", "value": 300, "unit": "ms", "code": "model::collection::TransitionConfig::default", "estimated": true},
     {"name": "longest transition duration", "group": "transitions", "value": 20000, "unit": "ms", "code": "model::collection::MAX_TRANSITION_MS", "estimated": true},

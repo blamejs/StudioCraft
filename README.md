@@ -16,10 +16,11 @@ and Linux.
 - **Built-in sources.** Color, image, text, media file, display capture, window capture, audio
   input and audio output (desktop audio). Display, window and device capture work on Windows and
   macOS.
-- **Filters.** Color correction, chroma key, and crop and pad for video. Color correction sets
-  gamma, contrast, brightness, saturation, opacity, and the white balance by temperature and tint.
-  Crop and pad takes pixels off each edge of a source (a positive value) or adds transparent pixels
-  (a negative value), or shows one area of it, and the source takes the new size in every scene.
+- **Filters.** Color correction, chroma key, crop and pad, and sharpen for video. Color correction
+  sets gamma, contrast, brightness, saturation, opacity, and the white balance by temperature and
+  tint. Crop and pad takes pixels off each edge of a source (a positive value) or adds transparent
+  pixels (a negative value), or shows one area of it, and the source takes the new size in every
+  scene. Sharpen makes edges crisper by a Sharpness from 0 to 1.
   Gain, noise gate, compressor, limiter and a three-band equalizer for audio.
 - **Transitions.** Cut, fade, fade through a color, and swipe, with a duration from 0 to 20 seconds.
   Fade, fade through a color and swipe have an Easing setting: Linear, Ease in, Ease out, or Ease

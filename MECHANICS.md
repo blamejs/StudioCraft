@@ -20,6 +20,8 @@ in both files.
 | Compositor texture ring | 3 frames | `render::compositor::RING_LEN` | estimated |
 | Largest side of a video filter's output | 8192 px | `plugin::filter::MAX_EFFECT_SIDE` | estimated |
 | Crop and pad edges and area | 0 px each (the whole source) | `sources::filters::CropPad` | estimated |
+| Sharpen Sharpness | 0.08 (0 to 1) | `sources::filters::SHARPEN_DEFAULT` | estimated |
+| Sharpen gain at Sharpness 1 | 4 × the difference from the 8 neighbors' average | `sources::filters::SHARPEN_GAIN` | estimated |
 
 ## Transitions
 
