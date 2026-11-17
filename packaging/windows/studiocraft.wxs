@@ -44,9 +44,12 @@
       <Component Id="StudioCraftCli" Guid="B1D12A0B-2B9C-4665-8BD1-D4A14E373490">
         <File Id="StudioCraftCliExe" Source="$(var.BinDir)\studiocraft-cli.exe" KeyPath="yes" />
       </Component>
-      <Component Id="StudioCraftDocs">
-        <File Id="StudioCraftLicenseMit" Source="$(var.BinDir)\LICENSE-MIT" KeyPath="yes" />
-        <File Id="StudioCraftLicenseApache" Source="$(var.BinDir)\LICENSE-APACHE" />
+      <!-- WiX generates the GUID of a component that holds one unversioned file. -->
+      <Component Id="StudioCraftLicenseMit">
+        <File Id="StudioCraftLicenseMitFile" Source="$(var.BinDir)\LICENSE-MIT" KeyPath="yes" />
+      </Component>
+      <Component Id="StudioCraftLicenseApache">
+        <File Id="StudioCraftLicenseApacheFile" Source="$(var.BinDir)\LICENSE-APACHE" KeyPath="yes" />
       </Component>
     </ComponentGroup>
   </Fragment>

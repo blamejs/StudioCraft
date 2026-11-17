@@ -46,7 +46,19 @@ pub struct FileFormat {
 pub const COLLECTION: FileFormat = FileFormat { name: "studiocraft.scene-collection", version: 1, migrations: &[] };
 
 /// Profiles.
-pub const PROFILE: FileFormat = FileFormat { name: "studiocraft.profile", version: 1, migrations: &[] };
+pub const PROFILE: FileFormat = FileFormat { name: "studiocraft.profile", version: 2, migrations: &[profile_v1_to_v2] };
+
+/// Profile version 1 to 2: the recording and the stream each keep the settings of their video
+/// encoders (`encoder_settings`, empty until the user changes one).
+fn profile_v1_to_v2(data: &mut Value) -> Result<(), String> {
+    let data = data.as_object_mut().ok_or("the profile is not an object")?;
+    for section in ["output", "stream"] {
+        if let Some(Value::Object(s)) = data.get_mut(section) {
+            s.entry("encoder_settings").or_insert_with(|| json!({}));
+        }
+    }
+    Ok(())
+}
 
 /// Largest file accepted, in bytes.
 pub const MAX_FILE_BYTES: usize = 64 << 20;
@@ -135,7 +147,7 @@ mod tests {
 
     /// Every version ever written, oldest first: `(version, text)`. A new version adds a line.
     const COLLECTION_FIXTURES: &[(u32, &str)] = &[(1, include_str!("../fixtures/collection-v1.json"))];
-    const PROFILE_FIXTURES: &[(u32, &str)] = &[(1, include_str!("../fixtures/profile-v1.json"))];
+    const PROFILE_FIXTURES: &[(u32, &str)] = &[(1, include_str!("../fixtures/profile-v1.json")), (2, include_str!("../fixtures/profile-v2.json"))];
 
     fn covers_every_version(format: &FileFormat, fixtures: &[(u32, &str)]) {
         assert_eq!(format.migrations.len() as u32, format.version - 1, "{}: one migration per version step", format.name);
@@ -161,6 +173,23 @@ mod tests {
             let p = read_profile(text).unwrap_or_else(|e| panic!("version {v}: {e}"));
             assert_eq!(p.video.base_width, 1280, "version {v}");
         }
+    }
+
+    #[test]
+    fn profiles_keep_the_settings_of_each_encoder() {
+        let (_, v1) = PROFILE_FIXTURES[0];
+        let old = read_profile(v1).unwrap();
+        assert!(old.output.encoder_settings.is_empty() && old.stream.encoder_settings.is_empty());
+        assert_eq!(old.output.video_encoder_settings(), crate::Settings::new(), "a version 1 profile keeps the encoders' defaults");
+
+        let (_, v2) = PROFILE_FIXTURES[1];
+        let p = read_profile(v2).unwrap();
+        assert_eq!(p.output.video_encoder_settings().str("preset"), Some("fast"));
+        assert_eq!(p.stream.video_encoder_settings().str("preset"), Some("p4"));
+        let mut other = p.clone();
+        other.output.video_encoder = "nvenc_h264".into();
+        assert_eq!(other.output.video_encoder_settings(), crate::Settings::new(), "another encoder does not take x264's preset");
+        assert_eq!(read_profile(&write_profile(&p).unwrap()).unwrap(), p);
     }
 
     #[test]

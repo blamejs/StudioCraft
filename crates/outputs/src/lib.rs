@@ -14,7 +14,7 @@ use studiocraft_media::audio::PooledBlock;
 use studiocraft_media::queue::Fifo;
 use studiocraft_media::video::PooledFrame;
 use studiocraft_model::{Field, FieldKind, PathMode, Settings, SettingsSchema};
-use studiocraft_plugin::{Output, OutputInstance, OutputJob, OutputStatus, Plugin, PluginError, RateControl, Registry};
+use studiocraft_plugin::{EncoderKind, Output, OutputInstance, OutputJob, OutputStatus, Plugin, PluginError, RateControl, Registry};
 
 use crate::writer::{Writer, audio_args};
 
@@ -28,10 +28,18 @@ pub fn register_all(reg: &mut Registry) -> Result<(), PluginError> {
     Ok(())
 }
 
-/// The codec arguments of `job`: its video encoder's, then audio.
+/// The codec arguments of `job`: its video encoder's, then audio. The video encoder must be a
+/// video encoder the ffmpeg program runs.
 fn codec_args(job: &OutputJob, lossless_audio: Option<&str>) -> Result<Vec<String>, PluginError> {
+    if job.video_encoder.kind() != EncoderKind::Video {
+        return Err(PluginError::Failed(format!("{} is not a video encoder", job.video_encoder.name())));
+    }
     let fps = f64::from(job.video.fps_num) / f64::from(job.video.fps_den.max(1));
-    let mut a = job.video_encoder.ffmpeg_args(&job.video_encoder_settings, job.rate, fps)?;
+    let video = job
+        .video_encoder
+        .ffmpeg()
+        .ok_or_else(|| PluginError::Unavailable(format!("{} does not run inside the ffmpeg program", job.video_encoder.name())))?;
+    let mut a = video.ffmpeg_args(&job.video_encoder_settings, job.rate, fps)?;
     match lossless_audio {
         Some(codec) => a.extend(["-c:a".to_string(), codec.to_string()]),
         None => a.extend(audio_args(job.audio_bitrate_kbps)),
@@ -161,7 +169,7 @@ impl Output for Stream {
         if !matches!(job.rate, RateControl::Bitrate { .. }) {
             return Err(PluginError::Failed("streams need a bitrate".into()));
         }
-        if !job.video_encoder.streams() {
+        if job.video_encoder.kind() != EncoderKind::Video || !job.video_encoder.streams() {
             return Err(PluginError::Failed(format!("streams need an H.264 encoder, and {} is not one", job.video_encoder.name())));
         }
         let codec = codec_args(&job, None)?;
