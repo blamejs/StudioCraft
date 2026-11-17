@@ -39,6 +39,8 @@ pub struct RenderShared {
     pub views: Latest<Arc<CanvasViews>>,
     /// Frames encoders never received because the read-back fell behind.
     pub readback_lost: AtomicU64,
+    /// Program copies the scopes never received because their read-back fell behind.
+    pub scope_skipped: AtomicU64,
     /// Shader and device errors for the interface to show.
     pub errors: Fifo<RenderError>,
     /// Still captures waiting for the next frame. A full queue refuses new requests.
@@ -57,6 +59,7 @@ impl Default for RenderShared {
             scope: Latest::new(),
             views: Latest::new(),
             readback_lost: AtomicU64::new(0),
+            scope_skipped: AtomicU64::new(0),
             errors: Fifo::new(16),
             captures: ArrayQueue::new(CAPTURE_SLOTS),
         }
@@ -412,6 +415,7 @@ impl Compositor {
             shared.errors.push(e);
         }
         self.frame(now, &shared.readback_lost);
+        shared.scope_skipped.store(self.scope_skipped(), Ordering::Relaxed);
         let mut waiting = std::mem::take(&mut self.waiting);
         for req in waiting.drain(..) {
             // A caller that gave up has dropped its receiver; nothing waits for the answer.
@@ -434,7 +438,9 @@ impl Compositor {
     pub fn frame(&mut self, now: Tick, readback_lost: &AtomicU64) {
         self.frame_no += 1;
         let plan = Arc::clone(&self.plan);
-        let mut slots = 4u64;
+        // A uniform slot for each item and effect, and one for each fixed pass: the transition and
+        // the encoders' and the scopes' NV12 conversions.
+        let mut slots = u64::from(plan.transition.is_some()) + u64::from(self.nv12.is_some()) + u64::from(self.scope_nv12.is_some());
         for item in plan.items() {
             slots += 1 + item.effects.len() as u64;
             self.sync_source(item);

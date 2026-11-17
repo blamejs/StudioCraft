@@ -82,7 +82,7 @@ fn frames_draw_in_both_modes() {
 fn view_scopes_opens_the_window_and_its_scope_is_a_command() {
     let mut a = app();
     let ctx = egui::Context::default();
-    assert_eq!(a.hud()["ui"]["scopes"], json!({"open": false, "kind": "waveform", "computed": 0}));
+    assert_eq!(a.hud()["ui"]["scopes"], json!({"open": false, "kind": "waveform", "computed": 0, "dropped": 0, "skipped": 0}));
     assert_eq!(run(&mut a, &ctx, "view.scopes", json!({})), Ok(json!({"on": true})));
     assert!(a.scopes.is_some(), "the scopes thread runs while the window is open");
     assert_eq!(a.item_state("view.scopes").checked, Some(true));
@@ -90,6 +90,10 @@ fn view_scopes_opens_the_window_and_its_scope_is_a_command() {
     assert_eq!(a.store().prefs().scope_kind, "vectorscopeHls");
     let err = run(&mut a, &ctx, "scopes.kind", json!({"kind": "oscilloscope"})).unwrap_err();
     assert!(err.contains("unknown scope") && err.contains("waveform"), "{err}");
+    // Only the five ids the params text lists are accepted.
+    for other in ["YUV", "vectorscope", "WAVEFORM", "Vector-Scope HLS", "Histogram"] {
+        assert!(run(&mut a, &ctx, "scopes.kind", json!({"kind": other})).is_err(), "{other}");
+    }
     assert!(run(&mut a, &ctx, "scopes.kind", json!({})).is_err(), "the kind is required");
     assert_eq!(a.store().prefs().scope_kind, "vectorscopeHls", "a refused kind changes nothing");
     frame(&mut a, &ctx, vec![]);

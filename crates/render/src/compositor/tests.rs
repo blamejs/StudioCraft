@@ -267,6 +267,12 @@ fn the_scope_copy_runs_beside_the_encoders_at_its_own_size() {
     c.frame(Tick(500), &lost);
     c.finish(&lost);
     assert!(scope.pop().is_none());
+    // The count of skipped copies reaches the app through RenderShared.
+    let shared = RenderShared::default();
+    c.scope_skipped.store(7, Ordering::Relaxed);
+    c.run(&shared, Tick(600));
+    c.finish(&shared.readback_lost);
+    assert_eq!(shared.scope_skipped.load(Ordering::Relaxed), 7);
 }
 
 #[test]

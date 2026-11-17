@@ -105,6 +105,7 @@
 	Hide	Hide
 	High	High
 	Histogram	Histogram
+	HLS vectorscope	HLS vectorscope
 	Hold (ms)	Hold (ms)
 	Hotkeys	Hotkeys
 	Image	Image
@@ -268,8 +269,6 @@
 	Updates	Updates
 	Use system title bar	Use system title bar
 	Username	Username
-	Vectorscope HLS	Vectorscope HLS
-	Vectorscope YUV	Vectorscope YUV
 	Version {version} ({os} {arch})	Version {version} ({os} {arch})
 	veryfast	veryfast
 	Video	Video
@@ -285,6 +284,7 @@
 	Window capture	Window capture
 	Windows Media Foundation H.264	Windows Media Foundation H.264
 	Your Videos folder	Your Videos folder
+	YUV vectorscope	YUV vectorscope
 	{db} dB	{db} dB
 	{encoder} (not in this ffmpeg)	{encoder} (not in this ffmpeg)
 	{fps} fps  {ms} ms	{fps} fps  {ms} ms

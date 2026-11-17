@@ -435,6 +435,8 @@ impl StudioApp {
                         "open": p.scopes,
                         "kind": scopes::kind_of(&p.scope_kind).name(),
                         "computed": self.scopes.as_ref().map_or(0, |s| s.computed),
+                        "dropped": self.scopes.as_ref().map_or(0, |s| s.dropped()),
+                        "skipped": self.studio.scope_skipped(),
                     },
                     "status_bar": p.status_bar,
                     "lock_preview": p.lock_preview,
@@ -603,11 +605,11 @@ impl StudioApp {
         let Some(s) = &mut self.scopes else { return };
         s.pump(kind);
         if s.fresh
-            && let Some(p) = &s.latest
+            && let Some(p) = &mut s.latest
         {
             s.fresh = false;
-            if p.width > 0 && p.height > 0 && p.rgba.len() == p.width * p.height * 4 {
-                let image = egui::ColorImage::from_rgba_premultiplied([p.width, p.height], &p.rgba);
+            // The scopes thread made the image; it moves into the texture without a copy here.
+            if let Some(image) = p.image.take() {
                 match &mut s.texture {
                     Some(t) => t.set(image, egui::TextureOptions::LINEAR),
                     None => s.texture = Some(ctx.load_texture("scopes", image, egui::TextureOptions::LINEAR)),
@@ -684,7 +686,7 @@ impl StudioApp {
             }
             "scopes.kind" => {
                 let name = Self::param_str(cmd, "kind")?;
-                let kind = craft_scopes::ScopeKind::from_name(name).ok_or_else(|| {
+                let kind = craft_scopes::ScopeKind::ALL.into_iter().find(|k| k.name() == name).ok_or_else(|| {
                     let known: Vec<&str> = craft_scopes::ScopeKind::ALL.iter().map(|k| k.name()).collect();
                     format!("`scopes.kind`: unknown scope `{name}` (one of {})", known.join(", "))
                 })?;

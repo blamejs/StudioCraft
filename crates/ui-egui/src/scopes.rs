@@ -2,21 +2,28 @@
 //!
 //! While the window is open the compositor sends a small NV12 copy of the program (at most
 //! [`craft_scopes::MAX_W`] × [`craft_scopes::MAX_H`], BT.709 limited range) to [`Scopes::feed`].
-//! Each interface frame hands the newest copy to the scopes thread, which computes and paints the
-//! chosen scope into buffers it keeps and sends the picture back. The compositor thread only draws
-//! the copy, and the interface thread only uploads the finished picture.
+//! Each interface frame hands the newest copy to the scopes thread when it is idle. The thread
+//! computes and paints the chosen scope into buffers it keeps, makes the texture image, and sends
+//! the picture back. The compositor thread only draws the copy, and the interface thread only
+//! hands the finished image to its texture. The threads share bounded lock-free queues and atomic
+//! flags, and the scopes thread parks while it has nothing to do.
+//!
+//! The copy is drawn from the program with linear filtering and its chroma is at half width and
+//! half height, so hard edges in the program show as intermediate levels on the scopes.
 
 use std::sync::Arc;
-use std::sync::mpsc::{Receiver, SyncSender, TrySendError, sync_channel};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::JoinHandle;
 
-use craft_scopes::{Computed, Frame, Histogram, Matrix, ParadeType, Params, Range, ScopeKind, Signal, WaveformType, paint};
-use studiocraft_media::queue::Fifo;
+use craft_scopes::{Computed, Frame, Grid, Histogram, Matrix, Params, Range, ScopeKind, Signal, paint};
+use studiocraft_media::queue::{Fifo, Latest};
 use studiocraft_media::video::{PixelFormat, PooledFrame, VideoFrame};
 use studiocraft_studio::ScopeFeed;
 
-/// Frames the feed holds; older ones are dropped and go back to the compositor's pool.
-const FEED_FRAMES: usize = 2;
+/// Frames the feed holds; an older one is dropped and goes back to the compositor's pool. With the
+/// one the scopes thread holds, the scopes never hold more than the compositor's converter keeps
+/// for this sink (its capacity plus one).
+const FEED_FRAMES: usize = 1;
 
 /// A painted scope.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -26,6 +33,9 @@ pub struct Picture {
     pub width: usize,
     pub height: usize,
     pub rgba: Vec<u8>,
+    /// The texture image of `rgba`, made on the scopes thread; the window moves it into its
+    /// texture.
+    pub image: Option<egui::ColorImage>,
     /// The bins the window draws for [`ScopeKind::Histogram`].
     pub histogram: Option<Histogram>,
     /// The size of the program copy the scope was computed from.
@@ -64,14 +74,19 @@ pub fn compute(frame: &VideoFrame, kind: ScopeKind, work: &mut Work, out: &mut P
     let f = Frame::Nv12 { width: w, height: h, y, y_stride: w, uv, uv_stride: w, matrix: Matrix::Bt709, range: Range::Limited };
     work.signal.fill(&f).map_err(|e| e.to_string())?;
     let p = Params::default();
-    craft_scopes::compute_into(kind, &work.signal, &p, WaveformType::Rgb, ParadeType::Rgb, &mut work.computed);
+    craft_scopes::compute_into(kind, &work.signal, &p, &mut work.computed);
     out.kind = kind;
     out.source = (frame.width, frame.height);
     match &work.computed {
         Computed::Waveform(wf) => {
-            let layers: Vec<(&craft_scopes::Grid, [f32; 3])> = wf.traces.iter().map(|t| (t, trace_color(t.name))).collect();
+            let none = Grid::default();
+            let mut layers = [(&none, [0.0; 3]); 4];
+            for (l, t) in layers.iter_mut().zip(&wf.traces) {
+                *l = (t, trace_color(t.name));
+            }
+            let n = wf.traces.len().min(layers.len());
             let reference = paint::waveform_reference(wf.per_column);
-            (out.width, out.height) = paint::grids_into(&layers, reference, 1.0, &mut work.scratch, &mut out.rgba);
+            (out.width, out.height) = paint::grids_into(layers.get(..n).unwrap_or(&[]), reference, 1.0, &mut work.scratch, &mut out.rgba);
             out.histogram = None;
         }
         Computed::Parade(wf) => {
@@ -106,7 +121,10 @@ pub fn compute(frame: &VideoFrame, kind: ScopeKind, work: &mut Work, out: &mut P
                 None => out.histogram = Some(hist.clone()),
             }
         }
+        _ => return Err(format!("the scopes cannot draw {kind:?}")),
     }
+    out.image = (out.width > 0 && out.height > 0 && out.rgba.len() == out.width * out.height * 4)
+        .then(|| egui::ColorImage::from_rgba_premultiplied([out.width, out.height], &out.rgba));
     Ok(())
 }
 
@@ -117,13 +135,26 @@ struct Job {
     spare: Option<Picture>,
 }
 
+/// A finished picture, or why the copy could not be drawn and the picture's buffers to reuse.
+type Outcome = Result<Picture, (String, Picture)>;
+
+/// What the window and the scopes thread share.
+struct Shared {
+    /// The copy to draw next. The window publishes only while the thread is idle.
+    job: Latest<Job>,
+    /// Finished pictures. At most one is outstanding, since the thread draws one copy at a time.
+    pictures: Fifo<Outcome>,
+    /// Set by the window when it hands a copy over, cleared by the thread when the picture is out.
+    busy: AtomicBool,
+    stop: AtomicBool,
+}
+
 /// The open Scopes window's feed and thread.
 pub struct Scopes {
     feed: Arc<Fifo<Arc<PooledFrame>>>,
-    jobs: Option<SyncSender<Job>>,
-    pictures: Receiver<Result<Picture, String>>,
+    shared: Arc<Shared>,
     thread: Option<JoinHandle<()>>,
-    /// The newest picture, and whether the window has uploaded it.
+    /// The newest picture, and whether the window has taken its image.
     pub latest: Option<Picture>,
     pub fresh: bool,
     /// The newest error the thread reported.
@@ -131,6 +162,9 @@ pub struct Scopes {
     spare: Option<Picture>,
     /// Pictures received.
     pub computed: u64,
+    /// Program copies taken from the feed but not drawn because a newer one arrived or the thread
+    /// was busy.
+    skipped: u64,
     /// The texture the window shows the newest picture with.
     pub texture: Option<egui::TextureHandle>,
 }
@@ -138,32 +172,40 @@ pub struct Scopes {
 impl Scopes {
     /// Start the scopes thread. Fails when the thread cannot start.
     pub fn start() -> Result<Scopes, String> {
-        let (jobs, inbox) = sync_channel::<Job>(1);
-        let (outbox, pictures) = sync_channel(2);
+        let shared = Arc::new(Shared { job: Latest::new(), pictures: Fifo::new(2), busy: AtomicBool::new(false), stop: AtomicBool::new(false) });
+        let theirs = Arc::clone(&shared);
         let thread = std::thread::Builder::new()
             .name("scopes".into())
             .spawn(move || {
                 let mut work = Work::default();
-                while let Ok(job) = inbox.recv() {
-                    let mut out = job.spare.unwrap_or_default();
-                    let r = compute(&job.frame, job.kind, &mut work, &mut out).map(|()| out);
-                    drop(job.frame);
-                    if outbox.send(r).is_err() {
+                loop {
+                    if let Some(job) = theirs.job.take() {
+                        let mut out = job.spare.unwrap_or_default();
+                        let r = match compute(&job.frame, job.kind, &mut work, &mut out) {
+                            Ok(()) => Ok(out),
+                            Err(e) => Err((e, out)),
+                        };
+                        drop(job.frame);
+                        theirs.pictures.push(r);
+                        theirs.busy.store(false, Ordering::Release);
+                    } else if theirs.stop.load(Ordering::Acquire) {
                         break;
+                    } else {
+                        std::thread::park();
                     }
                 }
             })
             .map_err(|e| e.to_string())?;
         Ok(Scopes {
             feed: Arc::new(Fifo::new(FEED_FRAMES)),
-            jobs: Some(jobs),
-            pictures,
+            shared,
             thread: Some(thread),
             latest: None,
             fresh: false,
             error: None,
             spare: None,
             computed: 0,
+            skipped: 0,
             texture: None,
         })
     }
@@ -173,47 +215,68 @@ impl Scopes {
         ScopeFeed { sink: Arc::clone(&self.feed), max_width: craft_scopes::MAX_W as u32, max_height: craft_scopes::MAX_H as u32 }
     }
 
-    /// Hand the newest program copy to the thread when it is free, and take any finished picture.
-    /// Older copies go back to the compositor's pool.
+    /// Program copies the scopes never drew: dropped from the full feed, replaced by a newer copy,
+    /// or arriving while the thread was busy.
+    pub fn dropped(&self) -> u64 {
+        self.feed.dropped().saturating_add(self.skipped)
+    }
+
+    /// Hand the newest program copy to the thread when it is idle, and take any finished picture.
+    /// Other copies go back to the compositor's pool.
     pub fn pump(&mut self, kind: ScopeKind) {
         let mut newest = None;
         while let Some(f) = self.feed.pop() {
-            newest = Some(f);
-        }
-        if let (Some(frame), Some(jobs)) = (newest, &self.jobs) {
-            match jobs.try_send(Job { frame, kind, spare: self.spare.take() }) {
-                Ok(()) => {}
-                // The thread is still working on the last copy; this one is dropped.
-                Err(TrySendError::Full(job) | TrySendError::Disconnected(job)) => self.spare = job.spare,
+            if newest.replace(f).is_some() {
+                self.skipped += 1;
             }
         }
-        while let Ok(r) = self.pictures.try_recv() {
+        if let Some(frame) = newest {
+            match &self.thread {
+                Some(t) if !self.shared.busy.load(Ordering::Acquire) => {
+                    self.shared.busy.store(true, Ordering::Release);
+                    self.shared.job.publish(Job { frame, kind, spare: self.spare.take() });
+                    t.thread().unpark();
+                }
+                // The thread is still drawing the last copy; this one is dropped.
+                _ => self.skipped += 1,
+            }
+        }
+        while let Some(r) = self.shared.pictures.pop() {
             self.received(r);
         }
     }
 
-    fn received(&mut self, r: Result<Picture, String>) {
-        match r {
+    fn received(&mut self, r: Outcome) {
+        let spare = match r {
             Ok(p) => {
-                self.spare = self.latest.replace(p);
                 self.fresh = true;
                 self.error = None;
                 self.computed += 1;
+                self.latest.replace(p)
             }
-            Err(e) => self.error = Some(e),
+            Err((e, buffers)) => {
+                self.error = Some(e);
+                Some(buffers)
+            }
+        };
+        if self.spare.is_none() {
+            self.spare = spare;
         }
     }
 
-    /// Wait for the thread's next picture (tests: the frame was handed over with [`Scopes::pump`]).
+    /// Wait for the thread to finish the copy handed over with [`Scopes::pump`] and take its
+    /// picture (tests). False when no picture came.
     #[cfg(test)]
     pub fn wait(&mut self) -> bool {
-        match self.pictures.recv() {
-            Ok(r) => {
-                self.received(r);
-                true
-            }
-            Err(_) => false,
+        while self.shared.busy.load(Ordering::Acquire) && self.thread.as_ref().is_some_and(|t| !t.is_finished()) {
+            std::thread::yield_now();
         }
+        let mut got = false;
+        while let Some(r) = self.shared.pictures.pop() {
+            self.received(r);
+            got = true;
+        }
+        got
     }
 
     /// The feed the compositor writes to, for tests that stand in for it.
@@ -225,9 +288,10 @@ impl Scopes {
 
 impl Drop for Scopes {
     fn drop(&mut self) {
-        // Closing the job channel ends the thread after the frame it is computing.
-        self.jobs = None;
+        // The thread ends after the copy it is drawing.
+        self.shared.stop.store(true, Ordering::Release);
         if let Some(t) = self.thread.take() {
+            t.thread().unpark();
             let _ = t.join();
         }
     }
@@ -355,10 +419,38 @@ mod tests {
             let p = s.latest.as_ref().unwrap();
             assert_eq!((p.kind, p.source), (ScopeKind::VectorscopeYuv, (32, 16)), "the newest copy");
             assert_eq!(s.computed, round + 1);
+            assert_eq!(s.dropped(), round + 1, "the older copy was dropped from the feed");
             assert!(s.fresh && s.error.is_none());
+            assert!(p.image.as_ref().is_some_and(|i| i.size == [p.width, p.height]), "the thread made the texture image");
         }
         drop(s);
         assert_eq!(pool.free(), pool.made(), "every frame went back to the pool");
+    }
+
+    #[test]
+    fn a_copy_that_cannot_be_drawn_hands_its_buffers_back() {
+        let pool: Arc<FramePool> = Pool::new(2, VideoFrame::default);
+        let mut s = Scopes::start().unwrap();
+        let mut f = pool.take();
+        assert!(f.reshape(4, 4, PixelFormat::Rgba8));
+        s.feed_queue().push(Arc::new(f));
+        s.pump(ScopeKind::Waveform);
+        assert!(s.wait());
+        assert!(s.error.as_deref().is_some_and(|e| e.contains("NV12")));
+        assert!(s.latest.is_none() && s.spare.is_some(), "the picture's buffers come back for the next copy");
+    }
+
+    #[test]
+    fn a_busy_thread_holds_no_queued_copy() {
+        let pool: Arc<FramePool> = Pool::new(2, VideoFrame::default);
+        let mut s = Scopes::start().unwrap();
+        // While the thread draws a copy, a newer one goes straight back to the pool.
+        s.shared.busy.store(true, Ordering::Release);
+        s.feed_queue().push(half_white(&pool, 16, 8));
+        s.pump(ScopeKind::Waveform);
+        assert_eq!(s.dropped(), 1);
+        assert_eq!(pool.free(), pool.made(), "the scopes hold no copy");
+        s.shared.busy.store(false, Ordering::Release);
     }
 
     #[test]

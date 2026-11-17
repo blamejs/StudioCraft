@@ -639,6 +639,12 @@ impl Studio {
         self.update_scope_target();
     }
 
+    /// Program copies the scopes never received because the compositor's read-back for them fell
+    /// behind (0 without a graphics device).
+    pub fn scope_skipped(&self) -> u64 {
+        self.video.as_ref().map_or(0, |v| v.shared.scope_skipped.load(std::sync::atomic::Ordering::Relaxed))
+    }
+
     fn update_scope_target(&mut self) {
         let Some(v) = &self.video else { return };
         let canvas = self.canvas();
