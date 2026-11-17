@@ -15,6 +15,8 @@ pub enum Class {
 pub const TABLE: &[(&str, Class)] = &[
     ("model", Class::Layer(0)),
     ("media", Class::Layer(0)),
+    // Shared crates built here before they move to craft-libs.
+    ("craft-scopes", Class::Layer(0)),
     ("plugin", Class::Layer(1)),
     ("engine", Class::Layer(2)),
     ("render", Class::Layer(2)),
