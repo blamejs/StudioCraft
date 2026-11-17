@@ -1,0 +1,385 @@
+# StudioCraft, Dutch.
+# Columns: context, source text, translation. Rows not listed here show in English.
+@id	language.name	Nederlands
+	a camera was not found	er is geen camera gevonden
+	A recording, stream or replay buffer is running. Exiting stops it; a recording is finished and saved first, and the replay buffer's unsaved video is lost.	Er loopt een opname, een stream of de replaybuffer. Afsluiten stopt deze; een opname wordt eerst afgerond en opgeslagen, en de niet-opgeslagen video van de replaybuffer gaat verloren.
+	About StudioCraft	Over StudioCraft
+	About {app}	Over {app}
+	Add	Toevoegen
+	Add a filter to change how this source looks or sounds.	Voeg een filter toe om het beeld of geluid van deze bron te veranderen.
+	Add a scene	Een scène toevoegen
+	Add a source	Een bron toevoegen
+	Add Scene	Scène toevoegen
+	Alignment	Uitlijning
+	Alpha mask (alpha channel)	Alfamasker (alfakanaal)
+	Alpha mask (color channel)	Alfamasker (kleurkanaal)
+	Apply	Toepassen
+	Apply Dock Layout	Dockindeling toepassen
+	Attack (ms)	Aanzet (ms)
+	Audio bitrate	Audiobitrate
+	Audio input capture	Audio-invoer opnemen
+	Audio Mixer	Audiomixer
+	Audio output capture	Audio-uitvoer opnemen
+	Audio source actions	Acties voor audiobronnen
+	available	beschikbaar
+	Available Encoders	Beschikbare encoders
+	Background	Achtergrond
+	Balanced	Gebalanceerd
+	Blend (add)	Mengen (optellen)
+	Blend (multiply)	Mengen (vermenigvuldigen)
+	Blend (subtract)	Mengen (aftrekken)
+	Bottom	Onder
+	Brightness	Helderheid
+	Browse…	Bladeren…
+	camera access is not allowed in the system's privacy settings	cameratoegang is niet toegestaan in de privacyinstellingen van het systeem
+	Cancel	Annuleren
+	Canvas size	Canvasgrootte
+	Capture rate (frames per second)	Opnamesnelheid (beelden per seconde)
+	Ceiling (dB)	Plafond (dB)
+	Center	Midden
+	Center to Screen	Centreren op scherm
+	Check for updates at start	Bij het starten op updates controleren
+	Check for Updates…	Op updates controleren…
+	Choose in the system picker	Kiezen in de systeemkiezer
+	Chroma key	Chromakey
+	Close	Sluiten
+	Close below (dB)	Sluiten onder (dB)
+	Color	Kleur
+	Color correction	Kleurcorrectie
+	Color key	Kleurkey
+	Community	Community
+	Compressor	Compressor
+	Contrast	Contrast
+	could not connect to the PipeWire sound server	kan geen verbinding maken met de PipeWire-geluidsserver
+	CPU usage preset (faster uses less CPU)	Voorinstelling voor CPU-gebruik (sneller gebruikt minder CPU)
+	Credits	Credits
+	Crop and pad	Bijsnijden en opvullen
+	Crop or pad each edge	Elke rand bijsnijden of opvullen
+	Cut	Harde overgang
+	Cut to Program	Direct naar programma
+	Default	Standaard
+	Defaults	Standaardwaarden
+	Delays this source's audio, to line it up with its picture	Vertraagt het geluid van deze bron zodat het bij het beeld past
+	Device	Apparaat
+	Direction	Richting
+	Discord Server	Discord-server
+	Display	Beeldscherm
+	Display capture	Beeldschermopname
+	Dock in the Strip	In de dockbalk plaatsen
+	Docks	Docks
+	dropped {dropped}  lagged {lagged}	weggevallen {dropped}  vertraagd {lagged}
+	Duplicate	Dupliceren
+	Duplicate…	Dupliceren…
+	Duration	Duur
+	Ease in	Langzaam in
+	Ease in and out	Langzaam in en uit
+	Ease out	Langzaam uit
+	Easing	Versnelling
+	Edit	Bewerken
+	Enabled	Ingeschakeld
+	Encoder queue	Encoderwachtrij
+	Ending Stream…	Stream beëindigen…
+	Equalizer	Equalizer
+	Existing Source	Bestaande bron
+	Exit	Afsluiten
+	Exit StudioCraft?	StudioCraft afsluiten?
+	Export…	Exporteren…
+	Fade	Vervagen
+	Fade over 300 ms	Vervagen in 300 ms
+	Fade through color	Vervagen via een kleur
+	Failed: {error}	Mislukt: {error}
+	ffmpeg (set its location in Settings › Output) was not found	ffmpeg is niet gevonden (stel de locatie in via Instellingen › Uitvoer)
+	ffmpeg on the PATH	ffmpeg uit PATH
+	ffmpeg program	ffmpeg-programma
+	File	Bestand
+	Filters for '{name}'	Filters voor '{name}'
+	Filters…	Filters…
+	Finishing Recording…	Opname afronden…
+	Fit to Screen	Aanpassen aan scherm
+	Font	Lettertype
+	Font family	Lettertypefamilie
+	Format	Indeling
+	Frame time (average)	Tijd per beeld (gemiddeld)
+	Frame time (last)	Tijd per beeld (laatste)
+	Frames drawn	Getekende beelden
+	Frames drawn late	Te laat getekende beelden
+	Frames encoded	Gecodeerde beelden
+	Frames per second	Beelden per seconde
+	Frames skipped by encoders	Door encoders overgeslagen beelden
+	Free software under the MIT or Apache 2.0 license.	Vrije software onder de MIT- of Apache 2.0-licentie.
+	From the bottom	Van onder
+	From the left	Van links
+	From the right	Van rechts
+	From the top	Van boven
+	Full-Screen Interface	Interface op volledig scherm
+	Gain	Versterking
+	Gain (dB)	Versterking (dB)
+	General	Algemeen
+	Go Live	Live gaan
+	H.264 (built in)	H.264 (ingebouwd)
+	Height	Hoogte
+	Hide	Verbergen
+	High	Hoog
+	High (dB)	Hoog (dB)
+	Histogram	Histogram
+	HLS vectorscope	HLS-vectorscoop
+	Hold (ms)	Vasthouden (ms)
+	Horizontal speed (px/s)	Horizontale snelheid (px/s)
+	Hotkeys	Sneltoetsen
+	Image	Afbeelding
+	Image mask	Afbeeldingsmasker
+	Import…	Importeren…
+	Key color	Keykleur
+	Key color spill reduction	Overloopvermindering van de keykleur
+	Keyframe interval	Keyframe-interval
+	Language	Taal
+	Layouts	Indelingen
+	Left	Links
+	Licenses	Licenties
+	Limit height	Hoogte beperken
+	Limit width	Breedte beperken
+	Limiter	Begrenzer
+	Linear	Lineair
+	Live, {time}	Live, {time}
+	Lock (it can't be moved in the preview)	Vergrendelen (kan niet worden verplaatst in het voorbeeld)
+	Lock Preview	Voorbeeld vergrendelen
+	Loop	Herhalen
+	Low (dB)	Laag (dB)
+	Maximize	Maximaliseren
+	Media file	Mediabestand
+	Media files	Mediabestanden
+	Mid (dB)	Midden (dB)
+	Minimize	Minimaliseren
+	Mode	Modus
+	Monitor and output	Meeluisteren en uitvoeren
+	Monitor off	Meeluisteren uit
+	Monitor only (left out of recordings and streams)	Alleen meeluisteren (niet in opnames en streams)
+	Monitoring	Meeluisteren
+	Monitoring device	Apparaat voor meeluisteren
+	Move Dock	Dock verplaatsen
+	Move Left	Naar links
+	Move Right	Naar rechts
+	Move the scene down	De scène omlaag verplaatsen
+	Move the scene up	De scène omhoog verplaatsen
+	Move the source down	De bron omlaag verplaatsen
+	Move the source up	De bron omhoog verplaatsen
+	Mute	Dempen
+	Name	Naam
+	New Profile	Nieuw profiel
+	New…	Nieuw…
+	No audio sources are heard in this scene.	In deze scène is geen audiobron te horen.
+	No contributors listed yet	Nog geen bijdragers
+	No filters yet.	Nog geen filters.
+	No graphics device: the preview is off	Geen grafisch apparaat: het voorbeeld staat uit
+	No sources in this scene. Add one with +.	Deze scène heeft geen bronnen. Voeg er een toe met +.
+	Noise gate	Noise gate
+	None	Geen
+	not in this ffmpeg	niet in deze ffmpeg
+	Opacity (%)	Dekking (%)
+	Open above (dB)	Openen boven (dB)
+	Order	Volgorde
+	Outline color	Omtrekkleur
+	Outline width	Omtrekdikte
+	Output	Uitvoer
+	Output Controls	Uitvoerknoppen
+	Output gain (dB)	Uitvoerversterking (dB)
+	Output size	Uitvoergrootte
+	Parade	Parade
+	Picture file	Afbeeldingsbestand
+	Pictures	Afbeeldingen
+	Plays this source on the monitoring device chosen in Settings › Audio	Speelt deze bron af op het apparaat voor meeluisteren dat is gekozen in Instellingen › Audio
+	Preferences…	Voorkeuren…
+	Preset (higher is slower and better)	Voorinstelling (hoger is trager en beter)
+	Presets	Voorinstellingen
+	Preview: {name}	Voorbeeld: {name}
+	Primary display	Hoofdscherm
+	Profile	Profiel
+	Program: {name}	Programma: {name}
+	Properties	Eigenschappen
+	Properties for '{name}'	Eigenschappen van '{name}'
+	Properties…	Eigenschappen…
+	Quality	Kwaliteit
+	Quit	Stoppen
+	Ratio	Verhouding
+	Read the displays, windows and devices again	De beeldschermen, vensters en apparaten opnieuw inlezen
+	Reading the lists…	Lijsten inlezen…
+	Record	Opnemen
+	Record and stream scenes built from your screen, windows, cameras, pictures, text and sound.	Neem scènes op en stream ze, opgebouwd uit je scherm, vensters, camera's, afbeeldingen, tekst en geluid.
+	Recording	Opname
+	Recording folder	Map voor opnames
+	Recording, {time}	Opname, {time}
+	Recordings	Opnames
+	Redo	Opnieuw
+	Refresh Lists	Lijsten vernieuwen
+	Release (ms)	Uitsterven (ms)
+	Remove	Verwijderen
+	Remove Dock Layout	Dockindeling verwijderen
+	Remove Layout	Indeling verwijderen
+	Remove Selected Source	Geselecteerde bron verwijderen
+	Remove the selected scene	De geselecteerde scène verwijderen
+	Remove the selected source from the scene	De geselecteerde bron uit de scène verwijderen
+	Rename	Naam wijzigen
+	Rename…	Naam wijzigen…
+	Replay buffer	Replaybuffer
+	Replay Buffer	Replaybuffer
+	Replay buffer length	Lengte van de replaybuffer
+	Replay buffer memory limit	Geheugenlimiet van de replaybuffer
+	Replay buffer, {time}	Replaybuffer, {time}
+	Replay length (seconds)	Lengte van de replay (seconden)
+	Replay memory limit (MB)	Geheugenlimiet van de replay (MB)
+	Report an Issue	Een probleem melden
+	Reset Docks	Docks herstellen
+	Reset Transform	Transformatie herstellen
+	Resize the dock strip	Grootte van de dockbalk wijzigen
+	Resize the docks	Grootte van de docks wijzigen
+	Restore	Herstellen
+	Right	Rechts
+	Rotate 90° Clockwise	90° rechtsom draaien
+	Rotate 90° Counterclockwise	90° linksom draaien
+	Running	Actief
+	Saturation	Verzadiging
+	Save Dock Layout	Dockindeling opslaan
+	Save Dock Layout…	Dockindeling opslaan…
+	Save Replay	Replay opslaan
+	Scene Collection	Scèneverzameling
+	Scene {n}	Scène {n}
+	Scenes	Scènes
+	Scope Type	Soort meter
+	Scopes	Videometers
+	Scroll	Schuiven
+	Send the preview to the program	Het voorbeeld naar het programma sturen
+	Server	Server
+	Settings	Instellingen
+	sharing stopped	delen is gestopt
+	Sharpen	Verscherpen
+	Sharpness	Scherpte
+	Show	Tonen
+	Show an area	Een gebied tonen
+	Show Recordings	Opnames tonen
+	Show Scene {n}	Scène {n} tonen
+	Show Settings Folder	Map met instellingen tonen
+	Similarity	Gelijkenis
+	Size	Grootte
+	Smoothness	Zachtheid
+	Software (x264)	Software (x264)
+	Source Code	Broncode
+	Source Properties	Broneigenschappen
+	Sources	Bronnen
+	Sources set to monitoring in their Properties window play on this device.	Bronnen die in hun venster Eigenschappen op meeluisteren staan, spelen af op dit apparaat.
+	Speed	Snelheid
+	Start or Stop Recording	Opname starten of stoppen
+	Start or Stop Replay Buffer	Replaybuffer starten of stoppen
+	Start or Stop Streaming	Stream starten of stoppen
+	Start Recording	Opname starten
+	Start Replay Buffer	Replaybuffer starten
+	Start Streaming	Stream starten
+	Starting…	Starten…
+	Stats	Statistieken
+	Status Bar	Statusbalk
+	Stop and Exit	Stoppen en afsluiten
+	Stop Recording	Opname stoppen
+	Stop Replay Buffer	Replaybuffer stoppen
+	Stop Streaming	Stream stoppen
+	Stopped	Gestopt
+	Stopping Replay Buffer…	Replaybuffer stoppen…
+	Stopping…	Stoppen…
+	Stream key	Streamsleutel
+	Stretch image	Afbeelding uitrekken
+	Stretch to Screen	Uitrekken tot scherm
+	Studio Mode	Studiomodus
+	StudioCraft is available under either license, at your option.	StudioCraft is naar keuze onder een van beide licenties beschikbaar.
+	Swipe	Vegen
+	Switch at once	Direct wisselen
+	Sync offset	Synchronisatieverschuiving
+	System ({language})	Systeem ({language})
+	Takes effect the next time StudioCraft starts.	Wordt van kracht bij de volgende start van StudioCraft.
+	Temperature (K)	Temperatuur (K)
+	Text	Tekst
+	the audio capture could not start	de audio-opname kon niet starten
+	the audio capture thread stopped	de thread voor audio-opname is gestopt
+	the audio format could not be described	het audioformaat kon niet worden beschreven
+	the audio stream ended	de audiostroom is beëindigd
+	the audio stream failed	de audiostroom is mislukt
+	the camera capture could not start	de camera-opname kon niet starten
+	the camera is in use by another camera source	de camera wordt gebruikt door een andere camerabron
+	the camera is still closing	de camera wordt nog gesloten
+	the camera offers no format StudioCraft reads	de camera biedt geen formaat dat StudioCraft kan lezen
+	the camera sends frames that cannot be read	de camera stuurt beelden die niet kunnen worden gelezen
+	the camera sent no picture	de camera heeft geen beeld gestuurd
+	the camera stopped	de camera is gestopt
+	the camera stopped sending pictures	de camera stuurt geen beelden meer
+	the camera stopped unexpectedly	de camera is onverwacht gestopt
+	the choice in the system picker was canceled	de keuze in de systeemkiezer is geannuleerd
+	the desktop has no screen-cast portal	het bureaublad heeft geen portaal voor schermopname
+	the screen capture could not start	de schermopname kon niet starten
+	the screen capture failed	de schermopname is mislukt
+	The interface fonts Inter and JetBrains Mono are under the SIL Open Font License 1.1.	De interfacelettertypen Inter en JetBrains Mono vallen onder de SIL Open Font License 1.1.
+	The licenses of the third-party crates StudioCraft uses are checked by `cargo xtask licenses`.	`cargo xtask licenses` controleert de licenties van de crates van derden die StudioCraft gebruikt.
+	The scope could not be computed: {error}	De meter kon niet worden berekend: {error}
+	The scopes need a graphics device to read the program.	De videometers hebben een grafisch apparaat nodig om het programma te lezen.
+	This filter has no settings.	Dit filter heeft geen instellingen.
+	this is not supported on this system yet	dit wordt op dit systeem nog niet ondersteund
+	Threshold (dB)	Drempel (dB)
+	Tint	Tint
+	Tools	Extra
+	Top	Boven
+	Transition	Overgang
+	Transition Controls	Overgangsknoppen
+	Transition settings	Instellingen voor de overgang
+	Transition to Program	Overgang naar programma
+	Type	Soort
+	Type shortcuts such as Ctrl+1 or Shift+F5; separate several with commas.	Typ sneltoetsen zoals Ctrl+1 of Shift+F5; scheid er meerdere met komma's.
+	Undo	Ongedaan maken
+	Undock	Losmaken
+	Updates	Updates
+	Use system title bar	Titelbalk van het systeem gebruiken
+	Username	Gebruikersnaam
+	Version {version} ({os} {arch})	Versie {version} ({os} {arch})
+	Vertical speed (px/s)	Verticale snelheid (px/s)
+	Video bitrate	Videobitrate
+	Video encoder	Video-encoder
+	Video settings can't change while recording, streaming or running the replay buffer.	Video-instellingen kunnen niet worden gewijzigd tijdens een opname, een stream of terwijl de replaybuffer loopt.
+	View	Beeld
+	Waiting for the program picture…	Wachten op het programmabeeld…
+	waiting for a choice in the system picker	wachten op een keuze in de systeemkiezer
+	waiting for the camera	wachten op de camera
+	waiting to open the camera again	wachten om de camera opnieuw te openen
+	Waveform	Golfvorm
+	Website	Website
+	Width	Breedte
+	Window	Venster
+	Window capture	Vensteropname
+	Your Videos folder	Je map Video's
+	YUV vectorscope	YUV-vectorscoop
+	{device} (not connected)	{device} (niet aangesloten)
+	{encoder} (not in this ffmpeg)	{encoder} (niet in deze ffmpeg)
+	{program} did not report its version	{program} heeft geen versie gemeld
+@msg	A plug-in could not be loaded: {error}	Een plug-in kon niet worden geladen: {error}
+@msg	Audio monitoring could not start: {error}	Meeluisteren kon niet starten: {error}
+@msg	Audio monitoring stopped: {error}	Meeluisteren is gestopt: {error}
+@msg	Could not check for updates: {error}	Kon niet op updates controleren: {error}
+@msg	Exported the scene collection to {path}	Scèneverzameling geëxporteerd naar {path}
+@msg	Imported the scene collection `{name}`	Scèneverzameling `{name}` geïmporteerd
+@msg	No file dialog could be shown: {error}	Er kon geen bestandsvenster worden getoond: {error}
+@msg	Recording saved to {path}	Opname opgeslagen in {path}
+@msg	Replay saved to {path}	Replay opgeslagen in {path}
+@msg	The compositor thread could not start: {error}	De compositor-thread kon niet starten: {error}
+@msg	The preferences could not be saved: {error}	De voorkeuren konden niet worden opgeslagen: {error}
+@msg	The profile could not be saved: {error}	Het profiel kon niet worden opgeslagen: {error}
+@msg	The recording could not be finished	De opname kon niet worden afgerond
+@msg	The recording could not be finished: {error}	De opname kon niet worden afgerond: {error}
+@msg	The recording stopped: {error}	De opname is gestopt: {error}
+@msg	The replay buffer could not be stopped	De replaybuffer kon niet worden gestopt
+@msg	The replay buffer could not be stopped: {error}	De replaybuffer kon niet worden gestopt: {error}
+@msg	The replay buffer stopped	De replaybuffer is gestopt
+@msg	The replay buffer stopped: {error}	De replaybuffer is gestopt: {error}
+@msg	The replay could not be saved	De replay kon niet worden opgeslagen
+@msg	The replay could not be saved: {error}	De replay kon niet worden opgeslagen: {error}
+@msg	The scene collection could not be saved: {error}	De scèneverzameling kon niet worden opgeslagen: {error}
+@msg	The scopes could not start: {error}	De videometers konden niet starten: {error}
+@msg	The stream could not be finished	De stream kon niet worden afgerond
+@msg	The stream could not be finished: {error}	De stream kon niet worden afgerond: {error}
+@msg	The stream ended	De stream is beëindigd
+@msg	The stream stopped: {error}	De stream is gestopt: {error}
+@msg	ffmpeg at {path} was not found	ffmpeg is niet gevonden op {path}
+menu	Transform	Transformeren
