@@ -22,13 +22,16 @@ pub struct DockState<'a> {
     pub meters: &'a mut HashMap<SourceId, MeterBallistics>,
     /// Seconds since the meters were last advanced.
     pub dt: f32,
+    /// The place of the dock being drawn among the shown docks, and how many are shown.
+    pub place: (usize, usize),
 }
 
-/// What a dock's header drew, for `ui.inspect`: its rectangle, the name and rectangle of each
-/// action from right to left, and whether the title was shortened to fit.
+/// What a dock's header drew, for `ui.inspect`: its rectangle, the room its title had, the name
+/// and rectangle of each action from right to left, and whether the title was shortened to fit.
 #[derive(Clone, Debug)]
 pub struct Drawn {
     pub header: Rect,
+    pub title: Rect,
     pub actions: Vec<(&'static str, Rect)>,
     pub truncated: bool,
 }
@@ -45,7 +48,25 @@ fn header(ui: &mut Ui, title: &str, add: impl FnOnce(&mut Ui, &mut Vec<(&'static
         add(ui, &mut actions);
         actions
     });
-    Drawn { header: r.rect, actions: r.inner, truncated: r.truncated }
+    Drawn { header: r.rect, title: r.title, actions: r.inner, truncated: r.truncated }
+}
+
+/// The menu a right-click on a dock's title opens: Move Left and Move Right, which run
+/// `dock.move` for `dock` (its name in `control::DOCK_NAMES`). The first shown dock cannot move
+/// left and the last cannot move right.
+fn dock_menu(ui: &mut Ui, drawn: &Drawn, dock: &'static str, place: (usize, usize), acts: &mut Vec<Act>) {
+    let (k, n) = place;
+    let r = ui.interact(drawn.title, ui.scope_id().with(("dock-title", dock)), Sense::click());
+    r.context_menu(|ui| {
+        if ui.add_enabled(k > 0, egui::Button::new(tl!("Move Left"))).clicked() {
+            acts.push(Act::run("dock.move", json!({"dock": dock, "to": "left"})));
+            ui.close();
+        }
+        if ui.add_enabled(k + 1 < n, egui::Button::new(tl!("Move Right"))).clicked() {
+            acts.push(Act::run("dock.move", json!({"dock": dock, "to": "right"})));
+            ui.close();
+        }
+    });
 }
 
 /// A header action named `name` for `ui.inspect`; `tip` is English and shown translated.
@@ -103,6 +124,7 @@ pub fn scenes(ui: &mut Ui, studio: &Studio, st: &mut DockState, acts: &mut Vec<A
             acts.push(Act::run("scene.add", json!({})));
         }
     });
+    dock_menu(ui, &drawn, "scenes", st.place, acts);
     let area = egui::ScrollArea::vertical().id_salt("scenes").auto_shrink([false, false]);
     area.show(&mut body(ui), |ui| {
         for (i, scene) in c.scenes.iter().enumerate() {
@@ -218,6 +240,7 @@ pub fn sources(ui: &mut Ui, studio: &Studio, st: &mut DockState, acts: &mut Vec<
         let r = icons::menu_sized(ui, Icon::Plus, tl!("Add a source"), size, scene.is_some(), |ui| add_source_menu(ui, studio, edit, acts));
         a.push(("add", r.rect));
     });
+    dock_menu(ui, &drawn, "sources", st.place, acts);
     let Some(scene) = scene else { return drawn };
     let area = egui::ScrollArea::vertical().id_salt("sources").auto_shrink([false, false]);
     area.show(&mut body(ui), |ui| {
@@ -369,6 +392,7 @@ fn gain_text(gain: f32) -> String {
 
 pub fn mixer(ui: &mut Ui, studio: &Studio, st: &mut DockState, acts: &mut Vec<Act>) -> Drawn {
     let drawn = header(ui, "Audio Mixer", |_, _| ());
+    dock_menu(ui, &drawn, "mixer", st.place, acts);
     let c = studio.collection();
     let program: Vec<SourceId> = c.scene(c.program_scene).map(|s| s.items.iter().map(|i| i.source).collect()).unwrap_or_default();
     let audio: Vec<_> = c

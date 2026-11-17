@@ -116,6 +116,7 @@
     {"name": "undo merge window", "group": "editing", "value": 750, "unit": "ms", "code": "engine::history::COALESCE", "estimated": true},
     {"name": "scene shortcuts", "group": "controls", "value": "Ctrl+1 to Ctrl+9", "code": "ui-egui::commands::SCENE_HOTKEYS", "estimated": true},
     {"name": "autosave after a change", "group": "editing", "value": 800, "unit": "ms", "code": "ui-egui::AUTOSAVE", "estimated": true},
+    {"name": "dock widths when none is set", "group": "interface", "value": [300, 340, 400], "unit": "pt", "code": "ui-egui::strip::DEFAULT_WIDTHS", "estimated": true},
     {"name": "status notice time", "group": "interface", "value": 8, "unit": "s", "code": "ui-egui::NOTICE_S", "estimated": true},
     {"name": "status error notice time", "group": "interface", "value": 24, "unit": "s", "code": "ui-egui::NOTICE_S", "estimated": true}
   ]

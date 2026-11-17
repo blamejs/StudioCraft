@@ -247,6 +247,7 @@ impl StudioApp {
                     "dock": DOCK_NAMES.get(*i).copied().unwrap_or("unknown"),
                     "rect": rect(*r),
                     "header": rect(d.header),
+                    "title": rect(d.title),
                     "title_truncated": d.truncated,
                     "actions": d.actions.iter().rev().map(|(name, r)| json!({"name": name, "rect": rect(*r)})).collect::<Vec<_>>(),
                 })
@@ -258,7 +259,12 @@ impl StudioApp {
                 "rect": rect(r),
                 "height": r.height(),
                 "saved_height": crate::strip::usable(d.height),
-                "saved_widths": {"scenes": crate::strip::usable(d.scenes_width), "sources": crate::strip::usable(d.sources_width)},
+                "saved_widths": {
+                    "scenes": crate::strip::usable(d.scenes_width),
+                    "sources": crate::strip::usable(d.sources_width),
+                    "mixer": crate::strip::usable(d.mixer_width),
+                },
+                "order": d.order().iter().filter_map(|i| DOCK_NAMES.get(usize::from(*i)).copied()).collect::<Vec<_>>(),
             })
         });
         let preview = self.last_view.map(|(r, scale)| json!({"rect": rect(r), "scale": scale}));
