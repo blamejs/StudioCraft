@@ -204,7 +204,7 @@ mod tests {
     }
 
     /// Values computed from the Annex 5 equations and the ST 2084 constants by a separate
-    /// implementation (studiocraft-harness color/eetf_oracle.py), 1000 nits to 100 nits.
+    /// implementation, 1000 nits to 100 nits.
     #[test]
     fn matches_an_independent_evaluation_of_the_annex() {
         let curve = Eetf::new(0.0, 1000.0, 0.0, 100.0);
