@@ -7,7 +7,7 @@ use studiocraft_media::Tick;
 use studiocraft_media::queue::Fifo;
 use studiocraft_media::video::PixelFormat;
 use studiocraft_model::{Crop, SourceId, Transform, Vec2};
-use studiocraft_plugin::{Easing, Plugin, Reframe, Transition, VIDEO_EFFECT_PARAMS, VideoContent, VideoEffect, VideoOut};
+use studiocraft_plugin::{Animation, Easing, Plugin, Reframe, Transition, VIDEO_EFFECT_PARAMS, VideoContent, VideoEffect, VideoOut};
 
 use super::*;
 use crate::transitions::Fade;
@@ -248,6 +248,40 @@ fn a_pass_that_differs_from_its_key_about_a_picture_is_skipped() {
     let px = draw(&mut c, Plan { program: SceneDesc { items: vec![it] }, ..Plan::default() }, Tick(2));
     assert!(close(pixel(&px, 16, 2, 8), [0, 255, 0, 255]), "{:?}", pixel(&px, 16, 2, 8));
     assert!(c.take_errors().is_empty());
+}
+
+/// Red is `p0.x` and green `p0.y`.
+const SHOW_PARAMS: &str = "fn effect(color: vec4<f32>, uv: vec2<f32>, size: vec2<f32>, p0: vec4<f32>, p1: vec4<f32>) -> vec4<f32> {
+    return vec4<f32>(p0.x, p0.y, 0.0, 1.0);
+}";
+
+/// A tenth of the seconds in `p[0]` and a sixteenth of the input's width in `p[1]`.
+fn tenths(p: &mut [f32; VIDEO_EFFECT_PARAMS], seconds: f64, (w, _): (u32, u32)) {
+    p[0] = (seconds / 10.0) as f32;
+    p[1] = w as f32 / 16.0;
+}
+
+/// An animated pass steps from the first frame that draws it; a new animation, or one that
+/// left the plan and came back, starts at 0 again.
+#[test]
+fn an_animated_filter_steps_its_parameters_from_its_first_frame() {
+    let Some(mut c) = compositor(16, 16) else { return };
+    let v = solid([0, 0, 0, 255], 8, 8);
+    let s = |n: i64| Tick::from_units(n, 1);
+    let plan = |a: Animation| {
+        let mut it = item(1, &v, at(0.0, 0.0));
+        it.effects = vec![VideoEffect { animation: Some(a), ..VideoEffect::new("test.animated", SHOW_PARAMS, [0.0; VIDEO_EFFECT_PARAMS]) }];
+        Plan { program: SceneDesc { items: vec![it] }, ..Plan::default() }
+    };
+    let a = Animation::new(tenths);
+    let red_green = |px: &[u8]| [pixel(px, 16, 2, 2)[0], pixel(px, 16, 2, 2)[1]];
+    assert_eq!(red_green(&draw(&mut c, plan(a), s(100))), [0, 128]);
+    // 0.5 x 255, rounded either way.
+    let half = red_green(&draw(&mut c, plan(a), s(105)))[0];
+    assert!(half.abs_diff(128) <= 1, "{half}");
+    draw(&mut c, Plan::default(), s(106));
+    assert_eq!(red_green(&draw(&mut c, plan(a), s(108)))[0], 0, "a returning animation starts again");
+    assert_eq!(red_green(&draw(&mut c, plan(Animation::new(tenths)), s(109)))[0], 0, "a new animation starts at 0");
 }
 
 const KEEP: &str = "fn effect(color: vec4<f32>, uv: vec2<f32>, size: vec2<f32>, p0: vec4<f32>, p1: vec4<f32>) -> vec4<f32> {

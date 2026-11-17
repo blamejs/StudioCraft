@@ -8,7 +8,7 @@ use studiocraft_media::audio::{BLOCK_FRAMES, CHANNELS, SAMPLE_RATE};
 use studiocraft_media::mix::{from_db, to_db};
 use studiocraft_model::{ChoiceOption, Field, FieldKind, PathMode, Settings, SettingsSchema};
 use studiocraft_plugin::{
-    EffectImage, Filter, FilterInstance, FilterTarget, MAX_EFFECT_SIDE, Plugin, PluginError, Reframe, VIDEO_EFFECT_PARAMS, VideoEffect,
+    Animation, EffectImage, Filter, FilterInstance, FilterTarget, MAX_EFFECT_SIDE, Plugin, PluginError, Reframe, VIDEO_EFFECT_PARAMS, VideoEffect,
 };
 
 use crate::image::{PICTURE_EXTENSIONS, load as load_picture};
@@ -898,6 +898,126 @@ impl FilterInstance for MaskInstance {
     }
 }
 
+const SCROLL: &str = r"
+fn effect(color: vec4<f32>, uv: vec2<f32>, size: vec2<f32>, p0: vec4<f32>, p1: vec4<f32>) -> vec4<f32> {
+    // p0.xy: how far the picture has moved right and down, in pixels; p0.z: 1 when it repeats.
+    let input = max(input_size(), vec2<f32>(1.0));
+    let px = uv * size - p0.xy;
+    if p0.z < 0.5 {
+        if any(px < vec2<f32>(0.0)) || any(px >= input) {
+            return vec4<f32>(0.0);
+        }
+        return input_pixel(px);
+    }
+    // Blend the four nearest pixels, wrapping at the edges so a repeat joins its neighbor.
+    let q = px - 0.5;
+    let f = q - floor(q);
+    let lo = scroll_wrap(floor(q), input) + 0.5;
+    let hi = scroll_wrap(floor(q) + 1.0, input) + 0.5;
+    let top = mix(input_pixel(lo), input_pixel(vec2<f32>(hi.x, lo.y)), f.x);
+    let bottom = mix(input_pixel(vec2<f32>(lo.x, hi.y)), input_pixel(hi), f.x);
+    return mix(top, bottom, f.y);
+}
+
+fn scroll_wrap(v: vec2<f32>, input: vec2<f32>) -> vec2<f32> {
+    return v - floor(v / input) * input;
+}
+";
+
+/// Moves a source's picture across its area at a steady speed.
+///
+/// A positive Horizontal speed moves the picture right and a negative one left; a positive
+/// Vertical speed moves it down. Speeds are in pixels per second. With Loop the picture repeats
+/// and keeps moving; without it the picture moves out of the area once and leaves it transparent.
+/// Limit width and Limit height set the area's size; the picture repeats across a larger area
+/// when Loop is on. The movement starts again when a speed or Loop changes.
+pub struct Scroll;
+
+/// The fastest Horizontal or Vertical speed, in pixels per second.
+pub const SCROLL_MAX_SPEED: f64 = 2000.0;
+/// The default Width and Height of a limited area.
+pub const SCROLL_DEFAULT_LIMIT: i64 = 100;
+/// How far a picture that does not repeat can move before the shader stops reading it, in pixels.
+const SCROLL_FAR: f64 = 2.0 * MAX_EFFECT_SIDE as f64;
+
+impl Plugin for Scroll {
+    fn id(&self) -> &'static str {
+        "scroll"
+    }
+    fn name(&self) -> &'static str {
+        "Scroll"
+    }
+    fn schema(&self) -> SettingsSchema {
+        let side = |key: &str, label: &str| Field::new(key, label, FieldKind::Int { min: 1, max: SIDE }, SCROLL_DEFAULT_LIMIT);
+        SettingsSchema::new(vec![
+            float_field("speed_x", "Horizontal speed (px/s)", -SCROLL_MAX_SPEED, SCROLL_MAX_SPEED, 1.0, 0.0),
+            float_field("speed_y", "Vertical speed (px/s)", -SCROLL_MAX_SPEED, SCROLL_MAX_SPEED, 1.0, 0.0),
+            Field::new("limit_width", "Limit width", FieldKind::Bool, false),
+            side("width", "Width"),
+            Field::new("limit_height", "Limit height", FieldKind::Bool, false),
+            side("height", "Height"),
+            Field::new("loop", "Loop", FieldKind::Bool, true),
+        ])
+    }
+}
+
+impl Filter for Scroll {
+    fn target(&self) -> FilterTarget {
+        FilterTarget::Video
+    }
+    fn create(&self, settings: &Settings) -> Result<Box<dyn FilterInstance>, PluginError> {
+        let mut f = ScrollInstance { params: [0.0; VIDEO_EFFECT_PARAMS], reframe: Reframe::None, animation: Animation::new(scroll_step) };
+        f.update(settings)?;
+        Ok(Box::new(f))
+    }
+}
+
+struct ScrollInstance {
+    params: Params,
+    reframe: Reframe,
+    animation: Animation,
+}
+
+/// The distance the picture has moved `seconds` after the start, wrapped to the size of the
+/// pass's input when it repeats: `p[4]` and `p[5]` hold the speeds and `p[2]` Loop.
+fn scroll_step(p: &mut Params, seconds: f64, (w, h): (u32, u32)) {
+    let repeats = p[2] > 0.5;
+    for (i, side) in [(0, w), (1, h)] {
+        let moved = f64::from(p[4 + i]) * seconds;
+        p[i] = if repeats { moved.rem_euclid(f64::from(side.max(1))) } else { moved.clamp(-SCROLL_FAR, SCROLL_FAR) } as f32;
+    }
+}
+
+impl FilterInstance for ScrollInstance {
+    /// A rejected update leaves the filter as it was.
+    fn update(&mut self, s: &Settings) -> Result<(), PluginError> {
+        let speed_x = checked(s, "speed_x", 0.0, -SCROLL_MAX_SPEED, SCROLL_MAX_SPEED, false)? as f32;
+        let speed_y = checked(s, "speed_y", 0.0, -SCROLL_MAX_SPEED, SCROLL_MAX_SPEED, false)? as f32;
+        let limit_width = checked_bool(s, "limit_width", false)?;
+        let width = checked_int(s, "width", SCROLL_DEFAULT_LIMIT, 1, SIDE)? as u32;
+        let limit_height = checked_bool(s, "limit_height", false)?;
+        let height = checked_int(s, "height", SCROLL_DEFAULT_LIMIT, 1, SIDE)? as u32;
+        let repeats = checked_bool(s, "loop", true)?;
+        let mut p = [0.0; VIDEO_EFFECT_PARAMS];
+        p[2] = f32::from(u8::from(repeats));
+        p[4] = speed_x;
+        p[5] = speed_y;
+        if (p[2], p[4], p[5]) != (self.params[2], self.params[4], self.params[5]) {
+            self.animation = Animation::new(scroll_step);
+        }
+        self.reframe = if limit_width || limit_height {
+            Reframe::Area { x: 0, y: 0, width: if limit_width { width } else { 0 }, height: if limit_height { height } else { 0 } }
+        } else {
+            Reframe::None
+        };
+        self.params = p;
+        Ok(())
+    }
+    fn video_effect(&self) -> Option<VideoEffect> {
+        Some(VideoEffect { reframe: self.reframe, animation: Some(self.animation), ..VideoEffect::new("scroll", SCROLL, self.params) })
+    }
+}
+
 /// Reads a video filter's pass from its settings.
 type ReadPass = fn(&Settings) -> Result<(Params, Reframe), PluginError>;
 
@@ -931,7 +1051,7 @@ impl FilterInstance for Effect {
 
 /// Every built-in video filter's effect with default settings, for checking that they compile.
 pub fn builtin_video_effects() -> Vec<VideoEffect> {
-    [&ColorCorrection as &dyn Filter, &ChromaKey, &ColorKey, &CropPad, &Sharpen]
+    [&ColorCorrection as &dyn Filter, &ChromaKey, &ColorKey, &CropPad, &Sharpen, &Scroll]
         .iter()
         .filter_map(|f| f.create(&f.schema().defaults()).ok().and_then(|i| i.video_effect()))
         .collect()
@@ -1265,10 +1385,14 @@ mod tests {
     /// A `w` x `h` RGBA frame drawn at the top-left of a 16 x 16 canvas through `effects`; the
     /// canvas as RGBA rows. `None` without a graphics adapter.
     fn draw_frame(pixels: &[[u8; 4]], w: u32, h: u32, effects: Vec<VideoEffect>) -> Option<Vec<u8>> {
+        draw_frames(pixels, w, h, effects, &[studiocraft_media::Tick(0)]).and_then(|mut f| f.pop())
+    }
+
+    /// The canvas after a frame at each of `times`, with one compositor.
+    fn draw_frames(pixels: &[[u8; 4]], w: u32, h: u32, effects: Vec<VideoEffect>, times: &[studiocraft_media::Tick]) -> Option<Vec<Vec<u8>>> {
         use std::sync::Arc;
         use std::sync::atomic::AtomicU64;
 
-        use studiocraft_media::Tick;
         use studiocraft_media::video::PixelFormat;
         use studiocraft_model::{SourceId, Transform};
         use studiocraft_plugin::{VideoContent, VideoOut};
@@ -1284,9 +1408,13 @@ mod tests {
         video.publish(VideoContent::Frame(f));
         let item = ItemDesc { source: SourceId(1), video, transform: Transform::default(), effects };
         c.set_plan(Arc::new(Plan { program: SceneDesc { items: vec![item] }, ..Plan::default() }));
-        c.frame(Tick(0), &AtomicU64::new(0));
-        assert!(c.take_errors().is_empty());
-        Some(c.read_program().unwrap())
+        let mut frames = Vec::new();
+        for &t in times {
+            c.frame(t, &AtomicU64::new(0));
+            assert!(c.take_errors().is_empty());
+            frames.push(c.read_program().unwrap());
+        }
+        Some(frames)
     }
 
     fn canvas_pixel(px: &[u8], x: usize, y: usize) -> [u8; 4] {
@@ -1554,9 +1682,142 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    fn scroll(s: &Settings) -> VideoEffect {
+        Scroll.create(s).unwrap().video_effect().unwrap()
+    }
+
+    fn seconds(s: i64) -> studiocraft_media::Tick {
+        studiocraft_media::Tick::from_units(s, 1)
+    }
+
+    /// Red, green, blue and white in a row, drawn over black.
+    const RGBW: [[u8; 4]; 4] = [[255, 0, 0, 255], [0, 255, 0, 255], [0, 0, 255, 255], [255, 255, 255, 255]];
+
+    fn row(px: &[u8], n: usize) -> Vec<[u8; 4]> {
+        (0..n).map(|x| canvas_pixel(px, x, 0)).collect()
+    }
+
+    #[test]
+    fn scroll_moves_the_picture_and_repeats_it() {
+        let right = Settings::new().with("speed_x", 1.0);
+        let Some(f) = draw_frames(&RGBW, 4, 1, vec![scroll(&right)], &[seconds(10), seconds(11), seconds(16)]) else { return };
+        // The first frame starts the movement; 1 second later the picture is 1 pixel right, and
+        // after 6 seconds 2 pixels right of a whole lap.
+        assert_eq!(row(&f[0], 4), RGBW);
+        assert_eq!(row(&f[1], 4), [RGBW[3], RGBW[0], RGBW[1], RGBW[2]]);
+        assert_eq!(row(&f[2], 4), [RGBW[2], RGBW[3], RGBW[0], RGBW[1]]);
+        let left = Settings::new().with("speed_x", -1.0);
+        let Some(f) = draw_frames(&RGBW, 4, 1, vec![scroll(&left)], &[seconds(0), seconds(1)]) else { return };
+        assert_eq!(row(&f[1], 4), [RGBW[1], RGBW[2], RGBW[3], RGBW[0]]);
+        // A column of two pixels moving down.
+        let down = Settings::new().with("speed_y", 1.0);
+        let Some(f) = draw_frames(&RGBW[..2], 1, 2, vec![scroll(&down)], &[seconds(0), seconds(1)]) else { return };
+        assert_eq!([canvas_pixel(&f[1], 0, 0), canvas_pixel(&f[1], 0, 1)], [RGBW[1], RGBW[0]]);
+    }
+
+    /// Half a pixel into its move, a repeating red and blue pair blends red with blue at every
+    /// pixel, the wrapped edge included.
+    #[test]
+    fn scroll_blends_across_the_edge_where_the_picture_repeats() {
+        let pair = [[255, 0, 0, 255], [0, 0, 255, 255]];
+        let s = Settings::new().with("speed_x", 0.5);
+        let Some(f) = draw_frames(&pair, 2, 1, vec![scroll(&s)], &[seconds(0), seconds(1)]) else { return };
+        for x in 0..2 {
+            let got = canvas_pixel(&f[1], x, 0);
+            assert!(near(got, [128, 0, 128, 255]), "x {x}: {got:?}");
+        }
+    }
+
+    #[test]
+    fn scroll_without_loop_moves_the_picture_out_once() {
+        let s = Settings::new().with("speed_x", 1.0).with("loop", false);
+        let Some(f) = draw_frames(&RGBW, 4, 1, vec![scroll(&s)], &[seconds(0), seconds(2), seconds(9)]) else { return };
+        let black = [0, 0, 0, 255];
+        assert_eq!(row(&f[1], 4), [black, black, RGBW[0], RGBW[1]]);
+        assert_eq!(row(&f[2], 4), [black; 4]);
+    }
+
+    #[test]
+    fn scroll_limits_the_area_and_repeats_the_picture_across_it() {
+        let s = Settings::new().with("limit_width", true).with("width", 6).with("limit_height", true).with("height", 1);
+        let e = scroll(&s);
+        assert_eq!(e.reframe.size((4, 3)), (6, 1));
+        let Some(px) = draw_frame(&RGBW, 4, 1, vec![e]) else { return };
+        assert_eq!(row(&px, 7), [RGBW[0], RGBW[1], RGBW[2], RGBW[3], RGBW[0], RGBW[1], [0, 0, 0, 255]]);
+        let no_loop = s.with("loop", false);
+        let Some(px) = draw_frame(&RGBW, 4, 1, vec![scroll(&no_loop)]) else { return };
+        assert_eq!(row(&px, 6)[4..], [[0, 0, 0, 255]; 2]);
+        // Only the limited side changes.
+        let e = scroll(&Settings::new().with("limit_height", true).with("height", 2));
+        assert_eq!(e.reframe.size((4, 3)), (4, 2));
+        assert_eq!(scroll(&Scroll.schema().defaults()).reframe.size((4, 3)), (4, 3));
+    }
+
+    #[test]
+    fn scroll_steps_with_exact_time_and_wraps_long_runs() {
+        let e = scroll(&Settings::new().with("speed_x", 37.0).with("speed_y", -3.0));
+        let animation = e.animation.unwrap();
+        let mut p = e.params;
+        // 37,000,009.25 px right is 9.25 past whole laps of 100, and 3,000,000.75 px up is 3.25
+        // into a lap of 7.
+        animation.step(&mut p, 1_000_000.25, (100, 7));
+        assert!((p[0] - 9.25).abs() < 1e-3 && (p[1] - 3.25).abs() < 1e-3, "{:?}", &p[..2]);
+        let e = scroll(&Settings::new().with("speed_x", -2000.0).with("loop", false));
+        let mut p = e.params;
+        e.animation.unwrap().step(&mut p, 1e9, (100, 7));
+        assert_eq!(p[..2], [-2.0 * MAX_EFFECT_SIDE as f32, 0.0]);
+        // A zero-size input does not divide by zero.
+        let mut p = scroll(&Settings::new().with("speed_x", 5.0)).params;
+        animation.step(&mut p, 1.0, (0, 0));
+        assert!(p[..2].iter().all(|v| v.is_finite()));
+    }
+
+    #[test]
+    fn scroll_starts_again_only_when_its_movement_changes() {
+        let mut f = Scroll.create(&Settings::new().with("speed_x", 10.0)).unwrap();
+        let first = f.video_effect().unwrap().animation;
+        f.update(&Settings::new().with("speed_x", 10.0).with("limit_width", true)).unwrap();
+        assert_eq!(f.video_effect().unwrap().animation, first);
+        for s in [
+            Settings::new().with("speed_x", 11.0),
+            Settings::new().with("speed_x", 11.0).with("speed_y", 1.0),
+            Settings::new().with("speed_x", 11.0).with("speed_y", 1.0).with("loop", false),
+        ] {
+            let before = f.video_effect().unwrap().animation;
+            f.update(&s).unwrap();
+            assert_ne!(f.video_effect().unwrap().animation, before, "{s:?}");
+        }
+    }
+
+    #[test]
+    fn scroll_rejects_settings_outside_its_ranges() {
+        use serde_json::{Value, json};
+        let bad: [(&str, Value); 9] = [
+            ("speed_x", json!(2001)),
+            ("speed_y", json!(-2001)),
+            ("speed_x", Value::from(f64::NAN)),
+            ("speed_x", json!("fast")),
+            ("width", json!(0)),
+            ("height", json!(MAX_EFFECT_SIDE + 1)),
+            ("width", json!(1.5)),
+            ("limit_width", json!(1)),
+            ("loop", json!("no")),
+        ];
+        let good = Settings::new().with("speed_x", 5.0).with("limit_width", true).with("width", 50);
+        for (key, v) in bad {
+            let s = good.clone().with(key, v.clone());
+            assert!(Scroll.create(&s).is_err(), "{key} = {v}");
+            let mut f = Scroll.create(&good).unwrap();
+            let before = f.video_effect();
+            assert!(f.update(&s).is_err(), "{key} = {v}");
+            assert_eq!(f.video_effect(), before, "{key} = {v}: the last good settings stay");
+        }
+        assert!(Scroll.create(&Settings::new().with("speed_x", 2000).with("width", MAX_EFFECT_SIDE)).is_ok());
+    }
+
     #[test]
     fn video_filters_have_effects_and_audio_filters_do_not() {
-        assert_eq!(builtin_video_effects().len(), 5);
+        assert_eq!(builtin_video_effects().len(), 6);
         assert!(Gain.create(&Settings::new()).unwrap().video_effect().is_none());
         let neutral = color_correction_params(&ColorCorrection.schema().defaults());
         let mut want = [0.0; VIDEO_EFFECT_PARAMS];

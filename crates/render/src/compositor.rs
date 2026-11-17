@@ -7,10 +7,11 @@ use std::sync::mpsc::SyncSender;
 
 use crossbeam_queue::ArrayQueue;
 use studiocraft_media::Tick;
+use studiocraft_media::clock::duration_of;
 use studiocraft_media::queue::{Fifo, Latest};
 use studiocraft_media::video::PixelFormat;
 use studiocraft_model::{Crop, SourceId, Vec2};
-use studiocraft_plugin::{EffectImage, VideoContent, VideoEffect, VideoOut};
+use studiocraft_plugin::{EffectImage, VIDEO_EFFECT_PARAMS, VideoContent, VideoEffect, VideoOut};
 
 use crate::nv12::{EncodeTarget, Nv12};
 use crate::plan::{ItemDesc, Plan, SceneDesc};
@@ -299,6 +300,9 @@ pub struct Compositor {
     sources: HashMap<SourceId, SourceTex>,
     /// The pictures the plan's filters read, by [`EffectImage::id`].
     images: HashMap<usize, ImageTex>,
+    /// When the plan's animations started, by [`studiocraft_plugin::Animation::id`]: `None` until
+    /// a frame draws them. `set_plan` makes the entries, so frames do not allocate.
+    started: HashMap<u64, Option<Tick>>,
     plan: Arc<Plan>,
     nv12: Option<Nv12>,
     /// The scopes' copy of the program, converted like the encoders' at a smaller size.
@@ -348,6 +352,7 @@ impl Compositor {
             generation: 1,
             sources: HashMap::new(),
             images: HashMap::new(),
+            started: HashMap::new(),
             plan: Arc::new(Plan::default()),
             nv12: None,
             scope_nv12: None,
@@ -392,8 +397,12 @@ impl Compositor {
     /// pictures it needs first. Pictures the plan no longer uses are released.
     pub fn set_plan(&mut self, plan: Arc<Plan>) {
         let mut used = HashSet::new();
+        let mut animations = HashSet::new();
         for item in plan.items() {
             for fx in &item.effects {
+                if let Some(a) = &fx.animation {
+                    animations.insert(a.id());
+                }
                 if !self.pipes.effects.contains_key(fx.key) {
                     let p = match fx.image {
                         Some(_) => self.compile(fx.key, &shaders::effect_with_image(fx.wgsl), Layout::Image, "fs_effect"),
@@ -411,6 +420,10 @@ impl Compositor {
             }
         }
         self.images.retain(|id, _| used.contains(id));
+        self.started.retain(|id, _| animations.contains(id));
+        for id in animations {
+            self.started.entry(id).or_insert(None);
+        }
         if let Some(t) = &plan.transition
             && !self.pipes.transitions.contains_key(&t.key)
         {
@@ -555,7 +568,8 @@ impl Compositor {
             if !item.effects.is_empty()
                 && let Some(st) = self.sources.get_mut(&item.source)
             {
-                run_effects(&device, &self.pipes, &self.images, &mut self.uniforms, &mut enc, st, &item.effects, self.frame_no);
+                let clock = EffectClock { now, started: &mut self.started };
+                run_effects(&device, &self.pipes, &self.images, clock, &mut self.uniforms, &mut enc, st, &item.effects, self.frame_no);
             }
         }
 
@@ -859,12 +873,33 @@ fn ready(pipes: &Pipes, images: &HashMap<usize, ImageTex>, e: &VideoEffect) -> b
         }
 }
 
+/// The frame's time and when each animation started.
+struct EffectClock<'a> {
+    now: Tick,
+    started: &'a mut HashMap<u64, Option<Tick>>,
+}
+
+impl EffectClock<'_> {
+    /// `e`'s parameters this frame, for an input of `input` pixels.
+    fn params(&mut self, e: &VideoEffect, input: (u32, u32)) -> [f32; VIDEO_EFFECT_PARAMS] {
+        let mut params = e.params;
+        if let Some(a) = &e.animation {
+            // An animation the plan did not hold stays at its start.
+            let start = self.started.get_mut(&a.id()).map_or(self.now, |s| *s.get_or_insert(self.now));
+            let seconds = duration_of(Tick(self.now.0.saturating_sub(start.0))).as_secs_f64();
+            a.step(&mut params, seconds, input);
+        }
+        params
+    }
+}
+
 /// Run a source's filter passes once this frame.
 #[allow(clippy::too_many_arguments)]
 fn run_effects(
     device: &wgpu::Device,
     pipes: &Pipes,
     images: &HashMap<usize, ImageTex>,
+    mut clock: EffectClock<'_>,
     uniforms: &mut Uniforms,
     enc: &mut wgpu::CommandEncoder,
     st: &mut SourceTex,
@@ -922,7 +957,7 @@ fn run_effects(
         let (u1, v1) = ((left as f32 + ow as f32) / iw * extent[0], (top as f32 + oh as f32) / ih * extent[1]);
         let mut slot = [0.0; SLOT_FLOATS];
         slot[..8].copy_from_slice(&[u0, v0, u1, v1, ow as f32, oh as f32, straight, 0.0]);
-        slot[8..32].copy_from_slice(&e.params);
+        slot[8..32].copy_from_slice(&clock.params(e, in_size));
         slot[32..].copy_from_slice(&[extent[0], extent[1], iw, ih]);
         let off = uniforms.push(&slot);
         let mut pass = begin(enc, &fx.views[out], Some(wgpu::Color::TRANSPARENT));

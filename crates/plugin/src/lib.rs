@@ -24,7 +24,9 @@ mod transition;
 
 pub use craft_ease::Easing;
 pub use encoder::{Availability, Codec, Encoder, EncoderEnv, EncoderKind, FfmpegEncoder, Packet, RateControl, VideoParams, VideoSession};
-pub use filter::{EffectImage, Filter, FilterInstance, FilterTarget, MAX_EFFECT_SIDE, Reframe, VIDEO_EFFECT_PARAMS, VideoEffect};
+pub use filter::{
+    Animation, AnimationStep, EffectImage, Filter, FilterInstance, FilterTarget, MAX_EFFECT_SIDE, Reframe, VIDEO_EFFECT_PARAMS, VideoEffect,
+};
 pub use output::{Output, OutputInstance, OutputJob, OutputStatus, VideoFormat};
 pub use registry::Registry;
 pub use source::{AudioOut, Pace, Source, SourceCaps, SourceInstance, SourceIo, VideoContent, VideoOut};

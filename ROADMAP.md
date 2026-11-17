@@ -6,8 +6,8 @@
 - Built-in sources: color, image, text, media file, display capture, window capture, audio input
   and desktop audio.
 - Filters: color correction with white balance by temperature and tint, chroma key, color key,
-  crop and pad, image mask, sharpen, gain, noise gate, compressor, limiter and a three-band
-  equalizer.
+  crop and pad, image mask, scroll, sharpen, gain, noise gate, compressor, limiter and a
+  three-band equalizer.
 - Transitions: cut, fade, fade through a color and swipe, with an Easing setting on the fades and
   the swipe. Studio mode with quick transitions.
 - The View › Scopes window: a waveform, an RGB parade, a histogram, and the YUV and HLS
@@ -52,12 +52,11 @@
 1. **Capture on Linux.** Display and window capture through PipeWire portals, and audio devices
    through ALSA or PipeWire.
 2. **Camera source.** Video capture devices on every system.
-3. **More filters.** Scroll.
-4. **Replay buffer.** Keep the last N seconds in memory and save them on a shortcut.
-5. **Audio monitoring.** Play a source to a chosen output device, and per-source audio offset.
-6. **Docks.** Undock, rearrange and save dock layouts.
-7. **Translations.** A `studiocraft.tsv` catalog for every other locale craft-i18n has, and
+3. **Replay buffer.** Keep the last N seconds in memory and save them on a shortcut.
+4. **Audio monitoring.** Play a source to a chosen output device, and per-source audio offset.
+5. **Docks.** Undock, rearrange and save dock layouts.
+6. **Translations.** A `studiocraft.tsv` catalog for every other locale craft-i18n has, and
    right-to-left layout for Arabic and Hebrew.
-8. **Multiple outputs.** Several streams at once, and a virtual camera.
-9. **Web build.** The model and plugin crates already build for WebAssembly; a browser editor for
+7. **Multiple outputs.** Several streams at once, and a virtual camera.
+8. **Web build.** The model and plugin crates already build for WebAssembly; a browser editor for
    scene collections is the first step.

@@ -44,12 +44,55 @@ pub struct VideoEffect {
     pub reframe: Reframe,
     /// A picture the pass reads beside its input.
     pub image: Option<EffectImage>,
+    /// Changes the parameters with time, before each frame's pass.
+    pub animation: Option<Animation>,
 }
 
 impl VideoEffect {
     /// A pass whose output has its input's size.
     pub fn new(key: &'static str, wgsl: &'static str, params: [f32; VIDEO_EFFECT_PARAMS]) -> Self {
-        Self { key, wgsl, params, reframe: Reframe::None, image: None }
+        Self { key, wgsl, params, reframe: Reframe::None, image: None, animation: None }
+    }
+}
+
+/// How a pass's parameters change with time. Before each frame's pass the compositor calls
+/// `step` with a copy of [`VideoEffect::params`], the seconds since the first frame it drew a
+/// pass with this animation, and the size of the pass's input in pixels. Two animations are
+/// equal when they come from the same [`Animation::new`] call; a new one starts at 0 seconds.
+#[derive(Clone, Copy)]
+pub struct Animation {
+    id: u64,
+    step: AnimationStep,
+}
+
+/// The function an [`Animation`] calls.
+pub type AnimationStep = fn(&mut [f32; VIDEO_EFFECT_PARAMS], f64, (u32, u32));
+
+impl Animation {
+    pub fn new(step: AnimationStep) -> Self {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+        Self { id: NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed), step }
+    }
+    /// Different for every [`Animation::new`] call.
+    pub fn id(&self) -> u64 {
+        self.id
+    }
+    /// The parameters `params` take `seconds` after the animation started, for an `input` of
+    /// that size.
+    pub fn step(&self, params: &mut [f32; VIDEO_EFFECT_PARAMS], seconds: f64, input: (u32, u32)) {
+        (self.step)(params, seconds, input);
+    }
+}
+
+impl PartialEq for Animation {
+    fn eq(&self, other: &Self) -> bool {
+        self.id == other.id
+    }
+}
+
+impl std::fmt::Debug for Animation {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Animation({})", self.id)
     }
 }
 
@@ -192,6 +235,23 @@ mod tests {
             assert!(EffectImage::new(w, h, vec![0; len]).is_none(), "{w} x {h}, {len} bytes");
         }
         assert!(EffectImage::new(MAX_EFFECT_SIDE, 1, vec![0; MAX_EFFECT_SIDE as usize * 4]).is_some());
+    }
+
+    #[test]
+    fn an_animation_steps_parameters_and_is_compared_by_its_creation() {
+        fn step(p: &mut [f32; VIDEO_EFFECT_PARAMS], seconds: f64, (w, h): (u32, u32)) {
+            p[0] = seconds as f32;
+            p[1] = (w + h) as f32;
+        }
+        let a = Animation::new(step);
+        let mut p = [0.0; VIDEO_EFFECT_PARAMS];
+        a.step(&mut p, 2.5, (3, 4));
+        assert_eq!(p[..3], [2.5, 7.0, 0.0]);
+        let copy = a;
+        assert_eq!(copy, a);
+        let b = Animation::new(step);
+        assert_ne!(a, b, "the same step from another call");
+        assert_ne!(a.id(), b.id());
     }
 
     #[test]

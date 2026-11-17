@@ -111,6 +111,7 @@
 	Hide	Ausblenden
 	High	Hoch
 	Hold (ms)	Haltezeit (ms)
+	Horizontal speed (px/s)	Horizontale Geschwindigkeit (px/s)
 	Hotkeys	Tastenkürzel
 	Image	Bild
 	Image mask	Bildmaske
@@ -121,6 +122,8 @@
 	Language	Sprache
 	Left	Links
 	Licenses	Lizenzen
+	Limit height	Höhe begrenzen
+	Limit width	Breite begrenzen
 	Linear	Linear
 	LIVE	LIVE
 	Live, {time}	Live, {time}
@@ -201,6 +204,7 @@
 	Scene Collection	Szenensammlung
 	Scene {n}	Szene {n}
 	Scenes	Szenen
+	Scroll	Bildlauf
 	Send the preview to the program	Vorschau ins Programm übernehmen
 	Server	Server
 	Settings	Einstellungen
@@ -262,6 +266,7 @@
 	Use system title bar	Titelleiste des Systems verwenden
 	Username	Benutzername
 	Version {version} ({os} {arch})	Version {version} ({os} {arch})
+	Vertical speed (px/s)	Vertikale Geschwindigkeit (px/s)
 	Video	Video
 	Video bitrate	Video-Bitrate
 	Video encoder	Video-Encoder
