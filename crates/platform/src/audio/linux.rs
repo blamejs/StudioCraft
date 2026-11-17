@@ -32,8 +32,13 @@ fn init() {
     INIT.call_once(pw::init);
 }
 
-fn not_running(e: impl std::fmt::Display) -> PlatformError {
-    PlatformError::Failed(format!("could not connect to the PipeWire sound server ({e})"))
+/// The window translates fixed messages only, so the library's own text is left out.
+fn not_running(_e: pw::Error) -> PlatformError {
+    PlatformError::Failed("could not connect to the PipeWire sound server".into())
+}
+
+fn could_not_start() -> PlatformError {
+    PlatformError::Failed("the audio capture could not start".into())
 }
 
 pub fn devices(kind: DeviceKind) -> Vec<DeviceInfo> {
@@ -137,7 +142,7 @@ impl Capture {
             Some(id.to_owned())
         };
         let (ready_tx, ready_rx) = sync_channel(1);
-        let (stop_rx, stop_tx) = std::io::pipe().map_err(PlatformError::failed)?;
+        let (stop_rx, stop_tx) = std::io::pipe().map_err(|_| could_not_start())?;
         let thread = std::thread::Builder::new()
             .name("audio capture".into())
             .spawn(move || {
@@ -145,7 +150,7 @@ impl Capture {
                     let _ = ready_tx.send(Err(e));
                 }
             })
-            .map_err(|e| PlatformError::Failed(e.to_string()))?;
+            .map_err(|_| could_not_start())?;
         match ready_rx.recv() {
             Ok(Ok(())) => Ok((Capture { stop: Some(stop_tx), thread: Some(thread) }, CAPTURE_FORMAT)),
             Ok(Err(e)) => {
@@ -195,7 +200,7 @@ fn format_param() -> Result<Vec<u8>, PlatformError> {
     };
     spa::pod::serialize::PodSerializer::serialize(std::io::Cursor::new(Vec::new()), &spa::pod::Value::Object(object))
         .map(|(cursor, _)| cursor.into_inner())
-        .map_err(|e| PlatformError::Failed(format!("the audio format could not be described ({e:?})")))
+        .map_err(|_| PlatformError::Failed("the audio format could not be described".into()))
 }
 
 /// Quit `mainloop` once the other end of `stop` closes, setting `stopping` first. Nothing is written
@@ -253,7 +258,7 @@ where
     if kind == DeviceKind::Output {
         props.insert(*pw::keys::STREAM_CAPTURE_SINK, "true");
     }
-    let stream = pw::stream::StreamBox::new(&core, "StudioCraft capture", props).map_err(PlatformError::failed)?;
+    let stream = pw::stream::StreamBox::new(&core, "StudioCraft capture", props).map_err(|_| could_not_start())?;
 
     let data = StreamData { on_data, samples: Vec::with_capacity(SCRATCH_SAMPLES), connected: false };
     let _stream_listener = stream
@@ -282,14 +287,14 @@ where
             pw_props::deliver_samples(bytes, offset, size, CAPTURE_FORMAT.channels, samples, |s| on_data(s, CAPTURE_FORMAT));
         })
         .register()
-        .map_err(PlatformError::failed)?;
+        .map_err(|_| could_not_start())?;
 
     // A lost server connection puts the stream in its error state, which `state_changed` reports.
     let param = format_param()?;
     let pod = spa::pod::Pod::from_bytes(&param).ok_or_else(|| PlatformError::Failed("the audio format could not be described".into()))?;
     stream
         .connect(spa::utils::Direction::Input, None, pw::stream::StreamFlags::AUTOCONNECT | pw::stream::StreamFlags::MAP_BUFFERS, &mut [pod])
-        .map_err(PlatformError::failed)?;
+        .map_err(|_| could_not_start())?;
 
     let _stop = watch_stop(&mainloop, stop, stopping);
     let _ = ready.send(Ok(()));

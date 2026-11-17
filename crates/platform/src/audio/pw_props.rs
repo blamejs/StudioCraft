@@ -99,8 +99,8 @@ pub enum StreamChange {
 /// streaming); a stream that has not started connecting has not ended.
 pub fn stream_failure(change: &StreamChange, connected: bool) -> Option<String> {
     match change {
-        StreamChange::Error(e) if e.trim().is_empty() => Some("the audio stream failed".into()),
-        StreamChange::Error(e) => Some(format!("the audio stream failed: {}", e.trim())),
+        // The server's own text is left out: the window translates fixed messages only.
+        StreamChange::Error(_) => Some("the audio stream failed".into()),
         StreamChange::Unconnected if connected => Some("the audio stream ended".into()),
         StreamChange::Unconnected | StreamChange::Streaming | StreamChange::Other => None,
     }
@@ -235,7 +235,7 @@ mod tests {
 
     #[test]
     fn an_error_or_an_end_after_connecting_stops_the_capture() {
-        assert_eq!(stream_failure(&StreamChange::Error("device busy".into()), false).as_deref(), Some("the audio stream failed: device busy"));
+        assert_eq!(stream_failure(&StreamChange::Error("device busy".into()), false).as_deref(), Some("the audio stream failed"));
         assert_eq!(stream_failure(&StreamChange::Error(String::new()), true).as_deref(), Some("the audio stream failed"));
         assert_eq!(stream_failure(&StreamChange::Unconnected, true).as_deref(), Some("the audio stream ended"));
         assert_eq!(stream_failure(&StreamChange::Unconnected, false), None);

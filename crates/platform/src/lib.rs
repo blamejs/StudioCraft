@@ -28,7 +28,7 @@ pub enum PlatformError {
     Failed(String),
 }
 
-#[cfg(any(windows, target_os = "macos", target_os = "linux"))]
+#[cfg(any(windows, target_os = "macos"))]
 impl PlatformError {
     pub(crate) fn failed(e: impl std::fmt::Display) -> Self {
         PlatformError::Failed(e.to_string())
