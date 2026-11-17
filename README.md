@@ -16,9 +16,12 @@ and Linux.
 - **Built-in sources.** Color, image, text, media file, display capture, window capture, audio
   input and audio output (desktop audio). Display, window and device capture work on Windows and
   macOS.
-- **Filters.** Color correction and chroma key for video. Gain, noise gate, compressor, limiter and
-  a three-band equalizer for audio.
+- **Filters.** Color correction and chroma key for video. Color correction sets gamma, contrast,
+  brightness, saturation, opacity, and the white balance by temperature and tint. Gain, noise gate,
+  compressor, limiter and a three-band equalizer for audio.
 - **Transitions.** Cut, fade, fade through a color, and swipe, with a duration from 0 to 20 seconds.
+  Fade, fade through a color and swipe have an Easing setting: Linear, Ease in, Ease out, or Ease
+  in and out.
 - **Studio mode.** Edit a preview scene beside the program scene, then send it to the program with
   the chosen transition, or with a quick cut or fade.
 - **Audio mixer.** Peak and RMS meters with peak hold, a volume fader in dB, and mute for every
@@ -26,6 +29,8 @@ and Linux.
 - **Recording and streaming.** MKV, MP4 or MOV recordings at four quality levels, and RTMP streams
   at a constant bitrate. Encoding runs in a separately installed `ffmpeg` with the software x264
   encoder or a hardware encoder (NVIDIA NVENC, AMD AMF, Intel Quick Sync, Windows Media Foundation).
+  Settings › Output and Settings › Stream show the chosen encoder's settings, such as the x264 and
+  NVENC presets. Tools › Available Encoders lists which encoders the installed `ffmpeg` offers.
 - **Profiles and scene collections.** Keep several sets of stream and output settings, and several
   sets of scenes, and switch between them from the menu bar.
 - **Shortcuts.** Change the shortcuts in Settings › Hotkeys.

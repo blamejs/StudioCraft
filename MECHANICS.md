@@ -3,8 +3,9 @@
 The timing and tuning values StudioCraft uses, where each one lives in the code, and where it came
 from. `mechanics.json` holds the same values for tools.
 
-Every value below is marked **estimated**: it is a common choice for studio software, and it has
-not been checked against public documentation or measured in another program. When a value is
+A value marked **estimated** is a common choice for studio software, and it has not been checked
+against public documentation or measured in another program. A value with a named source follows
+that source. When a value is
 confirmed from public documentation, add the page's URL as its source and remove the estimate mark
 in both files.
 
@@ -26,6 +27,8 @@ in both files.
 | Default duration | 300 ms | `model::collection::TransitionConfig::default` | estimated |
 | Longest duration | 20 000 ms | `model::collection::MAX_TRANSITION_MS` | estimated |
 | Audio fade on a scene change | 300 ms | `engine::mixer` (`set_fade_ms`) | estimated |
+| Fade and Fade through color easing | Linear | `render::transitions::FADE_EASING` | estimated |
+| Swipe easing | Ease in and out | `render::transitions::SWIPE_EASING` | estimated |
 
 ## Audio
 
@@ -58,6 +61,8 @@ in both files.
 | Stream audio bitrate | 160 kbps | `model::profile::StreamSettings::default` | estimated |
 | Keyframe interval | 2 s | `model::profile::StreamSettings::default` | estimated |
 | Default encoder | software x264 | `model::profile::OutputSettings::default` | estimated |
+| x264 preset | veryfast | `outputs::encoders::VideoEncoder::schema` | estimated |
+| NVENC preset | P5 | `outputs::encoders::VideoEncoder::schema` | estimated |
 | Recording file name | `YYYY-MM-DD HH-MM-SS.<ext>` | `studio::outputs::recording_path` | estimated |
 
 ## Editing

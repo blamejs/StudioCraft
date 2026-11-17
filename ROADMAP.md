@@ -5,13 +5,17 @@
 - Scenes, sources, scene items with move, resize, rotate, lock and visibility, and undo.
 - Built-in sources: color, image, text, media file, display capture, window capture, audio input
   and desktop audio.
-- Filters: color correction, chroma key, gain, noise gate, compressor, limiter and a three-band
-  equalizer.
-- Transitions: cut, fade, fade through a color and swipe. Studio mode with quick transitions.
+- Filters: color correction with white balance by temperature and tint, chroma key, gain, noise
+  gate, compressor, limiter and a three-band equalizer.
+- Transitions: cut, fade, fade through a color and swipe, with an Easing setting on the fades and
+  the swipe. Studio mode with quick transitions.
+- The View › Scopes window: a waveform, an RGB parade, a histogram, and the YUV and HLS
+  vectorscopes of the program output.
 - Audio mixer with meters, faders and mute. The mixer measures the final mix's loudness
   (momentary, short-term, integrated, loudness range and true peak); the window does not show it
   yet.
-- Recording to MKV, MP4 or MOV, and RTMP streaming, through an external ffmpeg.
+- Recording to MKV, MP4 or MOV, and RTMP streaming, through an external ffmpeg. The encoder's
+  settings, such as the x264 and NVENC presets, are set in Settings › Output and Settings › Stream.
 - Profiles, scene collections, rebindable shortcuts, the stats window, the control channel and the
   MCP server.
 - MCP window tools when the server is connected to the app (`studiocraft-cli mcp --connect
@@ -44,8 +48,7 @@
 1. **Capture on Linux.** Display and window capture through PipeWire portals, and audio devices
    through ALSA or PipeWire.
 2. **Camera source.** Video capture devices on every system.
-3. **More filters.** Crop and pad, scroll, sharpen, color key, image mask, and audio compressor and
-   limiter.
+3. **More filters.** Crop and pad, scroll, sharpen, color key and image mask.
 4. **Replay buffer.** Keep the last N seconds in memory and save them on a shortcut.
 5. **Audio monitoring.** Play a source to a chosen output device, and per-source audio offset.
 6. **Docks.** Undock, rearrange and save dock layouts.
