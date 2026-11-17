@@ -4,7 +4,7 @@
 use craft_color::rgb_to_ycbcr;
 use serde::Serialize;
 
-use crate::{Grid, MAX_VECTOR_SIZE, Matrix, Signal, Vectorscope, Waveform, angle_deg, red_angle};
+use crate::{Grid, MAX_ROWS, MAX_SIGNAL_W, MAX_VECTOR_SIZE, Matrix, Signal, Vectorscope, Waveform, angle_deg, red_angle};
 
 /// Minimum, maximum and mean of a set of levels (percent).
 #[derive(Clone, Copy, Debug, PartialEq, Serialize)]
@@ -95,8 +95,12 @@ pub fn channel_stats(s: &Signal, m: Matrix) -> Option<ChannelStats> {
 }
 
 /// A trace split into `buckets` column ranges, each with the levels its cells hold (None when a
-/// range holds no samples).
+/// range holds no samples). A grid wider than [`MAX_SIGNAL_W`] or taller than [`MAX_ROWS`] gives
+/// no ranges.
 pub fn trace_columns(w: &Waveform, g: &Grid, buckets: usize) -> Vec<Option<Level>> {
+    if g.cols > MAX_SIGNAL_W || g.rows > MAX_ROWS {
+        return Vec::new();
+    }
     let buckets = buckets.clamp(1, g.cols.max(1));
     (0..buckets)
         .map(|b| {

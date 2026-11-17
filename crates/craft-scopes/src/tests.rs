@@ -554,6 +554,7 @@ fn hand_built_values_past_the_caps_paint_nothing() {
     out.push(1);
     assert_eq!(paint::grids_into(&[(&g, [1.0; 3])], 1.0, 1.0, &mut scratch, &mut out), (0, 0));
     assert!(out.is_empty());
+    assert!(summary::trace_columns(&Waveform::default(), &g, usize::MAX).is_empty());
     let tall = Grid { name: "Y", cols: 4, rows: MAX_ROWS + 1, data: Vec::new() };
     assert_eq!(paint::grids_into(&[(&tall, [1.0; 3])], 1.0, 1.0, &mut scratch, &mut out), (0, 0));
 }
