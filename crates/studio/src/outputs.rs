@@ -11,7 +11,7 @@ use studiocraft_media::audio::SAMPLE_RATE;
 use studiocraft_media::queue::Fifo;
 use studiocraft_media::stats::EncoderStats;
 use studiocraft_media::video::{PixelFormat, PooledFrame};
-use studiocraft_model::Settings;
+use studiocraft_model::{Profile, Settings};
 use studiocraft_platform::ffmpeg;
 use studiocraft_plugin::{OutputInstance, OutputJob, OutputStatus, PluginError, RateControl, VideoFormat};
 
@@ -256,6 +256,44 @@ pub fn recording_folder(configured: &str) -> PathBuf {
     dirs::video_dir().or_else(dirs::home_dir).unwrap_or_else(|| PathBuf::from("."))
 }
 
+/// What an output is started with.
+#[derive(Debug, PartialEq)]
+struct Plan {
+    output_id: &'static str,
+    /// The output plug-in's settings.
+    settings: Settings,
+    encoder_id: String,
+    /// The video encoder's settings, from the profile.
+    encoder_settings: Settings,
+    rate: RateControl,
+    audio_kbps: u32,
+}
+
+/// How profile `p` starts the output `kind`.
+fn plan(p: &Profile, kind: OutputKind) -> Plan {
+    match kind {
+        OutputKind::Recording => Plan {
+            output_id: "file",
+            settings: Settings::new(),
+            encoder_id: p.output.video_encoder.clone(),
+            encoder_settings: p.output.video_encoder_settings(),
+            rate: p.output.quality.quality_level().map_or(RateControl::Lossless, RateControl::Quality),
+            audio_kbps: 192,
+        },
+        OutputKind::Streaming => Plan {
+            output_id: "rtmp",
+            settings: Settings::new().with("server", p.stream.server.as_str()).with("key", p.stream.key.as_str()),
+            encoder_id: p.stream.video_encoder.clone(),
+            encoder_settings: p.stream.video_encoder_settings(),
+            rate: RateControl::Bitrate {
+                kbps: p.stream.video_bitrate_kbps.clamp(100, 200_000),
+                keyframe_s: p.stream.keyframe_interval_s.clamp(1, 20),
+            },
+            audio_kbps: p.stream.audio_bitrate_kbps,
+        },
+    }
+}
+
 impl Studio {
     pub(crate) fn toggle_output(&mut self, kind: OutputKind) -> Result<(), StudioError> {
         if self.outputs.active.contains_key(&kind) {
@@ -287,21 +325,7 @@ impl Studio {
             return Err(StudioError::Output("set a server in Settings › Stream first".into()));
         }
         let program = ffmpeg::locate(&self.profile.output.ffmpeg_path).map_err(|e| StudioError::Output(e.to_string()))?;
-        let p = &self.profile;
-        let (output_id, settings, encoder_id, rate, audio_kbps) = match kind {
-            OutputKind::Recording => {
-                let rate = p.output.quality.quality_level().map_or(RateControl::Lossless, RateControl::Quality);
-                ("file", Settings::new(), p.output.video_encoder.clone(), rate, 192)
-            }
-            OutputKind::Streaming => {
-                let settings = Settings::new().with("server", p.stream.server.as_str()).with("key", p.stream.key.as_str());
-                let rate = RateControl::Bitrate {
-                    kbps: p.stream.video_bitrate_kbps.clamp(100, 200_000),
-                    keyframe_s: p.stream.keyframe_interval_s.clamp(1, 20),
-                };
-                ("rtmp", settings, p.stream.video_encoder.clone(), rate, p.stream.audio_bitrate_kbps)
-            }
-        };
+        let Plan { output_id, settings, encoder_id, encoder_settings, rate, audio_kbps } = plan(&self.profile, kind);
         let registry = Arc::clone(self.engine.registry());
         let encoder = registry.encoder(&encoder_id)?;
         let offered = self.outputs.encoders.entry(program.clone()).or_insert_with(|| ffmpeg::encoders(&program));
@@ -317,7 +341,7 @@ impl Studio {
             video: VideoFormat { width: v.output_width, height: v.output_height, fps_num: v.fps_num, fps_den: v.fps_den, pixel: PixelFormat::Nv12 },
             sample_rate: SAMPLE_RATE,
             video_encoder: encoder,
-            video_encoder_settings: Settings::new(),
+            video_encoder_settings: encoder_settings,
             rate,
             audio_bitrate_kbps: audio_kbps,
             ffmpeg: program,
@@ -357,6 +381,8 @@ impl Studio {
 
 #[cfg(test)]
 mod tests {
+    use studiocraft_plugin::{Encoder, Plugin};
+
     use super::*;
 
     #[test]
@@ -392,6 +418,29 @@ mod tests {
             [("The recording could not be finished: the muxer stopped".to_string(), true)],
             "a stream whose failure was shown while it ran is not reported again"
         );
+    }
+
+    #[test]
+    fn the_profile_s_encoder_settings_reach_the_encoder() {
+        let mut p = Profile::default();
+        p.output.encoder_settings.insert("x264".into(), Settings::new().with("preset", "fast"));
+        p.stream.video_encoder = "nvenc_h264".into();
+        p.stream.encoder_settings.insert("nvenc_h264".into(), Settings::new().with("preset", "p3"));
+        p.stream.encoder_settings.insert("x264".into(), Settings::new().with("preset", "medium"));
+
+        let rec = plan(&p, OutputKind::Recording);
+        assert_eq!((rec.output_id, rec.encoder_id.as_str()), ("file", "x264"));
+        assert_eq!(rec.encoder_settings, Settings::new().with("preset", "fast"));
+        let stream = plan(&p, OutputKind::Streaming);
+        assert_eq!(stream.encoder_settings, Settings::new().with("preset", "p3"), "the stream's own encoder's settings");
+
+        for (plan, preset) in [(rec, "-preset fast"), (stream, "-preset p3")] {
+            let Some(encoder) = studiocraft_outputs::encoders::all().into_iter().find(|e| e.id() == plan.encoder_id) else {
+                panic!("no encoder {}", plan.encoder_id)
+            };
+            let args = encoder.ffmpeg_args(&plan.encoder_settings, plan.rate, 30.0).unwrap().join(" ");
+            assert!(args.contains(preset), "{args}");
+        }
     }
 
     #[test]

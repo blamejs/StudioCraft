@@ -1,10 +1,12 @@
 //! The Settings window: General, Stream, Output, Video and Hotkeys, edited on a copy of the
 //! profile, the Language setting and the update check at start, applied with OK or Apply.
 
+use std::collections::BTreeMap;
+
 use craft_keymap::{Binding, CommandRef, Keymap, Overrides};
 use egui::{RichText, Ui};
 use studiocraft_model::{Profile, RecordingFormat, RecordingQuality};
-use studiocraft_plugin::Registry;
+use studiocraft_plugin::{Registry, Settings};
 
 use crate::i18n::{self, I18N};
 
@@ -193,6 +195,22 @@ impl SettingsWindow {
         });
     }
 
+    /// A grid row with the settings of the video encoder `encoder`, when it has any. Its values
+    /// are saved under its id once the user changes one; until then its defaults apply.
+    fn encoder_form(ui: &mut Ui, id: &str, registry: &Registry, encoder: &str, saved: &mut BTreeMap<String, Settings>) {
+        let Ok(e) = registry.encoder(encoder) else { return };
+        let schema = e.schema();
+        if schema.fields.is_empty() {
+            return;
+        }
+        let mut settings = saved.get(encoder).cloned().unwrap_or_default();
+        ui.label("");
+        if crate::forms::form(ui, egui::Id::unique(id), &schema, &mut settings).changed {
+            saved.insert(encoder.to_string(), settings);
+        }
+        ui.end_row();
+    }
+
     fn general(&mut self, ui: &mut Ui) {
         egui::Grid::new("general-grid").num_columns(2).spacing([12.0, 8.0]).show(ui, |ui| {
             ui.label(tl!("Language"));
@@ -240,6 +258,7 @@ impl SettingsWindow {
             ui.label(tl!("Video encoder"));
             Self::encoder_combo(ui, "stream-encoder", registry, &self.offered, &mut s.video_encoder, true);
             ui.end_row();
+            Self::encoder_form(ui, "stream-encoder-settings", registry, &s.video_encoder, &mut s.encoder_settings);
             ui.label(tl!("Keyframe interval"));
             ui.add(egui::DragValue::new(&mut s.keyframe_interval_s).range(1..=20).suffix(format!(" {}", tl!("s"))));
             ui.end_row();
@@ -282,6 +301,7 @@ impl SettingsWindow {
             ui.label(tl!("Video encoder"));
             Self::encoder_combo(ui, "record-encoder", registry, &self.offered, &mut o.video_encoder, false);
             ui.end_row();
+            Self::encoder_form(ui, "record-encoder-settings", registry, &o.video_encoder, &mut o.encoder_settings);
             ui.label(tl!("ffmpeg program"));
             ui.horizontal(|ui| {
                 let r = ui.add(egui::TextEdit::singleline(&mut o.ffmpeg_path).hint_text(tl!("ffmpeg on the PATH")).desired_width(240.0));
