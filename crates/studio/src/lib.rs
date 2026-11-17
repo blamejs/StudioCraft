@@ -8,6 +8,7 @@
 
 pub mod capture;
 pub mod files;
+mod monitor;
 mod outputs;
 mod wiring;
 
@@ -35,6 +36,8 @@ use studiocraft_sources::FfmpegSetting;
 
 pub use files::FileError;
 pub use outputs::{OutputKind, OutputState, recording_folder, recording_path, replay_path};
+pub use studiocraft_platform::PlatformError;
+pub use studiocraft_platform::audio::{AudioSink, Fill, Format, OnError, Playing, SystemSink};
 pub use studiocraft_render::{Capture, View};
 
 /// Why something the user asked for did not happen. Shown to the user as is.
@@ -185,6 +188,8 @@ pub struct Studio {
     notices: Vec<Notice>,
     /// Where the scopes' copy of the program goes, and the largest size it is drawn at.
     scope_feed: Option<ScopeFeed>,
+    /// The device monitored sources play on.
+    monitor: monitor::Monitor,
 }
 
 /// The queue the compositor sends the scopes' NV12 copy of the program to, and the largest size
@@ -241,6 +246,7 @@ impl Studio {
             outputs: outputs::Outputs::default(),
             notices: Vec::new(),
             scope_feed: None,
+            monitor: monitor::Monitor::new(Arc::new(studiocraft_platform::audio::SystemSink)),
         };
         s.restart_video();
         s.refresh();
@@ -369,6 +375,7 @@ impl Studio {
                 self.notices.push(Notice::plain(e.to_string(), true));
             }
         }
+        self.monitor.poll(&self.mixer, &mut self.notices);
         let events = self.outputs.poll();
         for n in events.notices {
             self.notices.push(n);
@@ -421,7 +428,28 @@ impl Studio {
                 self.mixer.send(cmd);
             }
         }
+        self.sync_monitor();
         self.publish();
+    }
+
+    /// Open the monitoring device while a source with audio is monitored, and close it when none
+    /// is.
+    fn sync_monitor(&mut self) {
+        let c = self.engine.collection();
+        let registry = self.engine.registry();
+        let wanted = c.sources.iter().any(|s| s.audio.monitor.monitored() && registry.source(&s.kind).is_ok_and(|p| p.caps().audio));
+        self.monitor.sync(wanted, &self.profile.audio.monitoring_device, &self.mixer, &mut self.notices);
+    }
+
+    /// Play monitored sources through `sink` instead of the system's output devices.
+    pub fn set_audio_sink(&mut self, sink: Arc<dyn studiocraft_platform::audio::AudioSink>) {
+        self.monitor.set_sink(sink, &self.mixer);
+        self.sync_monitor();
+    }
+
+    /// Whether monitored sources are playing on the monitoring device, and its format.
+    pub fn monitoring(&self) -> Option<studiocraft_platform::audio::Format> {
+        self.monitor.format()
     }
 
     /// Send the compositor what to draw now.
@@ -609,6 +637,7 @@ impl Studio {
         if video_changed {
             self.restart_video();
         }
+        self.sync_monitor();
         Ok(())
     }
 
@@ -639,6 +668,12 @@ impl Studio {
             }
             o.insert("replay".into(), replay);
             o.insert("transitioning".into(), json!(self.transition.is_some()));
+            let mut monitoring = json!({"device": self.profile.audio.monitoring_device, "playing": self.monitor.playing()});
+            if let (Some(m), Some(f)) = (monitoring.as_object_mut(), self.monitor.format()) {
+                m.insert("rate".into(), json!(f.rate));
+                m.insert("channels".into(), json!(f.channels));
+            }
+            o.insert("monitoring".into(), monitoring);
             o.insert(
                 "stats".into(),
                 json!({

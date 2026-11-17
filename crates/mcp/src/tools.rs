@@ -224,8 +224,9 @@ fn studio_tool_definitions() -> Vec<Value> {
         tool(
             "source_audio",
             "Set a source's audio",
-            "Set how a source's audio is mixed: `sync_offset_ms` delays it to line it up with its picture. Returns the source's audio \
-             settings. A value out of range is an error and changes nothing.",
+            "Set how a source's audio is mixed: `sync_offset_ms` delays it to line it up with its picture, and `monitor` plays it on \
+             the monitoring device in Settings › Audio (`monitor_only` also leaves it out of recordings and streams). Returns the \
+             source's audio settings. A value out of range is an error and changes nothing.",
             json!({
                 "source": {"type": ["integer", "string"], "description": "The source's id or name."},
                 "sync_offset_ms": {
@@ -233,6 +234,11 @@ fn studio_tool_definitions() -> Vec<Value> {
                     "minimum": 0,
                     "maximum": studiocraft_model::collection::MAX_SYNC_OFFSET_MS,
                     "description": "How long the audio is delayed, in milliseconds.",
+                },
+                "monitor": {
+                    "type": "string",
+                    "enum": studiocraft_model::MonitorMode::ALL.map(|m| m.id()),
+                    "description": "Whether the audio plays on the monitoring device, and whether it stays in recordings and streams.",
                 },
             }),
             &["source"],
@@ -768,8 +774,19 @@ fn source_audio(b: &mut dyn Backend, args: &Args) -> Result<Value, McpError> {
             _ => return Err(McpError::Invalid(format!("`sync_offset_ms` must be a whole number from 0 to {max}"))),
         },
     };
+    let modes = studiocraft_model::MonitorMode::ALL;
+    let monitor = match args.get("monitor").filter(|v| !v.is_null()) {
+        None => None,
+        Some(v) => match v.as_str().and_then(|m| modes.into_iter().find(|mode| mode.id() == m)) {
+            Some(mode) => Some(mode.id()),
+            None => return Err(McpError::Invalid("`monitor` must be off, monitor_only or monitor_and_output".into())),
+        },
+    };
     if let Some(ms) = offset {
         run(b, "source.sync_offset", json!({"source": source, "ms": ms}))?;
+    }
+    if let Some(mode) = monitor {
+        run(b, "source.monitor", json!({"source": source, "mode": mode}))?;
     }
     let state = b.call("document.inspect", json!({"detail": "summary"}))?;
     let sources = state.pointer("/collection/sources").and_then(Value::as_array).cloned().unwrap_or_default();

@@ -138,6 +138,11 @@
 	Media files	Mediendateien
 	Minimize	Minimieren
 	Mode	Modus
+	Monitor and output	Abhören und ausgeben
+	Monitor off	Abhören aus
+	Monitor only (left out of recordings and streams)	Nur abhören (nicht in Aufnahmen und Streams)
+	Monitoring	Abhören
+	Monitoring device	Abhörgerät
 	Move the scene down	Szene nach unten verschieben
 	Move the scene up	Szene nach oben verschieben
 	Move the source down	Quelle nach unten verschieben
@@ -164,6 +169,7 @@
 	Output size	Ausgabegröße
 	Picture file	Bilddatei
 	Pictures	Bilder
+	Plays this source on the monitoring device chosen in Settings › Audio	Spielt diese Quelle auf dem unter Einstellungen › Audio gewählten Abhörgerät ab
 	Preferences…	Einstellungen…
 	Preset (higher is slower and better)	Voreinstellung (höher ist langsamer und besser)
 	Presets	Voreinstellungen
@@ -235,6 +241,7 @@
 	Source Code	Quellcode
 	Source Properties	Quelleneigenschaften
 	Sources	Quellen
+	Sources set to monitoring in their Properties window play on this device.	Quellen, die in ihrem Eigenschaftenfenster auf Abhören gestellt sind, werden auf diesem Gerät wiedergegeben.
 	Speed	Geschwindigkeit
 	Start or Stop Recording	Aufnahme starten oder stoppen
 	Start or Stop Replay Buffer	Replay-Puffer starten oder stoppen
@@ -297,10 +304,13 @@
 	X	X
 	Y	Y
 	Your Videos folder	Ihr Videos-Ordner
+	{device} (not connected)	{device} (nicht verbunden)
 	{encoder} (not in this ffmpeg)	{encoder} (nicht in diesem ffmpeg)
 	{program} did not report its version	{program} hat keine Version gemeldet
 	{status} · {mb} MB	{status} · {mb} MB
 @msg	A plug-in could not be loaded: {error}	Ein Plug-in konnte nicht geladen werden: {error}
+@msg	Audio monitoring could not start: {error}	Das Abhören konnte nicht starten: {error}
+@msg	Audio monitoring stopped: {error}	Das Abhören wurde beendet: {error}
 @msg	Could not check for updates: {error}	Die Suche nach Updates ist fehlgeschlagen: {error}
 @msg	Exported the scene collection to {path}	Szenensammlung nach {path} exportiert
 @msg	Imported the scene collection `{name}`	Szenensammlung `{name}` importiert

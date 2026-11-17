@@ -12,7 +12,7 @@ pub mod profile;
 pub mod schema;
 pub mod settings;
 
-pub use collection::{AudioState, FilterConfig, Scene, SceneCollection, SceneItem, SourceConfig, TransitionConfig};
+pub use collection::{AudioState, FilterConfig, MonitorMode, Scene, SceneCollection, SceneItem, SourceConfig, TransitionConfig};
 pub use format::FormatError;
 pub use geom::{Crop, Transform, Vec2};
 pub use ids::{FilterId, ItemId, SceneId, SourceId};

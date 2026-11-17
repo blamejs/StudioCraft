@@ -49,6 +49,10 @@ in both files.
 | Block size | 1024 frames | `media::audio::BLOCK_FRAMES` | estimated |
 | Blocks queued per output | 4 | `engine::mixer::MAX_QUEUED_BLOCKS` | estimated |
 | Audio sync offset | 0 ms (0 to 5000 ms) | `model::collection::AudioState`, `model::collection::MAX_SYNC_OFFSET_MS` | estimated |
+| Monitoring mode | off | `model::collection::MonitorMode` | estimated |
+| Monitoring device | the system's default output | `model::profile::DEFAULT_AUDIO_DEVICE` | estimated |
+| Blocks queued for the monitoring device | 4 | `studio::monitor::MONITOR_QUEUE_BLOCKS` | estimated |
+| Blocks the monitoring device waits for before it plays | 2 | `studio::monitor::PRIME_BLOCKS` | estimated |
 | Meter floor | −60 dB | `media::mix::METER_FLOOR_DB` | estimated |
 | Meter yellow zone from | −20 dB | `ui-egui::docks::METER_YELLOW_DB` | estimated |
 | Meter red zone from | −9 dB | `ui-egui::docks::METER_RED_DB` | estimated |

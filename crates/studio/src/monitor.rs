@@ -1,0 +1,310 @@
+//! Audio monitoring: the mixer's monitoring mix played on an output device.
+//!
+//! The mixer pushes one block of the monitoring mix (48 kHz stereo) per tick into a bounded
+//! queue. The device pulls samples from it on its own thread through a [`Player`], which converts
+//! the rate to the device's by linear interpolation and maps the two channels onto the device's
+//! channels, without allocating or locking. The player waits for [`PRIME_BLOCKS`] blocks before it
+//! plays, and plays silence when the queue runs dry until it holds that many again.
+//!
+//! [`Monitor`] opens the device while a source is monitored and closes it when none is. A device
+//! that fails to open, or that fails or disappears while it plays, is reported; monitoring stops
+//! and the mixer and the outputs carry on. The same device is not tried again until the
+//! monitoring device setting or the set of monitored sources changes.
+
+use std::sync::Arc;
+
+use studiocraft_engine::mixer::{Mixer, MixerCmd};
+use studiocraft_media::audio::{CHANNELS, PooledBlock, SAMPLE_RATE};
+use studiocraft_media::queue::Fifo;
+use studiocraft_platform::audio::{AudioSink, Format, Playing};
+
+use crate::Notice;
+
+/// Blocks of the monitoring mix queued for the device at most (about 85 ms); past it the oldest
+/// is dropped.
+pub const MONITOR_QUEUE_BLOCKS: usize = 4;
+
+/// Blocks the player waits for before it plays, after it starts or runs dry (about 43 ms).
+pub const PRIME_BLOCKS: usize = 2;
+
+/// Errors a playing device reports, kept until the studio reads them.
+const ERRORS_KEPT: usize = 4;
+
+/// Pulls the monitoring mix from its queue in the device's format.
+pub(crate) struct Player {
+    queue: Arc<Fifo<PooledBlock>>,
+    block: Option<PooledBlock>,
+    /// The next frame of `block` to read.
+    at: usize,
+    /// The two mix frames the next device frame falls between, and how far it is from `prev`
+    /// toward `cur` (0 to 1).
+    prev: [f32; CHANNELS],
+    cur: [f32; CHANNELS],
+    phase: f64,
+    rate: u32,
+    /// Mix frames per device frame.
+    step: f64,
+    /// Whether the queue held [`PRIME_BLOCKS`] blocks since the player last ran dry.
+    primed: bool,
+}
+
+impl Player {
+    pub(crate) fn new(queue: Arc<Fifo<PooledBlock>>) -> Player {
+        Player { queue, block: None, at: 0, prev: [0.0; CHANNELS], cur: [0.0; CHANNELS], phase: 1.0, rate: SAMPLE_RATE, step: 1.0, primed: false }
+    }
+
+    /// The next frame of the mix, or silence when the player is not primed or the queue is dry.
+    fn next_frame(&mut self) -> [f32; CHANNELS] {
+        loop {
+            if let Some(b) = &self.block {
+                let i = self.at.saturating_mul(CHANNELS);
+                if let (Some(l), Some(r)) = (b.samples.get(i), b.samples.get(i + 1)) {
+                    self.at += 1;
+                    return [*l, *r];
+                }
+                // The block has played; dropping it returns it to the mixer's pool.
+                self.block = None;
+            }
+            if !self.primed {
+                return [0.0; CHANNELS];
+            }
+            match self.queue.pop() {
+                Some(b) => {
+                    self.block = Some(b);
+                    self.at = 0;
+                }
+                None => {
+                    self.primed = false;
+                    return [0.0; CHANNELS];
+                }
+            }
+        }
+    }
+
+    /// Fill `out`, interleaved samples in `format`.
+    pub(crate) fn fill(&mut self, out: &mut [f32], format: Format) {
+        let rate = format.rate.max(1);
+        if rate != self.rate {
+            self.rate = rate;
+            self.step = f64::from(SAMPLE_RATE) / f64::from(rate);
+        }
+        if !self.primed && self.block.is_none() && self.queue.len() >= PRIME_BLOCKS {
+            self.primed = true;
+        }
+        let channels = usize::from(format.channels.max(1));
+        for frame in out.chunks_mut(channels) {
+            while self.phase >= 1.0 {
+                self.prev = self.cur;
+                self.cur = self.next_frame();
+                self.phase -= 1.0;
+            }
+            let t = self.phase as f32;
+            let l = self.prev[0] + (self.cur[0] - self.prev[0]) * t;
+            let r = self.prev[1] + (self.cur[1] - self.prev[1]) * t;
+            match frame {
+                [m] => *m = (l + r) * 0.5,
+                [a, b, rest @ ..] => {
+                    *a = l;
+                    *b = r;
+                    rest.iter_mut().for_each(|s| *s = 0.0);
+                }
+                [] => {}
+            }
+            self.phase += self.step;
+        }
+    }
+}
+
+/// The monitoring device: opened while a source is monitored.
+pub(crate) struct Monitor {
+    sink: Arc<dyn AudioSink>,
+    playing: Option<Box<dyn Playing>>,
+    /// The device `playing` plays on.
+    device: String,
+    /// What the playing device reported.
+    errors: Arc<Fifo<String>>,
+    /// The device that failed, not opened again until the setting or the monitored sources change.
+    failed: Option<String>,
+}
+
+impl Monitor {
+    pub(crate) fn new(sink: Arc<dyn AudioSink>) -> Monitor {
+        Monitor { sink, playing: None, device: String::new(), errors: Arc::new(Fifo::new(ERRORS_KEPT)), failed: None }
+    }
+
+    /// Whether a device is playing.
+    pub(crate) fn playing(&self) -> bool {
+        self.playing.is_some()
+    }
+
+    /// The playing device's format.
+    pub(crate) fn format(&self) -> Option<Format> {
+        self.playing.as_ref().map(|p| p.format())
+    }
+
+    /// Play on another sink from now on; the device is opened again on the next [`Monitor::sync`].
+    pub(crate) fn set_sink(&mut self, sink: Arc<dyn AudioSink>, mixer: &Mixer) {
+        self.stop(mixer);
+        self.failed = None;
+        self.sink = sink;
+    }
+
+    fn stop(&mut self, mixer: &Mixer) {
+        if self.playing.take().is_some() {
+            mixer.send(MixerCmd::MonitorOutput(None));
+        }
+    }
+
+    /// Play on `device` while `wanted` (a source is monitored), else close the device.
+    pub(crate) fn sync(&mut self, wanted: bool, device: &str, mixer: &Mixer, notices: &mut Vec<Notice>) {
+        if !wanted {
+            self.stop(mixer);
+            self.failed = None;
+            return;
+        }
+        if self.failed.as_deref() == Some(device) {
+            return;
+        }
+        if self.playing.is_some() {
+            if self.device == device {
+                return;
+            }
+            self.stop(mixer);
+        }
+        let queue = Arc::new(Fifo::new(MONITOR_QUEUE_BLOCKS));
+        let errors = Arc::new(Fifo::new(ERRORS_KEPT));
+        let mut player = Player::new(Arc::clone(&queue));
+        let reported = Arc::clone(&errors);
+        match self.sink.play(device, Box::new(move |out, format| player.fill(out, format)), Box::new(move |e| reported.push(e))) {
+            Ok(p) => {
+                mixer.send(MixerCmd::MonitorOutput(Some(queue)));
+                self.playing = Some(p);
+                self.device = device.to_owned();
+                self.errors = errors;
+                self.failed = None;
+            }
+            Err(e) => {
+                self.failed = Some(device.to_owned());
+                notices.push(Notice::new("Audio monitoring could not start: {error}", vec![("error", e.to_string())], true));
+            }
+        }
+    }
+
+    /// Stop monitoring when the playing device reported an error.
+    pub(crate) fn poll(&mut self, mixer: &Mixer, notices: &mut Vec<Notice>) {
+        let Some(first) = self.errors.pop() else { return };
+        while self.errors.pop().is_some() {}
+        if self.playing.is_some() {
+            self.stop(mixer);
+            self.failed = Some(self.device.clone());
+            notices.push(Notice::new("Audio monitoring stopped: {error}", vec![("error", first)], true));
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use studiocraft_media::audio::{BLOCK_FRAMES, BLOCK_SAMPLES, block_pool};
+
+    use super::*;
+
+    /// A queue holding `blocks` blocks whose frames count up from 1 (left) and down from -1 (right).
+    fn queue_of(blocks: usize) -> Arc<Fifo<PooledBlock>> {
+        let pool = block_pool();
+        let q = Arc::new(Fifo::new(16));
+        for b in 0..blocks {
+            let mut block = pool.take();
+            block.samples.clear();
+            for f in 0..BLOCK_FRAMES {
+                let n = (b * BLOCK_FRAMES + f + 1) as f32;
+                block.samples.extend([n, -n]);
+            }
+            q.push(block);
+        }
+        q
+    }
+
+    const STEREO_48K: Format = Format { rate: 48_000, channels: 2 };
+
+    #[test]
+    fn at_the_mix_rate_the_frames_play_unchanged_one_frame_late() {
+        let q = queue_of(2);
+        let mut p = Player::new(Arc::clone(&q));
+        let mut out = vec![9.0; 8];
+        p.fill(&mut out, STEREO_48K);
+        assert_eq!(out, [0.0, 0.0, 1.0, -1.0, 2.0, -2.0, 3.0, -3.0]);
+        let mut rest = vec![0.0; (2 * BLOCK_FRAMES - 4) * 2];
+        p.fill(&mut rest, STEREO_48K);
+        assert_eq!(rest[rest.len() - 2..], [2047.0, -2047.0], "every frame of both blocks plays in order");
+        assert!(q.is_empty());
+    }
+
+    #[test]
+    fn the_player_waits_for_two_blocks_before_it_plays() {
+        let q = queue_of(1);
+        let mut p = Player::new(Arc::clone(&q));
+        let mut out = vec![9.0; 64];
+        p.fill(&mut out, STEREO_48K);
+        assert!(out.iter().all(|s| *s == 0.0), "one block is not enough");
+        assert_eq!(q.len(), 1, "the block waits in the queue");
+    }
+
+    #[test]
+    fn a_dry_queue_plays_silence_and_the_player_waits_for_two_blocks_again() {
+        let q = queue_of(2);
+        let mut p = Player::new(Arc::clone(&q));
+        let mut out = vec![0.0; (2 * BLOCK_FRAMES + 100) * 2];
+        p.fill(&mut out, STEREO_48K);
+        assert!(out[(2 * BLOCK_FRAMES + 1) * 2..].iter().all(|s| *s == 0.0), "after the last frame the player plays silence");
+        let one = queue_of(1);
+        q.push(one.pop().unwrap_or_else(|| panic!("a block")));
+        let mut out = vec![9.0; 64];
+        p.fill(&mut out, STEREO_48K);
+        assert!(out.iter().all(|s| *s == 0.0), "one block after running dry is not enough");
+    }
+
+    #[test]
+    fn another_device_rate_keeps_the_duration() {
+        // 10 blocks at 48 kHz are 10240 frames; at 44.1 kHz they play as about 9408.
+        let q = queue_of(10);
+        let mut p = Player::new(Arc::clone(&q));
+        let format = Format { rate: 44_100, channels: 2 };
+        let mut out = vec![0.0; 20_000 * 2];
+        p.fill(&mut out, format);
+        let played = out.chunks(2).rposition(|f| f[0] != 0.0).map_or(0, |i| i + 1);
+        assert!((9405..=9410).contains(&played), "{played}");
+        // The interpolated ramp rises by 48000 / 44100 frames per device frame.
+        let rise = out[200] - out[198];
+        assert!((f64::from(rise) - 48_000.0 / 44_100.0).abs() < 1e-3, "{rise}");
+    }
+
+    #[test]
+    fn mono_devices_get_both_channels_and_more_channels_get_silence() {
+        let mut p = Player::new(queue_of(2));
+        let mut mono = vec![9.0; 3];
+        p.fill(&mut mono, Format { rate: 48_000, channels: 1 });
+        assert_eq!(mono, [0.0, 0.0, 0.0], "left and right are 1 and -1");
+        let mut p = Player::new(queue_of(2));
+        let mut six = vec![9.0; 12];
+        p.fill(&mut six, Format { rate: 48_000, channels: 6 });
+        assert_eq!(six[6..], [1.0, -1.0, 0.0, 0.0, 0.0, 0.0]);
+        let mut p = Player::new(queue_of(2));
+        let mut odd = vec![9.0; 3];
+        p.fill(&mut odd, Format { rate: 0, channels: 0 });
+        assert!(odd.iter().all(|s| s.is_finite()), "a device format of zeros does not divide by zero");
+    }
+
+    #[test]
+    fn played_blocks_go_back_to_the_pool() {
+        let pool = block_pool();
+        let q = Arc::new(Fifo::new(8));
+        for _ in 0..3 {
+            q.push(pool.take());
+        }
+        let before = pool.free();
+        let mut p = Player::new(Arc::clone(&q));
+        let mut out = vec![0.0; BLOCK_SAMPLES * 2 + 2];
+        p.fill(&mut out, STEREO_48K);
+        assert_eq!(pool.free(), before + 2, "two played blocks are free again");
+    }
+}

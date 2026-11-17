@@ -162,6 +162,11 @@
 	Minimize	Minimize
 	MIT	MIT
 	Mode	Mode
+	Monitor and output	Monitor and output
+	Monitor off	Monitor off
+	Monitor only (left out of recordings and streams)	Monitor only (left out of recordings and streams)
+	Monitoring	Monitoring
+	Monitoring device	Monitoring device
 	Move the scene down	Move the scene down
 	Move the scene up	Move the scene up
 	Move the source down	Move the source down
@@ -200,6 +205,7 @@
 	Parade	Parade
 	Picture file	Picture file
 	Pictures	Pictures
+	Plays this source on the monitoring device chosen in Settings › Audio	Plays this source on the monitoring device chosen in Settings › Audio
 	Preferences…	Preferences…
 	Preset (higher is slower and better)	Preset (higher is slower and better)
 	Presets	Presets
@@ -275,6 +281,7 @@
 	Source Code	Source Code
 	Source Properties	Source Properties
 	Sources	Sources
+	Sources set to monitoring in their Properties window play on this device.	Sources set to monitoring in their Properties window play on this device.
 	Speed	Speed
 	Start or Stop Recording	Start or Stop Recording
 	Start or Stop Replay Buffer	Start or Stop Replay Buffer
@@ -348,6 +355,7 @@
 	Your Videos folder	Your Videos folder
 	YUV vectorscope	YUV vectorscope
 	{db} dB	{db} dB
+	{device} (not connected)	{device} (not connected)
 	{encoder} (not in this ffmpeg)	{encoder} (not in this ffmpeg)
 	{fps} fps  {ms} ms	{fps} fps  {ms} ms
 	{ms} ms	{ms} ms
@@ -355,6 +363,8 @@
 	{program} did not report its version	{program} did not report its version
 	{status} · {mb} MB	{status} · {mb} MB
 @msg	A plug-in could not be loaded: {error}	A plug-in could not be loaded: {error}
+@msg	Audio monitoring could not start: {error}	Audio monitoring could not start: {error}
+@msg	Audio monitoring stopped: {error}	Audio monitoring stopped: {error}
 @msg	Could not check for updates: {error}	Could not check for updates: {error}
 @msg	Exported the scene collection to {path}	Exported the scene collection to {path}
 @msg	Imported the scene collection `{name}`	Imported the scene collection `{name}`

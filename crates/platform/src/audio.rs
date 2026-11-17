@@ -1,4 +1,8 @@
-//! Audio devices: listing, input capture, and capture of what an output device plays (Windows).
+//! Audio devices: listing, input capture, capture of what an output device plays (Windows), and
+//! playback on an output device.
+
+use std::sync::mpsc::{SyncSender, sync_channel};
+use std::thread::JoinHandle;
 
 use crate::PlatformError;
 
@@ -58,13 +62,105 @@ impl AudioCapture {
     }
 }
 
+/// Fills each buffer a playing device asks for with interleaved samples in the device's format.
+/// It runs on the device's own thread, so it must not block or allocate.
+pub type Fill = Box<dyn FnMut(&mut [f32], Format) + Send>;
+
+/// Hears why a playing device stopped (it failed or was unplugged), on the device's thread.
+pub type OnError = Box<dyn FnMut(String) + Send>;
+
+/// Plays audio on output devices: [`SystemSink`] on the system's devices, or a stand-in in tests.
+pub trait AudioSink: Send + Sync {
+    /// Start playing on the output device `id` ([`DEFAULT_DEVICE`] or empty for the default).
+    /// Playback runs until the returned handle is dropped.
+    fn play(&self, id: &str, fill: Fill, on_error: OnError) -> Result<Box<dyn Playing>, PlatformError>;
+}
+
+/// An output device that is playing; dropping it stops the device.
+pub trait Playing: Send {
+    /// The device's sample rate and channel count.
+    fn format(&self) -> Format;
+}
+
+/// The system's output devices.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct SystemSink;
+
+impl AudioSink for SystemSink {
+    fn play(&self, id: &str, fill: Fill, on_error: OnError) -> Result<Box<dyn Playing>, PlatformError> {
+        Ok(Box::new(AudioPlayback::open(id, fill, on_error)?))
+    }
+}
+
+/// Playback on an output device. The device stream lives on a thread of its own, so the handle
+/// can move between threads; dropping the handle stops the stream and ends the thread.
+pub struct AudioPlayback {
+    stop: Option<SyncSender<()>>,
+    thread: Option<JoinHandle<()>>,
+    pub format: Format,
+}
+
+impl AudioPlayback {
+    /// Play on the output device `id` ([`DEFAULT_DEVICE`] or empty for the default). `fill`
+    /// supplies the samples on the device's own thread. Returns once the device has started, or
+    /// with the reason it could not.
+    pub fn open(id: &str, fill: Fill, on_error: OnError) -> Result<AudioPlayback, PlatformError> {
+        let (ready_tx, ready_rx) = sync_channel(1);
+        let (stop_tx, stop_rx) = sync_channel::<()>(0);
+        let id = id.to_owned();
+        let thread = std::thread::Builder::new()
+            .name("audio monitor".into())
+            .spawn(move || match imp::Playback::open(&id, fill, on_error) {
+                // The stream plays until the handle is dropped, and stops on this thread at the end
+                // of the arm.
+                Ok((_stream, format)) => {
+                    let _ = ready_tx.send(Ok(format));
+                    let _ = stop_rx.recv();
+                }
+                Err(e) => {
+                    let _ = ready_tx.send(Err(e));
+                }
+            })
+            .map_err(|e| PlatformError::Failed(e.to_string()))?;
+        match ready_rx.recv() {
+            Ok(Ok(format)) => Ok(AudioPlayback { stop: Some(stop_tx), thread: Some(thread), format }),
+            Ok(Err(e)) => {
+                let _ = thread.join();
+                Err(e)
+            }
+            Err(_) => {
+                let _ = thread.join();
+                Err(PlatformError::Failed("the audio device thread stopped".into()))
+            }
+        }
+    }
+}
+
+impl Playing for AudioPlayback {
+    fn format(&self) -> Format {
+        self.format
+    }
+}
+
+impl Drop for AudioPlayback {
+    fn drop(&mut self) {
+        drop(self.stop.take());
+        if let Some(t) = self.thread.take() {
+            let _ = t.join();
+        }
+    }
+}
+
 #[cfg(any(windows, target_os = "macos"))]
 mod imp {
     use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
     use cpal::{FromSample, SampleFormat, SizedSample};
 
-    use super::{DEFAULT_DEVICE, DeviceInfo, DeviceKind, Format};
+    use super::{DEFAULT_DEVICE, DeviceInfo, DeviceKind, Fill, Format, OnError};
     use crate::PlatformError;
+
+    /// Samples converted per pass for a device whose format is not `f32`.
+    const SCRATCH_SAMPLES: usize = 8192;
 
     fn list(host: &cpal::Host, kind: DeviceKind) -> Vec<cpal::Device> {
         let devices = match kind {
@@ -157,12 +253,89 @@ mod imp {
             )
             .map_err(PlatformError::failed)
     }
+
+    /// The device stream of an [`super::AudioPlayback`]; dropping it stops the device.
+    pub struct Playback {
+        _stream: cpal::Stream,
+    }
+
+    impl Playback {
+        pub fn open(id: &str, fill: Fill, on_error: OnError) -> Result<(Playback, Format), PlatformError> {
+            let host = cpal::default_host();
+            let device = if id.is_empty() || id == DEFAULT_DEVICE {
+                host.default_output_device()
+            } else {
+                list(&host, DeviceKind::Output).into_iter().find(|d| d.name().ok().as_deref() == Some(id))
+            };
+            let device = device.ok_or_else(|| PlatformError::NotFound(format!("the audio device \u{201c}{id}\u{201d}")))?;
+            let supported = device.default_output_config().map_err(PlatformError::failed)?;
+            let config: cpal::StreamConfig = supported.config();
+            let format = Format { rate: config.sample_rate.0, channels: config.channels };
+            let stream = match supported.sample_format() {
+                SampleFormat::F32 => play::<f32>(&device, &config, format, fill, on_error),
+                SampleFormat::I16 => play::<i16>(&device, &config, format, fill, on_error),
+                SampleFormat::I32 => play::<i32>(&device, &config, format, fill, on_error),
+                SampleFormat::U16 => play::<u16>(&device, &config, format, fill, on_error),
+                SampleFormat::U8 => play::<u8>(&device, &config, format, fill, on_error),
+                other => return Err(PlatformError::Failed(format!("the device's sample format {other:?} is not supported"))),
+            }?;
+            stream.play().map_err(PlatformError::failed)?;
+            Ok((Playback { _stream: stream }, format))
+        }
+    }
+
+    fn play<T>(
+        device: &cpal::Device,
+        config: &cpal::StreamConfig,
+        format: Format,
+        mut fill: Fill,
+        mut on_error: OnError,
+    ) -> Result<cpal::Stream, PlatformError>
+    where
+        T: SizedSample + FromSample<f32>,
+    {
+        // Allocated here, before the stream starts, so the callback does not allocate.
+        let mut scratch = vec![0.0f32; SCRATCH_SAMPLES];
+        let channels = usize::from(format.channels.max(1));
+        let step = (SCRATCH_SAMPLES / channels) * channels;
+        device
+            .build_output_stream(
+                config,
+                move |data: &mut [T], _: &cpal::OutputCallbackInfo| {
+                    if step == 0 {
+                        data.iter_mut().for_each(|d| *d = T::EQUILIBRIUM);
+                        return;
+                    }
+                    for chunk in data.chunks_mut(step) {
+                        let Some(buf) = scratch.get_mut(..chunk.len()) else {
+                            chunk.iter_mut().for_each(|d| *d = T::EQUILIBRIUM);
+                            continue;
+                        };
+                        fill(buf, format);
+                        for (d, s) in chunk.iter_mut().zip(buf.iter()) {
+                            *d = <T as FromSample<f32>>::from_sample_(*s);
+                        }
+                    }
+                },
+                move |e| on_error(e.to_string()),
+                None,
+            )
+            .map_err(PlatformError::failed)
+    }
 }
 
 #[cfg(not(any(windows, target_os = "macos")))]
 mod imp {
-    use super::{DeviceInfo, DeviceKind, Format};
+    use super::{DeviceInfo, DeviceKind, Fill, Format, OnError};
     use crate::PlatformError;
+
+    pub struct Playback;
+
+    impl Playback {
+        pub fn open(_id: &str, _fill: Fill, _on_error: OnError) -> Result<(Playback, Format), PlatformError> {
+            Err(PlatformError::Unsupported)
+        }
+    }
 
     pub fn devices(_kind: DeviceKind) -> Vec<DeviceInfo> {
         Vec::new()
@@ -200,6 +373,12 @@ mod tests {
     #[test]
     fn an_unknown_device_is_reported() {
         let r = AudioCapture::open(DeviceKind::Input, "no such device 1234", |_, _| {}, |_| {});
+        assert!(r.is_err());
+    }
+
+    #[test]
+    fn an_unknown_output_device_is_reported() {
+        let r = SystemSink.play("no such device 1234", Box::new(|_, _| {}), Box::new(|_| {}));
         assert!(r.is_err());
     }
 }

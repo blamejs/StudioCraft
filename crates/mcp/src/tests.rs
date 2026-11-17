@@ -242,6 +242,41 @@ fn source_audio_sets_the_sync_offset() {
     error_text(&call(&mut s, "source_audio", json!({"source": true})));
 }
 
+/// A sink with no devices, so the tests play nothing.
+struct NoDevices;
+
+impl studiocraft_studio::AudioSink for NoDevices {
+    fn play(
+        &self,
+        _: &str,
+        _: studiocraft_studio::Fill,
+        _: studiocraft_studio::OnError,
+    ) -> Result<Box<dyn studiocraft_studio::Playing>, studiocraft_studio::PlatformError> {
+        Err(studiocraft_studio::PlatformError::Unsupported)
+    }
+}
+
+#[test]
+fn source_audio_sets_the_monitoring_mode() {
+    let mut h = Headless::with_gpu(None).unwrap();
+    h.studio_mut().set_audio_sink(Arc::new(NoDevices));
+    let mut s = Server::new(Box::new(h)).unwrap();
+    let set = ok_json(&call(&mut s, "source_audio", json!({"source": "Microphone", "monitor": "monitor_only"})));
+    assert_eq!(set["audio"]["monitor"], "monitor_only", "{set}");
+    let both = ok_json(&call(&mut s, "source_audio", json!({"source": "Microphone", "monitor": "monitor_and_output", "sync_offset_ms": 40})));
+    assert_eq!((both["audio"]["monitor"].clone(), both["audio"]["sync_offset_ms"].clone()), (json!("monitor_and_output"), json!(40)), "{both}");
+    for mode in [json!("loud"), json!(1), json!(true)] {
+        error_text(&call(&mut s, "source_audio", json!({"source": "Microphone", "monitor": mode, "sync_offset_ms": 99})));
+    }
+    let read = ok_json(&call(&mut s, "source_audio", json!({"source": "Microphone"})));
+    assert_eq!(
+        (read["audio"]["monitor"].clone(), read["audio"]["sync_offset_ms"].clone()),
+        (json!("monitor_and_output"), json!(40)),
+        "a refused value changes nothing"
+    );
+    error_text(&call(&mut s, "source_audio", json!({"source": "ghost", "monitor": "off"})));
+}
+
 #[test]
 fn transition_tools_set_the_kind_and_length() {
     let mut s = server();

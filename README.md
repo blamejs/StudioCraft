@@ -36,7 +36,9 @@ and Linux.
   the chosen transition, or with a quick cut or fade.
 - **Audio mixer.** Peak and RMS meters with peak hold, a volume fader in dB, and mute for every
   audible source. A source's Properties window sets its sync offset, which delays its audio by 0
-  to 5000 ms to line it up with its picture.
+  to 5000 ms to line it up with its picture, and its monitoring: off, monitor only (you hear it,
+  and recordings and streams leave it out) or monitor and output. Monitored sources play on the
+  device chosen in Settings › Audio. Device output works on Windows and macOS.
 - **Recording and streaming.** MKV, MP4 or MOV recordings at four quality levels, and RTMP streams
   at a constant bitrate. With the H.264 (built in) encoder, StudioCraft records MKV files at the
   Compact, High and Pristine levels without `ffmpeg`, using its own H.264 and AAC encoders and a

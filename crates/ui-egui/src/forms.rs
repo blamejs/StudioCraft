@@ -3,7 +3,7 @@
 use egui::{Color32, Ui};
 use serde_json::{Value, json};
 use studiocraft_model::collection::MAX_SYNC_OFFSET_MS;
-use studiocraft_model::{AudioState, FieldKind, FilterId, PathMode, SettingsSchema, SourceId};
+use studiocraft_model::{AudioState, FieldKind, FilterId, MonitorMode, PathMode, SettingsSchema, SourceId};
 use studiocraft_plugin::{FilterTarget, Registry, Settings};
 use studiocraft_studio::Studio;
 
@@ -232,8 +232,28 @@ fn audio_form(ui: &mut Ui, source: SourceId, state: &AudioState) -> Vec<Action> 
             actions.push(("source.sync_offset", json!({"source": source, "ms": ms})));
         }
         ui.end_row();
+        ui.label(tl!("Monitoring")).on_hover_text(tl!("Plays this source on the monitoring device chosen in Settings › Audio"));
+        let mut mode = state.monitor;
+        craft_ui::ComboBox::from_id_salt(("props-monitor", source.0)).selected_text(monitor_label(mode)).width(200.0).show_ui(ui, |ui| {
+            for m in MonitorMode::ALL {
+                ui.selectable_value(&mut mode, m, monitor_label(m));
+            }
+        });
+        if mode != state.monitor {
+            actions.push(("source.monitor", json!({"source": source, "mode": mode.id()})));
+        }
+        ui.end_row();
     });
     actions
+}
+
+/// A monitoring mode as the Properties window shows it.
+fn monitor_label(mode: MonitorMode) -> String {
+    match mode {
+        MonitorMode::Off => tl!("Monitor off").to_string(),
+        MonitorMode::MonitorOnly => tl!("Monitor only (left out of recordings and streams)").to_string(),
+        MonitorMode::MonitorAndOutput => tl!("Monitor and output").to_string(),
+    }
 }
 
 /// The Filters window of one source.
@@ -380,6 +400,22 @@ mod tests {
         });
         out.textures_delta.clear();
         assert!(actions.is_empty());
+    }
+
+    #[test]
+    fn every_monitoring_mode_draws_with_its_own_label() {
+        let ctx = egui::Context::default();
+        for mode in MonitorMode::ALL {
+            let state = AudioState { monitor: mode, ..AudioState::default() };
+            let mut actions = vec![("x", json!(null))];
+            let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
+                actions = audio_form(ui, SourceId(3), &state);
+            });
+            out.textures_delta.clear();
+            assert!(actions.is_empty(), "{mode:?}");
+        }
+        let labels: std::collections::HashSet<String> = MonitorMode::ALL.into_iter().map(monitor_label).collect();
+        assert_eq!(labels.len(), 3);
     }
 
     #[test]
