@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 use craft_keymap::{Binding, CommandRef, Keymap, Overrides};
 use egui::{RichText, Ui};
 use studiocraft_model::{Profile, RecordingFormat, RecordingQuality};
-use studiocraft_plugin::{EncoderEnv, Registry, Settings};
+use studiocraft_plugin::{Availability, EncoderEnv, EncoderKind, Registry, Settings};
 
 use crate::i18n::{self, I18N};
 
@@ -182,13 +182,18 @@ impl SettingsWindow {
         ok.then_some(out)
     }
 
-    /// The video encoder list; `streaming` lists only the encoders a stream can carry. Recordings
-    /// and streams run their encoder inside the ffmpeg program, so only ffmpeg encoders are listed.
+    /// The video encoder list; `streaming` lists only the encoders a stream can carry. Encoders the
+    /// output cannot run are left out, and ones the ffmpeg program does not list are shown disabled.
     fn encoder_combo(ui: &mut Ui, id: &str, registry: &Registry, offered: &[String], value: &mut String, streaming: bool) {
         let name = registry.encoder(value).map_or_else(|_| value.clone(), |e| tl!(e.name()).to_string());
+        let env = EncoderEnv::ffmpeg(offered);
         craft_ui::ComboBox::from_id_salt(id).selected_text(name).width(260.0).show_ui(ui, |ui| {
-            for e in registry.encoders().iter().filter(|e| e.ffmpeg().is_some() && (!streaming || e.streams())) {
-                let available = e.available(&EncoderEnv { ffmpeg_encoders: offered });
+            for e in registry.encoders().iter().filter(|e| e.kind() == EncoderKind::Video && (!streaming || e.streams())) {
+                let availability = e.availability(&env);
+                if availability == Availability::NotRunHere {
+                    continue;
+                }
+                let available = availability.can_start();
                 let name = tl!(e.name());
                 let text = if available { name.to_string() } else { craft_i18n::fmt(tl!("{encoder} (not in this ffmpeg)"), &[("encoder", name)]) };
                 ui.add_enabled_ui(available, |ui| ui.selectable_value(value, e.id().to_string(), text));

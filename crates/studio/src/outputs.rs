@@ -7,13 +7,16 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use studiocraft_engine::mixer::MixerCmd;
+use studiocraft_media::Tick;
 use studiocraft_media::audio::SAMPLE_RATE;
 use studiocraft_media::queue::Fifo;
 use studiocraft_media::stats::EncoderStats;
 use studiocraft_media::video::{PixelFormat, PooledFrame};
 use studiocraft_model::{Profile, Settings};
 use studiocraft_platform::ffmpeg;
-use studiocraft_plugin::{EncoderEnv, OutputInstance, OutputJob, OutputStatus, PluginError, RateControl, VideoFormat};
+use studiocraft_plugin::{
+    Availability, Encoder, EncoderEnv, EncoderKind, OutputInstance, OutputJob, OutputStatus, PluginError, RateControl, VideoFormat,
+};
 
 use crate::{Notice, Studio, StudioError};
 
@@ -294,6 +297,45 @@ fn plan(p: &Profile, kind: OutputKind) -> Plan {
     }
 }
 
+impl Plan {
+    /// The job that runs `encoder` with this plan's encoder settings, rate and audio bitrate.
+    fn job(&self, encoder: Arc<dyn Encoder>, video: VideoFormat, ffmpeg: PathBuf, stats: Arc<EncoderStats>, start: Tick) -> OutputJob {
+        OutputJob {
+            video,
+            sample_rate: SAMPLE_RATE,
+            video_encoder: encoder,
+            video_encoder_settings: self.encoder_settings.clone(),
+            rate: self.rate,
+            audio_bitrate_kbps: self.audio_kbps,
+            ffmpeg,
+            stats,
+            start,
+        }
+    }
+}
+
+/// Whether the output `kind` can start with `encoder`, when the ffmpeg program listed `offered`
+/// (empty when that list could not be read).
+fn check_encoder(encoder: &dyn Encoder, offered: &[String], kind: OutputKind) -> Result<(), StudioError> {
+    let tab = match kind {
+        OutputKind::Recording => "Output",
+        OutputKind::Streaming => "Stream",
+    };
+    if encoder.kind() != EncoderKind::Video {
+        return Err(StudioError::Output(format!("{} is not a video encoder; choose another encoder in Settings › {tab}", encoder.name())));
+    }
+    match encoder.availability(&EncoderEnv::ffmpeg(offered)) {
+        a if a.can_start() => Ok(()),
+        Availability::NotRunHere => {
+            Err(StudioError::Output(format!("{} cannot run in a {}; choose another encoder in Settings › {tab}", encoder.name(), kind.noun())))
+        }
+        _ => {
+            let codec = encoder.ffmpeg().map_or(encoder.codec().id(), |f| f.ffmpeg_codec());
+            Err(StudioError::Output(format!("this ffmpeg has no {codec} encoder; choose another encoder in Settings › {tab}")))
+        }
+    }
+}
+
 impl Studio {
     pub(crate) fn toggle_output(&mut self, kind: OutputKind) -> Result<(), StudioError> {
         if self.outputs.active.contains_key(&kind) {
@@ -325,29 +367,17 @@ impl Studio {
             return Err(StudioError::Output("set a server in Settings › Stream first".into()));
         }
         let program = ffmpeg::locate(&self.profile.output.ffmpeg_path).map_err(|e| StudioError::Output(e.to_string()))?;
-        let Plan { output_id, settings, encoder_id, encoder_settings, rate, audio_kbps } = plan(&self.profile, kind);
+        let planned = plan(&self.profile, kind);
         let registry = Arc::clone(self.engine.registry());
-        let encoder = registry.encoder(&encoder_id)?;
+        let encoder = registry.encoder(&planned.encoder_id)?;
         let offered = self.outputs.encoders.entry(program.clone()).or_insert_with(|| ffmpeg::encoders(&program));
-        if !encoder.available(&EncoderEnv { ffmpeg_encoders: offered }) {
-            let codec = encoder.ffmpeg().map_or(encoder.codec().id(), |f| f.ffmpeg_codec());
-            return Err(StudioError::Output(format!("this ffmpeg has no {codec} encoder; choose another encoder in Settings › Output")));
-        }
+        check_encoder(encoder.as_ref(), offered, kind)?;
         let v = self.profile.video.sanitized();
         let stats = Arc::new(EncoderStats::default());
-        let job = OutputJob {
-            video: VideoFormat { width: v.output_width, height: v.output_height, fps_num: v.fps_num, fps_den: v.fps_den, pixel: PixelFormat::Nv12 },
-            sample_rate: SAMPLE_RATE,
-            video_encoder: encoder,
-            video_encoder_settings: encoder_settings,
-            rate,
-            audio_bitrate_kbps: audio_kbps,
-            ffmpeg: program,
-            stats: Arc::clone(&stats),
-            start: self.clock.now(),
-        };
-        let output = registry.output(output_id)?;
-        let mut settings = settings;
+        let video = VideoFormat { width: v.output_width, height: v.output_height, fps_num: v.fps_num, fps_den: v.fps_den, pixel: PixelFormat::Nv12 };
+        let job = planned.job(encoder, video, program, Arc::clone(&stats), self.clock.now());
+        let output = registry.output(planned.output_id)?;
+        let mut settings = planned.settings;
         let reserved = match kind {
             OutputKind::Recording => {
                 let folder = recording_folder(&self.profile.output.folder);
@@ -379,7 +409,7 @@ impl Studio {
 
 #[cfg(test)]
 mod tests {
-    use studiocraft_plugin::{FfmpegEncoder, Plugin};
+    use studiocraft_plugin::Plugin;
 
     use super::*;
 
@@ -432,13 +462,60 @@ mod tests {
         let stream = plan(&p, OutputKind::Streaming);
         assert_eq!(stream.encoder_settings, Settings::new().with("preset", "p3"), "the stream's own encoder's settings");
 
+        let video = VideoFormat { width: 64, height: 48, fps_num: 30, fps_den: 1, pixel: PixelFormat::Nv12 };
         for (plan, preset) in [(rec, "-preset fast"), (stream, "-preset p3")] {
             let Some(encoder) = studiocraft_outputs::encoders::all().into_iter().find(|e| e.id() == plan.encoder_id) else {
                 panic!("no encoder {}", plan.encoder_id)
             };
-            let args = encoder.ffmpeg_args(&plan.encoder_settings, plan.rate, 30.0).unwrap().join(" ");
+            let stats = Arc::new(EncoderStats::default());
+            let job = plan.job(Arc::new(encoder), video, PathBuf::from("ffmpeg"), stats, Tick::from_units(0, 1));
+            let Some(ffmpeg) = job.video_encoder.ffmpeg() else { panic!("{} runs in ffmpeg", plan.encoder_id) };
+            let args = ffmpeg.ffmpeg_args(&job.video_encoder_settings, job.rate, 30.0).unwrap().join(" ");
             assert!(args.contains(preset), "{args}");
         }
+    }
+
+    #[test]
+    fn an_encoder_that_cannot_run_names_the_settings_tab_of_its_output() {
+        let x264 = studiocraft_outputs::encoders::all().into_iter().next().unwrap();
+        let other = ["libx265".to_string()];
+        let listed = ["libx264".to_string()];
+        assert!(check_encoder(&x264, &listed, OutputKind::Streaming).is_ok());
+        assert!(check_encoder(&x264, &[], OutputKind::Recording).is_ok(), "an unknown list does not rule it out");
+        for (kind, tab) in [(OutputKind::Recording, "Settings › Output"), (OutputKind::Streaming, "Settings › Stream")] {
+            let Err(StudioError::Output(m)) = check_encoder(&x264, &other, kind) else { panic!("x264 started without libx264") };
+            assert!(m.contains("no libx264 encoder") && m.ends_with(tab), "{m}");
+        }
+    }
+
+    #[test]
+    fn a_built_in_encoder_does_not_start_in_an_ffmpeg_output() {
+        struct Builtin(studiocraft_plugin::Codec);
+        impl Plugin for Builtin {
+            fn id(&self) -> &'static str {
+                "builtin"
+            }
+            fn name(&self) -> &'static str {
+                "Built-in"
+            }
+            fn schema(&self) -> studiocraft_model::SettingsSchema {
+                studiocraft_model::SettingsSchema::default()
+            }
+        }
+        impl Encoder for Builtin {
+            fn codec(&self) -> studiocraft_plugin::Codec {
+                self.0
+            }
+        }
+        let video = Builtin(studiocraft_plugin::Codec::H264);
+        let listed = ["libx264".to_string()];
+        for offered in [&listed[..], &[]] {
+            let Err(StudioError::Output(m)) = check_encoder(&video, offered, OutputKind::Streaming) else { panic!("a built-in encoder started") };
+            assert_eq!(m, "Built-in cannot run in a stream; choose another encoder in Settings › Stream");
+        }
+        let audio = Builtin(studiocraft_plugin::Codec::Aac);
+        let Err(StudioError::Output(m)) = check_encoder(&audio, &listed, OutputKind::Recording) else { panic!("an audio encoder started as video") };
+        assert_eq!(m, "Built-in is not a video encoder; choose another encoder in Settings › Output");
     }
 
     #[test]

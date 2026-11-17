@@ -642,7 +642,7 @@ impl StudioApp {
             "tools.encoders" => {
                 let found = studiocraft_platform::ffmpeg::locate(&self.studio.profile().output.ffmpeg_path).map_err(|e| e.to_string())?;
                 let offered = studiocraft_platform::ffmpeg::encoders(&found);
-                let env = studiocraft_plugin::EncoderEnv { ffmpeg_encoders: &offered };
+                let env = studiocraft_plugin::EncoderEnv::ffmpeg(&offered);
                 let list = self
                     .studio
                     .registry()
@@ -650,8 +650,8 @@ impl StudioApp {
                     .iter()
                     .map(|e| {
                         let codec = e.ffmpeg().map_or(e.codec().id(), |f| f.ffmpeg_codec());
-                        // An ffmpeg encoder counts as missing when this ffmpeg's list could not be read.
-                        let ok = e.available(&env) && (e.ffmpeg().is_none() || !offered.is_empty());
+                        // Only an encoder this ffmpeg is known to run is listed as available.
+                        let ok = e.availability(&env) == studiocraft_plugin::Availability::Ready;
                         (e.name().to_string(), codec.to_string(), ok)
                     })
                     .collect();

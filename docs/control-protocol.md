@@ -130,8 +130,8 @@ that cannot be reached is reported as an error, never as "up to date". Sessions 
 The engine command `plugin.list` also only reads. It returns every registered plug-in, grouped as
 `sources`, `filters`, `transitions`, `encoders` and `outputs`. Each entry has `id`, `name`,
 `version` and `schema` (the settings fields with their types, limits and defaults), and sources add
-`video` and `audio`, filters `target`, transitions `instant`, and encoders `kind`, `codec` (`h264`
-or `hevc`) and `builtin`. `builtin` is `false` for an encoder that runs inside the ffmpeg program,
+`video` and `audio`, filters `target`, transitions `instant`, and encoders `kind`, `codec` (`h264`,
+`hevc` or `aac`) and `builtin`. `builtin` is `false` for an encoder that runs inside the ffmpeg program,
 and only such an encoder has `ffmpeg_codec`.
 
 ```sh
