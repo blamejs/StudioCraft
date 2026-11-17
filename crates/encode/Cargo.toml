@@ -1,0 +1,22 @@
+[package]
+name = "studiocraft-encode"
+description = "The built-in encoders: H.264 video from NV12 frames and AAC audio from the mixer's blocks"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+studiocraft-model.workspace = true
+studiocraft-media.workspace = true
+studiocraft-plugin.workspace = true
+craft-video.workspace = true
+craft-audio.workspace = true
+
+[dev-dependencies]
+# Independent decoders read back what the encoders write.
+craft-video = { workspace = true, features = ["h264-decode"] }
+craft-audio = { workspace = true, features = ["aac-decode"] }
+
+[lints]
+workspace = true

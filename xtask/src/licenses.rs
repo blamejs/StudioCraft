@@ -25,6 +25,8 @@ pub const ALLOWED: &[&str] = &[
     "Ubuntu-font-1.0",
     // The Independent JPEG Group license, a BSD-style license.
     "IJG",
+    // The University of Illinois/NCSA Open Source License, a BSD-style license.
+    "NCSA",
 ];
 
 /// Packages accepted under a license that is not in [`ALLOWED`], each with the license and the
@@ -87,6 +89,7 @@ mod tests {
         assert!(!permissive("MIT AND GPL-2.0"));
         assert!(!permissive("MPL-2.0"));
         assert!(permissive("(MIT OR Apache-2.0) AND OFL-1.1 AND Ubuntu-font-1.0"));
+        assert!(permissive("(MIT OR Apache-2.0) AND NCSA"));
     }
 
     #[test]

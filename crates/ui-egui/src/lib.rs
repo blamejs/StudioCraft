@@ -640,9 +640,12 @@ impl StudioApp {
                 }
             },
             "tools.encoders" => {
-                let found = studiocraft_platform::ffmpeg::locate(&self.studio.profile().output.ffmpeg_path).map_err(|e| e.to_string())?;
-                let offered = studiocraft_platform::ffmpeg::encoders(&found);
-                let env = studiocraft_plugin::EncoderEnv::ffmpeg(&offered);
+                // Without the ffmpeg program only the built-in encoders are available.
+                let offered = studiocraft_platform::ffmpeg::locate(&self.studio.profile().output.ffmpeg_path)
+                    .map(|found| studiocraft_platform::ffmpeg::encoders(&found))
+                    .unwrap_or_default();
+                // Recordings run the built-in encoders.
+                let env = studiocraft_plugin::EncoderEnv { builtin: true, ..studiocraft_plugin::EncoderEnv::ffmpeg(&offered) };
                 let list = self
                     .studio
                     .registry()
@@ -650,7 +653,8 @@ impl StudioApp {
                     .iter()
                     .map(|e| {
                         let codec = e.ffmpeg().map_or(e.codec().id(), |f| f.ffmpeg_codec());
-                        // Only an encoder this ffmpeg is known to run is listed as available.
+                        // Only a built-in encoder, or one this ffmpeg is known to run, is listed as
+                        // available.
                         let ok = e.availability(&env) == studiocraft_plugin::Availability::Ready;
                         (e.name().to_string(), codec.to_string(), ok)
                     })

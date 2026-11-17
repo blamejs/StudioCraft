@@ -18,6 +18,7 @@ studiocraft-plugin = { path = "crates/plugin" }
 studiocraft-engine = { path = "crates/engine" }
 studiocraft-render = { path = "crates/render" }
 studiocraft-platform = { path = "crates/platform" }
+studiocraft-encode = { path = "crates/encode" }
 studiocraft-sources = { path = "crates/sources" }
 studiocraft-outputs = { path = "crates/outputs" }
 studiocraft-studio = { path = "crates/studio" }
@@ -84,6 +85,10 @@ craft-i18n = { git = "https://github.com/storytold/craft-libs", rev = "7780b4f58
 craft-update = { git = "https://github.com/storytold/craft-libs", rev = "7780b4f58ec3d56b1f908c8fa3b1258fabae3880", features = ["egui"] }
 # Who draws the window frame (the desktop or the app), and the menu strip as the title bar.
 craft-window = { git = "https://github.com/storytold/craft-libs", rev = "7780b4f58ec3d56b1f908c8fa3b1258fabae3880", features = ["egui"] }
+# The built-in H.264 encoder (and its decoder, for tests), the AAC encoder, and the Matroska writer.
+craft-video = { git = "https://github.com/storytold/craft-libs", rev = "7780b4f58ec3d56b1f908c8fa3b1258fabae3880", default-features = false, features = ["h264-encode", "threads"] }
+craft-audio = { git = "https://github.com/storytold/craft-libs", rev = "7780b4f58ec3d56b1f908c8fa3b1258fabae3880", default-features = false, features = ["aac-encode"] }
+craft-media = { git = "https://github.com/storytold/craft-libs", rev = "7780b4f58ec3d56b1f908c8fa3b1258fabae3880", default-features = false, features = ["matroska"] }
 
 # egui 0.37 and winit: the suite's forks (storytold/egui, storytold/winit), as craft-libs pins them.
 [patch.crates-io]

@@ -182,18 +182,12 @@ impl SettingsWindow {
         ok.then_some(out)
     }
 
-    /// The video encoder list; `streaming` lists only the encoders a stream can carry. Encoders the
-    /// output cannot run are left out, and ones the ffmpeg program does not list are shown disabled.
+    /// The video encoder list of [`listed_encoders`]; the ones the ffmpeg program does not list
+    /// are shown disabled.
     fn encoder_combo(ui: &mut Ui, id: &str, registry: &Registry, offered: &[String], value: &mut String, streaming: bool) {
         let name = registry.encoder(value).map_or_else(|_| value.clone(), |e| tl!(e.name()).to_string());
-        let env = EncoderEnv::ffmpeg(offered);
         craft_ui::ComboBox::from_id_salt(id).selected_text(name).width(260.0).show_ui(ui, |ui| {
-            for e in registry.encoders().iter().filter(|e| e.kind() == EncoderKind::Video && (!streaming || e.streams())) {
-                let availability = e.availability(&env);
-                if availability == Availability::NotRunHere {
-                    continue;
-                }
-                let available = availability.can_start();
+            for (e, available) in listed_encoders(registry, offered, streaming) {
                 let name = tl!(e.name());
                 let text = if available { name.to_string() } else { craft_i18n::fmt(tl!("{encoder} (not in this ffmpeg)"), &[("encoder", name)]) };
                 ui.add_enabled_ui(available, |ui| ui.selectable_value(value, e.id().to_string(), text));
@@ -440,9 +434,41 @@ impl SettingsWindow {
     }
 }
 
+/// The video encoders a recording (`streaming` false) or a stream can choose, each with whether
+/// it can start: encoders the output cannot run are left out (a stream runs no built-in encoder,
+/// and carries H.264 only), and ones the ffmpeg program does not list cannot start.
+fn listed_encoders<'a>(registry: &'a Registry, offered: &[String], streaming: bool) -> Vec<(&'a dyn studiocraft_plugin::Encoder, bool)> {
+    let env = EncoderEnv { builtin: !streaming, ..EncoderEnv::ffmpeg(offered) };
+    registry
+        .encoders()
+        .iter()
+        .filter(|e| e.kind() == EncoderKind::Video && (!streaming || e.streams()))
+        .filter_map(|e| {
+            let availability = e.availability(&env);
+            (availability != Availability::NotRunHere).then_some((e.as_ref(), availability.can_start()))
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn recordings_list_the_built_in_encoder_and_streams_do_not() {
+        let app = crate::StudioApp::boot(crate::store::Store::memory(), None, Vec::new());
+        let registry = app.studio().registry();
+        let offered = vec!["libx264".to_string()];
+        let ids = |streaming| listed_encoders(registry, &offered, streaming).iter().map(|(e, ok)| (e.id(), *ok)).collect::<Vec<_>>();
+        let recording = ids(false);
+        assert!(recording.contains(&("h264", true)), "{recording:?}");
+        assert!(recording.contains(&("x264", true)), "{recording:?}");
+        let streaming = ids(true);
+        assert!(!streaming.iter().any(|(id, _)| *id == "h264"), "{streaming:?}");
+        assert!(streaming.contains(&("x264", true)), "{streaming:?}");
+        // Without an ffmpeg program the built-in encoder can still record.
+        assert!(listed_encoders(registry, &[], false).iter().any(|(e, ok)| e.id() == "h264" && *ok));
+    }
 
     #[test]
     fn changed_hotkeys_become_overrides_and_defaults_drop_out() {

@@ -1,10 +1,13 @@
 //! Recording and streaming.
 //!
-//! Both outputs run an ffmpeg process ([`writer`]): a recording writes a Matroska, MP4 or
-//! QuickTime file, and a stream sends FLV over RTMP or RTMPS. The video encoders ffmpeg offers
-//! are plug-ins ([`encoders`]).
+//! With an ffmpeg encoder, both outputs run an ffmpeg process ([`writer`]): a recording writes a
+//! Matroska, MP4 or QuickTime file, and a stream sends FLV over RTMP or RTMPS. With the built-in
+//! H.264 encoder, a recording writes a Matroska file from this process ([`native`]). The video
+//! encoders ffmpeg offers are plug-ins ([`encoders`]), and so is the built-in one
+//! ([`studiocraft_encode::H264`]).
 
 pub mod encoders;
+pub mod native;
 pub mod writer;
 
 use std::path::Path;
@@ -16,15 +19,17 @@ use studiocraft_media::video::PooledFrame;
 use studiocraft_model::{Field, FieldKind, PathMode, Settings, SettingsSchema};
 use studiocraft_plugin::{EncoderKind, Output, OutputInstance, OutputJob, OutputStatus, Plugin, PluginError, RateControl, Registry};
 
+use crate::native::Native;
 use crate::writer::{Writer, audio_args};
 
-/// Register both outputs and every video encoder.
+/// Register both outputs and every video encoder: the ffmpeg ones, then the built-in one.
 pub fn register_all(reg: &mut Registry) -> Result<(), PluginError> {
     reg.register_output(Arc::new(Recording))?;
     reg.register_output(Arc::new(Stream))?;
     for e in encoders::all() {
         reg.register_encoder(Arc::new(e))?;
     }
+    reg.register_encoder(Arc::new(studiocraft_encode::H264))?;
     Ok(())
 }
 
@@ -62,27 +67,47 @@ pub fn container_for(path: &Path) -> Result<&'static str, PluginError> {
     }
 }
 
-/// A running output: a writer and what it writes to.
+/// What encodes and writes a running output.
+enum Backend {
+    /// An ffmpeg process.
+    Ffmpeg(Writer),
+    /// The built-in encoders.
+    Native(Native),
+}
+
+/// A running output: what writes it, and what it writes to.
 struct Running {
-    writer: Writer,
+    backend: Backend,
     target: String,
 }
 
 impl OutputInstance for Running {
     fn video(&self) -> Arc<Fifo<Arc<PooledFrame>>> {
-        self.writer.video()
+        match &self.backend {
+            Backend::Ffmpeg(w) => w.video(),
+            Backend::Native(n) => n.video(),
+        }
     }
     fn audio(&self) -> Arc<Fifo<PooledBlock>> {
-        self.writer.audio()
+        match &self.backend {
+            Backend::Ffmpeg(w) => w.audio(),
+            Backend::Native(n) => n.audio(),
+        }
     }
     fn status(&self) -> OutputStatus {
-        self.writer.status()
+        match &self.backend {
+            Backend::Ffmpeg(w) => w.status(),
+            Backend::Native(n) => n.status(),
+        }
     }
     fn target(&self) -> String {
         self.target.clone()
     }
     fn stop(&mut self) -> Result<(), PluginError> {
-        self.writer.stop()
+        match &mut self.backend {
+            Backend::Ffmpeg(w) => w.stop(),
+            Backend::Native(n) => n.stop(),
+        }
     }
 }
 
@@ -117,6 +142,19 @@ impl Output for Recording {
         if let Some(dir) = path.parent().filter(|d| !d.as_os_str().is_empty()) {
             std::fs::create_dir_all(dir).map_err(|e| PluginError::Failed(format!("the folder {} could not be created: {e}", dir.display())))?;
         }
+        let target = path.display().to_string();
+        if job.video_encoder.ffmpeg().is_none() {
+            if job.video_encoder.kind() != EncoderKind::Video {
+                return Err(PluginError::Failed(format!("{} is not a video encoder", job.video_encoder.name())));
+            }
+            if container != "matroska" {
+                return Err(PluginError::Failed(format!(
+                    "{} records MKV files only; choose MKV as the format in Settings › Output",
+                    job.video_encoder.name()
+                )));
+            }
+            return Ok(Box::new(Running { backend: Backend::Native(Native::start(&job, path)?), target }));
+        }
         let lossless_audio = (job.rate == RateControl::Lossless).then(|| lossless_audio_codec(container));
         let codec = codec_args(&job, lossless_audio)?;
         let mut out: Vec<String> = vec!["-f".into(), container.into()];
@@ -126,7 +164,7 @@ impl Output for Recording {
         }
         out.push(path.to_string_lossy().into_owned());
         let writer = Writer::start(&job, &codec, &out, "")?;
-        Ok(Box::new(Running { writer, target: path.display().to_string() }))
+        Ok(Box::new(Running { backend: Backend::Ffmpeg(writer), target }))
     }
 }
 
@@ -172,11 +210,17 @@ impl Output for Stream {
         if job.video_encoder.kind() != EncoderKind::Video || !job.video_encoder.streams() {
             return Err(PluginError::Failed(format!("streams need an H.264 encoder, and {} is not one", job.video_encoder.name())));
         }
+        if job.video_encoder.ffmpeg().is_none() {
+            return Err(PluginError::Failed(format!(
+                "{} records files only; choose an ffmpeg encoder for streams in Settings › Output",
+                job.video_encoder.name()
+            )));
+        }
         let codec = codec_args(&job, None)?;
         let out = vec!["-f".into(), "flv".into(), "-flvflags".into(), "no_duration_filesize".into(), url];
         let writer = Writer::start(&job, &codec, &out, settings.str("key").unwrap_or_default().trim())?;
         // The key is a secret: the target shown is the server alone.
-        Ok(Box::new(Running { writer, target: server.trim().to_string() }))
+        Ok(Box::new(Running { backend: Backend::Ffmpeg(writer), target: server.trim().to_string() }))
     }
 }
 

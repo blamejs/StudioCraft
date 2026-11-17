@@ -372,6 +372,21 @@ fn profiles_keep_their_own_settings() {
 }
 
 #[test]
+fn available_encoders_lists_the_built_in_one_without_ffmpeg() {
+    let mut a = app();
+    let ctx = egui::Context::default();
+    let dir = temp_dir("no-ffmpeg");
+    let mut p = a.studio().profile().clone();
+    p.output.ffmpeg_path = dir.join("ffmpeg-missing").to_string_lossy().into_owned();
+    a.studio.set_profile(p).unwrap();
+    run(&mut a, &ctx, "tools.encoders", json!({})).unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
+    let list = a.encoders.clone().unwrap();
+    assert!(list.iter().any(|(name, _, ok)| name == "H.264 (built in)" && *ok), "{list:?}");
+    assert!(list.iter().filter(|(name, _, _)| name != "H.264 (built in)").all(|(_, _, ok)| !ok), "{list:?}");
+}
+
+#[test]
 fn dock_and_view_toggles_flip_the_preferences() {
     let mut a = app();
     let ctx = egui::Context::default();

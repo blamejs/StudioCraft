@@ -314,6 +314,12 @@ impl Plan {
     }
 }
 
+/// Where the output `kind` can run encoders, when the ffmpeg program listed `offered` (empty when
+/// that list could not be read): recordings also run the built-in ones.
+fn encoder_env(offered: &[String], kind: OutputKind) -> EncoderEnv<'_> {
+    EncoderEnv { builtin: kind == OutputKind::Recording, ..EncoderEnv::ffmpeg(offered) }
+}
+
 /// Whether the output `kind` can start with `encoder`, when the ffmpeg program listed `offered`
 /// (empty when that list could not be read).
 fn check_encoder(encoder: &dyn Encoder, offered: &[String], kind: OutputKind) -> Result<(), StudioError> {
@@ -324,7 +330,7 @@ fn check_encoder(encoder: &dyn Encoder, offered: &[String], kind: OutputKind) ->
     if encoder.kind() != EncoderKind::Video {
         return Err(StudioError::Output(format!("{} is not a video encoder; choose another encoder in Settings › {tab}", encoder.name())));
     }
-    match encoder.availability(&EncoderEnv::ffmpeg(offered)) {
+    match encoder.availability(&encoder_env(offered, kind)) {
         a if a.can_start() => Ok(()),
         Availability::NotRunHere => {
             Err(StudioError::Output(format!("{} cannot run in a {}; choose another encoder in Settings › {tab}", encoder.name(), kind.noun())))
@@ -366,12 +372,19 @@ impl Studio {
         if kind == OutputKind::Streaming && self.profile.stream.server.trim().is_empty() {
             return Err(StudioError::Output("set a server in Settings › Stream first".into()));
         }
-        let program = ffmpeg::locate(&self.profile.output.ffmpeg_path).map_err(|e| StudioError::Output(e.to_string()))?;
         let planned = plan(&self.profile, kind);
         let registry = Arc::clone(self.engine.registry());
         let encoder = registry.encoder(&planned.encoder_id)?;
-        let offered = self.outputs.encoders.entry(program.clone()).or_insert_with(|| ffmpeg::encoders(&program));
-        check_encoder(encoder.as_ref(), offered, kind)?;
+        let program = if encoder.ffmpeg().is_some() {
+            let program = ffmpeg::locate(&self.profile.output.ffmpeg_path).map_err(|e| StudioError::Output(e.to_string()))?;
+            let offered = self.outputs.encoders.entry(program.clone()).or_insert_with(|| ffmpeg::encoders(&program));
+            check_encoder(encoder.as_ref(), offered, kind)?;
+            program
+        } else {
+            // A built-in encoder runs without the ffmpeg program.
+            check_encoder(encoder.as_ref(), &[], kind)?;
+            PathBuf::new()
+        };
         let v = self.profile.video.sanitized();
         let stats = Arc::new(EncoderStats::default());
         let video = VideoFormat { width: v.output_width, height: v.output_height, fps_num: v.fps_num, fps_den: v.fps_den, pixel: PixelFormat::Nv12 };
@@ -489,7 +502,7 @@ mod tests {
     }
 
     #[test]
-    fn a_built_in_encoder_does_not_start_in_an_ffmpeg_output() {
+    fn a_built_in_encoder_records_and_does_not_stream() {
         struct Builtin(studiocraft_plugin::Codec);
         impl Plugin for Builtin {
             fn id(&self) -> &'static str {
@@ -512,7 +525,13 @@ mod tests {
         for offered in [&listed[..], &[]] {
             let Err(StudioError::Output(m)) = check_encoder(&video, offered, OutputKind::Streaming) else { panic!("a built-in encoder started") };
             assert_eq!(m, "Built-in cannot run in a stream; choose another encoder in Settings › Stream");
+            assert!(check_encoder(&video, offered, OutputKind::Recording).is_ok(), "recordings run built-in encoders");
         }
+        let mut registry = studiocraft_plugin::Registry::new();
+        studiocraft_outputs::register_all(&mut registry).unwrap();
+        let h264 = registry.encoder("h264").unwrap();
+        assert!(check_encoder(h264.as_ref(), &[], OutputKind::Recording).is_ok());
+        assert!(check_encoder(h264.as_ref(), &[], OutputKind::Streaming).is_err());
         let audio = Builtin(studiocraft_plugin::Codec::Aac);
         let Err(StudioError::Output(m)) = check_encoder(&audio, &listed, OutputKind::Recording) else { panic!("an audio encoder started as video") };
         assert_eq!(m, "Built-in is not a video encoder; choose another encoder in Settings › Output");

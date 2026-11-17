@@ -24,6 +24,7 @@
 	available	available
 	Available Encoders	Available Encoders
 	Background	Background
+	Balanced	Balanced
 	Brightness	Brightness
 	Browse…	Browse…
 	Cancel	Cancel
@@ -100,6 +101,7 @@
 	General	General
 	Go Live	Go Live
 	H.264	H.264
+	H.264 (built in)	H.264 (built in)
 	Height	Height
 	Help	Help
 	Hide	Hide
@@ -223,6 +225,7 @@
 	Source Code	Source Code
 	Source Properties	Source Properties
 	Sources	Sources
+	Speed	Speed
 	Start or Stop Recording	Start or Stop Recording
 	Start or Stop Streaming	Start or Stop Streaming
 	Start Recording	Start Recording
