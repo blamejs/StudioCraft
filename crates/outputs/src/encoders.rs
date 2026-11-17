@@ -1,7 +1,8 @@
-//! Video encoders: the software x264 encoder and the hardware encoders ffmpeg offers.
+//! Video encoders: the software x264 encoder and the hardware encoders ffmpeg offers, each an
+//! [`Encoder`] whose [`FfmpegEncoder`] form gives the ffmpeg program its codec arguments.
 
 use studiocraft_model::{ChoiceOption, Field, FieldKind, Settings, SettingsSchema};
-use studiocraft_plugin::{Encoder, EncoderKind, Plugin, PluginError, RateControl};
+use studiocraft_plugin::{Codec, Encoder, EncoderKind, FfmpegEncoder, Plugin, PluginError, RateControl};
 
 /// The family of codec options an encoder takes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -17,19 +18,28 @@ enum Family {
 pub struct VideoEncoder {
     id: &'static str,
     name: &'static str,
+    /// What it writes.
+    format: Codec,
+    /// The ffmpeg codec.
     codec: &'static str,
     family: Family,
 }
 
-/// Every built-in video encoder, software first.
+/// Every video encoder ffmpeg runs, software first.
 pub fn all() -> Vec<VideoEncoder> {
     vec![
-        VideoEncoder { id: "x264", name: "Software (x264)", codec: "libx264", family: Family::X264 },
-        VideoEncoder { id: "nvenc_h264", name: "NVIDIA NVENC H.264", codec: "h264_nvenc", family: Family::Nvenc },
-        VideoEncoder { id: "nvenc_hevc", name: "NVIDIA NVENC HEVC", codec: "hevc_nvenc", family: Family::Nvenc },
-        VideoEncoder { id: "amf_h264", name: "AMD AMF H.264", codec: "h264_amf", family: Family::Amf },
-        VideoEncoder { id: "qsv_h264", name: "Intel Quick Sync H.264", codec: "h264_qsv", family: Family::Qsv },
-        VideoEncoder { id: "mf_h264", name: "Windows Media Foundation H.264", codec: "h264_mf", family: Family::MediaFoundation },
+        VideoEncoder { id: "x264", name: "Software (x264)", format: Codec::H264, codec: "libx264", family: Family::X264 },
+        VideoEncoder { id: "nvenc_h264", name: "NVIDIA NVENC H.264", format: Codec::H264, codec: "h264_nvenc", family: Family::Nvenc },
+        VideoEncoder { id: "nvenc_hevc", name: "NVIDIA NVENC HEVC", format: Codec::Hevc, codec: "hevc_nvenc", family: Family::Nvenc },
+        VideoEncoder { id: "amf_h264", name: "AMD AMF H.264", format: Codec::H264, codec: "h264_amf", family: Family::Amf },
+        VideoEncoder { id: "qsv_h264", name: "Intel Quick Sync H.264", format: Codec::H264, codec: "h264_qsv", family: Family::Qsv },
+        VideoEncoder {
+            id: "mf_h264",
+            name: "Windows Media Foundation H.264",
+            format: Codec::H264,
+            codec: "h264_mf",
+            family: Family::MediaFoundation,
+        },
     ]
 }
 
@@ -65,6 +75,15 @@ impl Encoder for VideoEncoder {
     fn kind(&self) -> EncoderKind {
         EncoderKind::Video
     }
+    fn codec(&self) -> Codec {
+        self.format
+    }
+    fn ffmpeg(&self) -> Option<&dyn FfmpegEncoder> {
+        Some(self)
+    }
+}
+
+impl FfmpegEncoder for VideoEncoder {
     fn ffmpeg_codec(&self) -> &'static str {
         self.codec
     }
@@ -161,6 +180,16 @@ mod tests {
     fn an_unknown_preset_falls_back() {
         let a = x264().ffmpeg_args(&Settings::new().with("preset", "placebo; rm"), RateControl::Lossless, 30.0).unwrap();
         assert_eq!(a[3], "veryfast");
+    }
+
+    #[test]
+    fn each_encoder_names_the_codec_its_ffmpeg_codec_writes() {
+        for e in all() {
+            let expected = if e.codec == "libx264" || e.codec.starts_with("h264_") { Codec::H264 } else { Codec::Hevc };
+            assert!(e.codec == "libx264" || e.codec.starts_with("h264_") || e.codec.starts_with("hevc_"), "{}", e.codec);
+            assert_eq!(e.codec(), expected, "{}", e.id);
+            assert_eq!(e.ffmpeg().map(|f| f.ffmpeg_codec()), Some(e.codec), "{} runs in ffmpeg", e.id);
+        }
     }
 
     #[test]

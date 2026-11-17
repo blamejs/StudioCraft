@@ -13,7 +13,7 @@ use studiocraft_media::stats::EncoderStats;
 use studiocraft_media::video::{PixelFormat, PooledFrame};
 use studiocraft_model::{Profile, Settings};
 use studiocraft_platform::ffmpeg;
-use studiocraft_plugin::{OutputInstance, OutputJob, OutputStatus, PluginError, RateControl, VideoFormat};
+use studiocraft_plugin::{EncoderEnv, OutputInstance, OutputJob, OutputStatus, PluginError, RateControl, VideoFormat};
 
 use crate::{Notice, Studio, StudioError};
 
@@ -329,11 +329,9 @@ impl Studio {
         let registry = Arc::clone(self.engine.registry());
         let encoder = registry.encoder(&encoder_id)?;
         let offered = self.outputs.encoders.entry(program.clone()).or_insert_with(|| ffmpeg::encoders(&program));
-        if !offered.is_empty() && !offered.iter().any(|c| c == encoder.ffmpeg_codec()) {
-            return Err(StudioError::Output(format!(
-                "this ffmpeg has no {} encoder; choose another encoder in Settings › Output",
-                encoder.ffmpeg_codec()
-            )));
+        if !encoder.available(&EncoderEnv { ffmpeg_encoders: offered }) {
+            let codec = encoder.ffmpeg().map_or(encoder.codec().id(), |f| f.ffmpeg_codec());
+            return Err(StudioError::Output(format!("this ffmpeg has no {codec} encoder; choose another encoder in Settings › Output")));
         }
         let v = self.profile.video.sanitized();
         let stats = Arc::new(EncoderStats::default());
@@ -381,7 +379,7 @@ impl Studio {
 
 #[cfg(test)]
 mod tests {
-    use studiocraft_plugin::{Encoder, Plugin};
+    use studiocraft_plugin::{FfmpegEncoder, Plugin};
 
     use super::*;
 

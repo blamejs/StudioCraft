@@ -28,10 +28,15 @@ pub fn register_all(reg: &mut Registry) -> Result<(), PluginError> {
     Ok(())
 }
 
-/// The codec arguments of `job`: its video encoder's, then audio.
+/// The codec arguments of `job`: its video encoder's, then audio. The video encoder must be one
+/// the ffmpeg program runs.
 fn codec_args(job: &OutputJob, lossless_audio: Option<&str>) -> Result<Vec<String>, PluginError> {
     let fps = f64::from(job.video.fps_num) / f64::from(job.video.fps_den.max(1));
-    let mut a = job.video_encoder.ffmpeg_args(&job.video_encoder_settings, job.rate, fps)?;
+    let video = job
+        .video_encoder
+        .ffmpeg()
+        .ok_or_else(|| PluginError::Unavailable(format!("{} does not run inside the ffmpeg program", job.video_encoder.name())))?;
+    let mut a = video.ffmpeg_args(&job.video_encoder_settings, job.rate, fps)?;
     match lossless_audio {
         Some(codec) => a.extend(["-c:a".to_string(), codec.to_string()]),
         None => a.extend(audio_args(job.audio_bitrate_kbps)),
