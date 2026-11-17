@@ -55,7 +55,17 @@ build for `wasm32-unknown-unknown`:
   thread; a new input list takes over the delay lines of the sources it keeps, so their delayed
   audio still plays. It pushes the mix to every output's bounded queue. The clipped mix
   also feeds a `craft-audio-dsp` loudness meter (momentary, short-term, integrated, loudness range
-  and true peak), whose readings the mixer publishes after every block without locks.
+  and true peak), whose readings the mixer publishes after every block without locks. Sources set
+  to monitor only are measured but left out of that mix. Every monitored source, after its delay,
+  filters, gain, mute and fade, is added to a second, preallocated monitoring mix, which the mixer
+  pushes to the monitoring queue.
+- **Monitoring thread.** While a source is monitored, `studio::monitor` opens the profile's
+  monitoring device through `platform::audio::AudioSink` (cpal on Windows and macOS). The device's
+  callback pulls the monitoring mix from a queue of 4 blocks, waits for 2 blocks before it plays,
+  converts 48 kHz to the device's rate by linear interpolation and maps the two channels onto the
+  device's, without allocating or locking. A device that fails to open or fails while it plays is
+  reported in a notice and closed; the mixer and the outputs keep running, and the same device is
+  not opened again until the setting or the monitored sources change.
 - **Compositor thread.** The scheduler (`engine::scheduler`) wakes on the master clock's frame ticks.
   The compositor (`render`) uploads changed source frames, draws the program scene (and the preview
   scene in studio mode) into a ring of 3 GPU textures, and converts the program to NV12 for the

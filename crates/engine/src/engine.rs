@@ -445,6 +445,19 @@ impl Engine {
                 };
                 Ok((Value::Null, Some(format!("source.sync_offset:{id}"))))
             }
+            Command::SourceMonitor { source, mode } => {
+                use studiocraft_model::MonitorMode;
+                let id = self.source_id(&source)?;
+                let s = c.source_mut(id).ok_or_else(|| EngineError::NoSource(id.to_string()))?;
+                if self.registry.source(&s.kind).is_ok_and(|p| !p.caps().audio) {
+                    return Err(EngineError::Invalid(format!("`{}` has no audio", s.name)));
+                }
+                s.audio.monitor = MonitorMode::ALL
+                    .into_iter()
+                    .find(|m| m.id() == mode)
+                    .ok_or_else(|| EngineError::Invalid("the monitoring mode must be off, monitor_only or monitor_and_output".into()))?;
+                Ok((Value::Null, None))
+            }
             Command::SourceMute { source, muted } => {
                 let id = self.source_id(&source)?;
                 if let Some(s) = c.source_mut(id) {

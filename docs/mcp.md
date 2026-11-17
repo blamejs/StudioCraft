@@ -211,7 +211,7 @@ error -32602. A command that fails is a tool result with `isError: true` and the
 | `scene_select` | `scene` | `scene.select`, by id or name. In studio mode it sets the preview scene. |
 | `source_add` | `kind`, `scene?`, `name?`, `settings?`, `transform?` | `source.add`, in the scene being edited unless `scene` names one. Returns `source`, `item` and `scene`. |
 | `item_transform` | `item`, `scene?`, `transform` | `item.transform`. `item` is the item's id or the name of the source it shows. |
-| `source_audio` | `source`, `sync_offset_ms?` | `source.sync_offset` when `sync_offset_ms` is given (0 to 5000), then the source's `audio` settings. A value out of range is an error and changes nothing. Without `sync_offset_ms` it only reads the settings. |
+| `source_audio` | `source`, `sync_offset_ms?`, `monitor?` | `source.sync_offset` when `sync_offset_ms` is given (0 to 5000) and `source.monitor` when `monitor` is given (`off`, `monitor_only` or `monitor_and_output`), then the source's `audio` settings. A value out of range is an error and changes nothing. With neither value it only reads the settings. |
 | `transition_set` | `kind`, `ms?` | `transition.set`, then `transition.duration` when `ms` is given. |
 | `studio_transition` | `kind?`, `ms?` | `studio.transition`: in studio mode, moves the preview scene to the program. `kind` and `ms` apply to this switch only. |
 | `collection_open` | `path` | Replaces the scene collection with the one in the file. The undo history starts empty. |

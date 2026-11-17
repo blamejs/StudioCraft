@@ -383,6 +383,167 @@ fn records_a_file() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+mod monitoring {
+    use std::sync::Mutex;
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
+    use studiocraft_platform::PlatformError;
+    use studiocraft_platform::audio::{AudioSink, Fill, Format, OnError, Playing};
+
+    use super::*;
+
+    /// A stand-in for the system's output devices: it lists `default` and `Headphones`, and
+    /// refuses to open while `refuse` is set.
+    #[derive(Default)]
+    struct FakeSink {
+        opened: Mutex<Vec<String>>,
+        callbacks: Mutex<Vec<(Fill, OnError)>>,
+        refuse: AtomicBool,
+        live: Arc<AtomicUsize>,
+    }
+
+    struct FakePlaying(Arc<AtomicUsize>);
+
+    impl Playing for FakePlaying {
+        fn format(&self) -> Format {
+            Format { rate: 44_100, channels: 2 }
+        }
+    }
+
+    impl Drop for FakePlaying {
+        fn drop(&mut self) {
+            self.0.fetch_sub(1, Ordering::SeqCst);
+        }
+    }
+
+    impl AudioSink for FakeSink {
+        fn play(&self, id: &str, fill: Fill, on_error: OnError) -> Result<Box<dyn Playing>, PlatformError> {
+            if self.refuse.load(Ordering::SeqCst) {
+                return Err(PlatformError::Failed("the device is busy".into()));
+            }
+            if !["default", "Headphones"].contains(&id) {
+                return Err(PlatformError::NotFound(format!("the audio device \u{201c}{id}\u{201d}")));
+            }
+            self.opened.lock().unwrap().push(id.to_owned());
+            self.callbacks.lock().unwrap().push((fill, on_error));
+            self.live.fetch_add(1, Ordering::SeqCst);
+            Ok(Box::new(FakePlaying(Arc::clone(&self.live))))
+        }
+    }
+
+    impl FakeSink {
+        fn opened(&self) -> Vec<String> {
+            self.opened.lock().unwrap().clone()
+        }
+
+        fn live(&self) -> usize {
+            self.live.load(Ordering::SeqCst)
+        }
+    }
+
+    /// A studio with the default collection (Desktop audio and Microphone), playing on a fake.
+    fn studio() -> (Studio, Arc<FakeSink>) {
+        let mut s = studio_with(None, default_collection("Test"), Profile::default());
+        let sink = Arc::new(FakeSink::default());
+        s.set_audio_sink(Arc::clone(&sink) as Arc<dyn AudioSink>);
+        s.take_notices();
+        (s, sink)
+    }
+
+    fn monitor(s: &mut Studio, source: &str, mode: &str) {
+        s.run("source.monitor", &json!({"source": source, "mode": mode})).unwrap();
+    }
+
+    fn errors(s: &mut Studio) -> Vec<String> {
+        s.take_notices().into_iter().filter(|n| n.error && n.template.starts_with("Audio monitoring")).map(|n| n.text()).collect()
+    }
+
+    #[test]
+    fn the_device_is_open_while_a_source_is_monitored() {
+        let (mut s, sink) = studio();
+        assert!(sink.opened().is_empty() && s.monitoring().is_none(), "nothing is monitored at first");
+        monitor(&mut s, "Microphone", "monitor_only");
+        assert_eq!(sink.opened(), ["default"]);
+        assert_eq!(s.monitoring(), Some(Format { rate: 44_100, channels: 2 }));
+        let state = s.state_json();
+        assert_eq!(state["monitoring"], json!({"device": "default", "playing": true, "rate": 44_100, "channels": 2}), "{state}");
+        monitor(&mut s, "Desktop audio", "monitor_and_output");
+        monitor(&mut s, "Microphone", "off");
+        assert_eq!((sink.opened().len(), sink.live()), (1, 1), "the device stays open while one source is monitored");
+        monitor(&mut s, "Desktop audio", "off");
+        assert_eq!(sink.live(), 0, "the last source off closes the device");
+        assert_eq!(s.state_json()["monitoring"], json!({"device": "default", "playing": false}));
+        s.run("edit.undo", &json!({})).unwrap();
+        assert_eq!((sink.opened().len(), sink.live()), (2, 1), "undo opens it again");
+        assert!(errors(&mut s).is_empty());
+    }
+
+    #[test]
+    fn a_new_monitoring_device_takes_over_and_an_unknown_one_is_reported() {
+        let (mut s, sink) = studio();
+        monitor(&mut s, "Microphone", "monitor_and_output");
+        let mut p = s.profile().clone();
+        p.audio.monitoring_device = "Headphones".into();
+        s.set_profile(p.clone()).unwrap();
+        assert_eq!(sink.opened(), ["default", "Headphones"]);
+        assert_eq!(sink.live(), 1, "the default device was closed");
+        p.audio.monitoring_device = "Gone".into();
+        s.set_profile(p.clone()).unwrap();
+        assert_eq!(sink.live(), 0);
+        let e = errors(&mut s);
+        assert!(matches!(e.as_slice(), [m] if m.contains("Gone")), "{e:?}");
+        s.run("source.volume", &json!({"source": "Microphone", "gain": 0.5})).unwrap();
+        assert!(errors(&mut s).is_empty(), "the missing device is not tried on every change");
+        assert_eq!(s.state_json()["monitoring"]["playing"], json!(false));
+        p.audio.monitoring_device = "default".into();
+        s.set_profile(p).unwrap();
+        assert_eq!(sink.live(), 1);
+    }
+
+    #[test]
+    fn a_device_that_fails_to_open_is_reported_and_tried_again_after_a_change() {
+        let (mut s, sink) = studio();
+        sink.refuse.store(true, Ordering::SeqCst);
+        monitor(&mut s, "Microphone", "monitor_only");
+        assert_eq!(errors(&mut s), ["Audio monitoring could not start: the device is busy"]);
+        assert!(s.monitoring().is_none());
+        sink.refuse.store(false, Ordering::SeqCst);
+        s.run("source.mute", &json!({"source": "Microphone", "muted": true})).unwrap();
+        assert_eq!(sink.live(), 0, "a failed device is not opened again on an unrelated change");
+        monitor(&mut s, "Desktop audio", "monitor_only");
+        assert_eq!(sink.live(), 0, "nor when another source is monitored as well");
+        monitor(&mut s, "Microphone", "off");
+        monitor(&mut s, "Desktop audio", "off");
+        monitor(&mut s, "Microphone", "monitor_only");
+        assert_eq!(sink.live(), 1, "turning monitoring off and on tries again");
+    }
+
+    #[test]
+    fn a_device_that_fails_while_playing_stops_monitoring_and_the_studio_runs_on() {
+        let (mut s, sink) = studio();
+        monitor(&mut s, "Microphone", "monitor_only");
+        {
+            let mut callbacks = sink.callbacks.lock().unwrap();
+            let (fill, on_error) = callbacks.last_mut().unwrap();
+            let mut out = vec![9.0f32; 512];
+            fill(&mut out, Format { rate: 44_100, channels: 2 });
+            assert!(out.iter().all(|v| *v == 0.0), "the device plays silence before the mix arrives");
+            on_error("the device was unplugged".into());
+        }
+        s.tick();
+        assert_eq!(errors(&mut s), ["Audio monitoring stopped: the device was unplugged"]);
+        assert_eq!(sink.live(), 0);
+        s.tick();
+        s.run("source.volume", &json!({"source": "Microphone", "gain": 0.25})).unwrap();
+        assert_eq!((sink.opened().len(), sink.live()), (1, 0), "the failed device is not opened again on its own");
+        assert_eq!(s.collection().source_by_name("Microphone").map(|m| m.audio.monitor), Some(studiocraft_model::MonitorMode::MonitorOnly));
+        let mut p = s.profile().clone();
+        p.audio.monitoring_device = "Headphones".into();
+        s.set_profile(p).unwrap();
+        assert_eq!(sink.live(), 1, "another device opens");
+    }
+}
+
 #[test]
 fn collections_are_saved_to_and_opened_from_a_path() {
     let dir = std::env::temp_dir().join(format!("studiocraft-collection-file-{}", std::process::id()));

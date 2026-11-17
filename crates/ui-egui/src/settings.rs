@@ -1,11 +1,13 @@
-//! The Settings window: General, Stream, Output, Video and Hotkeys, edited on a copy of the
-//! profile, the Language setting and the update check at start, applied with OK or Apply.
+//! The Settings window: General, Stream, Output, Audio, Video and Hotkeys, edited on a copy of
+//! the profile, the Language setting and the update check at start, applied with OK or Apply.
 
 use std::collections::BTreeMap;
 
 use craft_keymap::{Binding, CommandRef, Keymap, Overrides};
 use egui::{RichText, Ui};
+use studiocraft_model::profile::DEFAULT_AUDIO_DEVICE;
 use studiocraft_model::{Profile, RecordingFormat, RecordingQuality, ReplaySettings};
+use studiocraft_platform::audio::{DeviceInfo, DeviceKind};
 use studiocraft_plugin::{Availability, EncoderEnv, EncoderKind, Registry, Settings};
 
 use crate::i18n::{self, I18N};
@@ -15,6 +17,7 @@ pub enum Tab {
     General,
     Stream,
     Output,
+    Audio,
     Video,
     Hotkeys,
 }
@@ -48,6 +51,8 @@ pub struct SettingsWindow {
     offered: Vec<String>,
     /// The configured ffmpeg's version text, or why it could not be read.
     pub(crate) ffmpeg_version: Result<String, String>,
+    /// The output devices the system listed when the window opened.
+    output_devices: Vec<DeviceInfo>,
 }
 
 /// The settings OK or Apply puts in force.
@@ -72,8 +77,14 @@ pub struct Outcome {
 }
 
 /// The tabs in the order the window shows them, with their English labels.
-pub const TABS: [(Tab, &str); 5] =
-    [(Tab::General, "General"), (Tab::Stream, "Stream"), (Tab::Output, "Output"), (Tab::Video, "Video"), (Tab::Hotkeys, "Hotkeys")];
+pub const TABS: [(Tab, &str); 6] = [
+    (Tab::General, "General"),
+    (Tab::Stream, "Stream"),
+    (Tab::Output, "Output"),
+    (Tab::Audio, "Audio"),
+    (Tab::Video, "Video"),
+    (Tab::Hotkeys, "Hotkeys"),
+];
 
 const FPS: [(&str, u32, u32); 8] =
     [("24", 24, 1), ("25", 25, 1), ("29.97", 30000, 1001), ("30", 30, 1), ("48", 48, 1), ("50", 50, 1), ("59.94", 60000, 1001), ("60", 60, 1)];
@@ -108,6 +119,18 @@ fn hotkey_label(command: &CommandRef, label: &str) -> String {
     if command.params.is_null() { i18n::command_label(&command.id, label).to_string() } else { tl!(label).to_string() }
 }
 
+/// The monitoring device `id` as the Audio tab shows it: the default device, a listed device by
+/// its name, or a device the system does not list now.
+fn device_name(id: &str, listed: &[DeviceInfo]) -> String {
+    if id.is_empty() || id == DEFAULT_AUDIO_DEVICE {
+        return tl!("Default").to_string();
+    }
+    match listed.iter().find(|d| d.id == id) {
+        Some(d) => d.name.clone(),
+        None => craft_i18n::fmt(tl!("{device} (not connected)"), &[("device", id)]),
+    }
+}
+
 /// The name of a Language setting in the picker.
 fn language_name(code: &str) -> String {
     if code == i18n::AUTO {
@@ -140,6 +163,7 @@ impl SettingsWindow {
             hotkeys,
             offered,
             ffmpeg_version,
+            output_devices: studiocraft_platform::audio::devices(DeviceKind::Output),
         }
     }
 
@@ -329,6 +353,23 @@ impl SettingsWindow {
         });
     }
 
+    fn audio(&mut self, ui: &mut Ui) {
+        let device = &mut self.draft.audio.monitoring_device;
+        let listed = &self.output_devices;
+        egui::Grid::new("audio-grid").num_columns(2).spacing([12.0, 8.0]).show(ui, |ui| {
+            ui.label(tl!("Monitoring device"));
+            craft_ui::ComboBox::from_id_salt("monitoring-device").selected_text(device_name(device, listed)).width(320.0).show_ui(ui, |ui| {
+                ui.selectable_value(device, DEFAULT_AUDIO_DEVICE.to_string(), tl!("Default"));
+                for d in listed {
+                    ui.selectable_value(device, d.id.clone(), &d.name);
+                }
+            });
+            ui.end_row();
+        });
+        ui.add_space(8.0);
+        ui.weak(tl!("Sources set to monitoring in their Properties window play on this device."));
+    }
+
     fn video(&mut self, ui: &mut Ui) {
         let v = &mut self.draft.video;
         let size_combo = |ui: &mut Ui, id: &str, w: &mut u32, h: &mut u32| {
@@ -408,6 +449,7 @@ impl SettingsWindow {
                 Tab::General => self.general(ui),
                 Tab::Stream => self.stream(ui, registry),
                 Tab::Output => self.output(ui, registry, &mut out),
+                Tab::Audio => self.audio(ui),
                 Tab::Video => self.video(ui),
                 Tab::Hotkeys => self.hotkeys(ui),
             }
@@ -475,6 +517,22 @@ mod tests {
         assert!(streaming.contains(&("x264", true)), "{streaming:?}");
         // Without an ffmpeg program the built-in encoder can still record.
         assert!(listed_encoders(registry, &[], false).iter().any(|(e, ok)| e.id() == "h264" && *ok));
+    }
+
+    #[test]
+    fn the_audio_tab_names_the_default_a_listed_device_and_a_missing_one() {
+        let listed = vec![DeviceInfo { id: "Speakers (USB)".into(), name: "Speakers (USB)".into(), default: true }];
+        assert_eq!(device_name(DEFAULT_AUDIO_DEVICE, &listed), tl!("Default"));
+        assert_eq!(device_name("", &listed), tl!("Default"));
+        assert_eq!(device_name("Speakers (USB)", &listed), "Speakers (USB)");
+        assert_eq!(device_name("Headphones", &listed), craft_i18n::fmt(tl!("{device} (not connected)"), &[("device", "Headphones")]));
+        assert!(device_name("Headphones", &listed).contains("Headphones"));
+        assert!(TABS.iter().any(|(t, label)| *t == Tab::Audio && *label == "Audio"));
+        let ctx = egui::Context::default();
+        let mut w = SettingsWindow::new(&Profile::default(), &crate::commands::keymap(Overrides::new()), Tab::Audio, i18n::AUTO, true);
+        let mut out = ctx.run_ui(egui::RawInput::default(), |ui| w.audio(ui));
+        out.textures_delta.clear();
+        assert_eq!(w.draft.audio.monitoring_device, DEFAULT_AUDIO_DEVICE, "drawing the tab changes nothing");
     }
 
     #[test]

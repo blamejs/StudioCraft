@@ -7,7 +7,7 @@ use studiocraft_engine::host::SourceSet;
 use studiocraft_engine::mixer::{MixInput, MixerCmd};
 use studiocraft_media::Tick;
 use studiocraft_media::mix::Levels;
-use studiocraft_model::{FilterId, SceneCollection, SceneId, Settings, SourceId};
+use studiocraft_model::{FilterId, MonitorMode, SceneCollection, SceneId, Settings, SourceId};
 use studiocraft_plugin::{AudioOut, FilterInstance, FilterTarget, Reframe, Registry};
 use studiocraft_render::{ItemDesc, Plan, SceneDesc, TransitionDesc};
 
@@ -58,6 +58,7 @@ pub(crate) struct Wiring {
     mix: Option<Vec<MixKey>>,
     gains: HashMap<SourceId, (f32, bool)>,
     offsets: HashMap<SourceId, u32>,
+    modes: HashMap<SourceId, MonitorMode>,
 }
 
 impl Wiring {
@@ -147,8 +148,8 @@ impl Wiring {
     }
 
     /// Mixer commands that bring it in line with the collection: a new set of inputs when the
-    /// sources, their filters or the program scene changed, else only volume, mute and sync offset
-    /// changes.
+    /// sources, their filters or the program scene changed, else only volume, mute, sync offset
+    /// and monitoring changes.
     pub(crate) fn mixer_inputs(
         &mut self,
         c: &SceneCollection,
@@ -181,6 +182,7 @@ impl Wiring {
             .collect();
         let gains: HashMap<SourceId, (f32, bool)> = audio_sources.iter().map(|(s, _)| (s.id, (s.audio.gain, s.audio.muted))).collect();
         let offsets: HashMap<SourceId, u32> = audio_sources.iter().map(|(s, _)| (s.id, s.audio.sync_offset_ms)).collect();
+        let modes: HashMap<SourceId, MonitorMode> = audio_sources.iter().map(|(s, _)| (s.id, s.audio.monitor)).collect();
         levels.retain(|id, _| gains.contains_key(id));
 
         if self.mix.as_ref() == Some(&key) {
@@ -192,8 +194,12 @@ impl Wiring {
             cmds.extend(
                 offsets.iter().filter(|(id, ms)| self.offsets.get(id) != Some(ms)).map(|(id, ms)| MixerCmd::SyncOffset { source: *id, ms: *ms }),
             );
+            cmds.extend(
+                modes.iter().filter(|(id, m)| self.modes.get(id) != Some(m)).map(|(id, mode)| MixerCmd::Monitor { source: *id, mode: *mode }),
+            );
             self.gains = gains;
             self.offsets = offsets;
+            self.modes = modes;
             return (!cmds.is_empty()).then_some(cmds);
         }
 
@@ -216,11 +222,13 @@ impl Wiring {
                 levels: lv,
                 filters,
                 sync_offset_ms: s.audio.sync_offset_ms,
+                monitor: s.audio.monitor,
             });
         }
         self.mix = Some(key);
         self.gains = gains;
         self.offsets = offsets;
+        self.modes = modes;
         Some(vec![MixerCmd::Inputs(inputs)])
     }
 }
@@ -272,6 +280,28 @@ mod tests {
         c.source_mut(mic).unwrap().audio.sync_offset_ms = 300;
         let cmds = wiring.mixer_inputs(&c, &registry, &sources, &mut levels, &mut notices).unwrap_or_default();
         assert!(matches!(cmds.as_slice(), [MixerCmd::SyncOffset { source, ms: 300 }] if *source == mic), "{} commands", cmds.len());
+        assert!(wiring.mixer_inputs(&c, &registry, &sources, &mut levels, &mut notices).is_none(), "nothing changed");
+    }
+
+    #[test]
+    fn a_changed_monitoring_mode_reaches_the_mixer_without_a_new_input_list() {
+        let registry = builtin_registry(&Arc::new(RwLock::new(String::new()))).unwrap();
+        let mut sources = SourceSet::new(MasterClock::new());
+        let (mut wiring, mut levels, mut notices) = (Wiring::default(), HashMap::new(), Vec::new());
+        let mut c = default_collection("Test");
+        sources.sync(&c, &registry);
+        let mic = c.global_audio.first().copied().unwrap_or_else(|| panic!("the default collection has global audio"));
+        c.source_mut(mic).unwrap().audio.monitor = MonitorMode::MonitorOnly;
+        let Some(cmds) = wiring.mixer_inputs(&c, &registry, &sources, &mut levels, &mut notices) else { panic!("no inputs") };
+        let [MixerCmd::Inputs(inputs)] = cmds.as_slice() else { panic!("{} commands", cmds.len()) };
+        assert_eq!(inputs.iter().find(|i| i.source == mic).map(|i| i.monitor), Some(MonitorMode::MonitorOnly));
+        c.source_mut(mic).unwrap().audio.monitor = MonitorMode::MonitorAndOutput;
+        let cmds = wiring.mixer_inputs(&c, &registry, &sources, &mut levels, &mut notices).unwrap_or_default();
+        assert!(
+            matches!(cmds.as_slice(), [MixerCmd::Monitor { source, mode: MonitorMode::MonitorAndOutput }] if *source == mic),
+            "{} commands",
+            cmds.len()
+        );
         assert!(wiring.mixer_inputs(&c, &registry, &sources, &mut levels, &mut notices).is_none(), "nothing changed");
     }
 

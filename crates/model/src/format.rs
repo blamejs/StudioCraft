@@ -43,7 +43,8 @@ pub struct FileFormat {
 }
 
 /// Scene collections.
-pub const COLLECTION: FileFormat = FileFormat { name: "studiocraft.scene-collection", version: 2, migrations: &[collection_v1_to_v2] };
+pub const COLLECTION: FileFormat =
+    FileFormat { name: "studiocraft.scene-collection", version: 3, migrations: &[collection_v1_to_v2, collection_v2_to_v3] };
 
 /// Collection version 1 to 2: each source's audio has a sync offset (`sync_offset_ms`), 0 for the
 /// sources of an older file.
@@ -60,8 +61,24 @@ fn collection_v1_to_v2(data: &mut Value) -> Result<(), String> {
     Ok(())
 }
 
+/// Collection version 2 to 3: each source's audio has a monitoring mode (`monitor`), `off` for
+/// the sources of an older file.
+fn collection_v2_to_v3(data: &mut Value) -> Result<(), String> {
+    let data = data.as_object_mut().ok_or("the collection is not an object")?;
+    if let Some(Value::Array(sources)) = data.get_mut("sources") {
+        for source in sources.iter_mut().filter_map(Value::as_object_mut) {
+            let audio = source.entry("audio").or_insert_with(|| json!({}));
+            if let Value::Object(a) = audio {
+                a.entry("monitor").or_insert_with(|| json!("off"));
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Profiles.
-pub const PROFILE: FileFormat = FileFormat { name: "studiocraft.profile", version: 3, migrations: &[profile_v1_to_v2, profile_v2_to_v3] };
+pub const PROFILE: FileFormat =
+    FileFormat { name: "studiocraft.profile", version: 4, migrations: &[profile_v1_to_v2, profile_v2_to_v3, profile_v3_to_v4] };
 
 /// Profile version 1 to 2: the recording and the stream each keep the settings of their video
 /// encoders (`encoder_settings`, empty until the user changes one).
@@ -80,6 +97,17 @@ fn profile_v1_to_v2(data: &mut Value) -> Result<(), String> {
 fn profile_v2_to_v3(data: &mut Value) -> Result<(), String> {
     let data = data.as_object_mut().ok_or("the profile is not an object")?;
     data.entry("replay").or_insert_with(|| json!({"seconds": 20, "memory_mb": 512}));
+    Ok(())
+}
+
+/// Profile version 3 to 4: monitored sources play on the system's default output
+/// (`audio.monitoring_device`, `default`).
+fn profile_v3_to_v4(data: &mut Value) -> Result<(), String> {
+    let data = data.as_object_mut().ok_or("the profile is not an object")?;
+    let audio = data.entry("audio").or_insert_with(|| json!({}));
+    if let Value::Object(a) = audio {
+        a.entry("monitoring_device").or_insert_with(|| json!(crate::profile::DEFAULT_AUDIO_DEVICE));
+    }
     Ok(())
 }
 
@@ -171,12 +199,16 @@ mod tests {
     use super::*;
 
     /// Every version ever written, oldest first: `(version, text)`. A new version adds a line.
-    const COLLECTION_FIXTURES: &[(u32, &str)] =
-        &[(1, include_str!("../fixtures/collection-v1.json")), (2, include_str!("../fixtures/collection-v2.json"))];
+    const COLLECTION_FIXTURES: &[(u32, &str)] = &[
+        (1, include_str!("../fixtures/collection-v1.json")),
+        (2, include_str!("../fixtures/collection-v2.json")),
+        (3, include_str!("../fixtures/collection-v3.json")),
+    ];
     const PROFILE_FIXTURES: &[(u32, &str)] = &[
         (1, include_str!("../fixtures/profile-v1.json")),
         (2, include_str!("../fixtures/profile-v2.json")),
         (3, include_str!("../fixtures/profile-v3.json")),
+        (4, include_str!("../fixtures/profile-v4.json")),
     ];
 
     fn covers_every_version(format: &FileFormat, fixtures: &[(u32, &str)]) {
@@ -255,6 +287,40 @@ mod tests {
         );
         let negative = v2.replace("\"sync_offset_ms\": 250", "\"sync_offset_ms\": -5");
         assert!(matches!(read_collection(&negative, "Scene"), Err(FormatError::Data(_))));
+    }
+
+    #[test]
+    fn collections_keep_each_source_monitoring_mode() {
+        for (v, text) in &COLLECTION_FIXTURES[..2] {
+            let c = read_collection(text, "Scene").unwrap();
+            assert!(c.sources.iter().all(|s| s.audio.monitor == crate::MonitorMode::Off), "version {v} monitors nothing");
+        }
+        let (_, v3) = COLLECTION_FIXTURES[2];
+        let c = read_collection(v3, "Scene").unwrap();
+        assert_eq!(c.source_by_name("Microphone").map(|s| s.audio.monitor), Some(crate::MonitorMode::MonitorOnly));
+        assert_eq!(read_collection(&write_collection(&c).unwrap(), "Scene").unwrap(), c);
+        for mode in crate::MonitorMode::ALL {
+            let text = v3.replace("\"monitor_only\"", &format!("\"{}\"", mode.id()));
+            assert_eq!(read_collection(&text, "Scene").unwrap().source_by_name("Microphone").map(|s| s.audio.monitor), Some(mode));
+        }
+        let unknown = v3.replace("\"monitor_only\"", "\"loud\"");
+        assert!(matches!(read_collection(&unknown, "Scene"), Err(FormatError::Data(_))), "an unknown mode refuses the file");
+    }
+
+    #[test]
+    fn profiles_keep_the_monitoring_device() {
+        for (v, text) in &PROFILE_FIXTURES[..3] {
+            let p = read_profile(text).unwrap();
+            assert_eq!(p.audio.monitoring_device, crate::profile::DEFAULT_AUDIO_DEVICE, "version {v} plays on the default output");
+        }
+        let (_, v4) = PROFILE_FIXTURES[3];
+        let p = read_profile(v4).unwrap();
+        assert_eq!(p.audio.monitoring_device, "Headphones (USB)");
+        assert_eq!(read_profile(&write_profile(&p).unwrap()).unwrap(), p);
+        let omitted = v4.replace(", \"monitoring_device\": \"Headphones (USB)\"", "");
+        assert_eq!(read_profile(&omitted).unwrap().audio.monitoring_device, crate::profile::DEFAULT_AUDIO_DEVICE, "an omitted device is the default");
+        let wrong = v4.replace("\"Headphones (USB)\"", "7");
+        assert!(matches!(read_profile(&wrong), Err(FormatError::Data(_))), "a device that is not a name refuses the file");
     }
 
     #[test]

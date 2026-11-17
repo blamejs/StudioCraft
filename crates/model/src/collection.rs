@@ -22,7 +22,44 @@ pub struct FilterConfig {
     pub settings: Settings,
 }
 
-/// Volume, mute and sync offset of a source's audio.
+/// Whether a source's audio plays on the monitoring device, and whether it stays in the program
+/// mix that recordings and streams carry.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MonitorMode {
+    /// Not monitored; heard in the program mix.
+    #[default]
+    Off,
+    /// Played on the monitoring device and left out of the program mix.
+    MonitorOnly,
+    /// Played on the monitoring device and heard in the program mix.
+    MonitorAndOutput,
+}
+
+impl MonitorMode {
+    pub const ALL: [MonitorMode; 3] = [MonitorMode::Off, MonitorMode::MonitorOnly, MonitorMode::MonitorAndOutput];
+
+    /// The name commands and files use.
+    pub fn id(self) -> &'static str {
+        match self {
+            MonitorMode::Off => "off",
+            MonitorMode::MonitorOnly => "monitor_only",
+            MonitorMode::MonitorAndOutput => "monitor_and_output",
+        }
+    }
+
+    /// Whether the source plays on the monitoring device.
+    pub fn monitored(self) -> bool {
+        self != MonitorMode::Off
+    }
+
+    /// Whether the source is heard in the program mix.
+    pub fn in_program(self) -> bool {
+        self != MonitorMode::MonitorOnly
+    }
+}
+
+/// Volume, mute, sync offset and monitoring of a source's audio.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AudioState {
@@ -32,6 +69,8 @@ pub struct AudioState {
     /// How long the mixer delays the source's audio, in milliseconds, 0 to
     /// [`MAX_SYNC_OFFSET_MS`].
     pub sync_offset_ms: u32,
+    /// Whether the audio plays on the monitoring device.
+    pub monitor: MonitorMode,
 }
 
 /// Longest audio sync offset accepted, in milliseconds.
@@ -39,7 +78,7 @@ pub const MAX_SYNC_OFFSET_MS: u32 = 5_000;
 
 impl Default for AudioState {
     fn default() -> Self {
-        Self { gain: 1.0, muted: false, sync_offset_ms: 0 }
+        Self { gain: 1.0, muted: false, sync_offset_ms: 0, monitor: MonitorMode::Off }
     }
 }
 

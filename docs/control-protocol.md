@@ -46,6 +46,11 @@ collections).
 `view.stats`, `profile.new`, `selection.fit`). A failed command is an error with its message.
 `source.sync_offset` takes `{"source", "ms"}` and delays the source's audio by `ms`
 milliseconds, a whole number from 0 to 5000; a source without audio is an error.
+`source.monitor` takes `{"source", "mode"}`, where `mode` is `off`, `monitor_only` or
+`monitor_and_output`; any other value, or a source without audio, is an error. `monitor_only`
+plays the source on the monitoring device and leaves it out of recordings and streams.
+`document.inspect` reports `monitoring` with the profile's `device`, whether it is `playing`, and
+the device's `rate` and `channels` while it plays.
 
 Each entry of `engine.commands` has `id`, `label`, `params` (a short description of the
 parameters), `undo` (whether Edit › Undo takes the command back), `scope` (`engine` or `window`),

@@ -11,6 +11,11 @@
 //! source sends no block, its delay line plays on into a silent block until the audio it holds has
 //! played.
 //!
+//! Inputs set to monitoring also go into a second mix, after the same delay, filters, volume,
+//! mute and fade, which goes clipped to the monitoring queue when one is set. An input set to
+//! monitor only is left out of the program mix that the outputs receive; its levels are still
+//! measured.
+//!
 //! The interface talks to the thread through a lock-free command queue, so moving a fader never
 //! waits on the mixer.
 //!
@@ -25,8 +30,8 @@ use studiocraft_media::audio::{AudioPool, BLOCK_FRAMES, BLOCK_SAMPLES, CHANNELS,
 use studiocraft_media::clock::{MasterClock, Pacer};
 use studiocraft_media::mix::{BlockLevels, Levels, clip, measure, mix_into};
 use studiocraft_media::queue::Fifo;
-use studiocraft_model::SourceId;
 use studiocraft_model::collection::MAX_SYNC_OFFSET_MS;
+use studiocraft_model::{MonitorMode, SourceId};
 use studiocraft_plugin::{AudioOut, FilterInstance};
 
 /// Blocks an input may have queued before the oldest are dropped, which bounds its latency to
@@ -87,6 +92,8 @@ pub struct MixInput {
     pub filters: Vec<Box<dyn FilterInstance>>,
     /// How long the input's audio is delayed, in milliseconds (at most [`MAX_SYNC_OFFSET_MS`]).
     pub sync_offset_ms: u32,
+    /// Whether the input goes into the monitoring mix, and whether it stays in the program mix.
+    pub monitor: MonitorMode,
 }
 
 /// Messages to the mixer thread.
@@ -104,6 +111,13 @@ pub enum MixerCmd {
         source: SourceId,
         ms: u32,
     },
+    /// A source's monitoring mode changed.
+    Monitor {
+        source: SourceId,
+        mode: MonitorMode,
+    },
+    /// Where the monitoring mix goes, or `None` to stop making it.
+    MonitorOutput(Option<Arc<Fifo<PooledBlock>>>),
     /// How long inputs take to fade in or out when the program scene changes, in milliseconds.
     FadeMs(u32),
     AddOutput {
@@ -356,6 +370,9 @@ pub struct MixState {
     mix: Vec<f32>,
     /// A block the delay lines of inputs without a new block play into.
     silence: Vec<f32>,
+    /// The mix of the monitored inputs, and the queue it goes to.
+    monitor_mix: Vec<f32>,
+    monitor_out: Option<Arc<Fifo<PooledBlock>>>,
     fade_step: f32,
     /// The number of the input list in use: a fader move sent before it is older than the
     /// gains the list carries.
@@ -374,6 +391,8 @@ impl MixState {
             pool: block_pool(),
             mix: vec![0.0; BLOCK_SAMPLES],
             silence: vec![0.0; BLOCK_SAMPLES],
+            monitor_mix: vec![0.0; BLOCK_SAMPLES],
+            monitor_out: None,
             fade_step: 1.0,
             inputs_sent: 0,
         };
@@ -433,6 +452,12 @@ impl MixState {
                     i.delay_frames = offset_frames(ms);
                 }
             }
+            MixerCmd::Monitor { source, mode } => {
+                for i in self.inputs.iter_mut().filter(|i| i.cfg.source == source) {
+                    i.cfg.monitor = mode;
+                }
+            }
+            MixerCmd::MonitorOutput(queue) => self.monitor_out = queue,
             MixerCmd::FadeMs(ms) => self.set_fade_ms(ms),
             MixerCmd::AddOutput { id, queue } => {
                 self.outputs.retain(|(o, _)| *o != id);
@@ -445,6 +470,10 @@ impl MixState {
     /// Mix one block stamped `pts`.
     pub fn tick(&mut self, pts: studiocraft_media::Tick) {
         self.mix.iter_mut().for_each(|s| *s = 0.0);
+        let monitoring = self.monitor_out.is_some();
+        if monitoring {
+            self.monitor_mix.iter_mut().for_each(|s| *s = 0.0);
+        }
         for input in &mut self.inputs {
             while input.cfg.audio.queued() > MAX_QUEUED_BLOCKS {
                 drop(input.cfg.audio.pop());
@@ -484,8 +513,21 @@ impl MixState {
                 f.process_audio(samples);
             }
             let gain = input.cfg.gain * input.fade;
-            let levels = if input.cfg.muted || input.fade <= 0.0 { measure(samples, input.cfg.gain) } else { mix_into(&mut self.mix, samples, gain) };
+            let heard = !input.cfg.muted && input.fade > 0.0;
+            if heard && monitoring && input.cfg.monitor.monitored() {
+                mix_into(&mut self.monitor_mix, samples, gain);
+            }
+            let levels = match (heard, input.cfg.monitor.in_program()) {
+                (true, true) => mix_into(&mut self.mix, samples, gain),
+                // A source left out of the program still meters what it plays on the monitor.
+                (true, false) => measure(samples, gain),
+                (false, _) => measure(samples, input.cfg.gain),
+            };
             input.cfg.levels.store(levels);
+        }
+        if let Some(q) = &self.monitor_out {
+            clip(&mut self.monitor_mix);
+            send_block(&self.pool, &self.outputs, q, &self.monitor_mix, pts);
         }
         clip(&mut self.mix);
         self.master.store(measure(&self.mix, 1.0));
@@ -495,21 +537,24 @@ impl MixState {
         self.meter.process_interleaved(&self.mix);
         self.loudness.store(&self.meter);
         for (_, q) in &self.outputs {
-            // An output that stops reading would make the pool allocate a block every tick; its
-            // oldest unread block is dropped and reused instead. When this output holds none, the
-            // oldest block of the output holding the most is reused.
-            let reclaimed = if self.pool.exhausted() {
-                q.reclaim().or_else(|| self.outputs.iter().max_by_key(|(_, o)| o.len()).and_then(|(_, o)| o.reclaim()))
-            } else {
-                None
-            };
-            let mut out = reclaimed.unwrap_or_else(|| self.pool.take());
-            out.samples.clear();
-            out.samples.extend_from_slice(&self.mix);
-            out.pts = pts;
-            q.push(out);
+            send_block(&self.pool, &self.outputs, q, &self.mix, pts);
         }
     }
+}
+
+/// Push a copy of `mix` stamped `pts` to `q`.
+///
+/// A queue that stops being read would make the pool allocate a block every tick; its oldest
+/// unread block is dropped and reused instead. When `q` holds none, the oldest block of the
+/// output holding the most is reused.
+fn send_block(pool: &Arc<AudioPool>, outputs: &[(u64, Arc<Fifo<PooledBlock>>)], q: &Fifo<PooledBlock>, mix: &[f32], pts: studiocraft_media::Tick) {
+    let reclaimed =
+        if pool.exhausted() { q.reclaim().or_else(|| outputs.iter().max_by_key(|(_, o)| o.len()).and_then(|(_, o)| o.reclaim())) } else { None };
+    let mut out = reclaimed.unwrap_or_else(|| pool.take());
+    out.samples.clear();
+    out.samples.extend_from_slice(mix);
+    out.pts = pts;
+    q.push(out);
 }
 
 /// Apply the waiting commands: the control commands first, then the fader moves, skipping the
@@ -550,6 +595,7 @@ mod tests {
                 levels: Arc::clone(&levels),
                 filters: vec![],
                 sync_offset_ms: 0,
+                monitor: MonitorMode::Off,
             },
             levels,
         )
@@ -1002,6 +1048,123 @@ mod tests {
         }
         assert!((m.mix[BLOCK_SAMPLES - 1] - 0.32).abs() < 1e-4, "{}", m.mix[BLOCK_SAMPLES - 1]);
         assert_eq!(m.inputs.iter().map(|i| i.delay.ring.capacity()).collect::<Vec<_>>(), lens);
+    }
+
+    /// A mixer with one output and a monitoring queue, and the two queues.
+    fn monitored(inputs: Vec<MixInput>) -> (MixState, Arc<Fifo<PooledBlock>>, Arc<Fifo<PooledBlock>>) {
+        let mut m = MixState::new(Arc::new(Levels::default()));
+        m.apply(MixerCmd::Inputs(inputs));
+        let (out, mon) = (Arc::new(Fifo::new(8)), Arc::new(Fifo::new(8)));
+        m.apply(MixerCmd::AddOutput { id: 1, queue: Arc::clone(&out) });
+        m.apply(MixerCmd::MonitorOutput(Some(Arc::clone(&mon))));
+        (m, out, mon)
+    }
+
+    fn first(q: &Fifo<PooledBlock>) -> f32 {
+        q.pop().map(|b| b.samples[0]).unwrap_or(f32::NAN)
+    }
+
+    #[test]
+    fn monitor_only_leaves_the_program_and_monitor_and_output_keeps_it() {
+        let (a, b, c) = (Arc::new(AudioOut::default()), Arc::new(AudioOut::default()), Arc::new(AudioOut::default()));
+        let (mut ia, la) = input(1, &a, 0.5, true);
+        ia.monitor = MonitorMode::MonitorOnly;
+        let (mut ib, _) = input(2, &b, 1.0, true);
+        ib.monitor = MonitorMode::MonitorAndOutput;
+        let (ic, _) = input(3, &c, 1.0, true);
+        let (mut m, out, mon) = monitored(vec![ia, ib, ic]);
+        feed(&a, 0.4);
+        feed(&b, 0.1);
+        feed(&c, 0.02);
+        m.tick(Tick(7));
+        assert!((first(&out) - (0.1 + 0.02)).abs() < 1e-6, "the program has the second and third inputs");
+        let block = mon.pop().unwrap();
+        assert_eq!(block.pts, Tick(7));
+        assert!((block.samples[0] - (0.4 * 0.5 + 0.1)).abs() < 1e-6, "the monitor has the first two, at their volume");
+        assert!((la.load().peak[0] - 0.2).abs() < 1e-6, "an input left out of the program is still metered");
+    }
+
+    #[test]
+    fn the_monitor_honors_mute_and_the_sync_offset() {
+        let a = Arc::new(AudioOut::default());
+        let (mut ia, _) = input(1, &a, 1e-6, true);
+        ia.monitor = MonitorMode::MonitorOnly;
+        ia.sync_offset_ms = 10;
+        let (mut m, out, mon) = monitored(vec![ia]);
+        let mut next = 1.0;
+        ramp(&mut m, &a, &mut next, 0);
+        assert!(unclipped(&out).iter().all(|s| *s == 0.0), "monitor only: the program is silent");
+        let heard = unclipped(&mon);
+        assert!(heard[..960].iter().all(|s| *s == 0.0), "the monitor starts 480 frames late");
+        assert_eq!(heard[960], 1.0);
+        m.apply(MixerCmd::Gain { source: SourceId(1), gain: 1e-6, muted: true });
+        ramp(&mut m, &a, &mut next, 1);
+        assert!(unclipped(&mon).iter().all(|s| *s == 0.0), "a muted input is not monitored");
+    }
+
+    #[test]
+    fn a_changed_mode_takes_effect_on_the_next_block() {
+        let a = Arc::new(AudioOut::default());
+        let (mut m, out, mon) = monitored(vec![input(1, &a, 1.0, true).0]);
+        feed(&a, 0.25);
+        m.tick(Tick(0));
+        assert_eq!((first(&out), first(&mon)), (0.25, 0.0), "off: heard in the program only");
+        m.apply(MixerCmd::Monitor { source: SourceId(1), mode: MonitorMode::MonitorOnly });
+        feed(&a, 0.25);
+        m.tick(Tick(1));
+        assert_eq!((first(&out), first(&mon)), (0.0, 0.25));
+        m.apply(MixerCmd::Monitor { source: SourceId(1), mode: MonitorMode::MonitorAndOutput });
+        feed(&a, 0.25);
+        m.tick(Tick(2));
+        assert_eq!((first(&out), first(&mon)), (0.25, 0.25));
+        m.apply(MixerCmd::MonitorOutput(None));
+        feed(&a, 0.25);
+        m.tick(Tick(3));
+        assert_eq!((first(&out), mon.len()), (0.25, 0), "without a monitoring queue nothing is sent to it");
+    }
+
+    #[test]
+    fn many_monitored_inputs_add_up_and_are_clipped() {
+        let queues: Vec<Arc<AudioOut>> = (0..32).map(|_| Arc::new(AudioOut::default())).collect();
+        let inputs = queues
+            .iter()
+            .enumerate()
+            .map(|(n, q)| {
+                let (mut i, _) = input(n as u64, q, 1.0, true);
+                i.monitor = MonitorMode::MonitorOnly;
+                i
+            })
+            .collect();
+        let (mut m, out, mon) = monitored(inputs);
+        for q in &queues {
+            feed(q, 0.01);
+        }
+        m.tick(Tick(0));
+        assert!((first(&mon) - 0.32).abs() < 1e-4);
+        assert_eq!(first(&out), 0.0);
+        for q in &queues {
+            feed(q, 0.5);
+        }
+        m.tick(Tick(1));
+        assert_eq!(first(&mon), 1.0, "the monitoring mix is clipped like the program");
+    }
+
+    #[test]
+    fn a_monitor_that_stops_reading_does_not_make_the_mixer_allocate() {
+        let a = Arc::new(AudioOut::default());
+        let (mut ia, _) = input(1, &a, 1.0, true);
+        ia.monitor = MonitorMode::MonitorAndOutput;
+        let (mut m, out, mon) = monitored(vec![ia]);
+        let kept = m.pool.capacity();
+        let mut held = None;
+        for i in 0..1000 {
+            drop(held.take());
+            m.tick(Tick(i));
+            held = out.pop();
+        }
+        assert!(m.pool.made() <= kept, "blocks made: {}", m.pool.made());
+        assert_eq!(mon.len(), mon.capacity());
+        assert_eq!(mon.dropped(), 1000 - mon.capacity() as u64);
     }
 
     #[test]

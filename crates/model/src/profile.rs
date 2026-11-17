@@ -54,16 +54,23 @@ impl VideoSettings {
     }
 }
 
-/// Audio format of the mix.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+/// Audio format of the mix, and the device monitored sources play on.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AudioSettings {
     pub sample_rate: u32,
+    /// The output device monitored sources play on, by its name; [`DEFAULT_AUDIO_DEVICE`] (or
+    /// empty) for the system's default output. A name the system does not list is reported
+    /// when monitoring starts.
+    pub monitoring_device: String,
 }
+
+/// The device name that stands for the system's default device.
+pub const DEFAULT_AUDIO_DEVICE: &str = "default";
 
 impl Default for AudioSettings {
     fn default() -> Self {
-        Self { sample_rate: 48_000 }
+        Self { sample_rate: 48_000, monitoring_device: DEFAULT_AUDIO_DEVICE.into() }
     }
 }
 

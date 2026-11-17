@@ -282,6 +282,33 @@ fn sync_offset() {
 }
 
 #[test]
+fn monitoring_mode() {
+    use studiocraft_model::MonitorMode;
+    let mut e = engine();
+    let o = run(&mut e, "source.add", json!({"kind": "mic", "name": "Mic"})).unwrap();
+    let src: SourceId = serde_json::from_value(o.result["source"].clone()).unwrap();
+    let mode = |e: &Engine| e.collection().source(src).unwrap().audio.monitor;
+    assert_eq!(mode(&e), MonitorMode::Off);
+    run(&mut e, "source.monitor", json!({"source": "Mic", "mode": "monitor_only"})).unwrap();
+    assert_eq!(mode(&e), MonitorMode::MonitorOnly);
+    run(&mut e, "source.monitor", json!({"source": src, "mode": "monitor_and_output"})).unwrap();
+    assert_eq!(mode(&e), MonitorMode::MonitorAndOutput);
+    for bad in [json!("loud"), json!(""), json!("Monitor_Only"), json!(1), json!(null)] {
+        assert!(run(&mut e, "source.monitor", json!({"source": "Mic", "mode": bad})).is_err(), "{bad}");
+    }
+    assert!(run(&mut e, "source.monitor", json!({"source": "Mic"})).is_err(), "the mode is required");
+    assert_eq!(mode(&e), MonitorMode::MonitorAndOutput, "a refused mode changes nothing");
+    assert!(!run(&mut e, "source.monitor", json!({"source": "Mic", "mode": "monitor_and_output"})).unwrap().changed, "the same mode is no change");
+    run(&mut e, "edit.undo", json!({})).unwrap();
+    assert_eq!(mode(&e), MonitorMode::MonitorOnly, "each change is its own undo step");
+    add_color(&mut e, "Video");
+    assert!(
+        matches!(run(&mut e, "source.monitor", json!({"source": "Video", "mode": "monitor_only"})), Err(EngineError::Invalid(m)) if m.contains("no audio"))
+    );
+    assert!(matches!(run(&mut e, "source.monitor", json!({"source": "ghost", "mode": "off"})), Err(EngineError::NoSource(_))));
+}
+
+#[test]
 fn filters_match_what_the_source_produces() {
     let mut e = engine();
     add_color(&mut e, "Video");
@@ -425,6 +452,7 @@ fn every_spec_is_reachable() {
             "source.volume" => json!({"source": 1, "gain": 0.5}),
             "source.mute" => json!({"source": 1, "muted": true}),
             "source.sync_offset" => json!({"source": 1, "ms": 100}),
+            "source.monitor" => json!({"source": 1, "mode": "monitor_only"}),
             "item.remove" | "item.duplicate" => json!({"item": 1}),
             "item.move" => json!({"item": 1, "to": "up"}),
             "item.transform" => json!({"item": 1, "transform": {}}),
