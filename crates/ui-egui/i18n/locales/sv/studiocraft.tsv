@@ -1,0 +1,409 @@
+# StudioCraft, Swedish.
+# Columns: context, source text, translation. Rows not listed here show in English.
+@id	language.name	Svenska
+	a camera was not found	ingen kamera hittades
+	A recording, stream or replay buffer is running. Exiting stops it; a recording is finished and saved first, and the replay buffer's unsaved video is lost.	En inspelning, sändning eller reprisbuffert körs. Om du avslutar stoppas den; en inspelning slutförs och sparas först, och reprisbuffertens osparade video går förlorad.
+	About StudioCraft	Om StudioCraft
+	About {app}	Om {app}
+	Add	Lägg till
+	Add a filter to change how this source looks or sounds.	Lägg till ett filter för att ändra hur källan ser ut eller låter.
+	Add a scene	Lägg till en scen
+	Add a source	Lägg till en källa
+	Add Scene	Lägg till scen
+	Alignment	Justering
+	Alpha mask (alpha channel)	Alfamask (alfakanal)
+	Alpha mask (color channel)	Alfamask (färgkanal)
+	Apply	Verkställ
+	Apply Dock Layout	Använd panellayout
+	Attack (ms)	Attacktid (ms)
+	Audio	Ljud
+	Audio bitrate	Ljudbithastighet
+	Audio input capture	Ljud från ljudingång
+	Audio Mixer	Ljudmixer
+	Audio output capture	Ljud från ljudutgång
+	Audio source actions	Åtgärder för ljudkällor
+	available	tillgänglig
+	Available Encoders	Tillgängliga kodare
+	Background	Bakgrund
+	Balanced	Balanserad
+	Blend (add)	Blanda (addera)
+	Blend (multiply)	Blanda (multiplicera)
+	Blend (subtract)	Blanda (subtrahera)
+	Bottom	Nederkant
+	Brightness	Ljusstyrka
+	Browse…	Bläddra…
+	Camera	Kamera
+	camera access is not allowed in the system's privacy settings	kameraåtkomst tillåts inte i systemets integritetsinställningar
+	Cancel	Avbryt
+	Canvas size	Arbetsytans storlek
+	Capture rate (frames per second)	Fångstfrekvens (bildrutor per sekund)
+	Ceiling (dB)	Maxnivå (dB)
+	Center	Mitten
+	Center to Screen	Centrera på skärmen
+	Check for updates at start	Sök efter uppdateringar vid start
+	Check for Updates…	Sök efter uppdateringar…
+	Choose in the system picker	Välj i systemets valdialog
+	Chroma key	Chroma key
+	Close	Stäng
+	Close below (dB)	Stängningströskel (dB)
+	Color	Färg
+	Color correction	Färgkorrigering
+	Color key	Färgnyckel
+	Community	Gemenskap
+	Compressor	Kompressor
+	Contrast	Kontrast
+	could not connect to the PipeWire sound server	kunde inte ansluta till ljudservern PipeWire
+	CPU usage preset (faster uses less CPU)	Förinställning för processoranvändning (snabbare använder mindre processorkraft)
+	Credits	Medverkande
+	Crop and pad	Beskär och fyll ut
+	Crop or pad each edge	Beskär eller fyll ut varje kant
+	Cut	Klipp
+	Cut to Program	Klipp till program
+	Default	Standard
+	Defaults	Standardvärden
+	Delays this source's audio, to line it up with its picture	Fördröjer källans ljud så att det stämmer med bilden
+	Device	Enhet
+	Direction	Riktning
+	Discord Server	Discord-server
+	Display	Skärm
+	Display capture	Skärminspelning
+	Dock in the Strip	Docka i listen
+	Docks	Paneler
+	dropped {dropped}  lagged {lagged}	tappade {dropped}  sena {lagged}
+	Duplicate	Duplicera
+	Duplicate…	Duplicera…
+	Duration	Övergångstid
+	Ease in	Mjuk start
+	Ease in and out	Mjuk start och slut
+	Ease out	Mjukt slut
+	Easing	Övergångskurva
+	Edit	Redigera
+	Enabled	Aktiverad
+	Encoder queue	Kodarkö
+	Ending Stream…	Avslutar sändning…
+	Equalizer	Equalizer
+	Existing Source	Befintlig källa
+	Exit	Avsluta
+	Exit StudioCraft?	Avsluta StudioCraft?
+	Export…	Exportera…
+	Fade	Tona
+	Fade over 300 ms	Tona på 300 ms
+	Fade through color	Tona via färg
+	Failed: {error}	Misslyckades: {error}
+	ffmpeg (set its location in Settings › Output) was not found	ffmpeg hittades inte (ange var det finns i Inställningar › Utdata)
+	ffmpeg on the PATH	ffmpeg i PATH
+	ffmpeg program	ffmpeg-program
+	File	Arkiv
+	Filters for '{name}'	Filter för '{name}'
+	Filters…	Filter…
+	Finishing Recording…	Slutför inspelning…
+	Fit to Screen	Anpassa till skärmen
+	Font	Typsnitt
+	Font family	Typsnittsfamilj
+	Format	Format
+	Frame time (average)	Bildrutetid (genomsnitt)
+	Frame time (last)	Bildrutetid (senaste)
+	Frames drawn	Renderade bildrutor
+	Frames drawn late	För sent renderade bildrutor
+	Frames encoded	Kodade bildrutor
+	Frames per second	Bildrutor per sekund
+	Frames skipped by encoders	Bildrutor som kodarna hoppade över
+	Free software under the MIT or Apache 2.0 license.	Fri programvara under licensen MIT eller Apache 2.0.
+	From the bottom	Nerifrån
+	From the left	Från vänster
+	From the right	Från höger
+	From the top	Uppifrån
+	Full-Screen Interface	Gränssnitt i helskärm
+	Gain	Förstärkning
+	Gain (dB)	Förstärkning (dB)
+	Gamma	Gamma
+	General	Allmänt
+	Go Live	Sänd live
+	H.264 (built in)	H.264 (inbyggd)
+	Height	Höjd
+	Help	Hjälp
+	Hide	Dölj
+	High	Hög
+	High (dB)	Diskant (dB)
+	Histogram	Histogram
+	HLS vectorscope	HLS-vektorskop
+	Hold (ms)	Hålltid (ms)
+	Horizontal speed (px/s)	Vågrät hastighet (px/s)
+	Hotkeys	Snabbtangenter
+	Image	Bild
+	Image mask	Bildmask
+	Import…	Importera…
+	Key color	Nyckelfärg
+	Key color spill reduction	Minskning av färgspill
+	Keyframe interval	Nyckelbildsintervall
+	Language	Språk
+	Left	Vänster
+	Licenses	Licenser
+	Limit height	Begränsa höjd
+	Limit width	Begränsa bredd
+	Limiter	Begränsare
+	Linear	Linjär
+	LIVE	LIVE
+	Layouts	Layouter
+	Live, {time}	Live, {time}
+	Lock (it can't be moved in the preview)	Lås (kan inte flyttas i förhandsvisningen)
+	Lock Preview	Lås förhandsvisning
+	Loop	Upprepa
+	Low (dB)	Bas (dB)
+	Maximize	Maximera
+	Media file	Mediefil
+	Media files	Mediefiler
+	Mid (dB)	Mellanregister (dB)
+	Minimize	Minimera
+	Mode	Läge
+	Monitor and output	Medhörning och utdata
+	Monitor off	Medhörning avstängd
+	Monitor only (left out of recordings and streams)	Endast medhörning (utesluts från inspelningar och sändningar)
+	Monitoring	Medhörning
+	Monitoring device	Enhet för medhörning
+	Move Dock	Flytta panel
+	Move Left	Flytta åt vänster
+	Move Right	Flytta åt höger
+	Move the scene down	Flytta ned scenen
+	Move the scene up	Flytta upp scenen
+	Move the source down	Flytta ned källan
+	Move the source up	Flytta upp källan
+	Mute	Ljud av
+	Name	Namn
+	New Profile	Ny profil
+	New…	Ny…
+	No audio sources are heard in this scene.	Inga ljudkällor hörs i den här scenen.
+	No contributors listed yet	Inga bidragsgivare listade ännu
+	No filters yet.	Inga filter ännu.
+	No graphics device: the preview is off	Ingen grafikenhet: förhandsvisningen är av
+	No sources in this scene. Add one with +.	Inga källor i den här scenen. Lägg till en med +.
+	Noise gate	Brusgrind
+	None	Ingen
+	not in this ffmpeg	finns inte i denna ffmpeg
+	Opacity (%)	Opacitet (%)
+	Open above (dB)	Öppningströskel (dB)
+	Order	Ordning
+	Outline color	Konturfärg
+	Outline width	Konturbredd
+	Output	Utdata
+	Output Controls	Utdatakontroller
+	Output gain (dB)	Utgångsförstärkning (dB)
+	Output size	Utdatastorlek
+	Parade	Parad
+	Picture file	Bildfil
+	Pictures	Bilder
+	Plays this source on the monitoring device chosen in Settings › Audio	Spelar upp källan på den enhet för medhörning som valts i Inställningar › Ljud
+	Preferences…	Inställningar…
+	Preset (higher is slower and better)	Förinställning (högre är långsammare och bättre)
+	Presets	Förinställningar
+	Preview: {name}	Förhandsvisning: {name}
+	Primary display	Huvudskärm
+	Profile	Profil
+	Program: {name}	Program: {name}
+	Properties	Egenskaper
+	Properties for '{name}'	Egenskaper för '{name}'
+	Properties…	Egenskaper…
+	Quality	Kvalitet
+	Quit	Avsluta
+	Ratio	Kompressionsförhållande
+	Read the displays, windows and devices again	Läs in skärmar, fönster och enheter igen
+	Reading the lists…	Läser in listorna…
+	Record	Spela in
+	Record and stream scenes built from your screen, windows, cameras, pictures, text and sound.	Spela in och sänd scener med innehåll från din skärm, dina fönster, kameror, bilder, text och ljud.
+	Recording	Inspelning
+	Recording folder	Mapp för inspelningar
+	Recording, {time}	Inspelning, {time}
+	Recordings	Inspelningar
+	Redo	Gör om
+	Refresh Lists	Uppdatera listor
+	Release (ms)	Återgångstid (ms)
+	Remove	Ta bort
+	Remove Dock Layout	Ta bort panellayout
+	Remove Layout	Ta bort layout
+	Remove Selected Source	Ta bort markerad källa
+	Remove the selected scene	Ta bort den markerade scenen
+	Remove the selected source from the scene	Ta bort den markerade källan från scenen
+	Rename	Byt namn
+	Rename…	Byt namn…
+	Replay	Repris
+	REPLAY	REPRIS
+	Replay buffer	Reprisbuffert
+	Replay Buffer	Reprisbuffert
+	Replay buffer length	Reprisbuffertens längd
+	Replay buffer memory limit	Reprisbuffertens minnesgräns
+	Replay buffer, {time}	Reprisbuffert, {time}
+	Replay length (seconds)	Reprislängd (sekunder)
+	Replay memory limit (MB)	Minnesgräns för repris (MB)
+	Report an Issue	Rapportera ett problem
+	Reset Docks	Återställ paneler
+	Reset Transform	Återställ transformering
+	Resize the dock strip	Ändra storlek på panellisten
+	Resize the docks	Ändra storlek på panelerna
+	Restore	Återställ
+	Right	Höger
+	Rotate 90° Clockwise	Rotera 90° medurs
+	Rotate 90° Counterclockwise	Rotera 90° moturs
+	Running	Körs
+	Saturation	Mättnad
+	Save Dock Layout	Spara panellayout
+	Save Dock Layout…	Spara panellayout…
+	Save Replay	Spara repris
+	Scene Collection	Scensamling
+	Scene {n}	Scen {n}
+	Scenes	Scener
+	Scope Type	Mätartyp
+	Scopes	Videomätare
+	Scroll	Rulla
+	Send the preview to the program	Skicka förhandsvisningen till programmet
+	Server	Server
+	Settings	Inställningar
+	sharing stopped	delningen stoppades
+	Sharpen	Skärpning
+	Sharpness	Skärpa
+	Show	Visa
+	Show an area	Visa ett område
+	Show Recordings	Visa inspelningar
+	Show Scene {n}	Visa scen {n}
+	Show Settings Folder	Visa inställningsmappen
+	Similarity	Likhet
+	Size	Storlek
+	Smoothness	Utjämning
+	Software (x264)	Programvara (x264)
+	Source Code	Källkod
+	Source Properties	Källans egenskaper
+	Sources	Källor
+	Sources set to monitoring in their Properties window play on this device.	Källor som har medhörning inställd i sitt egenskapsfönster spelas upp på den här enheten.
+	Speed	Hastighet
+	Start or Stop Recording	Starta eller stoppa inspelning
+	Start or Stop Replay Buffer	Starta eller stoppa reprisbuffert
+	Start or Stop Streaming	Starta eller stoppa sändning
+	Start Recording	Starta inspelning
+	Start Replay Buffer	Starta reprisbuffert
+	Start Streaming	Starta sändning
+	Starting…	Startar…
+	Stats	Statistik
+	Status Bar	Statusfält
+	Stop and Exit	Stoppa och avsluta
+	Stop Recording	Stoppa inspelning
+	Stop Replay Buffer	Stoppa reprisbuffert
+	Stop Streaming	Stoppa sändning
+	Stopped	Stoppad
+	Stopping Replay Buffer…	Stoppar reprisbuffert…
+	Stopping…	Stoppar…
+	Stream	Sändning
+	Stream key	Sändningsnyckel
+	Stretch image	Sträck ut bilden
+	Stretch to Screen	Sträck ut till skärmen
+	Studio	Studio
+	Studio Mode	Studioläge
+	StudioCraft is available under either license, at your option.	StudioCraft kan användas under valfri av dessa licenser.
+	Swipe	Svep
+	Switch at once	Byt direkt
+	Sync offset	Synkförskjutning
+	System ({language})	System ({language})
+	Takes effect the next time StudioCraft starts.	Gäller nästa gång StudioCraft startar.
+	Temperature (K)	Färgtemperatur (K)
+	Text	Text
+	the audio capture could not start	ljudinspelningen kunde inte starta
+	the audio capture thread stopped	ljudinspelningens tråd stoppades
+	the audio format could not be described	ljudformatet kunde inte beskrivas
+	the audio stream ended	ljudströmmen tog slut
+	the audio stream failed	ett fel uppstod i ljudströmmen
+	the camera capture could not start	kamerainspelningen kunde inte starta
+	the camera is in use by another camera source	kameran används av en annan kamerakälla
+	the camera is still closing	kameran håller fortfarande på att stängas
+	the camera offers no format StudioCraft reads	kameran erbjuder inget format som StudioCraft kan läsa
+	the camera sends frames that cannot be read	kameran skickar bilder som inte kan läsas
+	the camera sent no picture	kameran skickade ingen bild
+	the camera stopped	kameran stoppades
+	the camera stopped sending pictures	kameran slutade skicka bilder
+	the camera stopped unexpectedly	kameran stoppades oväntat
+	the choice in the system picker was canceled	valet i systemets valdialog avbröts
+	the desktop has no screen-cast portal	skrivbordsmiljön saknar en portal för skärmdelning
+	The interface fonts Inter and JetBrains Mono are under the SIL Open Font License 1.1.	Gränssnittets typsnitt Inter och JetBrains Mono omfattas av SIL Open Font License 1.1.
+	The licenses of the third-party crates StudioCraft uses are checked by `cargo xtask licenses`.	Licenserna för de tredjepartscrates som StudioCraft använder kontrolleras av `cargo xtask licenses`.
+	The scope could not be computed: {error}	Mätaren kunde inte beräknas: {error}
+	The scopes need a graphics device to read the program.	Videomätarna behöver en grafikenhet för att läsa programbilden.
+	the screen capture could not start	skärminspelningen kunde inte starta
+	the screen capture failed	skärminspelningen misslyckades
+	This filter has no settings.	Det här filtret har inga inställningar.
+	this is not supported on this system yet	detta stöds inte på det här systemet ännu
+	Threshold (dB)	Tröskel (dB)
+	Tint	Färgstick
+	Tools	Verktyg
+	Top	Överkant
+	Transition	Övergång
+	Transition Controls	Övergångskontroller
+	Transition settings	Övergångsinställningar
+	Transition to Program	Övergång till program
+	Type	Typ
+	Type shortcuts such as Ctrl+1 or Shift+F5; separate several with commas.	Skriv kortkommandon som Ctrl+1 eller Shift+F5; skilj flera åt med kommatecken.
+	Undo	Ångra
+	Undock	Lossa
+	Updates	Uppdateringar
+	Use system title bar	Använd systemets namnlist
+	Username	Användarnamn
+	Version {version} ({os} {arch})	Version {version} ({os} {arch})
+	Vertical speed (px/s)	Lodrät hastighet (px/s)
+	Video	Video
+	Video bitrate	Videobithastighet
+	Video encoder	Videokodare
+	Video settings can't change while recording, streaming or running the replay buffer.	Videoinställningarna kan inte ändras under inspelning, sändning eller när reprisbufferten körs.
+	View	Visa
+	waiting for a choice in the system picker	väntar på ett val i systemets valdialog
+	waiting for the camera	väntar på kameran
+	Waiting for the program picture…	Väntar på programbilden…
+	waiting to open the camera again	väntar på att öppna kameran igen
+	Waveform	Vågform
+	Website	Webbplats
+	Width	Bredd
+	Window	Fönster
+	Window capture	Fönsterinspelning
+	Your Videos folder	Din videomapp
+	YUV vectorscope	YUV-vektorskop
+	{device} (not connected)	{device} (inte ansluten)
+	{encoder} (not in this ffmpeg)	{encoder} (finns inte i denna ffmpeg)
+	{program} did not report its version	{program} rapporterade inte sin version
+	Compact (small files)	Kompakt (små filer)
+	Duplicate Profile	Duplicera profil
+	Duplicate Scene Collection	Duplicera scensamling
+	Lossless (very large files)	Förlustfri (mycket stora filer)
+	Move Down	Flytta nedåt
+	Move to Bottom	Flytta längst ned
+	Move to Top	Flytta längst upp
+	Move Up	Flytta uppåt
+	New Scene Collection	Ny scensamling
+	Pristine (large files)	Felfri (stora filer)
+	Rename Profile	Byt namn på profil
+	Rename Scene Collection	Byt namn på scensamling
+	Unlock	Lås upp
+	Unmute	Ljud på
+@msg	A plug-in could not be loaded: {error}	Ett insticksprogram kunde inte läsas in: {error}
+@msg	Audio monitoring could not start: {error}	Medhörningen kunde inte starta: {error}
+@msg	Audio monitoring stopped: {error}	Medhörningen stoppades: {error}
+@msg	Could not check for updates: {error}	Kunde inte söka efter uppdateringar: {error}
+@msg	Exported the scene collection to {path}	Scensamlingen exporterades till {path}
+@msg	Imported the scene collection `{name}`	Scensamlingen `{name}` importerades
+@msg	No file dialog could be shown: {error}	Ingen fildialog kunde visas: {error}
+@msg	Recording saved to {path}	Inspelningen sparades som {path}
+@msg	Replay saved to {path}	Reprisen sparades som {path}
+@msg	The compositor thread could not start: {error}	Tråden för bildsammansättning kunde inte starta: {error}
+@msg	The preferences could not be saved: {error}	Inställningarna kunde inte sparas: {error}
+@msg	The profile could not be saved: {error}	Profilen kunde inte sparas: {error}
+@msg	The recording could not be finished	Inspelningen kunde inte slutföras
+@msg	The recording could not be finished: {error}	Inspelningen kunde inte slutföras: {error}
+@msg	The recording stopped: {error}	Inspelningen stoppades: {error}
+@msg	The replay buffer could not be stopped	Reprisbufferten kunde inte stoppas
+@msg	The replay buffer could not be stopped: {error}	Reprisbufferten kunde inte stoppas: {error}
+@msg	The replay buffer stopped	Reprisbufferten stoppades
+@msg	The replay buffer stopped: {error}	Reprisbufferten stoppades: {error}
+@msg	The replay could not be saved	Reprisen kunde inte sparas
+@msg	The replay could not be saved: {error}	Reprisen kunde inte sparas: {error}
+@msg	The scene collection could not be saved: {error}	Scensamlingen kunde inte sparas: {error}
+@msg	The scopes could not start: {error}	Videomätarna kunde inte starta: {error}
+@msg	The stream could not be finished	Sändningen kunde inte avslutas
+@msg	The stream could not be finished: {error}	Sändningen kunde inte avslutas: {error}
+@msg	The stream ended	Sändningen avslutades
+@msg	The stream stopped: {error}	Sändningen stoppades: {error}
+@msg	ffmpeg at {path} was not found	ffmpeg i {path} hittades inte
+menu	Transform	Transformera
