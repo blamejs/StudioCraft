@@ -2,12 +2,14 @@
 //!
 //! - [`display`]: list displays and capture one.
 //! - [`window`]: list windows and capture one.
-//! - [`audio`]: list audio devices and capture an input or, on Windows, what an output plays.
+//! - [`audio`]: list audio devices and capture an input or, on Windows and Linux, what an output
+//!   plays.
 //! - [`ffmpeg`]: find the ffmpeg program recordings, streams and media sources run.
 //! - [`shell`]: open a folder in the file manager or a web page in the browser.
 //!
-//! Capture is implemented on Windows and macOS. Elsewhere the lists are empty and opening a
-//! capture returns [`PlatformError::Unsupported`].
+//! Display and window capture are implemented on Windows and macOS, and audio capture on Windows,
+//! macOS and Linux (through PipeWire). Elsewhere the lists are empty and opening a capture returns
+//! [`PlatformError::Unsupported`].
 
 pub mod audio;
 pub mod display;
@@ -26,7 +28,7 @@ pub enum PlatformError {
     Failed(String),
 }
 
-#[cfg(any(windows, target_os = "macos"))]
+#[cfg(any(windows, target_os = "macos", target_os = "linux"))]
 impl PlatformError {
     pub(crate) fn failed(e: impl std::fmt::Display) -> Self {
         PlatformError::Failed(e.to_string())

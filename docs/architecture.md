@@ -48,6 +48,13 @@ build for `wasm32-unknown-unknown`:
 
 - **Source threads.** Each source runs on its own thread (`engine::host`). It publishes video
   frames into a `VideoOut` slot and audio blocks into a bounded lock-free queue.
+- **Audio capture threads.** An audio input or output source receives samples on the device's
+  thread: cpal's on Windows and macOS, and on Linux a thread that `platform::audio` starts for each
+  capture to run a PipeWire stream loop. The Linux stream asks for 48 kHz stereo `f32`, converts
+  each buffer into a buffer allocated before the stream starts, and stops when its handle is
+  dropped. Listing Linux devices reads the PipeWire registry and the `default` metadata object and
+  waits at most 2 s for the server. A failed or ended stream and a lost server connection are
+  reported to the source, which reopens the device; the rest of the app keeps running.
 - **Mixer thread.** The mixer (`engine::mixer`) pulls one 1024-frame block (48 kHz stereo `f32`)
   from every audible source, delays it by the source's sync offset, applies the audio filters,
   gain, mute and scene-change fades, and measures peak and RMS levels. Each input's delay line
@@ -220,8 +227,9 @@ the window buttons sit where the desktop puts them. `src/titlebar.rs` makes the 
 ## Needs without a shared crate yet
 
 - **Native macOS menu bar.** The menu is drawn in the window on every system.
-- **Audio and video capture on Linux.** Display, window and device capture use `xcap` and `cpal` on
-  Windows and macOS only. On Linux these sources report that capture is unavailable.
+- **Display and window capture on Linux.** Display and window capture use `xcap` on Windows and
+  macOS only. On Linux these sources report that capture is unavailable. Audio device capture on
+  Linux uses the `pipewire` crate in `studiocraft-platform`.
 - **Encoding.** Streams, MP4 and MOV recordings, Lossless recordings, and recordings with x264 or a
   hardware encoder need an ffmpeg program installed separately. StudioCraft runs it as a process
   and does not link it. MKV recordings with H.264 (built in) use the `craft-video` H.264 encoder
