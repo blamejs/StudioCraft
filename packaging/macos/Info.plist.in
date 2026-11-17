@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- packaging/macos/package.sh writes the full version (for example 0.2.0-rc.1) in place of
+     @VERSION@, the numeric X.Y.Z in place of @SHORT_VERSION@, and the commit in place of
+     @BUILD_SHA@. -->
+<plist version="1.0">
+<dict>
+  <key>CFBundleDevelopmentRegion</key>
+  <string>en</string>
+  <key>CFBundleDisplayName</key>
+  <string>StudioCraft</string>
+  <key>CFBundleName</key>
+  <string>StudioCraft</string>
+  <key>CFBundleExecutable</key>
+  <string>StudioCraft</string>
+  <key>CFBundleIdentifier</key>
+  <string>ai.storyteller.studiocraft</string>
+  <key>CFBundleInfoDictionaryVersion</key>
+  <string>6.0</string>
+  <key>CFBundlePackageType</key>
+  <string>APPL</string>
+  <key>CFBundleSignature</key>
+  <string>????</string>
+  <key>CFBundleShortVersionString</key>
+  <string>@SHORT_VERSION@</string>
+  <key>CFBundleVersion</key>
+  <string>@SHORT_VERSION@</string>
+  <key>StudioCraftVersion</key>
+  <string>@VERSION@</string>
+  <key>StudioCraftBuildCommit</key>
+  <string>@BUILD_SHA@</string>
+  <key>CFBundleIconFile</key>
+  <string>StudioCraft</string>
+  <key>LSApplicationCategoryType</key>
+  <string>public.app-category.video</string>
+  <!-- MACOSX_DEPLOYMENT_TARGET in package.sh has the same value. -->
+  <key>LSMinimumSystemVersion</key>
+  <string>11.0</string>
+  <key>NSHighResolutionCapable</key>
+  <true/>
+  <key>NSSupportsAutomaticGraphicsSwitching</key>
+  <true/>
+  <key>NSRequiresAquaSystemAppearance</key>
+  <false/>
+  <!-- macOS shows this the first time StudioCraft opens an audio input source. -->
+  <key>NSMicrophoneUsageDescription</key>
+  <string>StudioCraft records and streams audio from the inputs you add to a scene.</string>
+  <key>NSHumanReadableCopyright</key>
+  <string>Copyright © the StudioCraft contributors. MIT OR Apache-2.0.</string>
+</dict>
+</plist>

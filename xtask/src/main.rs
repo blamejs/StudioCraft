@@ -5,6 +5,7 @@
 mod layers;
 mod licenses;
 mod scan;
+mod version;
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
@@ -22,6 +23,7 @@ commands:
   brands     check that the app's text and docs name no other vendor's products
   wasm       cargo check --target wasm32-unknown-unknown for the crates that build for the web
   ci         all of the above, stopping at the first failure
+  version    print the workspace version; `version set <version>` changes it and Cargo.lock
 ";
 
 fn main() -> ExitCode {
@@ -36,6 +38,7 @@ fn main() -> ExitCode {
         Some("brands") => scan::brands(&root()),
         Some("wasm") => wasm(),
         Some("ci") => ci(),
+        Some("version") => version::run_command(args.get(1..).unwrap_or(&[])),
         Some("-h" | "--help" | "help") | None => {
             print!("{USAGE}");
             Ok(())

@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- AppStream metadata. package.sh writes the version and build date in place of @VERSION@ and
+     @DATE@. -->
+<component type="desktop-application">
+  <id>ai.storyteller.studiocraft</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT OR Apache-2.0</project_license>
+  <name>StudioCraft</name>
+  <summary>Record and live-stream scenes</summary>
+  <developer id="io.github.blamejs">
+    <name>StudioCraft contributors</name>
+  </developer>
+  <description>
+    <p>
+      StudioCraft records and live-streams scenes. A scene is a stack of sources: displays,
+      windows, pictures, text, colors, media files and audio devices.
+    </p>
+    <ul>
+      <li>Arrange sources on a canvas with snapping, and lock them in place</li>
+      <li>Switch scenes with cut, fade and swipe transitions, or in studio mode</li>
+      <li>Mix the audio with meters, faders, mute, gain and a noise gate</li>
+      <li>Record to MKV, MP4 or MOV, or stream to an RTMP server, through ffmpeg</li>
+      <li>A command line and an MCP server for scripting</li>
+    </ul>
+  </description>
+  <launchable type="desktop-id">ai.storyteller.studiocraft.desktop</launchable>
+  <icon type="stock">ai.storyteller.studiocraft</icon>
+  <url type="homepage">https://github.com/blamejs/StudioCraft</url>
+  <url type="bugtracker">https://github.com/blamejs/StudioCraft/issues</url>
+  <categories>
+    <category>AudioVideo</category>
+    <category>Video</category>
+  </categories>
+  <keywords>
+    <keyword>recording</keyword>
+    <keyword>streaming</keyword>
+    <keyword>screen capture</keyword>
+    <keyword>rtmp</keyword>
+  </keywords>
+  <supports>
+    <control>keyboard</control>
+    <control>pointing</control>
+  </supports>
+  <provides>
+    <binary>studiocraft</binary>
+  </provides>
+  <content_rating type="oars-1.1"/>
+  <releases>
+    <release version="@VERSION@" date="@DATE@"/>
+  </releases>
+</component>

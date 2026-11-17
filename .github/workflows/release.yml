@@ -1,0 +1,68 @@
+name: Release
+
+# Builds the release files through the suite's shared release workflow and attaches them to a draft
+# GitHub release named v<version>, with <version> from [workspace.package] in Cargo.toml.
+#
+# - A push to the `release` branch builds a release. On that branch the macOS and Windows builds
+#   stop unless their signing secrets are set in the repository's `release` environment.
+# - A manual run builds from the chosen branch and also makes a draft; there the builds that have
+#   no signing secrets are left unsigned. With `dry-run`, it builds and checks without a draft.
+# - Every night a dry run on main builds everything except macOS, signs nothing and makes no draft.
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  push:
+    branches: [release]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version override for a test run, for example 0.2.0-rc.1 (empty: Cargo.toml)"
+        type: string
+        default: ""
+      dry-run:
+        description: "Build and check only: no signing, no macOS build and no draft release"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    # The shared workflow creates the draft release, which needs write access to contents.
+    permissions:
+      contents: write
+      packages: write
+    # Pinned to craft-common-actions main at 2026-11-16T01:19Z, the commit ci.yml's gate uses; move
+    # the pin to take later changes.
+    uses: storytold/craft-common-actions/.github/workflows/release.yml@59d1ecc4ea15ab59f8d60d38b147d5016c1f1385
+    with:
+      dry-run: ${{ github.event_name == 'schedule' || inputs.dry-run == true }}
+      app-name: studiocraft
+      app-title: StudioCraft
+      version: ${{ inputs.version }}
+      # Windows, macOS and Linux (AppImage, deb, rpm, tar.gz and Flatpak) only.
+      has-web: false
+      has-riscv64: false
+      has-freebsd: false
+      has-arch: false
+    secrets:
+      APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+      APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+      KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+      APPLE_ID: ${{ secrets.APPLE_ID }}
+      APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
+      WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+      AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+      AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+      AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+      AZURE_SIGNING_ENDPOINT: ${{ secrets.AZURE_SIGNING_ENDPOINT }}
+      AZURE_SIGNING_ACCOUNT: ${{ secrets.AZURE_SIGNING_ACCOUNT }}
+      AZURE_CERT_PROFILE: ${{ secrets.AZURE_CERT_PROFILE }}
+      LINUX_SIGNING_KEY: ${{ secrets.LINUX_SIGNING_KEY }}

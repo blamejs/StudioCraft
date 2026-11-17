@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Name=StudioCraft
+GenericName=Recording and Streaming Studio
+Comment=Record and live-stream scenes
+Exec=studiocraft
+TryExec=studiocraft
+Icon=ai.storyteller.studiocraft
+Terminal=false
+StartupNotify=true
+StartupWMClass=ai.storyteller.studiocraft
+Categories=AudioVideo;Video;Recorder;
+Keywords=recording;streaming;screen;capture;broadcast;rtmp;scenes;
