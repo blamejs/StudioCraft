@@ -22,6 +22,7 @@
     {"name": "wait for a linux gray camera frame that cannot be retried", "group": "video", "value": 5, "unit": "s", "code": "platform::camera_gray::READ_WAIT", "estimated": true},
     {"name": "camera yuv to rgb conversion", "group": "video", "value": "BT.601 studio range", "code": "platform::camera_frames::rgb", "estimated": false, "source": "ITU-R BT.601"},
     {"name": "wait before a failed camera is opened again", "group": "video", "value": 2, "unit": "s", "code": "sources::camera::REOPEN", "estimated": true},
+    {"name": "how often properties looks for devices plugged in or out", "group": "video", "value": 3, "unit": "s", "code": "ui-egui::forms::WATCH", "estimated": true},
     {"name": "time without a camera frame before the camera is lost", "group": "video", "value": 5, "unit": "s", "code": "sources::camera::STALL", "estimated": true},
     {"name": "camera polling rate with no format chosen", "group": "video", "value": 60, "unit": "per second", "code": "sources::camera::DEFAULT_FPS", "estimated": true},
     {"name": "crop and pad edges and area", "group": "video", "value": 0, "unit": "px", "code": "sources::filters::CropPad", "estimated": true},

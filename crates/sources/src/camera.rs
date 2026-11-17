@@ -170,6 +170,20 @@ impl Plugin for CameraSource {
         let formats = best_match(&list, &want).and_then(|i| list.get(i)).map(camera::formats).unwrap_or_default();
         schema(&list, &formats)
     }
+    /// Changes when a camera is plugged in or out. Listing the cameras does not open them.
+    fn lists_stamp(&self) -> Option<u64> {
+        Some(stamp(&camera::cameras()))
+    }
+}
+
+/// A value for a list of cameras that changes when the list does.
+fn stamp(list: &[CameraInfo]) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    for c in list {
+        c.key().hash(&mut h);
+    }
+    h.finish()
 }
 
 impl Source for CameraSource {
@@ -331,6 +345,17 @@ mod tests {
         assert_eq!(s.problems(&Settings::new().with("format", "640x480@30:MJPG")).len(), 1, "a format the camera does not offer");
         // A saved camera that is not connected keeps its value.
         assert_eq!(s.normalize(&Settings::new().with("device", "Gone\u{1f}9")).str("device"), Some("Gone\u{1f}9"));
+    }
+
+    #[test]
+    fn the_lists_stamp_changes_when_a_camera_is_plugged_in_or_out() {
+        let desk = CameraInfo { name: "Desk".into(), id: "1".into() };
+        let room = CameraInfo { name: "Room".into(), id: "2".into() };
+        let both = stamp(&[desk.clone(), room.clone()]);
+        assert_eq!(both, stamp(&[desk.clone(), room.clone()]));
+        assert_ne!(both, stamp(std::slice::from_ref(&desk)), "one unplugged");
+        assert_ne!(stamp(&[]), stamp(std::slice::from_ref(&desk)), "the first plugged in");
+        assert_ne!(both, stamp(&[desk, CameraInfo { name: "Room".into(), id: "3".into() }]), "another camera of the same name");
     }
 
     #[test]

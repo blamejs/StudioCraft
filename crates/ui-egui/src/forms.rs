@@ -2,6 +2,7 @@
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::{Duration, Instant};
 
 use egui::{Color32, Ui};
 use serde_json::{Value, json};
@@ -173,7 +174,8 @@ type Reader = Arc<dyn Fn(&Settings) -> SettingsSchema + Send + Sync>;
 /// A schema being read on its own thread. A window reads one schema at a time: a read asked for
 /// while one runs starts when that one ends, and the reply of the earlier one is dropped.
 struct Reading {
-    reply: Arc<Reply>,
+    /// The devices' stamp taken just before the schema was read, and the schema.
+    reply: Arc<Reply<(Option<u64>, SettingsSchema)>>,
     /// Another read was asked for while this one ran.
     again: bool,
     /// The fields after this index stay locked until the reply arrives.
@@ -185,32 +187,78 @@ struct Reading {
     base: Option<Settings>,
 }
 
-/// Where a read leaves its schema.
-#[derive(Default)]
-struct Reply {
-    schema: Latest<SettingsSchema>,
-    /// Set after the schema is left, or when the read stopped without one.
+/// Gives a value that changes when the devices a source lists change; see
+/// `Plugin::lists_stamp`.
+type Stamper = Arc<dyn Fn() -> Option<u64> + Send + Sync>;
+
+/// How often an open Properties window looks for devices plugged in or out.
+const WATCH: Duration = Duration::from_secs(3);
+
+/// Where a read on another thread leaves its value.
+struct Reply<T> {
+    value: Latest<T>,
+    /// Set after the value is left, or when the read stopped without one.
     done: AtomicBool,
 }
 
-impl Reply {
-    /// The schema once the read has ended: `Some(None)` when it stopped without one.
-    fn ended(&self) -> Option<Option<SettingsSchema>> {
-        if let Some(schema) = self.schema.take() {
-            return Some(Some(schema));
+impl<T> Default for Reply<T> {
+    fn default() -> Self {
+        Reply { value: Latest::new(), done: AtomicBool::new(false) }
+    }
+}
+
+impl<T> Reply<T> {
+    /// The value once the read has ended: `Some(None)` when it stopped without one.
+    fn ended(&self) -> Option<Option<T>> {
+        if let Some(value) = self.value.take() {
+            return Some(Some(value));
         }
-        // The schema is left before `done` is set, so it is seen once `done` is.
-        self.done.load(Ordering::Acquire).then(|| self.schema.take())
+        // The value is left before `done` is set, so it is seen once `done` is.
+        self.done.load(Ordering::Acquire).then(|| self.value.take())
     }
 }
 
 /// Sets [`Reply::done`] when the read ends, also when the reader panics.
-struct Ends(Arc<Reply>);
+struct Ends<T>(Arc<Reply<T>>);
 
-impl Drop for Ends {
+impl<T> Drop for Ends<T> {
     fn drop(&mut self) {
         self.0.done.store(true, Ordering::Release);
     }
+}
+
+/// Run `read` on a thread of its own; its value arrives in the returned reply. When no thread
+/// can be started, `read` runs here.
+fn read_off<T, F>(read: Arc<F>) -> Arc<Reply<T>>
+where
+    T: Send + 'static,
+    F: Fn() -> T + Send + Sync + ?Sized + 'static,
+{
+    let reply = Arc::new(Reply::default());
+    let ends = Ends(reply.clone());
+    let theirs = read.clone();
+    let started = std::thread::Builder::new().name("studiocraft-properties".into()).spawn(move || {
+        // The window may have closed or asked again; then nobody takes it.
+        ends.0.value.publish(theirs());
+    });
+    if started.is_err() {
+        // The reply is taken like any other.
+        reply.value.publish(read());
+        reply.done.store(true, Ordering::Release);
+    }
+    reply
+}
+
+/// Looks for devices plugged in or out while a Properties window is open.
+struct Watch {
+    /// The devices' stamp at the last look; `None` before the first.
+    seen: Option<u64>,
+    /// When to look next.
+    next: Instant,
+    /// A look running on its own thread.
+    look: Option<Arc<Reply<Option<u64>>>>,
+    /// The source's lists do not change on their own.
+    off: bool,
 }
 
 /// The Properties window of one source.
@@ -224,19 +272,58 @@ pub struct Properties {
     settings: Settings,
     reader: Reader,
     reading: Option<Reading>,
+    stamper: Stamper,
+    watch: Watch,
 }
 
 impl Properties {
     pub fn open(studio: &Studio, source: SourceId) -> Option<Properties> {
         let s = studio.collection().source(source)?;
         let plugin = studio.registry().source(&s.kind).ok()?;
-        Some(Properties::with_reader(source, s.settings.clone(), Arc::new(move |s: &Settings| plugin.schema_for(s))))
+        let lists = plugin.clone();
+        let reader: Reader = Arc::new(move |s: &Settings| plugin.schema_for(s));
+        Some(Properties::with_readers(source, s.settings.clone(), reader, Arc::new(move || lists.lists_stamp())))
     }
 
+    #[cfg(test)]
     fn with_reader(source: SourceId, settings: Settings, reader: Reader) -> Properties {
-        let mut p = Properties { source, schema: SettingsSchema::default(), loaded: false, settings, reader, reading: None };
+        Properties::with_readers(source, settings, reader, Arc::new(|| None))
+    }
+
+    fn with_readers(source: SourceId, settings: Settings, reader: Reader, stamper: Stamper) -> Properties {
+        let watch = Watch { seen: None, next: Instant::now(), look: None, off: false };
+        let mut p = Properties { source, schema: SettingsSchema::default(), loaded: false, settings, reader, reading: None, stamper, watch };
         p.read(None, None);
         p
+    }
+
+    /// Every [`WATCH`], look on another thread for devices plugged in or out, and read the lists
+    /// again when they changed. The look waits while the lists are read. True when a read
+    /// started.
+    fn watch(&mut self, now: Instant) -> bool {
+        if self.watch.off {
+            return false;
+        }
+        let Some(look) = &self.watch.look else {
+            if now >= self.watch.next && self.loaded && self.reading.is_none() {
+                self.watch.look = Some(read_off(self.stamper.clone()));
+            }
+            return false;
+        };
+        let Some(stamp) = look.ended() else { return false };
+        self.watch.look = None;
+        self.watch.next = now + WATCH;
+        let Some(stamp) = stamp.flatten() else {
+            // The lists do not change on their own, or they could not be looked at.
+            self.watch.off = true;
+            return false;
+        };
+        let changed = self.watch.seen.is_some_and(|seen| seen != stamp);
+        self.watch.seen = Some(stamp);
+        if changed {
+            self.read(None, None);
+        }
+        changed
     }
 
     /// Read the schema for the current settings on another thread, once the read in progress
@@ -255,19 +342,11 @@ impl Properties {
     }
 
     fn start(&mut self, after: Option<usize>, base: Option<Settings>) {
-        let reply = Arc::new(Reply::default());
-        let ends = Ends(reply.clone());
-        let reader = self.reader.clone();
+        let (reader, stamper) = (self.reader.clone(), self.stamper.clone());
         let settings = self.settings.clone();
-        let started = std::thread::Builder::new().name("studiocraft-properties".into()).spawn(move || {
-            // The window may have closed or asked again; then nobody takes it.
-            ends.0.schema.publish(reader(&settings));
-        });
-        if started.is_err() {
-            // No thread could be started: read here. The reply is taken like any other.
-            reply.schema.publish((self.reader)(&self.settings));
-            reply.done.store(true, Ordering::Release);
-        }
+        // The devices' stamp is taken before the lists: a device plugged in or out while they are
+        // read changes the stamp at the next look.
+        let reply = read_off(Arc::new(move || (stamper(), reader(&settings))));
         self.reading = Some(Reading { reply, again: false, after, base });
     }
 
@@ -275,19 +354,25 @@ impl Properties {
     /// source's settings from before that change.
     fn poll(&mut self) -> Option<Settings> {
         // A read that stopped without a schema leaves the window with what it has.
-        let schema = self.reading.as_ref()?.reply.ended()?;
-        self.deliver(schema).flatten()
+        let read = self.reading.as_ref()?.reply.ended()?;
+        self.deliver(read).flatten()
     }
 
-    /// A read ended with `schema`. `None` when the next read has started, otherwise what
-    /// [`Properties::poll`] returns.
-    fn deliver(&mut self, schema: Option<SettingsSchema>) -> Option<Option<Settings>> {
+    /// A read ended with the devices' stamp and the schema. `None` when the next read has
+    /// started, otherwise what [`Properties::poll`] returns.
+    fn deliver(&mut self, read: Option<(Option<u64>, SettingsSchema)>) -> Option<Option<Settings>> {
         let r = self.reading.take()?;
         if r.again {
             // The lists were read for settings the window no longer shows.
             self.start(r.after, r.base);
             return None;
         }
+        let schema = read.map(|(stamp, schema)| {
+            if stamp.is_some() {
+                self.watch.seen = stamp;
+            }
+            schema
+        });
         self.arrive(schema, r.after, r.base.is_some());
         Some(r.base)
     }
@@ -392,6 +477,7 @@ impl Properties {
         if self.poll().is_some_and(|base| base == src.settings) {
             out.0 = Some(self.command());
         }
+        self.watch(Instant::now());
         // The source's settings once this frame's commands have run: a change that starts
         // waiting in this frame is compared with them.
         let base = if out.0.is_some() { self.settings.clone() } else { src.settings.clone() };
@@ -652,13 +738,13 @@ mod tests {
     fn finish(p: &mut Properties) -> bool {
         loop {
             let reply = p.reading.as_ref().expect("a read in progress").reply.clone();
-            let schema = loop {
-                if let Some(schema) = reply.ended() {
-                    break schema;
+            let read = loop {
+                if let Some(read) = reply.ended() {
+                    break read;
                 }
                 std::thread::yield_now();
             };
-            if let Some(base) = p.deliver(schema) {
+            if let Some(base) = p.deliver(read) {
                 return base.is_some();
             }
         }
@@ -765,6 +851,83 @@ mod tests {
         assert_eq!(options[1].value, json!("sd"), "the formats of the device chosen last");
         assert_eq!(p.settings.str("format"), Some("sd"));
         assert!(p.poll().is_none(), "no later reply replaces them");
+    }
+
+    /// Wait for the look in progress to end.
+    fn looked(p: &Properties) {
+        let look = p.watch.look.clone().expect("a look in progress");
+        while !look.done.load(Ordering::Acquire) {
+            std::thread::yield_now();
+        }
+    }
+
+    #[test]
+    fn a_device_plugged_in_or_out_while_the_window_is_open_reads_the_lists_again() {
+        let devices = Arc::new(std::sync::atomic::AtomicU64::new(1));
+        let mut p = opened(&Settings::new().with("device", "a").with("format", "hd"));
+        let theirs = devices.clone();
+        p.stamper = Arc::new(move || Some(theirs.load(Ordering::Acquire)));
+        let t = Instant::now();
+        p.watch.next = t;
+        assert!(!p.watch(t));
+        looked(&p);
+        assert!(!p.watch(t), "the first look only notes the devices");
+        assert!(p.reading.is_none());
+        devices.store(2, Ordering::Release);
+        assert!(!p.watch(t + WATCH - Duration::from_millis(1)));
+        assert!(p.watch.look.is_none(), "the next look waits");
+        assert!(!p.watch(t + WATCH));
+        looked(&p);
+        assert!(p.watch(t + WATCH), "a camera was plugged in or out");
+        assert!(!finish(&mut p), "the lists are read again and nothing is sent");
+        assert_eq!(p.settings.str("format"), Some("hd"), "the values are kept");
+        assert!(!p.watch(t + WATCH + WATCH));
+        looked(&p);
+        assert!(!p.watch(t + WATCH + WATCH), "the same devices read nothing");
+        assert!(p.reading.is_none());
+    }
+
+    #[test]
+    fn a_device_plugged_in_before_the_first_look_reads_the_lists_again() {
+        let devices = Arc::new(std::sync::atomic::AtomicU64::new(1));
+        let theirs = devices.clone();
+        let stamper: Stamper = Arc::new(move || Some(theirs.load(Ordering::Acquire)));
+        let mut p = Properties::with_readers(SourceId(1), Settings::new().with("device", "a"), Arc::new(camera), stamper);
+        finish(&mut p);
+        // Plugged in after the lists were read and before the window looked.
+        devices.store(2, Ordering::Release);
+        let t = Instant::now();
+        p.watch.next = t;
+        assert!(!p.watch(t));
+        looked(&p);
+        assert!(p.watch(t), "the lists were read for other devices");
+    }
+
+    #[test]
+    fn lists_that_do_not_change_on_their_own_are_not_watched() {
+        let mut p = opened(&Settings::new().with("device", "a"));
+        let t = Instant::now();
+        p.watch.next = t;
+        assert!(!p.watch(t));
+        looked(&p);
+        assert!(!p.watch(t));
+        assert!(!p.watch(t + WATCH + WATCH));
+        assert!(p.watch.look.is_none(), "no more looks");
+    }
+
+    #[test]
+    fn a_look_waits_while_the_lists_are_read() {
+        let (open_gate, reader) = held();
+        let mut p = Properties::with_reader(SourceId(1), Settings::new().with("device", "a"), reader);
+        p.stamper = Arc::new(|| Some(1));
+        let t = Instant::now();
+        p.watch.next = t;
+        assert!(!p.watch(t));
+        assert!(p.watch.look.is_none(), "the first lists are still being read");
+        open_gate.send(()).unwrap();
+        finish(&mut p);
+        assert!(!p.watch(t));
+        assert!(p.watch.look.is_some());
     }
 
     /// A reader for [`camera`] that waits until the test sends on the returned channel.

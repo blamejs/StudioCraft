@@ -114,7 +114,13 @@ build for `wasm32-unknown-unknown`:
   to its default. The window reads one schema at a time: a read asked for while one runs starts
   when it ends, and the earlier reply is dropped. Closing the window while a change waits sends
   the change with the choices after it at their defaults. When the source's settings change
-  elsewhere while a change waits, the change made elsewhere is kept.
+  elsewhere while a change waits, the change made elsewhere is kept. Every 3 seconds the window
+  asks the source on another thread for `Plugin::lists_stamp`, a value that changes when its
+  devices change (the camera source hashes its list of cameras, which does not open them), and
+  reads the lists again when the value changed. Each read of the lists also takes the value,
+  just before it reads them. A source that returns `None` is not asked again.
+  A camera source whose camera is unplugged keeps opening it every 2 seconds and resumes when it
+  returns.
 - **Mixer thread.** The mixer (`engine::mixer`) pulls one 1024-frame block (48 kHz stereo `f32`)
   from every audible source, delays it by the source's sync offset, applies the audio filters,
   gain, mute and scene-change fades, and measures peak and RMS levels. Each input's delay line
