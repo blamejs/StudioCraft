@@ -11,7 +11,8 @@
 //! | `audio_input` | a microphone or line input |
 //! | `audio_output` | what a speaker or headphone device plays (Windows) |
 //!
-//! Filters: `gain`, `noise_gate` (audio), `color_correction`, `chroma_key` (video).
+//! Filters: `gain`, `noise_gate`, `compressor`, `limiter`, `equalizer` (audio), `color_correction`,
+//! `chroma_key` (video).
 
 mod audio;
 mod capture;
@@ -52,6 +53,9 @@ pub fn register_all(reg: &mut Registry, ffmpeg: &FfmpegSetting) -> Result<(), Pl
     reg.register_source(Arc::new(AudioOutput))?;
     reg.register_filter(Arc::new(filters::Gain))?;
     reg.register_filter(Arc::new(filters::NoiseGate))?;
+    reg.register_filter(Arc::new(filters::Compressor))?;
+    reg.register_filter(Arc::new(filters::Limiter))?;
+    reg.register_filter(Arc::new(filters::Equalizer))?;
     reg.register_filter(Arc::new(filters::ColorCorrection))?;
     reg.register_filter(Arc::new(filters::ChromaKey))?;
     Ok(())

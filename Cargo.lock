@@ -1095,6 +1095,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-audio-dsp"
+version = "0.1.0"
+
+[[package]]
 name = "craft-color"
 version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=7780b4f58ec3d56b1f908c8fa3b1258fabae3880#7780b4f58ec3d56b1f908c8fa3b1258fabae3880"
@@ -4986,6 +4990,7 @@ dependencies = [
 name = "studiocraft-engine"
 version = "0.1.0"
 dependencies = [
+ "craft-audio-dsp",
  "log",
  "serde",
  "serde_json",
@@ -5085,6 +5090,7 @@ name = "studiocraft-sources"
 version = "0.1.0"
 dependencies = [
  "ab_glyph",
+ "craft-audio-dsp",
  "craft-color",
  "craft-color-transform",
  "craft-font-catalog",

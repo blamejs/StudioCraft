@@ -29,6 +29,7 @@
 	Cancel	Cancel
 	Canvas size	Canvas size
 	Capture rate (frames per second)	Capture rate (frames per second)
+	Ceiling (dB)	Ceiling (dB)
 	Center	Center
 	Center to Screen	Center to Screen
 	Check for updates at start	Check for updates at start
@@ -39,6 +40,7 @@
 	Color	Color
 	Color correction	Color correction
 	Community	Community
+	Compressor	Compressor
 	Contrast	Contrast
 	CPU usage preset (faster uses less CPU)	CPU usage preset (faster uses less CPU)
 	Credits	Credits
@@ -64,6 +66,7 @@
 	Enabled	Enabled
 	Encoder queue	Encoder queue
 	Ending Stream…	Ending Stream…
+	Equalizer	Equalizer
 	Existing Source	Existing Source
 	Exit	Exit
 	Exit StudioCraft?	Exit StudioCraft?
@@ -108,6 +111,7 @@
 	Help	Help
 	Hide	Hide
 	High	High
+	High (dB)	High (dB)
 	Histogram	Histogram
 	HLS vectorscope	HLS vectorscope
 	Hold (ms)	Hold (ms)
@@ -124,16 +128,19 @@
 	Language	Language
 	Left	Left
 	Licenses	Licenses
+	Limiter	Limiter
 	Linear	Linear
 	LIVE	LIVE
 	Live, {time}	Live, {time}
 	Lock (it can't be moved in the preview)	Lock (it can't be moved in the preview)
 	Lock Preview	Lock Preview
 	Loop	Loop
+	Low (dB)	Low (dB)
 	Maximize	Maximize
 	Media file	Media file
 	Media files	Media files
 	medium	medium
+	Mid (dB)	Mid (dB)
 	Minimize	Minimize
 	MIT	MIT
 	Move the scene down	Move the scene down
@@ -162,6 +169,7 @@
 	Outline width	Outline width
 	Output	Output
 	Output Controls	Output Controls
+	Output gain (dB)	Output gain (dB)
 	Output size	Output size
 	P1	P1
 	P2	P2
@@ -185,6 +193,7 @@
 	Properties…	Properties…
 	Quality	Quality
 	Quit	Quit
+	Ratio	Ratio
 	Read the displays, windows and devices again	Read the displays, windows and devices again
 	REC	REC
 	Record	Record
@@ -264,6 +273,7 @@
 	The scopes need a graphics device to read the program.	The scopes need a graphics device to read the program.
 	This filter has no settings.	This filter has no settings.
 	this is not supported on this system yet	this is not supported on this system yet
+	Threshold (dB)	Threshold (dB)
 	Tint	Tint
 	Tools	Tools
 	Transition	Transition
