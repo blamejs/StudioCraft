@@ -1,0 +1,395 @@
+# StudioCraft, Korean.
+# Columns: context, source text, translation. Rows not listed here show in English.
+@id	language.name	한국어
+	a camera was not found	카메라를 찾을 수 없습니다
+	A recording, stream or replay buffer is running. Exiting stops it; a recording is finished and saved first, and the replay buffer's unsaved video is lost.	녹화, 방송 또는 리플레이 버퍼가 실행 중입니다. 종료하면 중지됩니다. 녹화는 먼저 마무리하여 저장하지만, 리플레이 버퍼의 저장되지 않은 영상은 사라집니다.
+	About StudioCraft	StudioCraft 정보
+	About {app}	{app} 정보
+	Add	추가
+	Add a filter to change how this source looks or sounds.	필터를 추가하여 이 소스의 영상이나 소리를 바꿉니다.
+	Add a scene	장면 추가
+	Add a source	소스 추가
+	Add Scene	장면 추가
+	Alignment	텍스트 정렬
+	Alpha mask (alpha channel)	알파 마스크 (알파 채널)
+	Alpha mask (color channel)	알파 마스크 (색상 채널)
+	Apply	적용
+	Apply Dock Layout	도크 레이아웃 적용
+	Attack (ms)	어택 (ms)
+	Audio	오디오
+	Audio bitrate	오디오 비트레이트
+	Audio input capture	오디오 입력 캡처
+	Audio Mixer	오디오 믹서
+	Audio output capture	오디오 출력 캡처
+	Audio source actions	오디오 소스 작업
+	available	사용 가능
+	Available Encoders	사용 가능한 인코더
+	Background	배경
+	Balanced	균형
+	Blend (add)	혼합 (더하기)
+	Blend (multiply)	혼합 (곱하기)
+	Blend (subtract)	혼합 (빼기)
+	Bottom	아래
+	Brightness	밝기
+	Browse…	찾아보기…
+	Camera	카메라
+	camera access is not allowed in the system's privacy settings	시스템 개인 정보 설정에서 카메라 접근이 허용되지 않았습니다
+	Cancel	취소
+	Canvas size	캔버스 크기
+	Capture rate (frames per second)	캡처 속도 (초당 프레임)
+	Ceiling (dB)	상한 (dB)
+	Center	가운데
+	Center to Screen	화면 가운데에 배치
+	Check for updates at start	시작할 때 업데이트 확인
+	Check for Updates…	업데이트 확인…
+	Choose in the system picker	시스템 선택 창에서 고르기
+	Chroma key	크로마 키
+	Close	닫기
+	Close below (dB)	이 값보다 낮으면 닫힘 (dB)
+	Color	색상
+	Color correction	색 보정
+	Color key	컬러 키
+	Community	커뮤니티
+	Compressor	컴프레서
+	Contrast	대비
+	could not connect to the PipeWire sound server	PipeWire 사운드 서버에 연결할 수 없습니다
+	CPU usage preset (faster uses less CPU)	CPU 사용량 프리셋 (빠를수록 CPU를 적게 사용)
+	Credits	제작자
+	Crop and pad	자르기 및 여백 추가
+	Crop or pad each edge	각 가장자리를 자르거나 여백을 추가
+	Cut	컷
+	Cut to Program	프로그램으로 컷
+	Default	기본값
+	Defaults	기본값
+	Delays this source's audio, to line it up with its picture	이 소스의 오디오를 지연시켜 영상과 맞춥니다
+	Device	장치
+	Direction	방향
+	Discord Server	Discord 서버
+	Display	디스플레이
+	Display capture	디스플레이 캡처
+	Dock in the Strip	스트립에 도킹
+	Docks	도크
+	dropped {dropped}  lagged {lagged}	인코더 건너뜀 {dropped}  렌더링 지연 {lagged}
+	Duplicate	복제
+	Duplicate…	복제…
+	Duration	전환 시간
+	Ease in	이즈 인
+	Ease in and out	이즈 인 아웃
+	Ease out	이즈 아웃
+	Easing	이징
+	Edit	편집
+	Enabled	사용
+	Encoder queue	인코더 대기열
+	Ending Stream…	방송 종료 중…
+	Equalizer	이퀄라이저
+	Existing Source	기존 소스
+	Exit	끝내기
+	Exit StudioCraft?	StudioCraft를 끝낼까요?
+	Export…	내보내기…
+	Fade	페이드
+	Fade over 300 ms	300 ms 동안 페이드
+	Fade through color	색상을 거쳐 페이드
+	Failed: {error}	실패: {error}
+	ffmpeg (set its location in Settings › Output) was not found	ffmpeg를 찾을 수 없습니다 (위치는 설정 › 출력에서 지정)
+	ffmpeg on the PATH	PATH의 ffmpeg
+	ffmpeg program	ffmpeg 프로그램
+	File	파일
+	Filters for '{name}'	'{name}'의 필터
+	Filters…	필터…
+	Finishing Recording…	녹화 마무리 중…
+	Fit to Screen	화면에 맞추기
+	Font	글꼴
+	Font family	글꼴 계열
+	Format	형식
+	Frame time (average)	프레임 시간 (평균)
+	Frame time (last)	프레임 시간 (마지막)
+	Frames drawn	렌더링한 프레임
+	Frames drawn late	늦게 렌더링한 프레임
+	Frames encoded	인코딩한 프레임
+	Frames per second	초당 프레임
+	Frames skipped by encoders	인코더가 건너뛴 프레임
+	Free software under the MIT or Apache 2.0 license.	MIT 또는 Apache 2.0 라이선스의 자유 소프트웨어입니다.
+	From the bottom	아래에서
+	From the left	왼쪽에서
+	From the right	오른쪽에서
+	From the top	위에서
+	Full-Screen Interface	인터페이스를 전체 화면으로 표시
+	Gain	게인
+	Gain (dB)	게인 (dB)
+	Gamma	감마
+	General	일반
+	Go Live	방송 시작
+	H.264 (built in)	H.264 (내장)
+	Height	높이
+	Help	도움말
+	Hide	숨기기
+	High	고품질
+	High (dB)	고음 (dB)
+	Histogram	히스토그램
+	HLS vectorscope	HLS 벡터스코프
+	Hold (ms)	홀드 (ms)
+	Horizontal speed (px/s)	가로 속도 (px/초)
+	Hotkeys	단축키
+	Image	이미지
+	Image mask	이미지 마스크
+	Import…	가져오기…
+	Key color	키 색상
+	Key color spill reduction	키 색상 번짐 감소
+	Keyframe interval	키프레임 간격
+	Language	언어
+	Left	왼쪽
+	Licenses	라이선스
+	Limit height	높이 제한
+	Limit width	너비 제한
+	Limiter	리미터
+	Linear	선형
+	LIVE	방송 중
+	Layouts	레이아웃
+	Live, {time}	방송 중, {time}
+	Lock (it can't be moved in the preview)	잠금 (미리 보기에서 옮길 수 없음)
+	Lock Preview	미리 보기 잠금
+	Loop	반복
+	Low (dB)	저음 (dB)
+	Maximize	최대화
+	Media file	미디어 파일
+	Media files	미디어 파일
+	Mid (dB)	중음 (dB)
+	Minimize	최소화
+	Mode	모드
+	Monitor and output	모니터링 및 출력
+	Monitor off	모니터링 끔
+	Monitor only (left out of recordings and streams)	모니터링만 (녹화와 방송에서 제외)
+	Monitoring	모니터링
+	Monitoring device	모니터링 장치
+	Move Dock	도크 이동
+	Move Left	왼쪽으로 이동
+	Move Right	오른쪽으로 이동
+	Move the scene down	장면을 아래로 이동
+	Move the scene up	장면을 위로 이동
+	Move the source down	소스를 아래로 이동
+	Move the source up	소스를 위로 이동
+	Mute	음소거
+	Name	이름
+	New Profile	새 프로필
+	New…	새로 만들기…
+	No audio sources are heard in this scene.	이 장면에서 들리는 오디오 소스가 없습니다.
+	No contributors listed yet	아직 기여자 목록이 없습니다
+	No filters yet.	아직 필터가 없습니다.
+	No graphics device: the preview is off	그래픽 장치가 없어 미리 보기가 꺼져 있습니다
+	No sources in this scene. Add one with +.	이 장면에 소스가 없습니다. +로 추가하세요.
+	Noise gate	노이즈 게이트
+	None	없음
+	not in this ffmpeg	이 ffmpeg에 없음
+	Opacity (%)	불투명도 (%)
+	Open above (dB)	이 값보다 높으면 열림 (dB)
+	Order	순서
+	Outline color	윤곽선 색상
+	Outline width	윤곽선 두께
+	Output	출력
+	Output Controls	출력 컨트롤
+	Output gain (dB)	출력 게인 (dB)
+	Output size	출력 크기
+	Parade	퍼레이드
+	Picture file	이미지 파일
+	Pictures	이미지
+	Plays this source on the monitoring device chosen in Settings › Audio	이 소스를 설정 › 오디오에서 고른 모니터링 장치로 재생합니다
+	Preferences…	환경설정…
+	Preset (higher is slower and better)	프리셋 (높을수록 느리지만 품질이 좋음)
+	Presets	프리셋
+	Preview: {name}	미리 보기: {name}
+	Primary display	주 디스플레이
+	Profile	프로필
+	Program: {name}	프로그램: {name}
+	Properties	속성
+	Properties for '{name}'	'{name}'의 속성
+	Properties…	속성…
+	Quality	품질
+	Quit	종료
+	Ratio	압축비
+	Read the displays, windows and devices again	디스플레이, 창, 장치를 다시 검색합니다
+	Reading the lists…	목록을 불러오는 중…
+	Record	녹화
+	Record and stream scenes built from your screen, windows, cameras, pictures, text and sound.	화면, 창, 카메라, 그림, 텍스트, 소리로 만든 장면을 녹화하고 방송합니다.
+	Recording	녹화
+	Recording folder	녹화 폴더
+	Recording, {time}	녹화 중, {time}
+	Recordings	녹화 파일
+	Redo	다시 실행
+	Refresh Lists	목록 새로 고침
+	Release (ms)	릴리스 (ms)
+	Remove	제거
+	Remove Dock Layout	도크 레이아웃 제거
+	Remove Layout	레이아웃 제거
+	Remove Selected Source	선택한 소스 제거
+	Remove the selected scene	선택한 장면 제거
+	Remove the selected source from the scene	선택한 소스를 장면에서 제거
+	Rename	이름 바꾸기
+	Rename…	이름 바꾸기…
+	Replay	리플레이
+	REPLAY	리플레이
+	Replay buffer	리플레이 버퍼
+	Replay Buffer	리플레이 버퍼
+	Replay buffer length	리플레이 버퍼 길이
+	Replay buffer memory limit	리플레이 버퍼 메모리 한도
+	Replay buffer, {time}	리플레이 버퍼, {time}
+	Replay length (seconds)	리플레이 길이 (초)
+	Replay memory limit (MB)	리플레이 메모리 한도 (MB)
+	Report an Issue	문제 보고
+	Reset Docks	도크 초기화
+	Reset Transform	변형 초기화
+	Resize the dock strip	도크 스트립 크기 조절
+	Resize the docks	도크 크기 조절
+	Restore	이전 크기로
+	Right	오른쪽
+	Rotate 90° Clockwise	시계 방향으로 90° 회전
+	Rotate 90° Counterclockwise	시계 반대 방향으로 90° 회전
+	Running	실행 중
+	Saturation	채도
+	Save Dock Layout	도크 레이아웃 저장
+	Save Dock Layout…	도크 레이아웃 저장…
+	Save Replay	리플레이 저장
+	Scene Collection	장면 모음
+	Scene {n}	장면 {n}
+	Scenes	장면
+	Scope Type	스코프 종류
+	Scopes	스코프
+	Scroll	스크롤
+	Send the preview to the program	미리 보기를 프로그램으로 보냅니다
+	Server	서버
+	Settings	설정
+	sharing stopped	공유가 중지되었습니다
+	Sharpen	선명하게
+	Sharpness	선명도
+	Show	표시
+	Show an area	영역을 지정해 표시
+	Show Recordings	녹화 파일 보기
+	Show Scene {n}	장면 {n} 표시
+	Show Settings Folder	설정 폴더 보기
+	Similarity	유사도
+	Size	크기
+	Smoothness	부드러움
+	Software (x264)	소프트웨어 (x264)
+	Source Code	소스 코드
+	Source Properties	소스 속성
+	Sources	소스
+	Sources set to monitoring in their Properties window play on this device.	속성 창에서 모니터링으로 설정한 소스는 이 장치로 재생됩니다.
+	Speed	속도
+	Start or Stop Recording	녹화 시작/중지
+	Start or Stop Replay Buffer	리플레이 버퍼 시작/중지
+	Start or Stop Streaming	방송 시작/중지
+	Start Recording	녹화 시작
+	Start Replay Buffer	리플레이 버퍼 시작
+	Start Streaming	방송 시작
+	Starting…	시작하는 중…
+	Stats	통계
+	Status Bar	상태 표시줄
+	Stop and Exit	중지하고 끝내기
+	Stop Recording	녹화 중지
+	Stop Replay Buffer	리플레이 버퍼 중지
+	Stop Streaming	방송 중지
+	Stopped	중지됨
+	Stopping Replay Buffer…	리플레이 버퍼 중지 중…
+	Stopping…	중지하는 중…
+	Stream	방송
+	Stream key	스트림 키
+	Stretch image	이미지 늘이기
+	Stretch to Screen	화면에 맞게 늘이기
+	Studio	스튜디오
+	Studio Mode	스튜디오 모드
+	StudioCraft is available under either license, at your option.	StudioCraft는 두 라이선스 중 원하는 것을 골라 사용할 수 있습니다.
+	Swipe	밀어내기
+	Switch at once	바로 전환
+	Sync offset	동기화 오프셋
+	System ({language})	시스템 ({language})
+	Takes effect the next time StudioCraft starts.	다음에 StudioCraft를 시작할 때 적용됩니다.
+	Temperature (K)	색온도 (K)
+	Text	텍스트
+	the audio capture could not start	오디오 캡처를 시작할 수 없습니다
+	the audio capture thread stopped	오디오 캡처 스레드가 중지되었습니다
+	the audio format could not be described	오디오 형식 정보를 처리할 수 없습니다
+	the audio stream ended	오디오 스트림이 끝났습니다
+	the audio stream failed	오디오 스트림에 오류가 발생했습니다
+	the camera capture could not start	카메라 캡처를 시작할 수 없습니다
+	the camera is in use by another camera source	카메라를 다른 카메라 소스가 사용하고 있습니다
+	the camera is still closing	카메라를 아직 닫는 중입니다
+	the camera offers no format StudioCraft reads	이 카메라에는 StudioCraft가 지원하는 영상 형식이 없습니다
+	the camera sends frames that cannot be read	카메라가 보내는 프레임을 읽을 수 없습니다
+	the camera sent no picture	카메라가 영상을 보내지 않았습니다
+	the camera stopped	카메라가 중지되었습니다
+	the camera stopped sending pictures	카메라가 영상 전송을 멈췄습니다
+	the camera stopped unexpectedly	카메라가 예기치 않게 중지되었습니다
+	the choice in the system picker was canceled	시스템 선택 창에서 선택이 취소되었습니다
+	the desktop has no screen-cast portal	데스크톱에 화면 공유 포털이 없습니다
+	The interface fonts Inter and JetBrains Mono are under the SIL Open Font License 1.1.	인터페이스 글꼴 Inter와 JetBrains Mono는 SIL Open Font License 1.1을 따릅니다.
+	The licenses of the third-party crates StudioCraft uses are checked by `cargo xtask licenses`.	StudioCraft가 사용하는 서드파티 크레이트의 라이선스는 `cargo xtask licenses`로 확인합니다.
+	The scope could not be computed: {error}	스코프를 계산할 수 없습니다: {error}
+	The scopes need a graphics device to read the program.	스코프로 프로그램 영상을 읽으려면 그래픽 장치가 필요합니다.
+	the screen capture could not start	화면 캡처를 시작할 수 없습니다
+	the screen capture failed	화면 캡처에 오류가 발생했습니다
+	This filter has no settings.	이 필터에는 설정이 없습니다.
+	this is not supported on this system yet	이 시스템에서는 아직 지원되지 않습니다
+	Threshold (dB)	임계값 (dB)
+	Tint	색조
+	Tools	도구
+	Top	위
+	Transition	전환
+	Transition Controls	전환 컨트롤
+	Transition settings	전환 설정
+	Transition to Program	프로그램으로 전환
+	Type	종류
+	Type shortcuts such as Ctrl+1 or Shift+F5; separate several with commas.	Ctrl+1이나 Shift+F5 같은 단축키를 입력하세요. 여러 개는 쉼표로 구분합니다.
+	Undo	실행 취소
+	Undock	도킹 해제
+	Updates	업데이트
+	Use system title bar	시스템 제목 표시줄 사용
+	Username	사용자 이름
+	Version {version} ({os} {arch})	버전 {version} ({os} {arch})
+	Vertical speed (px/s)	세로 속도 (px/초)
+	Video	비디오
+	Video bitrate	비디오 비트레이트
+	Video encoder	비디오 인코더
+	Video settings can't change while recording, streaming or running the replay buffer.	녹화, 방송 또는 리플레이 버퍼 실행 중에는 비디오 설정을 바꿀 수 없습니다.
+	View	보기
+	waiting for a choice in the system picker	시스템 선택 창에서 선택을 기다리는 중
+	waiting for the camera	카메라를 기다리는 중
+	Waiting for the program picture…	프로그램 영상을 기다리는 중…
+	waiting to open the camera again	카메라를 다시 열기 위해 기다리는 중
+	Waveform	파형
+	Website	웹사이트
+	Width	너비
+	Window	창
+	Window capture	창 캡처
+	Your Videos folder	내 비디오 폴더
+	YUV vectorscope	YUV 벡터스코프
+	{device} (not connected)	{device} (연결 안 됨)
+	{encoder} (not in this ffmpeg)	{encoder} (이 ffmpeg에 없음)
+	{program} did not report its version	{program}이(가) 버전을 알려 주지 않았습니다
+@msg	A plug-in could not be loaded: {error}	플러그인을 불러올 수 없습니다: {error}
+@msg	Audio monitoring could not start: {error}	오디오 모니터링을 시작할 수 없습니다: {error}
+@msg	Audio monitoring stopped: {error}	오디오 모니터링이 중지되었습니다: {error}
+@msg	Could not check for updates: {error}	업데이트를 확인할 수 없습니다: {error}
+@msg	Exported the scene collection to {path}	장면 모음을 {path}에 내보냈습니다
+@msg	Imported the scene collection `{name}`	장면 모음 `{name}`을(를) 가져왔습니다
+@msg	No file dialog could be shown: {error}	파일 대화 상자를 표시할 수 없습니다: {error}
+@msg	Recording saved to {path}	녹화를 {path}에 저장했습니다
+@msg	Replay saved to {path}	리플레이를 {path}에 저장했습니다
+@msg	The compositor thread could not start: {error}	합성 스레드를 시작할 수 없습니다: {error}
+@msg	The preferences could not be saved: {error}	환경설정을 저장할 수 없습니다: {error}
+@msg	The profile could not be saved: {error}	프로필을 저장할 수 없습니다: {error}
+@msg	The recording could not be finished	녹화를 마무리할 수 없습니다
+@msg	The recording could not be finished: {error}	녹화를 마무리할 수 없습니다: {error}
+@msg	The recording stopped: {error}	녹화가 중지되었습니다: {error}
+@msg	The replay buffer could not be stopped	리플레이 버퍼를 중지할 수 없습니다
+@msg	The replay buffer could not be stopped: {error}	리플레이 버퍼를 중지할 수 없습니다: {error}
+@msg	The replay buffer stopped	리플레이 버퍼가 중지되었습니다
+@msg	The replay buffer stopped: {error}	리플레이 버퍼가 중지되었습니다: {error}
+@msg	The replay could not be saved	리플레이를 저장할 수 없습니다
+@msg	The replay could not be saved: {error}	리플레이를 저장할 수 없습니다: {error}
+@msg	The scene collection could not be saved: {error}	장면 모음을 저장할 수 없습니다: {error}
+@msg	The scopes could not start: {error}	스코프를 시작할 수 없습니다: {error}
+@msg	The stream could not be finished	방송을 종료할 수 없습니다
+@msg	The stream could not be finished: {error}	방송을 종료할 수 없습니다: {error}
+@msg	The stream ended	방송이 끝났습니다
+@msg	The stream stopped: {error}	방송이 중지되었습니다: {error}
+@msg	ffmpeg at {path} was not found	{path}에서 ffmpeg를 찾을 수 없습니다
+menu	Transform	변형
