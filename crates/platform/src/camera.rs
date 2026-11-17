@@ -10,7 +10,7 @@
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Condvar, Mutex, OnceLock};
 
 use studiocraft_media::video::VideoFrame;
 
@@ -176,11 +176,33 @@ fn known_formats() -> &'static Mutex<Vec<(String, Vec<CameraFormat>)>> {
 /// Cameras whose formats are remembered.
 const KNOWN_CAMERAS: usize = 32;
 
-/// The cameras whose capture thread is running, with what that thread shares with its source.
-/// A camera is listed at most once.
-fn capturing() -> &'static Mutex<Vec<(String, Arc<Shared>)>> {
-    static OPEN: OnceLock<Mutex<Vec<(String, Arc<Shared>)>>> = OnceLock::new();
-    OPEN.get_or_init(|| Mutex::new(Vec::new()))
+/// The cameras in use by this app. The lock is never held while a camera is read.
+#[derive(Default)]
+struct Cameras {
+    /// The cameras whose capture thread is running, with what that thread shares with its
+    /// source. A camera is listed at most once.
+    open: Vec<(String, Arc<Shared>)>,
+    /// The cameras whose formats are being read outside a capture.
+    reading: Vec<String>,
+}
+
+/// [`Cameras`], with the condition signaled when a format read ends.
+fn capturing() -> &'static (Mutex<Cameras>, Condvar) {
+    static CAMERAS: OnceLock<(Mutex<Cameras>, Condvar)> = OnceLock::new();
+    CAMERAS.get_or_init(|| (Mutex::new(Cameras::default()), Condvar::new()))
+}
+
+/// Marks a camera's formats as being read while it lives.
+struct Reading(String);
+
+impl Drop for Reading {
+    fn drop(&mut self) {
+        let (lock, done) = capturing();
+        if let Ok(mut cameras) = lock.lock() {
+            cameras.reading.retain(|k| *k != self.0);
+        }
+        done.notify_all();
+    }
 }
 
 /// Reserves a camera for one capture while it lives.
@@ -189,9 +211,16 @@ struct Capturing(Arc<Shared>);
 impl Capturing {
     /// Reserve `key` for the capture sharing `shared`. A camera that another capture holds is an
     /// error: "the camera is still closing" when that capture was stopped and its thread still
-    /// waits on the camera, otherwise "the camera is in use by another camera source".
+    /// waits on the camera, otherwise "the camera is in use by another camera source". Waits
+    /// while the camera's formats are being read.
     fn reserve(key: String, shared: &Arc<Shared>) -> Result<Capturing, PlatformError> {
-        let mut open = capturing().lock().map_err(|_| PlatformError::Failed("the camera capture could not start".into()))?;
+        let cannot = || PlatformError::Failed("the camera capture could not start".into());
+        let (lock, done) = capturing();
+        let mut cameras = lock.lock().map_err(|_| cannot())?;
+        while cameras.reading.contains(&key) {
+            cameras = done.wait(cameras).map_err(|_| cannot())?;
+        }
+        let open = &mut cameras.open;
         if let Some((_, other)) = open.iter().find(|(k, _)| *k == key) {
             return Err(PlatformError::Failed(if other.stop.load(Ordering::Acquire) {
                 "the camera is still closing".into()
@@ -206,10 +235,10 @@ impl Capturing {
 
 impl Drop for Capturing {
     fn drop(&mut self) {
-        if let Ok(mut open) = capturing().lock()
-            && let Some(i) = open.iter().position(|(_, s)| Arc::ptr_eq(s, &self.0))
+        if let Ok(mut cameras) = capturing().0.lock()
+            && let Some(i) = cameras.open.iter().position(|(_, s)| Arc::ptr_eq(s, &self.0))
         {
-            open.swap_remove(i);
+            cameras.open.swap_remove(i);
         }
     }
 }
@@ -218,24 +247,35 @@ impl Drop for Capturing {
 /// is not opened again, since reading its formats can change the format it streams in: it gives
 /// the formats read when that capture opened it. A camera that cannot be read now (another
 /// program has it open) gives the formats it offered when it was last read, or an empty list.
-/// A capture cannot reserve the camera while its formats are being read.
+/// A camera whose formats another thread is reading gives the remembered formats too, so the
+/// caller does not wait on the camera. A capture cannot reserve the camera while its formats
+/// are being read.
 pub fn formats_with(backend: &dyn CameraBackend, camera: &CameraInfo) -> Vec<CameraFormat> {
     let key = camera.key();
-    let Ok(open) = capturing().lock() else { return Vec::new() };
-    if open.iter().any(|(k, _)| *k == key) {
-        return known_formats().lock().ok().and_then(|known| known.iter().find(|(k, _)| *k == key).map(|(_, l)| l.clone())).unwrap_or_default();
+    {
+        let Ok(mut cameras) = capturing().0.lock() else { return Vec::new() };
+        if cameras.open.iter().any(|(k, _)| *k == key) || cameras.reading.contains(&key) {
+            drop(cameras);
+            return remembered(&key);
+        }
+        cameras.reading.push(key.clone());
     }
-    let list = read_formats(backend, camera);
-    drop(open);
-    list
+    let _reading = Reading(key);
+    read_formats(backend, camera)
+}
+
+/// The formats the camera `key` offered when it was last read.
+fn remembered(key: &str) -> Vec<CameraFormat> {
+    known_formats().lock().ok().and_then(|known| known.iter().find(|(k, _)| k == key).map(|(_, l)| l.clone())).unwrap_or_default()
 }
 
 /// Read the formats `camera` offers and remember them, or give the ones it offered when it was
-/// last read.
+/// last read. No lock is held while the camera is read.
 fn read_formats(backend: &dyn CameraBackend, camera: &CameraInfo) -> Vec<CameraFormat> {
     let key = camera.key();
-    let Ok(mut known) = known_formats().lock() else { return backend.formats(camera).unwrap_or_default() };
-    match backend.formats(camera) {
+    let read = backend.formats(camera);
+    let Ok(mut known) = known_formats().lock() else { return read.unwrap_or_default() };
+    match read {
         Ok(list) => {
             known.retain(|(k, _)| *k != key);
             if known.len() >= KNOWN_CAMERAS {
@@ -977,7 +1017,7 @@ mod tests {
         // Once the camera answers, the first thread sees the stop and ends; the camera opens again.
         let dropped = Arc::clone(&first.dropped);
         tx.send(Step::Frame(vec![1, 2], GRAY)).unwrap();
-        while !dropped.load(Ordering::Acquire) || capturing().lock().unwrap().iter().any(|(k, _)| *k == stuck.key()) {
+        while !dropped.load(Ordering::Acquire) || capturing().0.lock().unwrap().open.iter().any(|(k, _)| *k == stuck.key()) {
             std::thread::yield_now();
         }
         let (tx3, rx3) = mpsc::channel();
@@ -1001,6 +1041,61 @@ mod tests {
         assert_eq!(f.data[0], 3, "the first capture keeps running");
     }
 
+    /// A camera, `slow`, whose format read waits until the test lets it finish; other cameras
+    /// are read at once.
+    struct SlowFormats {
+        slow: CameraInfo,
+        entered: Mutex<mpsc::Sender<()>>,
+        finish: Mutex<mpsc::Receiver<()>>,
+        reads: std::sync::atomic::AtomicUsize,
+    }
+
+    impl CameraBackend for SlowFormats {
+        fn cameras(&self) -> Result<Vec<CameraInfo>, PlatformError> {
+            Ok(vec![self.slow.clone()])
+        }
+        fn formats(&self, camera: &CameraInfo) -> Result<Vec<CameraFormat>, PlatformError> {
+            self.reads.fetch_add(1, Ordering::AcqRel);
+            if *camera == self.slow {
+                self.entered.lock().unwrap().send(()).unwrap();
+                self.finish.lock().unwrap().recv().unwrap();
+            }
+            Ok(vec![HD])
+        }
+        fn open(&self, _camera: &CameraInfo, _format: CameraFormat) -> Result<Box<dyn CameraStream>, PlatformError> {
+            Err(PlatformError::Unsupported)
+        }
+    }
+
+    #[test]
+    fn a_camera_slow_to_give_its_formats_holds_up_no_other_read() {
+        let slow = cam("Slow camera", "slow-format-read");
+        let other = cam("Other camera", "beside-a-slow-format-read");
+        let (entered_tx, entered) = mpsc::channel();
+        let (finish, finish_rx) = mpsc::channel();
+        let backend = Arc::new(SlowFormats {
+            slow: slow.clone(),
+            entered: Mutex::new(entered_tx),
+            finish: Mutex::new(finish_rx),
+            reads: std::sync::atomic::AtomicUsize::new(0),
+        });
+        finish.send(()).unwrap();
+        assert_eq!(formats_with(backend.as_ref(), &slow), vec![HD]);
+        entered.recv().unwrap();
+        let reading = {
+            let (backend, slow) = (Arc::clone(&backend), slow.clone());
+            std::thread::spawn(move || formats_with(backend.as_ref(), &slow))
+        };
+        entered.recv().unwrap();
+        // While that read waits on the slow camera:
+        assert_eq!(formats_with(backend.as_ref(), &other), vec![HD], "another camera is read");
+        let reads = backend.reads.load(Ordering::Acquire);
+        assert_eq!(formats_with(backend.as_ref(), &slow), vec![HD], "the slow camera gives the formats it offered last time");
+        assert_eq!(backend.reads.load(Ordering::Acquire), reads, "without being read twice at once");
+        finish.send(()).unwrap();
+        assert_eq!(reading.join().unwrap(), vec![HD]);
+    }
+
     #[test]
     fn a_camera_being_captured_is_not_opened_to_read_its_formats() {
         let (tx, rx) = mpsc::channel();
@@ -1019,7 +1114,7 @@ mod tests {
         while !dropped.load(Ordering::Acquire) {
             std::thread::yield_now();
         }
-        while capturing().lock().unwrap().iter().any(|(k, _)| *k == busy.key()) {
+        while capturing().0.lock().unwrap().open.iter().any(|(k, _)| *k == busy.key()) {
             std::thread::yield_now();
         }
         formats_with(fake.as_ref(), &busy);
