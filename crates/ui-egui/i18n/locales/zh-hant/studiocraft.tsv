@@ -1,0 +1,409 @@
+# StudioCraft, Traditional Chinese.
+# Columns: context, source text, translation. Rows not listed here show in English.
+@id	language.name	繁體中文
+	a camera was not found	找不到攝影機
+	A recording, stream or replay buffer is running. Exiting stops it; a recording is finished and saved first, and the replay buffer's unsaved video is lost.	錄影、直播或重播緩衝正在執行。結束程式會將其停止；錄影會先完成並儲存，重播緩衝中未儲存的影片將會遺失。
+	About StudioCraft	關於 StudioCraft
+	About {app}	關於 {app}
+	Add	新增
+	Add a filter to change how this source looks or sounds.	新增濾鏡以變更此來源的畫面或聲音。
+	Add a scene	新增場景
+	Add a source	新增來源
+	Add Scene	新增場景
+	Alignment	文字對齊
+	Alpha mask (alpha channel)	Alpha 遮罩（Alpha 通道）
+	Alpha mask (color channel)	Alpha 遮罩（色彩通道）
+	Apply	套用
+	Apply Dock Layout	套用停駐版面
+	Attack (ms)	起音時間 (ms)
+	Audio	音訊
+	Audio bitrate	音訊位元率
+	Audio input capture	音訊輸入擷取
+	Audio Mixer	混音器
+	Audio output capture	音訊輸出擷取
+	Audio source actions	音訊來源動作
+	available	可用
+	Available Encoders	可用的編碼器
+	Background	背景
+	Balanced	平衡
+	Blend (add)	混合（相加）
+	Blend (multiply)	混合（色彩增值）
+	Blend (subtract)	混合（相減）
+	Bottom	下
+	Brightness	亮度
+	Browse…	瀏覽…
+	Camera	攝影機
+	camera access is not allowed in the system's privacy settings	系統隱私權設定不允許存取攝影機
+	Cancel	取消
+	Canvas size	畫布大小
+	Capture rate (frames per second)	擷取速率（每秒影格數）
+	Ceiling (dB)	峰值上限 (dB)
+	Center	置中
+	Center to Screen	置於畫面中央
+	Check for updates at start	啟動時檢查更新
+	Check for Updates…	檢查更新…
+	Choose in the system picker	在系統選擇器中選擇
+	Chroma key	色度鍵
+	Close	關閉
+	Close below (dB)	低於此值時關閉 (dB)
+	Color	色彩
+	Color correction	色彩校正
+	Color key	色彩鍵
+	Community	社群
+	Compressor	壓縮器
+	Contrast	對比
+	could not connect to the PipeWire sound server	無法連線到 PipeWire 音效伺服器
+	CPU usage preset (faster uses less CPU)	CPU 使用率預設（越快使用越少 CPU）
+	Credits	致謝
+	Crop and pad	裁切與填補
+	Crop or pad each edge	裁切或填補每一邊
+	Cut	直接切換
+	Cut to Program	直接切換至節目畫面
+	Default	預設
+	Defaults	預設值
+	Delays this source's audio, to line it up with its picture	延遲此來源的音訊，使其與畫面同步
+	Device	裝置
+	Direction	方向
+	Discord Server	Discord 伺服器
+	Display	顯示器
+	Display capture	顯示器擷取
+	Dock in the Strip	停駐到停駐列
+	Docks	停駐面板
+	dropped {dropped}  lagged {lagged}	編碼掉格 {dropped}  繪製延遲 {lagged}
+	Duplicate	複製
+	Duplicate…	複製…
+	Duration	轉場時間
+	Ease in	漸入
+	Ease in and out	漸入漸出
+	Ease out	漸出
+	Easing	緩動
+	Edit	編輯
+	Enabled	啟用
+	Encoder queue	編碼器佇列
+	Ending Stream…	正在結束直播…
+	Equalizer	等化器
+	Existing Source	現有來源
+	Exit	結束
+	Exit StudioCraft?	要結束 StudioCraft 嗎？
+	Export…	匯出…
+	Fade	淡入淡出
+	Fade over 300 ms	在 300 ms 內淡入淡出
+	Fade through color	經由色彩淡入淡出
+	Failed: {error}	失敗：{error}
+	ffmpeg (set its location in Settings › Output) was not found	找不到 ffmpeg（請在 設定 › 輸出 中設定其位置）
+	ffmpeg on the PATH	PATH 中的 ffmpeg
+	ffmpeg program	ffmpeg 程式
+	File	檔案
+	Filters for '{name}'	「{name}」的濾鏡
+	Filters…	濾鏡…
+	Finishing Recording…	正在完成錄影…
+	Fit to Screen	縮放至符合畫面
+	Font	字型
+	Font family	字型系列
+	Format	格式
+	Frame time (average)	平均影格耗時
+	Frame time (last)	上一影格耗時
+	Frames drawn	已繪製影格
+	Frames drawn late	延遲繪製影格
+	Frames encoded	已編碼影格
+	Frames per second	每秒影格數
+	Frames skipped by encoders	編碼器略過的影格
+	Free software under the MIT or Apache 2.0 license.	以 MIT 或 Apache 2.0 授權條款發布的自由軟體。
+	From the bottom	從下方
+	From the left	從左側
+	From the right	從右側
+	From the top	從上方
+	Full-Screen Interface	全螢幕介面
+	Gain	增益
+	Gain (dB)	增益 (dB)
+	Gamma	Gamma
+	General	一般
+	Go Live	開始直播
+	H.264 (built in)	H.264（內建）
+	Height	高度
+	Help	說明
+	Hide	隱藏
+	High	高品質
+	High (dB)	高音增益 (dB)
+	Histogram	直方圖
+	HLS vectorscope	HLS 向量示波器
+	Hold (ms)	保持時間 (ms)
+	Horizontal speed (px/s)	水平速度 (px/s)
+	Hotkeys	快速鍵
+	Image	影像
+	Image mask	影像遮罩
+	Import…	匯入…
+	Key color	去背顏色
+	Key color spill reduction	減少去背色溢出
+	Keyframe interval	關鍵影格間隔
+	Language	語言
+	Left	左
+	Licenses	授權條款
+	Limit height	限制高度
+	Limit width	限制寬度
+	Limiter	限制器
+	Linear	線性
+	LIVE	直播中
+	Layouts	版面
+	Live, {time}	直播中，{time}
+	Lock (it can't be moved in the preview)	鎖定（無法在預覽中移動）
+	Lock Preview	鎖定預覽
+	Loop	循環播放
+	Low (dB)	低音增益 (dB)
+	Maximize	最大化
+	Media file	媒體檔案
+	Media files	媒體檔案
+	Mid (dB)	中音增益 (dB)
+	Minimize	最小化
+	Mode	模式
+	Monitor and output	監聽並輸出
+	Monitor off	關閉監聽
+	Monitor only (left out of recordings and streams)	僅監聽（不包含在錄影和直播中）
+	Monitoring	監聽
+	Monitoring device	監聽裝置
+	Move Dock	移動停駐面板
+	Move Left	向左移
+	Move Right	向右移
+	Move the scene down	將場景下移
+	Move the scene up	將場景上移
+	Move the source down	將來源下移
+	Move the source up	將來源上移
+	Mute	靜音
+	Name	名稱
+	New Profile	新增設定檔
+	New…	新增…
+	No audio sources are heard in this scene.	此場景中聽不到任何音訊來源。
+	No contributors listed yet	尚未列出貢獻者
+	No filters yet.	尚無濾鏡。
+	No graphics device: the preview is off	沒有圖形裝置：預覽已關閉
+	No sources in this scene. Add one with +.	此場景中沒有來源。請用 + 新增。
+	Noise gate	噪音閘
+	None	無
+	not in this ffmpeg	此 ffmpeg 中沒有
+	Opacity (%)	不透明度 (%)
+	Open above (dB)	高於此值時開啟 (dB)
+	Order	順序
+	Outline color	外框色彩
+	Outline width	外框寬度
+	Output	輸出
+	Output Controls	輸出控制
+	Output gain (dB)	輸出增益 (dB)
+	Output size	輸出大小
+	Parade	分量圖
+	Picture file	圖片檔案
+	Pictures	圖片
+	Plays this source on the monitoring device chosen in Settings › Audio	在 設定 › 音訊 中選擇的監聽裝置上播放此來源
+	Preferences…	偏好設定…
+	Preset (higher is slower and better)	預設（越高越慢、品質越好）
+	Presets	預設
+	Preview: {name}	預覽：{name}
+	Primary display	主要顯示器
+	Profile	設定檔
+	Program: {name}	節目畫面：{name}
+	Properties	屬性
+	Properties for '{name}'	「{name}」的屬性
+	Properties…	屬性…
+	Quality	品質
+	Quit	結束
+	Ratio	壓縮比
+	Read the displays, windows and devices again	重新偵測顯示器、視窗和裝置
+	Reading the lists…	正在讀取清單…
+	Record	錄影
+	Record and stream scenes built from your screen, windows, cameras, pictures, text and sound.	錄影並直播由螢幕、視窗、攝影機、圖片、文字和聲音組成的場景。
+	Recording	錄影
+	Recording folder	錄影資料夾
+	Recording, {time}	錄影中，{time}
+	Recordings	錄影檔案
+	Redo	重做
+	Refresh Lists	重新整理清單
+	Release (ms)	釋放時間 (ms)
+	Remove	移除
+	Remove Dock Layout	移除停駐版面
+	Remove Layout	移除版面
+	Remove Selected Source	移除所選來源
+	Remove the selected scene	移除所選場景
+	Remove the selected source from the scene	從場景中移除所選來源
+	Rename	重新命名
+	Rename…	重新命名…
+	Replay	重播
+	REPLAY	重播
+	Replay buffer	重播緩衝
+	Replay Buffer	重播緩衝
+	Replay buffer length	重播緩衝長度
+	Replay buffer memory limit	重播緩衝記憶體上限
+	Replay buffer, {time}	重播緩衝，{time}
+	Replay length (seconds)	重播長度（秒）
+	Replay memory limit (MB)	重播緩衝記憶體上限 (MB)
+	Report an Issue	回報問題
+	Reset Docks	重設停駐面板
+	Reset Transform	重設變形
+	Resize the dock strip	調整停駐列大小
+	Resize the docks	調整停駐面板大小
+	Restore	還原
+	Right	右
+	Rotate 90° Clockwise	順時針旋轉 90°
+	Rotate 90° Counterclockwise	逆時針旋轉 90°
+	Running	執行中
+	Saturation	飽和度
+	Save Dock Layout	儲存停駐版面
+	Save Dock Layout…	儲存停駐版面…
+	Save Replay	儲存重播
+	Scene Collection	場景集合
+	Scene {n}	場景 {n}
+	Scenes	場景
+	Scope Type	示波器類型
+	Scopes	示波器
+	Scroll	捲動
+	Send the preview to the program	將預覽畫面送至節目畫面
+	Server	伺服器
+	Settings	設定
+	sharing stopped	分享已停止
+	Sharpen	銳利化
+	Sharpness	銳利度
+	Show	顯示
+	Show an area	顯示指定區域
+	Show Recordings	顯示錄影檔案
+	Show Scene {n}	顯示場景 {n}
+	Show Settings Folder	顯示設定資料夾
+	Similarity	相似度
+	Size	大小
+	Smoothness	平滑度
+	Software (x264)	軟體 (x264)
+	Source Code	原始碼
+	Source Properties	來源屬性
+	Sources	來源
+	Sources set to monitoring in their Properties window play on this device.	在屬性視窗中設為監聽的來源會在此裝置上播放。
+	Speed	速度
+	Start or Stop Recording	開始或停止錄影
+	Start or Stop Replay Buffer	開始或停止重播緩衝
+	Start or Stop Streaming	開始或停止直播
+	Start Recording	開始錄影
+	Start Replay Buffer	開始重播緩衝
+	Start Streaming	開始直播
+	Starting…	正在開始…
+	Stats	統計資料
+	Status Bar	狀態列
+	Stop and Exit	停止並結束
+	Stop Recording	停止錄影
+	Stop Replay Buffer	停止重播緩衝
+	Stop Streaming	停止直播
+	Stopped	已停止
+	Stopping Replay Buffer…	正在停止重播緩衝…
+	Stopping…	正在停止…
+	Stream	直播
+	Stream key	串流金鑰
+	Stretch image	延展影像
+	Stretch to Screen	延展至畫面
+	Studio	工作室
+	Studio Mode	工作室模式
+	StudioCraft is available under either license, at your option.	您可以任選其中一種授權條款使用 StudioCraft。
+	Swipe	滑動
+	Switch at once	立即切換
+	Sync offset	同步偏移
+	System ({language})	系統（{language}）
+	Takes effect the next time StudioCraft starts.	下次啟動 StudioCraft 時生效。
+	Temperature (K)	色溫 (K)
+	Text	文字
+	the audio capture could not start	無法開始音訊擷取
+	the audio capture thread stopped	音訊擷取執行緒已停止
+	the audio format could not be described	無法解析音訊格式資訊
+	the audio stream ended	音訊串流已結束
+	the audio stream failed	音訊串流發生錯誤
+	the camera capture could not start	無法開始攝影機擷取
+	the camera is in use by another camera source	攝影機正由另一個攝影機來源使用
+	the camera is still closing	攝影機仍在關閉中
+	the camera offers no format StudioCraft reads	此攝影機沒有 StudioCraft 支援的影像格式
+	the camera sends frames that cannot be read	攝影機傳送的影格無法讀取
+	the camera sent no picture	攝影機未傳送畫面
+	the camera stopped	攝影機已停止
+	the camera stopped sending pictures	攝影機已停止傳送畫面
+	the camera stopped unexpectedly	攝影機意外停止
+	the choice in the system picker was canceled	已取消系統選擇器中的選取作業
+	the desktop has no screen-cast portal	桌面沒有螢幕分享入口
+	The interface fonts Inter and JetBrains Mono are under the SIL Open Font License 1.1.	介面字型 Inter 和 JetBrains Mono 採用 SIL Open Font License 1.1 授權。
+	The licenses of the third-party crates StudioCraft uses are checked by `cargo xtask licenses`.	StudioCraft 使用的第三方 crate 授權條款由 `cargo xtask licenses` 檢查。
+	The scope could not be computed: {error}	無法計算示波器：{error}
+	The scopes need a graphics device to read the program.	示波器需要圖形裝置才能讀取節目畫面。
+	the screen capture could not start	無法開始螢幕擷取
+	the screen capture failed	螢幕擷取發生錯誤
+	This filter has no settings.	此濾鏡沒有設定。
+	this is not supported on this system yet	此系統尚不支援此功能
+	Threshold (dB)	臨界值 (dB)
+	Tint	色偏
+	Tools	工具
+	Top	上
+	Transition	轉場
+	Transition Controls	轉場控制
+	Transition settings	轉場設定
+	Transition to Program	轉場至節目畫面
+	Type	類型
+	Type shortcuts such as Ctrl+1 or Shift+F5; separate several with commas.	輸入快速鍵，例如 Ctrl+1 或 Shift+F5；多個快速鍵以逗號分隔。
+	Undo	復原
+	Undock	取消停駐
+	Updates	更新
+	Use system title bar	使用系統標題列
+	Username	使用者名稱
+	Version {version} ({os} {arch})	版本 {version}（{os} {arch}）
+	Vertical speed (px/s)	垂直速度 (px/s)
+	Video	視訊
+	Video bitrate	視訊位元率
+	Video encoder	視訊編碼器
+	Video settings can't change while recording, streaming or running the replay buffer.	錄影、直播或執行重播緩衝時無法變更視訊設定。
+	View	檢視
+	waiting for a choice in the system picker	正在等待在系統選擇器中選擇
+	waiting for the camera	正在等待攝影機
+	Waiting for the program picture…	正在等待節目畫面…
+	waiting to open the camera again	正在等待重新開啟攝影機
+	Waveform	波形圖
+	Website	網站
+	Width	寬度
+	Window	視窗
+	Window capture	視窗擷取
+	Your Videos folder	您的「影片」資料夾
+	YUV vectorscope	YUV 向量示波器
+	{device} (not connected)	{device}（未連接）
+	{encoder} (not in this ffmpeg)	{encoder}（此 ffmpeg 中沒有）
+	{program} did not report its version	{program} 未回報其版本
+	Compact (small files)	精簡（檔案較小）
+	Duplicate Profile	複製設定檔
+	Duplicate Scene Collection	複製場景集合
+	Lossless (very large files)	無損（檔案非常大）
+	Move Down	下移
+	Move to Bottom	移到最下面
+	Move to Top	移到最上面
+	Move Up	上移
+	New Scene Collection	新增場景集合
+	Pristine (large files)	極高品質（檔案較大）
+	Rename Profile	重新命名設定檔
+	Rename Scene Collection	重新命名場景集合
+	Unlock	解除鎖定
+	Unmute	取消靜音
+@msg	A plug-in could not be loaded: {error}	無法載入外掛程式：{error}
+@msg	Audio monitoring could not start: {error}	無法開始音訊監聽：{error}
+@msg	Audio monitoring stopped: {error}	音訊監聽已停止：{error}
+@msg	Could not check for updates: {error}	無法檢查更新：{error}
+@msg	Exported the scene collection to {path}	已將場景集合匯出到 {path}
+@msg	Imported the scene collection `{name}`	已匯入場景集合 `{name}`
+@msg	No file dialog could be shown: {error}	無法顯示檔案對話方塊：{error}
+@msg	Recording saved to {path}	錄影已儲存到 {path}
+@msg	Replay saved to {path}	重播已儲存到 {path}
+@msg	The compositor thread could not start: {error}	無法啟動合成執行緒：{error}
+@msg	The preferences could not be saved: {error}	無法儲存偏好設定：{error}
+@msg	The profile could not be saved: {error}	無法儲存設定檔：{error}
+@msg	The recording could not be finished	無法完成錄影
+@msg	The recording could not be finished: {error}	無法完成錄影：{error}
+@msg	The recording stopped: {error}	錄影已停止：{error}
+@msg	The replay buffer could not be stopped	無法停止重播緩衝
+@msg	The replay buffer could not be stopped: {error}	無法停止重播緩衝：{error}
+@msg	The replay buffer stopped	重播緩衝已停止
+@msg	The replay buffer stopped: {error}	重播緩衝已停止：{error}
+@msg	The replay could not be saved	無法儲存重播
+@msg	The replay could not be saved: {error}	無法儲存重播：{error}
+@msg	The scene collection could not be saved: {error}	無法儲存場景集合：{error}
+@msg	The scopes could not start: {error}	無法啟動示波器：{error}
+@msg	The stream could not be finished	無法結束直播
+@msg	The stream could not be finished: {error}	無法結束直播：{error}
+@msg	The stream ended	直播已結束
+@msg	The stream stopped: {error}	直播已停止：{error}
+@msg	ffmpeg at {path} was not found	在 {path} 找不到 ffmpeg
+menu	Transform	變形
