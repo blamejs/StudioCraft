@@ -1,0 +1,418 @@
+# StudioCraft, Ukrainian.
+# Columns: context, source text, translation. Rows not listed here show in English.
+@id	language.name	Українська
+	a camera was not found	камеру не знайдено
+	A recording, stream or replay buffer is running. Exiting stops it; a recording is finished and saved first, and the replay buffer's unsaved video is lost.	Триває запис, трансляція або працює буфер повтору. Вихід зупинить їх; запис спершу буде завершено й збережено, а незбережене відео з буфера повтору буде втрачено.
+	About StudioCraft	Про StudioCraft
+	About {app}	Про {app}
+	Add	Додати
+	Add a filter to change how this source looks or sounds.	Додайте фільтр, щоб змінити зображення або звук цього джерела.
+	Add a scene	Додати сцену
+	Add a source	Додати джерело
+	Add Scene	Додати сцену
+	Alignment	Вирівнювання
+	Alpha mask (alpha channel)	Альфа-маска (альфа-канал)
+	Alpha mask (color channel)	Альфа-маска (канал кольору)
+	Apply	Застосувати
+	Apply Dock Layout	Застосувати розкладку панелей
+	Attack (ms)	Атака (мс)
+	Audio	Звук
+	Audio bitrate	Бітрейт звуку
+	Audio input capture	Захоплення вхідного звуку
+	Audio Mixer	Мікшер звуку
+	Audio output capture	Захоплення вихідного звуку
+	Audio source actions	Дії з джерелами звуку
+	available	доступний
+	Available Encoders	Доступні кодувальники
+	Background	Тло
+	Balanced	Збалансований
+	Blend (add)	Змішування (додавання)
+	Blend (multiply)	Змішування (множення)
+	Blend (subtract)	Змішування (віднімання)
+	Bottom	Знизу
+	Brightness	Яскравість
+	Browse…	Огляд…
+	Camera	Камера
+	camera access is not allowed in the system's privacy settings	доступ до камери заборонено в налаштуваннях конфіденційності системи
+	Cancel	Скасувати
+	Canvas size	Розмір полотна
+	Capture rate (frames per second)	Частота захоплення (кадрів за секунду)
+	Ceiling (dB)	Граничний рівень (дБ)
+	Center	По центру
+	Center to Screen	Вирівняти по центру екрана
+	Check for updates at start	Перевіряти оновлення під час запуску
+	Check for Updates…	Перевірити оновлення…
+	Choose in the system picker	Вибрати в системному вікні вибору
+	Chroma key	Хромакей
+	Close	Закрити
+	Close below (dB)	Поріг закриття (дБ)
+	Color	Колір
+	Color correction	Корекція кольору
+	Color key	Колірний ключ
+	Community	Спільнота
+	Compressor	Компресор
+	Contrast	Контраст
+	could not connect to the PipeWire sound server	не вдалося під’єднатися до звукового сервера PipeWire
+	CPU usage preset (faster uses less CPU)	Пресет використання ЦП (швидші пресети менше навантажують ЦП)
+	Credits	Подяки
+	Crop and pad	Обрізання й поля
+	Crop or pad each edge	Обрізати або додати поле з кожного боку
+	Cut	Миттєвий перехід
+	Cut to Program	Миттєвий перехід у програму
+	Default	За замовчуванням
+	Defaults	Типові значення
+	Delays this source's audio, to line it up with its picture	Затримує звук цього джерела, щоб узгодити його із зображенням
+	Device	Пристрій
+	Direction	Напрямок
+	Discord Server	Сервер Discord
+	Display	Екран
+	Display capture	Захоплення екрана
+	Dock in the Strip	Закріпити на смузі панелей
+	Docks	Панелі
+	dropped {dropped}  lagged {lagged}	пропущено {dropped}  із запізненням {lagged}
+	Duplicate	Дублювати
+	Duplicate…	Дублювати…
+	Duration	Тривалість
+	Ease in	Плавний початок
+	Ease in and out	Плавний початок і кінець
+	Ease out	Плавний кінець
+	Easing	Плавність переходу
+	Edit	Редагування
+	Enabled	Увімкнено
+	Encoder queue	Черга кодувальника
+	Ending Stream…	Завершення трансляції…
+	Equalizer	Еквалайзер
+	Existing Source	Наявне джерело
+	Exit	Вихід
+	Exit StudioCraft?	Вийти з StudioCraft?
+	Export…	Експорт…
+	Fade	Плавний перехід
+	Fade over 300 ms	Плавний перехід за 300 мс
+	Fade through color	Перехід через колір
+	Failed: {error}	Помилка: {error}
+	ffmpeg (set its location in Settings › Output) was not found	ffmpeg не знайдено (укажіть його розташування в Налаштування › Вивід)
+	ffmpeg on the PATH	ffmpeg із PATH
+	ffmpeg program	Програма ffmpeg
+	File	Файл
+	Filters for '{name}'	Фільтри «{name}»
+	Filters…	Фільтри…
+	Finishing Recording…	Завершення запису…
+	Fit to Screen	Вписати в екран
+	Font	Шрифт
+	Font family	Сімейство шрифтів
+	Format	Формат
+	Frame time (average)	Час кадру (середній)
+	Frame time (last)	Час кадру (останній)
+	Frames drawn	Відмальовано кадрів
+	Frames drawn late	Кадрів відмальовано із запізненням
+	Frames encoded	Закодовано кадрів
+	Frames per second	Кадрів за секунду
+	Frames skipped by encoders	Кадрів пропущено кодувальниками
+	Free software under the MIT or Apache 2.0 license.	Вільне програмне забезпечення за ліцензією MIT або Apache 2.0.
+	From the bottom	Знизу
+	From the left	Зліва
+	From the right	Справа
+	From the top	Згори
+	Full-Screen Interface	Інтерфейс на весь екран
+	Gain	Підсилення
+	Gain (dB)	Підсилення (дБ)
+	Gamma	Гамма
+	General	Загальні
+	Go Live	В ефір
+	H.264 (built in)	H.264 (вбудований)
+	Height	Висота
+	Help	Довідка
+	Hide	Сховати
+	High	Висока
+	High (dB)	Високі (дБ)
+	Histogram	Гістограма
+	HLS vectorscope	Вектороскоп HLS
+	Hold (ms)	Утримання (мс)
+	Horizontal speed (px/s)	Швидкість по горизонталі (пкс/с)
+	Hotkeys	Гарячі клавіші
+	Image	Зображення
+	Image mask	Маска зображення
+	Import…	Імпорт…
+	Key color	Колір ключа
+	Key color spill reduction	Придушення ореолу кольору ключа
+	Keyframe interval	Інтервал ключових кадрів
+	Language	Мова
+	Left	Зліва
+	Licenses	Ліцензії
+	Limit height	Обмежити висоту
+	Limit width	Обмежити ширину
+	Limiter	Лімітер
+	Linear	Лінійно
+	LIVE	ЕФІР
+	Layouts	Розкладки
+	Live, {time}	В ефірі, {time}
+	Lock (it can't be moved in the preview)	Заблокувати (не можна переміщати в попередньому перегляді)
+	Lock Preview	Заблокувати попередній перегляд
+	Loop	Повтор
+	Low (dB)	Низькі (дБ)
+	Maximize	Розгорнути
+	Media file	Медіафайл
+	Media files	Медіафайли
+	Mid (dB)	Середні (дБ)
+	Minimize	Згорнути
+	Mode	Режим
+	Monitor and output	Прослуховування й вивід
+	Monitor off	Прослуховування вимкнено
+	Monitor only (left out of recordings and streams)	Лише прослуховування (звук не записується й не транслюється)
+	Monitoring	Прослуховування
+	Monitoring device	Пристрій прослуховування
+	Move Dock	Перемістити панель
+	Move Left	Перемістити ліворуч
+	Move Right	Перемістити праворуч
+	Move the scene down	Перемістити сцену вниз
+	Move the scene up	Перемістити сцену вгору
+	Move the source down	Перемістити джерело вниз
+	Move the source up	Перемістити джерело вгору
+	Mute	Вимкнути звук
+	Name	Назва
+	New Profile	Новий профіль
+	New…	Створити…
+	No audio sources are heard in this scene.	У цій сцені не чути звуку з жодного джерела.
+	No contributors listed yet	Учасників поки не зазначено
+	No filters yet.	Фільтрів поки немає.
+	No graphics device: the preview is off	Немає графічного пристрою: попередній перегляд вимкнено
+	No sources in this scene. Add one with +.	У цій сцені немає джерел. Додайте джерело кнопкою +.
+	Noise gate	Шумовий гейт
+	None	Немає
+	not in this ffmpeg	немає в цій збірці ffmpeg
+	Opacity (%)	Непрозорість (%)
+	Open above (dB)	Поріг відкриття (дБ)
+	Order	Порядок
+	Outline color	Колір контуру
+	Outline width	Товщина контуру
+	Output	Вивід
+	Output Controls	Керування виводом
+	Output gain (dB)	Вихідне підсилення (дБ)
+	Output size	Розмір виводу
+	Parade	Парад каналів
+	Picture file	Файл зображення
+	Pictures	Зображення
+	Plays this source on the monitoring device chosen in Settings › Audio	Відтворює звук цього джерела на пристрої прослуховування, вибраному в розділі «Налаштування › Звук»
+	Preferences…	Параметри…
+	Preset (higher is slower and better)	Пресет (вищий рівень працює повільніше й дає кращу якість)
+	Presets	Пресети
+	Preview: {name}	Попередній перегляд: {name}
+	Primary display	Основний екран
+	Profile	Профіль
+	Program: {name}	Програма: {name}
+	Properties	Властивості
+	Properties for '{name}'	Властивості «{name}»
+	Properties…	Властивості…
+	Quality	Якість
+	Quit	Завершити
+	Ratio	Коефіцієнт стиснення
+	Read the displays, windows and devices again	Знову отримати списки екранів, вікон і пристроїв
+	Reading the lists…	Читання списків…
+	Record	Запис
+	Record and stream scenes built from your screen, windows, cameras, pictures, text and sound.	Записуйте й транслюйте сцени з екрана, вікон, камер, зображень, тексту та звуку.
+	Recording	Запис
+	Recording folder	Тека записів
+	Recording, {time}	Запис, {time}
+	Recordings	Записи
+	Redo	Повторити
+	Refresh Lists	Оновити списки
+	Release (ms)	Час відпускання (мс)
+	Remove	Вилучити
+	Remove Dock Layout	Вилучити розкладку панелей
+	Remove Layout	Вилучити розкладку
+	Remove Selected Source	Вилучити вибране джерело
+	Remove the selected scene	Вилучити вибрану сцену
+	Remove the selected source from the scene	Вилучити вибране джерело зі сцени
+	Rename	Перейменувати
+	Rename…	Перейменувати…
+	Replay	Повтор
+	REPLAY	ПОВТОР
+	Replay buffer	Буфер повтору
+	Replay Buffer	Буфер повтору
+	Replay buffer length	Довжина буфера повтору
+	Replay buffer memory limit	Обмеження пам’яті буфера повтору
+	Replay buffer, {time}	Буфер повтору, {time}
+	Replay length (seconds)	Довжина повтору (секунди)
+	Replay memory limit (MB)	Обмеження пам’яті повтору (МБ)
+	Report an Issue	Повідомити про проблему
+	Reset Docks	Скинути панелі
+	Reset Transform	Скинути перетворення
+	Resize the dock strip	Змінити розмір смуги панелей
+	Resize the docks	Змінити розмір панелей
+	Restore	Відновити
+	Right	Справа
+	Rotate 90° Clockwise	Повернути на 90° за годинниковою стрілкою
+	Rotate 90° Counterclockwise	Повернути на 90° проти годинникової стрілки
+	Running	Працює
+	Saturation	Насиченість
+	Save Dock Layout	Зберегти розкладку панелей
+	Save Dock Layout…	Зберегти розкладку панелей…
+	Save Replay	Зберегти повтор
+	Scene Collection	Колекція сцен
+	Scene {n}	Сцена {n}
+	Scenes	Сцени
+	Scope Type	Тип графіка
+	Scopes	Графіки сигналу
+	Scroll	Прокручування
+	Send the preview to the program	Вивести попередній перегляд у програму
+	Server	Сервер
+	Settings	Налаштування
+	sharing stopped	показ екрана зупинено
+	Sharpen	Підвищення різкості
+	Sharpness	Різкість
+	Show	Показати
+	Show an area	Показати область
+	Show Recordings	Показати записи
+	Show Scene {n}	Показати сцену {n}
+	Show Settings Folder	Показати теку налаштувань
+	Similarity	Подібність
+	Size	Розмір
+	Smoothness	Згладженість
+	Software (x264)	Програмний (x264)
+	Source Code	Вихідний код
+	Source Properties	Властивості джерела
+	Sources	Джерела
+	Sources set to monitoring in their Properties window play on this device.	Звук джерел, для яких у вікні властивостей увімкнено прослуховування, відтворюється на цьому пристрої.
+	Speed	Швидкість
+	Start or Stop Recording	Почати або зупинити запис
+	Start or Stop Replay Buffer	Запустити або зупинити буфер повтору
+	Start or Stop Streaming	Почати або зупинити трансляцію
+	Start Recording	Почати запис
+	Start Replay Buffer	Запустити буфер повтору
+	Start Streaming	Почати трансляцію
+	Starting…	Запуск…
+	Stats	Статистика
+	Status Bar	Рядок стану
+	Stop and Exit	Зупинити й вийти
+	Stop Recording	Зупинити запис
+	Stop Replay Buffer	Зупинити буфер повтору
+	Stop Streaming	Зупинити трансляцію
+	Stopped	Зупинено
+	Stopping Replay Buffer…	Зупинення буфера повтору…
+	Stopping…	Зупинення…
+	Stream	Трансляція
+	Stream key	Ключ трансляції
+	Stretch image	Розтягнути зображення
+	Stretch to Screen	Розтягнути на екран
+	Studio	Студія
+	Studio Mode	Режим студії
+	StudioCraft is available under either license, at your option.	StudioCraft можна використовувати на умовах будь-якої з цих ліцензій, на ваш вибір.
+	Swipe	Зсув
+	Switch at once	Перемкнути одразу
+	Sync offset	Зсув синхронізації
+	System ({language})	Системна ({language})
+	Takes effect the next time StudioCraft starts.	Набуде чинності під час наступного запуску StudioCraft.
+	Temperature (K)	Температура (K)
+	Text	Текст
+	the audio capture could not start	не вдалося почати захоплення звуку
+	the audio capture thread stopped	потік захоплення звуку зупинився
+	the audio format could not be described	не вдалося визначити формат звуку
+	the audio stream ended	аудіопотік завершився
+	the audio stream failed	збій аудіопотоку
+	the camera capture could not start	не вдалося почати захоплення з камери
+	the camera is in use by another camera source	камеру використовує інше джерело камери
+	the camera is still closing	камера ще закривається
+	the camera offers no format StudioCraft reads	камера не пропонує жодного формату, який читає StudioCraft
+	the camera sends frames that cannot be read	камера надсилає кадри, які не вдається прочитати
+	the camera sent no picture	камера не надіслала зображення
+	the camera stopped	камера зупинилася
+	the camera stopped sending pictures	камера припинила надсилати зображення
+	the camera stopped unexpectedly	камера несподівано зупинилася
+	the choice in the system picker was canceled	вибір у системному вікні вибору скасовано
+	the desktop has no screen-cast portal	у робочому середовищі немає порталу захоплення екрана
+	The interface fonts Inter and JetBrains Mono are under the SIL Open Font License 1.1.	Шрифти інтерфейсу Inter і JetBrains Mono поширюються за ліцензією SIL Open Font License 1.1.
+	The licenses of the third-party crates StudioCraft uses are checked by `cargo xtask licenses`.	Ліцензії сторонніх крейтів, які використовує StudioCraft, перевіряє `cargo xtask licenses`.
+	The scope could not be computed: {error}	Не вдалося побудувати графік: {error}
+	The scopes need a graphics device to read the program.	Графікам сигналу потрібен графічний пристрій, щоб читати зображення програми.
+	the screen capture could not start	не вдалося почати захоплення екрана
+	the screen capture failed	збій захоплення екрана
+	This filter has no settings.	Цей фільтр не має налаштувань.
+	this is not supported on this system yet	у цій системі це поки не підтримується
+	Threshold (dB)	Поріг (дБ)
+	Tint	Відтінок
+	Tools	Інструменти
+	Top	Згори
+	Transition	Перехід
+	Transition Controls	Керування переходом
+	Transition settings	Налаштування переходу
+	Transition to Program	Перехід у програму
+	Type	Тип
+	Type shortcuts such as Ctrl+1 or Shift+F5; separate several with commas.	Введіть сполучення клавіш, наприклад Ctrl+1 або Shift+F5; кілька сполучень розділяйте комами.
+	Undo	Скасувати
+	Undock	Відкріпити
+	Updates	Оновлення
+	Use system title bar	Використовувати системний заголовок вікна
+	Username	Ім’я користувача
+	Version {version} ({os} {arch})	Версія {version} ({os} {arch})
+	Vertical speed (px/s)	Швидкість по вертикалі (пкс/с)
+	Video	Відео
+	Video bitrate	Бітрейт відео
+	Video encoder	Кодувальник відео
+	Video settings can't change while recording, streaming or running the replay buffer.	Налаштування відео не можна змінювати під час запису, трансляції або роботи буфера повтору.
+	View	Вигляд
+	waiting for a choice in the system picker	очікування вибору в системному вікні вибору
+	waiting for the camera	очікування камери
+	Waiting for the program picture…	Очікування зображення програми…
+	waiting to open the camera again	очікування повторного відкриття камери
+	Waveform	Осцилограма
+	Website	Сайт
+	Width	Ширина
+	Window	Вікно
+	Window capture	Захоплення вікна
+	Your Videos folder	Ваша тека «Відео»
+	YUV vectorscope	Вектороскоп YUV
+	{device} (not connected)	{device} (не під’єднано)
+	{encoder} (not in this ffmpeg)	{encoder} (немає в цій збірці ffmpeg)
+	{program} did not report its version	Не вдалося отримати версію програми {program}
+	kbps	кбіт/с
+	{n} kbps	{n} кбіт/с
+	MB	МБ
+	{status} · {mb} MB	{status} · {mb} МБ
+	{fps} fps  {ms} ms	{fps} кадр/с  {ms} мс
+	{db} dB	{db} дБ
+	{ms} ms	{ms} мс
+	ms	мс
+	s	с
+	Compact (small files)	Компактна (малі файли)
+	Duplicate Profile	Дублювати профіль
+	Duplicate Scene Collection	Дублювати колекцію сцен
+	Lossless (very large files)	Без втрат (дуже великі файли)
+	Move Down	Перемістити вниз
+	Move to Bottom	Перемістити в кінець
+	Move to Top	Перемістити на початок
+	Move Up	Перемістити вгору
+	New Scene Collection	Нова колекція сцен
+	Pristine (large files)	Бездоганна (великі файли)
+	Rename Profile	Перейменувати профіль
+	Rename Scene Collection	Перейменувати колекцію сцен
+	Unlock	Розблокувати
+	Unmute	Увімкнути звук
+@msg	A plug-in could not be loaded: {error}	Не вдалося завантажити модуль: {error}
+@msg	Audio monitoring could not start: {error}	Не вдалося почати прослуховування: {error}
+@msg	Audio monitoring stopped: {error}	Прослуховування зупинено: {error}
+@msg	Could not check for updates: {error}	Не вдалося перевірити оновлення: {error}
+@msg	Exported the scene collection to {path}	Колекцію сцен експортовано до {path}
+@msg	Imported the scene collection `{name}`	Колекцію сцен `{name}` імпортовано
+@msg	No file dialog could be shown: {error}	Не вдалося показати діалог вибору файлу: {error}
+@msg	Recording saved to {path}	Запис збережено до {path}
+@msg	Replay saved to {path}	Повтор збережено до {path}
+@msg	The compositor thread could not start: {error}	Не вдалося запустити потік компонування: {error}
+@msg	The preferences could not be saved: {error}	Не вдалося зберегти параметри: {error}
+@msg	The profile could not be saved: {error}	Не вдалося зберегти профіль: {error}
+@msg	The recording could not be finished	Не вдалося завершити запис
+@msg	The recording could not be finished: {error}	Не вдалося завершити запис: {error}
+@msg	The recording stopped: {error}	Запис зупинено: {error}
+@msg	The replay buffer could not be stopped	Не вдалося зупинити буфер повтору
+@msg	The replay buffer could not be stopped: {error}	Не вдалося зупинити буфер повтору: {error}
+@msg	The replay buffer stopped	Буфер повтору зупинено
+@msg	The replay buffer stopped: {error}	Буфер повтору зупинено: {error}
+@msg	The replay could not be saved	Не вдалося зберегти повтор
+@msg	The replay could not be saved: {error}	Не вдалося зберегти повтор: {error}
+@msg	The scene collection could not be saved: {error}	Не вдалося зберегти колекцію сцен: {error}
+@msg	The scopes could not start: {error}	Не вдалося запустити графіки сигналу: {error}
+@msg	The stream could not be finished	Не вдалося завершити трансляцію
+@msg	The stream could not be finished: {error}	Не вдалося завершити трансляцію: {error}
+@msg	The stream ended	Трансляцію завершено
+@msg	The stream stopped: {error}	Трансляцію зупинено: {error}
+@msg	ffmpeg at {path} was not found	ffmpeg за шляхом {path} не знайдено
+menu	Transform	Перетворення
