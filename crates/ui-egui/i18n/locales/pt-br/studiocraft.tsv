@@ -363,6 +363,20 @@
 	{device} (not connected)	{device} (não conectado)
 	{encoder} (not in this ffmpeg)	{encoder} (ausente neste ffmpeg)
 	{program} did not report its version	{program} não informou sua versão
+	Compact (small files)	Compacta (arquivos pequenos)
+	Duplicate Profile	Duplicar perfil
+	Duplicate Scene Collection	Duplicar coleção de cenas
+	Lossless (very large files)	Sem perdas (arquivos muito grandes)
+	Move Down	Descer
+	Move to Bottom	Mover para o fim
+	Move to Top	Mover para o início
+	Move Up	Subir
+	New Scene Collection	Nova coleção de cenas
+	Pristine (large files)	Impecável (arquivos grandes)
+	Rename Profile	Renomear perfil
+	Rename Scene Collection	Renomear coleção de cenas
+	Unlock	Desbloquear
+	Unmute	Ativar som
 @msg	A plug-in could not be loaded: {error}	Não foi possível carregar um plug-in: {error}
 @msg	Audio monitoring could not start: {error}	Não foi possível iniciar o monitoramento de áudio: {error}
 @msg	Audio monitoring stopped: {error}	O monitoramento de áudio parou: {error}

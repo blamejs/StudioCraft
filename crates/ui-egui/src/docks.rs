@@ -122,7 +122,7 @@ fn rename_field(ui: &mut Ui, text: &mut String) -> (Option<String>, bool) {
 }
 
 /// The labels of the four move commands, by their `to` parameter.
-const MOVES: [(&str, &str); 4] = [("top", "Move to Top"), ("up", "Move Up"), ("down", "Move Down"), ("bottom", "Move to Bottom")];
+pub(crate) const MOVES: [(&str, &str); 4] = [("top", "Move to Top"), ("up", "Move Up"), ("down", "Move Down"), ("bottom", "Move to Bottom")];
 
 pub fn scenes(ui: &mut Ui, studio: &Studio, st: &mut DockState, acts: &mut Vec<Act>) -> Drawn {
     let c = studio.collection();

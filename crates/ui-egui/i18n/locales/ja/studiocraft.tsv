@@ -364,6 +364,20 @@
 	{device} (not connected)	{device} (未接続)
 	{encoder} (not in this ffmpeg)	{encoder} (この ffmpeg にはありません)
 	{program} did not report its version	{program} がバージョンを返しませんでした
+	Compact (small files)	コンパクト (小さいファイル)
+	Duplicate Profile	プロファイルを複製
+	Duplicate Scene Collection	シーンコレクションを複製
+	Lossless (very large files)	ロスレス (非常に大きいファイル)
+	Move Down	下へ移動
+	Move to Bottom	最後へ移動
+	Move to Top	先頭へ移動
+	Move Up	上へ移動
+	New Scene Collection	新しいシーンコレクション
+	Pristine (large files)	最高品質 (大きいファイル)
+	Rename Profile	プロファイル名を変更
+	Rename Scene Collection	シーンコレクション名を変更
+	Unlock	ロックを解除
+	Unmute	ミュートを解除
 @msg	A plug-in could not be loaded: {error}	プラグインを読み込めませんでした: {error}
 @msg	Audio monitoring could not start: {error}	音声モニタリングを開始できませんでした: {error}
 @msg	Audio monitoring stopped: {error}	音声モニタリングが停止しました: {error}

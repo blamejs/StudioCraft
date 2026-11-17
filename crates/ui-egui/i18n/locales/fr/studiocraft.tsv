@@ -373,6 +373,20 @@
 	{n} kbps	{n} kb/s
 	{program} did not report its version	{program} n'a pas indiqué sa version
 	{status} · {mb} MB	{status} · {mb} Mo
+	Compact (small files)	Compacte (petits fichiers)
+	Duplicate Profile	Dupliquer le profil
+	Duplicate Scene Collection	Dupliquer la collection de scènes
+	Lossless (very large files)	Sans perte (fichiers très volumineux)
+	Move Down	Descendre
+	Move to Bottom	Placer en bas
+	Move to Top	Placer en haut
+	Move Up	Monter
+	New Scene Collection	Nouvelle collection de scènes
+	Pristine (large files)	Impeccable (fichiers volumineux)
+	Rename Profile	Renommer le profil
+	Rename Scene Collection	Renommer la collection de scènes
+	Unlock	Déverrouiller
+	Unmute	Rétablir le son
 @msg	A plug-in could not be loaded: {error}	Un plug-in n'a pas pu être chargé : {error}
 @msg	Audio monitoring could not start: {error}	L'écoute audio n'a pas pu démarrer : {error}
 @msg	Audio monitoring stopped: {error}	L'écoute audio s'est arrêtée : {error}

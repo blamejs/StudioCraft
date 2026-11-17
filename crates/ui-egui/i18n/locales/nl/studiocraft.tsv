@@ -354,6 +354,20 @@
 	{device} (not connected)	{device} (niet aangesloten)
 	{encoder} (not in this ffmpeg)	{encoder} (niet in deze ffmpeg)
 	{program} did not report its version	{program} heeft geen versie gemeld
+	Compact (small files)	Compact (kleine bestanden)
+	Duplicate Profile	Profiel dupliceren
+	Duplicate Scene Collection	Scèneverzameling dupliceren
+	Lossless (very large files)	Verliesvrij (zeer grote bestanden)
+	Move Down	Omlaag
+	Move to Bottom	Helemaal omlaag
+	Move to Top	Helemaal omhoog
+	Move Up	Omhoog
+	New Scene Collection	Nieuwe scèneverzameling
+	Pristine (large files)	Onberispelijk (grote bestanden)
+	Rename Profile	Naam van profiel wijzigen
+	Rename Scene Collection	Naam van scèneverzameling wijzigen
+	Unlock	Ontgrendelen
+	Unmute	Dempen opheffen
 @msg	A plug-in could not be loaded: {error}	Een plug-in kon niet worden geladen: {error}
 @msg	Audio monitoring could not start: {error}	Meeluisteren kon niet starten: {error}
 @msg	Audio monitoring stopped: {error}	Meeluisteren is gestopt: {error}
