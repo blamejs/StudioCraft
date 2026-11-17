@@ -442,13 +442,23 @@ impl Drop for Native {
     }
 }
 
+/// When the video packet `p` is written relative to the sound, in frames. `last` is the order of
+/// the packet before it and is moved on.
+fn video_order(p: &Packet, last: &mut i64) -> i64 {
+    // A keyframe starts a cluster at its presentation time, so the sound before that time goes
+    // into the cluster before it. The frames after a keyframe in decoding order are shown after
+    // it; one whose decoding time comes before the keyframe's presentation time is written with
+    // the keyframe, so the order never goes back.
+    let order = if p.keyframe { p.pts.max(p.dts) } else { p.dts };
+    *last = order.max(*last);
+    *last
+}
+
 /// Hand the video packets in `out` to the file thread; `false` when the recording cannot go on.
-fn send_video(out: &mut Vec<Packet>, shared: &Shared, rate: (u32, u32)) -> bool {
+/// `last` is the order of the last packet handed over ([`video_order`]).
+fn send_video(out: &mut Vec<Packet>, shared: &Shared, rate: (u32, u32), last: &mut i64) -> bool {
     for p in out.drain(..) {
-        // A keyframe starts a cluster at its presentation time, so the sound before that time
-        // goes into the cluster before it. The frames after a keyframe in decoding order are
-        // shown after it.
-        let order = if p.keyframe { p.pts.max(p.dts) } else { p.dts };
+        let order = video_order(&p, last);
         let item = Item {
             track: Track::Video,
             order_ns: frames_ns(order, rate.0, rate.1),
@@ -474,7 +484,7 @@ fn encode_video(
 ) {
     let _producing = Producing(shared, Track::Video);
     let fps = f64::from(rate.0) / f64::from(rate.1.max(1));
-    let (mut next, mut coded) = (0u64, 0i64);
+    let (mut next, mut coded, mut order) = (0u64, 0i64, i64::MIN);
     let mut last: Option<Arc<PooledFrame>> = None;
     let mut out = Vec::new();
     'frames: loop {
@@ -505,7 +515,7 @@ fn encode_video(
             }
             coded += 1;
             stats.frames.fetch_add(1, Ordering::Relaxed);
-            if !send_video(&mut out, shared, rate) {
+            if !send_video(&mut out, shared, rate, &mut order) {
                 return;
             }
         }
@@ -513,7 +523,7 @@ fn encode_video(
         last = Some(frame);
     }
     session.flush(&mut out);
-    send_video(&mut out, shared, rate);
+    send_video(&mut out, shared, rate, &mut order);
 }
 
 fn encode_audio(mut session: AacSession, q: &Fifo<PooledBlock>, shared: &Shared, start: Tick) {

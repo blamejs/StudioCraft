@@ -307,6 +307,16 @@ fn only_mkv_files_and_48_khz_are_taken() {
 }
 
 #[test]
+fn video_order_never_goes_back_after_a_keyframe_with_b_frames() {
+    // Decoding order around a keyframe with two B-frames: (pts, dts, keyframe).
+    let coded = [(57, 55, false), (58, 56, false), (60, 57, true), (63, 58, false), (61, 59, false), (62, 60, false), (66, 61, false)];
+    let mut last = i64::MIN;
+    let order: Vec<i64> =
+        coded.iter().map(|&(pts, dts, keyframe)| video_order(&Packet { data: Vec::new(), pts, dts, keyframe }, &mut last)).collect();
+    assert_eq!(order, [55, 56, 60, 60, 60, 60, 61], "the keyframe at its presentation time, the frames after it no earlier");
+}
+
+#[test]
 fn time_conversions_are_exact() {
     assert_eq!(frames_ns(3, 30_000, 1001), 100_100_000);
     assert_eq!(frames_ns(i64::from(u32::MAX), 60, 1), 71_582_788_250_000_000);
