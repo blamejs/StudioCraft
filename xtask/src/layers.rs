@@ -17,6 +17,7 @@ pub const TABLE: &[(&str, Class)] = &[
     ("media", Class::Layer(0)),
     // Shared crates built here before they move to craft-libs.
     ("craft-color-transform", Class::Layer(0)),
+    ("craft-scopes", Class::Layer(0)),
     ("plugin", Class::Layer(1)),
     ("engine", Class::Layer(2)),
     ("render", Class::Layer(2)),
