@@ -363,6 +363,14 @@
 	YUV vectorscope	YUV ベクトルスコープ
 	{device} (not connected)	{device} (未接続)
 	{encoder} (not in this ffmpeg)	{encoder} (この ffmpeg にはありません)
+	Hardware encoder	ハードウェアエンコーダー
+	Automatic (the first that passes a test)	自動 (テストに通った最初のもの)
+	Software only	ソフトウェアのみ
+	Used by recordings and streams whose encoder is Hardware. Automatic tests each hardware encoder with one frame and uses x264 when none works.	エンコーダーが「ハードウェア」の録画と配信で使われます。「自動」は各ハードウェアエンコーダーを 1 フレームでテストし、どれも動かなければ x264 を使います。
+	Hardware (set in Settings › Video)	ハードウェア (設定 › 映像 で指定)
+@msg	No hardware encoder passed its test; using {encoder}	テストに通ったハードウェアエンコーダーがありません。{encoder} を使用します
+@msg	The hardware encoder tests could not run: {error}	ハードウェアエンコーダーのテストを実行できませんでした: {error}
+@msg	{encoder} stopped working; the next start tries another encoder	{encoder} が動作しなくなりました。次回の開始時は別のエンコーダーを試します
 	{program} did not report its version	{program} がバージョンを返しませんでした
 	Automatic (fastest)	自動 (最速)
 	Drawing with {adapter}	{adapter} で描画中

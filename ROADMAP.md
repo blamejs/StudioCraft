@@ -67,6 +67,10 @@
   Software or a listed adapter), used from the next start, with a notice when the chosen adapter
   is missing or the app fell back to software. After a device loss the app starts again on a new
   device, and after 3 losses in 10 minutes it draws in software.
+- The Hardware video encoder for recordings and streams runs the hardware encoder set in Settings ›
+  Video › Hardware acceleration. Automatic tests each candidate with a one-frame encode, in an order
+  set by the graphics adapter's vendor, and uses x264 when none works. NVENC, AMF and Quick Sync
+  offer HEVC and AV1 as well, and VideoToolbox and VA-API are listed.
 
 ## Next
 

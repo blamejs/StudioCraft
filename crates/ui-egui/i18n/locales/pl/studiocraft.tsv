@@ -362,6 +362,14 @@
 	YUV vectorscope	Wektoroskop YUV
 	{device} (not connected)	{device} (niepodłączone)
 	{encoder} (not in this ffmpeg)	{encoder} (brak w tym ffmpeg)
+	Hardware encoder	Koder sprzętowy
+	Automatic (the first that passes a test)	Automatycznie (pierwszy, który przejdzie test)
+	Software only	Tylko programowo
+	Used by recordings and streams whose encoder is Hardware. Automatic tests each hardware encoder with one frame and uses x264 when none works.	Używany przez nagrania i transmisje, których koder to Sprzętowy. Automatycznie sprawdza każdy koder sprzętowy jedną klatką i używa x264, gdy żaden nie działa.
+	Hardware (set in Settings › Video)	Sprzętowy (ustawiany w Ustawienia › Wideo)
+@msg	No hardware encoder passed its test; using {encoder}	Żaden koder sprzętowy nie przeszedł testu; używany jest {encoder}
+@msg	The hardware encoder tests could not run: {error}	Nie można uruchomić testów koderów sprzętowych: {error}
+@msg	{encoder} stopped working; the next start tries another encoder	{encoder} przestał działać; przy następnym uruchomieniu zostanie wypróbowany inny koder
 	{program} did not report its version	{program} nie podał swojej wersji
 	Automatic (fastest)	Automatycznie (najszybciej)
 	Drawing with {adapter}	Rysowanie za pomocą {adapter}

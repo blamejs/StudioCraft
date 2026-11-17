@@ -1442,6 +1442,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-hwenc"
+version = "0.1.0"
+
+[[package]]
 name = "craft-i18n"
 version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=7780b4f58ec3d56b1f908c8fa3b1258fabae3880#7780b4f58ec3d56b1f908c8fa3b1258fabae3880"
@@ -5748,6 +5752,7 @@ name = "studiocraft-outputs"
 version = "0.1.0"
 dependencies = [
  "craft-audio",
+ "craft-hwenc",
  "craft-media",
  "craft-video",
  "crossbeam-queue",
@@ -5838,6 +5843,7 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "craft-atomic",
+ "craft-hwenc",
  "dirs",
  "image",
  "log",
@@ -5861,6 +5867,7 @@ dependencies = [
  "craft-atomic",
  "craft-dialogs",
  "craft-fonts-build",
+ "craft-hwenc",
  "craft-i18n",
  "craft-keymap",
  "craft-menu",

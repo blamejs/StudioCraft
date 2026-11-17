@@ -12,6 +12,7 @@ studiocraft-media.workspace = true
 studiocraft-plugin.workspace = true
 studiocraft-platform.workspace = true
 studiocraft-encode.workspace = true
+craft-hwenc.workspace = true
 craft-media = { workspace = true, features = ["matroska"] }
 crossbeam-queue.workspace = true
 log.workspace = true

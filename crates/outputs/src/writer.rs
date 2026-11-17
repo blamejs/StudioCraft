@@ -44,8 +44,13 @@ struct Shared {
     /// Late frames dropped by the writer (queue overflows are counted by the queue).
     late: AtomicU64,
     failure: Mutex<Option<String>>,
+    /// When `failure` was set.
+    failed_at: Mutex<Option<Instant>>,
     /// The last line ffmpeg reported that was not progress.
     last_message: Mutex<String>,
+    /// The first [`COMPONENT_LINES`] such lines from ffmpeg's components (`[h264_nvenc @ …] …`),
+    /// one of which names the encoder when the encoder failed; a general line often follows them.
+    component_message: Mutex<Vec<String>>,
     /// Text never logged or shown: the stream key.
     secret: String,
     /// Where the two writers are.
@@ -126,6 +131,52 @@ impl Timeline {
     }
 }
 
+/// The distinct component lines of ffmpeg's errors a writer keeps. ffmpeg runs with
+/// `-loglevel error`, so it prints only errors, and a repeated error is kept once.
+const COMPONENT_LINES: usize = 16;
+
+/// Why ffmpeg ended with exit status `code`: the components' error lines when ffmpeg ended with
+/// another line after them, then the last line.
+fn ended_text(shared: &Shared, code: impl std::fmt::Display) -> String {
+    let last = shared.last_message.lock().map(|m| m.clone()).unwrap_or_default();
+    let component = shared.component_message.lock().map(|m| m.join("; ")).unwrap_or_default();
+    match (component.is_empty() || component == last, last.is_empty()) {
+        (_, true) => format!("ffmpeg stopped unexpectedly ({code})"),
+        (true, false) => format!("ffmpeg stopped: {last}"),
+        (false, false) => format!("ffmpeg stopped: {component}; {last}"),
+    }
+}
+
+/// Whether the log thread, the last of a writer's `threads`, has read all of ffmpeg's output.
+fn log_read(threads: &[JoinHandle<()>]) -> bool {
+    threads.last().is_none_or(JoinHandle::is_finished)
+}
+
+/// How long a writer's failure waits for ffmpeg's error lines while ffmpeg still runs.
+const FAILURE_GRACE: Duration = Duration::from_secs(2);
+
+/// Whether a writer's failure is reported. A failure the writer found itself (`since` is `None`)
+/// is reported at once. A pipe failure `since` ago is reported once the log thread has read
+/// ffmpeg's last lines, or after [`FAILURE_GRACE`] when ffmpeg still runs (it can keep reading
+/// another pipe).
+fn failure_ready(exited: bool, log_read: bool, since: Option<Duration>) -> bool {
+    match since {
+        None => true,
+        Some(since) => log_read || (!exited && since >= FAILURE_GRACE),
+    }
+}
+
+/// A writer's `failure` (ffmpeg stopped reading its input) with the components' error lines and
+/// ffmpeg's last line, which say why when an encoder or its device failed.
+fn failure_text(shared: &Shared, failure: String) -> String {
+    let mut lines = shared.component_message.lock().map(|m| m.clone()).unwrap_or_default();
+    let last = shared.last_message.lock().map(|m| m.clone()).unwrap_or_default();
+    if !last.is_empty() && !lines.contains(&last) {
+        lines.push(last);
+    }
+    if lines.is_empty() { failure } else { format!("{failure}: {}", lines.join("; ")) }
+}
+
 /// `line` with every occurrence of `secret` replaced by `***`.
 fn redact(line: &str, secret: &str) -> String {
     if secret.is_empty() { line.to_string() } else { line.replace(secret, "***") }
@@ -136,6 +187,19 @@ impl Shared {
         if let Ok(mut f) = self.failure.lock()
             && f.is_none()
         {
+            *f = Some(message);
+        }
+    }
+
+    /// [`Shared::fail`] for a pipe ffmpeg stopped reading; ffmpeg's error lines that say why may
+    /// still come.
+    fn fail_pipe(&self, message: String) {
+        if let Ok(mut f) = self.failure.lock()
+            && f.is_none()
+        {
+            if let Ok(mut at) = self.failed_at.lock() {
+                *at = Some(Instant::now());
+            }
             *f = Some(message);
         }
     }
@@ -244,19 +308,24 @@ impl Writer {
         }
         self.stats.queued.store(self.video.len() as u64, Ordering::Relaxed);
         self.stats.dropped.store(self.video.dropped() + self.shared.late.load(Ordering::Relaxed), Ordering::Relaxed);
-        if let Some(f) = self.shared.failure.lock().ok().and_then(|f| f.clone()) {
-            return OutputStatus::Failed(f);
-        }
         let exited = self.child.try_lock().ok().and_then(|mut c| c.try_wait().ok().flatten());
-        if let Some(code) = exited {
+        let log_read = log_read(&self.threads);
+        let since = self.shared.failed_at.lock().ok().and_then(|at| *at).map(|at| at.elapsed());
+        if let Some(f) = self.shared.failure.lock().ok().and_then(|f| f.clone())
+            && failure_ready(exited.is_some(), log_read, since)
+        {
+            return OutputStatus::Failed(failure_text(&self.shared, f));
+        }
+        if let Some(code) = exited
+            && log_read
+        {
             return OutputStatus::Failed(self.ended_message(code));
         }
         if self.shared.started.load(Ordering::Relaxed) { OutputStatus::Running } else { OutputStatus::Starting }
     }
 
     fn ended_message(&self, code: std::process::ExitStatus) -> String {
-        let last = self.shared.last_message.lock().map(|m| m.clone()).unwrap_or_default();
-        if last.is_empty() { format!("ffmpeg stopped unexpectedly ({code})") } else { format!("ffmpeg stopped: {last}") }
+        ended_text(&self.shared, code)
     }
 
     /// End both inputs and wait for ffmpeg to finish the file or stream.
@@ -318,7 +387,7 @@ impl Writer {
             Err(e) => Err(e),
         };
         // A writer thread can fail while it finishes its queue after the stop.
-        let failed_writing = self.shared.failure.lock().ok().and_then(|f| f.clone());
+        let failed_writing = self.shared.failure.lock().ok().and_then(|f| f.clone()).map(|f| failure_text(&self.shared, f));
         let result = match (failed_before, failed_writing, result) {
             (OutputStatus::Failed(e), _, _) | (_, Some(e), _) => Err(PluginError::Failed(e)),
             (_, None, r) => r,
@@ -452,12 +521,12 @@ fn write_video(mut stdin: impl Write, q: &Fifo<Arc<PooledFrame>>, shared: &Share
         let fill = last.clone().unwrap_or_else(|| Arc::clone(&frame));
         for _ in 0..n {
             if !write(&mut stdin, &fill) {
-                shared.fail("ffmpeg stopped reading video".into());
+                shared.fail_pipe("ffmpeg stopped reading video".into());
                 return;
             }
         }
         if !write(&mut stdin, &frame) {
-            shared.fail("ffmpeg stopped reading video".into());
+            shared.fail_pipe("ffmpeg stopped reading video".into());
             return;
         }
         next = after;
@@ -486,7 +555,7 @@ fn write_audio(mut sink: impl Write, q: &Fifo<PooledBlock>, shared: &Shared, sta
         while gap > 0 {
             let frames = gap.min(BLOCK_FRAMES as i64) as usize;
             if sink.write_all(&silence[..frames * CHANNELS * 4]).is_err() {
-                shared.fail("ffmpeg stopped reading audio".into());
+                shared.fail_pipe("ffmpeg stopped reading audio".into());
                 return;
             }
             written += frames as i64;
@@ -495,7 +564,7 @@ fn write_audio(mut sink: impl Write, q: &Fifo<PooledBlock>, shared: &Shared, sta
         bytes.clear();
         bytes.extend(block.samples.iter().flat_map(|s| s.to_le_bytes()));
         if sink.write_all(&bytes).is_err() {
-            shared.fail("ffmpeg stopped reading audio".into());
+            shared.fail_pipe("ffmpeg stopped reading audio".into());
             return;
         }
         shared.started.store(true, Ordering::Relaxed);
@@ -519,6 +588,13 @@ fn read_log(stderr: impl Read, shared: &Shared, stats: &EncoderStats) {
             _ if !line.is_empty() => {
                 let line = redact(line, &shared.secret);
                 log::warn!("ffmpeg: {line}");
+                if line.starts_with('[')
+                    && let Ok(mut m) = shared.component_message.lock()
+                    && m.len() < COMPONENT_LINES
+                    && !m.contains(&line)
+                {
+                    m.push(line.clone());
+                }
                 if let Ok(mut m) = shared.last_message.lock() {
                     *m = line;
                 }
@@ -771,5 +847,55 @@ mod tests {
         read_log(text.as_bytes(), &shared, &stats);
         assert_eq!(stats.bytes.load(Ordering::Relaxed), 4096);
         assert_eq!(*shared.last_message.lock().unwrap(), "rtmp://x: Connection refused");
+        assert_eq!(ended_text(&shared, 1), "ffmpeg stopped: rtmp://x: Connection refused");
+    }
+
+    #[test]
+    fn the_encoders_line_is_kept_when_ffmpeg_ends_with_a_general_one() {
+        let shared = Shared::default();
+        let text = "[in#0 @ 0x3] Error during demuxing\n[h264_nvenc @ 0x1] Failed locking bitstream buffer: out of memory\n[out#0/mp4 @ 0x2] Error writing trailer\nConversion failed!\n";
+        read_log(text.as_bytes(), &shared, &EncoderStats::default());
+        let components = "[in#0 @ 0x3] Error during demuxing; [h264_nvenc @ 0x1] Failed locking bitstream buffer: out of memory; [out#0/mp4 @ 0x2] Error writing trailer";
+        assert_eq!(ended_text(&shared, 1), format!("ffmpeg stopped: {components}; Conversion failed!"));
+        assert_eq!(ended_text(&Shared::default(), 1), "ffmpeg stopped unexpectedly (1)");
+        assert_eq!(
+            failure_text(&shared, "ffmpeg stopped reading video".into()),
+            format!("ffmpeg stopped reading video: {components}; Conversion failed!")
+        );
+        let plain = Shared::default();
+        read_log(b"Cannot load nvcuda.dll\n".as_slice(), &plain, &EncoderStats::default());
+        assert_eq!(failure_text(&plain, "ffmpeg stopped reading video".into()), "ffmpeg stopped reading video: Cannot load nvcuda.dll");
+        let many = Shared::default();
+        let log: String = (0..40).map(|n| format!("[c{n} @ 1] e\n[c0 @ 1] e\n")).collect();
+        read_log(log.as_bytes(), &many, &EncoderStats::default());
+        let kept = many.component_message.lock().unwrap().clone();
+        assert_eq!(kept.len(), COMPONENT_LINES, "a repeated line is kept once");
+        assert_eq!(kept[1], "[c1 @ 1] e");
+        assert_eq!(failure_text(&Shared::default(), "ffmpeg stopped reading audio".into()), "ffmpeg stopped reading audio");
+    }
+
+    #[test]
+    fn a_failure_waits_for_the_log_thread_to_read_ffmpegs_last_lines() {
+        let (tx, rx) = std::sync::mpsc::channel::<()>();
+        let writer = std::thread::spawn(|| {});
+        let log = std::thread::spawn(move || {
+            let _ = rx.recv();
+        });
+        while !writer.is_finished() {
+            std::thread::yield_now();
+        }
+        let threads = vec![writer, log];
+        assert!(!log_read(&threads), "the log thread still reads");
+        let _ = tx.send(());
+        while !threads[1].is_finished() {
+            std::thread::yield_now();
+        }
+        assert!(log_read(&threads));
+        assert!(log_read(&[]));
+        assert!(!failure_ready(false, false, Some(Duration::ZERO)), "ffmpeg may still log why");
+        assert!(failure_ready(false, false, Some(FAILURE_GRACE)), "ffmpeg runs on, reading another pipe");
+        assert!(!failure_ready(true, false, Some(FAILURE_GRACE * 10)), "ffmpeg exited: its last lines come");
+        assert!(failure_ready(true, true, Some(Duration::ZERO)));
+        assert!(failure_ready(false, false, None), "a frame of the wrong size is reported at once");
     }
 }

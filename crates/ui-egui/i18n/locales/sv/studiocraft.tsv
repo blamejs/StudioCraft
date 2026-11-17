@@ -363,6 +363,14 @@
 	YUV vectorscope	YUV-vektorskop
 	{device} (not connected)	{device} (inte ansluten)
 	{encoder} (not in this ffmpeg)	{encoder} (finns inte i denna ffmpeg)
+	Hardware encoder	Hårdvarukodare
+	Automatic (the first that passes a test)	Automatiskt (den första som klarar ett test)
+	Software only	Endast programvara
+	Used by recordings and streams whose encoder is Hardware. Automatic tests each hardware encoder with one frame and uses x264 when none works.	Används av inspelningar och sändningar vars kodare är Hårdvara. Automatiskt testar varje hårdvarukodare med en bildruta och använder x264 när ingen fungerar.
+	Hardware (set in Settings › Video)	Hårdvara (anges i Inställningar › Video)
+@msg	No hardware encoder passed its test; using {encoder}	Ingen hårdvarukodare klarade sitt test; {encoder} används
+@msg	The hardware encoder tests could not run: {error}	Testerna av hårdvarukodarna kunde inte köras: {error}
+@msg	{encoder} stopped working; the next start tries another encoder	{encoder} slutade fungera; nästa start provar en annan kodare
 	{program} did not report its version	{program} rapporterade inte sin version
 	Compact (small files)	Kompakt (små filer)
 	Duplicate Profile	Duplicera profil

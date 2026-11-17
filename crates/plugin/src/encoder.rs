@@ -3,7 +3,8 @@
 //! An encoder names the [`Codec`] it writes. An ffmpeg encoder runs inside the separate `ffmpeg`
 //! program the user installs, and describes itself as the codec arguments that program takes
 //! ([`Encoder::ffmpeg`], [`FfmpegEncoder`]). Hardware encoders (NVENC, AMF, Quick Sync, Media
-//! Foundation) are ffmpeg encoders whose arguments name ffmpeg's hardware codec. An encoder without
+//! Foundation, VideoToolbox, VA-API) are ffmpeg encoders whose arguments name ffmpeg's hardware
+//! codec. An encoder without
 //! an ffmpeg form is built in: it runs in the app's own process as a [`VideoSession`]
 //! ([`Encoder::open`]), and only where the output says it can ([`EncoderEnv::builtin`]).
 
@@ -27,6 +28,8 @@ pub enum Codec {
     H264,
     /// HEVC (ITU-T H.265, High Efficiency Video Coding).
     Hevc,
+    /// AV1 (AOMedia Video 1).
+    Av1,
     /// AAC (ISO/IEC 14496-3, Advanced Audio Coding).
     Aac,
 }
@@ -37,6 +40,7 @@ impl Codec {
         match self {
             Codec::H264 => "h264",
             Codec::Hevc => "hevc",
+            Codec::Av1 => "av1",
             Codec::Aac => "aac",
         }
     }
@@ -44,7 +48,7 @@ impl Codec {
     /// Whether the format holds video or audio.
     pub fn kind(self) -> EncoderKind {
         match self {
-            Codec::H264 | Codec::Hevc => EncoderKind::Video,
+            Codec::H264 | Codec::Hevc | Codec::Av1 => EncoderKind::Video,
             Codec::Aac => EncoderKind::Audio,
         }
     }

@@ -441,6 +441,8 @@ impl SettingsWindow {
         ui.add_space(4.0);
         let listed = &self.adapters;
         let chosen = &mut self.graphics_adapter;
+        let encoder = &mut self.draft.output.hardware_encoder;
+        let offered = &self.offered;
         egui::Grid::new("hardware-grid").num_columns(2).spacing([12.0, 8.0]).show(ui, |ui| {
             ui.label(tl!("Graphics adapter"));
             ui.vertical(|ui| {
@@ -462,6 +464,23 @@ impl SettingsWindow {
                 ui.weak(craft_i18n::fmt(tl!("Drawing with {adapter}"), &[("adapter", name)]));
                 ui.end_row();
             }
+            ui.label(tl!("Hardware encoder"));
+            ui.vertical(|ui| {
+                craft_ui::ComboBox::from_id_salt("hardware-encoder").selected_text(hardware_encoder_label(encoder)).width(320.0).show_ui(ui, |ui| {
+                    for id in hardware_encoder_choices(offered, encoder) {
+                        let text = hardware_encoder_label(&id);
+                        ui.selectable_value(encoder, id, text);
+                    }
+                });
+                ui.label(
+                    RichText::new(tl!(
+                        "Used by recordings and streams whose encoder is Hardware. Automatic tests each hardware encoder with one frame and uses x264 when none works."
+                    ))
+                    .small()
+                    .weak(),
+                );
+            });
+            ui.end_row();
         });
         for n in &self.gpu_notices {
             ui.colored_label(ui.visuals().warn_fg_color, n.shown());
@@ -541,6 +560,34 @@ impl SettingsWindow {
     }
 }
 
+/// The Hardware encoder setting's choices: Automatic, Software only, then each hardware encoder of
+/// this system that the ffmpeg program lists (every one when the list could not be read), and the
+/// saved choice when it is none of those.
+fn hardware_encoder_choices(offered: &[String], saved: &str) -> Vec<String> {
+    let os = craft_hwenc::Os::current();
+    let mut ids: Vec<String> = ["auto", "software"].map(String::from).to_vec();
+    ids.extend(
+        craft_hwenc::CANDIDATES
+            .iter()
+            .filter(|c| c.runs_on(os) && (offered.is_empty() || offered.iter().any(|o| o == c.ffmpeg_codec)))
+            .map(|c| c.id.to_string()),
+    );
+    let saved = craft_hwenc::Preference::parse(saved);
+    if !ids.iter().any(|i| i == saved.id()) {
+        ids.push(saved.id().to_string());
+    }
+    ids
+}
+
+/// The shown name of a Hardware encoder setting value.
+fn hardware_encoder_label(id: &str) -> String {
+    match craft_hwenc::Preference::parse(id) {
+        craft_hwenc::Preference::Auto => tl!("Automatic (the first that passes a test)").to_string(),
+        craft_hwenc::Preference::Software => tl!("Software only").to_string(),
+        craft_hwenc::Preference::Named(id) => craft_hwenc::candidate(&id).map_or(id, |c| tl!(c.name).to_string()),
+    }
+}
+
 /// The video encoders a recording (`streaming` false) or a stream can choose, each with whether
 /// it can start: encoders the output cannot run are left out (a stream runs no built-in encoder,
 /// and carries H.264 only), and ones the ffmpeg program does not list cannot start.
@@ -617,6 +664,23 @@ mod tests {
         let notice = w.gpu_notices[0].shown();
         assert!(texts.contains(&notice), "the notice is shown: {texts:?}");
         assert_eq!(w.graphics_adapter, Preference::LowPower, "drawing the tab changes nothing");
+        assert!(texts.iter().any(|t| t == tl!("Hardware encoder")), "{texts:?}");
+        assert!(texts.iter().any(|t| t == tl!("Automatic (the first that passes a test)")), "the default is shown: {texts:?}");
+    }
+
+    #[test]
+    fn the_hardware_encoder_choices_are_this_systems_encoders_that_ffmpeg_lists() {
+        let os = craft_hwenc::Os::current();
+        let listed: Vec<String> = craft_hwenc::CANDIDATES.iter().filter(|c| c.runs_on(os)).take(1).map(|c| c.ffmpeg_codec.to_string()).collect();
+        let choices = hardware_encoder_choices(&listed, "auto");
+        assert_eq!(choices[..2], ["auto", "software"]);
+        assert_eq!(choices.len(), 2 + listed.len(), "{choices:?}");
+        let every = hardware_encoder_choices(&[], "");
+        assert_eq!(every.len(), 2 + craft_hwenc::CANDIDATES.iter().filter(|c| c.runs_on(os)).count(), "an unread list shows every one: {every:?}");
+        let saved = hardware_encoder_choices(&listed, "qsv_av1_gone");
+        assert_eq!(saved.last().map(String::as_str), Some("qsv_av1_gone"), "the saved choice stays selectable");
+        assert_eq!(hardware_encoder_label("qsv_av1_gone"), "qsv_av1_gone");
+        assert_eq!(hardware_encoder_label("nvenc_h264"), tl!("NVIDIA NVENC H.264"));
     }
 
     #[test]
