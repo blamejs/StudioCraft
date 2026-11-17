@@ -275,10 +275,13 @@ impl Scopes {
     }
 
     /// Wait until the picture of the copy handed over with [`Scopes::pump`] has been taken, by
-    /// that call or by this one (tests). False when the thread ended before it came.
+    /// that call or by this one, and the thread is idle (tests). False when the thread ended
+    /// first.
     #[cfg(test)]
     pub fn wait(&mut self) -> bool {
-        while self.pending {
+        // The thread clears `busy` just after it pushes the picture; waiting for both keeps the
+        // next `pump` from finding the thread still busy.
+        while self.pending || self.shared.busy.load(Ordering::Acquire) {
             if let Some(r) = self.shared.pictures.pop() {
                 self.received(r);
             } else if self.thread.as_ref().is_none_or(|t| t.is_finished()) {
