@@ -146,6 +146,9 @@ pub fn select(candidates: &[Candidate], preference: &Preference) -> Option<Selec
     let wanted = match preference {
         Preference::Auto | Preference::LowPower => None,
         Preference::Adapter(key) => {
+            // An entry that reports no bus id matches any saved bus. When it is the same model on
+            // the same driver it cannot be told apart from an older version of that driver, and
+            // the correction draws with the entry exposing the most features.
             let found =
                 candidates.iter().enumerate().filter(|(_, c)| c.usable && key.matches(c)).max_by_key(|(i, c)| (c.features, std::cmp::Reverse(*i)));
             match found.map(|(index, c)| corrected(candidates, index, c)) {
