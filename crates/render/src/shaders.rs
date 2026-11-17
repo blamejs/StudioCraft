@@ -123,30 +123,6 @@ const TRANSITION_MAIN: &str = r"
 }
 ";
 
-/// RGB to NV12 (BT.709, limited range). The luma pass draws at the output size; the chroma pass
-/// draws at half size and averages the four pixels under each sample through the linear sampler.
-const NV12: &str = r"
-@group(1) @binding(0) var tex: texture_2d<f32>;
-@group(1) @binding(1) var samp: sampler;
-
-fn luma(c: vec3<f32>) -> f32 {
-    return dot(c, vec3<f32>(0.2126, 0.7152, 0.0722));
-}
-
-@fragment fn fs_y(v: VOut) -> @location(0) vec4<f32> {
-    let c = textureSample(tex, samp, v.uv).rgb;
-    return vec4<f32>((16.0 + 219.0 * luma(c)) / 255.0, 0.0, 0.0, 1.0);
-}
-
-@fragment fn fs_uv(v: VOut) -> @location(0) vec4<f32> {
-    let c = textureSample(tex, samp, v.uv).rgb;
-    let y = luma(c);
-    let cb = (128.0 + 224.0 * (c.b - y) / 1.8556) / 255.0;
-    let cr = (128.0 + 224.0 * (c.r - y) / 1.5748) / 255.0;
-    return vec4<f32>(cb, cr, 0.0, 1.0);
-}
-";
-
 pub fn item() -> String {
     format!("{COMMON}{ITEM}")
 }
@@ -161,8 +137,4 @@ pub fn effect_with_image(body: &str) -> String {
 
 pub fn transition(body: &str) -> String {
     format!("{COMMON}{TRANSITION_HEAD}{body}\n{TRANSITION_MAIN}")
-}
-
-pub fn nv12() -> String {
-    format!("{COMMON}{NV12}")
 }

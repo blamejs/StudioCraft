@@ -30,6 +30,7 @@ craft-color-transform = { path = "crates/craft-color-transform" }
 craft-scopes = { path = "crates/craft-scopes" }
 craft-audio-dsp = { path = "crates/craft-audio-dsp" }
 craft-gpu-device = { path = "crates/craft-gpu-device" }
+craft-gpu-yuv = { path = "crates/craft-gpu-yuv" }
 
 # foundation
 thiserror = "2"

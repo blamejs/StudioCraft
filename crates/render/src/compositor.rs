@@ -5,6 +5,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::SyncSender;
 
+use craft_gpu_yuv::{Conversion, Converter, Format, Matrix, Range};
 use crossbeam_queue::ArrayQueue;
 use studiocraft_media::Tick;
 use studiocraft_media::clock::duration_of;
@@ -154,7 +155,8 @@ pub struct CanvasViews {
 struct Target {
     texture: wgpu::Texture,
     view: wgpu::TextureView,
-    bind: wgpu::BindGroup,
+    /// The texture bound for the NV12 conversion.
+    yuv: craft_gpu_yuv::Source,
 }
 
 /// A source's texture on the GPU.
@@ -223,8 +225,8 @@ struct Pipes {
     layout2: wgpu::PipelineLayout,
     layout_image: wgpu::PipelineLayout,
     item: wgpu::RenderPipeline,
-    nv12_y: wgpu::RenderPipeline,
-    nv12_uv: wgpu::RenderPipeline,
+    /// The program to NV12 for the encoders and the scopes.
+    yuv: Converter,
     effects: HashMap<&'static str, Option<wgpu::RenderPipeline>>,
     /// The effect keys compiled to read a picture.
     image_effects: HashSet<&'static str>,
@@ -487,12 +489,12 @@ impl Compositor {
 
     /// Start, change or stop converting frames for encoders.
     pub fn set_encode(&mut self, target: Option<EncodeTarget>) {
-        self.nv12 = retarget(&self.gpu.device, self.nv12.take(), target);
+        self.nv12 = retarget(&self.gpu.device, &self.pipes.yuv, self.nv12.take(), target, &mut self.errors);
     }
 
     /// Start, change or stop the scopes' NV12 copy of the program.
     pub fn set_scope(&mut self, target: Option<EncodeTarget>) {
-        self.scope_nv12 = retarget(&self.gpu.device, self.scope_nv12.take(), target);
+        self.scope_nv12 = retarget(&self.gpu.device, &self.pipes.yuv, self.scope_nv12.take(), target, &mut self.errors);
     }
 
     /// Frames the scopes' copy skipped because all its read-back buffers were in flight.
@@ -563,9 +565,9 @@ impl Compositor {
     pub fn frame(&mut self, now: Tick, readback_lost: &AtomicU64) {
         self.frame_no += 1;
         let plan = Arc::clone(&self.plan);
-        // A uniform slot for each item and effect, and one for each fixed pass: the transition and
-        // the encoders' and the scopes' NV12 conversions.
-        let mut slots = u64::from(plan.transition.is_some()) + u64::from(self.nv12.is_some()) + u64::from(self.scope_nv12.is_some());
+        // A uniform slot for each item and effect, and one for the transition. The NV12
+        // conversions keep their own uniforms.
+        let mut slots = u64::from(plan.transition.is_some());
         for item in plan.items() {
             slots += 1 + item.effects.len() as u64;
             self.sync_source(item);
@@ -618,9 +620,8 @@ impl Compositor {
             qi = Some(i);
         }
 
-        let copied = self.nv12.as_mut().is_some_and(|n| convert(n, &self.pipes, &mut self.uniforms, &mut enc, program, now, readback_lost));
-        let scope_copied =
-            self.scope_nv12.as_mut().is_some_and(|n| convert(n, &self.pipes, &mut self.uniforms, &mut enc, program, now, &self.scope_skipped));
+        let copied = self.nv12.as_mut().is_some_and(|n| convert(n, &self.pipes.yuv, &mut enc, program, now, readback_lost));
+        let scope_copied = self.scope_nv12.as_mut().is_some_and(|n| convert(n, &self.pipes.yuv, &mut enc, program, now, &self.scope_skipped));
 
         self.uniforms.flush(&self.gpu.queue);
         self.gpu.queue.submit([enc.finish()]);
@@ -720,42 +721,49 @@ impl Compositor {
 }
 
 /// `current` sending to `target`'s sinks when it already has `target`'s size, else a new converter,
-/// or none without a target.
-fn retarget(device: &wgpu::Device, current: Option<Nv12>, target: Option<EncodeTarget>) -> Option<Nv12> {
+/// or none without a target. A size the device cannot hold is an error in `errors`, and no
+/// converter.
+fn retarget(
+    device: &wgpu::Device,
+    converter: &Converter,
+    current: Option<Nv12>,
+    target: Option<EncodeTarget>,
+    errors: &mut Vec<RenderError>,
+) -> Option<Nv12> {
     match (target, current) {
         (None, _) => None,
-        (Some(t), Some(mut n)) if (n.width, n.height) == ((t.width + 1) & !1, (t.height + 1) & !1) => {
+        (Some(t), Some(mut n)) if (n.width, n.height) == crate::nv12::even_size(&t) => {
             n.set_sinks(t.sinks);
             Some(n)
         }
-        (Some(t), _) => Some(Nv12::new(device, t)),
+        (Some(t), _) => match Nv12::new(device, converter, t) {
+            Ok(n) => Some(n),
+            Err(e) => {
+                let e = RenderError::Device(format!("frames for the encoders cannot be converted: {e}"));
+                log::warn!("{e}");
+                errors.push(e);
+                None
+            }
+        },
     }
+}
+
+/// The program to NV12 (BT.709, limited range) converter.
+pub(crate) fn yuv_converter(device: &wgpu::Device) -> Converter {
+    Converter::new(device, Conversion::new(Format::Nv12, Matrix::Bt709, Range::Limited))
 }
 
 /// Record `n`'s two conversion passes from `program` and its copy into a free read-back buffer;
 /// whether it was recorded. With every buffer in flight the frame is skipped and counted in `lost`.
-fn convert(
-    n: &mut Nv12,
-    pipes: &Pipes,
-    uniforms: &mut Uniforms,
-    enc: &mut wgpu::CommandEncoder,
-    program: &Target,
-    now: Tick,
-    lost: &AtomicU64,
-) -> bool {
+fn convert(n: &mut Nv12, converter: &Converter, enc: &mut wgpu::CommandEncoder, program: &Target, now: Tick, lost: &AtomicU64) -> bool {
     if !n.has_room() {
         lost.fetch_add(1, Ordering::Relaxed);
         return false;
     }
-    let off = uniforms.push(&[0.0; 16]);
-    for (pipe, view) in [(&pipes.nv12_y, &n.y_view), (&pipes.nv12_uv, &n.uv_view)] {
-        let mut pass = begin(enc, view, Some(wgpu::Color::BLACK));
-        pass.set_pipeline(pipe);
-        pass.set_bind_group(0, &uniforms.bind, &[off]);
-        pass.set_bind_group(1, &program.bind, &[]);
-        pass.draw(0..3, 0..1);
+    if converter.draw(enc, &program.yuv, &n.planes).is_err() || !n.copy(enc, now) {
+        lost.fetch_add(1, Ordering::Relaxed);
+        return false;
     }
-    n.copy(enc, now);
     true
 }
 
@@ -1063,8 +1071,8 @@ fn make_target(gpu: &Gpu, pipes: &Pipes, label: &str, w: u32, h: u32) -> (Target
     let texture = texture(&gpu.device, label, w, h, CANVAS_FORMAT, usage, &[CANVAS_VIEW_FORMAT]);
     let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
     let srgb = texture.create_view(&wgpu::TextureViewDescriptor { format: Some(CANVAS_VIEW_FORMAT), ..Default::default() });
-    let bind = tex_bind(&gpu.device, pipes, &view);
-    (Target { texture, view, bind }, srgb)
+    let yuv = pipes.yuv.bind(&gpu.device, &view);
+    (Target { texture, view, yuv }, srgb)
 }
 
 fn make_canvas(
@@ -1179,12 +1187,9 @@ fn make_pipes(gpu: &Gpu) -> Pipes {
         device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some(label), source: wgpu::ShaderSource::Wgsl(source.into()) })
     };
     let item_module = module("items", shaders::item());
-    let nv12_module = module("nv12", shaders::nv12());
     // Premultiplied alpha over what is already drawn.
     let over = wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING;
     let item = pipeline(device, "items", &layout, &item_module, "vs_item", "fs_item", CANVAS_FORMAT, Some(over));
-    let nv12_y = pipeline(device, "nv12 luma", &layout, &nv12_module, "vs_full", "fs_y", wgpu::TextureFormat::R8Unorm, None);
-    let nv12_uv = pipeline(device, "nv12 chroma", &layout, &nv12_module, "vs_full", "fs_uv", wgpu::TextureFormat::Rg8Unorm, None);
     let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
         label: Some("linear"),
         address_mode_u: wgpu::AddressMode::ClampToEdge,
@@ -1201,8 +1206,7 @@ fn make_pipes(gpu: &Gpu) -> Pipes {
         layout2,
         layout_image,
         item,
-        nv12_y,
-        nv12_uv,
+        yuv: yuv_converter(device),
         effects: HashMap::new(),
         image_effects: HashSet::new(),
         transitions: HashMap::new(),

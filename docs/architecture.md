@@ -20,6 +20,7 @@ crate in the same layer. `cargo xtask layers` checks this against the table in
 | L0 | `craft-audio-dsp` | Audio DSP shared with the other Craft apps: the `AudioEffect` trait and its effects, the BS.1770 / EBU R128 loudness meter, panning, test signals and resampling. It depends on no StudioCraft crate. |
 | L0 | `craft-ease` | Easing curves, keyed tracks, constant-speed Bezier motion paths and damped springs. It depends on no StudioCraft crate. |
 | L0 | `craft-gpu-device` | Choosing and opening a wgpu device: the user's adapter choice, corrections for drivers that crash, a software fallback, a capability report, and device health with recovery after a device loss. It depends on no StudioCraft crate. |
+| L0 | `craft-gpu-yuv` | RGBA to NV12, P010 and I420 on the GPU with scaling, in BT.601, BT.709 and BT.2020 at limited or full range, and the same conversion on the CPU. It depends on no StudioCraft crate. |
 | L1 | `studiocraft-plugin` | The `Source`, `Filter`, `Transition`, `Encoder` and `Output` traits and the `Registry` they are registered in. |
 | L2 | `studiocraft-engine` | Commands with stable ids, undo and redo, source threads, the audio mixer thread and the frame scheduler. |
 | L2 | `studiocraft-render` | The wgpu compositor: scenes, filters, transitions, and frame conversion for encoders. |
@@ -142,12 +143,13 @@ build for `wasm32-unknown-unknown`:
   not opened again until the setting or the monitored sources change.
 - **Compositor thread.** The scheduler (`engine::scheduler`) wakes on the master clock's frame ticks.
   The compositor (`render`) uploads changed source frames, draws the program scene (and the preview
-  scene in studio mode) into a ring of 3 GPU textures, and converts the program to NV12 for the
-  encoders. The window registers the ring's texture views with egui, so frames stay on the GPU.
+  scene in studio mode) into a ring of 3 GPU textures, and converts the program to NV12 (BT.709,
+  limited range) at the output size for the encoders, through `craft-gpu-yuv`. The window
+  registers the ring's texture views with egui, so frames stay on the GPU.
   While View › Scopes is open, the compositor also converts the program to a second NV12 copy of
-  at most 480 × 270 and sends it to the window's scopes queue. The copy is drawn with linear
-  filtering and its chroma is at half width and half height, so a hard edge in the program shows on
-  the scopes as intermediate levels.
+  at most 480 × 270 and sends it to the window's scopes queue. Each texel of either copy averages
+  the part of the program it covers (up to 4 × 4 bilinear taps), and chroma is at half width and
+  half height, so a hard edge in the program shows on the scopes as intermediate levels.
   The window opens its device on the adapter Settings › Video › Hardware acceleration names
   (`graphics_adapter` in `config.toml`), through `craft-gpu-device`'s `pick`. When the window's
   device is lost, the app saves everything, notes the loss in `graphics_losses` and starts again;
