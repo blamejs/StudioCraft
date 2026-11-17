@@ -486,7 +486,8 @@ fn the_docks_menu_shows_and_hides_the_output_bar_groups() {
     assert_eq!(names(&a), ["menus"]);
     run(&mut a, &ctx, "dock.transitions", json!({})).unwrap();
     frame(&mut a, &ctx, vec![]);
-    assert_eq!(names(&a), ["menus", "transition", "duration"]);
+    // Fade has settings (its Easing), so its settings button shows too.
+    assert_eq!(names(&a), ["menus", "transition", "duration", "transition_settings"]);
     run(&mut a, &ctx, "dock.reset", json!({})).unwrap();
     frame(&mut a, &ctx, vec![]);
     assert!(names(&a).contains(&"record".to_string()));

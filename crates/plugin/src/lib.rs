@@ -22,13 +22,14 @@ mod registry;
 mod source;
 mod transition;
 
+pub use craft_ease::Easing;
 pub use encoder::{Availability, Codec, Encoder, EncoderEnv, EncoderKind, FfmpegEncoder, RateControl};
 pub use filter::{Filter, FilterInstance, FilterTarget, VIDEO_EFFECT_PARAMS, VideoEffect};
 pub use output::{Output, OutputInstance, OutputJob, OutputStatus, VideoFormat};
 pub use registry::Registry;
 pub use source::{AudioOut, Pace, Source, SourceCaps, SourceInstance, SourceIo, VideoContent, VideoOut};
 pub use studiocraft_model::{Settings, SettingsSchema};
-pub use transition::Transition;
+pub use transition::{Transition, easing_field, easing_from};
 
 use thiserror::Error;
 

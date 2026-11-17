@@ -468,7 +468,7 @@ impl Compositor {
         let transition = plan.transition.as_ref().and_then(|t| {
             let p = t.progress(now);
             let pipe = self.pipes.transitions.get(&t.key)?.as_ref()?;
-            (p < 1.0).then_some((t, p, pipe))
+            t.running(now).then_some((t, p, pipe))
         });
         match transition {
             Some((t, progress, pipe)) => {
