@@ -19,6 +19,7 @@ pub const TABLE: &[(&str, Class)] = &[
     ("craft-tsmux", Class::Layer(0)),
     ("craft-color-transform", Class::Layer(0)),
     ("craft-scopes", Class::Layer(0)),
+    ("craft-audio-dsp", Class::Layer(0)),
     ("plugin", Class::Layer(1)),
     ("engine", Class::Layer(2)),
     ("render", Class::Layer(2)),
