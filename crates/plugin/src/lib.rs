@@ -22,7 +22,7 @@ mod registry;
 mod source;
 mod transition;
 
-pub use encoder::{Encoder, EncoderKind, RateControl};
+pub use encoder::{Availability, Codec, Encoder, EncoderEnv, EncoderKind, FfmpegEncoder, RateControl};
 pub use filter::{Filter, FilterInstance, FilterTarget, VideoEffect};
 pub use output::{Output, OutputInstance, OutputJob, OutputStatus, VideoFormat};
 pub use registry::Registry;

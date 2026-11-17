@@ -118,7 +118,14 @@ impl Registry {
             "sources": describe(&self.sources, |s| { let c = s.caps(); json!({"video": c.video, "audio": c.audio}) }),
             "filters": describe(&self.filters, |f| json!({"target": match f.target() { FilterTarget::Video => "video", FilterTarget::Audio => "audio" }})),
             "transitions": describe(&self.transitions, |t| json!({"instant": t.instant()})),
-            "encoders": describe(&self.encoders, |e| json!({"kind": match e.kind() { EncoderKind::Video => "video", EncoderKind::Audio => "audio" }, "ffmpeg_codec": e.ffmpeg_codec()})),
+            "encoders": describe(&self.encoders, |e| {
+                let kind = match e.kind() { EncoderKind::Video => "video", EncoderKind::Audio => "audio" };
+                let mut v = json!({"kind": kind, "codec": e.codec().id(), "builtin": e.ffmpeg().is_none()});
+                if let (Some(f), Some(o)) = (e.ffmpeg(), v.as_object_mut()) {
+                    o.insert("ffmpeg_codec".into(), json!(f.ffmpeg_codec()));
+                }
+                v
+            }),
             "outputs": describe(&self.outputs, |_| json!({})),
         })
     }
@@ -164,5 +171,23 @@ mod tests {
         assert_eq!(d["sources"][1]["id"], "b");
         assert_eq!(d["sources"][0]["video"], true);
         assert_eq!(d["sources"][0]["version"], 1);
+    }
+
+    impl crate::Encoder for Dummy {
+        fn kind(&self) -> EncoderKind {
+            EncoderKind::Video
+        }
+        fn codec(&self) -> crate::Codec {
+            crate::Codec::H264
+        }
+    }
+
+    #[test]
+    fn a_built_in_encoder_is_listed_without_an_ffmpeg_codec() {
+        let mut r = Registry::new();
+        r.register_encoder(Arc::new(Dummy("enc"))).unwrap();
+        let e = &r.describe()["encoders"][0];
+        assert_eq!((&e["kind"], &e["codec"], &e["builtin"]), (&json!("video"), &json!("h264"), &json!(true)));
+        assert!(e.get("ffmpeg_codec").is_none(), "{e}");
     }
 }

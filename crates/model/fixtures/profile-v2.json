@@ -1,0 +1,11 @@
+{
+  "format": "studiocraft.profile",
+  "version": 2,
+  "data": {
+    "name": "Fixture",
+    "video": { "base_width": 1280, "base_height": 720, "output_width": 1280, "output_height": 720, "fps_num": 60, "fps_den": 1 },
+    "audio": { "sample_rate": 48000 },
+    "output": { "folder": "", "format": "mkv", "quality": "high", "video_encoder": "x264", "encoder_settings": { "x264": { "preset": "fast" } }, "ffmpeg_path": "" },
+    "stream": { "server": "rtmp://localhost/live", "key": "test", "video_bitrate_kbps": 4500, "audio_bitrate_kbps": 160, "video_encoder": "nvenc_h264", "encoder_settings": { "nvenc_h264": { "preset": "p4" } }, "keyframe_interval_s": 2 }
+  }
+}

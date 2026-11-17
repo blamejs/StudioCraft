@@ -1,7 +1,8 @@
-//! Video encoders: the software x264 encoder and the hardware encoders ffmpeg offers.
+//! Video encoders: the software x264 encoder and the hardware encoders ffmpeg offers, each an
+//! [`Encoder`] whose [`FfmpegEncoder`] form gives the ffmpeg program its codec arguments.
 
 use studiocraft_model::{ChoiceOption, Field, FieldKind, Settings, SettingsSchema};
-use studiocraft_plugin::{Encoder, EncoderKind, Plugin, PluginError, RateControl};
+use studiocraft_plugin::{Codec, Encoder, FfmpegEncoder, Plugin, PluginError, RateControl};
 
 /// The family of codec options an encoder takes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -17,23 +18,33 @@ enum Family {
 pub struct VideoEncoder {
     id: &'static str,
     name: &'static str,
+    /// What it writes.
+    format: Codec,
+    /// The ffmpeg codec.
     codec: &'static str,
     family: Family,
 }
 
-/// Every built-in video encoder, software first.
+/// Every video encoder ffmpeg runs, software first.
 pub fn all() -> Vec<VideoEncoder> {
     vec![
-        VideoEncoder { id: "x264", name: "Software (x264)", codec: "libx264", family: Family::X264 },
-        VideoEncoder { id: "nvenc_h264", name: "NVIDIA NVENC H.264", codec: "h264_nvenc", family: Family::Nvenc },
-        VideoEncoder { id: "nvenc_hevc", name: "NVIDIA NVENC HEVC", codec: "hevc_nvenc", family: Family::Nvenc },
-        VideoEncoder { id: "amf_h264", name: "AMD AMF H.264", codec: "h264_amf", family: Family::Amf },
-        VideoEncoder { id: "qsv_h264", name: "Intel Quick Sync H.264", codec: "h264_qsv", family: Family::Qsv },
-        VideoEncoder { id: "mf_h264", name: "Windows Media Foundation H.264", codec: "h264_mf", family: Family::MediaFoundation },
+        VideoEncoder { id: "x264", name: "Software (x264)", format: Codec::H264, codec: "libx264", family: Family::X264 },
+        VideoEncoder { id: "nvenc_h264", name: "NVIDIA NVENC H.264", format: Codec::H264, codec: "h264_nvenc", family: Family::Nvenc },
+        VideoEncoder { id: "nvenc_hevc", name: "NVIDIA NVENC HEVC", format: Codec::Hevc, codec: "hevc_nvenc", family: Family::Nvenc },
+        VideoEncoder { id: "amf_h264", name: "AMD AMF H.264", format: Codec::H264, codec: "h264_amf", family: Family::Amf },
+        VideoEncoder { id: "qsv_h264", name: "Intel Quick Sync H.264", format: Codec::H264, codec: "h264_qsv", family: Family::Qsv },
+        VideoEncoder {
+            id: "mf_h264",
+            name: "Windows Media Foundation H.264",
+            format: Codec::H264,
+            codec: "h264_mf",
+            family: Family::MediaFoundation,
+        },
     ]
 }
 
 const X264_PRESETS: [&str; 6] = ["ultrafast", "superfast", "veryfast", "faster", "fast", "medium"];
+const NVENC_PRESETS: [&str; 7] = ["p1", "p2", "p3", "p4", "p5", "p6", "p7"];
 
 impl Plugin for VideoEncoder {
     fn id(&self) -> &'static str {
@@ -49,7 +60,7 @@ impl Plugin for VideoEncoder {
                 SettingsSchema::new(vec![Field::new("preset", "CPU usage preset (faster uses less CPU)", FieldKind::Choice { options }, "veryfast")])
             }
             Family::Nvenc => {
-                let options = (1..=7).map(|i| ChoiceOption::new(format!("p{i}"), format!("P{i}"))).collect();
+                let options = NVENC_PRESETS.iter().map(|p| ChoiceOption::new(*p, p.to_uppercase())).collect();
                 SettingsSchema::new(vec![Field::new("preset", "Preset (higher is slower and better)", FieldKind::Choice { options }, "p5")])
             }
             _ => SettingsSchema::default(),
@@ -62,9 +73,15 @@ fn s(v: impl ToString) -> String {
 }
 
 impl Encoder for VideoEncoder {
-    fn kind(&self) -> EncoderKind {
-        EncoderKind::Video
+    fn codec(&self) -> Codec {
+        self.format
     }
+    fn ffmpeg(&self) -> Option<&dyn FfmpegEncoder> {
+        Some(self)
+    }
+}
+
+impl FfmpegEncoder for VideoEncoder {
     fn ffmpeg_codec(&self) -> &'static str {
         self.codec
     }
@@ -91,7 +108,7 @@ impl Encoder for VideoEncoder {
                 a.extend([s("-pix_fmt"), s("yuv420p")]);
             }
             Family::Nvenc => {
-                let preset = settings.str("preset").filter(|p| p.len() == 2 && p.starts_with('p')).unwrap_or("p5");
+                let preset = settings.str("preset").filter(|p| NVENC_PRESETS.contains(p)).unwrap_or("p5");
                 a.extend([s("-preset"), s(preset)]);
                 match rate {
                     RateControl::Quality(q) => {
@@ -161,6 +178,27 @@ mod tests {
     fn an_unknown_preset_falls_back() {
         let a = x264().ffmpeg_args(&Settings::new().with("preset", "placebo; rm"), RateControl::Lossless, 30.0).unwrap();
         assert_eq!(a[3], "veryfast");
+    }
+
+    #[test]
+    fn an_nvenc_preset_outside_its_choices_falls_back() {
+        let nvenc = all().into_iter().find(|e| e.id == "nvenc_h264").unwrap();
+        for bad in ["p0", "p8", "p9", "px", "P3"] {
+            let a = nvenc.ffmpeg_args(&Settings::new().with("preset", bad), RateControl::Quality(23), 30.0).unwrap();
+            assert_eq!(a[3], "p5", "{bad}");
+        }
+        let a = nvenc.ffmpeg_args(&Settings::new().with("preset", "p7"), RateControl::Quality(23), 30.0).unwrap();
+        assert_eq!(a[3], "p7");
+    }
+
+    #[test]
+    fn each_encoder_names_the_codec_its_ffmpeg_codec_writes() {
+        for e in all() {
+            let expected = if e.codec == "libx264" || e.codec.starts_with("h264_") { Codec::H264 } else { Codec::Hevc };
+            assert!(e.codec == "libx264" || e.codec.starts_with("h264_") || e.codec.starts_with("hevc_"), "{}", e.codec);
+            assert_eq!(e.codec(), expected, "{}", e.id);
+            assert_eq!(e.ffmpeg().map(|f| f.ffmpeg_codec()), Some(e.codec), "{} runs in ffmpeg", e.id);
+        }
     }
 
     #[test]
