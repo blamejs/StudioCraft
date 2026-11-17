@@ -19,7 +19,7 @@ use std::time::Duration;
 
 use serde_json::{Value, json};
 use studiocraft_engine::host::SourceSet;
-use studiocraft_engine::mixer::{Mixer, MixerCmd};
+use studiocraft_engine::mixer::{LoudnessReading, Mixer, MixerCmd};
 use studiocraft_engine::scheduler::Scheduler;
 use studiocraft_engine::{Command, Engine, EngineError, RuntimeAction};
 use studiocraft_media::clock::{MasterClock, tick_of};
@@ -519,6 +519,19 @@ impl Studio {
     /// Meter levels of the final mix.
     pub fn master_levels(&self) -> BlockLevels {
         self.mixer.master().load()
+    }
+
+    /// Loudness of the final mix (ITU-R BS.1770-4, EBU R 128) since the mixer started or the
+    /// last [`Studio::reset_loudness`].
+    pub fn master_loudness(&self) -> LoudnessReading {
+        self.mixer.loudness().load()
+    }
+
+    /// Start every loudness reading of the final mix again from the next block: momentary,
+    /// short-term, integrated, loudness range and true peak. The momentary and short-term
+    /// readings are −∞ until 400 ms and 3 s of the new program have played.
+    pub fn reset_loudness(&self) {
+        self.mixer.loudness().request_reset();
     }
 
     /// Whether a transition is running, and how far it is (0 to 1).

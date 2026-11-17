@@ -16,7 +16,8 @@ and Linux.
 - **Built-in sources.** Color, image, text, media file, display capture, window capture, audio
   input and audio output (desktop audio). Display, window and device capture work on Windows and
   macOS.
-- **Filters.** Color correction and chroma key for video. Gain and noise gate for audio.
+- **Filters.** Color correction and chroma key for video. Gain, noise gate, compressor, limiter and
+  a three-band equalizer for audio.
 - **Transitions.** Cut, fade, fade through a color, and swipe, with a duration from 0 to 20 seconds.
 - **Studio mode.** Edit a preview scene beside the program scene, then send it to the program with
   the chosen transition, or with a quick cut or fade.

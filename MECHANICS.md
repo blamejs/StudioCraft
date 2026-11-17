@@ -42,6 +42,12 @@ in both files.
 | Peak hold | 1.5 s | `media::mix::PEAK_HOLD_S` | estimated |
 | Noise gate open / close | −26 dB / −32 dB | `sources::filters::NoiseGate` | estimated |
 | Noise gate attack / hold / release | 25 / 200 / 150 ms | `sources::filters::NoiseGate` | estimated |
+| Compressor threshold / ratio | −18 dB / 3:1 | `sources::filters::Compressor` | estimated |
+| Compressor attack / release | 6 / 60 ms | `sources::filters::Compressor` | estimated |
+| Limiter ceiling / release | −1 dB / 60 ms | `sources::filters::Limiter` | estimated |
+| Limiter look-ahead | 5 ms | `craft_audio_dsp::effects::dynamics::Limiter::LOOKAHEAD_MS` | estimated |
+| Equalizer bands | 200 Hz low shelf, 1 kHz peak, 5 kHz high shelf | `sources::filters::Equalizer` | estimated |
+| Loudness windows | momentary 400 ms, short-term 3 s | `craft_audio_dsp::loudness` | ITU-R BS.1770-4 and EBU R 128 |
 
 ## Recording and streaming
 

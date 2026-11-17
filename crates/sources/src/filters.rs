@@ -1,5 +1,6 @@
 //! Built-in filters.
 
+use craft_audio_dsp::{AudioEffect, create_effect};
 use craft_color_transform::{Mat3, SRGB, cct};
 use studiocraft_media::audio::{BLOCK_FRAMES, CHANNELS, SAMPLE_RATE};
 use studiocraft_media::mix::{from_db, to_db};
@@ -126,10 +127,211 @@ impl FilterInstance for GateInstance {
             }
         }
         let (target, step) = if self.open { (1.0, self.attack) } else { (0.0, self.release) };
-        for frame in block.as_chunks_mut::<CHANNELS>().0 {
+        let (frames, part) = block.as_chunks_mut::<CHANNELS>();
+        for frame in frames {
             self.gain = if self.gain < target { (self.gain + step).min(target) } else { (self.gain - step).max(target) };
             frame.iter_mut().for_each(|s| *s *= self.gain);
         }
+        // A trailing part frame is silenced, as the effect filters do.
+        part.fill(0.0);
+    }
+}
+
+/// One setting of a filter built on a `craft_audio_dsp` effect: the setting's key, the effect
+/// parameter it sets, its default, its range and whether it takes whole numbers only, the same
+/// as the filter's schema field.
+struct DspSetting {
+    key: &'static str,
+    param: &'static str,
+    default: f64,
+    min: f64,
+    max: f64,
+    int: bool,
+}
+
+impl DspSetting {
+    /// The setting's value: the default when the key is missing, and an error when the value is
+    /// not a number (settings store a NaN or infinite number as `null`), is not a whole number
+    /// for a whole-number setting, or is outside the range.
+    fn read(&self, s: &Settings) -> Result<f32, PluginError> {
+        let Some(raw) = s.get(self.key) else { return Ok(self.default as f32) };
+        let Some(v) = raw.as_f64().filter(|v| v.is_finite()) else {
+            return Err(PluginError::Failed(format!("`{}` must be a number, not {raw}", self.key)));
+        };
+        if self.int && v.fract() != 0.0 {
+            return Err(PluginError::Failed(format!("`{}` must be a whole number, not {v}", self.key)));
+        }
+        if !(self.min..=self.max).contains(&v) {
+            return Err(PluginError::Failed(format!("`{}` is {v}; it must be from {} to {}", self.key, self.min, self.max)));
+        }
+        Ok(v as f32)
+    }
+}
+
+// The audio processing below splits a block into a left and a right buffer.
+const _: () = assert!(CHANNELS == 2, "DspFilter assumes stereo blocks");
+
+/// A filter that runs a `craft_audio_dsp` effect on the source's stereo audio.
+struct DspFilter {
+    fx: Box<dyn AudioEffect>,
+    settings: &'static [DspSetting],
+    /// The block split into its two channels; sized when the filter is created.
+    left: Vec<f32>,
+    right: Vec<f32>,
+}
+
+impl DspFilter {
+    fn create(effect: &str, settings: &'static [DspSetting], s: &Settings) -> Result<Box<dyn FilterInstance>, PluginError> {
+        let fx = create_effect(effect, SAMPLE_RATE as f32, CHANNELS).ok_or_else(|| PluginError::Failed(format!("no audio effect `{effect}`")))?;
+        let mut f = DspFilter { fx, settings, left: vec![0.0; BLOCK_FRAMES], right: vec![0.0; BLOCK_FRAMES] };
+        f.update(s)?;
+        Ok(Box::new(f))
+    }
+}
+
+impl FilterInstance for DspFilter {
+    fn update(&mut self, s: &Settings) -> Result<(), PluginError> {
+        // Check every setting before changing any, so a rejected update leaves the filter as it was.
+        let mut values = [0.0f32; MAX_DSP_SETTINGS];
+        for (v, d) in values.iter_mut().zip(self.settings) {
+            *v = d.read(s)?;
+        }
+        for (v, d) in values.iter().zip(self.settings) {
+            self.fx.set_param(d.param, *v);
+        }
+        Ok(())
+    }
+    fn process_audio(&mut self, block: &mut [f32]) {
+        // A trailing part frame has no partner sample; it is silenced rather than passed around
+        // the effect, so it cannot get past a limiter's ceiling.
+        let whole = block.len() - block.len() % CHANNELS;
+        let (block, part) = block.split_at_mut(whole);
+        part.fill(0.0);
+        for chunk in block.chunks_mut(BLOCK_FRAMES * CHANNELS) {
+            let frames = chunk.len() / CHANNELS;
+            let (left, right) = (&mut self.left[..frames], &mut self.right[..frames]);
+            for (i, f) in chunk.as_chunks::<CHANNELS>().0.iter().enumerate() {
+                left[i] = f[0];
+                right[i] = f[1];
+            }
+            self.fx.process(&mut [&mut *left, &mut *right]);
+            for (i, f) in chunk.as_chunks_mut::<CHANNELS>().0.iter_mut().enumerate() {
+                f[0] = left[i];
+                f[1] = right[i];
+            }
+        }
+    }
+}
+
+/// The most settings one `DspFilter` has.
+const MAX_DSP_SETTINGS: usize = 5;
+
+const COMPRESSOR: &[DspSetting] = &[
+    DspSetting { key: "threshold_db", param: "threshold", default: -18.0, min: -60.0, max: 0.0, int: false },
+    DspSetting { key: "ratio", param: "ratio", default: 3.0, min: 1.0, max: 30.0, int: false },
+    DspSetting { key: "attack_ms", param: "attack", default: 6.0, min: 1.0, max: 300.0, int: true },
+    DspSetting { key: "release_ms", param: "release", default: 60.0, min: 1.0, max: 3000.0, int: true },
+    DspSetting { key: "output_db", param: "makeup", default: 0.0, min: -32.0, max: 32.0, int: false },
+];
+const _: () = assert!(COMPRESSOR.len() <= MAX_DSP_SETTINGS);
+
+/// Turns down a source's level above a threshold by a ratio (a 6 dB knee, peak detection).
+pub struct Compressor;
+
+impl Plugin for Compressor {
+    fn id(&self) -> &'static str {
+        "compressor"
+    }
+    fn name(&self) -> &'static str {
+        "Compressor"
+    }
+    fn schema(&self) -> SettingsSchema {
+        SettingsSchema::new(vec![
+            float_field("threshold_db", "Threshold (dB)", -60.0, 0.0, 0.1, -18.0),
+            float_field("ratio", "Ratio", 1.0, 30.0, 0.1, 3.0),
+            Field::new("attack_ms", "Attack (ms)", FieldKind::Int { min: 1, max: 300 }, 6),
+            Field::new("release_ms", "Release (ms)", FieldKind::Int { min: 1, max: 3000 }, 60),
+            float_field("output_db", "Output gain (dB)", -32.0, 32.0, 0.1, 0.0),
+        ])
+    }
+}
+
+impl Filter for Compressor {
+    fn target(&self) -> FilterTarget {
+        FilterTarget::Audio
+    }
+    fn create(&self, settings: &Settings) -> Result<Box<dyn FilterInstance>, PluginError> {
+        DspFilter::create("compressor", COMPRESSOR, settings)
+    }
+}
+
+const LIMITER: &[DspSetting] = &[
+    DspSetting { key: "ceiling_db", param: "ceiling", default: -1.0, min: -24.0, max: 0.0, int: false },
+    DspSetting { key: "release_ms", param: "release", default: 60.0, min: 1.0, max: 1000.0, int: true },
+];
+const _: () = assert!(LIMITER.len() <= MAX_DSP_SETTINGS);
+
+/// Keeps a source's true peak at or below a ceiling. It looks 5 ms ahead and its true-peak
+/// filter adds 8 samples, so the source's audio plays 248 samples (about 5.2 ms) later than
+/// without it.
+pub struct Limiter;
+
+impl Plugin for Limiter {
+    fn id(&self) -> &'static str {
+        "limiter"
+    }
+    fn name(&self) -> &'static str {
+        "Limiter"
+    }
+    fn schema(&self) -> SettingsSchema {
+        SettingsSchema::new(vec![
+            float_field("ceiling_db", "Ceiling (dB)", -24.0, 0.0, 0.1, -1.0),
+            Field::new("release_ms", "Release (ms)", FieldKind::Int { min: 1, max: 1000 }, 60),
+        ])
+    }
+}
+
+impl Filter for Limiter {
+    fn target(&self) -> FilterTarget {
+        FilterTarget::Audio
+    }
+    fn create(&self, settings: &Settings) -> Result<Box<dyn FilterInstance>, PluginError> {
+        DspFilter::create("limiter", LIMITER, settings)
+    }
+}
+
+const EQUALIZER: &[DspSetting] = &[
+    DspSetting { key: "low_db", param: "low", default: 0.0, min: -24.0, max: 24.0, int: false },
+    DspSetting { key: "mid_db", param: "mid", default: 0.0, min: -24.0, max: 24.0, int: false },
+    DspSetting { key: "high_db", param: "high", default: 0.0, min: -24.0, max: 24.0, int: false },
+];
+const _: () = assert!(EQUALIZER.len() <= MAX_DSP_SETTINGS);
+
+/// Three bands: a low shelf at 200 Hz, a peak at 1 kHz and a high shelf at 5 kHz.
+pub struct Equalizer;
+
+impl Plugin for Equalizer {
+    fn id(&self) -> &'static str {
+        "equalizer"
+    }
+    fn name(&self) -> &'static str {
+        "Equalizer"
+    }
+    fn schema(&self) -> SettingsSchema {
+        SettingsSchema::new(vec![
+            float_field("low_db", "Low (dB)", -24.0, 24.0, 0.1, 0.0),
+            float_field("mid_db", "Mid (dB)", -24.0, 24.0, 0.1, 0.0),
+            float_field("high_db", "High (dB)", -24.0, 24.0, 0.1, 0.0),
+        ])
+    }
+}
+
+impl Filter for Equalizer {
+    fn target(&self) -> FilterTarget {
+        FilterTarget::Audio
+    }
+    fn create(&self, settings: &Settings) -> Result<Box<dyn FilterInstance>, PluginError> {
+        DspFilter::create("simple_eq", EQUALIZER, settings)
     }
 }
 
@@ -366,6 +568,165 @@ mod tests {
         let mut loud = vec![0.5f32; BLOCK_SAMPLES];
         g.process_audio(&mut loud);
         assert!((*loud.last().unwrap() - 0.5).abs() < 1e-6);
+    }
+
+    /// `blocks` stereo blocks of a `freq` Hz tone at `amp`, the same on both channels.
+    fn tone(freq: f64, amp: f32, blocks: usize) -> Vec<f32> {
+        (0..blocks * BLOCK_FRAMES)
+            .flat_map(|i| {
+                let v = amp * (2.0 * std::f64::consts::PI * freq * i as f64 / f64::from(SAMPLE_RATE)).sin() as f32;
+                [v, v]
+            })
+            .collect()
+    }
+
+    /// Run `f` over `x` block by block and return the peak of the last `tail` blocks.
+    fn run_peak(f: &mut dyn FilterInstance, x: &mut [f32], tail: usize) -> f32 {
+        x.chunks_mut(BLOCK_SAMPLES).for_each(|b| f.process_audio(b));
+        x[x.len() - tail * BLOCK_SAMPLES..].iter().fold(0.0f32, |m, v| m.max(v.abs()))
+    }
+
+    #[test]
+    fn the_compressor_turns_a_loud_tone_down_by_its_ratio() {
+        // −6 dBFS peak through a −18 dB threshold at 4:1: 12 dB over becomes 3 dB over, −15 dBFS.
+        // The peak detector relaxes a little between the tone's peaks, so the peaks come out
+        // up to about 1 dB higher.
+        let s = Compressor.schema().defaults().with("ratio", 4.0);
+        let mut c = Compressor.create(&s).unwrap();
+        let mut x = tone(1000.0, from_db(-6.0), 40);
+        let peak = to_db(run_peak(c.as_mut(), &mut x, 4));
+        assert!((-15.5..=-13.5).contains(&peak), "{peak} dBFS");
+        // A quiet tone passes unchanged.
+        let mut q = tone(1000.0, from_db(-40.0), 40);
+        let peak = to_db(run_peak(c.as_mut(), &mut q, 4));
+        assert!((peak - -40.0).abs() < 0.1, "{peak} dBFS");
+    }
+
+    #[test]
+    fn the_limiter_keeps_the_peak_under_its_ceiling() {
+        let s = Limiter.schema().defaults().with("ceiling_db", -6.0);
+        let mut l = Limiter.create(&s).unwrap();
+        let mut x = tone(997.0, 1.0, 20);
+        let peak = to_db(run_peak(l.as_mut(), &mut x, 10));
+        assert!((-6.5..=-6.0).contains(&peak), "{peak} dBFS");
+    }
+
+    #[test]
+    fn the_equalizer_boosts_and_cuts_its_bands() {
+        let level = |key: &str, db: f64, freq: f64| {
+            let mut e = Equalizer.create(&Equalizer.schema().defaults().with(key, db)).unwrap();
+            to_db(run_peak(e.as_mut(), &mut tone(freq, 0.1, 20), 4)) - to_db(0.1)
+        };
+        assert!((level("low_db", 6.0, 50.0) - 6.0).abs() < 0.5);
+        assert!((level("mid_db", -6.0, 1000.0) - -6.0).abs() < 0.5);
+        assert!((level("high_db", 6.0, 15_000.0) - 6.0).abs() < 0.5);
+        // At the defaults the equalizer is flat.
+        assert!(level("low_db", 0.0, 1000.0).abs() < 0.05);
+    }
+
+    /// The microphone chain: gate, compressor, limiter and equalizer, one after another on the
+    /// same blocks. With settings at their range ends, a loud tone comes out finite and under
+    /// the limiter's ceiling.
+    #[test]
+    fn a_microphone_chain_runs_on_the_same_blocks() {
+        let extreme = Settings::new().with("ratio", 30.0).with("ceiling_db", 0.0).with("high_db", -24.0);
+        let filters: [&dyn Filter; 4] = [&NoiseGate, &Compressor, &Limiter, &Equalizer];
+        let mut chain: Vec<Box<dyn FilterInstance>> = filters.iter().map(|f| f.create(&extreme).unwrap()).collect();
+        let mut x = tone(1000.0, 0.9, 40);
+        for b in x.chunks_mut(BLOCK_SAMPLES) {
+            chain.iter_mut().for_each(|f| f.process_audio(b));
+        }
+        let tail = &x[x.len() - 4 * BLOCK_SAMPLES..];
+        let peak = tail.iter().fold(0.0f32, |m, v| m.max(v.abs()));
+        assert!(tail.iter().all(|v| v.is_finite()));
+        // −0.9 dBFS through the default −18 dB threshold at 30:1 is about −17 dBFS.
+        assert!((-19.0..=-15.0).contains(&to_db(peak)), "{} dBFS", to_db(peak));
+        // A block shorter than the mixer's is processed, and the stray sample at the end of an
+        // odd-length block is silenced instead of passing the limiter's ceiling untouched.
+        for f in &mut chain {
+            let mut odd = [0.5f32; 7];
+            f.process_audio(&mut odd);
+            assert_eq!(odd[6], 0.0);
+            f.process_audio(&mut []);
+        }
+    }
+
+    /// A supplied setting that is out of range, not a number (a NaN is stored as `null`) or not a
+    /// whole number for a whole-number setting is an error, and the filter keeps its previous
+    /// settings; a missing one reads as the default.
+    #[test]
+    fn out_of_range_settings_are_errors() {
+        let bad = [
+            (&Compressor as &dyn Filter, "ratio", serde_json::json!(1e300)),
+            (&Compressor, "threshold_db", serde_json::json!(1.0)),
+            (&Compressor, "threshold_db", serde_json::Value::from(f64::NAN)),
+            (&Compressor, "attack_ms", serde_json::json!("fast")),
+            (&Compressor, "attack_ms", serde_json::json!(6.5)),
+            (&Limiter, "release_ms", serde_json::json!(1.5)),
+            (&Limiter, "ceiling_db", serde_json::json!(-1e9)),
+            (&Limiter, "release_ms", serde_json::json!(0)),
+            (&Equalizer, "high_db", serde_json::json!(-1e9)),
+            (&Equalizer, "low_db", serde_json::json!(true)),
+        ];
+        for (filter, key, value) in bad {
+            let s = Settings::new().with(key, value.clone());
+            assert!(filter.create(&s).is_err(), "{} {key} {value}", filter.id());
+            let mut f = filter.create(&Settings::new()).unwrap();
+            assert!(f.update(&s).is_err(), "{} {key} {value}", filter.id());
+        }
+        // A rejected update leaves every setting as it was.
+        let mut c = Compressor.create(&Compressor.schema().defaults().with("ratio", 4.0)).unwrap();
+        assert!(c.update(&Settings::new().with("ratio", 2.0).with("threshold_db", 5.0)).is_err());
+        let mut x = tone(1000.0, from_db(-6.0), 40);
+        let peak = to_db(run_peak(c.as_mut(), &mut x, 4));
+        assert!((-15.5..=-13.5).contains(&peak), "{peak} dBFS: the 4:1 ratio still applies");
+        // Missing settings and the range ends are accepted.
+        for f in [&Compressor as &dyn Filter, &Limiter, &Equalizer] {
+            assert!(f.create(&Settings::new()).is_ok());
+            for field in &f.schema().fields {
+                let (min, max) = match field.kind {
+                    FieldKind::Float { min, max, .. } => (min, max),
+                    FieldKind::Int { min, max } => (min as f64, max as f64),
+                    _ => continue,
+                };
+                for v in [min, max] {
+                    assert!(f.create(&Settings::new().with(&field.key, v)).is_ok(), "{} {} {v}", f.id(), field.key);
+                }
+            }
+        }
+    }
+
+    /// Each built-in effect filter's ranges and defaults are its schema's.
+    #[test]
+    fn dsp_settings_match_the_schemas() {
+        for (f, table) in [(&Compressor as &dyn Filter, COMPRESSOR), (&Limiter, LIMITER), (&Equalizer, EQUALIZER)] {
+            let schema = f.schema();
+            assert_eq!(schema.fields.len(), table.len(), "{}", f.id());
+            for d in table {
+                let field = schema.field(d.key).unwrap_or_else(|| panic!("{} has no {}", f.id(), d.key));
+                let (min, max, int) = match field.kind {
+                    FieldKind::Float { min, max, .. } => (min, max, false),
+                    FieldKind::Int { min, max } => (min as f64, max as f64, true),
+                    _ => panic!("{} {} is not a number", f.id(), d.key),
+                };
+                assert_eq!((min, max, int), (d.min, d.max, d.int), "{} {}", f.id(), d.key);
+                assert_eq!(field.default.as_f64(), Some(d.default), "{} {}", f.id(), d.key);
+            }
+        }
+    }
+
+    /// The limiter delays its source by its look-ahead (5 ms, 240 samples) plus the true-peak
+    /// filter's 8 samples: an impulse comes out 248 samples later.
+    #[test]
+    fn the_limiter_delays_its_source_by_248_samples() {
+        assert_eq!(create_effect("limiter", SAMPLE_RATE as f32, CHANNELS).map(|fx| fx.latency()), Some(248));
+        let mut l = Limiter.create(&Settings::new()).unwrap();
+        let mut x = vec![0.0f32; 2 * BLOCK_SAMPLES];
+        x[0] = 0.1;
+        x[1] = 0.1;
+        x.chunks_mut(BLOCK_SAMPLES).for_each(|b| l.process_audio(b));
+        let at = x.iter().step_by(CHANNELS).enumerate().max_by(|a, b| a.1.abs().total_cmp(&b.1.abs())).map(|(i, _)| i);
+        assert_eq!(at, Some(248));
     }
 
     /// One device for every test in this binary; tests run in parallel and opening many devices
