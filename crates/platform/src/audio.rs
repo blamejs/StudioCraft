@@ -1,5 +1,8 @@
-//! Audio devices: listing, input capture, capture of what an output device plays (Windows), and
-//! playback on an output device.
+//! Audio devices: listing, input capture, capture of what an output device plays (Windows and
+//! Linux), and playback on an output device (Windows and macOS).
+//!
+//! Windows and macOS use cpal. Linux uses the PipeWire sound server: capture asks for 48 kHz
+//! stereo, and PipeWire converts each device's own format to it.
 
 use std::sync::mpsc::{SyncSender, sync_channel};
 use std::thread::JoinHandle;
@@ -324,7 +327,14 @@ mod imp {
     }
 }
 
-#[cfg(not(any(windows, target_os = "macos")))]
+#[cfg(any(target_os = "linux", test))]
+mod pw_props;
+
+#[cfg(target_os = "linux")]
+#[path = "audio/linux.rs"]
+mod imp;
+
+#[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
 mod imp {
     use super::{DeviceInfo, DeviceKind, Fill, Format, OnError};
     use crate::PlatformError;
@@ -374,6 +384,22 @@ mod tests {
     fn an_unknown_device_is_reported() {
         let r = AudioCapture::open(DeviceKind::Input, "no such device 1234", |_, _| {}, |_| {});
         assert!(r.is_err());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_linux_capture_starts_or_reports_why_and_stops_when_dropped() {
+        for kind in [DeviceKind::Input, DeviceKind::Output] {
+            match AudioCapture::open(kind, DEFAULT_DEVICE, |_, _| {}, |_| {}) {
+                // Dropping the handle ends the capture thread; the test would hang otherwise.
+                Ok(c) => {
+                    assert_eq!(c.format, Format { rate: 48_000, channels: 2 });
+                    drop(c);
+                }
+                // Without a PipeWire server (build machines) the reason is reported.
+                Err(e) => assert!(matches!(e, PlatformError::Failed(_)), "{e:?}"),
+            }
+        }
     }
 
     #[test]

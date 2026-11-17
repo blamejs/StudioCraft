@@ -53,6 +53,9 @@ in both files.
 | Monitoring device | the system's default output | `model::profile::DEFAULT_AUDIO_DEVICE` | estimated |
 | Blocks queued for the monitoring device | 4 | `studio::monitor::MONITOR_QUEUE_BLOCKS` | estimated |
 | Blocks the monitoring device waits for before it plays | 2 | `studio::monitor::PRIME_BLOCKS` | estimated |
+| Linux capture format | 48 000 Hz, 2 channels, 32-bit float | `platform::audio::imp::CAPTURE_FORMAT` | estimated |
+| Linux device list wait for the sound server | 2 s | `platform::audio::imp::LIST_TIMEOUT` | estimated |
+| Linux capture conversion buffer | 8192 samples | `platform::audio::imp::SCRATCH_SAMPLES` | estimated |
 | Meter floor | −60 dB | `media::mix::METER_FLOOR_DB` | estimated |
 | Meter yellow zone from | −20 dB | `ui-egui::docks::METER_YELLOW_DB` | estimated |
 | Meter red zone from | −9 dB | `ui-egui::docks::METER_RED_DB` | estimated |

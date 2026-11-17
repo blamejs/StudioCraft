@@ -5409,6 +5409,8 @@ name = "studiocraft-platform"
 version = "0.1.0"
 dependencies = [
  "cpal",
+ "pipewire",
+ "serde_json",
  "studiocraft-media",
  "thiserror 2.0.21",
  "xcap",

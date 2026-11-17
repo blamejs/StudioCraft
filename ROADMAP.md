@@ -5,6 +5,8 @@
 - Scenes, sources, scene items with move, resize, rotate, lock and visibility, and undo.
 - Built-in sources: color, image, text, media file, display capture, window capture, audio input
   and desktop audio.
+- Audio input and desktop audio capture on Linux through the PipeWire sound server. The device
+  lists show PipeWire's devices with the default first.
 - Filters: color correction with white balance by temperature and tint, chroma key, color key,
   crop and pad, image mask, scroll, sharpen, gain, noise gate, compressor, limiter and a
   three-band equalizer.

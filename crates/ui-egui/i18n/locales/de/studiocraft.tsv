@@ -45,6 +45,7 @@
 	Color key	Farbschlüssel
 	Community	Community
 	Contrast	Kontrast
+	could not connect to the PipeWire sound server	keine Verbindung zum PipeWire-Soundserver möglich
 	CPU usage preset (faster uses less CPU)	CPU-Voreinstellung (schneller braucht weniger CPU)
 	Credits	Mitwirkende
 	Crop and pad	Zuschneiden und erweitern
@@ -273,6 +274,11 @@
 	Takes effect the next time StudioCraft starts.	Wirkt beim nächsten Start von StudioCraft.
 	Temperature (K)	Farbtemperatur (K)
 	Text	Text
+	the audio capture could not start	die Audioaufnahme konnte nicht starten
+	the audio capture thread stopped	der Thread der Audioaufnahme wurde beendet
+	the audio format could not be described	das Audioformat konnte nicht beschrieben werden
+	the audio stream ended	der Audiostream wurde beendet
+	the audio stream failed	der Audiostream ist fehlgeschlagen
 	The interface fonts Inter and JetBrains Mono are under the SIL Open Font License 1.1.	Die Schriften der Oberfläche, Inter und JetBrains Mono, stehen unter der SIL Open Font License 1.1.
 	The licenses of the third-party crates StudioCraft uses are checked by `cargo xtask licenses`.	Die Lizenzen der Crates von Drittanbietern, die StudioCraft nutzt, prüft `cargo xtask licenses`.
 	This filter has no settings.	Dieser Filter hat keine Einstellungen.

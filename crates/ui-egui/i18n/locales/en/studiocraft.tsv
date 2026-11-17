@@ -51,6 +51,7 @@
 	Community	Community
 	Compressor	Compressor
 	Contrast	Contrast
+	could not connect to the PipeWire sound server	could not connect to the PipeWire sound server
 	CPU usage preset (faster uses less CPU)	CPU usage preset (faster uses less CPU)
 	Credits	Credits
 	Crop and pad	Crop and pad
@@ -314,6 +315,11 @@
 	Takes effect the next time StudioCraft starts.	Takes effect the next time StudioCraft starts.
 	Temperature (K)	Temperature (K)
 	Text	Text
+	the audio capture could not start	the audio capture could not start
+	the audio capture thread stopped	the audio capture thread stopped
+	the audio format could not be described	the audio format could not be described
+	the audio stream ended	the audio stream ended
+	the audio stream failed	the audio stream failed
 	The interface fonts Inter and JetBrains Mono are under the SIL Open Font License 1.1.	The interface fonts Inter and JetBrains Mono are under the SIL Open Font License 1.1.
 	The licenses of the third-party crates StudioCraft uses are checked by `cargo xtask licenses`.	The licenses of the third-party crates StudioCraft uses are checked by `cargo xtask licenses`.
 	The scope could not be computed: {error}	The scope could not be computed: {error}

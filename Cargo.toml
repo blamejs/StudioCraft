@@ -65,6 +65,8 @@ ab_glyph = "0.2"
 cpal = "0.16"
 # Display and window capture.
 xcap = "0.9"
+# Audio devices on Linux, through the PipeWire sound server.
+pipewire = "=0.10.1"
 
 # ui
 egui = "0.37"

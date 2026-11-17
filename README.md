@@ -14,8 +14,10 @@ and Linux.
   resize and rotate sources in the preview with snapping to the canvas edges and center. Lock a
   source so it can't be moved, or lock the whole preview.
 - **Built-in sources.** Color, image, text, media file, display capture, window capture, audio
-  input and audio output (desktop audio). Display, window and device capture work on Windows and
-  macOS.
+  input and audio output (desktop audio). Display and window capture work on Windows and macOS.
+  Audio input and output capture work on Windows and Linux, and audio input capture on macOS. On
+  Linux, audio capture goes through the PipeWire sound server and lists its devices by their
+  descriptions.
 - **Filters.** Color correction, chroma key, color key, crop and pad, image mask, scroll, and
   sharpen for video. Color correction sets gamma, contrast, brightness, saturation, opacity, and the white
   balance by temperature and tint. Color key makes the pixels near a key color transparent by their
@@ -95,7 +97,7 @@ studiocraft-cli mcp --connect 9876
 ## Building
 
 You need a Rust toolchain (edition 2024) and, on Linux, the development packages for X11, Wayland,
-fontconfig and ALSA.
+fontconfig, ALSA and PipeWire (`libpipewire-0.3-dev` on Debian and Ubuntu), and libclang.
 
 ```sh
 cargo run --release
