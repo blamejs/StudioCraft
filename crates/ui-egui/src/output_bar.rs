@@ -9,7 +9,8 @@
 
 use craft_keymap::CommandRef;
 use craft_menu::{BarStyle, Gate, MenuBar, MenuBarUi};
-use egui::{Align, Layout, Rect, TextStyle, Ui, pos2, vec2};
+use craft_ui::direction;
+use egui::{Rect, TextStyle, Ui, pos2, vec2};
 use serde_json::{Value, json};
 use studiocraft_model::SettingsSchema;
 use studiocraft_studio::{OutputKind, OutputState, Studio};
@@ -336,14 +337,14 @@ impl StudioApp {
         let mut transitions_drawn = None;
         let height = ui.available_height();
         let clicked = ui
-            .allocate_ui_with_layout(vec2(room, height), Layout::left_to_right(Align::Center), |ui| {
+            .allocate_ui_with_layout(vec2(room, height), direction::row(ui), |ui| {
                 ui.spacing_mut().item_spacing.x = 0.0;
                 let top = ui.max_rect().top();
-                let start = ui.cursor().min.x;
+                let start = direction::start_x(ui, ui.cursor());
                 let clicked = MenuBarUi::new(laid).gate(gate).style(style).label(&i18n::menu_text).shrink_to_fit(fit.menus).show(ui);
-                let end = ui.cursor().min.x;
-                parts.push(("menus", Rect::from_min_max(pos2(start, top), pos2(end, top + height))));
-                ui.add_space((room - (end - start) - fit.outputs).max(0.0));
+                let end = direction::start_x(ui, ui.cursor());
+                parts.push(("menus", Rect::from_min_max(pos2(start.min(end), top), pos2(start.max(end), top + height))));
+                ui.add_space((room - (end - start).abs() - fit.outputs).max(0.0));
                 let mut first = true;
                 let mut gap = |ui: &mut Ui, w: f32| {
                     if !first {

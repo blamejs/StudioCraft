@@ -42,7 +42,9 @@
   the license texts.
 - Interface translations from StudioCraft's own catalogs in `crates/ui-egui/i18n/locales`, merged
   with the shared `craft-i18n` catalogs when `CRAFT_I18N_DIR` is set, with a Language setting in
-  Settings › General. English, Simplified Chinese, Traditional Chinese, Czech, Dutch, French, German, Italian, Japanese, Korean, Polish, Brazilian Portuguese, Russian, Spanish, Swedish, Turkish and Ukrainian are built in.
+  Settings › General. English, Simplified Chinese, Traditional Chinese, Arabic, Czech, Dutch, French, German, Hebrew, Italian, Japanese, Korean, Polish, Brazilian Portuguese, Russian, Spanish, Swedish, Turkish and Ukrainian are built in.
+  In Arabic and Hebrew the window runs right to left: the menus, output controls, dock headers and
+  status bar start at the right, and egui's submenus, scroll bars and collapsing headers mirror.
 - Help › Check for Updates…, a check at start (Settings › General › Check for updates at start, on
   by default) and finishing an update the app installed itself, through `craft-update`.
 - The app icon in `assets/app-icon`: the window icon, the picture in the update prompt and the icon
@@ -69,7 +71,8 @@
 ## Next
 
 1. **Translations.** A `studiocraft.tsv` catalog for every other locale craft-i18n has, and
-   right-to-left layout for Arabic and Hebrew.
+   right-to-left layout for the dock order, the order of the menu titles (egui's `MenuBar` lays
+   them out left to right) and the Settings, Properties and Filters windows.
 2. **Multiple outputs.** Several streams at once, and a virtual camera.
 3. **Web build.** The model and plugin crates already build for WebAssembly; a browser editor for
    scene collections is the first step.

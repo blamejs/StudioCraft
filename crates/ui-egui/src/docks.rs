@@ -102,7 +102,7 @@ fn body(ui: &mut Ui) -> Ui {
     let pad = theme::sizes(ui.ctx()).pad_panel;
     let r = ui.available_rect_before_wrap();
     let rect = Rect::from_min_max(r.min + pad, (r.max - pad).max(r.min + pad));
-    ui.new_child(egui::UiBuilder::new().max_rect(rect).layout(egui::Layout::top_down(egui::Align::Min)))
+    ui.new_child(egui::UiBuilder::new().max_rect(rect).layout(craft_ui::direction::column(ui)))
 }
 
 /// A text field for renaming; the new name once Enter is pressed or the field loses focus, and
@@ -269,7 +269,7 @@ pub fn sources(ui: &mut Ui, studio: &Studio, st: &mut DockState, acts: &mut Vec<
         }
         for it in scene.items.iter().rev() {
             let Some(src) = c.source(it.source) else { continue };
-            ui.horizontal(|ui| {
+            craft_ui::direction::horizontal(ui, |ui| {
                 let size = vec2(20.0, 20.0);
                 let (eye, tip) = if it.visible { (Icon::Eye, "Hide") } else { (Icon::EyeOff, "Show") };
                 if icons::sized(ui, eye, tl!(tip), true, size, Color32::TRANSPARENT) {
@@ -432,9 +432,9 @@ pub fn mixer(ui: &mut Ui, studio: &Studio, st: &mut DockState, acts: &mut Vec<Ac
             if let Some(l) = studio.levels(s.id) {
                 m.update(l, st.dt);
             }
-            ui.horizontal(|ui| {
+            craft_ui::direction::horizontal(ui, |ui| {
                 ui.label(RichText::new(&s.name).strong());
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.with_layout(craft_ui::direction::trailing(ui), |ui| {
                     icons::menu(ui, Icon::Gear, tl!("Audio source actions"), |ui| {
                         if ui.button(tid!("selection.properties", "Properties…")).clicked() {
                             acts.push(Act::Properties(s.id));

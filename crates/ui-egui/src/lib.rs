@@ -1238,6 +1238,10 @@ impl StudioApp {
         if self.fonts_for.is_some_and(|l| l != i18n::lang()) {
             self.install_fonts(ctx);
         }
+        let dir = i18n::direction();
+        if craft_ui::direction::HasDirection::direction(ctx) != dir {
+            craft_ui::direction::apply(ctx, dir);
+        }
         // eframe calls `logic` before each drawn frame, and also while the window is hidden.
         if !std::mem::take(&mut self.ticked_in_logic) {
             self.tick_studio(ctx);
@@ -1668,12 +1672,12 @@ impl StudioApp {
         let line = theme::palette(ui.ctx()).line;
         let frame = egui::Frame::side_top_panel(ui.style()).inner_margin(egui::Margin::symmetric(8, 0));
         let panel = egui::Panel::bottom("status").exact_size(height).show_separator_line(false).frame(frame).show(ui, |ui| {
-            ui.horizontal_centered(|ui| {
+            ui.with_layout(craft_ui::direction::row(ui), |ui| {
                 if let Some((text, error)) = notice {
                     let color = if error { ui.visuals().warn_fg_color } else { ui.visuals().text_color() };
                     ui.colored_label(color, text);
                 }
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.with_layout(craft_ui::direction::trailing(ui), |ui| {
                     let fps = format!("{fps:.2}");
                     let ms = format!("{:.1}", stats.render_avg_ms);
                     ui.monospace(craft_i18n::fmt(tl!("{fps} fps  {ms} ms"), &[("fps", &fps), ("ms", &ms)]));
@@ -1847,9 +1851,9 @@ impl StudioApp {
                     }
                 });
                 ui.separator();
-                ui.horizontal(|ui| {
+                craft_ui::direction::horizontal(ui, |ui| {
                     ui.strong(tl!("Credits"));
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.with_layout(craft_ui::direction::trailing(ui), |ui| {
                         craft_ui::ComboBox::from_id_salt("credit-names").selected_text(tl!(mode.label())).show_ui(ui, |ui| {
                             for m in credits::NameMode::ALL {
                                 ui.selectable_value(mode, m, tl!(m.label()));
@@ -1980,10 +1984,11 @@ impl StudioApp {
         let mut acts = Vec::new();
         let bar = theme::sizes(&ctx).bar_menu;
         let fill = theme::palette(&ctx).raised;
+        let (left, right) = if craft_ui::direction::is_rtl(&ctx) { (0, 4) } else { (4, 0) };
         let top = egui::Panel::top("menu")
             .exact_size(bar)
             .show_separator_line(false)
-            .frame(egui::Frame::NONE.fill(fill).inner_margin(egui::Margin { left: 4, right: 0, top: 0, bottom: 0 }))
+            .frame(egui::Frame::NONE.fill(fill).inner_margin(egui::Margin { left, right, top: 0, bottom: 0 }))
             .show(ui, |ui| self.menu(ui, &mut acts));
         // The divider is drawn inside the row's last point, so the content area keeps the full height.
         let row = top.response.rect;
