@@ -599,6 +599,7 @@ fn the_catalogs_in_the_tree_are_offered_and_switch_the_menus() {
     }
     let mut a = StudioApp::boot(Store::memory(), None, Vec::new());
     for (code, name, edit) in [
+        ("cs", "Čeština", "Úpravy"),
         ("de", "Deutsch", "Bearbeiten"),
         ("es", "Español", "Editar"),
         ("fr", "Français", "Édition"),
