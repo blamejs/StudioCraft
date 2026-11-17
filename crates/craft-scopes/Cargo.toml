@@ -1,0 +1,17 @@
+[package]
+name = "craft-scopes"
+description = "Video scopes maths: waveform, parade, histogram and vectorscopes from RGBA8 or NV12 frames, with numeric summaries and trace images"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+craft-color = { workspace = true }
+serde = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }
