@@ -105,6 +105,7 @@ enum Named {
     NewCollection,
     DuplicateCollection,
     RenameCollection,
+    SaveDockLayout,
 }
 
 impl Named {
@@ -117,6 +118,7 @@ impl Named {
             Named::NewCollection => "New Scene Collection",
             Named::DuplicateCollection => "Duplicate Scene Collection",
             Named::RenameCollection => "Rename Scene Collection",
+            Named::SaveDockLayout => "Save Dock Layout",
         }
     }
 }
@@ -771,11 +773,30 @@ impl StudioApp {
                 }
                 return Ok(json!({"floating": floating, "changed": changed}));
             }
-            "dock.reset" => {
-                self.store.update(|p| p.docks = store::Docks::default());
-                self.dock_window_at = [None; 3];
-                self.dock_window_touched = [false; 3];
-                self.dock_window_gen = self.dock_window_gen.wrapping_add(1);
+            "dock.reset" => self.set_docks(store::Docks::default()),
+            "dock.layout_save" => {
+                let Some(name) = cmd.params.get("name") else {
+                    self.ask_name(Named::SaveDockLayout, "");
+                    return Ok(json!({"asking": true}));
+                };
+                let name = name.as_str().ok_or("`dock.layout_save`: `name` is a string")?;
+                let replaced = self.save_dock_layout(name)?;
+                return Ok(json!({"saved": name, "replaced": replaced}));
+            }
+            "dock.layout_apply" => {
+                let name = Self::param_str(cmd, "name")?;
+                let layout = self.store.prefs().dock_layout(name).cloned().ok_or_else(|| format!("there is no dock layout named `{name}`"))?;
+                self.set_docks(layout.docks);
+                return Ok(json!({"applied": layout.name}));
+            }
+            "dock.layout_remove" => {
+                let name = Self::param_str(cmd, "name")?.to_string();
+                let mut removed = false;
+                self.store.update(|p| removed = p.remove_dock_layout(&name));
+                if !removed {
+                    return Err(format!("there is no dock layout named `{name}`"));
+                }
+                return Ok(json!({"removed": name}));
             }
             "profile.new" => self.ask_name(Named::NewProfile, ""),
             "profile.duplicate" => {
@@ -888,6 +909,23 @@ impl StudioApp {
         Ok(Value::Null)
     }
 
+    /// Put every dock setting to `docks`. Floating dock windows open again at the places and sizes
+    /// `docks` holds.
+    fn set_docks(&mut self, docks: store::Docks) {
+        self.store.update(|p| p.docks = docks);
+        self.dock_window_at = [None; 3];
+        self.dock_window_touched = [false; 3];
+        self.dock_window_drawn = [None; 3];
+        self.dock_window_gen = self.dock_window_gen.wrapping_add(1);
+    }
+
+    /// Save the current docks as the layout `name`; whether a layout with that name was replaced.
+    fn save_dock_layout(&mut self, name: &str) -> Result<bool, String> {
+        let mut result = Ok(false);
+        self.store.update(|p| result = p.save_dock_layout(name));
+        result
+    }
+
     fn ask_name(&mut self, what: Named, text: &str) {
         self.prompt = Some(Prompt { what, text: text.to_string(), error: None });
     }
@@ -945,6 +983,9 @@ impl StudioApp {
                 if what == Named::RenameCollection && old != name && !case_only {
                     self.store.remove_collection(&old)?;
                 }
+            }
+            Named::SaveDockLayout => {
+                self.save_dock_layout(name)?;
             }
         }
         self.refresh_lists();

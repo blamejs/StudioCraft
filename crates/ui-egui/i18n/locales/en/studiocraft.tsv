@@ -17,6 +17,7 @@
 	AMD AMF H.264	AMD AMF H.264
 	Apache 2.0	Apache 2.0
 	Apply	Apply
+	Apply Dock Layout	Apply Dock Layout
 	Attack (ms)	Attack (ms)
 	Audio	Audio
 	Audio bitrate	Audio bitrate
@@ -154,6 +155,7 @@
 	Limiter	Limiter
 	Linear	Linear
 	LIVE	LIVE
+	Layouts	Layouts
 	Live, {time}	Live, {time}
 	Lock (it can't be moved in the preview)	Lock (it can't be moved in the preview)
 	Lock Preview	Lock Preview
@@ -191,6 +193,7 @@
 	No graphics device: the preview is off	No graphics device: the preview is off
 	No sources in this scene. Add one with +.	No sources in this scene. Add one with +.
 	Noise gate	Noise gate
+	None	None
 	not in this ffmpeg	not in this ffmpeg
 	NVIDIA NVENC H.264	NVIDIA NVENC H.264
 	NVIDIA NVENC HEVC	NVIDIA NVENC HEVC
@@ -241,6 +244,8 @@
 	Refresh Lists	Refresh Lists
 	Release (ms)	Release (ms)
 	Remove	Remove
+	Remove Dock Layout	Remove Dock Layout
+	Remove Layout	Remove Layout
 	Remove Selected Source	Remove Selected Source
 	Remove the selected scene	Remove the selected scene
 	Remove the selected source from the scene	Remove the selected source from the scene
@@ -267,6 +272,8 @@
 	Running	Running
 	s	s
 	Saturation	Saturation
+	Save Dock Layout	Save Dock Layout
+	Save Dock Layout…	Save Dock Layout…
 	Save Replay	Save Replay
 	Scene Collection	Scene Collection
 	Scene {n}	Scene {n}

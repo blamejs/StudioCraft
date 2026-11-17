@@ -123,4 +123,5 @@ in both files.
 | Autosave after a change | 800 ms | `ui-egui::AUTOSAVE` | estimated |
 | Dock widths when none is set (the last shown dock takes the rest) | Scenes 300, Sources 340, Audio Mixer 400 points | `ui-egui::strip::DEFAULT_WIDTHS` | estimated |
 | Undocked dock window | the dock's default width by 200 points to start, at least 200 by 120 points | `ui-egui::StudioApp::dock_windows` | estimated |
+| Saved dock layouts | 32 | `ui-egui::store::MAX_DOCK_LAYOUTS` | estimated |
 | Status notices shown | 8 s (errors 24 s) | `ui-egui::NOTICE_S` | estimated |

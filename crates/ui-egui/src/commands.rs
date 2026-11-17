@@ -41,6 +41,9 @@ pub const UI_COMMANDS: &[(&str, &str)] = &[
     ("dock.transitions", "Transition Controls"),
     ("dock.move", "Move Dock"),
     ("dock.float", "Undock"),
+    ("dock.layout_save", "Save Dock Layout…"),
+    ("dock.layout_apply", "Apply Dock Layout"),
+    ("dock.layout_remove", "Remove Dock Layout"),
     ("dock.reset", "Reset Docks"),
     ("profile.new", "New Profile…"),
     ("profile.duplicate", "Duplicate Profile…"),
@@ -86,6 +89,8 @@ pub fn ui_params(id: &str) -> &'static str {
         "scopes.kind" => "kind: string (waveform, parade, histogram, vectorscopeYuv or vectorscopeHls)",
         "dock.move" => "dock: string (scenes, sources or mixer), to: string (left or right)",
         "dock.float" => "dock: string (scenes, sources or mixer), floating: boolean (true for a window of its own, false for the strip)",
+        "dock.layout_save" => "name?: string (without it the window asks for one)",
+        "dock.layout_apply" | "dock.layout_remove" => "name: string",
         _ => "",
     }
 }
@@ -150,6 +155,8 @@ pub struct MenuState<'a> {
     pub collection: &'a str,
     pub profiles: &'a [String],
     pub profile: &'a str,
+    /// The names of the saved dock layouts.
+    pub layouts: &'a [String],
 }
 
 /// A menu item, its label in the interface language.
@@ -160,6 +167,15 @@ fn item(id: &str, label: &str) -> Node {
 /// A menu or submenu title in the interface language.
 fn title(text: &str) -> &str {
     tlc!("menu", text)
+}
+
+/// One item per saved dock layout running `id` with its name, or a disabled None when there is
+/// no saved layout.
+fn layout_items(id: &str, names: &[String]) -> Vec<Node> {
+    if names.is_empty() {
+        return vec![Node::Item(Item::new(CommandRef::new(id), title("None")).enabled(false))];
+    }
+    names.iter().map(|n| Node::Item(Item::new(CommandRef::with_params(id, json!({"name": n})), n.clone()))).collect()
 }
 
 /// The menu bar before platform layout, in the interface language: File, Edit, View, Docks,
@@ -231,6 +247,10 @@ pub fn menu_bar(s: &MenuState) -> MenuBar {
             // transition picker with its duration.
             check("dock.controls", "Output Controls"),
             check("dock.transitions", "Transition Controls"),
+            Node::Separator,
+            item("dock.layout_save", "Save Dock Layout…"),
+            Node::submenu(title("Layouts"), layout_items("dock.layout_apply", s.layouts)),
+            Node::submenu(title("Remove Layout"), layout_items("dock.layout_remove", s.layouts)),
             Node::Separator,
             item("dock.reset", "Reset Docks"),
         ],
@@ -304,7 +324,7 @@ mod tests {
     #[test]
     fn menus_reach_every_command_they_name() {
         let names = vec!["A".to_string(), "B".to_string()];
-        let bar = menu_bar(&MenuState { collections: &names, collection: "A", profiles: &names, profile: "B" });
+        let bar = menu_bar(&MenuState { collections: &names, collection: "A", profiles: &names, profile: "B", layouts: &names });
         let titles: Vec<_> = bar.menus.iter().map(|m| m.title.as_str()).collect();
         assert_eq!(titles, ["File", "Edit", "View", "Docks", "Profile", "Scene Collection", "Tools", "Help"]);
         for it in bar.items() {
@@ -315,7 +335,7 @@ mod tests {
 
     #[test]
     fn the_docks_menu_names_the_output_bar_groups() {
-        let bar = menu_bar(&MenuState { collections: &[], collection: "", profiles: &[], profile: "" });
+        let bar = menu_bar(&MenuState { collections: &[], collection: "", profiles: &[], profile: "", layouts: &[] });
         let docks = bar.menus.iter().find(|m| m.title == "Docks").unwrap();
         let items: Vec<(&str, &str, Option<bool>)> = docks
             .children
@@ -330,6 +350,7 @@ mod tests {
                 ("dock.mixer", "Audio Mixer", Some(false)),
                 ("dock.controls", "Output Controls", Some(false)),
                 ("dock.transitions", "Transition Controls", Some(false)),
+                ("dock.layout_save", "Save Dock Layout…", None),
                 ("dock.reset", "Reset Docks", None),
             ]
         );
@@ -339,8 +360,29 @@ mod tests {
     }
 
     #[test]
+    fn the_layout_submenus_list_the_saved_layouts() {
+        let submenu = |layouts: &[String], name: &str| -> Vec<(String, serde_json::Value, bool)> {
+            let bar = menu_bar(&MenuState { collections: &[], collection: "", profiles: &[], profile: "", layouts });
+            let docks = bar.menus.into_iter().find(|m| m.title == "Docks").unwrap();
+            let Some(Node::Submenu { children, .. }) = docks.children.into_iter().find(|n| matches!(n, Node::Submenu { label, .. } if label == name))
+            else {
+                panic!("no {name} submenu");
+            };
+            children.into_iter().filter_map(|n| if let Node::Item(i) = n { Some((i.label, i.command.params, i.enabled)) } else { None }).collect()
+        };
+        assert_eq!(submenu(&[], "Layouts"), [("None".to_string(), serde_json::Value::Null, false)]);
+        assert_eq!(submenu(&[], "Remove Layout"), [("None".to_string(), serde_json::Value::Null, false)]);
+        let names = ["Talk".to_string(), "Game".to_string()];
+        assert_eq!(
+            submenu(&names, "Layouts"),
+            [("Talk".to_string(), json!({"name": "Talk"}), true), ("Game".to_string(), json!({"name": "Game"}), true)]
+        );
+        assert_eq!(submenu(&names, "Remove Layout").len(), 2);
+    }
+
+    #[test]
     fn help_community_holds_the_link_openers() {
-        let bar = menu_bar(&MenuState { collections: &[], collection: "", profiles: &[], profile: "" });
+        let bar = menu_bar(&MenuState { collections: &[], collection: "", profiles: &[], profile: "", layouts: &[] });
         let help = bar.menus.iter().find(|m| m.title == "Help").unwrap();
         let mut ids = Vec::new();
         for n in &help.children {
@@ -369,7 +411,7 @@ mod tests {
         assert!(is_ui_command("app.check_updates"));
         assert_eq!(ui_params("app.check_updates"), "");
         assert!(!ui_undoable("app.check_updates"));
-        let bar = menu_bar(&MenuState { collections: &[], collection: "", profiles: &[], profile: "" });
+        let bar = menu_bar(&MenuState { collections: &[], collection: "", profiles: &[], profile: "", layouts: &[] });
         let help = bar.menus.iter().find(|m| m.title == "Help").unwrap();
         let ids: Vec<_> = help.children.iter().filter_map(|n| if let Node::Item(i) = n { Some(i.command.id.as_str()) } else { None }).collect();
         assert_eq!(ids, ["app.check_updates", "app.about"]);

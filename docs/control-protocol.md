@@ -52,6 +52,12 @@ plays the source on the monitoring device and leaves it out of recordings and st
 `document.inspect` reports `monitoring` with the profile's `device`, whether it is `playing`, and
 the device's `rate` and `channels` while it plays.
 
+`dock.layout_save` takes `{"name"}` and saves every dock setting under that name, replacing a
+layout whose name differs only in case; it returns `{"saved", "replaced"}`. Without `name` it
+opens the Save Dock Layout prompt and returns `{"asking": true}`. Saving a 33rd layout is an
+error. `dock.layout_apply` and `dock.layout_remove` take `{"name"}`, compared without regard to
+case, and return `{"applied"}` or `{"removed"}`; a name no layout has is an error.
+
 Each entry of `engine.commands` has `id`, `label`, `params` (a short description of the
 parameters), `undo` (whether Edit › Undo takes the command back), `scope` (`engine` or `window`),
 `enabled` (whether the command can run now, as its menu item shows) and `shortcut` (the first
@@ -75,7 +81,8 @@ parameters that are left out.
 - `text` is at most 10,000 characters and goes to the field that has the keyboard focus.
 - `max_side` is the longest side of the returned picture in pixels; 0 (the default) is full size.
   Pictures are never larger than 4,096 pixels on a side.
-- `path` names a menu and the labels inside it, separated by `>`. Three dots match an ellipsis.
+- `path` names a menu and the labels inside it, separated by `>`. Three dots match an ellipsis
+  when no label in that menu is written exactly as given.
   An unknown path, a submenu and a disabled item are errors.
 
 `ui.click`, `ui.drag`, `ui.key` and `ui.type` queue input and answer at once. The window takes
@@ -106,6 +113,7 @@ dialog is open the request is an error.
 | `dialogs` | `settings`, `about`, `stats`, `encoders`, `confirm_exit` and `updates` (the update prompt or the result of Help › Check for Updates; each `true` or `false`), `properties` and `filters` (the ids of the sources whose windows are open) and `prompt` (`{"title", "text", "error"}` of the name prompt, or `null`). |
 | `docks` | Each shown dock in the strip (`scenes`, `sources`, `mixer`) from left to right, with its `rect`: `{"x", "y", "width", "height"}`; its `header` rect; its `title` rect, where a right-click opens the dock's menu; `title_truncated`, whether the title was shortened to fit; and `actions`, each header action with its `name` (`add`, `remove`, `up`, `down`, `properties`) and `rect`, from left to right. |
 | `floating_docks` | Each shown dock in a window of its own, with the same fields as `docks`; its `rect` is the window's. |
+| `dock_layouts` | The names of the saved dock layouts, in the order they were first saved. |
 | `dock_strip` | The strip that holds the docks, or `null` when every dock is hidden: its `rect` and `height`, `saved_height` (the height set by dragging its top edge, or `null`) and `saved_widths` (`scenes`, `sources` and `mixer`, each a width set by dragging a divider, or `null`) and `order`, every dock's name from left to right, hidden ones included. |
 | `output_bar` | The menu row: its `rect`; `transitions`, where the transition picker is (`inline`, `overflow` behind an icon button, or `hidden` by Docks › Transition Controls); `compact`, whether Record and Go Live leave out their labels; and `parts`, each drawn part with its `name` (`menus`, `mode`, `transition`, `duration`, `transition_settings`, `transition_overflow`, `record`, `stream`) and `rect`, from left to right. |
 | `preview` | The editable view's `rect` and `scale` (points per canvas pixel), or `null` before it is drawn. In studio mode this is the preview; otherwise it is the program. |

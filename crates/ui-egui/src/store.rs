@@ -286,6 +286,43 @@ impl Docks {
     }
 }
 
+/// The most dock layouts Docks › Save Layout… keeps.
+pub const MAX_DOCK_LAYOUTS: usize = 32;
+
+/// A dock layout saved with Docks › Save Layout…: every dock setting under a name.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct DockLayout {
+    pub name: String,
+    pub docks: Docks,
+}
+
+/// Reads at most [`MAX_DOCK_LAYOUTS`] layouts and skips the rest.
+fn bounded_layouts<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<DockLayout>, D::Error> {
+    use serde::de::{IgnoredAny, SeqAccess, Visitor};
+
+    struct Layouts;
+
+    impl<'de> Visitor<'de> for Layouts {
+        type Value = Vec<DockLayout>;
+        fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+            f.write_str("a list of dock layouts")
+        }
+        fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Self::Value, A::Error> {
+            let mut out = Vec::new();
+            while out.len() < MAX_DOCK_LAYOUTS {
+                match seq.next_element::<DockLayout>()? {
+                    Some(l) => out.push(l),
+                    None => return Ok(out),
+                }
+            }
+            while seq.next_element::<IgnoredAny>()?.is_some() {}
+            Ok(out)
+        }
+    }
+
+    d.deserialize_seq(Layouts)
+}
+
 /// The preferences in `config.toml`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -295,6 +332,9 @@ pub struct Prefs {
     /// The profile in use last.
     pub profile: String,
     pub docks: Docks,
+    /// The saved dock layouts, in the order they were first saved.
+    #[serde(deserialize_with = "bounded_layouts")]
+    pub dock_layouts: Vec<DockLayout>,
     pub stats: bool,
     /// View › Scopes is open.
     pub scopes: bool,
@@ -322,6 +362,7 @@ impl Default for Prefs {
             collection: DEFAULT_NAME.into(),
             profile: DEFAULT_NAME.into(),
             docks: Docks::default(),
+            dock_layouts: Vec::new(),
             stats: false,
             scopes: false,
             scope_kind: "waveform".into(),
@@ -341,17 +382,51 @@ impl Prefs {
     pub fn language(&self) -> &str {
         crate::i18n::normalize(&self.language)
     }
+
+    /// The names of the saved dock layouts.
+    pub fn dock_layout_names(&self) -> Vec<String> {
+        self.dock_layouts.iter().map(|l| l.name.clone()).collect()
+    }
+
+    /// The saved dock layout named `name`, ignoring case.
+    pub fn dock_layout(&self, name: &str) -> Option<&DockLayout> {
+        self.dock_layouts.iter().find(|l| l.name.eq_ignore_ascii_case(name))
+    }
+
+    /// Save the current docks as the layout `name`, replacing a layout with that name (ignoring
+    /// case). Returns whether one was replaced.
+    pub fn save_dock_layout(&mut self, name: &str) -> Result<bool, String> {
+        check_name(name)?;
+        let docks = self.docks;
+        if let Some(l) = self.dock_layouts.iter_mut().find(|l| l.name.eq_ignore_ascii_case(name)) {
+            *l = DockLayout { name: name.to_string(), docks };
+            return Ok(true);
+        }
+        if self.dock_layouts.len() >= MAX_DOCK_LAYOUTS {
+            return Err(format!("there are already {MAX_DOCK_LAYOUTS} dock layouts; remove one first"));
+        }
+        self.dock_layouts.push(DockLayout { name: name.to_string(), docks });
+        Ok(false)
+    }
+
+    /// Remove the layout `name`, ignoring case; false when there is none.
+    pub fn remove_dock_layout(&mut self, name: &str) -> bool {
+        let before = self.dock_layouts.len();
+        self.dock_layouts.retain(|l| !l.name.eq_ignore_ascii_case(name));
+        self.dock_layouts.len() != before
+    }
 }
 
 impl craft_settings::Settings for Prefs {
     const APP_ID: &'static str = "studiocraft";
-    /// Version 2 adds `docks.mixer_width` and `docks.order`, and version 3 adds `docks.floating`,
-    /// `docks.window_pos`, `docks.window_placed` and `docks.window_size`.
-    const SCHEMA_VERSION: u32 = 3;
+    /// Version 2 adds `docks.mixer_width` and `docks.order`, version 3 adds `docks.floating`,
+    /// `docks.window_pos`, `docks.window_placed` and `docks.window_size`, and version 4 adds
+    /// `dock_layouts`.
+    const SCHEMA_VERSION: u32 = 4;
 
-    /// Version 1 to 2 and 2 to 3: an older file lacks the keys its next version adds, so the docks
-    /// keep their saved settings and read the new keys as their defaults (every dock in the strip,
-    /// no saved window places or sizes). The file is left as it is.
+    /// Each version up to 4: an older file lacks the keys its next version adds, so the docks keep
+    /// their saved settings and read the new keys as their defaults (every dock in the strip, no
+    /// saved window places or sizes, no saved layouts). The file is left as it is.
     fn migrate(from: u32, doc: &mut craft_settings::DocumentMut) -> Result<(), craft_settings::MigrateError> {
         let _ = (from, doc);
         Ok(())
@@ -729,7 +804,7 @@ mod tests {
         s.update(|p| p.docks.height = 250.0);
         s.flush().unwrap();
         let text = std::fs::read_to_string(dir.join("config.toml")).unwrap();
-        assert!(text.contains("schema_version = 3"), "{text}");
+        assert!(text.contains("schema_version = 4"), "{text}");
         let (again, _) = Store::open(Location::Dir(dir.clone()));
         assert_eq!(again.prefs().docks, Docks { height: 250.0, ..want });
         let _ = std::fs::remove_dir_all(&dir);
@@ -749,10 +824,62 @@ mod tests {
         s.update(|p| p.docks.floating[1] = true);
         s.flush().unwrap();
         let text = std::fs::read_to_string(dir.join("config.toml")).unwrap();
-        assert!(text.contains("schema_version = 3"), "{text}");
+        assert!(text.contains("schema_version = 4"), "{text}");
         let (again, _) = Store::open(Location::Dir(dir.clone()));
         assert_eq!(again.prefs().docks.floating, [false, true, false]);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_version_3_config_has_no_dock_layouts_and_saved_layouts_are_kept() {
+        let dir = std::env::temp_dir().join(format!("studiocraft-store-prefs-v3-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let v3 = "schema_version = 3\n\n[docks]\nmixer = false\nfloating = [false, true, false]\n";
+        std::fs::write(dir.join("config.toml"), v3).unwrap();
+        let (mut s, _) = Store::open(Location::Dir(dir.clone()));
+        assert_eq!(s.prefs().dock_layouts, []);
+        assert!(!s.prefs().docks.mixer);
+        s.update(|p| {
+            assert_eq!(p.save_dock_layout("Talk"), Ok(false));
+            p.docks.mixer = true;
+            assert_eq!(p.save_dock_layout("Game"), Ok(false));
+        });
+        s.flush().unwrap();
+        let (again, _) = Store::open(Location::Dir(dir.clone()));
+        let p = again.prefs();
+        assert_eq!(p.dock_layout_names(), ["Talk", "Game"]);
+        let talk = p.dock_layout("talk").map(|l| l.docks);
+        assert_eq!(talk.map(|d| (d.mixer, d.floating)), Some((false, [false, true, false])));
+        assert_eq!(p.dock_layout("Game").map(|l| l.docks.mixer), Some(true));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn dock_layouts_are_replaced_by_name_removed_and_limited() {
+        let mut p = Prefs::default();
+        assert_eq!(p.save_dock_layout("One"), Ok(false));
+        p.docks.sources = false;
+        assert_eq!(p.save_dock_layout("ONE"), Ok(true), "the same name in other letters replaces it");
+        assert_eq!(p.dock_layout_names(), ["ONE"]);
+        assert_eq!(p.dock_layout("one").map(|l| l.docks.sources), Some(false));
+        assert!(p.save_dock_layout("").is_err());
+        assert!(p.save_dock_layout(" spaced").is_err());
+        for i in 1..MAX_DOCK_LAYOUTS {
+            assert_eq!(p.save_dock_layout(&format!("L{i}")), Ok(false));
+        }
+        assert_eq!(p.dock_layouts.len(), MAX_DOCK_LAYOUTS);
+        assert!(p.save_dock_layout("One more").is_err(), "the list is full");
+        assert_eq!(p.save_dock_layout("L5"), Ok(true), "a full list still takes a replacement");
+        assert!(p.remove_dock_layout("one"));
+        assert!(!p.remove_dock_layout("one"), "already removed");
+        assert_eq!(p.dock_layouts.len(), MAX_DOCK_LAYOUTS - 1);
+
+        // A file with more layouts than the limit keeps the first ones.
+        let many: Vec<serde_json::Value> = (0..100).map(|i| serde_json::json!({"name": format!("N{i}"), "docks": {}})).collect();
+        let read: Prefs = serde_json::from_value(serde_json::json!({ "dock_layouts": many })).unwrap();
+        assert_eq!(read.dock_layouts.len(), MAX_DOCK_LAYOUTS);
+        assert_eq!(read.dock_layouts[0].name, "N0");
     }
 
     #[test]
