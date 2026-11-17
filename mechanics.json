@@ -13,6 +13,8 @@
     {"name": "color key similarity", "group": "video", "value": 400, "code": "sources::filters::ColorKey", "estimated": true},
     {"name": "color key smoothness", "group": "video", "value": 80, "code": "sources::filters::ColorKey", "estimated": true},
     {"name": "color key default key color", "group": "video", "value": "#00ff00", "code": "sources::filters::COLOR_KEY_DEFAULT", "estimated": true},
+    {"name": "largest side of an image mask picture", "group": "video", "value": 8192, "unit": "px", "code": "plugin::filter::MAX_EFFECT_SIDE", "estimated": true},
+    {"name": "image mask luma weights", "group": "video", "value": [0.2126, 0.7152, 0.0722], "code": "sources::filters::ImageMask", "estimated": true},
     {"name": "sharpen sharpness", "group": "video", "value": 0.08, "code": "sources::filters::SHARPEN_DEFAULT", "estimated": true},
     {"name": "sharpen gain at sharpness 1", "group": "video", "value": 4, "code": "sources::filters::SHARPEN_GAIN", "estimated": true},
     {"name": "default transition", "group": "transitions", "value": "fade", "code": "model::collection::TransitionConfig::default", "estimated": true},

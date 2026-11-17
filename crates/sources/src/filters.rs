@@ -1,11 +1,17 @@
 //! Built-in filters.
 
+use std::path::Path;
+
 use craft_audio_dsp::{AudioEffect, create_effect};
 use craft_color_transform::{Mat3, SRGB, cct};
 use studiocraft_media::audio::{BLOCK_FRAMES, CHANNELS, SAMPLE_RATE};
 use studiocraft_media::mix::{from_db, to_db};
-use studiocraft_model::{ChoiceOption, Field, FieldKind, Settings, SettingsSchema};
-use studiocraft_plugin::{Filter, FilterInstance, FilterTarget, MAX_EFFECT_SIDE, Plugin, PluginError, Reframe, VIDEO_EFFECT_PARAMS, VideoEffect};
+use studiocraft_model::{ChoiceOption, Field, FieldKind, PathMode, Settings, SettingsSchema};
+use studiocraft_plugin::{
+    EffectImage, Filter, FilterInstance, FilterTarget, MAX_EFFECT_SIDE, Plugin, PluginError, Reframe, VIDEO_EFFECT_PARAMS, VideoEffect,
+};
+
+use crate::image::{PICTURE_EXTENSIONS, load as load_picture};
 
 /// A video filter's shader parameters.
 type Params = [f32; VIDEO_EFFECT_PARAMS];
@@ -192,6 +198,18 @@ fn checked_choice<'a>(s: &Settings, key: &str, default: &'a str, options: &[&'a 
 fn checked_color(s: &Settings, key: &str, default: [u8; 4]) -> Result<[u8; 4], PluginError> {
     let Some(raw) = s.get(key) else { return Ok(default) };
     s.color(key).ok_or_else(|| PluginError::Failed(format!("`{key}` must be a color such as #00ff00, not {raw}")))
+}
+
+/// A true or false setting: the default when the key is missing, and an error otherwise.
+fn checked_bool(s: &Settings, key: &str, default: bool) -> Result<bool, PluginError> {
+    let Some(raw) = s.get(key) else { return Ok(default) };
+    raw.as_bool().ok_or_else(|| PluginError::Failed(format!("`{key}` must be true or false, not {raw}")))
+}
+
+/// A text setting: empty when the key is missing, and an error when the value is not text.
+fn checked_text<'s>(s: &'s Settings, key: &str) -> Result<&'s str, PluginError> {
+    let Some(raw) = s.get(key) else { return Ok("") };
+    raw.as_str().ok_or_else(|| PluginError::Failed(format!("`{key}` must be text, not {raw}")))
 }
 
 // The audio processing below splits a block into a left and a right buffer.
@@ -743,6 +761,143 @@ fn sharpen_params(s: &Settings) -> Result<(Params, Reframe), PluginError> {
     Ok((p, Reframe::None))
 }
 
+const IMAGE_MASK: &str = r"
+fn effect(color: vec4<f32>, uv: vec2<f32>, size: vec2<f32>, p0: vec4<f32>, p1: vec4<f32>) -> vec4<f32> {
+    // p0: the color the result is multiplied by, opacity. p1.x: the type (0 alpha from the
+    // picture's color, 1 alpha from its alpha, 2 multiply, 3 add, 4 subtract), p1.y: 1 when the
+    // picture is stretched over the source, p1.zw: the picture's size in pixels.
+    var st = uv;
+    if p1.y < 0.5 {
+        st = (uv * size - (size - p1.zw) * 0.5) / p1.zw;
+    }
+    // Premultiplied: m.rgb is the picture's color times its alpha.
+    let m = image_at(st);
+    let kind = i32(p1.x + 0.5);
+    var c = color;
+    if kind == 0 {
+        c = c * dot(m.rgb, vec3<f32>(0.2126, 0.7152, 0.0722));
+    } else if kind == 1 {
+        c = c * m.a;
+    } else if kind == 2 {
+        c = vec4<f32>(c.rgb * (vec3<f32>(1.0 - m.a) + m.rgb), c.a);
+    } else if kind == 3 {
+        c = vec4<f32>(min(c.rgb + m.rgb * c.a, vec3<f32>(c.a)), c.a);
+    } else {
+        c = vec4<f32>(max(c.rgb - m.rgb * c.a, vec3<f32>(0.0)), c.a);
+    }
+    return vec4<f32>(c.rgb * p0.rgb, c.a) * p0.w;
+}
+";
+
+/// The types of [`ImageMask`], in the order of the shader's `p1.x`.
+const IMAGE_MASK_TYPES: &[&str] = &["alpha_color", "alpha_alpha", "multiply", "add", "subtract"];
+
+/// Masks or blends a source with a picture file.
+///
+/// The two alpha mask types make the source as opaque as the picture is bright (BT.709 luma
+/// times the picture's alpha) or as the picture's alpha. Multiply, Add and Subtract combine the
+/// source's color with the picture's, weighted by the picture's alpha. The result is multiplied
+/// by Color and drawn at Opacity. With Stretch image the picture covers the whole source;
+/// otherwise it is centered at its own size, and the alpha mask types make the source
+/// transparent outside it. The picture is read when the filter starts or its file changes; with
+/// no file the filter leaves the source as it is.
+pub struct ImageMask;
+
+impl Plugin for ImageMask {
+    fn id(&self) -> &'static str {
+        "image_mask"
+    }
+    fn name(&self) -> &'static str {
+        "Image mask"
+    }
+    fn schema(&self) -> SettingsSchema {
+        let extensions = PICTURE_EXTENSIONS.map(String::from).to_vec();
+        SettingsSchema::new(vec![
+            Field::new(
+                "type",
+                "Type",
+                FieldKind::Choice {
+                    options: vec![
+                        ChoiceOption::new("alpha_color", "Alpha mask (color channel)"),
+                        ChoiceOption::new("alpha_alpha", "Alpha mask (alpha channel)"),
+                        ChoiceOption::new("multiply", "Blend (multiply)"),
+                        ChoiceOption::new("add", "Blend (add)"),
+                        ChoiceOption::new("subtract", "Blend (subtract)"),
+                    ],
+                },
+                "alpha_color",
+            ),
+            Field::new("file", "Picture file", FieldKind::Path { mode: PathMode::OpenFile, filter_name: "Pictures".into(), extensions }, ""),
+            Field::new("color", "Color", FieldKind::Color, "#ffffffff"),
+            float_field("opacity", "Opacity (%)", 0.0, 100.0, 1.0, 100.0),
+            Field::new("stretch", "Stretch image", FieldKind::Bool, false),
+        ])
+    }
+}
+
+impl Filter for ImageMask {
+    fn target(&self) -> FilterTarget {
+        FilterTarget::Video
+    }
+    fn create(&self, settings: &Settings) -> Result<Box<dyn FilterInstance>, PluginError> {
+        let mut f = MaskInstance { file: String::new(), image: None, params: [0.0; VIDEO_EFFECT_PARAMS] };
+        f.update(settings)?;
+        Ok(Box::new(f))
+    }
+}
+
+struct MaskInstance {
+    /// The file `image` was read from.
+    file: String,
+    image: Option<EffectImage>,
+    params: Params,
+}
+
+/// Read `path` as a mask picture.
+fn load_mask(path: &str) -> Result<EffectImage, PluginError> {
+    let (w, h, rgba) = load_picture(Path::new(path))?;
+    EffectImage::new(w, h, rgba)
+        .ok_or_else(|| PluginError::Failed(format!("{path} is {w} x {h} pixels; a mask picture can be at most {MAX_EFFECT_SIDE} pixels a side")))
+}
+
+impl FilterInstance for MaskInstance {
+    /// A rejected update, a file that cannot be read included, leaves the filter as it was.
+    fn update(&mut self, s: &Settings) -> Result<(), PluginError> {
+        let kind = checked_choice(s, "type", "alpha_color", IMAGE_MASK_TYPES)?;
+        let file = checked_text(s, "file")?;
+        let [r, g, b, _] = checked_color(s, "color", [255; 4])?;
+        let opacity = checked(s, "opacity", 100.0, 0.0, 100.0, false)?;
+        let stretch = checked_bool(s, "stretch", false)?;
+        let image = if file == self.file {
+            self.image.clone()
+        } else if file.trim().is_empty() {
+            None
+        } else {
+            Some(load_mask(file)?)
+        };
+        let kind = IMAGE_MASK_TYPES.iter().position(|t| *t == kind).unwrap_or(0);
+        let mut p = [0.0; VIDEO_EFFECT_PARAMS];
+        p[..6].copy_from_slice(&[
+            f32::from(r) / 255.0,
+            f32::from(g) / 255.0,
+            f32::from(b) / 255.0,
+            (opacity / 100.0) as f32,
+            kind as f32,
+            f32::from(u8::from(stretch)),
+        ]);
+        if let Some(image) = &image {
+            p[6] = image.width() as f32;
+            p[7] = image.height() as f32;
+        }
+        (self.file, self.image, self.params) = (file.to_string(), image, p);
+        Ok(())
+    }
+    fn video_effect(&self) -> Option<VideoEffect> {
+        let image = self.image.clone()?;
+        Some(VideoEffect { image: Some(image), ..VideoEffect::new("image_mask", IMAGE_MASK, self.params) })
+    }
+}
+
 /// Reads a video filter's pass from its settings.
 type ReadPass = fn(&Settings) -> Result<(Params, Reframe), PluginError>;
 
@@ -1271,6 +1426,134 @@ mod tests {
         }
     }
 
+    /// A new folder for one test's files.
+    fn scratch(test: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("studiocraft-{test}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// `pixels` saved as a PNG in `dir`; its path.
+    fn png(dir: &std::path::Path, name: &str, w: u32, h: u32, pixels: &[[u8; 4]]) -> String {
+        let path = dir.join(name);
+        ::image::RgbaImage::from_raw(w, h, pixels.concat()).unwrap().save(&path).unwrap();
+        path.to_string_lossy().into_owned()
+    }
+
+    fn mask(s: &Settings) -> VideoEffect {
+        ImageMask.create(s).unwrap().video_effect().unwrap()
+    }
+
+    fn near(got: [u8; 4], want: [u8; 4]) -> bool {
+        got.iter().zip(want).all(|(a, b)| a.abs_diff(b) <= 3)
+    }
+
+    /// Each type over a 2 x 1 source, with the picture stretched over it, drawn over black.
+    #[test]
+    fn image_mask_masks_and_blends_with_its_picture() {
+        let dir = scratch("image-mask-types");
+        let bright = png(&dir, "bright.png", 2, 1, &[[255, 255, 255, 255], [0, 0, 0, 255]]);
+        let alpha = png(&dir, "alpha.png", 2, 1, &[[0, 0, 0, 255], [255, 255, 255, 0]]);
+        let tint = png(&dir, "tint.png", 2, 1, &[[255, 128, 0, 255], [100, 100, 100, 255]]);
+        let source = [[200, 200, 200, 255], [200, 200, 200, 255]];
+        let s = |kind: &str, file: &str| Settings::new().with("type", kind).with("file", file).with("stretch", true);
+        let cases: [(Settings, [[u8; 4]; 2]); 6] = [
+            (s("alpha_color", &bright), [[200, 200, 200, 255], [0, 0, 0, 255]]),
+            (s("alpha_alpha", &alpha), [[200, 200, 200, 255], [0, 0, 0, 255]]),
+            (s("multiply", &tint), [[200, 100, 0, 255], [78, 78, 78, 255]]),
+            (s("add", &tint), [[255, 255, 200, 255], [255, 255, 255, 255]]),
+            (s("subtract", &tint), [[0, 72, 200, 255], [100, 100, 100, 255]]),
+            (s("alpha_color", &bright).with("color", "#ff000080").with("opacity", 50.0), [[100, 0, 0, 255], [0, 0, 0, 255]]),
+        ];
+        for (settings, want) in cases {
+            let Some(px) = draw_frame(&source, 2, 1, vec![mask(&settings)]) else { break };
+            for (x, w) in want.iter().enumerate() {
+                assert!(near(canvas_pixel(&px, x, 0), *w), "{settings:?}, x {x}: {:?}", canvas_pixel(&px, x, 0));
+            }
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Without Stretch image the picture is centered at its own size, and an alpha mask leaves
+    /// the source transparent around it; the blend types leave it as it is there.
+    #[test]
+    fn image_mask_centers_a_picture_it_does_not_stretch() {
+        let dir = scratch("image-mask-center");
+        let white = png(&dir, "white.png", 2, 1, &[[255, 255, 255, 255]; 2]);
+        let source = [[0, 200, 0, 255]; 4];
+        let s = Settings::new().with("file", white.as_str());
+        let Some(px) = draw_frame(&source, 4, 1, vec![mask(&s)]) else { return };
+        let row: Vec<_> = (0..4).map(|x| canvas_pixel(&px, x, 0)).collect();
+        assert!(near(row[0], [0, 0, 0, 255]) && near(row[3], [0, 0, 0, 255]), "{row:?}");
+        assert!(near(row[1], [0, 200, 0, 255]) && near(row[2], [0, 200, 0, 255]), "{row:?}");
+        let Some(px) = draw_frame(&source, 4, 1, vec![mask(&s.with("type", "multiply"))]) else { return };
+        assert!(near(canvas_pixel(&px, 0, 0), [0, 200, 0, 255]), "{:?}", canvas_pixel(&px, 0, 0));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn image_mask_reads_its_settings_and_its_file_once() {
+        let dir = scratch("image-mask-settings");
+        let file = png(&dir, "mask.png", 3, 2, &[[255; 4]; 6]);
+        // Without a file the filter adds no pass.
+        assert!(ImageMask.create(&Settings::new()).unwrap().video_effect().is_none());
+        assert!(ImageMask.create(&ImageMask.schema().defaults()).unwrap().video_effect().is_none());
+        let s =
+            Settings::new().with("type", "subtract").with("file", file.as_str()).with("color", "#336699").with("opacity", 25.0).with("stretch", true);
+        let mut f = ImageMask.create(&s).unwrap();
+        let e = f.video_effect().unwrap();
+        assert_eq!(e.params[..8], [0.2, 0.4, 0.6, 0.25, 4.0, 1.0, 3.0, 2.0]);
+        let image = e.image.clone().unwrap();
+        assert_eq!((image.width(), image.height()), (3, 2));
+        // Other settings change without reading the file again: the picture is the same one,
+        // even after the file is gone.
+        std::fs::remove_file(&file).unwrap();
+        f.update(&s.clone().with("opacity", 50.0)).unwrap();
+        let e = f.video_effect().unwrap();
+        assert_eq!(e.image, Some(image));
+        assert_eq!(e.params[3], 0.5);
+        // Clearing the file removes the pass.
+        f.update(&Settings::new().with("file", "")).unwrap();
+        assert!(f.video_effect().is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn image_mask_rejects_bad_settings_and_missing_files_and_keeps_the_last_good_ones() {
+        use serde_json::{Value, json};
+        let dir = scratch("image-mask-bad");
+        let file = png(&dir, "mask.png", 1, 1, &[[255; 4]]);
+        let missing = dir.join("missing.png").to_string_lossy().into_owned();
+        let broken = dir.join("broken.png");
+        std::fs::write(&broken, b"not a picture").unwrap();
+        let empty = dir.join("empty.png");
+        std::fs::write(&empty, b"").unwrap();
+        let bad: [(&str, Value); 11] = [
+            ("type", json!("blur")),
+            ("type", json!(1)),
+            ("file", json!(5)),
+            ("file", json!(missing)),
+            ("file", json!(broken.to_string_lossy())),
+            ("file", json!(empty.to_string_lossy())),
+            ("file", json!(dir.to_string_lossy())),
+            ("color", json!("white")),
+            ("opacity", json!(101)),
+            ("opacity", Value::from(f64::NAN)),
+            ("stretch", json!("yes")),
+        ];
+        let good = Settings::new().with("file", file.as_str()).with("opacity", 40.0);
+        for (key, v) in bad {
+            let s = good.clone().with(key, v.clone());
+            assert!(ImageMask.create(&s).is_err(), "{key} = {v}");
+            let mut f = ImageMask.create(&good).unwrap();
+            let before = f.video_effect();
+            assert!(f.update(&s).is_err(), "{key} = {v}");
+            assert_eq!(f.video_effect(), before, "{key} = {v}: the last good settings stay");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn video_filters_have_effects_and_audio_filters_do_not() {
         assert_eq!(builtin_video_effects().len(), 5);
@@ -1363,7 +1646,7 @@ mod tests {
         for rgba in [[230, 150, 90, 255], [128, 128, 128, 255], [20, 200, 60, 255], [255, 255, 255, 255]] {
             let video = Arc::new(VideoOut::default());
             video.publish(VideoContent::Solid { rgba, width: 4, height: 4 });
-            let item = ItemDesc { source: SourceId(1), video, transform: Default::default(), effects: vec![effect] };
+            let item = ItemDesc { source: SourceId(1), video, transform: Default::default(), effects: vec![effect.clone()] };
             c.set_plan(Arc::new(Plan { program: SceneDesc { items: vec![item] }, ..Plan::default() }));
             c.frame(Tick(0), &AtomicU64::new(0));
             let px = c.read_program().unwrap();

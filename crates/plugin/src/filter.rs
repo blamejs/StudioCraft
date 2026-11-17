@@ -1,5 +1,7 @@
 //! Filters on a source's video or audio.
 
+use std::sync::Arc;
+
 use studiocraft_model::Settings;
 
 use crate::{Plugin, PluginError};
@@ -28,19 +30,72 @@ pub trait Filter: Plugin {
 /// `params[8..12]` to `params[20..24]`. `input_size()` is the input's size in pixels, and
 /// `input_pixel(px)` reads the input at a pixel position (pixel centers at .5), clamped to the
 /// input's edges. The compositor compiles each distinct `key` once.
-#[derive(Clone, Copy, Debug, PartialEq)]
+///
+/// A pass with an [`image`](VideoEffect::image) can also call `image_at(st)`: the picture's
+/// premultiplied color at `st` (0 to 1 across the picture, top-left at 0), transparent outside
+/// it. Every pass with the same `key` has an image, or none does; a pass that differs from the
+/// first one compiled under its key is skipped.
+#[derive(Clone, Debug, PartialEq)]
 pub struct VideoEffect {
     pub key: &'static str,
     pub wgsl: &'static str,
     pub params: [f32; VIDEO_EFFECT_PARAMS],
     /// The part of the input the pass draws, which sets the size of its output.
     pub reframe: Reframe,
+    /// A picture the pass reads beside its input.
+    pub image: Option<EffectImage>,
 }
 
 impl VideoEffect {
     /// A pass whose output has its input's size.
     pub fn new(key: &'static str, wgsl: &'static str, params: [f32; VIDEO_EFFECT_PARAMS]) -> Self {
-        Self { key, wgsl, params, reframe: Reframe::None }
+        Self { key, wgsl, params, reframe: Reframe::None, image: None }
+    }
+}
+
+/// A picture for a video filter pass: tightly packed RGBA rows with straight alpha, shared
+/// between the filter and the compositor. Two images are equal when they are the same picture,
+/// not when their pixels match; the compositor uploads each one once.
+#[derive(Clone)]
+pub struct EffectImage(Arc<ImagePixels>);
+
+struct ImagePixels {
+    width: u32,
+    height: u32,
+    rgba: Vec<u8>,
+}
+
+impl EffectImage {
+    /// A `width` x `height` picture, or `None` when a side is 0 or larger than
+    /// [`MAX_EFFECT_SIDE`], or `rgba` does not hold exactly `width * height * 4` bytes.
+    pub fn new(width: u32, height: u32, rgba: Vec<u8>) -> Option<Self> {
+        let sides = (1..=MAX_EFFECT_SIDE).contains(&width) && (1..=MAX_EFFECT_SIDE).contains(&height);
+        (sides && rgba.len() as u64 == u64::from(width) * u64::from(height) * 4).then(|| Self(Arc::new(ImagePixels { width, height, rgba })))
+    }
+    pub fn width(&self) -> u32 {
+        self.0.width
+    }
+    pub fn height(&self) -> u32 {
+        self.0.height
+    }
+    pub fn rgba(&self) -> &[u8] {
+        &self.0.rgba
+    }
+    /// The same for every copy of this picture and different from every other picture alive.
+    pub fn id(&self) -> usize {
+        Arc::as_ptr(&self.0) as usize
+    }
+}
+
+impl PartialEq for EffectImage {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+impl std::fmt::Debug for EffectImage {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "EffectImage({} x {})", self.0.width, self.0.height)
     }
 }
 
@@ -123,6 +178,21 @@ pub trait FilterInstance: Send {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_effect_image_holds_exactly_its_pixels_and_is_compared_by_identity() {
+        let a = EffectImage::new(2, 1, vec![0; 8]).unwrap();
+        assert_eq!((a.width(), a.height(), a.rgba().len()), (2, 1, 8));
+        assert_eq!(a.clone(), a);
+        assert_eq!(a.clone().id(), a.id());
+        let b = EffectImage::new(2, 1, vec![0; 8]).unwrap();
+        assert_ne!(a, b, "the same pixels in another picture");
+        assert_ne!(a.id(), b.id());
+        for (w, h, len) in [(0, 1, 0), (1, 0, 0), (2, 1, 7), (2, 1, 9), (MAX_EFFECT_SIDE + 1, 1, (MAX_EFFECT_SIDE as usize + 1) * 4)] {
+            assert!(EffectImage::new(w, h, vec![0; len]).is_none(), "{w} x {h}, {len} bytes");
+        }
+        assert!(EffectImage::new(MAX_EFFECT_SIDE, 1, vec![0; MAX_EFFECT_SIDE as usize * 4]).is_some());
+    }
 
     #[test]
     fn reframing_crops_pads_and_picks_areas() {

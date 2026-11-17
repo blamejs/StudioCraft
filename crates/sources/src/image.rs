@@ -12,6 +12,9 @@ const MAX_FILE: u64 = 512 * 1024 * 1024;
 /// Most pixels in a picture: 8192 x 8192, which is 256 MB as RGBA.
 const MAX_PIXELS: u64 = 8192 * 8192;
 
+/// The picture file extensions the file dialogs offer.
+pub(crate) const PICTURE_EXTENSIONS: [&str; 9] = ["png", "jpg", "jpeg", "bmp", "gif", "webp", "tga", "tif", "tiff"];
+
 pub struct ImageSource;
 
 impl Plugin for ImageSource {
@@ -22,7 +25,7 @@ impl Plugin for ImageSource {
         "Image"
     }
     fn schema(&self) -> SettingsSchema {
-        let extensions = ["png", "jpg", "jpeg", "bmp", "gif", "webp", "tga", "tif", "tiff"].map(String::from).to_vec();
+        let extensions = PICTURE_EXTENSIONS.map(String::from).to_vec();
         SettingsSchema::new(vec![Field::new(
             "file",
             "Picture file",

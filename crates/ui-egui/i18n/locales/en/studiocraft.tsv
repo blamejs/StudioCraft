@@ -11,6 +11,8 @@
 	Add a source	Add a source
 	Add Scene	Add Scene
 	Alignment	Alignment
+	Alpha mask (alpha channel)	Alpha mask (alpha channel)
+	Alpha mask (color channel)	Alpha mask (color channel)
 	AMD AMF H.264	AMD AMF H.264
 	Apache 2.0	Apache 2.0
 	Apply	Apply
@@ -25,6 +27,9 @@
 	Available Encoders	Available Encoders
 	Background	Background
 	Balanced	Balanced
+	Blend (add)	Blend (add)
+	Blend (multiply)	Blend (multiply)
+	Blend (subtract)	Blend (subtract)
 	Bottom	Bottom
 	Brightness	Brightness
 	Browse…	Browse…
@@ -123,6 +128,7 @@
 	Hold (ms)	Hold (ms)
 	Hotkeys	Hotkeys
 	Image	Image
+	Image mask	Image mask
 	Import…	Import…
 	Intel Quick Sync H.264	Intel Quick Sync H.264
 	Inter (SIL OFL 1.1)	Inter (SIL OFL 1.1)
@@ -267,6 +273,7 @@
 	Stopping…	Stopping…
 	Stream	Stream
 	Stream key	Stream key
+	Stretch image	Stretch image
 	Stretch to Screen	Stretch to Screen
 	Studio	Studio
 	Studio Mode	Studio Mode
@@ -292,6 +299,7 @@
 	Transition Controls	Transition Controls
 	Transition settings	Transition settings
 	Transition to Program	Transition to Program
+	Type	Type
 	Type shortcuts such as Ctrl+1 or Shift+F5; separate several with commas.	Type shortcuts such as Ctrl+1 or Shift+F5; separate several with commas.
 	ultrafast	ultrafast
 	Undo	Undo

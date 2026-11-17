@@ -131,10 +131,10 @@ fn filters_run_as_gpu_passes_in_order() {
     params[0] = 1.0;
     let invert = VideoEffect::new("test.invert", INVERT, params);
     let mut it = item(1, &v, at(0.0, 0.0));
-    it.effects = vec![invert];
+    it.effects = vec![invert.clone()];
     let px = draw(&mut c, Plan { program: SceneDesc { items: vec![it.clone()] }, ..Plan::default() }, Tick(0));
     assert!(close(pixel(&px, 16, 8, 8), [0, 255, 255, 255]), "{:?}", pixel(&px, 16, 8, 8));
-    it.effects = vec![invert, invert];
+    it.effects = vec![invert.clone(), invert];
     let px = draw(&mut c, Plan { program: SceneDesc { items: vec![it] }, ..Plan::default() }, Tick(1));
     assert!(close(pixel(&px, 16, 8, 8), [255, 0, 0, 255]), "two inverts cancel");
 }
@@ -183,6 +183,71 @@ fn a_broken_filter_is_reported_and_skipped() {
     let errors = c.take_errors();
     assert_eq!(errors.len(), 1);
     assert!(matches!(&errors[0], RenderError::Shader { key, .. } if key == "test.broken"));
+}
+
+/// Shows the filter's picture, stretched over the output.
+const PICTURE: &str = "fn effect(color: vec4<f32>, uv: vec2<f32>, size: vec2<f32>, p0: vec4<f32>, p1: vec4<f32>) -> vec4<f32> {
+    return image_at(uv);
+}";
+
+fn red_and_blue() -> EffectImage {
+    EffectImage::new(2, 1, vec![255, 0, 0, 255, 0, 0, 255, 255]).unwrap()
+}
+
+#[test]
+fn a_filter_reads_its_picture_and_the_picture_is_released_with_the_plan() {
+    let Some(mut c) = compositor(16, 16) else { return };
+    let v = solid([0, 255, 0, 255], 16, 16);
+    let mut it = item(1, &v, at(0.0, 0.0));
+    it.effects = vec![VideoEffect { image: Some(red_and_blue()), ..VideoEffect::new("test.picture", PICTURE, [0.0; VIDEO_EFFECT_PARAMS]) }];
+    let px = draw(&mut c, Plan { program: SceneDesc { items: vec![it.clone()] }, ..Plan::default() }, Tick(0));
+    assert!(c.take_errors().is_empty());
+    assert!(close(pixel(&px, 16, 2, 8), [255, 0, 0, 255]), "{:?}", pixel(&px, 16, 2, 8));
+    assert!(close(pixel(&px, 16, 13, 8), [0, 0, 255, 255]), "{:?}", pixel(&px, 16, 13, 8));
+    assert_eq!(c.images.len(), 1);
+    // The same plan again uploads nothing new; a plan without the filter releases the picture.
+    draw(&mut c, Plan { program: SceneDesc { items: vec![it.clone()] }, ..Plan::default() }, Tick(1));
+    assert_eq!(c.images.len(), 1);
+    it.effects.clear();
+    let px = draw(&mut c, Plan { program: SceneDesc { items: vec![it] }, ..Plan::default() }, Tick(2));
+    assert!(c.images.is_empty());
+    assert!(close(pixel(&px, 16, 2, 8), [0, 255, 0, 255]));
+}
+
+/// Between an opaque white pixel and a transparent red one, a stretched picture blends toward
+/// transparent, without the red the transparent pixel stores.
+#[test]
+fn a_stretched_picture_blends_without_the_color_of_its_transparent_pixels() {
+    let Some(mut c) = compositor(16, 16) else { return };
+    let v = solid([0, 0, 0, 255], 16, 16);
+    let image = EffectImage::new(2, 1, vec![255, 255, 255, 255, 255, 0, 0, 0]).unwrap();
+    let mut it = item(1, &v, at(0.0, 0.0));
+    it.effects = vec![VideoEffect { image: Some(image), ..VideoEffect::new("test.picture", PICTURE, [0.0; VIDEO_EFFECT_PARAMS]) }];
+    let px = draw(&mut c, Plan { program: SceneDesc { items: vec![it] }, ..Plan::default() }, Tick(0));
+    // Pixel 7's center is 0.5625 of the way from the red texel to the white one.
+    let got = pixel(&px, 16, 7, 8);
+    assert!(got[..3].iter().all(|v| v.abs_diff(143) <= 4), "{got:?}");
+}
+
+/// A key compiled with a picture is skipped when a pass under it comes without one, and the
+/// other way round.
+#[test]
+fn a_pass_that_differs_from_its_key_about_a_picture_is_skipped() {
+    let Some(mut c) = compositor(16, 16) else { return };
+    let v = solid([0, 255, 0, 255], 16, 16);
+    let with = VideoEffect { image: Some(red_and_blue()), ..VideoEffect::new("test.picture", PICTURE, [0.0; VIDEO_EFFECT_PARAMS]) };
+    let without = VideoEffect::new("test.picture", PICTURE, [0.0; VIDEO_EFFECT_PARAMS]);
+    let mut it = item(1, &v, at(0.0, 0.0));
+    it.effects = vec![with];
+    draw(&mut c, Plan { program: SceneDesc { items: vec![it.clone()] }, ..Plan::default() }, Tick(0));
+    it.effects = vec![without.clone()];
+    let px = draw(&mut c, Plan { program: SceneDesc { items: vec![it.clone()] }, ..Plan::default() }, Tick(1));
+    assert!(close(pixel(&px, 16, 2, 8), [0, 255, 0, 255]), "{:?}", pixel(&px, 16, 2, 8));
+    let keep = VideoEffect::new("test.keep", KEEP, [0.0; VIDEO_EFFECT_PARAMS]);
+    it.effects = vec![keep, VideoEffect { image: Some(red_and_blue()), ..VideoEffect::new("test.keep", KEEP, [0.0; VIDEO_EFFECT_PARAMS]) }];
+    let px = draw(&mut c, Plan { program: SceneDesc { items: vec![it] }, ..Plan::default() }, Tick(2));
+    assert!(close(pixel(&px, 16, 2, 8), [0, 255, 0, 255]), "{:?}", pixel(&px, 16, 2, 8));
+    assert!(c.take_errors().is_empty());
 }
 
 const KEEP: &str = "fn effect(color: vec4<f32>, uv: vec2<f32>, size: vec2<f32>, p0: vec4<f32>, p1: vec4<f32>) -> vec4<f32> {

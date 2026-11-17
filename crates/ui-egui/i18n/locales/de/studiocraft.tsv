@@ -11,6 +11,8 @@
 	Add a source	Quelle hinzufügen
 	Add Scene	Szene hinzufügen
 	Alignment	Ausrichtung
+	Alpha mask (alpha channel)	Alphamaske (Alphakanal)
+	Alpha mask (color channel)	Alphamaske (Farbkanal)
 	Apply	Anwenden
 	Attack (ms)	Ansprechzeit (ms)
 	Audio bitrate	Audio-Bitrate
@@ -22,6 +24,9 @@
 	Available Encoders	Verfügbare Encoder
 	Background	Hintergrund
 	Balanced	Ausgewogen
+	Blend (add)	Mischen (addieren)
+	Blend (multiply)	Mischen (multiplizieren)
+	Blend (subtract)	Mischen (subtrahieren)
 	Bottom	Unten
 	Brightness	Helligkeit
 	Browse…	Durchsuchen…
@@ -108,6 +113,7 @@
 	Hold (ms)	Haltezeit (ms)
 	Hotkeys	Tastenkürzel
 	Image	Bild
+	Image mask	Bildmaske
 	Import…	Importieren…
 	Key color	Schlüsselfarbe
 	Key color spill reduction	Farbsaum der Schlüsselfarbe verringern
@@ -227,6 +233,7 @@
 	Stopping…	Wird gestoppt…
 	Stream	Stream
 	Stream key	Stream-Schlüssel
+	Stretch image	Bild strecken
 	Stretch to Screen	Auf den Bildschirm strecken
 	Studio	Studio
 	Studio Mode	Studiomodus
@@ -248,6 +255,7 @@
 	Transition Controls	Übergangssteuerung
 	Transition settings	Übergangseinstellungen
 	Transition to Program	Übergang zum Programm
+	Type	Typ
 	Type shortcuts such as Ctrl+1 or Shift+F5; separate several with commas.	Geben Sie Kürzel wie Ctrl+1 oder Shift+F5 ein; trennen Sie mehrere durch Kommas.
 	Undo	Rückgängig
 	Updates	Updates

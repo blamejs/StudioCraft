@@ -1,6 +1,6 @@
 //! The compositor: GPU state and the per-frame passes.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::SyncSender;
@@ -10,7 +10,7 @@ use studiocraft_media::Tick;
 use studiocraft_media::queue::{Fifo, Latest};
 use studiocraft_media::video::PixelFormat;
 use studiocraft_model::{Crop, SourceId, Vec2};
-use studiocraft_plugin::{VideoContent, VideoEffect, VideoOut};
+use studiocraft_plugin::{EffectImage, VideoContent, VideoEffect, VideoOut};
 
 use crate::nv12::{EncodeTarget, Nv12};
 use crate::plan::{ItemDesc, Plan, SceneDesc};
@@ -89,6 +89,16 @@ pub struct Capture {
 pub struct CaptureRequest {
     pub view: View,
     pub reply: SyncSender<Result<Capture, RenderError>>,
+}
+
+/// Convert straight-alpha RGBA to premultiplied alpha in place, rounding to the nearest value.
+fn premultiply(rgba: &mut [u8]) {
+    for px in rgba.as_chunks_mut::<4>().0 {
+        let a = u32::from(px[3]);
+        for c in &mut px[..3] {
+            *c = ((u32::from(*c) * a + 127) / 255) as u8;
+        }
+    }
 }
 
 /// Convert premultiplied RGBA to straight alpha in place.
@@ -178,16 +188,45 @@ struct SourceTex {
     fx_size: (u32, u32),
 }
 
+/// A filter's picture on the GPU, uploaded once.
+struct ImageTex {
+    /// Held so the picture's id stays unique while the entry exists.
+    _image: EffectImage,
+    /// The texture and the bind group that samples it; `None` for a picture too large for the
+    /// device, which was reported once.
+    gpu: Option<(wgpu::Texture, wgpu::BindGroup)>,
+}
+
+impl ImageTex {
+    fn bind(&self) -> Option<&wgpu::BindGroup> {
+        self.gpu.as_ref().map(|(_, b)| b)
+    }
+}
+
+/// The bind groups a pipeline reads after the uniforms.
+#[derive(Clone, Copy)]
+enum Layout {
+    /// One texture.
+    One,
+    /// Two textures (transitions).
+    Two,
+    /// The input texture, and a filter's picture in group 2.
+    Image,
+}
+
 struct Pipes {
     uniform_layout: wgpu::BindGroupLayout,
     tex_layout: wgpu::BindGroupLayout,
     tex2_layout: wgpu::BindGroupLayout,
     layout: wgpu::PipelineLayout,
     layout2: wgpu::PipelineLayout,
+    layout_image: wgpu::PipelineLayout,
     item: wgpu::RenderPipeline,
     nv12_y: wgpu::RenderPipeline,
     nv12_uv: wgpu::RenderPipeline,
     effects: HashMap<&'static str, Option<wgpu::RenderPipeline>>,
+    /// The effect keys compiled to read a picture.
+    image_effects: HashSet<&'static str>,
     transitions: HashMap<String, Option<wgpu::RenderPipeline>>,
     sampler: wgpu::Sampler,
 }
@@ -258,6 +297,8 @@ pub struct Compositor {
     views: Arc<CanvasViews>,
     generation: u64,
     sources: HashMap<SourceId, SourceTex>,
+    /// The pictures the plan's filters read, by [`EffectImage::id`].
+    images: HashMap<usize, ImageTex>,
     plan: Arc<Plan>,
     nv12: Option<Nv12>,
     /// The scopes' copy of the program, converted like the encoders' at a smaller size.
@@ -306,6 +347,7 @@ impl Compositor {
             views,
             generation: 1,
             sources: HashMap::new(),
+            images: HashMap::new(),
             plan: Arc::new(Plan::default()),
             nv12: None,
             scope_nv12: None,
@@ -346,27 +388,73 @@ impl Compositor {
         (self.program, self.preview, self.scratch, self.scratch_bind, self.views) = (program, preview, scratch, scratch_bind, views);
     }
 
-    /// Draw `plan` from the next frame on, compiling the shaders it needs first.
+    /// Draw `plan` from the next frame on, compiling the shaders and uploading the filter
+    /// pictures it needs first. Pictures the plan no longer uses are released.
     pub fn set_plan(&mut self, plan: Arc<Plan>) {
+        let mut used = HashSet::new();
         for item in plan.items() {
             for fx in &item.effects {
                 if !self.pipes.effects.contains_key(fx.key) {
-                    let p = self.compile(fx.key, &shaders::effect(fx.wgsl), false, "fs_effect");
+                    let p = match fx.image {
+                        Some(_) => self.compile(fx.key, &shaders::effect_with_image(fx.wgsl), Layout::Image, "fs_effect"),
+                        None => self.compile(fx.key, &shaders::effect(fx.wgsl), Layout::One, "fs_effect"),
+                    };
+                    if fx.image.is_some() {
+                        self.pipes.image_effects.insert(fx.key);
+                    }
                     self.pipes.effects.insert(fx.key, p);
+                }
+                if let Some(image) = &fx.image {
+                    used.insert(image.id());
+                    self.upload_image(image);
                 }
             }
         }
+        self.images.retain(|id, _| used.contains(id));
         if let Some(t) = &plan.transition
             && !self.pipes.transitions.contains_key(&t.key)
         {
-            let p = self.compile(&t.key, &shaders::transition(t.wgsl), true, "fs_transition");
+            let p = self.compile(&t.key, &shaders::transition(t.wgsl), Layout::Two, "fs_transition");
             self.pipes.transitions.insert(t.key.clone(), p);
         }
         self.plan = plan;
     }
 
-    fn compile(&mut self, key: &str, source: &str, two_textures: bool, fs: &str) -> Option<wgpu::RenderPipeline> {
-        let layout = if two_textures { &self.pipes.layout2 } else { &self.pipes.layout };
+    /// Put `image` on the GPU unless it is there already. A picture larger than the device's
+    /// textures is reported and left out, and the passes that read it are skipped.
+    fn upload_image(&mut self, image: &EffectImage) {
+        if self.images.contains_key(&image.id()) {
+            return;
+        }
+        let device = &self.gpu.device;
+        let limit = device.limits().max_texture_dimension_2d;
+        if image.width() > limit || image.height() > limit {
+            self.errors.push(RenderError::Device(format!(
+                "a filter's {} x {} picture is larger than the graphics device's {limit} pixels",
+                image.width(),
+                image.height()
+            )));
+            self.images.insert(image.id(), ImageTex { _image: image.clone(), gpu: None });
+            return;
+        }
+        let format = wgpu::TextureFormat::Rgba8Unorm;
+        let usage = wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST;
+        let texture = texture(device, "filter picture", image.width(), image.height(), format, usage, &[]);
+        let bind = tex_bind(device, &self.pipes, &texture.create_view(&wgpu::TextureViewDescriptor::default()));
+        let tex = Tex { texture, bind, width: image.width(), height: image.height(), format };
+        // Premultiplied, so the linear filter does not mix the color of transparent pixels in.
+        let mut rgba = image.rgba().to_vec();
+        premultiply(&mut rgba);
+        write(&self.gpu.queue, &tex, &rgba);
+        self.images.insert(image.id(), ImageTex { _image: image.clone(), gpu: Some((tex.texture, tex.bind)) });
+    }
+
+    fn compile(&mut self, key: &str, source: &str, layout: Layout, fs: &str) -> Option<wgpu::RenderPipeline> {
+        let layout = match layout {
+            Layout::One => &self.pipes.layout,
+            Layout::Two => &self.pipes.layout2,
+            Layout::Image => &self.pipes.layout_image,
+        };
         let made = self.gpu.scoped(key, || {
             let module = self
                 .gpu
@@ -467,7 +555,7 @@ impl Compositor {
             if !item.effects.is_empty()
                 && let Some(st) = self.sources.get_mut(&item.source)
             {
-                run_effects(&device, &self.pipes, &mut self.uniforms, &mut enc, st, &item.effects, self.frame_no);
+                run_effects(&device, &self.pipes, &self.images, &mut self.uniforms, &mut enc, st, &item.effects, self.frame_no);
             }
         }
 
@@ -759,10 +847,24 @@ fn draw_scene(ctx: &Ctx<'_>, uniforms: &mut Uniforms, enc: &mut wgpu::CommandEnc
     }
 }
 
+/// Whether `e` can run: its pipeline compiled, it has a picture exactly when its key was
+/// compiled with one, and its picture is on the GPU.
+fn ready(pipes: &Pipes, images: &HashMap<usize, ImageTex>, e: &VideoEffect) -> bool {
+    let compiled = matches!(pipes.effects.get(e.key), Some(Some(_)));
+    let with_image = pipes.image_effects.contains(e.key);
+    compiled
+        && match &e.image {
+            None => !with_image,
+            Some(image) => with_image && images.get(&image.id()).and_then(ImageTex::bind).is_some(),
+        }
+}
+
 /// Run a source's filter passes once this frame.
+#[allow(clippy::too_many_arguments)]
 fn run_effects(
     device: &wgpu::Device,
     pipes: &Pipes,
+    images: &HashMap<usize, ImageTex>,
     uniforms: &mut Uniforms,
     enc: &mut wgpu::CommandEncoder,
     st: &mut SourceTex,
@@ -778,7 +880,7 @@ fn run_effects(
     // A solid's 1 x 1 texture stands for its whole size, which can be larger than a texture;
     // only the passes' outputs are limited.
     let source = if st.solid.is_some() { st.native } else { (tex.width, tex.height) };
-    let runnable = || effects.iter().filter(|e| matches!(pipes.effects.get(e.key), Some(Some(_))));
+    let runnable = || effects.iter().filter(|e| ready(pipes, images, e));
     // The size each pass draws at, and the largest of them, which the filter textures need.
     let mut size = source;
     let mut largest = (1, 1);
@@ -828,6 +930,9 @@ fn run_effects(
         pass.set_pipeline(pipe);
         pass.set_bind_group(0, &uniforms.bind, &[off]);
         pass.set_bind_group(1, input, &[]);
+        if let Some(bind) = e.image.as_ref().and_then(|i| images.get(&i.id())).and_then(ImageTex::bind) {
+            pass.set_bind_group(2, bind, &[]);
+        }
         pass.draw(0..3, 0..1);
         drop(pass);
         input = &fx.binds[out];
@@ -1017,6 +1122,11 @@ fn make_pipes(gpu: &Gpu) -> Pipes {
         bind_group_layouts: &[Some(&uniform_layout), Some(&tex2_layout)],
         immediate_size: 0,
     });
+    let layout_image = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("texture and picture"),
+        bind_group_layouts: &[Some(&uniform_layout), Some(&tex_layout), Some(&tex_layout)],
+        immediate_size: 0,
+    });
     let module = |label: &str, source: String| {
         device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some(label), source: wgpu::ShaderSource::Wgsl(source.into()) })
     };
@@ -1041,10 +1151,12 @@ fn make_pipes(gpu: &Gpu) -> Pipes {
         tex2_layout,
         layout,
         layout2,
+        layout_image,
         item,
         nv12_y,
         nv12_uv,
         effects: HashMap::new(),
+        image_effects: HashSet::new(),
         transitions: HashMap::new(),
         sampler,
     }
