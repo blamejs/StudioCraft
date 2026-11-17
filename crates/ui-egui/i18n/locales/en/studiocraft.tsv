@@ -126,6 +126,7 @@
 	Histogram	Histogram
 	HLS vectorscope	HLS vectorscope
 	Hold (ms)	Hold (ms)
+	Horizontal speed (px/s)	Horizontal speed (px/s)
 	Hotkeys	Hotkeys
 	Image	Image
 	Image mask	Image mask
@@ -140,6 +141,8 @@
 	Language	Language
 	Left	Left
 	Licenses	Licenses
+	Limit height	Limit height
+	Limit width	Limit width
 	Limiter	Limiter
 	Linear	Linear
 	LIVE	LIVE
@@ -241,6 +244,7 @@
 	Scenes	Scenes
 	Scope Type	Scope Type
 	Scopes	Scopes
+	Scroll	Scroll
 	Send the preview to the program	Send the preview to the program
 	Server	Server
 	Settings	Settings
@@ -307,6 +311,7 @@
 	Use system title bar	Use system title bar
 	Username	Username
 	Version {version} ({os} {arch})	Version {version} ({os} {arch})
+	Vertical speed (px/s)	Vertical speed (px/s)
 	veryfast	veryfast
 	Video	Video
 	Video bitrate	Video bitrate

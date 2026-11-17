@@ -16,15 +16,17 @@ and Linux.
 - **Built-in sources.** Color, image, text, media file, display capture, window capture, audio
   input and audio output (desktop audio). Display, window and device capture work on Windows and
   macOS.
-- **Filters.** Color correction, chroma key, color key, crop and pad, image mask, and sharpen for
-  video. Color correction sets gamma, contrast, brightness, saturation, opacity, and the white
+- **Filters.** Color correction, chroma key, color key, crop and pad, image mask, scroll, and
+  sharpen for video. Color correction sets gamma, contrast, brightness, saturation, opacity, and the white
   balance by temperature and tint. Color key makes the pixels near a key color transparent by their
   RGB distance from it, with Similarity and Smoothness, and adjusts the rest by gamma, contrast,
   brightness and opacity. Crop and pad takes pixels off each edge of a source (a positive value) or
   adds transparent pixels (a negative value), or shows one area of it, and the source takes the new
   size in every scene. Image mask uses a picture file as an alpha mask (from its brightness or its
   alpha) or blends it with the source (multiply, add or subtract), stretched over the source or
-  centered at its own size, then applies a color and an opacity. Sharpen makes edges crisper by a
+  centered at its own size, then applies a color and an opacity. Scroll moves a source's picture
+  at a horizontal and a vertical speed in pixels per second, repeating it (Loop) or moving it out
+  once, in an area whose width and height can be limited. Sharpen makes edges crisper by a
   Sharpness from 0 to 1.
   Gain, noise gate, compressor, limiter and a three-band equalizer for audio.
 - **Transitions.** Cut, fade, fade through a color, and swipe, with a duration from 0 to 20 seconds.

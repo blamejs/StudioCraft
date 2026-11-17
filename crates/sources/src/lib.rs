@@ -12,7 +12,7 @@
 //! | `audio_output` | what a speaker or headphone device plays (Windows) |
 //!
 //! Filters: `gain`, `noise_gate`, `compressor`, `limiter`, `equalizer` (audio), `color_correction`,
-//! `chroma_key` (video).
+//! `chroma_key`, `color_key`, `crop_pad`, `sharpen`, `image_mask`, `scroll` (video).
 
 mod audio;
 mod capture;
@@ -62,6 +62,7 @@ pub fn register_all(reg: &mut Registry, ffmpeg: &FfmpegSetting) -> Result<(), Pl
     reg.register_filter(Arc::new(filters::Sharpen))?;
     reg.register_filter(Arc::new(filters::ColorKey))?;
     reg.register_filter(Arc::new(filters::ImageMask))?;
+    reg.register_filter(Arc::new(filters::Scroll))?;
     Ok(())
 }
 

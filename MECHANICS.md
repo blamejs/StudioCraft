@@ -24,6 +24,8 @@ in both files.
 | Color key default key color | #00ff00 | `sources::filters::COLOR_KEY_DEFAULT` | estimated |
 | Largest side of an image mask picture | 8192 px | `plugin::filter::MAX_EFFECT_SIDE` | estimated |
 | Image mask luma weights (color channel) | 0.2126, 0.7152, 0.0722 (BT.709) | `sources::filters::ImageMask` | estimated |
+| Fastest scroll speed | 2000 px/s each way | `sources::filters::SCROLL_MAX_SPEED` | estimated |
+| Scroll default limited width and height | 100 px | `sources::filters::SCROLL_DEFAULT_LIMIT` | estimated |
 | Sharpen Sharpness | 0.08 (0 to 1) | `sources::filters::SHARPEN_DEFAULT` | estimated |
 | Sharpen gain at Sharpness 1 | 4 × the difference from the 8 neighbors' average | `sources::filters::SHARPEN_GAIN` | estimated |
 

@@ -92,7 +92,10 @@ filter textures as large as the largest pass, and the scene item takes the size 
 A pass reads its input through `input_at`, which returns transparent pixels outside the input, or
 `input_pixel`, which reads at a pixel position clamped to the input's edges. A pass can also carry
 an `EffectImage`, a picture the compositor uploads once and binds in group 2 for `image_at`; the
-compositor releases it when no pass in the plan uses it.
+compositor releases it when no pass in the plan uses it. A pass with an `Animation` has its
+parameters stepped before each frame with the seconds since the first frame that drew it and the
+size of its input; the compositor forgets the start time when no pass in the plan uses the
+animation.
 
 An encoder names the codec it writes (`Encoder::codec`: H.264, HEVC or AAC). An encoder that runs
 inside the ffmpeg program returns its `FfmpegEncoder` form from `Encoder::ffmpeg`, which gives
