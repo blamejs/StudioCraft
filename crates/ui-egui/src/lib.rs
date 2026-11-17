@@ -637,9 +637,8 @@ impl StudioApp {
                     Some(h) => scopes::draw_histogram(ui, h),
                     None => {
                         if let Some(t) = &s.texture {
-                            let width = ui.available_width().max(64.0);
-                            let height = (width * p.height as f32 / p.width.max(1) as f32).min(420.0);
-                            let (rect, _) = ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::hover());
+                            let size = scopes::fit((p.width, p.height), ui.available_width().max(64.0), 420.0);
+                            let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
                             ui.painter().rect_filled(rect, 0.0, Color32::BLACK);
                             let uv = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0));
                             ui.painter().image(t.id(), rect, uv, Color32::WHITE);

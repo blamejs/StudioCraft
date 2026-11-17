@@ -325,6 +325,14 @@ pub fn draw_histogram(ui: &mut egui::Ui, h: &Histogram) {
     }
 }
 
+/// The size a `picture` (width, height) is drawn at: as wide as `width` and at most `max_height`
+/// tall, keeping its shape so the vectorscope's angles stay true.
+pub fn fit(picture: (usize, usize), width: f32, max_height: f32) -> egui::Vec2 {
+    let aspect = picture.1.max(1) as f32 / picture.0.max(1) as f32;
+    let height = width * aspect;
+    if height <= max_height { egui::vec2(width, height) } else { egui::vec2(max_height / aspect, max_height) }
+}
+
 /// The scope a saved setting names, or the waveform.
 pub fn kind_of(setting: &str) -> ScopeKind {
     ScopeKind::from_name(setting).unwrap_or_default()
@@ -451,6 +459,16 @@ mod tests {
         assert_eq!(s.dropped(), 1);
         assert_eq!(pool.free(), pool.made(), "the scopes hold no copy");
         s.shared.busy.store(false, Ordering::Release);
+    }
+
+    #[test]
+    fn a_picture_keeps_its_shape_when_its_height_is_capped() {
+        // A square vectorscope in a 520-wide window stays square under the 420 cap.
+        assert_eq!(fit((255, 255), 520.0, 420.0), egui::vec2(420.0, 420.0));
+        // A waveform fits the width.
+        let w = fit((480, 256), 480.0, 420.0);
+        assert!(w.x == 480.0 && (w.y - 256.0).abs() < 1e-3, "{w:?}");
+        assert_eq!(fit((0, 0), 100.0, 420.0), egui::vec2(100.0, 100.0));
     }
 
     #[test]
