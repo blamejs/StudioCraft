@@ -560,21 +560,54 @@ mod imp {
     #[cfg(target_os = "macos")]
     fn read_formats(index: CameraIndex) -> Result<Vec<CameraFormat>, PlatformError> {
         let device = nokhwa_bindings_macos::AVCaptureDevice::new(&index).map_err(|e| failed("the camera could not be opened", e))?;
-        offered(device.supported_formats().map_err(|e| failed("the camera's formats could not be read", e))?)
+        let formats = device.supported_formats().map_err(|e| failed("the camera's formats could not be read", e))?;
+        Ok(offered(formats.iter().map(ours).collect()))
     }
 
     #[cfg(not(target_os = "macos"))]
     fn read_formats(index: CameraIndex) -> Result<Vec<CameraFormat>, PlatformError> {
-        let mut camera = opened(index, RequestedFormatType::None)?;
-        offered(camera.compatible_camera_formats().map_err(|e| failed("the camera's formats could not be read", e))?)
+        let gray = gray_formats(&index);
+        let listed = opened(index, RequestedFormatType::None)
+            .and_then(|mut camera| camera.compatible_camera_formats().map_err(|e| failed("the camera's formats could not be read", e)));
+        with_gray(listed.map(|formats| formats.iter().map(ours).collect()), gray)
     }
 
-    fn offered(formats: Vec<nokhwa::utils::CameraFormat>) -> Result<Vec<CameraFormat>, PlatformError> {
-        let mut list: Vec<CameraFormat> = formats.iter().map(ours).collect();
+    /// The formats the camera library lists, with the gray formats read on their own. A camera
+    /// that sends only gray cannot be opened by the library, and lists its gray formats.
+    #[cfg_attr(target_os = "macos", allow(dead_code))]
+    pub(super) fn with_gray(listed: Result<Vec<CameraFormat>, PlatformError>, gray: Vec<CameraFormat>) -> Result<Vec<CameraFormat>, PlatformError> {
+        match listed {
+            Ok(mut list) => {
+                list.extend(gray);
+                Ok(offered(list))
+            }
+            Err(_) if !gray.is_empty() => Ok(offered(gray)),
+            Err(e) => Err(e),
+        }
+    }
+
+    /// The gray formats of the V4L2 node `index`.
+    #[cfg(target_os = "linux")]
+    fn gray_formats(index: &CameraIndex) -> Vec<CameraFormat> {
+        node(index).map(crate::camera_gray::formats).unwrap_or_default()
+    }
+
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    fn gray_formats(_index: &CameraIndex) -> Vec<CameraFormat> {
+        Vec::new()
+    }
+
+    /// The V4L2 node number of `index`.
+    #[cfg(target_os = "linux")]
+    fn node(index: &CameraIndex) -> Option<usize> {
+        usize::try_from(index.as_index().ok()?).ok()
+    }
+
+    fn offered(mut list: Vec<CameraFormat>) -> Vec<CameraFormat> {
         list.retain(|f| f.width > 0 && f.height > 0 && f.fps > 0 && SENDS.contains(&f.pixel));
         list.sort_by_key(|f| (std::cmp::Reverse(u64::from(f.width) * u64::from(f.height)), std::cmp::Reverse(f.fps), f.pixel));
         list.dedup();
-        Ok(list)
+        list
     }
 
     pub struct System;
@@ -594,8 +627,13 @@ mod imp {
             guarded(|| {
                 #[cfg(windows)]
                 let com = com()?;
-                let exact = nokhwa::utils::CameraFormat::new_from(format.width, format.height, encoding(format.pixel), format.fps);
                 let index = index_of(camera)?;
+                #[cfg(target_os = "linux")]
+                if format.pixel == CameraPixel::Gray {
+                    let node = node(&index).ok_or_else(|| PlatformError::Failed("the camera could not be opened".into()))?;
+                    return crate::camera_gray::open(node, format);
+                }
+                let exact = nokhwa::utils::CameraFormat::new_from(format.width, format.height, encoding(format.pixel), format.fps);
                 let mut cam = opened(index.clone(), RequestedFormatType::Exact(exact))?;
                 cam.open_stream().map_err(|e| failed("the camera could not start", e))?;
                 Ok(Box::new(Stream {
@@ -705,6 +743,16 @@ mod tests {
         assert_eq!(CameraFormat::parse(&HD.key()), Some(HD));
         assert_eq!(HD.key(), "1280x720@30:YUYV");
         assert_eq!(HD.label(), "1280 x 720, 30 fps, YUYV");
+    }
+
+    #[cfg(any(windows, target_os = "linux"))]
+    #[test]
+    fn a_camera_that_sends_only_gray_lists_its_gray_formats() {
+        let gray = CameraFormat { width: 640, height: 480, fps: 30, pixel: CameraPixel::Gray };
+        let unopened = || Err(PlatformError::Failed("the camera could not be opened (no format)".into()));
+        assert_eq!(imp::with_gray(unopened(), vec![gray]), Ok(vec![gray]), "the library cannot open it; its gray formats are listed");
+        assert_eq!(imp::with_gray(Ok(vec![gray, HD]), vec![gray]), Ok(vec![HD, gray]), "listed once, largest first");
+        assert_eq!(imp::with_gray(unopened(), Vec::new()), unopened(), "a camera with nothing to list is an error");
     }
 
     #[test]

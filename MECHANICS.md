@@ -25,6 +25,10 @@ in both files.
 | Camera format when none is chosen | the largest picture up to 1920 × 1080 at 30 fps or more | `platform::camera::default_format` | estimated |
 | Camera frames in a row that cannot be read before the capture fails | 30 | `platform::camera::BAD_FRAMES` | estimated |
 | Cameras whose formats are remembered while they are busy | 32 | `platform::camera::KNOWN_CAMERAS` | estimated |
+| Gray formats listed for one Linux camera | 64 | `platform::camera_gray::MOST` | estimated |
+| Wait for a Linux gray camera frame before the capture looks for a stop | 500 ms | `platform::camera_gray::WAIT` | estimated |
+| Buffers a Linux gray camera stream maps | 4 | `platform::camera_gray::BUFFERS` | estimated |
+| Wait for a Linux gray camera frame, for the first frame and after a 500 ms wait ran out, before the capture fails | 5 s | `platform::camera_gray::READ_WAIT` | estimated |
 | Camera YUV to RGB conversion | BT.601, studio range (Y 16 to 235) | `platform::camera_frames::rgb` | ITU-R BT.601 |
 | Wait before a failed camera is opened again | 2 s | `sources::camera::REOPEN` | estimated |
 | Time without a new camera frame before the camera counts as lost | 5 s | `sources::camera::STALL` | estimated |

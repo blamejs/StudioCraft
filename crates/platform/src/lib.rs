@@ -16,6 +16,8 @@
 pub mod audio;
 pub mod camera;
 mod camera_frames;
+#[cfg(target_os = "linux")]
+mod camera_gray;
 pub mod display;
 pub mod ffmpeg;
 #[cfg(target_os = "linux")]

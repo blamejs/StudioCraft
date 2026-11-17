@@ -76,7 +76,13 @@ build for `wasm32-unknown-unknown`:
   Linux device node, then the same name),
   reads its formats and opens it through the `nokhwa` crate: Media Foundation on Windows,
   AVFoundation on macOS and V4L2 on Linux. On Linux only the V4L2 nodes that can capture video
-  are listed. The camera handle stays on that thread. Each frame is converted into a spare frame
+  are listed. On Linux the 8-bit gray (`GREY`) formats are listed and streamed through the `v4l`
+  crate (`platform::camera_gray`), since `nokhwa` asks for gray under another code; a camera
+  that sends only gray lists only those. A gray stream waits at most 500 ms for each frame, so
+  its capture thread sees a stop while the camera sends nothing. Once such a wait runs out, and
+  for the first frame, each read waits at most 5 s and a read that runs out fails the capture
+  (the source opens the camera again). The camera handle stays on that
+  thread. Each frame is converted into a spare frame
   of the same `FrameSlot` the screen captures use: YUYV and NV12 to RGBA with the BT.601
   studio-range formulas, gray and RGB to RGBA, BGR to BGRA, and MJPEG decoded with `zune-jpeg` at
   the size in its own header (an MJPEG frame without Huffman tables uses the standard ones). An
