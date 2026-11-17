@@ -22,10 +22,15 @@ user can act on. It must never crash the app or lose a scene collection.
 
 1. Learn how other streaming and recording software behaves only by using it and from its public
    documentation. Do not read its source code, its repository or its installed files.
-2. Copy no code, text, icons, shaders or other assets from other software. Write every interface
-   string in your own words. Draw icons from shapes in code (`crates/ui-egui/src/icons.rs`).
+2. Copy no code, text, icons, shaders or other assets from software outside the ArtCraft family.
+   Code and assets from the ArtCraft Craft apps (https://github.com/storytold) and from craft-libs
+   may be reused under their licenses. The crate that holds reused code names each source in its
+   `NOTICE` file: the repository, the path, the commit, the license and the copyright line. Write
+   every interface string in your own words. Draw icons from shapes in code
+   (`crates/ui-egui/src/icons.rs`).
 3. Do not name other products in the app or its documentation. `cargo xtask brands` checks this.
-   `MECHANICS.md` and `mechanics.json` may name the product a value was compared with.
+   `MECHANICS.md` and `mechanics.json` may name the product a value was compared with, and a
+   crate's `NOTICE` file names the ArtCraft code it reuses.
 
 ## 2. Dependencies and assets
 
