@@ -570,14 +570,16 @@ fn the_catalogs_in_the_tree_are_offered_and_switch_the_menus() {
             assert!(languages().contains(&code.as_str()), "{code} is in the tree but not offered: {:?}", languages());
         }
     }
-    let de = I18N.from_code("de").expect("de is embedded");
-    assert_eq!(I18N.name(de), "Deutsch");
     let mut a = StudioApp::boot(Store::memory(), None, Vec::new());
-    a.set_language("de");
-    assert_eq!(lang(), de);
-    let titles: Vec<String> = a.laid_menu().menus.iter().map(|m| m.title.clone()).collect();
-    assert!(titles.iter().any(|t| t == "Datei"), "{titles:?}");
-    assert!(!titles.iter().any(|t| t == "File"), "{titles:?}");
+    for (code, name, file) in [("de", "Deutsch", "Datei"), ("fr", "Français", "Fichier")] {
+        let l = I18N.from_code(code).unwrap_or_else(|| panic!("{code} is embedded"));
+        assert_eq!(I18N.name(l), name);
+        a.set_language(code);
+        assert_eq!(lang(), l);
+        let titles: Vec<String> = a.laid_menu().menus.iter().map(|m| m.title.clone()).collect();
+        assert!(titles.iter().any(|t| t == file), "{code}: {titles:?}");
+        assert!(!titles.iter().any(|t| t == "File"), "{code}: {titles:?}");
+    }
     a.set_language("en");
     let titles: Vec<String> = a.laid_menu().menus.iter().map(|m| m.title.clone()).collect();
     assert!(titles.iter().any(|t| t == "File"), "{titles:?}");
