@@ -748,12 +748,18 @@ impl StudioApp {
             "tools.encoders" => {
                 let found = studiocraft_platform::ffmpeg::locate(&self.studio.profile().output.ffmpeg_path).map_err(|e| e.to_string())?;
                 let offered = studiocraft_platform::ffmpeg::encoders(&found);
+                let env = studiocraft_plugin::EncoderEnv::ffmpeg(&offered);
                 let list = self
                     .studio
                     .registry()
                     .encoders()
                     .iter()
-                    .map(|e| (e.name().to_string(), e.ffmpeg_codec().to_string(), offered.iter().any(|c| c == e.ffmpeg_codec())))
+                    .map(|e| {
+                        let codec = e.ffmpeg().map_or(e.codec().id(), |f| f.ffmpeg_codec());
+                        // Only an encoder this ffmpeg is known to run is listed as available.
+                        let ok = e.availability(&env) == studiocraft_plugin::Availability::Ready;
+                        (e.name().to_string(), codec.to_string(), ok)
+                    })
                     .collect();
                 self.encoders = Some(list);
             }

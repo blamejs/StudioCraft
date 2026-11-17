@@ -769,6 +769,58 @@ fn link_queries_run_in_the_engine() {
     assert_eq!(ids, ["help.discord", "help.website", "help.github", "help.issues"]);
 }
 
+/// Every text a frame draws, with where it is drawn.
+fn texts(out: &egui::FullOutput) -> Vec<(String, egui::Rect)> {
+    fn walk(shape: &egui::Shape, found: &mut Vec<(String, egui::Rect)>) {
+        match shape {
+            egui::Shape::Text(t) => found.push((t.galley.text().to_string(), t.galley.rect.translate(t.pos.to_vec2()))),
+            egui::Shape::Vec(v) => v.iter().for_each(|s| walk(s, found)),
+            _ => {}
+        }
+    }
+    let mut found = Vec::new();
+    out.shapes.iter().for_each(|c| walk(&c.shape, &mut found));
+    found
+}
+
+/// One frame with `events`; the texts it draws.
+fn frame_texts(app: &mut StudioApp, ctx: &egui::Context, events: Vec<Event>) -> Vec<(String, egui::Rect)> {
+    let raw = RawInput { events, screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1280.0, 800.0))), ..RawInput::default() };
+    let mut out = ctx.run_ui(raw, |ui| app.frame(ui));
+    out.textures_delta.clear();
+    texts(&out)
+}
+
+/// Click the text `text` drawn in `shown`, one step per frame; the texts of the frame after.
+fn click_text(app: &mut StudioApp, ctx: &egui::Context, shown: &[(String, egui::Rect)], text: &str) -> Vec<(String, egui::Rect)> {
+    let Some((_, rect)) = shown.iter().rev().find(|(t, _)| t == text) else { panic!("`{text}` is not shown: {shown:?}") };
+    let at = rect.center();
+    let b = |pressed| Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: Modifiers::NONE };
+    for events in [vec![Event::PointerMoved(at)], vec![b(true)], vec![b(false)]] {
+        frame_texts(app, ctx, events);
+    }
+    frame_texts(app, ctx, vec![])
+}
+
+#[test]
+fn the_output_tab_sets_the_recording_encoder_s_preset() {
+    let mut a = app();
+    a.set_language("en");
+    let ctx = egui::Context::default();
+    a.open_settings(crate::settings::Tab::Output);
+    frame_texts(&mut a, &ctx, vec![]);
+    let shown = frame_texts(&mut a, &ctx, vec![]);
+    assert!(shown.iter().any(|(t, _)| t == "CPU usage preset (faster uses less CPU)"), "{shown:?}");
+    assert!(a.settings.as_ref().is_some_and(|w| w.draft.output.encoder_settings.is_empty()), "showing the form saves nothing");
+
+    let shown = click_text(&mut a, &ctx, &shown, "veryfast");
+    let shown = click_text(&mut a, &ctx, &shown, "fast");
+    click_text(&mut a, &ctx, &shown, "OK");
+    assert!(a.settings.is_none(), "OK closes the window");
+    assert_eq!(a.studio().profile().output.video_encoder_settings().str("preset"), Some("fast"));
+    assert_eq!(a.studio().profile().stream.video_encoder_settings().str("preset"), None, "the stream keeps its own settings");
+}
+
 #[test]
 fn the_fonts_are_installed_again_after_the_language_changes() {
     let mut a = app();

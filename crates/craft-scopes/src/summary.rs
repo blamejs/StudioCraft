@@ -4,7 +4,7 @@
 use craft_color::rgb_to_ycbcr;
 use serde::Serialize;
 
-use crate::{Grid, Matrix, Signal, Vectorscope, Waveform, angle_deg, red_angle};
+use crate::{Grid, MAX_ROWS, MAX_SIGNAL_W, MAX_VECTOR_SIZE, Matrix, Signal, Vectorscope, Waveform, angle_deg, red_angle};
 
 /// Minimum, maximum and mean of a set of levels (percent).
 #[derive(Clone, Copy, Debug, PartialEq, Serialize)]
@@ -95,8 +95,12 @@ pub fn channel_stats(s: &Signal, m: Matrix) -> Option<ChannelStats> {
 }
 
 /// A trace split into `buckets` column ranges, each with the levels its cells hold (None when a
-/// range holds no samples).
+/// range holds no samples). A grid wider than [`MAX_SIGNAL_W`] or taller than [`MAX_ROWS`] gives
+/// no ranges.
 pub fn trace_columns(w: &Waveform, g: &Grid, buckets: usize) -> Vec<Option<Level>> {
+    if g.cols > MAX_SIGNAL_W || g.rows > MAX_ROWS {
+        return Vec::new();
+    }
     let buckets = buckets.clamp(1, g.cols.max(1));
     (0..buckets)
         .map(|b| {
@@ -106,7 +110,7 @@ pub fn trace_columns(w: &Waveform, g: &Grid, buckets: usize) -> Vec<Option<Level
                 for row in 0..g.rows {
                     let n = g.at(col, row);
                     if n > 0 {
-                        a.add(w.level(row, g.rows) * 100.0, n as u64);
+                        a.add(w.level(row) * 100.0, n as u64);
                     }
                 }
             }
@@ -168,7 +172,11 @@ pub fn peaks(v: &Vectorscope, n: usize, min_share: f32) -> Vec<Peak> {
 }
 
 /// Sparse cells of a vectorscope re-binned to `size`² (for a coarse numeric picture): `[x, y, count]`.
+/// A vectorscope larger than [`MAX_VECTOR_SIZE`] gives no cells.
 pub fn coarse(v: &Vectorscope, size: usize) -> Vec<[u32; 3]> {
+    if v.size > MAX_VECTOR_SIZE {
+        return Vec::new();
+    }
     let size = size.clamp(1, v.size.max(1));
     let mut out = vec![0u32; size * size];
     for y in 0..v.size {

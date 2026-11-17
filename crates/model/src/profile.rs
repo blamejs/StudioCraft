@@ -1,7 +1,11 @@
 //! A profile: the video, audio, recording and streaming settings, kept apart from the scenes so
 //! one scene collection can be recorded or streamed with different setups.
 
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
+
+use crate::Settings;
 
 /// Canvas and output frame size and rate.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -124,6 +128,8 @@ pub struct OutputSettings {
     pub quality: RecordingQuality,
     /// Video encoder plug-in id.
     pub video_encoder: String,
+    /// The settings of each video encoder used for recordings, by encoder plug-in id.
+    pub encoder_settings: BTreeMap<String, Settings>,
     /// The ffmpeg program; empty means `ffmpeg` on the `PATH`.
     pub ffmpeg_path: String,
 }
@@ -135,8 +141,17 @@ impl Default for OutputSettings {
             format: RecordingFormat::default(),
             quality: RecordingQuality::default(),
             video_encoder: "x264".into(),
+            encoder_settings: BTreeMap::new(),
             ffmpeg_path: String::new(),
         }
+    }
+}
+
+impl OutputSettings {
+    /// The settings of the chosen video encoder; empty when none are saved, so the encoder's
+    /// defaults apply.
+    pub fn video_encoder_settings(&self) -> Settings {
+        self.encoder_settings.get(&self.video_encoder).cloned().unwrap_or_default()
     }
 }
 
@@ -151,6 +166,8 @@ pub struct StreamSettings {
     pub video_bitrate_kbps: u32,
     pub audio_bitrate_kbps: u32,
     pub video_encoder: String,
+    /// The settings of each video encoder used for streams, by encoder plug-in id.
+    pub encoder_settings: BTreeMap<String, Settings>,
     /// Seconds between keyframes.
     pub keyframe_interval_s: u32,
 }
@@ -163,8 +180,17 @@ impl Default for StreamSettings {
             video_bitrate_kbps: 6000,
             audio_bitrate_kbps: 160,
             video_encoder: "x264".into(),
+            encoder_settings: BTreeMap::new(),
             keyframe_interval_s: 2,
         }
+    }
+}
+
+impl StreamSettings {
+    /// The settings of the chosen video encoder; empty when none are saved, so the encoder's
+    /// defaults apply.
+    pub fn video_encoder_settings(&self) -> Settings {
+        self.encoder_settings.get(&self.video_encoder).cloned().unwrap_or_default()
     }
 }
 

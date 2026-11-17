@@ -11,13 +11,16 @@
 //!
 //! | Scope | Grid | Columns × rows |
 //! |---|---|---|
-//! | Waveform RGB / Luma / YC / YC no Chroma | per trace: R, G, B / Y / Y and C (Y ± \|CbCr\|) / Y | signal width × `rows` |
-//! | Parade RGB / YUV / RGB-White | per trace: R, G, B / Y, Cb + ½, Cr + ½ / R, G, B, Y | signal width × `rows` (drawn side by side) |
+//! | Waveform RGB / luma / luma and chroma / luma and chroma with the chroma hidden | per trace: R, G, B / Y / Y and C (Y ± \|CbCr\|) / Y | signal width × `rows` |
+//! | Parade RGB / YUV / RGB and luma | per trace: R, G, B / Y, Cb + ½, Cr + ½ / R, G, B, Y | signal width × `rows` (drawn side by side) |
 //! | Histogram | 256 bins per channel R, G, B, Y | — |
-//! | Vectorscope YUV | Cb horizontal, Cr up, ±[`VECTOR_EXTENT`] | `vector_size`² |
-//! | Vectorscope HLS | hue as the angle (red at the YUV red angle), HLS saturation as the radius (1 = 0.5) | `vector_size`² |
+//! | YUV vectorscope | Cb horizontal, Cr up, ±[`VECTOR_EXTENT`] | `vector_size`² |
+//! | HLS vectorscope | hue as the angle (red at the YUV red angle), HLS saturation as the radius (1 = 0.5) | `vector_size`² |
 //!
-//! Waveform rows cover `[lo, hi]` = `[0, 1]` with Clamp Signal on (values clamped first) and
+//! [`compute`] picks the waveform and parade traces from [`Params::waveform`] and
+//! [`Params::parade`].
+//!
+//! Waveform rows cover `[lo, hi]` = `[0, 1]` with clamping on (values clamped first) and
 //! `[-0.1, 1.1]` without (values outside are dropped). With 256 rows over `[0, 1]`, an 8-bit code
 //! value `c` lands exactly on row `c`.
 //!
@@ -60,6 +63,7 @@ pub const SKIN_TONE_DEG: f32 = 123.0;
 /// A scope.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub enum ScopeKind {
     VectorscopeYuv,
     VectorscopeHls,
@@ -85,8 +89,8 @@ impl ScopeKind {
     /// English label; an app translates it before showing it.
     pub fn label(self) -> &'static str {
         match self {
-            ScopeKind::VectorscopeYuv => "Vectorscope YUV",
-            ScopeKind::VectorscopeHls => "Vectorscope HLS",
+            ScopeKind::VectorscopeYuv => "YUV vectorscope",
+            ScopeKind::VectorscopeHls => "HLS vectorscope",
             ScopeKind::Histogram => "Histogram",
             ScopeKind::Parade => "Parade",
             ScopeKind::Waveform => "Waveform",
@@ -126,8 +130,8 @@ impl WaveformType {
         match self {
             WaveformType::Rgb => "RGB",
             WaveformType::Luma => "Luma",
-            WaveformType::Yc => "YC",
-            WaveformType::YcNoChroma => "YC no Chroma",
+            WaveformType::Yc => "Luma and chroma",
+            WaveformType::YcNoChroma => "Luma and chroma, chroma hidden",
         }
     }
     pub fn from_name(s: &str) -> Option<Self> {
@@ -152,7 +156,7 @@ impl ParadeType {
         match self {
             ParadeType::Rgb => "RGB",
             ParadeType::Yuv => "YUV",
-            ParadeType::RgbWhite => "RGB-White",
+            ParadeType::RgbWhite => "RGB and luma",
         }
     }
     pub fn from_name(s: &str) -> Option<Self> {
@@ -221,7 +225,7 @@ impl Scale {
     pub const ALL: [Scale; 3] = [Scale::Bits8, Scale::Float, Scale::Hdr];
     pub fn label(self) -> &'static str {
         match self {
-            Scale::Bits8 => "8 Bit",
+            Scale::Bits8 => "8-bit",
             Scale::Float => "Float",
             Scale::Hdr => "HDR",
         }
@@ -290,18 +294,22 @@ impl Targets {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Params {
     pub matrix: Matrix,
-    /// Clamp Signal: values are clamped to 0..1 before they are plotted.
+    /// Clamping: values are clamped to 0..1 before they are plotted.
     pub clamp: bool,
     /// Waveform and parade levels (2..=[`MAX_ROWS`]).
     pub rows: usize,
     /// Vectorscope grid size (square; 3..=[`MAX_VECTOR_SIZE`]). An even size is rounded up to the
     /// next odd one, so the center is a cell.
     pub vector_size: usize,
+    /// The traces [`compute`] draws for [`ScopeKind::Waveform`].
+    pub waveform: WaveformType,
+    /// The traces [`compute`] draws for [`ScopeKind::Parade`].
+    pub parade: ParadeType,
 }
 
 impl Default for Params {
     fn default() -> Self {
-        Params { matrix: Matrix::Bt709, clamp: true, rows: 256, vector_size: 255 }
+        Params { matrix: Matrix::Bt709, clamp: true, rows: 256, vector_size: 255, waveform: WaveformType::Rgb, parade: ParadeType::Rgb }
     }
 }
 
@@ -436,9 +444,11 @@ impl Signal {
         self.h = oh;
     }
 
-    /// A synthetic signal (tests, generated patterns).
+    /// A synthetic signal (tests, generated patterns), at most [`MAX_SIGNAL_W`] × [`MAX_SIGNAL_H`]:
+    /// a larger size is cut to that.
     pub fn from_fn(w: usize, h: usize, f: impl Fn(usize, usize) -> [f32; 3]) -> Signal {
-        let mut rgb = Vec::with_capacity(w.saturating_mul(h));
+        let (w, h) = (w.min(MAX_SIGNAL_W), h.min(MAX_SIGNAL_H));
+        let mut rgb = Vec::with_capacity(w * h);
         for y in 0..h {
             for x in 0..w {
                 rgb.push(f(x, y));
@@ -556,6 +566,8 @@ impl Grid {
 pub struct Waveform {
     pub lo: f32,
     pub hi: f32,
+    /// Levels of every trace.
+    pub rows: usize,
     /// Samples per column (the signal's height).
     pub per_column: usize,
     pub traces: Vec<Grid>,
@@ -566,8 +578,8 @@ impl Waveform {
         self.traces.iter().find(|t| t.name == name)
     }
     /// The value at the center of a row.
-    pub fn level(&self, row: usize, rows: usize) -> f32 {
-        self.lo + (self.hi - self.lo) * row as f32 / (rows.max(2) - 1) as f32
+    pub fn level(&self, row: usize) -> f32 {
+        self.lo + (self.hi - self.lo) * row as f32 / (self.rows.max(2) - 1) as f32
     }
 }
 
@@ -617,6 +629,7 @@ fn build_into(s: &Signal, p: &Params, names: &[&'static str], out: &mut Waveform
     }
     out.lo = lo;
     out.hi = hi;
+    out.rows = rows;
     out.per_column = per_column;
 }
 
@@ -675,7 +688,7 @@ pub struct Histogram {
     pub b: Vec<u32>,
     pub y: Vec<u32>,
     pub samples: u32,
-    /// Samples below 0 or above the top bin per channel (R, G, B, Y). With Clamp Signal they are
+    /// Samples below 0 or above the top bin per channel (R, G, B, Y). With clamping they are
     /// also counted in the first or last bin of an SDR histogram.
     pub below: [u32; 4],
     pub above: [u32; 4],
@@ -733,18 +746,23 @@ pub fn histogram_into(s: &Signal, p: &Params, out: &mut Histogram) {
     out.samples = u32::try_from(s.len()).unwrap_or(u32::MAX);
     for &[r, g, b] in &s.rgb {
         let y = rgb_to_ycbcr(r, g, b, p.matrix)[0];
-        for (i, v) in [r, g, b, y].into_iter().enumerate() {
-            match bin_of(v) {
+        // With clamping, the luma bin comes from the clamped R'G'B', as on the waveform; `below`
+        // and `above` count the luma of the sample as it is.
+        let y_bin = if p.clamp {
+            let [cr, cg, cb] = [r, g, b].map(|v| v.clamp(0.0, 1.0));
+            rgb_to_ycbcr(cr, cg, cb, p.matrix)[0]
+        } else {
+            y
+        };
+        for (i, (v, at)) in [(r, r), (g, g), (b, b), (y, y_bin)].into_iter().enumerate() {
+            if !v.is_nan() && bin_of(v).is_none() {
+                let side = if v < 0.0 { &mut out.below[i] } else { &mut out.above[i] };
+                *side = side.saturating_add(1);
+            }
+            match bin_of(at) {
                 Some(k) => out.count(i, k),
-                None if v.is_nan() => {}
-                None => {
-                    let low = v < 0.0;
-                    let side = if low { &mut out.below[i] } else { &mut out.above[i] };
-                    *side = side.saturating_add(1);
-                    if p.clamp {
-                        out.count(i, if low { 0 } else { BINS - 1 });
-                    }
-                }
+                None if at.is_nan() || !p.clamp => {}
+                None => out.count(i, if at < 0.0 { 0 } else { BINS - 1 }),
             }
         }
     }
@@ -1006,6 +1024,7 @@ pub fn hls_targets(m: Matrix) -> [(&'static str, f32, f32); 6] {
 
 /// One computed scope.
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub enum Computed {
     Waveform(Waveform),
     Parade(Waveform),
@@ -1020,18 +1039,18 @@ impl Default for Computed {
 }
 
 /// Compute one scope.
-pub fn compute(kind: ScopeKind, s: &Signal, p: &Params, waveform_type: WaveformType, parade_type: ParadeType) -> Computed {
+pub fn compute(kind: ScopeKind, s: &Signal, p: &Params) -> Computed {
     let mut c = Computed::default();
-    compute_into(kind, s, p, waveform_type, parade_type, &mut c);
+    compute_into(kind, s, p, &mut c);
     c
 }
 
 /// [`compute`] into `out`. While `kind` stays the same, the buffers of the previous result are
 /// reused.
-pub fn compute_into(kind: ScopeKind, s: &Signal, p: &Params, waveform_type: WaveformType, parade_type: ParadeType, out: &mut Computed) {
+pub fn compute_into(kind: ScopeKind, s: &Signal, p: &Params, out: &mut Computed) {
     match (kind, &mut *out) {
-        (ScopeKind::Waveform, Computed::Waveform(w)) => waveform_into(s, waveform_type, p, w),
-        (ScopeKind::Parade, Computed::Parade(w)) => parade_into(s, parade_type, p, w),
+        (ScopeKind::Waveform, Computed::Waveform(w)) => waveform_into(s, p.waveform, p, w),
+        (ScopeKind::Parade, Computed::Parade(w)) => parade_into(s, p.parade, p, w),
         (ScopeKind::Histogram, Computed::Histogram(h)) => histogram_into(s, p, h),
         (ScopeKind::VectorscopeYuv, Computed::Vectorscope(v)) => vectorscope_yuv_into(s, p, v),
         (ScopeKind::VectorscopeHls, Computed::Vectorscope(v)) => vectorscope_hls_into(s, p, v),
@@ -1047,7 +1066,7 @@ pub fn compute_into(kind: ScopeKind, s: &Signal, p: &Params, waveform_type: Wave
                 (ScopeKind::VectorscopeYuv | ScopeKind::VectorscopeHls, Computed::Vectorscope(v)) => Computed::Vectorscope(v),
                 (ScopeKind::VectorscopeYuv | ScopeKind::VectorscopeHls, _) => Computed::Vectorscope(Vectorscope::default()),
             };
-            compute_into(kind, s, p, waveform_type, parade_type, out);
+            compute_into(kind, s, p, out);
         }
     }
 }
