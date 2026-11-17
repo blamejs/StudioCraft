@@ -219,11 +219,13 @@
 	Switch at once	Sofort umschalten
 	System ({language})	System ({language})
 	Takes effect the next time StudioCraft starts.	Wirkt beim nächsten Start von StudioCraft.
+	Temperature (K)	Farbtemperatur (K)
 	Text	Text
 	The interface fonts Inter and JetBrains Mono are under the SIL Open Font License 1.1.	Die Schriften der Oberfläche, Inter und JetBrains Mono, stehen unter der SIL Open Font License 1.1.
 	The licenses of the third-party crates StudioCraft uses are checked by `cargo xtask licenses`.	Die Lizenzen der Crates von Drittanbietern, die StudioCraft nutzt, prüft `cargo xtask licenses`.
 	This filter has no settings.	Dieser Filter hat keine Einstellungen.
 	this is not supported on this system yet	das wird auf diesem System noch nicht unterstützt
+	Tint	Tönung
 	Tools	Werkzeuge
 	Transition	Übergang
 	Transition Controls	Übergangssteuerung

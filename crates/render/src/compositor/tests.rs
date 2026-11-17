@@ -7,7 +7,7 @@ use studiocraft_media::Tick;
 use studiocraft_media::queue::Fifo;
 use studiocraft_media::video::PixelFormat;
 use studiocraft_model::{Crop, SourceId, Transform, Vec2};
-use studiocraft_plugin::{Plugin, Transition, VideoContent, VideoEffect, VideoOut};
+use studiocraft_plugin::{Plugin, Transition, VIDEO_EFFECT_PARAMS, VideoContent, VideoEffect, VideoOut};
 
 use super::*;
 use crate::transitions::Fade;
@@ -127,7 +127,9 @@ const INVERT: &str = "fn effect(color: vec4<f32>, uv: vec2<f32>, size: vec2<f32>
 fn filters_run_as_gpu_passes_in_order() {
     let Some(mut c) = compositor(16, 16) else { return };
     let v = solid([255, 0, 0, 255], 16, 16);
-    let invert = VideoEffect { key: "test.invert", wgsl: INVERT, params: [1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0] };
+    let mut params = [0.0; VIDEO_EFFECT_PARAMS];
+    params[0] = 1.0;
+    let invert = VideoEffect { key: "test.invert", wgsl: INVERT, params };
     let mut it = item(1, &v, at(0.0, 0.0));
     it.effects = vec![invert];
     let px = draw(&mut c, Plan { program: SceneDesc { items: vec![it.clone()] }, ..Plan::default() }, Tick(0));
@@ -137,11 +139,27 @@ fn filters_run_as_gpu_passes_in_order() {
     assert!(close(pixel(&px, 16, 8, 8), [255, 0, 0, 255]), "two inverts cancel");
 }
 
+const LAST_PARAMS: &str = "fn effect(color: vec4<f32>, uv: vec2<f32>, size: vec2<f32>, p0: vec4<f32>, p1: vec4<f32>) -> vec4<f32> {
+    return extra_params()[3];
+}";
+
+#[test]
+fn every_filter_parameter_reaches_the_shader() {
+    let Some(mut c) = compositor(16, 16) else { return };
+    let v = solid([0, 0, 0, 255], 16, 16);
+    let mut params = [0.0; VIDEO_EFFECT_PARAMS];
+    params[20..].copy_from_slice(&[1.0, 0.5, 0.25, 1.0]);
+    let mut it = item(1, &v, at(0.0, 0.0));
+    it.effects = vec![VideoEffect { key: "test.last_params", wgsl: LAST_PARAMS, params }];
+    let px = draw(&mut c, Plan { program: SceneDesc { items: vec![it] }, ..Plan::default() }, Tick(0));
+    assert!(close(pixel(&px, 16, 8, 8), [255, 128, 64, 255]), "{:?}", pixel(&px, 16, 8, 8));
+}
+
 #[test]
 fn a_broken_filter_is_reported_and_skipped() {
     let Some(mut c) = compositor(16, 16) else { return };
     let v = solid([0, 0, 255, 255], 16, 16);
-    let broken = VideoEffect { key: "test.broken", wgsl: "fn effect( this is not wgsl", params: [0.0; 8] };
+    let broken = VideoEffect { key: "test.broken", wgsl: "fn effect( this is not wgsl", params: [0.0; VIDEO_EFFECT_PARAMS] };
     let mut it = item(1, &v, at(0.0, 0.0));
     it.effects = vec![broken];
     let px = draw(&mut c, Plan { program: SceneDesc { items: vec![it] }, ..Plan::default() }, Tick(0));

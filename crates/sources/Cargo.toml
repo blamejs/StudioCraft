@@ -13,10 +13,12 @@ studiocraft-plugin.workspace = true
 studiocraft-platform.workspace = true
 craft-image-codecs.workspace = true
 craft-font-catalog.workspace = true
+craft-color-transform.workspace = true
 ab_glyph.workspace = true
 serde_json.workspace = true
 
 [dev-dependencies]
+craft-color.workspace = true
 image.workspace = true
 jpeg-encoder.workspace = true
 studiocraft-render.workspace = true
