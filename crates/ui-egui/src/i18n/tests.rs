@@ -571,7 +571,7 @@ fn the_catalogs_in_the_tree_are_offered_and_switch_the_menus() {
         }
     }
     let mut a = StudioApp::boot(Store::memory(), None, Vec::new());
-    for (code, name, file) in [("de", "Deutsch", "Datei"), ("fr", "Français", "Fichier")] {
+    for (code, name, file) in [("de", "Deutsch", "Datei"), ("es", "Español", "Archivo"), ("fr", "Français", "Fichier")] {
         let l = I18N.from_code(code).unwrap_or_else(|| panic!("{code} is embedded"));
         assert_eq!(I18N.name(l), name);
         a.set_language(code);

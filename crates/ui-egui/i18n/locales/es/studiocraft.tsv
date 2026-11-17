@@ -1,0 +1,398 @@
+# StudioCraft, Spanish.
+# Columns: context, source text, translation. Rows not listed here show in English.
+@id	language.name	Español
+	a camera was not found	no se encontró ninguna cámara
+	A recording, stream or replay buffer is running. Exiting stops it; a recording is finished and saved first, and the replay buffer's unsaved video is lost.	Hay una grabación, una transmisión o el búfer de repetición en curso. Al salir se detiene; una grabación se termina y se guarda primero, y el video sin guardar del búfer de repetición se pierde.
+	About StudioCraft	Acerca de StudioCraft
+	About {app}	Acerca de {app}
+	Add	Agregar
+	Add a filter to change how this source looks or sounds.	Agregue un filtro para cambiar la imagen o el sonido de esta fuente.
+	Add a scene	Agregar una escena
+	Add a source	Agregar una fuente
+	Add Scene	Agregar escena
+	Alignment	Alineación
+	Alpha mask (alpha channel)	Máscara alfa (canal alfa)
+	Alpha mask (color channel)	Máscara alfa (canal de color)
+	Apply	Aplicar
+	Apply Dock Layout	Aplicar diseño de paneles
+	Attack (ms)	Ataque (ms)
+	Audio	Audio
+	Audio bitrate	Tasa de bits de audio
+	Audio input capture	Captura de entrada de audio
+	Audio Mixer	Mezclador de audio
+	Audio output capture	Captura de salida de audio
+	Audio source actions	Acciones de las fuentes de audio
+	available	disponible
+	Available Encoders	Codificadores disponibles
+	Background	Fondo
+	Balanced	Equilibrado
+	Blend (add)	Mezcla (sumar)
+	Blend (multiply)	Mezcla (multiplicar)
+	Blend (subtract)	Mezcla (restar)
+	Bottom	Abajo
+	Brightness	Brillo
+	Browse…	Examinar…
+	Camera	Cámara
+	camera access is not allowed in the system's privacy settings	el acceso a la cámara no está permitido en la configuración de privacidad del sistema
+	Cancel	Cancelar
+	Canvas size	Tamaño del lienzo
+	Capture rate (frames per second)	Frecuencia de captura (fotogramas por segundo)
+	Ceiling (dB)	Techo (dB)
+	Center	Centro
+	Center to Screen	Centrar en la pantalla
+	Check for updates at start	Buscar actualizaciones al iniciar
+	Check for Updates…	Buscar actualizaciones…
+	Choose in the system picker	Elegir en el selector del sistema
+	Chroma key	Clave de croma
+	Close	Cerrar
+	Close below (dB)	Cerrar por debajo de (dB)
+	Color	Color
+	Color correction	Corrección de color
+	Color key	Clave de color
+	Community	Comunidad
+	Compressor	Compresor
+	Contrast	Contraste
+	could not connect to the PipeWire sound server	no se pudo conectar con el servidor de sonido PipeWire
+	CPU usage preset (faster uses less CPU)	Ajuste de uso de CPU (más rápido usa menos CPU)
+	Credits	Créditos
+	Crop and pad	Recortar y rellenar
+	Crop or pad each edge	Recortar o rellenar cada borde
+	Cut	Corte
+	Cut to Program	Cortar al programa
+	Default	Predeterminado
+	Defaults	Valores predeterminados
+	Delays this source's audio, to line it up with its picture	Retrasa el sonido de esta fuente para alinearlo con su imagen
+	Device	Dispositivo
+	Direction	Dirección
+	Discord Server	Servidor de Discord
+	Display	Pantalla
+	Display capture	Captura de pantalla
+	Dock in the Strip	Acoplar en la barra de paneles
+	Docks	Paneles
+	dropped {dropped}  lagged {lagged}	descartados {dropped}  retrasados {lagged}
+	Duplicate	Duplicar
+	Duplicate…	Duplicar…
+	Duration	Duración
+	Ease in	Entrada suave
+	Ease in and out	Entrada y salida suaves
+	Ease out	Salida suave
+	Easing	Suavizado
+	Edit	Editar
+	Enabled	Activado
+	Encoder queue	Cola del codificador
+	Ending Stream…	Terminando la transmisión…
+	Equalizer	Ecualizador
+	Existing Source	Fuente existente
+	Exit	Salir
+	Exit StudioCraft?	¿Salir de StudioCraft?
+	Export…	Exportar…
+	Fade	Fundido
+	Fade over 300 ms	Fundido de 300 ms
+	Fade through color	Fundido a través de un color
+	Failed: {error}	Error: {error}
+	ffmpeg (set its location in Settings › Output) was not found	No se encontró ffmpeg (indique su ubicación en Configuración › Salida)
+	ffmpeg on the PATH	ffmpeg del PATH
+	ffmpeg program	Programa ffmpeg
+	File	Archivo
+	Filters for '{name}'	Filtros de «{name}»
+	Filters…	Filtros…
+	Finishing Recording…	Terminando la grabación…
+	Fit to Screen	Ajustar a la pantalla
+	Font	Fuente tipográfica
+	Font family	Familia tipográfica
+	Format	Formato
+	Frame time (average)	Tiempo por fotograma (promedio)
+	Frame time (last)	Tiempo por fotograma (último)
+	Frames drawn	Fotogramas dibujados
+	Frames drawn late	Fotogramas dibujados con retraso
+	Frames encoded	Fotogramas codificados
+	Frames per second	Fotogramas por segundo
+	Frames skipped by encoders	Fotogramas omitidos por los codificadores
+	Free software under the MIT or Apache 2.0 license.	Software libre bajo la licencia MIT o Apache 2.0.
+	From the bottom	Desde abajo
+	From the left	Desde la izquierda
+	From the right	Desde la derecha
+	From the top	Desde arriba
+	Full-Screen Interface	Interfaz en pantalla completa
+	Gain	Ganancia
+	Gain (dB)	Ganancia (dB)
+	Gamma	Gamma
+	General	General
+	Go Live	Transmitir en vivo
+	H.264 (built in)	H.264 (integrado)
+	Height	Alto
+	Help	Ayuda
+	Hide	Ocultar
+	High	Alta
+	High (dB)	Agudos (dB)
+	Histogram	Histograma
+	HLS vectorscope	Vectorscopio HLS
+	Hold (ms)	Retención (ms)
+	Horizontal speed (px/s)	Velocidad horizontal (px/s)
+	Hotkeys	Atajos de teclado
+	Image	Imagen
+	Image mask	Máscara de imagen
+	Import…	Importar…
+	Key color	Color clave
+	Key color spill reduction	Reducción del derrame del color clave
+	Keyframe interval	Intervalo de fotogramas clave
+	Language	Idioma
+	Layouts	Diseños
+	Left	Izquierda
+	Licenses	Licencias
+	Limit height	Limitar el alto
+	Limit width	Limitar el ancho
+	Limiter	Limitador
+	Linear	Lineal
+	LIVE	EN VIVO
+	Live, {time}	En vivo, {time}
+	Lock (it can't be moved in the preview)	Bloquear (no se puede mover en la vista previa)
+	Lock Preview	Bloquear vista previa
+	Loop	Repetir
+	Low (dB)	Graves (dB)
+	Maximize	Maximizar
+	Media file	Archivo multimedia
+	Media files	Archivos multimedia
+	Mid (dB)	Medios (dB)
+	Minimize	Minimizar
+	Mode	Modo
+	Monitor and output	Monitorear y enviar a la salida
+	Monitor off	Monitoreo desactivado
+	Monitor only (left out of recordings and streams)	Solo monitorear (fuera de grabaciones y transmisiones)
+	Monitoring	Monitoreo
+	Monitoring device	Dispositivo de monitoreo
+	Move Dock	Mover panel
+	Move Left	Mover a la izquierda
+	Move Right	Mover a la derecha
+	Move the scene down	Bajar la escena
+	Move the scene up	Subir la escena
+	Move the source down	Bajar la fuente
+	Move the source up	Subir la fuente
+	Mute	Silenciar
+	Name	Nombre
+	New Profile	Nuevo perfil
+	New…	Nuevo…
+	No audio sources are heard in this scene.	No se oye ninguna fuente de audio en esta escena.
+	No contributors listed yet	Todavía no hay colaboradores
+	No filters yet.	Todavía no hay filtros.
+	No graphics device: the preview is off	No hay dispositivo gráfico: la vista previa está desactivada
+	No sources in this scene. Add one with +.	Esta escena no tiene fuentes. Agregue una con +.
+	Noise gate	Puerta de ruido
+	None	Ninguno
+	not in this ffmpeg	no está en este ffmpeg
+	OK	Aceptar
+	Opacity (%)	Opacidad (%)
+	Open above (dB)	Abrir por encima de (dB)
+	Order	Orden
+	Outline color	Color del contorno
+	Outline width	Ancho del contorno
+	Output	Salida
+	Output Controls	Controles de salida
+	Output gain (dB)	Ganancia de salida (dB)
+	Output size	Tamaño de salida
+	Parade	Desfile
+	Picture file	Archivo de imagen
+	Pictures	Imágenes
+	Plays this source on the monitoring device chosen in Settings › Audio	Reproduce esta fuente en el dispositivo de monitoreo elegido en Configuración › Audio
+	Preferences…	Preferencias…
+	Preset (higher is slower and better)	Ajuste preestablecido (más alto es más lento y mejor)
+	Presets	Ajustes preestablecidos
+	Preview: {name}	Vista previa: {name}
+	Primary display	Pantalla principal
+	Profile	Perfil
+	Program: {name}	Programa: {name}
+	Properties	Propiedades
+	Properties for '{name}'	Propiedades de «{name}»
+	Properties…	Propiedades…
+	Quality	Calidad
+	Quit	Salir
+	Ratio	Proporción
+	Read the displays, windows and devices again	Volver a leer las pantallas, las ventanas y los dispositivos
+	Reading the lists…	Leyendo las listas…
+	REC	GRAB
+	Record	Grabar
+	Record and stream scenes built from your screen, windows, cameras, pictures, text and sound.	Grabe y transmita escenas creadas con su pantalla, ventanas, cámaras, imágenes, texto y sonido.
+	Recording	Grabación
+	Recording folder	Carpeta de grabaciones
+	Recording, {time}	Grabando, {time}
+	Recordings	Grabaciones
+	Redo	Rehacer
+	Refresh Lists	Actualizar listas
+	Release (ms)	Liberación (ms)
+	Remove	Quitar
+	Remove Dock Layout	Quitar diseño de paneles
+	Remove Layout	Quitar diseño
+	Remove Selected Source	Quitar la fuente seleccionada
+	Remove the selected scene	Quitar la escena seleccionada
+	Remove the selected source from the scene	Quitar de la escena la fuente seleccionada
+	Rename	Cambiar nombre
+	Rename…	Cambiar nombre…
+	Replay	Repetición
+	REPLAY	REPETICIÓN
+	Replay buffer	Búfer de repetición
+	Replay Buffer	Búfer de repetición
+	Replay buffer length	Duración del búfer de repetición
+	Replay buffer memory limit	Límite de memoria del búfer de repetición
+	Replay buffer, {time}	Búfer de repetición, {time}
+	Replay length (seconds)	Duración de la repetición (segundos)
+	Replay memory limit (MB)	Límite de memoria de la repetición (MB)
+	Report an Issue	Informar de un problema
+	Reset Docks	Restablecer paneles
+	Reset Transform	Restablecer transformación
+	Resize the dock strip	Cambiar el tamaño de la barra de paneles
+	Resize the docks	Cambiar el tamaño de los paneles
+	Restore	Restaurar
+	Right	Derecha
+	Rotate 90° Clockwise	Girar 90° en sentido horario
+	Rotate 90° Counterclockwise	Girar 90° en sentido antihorario
+	Running	En curso
+	Saturation	Saturación
+	Save Dock Layout	Guardar diseño de paneles
+	Save Dock Layout…	Guardar diseño de paneles…
+	Save Replay	Guardar repetición
+	Scene Collection	Colección de escenas
+	Scene {n}	Escena {n}
+	Scenes	Escenas
+	Scope Type	Tipo de monitor de señal
+	Scopes	Monitores de señal
+	Scroll	Desplazamiento
+	Send the preview to the program	Enviar la vista previa al programa
+	Server	Servidor
+	Settings	Configuración
+	sharing stopped	se detuvo el uso compartido
+	Sharpen	Enfocar
+	Sharpness	Nitidez
+	Show	Mostrar
+	Show an area	Mostrar un área
+	Show Recordings	Mostrar grabaciones
+	Show Scene {n}	Mostrar la escena {n}
+	Show Settings Folder	Mostrar la carpeta de configuración
+	Similarity	Similitud
+	Size	Tamaño
+	Smoothness	Suavidad
+	Software (x264)	Software (x264)
+	Source Code	Código fuente
+	Source Properties	Propiedades de la fuente
+	Sources	Fuentes
+	Sources set to monitoring in their Properties window play on this device.	Las fuentes configuradas para monitoreo en su ventana Propiedades se reproducen en este dispositivo.
+	Speed	Velocidad
+	Start or Stop Recording	Iniciar o detener la grabación
+	Start or Stop Replay Buffer	Iniciar o detener el búfer de repetición
+	Start or Stop Streaming	Iniciar o detener la transmisión
+	Start Recording	Iniciar grabación
+	Start Replay Buffer	Iniciar búfer de repetición
+	Start Streaming	Iniciar transmisión
+	Starting…	Iniciando…
+	Stats	Estadísticas
+	Status Bar	Barra de estado
+	Stop and Exit	Detener y salir
+	Stop Recording	Detener grabación
+	Stop Replay Buffer	Detener búfer de repetición
+	Stop Streaming	Detener transmisión
+	Stopped	Detenido
+	Stopping Replay Buffer…	Deteniendo el búfer de repetición…
+	Stopping…	Deteniendo…
+	Stream	Transmisión
+	Stream key	Clave de transmisión
+	Stretch image	Estirar la imagen
+	Stretch to Screen	Estirar a la pantalla
+	Studio	Estudio
+	Studio Mode	Modo estudio
+	StudioCraft is available under either license, at your option.	StudioCraft está disponible bajo cualquiera de las dos licencias, a su elección.
+	Swipe	Deslizamiento
+	Switch at once	Cambiar al instante
+	Sync offset	Desfase de sincronización
+	System ({language})	Sistema ({language})
+	Takes effect the next time StudioCraft starts.	Se aplica la próxima vez que se inicie StudioCraft.
+	Temperature (K)	Temperatura (K)
+	Text	Texto
+	the audio capture could not start	no se pudo iniciar la captura de audio
+	the audio capture thread stopped	se detuvo el hilo de captura de audio
+	the audio format could not be described	no se pudo describir el formato de audio
+	the audio stream ended	terminó el flujo de audio
+	the audio stream failed	falló el flujo de audio
+	the camera capture could not start	no se pudo iniciar la captura de la cámara
+	the camera is in use by another camera source	otra fuente de cámara está usando la cámara
+	the camera is still closing	la cámara todavía se está cerrando
+	the camera offers no format StudioCraft reads	la cámara no ofrece ningún formato que StudioCraft pueda leer
+	the camera sends frames that cannot be read	la cámara envía fotogramas que no se pueden leer
+	the camera sent no picture	la cámara no envió ninguna imagen
+	the camera stopped	la cámara se detuvo
+	the camera stopped sending pictures	la cámara dejó de enviar imágenes
+	the camera stopped unexpectedly	la cámara se detuvo de forma inesperada
+	the choice in the system picker was canceled	se canceló la elección en el selector del sistema
+	the desktop has no screen-cast portal	el escritorio no tiene un portal de captura de pantalla
+	the screen capture could not start	no se pudo iniciar la captura de pantalla
+	the screen capture failed	falló la captura de pantalla
+	The interface fonts Inter and JetBrains Mono are under the SIL Open Font License 1.1.	Las fuentes de la interfaz, Inter y JetBrains Mono, están bajo la SIL Open Font License 1.1.
+	The licenses of the third-party crates StudioCraft uses are checked by `cargo xtask licenses`.	`cargo xtask licenses` comprueba las licencias de los crates de terceros que usa StudioCraft.
+	The scope could not be computed: {error}	No se pudo calcular el monitor de señal: {error}
+	The scopes need a graphics device to read the program.	Los monitores de señal necesitan un dispositivo gráfico para leer el programa.
+	This filter has no settings.	Este filtro no tiene ajustes.
+	this is not supported on this system yet	esto todavía no es compatible con este sistema
+	Threshold (dB)	Umbral (dB)
+	Tint	Tinte
+	Tools	Herramientas
+	Top	Arriba
+	Transition	Transición
+	Transition Controls	Controles de transición
+	Transition settings	Ajustes de la transición
+	Transition to Program	Transición al programa
+	Type	Tipo
+	Type shortcuts such as Ctrl+1 or Shift+F5; separate several with commas.	Escriba atajos como Ctrl+1 o Shift+F5; separe varios con comas.
+	Undo	Deshacer
+	Undock	Desacoplar
+	Updates	Actualizaciones
+	Use system title bar	Usar la barra de título del sistema
+	Username	Nombre de usuario
+	Version {version} ({os} {arch})	Versión {version} ({os} {arch})
+	Vertical speed (px/s)	Velocidad vertical (px/s)
+	Video	Video
+	Video bitrate	Tasa de bits de video
+	Video encoder	Codificador de video
+	Video settings can't change while recording, streaming or running the replay buffer.	La configuración de video no se puede cambiar mientras se graba, se transmite o funciona el búfer de repetición.
+	View	Ver
+	Waiting for the program picture…	Esperando la imagen del programa…
+	waiting for a choice in the system picker	esperando una elección en el selector del sistema
+	waiting for the camera	esperando la cámara
+	waiting to open the camera again	esperando para volver a abrir la cámara
+	Waveform	Forma de onda
+	Website	Sitio web
+	Width	Ancho
+	Window	Ventana
+	Window capture	Captura de ventana
+	Your Videos folder	Su carpeta Videos
+	YUV vectorscope	Vectorscopio YUV
+	{device} (not connected)	{device} (no conectado)
+	{encoder} (not in this ffmpeg)	{encoder} (no está en este ffmpeg)
+	{fps} fps  {ms} ms	{fps} fps  {ms} ms
+	{program} did not report its version	{program} no informó su versión
+@msg	A plug-in could not be loaded: {error}	No se pudo cargar un complemento: {error}
+@msg	Audio monitoring could not start: {error}	No se pudo iniciar el monitoreo de audio: {error}
+@msg	Audio monitoring stopped: {error}	Se detuvo el monitoreo de audio: {error}
+@msg	Could not check for updates: {error}	No se pudo buscar actualizaciones: {error}
+@msg	Exported the scene collection to {path}	Colección de escenas exportada a {path}
+@msg	Imported the scene collection `{name}`	Colección de escenas `{name}` importada
+@msg	No file dialog could be shown: {error}	No se pudo mostrar ningún cuadro de diálogo de archivos: {error}
+@msg	Recording saved to {path}	Grabación guardada en {path}
+@msg	Replay saved to {path}	Repetición guardada en {path}
+@msg	The compositor thread could not start: {error}	No se pudo iniciar el hilo del compositor: {error}
+@msg	The preferences could not be saved: {error}	No se pudieron guardar las preferencias: {error}
+@msg	The profile could not be saved: {error}	No se pudo guardar el perfil: {error}
+@msg	The recording could not be finished	No se pudo terminar la grabación
+@msg	The recording could not be finished: {error}	No se pudo terminar la grabación: {error}
+@msg	The recording stopped: {error}	La grabación se detuvo: {error}
+@msg	The replay buffer could not be stopped	No se pudo detener el búfer de repetición
+@msg	The replay buffer could not be stopped: {error}	No se pudo detener el búfer de repetición: {error}
+@msg	The replay buffer stopped	El búfer de repetición se detuvo
+@msg	The replay buffer stopped: {error}	El búfer de repetición se detuvo: {error}
+@msg	The replay could not be saved	No se pudo guardar la repetición
+@msg	The replay could not be saved: {error}	No se pudo guardar la repetición: {error}
+@msg	The scene collection could not be saved: {error}	No se pudo guardar la colección de escenas: {error}
+@msg	The scopes could not start: {error}	No se pudieron iniciar los monitores de señal: {error}
+@msg	The stream could not be finished	No se pudo terminar la transmisión
+@msg	The stream could not be finished: {error}	No se pudo terminar la transmisión: {error}
+@msg	The stream ended	La transmisión terminó
+@msg	The stream stopped: {error}	La transmisión se detuvo: {error}
+@msg	ffmpeg at {path} was not found	No se encontró ffmpeg en {path}
+menu	Transform	Transformar
