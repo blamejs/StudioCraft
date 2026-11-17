@@ -160,6 +160,8 @@ pub struct Scopes {
     /// The newest error the thread reported.
     pub error: Option<String>,
     spare: Option<Picture>,
+    /// A copy was handed to the thread and its picture has not been taken yet.
+    pending: bool,
     /// Pictures received.
     pub computed: u64,
     /// Program copies taken from the feed but not drawn because a newer one arrived or the thread
@@ -204,6 +206,7 @@ impl Scopes {
             fresh: false,
             error: None,
             spare: None,
+            pending: false,
             computed: 0,
             skipped: 0,
             texture: None,
@@ -215,8 +218,8 @@ impl Scopes {
         ScopeFeed { sink: Arc::clone(&self.feed), max_width: craft_scopes::MAX_W as u32, max_height: craft_scopes::MAX_H as u32 }
     }
 
-    /// Program copies the scopes never drew: dropped from the full feed, replaced by a newer copy,
-    /// or arriving while the thread was busy.
+    /// Program copies the scopes never drew: replaced in the feed by a newer copy, for example
+    /// while the thread was busy, or taken from the feed together with a newer one.
     pub fn dropped(&self) -> u64 {
         self.feed.dropped().saturating_add(self.skipped)
     }
@@ -224,21 +227,27 @@ impl Scopes {
     /// Hand the newest program copy to the thread when it is idle, and take any finished picture.
     /// Other copies go back to the compositor's pool.
     pub fn pump(&mut self, kind: ScopeKind) {
-        let mut newest = None;
-        while let Some(f) = self.feed.pop() {
-            if newest.replace(f).is_some() {
-                self.skipped += 1;
-            }
+        // While the thread draws a copy, the newest one stays in the feed, so the scopes hold at
+        // most the feed's copy and the thread's. An idle thread's last picture is taken before the
+        // next copy goes over.
+        let idle = !self.shared.busy.load(Ordering::Acquire);
+        while let Some(r) = self.shared.pictures.pop() {
+            self.received(r);
         }
-        if let Some(frame) = newest {
-            match &self.thread {
-                Some(t) if !self.shared.busy.load(Ordering::Acquire) => {
-                    self.shared.busy.store(true, Ordering::Release);
-                    self.shared.job.publish(Job { frame, kind, spare: self.spare.take() });
-                    t.thread().unpark();
+        if let Some(t) = &self.thread
+            && idle
+        {
+            let mut newest = None;
+            while let Some(f) = self.feed.pop() {
+                if newest.replace(f).is_some() {
+                    self.skipped += 1;
                 }
-                // The thread is still drawing the last copy; this one is dropped.
-                _ => self.skipped += 1,
+            }
+            if let Some(frame) = newest {
+                self.shared.busy.store(true, Ordering::Release);
+                self.pending = true;
+                self.shared.job.publish(Job { frame, kind, spare: self.spare.take() });
+                t.thread().unpark();
             }
         }
         while let Some(r) = self.shared.pictures.pop() {
@@ -247,6 +256,7 @@ impl Scopes {
     }
 
     fn received(&mut self, r: Outcome) {
+        self.pending = false;
         let spare = match r {
             Ok(p) => {
                 self.fresh = true;
@@ -264,19 +274,23 @@ impl Scopes {
         }
     }
 
-    /// Wait for the thread to finish the copy handed over with [`Scopes::pump`] and take its
-    /// picture (tests). False when no picture came.
+    /// Wait until the picture of the copy handed over with [`Scopes::pump`] has been taken, by
+    /// that call or by this one, and the thread is idle (tests). False when the thread ended
+    /// first.
     #[cfg(test)]
     pub fn wait(&mut self) -> bool {
-        while self.shared.busy.load(Ordering::Acquire) && self.thread.as_ref().is_some_and(|t| !t.is_finished()) {
-            std::thread::yield_now();
+        // The thread clears `busy` just after it pushes the picture; waiting for both keeps the
+        // next `pump` from finding the thread still busy.
+        while self.pending || self.shared.busy.load(Ordering::Acquire) {
+            if let Some(r) = self.shared.pictures.pop() {
+                self.received(r);
+            } else if self.thread.as_ref().is_none_or(|t| t.is_finished()) {
+                return false;
+            } else {
+                std::thread::yield_now();
+            }
         }
-        let mut got = false;
-        while let Some(r) = self.shared.pictures.pop() {
-            self.received(r);
-            got = true;
-        }
-        got
+        true
     }
 
     /// The feed the compositor writes to, for tests that stand in for it.
@@ -436,6 +450,32 @@ mod tests {
     }
 
     #[test]
+    fn waiting_counts_a_picture_the_pump_already_took() {
+        let pool: Arc<FramePool> = Pool::new(1, VideoFrame::default);
+        let mut s = Scopes::start().unwrap();
+        s.feed_queue().push(half_white(&pool, 16, 8));
+        s.pump(ScopeKind::Waveform);
+        // The thread finishes before the next interface frame, whose pump takes the picture.
+        while s.shared.busy.load(Ordering::Acquire) {
+            std::thread::yield_now();
+        }
+        s.pump(ScopeKind::Waveform);
+        assert_eq!(s.computed, 1);
+        assert!(s.wait());
+        // The thread finishes again while a newer copy waits: the older picture is taken before
+        // the newer copy goes over, and waiting returns that copy's picture.
+        s.feed_queue().push(half_white(&pool, 16, 8));
+        s.pump(ScopeKind::Waveform);
+        while s.shared.busy.load(Ordering::Acquire) {
+            std::thread::yield_now();
+        }
+        s.feed_queue().push(half_white(&pool, 32, 16));
+        s.pump(ScopeKind::Waveform);
+        assert!(s.wait());
+        assert_eq!((s.computed, s.latest.as_ref().map(|p| p.source)), (3, Some((32, 16))));
+    }
+
+    #[test]
     fn a_copy_that_cannot_be_drawn_hands_its_buffers_back() {
         let pool: Arc<FramePool> = Pool::new(2, VideoFrame::default);
         let mut s = Scopes::start().unwrap();
@@ -449,16 +489,25 @@ mod tests {
     }
 
     #[test]
-    fn a_busy_thread_holds_no_queued_copy() {
-        let pool: Arc<FramePool> = Pool::new(2, VideoFrame::default);
+    fn a_busy_thread_leaves_the_newest_copy_in_the_feed() {
+        let pool: Arc<FramePool> = Pool::new(3, VideoFrame::default);
         let mut s = Scopes::start().unwrap();
-        // While the thread draws a copy, a newer one goes straight back to the pool.
+        // While the thread draws a copy, the window takes nothing from the feed, so the scopes
+        // never hold a third copy while the compositor pushes the next one.
         s.shared.busy.store(true, Ordering::Release);
         s.feed_queue().push(half_white(&pool, 16, 8));
         s.pump(ScopeKind::Waveform);
-        assert_eq!(s.dropped(), 1);
-        assert_eq!(pool.free(), pool.made(), "the scopes hold no copy");
+        assert_eq!((s.feed_queue().len(), s.dropped()), (1, 0), "the copy waits in the feed");
+        assert_eq!(pool.free(), pool.made() - 1, "the scopes hold only the feed's copy");
+        // A newer copy replaces it, and the older one goes back to the pool.
+        s.feed_queue().push(half_white(&pool, 32, 16));
+        assert_eq!((s.feed_queue().len(), s.dropped()), (1, 1));
+        assert_eq!(pool.free(), pool.made() - 1);
+        // Once the thread is idle, the newest copy is drawn.
         s.shared.busy.store(false, Ordering::Release);
+        s.pump(ScopeKind::Waveform);
+        assert!(s.wait());
+        assert_eq!(s.latest.as_ref().map(|p| p.source), Some((32, 16)));
     }
 
     #[test]
