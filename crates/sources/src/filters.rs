@@ -193,7 +193,7 @@ impl Plugin for ColorCorrection {
             float_field("contrast", "Contrast", -1.0, 1.0, 0.01, 0.0),
             float_field("brightness", "Brightness", -1.0, 1.0, 0.01, 0.0),
             float_field("saturation", "Saturation", -1.0, 5.0, 0.01, 0.0),
-            float_field("temperature", "Temperature (K)", 2000.0, 12000.0, 50.0, NEUTRAL_TEMPERATURE),
+            float_field("temperature", "Temperature (K)", 2000.0, 12000.0, 1.0, NEUTRAL_TEMPERATURE),
             float_field("tint", "Tint", -100.0, 100.0, 0.5, NEUTRAL_TINT),
             float_field("opacity", "Opacity (%)", 0.0, 100.0, 1.0, 100.0),
         ])
@@ -436,10 +436,12 @@ mod tests {
     fn the_default_white_balance_is_d65() {
         let (t, tint) = cct::xy_to_temp_tint(SRGB.white);
         assert!((t - NEUTRAL_TEMPERATURE).abs() <= 0.5 && (tint - NEUTRAL_TINT).abs() <= 0.05, "{t} {tint}");
-        // The tint slider snaps to its steps from its minimum; the default is one of them.
+        // Each slider snaps to its steps from its minimum; the default is one of them.
         let schema = ColorCorrection.schema();
-        let Some(FieldKind::Float { min, step, .. }) = schema.field("tint").map(|f| &f.kind) else { panic!("no tint field") };
-        assert_eq!(((NEUTRAL_TINT - min) / step).fract(), 0.0);
+        for (key, default) in [("temperature", NEUTRAL_TEMPERATURE), ("tint", NEUTRAL_TINT)] {
+            let Some(FieldKind::Float { min, step, .. }) = schema.field(key).map(|f| &f.kind) else { panic!("no {key} field") };
+            assert_eq!(((default - min) / step).fract(), 0.0, "{key}");
+        }
         let defaults = schema.defaults();
         assert_eq!(white_balance(&defaults), Mat3::IDENTITY);
         let near = white_balance(&defaults.with("temperature", NEUTRAL_TEMPERATURE + 1.0));
