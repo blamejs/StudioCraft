@@ -241,11 +241,16 @@ shortens the title instead. `ui-egui/src/strip.rs` sizes the strip: 200 points t
 window's height when that is less, and never under 120 points. Scenes, Sources and Audio Mixer are
 300, 340 and 400 points wide by default, and the last shown dock takes the rest; no column is
 narrower than 200 points while the window has room. A right-click on a dock's title offers Move
-Left and Move Right (`dock.move`), which pass over hidden docks. The strip's top edge and the 1-point dividers between docks are
+Left and Move Right (`dock.move`), which pass over hidden docks, and Undock (`dock.float`). An
+undocked dock is drawn in a window of its own inside the main window, which is dragged by the
+dock's title, starts as wide as the dock's default width and 200 points tall, and is at least
+200 by 120 points. The window resizes from its right and bottom edges. A smaller main window
+draws it further in without changing its saved place or size. Its menu offers Dock in the Strip. The strip's top edge and the 1-point dividers between docks are
 `craft-ui` `ResizeHandle`s with 8-point hit bands. The header actions take a press or a drag
 that starts on them, so the top edge resizes only from outside the actions. A dragged height (up to 45% of the window) and
-dragged widths are saved in `config.toml` with the docks' visibility and order, and Docks › Reset
-Docks clears them and puts the docks back in their first order.
+dragged widths are saved in `config.toml` with the docks' visibility and order, which docks are
+undocked, and where their windows were moved to and the sizes they were given. Docks › Reset Docks clears them and puts every
+dock back in the strip in its first order.
 
 `ui-egui/src/fonts.rs` builds the font stack with `craft-ui`'s `UiFonts`: Inter Regular for the
 proportional family, Inter SemiBold for the `semibold` family (dock, section and dialog titles) and

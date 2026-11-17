@@ -40,6 +40,7 @@ pub const UI_COMMANDS: &[(&str, &str)] = &[
     ("dock.controls", "Output Controls"),
     ("dock.transitions", "Transition Controls"),
     ("dock.move", "Move Dock"),
+    ("dock.float", "Undock"),
     ("dock.reset", "Reset Docks"),
     ("profile.new", "New Profile…"),
     ("profile.duplicate", "Duplicate Profile…"),
@@ -84,6 +85,7 @@ pub fn ui_params(id: &str) -> &'static str {
         "collection.import" | "collection.export" => "path?: string",
         "scopes.kind" => "kind: string (waveform, parade, histogram, vectorscopeYuv or vectorscopeHls)",
         "dock.move" => "dock: string (scenes, sources or mixer), to: string (left or right)",
+        "dock.float" => "dock: string (scenes, sources or mixer), floating: boolean (true for a window of its own, false for the strip)",
         _ => "",
     }
 }

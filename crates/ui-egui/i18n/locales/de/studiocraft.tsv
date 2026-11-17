@@ -64,6 +64,7 @@
 	Discord Server	Discord-Server
 	Display	Bildschirm
 	Display capture	Bildschirmaufnahme
+	Dock in the Strip	In der Dockleiste andocken
 	dropped {dropped}  lagged {lagged}	verworfen {dropped}  verspätet {lagged}
 	Duplicate	Duplizieren
 	Duplicate…	Duplizieren…
@@ -315,6 +316,7 @@
 	Type	Typ
 	Type shortcuts such as Ctrl+1 or Shift+F5; separate several with commas.	Geben Sie Kürzel wie Ctrl+1 oder Shift+F5 ein; trennen Sie mehrere durch Kommas.
 	Undo	Rückgängig
+	Undock	Abdocken
 	Updates	Updates
 	Use system title bar	Titelleiste des Systems verwenden
 	Username	Benutzername

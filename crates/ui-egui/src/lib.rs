@@ -184,9 +184,22 @@ pub struct StudioApp {
     frames: u64,
     /// Where the editable view was drawn last: its rectangle and screen points per canvas pixel.
     last_view: Option<(egui::Rect, f32)>,
-    /// Where each shown dock was drawn last: its index in `control::DOCK_NAMES`, its rectangle and
-    /// what its header drew.
+    /// Where each dock in the strip was drawn last: its index in `control::DOCK_NAMES`, its
+    /// rectangle and what its header drew.
     dock_rects: Vec<(usize, egui::Rect, docks::Drawn)>,
+    /// The same for each dock in a window of its own, with the window's rectangle.
+    floating_rects: Vec<(usize, egui::Rect, docks::Drawn)>,
+    /// Where each floating dock's window is this session, by dock index, while it differs from the
+    /// place saved when the pointer was last released.
+    dock_window_at: [Option<egui::Pos2>; 3],
+    /// Whether the user moved or resized each floating dock's window since its place was saved.
+    dock_window_touched: [bool; 3],
+    /// Where each floating dock's window was drawn last frame, and the main window's size then.
+    dock_window_drawn: [Option<egui::Rect>; 3],
+    dock_viewport: Option<egui::Vec2>,
+    /// Counts the dock windows' resets this session. It is part of their ids, so a window opened
+    /// after a reset starts at its default size instead of the size egui kept for the old one.
+    dock_window_gen: u32,
     /// Where the dock strip was drawn last.
     dock_strip: Option<egui::Rect>,
     /// Where the top row and the parts of the output bar were drawn last.
@@ -284,6 +297,12 @@ impl StudioApp {
             frames: 0,
             last_view: None,
             dock_rects: Vec::with_capacity(control::DOCK_NAMES.len()),
+            floating_rects: Vec::new(),
+            dock_window_at: [None; 3],
+            dock_window_touched: [false; 3],
+            dock_window_drawn: [None; 3],
+            dock_viewport: None,
+            dock_window_gen: 0,
             dock_strip: None,
             output_bar: output_bar::Drawn::default(),
             updates: updates_ui::Runtime::default(),
@@ -508,6 +527,16 @@ impl StudioApp {
         cmd.params.get(key).and_then(Value::as_str).ok_or_else(|| format!("`{}` needs `{key}`", cmd.id))
     }
 
+    /// The `dock` parameter as a dock index, or an error naming the docks.
+    fn param_dock(cmd: &CommandRef) -> Result<u8, String> {
+        let name = Self::param_str(cmd, "dock")?;
+        control::DOCK_NAMES
+            .iter()
+            .position(|n| *n == name)
+            .and_then(|i| u8::try_from(i).ok())
+            .ok_or_else(|| format!("`{}`: unknown dock `{name}` (one of {})", cmd.id, control::DOCK_NAMES.join(", ")))
+    }
+
     /// The optional `path` parameter: `None` when it is left out, an error when it is not a
     /// non-empty string.
     fn param_path(cmd: &CommandRef) -> Result<Option<PathBuf>, String> {
@@ -715,12 +744,7 @@ impl StudioApp {
             "dock.transitions" => return Ok(self.toggle_pref(|p| &mut p.docks.transitions)),
             "dock.controls" => return Ok(self.toggle_pref(|p| &mut p.docks.controls)),
             "dock.move" => {
-                let name = Self::param_str(cmd, "dock")?;
-                let i = control::DOCK_NAMES
-                    .iter()
-                    .position(|n| *n == name)
-                    .and_then(|i| u8::try_from(i).ok())
-                    .ok_or_else(|| format!("`dock.move`: unknown dock `{name}` (one of {})", control::DOCK_NAMES.join(", ")))?;
+                let i = Self::param_dock(cmd)?;
                 let left = match Self::param_str(cmd, "to")? {
                     "left" => true,
                     "right" => false,
@@ -734,7 +758,25 @@ impl StudioApp {
                 let order: Vec<&str> = docks.order().iter().filter_map(|i| control::DOCK_NAMES.get(usize::from(*i)).copied()).collect();
                 return Ok(json!({"moved": moved, "order": order}));
             }
-            "dock.reset" => self.store.update(|p| p.docks = store::Docks::default()),
+            "dock.float" => {
+                let i = Self::param_dock(cmd)?;
+                let floating = cmd.params.get("floating").and_then(Value::as_bool).ok_or("`dock.float` needs `floating`: true or false")?;
+                let changed = self.store.prefs().docks.is_floating(i) != floating;
+                if changed {
+                    self.store.update(|p| {
+                        if let Some(f) = p.docks.floating.get_mut(usize::from(i)) {
+                            *f = floating;
+                        }
+                    });
+                }
+                return Ok(json!({"floating": floating, "changed": changed}));
+            }
+            "dock.reset" => {
+                self.store.update(|p| p.docks = store::Docks::default());
+                self.dock_window_at = [None; 3];
+                self.dock_window_touched = [false; 3];
+                self.dock_window_gen = self.dock_window_gen.wrapping_add(1);
+            }
             "profile.new" => self.ask_name(Named::NewProfile, ""),
             "profile.duplicate" => {
                 let n = format!("{} copy", self.studio.profile().name);
@@ -1263,19 +1305,20 @@ impl StudioApp {
         let shields: Vec<egui::Rect> = self.dock_rects.iter().flat_map(|(_, _, drawn)| drawn.actions.iter().map(|(_, r)| *r)).collect();
         self.dock_rects.clear();
         self.dock_strip = None;
-        if shown.is_empty() {
-            return;
-        }
         let now = Instant::now();
         let dt = self.last_frame.map_or(0.0, |t| now.duration_since(t).as_secs_f32());
         self.last_frame = Some(now);
         let ctx = ui.ctx().clone();
+        self.dock_windows(&ctx, acts, dt);
+        if shown.is_empty() {
+            return;
+        }
         let palette = theme::palette(&ctx);
         let window = ctx.viewport_rect().height();
         let height = strip::height(window, d.height);
         let handle_style = ResizeHandleStyle { hovered: palette.line_strong, dragged: palette.accent, focused: palette.focus };
         let mut st =
-            docks::DockState { selected: self.selected, renaming: &mut self.renaming, meters: &mut self.meters, dt, place: (0, shown.len()) };
+            docks::DockState { selected: self.selected, renaming: &mut self.renaming, meters: &mut self.meters, dt, place: Some((0, shown.len())) };
         let studio = &self.studio;
         let rects = &mut self.dock_rects;
         let saved = d.widths();
@@ -1313,7 +1356,7 @@ impl StudioApp {
                     let mut col =
                         ui.new_child(egui::UiBuilder::new().id_salt(("dock", *i)).max_rect(rect).layout(egui::Layout::top_down(egui::Align::Min)));
                     col.set_clip_rect(rect.intersect(ui.clip_rect()));
-                    st.place = (k, shown.len());
+                    st.place = Some((k, shown.len()));
                     let drawn = match i {
                         0 => docks::scenes(&mut col, studio, &mut st, acts),
                         1 => docks::sources(&mut col, studio, &mut st, acts),
@@ -1373,6 +1416,96 @@ impl StudioApp {
                 }
                 if let Some(h) = new_height {
                     p.docks.height = h;
+                }
+            });
+        }
+    }
+
+    /// The docks shown in windows of their own. A window is dragged by its dock's title, keeps
+    /// inside the main window, and opens where it was last moved to at the size it was last given.
+    /// The place and size are saved once the pointer is released.
+    fn dock_windows(&mut self, ctx: &egui::Context, acts: &mut Vec<Act>, dt: f32) {
+        self.floating_rects.clear();
+        let d = self.store.prefs().docks;
+        let mut st = docks::DockState { selected: self.selected, renaming: &mut self.renaming, meters: &mut self.meters, dt, place: None };
+        let studio = &self.studio;
+        let pointer_down = ctx.input(|i| i.pointer.any_down());
+        let interacting = pointer_down || ctx.input(|i| i.pointer.any_released());
+        let mut changed: Vec<(usize, [f32; 2], [f32; 2])> = Vec::new();
+        let grab = {
+            let s = ctx.global_style();
+            s.interaction.resize_grab_radius_side.max(s.interaction.resize_grab_radius_corner)
+        };
+        let viewport = ctx.viewport_rect().size();
+        let same_viewport = self.dock_viewport.replace(viewport) == Some(viewport);
+        for i in d.floating_shown() {
+            let k = usize::from(i).min(2);
+            // Window sizes are outer sizes, with the frame's margins and stroke in them.
+            let size = d.window_size(i).map_or(egui::vec2(strip::DEFAULT_WIDTHS[k], strip::DEFAULT_HEIGHT), |[w, h]| egui::vec2(w, h));
+            let mut window = egui::Window::new(tl!(control::DOCK_TITLES[k]))
+                .id(egui::Id::unique("dock-window").with((k, self.dock_window_gen)))
+                .title_bar(false)
+                .movable(false)
+                .resizable(true)
+                .default_size(size)
+                .min_size(egui::vec2(strip::MIN_WIDTH, strip::MIN_HEIGHT));
+            if let Some(at) = self.dock_window_at[k].or_else(|| d.window_pos(i).map(|[x, y]| egui::pos2(x, y))) {
+                window = window.current_pos(at);
+            }
+            let shown = window.show(ctx, |ui| {
+                // The dock lays out its body in the room left under its header, so the window keeps
+                // the size it was given instead of shrinking to the header.
+                ui.set_min_size(ui.available_size());
+                // The title moves the window (`Drawn::grab`); a drag anywhere else in the dock
+                // does not.
+                let drawn = match i {
+                    0 => docks::scenes(ui, studio, &mut st, acts),
+                    1 => docks::sources(ui, studio, &mut st, acts),
+                    _ => docks::mixer(ui, studio, &mut st, acts),
+                };
+                let grab = drawn.grab;
+                (drawn, grab)
+            });
+            let Some(shown) = shown else { continue };
+            let rect = shown.response.rect;
+            let Some((drawn, delta)) = shown.inner else { continue };
+            // The user resized the window when its size changed during a press that started on it
+            // or its resize edge, or on the frame that press ended, while the main window kept its
+            // size.
+            // The press is tested against the window as it was before the resize.
+            let resized = self.dock_window_drawn[k].is_some_and(|was| {
+                interacting
+                    && same_viewport
+                    && was.size() != rect.size()
+                    && ctx.input(|i| i.pointer.press_origin()).is_some_and(|p| was.union(rect).expand(grab).contains(p))
+            });
+            self.dock_window_drawn[k] = Some(rect);
+            // `dock_window_at` is where the user put the window. egui may draw it further in when
+            // the main window is smaller; that does not change the place that is kept. A window that
+            // cannot be moved resizes only from its right and bottom edges, so a resize keeps it.
+            let at = if delta != egui::Vec2::ZERO { rect.min + delta } else { self.dock_window_at[k].unwrap_or(rect.min) };
+            self.dock_window_at[k] = Some(at);
+            if delta != egui::Vec2::ZERO || resized {
+                self.dock_window_touched[k] = true;
+                ctx.request_repaint();
+            }
+            let place = [at.x, at.y];
+            let outer = [rect.width(), rect.height()];
+            // The place and size are saved when the user moved or resized the window, and the first
+            // time the window is shown.
+            let save = self.dock_window_touched[k] || d.window_pos(i).is_none();
+            if !pointer_down && save {
+                self.dock_window_touched[k] = false;
+                if place.iter().chain(&outer).all(|v| v.is_finite()) && { d }.place_window(k, place, outer) {
+                    changed.push((k, place, outer));
+                }
+            }
+            self.floating_rects.push((k, rect, drawn));
+        }
+        if !changed.is_empty() {
+            self.store.update(|p| {
+                for (k, place, outer) in &changed {
+                    p.docks.place_window(*k, *place, *outer);
                 }
             });
         }

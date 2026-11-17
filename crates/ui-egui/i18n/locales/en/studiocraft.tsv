@@ -70,6 +70,7 @@
 	Discord Server	Discord Server
 	Display	Display
 	Display capture	Display capture
+	Dock in the Strip	Dock in the Strip
 	Docks	Docks
 	dropped {dropped}  lagged {lagged}	dropped {dropped}  lagged {lagged}
 	Duplicate	Duplicate
@@ -360,6 +361,7 @@
 	Type shortcuts such as Ctrl+1 or Shift+F5; separate several with commas.	Type shortcuts such as Ctrl+1 or Shift+F5; separate several with commas.
 	ultrafast	ultrafast
 	Undo	Undo
+	Undock	Undock
 	Updates	Updates
 	Use system title bar	Use system title bar
 	Username	Username

@@ -35,6 +35,17 @@ pub struct Docks {
     /// [`Docks::order`].
     #[serde(deserialize_with = "lenient_order")]
     pub order: [u8; 3],
+    /// The docks shown in a window of their own instead of in the strip, by index.
+    pub floating: [bool; 3],
+    /// Where each floating dock's window was last moved to, as its top-left corner in points, by
+    /// index. A place is used only when `window_placed` is set for that dock.
+    pub window_pos: [[f32; 2]; 3],
+    /// Whether each dock's window has a saved place; without one the window takes its default
+    /// place.
+    pub window_placed: [bool; 3],
+    /// The size of each floating dock's window with its frame, in points, by index; `[0, 0]` is
+    /// not set and gives the window its default size.
+    pub window_size: [[f32; 2]; 3],
 }
 
 /// The docks' order by default.
@@ -53,6 +64,10 @@ impl Default for Docks {
             sources_width: 0.0,
             mixer_width: 0.0,
             order: DOCK_ORDER,
+            floating: [false; 3],
+            window_pos: [[0.0; 2]; 3],
+            window_placed: [false; 3],
+            window_size: [[0.0; 2]; 3],
         }
     }
 }
@@ -199,9 +214,51 @@ impl Docks {
         }
     }
 
-    /// The shown docks from left to right.
+    /// Whether dock `i` is shown in a window of its own.
+    pub fn is_floating(&self, i: u8) -> bool {
+        self.floating.get(usize::from(i)).copied().unwrap_or(false)
+    }
+
+    /// Whether dock `i` is shown in the strip.
+    pub fn in_strip(&self, i: u8) -> bool {
+        self.is_shown(i) && !self.is_floating(i)
+    }
+
+    /// The docks shown in the strip, from left to right.
     pub fn shown(&self) -> Vec<u8> {
-        self.order().into_iter().filter(|i| self.is_shown(*i)).collect()
+        self.order().into_iter().filter(|i| self.in_strip(*i)).collect()
+    }
+
+    /// The docks shown in windows of their own, in the strip's order.
+    pub fn floating_shown(&self) -> Vec<u8> {
+        self.order().into_iter().filter(|i| self.is_shown(*i) && self.is_floating(*i)).collect()
+    }
+
+    /// Where dock `i`'s window was last moved to, when a place was saved and it is a usable point.
+    pub fn window_pos(&self, i: u8) -> Option<[f32; 2]> {
+        let k = usize::from(i);
+        let p = *self.window_pos.get(k)?;
+        (self.window_placed.get(k) == Some(&true) && p.iter().all(|v| v.is_finite())).then_some(p)
+    }
+
+    /// Save `at` as dock `i`'s window place and `size` as its size; false when `i` is not a dock
+    /// or nothing changed.
+    pub fn place_window(&mut self, i: usize, at: [f32; 2], size: [f32; 2]) -> bool {
+        let (Some(p), Some(placed), Some(s)) = (self.window_pos.get_mut(i), self.window_placed.get_mut(i), self.window_size.get_mut(i)) else {
+            return false;
+        };
+        if *placed && *p == at && *s == size {
+            return false;
+        }
+        (*p, *placed, *s) = (at, true, size);
+        true
+    }
+
+    /// The size dock `i`'s window was last given, when both sides are usable (finite and above
+    /// zero).
+    pub fn window_size(&self, i: u8) -> Option<[f32; 2]> {
+        let s = *self.window_size.get(usize::from(i))?;
+        s.iter().all(|v| crate::strip::usable(*v).is_some()).then_some(s)
     }
 
     /// The saved widths by dock index.
@@ -209,12 +266,15 @@ impl Docks {
         [self.scenes_width, self.sources_width, self.mixer_width]
     }
 
-    /// Move dock `i` past the nearest shown dock on its left (`left`) or its right. False when no
-    /// shown dock is on that side.
+    /// Move dock `i` past the nearest dock in the strip on its left (`left`) or its right. False
+    /// when `i` is not in the strip or no dock in the strip is on that side.
     pub fn shift(&mut self, i: u8, left: bool) -> bool {
+        if !self.in_strip(i) {
+            return false;
+        }
         let mut order = self.order();
         let Some(at) = order.iter().position(|d| *d == i) else { return false };
-        let to = if left { (0..at).rev().find(|k| self.is_shown(order[*k])) } else { (at + 1..order.len()).find(|k| self.is_shown(order[*k])) };
+        let to = if left { (0..at).rev().find(|k| self.in_strip(order[*k])) } else { (at + 1..order.len()).find(|k| self.in_strip(order[*k])) };
         let Some(to) = to else { return false };
         if left {
             order[to..=at].rotate_right(1);
@@ -285,11 +345,13 @@ impl Prefs {
 
 impl craft_settings::Settings for Prefs {
     const APP_ID: &'static str = "studiocraft";
-    /// Version 2 adds `docks.mixer_width` and `docks.order`.
-    const SCHEMA_VERSION: u32 = 2;
+    /// Version 2 adds `docks.mixer_width` and `docks.order`, and version 3 adds `docks.floating`,
+    /// `docks.window_pos`, `docks.window_placed` and `docks.window_size`.
+    const SCHEMA_VERSION: u32 = 3;
 
-    /// Version 1 to 2: a version 1 file has neither key, so the docks keep their saved sizes and
-    /// read the Audio Mixer's width and the order as their defaults. The file is left as it is.
+    /// Version 1 to 2 and 2 to 3: an older file lacks the keys its next version adds, so the docks
+    /// keep their saved settings and read the new keys as their defaults (every dock in the strip,
+    /// no saved window places or sizes). The file is left as it is.
     fn migrate(from: u32, doc: &mut craft_settings::DocumentMut) -> Result<(), craft_settings::MigrateError> {
         let _ = (from, doc);
         Ok(())
@@ -653,7 +715,7 @@ mod tests {
     }
 
     #[test]
-    fn a_version_1_config_keeps_its_dock_settings_and_is_saved_as_version_2() {
+    fn a_version_1_config_keeps_its_dock_settings_and_is_saved_as_the_current_version() {
         let dir = std::env::temp_dir().join(format!("studiocraft-store-prefs-v1-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
@@ -667,10 +729,50 @@ mod tests {
         s.update(|p| p.docks.height = 250.0);
         s.flush().unwrap();
         let text = std::fs::read_to_string(dir.join("config.toml")).unwrap();
-        assert!(text.contains("schema_version = 2"), "{text}");
+        assert!(text.contains("schema_version = 3"), "{text}");
         let (again, _) = Store::open(Location::Dir(dir.clone()));
         assert_eq!(again.prefs().docks, Docks { height: 250.0, ..want });
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_version_2_config_keeps_its_dock_order_and_puts_every_dock_in_the_strip() {
+        let dir = std::env::temp_dir().join(format!("studiocraft-store-prefs-v2-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let v2 = "schema_version = 2\n\n[docks]\nmixer_width = 420.0\norder = [2, 0, 1]\n";
+        std::fs::write(dir.join("config.toml"), v2).unwrap();
+        let (mut s, _) = Store::open(Location::Dir(dir.clone()));
+        let d = s.prefs().docks;
+        assert_eq!(d, Docks { mixer_width: 420.0, order: [2, 0, 1], ..Docks::default() });
+        assert_eq!((d.floating, d.window_pos(0)), ([false; 3], None));
+        s.update(|p| p.docks.floating[1] = true);
+        s.flush().unwrap();
+        let text = std::fs::read_to_string(dir.join("config.toml")).unwrap();
+        assert!(text.contains("schema_version = 3"), "{text}");
+        let (again, _) = Store::open(Location::Dir(dir.clone()));
+        assert_eq!(again.prefs().docks.floating, [false, true, false]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_window_place_is_used_only_when_it_is_set_and_finite() {
+        let mut d = Docks::default();
+        assert_eq!(d.window_pos(2), None, "not set");
+        d.window_pos[2] = [40.0, 60.0];
+        assert_eq!(d.window_pos(2), None, "a place that was never saved");
+        assert!(d.place_window(2, [0.0, 0.0], [300.0, 200.0]));
+        assert_eq!(d.window_pos(2), Some([0.0, 0.0]), "the top-left corner is a place like any other");
+        assert!(!d.place_window(2, [0.0, 0.0], [300.0, 200.0]), "nothing changed");
+        assert!(d.place_window(2, [40.0, 60.0], [300.0, 200.0]));
+        assert_eq!(d.window_pos(2), Some([40.0, 60.0]));
+        d.window_pos[2] = [f32::NAN, 60.0];
+        assert_eq!(d.window_pos(2), None);
+        assert_eq!(d.window_pos(9), None, "an unknown dock");
+        assert!(!d.place_window(9, [1.0, 1.0], [300.0, 200.0]));
+        d.floating = [true, false, true];
+        d.mixer = false;
+        assert_eq!((d.shown(), d.floating_shown()), (vec![1], vec![0]), "a hidden dock is in neither list");
     }
 
     #[test]
