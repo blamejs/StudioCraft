@@ -8,7 +8,7 @@ use studiocraft_engine::mixer::{MixInput, MixerCmd};
 use studiocraft_media::Tick;
 use studiocraft_media::mix::Levels;
 use studiocraft_model::{FilterId, SceneCollection, SceneId, Settings, SourceId};
-use studiocraft_plugin::{AudioOut, FilterInstance, FilterTarget, Registry};
+use studiocraft_plugin::{AudioOut, FilterInstance, FilterTarget, Reframe, Registry};
 use studiocraft_render::{ItemDesc, Plan, SceneDesc, TransitionDesc};
 
 use crate::Notice;
@@ -104,6 +104,15 @@ impl Wiring {
             })
             .collect();
         SceneDesc { items }
+    }
+
+    /// The size a `native`-sized picture of `source` has after its enabled video filters, as the
+    /// compositor draws it.
+    pub(crate) fn filtered_size(&self, c: &SceneCollection, source: SourceId, native: (u32, u32)) -> (u32, u32) {
+        let Some(src) = c.source(source) else { return native };
+        let reframes =
+            src.filters.iter().filter(|f| f.enabled).filter_map(|f| self.video_filters.get(&f.id)?.instance.video_effect()).map(|e| e.reframe);
+        Reframe::chain(reframes, native)
     }
 
     fn sync_video_filters(&mut self, c: &SceneCollection, registry: &Registry, notices: &mut Vec<Notice>) {
@@ -237,5 +246,42 @@ mod tests {
         let [MixerCmd::Inputs(inputs)] = cmds.as_slice() else { panic!("{} commands", cmds.len()) };
         let input = inputs.iter().find(|i| i.source == first);
         assert!(input.zip(new_queue).is_some_and(|(i, q)| Arc::ptr_eq(&i.audio, &q)));
+    }
+
+    /// A source's size follows its enabled crop and pad filters in order, and a disabled one or
+    /// one that rejected its settings changes nothing.
+    #[test]
+    fn the_filtered_size_follows_the_enabled_crop_and_pad_filters() {
+        use studiocraft_model::FilterConfig;
+        let registry = builtin_registry(&Arc::new(RwLock::new(String::new()))).unwrap();
+        let mut c = default_collection("Test");
+        let id = c.sources[0].id;
+        let filter = |n: u64, settings: Settings| FilterConfig {
+            id: FilterId(900 + n),
+            kind: "crop_pad".into(),
+            kind_version: 1,
+            name: format!("Crop {n}"),
+            enabled: true,
+            settings,
+        };
+        c.sources[0].filters =
+            vec![filter(1, Settings::new().with("left", 10).with("right", 30)), filter(2, Settings::new().with("top", -5).with("bottom", -5))];
+        let (mut wiring, mut notices) = (Wiring::default(), Vec::new());
+        assert_eq!(wiring.filtered_size(&c, id, (640, 360)), (640, 360), "no filter is running yet");
+        wiring.sync_video_filters(&c, &registry, &mut notices);
+        assert!(notices.is_empty());
+        assert_eq!(wiring.filtered_size(&c, id, (640, 360)), (600, 370));
+        c.sources[0].filters[1].enabled = false;
+        assert_eq!(wiring.filtered_size(&c, id, (640, 360)), (600, 360));
+        // Rejected settings leave the filter's last good ones.
+        c.sources[0].filters[0].settings = Settings::new().with("left", 1_000_000);
+        wiring.sync_video_filters(&c, &registry, &mut notices);
+        assert_eq!(notices.len(), 1);
+        assert_eq!(wiring.filtered_size(&c, id, (640, 360)), (600, 360));
+        // Cropping everything leaves nothing; an unknown source keeps its size.
+        c.sources[0].filters[0].settings = Settings::new().with("left", 640);
+        wiring.sync_video_filters(&c, &registry, &mut notices);
+        assert_eq!(wiring.filtered_size(&c, id, (640, 360)), (0, 0));
+        assert_eq!(wiring.filtered_size(&c, SourceId(123_456), (640, 360)), (640, 360));
     }
 }

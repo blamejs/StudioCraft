@@ -84,6 +84,14 @@ in `studiocraft-plugin`. The type is registered in a `Registry` (see
 `studiocraft_sources::register` and `studiocraft_outputs::register`). The window builds its
 property forms from each plugin's `SettingsSchema`, so a new plugin does not need window code.
 
+A video filter is one GPU pass (`VideoEffect`). Its `Reframe` sets which part of the input the
+pass draws: the whole input, the input with pixels taken off or added at each edge, or one area of
+it, up to 8192 pixels a side. The compositor draws each pass into the top-left corner of a pair of
+filter textures as large as the largest pass, and the scene item takes the size of the last pass.
+`Studio::source_size` applies the same passes, so the window's selection box matches the picture.
+A pass reads its input through `input_at`, which returns transparent pixels outside the input, or
+`input_pixel`, which reads at a pixel position clamped to the input's edges.
+
 An encoder names the codec it writes (`Encoder::codec`: H.264, HEVC or AAC). An encoder that runs
 inside the ffmpeg program returns its `FfmpegEncoder` form from `Encoder::ffmpeg`, which gives
 ffmpeg the codec and its arguments. An encoder without that form is built in: `Encoder::open`

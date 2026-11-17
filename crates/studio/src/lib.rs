@@ -501,9 +501,12 @@ impl Studio {
         (v.base_width, v.base_height)
     }
 
-    /// The size a source shows at, once it has shown something.
+    /// The size a source shows at, once it has shown something: its picture's size after its
+    /// enabled video filters, which can crop or pad it. `None` while the filters leave nothing.
     pub fn source_size(&self, id: SourceId) -> Option<(u32, u32)> {
-        self.sources.size(id)
+        let native = self.sources.size(id)?;
+        let size = self.wiring.filtered_size(self.engine.collection(), id, native);
+        (size.0 > 0 && size.1 > 0).then_some(size)
     }
 
     /// Why a source is not working, if it is not.

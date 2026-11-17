@@ -7,7 +7,7 @@ use studiocraft_media::Tick;
 use studiocraft_media::queue::Fifo;
 use studiocraft_media::video::PixelFormat;
 use studiocraft_model::{Crop, SourceId, Transform, Vec2};
-use studiocraft_plugin::{Easing, Plugin, Transition, VIDEO_EFFECT_PARAMS, VideoContent, VideoEffect, VideoOut};
+use studiocraft_plugin::{Easing, Plugin, Reframe, Transition, VIDEO_EFFECT_PARAMS, VideoContent, VideoEffect, VideoOut};
 
 use super::*;
 use crate::transitions::Fade;
@@ -129,7 +129,7 @@ fn filters_run_as_gpu_passes_in_order() {
     let v = solid([255, 0, 0, 255], 16, 16);
     let mut params = [0.0; VIDEO_EFFECT_PARAMS];
     params[0] = 1.0;
-    let invert = VideoEffect { key: "test.invert", wgsl: INVERT, params };
+    let invert = VideoEffect::new("test.invert", INVERT, params);
     let mut it = item(1, &v, at(0.0, 0.0));
     it.effects = vec![invert];
     let px = draw(&mut c, Plan { program: SceneDesc { items: vec![it.clone()] }, ..Plan::default() }, Tick(0));
@@ -164,7 +164,7 @@ fn every_filter_parameter_reaches_the_shader() {
     for j in 0..4u8 {
         params[0] = f32::from(j);
         let mut it = item(1, &v, at(0.0, 0.0));
-        it.effects = vec![VideoEffect { key: "test.extra_params", wgsl: EXTRA_PARAMS_COLUMN, params }];
+        it.effects = vec![VideoEffect::new("test.extra_params", EXTRA_PARAMS_COLUMN, params)];
         let px = draw(&mut c, Plan { program: SceneDesc { items: vec![it] }, ..Plan::default() }, Tick(0));
         let want = [0, 1, 2].map(|k| ((4 * j + k + 1) as f32 / 16.0 * 255.0).round() as u8);
         assert!(close(pixel(&px, 16, 8, 8), [want[0], want[1], want[2], 255]), "column {j}: {:?} vs {want:?}", pixel(&px, 16, 8, 8));
@@ -175,7 +175,7 @@ fn every_filter_parameter_reaches_the_shader() {
 fn a_broken_filter_is_reported_and_skipped() {
     let Some(mut c) = compositor(16, 16) else { return };
     let v = solid([0, 0, 255, 255], 16, 16);
-    let broken = VideoEffect { key: "test.broken", wgsl: "fn effect( this is not wgsl", params: [0.0; VIDEO_EFFECT_PARAMS] };
+    let broken = VideoEffect::new("test.broken", "fn effect( this is not wgsl", [0.0; VIDEO_EFFECT_PARAMS]);
     let mut it = item(1, &v, at(0.0, 0.0));
     it.effects = vec![broken];
     let px = draw(&mut c, Plan { program: SceneDesc { items: vec![it] }, ..Plan::default() }, Tick(0));
@@ -183,6 +183,123 @@ fn a_broken_filter_is_reported_and_skipped() {
     let errors = c.take_errors();
     assert_eq!(errors.len(), 1);
     assert!(matches!(&errors[0], RenderError::Shader { key, .. } if key == "test.broken"));
+}
+
+const KEEP: &str = "fn effect(color: vec4<f32>, uv: vec2<f32>, size: vec2<f32>, p0: vec4<f32>, p1: vec4<f32>) -> vec4<f32> {
+    return color;
+}";
+
+/// Every output pixel shows the input's bottom-right pixel.
+const LAST_PIXEL: &str = "fn effect(color: vec4<f32>, uv: vec2<f32>, size: vec2<f32>, p0: vec4<f32>, p1: vec4<f32>) -> vec4<f32> {
+    return input_pixel(input_size() - vec2<f32>(0.5));
+}";
+
+fn reframe(key: &'static str, wgsl: &'static str, reframe: Reframe) -> VideoEffect {
+    VideoEffect { reframe, ..VideoEffect::new(key, wgsl, [0.0; VIDEO_EFFECT_PARAMS]) }
+}
+
+/// Four columns: red, green, blue, white.
+fn four_columns() -> Arc<VideoOut> {
+    frame(&[[255, 0, 0, 255], [0, 255, 0, 255], [0, 0, 255, 255], [255, 255, 255, 255]], 4, 1)
+}
+
+#[test]
+fn a_filter_that_crops_draws_the_source_at_the_cropped_size() {
+    let Some(mut c) = compositor(40, 20) else { return };
+    let v = four_columns();
+    // One column off each side leaves green and blue, drawn 2 x 1 at a scale of 20 x 10.
+    let crop = reframe("test.keep", KEEP, Reframe::Edges { left: 1, top: 0, right: 1, bottom: 0 });
+    let mut it = item(1, &v, Transform { scale: Vec2::new(20.0, 10.0), ..Transform::default() });
+    it.effects = vec![crop];
+    let px = draw(&mut c, Plan { program: SceneDesc { items: vec![it.clone()] }, ..Plan::default() }, Tick(0));
+    assert!(close(pixel(&px, 40, 5, 5), [0, 255, 0, 255]), "{:?}", pixel(&px, 40, 5, 5));
+    assert!(close(pixel(&px, 40, 35, 5), [0, 0, 255, 255]), "{:?}", pixel(&px, 40, 35, 5));
+    assert!(close(pixel(&px, 40, 20, 15), [0, 0, 0, 255]), "the item is 10 pixels tall");
+    // An area two columns wide from the third column: blue and white.
+    it.effects = vec![reframe("test.keep", KEEP, Reframe::Area { x: 2, y: 0, width: 0, height: 0 })];
+    let px = draw(&mut c, Plan { program: SceneDesc { items: vec![it.clone()] }, ..Plan::default() }, Tick(1));
+    assert!(close(pixel(&px, 40, 5, 5), [0, 0, 255, 255]), "{:?}", pixel(&px, 40, 5, 5));
+    assert!(close(pixel(&px, 40, 35, 5), [255, 255, 255, 255]), "{:?}", pixel(&px, 40, 35, 5));
+    // The item's own crop applies to the filtered picture: a column off the left leaves white.
+    it.transform.crop = Crop { left: 1, ..Crop::default() };
+    let px = draw(&mut c, Plan { program: SceneDesc { items: vec![it] }, ..Plan::default() }, Tick(2));
+    assert!(close(pixel(&px, 40, 10, 5), [255, 255, 255, 255]), "{:?}", pixel(&px, 40, 10, 5));
+    assert!(close(pixel(&px, 40, 30, 5), [0, 0, 0, 255]), "{:?}", pixel(&px, 40, 30, 5));
+    assert!(c.take_errors().is_empty());
+}
+
+#[test]
+fn a_filter_that_pads_adds_transparent_pixels() {
+    let Some(mut c) = compositor(16, 16) else { return };
+    let red = solid([255, 0, 0, 255], 4, 4);
+    let mut it = item(1, &red, at(0.0, 0.0));
+    it.effects = vec![reframe("test.keep", KEEP, Reframe::Edges { left: -2, top: -2, right: -2, bottom: -2 })];
+    let bottom = solid([0, 0, 255, 255], 16, 16);
+    let program = SceneDesc { items: vec![item(2, &bottom, at(0.0, 0.0)), it] };
+    let px = draw(&mut c, Plan { program, ..Plan::default() }, Tick(0));
+    // The padding shows the blue item under it; the red is 2 pixels in and 4 wide.
+    for (x, y, want) in
+        [(1, 1, [0, 0, 255, 255]), (3, 3, [255, 0, 0, 255]), (5, 4, [255, 0, 0, 255]), (6, 6, [0, 0, 255, 255]), (7, 3, [0, 0, 255, 255])]
+    {
+        assert!(close(pixel(&px, 16, x, y), want), "({x}, {y}): {:?}", pixel(&px, 16, x, y));
+    }
+}
+
+#[test]
+fn a_later_filter_reads_only_the_earlier_output() {
+    let Some(mut c) = compositor(16, 16) else { return };
+    let v = four_columns();
+    // Padding then cropping back leaves the 4 x 1 picture in a 6 x 3 filter texture; the last
+    // pass must read white at its bottom-right, not the transparent texels around it.
+    let mut it = item(1, &v, Transform { scale: Vec2::new(4.0, 4.0), ..Transform::default() });
+    it.effects = vec![
+        reframe("test.keep", KEEP, Reframe::Edges { left: -1, top: -1, right: -1, bottom: -1 }),
+        reframe("test.keep", KEEP, Reframe::Edges { left: 1, top: 1, right: 1, bottom: 1 }),
+        VideoEffect::new("test.last_pixel", LAST_PIXEL, [0.0; VIDEO_EFFECT_PARAMS]),
+    ];
+    let px = draw(&mut c, Plan { program: SceneDesc { items: vec![it] }, ..Plan::default() }, Tick(0));
+    assert!(c.take_errors().is_empty());
+    assert!(close(pixel(&px, 16, 1, 1), [255, 255, 255, 255]), "{:?}", pixel(&px, 16, 1, 1));
+    assert!(close(pixel(&px, 16, 14, 2), [255, 255, 255, 255]), "{:?}", pixel(&px, 16, 14, 2));
+    assert!(close(pixel(&px, 16, 8, 6), [0, 0, 0, 255]), "the picture is 4 pixels tall: {:?}", pixel(&px, 16, 8, 6));
+}
+
+#[test]
+fn a_filter_that_crops_everything_draws_nothing() {
+    let Some(mut c) = compositor(16, 16) else { return };
+    let red = solid([255, 0, 0, 255], 16, 16);
+    let mut it = item(1, &red, at(0.0, 0.0));
+    it.effects = vec![
+        reframe("test.keep", KEEP, Reframe::Edges { left: 8, top: 0, right: 8, bottom: 0 }),
+        reframe("test.keep", KEEP, Reframe::Edges { left: -4, top: -4, right: -4, bottom: -4 }),
+    ];
+    let px = draw(&mut c, Plan { program: SceneDesc { items: vec![it.clone()] }, ..Plan::default() }, Tick(0));
+    assert!(close(pixel(&px, 16, 8, 8), [0, 0, 0, 255]), "{:?}", pixel(&px, 16, 8, 8));
+    assert!(c.take_errors().is_empty());
+    // Taking the filters off draws the source again.
+    it.effects.clear();
+    let px = draw(&mut c, Plan { program: SceneDesc { items: vec![it] }, ..Plan::default() }, Tick(1));
+    assert!(close(pixel(&px, 16, 8, 8), [255, 0, 0, 255]));
+}
+
+/// A solid wider than any texture is cropped from its own size: 8 pixels are left of 40 000.
+#[test]
+fn a_solid_wider_than_a_texture_is_cropped_from_its_own_size() {
+    let Some(mut c) = compositor(16, 16) else { return };
+    let wide = solid([255, 0, 0, 255], 40_000, 4);
+    let mut it = item(1, &wide, at(0.0, 0.0));
+    it.effects = vec![reframe("test.keep", KEEP, Reframe::Edges { left: 39_992, top: 0, right: 0, bottom: 0 })];
+    let px = draw(&mut c, Plan { program: SceneDesc { items: vec![it] }, ..Plan::default() }, Tick(0));
+    assert!(close(pixel(&px, 16, 4, 2), [255, 0, 0, 255]), "{:?}", pixel(&px, 16, 4, 2));
+    assert!(close(pixel(&px, 16, 12, 2), [0, 0, 0, 255]), "{:?}", pixel(&px, 16, 12, 2));
+}
+
+#[test]
+fn uniform_slots_follow_the_offset_alignment() {
+    for align in [0, 1, 16, 32, 64, 100, 128, 256] {
+        let stride = slot_stride(align);
+        assert!(stride >= SLOT_BYTES && stride.is_multiple_of(u64::from(align.max(1))), "{align}: {stride}");
+    }
 }
 
 #[test]

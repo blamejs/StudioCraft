@@ -22,6 +22,7 @@
 	Available Encoders	Verfügbare Encoder
 	Background	Hintergrund
 	Balanced	Ausgewogen
+	Bottom	Unten
 	Brightness	Helligkeit
 	Browse…	Durchsuchen…
 	Cancel	Abbrechen
@@ -39,6 +40,8 @@
 	Contrast	Kontrast
 	CPU usage preset (faster uses less CPU)	CPU-Voreinstellung (schneller braucht weniger CPU)
 	Credits	Mitwirkende
+	Crop and pad	Zuschneiden und erweitern
+	Crop or pad each edge	Jeden Rand zuschneiden oder erweitern
 	Cut	Schnitt
 	Cut to Program	Schnitt zum Programm
 	Default	Standard
@@ -121,6 +124,7 @@
 	Media file	Mediendatei
 	Media files	Mediendateien
 	Minimize	Minimieren
+	Mode	Modus
 	Move the scene down	Szene nach unten verschieben
 	Move the scene up	Szene nach oben verschieben
 	Move the source down	Quelle nach unten verschieben
@@ -194,6 +198,7 @@
 	Server	Server
 	Settings	Einstellungen
 	Show	Einblenden
+	Show an area	Einen Bereich zeigen
 	Show Recordings	Aufnahmen anzeigen
 	Show Scene {n}	Szene {n} zeigen
 	Show Settings Folder	Einstellungsordner anzeigen
@@ -235,6 +240,7 @@
 	this is not supported on this system yet	das wird auf diesem System noch nicht unterstützt
 	Tint	Tönung
 	Tools	Werkzeuge
+	Top	Oben
 	Transition	Übergang
 	Transition Controls	Übergangssteuerung
 	Transition settings	Übergangseinstellungen
@@ -254,6 +260,8 @@
 	Width	Breite
 	Window	Fenster
 	Window capture	Fensteraufnahme
+	X	X
+	Y	Y
 	Your Videos folder	Ihr Videos-Ordner
 	{encoder} (not in this ffmpeg)	{encoder} (nicht in diesem ffmpeg)
 	{program} did not report its version	{program} hat keine Version gemeldet

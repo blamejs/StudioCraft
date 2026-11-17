@@ -17,7 +17,7 @@ use crate::plan::{ItemDesc, Plan, SceneDesc};
 use crate::{CANVAS_FORMAT, CANVAS_VIEW_FORMAT, Gpu, RenderError, shaders};
 
 /// Values in one uniform slot.
-const SLOT_FLOATS: usize = 32;
+const SLOT_FLOATS: usize = 36;
 /// Size of one uniform slot.
 const SLOT_BYTES: u64 = SLOT_FLOATS as u64 * 4;
 /// Canvas textures per ring: the interface reads the newest while the compositor draws the next.
@@ -155,7 +155,8 @@ struct Tex {
     format: wgpu::TextureFormat,
 }
 
-/// Two textures the filter passes of one source alternate between.
+/// Two textures the filter passes of one source alternate between. Each pass draws into the
+/// top-left corner; a texture is as large as the largest pass output.
 struct FxPair {
     width: u32,
     height: u32,
@@ -170,9 +171,11 @@ struct SourceTex {
     native: (u32, u32),
     solid: Option<[u8; 4]>,
     fx: Option<FxPair>,
-    /// The frame the filter passes last ran, and which texture of `fx` holds the result.
+    /// The frame the filter passes last ran, which texture of `fx` holds the result, and the
+    /// result's size in pixels (0 when the filters left nothing to draw).
     fx_frame: u64,
     fx_result: usize,
+    fx_size: (u32, u32),
 }
 
 struct Pipes {
@@ -270,6 +273,13 @@ pub struct Compositor {
 /// Largest canvas side.
 pub const MAX_CANVAS: u32 = 8192;
 
+/// The distance between uniform slots: the slot's size rounded up to the device's offset
+/// alignment, so every dynamic offset is a multiple of it.
+fn slot_stride(alignment: u32) -> u64 {
+    let align = u64::from(alignment.max(1));
+    SLOT_BYTES.div_ceil(align) * align
+}
+
 fn clamp_canvas(width: u32, height: u32, limit: u32) -> (u32, u32) {
     let max = limit.min(MAX_CANVAS);
     (width.clamp(16, max), height.clamp(16, max))
@@ -279,8 +289,7 @@ impl Compositor {
     /// A compositor drawing a `width` x `height` canvas.
     pub fn new(gpu: Gpu, width: u32, height: u32) -> Result<Compositor, RenderError> {
         let pipes = gpu.scoped("compositor", || make_pipes(&gpu))?;
-        let align = u64::from(gpu.device.limits().min_uniform_buffer_offset_alignment).max(SLOT_BYTES);
-        let stride = SLOT_BYTES.div_ceil(align) * align;
+        let stride = slot_stride(gpu.device.limits().min_uniform_buffer_offset_alignment);
         let uniforms = Uniforms::new(&gpu.device, &pipes.uniform_layout, stride, 64);
         let (width, height) = clamp_canvas(width, height, gpu.device.limits().max_texture_dimension_2d);
         let (program, preview, scratch, scratch_bind, views) = make_canvas(&gpu, &pipes, width, height, 1);
@@ -522,17 +531,19 @@ impl Compositor {
 
     /// Bring a source's texture up to date with its newest content.
     fn sync_source(&mut self, item: &ItemDesc) {
-        let st = self.sources.entry(item.source).or_insert_with(|| SourceTex {
-            video: Arc::clone(&item.video),
+        let fresh = |video: &Arc<VideoOut>| SourceTex {
+            video: Arc::clone(video),
             tex: None,
             native: (0, 0),
             solid: None,
             fx: None,
             fx_frame: 0,
             fx_result: 0,
-        });
+            fx_size: (0, 0),
+        };
+        let st = self.sources.entry(item.source).or_insert_with(|| fresh(&item.video));
         if !Arc::ptr_eq(&st.video, &item.video) {
-            *st = SourceTex { video: Arc::clone(&item.video), tex: None, native: (0, 0), solid: None, fx: None, fx_frame: 0, fx_result: 0 };
+            *st = fresh(&item.video);
         }
         let Some(content) = st.video.take() else { return };
         let (device, queue) = (&self.gpu.device, &self.gpu.queue);
@@ -719,13 +730,27 @@ fn draw_scene(ctx: &Ctx<'_>, uniforms: &mut Uniforms, enc: &mut wgpu::CommandEnc
             continue;
         }
         let filtered = !item.effects.is_empty() && st.fx_frame == ctx.frame_no;
-        let (bind, straight) = match (&st.fx, filtered) {
-            (Some(fx), true) => (&fx.binds[st.fx_result], 0.0),
-            _ => (&tex.bind, 1.0),
+        if filtered && (st.fx_size.0 == 0 || st.fx_size.1 == 0) {
+            continue;
+        }
+        let (bind, straight, size, uv) = match (&st.fx, filtered) {
+            (Some(fx), true) => {
+                // The result fills the top-left `fx_size` of the filter texture.
+                let size = st.fx_size;
+                let [u0, v0, u1, v1] = crop_uv(item.transform.crop, size);
+                let (su, sv) = (size.0 as f32 / fx.width.max(1) as f32, size.1 as f32 / fx.height.max(1) as f32);
+                (&fx.binds[st.fx_result], 0.0, size, [u0 * su, v0 * sv, u1 * su, v1 * sv])
+            }
+            _ => {
+                let uv = if st.solid.is_some() { [0.0, 0.0, 1.0, 1.0] } else { crop_uv(item.transform.crop, st.native) };
+                (&tex.bind, 1.0, st.native, uv)
+            }
         };
-        let uv = if st.solid.is_some() { [0.0, 0.0, 1.0, 1.0] } else { crop_uv(item.transform.crop, st.native) };
+        if size.0 == 0 || size.1 == 0 {
+            continue;
+        }
         let t = item.transform.sanitized();
-        let [c0, c1, c2, c3] = t.corners(st.native).map(clip);
+        let [c0, c1, c2, c3] = t.corners(size).map(clip);
         let slot = [c0[0], c0[1], c1[0], c1[1], c2[0], c2[1], c3[0], c3[1], uv[0], uv[1], uv[2], uv[3], straight, 1.0, 0.0, 0.0];
         let off = uniforms.push(&slot);
         pass.set_bind_group(0, &uniforms.bind, &[off]);
@@ -748,38 +773,71 @@ fn run_effects(
         return;
     }
     let Some(tex) = &st.tex else { return };
-    let (w, h) = if st.solid.is_some() { st.native } else { (tex.width, tex.height) };
     let limit = device.limits().max_texture_dimension_2d;
-    let (w, h) = (w.clamp(1, limit), h.clamp(1, limit));
-    if st.fx.as_ref().is_none_or(|f| (f.width, f.height) != (w, h)) {
-        st.fx = Some(make_fx(device, pipes, w, h));
+    let side = |v: u32| v.min(limit);
+    // A solid's 1 x 1 texture stands for its whole size, which can be larger than a texture;
+    // only the passes' outputs are limited.
+    let source = if st.solid.is_some() { st.native } else { (tex.width, tex.height) };
+    let runnable = || effects.iter().filter(|e| matches!(pipes.effects.get(e.key), Some(Some(_))));
+    // The size each pass draws at, and the largest of them, which the filter textures need.
+    let mut size = source;
+    let mut largest = (1, 1);
+    let mut any = false;
+    for e in runnable() {
+        if size.0 > 0 && size.1 > 0 {
+            let (ow, oh) = e.reframe.size(size);
+            size = (side(ow), side(oh));
+            largest = (largest.0.max(size.0), largest.1.max(size.1));
+        }
+        any = true;
+    }
+    if !any {
+        return;
+    }
+    st.fx_frame = frame_no;
+    if size.0 == 0 || size.1 == 0 || source.0 == 0 || source.1 == 0 {
+        // Nothing is left to draw.
+        st.fx_size = (0, 0);
+        return;
+    }
+    if st.fx.as_ref().is_none_or(|f| (f.width, f.height) != largest) {
+        st.fx = Some(make_fx(device, pipes, largest.0, largest.1));
     }
     let Some(fx) = &st.fx else { return };
     let mut input = &tex.bind;
+    // The input's size in pixels and its extent in the texture it is read from.
+    let mut in_size = source;
+    let mut extent = [1.0f32, 1.0];
     let mut straight = 1.0;
     let mut out = 0;
-    let mut ran = false;
-    for e in effects {
+    for e in runnable() {
         let Some(Some(pipe)) = pipes.effects.get(e.key) else { continue };
+        let (left, top, ow, oh) = e.reframe.apply(in_size);
+        let (ow, oh) = (side(ow), side(oh));
+        let (iw, ih) = (in_size.0 as f32, in_size.1 as f32);
+        // The texture rectangle under the output: input pixel `left + ox` at output pixel `ox`.
+        let (u0, v0) = (left as f32 / iw * extent[0], top as f32 / ih * extent[1]);
+        let (u1, v1) = ((left as f32 + ow as f32) / iw * extent[0], (top as f32 + oh as f32) / ih * extent[1]);
         let mut slot = [0.0; SLOT_FLOATS];
-        slot[..8].copy_from_slice(&[0.0, 0.0, 1.0, 1.0, w as f32, h as f32, straight, 0.0]);
-        slot[8..].copy_from_slice(&e.params);
+        slot[..8].copy_from_slice(&[u0, v0, u1, v1, ow as f32, oh as f32, straight, 0.0]);
+        slot[8..32].copy_from_slice(&e.params);
+        slot[32..].copy_from_slice(&[extent[0], extent[1], iw, ih]);
         let off = uniforms.push(&slot);
         let mut pass = begin(enc, &fx.views[out], Some(wgpu::Color::TRANSPARENT));
+        pass.set_viewport(0.0, 0.0, ow as f32, oh as f32, 0.0, 1.0);
         pass.set_pipeline(pipe);
         pass.set_bind_group(0, &uniforms.bind, &[off]);
         pass.set_bind_group(1, input, &[]);
         pass.draw(0..3, 0..1);
         drop(pass);
         input = &fx.binds[out];
+        in_size = (ow, oh);
+        extent = [ow as f32 / fx.width as f32, oh as f32 / fx.height as f32];
         straight = 0.0;
-        ran = true;
         st.fx_result = out;
         out = 1 - out;
     }
-    if ran {
-        st.fx_frame = frame_no;
-    }
+    st.fx_size = in_size;
 }
 
 fn texture(
