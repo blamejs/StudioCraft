@@ -66,8 +66,12 @@ build for `wasm32-unknown-unknown`:
   the chosen scope with `craft-scopes` into buffers it keeps and makes the texture image. The window
   moves the image into its texture. The window and the thread share bounded lock-free queues and
   atomic flags, and the thread parks while it has nothing to do.
-- **Output threads.** Each recording or stream runs an ffmpeg process with one writer thread for
-  video and one for audio.
+- **Output threads.** A stream, or a recording with an ffmpeg encoder, runs an ffmpeg process with
+  one writer thread for video and one for audio (`outputs/src/writer.rs`). A recording with H.264
+  (built in) runs a video encode thread, an audio encode thread and a file thread that writes the
+  Matroska file (`outputs/src/native.rs`). The encode threads hand packets to the file thread
+  through a queue that holds at most 64 MiB and 3 s of media. In both, the video and audio threads
+  share their timeline through one 128-bit atomic word.
 - **Window thread.** The window reads `Studio` state, runs commands, and shows statistics.
 
 One `MasterClock` (`media::clock`) drives the frame scheduler, the mixer and every timestamp.
@@ -82,8 +86,13 @@ property forms from each plugin's `SettingsSchema`, so a new plugin does not nee
 
 An encoder names the codec it writes (`Encoder::codec`: H.264, HEVC or AAC). An encoder that runs
 inside the ffmpeg program returns its `FfmpegEncoder` form from `Encoder::ffmpeg`, which gives
-ffmpeg the codec and its arguments. An encoder without that form is built in, and runs only in an
-output that runs built-in encoders; the recording and stream outputs run ffmpeg encoders only.
+ffmpeg the codec and its arguments. An encoder without that form is built in: `Encoder::open`
+starts its `VideoSession`, which takes NV12 frames and returns packets. A built-in encoder runs only
+in an output that runs built-in encoders. The recording output runs built-in and ffmpeg encoders,
+and with a built-in encoder it writes MKV files only. The stream output runs ffmpeg encoders only.
+`studiocraft-encode` holds the built-in H.264 encoder (`studiocraft_encode::H264`, plug-in id
+`h264`) and the AAC encoder (`studiocraft_encode::AacSession`) that built-in recordings use for
+sound.
 `Encoder::availability` reports whether an output can run an encoder, and the output start check,
 the Settings encoder lists and Tools › Available Encoders use it.
 
@@ -180,12 +189,16 @@ the window buttons sit where the desktop puts them. `src/titlebar.rs` makes the 
 - **Native macOS menu bar.** The menu is drawn in the window on every system.
 - **Audio and video capture on Linux.** Display, window and device capture use `xcap` and `cpal` on
   Windows and macOS only. On Linux these sources report that capture is unavailable.
-- **Encoding.** Recording and streaming need an ffmpeg program installed separately. StudioCraft
-  runs it as a process and does not link it.
+- **Encoding.** Streams, MP4 and MOV recordings, Lossless recordings, and recordings with x264 or a
+  hardware encoder need an ffmpeg program installed separately. StudioCraft runs it as a process
+  and does not link it. MKV recordings with H.264 (built in) use the `craft-video` H.264 encoder
+  and the `craft-audio` AAC encoder and do not need ffmpeg.
 
 ## Dependency licenses
 
 `cargo xtask licenses` accepts permissive software licenses (MIT, Apache-2.0, BSD, Zlib, ISC and
 similar), the OFL-1.1 and Ubuntu font licenses of egui's built-in fonts, and the IJG license.
-One package is accepted by name: `option-ext` (MPL-2.0), which `dirs-sys` uses through
-`craft-settings`. The list is `EXCEPTIONS` in `xtask/src/licenses.rs`.
+Two packages are accepted by name: `option-ext` (MPL-2.0), which `dirs-sys` uses through
+`craft-settings`, and `libfuzzer-sys` ((MIT OR Apache-2.0) AND NCSA), which `Cargo.lock` lists
+for `rav1e`. `rav1e` is an optional dependency of `craft-video` that no StudioCraft crate enables,
+so neither package is built. The list is `EXCEPTIONS` in `xtask/src/licenses.rs`.
