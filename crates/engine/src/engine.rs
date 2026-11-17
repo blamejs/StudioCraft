@@ -432,6 +432,19 @@ impl Engine {
                 };
                 Ok((Value::Null, Some(format!("source.volume:{id}"))))
             }
+            Command::SourceSyncOffset { source, ms } => {
+                let id = self.source_id(&source)?;
+                let s = c.source_mut(id).ok_or_else(|| EngineError::NoSource(id.to_string()))?;
+                if self.registry.source(&s.kind).is_ok_and(|p| !p.caps().audio) {
+                    return Err(EngineError::Invalid(format!("`{}` has no audio", s.name)));
+                }
+                let max = studiocraft_model::collection::MAX_SYNC_OFFSET_MS;
+                s.audio.sync_offset_ms = match u32::try_from(ms) {
+                    Ok(ms) if ms <= max => ms,
+                    _ => return Err(EngineError::Invalid(format!("the sync offset must be a whole number of milliseconds from 0 to {max}"))),
+                };
+                Ok((Value::Null, Some(format!("source.sync_offset:{id}"))))
+            }
             Command::SourceMute { source, muted } => {
                 let id = self.source_id(&source)?;
                 if let Some(s) = c.source_mut(id) {

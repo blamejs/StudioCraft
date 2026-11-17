@@ -153,7 +153,7 @@ Units are the same in every tool, resource and prompt:
   default canvas is 1920 x 1080.
 - Rotation is in degrees.
 - Volume gain is 0 to 1.
-- Durations are in milliseconds.
+- Durations and audio sync offsets are in milliseconds.
 - The window tools take window points, with (0, 0) at the window's top left.
 
 ### Prompts
@@ -211,6 +211,7 @@ error -32602. A command that fails is a tool result with `isError: true` and the
 | `scene_select` | `scene` | `scene.select`, by id or name. In studio mode it sets the preview scene. |
 | `source_add` | `kind`, `scene?`, `name?`, `settings?`, `transform?` | `source.add`, in the scene being edited unless `scene` names one. Returns `source`, `item` and `scene`. |
 | `item_transform` | `item`, `scene?`, `transform` | `item.transform`. `item` is the item's id or the name of the source it shows. |
+| `source_audio` | `source`, `sync_offset_ms?` | `source.sync_offset` when `sync_offset_ms` is given (0 to 5000), then the source's `audio` settings. A value out of range is an error and changes nothing. Without `sync_offset_ms` it only reads the settings. |
 | `transition_set` | `kind`, `ms?` | `transition.set`, then `transition.duration` when `ms` is given. |
 | `studio_transition` | `kind?`, `ms?` | `studio.transition`: in studio mode, moves the preview scene to the program. `kind` and `ms` apply to this switch only. |
 | `collection_open` | `path` | Replaces the scene collection with the one in the file. The undo history starts empty. |

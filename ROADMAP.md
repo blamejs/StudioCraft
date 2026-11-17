@@ -12,7 +12,8 @@
   the swipe. Studio mode with quick transitions.
 - The View › Scopes window: a waveform, an RGB parade, a histogram, and the YUV and HLS
   vectorscopes of the program output.
-- Audio mixer with meters, faders and mute. The mixer measures the final mix's loudness
+- Audio mixer with meters, faders and mute, and a sync offset of 0 to 5000 ms for each source's
+  audio (in the source's Properties window). The mixer measures the final mix's loudness
   (momentary, short-term, integrated, loudness range and true peak); the window does not show it
   yet.
 - Recording to MKV with the built-in H.264 and AAC encoders, without ffmpeg (H.264 (built in) in
@@ -55,7 +56,7 @@
 1. **Capture on Linux.** Display and window capture through PipeWire portals, and audio devices
    through ALSA or PipeWire.
 2. **Camera source.** Video capture devices on every system.
-3. **Audio monitoring.** Play a source to a chosen output device, and per-source audio offset.
+3. **Audio monitoring.** Play a source to a chosen output device.
 4. **Docks.** Undock, rearrange and save dock layouts.
 5. **Translations.** A `studiocraft.tsv` catalog for every other locale craft-i18n has, and
    right-to-left layout for Arabic and Hebrew.

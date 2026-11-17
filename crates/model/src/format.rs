@@ -43,7 +43,22 @@ pub struct FileFormat {
 }
 
 /// Scene collections.
-pub const COLLECTION: FileFormat = FileFormat { name: "studiocraft.scene-collection", version: 1, migrations: &[] };
+pub const COLLECTION: FileFormat = FileFormat { name: "studiocraft.scene-collection", version: 2, migrations: &[collection_v1_to_v2] };
+
+/// Collection version 1 to 2: each source's audio has a sync offset (`sync_offset_ms`), 0 for the
+/// sources of an older file.
+fn collection_v1_to_v2(data: &mut Value) -> Result<(), String> {
+    let data = data.as_object_mut().ok_or("the collection is not an object")?;
+    if let Some(Value::Array(sources)) = data.get_mut("sources") {
+        for source in sources.iter_mut().filter_map(Value::as_object_mut) {
+            let audio = source.entry("audio").or_insert_with(|| json!({}));
+            if let Value::Object(a) = audio {
+                a.entry("sync_offset_ms").or_insert_with(|| json!(0));
+            }
+        }
+    }
+    Ok(())
+}
 
 /// Profiles.
 pub const PROFILE: FileFormat = FileFormat { name: "studiocraft.profile", version: 3, migrations: &[profile_v1_to_v2, profile_v2_to_v3] };
@@ -156,7 +171,8 @@ mod tests {
     use super::*;
 
     /// Every version ever written, oldest first: `(version, text)`. A new version adds a line.
-    const COLLECTION_FIXTURES: &[(u32, &str)] = &[(1, include_str!("../fixtures/collection-v1.json"))];
+    const COLLECTION_FIXTURES: &[(u32, &str)] =
+        &[(1, include_str!("../fixtures/collection-v1.json")), (2, include_str!("../fixtures/collection-v2.json"))];
     const PROFILE_FIXTURES: &[(u32, &str)] = &[
         (1, include_str!("../fixtures/profile-v1.json")),
         (2, include_str!("../fixtures/profile-v2.json")),
@@ -222,6 +238,26 @@ mod tests {
     }
 
     #[test]
+    fn collections_keep_each_source_sync_offset() {
+        let (_, v1) = COLLECTION_FIXTURES[0];
+        let old = read_collection(v1, "Scene").unwrap();
+        assert!(old.sources.iter().all(|s| s.audio.sync_offset_ms == 0), "a version 1 collection has no offsets");
+        let (_, v2) = COLLECTION_FIXTURES[1];
+        let c = read_collection(v2, "Scene").unwrap();
+        assert_eq!(c.source_by_name("Microphone").map(|s| s.audio.sync_offset_ms), Some(250));
+        assert_eq!(read_collection(&write_collection(&c).unwrap(), "Scene").unwrap(), c);
+        let wild = v2.replace("\"sync_offset_ms\": 250", "\"sync_offset_ms\": 4000000");
+        let c = read_collection(&wild, "Scene").unwrap();
+        assert_eq!(
+            c.source_by_name("Microphone").map(|s| s.audio.sync_offset_ms),
+            Some(crate::collection::MAX_SYNC_OFFSET_MS),
+            "an offset out of range is brought into it"
+        );
+        let negative = v2.replace("\"sync_offset_ms\": 250", "\"sync_offset_ms\": -5");
+        assert!(matches!(read_collection(&negative, "Scene"), Err(FormatError::Data(_))));
+    }
+
+    #[test]
     fn collection_round_trips() {
         let (_, text) = COLLECTION_FIXTURES[0];
         let c = read_collection(text, "Scene").unwrap();
@@ -250,7 +286,12 @@ mod tests {
             read_collection(r#"{"format":"studiocraft.scene-collection","version":0,"data":{}}"#, "Scene"),
             Err(FormatError::NoVersion)
         ));
-        assert!(matches!(read_collection(r#"{"format":"studiocraft.scene-collection","version":1,"data":[]}"#, "Scene"), Err(FormatError::Data(_))));
+        let current = format!(r#"{{"format":"{}","version":{},"data":[]}}"#, COLLECTION.name, COLLECTION.version);
+        assert!(matches!(read_collection(&current, "Scene"), Err(FormatError::Data(_))));
+        assert!(matches!(
+            read_collection(r#"{"format":"studiocraft.scene-collection","version":1,"data":[]}"#, "Scene"),
+            Err(FormatError::Migration { from: 1, .. })
+        ));
     }
 
     #[test]

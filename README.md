@@ -35,7 +35,8 @@ and Linux.
 - **Studio mode.** Edit a preview scene beside the program scene, then send it to the program with
   the chosen transition, or with a quick cut or fade.
 - **Audio mixer.** Peak and RMS meters with peak hold, a volume fader in dB, and mute for every
-  audible source.
+  audible source. A source's Properties window sets its sync offset, which delays its audio by 0
+  to 5000 ms to line it up with its picture.
 - **Recording and streaming.** MKV, MP4 or MOV recordings at four quality levels, and RTMP streams
   at a constant bitrate. With the H.264 (built in) encoder, StudioCraft records MKV files at the
   Compact, High and Pristine levels without `ffmpeg`, using its own H.264 and AAC encoders and a

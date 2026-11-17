@@ -2,7 +2,8 @@
 
 use egui::{Color32, Ui};
 use serde_json::{Value, json};
-use studiocraft_model::{FieldKind, FilterId, PathMode, SettingsSchema, SourceId};
+use studiocraft_model::collection::MAX_SYNC_OFFSET_MS;
+use studiocraft_model::{AudioState, FieldKind, FilterId, PathMode, SettingsSchema, SourceId};
 use studiocraft_plugin::{FilterTarget, Registry, Settings};
 use studiocraft_studio::Studio;
 
@@ -164,13 +165,16 @@ impl Properties {
         json!({"source": self.source, "settings": self.settings})
     }
 
-    /// Draw the window; the `source.settings` parameters to run when a value changed, and a
-    /// requested file dialog. `open` turns false when the window is closed.
-    pub fn show(&mut self, ctx: &egui::Context, studio: &Studio, open: &mut bool) -> (Option<Value>, Option<Browse>) {
+    /// Draw the window; the `source.settings` parameters to run when a value changed, a
+    /// requested file dialog, and the audio commands to run. `open` turns false when the window
+    /// is closed.
+    pub fn show(&mut self, ctx: &egui::Context, studio: &Studio, open: &mut bool) -> (Option<Value>, Option<Browse>, Vec<Action>) {
         let Some(src) = studio.collection().source(self.source) else {
             *open = false;
-            return (None, None);
+            return (None, None, Vec::new());
         };
+        let has_audio = studio.registry().source(&src.kind).is_ok_and(|p| p.caps().audio);
+        let mut audio = Vec::new();
         if src.settings != self.settings && !ctx.egui_is_using_pointer() && !ctx.egui_wants_keyboard_input() {
             // Undo, a script or the control channel changed them.
             self.settings = src.settings.clone();
@@ -191,6 +195,10 @@ impl Properties {
                     out.0 = Some(self.command());
                 }
                 out.1 = ev.browse;
+                if has_audio {
+                    ui.separator();
+                    audio = audio_form(ui, self.source, &src.audio);
+                }
             });
             ui.separator();
             ui.horizontal(|ui| {
@@ -206,8 +214,26 @@ impl Properties {
         if refresh && let Ok(p) = studio.registry().source(&src.kind) {
             self.schema = p.schema();
         }
-        out
+        (out.0, out.1, audio)
     }
+}
+
+/// The audio rows of a source's Properties window: the commands to run for what changed.
+fn audio_form(ui: &mut Ui, source: SourceId, state: &AudioState) -> Vec<Action> {
+    let mut actions = Vec::new();
+    ui.strong(tl!("Audio"));
+    egui::Grid::new(egui::Id::unique(("props-audio", source.0))).num_columns(2).spacing([12.0, 6.0]).show(ui, |ui| {
+        ui.label(tl!("Sync offset"));
+        let mut ms = state.sync_offset_ms.min(MAX_SYNC_OFFSET_MS);
+        let r = ui
+            .add(egui::DragValue::new(&mut ms).range(0..=MAX_SYNC_OFFSET_MS).suffix(format!(" {}", tl!("ms"))))
+            .on_hover_text(tl!("Delays this source's audio, to line it up with its picture"));
+        if r.changed() && ms != state.sync_offset_ms {
+            actions.push(("source.sync_offset", json!({"source": source, "ms": ms})));
+        }
+        ui.end_row();
+    });
+    actions
 }
 
 /// The Filters window of one source.
@@ -342,6 +368,18 @@ mod tests {
         out.textures_delta.clear();
         assert!(!changed);
         assert_eq!(settings.str("extra"), Some("kept"));
+    }
+
+    #[test]
+    fn the_audio_rows_draw_without_running_a_command() {
+        let ctx = egui::Context::default();
+        let mut actions = vec![("x", json!(null))];
+        let state = AudioState { sync_offset_ms: 250, ..AudioState::default() };
+        let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
+            actions = audio_form(ui, SourceId(3), &state);
+        });
+        out.textures_delta.clear();
+        assert!(actions.is_empty());
     }
 
     #[test]

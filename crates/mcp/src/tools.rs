@@ -222,6 +222,23 @@ fn studio_tool_definitions() -> Vec<Value> {
             SETS,
         ),
         tool(
+            "source_audio",
+            "Set a source's audio",
+            "Set how a source's audio is mixed: `sync_offset_ms` delays it to line it up with its picture. Returns the source's audio \
+             settings. A value out of range is an error and changes nothing.",
+            json!({
+                "source": {"type": ["integer", "string"], "description": "The source's id or name."},
+                "sync_offset_ms": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": studiocraft_model::collection::MAX_SYNC_OFFSET_MS,
+                    "description": "How long the audio is delayed, in milliseconds.",
+                },
+            }),
+            &["source"],
+            SETS,
+        ),
+        tool(
             "transition_set",
             "Set the transition",
             "Set the scene transition (for example fade, cut, swipe) and, optionally, its length.",
@@ -736,6 +753,33 @@ fn transition_set(b: &mut dyn Backend, args: &Args) -> Result<Value, McpError> {
     Ok(text(&result))
 }
 
+/// Run the audio commands for the given keys, then report the source's `audio` from
+/// `document.inspect`.
+fn source_audio(b: &mut dyn Backend, args: &Args) -> Result<Value, McpError> {
+    let source = match args.get("source") {
+        Some(v @ (Value::Number(_) | Value::String(_))) => v.clone(),
+        _ => return Err(McpError::Invalid("`source` must be a source's id or name".into())),
+    };
+    let max = studiocraft_model::collection::MAX_SYNC_OFFSET_MS;
+    let offset = match args.get("sync_offset_ms").filter(|v| !v.is_null()) {
+        None => None,
+        Some(v) => match v.as_u64() {
+            Some(ms) if ms <= u64::from(max) => Some(ms),
+            _ => return Err(McpError::Invalid(format!("`sync_offset_ms` must be a whole number from 0 to {max}"))),
+        },
+    };
+    if let Some(ms) = offset {
+        run(b, "source.sync_offset", json!({"source": source, "ms": ms}))?;
+    }
+    let state = b.call("document.inspect", json!({"detail": "summary"}))?;
+    let sources = state.pointer("/collection/sources").and_then(Value::as_array).cloned().unwrap_or_default();
+    let found = sources.iter().find(|s| s.get("id") == Some(&source) || s.get("name") == Some(&source));
+    match found {
+        Some(s) => Ok(text(&json!({"source": s.get("id"), "name": s.get("name"), "audio": s.get("audio")}))),
+        None => Err(McpError::Invalid(format!("there is no source {source}"))),
+    }
+}
+
 /// The recording's, the stream's and the replay buffer's state from `document.inspect`.
 fn outputs(b: &mut dyn Backend) -> Result<Value, McpError> {
     let state = b.call("document.inspect", json!({"detail": "summary"}))?;
@@ -768,6 +812,7 @@ fn dispatch(b: &mut dyn Backend, name: &str, args: &Args) -> Result<Value, McpEr
             Ok(text(&run(b, "source.add", pick(args, &["kind", "scene", "name", "settings", "transform"]))?))
         }
         "item_transform" => Ok(text(&run(b, "item.transform", pick(args, &["item", "scene", "transform"]))?)),
+        "source_audio" => source_audio(b, args),
         "transition_set" => transition_set(b, args),
         "studio_transition" => Ok(text(&run(b, "studio.transition", pick(args, &["kind", "ms"]))?)),
         "collection_open" => Ok(text(&b.call("collection.open", json!({"path": req_str(args, "path")?}))?)),

@@ -44,6 +44,8 @@ collections).
 `engine.execute` runs every engine command (for example `scene.add`, `source.add`,
 `item.transform`, `record.toggle`, `studio.transition`) and every window command (for example
 `view.stats`, `profile.new`, `selection.fit`). A failed command is an error with its message.
+`source.sync_offset` takes `{"source", "ms"}` and delays the source's audio by `ms`
+milliseconds, a whole number from 0 to 5000; a source without audio is an error.
 
 Each entry of `engine.commands` has `id`, `label`, `params` (a short description of the
 parameters), `undo` (whether Edit › Undo takes the command back), `scope` (`engine` or `window`),

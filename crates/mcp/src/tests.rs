@@ -13,7 +13,7 @@ use crate::{Backend, Headless, MAX_BATCH_STEPS, McpError, Remote, Roots, Server,
 
 const TOKEN: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
-const TOOLS: [&str; 24] = [
+const TOOLS: [&str; 25] = [
     "command_list",
     "command_run",
     "command_batch",
@@ -25,6 +25,7 @@ const TOOLS: [&str; 24] = [
     "scene_select",
     "source_add",
     "item_transform",
+    "source_audio",
     "transition_set",
     "studio_transition",
     "collection_open",
@@ -220,6 +221,25 @@ fn source_add_with_an_unknown_kind_is_a_tool_error() {
     let doc = ok_json(&call(&mut s, "doc_inspect", json!({})));
     let items = doc["collection"]["scenes"][0]["items"].as_array().unwrap();
     assert!(items.iter().any(|i| i["transform"]["rotation"] == json!(15.0)), "{doc}");
+}
+
+#[test]
+fn source_audio_sets_the_sync_offset() {
+    let mut s = server();
+    let set = ok_json(&call(&mut s, "source_audio", json!({"source": "Microphone", "sync_offset_ms": 180})));
+    assert_eq!(set["audio"]["sync_offset_ms"], 180, "{set}");
+    assert_eq!(set["name"], "Microphone");
+    let id = set["source"].clone();
+    let read = ok_json(&call(&mut s, "source_audio", json!({"source": id})));
+    assert_eq!(read["audio"]["sync_offset_ms"], 180, "without a value it only reads: {read}");
+    for ms in [json!(5001), json!(-1), json!(2.5), json!("late")] {
+        error_text(&call(&mut s, "source_audio", json!({"source": "Microphone", "sync_offset_ms": ms})));
+    }
+    let read = ok_json(&call(&mut s, "source_audio", json!({"source": "Microphone"})));
+    assert_eq!(read["audio"]["sync_offset_ms"], 180, "a refused value changes nothing");
+    error_text(&call(&mut s, "source_audio", json!({"source": "ghost", "sync_offset_ms": 10})));
+    error_text(&call(&mut s, "source_audio", json!({"source": "ghost"})));
+    error_text(&call(&mut s, "source_audio", json!({"source": true})));
 }
 
 #[test]

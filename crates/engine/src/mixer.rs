@@ -1,9 +1,15 @@
 //! The audio mixer thread.
 //!
 //! Once per block (1024 frames at 48 kHz, every 21.3 ms) on the master clock, the mixer takes
-//! one block from each input's queue, runs the input's audio filters, applies its volume, mute
-//! and transition fade, adds it to the mix and publishes the input's levels. The clipped mix
-//! goes to every output's queue, stamped with the block's time.
+//! one block from each input's queue, delays it by the input's sync offset, runs the input's
+//! audio filters, applies its volume, mute and transition fade, adds it to the mix and publishes
+//! the input's levels. The clipped mix goes to every output's queue, stamped with the block's
+//! time.
+//!
+//! Each input's delay line holds [`MAX_SYNC_OFFSET_MS`] of audio and is allocated with the input
+//! list on the sending thread, so changing an offset does not allocate on the mixer thread. When a
+//! source sends no block, its delay line plays on into a silent block until the audio it holds has
+//! played.
 //!
 //! The interface talks to the thread through a lock-free command queue, so moving a fader never
 //! waits on the mixer.
@@ -15,16 +21,59 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use craft_audio_dsp::LoudnessMeter;
-use studiocraft_media::audio::{AudioPool, BLOCK_SAMPLES, CHANNELS, PooledBlock, SAMPLE_RATE, block_pool, block_rate};
+use studiocraft_media::audio::{AudioPool, BLOCK_FRAMES, BLOCK_SAMPLES, CHANNELS, PooledBlock, SAMPLE_RATE, block_pool, block_rate};
 use studiocraft_media::clock::{MasterClock, Pacer};
 use studiocraft_media::mix::{BlockLevels, Levels, clip, measure, mix_into};
 use studiocraft_media::queue::Fifo;
 use studiocraft_model::SourceId;
+use studiocraft_model::collection::MAX_SYNC_OFFSET_MS;
 use studiocraft_plugin::{AudioOut, FilterInstance};
 
 /// Blocks an input may have queued before the oldest are dropped, which bounds its latency to
 /// about 85 ms when a device runs faster than the master clock.
 pub const MAX_QUEUED_BLOCKS: usize = 4;
+
+/// The frames of a sync offset of `ms` milliseconds, at most [`MAX_SYNC_OFFSET_MS`].
+fn offset_frames(ms: u32) -> usize {
+    let ms = u64::from(ms.min(MAX_SYNC_OFFSET_MS));
+    usize::try_from(ms * u64::from(SAMPLE_RATE) / 1000).unwrap_or(0)
+}
+
+/// An input's delay line: the last [`MAX_SYNC_OFFSET_MS`] of its audio, and one frame more.
+struct Delay {
+    ring: Vec<f32>,
+    write: usize,
+}
+
+impl Delay {
+    fn new() -> Delay {
+        Delay { ring: vec![0.0; (offset_frames(MAX_SYNC_OFFSET_MS) + 1) * CHANNELS], write: 0 }
+    }
+
+    /// The frames the line holds.
+    fn frames(&self) -> usize {
+        self.ring.len() / CHANNELS
+    }
+
+    /// Replace `block` with the audio `frames` frames older. The ring starts silent, so the first
+    /// `frames` frames after the input starts are silence.
+    fn process(&mut self, block: &mut [f32], frames: usize) {
+        let cap = self.ring.len();
+        if cap == 0 {
+            return;
+        }
+        let behind = frames.saturating_mul(CHANNELS).min(cap - CHANNELS.min(cap));
+        for s in block.iter_mut() {
+            if let Some(slot) = self.ring.get_mut(self.write) {
+                *slot = *s;
+            }
+            if behind > 0 {
+                *s = self.ring.get((self.write + cap - behind) % cap).copied().unwrap_or(0.0);
+            }
+            self.write = (self.write + 1) % cap;
+        }
+    }
+}
 
 /// One input of the mix.
 pub struct MixInput {
@@ -36,6 +85,8 @@ pub struct MixInput {
     pub active: bool,
     pub levels: Arc<Levels>,
     pub filters: Vec<Box<dyn FilterInstance>>,
+    /// How long the input's audio is delayed, in milliseconds (at most [`MAX_SYNC_OFFSET_MS`]).
+    pub sync_offset_ms: u32,
 }
 
 /// Messages to the mixer thread.
@@ -47,6 +98,11 @@ pub enum MixerCmd {
         source: SourceId,
         gain: f32,
         muted: bool,
+    },
+    /// A source's sync offset changed, in milliseconds.
+    SyncOffset {
+        source: SourceId,
+        ms: u32,
     },
     /// How long inputs take to fade in or out when the program scene changes, in milliseconds.
     FadeMs(u32),
@@ -69,7 +125,11 @@ enum Cmd {
 impl From<MixerCmd> for Cmd {
     fn from(cmd: MixerCmd) -> Cmd {
         match cmd {
-            MixerCmd::Inputs(list) => Cmd::Inputs(list.into_iter().map(|cfg| Input { cfg, fade: 0.0 }).collect()),
+            MixerCmd::Inputs(list) => Cmd::Inputs(
+                list.into_iter()
+                    .map(|cfg| Input { delay_frames: offset_frames(cfg.sync_offset_ms), cfg, fade: 0.0, delay: Delay::new(), idle: usize::MAX })
+                    .collect(),
+            ),
             other => Cmd::Mix(other),
         }
     }
@@ -268,6 +328,13 @@ struct Input {
     cfg: MixInput,
     /// Current fade, 0 (silent) to 1 (full), moving toward `active`.
     fade: f32,
+    delay: Delay,
+    /// The sync offset in frames.
+    delay_frames: usize,
+    /// Frames of silence the delay line has taken since the source's last block. While it is
+    /// below the offset, the line still holds audio to play; while it is below the line's length,
+    /// the line still holds audio that a longer offset would read.
+    idle: usize,
 }
 
 /// Replaced input lists held for the sending thread to free. A full queue frees the oldest on
@@ -287,6 +354,8 @@ pub struct MixState {
     loudness: Arc<Loudness>,
     pool: Arc<AudioPool>,
     mix: Vec<f32>,
+    /// A block the delay lines of inputs without a new block play into.
+    silence: Vec<f32>,
     fade_step: f32,
     /// The number of the input list in use: a fader move sent before it is older than the
     /// gains the list carries.
@@ -304,6 +373,7 @@ impl MixState {
             loudness: Arc::new(Loudness::default()),
             pool: block_pool(),
             mix: vec![0.0; BLOCK_SAMPLES],
+            silence: vec![0.0; BLOCK_SAMPLES],
             fade_step: 1.0,
             inputs_sent: 0,
         };
@@ -327,7 +397,19 @@ impl MixState {
                 self.inputs_sent = sent;
                 for i in &mut list {
                     let active = if i.cfg.active { 1.0 } else { 0.0 };
-                    i.fade = self.inputs.iter().find(|o| o.cfg.source == i.cfg.source).map_or(active, |o| o.fade);
+                    match self.inputs.iter_mut().find(|o| o.cfg.source == i.cfg.source) {
+                        // The source keeps the audio its delay line holds while it sends into the
+                        // same queue; the new, empty line goes back with the old list. A source
+                        // started again has a new queue and starts with a silent line.
+                        Some(o) => {
+                            i.fade = o.fade;
+                            if Arc::ptr_eq(&i.cfg.audio, &o.cfg.audio) {
+                                std::mem::swap(&mut i.delay, &mut o.delay);
+                                i.idle = o.idle;
+                            }
+                        }
+                        None => i.fade = active,
+                    }
                 }
                 let old = std::mem::replace(&mut self.inputs, list);
                 self.retired.push(old);
@@ -343,6 +425,12 @@ impl MixState {
                 for i in self.inputs.iter_mut().filter(|i| i.cfg.source == source) {
                     i.cfg.gain = gain;
                     i.cfg.muted = muted;
+                }
+            }
+            MixerCmd::SyncOffset { source, ms } => {
+                for i in self.inputs.iter_mut().filter(|i| i.cfg.source == source) {
+                    i.cfg.sync_offset_ms = ms.min(MAX_SYNC_OFFSET_MS);
+                    i.delay_frames = offset_frames(ms);
                 }
             }
             MixerCmd::FadeMs(ms) => self.set_fade_ms(ms),
@@ -363,22 +451,40 @@ impl MixState {
             }
             let target = if input.cfg.active { 1.0 } else { 0.0 };
             input.fade = if input.fade < target { (input.fade + self.fade_step).min(target) } else { (input.fade - self.fade_step).max(target) };
-            let Some(mut block) = input.cfg.audio.pop() else {
-                input.cfg.levels.store(BlockLevels::default());
-                continue;
+            let mut popped = input.cfg.audio.pop();
+            let samples: &mut [f32] = match &mut popped {
+                Some(block) => {
+                    if block.samples.len() != BLOCK_SAMPLES {
+                        block.clear();
+                    }
+                    input.idle = 0;
+                    &mut block.samples[..]
+                }
+                // A source that sends nothing still plays the audio its delay line holds, after
+                // silence, as the same source without an offset would have played it.
+                None if input.idle < input.delay_frames => {
+                    input.idle = input.idle.saturating_add(BLOCK_FRAMES);
+                    self.silence.iter_mut().for_each(|s| *s = 0.0);
+                    &mut self.silence[..]
+                }
+                None => {
+                    // The line still ages while nothing plays from it, so a longer offset set later
+                    // reads silence instead of the audio from before the gap.
+                    if input.idle < input.delay.frames() {
+                        input.idle = input.idle.saturating_add(BLOCK_FRAMES);
+                        self.silence.iter_mut().for_each(|s| *s = 0.0);
+                        input.delay.process(&mut self.silence, 0);
+                    }
+                    input.cfg.levels.store(BlockLevels::default());
+                    continue;
+                }
             };
-            if block.samples.len() != BLOCK_SAMPLES {
-                block.clear();
-            }
+            input.delay.process(samples, input.delay_frames);
             for f in &mut input.cfg.filters {
-                f.process_audio(&mut block.samples);
+                f.process_audio(samples);
             }
             let gain = input.cfg.gain * input.fade;
-            let levels = if input.cfg.muted || input.fade <= 0.0 {
-                measure(&block.samples, input.cfg.gain)
-            } else {
-                mix_into(&mut self.mix, &block.samples, gain)
-            };
+            let levels = if input.cfg.muted || input.fade <= 0.0 { measure(samples, input.cfg.gain) } else { mix_into(&mut self.mix, samples, gain) };
             input.cfg.levels.store(levels);
         }
         clip(&mut self.mix);
@@ -435,7 +541,16 @@ mod tests {
     fn input(source: u64, audio: &Arc<AudioOut>, gain: f32, active: bool) -> (MixInput, Arc<Levels>) {
         let levels = Arc::new(Levels::default());
         (
-            MixInput { source: SourceId(source), audio: Arc::clone(audio), gain, muted: false, active, levels: Arc::clone(&levels), filters: vec![] },
+            MixInput {
+                source: SourceId(source),
+                audio: Arc::clone(audio),
+                gain,
+                muted: false,
+                active,
+                levels: Arc::clone(&levels),
+                filters: vec![],
+                sync_offset_ms: 0,
+            },
             levels,
         )
     }
@@ -674,6 +789,219 @@ mod tests {
         }
         writer.join().unwrap();
         assert_eq!(loudness.load().generation, 200_000);
+    }
+
+    /// Push one block whose samples count up from `first`, and mix it.
+    fn ramp(m: &mut MixState, a: &AudioOut, first: &mut f32, at: i64) {
+        let mut b = a.block();
+        b.samples.clear();
+        for _ in 0..BLOCK_SAMPLES {
+            b.samples.push(*first);
+            *first += 1.0;
+        }
+        a.push(b);
+        m.tick(Tick(at));
+    }
+
+    /// The mix of one input, without clipping: gain 1e-6 keeps the ramp's values under 1.
+    fn unclipped(out: &Fifo<PooledBlock>) -> Vec<f32> {
+        out.pop().map(|b| b.samples.iter().map(|s| (s * 1e6).round()).collect()).unwrap_or_default()
+    }
+
+    #[test]
+    fn a_sync_offset_delays_the_input_by_whole_frames() {
+        let mut m = MixState::new(Arc::new(Levels::default()));
+        let a = Arc::new(AudioOut::default());
+        let (mut ia, _) = input(1, &a, 1e-6, true);
+        // 10 ms: 480 frames, 960 samples, less than one block.
+        ia.sync_offset_ms = 10;
+        m.apply(MixerCmd::Inputs(vec![ia]));
+        let out = Arc::new(Fifo::new(8));
+        m.apply(MixerCmd::AddOutput { id: 1, queue: Arc::clone(&out) });
+        let mut next = 1.0;
+        ramp(&mut m, &a, &mut next, 0);
+        let first = unclipped(&out);
+        assert!(first[..960].iter().all(|s| *s == 0.0), "the delay starts silent");
+        assert_eq!(first[960], 1.0, "the first sample comes 480 frames late");
+        ramp(&mut m, &a, &mut next, 1);
+        let second = unclipped(&out);
+        // Sample `i` of the second block is input sample `2048 + i - 960`, counted from 1.
+        assert_eq!(second[0], (BLOCK_SAMPLES - 960 + 1) as f32);
+        assert_eq!(second[BLOCK_SAMPLES - 1], (2 * BLOCK_SAMPLES - 960) as f32);
+    }
+
+    #[test]
+    fn a_changed_sync_offset_takes_effect_on_the_next_block_without_a_new_line() {
+        let mut m = MixState::new(Arc::new(Levels::default()));
+        let a = Arc::new(AudioOut::default());
+        m.apply(MixerCmd::Inputs(vec![input(1, &a, 1e-6, true).0]));
+        let out = Arc::new(Fifo::new(8));
+        m.apply(MixerCmd::AddOutput { id: 1, queue: Arc::clone(&out) });
+        let ring = m.inputs[0].delay.ring.as_ptr();
+        let mut next = 1.0;
+        ramp(&mut m, &a, &mut next, 0);
+        assert_eq!(unclipped(&out)[0], 1.0, "no offset, no delay");
+        // 64 ms is 3072 frames: three blocks.
+        m.apply(MixerCmd::SyncOffset { source: SourceId(1), ms: 64 });
+        for at in 1..5 {
+            ramp(&mut m, &a, &mut next, at);
+        }
+        let blocks: Vec<Vec<f32>> = std::iter::from_fn(|| (!out.is_empty()).then(|| unclipped(&out))).collect();
+        assert_eq!(blocks.len(), 4);
+        // Block 4 (the fifth pushed) carries block 1's audio.
+        assert_eq!(blocks[3][0], (BLOCK_SAMPLES + 1) as f32, "{:?}", &blocks[3][..4]);
+        assert_eq!(m.inputs[0].delay.ring.as_ptr(), ring, "the delay line is the same allocation");
+        // Beyond the longest offset, the mixer delays by the longest one.
+        m.apply(MixerCmd::SyncOffset { source: SourceId(1), ms: u32::MAX });
+        assert_eq!(m.inputs[0].delay_frames, offset_frames(MAX_SYNC_OFFSET_MS));
+        assert_eq!(m.inputs[0].cfg.sync_offset_ms, MAX_SYNC_OFFSET_MS);
+    }
+
+    #[test]
+    fn a_new_input_list_keeps_the_audio_a_delay_line_holds() {
+        let mixer = Mixer::detached();
+        let mut m = MixState::new(Arc::new(Levels::default()));
+        m.retired = Arc::clone(&mixer.retired);
+        let a = Arc::new(AudioOut::default());
+        let delayed = |gain| {
+            let (mut i, _) = input(1, &a, gain, true);
+            // 32 ms is 1536 frames: one and a half blocks.
+            i.sync_offset_ms = 32;
+            i
+        };
+        m.apply(MixerCmd::Inputs(vec![delayed(1e-6)]));
+        let out = Arc::new(Fifo::new(8));
+        m.apply(MixerCmd::AddOutput { id: 1, queue: Arc::clone(&out) });
+        let mut next = 1.0;
+        ramp(&mut m, &a, &mut next, 0);
+        ramp(&mut m, &a, &mut next, 1);
+        // A filter or fader change sends a new list; the audio already delayed still plays.
+        mixer.send(MixerCmd::Inputs(vec![delayed(1e-6)]));
+        drain(&mixer.control, &mixer.gains, &mut m);
+        drop((out.pop(), out.pop()));
+        ramp(&mut m, &a, &mut next, 2);
+        assert_eq!(unclipped(&out)[0], (2 * BLOCK_SAMPLES - 1536 * CHANNELS + 1) as f32);
+    }
+
+    #[test]
+    fn a_source_started_again_does_not_play_the_old_queue_s_delayed_audio() {
+        let mut m = MixState::new(Arc::new(Levels::default()));
+        let (old, new) = (Arc::new(AudioOut::default()), Arc::new(AudioOut::default()));
+        let delayed = |q: &Arc<AudioOut>| {
+            let (mut i, _) = input(1, q, 1e-6, true);
+            i.sync_offset_ms = 32;
+            i
+        };
+        m.apply(MixerCmd::Inputs(vec![delayed(&old)]));
+        let out = Arc::new(Fifo::new(8));
+        m.apply(MixerCmd::AddOutput { id: 1, queue: Arc::clone(&out) });
+        let mut next = 1.0;
+        ramp(&mut m, &old, &mut next, 0);
+        ramp(&mut m, &old, &mut next, 1);
+        m.apply(MixerCmd::Inputs(vec![delayed(&new)]));
+        drop((out.pop(), out.pop()));
+        ramp(&mut m, &new, &mut next, 2);
+        // The offset is longer than a block, so the whole block is silent.
+        assert!(unclipped(&out).iter().all(|s| *s == 0.0), "the new queue's line starts silent");
+    }
+
+    #[test]
+    fn delayed_audio_still_plays_after_the_source_stops_sending() {
+        let mut m = MixState::new(Arc::new(Levels::default()));
+        let a = Arc::new(AudioOut::default());
+        let (mut ia, _) = input(1, &a, 1e-6, true);
+        // 32 ms is 1536 frames: one and a half blocks.
+        ia.sync_offset_ms = 32;
+        m.apply(MixerCmd::Inputs(vec![ia]));
+        let out = Arc::new(Fifo::new(8));
+        m.apply(MixerCmd::AddOutput { id: 1, queue: Arc::clone(&out) });
+        let mut next = 1.0;
+        ramp(&mut m, &a, &mut next, 0);
+        // The source sends nothing more, as a media file at its end.
+        for at in 1..4 {
+            m.tick(Tick(at));
+        }
+        let blocks: Vec<Vec<f32>> = std::iter::from_fn(|| (!out.is_empty()).then(|| unclipped(&out))).collect();
+        assert!(blocks[0].iter().all(|s| *s == 0.0));
+        assert_eq!((blocks[1][BLOCK_SAMPLES / 2 - 1], blocks[1][BLOCK_SAMPLES / 2]), (0.0, 1.0), "the block plays 1536 frames late");
+        assert_eq!(blocks[2][BLOCK_SAMPLES / 2 - 1], (BLOCK_SAMPLES) as f32, "the rest of the block plays after it");
+        assert!(blocks[2][BLOCK_SAMPLES / 2..].iter().chain(&blocks[3]).all(|s| *s == 0.0));
+        assert!(m.inputs[0].idle >= m.inputs[0].delay_frames, "once it has played, the line is not mixed again");
+    }
+
+    #[test]
+    fn a_longer_offset_set_after_the_source_stops_still_plays_its_last_block() {
+        let mut m = MixState::new(Arc::new(Levels::default()));
+        let a = Arc::new(AudioOut::default());
+        let (mut ia, _) = input(1, &a, 1e-6, true);
+        ia.sync_offset_ms = 32;
+        m.apply(MixerCmd::Inputs(vec![ia]));
+        let out = Arc::new(Fifo::new(8));
+        m.apply(MixerCmd::AddOutput { id: 1, queue: Arc::clone(&out) });
+        let mut next = 1.0;
+        ramp(&mut m, &a, &mut next, 0);
+        // 64 ms is 3072 frames: the block's first frame is due at the start of block 3.
+        m.apply(MixerCmd::SyncOffset { source: SourceId(1), ms: 64 });
+        for at in 1..6 {
+            m.tick(Tick(at));
+        }
+        let blocks: Vec<Vec<f32>> = std::iter::from_fn(|| (!out.is_empty()).then(|| unclipped(&out))).collect();
+        assert!(blocks[..3].iter().flatten().all(|s| *s == 0.0));
+        assert_eq!((blocks[3][0], blocks[3][BLOCK_SAMPLES - 1]), (1.0, BLOCK_SAMPLES as f32));
+        assert!(blocks[4].iter().all(|s| *s == 0.0));
+    }
+
+    #[test]
+    fn an_offset_set_after_a_gap_reads_silence_not_the_audio_before_it() {
+        let mut m = MixState::new(Arc::new(Levels::default()));
+        let a = Arc::new(AudioOut::default());
+        m.apply(MixerCmd::Inputs(vec![input(1, &a, 1e-6, true).0]));
+        let out = Arc::new(Fifo::new(8));
+        m.apply(MixerCmd::AddOutput { id: 1, queue: Arc::clone(&out) });
+        let mut next = 1.0;
+        ramp(&mut m, &a, &mut next, 0);
+        for at in 1..4 {
+            m.tick(Tick(at));
+        }
+        m.apply(MixerCmd::SyncOffset { source: SourceId(1), ms: 10 });
+        ramp(&mut m, &a, &mut next, 4);
+        let last = std::iter::from_fn(|| (!out.is_empty()).then(|| unclipped(&out))).last().unwrap_or_default();
+        assert!(last[..960].iter().all(|s| *s == 0.0), "{:?}", &last[..4]);
+        assert_eq!(last[960], (BLOCK_SAMPLES + 1) as f32);
+    }
+
+    #[test]
+    fn many_inputs_at_the_longest_offset_mix_without_growing() {
+        let mut m = MixState::new(Arc::new(Levels::default()));
+        let queues: Vec<Arc<AudioOut>> = (0..32).map(|_| Arc::new(AudioOut::default())).collect();
+        let inputs = queues
+            .iter()
+            .enumerate()
+            .map(|(n, q)| {
+                let (mut i, _) = input(n as u64, q, 0.01, true);
+                i.sync_offset_ms = MAX_SYNC_OFFSET_MS;
+                i
+            })
+            .collect();
+        m.apply(MixerCmd::Inputs(inputs));
+        let out = Arc::new(Fifo::new(4));
+        m.apply(MixerCmd::AddOutput { id: 1, queue: Arc::clone(&out) });
+        let lens: Vec<usize> = m.inputs.iter().map(|i| i.delay.ring.capacity()).collect();
+        // 5 s is 240,000 frames, 234.4 blocks: block 234 is the first whose end carries the
+        // inputs' audio.
+        for at in 0..236 {
+            for q in &queues {
+                feed(q, 1.0);
+            }
+            m.tick(Tick(at));
+            let block = std::iter::from_fn(|| out.pop()).last();
+            let heard = block.map(|b| b.samples[BLOCK_SAMPLES - 1]).unwrap_or_default();
+            if at < 234 {
+                assert_eq!(heard, 0.0, "block {at}");
+            }
+        }
+        assert!((m.mix[BLOCK_SAMPLES - 1] - 0.32).abs() < 1e-4, "{}", m.mix[BLOCK_SAMPLES - 1]);
+        assert_eq!(m.inputs.iter().map(|i| i.delay.ring.capacity()).collect::<Vec<_>>(), lens);
     }
 
     #[test]
