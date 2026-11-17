@@ -360,6 +360,20 @@
 	{device} (not connected)	{device} (non collegato)
 	{encoder} (not in this ffmpeg)	{encoder} (non presente in questo ffmpeg)
 	{program} did not report its version	{program} non ha indicato la sua versione
+	Compact (small files)	Compatta (file piccoli)
+	Duplicate Profile	Duplica profilo
+	Duplicate Scene Collection	Duplica raccolta di scene
+	Lossless (very large files)	Senza perdita (file molto grandi)
+	Move Down	Sposta in basso
+	Move to Bottom	Sposta in fondo
+	Move to Top	Sposta in cima
+	Move Up	Sposta in alto
+	New Scene Collection	Nuova raccolta di scene
+	Pristine (large files)	Impeccabile (file grandi)
+	Rename Profile	Rinomina profilo
+	Rename Scene Collection	Rinomina raccolta di scene
+	Unlock	Sblocca
+	Unmute	Riattiva audio
 @msg	A plug-in could not be loaded: {error}	Impossibile caricare un plug-in: {error}
 @msg	Audio monitoring could not start: {error}	Impossibile avviare l'ascolto audio: {error}
 @msg	Audio monitoring stopped: {error}	L'ascolto audio si è interrotto: {error}

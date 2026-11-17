@@ -54,6 +54,7 @@
 	Color correction	Color correction
 	Color key	Color key
 	Community	Community
+	Compact (small files)	Compact (small files)
 	Compressor	Compressor
 	Contrast	Contrast
 	could not connect to the PipeWire sound server	could not connect to the PipeWire sound server
@@ -75,6 +76,8 @@
 	Docks	Docks
 	dropped {dropped}  lagged {lagged}	dropped {dropped}  lagged {lagged}
 	Duplicate	Duplicate
+	Duplicate Profile	Duplicate Profile
+	Duplicate Scene Collection	Duplicate Scene Collection
 	Duplicate…	Duplicate…
 	Duration	Duration
 	Ease in	Ease in
@@ -160,6 +163,7 @@
 	Lock (it can't be moved in the preview)	Lock (it can't be moved in the preview)
 	Lock Preview	Lock Preview
 	Loop	Loop
+	Lossless (very large files)	Lossless (very large files)
 	Low (dB)	Low (dB)
 	Maximize	Maximize
 	MB	MB
@@ -176,16 +180,21 @@
 	Monitoring	Monitoring
 	Monitoring device	Monitoring device
 	Move Dock	Move Dock
+	Move Down	Move Down
 	Move Left	Move Left
 	Move Right	Move Right
 	Move the scene down	Move the scene down
 	Move the scene up	Move the scene up
 	Move the source down	Move the source down
 	Move the source up	Move the source up
+	Move to Bottom	Move to Bottom
+	Move to Top	Move to Top
+	Move Up	Move Up
 	ms	ms
 	Mute	Mute
 	Name	Name
 	New Profile	New Profile
+	New Scene Collection	New Scene Collection
 	New…	New…
 	No audio sources are heard in this scene.	No audio sources are heard in this scene.
 	No contributors listed yet	No contributors listed yet
@@ -223,6 +232,7 @@
 	Presets	Presets
 	Preview: {name}	Preview: {name}
 	Primary display	Primary display
+	Pristine (large files)	Pristine (large files)
 	Profile	Profile
 	Program: {name}	Program: {name}
 	Properties	Properties
@@ -250,6 +260,8 @@
 	Remove the selected scene	Remove the selected scene
 	Remove the selected source from the scene	Remove the selected source from the scene
 	Rename	Rename
+	Rename Profile	Rename Profile
+	Rename Scene Collection	Rename Scene Collection
 	Rename…	Rename…
 	Replay	Replay
 	REPLAY	REPLAY
@@ -369,6 +381,8 @@
 	ultrafast	ultrafast
 	Undo	Undo
 	Undock	Undock
+	Unlock	Unlock
+	Unmute	Unmute
 	Updates	Updates
 	Use system title bar	Use system title bar
 	Username	Username

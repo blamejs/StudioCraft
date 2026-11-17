@@ -364,6 +364,20 @@
 	{device} (not connected)	{device} (연결 안 됨)
 	{encoder} (not in this ffmpeg)	{encoder} (이 ffmpeg에 없음)
 	{program} did not report its version	{program}이(가) 버전을 알려 주지 않았습니다
+	Compact (small files)	컴팩트 (작은 파일)
+	Duplicate Profile	프로필 복제
+	Duplicate Scene Collection	장면 모음 복제
+	Lossless (very large files)	무손실 (매우 큰 파일)
+	Move Down	아래로 이동
+	Move to Bottom	맨 아래로 이동
+	Move to Top	맨 위로 이동
+	Move Up	위로 이동
+	New Scene Collection	새 장면 모음
+	Pristine (large files)	최고 품질 (큰 파일)
+	Rename Profile	프로필 이름 바꾸기
+	Rename Scene Collection	장면 모음 이름 바꾸기
+	Unlock	잠금 해제
+	Unmute	음소거 해제
 @msg	A plug-in could not be loaded: {error}	플러그인을 불러올 수 없습니다: {error}
 @msg	Audio monitoring could not start: {error}	오디오 모니터링을 시작할 수 없습니다: {error}
 @msg	Audio monitoring stopped: {error}	오디오 모니터링이 중지되었습니다: {error}

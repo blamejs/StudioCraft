@@ -363,6 +363,20 @@
 	{device} (not connected)	{device} (niepodłączone)
 	{encoder} (not in this ffmpeg)	{encoder} (brak w tym ffmpeg)
 	{program} did not report its version	{program} nie podał swojej wersji
+	Compact (small files)	Kompaktowa (małe pliki)
+	Duplicate Profile	Duplikuj profil
+	Duplicate Scene Collection	Duplikuj kolekcję scen
+	Lossless (very large files)	Bezstratna (bardzo duże pliki)
+	Move Down	Przenieś w dół
+	Move to Bottom	Przenieś na dół
+	Move to Top	Przenieś na górę
+	Move Up	Przenieś w górę
+	New Scene Collection	Nowa kolekcja scen
+	Pristine (large files)	Nieskazitelna (duże pliki)
+	Rename Profile	Zmień nazwę profilu
+	Rename Scene Collection	Zmień nazwę kolekcji scen
+	Unlock	Odblokuj
+	Unmute	Wyłącz wyciszenie
 @msg	A plug-in could not be loaded: {error}	Nie można wczytać wtyczki: {error}
 @msg	Audio monitoring could not start: {error}	Nie można uruchomić odsłuchu: {error}
 @msg	Audio monitoring stopped: {error}	Odsłuch został zatrzymany: {error}
