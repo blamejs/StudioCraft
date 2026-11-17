@@ -69,3 +69,7 @@
 2. **Multiple outputs.** Several streams at once, and a virtual camera.
 3. **Web build.** The model and plugin crates already build for WebAssembly; a browser editor for
    scene collections is the first step.
+4. **Hardware acceleration.** A graphics adapter choice in Settings with a software fallback and
+   recovery after a device loss (`craft-gpu-device` holds the choice and the device handling),
+   color conversion and scaling on the GPU, hardware encoders checked and chosen automatically,
+   and frames that stay on the GPU from capture to the encoder.

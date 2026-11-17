@@ -1422,6 +1422,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-gpu-device"
+version = "0.1.0"
+dependencies = [
+ "log",
+ "pollster 0.4.0",
+ "serde",
+ "serde_json",
+ "wgpu",
+]
+
+[[package]]
 name = "craft-i18n"
 version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=7780b4f58ec3d56b1f908c8fa3b1258fabae3880#7780b4f58ec3d56b1f908c8fa3b1258fabae3880"
