@@ -7,11 +7,15 @@
 //!
 //! The interface talks to the thread through a lock-free command queue, so moving a fader never
 //! waits on the mixer.
+//!
+//! The clipped mix also feeds a loudness meter (ITU-R BS.1770-4, EBU R 128), whose readings are
+//! published after every block in [`Loudness`].
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
-use studiocraft_media::audio::{AudioPool, BLOCK_SAMPLES, PooledBlock, block_pool, block_rate};
+use craft_audio_dsp::LoudnessMeter;
+use studiocraft_media::audio::{AudioPool, BLOCK_SAMPLES, CHANNELS, PooledBlock, SAMPLE_RATE, block_pool, block_rate};
 use studiocraft_media::clock::{MasterClock, Pacer};
 use studiocraft_media::mix::{BlockLevels, Levels, clip, measure, mix_into};
 use studiocraft_media::queue::Fifo;
@@ -77,6 +81,74 @@ type CmdQueue = Fifo<(u64, Cmd)>;
 /// Input lists the mixer replaced, freed by the sending thread.
 type Retired = Fifo<Vec<Input>>;
 
+/// The final mix's loudness readings, as the mixer thread last published them.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct LoudnessReading {
+    /// Momentary loudness (the last 400 ms), LUFS; −∞ for silence.
+    pub momentary_lufs: f64,
+    /// Short-term loudness (the last 3 s), LUFS; −∞ for silence.
+    pub short_term_lufs: f64,
+    /// Gated integrated loudness since the start or the last reset, LUFS; −∞ until a block
+    /// passes the gates.
+    pub integrated_lufs: f64,
+    /// Loudness range since the start or the last reset, LU; 0 with too little signal.
+    pub range_lu: f64,
+    /// Highest true peak since the start or the last reset, dBTP; −∞ for silence.
+    pub true_peak_dbtp: f64,
+}
+
+/// Loudness readings shared between the mixer thread and the interface, without locks.
+#[derive(Debug)]
+pub struct Loudness {
+    momentary: AtomicU64,
+    short_term: AtomicU64,
+    integrated: AtomicU64,
+    range: AtomicU64,
+    true_peak: AtomicU64,
+    reset: AtomicBool,
+}
+
+impl Default for Loudness {
+    fn default() -> Self {
+        let silent = f64::NEG_INFINITY.to_bits();
+        Loudness {
+            momentary: AtomicU64::new(silent),
+            short_term: AtomicU64::new(silent),
+            integrated: AtomicU64::new(silent),
+            range: AtomicU64::new(0.0f64.to_bits()),
+            true_peak: AtomicU64::new(silent),
+            reset: AtomicBool::new(false),
+        }
+    }
+}
+
+impl Loudness {
+    pub fn load(&self) -> LoudnessReading {
+        let get = |a: &AtomicU64| f64::from_bits(a.load(Ordering::Relaxed));
+        LoudnessReading {
+            momentary_lufs: get(&self.momentary),
+            short_term_lufs: get(&self.short_term),
+            integrated_lufs: get(&self.integrated),
+            range_lu: get(&self.range),
+            true_peak_dbtp: get(&self.true_peak),
+        }
+    }
+
+    /// Ask the mixer to start the meter again before its next block.
+    pub fn request_reset(&self) {
+        self.reset.store(true, Ordering::Relaxed);
+    }
+
+    fn store(&self, m: &LoudnessMeter) {
+        let set = |a: &AtomicU64, v: f64| a.store(v.to_bits(), Ordering::Relaxed);
+        set(&self.momentary, m.momentary());
+        set(&self.short_term, m.short_term());
+        set(&self.integrated, m.integrated());
+        set(&self.range, m.loudness_range());
+        set(&self.true_peak, m.true_peak_dbtp());
+    }
+}
+
 /// The mixer thread's handle.
 pub struct Mixer {
     /// Fader moves. A full queue drops the oldest: a later move of the same fader follows.
@@ -87,6 +159,7 @@ pub struct Mixer {
     retired: Arc<Retired>,
     sent: AtomicU64,
     master: Arc<Levels>,
+    loudness: Arc<Loudness>,
     stop: Arc<AtomicBool>,
 }
 
@@ -97,6 +170,7 @@ impl Mixer {
         m.stop.store(false, Ordering::Relaxed);
         let mut state = MixState::new(Arc::clone(&m.master));
         state.retired = Arc::clone(&m.retired);
+        state.loudness = Arc::clone(&m.loudness);
         let (g, c, s) = (Arc::clone(&m.gains), Arc::clone(&m.control), Arc::clone(&m.stop));
         std::thread::Builder::new().name("audio mixer".into()).spawn(move || run(clock, &c, &g, &s, state))?;
         Ok(m)
@@ -111,6 +185,7 @@ impl Mixer {
             retired: Arc::new(Fifo::new(RETIRED_LISTS)),
             sent: AtomicU64::new(0),
             master: Arc::new(Levels::default()),
+            loudness: Arc::new(Loudness::default()),
             stop: Arc::new(AtomicBool::new(true)),
         }
     }
@@ -129,6 +204,11 @@ impl Mixer {
     /// Levels of the final mix.
     pub fn master(&self) -> &Arc<Levels> {
         &self.master
+    }
+
+    /// Loudness of the final mix.
+    pub fn loudness(&self) -> &Arc<Loudness> {
+        &self.loudness
     }
 }
 
@@ -157,6 +237,8 @@ pub struct MixState {
     retired: Arc<Retired>,
     outputs: Vec<(u64, Arc<Fifo<PooledBlock>>)>,
     master: Arc<Levels>,
+    meter: LoudnessMeter,
+    loudness: Arc<Loudness>,
     pool: Arc<AudioPool>,
     mix: Vec<f32>,
     fade_step: f32,
@@ -172,6 +254,8 @@ impl MixState {
             retired: Arc::new(Fifo::new(RETIRED_LISTS)),
             outputs: Vec::with_capacity(OUTPUT_ROOM),
             master,
+            meter: LoudnessMeter::new(f64::from(SAMPLE_RATE), CHANNELS),
+            loudness: Arc::new(Loudness::default()),
             pool: block_pool(),
             mix: vec![0.0; BLOCK_SAMPLES],
             fade_step: 1.0,
@@ -253,6 +337,11 @@ impl MixState {
         }
         clip(&mut self.mix);
         self.master.store(measure(&self.mix, 1.0));
+        if self.loudness.reset.swap(false, Ordering::Relaxed) {
+            self.meter.reset();
+        }
+        self.meter.process_interleaved(&self.mix);
+        self.loudness.store(&self.meter);
         for (_, q) in &self.outputs {
             // An output that stops reading would make the pool allocate a block every tick; its
             // oldest unread block is dropped and reused instead. When this output holds none, the
@@ -450,6 +539,57 @@ mod tests {
         assert_eq!(mixer.retired.len(), 2, "the mixer hands back the lists it replaced");
         mixer.send(MixerCmd::FadeMs(100));
         assert!(mixer.retired.is_empty(), "the next send frees them");
+    }
+
+    /// Push `blocks` blocks of a 1 kHz tone with `peak`, the same on both channels, through `m`.
+    fn play_tone(m: &mut MixState, a: &AudioOut, peak: f32, blocks: usize, first: &mut usize) {
+        let frames = BLOCK_SAMPLES / CHANNELS;
+        for _ in 0..blocks {
+            let mut b = a.block();
+            b.samples.clear();
+            for i in *first..*first + frames {
+                let v = peak * (2.0 * std::f64::consts::PI * 1000.0 * i as f64 / f64::from(SAMPLE_RATE)).sin() as f32;
+                b.samples.extend([v; CHANNELS]);
+            }
+            *first += frames;
+            a.push(b);
+            m.tick(Tick(*first as i64));
+        }
+    }
+
+    /// EBU Tech 3341's first case: a 1 kHz stereo tone at −23 dBFS reads −23 LUFS momentary,
+    /// short-term and integrated.
+    #[test]
+    fn the_master_meter_reads_the_loudness_of_the_mix() {
+        let mut m = MixState::new(Arc::new(Levels::default()));
+        assert_eq!(m.loudness.load().integrated_lufs, f64::NEG_INFINITY);
+        let a = Arc::new(AudioOut::default());
+        m.apply(MixerCmd::Inputs(vec![input(1, &a, 1.0, true).0]));
+        let mut at = 0;
+        // 20 s
+        play_tone(&mut m, &a, 10f32.powf(-23.0 / 20.0), 470, &mut at);
+        let r = m.loudness.load();
+        for v in [r.momentary_lufs, r.short_term_lufs, r.integrated_lufs] {
+            assert!((v - -23.0).abs() < 0.1, "{r:?}");
+        }
+        assert!((r.true_peak_dbtp - -23.0).abs() < 0.2, "{r:?}");
+        assert!(r.range_lu.abs() < 0.1, "{r:?}");
+    }
+
+    #[test]
+    fn a_reset_starts_the_program_measurements_again() {
+        let mixer = Mixer::detached();
+        let mut m = MixState::new(Arc::new(Levels::default()));
+        m.loudness = Arc::clone(mixer.loudness());
+        let a = Arc::new(AudioOut::default());
+        m.apply(MixerCmd::Inputs(vec![input(1, &a, 1.0, true).0]));
+        let mut at = 0;
+        play_tone(&mut m, &a, 0.5, 100, &mut at);
+        assert!(mixer.loudness().load().integrated_lufs.is_finite());
+        mixer.loudness().request_reset();
+        play_tone(&mut m, &a, 0.0, 1, &mut at);
+        let r = mixer.loudness().load();
+        assert_eq!((r.integrated_lufs, r.true_peak_dbtp, r.momentary_lufs), (f64::NEG_INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY), "{r:?}");
     }
 
     #[test]

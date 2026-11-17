@@ -4982,6 +4982,7 @@ dependencies = [
 name = "studiocraft-engine"
 version = "0.1.0"
 dependencies = [
+ "craft-audio-dsp",
  "log",
  "serde",
  "serde_json",
@@ -5080,6 +5081,7 @@ name = "studiocraft-sources"
 version = "0.1.0"
 dependencies = [
  "ab_glyph",
+ "craft-audio-dsp",
  "craft-color",
  "craft-color-transform",
  "craft-font-catalog",

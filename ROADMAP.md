@@ -5,9 +5,12 @@
 - Scenes, sources, scene items with move, resize, rotate, lock and visibility, and undo.
 - Built-in sources: color, image, text, media file, display capture, window capture, audio input
   and desktop audio.
-- Filters: color correction, chroma key, gain and noise gate.
+- Filters: color correction, chroma key, gain, noise gate, compressor, limiter and a three-band
+  equalizer.
 - Transitions: cut, fade, fade through a color and swipe. Studio mode with quick transitions.
-- Audio mixer with meters, faders and mute.
+- Audio mixer with meters, faders and mute. The mixer measures the final mix's loudness
+  (momentary, short-term, integrated, loudness range and true peak); the window does not show it
+  yet.
 - Recording to MKV, MP4 or MOV, and RTMP streaming, through an external ffmpeg.
 - Profiles, scene collections, rebindable shortcuts, the stats window, the control channel and the
   MCP server.

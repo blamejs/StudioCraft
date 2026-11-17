@@ -14,6 +14,7 @@ studiocraft-platform.workspace = true
 craft-image-codecs.workspace = true
 craft-font-catalog.workspace = true
 craft-color-transform.workspace = true
+craft-audio-dsp.workspace = true
 ab_glyph.workspace = true
 serde_json.workspace = true
 

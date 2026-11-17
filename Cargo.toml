@@ -26,6 +26,7 @@ studiocraft-mcp = { path = "crates/mcp" }
 # Shared crates built here before they move to craft-libs.
 craft-color-transform = { path = "crates/craft-color-transform" }
 craft-scopes = { path = "crates/craft-scopes" }
+craft-audio-dsp = { path = "crates/craft-audio-dsp" }
 
 # foundation
 thiserror = "2"
