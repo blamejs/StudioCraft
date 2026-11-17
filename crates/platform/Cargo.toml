@@ -11,19 +11,27 @@ studiocraft-media.workspace = true
 thiserror.workspace = true
 
 # Capture uses xcap (displays, windows) and cpal (audio devices, and output loopback through WASAPI
-# on Windows). Linux captures audio devices through PipeWire. Other systems build without them and
-# report capture as unavailable.
+# on Windows). Linux captures through PipeWire. Other systems build without them and report capture
+# as unavailable.
 [target.'cfg(any(windows, target_os = "macos"))'.dependencies]
 xcap.workspace = true
 cpal.workspace = true
 
-# PipeWire's registry, metadata and streams; serde_json reads the default-device metadata.
+# PipeWire's registry, metadata and streams; serde_json reads the default-device metadata. Displays
+# and windows come from the screen-cast portal (ashpd, run by pollster on the capture thread) as
+# PipeWire streams, handed to the source thread through crossbeam queues.
 [target.'cfg(target_os = "linux")'.dependencies]
 pipewire.workspace = true
 serde_json.workspace = true
+ashpd.workspace = true
+futures-channel.workspace = true
+futures-util.workspace = true
+pollster.workspace = true
+crossbeam-queue.workspace = true
 
 [dev-dependencies]
 serde_json.workspace = true
+crossbeam-queue.workspace = true
 
 [lints]
 workspace = true

@@ -4,19 +4,18 @@
 use std::cell::{Cell, RefCell};
 use std::io::{PipeReader, PipeWriter};
 use std::rc::Rc;
-use std::sync::Once;
 use std::sync::mpsc::{SyncSender, sync_channel};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
 use pipewire as pw;
 use pw::spa;
-use pw::spa::support::system::IoFlags;
 use pw::types::ObjectType;
 
 use super::pw_props::{self, Node, StreamChange};
 use super::{DEFAULT_DEVICE, DeviceInfo, DeviceKind, Fill, Format, OnError};
 use crate::PlatformError;
+use crate::pw_loop::{init, watch_stop};
 
 /// The format every capture asks for. PipeWire converts each device's own rate and channels to it.
 pub const CAPTURE_FORMAT: Format = Format { rate: 48_000, channels: 2 };
@@ -26,11 +25,6 @@ pub const LIST_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// Samples a capture's conversion buffer holds before the stream starts.
 const SCRATCH_SAMPLES: usize = 8192;
-
-fn init() {
-    static INIT: Once = Once::new();
-    INIT.call_once(pw::init);
-}
 
 /// The window translates fixed messages only, so the library's own text is left out.
 fn not_running(_e: pw::Error) -> PlatformError {
@@ -203,16 +197,6 @@ fn format_param() -> Result<Vec<u8>, PlatformError> {
         .map_err(|_| PlatformError::Failed("the audio format could not be described".into()))
 }
 
-/// Quit `mainloop` once the other end of `stop` closes, setting `stopping` first. Nothing is written
-/// to the pipe; closing it makes it readable.
-fn watch_stop<'l>(mainloop: &'l pw::main_loop::MainLoopRc, stop: PipeReader, stopping: Rc<Cell<bool>>) -> pw::loop_::IoSource<'l, PipeReader> {
-    let quit = mainloop.clone();
-    mainloop.loop_().add_io(stop, IoFlags::IN | IoFlags::HUP | IoFlags::ERR, move |_| {
-        stopping.set(true);
-        quit.quit();
-    })
-}
-
 /// Connect a capture stream, report that it started, and run its loop until the handle is dropped.
 fn run<D, E>(
     kind: DeviceKind,
@@ -314,19 +298,6 @@ impl Playback {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn closing_the_stop_pipe_ends_the_capture_loop() {
-        init();
-        // A loop runs without a server, so this works on build machines too.
-        let mainloop = pw::main_loop::MainLoopRc::new(None).unwrap();
-        let (reader, writer) = std::io::pipe().unwrap();
-        let stopping = Rc::new(Cell::new(false));
-        let _watch = watch_stop(&mainloop, reader, Rc::clone(&stopping));
-        drop(writer);
-        mainloop.run();
-        assert!(stopping.get(), "the loop stopped because the pipe closed");
-    }
 
     #[test]
     fn the_format_parameter_describes_a_pod() {

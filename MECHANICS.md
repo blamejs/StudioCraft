@@ -19,6 +19,8 @@ in both files.
 | Largest canvas side | 8192 px | `render::compositor::MAX_CANVAS` | estimated |
 | Compositor texture ring | 3 frames | `render::compositor::RING_LEN` | estimated |
 | Largest side of a video filter's output | 8192 px | `plugin::filter::MAX_EFFECT_SIDE` | estimated |
+| Largest side of a Linux display or window capture | 8192 px | `platform::portal::MAX_SIDE` | estimated |
+| Spare frames a Linux display or window capture reuses | 2 | `platform::screen_frames::SPARE_FRAMES` | estimated |
 | Crop and pad edges and area | 0 px each (the whole source) | `sources::filters::CropPad` | estimated |
 | Color key similarity and smoothness | 400 and 80 (1 to 1000, thousandths of RGB distance) | `sources::filters::ColorKey` | estimated |
 | Color key default key color | #00ff00 | `sources::filters::COLOR_KEY_DEFAULT` | estimated |

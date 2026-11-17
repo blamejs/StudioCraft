@@ -58,7 +58,8 @@ impl WindowCapture {
         Ok(WindowCapture { inner: imp::Capture::open(&WindowInfo::parse_key(key))? })
     }
 
-    /// The window's current picture into `frame` (RGBA). Minimized windows return an error.
+    /// The window's current picture into `frame` (RGBA). Minimized windows return an error. On
+    /// Linux the window is chosen in the desktop's picker, as for [`crate::display::DisplayCapture`].
     pub fn grab(&mut self, frame: &mut VideoFrame) -> Result<(), PlatformError> {
         self.inner.grab(frame)
     }
@@ -109,7 +110,34 @@ mod imp {
     }
 }
 
-#[cfg(not(any(windows, target_os = "macos")))]
+/// On Linux the desktop's picker chooses the window, so the list is empty and every key opens the
+/// picker.
+#[cfg(target_os = "linux")]
+mod imp {
+    use studiocraft_media::video::VideoFrame;
+
+    use super::WindowInfo;
+    use crate::PlatformError;
+    use crate::portal::{Kind, PortalCapture};
+
+    pub fn windows() -> Vec<WindowInfo> {
+        Vec::new()
+    }
+
+    pub struct Capture(PortalCapture);
+
+    impl Capture {
+        pub fn open(_want: &WindowInfo) -> Result<Capture, PlatformError> {
+            Ok(Capture(PortalCapture::open(Kind::Window)?))
+        }
+
+        pub fn grab(&mut self, frame: &mut VideoFrame) -> Result<(), PlatformError> {
+            self.0.grab(frame)
+        }
+    }
+}
+
+#[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
 mod imp {
     use studiocraft_media::video::VideoFrame;
 

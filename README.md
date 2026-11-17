@@ -14,10 +14,13 @@ and Linux.
   resize and rotate sources in the preview with snapping to the canvas edges and center. Lock a
   source so it can't be moved, or lock the whole preview.
 - **Built-in sources.** Color, image, text, media file, display capture, window capture, audio
-  input and audio output (desktop audio). Display and window capture work on Windows and macOS.
-  Audio input and output capture work on Windows and Linux, and audio input capture on macOS. On
-  Linux, audio capture goes through the PipeWire sound server and lists its devices by their
-  descriptions.
+  input and audio output (desktop audio). Display and window capture work on Windows, macOS and
+  Linux. Audio input and output capture work on Windows and Linux, and audio input capture on
+  macOS. On Linux, audio capture goes through the PipeWire sound server and lists its devices by
+  their descriptions. Display and window capture on Linux go through the desktop's screen-cast
+  portal (`xdg-desktop-portal` with a backend for your desktop): the display or window is chosen in
+  the desktop's own picker when the source starts. After the picker is canceled or sharing is
+  stopped, changing any of the source's properties opens the picker again.
 - **Filters.** Color correction, chroma key, color key, crop and pad, image mask, scroll, and
   sharpen for video. Color correction sets gamma, contrast, brightness, saturation, opacity, and the white
   balance by temperature and tint. Color key makes the pixels near a key color transparent by their

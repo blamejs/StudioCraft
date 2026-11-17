@@ -7,13 +7,19 @@
 //! - [`ffmpeg`]: find the ffmpeg program recordings, streams and media sources run.
 //! - [`shell`]: open a folder in the file manager or a web page in the browser.
 //!
-//! Display and window capture are implemented on Windows and macOS, and audio capture on Windows,
-//! macOS and Linux (through PipeWire). Elsewhere the lists are empty and opening a capture returns
-//! [`PlatformError::Unsupported`].
+//! Capture is implemented on Windows, macOS and Linux. On Linux, displays and windows are chosen in
+//! the desktop's own picker through the screen-cast portal, and audio goes through PipeWire.
+//! Elsewhere the lists are empty and opening a capture returns [`PlatformError::Unsupported`].
 
 pub mod audio;
 pub mod display;
 pub mod ffmpeg;
+#[cfg(target_os = "linux")]
+mod portal;
+#[cfg(target_os = "linux")]
+mod pw_loop;
+#[cfg(any(target_os = "linux", test))]
+mod screen_frames;
 pub mod shell;
 pub mod window;
 
@@ -26,6 +32,17 @@ pub enum PlatformError {
     NotFound(String),
     #[error("{0}")]
     Failed(String),
+    /// The capture is open and waits for a choice in the system picker. Keep the capture.
+    #[error("waiting for a choice in the system picker")]
+    Waiting,
+    /// The capture is running and the picture has not changed since the last one. Keep the
+    /// capture and the last picture.
+    #[error("the picture has not changed")]
+    Unchanged,
+    /// The person ended the capture: they canceled the system picker or stopped sharing. Do not
+    /// open it again until its settings change.
+    #[error("{0}")]
+    Stopped(String),
 }
 
 #[cfg(any(windows, target_os = "macos"))]

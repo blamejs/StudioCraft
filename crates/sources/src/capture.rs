@@ -3,6 +3,7 @@
 use std::time::{Duration, Instant};
 
 use studiocraft_model::{ChoiceOption, Field, FieldKind, Settings, SettingsSchema};
+use studiocraft_platform::PlatformError;
 use studiocraft_platform::display::{self, DisplayCapture as Display};
 use studiocraft_platform::window::{self, WindowCapture as Window};
 use studiocraft_plugin::{Pace, Plugin, PluginError, Source, SourceCaps, SourceInstance, SourceIo, VideoContent};
@@ -12,6 +13,11 @@ use crate::uint;
 /// How long a lost display or window waits before it is looked for again.
 const REOPEN: Duration = Duration::from_secs(2);
 
+/// Whether the desktop's own picker chooses the display or window (Linux).
+const PICKER: bool = cfg!(target_os = "linux");
+
+const CHOOSE_IN_PICKER: &str = "Choose in the system picker";
+
 fn rate_field() -> Field {
     Field::new("fps", "Capture rate (frames per second)", FieldKind::Int { min: 1, max: 60 }, 30)
 }
@@ -20,20 +26,45 @@ fn period(s: &Settings) -> Duration {
     Duration::from_secs_f64(1.0 / f64::from(uint(s, "fps", 30, 1, 60)))
 }
 
+/// What a grab gave.
+enum Grabbed {
+    Picture,
+    /// The capture runs and the picture has not changed; the last one stays on screen.
+    Unchanged,
+    /// The capture waits for a choice in the system picker.
+    Waiting,
+    /// The person ended the capture; it is not opened again until its settings change.
+    Stopped(PluginError),
+    /// The target was lost; it is looked for again.
+    Lost(PluginError),
+}
+
+impl From<Result<(), PlatformError>> for Grabbed {
+    fn from(r: Result<(), PlatformError>) -> Self {
+        match r {
+            Ok(()) => Grabbed::Picture,
+            Err(PlatformError::Unchanged) => Grabbed::Unchanged,
+            Err(PlatformError::Waiting) => Grabbed::Waiting,
+            Err(PlatformError::Stopped(m)) => Grabbed::Stopped(PluginError::Unavailable(m)),
+            Err(e) => Grabbed::Lost(PluginError::Failed(e.to_string())),
+        }
+    }
+}
+
 /// What both captures do with their OS capture object.
 trait Grab {
     fn open(target: &str) -> Result<Self, PluginError>
     where
         Self: Sized;
-    fn grab(&mut self, frame: &mut studiocraft_media::video::VideoFrame) -> Result<(), PluginError>;
+    fn grab(&mut self, frame: &mut studiocraft_media::video::VideoFrame) -> Grabbed;
 }
 
 impl Grab for Display {
     fn open(target: &str) -> Result<Self, PluginError> {
         Display::open(target).map_err(|e| PluginError::Unavailable(e.to_string()))
     }
-    fn grab(&mut self, frame: &mut studiocraft_media::video::VideoFrame) -> Result<(), PluginError> {
-        Display::grab(self, frame).map_err(|e| PluginError::Failed(e.to_string()))
+    fn grab(&mut self, frame: &mut studiocraft_media::video::VideoFrame) -> Grabbed {
+        Display::grab(self, frame).into()
     }
 }
 
@@ -41,8 +72,8 @@ impl Grab for Window {
     fn open(target: &str) -> Result<Self, PluginError> {
         Window::open(target).map_err(|e| PluginError::Unavailable(e.to_string()))
     }
-    fn grab(&mut self, frame: &mut studiocraft_media::video::VideoFrame) -> Result<(), PluginError> {
-        Window::grab(self, frame).map_err(|e| PluginError::Failed(e.to_string()))
+    fn grab(&mut self, frame: &mut studiocraft_media::video::VideoFrame) -> Grabbed {
+        Window::grab(self, frame).into()
     }
 }
 
@@ -53,13 +84,15 @@ struct Capture<G: Grab> {
     period: Duration,
     cap: Option<G>,
     retry_at: Instant,
+    /// Why the person ended the capture, until its settings change.
+    stopped: Option<PluginError>,
 }
 
 impl<G: Grab> Capture<G> {
     fn new(key: &'static str, s: &Settings) -> Self {
         let target = s.str(key).unwrap_or_default().to_string();
         let cap = G::open(&target).ok();
-        Capture { key, target, period: period(s), cap, retry_at: Instant::now() + REOPEN }
+        Capture { key, target, period: period(s), cap, retry_at: Instant::now() + REOPEN, stopped: None }
     }
 }
 
@@ -68,6 +101,9 @@ impl<G: Grab> SourceInstance for Capture<G> {
         Pace::Every(self.period)
     }
     fn produce(&mut self, io: &SourceIo) -> Result<(), PluginError> {
+        if let Some(e) = &self.stopped {
+            return Err(e.clone());
+        }
         if self.cap.is_none() {
             if Instant::now() < self.retry_at {
                 return Err(PluginError::Unavailable("waiting for the capture target".into()));
@@ -84,12 +120,20 @@ impl<G: Grab> SourceInstance for Capture<G> {
         let Some(cap) = self.cap.as_mut() else { return Ok(()) };
         let mut frame = io.video.frame();
         match cap.grab(&mut frame) {
-            Ok(()) => {
+            Grabbed::Picture => {
                 frame.pts = io.clock.now();
                 io.video.publish(VideoContent::Frame(frame));
                 Ok(())
             }
-            Err(e) => {
+            Grabbed::Unchanged => Ok(()),
+            Grabbed::Waiting => Err(PluginError::Unavailable("waiting for a choice in the system picker".into())),
+            Grabbed::Stopped(e) => {
+                self.cap = None;
+                self.stopped = Some(e.clone());
+                io.video.publish(VideoContent::Empty);
+                Err(e)
+            }
+            Grabbed::Lost(e) => {
                 self.cap = None;
                 self.retry_at = Instant::now() + REOPEN;
                 // The last picture of a closed window or a lost display is not shown.
@@ -101,8 +145,9 @@ impl<G: Grab> SourceInstance for Capture<G> {
     fn update(&mut self, s: &Settings, io: &SourceIo) -> Result<(), PluginError> {
         self.period = period(s);
         let target = s.str(self.key).unwrap_or_default();
-        if target != self.target {
+        if target != self.target || self.stopped.is_some() {
             self.target = target.to_string();
+            self.stopped = None;
             self.cap = G::open(&self.target).ok();
             // The picture of the target captured before is not shown as the new target's.
             io.video.publish(VideoContent::Empty);
@@ -121,7 +166,7 @@ impl Plugin for DisplayCapture {
         "Display capture"
     }
     fn schema(&self) -> SettingsSchema {
-        let mut options = vec![ChoiceOption::new("", "Primary display")];
+        let mut options = vec![ChoiceOption::new("", if PICKER { CHOOSE_IN_PICKER } else { "Primary display" })];
         options.extend(display::displays().into_iter().map(|d| ChoiceOption::new(d.id, format!("{}: {} x {}", d.name, d.width, d.height))));
         SettingsSchema::new(vec![Field::new("display", "Display", FieldKind::Choice { options }, ""), rate_field()])
     }
@@ -146,7 +191,11 @@ impl Plugin for WindowCapture {
         "Window capture"
     }
     fn schema(&self) -> SettingsSchema {
-        let options = window::windows().into_iter().map(|w| ChoiceOption::new(w.key(), w.label())).collect();
+        let mut options: Vec<ChoiceOption> = Vec::new();
+        if PICKER {
+            options.push(ChoiceOption::new("", CHOOSE_IN_PICKER));
+        }
+        options.extend(window::windows().into_iter().map(|w| ChoiceOption::new(w.key(), w.label())));
         SettingsSchema::new(vec![Field::new("window", "Window", FieldKind::Choice { options }, ""), rate_field()])
     }
 }
@@ -186,14 +235,83 @@ mod tests {
         fn open(_target: &str) -> Result<Self, PluginError> {
             Ok(LostAfterOne { grabbed: false })
         }
-        fn grab(&mut self, frame: &mut studiocraft_media::video::VideoFrame) -> Result<(), PluginError> {
+        fn grab(&mut self, frame: &mut studiocraft_media::video::VideoFrame) -> Grabbed {
             if self.grabbed {
-                return Err(PluginError::Failed("the window closed".into()));
+                return Grabbed::Lost(PluginError::Failed("the window closed".into()));
             }
             self.grabbed = true;
             frame.reshape(8, 4, studiocraft_media::video::PixelFormat::Rgba8);
-            Ok(())
+            Grabbed::Picture
         }
+    }
+
+    /// A capture through a system picker: it waits, gives one picture, keeps it while nothing
+    /// changes, and then ends as `END` says. Counts how often it was opened.
+    struct Picked<const END: u8>(u8);
+
+    thread_local! {
+        static OPENED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    }
+
+    fn opened() -> usize {
+        OPENED.with(|o| o.get())
+    }
+
+    impl<const END: u8> Grab for Picked<END> {
+        fn open(_target: &str) -> Result<Self, PluginError> {
+            OPENED.with(|o| o.set(o.get() + 1));
+            Ok(Picked(0))
+        }
+        fn grab(&mut self, frame: &mut studiocraft_media::video::VideoFrame) -> Grabbed {
+            self.0 += 1;
+            let r = match self.0 {
+                1 => Err(PlatformError::Waiting),
+                2 => {
+                    frame.reshape(8, 4, studiocraft_media::video::PixelFormat::Rgba8);
+                    Ok(())
+                }
+                3 => Err(PlatformError::Unchanged),
+                _ if END == 0 => Err(PlatformError::Stopped("sharing stopped".into())),
+                _ => Err(PlatformError::Failed("the screen capture failed".into())),
+            };
+            r.into()
+        }
+    }
+
+    #[test]
+    fn a_capture_through_the_picker_waits_keeps_its_picture_and_stays_stopped() {
+        let io = SourceIo::new(MasterClock::new());
+        let before = opened();
+        let mut c = Capture::<Picked<0>>::new("display", &Settings::new());
+        assert_eq!(c.produce(&io), Err(PluginError::Unavailable("waiting for a choice in the system picker".into())));
+        assert!(io.video.take().is_none(), "nothing is shown while the picker is open");
+        c.produce(&io).unwrap();
+        assert!(matches!(io.video.take(), Some(VideoContent::Frame(_))));
+        c.produce(&io).unwrap();
+        assert!(io.video.take().is_none(), "an unchanged picture is not published again");
+        assert_eq!(io.video.size(), Some((8, 4)), "the last picture stays on screen");
+        let stopped = Err(PluginError::Unavailable("sharing stopped".into()));
+        assert_eq!(c.produce(&io), stopped);
+        assert!(matches!(io.video.take(), Some(VideoContent::Empty)));
+        // A stopped capture does not open the picker again by itself.
+        assert_eq!(c.produce(&io), stopped);
+        assert_eq!(opened(), before + 1);
+        // A change to its settings does.
+        c.update(&Settings::new().with("fps", 10), &io).unwrap();
+        assert_eq!(opened(), before + 2);
+        assert!(c.produce(&io).is_err(), "the new capture waits for the picker");
+        assert!(c.stopped.is_none());
+    }
+
+    #[test]
+    fn a_failed_picker_capture_is_tried_again() {
+        let io = SourceIo::new(MasterClock::new());
+        let mut c = Capture::<Picked<1>>::new("display", &Settings::new());
+        for _ in 0..3 {
+            let _ = c.produce(&io);
+        }
+        assert_eq!(c.produce(&io), Err(PluginError::Failed("the screen capture failed".into())));
+        assert!(c.cap.is_none() && c.stopped.is_none(), "a failure is retried after the reopen wait");
     }
 
     #[test]

@@ -5408,8 +5408,13 @@ dependencies = [
 name = "studiocraft-platform"
 version = "0.1.0"
 dependencies = [
+ "ashpd",
  "cpal",
+ "crossbeam-queue",
+ "futures-channel",
+ "futures-util",
  "pipewire",
+ "pollster 0.4.0",
  "serde_json",
  "studiocraft-media",
  "thiserror 2.0.21",

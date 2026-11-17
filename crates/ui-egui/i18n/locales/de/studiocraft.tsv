@@ -38,6 +38,7 @@
 	Center to Screen	Auf dem Bildschirm zentrieren
 	Check for updates at start	Beim Start nach Updates suchen
 	Check for Updates…	Nach Updates suchen…
+	Choose in the system picker	In der Systemauswahl wählen
 	Close	Schließen
 	Close below (dB)	Schließen unter (dB)
 	Color	Farbe
@@ -228,6 +229,7 @@
 	Send the preview to the program	Vorschau ins Programm übernehmen
 	Server	Server
 	Settings	Einstellungen
+	sharing stopped	die Freigabe wurde beendet
 	Sharpen	Scharfzeichnen
 	Sharpness	Schärfe
 	Show	Einblenden
@@ -279,6 +281,10 @@
 	the audio format could not be described	das Audioformat konnte nicht beschrieben werden
 	the audio stream ended	der Audiostream wurde beendet
 	the audio stream failed	der Audiostream ist fehlgeschlagen
+	the choice in the system picker was canceled	die Auswahl in der Systemauswahl wurde abgebrochen
+	the desktop has no screen-cast portal	der Desktop hat kein Screencast-Portal
+	the screen capture could not start	die Bildschirmaufnahme konnte nicht starten
+	the screen capture failed	die Bildschirmaufnahme ist fehlgeschlagen
 	The interface fonts Inter and JetBrains Mono are under the SIL Open Font License 1.1.	Die Schriften der Oberfläche, Inter und JetBrains Mono, stehen unter der SIL Open Font License 1.1.
 	The licenses of the third-party crates StudioCraft uses are checked by `cargo xtask licenses`.	Die Lizenzen der Crates von Drittanbietern, die StudioCraft nutzt, prüft `cargo xtask licenses`.
 	This filter has no settings.	Dieser Filter hat keine Einstellungen.
@@ -303,6 +309,7 @@
 	Video encoder	Video-Encoder
 	Video settings can't change while recording, streaming or running the replay buffer.	Während einer Aufnahme, eines Streams oder des Replay-Puffers lassen sich die Videoeinstellungen nicht ändern.
 	View	Ansicht
+	waiting for a choice in the system picker	wartet auf eine Auswahl in der Systemauswahl
 	Website	Website
 	Width	Breite
 	Window	Fenster
