@@ -1,0 +1,413 @@
+# StudioCraft, Hebrew.
+# Columns: context, source text, translation. Rows not listed here show in English.
+@id	language.name	עברית
+	a camera was not found	לא נמצאה מצלמה
+	A recording, stream or replay buffer is running. Exiting stops it; a recording is finished and saved first, and the replay buffer's unsaved video is lost.	הקלטה, שידור או מאגר הילוך חוזר פועלים. היציאה עוצרת אותם; הקלטה מסתיימת ונשמרת קודם, והווידאו שלא נשמר במאגר ההילוך החוזר אובד.
+	About StudioCraft	אודות StudioCraft
+	About {app}	אודות {app}
+	Add	הוספה
+	Add a filter to change how this source looks or sounds.	הוסיפו מסנן כדי לשנות את המראה או הצליל של מקור זה.
+	Add a scene	הוספת סצנה
+	Add a source	הוספת מקור
+	Add Scene	הוספת סצנה
+	Alignment	יישור
+	Alpha mask (alpha channel)	מסכת אלפא (ערוץ אלפא)
+	Alpha mask (color channel)	מסכת אלפא (ערוץ צבע)
+	Apply	החלה
+	Apply Dock Layout	החלת פריסת חלוניות
+	Attack (ms)	זמן תגובה (אלפיות שנייה)
+	Audio	שמע
+	Audio bitrate	קצב סיביות שמע
+	Audio input capture	לכידת קלט שמע
+	Audio Mixer	מערבל שמע
+	Audio output capture	לכידת פלט שמע
+	Audio source actions	פעולות מקור שמע
+	available	זמין
+	Available Encoders	מקודדים זמינים
+	Background	רקע
+	Balanced	מאוזן
+	Blend (add)	מיזוג (חיבור)
+	Blend (multiply)	מיזוג (הכפלה)
+	Blend (subtract)	מיזוג (חיסור)
+	Bottom	למטה
+	Brightness	בהירות
+	Browse…	עיון…
+	Camera	מצלמה
+	camera access is not allowed in the system's privacy settings	הגישה למצלמה אינה מותרת בהגדרות הפרטיות של המערכת
+	Cancel	ביטול
+	Canvas size	גודל משטח
+	Capture rate (frames per second)	קצב לכידה (פריימים לשנייה)
+	Ceiling (dB)	תקרה (dB)
+	Center	מרכז
+	Center to Screen	מרכוז במסך
+	Check for updates at start	בדיקת עדכונים בהפעלה
+	Check for Updates…	בדיקת עדכונים…
+	Choose in the system picker	בחירה בבורר של המערכת
+	Chroma key	מפתח כרומה
+	Close	סגירה
+	Close below (dB)	סגירה מתחת ל־ (dB)
+	Color	צבע
+	Color correction	תיקון צבע
+	Color key	מפתח צבע
+	Community	קהילה
+	Compact (small files)	דחוס (קבצים קטנים)
+	Compressor	מדחס
+	Contrast	ניגודיות
+	could not connect to the PipeWire sound server	לא ניתן להתחבר לשרת הקול PipeWire
+	CPU usage preset (faster uses less CPU)	הגדרה מראש לשימוש במעבד (הגדרה מהירה יותר צורכת פחות משאבי מעבד)
+	Credits	תודות
+	Crop and pad	חיתוך וריפוד
+	Crop or pad each edge	חיתוך או ריפוד של כל קצה
+	Cut	מעבר מיידי
+	Cut to Program	מעבר מיידי לפלט הסופי
+	Default	ברירת מחדל
+	Defaults	ברירות מחדל
+	Delays this source's audio, to line it up with its picture	משהה את השמע של מקור זה כדי לסנכרן אותו עם התמונה
+	Device	התקן
+	Direction	כיוון
+	Discord Server	שרת Discord
+	Display	מסך
+	Display capture	לכידת מסך
+	Dock in the Strip	עגינה ברצועה
+	Docks	חלוניות
+	dropped {dropped}  lagged {lagged}	הושמטו {dropped}  פיגרו {lagged}
+	Duplicate	שכפול
+	Duplicate Profile	שכפול פרופיל
+	Duplicate Scene Collection	שכפול אוסף סצנות
+	Duplicate…	שכפול…
+	Duration	משך
+	Ease in	האצה הדרגתית
+	Ease in and out	האצה והאטה הדרגתיות
+	Ease out	האטה הדרגתית
+	Easing	עקומת מעבר
+	Edit	עריכה
+	Enabled	מופעל
+	Encoder queue	תור המקודד
+	Ending Stream…	השידור מסתיים…
+	Equalizer	אקולייזר
+	Existing Source	מקור קיים
+	Exit	יציאה
+	Exit StudioCraft?	לצאת מ־StudioCraft?
+	Export…	ייצוא…
+	Fade	מעבר הדרגתי
+	Fade over 300 ms	מעבר הדרגתי במשך 300 אלפיות שנייה
+	Fade through color	מעבר הדרגתי דרך צבע
+	Failed: {error}	נכשל: {error}
+	ffmpeg (set its location in Settings › Output) was not found	ffmpeg לא נמצא (הגדירו את מיקומו בהגדרות › פלט)
+	ffmpeg on the PATH	ffmpeg ב־PATH
+	ffmpeg program	תוכנית ffmpeg
+	File	קובץ
+	Filters for '{name}'	מסננים עבור '{name}'
+	Filters…	מסננים…
+	Finishing Recording…	ההקלטה מסתיימת…
+	Fit to Screen	התאמה למסך
+	Font	גופן
+	Font family	משפחת גופנים
+	Format	פורמט
+	Frame time (average)	זמן פריים (ממוצע)
+	Frame time (last)	זמן פריים (אחרון)
+	Frames drawn	פריימים שצוירו
+	Frames drawn late	פריימים שצוירו באיחור
+	Frames encoded	פריימים שקודדו
+	Frames per second	פריימים לשנייה
+	Frames skipped by encoders	פריימים שהמקודדים דילגו עליהם
+	Free software under the MIT or Apache 2.0 license.	תוכנה חופשית ברישיון MIT או Apache 2.0.
+	From the bottom	מלמטה
+	From the left	משמאל
+	From the right	מימין
+	From the top	מלמעלה
+	Full-Screen Interface	ממשק במסך מלא
+	Gain	הגבר
+	Gain (dB)	הגבר (dB)
+	Gamma	גמא
+	General	כללי
+	Go Live	התחלת שידור חי
+	H.264 (built in)	H.264 (מובנה)
+	Height	גובה
+	Help	עזרה
+	Hide	הסתרה
+	High	גבוהה
+	High (dB)	תדרים גבוהים (dB)
+	Histogram	היסטוגרמה
+	HLS vectorscope	וקטורסקופ HLS
+	Hold (ms)	זמן החזקה (אלפיות שנייה)
+	Horizontal speed (px/s)	מהירות אופקית (פיקסלים/שנייה)
+	Hotkeys	מקשי קיצור
+	Image	תמונה
+	Image mask	מסכת תמונה
+	Import…	ייבוא…
+	Key color	צבע המפתח
+	Key color spill reduction	הפחתת זליגת צבע המפתח
+	Keyframe interval	מרווח פריימי מפתח
+	Language	שפה
+	Left	שמאל
+	Licenses	רישיונות
+	Limit height	הגבלת גובה
+	Limit width	הגבלת רוחב
+	Limiter	מגביל
+	Linear	ליניארי
+	LIVE	חי
+	Layouts	פריסות
+	Live, {time}	חי, {time}
+	Lock (it can't be moved in the preview)	נעילה (לא ניתן להזיז אותו בתצוגה המקדימה)
+	Lock Preview	נעילת התצוגה המקדימה
+	Loop	לולאה
+	Lossless (very large files)	ללא אובדן (קבצים גדולים מאוד)
+	Low (dB)	תדרים נמוכים (dB)
+	Maximize	הגדלה
+	Media file	קובץ מדיה
+	Media files	קובצי מדיה
+	Mid (dB)	תדרים בינוניים (dB)
+	Minimize	מזעור
+	Mode	מצב
+	Monitor and output	ניטור ופלט
+	Monitor off	ניטור כבוי
+	Monitor only (left out of recordings and streams)	ניטור בלבד (לא נכלל בהקלטות ובשידורים)
+	Monitoring	ניטור
+	Monitoring device	התקן ניטור
+	Move Dock	העברת חלונית
+	Move Down	הזזה למטה
+	Move Left	הזזה שמאלה
+	Move Right	הזזה ימינה
+	Move the scene down	הזזת הסצנה למטה
+	Move the scene up	הזזת הסצנה למעלה
+	Move the source down	הזזת המקור למטה
+	Move the source up	הזזת המקור למעלה
+	Move to Bottom	הזזה לתחתית
+	Move to Top	הזזה לראש
+	Move Up	הזזה למעלה
+	ms	אלפיות שנייה
+	Mute	השתקה
+	Name	שם
+	New Profile	פרופיל חדש
+	New Scene Collection	אוסף סצנות חדש
+	New…	חדש…
+	No audio sources are heard in this scene.	לא נשמעים מקורות שמע בסצנה זו.
+	No contributors listed yet	עדיין לא רשומים תורמים
+	No filters yet.	אין עדיין מסננים.
+	No graphics device: the preview is off	אין התקן גרפי: התצוגה המקדימה כבויה
+	No sources in this scene. Add one with +.	אין מקורות בסצנה זו. הוסיפו מקור עם +.
+	Noise gate	שער רעש
+	None	ללא
+	not in this ffmpeg	לא קיים ב־ffmpeg זה
+	OK	אישור
+	Opacity (%)	אטימות (%)
+	Open above (dB)	פתיחה מעל (dB)
+	Order	סדר
+	Outline color	צבע קו מתאר
+	Outline width	עובי קו מתאר
+	Output	פלט
+	Output Controls	פקדי פלט
+	Output gain (dB)	הגבר פלט (dB)
+	Output size	גודל פלט
+	Parade	תצוגת ערוצים זה לצד זה
+	Picture file	קובץ תמונה
+	Pictures	תמונות
+	Plays this source on the monitoring device chosen in Settings › Audio	מנגן את מקור זה בהתקן הניטור שנבחר בהגדרות › שמע
+	Preferences…	העדפות…
+	Preset (higher is slower and better)	הגדרה מראש (ערך גבוה יותר איטי יותר ומשפר את האיכות)
+	Presets	הגדרות מראש
+	Preview: {name}	תצוגה מקדימה: {name}
+	Primary display	המסך הראשי
+	Pristine (large files)	איכות מרבית (קבצים גדולים)
+	Profile	פרופיל
+	Program: {name}	פלט סופי: {name}
+	Properties	מאפיינים
+	Properties for '{name}'	מאפיינים עבור '{name}'
+	Properties…	מאפיינים…
+	Quality	איכות
+	Quit	יציאה
+	Ratio	יחס דחיסה
+	Read the displays, windows and devices again	קריאה מחדש של המסכים, החלונות וההתקנים
+	Reading the lists…	הרשימות נקראות…
+	REC	הקלטה
+	Record	הקלטה
+	Record and stream scenes built from your screen, windows, cameras, pictures, text and sound.	הקליטו ושדרו סצנות הבנויות מהמסך, החלונות, המצלמות, התמונות, הטקסט והצליל שלכם.
+	Recording	הקלטה
+	Recording folder	תיקיית ההקלטות
+	Recording, {time}	הקלטה, {time}
+	Recordings	הקלטות
+	Redo	ביצוע חוזר
+	Refresh Lists	רענון הרשימות
+	Release (ms)	זמן שחרור (אלפיות שנייה)
+	Remove	הסרה
+	Remove Dock Layout	הסרת פריסת חלוניות
+	Remove Layout	הסרת פריסה
+	Remove Selected Source	הסרת המקור הנבחר
+	Remove the selected scene	הסרת הסצנה הנבחרת
+	Remove the selected source from the scene	הסרת המקור הנבחר מהסצנה
+	Rename	שינוי שם
+	Rename Profile	שינוי שם הפרופיל
+	Rename Scene Collection	שינוי שם אוסף הסצנות
+	Rename…	שינוי שם…
+	Replay	הילוך חוזר
+	REPLAY	הילוך חוזר
+	Replay buffer	מאגר הילוך חוזר
+	Replay Buffer	מאגר הילוך חוזר
+	Replay buffer length	אורך מאגר ההילוך החוזר
+	Replay buffer memory limit	מגבלת הזיכרון של מאגר ההילוך החוזר
+	Replay buffer, {time}	מאגר הילוך חוזר, {time}
+	Replay length (seconds)	אורך ההילוך החוזר (שניות)
+	Replay memory limit (MB)	מגבלת הזיכרון של ההילוך החוזר (MB)
+	Report an Issue	דיווח על בעיה
+	Reset Docks	איפוס החלוניות
+	Reset Transform	איפוס שינויי הצורה
+	Resize the dock strip	שינוי גודל רצועת החלוניות
+	Resize the docks	שינוי גודל החלוניות
+	Restore	שחזור
+	Right	ימין
+	Rotate 90° Clockwise	סיבוב 90° בכיוון השעון
+	Rotate 90° Counterclockwise	סיבוב 90° נגד כיוון השעון
+	Running	פועל
+	s	ש׳
+	Saturation	רוויה
+	Save Dock Layout	שמירת פריסת חלוניות
+	Save Dock Layout…	שמירת פריסת חלוניות…
+	Save Replay	שמירת ההילוך החוזר
+	Scene Collection	אוסף סצנות
+	Scene {n}	סצנה {n}
+	Scenes	סצנות
+	Scope Type	סוג מכשיר המדידה
+	Scopes	מכשירי מדידה
+	Scroll	גלילה
+	Send the preview to the program	שליחת התצוגה המקדימה לפלט הסופי
+	Server	שרת
+	Settings	הגדרות
+	sharing stopped	השיתוף נעצר
+	Sharpen	חידוד
+	Sharpness	חדות
+	Show	הצגה
+	Show an area	הצגת אזור
+	Show Recordings	הצגת ההקלטות
+	Show Scene {n}	הצגת סצנה {n}
+	Show Settings Folder	הצגת תיקיית ההגדרות
+	Similarity	דמיון
+	Size	גודל
+	Smoothness	חלקות
+	Software (x264)	תוכנה (x264)
+	Source Code	קוד מקור
+	Source Properties	מאפייני המקור
+	Sources	מקורות
+	Sources set to monitoring in their Properties window play on this device.	מקורות שהוגדרו לניטור בחלון המאפיינים שלהם מתנגנים בהתקן זה.
+	Speed	מהירות
+	Start or Stop Recording	התחלה או עצירה של ההקלטה
+	Start or Stop Replay Buffer	התחלה או עצירה של מאגר ההילוך החוזר
+	Start or Stop Streaming	התחלה או עצירה של השידור
+	Start Recording	התחלת הקלטה
+	Start Replay Buffer	התחלת מאגר הילוך חוזר
+	Start Streaming	התחלת שידור
+	Starting…	מתחיל…
+	Stats	סטטיסטיקה
+	Status Bar	שורת המצב
+	Stop and Exit	עצירה ויציאה
+	Stop Recording	עצירת ההקלטה
+	Stop Replay Buffer	עצירת מאגר ההילוך החוזר
+	Stop Streaming	עצירת השידור
+	Stopped	נעצר
+	Stopping Replay Buffer…	מאגר ההילוך החוזר נעצר…
+	Stopping…	נעצר…
+	Stream	שידור
+	Stream key	מפתח שידור
+	Stretch image	מתיחת התמונה
+	Stretch to Screen	מתיחה למסך
+	Studio	אולפן
+	Studio Mode	מצב אולפן
+	StudioCraft is available under either license, at your option.	StudioCraft זמין לבחירתכם תחת כל אחד משני הרישיונות.
+	Swipe	החלקה
+	Switch at once	מעבר מיידי
+	Sync offset	היסט סנכרון
+	System ({language})	מערכת ({language})
+	Takes effect the next time StudioCraft starts.	ייכנס לתוקף בהפעלה הבאה של StudioCraft.
+	Temperature (K)	טמפרטורת צבע (K)
+	Text	טקסט
+	the audio capture could not start	לא ניתן להתחיל את לכידת השמע
+	the audio capture thread stopped	תהליכון לכידת השמע נעצר
+	the audio format could not be described	לא ניתן לתאר את פורמט השמע
+	the audio stream ended	זרם השמע הסתיים
+	the audio stream failed	זרם השמע נכשל
+	the camera capture could not start	לא ניתן להתחיל את לכידת המצלמה
+	the camera is in use by another camera source	המצלמה בשימוש של מקור מצלמה אחר
+	the camera is still closing	המצלמה עדיין נסגרת
+	the camera offers no format StudioCraft reads	המצלמה אינה מציעה פורמט ש־StudioCraft יכול לקרוא
+	the camera sends frames that cannot be read	המצלמה שולחת פריימים שלא ניתן לקרוא
+	the camera sent no picture	המצלמה לא שלחה תמונה
+	the camera stopped	המצלמה נעצרה
+	the camera stopped sending pictures	המצלמה הפסיקה לשלוח תמונות
+	the camera stopped unexpectedly	המצלמה נעצרה באופן בלתי צפוי
+	the choice in the system picker was canceled	הבחירה בבורר של המערכת בוטלה
+	the desktop has no screen-cast portal	לשולחן העבודה אין פורטל ללכידת מסך
+	The interface fonts Inter and JetBrains Mono are under the SIL Open Font License 1.1.	גופני הממשק Inter ו־JetBrains Mono מופצים ברישיון SIL Open Font License 1.1.
+	The licenses of the third-party crates StudioCraft uses are checked by `cargo xtask licenses`.	הפקודה `cargo xtask licenses` בודקת את הרישיונות של חבילות צד שלישי ש־StudioCraft משתמש בהן.
+	The scope could not be computed: {error}	לא ניתן לחשב את מכשיר המדידה: {error}
+	The scopes need a graphics device to read the program.	מכשירי המדידה זקוקים להתקן גרפי כדי לקרוא את הפלט הסופי.
+	the screen capture could not start	לא ניתן להתחיל את לכידת המסך
+	the screen capture failed	לכידת המסך נכשלה
+	This filter has no settings.	למסנן זה אין הגדרות.
+	this is not supported on this system yet	הדבר עדיין אינו נתמך במערכת זו
+	Threshold (dB)	סף (dB)
+	Tint	גוון
+	Tools	כלים
+	Top	למעלה
+	Transition	מעבר
+	Transition Controls	פקדי מעבר
+	Transition settings	הגדרות המעבר
+	Transition to Program	מעבר לפלט הסופי
+	Type	סוג
+	Type shortcuts such as Ctrl+1 or Shift+F5; separate several with commas.	הקלידו קיצורים כגון Ctrl+1 או Shift+F5; הפרידו בין כמה קיצורים בפסיקים.
+	Undo	ביטול פעולה
+	Undock	ניתוק
+	Unlock	ביטול נעילה
+	Unmute	ביטול השתקה
+	Updates	עדכונים
+	Use system title bar	שימוש בשורת הכותרת של המערכת
+	Username	שם משתמש
+	Version {version} ({os} {arch})	גרסה {version} ({os} {arch})
+	Vertical speed (px/s)	מהירות אנכית (פיקסלים/שנייה)
+	Video	וידאו
+	Video bitrate	קצב סיביות וידאו
+	Video encoder	מקודד וידאו
+	Video settings can't change while recording, streaming or running the replay buffer.	לא ניתן לשנות את הגדרות הווידאו בזמן הקלטה, שידור או הפעלת מאגר ההילוך החוזר.
+	View	תצוגה
+	waiting for a choice in the system picker	ממתין לבחירה בבורר של המערכת
+	waiting for the camera	ממתין למצלמה
+	Waiting for the program picture…	ממתין לתמונת הפלט הסופי…
+	waiting to open the camera again	ממתין לפתיחה מחדש של המצלמה
+	Waveform	צורת גל
+	Website	אתר אינטרנט
+	Width	רוחב
+	Window	חלון
+	Window capture	לכידת חלון
+	Your Videos folder	תיקיית הסרטונים שלכם
+	YUV vectorscope	וקטורסקופ YUV
+	{device} (not connected)	{device} (לא מחובר)
+	{encoder} (not in this ffmpeg)	{encoder} (לא קיים ב־ffmpeg זה)
+	{program} did not report its version	{program} לא דיווח על הגרסה שלו
+@msg	A plug-in could not be loaded: {error}	לא ניתן לטעון תוסף: {error}
+@msg	Audio monitoring could not start: {error}	לא ניתן להתחיל את ניטור השמע: {error}
+@msg	Audio monitoring stopped: {error}	ניטור השמע נעצר: {error}
+@msg	Could not check for updates: {error}	לא ניתן לבדוק עדכונים: {error}
+@msg	Exported the scene collection to {path}	אוסף הסצנות יוצא אל {path}
+@msg	Imported the scene collection `{name}`	אוסף הסצנות `{name}` יובא
+@msg	No file dialog could be shown: {error}	לא ניתן להציג חלון בחירת קבצים: {error}
+@msg	Recording saved to {path}	ההקלטה נשמרה ב־{path}
+@msg	Replay saved to {path}	ההילוך החוזר נשמר ב־{path}
+@msg	The compositor thread could not start: {error}	לא ניתן להתחיל את תהליכון הרכבת התמונה: {error}
+@msg	The preferences could not be saved: {error}	לא ניתן לשמור את ההעדפות: {error}
+@msg	The profile could not be saved: {error}	לא ניתן לשמור את הפרופיל: {error}
+@msg	The recording could not be finished	לא ניתן לסיים את ההקלטה
+@msg	The recording could not be finished: {error}	לא ניתן לסיים את ההקלטה: {error}
+@msg	The recording stopped: {error}	ההקלטה נעצרה: {error}
+@msg	The replay buffer could not be stopped	לא ניתן לעצור את מאגר ההילוך החוזר
+@msg	The replay buffer could not be stopped: {error}	לא ניתן לעצור את מאגר ההילוך החוזר: {error}
+@msg	The replay buffer stopped	מאגר ההילוך החוזר נעצר
+@msg	The replay buffer stopped: {error}	מאגר ההילוך החוזר נעצר: {error}
+@msg	The replay could not be saved	לא ניתן לשמור את ההילוך החוזר
+@msg	The replay could not be saved: {error}	לא ניתן לשמור את ההילוך החוזר: {error}
+@msg	The scene collection could not be saved: {error}	לא ניתן לשמור את אוסף הסצנות: {error}
+@msg	The scopes could not start: {error}	לא ניתן להפעיל את מכשירי המדידה: {error}
+@msg	The stream could not be finished	לא ניתן לסיים את השידור
+@msg	The stream could not be finished: {error}	לא ניתן לסיים את השידור: {error}
+@msg	The stream ended	השידור הסתיים
+@msg	The stream stopped: {error}	השידור נעצר: {error}
+@msg	ffmpeg at {path} was not found	ffmpeg לא נמצא ב־{path}
+menu	Transform	שינוי צורה

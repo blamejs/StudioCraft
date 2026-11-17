@@ -1393,3 +1393,30 @@ fn the_fonts_are_installed_again_after_the_language_changes() {
     frame(&mut a, &ctx, vec![]);
     assert_eq!(a.fonts_for, Some(craft_i18n::Lang::EN));
 }
+
+#[test]
+fn arabic_and_hebrew_run_the_window_right_to_left() {
+    use craft_ui::direction::is_rtl;
+    let mut a = app();
+    a.set_language("en");
+    let ctx = egui::Context::default();
+    frame(&mut a, &ctx, vec![]);
+    assert!(!is_rtl(&ctx));
+    let menus = |a: &StudioApp| bar_parts(a, &ctx).into_iter().find(|(n, _)| n == "menus").map(|(_, r)| r);
+    let Some(ltr) = menus(&a) else { panic!("no menus part") };
+    for code in ["ar", "he"] {
+        a.set_language(code);
+        frame(&mut a, &ctx, vec![]);
+        frame(&mut a, &ctx, vec![]);
+        assert!(is_rtl(&ctx), "{code}");
+        assert!(ctx.global_style().right_to_left, "{code}: egui's own chrome mirrors");
+        let Some(rtl) = menus(&a) else { panic!("{code}: no menus part") };
+        assert!(rtl[0] < rtl[2], "{code}: {rtl:?}");
+        assert!(rtl[2] > ltr[2] + 200.0, "{code}: the menus move to the right end of the bar: {ltr:?} {rtl:?}");
+        assert!((1280.0 - rtl[2] - ltr[0]).abs() < 0.5, "{code}: the bar's margin moves to the right: {ltr:?} {rtl:?}");
+    }
+    a.set_language("en");
+    frame(&mut a, &ctx, vec![]);
+    assert!(!is_rtl(&ctx));
+    assert!(!ctx.global_style().right_to_left);
+}

@@ -1,11 +1,13 @@
-//! A dock's header: one row with the title on the left and the dock's actions on the right.
+//! A dock's header: one row with the title on the left and the dock's actions on the right, or
+//! the other way round in a right-to-left interface.
 //!
 //! The header is a fixed height and has a fill of its own and no separator under it. The actions
-//! are laid out from the right edge, so they always keep their room; the title takes the width
+//! are laid out from the end edge, so they always keep their room; the title takes the width
 //! that is left and is shortened with an ellipsis when it does not fit, with the whole title in its
 //! tooltip. A dock has no footer: every action it offers is in its header.
 
-use egui::{Align, Color32, FontId, Layout, Rect, RichText, Sense, Ui, UiBuilder, pos2, vec2};
+use craft_ui::direction;
+use egui::{Color32, FontId, Rect, RichText, Sense, Ui, UiBuilder, pos2, vec2};
 
 use super::tokens::{Palette, Sizes};
 
@@ -17,9 +19,10 @@ pub struct PanelHeaderStyle {
     pub fill: Color32,
     pub title_color: Color32,
     pub title_font: FontId,
-    /// The space between the left edge and the title.
+    /// The space between the start edge (the left, or the right in a right-to-left interface)
+    /// and the title.
     pub title_inset: f32,
-    /// The space between the last action and the right edge.
+    /// The space between the last action and the end edge.
     pub action_inset: f32,
     /// The space between two actions, and between the title and the first action.
     pub action_gap: f32,
@@ -55,7 +58,8 @@ pub struct PanelHeaderResponse<R> {
 }
 
 /// Draw a header across the available width with `title` and the actions `actions` adds. The
-/// actions are added from right to left, so the first one added is the rightmost.
+/// actions are added from the reading end, so the first one added is the rightmost (the leftmost
+/// in a right-to-left interface).
 pub fn panel_header<R>(ui: &mut Ui, title: &str, style: &PanelHeaderStyle, actions: impl FnOnce(&mut Ui) -> R) -> PanelHeaderResponse<R> {
     let width = ui.available_width().max(0.0);
     let height = if style.height.is_finite() { style.height.max(0.0) } else { 0.0 };
@@ -63,19 +67,26 @@ pub fn panel_header<R>(ui: &mut Ui, title: &str, style: &PanelHeaderStyle, actio
     if ui.is_rect_visible(rect) {
         ui.painter().rect_filled(rect, 0.0, style.fill);
     }
-    let inner_left = (rect.left() + style.title_inset).min(rect.right());
-    let room = Rect::from_min_max(pos2(inner_left, rect.top()), pos2((rect.right() - style.action_inset).max(inner_left), rect.bottom()));
-    let mut row = ui.new_child(UiBuilder::new().id_salt("panel-header-actions").max_rect(room).layout(Layout::right_to_left(Align::Center)));
+    let rtl = direction::is_rtl(ui);
+    let (left_inset, right_inset) = if rtl { (style.action_inset, style.title_inset) } else { (style.title_inset, style.action_inset) };
+    let inner_left = (rect.left() + left_inset).min(rect.right());
+    let room = Rect::from_min_max(pos2(inner_left, rect.top()), pos2((rect.right() - right_inset).max(inner_left), rect.bottom()));
+    let mut row = ui.new_child(UiBuilder::new().id_salt("panel-header-actions").max_rect(room).layout(direction::trailing(ui)));
     row.spacing_mut().item_spacing.x = style.action_gap;
     let inner = actions(&mut row);
     let used = row.min_rect();
-    let actions_rect = if used.width() > 0.0 { used.intersect(room) } else { Rect::from_min_max(room.right_top(), room.right_bottom()) };
+    let end = direction::end_x(ui, room);
+    let actions_rect = if used.width() > 0.0 { used.intersect(room) } else { Rect::from_min_max(pos2(end, room.top()), pos2(end, room.bottom())) };
     let gap = if actions_rect.width() > 0.0 { style.action_gap } else { 0.0 };
-    let title_rect = Rect::from_min_max(room.left_top(), pos2((actions_rect.left() - gap).max(room.left()), room.bottom()));
+    let title_rect = if rtl {
+        Rect::from_min_max(pos2((actions_rect.right() + gap).min(room.right()), room.top()), room.right_bottom())
+    } else {
+        Rect::from_min_max(room.left_top(), pos2((actions_rect.left() - gap).max(room.left()), room.bottom()))
+    };
     let wanted = ui.painter().layout_no_wrap(title.to_owned(), style.title_font.clone(), style.title_color).size().x;
     let truncated = wanted > title_rect.width() + 0.5;
     if title_rect.width() > 0.0 {
-        let mut col = ui.new_child(UiBuilder::new().id_salt("panel-header-title").max_rect(title_rect).layout(Layout::left_to_right(Align::Center)));
+        let mut col = ui.new_child(UiBuilder::new().id_salt("panel-header-title").max_rect(title_rect).layout(direction::row(ui)));
         col.set_clip_rect(title_rect.intersect(ui.clip_rect()));
         let text = RichText::new(title).font(style.title_font.clone()).color(style.title_color);
         let label = col.add(egui::Label::new(text).truncate().selectable(false));
@@ -98,7 +109,12 @@ mod tests {
 
     /// One header `width` wide with `n` 24 x 24 actions; the header and the action rectangles.
     fn run(width: f32, title: &str, n: usize) -> (PanelHeaderResponse<Vec<Rect>>, Vec<egui::epaint::ClippedShape>) {
+        run_in(direction::Direction::Ltr, width, title, n)
+    }
+
+    fn run_in(dir: direction::Direction, width: f32, title: &str, n: usize) -> (PanelHeaderResponse<Vec<Rect>>, Vec<egui::epaint::ClippedShape>) {
         let ctx = egui::Context::default();
+        direction::apply(&ctx, dir);
         let raw = RawInput { screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(width, 200.0))), ..RawInput::default() };
         let st = style();
         let mut out = None;
@@ -129,6 +145,21 @@ mod tests {
         assert_eq!(r.title.left(), r.rect.left() + 8.0, "the title starts 8 points from the left");
         assert!(r.title.right() <= a[3].left(), "the title ends before the actions");
         assert!(!r.truncated);
+    }
+
+    #[test]
+    fn a_right_to_left_header_mirrors_the_title_and_the_actions() {
+        let (r, _) = run_in(direction::Direction::Rtl, 300.0, "Scenes", 4);
+        let a = &r.inner;
+        assert!((a[0].left() - r.rect.left() - 4.0).abs() < 0.01, "the first action is 4 points from the left edge: {a:?}");
+        for pair in a.windows(2) {
+            assert!((pair[1].left() - pair[0].right() - 2.0).abs() < 0.01, "actions are 2 points apart: {a:?}");
+        }
+        assert_eq!(r.title.right(), r.rect.right() - 8.0, "the title starts 8 points from the right");
+        assert!(r.title.left() >= a[3].right(), "the title ends before the actions");
+        let (r, _) = run_in(direction::Direction::Rtl, 200.0, "Audio Mixer", 0);
+        assert_eq!(r.actions.width(), 0.0);
+        assert_eq!(r.title.left(), r.rect.left() + 4.0);
     }
 
     #[test]

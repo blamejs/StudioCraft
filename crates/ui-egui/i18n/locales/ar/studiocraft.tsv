@@ -1,0 +1,420 @@
+# StudioCraft, Arabic.
+# Columns: context, source text, translation. Rows not listed here show in English.
+@id	language.name	العربية
+	a camera was not found	لم يُعثر على كاميرا
+	A recording, stream or replay buffer is running. Exiting stops it; a recording is finished and saved first, and the replay buffer's unsaved video is lost.	هناك تسجيل أو بث أو مخزن إعادة قيد التشغيل. يؤدي الخروج إلى إيقافه؛ يُنهى التسجيل ويُحفظ أولًا، ويُفقد الفيديو غير المحفوظ في مخزن الإعادة.
+	About StudioCraft	حول StudioCraft
+	About {app}	حول {app}
+	Add	إضافة
+	Add a filter to change how this source looks or sounds.	أضف مرشحًا لتغيير مظهر هذا المصدر أو صوته.
+	Add a scene	إضافة مشهد
+	Add a source	إضافة مصدر
+	Add Scene	إضافة مشهد
+	Alignment	محاذاة النص
+	Alpha mask (alpha channel)	قناع ألفا (قناة ألفا)
+	Alpha mask (color channel)	قناع ألفا (قناة اللون)
+	Apply	تطبيق
+	Apply Dock Layout	تطبيق تخطيط اللوحات
+	Attack (ms)	زمن الاستجابة (مللي ثانية)
+	Audio	الصوت
+	Audio bitrate	معدل بت الصوت
+	Audio input capture	التقاط مدخل الصوت
+	Audio Mixer	مازج الصوت
+	Audio output capture	التقاط مخرج الصوت
+	Audio source actions	إجراءات مصدر الصوت
+	available	متاح
+	Available Encoders	المرمِّزات المتاحة
+	Background	الخلفية
+	Balanced	متوازن
+	Blend (add)	مزج (جمع)
+	Blend (multiply)	مزج (ضرب)
+	Blend (subtract)	مزج (طرح)
+	Bottom	أسفل
+	Brightness	السطوع
+	Browse…	استعراض…
+	Camera	الكاميرا
+	camera access is not allowed in the system's privacy settings	الوصول إلى الكاميرا غير مسموح به في إعدادات الخصوصية في النظام
+	Cancel	إلغاء
+	Canvas size	حجم اللوحة
+	Capture rate (frames per second)	معدل الالتقاط (إطارات في الثانية)
+	Ceiling (dB)	الحد الأقصى (ديسيبل)
+	Center	الوسط
+	Center to Screen	توسيط في الشاشة
+	Check for updates at start	التحقق من التحديثات عند البدء
+	Check for Updates…	التحقق من التحديثات…
+	Choose in the system picker	الاختيار في نافذة الاختيار في النظام
+	Chroma key	مفتاح الكروما
+	Close	إغلاق
+	Close below (dB)	عتبة الإغلاق (ديسيبل)
+	Color	اللون
+	Color correction	تصحيح الألوان
+	Color key	مفتاح اللون
+	Community	المجتمع
+	Compact (small files)	مضغوط (ملفات صغيرة)
+	Compressor	الضاغط
+	Contrast	التباين
+	could not connect to the PipeWire sound server	تعذّر الاتصال بخادم الصوت PipeWire
+	CPU usage preset (faster uses less CPU)	إعداد استخدام المعالج (الأسرع يستخدم المعالج أقل)
+	Credits	المساهمون
+	Crop and pad	القص والحشو
+	Crop or pad each edge	قص كل حافة أو حشوها
+	Cut	انتقال فوري
+	Cut to Program	انتقال فوري إلى الإخراج النهائي
+	Default	الافتراضي
+	Defaults	الإعدادات الافتراضية
+	Delays this source's audio, to line it up with its picture	يؤخر صوت هذا المصدر ليتزامن مع صورته
+	Device	الجهاز
+	Direction	الاتجاه
+	Discord Server	خادم Discord
+	Display	الشاشة
+	Display capture	التقاط الشاشة
+	Dock in the Strip	إرساء في الشريط
+	Docks	اللوحات
+	dropped {dropped}  lagged {lagged}	مُسقَطة {dropped}  متأخرة {lagged}
+	Duplicate	تكرار
+	Duplicate Profile	تكرار ملف التعريف
+	Duplicate Scene Collection	تكرار مجموعة المشاهد
+	Duplicate…	تكرار…
+	Duration	مدة الانتقال
+	Ease in	تسارع تدريجي
+	Ease in and out	تسارع وتباطؤ تدريجيان
+	Ease out	تباطؤ تدريجي
+	Easing	منحنى الانتقال
+	Edit	تحرير
+	Enabled	مفعّل
+	Encoder queue	طابور المرمِّز
+	Ending Stream…	جارٍ إنهاء البث…
+	Equalizer	المعادِل
+	Existing Source	مصدر موجود
+	Exit	خروج
+	Exit StudioCraft?	الخروج من StudioCraft؟
+	Export…	تصدير…
+	Fade	تلاشٍ
+	Fade over 300 ms	تلاشٍ خلال 300 مللي ثانية
+	Fade through color	تلاشٍ عبر لون
+	Failed: {error}	فشل: {error}
+	ffmpeg (set its location in Settings › Output) was not found	لم يُعثر على ffmpeg (حدّد موقعه في الإعدادات › الإخراج)
+	ffmpeg on the PATH	ffmpeg في PATH
+	ffmpeg program	برنامج ffmpeg
+	File	ملف
+	Filters for '{name}'	مرشحات '{name}'
+	Filters…	المرشحات…
+	Finishing Recording…	جارٍ إنهاء التسجيل…
+	Fit to Screen	ملاءمة الشاشة
+	Font	الخط
+	Font family	عائلة الخط
+	Format	التنسيق
+	Frame time (average)	زمن الإطار (المتوسط)
+	Frame time (last)	زمن الإطار (الأخير)
+	Frames drawn	الإطارات المرسومة
+	Frames drawn late	الإطارات المرسومة متأخرة
+	Frames encoded	الإطارات المرمَّزة
+	Frames per second	إطارات في الثانية
+	Frames skipped by encoders	الإطارات التي تخطتها المرمِّزات
+	Free software under the MIT or Apache 2.0 license.	برنامج حر بموجب رخصة MIT أو Apache 2.0.
+	From the bottom	من الأسفل
+	From the left	من اليسار
+	From the right	من اليمين
+	From the top	من الأعلى
+	Full-Screen Interface	الواجهة بملء الشاشة
+	Gain	الكسب
+	Gain (dB)	الكسب (ديسيبل)
+	Gamma	جاما
+	General	عام
+	Go Live	بدء البث المباشر
+	H.264 (built in)	H.264 (مدمج)
+	Height	الارتفاع
+	Help	تعليمات
+	Hide	إخفاء
+	High	عالية
+	High (dB)	الترددات العالية (ديسيبل)
+	Histogram	المدرج التكراري
+	HLS vectorscope	مخطط المتجهات HLS
+	Hold (ms)	زمن الإبقاء (مللي ثانية)
+	Horizontal speed (px/s)	السرعة الأفقية (بكسل/ث)
+	Hotkeys	مفاتيح الاختصار
+	Image	صورة
+	Image mask	قناع صورة
+	Import…	استيراد…
+	Key color	لون المفتاح
+	Key color spill reduction	تقليل انتشار لون المفتاح
+	Keyframe interval	الفاصل بين الإطارات الرئيسية
+	Language	اللغة
+	Left	يسار
+	Licenses	التراخيص
+	Limit height	تحديد الارتفاع
+	Limit width	تحديد العرض
+	Limiter	المحدِّد
+	Linear	خطي
+	LIVE	مباشر
+	Layouts	التخطيطات
+	Live, {time}	مباشر، {time}
+	Lock (it can't be moved in the preview)	قفل (لا يمكن تحريكه في المعاينة)
+	Lock Preview	قفل المعاينة
+	Loop	تكرار التشغيل
+	Lossless (very large files)	بلا فقد (ملفات كبيرة جدًا)
+	Low (dB)	الترددات المنخفضة (ديسيبل)
+	Maximize	تكبير
+	Media file	ملف وسائط
+	Media files	ملفات الوسائط
+	Mid (dB)	الترددات المتوسطة (ديسيبل)
+	Minimize	تصغير
+	Mode	الوضع
+	Monitor and output	مراقبة وإخراج
+	Monitor off	المراقبة متوقفة
+	Monitor only (left out of recordings and streams)	مراقبة فقط (لا يدخل في التسجيلات والبث)
+	Monitoring	المراقبة
+	Monitoring device	جهاز المراقبة
+	Move Dock	نقل اللوحة
+	Move Down	نقل لأسفل
+	Move Left	نقل لليسار
+	Move Right	نقل لليمين
+	Move the scene down	نقل المشهد لأسفل
+	Move the scene up	نقل المشهد لأعلى
+	Move the source down	نقل المصدر لأسفل
+	Move the source up	نقل المصدر لأعلى
+	Move to Bottom	نقل إلى الأسفل
+	Move to Top	نقل إلى الأعلى
+	Move Up	نقل لأعلى
+	ms	مللي ثانية
+	Mute	كتم الصوت
+	Name	الاسم
+	New Profile	ملف تعريف جديد
+	New Scene Collection	مجموعة مشاهد جديدة
+	New…	جديد…
+	No audio sources are heard in this scene.	لا يُسمع أي مصدر صوت في هذا المشهد.
+	No contributors listed yet	لا يوجد مساهمون مدرجون بعد
+	No filters yet.	لا توجد مرشحات بعد.
+	No graphics device: the preview is off	لا يوجد جهاز رسومات: المعاينة متوقفة
+	No sources in this scene. Add one with +.	لا توجد مصادر في هذا المشهد. أضف مصدرًا بالزر +.
+	Noise gate	بوابة الضوضاء
+	None	بلا
+	not in this ffmpeg	غير موجود في ffmpeg هذا
+	OK	موافق
+	Opacity (%)	العتامة (%)
+	Open above (dB)	عتبة الفتح (ديسيبل)
+	Order	الترتيب
+	Outline color	لون الحد
+	Outline width	عرض الحد
+	Output	الإخراج
+	Output Controls	عناصر تحكم الإخراج
+	Output gain (dB)	كسب الإخراج (ديسيبل)
+	Output size	حجم الإخراج
+	Parade	عرض القنوات جنبًا إلى جنب
+	Picture file	ملف صورة
+	Pictures	الصور
+	Plays this source on the monitoring device chosen in Settings › Audio	يشغّل صوت هذا المصدر على جهاز المراقبة المحدد في الإعدادات › الصوت
+	Preferences…	التفضيلات…
+	Preset (higher is slower and better)	الإعداد المسبق (الأعلى أبطأ وأفضل)
+	Presets	الإعدادات المسبقة
+	Preview: {name}	المعاينة: {name}
+	Primary display	الشاشة الرئيسية
+	Pristine (large files)	نقي (ملفات كبيرة)
+	Profile	ملف التعريف
+	Program: {name}	الإخراج النهائي: {name}
+	Properties	الخصائص
+	Properties for '{name}'	خصائص '{name}'
+	Properties…	الخصائص…
+	Quality	الجودة
+	Quit	إنهاء
+	Ratio	نسبة الضغط
+	Read the displays, windows and devices again	إعادة اكتشاف الشاشات والنوافذ والأجهزة
+	Reading the lists…	جارٍ قراءة القوائم…
+	REC	تسجيل
+	Record	تسجيل
+	Record and stream scenes built from your screen, windows, cameras, pictures, text and sound.	سجّل وابثّ مشاهد تتكون من شاشتك ونوافذك وكاميراتك وصورك ونصوصك وصوتك.
+	Recording	التسجيل
+	Recording folder	مجلد التسجيلات
+	Recording, {time}	تسجيل، {time}
+	Recordings	التسجيلات
+	Redo	إعادة
+	Refresh Lists	تحديث القوائم
+	Release (ms)	زمن التحرر (مللي ثانية)
+	Remove	إزالة
+	Remove Dock Layout	إزالة تخطيط اللوحات
+	Remove Layout	إزالة التخطيط
+	Remove Selected Source	إزالة المصدر المحدد
+	Remove the selected scene	إزالة المشهد المحدد
+	Remove the selected source from the scene	إزالة المصدر المحدد من المشهد
+	Rename	إعادة تسمية
+	Rename Profile	إعادة تسمية ملف التعريف
+	Rename Scene Collection	إعادة تسمية مجموعة المشاهد
+	Rename…	إعادة تسمية…
+	Replay	الإعادة
+	REPLAY	إعادة
+	Replay buffer	مخزن الإعادة
+	Replay Buffer	مخزن الإعادة
+	Replay buffer length	مدة مخزن الإعادة
+	Replay buffer memory limit	حد ذاكرة مخزن الإعادة
+	Replay buffer, {time}	مخزن الإعادة، {time}
+	Replay length (seconds)	مدة الإعادة (ثوانٍ)
+	Replay memory limit (MB)	حد ذاكرة الإعادة (ميغابايت)
+	Report an Issue	الإبلاغ عن مشكلة
+	Reset Docks	إعادة تعيين اللوحات
+	Reset Transform	إعادة تعيين التحويل
+	Resize the dock strip	تغيير حجم شريط اللوحات
+	Resize the docks	تغيير حجم اللوحات
+	Restore	استعادة
+	Right	يمين
+	Rotate 90° Clockwise	تدوير 90° باتجاه عقارب الساعة
+	Rotate 90° Counterclockwise	تدوير 90° عكس اتجاه عقارب الساعة
+	Running	قيد التشغيل
+	s	ث
+	Saturation	التشبع
+	Save Dock Layout	حفظ تخطيط اللوحات
+	Save Dock Layout…	حفظ تخطيط اللوحات…
+	Save Replay	حفظ الإعادة
+	Scene Collection	مجموعة المشاهد
+	Scene {n}	المشهد {n}
+	Scenes	المشاهد
+	Scope Type	نوع أداة القياس
+	Scopes	أدوات قياس الفيديو
+	Scroll	تمرير
+	Send the preview to the program	إرسال المعاينة إلى الإخراج النهائي
+	Server	الخادم
+	Settings	الإعدادات
+	sharing stopped	توقفت المشاركة
+	Sharpen	زيادة الحدة
+	Sharpness	الحدة
+	Show	إظهار
+	Show an area	إظهار منطقة
+	Show Recordings	إظهار التسجيلات
+	Show Scene {n}	إظهار المشهد {n}
+	Show Settings Folder	إظهار مجلد الإعدادات
+	Similarity	التشابه
+	Size	الحجم
+	Smoothness	النعومة
+	Software (x264)	برمجي (x264)
+	Source Code	الشيفرة المصدرية
+	Source Properties	خصائص المصدر
+	Sources	المصادر
+	Sources set to monitoring in their Properties window play on this device.	يُشغَّل على هذا الجهاز صوت المصادر المضبوطة على المراقبة في نافذة خصائصها.
+	Speed	السرعة
+	Start or Stop Recording	بدء التسجيل أو إيقافه
+	Start or Stop Replay Buffer	بدء مخزن الإعادة أو إيقافه
+	Start or Stop Streaming	بدء البث أو إيقافه
+	Start Recording	بدء التسجيل
+	Start Replay Buffer	بدء مخزن الإعادة
+	Start Streaming	بدء البث
+	Starting…	جارٍ البدء…
+	Stats	الإحصاءات
+	Status Bar	شريط الحالة
+	Stop and Exit	إيقاف وخروج
+	Stop Recording	إيقاف التسجيل
+	Stop Replay Buffer	إيقاف مخزن الإعادة
+	Stop Streaming	إيقاف البث
+	Stopped	متوقف
+	Stopping Replay Buffer…	جارٍ إيقاف مخزن الإعادة…
+	Stopping…	جارٍ الإيقاف…
+	Stream	البث
+	Stream key	مفتاح البث
+	Stretch image	تمديد الصورة
+	Stretch to Screen	تمديد إلى الشاشة
+	Studio	الاستوديو
+	Studio Mode	وضع الاستوديو
+	StudioCraft is available under either license, at your option.	يمكنك استخدام StudioCraft بموجب أي من الرخصتين حسب اختيارك.
+	Swipe	انزلاق
+	Switch at once	تبديل فوري
+	Sync offset	إزاحة المزامنة
+	System ({language})	النظام ({language})
+	Takes effect the next time StudioCraft starts.	يسري في المرة التالية التي يبدأ فيها StudioCraft.
+	Temperature (K)	درجة حرارة اللون (K)
+	Text	نص
+	the audio capture could not start	تعذّر بدء التقاط الصوت
+	the audio capture thread stopped	توقف خيط التقاط الصوت
+	the audio format could not be described	تعذّر تحديد تنسيق الصوت
+	the audio stream ended	انتهى دفق الصوت
+	the audio stream failed	حدث خطأ في دفق الصوت
+	the camera capture could not start	تعذّر بدء التقاط الكاميرا
+	the camera is in use by another camera source	الكاميرا مستخدمة من مصدر كاميرا آخر
+	the camera is still closing	لا تزال الكاميرا قيد الإغلاق
+	the camera offers no format StudioCraft reads	لا تقدم الكاميرا أي تنسيق يقرؤه StudioCraft
+	the camera sends frames that cannot be read	ترسل الكاميرا إطارات لا يمكن قراءتها
+	the camera sent no picture	لم ترسل الكاميرا أي صورة
+	the camera stopped	توقفت الكاميرا
+	the camera stopped sending pictures	توقفت الكاميرا عن إرسال الصور
+	the camera stopped unexpectedly	توقفت الكاميرا بشكل غير متوقع
+	the choice in the system picker was canceled	أُلغي الاختيار في نافذة الاختيار في النظام
+	the desktop has no screen-cast portal	لا تحتوي بيئة سطح المكتب على بوابة لالتقاط الشاشة
+	The interface fonts Inter and JetBrains Mono are under the SIL Open Font License 1.1.	خطا الواجهة Inter و JetBrains Mono مرخصان بموجب SIL Open Font License 1.1.
+	The licenses of the third-party crates StudioCraft uses are checked by `cargo xtask licenses`.	يتحقق `cargo xtask licenses` من تراخيص حزم الجهات الخارجية التي يستخدمها StudioCraft.
+	The scope could not be computed: {error}	تعذّر حساب أداة القياس: {error}
+	The scopes need a graphics device to read the program.	تحتاج أدوات القياس إلى جهاز رسومات لقراءة صورة الإخراج النهائي.
+	the screen capture could not start	تعذّر بدء التقاط الشاشة
+	the screen capture failed	فشل التقاط الشاشة
+	This filter has no settings.	لا توجد إعدادات لهذا المرشح.
+	this is not supported on this system yet	هذا غير مدعوم على هذا النظام بعد
+	Threshold (dB)	العتبة (ديسيبل)
+	Tint	الصبغة
+	Tools	أدوات
+	Top	أعلى
+	Transition	الانتقال
+	Transition Controls	عناصر تحكم الانتقال
+	Transition settings	إعدادات الانتقال
+	Transition to Program	الانتقال إلى الإخراج النهائي
+	Type	النوع
+	Type shortcuts such as Ctrl+1 or Shift+F5; separate several with commas.	اكتب اختصارات مثل Ctrl+1 أو Shift+F5؛ وافصل بين عدة اختصارات بفواصل.
+	Undo	تراجع
+	Undock	فصل
+	Unlock	إلغاء القفل
+	Unmute	إلغاء كتم الصوت
+	Updates	التحديثات
+	Use system title bar	استخدام شريط عنوان النظام
+	Username	اسم المستخدم
+	Version {version} ({os} {arch})	الإصدار {version} ({os} {arch})
+	Vertical speed (px/s)	السرعة العمودية (بكسل/ث)
+	Video	الفيديو
+	Video bitrate	معدل بت الفيديو
+	Video encoder	مرمِّز الفيديو
+	Video settings can't change while recording, streaming or running the replay buffer.	لا يمكن تغيير إعدادات الفيديو أثناء التسجيل أو البث أو تشغيل مخزن الإعادة.
+	View	عرض
+	waiting for a choice in the system picker	في انتظار الاختيار في نافذة الاختيار في النظام
+	waiting for the camera	في انتظار الكاميرا
+	Waiting for the program picture…	في انتظار صورة الإخراج النهائي…
+	waiting to open the camera again	في انتظار إعادة فتح الكاميرا
+	Waveform	الشكل الموجي
+	Website	الموقع الإلكتروني
+	Width	العرض
+	Window	النافذة
+	Window capture	التقاط النافذة
+	Your Videos folder	مجلد مقاطع الفيديو
+	YUV vectorscope	مخطط المتجهات YUV
+	{db} dB	{db} ديسيبل
+	{device} (not connected)	{device} (غير متصل)
+	{encoder} (not in this ffmpeg)	{encoder} (غير موجود في ffmpeg هذا)
+	{fps} fps  {ms} ms	{fps} إطار/ث  {ms} مللي ثانية
+	{ms} ms	{ms} مللي ثانية
+	{n} kbps	{n} كيلوبت/ث
+	kbps	كيلوبت/ث
+	MB	ميغابايت
+	{program} did not report its version	لم يُبلغ {program} عن إصداره
+	{status} · {mb} MB	{status} · {mb} ميغابايت
+@msg	A plug-in could not be loaded: {error}	تعذّر تحميل مكوّن إضافي: {error}
+@msg	Audio monitoring could not start: {error}	تعذّر بدء مراقبة الصوت: {error}
+@msg	Audio monitoring stopped: {error}	توقفت مراقبة الصوت: {error}
+@msg	Could not check for updates: {error}	تعذّر التحقق من التحديثات: {error}
+@msg	Exported the scene collection to {path}	صُدّرت مجموعة المشاهد إلى {path}
+@msg	Imported the scene collection `{name}`	استُوردت مجموعة المشاهد `{name}`
+@msg	No file dialog could be shown: {error}	تعذّر عرض نافذة اختيار الملفات: {error}
+@msg	Recording saved to {path}	حُفظ التسجيل في {path}
+@msg	Replay saved to {path}	حُفظت الإعادة في {path}
+@msg	The compositor thread could not start: {error}	تعذّر بدء خيط تركيب الصورة: {error}
+@msg	The preferences could not be saved: {error}	تعذّر حفظ التفضيلات: {error}
+@msg	The profile could not be saved: {error}	تعذّر حفظ ملف التعريف: {error}
+@msg	The recording could not be finished	تعذّر إنهاء التسجيل
+@msg	The recording could not be finished: {error}	تعذّر إنهاء التسجيل: {error}
+@msg	The recording stopped: {error}	توقف التسجيل: {error}
+@msg	The replay buffer could not be stopped	تعذّر إيقاف مخزن الإعادة
+@msg	The replay buffer could not be stopped: {error}	تعذّر إيقاف مخزن الإعادة: {error}
+@msg	The replay buffer stopped	توقف مخزن الإعادة
+@msg	The replay buffer stopped: {error}	توقف مخزن الإعادة: {error}
+@msg	The replay could not be saved	تعذّر حفظ الإعادة
+@msg	The replay could not be saved: {error}	تعذّر حفظ الإعادة: {error}
+@msg	The scene collection could not be saved: {error}	تعذّر حفظ مجموعة المشاهد: {error}
+@msg	The scopes could not start: {error}	تعذّر بدء أدوات القياس: {error}
+@msg	The stream could not be finished	تعذّر إنهاء البث
+@msg	The stream could not be finished: {error}	تعذّر إنهاء البث: {error}
+@msg	The stream ended	انتهى البث
+@msg	The stream stopped: {error}	توقف البث: {error}
+@msg	ffmpeg at {path} was not found	لم يُعثر على ffmpeg في {path}
+menu	Transform	التحويل

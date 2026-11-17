@@ -79,6 +79,11 @@ pub fn set_lang(lang: Lang) {
     CURRENT.set(lang);
 }
 
+/// The interface direction of this thread's language: right to left for Arabic and Hebrew.
+pub fn direction() -> craft_ui::direction::Direction {
+    if I18N.rtl(lang()) { craft_ui::direction::Direction::Rtl } else { craft_ui::direction::Direction::Ltr }
+}
+
 /// The language a Language setting stands for: `auto`, or a code that is not offered, follows the
 /// system.
 pub fn resolve(setting: &str) -> Lang {
