@@ -64,6 +64,8 @@ impl Nvenc {
             Error::Busy(why) => SessionError::Busy(format!("{} has no free encoding session: {why}", self.name())),
             e => SessionError::Other(self.error(e)),
         })?;
+        // A session opened, so a failure that `usable` remembers is out of date.
+        *LAST_TEST.lock().unwrap_or_else(PoisonError::into_inner) = Some((true, Instant::now()));
         Ok(NvencSession { core, name: self.name() })
     }
 
@@ -115,15 +117,18 @@ impl Encoder for Nvenc {
 /// How long a failed session test stands before the next call tests again.
 const RETEST_AFTER: Duration = Duration::from_secs(30);
 
+/// The last answer of [`usable`], or of a session that opened, and when it was found.
+static LAST_TEST: Mutex<Option<(bool, Instant)>> = Mutex::new(None);
+
 /// Whether an NVENC session opens on this system. A call opens and closes one; a session that
-/// opened is remembered, and a failure is remembered for [`RETEST_AFTER`], since every session can
-/// be taken by other programs for a while. Without the NVIDIA driver nothing is tested again.
+/// opened is remembered, and a failure is remembered for [`RETEST_AFTER`] or until a session opens,
+/// since every session can be taken by other programs for a while. Without the NVIDIA driver
+/// nothing is tested again.
 fn usable() -> bool {
-    static LAST: Mutex<Option<(bool, Instant)>> = Mutex::new(None);
     if craft_hwenc_native::nvenc::driver().is_err() {
         return false;
     }
-    let mut last = LAST.lock().unwrap_or_else(PoisonError::into_inner);
+    let mut last = LAST_TEST.lock().unwrap_or_else(PoisonError::into_inner);
     match *last {
         Some((true, _)) => true,
         Some((false, at)) if at.elapsed() < RETEST_AFTER => false,
@@ -193,11 +198,10 @@ impl VideoSession for NvencSession {
         Ok(())
     }
 
-    fn flush(&mut self, out: &mut Vec<Packet>) {
-        match self.core.flush() {
-            Ok(ps) => packets(out, ps),
-            Err(e) => log::warn!("{} lost its last frames: {e}", self.name),
-        }
+    fn flush(&mut self, out: &mut Vec<Packet>) -> Result<(), PluginError> {
+        let ps = self.core.flush().map_err(|e| PluginError::Failed(format!("{} lost its last frames: {e}", self.name)))?;
+        packets(out, ps);
+        Ok(())
     }
 }
 
@@ -261,7 +265,7 @@ mod tests {
         for pts in 0..5 {
             s.encode(&frame, pts, &mut out).unwrap();
         }
-        s.flush(&mut out);
+        s.flush(&mut out).unwrap();
         assert_eq!(out.iter().map(|p| (p.pts, p.dts)).collect::<Vec<_>>(), (0..5).map(|i| (i, i)).collect::<Vec<_>>());
         assert!(out[0].keyframe);
     }

@@ -132,8 +132,9 @@ pub trait VideoSession: Send {
     /// Encode `nv12`, a tightly packed NV12 frame of the opened size, shown at frame `pts`. The
     /// packets that are ready are appended to `out`.
     fn encode(&mut self, nv12: &[u8], pts: i64, out: &mut Vec<Packet>) -> Result<(), PluginError>;
-    /// Append the packets the encoder still holds to `out`. No frame can follow.
-    fn flush(&mut self, out: &mut Vec<Packet>);
+    /// Append the packets the encoder still holds to `out`. No frame can follow. An error means the
+    /// last frames were lost.
+    fn flush(&mut self, out: &mut Vec<Packet>) -> Result<(), PluginError>;
 }
 
 /// An encoder that runs inside the ffmpeg program.

@@ -5701,7 +5701,6 @@ dependencies = [
  "craft-audio",
  "craft-hwenc-native",
  "craft-video",
- "log",
  "studiocraft-media",
  "studiocraft-model",
  "studiocraft-plugin",

@@ -13,7 +13,6 @@ studiocraft-plugin.workspace = true
 craft-video.workspace = true
 craft-audio.workspace = true
 craft-hwenc-native.workspace = true
-log.workspace = true
 
 [dev-dependencies]
 # Independent decoders read back what the encoders write.

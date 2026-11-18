@@ -543,7 +543,9 @@ impl BuiltInFirst {
         if let Err(e) = session.encode(&gray, 0, &mut packets) {
             return Outcome::Failed(e.to_string());
         }
-        session.flush(&mut packets);
+        if let Err(e) = session.flush(&mut packets) {
+            return Outcome::Failed(e.to_string());
+        }
         if packets.is_empty() { Outcome::Failed(format!("{} returned no packet for its test frame", encoder.name())) } else { Outcome::Works }
     }
 }

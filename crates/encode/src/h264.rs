@@ -184,8 +184,9 @@ impl VideoSession for H264Session {
         Ok(())
     }
 
-    fn flush(&mut self, out: &mut Vec<Packet>) {
+    fn flush(&mut self, out: &mut Vec<Packet>) -> Result<(), PluginError> {
         out.extend(self.core.flush().into_iter().map(packet));
+        Ok(())
     }
 }
 

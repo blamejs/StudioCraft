@@ -572,7 +572,10 @@ fn encode_video(
         next = after;
         last = Some(frame);
     }
-    session.flush(&mut out);
+    // The packets that came out before a failure are still written.
+    if let Err(e) = session.flush(&mut out) {
+        shared.fail(e.to_string());
+    }
     send_video(&mut out, shared, rate, &mut order);
 }
 
