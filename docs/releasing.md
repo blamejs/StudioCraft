@@ -74,6 +74,8 @@ commit. The draft is left unpublished, and the job fails, when any of these chec
   `.oci.sig` must both be there too. A missing architecture or format stops the release.
 - `release-signing-key.asc` holds the key in `LINUX_SIGNING_KEY`, and every `.asc` signature
   verifies with `gpgv` against that public key. The `publish` job does not import the private key.
+  The shared workflow's `linux` and `flatpak` jobs do: they import it in the job that builds the
+  packages, and run the built AppImage and `packaging/linux/flatpak-bundle.sh` after the import.
 - Every file matches `SHA256SUMS.txt` and `SHA3-512SUMS.txt`, and both list every file.
 - `rpmkeys --checksig` reports `signatures OK` for both `.rpm` packages, and both `.deb` packages
   carry a `_gpgorigin` signature that verifies.
@@ -81,7 +83,8 @@ commit. The draft is left unpublished, and the job fails, when any of these chec
   `.exe` in each `-portable.zip`.
 - `cargo xtask release-ready` counts at least 50 pull requests, and the notes it writes name no
   other product (the `cargo xtask brands` list). The command runs in the `release-ready` job, which
-  has no environment and no secrets except a read-only `GITHUB_TOKEN`. The `publish` job takes the
+  has no environment and no secrets except a read-only `GITHUB_TOKEN`, which only the step that runs
+  the built `xtask` receives. The `publish` job takes the
   notes from that job's artifact and does not check out or build any code.
 
 An unsigned or missing file is a fault in the build to fix before the alpha is published. A manual

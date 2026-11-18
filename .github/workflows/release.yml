@@ -40,7 +40,9 @@ jobs:
       contents: write
       packages: write
     # Pinned to craft-common-actions main at 2026-11-16T01:19Z, the commit ci.yml's gate uses; move
-    # the pin to take later changes.
+    # the pin to take later changes. The pin covers the workflow file only: the shared workflow calls
+    # its own actions (import-signing-key, sign-rpms, draft-release and others) at @main. Its linux
+    # and flatpak jobs import LINUX_SIGNING_KEY in the job that builds and packages the app.
     uses: storytold/craft-common-actions/.github/workflows/release.yml@59d1ecc4ea15ab59f8d60d38b147d5016c1f1385
     with:
       dry-run: ${{ github.event_name == 'schedule' || inputs.dry-run == true }}
@@ -72,7 +74,8 @@ jobs:
   # Adds SHA3-512SUMS.txt to the draft release. It hashes the files that the draft release lists in
   # SHA256SUMS.txt, as published (after the Linux packages are signed), and on the release branch
   # signs it with LINUX_SIGNING_KEY as the shared workflow signs SHA256SUMS.txt. The signing key is
-  # imported only for the signing step, and only gpg, gpgv and gh run while it is in the keyring.
+  # imported only for the signing step. The job checks out no code, and after the import only system
+  # tools (bash, gpg, gpgv, sed, cat and gh) and harden-runner's post step run.
   # The job's `fingerprint` output is the signing key's fingerprint, which the publish job checks
   # release-signing-key.asc against.
   checksums:
@@ -208,7 +211,6 @@ jobs:
       # cargo xtask release-ready lists the merged pull requests.
       pull-requests: read
     env:
-      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       GH_REPO: ${{ github.repository }}
       TAG: v${{ needs.release.outputs.version }}
     steps:
@@ -221,14 +223,20 @@ jobs:
           persist-credentials: false
           # The whole history and every tag, for the count since the previous alpha tag.
           fetch-depth: 0
+      # The build runs without GH_TOKEN, so build scripts and proc macros do not see the token.
+      - name: Build xtask
+        run: |
+          rustup toolchain install stable --profile minimal
+          cargo +stable build --locked -q -p xtask
       - name: Count the pull requests and write the notes
         id: count
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -uo pipefail
           out="$RUNNER_TEMP/release-ready"
           mkdir -p "$out"
-          rustup toolchain install stable --profile minimal
-          if cargo +stable run --locked -q -p xtask -- release-ready --ref "$GITHUB_SHA" --tag "$TAG" --notes "$out/notes.md"; then
+          if target/debug/xtask release-ready --ref "$GITHUB_SHA" --tag "$TAG" --notes "$out/notes.md"; then
             status=0
           else
             status=$?
