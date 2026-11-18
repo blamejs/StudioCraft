@@ -584,6 +584,55 @@ fn a_reader_refuses_tags_after_a_read_fails_partway() {
 }
 
 #[test]
+fn avcc_parameter_sets_must_fit_the_record() {
+    // One SPS of 3 bytes and one PPS of 2 bytes, then an extension byte.
+    let full = [1, 0x64, 0, 0x1F, 0xFF, 0xE1, 0, 3, 0x67, 0x64, 0x1F, 1, 0, 2, 0x68, 0xEE, 0xFD];
+    assert!(Body::AvcSequenceHeader(&full).size().is_ok());
+    let mut tag = vec![0x17, 0, 0, 0, 0];
+    tag.extend_from_slice(&full);
+    assert_eq!(parse_video(&tag).unwrap(), Video::AvcSequenceHeader(&full));
+    let cut: &[&[u8]] = &[
+        // An SPS is declared but its length is missing.
+        &[1, 0x64, 0, 0x1F, 0xFF, 0xE1, 0],
+        // The SPS runs past the end.
+        &[1, 0x64, 0, 0x1F, 0xFF, 0xE1, 0, 9, 0x67],
+        // The PPS count is missing.
+        &full[..11],
+        // The PPS runs past the end.
+        &full[..15],
+    ];
+    for avcc in cut {
+        assert!(matches!(Body::AvcSequenceHeader(avcc).size(), Err(Error::BadInput(_))), "{avcc:?}");
+        let mut tag = vec![0x17, 0, 0, 0, 0];
+        tag.extend_from_slice(avcc);
+        assert!(matches!(parse_video(&tag), Err(Error::Invalid(_))), "{avcc:?}");
+    }
+}
+
+/// Accepts writes, but its first flush fails.
+struct FlushFails(Vec<u8>);
+
+impl io::Write for FlushFails {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.0.extend_from_slice(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Err(io::ErrorKind::TimedOut.into())
+    }
+}
+
+#[test]
+fn a_failed_flush_breaks_the_writer() {
+    let mut w = Writer::new(FlushFails(Vec::new()), Header { audio: true, video: false }).unwrap();
+    w.write(0, &Body::AacRaw(&[0x21])).unwrap();
+    assert!(matches!(w.flush(), Err(Error::Io(_))));
+    assert!(w.is_broken());
+    assert!(matches!(w.write(1, &Body::AacRaw(&[0x21])), Err(Error::Broken)));
+}
+
+#[test]
 fn a_reader_does_not_reserve_a_hostile_tag_length() {
     let mut bytes = Header { audio: true, video: false }.bytes().to_vec();
     bytes.extend_from_slice(&[8, 0xFF, 0xFF, 0xFF, 0, 0, 0, 0, 0, 0, 0]);

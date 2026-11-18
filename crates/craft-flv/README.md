@@ -60,8 +60,9 @@ Each tag is checked before any of it is written, and a refused tag leaves the ou
 `annexb_to_nalus` refuses the same Annex B input and leaves its buffer as it was.
 `Writer::write` refuses:
 
-- an `avcC` shorter than 7 bytes, with a configurationVersion other than 1, or with NAL unit
-  lengths other than 4 bytes;
+- an `avcC` shorter than 7 bytes, with a configurationVersion other than 1, with NAL unit lengths
+  other than 4 bytes, or that ends inside a sequence or picture parameter set its counts declare
+  (`parse_video` refuses the same records);
 - an Annex B access unit that does not start with a start code or holds no NAL unit;
 - length-prefixed NAL units whose lengths are 0 or do not cover the data exactly;
 - a composition time outside -8 388 608 to 8 388 607 ms (a signed 24-bit field);
@@ -72,8 +73,8 @@ Each tag is checked before any of it is written, and a refused tag leaves the ou
   at the first NAL unit past the limit;
 - a negative timestamp, or one earlier than the last tag of the same type (`tag_header` refuses a
   negative timestamp too);
-- every tag after a write that failed partway through a tag (`Error::Broken`), since the output
-  then holds part of a tag. Start a new stream with a new `Writer`.
+- every tag after a write or flush that failed (`Error::Broken`), since the output may then hold
+  part of a tag. Start a new stream with a new `Writer`.
 
 `Reader` refuses a signature other than `FLV`, a version other than 1, set reserved bits, a
 DataOffset under 9 or over 65 536 (`MAX_DATA_OFFSET`), a first PreviousTagSize other than 0, a tag

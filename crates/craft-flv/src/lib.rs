@@ -299,9 +299,16 @@ impl<W: Write> Writer<W> {
         self.write(timestamp, &Body::Script(&data))
     }
 
-    /// Flushes the output.
+    /// Flushes the output. A failed flush may leave part of a tag at the destination, so it marks
+    /// the writer broken, as a failed write does.
     pub fn flush(&mut self) -> Result<(), Error> {
-        Ok(self.out.flush()?)
+        if self.broken {
+            return Err(Error::Broken);
+        }
+        self.out.flush().map_err(|e| {
+            self.broken = true;
+            Error::Io(e)
+        })
     }
 
     /// Tags written.

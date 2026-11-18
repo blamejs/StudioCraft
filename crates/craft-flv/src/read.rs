@@ -3,7 +3,7 @@
 use std::io::{self, Read};
 
 use crate::amf0::{self, Value};
-use crate::body::{CODEC_AVC, SOUND_FORMAT_AAC, nalus_problem};
+use crate::body::{CODEC_AVC, SOUND_FORMAT_AAC, avcc_problem, nalus_problem};
 use crate::{Error, HEADER_LEN, Header, TAG_HEADER_LEN, TagType};
 
 /// One tag read by [`Reader::next_tag`]. `data` is the tag's body, which is also the body of the
@@ -201,7 +201,10 @@ pub fn parse_video(data: &[u8]) -> Result<Video<'_>, Error> {
     let rest = &data[5..];
     match data[1] {
         0 if rest.is_empty() => Err(Error::Truncated("an AVC sequence header")),
-        0 => Ok(Video::AvcSequenceHeader(rest)),
+        0 => match avcc_problem(rest) {
+            Some(p) => Err(Error::Invalid(p)),
+            None => Ok(Video::AvcSequenceHeader(rest)),
+        },
         1 => match nalus_problem(rest) {
             Some(p) => Err(Error::Invalid(p)),
             None => Ok(Video::AvcNalus { key: frame_type == 1, composition_time: ct, data: rest }),

@@ -269,13 +269,44 @@ fn check_composition_time(ct: i32) -> Result<(), Error> {
 }
 
 fn check_avcc(avcc: &[u8]) -> Result<(), Error> {
+    avcc_problem(avcc).map_or(Ok(()), |p| Err(Error::BadInput(p)))
+}
+
+/// What is wrong with an AVCDecoderConfigurationRecord, or `None`: configurationVersion 1, 4-byte
+/// NAL unit lengths, and every sequence and picture parameter set its counts declare, each a 16-bit
+/// length and that many bytes, inside the record. Bytes after the picture parameter sets (the
+/// extension that some profiles add) are allowed.
+pub(crate) fn avcc_problem(avcc: &[u8]) -> Option<&'static str> {
     if avcc.len() < 7 || avcc[0] != 1 {
-        return Err(Error::BadInput("the avcC record is shorter than 7 bytes or its configurationVersion is not 1"));
+        return Some("the avcC record is shorter than 7 bytes or its configurationVersion is not 1");
     }
     if avcc[4] & 3 != 3 {
-        return Err(Error::BadInput("the avcC record does not use 4-byte NAL unit lengths"));
+        return Some("the avcC record does not use 4-byte NAL unit lengths");
     }
-    Ok(())
+    const CUT: &str = "the avcC record ends inside a parameter set it declares";
+    let mut pos = 6;
+    let skip_sets = |pos: &mut usize, count: u8| {
+        for _ in 0..count {
+            let len = match avcc.get(*pos..*pos + 2) {
+                Some(&[a, b]) => usize::from(u16::from_be_bytes([a, b])),
+                _ => return false,
+            };
+            *pos += 2 + len;
+            if *pos > avcc.len() {
+                return false;
+            }
+        }
+        true
+    };
+    if !skip_sets(&mut pos, avcc[5] & 0x1F) {
+        return Some(CUT);
+    }
+    let Some(&pps) = avcc.get(pos) else { return Some(CUT) };
+    pos += 1;
+    if !skip_sets(&mut pos, pps) {
+        return Some(CUT);
+    }
+    None
 }
 
 fn check_nalus(data: &[u8]) -> Result<(), Error> {
