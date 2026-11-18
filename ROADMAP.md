@@ -1,94 +1,85 @@
 # Roadmap
 
-## Working now
+This page lists what StudioCraft does today and what comes next. Each shipped item links to its
+description in [docs/features.md](docs/features.md).
 
-- Scenes, sources, scene items with move, resize, rotate, lock and visibility, and undo.
-- Built-in sources: color, image, text, media file, display capture, window capture, camera, audio
-  input and desktop audio.
-- Camera capture on Windows (Media Foundation), macOS (AVFoundation) and Linux (V4L2), with the
-  camera and its format (size, frame rate and pixel encoding) chosen in the source's Properties.
-- Audio input and desktop audio capture on Linux through the PipeWire sound server. The device
-  lists show PipeWire's devices with the default first.
-- Display and window capture on Linux through the desktop's screen-cast portal and PipeWire. The
-  display or window is chosen in the desktop's picker when the source starts.
-- Filters: color correction with white balance by temperature and tint, chroma key, color key,
-  crop and pad, image mask, scroll, sharpen, gain, noise gate, compressor, limiter and a
-  three-band equalizer.
-- Transitions: cut, fade, fade through a color and swipe, with an Easing setting on the fades and
-  the swipe. Studio mode with quick transitions.
-- The View › Scopes window: a waveform, an RGB parade, a histogram, and the YUV and HLS
-  vectorscopes of the program output.
-- Audio mixer with meters, faders and mute, and a sync offset of 0 to 5000 ms for each source's
-  audio (in the source's Properties window). The mixer measures the final mix's loudness
-  (momentary, short-term, integrated, loudness range and true peak); the window does not show it
-  yet.
-- Audio monitoring on Windows and macOS: each source is off, monitor only (left out of recordings
-  and streams) or monitor and output (in the source's Properties window), and monitored sources
-  play on the device chosen in Settings › Audio.
-- Recording to MKV with the built-in H.264 and AAC encoders, without ffmpeg (H.264 (built in) in
-  Settings › Output, with a Speed, Balanced or Quality preset).
-- The replay buffer: the built-in H.264 and AAC encoders keep the last 5 to 3600 seconds in memory,
-  within a memory limit of 32 to 16384 MB (Settings › Output), and File › Save Replay or a
-  shortcut writes them to an MKV file while the buffer keeps running.
-- Recording to MKV, MP4 or MOV, Lossless recording, and RTMP streaming, through an external ffmpeg.
-  The encoder's settings, such as the x264 and NVENC presets, are set in Settings › Output and
-  Settings › Stream.
-- Profiles, scene collections, rebindable shortcuts, the stats window, the control channel and the
-  MCP server.
-- MCP window tools when the server is connected to the app (`studiocraft-cli mcp --connect
-  <port>`): inspect, screenshot, click, drag, keys, typing, menus, dialog answers and quit.
-- Scene Collection › Import… and Export… for scene collection files.
-- Credits in Help › About StudioCraft, with a choice of username, display name or real name, and
-  the license texts.
-- Interface translations from StudioCraft's own catalogs in `crates/ui-egui/i18n/locales`, merged
-  with the shared `craft-i18n` catalogs when `CRAFT_I18N_DIR` is set, with a Language setting in
-  Settings › General. English, Simplified Chinese, Traditional Chinese, Arabic, Czech, Dutch, French, German, Hebrew, Italian, Japanese, Korean, Polish, Brazilian Portuguese, Russian, Spanish, Swedish, Turkish and Ukrainian are built in.
-  In Arabic and Hebrew the window runs right to left: the menus, output controls, dock headers and
-  status bar start at the right, and egui's submenus, scroll bars and collapsing headers mirror.
-- Help › Check for Updates…, a check at start (Settings › General › Check for updates at start, on
-  by default) and finishing an update the app installed itself, through `craft-update`.
-- The app icon in `assets/app-icon`: the window icon, the picture in the update prompt and the icon
-  of the menu entry the updater writes beside an AppImage.
-- A compact dark and light theme: 24-point controls and menu rows, 12-point body text, menus sized
-  to their content, and a focus ring for keyboard navigation.
-- The output controls on the menu row: an Edit and Studio switch, the transition picker and its
-  duration, and Record and Go Live with their timers. A narrow window moves the transition picker
-  behind an icon button and leaves out the buttons' labels.
-- The dock strip: Scenes, Sources and Audio Mixer under 24-point headers that hold each dock's
-  actions, separated by 1-point dividers. The strip is 200 points tall, or 30% of the window when
-  that is less. Dragging its top edge outside the header actions, or a divider, resizes it, and a
-  right-click on a dock's title moves the dock left or right, or undocks it into a window of its
-  own. The sizes, the order and the undocked windows' places are kept until Docks › Reset Docks,
-  and Docks › Save Dock Layout… keeps them under a name to put back later from Docks › Layouts.
-- Interface fonts through `craft-ui`'s font stack: Inter for text, Inter SemiBold for titles and
-  JetBrains Mono for readouts, then the craft-fonts faces when `CRAFT_FONTS_DIR` is set, then
-  egui's built-in faces. The menus' check and radio marks draw with or without `CRAFT_FONTS_DIR`.
-- Settings › Video › Hardware acceleration: the graphics adapter (Automatic, Power saving,
-  Software or a listed adapter), used from the next start, with a notice when the chosen adapter
-  is missing or the app fell back to software. After a device loss the app starts again on a new
-  device, and after 3 losses in 10 minutes it draws in software.
-- The Hardware video encoder for recordings and streams runs the hardware encoder set in Settings ›
-  Video › Hardware acceleration. Automatic tests each candidate with a one-frame encode, in an order
-  set by the graphics adapter's vendor, and uses x264 when none works. NVENC, AMF and Quick Sync
-  offer HEVC and AV1 as well, and VideoToolbox and VA-API are listed.
-- NVIDIA NVENC H.264 and HEVC (built in) run through the NVIDIA driver in StudioCraft's own
-  process, on Windows and 64-bit Linux, for MKV recordings without `ffmpeg`. For an MKV recording
-  the Hardware encoder tests NVENC in the process and records with the built-in encoder.
-- Windows Media Foundation H.264 and HEVC (built in) run the hardware encoders Media Foundation
-  lists in StudioCraft's own process, for MKV recordings without `ffmpeg` on Windows. For an MKV
-  recording the Hardware encoder tests them in the process, as it tests NVENC.
-- Apple VideoToolbox H.264 and HEVC (built in) run the VideoToolbox hardware encoders in
-  StudioCraft's own process, for MKV recordings without `ffmpeg` on macOS. For an MKV recording the
-  Hardware encoder tests them in the process, as it tests NVENC.
+## Shipped
+
+### Sources
+
+- Scenes, sources and scene items can be moved, resized, rotated, locked, hidden and undone ([Sources](docs/features.md#sources)).
+- Color, image, text, media file, display capture, window capture, camera, audio input and audio output sources are built in ([Built-in sources](docs/features.md#built-in-sources)).
+- Cameras are captured on Windows (Media Foundation), macOS (AVFoundation) and Linux (V4L2), with the camera and its format chosen in the source's Properties ([Camera](docs/features.md#camera)).
+- Audio input and output are captured on Linux through the PipeWire sound server, which lists its devices with the default first ([Audio capture on Linux](docs/features.md#audio-capture-on-linux)).
+- Displays and windows are captured on Linux through the desktop's screen-cast portal and PipeWire ([Display and window capture on Linux](docs/features.md#display-and-window-capture-on-linux)).
+
+### Filters
+
+- Color correction with white balance, chroma key, color key, crop and pad, image mask, scroll, sharpen, gain, noise gate, compressor, limiter and a three-band equalizer are built in ([Filters](docs/features.md#filters)).
+
+### Transitions
+
+- Cut, fade, fade through a color and swipe transitions are built in, with an Easing setting on the fades and the swipe ([Transitions](docs/features.md#transitions)).
+- Studio mode sends the preview to the program with a transition or a quick cut or fade ([Studio mode](docs/features.md#studio-mode)).
+
+### Audio
+
+- The audio mixer has meters, faders and mute, and each source has a sync offset of 0 to 5000 ms ([Audio](docs/features.md#audio)).
+- The mixer measures the final mix's loudness, and the window does not show the readings yet ([Audio](docs/features.md#audio)).
+- Audio monitoring works on Windows and macOS, with each source off, monitor only or monitor and output ([Audio](docs/features.md#audio)).
+
+### Recording
+
+- MKV files are recorded with the built-in H.264 and AAC encoders without ffmpeg ([Encoders](docs/features.md#encoders)).
+- MKV, MP4 and MOV files, including recordings at the Lossless quality level, are recorded through an external ffmpeg ([When `ffmpeg` is needed](docs/features.md#when-ffmpeg-is-needed)).
+- The replay buffer keeps the last 5 to 3600 seconds in memory and saves them to an MKV file while it keeps running ([Replay buffer](docs/features.md#replay-buffer)).
+
+### Streaming
+
+- Streams go to an RTMP server through an external ffmpeg, with the encoder's settings in Settings › Stream ([Streaming](docs/features.md#streaming)).
+
+### Hardware acceleration
+
+- Settings › Video › Hardware acceleration chooses the graphics adapter, and the app recovers from a device loss ([Hardware acceleration](docs/features.md#hardware-acceleration)).
+- The compositor converts the program to NV12 on the GPU for the encoders (`craft-gpu-yuv`) ([Hardware acceleration](docs/features.md#hardware-acceleration)).
+- The Hardware video encoder tests each hardware encoder with one frame and picks one automatically (`craft-hwenc`) ([Hardware acceleration](docs/features.md#hardware-acceleration)).
+- NVIDIA NVENC, Windows Media Foundation and Apple VideoToolbox H.264 and HEVC (built in) record MKV files in StudioCraft's own process (`craft-hwenc-native`) ([Hardware acceleration](docs/features.md#hardware-acceleration)).
+
+### Interface
+
+- A compact dark and light theme has a focus ring for keyboard navigation ([Theme](docs/features.md#theme)).
+- The output controls sit on the menu row and adapt to a narrow window ([Menu row and output controls](docs/features.md#menu-row-and-output-controls)).
+- The Scenes, Sources and Audio Mixer docks can be resized, reordered, undocked and saved as named layouts ([Docks](docs/features.md#docks)).
+- The interface fonts come from `craft-ui`'s font stack ([Fonts](docs/features.md#fonts)).
+- Nineteen interface languages are built in, and Arabic and Hebrew run right to left ([Languages](docs/features.md#languages)).
+- Profiles and scene collections can be switched, and Scene Collection › Import… and Export… read and write collection files ([Profiles and scene collections](docs/features.md#profiles-and-scene-collections)).
+- The stats window and View › Scopes show the program's timing and levels ([Stats and scopes](docs/features.md#stats-and-scopes)).
+- Help › Check for Updates…, the check at start and finishing an installed update run through `craft-update` ([Help and updates](docs/features.md#help-and-updates)).
+- Help › About StudioCraft shows the credits, with a choice of username, display name or real name, and the license texts ([Help and updates](docs/features.md#help-and-updates)).
+- The app icon in `assets/app-icon` is the window icon, the picture in the update prompt and the icon of the AppImage menu entry ([Help and updates](docs/features.md#help-and-updates)).
+
+### Hotkeys
+
+- Shortcuts can be changed in Settings › Hotkeys ([Hotkeys](docs/features.md#hotkeys)).
+
+### Settings
+
+- The Settings window has General, Stream, Output, Audio, Video and Hotkeys tabs ([Settings](docs/features.md#settings)).
+
+### Control and automation
+
+- The control channel and the Model Context Protocol (MCP) server run every command from outside the window ([Control and automation](docs/features.md#control-and-automation)).
+- When the MCP server is connected to the app (`studiocraft-cli mcp --connect <port>`), it can inspect, screenshot, click, drag, press keys, type, use menus, answer dialogs and quit ([Control and automation](docs/features.md#control-and-automation)).
 
 ## Next
 
-1. **Translations.** A `studiocraft.tsv` catalog for every other locale craft-i18n has, and
-   right-to-left layout for the dock order, the order of the menu titles (egui's `MenuBar` lays
-   them out left to right) and the Settings, Properties and Filters windows.
-2. **Multiple outputs.** Several streams at once, and a virtual camera. `craft-flv` writes and
-   reads the FLV tags and AMF0 values an RTMP stream carries.
-3. **Web build.** The model and plugin crates already build for WebAssembly; a browser editor for
+1. **Translations.** A `studiocraft.tsv` catalog will be added for every other locale craft-i18n
+   has. Right-to-left layout will extend to the dock order, the order of the menu titles (egui's
+   `MenuBar` lays them out left to right) and the Settings, Properties and Filters windows.
+2. **Multiple outputs (in progress).** StudioCraft will stream to several destinations at once and
+   offer a virtual camera. `craft-flv` already writes and reads the FLV tags and AMF0 values an
+   RTMP stream carries.
+3. **Web build.** The model and plugin crates already build for WebAssembly. A browser editor for
    scene collections is the first step.
-4. **Hardware acceleration.** Color conversion and scaling on the GPU, hardware encoders checked
-   and chosen automatically, and frames that stay on the GPU from capture to the encoder.
+4. **Frames on the GPU from capture to the encoder.** Captured frames will stay on the GPU until
+   the encoder reads them.
