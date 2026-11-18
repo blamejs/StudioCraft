@@ -11,6 +11,7 @@ workspace = true
 
 [dependencies]
 crossbeam-queue = { workspace = true }
+crossbeam-utils = { workspace = true }
 arc-swap = { workspace = true }
 
 [dev-dependencies]

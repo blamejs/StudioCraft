@@ -43,6 +43,8 @@ log = "0.4"
 base64 = "0.22"
 # Bounded lock-free queues between the capture, compositor, mixer and encoder threads.
 crossbeam-queue = "0.3"
+# Cache-line padding for counters that two threads write.
+crossbeam-utils = "0.8"
 # The subscriber list a packet fan-out reads without a lock.
 arc-swap = "1"
 # Tests and benches only: a global allocator that counts allocations.

@@ -95,7 +95,7 @@ proptest! {
         video in any::<bool>(),
         ops in prop::collection::vec(op(), 0..400),
     ) {
-        let cfg = RingConfig { slots, bytes, span, video };
+        let cfg = RingConfig { slots, bytes, span, video, wake_every: 1 };
         let mut fanout = Fanout::new();
         let mut r = fanout.subscribe(cfg).unwrap();
         let mut model = Model::new(cfg);

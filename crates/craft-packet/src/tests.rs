@@ -1,3 +1,5 @@
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
@@ -6,7 +8,12 @@ use super::*;
 
 /// A ring with room for `slots` packets and plenty of bytes and span.
 fn slots(slots: usize) -> RingConfig {
-    RingConfig { slots, bytes: 1 << 30, span: i64::MAX, video: true }
+    RingConfig { slots, bytes: MAX_RING_BYTES, span: i64::MAX, video: true, wake_every: 1 }
+}
+
+/// A ring of `slots` packets and `bytes` bytes, with the other fields as in [`slots`].
+fn sized(slots: usize, bytes: usize) -> RingConfig {
+    RingConfig { bytes, ..self::slots(slots) }
 }
 
 /// A test stream: frame `i` is a video packet at `i * 10` ms, a keyframe every `gop` frames, then
@@ -67,11 +74,57 @@ fn share_moves_the_buffer_in_and_hands_the_old_one_back() {
     assert_eq!(p.data().as_ptr(), at, "the encoder's buffer is not copied");
     assert!(buf.is_empty());
     drop(p);
-    let mut next = vec![1, 2, 3];
-    let q = pool.share(&mut next, Info::audio(1)).unwrap();
+    let mut next = vec![1u8; 4096];
+    let q = pool.share(&mut next, Info::video(1, 1, false)).unwrap();
     assert_eq!(next.as_ptr(), at, "the free packet's old buffer comes back");
     assert!(next.is_empty() && next.capacity() >= 4096);
-    assert_eq!(q.data(), [1, 2, 3]);
+    assert_eq!(q.data(), [1u8; 4096]);
+}
+
+#[test]
+fn share_hands_the_encoder_back_a_buffer_of_its_size() {
+    // Video swapped in with `share` and audio copied with `share_copy` share one pool.
+    let mut pool = PacketPool::new(4, 0).unwrap();
+    let mut video = vec![0u8; 12_500];
+    for i in 0..50 {
+        video.resize(12_500, 1);
+        let v = pool.share(&mut video, Info::video(i, i, false)).unwrap();
+        let a = pool.share_copy(&[2; 426], Info::audio(i)).unwrap();
+        assert!(a.capacity() <= 4 * 426, "an audio packet keeps a buffer of {} bytes", a.capacity());
+        drop((v, a));
+        if i > 0 {
+            assert!(video.capacity() >= 12_500, "frame {i}: the encoder got back a buffer of {} bytes", video.capacity());
+        }
+    }
+}
+
+#[test]
+fn a_pool_of_empty_packets_takes_a_packet_of_the_largest_size() {
+    // Every packet the pool can make exists and has no buffer.
+    let mut pool = PacketPool::new(MAX_SLOTS, 0).unwrap();
+    let p = pool.share_copy(&vec![5; MAX_BUFFER_BYTES], Info::video(0, 0, true)).unwrap();
+    assert_eq!(p.len(), MAX_BUFFER_BYTES);
+    assert_eq!(pool.made(), MAX_SLOTS);
+}
+
+#[test]
+fn a_packet_keeps_no_buffer_much_larger_than_its_bytes() {
+    let mut pool = PacketPool::new(1, 0).unwrap();
+    drop(pool.share_copy(&vec![1; 400_000], Info::video(0, 0, true)).unwrap());
+    for i in 0..100 {
+        let a = pool.share_copy(&[2; 426], Info::audio(i)).unwrap();
+        assert!(a.capacity() <= 4 * 426, "an audio packet keeps a buffer of {} bytes", a.capacity());
+    }
+    // An encoder buffer far larger than its packet is copied from, and the encoder keeps it.
+    let mut enc = Vec::with_capacity(3 << 20);
+    enc.extend_from_slice(&[3; 20_000]);
+    let at = enc.as_ptr();
+    let v = pool.share(&mut enc, Info::video(1, 1, false)).unwrap();
+    assert!(v.capacity() <= 4 * 20_000, "a 20 000-byte packet keeps a buffer of {} bytes", v.capacity());
+    assert_eq!(v.data(), [3; 20_000]);
+    assert_eq!(enc.as_ptr(), at);
+    assert!(enc.is_empty() && enc.capacity() == 3 << 20);
+    assert!(pool.held_bytes() < 1 << 20, "the pool holds {} bytes", pool.held_bytes());
 }
 
 #[test]
@@ -88,6 +141,26 @@ fn the_pool_reuses_packets_once_they_are_dropped() {
     assert_eq!(pool.free(), 0);
     drop(held);
     assert_eq!(pool.free(), 5);
+}
+
+#[test]
+fn share_copy_finds_a_fitting_free_buffer_behind_smaller_ones() {
+    let mut pool = PacketPool::new(1, 0).unwrap();
+    // One free 1000-byte buffer behind nine free 600-byte buffers, all in the 512 to 1023 list.
+    let mut fitting = vec![0u8; 1000];
+    let fit = pool.share(&mut fitting, Info::data(0)).unwrap();
+    let small: Vec<_> = (1..10)
+        .map(|i| {
+            let mut buf = vec![0u8; 600];
+            pool.share(&mut buf, Info::data(i)).unwrap()
+        })
+        .collect();
+    drop(fit);
+    drop(small);
+    let (made, held) = (pool.made(), pool.held_bytes());
+    let p = pool.share_copy(&[1; 1000], Info::data(10)).unwrap();
+    assert_eq!(p.data(), [1; 1000]);
+    assert_eq!((pool.made(), pool.held_bytes()), (made, held), "the pool used the free buffer instead of allocating");
 }
 
 #[test]
@@ -116,12 +189,12 @@ fn the_pool_refuses_buffers_past_its_byte_limit() {
     let per = MAX_POOL_BYTES / 16;
     let held: Vec<_> = (0..16)
         .map(|i| {
-            let mut buf = Vec::with_capacity(per);
+            let mut buf = vec![0u8; per];
             pool.share(&mut buf, Info::data(i)).unwrap()
         })
         .collect();
     assert_eq!(pool.held_bytes(), MAX_POOL_BYTES);
-    let mut extra = Vec::with_capacity(per);
+    let mut extra = vec![0u8; per];
     assert_eq!(pool.share(&mut extra, Info::data(16)).unwrap_err(), ShareError::PoolFull);
     assert_eq!(extra.capacity(), per);
     assert_eq!(pool.share_copy(&[1], Info::data(16)).unwrap_err(), ShareError::PoolFull);
@@ -130,20 +203,21 @@ fn the_pool_refuses_buffers_past_its_byte_limit() {
 }
 
 #[test]
-fn a_full_pool_uses_a_free_packet_whose_buffer_is_large_enough() {
+fn a_full_pool_releases_free_buffers_to_make_room() {
     let mut pool = PacketPool::new(1, 0).unwrap();
-    let mut small = Vec::with_capacity(1);
-    let mut held = vec![pool.share(&mut small, Info::data(0)).unwrap()];
-    for i in 0..16 {
-        let mut big = Vec::with_capacity(if i == 15 { MAX_BUFFER_BYTES - 1 } else { MAX_BUFFER_BYTES });
-        held.push(pool.share(&mut big, Info::data(1)).unwrap());
-    }
+    let held: Vec<_> = (0..16)
+        .map(|i| {
+            let mut big = vec![0u8; MAX_BUFFER_BYTES];
+            pool.share(&mut big, Info::data(i)).unwrap()
+        })
+        .collect();
     assert_eq!(pool.held_bytes(), MAX_POOL_BYTES);
     drop(held);
-    // The next free packet has a 1-byte buffer and cannot grow; the one after it can take 4 bytes.
-    let p = pool.share_copy(&[7; 4], Info::data(2)).unwrap();
+    // No free buffer is of a 4-byte packet's size, and a new one would pass the limit, so the
+    // pool releases one large free buffer.
+    let p = pool.share_copy(&[7; 4], Info::data(16)).unwrap();
     assert_eq!(p.data(), [7; 4]);
-    assert_eq!(pool.held_bytes(), MAX_POOL_BYTES);
+    assert_eq!(pool.held_bytes(), MAX_POOL_BYTES - MAX_BUFFER_BYTES + 64);
 }
 
 #[test]
@@ -266,7 +340,7 @@ fn audio_and_video_stay_aligned_across_a_drop() {
 #[test]
 fn the_byte_cap_drops_like_the_packet_cap() {
     let mut f = Fanout::new();
-    let mut r = f.subscribe(RingConfig { slots: 100, bytes: 30, span: i64::MAX, video: true }).unwrap();
+    let mut r = f.subscribe(sized(100, 30)).unwrap();
     let mut s = Stream::new(100);
     // 14 bytes a frame: two frames fit in 30 bytes, the third frame's video packet does not.
     s.publish(&mut f, 3);
@@ -281,7 +355,7 @@ fn the_byte_cap_drops_like_the_packet_cap() {
 #[test]
 fn an_empty_ring_takes_a_packet_larger_than_its_byte_cap() {
     let mut f = Fanout::new();
-    let mut r = f.subscribe(RingConfig { slots: 4, bytes: 8, span: i64::MAX, video: true }).unwrap();
+    let mut r = f.subscribe(sized(4, 8)).unwrap();
     let mut pool = PacketPool::new(1, 0).unwrap();
     let big = pool.share_copy(&[0; 100], Info::video(0, 0, true)).unwrap();
     assert_eq!(f.publish(&big), 1);
@@ -291,7 +365,7 @@ fn an_empty_ring_takes_a_packet_larger_than_its_byte_cap() {
 #[test]
 fn the_receiver_skips_stale_packets_to_the_next_keyframe() {
     let mut f = Fanout::new();
-    let mut r = f.subscribe(RingConfig { slots: 1000, bytes: 1 << 20, span: 100, video: true }).unwrap();
+    let mut r = f.subscribe(RingConfig { span: 100, ..sized(1000, 1 << 20) }).unwrap();
     let mut s = Stream::new(10);
     // 30 frames span 290 ms; the receiver falls behind by more than 100 ms.
     s.publish(&mut f, 30);
@@ -321,7 +395,7 @@ fn a_new_subscriber_starts_at_the_next_keyframe_without_counting_drops() {
 #[test]
 fn an_audio_only_ring_resumes_at_any_audio_packet() {
     let mut f = Fanout::new();
-    let mut r = f.subscribe(RingConfig { slots: 2, bytes: 1 << 20, span: i64::MAX, video: false }).unwrap();
+    let mut r = f.subscribe(RingConfig { video: false, ..sized(2, 1 << 20) }).unwrap();
     let mut pool = PacketPool::new(4, 8).unwrap();
     for t in 0..3 {
         f.publish(&pool.share_copy(&[0; 4], Info::audio(t)).unwrap());
@@ -389,15 +463,34 @@ fn unsubscribe_closes_the_receiver_after_its_ring_drains() {
 }
 
 #[test]
+fn a_removed_subscriber_delivers_its_queued_packets_while_others_go_on() {
+    let mut f = Fanout::new();
+    let control = f.control();
+    let mut gone = f.subscribe(RingConfig { span: 100, ..sized(64, 1 << 20) }).unwrap();
+    let _stays = f.subscribe(slots(64)).unwrap();
+    let mut s = Stream::new(5);
+    s.publish(&mut f, 3);
+    assert!(control.unsubscribe(gone.id()));
+    // The stream goes on far past the removed ring's span.
+    s.publish(&mut f, 30);
+    assert_eq!(drain(&mut gone).len(), 6, "the packets queued before the removal are delivered");
+    assert_eq!(gone.stats().skipped_packets, 0);
+}
+
+#[test]
 fn no_packet_follows_closed() {
     let f = Fanout::new();
     let control = f.control();
     let mut r = f.subscribe(slots(8)).unwrap();
     assert!(control.unsubscribe(r.id()));
     assert_eq!(r.try_recv().unwrap_err(), RecvError::Closed);
-    let [v, _] = Stream::new(1).frame();
-    r.push_late(v);
+    let mut pool = PacketPool::new(1, 64).unwrap();
+    r.push_late(pool.share_copy(&[1; 10], Info::video(0, 0, true)).unwrap());
+    assert_eq!(pool.free(), 0);
     assert_eq!(r.try_recv().unwrap_err(), RecvError::Closed);
+    assert_eq!(pool.free(), 1, "the late packet goes back to the pool while the receiver lives");
+    let st = r.stats();
+    assert_eq!((st.queued_packets, st.discarded_packets, st.discarded_bytes), (0, 1, 10));
     assert_eq!(r.recv_timeout(Duration::from_secs(60)).unwrap_err(), RecvError::Closed);
 }
 
@@ -429,6 +522,16 @@ fn a_parked_receiver_wakes_for_a_packet() {
 }
 
 #[test]
+fn a_batching_receiver_parks_at_most_one_batch_wait() {
+    let hour = Duration::from_secs(3600);
+    // The producer does not wake a receiver for fewer than `wake_every` packets, so one that
+    // batches looks at its ring again after `BATCH_WAIT` to take a partial batch.
+    assert_eq!(ring::park_for(&RingConfig { wake_every: 3, ..slots(8) }, hour), BATCH_WAIT);
+    assert_eq!(ring::park_for(&RingConfig { wake_every: 3, ..slots(8) }, Duration::from_millis(5)), Duration::from_millis(5));
+    assert_eq!(ring::park_for(&slots(8), hour), hour, "a receiver woken for each packet parks for its whole timeout");
+}
+
+#[test]
 fn recv_timeout_returns_when_the_time_is_up() {
     let f = Fanout::new();
     let mut r = f.subscribe(slots(8)).unwrap();
@@ -456,9 +559,186 @@ fn bad_ring_sizes_are_refused() {
     assert_eq!(f.subscribe(RingConfig { bytes: 0, ..ok }).unwrap_err(), ConfigError::NoBytes);
     assert_eq!(f.subscribe(RingConfig { span: 0, ..ok }).unwrap_err(), ConfigError::NoSpan(0));
     assert_eq!(f.subscribe(RingConfig { span: -5, ..ok }).unwrap_err(), ConfigError::NoSpan(-5));
-    assert_eq!(f.subscribe(RingConfig { slots: MAX_SLOTS + 1, ..ok }).unwrap_err(), ConfigError::TooManySlots(MAX_SLOTS + 1));
-    assert!(f.subscribe(RingConfig { slots: MAX_SLOTS, ..ok }).is_ok());
+    assert_eq!(f.subscribe(RingConfig { slots: MAX_RING_SLOTS + 1, ..ok }).unwrap_err(), ConfigError::TooManyRingSlots(MAX_RING_SLOTS + 1));
+    assert!(f.subscribe(RingConfig { slots: MAX_RING_SLOTS, ..ok }).is_ok());
+    assert_eq!(f.subscribe(RingConfig { bytes: MAX_RING_BYTES + 1, ..ok }).unwrap_err(), ConfigError::TooManyRingBytes(MAX_RING_BYTES + 1));
+    assert_eq!(f.subscribe(RingConfig { wake_every: 0, ..ok }).unwrap_err(), ConfigError::BadWake(0));
+    assert_eq!(f.subscribe(RingConfig { wake_every: 2, ..ok }).unwrap_err(), ConfigError::BadWake(2));
     assert_eq!(f.subscribers(), 0);
+}
+
+#[test]
+fn a_ring_the_pool_cannot_back_is_refused() {
+    // Ten minutes of a 6000 kb/s stream: more packets than one ring may hold.
+    let rates = StreamRates { video_packets_per_second: 60, audio_packets_per_second: 47, bits_per_second: 6_000_000, ticks_per_second: 1000 };
+    let cfg = RingConfig::for_stream(&rates, 600);
+    assert_eq!((cfg.slots, cfg.bytes), (64_200, 675_000_000));
+    assert_eq!(cfg.check(), Err(ConfigError::TooManyRingSlots(64_200)));
+    assert_eq!(RingConfig { slots: 1000, ..cfg }.check(), Err(ConfigError::TooManyRingBytes(675_000_000)));
+    assert_eq!(Fanout::new().subscribe(cfg).unwrap_err(), ConfigError::TooManyRingSlots(64_200));
+}
+
+#[test]
+fn a_stalled_subscriber_never_starves_the_pool_for_the_others() {
+    let mut f = Fanout::new();
+    // Two stalled rings that together hold every packet the pool can make: the second subscribes
+    // once the first is full, so they hold different packets.
+    let mut stalled = vec![f.subscribe(slots(MAX_RING_SLOTS)).unwrap()];
+    let mut healthy = f.subscribe(slots(8)).unwrap();
+    let mut pool = PacketPool::new(1, 0).unwrap();
+    let total = MAX_SLOTS + 1000;
+    let mut got = 0;
+    for i in 0..total as i64 {
+        if i == MAX_RING_SLOTS as i64 {
+            stalled.push(f.subscribe(slots(MAX_RING_SLOTS)).unwrap());
+        }
+        let p = f.share_copy(&mut pool, &[], Info::video(i, i, true)).unwrap();
+        f.publish(&p);
+        drop(p);
+        while healthy.try_recv().is_ok() {
+            got += 1;
+        }
+    }
+    assert_eq!(got, total, "the healthy subscriber got every packet");
+    assert!(stalled.iter().any(|r| r.stats().discarded_packets > 0), "a stalled ring was emptied");
+    assert_eq!(healthy.stats().discarded_packets, 0);
+    assert!(pool.made() <= MAX_SLOTS);
+}
+
+#[test]
+fn a_full_pool_never_empties_a_ring_of_another_pools_packets() {
+    let mut f = Fanout::new();
+    let stalled = f.subscribe(slots(8)).unwrap();
+    let mut other = PacketPool::new(1, 0).unwrap();
+    f.publish(&other.share_copy(&[1; 10], Info::video(0, 0, true)).unwrap());
+    let mut full = PacketPool::new(MAX_SLOTS, 0).unwrap();
+    let held: Vec<_> = (0..MAX_SLOTS).map(|i| full.share_copy(&[], Info::data(i as i64)).unwrap()).collect();
+    assert_eq!(f.share_copy(&mut full, &[2], Info::data(0)).unwrap_err(), ShareError::PoolFull);
+    let st = stalled.stats();
+    assert_eq!((st.queued_packets, st.discarded_packets), (1, 0), "the other pool's packet stays queued");
+    drop(held);
+    assert!(f.share_copy(&mut full, &[2], Info::data(0)).is_ok());
+}
+
+#[test]
+fn relief_stops_when_emptying_a_ring_frees_nothing_in_the_pool() {
+    let mut f = Fanout::new();
+    let stalled = f.subscribe(slots(8)).unwrap();
+    let keeping_up = f.subscribe(slots(64)).unwrap();
+    let also_keeping_up = f.subscribe(slots(64)).unwrap();
+    let mut pool = PacketPool::new(MAX_SLOTS, 0).unwrap();
+    // The caller keeps a clone of every packet, so emptying a ring returns none to the pool.
+    let held: Vec<_> = (0..MAX_SLOTS).map(|i| pool.share_copy(&[1], Info::video(i as i64, i as i64, true)).unwrap()).collect();
+    for p in held.iter().take(8) {
+        f.publish(p);
+    }
+    for p in held.iter().skip(8).take(2) {
+        assert!(also_keeping_up.offer_only_here(p));
+    }
+    assert_eq!(f.share_copy(&mut pool, &[2], Info::data(0)).unwrap_err(), ShareError::PoolFull);
+    assert_eq!(stalled.stats().discarded_packets, 8, "the full ring was emptied");
+    assert_eq!(also_keeping_up.stats().discarded_packets, 10, "then the fullest ring that keeps up");
+    assert_eq!(keeping_up.stats().queued_packets, 8, "no further ring is emptied once a flush frees nothing");
+    drop(held);
+}
+
+#[test]
+fn relief_goes_on_while_another_stalled_ring_holds_the_same_packets() {
+    let mut f = Fanout::new();
+    let a = f.subscribe(slots(8)).unwrap();
+    let b = f.subscribe(slots(8)).unwrap();
+    let mut pool = PacketPool::new(MAX_SLOTS, 0).unwrap();
+    let mut held: Vec<_> = (0..MAX_SLOTS).map(|i| pool.share_copy(&[1], Info::video(i as i64, i as i64, true)).unwrap()).collect();
+    // Both stalled rings hold clones of the first 8 packets; the caller holds the rest.
+    for p in held.drain(..8) {
+        f.publish(&p);
+    }
+    let p = f.share_copy(&mut pool, &[2], Info::data(0)).unwrap();
+    assert_eq!(p.data(), [2]);
+    assert_eq!((a.stats().discarded_packets, b.stats().discarded_packets), (8, 8));
+    drop(held);
+}
+
+#[test]
+fn the_producer_wakes_a_parked_receiver_after_wake_every_packets() {
+    let mut f = Fanout::new();
+    let r = f.subscribe(RingConfig { wake_every: 3, ..slots(8) }).unwrap();
+    let m = r.monitor();
+    let mut s = Stream::new(1);
+    m.set_waiting();
+    let [v, a] = s.frame();
+    f.publish(&v);
+    f.publish(&a);
+    assert_eq!(m.stats().wakes, 0);
+    assert!(m.is_waiting());
+    let [v, _] = s.frame();
+    f.publish(&v);
+    assert_eq!(m.stats().wakes, 1);
+    assert!(!m.is_waiting());
+}
+
+#[test]
+fn a_ring_full_by_bytes_wakes_its_parked_receiver() {
+    let mut f = Fanout::new();
+    // 14 bytes a frame and room for 20: the second frame's video packet overflows the ring.
+    let r = f.subscribe(RingConfig { wake_every: 4, ..sized(8, 20) }).unwrap();
+    let m = r.monitor();
+    let mut s = Stream::new(1);
+    m.set_waiting();
+    s.publish(&mut f, 1);
+    assert_eq!(m.stats().wakes, 0);
+    let [v, _] = s.frame();
+    f.publish(&v);
+    assert_eq!(m.stats().wakes, 1);
+}
+
+#[test]
+fn counters_never_show_more_delivered_than_accepted() {
+    const FRAMES: usize = 50_000;
+    let mut f = Fanout::new();
+    let mut r = f.subscribe(slots(64)).unwrap();
+    let m = r.monitor();
+    let reader = thread::spawn(move || while r.recv_timeout(Duration::from_secs(60)).is_ok() {});
+    let done = Arc::new(AtomicBool::new(false));
+    let watching = Arc::clone(&done);
+    let watcher = thread::spawn(move || {
+        let mut bad = 0u64;
+        let mut reads = 0u64;
+        while !watching.load(Ordering::Acquire) {
+            let st = m.stats();
+            reads += 1;
+            if st.delivered_packets + st.skipped_packets + st.discarded_packets > st.accepted_packets
+                || st.delivered_bytes + st.skipped_bytes + st.discarded_bytes > st.accepted_bytes
+            {
+                bad += 1;
+            }
+        }
+        (bad, reads)
+    });
+    let mut s = Stream::new(30);
+    s.publish(&mut f, FRAMES);
+    drop(f);
+    reader.join().unwrap();
+    done.store(true, Ordering::Release);
+    let (bad, reads) = watcher.join().unwrap();
+    assert!(reads > 0);
+    assert_eq!(bad, 0, "{bad} of {reads} reads showed more delivered than accepted");
+}
+
+#[test]
+fn a_removed_ring_is_freed_off_the_producer_thread() {
+    let f = Fanout::new();
+    let control = f.control();
+    let r = f.subscribe(slots(8)).unwrap();
+    let ring = r.ring_weak();
+    // The producer is reading the list, as `publish` does, when the receiver is dropped.
+    let held = f.hold_list();
+    drop(r);
+    drop(held);
+    assert!(ring.upgrade().is_some(), "the producer's read of the list freed the ring");
+    // The next change to the list, on a thread that is not the producer's, frees it.
+    let _other = control.subscribe(slots(8)).unwrap();
+    assert!(ring.upgrade().is_none());
 }
 
 #[test]
@@ -489,14 +769,14 @@ fn for_stream_saturates_and_check_refuses_rates_too_large() {
     let cfg = RingConfig::for_stream(&rates, u32::MAX);
     assert_eq!(cfg.span, i64::MAX);
     assert!(cfg.bytes > 0);
-    assert_eq!(cfg.check(), Err(ConfigError::TooManySlots(cfg.slots)));
+    assert_eq!(cfg.check(), Err(ConfigError::TooManyRingSlots(cfg.slots)));
 }
 
 #[test]
 fn for_stream_sizes_three_seconds_of_a_6000_kbps_stream() {
     let rates = StreamRates { video_packets_per_second: 60, audio_packets_per_second: 47, bits_per_second: 6_160_000, ticks_per_second: 1000 };
     let cfg = RingConfig::for_stream(&rates, 3);
-    assert_eq!(cfg, RingConfig { slots: 321, bytes: 3_465_000, span: 3000, video: true });
+    assert_eq!(cfg, RingConfig { slots: 321, bytes: 3_465_000, span: 3000, video: true, wake_every: 3 });
     let audio = StreamRates { video_packets_per_second: 0, ..rates };
     assert!(!RingConfig::for_stream(&audio, 3).video);
 }

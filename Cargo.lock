@@ -1601,6 +1601,7 @@ dependencies = [
  "arc-swap",
  "criterion",
  "crossbeam-queue",
+ "crossbeam-utils",
  "proptest",
  "stats_alloc",
 ]
