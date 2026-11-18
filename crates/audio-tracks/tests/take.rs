@@ -495,6 +495,27 @@ fn a_journal_cut_inside_a_character_is_still_repaired() {
     assert!(matches!(lines.last(), Some(Line::End { .. })), "the repaired journal reads back: {lines:?}");
 }
 
+#[cfg(unix)]
+#[test]
+fn a_journal_that_cannot_be_opened_is_reported_instead_of_skipped() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = scratch("unreadable-journal");
+    crashed_take(&dir);
+    let path = dir.join(journal::FILE_NAME);
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o000)).unwrap();
+    if std::fs::File::open(&path).is_ok() {
+        // Running as root, which reads the file anyway.
+        return;
+    }
+    let recording = dir.parent().and_then(Path::parent).unwrap();
+    assert_eq!(recover::unfinished(recording), vec![dir.clone()]);
+    let out = recover::repair_each(recording);
+    assert!(out.repaired.is_empty());
+    assert_eq!(out.failed.len(), 1);
+    assert_eq!(out.failed[0].1.kind(), std::io::ErrorKind::PermissionDenied);
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+}
+
 #[test]
 fn a_journal_that_does_not_read_is_reported_and_the_other_takes_are_repaired() {
     let bad = scratch("bad-journal");

@@ -18,16 +18,16 @@ pub struct Repaired {
 }
 
 /// The `Audio Files` folders under `folder` whose take did not end: `folder` itself, its
-/// `Audio Files` folder, or those of the folders in it (a recording folder). A journal whose
-/// lines do not read is included, so repairing it reports why. A journal that cannot be opened,
-/// as a locked one on Windows, is left out. Links are not followed below `folder`.
+/// `Audio Files` folder, or those of the folders in it (a recording folder). A journal that cannot
+/// be read is included, so repairing it reports why; a take still being written (its journal is
+/// locked) is then left as it is by [`repair`]. Links are not followed below `folder`.
 pub fn unfinished(folder: &Path) -> Vec<PathBuf> {
     let mut found = Vec::new();
     let mut check = |dir: PathBuf| {
         if (dir == folder || real_dir(&dir)) && real_file(&dir.join(journal::FILE_NAME)) {
             let open = match journal::read(&dir) {
                 Ok(lines) => !lines.iter().any(|l| matches!(l, Line::End { .. })),
-                Err(e) => e.kind() == std::io::ErrorKind::InvalidData,
+                Err(_) => true,
             };
             if open {
                 found.push(dir);
