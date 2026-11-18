@@ -5,8 +5,9 @@
 //! encoders, a recording writes a Matroska file from this process ([`native`]). The video encoders
 //! ffmpeg offers are plug-ins ([`encoders`]), and so are the built-in ones: H.264
 //! ([`studiocraft_encode::H264`]), NVENC H.264 and HEVC ([`studiocraft_encode::Nvenc`]), the
-//! Media Foundation hardware H.264 and HEVC encoders ([`studiocraft_encode::MediaFoundation`]) and
-//! the VideoToolbox hardware H.264 and HEVC encoders ([`studiocraft_encode::VideoToolbox`]). The
+//! Media Foundation hardware H.264 and HEVC encoders ([`studiocraft_encode::MediaFoundation`]),
+//! the VideoToolbox hardware H.264 and HEVC encoders ([`studiocraft_encode::VideoToolbox`]) and
+//! the VA-API hardware H.264 and HEVC encoders ([`studiocraft_encode::VaApi`]). The
 //! hardware choice ([`encoders::Hardware`]) is resolved by the studio to one of the ffmpeg encoders,
 //! or to a built-in hardware encoder for an MKV recording or the replay buffer, before an output
 //! starts. The
@@ -47,6 +48,8 @@ pub fn register_all(reg: &mut Registry) -> Result<(), PluginError> {
     reg.register_encoder(Arc::new(studiocraft_encode::MediaFoundation::HEVC))?;
     reg.register_encoder(Arc::new(studiocraft_encode::VideoToolbox::H264))?;
     reg.register_encoder(Arc::new(studiocraft_encode::VideoToolbox::HEVC))?;
+    reg.register_encoder(Arc::new(studiocraft_encode::VaApi::H264))?;
+    reg.register_encoder(Arc::new(studiocraft_encode::VaApi::HEVC))?;
     Ok(())
 }
 

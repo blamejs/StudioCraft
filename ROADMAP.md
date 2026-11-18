@@ -80,6 +80,10 @@
 - Apple VideoToolbox H.264 and HEVC (built in) run the VideoToolbox hardware encoders in
   StudioCraft's own process, for MKV recordings without `ffmpeg` on macOS. For an MKV recording the
   Hardware encoder tests them in the process, as it tests NVENC.
+- VA-API H.264 and HEVC (built in) run the VA-API hardware encoders through libva in StudioCraft's
+  own process, for MKV recordings without `ffmpeg` on 64-bit Linux. For an MKV recording the
+  Hardware encoder tests them in the process, as it tests NVENC, and so does VA-API H.264 or HEVC
+  chosen by name, which then records with the built-in encoder without `ffmpeg` too.
 
 ## Next
 

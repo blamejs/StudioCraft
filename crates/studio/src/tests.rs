@@ -712,7 +712,7 @@ fn without_ffmpeg_only_an_mkv_recording_tests_the_hardware_encoders() {
     p.stream.server = "rtmp://127.0.0.1/live".into();
     let mut s = studio_with(Some(noop_gpu()), SceneCollection::new("Test", "Scene"), p.clone());
     s.start_output(OutputKind::Recording).unwrap();
-    assert!(s.testing_hardware(OutputKind::Recording), "NVENC, Media Foundation and VideoToolbox can still run in this process");
+    assert!(s.testing_hardware(OutputKind::Recording), "NVENC, Media Foundation, VideoToolbox and VA-API can still run in this process");
     while s.testing_hardware(OutputKind::Recording) {
         s.tick();
         std::thread::yield_now();
@@ -721,6 +721,22 @@ fn without_ffmpeg_only_an_mkv_recording_tests_the_hardware_encoders() {
     let e = s.start_output(OutputKind::Streaming).unwrap_err().to_string();
     assert!(e.contains("ffmpeg"), "{e}");
     assert!(!s.testing_hardware(OutputKind::Streaming));
+    // A VA-API encoder chosen by name is tested in the process too; another named encoder needs
+    // ffmpeg.
+    for (named, tests) in [("vaapi_hevc", true), ("nvenc_h264", false)] {
+        let mut named_p = p.clone();
+        named_p.output.video_encoder = named.into();
+        let mut s = studio_with(Some(noop_gpu()), SceneCollection::new("Test", "Scene"), named_p);
+        match s.start_output(OutputKind::Recording) {
+            Ok(()) => assert!(tests && s.testing_hardware(OutputKind::Recording), "{named}"),
+            Err(e) => assert!(!tests && e.to_string().contains("ffmpeg"), "{named}: {e}"),
+        }
+        while s.testing_hardware(OutputKind::Recording) {
+            s.tick();
+            std::thread::yield_now();
+        }
+        s.stop_output(OutputKind::Recording);
+    }
     p.output.format = studiocraft_model::RecordingFormat::Mp4;
     let mut s = studio_with(Some(noop_gpu()), SceneCollection::new("Test", "Scene"), p);
     assert!(s.start_output(OutputKind::Recording).is_err(), "an MP4 recording runs in ffmpeg");

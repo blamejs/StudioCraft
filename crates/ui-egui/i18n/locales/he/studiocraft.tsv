@@ -129,6 +129,8 @@
 	Windows Media Foundation HEVC (built in)	Windows Media Foundation HEVC (מובנה)
 	Apple VideoToolbox H.264 (built in)	Apple VideoToolbox H.264 (מובנה)
 	Apple VideoToolbox HEVC (built in)	Apple VideoToolbox HEVC (מובנה)
+	VA-API H.264 (built in)	VA-API H.264 (מובנה)
+	VA-API HEVC (built in)	VA-API HEVC (מובנה)
 	Height	גובה
 	Help	עזרה
 	Hide	הסתרה

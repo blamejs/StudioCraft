@@ -74,6 +74,23 @@ Balanced. More than 14 threads gives little: the encoder splits a picture into a
 per four rows of macroblocks (17 slices at 1080p, 12 at 720p). Speed is the encoder's default
 preset.
 
+### VA-API encoder
+
+Measured on 2026-11-17 on the same machine, which has no VA-API device. `cargo bench -p
+craft-hwenc-native` measures the work the VA-API encoder does on the CPU for each frame:
+
+| Bench | Median | Range (95%) |
+| --- | --- | --- |
+| `copy nv12 1080p` | 80.3 µs | 79.8 to 80.8 µs |
+| `copy nv12 4k` | 1.22 ms | 1.17 to 1.26 ms |
+| `packet 1080p p picture` | 7.73 µs | 7.65 to 7.81 µs |
+
+The copy moves a frame into an H.264 surface's planes and fills the rows past 1080 with the last
+row, and the packet bench turns a 12.5 kB coded
+picture into a length-prefixed packet. At 1080p and 60 fps the two take about 0.5% of the frame
+time. On a machine with a VA-API H.264 encoder the bench also measures `vaapi h264 encode 1080p`,
+a whole frame from `encode`.
+
 ## Measuring
 
 - Run the criterion benches with `cargo bench -p <crate>`.

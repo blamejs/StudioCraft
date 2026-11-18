@@ -126,6 +126,8 @@
 	Windows Media Foundation HEVC (built in)	Windows Media Foundation HEVC (wbudowany)
 	Apple VideoToolbox H.264 (built in)	Apple VideoToolbox H.264 (wbudowany)
 	Apple VideoToolbox HEVC (built in)	Apple VideoToolbox HEVC (wbudowany)
+	VA-API H.264 (built in)	VA-API H.264 (wbudowany)
+	VA-API HEVC (built in)	VA-API HEVC (wbudowany)
 	Height	Wysokość
 	Help	Pomoc
 	Hide	Ukryj

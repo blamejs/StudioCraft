@@ -17,6 +17,7 @@ use studiocraft_plugin::{Encoder, Packet, PluginError, RateControl, VideoParams,
 use crate::h264::{KBPS, KEYFRAME_S, RECORDING_KEYFRAME_S};
 use crate::mf::MediaFoundation;
 use crate::nvenc::Nvenc;
+use crate::vaapi::VaApi;
 use crate::vt::VideoToolbox;
 
 /// The quality levels the hardware encoders take; lower is better.
@@ -44,6 +45,8 @@ static MF_H264: MediaFoundation = MediaFoundation::H264;
 static MF_HEVC: MediaFoundation = MediaFoundation::HEVC;
 static VT_H264: VideoToolbox = VideoToolbox::H264;
 static VT_HEVC: VideoToolbox = VideoToolbox::HEVC;
+static VAAPI_H264: VaApi = VaApi::H264;
+static VAAPI_HEVC: VaApi = VaApi::HEVC;
 
 /// The built-in encoder that runs `candidate` (a `craft_hwenc` candidate id) in this process, if
 /// any.
@@ -55,6 +58,8 @@ pub fn for_candidate(candidate: &str) -> Option<&'static dyn Hardware> {
         "mf_hevc" => Some(&MF_HEVC),
         "vt_h264" => Some(&VT_H264),
         "vt_hevc" => Some(&VT_HEVC),
+        "vaapi_h264" => Some(&VAAPI_H264),
+        "vaapi_hevc" => Some(&VAAPI_HEVC),
         _ => None,
     }
 }
@@ -170,7 +175,9 @@ mod tests {
         assert_eq!(ids("mf_hevc"), Some(("mf_native_hevc", studiocraft_plugin::Codec::Hevc)));
         assert_eq!(ids("vt_h264"), Some(("vt_native_h264", studiocraft_plugin::Codec::H264)));
         assert_eq!(ids("vt_hevc"), Some(("vt_native_hevc", studiocraft_plugin::Codec::Hevc)));
-        for none in ["nvenc_av1", "amf_h264", "qsv_hevc", "vaapi_h264", "x264"] {
+        assert_eq!(ids("vaapi_h264"), Some(("vaapi_native_h264", studiocraft_plugin::Codec::H264)));
+        assert_eq!(ids("vaapi_hevc"), Some(("vaapi_native_hevc", studiocraft_plugin::Codec::Hevc)));
+        for none in ["nvenc_av1", "amf_h264", "qsv_hevc", "vaapi_av1", "x264"] {
             assert!(for_candidate(none).is_none(), "{none}");
         }
     }

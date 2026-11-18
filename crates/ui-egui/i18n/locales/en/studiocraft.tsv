@@ -212,6 +212,8 @@
 	Windows Media Foundation HEVC (built in)	Windows Media Foundation HEVC (built in)
 	Apple VideoToolbox H.264 (built in)	Apple VideoToolbox H.264 (built in)
 	Apple VideoToolbox HEVC (built in)	Apple VideoToolbox HEVC (built in)
+	VA-API H.264 (built in)	VA-API H.264 (built in)
+	VA-API HEVC (built in)	VA-API HEVC (built in)
 	OK	OK
 	Opacity (%)	Opacity (%)
 	Open above (dB)	Open above (dB)

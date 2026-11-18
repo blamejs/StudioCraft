@@ -22,7 +22,7 @@ crate in the same layer. `cargo xtask layers` checks this against the table in
 | L0 | `craft-gpu-device` | Choosing and opening a wgpu device: the user's adapter choice, corrections for drivers that crash, a software fallback, a capability report, and device health with recovery after a device loss. It depends on no StudioCraft crate. |
 | L0 | `craft-gpu-yuv` | RGBA to NV12, P010 and I420 on the GPU with scaling, in BT.601, BT.709 and BT.2020 at limited or full range, and the same conversion on the CPU. It depends on no StudioCraft crate. |
 | L0 | `craft-hwenc` | The hardware encoders ffmpeg runs, a one-frame test encode of each with results kept for the session, and an automatic choice ordered by the graphics adapter's vendor with a software fallback. It depends on no StudioCraft crate. |
-| L0 | `craft-hwenc-native` | Hardware encoders called through their drivers: NVENC H.264 and HEVC from NV12 or P010 frames on Windows (Direct3D 11) and 64-bit Linux (CUDA), the Windows Media Foundation and macOS VideoToolbox hardware H.264 and HEVC encoders from NV12 frames, the Annex B helpers, and the `avcC` and `hvcC` records. Its private `nvenc_ffi`, `mf_ffi` and `vt_ffi` modules are the only code that calls the drivers. It depends on no StudioCraft crate. |
+| L0 | `craft-hwenc-native` | Hardware encoders called through their drivers: NVENC H.264 and HEVC from NV12 or P010 frames on Windows (Direct3D 11) and 64-bit Linux (CUDA), the Windows Media Foundation, macOS VideoToolbox and Linux VA-API hardware H.264 and HEVC encoders from NV12 frames, the Annex B helpers, and the `avcC` and `hvcC` records. Its private `nvenc_ffi`, `mf_ffi`, `vt_ffi` and `vaapi_ffi` modules are the only code that calls the drivers. It depends on no StudioCraft crate. |
 | L1 | `studiocraft-plugin` | The `Source`, `Filter`, `Transition`, `Encoder` and `Output` traits and the `Registry` they are registered in. |
 | L2 | `studiocraft-engine` | Commands with stable ids, undo and redo, source threads, the audio mixer thread and the frame scheduler. |
 | L2 | `studiocraft-render` | The wgpu compositor: scenes, filters, transitions, and frame conversion for encoders. |
@@ -332,7 +332,12 @@ the window buttons sit where the desktop puts them. `src/titlebar.rs` makes the 
   not need ffmpeg either. MKV recordings with Windows Media Foundation H.264 or HEVC (built in) use
   `craft-hwenc-native` too, which loads `mfplat.dll` at run time. MKV recordings with Apple
   VideoToolbox H.264 or HEVC (built in) use `craft-hwenc-native` on macOS, which calls the
-  VideoToolbox framework.
+  VideoToolbox framework. MKV recordings with VA-API H.264 or HEVC (built in) use
+  `craft-hwenc-native` on 64-bit Linux, which loads `libva.so.2` and `libva-drm.so.2` at run time.
+  The VA-API encoder runs on the recording's encoder thread, as the other built-in encoders do. It
+  keeps four frames in flight, so the thread waits for the GPU only when all four surfaces are
+  taken, and then for the frame submitted three frames before. Frames reach it as NV12 in memory
+  and are copied into a surface.
 
 ## Dependency licenses
 

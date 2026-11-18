@@ -19,6 +19,9 @@ Licensed under MIT OR Apache-2.0. See NOTICE for the sources.
 | `mf::available(codec)` | whether Media Foundation lists a hardware encoder that writes `codec` and opens |
 | `vt::Encoder` | the hardware H.264 High and HEVC Main encoders of macOS VideoToolbox, from NV12 frames; the same `Config`, `encode`, `flush` and `codec_private` as NVENC; a session that VideoToolbox reports as software is not used; quality `(100 - 2 × level) / 100`, constant bitrate on macOS 13 and later and otherwise an average bitrate with a one-second ceiling, no B-frames, BT.709 limited range |
 | `vt::available(codec)` | whether VideoToolbox opens a hardware encoder that writes `codec` |
+| `vaapi::Encoder` | the VA-API hardware H.264 (High, Main or Constrained Baseline) and HEVC Main encoders on 64-bit Linux (`libva.so.2`, `libva-drm.so.2`), on the first `/dev/dri/renderD*` node whose driver encodes the codec, from NV12 frames; the same `Config`, `encode`, `flush` and `codec_private` as NVENC; constant QP at the level (a variable bitrate where the driver has no constant QP), constant bitrate with a one-second buffer, IDR and P pictures only; HEVC sizes are multiples of the driver's smallest coding block |
+| `vaapi::available(codec)` | whether a VA-API driver opens an encoder that writes `codec` |
+| `vaapi::copy_nv12`, `vaapi::packet` | the two passes the VA-API encoder makes over each frame on the CPU: the copy into a surface's pitched planes, and the coded picture to a packet |
 | `annexb::nals`, `to_length_prefixed`, `parameter_sets` | Annex B streams split into NAL units; samples without parameter sets or delimiters |
 | `avc::avcc`, `hevc::hvcc` | the decoder configuration records of ISO/IEC 14496-15, checked against the stream that was asked for |
 
@@ -44,10 +47,18 @@ for packet in enc.flush()? {
 `mf::Encoder` takes the same `Config` with `Input::Nv12`. Off Windows, and on Windows without a
 hardware encoder MFT, `Encoder::new` returns `Error::NoDevice`. `vt::Encoder` also takes
 `Input::Nv12`. Off macOS, and on a Mac without a hardware encoder for the codec, `Encoder::new`
-returns `Error::NoDevice`.
+returns `Error::NoDevice`. `vaapi::Encoder` also takes `Input::Nv12`. Off 64-bit Linux, without
+libva, and without a driver that encodes the codec, `Encoder::new` returns `Error::NoDevice`.
 
-Only the private `nvenc_ffi`, `mf_ffi` and `vt_ffi` modules contain `unsafe` code. The NVENC
-layout tests compare every structure the crate passes to the driver with the C header's sizes and
-offsets, and they run on every platform. The Media Foundation calls go through the `windows`
+`vaapi::Encoder` keeps up to four frames in flight, each in its own surface and coded buffer.
+`encode` copies the frame into a free surface and submits it, and waits for the GPU only when all
+four are taken, for the frame submitted three frames before. The surfaces, coded buffers and the
+buffer that collects coded data are made once in `Encoder::new`; each frame allocates only the
+packet it returns. `cargo bench -p craft-hwenc-native` measures the copy and the packet, and a
+1080p encode where a VA-API H.264 encoder is present.
+
+Only the private `nvenc_ffi`, `mf_ffi`, `vt_ffi` and `vaapi_ffi` modules contain `unsafe` code.
+The NVENC and VA-API layout tests compare every structure the crate passes to the driver with the
+C header's sizes and offsets, and they run on every platform. The Media Foundation calls go through the `windows`
 crate's bindings, and the VideoToolbox calls go through the `objc2-video-toolbox`,
 `objc2-core-media`, `objc2-core-video` and `objc2-core-foundation` bindings.

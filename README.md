@@ -64,8 +64,9 @@ and Linux.
   and falls back to x264. NVIDIA NVENC H.264 and HEVC (built in) record MKV files through the
   NVIDIA driver without `ffmpeg` on Windows and 64-bit Linux, and the Hardware encoder uses them for
   MKV recordings. Windows Media Foundation H.264 and HEVC (built in) do the same on Windows with the
-  hardware encoders Media Foundation lists, and Apple VideoToolbox H.264 and HEVC (built in) do the
-  same on macOS with the VideoToolbox hardware encoders. x264 is the default encoder for recordings
+  hardware encoders Media Foundation lists, Apple VideoToolbox H.264 and HEVC (built in) do the
+  same on macOS with the VideoToolbox hardware encoders, and VA-API H.264 and HEVC (built in) do the
+  same on 64-bit Linux through libva. x264 is the default encoder for recordings
   and streams. Settings › Output and Settings › Stream show the chosen encoder's settings, such as
   the x264 and NVENC presets. Tools › Available Encoders lists the built-in encoders and the encoders the
   installed `ffmpeg` offers, and says when `ffmpeg` was not found.
