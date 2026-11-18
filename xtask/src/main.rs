@@ -5,6 +5,7 @@
 mod layers;
 mod licenses;
 mod scan;
+mod unsafe_code;
 mod version;
 
 use std::path::{Path, PathBuf};
@@ -19,6 +20,7 @@ commands:
   test       cargo test --workspace
   layers     check that each crate depends only on crates in lower layers (docs/architecture.md)
   licenses   check that every dependency has an MIT, Apache-2.0, BSD, Zlib, ISC or similar license
+  unsafe     check that only the native hardware crates may use `unsafe` (AGENTS.md › Never crash)
   assets     check that every picture, sound, font or video file is listed in ASSETS.md
   brands     check that the app's text and docs name no other vendor's products
   wasm       cargo check --target wasm32-unknown-unknown for the crates that build for the web
@@ -34,6 +36,7 @@ fn main() -> ExitCode {
         Some("test") => test(),
         Some("layers") => layers::run(),
         Some("licenses") => licenses::run(),
+        Some("unsafe") => unsafe_code::run(&root()),
         Some("assets") => scan::assets(&root()),
         Some("brands") => scan::brands(&root()),
         Some("wasm") => wasm(),
@@ -112,6 +115,7 @@ fn ci() -> Result<(), String> {
     test()?;
     layers::run()?;
     licenses::run()?;
+    unsafe_code::run(&root())?;
     scan::assets(&root())?;
     scan::brands(&root())?;
     wasm()?;

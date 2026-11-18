@@ -11,14 +11,34 @@ const SKIP_ROOT_DIRS: &[&str] = &["craft-fonts", "craft-i18n"];
 
 /// Every file under `root`, relative, with `/` separators.
 pub fn files(root: &Path) -> Vec<String> {
-    fn walk(root: &Path, dir: &Path, out: &mut Vec<String>) {
-        let Ok(rd) = std::fs::read_dir(dir) else { return };
-        for e in rd.flatten() {
+    walk_all(root).0
+}
+
+/// Every file under `root`, or an error naming each folder or entry that could not be read.
+pub fn try_files(root: &Path) -> Result<Vec<String>, String> {
+    let (out, errors) = walk_all(root);
+    if errors.is_empty() { Ok(out) } else { Err(format!("could not read:\n  {}", errors.join("\n  "))) }
+}
+
+fn walk_all(root: &Path) -> (Vec<String>, Vec<String>) {
+    fn walk(root: &Path, dir: &Path, out: &mut Vec<String>, errors: &mut Vec<String>) {
+        let rd = match std::fs::read_dir(dir) {
+            Ok(rd) => rd,
+            Err(e) => return errors.push(format!("{}: {e}", dir.display())),
+        };
+        for e in rd {
+            let e = match e {
+                Ok(e) => e,
+                Err(err) => {
+                    errors.push(format!("{}: {err}", dir.display()));
+                    continue;
+                }
+            };
             let p: PathBuf = e.path();
             let name = e.file_name().to_string_lossy().into_owned();
             if p.is_dir() {
                 if !SKIP_DIRS.contains(&name.as_str()) && !(dir == root && SKIP_ROOT_DIRS.contains(&name.as_str())) {
-                    walk(root, &p, out);
+                    walk(root, &p, out, errors);
                 }
             } else if let Ok(rel) = p.strip_prefix(root) {
                 out.push(rel.to_string_lossy().replace('\\', "/"));
@@ -26,9 +46,10 @@ pub fn files(root: &Path) -> Vec<String> {
         }
     }
     let mut out = Vec::new();
-    walk(root, root, &mut out);
+    let mut errors = Vec::new();
+    walk(root, root, &mut out, &mut errors);
     out.sort();
-    out
+    (out, errors)
 }
 
 const ASSET_EXT: &[&str] = &[
