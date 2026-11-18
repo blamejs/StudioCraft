@@ -64,8 +64,14 @@ impl Nvenc {
             Error::Busy(why) => SessionError::Busy(format!("{} has no free encoding session: {why}", self.name())),
             e => SessionError::Other(self.error(e)),
         })?;
-        // A session opened, so a failure that `usable` remembers is out of date.
-        *LAST_TEST.lock().unwrap_or_else(PoisonError::into_inner) = Some((true, Instant::now()));
+        // A session opened: this codec works, and the other one is tested again if it failed only
+        // because every session was taken.
+        *last_test(self.codec) = Some((Tested::Works, Instant::now()));
+        let other = if self.codec == NativeCodec::H264 { NativeCodec::Hevc } else { NativeCodec::H264 };
+        let mut o = last_test(other);
+        if matches!(*o, Some((Tested::Busy, _))) {
+            *o = None;
+        }
         Ok(NvencSession { core, name: self.name() })
     }
 
@@ -107,35 +113,58 @@ impl Encoder for Nvenc {
     fn open(&self, _settings: &Settings, params: &VideoParams) -> Result<Box<dyn VideoSession>, PluginError> {
         Ok(Box::new(self.session(params)?))
     }
-    /// Ready in an output that runs built-in encoders on a system where an NVENC session opens
-    /// (see [`usable`]).
+    /// Ready in an output that runs built-in encoders on a system where an NVENC session that
+    /// writes this codec opens (see [`usable`]).
     fn availability(&self, env: &EncoderEnv) -> Availability {
-        if env.builtin && usable() { Availability::Ready } else { Availability::NotRunHere }
+        if env.builtin && usable(self.codec) { Availability::Ready } else { Availability::NotRunHere }
     }
 }
 
 /// How long a failed session test stands before the next call tests again.
 const RETEST_AFTER: Duration = Duration::from_secs(30);
 
-/// The last answer of [`usable`], or of a session that opened, and when it was found.
-static LAST_TEST: Mutex<Option<(bool, Instant)>> = Mutex::new(None);
+/// What a session test found.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Tested {
+    Works,
+    /// Every session was taken by other programs.
+    Busy,
+    /// No device, or a GPU whose encoder does not write the codec.
+    Failed,
+}
 
-/// Whether an NVENC session opens on this system. A call opens and closes one; a session that
-/// opened is remembered, and a failure is remembered for [`RETEST_AFTER`] or until a session opens,
-/// since every session can be taken by other programs for a while. Without the NVIDIA driver
-/// nothing is tested again.
-fn usable() -> bool {
+/// The last answer of [`usable`] for each codec, or of a session that opened, and when it was found.
+static LAST_TEST: [Mutex<Option<(Tested, Instant)>>; 2] = [Mutex::new(None), Mutex::new(None)];
+
+/// The [`LAST_TEST`] entry of `codec`, locked.
+fn last_test(codec: NativeCodec) -> std::sync::MutexGuard<'static, Option<(Tested, Instant)>> {
+    let i = match codec {
+        NativeCodec::H264 => 0,
+        NativeCodec::Hevc => 1,
+    };
+    LAST_TEST[i].lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// Whether an NVENC session that writes `codec` opens on this system. A call opens and closes one;
+/// a session that opened is remembered, and a failure is remembered for [`RETEST_AFTER`]. A
+/// failure because every session was taken is also forgotten when a session of the other codec
+/// opens. Without the NVIDIA driver nothing is tested again.
+fn usable(codec: NativeCodec) -> bool {
     if craft_hwenc_native::nvenc::driver().is_err() {
         return false;
     }
-    let mut last = LAST_TEST.lock().unwrap_or_else(PoisonError::into_inner);
+    let mut last = last_test(codec);
     match *last {
-        Some((true, _)) => true,
-        Some((false, at)) if at.elapsed() < RETEST_AFTER => false,
+        Some((Tested::Works, _)) => true,
+        Some((_, at)) if at.elapsed() < RETEST_AFTER => false,
         _ => {
-            let ok = craft_hwenc_native::nvenc::available().is_ok();
-            *last = Some((ok, Instant::now()));
-            ok
+            let found = match craft_hwenc_native::nvenc::available(codec) {
+                Ok(()) => Tested::Works,
+                Err(Error::Busy(_)) => Tested::Busy,
+                Err(_) => Tested::Failed,
+            };
+            *last = Some((found, Instant::now()));
+            found == Tested::Works
         }
     }
 }
@@ -248,7 +277,7 @@ mod tests {
         let stream = EncoderEnv { ffmpeg_encoders: None, builtin: false };
         assert_eq!(Nvenc::H264.availability(&stream), Availability::NotRunHere);
         let recording = EncoderEnv { ffmpeg_encoders: None, builtin: true };
-        let expected = if craft_hwenc_native::nvenc::available().is_ok() { Availability::Ready } else { Availability::NotRunHere };
+        let expected = if craft_hwenc_native::nvenc::available(NativeCodec::Hevc).is_ok() { Availability::Ready } else { Availability::NotRunHere };
         assert_eq!(Nvenc::HEVC.availability(&recording), expected);
     }
 

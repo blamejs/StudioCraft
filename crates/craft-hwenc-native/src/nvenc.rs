@@ -112,11 +112,19 @@ pub fn driver() -> Result<(), Error> {
     nvenc_ffi::driver().map_err(Error::NoDevice)
 }
 
-/// Whether this system has an NVIDIA GPU and a driver whose encode API this crate speaks. It
-/// opens a session and closes it again.
-pub fn available() -> Result<(), Error> {
+/// Whether this system has an NVIDIA GPU whose encoder writes `codec`, with a driver whose encode
+/// API this crate speaks. It opens a session, reads the codec's capabilities and closes it again.
+pub fn available(codec: Codec) -> Result<(), Error> {
     driver()?;
-    Session::open().map(drop).map_err(Error::from)
+    let session = Session::open()?;
+    session.caps(ffi_codec(codec)).map(drop).map_err(Error::Unsupported)
+}
+
+fn ffi_codec(codec: Codec) -> nvenc_ffi::Codec {
+    match codec {
+        Codec::H264 => nvenc_ffi::Codec::H264,
+        Codec::Hevc => nvenc_ffi::Codec::Hevc,
+    }
 }
 
 /// Check `cfg` without the driver: sizes, rate, codec and input.
@@ -155,10 +163,7 @@ impl Encoder {
     pub fn new(cfg: &Config) -> Result<Encoder, Error> {
         check(cfg)?;
         let mut session = Session::open()?;
-        let codec = match cfg.codec {
-            Codec::H264 => nvenc_ffi::Codec::H264,
-            Codec::Hevc => nvenc_ffi::Codec::Hevc,
-        };
+        let codec = ffi_codec(cfg.codec);
         let caps = session.caps(codec).map_err(Error::Unsupported)?;
         let ten_bit = cfg.input == Input::P010;
         if ten_bit && !caps.ten_bit {
@@ -237,6 +242,9 @@ impl Encoder {
             }
         };
         self.pending.push_back(slot);
+        // In synchronous mode a picture that returns success makes the output of every picture
+        // queued before it ready as well, including those that returned NEED_MORE_INPUT; they are
+        // locked in the order they were queued.
         if submitted == Submitted::Ready {
             self.ready = self.pending.len();
         }
@@ -363,10 +371,12 @@ mod tests {
                 Err(other) => panic!("{codec:?}: {other}"),
             }
         }
-        match available() {
-            Ok(()) => {}
-            Err(Error::NoDevice(why)) => assert!(!why.is_empty()),
-            Err(other) => panic!("{other}"),
+        for codec in [Codec::H264, Codec::Hevc] {
+            match available(codec) {
+                Ok(()) => {}
+                Err(Error::NoDevice(why)) => assert!(!why.is_empty()),
+                Err(other) => panic!("{codec:?}: {other}"),
+            }
         }
     }
 

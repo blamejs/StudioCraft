@@ -14,7 +14,7 @@ Licensed under MIT OR Apache-2.0. See NOTICE for the sources.
 | `nvenc::Config` | codec, input layout, size (even, within the GPU's limits), frame rate, `Rate::Quality(1..=51)` or `Rate::Cbr(kbps)`, keyframe interval |
 | `nvenc::Encoder::encode`, `flush` | packed frames in, 4-byte length-prefixed packets out in input order, each with its timestamp and keyframe flag; preset P5, high-quality tuning, no B-frames, BT.709 limited range |
 | `nvenc::Encoder::codec_private` | the `avcC` or `hvcC` record for the container |
-| `nvenc::available()` | whether this system can open an NVENC session |
+| `nvenc::available(codec)` | whether this system can open an NVENC session that writes `codec` |
 | `annexb::nals`, `to_length_prefixed`, `parameter_sets` | Annex B streams split into NAL units; samples without parameter sets or delimiters |
 | `avc::avcc`, `hevc::hvcc` | the decoder configuration records of ISO/IEC 14496-15, checked against the stream that was asked for |
 
