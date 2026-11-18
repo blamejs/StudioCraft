@@ -151,14 +151,23 @@ impl Track {
             }
         };
         let keyframe = is_keyframe(self.codec, &o.data);
-        if keyframe
-            && let Ok(sets) = annexb::parameter_sets(self.codec, &o.data, set_types(self.codec))
-            && sets != self.sets
-        {
-            return Err(Error::Failed("the encoder changed its parameter sets".into()));
-        }
+        self.sets_in(&o.data)?;
         let data = annexb::to_length_prefixed(self.codec, &o.data).map_err(Error::Failed)?;
         Ok(Packet { data, pts, keyframe })
+    }
+
+    /// Check that each parameter set in the Annex B `data` of a sample is the set of that type the
+    /// container record was made of; the packet goes out without them.
+    fn sets_in(&self, data: &[u8]) -> Result<(), Error> {
+        let types = set_types(self.codec);
+        for n in annexb::nals(data) {
+            let Some(i) = annexb::nal_type(self.codec, n).and_then(|t| types.iter().position(|&(ty, _)| ty == t)) else { continue };
+            if self.sets.get(i).map(Vec::as_slice) != Some(n) {
+                let name = types.get(i).map_or("parameter sets", |&(_, name)| name);
+                return Err(Error::Failed(format!("the encoder changed its {name}")));
+            }
+        }
+        Ok(())
     }
 
     /// Check that the Annex B `header` of a new output type holds the parameter sets the
@@ -390,10 +399,16 @@ mod tests {
         let mut t = track();
         t.send(0);
         let other = t.packet(Output { data: annex_b(&[&[0x67, 9], PPS, IDR]), time: Some(0) });
-        assert!(matches!(other, Err(Error::Failed(why)) if why.contains("parameter sets")));
+        assert!(matches!(other, Err(Error::Failed(why)) if why.contains("changed its SPS")));
         // A keyframe without parameter sets of its own is fine.
         t.send(1);
         assert!(t.packet(Output { data: annex_b(&[IDR]), time: Some(second) }).unwrap().keyframe);
+        // Each set a sample carries is checked, alone too and in any picture.
+        t.send(2);
+        assert!(t.packet(Output { data: annex_b(&[SPS, IDR]), time: None }).is_ok(), "the same SPS alone");
+        t.send(3);
+        let pps = t.packet(Output { data: annex_b(&[&[0x68, 7], P]), time: None });
+        assert!(matches!(pps, Err(Error::Failed(why)) if why.contains("changed its PPS")));
     }
 
     #[test]

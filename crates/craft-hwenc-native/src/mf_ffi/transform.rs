@@ -429,15 +429,21 @@ impl Transform {
         Ok(())
     }
 
+    /// The bytes and time of an output sample. A sample longer than this side's output buffers
+    /// ([`output_size`]) is an error, also when the MFT allocated it.
     fn bytes_of(&self, sample: &IMFSample) -> Result<Output, String> {
         // SAFETY: `Lock` gives a readable block of `len` bytes valid until `Unlock`; it is copied
         // before the buffer is unlocked.
         unsafe {
             let time = sample.GetSampleTime().ok();
+            let total = sample.GetTotalLength().map_err(|e| format!("{}: cannot size a frame: {e}", self.name))?;
+            if total > self.output_size {
+                return Err(format!("{}: a frame of {total} bytes is larger than {} bytes", self.name, self.output_size));
+            }
             let buffer = sample.ConvertToContiguousBuffer().map_err(|e| format!("{}: cannot read a frame: {e}", self.name))?;
             let (mut ptr, mut len) = (std::ptr::null_mut::<u8>(), 0u32);
             buffer.Lock(&mut ptr, None, Some(&mut len)).map_err(|e| format!("{}: cannot lock a frame: {e}", self.name))?;
-            let data = if ptr.is_null() { Vec::new() } else { std::slice::from_raw_parts(ptr, len as usize).to_vec() };
+            let data = if ptr.is_null() { Vec::new() } else { std::slice::from_raw_parts(ptr, len.min(total) as usize).to_vec() };
             buffer.Unlock().map_err(|e| format!("{}: cannot unlock a frame: {e}", self.name))?;
             Ok(Output { data, time })
         }
