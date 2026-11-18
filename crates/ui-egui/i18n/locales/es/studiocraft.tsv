@@ -455,6 +455,7 @@ menu	Transform	Transformar
 	A recording or the stream runs	Hay una grabación o la transmisión en curso
 	The disk is almost full; audio tracks stop before the recording or the stream runs out of space	El disco está casi lleno; las pistas de audio se detienen antes de que la grabación o la transmisión se queden sin espacio
 	This take has made as many audio track files as it can; sources added since are not recorded to their own files	Esta toma ya creó todos los archivos de pistas de audio que puede; las fuentes añadidas desde entonces no se graban en archivos propios
+	More sources are set to record their own track than can be recorded at once; the later ones are not recorded	Hay más fuentes configuradas para grabar su propia pista de las que se pueden grabar a la vez; las últimas no se graban
 	{tracks} audio tracks; {lost} s of audio lost while the disk was slow	{tracks} pistas de audio; {lost} s de audio perdidos mientras el disco iba lento
 	TRACKS	PISTAS
 	TRACKS stopped	PISTAS detenidas

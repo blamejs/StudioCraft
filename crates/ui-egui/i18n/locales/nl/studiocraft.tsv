@@ -442,6 +442,7 @@ menu	Transform	Transformeren
 	A recording or the stream runs	Er loopt een opname of de stream
 	The disk is almost full; audio tracks stop before the recording or the stream runs out of space	De schijf is bijna vol; de audiosporen stoppen voordat de opname of de stream geen ruimte meer heeft
 	This take has made as many audio track files as it can; sources added since are not recorded to their own files	Deze opname heeft zoveel audiospoorbestanden gemaakt als mogelijk is; bronnen die daarna zijn toegevoegd worden niet in eigen bestanden opgenomen
+	More sources are set to record their own track than can be recorded at once; the later ones are not recorded	Er zijn meer bronnen ingesteld om een eigen spoor op te nemen dan er tegelijk kunnen worden opgenomen; de latere worden niet opgenomen
 	{tracks} audio tracks; {lost} s of audio lost while the disk was slow	{tracks} audiosporen; {lost} s audio verloren terwijl de schijf traag was
 	TRACKS	SPOREN
 	TRACKS stopped	SPOREN gestopt

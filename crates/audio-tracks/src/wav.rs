@@ -62,12 +62,17 @@ pub fn check(path: &Path) -> std::io::Result<u64> {
     check_file(&mut File::open(path)?)
 }
 
-/// The length of `file`, or an error when it is shorter than a header or does not start like a
-/// WAV file.
+/// The length of `file`, or an error when it is shorter than a header or its header is not the one
+/// the writer makes: every byte but the sizes, which depend on the frame count, must match.
 fn check_file(file: &mut File) -> std::io::Result<u64> {
     let len = file.metadata()?.len();
-    let mut magic = [0u8; 4];
-    if len < header_len()? || file.read_exact(&mut magic).is_err() || &magic != b"RIFF" {
+    // Every byte of every size field differs between these two counts, and only those bytes do.
+    let (empty, full) = (header(0)?, header(0x0202_0202)?);
+    let mut head = vec![0u8; empty.len()];
+    let ours = len >= empty.len() as u64
+        && file.read_exact(&mut head).is_ok()
+        && head.iter().zip(empty.iter().zip(&full)).all(|(b, (e, f))| e != f || b == e);
+    if !ours {
         return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "not an audio track file"));
     }
     Ok(len)
@@ -86,6 +91,28 @@ mod tests {
             assert_eq!(h.len() as u64, len, "{frames} frames");
             assert_eq!(&h[..4], b"RIFF");
         }
+    }
+
+    #[test]
+    fn repair_leaves_a_file_of_another_riff_kind_alone() {
+        let path = std::env::temp_dir().join(format!("studiocraft-wav-riff-{}.wav", std::process::id()));
+        let mut bytes = b"RIFF\0\0\0\0AVI LIST".to_vec();
+        bytes.resize(header_len().unwrap() as usize + 100, 7);
+        std::fs::write(&path, &bytes).unwrap();
+        let err = repair(&path).unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+        assert_eq!(std::fs::read(&path).unwrap(), bytes, "the file is unchanged");
+        // A file the writer made, with a stale frame count and a partial frame, is repaired.
+        let mut ours = header(1).unwrap();
+        ours.extend_from_slice(&[0u8; 3 * FRAME_BYTES as usize + 2]);
+        std::fs::write(&path, &ours).unwrap();
+        assert_eq!(repair(&path).unwrap(), 3);
+        // Any frame count the writer can reach passes the check.
+        for frames in [0u64, 1, 3, 255, 256, 65_537, 48_000 * 3600, MAX_SEGMENT_BYTES / FRAME_BYTES] {
+            std::fs::write(&path, header(frames).unwrap()).unwrap();
+            assert!(check(&path).is_ok(), "{frames} frames");
+        }
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]

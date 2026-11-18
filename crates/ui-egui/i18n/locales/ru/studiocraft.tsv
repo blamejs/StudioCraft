@@ -461,6 +461,7 @@ menu	Transform	Преобразование
 	A recording or the stream runs	Идёт запись или трансляция
 	The disk is almost full; audio tracks stop before the recording or the stream runs out of space	Диск почти заполнен; звуковые дорожки останавливаются раньше, чем записи или трансляции перестанет хватать места
 	This take has made as many audio track files as it can; sources added since are not recorded to their own files	Этот дубль уже создал максимально возможное число файлов звуковых дорожек; источники, добавленные после этого, не записываются в собственные файлы
+	More sources are set to record their own track than can be recorded at once; the later ones are not recorded	Собственную дорожку должны записывать больше источников, чем можно записывать одновременно; последние не записываются
 	{tracks} audio tracks; {lost} s of audio lost while the disk was slow	Звуковых дорожек: {tracks}; потеряно {lost} с звука, пока диск работал медленно
 	TRACKS	ДОРОЖКИ
 	TRACKS stopped	ДОРОЖКИ остановлены

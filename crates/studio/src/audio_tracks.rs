@@ -55,6 +55,9 @@ pub(crate) struct AudioTracks {
     /// next take.
     take_sizes: Option<(u32, u32)>,
     repair: Option<JoinHandle<Outcome>>,
+    /// Sources set to record their own track were left out, because more than
+    /// [`MAX_TRACKS`] tracks would run at once.
+    source_limit: bool,
 }
 
 impl Studio {
@@ -106,11 +109,23 @@ impl Studio {
     /// tracks with the program. Later sources are not recorded, so a large collection cannot
     /// make a tap, with its preallocated blocks, for every source.
     fn track_source_ids(&self) -> Vec<SourceId> {
+        self.track_sources().0
+    }
+
+    /// [`Self::track_source_ids`], and whether sources set to record were left out by the limit.
+    fn track_sources(&self) -> (Vec<SourceId>, bool) {
         let registry = self.engine.registry();
         let room = MAX_TRACKS - usize::from(self.profile.audio_tracks.include_program);
-        let all =
+        let mut all =
             self.engine.collection().sources.iter().filter(|s| s.audio.records_track() && registry.source(&s.kind).is_ok_and(|p| p.caps().audio));
-        all.take(room).map(|s| s.id).collect()
+        let ids: Vec<SourceId> = all.by_ref().take(room).map(|s| s.id).collect();
+        (ids, all.next().is_some())
+    }
+
+    /// Whether the running take leaves out sources set to record their own track, because more
+    /// than [`MAX_TRACKS`] tracks would run at once.
+    pub fn audio_tracks_source_limit(&self) -> bool {
+        self.audio_tracks.take.is_some() && self.audio_tracks.source_limit
     }
 
     /// The sources to record now, with their taps, the program mix first.
@@ -155,6 +170,7 @@ impl Studio {
             return;
         };
         let specs = self.audio_track_specs();
+        self.audio_tracks.source_limit = self.track_sources().1;
         let outputs = self.output_bytes_per_second();
         let settings = self.profile.audio_tracks;
         let tracks = specs.len() as u64;
@@ -210,7 +226,8 @@ impl Studio {
             // The new collection's sources get new taps, even those whose ids match the old ones.
             self.audio_tracks.slots.clear();
         }
-        let now = self.track_source_ids();
+        let (now, source_limit) = self.track_sources();
+        self.audio_tracks.source_limit = source_limit;
         let program = self.profile.audio_tracks.include_program == self.audio_tracks.program.is_some();
         if !arming && !replace && now == self.audio_tracks.recorded && program {
             return;
@@ -371,6 +388,7 @@ impl Studio {
             o.insert("dropped_seconds".into(), json!(st.dropped_seconds()));
             o.insert("low_space".into(), json!(st.low_space()));
             o.insert("track_limit".into(), json!(st.track_limit()));
+            o.insert("source_limit".into(), json!(self.audio_tracks_source_limit()));
             if let Some(r) = st.reason() {
                 o.insert("stopped_at".into(), json!(clock_text(st.stopped_at_seconds())));
                 o.insert("reason".into(), json!(r.text()));

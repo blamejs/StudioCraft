@@ -799,6 +799,14 @@ mod audio_tracks {
         armed(&mut s);
         assert_eq!(sources(&s).len(), studiocraft_audio_tracks::MAX_TRACKS - 1);
         assert_eq!(s.audio_tracks.slots.len(), studiocraft_audio_tracks::MAX_TRACKS - 1, "no tap for the sources after the limit");
+        assert!(s.audio_tracks_source_limit(), "the sources left out are reported");
+        assert_eq!(s.state_json()["audio_tracks"]["source_limit"], json!(true));
+        // With 9 fewer sources set to record, every one fits.
+        for n in 0..9 {
+            s.run("source.set_record_track", &json!({"source": format!("Mic {n}"), "on": false})).unwrap();
+        }
+        s.tick();
+        assert!(!s.audio_tracks_source_limit());
         s.test_streaming = false;
         s.tick();
         drop(s);

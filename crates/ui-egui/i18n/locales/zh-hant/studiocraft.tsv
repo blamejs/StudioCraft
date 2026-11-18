@@ -452,6 +452,7 @@ menu	Transform	變形
 	A recording or the stream runs	錄製或串流進行時
 	The disk is almost full; audio tracks stop before the recording or the stream runs out of space	磁碟快滿了；音訊軌道會在錄製或串流空間用盡之前停止
 	This take has made as many audio track files as it can; sources added since are not recorded to their own files	本次錄製已建立了所能建立的最多音訊軌道檔案；此後加入的來源不會錄製到各自的檔案
+	More sources are set to record their own track than can be recorded at once; the later ones are not recorded	設定為錄製各自軌道的來源超過了可同時錄製的數量；較後的來源不會被錄製
 	{tracks} audio tracks; {lost} s of audio lost while the disk was slow	{tracks} 條音訊軌道；磁碟變慢期間遺失了 {lost} 秒音訊
 	TRACKS	音軌
 	TRACKS stopped	音軌已停止

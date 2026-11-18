@@ -453,6 +453,7 @@ menu	Transform	Dönüştür
 	A recording or the stream runs	Bir kayıt veya yayın sürerken
 	The disk is almost full; audio tracks stop before the recording or the stream runs out of space	Disk neredeyse dolu; ses parçaları, kaydın veya yayının yeri bitmeden durur
 	This take has made as many audio track files as it can; sources added since are not recorded to their own files	Bu çekim oluşturabileceği kadar ses parçası dosyası oluşturdu; o zamandan beri eklenen kaynaklar kendi dosyalarına kaydedilmez
+	More sources are set to record their own track than can be recorded at once; the later ones are not recorded	Kendi parçasını kaydetmek üzere ayarlı kaynak sayısı aynı anda kaydedilebilecek sayıdan fazla; sonrakiler kaydedilmez
 	{tracks} audio tracks; {lost} s of audio lost while the disk was slow	{tracks} ses parçası; disk yavaşken {lost} sn ses kaybedildi
 	TRACKS	PARÇALAR
 	TRACKS stopped	PARÇALAR durdu

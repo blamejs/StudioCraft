@@ -501,6 +501,7 @@ menu	Transform	Transform
 	A recording or the stream runs	A recording or the stream runs
 	The disk is almost full; audio tracks stop before the recording or the stream runs out of space	The disk is almost full; audio tracks stop before the recording or the stream runs out of space
 	This take has made as many audio track files as it can; sources added since are not recorded to their own files	This take has made as many audio track files as it can; sources added since are not recorded to their own files
+	More sources are set to record their own track than can be recorded at once; the later ones are not recorded	More sources are set to record their own track than can be recorded at once; the later ones are not recorded
 	{tracks} audio tracks; {lost} s of audio lost while the disk was slow	{tracks} audio tracks; {lost} s of audio lost while the disk was slow
 	TRACKS	TRACKS
 	TRACKS stopped	TRACKS stopped

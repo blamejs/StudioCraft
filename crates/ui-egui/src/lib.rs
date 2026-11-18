@@ -1670,7 +1670,8 @@ impl StudioApp {
         let live = self.studio.output(OutputKind::Streaming);
         let replay = self.studio.output(OutputKind::Replay);
         let outputs_run = [&rec, &live].into_iter().flatten().any(|s| s.active);
-        let tracks = self.studio.audio_tracks_status().and_then(|s| tracks_item(s, outputs_run));
+        let source_limit = self.studio.audio_tracks_source_limit();
+        let tracks = self.studio.audio_tracks_status().and_then(|s| tracks_item(s, outputs_run, source_limit));
         let height = theme::sizes(ui.ctx()).bar_status;
         let line = theme::palette(ui.ctx()).line;
         let frame = egui::Frame::side_top_panel(ui.style()).inner_margin(egui::Margin::symmetric(8, 0));
@@ -2102,7 +2103,8 @@ fn output_status(o: &studiocraft_studio::OutputState) -> String {
 /// The audio tracks item of the status bar: its text, whether it shows as a warning, and its
 /// hover text. It shows while a take runs or finishes, and after a take stopped early while the
 /// recording or the stream that started it still runs.
-fn tracks_item(s: &studiocraft_studio::AudioTracksStatus, outputs_run: bool) -> Option<(String, bool, String)> {
+/// `source_limit` says that sources set to record were left out by the limit on tracks at once.
+fn tracks_item(s: &studiocraft_studio::AudioTracksStatus, outputs_run: bool, source_limit: bool) -> Option<(String, bool, String)> {
     use studiocraft_studio::AudioTracksState as S;
     let t = s.seconds() as u64;
     let clock = format!("{:02}:{:02}:{:02}", t / 3600, (t / 60) % 60, t % 60);
@@ -2116,13 +2118,17 @@ fn tracks_item(s: &studiocraft_studio::AudioTracksStatus, outputs_run: bool) -> 
             if s.track_limit() {
                 warnings.push(tl!("This take has made as many audio track files as it can; sources added since are not recorded to their own files"));
             }
+            if source_limit {
+                warnings.push(tl!("More sources are set to record their own track than can be recorded at once; the later ones are not recorded"));
+            }
+            let warn = !warnings.is_empty();
             let hover = if warnings.is_empty() {
                 let lost = format!("{:.1}", s.dropped_seconds());
                 craft_i18n::fmt(tl!("{tracks} audio tracks; {lost} s of audio lost while the disk was slow"), &[("tracks", &tracks), ("lost", &lost)])
             } else {
                 warnings.join("\n")
             };
-            Some((format!("{} {clock}", tl!("TRACKS")), s.low_space() || s.track_limit(), hover))
+            Some((format!("{} {clock}", tl!("TRACKS")), warn, hover))
         }
         S::Stopped if outputs_run => {
             Some((tl!("TRACKS stopped").to_string(), true, tl!("Audio tracks stopped early; the status message gives the reason").to_string()))

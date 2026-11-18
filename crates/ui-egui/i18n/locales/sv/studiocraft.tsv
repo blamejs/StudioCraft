@@ -452,6 +452,7 @@ menu	Transform	Transformera
 	A recording or the stream runs	En inspelning eller strömmen pågår
 	The disk is almost full; audio tracks stop before the recording or the stream runs out of space	Disken är nästan full; ljudspåren stoppas innan inspelningen eller strömmen får slut på utrymme
 	This take has made as many audio track files as it can; sources added since are not recorded to their own files	Den här tagningen har skapat så många ljudspårsfiler som den kan; källor som lagts till sedan spelas inte in i egna filer
+	More sources are set to record their own track than can be recorded at once; the later ones are not recorded	Fler källor är inställda på att spela in ett eget spår än vad som kan spelas in samtidigt; de senare spelas inte in
 	{tracks} audio tracks; {lost} s of audio lost while the disk was slow	{tracks} ljudspår; {lost} s ljud förlorat medan disken var långsam
 	TRACKS	SPÅR
 	TRACKS stopped	SPÅR stoppade

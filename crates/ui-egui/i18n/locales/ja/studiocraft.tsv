@@ -452,6 +452,7 @@ menu	Transform	変形
 	A recording or the stream runs	録画中または配信中
 	The disk is almost full; audio tracks stop before the recording or the stream runs out of space	ディスクの空きがわずかです。録画や配信の容量が尽きる前にオーディオトラックは停止します
 	This take has made as many audio track files as it can; sources added since are not recorded to their own files	このテイクで作れるオーディオトラックのファイル数が上限に達しました。その後に追加したソースは個別のファイルに記録されません
+	More sources are set to record their own track than can be recorded at once; the later ones are not recorded	個別のトラックに記録する設定のソースが、同時に記録できる数を超えています。後のソースは記録されません
 	{tracks} audio tracks; {lost} s of audio lost while the disk was slow	オーディオトラック {tracks} 本、ディスクが遅いあいだに {lost} 秒分の音声が失われました
 	TRACKS	トラック
 	TRACKS stopped	トラック停止
