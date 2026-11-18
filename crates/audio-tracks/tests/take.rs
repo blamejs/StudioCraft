@@ -115,6 +115,21 @@ fn every_track_holds_its_audio_at_its_place_in_the_take_with_silence_for_gaps() 
 }
 
 #[test]
+fn a_take_that_ends_before_any_audio_still_has_a_file_per_track() {
+    let dir = scratch("no-audio");
+    let mut rig = Rig::new(config(&dir), 4);
+    rig.c.set_tracks(vec![spec(1, "Mic"), spec(2, "Desk")]);
+    rig.pump().unwrap();
+    rig.end().unwrap();
+    for name in ["Mic.wav", "Desk.wav"] {
+        assert!(read(&dir.join(name)).is_empty(), "{name} is an empty WAV");
+    }
+    let lines = journal::read(&dir).unwrap();
+    assert!(matches!(lines.last(), Some(Line::End { frames: 0 })), "{lines:?}");
+    let _ = std::fs::remove_dir_all(dir.parent().and_then(Path::parent).unwrap());
+}
+
+#[test]
 fn a_repaired_take_split_into_parts_ends_after_its_last_part() {
     let dir = scratch("segments-crash");
     let head = wav::header_len().unwrap();

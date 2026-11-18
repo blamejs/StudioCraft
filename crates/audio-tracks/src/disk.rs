@@ -313,6 +313,14 @@ impl Writer {
         for (track, &end) in ends.iter().enumerate() {
             self.write_chunk(&Chunk { track, first_frame: end, data: Vec::new() })?;
         }
+        // A track that never got audio, as in a take that ended before its first block, still
+        // gets its file, empty.
+        for track in 0..self.names.len() {
+            let named = self.names.get(track).is_some_and(Option::is_some);
+            if named && self.files.get(track).is_none_or(Option::is_none) {
+                self.room(track, 0)?;
+            }
+        }
         for d in dropouts {
             self.journal.write(&Line::Dropout { track: d.track, at: d.at, frames: d.frames }).map_err(Failure::io)?;
         }
