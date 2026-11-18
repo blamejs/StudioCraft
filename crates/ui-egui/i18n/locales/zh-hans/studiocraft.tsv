@@ -451,6 +451,7 @@ menu	Transform	变换
 	The stream runs	推流进行时
 	A recording or the stream runs	录制或推流进行时
 	The disk is almost full; audio tracks stop before the recording or the stream runs out of space	磁盘快满了；音频轨道会在录制或推流空间耗尽之前停止
+	This take has made as many audio track files as it can; sources added since are not recorded to their own files	本次录制已创建了所能创建的最多音频轨道文件；此后添加的来源不会录制到各自的文件
 	{tracks} audio tracks; {lost} s of audio lost while the disk was slow	{tracks} 条音频轨道；磁盘变慢期间丢失了 {lost} 秒音频
 	TRACKS	音轨
 	TRACKS stopped	音轨已停止

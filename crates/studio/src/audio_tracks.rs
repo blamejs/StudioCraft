@@ -370,6 +370,7 @@ impl Studio {
             o.insert("bytes".into(), json!(st.bytes()));
             o.insert("dropped_seconds".into(), json!(st.dropped_seconds()));
             o.insert("low_space".into(), json!(st.low_space()));
+            o.insert("track_limit".into(), json!(st.track_limit()));
             if let Some(r) = st.reason() {
                 o.insert("stopped_at".into(), json!(clock_text(st.stopped_at_seconds())));
                 o.insert("reason".into(), json!(r.text()));

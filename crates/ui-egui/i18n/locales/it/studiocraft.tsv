@@ -447,6 +447,7 @@ menu	Transform	Trasforma
 	The stream runs	È in corso lo streaming
 	A recording or the stream runs	È in corso una registrazione o lo streaming
 	The disk is almost full; audio tracks stop before the recording or the stream runs out of space	Il disco è quasi pieno; le tracce audio si fermano prima che la registrazione o lo streaming esauriscano lo spazio
+	This take has made as many audio track files as it can; sources added since are not recorded to their own files	Questa ripresa ha creato tutti i file di tracce audio che può; le sorgenti aggiunte da allora non vengono registrate in file propri
 	{tracks} audio tracks; {lost} s of audio lost while the disk was slow	{tracks} tracce audio; {lost} s di audio persi mentre il disco era lento
 	TRACKS	TRACCE
 	TRACKS stopped	TRACCE fermate

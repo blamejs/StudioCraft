@@ -450,6 +450,7 @@ menu	Transform	Przekształć
 	The stream runs	Trwa transmisja
 	A recording or the stream runs	Trwa nagrywanie lub transmisja
 	The disk is almost full; audio tracks stop before the recording or the stream runs out of space	Dysk jest prawie pełny; ścieżki audio zatrzymują się, zanim nagraniu lub transmisji zabraknie miejsca
+	This take has made as many audio track files as it can; sources added since are not recorded to their own files	To ujęcie utworzyło już tyle plików ścieżek audio, ile może; źródła dodane później nie są nagrywane do własnych plików
 	{tracks} audio tracks; {lost} s of audio lost while the disk was slow	Ścieżki audio: {tracks}; utracono {lost} s dźwięku, gdy dysk był wolny
 	TRACKS	ŚCIEŻKI
 	TRACKS stopped	ŚCIEŻKI zatrzymane

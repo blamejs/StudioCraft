@@ -241,6 +241,17 @@ fn a_take_on_its_threads_writes_every_block_it_was_given() {
 }
 
 #[test]
+fn a_source_left_without_a_file_at_the_track_limit_shows_in_the_status() {
+    let dir = scratch("track-limit");
+    let specs: Vec<TrackSpec> = (0..=studiocraft_audio_tracks::MAX_TAKE_TRACKS as u64).map(|n| spec(n + 1, &format!("Source {n}"))).collect();
+    let take = Take::start(TakeConfig { disk: config(&dir), buffer_mib: 4 }, specs).unwrap();
+    let status = take.join();
+    assert_eq!(status.tracks(), studiocraft_audio_tracks::MAX_TAKE_TRACKS as u64);
+    assert!(status.track_limit(), "the source past the limit is reported");
+    let _ = std::fs::remove_dir_all(dir.parent().and_then(Path::parent).unwrap());
+}
+
+#[test]
 fn a_take_stopped_after_the_taps_go_keeps_the_blocks_stored_until_then() {
     use std::sync::atomic::{AtomicU64, Ordering};
     let dir = scratch("stop-after");

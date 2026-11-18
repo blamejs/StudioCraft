@@ -2108,13 +2108,20 @@ fn tracks_item(s: &studiocraft_studio::AudioTracksStatus, outputs_run: bool) -> 
     let tracks = s.tracks().to_string();
     match s.state()? {
         S::Recording | S::Finishing => {
-            let hover = if s.low_space() {
-                tl!("The disk is almost full; audio tracks stop before the recording or the stream runs out of space").to_string()
-            } else {
+            let mut warnings = Vec::new();
+            if s.low_space() {
+                warnings.push(tl!("The disk is almost full; audio tracks stop before the recording or the stream runs out of space"));
+            }
+            if s.track_limit() {
+                warnings.push(tl!("This take has made as many audio track files as it can; sources added since are not recorded to their own files"));
+            }
+            let hover = if warnings.is_empty() {
                 let lost = format!("{:.1}", s.dropped_seconds());
                 craft_i18n::fmt(tl!("{tracks} audio tracks; {lost} s of audio lost while the disk was slow"), &[("tracks", &tracks), ("lost", &lost)])
+            } else {
+                warnings.join("\n")
             };
-            Some((format!("{} {clock}", tl!("TRACKS")), s.low_space(), hover))
+            Some((format!("{} {clock}", tl!("TRACKS")), s.low_space() || s.track_limit(), hover))
         }
         S::Stopped if outputs_run => {
             Some((tl!("TRACKS stopped").to_string(), true, tl!("Audio tracks stopped early; the status message gives the reason").to_string()))

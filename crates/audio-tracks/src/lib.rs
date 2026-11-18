@@ -91,6 +91,7 @@ pub struct Status {
     tracks: AtomicU64,
     free_bytes: AtomicU64,
     low_space: AtomicBool,
+    track_limit: AtomicBool,
     ready: AtomicBool,
 }
 
@@ -147,6 +148,12 @@ impl Status {
 
     pub fn low_space(&self) -> bool {
         self.low_space.load(Ordering::Relaxed)
+    }
+
+    /// Whether a source was left without a file because the take already made
+    /// [`MAX_TAKE_TRACKS`] files.
+    pub fn track_limit(&self) -> bool {
+        self.track_limit.load(Ordering::Relaxed)
     }
 
     fn stop(&self, reason: StopReason) {
@@ -318,6 +325,7 @@ fn collect_loop(mut c: Collector, status: &Status, stop: &AtomicBool, tracks: &A
                 c.set_tracks(list);
             }
             status.tracks.store(c.tracks() as u64, Ordering::Relaxed);
+            status.track_limit.store(c.full(), Ordering::Relaxed);
         }
         c.poll();
         status.frames.store(c.position(), Ordering::Relaxed);

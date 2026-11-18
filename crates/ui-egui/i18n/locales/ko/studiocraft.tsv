@@ -451,6 +451,7 @@ menu	Transform	변형
 	The stream runs	방송 중
 	A recording or the stream runs	녹화 또는 방송 중
 	The disk is almost full; audio tracks stop before the recording or the stream runs out of space	디스크가 거의 가득 찼습니다. 녹화나 방송 공간이 부족해지기 전에 오디오 트랙이 멈춥니다
+	This take has made as many audio track files as it can; sources added since are not recorded to their own files	이 테이크에서 만들 수 있는 오디오 트랙 파일 수가 한도에 이르렀습니다. 그 뒤에 추가한 소스는 자체 파일로 기록되지 않습니다
 	{tracks} audio tracks; {lost} s of audio lost while the disk was slow	오디오 트랙 {tracks}개, 디스크가 느린 동안 {lost}초 분량의 오디오 손실
 	TRACKS	트랙
 	TRACKS stopped	트랙 중지됨

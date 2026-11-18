@@ -460,6 +460,7 @@ menu	Transform	Перетворення
 	The stream runs	Триває трансляція
 	A recording or the stream runs	Триває запис або трансляція
 	The disk is almost full; audio tracks stop before the recording or the stream runs out of space	Диск майже заповнений; звукові доріжки зупиняються раніше, ніж запису чи трансляції забракне місця
+	This take has made as many audio track files as it can; sources added since are not recorded to their own files	Цей дубль уже створив найбільшу можливу кількість файлів звукових доріжок; джерела, додані після цього, не записуються у власні файли
 	{tracks} audio tracks; {lost} s of audio lost while the disk was slow	Звукових доріжок: {tracks}; втрачено {lost} с звуку, поки диск працював повільно
 	TRACKS	ДОРІЖКИ
 	TRACKS stopped	ДОРІЖКИ зупинено
