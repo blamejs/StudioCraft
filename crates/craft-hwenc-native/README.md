@@ -17,6 +17,8 @@ Licensed under MIT OR Apache-2.0. See NOTICE for the sources.
 | `nvenc::available(codec)` | whether this system can open an NVENC session that writes `codec` |
 | `mf::Encoder` | the hardware H.264 and HEVC encoder MFTs that Windows Media Foundation lists (`mfplat.dll`), from NV12 frames; the same `Config`, `encode`, `flush` and `codec_private` as NVENC; quality `100 - 2 × level`, constant bitrate with a one-second buffer, no B-frames, BT.709 limited range |
 | `mf::available(codec)` | whether Media Foundation lists a hardware encoder that writes `codec` and opens |
+| `vt::Encoder` | the hardware H.264 High and HEVC Main encoders of macOS VideoToolbox, from NV12 frames; the same `Config`, `encode`, `flush` and `codec_private` as NVENC; a session that VideoToolbox reports as software is not used; quality `(100 - 2 × level) / 100`, constant bitrate on macOS 13 and later and otherwise an average bitrate with a one-second ceiling, no B-frames, BT.709 limited range |
+| `vt::available(codec)` | whether VideoToolbox opens a hardware encoder that writes `codec` |
 | `annexb::nals`, `to_length_prefixed`, `parameter_sets` | Annex B streams split into NAL units; samples without parameter sets or delimiters |
 | `avc::avcc`, `hevc::hvcc` | the decoder configuration records of ISO/IEC 14496-15, checked against the stream that was asked for |
 
@@ -40,8 +42,12 @@ for packet in enc.flush()? {
 ```
 
 `mf::Encoder` takes the same `Config` with `Input::Nv12`. Off Windows, and on Windows without a
-hardware encoder MFT, `Encoder::new` returns `Error::NoDevice`.
+hardware encoder MFT, `Encoder::new` returns `Error::NoDevice`. `vt::Encoder` also takes
+`Input::Nv12`. Off macOS, and on a Mac without a hardware encoder for the codec, `Encoder::new`
+returns `Error::NoDevice`.
 
-Only the private `nvenc_ffi` and `mf_ffi` modules contain `unsafe` code. The NVENC layout tests
-compare every structure the crate passes to the driver with the C header's sizes and offsets, and
-they run on every platform. The Media Foundation calls go through the `windows` crate's bindings.
+Only the private `nvenc_ffi`, `mf_ffi` and `vt_ffi` modules contain `unsafe` code. The NVENC
+layout tests compare every structure the crate passes to the driver with the C header's sizes and
+offsets, and they run on every platform. The Media Foundation calls go through the `windows`
+crate's bindings, and the VideoToolbox calls go through the `objc2-video-toolbox`,
+`objc2-core-media`, `objc2-core-video` and `objc2-core-foundation` bindings.

@@ -2,6 +2,7 @@
 //!
 //! - [`nvenc`] encodes H.264 and HEVC on NVIDIA GPUs through NVENC, on Windows and 64-bit Linux.
 //! - [`mf`] encodes H.264 and HEVC with the hardware encoders that Windows Media Foundation lists.
+//! - [`vt`] encodes H.264 and HEVC with the hardware encoders of macOS VideoToolbox.
 //! - [`annexb`] splits Annex B byte streams into NAL units and writes the 4-byte length-prefixed
 //!   samples a container stores.
 //! - [`avc`] and [`hevc`] build the `avcC` and `hvcC` records from the parameter sets an encoder
@@ -22,6 +23,9 @@ mod mf_ffi;
 pub mod nvenc;
 #[allow(unsafe_code)]
 mod nvenc_ffi;
+pub mod vt;
+#[allow(unsafe_code)]
+mod vt_ffi;
 
 /// The codec of a stream.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]

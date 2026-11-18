@@ -520,8 +520,8 @@ fn encoder_failed(candidate: &Candidate, error: &str) -> bool {
 }
 
 /// Tests the hardware encoders for an MKV recording: an encoder that also runs in this process
-/// (NVENC and Media Foundation H.264 and HEVC) is tested by opening it there and encoding one
-/// frame, and the others are tested in the ffmpeg program.
+/// (NVENC, Media Foundation and VideoToolbox H.264 and HEVC) is tested by opening it there and
+/// encoding one frame, and the others are tested in the ffmpeg program.
 struct BuiltInFirst {
     ffmpeg: FfmpegProber,
     fps: (u32, u32),
@@ -779,8 +779,8 @@ impl Studio {
         let mut hardware = None;
         let program = if encoder.ffmpeg().is_some() || encoder.id() == HARDWARE {
             let located = ffmpeg::locate(&self.profile.output.ffmpeg_path).map_err(|e| StudioError::Output(e.to_string()));
-            // The `hardware` choice of an MKV recording can still run NVENC or Media Foundation
-            // without ffmpeg.
+            // The `hardware` choice of an MKV recording can still run NVENC, Media Foundation or
+            // VideoToolbox without ffmpeg.
             let (program, missing) = match located {
                 Ok(program) => (program, None),
                 Err(e) if encoder.id() == HARDWARE && runs_built_in(&self.profile, kind, planned.rate) => (PathBuf::new(), Some(e)),
@@ -1010,6 +1010,8 @@ mod tests {
         assert_eq!(built_in_twin(("nvenc_hevc".into(), Some(run("nvenc_hevc")), None)).0, "nvenc_native_hevc");
         assert_eq!(built_in_twin(("mf_h264".into(), Some(run("mf_h264")), None)).0, "mf_native_h264");
         assert_eq!(built_in_twin(("mf_hevc".into(), Some(run("mf_hevc")), None)).0, "mf_native_hevc");
+        assert_eq!(built_in_twin(("vt_h264".into(), Some(run("vt_h264")), None)).0, "vt_native_h264");
+        assert_eq!(built_in_twin(("vt_hevc".into(), Some(run("vt_hevc")), None)).0, "vt_native_hevc");
         assert_eq!(built_in_twin(("amf_h264".into(), Some(run("amf_h264")), None)).0, "amf_h264", "no built-in twin");
         assert_eq!(built_in_twin(("x264".into(), None, None)).0, "x264");
 
@@ -1031,6 +1033,14 @@ mod tests {
             other => panic!("{other:?}"),
         }
         assert_eq!(p.runs_in(mf), Path::new(IN_PROCESS));
+        // So is VideoToolbox.
+        let vt = craft_hwenc::candidate("vt_h264").unwrap();
+        match p.probe(vt, Input::Nv12, &Cancel::new()) {
+            Outcome::Works => {}
+            Outcome::NoDevice(why) => assert!(why.starts_with("Apple VideoToolbox H.264 (built in) cannot "), "{why}"),
+            other => panic!("{other:?}"),
+        }
+        assert_eq!(p.runs_in(vt), Path::new(IN_PROCESS));
         // AMF is tested in ffmpeg; a missing ffmpeg does not stop the tests before NVENC.
         assert!(matches!(p.probe(amf, Input::Nv12, &Cancel::new()), Outcome::NoDevice(why) if why.contains("was not found")));
         let canceled = Cancel::new();

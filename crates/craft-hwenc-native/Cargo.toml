@@ -1,13 +1,13 @@
 [package]
 name = "craft-hwenc-native"
-description = "Hardware video encoders called through the drivers' own APIs: NVENC H.264 and HEVC from NV12 or P010 frames, and the Windows Media Foundation hardware H.264 and HEVC encoders from NV12 frames, with the avcC and hvcC records built from the parameter sets the encoder writes"
+description = "Hardware video encoders called through the drivers' own APIs: NVENC H.264 and HEVC from NV12 or P010 frames, the Windows Media Foundation hardware H.264 and HEVC encoders, and the macOS VideoToolbox hardware H.264 and HEVC encoders from NV12 frames, with the avcC and hvcC records built from the parameter sets the encoder writes"
 version = "0.1.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 publish = false
 
 # One of the crates `cargo xtask unsafe` lets opt in to unsafe code (AGENTS.md 0.3): only the
-# `nvenc_ffi` and `mf_ffi` modules allow it, and every unsafe block carries a SAFETY comment.
+# `nvenc_ffi`, `mf_ffi` and `vt_ffi` modules allow it, and every unsafe block carries a SAFETY comment.
 [lints.rust]
 unsafe_code = "deny"
 unsafe_op_in_unsafe_fn = "deny"
@@ -46,3 +46,10 @@ windows = { version = "0.62", features = [
 [target.'cfg(all(target_os = "linux", target_pointer_width = "64"))'.dependencies]
 libloading = "0.8"
 log.workspace = true
+
+# macOS: VideoToolbox, CoreMedia, CoreVideo and CoreFoundation through the objc2 bindings.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2-core-foundation = "0.3.2"
+objc2-core-media = "0.3.2"
+objc2-core-video = "0.3.2"
+objc2-video-toolbox = "0.3.2"

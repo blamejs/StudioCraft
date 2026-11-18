@@ -712,7 +712,7 @@ fn without_ffmpeg_only_an_mkv_recording_tests_the_hardware_encoders() {
     p.stream.server = "rtmp://127.0.0.1/live".into();
     let mut s = studio_with(Some(noop_gpu()), SceneCollection::new("Test", "Scene"), p.clone());
     s.start_output(OutputKind::Recording).unwrap();
-    assert!(s.testing_hardware(OutputKind::Recording), "NVENC and Media Foundation can still run in this process");
+    assert!(s.testing_hardware(OutputKind::Recording), "NVENC, Media Foundation and VideoToolbox can still run in this process");
     while s.testing_hardware(OutputKind::Recording) {
         s.tick();
         std::thread::yield_now();

@@ -124,6 +124,8 @@
 	NVIDIA NVENC HEVC (built in)	NVIDIA NVENC HEVC (내장)
 	Windows Media Foundation H.264 (built in)	Windows Media Foundation H.264 (내장)
 	Windows Media Foundation HEVC (built in)	Windows Media Foundation HEVC (내장)
+	Apple VideoToolbox H.264 (built in)	Apple VideoToolbox H.264 (내장)
+	Apple VideoToolbox HEVC (built in)	Apple VideoToolbox HEVC (내장)
 	Height	높이
 	Help	도움말
 	Hide	숨기기

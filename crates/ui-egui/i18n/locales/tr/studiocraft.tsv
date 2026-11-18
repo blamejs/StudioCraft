@@ -124,6 +124,8 @@
 	NVIDIA NVENC HEVC (built in)	NVIDIA NVENC HEVC (yerleşik)
 	Windows Media Foundation H.264 (built in)	Windows Media Foundation H.264 (yerleşik)
 	Windows Media Foundation HEVC (built in)	Windows Media Foundation HEVC (yerleşik)
+	Apple VideoToolbox H.264 (built in)	Apple VideoToolbox H.264 (yerleşik)
+	Apple VideoToolbox HEVC (built in)	Apple VideoToolbox HEVC (yerleşik)
 	Height	Yükseklik
 	Help	Yardım
 	Hide	Gizle
