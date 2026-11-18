@@ -135,8 +135,13 @@ flags. The two flags keep the headless backend's file access inside the folders 
   file that does not exist yet, its nearest existing folder's links are followed and the rest must
   be plain names, so `..` below a missing folder and a link that leads nowhere are refused. The
   result is compared with each root folder name by folder name: `/work2/x` is not inside `/work`.
-  On Windows case is ignored, and device names (`CON`, `NUL`, `COM1`) and a `:` after the drive are
-  refused.
+  On Windows case is ignored, and device names (`CON`, `NUL`, `COM1`), a `:` after the drive, a
+  file or folder name that ends in a dot or a space, and a path that starts with `\\?\` or `\\.\`
+  are refused.
+- A call runs with the path that was checked: the path settings a command stores or a collection
+  opens with, and the `folder` a repair reads, are the absolute paths with their links followed. A
+  path that resolves to a name that is not valid Unicode is refused, and so is one whose stored
+  text, checked again, resolves to a different path.
 - A refused call fails before anything runs. Without either flag nothing is checked.
 - The roots apply to the headless backend only. Combining them, `--allow-streaming` or
   `--collection` with a port is an error at startup (exit code 2).

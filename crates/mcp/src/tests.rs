@@ -1107,7 +1107,55 @@ fn source_files_are_held_to_the_read_roots() {
     assert!(text.contains("outside the read roots"), "{text}");
     let doc = ok_json(&call(&mut s, "doc_inspect", json!({"detail": "full"})));
     let logo = doc["collection"]["sources"].as_array().unwrap().iter().find(|x| x["name"] == "Logo").cloned().unwrap();
-    assert_eq!(logo["settings"]["file"].as_str(), Some(inside.as_str()), "{logo}");
+    assert_eq!(logo["settings"]["file"].as_str(), Some(resolved_text(&dir.join("in/logo.png")).as_str()), "{logo}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// `p` with its links followed, as the roots store a path they checked.
+fn resolved_text(p: &std::path::Path) -> String {
+    text_of(&crate::roots::shown(&std::fs::canonicalize(p).unwrap()))
+}
+
+#[test]
+fn a_source_file_is_set_to_the_path_the_roots_checked() {
+    let dir = root_folders("resolved-roots");
+    std::fs::create_dir_all(dir.join("in/sub")).unwrap();
+    std::fs::write(dir.join("in/logo.png"), b"not a picture").unwrap();
+    let mut s = confined(&[dir.join("in")], &[dir.join("out")]);
+    let roundabout = text_of(&dir.join("in").join("sub").join("..").join("logo.png"));
+    ok_json(&call(&mut s, "source_add", json!({"kind": "image", "name": "Logo", "settings": {"file": roundabout}})));
+    let logo_file = |s: &mut Server| {
+        let doc = ok_json(&call(s, "doc_inspect", json!({"detail": "full"})));
+        let logo = doc["collection"]["sources"].as_array().unwrap().iter().find(|x| x["name"] == "Logo").cloned().unwrap();
+        logo["settings"]["file"].as_str().map(str::to_owned)
+    };
+    let want = resolved_text(&dir.join("in/logo.png"));
+    assert_eq!(logo_file(&mut s).as_deref(), Some(want.as_str()));
+    // A collection opened from a file is set to the checked paths too.
+    let mut free = server();
+    ok_json(&call(&mut free, "source_add", json!({"kind": "image", "name": "Logo", "settings": {"file": roundabout}})));
+    ok_json(&call(&mut free, "collection_save", json!({"path": text_of(&dir.join("in/roundabout.json"))})));
+    ok_json(&call(&mut s, "collection_open", json!({"path": text_of(&dir.join("in/roundabout.json"))})));
+    assert_eq!(logo_file(&mut s).as_deref(), Some(want.as_str()));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[cfg(windows)]
+#[test]
+fn a_checked_path_is_stored_only_when_its_text_names_the_same_path() {
+    use crate::headless::setting_text;
+    use crate::roots::Access;
+    let dir = root_folders("stored-text");
+    std::fs::write(dir.join("in/logo.png"), b"not a picture").unwrap();
+    let roots = Roots::new(&[dir.join("in")], &[dir.join("out")]).unwrap();
+    let logo = std::fs::canonicalize(dir.join("in/logo.png")).unwrap();
+    assert_eq!(setting_text(&roots, &logo, Access::Read).unwrap(), resolved_text(&dir.join("in/logo.png")));
+    // Without `\\?\`, Windows drops the dot that ends this name and reads logo.png instead.
+    let dotted = std::path::PathBuf::from(format!("{}.", logo.display()));
+    std::fs::write(&dotted, b"another file").unwrap();
+    let e = setting_text(&roots, &dotted, Access::Read).unwrap_err();
+    assert!(e.to_string().contains("ends in a dot"), "{e}");
+    let _ = std::fs::remove_file(&dotted);
     let _ = std::fs::remove_dir_all(&dir);
 }
 

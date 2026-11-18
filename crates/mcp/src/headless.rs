@@ -15,7 +15,7 @@ use studiocraft_studio::files::read_collection_file;
 use studiocraft_studio::{OutputKind, Studio, StudioError, View, builtin_registry, default_collection, recording_folder};
 
 use crate::backend::{Backend, McpError};
-use crate::roots::{Access, Roots};
+use crate::roots::{Access, Roots, shown};
 
 /// How long one capture waits for the compositor.
 const CAPTURE_WAIT: Duration = Duration::from_secs(2);
@@ -37,6 +37,22 @@ type Params = Map<String, Value>;
 
 fn needs_app(what: &str) -> McpError {
     McpError::NeedsApp(format!("{what} needs the app's window; {BRIDGE_HINT}"))
+}
+
+/// The path `roots` resolved for `access`, as the text a setting or command holds: the path
+/// without Windows' `\\?\` prefix, which is checked with `roots` again and must resolve to
+/// `resolved`. Windows reads a path without that prefix by other rules (it drops the dots and
+/// spaces that end a name), so a text that resolves elsewhere is an error, as is a path that is
+/// not valid Unicode.
+pub(crate) fn setting_text(roots: &Roots, resolved: &Path, access: Access) -> Result<String, McpError> {
+    if resolved.to_str().is_none() {
+        return Err(McpError::Invalid(format!("{} resolves to a path that is not valid Unicode", resolved.display())));
+    }
+    let text = shown(resolved).to_string_lossy().into_owned();
+    if roots.check(Path::new(&text), access)?.as_path() != resolved {
+        return Err(McpError::Invalid(format!("{text} does not name the path the roots checked")));
+    }
+    Ok(text)
 }
 
 /// The parameters as an object; a missing one is empty.
@@ -140,40 +156,46 @@ impl Headless {
         }
     }
 
-    /// Every path field of `schema` set in `settings`, held to the roots.
-    fn check_paths(&self, schema: &SettingsSchema, settings: &Settings) -> Result<(), McpError> {
+    /// Every path field of `schema` set in `settings`, held to the roots: `settings` with each such
+    /// path replaced by the path the roots resolved, so the source opens the file that was checked.
+    fn check_paths(&self, schema: &SettingsSchema, settings: &Settings) -> Result<Settings, McpError> {
+        let mut held = settings.clone();
         for field in &schema.fields {
             let FieldKind::Path { mode, .. } = &field.kind else { continue };
             let Some(path) = settings.get(&field.key).and_then(Value::as_str).filter(|p| !p.trim().is_empty()) else { continue };
             let access = if *mode == PathMode::SaveFile { Access::Write } else { Access::Read };
-            self.allowed(Path::new(path), access)?;
+            let resolved = self.allowed(Path::new(path), access)?;
+            if let Some(roots) = &self.options.roots {
+                held.set(&field.key, setting_text(roots, &resolved, access)?);
+            }
         }
-        Ok(())
+        Ok(held)
     }
 
-    /// The path settings of a source and its filters, held to the roots.
-    fn check_source(&self, source: &SourceConfig) -> Result<(), McpError> {
+    /// The path settings of a source and its filters, held to the roots and set to the paths the
+    /// roots resolved.
+    fn check_source(&self, source: &mut SourceConfig) -> Result<(), McpError> {
         let registry = self.studio.registry();
         // A kind this build lacks is not run, so its settings read no file.
         if let Ok(plugin) = registry.source(&source.kind) {
-            self.check_paths(&plugin.schema(), &source.settings)?;
+            source.settings = self.check_paths(&plugin.schema(), &source.settings)?;
         }
-        for f in &source.filters {
+        for f in &mut source.filters {
             if let Ok(plugin) = registry.filter(&f.kind) {
-                self.check_paths(&plugin.schema(), &f.settings)?;
+                f.settings = self.check_paths(&plugin.schema(), &f.settings)?;
             }
         }
         Ok(())
     }
 
     /// Every file a scene collection's sources, filters and transition name, held to the read
-    /// roots.
-    fn check_collection(&self, c: &SceneCollection) -> Result<(), McpError> {
-        for s in &c.sources {
+    /// roots and set to the paths the roots resolved.
+    fn check_collection(&self, c: &mut SceneCollection) -> Result<(), McpError> {
+        for s in &mut c.sources {
             self.check_source(s)?;
         }
         if let Ok(plugin) = self.studio.registry().transition(&c.transition.kind) {
-            self.check_paths(&plugin.schema(), &c.transition.settings)?;
+            c.transition.settings = self.check_paths(&plugin.schema(), &c.transition.settings)?;
         }
         Ok(())
     }
@@ -197,9 +219,10 @@ impl Headless {
     }
 
     /// Refuse a command that would stream without permission or reach a file outside the roots,
-    /// before anything runs.
-    fn guard(&self, cmd: &Command) -> Result<(), McpError> {
-        let starts_stream = match cmd {
+    /// before anything runs. The command to run: with roots, each path it names is replaced by the
+    /// path the roots resolved, so it acts on the file or folder that was checked.
+    fn guard(&self, mut cmd: Command) -> Result<Command, McpError> {
+        let starts_stream = match &cmd {
             Command::StreamStart {} => true,
             Command::StreamToggle {} => !self.running(OutputKind::Streaming),
             _ => false,
@@ -207,11 +230,9 @@ impl Headless {
         if starts_stream && !self.options.allow_streaming {
             return Err(McpError::NotAllowed(STREAMING_REFUSED.into()));
         }
-        if self.options.roots.is_none() {
-            return Ok(());
-        }
+        let Some(roots) = &self.options.roots else { return Ok(cmd) };
         let registry = self.studio.registry();
-        match cmd {
+        match &mut cmd {
             Command::RecordStart {} | Command::RecordToggle {} if !self.running(OutputKind::Recording) => {
                 let folder = recording_folder(&self.studio.profile().output.folder);
                 self.allowed(&folder, Access::Write)?;
@@ -228,32 +249,33 @@ impl Headless {
             }
             // Repair rewrites the files it finds.
             Command::AudioTracksRepair { folder } => {
-                self.allowed(Path::new(folder), Access::Write)?;
+                let resolved = self.allowed(Path::new(folder.as_str()), Access::Write)?;
+                *folder = setting_text(roots, &resolved, Access::Write)?;
             }
             Command::SourceAdd { kind, settings: Some(settings), .. } => {
                 if let Ok(plugin) = registry.source(kind) {
-                    self.check_paths(&plugin.schema(), settings)?;
+                    *settings = self.check_paths(&plugin.schema(), settings)?;
                 }
             }
             Command::SourceSettings { source, settings } => {
                 if let Some(plugin) = self.source_config(source).and_then(|s| registry.source(&s.kind).ok()) {
-                    self.check_paths(&plugin.schema(), settings)?;
+                    *settings = self.check_paths(&plugin.schema(), settings)?;
                 }
             }
             Command::FilterSettings { source, filter, settings } => {
                 let kind = self.source_config(source).and_then(|s| s.filters.iter().find(|f| f.id.0 == *filter)).map(|f| f.kind.as_str());
                 if let Some(plugin) = kind.and_then(|k| registry.filter(k).ok()) {
-                    self.check_paths(&plugin.schema(), settings)?;
+                    *settings = self.check_paths(&plugin.schema(), settings)?;
                 }
             }
             Command::TransitionSettings { settings } => {
                 if let Ok(plugin) = registry.transition(&self.studio.collection().transition.kind) {
-                    self.check_paths(&plugin.schema(), settings)?;
+                    *settings = self.check_paths(&plugin.schema(), settings)?;
                 }
             }
             _ => {}
         }
-        Ok(())
+        Ok(cmd)
     }
 
     fn open(&mut self, p: &Params) -> Result<Value, McpError> {
@@ -262,8 +284,8 @@ impl Headless {
             self.studio.open_collection(path)?;
         } else {
             let resolved = self.allowed(path, Access::Read)?;
-            let collection = read_collection_file(&resolved)?;
-            self.check_collection(&collection)?;
+            let mut collection = read_collection_file(&resolved)?;
+            self.check_collection(&mut collection)?;
             self.studio.load_collection(collection);
         }
         Ok(json!({"opened": true}))
@@ -292,7 +314,7 @@ impl Headless {
             )));
         }
         let cmd = Command::from_parts(id, &params).map_err(|e| McpError::Studio(StudioError::Engine(EngineError::Invalid(e))))?;
-        self.guard(&cmd)?;
+        let cmd = self.guard(cmd)?;
         let (result, _) = self.studio.execute(cmd)?;
         Ok(result)
     }
