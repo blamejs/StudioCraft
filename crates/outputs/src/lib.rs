@@ -4,9 +4,11 @@
 //! Matroska, MP4 or QuickTime file, and a stream sends FLV over RTMP or RTMPS. With the built-in
 //! encoders, a recording writes a Matroska file from this process ([`native`]). The video encoders
 //! ffmpeg offers are plug-ins ([`encoders`]), and so are the built-in ones: H.264
-//! ([`studiocraft_encode::H264`]) and NVENC H.264 and HEVC ([`studiocraft_encode::Nvenc`]). The
+//! ([`studiocraft_encode::H264`]), NVENC H.264 and HEVC ([`studiocraft_encode::Nvenc`]) and the
+//! Media Foundation hardware H.264 and HEVC encoders ([`studiocraft_encode::MediaFoundation`]). The
 //! hardware choice ([`encoders::Hardware`]) is resolved by the studio to one of the ffmpeg encoders,
-//! or to built-in NVENC for an MKV recording or the replay buffer, before an output starts. The
+//! or to a built-in hardware encoder for an MKV recording or the replay buffer, before an output
+//! starts. The
 //! replay buffer ([`replay`]) runs the built-in encoders and keeps their newest packets in memory
 //! until a save writes them to a Matroska file.
 
@@ -40,6 +42,8 @@ pub fn register_all(reg: &mut Registry) -> Result<(), PluginError> {
     reg.register_encoder(Arc::new(studiocraft_encode::H264))?;
     reg.register_encoder(Arc::new(studiocraft_encode::Nvenc::H264))?;
     reg.register_encoder(Arc::new(studiocraft_encode::Nvenc::HEVC))?;
+    reg.register_encoder(Arc::new(studiocraft_encode::MediaFoundation::H264))?;
+    reg.register_encoder(Arc::new(studiocraft_encode::MediaFoundation::HEVC))?;
     Ok(())
 }
 

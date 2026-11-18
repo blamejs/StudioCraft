@@ -208,6 +208,8 @@
 	NVIDIA NVENC H.264 (built in)	NVIDIA NVENC H.264 (built in)
 	NVIDIA NVENC HEVC	NVIDIA NVENC HEVC
 	NVIDIA NVENC HEVC (built in)	NVIDIA NVENC HEVC (built in)
+	Windows Media Foundation H.264 (built in)	Windows Media Foundation H.264 (built in)
+	Windows Media Foundation HEVC (built in)	Windows Media Foundation HEVC (built in)
 	OK	OK
 	Opacity (%)	Opacity (%)
 	Open above (dB)	Open above (dB)

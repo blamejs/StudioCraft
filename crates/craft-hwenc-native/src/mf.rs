@@ -1,0 +1,406 @@
+//! The hardware H.264 and HEVC encoders that Windows Media Foundation lists (the GPU vendors'
+//! encoder MFTs), through `mfplat.dll`, which is loaded at run time. Frames go in as NV12 in system
+//! memory and come out as Annex B, which [`Encoder`] turns into 4-byte length-prefixed samples with
+//! the parameter sets in the `avcC` or `hvcC` record ([`Encoder::codec_private`]).
+//!
+//! - Quality mode sets the encoder's quality to `100 - 2 × level`, 0 to 98. Bitrate mode is
+//!   constant bitrate with a one-second buffer.
+//! - The encoder is asked for no B-frames, and each packet's decoding time is its presentation
+//!   time. A frame that comes out before one that went in earlier is an error.
+//! - The media types say BT.709 at limited range.
+//! - When the encoder's output type carries no parameter sets, [`Encoder::new`] encodes one gray
+//!   frame in a second instance of the encoder and takes them from its output. A keyframe whose
+//!   own parameter sets differ from the record is an error.
+
+use std::collections::VecDeque;
+
+use crate::mf_ffi::{self, OpenError, Output, Params, Transform};
+use crate::{Codec, annexb, avc, hevc};
+pub use crate::{Config, Error, Input, Packet, Rate};
+
+impl From<OpenError> for Error {
+    fn from(e: OpenError) -> Error {
+        match e {
+            OpenError::NoDevice(why) => Error::NoDevice(why),
+            OpenError::Busy(why) => Error::Busy(why),
+            OpenError::Unsupported(why) => Error::Unsupported(why),
+        }
+    }
+}
+
+/// Media Foundation's clock: 100 ns units.
+const TICKS_PER_SECOND: i128 = 10_000_000;
+
+/// Whether Media Foundation loads and starts on this system. It is loaded once per process, so
+/// later calls cost nothing.
+pub fn driver() -> Result<(), Error> {
+    mf_ffi::loaded().map_err(Error::NoDevice)
+}
+
+/// Whether Media Foundation lists a hardware encoder that writes `codec` and takes a 256 × 144
+/// stream at 30 frames per second. It opens the encoder and closes it again.
+pub fn available(codec: Codec) -> Result<(), Error> {
+    driver()?;
+    let cfg = Config { codec, input: Input::Nv12, width: 256, height: 144, fps: (30, 1), rate: Rate::Quality(23), keyint: 60 };
+    Transform::open(&params(&cfg)).map(drop).map_err(Error::from)
+}
+
+fn params(cfg: &Config) -> Params {
+    Params { codec: cfg.codec, width: cfg.width, height: cfg.height, fps: cfg.fps, rate: cfg.rate, gop: cfg.keyint.max(1) }
+}
+
+/// The widest and tallest frame this crate sends to a Media Foundation encoder.
+const MAX_SIDE: u32 = 8192;
+
+/// Check `cfg` without Media Foundation: sizes, rate and input.
+fn check(cfg: &Config) -> Result<(), Error> {
+    let bad = |e: String| Err(Error::Unsupported(e));
+    let (w, h) = (cfg.width, cfg.height);
+    if w == 0 || h == 0 || w % 2 != 0 || h % 2 != 0 {
+        return bad(format!("{w}x{h}: the encoder needs even, nonzero dimensions"));
+    }
+    if w > MAX_SIDE || h > MAX_SIDE {
+        return bad(format!("{w}x{h}: the encoders take at most {MAX_SIDE} pixels a side"));
+    }
+    if cfg.fps.0 == 0 || cfg.fps.1 == 0 {
+        return bad(format!("the frame rate {}/{} is not a rate", cfg.fps.0, cfg.fps.1));
+    }
+    if cfg.input != Input::Nv12 {
+        return bad("the Media Foundation encoders take NV12 frames only".into());
+    }
+    match cfg.rate {
+        Rate::Quality(q) if !(1..=51).contains(&q) => bad(format!("the quality level {q} is outside 1 to 51")),
+        Rate::Cbr(0) => bad("a bitrate of 0 kbit/s".into()),
+        Rate::Cbr(kbps) if kbps > u32::MAX / 1000 => bad(format!("a bitrate of {kbps} kbit/s")),
+        _ => Ok(()),
+    }
+}
+
+/// The NAL unit types of `codec`'s parameter sets, in the order the record takes them.
+fn set_types(codec: Codec) -> &'static [(u8, &'static str)] {
+    match codec {
+        Codec::H264 => &[(7, "SPS"), (8, "PPS")],
+        Codec::Hevc => &[(32, "VPS"), (33, "SPS"), (34, "PPS")],
+    }
+}
+
+/// The parameter sets in the Annex B `header` and the `avcC` or `hvcC` record made of them.
+fn record_of(cfg: &Config, header: &[u8]) -> Result<(Vec<Vec<u8>>, Vec<u8>), Error> {
+    let sets = annexb::parameter_sets(cfg.codec, header, set_types(cfg.codec)).map_err(Error::Failed)?;
+    let record = match (cfg.codec, sets.as_slice()) {
+        (Codec::H264, [sps, pps]) => avc::avcc(sps, pps),
+        (Codec::Hevc, [vps, sps, pps]) => hevc::hvcc(vps, sps, pps, (cfg.width, cfg.height), 8),
+        _ => Err("the encoder returned no parameter sets".into()),
+    }
+    .map_err(Error::Failed)?;
+    Ok((sets, record))
+}
+
+/// Whether the Annex B `data` holds a picture a decoder can start at: IDR for H.264, an IRAP
+/// picture (types 16 to 21) for HEVC.
+fn is_keyframe(codec: Codec, data: &[u8]) -> bool {
+    annexb::nals(data).iter().any(|n| match (codec, annexb::nal_type(codec, n)) {
+        (Codec::H264, Some(t)) => t == 5,
+        (Codec::Hevc, Some(t)) => (16..=21).contains(&t),
+        (_, None) => false,
+    })
+}
+
+/// The frames of one stream between the encoder and its packets: the Media Foundation time each
+/// frame goes in at, and the timestamp and parameter sets each packet must come out with.
+struct Track {
+    codec: Codec,
+    fps: (u32, u32),
+    sets: Vec<Vec<u8>>,
+    frames: u64,
+    /// Frames sent and not returned, oldest first: their Media Foundation time and timestamp.
+    pending: VecDeque<(i64, i64)>,
+}
+
+impl Track {
+    fn new(codec: Codec, fps: (u32, u32), sets: Vec<Vec<u8>>) -> Track {
+        Track { codec, fps, sets, frames: 0, pending: VecDeque::new() }
+    }
+
+    /// The Media Foundation time of frame `n`, from the frame rate.
+    fn time_of(&self, n: u64) -> i64 {
+        let t = i128::from(n) * TICKS_PER_SECOND * i128::from(self.fps.1) / i128::from(self.fps.0.max(1));
+        i64::try_from(t).unwrap_or(i64::MAX)
+    }
+
+    /// The time and duration the next frame goes in with, remembered with its timestamp `pts`.
+    fn send(&mut self, pts: i64) -> (i64, i64) {
+        let (time, next) = (self.time_of(self.frames), self.time_of(self.frames.saturating_add(1)));
+        self.frames = self.frames.saturating_add(1);
+        self.pending.push_back((time, pts));
+        (time, next.saturating_sub(time).max(1))
+    }
+
+    /// The packet of one output sample. A sample at a later time than the oldest frame sent means
+    /// the encoder dropped the frames before it; a sample at an earlier time is out of order.
+    fn packet(&mut self, o: Output) -> Result<Packet, Error> {
+        let pts = loop {
+            let Some((time, pts)) = self.pending.pop_front() else {
+                return Err(Error::Failed("the encoder returned more frames than it was given".into()));
+            };
+            match o.time {
+                None => break pts,
+                Some(t) if t == time => break pts,
+                Some(t) if t > time => continue,
+                Some(_) => return Err(Error::Failed("the encoder returned a frame out of order".into())),
+            }
+        };
+        let keyframe = is_keyframe(self.codec, &o.data);
+        if keyframe
+            && let Ok(sets) = annexb::parameter_sets(self.codec, &o.data, set_types(self.codec))
+            && sets != self.sets
+        {
+            return Err(Error::Failed("the encoder changed its parameter sets".into()));
+        }
+        let data = annexb::to_length_prefixed(self.codec, &o.data).map_err(Error::Failed)?;
+        Ok(Packet { data, pts, keyframe })
+    }
+}
+
+/// A Media Foundation hardware encoder.
+pub struct Encoder {
+    transform: Transform,
+    cfg: Config,
+    record: Vec<u8>,
+    track: Track,
+}
+
+impl Encoder {
+    /// Open an encoder for `cfg`, or say why this system cannot run it.
+    pub fn new(cfg: &Config) -> Result<Encoder, Error> {
+        check(cfg)?;
+        let p = params(cfg);
+        let mut transform = Transform::open(&p)?;
+        let header = match transform.sequence_header() {
+            Some(h) => h,
+            None => {
+                // Some GPUs allow one encoding session, so this instance closes before the
+                // gray frame's instance opens. Off Windows the stub holds nothing to drop.
+                #[cfg_attr(not(target_os = "windows"), allow(clippy::drop_non_drop))]
+                drop(transform);
+                let h = first_frame(cfg, &p)?;
+                transform = Transform::open(&p)?;
+                h
+            }
+        };
+        let (sets, record) = record_of(cfg, &header)?;
+        Ok(Encoder { transform, cfg: *cfg, record, track: Track::new(cfg.codec, cfg.fps, sets) })
+    }
+
+    /// The `avcC` (H.264) or `hvcC` (HEVC) record a container stores with the track.
+    pub fn codec_private(&self) -> &[u8] {
+        &self.record
+    }
+
+    /// The settings the encoder runs with.
+    pub fn config(&self) -> &Config {
+        &self.cfg
+    }
+
+    /// Encode `frame` (NV12 of the configured size) with the timestamp `pts`, which must not be
+    /// negative. Returns the packets that came out, oldest first.
+    pub fn encode(&mut self, frame: &[u8], pts: i64) -> Result<Vec<Packet>, Error> {
+        let expected = Input::Nv12.frame_bytes(self.cfg.width, self.cfg.height);
+        if frame.len() != expected {
+            return Err(Error::Failed(format!("a frame of {} bytes is not an NV12 frame of {}x{}", frame.len(), self.cfg.width, self.cfg.height)));
+        }
+        if pts < 0 {
+            return Err(Error::Failed(format!("the timestamp {pts} is negative")));
+        }
+        let (time, duration) = self.track.send(pts);
+        let mut outputs = Vec::new();
+        let sent = self.transform.encode(frame, time, duration, &mut outputs);
+        if sent.is_err() {
+            self.track.pending.pop_back();
+        }
+        let packets = outputs.into_iter().map(|o| self.track.packet(o)).collect::<Result<Vec<_>, _>>()?;
+        sent.map_err(Error::Failed)?;
+        Ok(packets)
+    }
+
+    /// End the stream: every frame still inside comes out.
+    pub fn flush(&mut self) -> Result<Vec<Packet>, Error> {
+        let mut outputs = Vec::new();
+        self.transform.drain(&mut outputs).map_err(Error::Failed)?;
+        outputs.into_iter().map(|o| self.track.packet(o)).collect()
+    }
+}
+
+/// The output of one gray frame from a separate instance of the encoder for `cfg`: the parameter
+/// sets of an encoder whose output type carries none.
+fn first_frame(cfg: &Config, p: &Params) -> Result<Vec<u8>, Error> {
+    let mut t = Transform::open(p)?;
+    let (w, h) = (cfg.width as usize, cfg.height as usize);
+    let gray = [vec![16u8; w * h], vec![128u8; w * h / 2]].concat();
+    let (time, duration) = Track::new(cfg.codec, cfg.fps, Vec::new()).send(0);
+    let mut out = Vec::new();
+    t.encode(&gray, time, duration, &mut out).map_err(Error::Failed)?;
+    t.drain(&mut out).map_err(Error::Failed)?;
+    let data: Vec<u8> = out.into_iter().flat_map(|o| o.data).collect();
+    if data.is_empty() {
+        return Err(Error::Failed("the encoder returned no parameter sets and no frame".into()));
+    }
+    Ok(data)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn cfg(codec: Codec) -> Config {
+        Config { codec, input: Input::Nv12, width: 256, height: 144, fps: (30, 1), rate: Rate::Quality(23), keyint: 60 }
+    }
+
+    /// An Annex B access unit of the NAL units `nals`, each a header byte (two for HEVC) and one
+    /// byte of payload.
+    fn annex_b(nals: &[&[u8]]) -> Vec<u8> {
+        nals.iter().flat_map(|n| [&[0u8, 0, 0, 1][..], *n].concat()).collect()
+    }
+
+    const SPS: &[u8] = &[0x67, 1];
+    const PPS: &[u8] = &[0x68, 2];
+    const IDR: &[u8] = &[0x65, 3];
+    const P: &[u8] = &[0x41, 4];
+
+    fn track() -> Track {
+        Track::new(Codec::H264, (30000, 1001), vec![SPS.to_vec(), PPS.to_vec()])
+    }
+
+    #[test]
+    fn configurations_the_encoder_cannot_take_are_refused_before_media_foundation() {
+        let ok = cfg(Codec::Hevc);
+        assert_eq!(check(&ok), Ok(()));
+        for bad in [
+            Config { width: 255, ..ok },
+            Config { height: 0, ..ok },
+            Config { width: 8194, ..ok },
+            Config { height: u32::MAX - 1, ..ok },
+            Config { fps: (30, 0), ..ok },
+            Config { fps: (0, 1), ..ok },
+            Config { input: Input::P010, ..ok },
+            Config { rate: Rate::Quality(0), ..ok },
+            Config { rate: Rate::Quality(52), ..ok },
+            Config { rate: Rate::Cbr(0), ..ok },
+            Config { rate: Rate::Cbr(u32::MAX / 1000 + 1), ..ok },
+        ] {
+            assert!(matches!(check(&bad), Err(Error::Unsupported(_))), "{bad:?}");
+            assert!(matches!(Encoder::new(&bad), Err(Error::Unsupported(_))), "{bad:?} reached Media Foundation");
+        }
+    }
+
+    #[test]
+    fn levels_map_to_the_encoders_quality_scale_and_quality_mode_names_a_bitrate() {
+        assert_eq!([1, 23, 50, 51].map(mf_ffi::quality), [98, 54, 0, 0]);
+        let p = params(&Config { width: 1920, height: 1080, fps: (60, 1), ..cfg(Codec::H264) });
+        assert_eq!(mf_ffi::nominal_bitrate(&p), 12_441_600);
+        let huge = Params { width: u32::MAX, height: u32::MAX, fps: (u32::MAX, 1), ..p };
+        assert_eq!(mf_ffi::nominal_bitrate(&huge), u32::MAX);
+        assert_eq!(mf_ffi::nominal_bitrate(&Params { width: 2, height: 2, ..p }), 24);
+    }
+
+    #[test]
+    fn output_buffers_hold_a_raw_frame_and_an_encoder_cannot_ask_for_any_size() {
+        assert_eq!(mf_ffi::output_size(0, 1920, 1080), Ok(3_110_400));
+        assert_eq!(mf_ffi::output_size(0, 16, 16), Ok(1 << 20));
+        assert_eq!(mf_ffi::output_size(64 << 20, 16, 16), Ok(64 << 20));
+        assert!(mf_ffi::output_size((64 << 20) + 1, 16, 16).is_err());
+        assert_eq!(mf_ffi::output_size(99_532_800, 7680, 4320), Ok(99_532_800), "two raw 8K frames");
+        assert!(mf_ffi::output_size(99_532_801, 7680, 4320).is_err());
+        assert!(mf_ffi::output_size(u32::MAX, u32::MAX, u32::MAX).is_err());
+    }
+
+    #[test]
+    fn frames_go_in_at_the_frame_rates_times_and_their_durations_add_up() {
+        let mut t = track();
+        let sent: Vec<_> = (0..4).map(|pts| t.send(pts * 1001)).collect();
+        assert_eq!(sent, [(0, 333_666), (333_666, 333_667), (667_333, 333_667), (1_001_000, 333_666)]);
+        assert_eq!(t.time_of(30_000), 10_010_000_000, "1001 seconds after 30000 frames at 29.97");
+        assert_eq!(Track::new(Codec::Hevc, (u32::MAX, 1), Vec::new()).send(0), (0, 1), "a frame is never 0 ticks long");
+    }
+
+    #[test]
+    fn packets_take_the_timestamps_their_frames_went_in_with() {
+        let mut t = track();
+        let times: Vec<_> = (0..3).map(|pts| t.send(100 + pts).0).collect();
+        let key = t.packet(Output { data: annex_b(&[SPS, PPS, IDR]), time: Some(times[0]) }).unwrap();
+        assert_eq!((key.pts, key.keyframe), (100, true));
+        assert_eq!(key.data, [0, 0, 0, 2, 0x65, 3], "the parameter sets are in the record, not the packet");
+        // A sample without a time is the oldest frame; a later sample skips a dropped frame.
+        assert_eq!(t.packet(Output { data: annex_b(&[P]), time: None }).unwrap().pts, 101);
+        t.send(103);
+        let p = t.packet(Output { data: annex_b(&[P]), time: Some(t.time_of(3)) }).unwrap();
+        assert_eq!((p.pts, p.keyframe), (103, false));
+        assert!(t.pending.is_empty());
+        assert!(t.packet(Output { data: annex_b(&[P]), time: None }).is_err(), "more frames than went in");
+    }
+
+    #[test]
+    fn a_frame_out_of_order_or_with_other_parameter_sets_is_an_error() {
+        let mut t = track();
+        let (first, _) = t.send(0);
+        let (second, _) = t.send(1);
+        let early = t.packet(Output { data: annex_b(&[P]), time: Some(first - 1) });
+        assert!(matches!(early, Err(Error::Failed(why)) if why.contains("out of order")));
+        let mut t = track();
+        t.send(0);
+        let other = t.packet(Output { data: annex_b(&[&[0x67, 9], PPS, IDR]), time: Some(0) });
+        assert!(matches!(other, Err(Error::Failed(why)) if why.contains("parameter sets")));
+        // A keyframe without parameter sets of its own is fine.
+        t.send(1);
+        assert!(t.packet(Output { data: annex_b(&[IDR]), time: Some(second) }).unwrap().keyframe);
+    }
+
+    #[test]
+    fn keyframes_are_found_from_the_nal_unit_types() {
+        assert!(is_keyframe(Codec::H264, &annex_b(&[SPS, PPS, IDR])));
+        assert!(!is_keyframe(Codec::H264, &annex_b(&[P])));
+        for t in [16u8, 19, 20, 21] {
+            assert!(is_keyframe(Codec::Hevc, &annex_b(&[&[t << 1, 1, 0]])), "{t}");
+        }
+        for t in [0u8, 1, 15, 22, 32] {
+            assert!(!is_keyframe(Codec::Hevc, &annex_b(&[&[t << 1, 1, 0]])), "{t}");
+        }
+        assert!(!is_keyframe(Codec::Hevc, &[]));
+    }
+
+    #[test]
+    fn a_system_without_a_media_foundation_encoder_says_so() {
+        // Off Windows (and on every CI runner without a GPU) opening is a `NoDevice` error, never
+        // a panic; with a hardware encoder, it opens and writes its record, or says that the
+        // encoder does not take the stream.
+        for codec in [Codec::H264, Codec::Hevc] {
+            match Encoder::new(&cfg(codec)) {
+                Ok(e) => assert!(!e.codec_private().is_empty()),
+                Err(Error::NoDevice(why) | Error::Unsupported(why)) => assert!(!why.is_empty()),
+                Err(other) => panic!("{codec:?}: {other}"),
+            }
+            match available(codec) {
+                Ok(()) => {}
+                Err(Error::NoDevice(why) | Error::Unsupported(why)) => assert!(!why.is_empty()),
+                Err(other) => panic!("{codec:?}: {other}"),
+            }
+        }
+        #[cfg(not(target_os = "windows"))]
+        assert_eq!(driver(), Err(Error::NoDevice("Media Foundation runs on Windows only".into())));
+    }
+
+    #[test]
+    fn an_encoder_round_trips_frames_when_a_hardware_encoder_is_present() {
+        let Ok(mut e) = Encoder::new(&cfg(Codec::H264)) else { return };
+        let frame = vec![128u8; Input::Nv12.frame_bytes(256, 144)];
+        let mut packets = Vec::new();
+        for pts in 0..10 {
+            packets.extend(e.encode(&frame, pts).unwrap());
+        }
+        packets.extend(e.flush().unwrap());
+        assert_eq!(packets.iter().map(|p| p.pts).collect::<Vec<_>>(), (0..10).collect::<Vec<_>>());
+        assert!(packets[0].keyframe);
+        assert!(e.encode(&frame[1..], 10).is_err(), "a short frame");
+        assert!(e.encode(&frame, -1).is_err(), "a negative timestamp");
+    }
+}

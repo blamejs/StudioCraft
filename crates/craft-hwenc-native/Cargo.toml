@@ -1,13 +1,13 @@
 [package]
 name = "craft-hwenc-native"
-description = "Hardware video encoders called through the drivers' own APIs: NVENC H.264 and HEVC from NV12 or P010 frames, with the avcC and hvcC records built from the parameter sets the encoder writes"
+description = "Hardware video encoders called through the drivers' own APIs: NVENC H.264 and HEVC from NV12 or P010 frames, and the Windows Media Foundation hardware H.264 and HEVC encoders from NV12 frames, with the avcC and hvcC records built from the parameter sets the encoder writes"
 version = "0.1.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 publish = false
 
 # One of the crates `cargo xtask unsafe` lets opt in to unsafe code (AGENTS.md 0.3): only the
-# `nvenc_ffi` module allows it, and every unsafe block carries a SAFETY comment.
+# `nvenc_ffi` and `mf_ffi` modules allow it, and every unsafe block carries a SAFETY comment.
 [lints.rust]
 unsafe_code = "deny"
 unsafe_op_in_unsafe_fn = "deny"
@@ -24,8 +24,9 @@ too_many_arguments = "allow"
 type_complexity = "allow"
 undocumented_unsafe_blocks = "deny"
 
-# Windows: the encoder runs on a Direct3D 11 device of the NVIDIA adapter, and the driver's
-# `nvEncodeAPI64.dll` is loaded from the system directory.
+# Windows: NVENC runs on a Direct3D 11 device of the NVIDIA adapter, and the driver's
+# `nvEncodeAPI64.dll` is loaded from the system directory. Media Foundation's `mfplat.dll` is also
+# loaded from the system directory at run time.
 [target.'cfg(target_os = "windows")'.dependencies]
 windows = { version = "0.62", features = [
     "Win32_Foundation",
@@ -33,7 +34,11 @@ windows = { version = "0.62", features = [
     "Win32_Graphics_Direct3D11",
     "Win32_Graphics_Dxgi",
     "Win32_Graphics_Dxgi_Common",
+    "Win32_Media_MediaFoundation",
+    "Win32_System_Com",
     "Win32_System_LibraryLoader",
+    "Win32_System_Ole",
+    "Win32_System_Variant",
 ] }
 
 # 64-bit Linux: `libnvidia-encode.so.1` and `libcuda.so.1` are loaded at run time, so building

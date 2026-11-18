@@ -213,8 +213,9 @@ fn the_built_in_encoders_are_listed_after_the_ffmpeg_ones() {
     let mut reg = Registry::new();
     register_all(&mut reg).unwrap();
     let ids: Vec<&str> = reg.encoders().iter().map(|e| e.id()).collect();
-    assert_eq!(ids[ids.len().saturating_sub(4)..], ["hardware", "h264", "nvenc_native_h264", "nvenc_native_hevc"], "{ids:?}");
-    for id in ["h264", "nvenc_native_h264", "nvenc_native_hevc"] {
+    let built_in = ["h264", "nvenc_native_h264", "nvenc_native_hevc", "mf_native_h264", "mf_native_hevc"];
+    assert_eq!(ids[ids.len().saturating_sub(6)..], [&["hardware"][..], &built_in[..]].concat(), "{ids:?}");
+    for id in built_in {
         assert!(reg.encoder(id).unwrap().ffmpeg().is_none(), "{id}");
     }
     assert_eq!(reg.describe()["encoders"].as_array().and_then(|a| a.last()).map(|e| e["builtin"].clone()), Some(true.into()));

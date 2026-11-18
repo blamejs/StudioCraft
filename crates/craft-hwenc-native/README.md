@@ -15,6 +15,8 @@ Licensed under MIT OR Apache-2.0. See NOTICE for the sources.
 | `nvenc::Encoder::encode`, `flush` | packed frames in, 4-byte length-prefixed packets out in input order, each with its timestamp and keyframe flag; preset P5, high-quality tuning, no B-frames, BT.709 limited range |
 | `nvenc::Encoder::codec_private` | the `avcC` or `hvcC` record for the container |
 | `nvenc::available(codec)` | whether this system can open an NVENC session that writes `codec` |
+| `mf::Encoder` | the hardware H.264 and HEVC encoder MFTs that Windows Media Foundation lists (`mfplat.dll`), from NV12 frames; the same `Config`, `encode`, `flush` and `codec_private` as NVENC; quality `100 - 2 × level`, constant bitrate with a one-second buffer, no B-frames, BT.709 limited range |
+| `mf::available(codec)` | whether Media Foundation lists a hardware encoder that writes `codec` and opens |
 | `annexb::nals`, `to_length_prefixed`, `parameter_sets` | Annex B streams split into NAL units; samples without parameter sets or delimiters |
 | `avc::avcc`, `hevc::hvcc` | the decoder configuration records of ISO/IEC 14496-15, checked against the stream that was asked for |
 
@@ -37,6 +39,9 @@ for packet in enc.flush()? {
 }
 ```
 
-Only the private `nvenc_ffi` module contains `unsafe` code. Its layout tests compare every
-structure the crate passes to the driver with the C header's sizes and offsets, and they run on
-every platform.
+`mf::Encoder` takes the same `Config` with `Input::Nv12`. Off Windows, and on Windows without a
+hardware encoder MFT, `Encoder::new` returns `Error::NoDevice`.
+
+Only the private `nvenc_ffi` and `mf_ffi` modules contain `unsafe` code. The NVENC layout tests
+compare every structure the crate passes to the driver with the C header's sizes and offsets, and
+they run on every platform. The Media Foundation calls go through the `windows` crate's bindings.

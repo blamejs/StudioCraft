@@ -1,34 +1,18 @@
 //! The NVENC encoders that run through the NVIDIA driver in StudioCraft's own process: H.264 and
 //! HEVC from the compositor's NV12 frames, with the `avcC` or `hvcC` record a container stores.
 //!
-//! - Quality mode is constant quality ([`QUALITY`]) with a keyframe every
-//!   [`RECORDING_KEYFRAME_S`] seconds. Bitrate mode is constant bitrate ([`KBPS`]) with the
-//!   requested keyframe interval ([`KEYFRAME_S`]). A level, bitrate or interval outside those
-//!   ranges is an error, and lossless recording is not offered.
+//! - The rate control, the keyframe interval and the limits on them are the ones every built-in
+//!   hardware encoder takes ([`crate::hardware`]).
 //! - The encoder writes no B-frames, so each packet's decoding time is its presentation time.
 //! - The stream's VUI says BT.709 at limited range, as StudioCraft's NV12 conversion writes it.
 
-use std::sync::{Mutex, PoisonError};
-use std::time::{Duration, Instant};
-
 use craft_hwenc_native::Codec as NativeCodec;
-use craft_hwenc_native::nvenc::{Config, Encoder as Core, Error, Input, Rate};
+use craft_hwenc_native::nvenc::{Config, Encoder as Core, Error};
 use studiocraft_model::{Settings, SettingsSchema};
-use studiocraft_plugin::{Availability, Codec, Encoder, EncoderEnv, Packet, Plugin, PluginError, RateControl, VideoParams, VideoSession};
+use studiocraft_plugin::{Availability, Codec, Encoder, EncoderEnv, Packet, Plugin, PluginError, VideoParams, VideoSession};
 
-use crate::h264::{KBPS, KEYFRAME_S, RECORDING_KEYFRAME_S};
-
-/// The quality levels NVENC takes; lower is better.
-pub const QUALITY: std::ops::RangeInclusive<u32> = 1..=51;
-
-/// Why [`Nvenc::try_session`] did not open a session.
-#[derive(Debug)]
-pub enum SessionError {
-    /// Every encoding session of the GPU is taken by other programs; a later try can work.
-    Busy(String),
-    /// Any other reason.
-    Other(PluginError),
-}
+use crate::hardware::{self, Hardware, Tested, Tests, packets};
+pub use crate::hardware::{QUALITY, SessionError};
 
 /// An NVENC encoder of one codec.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -67,14 +51,7 @@ impl Nvenc {
             Error::Busy(why) => SessionError::Busy(format!("{} has no free encoding session: {why}", self.name())),
             e => SessionError::Other(self.error(e)),
         })?;
-        // A session opened: this codec works, and the other one is tested again if it failed only
-        // because every session was taken.
-        *last_test(self.codec) = Some((Tested::Works, Instant::now()));
-        let other = if self.codec == NativeCodec::H264 { NativeCodec::Hevc } else { NativeCodec::H264 };
-        let mut o = last_test(other);
-        if matches!(*o, Some((Tested::Busy, _))) {
-            *o = None;
-        }
+        LAST_TEST.opened(self.codec);
         Ok(NvencSession { core, name: self.name() })
     }
 
@@ -123,88 +100,33 @@ impl Encoder for Nvenc {
     }
 }
 
-/// How long a failed session test stands before the next call tests again.
-const RETEST_AFTER: Duration = Duration::from_secs(30);
-
-/// What a session test found.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Tested {
-    Works,
-    /// Every session was taken by other programs.
-    Busy,
-    /// No device, or a GPU whose encoder does not write the codec.
-    Failed,
+impl Hardware for Nvenc {
+    fn try_open(&self, params: &VideoParams) -> Result<Box<dyn VideoSession>, SessionError> {
+        Ok(Box::new(self.try_session(params)?))
+    }
 }
 
-/// The last answer of [`usable`] for each codec, or of a session that opened, and when it was found.
-static LAST_TEST: [Mutex<Option<(Tested, Instant)>>; 2] = [Mutex::new(None), Mutex::new(None)];
-
-/// The [`LAST_TEST`] entry of `codec`, locked.
-fn last_test(codec: NativeCodec) -> std::sync::MutexGuard<'static, Option<(Tested, Instant)>> {
-    let i = match codec {
-        NativeCodec::H264 => 0,
-        NativeCodec::Hevc => 1,
-    };
-    LAST_TEST[i].lock().unwrap_or_else(PoisonError::into_inner)
-}
+/// The session tests of NVENC and the sessions that opened.
+static LAST_TEST: Tests = Tests::new();
 
 /// Whether an NVENC session that writes `codec` opens on this system. A call opens and closes one;
-/// a session that opened is remembered, and a failure is remembered for [`RETEST_AFTER`]. A
-/// failure because every session was taken is also forgotten when a session of the other codec
-/// opens. Without the NVIDIA driver nothing is tested again.
+/// a session that opened is remembered, and a failure is remembered for
+/// [`hardware::RETEST_AFTER`]. A failure because every session was taken is also forgotten when a
+/// session of the other codec opens. Without the NVIDIA driver nothing is tested again.
 fn usable(codec: NativeCodec) -> bool {
     if craft_hwenc_native::nvenc::driver().is_err() {
         return false;
     }
-    let mut last = last_test(codec);
-    match *last {
-        Some((Tested::Works, _)) => true,
-        Some((_, at)) if at.elapsed() < RETEST_AFTER => false,
-        _ => {
-            let found = match craft_hwenc_native::nvenc::available(codec) {
-                Ok(()) => Tested::Works,
-                Err(Error::Busy(_)) => Tested::Busy,
-                Err(_) => Tested::Failed,
-            };
-            *last = Some((found, Instant::now()));
-            found == Tested::Works
-        }
-    }
+    LAST_TEST.usable(codec, || match craft_hwenc_native::nvenc::available(codec) {
+        Ok(()) => Tested::Works,
+        Err(Error::Busy(_)) => Tested::Busy,
+        Err(_) => Tested::Failed,
+    })
 }
 
 /// The encoder settings of `codec` for `params`.
 fn config(codec: NativeCodec, params: &VideoParams) -> Result<Config, PluginError> {
-    if params.fps_num == 0 || params.fps_den == 0 {
-        return Err(PluginError::Failed(format!("the frame rate {}/{} is not valid", params.fps_num, params.fps_den)));
-    }
-    let fps = f64::from(params.fps_num) / f64::from(params.fps_den);
-    // A float-to-integer `as` saturates.
-    let gop = |seconds: u32| (fps * f64::from(seconds)).round().max(1.0) as u32;
-    let (rate, keyint) = match params.rate {
-        RateControl::Quality(q) => {
-            if !QUALITY.contains(&q) {
-                return Err(PluginError::Failed(format!("the quality level {q} is outside {} to {}", QUALITY.start(), QUALITY.end())));
-            }
-            (Rate::Quality(q), gop(RECORDING_KEYFRAME_S))
-        }
-        RateControl::Bitrate { kbps, keyframe_s } => {
-            if !KBPS.contains(&kbps) {
-                return Err(PluginError::Failed(format!("the video bitrate {kbps} kbps is outside {} to {} kbps", KBPS.start(), KBPS.end())));
-            }
-            if !KEYFRAME_S.contains(&keyframe_s) {
-                return Err(PluginError::Failed(format!(
-                    "the keyframe interval of {keyframe_s} seconds is outside {} to {} seconds",
-                    KEYFRAME_S.start(),
-                    KEYFRAME_S.end()
-                )));
-            }
-            (Rate::Cbr(kbps), gop(keyframe_s))
-        }
-        RateControl::Lossless => {
-            return Err(PluginError::Unavailable("NVENC (built in) cannot record losslessly; choose another encoder in Settings › Output".into()));
-        }
-    };
-    Ok(Config { codec, input: Input::Nv12, width: params.width, height: params.height, fps: (params.fps_num, params.fps_den), rate, keyint })
+    hardware::config(codec, params, "NVENC (built in)")
 }
 
 /// A running NVENC encoder.
@@ -218,10 +140,6 @@ impl NvencSession {
     pub fn config(&self) -> &Config {
         self.core.config()
     }
-}
-
-fn packets(out: &mut Vec<Packet>, ps: Vec<craft_hwenc_native::nvenc::Packet>) {
-    out.extend(ps.into_iter().map(|p| Packet { data: p.data, pts: p.pts, dts: p.pts, keyframe: p.keyframe }));
 }
 
 impl VideoSession for NvencSession {
@@ -245,6 +163,8 @@ impl VideoSession for NvencSession {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use craft_hwenc_native::nvenc::{Input, Rate};
+    use studiocraft_plugin::RateControl;
 
     fn params(rate: RateControl) -> VideoParams {
         VideoParams { width: 256, height: 144, fps_num: 60, fps_den: 1, rate }

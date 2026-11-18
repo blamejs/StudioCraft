@@ -1,13 +1,14 @@
 //! Hardware video encoders called through their drivers' own APIs, without the ffmpeg program.
 //!
 //! - [`nvenc`] encodes H.264 and HEVC on NVIDIA GPUs through NVENC, on Windows and 64-bit Linux.
+//! - [`mf`] encodes H.264 and HEVC with the hardware encoders that Windows Media Foundation lists.
 //! - [`annexb`] splits Annex B byte streams into NAL units and writes the 4-byte length-prefixed
 //!   samples a container stores.
 //! - [`avc`] and [`hevc`] build the `avcC` and `hvcC` records from the parameter sets an encoder
 //!   writes.
 //!
-//! The driver calls are in one private module with `unsafe` allowed; every item this crate exports
-//! is safe.
+//! The encoders take a [`Config`] and return [`Packet`]s or an [`Error`]. The system calls are in
+//! private modules with `unsafe` allowed; every item this crate exports is safe.
 
 #![deny(unsafe_op_in_unsafe_fn)]
 
@@ -15,6 +16,9 @@ pub mod annexb;
 pub mod avc;
 mod bits;
 pub mod hevc;
+pub mod mf;
+#[allow(unsafe_code)]
+mod mf_ffi;
 pub mod nvenc;
 #[allow(unsafe_code)]
 mod nvenc_ffi;
@@ -25,3 +29,82 @@ pub enum Codec {
     H264,
     Hevc,
 }
+
+/// The layout of the frames an encoder takes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Input {
+    /// 8-bit 4:2:0: the luma rows, then the interleaved Cb and Cr rows at half height.
+    Nv12,
+    /// 10-bit 4:2:0 in 16-bit little-endian samples with the value in the high 10 bits, the
+    /// planes laid out as NV12. HEVC only (Main 10).
+    P010,
+}
+
+impl Input {
+    pub(crate) fn bytes_per_sample(self) -> usize {
+        match self {
+            Input::Nv12 => 1,
+            Input::P010 => 2,
+        }
+    }
+
+    /// The bytes of one `width` × `height` frame.
+    pub fn frame_bytes(self, width: u32, height: u32) -> usize {
+        (width as usize).saturating_mul(height as usize).saturating_mul(3) / 2 * self.bytes_per_sample()
+    }
+}
+
+/// How the encoder spends bits.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Rate {
+    /// Constant quality at this level, 1 to 51, lower is better.
+    Quality(u32),
+    /// Constant bitrate in kbit/s, with a one-second buffer.
+    Cbr(u32),
+}
+
+/// What to encode.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Config {
+    pub codec: Codec,
+    pub input: Input,
+    pub width: u32,
+    pub height: u32,
+    /// Frames per second as numerator and denominator.
+    pub fps: (u32, u32),
+    pub rate: Rate,
+    /// Frames from one keyframe to the next.
+    pub keyint: u32,
+}
+
+/// One encoded frame: 4-byte length-prefixed NAL units without parameter sets.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Packet {
+    pub data: Vec<u8>,
+    /// The timestamp the frame went in with; with no B-frames it is also the decoding time.
+    pub pts: i64,
+    pub keyframe: bool,
+}
+
+/// Why an encoder could not open or run.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Error {
+    /// No GPU, driver or encode library for this encoder on this system.
+    NoDevice(String),
+    /// Every encoding session of the GPU is taken by other programs; a later open can work.
+    Busy(String),
+    /// The GPU's encoder does not take this configuration.
+    Unsupported(String),
+    /// The driver failed.
+    Failed(String),
+}
+
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Error::NoDevice(e) | Error::Busy(e) | Error::Unsupported(e) | Error::Failed(e) => f.write_str(e),
+        }
+    }
+}
+
+impl std::error::Error for Error {}

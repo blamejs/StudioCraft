@@ -1,6 +1,6 @@
 [package]
 name = "studiocraft-encode"
-description = "The built-in encoders: H.264 video from NV12 frames, NVENC H.264 and HEVC through the NVIDIA driver, and AAC audio from the mixer's blocks"
+description = "The built-in encoders: H.264 video from NV12 frames, NVENC H.264 and HEVC through the NVIDIA driver, the Windows Media Foundation hardware H.264 and HEVC encoders, and AAC audio from the mixer's blocks"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
