@@ -1,16 +1,21 @@
 # Performance
 
+This file holds StudioCraft's time budgets, the measured baselines and the commands that measure
+them. The rules for threads, queues and hot paths are in
+[AGENTS.md section 6](../AGENTS.md#6-performance).
+
 ## Budgets
 
 - At 60 fps the compositor has 16.7 ms per frame. Drawing the program scene must stay well under
-  that, so encoders and the window have time too.
+  16.7 ms.
 - One audio block is 1024 frames at 48 kHz, which is 21.3 ms. Mixing every source into one block
   must stay under 1 ms.
-- The frame loop and the mixer loop do not allocate. Frames and audio blocks come from pools.
 
 ## Baselines
 
-Measured on 2026-11-15 on Linux, release builds.
+The criterion benches and the timing run below were measured on 2026-11-15 on Linux, in release
+builds. The hardware for those runs was not recorded. Each later section names its own date and
+hardware.
 
 ### Criterion benches
 
@@ -41,6 +46,13 @@ boxes (one rotated) and nothing else, at 60 fps for 10 seconds, without a window
 The frame time is the time the compositor thread spends on one frame after its tick, from the
 start of drawing to the end of submitting it to the GPU.
 
+### GPU YUV conversion
+
+`cargo bench -p craft-gpu-yuv` converts a 1080p and a 4K picture on the GPU and times each case
+from the conversion passes to a mapped read-back buffer, so the figure includes the read-back. It
+also times a CPU reference conversion at 1080p. On a machine without a graphics adapter only the
+CPU reference runs. No baseline is recorded yet.
+
 ### Built-in H.264 encoder
 
 Measured on 2026-11-17 on Linux (AMD EPYC 9R14, 128 hardware threads), release build.
@@ -48,24 +60,25 @@ Measured on 2026-11-17 on Linux (AMD EPYC 9R14, 128 hardware threads), release b
 of moving pictures per case after one second of warm-up, in quality mode at level 23. The frames
 cycle through one second of different pictures. A recording runs the encoder on the computer's
 hardware threads minus two, so 6 threads stands for an 8-thread computer and 14 threads for a
-16-thread one; the other cores of this machine were idle. The table gives the share of real time:
-the time spent coding over the length of the video. A recording keeps up only while it is under
-100%; one that stays above it fails after the video falls 10 seconds behind the sound.
+16-thread one. The other cores of this machine were idle. The table gives the share of real time:
+the time spent coding over the length of the video. A recording keeps up only while the share is
+under 100%. A recording that stays above 100% fails after the video falls 10 seconds behind the
+sound.
 
-| Size | Frame rate | Preset | 6 threads | 14 threads | 126 threads |
+| Size | Frame rate (fps) | Preset | 6 threads | 14 threads | 126 threads |
 | --- | --- | --- | --- | --- | --- |
-| 1280×720 | 30 | Speed | 42% | 25% | 30% |
-| 1280×720 | 30 | Balanced | 72% | 40% | 45% |
-| 1280×720 | 30 | Quality | 133% | 70% | 74% |
-| 1280×720 | 60 | Speed | 92% | 50% | 56% |
-| 1280×720 | 60 | Balanced | 158% | 77% | 87% |
-| 1280×720 | 60 | Quality | 265% | 132% | 142% |
-| 1920×1080 | 30 | Speed | 92% | 45% | 49% |
-| 1920×1080 | 30 | Balanced | 164% | 74% | 74% |
-| 1920×1080 | 30 | Quality | 294% | 130% | 107% |
-| 1920×1080 | 60 | Speed | 174% | 86% | 88% |
-| 1920×1080 | 60 | Balanced | 320% | 154% | 133% |
-| 1920×1080 | 60 | Quality | 571% | 256% | 223% |
+| 1280 × 720 | 30 | Speed | 42% | 25% | 30% |
+| 1280 × 720 | 30 | Balanced | 72% | 40% | 45% |
+| 1280 × 720 | 30 | Quality | 133% | 70% | 74% |
+| 1280 × 720 | 60 | Speed | 92% | 50% | 56% |
+| 1280 × 720 | 60 | Balanced | 158% | 77% | 87% |
+| 1280 × 720 | 60 | Quality | 265% | 132% | 142% |
+| 1920 × 1080 | 30 | Speed | 92% | 45% | 49% |
+| 1920 × 1080 | 30 | Balanced | 164% | 74% | 74% |
+| 1920 × 1080 | 30 | Quality | 294% | 130% | 107% |
+| 1920 × 1080 | 60 | Speed | 174% | 86% | 88% |
+| 1920 × 1080 | 60 | Balanced | 320% | 154% | 133% |
+| 1920 × 1080 | 60 | Quality | 571% | 256% | 223% |
 
 With 6 threads, 720p at 30 fps keeps up on Speed and Balanced, and 1080p at 30 fps and 720p at
 60 fps keep up on Speed only, near the limit. 1080p at 60 fps does not keep up on any preset. With
@@ -77,16 +90,19 @@ preset.
 ### FLV tags
 
 Measured on 2026-11-18 on Linux (AMD EPYC 9R14), release build. `cargo bench -p craft-flv` writes
-and reads one second of a 6000 kb/s, 60 fps H.264 stream with 160 kb/s AAC: 60 video tags of about
+and reads one second of a 6000 kbps, 60 fps H.264 stream with 160 kbps AAC: 60 video tags of about
 12 500 bytes and 47 audio tags of 426 bytes, 770 KB in all, into buffers that keep their capacity.
 
-The destination benches send the same second to 4 outputs. "Annex B per destination" gives every
-output the Annex B access units, so each output scans them for start codes twice, once to measure
-the tag and once to write it. "Converted once" converts each access unit with `annexb_to_nalus`
-once, checks each body once with `Body::check`, and writes the one result to every output with
-`Writer::write_checked`, or with `Checked::write_to` for RTMP message bodies. "With zero bytes" uses
-pseudo-random slice data with emulation prevention applied, so about one byte in 256 is 0, as in
-entropy-coded slices; the other Annex B input has no zero bytes in its slices.
+The destination benches send the same second to 4 outputs:
+
+- "Annex B per destination" gives every output the Annex B access units, so each output scans them
+  for start codes twice, once to measure the tag and once to write it.
+- "Converted once" converts each access unit with `annexb_to_nalus` once, checks each body once
+  with `Body::check`, and writes the one result to every output with `Writer::write_checked`, or
+  with `Checked::write_to` for RTMP message bodies.
+- "With zero bytes" uses pseudo-random slice data with emulation prevention applied, so about one
+  byte in 256 is 0, as in entropy-coded slices. The other Annex B input has no zero bytes in its
+  slices.
 
 | Bench | Median | Range (95%) |
 | --- | --- | --- |
