@@ -84,15 +84,30 @@ pub fn repair(dir: &Path) -> std::io::Result<Option<Repaired>> {
             format!("the journal names {bad:?}, which is not a file in the take's folder"),
         ));
     }
-    let mut files = Vec::new();
-    for name in names {
-        let path = dir.join(&name);
+    // Every file is checked before any is cut, so a take that stays unfinished is left as it was.
+    let head = crate::wav::header_len()?;
+    for name in &names {
+        let path = dir.join(name);
         // Each file is made before the journal names it, so a missing one was moved or deleted
         // since: the take stays unfinished, to be repaired once the file is back.
         if !real_file(&path) {
             return Err(std::io::Error::new(std::io::ErrorKind::NotFound, format!("{name} is missing from the take's folder")));
         }
-        files.push((name, crate::wav::repair(&path)?));
+        // A sync put its frames on the disk, so a file holding fewer was cut or replaced since.
+        let held = std::fs::metadata(&path)?.len().saturating_sub(head) / crate::wav::FRAME_BYTES;
+        if let Some((_, want)) = synced.iter().find(|(f, _)| f == name)
+            && held < *want
+        {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("{name} holds {held} frames, fewer than the {want} the journal recorded as written"),
+            ));
+        }
+    }
+    let mut files = Vec::new();
+    for name in names {
+        let frames = crate::wav::repair(&dir.join(&name))?;
+        files.push((name, frames));
     }
     let end = files.iter().map(|(_, n)| *n).max().unwrap_or(0);
     j.write(&Line::Repaired { files: files.clone() })?;

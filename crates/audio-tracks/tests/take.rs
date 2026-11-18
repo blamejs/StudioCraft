@@ -485,6 +485,24 @@ fn a_journal_that_names_a_path_leaves_the_take_unfinished_and_its_files_untouche
 }
 
 #[test]
+fn a_file_shorter_than_its_last_sync_leaves_the_take_unfinished_and_uncut() {
+    let dir = scratch("short-file");
+    crashed_take(&dir);
+    let mic_len = std::fs::metadata(dir.join("Mic.wav")).unwrap().len();
+    let mut j = std::fs::OpenOptions::new().append(true).open(dir.join(journal::FILE_NAME)).unwrap();
+    let line = Line::Sync { files: vec![("Mic.wav".into(), 10 * BLOCK_FRAMES as u64)] };
+    std::io::Write::write_all(&mut j, format!("{}\n", serde_json::to_string(&line).unwrap()).as_bytes()).unwrap();
+    drop(j);
+    let err = recover::repair(&dir).unwrap_err();
+    assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+    assert!(err.to_string().contains("fewer than"), "{err}");
+    assert_eq!(std::fs::metadata(dir.join("Mic.wav")).unwrap().len(), mic_len, "Mic.wav was not cut before the error");
+    let recording = dir.parent().and_then(Path::parent).unwrap();
+    assert_eq!(recover::unfinished(recording), vec![dir.clone()], "the journal was not ended");
+    let _ = std::fs::remove_dir_all(recording);
+}
+
+#[test]
 fn a_journal_larger_than_the_limit_is_refused_before_it_is_read() {
     let dir = scratch("huge-journal");
     crashed_take(&dir);
