@@ -77,6 +77,9 @@
 - Windows Media Foundation H.264 and HEVC (built in) run the hardware encoders Media Foundation
   lists in StudioCraft's own process, for MKV recordings without `ffmpeg` on Windows. For an MKV
   recording the Hardware encoder tests them in the process, as it tests NVENC.
+- Apple VideoToolbox H.264 and HEVC (built in) run the VideoToolbox hardware encoders in
+  StudioCraft's own process, for MKV recordings without `ffmpeg` on macOS. For an MKV recording the
+  Hardware encoder tests them in the process, as it tests NVENC.
 
 ## Next
 

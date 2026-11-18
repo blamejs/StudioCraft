@@ -11,6 +11,10 @@ The Media Foundation loading, COM setup, sample creation, MFT enumeration and ou
 src/mf_ffi/api.rs and src/mf_ffi/transform.rs come from FilmCraft's
 `crates/platform/src/media_foundation/mft.rs` and `gpu.rs` (same repository, commit and license).
 
+The VideoToolbox session setup, pixel buffer filling, output callback and parameter-set reading in
+src/vt_ffi/session.rs come from FilmCraft's `crates/platform/src/videotoolbox_encode.rs` (same
+repository, commit and license).
+
 The declarations in src/nvenc_ffi/abi.rs are transcribed from NVIDIA's `nvEncodeAPI.h` (Video
 Codec SDK, API 12.1), Copyright (c) 2010-2023 NVIDIA Corporation, under the MIT license whose
 text is at the top of that file.

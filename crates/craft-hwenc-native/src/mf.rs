@@ -77,7 +77,7 @@ fn check(cfg: &Config) -> Result<(), Error> {
 }
 
 /// The NAL unit types of `codec`'s parameter sets, in the order the record takes them.
-fn set_types(codec: Codec) -> &'static [(u8, &'static str)] {
+pub(crate) fn set_types(codec: Codec) -> &'static [(u8, &'static str)] {
     match codec {
         Codec::H264 => &[(7, "SPS"), (8, "PPS")],
         Codec::Hevc => &[(32, "VPS"), (33, "SPS"), (34, "PPS")],

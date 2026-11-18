@@ -123,6 +123,8 @@
 	NVIDIA NVENC HEVC (built in)	NVIDIA NVENC HEVC (integrato)
 	Windows Media Foundation H.264 (built in)	Windows Media Foundation H.264 (integrato)
 	Windows Media Foundation HEVC (built in)	Windows Media Foundation HEVC (integrato)
+	Apple VideoToolbox H.264 (built in)	Apple VideoToolbox H.264 (integrato)
+	Apple VideoToolbox HEVC (built in)	Apple VideoToolbox HEVC (integrato)
 	Height	Altezza
 	Help	Aiuto
 	Hide	Nascondi

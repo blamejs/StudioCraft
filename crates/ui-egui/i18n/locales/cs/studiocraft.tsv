@@ -124,6 +124,8 @@
 	NVIDIA NVENC HEVC (built in)	NVIDIA NVENC HEVC (vestavěný)
 	Windows Media Foundation H.264 (built in)	Windows Media Foundation H.264 (vestavěný)
 	Windows Media Foundation HEVC (built in)	Windows Media Foundation HEVC (vestavěný)
+	Apple VideoToolbox H.264 (built in)	Apple VideoToolbox H.264 (vestavěný)
+	Apple VideoToolbox HEVC (built in)	Apple VideoToolbox HEVC (vestavěný)
 	Height	Výška
 	Help	Nápověda
 	Hide	Skrýt

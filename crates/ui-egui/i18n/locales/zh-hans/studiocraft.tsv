@@ -124,6 +124,8 @@
 	NVIDIA NVENC HEVC (built in)	NVIDIA NVENC HEVC（内置）
 	Windows Media Foundation H.264 (built in)	Windows Media Foundation H.264（内置）
 	Windows Media Foundation HEVC (built in)	Windows Media Foundation HEVC（内置）
+	Apple VideoToolbox H.264 (built in)	Apple VideoToolbox H.264（内置）
+	Apple VideoToolbox HEVC (built in)	Apple VideoToolbox HEVC（内置）
 	Height	高度
 	Help	帮助
 	Hide	隐藏
