@@ -1,0 +1,20 @@
+[package]
+name = "craft-flv"
+description = "FLV tags for H.264 and AAC: the file header, onMetaData, AVC and AAC sequence headers, video and audio tags with composition time, AMF0 values, and a tag reader, to any io::Write or as RTMP message bodies"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+
+[dev-dependencies]
+proptest = { workspace = true }
+criterion = { workspace = true }
+
+[[bench]]
+name = "flv"
+harness = false

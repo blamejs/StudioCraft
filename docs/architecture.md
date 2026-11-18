@@ -15,6 +15,7 @@ crate in the same layer. `cargo xtask layers` checks this against the table in
 | L0 | `studiocraft-model` | Scenes, sources, scene items, transforms, profiles, settings schemas, and the versioned file format with its migrations. |
 | L0 | `studiocraft-media` | The master clock, frame pacing, video frame and audio block types, buffer pools, bounded lock-free queues, mixing and level meters. |
 | L0 | `craft-tsmux` | The MPEG-2 transport stream writer: PAT and PMT, PES packets, PCR and continuity counters, written to any `io::Write`. It depends on no StudioCraft crate. |
+| L0 | `craft-flv` | FLV tags for H.264 and AAC: the file header, `onMetaData`, the AVC and AAC sequence headers, video and audio tags with composition time, the AMF0 values of script data and RTMP commands, and a tag reader. Its tag bodies are also RTMP message bodies. It depends on no StudioCraft crate. |
 | L0 | `craft-color-transform` | RGB spaces and Bradford adaptation, white balance by temperature and tint, OkLab and OkLCh, monotone tone curves and lookup tables, and PQ tone mapping. It depends on no StudioCraft crate. |
 | L0 | `craft-scopes` | Video scope maths: the waveform, parade, histogram and vectorscopes of a borrowed RGBA8 or NV12 frame, their numeric summaries and trace images. It depends on no StudioCraft crate. |
 | L0 | `craft-audio-dsp` | Audio DSP shared with the other Craft apps: the `AudioEffect` trait and its effects, the BS.1770 / EBU R128 loudness meter, panning, test signals and resampling. It depends on no StudioCraft crate. |
@@ -43,6 +44,7 @@ build for `wasm32-unknown-unknown`:
 - `studiocraft-model`
 - `studiocraft-plugin`
 - `craft-tsmux`
+- `craft-flv`
 - `craft-color-transform`
 - `craft-scopes`
 - `craft-audio-dsp`
@@ -337,7 +339,8 @@ the window buttons sit where the desktop puts them. `src/titlebar.rs` makes the 
   The VA-API encoder runs on the recording's encoder thread, as the other built-in encoders do. It
   keeps four frames in flight, so the thread waits for the GPU only when all four surfaces are
   taken, and then for the frame submitted three frames before. Frames reach it as NV12 in memory
-  and are copied into a surface.
+  and are copied into a surface. `craft-flv` writes and reads the FLV tags and AMF0 values that
+  RTMP carries; no output uses it yet.
 
 ## Dependency licenses
 

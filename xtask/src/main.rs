@@ -4,6 +4,7 @@
 
 mod layers;
 mod licenses;
+mod release_ready;
 mod scan;
 mod unsafe_code;
 mod version;
@@ -26,6 +27,9 @@ commands:
   wasm       cargo check --target wasm32-unknown-unknown for the crates that build for the web
   ci         all of the above, stopping at the first failure
   version    print the workspace version; `version set <version>` changes it and Cargo.lock
+  release-ready
+             count the pull requests merged into main since the previous alpha tag; exits 0 at 50
+             or more, 1 below that and 2 on an error (docs/releasing.md, Alpha releases)
 ";
 
 fn main() -> ExitCode {
@@ -42,6 +46,7 @@ fn main() -> ExitCode {
         Some("wasm") => wasm(),
         Some("ci") => ci(),
         Some("version") => version::run_command(args.get(1..).unwrap_or(&[])),
+        Some("release-ready") => return release_ready::main(args.get(1..).unwrap_or(&[])),
         Some("-h" | "--help" | "help") | None => {
             print!("{USAGE}");
             Ok(())
@@ -96,8 +101,16 @@ fn test() -> Result<(), String> {
 }
 
 /// Crates with no operating-system or GPU dependency, which the web build will use.
-const WASM_CRATES: &[&str] =
-    &["studiocraft-model", "studiocraft-plugin", "craft-tsmux", "craft-color-transform", "craft-scopes", "craft-audio-dsp", "craft-ease"];
+const WASM_CRATES: &[&str] = &[
+    "studiocraft-model",
+    "studiocraft-plugin",
+    "craft-tsmux",
+    "craft-flv",
+    "craft-color-transform",
+    "craft-scopes",
+    "craft-audio-dsp",
+    "craft-ease",
+];
 
 fn wasm() -> Result<(), String> {
     let mut c = cargo();
