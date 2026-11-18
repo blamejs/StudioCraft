@@ -6,14 +6,21 @@
 //! - [`aac::AacSession`] encodes the mixer's 48 kHz stereo blocks as AAC-LC.
 //! - [`nvenc::Nvenc`] runs NVIDIA's NVENC H.264 and HEVC encoders through the driver, registered
 //!   as `nvenc_native_h264` and `nvenc_native_hevc`.
+//! - [`mf::MediaFoundation`] runs the hardware H.264 and HEVC encoders Windows Media Foundation
+//!   lists, registered as `mf_native_h264` and `mf_native_hevc`.
+//! - [`hardware::for_candidate`] gives the built-in encoder that runs a `craft_hwenc` candidate.
 //!
 //! The H.264 and AAC encoders are written on the clean-room encoders of `craft-video` and
-//! `craft-audio`; NVENC runs through `craft-hwenc-native`.
+//! `craft-audio`; NVENC and Media Foundation run through `craft-hwenc-native`.
 
 pub mod aac;
 pub mod h264;
+pub mod hardware;
+pub mod mf;
 pub mod nvenc;
 
 pub use aac::AacSession;
 pub use h264::H264;
-pub use nvenc::{Nvenc, SessionError};
+pub use hardware::{Hardware, SessionError};
+pub use mf::MediaFoundation;
+pub use nvenc::Nvenc;

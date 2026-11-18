@@ -7,6 +7,10 @@ from FilmCraft's `crates/platform/src/nvenc/` (https://github.com/storytold/film
 de529c88f4948d0803bef746a325707f2671a71d), MIT OR Apache-2.0, Copyright (c) 2026 ArtCraft Team
 and the FilmCraft contributors.
 
+The Media Foundation loading, COM setup, sample creation, MFT enumeration and output reading in
+src/mf_ffi/api.rs and src/mf_ffi/transform.rs come from FilmCraft's
+`crates/platform/src/media_foundation/mft.rs` and `gpu.rs` (same repository, commit and license).
+
 The declarations in src/nvenc_ffi/abi.rs are transcribed from NVIDIA's `nvEncodeAPI.h` (Video
 Codec SDK, API 12.1), Copyright (c) 2010-2023 NVIDIA Corporation, under the MIT license whose
 text is at the top of that file.

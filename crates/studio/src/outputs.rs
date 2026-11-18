@@ -10,7 +10,8 @@ use craft_hwenc::{
     Cancel, Candidate, Choice, Error as HwError, FfmpegProber, Input, Os, Outcome, PROBE_HEIGHT, PROBE_WIDTH, Preference, ProbeCache, Prober, Target,
     Vendor,
 };
-use studiocraft_encode::{Nvenc, SessionError};
+use studiocraft_encode::SessionError;
+use studiocraft_encode::hardware::{self, Hardware};
 use studiocraft_engine::mixer::MixerCmd;
 use studiocraft_media::Tick;
 use studiocraft_media::audio::SAMPLE_RATE;
@@ -22,8 +23,7 @@ use studiocraft_outputs::encoders::HARDWARE;
 use studiocraft_outputs::replay::MAX_SAVES;
 use studiocraft_platform::ffmpeg;
 use studiocraft_plugin::{
-    Availability, Encoder, EncoderEnv, EncoderKind, OutputInstance, OutputJob, OutputStatus, Plugin, PluginError, RateControl, VideoFormat,
-    VideoParams, VideoSession,
+    Availability, Encoder, EncoderEnv, EncoderKind, OutputInstance, OutputJob, OutputStatus, PluginError, RateControl, VideoFormat, VideoParams,
 };
 
 use crate::{Notice, Studio, StudioError};
@@ -520,8 +520,8 @@ fn encoder_failed(candidate: &Candidate, error: &str) -> bool {
 }
 
 /// Tests the hardware encoders for an MKV recording: an encoder that also runs in this process
-/// (NVENC H.264 and HEVC) is tested by opening it there and encoding one frame, and the others
-/// are tested in the ffmpeg program.
+/// (NVENC and Media Foundation H.264 and HEVC) is tested by opening it there and encoding one
+/// frame, and the others are tested in the ffmpeg program.
 struct BuiltInFirst {
     ffmpeg: FfmpegProber,
     fps: (u32, u32),
@@ -529,9 +529,9 @@ struct BuiltInFirst {
 }
 
 impl BuiltInFirst {
-    fn test(&self, encoder: Nvenc) -> Outcome {
+    fn test(&self, encoder: &dyn Hardware) -> Outcome {
         let params = VideoParams { width: PROBE_WIDTH, height: PROBE_HEIGHT, fps_num: self.fps.0, fps_den: self.fps.1, rate: self.rate };
-        let mut session = match encoder.try_session(&params) {
+        let mut session = match encoder.try_open(&params) {
             Ok(s) => s,
             // Not kept in the test cache: the next start tests again.
             Err(SessionError::Busy(why)) => return Outcome::Busy(why),
@@ -559,13 +559,13 @@ impl Prober for BuiltInFirst {
         self.ffmpeg.program()
     }
     fn runs_in(&self, candidate: &'static Candidate) -> &Path {
-        match Nvenc::for_candidate(candidate.id) {
+        match hardware::for_candidate(candidate.id) {
             Some(_) => Path::new(IN_PROCESS),
             None => self.ffmpeg.program(),
         }
     }
     fn probe(&self, candidate: &'static Candidate, input: Input, cancel: &Cancel) -> Outcome {
-        match Nvenc::for_candidate(candidate.id).filter(|_| input == Input::Nv12) {
+        match hardware::for_candidate(candidate.id).filter(|_| input == Input::Nv12) {
             Some(_) if cancel.is_canceled() => Outcome::Canceled,
             Some(encoder) => self.test(encoder),
             // Without ffmpeg the encoders that run in this process are still tested.
@@ -576,7 +576,7 @@ impl Prober for BuiltInFirst {
         }
     }
     fn args(&self, candidate: &'static Candidate, input: Input) -> Vec<String> {
-        match Nvenc::for_candidate(candidate.id).filter(|_| input == Input::Nv12) {
+        match hardware::for_candidate(candidate.id).filter(|_| input == Input::Nv12) {
             // Kept apart from the ffmpeg encoder's results in the cache.
             Some(encoder) => vec![encoder.id().to_string(), format!("{:?}", self.rate), format!("{}/{}", self.fps.0, self.fps.1)],
             None => self.ffmpeg.args(candidate, input),
@@ -584,8 +584,8 @@ impl Prober for BuiltInFirst {
     }
 }
 
-/// Whether the `hardware` choice of output `kind` runs NVENC in this process: an MKV recording
-/// that is not lossless, since the built-in encoders have no lossless mode.
+/// Whether the `hardware` choice of output `kind` runs the built-in hardware encoders in this
+/// process: an MKV recording that is not lossless, since they have no lossless mode.
 fn runs_built_in(p: &Profile, kind: OutputKind, rate: RateControl) -> bool {
     kind == OutputKind::Recording && p.output.format == RecordingFormat::Mkv && rate != RateControl::Lossless
 }
@@ -594,7 +594,7 @@ fn runs_built_in(p: &Profile, kind: OutputKind, rate: RateControl) -> bool {
 /// encoder.
 fn built_in_twin(resolved: Resolved) -> Resolved {
     match resolved {
-        (id, Some(run), notice) => match Nvenc::for_candidate(&id) {
+        (id, Some(run), notice) => match hardware::for_candidate(&id) {
             Some(encoder) => (encoder.id().to_string(), Some(run), notice),
             None => (id, Some(run), notice),
         },
@@ -779,7 +779,8 @@ impl Studio {
         let mut hardware = None;
         let program = if encoder.ffmpeg().is_some() || encoder.id() == HARDWARE {
             let located = ffmpeg::locate(&self.profile.output.ffmpeg_path).map_err(|e| StudioError::Output(e.to_string()));
-            // The `hardware` choice of an MKV recording can still run NVENC without ffmpeg.
+            // The `hardware` choice of an MKV recording can still run NVENC or Media Foundation
+            // without ffmpeg.
             let (program, missing) = match located {
                 Ok(program) => (program, None),
                 Err(e) if encoder.id() == HARDWARE && runs_built_in(&self.profile, kind, planned.rate) => (PathBuf::new(), Some(e)),
@@ -1007,6 +1008,8 @@ mod tests {
         let run = |id: &'static str| HardwareRun { candidate: craft_hwenc::candidate(id).unwrap(), program: PathBuf::from("ffmpeg"), auto: true };
         assert_eq!(built_in_twin(("nvenc_h264".into(), Some(run("nvenc_h264")), None)).0, "nvenc_native_h264");
         assert_eq!(built_in_twin(("nvenc_hevc".into(), Some(run("nvenc_hevc")), None)).0, "nvenc_native_hevc");
+        assert_eq!(built_in_twin(("mf_h264".into(), Some(run("mf_h264")), None)).0, "mf_native_h264");
+        assert_eq!(built_in_twin(("mf_hevc".into(), Some(run("mf_hevc")), None)).0, "mf_native_hevc");
         assert_eq!(built_in_twin(("amf_h264".into(), Some(run("amf_h264")), None)).0, "amf_h264", "no built-in twin");
         assert_eq!(built_in_twin(("x264".into(), None, None)).0, "x264");
 
@@ -1020,6 +1023,14 @@ mod tests {
             Outcome::NoDevice(why) => assert!(why.starts_with("NVIDIA NVENC H.264 (built in) cannot run on this system"), "{why}"),
             other => panic!("{other:?}"),
         }
+        // Media Foundation is tested in this process too.
+        let mf = craft_hwenc::candidate("mf_hevc").unwrap();
+        match p.probe(mf, Input::Nv12, &Cancel::new()) {
+            Outcome::Works => {}
+            Outcome::NoDevice(why) => assert!(why.starts_with("Windows Media Foundation HEVC (built in) cannot "), "{why}"),
+            other => panic!("{other:?}"),
+        }
+        assert_eq!(p.runs_in(mf), Path::new(IN_PROCESS));
         // AMF is tested in ffmpeg; a missing ffmpeg does not stop the tests before NVENC.
         assert!(matches!(p.probe(amf, Input::Nv12, &Cancel::new()), Outcome::NoDevice(why) if why.contains("was not found")));
         let canceled = Cancel::new();
