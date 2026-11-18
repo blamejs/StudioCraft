@@ -550,9 +550,19 @@ impl BuiltInFirst {
     }
 }
 
+/// The path the tests and failures of the encoders that run in this process are kept under, apart
+/// from the same candidates run in ffmpeg.
+const IN_PROCESS: &str = "<in process>";
+
 impl Prober for BuiltInFirst {
     fn program(&self) -> &Path {
         self.ffmpeg.program()
+    }
+    fn runs_in(&self, candidate: &'static Candidate) -> &Path {
+        match Nvenc::for_candidate(candidate.id) {
+            Some(_) => Path::new(IN_PROCESS),
+            None => self.ffmpeg.program(),
+        }
     }
     fn probe(&self, candidate: &'static Candidate, input: Input, cancel: &Cancel) -> Outcome {
         match Nvenc::for_candidate(candidate.id).filter(|_| input == Input::Nv12) {
@@ -614,7 +624,7 @@ fn resolve_hardware(
     };
     let target = Target { vendor: Vendor::from_pci_id(vendor), os: Os::current(), codec, input: Input::Nv12, lossless };
     match craft_hwenc::resolve(&preference, target, prober, cache, cancel) {
-        Ok(Choice::Hardware(c)) => Ok((c.id.to_string(), Some(HardwareRun { candidate: c, program: prober.program().to_path_buf(), auto }), None)),
+        Ok(Choice::Hardware(c)) => Ok((c.id.to_string(), Some(HardwareRun { candidate: c, program: prober.runs_in(c).to_path_buf(), auto }), None)),
         Ok(Choice::Software { tried }) => {
             for (c, outcome) in &tried {
                 log::info!("{} was not used: {outcome}", c.name);
@@ -1020,6 +1030,12 @@ mod tests {
         let ffmpeg = FfmpegProber::new("missing-ffmpeg-for-the-test", Vec::new());
         let at_60 = BuiltInFirst { ffmpeg, fps: (60, 1), rate: RateControl::Quality(23) };
         assert_ne!(at_60.args(nvenc, Input::Nv12), p.args(nvenc, Input::Nv12), "another frame rate is tested again");
+        // A failure of the built-in encoder while it records does not stop ffmpeg's NVENC.
+        assert_eq!((p.runs_in(nvenc), p.runs_in(amf)), (Path::new(IN_PROCESS), p.program()));
+        let cache = ProbeCache::new();
+        cache.mark_failed(p.runs_in(nvenc), nvenc, "lost its last frames");
+        assert!(matches!(cache.get(&p, nvenc, Input::Nv12), Some(Outcome::Failed(_))));
+        assert_eq!(cache.get(&p.ffmpeg, nvenc, Input::Nv12), None);
     }
 
     /// An output that failed while it ran.
