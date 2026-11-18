@@ -25,11 +25,17 @@ fn reserved(stem: &str) -> bool {
 /// are added: file systems allow 255 bytes in a name.
 const MAX_BYTES: usize = 200;
 
-/// `name` as a file name: path and control characters removed, spaces and dots trimmed from the
-/// end, reserved device names prefixed, at most [`MAX_BYTES`] bytes of whole characters. An
-/// empty result is `Source <n>`.
+/// Whether `c` is left out of a track's file name: a control character, a character Windows does
+/// not allow in a name, or `~`, which Windows' short names use.
+fn removed(c: char) -> bool {
+    c.is_control() || matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' | '~')
+}
+
+/// `name` as a file name: path and control characters and `~` removed, spaces and dots trimmed
+/// from the end, reserved device names prefixed, at most [`MAX_BYTES`] bytes of whole characters.
+/// An empty result is `Source <n>`.
 pub fn sanitize(name: &str, n: usize) -> String {
-    let kept: String = name.chars().filter(|c| !c.is_control() && !matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|')).collect();
+    let kept: String = name.chars().filter(|c| !removed(*c)).collect();
     let mut kept = kept.trim().to_string();
     // One byte is kept for the prefix of a reserved name.
     let mut cut = MAX_BYTES - 1;
@@ -49,6 +55,16 @@ pub fn sanitize(name: &str, n: usize) -> String {
         return format!("_{kept}");
     }
     kept
+}
+
+/// Whether `file` has the form of a track file's name the writer makes: a name [`sanitize`] keeps
+/// as it is, possibly followed by a number and a part number, then `.wav`, in at most 255 bytes.
+/// A name with a character [`sanitize`] removes, one that starts with a space, ends in a dot or a
+/// space before `.wav`, or names a Windows device is not.
+pub fn is_track_file(file: &str) -> bool {
+    let Some(stem) = file.strip_suffix(".wav") else { return false };
+    let device = stem.split('.').next().is_some_and(|s| reserved(s.trim_end()));
+    file.len() <= 255 && !stem.is_empty() && !stem.chars().any(removed) && !stem.starts_with(' ') && !stem.ends_with(['.', ' ']) && !device
 }
 
 /// The first of `base`, `base 2`, `base 3` … not in `used` (compared without letter case), which
@@ -93,5 +109,36 @@ mod tests {
         assert_eq!(unique("Mic", &mut used), "Mic");
         assert_eq!(unique("mic", &mut used), "mic 2", "names that differ only in case would share a file on some systems");
         assert_eq!(unique("Mic", &mut used), "Mic 3");
+        assert_eq!(sanitize("Mic~1", 1), "Mic1");
+    }
+
+    #[test]
+    fn only_names_the_writer_makes_are_track_files() {
+        for ok in ["Mic.wav", "Mic 2.wav", "Mic part 2.wav", "_con.wav", "Música 🎤.wav", "Game.v2.wav"] {
+            assert!(is_track_file(ok), "{ok}");
+        }
+        for bad in [
+            "notes.txt",
+            "Mic.WAV",
+            ".wav",
+            "Mic..wav",
+            "Mic .wav",
+            " Mic.wav",
+            "Mic.wav.",
+            "Mic.wav ",
+            "MICPAR~1.wav",
+            "a:b.wav",
+            "con.wav",
+            "../Mic.wav",
+            "a\tb.wav",
+        ] {
+            assert!(!is_track_file(bad), "{bad}");
+        }
+        assert!(!is_track_file(&format!("{}.wav", "x".repeat(252))));
+        let mut used = HashSet::new();
+        for name in ["Mic", "con", "Game.", "  Desk  ", "~x~"] {
+            let file = unique(&sanitize(name, 1), &mut used) + ".wav";
+            assert!(is_track_file(&file), "{file}");
+        }
     }
 }

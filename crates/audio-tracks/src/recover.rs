@@ -54,6 +54,8 @@ pub fn unfinished(folder: &Path) -> Vec<PathBuf> {
 /// whole frames with a header for them, and the journal is ended. A take that ended, and a take
 /// still being written (its journal is locked), are left as they are and give `None`. The journal
 /// and the files it names must be files in `dir` itself, not links, so repair writes only there.
+/// The files must have names in the writer's format that differ in more than letter case, and each
+/// must have one name (no hard links), so a file that is removed is never one that is kept.
 pub fn repair(dir: &Path) -> std::io::Result<Option<Repaired>> {
     if !real_file(&dir.join(journal::FILE_NAME)) {
         return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "the take's journal is not a file in its folder"));
@@ -96,24 +98,35 @@ pub fn repair(dir: &Path) -> std::io::Result<Option<Repaired>> {
             _ => {}
         }
     }
-    // The writer names only files in this folder, so any other name means the journal was damaged:
-    // the take stays unfinished, and no file is touched.
-    if let Some(bad) = names.iter().find(|n| Path::new(n.as_str()).file_name() != Some(std::ffi::OsStr::new(n.as_str()))) {
+    // The writer names only track files in this folder, in its own name format and apart in letter
+    // case, so any other name means the journal was damaged: the take stays unfinished, and no file
+    // is touched.
+    if let Some(bad) = names.iter().find(|n| !crate::names::is_track_file(n)) {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidData,
-            format!("the journal names {bad:?}, which is not a file in the take's folder"),
+            format!("the journal names {bad:?}, which is not a track file in the take's folder"),
         ));
     }
+    for (i, a) in names.iter().enumerate() {
+        if let Some(b) = names[i + 1..].iter().find(|b| b.to_lowercase() == a.to_lowercase()) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("the journal names {a:?} and {b:?}, which differ only in letter case"),
+            ));
+        }
+    }
     // A cut the writer journaled is finished here too, since the take may have stopped part way
-    // through it: a part after the first that starts at or after the end is removed, and the file
-    // holding the end keeps only the frames before it.
+    // through it: a part that starts at or after the end, after an earlier part of its track, is
+    // removed, and the file holding the end keeps only the frames before it. A track's first file
+    // is never removed.
     let start_of = |name: &str| starts.iter().find(|(f, _)| f == name).map_or(0, |(_, s)| *s);
     let mut removed: Vec<String> = Vec::new();
     let mut limits: Vec<(String, u64)> = Vec::new();
     for (track, file) in &of_track {
         let Some(&end) = cuts.get(track) else { continue };
         let start = start_of(file);
-        if start > 0 && start >= end {
+        let earlier = of_track.iter().any(|(t, f)| t == track && f != file && start_of(f) < start);
+        if earlier && start >= end {
             removed.push(file.clone());
         } else {
             limits.push((file.clone(), end.saturating_sub(start)));
@@ -121,7 +134,26 @@ pub fn repair(dir: &Path) -> std::io::Result<Option<Repaired>> {
     }
     names.retain(|n| !removed.contains(n));
     let limit = |name: &str| limits.iter().find(|(f, _)| f == name).map(|(_, l)| *l);
-    // Every file is checked before any is cut, so a take that stays unfinished is left as it was.
+    // Every file is checked before any is removed or cut, so a take that stays unfinished is left
+    // as it was. A part to remove may be gone already, when the take stopped after removing it;
+    // one that is there must be a track file the writer made, as the kept files must. Each must
+    // have one name, and no part to remove may be a kept file under another name.
+    let mut removed_ids = Vec::new();
+    let mut kept_ids = Vec::new();
+    for name in &removed {
+        let path = dir.join(name);
+        match std::fs::symlink_metadata(&path) {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(std::io::Error::new(e.kind(), format!("{name}: {e}"))),
+            Ok(m) if !m.is_file() => {
+                return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, format!("{name} is not a file in the take's folder")));
+            }
+            Ok(_) => {
+                crate::wav::check(&path).map_err(|e| std::io::Error::new(e.kind(), format!("{name}: {e}")))?;
+                removed_ids.push((name, file_identity(&path)?));
+            }
+        }
+    }
     let head = crate::wav::header_len()?;
     for name in &names {
         let path = dir.join(name);
@@ -131,6 +163,7 @@ pub fn repair(dir: &Path) -> std::io::Result<Option<Repaired>> {
             return Err(std::io::Error::new(std::io::ErrorKind::NotFound, format!("{name} is missing from the take's folder")));
         }
         let len = crate::wav::check(&path).map_err(|e| std::io::Error::new(e.kind(), format!("{name}: {e}")))?;
+        kept_ids.push((name, file_identity(&path)?));
         // A sync put its frames on the disk, so a file holding fewer was cut or replaced since.
         let held = len.saturating_sub(head) / crate::wav::FRAME_BYTES;
         if let Some((_, want)) = synced.iter().find(|(f, _)| f == name)
@@ -140,6 +173,11 @@ pub fn repair(dir: &Path) -> std::io::Result<Option<Repaired>> {
                 std::io::ErrorKind::InvalidData,
                 format!("{name} holds {held} frames, fewer than the {want} the journal recorded as written"),
             ));
+        }
+    }
+    for (r, rid) in &removed_ids {
+        if let Some((k, _)) = kept_ids.iter().find(|(_, kid)| kid == rid) {
+            return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, format!("{r} and {k} are the same file")));
         }
     }
     for name in &removed {
@@ -197,6 +235,13 @@ pub fn repair_all(folder: &Path) -> std::io::Result<Vec<Repaired>> {
     }
     let why: Vec<String> = out.failed.iter().map(|(d, e)| format!("{}: {e}", d.display())).collect();
     Err(std::io::Error::other(format!("{} take(s) could not be repaired ({} repaired): {}", out.failed.len(), out.repaired.len(), why.join("; "))))
+}
+
+/// Which file `p` names, opened without following a link; an error when it has more than one
+/// name (hard link).
+fn file_identity(p: &Path) -> std::io::Result<(u64, u64)> {
+    let file = crate::open::no_follow(std::fs::OpenOptions::new().read(true), p)?;
+    crate::open::one_name(&file, p).map(|i| i.id)
 }
 
 /// Whether `p` is a folder and not a link to one.

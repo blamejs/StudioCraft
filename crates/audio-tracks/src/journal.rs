@@ -91,9 +91,10 @@ impl Journal {
 
     /// Open the journal in `dir` to append to it, with its lines, locked while it is open. `None`
     /// when another journal handle holds the lock: the take is still being written or repaired.
-    /// A last line cut short by a crash is removed, so the lines appended next read back.
+    /// A last line cut short by a crash is removed, so the lines appended next read back. A
+    /// journal that is a link is refused.
     pub fn open_idle(dir: &Path) -> std::io::Result<Option<(Journal, Vec<Line>)>> {
-        let mut file = OpenOptions::new().read(true).write(true).open(dir.join(FILE_NAME))?;
+        let mut file = crate::open::no_follow(OpenOptions::new().read(true).write(true), &dir.join(FILE_NAME))?;
         match file.try_lock() {
             Ok(()) => {}
             Err(std::fs::TryLockError::WouldBlock) => return Ok(None),
@@ -151,15 +152,15 @@ impl Journal {
 }
 
 /// The lines of the journal in `dir`. A last line cut short by a crash is left out; other lines
-/// that do not read are an error.
+/// that do not read are an error, and so is a journal that is a link.
 pub fn read(dir: &Path) -> std::io::Result<Vec<Line>> {
-    parse(&read_bounded(&mut File::open(dir.join(FILE_NAME))?)?).map(|(lines, _)| lines)
+    parse(&read_bounded(&mut crate::open::no_follow(OpenOptions::new().read(true), &dir.join(FILE_NAME))?)?).map(|(lines, _)| lines)
 }
 
 /// Whether the journal in `dir` ends with its `End` line, read from its last 64 KiB only, so a
 /// journal of any length is answered without reading it whole.
 pub fn ended(dir: &Path) -> std::io::Result<bool> {
-    let mut file = File::open(dir.join(FILE_NAME))?;
+    let mut file = crate::open::no_follow(OpenOptions::new().read(true), &dir.join(FILE_NAME))?;
     let len = file.metadata()?.len();
     let from = len.saturating_sub(TAIL_BYTES);
     file.seek(SeekFrom::Start(from))?;

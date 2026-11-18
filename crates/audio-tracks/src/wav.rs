@@ -106,9 +106,10 @@ pub fn rewrite_header(file: &mut File, frames: u64, stamp: &Stamp) -> std::io::R
 
 /// Make the file at `path` a valid WAV of the whole frames it holds: a partial frame at the end is
 /// cut off and the header is written for the rest, with the file's own `bext` stamp. The frames
-/// it holds.
+/// it holds. A link at `path`, and a file with more than one name (hard link), are refused.
 pub fn repair(path: &Path) -> std::io::Result<u64> {
-    let mut file = OpenOptions::new().read(true).write(true).open(path)?;
+    let mut file = crate::open::no_follow(OpenOptions::new().read(true).write(true), path)?;
+    crate::open::one_name(&file, path)?;
     let (len, old) = check_file(&mut file)?;
     let head = header_len()?;
     let frames = (len - head) / FRAME_BYTES;
@@ -123,9 +124,11 @@ pub fn repair(path: &Path) -> std::io::Result<u64> {
 }
 
 /// Shorten the file at `path`, checked by [`check`], to at most `frames` frames after its header.
-/// [`repair`] then writes the header for what is left.
+/// [`repair`] then writes the header for what is left. A link at `path`, and a file with more than
+/// one name (hard link), are refused.
 pub fn cut(path: &Path, frames: u64) -> std::io::Result<()> {
-    let file = OpenOptions::new().write(true).open(path)?;
+    let file = crate::open::no_follow(OpenOptions::new().write(true), path)?;
+    crate::open::one_name(&file, path)?;
     // `frames` comes from the journal: a length past any file leaves the file as it is.
     let keep = header_len()?.saturating_add(frames.saturating_mul(FRAME_BYTES));
     if file.metadata()?.len() > keep {
@@ -135,8 +138,9 @@ pub fn cut(path: &Path, frames: u64) -> std::io::Result<()> {
 }
 
 /// Check, without changing it, that the file at `path` is one [`repair`] can repair. Its length.
+/// A link at `path` is refused.
 pub fn check(path: &Path) -> std::io::Result<u64> {
-    check_file(&mut File::open(path)?).map(|(len, _)| len)
+    check_file(&mut crate::open::no_follow(OpenOptions::new().read(true), path)?).map(|(len, _)| len)
 }
 
 /// The length and header of `file`, or an error when it is shorter than a header or its header is

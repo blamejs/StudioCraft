@@ -58,6 +58,11 @@ chrono = { version = "0.4", default-features = false, features = ["clock"] }
 dirs = "7"
 # Free space on the disk audio tracks are written to, without unsafe code here.
 fs4 = { version = "1.1", default-features = false, features = ["sync"] }
+# O_NOFOLLOW, to open audio track files without following a link.
+libc = "0.2"
+# The volume serial number, file index and link count of an audio track file on Windows, without
+# unsafe code here.
+winapi-util = "0.1"
 criterion = { version = "0.8", default-features = false, features = ["cargo_bench_support"] }
 # contributors/people.toml, read by the engine's build script.
 toml = "1"

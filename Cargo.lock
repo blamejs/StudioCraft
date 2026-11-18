@@ -5775,11 +5775,13 @@ dependencies = [
  "criterion",
  "crossbeam-queue",
  "fs4",
+ "libc",
  "log",
  "serde",
  "serde_json",
  "studiocraft-media",
  "studiocraft-model",
+ "winapi-util",
 ]
 
 [[package]]
