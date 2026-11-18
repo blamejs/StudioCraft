@@ -76,12 +76,16 @@ pub fn repair(dir: &Path) -> std::io::Result<Option<Repaired>> {
             _ => {}
         }
     }
+    // The writer names only files in this folder, so any other name means the journal was damaged:
+    // the take stays unfinished, and no file is touched.
+    if let Some(bad) = names.iter().find(|n| Path::new(n.as_str()).file_name() != Some(std::ffi::OsStr::new(n.as_str()))) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("the journal names {bad:?}, which is not a file in the take's folder"),
+        ));
+    }
     let mut files = Vec::new();
     for name in names {
-        // A name from the journal is only ever a file in this folder.
-        if Path::new(&name).components().count() != 1 {
-            continue;
-        }
         let path = dir.join(&name);
         // Each file is made before the journal names it, so a missing one was moved or deleted
         // since: the take stays unfinished, to be repaired once the file is back.
