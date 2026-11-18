@@ -80,7 +80,8 @@ description in [docs/features.md](docs/features.md).
    to right in every language.
 2. **Multiple outputs (in progress).** StudioCraft will stream to several destinations at once and
    offer a virtual camera. `craft-flv` already writes and reads the FLV tags and AMF0 values an
-   RTMP stream carries.
+   RTMP stream carries. `craft-packet` shares each encoded packet by reference with every
+   destination's bounded ring.
 3. **Web build.** The model and plugin crates already build for WebAssembly. A browser editor for
    scene collections is the first step.
 4. **Frames on the GPU from capture to the encoder.** Captured frames will stay on the GPU until

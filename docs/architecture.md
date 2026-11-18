@@ -19,6 +19,7 @@ crate in the same layer. `cargo xtask layers` checks this against the table in
 | L0 | `studiocraft-media` | The master clock, frame pacing, video frame and audio block types, buffer pools, bounded lock-free queues, mixing and level meters. |
 | L0 | `craft-tsmux` | The MPEG-2 transport stream writer: PAT and PMT, PES packets, PCR and continuity counters, written to any `io::Write`. It depends on no StudioCraft crate. |
 | L0 | `craft-flv` | FLV tags for H.264 and AAC: the file header, `onMetaData`, the AVC and AAC sequence headers, video and audio tags with composition time, the AMF0 values of script data and RTMP commands, and a tag reader. Its tag bodies are also RTMP message bodies. It depends on no StudioCraft crate. |
+| L0 | `craft-packet` | Encoded packets shared by reference through a pool, fanned out to bounded per-subscriber rings with packet and byte caps. A full ring drops packets up to the next keyframe, its receiver skips stale packets to a keyframe, and each subscriber keeps its own counters. When the pool is full, the ring holding the most bytes is emptied, so a stalled destination loses only its own packets. It depends on no StudioCraft crate. |
 | L0 | `craft-color-transform` | RGB spaces and Bradford adaptation, white balance by temperature and tint, OkLab and OkLCh, monotone tone curves and lookup tables, and PQ tone mapping. It depends on no StudioCraft crate. |
 | L0 | `craft-scopes` | Video scope math: the waveform, parade, histogram and vectorscopes of a borrowed RGBA8 or NV12 frame, their numeric summaries and trace images. It depends on no StudioCraft crate. |
 | L0 | `craft-audio-dsp` | Audio DSP shared with the other Craft apps: the `AudioEffect` trait and its effects, the BS.1770 / EBU R128 loudness meter, panning, test signals and resampling. It depends on no StudioCraft crate. |
@@ -424,8 +425,8 @@ Release file names and package ids are in [docs/releasing.md](releasing.md#file-
   | Windows Media Foundation H.264 or HEVC (built in) | `craft-hwenc-native`, which loads `mfplat.dll` at run time |
   | Apple VideoToolbox H.264 or HEVC (built in) | `craft-hwenc-native` on macOS, which calls the VideoToolbox framework |
 
-  `craft-flv` writes and reads the FLV tags and AMF0 values that RTMP carries. No output uses it
-  yet.
+  `craft-flv` writes and reads the FLV tags and AMF0 values that RTMP carries, and `craft-packet`
+  fans encoded packets out to several destinations. No output uses either yet.
 
 ## Dependency licenses
 
