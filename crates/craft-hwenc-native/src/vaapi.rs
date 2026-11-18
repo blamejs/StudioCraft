@@ -18,8 +18,8 @@
 //! Up to four frames are in flight: [`Encoder::encode`] copies a frame into a free surface and
 //! submits it, and reads the oldest frame's coded data only when every surface is taken. Reading
 //! is the one call that waits for the GPU, and it waits for a frame submitted three frames before.
-
-use std::collections::VecDeque;
+//! With libva 2.9 or later and a driver that has `vaSyncSurface2`, a frame the GPU has not
+//! finished after two seconds is an error.
 
 use crate::mf::set_types;
 use crate::vaapi_ffi::{self, OpenError, Params, Picture, Session};
@@ -29,7 +29,7 @@ pub use crate::{Config, Error, Input, Packet, Rate};
 impl From<OpenError> for Error {
     fn from(e: OpenError) -> Error {
         match e {
-            OpenError::NoDevice(why) => Error::NoDevice(why),
+            OpenError::NoDevice(why) | OpenError::NoEncoder(why) => Error::NoDevice(why),
             OpenError::Unsupported(why) => Error::Unsupported(why),
             OpenError::Busy(why) => Error::Busy(why),
         }
@@ -179,8 +179,6 @@ pub struct Encoder {
     record: Vec<u8>,
     sets: Vec<Vec<u8>>,
     gop: Gop,
-    /// Frames in flight, oldest first: their timestamp and whether each went in as an IDR picture.
-    pending: VecDeque<(i64, bool)>,
     /// The coded data of the frame being read, kept between frames so reading allocates nothing.
     coded: Vec<u8>,
 }
@@ -200,16 +198,16 @@ impl Encoder {
         gray.try_reserve_exact(size).map_err(no_memory)?;
         gray.resize(luma, 16u8);
         gray.resize(size, 128u8);
-        session.submit(&gray, &gop.next()).map_err(Error::Failed)?;
+        session.submit(&gray, &gop.next(), (0, true)).map_err(Error::Failed)?;
         let mut coded = Vec::new();
         coded.try_reserve_exact(size).map_err(no_memory)?;
-        if !session.collect(&mut coded).map_err(Error::Failed)? {
+        if session.collect(&mut coded).map_err(Error::Failed)?.is_none() {
             return Err(Error::Failed("the encoder returned no frame".into()));
         }
         let sets = annexb::parameter_sets(cfg.codec, &coded, set_types(cfg.codec)).map_err(Error::Failed)?;
         let record = record_of(cfg, &sets)?;
         gop.restart();
-        Ok(Encoder { session, cfg: *cfg, record, sets, gop, pending: VecDeque::with_capacity(vaapi_ffi::DEPTH), coded })
+        Ok(Encoder { session, cfg: *cfg, record, sets, gop, coded })
     }
 
     /// The `avcC` (H.264) or `hvcC` (HEVC) record a container stores with the track.
@@ -237,25 +235,24 @@ impl Encoder {
             self.take(&mut packets)?;
         }
         let pic = self.gop.next();
-        self.session.submit(frame, &pic).map_err(Error::Failed)?;
-        self.pending.push_back((pts, pic.idr));
+        self.session.submit(frame, &pic, (pts, pic.idr)).map_err(Error::Failed)?;
         Ok(packets)
     }
 
-    /// End the stream: every frame still inside comes out.
+    /// End the stream: every frame still inside comes out. A frame that cannot be read is an
+    /// error; the frames after it stay inside, each with its own timestamp, for the next call.
     pub fn flush(&mut self) -> Result<Vec<Packet>, Error> {
-        let mut packets = Vec::with_capacity(self.pending.len());
+        let mut packets = Vec::with_capacity(vaapi_ffi::DEPTH);
         while self.take(&mut packets)? {}
         Ok(packets)
     }
 
-    /// Read the oldest frame in flight into `packets`; `false` when none is in flight.
+    /// Read the oldest frame in flight into `packets`; `false` when none is in flight. The
+    /// session gives each frame back with the timestamp it went in with, so a frame that fails to
+    /// read leaves the later frames' timestamps as they were.
     fn take(&mut self, packets: &mut Vec<Packet>) -> Result<bool, Error> {
         self.coded.clear();
-        if !self.session.collect(&mut self.coded).map_err(Error::Failed)? {
-            return Ok(false);
-        }
-        let (pts, idr) = self.pending.pop_front().ok_or_else(|| Error::Failed("the encoder returned more frames than it was given".into()))?;
+        let Some((pts, idr)) = self.session.collect(&mut self.coded).map_err(Error::Failed)? else { return Ok(false) };
         packets.push(packet(self.cfg.codec, &self.sets, &self.coded, pts, idr)?);
         Ok(true)
     }
@@ -266,8 +263,8 @@ mod tests {
     use super::*;
     use crate::vaapi_ffi::abi::*;
     use crate::vaapi_ffi::{
-        Blocks, Control, control, copy_nv12, frame_rate, h264_level, h264_picture, h264_sequence, h264_slice, hevc_blocks, hevc_level, hevc_picture,
-        hevc_sequence, hevc_slice, open_error, rate_buffers,
+        Blocks, Control, Slots, Waited, control, copy_nv12, frame_rate, h264_level, h264_picture, h264_sequence, h264_slice, hevc_blocks, hevc_level,
+        hevc_picture, hevc_sequence, hevc_slice, open_error, rate_buffers, waited,
     };
 
     fn cfg(codec: Codec) -> Config {
@@ -503,6 +500,34 @@ mod tests {
     }
 
     #[test]
+    fn a_frame_that_fails_to_read_leaves_the_later_frames_their_own_timestamps() {
+        let mut slots = Slots::new();
+        assert_eq!(slots.pop(), None);
+        for pts in 0..vaapi_ffi::DEPTH as i64 {
+            assert_eq!(slots.push((pts, pts == 0)), Ok(pts as usize));
+        }
+        assert!(slots.full() && slots.free().is_none());
+        assert!(slots.push((9, false)).is_err(), "every slot is taken");
+        // The oldest frame leaves its slot before its read, which then fails: the next read gets
+        // the next frame's slot and timestamp.
+        assert_eq!(slots.pop(), Some((0, (0, true))));
+        assert_eq!(slots.free(), Some(0), "the freed slot takes the next frame");
+        assert_eq!(slots.push((4, false)), Ok(0));
+        let rest: Vec<_> = std::iter::from_fn(|| slots.pop()).collect();
+        assert_eq!(rest, [(1, (1, false)), (2, (2, false)), (3, (3, false)), (0, (4, false))]);
+        assert_eq!(slots.free(), Some(1), "no frame is in flight");
+    }
+
+    #[test]
+    fn a_wait_for_the_gpu_times_out_where_the_driver_can() {
+        assert_eq!(waited(VA_STATUS_SUCCESS), Waited::Done);
+        assert_eq!(waited(VA_STATUS_ERROR_TIMEDOUT), Waited::TimedOut);
+        assert_eq!(waited(VA_STATUS_ERROR_UNIMPLEMENTED), Waited::Unbounded, "a driver without vaSyncSurface2");
+        assert_eq!(waited(VA_STATUS_ERROR_HW_BUSY), Waited::Failed);
+        assert_eq!(vaapi_ffi::SYNC_TIMEOUT_NS, 2_000_000_000);
+    }
+
+    #[test]
     fn segments_that_overflowed_or_that_the_driver_marks_bad_are_refused() {
         assert_eq!(vaapi_ffi::segment_error(0), None);
         assert_eq!(vaapi_ffi::segment_error(26), None, "the low byte holds the picture's average QP");
@@ -528,6 +553,22 @@ mod tests {
         assert_eq!(Error::from(telling(unsupported(), none())), Error::Unsupported("b".into()));
         assert_eq!(Error::from(telling(unsupported(), busy())), Error::Busy("c".into()));
         assert_eq!(Error::from(telling(none(), OpenError::NoDevice("later".into()))), Error::NoDevice("a".into()), "the first of a kind is kept");
+    }
+
+    #[test]
+    fn no_encoder_on_any_render_node_stands_and_other_failures_are_tried_again() {
+        use vaapi_ffi::no_session;
+        let lacks = |n: &str| OpenError::NoEncoder(format!("{n} has no HEVC encoder"));
+        let (why, stands) = no_session([lacks("renderD128"), lacks("renderD129")]);
+        assert!(stands, "every driver initialized and lists no encoder");
+        assert_eq!(Error::from(why), Error::NoDevice("renderD128 has no HEVC encoder".into()));
+        let (why, stands) = no_session([lacks("renderD128"), OpenError::NoDevice("renderD129: vaInitialize failed".into())]);
+        assert!(!stands, "a node that did not open may open later");
+        assert_eq!(Error::from(why), Error::NoDevice("renderD128 has no HEVC encoder".into()));
+        assert!(!no_session([lacks("renderD128"), OpenError::Busy("taken".into())]).1);
+        assert!(!no_session([OpenError::Unsupported("vaCreateContext".into())]).1, "a driver that failed to start");
+        let (why, stands) = no_session([]);
+        assert!(!stands && matches!(why, OpenError::NoDevice(_)), "no render node");
     }
 
     #[test]

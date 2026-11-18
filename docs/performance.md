@@ -88,7 +88,8 @@ craft-hwenc-native` measures the work the VA-API encoder does on the CPU for eac
 The copy moves a frame into an H.264 surface's planes and fills the rows past 1080 with the last
 row, and the packet bench turns a 12.5 kB coded
 picture into a length-prefixed packet. At 1080p and 60 fps the two take about 0.5% of the frame
-time. On a machine with a VA-API H.264 encoder the bench also measures `vaapi h264 encode 1080p`,
+time. The copy bench writes into heap memory; a mapped VA surface can be uncached memory, where
+writes are slower, and the bench does not measure that. On a machine with a VA-API H.264 encoder the bench also measures `vaapi h264 encode 1080p`,
 a whole frame from `encode`.
 
 ### FLV tags

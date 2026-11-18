@@ -52,10 +52,16 @@ libva, and without a driver that encodes the codec, `Encoder::new` returns `Erro
 
 `vaapi::Encoder` keeps up to four frames in flight, each in its own surface and coded buffer.
 `encode` copies the frame into a free surface and submits it, and waits for the GPU only when all
-four are taken, for the frame submitted three frames before. The surfaces, coded buffers and the
-buffer that collects coded data are made once in `Encoder::new`; each frame allocates only the
-packet it returns. `cargo bench -p craft-hwenc-native` measures the copy and the packet, and a
-1080p encode where a VA-API H.264 encoder is present.
+four are taken, for the frame submitted three frames before. With libva 2.9 or later and a
+driver that has `vaSyncSurface2`, a frame the GPU has not finished after two seconds is an error;
+with an older libva the wait has no limit. The surfaces, coded buffers and the buffer that
+collects coded data are made once in `Encoder::new`. Each frame still allocates on the CPU side:
+the packet it returns, and the `Vec` of packets when one comes out. In the driver, each frame
+creates and destroys its picture and slice parameter buffers (and on an IDR picture the sequence,
+rate and frame rate buffers) and maps its surface with `vaDeriveImage`. Coded data is copied out
+of the mapped coded buffer and then into the length-prefixed packet. `cargo bench -p
+craft-hwenc-native` measures the copy and the packet, and a 1080p encode where a VA-API H.264
+encoder is present; the copy bench writes into heap memory, not a mapped surface.
 
 Only the private `nvenc_ffi`, `mf_ffi`, `vt_ffi` and `vaapi_ffi` modules contain `unsafe` code.
 The NVENC and VA-API layout tests compare every structure the crate passes to the driver with the

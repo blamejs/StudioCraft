@@ -339,7 +339,12 @@ the window buttons sit where the desktop puts them. `src/titlebar.rs` makes the 
   The VA-API encoder runs on the recording's encoder thread, as the other built-in encoders do. It
   keeps four frames in flight, so the thread waits for the GPU only when all four surfaces are
   taken, and then for the frame submitted three frames before. Frames reach it as NV12 in memory
-  and are copied into a surface. `craft-flv` writes and reads the FLV tags and AMF0 values that
+  and are copied into a surface, so a frame rendered on the GPU is read back to the CPU and
+  uploaded again. VA-API can import a DMA-BUF as a surface; the encoder does not do this yet, and
+  the copy costs 80 µs at 1080p and 1.2 ms at 4K on the encoder thread. The VA-API test that
+  lists the encoder in Settings initializes the driver of every render node on the calling
+  thread. When every node's driver lists no encoder for the codec, that answer stands until
+  StudioCraft restarts and later tests do not initialize the drivers again. `craft-flv` writes and reads the FLV tags and AMF0 values that
   RTMP carries; no output uses it yet.
 
 ## Dependency licenses

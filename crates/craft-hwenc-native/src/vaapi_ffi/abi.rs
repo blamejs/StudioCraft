@@ -64,7 +64,9 @@ pub const VA_STATUS_ERROR_UNSUPPORTED_PROFILE: VAStatus = 0x0c;
 pub const VA_STATUS_ERROR_UNSUPPORTED_ENTRYPOINT: VAStatus = 0x0d;
 pub const VA_STATUS_ERROR_UNSUPPORTED_RT_FORMAT: VAStatus = 0x0e;
 pub const VA_STATUS_ERROR_RESOLUTION_NOT_SUPPORTED: VAStatus = 0x13;
+pub const VA_STATUS_ERROR_UNIMPLEMENTED: VAStatus = 0x14;
 pub const VA_STATUS_ERROR_HW_BUSY: VAStatus = 0x22;
+pub const VA_STATUS_ERROR_TIMEDOUT: VAStatus = 0x26;
 
 pub const VA_INVALID_ID: VAGenericID = 0xffff_ffff;
 pub const VA_INVALID_SURFACE: VASurfaceID = VA_INVALID_ID;
@@ -519,6 +521,9 @@ pub type vaBeginPicture = unsafe extern "C" fn(dpy: VADisplay, context: VAContex
 pub type vaRenderPicture = unsafe extern "C" fn(dpy: VADisplay, context: VAContextID, buffers: *mut VABufferID, num_buffers: c_int) -> VAStatus;
 pub type vaEndPicture = unsafe extern "C" fn(dpy: VADisplay, context: VAContextID) -> VAStatus;
 pub type vaSyncSurface = unsafe extern "C" fn(dpy: VADisplay, render_target: VASurfaceID) -> VAStatus;
+/// libva 2.9 and later: [`vaSyncSurface`] that returns `VA_STATUS_ERROR_TIMEDOUT` after
+/// `timeout_ns`, or `VA_STATUS_ERROR_UNIMPLEMENTED` from a driver without it.
+pub type vaSyncSurface2 = unsafe extern "C" fn(dpy: VADisplay, surface: VASurfaceID, timeout_ns: u64) -> VAStatus;
 pub type vaCreateImage =
     unsafe extern "C" fn(dpy: VADisplay, format: *mut VAImageFormat, width: c_int, height: c_int, image: *mut VAImage) -> VAStatus;
 pub type vaDeriveImage = unsafe extern "C" fn(dpy: VADisplay, surface: VASurfaceID, image: *mut VAImage) -> VAStatus;

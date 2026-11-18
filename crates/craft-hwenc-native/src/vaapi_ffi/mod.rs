@@ -33,6 +33,80 @@ pub(crate) fn recon_slots(n: usize) -> (usize, usize) {
     (n % RECON, (n + RECON - 1) % RECON)
 }
 
+/// What a frame in flight carries out with its coded data: its timestamp and whether it went in
+/// as an IDR picture.
+pub(crate) type Tag = (i64, bool);
+
+/// The [`DEPTH`] frame slots of a session, oldest frame first, each with the [`Tag`] its frame
+/// went in with. A frame leaves its slot with its tag before its coded data is read, so a read
+/// that fails drops that frame alone and every later frame keeps its own tag.
+#[derive(Debug)]
+pub(crate) struct Slots {
+    tags: [Tag; DEPTH],
+    head: usize,
+    count: usize,
+}
+
+impl Slots {
+    pub(crate) fn new() -> Slots {
+        Slots { tags: [(0, false); DEPTH], head: 0, count: 0 }
+    }
+
+    /// Whether every slot holds a frame.
+    pub(crate) fn full(&self) -> bool {
+        self.count >= DEPTH
+    }
+
+    /// The slot the next frame goes into, if one is free.
+    pub(crate) fn free(&self) -> Option<usize> {
+        (!self.full()).then_some((self.head + self.count) % DEPTH)
+    }
+
+    /// Put a frame tagged `tag` into the free slot [`Slots::free`] gave.
+    pub(crate) fn push(&mut self, tag: Tag) -> Result<usize, String> {
+        let slot = self.free().ok_or("every frame slot of the encoder is in use")?;
+        self.tags[slot] = tag;
+        self.count += 1;
+        Ok(slot)
+    }
+
+    /// Take the oldest frame out: its slot and tag.
+    pub(crate) fn pop(&mut self) -> Option<(usize, Tag)> {
+        if self.count == 0 {
+            return None;
+        }
+        let slot = self.head;
+        self.head = (self.head + 1) % DEPTH;
+        self.count -= 1;
+        Some((slot, self.tags[slot]))
+    }
+}
+
+/// How long reading a frame waits for the GPU (`vaSyncSurface2`) before it is an error.
+pub(crate) const SYNC_TIMEOUT_NS: u64 = 2_000_000_000;
+
+/// What a `vaSyncSurface2` status says about the wait for a frame.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Waited {
+    /// The frame is coded.
+    Done,
+    /// The GPU did not finish it within [`SYNC_TIMEOUT_NS`].
+    TimedOut,
+    /// The driver has no `vaSyncSurface2`; `vaSyncSurface` waits instead, without a limit.
+    Unbounded,
+    /// Any other error.
+    Failed,
+}
+
+pub(crate) fn waited(status: VAStatus) -> Waited {
+    match status {
+        VA_STATUS_SUCCESS => Waited::Done,
+        VA_STATUS_ERROR_TIMEDOUT => Waited::TimedOut,
+        VA_STATUS_ERROR_UNIMPLEMENTED => Waited::Unbounded,
+        _ => Waited::Failed,
+    }
+}
+
 /// What one session encodes.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Params {
@@ -49,6 +123,8 @@ pub(crate) struct Params {
 #[derive(Debug)]
 pub(crate) enum OpenError {
     NoDevice(String),
+    /// The render node's driver initialized and lists no encode entry point for the codec.
+    NoEncoder(String),
     Unsupported(String),
     Busy(String),
 }
@@ -58,11 +134,30 @@ pub(crate) enum OpenError {
 /// The earlier error is kept between two of the same kind.
 pub(crate) fn telling(kept: OpenError, new: OpenError) -> OpenError {
     let rank = |e: &OpenError| match e {
-        OpenError::NoDevice(_) => 0,
+        OpenError::NoDevice(_) | OpenError::NoEncoder(_) => 0,
         OpenError::Unsupported(_) => 1,
         OpenError::Busy(_) => 2,
     };
     if rank(&new) > rank(&kept) { new } else { kept }
+}
+
+/// The error of a session that opened on none of the render nodes, from each node's error, and
+/// whether it stands until the process ends: there was a node, and every node's driver
+/// initialized and lists no encoder for the codec. A node that failed to open, was busy or
+/// refused the stream is tried again at the next open.
+pub(crate) fn no_session(errors: impl IntoIterator<Item = OpenError>) -> (OpenError, bool) {
+    let (mut why, mut stands) = (None::<OpenError>, true);
+    for e in errors {
+        stands &= matches!(e, OpenError::NoEncoder(_));
+        why = Some(match why {
+            Some(kept) => telling(kept, e),
+            None => e,
+        });
+    }
+    match why {
+        Some(why) => (why, stands),
+        None => (OpenError::NoDevice("no DRM render node (/dev/dri/renderD*)".into()), false),
+    }
 }
 
 /// The status of an open call that failed: every encoder of the GPU is taken (busy), or `other`.
@@ -635,7 +730,11 @@ pub(crate) fn copy_nv12(
         if end.is_none_or(|end| end > dst.len()) {
             return Err("the surface's image is smaller than the frame".into());
         }
-        for (r, src) in plane.chunks_exact(width).take(rows).enumerate() {
+        // The rows past the frame repeat its last row, copied from the frame: a mapped surface
+        // can be uncached memory, which is slow to read back.
+        let src_rows = plane.chunks_exact(width).take(rows);
+        let last = plane.chunks_exact(width).nth(rows - 1).unwrap_or(&[]);
+        for (r, src) in src_rows.chain(std::iter::repeat_n(last, coded_rows - rows)).enumerate() {
             let at = offset + r * pitch;
             let row = &mut dst[at..at + cw];
             row[..width].copy_from_slice(src);
@@ -644,17 +743,13 @@ pub(crate) fn copy_nv12(
                 pad.copy_from_slice(&edge[2 - px..]);
             }
         }
-        let last = offset + (rows - 1) * pitch;
-        for r in rows..coded_rows {
-            dst.copy_within(last..last + cw, offset + r * pitch);
-        }
     }
     Ok(())
 }
 
 #[cfg(not(all(target_os = "linux", target_pointer_width = "64")))]
 mod none {
-    use super::{OpenError, Params, Picture};
+    use super::{OpenError, Params, Picture, Tag};
 
     const WHY: &str = "VA-API runs on 64-bit Linux only";
 
@@ -673,10 +768,10 @@ mod none {
         pub(crate) fn full(&self) -> bool {
             match *self {}
         }
-        pub(crate) fn submit(&mut self, _: &[u8], _: &Picture) -> Result<(), String> {
+        pub(crate) fn submit(&mut self, _: &[u8], _: &Picture, _: Tag) -> Result<(), String> {
             match *self {}
         }
-        pub(crate) fn collect(&mut self, _: &mut Vec<u8>) -> Result<bool, String> {
+        pub(crate) fn collect(&mut self, _: &mut Vec<u8>) -> Result<Option<Tag>, String> {
             match *self {}
         }
     }

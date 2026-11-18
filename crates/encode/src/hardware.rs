@@ -95,18 +95,24 @@ impl Tests {
     }
 
     /// Whether a session that writes `codec` opens, running `test` when no answer stands: a
-    /// session that opened is remembered, and a failure is remembered for [`RETEST_AFTER`].
+    /// session that opened is remembered, and a failure is remembered for [`RETEST_AFTER`]. The
+    /// lock is not held while `test` runs, so a session that opens meanwhile does not wait for
+    /// it. When the answer changed while `test` ran (a session opened, or a busy answer was
+    /// cleared), the test's answer is not stored over it.
     pub(crate) fn usable(&self, codec: NativeCodec, test: impl FnOnce() -> Tested) -> bool {
-        let mut last = self.slot(codec);
-        match *last {
-            Some((Tested::Works, _)) => true,
-            Some((_, at)) if at.elapsed() < RETEST_AFTER => false,
-            _ => {
-                let found = test();
-                *last = Some((found, Instant::now()));
-                found == Tested::Works
-            }
+        let before = *self.slot(codec);
+        match before {
+            Some((Tested::Works, _)) => return true,
+            Some((_, at)) if at.elapsed() < RETEST_AFTER => return false,
+            _ => {}
         }
+        let found = test();
+        let mut last = self.slot(codec);
+        if *last != before {
+            return found == Tested::Works || matches!(*last, Some((Tested::Works, _)));
+        }
+        *last = Some((found, Instant::now()));
+        found == Tested::Works
     }
 
     /// A session that writes `codec` opened: the codec works, and the other one is tested again if
@@ -202,5 +208,25 @@ mod tests {
         assert!(!failed.usable(NativeCodec::Hevc, || Tested::Failed));
         failed.opened(NativeCodec::H264);
         assert!(!failed.usable(NativeCodec::Hevc, || Tested::Works), "a failure that was not a full GPU stands");
+    }
+
+    #[test]
+    fn a_test_runs_without_the_lock_and_a_session_that_opens_meanwhile_is_kept() {
+        let tests = Tests::new();
+        assert!(tests.usable(NativeCodec::H264, || {
+            assert!(tests.0[0].try_lock().is_ok(), "the lock is free while the test runs");
+            tests.opened(NativeCodec::H264);
+            Tested::Failed
+        }));
+        assert!(tests.usable(NativeCodec::H264, || Tested::Failed), "the session that opened during the test is kept");
+        // A busy answer cleared while a retest runs is not put back by that retest.
+        let busy = Tests::new();
+        let long_ago = Instant::now().checked_sub(RETEST_AFTER * 2).unwrap_or_else(Instant::now);
+        *busy.slot(NativeCodec::Hevc) = Some((Tested::Busy, long_ago));
+        assert!(!busy.usable(NativeCodec::Hevc, || {
+            busy.opened(NativeCodec::H264);
+            Tested::Busy
+        }));
+        assert!(busy.slot(NativeCodec::Hevc).is_none(), "the next call tests again");
     }
 }

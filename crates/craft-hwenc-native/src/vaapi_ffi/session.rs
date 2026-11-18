@@ -9,6 +9,12 @@
 //! - Frames are copied into the surface through `vaDeriveImage` (the surface's own memory). A
 //!   driver that cannot map its surfaces gets one image made at the start, copied into the surface
 //!   with `vaPutImage`.
+//! - Reading a frame waits for the GPU with `vaSyncSurface2` for at most [`SYNC_TIMEOUT_NS`]. With
+//!   libva older than 2.9, or a driver without it, `vaSyncSurface` waits without a limit.
+//! - After a wait fails or times out, the session takes no more frames. Dropping a session waits
+//!   for the frames still in flight before it destroys their surfaces and coded buffers. After a
+//!   failed wait it destroys nothing and leaves its display and render node open, since the GPU
+//!   may still use them.
 //! - Every unsafe block has a SAFETY comment; the one callback into Rust (libva's error messages)
 //!   catches panics.
 
@@ -21,9 +27,9 @@ use libloading::Library;
 
 use super::abi::{self, VABufferID, VAConfigAttrib, VAImage, VAImageFormat, VASurfaceID};
 use super::{
-    Blocks, Control, DEPTH, OpenError, Params, Picture, RECON, coded_bytes, coded_size, control, copy_nv12, frame_rate_buffer, h264_picture,
-    h264_sequence, h264_slice, hevc_blocks, hevc_picture, hevc_sequence, hevc_slice, nominal_bitrate, open_error, rate_buffers, recon_slots,
-    segment_error, telling,
+    Blocks, Control, DEPTH, OpenError, Params, Picture, RECON, SYNC_TIMEOUT_NS, Slots, Tag, Waited, coded_bytes, coded_size, control, copy_nv12,
+    frame_rate_buffer, h264_picture, h264_sequence, h264_slice, hevc_blocks, hevc_picture, hevc_sequence, hevc_slice, no_session, nominal_bitrate,
+    open_error, rate_buffers, recon_slots, segment_error, waited,
 };
 use crate::Codec;
 
@@ -56,6 +62,8 @@ struct Api {
     render_picture: abi::vaRenderPicture,
     end_picture: abi::vaEndPicture,
     sync_surface: abi::vaSyncSurface,
+    /// Absent before libva 2.9.
+    sync_surface2: Option<abi::vaSyncSurface2>,
     create_image: abi::vaCreateImage,
     derive_image: abi::vaDeriveImage,
     destroy_image: abi::vaDestroyImage,
@@ -66,6 +74,10 @@ struct Api {
 }
 
 static API: OnceLock<Result<Api, String>> = OnceLock::new();
+
+/// For H.264 and HEVC: why no render node has an encoder for the codec, once every node's driver
+/// initialized and listed none.
+static NO_ENCODER: [OnceLock<String>; 2] = [OnceLock::new(), OnceLock::new()];
 
 fn api() -> Result<&'static Api, String> {
     API.get_or_init(load).as_ref().map_err(Clone::clone)
@@ -92,6 +104,8 @@ fn load() -> Result<Api, String> {
             *s.map_err(|e| format!("{}: {e}", stringify!($name)))?
         }};
     }
+    // SAFETY: as in `sym!`, for `abi::vaSyncSurface2`; libva before 2.9 does not export it.
+    let sync_surface2 = unsafe { va.get::<abi::vaSyncSurface2>(b"vaSyncSurface2\0") }.ok().map(|s| *s);
     Ok(Api {
         initialize: sym!(va, vaInitialize),
         terminate: sym!(va, vaTerminate),
@@ -114,6 +128,7 @@ fn load() -> Result<Api, String> {
         render_picture: sym!(va, vaRenderPicture),
         end_picture: sym!(va, vaEndPicture),
         sync_surface: sym!(va, vaSyncSurface),
+        sync_surface2,
         create_image: sym!(va, vaCreateImage),
         derive_image: sym!(va, vaDeriveImage),
         destroy_image: sym!(va, vaDestroyImage),
@@ -161,7 +176,10 @@ struct Display {
     /// The render node and the driver's description, for messages.
     name: String,
     /// The render node; open for as long as the display uses it.
-    _device: File,
+    device: Option<File>,
+    /// The GPU may still be using objects made on the display: it is not terminated and its
+    /// render node stays open, so nothing the GPU uses is freed.
+    leak: bool,
 }
 
 impl Display {
@@ -174,7 +192,7 @@ impl Display {
             return Err(format!("{path}: vaGetDisplayDRM failed"));
         }
         // From here on `Drop` terminates the display.
-        let mut d = Display { api, dpy, name: path.to_string(), _device: device };
+        let mut d = Display { api, dpy, name: path.to_string(), device: Some(device), leak: false };
         // SAFETY: `dpy` is a display from vaGetDisplayDRM; a null info callback turns libva's info
         // messages off, and `on_error` matches `VAMessageCallback` and never unwinds.
         unsafe {
@@ -213,21 +231,25 @@ impl Display {
     }
 
     /// The entry points the driver offers for `profile`; none when it does not know the profile.
-    fn entrypoints(&self, profile: abi::VAProfile) -> Vec<abi::VAEntrypoint> {
+    /// A query that fails for another reason is an error.
+    fn entrypoints(&self, profile: abi::VAProfile) -> Result<Vec<abi::VAEntrypoint>, String> {
         // SAFETY: `dpy` is an initialized display.
         let max = unsafe { (self.api.max_num_entrypoints)(self.dpy) };
         // A driver that reports no entry points, or more than any driver has, is not asked.
-        let Some(max) = usize::try_from(max).ok().filter(|m| (1..=MAX_ENTRYPOINTS).contains(m)) else { return Vec::new() };
+        let Some(max) = usize::try_from(max).ok().filter(|m| (1..=MAX_ENTRYPOINTS).contains(m)) else {
+            return Err(format!("vaMaxNumEntrypoints returned {max}"));
+        };
         let mut list = vec![0; max];
         let mut n: c_int = 0;
         // SAFETY: `list` has room for the `vaMaxNumEntrypoints` entries the call may write, and `n`
         // is a live output.
         let st = unsafe { (self.api.query_config_entrypoints)(self.dpy, profile, list.as_mut_ptr(), &mut n) };
-        if st != abi::VA_STATUS_SUCCESS {
-            return Vec::new();
+        if st == abi::VA_STATUS_ERROR_UNSUPPORTED_PROFILE {
+            return Ok(Vec::new());
         }
+        self.check(st, "vaQueryConfigEntrypoints")?;
         list.truncate(usize::try_from(n).unwrap_or(0).min(max));
-        list
+        Ok(list)
     }
 
     /// The driver's values of the attributes in `attrs` for `profile` and `entry`.
@@ -240,15 +262,23 @@ impl Display {
 
     /// The first profile and encode entry point of the driver that takes `p`, with its rate
     /// control and block sizes. A driver without any encode entry point for the codec is
-    /// `NoDevice`; one whose encoders all refuse `p` is `Unsupported`.
+    /// `NoEncoder`; one whose encoders all refuse `p` is `Unsupported`; one whose entry points
+    /// could not be listed is `NoDevice`.
     fn choose(&self, p: &Params) -> Result<Choice, OpenError> {
         let profiles: &[abi::VAProfile] = match p.codec {
             Codec::H264 => &[abi::VAProfileH264High, abi::VAProfileH264Main, abi::VAProfileH264ConstrainedBaseline],
             Codec::Hevc => &[abi::VAProfileHEVCMain],
         };
         let mut why = None;
+        let mut unlisted = None;
         for &profile in profiles {
-            let entries = self.entrypoints(profile);
+            let entries = match self.entrypoints(profile) {
+                Ok(entries) => entries,
+                Err(e) => {
+                    unlisted = Some(e);
+                    continue;
+                }
+            };
             for entry in [abi::VAEntrypointEncSlice, abi::VAEntrypointEncSliceLP] {
                 if !entries.contains(&entry) {
                     continue;
@@ -260,9 +290,10 @@ impl Display {
             }
         }
         let codec = if p.codec == Codec::H264 { "H.264" } else { "HEVC" };
-        Err(match why {
-            Some(why) => OpenError::Unsupported(format!("{}: {why}", self.name)),
-            None => OpenError::NoDevice(format!("{} has no {codec} encoder", self.name)),
+        Err(match (why, unlisted) {
+            (Some(why), _) => OpenError::Unsupported(format!("{}: {why}", self.name)),
+            (None, Some(e)) => OpenError::NoDevice(format!("{}: {e}", self.name)),
+            (None, None) => OpenError::NoEncoder(format!("{} has no {codec} encoder", self.name)),
         })
     }
 
@@ -297,6 +328,10 @@ impl Display {
 
 impl Drop for Display {
     fn drop(&mut self) {
+        if self.leak {
+            std::mem::forget(self.device.take());
+            return;
+        }
         // SAFETY: `dpy` came from vaGetDisplayDRM and is terminated exactly once, here, after every
         // object made on it was destroyed (`Session::drop` runs before its fields drop).
         unsafe { (self.api.terminate)(self.dpy) };
@@ -337,11 +372,15 @@ pub(crate) struct Session {
     /// Macroblocks (H.264) or coding tree blocks (HEVC) in a picture.
     units: u32,
     upload: Upload,
-    /// The slot of the oldest frame in flight, and how many are in flight.
-    head: usize,
-    count: usize,
+    /// The frames in flight.
+    slots: Slots,
     /// Pictures submitted so far.
     frames: u64,
+    /// Whether waits go through `vaSyncSurface2`: until the driver says it does not have it.
+    bounded: bool,
+    /// A wait failed or timed out, so the GPU may still use a surface: no frame goes in after it,
+    /// and no later read or drop waits.
+    stalled: bool,
 }
 
 // SAFETY: a VA display and its objects are not tied to the thread that made them (va.h,
@@ -350,22 +389,28 @@ pub(crate) struct Session {
 unsafe impl Send for Session {}
 
 impl Session {
-    /// Open an encoder for `p` on the first render node whose driver encodes the codec.
+    /// Open an encoder for `p` on the first render node whose driver encodes the codec. When every
+    /// node's driver lists no encoder for the codec, later calls return that answer without
+    /// initializing the drivers again.
     pub(crate) fn open(p: &Params) -> Result<Session, OpenError> {
         let api = api().map_err(OpenError::NoDevice)?;
-        let mut why: Option<OpenError> = None;
+        let none = &NO_ENCODER[usize::from(p.codec == Codec::Hevc)];
+        if let Some(why) = none.get() {
+            return Err(OpenError::NoEncoder(why.clone()));
+        }
+        let mut errors = Vec::new();
         for node in render_nodes() {
             let found = Display::open(api, &node).map_err(OpenError::NoDevice).and_then(|d| d.choose(p).map(|c| (d, c)));
-            let e = match found.and_then(|(display, choice)| Session::on(display, choice, p)) {
+            match found.and_then(|(display, choice)| Session::on(display, choice, p)) {
                 Ok(s) => return Ok(s),
-                Err(e) => e,
-            };
-            why = Some(match why {
-                Some(kept) => telling(kept, e),
-                None => e,
-            });
+                Err(e) => errors.push(e),
+            }
         }
-        Err(why.unwrap_or_else(|| OpenError::NoDevice("no DRM render node (/dev/dri/renderD*)".into())))
+        let (why, stands) = no_session(errors);
+        if let (true, OpenError::NoEncoder(text)) = (stands, &why) {
+            let _ = none.set(text.clone());
+        }
+        Err(why)
     }
 
     fn on(display: Display, choice: Choice, p: &Params) -> Result<Session, OpenError> {
@@ -396,9 +441,10 @@ impl Session {
             p: *p,
             units,
             upload: Upload::Unknown,
-            head: 0,
-            count: 0,
+            slots: Slots::new(),
             frames: 0,
+            bounded: api.sync_surface2.is_some(),
+            stalled: false,
         };
         let mut surfaces = vec![abi::VA_INVALID_SURFACE; DEPTH + RECON];
         // SAFETY: `surfaces` has room for DEPTH + RECON ids; no attributes are passed (null, 0).
@@ -429,16 +475,16 @@ impl Session {
 
     /// Whether every frame slot holds a frame whose coded data has not been read.
     pub(crate) fn full(&self) -> bool {
-        self.count >= DEPTH
+        self.slots.full()
     }
 
-    /// Copy the NV12 `frame` into the next free slot's surface and submit it as `pic`. The GPU
-    /// encodes it while the caller goes on; [`Session::collect`] reads it.
-    pub(crate) fn submit(&mut self, frame: &[u8], pic: &Picture) -> Result<(), String> {
-        if self.full() {
-            return Err("every frame slot of the encoder is in use".into());
+    /// Copy the NV12 `frame` into the next free slot's surface and submit it as `pic`, tagged
+    /// `tag`. The GPU encodes it while the caller goes on; [`Session::collect`] reads it.
+    pub(crate) fn submit(&mut self, frame: &[u8], pic: &Picture, tag: Tag) -> Result<(), String> {
+        if self.stalled {
+            return Err("an earlier wait for the GPU failed".into());
         }
-        let slot = (self.head + self.count) % DEPTH;
+        let slot = self.slots.free().ok_or("every frame slot of the encoder is in use")?;
         let input = self.surfaces[slot];
         self.copy_in(frame, input)?;
         let n = self.frames as usize;
@@ -453,7 +499,7 @@ impl Session {
             unsafe { (self.display.api.destroy_buffer)(self.display.dpy, id) };
         }
         sent?;
-        self.count += 1;
+        self.slots.push(tag)?;
         self.frames += 1;
         Ok(())
     }
@@ -587,19 +633,41 @@ impl Session {
         self.display.check(st, "vaUnmapBuffer")
     }
 
-    /// Wait for the oldest frame in flight and append its coded data (Annex B) to `out`. Returns
-    /// `false` when no frame is in flight.
-    pub(crate) fn collect(&mut self, out: &mut Vec<u8>) -> Result<bool, String> {
-        if self.count == 0 {
-            return Ok(false);
+    /// Wait for `surface`, one of this session's input surfaces, to be coded: with
+    /// `vaSyncSurface2` for at most [`SYNC_TIMEOUT_NS`] where the driver has it.
+    fn wait(&mut self, surface: VASurfaceID) -> Result<(), String> {
+        if self.stalled {
+            return Err("an earlier wait for the GPU failed".into());
         }
-        let slot = self.head;
-        self.head = (self.head + 1) % DEPTH;
-        self.count -= 1;
+        let waited = self.wait_once(surface);
+        self.stalled = waited.is_err();
+        waited
+    }
+
+    fn wait_once(&mut self, surface: VASurfaceID) -> Result<(), String> {
         let (api, dpy) = (self.display.api, self.display.dpy);
-        // SAFETY: the surface is one of this session's render targets.
-        let st = unsafe { (api.sync_surface)(dpy, self.surfaces[slot]) };
-        self.display.check(st, "vaSyncSurface")?;
+        if let Some(sync2) = api.sync_surface2.filter(|_| self.bounded) {
+            // SAFETY: `surface` is one of this session's render targets.
+            let st = unsafe { sync2(dpy, surface, SYNC_TIMEOUT_NS) };
+            match waited(st) {
+                Waited::Done => return Ok(()),
+                Waited::TimedOut => return Err(format!("the GPU did not finish a frame within {} ms", SYNC_TIMEOUT_NS / 1_000_000)),
+                Waited::Failed => return self.display.check(st, "vaSyncSurface2"),
+                Waited::Unbounded => self.bounded = false,
+            }
+        }
+        // SAFETY: `surface` is one of this session's render targets.
+        let st = unsafe { (api.sync_surface)(dpy, surface) };
+        self.display.check(st, "vaSyncSurface")
+    }
+
+    /// Wait for the oldest frame in flight and append its coded data (Annex B) to `out`. Returns
+    /// the frame's tag, or `None` when no frame is in flight. The frame leaves its slot first, so
+    /// after an error the next call reads the next frame.
+    pub(crate) fn collect(&mut self, out: &mut Vec<u8>) -> Result<Option<Tag>, String> {
+        let Some((slot, tag)) = self.slots.pop() else { return Ok(None) };
+        self.wait(self.surfaces[slot])?;
+        let (api, dpy) = (self.display.api, self.display.dpy);
         let coded = self.coded[slot];
         let mut ptr: *mut c_void = std::ptr::null_mut();
         // SAFETY: `coded` is a coded buffer made on this context; `ptr` is a live output.
@@ -629,6 +697,10 @@ impl Session {
                     read = Err("the encoder returned a coded segment this crate cannot read".to_string());
                     break;
                 }
+                if let Err(e) = out.try_reserve(s.size as usize) {
+                    read = Err(format!("no memory for a coded picture of {} bytes: {e}", s.size));
+                    break;
+                }
                 // SAFETY: the segment's `size` bytes at `buf` stay valid until the buffer is
                 // unmapped; they are copied out here.
                 out.extend_from_slice(unsafe { std::slice::from_raw_parts(s.buf.cast::<u8>().cast_const(), s.size as usize) });
@@ -639,12 +711,25 @@ impl Session {
         let st = unsafe { (api.unmap_buffer)(dpy, coded) };
         read?;
         self.display.check(st, "vaUnmapBuffer")?;
-        Ok(true)
+        Ok(Some(tag))
     }
 }
 
 impl Drop for Session {
     fn drop(&mut self) {
+        // The frames still in flight are waited for, so the GPU is no longer writing their
+        // surfaces and coded buffers when they are destroyed. After a failed wait the GPU may
+        // still use them, so the session's objects and its display are left in place instead.
+        while let Some((slot, _)) = self.slots.pop() {
+            if self.wait(self.surfaces[slot]).is_err() {
+                break;
+            }
+        }
+        if self.stalled {
+            log::warn!("{}: a VA-API encoder that stopped finishing frames is left open", self.display.name);
+            self.display.leak = true;
+            return;
+        }
         let (api, dpy) = (self.display.api, self.display.dpy);
         // SAFETY: each object below was made on this display and is destroyed once, by this
         // session only; the display is terminated after this, when its field drops.

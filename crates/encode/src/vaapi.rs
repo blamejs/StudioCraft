@@ -101,7 +101,9 @@ static LAST_TEST: Tests = Tests::new();
 
 /// Whether a VA-API driver opens an encoder that writes `codec` on this system. A call opens and
 /// closes one; an encoder that opened is remembered, and a failure is remembered for
-/// [`hardware::RETEST_AFTER`]. Without libva nothing is tested.
+/// [`hardware::RETEST_AFTER`]. Without libva nothing is tested, and once every render node's
+/// driver has listed no encoder for the codec, a test returns at once without initializing the
+/// drivers again.
 fn usable(codec: NativeCodec) -> bool {
     if craft_hwenc_native::vaapi::driver().is_err() {
         return false;
