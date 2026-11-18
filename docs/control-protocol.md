@@ -53,8 +53,8 @@ plays the source on the monitoring device and leaves it out of recordings and st
 the device's `rate` and `channels` while it plays.
 `source.set_record_track` takes `{"source", "on"}`, where `on` is `true` or `false`, and sets
 whether audio tracks write the source to a WAV file of its own; a source without audio is an
-error, and Edit › Undo takes it back. Until it is set, a source heard in the program mix is written
-and a monitor-only source is not. A take writes at most 64 tracks, the program mix included;
+error, and Edit › Undo takes it back. Until it is set, a source whose monitoring setting sends it
+to the program mix (`off` or `monitor_and_output`) is written and a monitor-only source is not. A take writes at most 64 tracks, the program mix included;
 sources after that, in the collection's order, are not written. Counting sources that left or
 were replaced during it, one take makes at most 256 files; a source after that is not written. `audio_tracks.status` takes no params and returns the audio
 tracks settings and the last take's state, as `document.inspect`'s `audio_tracks` entry does.

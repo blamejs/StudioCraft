@@ -72,8 +72,8 @@ pub struct AudioState {
     /// Whether the audio plays on the monitoring device.
     pub monitor: MonitorMode,
     /// Whether audio tracks record the source to a file of its own: `None` (the default) records
-    /// it when it is heard in the program mix, so a monitor-only source is left out until it is
-    /// set to `Some(true)`.
+    /// it when its monitoring setting sends it to the program mix, so a monitor-only source is
+    /// left out until it is set to `Some(true)`.
     pub record_track: Option<bool>,
 }
 
