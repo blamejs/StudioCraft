@@ -1,7 +1,7 @@
 //! Tag bodies: the bytes after an FLV tag's 11-byte header, which are also the body of the RTMP
 //! audio (type 8), video (type 9) and AMF0 data (type 18) messages.
 
-use std::io::Write;
+use std::io::{self, IoSlice, Write};
 
 use crate::{Error, MAX_TAG_DATA, TagType};
 
@@ -26,7 +26,12 @@ const AVC_END_OF_SEQUENCE: u8 = 2;
 const AAC_SEQUENCE_HEADER: u8 = 0;
 const AAC_RAW: u8 = 1;
 
-/// One tag's body. [`Body::size`] checks it and gives its length; [`Body::write_to`] writes it.
+/// One tag's body. [`Body::check`] checks it once and returns a [`Checked`] body with its length,
+/// which can then be written to any number of outputs without being checked again.
+///
+/// A body sent to several destinations is checked once and the same [`Checked`] value is written
+/// to each one. Annex B input costs a start code scan to check and another to write; convert it
+/// once with [`annexb_to_nalus`] and send [`Body::AvcNalus`] to every destination instead.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Body<'a> {
     /// The AVC sequence header: an AVCDecoderConfigurationRecord (`avcC`, ISO/IEC 14496-15
@@ -63,7 +68,7 @@ pub enum Body<'a> {
     Script(&'a [u8]),
 }
 
-impl Body<'_> {
+impl<'a> Body<'a> {
     /// The tag type, which is also the RTMP message type id.
     pub fn tag_type(&self) -> TagType {
         match self {
@@ -83,8 +88,15 @@ impl Body<'_> {
     }
 
     /// Checks the body and returns the number of bytes [`Body::write_to`] writes. The check reads
-    /// the data once and allocates nothing.
+    /// the data once and allocates nothing. To write the body after measuring it, use
+    /// [`Body::check`], which keeps the length so the data is not read again.
     pub fn size(&self) -> Result<usize, Error> {
+        self.check().map(|c| c.len)
+    }
+
+    /// Checks the body and returns it with its length. The check reads the data once and
+    /// allocates nothing.
+    pub fn check(&self) -> Result<Checked<'a>, Error> {
         let len = match self {
             Body::AvcSequenceHeader(avcc) => {
                 check_avcc(avcc)?;
@@ -125,48 +137,126 @@ impl Body<'_> {
         if len > MAX_TAG_DATA {
             return Err(Error::TooLarge { size: len, limit: MAX_TAG_DATA });
         }
-        Ok(len)
+        Ok(Checked { body: *self, len })
     }
 
     /// Checks the body and writes it to `out`, returning its length.
     pub fn write_to<W: Write + ?Sized>(&self, out: &mut W) -> Result<usize, Error> {
-        let len = self.size()?;
-        self.emit(out)?;
-        Ok(len)
+        Ok(self.check()?.write_to(out)?)
     }
 
-    /// Writes a body that [`Body::size`] accepted.
-    pub(crate) fn emit<W: Write + ?Sized>(&self, out: &mut W) -> std::io::Result<()> {
-        match self {
-            Body::AvcSequenceHeader(avcc) => {
-                out.write_all(&[FRAME_KEY << 4 | CODEC_AVC, AVC_SEQUENCE_HEADER, 0, 0, 0])?;
-                out.write_all(avcc)
+    /// The bytes before the data and the data, for every body but Annex B.
+    fn parts(&self) -> Option<([u8; 5], usize, &'a [u8])> {
+        Some(match *self {
+            Body::AvcSequenceHeader(avcc) => ([FRAME_KEY << 4 | CODEC_AVC, AVC_SEQUENCE_HEADER, 0, 0, 0], 5, avcc),
+            Body::AvcAnnexB { .. } => return None,
+            Body::AvcNalus { key, composition_time, data } => (video_header(key, AVC_NALU, composition_time), 5, data),
+            Body::AvcEndOfSequence => ([FRAME_KEY << 4 | CODEC_AVC, AVC_END_OF_SEQUENCE, 0, 0, 0], 5, &[]),
+            Body::AacSequenceHeader(asc) => ([AAC_TAG_HEADER, AAC_SEQUENCE_HEADER, 0, 0, 0], 2, asc),
+            Body::AacRaw(frame) => ([AAC_TAG_HEADER, AAC_RAW, 0, 0, 0], 2, frame),
+            Body::Script(data) => ([0; 5], 0, data),
+        })
+    }
+
+    /// Writes `head`, a body that [`Body::check`] accepted, and `tail`. Every body but Annex B goes
+    /// out in one vectored write.
+    pub(crate) fn emit<W: Write + ?Sized>(&self, out: &mut W, head: &[u8], tail: &[u8]) -> io::Result<()> {
+        match (self, self.parts()) {
+            (_, Some((prefix, n, data))) => {
+                write_all_vectored(out, &mut [IoSlice::new(head), IoSlice::new(&prefix[..n]), IoSlice::new(data), IoSlice::new(tail)])
             }
-            Body::AvcAnnexB { key, composition_time, data } => {
+            (Body::AvcAnnexB { key, composition_time, data }, None) => {
+                out.write_all(head)?;
                 out.write_all(&video_header(*key, AVC_NALU, *composition_time))?;
                 for nal in AnnexB::new(data) {
-                    // Each NAL unit is shorter than MAX_TAG_DATA, which `len` checked.
+                    // Each NAL unit is shorter than MAX_TAG_DATA, which the check made sure of.
                     out.write_all(&(nal.len() as u32).to_be_bytes())?;
                     out.write_all(nal)?;
                 }
-                Ok(())
+                out.write_all(tail)
             }
-            Body::AvcNalus { key, composition_time, data } => {
-                out.write_all(&video_header(*key, AVC_NALU, *composition_time))?;
-                out.write_all(data)
-            }
-            Body::AvcEndOfSequence => out.write_all(&[FRAME_KEY << 4 | CODEC_AVC, AVC_END_OF_SEQUENCE, 0, 0, 0]),
-            Body::AacSequenceHeader(asc) => {
-                out.write_all(&[AAC_TAG_HEADER, AAC_SEQUENCE_HEADER])?;
-                out.write_all(asc)
-            }
-            Body::AacRaw(frame) => {
-                out.write_all(&[AAC_TAG_HEADER, AAC_RAW])?;
-                out.write_all(frame)
-            }
-            Body::Script(data) => out.write_all(data),
+            (_, None) => Ok(()),
         }
     }
+}
+
+/// A body that [`Body::check`] accepted, with its length. Writing it does not check it again, so
+/// one checked body can go to several outputs, such as the chunk streams of several RTMP servers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Checked<'a> {
+    body: Body<'a>,
+    len: usize,
+}
+
+impl<'a> Checked<'a> {
+    /// The body.
+    pub fn body(&self) -> &Body<'a> {
+        &self.body
+    }
+
+    /// The number of bytes [`Checked::write_to`] writes: the length of an RTMP message or the
+    /// DataSize of an FLV tag.
+    pub fn len(&self) -> usize {
+        self.len
+    }
+
+    /// Whether the body is empty. A checked body never is; every body has at least one byte.
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
+    /// The tag type, which is also the RTMP message type id.
+    pub fn tag_type(&self) -> TagType {
+        self.body.tag_type()
+    }
+
+    /// Writes the body to `out` and returns its length. Every body but Annex B goes out in one
+    /// vectored write.
+    pub fn write_to<W: Write + ?Sized>(&self, out: &mut W) -> io::Result<usize> {
+        self.body.emit(out, &[], &[])?;
+        Ok(self.len)
+    }
+}
+
+/// Writes every slice, as `Write::write_all` does for one.
+fn write_all_vectored<W: Write + ?Sized>(out: &mut W, mut bufs: &mut [IoSlice<'_>]) -> io::Result<()> {
+    IoSlice::advance_slices(&mut bufs, 0);
+    while !bufs.is_empty() {
+        match out.write_vectored(bufs) {
+            Ok(0) => return Err(io::ErrorKind::WriteZero.into()),
+            Ok(n) => IoSlice::advance_slices(&mut bufs, n),
+            Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
+            Err(e) => return Err(e),
+        }
+    }
+    Ok(())
+}
+
+/// Appends the NAL units of an Annex B access unit to `out`, each preceded by its 4-byte length,
+/// and returns the bytes appended. The data is scanned once.
+///
+/// A sender with several destinations converts each access unit once and writes the result as
+/// [`Body::AvcNalus`] to every destination, sharing the one buffer. An access unit that does not
+/// start with a start code, holds no NAL unit or would not fit in a tag body is refused, and
+/// `out` is then left as it was.
+pub fn annexb_to_nalus(data: &[u8], out: &mut Vec<u8>) -> Result<usize, Error> {
+    if start_code_at(data, 0).is_none() {
+        return Err(Error::BadInput("the Annex B access unit does not start with a start code"));
+    }
+    let start = out.len();
+    for nal in AnnexB::new(data) {
+        let len = out.len() - start + 4 + nal.len();
+        if len > MAX_TAG_DATA - 5 {
+            out.truncate(start);
+            return Err(Error::TooLarge { size: 5 + len, limit: MAX_TAG_DATA });
+        }
+        out.extend_from_slice(&(nal.len() as u32).to_be_bytes());
+        out.extend_from_slice(nal);
+    }
+    if out.len() == start {
+        return Err(Error::BadInput("the Annex B access unit holds no NAL unit"));
+    }
+    Ok(out.len() - start)
 }
 
 fn video_header(key: bool, packet_type: u8, composition_time: i32) -> [u8; 5] {
@@ -212,7 +302,8 @@ pub(crate) fn nalus_problem(data: &[u8]) -> Option<&'static str> {
     None
 }
 
-/// The length of an Annex B access unit written with 4-byte lengths.
+/// The length of an Annex B access unit written with 4-byte lengths. The scan stops as soon as
+/// the tag body would be longer than [`MAX_TAG_DATA`].
 fn annexb_len(data: &[u8]) -> Result<usize, Error> {
     if start_code_at(data, 0).is_none() {
         return Err(Error::BadInput("the Annex B access unit does not start with a start code"));
@@ -222,6 +313,9 @@ fn annexb_len(data: &[u8]) -> Result<usize, Error> {
     for nal in AnnexB::new(data) {
         len += 4 + nal.len();
         count += 1;
+        if 5 + len > MAX_TAG_DATA {
+            return Err(Error::TooLarge { size: 5 + len, limit: MAX_TAG_DATA });
+        }
     }
     if count == 0 {
         return Err(Error::BadInput("the Annex B access unit holds no NAL unit"));

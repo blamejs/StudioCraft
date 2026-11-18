@@ -5,7 +5,10 @@
 //! - [`Body`] is one tag's body: the AVC and AAC sequence headers, H.264 access units (Annex B or
 //!   length-prefixed) with their composition time, raw AAC frames, the end of the AVC sequence,
 //!   and script data. The same bytes are the body of an RTMP audio, video or data message, so an
-//!   RTMP sender writes [`Body::write_to`] into its chunks without the FLV tag header.
+//!   RTMP sender checks a body once with [`Body::check`] and writes the [`Checked`] body into the
+//!   chunks of every destination without the FLV tag header.
+//! - [`annexb_to_nalus`] converts an Annex B access unit to length-prefixed NAL units once, so
+//!   several destinations share one buffer instead of each scanning for start codes.
 //! - [`Metadata`] encodes the `onMetaData` script data.
 //! - [`Reader`] reads tags one at a time from a byte stream, such as a process writing FLV to a
 //!   pipe, and [`parse_video`], [`parse_audio`] and [`parse_script`] read their bodies.
@@ -15,10 +18,11 @@
 //!
 //! [`Writer::write`] builds the 11-byte tag header and the 4-byte PreviousTagSize on the stack and
 //! writes the body straight from the caller's slice: it allocates nothing and copies the frame only
-//! into the output. An Annex B access unit is read twice, once to measure it and once to write it
-//! with 4-byte lengths in place of the start codes. [`Reader::next_tag`] reads into a buffer the
-//! caller reuses. Wrap a file or socket in a `BufWriter` or `BufReader`, since a tag is written in
-//! several `write_all` calls.
+//! into the output. Every body but Annex B goes out in one vectored write with its tag header and
+//! PreviousTagSize. An Annex B access unit is read twice, once to measure it and once to write it
+//! with 4-byte lengths in place of the start codes, and it takes two writes per NAL unit. With
+//! several destinations, convert it once with [`annexb_to_nalus`]. [`Reader::next_tag`] reads into
+//! a buffer the caller reuses, as the bytes arrive.
 //!
 //! No dependencies beyond `std`, no `unsafe`, builds for `wasm32-unknown-unknown`.
 
@@ -31,7 +35,9 @@ mod read;
 use std::fmt;
 use std::io::{self, Write};
 
-pub use body::{AAC_TAG_HEADER, AnnexB, Body, CODEC_AVC, MAX_COMPOSITION_TIME, MIN_COMPOSITION_TIME, Nalus, SOUND_FORMAT_AAC};
+pub use body::{
+    AAC_TAG_HEADER, AnnexB, Body, CODEC_AVC, Checked, MAX_COMPOSITION_TIME, MIN_COMPOSITION_TIME, Nalus, SOUND_FORMAT_AAC, annexb_to_nalus,
+};
 pub use read::{Audio, Reader, Tag, Video, parse_audio, parse_script, parse_video};
 
 use amf0::Value;
@@ -61,7 +67,8 @@ pub enum Error {
     BadInput(&'static str),
     /// A tag body would be longer than [`MAX_TAG_DATA`].
     TooLarge {
-        /// Bytes in the body.
+        /// Bytes in the body. For Annex B input, the check stops at the first NAL unit that takes
+        /// the body past the limit, and this is the length up to that NAL unit.
         size: usize,
         /// Most bytes a body may have.
         limit: usize,
@@ -82,6 +89,9 @@ pub enum Error {
         /// The value read.
         found: u32,
     },
+    /// An earlier read or write failed partway through a tag, so the stream is out of step. A
+    /// [`Writer`] or [`Reader`] refuses every later tag; start again with a new one.
+    Broken,
 }
 
 impl fmt::Display for Error {
@@ -98,6 +108,7 @@ impl fmt::Display for Error {
             }
             Error::Timestamp { timestamp, min } => write!(f, "a timestamp of {timestamp} ms is before {min} ms"),
             Error::PreviousTagSize { expected, found } => write!(f, "a PreviousTagSize of {found} follows a tag of {expected} bytes"),
+            Error::Broken => write!(f, "an earlier read or write failed partway through a tag"),
         }
     }
 }
@@ -188,14 +199,19 @@ impl Header {
 }
 
 /// An 11-byte tag header: TagType, DataSize, Timestamp with TimestampExtended, and StreamID 0.
-/// A `data_size` over [`MAX_TAG_DATA`] is [`Error::TooLarge`].
+/// A `data_size` over [`MAX_TAG_DATA`] is [`Error::TooLarge`], and a negative timestamp is
+/// [`Error::Timestamp`], as [`Writer::write`] refuses them.
 ///
 /// The timestamp is the signed 32-bit value the specification gives (E.4.1: TimestampExtended is
 /// the upper 8 bits of an SI32), so the last time a tag can carry is `i32::MAX` milliseconds,
-/// about 24.8 days.
+/// about 24.8 days. An RTMP message header carries its own 32-bit timestamp, which wraps; a sender
+/// writes [`Body`] bytes under it and is not bound by this limit.
 pub fn tag_header(kind: TagType, data_size: usize, timestamp: i32) -> Result<[u8; TAG_HEADER_LEN], Error> {
     if data_size > MAX_TAG_DATA {
         return Err(Error::TooLarge { size: data_size, limit: MAX_TAG_DATA });
+    }
+    if timestamp < 0 {
+        return Err(Error::Timestamp { timestamp, min: 0 });
     }
     let s = (data_size as u32).to_be_bytes();
     let t = timestamp.to_be_bytes();
@@ -205,13 +221,22 @@ pub fn tag_header(kind: TagType, data_size: usize, timestamp: i32) -> Result<[u8
 /// Writes an FLV stream tag by tag.
 ///
 /// Timestamps are decoding times in milliseconds. They must not be negative, and within each tag
-/// type they must not go back ([`Error::Timestamp`]). A tag is checked before any of it is
-/// written; after an [`Error::Io`] the output may hold part of a tag.
+/// type they must not go back ([`Error::Timestamp`]). The largest is `i32::MAX`, about 24.8 days
+/// of stream; a stream that runs longer calls [`Writer::reset_timestamps`] and starts again from 0.
+///
+/// A tag is checked before any of it is written, and a refused tag leaves the output as it was.
+/// After an [`Error::Io`] the output may hold part of a tag, so every later tag is refused with
+/// [`Error::Broken`]: a caller that retries after a timeout must start a new stream with a new
+/// `Writer`, the sequence headers and the metadata.
+///
+/// Every body but Annex B goes out in one vectored write with its tag header and PreviousTagSize,
+/// so an unbuffered socket or pipe takes one system call per tag.
 pub struct Writer<W: Write> {
     out: W,
     last: [i32; 3],
     tags: u64,
     bytes: u64,
+    broken: bool,
 }
 
 impl<W: Write> Writer<W> {
@@ -219,25 +244,52 @@ impl<W: Write> Writer<W> {
     pub fn new(mut out: W, header: Header) -> Result<Self, Error> {
         let h = header.bytes();
         out.write_all(&h)?;
-        Ok(Writer { out, last: [0; 3], tags: 0, bytes: h.len() as u64 })
+        Ok(Writer { out, last: [0; 3], tags: 0, bytes: h.len() as u64, broken: false })
     }
 
     /// Writes one tag at `timestamp` and returns the bytes written, PreviousTagSize included.
     pub fn write(&mut self, timestamp: i32, body: &Body<'_>) -> Result<usize, Error> {
+        if self.broken {
+            return Err(Error::Broken);
+        }
+        self.write_checked(timestamp, &body.check()?)
+    }
+
+    /// Writes one tag whose body [`Body::check`] accepted, without checking the body again, and
+    /// returns the bytes written. Several writers can share one checked body.
+    pub fn write_checked(&mut self, timestamp: i32, body: &Checked<'_>) -> Result<usize, Error> {
+        if self.broken {
+            return Err(Error::Broken);
+        }
         let kind = body.tag_type();
         let min = self.last[kind.index()];
         if timestamp < min {
             return Err(Error::Timestamp { timestamp, min });
         }
-        let len = body.size()?;
-        self.out.write_all(&tag_header(kind, len, timestamp)?)?;
-        body.emit(&mut self.out)?;
-        self.out.write_all(&((TAG_HEADER_LEN + len) as u32).to_be_bytes())?;
+        let len = body.len();
+        let head = tag_header(kind, len, timestamp)?;
+        let tail = ((TAG_HEADER_LEN + len) as u32).to_be_bytes();
+        if let Err(e) = body.body().emit(&mut self.out, &head, &tail) {
+            self.broken = true;
+            return Err(Error::Io(e));
+        }
         self.last[kind.index()] = timestamp;
         let n = TAG_HEADER_LEN + len + 4;
         self.tags += 1;
         self.bytes += n as u64;
         Ok(n)
+    }
+
+    /// Lets the next tag of each type start again from timestamp 0, for a stream that reaches the
+    /// largest timestamp. Players see the time go back, so send the sequence headers and the
+    /// metadata again first.
+    pub fn reset_timestamps(&mut self) {
+        self.last = [0; 3];
+    }
+
+    /// Whether a write failed partway through a tag, so the writer refuses every later tag.
+    pub fn is_broken(&self) -> bool {
+        self.broken
     }
 
     /// Encodes `metadata` and writes it as an `onMetaData` script tag at `timestamp`.

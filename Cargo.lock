@@ -1399,7 +1399,7 @@ dependencies = [
 
 [[package]]
 name = "craft-flv"
-version = "0.1.0"
+version = "0.1.0-alpha.1"
 dependencies = [
  "criterion",
  "proptest",

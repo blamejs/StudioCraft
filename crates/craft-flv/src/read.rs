@@ -23,11 +23,18 @@ pub struct Tag<'a> {
 /// pipe.
 ///
 /// Each tag is read into a buffer the caller passes in and reuses, so after the largest tag has
-/// been seen no tag allocates. A tag's data is at most [`crate::MAX_TAG_DATA`] bytes.
+/// been seen no tag allocates. The buffer grows as the bytes arrive, not to the length a tag header
+/// claims, and it keeps its capacity until the caller shrinks it. A tag's data is at most
+/// [`crate::MAX_TAG_DATA`] bytes.
+///
+/// The source must block until bytes arrive. A read that fails partway through a tag, such as a
+/// `WouldBlock` or `TimedOut` from a socket with a read timeout, loses the bytes already taken, so
+/// after any error the reader refuses every later tag with [`Error::Broken`].
 pub struct Reader<R> {
     inner: R,
     header: Header,
     tags: u64,
+    broken: bool,
 }
 
 impl<R: Read> Reader<R> {
@@ -53,7 +60,7 @@ impl<R: Read> Reader<R> {
         if found != 0 {
             return Err(Error::PreviousTagSize { expected: 0, found });
         }
-        Ok(Reader { inner, header, tags: 0 })
+        Ok(Reader { inner, header, tags: 0, broken: false })
     }
 
     /// The file header.
@@ -71,11 +78,33 @@ impl<R: Read> Reader<R> {
         self.inner
     }
 
+    /// Whether an earlier call failed, so the reader refuses every later tag.
+    pub fn is_broken(&self) -> bool {
+        self.broken
+    }
+
     /// Reads the next tag into `buf` and returns it, or `None` when the stream ends after a
     /// PreviousTagSize. A stream that ends inside a tag, a tag type other than 8, 9 or 18, a set
     /// Filter bit (an encrypted tag), a StreamID other than 0 or a PreviousTagSize that does not
-    /// match the tag is an error.
+    /// match the tag is an error. After any error, every later call returns [`Error::Broken`].
     pub fn next_tag<'b>(&mut self, buf: &'b mut Vec<u8>) -> Result<Option<Tag<'b>>, Error> {
+        if self.broken {
+            return Err(Error::Broken);
+        }
+        match self.read_tag(buf) {
+            Ok(Some((kind, timestamp))) => {
+                self.tags += 1;
+                Ok(Some(Tag { kind, timestamp, data: buf }))
+            }
+            Ok(None) => Ok(None),
+            Err(e) => {
+                self.broken = true;
+                Err(e)
+            }
+        }
+    }
+
+    fn read_tag(&mut self, buf: &mut Vec<u8>) -> Result<Option<(TagType, i32)>, Error> {
         let mut h = [0u8; TAG_HEADER_LEN];
         match read_full(&mut self.inner, &mut h)? {
             0 => return Ok(None),
@@ -94,9 +123,10 @@ impl<R: Read> Reader<R> {
         if h[8..11] != [0, 0, 0] {
             return Err(Error::Invalid("a tag's StreamID is not 0"));
         }
+        // Reading through `take` fills the buffer as the bytes arrive, without zeroing it first or
+        // reserving a length the header claims before the data is there.
         buf.clear();
-        buf.resize(size, 0);
-        if read_full(&mut self.inner, buf)? < size {
+        if (&mut self.inner).take(size as u64).read_to_end(buf)? < size {
             return Err(Error::Truncated("a tag's data"));
         }
         let mut p = [0u8; 4];
@@ -108,8 +138,7 @@ impl<R: Read> Reader<R> {
         if found != expected {
             return Err(Error::PreviousTagSize { expected, found });
         }
-        self.tags += 1;
-        Ok(Some(Tag { kind, timestamp, data: buf }))
+        Ok(Some((kind, timestamp)))
     }
 }
 
@@ -153,12 +182,16 @@ pub enum Video<'a> {
 }
 
 /// Reads a video tag's body. An AVC access unit must be NAL units with 4-byte lengths that cover
-/// it exactly, as [`crate::Writer`] writes them; other lengths are [`Error::Invalid`].
+/// it exactly, as [`crate::Writer`] writes them; other lengths are [`Error::Invalid`]. Only
+/// FrameType 1 to 4 with CodecID 7 is read as AVC. FrameType 5 (video info or command frames),
+/// the reserved values 0, 6 and 7, and a first byte with the high bit set (the extended video
+/// header of later revisions, whose low four bits are a packet type) are returned as
+/// [`Video::Other`].
 pub fn parse_video(data: &[u8]) -> Result<Video<'_>, Error> {
     let first = *data.first().ok_or(Error::Truncated("a video tag"))?;
     let frame_type = first >> 4;
     let codec = first & 0x0F;
-    if codec != CODEC_AVC || frame_type == 5 {
+    if codec != CODEC_AVC || !(1..=4).contains(&frame_type) {
         return Ok(Video::Other { frame_type, codec });
     }
     if data.len() < 5 {
@@ -192,7 +225,8 @@ pub enum Audio<'a> {
     },
 }
 
-/// Reads an audio tag's body.
+/// Reads an audio tag's body. An empty raw AAC frame is [`Error::Invalid`], as
+/// [`crate::Body::AacRaw`] refuses one.
 pub fn parse_audio(data: &[u8]) -> Result<Audio<'_>, Error> {
     let first = *data.first().ok_or(Error::Truncated("an audio tag"))?;
     if first >> 4 != SOUND_FORMAT_AAC {
@@ -203,6 +237,7 @@ pub fn parse_audio(data: &[u8]) -> Result<Audio<'_>, Error> {
     match packet_type {
         0 if rest.is_empty() => Err(Error::Truncated("an AAC sequence header")),
         0 => Ok(Audio::AacSequenceHeader(rest)),
+        1 if rest.is_empty() => Err(Error::Invalid("an AAC frame is empty")),
         1 => Ok(Audio::AacRaw(rest)),
         _ => Err(Error::Invalid("an AACPacketType other than 0 or 1")),
     }

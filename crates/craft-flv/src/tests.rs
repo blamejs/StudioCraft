@@ -360,7 +360,238 @@ fn parse_video_and_audio_cover_other_codecs() {
     assert!(matches!(parse_audio(&[0xAF]), Err(Error::Truncated(_))));
     assert!(matches!(parse_audio(&[0xAF, 0]), Err(Error::Truncated(_))));
     assert!(matches!(parse_audio(&[0xAF, 2, 1]), Err(Error::Invalid(_))));
-    assert_eq!(parse_audio(&[0xAF, 1]).unwrap(), Audio::AacRaw(&[]));
+    // An empty raw frame is refused, as the writer refuses one.
+    assert!(matches!(parse_audio(&[0xAF, 1]), Err(Error::Invalid(_))));
+    assert_eq!(parse_audio(&[0xAF, 1, 0x21]).unwrap(), Audio::AacRaw(&[0x21]));
+}
+
+#[test]
+fn reserved_and_extended_frame_types_are_other() {
+    // FrameType 0, 6 and 7 are reserved, and a set high bit marks the extended video header,
+    // whose low nibble is a packet type rather than a CodecID.
+    for first in [0x07u8, 0x67, 0x77, 0x87, 0x97, 0xF7] {
+        let tag = [first, 1, 0, 0, 0, 0, 0, 0, 1, 0x41];
+        assert_eq!(parse_video(&tag).unwrap(), Video::Other { frame_type: first >> 4, codec: 7 }, "{first:#x}");
+    }
+    for first in [0x17u8, 0x27, 0x37, 0x47] {
+        assert!(matches!(parse_video(&[first, 1, 0, 0, 0, 0, 0, 0, 1, 0x41]).unwrap(), Video::AvcNalus { .. }), "{first:#x}");
+    }
+}
+
+#[test]
+fn annexb_converts_once_into_a_shared_buffer() {
+    let au = [0, 0, 0, 1, 0x65, 0xAA, 0, 0, 0, 1, 0x41, 0xBB];
+    let mut nalus = vec![0xEE];
+    assert_eq!(annexb_to_nalus(&au, &mut nalus).unwrap(), 12);
+    assert_eq!(nalus, [0xEE, 0, 0, 0, 2, 0x65, 0xAA, 0, 0, 0, 2, 0x41, 0xBB]);
+    // The converted access unit writes the same bytes as the Annex B one.
+    let mut a = Vec::new();
+    let mut b = Vec::new();
+    Body::AvcAnnexB { key: true, composition_time: 5, data: &au }.write_to(&mut a).unwrap();
+    Body::AvcNalus { key: true, composition_time: 5, data: &nalus[1..] }.write_to(&mut b).unwrap();
+    assert_eq!(a, b);
+    for bad in [&[0x65, 0, 0, 1, 0x41][..], &[0, 0, 1, 0, 0, 0, 1]] {
+        let mut out = vec![7];
+        assert!(matches!(annexb_to_nalus(bad, &mut out), Err(Error::BadInput(_))));
+        assert_eq!(out, [7]);
+    }
+    let mut big = vec![0, 0, 1];
+    big.resize(MAX_TAG_DATA, 0x21);
+    let mut out = vec![7];
+    assert!(matches!(annexb_to_nalus(&big, &mut out), Err(Error::TooLarge { .. })));
+    assert_eq!(out, [7]);
+}
+
+#[test]
+fn an_oversized_annexb_access_unit_stops_at_the_limit() {
+    // Many NAL units past the limit: the check stops at the first that crosses it.
+    let mut au = Vec::new();
+    while au.len() < 2 * MAX_TAG_DATA {
+        au.extend_from_slice(&[0, 0, 1]);
+        au.extend(std::iter::repeat_n(0x21, 4093));
+    }
+    let body = Body::AvcAnnexB { key: false, composition_time: 0, data: &au };
+    match body.size() {
+        Err(Error::TooLarge { size, limit }) => assert!(size > limit && size <= limit + 4 + 4093, "{size}"),
+        r => panic!("{r:?}"),
+    }
+}
+
+#[test]
+fn one_checked_body_goes_to_several_writers() {
+    let au = [0, 0, 0, 1, 0x65, 0xAA];
+    let checked = Body::AvcAnnexB { key: true, composition_time: 0, data: &au }.check().unwrap();
+    assert_eq!(checked.len(), 5 + 6);
+    assert_eq!(checked.tag_type(), TagType::Video);
+    let mut writers: Vec<_> = (0..3).map(|_| Writer::new(Vec::new(), Header { audio: false, video: true }).unwrap()).collect();
+    for w in &mut writers {
+        assert_eq!(w.write_checked(40, &checked).unwrap(), 11 + 11 + 4);
+    }
+    let one = tag_bytes(Body::AvcAnnexB { key: true, composition_time: 0, data: &au }, 40);
+    for w in writers {
+        assert_eq!(tags_of(&w.into_inner()), one);
+    }
+    // The RTMP path: the length, then the body bytes, without a second check.
+    let mut rtmp = Vec::new();
+    assert_eq!(checked.write_to(&mut rtmp).unwrap(), checked.len());
+    assert_eq!(rtmp, one[11..one.len() - 4]);
+}
+
+#[test]
+fn reset_timestamps_lets_a_long_stream_start_again() {
+    let mut w = Writer::new(Vec::new(), Header { audio: true, video: false }).unwrap();
+    w.write(i32::MAX, &Body::AacRaw(&[0x21])).unwrap();
+    assert!(matches!(w.write(0, &Body::AacRaw(&[0x21])), Err(Error::Timestamp { .. })));
+    w.reset_timestamps();
+    w.write(0, &Body::AacSequenceHeader(&ASC)).unwrap();
+    w.write(0, &Body::AacRaw(&[0x21])).unwrap();
+    assert_eq!(w.tags(), 3);
+}
+
+#[test]
+fn tag_header_refuses_a_negative_timestamp() {
+    assert!(matches!(tag_header(TagType::Audio, 1, -1), Err(Error::Timestamp { timestamp: -1, min: 0 })));
+    assert!(tag_header(TagType::Audio, 1, i32::MAX).is_ok());
+}
+
+/// Accepts `limit` bytes, fails once with `TimedOut`, then accepts everything.
+struct FailsOnce {
+    out: Vec<u8>,
+    limit: usize,
+    failed: bool,
+}
+
+impl io::Write for FailsOnce {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        if !self.failed && self.out.len() + buf.len() > self.limit {
+            let n = self.limit - self.out.len();
+            if n == 0 {
+                self.failed = true;
+                return Err(io::ErrorKind::TimedOut.into());
+            }
+            self.out.extend_from_slice(&buf[..n]);
+            return Ok(n);
+        }
+        self.out.extend_from_slice(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+#[test]
+fn a_writer_refuses_tags_after_a_write_fails_partway() {
+    let out = FailsOnce { out: Vec::new(), limit: 13 + 11 + 3, failed: false };
+    let mut w = Writer::new(out, Header { audio: true, video: false }).unwrap();
+    assert!(matches!(w.write(0, &Body::AacRaw(&[0x21; 10])), Err(Error::Io(_))));
+    let len = w.get_ref().out.len();
+    assert_eq!(len, 13 + 11 + 3);
+    // The output holds part of a tag, so a later tag would follow it out of step.
+    assert!(w.write(1, &Body::AacRaw(&[0x21])).is_err());
+    assert!(matches!(w.write(1, &Body::AacRaw(&[0x21])), Err(Error::Broken)));
+    // A body that would be refused anyway still reports the broken stream first.
+    assert!(matches!(w.write(1, &Body::AacRaw(&[])), Err(Error::Broken)));
+    assert!(w.is_broken());
+    assert_eq!(w.get_ref().out.len(), len);
+    assert_eq!(w.tags(), 0);
+}
+
+/// Counts the calls that reach the output.
+struct CountsWrites {
+    out: Vec<u8>,
+    calls: usize,
+}
+
+impl io::Write for CountsWrites {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.calls += 1;
+        self.out.extend_from_slice(buf);
+        Ok(buf.len())
+    }
+
+    fn write_vectored(&mut self, bufs: &[io::IoSlice<'_>]) -> io::Result<usize> {
+        self.calls += 1;
+        let mut n = 0;
+        for b in bufs {
+            self.out.extend_from_slice(b);
+            n += b.len();
+        }
+        Ok(n)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+#[test]
+fn a_tag_goes_out_in_one_vectored_write() {
+    let mut w = Writer::new(CountsWrites { out: Vec::new(), calls: 0 }, Header { audio: true, video: true }).unwrap();
+    let before = w.get_ref().calls;
+    w.write(0, &Body::AvcNalus { key: true, composition_time: 0, data: &[0, 0, 0, 1, 0x65] }).unwrap();
+    w.write(0, &Body::AacRaw(&[0x21, 0x10])).unwrap();
+    w.write(0, &Body::AvcEndOfSequence).unwrap();
+    assert_eq!(w.get_ref().calls - before, 3);
+    let bytes = w.into_inner().out;
+    let mut r = Reader::new(&bytes[..]).unwrap();
+    let mut buf = Vec::new();
+    let mut n = 0;
+    while r.next_tag(&mut buf).unwrap().is_some() {
+        n += 1;
+    }
+    assert_eq!(n, 3);
+}
+
+/// Hands out `data`, but fails once with `WouldBlock` when `stall` bytes have been read.
+struct StallsOnce {
+    data: Vec<u8>,
+    pos: usize,
+    stall: usize,
+    stalled: bool,
+}
+
+impl io::Read for StallsOnce {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        if !self.stalled && self.pos == self.stall {
+            self.stalled = true;
+            return Err(io::ErrorKind::WouldBlock.into());
+        }
+        let end = if self.stalled { self.data.len() } else { self.stall };
+        let n = buf.len().min(end - self.pos);
+        buf[..n].copy_from_slice(&self.data[self.pos..self.pos + n]);
+        self.pos += n;
+        Ok(n)
+    }
+}
+
+#[test]
+fn a_reader_refuses_tags_after_a_read_fails_partway() {
+    // The first tag's frame is itself the bytes of a whole tag, so a reader that went on after
+    // losing the first tag's header would read it as a tag and not notice.
+    let inner = [8, 0, 0, 3, 0, 0, 0, 0, 0, 0, 0, 0xAF, 1, 0x21, 0, 0, 0, 14];
+    let data = written(|w| {
+        w.write(0, &Body::AacRaw(&inner)).unwrap();
+    });
+    let mut r = Reader::new(StallsOnce { data, pos: 0, stall: 13 + 11 + 2, stalled: false }).unwrap();
+    let mut buf = Vec::new();
+    assert!(matches!(r.next_tag(&mut buf), Err(Error::Io(_))));
+    assert!(r.next_tag(&mut buf).is_err());
+    assert!(matches!(r.next_tag(&mut buf), Err(Error::Broken)));
+    assert!(r.is_broken());
+    assert_eq!(r.tags(), 0);
+}
+
+#[test]
+fn a_reader_does_not_reserve_a_hostile_tag_length() {
+    let mut bytes = Header { audio: true, video: false }.bytes().to_vec();
+    bytes.extend_from_slice(&[8, 0xFF, 0xFF, 0xFF, 0, 0, 0, 0, 0, 0, 0]);
+    bytes.extend_from_slice(&[0xAF; 10]);
+    let mut r = Reader::new(&bytes[..]).unwrap();
+    let mut buf = Vec::new();
+    assert!(matches!(r.next_tag(&mut buf), Err(Error::Truncated(_))));
+    assert!(buf.capacity() < 1 << 16, "{} bytes reserved", buf.capacity());
 }
 
 #[test]
@@ -484,14 +715,49 @@ mod amf0_tests {
     }
 
     #[test]
-    fn one_read_decodes_at_most_a_million_values() {
-        let nulls = vec![5u8; 1 << 20];
-        assert_eq!(amf0::read_all(&nulls).unwrap().len(), 1 << 20);
-        let more = vec![5u8; (1 << 20) + 1];
+    fn one_read_decodes_at_most_max_values() {
+        let nulls = vec![5u8; amf0::MAX_VALUES];
+        assert_eq!(amf0::read_all(&nulls).unwrap().len(), amf0::MAX_VALUES);
+        let more = vec![5u8; amf0::MAX_VALUES + 1];
         assert!(matches!(amf0::read_all(&more), Err(Error::Invalid(_))));
-        let mut array = vec![0x0A, 0x00, 0x10, 0x00, 0x00];
-        array.extend(std::iter::repeat_n(5u8, 1 << 20));
+        // The array counts as one value, so MAX_VALUES items are one too many.
+        let mut array = vec![0x0A];
+        array.extend_from_slice(&(amf0::MAX_VALUES as u32).to_be_bytes());
+        array.extend(std::iter::repeat_n(5u8, amf0::MAX_VALUES));
         assert!(matches!(amf0::read(&array), Err(Error::Invalid(_))));
+    }
+
+    #[test]
+    fn values_at_the_byte_limit_read_back() {
+        // One string that takes the whole budget reads back; one more byte is refused both ways.
+        let fits = Value::StrictArray(vec![Value::String("x".repeat(amf0::MAX_DECODED_BYTES - std::mem::size_of::<Value>()))]);
+        round_trip(&fits);
+        let over = Value::StrictArray(vec![Value::String("x".repeat(amf0::MAX_DECODED_BYTES - std::mem::size_of::<Value>() + 1))]);
+        let mut out = Vec::new();
+        assert!(matches!(over.write(&mut out), Err(Error::BadInput(_))));
+        let mut bytes = vec![0x0A, 0, 0, 0, 1];
+        amf0::write_string(&mut bytes, &"x".repeat(amf0::MAX_DECODED_BYTES - std::mem::size_of::<Value>() + 1)).unwrap();
+        assert!(matches!(amf0::read(&bytes), Err(Error::Invalid(_))));
+    }
+
+    /// A strict array of `n` objects that each hold one null with an empty name: 7 input bytes and
+    /// 2 values each, but each object's property list takes far more memory than that.
+    fn objects_of_one_null(n: u32) -> Vec<u8> {
+        let mut out = vec![0x0A];
+        out.extend_from_slice(&n.to_be_bytes());
+        for _ in 0..n {
+            out.extend_from_slice(&[3, 0, 0, 5, 0, 0, 9]);
+        }
+        out
+    }
+
+    #[test]
+    fn decoded_memory_is_bounded_by_bytes_as_well_as_values() {
+        // 100 000 objects are 200 001 values, but their property lists alone take over 16 MiB.
+        assert!(matches!(amf0::read(&objects_of_one_null(100_000)), Err(Error::Invalid(_))));
+        assert!(amf0::read(&objects_of_one_null(1_000)).is_ok());
+        let v = Value::StrictArray(vec![Value::Object(vec![(String::new(), Value::Null)]); 100_000]);
+        assert!(matches!(v.write(&mut Vec::new()), Err(Error::BadInput(_))));
     }
 
     #[test]

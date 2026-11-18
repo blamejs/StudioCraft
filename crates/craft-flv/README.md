@@ -14,7 +14,12 @@ License: MIT OR Apache-2.0.
   first PreviousTagSize (0).
 - `Writer::write` writes one tag: TagType, DataSize, the timestamp in milliseconds with its upper
   byte in TimestampExtended, StreamID 0, the body, and the PreviousTagSize (11 plus the body's
-  length).
+  length). Timestamps run to `i32::MAX`, about 24.8 days; `Writer::reset_timestamps` lets a longer
+  stream start again from 0 after it sends the sequence headers and metadata again.
+- `Body::check` checks a body once and returns a `Checked` body with its length.
+  `Writer::write_checked` and `Checked::write_to` write it without checking it again, so one body
+  goes to several FLV writers or RTMP chunk streams. `annexb_to_nalus` converts an Annex B access
+  unit to length-prefixed NAL units once, for `Body::AvcNalus`.
 - `Body` is a tag's body:
 
   | `Body` | Tag type | Bytes before the data | Data |
@@ -40,15 +45,19 @@ License: MIT OR Apache-2.0.
 ## What it reads
 
 `Reader` reads the file header and then one tag per `next_tag` call into a buffer the caller
-reuses. Bytes past 9 in a larger header are skipped. `parse_video`, `parse_audio` and
-`parse_script` read the bodies; `Nalus` splits a length-prefixed access unit, and `AnnexB` splits
-an Annex B one. `parse_video` reads AVC access units with 4-byte NAL unit lengths, and refuses one
-whose lengths are 0 or do not cover it exactly. Video of other codecs, video info frames and audio in other formats are returned as
+reuses. Bytes past 9 in a larger header are skipped. The source must block until bytes arrive;
+after any error, such as a `WouldBlock` or `TimedOut` partway through a tag, `next_tag` returns
+`Error::Broken`. `parse_video`, `parse_audio` and `parse_script` read the bodies; `Nalus` splits a
+length-prefixed access unit, and `AnnexB` splits an Annex B one. `parse_video` reads AVC access
+units with FrameType 1 to 4 and 4-byte NAL unit lengths, and refuses one whose lengths are 0 or do
+not cover it exactly. Video of other codecs, video info frames, the reserved frame types 0, 6 and
+7, the extended video header (first byte 0x80 or above) and audio in other formats are returned as
 `Other` with their field values.
 
 ## Checks and errors
 
 Each tag is checked before any of it is written, and a refused tag leaves the output as it was.
+`annexb_to_nalus` refuses the same Annex B input and leaves its buffer as it was.
 `Writer::write` refuses:
 
 - an `avcC` shorter than 7 bytes, with a configurationVersion other than 1, or with NAL unit
@@ -59,32 +68,43 @@ Each tag is checked before any of it is written, and a refused tag leaves the ou
 - an AudioSpecificConfig shorter than 2 bytes or with audio object type 0;
 - an empty AAC frame, or one that starts with an ADTS header;
 - script data that does not start with an AMF0 string;
-- a body longer than 16 777 215 bytes (`MAX_TAG_DATA`);
-- a negative timestamp, or one earlier than the last tag of the same type.
+- a body longer than 16 777 215 bytes (`MAX_TAG_DATA`); the check of an Annex B access unit stops
+  at the first NAL unit past the limit;
+- a negative timestamp, or one earlier than the last tag of the same type (`tag_header` refuses a
+  negative timestamp too);
+- every tag after a write that failed partway through a tag (`Error::Broken`), since the output
+  then holds part of a tag. Start a new stream with a new `Writer`.
 
 `Reader` refuses a signature other than `FLV`, a version other than 1, set reserved bits, a
-DataOffset under 9 or over 65 536 (`MAX_DATA_OFFSET`), a first PreviousTagSize other than 0, a tag type other than 8, 9 or 18, an
-encrypted tag (Filter bit set), a StreamID other than 0, and a PreviousTagSize that does not match
-its tag. A stream that ends between tags ends the reading (`Ok(None)`); one that ends inside a tag
-is `Error::Truncated`. AMF0 reading refuses references, movie clips, typed objects and the other
-markers this crate does not read, nesting deeper than 64, more than 1 048 576 values in one call
-(`MAX_VALUES`, about 32 MiB of decoded values), strings that are not UTF-8, and a strict array whose
-count is larger than the bytes left. AMF0 writing refuses nesting deeper than 64 and more
-than 1 048 576 values as well, so everything it writes reads back, and a property name over
-65 535 bytes.
+DataOffset under 9 or over 65 536 (`MAX_DATA_OFFSET`), a first PreviousTagSize other than 0, a tag
+type other than 8, 9 or 18, an encrypted tag (Filter bit set), a StreamID other than 0, and a
+PreviousTagSize that does not match its tag. A stream that ends between tags ends the reading
+(`Ok(None)`); one that ends inside a tag is `Error::Truncated`. `parse_audio` refuses an empty raw
+AAC frame, as `Body::AacRaw` does. AMF0 reading refuses references, movie clips, typed objects and
+the other markers this crate does not read, nesting deeper than 64, more than 262 144 values in one
+call (`MAX_VALUES`), values that take more than 16 MiB (`MAX_DECODED_BYTES`: string bytes, and the
+slots of arrays and property lists, so one call allocates at most about 32 MiB), strings that are
+not UTF-8, and a strict array whose count is larger than the bytes left. AMF0 writing refuses
+nesting deeper than 64, more than 262 144 values and more than 16 MiB of decoded values as well, so
+everything it writes reads back, and a property name over 65 535 bytes.
 
 ## Cost
 
 `Writer::write` allocates nothing. It builds the tag header and the PreviousTagSize on the stack and
-writes the body from the caller's slice, so a frame is copied once, into the output. An Annex B
-access unit is read twice, once to measure it and once to write it. A tag is written in several
-`write_all` calls, so wrap a file or socket in a `BufWriter`. `Reader::next_tag` reads into the
-caller's buffer, which stops growing once it holds the largest tag. `Writer::write_metadata`
-allocates one buffer for the script data.
+writes the body from the caller's slice, so a frame is copied once, into the output. Every body but
+Annex B goes out in one vectored write, one system call per tag on an unbuffered socket or pipe. An
+Annex B access unit is read twice, once to measure it and once to write it, and takes two writes
+per NAL unit. A sender with several destinations converts each access unit once with
+`annexb_to_nalus`, checks the body once with `Body::check`, and writes the shared `Checked` body
+to every destination. `Reader::next_tag` reads into the caller's buffer as the bytes arrive,
+without zeroing it first or reserving the length a tag header claims; the buffer stops growing once
+it holds the largest tag and keeps that capacity until the caller shrinks it.
+`Writer::write_metadata` allocates one buffer for the script data.
 
 `cargo bench -p craft-flv` writes and reads one second of a 6000 kb/s, 60 fps stream with
-160 kb/s AAC (60 video tags of about 12 500 bytes and 47 audio tags); docs/performance.md lists the
-results.
+160 kb/s AAC (60 video tags of about 12 500 bytes and 47 audio tags), to one output and to 4, with
+Annex B input converted per destination or once; docs/performance.md lists the results. With the
+conversion shared, 4 destinations cost 170.5 µs per second of stream.
 
 ## Example
 
@@ -105,7 +125,7 @@ assert_eq!(&bytes[..3], b"FLV");
 
 `cargo test -p craft-flv` compares the header, tag header, AVC, AAC and `onMetaData` bytes with the
 specification's field tables, writes streams and reads them back tag by tag, and checks every
-refusal above. `tests/fuzz.rs` writes random streams of Annex B and length-prefixed access units
+refusal above, including a writer and a reader after an I/O error partway through a tag. `tests/fuzz.rs` writes random streams of Annex B and length-prefixed access units
 and AAC frames and reads back every timestamp, keyframe flag, composition time and NAL unit,
 round-trips random AMF0 values, and feeds random bytes to the reader and every parser.
 
