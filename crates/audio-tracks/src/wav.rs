@@ -48,17 +48,29 @@ pub fn rewrite_header(file: &mut File, frames: u64) -> std::io::Result<()> {
 /// cut off and the header is written for the rest. The frames it holds.
 pub fn repair(path: &Path) -> std::io::Result<u64> {
     let mut file = OpenOptions::new().read(true).write(true).open(path)?;
-    let len = file.metadata()?.len();
+    let len = check_file(&mut file)?;
     let head = header_len()?;
-    let mut magic = [0u8; 4];
-    if len < head || file.read_exact(&mut magic).is_err() || &magic != b"RIFF" {
-        return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "not an audio track file"));
-    }
     let frames = (len - head) / FRAME_BYTES;
     file.set_len(head + frames * FRAME_BYTES)?;
     rewrite_header(&mut file, frames)?;
     file.sync_all()?;
     Ok(frames)
+}
+
+/// Check, without changing it, that the file at `path` is one [`repair`] can repair. Its length.
+pub fn check(path: &Path) -> std::io::Result<u64> {
+    check_file(&mut File::open(path)?)
+}
+
+/// The length of `file`, or an error when it is shorter than a header or does not start like a
+/// WAV file.
+fn check_file(file: &mut File) -> std::io::Result<u64> {
+    let len = file.metadata()?.len();
+    let mut magic = [0u8; 4];
+    if len < header_len()? || file.read_exact(&mut magic).is_err() || &magic != b"RIFF" {
+        return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "not an audio track file"));
+    }
+    Ok(len)
 }
 
 #[cfg(test)]

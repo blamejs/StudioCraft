@@ -542,6 +542,34 @@ fn a_file_shorter_than_its_last_sync_leaves_the_take_unfinished_and_uncut() {
 }
 
 #[test]
+fn a_file_that_is_not_a_wav_leaves_the_other_files_uncut() {
+    let dir = scratch("bad-header");
+    let mut rig = Rig::new(config(&dir), 4);
+    let (a, b) = (spec(1, "Mic"), spec(2, "Desk"));
+    rig.c.set_tracks(vec![a.clone(), b.clone()]);
+    feed(&a.slot, 1, 0);
+    feed(&b.slot, 2, 0);
+    rig.c.poll();
+    rig.c.flush();
+    rig.write().unwrap();
+    drop(rig);
+    // Mic has a partial frame that repair would cut; Desk no longer starts like a WAV file.
+    let f = std::fs::OpenOptions::new().append(true).open(dir.join("Mic.wav")).unwrap();
+    std::io::Write::write_all(&mut &f, &[1, 2, 3]).unwrap();
+    drop(f);
+    let mut d = std::fs::OpenOptions::new().write(true).open(dir.join("Desk.wav")).unwrap();
+    std::io::Write::write_all(&mut d, b"XXXX").unwrap();
+    drop(d);
+    let mic_len = std::fs::metadata(dir.join("Mic.wav")).unwrap().len();
+    let err = recover::repair(&dir).unwrap_err();
+    assert!(err.to_string().contains("Desk.wav"), "{err}");
+    assert_eq!(std::fs::metadata(dir.join("Mic.wav")).unwrap().len(), mic_len, "Mic.wav was not cut before the error");
+    let recording = dir.parent().and_then(Path::parent).unwrap();
+    assert_eq!(recover::unfinished(recording), vec![dir.clone()], "the journal was not ended");
+    let _ = std::fs::remove_dir_all(recording);
+}
+
+#[test]
 fn a_journal_larger_than_the_limit_is_refused_before_it_is_read() {
     let dir = scratch("huge-journal");
     crashed_take(&dir);

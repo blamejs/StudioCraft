@@ -93,8 +93,9 @@ pub fn repair(dir: &Path) -> std::io::Result<Option<Repaired>> {
         if !real_file(&path) {
             return Err(std::io::Error::new(std::io::ErrorKind::NotFound, format!("{name} is missing from the take's folder")));
         }
+        let len = crate::wav::check(&path).map_err(|e| std::io::Error::new(e.kind(), format!("{name}: {e}")))?;
         // A sync put its frames on the disk, so a file holding fewer was cut or replaced since.
-        let held = std::fs::metadata(&path)?.len().saturating_sub(head) / crate::wav::FRAME_BYTES;
+        let held = len.saturating_sub(head) / crate::wav::FRAME_BYTES;
         if let Some((_, want)) = synced.iter().find(|(f, _)| f == name)
             && held < *want
         {
