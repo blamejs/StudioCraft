@@ -466,18 +466,20 @@ fn a_track_whose_source_gives_no_audio_is_silence_for_the_whole_take() {
 #[test]
 fn audio_lost_at_the_end_of_a_take_is_silence_to_the_end() {
     let dir = scratch("lost-at-end");
-    // One chunk: the first 128 blocks fill it, and the last 3 find no free chunk.
+    // One chunk set, and two for the one track: the first 256 blocks fill them, and the last 3
+    // find no free chunk.
     let mut rig = Rig::new(config(&dir), 1);
     let a = spec(1, "Mic");
     rig.c.set_tracks(vec![a.clone()]);
-    for n in 0..CHUNK_BLOCKS as i64 + 3 {
+    let filled = 2 * CHUNK_BLOCKS as i64;
+    for n in 0..filled + 3 {
         feed(&a.slot, 1, n);
         rig.c.poll();
     }
     assert_eq!(rig.c.dropped_frames(), 3 * BLOCK_FRAMES as u64);
     rig.end().unwrap();
     let silence = vec![0.0; 3 * BLOCK_SAMPLES];
-    let want = [(0..CHUNK_BLOCKS as i64).flat_map(|n| samples(1, n)).collect::<Vec<f32>>(), silence].concat();
+    let want = [(0..filled).flat_map(|n| samples(1, n)).collect::<Vec<f32>>(), silence].concat();
     assert_eq!(read(&dir.join("Mic.wav")), want);
 }
 

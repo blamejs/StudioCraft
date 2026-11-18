@@ -11,7 +11,8 @@
 //!
 //! Each tap holds 32 blocks (683 ms) and drops its oldest when the collect thread falls behind.
 //! The chunk pool is the buffer setting in MiB, each chunk 128 blocks of one track, made when the
-//! take starts; when it runs out the collect thread drops blocks and logs the dropout, and the
+//! take starts, and at least two chunks for each track recorded, made when the track starts; when
+//! it runs out the collect thread drops blocks and logs the dropout, and the
 //! disk thread writes silence in their place. Nothing here blocks the mixer, the outputs or the
 //! thread that starts and stops the take, and a take that is off makes no thread and no pool.
 //!
@@ -36,7 +37,7 @@ use std::time::{Duration, Instant};
 use crossbeam_queue::ArrayQueue;
 use studiocraft_media::Tick;
 
-pub use collect::{Collector, Dropout, TrackSpec};
+pub use collect::{Collector, Dropout, TrackSpec, pool_chunks};
 pub use disk::{DiskConfig, Faults, Gate, StopReason};
 
 /// A list of tracks for the collect thread, with the clock time it was sent at (none for the
@@ -211,7 +212,7 @@ impl Take {
         let no_memory = cfg.disk.faults.no_memory;
         let collect = std::thread::Builder::new().name("audio-tracks-collect".into()).spawn(move || {
             // Without its buffer the take stops; dropping `disk_tx` ends the disk thread too.
-            let made = if no_memory { None } else { Collector::new(chunks, chunks + QUEUE_SPARE) };
+            let made = if no_memory { None } else { Collector::new(chunks, pool_chunks(chunks, MAX_TRACKS) + QUEUE_SPARE) };
             let Some((mut collector, free, out)) = made else {
                 c_status.stop(StopReason::NoMemory);
                 return;

@@ -179,7 +179,8 @@ fn tracks_estimate(t: &AudioTracksSettings, sources: usize) -> Option<(String, S
     }
     let per_second = tracks as f64 * TRACK_BYTES_PER_SECOND as f64;
     let gb = per_second * 3600.0 / 1e9;
-    let seconds = f64::from(t.buffer_mib) * 1_048_576.0 / per_second;
+    let chunks = studiocraft_audio_tracks::pool_chunks(t.buffer_mib as usize, tracks);
+    let seconds = chunks as f64 * studiocraft_audio_tracks::collect::CHUNK_BYTES as f64 / per_second;
     Some((format!("{gb:.1}"), format!("{seconds:.0}")))
 }
 
@@ -714,6 +715,8 @@ mod tests {
         t.include_program = false;
         t.buffer_mib = 16;
         assert_eq!(tracks_estimate(&t, 1), Some(("1.4".to_string(), "44".to_string())));
+        // 20 tracks get 2 MiB each, more than the 16 MiB set.
+        assert_eq!(tracks_estimate(&t, 20).map(|e| e.1), Some("5".to_string()));
         assert_eq!(tracks_estimate(&t, 0), None, "no tracks write nothing, so there is no estimate");
         let ctx = egui::Context::default();
         let mut p = Profile::default();

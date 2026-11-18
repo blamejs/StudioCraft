@@ -31,6 +31,15 @@ pub const BLOCK_TICKS: i64 = FRAME_TICKS * BLOCK_FRAMES as i64;
 pub const REJOIN_SECONDS: u64 = 60;
 /// Dropouts kept for the status; later ones are only counted.
 pub const DROPOUT_LOG: usize = 256;
+/// Chunks the pool holds at least for each track being recorded: one being filled and one with
+/// the disk thread.
+pub const CHUNKS_PER_TRACK: usize = 2;
+
+/// Chunks in the pool for a buffer setting of `chunks` and `tracks` tracks recorded at once: the
+/// setting, or [`CHUNKS_PER_TRACK`] for each track when that is more.
+pub fn pool_chunks(chunks: usize, tracks: usize) -> usize {
+    chunks.max(1).max(tracks.saturating_mul(CHUNKS_PER_TRACK))
+}
 
 /// Audio for one track, and where in the file it starts.
 pub struct Chunk {
@@ -140,6 +149,8 @@ pub struct Collector {
     /// A source was left without a track because the take already made
     /// [`crate::MAX_TAKE_TRACKS`].
     full: bool,
+    /// Chunks made for the pool so far.
+    made: usize,
 }
 
 impl Collector {
@@ -151,9 +162,10 @@ impl Collector {
 
     /// A collector with `chunks` free chunks made now and a queue of `queue` messages to the disk
     /// thread. None when the memory for the chunks cannot be reserved; the chunks made so far are
-    /// freed.
+    /// freed. The pool grows when tracks start, to [`CHUNKS_PER_TRACK`] for each track recorded,
+    /// up to [`crate::MAX_TRACKS`] tracks.
     pub fn new(chunks: usize, queue: usize) -> Option<(Collector, Arc<ArrayQueue<Vec<u8>>>, Arc<ArrayQueue<ToDisk>>)> {
-        let free = Arc::new(ArrayQueue::new(chunks.max(1)));
+        let free = Arc::new(ArrayQueue::new(pool_chunks(chunks, crate::MAX_TRACKS)));
         for _ in 0..chunks.max(1) {
             let mut chunk = Vec::new();
             chunk.try_reserve_exact(CHUNK_BYTES).ok()?;
@@ -173,8 +185,25 @@ impl Collector {
             announce: std::collections::VecDeque::new(),
             used_names: std::collections::HashSet::new(),
             full: false,
+            made: chunks.max(1),
         };
         Some((c, free, out))
+    }
+
+    /// Make chunks until the pool holds [`CHUNKS_PER_TRACK`] for each track being recorded. A
+    /// chunk whose memory cannot be reserved is not made; the track's blocks are then dropped and
+    /// logged as when the disk is slow.
+    fn grow(&mut self) {
+        let live = self.tracks.iter().filter(|t| t.slot.is_some()).count();
+        let want = pool_chunks(self.made, live).min(self.free.capacity());
+        while self.made < want {
+            let mut chunk = Vec::new();
+            if chunk.try_reserve_exact(CHUNK_BYTES).is_err() {
+                return;
+            }
+            let _ = self.free.push(chunk);
+            self.made += 1;
+        }
     }
 
     /// Record `specs` from now on: new sources become tracks, sources no longer listed stop, and a
@@ -226,6 +255,7 @@ impl Collector {
                 }
             }
         }
+        self.grow();
     }
 
     /// Record `specs` from now on, from a collection that replaced the one recorded so far: every
@@ -599,6 +629,33 @@ mod tests {
         feed(&c2.slot, 1, 0.3);
         c.poll();
         assert_eq!(c.dropped_frames(), 0, "both tracks found a chunk");
+        c.flush();
+        drain(&out, &free);
+    }
+
+    #[test]
+    fn every_recorded_track_has_two_chunks_whatever_the_buffer_setting() {
+        // 16 chunks set and 20 tracks: each track fills one chunk while its last one is with the
+        // disk, here never given back.
+        let (mut c, free, out) = Collector::new(16, 256).unwrap();
+        let mut specs: Vec<TrackSpec> = (0..20).map(|n| spec(n, "S")).collect();
+        c.set_tracks(specs.clone());
+        let feed_all = |c: &mut Collector, specs: &[TrackSpec], blocks: std::ops::Range<i64>| {
+            for n in blocks {
+                for s in specs {
+                    feed(&s.slot, n, 0.1);
+                }
+                c.poll();
+            }
+        };
+        let full = CHUNK_BLOCKS as i64;
+        feed_all(&mut c, &specs, 0..full + 1);
+        assert_eq!(c.dropped_frames(), 0, "every track found a chunk");
+        // A track added during the take gets its chunks too.
+        specs.push(spec(99, "Late"));
+        c.set_tracks(specs.clone());
+        feed_all(&mut c, &specs, full + 1..full + 3);
+        assert_eq!(c.dropped_frames(), 0, "the added track found a chunk");
         c.flush();
         drain(&out, &free);
     }

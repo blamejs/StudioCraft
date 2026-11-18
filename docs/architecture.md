@@ -75,7 +75,7 @@ gives no value for that column.
 | Output (ffmpeg) | The program's frames and the mixer's audio blocks | 256 audio blocks, and one second of video frames (the frame rate rounded up, from 8 to 240 frames) | A full video or audio queue drops its oldest item and counts the drop (`media::queue::Fifo`) | |
 | Output (built-in encoders) | The program's frames and the mixer's audio blocks; the file thread takes the encode threads' packets | 256 audio blocks, and 64 MiB and 3 s of packets | An encoder that finds the packet queue full waits up to 2 s (`outputs::native::DISK_WAIT`), and then the recording fails. The recording also fails when one encoder falls more than 10 s behind the other (`MAX_LAG_NS`). | |
 | Replay buffer | The encode threads' packets | A ring bounded by length and bytes | | |
-| Audio tracks collect | Each recorded track's tap of mixer blocks | 32 blocks per tap with its own pool of 34, and a write buffer of 16 to 1024 1 MiB chunks | A full tap reuses its own oldest block; an empty write buffer drops blocks, logs them and writes silence in their place | One 8 KiB copy per track per block |
+| Audio tracks collect | Each recorded track's tap of mixer blocks | 32 blocks per tap with its own pool of 34, and a write buffer of 16 to 1024 1 MiB chunks, at least 2 for each recorded track | A full tap reuses its own oldest block; an empty write buffer drops blocks, logs them and writes silence in their place | One 8 KiB copy per track per block |
 | Audio tracks disk | The collect thread's chunks | The chunk count of the write buffer | A full or failing disk stops only the audio tracks | Sequential 1 MiB writes |
 | Window | `Studio` state | | | |
 
@@ -274,8 +274,9 @@ at most 256 in all. A source in the program mix is stored in the same pass that 
 
 The `audio-tracks-collect` thread drains the taps into 1 MiB chunks, places each block by its
 timestamp from the first block of the take, and fills gaps with silence, counting a gap in a
-track's audio as lost audio. It does not touch files. When the chunk pool (the write buffer) is
-empty because the disk is slow, the collect thread drops blocks and logs them, and the files still
+track's audio as lost audio. It does not touch files. The chunk pool (the write buffer) holds the
+buffer setting in MiB, and when a track starts the collect thread adds chunks until there are at
+least 2 for each track recorded. When the pool is empty because the disk is slow, the collect thread drops blocks and logs them, and the files still
 keep time.
 
 The `audio-tracks-disk` thread appends the chunks to one WAV file per track, rewrites each header
