@@ -22,11 +22,78 @@ file in the release on every platform, and both are computed after the Linux pac
 
 2. Merge or fast-forward `main` into the `release` branch and push it. The workflow starts on the
    push.
-3. When the run finishes, open the draft on the Releases page, check its files, and publish it.
-   A version with a pre-release part (`-rc.1`) is marked as a pre-release.
+3. An alpha version (`0.2.0-alpha.1`) is published by the workflow itself, as described in
+   [Alpha releases](#alpha-releases). For any other version, open the draft on the Releases page
+   when the run finishes, check its files, and publish it. A version with a pre-release part
+   (`-rc.1`) is marked as a pre-release.
 
 Another push to `release` before the draft is published rebuilds the same draft. Once it is
 published, the next release needs a new version.
+
+## Alpha releases
+
+Alpha versions are `0.<minor>.<patch>-alpha.<N>`, for example `0.1.0-alpha.1`, then
+`0.1.0-alpha.2`. Each one is tagged `v<version>` and published as a GitHub prerelease.
+
+An alpha is cut only when at least 50 pull requests have merged into `main` since the previous
+alpha tag. For the first alpha the count starts at the beginning of the repository.
+`cargo xtask release-ready` does the count:
+
+```sh
+git fetch origin --tags
+cargo xtask release-ready                  # counts up to origin/main
+cargo xtask release-ready --ref <commit>   # counts up to another commit
+```
+
+It takes the newest `v*-alpha.*` tag that is an ancestor of the counted commit, lists the merged
+pull requests with `gh pr list --state merged --base main`, and counts those whose merge commit is
+in `<tag>..<commit>`. It prints the count and the pull requests, and exits 0 at 50 or more, 1 below
+50 and 2 on an error (for example when `gh` is not signed in). `--notes <file>` also writes the
+release notes from `packaging/release-notes.md`.
+
+To cut an alpha:
+
+1. Run `cargo xtask release-ready`. Below 50, do not cut the alpha.
+2. Set the version through a pull request: `cargo xtask version set 0.1.0-alpha.2`.
+3. After that pull request merges, fast-forward `main` into `release` and push it:
+
+   ```sh
+   git fetch origin
+   git push origin origin/main:refs/heads/release
+   ```
+
+The push builds and signs every file and creates the draft `v<version>`. The workflow's `publish`
+job then checks the draft and publishes it as a prerelease, which creates the tag at the built
+commit. The draft is left unpublished, and the job fails, when any of these checks fails:
+
+- The draft holds exactly these files: the Windows `x64` and `arm64` `.msi` and `-portable.zip`;
+  the macOS `universal` `.dmg` and `studiocraft-cli` `.zip`; the Linux `x86_64` and `aarch64`
+  `.AppImage`, `.AppImage.zsync`, `.deb`, `.rpm`, `.flatpak` and `.tar.gz`, each with its `.asc`
+  signature; `SHA256SUMS.txt`, `SHA3-512SUMS.txt` and their `.asc` signatures; and
+  `release-signing-key.asc`. When a Flatpak OCI image was pushed, its `.oci-manifest.json` and
+  `.oci.sig` must both be there too. A missing architecture or format stops the release.
+- `release-signing-key.asc` holds the key in `LINUX_SIGNING_KEY`, and every `.asc` signature
+  verifies with `gpgv`.
+- Every file matches `SHA256SUMS.txt` and `SHA3-512SUMS.txt`, and both list every file.
+- `rpmkeys --checksig` reports `signatures OK` for both `.rpm` packages, and both `.deb` packages
+  carry a `_gpgorigin` signature that verifies.
+- On a Windows runner, `Get-AuthenticodeSignature` reports `Valid` for each `.msi` and for every
+  `.exe` in each `-portable.zip`.
+- `cargo xtask release-ready` counts at least 50 pull requests, and the notes it writes name no
+  other product (the `cargo xtask brands` list).
+
+An unsigned or missing file is a fault in the build to fix before the alpha is published. A manual
+run of the workflow, and a push to `release` with a version that is not an alpha, leave a draft as
+before.
+
+The notes have this shape (the template is `packaging/release-notes.md`):
+
+1. One line saying that the version is an alpha prerelease.
+2. Which file to install on Windows, macOS and Linux, and which files are signed.
+3. That streaming and encoders other than H.264 need a separately installed `ffmpeg`.
+4. The commands that verify the checksum files and their signatures.
+5. The number of pull requests merged since the previous alpha, the list of them, and the link to
+   the full list of changes.
 
 The macOS and Windows jobs on the `release` branch stop unless their signing secrets are set in
 the repository's `release` environment:
