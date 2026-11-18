@@ -3,11 +3,23 @@
 
 use std::collections::HashSet;
 
-/// Names Windows keeps for devices, in any letter case and with any extension.
-const RESERVED: [&str; 22] = [
-    "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5",
-    "LPT6", "LPT7", "LPT8", "LPT9",
-];
+/// Names Windows keeps for devices, in any letter case and with any extension
+/// (<https://learn.microsoft.com/en-us/windows/win32/fileio/naming-a-file>).
+const RESERVED: [&str; 4] = ["CON", "PRN", "AUX", "NUL"];
+
+/// Whether `stem` is a Windows device name: one of [`RESERVED`], or `COM` or `LPT` followed by
+/// one digit from 0 to 9 or a superscript 1, 2 or 3.
+fn reserved(stem: &str) -> bool {
+    if RESERVED.iter().any(|r| r.eq_ignore_ascii_case(stem)) {
+        return true;
+    }
+    let mut chars = stem.chars();
+    let head: String = chars.by_ref().take(3).collect();
+    if !(head.eq_ignore_ascii_case("COM") || head.eq_ignore_ascii_case("LPT")) {
+        return false;
+    }
+    matches!((chars.next(), chars.next()), (Some('0'..='9' | '¹' | '²' | '³'), None))
+}
 
 /// Bytes of UTF-8 a track's file name keeps at most, before a number, a part number and `.wav`
 /// are added: file systems allow 255 bytes in a name.
@@ -33,7 +45,7 @@ pub fn sanitize(name: &str, n: usize) -> String {
         return format!("Source {n}");
     }
     let stem = kept.split('.').next().unwrap_or_default().trim_end();
-    if RESERVED.iter().any(|r| r.eq_ignore_ascii_case(stem)) {
+    if reserved(stem) {
         return format!("_{kept}");
     }
     kept
@@ -65,6 +77,11 @@ mod tests {
         assert_eq!(sanitize("Game. . ", 1), "Game");
         assert_eq!(sanitize("con", 1), "_con");
         assert_eq!(sanitize("LPT3.txt", 1), "_LPT3.txt");
+        assert_eq!(sanitize("COM¹", 1), "_COM¹");
+        assert_eq!(sanitize("lpt³.wav", 1), "_lpt³.wav");
+        assert_eq!(sanitize("COM0", 1), "_COM0");
+        assert_eq!(sanitize("LPT0", 1), "_LPT0");
+        assert_eq!(sanitize("COM⁴", 1), "COM⁴", "only superscript 1, 2 and 3 are device names");
         assert_eq!(sanitize("Console", 1), "Console", "a name that only starts like a device stays");
         assert_eq!(sanitize("a\u{0}b\tc", 1), "abc");
         assert_eq!(sanitize(&"x".repeat(500), 1).len(), MAX_BYTES - 1);
