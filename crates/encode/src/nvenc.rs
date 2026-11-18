@@ -1,10 +1,10 @@
 //! The NVENC encoders that run through the NVIDIA driver in StudioCraft's own process: H.264 and
 //! HEVC from the compositor's NV12 frames, with the `avcC` or `hvcC` record a container stores.
 //!
-//! - Quality mode is constant quality with a keyframe every [`RECORDING_KEYFRAME_S`] seconds.
-//!   Bitrate mode is constant bitrate ([`KBPS`]) with the requested keyframe interval
-//!   ([`KEYFRAME_S`]). A bitrate or interval outside those ranges is an error, and lossless
-//!   recording is not offered.
+//! - Quality mode is constant quality ([`QUALITY`]) with a keyframe every
+//!   [`RECORDING_KEYFRAME_S`] seconds. Bitrate mode is constant bitrate ([`KBPS`]) with the
+//!   requested keyframe interval ([`KEYFRAME_S`]). A level, bitrate or interval outside those
+//!   ranges is an error, and lossless recording is not offered.
 //! - The encoder writes no B-frames, so each packet's decoding time is its presentation time.
 //! - The stream's VUI says BT.709 at limited range, as StudioCraft's NV12 conversion writes it.
 
@@ -17,6 +17,9 @@ use studiocraft_model::{Settings, SettingsSchema};
 use studiocraft_plugin::{Availability, Codec, Encoder, EncoderEnv, Packet, Plugin, PluginError, RateControl, VideoParams, VideoSession};
 
 use crate::h264::{KBPS, KEYFRAME_S, RECORDING_KEYFRAME_S};
+
+/// The quality levels NVENC takes; lower is better.
+pub const QUALITY: std::ops::RangeInclusive<u32> = 1..=51;
 
 /// Why [`Nvenc::try_session`] did not open a session.
 #[derive(Debug)]
@@ -178,7 +181,12 @@ fn config(codec: NativeCodec, params: &VideoParams) -> Result<Config, PluginErro
     // A float-to-integer `as` saturates.
     let gop = |seconds: u32| (fps * f64::from(seconds)).round().max(1.0) as u32;
     let (rate, keyint) = match params.rate {
-        RateControl::Quality(q) => (Rate::Quality(q.clamp(1, 51)), gop(RECORDING_KEYFRAME_S)),
+        RateControl::Quality(q) => {
+            if !QUALITY.contains(&q) {
+                return Err(PluginError::Failed(format!("the quality level {q} is outside {} to {}", QUALITY.start(), QUALITY.end())));
+            }
+            (Rate::Quality(q), gop(RECORDING_KEYFRAME_S))
+        }
         RateControl::Bitrate { kbps, keyframe_s } => {
             if !KBPS.contains(&kbps) {
                 return Err(PluginError::Failed(format!("the video bitrate {kbps} kbps is outside {} to {} kbps", KBPS.start(), KBPS.end())));
@@ -246,8 +254,8 @@ mod tests {
     fn the_rate_and_keyframes_follow_the_output_settings() {
         let c = config(NativeCodec::Hevc, &params(RateControl::Quality(20))).unwrap();
         assert_eq!((c.rate, c.keyint, c.input), (Rate::Quality(20), 120, Input::Nv12));
-        assert_eq!(config(NativeCodec::H264, &params(RateControl::Quality(80))).unwrap().rate, Rate::Quality(51));
-        assert_eq!(config(NativeCodec::H264, &params(RateControl::Quality(0))).unwrap().rate, Rate::Quality(1));
+        assert_eq!(config(NativeCodec::H264, &params(RateControl::Quality(51))).unwrap().rate, Rate::Quality(51));
+        assert_eq!(config(NativeCodec::H264, &params(RateControl::Quality(1))).unwrap().rate, Rate::Quality(1));
         let c = config(NativeCodec::H264, &params(RateControl::Bitrate { kbps: 6000, keyframe_s: 4 })).unwrap();
         assert_eq!((c.rate, c.keyint), (Rate::Cbr(6000), 240));
         let p = VideoParams { fps_num: 30000, fps_den: 1001, ..params(RateControl::Quality(23)) };
@@ -256,7 +264,13 @@ mod tests {
 
     #[test]
     fn settings_the_encoder_cannot_take_are_errors() {
-        for rate in [RateControl::Bitrate { kbps: 50, keyframe_s: 2 }, RateControl::Bitrate { kbps: 6000, keyframe_s: 21 }, RateControl::Lossless] {
+        for rate in [
+            RateControl::Quality(0),
+            RateControl::Quality(52),
+            RateControl::Bitrate { kbps: 50, keyframe_s: 2 },
+            RateControl::Bitrate { kbps: 6000, keyframe_s: 21 },
+            RateControl::Lossless,
+        ] {
             assert!(config(NativeCodec::H264, &params(rate)).is_err(), "{rate:?}");
         }
         let p = VideoParams { fps_den: 0, ..params(RateControl::Quality(23)) };

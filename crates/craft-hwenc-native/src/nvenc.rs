@@ -370,18 +370,19 @@ mod tests {
     #[test]
     fn a_system_without_the_driver_says_so() {
         // On a machine without an NVIDIA GPU (every CI runner) opening is a `NoDevice` error,
-        // never a panic; with one, the encoder opens and writes its record.
+        // never a panic; with one, the encoder opens and writes its record, or says that the GPU
+        // does not write the codec or has no free session.
         for (codec, input) in [(Codec::H264, Input::Nv12), (Codec::Hevc, Input::Nv12)] {
             match Encoder::new(&cfg(codec, input)) {
                 Ok(e) => assert!(!e.codec_private().is_empty()),
-                Err(Error::NoDevice(why)) => assert!(!why.is_empty()),
+                Err(Error::NoDevice(why) | Error::Unsupported(why) | Error::Busy(why)) => assert!(!why.is_empty()),
                 Err(other) => panic!("{codec:?}: {other}"),
             }
         }
         for codec in [Codec::H264, Codec::Hevc] {
             match available(codec) {
                 Ok(()) => {}
-                Err(Error::NoDevice(why)) => assert!(!why.is_empty()),
+                Err(Error::NoDevice(why) | Error::Unsupported(why) | Error::Busy(why)) => assert!(!why.is_empty()),
                 Err(other) => panic!("{codec:?}: {other}"),
             }
         }
