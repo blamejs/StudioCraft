@@ -272,6 +272,7 @@ fn low_free_space_stops_the_take_before_it_writes() {
     let take = Take::start(TakeConfig { disk: cfg, buffer_mib: 4 }, vec![spec(1, "Mic")]).unwrap();
     let status = take.join();
     assert_eq!((status.state(), status.reason()), (Some(State::Stopped), Some(StopReason::LowSpace)));
+    assert!(!dir.exists(), "a take that could not start leaves no folder or journal");
 }
 
 #[test]

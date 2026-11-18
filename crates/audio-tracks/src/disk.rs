@@ -251,6 +251,17 @@ pub struct Writer {
 /// Folder names tried for a take's folder before the take stops.
 const FOLDER_TRIES: u32 = 999;
 
+/// Remove the take's `Audio Files` folder, and the take folder [`make_folder`] made for it, when
+/// each is empty. The folder a take was made in is left alone.
+fn remove_folders(cfg: &DiskConfig, dir: &std::path::Path) {
+    let _ = std::fs::remove_dir(dir);
+    if cfg.folder_stem.is_some()
+        && let Some(take) = dir.parent()
+    {
+        let _ = std::fs::remove_dir(take);
+    }
+}
+
 /// Make the take's `Audio Files` folder as `cfg` says. Its path.
 fn make_folder(cfg: &DiskConfig) -> std::io::Result<PathBuf> {
     let Some(stem) = &cfg.folder_stem else {
@@ -279,7 +290,13 @@ impl Writer {
     pub fn create(cfg: DiskConfig, free: Arc<ArrayQueue<Vec<u8>>>, dropq: Arc<ArrayQueue<Dropout>>) -> Result<Writer, Failure> {
         let fail = |e: std::io::Error| Failure { reason: StopReason::CreateFailed, error: e.to_string() };
         let dir = make_folder(&cfg).map_err(fail)?;
-        let mut journal = Journal::create(&dir).map_err(fail)?;
+        let journal = match Journal::create(&dir) {
+            Ok(j) => j,
+            Err(e) => {
+                remove_folders(&cfg, &dir);
+                return Err(fail(e));
+            }
+        };
         let t = &cfg.timing;
         let anchor = if t.anchor.is_empty() { "none".to_string() } else { t.anchor.clone() };
         let start = Line::Start {
@@ -291,7 +308,6 @@ impl Writer {
             offset_frames: t.offset_frames,
             started_unix_ms: t.started_unix_ms,
         };
-        journal.write(&start).map_err(fail)?;
         let head = wav::header_len().map_err(fail)?;
         let mut w = Writer {
             cfg,
@@ -310,7 +326,11 @@ impl Writer {
             finishing: false,
             discard: false,
         };
-        w.check_space()?;
+        // A take that cannot start leaves no folder or journal behind for repair to find.
+        if let Err(e) = w.journal.write(&start).map_err(fail).and_then(|()| w.check_space()) {
+            w.discard_files();
+            return Err(e);
+        }
         Ok(w)
     }
 
@@ -337,12 +357,7 @@ impl Writer {
         for name in made.iter().map(String::as_str).chain([crate::journal::FILE_NAME]) {
             let _ = std::fs::remove_file(dir.join(name));
         }
-        let _ = std::fs::remove_dir(&dir);
-        if cfg.folder_stem.is_some()
-            && let Some(take) = dir.parent()
-        {
-            let _ = std::fs::remove_dir(take);
-        }
+        remove_folders(&cfg, &dir);
     }
 
     /// Handle one message from the collector. True at the end of the take.
