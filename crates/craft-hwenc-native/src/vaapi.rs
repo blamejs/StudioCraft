@@ -11,6 +11,8 @@
 //!   are no B-frames and each packet's decoding time is its presentation time.
 //! - HEVC takes widths and heights that are multiples of the driver's smallest coding block
 //!   (8 × 8 unless the driver lists another).
+//! - A stream whose picture size or picture rate is more than level 6.2 of the codec allows is
+//!   refused before VA-API is called.
 //! - The driver writes the parameter sets, so [`Encoder::new`] encodes one gray frame first and
 //!   takes them from its output; the stream that follows starts again at an IDR picture. A
 //!   picture whose parameter sets differ from the record is an error.
@@ -86,6 +88,10 @@ fn check(cfg: &Config) -> Result<(), Error> {
     }
     if cfg.fps.0 == 0 || cfg.fps.1 == 0 {
         return bad(format!("the frame rate {}/{} is not a rate", cfg.fps.0, cfg.fps.1));
+    }
+    if !vaapi_ffi::fits_a_level(cfg.codec, w, h, cfg.fps) {
+        let codec = if cfg.codec == Codec::H264 { "H.264" } else { "HEVC" };
+        return bad(format!("{w}x{h} at {}/{} frames per second is more than {codec} level 6.2 allows", cfg.fps.0, cfg.fps.1));
     }
     if cfg.input != Input::Nv12 {
         return bad("the VA-API encoders take NV12 frames only".into());
@@ -288,10 +294,19 @@ mod tests {
     fn configurations_the_encoder_cannot_take_are_refused_before_va_api() {
         let ok = cfg(Codec::Hevc);
         assert_eq!(check(&ok), Ok(()));
+        for largest in [(Codec::Hevc, (60, 1)), (Codec::H264, (120, 1))] {
+            let c = Config { codec: largest.0, width: 7680, height: 4320, fps: largest.1, ..ok };
+            assert_eq!(check(&c), Ok(()), "{c:?} fits level 6.2");
+        }
         for bad in [
             Config { width: 255, ..ok },
             Config { height: 0, ..ok },
             Config { width: 8194, ..ok },
+            Config { width: 8192, height: 8192, ..ok },
+            Config { width: 8192, height: 4352, fps: (121, 1), ..ok },
+            Config { width: 7680, height: 4320, fps: (130, 1), ..ok },
+            Config { codec: Codec::H264, width: 8192, height: 8192, ..ok },
+            Config { codec: Codec::H264, width: 7680, height: 4320, fps: (240, 1), ..ok },
             Config { fps: (30, 0), ..ok },
             Config { fps: (0, 1), ..ok },
             Config { input: Input::P010, ..ok },

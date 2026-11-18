@@ -329,6 +329,24 @@ pub(crate) fn hevc_level(width: u32, height: u32, fps: (u32, u32), bps: u32) -> 
     LEVELS.iter().find(|&&(_, mps, msr, br)| ps <= mps && sr <= msr && u64::from(bps) <= br * 1000).map_or(186, |&(level, ..)| level)
 }
 
+/// Whether a `width` × `height` stream at `fps` fits level 6.2, the highest level the encoder
+/// writes: Rec. ITU-T H.264 Table A-1's MaxFS and MaxMBPS (in macroblocks of the coded size), or
+/// Rec. ITU-T H.265 Table A.8's MaxLumaPs and MaxLumaSr.
+pub(crate) fn fits_a_level(codec: Codec, width: u32, height: u32, fps: (u32, u32)) -> bool {
+    let per_second = |n: u64| n.saturating_mul(u64::from(fps.0)).div_ceil(u64::from(fps.1.max(1)));
+    match codec {
+        Codec::H264 => {
+            let (cw, ch) = coded_size(Codec::H264, width, height);
+            let mbs = u64::from(cw / 16) * u64::from(ch / 16);
+            mbs <= 139_264 && per_second(mbs) <= 16_711_680
+        }
+        Codec::Hevc => {
+            let samples = u64::from(width) * u64::from(height);
+            samples <= 35_651_584 && per_second(samples) <= 4_278_190_080
+        }
+    }
+}
+
 /// The HEVC block sizes a session uses, as log2 of the size in luma samples.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Blocks {
