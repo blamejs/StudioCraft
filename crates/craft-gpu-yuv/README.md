@@ -1,23 +1,24 @@
 # craft-gpu-yuv
 
-RGBA to 4:2:0 Y'CbCr on the GPU for the Craft apps' encoders and scopes: NV12, P010 and I420,
-scaled to the output size, in the BT.601, BT.709 and BT.2020 matrices at limited or full range.
-`cpu::convert` is the same conversion on the CPU, and the crate depends only on `wgpu` 30.
+craft-gpu-yuv converts RGBA to 4:2:0 Y'CbCr on the GPU for the Craft apps' encoders and scopes. It
+writes NV12, P010 and I420, scales to the output size, and uses the BT.601, BT.709 and BT.2020
+matrices at limited or full range. `cpu::convert` is the same conversion on the CPU. The crate
+depends only on `wgpu` 30.
 
 ## Contents
 
-| Item | What |
+| Item | Description |
 |---|---|
-| `Format` | `Nv12` (8-bit luma, then interleaved Cb and Cr), `P010` (10-bit values in the high bits of little-endian 16-bit words, same planes as NV12) and `I420` (8-bit luma, Cb, then Cr). |
-| `Matrix`, `Range` | BT.601, BT.709 and BT.2020 non-constant luminance. Limited range is luma 16 to 235 and chroma 16 to 240, times 4 at 10 bits. Full range uses every code, with chroma centered on 128 or 512. |
-| `Conversion` | One format, matrix and range. |
-| `Converter::new(device, conversion)` | The two render pipelines of one conversion, with no per-frame state. |
-| `Converter::bind(device, view)` | A source texture view bound once, as a `Source`. |
-| `Converter::planes(device, width, height)` | The plane textures of one output size, as `Planes`. |
-| `Converter::draw(encoder, source, planes)` | Records a luma pass and a chroma pass. |
-| `Planes::copy_to_buffer(encoder, buffer, offset)` | Records the copies of every plane into a read-back buffer. |
-| `FrameLayout` | Each plane's size, its offset and row pitch in a read-back buffer (`buffer_size`), and the size of a packed frame (`frame_bytes`). `unpack` copies a mapped buffer into a packed frame. |
-| `cpu::convert(rgba, src_width, src_height, conversion, width, height)` | The conversion of an RGBA8 picture on the CPU, as one packed frame. |
+| `Format` | The formats are `Nv12` (8-bit luma, then interleaved Cb and Cr), `P010` (10-bit values in the high bits of little-endian 16-bit words, same planes as NV12) and `I420` (8-bit luma, Cb, then Cr). |
+| `Matrix`, `Range` | The matrices are BT.601, BT.709 and BT.2020 non-constant luminance. Limited range is luma 16 to 235 and chroma 16 to 240, times 4 at 10 bits. Full range uses every code, with chroma centered on 128 or 512. |
+| `Conversion` | It holds one format, matrix and range. |
+| `Converter::new(device, conversion)` | It builds the two render pipelines of one conversion, with no per-frame state. |
+| `Converter::bind(device, view)` | It binds a source texture view once, as a `Source`. |
+| `Converter::planes(device, width, height)` | It creates the plane textures of one output size, as `Planes`. |
+| `Converter::draw(encoder, source, planes)` | It records a luma pass and a chroma pass. |
+| `Planes::copy_to_buffer(encoder, buffer, offset)` | It records the copies of every plane into a read-back buffer. |
+| `FrameLayout` | It gives each plane's size, its offset and row pitch in a read-back buffer (`buffer_size`), and the size of a packed frame (`frame_bytes`). `unpack` copies a mapped buffer into a packed frame. |
+| `cpu::convert(rgba, src_width, src_height, conversion, width, height)` | It converts an RGBA8 picture on the CPU and returns one packed frame. |
 
 ### Sampling
 
@@ -42,7 +43,7 @@ shader rounds each value half to even. P010 does not need wgpu's 16-bit norm fea
   largest 2D texture (`Error::TooLarge`). A layout whose byte sizes do not fit in `u32` rows, `u64`
   offsets or a `usize` frame is `Error::Overflow`.
 - `Converter::planes` refuses a read-back layout larger than the device's largest buffer
-  (`Error::BufferLimit`), and `cpu::convert` refuses an output side over `cpu::MAX_SIDE` (16384).
+  (`Error::BufferLimit`), and `cpu::convert` refuses an output side over `cpu::MAX_SIDE` (16,384).
 - The source view must be a 2D view of a filterable float format, such as `Rgba8Unorm`,
   `Bgra8Unorm` or `Rgba16Float`.
 - `copy_to_buffer` needs an offset that is a multiple of `wgpu::COPY_BYTES_PER_ROW_ALIGNMENT`
@@ -66,4 +67,4 @@ the CPU reference at 1080p.
 
 ## License
 
-Licensed under either of MIT or Apache-2.0, at your option.
+The crate is licensed under MIT OR Apache-2.0, at your option.

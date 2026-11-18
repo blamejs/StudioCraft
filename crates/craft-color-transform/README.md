@@ -1,9 +1,9 @@
 # craft-color-transform
 
-Color transforms for the Craft apps: RGB spaces and chromatic adaptation, white balance by
-temperature and tint, OkLab and OkLCh, monotone tone curves and 1D lookup tables, and perceptual
-quantizer (PQ) tone mapping. The crate depends on `craft-color` and `serde` only, contains no
-`unsafe` code, and builds for `wasm32-unknown-unknown`.
+craft-color-transform provides color transforms for the Craft apps: RGB spaces and chromatic
+adaptation, white balance by temperature and tint, OkLab and OkLCh, monotone tone curves and 1D
+lookup tables, and perceptual quantizer (PQ) tone mapping. The crate depends on `craft-color` and
+`serde` only, contains no `unsafe` code, and builds for `wasm32-unknown-unknown`.
 
 ## Contents
 
@@ -11,17 +11,17 @@ The crate builds on [`craft-color`](https://github.com/storytold/craft-libs/tree
 which holds the frame color tags, the Y'CbCr matrices and the sRGB, PQ and HLG transfer functions.
 The per-pixel functions take `f32` and do not allocate.
 
-| Item | What it does |
+| Item | Description |
 | --- | --- |
-| `Mat3`, `Xy`, `RgbSpace` | 3×3 matrices, CIE 1931 chromaticities, and RGB spaces from primaries and a white point. `RgbSpace::to_xyz` is the normalized primary matrix. `RgbSpace::from(craft_color::Primaries)` gives the space of a frame tag. |
-| `bradford`, `bradford_xyz` | The Bradford chromatic adaptation matrix between two whites. `RgbSpace::to_space` converts between spaces with it. |
-| `cct::temp_tint_to_xy`, `cct::xy_to_temp_tint` | A white at a correlated color temperature and tint, and back. Tint is Duv × 3000 along the locus normal in CIE 1960 (u, v); positive is towards green. |
-| `cct::wb_matrix`, `cct::white_balance` | The RGB matrix that makes a scene lit by one white look lit by another. |
-| `oklab` | OkLab from linear sRGB with the published matrices, from XYZ, and for any `RgbSpace` (`OkLab::for_space`), and OkLCh. |
-| `curve::MonotoneCurve` | A tone curve through points that does not overshoot between them. It saves as its list of points. `knots` gives each point with its tangent for evaluation in a shader. |
-| `curve::Lut1` | A 1D lookup table over 0..1 with linear interpolation. |
-| `tonemap::Eetf` | The reference EETF from a mastering display to a target display, with the black lift, on PQ values or nits. When the target peak is below a third of the source range in PQ, where the Annex's knee would be negative, the knee is 0 and the spline starts with a slope of 3 × maxLum. This rule is the crate's own. |
-| `tonemap::ToneMap` | The EETF applied to linear RGB by max(R, G, B) as a ratio, with 1.0 at the 203-nit reference white. |
+| `Mat3`, `Xy`, `RgbSpace` | These types hold 3×3 matrices, CIE 1931 chromaticities, and RGB spaces from primaries and a white point. `RgbSpace::to_xyz` is the normalized primary matrix. `RgbSpace::from(craft_color::Primaries)` gives the space of a frame tag. |
+| `bradford`, `bradford_xyz` | These return the Bradford chromatic adaptation matrix between two whites. `RgbSpace::to_space` converts between spaces with it. |
+| `cct::temp_tint_to_xy`, `cct::xy_to_temp_tint` | These convert a correlated color temperature and tint to a white point, and a white point back to temperature and tint. Tint is Duv × 3000 along the locus normal in CIE 1960 (u, v); positive values move toward green. |
+| `cct::wb_matrix`, `cct::white_balance` | These return the RGB matrix that makes a scene lit by one white look lit by another. |
+| `oklab` | The module converts to OkLab from linear sRGB with the published matrices, from XYZ, and from any `RgbSpace` (`OkLab::for_space`), and it converts to OkLCh. |
+| `curve::MonotoneCurve` | This is a tone curve through points that does not overshoot between them. It saves as its list of points. `knots` gives each point with its tangent for evaluation in a shader. |
+| `curve::Lut1` | This is a 1D lookup table over 0..1 with linear interpolation. |
+| `tonemap::Eetf` | This is the reference electrical-electrical transfer function (EETF) from a mastering display to a target display, with the black lift, on PQ values or nits. When the target peak is below a third of the source range in PQ, where the Annex's knee would be negative, the knee is 0 and the spline starts with a slope of 3 × maxLum. This rule is the crate's own. |
+| `tonemap::ToneMap` | This applies the EETF to linear RGB by max(R, G, B) as a ratio, with 1.0 at the 203-nit reference white. |
 
 `craft-cms` has its own 3×3 matrix and Bradford helpers (`craft_cms::math`) for ICC work in the
 D50 connection space. `Mat3` converts to and from their row-major `[[f64; 3]; 3]` with `From`.
@@ -31,14 +31,14 @@ D50 connection space. `Mat3` converts to and from their row-major `[[f64; 3]; 3]
 - `Xy::to_xyz` rejects a chromaticity with `y` at or below 0, or with a coordinate that is not
   finite. `bradford` then returns the identity, and so does `RgbSpace::to_xyz` for such a white or
   for collinear primaries.
-- Temperatures are clamped to 1000 K to 100 000 K, and NaN reads as 6500 K. A tint that is not
+- Temperatures are clamped to 1000 K to 100,000 K, and NaN reads as 6500 K. A tint that is not
   finite reads as 0.
 - `MonotoneCurve` keeps at most 1024 points and drops points with a coordinate that is not finite
-  or is beyond ±1e6. A saved curve is read back through the same constructor, so a file cannot give
-  it mismatched arrays.
-- `Lut1::from_fn` and `MonotoneCurve::to_lut` build at most 65 536 entries.
-- Luminances are clamped to 0..10 000 nits. A target peak that is NaN or not above 0 gives an EETF
-  and a `ToneMap` that pass values through.
+  or is beyond ±1e6. Reading a saved curve runs the same constructor and its checks. The saved form
+  is one list of points, so a file cannot give the curve mismatched arrays.
+- `Lut1::from_fn` and `MonotoneCurve::to_lut` build at most 65,536 entries.
+- Luminances are clamped to 0 to 10,000 nits. A target peak that is NaN or not above 0 gives an
+  EETF and a `ToneMap` that pass values through.
 
 ## Tests
 
@@ -64,4 +64,4 @@ BT.2408, and EETF values computed from the BT.2408 Annex 5 equations by a separa
 
 ## License
 
-Licensed under either of MIT or Apache-2.0, at your option.
+The crate is licensed under MIT OR Apache-2.0, at your option.

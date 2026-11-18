@@ -1,7 +1,7 @@
 # craft-audio-dsp
 
-Audio digital signal processing (DSP) for the Craft apps, written in Rust with no dependencies. The
-crate builds for `wasm32-unknown-unknown` and contains no `unsafe` code.
+craft-audio-dsp provides audio digital signal processing (DSP) for the Craft apps. It is written in
+Rust with no dependencies, builds for `wasm32-unknown-unknown` and contains no `unsafe` code.
 
 ## Contents
 
@@ -29,13 +29,7 @@ crate builds for `wasm32-unknown-unknown` and contains no `unsafe` code.
 - `biquad` and `design` provide biquad filters with their magnitude response, and IIR filter design
   from Butterworth, Bessel, Chebyshev and elliptic prototypes.
 
-### API stability
-
-The items the crate exports are its API. Removing or changing one is a breaking change and bumps
-the major version (the minor version while it is below 1.0). Effect ids and parameter ids are part
-of the API.
-
-## Use
+## Usage
 
 Audio is planar `f32`: one slice per channel, all the same length. Compressor, gate and
 limiter-type effects report their gain reduction in dB as a non-negative number through
@@ -60,6 +54,13 @@ Other parameters, such as a compressor's threshold, ratio, knee and times or a l
 and release, take effect from the next sample. With the parameters held still, the output does not
 depend on the block size.
 
+## API stability
+
+The items the crate exports are its API. Removing or changing one is a breaking change and bumps
+the major version (the minor version while it is below 1.0). Effect ids and parameter ids are part
+of the API. Hosts save these ids in their files, and a renamed id no longer matches the files that
+use it.
+
 ## Limits and failures
 
 - `AudioEffect::process`, `process_keyed`, `set_param` and `reset` do not allocate. Every buffer is
@@ -67,7 +68,7 @@ depend on the block size.
 - The convolution reverb is the one effect whose `process` call can take much longer than a block.
   After a change to its impulse, room size or damping, the next call rebuilds the impulse's
   partitions in buffers sized when the effect was created.
-- Non-finite input samples do not leave an effect's state at NaN.
+- An effect whose input holds non-finite samples does not keep NaN in its state.
 - Constructors clamp the sample rate to `MIN_SAMPLE_RATE ..= MAX_SAMPLE_RATE` (1 kHz to 1.536 MHz)
   and use 48 kHz for a non-finite rate. They clamp the channel count to `1 ..= MAX_CHANNELS` (64).
 
@@ -78,7 +79,7 @@ depend on the block size.
 
 ## License
 
-Licensed under either of MIT or Apache-2.0, at your option.
+The crate is licensed under MIT OR Apache-2.0, at your option.
 
 The crate combines two crates from the ArtCraft apps, with changes:
 

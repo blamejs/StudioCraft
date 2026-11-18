@@ -1,11 +1,26 @@
 # craft-tsmux
 
-An MPEG-2 transport stream writer (ITU-T H.222.0 | ISO/IEC 13818-1) for the Craft apps. It writes
-one program to any `std::io::Write` as frames arrive, so the same code writes `.ts` files, HTTP
-Live Streaming (HLS) segments and Secure Reliable Transport (SRT) payloads. It has no dependencies
-beyond `std`, contains no `unsafe` code, and builds for `wasm32-unknown-unknown`.
+craft-tsmux is an MPEG-2 transport stream writer (ITU-T H.222.0 | ISO/IEC 13818-1) for the Craft
+apps. It writes one program to any `std::io::Write` as frames arrive, and the same code writes
+`.ts` files, HTTP Live Streaming (HLS) segments and Secure Reliable Transport (SRT) payloads. It
+has no dependencies beyond `std`, contains no `unsafe` code, and builds for
+`wasm32-unknown-unknown`.
 
-## Contents
+## Usage
+
+```rust
+use craft_tsmux::{Codec, Config, Frame, Muxer, Stream};
+
+let streams = [Stream::new(0x100, Codec::H264), Stream::new(0x101, Codec::AacAdts)];
+let mut ts = Muxer::new(Vec::new(), Config::default(), &streams)?;
+let idr = [0, 0, 0, 1, 0x65, 0x88, 0x84];
+ts.write_frame(0, &Frame { data: &idr, pts: 90_000, dts: None, key: true })?;
+let bytes = ts.finish()?;
+assert_eq!(bytes.len() % 188, 0);
+# Ok::<(), craft_tsmux::Error>(())
+```
+
+## Output format
 
 ### Tables
 
@@ -16,8 +31,8 @@ keyframe when `Config::psi_before_keyframes` is set, and before the first frame 
 
 ### Streams
 
-The writer writes one packetized elementary stream (PES) packet per frame, with PTS and, when it
-differs from the PTS, DTS.
+The writer writes one packetized elementary stream (PES) packet per frame, with the presentation
+timestamp (PTS) and, when it differs from the PTS, the decoding timestamp (DTS).
 
 | `Codec` | stream_type | stream_id | Frames passed in |
 | --- | --- | --- | --- |
@@ -26,8 +41,8 @@ differs from the PTS, DTS.
 | `Mpeg2Video` | 0x02 | 0xE0 | MPEG-2 pictures from their first start code |
 | `Mpeg1Video` | 0x01 | 0xE0 | MPEG-1 pictures from their first start code |
 | `Mpeg4Part2` | 0x10 | 0xE0 | MPEG-4 Part 2 visual frames from their first start code |
-| `Av1(Av1Config)` | 0x06 | 0xBD | Temporal units in the low overhead format (every OBU has `obu_size`) |
-| `AacAdts` | 0x0F | 0xC0 | ADTS frames. Their `frame_length` fields must tile the frame. |
+| `Av1(Av1Config)` | 0x06 | 0xBD | Temporal units in the low overhead format (every open bitstream unit (OBU) has `obu_size`) |
+| `AacAdts` | 0x0F | 0xC0 | Audio Data Transport Stream (ADTS) frames. Their `frame_length` fields must tile the frame. |
 | `Aac { .. }` | 0x0F | 0xC0 | Raw AAC frames. The writer adds the ADTS header. |
 | `Opus { channels }` | 0x06 | 0xBD | Opus packets, 1 to 8 channels. The writer adds the Opus control header. |
 | `OpusMapped(OpusMapping)` | 0x06 | 0xBD | Opus multistream access units with an explicit channel mapping |
@@ -60,9 +75,9 @@ The program map section carries these descriptors:
   refused.
 - For Opus, `Muxer::write_frame_with_trim` writes the control header's start and end trims. A
   start trim is allowed on the stream's first frame, and on a later frame only while every earlier
-  frame was trimmed whole. The start trims add up to at most 65 535 samples. After
+  frame was trimmed whole. The start trims add up to at most 65,535 samples. After
   `Muxer::discontinuity` the stream starts again and may carry a new start trim. Each trim is at
-  most 8 191 samples (`MAX_OPUS_TRIM`), and a frame's two trims together are no longer than the
+  most 8191 samples (`MAX_OPUS_TRIM`), and a frame's two trims together are no longer than the
   frame.
 
 ### Timing
@@ -72,7 +87,7 @@ The program map section carries these descriptors:
   adaptation field of each of its frames, and in packets with only an adaptation field when its
   frames are further apart than `Config::pcr_interval`. PCRs are never more than `pcr_interval`
   apart, and the interval is at most 100 ms (§2.7.2).
-- The PCR is the largest DTS so far minus `Config::pcr_delay`, which is 1 to 90 000 ticks
+- The PCR is the largest DTS so far minus `Config::pcr_delay`, which is 1 to 90,000 ticks
   (`MAX_PCR_DELAY`, one second, the T-STD limit of §2.4.2.6). A live output calls `Muxer::advance`
   while no frames arrive. Its time is on the DTS scale, so the PCR it writes is that time minus
   `pcr_delay`.
@@ -84,34 +99,22 @@ The program map section carries these descriptors:
 
 Timestamps are 90 kHz ticks and are written modulo 2^33.
 
-## Use
-
-```rust
-use craft_tsmux::{Codec, Config, Frame, Muxer, Stream};
-
-let streams = [Stream::new(0x100, Codec::H264), Stream::new(0x101, Codec::AacAdts)];
-let mut ts = Muxer::new(Vec::new(), Config::default(), &streams)?;
-let idr = [0, 0, 0, 1, 0x65, 0x88, 0x84];
-ts.write_frame(0, &Frame { data: &idr, pts: 90_000, dts: None, key: true })?;
-let bytes = ts.finish()?;
-assert_eq!(bytes.len() % 188, 0);
-# Ok::<(), craft_tsmux::Error>(())
-```
-
-### Defaults
+## Defaults
 
 | Setting | Value | Source |
 | --- | --- | --- |
-| Program number, PMT PID | 1, 0x1000 | estimated |
-| PCR PID | the first video stream, or the first stream | estimated |
-| PCR interval | 40 ms (largest 100 ms) | estimated (the limit: H.222.0 §2.7.2) |
-| PCR delay | 700 ms (largest 1 s) | estimated (the limit: H.222.0 §2.4.2.6) |
-| PAT and PMT interval | 100 ms, and before keyframes | estimated |
-| Packets per write | 7 (largest 1 024) | estimated |
+| Program number, PMT PID | 1, 0x1000 | the crate's own value |
+| PCR PID | the first video stream, or the first stream | the crate's own value |
+| PCR interval | 40 ms (largest 100 ms) | the crate's own value (the limit: H.222.0 §2.7.2) |
+| PCR delay | 700 ms (largest 1 s) | the crate's own value (the limit: H.222.0 §2.4.2.6) |
+| PAT and PMT interval | 100 ms, and before keyframes | the crate's own value |
+| Packets per write | 7 (largest 1024) | the crate's own value |
+
+## Output handling
 
 ### Output buffering
 
-The writer builds packets in a buffer of `Config::batch_packets` packets (7 by default, 1 316
+The writer builds packets in a buffer of `Config::batch_packets` packets (7 by default, 1316
 bytes, one UDP datagram for SRT). It hands each full buffer to the output in one `write` call, and
 repeats the call only when the output takes part of it. Each `write_frame`, `advance` and `finish`
 call also passes on what is left. The output then holds every packet of a frame when the call
@@ -125,9 +128,9 @@ allocated once, in `Muxer::new`.
 
 `Muxer::replace_writer` hands back the old output in a `Segment`: its packet and frame counts, its
 first and last PTS, whether it starts with a keyframe, and any error from passing on its last
-packets. The new output starts with the PAT, the PMT and a PCR, and a reader can read it without
-the old one. `Muxer::replace_writer_continuing` swaps the output without adding tables or a PCR,
-for an output that continues the same stream.
+packets. The new output starts with the PAT, the PMT and a PCR, and a reader can read it on its
+own. `Muxer::replace_writer_continuing` swaps the output without adding tables or a PCR, for an
+output that continues the same stream.
 
 ### Arrival order
 
@@ -140,7 +143,7 @@ so far. A frame further behind, or behind a time given to `advance`, is refused 
 
 - A muxer takes 1 to 32 streams. PIDs are 0x0010 to 0x1FFE and must differ (`Error::BadPid`,
   `Error::DuplicatePid`).
-- Audio frames must fit in one PES packet (65 535 bytes including the PES header). An Opus frame's
+- Audio frames must fit in one PES packet (65,535 bytes including the PES header). An Opus frame's
   limit leaves room for the control header and its trims.
 - Video frames may be up to `MAX_VIDEO_FRAME` (128 MiB), counting the start codes, emulation
   prevention bytes and access unit delimiter the writer adds. A larger frame is refused with
@@ -156,12 +159,10 @@ so far. A frame further behind, or behind a time given to `advance`, is refused 
 
 ### Not supported
 
-- The writer writes one program per stream and has no multi-program output.
+- Each transport stream carries one program. The writer has no multi-program output.
 - It has no constant bit rate output and adds no null packets.
 - It does not write LPCM (H.222.0 defines no LPCM stream type for transport streams), AAC in LATM,
-  DTS, subtitles or teletext.
-- craft-media's demuxer at `7780b4f5` reads Opus and AV1 streams as `Unknown(6)` and MPEG-4 Part 2
-  as `Unknown(0x10)`, one unit per PES packet. The tests read those units back byte for byte.
+  DTS audio, subtitles or teletext.
 
 ## Tests
 
@@ -172,6 +173,9 @@ codes and emulation prevention bytes removed, Opus with an explicit mapping and 
 sides of a discontinuity, and the output that follows an I/O error. `tests/fuzz.rs` muxes random
 programs and timelines with idle gaps and output swaps and reads them back, and feeds random bytes
 to every codec.
+
+craft-media's demuxer at `7780b4f5` reads Opus and AV1 streams as `Unknown(6)` and MPEG-4 Part 2
+as `Unknown(0x10)`, one unit per PES packet. The tests read those units back byte for byte.
 
 ## Sources
 
@@ -190,4 +194,4 @@ to every codec.
 
 ## License
 
-Licensed under either of MIT or Apache-2.0, at your option.
+The crate is licensed under MIT OR Apache-2.0, at your option.

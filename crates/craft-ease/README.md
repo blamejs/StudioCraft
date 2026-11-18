@@ -1,8 +1,8 @@
 # craft-ease
 
-Easing curves, keyed tracks, constant-speed motion paths and damped springs for animation in the
-Craft apps. The crate depends only on the standard library, with `serde` as an optional feature (on
-by default), and builds for `wasm32-unknown-unknown`.
+craft-ease provides easing curves, keyed tracks, constant-speed motion paths and damped springs for
+animation in the Craft apps. The crate depends only on the standard library, with `serde` as an
+optional feature (on by default), and builds for `wasm32-unknown-unknown`.
 
 ## Contents
 
@@ -20,8 +20,8 @@ Values are `f64` throughout.
   may be from 0.001 to 1, and the two may add up to more than 1. `Easing::temporal` reads them
   back.
 - `Track<T>` holds keys of any `Animatable` value (`f32`, `f64`, `Vec2`, `[f32; N]`, `[f64; N]`),
-  each with the ease to the next key. A held key uses `Easing::Hold`, and −0 and +0 are one time.
-  `Track::sample` is a binary search and does not allocate.
+  each with the ease to the next key. A held key uses `Easing::Hold`, and a track treats −0 and +0
+  as the same time. `Track::sample` is a binary search and does not allocate.
 - `MotionPath` is a chain of cubic Bezier segments with an arc-length table per segment, built
   once. Each table cell is measured by Gauss-Legendre quadrature with Newton refinement, and a
   segment whose handles lie on its chord is treated as a straight line. `point_at` and
@@ -29,14 +29,12 @@ Values are `f64` throughout.
   either end. `MotionPath::through` sets the handles of a smooth path through a list of anchors,
   each handle a sixth of the line between the anchor's neighbors.
 - `Spring` and `SpringState` move a value toward a target. `SpringState::step` applies the exact
-  solution of the damped spring equation over the step, so a step costs O(1), any step length is
-  stable, and many short steps give the same value as one long one.
+  solution of the damped spring equation over the step. A step costs O(1) and is stable at any
+  length, and many short steps give the same value as one long step.
   `Spring::from_physical(mass, stiffness, damping)` takes a mass, a stiffness and a damping
   coefficient.
 
-## Use
-
-### Checked and lenient constructors
+## Constructors
 
 Every type has a checked constructor that returns `EaseError` for a value that is not finite or is
 out of range: `Easing::cubic_bezier`, `Easing::from_temporal`, `Easing::spring`,
@@ -44,7 +42,7 @@ out of range: `Easing::cubic_bezier`, `Easing::from_temporal`, `Easing::spring`,
 `Spring::new` and `Spring::from_physical`. `CustomEase::new` and `SampledEase::new` repair what
 they are given instead, and files are read through the same repairs.
 
-### Saved form
+## Saved form
 
 The `serde` feature reads and writes `Easing` (spring eases included) and `Track`. `MotionPath`,
 `Spring` and `SpringState` are not serialized.
@@ -59,7 +57,7 @@ variants. A track is read from its fields by name or in order.
 | --- | --- |
 | `MAX_EASE_Y` | 10 (eased values stay within ±10) |
 | `MAX_EASE_POINTS` | 64 points in a custom ease |
-| `MAX_EASE_SAMPLES` | 1,025 samples in a sampled ease |
+| `MAX_EASE_SAMPLES` | 1025 samples in a sampled ease |
 | `MAX_TRACK_KEYS` | 100,000 keys in a track |
 | `MAX_PATH_SEGMENTS` | 10,000 segments in a motion path |
 | `MAX_SPRING_HZ` | 10,000 swings a second |
@@ -76,9 +74,9 @@ variants. A track is read from its fields by name or in order.
   most 64 steps.
 - `Track` samples keys at opposite ends of the `f64` range without overflow. It returns
   `EaseError::Overflow` when an overshooting ease carries a value past what its type holds.
-- A spring ease that is still moving after 10 seconds has the distance it is still off taken out
-  evenly over the ease, so it reaches 1 without a jump. Any other spring ease is within about
-  0.1 % of 1 just before it reaches 1.
+- When a spring ease is still moving after 10 seconds, the ease spreads its remaining distance
+  evenly over its whole length and reaches 1 without a jump. Any other spring ease is within about
+  0.1% of 1 just before it reaches 1.
 
 ## Sources
 
@@ -89,4 +87,4 @@ variants. A track is read from its fields by name or in order.
 
 ## License
 
-Licensed under either of MIT or Apache-2.0, at your option.
+The crate is licensed under MIT OR Apache-2.0, at your option.
