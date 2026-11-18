@@ -74,6 +74,21 @@ Balanced. More than 14 threads gives little: the encoder splits a picture into a
 per four rows of macroblocks (17 slices at 1080p, 12 at 720p). Speed is the encoder's default
 preset.
 
+### FLV tags
+
+Measured on 2026-11-18 on Linux (AMD EPYC 9R14), release build. `cargo bench -p craft-flv` writes
+and reads one second of a 6000 kb/s, 60 fps H.264 stream with 160 kb/s AAC: 60 video tags of about
+12 500 bytes and 47 audio tags of 426 bytes, 770 KB in all, into a buffer that keeps its capacity.
+
+| Bench | Median | Range (95%) |
+| --- | --- | --- |
+| `flv/write 1 s, Annex B input` | 159.3 µs | 158.3 to 160.5 µs |
+| `flv/write 1 s, length-prefixed input` | 11.19 µs | 11.18 to 11.20 µs |
+| `flv/read and parse 1 s` | 20.23 µs | 19.97 to 20.49 µs |
+
+One second of the stream costs at most 0.02% of one core to write. Annex B input costs more because
+each access unit is scanned for start codes twice, once to measure the tag and once to write it.
+
 ## Measuring
 
 - Run the criterion benches with `cargo bench -p <crate>`.
