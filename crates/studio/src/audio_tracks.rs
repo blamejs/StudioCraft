@@ -100,7 +100,9 @@ impl Studio {
             if let Some(last) = self.audio_tracks.finishing.last_mut() {
                 last.1 = true;
             }
-            return;
+            if anchor.is_some() {
+                return;
+            }
         }
         let running = self.audio_tracks.take.is_some();
         match anchor {

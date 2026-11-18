@@ -918,6 +918,31 @@ mod audio_tracks {
     }
 
     #[test]
+    fn an_output_that_stops_in_the_tick_that_sees_an_early_stop_lets_the_next_one_record() {
+        let (mut s, dir) = studio("full-then-stop", true);
+        s.test_faults.full_after_bytes = Some(0);
+        s.test_streaming = true;
+        s.tick();
+        armed(&mut s);
+        let status = Arc::clone(s.audio_tracks_status().unwrap());
+        let mut spins = 0u64;
+        while status.state() != Some(AudioTracksState::Stopped) {
+            spins += 1;
+            assert!(spins < 200_000_000, "the take never stopped: {:?}", status.state());
+            std::thread::yield_now();
+        }
+        // The stream stops before the studio sees the early stop; both are seen in one tick.
+        s.test_streaming = false;
+        s.tick();
+        s.test_faults.full_after_bytes = None;
+        s.test_streaming = true;
+        s.tick();
+        assert!(s.audio_tracks_take().is_some(), "the next stream starts a take");
+        drop(s);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn settings_out_of_range_are_refused_and_change_nothing() {
         let (mut s, dir) = studio("range", false);
         let mut p = s.profile().clone();

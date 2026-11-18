@@ -187,7 +187,9 @@ setting was turned on during a recording.
 A file that reaches the file size limit (1 GiB by default, 1 to 3 GiB) continues in
 `<name> part N.wav`, whose time reference is where that part starts. An editor that limits the
 length of an imported file may need the 1 GiB setting for long takes. A full or failing disk stops
-only the audio tracks, and the status bar gives the reason. A take cut short by a crash is repaired
+only the audio tracks, and the status bar gives the reason. The take's files keep every whole frame
+that reached the disk and are finished at once; a failure while the take was finishing its files
+leaves it for repair. A take cut short by a crash is repaired
 at the next start, or with `studiocraft-cli audio-tracks repair <folder>`. Each repaired file keeps
 the audio that reached the disk, so the files of a repaired take can end at different points.
 

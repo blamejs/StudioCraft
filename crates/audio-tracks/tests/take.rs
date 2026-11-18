@@ -259,6 +259,9 @@ fn a_full_disk_stops_the_take_with_its_reason_and_leaves_readable_files() {
     let lines = journal::read(&dir).unwrap();
     assert!(lines.contains(&Line::Stop { reason: "the disk is full".into() }));
     assert_eq!(read(&dir.join("Mic.wav")).len(), 3 * BLOCK_SAMPLES, "the header matches what was written");
+    // The files were finished after the failure, so the take is not left for repair.
+    assert!(matches!(lines.last(), Some(Line::End { .. })), "{lines:?}");
+    assert!(recover::unfinished(dir.parent().unwrap().parent().unwrap()).is_empty());
 }
 
 #[test]
@@ -868,6 +871,73 @@ fn repair_finishes_a_cut_the_take_stopped_during() {
     let mut joined = read(&dir.join("Mic.wav"));
     joined.extend(read(&dir.join("Mic part 2.wav")));
     assert_eq!(joined, (0..blocks).flat_map(|n| samples(1, n)).take(frames * 2).collect::<Vec<f32>>());
+}
+
+/// A write that fails after the cuts are journaled and before every file is cut leaves the take
+/// for repair, which makes the cuts.
+#[test]
+fn a_take_that_fails_before_its_cuts_are_made_is_left_for_repair() {
+    // Mic gets no audio, so finishing pads its file from 0; Game has audio past the end.
+    let run = |dir: &Path, faults: Faults| {
+        let mut rig = Rig::new(DiskConfig { faults, ..config(dir) }, 4);
+        let (mic, game) = (spec(1, "Mic"), spec(2, "Game"));
+        rig.c.set_start(Tick(500));
+        rig.c.set_tracks(vec![mic.clone(), game.clone()]);
+        for n in 0..CHUNK_BLOCKS as i64 {
+            feed(&game.slot, 1, n);
+            if n % 16 == 15 {
+                rig.pump().unwrap();
+            }
+        }
+        rig.pump().unwrap();
+        rig.c.set_end(Tick(500 + 5 * BLOCK_TICKS));
+        let written = rig.w.progress().bytes;
+        let ended = rig.end();
+        (rig, written, ended)
+    };
+    let (_, written, ended) = run(&scratch("cut-fails-measure"), Faults::default());
+    ended.unwrap();
+    let dir = scratch("cut-fails");
+    let (mut rig, _, ended) = run(&dir, Faults { full_after_bytes: Some(written), ..Faults::default() });
+    assert!(ended.is_err(), "padding Mic fills the disk");
+    rig.w.abandon(StopReason::DiskFull);
+    drop(rig);
+    let lines = journal::read(&dir).unwrap();
+    assert!(lines.contains(&Line::Cut { track: 1, frames: 5 * BLOCK_FRAMES as u64 }), "{lines:?}");
+    assert!(!lines.iter().any(|l| matches!(l, Line::End { .. })), "{lines:?}");
+    let recording = dir.parent().and_then(Path::parent).unwrap();
+    assert_eq!(recover::unfinished(recording), vec![dir.clone()]);
+    recover::repair(&dir).unwrap().unwrap();
+    assert_eq!(read(&dir.join("Game.wav")), (0..5).flat_map(|n| samples(1, n)).collect::<Vec<f32>>());
+}
+
+/// A take stopped by a failed write keeps every whole frame on the disk, including frames a
+/// failed write got out, and its journal ends.
+#[test]
+fn a_failed_write_keeps_the_whole_frames_it_got_out() {
+    let dir = scratch("partial-write");
+    let mut rig = Rig::new(DiskConfig { faults: Faults { full_after_bytes: Some(3 * 8192), ..Faults::default() }, ..config(&dir) }, 4);
+    let a = spec(1, "Mic");
+    rig.c.set_start(Tick(500));
+    rig.c.set_tracks(vec![a.clone()]);
+    let mut failed = false;
+    for n in 0..CHUNK_BLOCKS as i64 {
+        feed(&a.slot, 1, n);
+        if n % 16 == 15 {
+            failed |= rig.pump().is_err();
+        }
+    }
+    assert!(failed || rig.pump().is_err() || rig.end().is_err(), "the disk fills");
+    // The failed write got two more frames and part of a third out.
+    let mut f = std::fs::OpenOptions::new().append(true).open(dir.join("Mic.wav")).unwrap();
+    std::io::Write::write_all(&mut f, &[0u8; 2 * 8 + 3]).unwrap();
+    drop(f);
+    rig.w.abandon(StopReason::DiskFull);
+    drop(rig);
+    let lines = journal::read(&dir).unwrap();
+    assert!(matches!(lines.last(), Some(Line::End { .. })), "{lines:?}");
+    let want = [(0..3).flat_map(|n| samples(1, n)).collect::<Vec<f32>>(), vec![0.0; 4]].concat();
+    assert_eq!(read(&dir.join("Mic.wav")), want);
 }
 
 #[test]

@@ -241,6 +241,9 @@ pub struct Writer {
     made: Vec<String>,
     /// Each track's parts closed at the size limit, oldest first, for a cut to an earlier part.
     closed: Vec<Vec<Closed>>,
+    /// Finishing started: its cuts may be in the journal and not made on every file, and a track
+    /// may have no file yet, so a take that fails from here is left for repair.
+    finishing: bool,
     /// The take ended and is to be thrown away.
     discard: bool,
 }
@@ -304,6 +307,7 @@ impl Writer {
             dir,
             made: Vec::new(),
             closed: Vec::new(),
+            finishing: false,
             discard: false,
         };
         w.check_space()?;
@@ -423,11 +427,30 @@ impl Writer {
 
     /// Note the reason in the journal and close the files with their headers, after a failure.
     pub fn abandon(&mut self, reason: StopReason) {
-        let _ = self.journal_dropouts();
-        let _ = self.journal.write(&Line::Stop { reason: reason.text().into() });
-        let _ = self.refresh_headers();
+        let mut ok = self.journal_dropouts().is_ok() && !self.finishing;
+        ok &= self.journal.write(&Line::Stop { reason: reason.text().into() }).is_ok();
+        // A write that failed part way can leave whole frames and part of one; each file keeps the
+        // whole frames on the disk, as repair would.
+        let head = self.head;
         for f in self.files.iter_mut().flatten() {
-            let _ = f.file.sync_data();
+            let kept = f.file.metadata().map(|m| m.len().saturating_sub(head) / FRAME_BYTES);
+            ok &= match kept {
+                Ok(frames) => {
+                    f.frames = frames;
+                    f.file.set_len(head + frames * FRAME_BYTES).is_ok() && f.file.seek(SeekFrom::End(0)).is_ok()
+                }
+                Err(_) => false,
+            };
+        }
+        ok &= self.refresh_headers().is_ok();
+        for f in self.files.iter_mut().flatten() {
+            ok &= f.file.sync_data().is_ok();
+        }
+        // With every file complete the take has ended, and repair leaves it alone. Otherwise the
+        // journal stays open, for repair to finish.
+        if ok {
+            self.end = self.files.iter().flatten().map(|f| f.base + f.frames).max().unwrap_or(0).max(self.end);
+            let _ = self.journal.write(&Line::End { frames: self.end });
         }
         let _ = self.journal.sync();
     }
@@ -459,6 +482,7 @@ impl Writer {
             .filter(|&(track, &end)| self.files.get(track).and_then(Option::as_ref).is_some_and(|f| f.base + f.frames > end))
             .map(|(track, &end)| (track, end))
             .collect();
+        self.finishing = true;
         if !cuts.is_empty() {
             for &(track, frames) in &cuts {
                 self.journal.write(&Line::Cut { track, frames }).map_err(Failure::io)?;
