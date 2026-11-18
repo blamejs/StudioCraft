@@ -7,8 +7,8 @@ bold label is the symptom or the message the app shows.
 
 **"ffmpeg (set its location in Settings › Output) was not found" or "ffmpeg at {path} was not
 found".** Streams, MP4 and MOV recordings, recordings at the Lossless quality level, and
-recordings with x264 or an `ffmpeg` hardware encoder run in a separately installed `ffmpeg`, and
-StudioCraft could not find it. Install `ffmpeg` so that it is on the `PATH`, or set its location
+recordings with x264 or an `ffmpeg` hardware encoder run in a separately installed `ffmpeg`, Media
+file sources play through it, and StudioCraft could not find it. Install `ffmpeg` so that it is on the `PATH`, or set its location
 in Settings › Output › ffmpeg program. Tools › Available Encoders lists the encoders the installed
 `ffmpeg` offers, and says when `ffmpeg` was not found. To record without `ffmpeg`, set the Video
 encoder in Settings › Output to H.264 (built in) and record MKV files.

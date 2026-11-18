@@ -143,7 +143,7 @@ describes how it picks one.
 
 MP4 and MOV recordings, recordings at the Lossless quality level, streams, and recordings with
 x264 or a hardware encoder outside the built-in ones run in a separately installed `ffmpeg`.
-StudioCraft looks for `ffmpeg` on the `PATH`, or at the location set in Settings › Output.
+A Media file source also plays its file through `ffmpeg`. StudioCraft looks for `ffmpeg` on the `PATH`, or at the location set in Settings › Output.
 Recording uses x264 until H.264 (built in) is chosen in Settings › Output. No release package
 includes `ffmpeg`. The `.deb` and `.rpm` packages list it as a recommended package. The Flatpak
 runtime has no `ffmpeg`, and the Flatpak sandbox cannot run an `ffmpeg` installed on the system.

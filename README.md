@@ -61,8 +61,8 @@ encoder other than H.264 (built in), need `ffmpeg`.
 
 ## Documentation
 
-The release packages include this README but not the `docs/` folder, so the links below go to the
-repository on GitHub.
+The Windows portable `.zip`, the macOS command-line `.zip` and the Linux packages include this
+README without the `docs/` folder, so the links below go to the repository on GitHub.
 [docs/README.md](https://github.com/blamejs/StudioCraft/blob/main/docs/README.md) lists every page
 by reader.
 
