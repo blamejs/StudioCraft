@@ -98,7 +98,8 @@ The notes have this shape (the template is `packaging/release-notes.md`):
 3. That streaming and encoders other than H.264 need a separately installed `ffmpeg`.
 4. The commands that verify the checksum files and their signatures.
 5. The number of pull requests merged since the previous alpha, the list of them, and the link to
-   the full list of changes.
+   the full list of changes. The command writes each title as a code span on one line, so GitHub
+   shows it as written, without formatting, links, HTML or mentions.
 
 The macOS and Windows jobs on the `release` branch stop unless their signing secrets are set in
 the repository's `release` environment:
