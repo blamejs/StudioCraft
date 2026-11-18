@@ -50,9 +50,9 @@ after any error, such as a `WouldBlock` or `TimedOut` partway through a tag, `ne
 `Error::Broken`. `parse_video`, `parse_audio` and `parse_script` read the bodies; `Nalus` splits a
 length-prefixed access unit, and `AnnexB` splits an Annex B one. `parse_video` reads AVC access
 units with FrameType 1 to 4 and 4-byte NAL unit lengths, and refuses one whose lengths are 0 or do
-not cover it exactly. Video of other codecs, video info frames, the reserved frame types 0, 6 and
-7, the extended video header (first byte 0x80 or above) and audio in other formats are returned as
-`Other` with their field values.
+not cover it exactly, and an end of sequence that carries data. Video of other codecs, video info
+frames, the reserved frame types 0, 6 and 7, the extended video header (first byte 0x80 or above)
+and audio in other formats are returned as `Other` with their field values.
 
 ## Checks and errors
 

@@ -383,6 +383,8 @@ fn parse_video_and_audio_cover_other_codecs() {
     assert_eq!(parse_video(&[0x22, 1, 2]).unwrap(), Video::Other { frame_type: 2, codec: 2 });
     assert_eq!(parse_video(&[0x57, 0]).unwrap(), Video::Other { frame_type: 5, codec: 7 });
     assert_eq!(parse_video(&[0x17, 2, 0, 0, 0]).unwrap(), Video::AvcEndOfSequence);
+    // The end of the sequence carries no data.
+    assert!(matches!(parse_video(&[0x17, 2, 0, 0, 0, 0x0B]), Err(Error::Invalid(_))));
     assert!(matches!(parse_video(&[0x17, 3, 0, 0, 0]), Err(Error::Invalid(_))));
     assert!(matches!(parse_video(&[0x17, 0, 0, 0, 0]), Err(Error::Truncated(_))));
     assert!(matches!(parse_video(&[0x17, 1, 0]), Err(Error::Truncated(_))));

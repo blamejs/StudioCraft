@@ -209,6 +209,7 @@ pub fn parse_video(data: &[u8]) -> Result<Video<'_>, Error> {
             Some(p) => Err(Error::Invalid(p)),
             None => Ok(Video::AvcNalus { key: frame_type == 1, composition_time: ct, data: rest }),
         },
+        2 if !rest.is_empty() => Err(Error::Invalid("an AVC end of sequence carries data")),
         2 => Ok(Video::AvcEndOfSequence),
         _ => Err(Error::Invalid("an AVCPacketType other than 0, 1 or 2")),
     }
