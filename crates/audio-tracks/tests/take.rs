@@ -115,6 +115,29 @@ fn every_track_holds_its_audio_at_its_place_in_the_take_with_silence_for_gaps() 
 }
 
 #[test]
+fn a_repaired_take_split_into_parts_ends_after_its_last_part() {
+    let dir = scratch("segments-crash");
+    let head = wav::header_len().unwrap();
+    let cfg = DiskConfig { segment_bytes: head + 3_000 * 8, ..config(&dir) };
+    let mut rig = Rig::new(cfg, 4);
+    let a = spec(1, "Mic");
+    rig.c.set_tracks(vec![a.clone()]);
+    for n in 0..10 {
+        feed(&a.slot, 1, n);
+        rig.pump().unwrap();
+    }
+    rig.c.flush();
+    rig.write().unwrap();
+    // The app stops here, without ending the take.
+    drop(rig);
+    let recording = dir.parent().and_then(Path::parent).unwrap();
+    let done = recover::repair_all(recording).unwrap();
+    assert_eq!(done.len(), 1);
+    let lines = journal::read(&dir).unwrap();
+    assert!(matches!(lines.last(), Some(Line::End { frames }) if *frames == 10 * BLOCK_FRAMES as u64), "{lines:?}");
+}
+
+#[test]
 fn a_take_split_into_parts_holds_the_same_audio_end_to_end() {
     let dir = scratch("segments");
     let head = wav::header_len().unwrap();

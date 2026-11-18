@@ -61,10 +61,15 @@ pub fn repair(dir: &Path) -> std::io::Result<Option<Repaired>> {
         return Ok(None);
     }
     let mut names: Vec<String> = Vec::new();
+    // The take frame each file starts at, by file name.
+    let mut starts: Vec<(String, u64)> = Vec::new();
     let mut synced: Vec<(String, u64)> = Vec::new();
     for l in &lines {
         match l {
-            Line::File { file, .. } if !names.contains(file) => names.push(file.clone()),
+            Line::File { file, first_frame, .. } if !names.contains(file) => {
+                names.push(file.clone());
+                starts.push((file.clone(), *first_frame));
+            }
             Line::Sync { files } => {
                 for (f, n) in files {
                     match synced.iter_mut().find(|(s, _)| s == f) {
@@ -110,7 +115,9 @@ pub fn repair(dir: &Path) -> std::io::Result<Option<Repaired>> {
         let frames = crate::wav::repair(&dir.join(&name))?;
         files.push((name, frames));
     }
-    let end = files.iter().map(|(_, n)| *n).max().unwrap_or(0);
+    // A part after the first starts later in the take, so the take ends after its last frame.
+    let start = |name: &str| starts.iter().find(|(f, _)| f == name).map_or(0, |(_, s)| *s);
+    let end = files.iter().map(|(f, n)| start(f).saturating_add(*n)).max().unwrap_or(0);
     j.write(&Line::Repaired { files: files.clone() })?;
     j.write(&Line::End { frames: end })?;
     j.sync()?;
