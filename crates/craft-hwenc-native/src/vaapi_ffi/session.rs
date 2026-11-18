@@ -11,10 +11,10 @@
 //!   with `vaPutImage`.
 //! - Reading a frame waits for the GPU with `vaSyncSurface2` for at most [`SYNC_TIMEOUT_NS`]. With
 //!   libva older than 2.9, or a driver without it, `vaSyncSurface` waits without a limit.
-//! - After a wait fails or times out, the session takes no more frames. Dropping a session waits
-//!   for the frames still in flight before it destroys their surfaces and coded buffers. After a
-//!   failed wait it destroys nothing and leaves its display and render node open, since the GPU
-//!   may still use them.
+//! - After a wait fails or times out, or a picture fails after `vaBeginPicture`, the session takes
+//!   no more frames. Dropping a session waits for the frames still in flight before it destroys
+//!   their surfaces and coded buffers. After such a failure it destroys nothing and leaves its
+//!   display and render node open, since the GPU may still use them.
 //! - Every unsafe block has a SAFETY comment; the one callback into Rust (libva's error messages)
 //!   catches panics.
 
@@ -376,15 +376,12 @@ pub(crate) struct Session {
     /// Macroblocks (H.264) or coding tree blocks (HEVC) in a picture.
     units: u32,
     upload: Upload,
-    /// The frames in flight.
+    /// The frames in flight. Once stalled ([`Slots::stall`]), no later read or drop waits either.
     slots: Slots,
     /// Pictures submitted so far.
     frames: u64,
     /// Whether waits go through `vaSyncSurface2`: until the driver says it does not have it.
     bounded: bool,
-    /// A wait failed or timed out, so the GPU may still use a surface: no frame goes in after it,
-    /// and no later read or drop waits.
-    stalled: bool,
 }
 
 // SAFETY: a VA display and its objects are not tied to the thread that made them (va.h,
@@ -448,7 +445,6 @@ impl Session {
             slots: Slots::new(),
             frames: 0,
             bounded: api.sync_surface2.is_some(),
-            stalled: false,
         };
         let mut surfaces = vec![abi::VA_INVALID_SURFACE; DEPTH + RECON];
         // SAFETY: `surfaces` has room for DEPTH + RECON ids; no attributes are passed (null, 0).
@@ -485,8 +481,8 @@ impl Session {
     /// Copy the NV12 `frame` into the next free slot's surface and submit it as `pic`, tagged
     /// `tag`. The GPU encodes it while the caller goes on; [`Session::collect`] reads it.
     pub(crate) fn submit(&mut self, frame: &[u8], pic: &Picture, tag: Tag) -> Result<(), String> {
-        if self.stalled {
-            return Err("an earlier wait for the GPU failed".into());
+        if self.slots.stalled() {
+            return Err("an earlier frame failed on the GPU".into());
         }
         let slot = self.slots.free().ok_or("every frame slot of the encoder is in use")?;
         let input = self.surfaces[slot];
@@ -496,7 +492,14 @@ impl Session {
         let (recon, reference) = (self.surfaces[DEPTH + write], self.surfaces[DEPTH + read]);
         let mut ids = [abi::VA_INVALID_ID; 6];
         let mut made = 0;
-        let sent = self.picture(pic, input, recon, reference, self.coded[slot], &mut ids, &mut made);
+        let mut begun = false;
+        let sent = self.picture(pic, input, recon, reference, self.coded[slot], &mut ids, &mut made, &mut begun);
+        if sent.is_err() && begun {
+            // The driver may have queued work that uses the surfaces and buffers: the session
+            // takes no more frames, and its objects are left in place.
+            self.slots.stall();
+            return sent;
+        }
         for &id in &ids[..made] {
             // SAFETY: each id is a buffer made above on this display, destroyed once; vaEndPicture
             // has returned, and the driver keeps no pointer to a parameter buffer after it.
@@ -509,7 +512,8 @@ impl Session {
     }
 
     /// Make the parameter buffers of `pic` (their ids go into `ids`, `made` of them) and encode
-    /// `input` with them.
+    /// `input` with them. `begun` is set once `vaBeginPicture` succeeds.
+    #[allow(clippy::too_many_arguments)]
     fn picture(
         &self,
         pic: &Picture,
@@ -519,6 +523,7 @@ impl Session {
         coded: VABufferID,
         ids: &mut [VABufferID; 6],
         made: &mut usize,
+        begun: &mut bool,
     ) -> Result<(), String> {
         let ctl = self.choice.ctl;
         let mut push = |id: Result<VABufferID, String>| -> Result<(), String> {
@@ -552,6 +557,7 @@ impl Session {
         // SAFETY: `input` is one of this context's render targets.
         let st = unsafe { (api.begin_picture)(dpy, self.context, input) };
         self.display.check(st, "vaBeginPicture")?;
+        *begun = true;
         let n = c_int::try_from(*made).unwrap_or(0);
         // SAFETY: the first `n` ids are live buffers made on this context.
         let st = unsafe { (api.render_picture)(dpy, self.context, ids.as_mut_ptr(), n) };
@@ -640,11 +646,13 @@ impl Session {
     /// Wait for `surface`, one of this session's input surfaces, to be coded: with
     /// `vaSyncSurface2` for at most [`SYNC_TIMEOUT_NS`] where the driver has it.
     fn wait(&mut self, surface: VASurfaceID) -> Result<(), String> {
-        if self.stalled {
-            return Err("an earlier wait for the GPU failed".into());
+        if self.slots.stalled() {
+            return Err("an earlier frame failed on the GPU".into());
         }
         let waited = self.wait_once(surface);
-        self.stalled = waited.is_err();
+        if waited.is_err() {
+            self.slots.stall();
+        }
         waited
     }
 
@@ -722,14 +730,15 @@ impl Session {
 impl Drop for Session {
     fn drop(&mut self) {
         // The frames still in flight are waited for, so the GPU is no longer writing their
-        // surfaces and coded buffers when they are destroyed. After a failed wait the GPU may
-        // still use them, so the session's objects and its display are left in place instead.
+        // surfaces and coded buffers when they are destroyed. After a failure that stalled the
+        // slots the GPU may still use them, so the session's objects and its display are left in
+        // place instead.
         while let Some((slot, _)) = self.slots.pop() {
             if self.wait(self.surfaces[slot]).is_err() {
                 break;
             }
         }
-        if self.stalled {
+        if self.slots.stalled() {
             log::warn!("{}: a VA-API encoder that stopped finishing frames is left open", self.display.name);
             self.display.leak = true;
             return;

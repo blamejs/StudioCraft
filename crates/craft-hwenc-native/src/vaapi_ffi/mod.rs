@@ -45,11 +45,23 @@ pub(crate) struct Slots {
     tags: [Tag; DEPTH],
     head: usize,
     count: usize,
+    stalled: bool,
 }
 
 impl Slots {
     pub(crate) fn new() -> Slots {
-        Slots { tags: [(0, false); DEPTH], head: 0, count: 0 }
+        Slots { tags: [(0, false); DEPTH], head: 0, count: 0, stalled: false }
+    }
+
+    /// The GPU may still be using a surface after a failure (a wait that failed or timed out, or
+    /// a picture that failed after `vaBeginPicture`): no frame goes in from now on, and the
+    /// session's objects are not destroyed.
+    pub(crate) fn stall(&mut self) {
+        self.stalled = true;
+    }
+
+    pub(crate) fn stalled(&self) -> bool {
+        self.stalled
     }
 
     /// Whether every slot holds a frame.
@@ -57,13 +69,16 @@ impl Slots {
         self.count >= DEPTH
     }
 
-    /// The slot the next frame goes into, if one is free.
+    /// The slot the next frame goes into, if one is free and the slots are not stalled.
     pub(crate) fn free(&self) -> Option<usize> {
-        (!self.full()).then_some((self.head + self.count) % DEPTH)
+        (!self.full() && !self.stalled).then_some((self.head + self.count) % DEPTH)
     }
 
     /// Put a frame tagged `tag` into the free slot [`Slots::free`] gave.
     pub(crate) fn push(&mut self, tag: Tag) -> Result<usize, String> {
+        if self.stalled {
+            return Err("an earlier frame failed on the GPU".into());
+        }
         let slot = self.free().ok_or("every frame slot of the encoder is in use")?;
         self.tags[slot] = tag;
         self.count += 1;

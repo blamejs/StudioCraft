@@ -538,6 +538,23 @@ mod tests {
     }
 
     #[test]
+    fn after_a_failure_on_the_gpu_no_frame_goes_in_and_the_frames_inside_keep_their_tags() {
+        let mut slots = Slots::new();
+        slots.push((0, true)).unwrap();
+        slots.push((1, false)).unwrap();
+        assert!(!slots.stalled());
+        // A picture failed after vaBeginPicture, or a wait failed: the GPU may still use a surface.
+        slots.stall();
+        assert!(slots.stalled(), "the session's objects are left in place when it drops");
+        assert_eq!(slots.free(), None);
+        assert!(slots.push((2, false)).is_err(), "no frame goes in after it");
+        assert_eq!(slots.pop(), Some((0, (0, true))));
+        assert_eq!(slots.pop(), Some((1, (1, false))));
+        assert_eq!(slots.pop(), None);
+        assert!(slots.stalled(), "reading every frame out does not clear it");
+    }
+
+    #[test]
     fn a_wait_for_the_gpu_times_out_where_the_driver_can() {
         assert_eq!(waited(VA_STATUS_SUCCESS), Waited::Done);
         assert_eq!(waited(VA_STATUS_ERROR_TIMEDOUT), Waited::TimedOut);
