@@ -58,6 +58,12 @@ pub enum RuntimeAction {
     StopReplay,
     ToggleReplay,
     SaveReplay,
+    /// The state of the audio tracks.
+    AudioTracksStatus,
+    /// Repair the audio tracks of takes in `folder` that ended without finishing their files.
+    AudioTracksRepair {
+        folder: String,
+    },
     OpenSettings,
     Exit,
 }
@@ -127,6 +133,9 @@ pub enum Command {
     /// `monitor_and_output`.
     #[serde(rename = "source.monitor")]
     SourceMonitor { source: SourceRef, mode: String },
+    /// Whether audio tracks record the source to a file of its own.
+    #[serde(rename = "source.set_record_track")]
+    SourceSetRecordTrack { source: SourceRef, on: bool },
 
     #[serde(rename = "item.remove")]
     ItemRemove {
@@ -228,6 +237,12 @@ pub enum Command {
     ReplayToggle {},
     #[serde(rename = "replay.save")]
     ReplaySave {},
+    #[serde(rename = "audio_tracks.status")]
+    AudioTracksStatus {},
+    /// Repair the audio tracks of takes that ended without finishing their files: `folder` is a
+    /// take's `Audio Files` folder, its `<name> Audio` folder or the recording folder holding them.
+    #[serde(rename = "audio_tracks.repair")]
+    AudioTracksRepair { folder: String },
     #[serde(rename = "app.settings")]
     OpenSettings {},
     #[serde(rename = "app.exit")]
@@ -293,6 +308,7 @@ impl Command {
             Command::SourceMute { .. } => "source.mute",
             Command::SourceSyncOffset { .. } => "source.sync_offset",
             Command::SourceMonitor { .. } => "source.monitor",
+            Command::SourceSetRecordTrack { .. } => "source.set_record_track",
             Command::ItemRemove { .. } => "item.remove",
             Command::ItemDuplicate { .. } => "item.duplicate",
             Command::ItemMove { .. } => "item.move",
@@ -320,6 +336,8 @@ impl Command {
             Command::ReplayStop {} => "replay.stop",
             Command::ReplayToggle {} => "replay.toggle",
             Command::ReplaySave {} => "replay.save",
+            Command::AudioTracksStatus {} => "audio_tracks.status",
+            Command::AudioTracksRepair { .. } => "audio_tracks.repair",
             Command::OpenSettings {} => "app.settings",
             Command::Exit {} => "app.exit",
             Command::AppLinks { .. } => "app.links",
@@ -380,6 +398,7 @@ const SPECS: &[CommandSpec] = &[
     spec("source.mute", "Mute", "source: id or name, muted: bool", Undo::Undoable),
     spec("source.sync_offset", "Set Sync Offset", "source: id or name, ms: 0..5000 milliseconds the audio is delayed", Undo::Undoable),
     spec("source.monitor", "Audio Monitoring", "source: id or name, mode: off|monitor_only|monitor_and_output", Undo::Undoable),
+    spec("source.set_record_track", "Record as Its Own Track", "source: id or name, on: bool", Undo::Undoable),
     spec("item.remove", "Remove Source from Scene", "item: id or source name, scene?", Undo::Undoable),
     spec("item.duplicate", "Duplicate Source", "item: id or source name, scene?", Undo::Undoable),
     spec("item.move", "Move Source", "item, scene?, to: up|down|top|bottom|{to: index}", Undo::Undoable),
@@ -407,6 +426,8 @@ const SPECS: &[CommandSpec] = &[
     spec("replay.stop", "Stop Replay Buffer", "", Undo::NotUndoable),
     spec("replay.toggle", "Start or Stop Replay Buffer", "", Undo::NotUndoable),
     spec("replay.save", "Save Replay", "", Undo::NotUndoable),
+    spec("audio_tracks.status", "Audio Tracks Status", "", Undo::NotUndoable),
+    spec("audio_tracks.repair", "Repair Audio Tracks", "folder: path to a take's folder or the recording folder", Undo::NotUndoable),
     spec("app.settings", "Settings", "", Undo::NotUndoable),
     spec("app.exit", "Exit", "", Undo::NotUndoable),
     spec("app.links", "Community Links", "link?: discord|website|github|issues", Undo::NotUndoable),

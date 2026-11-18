@@ -27,3 +27,8 @@ serde_json = { workspace = true }
 
 [dev-dependencies]
 toml = { workspace = true }
+criterion = { workspace = true }
+
+[[bench]]
+name = "mixer_taps"
+harness = false

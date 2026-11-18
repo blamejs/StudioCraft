@@ -19,4 +19,6 @@ studiocraft-engine = { workspace = true }
 studiocraft-render = { workspace = true }
 studiocraft-studio = { workspace = true }
 studiocraft-mcp = { workspace = true }
+studiocraft-media = { workspace = true }
+studiocraft-audio-tracks = { workspace = true }
 serde_json = { workspace = true }

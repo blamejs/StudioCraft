@@ -13,7 +13,7 @@ use crate::{Backend, Headless, MAX_BATCH_STEPS, McpError, Remote, Roots, Server,
 
 const TOKEN: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
-const TOOLS: [&str; 27] = [
+const TOOLS: [&str; 29] = [
     "command_list",
     "command_run",
     "command_batch",
@@ -40,6 +40,8 @@ const TOOLS: [&str; 27] = [
     "replay_start",
     "replay_stop",
     "replay_save",
+    "audio_tracks_status",
+    "audio_tracks_repair",
     "output_status",
 ];
 
@@ -305,6 +307,54 @@ fn source_audio_sets_the_monitoring_mode() {
         "a refused value changes nothing"
     );
     error_text(&call(&mut s, "source_audio", json!({"source": "ghost", "monitor": "off"})));
+}
+
+#[test]
+fn source_audio_sets_whether_the_source_records_its_own_track() {
+    let mut h = Headless::with_gpu(None).unwrap();
+    h.studio_mut().set_audio_sink(Arc::new(NoDevices));
+    let mut s = Server::new(Box::new(h)).unwrap();
+    let read = ok_json(&call(&mut s, "source_audio", json!({"source": "Microphone"})));
+    assert_eq!(read["audio"]["record_track"], Value::Null, "{read}");
+    let set = ok_json(&call(&mut s, "source_audio", json!({"source": "Microphone", "record_track": false})));
+    assert_eq!(set["audio"]["record_track"], false, "{set}");
+    for bad in [json!("yes"), json!(1), Value::Null] {
+        error_text(&call(&mut s, "source_audio", json!({"source": "Microphone", "record_track": bad, "sync_offset_ms": 99})));
+    }
+    let read = ok_json(&call(&mut s, "source_audio", json!({"source": "Microphone"})));
+    assert_eq!(
+        (read["audio"]["record_track"].clone(), read["audio"]["sync_offset_ms"].clone()),
+        (json!(false), json!(0)),
+        "a refused value changes nothing"
+    );
+    let status = ok_json(&call(&mut s, "audio_tracks_status", json!({})));
+    assert_eq!((status["enabled"].clone(), status["active"].clone()), (json!(false), json!(false)), "{status}");
+    error_text(&call(&mut s, "audio_tracks_repair", json!({})));
+}
+
+#[test]
+fn audio_tracks_writes_are_held_to_the_write_roots() {
+    let dir = root_folders("tracks-roots");
+    let roots = Roots::new(&[dir.join("in")], &[dir.join("out")]).unwrap();
+    let mut h = Headless::with_options(None, ServerOptions { allow_streaming: true, roots: Some(roots) }).unwrap();
+    let mut profile = h.studio().profile().clone();
+    profile.output.folder = text_of(&dir.join("outside"));
+    profile.audio_tracks.enabled = true;
+    profile.audio_tracks.when = studiocraft_model::AudioTracksWhen::Either;
+    h.studio_mut().set_profile(profile).unwrap();
+    let mut s = Server::new(Box::new(h)).unwrap();
+    let outside = text_of(&dir.join("in"));
+    for (tool, args) in [
+        ("audio_tracks_repair", json!({"folder": outside})),
+        ("command_run", json!({"id": "audio_tracks.repair", "params": {"folder": outside}})),
+        ("stream_start", json!({})),
+    ] {
+        let text = error_text(&call(&mut s, tool, args.clone()));
+        assert!(text.contains("outside the write roots"), "{tool} {args}: {text}");
+    }
+    let inside = ok_json(&call(&mut s, "audio_tracks_repair", json!({"folder": text_of(&dir.join("out"))})));
+    assert_eq!(inside["started"], json!(true), "{inside}");
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]

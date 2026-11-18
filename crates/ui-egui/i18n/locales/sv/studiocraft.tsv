@@ -440,3 +440,40 @@
 @msg	The stream stopped: {error}	Sändningen stoppades: {error}
 @msg	ffmpeg at {path} was not found	ffmpeg i {path} hittades inte
 menu	Transform	Transformera
+	Record as its own track	Spela in som eget spår
+	Audio tracks write this source to a WAV file of its own (Settings › Output › Audio tracks)	Ljudspår skriver den här källan till en egen WAV-fil (Inställningar › Utdata › Ljudspår)
+	Audio tracks	Ljudspår
+	Write each recorded source and the program mix to its own WAV file	Skriv varje inspelad källa och programmixen till en egen WAV-fil
+	Write them while	Skriv dem medan
+	Include the program mix	Ta med programmixen
+	Write buffer	Skrivbuffert
+	MiB	MiB
+	File size	Filstorlek
+	GiB	GiB
+	Audio tracks: {tracks}, about {gb} GiB an hour; the buffer holds {seconds} s of audio while the disk is slow	Ljudspår: {tracks}, ungefär {gb} GiB i timmen; bufferten rymmer {seconds} s ljud medan disken är långsam
+	A recording runs	En inspelning pågår
+	The stream runs	Strömmen pågår
+	A recording or the stream runs	En inspelning eller strömmen pågår
+	The disk is almost full; audio tracks stop before the recording or the stream runs out of space	Disken är nästan full; ljudspåren stoppas innan inspelningen eller strömmen får slut på utrymme
+	This take has made as many audio track files as it can; sources added since are not recorded to their own files	Den här tagningen har skapat så många ljudspårsfiler som den kan; källor som lagts till sedan spelas inte in i egna filer
+	More sources are set to record their own track than can be recorded at once; the later ones are not recorded	Fler källor är inställda på att spela in ett eget spår än vad som kan spelas in samtidigt; de senare spelas inte in
+	Audio tracks: {tracks}; {lost} s of audio lost while the disk was slow	Ljudspår: {tracks}; {lost} s ljud förlorat medan disken var långsam
+	TRACKS	SPÅR
+	TRACKS stopped	SPÅR stoppade
+	Audio tracks stopped early; the status message gives the reason	Ljudspåren stoppades i förtid; statusmeddelandet anger orsaken
+	Record as Its Own Track	Spela in som eget spår
+	Audio Tracks Status	Ljudspårens status
+	Repair Audio Tracks	Reparera ljudspår
+@msg	Audio tracks stopped at {time}: the disk is full	Ljudspåren stoppades vid {time}: disken är full
+@msg	Audio tracks stopped at {time}: the disk is almost full	Ljudspåren stoppades vid {time}: disken är nästan full
+@msg	Audio tracks stopped at {time}: the files could not be created	Ljudspåren stoppades vid {time}: filerna kunde inte skapas
+@msg	Audio tracks stopped at {time}: the free space on the disk could not be read	Ljudspåren stoppades vid {time}: det lediga utrymmet på disken kunde inte läsas
+@msg	Audio tracks stopped at {time}: there is not enough memory for the write buffer	Ljudspåren stoppades vid {time}: det finns inte tillräckligt med minne för skrivbufferten
+@msg	Audio tracks stopped at {time}: a file could not be written	Ljudspåren stoppades vid {time}: en fil kunde inte skrivas
+@msg	Audio tracks could not start: {error}	Ljudspåren kunde inte starta: {error}
+@msg	Audio tracks repaired after the app closed during a take: {folders}	Ljudspår reparerades efter att appen stängdes under en tagning: {folders}
+@msg	Audio tracks could not be repaired: {takes}	Ljudspåren kunde inte repareras: {takes}
+@msg	Audio tracks repaired after the app closed during a take: {folders} and {more} more	Ljudspår reparerades efter att appen stängdes under en tagning: {folders} och {more} till
+@msg	Audio tracks could not be repaired: {takes} and {more} more	Ljudspåren kunde inte repareras: {takes} och {more} till
+@msg	Audio tracks could not be repaired: {takes}. Takes repaired: {count}	Ljudspåren kunde inte repareras: {takes}. Reparerade tagningar: {count}
+@msg	Audio tracks could not be repaired: {takes} and {more} more. Takes repaired: {count}	Ljudspåren kunde inte repareras: {takes} och {more} till. Reparerade tagningar: {count}

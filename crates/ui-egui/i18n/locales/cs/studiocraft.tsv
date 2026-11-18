@@ -440,3 +440,40 @@
 @msg	The stream stopped: {error}	Vysílání se zastavilo: {error}
 @msg	ffmpeg at {path} was not found	ffmpeg v umístění {path} nebyl nalezen
 menu	Transform	Transformace
+	Record as its own track	Nahrávat jako samostatnou stopu
+	Audio tracks write this source to a WAV file of its own (Settings › Output › Audio tracks)	Zvukové stopy zapisují tento zdroj do samostatného souboru WAV (Nastavení › Výstup › Zvukové stopy)
+	Audio tracks	Zvukové stopy
+	Write each recorded source and the program mix to its own WAV file	Zapisovat každý nahrávaný zdroj a mix programu do samostatného souboru WAV
+	Write them while	Zapisovat, když
+	Include the program mix	Zahrnout mix programu
+	Write buffer	Vyrovnávací paměť zápisu
+	MiB	MiB
+	File size	Velikost souboru
+	GiB	GiB
+	Audio tracks: {tracks}, about {gb} GiB an hour; the buffer holds {seconds} s of audio while the disk is slow	Zvukové stopy: {tracks}, asi {gb} GiB za hodinu; vyrovnávací paměť pojme {seconds} s zvuku, když je disk pomalý
+	A recording runs	Běží nahrávání
+	The stream runs	Běží stream
+	A recording or the stream runs	Běží nahrávání nebo stream
+	The disk is almost full; audio tracks stop before the recording or the stream runs out of space	Disk je téměř plný; zvukové stopy se zastaví dřív, než nahrávce nebo streamu dojde místo
+	This take has made as many audio track files as it can; sources added since are not recorded to their own files	Tento záběr už vytvořil nejvíc souborů zvukových stop, kolik může; zdroje přidané potom se do vlastních souborů nenahrávají
+	More sources are set to record their own track than can be recorded at once; the later ones are not recorded	Vlastní stopu má nahrávat víc zdrojů, než lze nahrávat najednou; ty pozdější se nenahrávají
+	Audio tracks: {tracks}; {lost} s of audio lost while the disk was slow	Zvukové stopy: {tracks}; ztraceno {lost} s zvuku, když byl disk pomalý
+	TRACKS	STOPY
+	TRACKS stopped	STOPY zastaveny
+	Audio tracks stopped early; the status message gives the reason	Zvukové stopy se zastavily předčasně; důvod uvádí stavová zpráva
+	Record as Its Own Track	Nahrávat jako samostatnou stopu
+	Audio Tracks Status	Stav zvukových stop
+	Repair Audio Tracks	Opravit zvukové stopy
+@msg	Audio tracks stopped at {time}: the disk is full	Zvukové stopy se zastavily v {time}: disk je plný
+@msg	Audio tracks stopped at {time}: the disk is almost full	Zvukové stopy se zastavily v {time}: disk je téměř plný
+@msg	Audio tracks stopped at {time}: the files could not be created	Zvukové stopy se zastavily v {time}: soubory nešlo vytvořit
+@msg	Audio tracks stopped at {time}: the free space on the disk could not be read	Zvukové stopy se zastavily v {time}: volné místo na disku nešlo zjistit
+@msg	Audio tracks stopped at {time}: there is not enough memory for the write buffer	Zvukové stopy se zastavily v {time}: pro zápisovou vyrovnávací paměť není dost paměti
+@msg	Audio tracks stopped at {time}: a file could not be written	Zvukové stopy se zastavily v {time}: soubor nešlo zapsat
+@msg	Audio tracks could not start: {error}	Zvukové stopy nešlo spustit: {error}
+@msg	Audio tracks repaired after the app closed during a take: {folders}	Zvukové stopy byly opraveny po zavření aplikace během záznamu: {folders}
+@msg	Audio tracks could not be repaired: {takes}	Zvukové stopy nelze opravit: {takes}
+@msg	Audio tracks repaired after the app closed during a take: {folders} and {more} more	Zvukové stopy byly opraveny po zavření aplikace během záznamu: {folders} a {more} dalších
+@msg	Audio tracks could not be repaired: {takes} and {more} more	Zvukové stopy nelze opravit: {takes} a {more} dalších
+@msg	Audio tracks could not be repaired: {takes}. Takes repaired: {count}	Zvukové stopy nelze opravit: {takes}. Opravené záznamy: {count}
+@msg	Audio tracks could not be repaired: {takes} and {more} more. Takes repaired: {count}	Zvukové stopy nelze opravit: {takes} a {more} dalších. Opravené záznamy: {count}

@@ -449,3 +449,40 @@
 @msg	The stream stopped: {error}	Трансляцію зупинено: {error}
 @msg	ffmpeg at {path} was not found	ffmpeg за шляхом {path} не знайдено
 menu	Transform	Перетворення
+	Record as its own track	Записувати окремою доріжкою
+	Audio tracks write this source to a WAV file of its own (Settings › Output › Audio tracks)	Звукові доріжки записують це джерело в окремий файл WAV («Налаштування › Вивід › Звукові доріжки»)
+	Audio tracks	Звукові доріжки
+	Write each recorded source and the program mix to its own WAV file	Записувати кожне джерело, що записується, і мікс програми в окремий файл WAV
+	Write them while	Записувати, коли
+	Include the program mix	Додавати мікс програми
+	Write buffer	Буфер запису
+	MiB	МіБ
+	File size	Розмір файлу
+	GiB	ГіБ
+	Audio tracks: {tracks}, about {gb} GiB an hour; the buffer holds {seconds} s of audio while the disk is slow	Звукові доріжки: {tracks}, близько {gb} ГіБ на годину; буфер вміщує {seconds} с звуку, поки диск працює повільно
+	A recording runs	Триває запис
+	The stream runs	Триває трансляція
+	A recording or the stream runs	Триває запис або трансляція
+	The disk is almost full; audio tracks stop before the recording or the stream runs out of space	Диск майже заповнений; звукові доріжки зупиняються раніше, ніж запису чи трансляції забракне місця
+	This take has made as many audio track files as it can; sources added since are not recorded to their own files	Цей дубль уже створив найбільшу можливу кількість файлів звукових доріжок; джерела, додані після цього, не записуються у власні файли
+	More sources are set to record their own track than can be recorded at once; the later ones are not recorded	Власну доріжку мають записувати більше джерел, ніж можна записувати одночасно; останні не записуються
+	Audio tracks: {tracks}; {lost} s of audio lost while the disk was slow	Звукових доріжок: {tracks}; втрачено {lost} с звуку, поки диск працював повільно
+	TRACKS	ДОРІЖКИ
+	TRACKS stopped	ДОРІЖКИ зупинено
+	Audio tracks stopped early; the status message gives the reason	Звукові доріжки зупинилися передчасно; причину вказано в повідомленні про стан
+	Record as Its Own Track	Записувати окремою доріжкою
+	Audio Tracks Status	Стан звукових доріжок
+	Repair Audio Tracks	Відновити звукові доріжки
+@msg	Audio tracks stopped at {time}: the disk is full	Звукові доріжки зупинено о {time}: диск заповнений
+@msg	Audio tracks stopped at {time}: the disk is almost full	Звукові доріжки зупинено о {time}: диск майже заповнений
+@msg	Audio tracks stopped at {time}: the files could not be created	Звукові доріжки зупинено о {time}: не вдалося створити файли
+@msg	Audio tracks stopped at {time}: the free space on the disk could not be read	Звукові доріжки зупинено о {time}: не вдалося дізнатися вільне місце на диску
+@msg	Audio tracks stopped at {time}: there is not enough memory for the write buffer	Звукові доріжки зупинено о {time}: недостатньо пам'яті для буфера запису
+@msg	Audio tracks stopped at {time}: a file could not be written	Звукові доріжки зупинено о {time}: не вдалося записати файл
+@msg	Audio tracks could not start: {error}	Не вдалося запустити звукові доріжки: {error}
+@msg	Audio tracks repaired after the app closed during a take: {folders}	Звукові доріжки відновлено після закриття застосунку під час дубля: {folders}
+@msg	Audio tracks could not be repaired: {takes}	Не вдалося відновити звукові доріжки: {takes}
+@msg	Audio tracks repaired after the app closed during a take: {folders} and {more} more	Звукові доріжки відновлено після закриття застосунку під час дубля: {folders} і ще {more}
+@msg	Audio tracks could not be repaired: {takes} and {more} more	Не вдалося відновити звукові доріжки: {takes} і ще {more}
+@msg	Audio tracks could not be repaired: {takes}. Takes repaired: {count}	Не вдалося відновити звукові доріжки: {takes}. Відновлено дублів: {count}
+@msg	Audio tracks could not be repaired: {takes} and {more} more. Takes repaired: {count}	Не вдалося відновити звукові доріжки: {takes} і ще {more}. Відновлено дублів: {count}

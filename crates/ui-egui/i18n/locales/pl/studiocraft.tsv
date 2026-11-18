@@ -439,3 +439,40 @@
 @msg	The stream stopped: {error}	Transmisja została zatrzymana: {error}
 @msg	ffmpeg at {path} was not found	Nie znaleziono ffmpeg w {path}
 menu	Transform	Przekształć
+	Record as its own track	Nagrywaj jako osobną ścieżkę
+	Audio tracks write this source to a WAV file of its own (Settings › Output › Audio tracks)	Ścieżki audio zapisują to źródło w osobnym pliku WAV (Ustawienia › Wyjście › Ścieżki audio)
+	Audio tracks	Ścieżki audio
+	Write each recorded source and the program mix to its own WAV file	Zapisuj każde nagrywane źródło i miks programu w osobnym pliku WAV
+	Write them while	Zapisuj, gdy
+	Include the program mix	Dołącz miks programu
+	Write buffer	Bufor zapisu
+	MiB	MiB
+	File size	Rozmiar pliku
+	GiB	GiB
+	Audio tracks: {tracks}, about {gb} GiB an hour; the buffer holds {seconds} s of audio while the disk is slow	Ścieżki dźwiękowe: {tracks}, około {gb} GiB na godzinę; bufor mieści {seconds} s dźwięku, gdy dysk jest wolny
+	A recording runs	Trwa nagrywanie
+	The stream runs	Trwa transmisja
+	A recording or the stream runs	Trwa nagrywanie lub transmisja
+	The disk is almost full; audio tracks stop before the recording or the stream runs out of space	Dysk jest prawie pełny; ścieżki audio zatrzymują się, zanim nagraniu lub transmisji zabraknie miejsca
+	This take has made as many audio track files as it can; sources added since are not recorded to their own files	To ujęcie utworzyło już tyle plików ścieżek audio, ile może; źródła dodane później nie są nagrywane do własnych plików
+	More sources are set to record their own track than can be recorded at once; the later ones are not recorded	Więcej źródeł ma nagrywać własną ścieżkę, niż można nagrywać jednocześnie; późniejsze nie są nagrywane
+	Audio tracks: {tracks}; {lost} s of audio lost while the disk was slow	Ścieżki audio: {tracks}; utracono {lost} s dźwięku, gdy dysk był wolny
+	TRACKS	ŚCIEŻKI
+	TRACKS stopped	ŚCIEŻKI zatrzymane
+	Audio tracks stopped early; the status message gives the reason	Ścieżki audio zatrzymały się przedwcześnie; komunikat stanu podaje przyczynę
+	Record as Its Own Track	Nagrywaj jako osobną ścieżkę
+	Audio Tracks Status	Stan ścieżek audio
+	Repair Audio Tracks	Napraw ścieżki audio
+@msg	Audio tracks stopped at {time}: the disk is full	Ścieżki audio zatrzymały się w {time}: dysk jest pełny
+@msg	Audio tracks stopped at {time}: the disk is almost full	Ścieżki audio zatrzymały się w {time}: dysk jest prawie pełny
+@msg	Audio tracks stopped at {time}: the files could not be created	Ścieżki audio zatrzymały się w {time}: nie udało się utworzyć plików
+@msg	Audio tracks stopped at {time}: the free space on the disk could not be read	Ścieżki audio zatrzymały się w {time}: nie udało się odczytać wolnego miejsca na dysku
+@msg	Audio tracks stopped at {time}: there is not enough memory for the write buffer	Ścieżki audio zatrzymały się w {time}: za mało pamięci na bufor zapisu
+@msg	Audio tracks stopped at {time}: a file could not be written	Ścieżki audio zatrzymały się w {time}: nie udało się zapisać pliku
+@msg	Audio tracks could not start: {error}	Nie udało się uruchomić ścieżek audio: {error}
+@msg	Audio tracks repaired after the app closed during a take: {folders}	Naprawiono ścieżki audio po zamknięciu aplikacji w trakcie nagrania: {folders}
+@msg	Audio tracks could not be repaired: {takes}	Nie można naprawić ścieżek audio: {takes}
+@msg	Audio tracks repaired after the app closed during a take: {folders} and {more} more	Naprawiono ścieżki audio po zamknięciu aplikacji w trakcie nagrania: {folders} i {more} innych
+@msg	Audio tracks could not be repaired: {takes} and {more} more	Nie można naprawić ścieżek audio: {takes} i {more} innych
+@msg	Audio tracks could not be repaired: {takes}. Takes repaired: {count}	Nie można naprawić ścieżek audio: {takes}. Naprawione nagrania: {count}
+@msg	Audio tracks could not be repaired: {takes} and {more} more. Takes repaired: {count}	Nie można naprawić ścieżek audio: {takes} i {more} innych. Naprawione nagrania: {count}

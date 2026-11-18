@@ -489,3 +489,40 @@
 @msg	The stream stopped: {error}	The stream stopped: {error}
 @msg	ffmpeg at {path} was not found	ffmpeg at {path} was not found
 menu	Transform	Transform
+	Record as its own track	Record as its own track
+	Audio tracks write this source to a WAV file of its own (Settings › Output › Audio tracks)	Audio tracks write this source to a WAV file of its own (Settings › Output › Audio tracks)
+	Audio tracks	Audio tracks
+	Write each recorded source and the program mix to its own WAV file	Write each recorded source and the program mix to its own WAV file
+	Write them while	Write them while
+	Include the program mix	Include the program mix
+	Write buffer	Write buffer
+	MiB	MiB
+	File size	File size
+	GiB	GiB
+	Audio tracks: {tracks}, about {gb} GiB an hour; the buffer holds {seconds} s of audio while the disk is slow	Audio tracks: {tracks}, about {gb} GiB an hour; the buffer holds {seconds} s of audio while the disk is slow
+	A recording runs	A recording runs
+	The stream runs	The stream runs
+	A recording or the stream runs	A recording or the stream runs
+	The disk is almost full; audio tracks stop before the recording or the stream runs out of space	The disk is almost full; audio tracks stop before the recording or the stream runs out of space
+	This take has made as many audio track files as it can; sources added since are not recorded to their own files	This take has made as many audio track files as it can; sources added since are not recorded to their own files
+	More sources are set to record their own track than can be recorded at once; the later ones are not recorded	More sources are set to record their own track than can be recorded at once; the later ones are not recorded
+	Audio tracks: {tracks}; {lost} s of audio lost while the disk was slow	Audio tracks: {tracks}; {lost} s of audio lost while the disk was slow
+	TRACKS	TRACKS
+	TRACKS stopped	TRACKS stopped
+	Audio tracks stopped early; the status message gives the reason	Audio tracks stopped early; the status message gives the reason
+	Record as Its Own Track	Record as Its Own Track
+	Audio Tracks Status	Audio Tracks Status
+	Repair Audio Tracks	Repair Audio Tracks
+@msg	Audio tracks stopped at {time}: the disk is full	Audio tracks stopped at {time}: the disk is full
+@msg	Audio tracks stopped at {time}: the disk is almost full	Audio tracks stopped at {time}: the disk is almost full
+@msg	Audio tracks stopped at {time}: the files could not be created	Audio tracks stopped at {time}: the files could not be created
+@msg	Audio tracks stopped at {time}: the free space on the disk could not be read	Audio tracks stopped at {time}: the free space on the disk could not be read
+@msg	Audio tracks stopped at {time}: there is not enough memory for the write buffer	Audio tracks stopped at {time}: there is not enough memory for the write buffer
+@msg	Audio tracks stopped at {time}: a file could not be written	Audio tracks stopped at {time}: a file could not be written
+@msg	Audio tracks could not start: {error}	Audio tracks could not start: {error}
+@msg	Audio tracks repaired after the app closed during a take: {folders}	Audio tracks repaired after the app closed during a take: {folders}
+@msg	Audio tracks could not be repaired: {takes}	Audio tracks could not be repaired: {takes}
+@msg	Audio tracks repaired after the app closed during a take: {folders} and {more} more	Audio tracks repaired after the app closed during a take: {folders} and {more} more
+@msg	Audio tracks could not be repaired: {takes} and {more} more	Audio tracks could not be repaired: {takes} and {more} more
+@msg	Audio tracks could not be repaired: {takes}. Takes repaired: {count}	Audio tracks could not be repaired: {takes}. Takes repaired: {count}
+@msg	Audio tracks could not be repaired: {takes} and {more} more. Takes repaired: {count}	Audio tracks could not be repaired: {takes} and {more} more. Takes repaired: {count}
