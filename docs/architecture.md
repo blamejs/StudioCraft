@@ -336,11 +336,11 @@ the window buttons sit where the desktop puts them. `src/titlebar.rs` makes the 
   VideoToolbox H.264 or HEVC (built in) use `craft-hwenc-native` on macOS, which calls the
   VideoToolbox framework. `craft-flv` writes and reads the FLV tags and AMF0 values that RTMP
   carries; no output uses it yet.
-- **Media files.** The media file source plays an Ogg file that holds one Vorbis stream and nothing
-  else on a thread of its own, with the `craft-media` Ogg reader and the `craft-audio` Vorbis
-  decoder. The thread holds the file's packet index and one packet at a time, and waits for each
-  packet's time before publishing it. Every other file, chained Ogg files included, plays through
-  two ffmpeg processes.
+- **Media files.** The media file source plays an Ogg file that holds one Vorbis stream at 8 to
+  192 kHz and nothing else on a thread of its own, with the `craft-media` Ogg reader and the
+  `craft-audio` Vorbis decoder. The thread holds the file's packet index and one packet at a time,
+  and waits for each packet's time before publishing it. Every other file, chained Ogg files and
+  Vorbis streams at other rates included, plays through two ffmpeg processes.
 
 ## Dependency licenses
 

@@ -147,8 +147,8 @@ CRAFT_I18N_DIR=/path/to/craft-i18n CRAFT_FONTS_DIR=/path/to/craft-fonts cargo ru
 
 Streaming, and recording with an encoder other than H.264 (built in), need `ffmpeg` on the
 `PATH`, or its location in Settings › Output. Recording uses x264 until H.264 (built in) is chosen
-in Settings › Output. The media file source plays Ogg Vorbis files without `ffmpeg` and needs it
-for every other file.
+in Settings › Output. The media file source plays Ogg Vorbis files at 8 to 192 kHz without `ffmpeg`
+and needs it for every other file.
 
 ## Running
 

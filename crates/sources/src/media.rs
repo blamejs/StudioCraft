@@ -1,6 +1,6 @@
 //! A video or audio file, played in real time.
 //!
-//! An Ogg file that holds one Vorbis stream and nothing else plays in this process: a player thread
+//! An Ogg file that holds one Vorbis stream at 8 to 192 kHz and nothing else plays in this process: a player thread
 //! reads it packet by packet with `craft-audio`'s Vorbis decoder and publishes the samples at the file's own speed.
 //! Every other file plays through ffmpeg. Two ffmpeg processes read the file at its own speed
 //! (`-re`): one writes RGBA pictures (PAM images, which carry their size) and one writes 48 kHz
@@ -162,8 +162,18 @@ impl Instance {
             return Err(PluginError::Failed(format!("{} was not found", path.display())));
         }
         let path = path.to_path_buf();
-        if is_ogg_vorbis(&path) {
-            return self.start_player(path, io);
+        match read_ogg_head(&path) {
+            OggHead::Vorbis => return self.start_player(path, io),
+            OggHead::VorbisRateOutOfRange(rate) => {
+                if let Err(e) = &self.program {
+                    let (low, high) = (VORBIS_RATES.start(), VORBIS_RATES.end());
+                    return Err(PluginError::Unavailable(format!(
+                        "{} has a sample rate of {rate} Hz; Ogg Vorbis files outside {low} to {high} Hz play only through ffmpeg, and {e}",
+                        path.display()
+                    )));
+                }
+            }
+            OggHead::Other => {}
         }
         self.start_ffmpeg(&path, io)
     }
@@ -207,8 +217,8 @@ impl Instance {
 
     /// Play an Ogg Vorbis file on a thread of its own, which indexes it, decodes it packet by
     /// packet and publishes the samples at the file's own speed. A file that turns out to hold
-    /// more than its one Vorbis stream (a chained file, or one with other streams later on) is
-    /// left to ffmpeg on the next produce.
+    /// more than its one Vorbis stream (a chained file, or one with other streams later on), or
+    /// whose rate is outside [`VORBIS_RATES`], is left to ffmpeg on the next produce.
     fn start_player(&mut self, path: PathBuf, io: &SourceIo) -> Result<(), PluginError> {
         let state = Arc::clone(&self.player);
         let (looping, audio, clock) = (self.looping, Arc::clone(&io.audio), io.clock);
@@ -319,18 +329,37 @@ impl SourceInstance for Instance {
 /// a Vorbis stream's first page holds only its 30-byte identification header.
 const OGG_HEAD: u64 = 64 << 10;
 
-/// Whether the file is an Ogg file whose first streams are all Vorbis, from the first page of each
-/// stream at its start. A file with video, or any other stream there, plays through ffmpeg. The
-/// player checks the whole file again once it has indexed it, for streams chained later on.
-fn is_ogg_vorbis(path: &Path) -> bool {
-    let mut head = Vec::new();
-    let read = std::fs::File::open(path).and_then(|f| f.take(OGG_HEAD).read_to_end(&mut head));
-    read.is_ok() && only_vorbis_streams(&head)
+/// The sample rates, in Hz, of the Vorbis streams the player plays. A stream at any other rate
+/// plays through ffmpeg.
+const VORBIS_RATES: std::ops::RangeInclusive<u32> = 8_000..=192_000;
+
+/// What the first page of each stream at the start of an Ogg file shows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OggHead {
+    /// Every stream there is Vorbis, at a rate in [`VORBIS_RATES`].
+    Vorbis,
+    /// Every stream there is Vorbis, and this one's rate is outside [`VORBIS_RATES`].
+    VorbisRateOutOfRange(u32),
+    /// Not an Ogg file, or one with a stream that is not Vorbis.
+    Other,
 }
 
-/// Whether `head` starts with the first pages of one or more Ogg streams, all of them Vorbis.
-fn only_vorbis_streams(head: &[u8]) -> bool {
-    let (mut at, mut streams) = (0usize, 0usize);
+/// The streams at the start of the file, from the first page of each. A file with video, or any
+/// other stream there, plays through ffmpeg. The player checks the whole file again once it has
+/// indexed it, for streams chained later on.
+fn read_ogg_head(path: &Path) -> OggHead {
+    let mut head = Vec::new();
+    let read = std::fs::File::open(path).and_then(|f| f.take(OGG_HEAD).read_to_end(&mut head));
+    if read.is_err() {
+        return OggHead::Other;
+    }
+    ogg_head(&head)
+}
+
+/// Whether `head` starts with the first pages of one or more Ogg streams, all of them Vorbis, and
+/// whether each one's identification header gives a sample rate in [`VORBIS_RATES`].
+fn ogg_head(head: &[u8]) -> OggHead {
+    let (mut at, mut streams, mut rate_out_of_range) = (0usize, 0usize, None);
     // A page: "OggS", version 0, flags (2 marks a stream's first page), granule, serial,
     // sequence, checksum, then the segment count and table at 26 and 27 (RFC 3533 §6).
     while let Some(page) = head.get(at..).filter(|p| p.len() >= 27 && p.starts_with(b"OggS\0")) {
@@ -339,15 +368,27 @@ fn only_vorbis_streams(head: &[u8]) -> bool {
             break;
         }
         let segments = page.get(26).map_or(0, |&n| usize::from(n));
-        let Some(table) = page.get(27..27 + segments) else { return false };
+        let Some(table) = page.get(27..27 + segments) else { return OggHead::Other };
         let body = 27 + segments;
         if !page.get(body..).is_some_and(|b| b.starts_with(b"\x01vorbis")) {
-            return false;
+            return OggHead::Other;
+        }
+        // The identification header: the packet type and "vorbis", a 32-bit version, the channel
+        // count, then the sample rate as a little-endian 32-bit number (Vorbis I §4.2.2).
+        let Some(rate) = page.get(body + 12..body + 16).and_then(|b| b.try_into().ok()).map(u32::from_le_bytes) else {
+            return OggHead::Other;
+        };
+        if !VORBIS_RATES.contains(&rate) {
+            rate_out_of_range.get_or_insert(rate);
         }
         streams += 1;
         at = at.saturating_add(body).saturating_add(table.iter().map(|&n| usize::from(n)).sum());
     }
-    streams > 0
+    match (streams, rate_out_of_range) {
+        (0, _) => OggHead::Other,
+        (_, Some(rate)) => OggHead::VorbisRateOutOfRange(rate),
+        (_, None) => OggHead::Vorbis,
+    }
 }
 
 /// The largest Vorbis audio packet the player reads. A larger one is skipped as damaged, unread.
@@ -367,7 +408,8 @@ struct PlayerState {
 enum PlayerEnd {
     /// The file could not be read or decoded.
     Failed(String),
-    /// The file holds more than one stream, and plays through ffmpeg instead.
+    /// The file holds more than one stream, or its sample rate is outside [`VORBIS_RATES`], and it
+    /// plays through ffmpeg instead.
     NeedsFfmpeg,
 }
 
@@ -398,7 +440,9 @@ struct VorbisFile {
 impl VorbisFile {
     /// Index the file and read the three header packets. Only the index and one packet at a time
     /// are held in memory; `craft-media` bounds the index by the file's size. `None` when the file
-    /// holds any stream besides one Vorbis stream.
+    /// holds any stream besides one Vorbis stream, or its sample rate is outside [`VORBIS_RATES`].
+    /// The decoder refuses a header without channels or with block sizes that Vorbis I §4.2.2 does
+    /// not allow.
     fn open(path: &Path) -> Result<Option<Self>, String> {
         let src = FileReader::open(path).map_err(|e| e.to_string())?;
         let ogg = ogg::open(&src).map_err(|e| e.to_string())?;
@@ -406,6 +450,9 @@ impl VorbisFile {
         let Some(s) = ogg.streams.first().filter(|s| ogg.streams.len() == 1 && s.codec == Codec::Vorbis) else { return Ok(None) };
         let [id, comment, setup, ..] = s.headers.as_slice() else { return Err("the Vorbis stream ends before its setup header".into()) };
         let decoder = Decoder::new(id, comment, setup).map_err(|e| e.to_string())?;
+        if !VORBIS_RATES.contains(&decoder.identification().sample_rate) {
+            return Ok(None);
+        }
         let length = s.last_granule.and_then(|g| u64::try_from(g).ok());
         let downmix = Downmix::new(usize::from(decoder.identification().channels));
         Ok(Some(VorbisFile { src, ogg, stream, decoder, length, downmix }))
@@ -797,28 +844,111 @@ mod tests {
     fn ogg_files_whose_streams_are_all_vorbis_are_recognized() {
         let vorbis = ogg_vorbis(2, 4800);
         let first = first_page(&vorbis);
-        assert!(only_vorbis_streams(&vorbis));
+        assert_eq!(ogg_head(&vorbis), OggHead::Vorbis);
         // The same first page for a Theora video stream.
         let mut theora = vorbis[..first].to_vec();
         let body = 27 + usize::from(theora[26]);
         theora[body..body + 7].copy_from_slice(b"\x80theora");
-        assert!(!only_vorbis_streams(&theora));
+        assert_eq!(ogg_head(&theora), OggHead::Other);
         // A stream of a codec this source does not know.
         let mut unknown = vorbis[..first].to_vec();
         unknown[body..body + 7].copy_from_slice(b"\x01vorbit");
-        assert!(!only_vorbis_streams(&unknown));
+        assert_eq!(ogg_head(&unknown), OggHead::Other);
         // A Vorbis stream and a Theora stream: the file has video.
         let mut both = vorbis[..first].to_vec();
         both.extend_from_slice(&theora);
-        assert!(!only_vorbis_streams(&both));
+        assert_eq!(ogg_head(&both), OggHead::Other);
         // Two Vorbis streams.
         let mut two = vorbis[..first].to_vec();
         two.extend_from_slice(&vorbis);
-        assert!(only_vorbis_streams(&two));
-        assert!(!only_vorbis_streams(b""));
-        assert!(!only_vorbis_streams(b"not a video"));
-        // A first page that ends before its packet does.
-        assert!(!only_vorbis_streams(&vorbis[..28]));
+        assert_eq!(ogg_head(&two), OggHead::Vorbis);
+        assert_eq!(ogg_head(b""), OggHead::Other);
+        assert_eq!(ogg_head(b"not a video"), OggHead::Other);
+        // A first page that ends before its packet does, or inside the sample rate.
+        assert_eq!(ogg_head(&vorbis[..28]), OggHead::Other);
+        assert_eq!(ogg_head(&vorbis[..body + 14]), OggHead::Other);
+    }
+
+    /// The Ogg Vorbis file `src` with its identification header changed by `edit`.
+    fn with_identification(src: &[u8], edit: impl FnOnce(&mut Vec<u8>)) -> Vec<u8> {
+        let parsed = ogg::open(src).unwrap();
+        let stream = &parsed.streams[0];
+        let mut w = ogg::PageWriter::new(1);
+        let mut headers = stream.headers.clone();
+        edit(&mut headers[0]);
+        let mut bytes = Vec::new();
+        for h in &headers {
+            bytes.extend(w.header(h));
+        }
+        for i in 0..stream.packets.len() {
+            bytes.extend(w.packet(&parsed.read_packet(src, 0, i).unwrap(), 0));
+        }
+        bytes.extend(w.finish(stream.last_granule));
+        bytes
+    }
+
+    /// The Ogg Vorbis file `src` with the sample rate in its identification header set to `rate`.
+    fn at_rate(src: &[u8], rate: u32) -> Vec<u8> {
+        with_identification(src, |id| id[12..16].copy_from_slice(&rate.to_le_bytes()))
+    }
+
+    #[test]
+    fn ogg_vorbis_files_outside_the_sample_rates_play_through_ffmpeg() {
+        let base = ogg_vorbis(2, 4800);
+        for rate in [0, 1, 7_999, 192_001, u32::MAX] {
+            let bytes = at_rate(&base, rate);
+            assert_eq!(ogg_head(&bytes), OggHead::VorbisRateOutOfRange(rate));
+            let (dir, file) = temp_file(&format!("vorbis-rate-{rate}"), "rate.ogg", &bytes);
+            let opened = VorbisFile::open(&file).map(|f| f.is_some());
+            let _ = std::fs::remove_dir_all(&dir);
+            // The decoder itself refuses a rate of 0.
+            assert_ne!(opened, Ok(true), "{rate} Hz is not played by the player");
+            if rate != 0 {
+                assert_eq!(opened, Ok(false), "{rate} Hz is left to ffmpeg");
+            }
+        }
+        for rate in [8_000, 44_100, 192_000] {
+            let bytes = at_rate(&base, rate);
+            assert_eq!(ogg_head(&bytes), OggHead::Vorbis, "{rate} Hz");
+            let (dir, file) = temp_file(&format!("vorbis-rate-{rate}"), "rate.ogg", &bytes);
+            let opened = VorbisFile::open(&file).map(|f| f.map(|f| f.sample_rate()));
+            let _ = std::fs::remove_dir_all(&dir);
+            assert_eq!(opened, Ok(Some(rate)));
+        }
+    }
+
+    #[test]
+    fn an_ogg_vorbis_file_outside_the_sample_rates_reports_a_missing_ffmpeg() {
+        let (dir, file) = temp_file("vorbis-rate-no-ffmpeg", "rate.ogg", &at_rate(&ogg_vorbis(2, 4800), 1));
+        let io = SourceIo::new(MasterClock::new());
+        let mut i = Instance::new(Err("ffmpeg (set its location in Settings › Output) was not found".into()));
+        let started = i.update(&Settings::new().with("file", file.to_string_lossy().as_ref()), &io);
+        let player = i.player_thread.is_some();
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(!player, "no player thread is started");
+        assert!(
+            matches!(&started, Err(PluginError::Unavailable(e)) if e.contains("sample rate of 1 Hz") && e.contains("was not found")),
+            "{started:?}"
+        );
+    }
+
+    #[test]
+    fn identification_headers_without_channels_or_with_bad_block_sizes_are_refused() {
+        let base = ogg_vorbis(2, 4800);
+        // The channel count, and the block size exponents: the short one in the low four bits.
+        let cases: [(&str, fn(&mut Vec<u8>)); 4] = [
+            ("no channels", |id| id[11] = 0),
+            ("short block of 32", |id| id[28] = 0xB5),
+            ("long block of 16384", |id| id[28] = 0xE8),
+            ("short block above the long one", |id| id[28] = 0x9B),
+        ];
+        for (what, edit) in cases {
+            let bytes = with_identification(&base, edit);
+            let (dir, file) = temp_file("vorbis-bad-id", "bad.ogg", &bytes);
+            let opened = VorbisFile::open(&file).map(|f| f.is_some());
+            let _ = std::fs::remove_dir_all(&dir);
+            assert!(opened.is_err(), "{what}: {opened:?}");
+        }
     }
 
     #[test]
