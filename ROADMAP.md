@@ -5,6 +5,8 @@
 - Scenes, sources, scene items with move, resize, rotate, lock and visibility, and undo.
 - Built-in sources: color, image, text, media file, display capture, window capture, camera, audio
   input and desktop audio.
+- Ogg Vorbis files play in the media file source without ffmpeg, through `craft-audio`'s Vorbis
+  decoder. Files with more than two channels are mixed down to stereo.
 - Camera capture on Windows (Media Foundation), macOS (AVFoundation) and Linux (V4L2), with the
   camera and its format (size, frame rate and pixel encoding) chosen in the source's Properties.
 - Audio input and desktop audio capture on Linux through the PipeWire sound server. The device

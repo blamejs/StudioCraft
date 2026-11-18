@@ -94,31 +94,32 @@ eframe = { version = "0.37", default-features = false }
 egui-wgpu = "0.37"
 
 # Shared Craft crates: storytold/craft-libs, MIT OR Apache-2.0, pinned to one rev.
-craft-ui = { git = "https://github.com/storytold/craft-libs", rev = "7780b4f58ec3d56b1f908c8fa3b1258fabae3880", features = ["serde"] }
-craft-menu = { git = "https://github.com/storytold/craft-libs", rev = "7780b4f58ec3d56b1f908c8fa3b1258fabae3880" }
-craft-keymap = { git = "https://github.com/storytold/craft-libs", rev = "7780b4f58ec3d56b1f908c8fa3b1258fabae3880", features = ["egui"] }
-craft-settings = { git = "https://github.com/storytold/craft-libs", rev = "7780b4f58ec3d56b1f908c8fa3b1258fabae3880" }
-craft-dialogs = { git = "https://github.com/storytold/craft-libs", rev = "7780b4f58ec3d56b1f908c8fa3b1258fabae3880" }
-craft-quit = { git = "https://github.com/storytold/craft-libs", rev = "7780b4f58ec3d56b1f908c8fa3b1258fabae3880", features = ["egui"] }
-craft-mcp = { git = "https://github.com/storytold/craft-libs", rev = "7780b4f58ec3d56b1f908c8fa3b1258fabae3880" }
-craft-control-protocol = { git = "https://github.com/storytold/craft-libs", rev = "7780b4f58ec3d56b1f908c8fa3b1258fabae3880" }
-craft-jsonrpc = { git = "https://github.com/storytold/craft-libs", rev = "7780b4f58ec3d56b1f908c8fa3b1258fabae3880" }
-craft-time = { git = "https://github.com/storytold/craft-libs", rev = "7780b4f58ec3d56b1f908c8fa3b1258fabae3880" }
-craft-font-catalog = { git = "https://github.com/storytold/craft-libs", rev = "7780b4f58ec3d56b1f908c8fa3b1258fabae3880" }
-craft-image-codecs = { git = "https://github.com/storytold/craft-libs", rev = "7780b4f58ec3d56b1f908c8fa3b1258fabae3880" }
-craft-color = { git = "https://github.com/storytold/craft-libs", rev = "7780b4f58ec3d56b1f908c8fa3b1258fabae3880" }
-craft-atomic = { git = "https://github.com/storytold/craft-libs", rev = "7780b4f58ec3d56b1f908c8fa3b1258fabae3880" }
-craft-fonts-build = { git = "https://github.com/storytold/craft-libs", rev = "7780b4f58ec3d56b1f908c8fa3b1258fabae3880" }
-craft-i18n = { git = "https://github.com/storytold/craft-libs", rev = "7780b4f58ec3d56b1f908c8fa3b1258fabae3880" }
-# The Matroska writer for recordings, and in tests the demuxers that read back what the writers here produce.
-craft-media ={ git = "https://github.com/storytold/craft-libs", rev = "7780b4f58ec3d56b1f908c8fa3b1258fabae3880", default-features = false }
+craft-ui = { git = "https://github.com/storytold/craft-libs", rev = "2dc55f434142ce20e4b89c5986199849a65f6f8b", features = ["serde"] }
+craft-menu = { git = "https://github.com/storytold/craft-libs", rev = "2dc55f434142ce20e4b89c5986199849a65f6f8b" }
+craft-keymap = { git = "https://github.com/storytold/craft-libs", rev = "2dc55f434142ce20e4b89c5986199849a65f6f8b", features = ["egui"] }
+craft-settings = { git = "https://github.com/storytold/craft-libs", rev = "2dc55f434142ce20e4b89c5986199849a65f6f8b" }
+craft-dialogs = { git = "https://github.com/storytold/craft-libs", rev = "2dc55f434142ce20e4b89c5986199849a65f6f8b" }
+craft-quit = { git = "https://github.com/storytold/craft-libs", rev = "2dc55f434142ce20e4b89c5986199849a65f6f8b", features = ["egui"] }
+craft-mcp = { git = "https://github.com/storytold/craft-libs", rev = "2dc55f434142ce20e4b89c5986199849a65f6f8b" }
+craft-control-protocol = { git = "https://github.com/storytold/craft-libs", rev = "2dc55f434142ce20e4b89c5986199849a65f6f8b" }
+craft-jsonrpc = { git = "https://github.com/storytold/craft-libs", rev = "2dc55f434142ce20e4b89c5986199849a65f6f8b" }
+craft-time = { git = "https://github.com/storytold/craft-libs", rev = "2dc55f434142ce20e4b89c5986199849a65f6f8b" }
+craft-font-catalog = { git = "https://github.com/storytold/craft-libs", rev = "2dc55f434142ce20e4b89c5986199849a65f6f8b" }
+craft-image-codecs = { git = "https://github.com/storytold/craft-libs", rev = "2dc55f434142ce20e4b89c5986199849a65f6f8b" }
+craft-color = { git = "https://github.com/storytold/craft-libs", rev = "2dc55f434142ce20e4b89c5986199849a65f6f8b" }
+craft-atomic = { git = "https://github.com/storytold/craft-libs", rev = "2dc55f434142ce20e4b89c5986199849a65f6f8b" }
+craft-fonts-build = { git = "https://github.com/storytold/craft-libs", rev = "2dc55f434142ce20e4b89c5986199849a65f6f8b" }
+craft-i18n = { git = "https://github.com/storytold/craft-libs", rev = "2dc55f434142ce20e4b89c5986199849a65f6f8b" }
+# The Matroska writer for recordings, the Ogg reader for Ogg Vorbis media files, and in tests the demuxers that read
+# back what the writers here produce.
+craft-media ={ git = "https://github.com/storytold/craft-libs", rev = "2dc55f434142ce20e4b89c5986199849a65f6f8b", default-features = false }
 # Help › Check for Updates, the check at start and finishing an update the app installed itself.
-craft-update = { git = "https://github.com/storytold/craft-libs", rev = "7780b4f58ec3d56b1f908c8fa3b1258fabae3880", features = ["egui"] }
+craft-update = { git = "https://github.com/storytold/craft-libs", rev = "2dc55f434142ce20e4b89c5986199849a65f6f8b", features = ["egui"] }
 # Who draws the window frame (the desktop or the app), and the menu strip as the title bar.
-craft-window = { git = "https://github.com/storytold/craft-libs", rev = "7780b4f58ec3d56b1f908c8fa3b1258fabae3880", features = ["egui"] }
-# The built-in H.264 encoder (and its decoder, for tests) and the AAC encoder.
-craft-video = { git = "https://github.com/storytold/craft-libs", rev = "7780b4f58ec3d56b1f908c8fa3b1258fabae3880", default-features = false, features = ["h264-encode", "threads"] }
-craft-audio = { git = "https://github.com/storytold/craft-libs", rev = "7780b4f58ec3d56b1f908c8fa3b1258fabae3880", default-features = false, features = ["aac-encode"] }
+craft-window = { git = "https://github.com/storytold/craft-libs", rev = "2dc55f434142ce20e4b89c5986199849a65f6f8b", features = ["egui"] }
+# The built-in H.264 encoder (and its decoder, for tests), the AAC encoder and the Vorbis decoder.
+craft-video = { git = "https://github.com/storytold/craft-libs", rev = "2dc55f434142ce20e4b89c5986199849a65f6f8b", default-features = false, features = ["h264-encode", "threads"] }
+craft-audio = { git = "https://github.com/storytold/craft-libs", rev = "2dc55f434142ce20e4b89c5986199849a65f6f8b", default-features = false, features = ["aac-encode"] }
 
 # egui 0.37 and winit: the suite's forks (storytold/egui, storytold/winit), as craft-libs pins them.
 [patch.crates-io]
