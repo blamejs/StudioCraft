@@ -50,6 +50,11 @@ pub(crate) fn nominal_bitrate(p: &Params) -> u32 {
     u32::try_from(bps).unwrap_or(u32::MAX).max(1)
 }
 
+/// The constant-bitrate buffer size, in bytes, that holds one second at `kbps` kbit/s.
+pub(crate) fn cbr_buffer_bytes(kbps: u32) -> u32 {
+    kbps.saturating_mul(125).max(1)
+}
+
 /// The largest parameter-set blob read from an output type; a larger one is not read.
 pub(crate) const MAX_HEADER: u32 = 1 << 16;
 

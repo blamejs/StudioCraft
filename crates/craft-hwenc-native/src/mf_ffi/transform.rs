@@ -32,7 +32,9 @@ use windows::Win32::System::Variant::VARIANT;
 use windows::core::{GUID, Interface};
 
 use super::api::{self, Api};
-use super::{MAX_HEADER, MAX_SAMPLES_PER_OUTPUT, MAX_STREAM_CHANGES, OpenError, Output, Params, nominal_bitrate, output_size, quality};
+use super::{
+    MAX_HEADER, MAX_SAMPLES_PER_OUTPUT, MAX_STREAM_CHANGES, OpenError, Output, Params, cbr_buffer_bytes, nominal_bitrate, output_size, quality,
+};
 use crate::{Codec, Rate};
 
 /// How long a wait for the encoder's next event lasts before it is an error.
@@ -202,7 +204,7 @@ impl Transform {
                 let bps = kbps.saturating_mul(1000);
                 set(&CODECAPI_AVEncCommonRateControlMode, eAVEncCommonRateControlMode_CBR.0 as u32, "constant bitrate")?;
                 set(&CODECAPI_AVEncCommonMeanBitRate, bps, "the bitrate")?;
-                set(&CODECAPI_AVEncCommonBufferSize, bps, "a one-second buffer")?;
+                set(&CODECAPI_AVEncCommonBufferSize, cbr_buffer_bytes(kbps), "a one-second buffer")?;
                 bps
             }
         };

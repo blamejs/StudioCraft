@@ -342,6 +342,8 @@ mod tests {
         let huge = Params { width: u32::MAX, height: u32::MAX, fps: (u32::MAX, 1), ..p };
         assert_eq!(mf_ffi::nominal_bitrate(&huge), u32::MAX);
         assert_eq!(mf_ffi::nominal_bitrate(&Params { width: 2, height: 2, ..p }), 24);
+        // The buffer size is in bytes: one second at 6000 kbit/s is 750,000 bytes.
+        assert_eq!([1, 6000, u32::MAX].map(mf_ffi::cbr_buffer_bytes), [125, 750_000, u32::MAX]);
     }
 
     #[test]
