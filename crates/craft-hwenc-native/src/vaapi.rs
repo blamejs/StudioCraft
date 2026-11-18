@@ -42,11 +42,12 @@ pub fn driver() -> Result<(), Error> {
     vaapi_ffi::driver().map_err(Error::NoDevice)
 }
 
-/// Whether a VA-API driver opens an encoder that writes `codec` for a 256 × 144 stream at 30
+/// Whether a VA-API driver opens an encoder that writes `codec` for a 256 × 192 stream at 30
 /// frames per second. It opens the encoder and closes it again.
 pub fn available(codec: Codec) -> Result<(), Error> {
     driver()?;
-    let cfg = Config { codec, input: Input::Nv12, width: 256, height: 144, fps: (30, 1), rate: Rate::Quality(23), keyint: 60 };
+    // Both sides are multiples of 64, the largest smallest coding block an HEVC driver reports.
+    let cfg = Config { codec, input: Input::Nv12, width: 256, height: 192, fps: (30, 1), rate: Rate::Quality(23), keyint: 60 };
     Session::open(&params(&cfg)).map(drop).map_err(Error::from)
 }
 
