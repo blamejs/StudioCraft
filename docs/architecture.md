@@ -72,7 +72,7 @@ has no stated value in the code's documentation.
 | Compositor | The master clock's frame ticks | A ring of 3 GPU textures | Not documented | No allocation in the steady state |
 | Scopes | The newest program copy, handed over when the thread is idle | One copy | A copy made while the thread is busy is not handed over | Not documented |
 | Output (ffmpeg) | The program's frames and the mixer's audio blocks | 256 audio blocks; the video bound is not documented | Not documented | Not documented |
-| Output (built-in encoders) | The program's frames and the mixer's audio blocks; the file thread takes the encode threads' packets | 256 audio blocks, and 64 MiB and 3 s of packets | Not documented; Not documented; the recording fails when an encoder lags 10 s | Not documented |
+| Output (built-in encoders) | The program's frames and the mixer's audio blocks; the file thread takes the encode threads' packets | 256 audio blocks, and 64 MiB and 3 s of packets | An encoder that finds the packet queue full waits up to 2 s (`outputs::native::DISK_WAIT`), and then the recording fails. The recording also fails when one encoder falls more than 10 s behind the other (`MAX_LAG_NS`). | Not documented |
 | Replay buffer | The encode threads' packets | A ring bounded by length and bytes | Not documented | Not documented |
 | Window | `Studio` state | Not documented | Not documented | Not documented |
 
