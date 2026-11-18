@@ -153,11 +153,15 @@ extern "C" fn on_error(_user: *mut c_void, message: *const c_char) {
     });
 }
 
-/// The `/dev/dri/renderD*` nodes in number order.
-fn render_nodes() -> Vec<String> {
-    let mut nodes: Vec<(u32, String)> = std::fs::read_dir("/dev/dri")
-        .into_iter()
-        .flatten()
+/// The `/dev/dri/renderD*` nodes in number order; none without `/dev/dri`, and an error when it
+/// cannot be read.
+fn render_nodes() -> Result<Vec<String>, String> {
+    let dir = match std::fs::read_dir("/dev/dri") {
+        Ok(dir) => dir,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => return Err(format!("/dev/dri: {e}")),
+    };
+    let mut nodes: Vec<(u32, String)> = dir
         .flatten()
         .filter_map(|e| {
             let name = e.file_name().into_string().ok()?;
@@ -166,7 +170,7 @@ fn render_nodes() -> Vec<String> {
         })
         .collect();
     nodes.sort();
-    nodes.into_iter().map(|(_, path)| path).collect()
+    Ok(nodes.into_iter().map(|(_, path)| path).collect())
 }
 
 /// An initialized VA display on a DRM render node.
@@ -399,7 +403,7 @@ impl Session {
             return Err(OpenError::NoEncoder(why.clone()));
         }
         let mut errors = Vec::new();
-        for node in render_nodes() {
+        for node in render_nodes().map_err(OpenError::NoDevice)? {
             let found = Display::open(api, &node).map_err(OpenError::NoDevice).and_then(|d| d.choose(p).map(|c| (d, c)));
             match found.and_then(|(display, choice)| Session::on(display, choice, p)) {
                 Ok(s) => return Ok(s),

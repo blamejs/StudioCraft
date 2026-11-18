@@ -349,6 +349,10 @@ mod tests {
         assert_eq!(control(Rate::Cbr(u32::MAX / 1000), VA_RC_CBR, 9), Ok(Control::Cbr(u32::MAX / 1000 * 1000)));
         let nominal = vaapi_ffi::nominal_bitrate(&p(Codec::H264, 1920, 1080, (60, 1)));
         assert_eq!(nominal, 12_441_600);
+        let fast = vaapi_ffi::nominal_bitrate(&p(Codec::Hevc, 4096, 4096, (240, 1)));
+        assert_eq!(fast, 240_000_000, "at most the bitrate HEVC level 6.2 Main tier takes");
+        assert_eq!(hevc_level(4096, 4096, (240, 1), fast), 186);
+        assert_eq!(vaapi_ffi::nominal_bitrate(&p(Codec::H264, 8192, 4320, (240, 1))), 800_000_000);
     }
 
     #[test]

@@ -226,11 +226,16 @@ pub(crate) fn bitrate_bps(kbps: u32) -> u32 {
 }
 
 /// A tenth of a bit per pixel per frame: the variable bitrate quality mode runs at when the driver
-/// has no constant QP.
+/// has no constant QP. It is at most the level 6.2 bitrate every profile the encoder writes takes:
+/// 800 Mbit/s for H.264 (Table A-1's MaxBR) and 240 Mbit/s for HEVC Main tier (Table A.9).
 pub(crate) fn nominal_bitrate(p: &Params) -> u32 {
     let pixels = u64::from(p.width) * u64::from(p.height);
     let bps = pixels.saturating_mul(u64::from(p.fps.0)) / u64::from(p.fps.1.max(1)) / 10;
-    u32::try_from(bps).unwrap_or(u32::MAX).max(1)
+    let most: u64 = match p.codec {
+        Codec::H264 => 800_000_000,
+        Codec::Hevc => 240_000_000,
+    };
+    u32::try_from(bps.min(most)).unwrap_or(u32::MAX).max(1)
 }
 
 /// The `VAEncMiscParameterFrameRate::framerate` word of `fps`: the numerator in the low 16 bits and
