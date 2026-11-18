@@ -74,6 +74,35 @@ Balanced. More than 14 threads gives little: the encoder splits a picture into a
 per four rows of macroblocks (17 slices at 1080p, 12 at 720p). Speed is the encoder's default
 preset.
 
+### FLV tags
+
+Measured on 2026-11-18 on Linux (AMD EPYC 9R14), release build. `cargo bench -p craft-flv` writes
+and reads one second of a 6000 kb/s, 60 fps H.264 stream with 160 kb/s AAC: 60 video tags of about
+12 500 bytes and 47 audio tags of 426 bytes, 770 KB in all, into buffers that keep their capacity.
+
+The destination benches send the same second to 4 outputs. "Annex B per destination" gives every
+output the Annex B access units, so each output scans them for start codes twice, once to measure
+the tag and once to write it. "Converted once" converts each access unit with `annexb_to_nalus`
+once, checks each body once with `Body::check`, and writes the one result to every output with
+`Writer::write_checked`, or with `Checked::write_to` for RTMP message bodies. "With zero bytes" uses
+pseudo-random slice data with emulation prevention applied, so about one byte in 256 is 0, as in
+entropy-coded slices; the other Annex B input has no zero bytes in its slices.
+
+| Bench | Median | Range (95%) |
+| --- | --- | --- |
+| `flv/write 1 s, Annex B input` | 191.0 µs | 190.4 to 191.6 µs |
+| `flv/write 1 s, Annex B input with zero bytes` | 198.2 µs | 197.3 to 199.3 µs |
+| `flv/write 1 s, length-prefixed input` | 15.78 µs | 15.71 to 15.85 µs |
+| `flv/write 1 s to 4 destinations, Annex B per destination` | 820.5 µs | 815.0 to 826.0 µs |
+| `flv/write 1 s to 4 destinations, converted once` | 170.5 µs | 169.5 to 171.5 µs |
+| `flv/RTMP bodies 1 s to 4 destinations, converted once` | 161.1 µs | 160.4 to 162.0 µs |
+| `flv/write 1 s through a BufWriter, length-prefixed input` | 15.56 µs | 15.52 to 15.61 µs |
+| `flv/read and parse 1 s` | 15.53 µs | 15.49 to 15.57 µs |
+
+With each access unit converted once and the result shared, sending the stream to 4 destinations
+costs 170.5 µs of one core per second of stream, or 2.8 µs per video frame. Converting it for each
+destination costs 820.5 µs. Runs on this host vary by up to 15% from one run to the next.
+
 ## Measuring
 
 - Run the criterion benches with `cargo bench -p <crate>`.

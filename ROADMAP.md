@@ -86,7 +86,8 @@
 1. **Translations.** A `studiocraft.tsv` catalog for every other locale craft-i18n has, and
    right-to-left layout for the dock order, the order of the menu titles (egui's `MenuBar` lays
    them out left to right) and the Settings, Properties and Filters windows.
-2. **Multiple outputs.** Several streams at once, and a virtual camera.
+2. **Multiple outputs.** Several streams at once, and a virtual camera. `craft-flv` writes and
+   reads the FLV tags and AMF0 values an RTMP stream carries.
 3. **Web build.** The model and plugin crates already build for WebAssembly; a browser editor for
    scene collections is the first step.
 4. **Hardware acceleration.** Color conversion and scaling on the GPU, hardware encoders checked
