@@ -4,6 +4,10 @@
 
 #![cfg_attr(not(target_os = "macos"), allow(dead_code))]
 
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+use crossbeam_queue::ArrayQueue;
+
 use crate::{Codec, Rate};
 
 #[cfg(target_os = "macos")]
@@ -60,6 +64,69 @@ pub(crate) const MAX_FRAME_BYTES: usize = 256 << 20;
 /// The most parameter sets read from one format description.
 pub(crate) const MAX_SETS: usize = 16;
 
+/// The most frames a session holds between sending a frame and reading its sample.
+pub(crate) const MAX_WAITING: usize = 64;
+
+/// The bounded lock-free queue that carries compressed samples from the output callback's thread
+/// to the session's owner, with a count of the frames sent whose samples have not been read. The
+/// owner sends a frame only while [`full`](Handoff::full) is false, so every frame's sample has a
+/// slot. A sample that still finds the queue full is dropped, and the next [`take`] is an error.
+///
+/// [`take`]: Handoff::take
+pub(crate) struct Handoff {
+    q: ArrayQueue<Result<Output, String>>,
+    /// Frames sent whose samples have not been read. Only the owner changes it.
+    waiting: AtomicUsize,
+    /// Samples dropped because the queue was full.
+    lost: AtomicUsize,
+}
+
+impl Handoff {
+    /// A queue that holds up to `capacity` samples (at least 1).
+    pub(crate) fn new(capacity: usize) -> Handoff {
+        Handoff { q: ArrayQueue::new(capacity.max(1)), waiting: AtomicUsize::new(0), lost: AtomicUsize::new(0) }
+    }
+
+    /// Whether as many frames wait as the queue holds, so the frames in flight must be completed
+    /// and read before another one is sent.
+    pub(crate) fn full(&self) -> bool {
+        self.waiting.load(Ordering::Relaxed) >= self.q.capacity()
+    }
+
+    /// Count a frame the session took, whose sample the callback will queue.
+    pub(crate) fn sent(&self) {
+        self.waiting.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Queue `o` without blocking. When the queue is full, `o` is dropped and the loss is
+    /// recorded for the next [`take`](Handoff::take).
+    pub(crate) fn push(&self, o: Result<Output, String>) {
+        if self.q.push(o).is_err() {
+            self.lost.fetch_add(1, Ordering::AcqRel);
+        }
+    }
+
+    /// Move the queued samples to `out`, in the order they were queued. A failed sample, or a
+    /// sample lost to a full queue, is an error; the samples after a failed one stay queued.
+    pub(crate) fn take(&self, out: &mut Vec<Output>) -> Result<(), String> {
+        while let Some(o) = self.q.pop() {
+            self.read(1);
+            out.push(o?);
+        }
+        let lost = self.lost.swap(0, Ordering::AcqRel);
+        if lost > 0 {
+            self.read(lost);
+            return Err(format!("more than {} compressed frames waited to be read, and {lost} were lost", self.q.capacity()));
+        }
+        Ok(())
+    }
+
+    fn read(&self, n: usize) {
+        let left = self.waiting.load(Ordering::Relaxed).saturating_sub(n);
+        self.waiting.store(left, Ordering::Relaxed);
+    }
+}
+
 /// The session's quality for level `q` (1 to 51, lower is better): 0.0 to 0.98, higher is better.
 pub(crate) fn quality(q: u32) -> f64 {
     f64::from(100u32.saturating_sub(q.saturating_mul(2))) / 100.0
@@ -100,8 +167,16 @@ mod none {
             Err(OpenError::NoDevice("VideoToolbox runs on macOS only".into()))
         }
 
-        pub fn encode(&mut self, _: &[u8], _: i64, _: i64, _: &mut Vec<Output>) -> Result<(), String> {
+        pub fn encode(&mut self, _: &[u8], _: i64, _: i64) -> Result<(), String> {
             Err("VideoToolbox runs on macOS only".into())
+        }
+
+        pub fn take(&mut self, _: &mut Vec<Output>) -> Result<(), String> {
+            Ok(())
+        }
+
+        pub fn full(&self) -> bool {
+            false
         }
 
         pub fn drain(&mut self, _: &mut Vec<Output>) -> Result<(), String> {

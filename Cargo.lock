@@ -1449,6 +1449,7 @@ version = "0.1.0"
 name = "craft-hwenc-native"
 version = "0.1.0"
 dependencies = [
+ "crossbeam-queue",
  "libloading",
  "log",
  "objc2-core-foundation",

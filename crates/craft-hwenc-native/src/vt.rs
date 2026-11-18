@@ -240,14 +240,26 @@ impl Encoder {
         if pts < 0 {
             return Err(Error::Failed(format!("the timestamp {pts} is negative")));
         }
-        let (time, duration) = self.track.send(pts);
         let mut outputs = Vec::new();
-        let sent = self.session.encode(frame, time, duration, &mut outputs);
-        if sent.is_err() {
-            self.track.pending.pop_back();
-        }
+        // When every slot of the callback queue belongs to a frame in flight, those frames are
+        // completed and read first, so the new frame's sample has a slot.
+        let room = if self.session.full() { self.session.drain(&mut outputs) } else { Ok(()) };
+        let (sent, taken) = if room.is_ok() {
+            let (time, duration) = self.track.send(pts);
+            let sent = self.session.encode(frame, time, duration);
+            if sent.is_err() {
+                // Only a frame VideoToolbox did not take leaves the pending list; a frame it took
+                // keeps its time even when reading an earlier sample fails.
+                self.track.pending.pop_back();
+            }
+            (sent, self.session.take(&mut outputs))
+        } else {
+            (Ok(()), Ok(()))
+        };
         let packets = outputs.into_iter().map(|o| self.track.packet(o)).collect::<Result<Vec<_>, _>>()?;
+        room.map_err(Error::Failed)?;
         sent.map_err(Error::Failed)?;
+        taken.map_err(Error::Failed)?;
         Ok(packets)
     }
 
@@ -267,7 +279,7 @@ fn first_frame(cfg: &Config, p: &Params) -> Result<Vec<Vec<u8>>, Error> {
     let gray = [vec![16u8; w * h], vec![128u8; w * h / 2]].concat();
     let (time, duration) = Track::new(cfg.codec, cfg.fps, Vec::new()).send(0);
     let mut out = Vec::new();
-    s.encode(&gray, time, duration, &mut out).map_err(Error::Failed)?;
+    s.encode(&gray, time, duration).map_err(Error::Failed)?;
     s.drain(&mut out).map_err(Error::Failed)?;
     let o = out.first().ok_or_else(|| Error::Failed("the encoder returned no frame".into()))?;
     sorted_sets(cfg.codec, &o.sets)
@@ -411,6 +423,40 @@ mod tests {
         assert_eq!(sorted_sets(Codec::Hevc, &hevc).unwrap(), vec![vec![0x40, 1, 1], vec![0x42, 1, 3], vec![0x44, 1, 4]]);
         assert!(matches!(sorted_sets(Codec::H264, &[SPS.to_vec()]), Err(Error::Failed(why)) if why.contains("PPS")));
         assert!(sorted_sets(Codec::Hevc, &[]).is_err());
+    }
+
+    #[test]
+    fn callback_samples_wait_in_a_bounded_queue_and_a_lost_one_is_an_error() {
+        let handoff = vt_ffi::Handoff::new(2);
+        let mut out = Vec::new();
+        handoff.sent();
+        assert!(!handoff.full());
+        handoff.sent();
+        assert!(handoff.full(), "two frames in flight fill a queue of two");
+        handoff.push(Ok(output(&[IDR], Some(0))));
+        handoff.push(Ok(output(&[P], Some(1))));
+        handoff.take(&mut out).unwrap();
+        assert!(!handoff.full(), "reading the samples frees their slots");
+        assert_eq!(out.iter().map(|o| o.time).collect::<Vec<_>>(), [Some(0), Some(1)]);
+        out.clear();
+        for t in 2..5 {
+            handoff.sent();
+            handoff.push(Ok(output(&[P], Some(t))));
+        }
+        let lost = handoff.take(&mut out);
+        assert!(matches!(lost, Err(why) if why.contains("more than 2")), "a sample pushed onto a full queue was lost");
+        assert_eq!(out.iter().map(|o| o.time).collect::<Vec<_>>(), [Some(2), Some(3)], "the queued samples still come out in order");
+        assert!(!handoff.full(), "a lost sample no longer waits");
+        out.clear();
+        handoff.sent();
+        handoff.sent();
+        handoff.push(Err("VideoToolbox dropped a frame".into()));
+        handoff.push(Ok(output(&[P], Some(5))));
+        assert_eq!(handoff.take(&mut out), Err("VideoToolbox dropped a frame".into()));
+        assert!(out.is_empty());
+        handoff.take(&mut out).unwrap();
+        assert_eq!(out.iter().map(|o| o.time).collect::<Vec<_>>(), [Some(5)], "a sample after a failed one stays queued");
+        assert!(!handoff.full());
     }
 
     #[test]

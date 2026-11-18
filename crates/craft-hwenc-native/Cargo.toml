@@ -24,6 +24,9 @@ too_many_arguments = "allow"
 type_complexity = "allow"
 undocumented_unsafe_blocks = "deny"
 
+[dependencies]
+crossbeam-queue.workspace = true
+
 # Windows: NVENC runs on a Direct3D 11 device of the NVIDIA adapter, and the driver's
 # `nvEncodeAPI64.dll` is loaded from the system directory. Media Foundation's `mfplat.dll` is also
 # loaded from the system directory at run time.

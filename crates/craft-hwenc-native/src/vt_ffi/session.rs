@@ -4,7 +4,6 @@
 use std::ffi::{CStr, c_char, c_int, c_void};
 use std::panic::AssertUnwindSafe;
 use std::ptr::NonNull;
-use std::sync::{Mutex, PoisonError};
 
 use objc2_core_foundation::{CFArray, CFBoolean, CFDictionary, CFNumber, CFRetained, CFString, CFType};
 use objc2_core_media::{
@@ -27,7 +26,7 @@ use objc2_video_toolbox::{
     kVTVideoEncoderSpecification_RequireHardwareAcceleratedVideoEncoder,
 };
 
-use super::{MAX_FRAME_BYTES, MAX_SETS, OpenError, Output, Params, bitrate_bps, nominal_bitrate, open_error, quality, rescale};
+use super::{Handoff, MAX_FRAME_BYTES, MAX_SETS, MAX_WAITING, OpenError, Output, Params, bitrate_bps, nominal_bitrate, open_error, quality, rescale};
 use crate::{Codec, Rate};
 
 /// The pixel format of the input buffers: NV12 at video range (`'420v'`).
@@ -38,13 +37,7 @@ struct Shared {
     codec: Codec,
     /// The session's timescale, which the samples' times are read in.
     timescale: i32,
-    out: Mutex<Vec<Result<Output, String>>>,
-}
-
-impl Shared {
-    fn push(&self, o: Result<Output, String>) {
-        self.out.lock().unwrap_or_else(PoisonError::into_inner).push(o);
-    }
+    out: Handoff,
 }
 
 /// A compression session that requires a hardware encoder. Dropping it completes the frames in
@@ -63,7 +56,7 @@ pub(crate) struct Session {
 // SAFETY: Apple documents VTCompressionSession and the CoreFoundation, CoreMedia and CoreVideo
 // objects it holds as safe to use from any thread. The session's owner uses it from one thread at
 // a time (`&mut self`), the buffer attributes are never changed after creation, and the callback
-// state sits behind a `Mutex`.
+// state is a lock-free queue and an atomic flag.
 unsafe impl Send for Session {}
 
 impl Drop for Session {
@@ -174,7 +167,7 @@ unsafe extern "C-unwind" fn output_callback(
         // callback; it is only borrowed here.
         read_output(unsafe { sample.as_ref() }, shared)
     }));
-    shared.push(result.unwrap_or_else(|_| Err("a compressed frame could not be read".into())));
+    shared.out.push(result.unwrap_or_else(|_| Err("a compressed frame could not be read".into())));
 }
 
 unsafe extern "C" {
@@ -338,7 +331,7 @@ impl Session {
     pub(crate) fn open(p: &Params) -> Result<Session, OpenError> {
         let (w, h) = (i32::try_from(p.width).unwrap_or(i32::MAX), i32::try_from(p.height).unwrap_or(i32::MAX));
         let timescale = i32::try_from(p.fps.0).map_err(|_| OpenError::Unsupported(format!("the frame rate {}/{}", p.fps.0, p.fps.1)))?;
-        let shared = Box::new(Shared { codec: p.codec, timescale, out: Mutex::new(Vec::new()) });
+        let shared = Box::new(Shared { codec: p.codec, timescale, out: Handoff::new(MAX_WAITING) });
         // SAFETY: reading an immutable framework constant.
         let require_key: &CFString = unsafe { kVTVideoEncoderSpecification_RequireHardwareAcceleratedVideoEncoder };
         let spec = CFDictionary::<CFString, CFType>::from_slices(&[require_key], &[CFBoolean::new(true).as_ref()]);
@@ -421,8 +414,9 @@ impl Session {
     }
 
     /// Send the NV12 `frame` at `time` lasting `duration` (both in units of 1 / the frame rate's
-    /// numerator), and move the samples that came out to `out`.
-    pub(crate) fn encode(&mut self, frame: &[u8], time: i64, duration: i64, out: &mut Vec<Output>) -> Result<(), String> {
+    /// numerator). An error means VideoToolbox did not take the frame; [`take`](Session::take)
+    /// reads the samples that came out.
+    pub(crate) fn encode(&mut self, frame: &[u8], time: i64, duration: i64) -> Result<(), String> {
         let buffer = self.new_buffer()?;
         fill(&buffer, self.width, self.height, frame)?;
         let (pts, duration) = (cm_time(time, self.timescale), cm_time(duration, self.timescale));
@@ -432,7 +426,15 @@ impl Session {
         if status != 0 {
             return Err(format!("VideoToolbox did not take a frame ({status})"));
         }
-        self.take(out)
+        // VideoToolbox calls the output callback once for every frame it took.
+        self.shared.out.sent();
+        Ok(())
+    }
+
+    /// Whether the frames waiting to be read fill the callback queue, so they must be drained
+    /// before another frame is sent.
+    pub(crate) fn full(&self) -> bool {
+        self.shared.out.full()
     }
 
     /// Finish every frame in flight and move its sample to `out`.
@@ -445,11 +447,8 @@ impl Session {
         self.take(out)
     }
 
-    fn take(&mut self, out: &mut Vec<Output>) -> Result<(), String> {
-        let done = std::mem::take(&mut *self.shared.out.lock().unwrap_or_else(PoisonError::into_inner));
-        for o in done {
-            out.push(o?);
-        }
-        Ok(())
+    /// Move the samples that came out so far to `out`. A failed or lost sample is an error.
+    pub(crate) fn take(&mut self, out: &mut Vec<Output>) -> Result<(), String> {
+        self.shared.out.take(out)
     }
 }
