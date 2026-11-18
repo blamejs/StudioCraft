@@ -67,8 +67,10 @@ Each tag is checked before any of it is written, and a refused tag leaves the ou
 - length-prefixed NAL units whose lengths are 0 or do not cover the data exactly;
 - a composition time outside -8 388 608 to 8 388 607 ms (a signed 24-bit field);
 - an AudioSpecificConfig shorter than 2 bytes or with audio object type 0;
-- an empty AAC frame, or one that starts with an ADTS header;
-- script data that does not start with an AMF0 string;
+- an empty AAC frame, or one that is whole ADTS frames back to back (each with the sync word,
+  layer 0, and a frame_length that ends inside the input, the last at its end);
+- script data that is not an AMF0 name string followed by one value that `parse_script` reads
+  back. The check walks the bytes without allocating;
 - a body longer than 16 777 215 bytes (`MAX_TAG_DATA`); the check of an Annex B access unit stops
   at the first NAL unit past the limit;
 - a negative timestamp, or one earlier than the last tag of the same type (`tag_header` refuses a

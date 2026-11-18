@@ -123,9 +123,18 @@ fn bad_inputs_are_refused_before_writing() {
         Body::AacSequenceHeader(&[0x11]),
         Body::AacSequenceHeader(&[0x01, 0x90]),
         Body::AacRaw(&[]),
-        Body::AacRaw(&[0xFF, 0xF1, 0x50, 0x80, 0x01, 0x7F, 0xFC, 0x21]),
+        // A whole ADTS frame: frame_length 8 is the input's length. Then two of them.
+        Body::AacRaw(&[0xFF, 0xF1, 0x50, 0x80, 0x01, 0x1F, 0xFC, 0x21]),
+        Body::AacRaw(&[0xFF, 0xF1, 0x50, 0x80, 0x01, 0x1F, 0xFC, 0x21, 0xFF, 0xF1, 0x50, 0x80, 0x01, 0x1F, 0xFC, 0x21]),
         Body::Script(&[]),
         Body::Script(&[0, 0, 0, 0, 0, 0, 0, 0, 0]),
+        // A name string with no bytes after its marker, a name with no value, and a value
+        // followed by more bytes.
+        Body::Script(&[2]),
+        Body::Script(&[2, 0, 1, b'a']),
+        Body::Script(&[2, 0, 1, b'a', 5, 5]),
+        // A name that is not UTF-8.
+        Body::Script(&[2, 0, 1, 0xC3, 5]),
     ];
     for body in cases {
         let mut w = Writer::new(Vec::new(), Header::default()).unwrap();
@@ -133,6 +142,34 @@ fn bad_inputs_are_refused_before_writing() {
         assert_eq!(w.tags(), 0);
         assert_eq!(w.into_inner().len(), 13, "{body:?}");
     }
+}
+
+#[test]
+fn raw_aac_that_only_starts_like_adts_is_written() {
+    // The sync word's bits, but frame_length 11 is not the frame's length of 8, and layer bits
+    // that ADTS never sets.
+    for frame in [&[0xFF, 0xF1, 0x50, 0x80, 0x01, 0x7F, 0xFC, 0x21][..], &[0xFF, 0xF3, 0x50, 0x80, 0x01, 0x1F, 0xFC, 0x21]] {
+        assert_eq!(Body::AacRaw(frame).size().unwrap(), 2 + frame.len(), "{frame:?}");
+    }
+}
+
+#[test]
+fn script_data_that_reads_back_is_written() {
+    let mut data = Vec::new();
+    amf0::write_string(&mut data, "onCuePoint").unwrap();
+    Value::Object(vec![("name".into(), Value::String("a".into())), ("time".into(), Value::Number(1.0))]).write(&mut data).unwrap();
+    let out = tag_bytes(Body::Script(&data), 0);
+    assert_eq!(parse_script(&out[11..out.len() - 4]).unwrap().0, "onCuePoint");
+    // A value parse_script would refuse for its memory is refused before writing.
+    let mut big = Vec::new();
+    amf0::write_string(&mut big, "x").unwrap();
+    big.push(0x0A);
+    big.extend_from_slice(&100_000u32.to_be_bytes());
+    for _ in 0..100_000 {
+        big.extend_from_slice(&[3, 0, 0, 5, 0, 0, 9]);
+    }
+    assert!(parse_script(&big).is_err());
+    assert!(matches!(Body::Script(&big).size(), Err(Error::BadInput(_))));
 }
 
 #[test]

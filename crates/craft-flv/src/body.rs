@@ -122,14 +122,20 @@ impl<'a> Body<'a> {
                 if frame.is_empty() {
                     return Err(Error::BadInput("the AAC frame is empty"));
                 }
-                if frame.len() >= 7 && frame[0] == 0xFF && frame[1] & 0xF0 == 0xF0 {
-                    return Err(Error::BadInput("the AAC frame starts with an ADTS header; pass the raw frame"));
+                if is_adts_frame(frame) {
+                    return Err(Error::BadInput("the AAC frame is a whole ADTS frame; pass the raw frame without its header"));
                 }
                 2 + frame.len()
             }
             Body::Script(data) => {
                 if data.first() != Some(&crate::amf0::marker::STRING) {
                     return Err(Error::BadInput("script data does not start with an AMF0 string"));
+                }
+                // The name and one value, under the limits `parse_script` reads them with.
+                const BAD: Error = Error::BadInput("script data is not an AMF0 name string followed by one value that reads back");
+                let name = crate::amf0::skip(data).map_err(|_| BAD)?;
+                if name + crate::amf0::skip(&data[name..]).map_err(|_| BAD)? != data.len() {
+                    return Err(BAD);
                 }
                 data.len()
             }
@@ -266,6 +272,28 @@ fn video_header(key: bool, packet_type: u8, composition_time: i32) -> [u8; 5] {
 
 fn check_composition_time(ct: i32) -> Result<(), Error> {
     if (MIN_COMPOSITION_TIME..=MAX_COMPOSITION_TIME).contains(&ct) { Ok(()) } else { Err(Error::CompositionTime(ct)) }
+}
+
+/// Whether `data` is one or more whole ADTS frames back to back (ISO/IEC 14496-3 §1.A.2.2): each
+/// with the 12-bit sync word, layer 0, and a frame_length of at least 7 that ends inside the data,
+/// the last ending at its end. A raw frame that only starts with the sync word's bits is not
+/// refused.
+fn is_adts_frame(data: &[u8]) -> bool {
+    let mut rest = data;
+    while let [0xFF, b1, _, b3, b4, b5, _, ..] = rest {
+        if b1 & 0xF6 != 0xF0 {
+            return false;
+        }
+        let len = usize::from(b3 & 3) << 11 | usize::from(*b4) << 3 | usize::from(b5 >> 5);
+        if len < 7 || len > rest.len() {
+            return false;
+        }
+        rest = &rest[len..];
+        if rest.is_empty() {
+            return true;
+        }
+    }
+    false
 }
 
 fn check_avcc(avcc: &[u8]) -> Result<(), Error> {

@@ -303,6 +303,14 @@ pub fn read_all(data: &[u8]) -> Result<Vec<Value>, Error> {
     Ok(out)
 }
 
+/// Checks that `data` starts with one value that [`read`] would accept, without building it, and
+/// returns the number of bytes it takes. It allocates nothing.
+pub(crate) fn skip(data: &[u8]) -> Result<usize, Error> {
+    let mut c = Cursor { data, pos: 0, budget: Budget::default() };
+    c.skip_value(0)?;
+    Ok(c.pos)
+}
+
 struct Cursor<'a> {
     data: &'a [u8],
     pos: usize,
@@ -404,6 +412,78 @@ impl<'a> Cursor<'a> {
             marker::MOVIECLIP | marker::REFERENCE => return Err(Error::Unsupported("AMF0 movie clips and references")),
             _ => return Err(Error::Unsupported("this AMF0 type marker")),
         })
+    }
+
+    /// Walks a string as [`Cursor::utf8`] reads it, without allocating.
+    fn skip_utf8(&mut self, len: usize) -> Result<(), Error> {
+        let b = self.take(len)?;
+        self.charge(len)?;
+        std::str::from_utf8(b).map(|_| ()).map_err(|_| Error::Invalid("an AMF0 string is not UTF-8"))
+    }
+
+    /// Walks one value with the checks and charges of [`Cursor::value`], without building it.
+    fn skip_value(&mut self, depth: usize) -> Result<(), Error> {
+        if depth > MAX_DEPTH {
+            return Err(Error::Invalid("AMF0 values are nested more than 64 deep"));
+        }
+        if !self.budget.value() {
+            return Err(Error::Invalid("the AMF0 data holds more than 262 144 values"));
+        }
+        match self.u8()? {
+            marker::NUMBER => {
+                self.take(8)?;
+            }
+            marker::BOOLEAN => {
+                self.take(1)?;
+            }
+            marker::STRING => {
+                let len = self.u16()? as usize;
+                self.skip_utf8(len)?;
+            }
+            marker::LONG_STRING => {
+                let len = self.u32()? as usize;
+                self.skip_utf8(len)?;
+            }
+            marker::OBJECT => self.skip_properties(depth)?,
+            marker::NULL | marker::UNDEFINED => {}
+            marker::ECMA_ARRAY => {
+                self.u32()?;
+                self.skip_properties(depth)?;
+            }
+            marker::STRICT_ARRAY => {
+                let count = self.u32()? as usize;
+                if count > self.data.len() - self.pos {
+                    return Err(Error::Truncated("an AMF0 strict array"));
+                }
+                self.charge(count.saturating_mul(VALUE_SLOT))?;
+                for _ in 0..count {
+                    self.skip_value(depth + 1)?;
+                }
+            }
+            marker::DATE => {
+                self.take(10)?;
+            }
+            marker::OBJECT_END => return Err(Error::Invalid("an AMF0 object end marker outside an object")),
+            marker::MOVIECLIP | marker::REFERENCE => return Err(Error::Unsupported("AMF0 movie clips and references")),
+            _ => return Err(Error::Unsupported("this AMF0 type marker")),
+        }
+        Ok(())
+    }
+
+    /// Walks properties with the checks and charges of [`Cursor::properties`].
+    fn skip_properties(&mut self, depth: usize) -> Result<(), Error> {
+        let mut n = 0;
+        loop {
+            let len = self.u16()? as usize;
+            if len == 0 && self.data.get(self.pos) == Some(&marker::OBJECT_END) {
+                self.pos += 1;
+                return Ok(());
+            }
+            self.skip_utf8(len)?;
+            self.skip_value(depth + 1)?;
+            self.charge_slot(n, PROPERTY_SLOT)?;
+            n += 1;
+        }
     }
 
     fn properties(&mut self, depth: usize) -> Result<Vec<(String, Value)>, Error> {
