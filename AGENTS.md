@@ -12,7 +12,23 @@ user can act on. It must never crash the app or lose a scene collection.
    a dialog and carry on.
 2. Outside tests, do not use `unwrap()`, `expect()`, `panic!`, `unreachable!`, `todo!` or
    `unimplemented!`. The workspace lints deny them; `clippy.toml` allows them in tests.
-3. Do not write `unsafe` code. The workspace sets `unsafe_code = "forbid"`.
+3. Do not write `unsafe` code. The workspace sets `unsafe_code = "forbid"`. The only exceptions
+   are the crates that call native hardware APIs: `craft-hwenc-native` (hardware video encoding),
+   `craft-gpu-interop` (sharing captured GPU textures with the compositor) and `craft-hwdec`
+   (hardware video decoding). They follow FilmCraft's `crates/platform` rule
+   (https://github.com/storytold/filmcraft/blob/main/docs/adr/0001-platform-ffi.md). Such a crate
+   does not use the workspace lints. Its own `[lints]` tables copy them, except that
+   `unsafe_code` is `deny`, and add `unsafe_op_in_unsafe_fn = "deny"` and
+   `clippy::undocumented_unsafe_blocks = "deny"`. Its `src/lib.rs` starts with
+   `#![deny(unsafe_op_in_unsafe_fn)]`. Its unsafe code is in private FFI modules named `ffi` or
+   `<name>_ffi`, each in its own file and declared as `#[allow(unsafe_code)] mod ffi;` (or
+   `pub(crate) mod`). Every `unsafe` block has a `// SAFETY:` comment saying why it is sound. The
+   files outside the FFI modules hold no `unsafe`, no raw pointer types and no `pub use` from an
+   FFI module, so the public API is safe, and failures are `Result`s. No panic crosses the FFI boundary. The crate builds on every
+   target and reports the backend as unavailable where the operating system API does not exist.
+   `cargo xtask unsafe` holds the list (`ALLOWED` in `xtask/src/unsafe_code.rs`), checks these
+   rules for the listed crates, and fails when any other crate uses `unsafe` or relaxes
+   `unsafe_code`.
 4. Treat every number from a file, a device, a plugin setting or a control request as hostile:
    index with `get()`, use checked or saturating arithmetic, never divide by a value that can be
    zero, and cap allocations sized by input.
