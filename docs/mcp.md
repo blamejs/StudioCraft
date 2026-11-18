@@ -1,15 +1,14 @@
 # MCP server
 
-`studiocraft-cli mcp` is a Model Context Protocol (MCP) server on standard input and output. This
-page is for people who connect an MCP client to StudioCraft: it covers registering the server, its
-options and backends, file confinement, and every tool, resource and prompt.
+`studiocraft-cli mcp` is a Model Context Protocol (MCP) server on standard input and output. An MCP
+client registers it as a program and drives StudioCraft through its tools, resources and prompts.
 
 The `studiocraft-mcp` crate holds the server. Every tool runs StudioCraft commands by id, the same
 commands the menus, shortcuts and the control channel run.
 
 The server runs on one of two backends:
 
-- **Headless.** `studiocraft-cli mcp` runs a studio in its own process, with the built-in plugins,
+- **Headless.** `studiocraft-cli mcp` runs a studio in its own process, with the built-in plug-ins,
   a new scene collection and default settings. It composites on the system's graphics device when
   one is available.
 - **App.** `studiocraft-cli mcp --connect <port>` sends every call to the app started with
@@ -173,7 +172,7 @@ error -32602. A command that fails is a tool result with `isError: true` and the
 | `collection_open` | `path` | Replaces the scene collection with the one in the file. The undo history starts empty. |
 | `collection_save` | `path` | Writes the scene collection to the file, replacing any file at that path. |
 | `app_links` | none | Returns the community links (`app.links`). |
-| `source_schema` | `kind`, `settings?` | Runs `source.schema` and returns the source plugin's settings fields with the choices the system offers now. For `camera`, the `device` field lists the connected cameras and the `format` field the formats of the camera that `settings.device` names. |
+| `source_schema` | `kind`, `settings?` | Runs `source.schema` and returns the source plug-in's settings fields with the choices the system offers now. For `camera`, the `device` field lists the connected cameras and the `format` field the formats of the camera that `settings.device` names. |
 | `record_start` | none | Runs `record.start`, then returns the recording's state from `document.inspect`. Nothing happens when a recording already runs. |
 | `record_stop` | none | Runs `record.stop`, then returns the recording's state. |
 | `stream_start` | none | Runs `stream.start`, then returns the stream's state. The tool is marked `openWorldHint: true`. The headless backend refuses it without `--allow-streaming`. |
@@ -196,6 +195,9 @@ set and run `studiocraft-cli mcp --connect PORT`. Arguments are checked before a
 the wrong type or out of range is error -32602 (a string `x`, for example, is not read as 0).
 `ui_inspect`, `ui_screenshot` and `ui_menu_list` are marked `readOnlyHint: true`.
 
+The earlier `studio_state`, `studio_commands` and `studio_run` tools have been removed. Use
+`doc_inspect`, `command_list` and `command_run` instead.
+
 | Tool | Arguments | What it does |
 | --- | --- | --- |
 | `ui_inspect` | none | Runs `ui.inspect` and returns the window's size, dialogs, docks, preview rectangle, menus, selection and status messages. |
@@ -205,7 +207,7 @@ the wrong type or out of range is error -32602 (a string `x`, for example, is no
 | `ui_key` | `key` | Runs `ui.key`, for example `Cmd+Z`. A key pressed twice is written twice: `A A`. |
 | `ui_type` | `text` | Runs `ui.type`, which types up to 10,000 characters into the focused field. |
 | `ui_menu_list` | none | Runs `ui.menu.list` and returns the menu bar as a tree. |
-| `ui_menu_invoke` | `path` | Runs `ui.menu.invoke`, for example `Scene Collection > New…`. Three dots match the ellipsis, so `Scene Collection > New...` also works. An unknown path, a submenu or a disabled item is an error. |
+| `ui_menu_invoke` | `path` | Runs `ui.menu.invoke`, for example `Scene Collection > New...`. Three dots match an ellipsis when no label in that menu is written exactly as given ([`path`](control-protocol.md#parameters-and-limits)). An unknown path, a submenu or a disabled item is an error. |
 | `ui_dialog` | `answer: ok \| cancel`, `text?` | Runs `ui.dialog`, which answers the open name prompt or the exit confirmation as its buttons do. `ok` presses OK, or Stop and Exit; `cancel` presses Cancel. `text` replaces the name in a name prompt first. A name the prompt refuses is an error and the prompt stays open. |
 | `app_quit` | none | Runs `app.quit`, which closes the window as File › Exit does. While a recording, stream or replay buffer runs, the window asks first and the result's `confirming` is `true`. |
 
@@ -216,7 +218,7 @@ the wrong type or out of range is error -32602 (a string `x`, for example, is no
 | `studiocraft://document` | `document.inspect` with `detail: full`, as JSON. |
 | `studiocraft://commands` | `engine.commands`, as JSON. |
 
-[Resource templates](#resource-templates) read one scene, source, command or plugin at a time.
+[Resource templates](#resource-templates) read one scene, source, command or plug-in at a time.
 
 ### Resource templates
 
@@ -227,7 +229,7 @@ the wrong type or out of range is error -32602 (a string `x`, for example, is no
 | `studiocraft://scene/{id}` | The scene with this id or name: its items, each with `source_name`, and `program` and `preview`, which say whether it is the program scene or, in studio mode, the preview scene. |
 | `studiocraft://source/{id}` | The source with this id or name, with its settings and filters, `scenes` (the names of the scenes that place it) and `global_audio`. |
 | `studiocraft://command/{id}` | The command with this id, as `engine.commands` lists it. |
-| `studiocraft://plugin/{kind}` | The source, filter or transition plugin with this id: `type`, `name`, `version` and `schema` (its settings fields with their defaults), from the `plugin.list` command. |
+| `studiocraft://plugin/{kind}` | The source, filter or transition plug-in with this id: `type`, `name`, `version` and `schema` (its settings fields with their defaults), from the `plugin.list` command. |
 
 A numeric id is looked up as an id first and then as a name. Names may be percent-encoded
 (`studiocraft://scene/Be%20right%20back`). `resources/read` with any other URI, or with a value
@@ -255,7 +257,7 @@ variable (`ref/resource`):
 | `studiocraft://command/{id}` | Command ids. |
 | `studiocraft://scene/{id}` and the `scene` argument of `lower_third` | Scene names. |
 | `studiocraft://source/{id}` | Source names. |
-| `studiocraft://plugin/{kind}` | Plugin ids. |
+| `studiocraft://plugin/{kind}` | Plug-in ids. |
 | `color` | A short list of colors. |
 
 A value is suggested when it starts with the typed text, ignoring case. A reply holds at most 100

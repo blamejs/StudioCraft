@@ -1,10 +1,16 @@
 # Control protocol
 
-This page describes the control channel that scripts, test tools and the Model Context Protocol
-(MCP) server use to drive a running StudioCraft. It covers starting the app with a token, the
-request format, every method and its limits, and the `studiocraft-cli send` command.
+Scripts, test tools and the Model Context Protocol (MCP) server drive a running StudioCraft through
+its control channel: a local TCP port that takes one JSON request per line.
 
 ## Connecting
+
+Install the app and the command-line tool on the `PATH` from the repository root:
+
+```sh
+cargo install --path .
+cargo install --path apps/studiocraft-cli
+```
 
 `studiocraft --control <port>` accepts control requests on `127.0.0.1:<port>`. Every request must
 carry the session token from the `STUDIOCRAFT_CONTROL_TOKEN` environment variable the app was
@@ -29,6 +35,9 @@ Start-Process studiocraft -ArgumentList '--control', '9876'
 
 `studiocraft-cli send` and `studiocraft-cli mcp --connect` read the token from
 `STUDIOCRAFT_CONTROL_TOKEN` as the app does, so run them where that variable holds the same token.
+To copy the token into another shell or an MCP client's settings, print it with
+`echo $STUDIOCRAFT_CONTROL_TOKEN` in a POSIX shell or `$env:STUDIOCRAFT_CONTROL_TOKEN` in
+PowerShell.
 
 ## Requests and replies
 
@@ -71,8 +80,9 @@ collections).
 `engine.execute` runs every engine command (for example `scene.add`, `source.add`,
 `item.transform`, `record.toggle`, `studio.transition`) and every window command (for example
 `view.stats`, `profile.new`, `selection.fit`). A failed command is an error with its message.
-[App and engine methods](#app-and-engine-methods) describes the commands that report on the app
-and the commands with parameters of their own.
+[Commands with their own parameters](#commands-with-their-own-parameters) describes `app.info`,
+`app.links`, `app.check_updates`, `plugin.list`, `source.schema`, `source.sync_offset`,
+`source.monitor` and the `dock.layout_*` commands.
 
 Each entry of `engine.commands` has these fields:
 
@@ -94,15 +104,15 @@ parameters that are left out.
 
 | Parameter | Allowed values | Default |
 | --- | --- | --- |
-| `x`, `y` | Window points, with (0, 0) at the window's top left. A point outside the window is an error. `ui.inspect` reports the window's size. | None |
+| `x`, `y` | Window points, with (0, 0) at the window's top left. A point outside the window is an error. `ui.inspect` reports the window's size. | Required |
 | `button` | `primary`, `secondary` or `middle`. | `primary` |
 | `count` | 1 to 3 presses. | 1 |
-| `modifiers` | A list of `cmd`, `ctrl`, `alt` and `shift`. `cmd` is Command on macOS and Ctrl on Windows and Linux. | None |
+| `modifiers` | A list of `cmd`, `ctrl`, `alt` and `shift`. `cmd` is Command on macOS and Ctrl on Windows and Linux. | No modifiers |
 | `steps` | 1 to 200 moves. `ui.drag` drags with the primary button. | 12 |
-| `key` | A shortcut as Settings › Hotkeys writes it: `Cmd+Z`, `Shift+F11`, `Delete`. A key pressed twice is written twice: `A A`. | None |
-| `text` | At most 10,000 characters. The text goes to the field that has the keyboard focus. | None |
+| `key` | A shortcut as Settings › Hotkeys writes it: `Cmd+Z`, `Shift+F11`, `Delete`. A key pressed twice is written twice: `A A`. | Required |
+| `text` | At most 10,000 characters. The text goes to the field that has the keyboard focus. | Required |
 | `max_side` (pixels) | The longest side of the returned picture. Pictures are never larger than 4,096 pixels on a side. | 0 (full size) |
-| `path` | A menu and the labels inside it, separated by `>`. Three dots match an ellipsis when no label in that menu is written exactly as given. An unknown path, a submenu and a disabled item are errors. | None |
+| `path` | A menu and the labels inside it, separated by `>`. Three dots match an ellipsis when no label in that menu is written exactly as given. An unknown path, a submenu and a disabled item are errors. | Required |
 
 ### Input, screenshots and dialogs
 
@@ -151,10 +161,10 @@ Each menu and submenu has `label`, `path` and `children`. Each item has `label`,
 (the command it runs), `params` (when the item passes any), `enabled`, `checked` (`true` or
 `false` for a check or choice item, `null` for a plain one) and `shortcut`.
 
-## App and engine methods
+## Commands with their own parameters
 
-`engine.execute` runs these commands like any other. Each one is described here because it reports
-on the app or takes parameters of its own.
+These are commands, not methods: run each one with `engine.execute`, as the example under
+[`app.info` and `app.links`](#appinfo-and-applinks) shows.
 
 ### `app.info` and `app.links`
 
@@ -182,7 +192,7 @@ that cannot be reached is reported as an error, never as "up to date". Sessions 
 
 ### `plugin.list`
 
-The engine command `plugin.list` only reads. It returns every registered plugin, grouped as
+The engine command `plugin.list` only reads. It returns every registered plug-in, grouped as
 `sources`, `filters`, `transitions`, `encoders` and `outputs`. Each entry has `id`, `name`,
 `version` and `schema` (the settings fields with their types, limits and defaults). Some groups add
 fields of their own:
@@ -234,8 +244,8 @@ return `{"applied"}` or `{"removed"}`; a name no layout has is an error.
 ## Command line
 
 `studiocraft-cli send <port> <method> [<params as JSON>]` sends one request to the app and prints
-the reply. Start the app as
-[Connecting](#connecting) shows, then send requests from a shell that has the same token:
+the reply. Start the app as [Connecting](#connecting) shows, then send requests from a shell that
+has the same token:
 
 ```sh
 studiocraft-cli send 9876 document.inspect
@@ -243,8 +253,9 @@ studiocraft-cli send 9876 engine.execute '{"command": "scene.add", "params": {"n
 ```
 
 `send` takes the method names listed in [Methods](#methods). A command line it can't read (a
-missing port or method, a port outside 1 to 65535, parameters that are not JSON) exits with code 2;
-a request that fails exits with code 1.
+missing port or method, a port outside 1 to 65535, parameters that are not JSON, more than one
+parameters argument) exits with code 2. A request that fails, or a missing or invalid
+`STUDIOCRAFT_CONTROL_TOKEN`, exits with code 1.
 
 ## MCP
 
