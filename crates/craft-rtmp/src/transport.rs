@@ -2,24 +2,87 @@
 
 use std::io::{self, IoSlice, Read, Write};
 use std::net::{Shutdown, TcpStream};
+use std::time::{Duration, Instant};
+
+/// A TCP socket with an optional deadline. While the deadline is set, each read and write on the
+/// socket waits at most the time left before it, and fails with [`io::ErrorKind::TimedOut`] once
+/// it has passed, so a peer that sends or reads a byte at a time cannot stretch a step past it.
+pub struct Socket {
+    stream: TcpStream,
+    deadline: Option<Instant>,
+}
+
+impl Socket {
+    pub fn new(stream: TcpStream, deadline: Option<Instant>) -> Socket {
+        Socket { stream, deadline }
+    }
+
+    /// The time left before the deadline, or `None` without one.
+    fn left(&self) -> io::Result<Option<Duration>> {
+        let Some(deadline) = self.deadline else { return Ok(None) };
+        let left = deadline.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            return Err(io::Error::from(io::ErrorKind::TimedOut));
+        }
+        Ok(Some(left))
+    }
+}
+
+impl Read for Socket {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        if let Some(left) = self.left()? {
+            self.stream.set_read_timeout(Some(left))?;
+        }
+        self.stream.read(buf)
+    }
+}
+
+impl Write for Socket {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        if let Some(left) = self.left()? {
+            self.stream.set_write_timeout(Some(left))?;
+        }
+        self.stream.write(buf)
+    }
+
+    fn write_vectored(&mut self, bufs: &[IoSlice<'_>]) -> io::Result<usize> {
+        if let Some(left) = self.left()? {
+            self.stream.set_write_timeout(Some(left))?;
+        }
+        self.stream.write_vectored(bufs)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.stream.flush()
+    }
+}
 
 /// A TCP socket, or a TLS session over one. Writes to a TLS session go into rustls's buffer and
 /// reach the socket on [`Transport::flush`], so one message is one flush.
 pub enum Transport {
     /// Plain RTMP.
-    Tcp(TcpStream),
+    Tcp(Socket),
     /// RTMPS.
     #[cfg(feature = "rtmps")]
-    Tls(Box<rustls::StreamOwned<rustls::ClientConnection, TcpStream>>),
+    Tls(Box<rustls::StreamOwned<rustls::ClientConnection, Socket>>),
 }
 
 impl Transport {
     /// The socket.
     pub fn socket(&self) -> &TcpStream {
         match self {
-            Transport::Tcp(s) => s,
+            Transport::Tcp(s) => &s.stream,
             #[cfg(feature = "rtmps")]
-            Transport::Tls(t) => &t.sock,
+            Transport::Tls(t) => &t.sock.stream,
+        }
+    }
+
+    /// Sets or clears the deadline that bounds every read and write on the socket.
+    pub fn set_deadline(&mut self, deadline: Option<Instant>) {
+        match self {
+            Transport::Tcp(s) => s.deadline = deadline,
+            #[cfg(feature = "rtmps")]
+            Transport::Tls(t) => t.sock.deadline = deadline,
         }
     }
 

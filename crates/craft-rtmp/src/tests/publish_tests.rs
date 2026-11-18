@@ -1,7 +1,7 @@
 use std::io::{self, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::mpsc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use craft_flv::amf0::{self, Value};
 use craft_flv::{Body, Metadata};
@@ -12,6 +12,7 @@ use super::server::{Conn, STREAM_ID, WINDOW, info, s, spawn};
 #[cfg(feature = "rtmps")]
 use crate::TlsRoots;
 use crate::chunk::{csid, msg_type, user_control};
+use crate::transport::Socket;
 use crate::{Config, Error, Kind, Message, Publisher};
 
 const KEY: &str = "live_s3cret_key";
@@ -344,6 +345,52 @@ fn a_server_that_never_answers_times_out() {
     assert!(matches!(e, Error::Timeout("handshake")), "{e:?}");
     release_tx.send(()).unwrap();
     server.join().unwrap();
+}
+
+#[test]
+fn a_server_that_trickles_the_handshake_times_out() {
+    let (done_tx, done_rx) = mpsc::channel::<()>();
+    let (url, server) = spawn(move |mut stream: TcpStream| {
+        let mut c0c1 = vec![0u8; 1537];
+        stream.read_exact(&mut c0c1).unwrap();
+        // One byte of S0 and S1 every 10 ms, each well within the setup timeout, until the client
+        // gives up. Returns how many bytes went out first.
+        let mut sent = 0;
+        loop {
+            if sent < 1537 && stream.write_all(&[if sent == 0 { 3 } else { 0 }]).is_ok() {
+                sent += 1;
+            }
+            match done_rx.recv_timeout(Duration::from_millis(10)) {
+                Err(mpsc::RecvTimeoutError::Timeout) => {}
+                _ => return sent,
+            }
+        }
+    });
+    let mut c = config(&url);
+    c.setup_timeout = Duration::from_secs(1);
+    let e = Publisher::connect(&c).unwrap_err();
+    done_tx.send(()).unwrap();
+    assert!(matches!(e, Error::Timeout("handshake")), "{e:?}");
+    // Without the overall deadline, every byte would restart the read timeout and the client would
+    // read all of S0 and S1.
+    let sent = server.join().unwrap();
+    assert!(sent < 1537, "the server sent {sent} bytes before the client gave up");
+}
+
+#[test]
+fn a_passed_deadline_stops_reads_and_writes_with_data_waiting() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let mut peer = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+    let (stream, _) = listener.accept().unwrap();
+    peer.write_all(&[3; 16]).unwrap();
+    let mut buf = [0u8; 16];
+    let mut open = Socket::new(stream.try_clone().unwrap(), None);
+    assert!(open.read(&mut buf).unwrap() > 0);
+    // Bytes are waiting, but the deadline has passed, so neither call reaches the socket.
+    peer.write_all(&[3; 16]).unwrap();
+    let mut late = Socket::new(stream, Some(Instant::now()));
+    assert_eq!(late.read(&mut buf).unwrap_err().kind(), io::ErrorKind::TimedOut);
+    assert_eq!(late.write(&[0]).unwrap_err().kind(), io::ErrorKind::TimedOut);
 }
 
 #[test]

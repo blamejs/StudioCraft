@@ -10,7 +10,7 @@ use craft_flv::amf0::{self, Value};
 use crate::chunk::{ChunkReader, ChunkWriter, MessageHeader, PUBLISH_CHUNK_SIZE, csid, msg_type, user_control};
 use crate::error::{read_error, redact, write_error};
 use crate::handshake::{self, HandshakeError};
-use crate::transport::Transport;
+use crate::transport::{Socket, Transport};
 use crate::{Endpoint, Error, StreamKey};
 
 /// How long a write may make no progress before the connection counts as broken.
@@ -172,7 +172,8 @@ pub struct Publisher {
     key: StreamKey,
     stream_id: u32,
     stall_timeout: Duration,
-    /// While [`Publisher::connect`] runs, the setup deadline, which bounds writes as well as reads.
+    /// While [`Publisher::connect`] runs, the setup deadline. The transport holds the same deadline
+    /// and bounds every read and write by it.
     setup_deadline: Option<Instant>,
     started: Instant,
     last_poll: Instant,
@@ -235,18 +236,19 @@ impl Publisher {
             broken: false,
             scratch: Vec::with_capacity(512),
         };
-        p.handshake(deadline)?;
+        p.handshake()?;
         p.send_control(msg_type::SET_CHUNK_SIZE, &config.chunk_size.to_be_bytes())?;
         p.out.set_chunk_size(config.chunk_size)?;
-        p.start_publishing(config, deadline)?;
+        p.start_publishing(config)?;
         p.setup_deadline = None;
+        p.transport.set_deadline(None);
         p.transport.socket().set_write_timeout(Some(config.stall_timeout)).map_err(Error::Io)?;
         p.last_poll = Instant::now();
         Ok(p)
     }
 
-    fn handshake(&mut self, deadline: Instant) -> Result<(), Error> {
-        set_deadline(self.transport.socket(), deadline, "handshake")?;
+    /// Runs the handshake. The transport's deadline bounds each of its reads and writes.
+    fn handshake(&mut self) -> Result<(), Error> {
         let started = self.started;
         let elapsed = || started.elapsed().as_millis() as u32;
         let mut counted = Counted { inner: &mut self.transport, read: 0, written: 0 };
@@ -264,7 +266,7 @@ impl Publisher {
         }
     }
 
-    fn start_publishing(&mut self, config: &Config, deadline: Instant) -> Result<(), Error> {
+    fn start_publishing(&mut self, config: &Config) -> Result<(), Error> {
         let key = config.key.expose().to_owned();
         // connect (§7.2.1.1).
         let app = config.endpoint.app().to_owned();
@@ -281,7 +283,7 @@ impl Publisher {
             amf0::write_object_end(b);
             Ok(())
         })?;
-        self.wait_for("connect", deadline, |p, values| p.result_for(values, TXN_CONNECT, "connect").map(|r| r.map(|_| ())))?;
+        self.wait_for("connect", |p, values| p.result_for(values, TXN_CONNECT, "connect").map(|r| r.map(|_| ())))?;
 
         // releaseStream and FCPublish, which many servers expect before a publish.
         for (name, txn) in [("releaseStream", TXN_RELEASE), ("FCPublish", TXN_FC_PUBLISH)] {
@@ -300,7 +302,7 @@ impl Publisher {
             amf0::write_null(b);
             Ok(())
         })?;
-        let id = self.wait_for("createStream", deadline, |p, values| p.result_for(values, TXN_CREATE_STREAM, "createStream"))?;
+        let id = self.wait_for("createStream", |p, values| p.result_for(values, TXN_CREATE_STREAM, "createStream"))?;
         let id = match id.get(3).and_then(Value::as_number) {
             Some(n) if n.fract() == 0.0 && (0.0..=f64::from(u32::MAX)).contains(&n) => n as u32,
             _ => return Err(Error::Protocol("the answer to createStream holds no stream id")),
@@ -316,7 +318,7 @@ impl Publisher {
             amf0::write_string(b, "live")
         })?;
         // A status at level error ends every wait as a refusal.
-        self.wait_for("publish", deadline, |p, values| match status(values) {
+        self.wait_for("publish", |p, values| match status(values) {
             Some(Status { level: "status", code: "NetStream.Publish.Start", .. }) => Some(Ok(())),
             _ => p.result_for(values, 0.0, "publish").and_then(|r| r.err().map(Err)),
         })
@@ -443,11 +445,6 @@ impl Publisher {
     }
 
     fn write_message(&mut self, header: &MessageHeader, parts: &[&[u8]]) -> Result<(), Error> {
-        if let Some(deadline) = self.setup_deadline
-            && let Err(e) = set_deadline(self.transport.socket(), deadline, "setup")
-        {
-            return Err(self.fail(e));
-        }
         let result = self.out.write_message(&mut self.transport, header, parts).and_then(|n| self.transport.flush().map(|()| n));
         match result {
             Ok(n) => {
@@ -479,12 +476,7 @@ impl Publisher {
     }
 
     /// Reads messages until `pick` returns an answer, handling control messages on the way.
-    fn wait_for<T>(
-        &mut self,
-        step: &'static str,
-        deadline: Instant,
-        mut pick: impl FnMut(&Publisher, &[Value]) -> Option<Result<T, Error>>,
-    ) -> Result<T, Error> {
+    fn wait_for<T>(&mut self, step: &'static str, mut pick: impl FnMut(&Publisher, &[Value]) -> Option<Result<T, Error>>) -> Result<T, Error> {
         let mut buf = [0u8; 4096];
         loop {
             while let Some(m) = self.inbound.next_message().map_err(|e| self.fail(e))? {
@@ -501,7 +493,6 @@ impl Publisher {
                 }
             }
             self.ack_if_due()?;
-            set_deadline(self.transport.socket(), deadline, step).map_err(|e| self.fail(e))?;
             match self.transport.read_blocking(&mut buf) {
                 Ok(0) => return Err(self.fail(Error::Closed)),
                 Ok(n) => self.inbound.push(&buf[..n]),
@@ -632,17 +623,6 @@ fn status(values: &[Value]) -> Option<Status<'_>> {
     })
 }
 
-/// Sets the socket's read timeout to the time left before `deadline`.
-/// Bounds the socket's reads and writes by the time left before `deadline`.
-fn set_deadline(socket: &TcpStream, deadline: Instant, step: &'static str) -> Result<(), Error> {
-    let left = deadline.saturating_duration_since(Instant::now());
-    if left.is_zero() {
-        return Err(Error::Timeout(step));
-    }
-    socket.set_read_timeout(Some(left)).map_err(Error::Io)?;
-    socket.set_write_timeout(Some(left)).map_err(Error::Io)
-}
-
 fn connect_any(addrs: &[SocketAddr], timeout: Duration) -> Result<TcpStream, Error> {
     let mut last = io::Error::new(io::ErrorKind::NotFound, "the name resolved to no address");
     for a in addrs {
@@ -655,16 +635,17 @@ fn connect_any(addrs: &[SocketAddr], timeout: Duration) -> Result<TcpStream, Err
 }
 
 #[cfg(not(feature = "rtmps"))]
-fn open_transport(socket: TcpStream, _config: &Config, _deadline: Instant) -> Result<Transport, Error> {
-    Ok(Transport::Tcp(socket))
+fn open_transport(socket: TcpStream, _config: &Config, deadline: Instant) -> Result<Transport, Error> {
+    Ok(Transport::Tcp(Socket::new(socket, Some(deadline))))
 }
 
 #[cfg(feature = "rtmps")]
 fn open_transport(socket: TcpStream, config: &Config, deadline: Instant) -> Result<Transport, Error> {
     use std::sync::Arc;
 
+    let mut sock = Socket::new(socket, Some(deadline));
     if !config.endpoint.tls() {
-        return Ok(Transport::Tcp(socket));
+        return Ok(Transport::Tcp(sock));
     }
     let tls = |e: rustls::Error| Error::Tls(e.to_string());
     let provider = Arc::new(rustls::crypto::ring::default_provider());
@@ -686,15 +667,12 @@ fn open_transport(socket: TcpStream, config: &Config, deadline: Instant) -> Resu
         .map_err(|_| Error::BadUrl("the host is not a valid TLS server name"))?;
     let mut conn = rustls::ClientConnection::new(Arc::new(client), name).map_err(tls)?;
     conn.set_buffer_limit(None);
-    let mut sock = socket;
-    set_deadline(&sock, deadline, "the TLS handshake")?;
     while conn.is_handshaking() {
         match conn.complete_io(&mut sock) {
             Ok(_) => {}
             Err(e) if e.kind() == io::ErrorKind::InvalidData => return Err(Error::Tls(e.to_string())),
             Err(e) => return Err(read_error(e, "the TLS handshake")),
         }
-        set_deadline(&sock, deadline, "the TLS handshake")?;
     }
     Ok(Transport::Tls(Box::new(rustls::StreamOwned::new(conn, sock))))
 }
