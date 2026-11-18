@@ -336,6 +336,17 @@ fn only_mkv_files_and_48_khz_are_taken() {
 }
 
 #[test]
+fn the_video_track_names_the_encoder_codec() {
+    let aac = AacSession::new(128).unwrap();
+    let h264 = tracks(&job(RateControl::Quality(20)), vec![1], &aac);
+    assert_eq!((h264[0].codec_id.as_str(), h264[0].codec_private.as_slice()), ("V_MPEG4/ISO/AVC", &[1u8][..]));
+    let mut j = job(RateControl::Quality(20));
+    j.video_encoder = Arc::new(studiocraft_encode::Nvenc::HEVC);
+    let hevc = tracks(&j, vec![2], &aac);
+    assert_eq!((hevc[0].codec_id.as_str(), hevc[0].codec_private.as_slice()), ("V_MPEGH/ISO/HEVC", &[2u8][..]));
+}
+
+#[test]
 fn video_order_never_goes_back_after_a_keyframe_with_b_frames() {
     // Decoding order around a keyframe with two B-frames: (pts, dts, keyframe).
     let coded = [(57, 55, false), (58, 56, false), (60, 57, true), (63, 58, false), (61, 59, false), (62, 60, false), (66, 61, false)];

@@ -46,7 +46,7 @@ use studiocraft_media::audio::{BLOCK_FRAMES, CHANNELS, PooledBlock, SAMPLE_RATE}
 use studiocraft_media::queue::Fifo;
 use studiocraft_media::stats::EncoderStats;
 use studiocraft_media::video::{PixelFormat, PooledFrame};
-use studiocraft_plugin::{OutputJob, OutputStatus, Packet, PluginError, RateControl, VideoParams, VideoSession};
+use studiocraft_plugin::{Codec, OutputJob, OutputStatus, Packet, PluginError, RateControl, VideoParams, VideoSession};
 
 use crate::writer::{FINISH_TIMEOUT, IDLE, Timeline, audio_step, seconds_since, video_step};
 
@@ -304,11 +304,16 @@ fn samples_ns(n: i64) -> i64 {
     (i128::from(n) * NS / i128::from(SAMPLE_RATE)) as i64
 }
 
-/// The file's tracks: H.264 video (`avc` is its `avcC` record) and AAC audio.
-pub(crate) fn tracks(job: &OutputJob, avc: Vec<u8>, aac: &AacSession) -> Vec<TrackSpec> {
+/// The file's tracks: H.264 or HEVC video (`record` is its `avcC` or `hvcC` record, as the
+/// encoder's codec is) and AAC audio.
+pub(crate) fn tracks(job: &OutputJob, record: Vec<u8>, aac: &AacSession) -> Vec<TrackSpec> {
     let v = job.video;
-    let mut video = TrackSpec::new(TrackKind::Video, "V_MPEG4/ISO/AVC");
-    video.codec_private = avc;
+    let codec_id = match job.video_encoder.codec() {
+        Codec::Hevc => "V_MPEGH/ISO/HEVC",
+        _ => "V_MPEG4/ISO/AVC",
+    };
+    let mut video = TrackSpec::new(TrackKind::Video, codec_id);
+    video.codec_private = record;
     video.default_duration_ns = u64::try_from(frames_ns(1, v.fps_num, v.fps_den)).ok();
     video.video_size = Some((v.width, v.height));
     // BT.709 at limited range, as the NV12 conversion writes it (H.273 code points; Range 1 is limited).

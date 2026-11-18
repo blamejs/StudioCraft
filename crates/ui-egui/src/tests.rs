@@ -543,7 +543,7 @@ fn profiles_keep_their_own_settings() {
 }
 
 #[test]
-fn available_encoders_lists_the_built_in_one_without_ffmpeg() {
+fn available_encoders_lists_the_built_in_ones_without_ffmpeg() {
     let mut a = app();
     let ctx = egui::Context::default();
     let dir = temp_dir("no-ffmpeg");
@@ -554,7 +554,8 @@ fn available_encoders_lists_the_built_in_one_without_ffmpeg() {
     let _ = std::fs::remove_dir_all(&dir);
     let list = a.encoders.clone().unwrap();
     assert!(list.iter().any(|(name, _, ok)| name == "H.264 (built in)" && *ok), "{list:?}");
-    assert!(list.iter().filter(|(name, _, _)| name != "H.264 (built in)").all(|(_, _, ok)| !ok), "{list:?}");
+    // The built-in NVENC encoders are ready where the NVIDIA driver is installed.
+    assert!(list.iter().filter(|(name, _, _)| !name.ends_with("(built in)")).all(|(_, _, ok)| !ok), "{list:?}");
     let missing = a.encoders_ffmpeg.clone().map(|m| (m.english(), m.shown_in(&crate::i18n::I18N, crate::i18n::I18N.from_code("de").unwrap())));
     let (english, german) = missing.unwrap_or_default();
     assert!(english.starts_with("ffmpeg at ") && english.contains("ffmpeg-missing") && english.ends_with(" was not found"), "{english:?}");

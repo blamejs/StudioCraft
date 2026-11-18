@@ -121,6 +121,8 @@
 	General	Général
 	Go Live	Passer en direct
 	H.264 (built in)	H.264 (intégré)
+	NVIDIA NVENC H.264 (built in)	NVIDIA NVENC H.264 (intégré)
+	NVIDIA NVENC HEVC (built in)	NVIDIA NVENC HEVC (intégré)
 	Height	Hauteur
 	Help	Aide
 	Hide	Masquer

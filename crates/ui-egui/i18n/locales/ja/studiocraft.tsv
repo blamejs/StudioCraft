@@ -120,6 +120,8 @@
 	General	一般
 	Go Live	配信開始
 	H.264 (built in)	H.264 (内蔵)
+	NVIDIA NVENC H.264 (built in)	NVIDIA NVENC H.264 (内蔵)
+	NVIDIA NVENC HEVC (built in)	NVIDIA NVENC HEVC (内蔵)
 	Height	高さ
 	Help	ヘルプ
 	Hide	非表示

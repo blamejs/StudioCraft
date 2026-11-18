@@ -1446,6 +1446,15 @@ name = "craft-hwenc"
 version = "0.1.0"
 
 [[package]]
+name = "craft-hwenc-native"
+version = "0.1.0"
+dependencies = [
+ "libloading",
+ "log",
+ "windows 0.62.2",
+]
+
+[[package]]
 name = "craft-i18n"
 version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=7780b4f58ec3d56b1f908c8fa3b1258fabae3880#7780b4f58ec3d56b1f908c8fa3b1258fabae3880"
@@ -5690,7 +5699,9 @@ name = "studiocraft-encode"
 version = "0.1.0"
 dependencies = [
  "craft-audio",
+ "craft-hwenc-native",
  "craft-video",
+ "log",
  "studiocraft-media",
  "studiocraft-model",
  "studiocraft-plugin",
@@ -5848,6 +5859,7 @@ dependencies = [
  "image",
  "log",
  "serde_json",
+ "studiocraft-encode",
  "studiocraft-engine",
  "studiocraft-media",
  "studiocraft-model",

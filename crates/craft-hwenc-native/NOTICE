@@ -1,0 +1,12 @@
+craft-hwenc-native
+Licensed under the MIT license or the Apache License, Version 2.0, at your option.
+
+The NVENC backend (src/nvenc.rs and src/nvenc_ffi/), the Annex B helpers (src/annexb.rs), the
+HEVC parameter-set reading (src/hevc.rs) and the layout tests (src/nvenc_ffi/abi_tests.rs) come
+from FilmCraft's `crates/platform/src/nvenc/` (https://github.com/storytold/filmcraft, commit
+de529c88f4948d0803bef746a325707f2671a71d), MIT OR Apache-2.0, Copyright (c) 2026 ArtCraft Team
+and the FilmCraft contributors.
+
+The declarations in src/nvenc_ffi/abi.rs are transcribed from NVIDIA's `nvEncodeAPI.h` (Video
+Codec SDK, API 12.1), Copyright (c) 2010-2023 NVIDIA Corporation, under the MIT license whose
+text is at the top of that file.

@@ -24,6 +24,7 @@ pub const TABLE: &[(&str, Class)] = &[
     ("craft-gpu-device", Class::Layer(0)),
     ("craft-gpu-yuv", Class::Layer(0)),
     ("craft-hwenc", Class::Layer(0)),
+    ("craft-hwenc-native", Class::Layer(0)),
     ("plugin", Class::Layer(1)),
     ("engine", Class::Layer(2)),
     ("render", Class::Layer(2)),
