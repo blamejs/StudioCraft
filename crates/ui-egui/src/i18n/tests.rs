@@ -487,10 +487,10 @@ fn every_label_chosen_at_run_time_has_an_english_row() {
     assert!(missing.is_empty(), "labels with no row in i18n/locales/en/studiocraft.tsv:\n{}", missing.join("\n"));
 }
 
-/// The settings that list what the system has (devices, a camera's formats, displays, windows):
-/// their option labels are names from the system, apart from the fixed first entries, which have
-/// their own rows.
-const SYSTEM_LISTS: &[&str] = &["device", "format", "display", "window"];
+/// The settings that list what the system has (devices, a camera's formats, displays, windows,
+/// running applications): their option labels are names from the system, apart from the fixed
+/// first entries, which have their own rows.
+const SYSTEM_LISTS: &[&str] = &["device", "format", "display", "window", "app"];
 
 #[test]
 fn every_plug_in_name_and_setting_label_has_an_english_row() {

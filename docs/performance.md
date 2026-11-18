@@ -26,6 +26,22 @@ Each compositor bench iteration uploads a new 1080p source frame, draws 9 items 
 the GPU has finished. The second bench also converts the program to NV12 and reads it back for an
 encoder. In the app the compositor thread does not wait for the GPU after each frame.
 
+### Application audio
+
+Measured on 2026-11-18 on Linux, release build. `cargo bench -p studiocraft-sources --bench
+audio_feed` times the work an application capture's thread does for each 10 ms packet: turning 480
+stereo frames into 1024-frame blocks and queuing them for the mixer, with the mixer side taking
+them.
+
+| Bench | Median | Range (95%) |
+| --- | --- | --- |
+| `AudioFeed push, 480-frame stereo packet` | 3.77 µs | 3.76 to 3.78 µs |
+
+At 100 packets a second that is about 0.04% of one core for each captured application.
+`crates/sources/tests/alloc.rs` checks that a warm feed does not allocate or free memory over
+10 seconds of packets. The discovery thread does not run on the audio path: it lists the
+applications once a second and reads their meters 30 times a second only while the list is shown.
+
 ### Timing run
 
 `studiocraft-cli bench 10` draws a 1080p scene with a background, four overlapping translucent

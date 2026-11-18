@@ -14,6 +14,8 @@
 	Alpha mask (alpha channel)	Альфа-маска (альфа-канал)
 	Alpha mask (color channel)	Альфа-маска (канал кольору)
 	Apply	Застосувати
+	Application	Застосунок
+	Application audio capture	Захоплення звуку застосунку
 	Apply Dock Layout	Застосувати розкладку панелей
 	Attack (ms)	Атака (мс)
 	Audio	Звук
@@ -42,6 +44,7 @@
 	Center to Screen	Вирівняти по центру екрана
 	Check for updates at start	Перевіряти оновлення під час запуску
 	Check for Updates…	Перевірити оновлення…
+	Choose an application	Виберіть застосунок
 	Choose in the system picker	Вибрати в системному вікні вибору
 	Chroma key	Хромакей
 	Close	Закрити
@@ -138,6 +141,7 @@
 	Hotkeys	Гарячі клавіші
 	Image	Зображення
 	Image mask	Маска зображення
+	Include child processes	Включати дочірні процеси
 	Import…	Імпорт…
 	Key color	Колір ключа
 	Key color spill reduction	Придушення ореолу кольору ключа

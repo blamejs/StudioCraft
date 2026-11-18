@@ -12,6 +12,7 @@ description in [docs/features.md](docs/features.md).
 - Cameras are captured on Windows (Media Foundation), macOS (AVFoundation) and Linux (V4L2), with the camera and its format chosen in the source's Properties ([Camera](docs/features.md#camera)).
 - Audio input and output are captured on Linux through the PipeWire sound server, which lists its devices with the default first ([Audio capture on Linux](docs/features.md#audio-capture-on-linux)).
 - Displays and windows are captured on Linux through the desktop's screen-cast portal and PipeWire ([Display and window capture on Linux](docs/features.md#display-and-window-capture-on-linux)).
+- One application's audio is captured on Windows 11 and Windows Server 2022, chosen from the running applications that have audio and followed across restarts ([Application audio capture](docs/features.md#application-audio-capture)).
 
 ### Filters
 
@@ -85,3 +86,6 @@ description in [docs/features.md](docs/features.md).
    scene collections is the first step.
 4. **Frames on the GPU from capture to the encoder.** Captured frames will stay on the GPU until
    the encoder reads them.
+5. **Application Audio panel.** A dock will list the running applications with live meters, gray
+   out the ones not playing, and give each application and microphone lane its own gain, mute and
+   monitoring. The `app_audio` source and the application list it reads are already built in.

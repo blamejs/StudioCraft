@@ -14,6 +14,8 @@
 	Alpha mask (alpha channel)	قناع ألفا (قناة ألفا)
 	Alpha mask (color channel)	قناع ألفا (قناة اللون)
 	Apply	تطبيق
+	Application	التطبيق
+	Application audio capture	التقاط صوت التطبيق
 	Apply Dock Layout	تطبيق تخطيط اللوحات
 	Attack (ms)	زمن الاستجابة (مللي ثانية)
 	Audio	الصوت
@@ -42,6 +44,7 @@
 	Center to Screen	توسيط في الشاشة
 	Check for updates at start	التحقق من التحديثات عند البدء
 	Check for Updates…	التحقق من التحديثات…
+	Choose an application	اختر تطبيقًا
 	Choose in the system picker	الاختيار في نافذة الاختيار في النظام
 	Chroma key	مفتاح الكروما
 	Close	إغلاق
@@ -141,6 +144,7 @@
 	Hotkeys	مفاتيح الاختصار
 	Image	صورة
 	Image mask	قناع صورة
+	Include child processes	تضمين العمليات الفرعية
 	Import…	استيراد…
 	Key color	لون المفتاح
 	Key color spill reduction	تقليل انتشار لون المفتاح

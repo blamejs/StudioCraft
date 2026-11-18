@@ -158,6 +158,12 @@ impl AudioOut {
     pub fn dropped(&self) -> u64 {
         self.queue.dropped()
     }
+
+    /// Whether [`AudioOut::block`] would have to make a new block: the pool has made all it keeps
+    /// and none is free.
+    pub fn pool_exhausted(&self) -> bool {
+        self.pool.exhausted()
+    }
 }
 
 /// A source's outputs and the master clock, shared between its thread, any callback threads it

@@ -14,6 +14,8 @@
 	Alpha mask (alpha channel)	アルファマスク (アルファチャンネル)
 	Alpha mask (color channel)	アルファマスク (カラーチャンネル)
 	Apply	適用
+	Application	アプリケーション
+	Application audio capture	アプリケーション音声キャプチャ
 	Apply Dock Layout	ドックレイアウトを適用
 	Attack (ms)	アタック (ms)
 	Audio	音声
@@ -42,6 +44,7 @@
 	Center to Screen	画面の中央に配置
 	Check for updates at start	起動時にアップデートを確認
 	Check for Updates…	アップデートを確認…
+	Choose an application	アプリケーションを選択
 	Choose in the system picker	システムの選択画面で選ぶ
 	Chroma key	クロマキー
 	Close	閉じる
@@ -138,6 +141,7 @@
 	Hotkeys	ホットキー
 	Image	画像
 	Image mask	画像マスク
+	Include child processes	子プロセスを含める
 	Import…	読み込み…
 	Key color	キー色
 	Key color spill reduction	キー色のスピル除去

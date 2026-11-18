@@ -14,6 +14,8 @@
 	Alpha mask (alpha channel)	Alfamask (alfakanal)
 	Alpha mask (color channel)	Alfamask (färgkanal)
 	Apply	Verkställ
+	Application	Program
+	Application audio capture	Ljud från program
 	Apply Dock Layout	Använd panellayout
 	Attack (ms)	Attacktid (ms)
 	Audio	Ljud
@@ -42,6 +44,7 @@
 	Center to Screen	Centrera på skärmen
 	Check for updates at start	Sök efter uppdateringar vid start
 	Check for Updates…	Sök efter uppdateringar…
+	Choose an application	Välj ett program
 	Choose in the system picker	Välj i systemets valdialog
 	Chroma key	Chroma key
 	Close	Stäng
@@ -138,6 +141,7 @@
 	Hotkeys	Snabbtangenter
 	Image	Bild
 	Image mask	Bildmask
+	Include child processes	Ta med underprocesser
 	Import…	Importera…
 	Key color	Nyckelfärg
 	Key color spill reduction	Minskning av färgspill

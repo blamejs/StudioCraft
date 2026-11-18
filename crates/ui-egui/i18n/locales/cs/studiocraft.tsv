@@ -14,6 +14,8 @@
 	Alpha mask (alpha channel)	Maska alfa (kanál alfa)
 	Alpha mask (color channel)	Maska alfa (barevný kanál)
 	Apply	Použít
+	Application	Aplikace
+	Application audio capture	Zachytávání zvuku aplikace
 	Apply Dock Layout	Použít rozvržení panelů
 	Attack (ms)	Náběh (ms)
 	Audio	Zvuk
@@ -42,6 +44,7 @@
 	Center to Screen	Vystředit na obrazovku
 	Check for updates at start	Při spuštění hledat aktualizace
 	Check for Updates…	Vyhledat aktualizace…
+	Choose an application	Vyberte aplikaci
 	Choose in the system picker	Vybrat v systémovém dialogu
 	Chroma key	Chroma key
 	Close	Zavřít
@@ -138,6 +141,7 @@
 	Hotkeys	Klávesové zkratky
 	Image	Obrázek
 	Image mask	Obrazová maska
+	Include child processes	Zahrnout podřízené procesy
 	Import…	Importovat…
 	Key color	Barva klíče
 	Key color spill reduction	Potlačení zbytků klíčové barvy

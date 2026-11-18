@@ -14,6 +14,8 @@
 	Alpha mask (alpha channel)	Alpha 蒙版（Alpha 通道）
 	Alpha mask (color channel)	Alpha 蒙版（颜色通道）
 	Apply	应用
+	Application	应用程序
+	Application audio capture	应用程序音频采集
 	Apply Dock Layout	应用停靠布局
 	Attack (ms)	起音时间 (ms)
 	Audio	音频
@@ -42,6 +44,7 @@
 	Center to Screen	在屏幕上居中
 	Check for updates at start	启动时检查更新
 	Check for Updates…	检查更新…
+	Choose an application	选择应用程序
 	Choose in the system picker	在系统选择器中选择
 	Chroma key	色度键
 	Close	关闭
@@ -138,6 +141,7 @@
 	Hotkeys	快捷键
 	Image	图像
 	Image mask	图像蒙版
+	Include child processes	包括子进程
 	Import…	导入…
 	Key color	键控颜色
 	Key color spill reduction	键控颜色溢色抑制

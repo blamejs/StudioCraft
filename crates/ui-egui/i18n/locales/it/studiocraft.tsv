@@ -14,6 +14,8 @@
 	Alpha mask (alpha channel)	Maschera alfa (canale alfa)
 	Alpha mask (color channel)	Maschera alfa (canale colore)
 	Apply	Applica
+	Application	Applicazione
+	Application audio capture	Cattura audio applicazione
 	Apply Dock Layout	Applica layout dei pannelli
 	Attack (ms)	Attacco (ms)
 	Audio bitrate	Bitrate audio
@@ -41,6 +43,7 @@
 	Center to Screen	Centra sullo schermo
 	Check for updates at start	Cerca aggiornamenti all'avvio
 	Check for Updates…	Cerca aggiornamenti…
+	Choose an application	Scegli un'applicazione
 	Choose in the system picker	Scegli nel selettore di sistema
 	Chroma key	Chiave cromatica
 	Close	Chiudi
@@ -137,6 +140,7 @@
 	Hotkeys	Scorciatoie
 	Image	Immagine
 	Image mask	Maschera immagine
+	Include child processes	Includi processi figli
 	Import…	Importa…
 	Key color	Colore chiave
 	Key color spill reduction	Riduzione della dispersione del colore chiave

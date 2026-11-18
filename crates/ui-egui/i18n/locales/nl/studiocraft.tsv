@@ -14,6 +14,8 @@
 	Alpha mask (alpha channel)	Alfamasker (alfakanaal)
 	Alpha mask (color channel)	Alfamasker (kleurkanaal)
 	Apply	Toepassen
+	Application	Toepassing
+	Application audio capture	Toepassingsaudio opnemen
 	Apply Dock Layout	Dockindeling toepassen
 	Attack (ms)	Aanzet (ms)
 	Audio bitrate	Audiobitrate
@@ -40,6 +42,7 @@
 	Center to Screen	Centreren op scherm
 	Check for updates at start	Bij het starten op updates controleren
 	Check for Updates…	Op updates controleren…
+	Choose an application	Kies een toepassing
 	Choose in the system picker	Kiezen in de systeemkiezer
 	Chroma key	Chromakey
 	Close	Sluiten
@@ -134,6 +137,7 @@
 	Hotkeys	Sneltoetsen
 	Image	Afbeelding
 	Image mask	Afbeeldingsmasker
+	Include child processes	Onderliggende processen opnemen
 	Import…	Importeren…
 	Key color	Keykleur
 	Key color spill reduction	Overloopvermindering van de keykleur

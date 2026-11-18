@@ -15,6 +15,8 @@
 	Alpha mask (alpha channel)	Alphamaske (Alphakanal)
 	Alpha mask (color channel)	Alphamaske (Farbkanal)
 	Apply	Anwenden
+	Application	Anwendung
+	Application audio capture	Anwendungsaudio aufnehmen
 	Apply Dock Layout	Dock-Layout anwenden
 	Attack (ms)	Ansprechzeit (ms)
 	Audio	Audio
@@ -42,6 +44,7 @@
 	Center to Screen	Auf dem Bildschirm zentrieren
 	Check for updates at start	Beim Start nach Updates suchen
 	Check for Updates…	Nach Updates suchen…
+	Choose an application	Anwendung auswählen
 	Choose in the system picker	In der Systemauswahl wählen
 	Close	Schließen
 	Close below (dB)	Schließen unter (dB)
@@ -130,6 +133,7 @@
 	Hotkeys	Tastenkürzel
 	Image	Bild
 	Image mask	Bildmaske
+	Include child processes	Untergeordnete Prozesse einbeziehen
 	Import…	Importieren…
 	Key color	Schlüsselfarbe
 	Key color spill reduction	Farbsaum der Schlüsselfarbe verringern

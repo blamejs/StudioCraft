@@ -14,6 +14,8 @@
 	Alpha mask (alpha channel)	Alfa maskesi (alfa kanalı)
 	Alpha mask (color channel)	Alfa maskesi (renk kanalı)
 	Apply	Uygula
+	Application	Uygulama
+	Application audio capture	Uygulama sesi yakalama
 	Apply Dock Layout	Panel Düzenini Uygula
 	Attack (ms)	Atak (ms)
 	Audio	Ses
@@ -42,6 +44,7 @@
 	Center to Screen	Ekranda Ortala
 	Check for updates at start	Açılışta güncellemeleri denetle
 	Check for Updates…	Güncellemeleri Denetle…
+	Choose an application	Bir uygulama seçin
 	Choose in the system picker	Sistem seçicisinde seç
 	Chroma key	Kroma anahtarı
 	Close	Kapat
@@ -138,6 +141,7 @@
 	Hotkeys	Kısayol Tuşları
 	Image	Resim
 	Image mask	Resim maskesi
+	Include child processes	Alt süreçleri dahil et
 	Import…	İçe Aktar…
 	Key color	Anahtar rengi
 	Key color spill reduction	Anahtar renk sızıntısını azaltma

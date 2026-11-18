@@ -13,7 +13,7 @@ use crate::{Backend, Headless, MAX_BATCH_STEPS, McpError, Remote, Roots, Server,
 
 const TOKEN: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
-const TOOLS: [&str; 26] = [
+const TOOLS: [&str; 27] = [
     "command_list",
     "command_run",
     "command_batch",
@@ -32,6 +32,7 @@ const TOOLS: [&str; 26] = [
     "collection_save",
     "app_links",
     "source_schema",
+    "app_audio",
     "record_start",
     "record_stop",
     "stream_start",
@@ -234,6 +235,22 @@ fn source_schema_lists_a_camera_sources_fields() {
     assert_eq!(fields[1]["kind"]["options"][0]["value"], "", "the default format comes first");
     assert!(error_text(&call(&mut s, "source_schema", json!({"kind": "hologram"}))).contains("hologram"));
     error_text(&call(&mut s, "source_schema", json!({})));
+}
+
+#[test]
+fn app_audio_reports_the_systems_support_and_lists() {
+    let mut s = server();
+    let status = ok_json(&call(&mut s, "app_audio", json!({"action": "status"})));
+    let supported = status["support"]["supported"].as_bool().unwrap();
+    assert_eq!(status["max_captures"], 32, "{status}");
+    let list = ok_json(&call(&mut s, "app_audio", json!({"action": "list"})));
+    assert_eq!(list["supported"], supported);
+    assert!(list["apps"].is_array(), "{list}");
+    if !supported {
+        assert!(list["error"].as_str().is_some_and(|e| !e.is_empty()), "an unsupported system says why: {list}");
+    }
+    assert!(error_text(&call(&mut s, "app_audio", json!({"action": "capture"}))).contains("capture"));
+    error_text(&call(&mut s, "app_audio", json!({})));
 }
 
 #[test]

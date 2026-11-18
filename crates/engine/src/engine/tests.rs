@@ -431,6 +431,44 @@ fn link_and_info_queries_change_nothing() {
     assert_eq!(e.undo_label(), undo);
 }
 
+#[test]
+fn application_audio_queries_list_apps_and_captures_without_changing_anything() {
+    use craft_app_audio::fake::{FakeBackend, app};
+    let fake = FakeBackend::new();
+    let player = app("player.exe", 40, true);
+    fake.set_peak(&player.key, 0.5);
+    fake.set_apps(vec![player, app("browser.exe", 41, false)]);
+    let mut e = engine();
+    e.set_app_audio(craft_app_audio::Discovery::new(Arc::new(fake.clone())));
+    let (rev, undo) = (e.revision(), e.undo_label());
+    let list = run(&mut e, "app_audio.list", json!({})).unwrap();
+    assert!(!list.changed && list.runtime.is_none());
+    assert_eq!(list.result["supported"], true);
+    assert_eq!(list.result["error"], serde_json::Value::Null);
+    assert_eq!(list.result["apps"][0]["app"], r"player.exe|c:\apps\player.exe", "{}", list.result);
+    assert_eq!(list.result["apps"][0]["playing"], true);
+    assert_eq!(list.result["apps"][1]["name"], "browser");
+    assert_eq!(list.result["apps"][1]["target_pid"], 41);
+    assert!(list.result["apps"][0]["peak"].is_number(), "the list has meter rows: {}", list.result);
+    // Asking again after the meters were read shows the level.
+    assert!(fake.wait_peak_reads(1, std::time::Duration::from_secs(10)));
+    let again = run(&mut e, "app_audio.list", json!({})).unwrap();
+    assert_eq!(again.result["apps"][0]["peak"], 0.5);
+    let status = run(&mut e, "app_audio.status", json!({})).unwrap();
+    assert_eq!(status.result["support"]["supported"], true);
+    assert_eq!(status.result["captures"], 0);
+    assert_eq!(status.result["max_captures"], 32);
+    assert!(run(&mut e, "app_audio.list", json!({"app": "x"})).is_err(), "the list takes no parameters");
+    fake.set_support(craft_app_audio::Support::no("needs a newer system"));
+    let none = run(&mut e, "app_audio.list", json!({})).unwrap();
+    assert_eq!(none.result["supported"], false);
+    assert_eq!(none.result["error"], "needs a newer system");
+    assert_eq!(none.result["apps"], json!([]));
+    assert_eq!(e.revision(), rev);
+    assert!(!e.is_dirty());
+    assert_eq!(e.undo_label(), undo);
+}
+
 /// A source whose `mode` choices depend on its `device`.
 struct DeviceSource;
 impl Plugin for DeviceSource {

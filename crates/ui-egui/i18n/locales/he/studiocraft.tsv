@@ -14,6 +14,8 @@
 	Alpha mask (alpha channel)	מסכת אלפא (ערוץ אלפא)
 	Alpha mask (color channel)	מסכת אלפא (ערוץ צבע)
 	Apply	החלה
+	Application	יישום
+	Application audio capture	לכידת שמע של יישום
 	Apply Dock Layout	החלת פריסת חלוניות
 	Attack (ms)	זמן תגובה (אלפיות שנייה)
 	Audio	שמע
@@ -42,6 +44,7 @@
 	Center to Screen	מרכוז במסך
 	Check for updates at start	בדיקת עדכונים בהפעלה
 	Check for Updates…	בדיקת עדכונים…
+	Choose an application	בחירת יישום
 	Choose in the system picker	בחירה בבורר של המערכת
 	Chroma key	מפתח כרומה
 	Close	סגירה
@@ -141,6 +144,7 @@
 	Hotkeys	מקשי קיצור
 	Image	תמונה
 	Image mask	מסכת תמונה
+	Include child processes	הכללת תהליכי משנה
 	Import…	ייבוא…
 	Key color	צבע המפתח
 	Key color spill reduction	הפחתת זליגת צבע המפתח

@@ -28,6 +28,7 @@ crate in the same layer. `cargo xtask layers` checks this against the table in
 | L0 | `craft-gpu-yuv` | RGBA to NV12, P010 and I420 on the GPU with scaling, in BT.601, BT.709 and BT.2020 at limited or full range, and the same conversion on the CPU. It depends on no StudioCraft crate. |
 | L0 | `craft-hwenc` | The hardware encoders ffmpeg runs, a one-frame test encode of each with results kept for the session, and an automatic choice ordered by the graphics adapter's vendor with a software fallback. It depends on no StudioCraft crate. |
 | L0 | `craft-hwenc-native` | Hardware encoders called through their drivers: NVENC H.264 and HEVC from NV12 or P010 frames on Windows (Direct3D 11) and 64-bit Linux (CUDA), the Windows Media Foundation and macOS VideoToolbox hardware H.264 and HEVC encoders from NV12 frames, the Annex B helpers, and the `avcC` and `hvcC` records. Its private `nvenc_ffi`, `mf_ffi` and `vt_ffi` modules are the only code that calls the drivers. It depends on no StudioCraft crate. |
+| L0 | `craft-app-audio` | Per-application audio: the running applications that have audio, kept current by one discovery thread, a lock-free peak meter for each, and the capture of one application's audio as 48 kHz stereo `f32` with backoff, stall detection and a limit of 32 captures. Windows build 20348 and later capture through WASAPI process loopback; other systems report it as unsupported. It depends on no StudioCraft crate. |
 | L1 | `studiocraft-plugin` | The `Source`, `Filter`, `Transition`, `Encoder` and `Output` traits and the `Registry` they are registered in. |
 | L2 | `studiocraft-engine` | Commands with stable ids, undo and redo, source threads, the audio mixer thread and the frame scheduler. |
 | L2 | `studiocraft-render` | The wgpu compositor: scenes, filters, transitions, and frame conversion for encoders. |
@@ -66,6 +67,8 @@ gives no value for that column.
 | --- | --- | --- | --- | --- |
 | Source | None; it publishes video into a `VideoOut` slot and audio into a lock-free queue | The audio queue holds 32 blocks (`plugin::source::AUDIO_QUEUE_BLOCKS`), and at each tick the mixer keeps at most 4 (`engine::mixer::MAX_QUEUED_BLOCKS`) | A full queue drops its oldest block, and the mixer drops the oldest blocks beyond 4 | |
 | Audio capture | The device's thread | On Linux, a conversion buffer allocated before the stream starts | | |
+| Application audio discovery | System notifications and commands | A command queue of 16 (`craft_app_audio::discovery::COMMANDS`); the list is one `Arc<AppList>` slot, and the meters are 64 atomic rows | A full command queue drops the command; a new list replaces the old one | A scan every 1 s; meter reads 30 times a second while the list is shown |
+| Application audio capture | The system's packets, waited for 200 ms at a time | Buffers sized for the largest packet so far (250 ms to start, 2 s at most); a feed keeps at most 16 blocks per call (`sources::FEED_BLOCKS`) | Blocks past 16 in one call drop the oldest and are counted | 3.77 µs to turn a 10 ms packet into blocks, without allocating |
 | Screen capture (Linux) | The PipeWire stream | `FrameSlot`: the newest frame and up to 2 spares | A newer frame replaces a frame the source has not taken | One copy of the picture |
 | Camera capture | The camera library | `FrameSlot`: the newest frame and up to 2 spares | A newer frame replaces a frame the source has not taken; a frame that cannot be converted goes back to the spares | One conversion of the picture |
 | Mixer | One 1024-frame block from every audible source | 4 blocks per source; each output's audio queue holds 256 blocks | The oldest source blocks beyond 4 are dropped | No allocation; the delay lines are allocated with the input list |
@@ -91,6 +94,34 @@ allocated before the stream starts, and stops when its handle is dropped. Listin
 reads the PipeWire registry and the `default` metadata object and waits at most 2 s for the
 server. A failed or ended stream and a lost server connection are reported to the source, which
 reopens the device. The rest of the app keeps running.
+
+### Application audio threads
+
+`craft-app-audio` runs one discovery thread while an Application audio capture source exists or
+anything else holds a `DiscoveryUse`, and stops it when the last one is dropped. On Windows the
+thread lists the audio sessions of every active playback device every second, and at once when a
+device is added, removed or changed or a session changes state. It reads process names and parents
+only when the set of session processes changes. A list that differs from the one before is
+published as an `Arc<AppList>` with a generation number, so a reader compares one atomic and clones
+the `Arc` only when the list changed. While `set_visible(true)` is in force the thread reads each
+application's session meters about 30 times a second into 64 rows of atomics, which readers read
+without a lock. Settings and commands never list applications themselves: a source's schema reads
+the newest list, and `app_audio.list` scans once on a short-lived thread when no discovery thread
+runs.
+
+Each captured application has its own thread. It waits for the system's packets at most 200 ms at
+a time, reports a heartbeat each time, converts each packet into buffers it reuses, and hands the
+samples to the source's `AudioFeed`, which queues blocks for the mixer without allocating once the
+block pool is warm. The source's thread checks the capture every 250 ms. A capture that has not
+reported for 2 s counts as stalled. The source drops it, and the reaper thread joins its thread
+once it ends, so neither the source nor any other capture waits on a capture stuck in a system call.
+A failed capture opens again after 250 ms, 500 ms, 1 s, 2 s and then every 5 s, and a 33rd capture
+is refused. Each capture's callback passes a gate with one compare-and-swap. When the source's
+application changes, the source closes the old gate, waits for a callback inside it to finish its
+push, and empties the queue, so the mixer does not play the earlier application's audio.
+
+A settings form or an `app_audio.list` request keeps the discovery thread running for 60 s
+without a source, and waits at most 1 s or 2 s for a newly started thread's first scan.
 
 ### Screen capture threads
 

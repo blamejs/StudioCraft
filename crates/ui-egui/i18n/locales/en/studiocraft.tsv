@@ -17,6 +17,8 @@
 	AMD AMF H.264	AMD AMF H.264
 	Apache 2.0	Apache 2.0
 	Apply	Apply
+	Application	Application
+	Application audio capture	Application audio capture
 	Apply Dock Layout	Apply Dock Layout
 	Attack (ms)	Attack (ms)
 	Audio	Audio
@@ -46,6 +48,7 @@
 	Center to Screen	Center to Screen
 	Check for updates at start	Check for updates at start
 	Check for Updates…	Check for Updates…
+	Choose an application	Choose an application
 	Choose in the system picker	Choose in the system picker
 	Chroma key	Chroma key
 	Close	Close
@@ -142,6 +145,7 @@
 	Hotkeys	Hotkeys
 	Image	Image
 	Image mask	Image mask
+	Include child processes	Include child processes
 	Import…	Import…
 	Intel Quick Sync H.264	Intel Quick Sync H.264
 	Inter (SIL OFL 1.1)	Inter (SIL OFL 1.1)

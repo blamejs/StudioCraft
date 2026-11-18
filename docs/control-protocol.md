@@ -159,8 +159,26 @@ chosen camera offers. A camera's `device` is its name and the system's id joined
 `format` is written as `1280x720@30:MJPG` (width, height, frames per second and a four-character
 code: `MJPG`, `YUYV`, `NV12`, `GREY`, `RGB3` or `BGR3`), or `""` for the camera's default.
 
+The engine commands `app_audio.list` and `app_audio.status` also only read, and take no
+parameters. `app_audio.list` returns `{"supported", "error", "apps"}`: each application has `app`,
+`name`, `path`, `pids`, `target_pid`, `playing` and `peak`. Each `app_audio.list` keeps the
+application list current for the next 60 s and has the meters read for the next 2 s, so `peak` is
+0 on a first call and the newest level, 0 to 1, on a call made within 2 s of the one before.
+`peak` is `null` for an application past the 64th, which has no meter row.
+
+An Application audio capture source's `app` setting takes the `app` value: the program file's name
+in lower case, `|`, and the program's path in lower case. A value finds the listed application at
+its path; when none is there, it finds the one application with that file name, so a program that
+moved after an update is still found. A value of the file name alone finds an application only
+while one listed application has that file name. `app_audio.status` returns `support` (`supported`,
+`reason` and `permission`), `captures`, `max_captures`, the summed `dropped_blocks` and
+`pool_exhausted` counters, and `running` with each capture's `app`, `pid`, `state`, `packets`,
+`dropped_blocks` and `pool_exhausted`. When the system cannot capture one application,
+`supported` is `false` and `error` and `reason` say why.
+
 ```sh
 studiocraft-cli send 9876 engine.execute '{"command": "app.links", "params": {"link": "issues"}}'
+studiocraft-cli send 9876 engine.execute '{"command": "app_audio.list"}'
 ```
 
 ## Command line

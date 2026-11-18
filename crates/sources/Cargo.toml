@@ -1,6 +1,6 @@
 [package]
 name = "studiocraft-sources"
-description = "Built-in sources and filters: color, image, text, media file, display and window capture, audio devices"
+description = "Built-in sources and filters: color, image, text, media file, display and window capture, audio devices, application audio"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -15,6 +15,7 @@ craft-image-codecs.workspace = true
 craft-font-catalog.workspace = true
 craft-color-transform.workspace = true
 craft-audio-dsp.workspace = true
+craft-app-audio.workspace = true
 ab_glyph.workspace = true
 serde_json.workspace = true
 
@@ -23,6 +24,12 @@ craft-color.workspace = true
 image.workspace = true
 jpeg-encoder.workspace = true
 studiocraft-render.workspace = true
+criterion = { workspace = true }
+stats_alloc = { workspace = true }
+
+[[bench]]
+name = "audio_feed"
+harness = false
 
 [lints]
 workspace = true

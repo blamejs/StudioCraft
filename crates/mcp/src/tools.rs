@@ -296,6 +296,16 @@ fn studio_tool_definitions() -> Vec<Value> {
             READS,
         ),
         tool(
+            "app_audio",
+            "Application audio",
+            "`list`: the running applications that have audio, each with the `app` value an `app_audio` source takes, whether it plays \
+             sound now and its peak level. `status`: whether this system captures one application's audio, and the captures running \
+             now with their counters.",
+            json!({"action": {"type": "string", "enum": ["list", "status"], "description": "What to read."}}),
+            &["action"],
+            READS,
+        ),
+        tool(
             "record_start",
             "Start recording",
             "Start recording the program to a new file in the recording folder (Settings › Output), as Start Recording does. Returns the \
@@ -851,6 +861,11 @@ fn dispatch(b: &mut dyn Backend, name: &str, args: &Args) -> Result<Value, McpEr
             req_str(args, "kind")?;
             Ok(text(&run(b, "source.schema", pick(args, &["kind", "settings"]))?))
         }
+        "app_audio" => match req_str(args, "action")? {
+            "list" => Ok(text(&run(b, "app_audio.list", json!({}))?)),
+            "status" => Ok(text(&run(b, "app_audio.status", json!({}))?)),
+            other => Err(McpError::Invalid(format!("`action` must be list or status, not `{other}`"))),
+        },
         "record_start" => output_command(b, "record.start", "recording"),
         "record_stop" => output_command(b, "record.stop", "recording"),
         "stream_start" => output_command(b, "stream.start", "streaming"),

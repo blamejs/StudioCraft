@@ -14,6 +14,8 @@
 	Alpha mask (alpha channel)	Alpha 遮罩（Alpha 通道）
 	Alpha mask (color channel)	Alpha 遮罩（色彩通道）
 	Apply	套用
+	Application	應用程式
+	Application audio capture	應用程式音訊擷取
 	Apply Dock Layout	套用停駐版面
 	Attack (ms)	起音時間 (ms)
 	Audio	音訊
@@ -42,6 +44,7 @@
 	Center to Screen	置於畫面中央
 	Check for updates at start	啟動時檢查更新
 	Check for Updates…	檢查更新…
+	Choose an application	選擇應用程式
 	Choose in the system picker	在系統選擇器中選擇
 	Chroma key	色度鍵
 	Close	關閉
@@ -138,6 +141,7 @@
 	Hotkeys	快速鍵
 	Image	影像
 	Image mask	影像遮罩
+	Include child processes	包含子處理程序
 	Import…	匯入…
 	Key color	去背顏色
 	Key color spill reduction	減少去背色溢出

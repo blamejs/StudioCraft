@@ -14,6 +14,7 @@ studiocraft-model = { workspace = true }
 studiocraft-media = { workspace = true }
 studiocraft-plugin = { workspace = true }
 craft-audio-dsp = { workspace = true }
+craft-app-audio = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
