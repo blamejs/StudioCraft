@@ -509,6 +509,18 @@ mod tests {
     }
 
     #[test]
+    fn a_busy_render_node_outranks_later_nodes_that_cannot_encode_the_stream() {
+        use vaapi_ffi::telling;
+        let (none, unsupported, busy) = (|| OpenError::NoDevice("a".into()), || OpenError::Unsupported("b".into()), || OpenError::Busy("c".into()));
+        assert_eq!(Error::from(telling(busy(), unsupported())), Error::Busy("c".into()), "a busy node, then a node refusing the size");
+        assert_eq!(Error::from(telling(telling(busy(), none()), unsupported())), Error::Busy("c".into()));
+        assert_eq!(Error::from(telling(none(), unsupported())), Error::Unsupported("b".into()));
+        assert_eq!(Error::from(telling(unsupported(), none())), Error::Unsupported("b".into()));
+        assert_eq!(Error::from(telling(unsupported(), busy())), Error::Busy("c".into()));
+        assert_eq!(Error::from(telling(none(), OpenError::NoDevice("later".into()))), Error::NoDevice("a".into()), "the first of a kind is kept");
+    }
+
+    #[test]
     fn packets_leave_the_parameter_sets_in_the_record() {
         let sets = vec![SPS.to_vec(), PPS.to_vec()];
         let key = packet(Codec::H264, &sets, &annex_b(&[&[0x09, 0x10], SPS, PPS, IDR]), 7, true).unwrap();

@@ -23,7 +23,7 @@ use super::abi::{self, VABufferID, VAConfigAttrib, VAImage, VAImageFormat, VASur
 use super::{
     Blocks, Control, DEPTH, OpenError, Params, Picture, RECON, coded_bytes, coded_size, control, copy_nv12, frame_rate_buffer, h264_picture,
     h264_sequence, h264_slice, hevc_blocks, hevc_picture, hevc_sequence, hevc_slice, nominal_bitrate, open_error, rate_buffers, recon_slots,
-    segment_error,
+    segment_error, telling,
 };
 use crate::Codec;
 
@@ -353,20 +353,19 @@ impl Session {
     /// Open an encoder for `p` on the first render node whose driver encodes the codec.
     pub(crate) fn open(p: &Params) -> Result<Session, OpenError> {
         let api = api().map_err(OpenError::NoDevice)?;
-        let mut why = OpenError::NoDevice("no DRM render node (/dev/dri/renderD*)".into());
+        let mut why: Option<OpenError> = None;
         for node in render_nodes() {
             let found = Display::open(api, &node).map_err(OpenError::NoDevice).and_then(|d| d.choose(p).map(|c| (d, c)));
-            match found {
-                Ok((display, choice)) => match Session::on(display, choice, p) {
-                    Ok(s) => return Ok(s),
-                    Err(e) => why = e,
-                },
-                // A driver that encodes the codec says more than one that does not.
-                Err(e) if matches!(why, OpenError::NoDevice(_)) || !matches!(e, OpenError::NoDevice(_)) => why = e,
-                Err(_) => {}
-            }
+            let e = match found.and_then(|(display, choice)| Session::on(display, choice, p)) {
+                Ok(s) => return Ok(s),
+                Err(e) => e,
+            };
+            why = Some(match why {
+                Some(kept) => telling(kept, e),
+                None => e,
+            });
         }
-        Err(why)
+        Err(why.unwrap_or_else(|| OpenError::NoDevice("no DRM render node (/dev/dri/renderD*)".into())))
     }
 
     fn on(display: Display, choice: Choice, p: &Params) -> Result<Session, OpenError> {

@@ -53,6 +53,18 @@ pub(crate) enum OpenError {
     Busy(String),
 }
 
+/// Of two render nodes' errors, the one that says more: a busy encoder, which may be free at the
+/// next try, ahead of a driver that encodes the codec but not this stream, ahead of no encoder.
+/// The earlier error is kept between two of the same kind.
+pub(crate) fn telling(kept: OpenError, new: OpenError) -> OpenError {
+    let rank = |e: &OpenError| match e {
+        OpenError::NoDevice(_) => 0,
+        OpenError::Unsupported(_) => 1,
+        OpenError::Busy(_) => 2,
+    };
+    if rank(&new) > rank(&kept) { new } else { kept }
+}
+
 /// The status of an open call that failed: every encoder of the GPU is taken (busy), or `other`.
 pub(crate) fn open_error(status: VAStatus, why: String, other: fn(String) -> OpenError) -> OpenError {
     match status {
