@@ -105,6 +105,8 @@ impl From<nvenc_ffi::OpenError> for Error {
 
 /// Pictures in flight: input and output buffer pairs.
 const RING: usize = 4;
+/// The most buffer pairs a session grows to while the driver holds pictures back.
+const MAX_RING: usize = 32;
 
 /// Whether this system has the NVIDIA driver's encode library in a version this crate speaks. The
 /// library is loaded once per process, so later calls cost nothing.
@@ -225,10 +227,15 @@ impl Encoder {
         let mut out = Vec::new();
         let slot = match self.free.pop() {
             Some(s) => s,
-            None => {
-                if self.ready == 0 {
-                    return Err(Error::Failed("the encoder holds more frames than it has buffers".into()));
+            // The driver holds every buffer back until more pictures arrive: add one.
+            None if self.ready == 0 => {
+                if self.session.slots() >= MAX_RING {
+                    return Err(Error::Failed(format!("the encoder held back {MAX_RING} pictures without returning one")));
                 }
+                self.session.add_slot().map_err(Error::Failed)?;
+                self.session.slots().saturating_sub(1)
+            }
+            None => {
                 out.push(self.read_oldest()?);
                 self.free.pop().ok_or_else(|| Error::Failed("no free encoder buffer".into()))?
             }

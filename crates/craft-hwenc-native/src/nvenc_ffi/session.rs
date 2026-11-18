@@ -417,7 +417,8 @@ impl Session {
         Ok(())
     }
 
-    fn add_slot(&mut self) -> Result<(), String> {
+    /// Add a pair of input and output buffers; its slot number is `slots() - 1`.
+    pub fn add_slot(&mut self) -> Result<(), String> {
         let create_in = self.api.list.nvEncCreateInputBuffer.ok_or("the driver has no nvEncCreateInputBuffer")?;
         let create_out = self.api.list.nvEncCreateBitstreamBuffer.ok_or("the driver has no nvEncCreateBitstreamBuffer")?;
         // SAFETY: zeroed parameter blocks with their versions; the driver fills in the buffer
