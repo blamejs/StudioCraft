@@ -225,7 +225,9 @@ impl Fanout {
             return None;
         }
         let subs = self.shared.subs.load();
-        let holding = || subs.iter().filter(|r| r.queued_packets() > 0);
+        // Only the producer adds packets, so a ring emptied here is not picked again, and the
+        // search ends.
+        let holding = || subs.iter().filter(|r| r.has_packets());
         let behind = holding().filter(|r| r.is_backed_up()).max_by_key(|r| r.queued_bytes());
         match behind {
             Some(r) => Some((r.flush(), true)),

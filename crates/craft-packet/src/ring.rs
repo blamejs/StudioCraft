@@ -437,6 +437,12 @@ impl Ring {
         split(self.held.load(Ordering::Relaxed)).1
     }
 
+    /// Whether the ring's queue holds a packet. Its count can be above 0 while it holds none, when
+    /// the receiver has taken a packet out of the queue and not yet out of the count.
+    pub(crate) fn has_packets(&self) -> bool {
+        !self.q.is_empty()
+    }
+
     /// Whether the receiver has fallen behind: the ring is full by packets, or the producer is
     /// dropping packets until the next run start.
     pub(crate) fn is_backed_up(&self) -> bool {
@@ -667,6 +673,13 @@ impl Receiver {
         if self.ring.q.push(p).is_ok() {
             self.ring.held.fetch_add(add, Ordering::AcqRel);
         }
+    }
+
+    /// Takes the next packet out of the queue and stops there, as a receiver does part way through
+    /// `try_recv`, before it lowers the ring's count.
+    #[cfg(test)]
+    pub(crate) fn pop_without_release(&self) -> Option<SharedPacket> {
+        self.ring.q.pop()
     }
 
     /// Offers `p` to this ring alone, as `publish` offers it to each ring.

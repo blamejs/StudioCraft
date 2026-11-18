@@ -643,6 +643,21 @@ fn relief_stops_when_emptying_a_ring_frees_nothing_in_the_pool() {
 }
 
 #[test]
+fn relief_ends_when_a_receiver_is_part_way_through_taking_a_packet() {
+    let mut f = Fanout::new();
+    let r = f.subscribe(slots(1)).unwrap();
+    let mut pool = PacketPool::new(MAX_SLOTS, 0).unwrap();
+    let held: Vec<_> = (0..MAX_SLOTS).map(|i| pool.share_copy(&[1], Info::video(i as i64, i as i64, true)).unwrap()).collect();
+    f.publish(&held[0]);
+    // The receiver has taken the packet out of the queue but not yet out of the ring's count, so
+    // the ring counts as full while its queue is empty.
+    let taking = r.pop_without_release();
+    assert!(taking.is_some());
+    assert_eq!(f.share_copy(&mut pool, &[2], Info::data(0)).unwrap_err(), ShareError::PoolFull);
+    drop((taking, held));
+}
+
+#[test]
 fn relief_goes_on_while_another_stalled_ring_holds_the_same_packets() {
     let mut f = Fanout::new();
     let a = f.subscribe(slots(8)).unwrap();
