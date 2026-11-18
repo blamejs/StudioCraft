@@ -107,7 +107,8 @@ macOS.
 ## Recording
 
 Recordings are MKV, MP4 or MOV files at four quality levels: Compact, High, Pristine and Lossless.
-The Lossless level writes very large files. StudioCraft writes recordings to your Videos folder
+The Lossless level encodes the video frames without compression loss and writes very large files.
+The software encoder runs x264 with `-qp 0`, and NVENC through `ffmpeg` runs with `-tune lossless`. StudioCraft writes recordings to your Videos folder
 unless Settings › Output names another folder, and names each file `YYYY-MM-DD HH-MM-SS.<ext>`.
 File › Show Recordings opens the folder.
 
