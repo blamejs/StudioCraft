@@ -19,9 +19,10 @@ License: MIT OR Apache-2.0.
   `Control` adds and removes subscribers from other threads.
 - `Receiver` is one subscriber's end. `try_recv` returns the next packet without waiting;
   `recv_timeout` parks the thread until a packet arrives, the subscription ends or the time is up.
-  Dropping the receiver removes the subscription.
-- `Stats` holds each subscriber's counters: packets and bytes accepted, dropped, skipped, delivered
-  and queued, and whether the subscriber is resyncing. `Receiver::stats`, `Monitor::stats` and
+  Dropping the receiver removes the subscription and releases the packets left in its ring, even
+  while a `Monitor` of it is kept.
+- `Stats` holds each subscriber's counters: packets and bytes accepted, dropped, skipped, delivered,
+  discarded and queued, and whether the subscriber is resyncing. `Receiver::stats`, `Monitor::stats` and
   `Control::monitors` read them without a lock.
 
 ## Drops

@@ -167,7 +167,7 @@ pub struct SubscriberId(pub u64);
 /// One subscriber's counters, read without a lock.
 ///
 /// Every packet offered to a subscriber after it starts is counted once as accepted or dropped, and
-/// every accepted packet is later delivered, skipped or still queued.
+/// every accepted packet is later delivered, skipped, discarded or still queued.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Stats {
     /// Packets and bytes the ring took.
@@ -187,6 +187,11 @@ pub struct Stats {
     pub delivered_packets: u64,
     /// See [`Stats::delivered_packets`].
     pub delivered_bytes: u64,
+    /// Packets and bytes released without delivery because the receiver was dropped while they
+    /// were in the ring.
+    pub discarded_packets: u64,
+    /// See [`Stats::discarded_packets`].
+    pub discarded_bytes: u64,
     /// Packets and bytes in the ring now.
     pub queued_packets: usize,
     /// See [`Stats::queued_packets`].
@@ -223,6 +228,9 @@ pub(crate) struct Ring {
     state: AtomicU8,
     newest: AtomicI64,
     closed: AtomicBool,
+    /// Set when the receiver is dropped. From then on, whoever puts a packet in the ring or finds
+    /// one there releases it, so a [`Monitor`] that outlives the receiver holds no packets.
+    abandoned: AtomicBool,
     waiting: AtomicBool,
     waiter: ArcSwapOption<Thread>,
     accepted_packets: AtomicU64,
@@ -233,6 +241,8 @@ pub(crate) struct Ring {
     skipped_bytes: AtomicU64,
     delivered_packets: AtomicU64,
     delivered_bytes: AtomicU64,
+    discarded_packets: AtomicU64,
+    discarded_bytes: AtomicU64,
 }
 
 impl Ring {
@@ -252,6 +262,7 @@ impl Ring {
             state: AtomicU8::new(JOINING),
             newest: AtomicI64::new(i64::MIN),
             closed: AtomicBool::new(false),
+            abandoned: AtomicBool::new(false),
             waiting: AtomicBool::new(false),
             waiter: ArcSwapOption::empty(),
             accepted_packets: AtomicU64::new(0),
@@ -262,6 +273,8 @@ impl Ring {
             skipped_bytes: AtomicU64::new(0),
             delivered_packets: AtomicU64::new(0),
             delivered_bytes: AtomicU64::new(0),
+            discarded_packets: AtomicU64::new(0),
+            discarded_bytes: AtomicU64::new(0),
         })
     }
 
@@ -308,12 +321,46 @@ impl Ring {
         self.state.store(FLOWING, Ordering::Relaxed);
         self.accepted_packets.fetch_add(1, Ordering::Relaxed);
         self.accepted_bytes.fetch_add(len as u64, Ordering::Relaxed);
-        // Pairs with the fence in `Receiver::recv_timeout`: either the receiver sees this packet
-        // before it parks, or this sees `waiting` and wakes it.
+        self.after_push();
+        true
+    }
+
+    /// Wakes a waiting receiver after a push, or releases the ring's packets when the receiver has
+    /// been dropped.
+    fn after_push(&self) {
+        // Pairs with the fences in `Receiver::recv_timeout` and `Receiver::drop`: either the
+        // receiver sees this packet before it parks or releases the ring, or this sees `waiting`
+        // or `abandoned`.
         fence(Ordering::SeqCst);
+        if self.abandoned.load(Ordering::SeqCst) {
+            // The dropped receiver's thread empties the ring until it finds it empty. If it found
+            // it empty before this push, the ring holds this one packet, so taking one packet out
+            // here leaves it empty, and the producer never drains a whole ring.
+            self.discard_one();
+            return;
+        }
         if self.waiting.load(Ordering::SeqCst) && self.waiting.swap(false, Ordering::SeqCst) {
             self.wake();
         }
+    }
+
+    /// Takes every packet out of the ring and releases it, counting it as discarded.
+    fn discard(&self) {
+        while self.discard_one() {}
+    }
+
+    /// Takes the next packet out of the ring, if there is one, and releases it, counting it as
+    /// discarded. The producer and the dropped receiver's thread may both run this at once; each
+    /// packet is taken once.
+    fn discard_one(&self) -> bool {
+        let Some(p) = self.q.pop() else {
+            return false;
+        };
+        let len = p.len() as u64;
+        drop(p);
+        self.held.fetch_sub(ONE_PACKET + len, Ordering::AcqRel);
+        self.discarded_packets.fetch_add(1, Ordering::Relaxed);
+        self.discarded_bytes.fetch_add(len, Ordering::Relaxed);
         true
     }
 
@@ -356,6 +403,8 @@ impl Ring {
             skipped_bytes: self.skipped_bytes.load(Ordering::Relaxed),
             delivered_packets: self.delivered_packets.load(Ordering::Relaxed),
             delivered_bytes: self.delivered_bytes.load(Ordering::Relaxed),
+            discarded_packets: self.discarded_packets.load(Ordering::Relaxed),
+            discarded_bytes: self.discarded_bytes.load(Ordering::Relaxed),
             queued_packets: packets as usize,
             queued_bytes: bytes as usize,
             resyncing: self.state.load(Ordering::Relaxed) == RESYNC,
@@ -366,7 +415,8 @@ impl Ring {
 /// The receiving end of one subscription, used by one thread at a time, such as a destination's
 /// sender thread.
 ///
-/// Dropping it removes the subscription from its fan-out.
+/// Dropping it removes the subscription from its fan-out and releases the packets left in its ring,
+/// including one the producer was offering at that moment.
 pub struct Receiver {
     ring: Arc<Ring>,
     shared: Arc<Shared>,
@@ -501,6 +551,10 @@ impl Drop for Receiver {
     fn drop(&mut self) {
         self.shared.remove(self.ring.id);
         self.ring.close();
+        self.ring.abandoned.store(true, Ordering::SeqCst);
+        // Pairs with the fence in `Ring::after_push`: a packet pushed after this sees `abandoned`.
+        fence(Ordering::SeqCst);
+        self.ring.discard();
     }
 }
 
@@ -538,6 +592,20 @@ impl Monitor {
     #[cfg(test)]
     pub(crate) fn is_waiting(&self) -> bool {
         self.0.waiting.load(Ordering::SeqCst)
+    }
+
+    /// Puts `p` in the ring the way an offer that passed the closed check before the receiver was
+    /// dropped does.
+    #[cfg(test)]
+    pub(crate) fn push_in_flight(&self, p: SharedPacket) {
+        let add = ONE_PACKET + p.len() as u64;
+        self.0.held.fetch_add(add, Ordering::AcqRel);
+        if self.0.q.push(p).is_err() {
+            self.0.held.fetch_sub(add, Ordering::AcqRel);
+            return;
+        }
+        self.0.accepted_packets.fetch_add(1, Ordering::Relaxed);
+        self.0.after_push();
     }
 }
 

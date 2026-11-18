@@ -348,6 +348,34 @@ fn dropping_a_receiver_unsubscribes_it() {
 }
 
 #[test]
+fn dropping_a_receiver_releases_its_queued_packets_while_a_monitor_lives() {
+    let mut pool = PacketPool::new(1, 64).unwrap();
+    let mut f = Fanout::new();
+    let r = f.subscribe(slots(8)).unwrap();
+    let m = r.monitor();
+    f.publish(&pool.share_copy(&[1; 10], Info::video(0, 0, true)).unwrap());
+    assert_eq!(pool.free(), 0);
+    drop(r);
+    assert_eq!(pool.free(), 1, "the pool takes back the queued packet");
+    let st = m.stats();
+    assert_eq!((st.queued_packets, st.queued_bytes), (0, 0));
+    assert_eq!((st.discarded_packets, st.discarded_bytes), (1, 10));
+    assert_eq!(st.accepted_packets, st.delivered_packets + st.skipped_packets + st.discarded_packets);
+}
+
+#[test]
+fn a_packet_pushed_after_the_receiver_is_dropped_is_released() {
+    let mut pool = PacketPool::new(1, 64).unwrap();
+    let f = Fanout::new();
+    let r = f.subscribe(slots(8)).unwrap();
+    let m = r.monitor();
+    drop(r);
+    m.push_in_flight(pool.share_copy(&[1; 10], Info::video(0, 0, true)).unwrap());
+    assert_eq!(pool.free(), 1, "the pool takes back the late packet");
+    assert_eq!(m.stats().queued_packets, 0);
+}
+
+#[test]
 fn unsubscribe_closes_the_receiver_after_its_ring_drains() {
     let mut f = Fanout::new();
     let control = f.control();
