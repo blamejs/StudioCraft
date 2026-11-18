@@ -467,3 +467,8 @@ menu	Transform	變形
 @msg	Audio tracks stopped at {time}: a file could not be written	音訊軌道在 {time} 停止：無法寫入檔案
 @msg	Audio tracks could not start: {error}	音訊軌道無法啟動：{error}
 @msg	Audio tracks repaired after the app closed during a take: {folders}	應用程式在錄製過程中關閉，已修復音訊軌道：{folders}
+@msg	Audio tracks could not be repaired: {takes}	無法修復音訊軌道：{takes}
+@msg	Audio tracks repaired after the app closed during a take: {folders} and {more} more	應用程式在錄製過程中關閉，已修復音訊軌道：{folders} 及另外 {more} 個
+@msg	Audio tracks could not be repaired: {takes} and {more} more	無法修復音訊軌道：{takes} 及另外 {more} 個
+@msg	Audio tracks could not be repaired: {takes}. Takes repaired: {count}	無法修復音訊軌道：{takes}。已修復的錄製：{count}
+@msg	Audio tracks could not be repaired: {takes} and {more} more. Takes repaired: {count}	無法修復音訊軌道：{takes} 及另外 {more} 個。已修復的錄製：{count}

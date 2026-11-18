@@ -476,3 +476,8 @@ menu	Transform	Перетворення
 @msg	Audio tracks stopped at {time}: a file could not be written	Звукові доріжки зупинено о {time}: не вдалося записати файл
 @msg	Audio tracks could not start: {error}	Не вдалося запустити звукові доріжки: {error}
 @msg	Audio tracks repaired after the app closed during a take: {folders}	Звукові доріжки відновлено після закриття застосунку під час дубля: {folders}
+@msg	Audio tracks could not be repaired: {takes}	Не вдалося відновити звукові доріжки: {takes}
+@msg	Audio tracks repaired after the app closed during a take: {folders} and {more} more	Звукові доріжки відновлено після закриття застосунку під час дубля: {folders} і ще {more}
+@msg	Audio tracks could not be repaired: {takes} and {more} more	Не вдалося відновити звукові доріжки: {takes} і ще {more}
+@msg	Audio tracks could not be repaired: {takes}. Takes repaired: {count}	Не вдалося відновити звукові доріжки: {takes}. Відновлено дублів: {count}
+@msg	Audio tracks could not be repaired: {takes} and {more} more. Takes repaired: {count}	Не вдалося відновити звукові доріжки: {takes} і ще {more}. Відновлено дублів: {count}

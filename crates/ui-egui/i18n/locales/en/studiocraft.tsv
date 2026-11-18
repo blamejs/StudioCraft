@@ -516,3 +516,8 @@ menu	Transform	Transform
 @msg	Audio tracks stopped at {time}: a file could not be written	Audio tracks stopped at {time}: a file could not be written
 @msg	Audio tracks could not start: {error}	Audio tracks could not start: {error}
 @msg	Audio tracks repaired after the app closed during a take: {folders}	Audio tracks repaired after the app closed during a take: {folders}
+@msg	Audio tracks could not be repaired: {takes}	Audio tracks could not be repaired: {takes}
+@msg	Audio tracks repaired after the app closed during a take: {folders} and {more} more	Audio tracks repaired after the app closed during a take: {folders} and {more} more
+@msg	Audio tracks could not be repaired: {takes} and {more} more	Audio tracks could not be repaired: {takes} and {more} more
+@msg	Audio tracks could not be repaired: {takes}. Takes repaired: {count}	Audio tracks could not be repaired: {takes}. Takes repaired: {count}
+@msg	Audio tracks could not be repaired: {takes} and {more} more. Takes repaired: {count}	Audio tracks could not be repaired: {takes} and {more} more. Takes repaired: {count}

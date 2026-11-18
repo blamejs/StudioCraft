@@ -468,3 +468,8 @@ menu	Transform	Dönüştür
 @msg	Audio tracks stopped at {time}: a file could not be written	Ses parçaları {time} anında durdu: bir dosya yazılamadı
 @msg	Audio tracks could not start: {error}	Ses parçaları başlatılamadı: {error}
 @msg	Audio tracks repaired after the app closed during a take: {folders}	Uygulama bir çekim sırasında kapandığı için ses parçaları onarıldı: {folders}
+@msg	Audio tracks could not be repaired: {takes}	Ses parçaları onarılamadı: {takes}
+@msg	Audio tracks repaired after the app closed during a take: {folders} and {more} more	Uygulama bir çekim sırasında kapandığı için ses parçaları onarıldı: {folders} ve {more} tane daha
+@msg	Audio tracks could not be repaired: {takes} and {more} more	Ses parçaları onarılamadı: {takes} ve {more} tane daha
+@msg	Audio tracks could not be repaired: {takes}. Takes repaired: {count}	Ses parçaları onarılamadı: {takes}. Onarılan çekimler: {count}
+@msg	Audio tracks could not be repaired: {takes} and {more} more. Takes repaired: {count}	Ses parçaları onarılamadı: {takes} ve {more} tane daha. Onarılan çekimler: {count}

@@ -448,3 +448,8 @@ menu	Transform	שינוי צורה
 @msg	Audio tracks stopped at {time}: a file could not be written	רצועות השמע נעצרו ב-{time}: לא ניתן היה לכתוב קובץ
 @msg	Audio tracks could not start: {error}	לא ניתן היה להפעיל את רצועות השמע: {error}
 @msg	Audio tracks repaired after the app closed during a take: {folders}	רצועות השמע תוקנו לאחר שהאפליקציה נסגרה במהלך טייק: {folders}
+@msg	Audio tracks could not be repaired: {takes}	לא ניתן היה לתקן את רצועות השמע: {takes}
+@msg	Audio tracks repaired after the app closed during a take: {folders} and {more} more	רצועות השמע תוקנו לאחר שהאפליקציה נסגרה במהלך טייק: {folders} ועוד {more}
+@msg	Audio tracks could not be repaired: {takes} and {more} more	לא ניתן היה לתקן את רצועות השמע: {takes} ועוד {more}
+@msg	Audio tracks could not be repaired: {takes}. Takes repaired: {count}	לא ניתן היה לתקן את רצועות השמע: {takes}. טייקים שתוקנו: {count}
+@msg	Audio tracks could not be repaired: {takes} and {more} more. Takes repaired: {count}	לא ניתן היה לתקן את רצועות השמע: {takes} ועוד {more}. טייקים שתוקנו: {count}

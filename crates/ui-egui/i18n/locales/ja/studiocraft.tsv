@@ -467,3 +467,8 @@ menu	Transform	変形
 @msg	Audio tracks stopped at {time}: a file could not be written	オーディオトラックが {time} で停止しました: ファイルを書き込めませんでした
 @msg	Audio tracks could not start: {error}	オーディオトラックを開始できませんでした: {error}
 @msg	Audio tracks repaired after the app closed during a take: {folders}	テイク中にアプリが終了したため、オーディオトラックを修復しました: {folders}
+@msg	Audio tracks could not be repaired: {takes}	オーディオトラックを修復できませんでした: {takes}
+@msg	Audio tracks repaired after the app closed during a take: {folders} and {more} more	テイク中にアプリが終了したため、オーディオトラックを修復しました: {folders} ほか {more} 件
+@msg	Audio tracks could not be repaired: {takes} and {more} more	オーディオトラックを修復できませんでした: {takes} ほか {more} 件
+@msg	Audio tracks could not be repaired: {takes}. Takes repaired: {count}	オーディオトラックを修復できませんでした: {takes}。修復したテイク: {count}
+@msg	Audio tracks could not be repaired: {takes} and {more} more. Takes repaired: {count}	オーディオトラックを修復できませんでした: {takes} ほか {more} 件。修復したテイク: {count}

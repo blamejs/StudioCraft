@@ -467,3 +467,8 @@ menu	Transform	Transformace
 @msg	Audio tracks stopped at {time}: a file could not be written	Zvukové stopy se zastavily v {time}: soubor nešlo zapsat
 @msg	Audio tracks could not start: {error}	Zvukové stopy nešlo spustit: {error}
 @msg	Audio tracks repaired after the app closed during a take: {folders}	Zvukové stopy byly opraveny po zavření aplikace během záznamu: {folders}
+@msg	Audio tracks could not be repaired: {takes}	Zvukové stopy nelze opravit: {takes}
+@msg	Audio tracks repaired after the app closed during a take: {folders} and {more} more	Zvukové stopy byly opraveny po zavření aplikace během záznamu: {folders} a {more} dalších
+@msg	Audio tracks could not be repaired: {takes} and {more} more	Zvukové stopy nelze opravit: {takes} a {more} dalších
+@msg	Audio tracks could not be repaired: {takes}. Takes repaired: {count}	Zvukové stopy nelze opravit: {takes}. Opravené záznamy: {count}
+@msg	Audio tracks could not be repaired: {takes} and {more} more. Takes repaired: {count}	Zvukové stopy nelze opravit: {takes} a {more} dalších. Opravené záznamy: {count}

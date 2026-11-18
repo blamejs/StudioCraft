@@ -470,3 +470,8 @@ menu	Transform	Transformar
 @msg	Audio tracks stopped at {time}: a file could not be written	Las pistas de audio se detuvieron en {time}: no se pudo escribir un archivo
 @msg	Audio tracks could not start: {error}	Las pistas de audio no pudieron iniciarse: {error}
 @msg	Audio tracks repaired after the app closed during a take: {folders}	Pistas de audio reparadas tras cerrarse la aplicación durante una toma: {folders}
+@msg	Audio tracks could not be repaired: {takes}	No se pudieron reparar las pistas de audio: {takes}
+@msg	Audio tracks repaired after the app closed during a take: {folders} and {more} more	Pistas de audio reparadas tras cerrarse la aplicación durante una toma: {folders} y {more} más
+@msg	Audio tracks could not be repaired: {takes} and {more} more	No se pudieron reparar las pistas de audio: {takes} y {more} más
+@msg	Audio tracks could not be repaired: {takes}. Takes repaired: {count}	No se pudieron reparar las pistas de audio: {takes}. Tomas reparadas: {count}
+@msg	Audio tracks could not be repaired: {takes} and {more} more. Takes repaired: {count}	No se pudieron reparar las pistas de audio: {takes} y {more} más. Tomas reparadas: {count}

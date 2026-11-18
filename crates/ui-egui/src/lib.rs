@@ -1678,7 +1678,8 @@ impl StudioApp {
             ui.with_layout(craft_ui::direction::row(ui), |ui| {
                 if let Some((text, error)) = notice {
                     let color = if error { ui.visuals().warn_fg_color } else { ui.visuals().text_color() };
-                    ui.colored_label(color, text);
+                    // A message longer than the bar is cut off, so the whole text is on hover.
+                    ui.colored_label(color, text.clone()).on_hover_text(text);
                 }
                 ui.with_layout(craft_ui::direction::trailing(ui), |ui| {
                     let fps = format!("{fps:.2}");

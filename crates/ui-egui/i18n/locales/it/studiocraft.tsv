@@ -463,3 +463,8 @@ menu	Transform	Trasforma
 @msg	Audio tracks stopped at {time}: a file could not be written	Tracce audio fermate a {time}: non è stato possibile scrivere un file
 @msg	Audio tracks could not start: {error}	Impossibile avviare le tracce audio: {error}
 @msg	Audio tracks repaired after the app closed during a take: {folders}	Tracce audio riparate dopo la chiusura dell'app durante una ripresa: {folders}
+@msg	Audio tracks could not be repaired: {takes}	Impossibile riparare le tracce audio: {takes}
+@msg	Audio tracks repaired after the app closed during a take: {folders} and {more} more	Tracce audio riparate dopo la chiusura dell'app durante una ripresa: {folders} e altre {more}
+@msg	Audio tracks could not be repaired: {takes} and {more} more	Impossibile riparare le tracce audio: {takes} e altre {more}
+@msg	Audio tracks could not be repaired: {takes}. Takes repaired: {count}	Impossibile riparare le tracce audio: {takes}. Riprese riparate: {count}
+@msg	Audio tracks could not be repaired: {takes} and {more} more. Takes repaired: {count}	Impossibile riparare le tracce audio: {takes} e altre {more}. Riprese riparate: {count}

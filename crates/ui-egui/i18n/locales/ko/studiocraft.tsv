@@ -467,3 +467,8 @@ menu	Transform	변형
 @msg	Audio tracks stopped at {time}: a file could not be written	오디오 트랙이 {time}에 중지됨: 파일을 쓸 수 없습니다
 @msg	Audio tracks could not start: {error}	오디오 트랙을 시작할 수 없습니다: {error}
 @msg	Audio tracks repaired after the app closed during a take: {folders}	테이크 도중 앱이 닫혀 오디오 트랙을 복구했습니다: {folders}
+@msg	Audio tracks could not be repaired: {takes}	오디오 트랙을 복구할 수 없습니다: {takes}
+@msg	Audio tracks repaired after the app closed during a take: {folders} and {more} more	테이크 도중 앱이 닫혀 오디오 트랙을 복구했습니다: {folders} 외 {more}개
+@msg	Audio tracks could not be repaired: {takes} and {more} more	오디오 트랙을 복구할 수 없습니다: {takes} 외 {more}개
+@msg	Audio tracks could not be repaired: {takes}. Takes repaired: {count}	오디오 트랙을 복구할 수 없습니다: {takes}. 복구된 테이크: {count}
+@msg	Audio tracks could not be repaired: {takes} and {more} more. Takes repaired: {count}	오디오 트랙을 복구할 수 없습니다: {takes} 외 {more}개. 복구된 테이크: {count}

@@ -293,17 +293,10 @@ impl Studio {
             && let Some(h) = self.audio_tracks.repair.take()
             && let Ok(out) = h.join()
         {
-            if !out.repaired.is_empty() {
-                let folders = out.repaired.iter().map(|r| r.dir.display().to_string()).collect::<Vec<_>>().join(", ");
-                self.notices.push(Notice::new(
-                    "Audio tracks repaired after the app closed during a take: {folders}",
-                    vec![("folders", folders)],
-                    false,
-                ));
-            }
             for (dir, e) in &out.failed {
                 log::warn!("audio tracks: repair at launch: {}: {e}", dir.display());
             }
+            self.notices.extend(repair_notices(&out));
         }
     }
 
@@ -482,6 +475,54 @@ fn stop_notice(status: &studiocraft_audio_tracks::Status) -> Notice {
     Notice::new(template, vec![("time", clock_text(status.stopped_at_seconds()))], true)
 }
 
+/// Takes a repair notice names at most; it counts the rest.
+const LISTED_TAKES: usize = 3;
+
+/// The first [`LISTED_TAKES`] of `items` joined by `sep`, and how many were left out.
+fn listed(items: Vec<String>, sep: &str) -> (String, usize) {
+    let more = items.len().saturating_sub(LISTED_TAKES);
+    (items.into_iter().take(LISTED_TAKES).collect::<Vec<_>>().join(sep), more)
+}
+
+/// The notices for a repair made at launch: one for the takes repaired, and one error for the
+/// takes that could not be. Each names at most [`LISTED_TAKES`] takes and counts the rest, since
+/// the status bar shows only the latest notice.
+fn repair_notices(out: &Outcome) -> Vec<Notice> {
+    let mut notices = Vec::new();
+    if !out.repaired.is_empty() {
+        let (folders, more) = listed(out.repaired.iter().map(|r| r.dir.display().to_string()).collect(), ", ");
+        notices.push(if more == 0 {
+            Notice::new("Audio tracks repaired after the app closed during a take: {folders}", vec![("folders", folders)], false)
+        } else {
+            Notice::new(
+                "Audio tracks repaired after the app closed during a take: {folders} and {more} more",
+                vec![("folders", folders), ("more", more.to_string())],
+                false,
+            )
+        });
+    }
+    if !out.failed.is_empty() {
+        let (takes, more) = listed(out.failed.iter().map(|(dir, e)| format!("{} ({e})", dir.display())).collect(), "; ");
+        // The error is shown last, so it also counts the takes that were repaired.
+        let repaired = out.repaired.len();
+        let mut args = vec![("takes", takes)];
+        if more > 0 {
+            args.push(("more", more.to_string()));
+        }
+        if repaired > 0 {
+            args.push(("count", repaired.to_string()));
+        }
+        let template = match (more > 0, repaired > 0) {
+            (false, false) => "Audio tracks could not be repaired: {takes}",
+            (true, false) => "Audio tracks could not be repaired: {takes} and {more} more",
+            (false, true) => "Audio tracks could not be repaired: {takes}. Takes repaired: {count}",
+            (true, true) => "Audio tracks could not be repaired: {takes} and {more} more. Takes repaired: {count}",
+        };
+        notices.push(Notice::new(template, args, true));
+    }
+    notices
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -502,5 +543,45 @@ mod tests {
         assert!(stream.starts_with(&base) && stream.to_string_lossy().contains("Stream "));
         assert_eq!(clock_text(3725.9), "01:02:05");
         assert_eq!(clock_text(f64::NAN), "00:00:00");
+    }
+
+    #[test]
+    fn a_take_that_launch_repair_cannot_fix_is_shown_to_the_user() {
+        let (a, b) = (PathBuf::from("A Audio/Audio Files"), PathBuf::from("B Audio/Audio Files"));
+        let out = Outcome {
+            repaired: Vec::new(),
+            failed: vec![(a.clone(), std::io::Error::other("Mic.wav is missing")), (b.clone(), std::io::Error::other("Desk.wav is missing"))],
+        };
+        let notices = repair_notices(&out);
+        assert_eq!(notices.len(), 1, "every failed take is in one notice: {notices:?}");
+        let n = &notices[0];
+        assert!(n.error);
+        assert_eq!(n.template, "Audio tracks could not be repaired: {takes}");
+        let takes = format!("{} (Mic.wav is missing); {} (Desk.wav is missing)", a.display(), b.display());
+        assert_eq!(n.args, vec![("takes", takes)]);
+        // Many takes: the first three are named and the rest counted, in both notices.
+        let dirs: Vec<PathBuf> = (1..=5).map(|i| PathBuf::from(format!("T{i}"))).collect();
+        let out = Outcome {
+            repaired: dirs.iter().map(|d| recover::Repaired { dir: d.clone(), files: Vec::new(), synced: Vec::new() }).collect(),
+            failed: dirs.iter().map(|d| (d.clone(), std::io::Error::other("bad"))).collect(),
+        };
+        let notices = repair_notices(&out);
+        assert_eq!(notices.len(), 2, "{notices:?}");
+        assert_eq!(notices[0].template, "Audio tracks repaired after the app closed during a take: {folders} and {more} more");
+        assert_eq!(notices[0].args, vec![("folders", "T1, T2, T3".to_string()), ("more", "2".to_string())]);
+        // The error, shown last, also counts the takes repaired.
+        assert_eq!(notices[1].template, "Audio tracks could not be repaired: {takes} and {more} more. Takes repaired: {count}");
+        assert_eq!(
+            notices[1].args,
+            vec![("takes", "T1 (bad); T2 (bad); T3 (bad)".to_string()), ("more", "2".to_string()), ("count", "5".to_string())]
+        );
+        let one = Outcome {
+            repaired: vec![recover::Repaired { dir: dirs[0].clone(), files: Vec::new(), synced: Vec::new() }],
+            failed: vec![(dirs[1].clone(), std::io::Error::other("bad"))],
+        };
+        let notices = repair_notices(&one);
+        assert_eq!(notices[1].template, "Audio tracks could not be repaired: {takes}. Takes repaired: {count}");
+        assert_eq!(notices[1].args, vec![("takes", "T2 (bad)".to_string()), ("count", "1".to_string())]);
+        assert!(repair_notices(&Outcome::default()).is_empty());
     }
 }

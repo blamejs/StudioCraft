@@ -455,3 +455,8 @@ menu	Transform	التحويل
 @msg	Audio tracks stopped at {time}: a file could not be written	توقفت المسارات الصوتية عند {time}: تعذّرت كتابة ملف
 @msg	Audio tracks could not start: {error}	تعذّر بدء المسارات الصوتية: {error}
 @msg	Audio tracks repaired after the app closed during a take: {folders}	أُصلحت المسارات الصوتية بعد إغلاق التطبيق أثناء لقطة: {folders}
+@msg	Audio tracks could not be repaired: {takes}	تعذّر إصلاح المسارات الصوتية: {takes}
+@msg	Audio tracks repaired after the app closed during a take: {folders} and {more} more	أُصلحت المسارات الصوتية بعد إغلاق التطبيق أثناء لقطة: {folders} و{more} غيرها
+@msg	Audio tracks could not be repaired: {takes} and {more} more	تعذّر إصلاح المسارات الصوتية: {takes} و{more} غيرها
+@msg	Audio tracks could not be repaired: {takes}. Takes repaired: {count}	تعذّر إصلاح المسارات الصوتية: {takes}. اللقطات التي أُصلحت: {count}
+@msg	Audio tracks could not be repaired: {takes} and {more} more. Takes repaired: {count}	تعذّر إصلاح المسارات الصوتية: {takes} و{more} غيرها. اللقطات التي أُصلحت: {count}

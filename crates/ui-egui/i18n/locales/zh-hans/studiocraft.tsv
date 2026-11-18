@@ -467,3 +467,8 @@ menu	Transform	变换
 @msg	Audio tracks stopped at {time}: a file could not be written	音频轨道在 {time} 停止：无法写入文件
 @msg	Audio tracks could not start: {error}	音频轨道无法启动：{error}
 @msg	Audio tracks repaired after the app closed during a take: {folders}	应用在录制过程中关闭，已修复音频轨道：{folders}
+@msg	Audio tracks could not be repaired: {takes}	无法修复音频轨道：{takes}
+@msg	Audio tracks repaired after the app closed during a take: {folders} and {more} more	应用在录制过程中关闭，已修复音频轨道：{folders} 及另外 {more} 个
+@msg	Audio tracks could not be repaired: {takes} and {more} more	无法修复音频轨道：{takes} 及另外 {more} 个
+@msg	Audio tracks could not be repaired: {takes}. Takes repaired: {count}	无法修复音频轨道：{takes}。已修复的录制：{count}
+@msg	Audio tracks could not be repaired: {takes} and {more} more. Takes repaired: {count}	无法修复音频轨道：{takes} 及另外 {more} 个。已修复的录制：{count}

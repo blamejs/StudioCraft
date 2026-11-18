@@ -457,3 +457,8 @@ menu	Transform	Transformeren
 @msg	Audio tracks stopped at {time}: a file could not be written	Audiosporen gestopt op {time}: een bestand kon niet worden geschreven
 @msg	Audio tracks could not start: {error}	Audiosporen konden niet starten: {error}
 @msg	Audio tracks repaired after the app closed during a take: {folders}	Audiosporen hersteld nadat de app tijdens een opname werd gesloten: {folders}
+@msg	Audio tracks could not be repaired: {takes}	Audiosporen konden niet worden hersteld: {takes}
+@msg	Audio tracks repaired after the app closed during a take: {folders} and {more} more	Audiosporen hersteld nadat de app tijdens een opname werd gesloten: {folders} en {more} meer
+@msg	Audio tracks could not be repaired: {takes} and {more} more	Audiosporen konden niet worden hersteld: {takes} en {more} meer
+@msg	Audio tracks could not be repaired: {takes}. Takes repaired: {count}	Audiosporen konden niet worden hersteld: {takes}. Herstelde opnamen: {count}
+@msg	Audio tracks could not be repaired: {takes} and {more} more. Takes repaired: {count}	Audiosporen konden niet worden hersteld: {takes} en {more} meer. Herstelde opnamen: {count}

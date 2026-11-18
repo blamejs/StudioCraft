@@ -450,3 +450,8 @@ menu	Transform	Transformieren
 @msg	Audio tracks stopped at {time}: a file could not be written	Audiospuren bei {time} gestoppt: Eine Datei konnte nicht geschrieben werden
 @msg	Audio tracks could not start: {error}	Audiospuren konnten nicht starten: {error}
 @msg	Audio tracks repaired after the app closed during a take: {folders}	Audiospuren repariert, nachdem die App während einer Aufnahme geschlossen wurde: {folders}
+@msg	Audio tracks could not be repaired: {takes}	Audiospuren konnten nicht repariert werden: {takes}
+@msg	Audio tracks repaired after the app closed during a take: {folders} and {more} more	Audiospuren repariert, nachdem die App während einer Aufnahme geschlossen wurde: {folders} und {more} weitere
+@msg	Audio tracks could not be repaired: {takes} and {more} more	Audiospuren konnten nicht repariert werden: {takes} und {more} weitere
+@msg	Audio tracks could not be repaired: {takes}. Takes repaired: {count}	Audiospuren konnten nicht repariert werden: {takes}. Reparierte Aufnahmen: {count}
+@msg	Audio tracks could not be repaired: {takes} and {more} more. Takes repaired: {count}	Audiospuren konnten nicht repariert werden: {takes} und {more} weitere. Reparierte Aufnahmen: {count}

@@ -467,3 +467,8 @@ menu	Transform	Transformera
 @msg	Audio tracks stopped at {time}: a file could not be written	Ljudspåren stoppades vid {time}: en fil kunde inte skrivas
 @msg	Audio tracks could not start: {error}	Ljudspåren kunde inte starta: {error}
 @msg	Audio tracks repaired after the app closed during a take: {folders}	Ljudspår reparerades efter att appen stängdes under en tagning: {folders}
+@msg	Audio tracks could not be repaired: {takes}	Ljudspåren kunde inte repareras: {takes}
+@msg	Audio tracks repaired after the app closed during a take: {folders} and {more} more	Ljudspår reparerades efter att appen stängdes under en tagning: {folders} och {more} till
+@msg	Audio tracks could not be repaired: {takes} and {more} more	Ljudspåren kunde inte repareras: {takes} och {more} till
+@msg	Audio tracks could not be repaired: {takes}. Takes repaired: {count}	Ljudspåren kunde inte repareras: {takes}. Reparerade tagningar: {count}
+@msg	Audio tracks could not be repaired: {takes} and {more} more. Takes repaired: {count}	Ljudspåren kunde inte repareras: {takes} och {more} till. Reparerade tagningar: {count}

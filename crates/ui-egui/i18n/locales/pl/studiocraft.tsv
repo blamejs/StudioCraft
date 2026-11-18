@@ -466,3 +466,8 @@ menu	Transform	Przekształć
 @msg	Audio tracks stopped at {time}: a file could not be written	Ścieżki audio zatrzymały się w {time}: nie udało się zapisać pliku
 @msg	Audio tracks could not start: {error}	Nie udało się uruchomić ścieżek audio: {error}
 @msg	Audio tracks repaired after the app closed during a take: {folders}	Naprawiono ścieżki audio po zamknięciu aplikacji w trakcie nagrania: {folders}
+@msg	Audio tracks could not be repaired: {takes}	Nie można naprawić ścieżek audio: {takes}
+@msg	Audio tracks repaired after the app closed during a take: {folders} and {more} more	Naprawiono ścieżki audio po zamknięciu aplikacji w trakcie nagrania: {folders} i {more} innych
+@msg	Audio tracks could not be repaired: {takes} and {more} more	Nie można naprawić ścieżek audio: {takes} i {more} innych
+@msg	Audio tracks could not be repaired: {takes}. Takes repaired: {count}	Nie można naprawić ścieżek audio: {takes}. Naprawione nagrania: {count}
+@msg	Audio tracks could not be repaired: {takes} and {more} more. Takes repaired: {count}	Nie można naprawić ścieżek audio: {takes} i {more} innych. Naprawione nagrania: {count}
