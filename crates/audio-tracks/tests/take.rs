@@ -51,7 +51,7 @@ struct Rig {
 
 impl Rig {
     fn new(cfg: DiskConfig, chunks: usize) -> Rig {
-        let (c, free, out) = Collector::new(chunks, chunks + 64);
+        let (c, free, out) = Collector::new(chunks, chunks + 64).unwrap();
         let w = Writer::create(cfg, free).unwrap();
         Rig { c, w, out }
     }
@@ -447,11 +447,21 @@ fn audio_lost_at_the_end_of_a_take_is_silence_to_the_end() {
 fn a_take_whose_free_space_cannot_be_read_stops_with_that_reason() {
     let dir = scratch("space-unknown");
     let cfg = DiskConfig { reserve_bytes: 1 << 30, faults: Faults { space_unknown: true, ..Faults::default() }, ..config(&dir) };
-    let (_, free, _) = Collector::new(1, 4);
+    let (_, free, _) = Collector::new(1, 4).unwrap();
     match Writer::create(cfg, free) {
         Err(f) => assert_eq!(f.reason, StopReason::SpaceUnknown),
         Ok(_) => panic!("the take started without knowing the free space"),
     }
+}
+
+#[test]
+fn a_take_whose_write_buffer_cannot_be_made_stops_with_that_reason_and_writes_nothing() {
+    let dir = scratch("no-memory");
+    let cfg = DiskConfig { faults: Faults { no_memory: true, ..Faults::default() }, ..config(&dir) };
+    let take = Take::start(TakeConfig { disk: cfg, buffer_mib: 4 }, vec![spec(1, "Mic")]).unwrap();
+    let status = take.join();
+    assert_eq!((status.state(), status.reason()), (Some(State::Stopped), Some(StopReason::NoMemory)));
+    assert!(!dir.exists(), "the take made its folder without a write buffer");
 }
 
 /// An unfinished take in `dir` whose `Mic.wav` ends mid-frame.

@@ -13,7 +13,7 @@ use studiocraft_model::SourceId;
 fn collect_9_tracks(c: &mut Criterion) {
     let specs: Vec<TrackSpec> =
         (0..9u64).map(|i| TrackSpec { source: (i > 0).then_some(SourceId(i)), name: format!("Track {i}"), slot: Arc::new(TapSlot::new()) }).collect();
-    let (mut col, free, out) = Collector::new(96, 160);
+    let Some((mut col, free, out)) = Collector::new(96, 160) else { return };
     col.set_tracks(specs.clone());
     let mut n = 0i64;
     c.bench_function("collect_9_tracks_one_block", |b| {

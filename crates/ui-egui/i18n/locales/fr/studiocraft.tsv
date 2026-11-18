@@ -472,6 +472,7 @@ menu	Transform	Transformer
 @msg	Audio tracks stopped at {time}: the disk is almost full	Pistes audio arrêtées à {time} : le disque est presque plein
 @msg	Audio tracks stopped at {time}: the files could not be created	Pistes audio arrêtées à {time} : les fichiers n'ont pas pu être créés
 @msg	Audio tracks stopped at {time}: the free space on the disk could not be read	Pistes audio arrêtées à {time} : l'espace libre du disque n'a pas pu être lu
+@msg	Audio tracks stopped at {time}: there is not enough memory for the write buffer	Pistes audio arrêtées à {time} : la mémoire est insuffisante pour le tampon d'écriture
 @msg	Audio tracks stopped at {time}: a file could not be written	Pistes audio arrêtées à {time} : un fichier n'a pas pu être écrit
 @msg	Audio tracks could not start: {error}	Les pistes audio n'ont pas pu démarrer : {error}
 @msg	Audio tracks repaired after the app closed during a take: {folders}	Pistes audio réparées après la fermeture de l'application pendant une prise : {folders}

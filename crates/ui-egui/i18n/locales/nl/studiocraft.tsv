@@ -453,6 +453,7 @@ menu	Transform	Transformeren
 @msg	Audio tracks stopped at {time}: the disk is almost full	Audiosporen gestopt op {time}: de schijf is bijna vol
 @msg	Audio tracks stopped at {time}: the files could not be created	Audiosporen gestopt op {time}: de bestanden konden niet worden gemaakt
 @msg	Audio tracks stopped at {time}: the free space on the disk could not be read	Audiosporen gestopt op {time}: de vrije ruimte op de schijf kon niet worden gelezen
+@msg	Audio tracks stopped at {time}: there is not enough memory for the write buffer	Audiosporen gestopt op {time}: er is niet genoeg geheugen voor de schrijfbuffer
 @msg	Audio tracks stopped at {time}: a file could not be written	Audiosporen gestopt op {time}: een bestand kon niet worden geschreven
 @msg	Audio tracks could not start: {error}	Audiosporen konden niet starten: {error}
 @msg	Audio tracks repaired after the app closed during a take: {folders}	Audiosporen hersteld nadat de app tijdens een opname werd gesloten: {folders}

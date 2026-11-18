@@ -32,6 +32,8 @@ pub enum StopReason {
     CreateFailed = 4,
     /// The free space on the disk could not be read, so the reserve could not be kept.
     SpaceUnknown = 5,
+    /// The memory for the write buffer could not be reserved.
+    NoMemory = 6,
 }
 
 impl StopReason {
@@ -42,6 +44,7 @@ impl StopReason {
             3 => Some(StopReason::WriteFailed),
             4 => Some(StopReason::CreateFailed),
             5 => Some(StopReason::SpaceUnknown),
+            6 => Some(StopReason::NoMemory),
             _ => None,
         }
     }
@@ -54,6 +57,7 @@ impl StopReason {
             StopReason::WriteFailed => "a file could not be written",
             StopReason::CreateFailed => "the files could not be created",
             StopReason::SpaceUnknown => "the free space on the disk could not be read",
+            StopReason::NoMemory => "there is not enough memory for the write buffer",
         }
     }
 
@@ -142,6 +146,8 @@ pub struct Faults {
     pub free_space: Option<u64>,
     /// Reading the free space fails.
     pub space_unknown: bool,
+    /// The memory for the write buffer cannot be reserved.
+    pub no_memory: bool,
     /// A permit per chunk.
     pub gate: Option<Arc<Gate>>,
 }

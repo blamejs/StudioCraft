@@ -472,6 +472,7 @@ menu	Transform	Перетворення
 @msg	Audio tracks stopped at {time}: the disk is almost full	Звукові доріжки зупинено о {time}: диск майже заповнений
 @msg	Audio tracks stopped at {time}: the files could not be created	Звукові доріжки зупинено о {time}: не вдалося створити файли
 @msg	Audio tracks stopped at {time}: the free space on the disk could not be read	Звукові доріжки зупинено о {time}: не вдалося дізнатися вільне місце на диску
+@msg	Audio tracks stopped at {time}: there is not enough memory for the write buffer	Звукові доріжки зупинено о {time}: недостатньо пам'яті для буфера запису
 @msg	Audio tracks stopped at {time}: a file could not be written	Звукові доріжки зупинено о {time}: не вдалося записати файл
 @msg	Audio tracks could not start: {error}	Не вдалося запустити звукові доріжки: {error}
 @msg	Audio tracks repaired after the app closed during a take: {folders}	Звукові доріжки відновлено після закриття застосунку під час дубля: {folders}

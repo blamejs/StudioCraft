@@ -446,6 +446,7 @@ menu	Transform	Transformieren
 @msg	Audio tracks stopped at {time}: the disk is almost full	Audiospuren bei {time} gestoppt: Der Datenträger ist fast voll
 @msg	Audio tracks stopped at {time}: the files could not be created	Audiospuren bei {time} gestoppt: Die Dateien konnten nicht erstellt werden
 @msg	Audio tracks stopped at {time}: the free space on the disk could not be read	Audiospuren bei {time} gestoppt: Der freie Speicherplatz auf dem Datenträger konnte nicht gelesen werden
+@msg	Audio tracks stopped at {time}: there is not enough memory for the write buffer	Audiospuren bei {time} gestoppt: Für den Schreibpuffer ist nicht genug Arbeitsspeicher frei
 @msg	Audio tracks stopped at {time}: a file could not be written	Audiospuren bei {time} gestoppt: Eine Datei konnte nicht geschrieben werden
 @msg	Audio tracks could not start: {error}	Audiospuren konnten nicht starten: {error}
 @msg	Audio tracks repaired after the app closed during a take: {folders}	Audiospuren repariert, nachdem die App während einer Aufnahme geschlossen wurde: {folders}

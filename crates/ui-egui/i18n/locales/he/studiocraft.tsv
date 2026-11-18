@@ -444,6 +444,7 @@ menu	Transform	שינוי צורה
 @msg	Audio tracks stopped at {time}: the disk is almost full	רצועות השמע נעצרו ב-{time}: הדיסק כמעט מלא
 @msg	Audio tracks stopped at {time}: the files could not be created	רצועות השמע נעצרו ב-{time}: לא ניתן היה ליצור את הקבצים
 @msg	Audio tracks stopped at {time}: the free space on the disk could not be read	רצועות השמע נעצרו ב-{time}: לא ניתן היה לקרוא את השטח הפנוי בדיסק
+@msg	Audio tracks stopped at {time}: there is not enough memory for the write buffer	רצועות השמע נעצרו ב-{time}: אין מספיק זיכרון למאגר הכתיבה
 @msg	Audio tracks stopped at {time}: a file could not be written	רצועות השמע נעצרו ב-{time}: לא ניתן היה לכתוב קובץ
 @msg	Audio tracks could not start: {error}	לא ניתן היה להפעיל את רצועות השמע: {error}
 @msg	Audio tracks repaired after the app closed during a take: {folders}	רצועות השמע תוקנו לאחר שהאפליקציה נסגרה במהלך טייק: {folders}

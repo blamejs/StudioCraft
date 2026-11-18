@@ -463,6 +463,7 @@ menu	Transform	Transformera
 @msg	Audio tracks stopped at {time}: the disk is almost full	Ljudspåren stoppades vid {time}: disken är nästan full
 @msg	Audio tracks stopped at {time}: the files could not be created	Ljudspåren stoppades vid {time}: filerna kunde inte skapas
 @msg	Audio tracks stopped at {time}: the free space on the disk could not be read	Ljudspåren stoppades vid {time}: det lediga utrymmet på disken kunde inte läsas
+@msg	Audio tracks stopped at {time}: there is not enough memory for the write buffer	Ljudspåren stoppades vid {time}: det finns inte tillräckligt med minne för skrivbufferten
 @msg	Audio tracks stopped at {time}: a file could not be written	Ljudspåren stoppades vid {time}: en fil kunde inte skrivas
 @msg	Audio tracks could not start: {error}	Ljudspåren kunde inte starta: {error}
 @msg	Audio tracks repaired after the app closed during a take: {folders}	Ljudspår reparerades efter att appen stängdes under en tagning: {folders}

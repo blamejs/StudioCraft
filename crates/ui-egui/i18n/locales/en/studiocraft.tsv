@@ -512,6 +512,7 @@ menu	Transform	Transform
 @msg	Audio tracks stopped at {time}: the disk is almost full	Audio tracks stopped at {time}: the disk is almost full
 @msg	Audio tracks stopped at {time}: the files could not be created	Audio tracks stopped at {time}: the files could not be created
 @msg	Audio tracks stopped at {time}: the free space on the disk could not be read	Audio tracks stopped at {time}: the free space on the disk could not be read
+@msg	Audio tracks stopped at {time}: there is not enough memory for the write buffer	Audio tracks stopped at {time}: there is not enough memory for the write buffer
 @msg	Audio tracks stopped at {time}: a file could not be written	Audio tracks stopped at {time}: a file could not be written
 @msg	Audio tracks could not start: {error}	Audio tracks could not start: {error}
 @msg	Audio tracks repaired after the app closed during a take: {folders}	Audio tracks repaired after the app closed during a take: {folders}

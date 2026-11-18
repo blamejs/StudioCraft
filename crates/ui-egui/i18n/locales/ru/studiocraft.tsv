@@ -472,6 +472,7 @@ menu	Transform	Преобразование
 @msg	Audio tracks stopped at {time}: the disk is almost full	Звуковые дорожки остановлены в {time}: диск почти заполнен
 @msg	Audio tracks stopped at {time}: the files could not be created	Звуковые дорожки остановлены в {time}: не удалось создать файлы
 @msg	Audio tracks stopped at {time}: the free space on the disk could not be read	Звуковые дорожки остановлены в {time}: не удалось узнать свободное место на диске
+@msg	Audio tracks stopped at {time}: there is not enough memory for the write buffer	Звуковые дорожки остановлены в {time}: недостаточно памяти для буфера записи
 @msg	Audio tracks stopped at {time}: a file could not be written	Звуковые дорожки остановлены в {time}: не удалось записать файл
 @msg	Audio tracks could not start: {error}	Не удалось запустить звуковые дорожки: {error}
 @msg	Audio tracks repaired after the app closed during a take: {folders}	Звуковые дорожки восстановлены после закрытия приложения во время дубля: {folders}

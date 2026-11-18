@@ -463,6 +463,7 @@ menu	Transform	变换
 @msg	Audio tracks stopped at {time}: the disk is almost full	音频轨道在 {time} 停止：磁盘快满了
 @msg	Audio tracks stopped at {time}: the files could not be created	音频轨道在 {time} 停止：无法创建文件
 @msg	Audio tracks stopped at {time}: the free space on the disk could not be read	音频轨道在 {time} 停止：无法读取磁盘的可用空间
+@msg	Audio tracks stopped at {time}: there is not enough memory for the write buffer	音频轨道在 {time} 停止：内存不足，无法分配写入缓冲区
 @msg	Audio tracks stopped at {time}: a file could not be written	音频轨道在 {time} 停止：无法写入文件
 @msg	Audio tracks could not start: {error}	音频轨道无法启动：{error}
 @msg	Audio tracks repaired after the app closed during a take: {folders}	应用在录制过程中关闭，已修复音频轨道：{folders}

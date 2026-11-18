@@ -464,6 +464,7 @@ menu	Transform	Dönüştür
 @msg	Audio tracks stopped at {time}: the disk is almost full	Ses parçaları {time} anında durdu: disk neredeyse dolu
 @msg	Audio tracks stopped at {time}: the files could not be created	Ses parçaları {time} anında durdu: dosyalar oluşturulamadı
 @msg	Audio tracks stopped at {time}: the free space on the disk could not be read	Ses parçaları {time} anında durdu: diskteki boş alan okunamadı
+@msg	Audio tracks stopped at {time}: there is not enough memory for the write buffer	Ses parçaları {time} anında durdu: yazma arabelleği için yeterli bellek yok
 @msg	Audio tracks stopped at {time}: a file could not be written	Ses parçaları {time} anında durdu: bir dosya yazılamadı
 @msg	Audio tracks could not start: {error}	Ses parçaları başlatılamadı: {error}
 @msg	Audio tracks repaired after the app closed during a take: {folders}	Uygulama bir çekim sırasında kapandığı için ses parçaları onarıldı: {folders}

@@ -463,6 +463,7 @@ menu	Transform	変形
 @msg	Audio tracks stopped at {time}: the disk is almost full	オーディオトラックが {time} で停止しました: ディスクの空きがわずかです
 @msg	Audio tracks stopped at {time}: the files could not be created	オーディオトラックが {time} で停止しました: ファイルを作成できませんでした
 @msg	Audio tracks stopped at {time}: the free space on the disk could not be read	オーディオトラックが {time} で停止しました: ディスクの空き容量を読み取れませんでした
+@msg	Audio tracks stopped at {time}: there is not enough memory for the write buffer	オーディオトラックが {time} で停止しました: 書き込みバッファー用のメモリが足りません
 @msg	Audio tracks stopped at {time}: a file could not be written	オーディオトラックが {time} で停止しました: ファイルを書き込めませんでした
 @msg	Audio tracks could not start: {error}	オーディオトラックを開始できませんでした: {error}
 @msg	Audio tracks repaired after the app closed during a take: {folders}	テイク中にアプリが終了したため、オーディオトラックを修復しました: {folders}

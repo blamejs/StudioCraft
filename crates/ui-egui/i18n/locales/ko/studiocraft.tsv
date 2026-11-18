@@ -463,6 +463,7 @@ menu	Transform	변형
 @msg	Audio tracks stopped at {time}: the disk is almost full	오디오 트랙이 {time}에 중지됨: 디스크가 거의 가득 찼습니다
 @msg	Audio tracks stopped at {time}: the files could not be created	오디오 트랙이 {time}에 중지됨: 파일을 만들 수 없습니다
 @msg	Audio tracks stopped at {time}: the free space on the disk could not be read	오디오 트랙이 {time}에 중지됨: 디스크의 여유 공간을 읽을 수 없습니다
+@msg	Audio tracks stopped at {time}: there is not enough memory for the write buffer	오디오 트랙이 {time}에 중지됨: 쓰기 버퍼에 사용할 메모리가 부족합니다
 @msg	Audio tracks stopped at {time}: a file could not be written	오디오 트랙이 {time}에 중지됨: 파일을 쓸 수 없습니다
 @msg	Audio tracks could not start: {error}	오디오 트랙을 시작할 수 없습니다: {error}
 @msg	Audio tracks repaired after the app closed during a take: {folders}	테이크 도중 앱이 닫혀 오디오 트랙을 복구했습니다: {folders}

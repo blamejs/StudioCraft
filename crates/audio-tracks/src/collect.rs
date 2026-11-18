@@ -150,11 +150,14 @@ impl Collector {
     }
 
     /// A collector with `chunks` free chunks made now and a queue of `queue` messages to the disk
-    /// thread.
-    pub fn new(chunks: usize, queue: usize) -> (Collector, Arc<ArrayQueue<Vec<u8>>>, Arc<ArrayQueue<ToDisk>>) {
+    /// thread. None when the memory for the chunks cannot be reserved; the chunks made so far are
+    /// freed.
+    pub fn new(chunks: usize, queue: usize) -> Option<(Collector, Arc<ArrayQueue<Vec<u8>>>, Arc<ArrayQueue<ToDisk>>)> {
         let free = Arc::new(ArrayQueue::new(chunks.max(1)));
         for _ in 0..chunks.max(1) {
-            let _ = free.push(Vec::with_capacity(CHUNK_BYTES));
+            let mut chunk = Vec::new();
+            chunk.try_reserve_exact(CHUNK_BYTES).ok()?;
+            let _ = free.push(chunk);
         }
         let out = Arc::new(ArrayQueue::new(queue.max(4)));
         let c = Collector {
@@ -171,7 +174,7 @@ impl Collector {
             used_names: std::collections::HashSet::new(),
             full: false,
         };
-        (c, free, out)
+        Some((c, free, out))
     }
 
     /// Record `specs` from now on: new sources become tracks, sources no longer listed stop, and a
@@ -517,7 +520,7 @@ mod tests {
         assert_eq!(FRAME_TICKS, 5_292_000);
         // 130 blocks in a row: one full chunk goes out without its buffer growing, and the
         // rest starts the next one.
-        let (mut c, free, out) = Collector::new(4, 64);
+        let (mut c, free, out) = Collector::new(4, 64).unwrap();
         let a = spec(1, "A");
         c.set_tracks(vec![a.clone()]);
         for n in 0..130 {
@@ -540,7 +543,7 @@ mod tests {
 
     #[test]
     fn blocks_are_placed_by_their_timestamps_and_gaps_start_a_new_chunk() {
-        let (mut c, free, out) = Collector::new(8, 64);
+        let (mut c, free, out) = Collector::new(8, 64).unwrap();
         let (a, b) = (spec(1, "A"), spec(2, "B"));
         c.set_tracks(vec![a.clone(), b.clone()]);
         // B's first block comes later than A's, and A loses blocks 3 and 4 in its tap.
@@ -562,7 +565,7 @@ mod tests {
 
     #[test]
     fn blocks_the_tap_lost_before_the_first_one_collected_are_lost_audio() {
-        let (mut c, free, out) = Collector::new(8, 64);
+        let (mut c, free, out) = Collector::new(8, 64).unwrap();
         let (a, b) = (spec(1, "A"), spec(2, "B"));
         c.set_tracks(vec![a.clone(), b.clone()]);
         feed(&a.slot, 0, 0.1);
@@ -582,7 +585,7 @@ mod tests {
 
     #[test]
     fn a_source_that_leaves_gives_its_chunk_back_at_once() {
-        let (mut c, free, out) = Collector::new(2, 64);
+        let (mut c, free, out) = Collector::new(2, 64).unwrap();
         let (a, b) = (spec(1, "A"), spec(2, "B"));
         c.set_tracks(vec![a.clone()]);
         feed(&a.slot, 0, 0.1);
@@ -602,7 +605,7 @@ mod tests {
 
     #[test]
     fn blocks_a_new_tap_lost_before_its_track_was_listed_are_lost_audio() {
-        let (mut c, free, out) = Collector::new(8, 64);
+        let (mut c, free, out) = Collector::new(8, 64).unwrap();
         let (a, b) = (spec(1, "A"), spec(2, "B"));
         c.set_tracks(vec![a.clone()]);
         feed(&a.slot, 0, 0.1);
@@ -621,7 +624,7 @@ mod tests {
 
     #[test]
     fn chunks_wait_at_the_end_of_a_take_until_the_disk_queue_has_room() {
-        let (mut c, free, out) = Collector::new(8, 2);
+        let (mut c, free, out) = Collector::new(8, 2).unwrap();
         let (a, b, d) = (spec(1, "A"), spec(2, "B"), spec(3, "D"));
         c.set_tracks(vec![a.clone(), b.clone(), d.clone()]);
         // The three announcements fill the queue's two places and one waits.
@@ -654,7 +657,7 @@ mod tests {
 
     #[test]
     fn a_take_makes_a_bounded_number_of_tracks() {
-        let (mut c, _free, _out) = Collector::new(2, 4096);
+        let (mut c, _free, _out) = Collector::new(2, 4096).unwrap();
         for n in 0..crate::MAX_TAKE_TRACKS as u64 + 10 {
             c.replace_sources(vec![spec(n, "S")]);
         }
@@ -664,7 +667,7 @@ mod tests {
 
     #[test]
     fn with_no_free_chunk_blocks_are_dropped_and_logged_exactly() {
-        let (mut c, free, out) = Collector::new(2, 64);
+        let (mut c, free, out) = Collector::new(2, 64).unwrap();
         let a = spec(1, "A");
         c.set_tracks(vec![a.clone()]);
         for n in 0..300 {
@@ -684,7 +687,7 @@ mod tests {
 
     #[test]
     fn a_track_added_while_the_disk_queue_is_full_keeps_its_name_and_comes_before_its_audio() {
-        let (mut c, free, out) = Collector::new(8, 4);
+        let (mut c, free, out) = Collector::new(8, 4).unwrap();
         let (a, b) = (spec(1, "A"), spec(2, "B"));
         c.set_tracks(vec![a.clone()]);
         // The announcement of A and three chunks fill the queue; the fourth chunk waits.
@@ -720,7 +723,7 @@ mod tests {
 
     #[test]
     fn the_rejoin_limit_follows_the_clock_while_no_tap_gives_blocks() {
-        let (mut c, _free, _out) = Collector::new(4, 64);
+        let (mut c, _free, _out) = Collector::new(4, 64).unwrap();
         let a = spec(1, "Mic");
         c.set_tracks(vec![a.clone()]);
         feed(&a.slot, 0, 0.5);
@@ -740,7 +743,7 @@ mod tests {
 
     #[test]
     fn a_source_added_back_within_a_minute_continues_and_later_gets_a_new_track() {
-        let (mut c, free, out) = Collector::new(16, 64);
+        let (mut c, free, out) = Collector::new(16, 64).unwrap();
         let a = spec(1, "Mic");
         c.set_tracks(vec![a.clone()]);
         feed(&a.slot, 0, 0.5);

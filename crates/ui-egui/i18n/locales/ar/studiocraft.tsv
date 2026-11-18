@@ -451,6 +451,7 @@ menu	Transform	التحويل
 @msg	Audio tracks stopped at {time}: the disk is almost full	توقفت المسارات الصوتية عند {time}: القرص ممتلئ تقريبًا
 @msg	Audio tracks stopped at {time}: the files could not be created	توقفت المسارات الصوتية عند {time}: تعذّر إنشاء الملفات
 @msg	Audio tracks stopped at {time}: the free space on the disk could not be read	توقفت المسارات الصوتية عند {time}: تعذّرت قراءة المساحة الحرة على القرص
+@msg	Audio tracks stopped at {time}: there is not enough memory for the write buffer	توقفت المسارات الصوتية عند {time}: لا توجد ذاكرة كافية لمخزن الكتابة المؤقت
 @msg	Audio tracks stopped at {time}: a file could not be written	توقفت المسارات الصوتية عند {time}: تعذّرت كتابة ملف
 @msg	Audio tracks could not start: {error}	تعذّر بدء المسارات الصوتية: {error}
 @msg	Audio tracks repaired after the app closed during a take: {folders}	أُصلحت المسارات الصوتية بعد إغلاق التطبيق أثناء لقطة: {folders}

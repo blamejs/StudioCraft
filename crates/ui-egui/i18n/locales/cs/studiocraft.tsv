@@ -463,6 +463,7 @@ menu	Transform	Transformace
 @msg	Audio tracks stopped at {time}: the disk is almost full	Zvukové stopy se zastavily v {time}: disk je téměř plný
 @msg	Audio tracks stopped at {time}: the files could not be created	Zvukové stopy se zastavily v {time}: soubory nešlo vytvořit
 @msg	Audio tracks stopped at {time}: the free space on the disk could not be read	Zvukové stopy se zastavily v {time}: volné místo na disku nešlo zjistit
+@msg	Audio tracks stopped at {time}: there is not enough memory for the write buffer	Zvukové stopy se zastavily v {time}: pro zápisovou vyrovnávací paměť není dost paměti
 @msg	Audio tracks stopped at {time}: a file could not be written	Zvukové stopy se zastavily v {time}: soubor nešlo zapsat
 @msg	Audio tracks could not start: {error}	Zvukové stopy nešlo spustit: {error}
 @msg	Audio tracks repaired after the app closed during a take: {folders}	Zvukové stopy byly opraveny po zavření aplikace během záznamu: {folders}

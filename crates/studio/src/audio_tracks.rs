@@ -476,6 +476,7 @@ fn stop_notice(status: &studiocraft_audio_tracks::Status) -> Notice {
         Some(StopReason::LowSpace) => "Audio tracks stopped at {time}: the disk is almost full",
         Some(StopReason::CreateFailed) => "Audio tracks stopped at {time}: the files could not be created",
         Some(StopReason::SpaceUnknown) => "Audio tracks stopped at {time}: the free space on the disk could not be read",
+        Some(StopReason::NoMemory) => "Audio tracks stopped at {time}: there is not enough memory for the write buffer",
         Some(StopReason::WriteFailed) | None => "Audio tracks stopped at {time}: a file could not be written",
     };
     Notice::new(template, vec![("time", clock_text(status.stopped_at_seconds()))], true)

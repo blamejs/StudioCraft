@@ -208,8 +208,14 @@ impl Take {
         let c_stop = Arc::clone(&stop);
         let c_tracks = Arc::clone(&tracks);
         let c_after = Arc::clone(&after);
+        let no_memory = cfg.disk.faults.no_memory;
         let collect = std::thread::Builder::new().name("audio-tracks-collect".into()).spawn(move || {
-            let (mut collector, free, out) = Collector::new(chunks, chunks + QUEUE_SPARE);
+            // Without its buffer the take stops; dropping `disk_tx` ends the disk thread too.
+            let made = if no_memory { None } else { Collector::new(chunks, chunks + QUEUE_SPARE) };
+            let Some((mut collector, free, out)) = made else {
+                c_status.stop(StopReason::NoMemory);
+                return;
+            };
             if let Some(at) = at {
                 collector.set_start(at);
             }
