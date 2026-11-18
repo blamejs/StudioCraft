@@ -436,3 +436,40 @@
 @msg	The stream stopped: {error}	直播已停止：{error}
 @msg	ffmpeg at {path} was not found	在 {path} 找不到 ffmpeg
 menu	Transform	變形
+	Record as its own track	錄製為獨立音軌
+	Audio tracks write this source to a WAV file of its own (Settings › Output › Audio tracks)	音訊軌道會將此來源寫入獨立的 WAV 檔案（設定 › 輸出 › 音訊軌道）
+	Audio tracks	音訊軌道
+	Write each recorded source and the program mix to its own WAV file	將每個錄製的來源與節目混音分別寫入獨立的 WAV 檔案
+	Write them while	寫入時機
+	Include the program mix	包含節目混音
+	Write buffer	寫入緩衝區
+	MiB	MiB
+	File size	檔案大小
+	GiB	GiB
+	Audio tracks: {tracks}, about {gb} GiB an hour; the buffer holds {seconds} s of audio while the disk is slow	音軌：{tracks} 條，每小時約 {gb} GiB；磁碟變慢時，緩衝區可保存 {seconds} 秒音訊
+	A recording runs	錄製進行時
+	The stream runs	串流進行時
+	A recording or the stream runs	錄製或串流進行時
+	The disk is almost full; audio tracks stop before the recording or the stream runs out of space	磁碟快滿了；音訊軌道會在錄製或串流空間用盡之前停止
+	This take has made as many audio track files as it can; sources added since are not recorded to their own files	本次錄製已建立了所能建立的最多音訊軌道檔案；此後加入的來源不會錄製到各自的檔案
+	More sources are set to record their own track than can be recorded at once; the later ones are not recorded	設定為錄製各自軌道的來源超過了可同時錄製的數量；較後的來源不會被錄製
+	Audio tracks: {tracks}; {lost} s of audio lost while the disk was slow	{tracks} 條音訊軌道；磁碟變慢期間遺失了 {lost} 秒音訊
+	TRACKS	音軌
+	TRACKS stopped	音軌已停止
+	Audio tracks stopped early; the status message gives the reason	音訊軌道提前停止；原因請見狀態訊息
+	Record as Its Own Track	錄製為獨立音軌
+	Audio Tracks Status	音訊軌道狀態
+	Repair Audio Tracks	修復音訊軌道
+@msg	Audio tracks stopped at {time}: the disk is full	音訊軌道在 {time} 停止：磁碟已滿
+@msg	Audio tracks stopped at {time}: the disk is almost full	音訊軌道在 {time} 停止：磁碟快滿了
+@msg	Audio tracks stopped at {time}: the files could not be created	音訊軌道在 {time} 停止：無法建立檔案
+@msg	Audio tracks stopped at {time}: the free space on the disk could not be read	音訊軌道在 {time} 停止：無法讀取磁碟的可用空間
+@msg	Audio tracks stopped at {time}: there is not enough memory for the write buffer	音訊軌道在 {time} 停止：記憶體不足，無法配置寫入緩衝區
+@msg	Audio tracks stopped at {time}: a file could not be written	音訊軌道在 {time} 停止：無法寫入檔案
+@msg	Audio tracks could not start: {error}	音訊軌道無法啟動：{error}
+@msg	Audio tracks repaired after the app closed during a take: {folders}	應用程式在錄製過程中關閉，已修復音訊軌道：{folders}
+@msg	Audio tracks could not be repaired: {takes}	無法修復音訊軌道：{takes}
+@msg	Audio tracks repaired after the app closed during a take: {folders} and {more} more	應用程式在錄製過程中關閉，已修復音訊軌道：{folders} 及另外 {more} 個
+@msg	Audio tracks could not be repaired: {takes} and {more} more	無法修復音訊軌道：{takes} 及另外 {more} 個
+@msg	Audio tracks could not be repaired: {takes}. Takes repaired: {count}	無法修復音訊軌道：{takes}。已修復的錄製：{count}
+@msg	Audio tracks could not be repaired: {takes} and {more} more. Takes repaired: {count}	無法修復音訊軌道：{takes} 及另外 {more} 個。已修復的錄製：{count}

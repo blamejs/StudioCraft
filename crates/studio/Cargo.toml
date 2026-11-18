@@ -16,6 +16,8 @@ studiocraft-platform.workspace = true
 studiocraft-sources.workspace = true
 craft-hwenc.workspace = true
 studiocraft-outputs.workspace = true
+# Each recorded source and the program mix written to its own WAV file.
+studiocraft-audio-tracks.workspace = true
 # The built-in NVENC encoders, tested in this process for MKV recordings.
 studiocraft-encode.workspace = true
 serde_json.workspace = true

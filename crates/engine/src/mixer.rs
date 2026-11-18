@@ -21,6 +21,13 @@
 //!
 //! The clipped mix also feeds a loudness meter (ITU-R BS.1770-4, EBU R 128), whose readings are
 //! published after every block in [`Loudness`].
+//!
+//! While audio tracks are recorded, a [`TapSet`] gives inputs and the program a [`TapSlot`]
+//! each. A tapped input stores what it adds to the mix (after its delay, filters, gain, mute and
+//! fade) into a block from its slot in the same pass that adds it, so the stems of the program's
+//! inputs add up to the program mix before clipping; a muted or faded-out input stores silence.
+//! The program's tap gets the clipped mix the outputs get. Tap sets are built on the sending
+//! thread and handed back to it when replaced, and without one each input costs one check.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -28,8 +35,9 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use craft_audio_dsp::LoudnessMeter;
 use studiocraft_media::audio::{AudioPool, BLOCK_FRAMES, BLOCK_SAMPLES, CHANNELS, PooledBlock, SAMPLE_RATE, block_pool, block_rate};
 use studiocraft_media::clock::{MasterClock, Pacer};
-use studiocraft_media::mix::{BlockLevels, Levels, clip, measure, mix_into};
+use studiocraft_media::mix::{BlockLevels, Levels, clip, measure, mix_into, mix_into_tap, scale_into};
 use studiocraft_media::queue::Fifo;
+use studiocraft_media::tap::TapSlot;
 use studiocraft_model::collection::MAX_SYNC_OFFSET_MS;
 use studiocraft_model::{MonitorMode, SourceId};
 use studiocraft_plugin::{AudioOut, FilterInstance};
@@ -96,6 +104,20 @@ pub struct MixInput {
     pub monitor: MonitorMode,
 }
 
+/// The taps of one take of audio tracks: the program's, and those of the inputs recorded to
+/// their own track. Built on the sending thread; the mixer only clones the slots' handles.
+#[derive(Default)]
+pub struct TapSet {
+    pub program: Option<Arc<TapSlot>>,
+    pub inputs: Vec<(SourceId, Arc<TapSlot>)>,
+}
+
+impl TapSet {
+    fn input(&self, source: SourceId) -> Option<&Arc<TapSlot>> {
+        self.inputs.iter().find(|(s, _)| *s == source).map(|(_, t)| t)
+    }
+}
+
 /// Messages to the mixer thread.
 pub enum MixerCmd {
     /// Replace the inputs (sources, filters or the program scene changed).
@@ -127,6 +149,12 @@ pub enum MixerCmd {
     RemoveOutput {
         id: u64,
     },
+    /// Tap the inputs and the program for audio tracks, or stop tapping with `None`. Once the
+    /// mixer has applied it, [`Mixer::taps_applied`] reads `generation`.
+    Taps {
+        set: Option<Arc<TapSet>>,
+        generation: u64,
+    },
 }
 
 /// A command as the mixer thread takes it: an input list arrives built, so the thread does not
@@ -141,7 +169,14 @@ impl From<MixerCmd> for Cmd {
         match cmd {
             MixerCmd::Inputs(list) => Cmd::Inputs(
                 list.into_iter()
-                    .map(|cfg| Input { delay_frames: offset_frames(cfg.sync_offset_ms), cfg, fade: 0.0, delay: Delay::new(), idle: usize::MAX })
+                    .map(|cfg| Input {
+                        delay_frames: offset_frames(cfg.sync_offset_ms),
+                        cfg,
+                        fade: 0.0,
+                        delay: Delay::new(),
+                        idle: usize::MAX,
+                        tap: None,
+                    })
                     .collect(),
             ),
             other => Cmd::Mix(other),
@@ -154,6 +189,9 @@ type CmdQueue = Fifo<(u64, Cmd)>;
 
 /// Input lists the mixer replaced, freed by the sending thread.
 type Retired = Fifo<Vec<Input>>;
+
+/// Tap sets the mixer replaced, freed by the sending thread.
+type RetiredTaps = Fifo<Arc<TapSet>>;
 
 /// The final mix's loudness readings, as the mixer thread last published them.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -276,7 +314,12 @@ pub struct Mixer {
     /// Everything else: inputs, outputs and the fade time. These are few, and none is dropped
     /// for a burst of fader moves.
     control: Arc<CmdQueue>,
+    /// The latest tap set, which replaces one the mixer has not applied yet. It is kept apart
+    /// from `control`, so a burst of other commands can never drop the removal of the taps.
+    taps: Arc<CmdQueue>,
     retired: Arc<Retired>,
+    retired_taps: Arc<RetiredTaps>,
+    taps_applied: Arc<AtomicU64>,
     sent: AtomicU64,
     master: Arc<Levels>,
     loudness: Arc<Loudness>,
@@ -290,9 +333,12 @@ impl Mixer {
         m.stop.store(false, Ordering::Relaxed);
         let mut state = MixState::new(Arc::clone(&m.master));
         state.retired = Arc::clone(&m.retired);
+        state.retired_taps = Arc::clone(&m.retired_taps);
+        state.taps_applied = Arc::clone(&m.taps_applied);
         state.loudness = Arc::clone(&m.loudness);
-        let (g, c, s) = (Arc::clone(&m.gains), Arc::clone(&m.control), Arc::clone(&m.stop));
-        std::thread::Builder::new().name("audio mixer".into()).spawn(move || run(clock, &c, &g, &s, state))?;
+        let queues = [Arc::clone(&m.taps), Arc::clone(&m.control), Arc::clone(&m.gains)];
+        let s = Arc::clone(&m.stop);
+        std::thread::Builder::new().name("audio mixer".into()).spawn(move || run(clock, queues, &s, state))?;
         Ok(m)
     }
 
@@ -301,8 +347,11 @@ impl Mixer {
     pub fn detached() -> Mixer {
         Mixer {
             gains: Arc::new(Fifo::new(256)),
-            control: Arc::new(Fifo::new(1024)),
+            control: Arc::new(Fifo::new(CONTROL_QUEUE)),
+            taps: Arc::new(Fifo::new(1)),
             retired: Arc::new(Fifo::new(RETIRED_LISTS)),
+            retired_taps: Arc::new(Fifo::new(RETIRED_LISTS)),
+            taps_applied: Arc::new(AtomicU64::new(0)),
             sent: AtomicU64::new(0),
             master: Arc::new(Levels::default()),
             loudness: Arc::new(Loudness::default()),
@@ -311,14 +360,39 @@ impl Mixer {
     }
 
     pub fn send(&self, cmd: MixerCmd) {
-        while let Some(list) = self.retired.pop() {
-            drop(list);
-        }
+        self.free_retired();
         let n = self.sent.fetch_add(1, Ordering::Relaxed) + 1;
         match cmd {
             MixerCmd::Gain { .. } => self.gains.push((n, cmd.into())),
+            // A set the mixer has not applied yet is replaced, and freed here.
+            MixerCmd::Taps { .. } => self.taps.push((n, cmd.into())),
             _ => self.control.push((n, cmd.into())),
         }
+    }
+
+    /// Free the input lists and tap sets the mixer handed back, on this thread.
+    pub fn free_retired(&self) {
+        while let Some(list) = self.retired.pop() {
+            drop(list);
+        }
+        while let Some(set) = self.retired_taps.pop() {
+            drop(set);
+        }
+    }
+
+    /// The `generation` of the last [`MixerCmd::Taps`] the mixer applied; 0 before the first.
+    pub fn taps_applied(&self) -> u64 {
+        self.taps_applied.load(Ordering::Acquire)
+    }
+
+    /// The counter [`Mixer::taps_applied`] reads, for another thread to wait on.
+    pub fn taps_applied_counter(&self) -> Arc<AtomicU64> {
+        Arc::clone(&self.taps_applied)
+    }
+
+    /// Whether the mixer thread runs. A detached mixer applies no command.
+    pub fn running(&self) -> bool {
+        !self.stop.load(Ordering::Relaxed)
     }
 
     /// Levels of the final mix.
@@ -349,11 +423,17 @@ struct Input {
     /// below the offset, the line still holds audio to play; while it is below the line's length,
     /// the line still holds audio that a longer offset would read.
     idle: usize,
+    /// Where the input's stem goes while audio tracks are recorded.
+    tap: Option<Arc<TapSlot>>,
 }
 
-/// Replaced input lists held for the sending thread to free. A full queue frees the oldest on
-/// the mixer thread.
-const RETIRED_LISTS: usize = 16;
+/// Commands other than fader moves that can wait for the mixer.
+const CONTROL_QUEUE: usize = 1024;
+
+/// Replaced input lists and tap sets held for the sending thread to free. The sender frees them
+/// before each command it sends, so no more can wait than the commands the control queue holds
+/// plus the one the mixer is applying, and none is freed on the mixer thread.
+const RETIRED_LISTS: usize = CONTROL_QUEUE + 1;
 
 /// Outputs the mixer holds room for without allocating.
 const OUTPUT_ROOM: usize = 8;
@@ -377,6 +457,10 @@ pub struct MixState {
     /// The number of the input list in use: a fader move sent before it is older than the
     /// gains the list carries.
     inputs_sent: u64,
+    /// The taps of the take of audio tracks in progress.
+    taps: Option<Arc<TapSet>>,
+    retired_taps: Arc<RetiredTaps>,
+    taps_applied: Arc<AtomicU64>,
 }
 
 impl MixState {
@@ -384,6 +468,9 @@ impl MixState {
         let mut s = Self {
             inputs: Vec::new(),
             retired: Arc::new(Fifo::new(RETIRED_LISTS)),
+            taps: None,
+            retired_taps: Arc::new(Fifo::new(RETIRED_LISTS)),
+            taps_applied: Arc::new(AtomicU64::new(0)),
             outputs: Vec::with_capacity(OUTPUT_ROOM),
             master,
             meter: LoudnessMeter::new(f64::from(SAMPLE_RATE), CHANNELS),
@@ -429,6 +516,8 @@ impl MixState {
                         }
                         None => i.fade = active,
                     }
+                    // Cloning a slot's handle only counts a reference.
+                    i.tap = self.taps.as_ref().and_then(|t| t.input(i.cfg.source)).cloned();
                 }
                 let old = std::mem::replace(&mut self.inputs, list);
                 self.retired.push(old);
@@ -464,6 +553,17 @@ impl MixState {
                 self.outputs.push((id, queue));
             }
             MixerCmd::RemoveOutput { id } => self.outputs.retain(|(o, _)| *o != id),
+            MixerCmd::Taps { set, generation } => {
+                // The inputs let go of their slots first; the old set still holds them, and it
+                // goes back to the sending thread, so no slot is freed here.
+                for i in &mut self.inputs {
+                    i.tap = set.as_ref().and_then(|t| t.input(i.cfg.source)).cloned();
+                }
+                if let Some(old) = std::mem::replace(&mut self.taps, set) {
+                    self.retired_taps.push(old);
+                }
+                self.taps_applied.store(generation, Ordering::Release);
+            }
         }
     }
 
@@ -505,6 +605,14 @@ impl MixState {
                         input.delay.process(&mut self.silence, 0);
                     }
                     input.cfg.levels.store(BlockLevels::default());
+                    // A tapped source that sends nothing records silence, so its file keeps time.
+                    if let Some(t) = &input.tap
+                        && let Some(mut b) = t.claim()
+                    {
+                        b.samples.fill(0.0);
+                        b.pts = pts;
+                        t.push(b);
+                    }
                     continue;
                 }
             };
@@ -517,12 +625,30 @@ impl MixState {
             if heard && monitoring && input.cfg.monitor.monitored() {
                 mix_into(&mut self.monitor_mix, samples, gain);
             }
-            let levels = match (heard, input.cfg.monitor.in_program()) {
-                (true, true) => mix_into(&mut self.mix, samples, gain),
-                // A source left out of the program still meters what it plays on the monitor.
-                (true, false) => measure(samples, gain),
-                (false, _) => measure(samples, input.cfg.gain),
+            let mut stem = input.tap.as_ref().and_then(|t| t.claim());
+            let levels = match (heard, input.cfg.monitor.in_program(), &mut stem) {
+                // The stem is what the input adds to the program, stored in the same pass.
+                (true, true, Some(b)) => mix_into_tap(&mut self.mix, samples, gain, &mut b.samples),
+                (true, true, None) => mix_into(&mut self.mix, samples, gain),
+                // A source left out of the program still meters what it plays on the monitor, and
+                // its stem, when it has one, is what it plays.
+                (true, false, stem) => {
+                    if let Some(b) = stem {
+                        scale_into(&mut b.samples, samples, gain);
+                    }
+                    measure(samples, gain)
+                }
+                (false, _, stem) => {
+                    if let Some(b) = stem {
+                        b.samples.fill(0.0);
+                    }
+                    measure(samples, input.cfg.gain)
+                }
             };
+            if let (Some(mut b), Some(t)) = (stem, &input.tap) {
+                b.pts = pts;
+                t.push(b);
+            }
             input.cfg.levels.store(levels);
         }
         if let Some(q) = &self.monitor_out {
@@ -530,6 +656,13 @@ impl MixState {
             send_block(&self.pool, &self.outputs, q, &self.monitor_mix, pts);
         }
         clip(&mut self.mix);
+        if let Some(t) = self.taps.as_ref().and_then(|t| t.program.as_ref())
+            && let Some(mut b) = t.claim()
+        {
+            b.samples.copy_from_slice(&self.mix);
+            b.pts = pts;
+            t.push(b);
+        }
         self.master.store(measure(&self.mix, 1.0));
         if self.loudness.reset.swap(false, Ordering::Relaxed) {
             self.meter.reset_program();
@@ -557,9 +690,13 @@ fn send_block(pool: &Arc<AudioPool>, outputs: &[(u64, Arc<Fifo<PooledBlock>>)], 
     q.push(out);
 }
 
-/// Apply the waiting commands: the control commands first, then the fader moves, skipping the
-/// moves older than the input list in use.
-fn drain(control: &CmdQueue, gains: &CmdQueue, state: &mut MixState) {
+/// Apply the waiting commands: the latest tap set, then the control commands, then the fader
+/// moves, skipping the moves older than the input list in use. All of them apply before the next
+/// block, so a tap set applied ahead of an input list sent before it still reaches that list.
+fn drain(taps: &CmdQueue, control: &CmdQueue, gains: &CmdQueue, state: &mut MixState) {
+    while let Some((n, c)) = taps.pop() {
+        state.apply_sent(n, c);
+    }
     while let Some((n, c)) = control.pop() {
         state.apply_sent(n, c);
     }
@@ -568,11 +705,12 @@ fn drain(control: &CmdQueue, gains: &CmdQueue, state: &mut MixState) {
     }
 }
 
-fn run(clock: MasterClock, control: &CmdQueue, gains: &CmdQueue, stop: &AtomicBool, mut state: MixState) {
+fn run(clock: MasterClock, queues: [Arc<CmdQueue>; 3], stop: &AtomicBool, mut state: MixState) {
+    let [taps, control, gains] = queues;
     let mut pacer = Pacer::new(clock, block_rate());
     while !stop.load(Ordering::Relaxed) {
         let t = pacer.wait();
-        drain(control, gains, &mut state);
+        drain(&taps, &control, &gains, &mut state);
         state.tick(t.pts);
     }
 }
@@ -727,7 +865,7 @@ mod tests {
         }
         // The input list sent after the moves carries the newer gain.
         mixer.send(MixerCmd::Inputs(vec![input(1, &a, 1.0, true).0]));
-        drain(&mixer.control, &mixer.gains, &mut m);
+        drain(&mixer.taps, &mixer.control, &mixer.gains, &mut m);
         feed(&a, 0.5);
         m.tick(Tick(1));
         let block = out.pop();
@@ -742,7 +880,7 @@ mod tests {
         let a = Arc::new(AudioOut::default());
         mixer.send(MixerCmd::Inputs(vec![input(1, &a, 1.0, true).0]));
         mixer.send(MixerCmd::Inputs(vec![input(1, &a, 0.5, true).0]));
-        drain(&mixer.control, &mixer.gains, &mut m);
+        drain(&mixer.taps, &mixer.control, &mixer.gains, &mut m);
         assert_eq!(mixer.retired.len(), 2, "the mixer hands back the lists it replaced");
         mixer.send(MixerCmd::FadeMs(100));
         assert!(mixer.retired.is_empty(), "the next send frees them");
@@ -923,7 +1061,7 @@ mod tests {
         ramp(&mut m, &a, &mut next, 1);
         // A filter or fader change sends a new list; the audio already delayed still plays.
         mixer.send(MixerCmd::Inputs(vec![delayed(1e-6)]));
-        drain(&mixer.control, &mixer.gains, &mut m);
+        drain(&mixer.taps, &mixer.control, &mixer.gains, &mut m);
         drop((out.pop(), out.pop()));
         ramp(&mut m, &a, &mut next, 2);
         assert_eq!(unclipped(&out)[0], (2 * BLOCK_SAMPLES - 1536 * CHANNELS + 1) as f32);
@@ -1165,6 +1303,178 @@ mod tests {
         assert!(m.pool.made() <= kept, "blocks made: {}", m.pool.made());
         assert_eq!(mon.len(), mon.capacity());
         assert_eq!(mon.dropped(), 1000 - mon.capacity() as u64);
+    }
+
+    fn tapped(sources: &[u64]) -> (Arc<TapSet>, Vec<Arc<TapSlot>>, Arc<TapSlot>) {
+        let slots: Vec<Arc<TapSlot>> = sources.iter().map(|_| Arc::new(TapSlot::new())).collect();
+        let program = Arc::new(TapSlot::new());
+        let set = TapSet { program: Some(Arc::clone(&program)), inputs: sources.iter().map(|s| SourceId(*s)).zip(slots.iter().cloned()).collect() };
+        (Arc::new(set), slots, program)
+    }
+
+    /// The stems of the program's inputs, after their filters, gain and mute, add up to the
+    /// program mix; a muted input's stem is silence and a monitor-only input without a tap adds
+    /// nothing.
+    #[test]
+    fn the_stems_of_the_program_add_up_to_the_program_mix() {
+        let mut m = MixState::new(Arc::new(Levels::default()));
+        let queues: Vec<Arc<AudioOut>> = (0..4).map(|_| Arc::new(AudioOut::default())).collect();
+        let (mut a, _) = input(1, &queues[0], 0.5, true);
+        a.filters.push(Box::new(Half));
+        let (b, _) = input(2, &queues[1], 0.3, true);
+        let (mut c, _) = input(3, &queues[2], 1.0, true);
+        c.muted = true;
+        let (mut d, _) = input(4, &queues[3], 1.0, true);
+        d.monitor = MonitorMode::MonitorOnly;
+        m.apply(MixerCmd::Inputs(vec![a, b, c, d]));
+        let (set, stems, program) = tapped(&[1, 2, 3]);
+        m.apply(MixerCmd::Taps { set: Some(set), generation: 1 });
+        let out = Arc::new(Fifo::new(8));
+        m.apply(MixerCmd::AddOutput { id: 1, queue: Arc::clone(&out) });
+        for (n, q) in queues.iter().enumerate() {
+            let mut blk = q.block();
+            blk.samples.clear();
+            blk.samples.extend((0..BLOCK_SAMPLES).map(|i| ((i * (n + 3)) % 97) as f32 / 400.0 - 0.1));
+            q.push(blk);
+        }
+        m.tick(Tick(77));
+        let mix = out.pop().map(|b| b.samples.clone()).unwrap_or_default();
+        let blocks: Vec<PooledBlock> = stems.iter().filter_map(|s| s.pop()).collect();
+        assert_eq!(blocks.len(), 3, "one block per tapped input");
+        assert!(blocks.iter().all(|b| b.pts == Tick(77)));
+        assert!(blocks[2].samples.iter().all(|s| *s == 0.0), "the muted input records silence");
+        for i in 0..BLOCK_SAMPLES {
+            let sum: f32 = blocks.iter().map(|b| b.samples[i]).sum();
+            assert!((sum - mix[i]).abs() < 1e-6, "sample {i}: stems {sum}, program {}", mix[i]);
+        }
+        let p = program.pop().map(|b| (b.pts, b.samples.clone()));
+        assert_eq!(p, Some((Tick(77), mix)), "the program's tap is the clipped program the outputs get");
+    }
+
+    #[test]
+    fn a_tapped_source_that_sends_nothing_records_silence_and_untapped_inputs_cost_nothing() {
+        let mut m = MixState::new(Arc::new(Levels::default()));
+        let (a, b) = (Arc::new(AudioOut::default()), Arc::new(AudioOut::default()));
+        m.apply(MixerCmd::Inputs(vec![input(1, &a, 1.0, true).0, input(2, &b, 1.0, true).0]));
+        let (set, stems, _) = tapped(&[1]);
+        m.apply(MixerCmd::Taps { set: Some(set), generation: 1 });
+        feed(&b, 0.5);
+        m.tick(Tick(5));
+        assert_eq!(stems[0].pop().map(|b| (b.pts, b.samples.iter().all(|s| *s == 0.0))), Some((Tick(5), true)));
+        assert!(m.inputs[1].tap.is_none(), "an input without a slot has no tap");
+    }
+
+    #[test]
+    fn a_tap_that_stops_being_read_reclaims_its_own_blocks_and_leaves_the_outputs_alone() {
+        let mut m = MixState::new(Arc::new(Levels::default()));
+        let a = Arc::new(AudioOut::default());
+        m.apply(MixerCmd::Inputs(vec![input(1, &a, 1.0, true).0]));
+        let (set, stems, program) = tapped(&[1]);
+        m.apply(MixerCmd::Taps { set: Some(set), generation: 1 });
+        let (stalled, reading) = (Arc::new(Fifo::new(256)), Arc::new(Fifo::new(256)));
+        m.apply(MixerCmd::AddOutput { id: 1, queue: Arc::clone(&stalled) });
+        m.apply(MixerCmd::AddOutput { id: 2, queue: Arc::clone(&reading) });
+        let kept = m.pool.capacity();
+        let mut held = None;
+        for i in 0..1000 {
+            feed(&a, 0.25);
+            drop(held.take());
+            m.tick(Tick(i));
+            held = reading.pop();
+        }
+        assert_eq!(m.pool.made(), kept, "the outputs' pool made no more blocks");
+        for t in [&stems[0], &program] {
+            assert_eq!(t.made(), studiocraft_media::tap::TAP_POOL_BLOCKS, "the tap's pool made no more blocks");
+            assert_eq!(t.skipped(), 0);
+            assert_eq!(t.queued(), studiocraft_media::tap::TAP_QUEUE_BLOCKS);
+            assert_eq!(t.dropped(), 1000 - studiocraft_media::tap::TAP_QUEUE_BLOCKS as u64);
+        }
+        let newest = std::iter::from_fn(|| reading.pop()).last().map(|b| b.pts);
+        assert_eq!(newest.or(held.map(|b| b.pts)), Some(Tick(999)), "the reading output got every block");
+    }
+
+    #[test]
+    fn a_burst_of_replacements_is_all_handed_back_and_none_is_freed_on_the_mixer() {
+        let mixer = Mixer::detached();
+        let mut m = MixState::new(Arc::new(Levels::default()));
+        m.retired = Arc::clone(&mixer.retired);
+        m.retired_taps = Arc::clone(&mixer.retired_taps);
+        let a = Arc::new(AudioOut::default());
+        // Every command waits in the queue before the mixer runs. A tap set replaced before the
+        // mixer took it is freed by the sender as it sends the next.
+        let burst = 200;
+        for n in 0..burst {
+            mixer.send(MixerCmd::Taps { set: Some(tapped(&[1]).0), generation: n + 1 });
+            mixer.send(MixerCmd::Inputs(vec![input(1, &a, 1.0, true).0]));
+        }
+        drain(&mixer.taps, &mixer.control, &mixer.gains, &mut m);
+        assert!(mixer.retired_taps.is_empty(), "only the last tap set reached the mixer, and it is in use");
+        assert_eq!(mixer.retired.len(), burst as usize, "every replaced input list waits for the sender");
+        let (set, _, _) = tapped(&[1]);
+        mixer.send(MixerCmd::Taps { set: Some(set), generation: burst + 1 });
+        drain(&mixer.taps, &mixer.control, &mixer.gains, &mut m);
+        assert_eq!(mixer.retired_taps.len(), 1, "the set the mixer replaced waits for the sender");
+        mixer.free_retired();
+        assert!(mixer.retired_taps.is_empty() && mixer.retired.is_empty());
+    }
+
+    #[test]
+    fn tap_sets_are_applied_kept_across_new_input_lists_and_handed_back() {
+        let mixer = Mixer::detached();
+        let mut m = MixState::new(Arc::new(Levels::default()));
+        m.retired = Arc::clone(&mixer.retired);
+        m.retired_taps = Arc::clone(&mixer.retired_taps);
+        m.taps_applied = Arc::clone(&mixer.taps_applied);
+        let a = Arc::new(AudioOut::default());
+        let (set, stems, _) = tapped(&[1]);
+        mixer.send(MixerCmd::Taps { set: Some(set), generation: 1 });
+        mixer.send(MixerCmd::Inputs(vec![input(1, &a, 1.0, true).0]));
+        drain(&mixer.taps, &mixer.control, &mixer.gains, &mut m);
+        assert_eq!(mixer.taps_applied(), 1);
+        feed(&a, 0.5);
+        m.tick(Tick(1));
+        assert!(stems[0].pop().is_some_and(|b| b.samples[0] == 0.5), "an input list sent after the taps is tapped");
+        mixer.send(MixerCmd::Taps { set: None, generation: 2 });
+        drain(&mixer.taps, &mixer.control, &mixer.gains, &mut m);
+        assert_eq!(mixer.taps_applied(), 2);
+        assert!(m.inputs.iter().all(|i| i.tap.is_none()) && m.taps.is_none());
+        assert_eq!(mixer.retired_taps.len(), 1, "the replaced set goes back to the sender");
+        assert!(Arc::strong_count(&stems[0]) > 1, "the slot is still held, so the mixer did not free it");
+        mixer.free_retired();
+        assert!(mixer.retired_taps.is_empty());
+        feed(&a, 0.5);
+        m.tick(Tick(2));
+        assert!(stems[0].pop().is_none(), "nothing is tapped after the taps are removed");
+    }
+
+    #[test]
+    fn a_burst_of_commands_never_drops_the_removal_of_the_taps() {
+        let mixer = Mixer::detached();
+        let mut m = MixState::new(Arc::new(Levels::default()));
+        m.retired_taps = Arc::clone(&mixer.retired_taps);
+        m.taps_applied = Arc::clone(&mixer.taps_applied);
+        let (set, stems, _) = tapped(&[1]);
+        mixer.send(MixerCmd::Taps { set: Some(set), generation: 1 });
+        drain(&mixer.taps, &mixer.control, &mixer.gains, &mut m);
+        mixer.send(MixerCmd::Taps { set: None, generation: 2 });
+        // More commands than the control queue holds arrive before the mixer runs again.
+        for _ in 0..CONTROL_QUEUE + 10 {
+            mixer.send(MixerCmd::FadeMs(300));
+        }
+        drain(&mixer.taps, &mixer.control, &mixer.gains, &mut m);
+        assert_eq!(mixer.taps_applied(), 2);
+        assert!(m.taps.is_none());
+        // Of two sets sent before the mixer runs, the later one applies, and the earlier one is
+        // freed on the sending thread.
+        let (a, _, _) = tapped(&[1]);
+        let (b, _, _) = tapped(&[2]);
+        let weak = Arc::downgrade(&a);
+        mixer.send(MixerCmd::Taps { set: Some(a), generation: 3 });
+        mixer.send(MixerCmd::Taps { set: Some(b), generation: 4 });
+        assert!(weak.upgrade().is_none(), "the replaced set was freed by the sender");
+        drain(&mixer.taps, &mixer.control, &mixer.gains, &mut m);
+        assert_eq!(mixer.taps_applied(), 4);
+        drop(stems);
     }
 
     #[test]

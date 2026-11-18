@@ -183,6 +183,13 @@ impl Engine {
             Command::ReplayStop {} => Ok(Outcome::runtime(RuntimeAction::StopReplay)),
             Command::ReplayToggle {} => Ok(Outcome::runtime(RuntimeAction::ToggleReplay)),
             Command::ReplaySave {} => Ok(Outcome::runtime(RuntimeAction::SaveReplay)),
+            Command::AudioTracksStatus {} => Ok(Outcome::runtime(RuntimeAction::AudioTracksStatus)),
+            Command::AudioTracksRepair { folder } => {
+                if folder.trim().is_empty() {
+                    return Err(EngineError::Invalid("the folder to repair is empty".into()));
+                }
+                Ok(Outcome::runtime(RuntimeAction::AudioTracksRepair { folder }))
+            }
             Command::OpenSettings {} => Ok(Outcome::runtime(RuntimeAction::OpenSettings)),
             Command::Exit {} => Ok(Outcome::runtime(RuntimeAction::Exit)),
             // Queries: no history step, no revision bump, no change to the dirty flag.
@@ -461,6 +468,19 @@ impl Engine {
                     .into_iter()
                     .find(|m| m.id() == mode)
                     .ok_or_else(|| EngineError::Invalid("the monitoring mode must be off, monitor_only or monitor_and_output".into()))?;
+                Ok((Value::Null, None))
+            }
+            Command::SourceSetRecordTrack { source, on } => {
+                let id = self.source_id(&source)?;
+                let s = c.source_mut(id).ok_or_else(|| EngineError::NoSource(id.to_string()))?;
+                if self.registry.source(&s.kind).is_ok_and(|p| !p.caps().audio) {
+                    return Err(EngineError::Invalid(format!("`{}` has no audio", s.name)));
+                }
+                // A source that already records or not by its monitoring keeps following it: the
+                // command changes nothing and adds no undo step.
+                if s.audio.record_track.is_some() || s.audio.records_track() != on {
+                    s.audio.record_track = Some(on);
+                }
                 Ok((Value::Null, None))
             }
             Command::SourceMute { source, muted } => {

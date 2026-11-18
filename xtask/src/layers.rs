@@ -34,6 +34,7 @@ pub const TABLE: &[(&str, Class)] = &[
     ("encode", Class::Layer(2)),
     ("sources", Class::Layer(3)),
     ("outputs", Class::Layer(3)),
+    ("audio-tracks", Class::Layer(3)),
     ("studio", Class::Layer(4)),
     ("ui-egui", Class::Layer(5)),
     ("mcp", Class::Layer(5)),
