@@ -41,8 +41,8 @@ pub use disk::{DiskConfig, Faults, Gate, StopReason};
 
 /// A list of tracks for the collect thread, with the clock time it was sent at (none for the
 /// first list, sent before any block), and whether it comes from a collection that replaced the
-/// one recorded so far ([`Collector::replace_sources`]).
-type TrackList = (Vec<TrackSpec>, Option<Tick>, bool);
+/// one recorded so far ([`Collector::replace_sources`]), and the mixer's tap change it waits for.
+type TrackList = (Vec<TrackSpec>, Option<Tick>, bool, Option<StopAfter>);
 
 /// How long the collect and disk threads sleep when there is nothing to do.
 pub const IDLE: Duration = Duration::from_millis(10);
@@ -58,11 +58,12 @@ pub const MAX_TAKE_TRACKS: usize = 4 * MAX_TRACKS;
 /// Messages the disk queue holds beyond the chunks.
 const QUEUE_SPARE: usize = 64;
 /// How many idle waits the collect thread gives the mixer to take the taps away at a stop
-/// ([`Take::stop_after`]) before it ends the take anyway: 5 s.
+/// ([`Take::stop_after`]), or to apply the tap change a track list waits for, before it goes on
+/// anyway: 5 s.
 const STOP_WAITS: u32 = 500;
 
-/// The mixer's count of tap sets applied, and the count at which the taps are gone.
-type StopAfter = (Arc<AtomicU64>, u64);
+/// The mixer's count of tap sets applied, and the count at which a tap change has been applied.
+pub type StopAfter = (Arc<AtomicU64>, u64);
 
 /// What a take is doing.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -197,7 +198,7 @@ impl Take {
         status.state.store(State::Recording as u8, Ordering::Release);
         let stop = Arc::new(AtomicBool::new(false));
         let tracks: Arc<ArrayQueue<TrackList>> = Arc::new(ArrayQueue::new(8));
-        let _ = tracks.push((specs, None, false));
+        let _ = tracks.push((specs, None, false, None));
         let after: Arc<ArrayQueue<StopAfter>> = Arc::new(ArrayQueue::new(1));
         let chunks = cfg.buffer_mib.max(1) as usize;
         let (disk_tx, disk_rx) = std::sync::mpsc::sync_channel::<(Arc<ArrayQueue<collect::ToDisk>>, Arc<ArrayQueue<Vec<u8>>>, Thread)>(1);
@@ -251,19 +252,23 @@ impl Take {
 
     /// Record `specs` from `at`, the time on the clock the mixer stamps blocks with. False when
     /// the collect thread has not taken the last lists yet; send them again later.
-    pub fn set_tracks(&self, specs: Vec<TrackSpec>, at: Tick) -> bool {
-        self.send_tracks(specs, at, false)
+    ///
+    /// With `after`, the list waits until the mixer has applied that tap change (up to 5 s),
+    /// while the collect thread keeps taking blocks: a source that stops being recorded keeps the
+    /// blocks the mixer stores for it until its tap is gone.
+    pub fn set_tracks(&self, specs: Vec<TrackSpec>, at: Tick, after: Option<StopAfter>) -> bool {
+        self.send_tracks(specs, at, false, after)
     }
 
     /// Record `specs` from `at`, from a collection that replaced the one recorded so far: every
-    /// source's file ends, and each source of the new collection gets a new file. False as for
-    /// [`Take::set_tracks`].
-    pub fn replace_sources(&self, specs: Vec<TrackSpec>, at: Tick) -> bool {
-        self.send_tracks(specs, at, true)
+    /// source's file ends, and each source of the new collection gets a new file. False, and
+    /// `after`, as for [`Take::set_tracks`].
+    pub fn replace_sources(&self, specs: Vec<TrackSpec>, at: Tick, after: Option<StopAfter>) -> bool {
+        self.send_tracks(specs, at, true, after)
     }
 
-    fn send_tracks(&self, specs: Vec<TrackSpec>, at: Tick, replace: bool) -> bool {
-        let ok = self.tracks.push((specs, Some(at), replace)).is_ok();
+    fn send_tracks(&self, specs: Vec<TrackSpec>, at: Tick, replace: bool, after: Option<StopAfter>) -> bool {
+        let ok = self.tracks.push((specs, Some(at), replace, after)).is_ok();
         self.collect_thread.unpark();
         ok
     }
@@ -311,21 +316,35 @@ impl Drop for Take {
     }
 }
 
+/// Make `list` the tracks `c` records.
+fn apply_tracks(c: &mut Collector, status: &Status, (list, at, replace, _): TrackList) {
+    // The blocks already stored come first, so the clock moves the position only past them.
+    c.poll();
+    if let Some(at) = at {
+        c.advance_to(at);
+    }
+    if replace {
+        c.replace_sources(list);
+    } else {
+        c.set_tracks(list);
+    }
+    status.tracks.store(c.tracks() as u64, Ordering::Relaxed);
+    status.track_limit.store(c.full(), Ordering::Relaxed);
+}
+
 fn collect_loop(mut c: Collector, status: &Status, stop: &AtomicBool, tracks: &ArrayQueue<TrackList>, after: &ArrayQueue<StopAfter>) {
+    // A list waiting for the mixer to apply its tap change, and the idle waits it has had. The
+    // lists after it wait behind it, so they apply in the order they were sent.
+    let mut waiting: Option<(TrackList, u32)> = None;
     loop {
-        while let Some((list, at, replace)) = tracks.pop() {
-            // The blocks already stored come first, so the clock moves the position only past them.
-            c.poll();
-            if let Some(at) = at {
-                c.advance_to(at);
+        loop {
+            let Some((list, waits)) = waiting.take().or_else(|| tracks.pop().map(|l| (l, 0))) else { break };
+            let pending = list.3.as_ref().is_some_and(|(applied, generation)| applied.load(Ordering::Acquire) < *generation);
+            if pending && waits < STOP_WAITS {
+                waiting = Some((list, waits + 1));
+                break;
             }
-            if replace {
-                c.replace_sources(list);
-            } else {
-                c.set_tracks(list);
-            }
-            status.tracks.store(c.tracks() as u64, Ordering::Relaxed);
-            status.track_limit.store(c.full(), Ordering::Relaxed);
+            apply_tracks(&mut c, status, list);
         }
         c.poll();
         status.frames.store(c.position(), Ordering::Relaxed);
@@ -345,6 +364,14 @@ fn collect_loop(mut c: Collector, status: &Status, stop: &AtomicBool, tracks: &A
                     std::thread::park_timeout(IDLE);
                     waits += 1;
                 }
+            }
+            // The taps are gone, so the lists still waiting apply now: a source added just
+            // before the stop keeps the blocks it was given.
+            if let Some((list, _)) = waiting.take() {
+                apply_tracks(&mut c, status, list);
+            }
+            while let Some(list) = tracks.pop() {
+                apply_tracks(&mut c, status, list);
             }
             // The blocks the mixer stored before the stop, then the end.
             c.poll();

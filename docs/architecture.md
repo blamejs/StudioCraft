@@ -194,7 +194,10 @@ build for `wasm32-unknown-unknown`:
   is slow, the collect thread drops blocks and logs them, and the files still keep time. Status is
   atomics only. A stop returns at once. The collect thread keeps draining the taps until the
   mixer reports that it applied the removal of the taps (up to 5 seconds), so no block stored
-  before then is lost, and the threads end after the last chunk is written. While
+  before then is lost, and the threads end after the last chunk is written. A change to the
+  recorded sources during a take waits the same way: the collect thread applies the new track
+  list once the mixer has applied the matching tap change, so a source that stops being recorded
+  keeps every block stored for it. While
   audio tracks are off no tap, pool or thread exists, and the mixer checks one `Option` per input.
 - **Window thread.** The window reads `Studio` state, runs commands, and shows statistics.
 

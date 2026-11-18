@@ -13,7 +13,7 @@ use std::thread::JoinHandle;
 
 use serde_json::{Value, json};
 use studiocraft_audio_tracks::recover::{self, Outcome};
-use studiocraft_audio_tracks::{DiskConfig, Faults, MAX_TRACKS, State, StopReason, Take, TakeConfig, TrackSpec, space};
+use studiocraft_audio_tracks::{DiskConfig, Faults, MAX_TRACKS, State, StopAfter, StopReason, Take, TakeConfig, TrackSpec, space};
 use studiocraft_engine::mixer::{MixerCmd, TapSet};
 use studiocraft_media::tap::TapSlot;
 use studiocraft_model::{AudioTracksWhen, SourceId};
@@ -201,7 +201,7 @@ impl Studio {
         }
         if let Some((list, replace)) = self.audio_tracks.pending.take()
             && let Some(take) = &self.audio_tracks.take
-            && !send_tracks(take, list.clone(), self.clock.now(), replace)
+            && !send_tracks(take, list.clone(), self.clock.now(), replace, self.taps_gate())
         {
             self.audio_tracks.pending = Some((list, replace));
         }
@@ -222,8 +222,9 @@ impl Studio {
         self.send_taps(&specs);
         // A list still waiting from a replaced collection keeps that, so the old files end.
         let replace = replace || self.audio_tracks.pending.as_ref().is_some_and(|(_, r)| *r);
+        let gate = self.taps_gate();
         if let Some(take) = &self.audio_tracks.take {
-            if send_tracks(take, specs.clone(), self.clock.now(), replace) {
+            if send_tracks(take, specs.clone(), self.clock.now(), replace, gate) {
                 self.audio_tracks.pending = None;
             } else {
                 self.audio_tracks.pending = Some((specs, replace));
@@ -242,6 +243,12 @@ impl Studio {
             self.audio_tracks.armed = armed;
             self.audio_tracks.replaced = true;
         }
+    }
+
+    /// The tap change sent last, for a track list to wait for. A mixer without a thread applies
+    /// nothing, so a list waits for nothing then.
+    fn taps_gate(&self) -> Option<StopAfter> {
+        self.mixer.running().then(|| (self.mixer.taps_applied_counter(), self.audio_tracks.generation))
     }
 
     fn remove_taps(&mut self) {
@@ -449,8 +456,10 @@ fn take_dir(recording: Option<&Path>, folder: &Path, taken: &[PathBuf]) -> Optio
         .map(|p| p.join("Audio Files"))
 }
 
-fn send_tracks(take: &Take, specs: Vec<TrackSpec>, at: studiocraft_media::Tick, replace: bool) -> bool {
-    if replace { take.replace_sources(specs, at) } else { take.set_tracks(specs, at) }
+/// Send `specs` to the take. With `after`, the take applies them once the mixer has applied that
+/// tap change, so a source that stops being recorded keeps the blocks stored for it until then.
+fn send_tracks(take: &Take, specs: Vec<TrackSpec>, at: studiocraft_media::Tick, replace: bool, after: Option<StopAfter>) -> bool {
+    if replace { take.replace_sources(specs, at, after) } else { take.set_tracks(specs, at, after) }
 }
 
 /// `seconds` as `hh:mm:ss`.

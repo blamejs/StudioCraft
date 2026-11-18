@@ -241,6 +241,34 @@ fn a_take_on_its_threads_writes_every_block_it_was_given() {
 }
 
 #[test]
+fn a_source_that_stops_recording_keeps_its_blocks_until_the_mixer_drops_its_tap() {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    let dir = scratch("leave-after");
+    let (p, a) = (TrackSpec { source: None, name: "00 Program".into(), slot: Arc::new(TapSlot::new()) }, spec(1, "Mic"));
+    let take = Take::start(TakeConfig { disk: config(&dir), buffer_mib: 4 }, vec![p.clone(), a.clone()]).unwrap();
+    for n in 0..3 {
+        feed(&p.slot, 0, n);
+        feed(&a.slot, 1, n);
+    }
+    // The studio stops recording Mic and asks the mixer to drop its tap; the mixer has not yet.
+    let applied = Arc::new(AtomicU64::new(0));
+    assert!(take.set_tracks(vec![p.clone()], Tick(500 + 3 * BLOCK_TICKS), Some((Arc::clone(&applied), 1))));
+    // Give the take every chance to apply the list early: it must not, while the tap is in use.
+    for _ in 0..200_000 {
+        std::thread::yield_now();
+    }
+    for n in 3..6 {
+        feed(&p.slot, 0, n);
+        feed(&a.slot, 1, n);
+    }
+    applied.store(1, Ordering::Release);
+    let status = take.join();
+    assert_eq!(status.state(), Some(State::Done));
+    assert_eq!(read(&dir.join("Mic.wav")), (0..6).flat_map(|n| samples(1, n)).collect::<Vec<f32>>(), "Mic keeps every block the mixer stored");
+    let _ = std::fs::remove_dir_all(dir.parent().and_then(Path::parent).unwrap());
+}
+
+#[test]
 fn a_source_left_without_a_file_at_the_track_limit_shows_in_the_status() {
     let dir = scratch("track-limit");
     let specs: Vec<TrackSpec> = (0..=studiocraft_audio_tracks::MAX_TAKE_TRACKS as u64).map(|n| spec(n + 1, &format!("Source {n}"))).collect();
