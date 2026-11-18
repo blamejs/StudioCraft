@@ -103,6 +103,25 @@ With each access unit converted once and the result shared, sending the stream t
 costs 170.5 µs of one core per second of stream, or 2.8 µs per video frame. Converting it for each
 destination costs 820.5 µs. Runs on this host vary by up to 15% from one run to the next.
 
+### Packet fan-out
+
+Measured on 2026-11-18 on Linux (AMD EPYC 9R14), release build. `cargo bench -p craft-packet`
+publishes one second of a 60 fps stream, 60 video packets of 12 500 bytes and 47 audio packets of
+426 bytes (107 packets), to 1, 4, 8 and 16 subscribers. One subscriber never reads, so its 16-packet
+ring stays full and it drops packets up to each keyframe; the other rings hold 330 packets and
+3.5 MB and are drained between seconds, outside the timing. A counting allocator checks the timed
+part, and the bench exits with an error if it allocates.
+
+| Bench | Median | Range (95%) |
+| --- | --- | --- |
+| `fanout/publish 1 s to 1 subscriber that never reads` | 990.9 ns | 985.3 to 997.2 ns |
+| `fanout/publish 1 s to 4 subscribers, one never reads` | 5.628 µs | 5.570 to 5.684 µs |
+| `fanout/publish 1 s to 8 subscribers, one never reads` | 12.36 µs | 12.31 to 12.40 µs |
+| `fanout/publish 1 s to 16 subscribers, one never reads` | 26.89 µs | 26.42 to 27.33 µs |
+
+Publishing a packet to 8 subscribers costs 115 ns, about 14 ns per subscriber, and allocates
+nothing. The packet's bytes are not copied.
+
 ## Measuring
 
 - Run the criterion benches with `cargo bench -p <crate>`.

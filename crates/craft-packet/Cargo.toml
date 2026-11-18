@@ -1,0 +1,23 @@
+[package]
+name = "craft-packet"
+description = "Encoded packets shared by reference and fanned out to bounded per-subscriber rings, with byte caps, keyframe-aligned drops, stale-packet skipping and per-subscriber counters"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+crossbeam-queue = { workspace = true }
+arc-swap = { workspace = true }
+
+[dev-dependencies]
+proptest = { workspace = true }
+criterion = { workspace = true }
+stats_alloc = { workspace = true }
+
+[[bench]]
+name = "fanout"
+harness = false

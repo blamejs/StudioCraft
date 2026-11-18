@@ -43,6 +43,10 @@ log = "0.4"
 base64 = "0.22"
 # Bounded lock-free queues between the capture, compositor, mixer and encoder threads.
 crossbeam-queue = "0.3"
+# The subscriber list a packet fan-out reads without a lock.
+arc-swap = "1"
+# Tests and benches only: a global allocator that counts allocations.
+stats_alloc = "0.1"
 # A 128-bit atomic for the position the two recording writers share.
 portable-atomic = "1"
 # Local time for recording file names.
