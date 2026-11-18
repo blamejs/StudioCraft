@@ -5,7 +5,8 @@ name: Release
 # shared workflow writes SHA256SUMS.txt, and the checksums job below adds SHA3-512SUMS.txt.
 #
 # - A push to the `release` branch builds a release. On that branch the macOS and Windows builds
-#   stop unless their signing secrets are set in the repository's `release` environment.
+#   stop unless their signing secrets are set in the repository's `release` environment. An alpha
+#   version (0.x.y-alpha.N) is then published as a prerelease by the publish job below.
 # - A manual run builds from the chosen branch and also makes a draft; there the builds that have
 #   no signing secrets are left unsigned. With `dry-run`, it builds and checks without a draft.
 # - Every night a dry run on main builds everything except macOS, signs nothing and makes no draft.
@@ -144,3 +145,182 @@ jobs:
             echo
             sed 's/^/    /' SHA3-512SUMS.txt
           } >>"$GITHUB_STEP_SUMMARY"
+
+  # Publishes an alpha (a version with an -alpha.N part) that a push to the release branch built, as
+  # a prerelease. It checks that the draft holds every required file for both Windows, both Linux
+  # and the macOS builds, that the signatures verify, and that `cargo xtask release-ready` counts at
+  # least 50 pull requests merged since the previous alpha tag. When a check fails, the release
+  # stays a draft. Other versions stay drafts and are published by hand (docs/releasing.md).
+  # Checks the Authenticode signatures of an alpha's Windows files before the publish job runs.
+  windows-signatures:
+    name: Check the Windows signatures
+    needs: [release, checksums]
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/release' && contains(needs.release.outputs.version, '-alpha.') }}
+    runs-on: windows-latest
+    timeout-minutes: 20
+    # Reading a draft release's files needs write access to contents.
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GH_REPO: ${{ github.repository }}
+      TAG: v${{ needs.release.outputs.version }}
+    steps:
+      - name: Check that each .msi and every .exe in each portable zip has a valid signature
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $dir = Join-Path $env:RUNNER_TEMP 'windows'
+          gh release download $env:TAG --dir $dir --pattern '*-windows-*.msi' --pattern '*-windows-*-portable.zip'
+          if ($LASTEXITCODE -ne 0) { throw "gh release download failed" }
+          $files = @(Get-ChildItem $dir -Filter '*.msi')
+          foreach ($zip in Get-ChildItem $dir -Filter '*-portable.zip') {
+            $out = Join-Path $dir $zip.BaseName
+            Expand-Archive $zip.FullName -DestinationPath $out
+            $exes = @(Get-ChildItem $out -Recurse -Filter '*.exe')
+            if ($exes.Count -eq 0) { throw "$($zip.Name) holds no .exe" }
+            $files += $exes
+          }
+          if ($files.Count -lt 4) { throw "expected the x64 and arm64 .msi and portable zips, found $($files.Count) files to check" }
+          $bad = 0
+          foreach ($f in $files) {
+            $sig = Get-AuthenticodeSignature -LiteralPath $f.FullName
+            "{0}: {1} ({2})" -f $f.FullName.Substring($dir.Length + 1), $sig.Status, $sig.SignerCertificate.Subject
+            if ($sig.Status -ne 'Valid') {
+              "::error::$($f.Name) has no valid Authenticode signature: $($sig.Status) $($sig.StatusMessage)"
+              $bad++
+            }
+          }
+          if ($bad -gt 0) { exit 1 }
+
+  publish:
+    name: Publish the alpha release
+    needs: [release, checksums, windows-signatures]
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/release' && contains(needs.release.outputs.version, '-alpha.') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    environment: release
+    permissions:
+      contents: write
+      # cargo xtask release-ready lists the merged pull requests.
+      pull-requests: read
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GH_REPO: ${{ github.repository }}
+      VERSION: ${{ needs.release.outputs.version }}
+      TAG: v${{ needs.release.outputs.version }}
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          # The whole history and every tag, for the count since the previous alpha tag.
+          fetch-depth: 0
+      - name: Import the Linux signing key
+        id: key
+        uses: storytold/craft-common-actions/actions/import-signing-key@59d1ecc4ea15ab59f8d60d38b147d5016c1f1385
+        with:
+          key: ${{ secrets.LINUX_SIGNING_KEY }}
+      - name: Require the Linux signing key
+        if: steps.key.outputs.enabled != 'true'
+        run: |
+          echo "::error::LINUX_SIGNING_KEY is not set in the release environment, so $TAG stays a draft."
+          exit 1
+      - name: Install the checking tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends rpm
+      - name: Download the draft release
+        run: |
+          set -euo pipefail
+          read -r draft target < <(gh release view "$TAG" --json isDraft,targetCommitish --jq '"\(.isDraft) \(.targetCommitish)"')
+          if [ "$draft" != true ]; then
+            echo "::error::$TAG is not a draft release."
+            exit 1
+          fi
+          if [ "$target" != "$GITHUB_SHA" ]; then
+            echo "::error::The draft $TAG targets $target, not $GITHUB_SHA, which this run built."
+            exit 1
+          fi
+          gh release download "$TAG" --dir "$RUNNER_TEMP/assets"
+      - name: Check that every required file is in the draft
+        working-directory: ${{ runner.temp }}/assets
+        run: |
+          set -euo pipefail
+          v="$VERSION"
+          expected=(SHA256SUMS.txt SHA256SUMS.txt.asc SHA3-512SUMS.txt SHA3-512SUMS.txt.asc release-signing-key.asc
+            "studiocraft-$v-macos-universal.dmg" "studiocraft-cli-$v-macos-universal.zip")
+          for arch in x64 arm64; do
+            expected+=("studiocraft-$v-windows-$arch.msi" "studiocraft-$v-windows-$arch-portable.zip")
+          done
+          # Every Linux file has a detached signature beside it.
+          for arch in x86_64 aarch64; do
+            for ext in AppImage AppImage.zsync deb rpm flatpak tar.gz; do
+              expected+=("studiocraft-$v-linux-$arch.$ext" "studiocraft-$v-linux-$arch.$ext.asc")
+            done
+            # A Flatpak OCI image pushed to a registry leaves its manifest and that manifest's
+            # signature in the release; when one is there, so must the other be.
+            oci="studiocraft-$v-linux-$arch"
+            if [ -e "$oci.oci-manifest.json" ] || [ -e "$oci.oci.sig" ]; then
+              expected+=("$oci.oci-manifest.json" "$oci.oci.sig")
+            fi
+          done
+          if ! diff <(printf '%s\n' "${expected[@]}" | sort) <(find . -mindepth 1 -maxdepth 1 -printf '%f\n' | sort); then
+            echo "::error::The draft $TAG does not hold exactly the required files: lines with < are missing, lines with > are not expected."
+            exit 1
+          fi
+          echo "The draft holds all ${#expected[@]} required files."
+      - name: Check the signatures and checksums
+        working-directory: ${{ runner.temp }}/assets
+        run: |
+          set -euo pipefail
+          fail() {
+            echo "::error::$1"
+            exit 1
+          }
+          # The key the release ships is the key the release environment signs with.
+          gpg --batch --with-colons --show-keys release-signing-key.asc | awk -F: '$1 == "fpr" { print $10 }' | grep -x "$SIGNING_FPR" >/dev/null \
+            || fail "release-signing-key.asc does not hold the signing key $SIGNING_FPR"
+          for sig in *.asc; do
+            [ "$sig" = release-signing-key.asc ] && continue
+            gpgv --quiet --keyring "$SIGNING_PUBKEY" "$sig" "${sig%.asc}" || fail "$sig does not verify"
+          done
+          sha256sum --check --strict SHA256SUMS.txt || fail "SHA256SUMS.txt does not match the files"
+          while read -r hash name; do
+            [ "$(openssl dgst -sha3-512 -r -- "$name" | cut -d' ' -f1)" = "$hash" ] || fail "$name does not match SHA3-512SUMS.txt"
+          done <SHA3-512SUMS.txt
+          for f in *; do
+            case "$f" in SHA256SUMS.txt | SHA256SUMS.txt.asc | SHA3-512SUMS.txt | SHA3-512SUMS.txt.asc) continue ;; esac
+            for sums in SHA256SUMS.txt SHA3-512SUMS.txt; do
+              awk -v f="$f" '$2 == f { found = 1 } END { exit !found }' "$sums" || fail "$f is not in $sums"
+            done
+          done
+          rpmdb="$(mktemp -d)"
+          rpm --dbpath "$rpmdb" --initdb
+          rpmkeys --dbpath "$rpmdb" --import release-signing-key.asc
+          for f in *.rpm; do
+            out="$(rpmkeys --dbpath "$rpmdb" --checksig -- "$f")"
+            echo "$out"
+            grep -q 'signatures OK' <<<"$out" || fail "$f is not signed with the release key"
+          done
+          for f in *.deb; do
+            ar t "$f" | grep -x _gpgorigin >/dev/null || fail "$f has no _gpgorigin signature"
+            members="$(ar t "$f" | grep -v '^_gpg')"
+            # shellcheck disable=SC2086 # one argument per member name
+            ar p "$f" $members | gpgv --quiet --keyring "$SIGNING_PUBKEY" <(ar p "$f" _gpgorigin) - || fail "$f: _gpgorigin does not verify"
+          done
+      - name: Count the pull requests and write the notes
+        run: |
+          rustup toolchain install stable --profile minimal
+          if ! cargo +stable run --locked -q -p xtask -- release-ready --ref "$GITHUB_SHA" --tag "$TAG" --notes "$RUNNER_TEMP/notes.md"; then
+            echo "::error::$TAG stays a draft: see cargo xtask release-ready above."
+            exit 1
+          fi
+      - name: Publish the prerelease
+        run: |
+          set -euo pipefail
+          gh release edit "$TAG" --notes-file "$RUNNER_TEMP/notes.md" --draft=false --prerelease
+          echo "Published $TAG as a prerelease." >>"$GITHUB_STEP_SUMMARY"

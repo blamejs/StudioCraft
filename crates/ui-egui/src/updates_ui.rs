@@ -26,13 +26,16 @@ fn translate(text: &str, args: &[(&str, &str)]) -> String {
 
 /// The release to offer a copy running `running`, from the answer to a request for the release
 /// list. A missing list (the repository is private, renamed or gone) and a network error are
-/// reported as errors, never as "up to date".
+/// reported as errors, never as "up to date". A copy running a prerelease (`0.1.0-alpha.1`) is
+/// offered the newest release, prereleases included; a copy running `X.Y.Z` is offered only
+/// releases without a prerelease part.
 pub(crate) fn offered(fetched: Result<Fetched, String>, running: &str) -> Result<Option<Release>, String> {
     let unreachable = |why: &str| format!("could not reach the release list at {} ({why})", UPDATE_APP.releases_url());
     match fetched.map_err(|e| unreachable(&e))? {
         Fetched::Body { text, .. } => {
-            let latest = craft_update::parse_github_release_list(&text, UPDATE_APP.repo, false)?;
             let running = craft_update::parse_version(running);
+            let prereleases = running.as_ref().is_some_and(|v| !craft_update::version::is_stable(v));
+            let latest = craft_update::parse_github_release_list(&text, UPDATE_APP.repo, prereleases)?;
             Ok(latest.filter(|r| r.version.as_ref().zip(running.as_ref()).is_some_and(|(l, c)| craft_update::version::offers_update(l, c))))
         }
         Fetched::NotModified => Ok(None),
@@ -189,6 +192,28 @@ mod tests {
 
     fn body(text: String) -> Result<Fetched, String> {
         Ok(Fetched::Body { text, etag: None })
+    }
+
+    /// A release list as GitHub sends it, with each release's `prerelease` flag.
+    fn list_with_flags(tags: &[(&str, bool)]) -> String {
+        let items: Vec<String> =
+            tags.iter().map(|(t, pre)| format!(r#"{{"tag_name":"{t}","prerelease":{pre},"draft":false,"assets":[]}}"#)).collect();
+        format!("[{}]", items.join(","))
+    }
+
+    #[test]
+    fn a_prerelease_copy_is_offered_the_next_prerelease() {
+        let releases = list_with_flags(&[("v0.1.0-alpha.2", true), ("v0.1.0-alpha.1", true)]);
+        let release = offered(body(releases.clone()), "0.1.0-alpha.1").unwrap().expect("alpha.2 is offered");
+        assert_eq!(release.tag, "v0.1.0-alpha.2");
+        assert_eq!(offered(body(releases.clone()), "0.1.0-alpha.2"), Ok(None));
+        // A stable release after the alphas replaces them.
+        let with_stable = list_with_flags(&[("v0.1.0", false), ("v0.1.0-alpha.2", true)]);
+        assert_eq!(offered(body(with_stable), "0.1.0-alpha.2").unwrap().map(|r| r.tag), Some("v0.1.0".to_string()));
+        // A copy running a release without a prerelease part is not offered an alpha.
+        assert_eq!(offered(body(releases), "0.0.9"), Ok(None));
+        let mixed = list_with_flags(&[("v0.2.0-alpha.1", true), ("v0.1.1", false)]);
+        assert_eq!(offered(body(mixed), "0.1.0").unwrap().map(|r| r.tag), Some("v0.1.1".to_string()));
     }
 
     #[test]
