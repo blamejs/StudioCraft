@@ -49,6 +49,11 @@ crossbeam-utils = "0.8"
 arc-swap = "1"
 # Tests and benches only: a global allocator that counts allocations.
 stats_alloc = "0.1"
+# RTMPS: TLS with the ring provider, and the system's certificate checks.
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
+rustls-platform-verifier = "0.7"
+# Tests only: key pairs and signatures for the loopback RTMPS server's certificates.
+ring = "0.17"
 # A 128-bit atomic for the position the two recording writers share.
 portable-atomic = "1"
 # Local time for recording file names.

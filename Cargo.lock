@@ -1618,6 +1618,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-rtmp"
+version = "0.1.0-alpha.1"
+dependencies = [
+ "craft-flv",
+ "criterion",
+ "proptest",
+ "ring",
+ "rustls",
+ "rustls-platform-verifier",
+ "stats_alloc",
+]
+
+[[package]]
 name = "craft-scopes"
 version = "0.1.0-alpha.1"
 dependencies = [

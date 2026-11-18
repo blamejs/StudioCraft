@@ -144,6 +144,30 @@ woken for each packet, 0.20% of one core for one second of stream. With `wake_ev
 as without one. The `parked` timings depend on the load on the host's other cores: another run on
 the same host measured 5.630 ms for 8 parked receivers, 2.9 times the figure above.
 
+### RTMP chunking
+
+Measured on 2026-11-18 on Linux (AMD EPYC 9R14), release build. `cargo bench -p craft-rtmp`
+chunks one second of a 6000 kb/s, 60 fps H.264 stream with 160 kb/s AAC with `ChunkWriter`: 60
+video messages of 12 505 bytes and 47 audio messages of 428 bytes, 770 KB in all, each written as
+its codec bytes and its data.
+
+- `sink`: into `io::sink()` at the 4096-byte chunk size the publisher sets and at the default 128
+  bytes, which times building the chunk headers and slices.
+- `vec`: into a `Vec` that keeps its capacity, which adds copying every byte.
+- `tcp`: into a loopback TCP socket that another thread drains, which adds the system calls.
+
+| Bench | Median | Range (95%) |
+| --- | --- | --- |
+| `sink/chunk 1 s at 4096 bytes` | 4.509 µs | 4.439 to 4.582 µs |
+| `sink/chunk 1 s at 128 bytes` | 23.38 µs | 22.99 to 23.71 µs |
+| `vec/chunk 1 s at 4096 bytes into a Vec` | 17.80 µs | 17.54 to 18.08 µs |
+| `tcp/send 1 s at 4096 bytes over loopback TCP` | 1.253 ms | 1.194 to 1.304 ms |
+
+At the 4096-byte chunk size, chunking one second of stream costs 4.5 µs of one core, about 42 ns
+per message, and allocates nothing. Sending it over loopback TCP costs 1.25 ms, 0.13% of one core,
+almost all of it in the system calls. An earlier run on the same host measured 1.505 ms for the
+TCP bench.
+
 ## Measuring
 
 - Run the criterion benches with `cargo bench -p <crate>`.

@@ -1,0 +1,36 @@
+[package]
+name = "craft-rtmp"
+description = "A blocking RTMP and RTMPS publish client: the handshake, chunking, the connect, createStream and publish commands, acknowledgements, and timeouts on every step, with the stream key kept out of errors and Debug output"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[features]
+default = ["rtmps"]
+# RTMP over TLS with rustls, checking the server's certificate against the system's trust store or
+# against roots the caller passes.
+rtmps = ["dep:rustls", "dep:rustls-platform-verifier"]
+
+[dependencies]
+craft-flv = { path = "../craft-flv" }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+rustls = { workspace = true, optional = true }
+rustls-platform-verifier = { workspace = true, optional = true }
+
+[dev-dependencies]
+proptest = { workspace = true }
+criterion = { workspace = true }
+stats_alloc = { workspace = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+# Tests only: the key pairs and signatures of the certificates the loopback RTMPS server uses.
+ring = { workspace = true }
+
+[[bench]]
+name = "chunk"
+harness = false
