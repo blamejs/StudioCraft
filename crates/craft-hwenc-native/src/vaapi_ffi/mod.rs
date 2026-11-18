@@ -375,9 +375,9 @@ pub(crate) fn h264_picture(
     }
     let cabac = profile != VAProfileH264ConstrainedBaseline;
     let high = profile == VAProfileH264High;
-    // idr_pic_flag, reference_pic_flag 1, entropy_coding_mode_flag, transform_8x8_mode_flag,
-    // deblocking_filter_control_present_flag.
-    let pic_fields = u32::from(pic.idr) | 1 << 1 | u32::from(cabac) << 3 | u32::from(high) << 7 | 1 << 8;
+    // idr_pic_flag (bit 0), reference_pic_flag 1 (bits 1 and 2), entropy_coding_mode_flag (bit 3),
+    // transform_8x8_mode_flag (bit 8), deblocking_filter_control_present_flag (bit 9).
+    let pic_fields = u32::from(pic.idr) | 1 << 1 | u32::from(cabac) << 3 | u32::from(high) << 8 | 1 << 9;
     VAEncPictureParameterBufferH264 {
         CurrPic: VAPictureH264 { flags: 0, ..h264_reference(recon, pic.order) },
         ReferenceFrames: refs,

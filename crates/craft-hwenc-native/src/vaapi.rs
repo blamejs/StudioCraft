@@ -191,10 +191,18 @@ impl Encoder {
         check(cfg)?;
         let mut session = Session::open(&params(cfg))?;
         let mut gop = Gop::new(cfg.keyint);
-        let (w, h) = (cfg.width as usize, cfg.height as usize);
-        let gray = [vec![16u8; w * h], vec![128u8; w * h / 2]].concat();
+        // The gray frame and the buffer for its coded data are allocated fallibly: an 8192 × 8192
+        // stream needs 96 MiB for each.
+        let luma = (cfg.width as usize).saturating_mul(cfg.height as usize);
+        let size = luma.saturating_add(luma / 2);
+        let no_memory = |e| Error::Failed(format!("no memory for a {}x{} frame: {e}", cfg.width, cfg.height));
+        let mut gray = Vec::new();
+        gray.try_reserve_exact(size).map_err(no_memory)?;
+        gray.resize(luma, 16u8);
+        gray.resize(size, 128u8);
         session.submit(&gray, &gop.next()).map_err(Error::Failed)?;
-        let mut coded = Vec::with_capacity(gray.len());
+        let mut coded = Vec::new();
+        coded.try_reserve_exact(size).map_err(no_memory)?;
         if !session.collect(&mut coded).map_err(Error::Failed)? {
             return Err(Error::Failed("the encoder returned no frame".into()));
         }
@@ -384,7 +392,9 @@ mod tests {
         let idr = Picture { idr: true, order: 0, idr_id: 1 };
         let pic = h264_picture(&idr, VAProfileH264High, Control::Cqp(23), 10, 9, 5);
         assert_eq!((pic.CurrPic.picture_id, pic.coded_buf, pic.frame_num, pic.pic_init_qp), (10, 5, 0, 23));
-        assert_eq!(pic.pic_fields, 1 | 1 << 1 | 1 << 3 | 1 << 7 | 1 << 8, "IDR, reference, CABAC, 8x8 transform, deblocking control");
+        assert_eq!(pic.pic_fields, 1 | 1 << 1 | 1 << 3 | 1 << 8 | 1 << 9, "IDR, reference, CABAC, 8x8 transform, deblocking control");
+        let main = h264_picture(&idr, VAProfileH264Main, Control::Cqp(23), 10, 9, 5);
+        assert_eq!(main.pic_fields, 1 | 1 << 1 | 1 << 3 | 1 << 9, "no 8x8 transform in Main");
         assert!(pic.ReferenceFrames.iter().all(|r| r.picture_id == VA_INVALID_SURFACE));
         let slice = h264_slice(&idr, 8160, 9);
         assert_eq!((slice.slice_type, slice.num_macroblocks, slice.idr_pic_id, slice.pic_order_cnt_lsb), (2, 8160, 1, 0));
@@ -393,7 +403,7 @@ mod tests {
         let p5 = Picture { idr: false, order: 5, idr_id: 1 };
         let pic = h264_picture(&p5, VAProfileH264ConstrainedBaseline, Control::Cbr(1000), 11, 10, 6);
         assert_eq!((pic.frame_num, pic.pic_init_qp, pic.CurrPic.TopFieldOrderCnt), (5, 26, 10));
-        assert_eq!(pic.pic_fields, 1 << 1 | 1 << 8, "no CABAC or 8x8 transform in Constrained Baseline");
+        assert_eq!(pic.pic_fields, 1 << 1 | 1 << 9, "no CABAC or 8x8 transform in Constrained Baseline");
         assert_eq!((pic.ReferenceFrames[0].picture_id, pic.ReferenceFrames[0].frame_idx, pic.ReferenceFrames[0].TopFieldOrderCnt), (10, 4, 8));
         assert_eq!(pic.ReferenceFrames[0].flags, VA_PICTURE_H264_SHORT_TERM_REFERENCE);
         let slice = h264_slice(&p5, 8160, 10);
