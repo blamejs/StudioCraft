@@ -6,19 +6,24 @@ use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-use craft_hwenc::{Cancel, Candidate, Choice, Error as HwError, FfmpegProber, Input, Os, Preference, ProbeCache, Prober, Target, Vendor};
+use craft_hwenc::{
+    Cancel, Candidate, Choice, Error as HwError, FfmpegProber, Input, Os, Outcome, PROBE_HEIGHT, PROBE_WIDTH, Preference, ProbeCache, Prober, Target,
+    Vendor,
+};
+use studiocraft_encode::{Nvenc, SessionError};
 use studiocraft_engine::mixer::MixerCmd;
 use studiocraft_media::Tick;
 use studiocraft_media::audio::SAMPLE_RATE;
 use studiocraft_media::queue::Fifo;
 use studiocraft_media::stats::EncoderStats;
 use studiocraft_media::video::{PixelFormat, PooledFrame};
-use studiocraft_model::{Profile, RecordingQuality, Settings};
+use studiocraft_model::{Profile, RecordingFormat, RecordingQuality, Settings};
 use studiocraft_outputs::encoders::HARDWARE;
 use studiocraft_outputs::replay::MAX_SAVES;
 use studiocraft_platform::ffmpeg;
 use studiocraft_plugin::{
-    Availability, Encoder, EncoderEnv, EncoderKind, OutputInstance, OutputJob, OutputStatus, PluginError, RateControl, VideoFormat,
+    Availability, Encoder, EncoderEnv, EncoderKind, OutputInstance, OutputJob, OutputStatus, Plugin, PluginError, RateControl, VideoFormat,
+    VideoParams, VideoSession,
 };
 
 use crate::{Notice, Studio, StudioError};
@@ -509,7 +514,91 @@ fn encoder_failed(candidate: &Candidate, error: &str) -> bool {
     match craft_hwenc::classify(error) {
         craft_hwenc::Outcome::Busy(_) => false,
         craft_hwenc::Outcome::NoDevice(_) => true,
-        _ => error.contains(candidate.ffmpeg_codec),
+        // A built-in encoder's messages start with its name, which contains the candidate's.
+        _ => error.contains(candidate.ffmpeg_codec) || error.contains(candidate.name),
+    }
+}
+
+/// Tests the hardware encoders for an MKV recording: an encoder that also runs in this process
+/// (NVENC H.264 and HEVC) is tested by opening it there and encoding one frame, and the others
+/// are tested in the ffmpeg program.
+struct BuiltInFirst {
+    ffmpeg: FfmpegProber,
+    fps: (u32, u32),
+    rate: RateControl,
+}
+
+impl BuiltInFirst {
+    fn test(&self, encoder: Nvenc) -> Outcome {
+        let params = VideoParams { width: PROBE_WIDTH, height: PROBE_HEIGHT, fps_num: self.fps.0, fps_den: self.fps.1, rate: self.rate };
+        let mut session = match encoder.try_session(&params) {
+            Ok(s) => s,
+            // Not kept in the test cache: the next start tests again.
+            Err(SessionError::Busy(why)) => return Outcome::Busy(why),
+            Err(SessionError::Other(PluginError::Unavailable(why))) => return Outcome::NoDevice(why),
+            Err(SessionError::Other(e)) => return Outcome::Failed(e.to_string()),
+        };
+        let gray = [vec![16u8; (PROBE_WIDTH * PROBE_HEIGHT) as usize], vec![128u8; (PROBE_WIDTH * PROBE_HEIGHT / 2) as usize]].concat();
+        let mut packets = Vec::new();
+        if let Err(e) = session.encode(&gray, 0, &mut packets) {
+            return Outcome::Failed(e.to_string());
+        }
+        if let Err(e) = session.flush(&mut packets) {
+            return Outcome::Failed(e.to_string());
+        }
+        if packets.is_empty() { Outcome::Failed(format!("{} returned no packet for its test frame", encoder.name())) } else { Outcome::Works }
+    }
+}
+
+/// The path the tests and failures of the encoders that run in this process are kept under, apart
+/// from the same candidates run in ffmpeg.
+const IN_PROCESS: &str = "<in process>";
+
+impl Prober for BuiltInFirst {
+    fn program(&self) -> &Path {
+        self.ffmpeg.program()
+    }
+    fn runs_in(&self, candidate: &'static Candidate) -> &Path {
+        match Nvenc::for_candidate(candidate.id) {
+            Some(_) => Path::new(IN_PROCESS),
+            None => self.ffmpeg.program(),
+        }
+    }
+    fn probe(&self, candidate: &'static Candidate, input: Input, cancel: &Cancel) -> Outcome {
+        match Nvenc::for_candidate(candidate.id).filter(|_| input == Input::Nv12) {
+            Some(_) if cancel.is_canceled() => Outcome::Canceled,
+            Some(encoder) => self.test(encoder),
+            // Without ffmpeg the encoders that run in this process are still tested.
+            None => match self.ffmpeg.probe(candidate, input, cancel) {
+                Outcome::FfmpegMissing(why) => Outcome::NoDevice(why),
+                o => o,
+            },
+        }
+    }
+    fn args(&self, candidate: &'static Candidate, input: Input) -> Vec<String> {
+        match Nvenc::for_candidate(candidate.id).filter(|_| input == Input::Nv12) {
+            // Kept apart from the ffmpeg encoder's results in the cache.
+            Some(encoder) => vec![encoder.id().to_string(), format!("{:?}", self.rate), format!("{}/{}", self.fps.0, self.fps.1)],
+            None => self.ffmpeg.args(candidate, input),
+        }
+    }
+}
+
+/// Whether the `hardware` choice of output `kind` runs NVENC in this process: an MKV recording
+/// that is not lossless, since the built-in encoders have no lossless mode.
+fn runs_built_in(p: &Profile, kind: OutputKind, rate: RateControl) -> bool {
+    kind == OutputKind::Recording && p.output.format == RecordingFormat::Mkv && rate != RateControl::Lossless
+}
+
+/// `resolved` with a hardware encoder that also runs in this process replaced by that built-in
+/// encoder.
+fn built_in_twin(resolved: Resolved) -> Resolved {
+    match resolved {
+        (id, Some(run), notice) => match Nvenc::for_candidate(&id) {
+            Some(encoder) => (encoder.id().to_string(), Some(run), notice),
+            None => (id, Some(run), notice),
+        },
+        other => other,
     }
 }
 
@@ -535,7 +624,7 @@ fn resolve_hardware(
     };
     let target = Target { vendor: Vendor::from_pci_id(vendor), os: Os::current(), codec, input: Input::Nv12, lossless };
     match craft_hwenc::resolve(&preference, target, prober, cache, cancel) {
-        Ok(Choice::Hardware(c)) => Ok((c.id.to_string(), Some(HardwareRun { candidate: c, program: prober.program().to_path_buf(), auto }), None)),
+        Ok(Choice::Hardware(c)) => Ok((c.id.to_string(), Some(HardwareRun { candidate: c, program: prober.runs_in(c).to_path_buf(), auto }), None)),
         Ok(Choice::Software { tried }) => {
             for (c, outcome) in &tried {
                 log::info!("{} was not used: {outcome}", c.name);
@@ -590,10 +679,13 @@ impl Studio {
                 Some((c.id, a))
             })
             .collect();
-        let prober = FfmpegProber::new(program, offered).with_timeout(PROBE_TIMEOUT).with_encode_args(Box::new(move |c, _| args.get(c.id).cloned()));
+        let ffmpeg = FfmpegProber::new(program, offered).with_timeout(PROBE_TIMEOUT).with_encode_args(Box::new(move |c, _| args.get(c.id).cloned()));
         let vendor = self.gpu.as_ref().and_then(|g| g.adapter()).map_or(0, |a| a.vendor);
         let stream = kind == OutputKind::Streaming;
         let lossless = planned.rate == RateControl::Lossless;
+        let built_in = runs_built_in(&self.profile, kind, planned.rate);
+        let prober: Box<dyn Prober + Send> =
+            if built_in { Box::new(BuiltInFirst { ffmpeg, fps: (v.fps_num, v.fps_den.max(1)), rate: planned.rate }) } else { Box::new(ffmpeg) };
         let preference = named.map_or_else(|| self.profile.output.hardware_encoder.clone(), String::from);
         // A test passed before another output took an encoder says nothing about a second session.
         let encoding = self.outputs.active.values().any(|a| a.hardware.is_some());
@@ -607,7 +699,8 @@ impl Studio {
                 let _ = h.join();
             }
             let _one_at_a_time = probing.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-            resolve_hardware(&preference, vendor, stream, lossless, &prober, &cache, &c)
+            let resolved = resolve_hardware(&preference, vendor, stream, lossless, prober.as_ref(), &cache, &c);
+            if built_in { resolved.map(built_in_twin) } else { resolved }
         });
         match handle {
             Ok(handle) => {
@@ -685,8 +778,17 @@ impl Studio {
         let mut encoder = registry.encoder(&planned.encoder_id)?;
         let mut hardware = None;
         let program = if encoder.ffmpeg().is_some() || encoder.id() == HARDWARE {
-            let program = ffmpeg::locate(&self.profile.output.ffmpeg_path).map_err(|e| StudioError::Output(e.to_string()))?;
-            let offered = self.outputs.encoders.entry(program.clone()).or_insert_with(|| ffmpeg::encoders(&program)).clone();
+            let located = ffmpeg::locate(&self.profile.output.ffmpeg_path).map_err(|e| StudioError::Output(e.to_string()));
+            // The `hardware` choice of an MKV recording can still run NVENC without ffmpeg.
+            let (program, missing) = match located {
+                Ok(program) => (program, None),
+                Err(e) if encoder.id() == HARDWARE && runs_built_in(&self.profile, kind, planned.rate) => (PathBuf::new(), Some(e)),
+                Err(e) => return Err(e),
+            };
+            let offered = match missing {
+                Some(_) => Vec::new(),
+                None => self.outputs.encoders.entry(program.clone()).or_insert_with(|| ffmpeg::encoders(&program)).clone(),
+            };
             // A VA-API encoder chosen by name is tested too, to find the render node it encodes on.
             let vaapi = craft_hwenc::candidate(encoder.id()).filter(|c| c.api == craft_hwenc::Api::Vaapi).map(|c| c.id);
             if encoder.id() == HARDWARE || vaapi.is_some() {
@@ -701,6 +803,11 @@ impl Studio {
                 planned.encoder_id = id;
                 hardware = run;
                 self.notices.extend(notice);
+            }
+            if let Some(e) = missing
+                && encoder.ffmpeg().is_some()
+            {
+                return Err(e);
             }
             check_encoder(encoder.as_ref(), &offered, kind)?;
             if hardware.is_none()
@@ -892,6 +999,43 @@ mod tests {
         assert!(!encoder_failed(nvenc, "ffmpeg stopped: Connection reset by peer"), "a network error is not the encoder's");
         let busy = "ffmpeg stopped: [h264_nvenc @ 0000021] OpenEncodeSessionEx failed: incompatible client key (21)";
         assert!(!encoder_failed(nvenc, busy), "a full session is tried again at the next start");
+        assert!(encoder_failed(nvenc, "NVIDIA NVENC H.264 (built in) stopped: encoding a picture failed (8)"), "the built-in encoder's failure");
+    }
+
+    #[test]
+    fn an_mkv_recording_tests_nvenc_in_this_process_and_runs_the_built_in_encoder() {
+        let run = |id: &'static str| HardwareRun { candidate: craft_hwenc::candidate(id).unwrap(), program: PathBuf::from("ffmpeg"), auto: true };
+        assert_eq!(built_in_twin(("nvenc_h264".into(), Some(run("nvenc_h264")), None)).0, "nvenc_native_h264");
+        assert_eq!(built_in_twin(("nvenc_hevc".into(), Some(run("nvenc_hevc")), None)).0, "nvenc_native_hevc");
+        assert_eq!(built_in_twin(("amf_h264".into(), Some(run("amf_h264")), None)).0, "amf_h264", "no built-in twin");
+        assert_eq!(built_in_twin(("x264".into(), None, None)).0, "x264");
+
+        // The ffmpeg program does not exist: only the in-process test can say anything else.
+        let ffmpeg = FfmpegProber::new("missing-ffmpeg-for-the-test", Vec::new());
+        let p = BuiltInFirst { ffmpeg, fps: (30, 1), rate: RateControl::Quality(23) };
+        let nvenc = craft_hwenc::candidate("nvenc_h264").unwrap();
+        let amf = craft_hwenc::candidate("amf_h264").unwrap();
+        match p.probe(nvenc, Input::Nv12, &Cancel::new()) {
+            Outcome::Works => {}
+            Outcome::NoDevice(why) => assert!(why.starts_with("NVIDIA NVENC H.264 (built in) cannot run on this system"), "{why}"),
+            other => panic!("{other:?}"),
+        }
+        // AMF is tested in ffmpeg; a missing ffmpeg does not stop the tests before NVENC.
+        assert!(matches!(p.probe(amf, Input::Nv12, &Cancel::new()), Outcome::NoDevice(why) if why.contains("was not found")));
+        let canceled = Cancel::new();
+        canceled.cancel();
+        assert_eq!(p.probe(nvenc, Input::Nv12, &canceled), Outcome::Canceled);
+        assert_ne!(p.args(nvenc, Input::Nv12), p.ffmpeg.args(nvenc, Input::Nv12), "kept apart in the cache");
+        assert_eq!(p.args(amf, Input::Nv12), p.ffmpeg.args(amf, Input::Nv12));
+        let ffmpeg = FfmpegProber::new("missing-ffmpeg-for-the-test", Vec::new());
+        let at_60 = BuiltInFirst { ffmpeg, fps: (60, 1), rate: RateControl::Quality(23) };
+        assert_ne!(at_60.args(nvenc, Input::Nv12), p.args(nvenc, Input::Nv12), "another frame rate is tested again");
+        // A failure of the built-in encoder while it records does not stop ffmpeg's NVENC.
+        assert_eq!((p.runs_in(nvenc), p.runs_in(amf)), (Path::new(IN_PROCESS), p.program()));
+        let cache = ProbeCache::new();
+        cache.mark_failed(p.runs_in(nvenc), nvenc, "lost its last frames");
+        assert!(matches!(cache.get(&p, nvenc, Input::Nv12), Some(Outcome::Failed(_))));
+        assert_eq!(cache.get(&p.ffmpeg, nvenc, Input::Nv12), None);
     }
 
     /// An output that failed while it ran.

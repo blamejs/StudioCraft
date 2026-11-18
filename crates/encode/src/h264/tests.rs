@@ -33,7 +33,7 @@ fn round_trip(session: &mut dyn VideoSession, frames: &[Vec<u8>]) -> Vec<Picture
     for (i, f) in frames.iter().enumerate() {
         session.encode(f, i as i64, &mut packets).unwrap();
     }
-    session.flush(&mut packets);
+    session.flush(&mut packets).unwrap();
     assert_eq!(packets.len(), frames.len(), "one packet per frame");
     let mut dec = Decoder::from_avcc(&session.codec_private()).unwrap();
     let mut pictures = Vec::new();
@@ -120,7 +120,7 @@ fn bitrate_mode_has_a_fixed_group_of_pictures_and_no_b_frames() {
     for n in 0..75 {
         s.encode(&moving(64, 48, n * 7), n as i64, &mut packets).unwrap();
     }
-    s.flush(&mut packets);
+    s.flush(&mut packets).unwrap();
     let keys: Vec<i64> = packets.iter().filter(|p| p.keyframe).map(|p| p.pts).collect();
     assert_eq!(keys, [0, 30, 60]);
     assert!(packets.iter().all(|p| p.pts == p.dts), "frames are coded in display order");

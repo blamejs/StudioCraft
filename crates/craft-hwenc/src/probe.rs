@@ -81,6 +81,12 @@ impl Cancel {
 pub trait Prober: Sync {
     /// The ffmpeg program the encodes run in; outcomes are cached per program.
     fn program(&self) -> &Path;
+    /// The program `candidate`'s encodes run in: by default [`Prober::program`]. Its outcomes and
+    /// its failures while encoding are kept under this path.
+    fn runs_in(&self, candidate: &'static Candidate) -> &Path {
+        let _ = candidate;
+        self.program()
+    }
     /// Encode one frame of `input` with `candidate`.
     fn probe(&self, candidate: &'static Candidate, input: Input, cancel: &Cancel) -> Outcome;
     /// The arguments after the input that the test encode of `candidate` runs with: by default

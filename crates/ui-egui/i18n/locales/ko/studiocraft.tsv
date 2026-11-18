@@ -120,6 +120,8 @@
 	General	일반
 	Go Live	방송 시작
 	H.264 (built in)	H.264 (내장)
+	NVIDIA NVENC H.264 (built in)	NVIDIA NVENC H.264 (내장)
+	NVIDIA NVENC HEVC (built in)	NVIDIA NVENC HEVC (내장)
 	Height	높이
 	Help	도움말
 	Hide	숨기기

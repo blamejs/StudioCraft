@@ -61,9 +61,11 @@ and Linux.
   separately installed `ffmpeg` with the software x264 encoder or a hardware encoder (NVIDIA NVENC,
   AMD AMF, Intel Quick Sync, Windows Media Foundation, VideoToolbox, VA-API). The Hardware encoder
   runs the one set in Settings › Video › Hardware acceleration; Automatic tests each with one frame
-  and falls back to x264. x264 is the default encoder for recordings
+  and falls back to x264. NVIDIA NVENC H.264 and HEVC (built in) record MKV files through the
+  NVIDIA driver without `ffmpeg` on Windows and 64-bit Linux, and the Hardware encoder uses them for
+  MKV recordings. x264 is the default encoder for recordings
   and streams. Settings › Output and Settings › Stream show the chosen encoder's settings, such as
-  the x264 and NVENC presets. Tools › Available Encoders lists H.264 (built in) and the encoders the
+  the x264 and NVENC presets. Tools › Available Encoders lists the built-in encoders and the encoders the
   installed `ffmpeg` offers, and says when `ffmpeg` was not found.
 - **Replay buffer.** File › Replay Buffer keeps the last seconds of the program in memory with the
   built-in H.264 and AAC encoders, and File › Save Replay writes them to an MKV file named

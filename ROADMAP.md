@@ -71,6 +71,9 @@
   Video › Hardware acceleration. Automatic tests each candidate with a one-frame encode, in an order
   set by the graphics adapter's vendor, and uses x264 when none works. NVENC, AMF and Quick Sync
   offer HEVC and AV1 as well, and VideoToolbox and VA-API are listed.
+- NVIDIA NVENC H.264 and HEVC (built in) run through the NVIDIA driver in StudioCraft's own
+  process, on Windows and 64-bit Linux, for MKV recordings without `ffmpeg`. For an MKV recording
+  the Hardware encoder tests NVENC in the process and records with the built-in encoder.
 
 ## Next
 

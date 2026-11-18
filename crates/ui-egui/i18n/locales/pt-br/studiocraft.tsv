@@ -120,6 +120,8 @@
 	General	Geral
 	Go Live	Entrar ao vivo
 	H.264 (built in)	H.264 (integrado)
+	NVIDIA NVENC H.264 (built in)	NVIDIA NVENC H.264 (integrado)
+	NVIDIA NVENC HEVC (built in)	NVIDIA NVENC HEVC (integrado)
 	Height	Altura
 	Help	Ajuda
 	Hide	Ocultar

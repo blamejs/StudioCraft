@@ -16,6 +16,8 @@ studiocraft-platform.workspace = true
 studiocraft-sources.workspace = true
 craft-hwenc.workspace = true
 studiocraft-outputs.workspace = true
+# The built-in NVENC encoders, tested in this process for MKV recordings.
+studiocraft-encode.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 log.workspace = true

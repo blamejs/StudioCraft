@@ -700,6 +700,34 @@ fn hardware_encoder_tests_run_off_the_calling_thread_and_a_second_toggle_cancels
 }
 
 #[test]
+fn without_ffmpeg_only_an_mkv_recording_tests_the_hardware_encoders() {
+    let dir = std::env::temp_dir().join(format!("studiocraft-no-ffmpeg-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut p = Profile::default();
+    p.output.ffmpeg_path = dir.join("ffmpeg-missing").to_string_lossy().into_owned();
+    p.output.video_encoder = "hardware".into();
+    p.output.format = studiocraft_model::RecordingFormat::Mkv;
+    p.output.folder = dir.to_string_lossy().into_owned();
+    p.stream.video_encoder = "hardware".into();
+    p.stream.server = "rtmp://127.0.0.1/live".into();
+    let mut s = studio_with(Some(noop_gpu()), SceneCollection::new("Test", "Scene"), p.clone());
+    s.start_output(OutputKind::Recording).unwrap();
+    assert!(s.testing_hardware(OutputKind::Recording), "NVENC can still run in this process");
+    while s.testing_hardware(OutputKind::Recording) {
+        s.tick();
+        std::thread::yield_now();
+    }
+    s.stop_output(OutputKind::Recording);
+    let e = s.start_output(OutputKind::Streaming).unwrap_err().to_string();
+    assert!(e.contains("ffmpeg"), "{e}");
+    assert!(!s.testing_hardware(OutputKind::Streaming));
+    p.output.format = studiocraft_model::RecordingFormat::Mp4;
+    let mut s = studio_with(Some(noop_gpu()), SceneCollection::new("Test", "Scene"), p);
+    assert!(s.start_output(OutputKind::Recording).is_err(), "an MP4 recording runs in ffmpeg");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn graphics_notices_name_the_adapter_and_the_count() {
     use studiocraft_render::device::Notice as N;
     let n = gpu_notice(&N::SoftwareAfterLosses(3));

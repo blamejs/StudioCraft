@@ -218,7 +218,9 @@ impl VideoSession for StuckSession {
         let _ = self.0.recv();
         Ok(())
     }
-    fn flush(&mut self, _: &mut Vec<Packet>) {}
+    fn flush(&mut self, _: &mut Vec<Packet>) -> Result<(), PluginError> {
+        Ok(())
+    }
 }
 
 impl Encoder for Stuck {
@@ -247,6 +249,56 @@ fn a_recording_not_finished_in_time_fails_and_leaves_the_file() {
     let file = std::fs::read(&path).unwrap();
     let _ = std::fs::remove_dir_all(path.parent().unwrap());
     assert!(Demuxer::from_slice(&file).is_ok(), "the header was written");
+}
+
+/// A video encoder that loses its last frames when it is flushed.
+struct LosesLastFrames;
+
+impl Plugin for LosesLastFrames {
+    fn id(&self) -> &'static str {
+        "loses_last_frames"
+    }
+    fn name(&self) -> &'static str {
+        "Loses Last Frames"
+    }
+    fn schema(&self) -> SettingsSchema {
+        SettingsSchema::default()
+    }
+}
+
+impl VideoSession for LosesLastFrames {
+    fn codec_private(&self) -> Vec<u8> {
+        Vec::new()
+    }
+    fn encode(&mut self, _: &[u8], _: i64, _: &mut Vec<Packet>) -> Result<(), PluginError> {
+        Ok(())
+    }
+    fn flush(&mut self, _: &mut Vec<Packet>) -> Result<(), PluginError> {
+        Err(PluginError::Failed("the encoder lost its last frames".into()))
+    }
+}
+
+impl Encoder for LosesLastFrames {
+    fn codec(&self) -> Codec {
+        Codec::H264
+    }
+    fn open(&self, _: &Settings, _: &VideoParams) -> Result<Box<dyn VideoSession>, PluginError> {
+        Ok(Box::new(LosesLastFrames))
+    }
+}
+
+#[test]
+fn a_flush_that_fails_fails_the_recording() {
+    let path = temp_file("flush");
+    let mut j = job(RateControl::Quality(20));
+    j.video_encoder = Arc::new(LosesLastFrames);
+    let mut n = Native::start(&j, &path).unwrap();
+    feed(&n.video(), &n.audio(), 0.2);
+    let result = n.end(Duration::from_secs(30));
+    let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    let Err(e) = result else { panic!("a recording that lost its last frames finished") };
+    assert!(e.to_string().contains("lost its last frames"), "{e}");
+    assert!(matches!(n.status(), OutputStatus::Failed(_)));
 }
 
 fn item(track: Track, order_ns: i64, bytes: usize) -> Item {
@@ -333,6 +385,17 @@ fn only_mkv_files_and_48_khz_are_taken() {
     let Err(e) = Native::start(&job(RateControl::Lossless), &path) else { panic!("a lossless recording started") };
     assert!(e.to_string().contains("losslessly"), "{e}");
     let _ = std::fs::remove_dir_all(path.parent().unwrap());
+}
+
+#[test]
+fn the_video_track_names_the_encoder_codec() {
+    let aac = AacSession::new(128).unwrap();
+    let h264 = tracks(&job(RateControl::Quality(20)), vec![1], &aac);
+    assert_eq!((h264[0].codec_id.as_str(), h264[0].codec_private.as_slice()), ("V_MPEG4/ISO/AVC", &[1u8][..]));
+    let mut j = job(RateControl::Quality(20));
+    j.video_encoder = Arc::new(studiocraft_encode::Nvenc::HEVC);
+    let hevc = tracks(&j, vec![2], &aac);
+    assert_eq!((hevc[0].codec_id.as_str(), hevc[0].codec_private.as_slice()), ("V_MPEGH/ISO/HEVC", &[2u8][..]));
 }
 
 #[test]

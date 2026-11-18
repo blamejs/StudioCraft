@@ -32,6 +32,7 @@ craft-audio-dsp = { path = "crates/craft-audio-dsp" }
 craft-gpu-device = { path = "crates/craft-gpu-device" }
 craft-gpu-yuv = { path = "crates/craft-gpu-yuv" }
 craft-hwenc = { path = "crates/craft-hwenc" }
+craft-hwenc-native = { path = "crates/craft-hwenc-native" }
 
 # foundation
 thiserror = "2"

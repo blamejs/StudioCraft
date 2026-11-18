@@ -69,7 +69,7 @@ fn run(width: u32, height: u32, fps: u32, preset: &str, seconds: f64, threads: O
         session.encode(&frames[i % frames.len()], i as i64, &mut out).map_err(|e| e.to_string())?;
         out.clear();
     }
-    session.flush(&mut out);
+    session.flush(&mut out).map_err(|e| e.to_string())?;
     let wall = start.elapsed().as_secs_f64();
     let coded_per_s = timed as f64 / wall;
     Ok((coded_per_s, 100.0 * f64::from(fps) / coded_per_s))

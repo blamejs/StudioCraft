@@ -205,7 +205,9 @@
 	None	None
 	not in this ffmpeg	not in this ffmpeg
 	NVIDIA NVENC H.264	NVIDIA NVENC H.264
+	NVIDIA NVENC H.264 (built in)	NVIDIA NVENC H.264 (built in)
 	NVIDIA NVENC HEVC	NVIDIA NVENC HEVC
+	NVIDIA NVENC HEVC (built in)	NVIDIA NVENC HEVC (built in)
 	OK	OK
 	Opacity (%)	Opacity (%)
 	Open above (dB)	Open above (dB)

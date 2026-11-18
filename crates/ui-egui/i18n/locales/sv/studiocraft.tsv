@@ -120,6 +120,8 @@
 	General	Allmänt
 	Go Live	Sänd live
 	H.264 (built in)	H.264 (inbyggd)
+	NVIDIA NVENC H.264 (built in)	NVIDIA NVENC H.264 (inbyggd)
+	NVIDIA NVENC HEVC (built in)	NVIDIA NVENC HEVC (inbyggd)
 	Height	Höjd
 	Help	Hjälp
 	Hide	Dölj

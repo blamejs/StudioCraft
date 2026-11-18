@@ -94,7 +94,7 @@ impl ProbeCache {
 
     /// The kept outcome of `candidate` with `prober`'s program and arguments for `input`.
     pub fn get(&self, prober: &dyn Prober, candidate: &'static Candidate, input: Input) -> Option<Outcome> {
-        let program = prober.program().to_path_buf();
+        let program = prober.runs_in(candidate).to_path_buf();
         if let Some(why) = self.failed.lock().unwrap_or_else(PoisonError::into_inner).get(&(program.clone(), candidate.id)) {
             return Some(Outcome::Failed(why.clone()));
         }
@@ -111,7 +111,7 @@ impl ProbeCache {
         let o = prober.probe(candidate, input, cancel);
         // A busy device has a free session again once another program stops encoding.
         if !matches!(o, Outcome::Canceled | Outcome::FfmpegMissing(_) | Outcome::Busy(_)) {
-            let key = (prober.program().to_path_buf(), candidate.id, input, prober.args(candidate, input));
+            let key = (prober.runs_in(candidate).to_path_buf(), candidate.id, input, prober.args(candidate, input));
             self.outcomes.lock().unwrap_or_else(PoisonError::into_inner).insert(key, o.clone());
         }
         o

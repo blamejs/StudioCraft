@@ -208,14 +208,15 @@ fn a_built_in_recording_plays_in_ffmpeg() {
 }
 
 #[test]
-fn the_built_in_encoder_is_listed_after_the_ffmpeg_ones() {
+fn the_built_in_encoders_are_listed_after_the_ffmpeg_ones() {
     use studiocraft_plugin::Encoder;
     let mut reg = Registry::new();
     register_all(&mut reg).unwrap();
     let ids: Vec<&str> = reg.encoders().iter().map(|e| e.id()).collect();
-    assert_eq!(ids.last(), Some(&"h264"), "{ids:?}");
-    let h264 = reg.encoder("h264").unwrap();
-    assert!(h264.ffmpeg().is_none());
+    assert_eq!(ids[ids.len().saturating_sub(4)..], ["hardware", "h264", "nvenc_native_h264", "nvenc_native_hevc"], "{ids:?}");
+    for id in ["h264", "nvenc_native_h264", "nvenc_native_hevc"] {
+        assert!(reg.encoder(id).unwrap().ffmpeg().is_none(), "{id}");
+    }
     assert_eq!(reg.describe()["encoders"].as_array().and_then(|a| a.last()).map(|e| e["builtin"].clone()), Some(true.into()));
     let params = studiocraft_plugin::VideoParams { width: 64, height: 48, fps_num: 30, fps_den: 1, rate: RateControl::Quality(23) };
     for e in encoders::all() {
