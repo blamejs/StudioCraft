@@ -221,12 +221,28 @@ pub fn driver() -> Result<(), String> {
     api().map(|_| ())
 }
 
+/// Why a session did not open.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum OpenError {
+    /// No NVIDIA GPU, driver or encode library.
+    NoDevice(String),
+    /// The GPU has no free encoding session; another program holds them.
+    Busy(String),
+}
+
+/// Whether `s`, returned by `nvEncOpenEncodeSessionEx`, means every session of the GPU is taken.
+/// The driver gives `NV_ENC_ERR_OUT_OF_MEMORY` for a full session count, and
+/// `NV_ENC_ERR_INCOMPATIBLE_CLIENT_KEY` or `NV_ENC_ERR_ENCODER_BUSY` on some drivers.
+pub(crate) fn busy(s: NvStatus) -> bool {
+    matches!(s, NV_ENC_ERR_OUT_OF_MEMORY | NV_ENC_ERR_ENCODER_BUSY | NV_ENC_ERR_INCOMPATIBLE_CLIENT_KEY)
+}
+
 impl Session {
     /// Open a session on the system's NVIDIA GPU, or say why not.
-    pub fn open() -> Result<Session, String> {
-        let api = api()?;
-        let device = Device::new()?;
-        let open = api.list.nvEncOpenEncodeSessionEx.ok_or("the driver has no nvEncOpenEncodeSessionEx")?;
+    pub fn open() -> Result<Session, OpenError> {
+        let api = api().map_err(OpenError::NoDevice)?;
+        let device = Device::new().map_err(OpenError::NoDevice)?;
+        let open = api.list.nvEncOpenEncodeSessionEx.ok_or_else(|| OpenError::NoDevice("the driver has no nvEncOpenEncodeSessionEx".into()))?;
         // SAFETY: a zeroed parameter block with its version and the device's pointer; the device
         // stays in the session while the encoder lives. After a failed open, a non-null handle is
         // the driver's and is destroyed here, once.
@@ -245,7 +261,7 @@ impl Session {
                 {
                     d(enc);
                 }
-                return Err(e);
+                return Err(if busy(s) { OpenError::Busy(e) } else { OpenError::NoDevice(e) });
             }
             enc
         };

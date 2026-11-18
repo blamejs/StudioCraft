@@ -16,4 +16,4 @@ pub mod nvenc;
 
 pub use aac::AacSession;
 pub use h264::H264;
-pub use nvenc::Nvenc;
+pub use nvenc::{Nvenc, SessionError};

@@ -77,10 +77,12 @@ pub const NV_ENC_SEQUENCE_PARAM_PAYLOAD_VER: u32 = struct_version(1);
 pub type NvStatus = c_int;
 pub const NV_ENC_SUCCESS: NvStatus = 0;
 pub const NV_ENC_ERR_UNSUPPORTED_DEVICE: NvStatus = 2;
+pub const NV_ENC_ERR_OUT_OF_MEMORY: NvStatus = 10;
 pub const NV_ENC_ERR_LOCK_BUSY: NvStatus = 13;
 pub const NV_ENC_ERR_INVALID_VERSION: NvStatus = 15;
 pub const NV_ENC_ERR_NEED_MORE_INPUT: NvStatus = 17;
 pub const NV_ENC_ERR_ENCODER_BUSY: NvStatus = 18;
+pub const NV_ENC_ERR_INCOMPATIBLE_CLIENT_KEY: NvStatus = 21;
 
 pub const NV_ENC_DEVICE_TYPE_DIRECTX: u32 = 0;
 pub const NV_ENC_DEVICE_TYPE_CUDA: u32 = 1;

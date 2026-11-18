@@ -18,6 +18,15 @@ use studiocraft_plugin::{Availability, Codec, Encoder, EncoderEnv, Packet, Plugi
 
 use crate::h264::{KBPS, KEYFRAME_S, RECORDING_KEYFRAME_S};
 
+/// Why [`Nvenc::try_session`] did not open a session.
+#[derive(Debug)]
+pub enum SessionError {
+    /// Every encoding session of the GPU is taken by other programs; a later try can work.
+    Busy(String),
+    /// Any other reason.
+    Other(PluginError),
+}
+
 /// An NVENC encoder of one codec.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Nvenc {
@@ -39,16 +48,29 @@ impl Nvenc {
         }
     }
 
-    /// Open a session for `params` without a registry; the hardware encoder tests use it.
+    /// Open a session for `params` without a registry.
     pub fn session(&self, params: &VideoParams) -> Result<NvencSession, PluginError> {
-        let cfg = config(self.codec, params)?;
-        let core = Core::new(&cfg).map_err(|e| self.error(e))?;
+        self.try_session(params).map_err(|e| match e {
+            SessionError::Busy(why) => PluginError::Unavailable(why),
+            SessionError::Other(e) => e,
+        })
+    }
+
+    /// [`Nvenc::session`], telling a GPU whose sessions are all taken apart from other failures;
+    /// the hardware encoder tests use it.
+    pub fn try_session(&self, params: &VideoParams) -> Result<NvencSession, SessionError> {
+        let cfg = config(self.codec, params).map_err(SessionError::Other)?;
+        let core = Core::new(&cfg).map_err(|e| match e {
+            Error::Busy(why) => SessionError::Busy(format!("{} has no free encoding session: {why}", self.name())),
+            e => SessionError::Other(self.error(e)),
+        })?;
         Ok(NvencSession { core, name: self.name() })
     }
 
     fn error(&self, e: Error) -> PluginError {
         match e {
             Error::NoDevice(why) => PluginError::Unavailable(format!("{} cannot run on this system: {why}", self.name())),
+            Error::Busy(why) => PluginError::Unavailable(format!("{} has no free encoding session: {why}", self.name())),
             Error::Unsupported(why) => PluginError::Unavailable(format!("{} cannot encode this video: {why}", self.name())),
             Error::Failed(why) => PluginError::Failed(format!("{} could not start: {why}", self.name())),
         }

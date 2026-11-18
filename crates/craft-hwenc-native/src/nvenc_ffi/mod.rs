@@ -9,4 +9,4 @@ mod abi_tests;
 mod device;
 mod session;
 
-pub(crate) use session::{Codec, Locked, Params, Rate, Session, Submitted, driver};
+pub(crate) use session::{Codec, Locked, OpenError, Params, Rate, Session, Submitted, driver};

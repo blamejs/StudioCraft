@@ -194,10 +194,12 @@ fn constants_match_the_header() {
         (i64::from(NVENCAPI_VERSION), 16777228, "NVENCAPI_VERSION"),
         (i64::from(NV_ENC_SUCCESS), 0, "NV_ENC_SUCCESS"),
         (i64::from(NV_ENC_ERR_UNSUPPORTED_DEVICE), 2, "NV_ENC_ERR_UNSUPPORTED_DEVICE"),
+        (i64::from(NV_ENC_ERR_OUT_OF_MEMORY), 10, "NV_ENC_ERR_OUT_OF_MEMORY"),
         (i64::from(NV_ENC_ERR_LOCK_BUSY), 13, "NV_ENC_ERR_LOCK_BUSY"),
         (i64::from(NV_ENC_ERR_INVALID_VERSION), 15, "NV_ENC_ERR_INVALID_VERSION"),
         (i64::from(NV_ENC_ERR_NEED_MORE_INPUT), 17, "NV_ENC_ERR_NEED_MORE_INPUT"),
         (i64::from(NV_ENC_ERR_ENCODER_BUSY), 18, "NV_ENC_ERR_ENCODER_BUSY"),
+        (i64::from(NV_ENC_ERR_INCOMPATIBLE_CLIENT_KEY), 21, "NV_ENC_ERR_INCOMPATIBLE_CLIENT_KEY"),
         (i64::from(NV_ENC_DEVICE_TYPE_DIRECTX), 0, "NV_ENC_DEVICE_TYPE_DIRECTX"),
         (i64::from(NV_ENC_MEMORY_HEAP_SYSMEM_CACHED), 2, "NV_ENC_MEMORY_HEAP_SYSMEM_CACHED"),
         (i64::from(NV_ENC_BUFFER_FORMAT_NV12), 1, "NV_ENC_BUFFER_FORMAT_NV12"),
@@ -261,4 +263,15 @@ fn bit_field_masks_match_the_header() {
     assert_eq!(HEVC_PIXEL_BIT_DEPTH_MASK, 0x3800, "NV_ENC_CONFIG_HEVC.pixelBitDepthMinus8");
     assert_eq!(HEVC_CHROMA_FORMAT_MASK >> HEVC_CHROMA_FORMAT_SHIFT, 3, "chromaFormatIDC is 2 bits");
     assert_eq!(HEVC_PIXEL_BIT_DEPTH_MASK >> HEVC_PIXEL_BIT_DEPTH_SHIFT, 7, "pixelBitDepthMinus8 is 3 bits");
+}
+
+#[test]
+fn a_full_session_count_is_busy_and_other_open_failures_are_not() {
+    use super::session::busy;
+    for s in [NV_ENC_ERR_OUT_OF_MEMORY, NV_ENC_ERR_ENCODER_BUSY, NV_ENC_ERR_INCOMPATIBLE_CLIENT_KEY] {
+        assert!(busy(s), "{s}");
+    }
+    for s in [NV_ENC_SUCCESS, NV_ENC_ERR_UNSUPPORTED_DEVICE, NV_ENC_ERR_INVALID_VERSION, NV_ENC_ERR_LOCK_BUSY] {
+        assert!(!busy(s), "{s}");
+    }
 }

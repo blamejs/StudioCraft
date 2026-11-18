@@ -10,7 +10,7 @@ use craft_hwenc::{
     Cancel, Candidate, Choice, Error as HwError, FfmpegProber, Input, Os, Outcome, PROBE_HEIGHT, PROBE_WIDTH, Preference, ProbeCache, Prober, Target,
     Vendor,
 };
-use studiocraft_encode::Nvenc;
+use studiocraft_encode::{Nvenc, SessionError};
 use studiocraft_engine::mixer::MixerCmd;
 use studiocraft_media::Tick;
 use studiocraft_media::audio::SAMPLE_RATE;
@@ -531,10 +531,12 @@ struct BuiltInFirst {
 impl BuiltInFirst {
     fn test(&self, encoder: Nvenc) -> Outcome {
         let params = VideoParams { width: PROBE_WIDTH, height: PROBE_HEIGHT, fps_num: self.fps.0, fps_den: self.fps.1, rate: self.rate };
-        let mut session = match encoder.session(&params) {
+        let mut session = match encoder.try_session(&params) {
             Ok(s) => s,
-            Err(PluginError::Unavailable(why)) => return Outcome::NoDevice(why),
-            Err(e) => return Outcome::Failed(e.to_string()),
+            // Not kept in the test cache: the next start tests again.
+            Err(SessionError::Busy(why)) => return Outcome::Busy(why),
+            Err(SessionError::Other(PluginError::Unavailable(why))) => return Outcome::NoDevice(why),
+            Err(SessionError::Other(e)) => return Outcome::Failed(e.to_string()),
         };
         let gray = [vec![16u8; (PROBE_WIDTH * PROBE_HEIGHT) as usize], vec![128u8; (PROBE_WIDTH * PROBE_HEIGHT / 2) as usize]].concat();
         let mut packets = Vec::new();

@@ -76,6 +76,8 @@ pub struct Packet {
 pub enum Error {
     /// No NVIDIA GPU, driver or encode library on this system.
     NoDevice(String),
+    /// Every encoding session of the GPU is taken by other programs; a later open can work.
+    Busy(String),
     /// The GPU's encoder does not take this configuration.
     Unsupported(String),
     /// The driver failed.
@@ -85,12 +87,21 @@ pub enum Error {
 impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Error::NoDevice(e) | Error::Unsupported(e) | Error::Failed(e) => f.write_str(e),
+            Error::NoDevice(e) | Error::Busy(e) | Error::Unsupported(e) | Error::Failed(e) => f.write_str(e),
         }
     }
 }
 
 impl std::error::Error for Error {}
+
+impl From<nvenc_ffi::OpenError> for Error {
+    fn from(e: nvenc_ffi::OpenError) -> Error {
+        match e {
+            nvenc_ffi::OpenError::NoDevice(why) => Error::NoDevice(why),
+            nvenc_ffi::OpenError::Busy(why) => Error::Busy(why),
+        }
+    }
+}
 
 /// Pictures in flight: input and output buffer pairs.
 const RING: usize = 4;
@@ -105,7 +116,7 @@ pub fn driver() -> Result<(), Error> {
 /// opens a session and closes it again.
 pub fn available() -> Result<(), Error> {
     driver()?;
-    Session::open().map(drop).map_err(Error::NoDevice)
+    Session::open().map(drop).map_err(Error::from)
 }
 
 /// Check `cfg` without the driver: sizes, rate, codec and input.
@@ -143,7 +154,7 @@ impl Encoder {
     /// Open an encoder for `cfg`, or say why this system cannot run it.
     pub fn new(cfg: &Config) -> Result<Encoder, Error> {
         check(cfg)?;
-        let mut session = Session::open().map_err(Error::NoDevice)?;
+        let mut session = Session::open()?;
         let codec = match cfg.codec {
             Codec::H264 => nvenc_ffi::Codec::H264,
             Codec::Hevc => nvenc_ffi::Codec::Hevc,
