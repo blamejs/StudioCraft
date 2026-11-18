@@ -417,3 +417,32 @@
 @msg	The stream stopped: {error}	השידור נעצר: {error}
 @msg	ffmpeg at {path} was not found	ffmpeg לא נמצא ב־{path}
 menu	Transform	שינוי צורה
+	Record as its own track	הקלטה כרצועה נפרדת
+	Audio tracks write this source to a WAV file of its own (Settings › Output › Audio tracks)	רצועות השמע כותבות מקור זה לקובץ WAV משלו (הגדרות › פלט › רצועות שמע)
+	Audio tracks	רצועות שמע
+	Write each recorded source and the program mix to its own WAV file	כתיבת כל מקור מוקלט ומיקס התוכנית לקובץ WAV משלו
+	Write them while	מתי לכתוב
+	Include the program mix	כולל מיקס התוכנית
+	Write buffer	מאגר כתיבה
+	MiB	MiB
+	File size	גודל קובץ
+	GiB	GiB
+	{tracks} tracks take about {gb} GB an hour; the buffer holds {seconds} s of audio while the disk is slow	{tracks} רצועות תופסות כ-{gb} GB לשעה; המאגר מחזיק {seconds} שנ׳ של שמע בזמן שהדיסק איטי
+	A recording runs	כשהקלטה פועלת
+	The stream runs	כשהשידור פועל
+	A recording or the stream runs	כשהקלטה או השידור פועלים
+	The disk is almost full; audio tracks stop before the recording or the stream runs out of space	הדיסק כמעט מלא; רצועות השמע נעצרות לפני שייגמר המקום להקלטה או לשידור
+	{tracks} audio tracks; {lost} s of audio lost while the disk was slow	{tracks} רצועות שמע; {lost} שנ׳ של שמע אבדו בזמן שהדיסק היה איטי
+	TRACKS	רצועות
+	TRACKS stopped	הרצועות נעצרו
+	Audio tracks stopped early; the status message gives the reason	רצועות השמע נעצרו מוקדם; הודעת המצב מציינת את הסיבה
+	Record as Its Own Track	הקלטה כרצועה נפרדת
+	Audio Tracks Status	מצב רצועות השמע
+	Repair Audio Tracks	תיקון רצועות שמע
+@msg	Audio tracks stopped at {time}: the disk is full	רצועות השמע נעצרו ב-{time}: הדיסק מלא
+@msg	Audio tracks stopped at {time}: the disk is almost full	רצועות השמע נעצרו ב-{time}: הדיסק כמעט מלא
+@msg	Audio tracks stopped at {time}: the files could not be created	רצועות השמע נעצרו ב-{time}: לא ניתן היה ליצור את הקבצים
+@msg	Audio tracks stopped at {time}: the free space on the disk could not be read	רצועות השמע נעצרו ב-{time}: לא ניתן היה לקרוא את השטח הפנוי בדיסק
+@msg	Audio tracks stopped at {time}: a file could not be written	רצועות השמע נעצרו ב-{time}: לא ניתן היה לכתוב קובץ
+@msg	Audio tracks could not start: {error}	לא ניתן היה להפעיל את רצועות השמע: {error}
+@msg	Audio tracks repaired after the app closed during a take: {folders}	רצועות השמע תוקנו לאחר שהאפליקציה נסגרה במהלך טייק: {folders}

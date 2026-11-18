@@ -30,6 +30,12 @@
 - The replay buffer: the built-in H.264 and AAC encoders keep the last 5 to 3600 seconds in memory,
   within a memory limit of 32 to 16384 MB (Settings › Output), and File › Save Replay or a
   shortcut writes them to an MKV file while the buffer keeps running.
+- Audio tracks (Settings › Output): while a recording, the stream or either runs, each source set
+  to record its own track (in its Properties window) and the program mix are written to 32-bit
+  float 48 kHz stereo WAV files in an `Audio Files` folder beside the recording. Every file starts
+  at the same moment and keeps time through gaps and slow disks. A full or failing disk stops only
+  the audio tracks, and takes cut short by a crash are repaired at the next start or with
+  `studiocraft-cli audio-tracks repair <folder>`.
 - Recording to MKV, MP4 or MOV, Lossless recording, and RTMP streaming, through an external ffmpeg.
   The encoder's settings, such as the x264 and NVENC presets, are set in Settings › Output and
   Settings › Stream.

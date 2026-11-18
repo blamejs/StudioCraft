@@ -436,3 +436,32 @@
 @msg	The stream stopped: {error}	Vysílání se zastavilo: {error}
 @msg	ffmpeg at {path} was not found	ffmpeg v umístění {path} nebyl nalezen
 menu	Transform	Transformace
+	Record as its own track	Nahrávat jako samostatnou stopu
+	Audio tracks write this source to a WAV file of its own (Settings › Output › Audio tracks)	Zvukové stopy zapisují tento zdroj do samostatného souboru WAV (Nastavení › Výstup › Zvukové stopy)
+	Audio tracks	Zvukové stopy
+	Write each recorded source and the program mix to its own WAV file	Zapisovat každý nahrávaný zdroj a mix programu do samostatného souboru WAV
+	Write them while	Zapisovat, když
+	Include the program mix	Zahrnout mix programu
+	Write buffer	Vyrovnávací paměť zápisu
+	MiB	MiB
+	File size	Velikost souboru
+	GiB	GiB
+	{tracks} tracks take about {gb} GB an hour; the buffer holds {seconds} s of audio while the disk is slow	Stopy ({tracks}) zaberou asi {gb} GB za hodinu; vyrovnávací paměť pojme {seconds} s zvuku, když je disk pomalý
+	A recording runs	Běží nahrávání
+	The stream runs	Běží stream
+	A recording or the stream runs	Běží nahrávání nebo stream
+	The disk is almost full; audio tracks stop before the recording or the stream runs out of space	Disk je téměř plný; zvukové stopy se zastaví dřív, než nahrávce nebo streamu dojde místo
+	{tracks} audio tracks; {lost} s of audio lost while the disk was slow	Zvukové stopy: {tracks}; ztraceno {lost} s zvuku, když byl disk pomalý
+	TRACKS	STOPY
+	TRACKS stopped	STOPY zastaveny
+	Audio tracks stopped early; the status message gives the reason	Zvukové stopy se zastavily předčasně; důvod uvádí stavová zpráva
+	Record as Its Own Track	Nahrávat jako samostatnou stopu
+	Audio Tracks Status	Stav zvukových stop
+	Repair Audio Tracks	Opravit zvukové stopy
+@msg	Audio tracks stopped at {time}: the disk is full	Zvukové stopy se zastavily v {time}: disk je plný
+@msg	Audio tracks stopped at {time}: the disk is almost full	Zvukové stopy se zastavily v {time}: disk je téměř plný
+@msg	Audio tracks stopped at {time}: the files could not be created	Zvukové stopy se zastavily v {time}: soubory nešlo vytvořit
+@msg	Audio tracks stopped at {time}: the free space on the disk could not be read	Zvukové stopy se zastavily v {time}: volné místo na disku nešlo zjistit
+@msg	Audio tracks stopped at {time}: a file could not be written	Zvukové stopy se zastavily v {time}: soubor nešlo zapsat
+@msg	Audio tracks could not start: {error}	Zvukové stopy nešlo spustit: {error}
+@msg	Audio tracks repaired after the app closed during a take: {folders}	Zvukové stopy byly opraveny po zavření aplikace během záznamu: {folders}

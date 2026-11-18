@@ -111,6 +111,16 @@ in both files.
 | Replays saved at once (waiting for the buffer or being written) | 8 | `outputs::replay::MAX_SAVES` | estimated |
 | Replay save wait for the buffer's packets | 5 s | `outputs::replay::ANSWER_WAIT` | estimated |
 | Saved replay file name | `Replay YYYY-MM-DD HH-MM-SS.mkv` | `studio::outputs::replay_path` | estimated |
+| Audio tracks file format | WAV, 32-bit float, 48 kHz, stereo (RF64 above 4 GiB) | `audio_tracks::wav::header` | estimated |
+| Audio tracks write buffer | 96 MiB (16 to 1024 MiB) | `model::profile::AudioTracksSettings` | estimated |
+| Audio tracks file size before the next part | 2 GiB (1 to 3 GiB) | `model::profile::AudioTracksSettings` | estimated |
+| Audio tracks tap queue and pool | 32 and 34 blocks per track | `media::tap::TAP_QUEUE_BLOCKS`, `media::tap::TAP_POOL_BLOCKS` | estimated |
+| Audio tracks chunk | 1 MiB | `audio_tracks::collect::CHUNK_BYTES` | estimated |
+| Audio tracks header rewrite and sync | every 1 s and every 5 s | `audio_tracks::HEADER_EVERY`, `audio_tracks::SYNC_EVERY` | estimated |
+| A source added back continues its file within | 60 s | `audio_tracks::collect::REJOIN_SECONDS` | estimated |
+| Audio tracks stop at free space below | 1 GiB or 120 s of the running outputs, whichever is more | `audio_tracks::space::reserve` | estimated |
+| Audio tracks low-space warning | the stop point plus 600 s of the tracks and outputs | `audio_tracks::space::warning` | estimated |
+| Audio tracks folder | `<recording name> Audio/Audio Files`, or `Stream YYYY-MM-DD HH-MM-SS Audio/Audio Files` for a stream alone | `studio::audio_tracks::take_dir` | estimated |
 
 ## Editing
 

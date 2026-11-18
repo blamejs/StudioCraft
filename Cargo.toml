@@ -22,6 +22,7 @@ studiocraft-platform = { path = "crates/platform" }
 studiocraft-encode = { path = "crates/encode" }
 studiocraft-sources = { path = "crates/sources" }
 studiocraft-outputs = { path = "crates/outputs" }
+studiocraft-audio-tracks = { path = "crates/audio-tracks" }
 studiocraft-studio = { path = "crates/studio" }
 studiocraft-ui-egui = { path = "crates/ui-egui" }
 studiocraft-mcp = { path = "crates/mcp" }
@@ -49,6 +50,8 @@ portable-atomic = "1"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 # The user's Videos folder for recordings.
 dirs = "7"
+# Free space on the disk audio tracks are written to, without unsafe code here.
+fs4 = { version = "1.1", default-features = false, features = ["sync"] }
 criterion = { version = "0.8", default-features = false, features = ["cargo_bench_support"] }
 # contributors/people.toml, read by the engine's build script.
 toml = "1"

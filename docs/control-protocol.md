@@ -51,6 +51,18 @@ milliseconds, a whole number from 0 to 5000; a source without audio is an error.
 plays the source on the monitoring device and leaves it out of recordings and streams.
 `document.inspect` reports `monitoring` with the profile's `device`, whether it is `playing`, and
 the device's `rate` and `channels` while it plays.
+`source.set_record_track` takes `{"source", "on"}`, where `on` is `true` or `false`, and sets
+whether audio tracks write the source to a WAV file of its own; a source without audio is an
+error, and Edit › Undo takes it back. Until it is set, a source heard in the program mix is written
+and a monitor-only source is not. A take writes at most 64 tracks, the program mix included;
+sources after that, in the collection's order, are not written. Counting sources that left or
+were replaced during it, one take makes at most 256 files; a source after that is not written. `audio_tracks.status` takes no params and returns the audio
+tracks settings and the last take's state, as `document.inspect`'s `audio_tracks` entry does.
+`audio_tracks.repair` takes `{"folder"}` and repairs the takes in it that ended without finishing
+their files; it returns `{"repaired": [{"folder", "files": [{"file", "seconds"}]}], "failed":
+[{"folder", "error"}]}`, where `failed` lists each take that could not be repaired, such as one
+whose journal does not read, and an empty `folder` or one that does not exist is an error. A take
+that is still being written is left unchanged.
 
 `dock.layout_save` takes `{"name"}` and saves every dock setting under that name, replacing a
 layout whose name differs only in case; it returns `{"saved", "replaced"}`. Without `name` it

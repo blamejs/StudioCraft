@@ -3,6 +3,7 @@
 
 mod client;
 mod mcp;
+mod tracks;
 
 use std::process::ExitCode;
 use std::sync::{Arc, RwLock};
@@ -36,6 +37,15 @@ usage:
   studiocraft-cli bench [<seconds>]
                      run the compositor without a window for 1 to 600 seconds (5 by
                      default) and print its frame times
+  studiocraft-cli bench audio-tracks [--seconds <s>] [--stall <s>] [--stall-at <s>]
+                                     [--buffer <MiB>] [--tracks <n>] [--folder <dir>]
+                     feed <n> audio tracks (9 by default) at the mixer's pace for 60 seconds
+                     while the disk takes nothing for 40 seconds from second 5, then print
+                     the seconds lost and whether every file has the full length. The files
+                     go to a temporary folder that is deleted, or to <dir>, which is kept
+  studiocraft-cli audio-tracks repair <folder>
+                     repair the audio tracks of takes that stopped without finishing their
+                     files, in <folder> and the folders in it, and print each file's length
   studiocraft-cli --version
                      print `studiocraft-cli <version>`
 
@@ -186,6 +196,10 @@ fn main() -> ExitCode {
         Some("mcp") => mcp::run(&args[1..]),
         Some("check") if args.len() < 2 => Err(CliError::Usage("name at least one file".into())),
         Some("check") => check(&args[1..]).map_err(CliError::Failed),
+        Some("bench") if args.get(1).is_some_and(|a| a == "audio-tracks") => {
+            tracks::bench_args(&args[2..]).and_then(|b| tracks::bench(&b).map_err(CliError::Failed))
+        }
+        Some("audio-tracks") => tracks::run(&args[1..]),
         Some("bench") => bench_seconds(args.get(1).map(String::as_str)).and_then(|s| bench(s).map_err(CliError::Failed)),
         Some("-V" | "--version" | "version") => {
             println!("studiocraft-cli {}", env!("CARGO_PKG_VERSION"));

@@ -180,6 +180,22 @@ build for `wasm32-unknown-unknown`:
   bounded lock-free queue, and the ring thread puts a copy of its packet list, which shares the
   packet bytes, in that slot. A `save replay` thread per save writes the clip to its MKV file, and
   `Studio::tick` reports each finished save.
+- **Audio tracks threads.** While audio tracks run (`studiocraft-audio-tracks`), the mixer stores
+  each recorded source's block and the program block into that track's `TapSlot`
+  (`media/src/tap.rs`): a bounded lock-free queue of 32 blocks with its own pool of 34, made on the
+  studio thread and sent to the mixer once the take's collect thread has made its chunk pool. A
+  take records at most 64 tracks at once and makes at most 256 in all. A source in the program mix is stored in the same pass that mixes it
+  (`mix_into_tap`). The `audio-tracks-collect` thread drains the taps into 1 MiB chunks, places
+  each block by its timestamp from the first block of the take, and fills gaps with silence,
+  counting a gap in a track's audio as lost audio; it does not touch files. The `audio-tracks-disk` thread appends the chunks to one WAV file per
+  track, rewrites each header every second, syncs the files and the take's `take.journal` every
+  5 seconds, starts a `<name> part N.wav` file at the file size limit, and stops the take when free
+  space drops below the reserve or cannot be read. When the chunk pool (the write buffer) is empty because the disk
+  is slow, the collect thread drops blocks and logs them, and the files still keep time. Status is
+  atomics only. A stop returns at once. The collect thread keeps draining the taps until the
+  mixer reports that it applied the removal of the taps (up to 5 seconds), so no block stored
+  before then is lost, and the threads end after the last chunk is written. While
+  audio tracks are off no tap, pool or thread exists, and the mixer checks one `Option` per input.
 - **Window thread.** The window reads `Studio` state, runs commands, and shows statistics.
 
 One `MasterClock` (`media::clock`) drives the frame scheduler, the mixer and every timestamp.

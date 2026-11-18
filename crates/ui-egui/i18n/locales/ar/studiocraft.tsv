@@ -424,3 +424,32 @@
 @msg	The stream stopped: {error}	توقف البث: {error}
 @msg	ffmpeg at {path} was not found	لم يُعثر على ffmpeg في {path}
 menu	Transform	التحويل
+	Record as its own track	التسجيل كمسار مستقل
+	Audio tracks write this source to a WAV file of its own (Settings › Output › Audio tracks)	تكتب المسارات الصوتية هذا المصدر في ملف WAV خاص به (الإعدادات › الإخراج › المسارات الصوتية)
+	Audio tracks	المسارات الصوتية
+	Write each recorded source and the program mix to its own WAV file	كتابة كل مصدر مسجَّل ومزيج البرنامج في ملف WAV خاص به
+	Write them while	كتابتها عند
+	Include the program mix	تضمين مزيج البرنامج
+	Write buffer	مخزن الكتابة المؤقت
+	MiB	ميبيبايت
+	File size	حجم الملف
+	GiB	جيبيبايت
+	{tracks} tracks take about {gb} GB an hour; the buffer holds {seconds} s of audio while the disk is slow	تشغل المسارات ({tracks}) نحو {gb} غيغابايت في الساعة؛ ويحتفظ المخزن المؤقت بـ {seconds} ث من الصوت أثناء بطء القرص
+	A recording runs	عمل تسجيل
+	The stream runs	عمل البث
+	A recording or the stream runs	عمل تسجيل أو البث
+	The disk is almost full; audio tracks stop before the recording or the stream runs out of space	القرص ممتلئ تقريبًا؛ تتوقف المسارات الصوتية قبل أن تنفد مساحة التسجيل أو البث
+	{tracks} audio tracks; {lost} s of audio lost while the disk was slow	المسارات الصوتية: {tracks}؛ فُقد {lost} ث من الصوت أثناء بطء القرص
+	TRACKS	المسارات
+	TRACKS stopped	توقفت المسارات
+	Audio tracks stopped early; the status message gives the reason	توقفت المسارات الصوتية مبكرًا؛ تذكر رسالة الحالة السبب
+	Record as Its Own Track	التسجيل كمسار مستقل
+	Audio Tracks Status	حالة المسارات الصوتية
+	Repair Audio Tracks	إصلاح المسارات الصوتية
+@msg	Audio tracks stopped at {time}: the disk is full	توقفت المسارات الصوتية عند {time}: القرص ممتلئ
+@msg	Audio tracks stopped at {time}: the disk is almost full	توقفت المسارات الصوتية عند {time}: القرص ممتلئ تقريبًا
+@msg	Audio tracks stopped at {time}: the files could not be created	توقفت المسارات الصوتية عند {time}: تعذّر إنشاء الملفات
+@msg	Audio tracks stopped at {time}: the free space on the disk could not be read	توقفت المسارات الصوتية عند {time}: تعذّرت قراءة المساحة الحرة على القرص
+@msg	Audio tracks stopped at {time}: a file could not be written	توقفت المسارات الصوتية عند {time}: تعذّرت كتابة ملف
+@msg	Audio tracks could not start: {error}	تعذّر بدء المسارات الصوتية: {error}
+@msg	Audio tracks repaired after the app closed during a take: {folders}	أُصلحت المسارات الصوتية بعد إغلاق التطبيق أثناء لقطة: {folders}

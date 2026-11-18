@@ -1,0 +1,141 @@
+//! Repair of takes that ended without their journal's last line (the app or the computer stopped
+//! during the take): each file is cut to its whole frames and given a header for them.
+
+use std::path::{Path, PathBuf};
+
+use crate::journal::{self, Journal, Line};
+
+/// What repairing one take did.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Repaired {
+    /// The take's `Audio Files` folder.
+    pub dir: PathBuf,
+    /// Each file and the frames it holds now.
+    pub files: Vec<(String, u64)>,
+    /// Frames the journal's last sync recorded for each file, which a repaired file holds at
+    /// least.
+    pub synced: Vec<(String, u64)>,
+}
+
+/// The `Audio Files` folders under `folder` whose take did not end: `folder` itself, its
+/// `Audio Files` folder, or those of the folders in it (a recording folder). A journal whose
+/// lines do not read is included, so repairing it reports why. A journal that cannot be opened,
+/// as a locked one on Windows, is left out. Links are not followed below `folder`.
+pub fn unfinished(folder: &Path) -> Vec<PathBuf> {
+    let mut found = Vec::new();
+    let mut check = |dir: PathBuf| {
+        if (dir == folder || real_dir(&dir)) && real_file(&dir.join(journal::FILE_NAME)) {
+            let open = match journal::read(&dir) {
+                Ok(lines) => !lines.iter().any(|l| matches!(l, Line::End { .. })),
+                Err(e) => e.kind() == std::io::ErrorKind::InvalidData,
+            };
+            if open {
+                found.push(dir);
+            }
+        }
+    };
+    check(folder.to_path_buf());
+    check(folder.join("Audio Files"));
+    if let Ok(entries) = std::fs::read_dir(folder) {
+        for e in entries.flatten() {
+            if e.file_type().is_ok_and(|t| t.is_dir()) {
+                check(e.path().join("Audio Files"));
+            }
+        }
+    }
+    found.sort();
+    found.dedup();
+    found
+}
+
+/// Repair the take in `dir`, its `Audio Files` folder: every file the journal names is cut to
+/// whole frames with a header for them, and the journal is ended. A take that ended, and a take
+/// still being written (its journal is locked), are left as they are and give `None`. The journal
+/// and the files it names must be files in `dir` itself, not links, so repair writes only there.
+pub fn repair(dir: &Path) -> std::io::Result<Option<Repaired>> {
+    if !real_file(&dir.join(journal::FILE_NAME)) {
+        return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "the take's journal is not a file in its folder"));
+    }
+    let Some((mut j, lines)) = Journal::open_idle(dir)? else { return Ok(None) };
+    if lines.iter().any(|l| matches!(l, Line::End { .. })) {
+        return Ok(None);
+    }
+    let mut names: Vec<String> = Vec::new();
+    let mut synced: Vec<(String, u64)> = Vec::new();
+    for l in &lines {
+        match l {
+            Line::File { file, .. } if !names.contains(file) => names.push(file.clone()),
+            Line::Sync { files } => {
+                for (f, n) in files {
+                    match synced.iter_mut().find(|(s, _)| s == f) {
+                        Some(s) => s.1 = *n,
+                        None => synced.push((f.clone(), *n)),
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut files = Vec::new();
+    for name in names {
+        // A name from the journal is only ever a file in this folder.
+        if Path::new(&name).components().count() != 1 {
+            continue;
+        }
+        let path = dir.join(&name);
+        // Each file is made before the journal names it, so a missing one was moved or deleted
+        // since: the take stays unfinished, to be repaired once the file is back.
+        if !real_file(&path) {
+            return Err(std::io::Error::new(std::io::ErrorKind::NotFound, format!("{name} is missing from the take's folder")));
+        }
+        files.push((name, crate::wav::repair(&path)?));
+    }
+    let end = files.iter().map(|(_, n)| *n).max().unwrap_or(0);
+    j.write(&Line::Repaired { files: files.clone() })?;
+    j.write(&Line::End { frames: end })?;
+    j.sync()?;
+    Ok(Some(Repaired { dir: dir.to_path_buf(), files, synced }))
+}
+
+/// What repairing the takes under a folder did.
+#[derive(Debug, Default)]
+pub struct Outcome {
+    pub repaired: Vec<Repaired>,
+    /// Each take that could not be repaired, with why.
+    pub failed: Vec<(PathBuf, std::io::Error)>,
+}
+
+/// Repair every unfinished take under `folder` (see [`unfinished`]). A take that cannot be
+/// repaired does not stop the others.
+pub fn repair_each(folder: &Path) -> Outcome {
+    let mut out = Outcome::default();
+    for dir in unfinished(folder) {
+        match repair(&dir) {
+            Ok(Some(r)) => out.repaired.push(r),
+            Ok(None) => {}
+            Err(e) => out.failed.push((dir, e)),
+        }
+    }
+    out
+}
+
+/// Repair every unfinished take under `folder`, as [`repair_each`] does. When a take could not
+/// be repaired, the error names each such folder and why, after the others are repaired.
+pub fn repair_all(folder: &Path) -> std::io::Result<Vec<Repaired>> {
+    let out = repair_each(folder);
+    if out.failed.is_empty() {
+        return Ok(out.repaired);
+    }
+    let why: Vec<String> = out.failed.iter().map(|(d, e)| format!("{}: {e}", d.display())).collect();
+    Err(std::io::Error::other(format!("{} take(s) could not be repaired ({} repaired): {}", out.failed.len(), out.repaired.len(), why.join("; "))))
+}
+
+/// Whether `p` is a folder and not a link to one.
+fn real_dir(p: &Path) -> bool {
+    std::fs::symlink_metadata(p).is_ok_and(|m| m.is_dir())
+}
+
+/// Whether `p` is a file and not a link to one.
+fn real_file(p: &Path) -> bool {
+    std::fs::symlink_metadata(p).is_ok_and(|m| m.is_file())
+}

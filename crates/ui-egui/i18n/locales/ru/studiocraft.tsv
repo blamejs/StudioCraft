@@ -445,3 +445,32 @@
 @msg	The stream stopped: {error}	Трансляция остановлена: {error}
 @msg	ffmpeg at {path} was not found	ffmpeg по пути {path} не найден
 menu	Transform	Преобразование
+	Record as its own track	Записывать отдельной дорожкой
+	Audio tracks write this source to a WAV file of its own (Settings › Output › Audio tracks)	Звуковые дорожки записывают этот источник в отдельный файл WAV («Настройки › Вывод › Звуковые дорожки»)
+	Audio tracks	Звуковые дорожки
+	Write each recorded source and the program mix to its own WAV file	Записывать каждый записываемый источник и микс программы в отдельный файл WAV
+	Write them while	Записывать, когда
+	Include the program mix	Включать микс программы
+	Write buffer	Буфер записи
+	MiB	МиБ
+	File size	Размер файла
+	GiB	ГиБ
+	{tracks} tracks take about {gb} GB an hour; the buffer holds {seconds} s of audio while the disk is slow	Дорожки ({tracks}) занимают около {gb} ГБ в час; буфер вмещает {seconds} с звука, пока диск работает медленно
+	A recording runs	Идёт запись
+	The stream runs	Идёт трансляция
+	A recording or the stream runs	Идёт запись или трансляция
+	The disk is almost full; audio tracks stop before the recording or the stream runs out of space	Диск почти заполнен; звуковые дорожки останавливаются раньше, чем записи или трансляции перестанет хватать места
+	{tracks} audio tracks; {lost} s of audio lost while the disk was slow	Звуковых дорожек: {tracks}; потеряно {lost} с звука, пока диск работал медленно
+	TRACKS	ДОРОЖКИ
+	TRACKS stopped	ДОРОЖКИ остановлены
+	Audio tracks stopped early; the status message gives the reason	Звуковые дорожки остановились досрочно; причина указана в сообщении о состоянии
+	Record as Its Own Track	Записывать отдельной дорожкой
+	Audio Tracks Status	Состояние звуковых дорожек
+	Repair Audio Tracks	Восстановить звуковые дорожки
+@msg	Audio tracks stopped at {time}: the disk is full	Звуковые дорожки остановлены в {time}: диск заполнен
+@msg	Audio tracks stopped at {time}: the disk is almost full	Звуковые дорожки остановлены в {time}: диск почти заполнен
+@msg	Audio tracks stopped at {time}: the files could not be created	Звуковые дорожки остановлены в {time}: не удалось создать файлы
+@msg	Audio tracks stopped at {time}: the free space on the disk could not be read	Звуковые дорожки остановлены в {time}: не удалось узнать свободное место на диске
+@msg	Audio tracks stopped at {time}: a file could not be written	Звуковые дорожки остановлены в {time}: не удалось записать файл
+@msg	Audio tracks could not start: {error}	Не удалось запустить звуковые дорожки: {error}
+@msg	Audio tracks repaired after the app closed during a take: {folders}	Звуковые дорожки восстановлены после закрытия приложения во время дубля: {folders}

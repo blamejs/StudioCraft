@@ -469,6 +469,7 @@ fn every_label_chosen_at_run_time_has_an_english_row() {
     use studiocraft_model::RecordingQuality;
     let mut labels: Vec<&str> = crate::docks::MOVES.iter().map(|(_, l)| *l).collect();
     labels.extend(RecordingQuality::ALL.map(crate::settings::quality_label));
+    labels.extend(studiocraft_model::AudioTracksWhen::ALL.map(crate::settings::when_label));
     labels.extend(
         [
             Named::NewProfile,

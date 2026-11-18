@@ -6,8 +6,9 @@ use std::collections::BTreeMap;
 
 use craft_keymap::{Binding, CommandRef, Keymap, Overrides};
 use egui::{RichText, Ui};
+use studiocraft_audio_tracks::space::TRACK_BYTES_PER_SECOND;
 use studiocraft_model::profile::DEFAULT_AUDIO_DEVICE;
-use studiocraft_model::{Profile, RecordingFormat, RecordingQuality, ReplaySettings};
+use studiocraft_model::{AudioTracksSettings, AudioTracksWhen, Profile, RecordingFormat, RecordingQuality, ReplaySettings};
 use studiocraft_platform::audio::{DeviceInfo, DeviceKind};
 use studiocraft_plugin::{Availability, EncoderEnv, EncoderKind, Registry, Settings};
 
@@ -66,6 +67,8 @@ pub struct SettingsWindow {
     /// What the user was told about the adapter the window opened on (a missing adapter, a
     /// fallback to software).
     pub gpu_notices: Vec<Msg>,
+    /// The sources set to record their own track, for the audio tracks size estimate.
+    pub track_sources: usize,
 }
 
 /// The settings OK or Apply puts in force.
@@ -157,6 +160,29 @@ pub(crate) fn quality_label(q: RecordingQuality) -> &'static str {
     }
 }
 
+/// When audio tracks are written, as the Output tab shows it.
+pub(crate) fn when_label(w: AudioTracksWhen) -> &'static str {
+    match w {
+        AudioTracksWhen::Recording => "A recording runs",
+        AudioTracksWhen::Streaming => "The stream runs",
+        AudioTracksWhen::Either => "A recording or the stream runs",
+    }
+}
+
+/// The audio tracks' disk use in GB an hour, and how many seconds the write buffer holds, both
+/// as text, for `sources` recorded sources and the program when it is included. `None` when
+/// there is no track to write.
+fn tracks_estimate(t: &AudioTracksSettings, sources: usize) -> Option<(String, String)> {
+    let tracks = sources + usize::from(t.include_program);
+    if tracks == 0 {
+        return None;
+    }
+    let per_second = tracks as f64 * TRACK_BYTES_PER_SECOND as f64;
+    let gb = per_second * 3600.0 / 1e9;
+    let seconds = f64::from(t.buffer_mib) * 1_048_576.0 / per_second;
+    Some((format!("{gb:.1}"), format!("{seconds:.0}")))
+}
+
 fn language_name(code: &str) -> String {
     if code == i18n::AUTO {
         let system = I18N.name(I18N.system_lang()).to_string();
@@ -193,6 +219,7 @@ impl SettingsWindow {
             adapters: Vec::new(),
             drawing_with: None,
             gpu_notices: Vec::new(),
+            track_sources: 0,
         }
     }
 
@@ -372,6 +399,45 @@ impl SettingsWindow {
             ui.label(tl!("Replay buffer memory limit"));
             ui.add(egui::DragValue::new(&mut r.memory_mb).range(ReplaySettings::MEMORY_MB).speed(16.0).suffix(format!(" {}", tl!("MB"))));
             ui.end_row();
+        });
+        ui.add_space(12.0);
+        self.audio_tracks(ui);
+    }
+
+    /// The Audio tracks section of the Output tab.
+    fn audio_tracks(&mut self, ui: &mut Ui) {
+        ui.label(RichText::new(tl!("Audio tracks")).strong());
+        ui.add_space(4.0);
+        let t = &mut self.draft.audio_tracks;
+        ui.checkbox(&mut t.enabled, tl!("Write each recorded source and the program mix to its own WAV file"));
+        ui.add_enabled_ui(t.enabled, |ui| {
+            egui::Grid::new("audio-tracks-grid").num_columns(2).spacing([12.0, 8.0]).show(ui, |ui| {
+                ui.label(tl!("Write them while"));
+                let label = |w: AudioTracksWhen| tl!(when_label(w));
+                craft_ui::ComboBox::from_id_salt("audio-tracks-when").selected_text(label(t.when)).width(260.0).show_ui(ui, |ui| {
+                    for w in AudioTracksWhen::ALL {
+                        ui.selectable_value(&mut t.when, w, label(w));
+                    }
+                });
+                ui.end_row();
+                ui.label("");
+                ui.checkbox(&mut t.include_program, tl!("Include the program mix"));
+                ui.end_row();
+                ui.label(tl!("Write buffer"));
+                ui.add(egui::DragValue::new(&mut t.buffer_mib).range(AudioTracksSettings::BUFFER_MIB).speed(4.0).suffix(format!(" {}", tl!("MiB"))));
+                ui.end_row();
+                ui.label(tl!("File size"));
+                ui.add(egui::DragValue::new(&mut t.segment_gib).range(AudioTracksSettings::SEGMENT_GIB).suffix(format!(" {}", tl!("GiB"))));
+                ui.end_row();
+            });
+            // With no track to write there is no disk use to estimate.
+            if let Some((gb, seconds)) = tracks_estimate(t, self.track_sources) {
+                let tracks = (self.track_sources + usize::from(t.include_program)).to_string();
+                ui.weak(craft_i18n::fmt(
+                    tl!("{tracks} tracks take about {gb} GB an hour; the buffer holds {seconds} s of audio while the disk is slow"),
+                    &[("tracks", &tracks), ("gb", &gb), ("seconds", &seconds)],
+                ));
+            }
         });
     }
 
@@ -638,6 +704,34 @@ mod tests {
         let mut out = ctx.run_ui(egui::RawInput::default(), |ui| w.audio(ui));
         out.textures_delta.clear();
         assert_eq!(w.draft.audio.monitoring_device, DEFAULT_AUDIO_DEVICE, "drawing the tab changes nothing");
+    }
+
+    #[test]
+    fn the_output_tab_estimates_the_audio_tracks_size_and_buffer() {
+        let mut t = AudioTracksSettings::default();
+        // 8 sources and the program: 9 × 384,000 bytes a second.
+        assert_eq!(tracks_estimate(&t, 8), Some(("12.4".to_string(), "29".to_string())));
+        t.include_program = false;
+        t.buffer_mib = 16;
+        assert_eq!(tracks_estimate(&t, 1), Some(("1.4".to_string(), "44".to_string())));
+        assert_eq!(tracks_estimate(&t, 0), None, "no tracks write nothing, so there is no estimate");
+        let ctx = egui::Context::default();
+        let mut p = Profile::default();
+        p.audio_tracks.enabled = true;
+        let mut w = SettingsWindow::new(&p, &crate::commands::keymap(Overrides::new()), Tab::Output, i18n::AUTO, true);
+        w.track_sources = 2;
+        let mut out = ctx.run_ui(egui::RawInput::default(), |ui| w.audio_tracks(ui));
+        let texts: Vec<String> = out
+            .shapes
+            .iter()
+            .filter_map(|s| match &s.shape {
+                egui::Shape::Text(t) => Some(t.galley.text().to_string()),
+                _ => None,
+            })
+            .collect();
+        out.textures_delta.clear();
+        assert!(texts.iter().any(|t| t.starts_with("3 tracks take about 4.1 GB an hour")), "{texts:?}");
+        assert_eq!(w.draft.audio_tracks, p.audio_tracks, "drawing the section changes nothing");
     }
 
     #[test]

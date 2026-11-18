@@ -436,3 +436,32 @@
 @msg	The stream stopped: {error}	配信が停止しました: {error}
 @msg	ffmpeg at {path} was not found	{path} の ffmpeg が見つかりませんでした
 menu	Transform	変形
+	Record as its own track	独立したトラックとして録音
+	Audio tracks write this source to a WAV file of its own (Settings › Output › Audio tracks)	オーディオトラックはこのソースを専用の WAV ファイルに書き出します (設定 › 出力 › オーディオトラック)
+	Audio tracks	オーディオトラック
+	Write each recorded source and the program mix to its own WAV file	録音する各ソースとプログラムミックスをそれぞれ専用の WAV ファイルに書き出す
+	Write them while	書き出すタイミング
+	Include the program mix	プログラムミックスを含める
+	Write buffer	書き込みバッファー
+	MiB	MiB
+	File size	ファイルサイズ
+	GiB	GiB
+	{tracks} tracks take about {gb} GB an hour; the buffer holds {seconds} s of audio while the disk is slow	{tracks} トラックで 1 時間あたり約 {gb} GB を使います。ディスクが遅いあいだ、バッファーは {seconds} 秒分の音声を保持します
+	A recording runs	録画中
+	The stream runs	配信中
+	A recording or the stream runs	録画中または配信中
+	The disk is almost full; audio tracks stop before the recording or the stream runs out of space	ディスクの空きがわずかです。録画や配信の容量が尽きる前にオーディオトラックは停止します
+	{tracks} audio tracks; {lost} s of audio lost while the disk was slow	オーディオトラック {tracks} 本、ディスクが遅いあいだに {lost} 秒分の音声が失われました
+	TRACKS	トラック
+	TRACKS stopped	トラック停止
+	Audio tracks stopped early; the status message gives the reason	オーディオトラックが途中で停止しました。理由はステータスメッセージに表示されます
+	Record as Its Own Track	独立したトラックとして録音
+	Audio Tracks Status	オーディオトラックの状態
+	Repair Audio Tracks	オーディオトラックを修復
+@msg	Audio tracks stopped at {time}: the disk is full	オーディオトラックが {time} で停止しました: ディスクがいっぱいです
+@msg	Audio tracks stopped at {time}: the disk is almost full	オーディオトラックが {time} で停止しました: ディスクの空きがわずかです
+@msg	Audio tracks stopped at {time}: the files could not be created	オーディオトラックが {time} で停止しました: ファイルを作成できませんでした
+@msg	Audio tracks stopped at {time}: the free space on the disk could not be read	オーディオトラックが {time} で停止しました: ディスクの空き容量を読み取れませんでした
+@msg	Audio tracks stopped at {time}: a file could not be written	オーディオトラックが {time} で停止しました: ファイルを書き込めませんでした
+@msg	Audio tracks could not start: {error}	オーディオトラックを開始できませんでした: {error}
+@msg	Audio tracks repaired after the app closed during a take: {folders}	テイク中にアプリが終了したため、オーディオトラックを修復しました: {folders}
