@@ -8,6 +8,9 @@
 //!   before the media types. An encoder whose B-frame count cannot be set to 0, and does not
 //!   report 0, is skipped.
 //! - Frames go in as samples in system memory, and output samples are read back to Annex B bytes.
+//!   Output samples this side allocates have the alignment the encoder asks for.
+//! - Each `METransformHaveOutput` event reads one sample, and each `METransformNeedInput` event
+//!   takes one frame.
 //! - A wait for the encoder's next event ends with an error after [`EVENT_TIMEOUT`].
 
 use std::mem::ManuallyDrop;
@@ -23,18 +26,15 @@ use windows::Win32::Media::MediaFoundation::{
     MF_MT_MPEG2_PROFILE, MF_MT_PIXEL_ASPECT_RATIO, MF_MT_SUBTYPE, MF_MT_TRANSFER_FUNCTION, MF_MT_VIDEO_NOMINAL_RANGE, MF_MT_VIDEO_PRIMARIES,
     MF_MT_YUV_MATRIX, MF_TRANSFORM_ASYNC, MF_TRANSFORM_ASYNC_UNLOCK, MFMediaType_Video, MFNominalRange_16_235, MFT_MESSAGE_COMMAND_DRAIN,
     MFT_MESSAGE_NOTIFY_BEGIN_STREAMING, MFT_MESSAGE_NOTIFY_END_OF_STREAM, MFT_MESSAGE_NOTIFY_END_STREAMING, MFT_MESSAGE_NOTIFY_START_OF_STREAM,
-    MFT_OUTPUT_DATA_BUFFER, MFT_OUTPUT_DATA_BUFFER_INCOMPLETE, MFT_OUTPUT_STREAM_CAN_PROVIDE_SAMPLES, MFT_OUTPUT_STREAM_PROVIDES_SAMPLES,
-    MFVideoFormat_H264, MFVideoFormat_HEVC, MFVideoFormat_NV12, MFVideoInterlace_Progressive, MFVideoPrimaries_BT709, MFVideoTransFunc_709,
-    MFVideoTransferMatrix_BT709, eAVEncCommonRateControlMode_CBR, eAVEncCommonRateControlMode_Quality, eAVEncH264VProfile_High,
-    eAVEncH265VProfile_Main_420_8,
+    MFT_OUTPUT_DATA_BUFFER, MFT_OUTPUT_STREAM_CAN_PROVIDE_SAMPLES, MFT_OUTPUT_STREAM_PROVIDES_SAMPLES, MFVideoFormat_H264, MFVideoFormat_HEVC,
+    MFVideoFormat_NV12, MFVideoInterlace_Progressive, MFVideoPrimaries_BT709, MFVideoTransFunc_709, MFVideoTransferMatrix_BT709,
+    eAVEncCommonRateControlMode_CBR, eAVEncCommonRateControlMode_Quality, eAVEncH264VProfile_High, eAVEncH265VProfile_Main_420_8,
 };
 use windows::Win32::System::Variant::VARIANT;
 use windows::core::{GUID, Interface};
 
 use super::api::{self, Api};
-use super::{
-    MAX_HEADER, MAX_SAMPLES_PER_OUTPUT, MAX_STREAM_CHANGES, OpenError, Output, Params, cbr_buffer_bytes, nominal_bitrate, output_size, quality,
-};
+use super::{MAX_HEADER, OpenError, Output, Params, Read, alignment_flag, cbr_buffer_bytes, nominal_bitrate, output_size, quality, read_again};
 use crate::{Codec, Rate};
 
 /// How long a wait for the encoder's next event lasts before it is an error.
@@ -46,16 +46,6 @@ enum Event {
     HaveOutput,
     DrainComplete,
     Other,
-}
-
-/// What one `ProcessOutput` call did.
-enum Read {
-    /// It returned a sample, or had none yet.
-    Done,
-    /// It returned a sample, and more output is ready.
-    Incomplete,
-    /// The encoder changed its output type, and the output is still to be read.
-    StreamChanged,
 }
 
 /// Why one encoder MFT did not open, and whether it lacked the hardware resources to start
@@ -92,6 +82,9 @@ pub struct Transform {
     provides_samples: bool,
     /// The buffer size of an output sample this side allocates.
     output_size: u32,
+    /// The `MFCreateAlignedMemoryBuffer` alignment of an output sample this side allocates, when
+    /// the encoder asks for one.
+    output_align: Option<u32>,
     /// Input requests not answered yet.
     wanted: u32,
     /// Set by [`Transform::drain`]: the stream has ended.
@@ -170,6 +163,7 @@ impl Transform {
             height: p.height,
             provides_samples: false,
             output_size: 0,
+            output_align: None,
             wanted: 0,
             ended: false,
             header: None,
@@ -255,6 +249,8 @@ impl Transform {
         let provides = (MFT_OUTPUT_STREAM_PROVIDES_SAMPLES.0 | MFT_OUTPUT_STREAM_CAN_PROVIDE_SAMPLES.0) as u32;
         self.provides_samples = info.dwFlags & provides != 0;
         self.output_size = output_size(info.cbSize, self.width, self.height).map_err(|e| format!("{}: {e}", self.name))?;
+        // The alignment applies to the samples this side allocates.
+        self.output_align = if self.provides_samples { None } else { alignment_flag(info.cbAlignment).map_err(|e| format!("{}: {e}", self.name))? };
         Ok(())
     }
 
@@ -367,33 +363,24 @@ impl Transform {
         }
     }
 
-    /// Take the output the encoder announced and add it to `out`. After the encoder changes its
-    /// output type, the new type is set and the output is read again; while the encoder marks a
-    /// sample incomplete, the next one is read too, up to [`MAX_SAMPLES_PER_OUTPUT`] samples.
+    /// Take the output the encoder announced with one `METransformHaveOutput` event and add it to
+    /// `out`: one sample, after setting the new output type when the encoder changed it.
     fn read(&mut self, out: &mut Vec<Output>) -> Result<(), String> {
-        let (mut changes, mut samples) = (0, 0);
+        let mut changes = 0;
         loop {
-            match self.read_once(out)? {
-                Read::Done => return Ok(()),
-                Read::Incomplete => {
-                    samples += 1;
-                    if samples >= MAX_SAMPLES_PER_OUTPUT {
-                        return Err(format!("{}: one output held more than {MAX_SAMPLES_PER_OUTPUT} samples", self.name));
-                    }
-                }
-                Read::StreamChanged => {
-                    changes += 1;
-                    if changes > MAX_STREAM_CHANGES {
-                        return Err(format!("{}: the output type changed {changes} times in a row", self.name));
-                    }
-                    self.renegotiate()?;
-                }
+            let r = self.read_once(out)?;
+            if r == Read::StreamChanged {
+                changes += 1;
             }
+            if !read_again(r, changes).map_err(|e| format!("{}: {e}", self.name))? {
+                return Ok(());
+            }
+            self.renegotiate()?;
         }
     }
 
     fn read_once(&mut self, out: &mut Vec<Output>) -> Result<Read, String> {
-        let ours = if self.provides_samples { None } else { Some(self.api.empty_sample(self.output_size)?.0) };
+        let ours = if self.provides_samples { None } else { Some(self.api.empty_sample(self.output_size, self.output_align)?.0) };
         let mut buffers =
             [MFT_OUTPUT_DATA_BUFFER { dwStreamID: self.output_id, pSample: ManuallyDrop::new(ours), dwStatus: 0, pEvents: ManuallyDrop::new(None) }];
         let mut status = 0u32;
@@ -407,8 +394,7 @@ impl Transform {
             Ok(()) => {
                 let sample = sample.ok_or_else(|| format!("{} returned no sample", self.name))?;
                 out.push(self.bytes_of(&sample)?);
-                let incomplete = buffers[0].dwStatus & MFT_OUTPUT_DATA_BUFFER_INCOMPLETE.0 as u32 != 0;
-                Ok(if incomplete { Read::Incomplete } else { Read::Done })
+                Ok(Read::Done)
             }
             Err(e) if e.code() == MF_E_TRANSFORM_NEED_MORE_INPUT => Ok(Read::Done),
             Err(e) if e.code() == MF_E_TRANSFORM_STREAM_CHANGE => Ok(Read::StreamChanged),

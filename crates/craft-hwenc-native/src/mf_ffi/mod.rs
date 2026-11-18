@@ -61,8 +61,37 @@ pub(crate) const MAX_HEADER: u32 = 1 << 16;
 /// How many output type changes in a row one output read follows before it fails.
 pub(crate) const MAX_STREAM_CHANGES: u32 = 4;
 
-/// How many samples one output read takes while the encoder marks them incomplete.
-pub(crate) const MAX_SAMPLES_PER_OUTPUT: u32 = 64;
+/// What one `ProcessOutput` call returned.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Read {
+    /// A sample, or no sample yet.
+    Done,
+    /// The encoder changed its output type, and the output is still to be read.
+    StreamChanged,
+}
+
+/// Whether the output read for one `METransformHaveOutput` event calls `ProcessOutput` again after
+/// a call returned `r`, with `changes` output type changes in a row so far. Only an output type
+/// change reads again; a sample the encoder marks incomplete ends the read, and the encoder sends
+/// another event for the rest. More than [`MAX_STREAM_CHANGES`] changes in a row is an error.
+pub(crate) fn read_again(r: Read, changes: u32) -> Result<bool, String> {
+    match r {
+        Read::Done => Ok(false),
+        Read::StreamChanged if changes > MAX_STREAM_CHANGES => Err(format!("the output type changed {changes} times in a row")),
+        Read::StreamChanged => Ok(true),
+    }
+}
+
+/// The `MFCreateAlignedMemoryBuffer` alignment constant for an output stream that asks for
+/// `align`-byte alignment, or `None` when it asks for none (0 or 1). An alignment that is not a
+/// power of two or is larger than 512 bytes, the largest Media Foundation allocates, is an error.
+pub(crate) fn alignment_flag(align: u32) -> Result<Option<u32>, String> {
+    match align {
+        0 | 1 => Ok(None),
+        a if a.is_power_of_two() && a <= 512 => Ok(Some(a - 1)),
+        a => Err(format!("the encoder asks for {a}-byte aligned output buffers")),
+    }
+}
 
 /// The buffer size of the output samples this side allocates for a `width` by `height` stream,
 /// from the size the encoder asks for (`asked`): at least one raw NV12 frame and 1 MiB. Asking for

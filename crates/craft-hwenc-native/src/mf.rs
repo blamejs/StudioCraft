@@ -358,6 +358,27 @@ mod tests {
     }
 
     #[test]
+    fn output_buffers_this_side_allocates_take_the_alignment_the_encoder_asks_for() {
+        assert_eq!(mf_ffi::alignment_flag(0), Ok(None));
+        assert_eq!(mf_ffi::alignment_flag(1), Ok(None));
+        assert_eq!([2, 16, 64, 512].map(mf_ffi::alignment_flag), [Ok(Some(1)), Ok(Some(0x0f)), Ok(Some(0x3f)), Ok(Some(0x1ff))]);
+        for bad in [3, 24, 1024, u32::MAX] {
+            assert!(mf_ffi::alignment_flag(bad).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn one_output_event_reads_one_sample_and_only_a_type_change_reads_again() {
+        use mf_ffi::{Read, read_again};
+        // A sample ends the read, also one the encoder marks incomplete: the rest comes with its
+        // next METransformHaveOutput event.
+        assert_eq!(read_again(Read::Done, 0), Ok(false));
+        assert_eq!(read_again(Read::StreamChanged, 1), Ok(true));
+        assert_eq!(read_again(Read::StreamChanged, mf_ffi::MAX_STREAM_CHANGES), Ok(true));
+        assert!(read_again(Read::StreamChanged, mf_ffi::MAX_STREAM_CHANGES + 1).is_err());
+    }
+
+    #[test]
     fn frames_go_in_at_the_frame_rates_times_and_their_durations_add_up() {
         let mut t = track();
         let sent: Vec<_> = (0..4).map(|pts| t.send(pts * 1001)).collect();

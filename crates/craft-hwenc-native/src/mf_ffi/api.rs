@@ -17,6 +17,7 @@ use windows::core::{GUID, HRESULT, Interface, PCSTR, PWSTR, w};
 type StartupFn = unsafe extern "system" fn(u32, u32) -> HRESULT;
 type CreateFn = unsafe extern "system" fn(*mut *mut c_void) -> HRESULT;
 type CreateBufferFn = unsafe extern "system" fn(u32, *mut *mut c_void) -> HRESULT;
+type CreateAlignedBufferFn = unsafe extern "system" fn(u32, u32, *mut *mut c_void) -> HRESULT;
 type EnumFn =
     unsafe extern "system" fn(GUID, u32, *const MFT_REGISTER_TYPE_INFO, *const MFT_REGISTER_TYPE_INFO, *mut *mut *mut c_void, *mut u32) -> HRESULT;
 
@@ -25,6 +26,7 @@ pub struct Api {
     create_media_type: CreateFn,
     create_sample: CreateFn,
     create_memory_buffer: CreateBufferFn,
+    create_aligned_memory_buffer: CreateAlignedBufferFn,
     enum_transforms: EnumFn,
 }
 
@@ -61,7 +63,8 @@ fn load() -> Result<Api, String> {
     let module = unsafe { LoadLibraryExW(w!("mfplat.dll"), None, LOAD_LIBRARY_SEARCH_SYSTEM32) }
         .map_err(|_| "Media Foundation is not installed".to_string())?;
     // SAFETY: each symbol is looked up with the signature Microsoft documents for it
-    // (MFStartup, MFCreateMediaType, MFCreateSample, MFCreateMemoryBuffer, MFTEnumEx).
+    // (MFStartup, MFCreateMediaType, MFCreateSample, MFCreateMemoryBuffer,
+    // MFCreateAlignedMemoryBuffer, MFTEnumEx).
     let (startup, api) = unsafe {
         (
             symbol::<StartupFn>(module, PCSTR(c"MFStartup".as_ptr().cast()))?,
@@ -69,6 +72,7 @@ fn load() -> Result<Api, String> {
                 create_media_type: symbol(module, PCSTR(c"MFCreateMediaType".as_ptr().cast()))?,
                 create_sample: symbol(module, PCSTR(c"MFCreateSample".as_ptr().cast()))?,
                 create_memory_buffer: symbol(module, PCSTR(c"MFCreateMemoryBuffer".as_ptr().cast()))?,
+                create_aligned_memory_buffer: symbol(module, PCSTR(c"MFCreateAlignedMemoryBuffer".as_ptr().cast()))?,
                 enum_transforms: symbol(module, PCSTR(c"MFTEnumEx".as_ptr().cast()))?,
             },
         )
@@ -119,12 +123,23 @@ impl Api {
         made(hr, raw, "MFCreateMediaType")
     }
 
-    /// A sample holding one empty buffer of `len` bytes.
-    pub fn empty_sample(&self, len: u32) -> Result<(IMFSample, IMFMediaBuffer), String> {
+    /// A sample holding one empty buffer of `len` bytes, aligned as the `MFCreateAlignedMemoryBuffer`
+    /// constant `align` says when there is one.
+    pub fn empty_sample(&self, len: u32, align: Option<u32>) -> Result<(IMFSample, IMFMediaBuffer), String> {
         let mut raw = std::ptr::null_mut();
-        // SAFETY: the out-pointer refers to a live local.
-        let hr = unsafe { (self.create_memory_buffer)(len, &mut raw) };
-        let buffer: IMFMediaBuffer = made(hr, raw, "MFCreateMemoryBuffer")?;
+        let buffer: IMFMediaBuffer = match align {
+            Some(a) => {
+                // SAFETY: the out-pointer refers to a live local, and `a` is one of the documented
+                // alignment constants (`alignment_flag`).
+                let hr = unsafe { (self.create_aligned_memory_buffer)(len, a, &mut raw) };
+                made(hr, raw, "MFCreateAlignedMemoryBuffer")?
+            }
+            None => {
+                // SAFETY: the out-pointer refers to a live local.
+                let hr = unsafe { (self.create_memory_buffer)(len, &mut raw) };
+                made(hr, raw, "MFCreateMemoryBuffer")?
+            }
+        };
         let mut raw = std::ptr::null_mut();
         // SAFETY: the out-pointer refers to a live local.
         let hr = unsafe { (self.create_sample)(&mut raw) };
@@ -137,7 +152,7 @@ impl Api {
     /// An input sample holding a copy of `data`, at `time` for `duration` (100 ns units).
     pub fn sample_of(&self, data: &[u8], time: i64, duration: i64) -> Result<IMFSample, String> {
         let len = u32::try_from(data.len()).map_err(|_| "a frame is too large".to_string())?;
-        let (sample, buffer) = self.empty_sample(len)?;
+        let (sample, buffer) = self.empty_sample(len, None)?;
         // SAFETY: `Lock` gives a writable block of at least `max` bytes valid until `Unlock`; the
         // copy stays within `len <= max` bytes and the buffer is unlocked before it is used.
         unsafe {
