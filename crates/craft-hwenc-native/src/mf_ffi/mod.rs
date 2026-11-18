@@ -99,7 +99,7 @@ mod none {
             Err(OpenError::NoDevice("Media Foundation runs on Windows only".into()))
         }
 
-        pub fn sequence_header(&self) -> Option<Vec<u8>> {
+        pub fn sequence_header(&self) -> Option<&[u8]> {
             None
         }
 

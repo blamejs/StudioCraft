@@ -276,8 +276,8 @@ impl Transform {
     }
 
     /// The parameter sets the encoder's output type carries, as Annex B, when it carries them.
-    pub fn sequence_header(&self) -> Option<Vec<u8>> {
-        self.header.clone()
+    pub fn sequence_header(&self) -> Option<&[u8]> {
+        self.header.as_deref()
     }
 
     /// Send one NV12 frame at `time` for `duration` (100 ns units), after the encoder asks for

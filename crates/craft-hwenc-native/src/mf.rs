@@ -160,6 +160,15 @@ impl Track {
         let data = annexb::to_length_prefixed(self.codec, &o.data).map_err(Error::Failed)?;
         Ok(Packet { data, pts, keyframe })
     }
+
+    /// Check that the Annex B `header` of a new output type holds the parameter sets the
+    /// container record was made of.
+    fn same_sets(&self, header: &[u8]) -> Result<(), Error> {
+        match annexb::parameter_sets(self.codec, header, set_types(self.codec)) {
+            Ok(sets) if sets == self.sets => Ok(()),
+            _ => Err(Error::Failed("the encoder changed its parameter sets".into())),
+        }
+    }
 }
 
 /// A Media Foundation hardware encoder.
@@ -168,6 +177,8 @@ pub struct Encoder {
     cfg: Config,
     record: Vec<u8>,
     track: Track,
+    /// The parameter sets the encoder's output type carried when they were last checked.
+    header: Option<Vec<u8>>,
 }
 
 impl Encoder {
@@ -177,7 +188,7 @@ impl Encoder {
         let p = params(cfg);
         let mut transform = Transform::open(&p)?;
         let header = match transform.sequence_header() {
-            Some(h) => h,
+            Some(h) => h.to_vec(),
             None => {
                 // Some GPUs allow one encoding session, so this instance closes before the
                 // gray frame's instance opens. Off Windows the stub holds nothing to drop.
@@ -189,7 +200,26 @@ impl Encoder {
             }
         };
         let (sets, record) = record_of(cfg, &header)?;
-        Ok(Encoder { transform, cfg: *cfg, record, track: Track::new(cfg.codec, cfg.fps, sets) })
+        let track = Track::new(cfg.codec, cfg.fps, sets);
+        let header = transform.sequence_header().map(<[u8]>::to_vec);
+        let mut encoder = Encoder { transform, cfg: *cfg, record, track, header: None };
+        if let Some(h) = &header {
+            encoder.track.same_sets(h)?;
+        }
+        encoder.header = header;
+        Ok(encoder)
+    }
+
+    /// Check the parameter sets of the encoder's output type again after it changed.
+    fn check_header(&mut self) -> Result<(), Error> {
+        let now = self.transform.sequence_header();
+        if now == self.header.as_deref() {
+            return Ok(());
+        }
+        let Some(now) = now.map(<[u8]>::to_vec) else { return Ok(()) };
+        self.track.same_sets(&now)?;
+        self.header = Some(now);
+        Ok(())
     }
 
     /// The `avcC` (H.264) or `hvcC` (HEVC) record a container stores with the track.
@@ -218,6 +248,7 @@ impl Encoder {
         if sent.is_err() {
             self.track.pending.pop_back();
         }
+        self.check_header()?;
         let packets = outputs.into_iter().map(|o| self.track.packet(o)).collect::<Result<Vec<_>, _>>()?;
         sent.map_err(Error::Failed)?;
         Ok(packets)
@@ -227,6 +258,7 @@ impl Encoder {
     pub fn flush(&mut self) -> Result<Vec<Packet>, Error> {
         let mut outputs = Vec::new();
         self.transform.drain(&mut outputs).map_err(Error::Failed)?;
+        self.check_header()?;
         outputs.into_iter().map(|o| self.track.packet(o)).collect()
     }
 }
@@ -337,6 +369,15 @@ mod tests {
         assert_eq!((p.pts, p.keyframe), (103, false));
         assert!(t.pending.is_empty());
         assert!(t.packet(Output { data: annex_b(&[P]), time: None }).is_err(), "more frames than went in");
+    }
+
+    #[test]
+    fn a_new_output_type_must_keep_the_parameter_sets_of_the_record() {
+        let t = track();
+        assert!(t.same_sets(&annex_b(&[SPS, PPS])).is_ok());
+        assert!(t.same_sets(&annex_b(&[&[0x67, 9], PPS])).is_err(), "another SPS");
+        assert!(t.same_sets(&annex_b(&[SPS])).is_err(), "no PPS");
+        assert!(t.same_sets(&[]).is_err());
     }
 
     #[test]
