@@ -1,12 +1,15 @@
 # MCP server
 
-`studiocraft-cli mcp` is an MCP server on standard input and output. The `studiocraft-mcp` crate
-holds it. Every tool runs StudioCraft commands by id, the same commands the menus, shortcuts and
-the control channel run.
+`studiocraft-cli mcp` is a Model Context Protocol (MCP) server on standard input and output. This
+page is for people who connect an MCP client to StudioCraft: it covers registering the server, its
+options and backends, file confinement, and every tool, resource and prompt.
+
+The `studiocraft-mcp` crate holds the server. Every tool runs StudioCraft commands by id, the same
+commands the menus, shortcuts and the control channel run.
 
 The server runs on one of two backends:
 
-- **Headless.** `studiocraft-cli mcp` runs a studio in its own process, with the built-in plug-ins,
+- **Headless.** `studiocraft-cli mcp` runs a studio in its own process, with the built-in plugins,
   a new scene collection and default settings. It composites on the system's graphics device when
   one is available.
 - **App.** `studiocraft-cli mcp --connect <port>` sends every call to the app started with
@@ -43,25 +46,9 @@ When the `--collection` file can't be opened, the server exits with code 1 and s
 
 ### The running app
 
-Start the app with a control port and a session token of 64 hexadecimal characters in
-`STUDIOCRAFT_CONTROL_TOKEN`. The app does not start when `--control` is given without a valid
-token.
-
-```sh
-# POSIX shells
-export STUDIOCRAFT_CONTROL_TOKEN=$(openssl rand -hex 32)
-studiocraft --control 9876 &
-```
-
-```powershell
-# Windows (PowerShell)
-$bytes = [byte[]]::new(32)
-[Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($bytes)
-$env:STUDIOCRAFT_CONTROL_TOKEN = -join ($bytes | ForEach-Object { $_.ToString('x2') })
-Start-Process studiocraft -ArgumentList '--control', '9876'
-```
-
-Then register `studiocraft-cli mcp --connect <port>` with the same token:
+Start the app with a control port and a session token, as
+[Connecting](control-protocol.md#connecting) shows for POSIX shells and PowerShell. Then register
+`studiocraft-cli mcp --connect <port>` with the same token in `STUDIOCRAFT_CONTROL_TOKEN`:
 
 ```json
 {"mcpServers": {"studiocraft": {"command": "studiocraft-cli", "args": ["mcp", "--connect", "9876"],
@@ -73,28 +60,28 @@ Then register `studiocraft-cli mcp --connect <port>` with the same token:
 connecting; when no app listens on the port, each tool call fails with "StudioCraft is not
 listening at 127.0.0.1:<port>".
 
-### Options
+## Options
 
 The options are read before the server starts. These are errors, and `studiocraft-cli` exits with
 code 2 without starting the server:
 
-- an unknown option or a missing value;
-- `--connect` given twice, or a port given twice;
-- a port of 0 or above 65535, or an address not on this computer;
-- `--collection` given twice;
+- An unknown option or a missing value.
+- `--connect` given twice, or a port given twice.
+- A port of 0 or above 65535, or an address not on this computer.
+- `--collection` given twice.
 - `--read-root`, `--write-root`, `--allow-streaming` or `--collection` together with a port.
 
-### Headless and app backends
+## Headless and app backends
 
 | | Headless (`mcp`) | App (`mcp --connect <port>`) |
 | --- | --- | --- |
-| Studio | Its own, with a new scene collection and default settings. | The running app's, with its open scene collection, profile and settings. |
-| Window tools (`ui_*`, `app_quit`) | Left out of `tools/list`. A call fails and says how to start the app for it. | Listed and sent to the window. |
-| Window commands (`view.stats`, `collection.import`, `app.settings`, `app.exit`) | Refused with an error that says how to start the app for them. | Run by the window. |
-| `collection_open`, `collection_save` | Read and write the file in the server's process. | Run the window's `collection.import` and `collection.export`. |
-| Streaming | Only with `--allow-streaming`. | As the app's Start Streaming does. |
-| File roots | `--read-root` and `--write-root`. | Not accepted. |
-| `render_preview` | Waits up to 2 seconds for a running transition to end and for the shown scene's sources to show their first picture, then draws. Fails without a graphics device. | Waits up to 5 seconds for the app's compositor. |
+| Studio | The server uses its own studio, with a new scene collection and default settings. | The server uses the running app's studio, with its open scene collection, profile and settings. |
+| Window tools (`ui_*`, `app_quit`) | `tools/list` leaves them out. A call fails and says how to start the app for it. | `tools/list` lists them, and calls go to the window. |
+| Window commands (`view.stats`, `collection.import`, `app.settings`, `app.exit`) | The server refuses them with an error that says how to start the app for them. | The window runs them. |
+| `collection_open`, `collection_save` | The tools read and write the file in the server's process. | The tools run the window's `collection.import` and `collection.export`. |
+| Streaming | A stream starts only with `--allow-streaming`. | A stream starts as the app's Start Streaming does. |
+| File roots | `--read-root` and `--write-root` apply. | The server does not accept them. |
+| `render_preview` | The tool waits up to 2 seconds for a running transition to end and for the shown scene's sources to show their first picture, then draws. It fails without a graphics device. | The tool waits up to 5 seconds for the app's compositor. |
 
 On the app backend, connecting waits at most 800 ms, and a reply may be up to 256 MiB long. When
 the connection drops after a request was sent, a request that only reads is sent once more on a
@@ -103,10 +90,11 @@ or may not have run.
 
 ### Streaming
 
-A stream publishes the program to the RTMP server in Settings › Stream. The headless backend starts
-a stream only when the server was started with `--allow-streaming`. Without it, `stream_start`,
-`stream.start` and a `stream.toggle` that would start a stream fail and nothing starts. The app
-backend starts a stream as its Start Streaming menu item does.
+A stream publishes the program to the Real-Time Messaging Protocol (RTMP) server in
+Settings › Stream. The headless backend starts a stream only when the server was started with
+`--allow-streaming`. Without it, `stream_start`, `stream.start` and a `stream.toggle` that would
+start a stream fail and nothing starts. The app backend starts a stream as its Start Streaming menu
+item does.
 
 ## Confining file access
 
@@ -116,7 +104,9 @@ studiocraft-cli mcp --read-root /work/show --read-root /work/media --write-root 
 ```
 
 `--automation-read-root` and `--automation-write-root` are accepted as other names for the two
-flags. The two flags keep the headless backend's file access inside the folders given:
+flags. The two flags keep the headless backend's file access inside the folders given.
+
+### Reads and writes
 
 - Every file a call reads must lie inside a read root: `collection_open`, the files a scene
   collection's sources, filters and transition name when it is opened, and the path settings of
@@ -126,19 +116,22 @@ flags. The two flags keep the headless backend's file access inside the folders 
   folder (Settings › Output, or the Videos folder when it is empty) for `record_start`,
   `record.start` and a `record.toggle` that would start a recording, and for `replay_save` and
   `replay.save`.
+- `--collection <file>` is opened through the same checks, so the file and the files it names
+  must lie inside a read root.
+
+### How paths are checked
+
 - Each flag may be given more than once; a path inside any root of its kind is allowed. Each root
   must be an existing folder. A kind of access with no root of its own is not granted.
 - A path is made absolute against the server's working directory and its links are followed. For a
   file that does not exist yet, its nearest existing folder's links are followed and the rest must
-  be plain names, so `..` below a missing folder and a link that leads nowhere are refused. The
-  result is compared with each root folder name by folder name: `/work2/x` is not inside `/work`.
-  On Windows case is ignored, and device names (`CON`, `NUL`, `COM1`) and a `:` after the drive are
-  refused.
+  be plain names, so `..` below a missing folder and a link that leads nowhere are refused.
+- The result is compared with each root folder name by folder name: `/work2/x` is not inside
+  `/work`. On Windows case is ignored, and device names (`CON`, `NUL`, `COM1`) and a `:` after the
+  drive are refused.
 - A refused call fails before anything runs. Without either flag nothing is checked.
 - The roots apply to the headless backend only. Combining them, `--allow-streaming` or
   `--collection` with a port is an error at startup (exit code 2).
-- `--collection <file>` is opened through the same checks, so the file and the files it names
-  must lie inside a read root.
 
 ## Protocol
 
@@ -150,48 +143,11 @@ community links.
 Units are the same in every tool, resource and prompt:
 
 - Canvas coordinates are pixels, x to the right and y down, with the origin at the top-left. The
-  default canvas is 1920 x 1080.
+  default canvas is 1920 × 1080.
 - Rotation is in degrees.
 - Volume gain is 0 to 1.
 - Durations and audio sync offsets are in milliseconds.
 - The window tools take window points, with (0, 0) at the window's top left.
-
-### Prompts
-
-`prompts/list` lists three prompts, and `prompts/get` returns one user message with the arguments
-filled in. A missing or empty required argument, an argument the prompt does not take, a value
-that is not a string and an unknown prompt are error -32602.
-
-| Prompt | Arguments | What it asks for |
-| --- | --- | --- |
-| `build_scene` | `description` | A new scene built from the description with `scene_add`, `source_add` and `item_transform`, checked with `render_preview`. |
-| `lower_third` | `text`, `color?` (`#rrggbbaa`, default `#ffffffff`), `scene?` | A `text` source placed in the lower band of the canvas. |
-| `check_collection` | none | A report of sources whose files are missing, empty scenes, scenes whose items are all hidden, and sources no scene places. Nothing is changed. |
-
-### Resource templates
-
-`resources/templates/list` lists four templates. Each reads one thing as JSON:
-
-| URI template | Contents |
-| --- | --- |
-| `studiocraft://scene/{id}` | The scene with this id or name: its items, each with `source_name`, and `program` and `preview`, which say whether it is the program scene or, in studio mode, the preview scene. |
-| `studiocraft://source/{id}` | The source with this id or name, with its settings and filters, `scenes` (the names of the scenes that place it) and `global_audio`. |
-| `studiocraft://command/{id}` | The command with this id, as `engine.commands` lists it. |
-| `studiocraft://plugin/{kind}` | The source, filter or transition plug-in with this id: `type`, `name`, `version` and `schema` (its settings fields with their defaults), from the `plugin.list` command. |
-
-A numeric id is looked up as an id first and then as a name. Names may be percent-encoded
-(`studiocraft://scene/Be%20right%20back`). `resources/read` with any other URI, or with a value
-that names nothing, is error -32002.
-
-### Completions
-
-`completion/complete` suggests values for a prompt argument (`ref/prompt`) or a resource template's
-variable (`ref/resource`): command ids for `studiocraft://command/{id}`, scene names for
-`studiocraft://scene/{id}` and the `scene` argument of `lower_third`, source names for
-`studiocraft://source/{id}`, plug-in ids for `studiocraft://plugin/{kind}`, and a short list of
-colors for `color`. A value is suggested when it starts with the typed text, ignoring case. A
-reply holds at most 100 values; `total` counts every match and `hasMore` is `true` when some were
-left out. An unknown prompt, argument or template gives no values.
 
 ## Tools
 
@@ -201,31 +157,31 @@ error -32602. A command that fails is a tool result with `isError: true` and the
 
 | Tool | Arguments | What it does |
 | --- | --- | --- |
-| `command_list` | `filter?`, `enabled_only?` | Every command with `id`, `label`, `params`, `undo`, `scope`, `enabled` and `shortcut`. `filter` keeps ids and labels that contain the text, ignoring case; `enabled_only` keeps commands that can run now. |
+| `command_list` | `filter?`, `enabled_only?` | Lists every command with `id`, `label`, `params`, `undo`, `scope`, `enabled` and `shortcut`. `filter` keeps ids and labels that contain the text, ignoring case; `enabled_only` keeps commands that can run now. |
 | `command_run` | `id`, `params?` | Runs one command and returns its result. |
 | `command_batch` | `steps: [{id, params?}]`, `stop_on_error?` | Runs the steps in order and reports `completed`, `failed`, `skipped` and each step's result or error. It stops at the first failed step unless `stop_on_error` is `false` (default `true`). A batch of more than 1,000 steps, or one with a malformed step, runs nothing. |
-| `doc_inspect` | `detail?: summary \| full` | The scene collection, studio mode, program and preview scenes, outputs, statistics and canvas. `summary` (the default) leaves out source, filter and transition settings. |
-| `render_preview` | `view?: program \| preview`, `max_side?` | A PNG image of the program (the default), or of the preview in studio mode. `max_side` is 0 to 4096 pixels (default 960; 0 is full size). On the headless backend it first waits up to 2 seconds for a running transition to end and for sources just added to show their first picture. Without a graphics device it fails with "nothing is drawn: the studio runs without a graphics device". |
-| `undo`, `redo` | none | `edit.undo` and `edit.redo`. |
-| `scene_add` | `name?` | `scene.add`. The name defaults to the next free "Scene N". Returns `scene`, the new scene's id. |
-| `scene_select` | `scene` | `scene.select`, by id or name. In studio mode it sets the preview scene. |
-| `source_add` | `kind`, `scene?`, `name?`, `settings?`, `transform?` | `source.add`, in the scene being edited unless `scene` names one. Returns `source`, `item` and `scene`. |
-| `item_transform` | `item`, `scene?`, `transform` | `item.transform`. `item` is the item's id or the name of the source it shows. |
-| `source_audio` | `source`, `sync_offset_ms?`, `monitor?` | `source.sync_offset` when `sync_offset_ms` is given (0 to 5000) and `source.monitor` when `monitor` is given (`off`, `monitor_only` or `monitor_and_output`), then the source's `audio` settings. A value out of range is an error and changes nothing. With neither value it only reads the settings. |
-| `transition_set` | `kind`, `ms?` | `transition.set`, then `transition.duration` when `ms` is given. |
-| `studio_transition` | `kind?`, `ms?` | `studio.transition`: in studio mode, moves the preview scene to the program. `kind` and `ms` apply to this switch only. |
+| `doc_inspect` | `detail?: summary \| full` | Returns the scene collection, studio mode, program and preview scenes, outputs, statistics and canvas. `summary` (the default) leaves out source, filter and transition settings. |
+| `render_preview` | `view?: program \| preview`, `max_side?` | Returns a PNG image of the program (the default), or of the preview in studio mode. `max_side` is 0 to 4096 pixels (default 960; 0 is full size). On the headless backend it first waits up to 2 seconds for a running transition to end and for sources just added to show their first picture. Without a graphics device it fails with "nothing is drawn: the studio runs without a graphics device". |
+| `undo`, `redo` | none | Runs `edit.undo` or `edit.redo`. |
+| `scene_add` | `name?` | Runs `scene.add`. The name defaults to the next free "Scene N". The tool returns `scene`, the new scene's id. |
+| `scene_select` | `scene` | Runs `scene.select`, by id or name. In studio mode it sets the preview scene. |
+| `source_add` | `kind`, `scene?`, `name?`, `settings?`, `transform?` | Runs `source.add`, in the scene being edited unless `scene` names one. The tool returns `source`, `item` and `scene`. |
+| `item_transform` | `item`, `scene?`, `transform` | Runs `item.transform`. `item` is the item's id or the name of the source it shows. |
+| `source_audio` | `source`, `sync_offset_ms?`, `monitor?` | Runs `source.sync_offset` when `sync_offset_ms` is given (0 to 5000) and `source.monitor` when `monitor` is given (`off`, `monitor_only` or `monitor_and_output`), then returns the source's `audio` settings. A value out of range is an error and changes nothing. With neither value it only reads the settings. |
+| `transition_set` | `kind`, `ms?` | Runs `transition.set`, then `transition.duration` when `ms` is given. |
+| `studio_transition` | `kind?`, `ms?` | Runs `studio.transition`: in studio mode, it moves the preview scene to the program. `kind` and `ms` apply to this switch only. |
 | `collection_open` | `path` | Replaces the scene collection with the one in the file. The undo history starts empty. |
 | `collection_save` | `path` | Writes the scene collection to the file, replacing any file at that path. |
-| `app_links` | none | The community links (`app.links`). |
-| `source_schema` | `kind`, `settings?` | `source.schema`: the source plug-in's settings fields with the choices the system offers now. For `camera`, the `device` field lists the connected cameras and the `format` field the formats of the camera that `settings.device` names. |
-| `record_start` | none | `record.start`, then the recording's state from `document.inspect`. Nothing happens when a recording already runs. |
-| `record_stop` | none | `record.stop`, then the recording's state. |
-| `stream_start` | none | `stream.start`, then the stream's state. Marked `openWorldHint: true`. The headless backend refuses it without `--allow-streaming`. |
-| `stream_stop` | none | `stream.stop`, then the stream's state. Marked `openWorldHint: true`. |
-| `replay_start` | none | `replay.start`, then the replay buffer's state. Nothing happens when it already runs. |
-| `replay_stop` | none | `replay.stop`, then the replay buffer's state. Replays being saved are still written. |
-| `replay_save` | none | `replay.save`: writes what the replay buffer holds to a new MKV file in the recording folder in the background, then the replay buffer's state. An error when the replay buffer is not running or holds nothing yet. |
-| `output_status` | none | The `recording`, `streaming` and `replay` entries of `document.inspect`: `active`, `status`, `target` (the file or server) and `seconds`. The `replay` entry also has `saving` (replays still being written) and, while it runs, `bytes` (the bytes it holds). |
+| `app_links` | none | Returns the community links (`app.links`). |
+| `source_schema` | `kind`, `settings?` | Runs `source.schema` and returns the source plugin's settings fields with the choices the system offers now. For `camera`, the `device` field lists the connected cameras and the `format` field the formats of the camera that `settings.device` names. |
+| `record_start` | none | Runs `record.start`, then returns the recording's state from `document.inspect`. Nothing happens when a recording already runs. |
+| `record_stop` | none | Runs `record.stop`, then returns the recording's state. |
+| `stream_start` | none | Runs `stream.start`, then returns the stream's state. The tool is marked `openWorldHint: true`. The headless backend refuses it without `--allow-streaming`. |
+| `stream_stop` | none | Runs `stream.stop`, then returns the stream's state. The tool is marked `openWorldHint: true`. |
+| `replay_start` | none | Runs `replay.start`, then returns the replay buffer's state. Nothing happens when it already runs. |
+| `replay_stop` | none | Runs `replay.stop`, then returns the replay buffer's state. Replays being saved are still written. |
+| `replay_save` | none | Runs `replay.save`, which writes what the replay buffer holds to a new MKV file in the recording folder in the background, then returns the replay buffer's state. It is an error when the replay buffer is not running or holds nothing yet. |
+| `output_status` | none | Returns the `recording`, `streaming` and `replay` entries of `document.inspect`: `active`, `status`, `target` (the file or server) and `seconds`. The `replay` entry also has `saving` (replays still being written) and, while it runs, `bytes` (the bytes it holds). |
 
 `transform` is an object with `position` `{x, y}` (the top-left corner in canvas pixels), `scale`
 `{x, y}` (1 is the source's own size), `rotation` in degrees and `crop` `{left, top, right,
@@ -242,19 +198,16 @@ the wrong type or out of range is error -32602 (a string `x`, for example, is no
 
 | Tool | Arguments | What it does |
 | --- | --- | --- |
-| `ui_inspect` | none | `ui.inspect`: the window's size, dialogs, docks, preview rectangle, menus, selection and status messages. |
-| `ui_screenshot` | `max_side?` | `ui.screenshot`, returned as a PNG image. `max_side` is 0 to 4096 pixels (default 1600; 0 is full size). A reply that is not valid base64 or not a PNG is an error. |
-| `ui_click` | `x`, `y`, `button?`, `count?`, `modifiers?` | `ui.click`. `x` and `y` are window points of 0 or more; `button` is `primary` (the default), `secondary` or `middle`; `count` is 1 to 3 (default 1); `modifiers` is a list of `cmd`, `ctrl`, `alt` and `shift`. |
-| `ui_drag` | `from: {x, y}`, `to: {x, y}`, `steps?`, `modifiers?` | `ui.drag` with the primary button. `steps` is 1 to 200 (default 12). |
-| `ui_key` | `key` | `ui.key`, for example `Cmd+Z`. A key pressed twice is written twice: `A A`. |
-| `ui_type` | `text` | `ui.type`: up to 10,000 characters into the focused field. |
-| `ui_menu_list` | none | `ui.menu.list`: the menu bar as a tree. |
-| `ui_menu_invoke` | `path` | `ui.menu.invoke`, for example `Scene Collection > New...`. An unknown path, a submenu or a disabled item is an error. |
-| `ui_dialog` | `answer: ok \| cancel`, `text?` | `ui.dialog`: answers the open name prompt or the exit confirmation as its buttons do. `ok` presses OK, or Stop and Exit; `cancel` presses Cancel. `text` replaces the name in a name prompt first. A name the prompt refuses is an error and the prompt stays open. |
-| `app_quit` | none | `app.quit`: closes the window as File › Exit does. While a recording, stream or replay buffer runs, the window asks first and the result's `confirming` is `true`. |
-
-The earlier `studio_state`, `studio_commands` and `studio_run` tools have been removed. Use
-`doc_inspect`, `command_list` and `command_run` instead.
+| `ui_inspect` | none | Runs `ui.inspect` and returns the window's size, dialogs, docks, preview rectangle, menus, selection and status messages. |
+| `ui_screenshot` | `max_side?` | Runs `ui.screenshot` and returns a PNG image. `max_side` is 0 to 4096 pixels (default 1600; 0 is full size). A reply that is not valid base64 or not a PNG is an error. |
+| `ui_click` | `x`, `y`, `button?`, `count?`, `modifiers?` | Runs `ui.click`. `x` and `y` are window points of 0 or more; `button` is `primary` (the default), `secondary` or `middle`; `count` is 1 to 3 (default 1); `modifiers` is a list of `cmd`, `ctrl`, `alt` and `shift`. |
+| `ui_drag` | `from: {x, y}`, `to: {x, y}`, `steps?`, `modifiers?` | Runs `ui.drag` with the primary button. `steps` is 1 to 200 (default 12). |
+| `ui_key` | `key` | Runs `ui.key`, for example `Cmd+Z`. A key pressed twice is written twice: `A A`. |
+| `ui_type` | `text` | Runs `ui.type`, which types up to 10,000 characters into the focused field. |
+| `ui_menu_list` | none | Runs `ui.menu.list` and returns the menu bar as a tree. |
+| `ui_menu_invoke` | `path` | Runs `ui.menu.invoke`, for example `Scene Collection > New…`. Three dots match the ellipsis, so `Scene Collection > New...` also works. An unknown path, a submenu or a disabled item is an error. |
+| `ui_dialog` | `answer: ok \| cancel`, `text?` | Runs `ui.dialog`, which answers the open name prompt or the exit confirmation as its buttons do. `ok` presses OK, or Stop and Exit; `cancel` presses Cancel. `text` replaces the name in a name prompt first. A name the prompt refuses is an error and the prompt stays open. |
+| `app_quit` | none | Runs `app.quit`, which closes the window as File › Exit does. While a recording, stream or replay buffer runs, the window asks first and the result's `confirming` is `true`. |
 
 ## Resources
 
@@ -263,7 +216,51 @@ The earlier `studio_state`, `studio_commands` and `studio_run` tools have been r
 | `studiocraft://document` | `document.inspect` with `detail: full`, as JSON. |
 | `studiocraft://commands` | `engine.commands`, as JSON. |
 
-[Resource templates](#resource-templates) read one scene, source, command or plug-in at a time.
+[Resource templates](#resource-templates) read one scene, source, command or plugin at a time.
+
+### Resource templates
+
+`resources/templates/list` lists four templates. Each reads one thing as JSON:
+
+| URI template | Contents |
+| --- | --- |
+| `studiocraft://scene/{id}` | The scene with this id or name: its items, each with `source_name`, and `program` and `preview`, which say whether it is the program scene or, in studio mode, the preview scene. |
+| `studiocraft://source/{id}` | The source with this id or name, with its settings and filters, `scenes` (the names of the scenes that place it) and `global_audio`. |
+| `studiocraft://command/{id}` | The command with this id, as `engine.commands` lists it. |
+| `studiocraft://plugin/{kind}` | The source, filter or transition plugin with this id: `type`, `name`, `version` and `schema` (its settings fields with their defaults), from the `plugin.list` command. |
+
+A numeric id is looked up as an id first and then as a name. Names may be percent-encoded
+(`studiocraft://scene/Be%20right%20back`). `resources/read` with any other URI, or with a value
+that names nothing, is error -32002.
+
+## Prompts
+
+`prompts/list` lists three prompts, and `prompts/get` returns one user message with the arguments
+filled in. A missing or empty required argument, an argument the prompt does not take, a value
+that is not a string and an unknown prompt are error -32602.
+
+| Prompt | Arguments | What it asks for |
+| --- | --- | --- |
+| `build_scene` | `description` | A new scene built from the description with `scene_add`, `source_add` and `item_transform`, checked with `render_preview`. |
+| `lower_third` | `text`, `color?` (`#rrggbbaa`, default `#ffffffff`), `scene?` | A `text` source placed in the lower band of the canvas. |
+| `check_collection` | none | A report of sources whose files are missing, empty scenes, scenes whose items are all hidden, and sources no scene places. Nothing is changed. |
+
+## Completions
+
+`completion/complete` suggests values for a prompt argument (`ref/prompt`) or a resource template's
+variable (`ref/resource`):
+
+| Target | Suggested values |
+| --- | --- |
+| `studiocraft://command/{id}` | Command ids. |
+| `studiocraft://scene/{id}` and the `scene` argument of `lower_third` | Scene names. |
+| `studiocraft://source/{id}` | Source names. |
+| `studiocraft://plugin/{kind}` | Plugin ids. |
+| `color` | A short list of colors. |
+
+A value is suggested when it starts with the typed text, ignoring case. A reply holds at most 100
+values; `total` counts every match and `hasMore` is `true` when some were left out. An unknown
+prompt, argument or template gives no values.
 
 ## Examples
 
