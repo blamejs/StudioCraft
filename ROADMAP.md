@@ -42,7 +42,7 @@ description in [docs/features.md](docs/features.md).
 
 - Settings › Video › Hardware acceleration chooses the graphics adapter, and the app recovers from a device loss ([Hardware acceleration](docs/features.md#hardware-acceleration)).
 - The compositor converts the program to NV12 on the GPU for the encoders (`craft-gpu-yuv`) ([Hardware acceleration](docs/features.md#hardware-acceleration)).
-- The Hardware video encoder tests each hardware encoder with one frame and picks one automatically (`craft-hwenc`) ([Hardware acceleration](docs/features.md#hardware-acceleration)).
+- The Hardware video encoder runs the hardware encoder set in Settings › Video › Hardware acceleration. Automatic tests each candidate with one frame, in an order set by the adapter's vendor, and falls back to x264 (`craft-hwenc`) ([Hardware acceleration](docs/features.md#hardware-acceleration)).
 - NVIDIA NVENC, Windows Media Foundation and Apple VideoToolbox H.264 and HEVC (built in) record MKV files in StudioCraft's own process (`craft-hwenc-native`) ([Hardware acceleration](docs/features.md#hardware-acceleration)).
 
 ### Interface
@@ -54,7 +54,7 @@ description in [docs/features.md](docs/features.md).
 - Nineteen interface languages are built in, and Arabic and Hebrew run right to left ([Languages](docs/features.md#languages)).
 - Profiles and scene collections can be switched, and Scene Collection › Import… and Export… read and write collection files ([Profiles and scene collections](docs/features.md#profiles-and-scene-collections)).
 - The stats window and View › Scopes show the program's timing and levels ([Stats and scopes](docs/features.md#stats-and-scopes)).
-- Help › Check for Updates…, the check at start and finishing an installed update run through `craft-update` ([Help and updates](docs/features.md#help-and-updates)).
+- Help › Check for Updates…, the check at start and the step that finishes installing a downloaded update on Windows run through `craft-update` ([Help and updates](docs/features.md#help-and-updates)).
 - Help › About StudioCraft shows the credits, with a choice of username, display name or real name, and the license texts ([Help and updates](docs/features.md#help-and-updates)).
 - The app icon in `assets/app-icon` is the window icon, the picture in the update prompt and the icon of the AppImage menu entry ([Help and updates](docs/features.md#help-and-updates)).
 
@@ -74,8 +74,9 @@ description in [docs/features.md](docs/features.md).
 ## Next
 
 1. **Translations.** A `studiocraft.tsv` catalog will be added for every other locale craft-i18n
-   has. Right-to-left layout will extend to the dock order, the order of the menu titles (egui's
-   `MenuBar` lays them out left to right) and the Settings, Properties and Filters windows.
+   has. Right-to-left layout will extend to the dock order, the order of the menu titles and the
+   Settings, Properties and Filters windows. Today egui's `MenuBar` lays the menu titles out left
+   to right in every language.
 2. **Multiple outputs (in progress).** StudioCraft will stream to several destinations at once and
    offer a virtual camera. `craft-flv` already writes and reads the FLV tags and AMF0 values an
    RTMP stream carries.

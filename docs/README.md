@@ -14,8 +14,8 @@ This page lists StudioCraft's documentation, grouped by what you want to do.
 
 ## Control and automate it
 
-- [Control protocol](control-protocol.md) describes the control channel: connecting with a token,
-  the methods and their limits, and the command-line tool.
+- [Control protocol](control-protocol.md) describes the control channel: the methods and their
+  limits, and the command-line tool, with how to make the session token.
 - [MCP server](mcp.md) shows how to register the Model Context Protocol (MCP) server with a client,
   and lists its tools, resources and prompts.
 

@@ -22,25 +22,37 @@ release carries these Linux signatures only when it was signed with the release 
 release notes show how to verify the downloads against `SHA256SUMS.txt` and `SHA3-512SUMS.txt`.
 
 No package includes `ffmpeg`. You need it only for streaming and for some kinds of recording, as
-[First stream](#first-stream) describes. The Flatpak cannot run an `ffmpeg` installed on the
-system.
+[First stream](#first-stream) describes. The `.deb` and `.rpm` packages list `ffmpeg` as a
+recommended package, so `apt` and `dnf` usually install it with them. The Flatpak runtime has no
+`ffmpeg`, and the Flatpak sandbox cannot run an `ffmpeg` installed on the system.
 
 ## First recording
+
+A new scene collection already has two audio sources that every scene records:
+
+- **Desktop audio** captures the sound the computer plays, on Windows and Linux. On macOS this
+  source records nothing: StudioCraft captures an output device only on Windows and Linux.
+- **Microphone** captures the system's default input device.
+
+Each one shows in the Audio Mixer dock with a meter and a mute button. Mute a source there to
+leave it out of the recording. Do not add another Audio output capture source for the same device,
+because the recording would then carry that sound twice.
 
 You can make your first recording without `ffmpeg`:
 
 1. In the Sources dock, click + and add a Display capture source. On Linux, pick the display in
-   the desktop's picker when it opens.
-2. Click + again and add an Audio output capture source to record the sound the computer plays.
-   This source works on Windows and Linux. On macOS, add an Audio input capture source for a
-   microphone instead.
-3. Open File › Settings, choose the Output tab, and set Video encoder to H.264 (built in). Keep
-   Format at MKV. Click OK.
-4. Click Record on the menu row. Click it again to stop.
+   the desktop's picker when it opens. On macOS, allow StudioCraft in System Settings › Privacy &
+   Security › Screen Recording when the system asks, as
+   [Troubleshooting](troubleshooting.md#capture) describes.
+2. Open the Settings window: Edit › Preferences… on Windows and Linux, or StudioCraft › Settings…
+   (⌘,) on macOS. Choose the Output tab, and set Video encoder to H.264 (built in). Keep Format at
+   MKV. Click OK.
+3. Click Record on the menu row. Click it again to stop.
 
-StudioCraft saves the recording in your Videos folder, or in the Recording folder set in
-Settings › Output, and names it `YYYY-MM-DD HH-MM-SS.<ext>`, for example
-`2026-11-18 14-05-09.mkv`. File › Show Recordings opens the folder.
+StudioCraft saves the recording in the Recording folder set in Settings › Output. When that setting
+is empty, it uses your Videos folder, then your home folder when the system has no Videos folder,
+and then the folder StudioCraft was started in. It names each file `YYYY-MM-DD HH-MM-SS.<ext>`, for
+example `2026-11-18 14-05-09.mkv`. File › Show Recordings opens the folder.
 
 MP4 and MOV files, the Lossless quality level and the x264 encoder need `ffmpeg`. The built-in
 hardware encoders record MKV files without it. [Encoders](features.md#encoders) lists which
@@ -48,8 +60,9 @@ encoder needs what.
 
 ## First stream
 
-Streaming needs `ffmpeg`, which the Flatpak cannot run. To stream on Linux, install another
-package, such as the `.AppImage`, `.deb` or `.rpm`.
+Streaming needs an `ffmpeg` that StudioCraft can run. The Flatpak cannot run an `ffmpeg` installed
+on the system, so to stream on Linux, install another package, such as the `.AppImage`, `.deb` or
+`.rpm`.
 
 1. Install `ffmpeg` so that it is on the `PATH`, or set its location in Settings › Output ›
    ffmpeg program.
@@ -63,7 +76,7 @@ software x264 encoder. Settings › Stream changes these values, and
 [Troubleshooting](troubleshooting.md#recording-and-streaming) covers a stream that does not start
 because `ffmpeg` was not found.
 
-## Where your files live
+## Where StudioCraft keeps your files
 
 StudioCraft keeps its settings, scene collections and profiles in its settings folder, a folder
 named `studiocraft` in your system's settings location. File › Show Settings Folder opens it.

@@ -20,7 +20,7 @@ crate in the same layer. `cargo xtask layers` checks this against the table in
 | L0 | `craft-tsmux` | The MPEG-2 transport stream writer: PAT and PMT, PES packets, PCR and continuity counters, written to any `io::Write`. It depends on no StudioCraft crate. |
 | L0 | `craft-flv` | FLV tags for H.264 and AAC: the file header, `onMetaData`, the AVC and AAC sequence headers, video and audio tags with composition time, the AMF0 values of script data and RTMP commands, and a tag reader. Its tag bodies are also RTMP message bodies. It depends on no StudioCraft crate. |
 | L0 | `craft-color-transform` | RGB spaces and Bradford adaptation, white balance by temperature and tint, OkLab and OkLCh, monotone tone curves and lookup tables, and PQ tone mapping. It depends on no StudioCraft crate. |
-| L0 | `craft-scopes` | Video scope maths: the waveform, parade, histogram and vectorscopes of a borrowed RGBA8 or NV12 frame, their numeric summaries and trace images. It depends on no StudioCraft crate. |
+| L0 | `craft-scopes` | Video scope math: the waveform, parade, histogram and vectorscopes of a borrowed RGBA8 or NV12 frame, their numeric summaries and trace images. It depends on no StudioCraft crate. |
 | L0 | `craft-audio-dsp` | Audio DSP shared with the other Craft apps: the `AudioEffect` trait and its effects, the BS.1770 / EBU R128 loudness meter, panning, test signals and resampling. It depends on no StudioCraft crate. |
 | L0 | `craft-ease` | Easing curves, keyed tracks, constant-speed Bezier motion paths and damped springs. It depends on no StudioCraft crate. |
 | L0 | `craft-gpu-device` | Choosing and opening a wgpu device: the user's adapter choice, corrections for drivers that crash, a software fallback, a capability report, and device health with recovery after a device loss. It depends on no StudioCraft crate. |
@@ -58,23 +58,23 @@ build for `wasm32-unknown-unknown`:
 One `MasterClock` (`media::clock`) drives the frame scheduler, the mixer and every timestamp.
 Frames and audio blocks come from pools, and the steady-state frame loop does not allocate.
 
-The following table summarizes how each thread receives its work. A cell marked "Not documented"
-has no stated value in the code's documentation.
+The following table summarizes how each thread receives its work. An empty cell means this page
+gives no value for that column.
 
 | Thread | Input queue | Bound | Drop policy | Cost per frame |
 | --- | --- | --- | --- | --- |
-| Source | None; it publishes video into a `VideoOut` slot and audio into a lock-free queue | The audio queue holds 32 blocks (`plugin::source::AUDIO_QUEUE_BLOCKS`), and at each tick the mixer keeps at most 4 (`engine::mixer::MAX_QUEUED_BLOCKS`) | A full queue drops its oldest block, and the mixer drops the oldest blocks beyond 4 | Not documented |
-| Audio capture | The device's thread | On Linux, a conversion buffer allocated before the stream starts | Not documented | Not documented |
+| Source | None; it publishes video into a `VideoOut` slot and audio into a lock-free queue | The audio queue holds 32 blocks (`plugin::source::AUDIO_QUEUE_BLOCKS`), and at each tick the mixer keeps at most 4 (`engine::mixer::MAX_QUEUED_BLOCKS`) | A full queue drops its oldest block, and the mixer drops the oldest blocks beyond 4 | |
+| Audio capture | The device's thread | On Linux, a conversion buffer allocated before the stream starts | | |
 | Screen capture (Linux) | The PipeWire stream | `FrameSlot`: the newest frame and up to 2 spares | A newer frame replaces a frame the source has not taken | One copy of the picture |
 | Camera capture | The camera library | `FrameSlot`: the newest frame and up to 2 spares | A newer frame replaces a frame the source has not taken; a frame that cannot be converted goes back to the spares | One conversion of the picture |
 | Mixer | One 1024-frame block from every audible source | 4 blocks per source; each output's audio queue holds 256 blocks | The oldest source blocks beyond 4 are dropped | No allocation; the delay lines are allocated with the input list |
-| Monitoring | The monitoring mix | 4 blocks, and playback waits for 2 | Not documented | No allocation or lock |
-| Compositor | The master clock's frame ticks | A ring of 3 GPU textures | Not documented | No allocation in the steady state |
-| Scopes | The newest program copy, handed over when the thread is idle | One copy | A copy made while the thread is busy is not handed over | Not documented |
-| Output (ffmpeg) | The program's frames and the mixer's audio blocks | 256 audio blocks; the video bound is not documented | Not documented | Not documented |
-| Output (built-in encoders) | The program's frames and the mixer's audio blocks; the file thread takes the encode threads' packets | 256 audio blocks, and 64 MiB and 3 s of packets | An encoder that finds the packet queue full waits up to 2 s (`outputs::native::DISK_WAIT`), and then the recording fails. The recording also fails when one encoder falls more than 10 s behind the other (`MAX_LAG_NS`). | Not documented |
-| Replay buffer | The encode threads' packets | A ring bounded by length and bytes | Not documented | Not documented |
-| Window | `Studio` state | Not documented | Not documented | Not documented |
+| Monitoring | The monitoring mix | 4 blocks, and playback waits for 2 | | No allocation or lock |
+| Compositor | The master clock's frame ticks | A ring of 3 GPU textures | | No allocation in the steady state |
+| Scopes | The newest program copy, handed over when the thread is idle | One copy | A copy made while the thread is busy is not handed over | |
+| Output (ffmpeg) | The program's frames and the mixer's audio blocks | 256 audio blocks, and one second of video frames (the frame rate rounded up, from 8 to 240 frames) | A full video or audio queue drops its oldest item and counts the drop (`media::queue::Fifo`) | |
+| Output (built-in encoders) | The program's frames and the mixer's audio blocks; the file thread takes the encode threads' packets | 256 audio blocks, and 64 MiB and 3 s of packets | An encoder that finds the packet queue full waits up to 2 s (`outputs::native::DISK_WAIT`), and then the recording fails. The recording also fails when one encoder falls more than 10 s behind the other (`MAX_LAG_NS`). | |
+| Replay buffer | The encode threads' packets | A ring bounded by length and bytes | | |
+| Window | `Studio` state | | | |
 
 ### Source threads
 
@@ -83,8 +83,8 @@ slot and audio blocks into a bounded lock-free queue.
 
 ### Audio capture threads
 
-An audio input or output source receives samples on the device's thread: cpal's on Windows and
-macOS, and on Linux a thread that `platform::audio` starts for each capture to run a PipeWire
+An audio input or output source receives samples on the device's thread: cpal's thread on Windows
+and macOS, and on Linux a thread that `platform::audio` starts for each capture to run a PipeWire
 stream loop. The Linux stream asks for 48 kHz stereo `f32`, converts each buffer into a buffer
 allocated before the stream starts, and stops when its handle is dropped. Listing Linux devices
 reads the PipeWire registry and the `default` metadata object and waits at most 2 s for the
@@ -103,11 +103,11 @@ frame and up to 2 spares. A newer picture replaces a picture the source has not 
 neither thread waits for the other. The stream takes 4-byte RGB formats up to 8192 px a side
 and follows a resize with the next buffer.
 
-| Event | What the capture does |
+| Event | What happens |
 | --- | --- |
-| The picker is canceled, or the desktop closes the session when sharing is stopped from its own controls | Clears the picture. The source does not open the picker again until its settings change. |
-| The desktop has no portal, the portal returns no stream, the stream fails, or the PipeWire connection is lost | Reports it and tries again after 2 s. |
-| The capture is dropped while the picker is open | Closes the portal session, which ends the request. |
+| The picker is canceled, or the desktop closes the session when sharing is stopped from its own controls | The capture clears the picture. The source does not open the picker again until its settings change. |
+| The desktop has no portal, the portal returns no stream, the stream fails, or the PipeWire connection is lost | The capture reports it and tries again after 2 s. |
+| The capture is dropped while the picker is open | The capture closes the portal session, which ends the request. |
 | The capture is dropped, the session closes or the stream ends while the stream runs | The portal thread, which waits for these, closes a pipe the stream loop watches and closes the portal session. |
 
 ### Camera capture
@@ -119,8 +119,8 @@ thread of its own. The camera handle stays on that thread.
 then the same id unless it is a Linux device node, then the same name. It reads the camera's
 formats and opens it through the `nokhwa` crate: Media Foundation on Windows, AVFoundation on macOS
 and V4L2 on Linux. On Linux only the V4L2 nodes that can capture video are listed. On Windows every
-thread that uses Media Foundation sets up COM (`comedy`): each capture thread for its stream's
-life, and a short-lived thread for each camera list or format read.
+thread that uses Media Foundation sets up COM (`comedy`). Each capture thread sets up COM for its
+stream's life, and each camera list or format read runs on a short-lived thread that sets it up.
 
 **Gray cameras on Linux.** The 8-bit gray (`GREY`) formats are listed and streamed through the
 `v4l` crate (`platform::camera_gray`). A camera that sends only gray lists only those formats. A
@@ -139,8 +139,8 @@ screen captures use:
 | MJPEG | Decoded with `zune-jpeg` at the size in its own header. An MJPEG frame without Huffman tables uses the standard ones. |
 
 An uncompressed frame longer than its tight size is read with the row stride V4L2 reports on
-Linux, and elsewhere with the stride its length gives. On Windows RGB24 frames arrive last row
-first. On macOS each frame's own size and encoding are used, the library's frame queue is emptied
+Linux, and elsewhere it is read with the stride its length gives. On Windows RGB24 frames arrive
+last row first. On macOS each frame's own size and encoding are used, the library's frame queue is emptied
 at every frame, and only YUYV formats are offered. The thread copies such frames tight and top row
 first into a reused buffer.
 

@@ -1,7 +1,7 @@
 # Features
 
 This page describes everything StudioCraft does, one section per area. It is for people who use
-the app and want the details behind a menu item or a setting. The tuned values, such as timings,
+the app and want to know what a menu item or a setting does. The tuned values, such as timings,
 sizes and bitrates, are listed in [MECHANICS.md](../MECHANICS.md).
 
 ## Sources
@@ -90,6 +90,10 @@ the program with the chosen transition, or with a quick cut or fade.
 
 ## Audio
 
+A new scene collection has two global audio sources that every scene records: Desktop audio, the
+system's default output device, and Microphone, the default input device. Desktop audio captures
+sound on Windows and Linux only.
+
 The Audio Mixer dock shows peak and RMS meters with peak hold, a volume fader in dB, and a mute
 button for every audible source. The mixer also measures the final mix's loudness (momentary,
 short-term, integrated, loudness range and true peak). The window does not show these readings
@@ -108,9 +112,14 @@ macOS.
 
 Recordings are MKV, MP4 or MOV files at four quality levels: Compact, High, Pristine and Lossless.
 The Lossless level encodes the video frames without compression loss and writes very large files.
-The software encoder runs x264 with `-qp 0`, and NVENC through `ffmpeg` runs with `-tune lossless`. StudioCraft writes recordings to your Videos folder
-unless Settings › Output names another folder, and names each file `YYYY-MM-DD HH-MM-SS.<ext>`.
-File › Show Recordings opens the folder.
+The software encoder runs x264 with `-qp 0`, and NVENC through `ffmpeg` runs with
+`-tune lossless`. A Lossless recording also stores its audio without loss, as FLAC in an MKV file
+and as ALAC in an MP4 or MOV file. The other levels encode the audio as AAC.
+
+StudioCraft writes recordings to the folder set in Settings › Output. When that setting is empty,
+it uses your Videos folder, then your home folder when the system has no Videos folder, and then
+the folder StudioCraft was started in. It names each file `YYYY-MM-DD HH-MM-SS.<ext>`. File › Show
+Recordings opens the folder.
 
 ### Encoders
 
@@ -132,11 +141,12 @@ describes how it picks one.
 
 ### When `ffmpeg` is needed
 
-MP4 and MOV recordings, recordings at the Lossless quality level, streams, and recordings with x264 or a hardware
-encoder outside the built-in ones run in a separately installed `ffmpeg`. StudioCraft looks for
-`ffmpeg` on the `PATH`, or at the location set in Settings › Output. Recording uses x264 until
-H.264 (built in) is chosen in Settings › Output. No release package includes `ffmpeg`, and the
-Flatpak cannot run an `ffmpeg` installed on the system.
+MP4 and MOV recordings, recordings at the Lossless quality level, streams, and recordings with
+x264 or a hardware encoder outside the built-in ones run in a separately installed `ffmpeg`.
+StudioCraft looks for `ffmpeg` on the `PATH`, or at the location set in Settings › Output.
+Recording uses x264 until H.264 (built in) is chosen in Settings › Output. No release package
+includes `ffmpeg`. The `.deb` and `.rpm` packages list it as a recommended package. The Flatpak
+runtime has no `ffmpeg`, and the Flatpak sandbox cannot run an `ffmpeg` installed on the system.
 
 Tools › Available Encoders lists the built-in encoders and the encoders the installed `ffmpeg`
 offers, and says when `ffmpeg` was not found.
@@ -168,13 +178,23 @@ the chosen adapter is missing or the app fell back to software. After a device l
 again on a new device, and after 3 losses in 10 minutes it draws in software.
 
 **Hardware encoder** picks the encoder that recordings and streams use when their encoder is
-Hardware. Automatic tests each candidate with a one-frame encode, in an order set by the graphics
-adapter's vendor, and uses x264 when none works. The candidates run in `ffmpeg`: NVIDIA NVENC, AMD
-AMF, Intel Quick Sync, Windows Media Foundation, VideoToolbox and VA-API. NVENC, AMF and Quick
-Sync offer HEVC and AV1 as well as H.264, and VideoToolbox and VA-API are listed.
+Hardware: Automatic, Software only, or one of the listed hardware encoders. Software only uses
+x264 without testing the hardware encoders. Automatic tests each candidate with a one-frame
+encode, in an order set by the graphics adapter's vendor, and uses x264 when none works. The
+candidates run in `ffmpeg`:
 
-For an MKV recording, the Hardware encoder tests the built-in hardware encoders in StudioCraft's
-own process, as it tests NVENC, and records with the built-in encoder:
+| Family | Codecs |
+| --- | --- |
+| NVIDIA NVENC | H.264, HEVC and AV1 |
+| AMD AMF | H.264, HEVC and AV1 |
+| Intel Quick Sync | H.264, HEVC and AV1 |
+| Windows Media Foundation | H.264 and HEVC |
+| VideoToolbox | H.264 and HEVC |
+| VA-API | H.264, HEVC and AV1 |
+
+For an MKV recording that is not at the Lossless level, StudioCraft tests each candidate that has
+a built-in encoder in the following list with that built-in encoder, inside its own process
+instead of in `ffmpeg`. When such a candidate is chosen, the recording uses the built-in encoder:
 
 - NVIDIA NVENC H.264 and HEVC (built in) run through the NVIDIA driver on Windows and 64-bit
   Linux.
@@ -196,21 +216,22 @@ and the focus ring have at least 3:1.
 
 ### Menu row and output controls
 
-The menu row is 32 points tall. It holds the menu titles on the left, and on the right an Edit and
-Studio switch, the transition picker with its duration, and Record and Go Live with their timers.
-When the row is too narrow, the transition picker moves behind an icon button first, then Record
-and Go Live leave out their labels, and last the menu titles move into the menu bar's overflow
-menu. Docks › Output Controls and Docks › Transition Controls show and hide the two groups.
+The menu row is 32 points tall. It holds the menu titles at the start of the row, and at the end
+an Edit and Studio switch, the transition picker with its duration, and Record and Go Live with
+their timers. When the row is too narrow, the transition picker moves behind an icon button
+first, then Record and Go Live leave out their labels, and last the menu titles move into the menu
+bar's overflow menu. Docks › Output Controls and Docks › Transition Controls show and hide the two groups.
 
 ### Docks
 
 Scenes, Sources and Audio Mixer sit in a strip under the preview. Each dock has a 24-point header
-with the title on the left and the dock's actions on the right, and no footer. When the dock is
+with the title at its start and the dock's actions at its end, and no footer. When the dock is
 narrow, the header keeps its actions and shortens the title. 1-point dividers separate the docks.
 
 The strip is 200 points tall, or 30% of the window's height when that is less, and never under 120
 points. Scenes, Sources and Audio Mixer start 300, 340 and 400 points wide
-([MECHANICS.md](../MECHANICS.md#editing)), and the last shown dock takes the rest. No dock is narrower than 200 points while the window has room.
+([MECHANICS.md](../MECHANICS.md#editing)), and the last shown dock takes the rest. No dock is
+narrower than 200 points while the window has room.
 
 You resize the strip by dragging its top edge outside the header actions, and resize the docks by
 dragging a divider. The edge and the dividers have 8-point hit bands, and a dragged strip can be up
@@ -219,8 +240,9 @@ which pass over hidden docks, and Undock.
 
 An undocked dock is drawn in a window of its own inside the main window. You drag it by the dock's
 title and resize it from its right and bottom edges. Its starting and smallest sizes are in
-[MECHANICS.md](../MECHANICS.md#editing). A smaller main window draws it further in without
-changing its saved place or size. Its menu offers Dock in the Strip.
+[MECHANICS.md](../MECHANICS.md#editing). When the main window is smaller, StudioCraft draws the
+undocked dock further in without changing its saved place or size. Its menu offers Dock in the
+Strip.
 
 StudioCraft keeps the strip's height, the docks' widths, visibility and order, which docks are
 undocked, and their windows' places and sizes until Docks › Reset Docks. Reset Docks puts every
@@ -239,15 +261,15 @@ replaces that layout. At most 32 layouts are kept, and a settings file with more
 The interface uses Inter for text, Inter SemiBold for titles and JetBrains Mono for readouts. When
 `CRAFT_FONTS_DIR` is set at build time, the craft-fonts faces follow for the scripts Inter lacks,
 and egui's built-in faces come last. When the interface language is written in a script Inter
-lacks (Arabic, Thai), that script's face goes first. The menus' check and radio marks draw with or
-without `CRAFT_FONTS_DIR`.
+lacks (Arabic, Thai), that script's face goes first. StudioCraft draws the menus' check and radio
+marks with or without `CRAFT_FONTS_DIR`.
 
 ### Title bar
 
-StudioCraft draws its own title bar only where the desktop leaves the window frame to the app
-(GNOME on Wayland, or `STUDIOCRAFT_TITLEBAR=app`) and Settings › General › "Use system title bar"
-is off. The menu strip is then the title bar. You move the window by its empty part, a
-double-click maximizes it, and the window buttons sit where the desktop puts them.
+StudioCraft draws its own title bar only where the desktop does not draw a window frame (GNOME on
+Wayland, or `STUDIOCRAFT_TITLEBAR=app`) and Settings › General › "Use system title bar" is off.
+The menu strip is then the title bar. You move the window by its empty part, a double-click
+maximizes it, and the window buttons sit where the desktop puts them.
 
 ### Languages
 
@@ -277,9 +299,10 @@ program output. The `scopes.kind` command picks the scope.
 
 Help › Community opens the Discord server, the website, the source code and the issue tracker.
 Help › Check for Updates… looks for a newer release, and Settings › General › Check for updates at
-start (on by default) does the same when the app starts. The app finishes an update it installed
-itself. Help › About StudioCraft lists the contributors, with a choice of username, display name
-or real name, and shows the license texts.
+start (on by default) does the same when the app starts. On Windows, a copy of the program
+finishes installing a downloaded update, starts StudioCraft again and exits. Help › About
+StudioCraft lists the contributors, with a choice of username, display name or real name, and
+shows the license texts.
 
 The app icon is the window icon, the picture in the update prompt, and the icon of the menu entry
 the updater writes beside an AppImage.
@@ -287,13 +310,15 @@ the updater writes beside an AppImage.
 ## Hotkeys
 
 Settings › Hotkeys lists every command that can take a shortcut and changes its shortcuts. Type
-shortcuts such as Ctrl+1 or Shift+F5, and separate several with commas. Ctrl+1 to Ctrl+9 show the
-first nine scenes. The list includes Start or Stop Recording, Start or Stop Streaming, Start or
-Stop Replay Buffer, Save Replay, Transition to Program, Cut to Program and Studio Mode.
+shortcuts such as Ctrl+1 or Shift+F5, and separate several with commas. Ctrl+1 to Ctrl+9 on
+Windows and Linux, and ⌘1 to ⌘9 on macOS, show the first nine scenes. The list includes Start or
+Stop Recording, Start or Stop Streaming, Start or Stop Replay Buffer, Save Replay, Transition to
+Program, Cut to Program and Studio Mode.
 
 ## Settings
 
-File › Settings opens the Settings window. OK or Apply puts the changes in force, and Cancel
+Edit › Preferences… on Windows and Linux, and StudioCraft › Settings… (⌘,) on macOS, open the
+Settings window. OK or Apply puts the changes in force, and Cancel
 discards them.
 
 | Tab | Settings |
@@ -314,10 +339,10 @@ outside the window:
   and prints the reply. `studiocraft-cli check <file>` reports problems in scene collection files.
 - `studiocraft --control <port>` accepts JSON requests on `127.0.0.1:<port>`. Each request carries
   the token from `STUDIOCRAFT_CONTROL_TOKEN`. [docs/control-protocol.md](control-protocol.md)
-  describes the protocol, and its [Connecting](control-protocol.md#connecting) section shows how
-  to make the token.
+  describes the protocol, and its [Command line](control-protocol.md#command-line) section shows
+  how to make the token.
 - The Model Context Protocol (MCP) server lets an MCP client drive StudioCraft.
-  `studiocraft-cli mcp` runs its own studio without a window, and
+  `studiocraft-cli mcp` runs a StudioCraft engine in its own process without a window, and
   `studiocraft-cli mcp --connect <port>` drives the app started with `--control <port>`, including
   its window, menus and screenshots. Connected to the app, the server can inspect the window, take
   screenshots, click, drag, press keys, type, use menus, answer dialogs and quit.

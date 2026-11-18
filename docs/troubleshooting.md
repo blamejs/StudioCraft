@@ -6,18 +6,19 @@ bold label is the symptom or the message the app shows.
 ## Recording and streaming
 
 **"ffmpeg (set its location in Settings › Output) was not found" or "ffmpeg at {path} was not
-found".** Streams, MP4 and MOV recordings, recordings at the Lossless quality level, and recordings with x264 or an
-`ffmpeg` hardware encoder run in a separately installed `ffmpeg`, and StudioCraft could not find
-it. Install `ffmpeg` so that it is on the `PATH`, or set its location in Settings › Output ›
-ffmpeg program. Tools › Available Encoders lists the encoders the installed `ffmpeg` offers, and
-says when `ffmpeg` was not found. To record without `ffmpeg`, set the Video encoder in Settings ›
-Output to H.264 (built in) and record MKV files.
+found".** Streams, MP4 and MOV recordings, recordings at the Lossless quality level, and
+recordings with x264 or an `ffmpeg` hardware encoder run in a separately installed `ffmpeg`, and
+StudioCraft could not find it. Install `ffmpeg` so that it is on the `PATH`, or set its location
+in Settings › Output › ffmpeg program. Tools › Available Encoders lists the encoders the installed
+`ffmpeg` offers, and says when `ffmpeg` was not found. To record without `ffmpeg`, set the Video
+encoder in Settings › Output to H.264 (built in) and record MKV files.
 
 **An encoder in Settings is shown as "(not in this ffmpeg)".** The installed `ffmpeg` does not
 offer that encoder. Pick another encoder, or install an `ffmpeg` build that has it.
 
-**The Flatpak cannot find `ffmpeg`.** The Flatpak cannot run an `ffmpeg` installed on the system.
-Record MKV files with H.264 (built in), or use another package to stream.
+**The Flatpak cannot find `ffmpeg`.** The Flatpak runtime has no `ffmpeg`, and the Flatpak sandbox
+cannot run an `ffmpeg` installed on the system. Record MKV files with H.264 (built in), or use
+another package to stream.
 
 **"No hardware encoder passed its test; using {encoder}".** With the Hardware encoder set to
 Automatic, StudioCraft tests each hardware encoder with one frame and uses x264 when none works.
@@ -28,6 +29,10 @@ Hardware acceleration.
 while it ran. The next recording or stream tries another encoder.
 
 ## Capture
+
+**On macOS, a Display capture or Window capture source shows no picture.** A program can capture
+the screen on macOS only after you allow it. Allow StudioCraft in System Settings › Privacy &
+Security › Screen Recording, then quit StudioCraft and start it again.
 
 **"the desktop has no screen-cast portal".** On Linux, display and window capture need
 `xdg-desktop-portal` with a backend for your desktop. Install them and change any of the source's
@@ -92,7 +97,7 @@ normally and use Help › Check for Updates….
 `--control` and no token. Set `STUDIOCRAFT_CONTROL_TOKEN` before you start it.
 
 **"STUDIOCRAFT_CONTROL_TOKEN must be 64 hexadecimal characters".** The token has the wrong form.
-Make a new one as [Connecting](control-protocol.md#connecting) shows.
+Make a new one as the [Command line](control-protocol.md#command-line) section shows.
 
 **"set STUDIOCRAFT_CONTROL_TOKEN to the token the app was started with".**
 `studiocraft-cli send` and `studiocraft-cli mcp --connect` read the token from the same variable
