@@ -612,15 +612,15 @@ impl Session {
         let mut read = Ok(());
         let mut seg = ptr.cast::<abi::VACodedBufferSegment>().cast_const();
         let mut segments = 0;
-        while !seg.is_null() {
+        // SAFETY: a mapped coded buffer starts with a list of segments, each valid and aligned
+        // until the buffer is unmapped below, linked by `next` and ended by a null pointer, which
+        // `as_ref` turns into `None`. The reference is not kept past this iteration.
+        while let Some(s) = unsafe { seg.as_ref() } {
             segments += 1;
             if segments > 4096 {
                 read = Err("the coded buffer's segment list does not end".to_string());
                 break;
             }
-            // SAFETY: a mapped coded buffer starts with a list of segments, each valid until the
-            // buffer is unmapped below, linked by `next` and ended by a null pointer.
-            let s = unsafe { *seg };
             if let Some(why) = segment_error(s.status) {
                 read = Err(why.to_string());
                 break;
