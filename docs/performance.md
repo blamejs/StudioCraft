@@ -7,15 +7,14 @@ them. The rules for threads, queues and hot paths are in
 ## Budgets
 
 - At 60 fps the compositor has 16.7 ms per frame. Drawing the program scene must stay well under
-  16.7 ms.
+  that, so encoders and the window have time too.
 - One audio block is 1024 frames at 48 kHz, which is 21.3 ms. Mixing every source into one block
   must stay under 1 ms.
 
 ## Baselines
 
 The criterion benches and the timing run below were measured on 2026-11-15 on Linux, in release
-builds. The hardware for those runs was not recorded. Each later section names its own date and
-hardware.
+builds. The encoder and FLV sections name their own dates and hardware.
 
 ### Criterion benches
 
@@ -48,15 +47,17 @@ start of drawing to the end of submitting it to the GPU.
 
 ### GPU YUV conversion
 
-`cargo bench -p craft-gpu-yuv` converts a 1080p and a 4K picture on the GPU and times each case
-from the conversion passes to a mapped read-back buffer, so the figure includes the read-back. It
-also times a CPU reference conversion at 1080p. On a machine without a graphics adapter only the
-CPU reference runs. No baseline is recorded yet.
+`cargo bench -p craft-gpu-yuv` times four conversions on the GPU: `gpu nv12 1080p`,
+`gpu p010 1080p`, `gpu nv12 4k`, and `gpu nv12 4k to 1080p`, which scales a 4K picture down to
+1080p. Each timing runs from the conversion passes to a mapped read-back buffer and includes the
+read-back. The bench also times `cpu nv12 1080p`, a reference conversion on the CPU. On a machine
+without a graphics adapter only the CPU case runs. This page records no baseline for these
+benches yet.
 
 ### Built-in H.264 encoder
 
-Measured on 2026-11-17 on Linux (AMD EPYC 9R14, 128 hardware threads), release build.
-`cargo run --release -p studiocraft-encode --example encode_bench -- 3 <threads>` codes 3 seconds
+This bench was measured on 2026-11-17 on Linux (AMD EPYC 9R14, 128 hardware threads), in a
+release build. `cargo run --release -p studiocraft-encode --example encode_bench -- 3 <threads>` codes 3 seconds
 of moving pictures per case after one second of warm-up, in quality mode at level 23. The frames
 cycle through one second of different pictures. A recording runs the encoder on the computer's
 hardware threads minus two, so 6 threads stands for an 8-thread computer and 14 threads for a
@@ -80,17 +81,18 @@ sound.
 | 1920 × 1080 | 60 | Balanced | 320% | 154% | 133% |
 | 1920 × 1080 | 60 | Quality | 571% | 256% | 223% |
 
-With 6 threads, 720p at 30 fps keeps up on Speed and Balanced, and 1080p at 30 fps and 720p at
-60 fps keep up on Speed only, near the limit. 1080p at 60 fps does not keep up on any preset. With
-14 threads or more, 1080p at 60 fps keeps up on Speed only, and 1080p at 30 fps on Speed and
-Balanced. More than 14 threads gives little: the encoder splits a picture into at most one slice
-per four rows of macroblocks (17 slices at 1080p, 12 at 720p). Speed is the encoder's default
-preset.
+With 6 threads, 720p at 30 fps keeps up on Speed and Balanced. 1080p at 30 fps and 720p at 60 fps
+keep up on Speed only, at 92% of real time. 1080p at 60 fps does not keep up on any preset. With
+14 threads or more, 1080p at 60 fps keeps up on Speed only, and 1080p at 30 fps keeps up on Speed
+and Balanced. Going from 14 to 126 threads changes the share by between 10 points slower and
+33 points faster in the encoder table. The encoder splits a picture into at most one slice per four
+rows of macroblocks (17 slices at 1080p, 12 at 720p). Speed is the encoder's default preset.
 
 ### FLV tags
 
-Measured on 2026-11-18 on Linux (AMD EPYC 9R14), release build. `cargo bench -p craft-flv` writes
-and reads one second of a 6000 kbps, 60 fps H.264 stream with 160 kbps AAC: 60 video tags of about
+This bench was measured on 2026-11-18 on Linux (AMD EPYC 9R14), in a release build.
+`cargo bench -p craft-flv` writes and reads one second of a 6000 kb/s, 60 fps H.264 stream with
+160 kb/s AAC: 60 video tags of about
 12 500 bytes and 47 audio tags of 426 bytes, 770 KB in all, into buffers that keep their capacity.
 
 The destination benches send the same second to 4 outputs:
@@ -124,6 +126,7 @@ destination costs 820.5 µs. Runs on this host vary by up to 15% from one run to
 - Run the criterion benches with `cargo bench -p <crate>`.
 - Run the timing run with `cargo run --release -p studiocraft-cli -- bench <seconds>`.
 - Run the encoder bench with `cargo run --release -p studiocraft-encode --example encode_bench -- <seconds> [<threads>]`.
-- In the app, View › Stats shows the same counters while you work.
+- In the app, View › Stats shows the frames drawn, the frames drawn late and the last and average
+  frame times while you work.
 
 Record new baselines here when a change moves them by more than 10%.

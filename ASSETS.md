@@ -1,14 +1,15 @@
 # Assets
 
 This file lists every picture, sound, font or video file in the repository with its author, source
-and license. `cargo xtask assets` fails when a file is missing from this list, so each entry keeps
-the file's full path from the repository root in backticks.
+and license. `cargo xtask assets` fails when a file is missing from this list. The rows of the
+author, source and license tables give each file's full path from the repository root in backticks.
+The notes and the "Where each file is used" table use short names.
 
 The asset files are the app icon in `assets/app-icon` and the three interface faces in
 `assets/fonts`. The interface icons are drawn from shapes in `crates/ui-egui/src/icons.rs` and are
 not files.
 
-## Icons
+## App icon
 
 The app icon is an engraving-style panda seated on a rounded purple tile. It is the project owner's
 original drawing, a 1254 × 1254 raster. The tile is fully opaque in flat purple (128, 66, 129), and
@@ -24,6 +25,8 @@ The files are made from the drawing as follows:
   824/1024 of the side, centered on a transparent canvas (412 px of 512 px).
 - `studiocraft.ico` holds PNG images at 16, 24, 32, 48, 64, 128 and 256 px.
 - `studiocraft.icns` holds PNG images for every iconset size from 16 to 1024 px, @2x included.
+
+The app icon files have these authors, sources and licenses:
 
 | File | Author | Source | License |
 | --- | --- | --- | --- |
@@ -53,6 +56,8 @@ The font files are the upstream releases, unmodified:
 | `assets/fonts/Inter-Regular.ttf` | Inter 4.1 (name table 4.001) | `40d692fce188e4471e2b3cba937be967878f631ad3ebbbdcd587687c7ebe0c82` |
 | `assets/fonts/Inter-SemiBold.ttf` | Inter 4.1 (name table 4.001) | `78a843fade9d4612a5567302fb595b56976eb5fcebf4fea5a5912d638bafcde3` |
 | `assets/fonts/JetBrainsMono-Regular.ttf` | JetBrains Mono 2.305 | `e6fd0d7e91550b3ed2b735d4312474362c4716edc4fc0577a0f61ed782d5aed1` |
+
+The font files and their license texts have these authors, sources and licenses:
 
 | File | Author | Source | License |
 | --- | --- | --- | --- |
