@@ -455,14 +455,14 @@ menu	Transform	Преобразование
 	MiB	МиБ
 	File size	Размер файла
 	GiB	ГиБ
-	{tracks} tracks take about {gb} GB an hour; the buffer holds {seconds} s of audio while the disk is slow	Дорожки ({tracks}) занимают около {gb} ГБ в час; буфер вмещает {seconds} с звука, пока диск работает медленно
+	Audio tracks: {tracks}, about {gb} GiB an hour; the buffer holds {seconds} s of audio while the disk is slow	Звуковые дорожки: {tracks}, около {gb} ГиБ в час; буфер вмещает {seconds} с звука, пока диск работает медленно
 	A recording runs	Идёт запись
 	The stream runs	Идёт трансляция
 	A recording or the stream runs	Идёт запись или трансляция
 	The disk is almost full; audio tracks stop before the recording or the stream runs out of space	Диск почти заполнен; звуковые дорожки останавливаются раньше, чем записи или трансляции перестанет хватать места
 	This take has made as many audio track files as it can; sources added since are not recorded to their own files	Этот дубль уже создал максимально возможное число файлов звуковых дорожек; источники, добавленные после этого, не записываются в собственные файлы
 	More sources are set to record their own track than can be recorded at once; the later ones are not recorded	Собственную дорожку должны записывать больше источников, чем можно записывать одновременно; последние не записываются
-	{tracks} audio tracks; {lost} s of audio lost while the disk was slow	Звуковых дорожек: {tracks}; потеряно {lost} с звука, пока диск работал медленно
+	Audio tracks: {tracks}; {lost} s of audio lost while the disk was slow	Звуковых дорожек: {tracks}; потеряно {lost} с звука, пока диск работал медленно
 	TRACKS	ДОРОЖКИ
 	TRACKS stopped	ДОРОЖКИ остановлены
 	Audio tracks stopped early; the status message gives the reason	Звуковые дорожки остановились досрочно; причина указана в сообщении о состоянии

@@ -495,14 +495,14 @@ menu	Transform	Transform
 	MiB	MiB
 	File size	File size
 	GiB	GiB
-	{tracks} tracks take about {gb} GB an hour; the buffer holds {seconds} s of audio while the disk is slow	{tracks} tracks take about {gb} GB an hour; the buffer holds {seconds} s of audio while the disk is slow
+	Audio tracks: {tracks}, about {gb} GiB an hour; the buffer holds {seconds} s of audio while the disk is slow	Audio tracks: {tracks}, about {gb} GiB an hour; the buffer holds {seconds} s of audio while the disk is slow
 	A recording runs	A recording runs
 	The stream runs	The stream runs
 	A recording or the stream runs	A recording or the stream runs
 	The disk is almost full; audio tracks stop before the recording or the stream runs out of space	The disk is almost full; audio tracks stop before the recording or the stream runs out of space
 	This take has made as many audio track files as it can; sources added since are not recorded to their own files	This take has made as many audio track files as it can; sources added since are not recorded to their own files
 	More sources are set to record their own track than can be recorded at once; the later ones are not recorded	More sources are set to record their own track than can be recorded at once; the later ones are not recorded
-	{tracks} audio tracks; {lost} s of audio lost while the disk was slow	{tracks} audio tracks; {lost} s of audio lost while the disk was slow
+	Audio tracks: {tracks}; {lost} s of audio lost while the disk was slow	Audio tracks: {tracks}; {lost} s of audio lost while the disk was slow
 	TRACKS	TRACKS
 	TRACKS stopped	TRACKS stopped
 	Audio tracks stopped early; the status message gives the reason	Audio tracks stopped early; the status message gives the reason

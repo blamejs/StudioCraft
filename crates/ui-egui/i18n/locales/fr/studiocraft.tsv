@@ -455,14 +455,14 @@ menu	Transform	Transformer
 	MiB	Mio
 	File size	Taille de fichier
 	GiB	Gio
-	{tracks} tracks take about {gb} GB an hour; the buffer holds {seconds} s of audio while the disk is slow	{tracks} pistes occupent environ {gb} Go par heure ; le tampon conserve {seconds} s d'audio quand le disque est lent
+	Audio tracks: {tracks}, about {gb} GiB an hour; the buffer holds {seconds} s of audio while the disk is slow	Pistes audio : {tracks}, environ {gb} Gio par heure ; le tampon conserve {seconds} s d'audio quand le disque est lent
 	A recording runs	Un enregistrement est en cours
 	The stream runs	Le stream est en cours
 	A recording or the stream runs	Un enregistrement ou le stream est en cours
 	The disk is almost full; audio tracks stop before the recording or the stream runs out of space	Le disque est presque plein ; les pistes audio s'arrêtent avant que l'enregistrement ou le stream manque d'espace
 	This take has made as many audio track files as it can; sources added since are not recorded to their own files	Cette prise a créé autant de fichiers de pistes audio qu'elle le peut ; les sources ajoutées depuis ne sont pas enregistrées dans leurs propres fichiers
 	More sources are set to record their own track than can be recorded at once; the later ones are not recorded	Plus de sources sont réglées pour enregistrer leur propre piste qu'il n'est possible d'en enregistrer à la fois ; les dernières ne sont pas enregistrées
-	{tracks} audio tracks; {lost} s of audio lost while the disk was slow	{tracks} pistes audio ; {lost} s d'audio perdues quand le disque était lent
+	Audio tracks: {tracks}; {lost} s of audio lost while the disk was slow	Pistes audio : {tracks} ; {lost} s d'audio perdues quand le disque était lent
 	TRACKS	PISTES
 	TRACKS stopped	PISTES arrêtées
 	Audio tracks stopped early; the status message gives the reason	Les pistes audio se sont arrêtées plus tôt ; le message d'état en donne la raison

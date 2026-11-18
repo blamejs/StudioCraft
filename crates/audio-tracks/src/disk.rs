@@ -5,7 +5,7 @@
 //! It owns every open file and the journal; chunks go back to the collector's pool once written.
 
 use std::fs::{File, OpenOptions};
-use std::io::Write;
+use std::io::{Seek, SeekFrom, Write};
 use std::path::PathBuf;
 use std::sync::{Arc, Condvar, Mutex};
 
@@ -150,13 +150,38 @@ pub struct Faults {
     pub no_memory: bool,
     /// A permit per chunk.
     pub gate: Option<Arc<Gate>>,
+    /// The disk thread panics on its first chunk.
+    pub panic_on_chunk: bool,
+}
+
+/// Where a take's files sit on the timeline of the output it follows, for the journal and each
+/// file's `bext` chunk.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Timing {
+    /// `recording`, `stream`, or empty for a take that follows no output (journaled as `none`).
+    pub anchor: String,
+    /// Take frame 0 on the studio's clock, when the take has a start time.
+    pub origin_tick: Option<i64>,
+    /// Frames from the start of the output to take frame 0.
+    pub offset_frames: u64,
+    /// The wall-clock time of take frame 0, in milliseconds since 1970.
+    pub started_unix_ms: Option<i64>,
+    /// The local date and time of take frame 0, `yyyy-mm-dd` and `hh:mm:ss`.
+    pub date: String,
+    pub time: String,
 }
 
 /// Where and how a take writes.
 #[derive(Clone)]
 pub struct DiskConfig {
-    /// The take's `Audio Files` folder; it is created.
+    /// The take's `Audio Files` folder, which is created. With [`DiskConfig::folder_stem`], the
+    /// folder the take's own folder is made in instead.
     pub dir: PathBuf,
+    /// Make the take's folder in `dir` as `<stem> Audio`, or `<stem> (n) Audio` when that name is
+    /// taken, with its `Audio Files` folder inside. The name is taken by creating the folder, so
+    /// two takes never share one.
+    pub folder_stem: Option<String>,
+    pub timing: Timing,
     /// Bytes at which a file is closed and the track's next part begins.
     pub segment_bytes: u64,
     /// Free space the tracks stop at.
@@ -169,12 +194,24 @@ pub struct DiskConfig {
 
 struct TrackFile {
     file: File,
-    file_name: String,
     /// The take frame of the file's first sample.
     base: u64,
     frames: u64,
     header_frames: u64,
+    /// The frames the journal's last sync line recorded.
+    synced_frames: u64,
     segment: u32,
+    stamp: wav::Stamp,
+    file_name: String,
+}
+
+/// A part closed at the size limit, with its header written.
+struct Closed {
+    file_name: String,
+    base: u64,
+    frames: u64,
+    segment: u32,
+    stamp: wav::Stamp,
 }
 
 /// What the disk thread reports after each step.
@@ -195,17 +232,63 @@ pub struct Writer {
     used: std::collections::HashSet<String>,
     journal: Journal,
     free: Arc<ArrayQueue<Vec<u8>>>,
+    dropq: Arc<ArrayQueue<Dropout>>,
     progress: Progress,
     end: u64,
+    /// The take's `Audio Files` folder.
+    dir: PathBuf,
+    /// Every file made, for a take that is thrown away.
+    made: Vec<String>,
+    /// Each track's parts closed at the size limit, oldest first, for a cut to an earlier part.
+    closed: Vec<Vec<Closed>>,
+    /// The take ended and is to be thrown away.
+    discard: bool,
+}
+
+/// Folder names tried for a take's folder before the take stops.
+const FOLDER_TRIES: u32 = 999;
+
+/// Make the take's `Audio Files` folder as `cfg` says. Its path.
+fn make_folder(cfg: &DiskConfig) -> std::io::Result<PathBuf> {
+    let Some(stem) = &cfg.folder_stem else {
+        std::fs::create_dir_all(&cfg.dir)?;
+        return Ok(cfg.dir.clone());
+    };
+    std::fs::create_dir_all(&cfg.dir)?;
+    for n in 1..=FOLDER_TRIES {
+        let name = if n == 1 { format!("{stem} Audio") } else { format!("{stem} ({n}) Audio") };
+        let take = cfg.dir.join(name);
+        match std::fs::create_dir(&take) {
+            Ok(()) => {
+                let files = take.join("Audio Files");
+                std::fs::create_dir(&files)?;
+                return Ok(files);
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(e) => return Err(e),
+        }
+    }
+    Err(std::io::Error::new(std::io::ErrorKind::AlreadyExists, "no free folder name"))
 }
 
 impl Writer {
-    /// Make the folder and the journal.
-    pub fn create(cfg: DiskConfig, free: Arc<ArrayQueue<Vec<u8>>>) -> Result<Writer, Failure> {
+    /// Make the folder and the journal. Dropouts come in through `dropq`.
+    pub fn create(cfg: DiskConfig, free: Arc<ArrayQueue<Vec<u8>>>, dropq: Arc<ArrayQueue<Dropout>>) -> Result<Writer, Failure> {
         let fail = |e: std::io::Error| Failure { reason: StopReason::CreateFailed, error: e.to_string() };
-        std::fs::create_dir_all(&cfg.dir).map_err(fail)?;
-        let mut journal = Journal::create(&cfg.dir).map_err(fail)?;
-        journal.write(&Line::Start { version: 1, sample_rate: studiocraft_media::audio::SAMPLE_RATE, channels: 2 }).map_err(fail)?;
+        let dir = make_folder(&cfg).map_err(fail)?;
+        let mut journal = Journal::create(&dir).map_err(fail)?;
+        let t = &cfg.timing;
+        let anchor = if t.anchor.is_empty() { "none".to_string() } else { t.anchor.clone() };
+        let start = Line::Start {
+            version: 1,
+            sample_rate: studiocraft_media::audio::SAMPLE_RATE,
+            channels: 2,
+            anchor,
+            origin_tick: t.origin_tick,
+            offset_frames: t.offset_frames,
+            started_unix_ms: t.started_unix_ms,
+        };
+        journal.write(&start).map_err(fail)?;
         let head = wav::header_len().map_err(fail)?;
         let mut w = Writer {
             cfg,
@@ -215,8 +298,13 @@ impl Writer {
             used: std::collections::HashSet::new(),
             journal,
             free,
+            dropq,
             progress: Progress::default(),
             end: 0,
+            dir,
+            made: Vec::new(),
+            closed: Vec::new(),
+            discard: false,
         };
         w.check_space()?;
         Ok(w)
@@ -224,6 +312,33 @@ impl Writer {
 
     pub fn progress(&self) -> Progress {
         self.progress
+    }
+
+    /// The take's `Audio Files` folder.
+    pub fn dir(&self) -> &std::path::Path {
+        &self.dir
+    }
+
+    /// Whether the take ended to be thrown away ([`Writer::discard_files`]).
+    pub fn discarded(&self) -> bool {
+        self.discard
+    }
+
+    /// Remove the take's files, its journal and its folders, after a take thrown away. The folder
+    /// a take was made in is left alone, and so is a folder holding anything else.
+    pub fn discard_files(self) {
+        let Writer { dir, made, journal, files, cfg, .. } = self;
+        drop(files);
+        drop(journal);
+        for name in made.iter().map(String::as_str).chain([crate::journal::FILE_NAME]) {
+            let _ = std::fs::remove_file(dir.join(name));
+        }
+        let _ = std::fs::remove_dir(&dir);
+        if cfg.folder_stem.is_some()
+            && let Some(take) = dir.parent()
+        {
+            let _ = std::fs::remove_dir(take);
+        }
     }
 
     /// Handle one message from the collector. True at the end of the take.
@@ -243,14 +358,24 @@ impl Writer {
                 if let Some(g) = &self.cfg.faults.gate {
                     g.wait();
                 }
+                if self.cfg.faults.panic_on_chunk {
+                    #[allow(clippy::panic)]
+                    {
+                        panic!("disk thread fault");
+                    }
+                }
                 let r = self.write_chunk(&chunk);
                 let mut data = chunk.data;
                 data.clear();
                 let _ = self.free.push(data);
                 r.map(|()| false)
             }
-            ToDisk::Finish { dropouts, dropped_frames: _, ends } => {
-                self.finish(&dropouts, &ends)?;
+            ToDisk::Finish { dropped_frames: _, unlisted, ends, discard } => {
+                if discard {
+                    self.discard = true;
+                    return Ok(true);
+                }
+                self.finish(unlisted, &ends)?;
                 Ok(true)
             }
         }
@@ -260,28 +385,45 @@ impl Writer {
     pub fn refresh_headers(&mut self) -> Result<(), Failure> {
         for f in self.files.iter_mut().flatten() {
             if f.frames != f.header_frames {
-                wav::rewrite_header(&mut f.file, f.frames).map_err(Failure::io)?;
+                wav::rewrite_header(&mut f.file, f.frames, &f.stamp).map_err(Failure::io)?;
                 f.header_frames = f.frames;
             }
         }
         Ok(())
     }
 
-    /// Put every file on the disk, note what they hold in the journal, and check the free space.
+    /// Put the files that grew on the disk, note what they hold and the dropouts that ended in
+    /// the journal, and check the free space.
     pub fn sync(&mut self) -> Result<(), Failure> {
         self.refresh_headers()?;
-        let mut held = Vec::new();
-        for f in self.files.iter_mut().flatten() {
-            f.file.sync_data().map_err(Failure::io)?;
-            held.push((f.file_name.clone(), f.frames));
+        let mut grew = Vec::new();
+        for (track, f) in self.files.iter_mut().enumerate() {
+            let Some(f) = f else { continue };
+            if f.frames != f.synced_frames {
+                f.file.sync_data().map_err(Failure::io)?;
+                f.synced_frames = f.frames;
+                grew.push((track, f.frames));
+            }
         }
-        self.journal.write(&Line::Sync { files: held }).map_err(Failure::io)?;
+        self.journal_dropouts()?;
+        if !grew.is_empty() {
+            self.journal.write(&Line::Sync { tracks: grew }).map_err(Failure::io)?;
+        }
         self.journal.sync().map_err(Failure::io)?;
         self.check_space()
     }
 
+    /// Journal the dropouts the collector has sent.
+    fn journal_dropouts(&mut self) -> Result<(), Failure> {
+        while let Some(d) = self.dropq.pop() {
+            self.journal.write(&Line::Dropout { track: d.track, at: d.at, frames: d.frames }).map_err(Failure::io)?;
+        }
+        Ok(())
+    }
+
     /// Note the reason in the journal and close the files with their headers, after a failure.
     pub fn abandon(&mut self, reason: StopReason) {
+        let _ = self.journal_dropouts();
         let _ = self.journal.write(&Line::Stop { reason: reason.text().into() });
         let _ = self.refresh_headers();
         for f in self.files.iter_mut().flatten() {
@@ -291,8 +433,7 @@ impl Writer {
     }
 
     fn check_space(&mut self) -> Result<(), Failure> {
-        let read =
-            if self.cfg.faults.space_unknown { Err(std::io::Error::other("free space fault")) } else { crate::space::available(&self.cfg.dir) };
+        let read = if self.cfg.faults.space_unknown { Err(std::io::Error::other("free space fault")) } else { crate::space::available(&self.dir) };
         let free = match (self.cfg.faults.free_space, read) {
             (Some(f), _) => f,
             (None, Ok(f)) => f,
@@ -307,12 +448,28 @@ impl Writer {
         Ok(())
     }
 
-    fn finish(&mut self, dropouts: &[Dropout], ends: &[u64]) -> Result<(), Failure> {
-        // Audio lost at the end of a track has no later chunk to write silence before, so each
-        // file is padded to where its track ended.
+    fn finish(&mut self, unlisted: u64, ends: &[u64]) -> Result<(), Failure> {
+        // A chunk sent before the take's end time was known can hold audio past it, so each file
+        // is cut back to where its track ended. Audio lost at the end of a track has no later
+        // chunk to write silence before, so each file is padded to that point too. The cuts are in
+        // the journal on the disk before any file changes.
+        let cuts: Vec<(usize, u64)> = ends
+            .iter()
+            .enumerate()
+            .filter(|&(track, &end)| self.files.get(track).and_then(Option::as_ref).is_some_and(|f| f.base + f.frames > end))
+            .map(|(track, &end)| (track, end))
+            .collect();
+        if !cuts.is_empty() {
+            for &(track, frames) in &cuts {
+                self.journal.write(&Line::Cut { track, frames }).map_err(Failure::io)?;
+            }
+            self.journal.sync().map_err(Failure::io)?;
+        }
         for (track, &end) in ends.iter().enumerate() {
+            self.cut_to(track, end)?;
             self.write_chunk(&Chunk { track, first_frame: end, data: Vec::new() })?;
         }
+        self.end = self.files.iter().flatten().map(|f| f.base + f.frames).max().unwrap_or(0);
         // A track that never got audio, as in a take that ended before its first block, still
         // gets its file, empty.
         for track in 0..self.names.len() {
@@ -321,8 +478,9 @@ impl Writer {
                 self.room(track, 0)?;
             }
         }
-        for d in dropouts {
-            self.journal.write(&Line::Dropout { track: d.track, at: d.at, frames: d.frames }).map_err(Failure::io)?;
+        self.journal_dropouts()?;
+        if unlisted > 0 {
+            self.journal.write(&Line::Unlisted { frames: unlisted }).map_err(Failure::io)?;
         }
         self.refresh_headers()?;
         for f in self.files.iter_mut().flatten() {
@@ -372,8 +530,15 @@ impl Writer {
             Some(true) => {
                 let next = self.files.get(track).and_then(|f| f.as_ref()).map(|f| f.segment + 1).unwrap_or(1);
                 if let Some(Some(mut old)) = self.files.get_mut(track).map(Option::take) {
-                    wav::rewrite_header(&mut old.file, old.frames).map_err(Failure::io)?;
+                    wav::rewrite_header(&mut old.file, old.frames, &old.stamp).map_err(Failure::io)?;
                     old.file.sync_all().map_err(Failure::io)?;
+                    if self.closed.len() <= track {
+                        self.closed.resize_with(track + 1, Vec::new);
+                    }
+                    if let Some(parts) = self.closed.get_mut(track) {
+                        let TrackFile { file_name, base, frames, segment, stamp, .. } = old;
+                        parts.push(Closed { file_name, base, frames, segment, stamp });
+                    }
                 }
                 self.open(track, next, pos)?;
             }
@@ -386,17 +551,51 @@ impl Writer {
         let name = self.names.get(track).cloned().flatten().unwrap_or_else(|| format!("Track {}", track + 1));
         let stem = if segment == 1 { name.clone() } else { format!("{name} part {segment}") };
         let file_name = crate::names::unique(&stem, &mut self.used) + ".wav";
-        let path = self.cfg.dir.join(&file_name);
+        let path = self.dir.join(&file_name);
         let fail = |e: std::io::Error| Failure { reason: StopReason::CreateFailed, error: e.to_string() };
         let mut file = OpenOptions::new().create_new(true).write(true).read(true).open(&path).map_err(fail)?;
-        file.write_all(&wav::header(0).map_err(fail)?).map_err(Failure::io)?;
+        self.made.push(file_name.clone());
+        let t = &self.cfg.timing;
+        let stamp = wav::Stamp { time_reference: t.offset_frames.saturating_add(base), date: t.date.clone(), time: t.time.clone() };
+        file.write_all(&wav::header(0, &stamp).map_err(fail)?).map_err(Failure::io)?;
         self.journal.write(&Line::File { track, name, file: file_name.clone(), segment, first_frame: base }).map_err(Failure::io)?;
         if self.files.len() <= track {
             self.files.resize_with(track + 1, || None);
         }
         if let Some(slot) = self.files.get_mut(track) {
-            *slot = Some(TrackFile { file, file_name, base, frames: 0, header_frames: 0, segment });
+            *slot = Some(TrackFile { file, base, frames: 0, header_frames: 0, synced_frames: 0, segment, stamp, file_name });
         }
+        Ok(())
+    }
+
+    /// Cut the files of `track` back to take frame `end` when they run past it. A part that starts
+    /// at or after `end` is removed, and the part before it becomes the track's file again.
+    fn cut_to(&mut self, track: usize, end: u64) -> Result<(), Failure> {
+        while self.files.get(track).and_then(Option::as_ref).is_some_and(|f| f.base >= end)
+            && let Some(prev) = self.closed.get_mut(track).and_then(Vec::pop)
+        {
+            let Some(Some(cur)) = self.files.get_mut(track).map(Option::take) else { break };
+            self.progress.bytes = self.progress.bytes.saturating_sub(cur.frames * FRAME_BYTES);
+            drop(cur.file);
+            std::fs::remove_file(self.dir.join(&cur.file_name)).map_err(Failure::io)?;
+            self.made.retain(|n| *n != cur.file_name);
+            let mut file = OpenOptions::new().read(true).write(true).open(self.dir.join(&prev.file_name)).map_err(Failure::io)?;
+            file.seek(SeekFrom::End(0)).map_err(Failure::io)?;
+            let Closed { file_name, base, frames, segment, stamp } = prev;
+            if let Some(slot) = self.files.get_mut(track) {
+                *slot = Some(TrackFile { file, base, frames, header_frames: frames, synced_frames: frames, segment, stamp, file_name });
+            }
+        }
+        let head = self.head;
+        let Some(Some(f)) = self.files.get_mut(track) else { return Ok(()) };
+        if f.base + f.frames <= end {
+            return Ok(());
+        }
+        let keep = end.saturating_sub(f.base);
+        f.file.set_len(head + keep * FRAME_BYTES).map_err(Failure::io)?;
+        f.file.seek(SeekFrom::End(0)).map_err(Failure::io)?;
+        self.progress.bytes = self.progress.bytes.saturating_sub((f.frames - keep) * FRAME_BYTES);
+        f.frames = keep;
         Ok(())
     }
 

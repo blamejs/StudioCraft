@@ -336,7 +336,7 @@ fn audio_tracks_writes_are_held_to_the_write_roots() {
         assert!(text.contains("outside the write roots"), "{tool} {args}: {text}");
     }
     let inside = ok_json(&call(&mut s, "audio_tracks_repair", json!({"folder": text_of(&dir.join("out"))})));
-    assert_eq!(inside, json!({"repaired": [], "failed": []}));
+    assert_eq!(inside["started"], json!(true), "{inside}");
     let _ = std::fs::remove_dir_all(&dir);
 }
 

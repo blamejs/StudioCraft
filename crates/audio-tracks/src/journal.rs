@@ -9,22 +9,48 @@ use serde::{Deserialize, Serialize};
 /// The journal's file name in a take's folder.
 pub const FILE_NAME: &str = "take.journal";
 
-/// The largest journal that is read back. A day-long take of [`crate::MAX_TAKE_TRACKS`] files
-/// writes about 40 MiB of sync lines, so a larger file did not come from the disk thread.
+/// The largest journal that is read back whole. A sync line lists only the tracks whose files
+/// grew, by track number, so a take of [`crate::MAX_TRACKS`] tracks writes about 1 KiB every
+/// 5 seconds: about 17 MiB a day, so the limit covers a take of about two weeks.
 pub const MAX_BYTES: u64 = 256 << 20;
+
+/// Bytes from the end of the journal that [`ended`] reads.
+const TAIL_BYTES: u64 = 64 << 10;
 
 /// One line of the journal.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Line {
     /// The take began; the files are 32-bit float WAV at this rate and channel count.
-    Start { version: u32, sample_rate: u32, channels: u16 },
+    ///
+    /// `anchor` names the timeline the files are placed on: `recording`, `stream`, or `none` when
+    /// the take follows no output. Take frame 0 is `offset_frames` frames into that timeline, at
+    /// `origin_tick` on the studio's clock (none when frame 0 is the first block the take got).
+    /// Each file's `bext` time reference is `offset_frames` plus the file's `first_frame`.
+    /// `started_unix_ms` is the wall-clock time of take frame 0, when known.
+    Start {
+        version: u32,
+        sample_rate: u32,
+        channels: u16,
+        anchor: String,
+        origin_tick: Option<i64>,
+        offset_frames: u64,
+        started_unix_ms: Option<i64>,
+    },
     /// A track's file was opened. `first_frame` is the take frame its first sample is at.
     File { track: usize, name: String, file: String, segment: u32, first_frame: u64 },
-    /// After a sync: frames each open file held on disk, by file name.
-    Sync { files: Vec<(String, u64)> },
+    /// After a sync: frames each track's current file held on disk, for the tracks whose files
+    /// grew since the last sync.
+    Sync { tracks: Vec<(usize, u64)> },
     /// Audio lost before the disk; the track's file holds silence there.
     Dropout { track: usize, at: u64, frames: u64 },
+    /// Frames of lost audio that have no `Dropout` line, because the list of dropouts waiting for
+    /// the disk thread was full.
+    Unlisted { frames: u64 },
+    /// The track's files are cut back to take frame `frames`, the take's end time: a part that
+    /// starts there or later is removed and the part holding it is shortened. Written before the
+    /// files are changed, so repair can finish a cut that was cut short.
+    Cut { track: usize, frames: u64 },
     /// The take stopped early.
     Stop { reason: String },
     /// Files repaired after the take ended without its last line, with the frames each holds.
@@ -36,22 +62,37 @@ pub enum Line {
 /// An open journal.
 pub struct Journal {
     file: File,
+    /// The length of the lines written whole: a write that fails is cut back to it.
+    len: u64,
+    /// Bytes after which the next write fails, for the tests of a write cut short.
+    #[cfg(test)]
+    fail_after: Option<usize>,
 }
 
 impl Journal {
+    fn new(file: File, len: u64) -> Journal {
+        Journal {
+            file,
+            len,
+            #[cfg(test)]
+            fail_after: None,
+        }
+    }
+
     /// Create the journal in `dir`, locked for as long as the journal is open. [`Journal::open_idle`]
     /// skips a locked journal, so repair never touches a take that is still being written.
     pub fn create(dir: &Path) -> std::io::Result<Journal> {
-        let file = OpenOptions::new().create_new(true).read(true).append(true).open(dir.join(FILE_NAME))?;
+        // Write access, not append: cutting back a failed write sets the length, which needs it
+        // on Windows.
+        let file = OpenOptions::new().create_new(true).read(true).write(true).open(dir.join(FILE_NAME))?;
         file.lock()?;
-        Ok(Journal { file })
+        Ok(Journal::new(file, 0))
     }
 
     /// Open the journal in `dir` to append to it, with its lines, locked while it is open. `None`
     /// when another journal handle holds the lock: the take is still being written or repaired.
     /// A last line cut short by a crash is removed, so the lines appended next read back.
     pub fn open_idle(dir: &Path) -> std::io::Result<Option<(Journal, Vec<Line>)>> {
-        // Write access, not append: setting the length needs it on Windows.
         let mut file = OpenOptions::new().read(true).write(true).open(dir.join(FILE_NAME))?;
         match file.try_lock() {
             Ok(()) => {}
@@ -65,19 +106,43 @@ impl Journal {
         if cut {
             file.set_len(whole as u64)?;
         }
-        file.seek(SeekFrom::End(0))?;
+        let mut len = file.seek(SeekFrom::End(0))?;
         if !cut && whole < bytes.len() {
             // The last line read but has no newline: end it so the next line starts on its own.
             file.write_all(b"\n")?;
+            len += 1;
         }
-        Ok(Some((Journal { file }, lines)))
+        Ok(Some((Journal::new(file, len), lines)))
     }
 
-    /// Append `line`. It reaches the disk with the next [`Journal::sync`].
+    /// Append `line`. It reaches the disk with the next [`Journal::sync`]. A write that fails
+    /// part way, as on a full disk, is cut back, so the journal holds only whole lines and the
+    /// next line starts on its own.
     pub fn write(&mut self, line: &Line) -> std::io::Result<()> {
         let mut text = serde_json::to_string(line).map_err(std::io::Error::other)?;
         text.push('\n');
-        self.file.write_all(text.as_bytes())
+        match self.write_bytes(text.as_bytes()) {
+            Ok(()) => {
+                self.len += text.len() as u64;
+                Ok(())
+            }
+            Err(e) => {
+                // The cut is best effort: the error that stopped the write is the one reported.
+                if self.file.set_len(self.len).is_ok() {
+                    let _ = self.file.seek(SeekFrom::Start(self.len));
+                }
+                Err(e)
+            }
+        }
+    }
+
+    fn write_bytes(&mut self, bytes: &[u8]) -> std::io::Result<()> {
+        #[cfg(test)]
+        if let Some(n) = self.fail_after.take() {
+            self.file.write_all(bytes.get(..n.min(bytes.len())).unwrap_or_default())?;
+            return Err(std::io::Error::new(std::io::ErrorKind::StorageFull, "no space left on the disk"));
+        }
+        self.file.write_all(bytes)
     }
 
     pub fn sync(&mut self) -> std::io::Result<()> {
@@ -89,6 +154,19 @@ impl Journal {
 /// that do not read are an error.
 pub fn read(dir: &Path) -> std::io::Result<Vec<Line>> {
     parse(&read_bounded(&mut File::open(dir.join(FILE_NAME))?)?).map(|(lines, _)| lines)
+}
+
+/// Whether the journal in `dir` ends with its `End` line, read from its last 64 KiB only, so a
+/// journal of any length is answered without reading it whole.
+pub fn ended(dir: &Path) -> std::io::Result<bool> {
+    let mut file = File::open(dir.join(FILE_NAME))?;
+    let len = file.metadata()?.len();
+    let from = len.saturating_sub(TAIL_BYTES);
+    file.seek(SeekFrom::Start(from))?;
+    let mut tail = Vec::with_capacity((len - from) as usize);
+    (&mut file).take(TAIL_BYTES).read_to_end(&mut tail)?;
+    let last = tail.split(|&b| b == b'\n').rev().find(|l| !l.iter().all(u8::is_ascii_whitespace));
+    Ok(last.and_then(|l| serde_json::from_slice::<Line>(l).ok()).is_some_and(|l| matches!(l, Line::End { .. })))
 }
 
 /// The bytes of `file` from its start, or an error when it holds more than [`MAX_BYTES`]. The size
@@ -135,5 +213,53 @@ fn parse(bytes: &[u8]) -> std::io::Result<(Vec<Line>, bool)> {
             Ok((lines, false))
         }
         None => Ok((lines, true)),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn scratch(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("studiocraft-journal-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn a_write_cut_short_by_a_full_disk_leaves_only_whole_lines() {
+        let dir = scratch("cut-write");
+        let mut j = Journal::create(&dir).unwrap();
+        j.write(&Line::Dropout { track: 0, at: 0, frames: 1 }).unwrap();
+        // The disk takes 10 bytes of the next line, then is full.
+        j.fail_after = Some(10);
+        assert!(j.write(&Line::Sync { tracks: vec![(0, 1024)] }).is_err());
+        j.write(&Line::Stop { reason: "the disk is full".into() }).unwrap();
+        drop(j);
+        let lines = read(&dir).unwrap();
+        assert_eq!(lines, [Line::Dropout { track: 0, at: 0, frames: 1 }, Line::Stop { reason: "the disk is full".into() }]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn whether_a_journal_ended_is_read_from_its_end_alone() {
+        let dir = scratch("ended");
+        let mut j = Journal::create(&dir).unwrap();
+        // Lines well past the part that is read.
+        for n in 0..4_000 {
+            j.write(&Line::Sync { tracks: vec![(0, n), (1, n)] }).unwrap();
+        }
+        assert!(!ended(&dir).unwrap());
+        j.write(&Line::End { frames: 4_000 }).unwrap();
+        drop(j);
+        assert!(std::fs::metadata(dir.join(FILE_NAME)).unwrap().len() > TAIL_BYTES);
+        assert!(ended(&dir).unwrap());
+        // A journal past the limit for reading it whole still answers.
+        let f = OpenOptions::new().write(true).open(dir.join(FILE_NAME)).unwrap();
+        f.set_len(MAX_BYTES + 1).unwrap();
+        drop(f);
+        assert!(!ended(&dir).unwrap(), "a journal that ends in zeros did not end");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

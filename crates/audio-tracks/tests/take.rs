@@ -6,10 +6,11 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use crossbeam_queue::ArrayQueue;
+use studiocraft_audio_tracks::collect::FRAME_TICKS;
 use studiocraft_audio_tracks::collect::{BLOCK_TICKS, CHUNK_BLOCKS, ToDisk};
 use studiocraft_audio_tracks::disk::{Failure, Writer};
 use studiocraft_audio_tracks::journal::{self, Line};
-use studiocraft_audio_tracks::{Collector, DiskConfig, Faults, State, StopReason, Take, TakeConfig, TrackSpec, recover, wav};
+use studiocraft_audio_tracks::{Collector, DiskConfig, Faults, State, StopReason, Take, TakeConfig, Timing, TrackSpec, recover, wav};
 use studiocraft_media::Tick;
 use studiocraft_media::audio::{BLOCK_FRAMES, BLOCK_SAMPLES};
 use studiocraft_media::tap::TapSlot;
@@ -22,7 +23,15 @@ fn scratch(name: &str) -> PathBuf {
 }
 
 fn config(dir: &Path) -> DiskConfig {
-    DiskConfig { dir: dir.to_path_buf(), segment_bytes: 2 << 30, reserve_bytes: 0, warn_bytes: 0, faults: Faults::default() }
+    DiskConfig {
+        dir: dir.to_path_buf(),
+        folder_stem: None,
+        timing: Timing::default(),
+        segment_bytes: 2 << 30,
+        reserve_bytes: 0,
+        warn_bytes: 0,
+        faults: Faults::default(),
+    }
 }
 
 fn spec(source: u64, name: &str) -> TrackSpec {
@@ -52,7 +61,7 @@ struct Rig {
 impl Rig {
     fn new(cfg: DiskConfig, chunks: usize) -> Rig {
         let (c, free, out) = Collector::new(chunks, chunks + 64).unwrap();
-        let w = Writer::create(cfg, free).unwrap();
+        let w = Writer::create(cfg, free, c.dropout_queue()).unwrap();
         Rig { c, w, out }
     }
 
@@ -328,7 +337,7 @@ fn a_take_stopped_after_the_taps_go_keeps_the_blocks_stored_until_then() {
     }
     // The studio asked the mixer to remove the taps; the mixer has not applied it yet.
     let applied = Arc::new(AtomicU64::new(0));
-    take.stop_after(Arc::clone(&applied), 1);
+    take.stop_after(Arc::clone(&applied), 1, None);
     // Give the take every chance to end early: it must not, while the mixer still holds the taps.
     for _ in 0..200_000 {
         if take.finished() {
@@ -487,8 +496,8 @@ fn audio_lost_at_the_end_of_a_take_is_silence_to_the_end() {
 fn a_take_whose_free_space_cannot_be_read_stops_with_that_reason() {
     let dir = scratch("space-unknown");
     let cfg = DiskConfig { reserve_bytes: 1 << 30, faults: Faults { space_unknown: true, ..Faults::default() }, ..config(&dir) };
-    let (_, free, _) = Collector::new(1, 4).unwrap();
-    match Writer::create(cfg, free) {
+    let (c, free, _) = Collector::new(1, 4).unwrap();
+    match Writer::create(cfg, free, c.dropout_queue()) {
         Err(f) => assert_eq!(f.reason, StopReason::SpaceUnknown),
         Ok(_) => panic!("the take started without knowing the free space"),
     }
@@ -600,7 +609,7 @@ fn a_file_shorter_than_its_last_sync_leaves_the_take_unfinished_and_uncut() {
     crashed_take(&dir);
     let mic_len = std::fs::metadata(dir.join("Mic.wav")).unwrap().len();
     let mut j = std::fs::OpenOptions::new().append(true).open(dir.join(journal::FILE_NAME)).unwrap();
-    let line = Line::Sync { files: vec![("Mic.wav".into(), 10 * BLOCK_FRAMES as u64)] };
+    let line = Line::Sync { tracks: vec![(0, 10 * BLOCK_FRAMES as u64)] };
     std::io::Write::write_all(&mut j, format!("{}\n", serde_json::to_string(&line).unwrap()).as_bytes()).unwrap();
     drop(j);
     let err = recover::repair(&dir).unwrap_err();
@@ -692,4 +701,241 @@ fn repair_follows_no_links_out_of_the_folder() {
     assert_eq!(std::fs::metadata(outside.join("Mic.wav")).unwrap().len(), outside_len, "nothing outside was written");
     let _ = std::fs::remove_dir_all(&recording);
     let _ = std::fs::remove_dir_all(outside.parent().and_then(Path::parent).unwrap());
+}
+
+/// The `bext` time reference of the WAV at `path`, read as the audio editor reads it.
+fn time_reference(path: &Path) -> u64 {
+    craft_audio::probe(&std::fs::read(path).unwrap(), Some("wav")).unwrap().bwf.unwrap().time_reference
+}
+
+#[test]
+fn every_file_and_part_carries_its_place_on_the_output_timeline() {
+    let dir = scratch("timeline");
+    let head = wav::header_len().unwrap();
+    // The take started 2 s into the recording; parts of 3,000 frames.
+    let timing = Timing {
+        anchor: "recording".into(),
+        origin_tick: Some(500),
+        offset_frames: 96_000,
+        started_unix_ms: Some(1_800_000_000_000),
+        date: "2026-11-18".into(),
+        time: "21:00:02".into(),
+    };
+    let cfg = DiskConfig { segment_bytes: head + 3_000 * 8, timing, ..config(&dir) };
+    let mut rig = Rig::new(cfg, 4);
+    rig.c.set_start(Tick(500));
+    let (a, b) = (spec(1, "Mic"), spec(2, "Late"));
+    rig.c.set_tracks(vec![a.clone(), b.clone()]);
+    for n in 0..4 {
+        feed(&a.slot, 1, n);
+        rig.pump().unwrap();
+    }
+    feed(&b.slot, 2, 4);
+    feed(&a.slot, 1, 4);
+    rig.pump().unwrap();
+    rig.end().unwrap();
+    let lines = journal::read(&dir).unwrap();
+    let want = Line::Start {
+        version: 1,
+        sample_rate: 48_000,
+        channels: 2,
+        anchor: "recording".into(),
+        origin_tick: Some(500),
+        offset_frames: 96_000,
+        started_unix_ms: Some(1_800_000_000_000),
+    };
+    assert_eq!(lines.first(), Some(&want));
+    for (file, first_frame) in [("Mic.wav", 0), ("Mic part 2.wav", 3_000), ("Late.wav", 0), ("Late part 2.wav", 3_000)] {
+        assert_eq!(time_reference(&dir.join(file)), 96_000 + first_frame, "{file}");
+    }
+    // Late's file starts at the take's start, with silence before its first block.
+    let late: Vec<f32> = [read(&dir.join("Late.wav")), read(&dir.join("Late part 2.wav"))].concat();
+    assert_eq!(late.len(), 5 * BLOCK_SAMPLES);
+    assert_eq!(&late[4 * BLOCK_SAMPLES..], samples(2, 4).as_slice());
+}
+
+#[test]
+fn a_take_ended_at_its_end_time_has_files_of_exactly_that_length() {
+    let dir = scratch("end-time");
+    let (p, quiet) = (TrackSpec { source: None, name: "00 Program".into(), slot: Arc::new(TapSlot::new()) }, spec(2, "Quiet"));
+    let take = Take::start_from(TakeConfig { disk: config(&dir), buffer_mib: 4 }, vec![p.clone(), quiet.clone()], Some(Tick(500))).unwrap();
+    for n in 0..10 {
+        feed(&p.slot, 0, n);
+    }
+    // The recording ended 100 frames into block 5; the mixer still made blocks after it.
+    take.stop_at(Tick(500 + 5 * BLOCK_TICKS + 100 * FRAME_TICKS));
+    let status = take.join();
+    assert_eq!(status.state(), Some(State::Done));
+    let frames = 5 * BLOCK_FRAMES + 100;
+    let program = read(&dir.join("00 Program.wav"));
+    assert_eq!(program, (0..10).flat_map(|n| samples(0, n)).take(frames * 2).collect::<Vec<f32>>());
+    assert_eq!(read(&dir.join("Quiet.wav")), vec![0.0; frames * 2], "a silent track ends at the end time too");
+    assert_eq!(status.dir(), Some(dir.as_path()));
+}
+
+/// The end time can arrive after a whole chunk past it reached the disk; the files are still cut
+/// at the end time.
+#[test]
+fn audio_already_written_past_the_end_time_is_cut() {
+    let dir = scratch("end-after-write");
+    let mut rig = Rig::new(config(&dir), 4);
+    let a = spec(1, "Mic");
+    rig.c.set_start(Tick(500));
+    rig.c.set_tracks(vec![a.clone()]);
+    let blocks = CHUNK_BLOCKS as i64 + 8;
+    for n in 0..blocks {
+        feed(&a.slot, 1, n);
+        if n % 16 == 15 {
+            rig.pump().unwrap();
+        }
+    }
+    rig.pump().unwrap();
+    rig.c.set_end(Tick(500 + 5 * BLOCK_TICKS + 100 * FRAME_TICKS));
+    rig.end().unwrap();
+    let frames = 5 * BLOCK_FRAMES + 100;
+    assert_eq!(read(&dir.join("Mic.wav")), (0..blocks).flat_map(|n| samples(1, n)).take(frames * 2).collect::<Vec<f32>>());
+    let lines = journal::read(&dir).unwrap();
+    assert!(matches!(lines.last(), Some(Line::End { frames: f }) if *f == frames as u64), "{:?}", lines.last());
+}
+
+/// The same across parts: the parts that start after the end time are removed, and the part the
+/// end time falls in is cut.
+#[test]
+fn parts_written_past_the_end_time_are_removed() {
+    let dir = scratch("end-after-parts");
+    let head = wav::header_len().unwrap();
+    let cfg = DiskConfig { segment_bytes: head + 3_000 * 8, ..config(&dir) };
+    let mut rig = Rig::new(cfg, 4);
+    let a = spec(1, "Mic");
+    rig.c.set_start(Tick(500));
+    rig.c.set_tracks(vec![a.clone()]);
+    let blocks = CHUNK_BLOCKS as i64 + 8;
+    for n in 0..blocks {
+        feed(&a.slot, 1, n);
+        if n % 16 == 15 {
+            rig.pump().unwrap();
+        }
+    }
+    rig.pump().unwrap();
+    assert!(dir.join("Mic part 3.wav").exists(), "a whole chunk reached the disk before the end time");
+    rig.c.set_end(Tick(500 + 3 * BLOCK_TICKS + 100 * FRAME_TICKS));
+    rig.end().unwrap();
+    let frames = 3 * BLOCK_FRAMES + 100;
+    let mut files: Vec<String> = std::fs::read_dir(&dir).unwrap().flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect();
+    files.sort();
+    assert_eq!(files, ["Mic part 2.wav", "Mic.wav", journal::FILE_NAME]);
+    let mut joined = read(&dir.join("Mic.wav"));
+    joined.extend(read(&dir.join("Mic part 2.wav")));
+    assert_eq!(joined, (0..blocks).flat_map(|n| samples(1, n)).take(frames * 2).collect::<Vec<f32>>());
+    let lines = journal::read(&dir).unwrap();
+    assert!(matches!(lines.last(), Some(Line::End { frames: f }) if *f == frames as u64), "{:?}", lines.last());
+}
+
+/// A take that stopped part way through the cut at its end time: the journal holds the cut, the
+/// last part is already gone, and the others are not cut yet. Repair finishes the cut.
+#[test]
+fn repair_finishes_a_cut_the_take_stopped_during() {
+    let dir = scratch("cut-repair");
+    let head = wav::header_len().unwrap();
+    let cfg = DiskConfig { segment_bytes: head + 3_000 * 8, ..config(&dir) };
+    let blocks = CHUNK_BLOCKS as i64 + 8;
+    {
+        let mut rig = Rig::new(cfg, 4);
+        let a = spec(1, "Mic");
+        rig.c.set_start(Tick(500));
+        rig.c.set_tracks(vec![a.clone()]);
+        for n in 0..blocks {
+            feed(&a.slot, 1, n);
+            if n % 16 == 15 {
+                rig.pump().unwrap();
+            }
+        }
+        rig.pump().unwrap();
+        rig.w.sync().unwrap();
+    }
+    let frames = 3 * BLOCK_FRAMES + 100;
+    let (mut j, _) = journal::Journal::open_idle(&dir).unwrap().unwrap();
+    j.write(&Line::Cut { track: 0, frames: frames as u64 }).unwrap();
+    j.sync().unwrap();
+    drop(j);
+    let last = (CHUNK_BLOCKS * BLOCK_FRAMES).div_ceil(3_000);
+    std::fs::remove_file(dir.join(format!("Mic part {last}.wav"))).unwrap();
+    let r = recover::repair(&dir).unwrap().unwrap();
+    assert_eq!(r.files, [("Mic.wav".to_string(), 3_000), ("Mic part 2.wav".to_string(), frames as u64 - 3_000)]);
+    let mut files: Vec<String> = std::fs::read_dir(&dir).unwrap().flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect();
+    files.sort();
+    assert_eq!(files, ["Mic part 2.wav", "Mic.wav", journal::FILE_NAME]);
+    let mut joined = read(&dir.join("Mic.wav"));
+    joined.extend(read(&dir.join("Mic part 2.wav")));
+    assert_eq!(joined, (0..blocks).flat_map(|n| samples(1, n)).take(frames * 2).collect::<Vec<f32>>());
+}
+
+#[test]
+fn takes_given_the_same_folder_name_each_get_their_own_folder() {
+    let recording = scratch("folders").parent().and_then(Path::parent).unwrap().to_path_buf();
+    let cfg = DiskConfig { folder_stem: Some("2026-11-18 21-00-00".into()), ..config(&recording) };
+    let first = Take::start(TakeConfig { disk: cfg.clone(), buffer_mib: 1 }, vec![spec(1, "Mic")]).unwrap();
+    let second = Take::start(TakeConfig { disk: cfg, buffer_mib: 1 }, vec![spec(1, "Mic")]).unwrap();
+    let mut dirs = vec![first.join().dir().unwrap().to_path_buf(), second.join().dir().unwrap().to_path_buf()];
+    dirs.sort();
+    assert_eq!(
+        dirs,
+        [recording.join("2026-11-18 21-00-00 (2) Audio").join("Audio Files"), recording.join("2026-11-18 21-00-00 Audio").join("Audio Files")]
+    );
+    let _ = std::fs::remove_dir_all(&recording);
+}
+
+#[test]
+fn a_take_thrown_away_leaves_no_folder() {
+    let recording = scratch("discard").parent().and_then(Path::parent).unwrap().to_path_buf();
+    let cfg = DiskConfig { folder_stem: Some("Never".into()), ..config(&recording) };
+    let p = TrackSpec { source: None, name: "00 Program".into(), slot: Arc::new(TapSlot::new()) };
+    let take = Take::start(TakeConfig { disk: cfg, buffer_mib: 1 }, vec![p.clone()]).unwrap();
+    for n in 0..3 {
+        feed(&p.slot, 0, n);
+    }
+    take.discard();
+    let status = take.join();
+    assert_eq!(status.state(), Some(State::Done));
+    let left: Vec<PathBuf> = std::fs::read_dir(&recording).unwrap().flatten().map(|e| e.path()).collect();
+    assert!(left.is_empty(), "{left:?}");
+    let _ = std::fs::remove_dir_all(&recording);
+}
+
+#[test]
+fn a_fault_on_the_disk_thread_stops_the_take_with_a_write_failure() {
+    let dir = scratch("disk-fault");
+    let cfg = DiskConfig { faults: Faults { panic_on_chunk: true, ..Faults::default() }, ..config(&dir) };
+    let p = TrackSpec { source: None, name: "00 Program".into(), slot: Arc::new(TapSlot::new()) };
+    let take = Take::start(TakeConfig { disk: cfg, buffer_mib: 1 }, vec![p.clone()]).unwrap();
+    for n in 0..3 {
+        feed(&p.slot, 0, n);
+    }
+    // The stop sends the chunk, and the disk thread fails on it; both threads end.
+    let status = take.join();
+    assert_eq!((status.state(), status.reason()), (Some(State::Stopped), Some(StopReason::WriteFailed)));
+}
+
+#[test]
+fn a_sync_journals_the_tracks_that_grew_and_the_dropouts_that_ended() {
+    let dir = scratch("sync-lines");
+    let mut rig = Rig::new(config(&dir), 2);
+    let (a, b) = (spec(1, "Mic"), spec(2, "Quiet"));
+    rig.c.set_tracks(vec![a.clone(), b.clone()]);
+    // Mic's tap loses blocks 1 and 2.
+    feed(&a.slot, 1, 0);
+    rig.pump().unwrap();
+    feed(&a.slot, 1, 3);
+    rig.pump().unwrap();
+    rig.c.flush();
+    rig.write().unwrap();
+    rig.w.sync().unwrap();
+    // Nothing grew since: the next sync adds no sync line.
+    rig.w.sync().unwrap();
+    let f = BLOCK_FRAMES as u64;
+    let lines: Vec<Line> = journal::read(&dir).unwrap().into_iter().filter(|l| matches!(l, Line::Sync { .. } | Line::Dropout { .. })).collect();
+    assert_eq!(lines, [Line::Dropout { track: 0, at: f, frames: 2 * f }, Line::Sync { tracks: vec![(0, 4 * f)] }]);
+    rig.end().unwrap();
+    let lines = journal::read(&dir).unwrap();
+    assert_eq!(lines.iter().filter(|l| matches!(l, Line::Dropout { .. })).count(), 1, "the dropout is journaled once");
 }

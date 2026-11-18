@@ -476,7 +476,11 @@ impl Engine {
                 if self.registry.source(&s.kind).is_ok_and(|p| !p.caps().audio) {
                     return Err(EngineError::Invalid(format!("`{}` has no audio", s.name)));
                 }
-                s.audio.record_track = Some(on);
+                // A source that already records or not by its monitoring keeps following it: the
+                // command changes nothing and adds no undo step.
+                if s.audio.record_track.is_some() || s.audio.records_track() != on {
+                    s.audio.record_track = Some(on);
+                }
                 Ok((Value::Null, None))
             }
             Command::SourceMute { source, muted } => {

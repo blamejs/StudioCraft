@@ -169,7 +169,7 @@ pub(crate) fn when_label(w: AudioTracksWhen) -> &'static str {
     }
 }
 
-/// The audio tracks' disk use in GB an hour, and how many seconds the write buffer holds, both
+/// The audio tracks' disk use in GiB an hour, and how many seconds the write buffer holds, both
 /// as text, for `sources` recorded sources and the program when it is included. `None` when
 /// there is no track to write.
 fn tracks_estimate(t: &AudioTracksSettings, sources: usize) -> Option<(String, String)> {
@@ -178,7 +178,7 @@ fn tracks_estimate(t: &AudioTracksSettings, sources: usize) -> Option<(String, S
         return None;
     }
     let per_second = tracks as f64 * TRACK_BYTES_PER_SECOND as f64;
-    let gb = per_second * 3600.0 / 1e9;
+    let gb = per_second * 3600.0 / f64::from(1u32 << 30);
     let chunks = studiocraft_audio_tracks::pool_chunks(t.buffer_mib as usize, tracks);
     let seconds = chunks as f64 * studiocraft_audio_tracks::collect::CHUNK_BYTES as f64 / per_second;
     Some((format!("{gb:.1}"), format!("{seconds:.0}")))
@@ -435,7 +435,7 @@ impl SettingsWindow {
             if let Some((gb, seconds)) = tracks_estimate(t, self.track_sources) {
                 let tracks = (self.track_sources + usize::from(t.include_program)).to_string();
                 ui.weak(craft_i18n::fmt(
-                    tl!("{tracks} tracks take about {gb} GB an hour; the buffer holds {seconds} s of audio while the disk is slow"),
+                    tl!("Audio tracks: {tracks}, about {gb} GiB an hour; the buffer holds {seconds} s of audio while the disk is slow"),
                     &[("tracks", &tracks), ("gb", &gb), ("seconds", &seconds)],
                 ));
             }
@@ -711,10 +711,10 @@ mod tests {
     fn the_output_tab_estimates_the_audio_tracks_size_and_buffer() {
         let mut t = AudioTracksSettings::default();
         // 8 sources and the program: 9 × 384,000 bytes a second.
-        assert_eq!(tracks_estimate(&t, 8), Some(("12.4".to_string(), "29".to_string())));
+        assert_eq!(tracks_estimate(&t, 8), Some(("11.6".to_string(), "29".to_string())));
         t.include_program = false;
         t.buffer_mib = 16;
-        assert_eq!(tracks_estimate(&t, 1), Some(("1.4".to_string(), "44".to_string())));
+        assert_eq!(tracks_estimate(&t, 1), Some(("1.3".to_string(), "44".to_string())));
         // 20 tracks get 2 MiB each, more than the 16 MiB set.
         assert_eq!(tracks_estimate(&t, 20).map(|e| e.1), Some("5".to_string()));
         assert_eq!(tracks_estimate(&t, 0), None, "no tracks write nothing, so there is no estimate");
@@ -733,7 +733,7 @@ mod tests {
             })
             .collect();
         out.textures_delta.clear();
-        assert!(texts.iter().any(|t| t.starts_with("3 tracks take about 4.1 GB an hour")), "{texts:?}");
+        assert!(texts.iter().any(|t| t.starts_with("Audio tracks: 3, about 3.9 GiB an hour")), "{texts:?}");
         assert_eq!(w.draft.audio_tracks, p.audio_tracks, "drawing the section changes nothing");
     }
 

@@ -446,14 +446,14 @@ menu	Transform	变换
 	MiB	MiB
 	File size	文件大小
 	GiB	GiB
-	{tracks} tracks take about {gb} GB an hour; the buffer holds {seconds} s of audio while the disk is slow	{tracks} 条音轨每小时约占 {gb} GB；磁盘变慢时，缓冲区可保存 {seconds} 秒音频
+	Audio tracks: {tracks}, about {gb} GiB an hour; the buffer holds {seconds} s of audio while the disk is slow	音轨：{tracks} 条，每小时约 {gb} GiB；磁盘变慢时，缓冲区可保存 {seconds} 秒音频
 	A recording runs	录制进行时
 	The stream runs	推流进行时
 	A recording or the stream runs	录制或推流进行时
 	The disk is almost full; audio tracks stop before the recording or the stream runs out of space	磁盘快满了；音频轨道会在录制或推流空间耗尽之前停止
 	This take has made as many audio track files as it can; sources added since are not recorded to their own files	本次录制已创建了所能创建的最多音频轨道文件；此后添加的来源不会录制到各自的文件
 	More sources are set to record their own track than can be recorded at once; the later ones are not recorded	设置为录制各自轨道的来源超过了可同时录制的数量；靠后的来源不会被录制
-	{tracks} audio tracks; {lost} s of audio lost while the disk was slow	{tracks} 条音频轨道；磁盘变慢期间丢失了 {lost} 秒音频
+	Audio tracks: {tracks}; {lost} s of audio lost while the disk was slow	{tracks} 条音频轨道；磁盘变慢期间丢失了 {lost} 秒音频
 	TRACKS	音轨
 	TRACKS stopped	音轨已停止
 	Audio tracks stopped early; the status message gives the reason	音频轨道提前停止；原因见状态消息

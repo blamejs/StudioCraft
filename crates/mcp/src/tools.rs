@@ -359,9 +359,10 @@ fn studio_tool_definitions() -> Vec<Value> {
         tool(
             "audio_tracks_status",
             "Audio tracks state",
-            "The audio tracks settings, and the last take's state (recording, finishing, done or stopped), folder, track count, \
-             seconds, bytes written, seconds of audio lost before the disk, whether free space is low, and why and when it stopped \
-             early.",
+            "The audio tracks settings, the output the running take follows (`anchor`), and the last take's state (recording, \
+             finishing, done or stopped), folder, track count, seconds, bytes written, seconds of audio lost before the disk, \
+             whether free space is low, and why and when it stopped early. `repairing` is true while a repair runs, and \
+             `last_repair` holds what the last repair did.",
             json!({}),
             &[],
             READS,
@@ -371,8 +372,10 @@ fn studio_tool_definitions() -> Vec<Value> {
             "Repair audio tracks",
             "Repair the audio tracks of takes that ended without finishing their files (the app or the computer stopped during the \
              take): each file is cut to its whole frames and its header is written for them. `folder` is a take's `Audio Files` \
-             folder, its `<name> Audio` folder, or the recording folder that holds such folders. Returns each take repaired with its \
-             files and their seconds; takes that ended normally are left as they are.",
+             folder, its `<name> Audio` folder, or the recording folder that holds such folders. The repair runs in the \
+             background and this returns `started` at once; audio_tracks_status then shows `repairing` until it ends, and \
+             `last_repair` with each take repaired, its files and their seconds, and each take that could not be repaired. Takes \
+             that ended normally are left as they are.",
             json!({"folder": {"type": "string", "description": "The folder to look in."}}),
             &["folder"],
             RECORDS,

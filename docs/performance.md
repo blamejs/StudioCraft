@@ -43,24 +43,40 @@ start of drawing to the end of submitting it to the GPU.
 
 ### Audio tracks
 
-Measured on 2026-11-17 on Linux, `cargo bench -p studiocraft-media --bench mixer` and
-`cargo bench -p studiocraft-audio-tracks --bench collect`, in one run on one machine:
+Measured on 2026-11-17 on Linux with `cargo bench -p studiocraft-media --bench mixer`, in one run
+on one machine:
 
 | Bench | Median | Range (95%) |
 | --- | --- | --- |
 | `mix 8 sources, 1024-frame stereo block` | 12.87 µs | 12.77 to 12.97 µs |
 | `mix_8_sources_taps_off` | 12.97 µs | 12.78 to 13.17 µs |
 | `mix_8_sources_8_taps` | 12.89 µs | 12.71 to 13.06 µs |
-| `collect_9_tracks_one_block` | 9.89 µs | 9.79 to 10.00 µs |
 
-`mix_8_sources_taps_off` is the mixer tick with audio tracks off, where each input checks for a
+`mix_8_sources_taps_off` is the mixing pass with audio tracks off, where each input checks for a
 tap and finds none. `mix_8_sources_8_taps` stores every input's block into its tap in the same
-pass that mixes it and copies the program into its own tap. The first three medians are within
-0.1 µs of each other, inside the run-to-run spread. `collect_9_tracks_one_block` is the collect
-thread taking one block from each of 9 taps and placing it in its chunk, once every 21.3 ms.
+pass that mixes it and copies the program into its own tap. The three medians are within 0.1 µs
+of each other, inside the run-to-run spread.
+
+Measured on 2026-11-18 on Linux with `cargo bench -p studiocraft-engine --bench mixer_taps` and
+`cargo bench -p studiocraft-audio-tracks --bench collect`, in one run on one machine:
+
+| Bench | Median | Range (95%) |
+| --- | --- | --- |
+| `mix_state_8_inputs_taps_off` | 120.19 µs | 118.36 to 122.11 µs |
+| `mix_state_8_inputs_9_taps` | 137.04 µs | 134.37 to 139.65 µs |
+| `mix_state_63_inputs_64_taps` | 617.29 µs | 612.12 to 623.00 µs |
+| `collect_9_tracks_one_block` | 14.47 µs | 13.84 to 15.41 µs |
+
+The `mix_state` benches run the mixer thread's whole tick (`MixState::tick`) for one 1024-frame
+block: input levels, mixing, the loudness meter and the taps. In the tapped cases a second thread
+drains every tap while the tick runs, as the collect thread does. Taps on 8 inputs and the program
+add 16.9 µs to the tick. 64 tracks, the most a take records at once, take 617 µs of the 21.3 ms
+between blocks. `collect_9_tracks_one_block` is the collect thread taking one block from each of 9
+taps and placing it in its chunk, once every 21.3 ms.
 
 `studiocraft-cli bench audio-tracks` feeds 9 tracks at the mixer's pace for 60 seconds while the
-disk takes nothing for 40 seconds from second 5, with the default 96 MiB write buffer:
+disk takes nothing for 40 seconds from second 5, with the default 96 MiB write buffer. A run on
+2026-11-18 gave the same values as the run on 2026-11-17:
 
 | Measure | Value |
 | --- | --- |

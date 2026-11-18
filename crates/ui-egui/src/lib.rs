@@ -2124,7 +2124,10 @@ fn tracks_item(s: &studiocraft_studio::AudioTracksStatus, outputs_run: bool, sou
             let warn = !warnings.is_empty();
             let hover = if warnings.is_empty() {
                 let lost = format!("{:.1}", s.dropped_seconds());
-                craft_i18n::fmt(tl!("{tracks} audio tracks; {lost} s of audio lost while the disk was slow"), &[("tracks", &tracks), ("lost", &lost)])
+                craft_i18n::fmt(
+                    tl!("Audio tracks: {tracks}; {lost} s of audio lost while the disk was slow"),
+                    &[("tracks", &tracks), ("lost", &lost)],
+                )
             } else {
                 warnings.join("\n")
             };

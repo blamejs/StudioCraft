@@ -761,11 +761,11 @@ mod audio_tracks {
         s.audio_tracks.recorded.clone()
     }
 
-    /// Tick until the running take's taps are with the mixer. Bounded by a count of ticks, so a
-    /// fault fails the test instead of hanging it.
+    /// Tick until the running take is ready. Bounded by a count of ticks, so a fault fails the
+    /// test instead of hanging it.
     fn armed(s: &mut Studio) {
         let mut spins = 0u64;
-        while !s.audio_tracks.armed {
+        while !s.audio_tracks_take().is_some_and(|t| t.status().ready()) {
             spins += 1;
             assert!(spins < 50_000_000, "the take never became ready");
             s.tick();
@@ -818,9 +818,10 @@ mod audio_tracks {
         let (mut s, dir) = studio("on", true);
         s.test_streaming = true;
         s.tick();
-        assert_eq!(s.audio_tracks.generation, 0, "no taps go to the mixer before the take reads them");
+        assert_eq!(s.audio_tracks.generation, 1, "the taps go to the mixer with the take's start");
         armed(&mut s);
-        assert_eq!(s.audio_tracks.generation, 1, "the taps went once the take was ready");
+        assert_eq!(s.audio_tracks.generation, 1, "an unchanged collection sends nothing more");
+        assert_eq!(s.state_json()["audio_tracks"]["anchor"], json!("stream"));
         let mic = s.collection().source_by_name("Mic").map(|x| x.id).unwrap();
         let desk = s.collection().source_by_name("Desk").map(|x| x.id).unwrap();
         assert!(s.audio_tracks_take().is_some());
@@ -964,14 +965,73 @@ mod audio_tracks {
     }
 
     #[test]
+    fn a_take_follows_the_recording_when_it_starts_and_is_thrown_away_when_it_fails() {
+        let (mut s, dir) = studio("anchor", true);
+        let mut p = s.profile().clone();
+        p.audio_tracks.when = AudioTracksWhen::Either;
+        s.set_profile(p).unwrap();
+        s.test_streaming = true;
+        s.tick();
+        armed(&mut s);
+        assert_eq!(s.state_json()["audio_tracks"]["anchor"], json!("stream"));
+        // A recording starts while the stream runs: the stream's take ends and one beside the
+        // recording starts before the recording's first sample.
+        let rec = dir.join("2026-11-18 21-00-00.mkv");
+        let now = s.clock.now();
+        s.audio_tracks_output_starting(OutputKind::Recording, now, Some(&rec));
+        assert_eq!(s.state_json()["audio_tracks"]["anchor"], json!("recording"));
+        assert_eq!(s.audio_tracks.finishing.len(), 1);
+        // The recording does not start: its take, folder and files are removed, and the stream's
+        // take continues at once from where it ended.
+        s.audio_tracks_output_failed(OutputKind::Recording);
+        assert!(s.audio_tracks_take().is_some(), "the stream has a take again");
+        assert_eq!(s.state_json()["audio_tracks"]["anchor"], json!("stream"));
+        s.test_streaming = false;
+        s.tick();
+        s.finish_audio_tracks_blocking();
+        assert!(!dir.join("2026-11-18 21-00-00 Audio").exists(), "the take of a recording that never started leaves nothing");
+        let streams: Vec<std::path::PathBuf> = std::fs::read_dir(&dir)
+            .unwrap()
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| p.file_name().is_some_and(|n| n.to_string_lossy().starts_with("Stream ")))
+            .collect();
+        assert_eq!(streams.len(), 2, "the stream's take before the recording and the one after it");
+        // The stream started at tick 0 in this test, so the second take's time reference is
+        // where the first one ended.
+        let mut offsets: Vec<u64> = streams
+            .iter()
+            .filter_map(|d| journal::read(&d.join("Audio Files")).ok())
+            .filter_map(|lines| {
+                lines.into_iter().find_map(|l| match l {
+                    Line::Start { offset_frames, .. } => Some(offset_frames),
+                    _ => None,
+                })
+            })
+            .collect();
+        offsets.sort_unstable();
+        assert_eq!(offsets.len(), 2);
+        assert_eq!(offsets[1], u64::try_from(now.0 / studiocraft_audio_tracks::collect::FRAME_TICKS).unwrap());
+        drop(s);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn audio_tracks_status_and_repair_are_commands() {
         let (mut s, dir) = studio("cmd", false);
         let (v, _) = s.run("audio_tracks.status", &json!({})).unwrap();
         assert_eq!((v["enabled"].clone(), v["buffer_mib"].clone()), (json!(false), json!(16)));
         std::fs::create_dir_all(&dir).unwrap();
+        // The repair runs on its own thread and the command returns at once.
         let (v, _) = s.run("audio_tracks.repair", &json!({"folder": dir.to_string_lossy()})).unwrap();
-        assert_eq!(v, json!({"repaired": [], "failed": []}));
-        assert!(s.run("audio_tracks.repair", &json!({"folder": dir.join("missing").to_string_lossy()})).is_err());
+        assert_eq!(v["started"], json!(true));
+        assert_eq!(s.state_json()["audio_tracks"]["repairing"], json!(true));
+        assert_eq!(s.audio_tracks_repair_result(), Some(json!({"repaired": [], "failed": []})));
+        assert_eq!(s.state_json()["audio_tracks"]["repairing"], json!(false));
+        assert_eq!(s.state_json()["audio_tracks"]["last_repair"], json!({"repaired": [], "failed": []}));
+        let missing = s.run("audio_tracks.repair", &json!({"folder": dir.join("missing").to_string_lossy()}));
+        assert!(missing.is_err(), "a folder that is not there is an error");
+        assert_eq!(s.state_json()["audio_tracks"]["repairing"], json!(false), "and starts no repair");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

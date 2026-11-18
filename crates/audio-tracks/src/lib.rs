@@ -13,8 +13,12 @@
 //! The chunk pool is the buffer setting in MiB, each chunk 128 blocks of one track, made when the
 //! take starts, and at least two chunks for each track recorded, made when the track starts; when
 //! it runs out the collect thread drops blocks and logs the dropout, and the
-//! disk thread writes silence in their place. Nothing here blocks the mixer, the outputs or the
-//! thread that starts and stops the take, and a take that is off makes no thread and no pool.
+//! disk thread writes silence in their place. The disk queue has room for every chunk of the pool
+//! and every track a take can make, so the collect thread never waits for it. The disk thread
+//! rewrites the headers, syncs and checks the free space on time even while chunks keep coming.
+//! Nothing here blocks the mixer, the outputs or the thread that starts and stops the take, and a
+//! take that is off makes no thread and no pool. A panic on either thread stops the take with
+//! [`StopReason::WriteFailed`].
 //!
 //! A take writes `take.journal` beside its files; [`recover`] repairs the files of a take that
 //! ended without its journal's last line.
@@ -28,9 +32,10 @@ pub mod recover;
 pub mod space;
 pub mod wav;
 
-use std::path::PathBuf;
-use std::sync::Arc;
+use std::panic::AssertUnwindSafe;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
+use std::sync::{Arc, OnceLock};
 use std::thread::{JoinHandle, Thread};
 use std::time::{Duration, Instant};
 
@@ -38,7 +43,7 @@ use crossbeam_queue::ArrayQueue;
 use studiocraft_media::Tick;
 
 pub use collect::{Collector, Dropout, TrackSpec, pool_chunks};
-pub use disk::{DiskConfig, Faults, Gate, StopReason};
+pub use disk::{DiskConfig, Faults, Gate, StopReason, Timing};
 
 /// A list of tracks for the collect thread, with the clock time it was sent at (none for the
 /// first list, sent before any block), and whether it comes from a collection that replaced the
@@ -56,8 +61,10 @@ pub const SYNC_EVERY: Duration = Duration::from_secs(5);
 pub const MAX_TRACKS: usize = 64;
 /// Tracks one take makes at most, counting every source that left or was replaced during it.
 pub const MAX_TAKE_TRACKS: usize = 4 * MAX_TRACKS;
-/// Messages the disk queue holds beyond the chunks.
-const QUEUE_SPARE: usize = 64;
+/// Messages the disk queue holds beyond the chunks and the track announcements: the end.
+const QUEUE_SPARE: usize = 8;
+/// Messages the disk thread handles before it checks whether a header refresh or a sync is due.
+const MESSAGES_PER_CHECK: usize = 16;
 /// How many idle waits the collect thread gives the mixer to take the taps away at a stop
 /// ([`Take::stop_after`]), or to apply the tap change a track list waits for, before it goes on
 /// anyway: 5 s.
@@ -95,9 +102,16 @@ pub struct Status {
     low_space: AtomicBool,
     track_limit: AtomicBool,
     ready: AtomicBool,
+    /// The take's `Audio Files` folder, once the disk thread has made it.
+    dir: OnceLock<PathBuf>,
 }
 
 impl Status {
+    /// The take's `Audio Files` folder, once the disk thread has made it.
+    pub fn dir(&self) -> Option<&Path> {
+        self.dir.get().map(PathBuf::as_path)
+    }
+
     /// Whether the collect thread has made its chunk pool and reads the taps: before that, a tap
     /// the mixer filled would drop the take's first audio.
     pub fn ready(&self) -> bool {
@@ -179,10 +193,22 @@ pub struct Take {
     stop: Arc<AtomicBool>,
     tracks: Arc<ArrayQueue<TrackList>>,
     after: Arc<ArrayQueue<StopAfter>>,
+    /// The take's end time on the mixer's clock, for the collect thread at the stop.
+    end: Arc<ArrayQueue<Tick>>,
+    discard: Arc<AtomicBool>,
     collect: Option<JoinHandle<()>>,
     disk: Option<JoinHandle<()>>,
     collect_thread: Thread,
-    dir: PathBuf,
+}
+
+/// Run `body`, and stop the take with [`StopReason::WriteFailed`] if it panics, so a fault in
+/// one thread ends the other and the status shows it.
+fn guarded(name: &str, status: &Status, stop: &AtomicBool, body: impl FnOnce()) {
+    if std::panic::catch_unwind(AssertUnwindSafe(body)).is_err() {
+        log::warn!("audio tracks: the {name} thread stopped on a fault");
+        status.stop(StopReason::WriteFailed);
+        stop.store(true, Ordering::Release);
+    }
 }
 
 impl Take {
@@ -201,30 +227,38 @@ impl Take {
         let tracks: Arc<ArrayQueue<TrackList>> = Arc::new(ArrayQueue::new(8));
         let _ = tracks.push((specs, None, false, None));
         let after: Arc<ArrayQueue<StopAfter>> = Arc::new(ArrayQueue::new(1));
+        let end: Arc<ArrayQueue<Tick>> = Arc::new(ArrayQueue::new(1));
+        let discard = Arc::new(AtomicBool::new(false));
         let chunks = cfg.buffer_mib.max(1) as usize;
-        let (disk_tx, disk_rx) = std::sync::mpsc::sync_channel::<(Arc<ArrayQueue<collect::ToDisk>>, Arc<ArrayQueue<Vec<u8>>>, Thread)>(1);
-        let dir = cfg.disk.dir.clone();
+        type ToDiskThread = (Arc<ArrayQueue<collect::ToDisk>>, Arc<ArrayQueue<Vec<u8>>>, Arc<ArrayQueue<Dropout>>, Thread);
+        let (disk_tx, disk_rx) = std::sync::mpsc::sync_channel::<ToDiskThread>(1);
 
         let c_status = Arc::clone(&status);
         let c_stop = Arc::clone(&stop);
         let c_tracks = Arc::clone(&tracks);
         let c_after = Arc::clone(&after);
+        let c_end = Arc::clone(&end);
+        let c_discard = Arc::clone(&discard);
         let no_memory = cfg.disk.faults.no_memory;
         let collect = std::thread::Builder::new().name("audio-tracks-collect".into()).spawn(move || {
-            // Without its buffer the take stops; dropping `disk_tx` ends the disk thread too.
-            let made = if no_memory { None } else { Collector::new(chunks, pool_chunks(chunks, MAX_TRACKS) + QUEUE_SPARE) };
-            let Some((mut collector, free, out)) = made else {
-                c_status.stop(StopReason::NoMemory);
-                return;
-            };
-            if let Some(at) = at {
-                collector.set_start(at);
-            }
-            if disk_tx.send((Arc::clone(&out), free, std::thread::current())).is_err() {
-                return;
-            }
-            c_status.ready.store(true, Ordering::Release);
-            collect_loop(collector, &c_status, &c_stop, &c_tracks, &c_after);
+            guarded("collect", &c_status, &c_stop, || {
+                // Without its buffer the take stops; dropping `disk_tx` ends the disk thread too.
+                let queue = pool_chunks(chunks, MAX_TRACKS) + MAX_TAKE_TRACKS + QUEUE_SPARE;
+                let made = if no_memory { None } else { Collector::new(chunks, queue) };
+                let Some((mut collector, free, out)) = made else {
+                    c_status.stop(StopReason::NoMemory);
+                    return;
+                };
+                if let Some(at) = at {
+                    collector.set_start(at);
+                }
+                if disk_tx.send((Arc::clone(&out), free, collector.dropout_queue(), std::thread::current())).is_err() {
+                    return;
+                }
+                c_status.ready.store(true, Ordering::Release);
+                let shared = Shared { status: &c_status, stop: &c_stop, tracks: &c_tracks, after: &c_after, end: &c_end, discard: &c_discard };
+                collect_loop(collector, &shared);
+            });
         })?;
         let collect_thread = collect.thread().clone();
 
@@ -232,8 +266,8 @@ impl Take {
         let d_stop = Arc::clone(&stop);
         let disk_cfg = cfg.disk;
         let disk = std::thread::Builder::new().name("audio-tracks-disk".into()).spawn(move || {
-            let Ok((queue, free, collect_thread)) = disk_rx.recv() else { return };
-            disk_loop(disk_cfg, queue, free, &d_status, &d_stop);
+            let Ok((queue, free, dropq, collect_thread)) = disk_rx.recv() else { return };
+            guarded("disk", &d_status, &d_stop, || disk_loop(disk_cfg, queue, free, dropq, &d_status, &d_stop));
             collect_thread.unpark();
         });
         let disk = match disk {
@@ -245,16 +279,16 @@ impl Take {
                 return Err(e);
             }
         };
-        Ok(Take { status, stop, tracks, after, collect: Some(collect), disk: Some(disk), collect_thread, dir })
+        Ok(Take { status, stop, tracks, after, end, discard, collect: Some(collect), disk: Some(disk), collect_thread })
     }
 
     pub fn status(&self) -> &Arc<Status> {
         &self.status
     }
 
-    /// The take's `Audio Files` folder.
-    pub fn dir(&self) -> &std::path::Path {
-        &self.dir
+    /// The take's `Audio Files` folder, once the disk thread has made it.
+    pub fn dir(&self) -> Option<&Path> {
+        self.status.dir()
     }
 
     /// Record `specs` from `at`, the time on the clock the mixer stamps blocks with. False when
@@ -291,9 +325,27 @@ impl Take {
 
     /// Ask the take to stop once `applied` reaches `generation`: the mixer has taken the taps
     /// away, so it stores no more blocks for the collect thread to miss. The collect thread waits
-    /// for that, taking blocks as it waits, for up to 5 s. Returns at once.
-    pub fn stop_after(&self, applied: Arc<AtomicU64>, generation: u64) {
+    /// for that, taking blocks as it waits, for up to 5 s. With `end`, the take ends at that time
+    /// on the mixer's clock ([`Take::stop_at`]). Returns at once.
+    pub fn stop_after(&self, applied: Arc<AtomicU64>, generation: u64, end: Option<Tick>) {
         let _ = self.after.force_push((applied, generation));
+        if let Some(end) = end {
+            let _ = self.end.force_push(end);
+        }
+        self.stop();
+    }
+
+    /// Ask the take to stop, ending at `end` on the mixer's clock: audio stamped later is left
+    /// out, and every track still recorded ends there. Returns at once.
+    pub fn stop_at(&self, end: Tick) {
+        let _ = self.end.force_push(end);
+        self.stop();
+    }
+
+    /// Throw the take away: it stops, and its files, journal and folder are removed once its
+    /// threads end. For a take whose output did not start.
+    pub fn discard(&self) {
+        self.discard.store(true, Ordering::Release);
         self.stop();
     }
 
@@ -302,7 +354,7 @@ impl Take {
         self.collect.as_ref().is_none_or(|h| h.is_finished()) && self.disk.as_ref().is_none_or(|h| h.is_finished())
     }
 
-    /// Wait for both threads, for tests, the command line and the end of the app.
+    /// Wait for both threads, for tests and the command line.
     pub fn join(mut self) -> Arc<Status> {
         self.stop();
         if let Some(h) = self.collect.take() {
@@ -312,6 +364,21 @@ impl Take {
             let _ = h.join();
         }
         Arc::clone(&self.status)
+    }
+
+    /// Wait for both threads until `deadline`, for the end of the app. False when they are still
+    /// running then; they are left to finish on their own, and the journal lets the next launch
+    /// repair a take they did not finish.
+    pub fn join_until(self, deadline: Instant) -> bool {
+        self.stop();
+        while !self.finished() {
+            if Instant::now() >= deadline {
+                return false;
+            }
+            std::thread::sleep(IDLE);
+        }
+        drop(self.join());
+        true
     }
 }
 
@@ -339,7 +406,18 @@ fn apply_tracks(c: &mut Collector, status: &Status, (list, at, replace, _): Trac
     status.track_limit.store(c.full(), Ordering::Relaxed);
 }
 
-fn collect_loop(mut c: Collector, status: &Status, stop: &AtomicBool, tracks: &ArrayQueue<TrackList>, after: &ArrayQueue<StopAfter>) {
+/// What the collect thread shares with the take.
+struct Shared<'a> {
+    status: &'a Status,
+    stop: &'a AtomicBool,
+    tracks: &'a ArrayQueue<TrackList>,
+    after: &'a ArrayQueue<StopAfter>,
+    end: &'a ArrayQueue<Tick>,
+    discard: &'a AtomicBool,
+}
+
+fn collect_loop(mut c: Collector, shared: &Shared<'_>) {
+    let Shared { status, stop, tracks, after, end, discard } = *shared;
     // A list waiting for the mixer to apply its tap change, and the idle waits it has had. The
     // lists after it wait behind it, so they apply in the order they were sent.
     let mut waiting: Option<(TrackList, u32)> = None;
@@ -360,6 +438,10 @@ fn collect_loop(mut c: Collector, status: &Status, stop: &AtomicBool, tracks: &A
             return;
         }
         if stop.load(Ordering::Acquire) {
+            // Blocks stored from here on are cut at the end time.
+            if let Some(at) = end.pop() {
+                c.set_end(at);
+            }
             // Until the mixer has let go of the taps it may still store blocks.
             if let Some((applied, generation)) = after.pop() {
                 let mut waits = 0;
@@ -380,6 +462,9 @@ fn collect_loop(mut c: Collector, status: &Status, stop: &AtomicBool, tracks: &A
             while let Some(list) = tracks.pop() {
                 apply_tracks(&mut c, status, list);
             }
+            if discard.load(Ordering::Acquire) {
+                c.set_discard();
+            }
             // The blocks the mixer stored before the stop, then the end.
             c.poll();
             status.frames.store(c.position(), Ordering::Relaxed);
@@ -396,8 +481,15 @@ fn collect_loop(mut c: Collector, status: &Status, stop: &AtomicBool, tracks: &A
     }
 }
 
-fn disk_loop(cfg: DiskConfig, queue: Arc<ArrayQueue<collect::ToDisk>>, free: Arc<ArrayQueue<Vec<u8>>>, status: &Status, stop: &AtomicBool) {
-    let mut w = match disk::Writer::create(cfg, free) {
+fn disk_loop(
+    cfg: DiskConfig,
+    queue: Arc<ArrayQueue<collect::ToDisk>>,
+    free: Arc<ArrayQueue<Vec<u8>>>,
+    dropq: Arc<ArrayQueue<Dropout>>,
+    status: &Status,
+    stop: &AtomicBool,
+) {
+    let mut w = match disk::Writer::create(cfg, free, dropq) {
         Ok(w) => w,
         Err(f) => {
             log::warn!("audio tracks: {}", f.error);
@@ -405,10 +497,14 @@ fn disk_loop(cfg: DiskConfig, queue: Arc<ArrayQueue<collect::ToDisk>>, free: Arc
             return;
         }
     };
+    let _ = status.dir.set(w.dir().to_path_buf());
     let (mut header_at, mut sync_at) = (Instant::now(), Instant::now());
     loop {
         let mut ended = false;
         let mut result = Ok(());
+        // A disk slower than the tracks keeps the queue from emptying, so the header refresh,
+        // the sync and the free-space check are due by time, not by an empty queue.
+        let mut handled = 0usize;
         while let Some(msg) = queue.pop() {
             match w.handle(msg) {
                 Ok(true) => {
@@ -420,6 +516,10 @@ fn disk_loop(cfg: DiskConfig, queue: Arc<ArrayQueue<collect::ToDisk>>, free: Arc
                     result = Err(f);
                     break;
                 }
+            }
+            handled += 1;
+            if handled.is_multiple_of(MESSAGES_PER_CHECK) && header_at.elapsed() >= HEADER_EVERY {
+                break;
             }
         }
         if result.is_ok() && !ended {
@@ -443,6 +543,9 @@ fn disk_loop(cfg: DiskConfig, queue: Arc<ArrayQueue<collect::ToDisk>>, free: Arc
             return;
         }
         if ended {
+            if w.discarded() {
+                w.discard_files();
+            }
             status.state.store(State::Done as u8, Ordering::Release);
             return;
         }

@@ -436,14 +436,14 @@ menu	Transform	Transformeren
 	MiB	MiB
 	File size	Bestandsgrootte
 	GiB	GiB
-	{tracks} tracks take about {gb} GB an hour; the buffer holds {seconds} s of audio while the disk is slow	{tracks} sporen nemen ongeveer {gb} GB per uur in; de buffer houdt {seconds} s audio vast terwijl de schijf traag is
+	Audio tracks: {tracks}, about {gb} GiB an hour; the buffer holds {seconds} s of audio while the disk is slow	Audiosporen: {tracks}, ongeveer {gb} GiB per uur; de buffer houdt {seconds} s audio vast terwijl de schijf traag is
 	A recording runs	Er loopt een opname
 	The stream runs	De stream loopt
 	A recording or the stream runs	Er loopt een opname of de stream
 	The disk is almost full; audio tracks stop before the recording or the stream runs out of space	De schijf is bijna vol; de audiosporen stoppen voordat de opname of de stream geen ruimte meer heeft
 	This take has made as many audio track files as it can; sources added since are not recorded to their own files	Deze opname heeft zoveel audiospoorbestanden gemaakt als mogelijk is; bronnen die daarna zijn toegevoegd worden niet in eigen bestanden opgenomen
 	More sources are set to record their own track than can be recorded at once; the later ones are not recorded	Er zijn meer bronnen ingesteld om een eigen spoor op te nemen dan er tegelijk kunnen worden opgenomen; de latere worden niet opgenomen
-	{tracks} audio tracks; {lost} s of audio lost while the disk was slow	{tracks} audiosporen; {lost} s audio verloren terwijl de schijf traag was
+	Audio tracks: {tracks}; {lost} s of audio lost while the disk was slow	Audiosporen: {tracks}; {lost} s audio verloren terwijl de schijf traag was
 	TRACKS	SPOREN
 	TRACKS stopped	SPOREN gestopt
 	Audio tracks stopped early; the status message gives the reason	De audiosporen zijn vroegtijdig gestopt; het statusbericht noemt de reden

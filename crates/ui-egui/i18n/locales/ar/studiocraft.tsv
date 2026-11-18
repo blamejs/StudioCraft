@@ -434,14 +434,14 @@ menu	Transform	التحويل
 	MiB	ميبيبايت
 	File size	حجم الملف
 	GiB	جيبيبايت
-	{tracks} tracks take about {gb} GB an hour; the buffer holds {seconds} s of audio while the disk is slow	تشغل المسارات ({tracks}) نحو {gb} غيغابايت في الساعة؛ ويحتفظ المخزن المؤقت بـ {seconds} ث من الصوت أثناء بطء القرص
+	Audio tracks: {tracks}, about {gb} GiB an hour; the buffer holds {seconds} s of audio while the disk is slow	المسارات الصوتية: {tracks}، نحو {gb} جيبيبايت في الساعة؛ ويحتفظ المخزن المؤقت بـ {seconds} ث من الصوت أثناء بطء القرص
 	A recording runs	عمل تسجيل
 	The stream runs	عمل البث
 	A recording or the stream runs	عمل تسجيل أو البث
 	The disk is almost full; audio tracks stop before the recording or the stream runs out of space	القرص ممتلئ تقريبًا؛ تتوقف المسارات الصوتية قبل أن تنفد مساحة التسجيل أو البث
 	This take has made as many audio track files as it can; sources added since are not recorded to their own files	أنشأت هذه اللقطة أكبر عدد ممكن من ملفات المسارات الصوتية؛ المصادر المضافة بعد ذلك لا تُسجَّل في ملفات خاصة بها
 	More sources are set to record their own track than can be recorded at once; the later ones are not recorded	مصادر أكثر مما يمكن تسجيله معًا مضبوطة لتسجيل مسارها الخاص؛ المصادر اللاحقة لا تُسجَّل
-	{tracks} audio tracks; {lost} s of audio lost while the disk was slow	المسارات الصوتية: {tracks}؛ فُقد {lost} ث من الصوت أثناء بطء القرص
+	Audio tracks: {tracks}; {lost} s of audio lost while the disk was slow	المسارات الصوتية: {tracks}؛ فُقد {lost} ث من الصوت أثناء بطء القرص
 	TRACKS	المسارات
 	TRACKS stopped	توقفت المسارات
 	Audio tracks stopped early; the status message gives the reason	توقفت المسارات الصوتية مبكرًا؛ تذكر رسالة الحالة السبب

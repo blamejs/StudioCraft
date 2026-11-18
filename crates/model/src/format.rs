@@ -142,11 +142,11 @@ fn profile_v4_to_v5(data: &mut Value) -> Result<(), String> {
 }
 
 /// Profile version 5 to 6: audio tracks (`audio_tracks`), off, recorded while a recording runs,
-/// with the program mix, a 96 MiB buffer and 2 GiB files.
+/// with the program mix, a 96 MiB buffer and 1 GiB files.
 fn profile_v5_to_v6(data: &mut Value) -> Result<(), String> {
     let data = data.as_object_mut().ok_or("the profile is not an object")?;
     data.entry("audio_tracks")
-        .or_insert_with(|| json!({"enabled": false, "when": "recording", "include_program": true, "buffer_mib": 96, "segment_gib": 2}));
+        .or_insert_with(|| json!({"enabled": false, "when": "recording", "include_program": true, "buffer_mib": 96, "segment_gib": 1}));
     Ok(())
 }
 
@@ -224,13 +224,13 @@ pub fn write_profile(p: &Profile) -> Result<String, FormatError> {
     PROFILE.write(p)
 }
 
-/// A profile from a file's text, migrated, with video and replay buffer settings brought into
-/// range. Audio tracks settings out of range refuse the file.
+/// A profile from a file's text, migrated, with video, replay buffer and audio tracks settings
+/// brought into range.
 pub fn read_profile(text: &str) -> Result<Profile, FormatError> {
     let mut p: Profile = PROFILE.read(text)?;
     p.video = p.video.sanitized();
     p.replay = p.replay.sanitized();
-    p.audio_tracks.check().map_err(FormatError::Data)?;
+    p.audio_tracks = p.audio_tracks.sanitized();
     Ok(p)
 }
 
@@ -398,7 +398,7 @@ mod tests {
     }
 
     #[test]
-    fn profiles_keep_the_audio_tracks_settings_and_refuse_values_out_of_range() {
+    fn profiles_keep_the_audio_tracks_settings_and_bring_sizes_into_range() {
         for (v, text) in &PROFILE_FIXTURES[..5] {
             let p = read_profile(text).unwrap();
             assert_eq!(p.audio_tracks, crate::profile::AudioTracksSettings::default(), "version {v} gets the defaults");
@@ -415,14 +415,18 @@ mod tests {
         };
         assert_eq!(p.audio_tracks, want);
         assert_eq!(read_profile(&write_profile(&p).unwrap()).unwrap(), p);
-        for (from, to) in [
-            ("\"buffer_mib\": 256", "\"buffer_mib\": 15"),
-            ("\"buffer_mib\": 256", "\"buffer_mib\": 1025"),
-            ("\"segment_gib\": 1", "\"segment_gib\": 0"),
-            ("\"segment_gib\": 1", "\"segment_gib\": 4"),
-            ("\"either\"", "\"sometimes\""),
-            ("\"segment_gib\": 1", "\"segment_gib\": -1"),
+        // A size out of range is brought into it, so the rest of the profile is kept.
+        for (from, to, buffer, segment) in [
+            ("\"buffer_mib\": 256", "\"buffer_mib\": 15", 16, 1),
+            ("\"buffer_mib\": 256", "\"buffer_mib\": 1025", 1024, 1),
+            ("\"segment_gib\": 1", "\"segment_gib\": 0", 256, 1),
+            ("\"segment_gib\": 1", "\"segment_gib\": 4", 256, 3),
         ] {
+            let p = read_profile(&v6.replace(from, to)).unwrap();
+            assert_eq!((p.audio_tracks.buffer_mib, p.audio_tracks.segment_gib, p.audio_tracks.enabled), (buffer, segment, true), "{to}");
+        }
+        // A value of the wrong kind still refuses the file.
+        for (from, to) in [("\"either\"", "\"sometimes\""), ("\"segment_gib\": 1", "\"segment_gib\": -1")] {
             let bad = v6.replace(from, to);
             assert!(matches!(read_profile(&bad), Err(FormatError::Data(_))), "{to} refuses the file");
         }

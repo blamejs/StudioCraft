@@ -446,14 +446,14 @@ menu	Transform	変形
 	MiB	MiB
 	File size	ファイルサイズ
 	GiB	GiB
-	{tracks} tracks take about {gb} GB an hour; the buffer holds {seconds} s of audio while the disk is slow	{tracks} トラックで 1 時間あたり約 {gb} GB を使います。ディスクが遅いあいだ、バッファーは {seconds} 秒分の音声を保持します
+	Audio tracks: {tracks}, about {gb} GiB an hour; the buffer holds {seconds} s of audio while the disk is slow	オーディオトラック {tracks} 本で 1 時間あたり約 {gb} GiB を使います。ディスクが遅いあいだ、バッファーは {seconds} 秒分の音声を保持します
 	A recording runs	録画中
 	The stream runs	配信中
 	A recording or the stream runs	録画中または配信中
 	The disk is almost full; audio tracks stop before the recording or the stream runs out of space	ディスクの空きがわずかです。録画や配信の容量が尽きる前にオーディオトラックは停止します
 	This take has made as many audio track files as it can; sources added since are not recorded to their own files	このテイクで作れるオーディオトラックのファイル数が上限に達しました。その後に追加したソースは個別のファイルに記録されません
 	More sources are set to record their own track than can be recorded at once; the later ones are not recorded	個別のトラックに記録する設定のソースが、同時に記録できる数を超えています。後のソースは記録されません
-	{tracks} audio tracks; {lost} s of audio lost while the disk was slow	オーディオトラック {tracks} 本、ディスクが遅いあいだに {lost} 秒分の音声が失われました
+	Audio tracks: {tracks}; {lost} s of audio lost while the disk was slow	オーディオトラック {tracks} 本、ディスクが遅いあいだに {lost} 秒分の音声が失われました
 	TRACKS	トラック
 	TRACKS stopped	トラック停止
 	Audio tracks stopped early; the status message gives the reason	オーディオトラックが途中で停止しました。理由はステータスメッセージに表示されます

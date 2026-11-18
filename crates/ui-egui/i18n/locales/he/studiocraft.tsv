@@ -427,14 +427,14 @@ menu	Transform	שינוי צורה
 	MiB	MiB
 	File size	גודל קובץ
 	GiB	GiB
-	{tracks} tracks take about {gb} GB an hour; the buffer holds {seconds} s of audio while the disk is slow	{tracks} רצועות תופסות כ-{gb} GB לשעה; המאגר מחזיק {seconds} שנ׳ של שמע בזמן שהדיסק איטי
+	Audio tracks: {tracks}, about {gb} GiB an hour; the buffer holds {seconds} s of audio while the disk is slow	רצועות שמע: {tracks}, כ-{gb} GiB לשעה; המאגר מחזיק {seconds} שנ׳ של שמע בזמן שהדיסק איטי
 	A recording runs	כשהקלטה פועלת
 	The stream runs	כשהשידור פועל
 	A recording or the stream runs	כשהקלטה או השידור פועלים
 	The disk is almost full; audio tracks stop before the recording or the stream runs out of space	הדיסק כמעט מלא; רצועות השמע נעצרות לפני שייגמר המקום להקלטה או לשידור
 	This take has made as many audio track files as it can; sources added since are not recorded to their own files	הטייק הזה יצר את מספר קובצי רצועות השמע המרבי; מקורות שנוספו מאז אינם מוקלטים לקבצים משלהם
 	More sources are set to record their own track than can be recorded at once; the later ones are not recorded	יותר מקורות מוגדרים להקליט רצועה משלהם ממה שניתן להקליט בבת אחת; המקורות האחרונים אינם מוקלטים
-	{tracks} audio tracks; {lost} s of audio lost while the disk was slow	{tracks} רצועות שמע; {lost} שנ׳ של שמע אבדו בזמן שהדיסק היה איטי
+	Audio tracks: {tracks}; {lost} s of audio lost while the disk was slow	רצועות שמע: {tracks}; {lost} שנ׳ של שמע אבדו בזמן שהדיסק היה איטי
 	TRACKS	רצועות
 	TRACKS stopped	הרצועות נעצרו
 	Audio tracks stopped early; the status message gives the reason	רצועות השמע נעצרו מוקדם; הודעת המצב מציינת את הסיבה

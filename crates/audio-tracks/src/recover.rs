@@ -1,5 +1,8 @@
 //! Repair of takes that ended without their journal's last line (the app or the computer stopped
-//! during the take): each file is cut to its whole frames and given a header for them.
+//! during the take): each file is cut to its whole frames and given a header for them, with its
+//! `bext` time reference kept. Each file keeps the audio it holds, so the files of a repaired take
+//! can end at different points: the chunks still in memory at the crash are lost, and their
+//! length differs from track to track.
 
 use std::path::{Path, PathBuf};
 
@@ -18,17 +21,16 @@ pub struct Repaired {
 }
 
 /// The `Audio Files` folders under `folder` whose take did not end: `folder` itself, its
-/// `Audio Files` folder, or those of the folders in it (a recording folder). A journal that cannot
-/// be read is included, so repairing it reports why; a take still being written (its journal is
-/// locked) is then left as it is by [`repair`]. Links are not followed below `folder`.
+/// `Audio Files` folder, or those of the folders in it (a recording folder). Whether a take ended
+/// is read from the end of its journal alone, so a long take's journal is not read whole. A
+/// journal that cannot be read is included, so repairing it reports why; a take still being
+/// written (its journal is locked) is then left as it is by [`repair`]. Links are not followed
+/// below `folder`.
 pub fn unfinished(folder: &Path) -> Vec<PathBuf> {
     let mut found = Vec::new();
     let mut check = |dir: PathBuf| {
         if (dir == folder || real_dir(&dir)) && real_file(&dir.join(journal::FILE_NAME)) {
-            let open = match journal::read(&dir) {
-                Ok(lines) => !lines.iter().any(|l| matches!(l, Line::End { .. })),
-                Err(_) => true,
-            };
+            let open = !journal::ended(&dir).unwrap_or(false);
             if open {
                 found.push(dir);
             }
@@ -64,14 +66,27 @@ pub fn repair(dir: &Path) -> std::io::Result<Option<Repaired>> {
     // The take frame each file starts at, by file name.
     let mut starts: Vec<(String, u64)> = Vec::new();
     let mut synced: Vec<(String, u64)> = Vec::new();
+    // Each track's file at this point of the journal: a sync line names tracks, not files.
+    let mut current: std::collections::HashMap<usize, String> = std::collections::HashMap::new();
+    // Each track's files, and the take frame a `Cut` line cut them back to.
+    let mut of_track: Vec<(usize, String)> = Vec::new();
+    let mut cuts: std::collections::HashMap<usize, u64> = std::collections::HashMap::new();
     for l in &lines {
         match l {
-            Line::File { file, first_frame, .. } if !names.contains(file) => {
-                names.push(file.clone());
-                starts.push((file.clone(), *first_frame));
+            Line::File { track, file, first_frame, .. } => {
+                current.insert(*track, file.clone());
+                if !names.contains(file) {
+                    names.push(file.clone());
+                    starts.push((file.clone(), *first_frame));
+                    of_track.push((*track, file.clone()));
+                }
             }
-            Line::Sync { files } => {
-                for (f, n) in files {
+            Line::Cut { track, frames } => {
+                cuts.insert(*track, *frames);
+            }
+            Line::Sync { tracks } => {
+                for (track, n) in tracks {
+                    let Some(f) = current.get(track) else { continue };
                     match synced.iter_mut().find(|(s, _)| s == f) {
                         Some(s) => s.1 = *n,
                         None => synced.push((f.clone(), *n)),
@@ -89,6 +104,23 @@ pub fn repair(dir: &Path) -> std::io::Result<Option<Repaired>> {
             format!("the journal names {bad:?}, which is not a file in the take's folder"),
         ));
     }
+    // A cut the writer journaled is finished here too, since the take may have stopped part way
+    // through it: a part after the first that starts at or after the end is removed, and the file
+    // holding the end keeps only the frames before it.
+    let start_of = |name: &str| starts.iter().find(|(f, _)| f == name).map_or(0, |(_, s)| *s);
+    let mut removed: Vec<String> = Vec::new();
+    let mut limits: Vec<(String, u64)> = Vec::new();
+    for (track, file) in &of_track {
+        let Some(&end) = cuts.get(track) else { continue };
+        let start = start_of(file);
+        if start > 0 && start >= end {
+            removed.push(file.clone());
+        } else {
+            limits.push((file.clone(), end.saturating_sub(start)));
+        }
+    }
+    names.retain(|n| !removed.contains(n));
+    let limit = |name: &str| limits.iter().find(|(f, _)| f == name).map(|(_, l)| *l);
     // Every file is checked before any is cut, so a take that stays unfinished is left as it was.
     let head = crate::wav::header_len()?;
     for name in &names {
@@ -102,7 +134,7 @@ pub fn repair(dir: &Path) -> std::io::Result<Option<Repaired>> {
         // A sync put its frames on the disk, so a file holding fewer was cut or replaced since.
         let held = len.saturating_sub(head) / crate::wav::FRAME_BYTES;
         if let Some((_, want)) = synced.iter().find(|(f, _)| f == name)
-            && held < *want
+            && held < limit(name).map_or(*want, |l| l.min(*want))
         {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
@@ -110,9 +142,19 @@ pub fn repair(dir: &Path) -> std::io::Result<Option<Repaired>> {
             ));
         }
     }
+    for name in &removed {
+        let path = dir.join(name);
+        if real_file(&path) {
+            std::fs::remove_file(&path)?;
+        }
+    }
     let mut files = Vec::new();
     for name in names {
-        let frames = crate::wav::repair(&dir.join(&name))?;
+        let path = dir.join(&name);
+        if let Some(frames) = limit(&name) {
+            crate::wav::cut(&path, frames)?;
+        }
+        let frames = crate::wav::repair(&path)?;
         files.push((name, frames));
     }
     // A part after the first starts later in the take, so the take ends after its last frame.

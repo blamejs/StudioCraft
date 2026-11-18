@@ -290,11 +290,17 @@ impl AudioTracksSettings {
         range("buffer_mib", self.buffer_mib, Self::BUFFER_MIB)?;
         range("segment_gib", self.segment_gib, Self::SEGMENT_GIB)
     }
+
+    /// These settings with each size brought into its range.
+    pub fn sanitized(self) -> Self {
+        let clamp = |v: u32, r: std::ops::RangeInclusive<u32>| v.clamp(*r.start(), *r.end());
+        Self { buffer_mib: clamp(self.buffer_mib, Self::BUFFER_MIB), segment_gib: clamp(self.segment_gib, Self::SEGMENT_GIB), ..self }
+    }
 }
 
 impl Default for AudioTracksSettings {
     fn default() -> Self {
-        Self { enabled: false, when: AudioTracksWhen::Recording, include_program: true, buffer_mib: 96, segment_gib: 2 }
+        Self { enabled: false, when: AudioTracksWhen::Recording, include_program: true, buffer_mib: 96, segment_gib: 1 }
     }
 }
 

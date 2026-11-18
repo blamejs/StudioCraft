@@ -446,14 +446,14 @@ menu	Transform	Transformace
 	MiB	MiB
 	File size	Velikost souboru
 	GiB	GiB
-	{tracks} tracks take about {gb} GB an hour; the buffer holds {seconds} s of audio while the disk is slow	Stopy ({tracks}) zaberou asi {gb} GB za hodinu; vyrovnávací paměť pojme {seconds} s zvuku, když je disk pomalý
+	Audio tracks: {tracks}, about {gb} GiB an hour; the buffer holds {seconds} s of audio while the disk is slow	Zvukové stopy: {tracks}, asi {gb} GiB za hodinu; vyrovnávací paměť pojme {seconds} s zvuku, když je disk pomalý
 	A recording runs	Běží nahrávání
 	The stream runs	Běží stream
 	A recording or the stream runs	Běží nahrávání nebo stream
 	The disk is almost full; audio tracks stop before the recording or the stream runs out of space	Disk je téměř plný; zvukové stopy se zastaví dřív, než nahrávce nebo streamu dojde místo
 	This take has made as many audio track files as it can; sources added since are not recorded to their own files	Tento záběr už vytvořil nejvíc souborů zvukových stop, kolik může; zdroje přidané potom se do vlastních souborů nenahrávají
 	More sources are set to record their own track than can be recorded at once; the later ones are not recorded	Vlastní stopu má nahrávat víc zdrojů, než lze nahrávat najednou; ty pozdější se nenahrávají
-	{tracks} audio tracks; {lost} s of audio lost while the disk was slow	Zvukové stopy: {tracks}; ztraceno {lost} s zvuku, když byl disk pomalý
+	Audio tracks: {tracks}; {lost} s of audio lost while the disk was slow	Zvukové stopy: {tracks}; ztraceno {lost} s zvuku, když byl disk pomalý
 	TRACKS	STOPY
 	TRACKS stopped	STOPY zastaveny
 	Audio tracks stopped early; the status message gives the reason	Zvukové stopy se zastavily předčasně; důvod uvádí stavová zpráva

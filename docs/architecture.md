@@ -268,30 +268,40 @@ the clip to its MKV file, and `Studio::tick` reports each finished save.
 
 While audio tracks run (`studiocraft-audio-tracks`), the mixer stores each recorded source's block
 and the program block into that track's `TapSlot` (`media/src/tap.rs`): a bounded lock-free queue
-of 32 blocks with its own pool of 34, made on the studio thread and sent to the mixer once the
-take's collect thread has made its chunk pool. A take records at most 64 tracks at once and makes
-at most 256 in all. A source in the program mix is stored in the same pass that mixes it
-(`mix_into_tap`).
+of 32 blocks with its own pool of 34, made on the studio thread and sent to the mixer when the take
+starts. Tap sets go to the mixer through a slot of their own that keeps only the latest set, so a
+burst of other commands cannot drop the removal of the taps. A take records at most 64 tracks at
+once and makes at most 256 in all. A source in the program mix is stored in the same pass that
+mixes it (`mix_into_tap`).
+
+A take follows the recording or the stream. The studio starts it just before its output's first
+sample and passes that time as the take's frame 0; a take started later gets the time it starts,
+and each file's `bext` time reference says where it sits on the output's timeline. A stop passes
+the time the output stopped, and every track still recorded ends there.
 
 The `audio-tracks-collect` thread drains the taps into 1 MiB chunks, places each block by its
-timestamp from the first block of the take, and fills gaps with silence, counting a gap in a
-track's audio as lost audio. It does not touch files. The chunk pool (the write buffer) holds the
-buffer setting in MiB, and when a track starts the collect thread adds chunks until there are at
-least 2 for each track recorded. When the pool is empty because the disk is slow, the collect thread drops blocks and logs them, and the files still
-keep time.
+timestamp from frame 0, cuts audio before frame 0 and after the end, and fills gaps with silence,
+counting a gap in a track's audio as lost audio. It does not touch files. The chunk pool (the
+write buffer) holds the buffer setting in MiB, and when a track starts the collect thread adds
+chunks until there are at least 2 for each track recorded. When the pool is empty because the disk
+is slow, the collect thread drops blocks and logs them, and the files still keep time. Each
+dropout goes to the disk thread through a queue of 4,096 as soon as it ends.
 
-The `audio-tracks-disk` thread appends the chunks to one WAV file per track, rewrites each header
-every second, syncs the files and the take's `take.journal` every 5 seconds, starts a
-`<name> part N.wav` file at the file size limit, and stops the take when free space drops below
-the reserve or cannot be read.
+The `audio-tracks-disk` thread makes the take's folder, appends the chunks to one WAV file per
+track, rewrites each header every second, syncs the files that grew and journals them and the
+dropouts in the take's `take.journal` every 5 seconds, starts a `<name> part N.wav` file at the
+file size limit, and stops the take when free space drops below the reserve or cannot be read. It
+checks whether a header rewrite or sync is due after every 16 messages from the collect thread, so a disk slower than the tracks
+does not delay them. A panic on either thread stops the take with a write failure.
 
 Status is atomics only. A stop returns at once. The collect thread keeps draining the taps until
 the mixer reports that it applied the removal of the taps (up to 5 seconds), so no block stored
 before then is lost, and the threads end after the last chunk is written. A change to the recorded
 sources during a take waits the same way: the collect thread applies the new track list once the
 mixer has applied the matching tap change, so a source that stops being recorded keeps every block
-stored for it. While audio tracks are off no tap, pool or thread exists, and the mixer checks one
-`Option` per input.
+stored for it. At most 2 takes finish their files at once; a new take waits for one of them. When
+the app closes it waits up to 10 seconds for takes to finish. While audio tracks are off no tap,
+pool or thread exists, and the mixer checks one `Option` per input.
 
 ### Window thread
 

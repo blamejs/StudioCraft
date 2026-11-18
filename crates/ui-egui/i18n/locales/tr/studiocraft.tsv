@@ -447,14 +447,14 @@ menu	Transform	Dönüştür
 	MiB	MiB
 	File size	Dosya boyutu
 	GiB	GiB
-	{tracks} tracks take about {gb} GB an hour; the buffer holds {seconds} s of audio while the disk is slow	{tracks} parça saatte yaklaşık {gb} GB yer kaplar; arabellek, disk yavaşken {seconds} sn ses tutar
+	Audio tracks: {tracks}, about {gb} GiB an hour; the buffer holds {seconds} s of audio while the disk is slow	Ses parçaları: {tracks}, saatte yaklaşık {gb} GiB; arabellek, disk yavaşken {seconds} sn ses tutar
 	A recording runs	Bir kayıt sürerken
 	The stream runs	Yayın sürerken
 	A recording or the stream runs	Bir kayıt veya yayın sürerken
 	The disk is almost full; audio tracks stop before the recording or the stream runs out of space	Disk neredeyse dolu; ses parçaları, kaydın veya yayının yeri bitmeden durur
 	This take has made as many audio track files as it can; sources added since are not recorded to their own files	Bu çekim oluşturabileceği kadar ses parçası dosyası oluşturdu; o zamandan beri eklenen kaynaklar kendi dosyalarına kaydedilmez
 	More sources are set to record their own track than can be recorded at once; the later ones are not recorded	Kendi parçasını kaydetmek üzere ayarlı kaynak sayısı aynı anda kaydedilebilecek sayıdan fazla; sonrakiler kaydedilmez
-	{tracks} audio tracks; {lost} s of audio lost while the disk was slow	{tracks} ses parçası; disk yavaşken {lost} sn ses kaybedildi
+	Audio tracks: {tracks}; {lost} s of audio lost while the disk was slow	Ses parçaları: {tracks}; disk yavaşken {lost} sn ses kaybedildi
 	TRACKS	PARÇALAR
 	TRACKS stopped	PARÇALAR durdu
 	Audio tracks stopped early; the status message gives the reason	Ses parçaları erken durdu; nedeni durum iletisinde yer alır

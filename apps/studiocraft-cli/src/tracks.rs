@@ -100,7 +100,9 @@ pub fn bench(b: &BenchArgs) -> Result<(), String> {
     let cfg = TakeConfig {
         disk: DiskConfig {
             dir: dir.clone(),
-            segment_bytes: 2 << 30,
+            folder_stem: None,
+            timing: Default::default(),
+            segment_bytes: 1 << 30,
             reserve_bytes: space::reserve(0),
             warn_bytes: space::warning(0, b.tracks as u64),
             faults: Faults { gate: Some(Arc::clone(&gate)), ..Faults::default() },

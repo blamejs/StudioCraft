@@ -455,14 +455,14 @@ menu	Transform	Перетворення
 	MiB	МіБ
 	File size	Розмір файлу
 	GiB	ГіБ
-	{tracks} tracks take about {gb} GB an hour; the buffer holds {seconds} s of audio while the disk is slow	Доріжки ({tracks}) займають близько {gb} ГБ на годину; буфер вміщує {seconds} с звуку, поки диск працює повільно
+	Audio tracks: {tracks}, about {gb} GiB an hour; the buffer holds {seconds} s of audio while the disk is slow	Звукові доріжки: {tracks}, близько {gb} ГіБ на годину; буфер вміщує {seconds} с звуку, поки диск працює повільно
 	A recording runs	Триває запис
 	The stream runs	Триває трансляція
 	A recording or the stream runs	Триває запис або трансляція
 	The disk is almost full; audio tracks stop before the recording or the stream runs out of space	Диск майже заповнений; звукові доріжки зупиняються раніше, ніж запису чи трансляції забракне місця
 	This take has made as many audio track files as it can; sources added since are not recorded to their own files	Цей дубль уже створив найбільшу можливу кількість файлів звукових доріжок; джерела, додані після цього, не записуються у власні файли
 	More sources are set to record their own track than can be recorded at once; the later ones are not recorded	Власну доріжку мають записувати більше джерел, ніж можна записувати одночасно; останні не записуються
-	{tracks} audio tracks; {lost} s of audio lost while the disk was slow	Звукових доріжок: {tracks}; втрачено {lost} с звуку, поки диск працював повільно
+	Audio tracks: {tracks}; {lost} s of audio lost while the disk was slow	Звукових доріжок: {tracks}; втрачено {lost} с звуку, поки диск працював повільно
 	TRACKS	ДОРІЖКИ
 	TRACKS stopped	ДОРІЖКИ зупинено
 	Audio tracks stopped early; the status message gives the reason	Звукові доріжки зупинилися передчасно; причину вказано в повідомленні про стан

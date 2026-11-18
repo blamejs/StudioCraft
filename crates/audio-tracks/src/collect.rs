@@ -1,17 +1,23 @@
 //! The collect side: blocks from the taps, placed by their timestamps into 1 MiB chunks for the
 //! disk thread.
 //!
-//! [`Collector::poll`] runs on the collect thread. It never allocates once the chunk pool is made,
-//! never touches the filesystem and never waits: when no free chunk is left, the block is dropped
-//! and the dropout is logged, and the disk thread later writes silence for it so every file keeps
-//! time. A gap in a tap's timestamps (the mixer's queue dropped its oldest blocks) is handled the
-//! same way.
+//! [`Collector::poll`] runs on the collect thread. Placing a block does not allocate, touch the
+//! filesystem or wait: when no free chunk is left, the block is dropped and the dropout is logged,
+//! and the disk thread later writes silence for it so every file keeps time. A gap in a tap's
+//! timestamps (the mixer's queue dropped its oldest blocks) is handled the same way. Two steps
+//! allocate, once a take each: finding the first block of a take that has no start time, and the
+//! track list a source change sends.
+//!
+//! Take frame 0 is the take's start time when it has one ([`Collector::set_start`]): the part of
+//! a block before it is cut off, and a track whose first block comes later begins with silence.
+//! With an end time ([`Collector::set_end`]), the part of a block after it is cut off and every
+//! track still recorded ends there.
 
 use std::sync::Arc;
 
 use crossbeam_queue::ArrayQueue;
 use studiocraft_media::Tick;
-use studiocraft_media::audio::{BLOCK_FRAMES, BLOCK_SAMPLES, PooledBlock, SAMPLE_RATE};
+use studiocraft_media::audio::{BLOCK_FRAMES, BLOCK_SAMPLES, CHANNELS, PooledBlock, SAMPLE_RATE};
 use studiocraft_media::tap::TapSlot;
 use studiocraft_model::SourceId;
 
@@ -29,8 +35,12 @@ pub const FRAME_TICKS: i64 = craft_time::TICKS_PER_SECOND / SAMPLE_RATE as i64;
 pub const BLOCK_TICKS: i64 = FRAME_TICKS * BLOCK_FRAMES as i64;
 /// Seconds of audio within which a source added back continues its file.
 pub const REJOIN_SECONDS: u64 = 60;
-/// Dropouts kept for the status; later ones are only counted.
+/// Dropouts kept in memory for [`Collector::dropouts`]; later ones are only counted there. The
+/// journal lists every dropout ([`Collector::dropout_queue`]).
 pub const DROPOUT_LOG: usize = 256;
+/// Dropouts waiting for the disk thread to journal them. Adjacent losses of a track are one
+/// entry, so a full queue needs this many separate dropouts within one pass of the disk thread.
+pub const DROPOUT_QUEUE: usize = 4096;
 /// Chunks the pool holds at least for each track being recorded: one being filled and one with
 /// the disk thread.
 pub const CHUNKS_PER_TRACK: usize = 2;
@@ -73,12 +83,15 @@ pub enum ToDisk {
         name: String,
     },
     Chunk(Chunk),
-    /// The end of the take, after every chunk: the dropouts for the journal.
+    /// The end of the take, after every chunk and every dropout.
     Finish {
-        dropouts: Vec<Dropout>,
         dropped_frames: u64,
+        /// Frames of lost audio left out of the dropout queue because it was full.
+        unlisted: u64,
         /// The frame each track ended at, by track; each file is padded with silence to it.
         ends: Vec<u64>,
+        /// The take is thrown away: its files, journal and folder are removed.
+        discard: bool,
     },
 }
 
@@ -108,6 +121,8 @@ struct Track {
     /// The blocks the tap had lost (dropped from its queue or not claimed) when last looked at,
     /// so a gap before the track's first block that the tap lost counts as lost audio.
     lost_seen: u64,
+    /// The track's dropout still growing, sent to the disk thread when it ends.
+    open: Option<Dropout>,
 }
 
 impl Track {
@@ -132,15 +147,24 @@ pub struct Collector {
     /// Free chunks; the disk thread puts each back after writing it.
     free: Arc<ArrayQueue<Vec<u8>>>,
     out: Arc<ArrayQueue<ToDisk>>,
-    /// The timestamp of file frame 0: the first block any tap gave, or the take's start when
-    /// that is earlier.
+    /// The timestamp of take frame 0: the take's start, or without one the first block any tap
+    /// gave.
     origin: Option<Tick>,
-    /// When the take started on the mixer's clock, if known.
-    start: Option<Tick>,
-    /// The furthest frame any track has reached, which a track joining later is padded to.
+    /// The furthest frame any track's audio has reached.
     now: u64,
+    /// The furthest frame the clock has reached while no tap gave blocks, for the rejoin limit
+    /// only: the files never run past their last block because of it.
+    clock: u64,
+    /// The take frame the take ends at, once its end time is known.
+    end: Option<u64>,
     dropouts: Vec<Dropout>,
     dropped_frames: u64,
+    /// Dropouts for the disk thread to journal.
+    dropq: Arc<ArrayQueue<Dropout>>,
+    /// Frames of lost audio that found no room in `dropq`.
+    unlisted: u64,
+    /// The take is thrown away at its end.
+    discard: bool,
     /// Messages to the disk thread that did not fit in its queue and wait for room.
     held: Option<ToDisk>,
     /// Track announcements that found no room; they go to the disk thread before any later chunk.
@@ -160,6 +184,17 @@ impl Collector {
         self.full
     }
 
+    /// The dropouts for the disk thread to journal, each sent once it has ended, adjacent losses
+    /// of a track as one.
+    pub fn dropout_queue(&self) -> Arc<ArrayQueue<Dropout>> {
+        Arc::clone(&self.dropq)
+    }
+
+    /// Throw the take away at its end: the disk thread removes its files, journal and folder.
+    pub fn set_discard(&mut self) {
+        self.discard = true;
+    }
+
     /// A collector with `chunks` free chunks made now and a queue of `queue` messages to the disk
     /// thread. None when the memory for the chunks cannot be reserved; the chunks made so far are
     /// freed. The pool grows when tracks start, to [`CHUNKS_PER_TRACK`] for each track recorded,
@@ -177,10 +212,14 @@ impl Collector {
             free: Arc::clone(&free),
             out: Arc::clone(&out),
             origin: None,
-            start: None,
             now: 0,
+            clock: 0,
+            end: None,
             dropouts: Vec::with_capacity(DROPOUT_LOG),
             dropped_frames: 0,
+            dropq: Arc::new(ArrayQueue::new(DROPOUT_QUEUE)),
+            unlisted: 0,
+            discard: false,
             held: None,
             announce: std::collections::VecDeque::new(),
             used_names: std::collections::HashSet::new(),
@@ -210,10 +249,11 @@ impl Collector {
     /// source listed again within [`REJOIN_SECONDS`] continues its file. Runs off the hot path.
     pub fn set_tracks(&mut self, specs: Vec<TrackSpec>) {
         let mut left = Vec::new();
+        let at = self.now.max(self.clock);
         for (i, t) in self.tracks.iter_mut().enumerate() {
             if t.slot.is_some() && !specs.iter().any(|s| s.source == t.source) {
                 t.slot = None;
-                t.left_at = Some(t.next.max(self.now));
+                t.left_at = Some(t.next.max(at));
                 left.push(i);
             }
         }
@@ -224,7 +264,7 @@ impl Collector {
         }
         let rejoin = REJOIN_SECONDS * u64::from(SAMPLE_RATE);
         for spec in specs {
-            let now = self.now;
+            let now = self.now.max(self.clock);
             let made = self.tracks.len();
             let same = self.tracks.iter_mut().rev().find(|t| t.source == spec.source && !t.closed);
             match same {
@@ -251,6 +291,7 @@ impl Collector {
                         chunk: None,
                         closed: false,
                         lost_seen: 0,
+                        open: None,
                     });
                 }
             }
@@ -263,9 +304,10 @@ impl Collector {
     /// id. The program track goes on.
     pub fn replace_sources(&mut self, specs: Vec<TrackSpec>) {
         let mut left = Vec::new();
+        let at = self.now.max(self.clock);
         for (i, t) in self.tracks.iter_mut().enumerate().filter(|(_, t)| t.source.is_some()) {
             if t.slot.take().is_some() {
-                t.left_at = Some(t.next.max(self.now));
+                t.left_at = Some(t.next.max(at));
                 left.push(i);
             }
             t.closed = true;
@@ -281,6 +323,10 @@ impl Collector {
         self.retry_held();
         if self.origin.is_none() {
             self.find_origin();
+            // No tap had a block: the blocks stored since are taken once there is a frame 0.
+            if self.origin.is_none() {
+                return 0;
+            }
         }
         let mut taken = 0;
         for i in 0..self.tracks.len() {
@@ -316,19 +362,24 @@ impl Collector {
         &self.dropouts
     }
 
-    /// The furthest file frame any track has reached.
+    /// The furthest take frame any track's audio has reached.
     pub fn position(&self) -> u64 {
         self.now
     }
 
-    /// Move the position to `at` on the mixer's clock, so time passes for the rejoin limit while
-    /// no tap gives blocks. Nothing moves before the first block, or backwards.
+    /// Let time pass up to `at` on the mixer's clock for the rejoin limit, while no tap gives
+    /// blocks. It does not move [`Collector::position`] or where the files end. Nothing moves
+    /// before frame 0 is known, or backwards.
     pub fn advance_to(&mut self, at: Tick) {
-        if let Some(origin) = self.origin
-            && let Ok(frame) = u64::try_from(at.0.saturating_sub(origin.0).div_euclid(FRAME_TICKS))
-        {
-            self.now = self.now.max(frame);
+        if let Some(frame) = self.frame_of(at) {
+            self.clock = self.clock.max(frame);
         }
+    }
+
+    /// The take frame of `at`, or none before frame 0 is known or before frame 0.
+    fn frame_of(&self, at: Tick) -> Option<u64> {
+        let origin = self.origin?;
+        u64::try_from(at.0.saturating_sub(origin.0).div_euclid(FRAME_TICKS)).ok()
     }
 
     /// Tracks made so far, the program mix included.
@@ -336,14 +387,34 @@ impl Collector {
         self.tracks.len()
     }
 
-    /// Set when the take started on the mixer's clock, so a track whose first block comes later
-    /// starts with silence from then, and every file lines up with the recording or stream.
+    /// Make `at` on the mixer's clock take frame 0, before the first block: audio stamped earlier
+    /// is cut off, and a track whose first block comes later starts with silence from `at`.
     pub fn set_start(&mut self, at: Tick) {
-        self.start = Some(at);
+        self.origin = Some(at);
     }
 
-    /// Frame 0 is the earliest first block of the taps that have one now, or the take's start
-    /// when that is earlier.
+    /// End the take at `at` on the mixer's clock: audio stamped later is cut off, and every track
+    /// still recorded ends there, silent where its source gave no audio.
+    pub fn set_end(&mut self, at: Tick) {
+        let origin = self.origin.unwrap_or(at);
+        let end = u64::try_from(at.0.saturating_sub(origin.0).div_euclid(FRAME_TICKS)).unwrap_or(0);
+        self.end = Some(end);
+        // Audio placed past the end and still in memory is cut too.
+        for t in &mut self.tracks {
+            if t.next <= end {
+                continue;
+            }
+            if let Some(c) = t.chunk.as_mut().filter(|c| !c.data.is_empty()) {
+                let keep = end.saturating_sub(c.first_frame).min(c.frames());
+                c.data.truncate((keep * FRAME_BYTES) as usize);
+                t.next = end.max(c.first_frame);
+            }
+        }
+        self.now = self.tracks.iter().map(|t| t.next).max().unwrap_or(0);
+    }
+
+    /// For a take with no start time: frame 0 is the earliest first block of the taps that have
+    /// one now.
     fn find_origin(&mut self) {
         let mut first: Vec<(usize, PooledBlock)> = Vec::new();
         for (i, t) in self.tracks.iter().enumerate() {
@@ -351,7 +422,7 @@ impl Collector {
                 first.push((i, b));
             }
         }
-        self.origin = first.iter().map(|(_, b)| b.pts).min().map(|p| self.start.map_or(p, |s| s.min(p)));
+        self.origin = first.iter().map(|(_, b)| b.pts).min();
         for (i, b) in first {
             self.place(i, &b);
         }
@@ -359,20 +430,37 @@ impl Collector {
 
     fn place(&mut self, i: usize, block: &PooledBlock) {
         let Some(origin) = self.origin else { return };
-        let frame = (block.pts.0 - origin.0).div_euclid(FRAME_TICKS);
-        let Ok(frame) = u64::try_from(frame) else { return };
+        // A tap loses whole blocks, so its losses count in whole blocks.
+        let whole_frames = (block.samples.len() / CHANNELS) as u64;
+        let mut samples: &[f32] = &block.samples;
+        let mut frame = (block.pts.0 - origin.0).div_euclid(FRAME_TICKS);
+        if frame < 0 {
+            // The part before frame 0 is cut off.
+            let skip = usize::try_from(frame.unsigned_abs()).unwrap_or(usize::MAX).saturating_mul(CHANNELS);
+            samples = samples.get(skip..).unwrap_or_default();
+            frame = 0;
+        }
+        let frame = frame as u64;
+        if let Some(end) = self.end {
+            // The part after the end is cut off.
+            let room = usize::try_from(end.saturating_sub(frame)).unwrap_or(usize::MAX).saturating_mul(CHANNELS);
+            samples = samples.get(..room.min(samples.len())).unwrap_or_default();
+        }
+        if samples.is_empty() {
+            return;
+        }
         let Some(t) = self.tracks.get_mut(i) else { return };
         if frame < t.next {
             // Older than what the file already holds.
             return;
         }
-        let block_frames = (block.samples.len() / 2) as u64;
+        let block_frames = (samples.len() / CHANNELS) as u64;
         // A gap in a track that has audio: the tap's queue lost blocks, which the file holds as
         // silence, so it counts as lost audio. Before the track's first block, a gap is lost
         // audio only as far as the tap counted blocks lost; the rest is time the source gave
         // nothing.
         let lost_now = t.slot.as_deref().map_or(t.lost_seen, lost_blocks);
-        let tap_lost = lost_now.saturating_sub(t.lost_seen).saturating_mul(block_frames);
+        let tap_lost = lost_now.saturating_sub(t.lost_seen).saturating_mul(whole_frames);
         t.lost_seen = lost_now;
         let gap = frame.saturating_sub(t.next);
         let lost = match t.contiguous {
@@ -410,15 +498,18 @@ impl Collector {
                 c.first_frame = frame;
             }
             let start = c.data.len();
-            c.data.resize(start + block.samples.len() * 4, 0);
+            c.data.resize(start + samples.len() * 4, 0);
             if let Some(dst) = c.data.get_mut(start..) {
-                for (d, s) in dst.as_chunks_mut::<4>().0.iter_mut().zip(&block.samples) {
+                for (d, s) in dst.as_chunks_mut::<4>().0.iter_mut().zip(samples) {
                     *d = s.to_le_bytes();
                 }
             }
         }
         t.next = frame + block_frames;
         self.now = self.now.max(t.next);
+        // Audio arrived, so a dropout before it has ended.
+        self.send_dropout(i);
+        let Some(t) = self.tracks.get(i) else { return };
         if t.chunk.as_ref().is_some_and(|c| c.data.len() + BLOCK_BYTES > CHUNK_BYTES) {
             self.send_chunk(i);
         }
@@ -426,6 +517,18 @@ impl Collector {
 
     fn log_dropout(&mut self, d: Dropout) {
         self.dropped_frames += d.frames;
+        // The journal's entry: adjacent dropouts of one track grow one entry until it ends.
+        if let Some(t) = self.tracks.get_mut(d.track) {
+            match &mut t.open {
+                Some(open) if open.at + open.frames == d.at => open.frames += d.frames,
+                _ => {
+                    self.send_dropout(d.track);
+                    if let Some(t) = self.tracks.get_mut(d.track) {
+                        t.open = Some(d);
+                    }
+                }
+            }
+        }
         // Adjacent dropouts of one track are one entry.
         if let Some(last) = self.dropouts.iter_mut().rev().find(|l| l.track == d.track)
             && last.at + last.frames == d.at
@@ -435,6 +538,14 @@ impl Collector {
         }
         if self.dropouts.len() < DROPOUT_LOG {
             self.dropouts.push(d);
+        }
+    }
+
+    /// Send track `i`'s dropout that has ended to the disk thread's dropout queue.
+    fn send_dropout(&mut self, i: usize) {
+        let Some(d) = self.tracks.get_mut(i).and_then(|t| t.open.take()) else { return };
+        if self.dropq.push(d).is_err() {
+            self.unlisted += d.frames;
         }
     }
 
@@ -453,11 +564,24 @@ impl Collector {
         if !self.drained() {
             return false;
         }
-        // A track still recorded ends with the take, silent where its source gave no audio, and
-        // a track whose source left ends where it left.
-        let now = self.now;
-        let ends = self.tracks.iter().map(|t| t.next.max(t.left_at.unwrap_or(now))).collect();
-        let msg = ToDisk::Finish { dropouts: self.dropouts.clone(), dropped_frames: self.dropped_frames, ends };
+        // Every dropout goes to the journal before the end.
+        for i in 0..self.tracks.len() {
+            self.send_dropout(i);
+        }
+        // A track still recorded ends with the take, at its end time or else at the last audio
+        // of any track, silent where its source gave no audio; a track whose source left ends
+        // where it left. With an end time no track runs past it, even audio already sent.
+        let end = self.end.unwrap_or(self.now);
+        let ends = self
+            .tracks
+            .iter()
+            .map(|t| match (t.left_at, self.end) {
+                (Some(left), _) => t.next.max(left).min(end),
+                (None, Some(end)) => end,
+                (None, None) => t.next.max(end),
+            })
+            .collect();
+        let msg = ToDisk::Finish { dropped_frames: self.dropped_frames, unlisted: self.unlisted, ends, discard: self.discard };
         match self.out.push(msg) {
             Ok(()) => true,
             Err(_) => false,
@@ -504,14 +628,12 @@ impl Collector {
     }
 
     /// A message with no room anywhere: a chunk becomes a dropout and goes back to the pool.
-    /// Track announcements never come here; they wait in `announce`.
+    /// Track announcements never come here; they wait in `announce`. The take's disk queue has
+    /// room for every chunk of the pool and every track a take can make, so this happens only to
+    /// a collector made with a smaller queue.
     fn lose(&mut self, msg: ToDisk) {
         if let ToDisk::Chunk(c) = msg {
-            let d = Dropout { track: c.track, at: c.first_frame, frames: c.frames() };
-            self.dropped_frames += d.frames;
-            if self.dropouts.len() < DROPOUT_LOG {
-                self.dropouts.push(d);
-            }
+            self.log_dropout(Dropout { track: c.track, at: c.first_frame, frames: c.frames() });
             let _ = self.free.push(c.data);
         }
     }
@@ -795,7 +917,103 @@ mod tests {
         c.set_tracks(vec![spec(1, "Mic")]);
         assert_eq!(c.tracks(), 2, "back after more than a minute: a new track");
         c.advance_to(Tick(0));
-        assert_eq!(c.position(), 92 * u64::from(SAMPLE_RATE), "the clock never moves the position back");
+        c.set_tracks(vec![]);
+        c.set_tracks(vec![spec(1, "Mic")]);
+        assert_eq!(c.tracks(), 2, "the clock never goes back: the track that left at 92 s continues");
+    }
+
+    #[test]
+    fn the_clock_does_not_move_where_the_files_end() {
+        let (mut c, free, out) = Collector::new(4, 64).unwrap();
+        let (a, b) = (spec(1, "Mic"), spec(2, "Desk"));
+        c.set_tracks(vec![a.clone(), b.clone()]);
+        feed(&a.slot, 0, 0.5);
+        c.poll();
+        // The list of a change is sent at a clock time past the last block the mixer made.
+        c.advance_to(Tick(1_000 + 30 * craft_time::TICKS_PER_SECOND));
+        c.set_tracks(vec![a.clone()]);
+        assert_eq!(c.position(), BLOCK_FRAMES as u64);
+        assert!(c.finish());
+        let f = BLOCK_FRAMES as u64;
+        let ends: Vec<Vec<u64>> = std::iter::from_fn(|| out.pop())
+            .filter_map(|m| match m {
+                ToDisk::Finish { ends, .. } => Some(ends),
+                ToDisk::Chunk(ch) => {
+                    let _ = free.push(ch.data);
+                    None
+                }
+                ToDisk::Track { .. } => None,
+            })
+            .collect();
+        assert_eq!(ends, [vec![f, f]], "both files end at the last block, not at the clock");
+    }
+
+    #[test]
+    fn a_start_time_cuts_audio_before_it_and_an_end_time_cuts_audio_after_it() {
+        let (mut c, free, out) = Collector::new(4, 64).unwrap();
+        let (a, b) = (spec(1, "Mic"), spec(2, "Quiet"));
+        c.set_tracks(vec![a.clone(), b.clone()]);
+        let f = BLOCK_FRAMES as u64;
+        // Frame 0 is 100 frames into block 0, and the end is 200 frames into block 2.
+        c.set_start(Tick(1_000 + 100 * FRAME_TICKS));
+        c.set_end(Tick(1_000 + 2 * BLOCK_TICKS + 200 * FRAME_TICKS));
+        for n in 0..5 {
+            feed(&a.slot, n, 0.25);
+        }
+        c.poll();
+        assert!(c.finish());
+        let mut chunks = Vec::new();
+        let mut ends = Vec::new();
+        while let Some(m) = out.pop() {
+            match m {
+                ToDisk::Chunk(ch) => {
+                    chunks.push((ch.track, ch.first_frame, ch.frames()));
+                    let _ = free.push(ch.data);
+                }
+                ToDisk::Finish { ends: e, .. } => ends = e,
+                ToDisk::Track { .. } => {}
+            }
+        }
+        let end = 2 * f + 200 - 100;
+        assert_eq!(chunks, [(0, 0, end)], "the audio between the start and the end, from frame 0");
+        assert_eq!(ends, [end, end], "a track with no audio ends at the end time too");
+        assert_eq!(c.dropped_frames(), 0, "audio cut at the start or end is not lost audio");
+    }
+
+    #[test]
+    fn chunks_lost_one_after_another_are_one_dropout() {
+        let (mut c, free, out) = Collector::new(16, 4).unwrap();
+        let a = spec(1, "A");
+        c.set_tracks(vec![a.clone()]);
+        // The announcement and three chunks fill the queue, the fourth waits, and the fifth and
+        // sixth find no room.
+        for n in 0..6 * CHUNK_BLOCKS as i64 {
+            feed(&a.slot, n, 0.1);
+            c.poll();
+        }
+        let f = BLOCK_FRAMES as u64;
+        let chunk = CHUNK_BLOCKS as u64 * f;
+        assert_eq!(c.dropouts(), &[Dropout { track: 0, at: 4 * chunk, frames: 2 * chunk }]);
+        drain(&out, &free);
+    }
+
+    #[test]
+    fn every_dropout_goes_to_the_disk_queue_once_it_ends_past_the_memory_list() {
+        let (mut c, free, out) = Collector::new(16, 256).unwrap();
+        let a = spec(1, "A");
+        c.set_tracks(vec![a.clone()]);
+        let gaps = DROPOUT_LOG as i64 + 44;
+        // Every other block is lost in the tap: each gap is a dropout of its own.
+        for n in 0..=gaps {
+            feed(&a.slot, 2 * n, 0.1);
+            c.poll();
+            drain(&out, &free);
+        }
+        let q = c.dropout_queue();
+        assert_eq!(c.dropouts().len(), DROPOUT_LOG, "the memory list stops at its limit");
+        assert_eq!(q.len(), gaps as usize, "the disk queue has every dropout that ended");
+        let f = BLOCK_FRAMES as u64;
+        assert_eq!(q.pop(), Some(Dropout { track: 0, at: f, frames: f }));
     }
 
     #[test]

@@ -408,6 +408,9 @@ fn a_source_is_set_to_record_its_own_track_or_not() {
     run(&mut e, "source.add", json!({"kind": "mic", "name": "Mic"})).unwrap();
     let flag = |e: &Engine| e.collection().source_by_name("Mic").map(|s| (s.audio.record_track, s.audio.records_track()));
     assert_eq!(flag(&e), Some((None, true)), "a source heard in the program records by default");
+    let rev = e.revision();
+    assert!(!run(&mut e, "source.set_record_track", json!({"source": "Mic", "on": true})).unwrap().changed, "on, as it already records");
+    assert_eq!((flag(&e), e.revision()), (Some((None, true)), rev), "it keeps following its monitoring");
     run(&mut e, "source.monitor", json!({"source": "Mic", "mode": "monitor_only"})).unwrap();
     assert_eq!(flag(&e), Some((None, false)), "a monitor-only source does not until it is set");
     run(&mut e, "source.set_record_track", json!({"source": "Mic", "on": true})).unwrap();

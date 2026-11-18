@@ -3,18 +3,27 @@
 //!
 //! The studio's thread decides when a take runs, builds the taps (their pools are made here, not
 //! on the mixer thread) and hands them to the mixer, and reads the take's status from atomics.
-//! The files are written on the take's own threads. Stopping returns at once. While the setting
-//! is off no tap, thread or pool exists, and the mixer's per-input cost is one `Option` check.
+//! The files are written on the take's own threads, which also make the take's folder. Stopping
+//! returns at once. While the setting is off no tap, thread or pool exists, and the mixer's
+//! per-input cost is one `Option` check.
+//!
+//! A take follows one output, its anchor: the recording, or the stream. A take started with its
+//! output starts at the output's first sample; a take started later (the setting turned on, or
+//! the anchor changed) starts at that time, and each file's `bext` time reference says where on
+//! the output's timeline it starts. A take ends at the time its output stopped.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::thread::JoinHandle;
+use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
+use studiocraft_audio_tracks::collect::FRAME_TICKS;
 use studiocraft_audio_tracks::recover::{self, Outcome};
-use studiocraft_audio_tracks::{DiskConfig, Faults, MAX_TRACKS, State, StopAfter, StopReason, Take, TakeConfig, TrackSpec, space};
+use studiocraft_audio_tracks::{DiskConfig, Faults, MAX_TRACKS, State, StopAfter, StopReason, Take, TakeConfig, Timing, TrackSpec, space};
 use studiocraft_engine::mixer::{MixerCmd, TapSet};
+use studiocraft_media::Tick;
 use studiocraft_media::tap::TapSlot;
 use studiocraft_model::{AudioTracksWhen, SourceId};
 
@@ -22,6 +31,16 @@ use crate::{Notice, OutputKind, Studio, recording_folder};
 
 /// The program mix's file name, first in a folder's listing.
 pub const PROGRAM_NAME: &str = "00 Program";
+
+/// Takes still finishing their files when a new take may start; a new take waits for one to end.
+const MAX_FINISHING: usize = 2;
+
+/// How long closing the app waits for takes to finish their files. A take still writing then is
+/// left to its threads, and its journal lets the next launch repair it.
+const CLOSE_WAIT: Duration = Duration::from_secs(10);
+
+/// Repairs that may run at once.
+const MAX_REPAIRS: usize = 4;
 
 /// The audio tracks part of the studio.
 #[derive(Default)]
@@ -42,19 +61,25 @@ pub(crate) struct AudioTracks {
     pending: Option<(Vec<TrackSpec>, bool)>,
     /// The collection was replaced since the last list was sent.
     replaced: bool,
-    /// Whether the mixer has the running take's taps. They are sent once the take's collect
-    /// thread reads them, so a tap does not fill and drop the take's first audio meanwhile.
-    pub(crate) armed: bool,
+    /// The output the running take follows, and that output's start on the studio clock.
+    anchor: Option<(OutputKind, Tick)>,
+    /// The take ended for the output starting now: that output, what the take followed and where
+    /// it ended, so a start that fails can continue it from there.
+    cut_for: Option<(OutputKind, (OutputKind, Tick), Tick)>,
+    /// The collection's revision and the program setting the running take's list was made
+    /// from, so an unchanged collection costs no work each tick.
+    listed: Option<(u64, bool)>,
     /// Whether the last take's early stop was reported.
     reported: bool,
-    /// The last take's folder and status, kept after it ends for the status line.
-    last: Option<(PathBuf, Arc<studiocraft_audio_tracks::Status>)>,
-    /// Folders of takes started here whose threads may not have made them yet.
-    taken: Vec<PathBuf>,
+    /// The last take's status, kept after it ends for the status line; its folder once made.
+    last: Option<Arc<studiocraft_audio_tracks::Status>>,
     /// The write buffer and file size the running take uses; changed settings apply from the
     /// next take.
     take_sizes: Option<(u32, u32)>,
-    repair: Option<JoinHandle<Outcome>>,
+    /// Repairs running on their own threads, at launch or for `audio_tracks.repair`.
+    repairs: Vec<JoinHandle<Outcome>>,
+    /// What the last repair did, for the status.
+    last_repair: Option<Value>,
     /// Sources set to record their own track were left out, because more than
     /// [`MAX_TRACKS`] tracks would run at once.
     source_limit: bool,
@@ -65,17 +90,7 @@ impl Studio {
     /// and after the collection changes; it does nothing while the setting is off.
     pub(crate) fn sync_audio_tracks(&mut self) {
         self.finish_audio_tracks();
-        let settings = self.profile.audio_tracks;
-        let recording = self.output(OutputKind::Recording).filter(|s| s.active);
-        let streaming = self.output(OutputKind::Streaming).is_some_and(|s| s.active);
-        #[cfg(test)]
-        let streaming = streaming || self.test_streaming;
-        let wanted = settings.enabled
-            && match settings.when {
-                AudioTracksWhen::Recording => recording.is_some(),
-                AudioTracksWhen::Streaming => streaming,
-                AudioTracksWhen::Either => recording.is_some() || streaming,
-            };
+        let anchor = if self.profile.audio_tracks.enabled { self.audio_tracks_anchor() } else { None };
         if let Some(take) = &self.audio_tracks.take
             && take.status().state() == Some(State::Stopped)
         {
@@ -87,16 +102,94 @@ impl Studio {
             }
             return;
         }
-        match (wanted, self.audio_tracks.take.is_some()) {
+        let running = self.audio_tracks.take.is_some();
+        match anchor {
+            Some(a) if running && self.audio_tracks.anchor == Some(a) => self.update_audio_tracks(),
+            // The anchor changed (Either: the recording started or stopped while the stream
+            // runs): the take ends, and one that follows the new anchor starts now.
+            Some(a) if running => {
+                self.stop_audio_tracks();
+                self.start_audio_tracks(a, self.clock.now());
+            }
             // After an early stop or a failed start, the next take waits until the outputs stop.
-            (true, false) if !self.audio_tracks.reported => self.start_audio_tracks(recording.map(|r| PathBuf::from(r.target))),
-            (true, true) => self.update_audio_tracks(),
-            (false, true) => self.stop_audio_tracks(),
+            Some(a) if !self.audio_tracks.reported => self.start_audio_tracks(a, self.clock.now()),
+            None if running => self.stop_audio_tracks(),
             _ => {}
         }
-        if !wanted {
+        if anchor.is_none() {
             // The next take may start again after an early stop.
             self.audio_tracks.reported = false;
+        }
+    }
+
+    /// The output a take follows now: the recording or the stream, as the setting says, and the
+    /// recording when Either finds both running. `None` when it is not running.
+    fn audio_tracks_anchor(&self) -> Option<(OutputKind, Tick)> {
+        let start = |k: OutputKind| self.outputs.start_of(k).map(|t| (k, t));
+        let stream = start(OutputKind::Streaming);
+        #[cfg(test)]
+        let stream = stream.or(self.test_streaming.then_some((OutputKind::Streaming, Tick(0))));
+        match self.profile.audio_tracks.when {
+            AudioTracksWhen::Recording => start(OutputKind::Recording),
+            AudioTracksWhen::Streaming => stream,
+            AudioTracksWhen::Either => start(OutputKind::Recording).or(stream),
+        }
+    }
+
+    /// `kind` is about to start at `start` on the studio clock: start the take that follows it
+    /// now, before its first sample, so the take's first sample is the output's.
+    pub(crate) fn audio_tracks_output_starting(&mut self, kind: OutputKind, start: Tick, recording: Option<&Path>) {
+        let s = self.profile.audio_tracks;
+        if !s.enabled || self.audio_tracks.reported {
+            return;
+        }
+        let follows = match s.when {
+            AudioTracksWhen::Recording => kind == OutputKind::Recording,
+            AudioTracksWhen::Streaming => kind == OutputKind::Streaming,
+            AudioTracksWhen::Either => {
+                kind == OutputKind::Recording || (kind == OutputKind::Streaming && self.outputs.start_of(OutputKind::Recording).is_none())
+            }
+        };
+        self.audio_tracks.cut_for = None;
+        if !follows {
+            return;
+        }
+        if self.audio_tracks.take.is_some() {
+            self.audio_tracks.cut_for = self.audio_tracks.anchor.map(|a| (kind, a, start));
+            self.stop_audio_tracks_at(start);
+        }
+        self.start_audio_tracks_for((kind, start), start, recording.map(Path::to_path_buf));
+    }
+
+    /// `kind` did not start after [`Studio::audio_tracks_output_starting`]: its take is thrown
+    /// away, files and folder included. A take that ended for it and whose output still runs
+    /// continues in a new take from the time it ended.
+    pub(crate) fn audio_tracks_output_failed(&mut self, kind: OutputKind) {
+        let cut_for = self.audio_tracks.cut_for.take().filter(|(starting, _, _)| *starting == kind);
+        let mut thrown = None;
+        if self.audio_tracks.anchor.is_some_and(|(k, _)| k == kind)
+            && let Some(take) = self.audio_tracks.take.take()
+        {
+            self.remove_taps();
+            self.audio_tracks.anchor = None;
+            self.audio_tracks.take_sizes = None;
+            if self.audio_tracks.last.as_ref().is_some_and(|s| Arc::ptr_eq(s, take.status())) {
+                self.audio_tracks.last = None;
+            }
+            take.discard();
+            thrown = Some(take);
+        }
+        // The ended take continues whether or not a take for `kind` started. Started before the
+        // thrown-away take counts as finishing, so it has room.
+        if let Some((_, anchor, end)) = cut_for
+            && self.audio_tracks.take.is_none()
+            && self.profile.audio_tracks.enabled
+            && self.audio_tracks_anchor() == Some(anchor)
+        {
+            self.start_audio_tracks(anchor, end);
+        }
+        if let Some(take) = thrown {
+            self.audio_tracks.finishing.push((take, true));
         }
     }
 
@@ -159,16 +252,26 @@ impl Studio {
         self.mixer.send(MixerCmd::Taps { set: Some(Arc::new(set)), generation: self.audio_tracks.generation });
     }
 
-    fn start_audio_tracks(&mut self, recording: Option<PathBuf>) {
-        let folder = recording_folder(&self.profile.output.folder);
-        // A take started earlier may not have made its folder yet; once it has, the folder's
-        // existence keeps its name taken.
-        self.audio_tracks.taken.retain(|p| !p.exists());
-        let Some(dir) = take_dir(recording.as_deref(), &folder, &self.audio_tracks.taken) else {
-            self.notices.push(Notice::new("Audio tracks could not start: {error}", vec![("error", "no free folder name".into())], true));
-            self.audio_tracks.reported = true;
-            return;
+    /// Start a take that follows `anchor`, from `origin` on the studio clock.
+    fn start_audio_tracks(&mut self, anchor: (OutputKind, Tick), origin: Tick) {
+        let recording = match anchor.0 {
+            OutputKind::Recording => self.output(OutputKind::Recording).map(|r| PathBuf::from(r.target)),
+            OutputKind::Streaming | OutputKind::Replay => None,
         };
+        self.start_audio_tracks_for(anchor, origin, recording);
+    }
+
+    /// Start a take that follows `anchor`, from `origin` on the studio clock, beside the
+    /// recording at `recording` or in the recording folder. The take's own thread makes its
+    /// folder, so this thread does not touch the disk.
+    fn start_audio_tracks_for(&mut self, anchor: (OutputKind, Tick), origin: Tick, recording: Option<PathBuf>) {
+        // Each take holds its buffer until its files are complete; a new one waits for room, and
+        // the next tick starts it from then.
+        if self.audio_tracks.finishing.len() >= MAX_FINISHING {
+            log::debug!("audio tracks: waiting for {} takes to finish before the next starts", self.audio_tracks.finishing.len());
+            return;
+        }
+        let (parent, stem) = take_place(recording.as_deref(), &recording_folder(&self.profile.output.folder));
         let specs = self.audio_track_specs();
         self.audio_tracks.source_limit = self.track_sources().1;
         let outputs = self.output_bytes_per_second();
@@ -176,7 +279,9 @@ impl Studio {
         let tracks = specs.len() as u64;
         let cfg = TakeConfig {
             disk: DiskConfig {
-                dir: dir.clone(),
+                dir: parent,
+                folder_stem: Some(stem),
+                timing: self.audio_tracks_timing(anchor, origin),
                 segment_bytes: u64::from(settings.segment_gib) << 30,
                 reserve_bytes: space::reserve(outputs),
                 warn_bytes: space::warning(outputs, tracks),
@@ -184,17 +289,16 @@ impl Studio {
             },
             buffer_mib: settings.buffer_mib,
         };
-        // The taps go to the mixer once the take is ready ([`Studio::update_audio_tracks`]); the
-        // files start at this time either way.
-        match Take::start_from(cfg, specs, Some(self.clock.now())) {
+        match Take::start_from(cfg, specs.clone(), Some(origin)) {
             Ok(take) => {
-                self.audio_tracks.armed = false;
-                if let Some(p) = dir.parent() {
-                    self.audio_tracks.taken.push(p.to_path_buf());
-                }
+                // The taps go to the mixer at once: each holds 683 ms of blocks, far longer than
+                // the take's threads take to start, and blocks are placed by their time.
+                self.send_taps(&specs);
+                self.audio_tracks.listed = Some((self.engine.revision(), settings.include_program));
                 self.audio_tracks.take_sizes = Some((settings.buffer_mib, settings.segment_gib));
-                self.audio_tracks.last = Some((dir, Arc::clone(take.status())));
+                self.audio_tracks.last = Some(Arc::clone(take.status()));
                 self.audio_tracks.take = Some(take);
+                self.audio_tracks.anchor = Some(anchor);
                 self.audio_tracks.reported = false;
             }
             Err(e) => {
@@ -205,16 +309,33 @@ impl Studio {
         }
     }
 
-    /// Send the taps once the take is ready, then follow sources added, removed or switched on
-    /// or off during the take.
-    fn update_audio_tracks(&mut self) {
-        let arming = !self.audio_tracks.armed;
-        if arming {
-            if !self.audio_tracks.take.as_ref().is_some_and(|t| t.status().ready()) {
-                return;
-            }
-            self.audio_tracks.armed = true;
+    /// Where a take from `origin` sits on the timeline of the output at `anchor`.
+    fn audio_tracks_timing(&self, anchor: (OutputKind, Tick), origin: Tick) -> Timing {
+        let offset = origin.0.saturating_sub(anchor.1.0).max(0);
+        // The wall-clock time of `origin`, which is now or a moment ago.
+        let ago = self.clock.now().0.saturating_sub(origin.0).max(0) / (FRAME_TICKS * 48);
+        let at = chrono::Local::now() - chrono::Duration::milliseconds(ago);
+        Timing {
+            anchor: match anchor.0 {
+                OutputKind::Recording => "recording".into(),
+                OutputKind::Streaming | OutputKind::Replay => "stream".into(),
+            },
+            origin_tick: Some(origin.0),
+            offset_frames: u64::try_from(offset / FRAME_TICKS).unwrap_or(0),
+            started_unix_ms: Some(at.timestamp_millis()),
+            date: at.format("%Y-%m-%d").to_string(),
+            time: at.format("%H:%M:%S").to_string(),
         }
+    }
+
+    /// Follow sources added, removed or switched on or off during the take. An unchanged
+    /// collection costs a comparison of two numbers.
+    fn update_audio_tracks(&mut self) {
+        let listed = (self.engine.revision(), self.profile.audio_tracks.include_program);
+        if self.audio_tracks.pending.is_none() && !self.audio_tracks.replaced && self.audio_tracks.listed == Some(listed) {
+            return;
+        }
+        self.audio_tracks.listed = Some(listed);
         if let Some((list, replace)) = self.audio_tracks.pending.take()
             && let Some(take) = &self.audio_tracks.take
             && !send_tracks(take, list.clone(), self.clock.now(), replace, self.taps_gate())
@@ -229,7 +350,7 @@ impl Studio {
         let (now, source_limit) = self.track_sources();
         self.audio_tracks.source_limit = source_limit;
         let program = self.profile.audio_tracks.include_program == self.audio_tracks.program.is_some();
-        if !arming && !replace && now == self.audio_tracks.recorded && program {
+        if !replace && now == self.audio_tracks.recorded && program {
             return;
         }
         if !self.profile.audio_tracks.include_program {
@@ -255,9 +376,7 @@ impl Studio {
     /// no new source's audio reaches an old source's file.
     pub(crate) fn audio_tracks_collection_replaced(&mut self) {
         if self.audio_tracks.take.is_some() {
-            let armed = self.audio_tracks.armed;
             self.remove_taps();
-            self.audio_tracks.armed = armed;
             self.audio_tracks.replaced = true;
         }
     }
@@ -278,16 +397,23 @@ impl Studio {
         self.audio_tracks.replaced = false;
     }
 
-    /// Stop the take. Returns at once; its threads finish the files.
+    /// Stop the take, ending its files now. Returns at once; its threads finish the files.
     pub(crate) fn stop_audio_tracks(&mut self) {
+        self.stop_audio_tracks_at(self.clock.now());
+    }
+
+    /// Stop the take, ending its files at `end` on the studio clock: every track still recorded
+    /// ends there, and audio stamped later is left out. Returns at once.
+    fn stop_audio_tracks_at(&mut self, end: Tick) {
         let Some(take) = self.audio_tracks.take.take() else { return };
         self.remove_taps();
+        self.audio_tracks.anchor = None;
         // The take ends after the mixer has applied the removal, so no block is stored after
         // the collect thread's last look at the taps. A mixer without a thread applies nothing.
         if self.mixer.running() {
-            take.stop_after(self.mixer.taps_applied_counter(), self.audio_tracks.generation);
+            take.stop_after(self.mixer.taps_applied_counter(), self.audio_tracks.generation, Some(end));
         } else {
-            take.stop();
+            take.stop_at(end);
         }
         self.audio_tracks.finishing.push((take, false));
     }
@@ -306,14 +432,13 @@ impl Studio {
         for status in failed {
             self.notices.push(stop_notice(&status));
         }
-        if self.audio_tracks.repair.as_ref().is_some_and(JoinHandle::is_finished)
-            && let Some(h) = self.audio_tracks.repair.take()
-            && let Ok(out) = h.join()
-        {
+        while let Some(i) = self.audio_tracks.repairs.iter().position(JoinHandle::is_finished) {
+            let Ok(out) = self.audio_tracks.repairs.swap_remove(i).join() else { continue };
             for (dir, e) in &out.failed {
-                log::warn!("audio tracks: repair at launch: {}: {e}", dir.display());
+                log::warn!("audio tracks: repair: {}: {e}", dir.display());
             }
             self.notices.extend(repair_notices(&out));
+            self.audio_tracks.last_repair = Some(repair_json(&out));
         }
     }
 
@@ -322,7 +447,7 @@ impl Studio {
             return;
         }
         self.audio_tracks.reported = true;
-        let Some((_, status)) = &self.audio_tracks.last else { return };
+        let Some(status) = &self.audio_tracks.last else { return };
         let notice = stop_notice(status);
         self.notices.push(notice);
     }
@@ -330,34 +455,54 @@ impl Studio {
     /// Repair takes in the recording folder that ended without finishing, on a background
     /// thread, when audio tracks are on.
     pub(crate) fn repair_audio_tracks_at_launch(&mut self) {
-        if !self.profile.audio_tracks.enabled || self.audio_tracks.repair.is_some() {
+        if !self.profile.audio_tracks.enabled || !self.audio_tracks.repairs.is_empty() {
             return;
         }
         let folder = recording_folder(&self.profile.output.folder);
         let spawned = std::thread::Builder::new().name("audio-tracks-repair".into()).spawn(move || recover::repair_each(&folder));
         match spawned {
-            Ok(h) => self.audio_tracks.repair = Some(h),
+            Ok(h) => self.audio_tracks.repairs.push(h),
             Err(e) => log::warn!("audio tracks: the repair thread could not start: {e}"),
         }
     }
 
-    /// Repair the takes in `folder` now, for `audio_tracks.repair`.
+    /// Repair the takes in `folder` on a background thread, for `audio_tracks.repair`. Returns
+    /// at once; the result comes as notices and as the status's `last_repair`, and the status
+    /// shows `repairing` until then. A take another repair holds is left to that repair.
     pub(crate) fn repair_audio_tracks(&mut self, folder: &str) -> Result<Value, crate::StudioError> {
-        let path = Path::new(folder);
+        if self.audio_tracks.repairs.len() >= MAX_REPAIRS {
+            return Err(crate::StudioError::Output(format!("{MAX_REPAIRS} repairs of audio tracks are already running")));
+        }
+        let path = PathBuf::from(folder);
+        // One metadata read, so a folder that is not there is an error and not a started repair.
         if !path.is_dir() {
             return Err(crate::StudioError::Output(format!("{folder} is not a folder")));
         }
-        let out = recover::repair_each(path);
-        let takes: Vec<Value> = out
-            .repaired
-            .iter()
-            .map(|r| {
-                let files: Vec<Value> = r.files.iter().map(|(f, n)| json!({"file": f, "seconds": *n as f64 / 48_000.0})).collect();
-                json!({"folder": r.dir.display().to_string(), "files": files})
-            })
-            .collect();
-        let failed: Vec<Value> = out.failed.iter().map(|(d, e)| json!({"folder": d.display().to_string(), "error": e.to_string()})).collect();
-        Ok(json!({"repaired": takes, "failed": failed}))
+        let for_thread = path.clone();
+        let spawned = std::thread::Builder::new().name("audio-tracks-repair".into()).spawn(move || {
+            if for_thread.is_dir() {
+                recover::repair_each(&for_thread)
+            } else {
+                let e = std::io::Error::new(std::io::ErrorKind::NotFound, "not a folder");
+                Outcome { repaired: Vec::new(), failed: vec![(for_thread, e)] }
+            }
+        });
+        match spawned {
+            Ok(h) => self.audio_tracks.repairs.push(h),
+            Err(e) => return Err(crate::StudioError::Output(format!("the repair could not start: {e}"))),
+        }
+        Ok(json!({"started": true, "folder": path.display().to_string()}))
+    }
+
+    /// Wait for the repairs started here and take their results as the next tick would, for
+    /// tests.
+    #[cfg(test)]
+    pub(crate) fn audio_tracks_repair_result(&mut self) -> Option<Value> {
+        while self.audio_tracks.repairs.iter().any(|h| !h.is_finished()) {
+            std::thread::yield_now();
+        }
+        self.finish_audio_tracks();
+        self.audio_tracks.last_repair.clone()
     }
 
     /// The audio tracks part of the studio's state, read from atomics.
@@ -366,13 +511,20 @@ impl Studio {
         let mut v = json!({
             "enabled": s.enabled, "when": s.when.id(), "include_program": s.include_program, "buffer_mib": s.buffer_mib,
             "segment_gib": s.segment_gib, "active": self.audio_tracks.take.is_some(), "finishing": self.audio_tracks.finishing.len(),
+            "repairing": !self.audio_tracks.repairs.is_empty(),
         });
+        if let (Some(o), Some(r)) = (v.as_object_mut(), &self.audio_tracks.last_repair) {
+            o.insert("last_repair".into(), r.clone());
+        }
+        if let (Some(o), Some((kind, _))) = (v.as_object_mut(), self.audio_tracks.anchor) {
+            o.insert("anchor".into(), json!(if kind == OutputKind::Recording { "recording" } else { "stream" }));
+        }
         if let (Some(o), Some((buffer, segment)), true) = (v.as_object_mut(), self.audio_tracks.take_sizes, self.audio_tracks.take.is_some()) {
             // The running take keeps the sizes it started with.
             o.insert("take_buffer_mib".into(), json!(buffer));
             o.insert("take_segment_gib".into(), json!(segment));
         }
-        if let (Some(o), Some((dir, st))) = (v.as_object_mut(), &self.audio_tracks.last) {
+        if let (Some(o), Some(st)) = (v.as_object_mut(), &self.audio_tracks.last) {
             let state = match st.state() {
                 Some(State::Recording) => "recording",
                 Some(State::Finishing) => "finishing",
@@ -381,7 +533,9 @@ impl Studio {
                 None => "idle",
             };
             o.insert("state".into(), json!(state));
-            o.insert("folder".into(), json!(dir.display().to_string()));
+            if let Some(dir) = st.dir() {
+                o.insert("folder".into(), json!(dir.display().to_string()));
+            }
             o.insert("tracks".into(), json!(st.tracks()));
             o.insert("seconds".into(), json!(st.seconds()));
             o.insert("bytes".into(), json!(st.bytes()));
@@ -399,7 +553,7 @@ impl Studio {
 
     /// The status of the last take, for the status bar; `None` before the first.
     pub fn audio_tracks_status(&self) -> Option<&Arc<studiocraft_audio_tracks::Status>> {
-        self.audio_tracks.last.as_ref().map(|(_, s)| s)
+        self.audio_tracks.last.as_ref()
     }
 
     /// Bytes a second the running outputs write to disk or send: what each has written so far,
@@ -427,11 +581,15 @@ impl Studio {
         }
     }
 
-    /// Stop the take and wait for its files, when the app closes.
+    /// Stop the take and wait for its files, when the app closes, for at most [`CLOSE_WAIT`] in
+    /// all. A take still writing then is left to finish on its own threads.
     pub(crate) fn finish_audio_tracks_blocking(&mut self) {
         self.stop_audio_tracks();
+        let deadline = Instant::now() + CLOSE_WAIT;
         for (t, _) in self.audio_tracks.finishing.drain(..) {
-            t.join();
+            if !t.join_until(deadline) {
+                log::warn!("audio tracks: a take was still writing when the app closed; the next launch repairs it if it does not finish");
+            }
         }
     }
 
@@ -445,26 +603,21 @@ impl Studio {
     #[cfg(test)]
     pub(crate) fn audio_tracks_idle(&self) -> bool {
         let a = &self.audio_tracks;
-        a.take.is_none() && a.finishing.is_empty() && a.slots.is_empty() && a.program.is_none() && a.repair.is_none() && a.generation == 0
+        a.take.is_none() && a.finishing.is_empty() && a.slots.is_empty() && a.program.is_none() && a.repairs.is_empty() && a.generation == 0
     }
 }
 
-/// The take's `Audio Files` folder: beside the recording at `recording`, else a folder named for
-/// the date and time in `folder` while only the stream runs. A name in `taken` is skipped even
-/// before its take's thread has made the folder. `None` when 999 such names are taken.
-fn take_dir(recording: Option<&Path>, folder: &Path, taken: &[PathBuf]) -> Option<PathBuf> {
-    let (parent, stem) = match recording {
+/// Where a take's folder goes and the stem of its name: beside the recording at `recording`,
+/// named after it, else in `folder`, named for the date and time, while only the stream runs. The
+/// take's disk thread makes `<stem> Audio`, or `<stem> (n) Audio` when that name is taken.
+fn take_place(recording: Option<&Path>, folder: &Path) -> (PathBuf, String) {
+    match recording {
         Some(r) => (
             r.parent().map(Path::to_path_buf).unwrap_or_else(|| folder.to_path_buf()),
             r.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "Take".into()),
         ),
         None => (folder.to_path_buf(), format!("Stream {}", chrono::Local::now().format("%Y-%m-%d %H-%M-%S"))),
-    };
-    (1..1000)
-        .map(|n| if n == 1 { format!("{stem} Audio") } else { format!("{stem} ({n}) Audio") })
-        .map(|name| parent.join(name))
-        .find(|p| !p.exists() && !taken.contains(p))
-        .map(|p| p.join("Audio Files"))
+    }
 }
 
 /// Send `specs` to the take. With `after`, the take applies them once the mixer has applied that
@@ -491,6 +644,21 @@ fn stop_notice(status: &studiocraft_audio_tracks::Status) -> Notice {
         Some(StopReason::WriteFailed) | None => "Audio tracks stopped at {time}: a file could not be written",
     };
     Notice::new(template, vec![("time", clock_text(status.stopped_at_seconds()))], true)
+}
+
+/// What a repair did, for the status: each take repaired with its files and their seconds, and
+/// each take that could not be repaired with why.
+fn repair_json(out: &Outcome) -> Value {
+    let takes: Vec<Value> = out
+        .repaired
+        .iter()
+        .map(|r| {
+            let files: Vec<Value> = r.files.iter().map(|(f, n)| json!({"file": f, "seconds": *n as f64 / 48_000.0})).collect();
+            json!({"folder": r.dir.display().to_string(), "files": files})
+        })
+        .collect();
+    let failed: Vec<Value> = out.failed.iter().map(|(d, e)| json!({"folder": d.display().to_string(), "error": e.to_string()})).collect();
+    json!({"repaired": takes, "failed": failed})
 }
 
 /// Takes a repair notice names at most; it counts the rest.
@@ -546,23 +714,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn take_folders_sit_beside_the_recording_and_never_reuse_a_name() {
-        let base = std::env::temp_dir().join(format!("studiocraft-take-dir-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&base);
-        let rec = base.join("2026-11-17 10-00-00.mkv");
-        let first = take_dir(Some(&rec), &base, &[]);
-        assert_eq!(first, Some(base.join("2026-11-17 10-00-00 Audio").join("Audio Files")));
-        // A take that started but has not made its folder yet keeps the name.
-        let started = [base.join("2026-11-17 10-00-00 Audio")];
-        assert_eq!(take_dir(Some(&rec), &base, &started), Some(base.join("2026-11-17 10-00-00 (2) Audio").join("Audio Files")));
-        std::fs::create_dir_all(base.join("2026-11-17 10-00-00 Audio")).unwrap();
-        assert_eq!(take_dir(Some(&rec), &base, &[]), Some(base.join("2026-11-17 10-00-00 (2) Audio").join("Audio Files")));
-        let stream = take_dir(None, &base, &[]).unwrap();
-        assert!(stream.starts_with(&base) && stream.to_string_lossy().contains("Stream "));
+    fn take_folders_sit_beside_the_recording_and_are_named_after_it() {
+        let base = PathBuf::from("Videos");
+        let rec = base.join("Shows").join("2026-11-17 10-00-00.mkv");
+        assert_eq!(take_place(Some(&rec), &base), (base.join("Shows"), "2026-11-17 10-00-00".to_string()));
+        let (parent, stem) = take_place(None, &base);
+        assert!(parent == base && stem.starts_with("Stream "), "{stem}");
         assert_eq!(clock_text(3725.9), "01:02:05");
         assert_eq!(clock_text(f64::NAN), "00:00:00");
     }
-
     #[test]
     fn a_take_that_launch_repair_cannot_fix_is_shown_to_the_user() {
         let (a, b) = (PathBuf::from("A Audio/Audio Files"), PathBuf::from("B Audio/Audio Files"));

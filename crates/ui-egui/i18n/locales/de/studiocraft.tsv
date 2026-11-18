@@ -429,14 +429,14 @@ menu	Transform	Transformieren
 	MiB	MiB
 	File size	Dateigröße
 	GiB	GiB
-	{tracks} tracks take about {gb} GB an hour; the buffer holds {seconds} s of audio while the disk is slow	{tracks} Spuren belegen etwa {gb} GB pro Stunde; der Puffer hält {seconds} s Audio, während der Datenträger langsam ist
+	Audio tracks: {tracks}, about {gb} GiB an hour; the buffer holds {seconds} s of audio while the disk is slow	Audiospuren: {tracks}, etwa {gb} GiB pro Stunde; der Puffer hält {seconds} s Audio, während der Datenträger langsam ist
 	A recording runs	Eine Aufnahme läuft
 	The stream runs	Der Stream läuft
 	A recording or the stream runs	Eine Aufnahme oder der Stream läuft
 	The disk is almost full; audio tracks stop before the recording or the stream runs out of space	Der Datenträger ist fast voll; die Audiospuren stoppen, bevor der Aufnahme oder dem Stream der Platz ausgeht
 	This take has made as many audio track files as it can; sources added since are not recorded to their own files	Diese Aufnahme hat so viele Audiospur-Dateien angelegt, wie sie kann; seitdem hinzugefügte Quellen werden nicht in eigene Dateien aufgenommen
 	More sources are set to record their own track than can be recorded at once; the later ones are not recorded	Mehr Quellen sollen eine eigene Spur aufnehmen, als gleichzeitig möglich ist; die späteren werden nicht aufgenommen
-	{tracks} audio tracks; {lost} s of audio lost while the disk was slow	{tracks} Audiospuren; {lost} s Audio verloren, während der Datenträger langsam war
+	Audio tracks: {tracks}; {lost} s of audio lost while the disk was slow	Audiospuren: {tracks}; {lost} s Audio verloren, während der Datenträger langsam war
 	TRACKS	SPUREN
 	TRACKS stopped	SPUREN gestoppt
 	Audio tracks stopped early; the status message gives the reason	Die Audiospuren wurden vorzeitig gestoppt; die Statusmeldung nennt den Grund

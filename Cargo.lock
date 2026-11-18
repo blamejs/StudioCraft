@@ -5813,6 +5813,7 @@ name = "studiocraft-engine"
 version = "0.1.0-alpha.1"
 dependencies = [
  "craft-audio-dsp",
+ "criterion",
  "log",
  "serde",
  "serde_json",
