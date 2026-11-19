@@ -566,6 +566,15 @@ fn audio_form(ui: &mut Ui, source: SourceId, state: &AudioState) -> Vec<Action> 
             actions.push(("source.monitor", json!({"source": source, "mode": mode.id()})));
         }
         ui.end_row();
+        ui.label("");
+        let mut own = state.records_track();
+        let r = ui
+            .checkbox(&mut own, tl!("Record as its own track"))
+            .on_hover_text(tl!("Audio tracks write this source to a WAV file of its own (Settings › Output › Audio tracks)"));
+        if r.changed() {
+            actions.push(("source.set_record_track", json!({"source": source, "on": own})));
+        }
+        ui.end_row();
     });
     actions
 }

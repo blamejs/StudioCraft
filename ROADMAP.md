@@ -34,6 +34,7 @@ description in [docs/features.md](docs/features.md).
 - MKV files are recorded with the built-in H.264 and AAC encoders without ffmpeg ([Encoders](docs/features.md#encoders)).
 - MKV, MP4 and MOV files, including recordings at the Lossless quality level, are recorded through an external ffmpeg ([When `ffmpeg` is needed](docs/features.md#when-ffmpeg-is-needed)).
 - The replay buffer keeps the last 5 to 3600 seconds in memory and saves them to an MKV file while it keeps running ([Replay buffer](docs/features.md#replay-buffer)).
+- Each audio source and the program mix are written to their own WAV files while a recording or the stream runs, and takes cut short by a crash are repaired ([Audio tracks](docs/features.md#audio-tracks)).
 
 ### Streaming
 
@@ -81,7 +82,7 @@ description in [docs/features.md](docs/features.md).
 2. **Multiple outputs (in progress).** StudioCraft will stream to several destinations at once and
    offer a virtual camera. `craft-flv` already writes and reads the FLV tags and AMF0 values an
    RTMP stream carries. `craft-packet` shares each encoded packet by reference with every
-   destination's bounded ring.
+   destination's bounded ring. `craft-rtmp` publishes a stream to an RTMP or RTMPS server.
 3. **Web build.** The model and plugin crates already build for WebAssembly. A browser editor for
    scene collections is the first step.
 4. **Frames on the GPU from capture to the encoder.** Captured frames will stay on the GPU until

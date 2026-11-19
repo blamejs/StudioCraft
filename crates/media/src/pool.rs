@@ -24,6 +24,17 @@ impl<T: Default> Pool<T> {
         Arc::new(Self { free: ArrayQueue::new(capacity.max(1)), made: AtomicUsize::new(0), make })
     }
 
+    /// A pool that makes all `capacity` items (at least 1) now, so the thread that takes them
+    /// never allocates: once every item is out, [`Pool::exhausted`] is true.
+    pub fn with_capacity(capacity: usize, make: fn() -> T) -> Arc<Self> {
+        let pool = Self::new(capacity, make);
+        for _ in 0..pool.capacity() {
+            let _ = pool.free.push(make());
+        }
+        pool.made.store(pool.capacity(), Ordering::Relaxed);
+        pool
+    }
+
     /// A free item, or a new one when none is free.
     pub fn take(self: &Arc<Self>) -> Pooled<T> {
         let item = self.free.pop().unwrap_or_else(|| {
@@ -31,6 +42,11 @@ impl<T: Default> Pool<T> {
             (self.make)()
         });
         Pooled { item, pool: Arc::clone(self) }
+    }
+
+    /// A free item, or `None` when none is free; it never makes one.
+    pub fn try_take(self: &Arc<Self>) -> Option<Pooled<T>> {
+        self.free.pop().map(|item| Pooled { item, pool: Arc::clone(self) })
     }
 
     /// How many items the pool has made so far.
@@ -105,6 +121,30 @@ mod tests {
         }
         let b = pool.take();
         assert!(b.capacity() >= 4096);
+    }
+
+    #[test]
+    fn a_pool_made_with_its_capacity_never_makes_more_while_items_come_back() {
+        let pool: Arc<Pool<Vec<u8>>> = Pool::with_capacity(3, || Vec::with_capacity(64));
+        assert_eq!((pool.made(), pool.free()), (3, 3));
+        let held: Vec<_> = (0..3).map(|_| pool.take()).collect();
+        assert!(pool.exhausted(), "every item is out");
+        drop(held);
+        for _ in 0..100 {
+            drop(pool.take());
+        }
+        assert_eq!(pool.made(), 3);
+    }
+
+    #[test]
+    fn try_take_hands_out_free_items_only() {
+        let pool: Arc<Pool<Vec<u8>>> = Pool::with_capacity(1, Vec::new);
+        let a = pool.try_take();
+        assert!(a.is_some());
+        assert!(pool.try_take().is_none(), "none free, and none is made");
+        drop(a);
+        assert!(pool.try_take().is_some());
+        assert_eq!(pool.made(), 1);
     }
 
     #[test]

@@ -125,7 +125,10 @@ flags. The two flags keep the headless backend's file access inside the folders 
 - Every file a call writes must lie inside a write root: `collection_save`, and the recording
   folder (Settings › Output, or the Videos folder when it is empty) for `record_start`,
   `record.start` and a `record.toggle` that would start a recording, and for `replay_save` and
-  `replay.save`.
+  `replay.save`. With audio tracks on for the stream, the recording folder is also checked for
+  `stream_start`, `stream.start` and a `stream.toggle` that would start the stream.
+  `audio_tracks_repair` and `audio_tracks.repair` rewrite files, so their `folder` must lie inside
+  a write root.
 - Each flag may be given more than once; a path inside any root of its kind is allowed. Each root
   must be an existing folder. A kind of access with no root of its own is not granted.
 - A path is made absolute against the server's working directory and its links are followed. For a
@@ -211,7 +214,7 @@ error -32602. A command that fails is a tool result with `isError: true` and the
 | `scene_select` | `scene` | `scene.select`, by id or name. In studio mode it sets the preview scene. |
 | `source_add` | `kind`, `scene?`, `name?`, `settings?`, `transform?` | `source.add`, in the scene being edited unless `scene` names one. Returns `source`, `item` and `scene`. |
 | `item_transform` | `item`, `scene?`, `transform` | `item.transform`. `item` is the item's id or the name of the source it shows. |
-| `source_audio` | `source`, `sync_offset_ms?`, `monitor?` | `source.sync_offset` when `sync_offset_ms` is given (0 to 5000) and `source.monitor` when `monitor` is given (`off`, `monitor_only` or `monitor_and_output`), then the source's `audio` settings. A value out of range is an error and changes nothing. With neither value it only reads the settings. |
+| `source_audio` | `source`, `sync_offset_ms?`, `monitor?`, `record_track?` | `source.sync_offset` when `sync_offset_ms` is given (0 to 5000), `source.monitor` when `monitor` is given (`off`, `monitor_only` or `monitor_and_output`) and `source.set_record_track` when `record_track` is given (`true` or `false`), then the source's `audio` settings. A value out of range is an error and changes nothing. With no value it only reads the settings. `record_track` is `null` until set; a source whose `monitor` sends it to the program mix (`off` or `monitor_and_output`) is then written to its own track and a monitor-only source is not. |
 | `transition_set` | `kind`, `ms?` | `transition.set`, then `transition.duration` when `ms` is given. |
 | `studio_transition` | `kind?`, `ms?` | `studio.transition`: in studio mode, moves the preview scene to the program. `kind` and `ms` apply to this switch only. |
 | `collection_open` | `path` | Replaces the scene collection with the one in the file. The undo history starts empty. |
@@ -225,6 +228,8 @@ error -32602. A command that fails is a tool result with `isError: true` and the
 | `replay_start` | none | `replay.start`, then the replay buffer's state. Nothing happens when it already runs. |
 | `replay_stop` | none | `replay.stop`, then the replay buffer's state. Replays being saved are still written. |
 | `replay_save` | none | `replay.save`: writes what the replay buffer holds to a new MKV file in the recording folder in the background, then the replay buffer's state. An error when the replay buffer is not running or holds nothing yet. |
+| `audio_tracks_status` | none | `audio_tracks.status`: the settings (`enabled`, `when`, `include_program`, `buffer_mib`, `segment_gib`), `active` and `finishing` (takes still writing), `repairing` (true while a repair runs) and `last_repair` (what the last repair did, as below), while a take runs the `anchor` it follows (`recording` or `stream`) and the `take_buffer_mib` and `take_segment_gib` it started with (a changed write buffer or file size applies from the next take), and for the last take its `state` (`recording`, `finishing`, `done` or `stopped`), `folder` (once the take's thread has made it), `tracks`, `seconds`, `bytes`, `dropped_seconds`, `low_space`, `track_limit` (true once a source was left without a file because the take made its 256 tracks) and `source_limit` (true while a take runs and more sources are set to record their own track than the 64 tracks recorded at once, the program included; the later sources are not recorded), with `stopped_at` and `reason` when it stopped early. |
+| `audio_tracks_repair` | `folder` | `audio_tracks.repair`: repairs the takes in `folder` (a take's `Audio Files` folder, its `<name> Audio` folder, or a folder holding such folders) that ended without finishing their files, on a background thread, and returns `started` and `folder` at once. When it ends, `audio_tracks_status` shows `last_repair` with `repaired`, each take's `folder` with its `files` and their `seconds`, and `failed`, each take that could not be repaired with its `folder` and `error`. A folder that does not exist is an error. At most 4 repairs run at once. |
 | `output_status` | none | The `recording`, `streaming` and `replay` entries of `document.inspect`: `active`, `status`, `target` (the file or server) and `seconds`. The `replay` entry also has `saving` (replays still being written) and, while it runs, `bytes` (the bytes it holds). |
 
 `transform` is an object with `position` `{x, y}` (the top-left corner in canvas pixels), `scale`

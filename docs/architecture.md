@@ -29,11 +29,13 @@ crate in the same layer. `cargo xtask layers` checks this against the table in
 | L0 | `craft-hwenc` | The hardware encoders ffmpeg runs, a one-frame test encode of each with results kept for the session, and an automatic choice ordered by the graphics adapter's vendor with a software fallback. It depends on no StudioCraft crate. |
 | L0 | `craft-hwenc-native` | Hardware encoders called through their drivers: NVENC H.264 and HEVC from NV12 or P010 frames on Windows (Direct3D 11) and 64-bit Linux (CUDA), the Windows Media Foundation and macOS VideoToolbox hardware H.264 and HEVC encoders from NV12 frames, the Annex B helpers, and the `avcC` and `hvcC` records. Its private `nvenc_ffi`, `mf_ffi` and `vt_ffi` modules are the only code that calls the drivers. It depends on no StudioCraft crate. |
 | L1 | `studiocraft-plugin` | The `Source`, `Filter`, `Transition`, `Encoder` and `Output` traits and the `Registry` they are registered in. |
+| L1 | `craft-rtmp` | A blocking RTMP and RTMPS publish client on `std::net`: the handshake, chunking, the `connect`, `createStream`, `publish` and `deleteStream` commands, acknowledgements, and a timeout on every step, with the stream key kept out of errors and `Debug` output. It sends `craft-flv` bodies, starts no threads, and is built for native targets only. It depends on no StudioCraft crate. |
 | L2 | `studiocraft-engine` | Commands with stable ids, undo and redo, source threads, the audio mixer thread and the frame scheduler. |
 | L2 | `studiocraft-render` | The wgpu compositor: scenes, filters, transitions, and frame conversion for encoders. |
 | L2 | `studiocraft-platform` | Display, window, camera and audio capture, locating ffmpeg, and opening folders and links. |
 | L2 | `studiocraft-encode` | The built-in encoders: H.264 video from NV12 frames and AAC audio from the mixer's blocks. |
 | L3 | `studiocraft-sources` | The built-in sources and filters. |
+| L3 | `studiocraft-audio-tracks` | Audio tracks: the collect and disk threads that write each recorded source and the program mix to WAV files, the take journal, and the repair of takes cut short. |
 | L3 | `studiocraft-outputs` | Recording and streaming through an ffmpeg process, Matroska recording through the built-in encoders, and the video encoders. |
 | L4 | `studiocraft-studio` | The running studio: sources, mixer, compositor, transitions and outputs behind one command interface. |
 | L5 | `studiocraft-ui-egui` | The window: menus, preview, docks, properties, filters and settings. |
@@ -75,6 +77,8 @@ gives no value for that column.
 | Output (ffmpeg) | The program's frames and the mixer's audio blocks | 256 audio blocks, and one second of video frames (the frame rate rounded up, from 8 to 240 frames) | A full video or audio queue drops its oldest item and counts the drop (`media::queue::Fifo`) | |
 | Output (built-in encoders) | The program's frames and the mixer's audio blocks; the file thread takes the encode threads' packets | 256 audio blocks, and 64 MiB and 3 s of packets | An encoder that finds the packet queue full waits up to 2 s (`outputs::native::DISK_WAIT`), and then the recording fails. The recording also fails when one encoder falls more than 10 s behind the other (`MAX_LAG_NS`). | |
 | Replay buffer | The encode threads' packets | A ring bounded by length and bytes | | |
+| Audio tracks collect | Each recorded track's tap of mixer blocks | 32 blocks per tap with its own pool of 34, and a write buffer of 16 to 1024 1 MiB chunks, at least 2 for each recorded track | A full tap reuses its own oldest block; an empty write buffer drops blocks, logs them and writes silence in their place | One 8 KiB copy per track per block |
+| Audio tracks disk | The collect thread's chunks | The chunk count of the write buffer | A full or failing disk stops only the audio tracks | Sequential 1 MiB writes |
 | Window | `Studio` state | | | |
 
 ### Source threads
@@ -261,6 +265,45 @@ ring thread a one-slot queue through a bounded lock-free queue. The ring thread 
 packet list, which shares the packet bytes, in that slot. A `save replay` thread per save writes
 the clip to its MKV file, and `Studio::tick` reports each finished save.
 
+### Audio tracks threads
+
+While audio tracks run (`studiocraft-audio-tracks`), the mixer stores each recorded source's block
+and the program block into that track's `TapSlot` (`media/src/tap.rs`): a bounded lock-free queue
+of 32 blocks with its own pool of 34, made on the studio thread and sent to the mixer when the take
+starts. Tap sets go to the mixer through a slot of their own that keeps only the latest set, so a
+burst of other commands cannot drop the removal of the taps. A take records at most 64 tracks at
+once and makes at most 256 in all. A source in the program mix is stored in the same pass that
+mixes it (`mix_into_tap`).
+
+A take follows the recording or the stream. The studio starts it just before its output's first
+sample and passes that time as the take's frame 0; a take started later gets the time it starts,
+and each file's `bext` time reference says where it sits on the output's timeline. A stop passes
+the time the output stopped, and every track still recorded ends there.
+
+The `audio-tracks-collect` thread drains the taps into 1 MiB chunks, places each block by its
+timestamp from frame 0, cuts audio before frame 0 and after the end, and fills gaps with silence,
+counting a gap in a track's audio as lost audio. It does not touch files. The chunk pool (the
+write buffer) holds the buffer setting in MiB, and when a track starts the collect thread adds
+chunks until there are at least 2 for each track recorded. When the pool is empty because the disk
+is slow, the collect thread drops blocks and logs them, and the files still keep time. Each
+dropout goes to the disk thread through a queue of 4,096 as soon as it ends.
+
+The `audio-tracks-disk` thread makes the take's folder, appends the chunks to one WAV file per
+track, rewrites each header every second, syncs the files that grew and journals them and the
+dropouts in the take's `take.journal` every 5 seconds, starts a `<name> part N.wav` file at the
+file size limit, and stops the take when free space drops below the reserve or cannot be read. It
+checks whether a header rewrite or sync is due after every 16 messages from the collect thread, so a disk slower than the tracks
+does not delay them. A panic on either thread stops the take with a write failure.
+
+Status is atomics only. A stop returns at once. The collect thread keeps draining the taps until
+the mixer reports that it applied the removal of the taps (up to 5 seconds), so no block stored
+before then is lost, and the threads end after the last chunk is written. A change to the recorded
+sources during a take waits the same way: the collect thread applies the new track list once the
+mixer has applied the matching tap change, so a source that stops being recorded keeps every block
+stored for it. At most 2 takes finish their files at once; a new take waits for one of them. When
+the app closes it waits up to 10 seconds for takes to finish. While audio tracks are off no tap,
+pool or thread exists, and the mixer checks one `Option` per input.
+
 ### Window thread
 
 The window reads `Studio` state, runs commands, and shows statistics.
@@ -393,8 +436,9 @@ Release file names and package ids are in [docs/releasing.md](releasing.md#file-
   | Windows Media Foundation H.264 or HEVC (built in) | `craft-hwenc-native`, which loads `mfplat.dll` at run time |
   | Apple VideoToolbox H.264 or HEVC (built in) | `craft-hwenc-native` on macOS, which calls the VideoToolbox framework |
 
-  `craft-flv` writes and reads the FLV tags and AMF0 values that RTMP carries, and `craft-packet`
-  fans encoded packets out to several destinations. No output uses either yet.
+  `craft-flv` writes and reads the FLV tags and AMF0 values that RTMP carries, `craft-packet`
+  fans encoded packets out to several destinations, and `craft-rtmp` publishes a stream to an RTMP
+  or RTMPS server. No output uses them yet.
 - **Media files.** The media file source plays an Ogg file that holds one Vorbis stream at 8 to
   192 kHz and nothing else on a thread of its own, with the `craft-media` Ogg reader and the
   `craft-audio` Vorbis decoder. The thread holds the file's packet index and one packet at a time,

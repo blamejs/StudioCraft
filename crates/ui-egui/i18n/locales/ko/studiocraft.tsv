@@ -436,3 +436,40 @@
 @msg	The stream stopped: {error}	방송이 중지되었습니다: {error}
 @msg	ffmpeg at {path} was not found	{path}에서 ffmpeg를 찾을 수 없습니다
 menu	Transform	변형
+	Record as its own track	별도 트랙으로 녹음
+	Audio tracks write this source to a WAV file of its own (Settings › Output › Audio tracks)	오디오 트랙은 이 소스를 별도의 WAV 파일에 기록합니다(설정 › 출력 › 오디오 트랙)
+	Audio tracks	오디오 트랙
+	Write each recorded source and the program mix to its own WAV file	녹음되는 각 소스와 프로그램 믹스를 각각 별도의 WAV 파일에 기록
+	Write them while	기록 시점
+	Include the program mix	프로그램 믹스 포함
+	Write buffer	쓰기 버퍼
+	MiB	MiB
+	File size	파일 크기
+	GiB	GiB
+	Audio tracks: {tracks}, about {gb} GiB an hour; the buffer holds {seconds} s of audio while the disk is slow	오디오 트랙 {tracks}개는 시간당 약 {gb}GiB를 차지합니다. 디스크가 느린 동안 버퍼는 {seconds}초 분량의 오디오를 보관합니다
+	A recording runs	녹화 중
+	The stream runs	방송 중
+	A recording or the stream runs	녹화 또는 방송 중
+	The disk is almost full; audio tracks stop before the recording or the stream runs out of space	디스크가 거의 가득 찼습니다. 녹화나 방송 공간이 부족해지기 전에 오디오 트랙이 멈춥니다
+	This take has made as many audio track files as it can; sources added since are not recorded to their own files	이 테이크에서 만들 수 있는 오디오 트랙 파일 수가 한도에 이르렀습니다. 그 뒤에 추가한 소스는 자체 파일로 기록되지 않습니다
+	More sources are set to record their own track than can be recorded at once; the later ones are not recorded	자체 트랙으로 기록하도록 설정된 소스가 한 번에 기록할 수 있는 수보다 많습니다. 뒤쪽 소스는 기록되지 않습니다
+	Audio tracks: {tracks}; {lost} s of audio lost while the disk was slow	오디오 트랙 {tracks}개, 디스크가 느린 동안 {lost}초 분량의 오디오 손실
+	TRACKS	트랙
+	TRACKS stopped	트랙 중지됨
+	Audio tracks stopped early; the status message gives the reason	오디오 트랙이 일찍 중지되었습니다. 이유는 상태 메시지에 표시됩니다
+	Record as Its Own Track	별도 트랙으로 녹음
+	Audio Tracks Status	오디오 트랙 상태
+	Repair Audio Tracks	오디오 트랙 복구
+@msg	Audio tracks stopped at {time}: the disk is full	오디오 트랙이 {time}에 중지됨: 디스크가 가득 찼습니다
+@msg	Audio tracks stopped at {time}: the disk is almost full	오디오 트랙이 {time}에 중지됨: 디스크가 거의 가득 찼습니다
+@msg	Audio tracks stopped at {time}: the files could not be created	오디오 트랙이 {time}에 중지됨: 파일을 만들 수 없습니다
+@msg	Audio tracks stopped at {time}: the free space on the disk could not be read	오디오 트랙이 {time}에 중지됨: 디스크의 여유 공간을 읽을 수 없습니다
+@msg	Audio tracks stopped at {time}: there is not enough memory for the write buffer	오디오 트랙이 {time}에 중지됨: 쓰기 버퍼에 사용할 메모리가 부족합니다
+@msg	Audio tracks stopped at {time}: a file could not be written	오디오 트랙이 {time}에 중지됨: 파일을 쓸 수 없습니다
+@msg	Audio tracks could not start: {error}	오디오 트랙을 시작할 수 없습니다: {error}
+@msg	Audio tracks repaired after the app closed during a take: {folders}	테이크 도중 앱이 닫혀 오디오 트랙을 복구했습니다: {folders}
+@msg	Audio tracks could not be repaired: {takes}	오디오 트랙을 복구할 수 없습니다: {takes}
+@msg	Audio tracks repaired after the app closed during a take: {folders} and {more} more	테이크 도중 앱이 닫혀 오디오 트랙을 복구했습니다: {folders} 외 {more}개
+@msg	Audio tracks could not be repaired: {takes} and {more} more	오디오 트랙을 복구할 수 없습니다: {takes} 외 {more}개
+@msg	Audio tracks could not be repaired: {takes}. Takes repaired: {count}	오디오 트랙을 복구할 수 없습니다: {takes}. 복구된 테이크: {count}
+@msg	Audio tracks could not be repaired: {takes} and {more} more. Takes repaired: {count}	오디오 트랙을 복구할 수 없습니다: {takes} 외 {more}개. 복구된 테이크: {count}

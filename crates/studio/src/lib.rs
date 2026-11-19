@@ -6,6 +6,7 @@
 //! and the control channel all go through [`Studio::execute`]; after each change the studio
 //! brings the running parts in line with the collection.
 
+mod audio_tracks;
 pub mod capture;
 pub mod files;
 mod monitor;
@@ -35,8 +36,10 @@ use studiocraft_render::device::{Recovery, RecoveryPolicy};
 use studiocraft_render::{CanvasViews, CaptureRequest, Compositor, Gpu, RenderShared};
 use studiocraft_sources::FfmpegSetting;
 
+pub use audio_tracks::{PROGRAM_NAME, clock_text};
 pub use files::FileError;
 pub use outputs::{OutputKind, OutputState, recording_folder, recording_path, replay_path};
+pub use studiocraft_audio_tracks::{State as AudioTracksState, Status as AudioTracksStatus, StopReason as AudioTracksStopReason};
 pub use studiocraft_platform::PlatformError;
 pub use studiocraft_platform::audio::{AudioSink, Fill, Format, OnError, Playing, SystemSink};
 pub use studiocraft_render::{Capture, View};
@@ -233,6 +236,14 @@ pub struct Studio {
     scope_feed: Option<ScopeFeed>,
     /// The device monitored sources play on.
     monitor: monitor::Monitor,
+    /// Each recorded source and the program mix written to its own file.
+    audio_tracks: audio_tracks::AudioTracks,
+    /// Faults the tests put into the audio tracks' disk side.
+    #[cfg(test)]
+    test_faults: studiocraft_audio_tracks::Faults,
+    /// Counts as a running stream for the audio tracks, in tests without a server.
+    #[cfg(test)]
+    test_streaming: bool,
 }
 
 /// The queue the compositor sends the scopes' NV12 copy of the program to, and the largest size
@@ -298,9 +309,15 @@ impl Studio {
             notices: Vec::new(),
             scope_feed: None,
             monitor: monitor::Monitor::new(Arc::new(studiocraft_platform::audio::SystemSink)),
+            audio_tracks: audio_tracks::AudioTracks::default(),
+            #[cfg(test)]
+            test_faults: studiocraft_audio_tracks::Faults::default(),
+            #[cfg(test)]
+            test_streaming: false,
         };
         s.restart_video();
         s.refresh();
+        s.repair_audio_tracks_at_launch();
         s
     }
 
@@ -342,8 +359,11 @@ impl Studio {
             }
         };
         let mut ui = None;
+        let mut result = outcome.result;
         if let Some(action) = outcome.runtime {
             match action {
+                RuntimeAction::AudioTracksStatus => result = self.audio_tracks_json(),
+                RuntimeAction::AudioTracksRepair { folder } => result = self.repair_audio_tracks(&folder)?,
                 RuntimeAction::StartRecording => self.start_output(OutputKind::Recording)?,
                 RuntimeAction::StopRecording => self.stop_output(OutputKind::Recording),
                 RuntimeAction::ToggleRecording => self.toggle_output(OutputKind::Recording)?,
@@ -357,15 +377,18 @@ impl Studio {
                 RuntimeAction::OpenSettings => ui = Some(UiAction::OpenSettings),
                 RuntimeAction::Exit => ui = Some(UiAction::Exit),
             }
+            // A recording or stream that started or stopped starts or stops the audio tracks now.
+            self.sync_audio_tracks();
         }
         if outcome.changed {
             self.refresh();
+            self.sync_audio_tracks();
         } else if transition {
             // A transition that changed nothing drops its override, so a later switch uses the
             // collection's transition.
             self.quick = None;
         }
-        Ok((outcome.result, ui))
+        Ok((result, ui))
     }
 
     /// Run a command by its id and JSON parameters (hotkeys, scripts, the control channel).
@@ -381,10 +404,13 @@ impl Studio {
 
     /// Replace the scene collection (a file was opened or a new one made).
     pub fn load_collection(&mut self, collection: SceneCollection) {
+        // The mixer drops the old sources' taps before it gets the new sources.
+        self.audio_tracks_collection_replaced();
         self.engine.load(collection);
         self.transition = None;
         self.shown_program = self.engine.collection().program_scene;
         self.refresh();
+        self.sync_audio_tracks();
     }
 
     pub fn mark_saved(&mut self) {
@@ -439,6 +465,8 @@ impl Studio {
         for id in events.removed {
             self.mixer.send(MixerCmd::RemoveOutput { id });
         }
+        self.sync_audio_tracks();
+        self.mixer.free_retired();
     }
 
     /// Notice a lost graphics device and stop drawing with it. A device the studio opened is
@@ -752,6 +780,7 @@ impl Studio {
     /// Apply new settings. Video changes restart the compositor; they are refused while a
     /// recording or stream runs.
     pub fn set_profile(&mut self, profile: Profile) -> Result<(), StudioError> {
+        profile.audio_tracks.check().map_err(StudioError::Output)?;
         let video_changed = profile.video.sanitized() != self.profile.video.sanitized();
         if video_changed && self.outputs.any_active() {
             return Err(StudioError::Output("stop recording, streaming and the replay buffer before changing the video settings".into()));
@@ -759,11 +788,16 @@ impl Studio {
         if let Ok(mut f) = self.ffmpeg.write() {
             f.clone_from(&profile.output.ffmpeg_path);
         }
+        let tracks_on = profile.audio_tracks.enabled && !self.profile.audio_tracks.enabled;
         self.profile = profile;
         if video_changed {
             self.restart_video();
         }
         self.sync_monitor();
+        if tracks_on {
+            self.repair_audio_tracks_at_launch();
+        }
+        self.sync_audio_tracks();
         Ok(())
     }
 
@@ -800,6 +834,7 @@ impl Studio {
                 m.insert("channels".into(), json!(f.channels));
             }
             o.insert("monitoring".into(), monitoring);
+            o.insert("audio_tracks".into(), self.audio_tracks_json());
             o.insert(
                 "stats".into(),
                 json!({
@@ -847,8 +882,11 @@ impl Studio {
 
 impl Drop for Studio {
     fn drop(&mut self) {
-        // Recordings are finished, not cut off, when the app closes.
+        // Recordings and audio tracks are finished, not cut off, when the app closes. Both are
+        // asked to stop before either is waited for, so neither runs on while the other ends.
+        self.stop_audio_tracks();
         self.outputs.stop_all_blocking();
+        self.finish_audio_tracks_blocking();
     }
 }
 

@@ -41,6 +41,53 @@ boxes (one rotated) and nothing else, at 60 fps for 10 seconds, without a window
 The frame time is the time the compositor thread spends on one frame after its tick, from the
 start of drawing to the end of submitting it to the GPU.
 
+### Audio tracks
+
+Measured on 2026-11-17 on Linux with `cargo bench -p studiocraft-media --bench mixer`, in one run
+on one machine:
+
+| Bench | Median | Range (95%) |
+| --- | --- | --- |
+| `mix 8 sources, 1024-frame stereo block` | 12.87 µs | 12.77 to 12.97 µs |
+| `mix_8_sources_taps_off` | 12.97 µs | 12.78 to 13.17 µs |
+| `mix_8_sources_8_taps` | 12.89 µs | 12.71 to 13.06 µs |
+
+`mix_8_sources_taps_off` is the mixing pass with audio tracks off, where each input checks for a
+tap and finds none. `mix_8_sources_8_taps` stores every input's block into its tap in the same
+pass that mixes it and copies the program into its own tap. The three medians are within 0.1 µs
+of each other, inside the run-to-run spread.
+
+Measured on 2026-11-18 on Linux with `cargo bench -p studiocraft-engine --bench mixer_taps` and
+`cargo bench -p studiocraft-audio-tracks --bench collect`, in one run on one machine:
+
+| Bench | Median | Range (95%) |
+| --- | --- | --- |
+| `mix_state_8_inputs_taps_off` | 120.19 µs | 118.36 to 122.11 µs |
+| `mix_state_8_inputs_9_taps` | 137.04 µs | 134.37 to 139.65 µs |
+| `mix_state_63_inputs_64_taps` | 617.29 µs | 612.12 to 623.00 µs |
+| `collect_9_tracks_one_block` | 14.47 µs | 13.84 to 15.41 µs |
+
+The `mix_state` benches run the mixer thread's whole tick (`MixState::tick`) for one 1024-frame
+block: input levels, mixing, the loudness meter and the taps. In the tapped cases a second thread
+drains every tap while the tick runs, as the collect thread does. Taps on 8 inputs and the program
+add 16.9 µs to the tick. 64 tracks, the most a take records at once, take 617 µs of the 21.3 ms
+between blocks. `collect_9_tracks_one_block` is the collect thread taking one block from each of 9
+taps and placing it in its chunk, once every 21.3 ms.
+
+`studiocraft-cli bench audio-tracks` feeds 9 tracks at the mixer's pace for 60 seconds while the
+disk takes nothing for 40 seconds from second 5, with the default 96 MiB write buffer. A run on
+2026-11-18 gave the same values as the run on 2026-11-17:
+
+| Measure | Value |
+| --- | --- |
+| Seconds the buffer holds for 9 tracks | 29.1 s |
+| Audio lost per track during the 40 s stall | 13.2 s |
+| Every file the full 60 s long | yes |
+| Feeder late | 0 ms |
+
+The lost audio is replaced with silence in place, so each file still has the take's full length.
+A longer stall loses more; a larger buffer (up to 1024 MiB) holds more.
+
 ### Built-in H.264 encoder
 
 Measured on 2026-11-17 on Linux (AMD EPYC 9R14, 128 hardware threads), release build.
@@ -144,10 +191,35 @@ woken for each packet, 0.20% of one core for one second of stream. With `wake_ev
 as without one. The `parked` timings depend on the load on the host's other cores: another run on
 the same host measured 5.630 ms for 8 parked receivers, 2.9 times the figure above.
 
+### RTMP chunking
+
+Measured on 2026-11-18 on Linux (AMD EPYC 9R14), release build. `cargo bench -p craft-rtmp`
+chunks one second of a 6000 kb/s, 60 fps H.264 stream with 160 kb/s AAC with `ChunkWriter`: 60
+video messages of 12 505 bytes and 47 audio messages of 428 bytes, 770 KB in all, each written as
+its codec bytes and its data.
+
+- `sink`: into `io::sink()` at the 4096-byte chunk size the publisher sets and at the default 128
+  bytes, which times building the chunk headers and slices.
+- `vec`: into a `Vec` that keeps its capacity, which adds copying every byte.
+- `tcp`: into a loopback TCP socket that another thread drains, which adds the system calls.
+
+| Bench | Median | Range (95%) |
+| --- | --- | --- |
+| `sink/chunk 1 s at 4096 bytes` | 4.509 µs | 4.439 to 4.582 µs |
+| `sink/chunk 1 s at 128 bytes` | 23.38 µs | 22.99 to 23.71 µs |
+| `vec/chunk 1 s at 4096 bytes into a Vec` | 17.80 µs | 17.54 to 18.08 µs |
+| `tcp/send 1 s at 4096 bytes over loopback TCP` | 1.253 ms | 1.194 to 1.304 ms |
+
+At the 4096-byte chunk size, chunking one second of stream costs 4.5 µs of one core, about 42 ns
+per message, and allocates nothing. Sending it over loopback TCP costs 1.25 ms, 0.13% of one core,
+almost all of it in the system calls. An earlier run on the same host measured 1.505 ms for the
+TCP bench.
+
 ## Measuring
 
 - Run the criterion benches with `cargo bench -p <crate>`.
 - Run the timing run with `cargo run --release -p studiocraft-cli -- bench <seconds>`.
+- Run the audio tracks stall run with `cargo run --release -p studiocraft-cli -- bench audio-tracks`.
 - Run the encoder bench with `cargo run --release -p studiocraft-encode --example encode_bench -- <seconds> [<threads>]`.
 - In the app, View › Stats shows the same counters while you work.
 

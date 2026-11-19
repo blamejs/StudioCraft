@@ -436,3 +436,40 @@
 @msg	The stream stopped: {error}	直播已停止：{error}
 @msg	ffmpeg at {path} was not found	未在 {path} 找到 ffmpeg
 menu	Transform	变换
+	Record as its own track	录制为单独音轨
+	Audio tracks write this source to a WAV file of its own (Settings › Output › Audio tracks)	音频轨道将此来源写入单独的 WAV 文件（设置 › 输出 › 音频轨道）
+	Audio tracks	音频轨道
+	Write each recorded source and the program mix to its own WAV file	将每个录制的来源和节目混音分别写入单独的 WAV 文件
+	Write them while	写入时机
+	Include the program mix	包括节目混音
+	Write buffer	写入缓冲区
+	MiB	MiB
+	File size	文件大小
+	GiB	GiB
+	Audio tracks: {tracks}, about {gb} GiB an hour; the buffer holds {seconds} s of audio while the disk is slow	音轨：{tracks} 条，每小时约 {gb} GiB；磁盘变慢时，缓冲区可保存 {seconds} 秒音频
+	A recording runs	录制进行时
+	The stream runs	推流进行时
+	A recording or the stream runs	录制或推流进行时
+	The disk is almost full; audio tracks stop before the recording or the stream runs out of space	磁盘快满了；音频轨道会在录制或推流空间耗尽之前停止
+	This take has made as many audio track files as it can; sources added since are not recorded to their own files	本次录制已创建了所能创建的最多音频轨道文件；此后添加的来源不会录制到各自的文件
+	More sources are set to record their own track than can be recorded at once; the later ones are not recorded	设置为录制各自轨道的来源超过了可同时录制的数量；靠后的来源不会被录制
+	Audio tracks: {tracks}; {lost} s of audio lost while the disk was slow	{tracks} 条音频轨道；磁盘变慢期间丢失了 {lost} 秒音频
+	TRACKS	音轨
+	TRACKS stopped	音轨已停止
+	Audio tracks stopped early; the status message gives the reason	音频轨道提前停止；原因见状态消息
+	Record as Its Own Track	录制为单独音轨
+	Audio Tracks Status	音频轨道状态
+	Repair Audio Tracks	修复音频轨道
+@msg	Audio tracks stopped at {time}: the disk is full	音频轨道在 {time} 停止：磁盘已满
+@msg	Audio tracks stopped at {time}: the disk is almost full	音频轨道在 {time} 停止：磁盘快满了
+@msg	Audio tracks stopped at {time}: the files could not be created	音频轨道在 {time} 停止：无法创建文件
+@msg	Audio tracks stopped at {time}: the free space on the disk could not be read	音频轨道在 {time} 停止：无法读取磁盘的可用空间
+@msg	Audio tracks stopped at {time}: there is not enough memory for the write buffer	音频轨道在 {time} 停止：内存不足，无法分配写入缓冲区
+@msg	Audio tracks stopped at {time}: a file could not be written	音频轨道在 {time} 停止：无法写入文件
+@msg	Audio tracks could not start: {error}	音频轨道无法启动：{error}
+@msg	Audio tracks repaired after the app closed during a take: {folders}	应用在录制过程中关闭，已修复音频轨道：{folders}
+@msg	Audio tracks could not be repaired: {takes}	无法修复音频轨道：{takes}
+@msg	Audio tracks repaired after the app closed during a take: {folders} and {more} more	应用在录制过程中关闭，已修复音频轨道：{folders} 及另外 {more} 个
+@msg	Audio tracks could not be repaired: {takes} and {more} more	无法修复音频轨道：{takes} 及另外 {more} 个
+@msg	Audio tracks could not be repaired: {takes}. Takes repaired: {count}	无法修复音频轨道：{takes}。已修复的录制：{count}
+@msg	Audio tracks could not be repaired: {takes} and {more} more. Takes repaired: {count}	无法修复音频轨道：{takes} 及另外 {more} 个。已修复的录制：{count}

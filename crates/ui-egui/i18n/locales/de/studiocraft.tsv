@@ -419,3 +419,40 @@
 @msg	The stream stopped: {error}	Der Stream wurde abgebrochen: {error}
 @msg	ffmpeg at {path} was not found	ffmpeg unter {path} wurde nicht gefunden
 menu	Transform	Transformieren
+	Record as its own track	Als eigene Spur aufnehmen
+	Audio tracks write this source to a WAV file of its own (Settings › Output › Audio tracks)	Audiospuren schreiben diese Quelle in eine eigene WAV-Datei (Einstellungen › Ausgabe › Audiospuren)
+	Audio tracks	Audiospuren
+	Write each recorded source and the program mix to its own WAV file	Jede aufgenommene Quelle und den Programmmix in eine eigene WAV-Datei schreiben
+	Write them while	Schreiben, während
+	Include the program mix	Programmmix einschließen
+	Write buffer	Schreibpuffer
+	MiB	MiB
+	File size	Dateigröße
+	GiB	GiB
+	Audio tracks: {tracks}, about {gb} GiB an hour; the buffer holds {seconds} s of audio while the disk is slow	Audiospuren: {tracks}, etwa {gb} GiB pro Stunde; der Puffer hält {seconds} s Audio, während der Datenträger langsam ist
+	A recording runs	Eine Aufnahme läuft
+	The stream runs	Der Stream läuft
+	A recording or the stream runs	Eine Aufnahme oder der Stream läuft
+	The disk is almost full; audio tracks stop before the recording or the stream runs out of space	Der Datenträger ist fast voll; die Audiospuren stoppen, bevor der Aufnahme oder dem Stream der Platz ausgeht
+	This take has made as many audio track files as it can; sources added since are not recorded to their own files	Diese Aufnahme hat so viele Audiospur-Dateien angelegt, wie sie kann; seitdem hinzugefügte Quellen werden nicht in eigene Dateien aufgenommen
+	More sources are set to record their own track than can be recorded at once; the later ones are not recorded	Mehr Quellen sollen eine eigene Spur aufnehmen, als gleichzeitig möglich ist; die späteren werden nicht aufgenommen
+	Audio tracks: {tracks}; {lost} s of audio lost while the disk was slow	Audiospuren: {tracks}; {lost} s Audio verloren, während der Datenträger langsam war
+	TRACKS	SPUREN
+	TRACKS stopped	SPUREN gestoppt
+	Audio tracks stopped early; the status message gives the reason	Die Audiospuren wurden vorzeitig gestoppt; die Statusmeldung nennt den Grund
+	Record as Its Own Track	Als eigene Spur aufnehmen
+	Audio Tracks Status	Status der Audiospuren
+	Repair Audio Tracks	Audiospuren reparieren
+@msg	Audio tracks stopped at {time}: the disk is full	Audiospuren bei {time} gestoppt: Der Datenträger ist voll
+@msg	Audio tracks stopped at {time}: the disk is almost full	Audiospuren bei {time} gestoppt: Der Datenträger ist fast voll
+@msg	Audio tracks stopped at {time}: the files could not be created	Audiospuren bei {time} gestoppt: Die Dateien konnten nicht erstellt werden
+@msg	Audio tracks stopped at {time}: the free space on the disk could not be read	Audiospuren bei {time} gestoppt: Der freie Speicherplatz auf dem Datenträger konnte nicht gelesen werden
+@msg	Audio tracks stopped at {time}: there is not enough memory for the write buffer	Audiospuren bei {time} gestoppt: Für den Schreibpuffer ist nicht genug Arbeitsspeicher frei
+@msg	Audio tracks stopped at {time}: a file could not be written	Audiospuren bei {time} gestoppt: Eine Datei konnte nicht geschrieben werden
+@msg	Audio tracks could not start: {error}	Audiospuren konnten nicht starten: {error}
+@msg	Audio tracks repaired after the app closed during a take: {folders}	Audiospuren repariert, nachdem die App während einer Aufnahme geschlossen wurde: {folders}
+@msg	Audio tracks could not be repaired: {takes}	Audiospuren konnten nicht repariert werden: {takes}
+@msg	Audio tracks repaired after the app closed during a take: {folders} and {more} more	Audiospuren repariert, nachdem die App während einer Aufnahme geschlossen wurde: {folders} und {more} weitere
+@msg	Audio tracks could not be repaired: {takes} and {more} more	Audiospuren konnten nicht repariert werden: {takes} und {more} weitere
+@msg	Audio tracks could not be repaired: {takes}. Takes repaired: {count}	Audiospuren konnten nicht repariert werden: {takes}. Reparierte Aufnahmen: {count}
+@msg	Audio tracks could not be repaired: {takes} and {more} more. Takes repaired: {count}	Audiospuren konnten nicht repariert werden: {takes} und {more} weitere. Reparierte Aufnahmen: {count}

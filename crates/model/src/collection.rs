@@ -71,6 +71,10 @@ pub struct AudioState {
     pub sync_offset_ms: u32,
     /// Whether the audio plays on the monitoring device.
     pub monitor: MonitorMode,
+    /// Whether audio tracks record the source to a file of its own: `None` (the default) records
+    /// it when its monitoring setting sends it to the program mix, so a monitor-only source is
+    /// left out until it is set to `Some(true)`.
+    pub record_track: Option<bool>,
 }
 
 /// Longest audio sync offset accepted, in milliseconds.
@@ -78,7 +82,14 @@ pub const MAX_SYNC_OFFSET_MS: u32 = 5_000;
 
 impl Default for AudioState {
     fn default() -> Self {
-        Self { gain: 1.0, muted: false, sync_offset_ms: 0, monitor: MonitorMode::Off }
+        Self { gain: 1.0, muted: false, sync_offset_ms: 0, monitor: MonitorMode::Off, record_track: None }
+    }
+}
+
+impl AudioState {
+    /// Whether audio tracks record the source to its own file.
+    pub fn records_track(&self) -> bool {
+        self.record_track.unwrap_or(self.monitor.in_program())
     }
 }
 
