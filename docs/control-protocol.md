@@ -67,7 +67,10 @@ repairs the takes in it that ended without finishing their files, on a backgroun
 returns `{"started": true, "folder"}` at once. When the repair ends, `last_repair` holds
 `{"repaired": [{"folder", "files": [{"file", "seconds"}]}], "failed": [{"folder", "error"}]}`,
 where `failed` lists each take that could not be repaired, such as one whose journal does not read.
-An empty `folder`, one that does not exist and a fifth repair while four run are errors. A take that is still being written, or that another repair holds, is left unchanged.
+`folder` must be the recording folder or a folder inside it, compared with the links of both
+followed, and the repair reads the folder at that resolved path. An empty `folder`, one that does
+not exist, one outside the recording folder, a recording folder that does not exist and a fifth
+repair while four run are errors. A take that is still being written, or that another repair holds, is left unchanged.
 
 `dock.layout_save` takes `{"name"}` and saves every dock setting under that name, replacing a
 layout whose name differs only in case; it returns `{"saved", "replaced"}`. Without `name` it

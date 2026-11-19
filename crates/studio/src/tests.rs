@@ -1059,4 +1059,37 @@ mod audio_tracks {
         assert_eq!(s.state_json()["audio_tracks"]["repairing"], json!(false), "and starts no repair");
         let _ = std::fs::remove_dir_all(&dir);
     }
+
+    #[test]
+    fn a_repair_reads_only_folders_inside_the_recording_folder() {
+        let (mut s, dir) = studio("repair-roots", false);
+        let take = dir.join("Show Audio").join("Audio Files");
+        std::fs::create_dir_all(&take).unwrap();
+        // A sibling whose name starts with the recording folder's is outside it.
+        let sibling = std::path::PathBuf::from(format!("{}-other", dir.display()));
+        std::fs::create_dir_all(&sibling).unwrap();
+        #[cfg_attr(not(unix), allow(unused_mut))]
+        let mut outside = vec![sibling.clone(), dir.join("Show Audio").join("..").join("..")];
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(&sibling, dir.join("link")).unwrap();
+            outside.push(dir.join("link"));
+        }
+        for folder in &outside {
+            let r = s.run("audio_tracks.repair", &json!({"folder": folder.to_string_lossy()}));
+            let Err(e) = r else { panic!("{} was repaired", folder.display()) };
+            assert!(e.to_string().contains("not inside the recording folder"), "{}: {e}", folder.display());
+            assert_eq!(s.state_json()["audio_tracks"]["repairing"], json!(false), "{} started a repair", folder.display());
+        }
+        for folder in [dir.clone(), take, dir.join("Show Audio").join("..")] {
+            let (v, _) = s.run("audio_tracks.repair", &json!({"folder": folder.to_string_lossy()})).unwrap();
+            assert_eq!(v["started"], json!(true), "{}", folder.display());
+            assert_eq!(s.audio_tracks_repair_result(), Some(json!({"repaired": [], "failed": []})));
+        }
+        // Without the recording folder nothing is repaired.
+        let _ = std::fs::remove_dir_all(&dir);
+        let r = s.run("audio_tracks.repair", &json!({"folder": sibling.to_string_lossy()}));
+        assert!(r.is_err_and(|e| e.to_string().contains("recording folder")));
+        let _ = std::fs::remove_dir_all(&sibling);
+    }
 }
