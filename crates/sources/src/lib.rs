@@ -24,13 +24,14 @@ mod image;
 mod media;
 mod text;
 
+use std::collections::VecDeque;
 use std::sync::{Arc, RwLock};
 
 use studiocraft_media::Tick;
 use studiocraft_media::audio::{BLOCK_FRAMES, PooledBlock, Reblocker, SAMPLE_RATE};
 use studiocraft_media::clock::MasterClock;
 use studiocraft_model::Settings;
-use studiocraft_plugin::{AudioOut, PluginError, Registry};
+use studiocraft_plugin::{AUDIO_QUEUE_BLOCKS, AudioOut, PluginError, Registry};
 
 pub use audio::{AudioInput, AudioOutput};
 pub use camera::CameraSource;
@@ -75,30 +76,33 @@ pub(crate) fn uint(s: &Settings, key: &str, default: u32, min: u32, max: u32) ->
     s.i64(key).map_or(default, |v| u32::try_from(v.clamp(i64::from(min), i64::from(max))).unwrap_or(default))
 }
 
-/// Blocks one device callback usually completes; more grow the buffer once.
-const FEED_BLOCKS: usize = 8;
-
 /// Device samples to pipeline blocks. The last block a callback completes is stamped with the
 /// clock, and each earlier one a block's duration before the one after it.
 pub(crate) struct AudioFeed {
     reblocker: Reblocker,
     audio: Arc<AudioOut>,
     clock: MasterClock,
-    pending: Vec<PooledBlock>,
+    /// The blocks of one callback, at most [`AUDIO_QUEUE_BLOCKS`]: the newest ones.
+    pending: VecDeque<PooledBlock>,
 }
 
 impl AudioFeed {
     pub(crate) fn new(rate: u32, channels: usize, audio: Arc<AudioOut>, clock: MasterClock) -> Self {
-        Self { reblocker: Reblocker::new(rate, channels), audio, clock, pending: Vec::with_capacity(FEED_BLOCKS) }
+        Self { reblocker: Reblocker::new(rate, channels), audio, clock, pending: VecDeque::with_capacity(AUDIO_QUEUE_BLOCKS) }
     }
 
     pub(crate) fn push(&mut self, samples: &[f32]) {
         let (audio, pending) = (&self.audio, &mut self.pending);
         self.reblocker.push(samples, |b| {
+            // The queue keeps only its newest blocks, so the older blocks of a callback that
+            // completes more are dropped here, and the block goes back to the pool.
+            if pending.len() >= AUDIO_QUEUE_BLOCKS {
+                pending.pop_front();
+            }
             let mut block = audio.block();
             block.samples.clear();
             block.samples.extend_from_slice(b);
-            pending.push(block);
+            pending.push_back(block);
         });
         let now = self.clock.now();
         let step = Tick::from_units(BLOCK_FRAMES as i64, i64::from(SAMPLE_RATE));
@@ -141,6 +145,25 @@ mod tests {
         assert_eq!(pts[1] - pts[0], step);
         assert_eq!(pts[2] - pts[1], step);
         assert!(pts[2] >= before && pts[2] <= after, "the last block is stamped when the callback ends");
+    }
+
+    #[test]
+    fn a_callback_holds_at_most_a_queue_of_blocks() {
+        let audio = Arc::new(AudioOut::default());
+        let mut feed = AudioFeed::new(SAMPLE_RATE, 2, Arc::clone(&audio), MasterClock::new());
+        let capacity = feed.pending.capacity();
+        // Ten queues' worth of blocks in one callback, each block's samples set to its number over
+        // 1000, within the range the reblocker keeps.
+        let blocks = AUDIO_QUEUE_BLOCKS * 10;
+        let level = |n: usize| n as f32 / 1000.0;
+        let samples: Vec<f32> = (0..blocks * BLOCK_FRAMES * 2).map(|i| level(i / (BLOCK_FRAMES * 2))).collect();
+        feed.push(&samples);
+        // One frame more completes the last block: the reblocker holds one back.
+        feed.push(&[0.0; 2]);
+        assert_eq!(feed.pending.capacity(), capacity, "the callback's blocks are not all held at once");
+        let first: Vec<f32> = std::iter::from_fn(|| audio.pop()).map(|b| b.samples[0]).collect();
+        let newest = (blocks - AUDIO_QUEUE_BLOCKS..blocks).map(level).collect::<Vec<_>>();
+        assert_eq!(first, newest, "the newest blocks are kept, in order");
     }
 
     #[test]

@@ -22,7 +22,7 @@ release carries these Linux signatures only when it was signed with the release 
 release notes show how to verify the downloads against `SHA256SUMS.txt` and `SHA3-512SUMS.txt`.
 
 No package includes `ffmpeg`. You need it for streaming, for some kinds of recording, as
-[First stream](#first-stream) describes, and for Media file sources. The `.deb` and `.rpm` packages list `ffmpeg` as a
+[First stream](#first-stream) describes, and for Media file sources that play files other than Ogg Vorbis at 8 to 192 kHz. The `.deb` and `.rpm` packages list `ffmpeg` as a
 recommended package, so `apt` and `dnf` usually install it with them. The Flatpak runtime has no
 `ffmpeg`, and the Flatpak sandbox cannot run an `ffmpeg` installed on the system.
 

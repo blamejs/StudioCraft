@@ -439,6 +439,11 @@ Release file names and package ids are in [docs/releasing.md](releasing.md#file-
   `craft-flv` writes and reads the FLV tags and AMF0 values that RTMP carries, `craft-packet`
   fans encoded packets out to several destinations, and `craft-rtmp` publishes a stream to an RTMP
   or RTMPS server. No output uses them yet.
+- **Media files.** The media file source plays an Ogg file that holds one Vorbis stream at 8 to
+  192 kHz and nothing else on a thread of its own, with the `craft-media` Ogg reader and the
+  `craft-audio` Vorbis decoder. The thread holds the file's packet index and one packet at a time,
+  and waits for each packet's time before publishing it. Every other file, chained Ogg files and
+  Vorbis streams at other rates included, plays through two ffmpeg processes.
 
 ## Dependency licenses
 

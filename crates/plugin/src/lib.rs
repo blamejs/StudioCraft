@@ -29,7 +29,7 @@ pub use filter::{
 };
 pub use output::{Output, OutputInstance, OutputJob, OutputStatus, ReplayClip, VideoFormat};
 pub use registry::Registry;
-pub use source::{AudioOut, Pace, Source, SourceCaps, SourceInstance, SourceIo, VideoContent, VideoOut};
+pub use source::{AUDIO_QUEUE_BLOCKS, AudioOut, Pace, Source, SourceCaps, SourceInstance, SourceIo, VideoContent, VideoOut};
 pub use studiocraft_model::{Settings, SettingsSchema};
 pub use transition::{Transition, easing_field, easing_from};
 
