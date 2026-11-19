@@ -144,7 +144,6 @@
 	Hotkeys	מקשי קיצור
 	Image	תמונה
 	Image mask	מסכת תמונה
-	Include child processes	הכללת תהליכי משנה
 	Import…	ייבוא…
 	Key color	צבע המפתח
 	Key color spill reduction	הפחתת זליגת צבע המפתח
@@ -393,6 +392,10 @@
 	{encoder} (not in this ffmpeg)	{encoder} (לא קיים ב־ffmpeg זה)
 	{program} did not report its version	{program} לא דיווח על הגרסה שלו
 @msg	A plug-in could not be loaded: {error}	לא ניתן לטעון תוסף: {error}
+@msg	The application's audio could not be captured. The capture is opened again shortly.	לא ניתן ללכוד את השמע של היישום. הלכידה תיפתח שוב בקרוב.
+@msg	Capturing one application's audio is not available on this system yet.	לכידת השמע של יישום יחיד עדיין אינה זמינה במערכת זו.
+@msg	Capturing one application needs Windows 11 or Windows Server 2022. Audio output capture still records everything the computer plays.	לכידת יישום יחיד דורשת Windows 11 או Windows Server 2022. "לכידת פלט שמע" עדיין מקליטה את כל מה שהמחשב מנגן.
+@msg	32 applications are already being captured	כבר נלכדים 32 יישומים
 @msg	Audio monitoring could not start: {error}	לא ניתן להתחיל את ניטור השמע: {error}
 @msg	Audio monitoring stopped: {error}	ניטור השמע נעצר: {error}
 @msg	Could not check for updates: {error}	לא ניתן לבדוק עדכונים: {error}

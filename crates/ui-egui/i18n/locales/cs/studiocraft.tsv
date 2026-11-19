@@ -141,7 +141,6 @@
 	Hotkeys	Klávesové zkratky
 	Image	Obrázek
 	Image mask	Obrazová maska
-	Include child processes	Zahrnout podřízené procesy
 	Import…	Importovat…
 	Key color	Barva klíče
 	Key color spill reduction	Potlačení zbytků klíčové barvy
@@ -403,6 +402,10 @@
 	Unlock	Odemknout
 	Unmute	Zrušit ztlumení
 @msg	A plug-in could not be loaded: {error}	Zásuvný modul nelze načíst: {error}
+@msg	The application's audio could not be captured. The capture is opened again shortly.	Zvuk aplikace nelze zachytit. Zachytávání se brzy otevře znovu.
+@msg	Capturing one application's audio is not available on this system yet.	Zachytávání zvuku jedné aplikace zatím není v tomto systému k dispozici.
+@msg	Capturing one application needs Windows 11 or Windows Server 2022. Audio output capture still records everything the computer plays.	Zachytávání jedné aplikace vyžaduje Windows 11 nebo Windows Server 2022. Zachytávání zvukového výstupu dál nahrává vše, co počítač přehrává.
+@msg	32 applications are already being captured	Již se zachytává 32 aplikací
 @msg	Drawing again on {adapter}	Znovu se kreslí pomocí {adapter}
 @msg	No graphics device could be opened again: {error}	Grafické zařízení nelze znovu otevřít: {error}
 @msg	No graphics hardware can be used; drawing in software, which is slower	Grafický hardware nelze použít; kreslí se softwarově, což je pomalejší

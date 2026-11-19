@@ -105,8 +105,8 @@ anything else holds a `DiscoveryUse`, and stops it when the last one is dropped.
 thread lists the audio sessions of every active playback device every second, and at once when a
 device is added, removed or changed or a session changes state. It reads process names and parents
 only when the set of session processes changes. A list that differs from the one before is
-published as an `Arc<AppList>` with a generation number, so a reader compares one atomic and clones
-the `Arc` only when the list changed. While `set_visible(true)` is in force the thread reads each
+published as an `Arc<AppList>` with a generation number through an `ArcSwap`, so a reader compares
+one atomic and loads the list, without a lock, only when it changed. While `set_visible(true)` is in force the thread reads each
 application's session meters about 30 times a second into 64 rows of atomics, which readers read
 without a lock. Settings and commands never list applications themselves: a source's schema reads
 the newest list, and `app_audio.list` scans once on a short-lived thread when no discovery thread

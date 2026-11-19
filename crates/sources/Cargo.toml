@@ -18,6 +18,7 @@ craft-audio-dsp.workspace = true
 craft-app-audio.workspace = true
 ab_glyph.workspace = true
 serde_json.workspace = true
+log.workspace = true
 
 [dev-dependencies]
 craft-color.workspace = true

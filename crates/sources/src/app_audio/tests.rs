@@ -65,7 +65,7 @@ fn key() -> AppKey {
 
 #[test]
 fn without_an_application_the_source_stays_unbound() {
-    let mut m: Machine<Rc<Stub>> = Machine::new(None, true);
+    let mut m: Machine<Rc<Stub>> = Machine::new(None);
     let mut w = World { pid: Some(5), ..World::default() };
     assert_eq!(m.step(&mut w, Instant::now(), 0), Ok(()));
     assert_eq!(m.state, State::Unbound);
@@ -74,26 +74,26 @@ fn without_an_application_the_source_stays_unbound() {
 
 #[test]
 fn a_chosen_application_on_a_system_without_support_says_why() {
-    let mut m = Machine::new(Some(key()), true);
+    let mut m = Machine::new(Some(key()));
     let mut w = World { unsupported: Some("needs a newer system".into()), pid: Some(5), ..World::default() };
     assert_eq!(m.step(&mut w, Instant::now(), 0), Err("needs a newer system".into()));
     assert_eq!(m.state, State::Waiting);
     assert!(w.opened.is_empty());
     // Without a chosen application there is nothing to report.
-    let mut none: Machine<Rc<Stub>> = Machine::new(None, true);
+    let mut none: Machine<Rc<Stub>> = Machine::new(None);
     assert_eq!(none.step(&mut w, Instant::now(), 0), Ok(()));
 }
 
 #[test]
 fn a_chosen_application_that_is_not_running_waits_silently() {
-    let mut m = Machine::new(Some(key()), true);
+    let mut m = Machine::new(Some(key()));
     let mut w = World::default();
     assert_eq!(m.step(&mut w, Instant::now(), 0), Ok(()));
     assert_eq!(m.state, State::Waiting);
     w.pid = Some(5);
     m.step(&mut w, Instant::now(), 0).unwrap();
     assert_eq!(m.state, State::Binding);
-    assert_eq!(w.opened[0].target, Target { pid: 5, include_children: true });
+    assert_eq!(w.opened[0].target, Target { pid: 5 });
     w.opened[0].state.set(CaptureState::Running);
     m.step(&mut w, Instant::now(), 0).unwrap();
     assert_eq!(m.state, State::Capturing);
@@ -101,7 +101,7 @@ fn a_chosen_application_that_is_not_running_waits_silently() {
 
 #[test]
 fn a_restarted_application_is_captured_again_under_its_new_process() {
-    let mut m = Machine::new(Some(key()), false);
+    let mut m = Machine::new(Some(key()));
     let mut w = World { pid: Some(5), ..World::default() };
     m.step(&mut w, Instant::now(), 0).unwrap();
     w.opened[0].state.set(CaptureState::Running);
@@ -115,7 +115,7 @@ fn a_restarted_application_is_captured_again_under_its_new_process() {
     w.pid = Some(9);
     m.step(&mut w, Instant::now(), 0).unwrap();
     assert_eq!(w.opened.len(), 2);
-    assert_eq!(w.opened[1].target, Target { pid: 9, include_children: false });
+    assert_eq!(w.opened[1].target, Target { pid: 9 });
     // A new process while the old capture still runs also rebinds.
     w.opened[1].state.set(CaptureState::Running);
     w.pid = Some(11);
@@ -126,7 +126,7 @@ fn a_restarted_application_is_captured_again_under_its_new_process() {
 
 #[test]
 fn a_failed_capture_backs_off_before_it_opens_again() {
-    let mut m = Machine::new(Some(key()), true);
+    let mut m = Machine::new(Some(key()));
     let mut w = World { pid: Some(5), refuse: Some(AppAudioError::Failed("no audio".into())), ..World::default() };
     let t0 = Instant::now();
     assert_eq!(m.step(&mut w, t0, 0), Err("no audio".into()));
@@ -151,7 +151,7 @@ fn a_failed_capture_backs_off_before_it_opens_again() {
 
 #[test]
 fn repeated_failures_wait_longer_each_time() {
-    let mut m = Machine::new(Some(key()), true);
+    let mut m = Machine::new(Some(key()));
     let mut w = World { pid: Some(5), ..World::default() };
     let mut t = Instant::now();
     let mut waits = Vec::new();
@@ -167,7 +167,7 @@ fn repeated_failures_wait_longer_each_time() {
 
 #[test]
 fn a_stalled_capture_is_dropped_and_opened_again() {
-    let mut m = Machine::new(Some(key()), true);
+    let mut m = Machine::new(Some(key()));
     let mut w = World { pid: Some(5), ..World::default() };
     let t0 = Instant::now();
     m.step(&mut w, t0, 0).unwrap();
@@ -183,17 +183,17 @@ fn a_stalled_capture_is_dropped_and_opened_again() {
 
 #[test]
 fn a_new_choice_starts_over() {
-    let mut m = Machine::new(Some(key()), true);
+    let mut m = Machine::new(Some(key()));
     let mut w = World { pid: Some(5), refuse: Some(AppAudioError::Failed("x".into())), ..World::default() };
     let t0 = Instant::now();
     let _ = m.step(&mut w, t0, 0);
-    m.rebind(Some(AppKey::from_exe("other.exe").unwrap()), true);
+    assert!(m.rebind(Some(AppKey::from_exe("other.exe").unwrap())));
     assert_eq!(m.state, State::Unbound);
     m.step(&mut w, t0, 0).unwrap();
     assert_eq!(w.opened.len(), 1, "the new choice opens at once, without the old wait");
-    m.rebind(Some(AppKey::from_exe("other.exe").unwrap()), true);
+    assert!(!m.rebind(Some(AppKey::from_exe("other.exe").unwrap())));
     assert!(m.handle.is_some(), "the same choice keeps its capture");
-    m.rebind(Some(AppKey::from_exe("other.exe").unwrap()), false);
+    assert!(m.rebind(None));
     assert!(m.handle.is_none());
 }
 
@@ -283,6 +283,70 @@ fn the_schema_lists_applications_before_any_source_exists() {
 }
 
 #[test]
+fn the_window_is_given_a_fixed_message_for_a_failed_capture() {
+    let fake = FakeBackend::new();
+    fake.set_apps(vec![app("player.exe", 40, true)]);
+    fake.set_behavior(40, Behavior::Fail("the device answered 0x88890004".into()));
+    let discovery = Discovery::new(Arc::new(fake.clone()));
+    let usage = discovery.acquire();
+    discovery.wait_newer(0, Duration::from_secs(10));
+    let io = SourceIo::new(MasterClock::new());
+    let mut settings = Settings::new();
+    settings.set("app", "player.exe");
+    let mut instance = super::Instance::new(discovery.clone(), &settings);
+    instance.check(&io).unwrap();
+    let handle = instance.machine.handle.as_ref().expect("the capture opened");
+    assert_eq!(handle.wait_ended(Duration::from_secs(10)), CaptureState::Failed);
+    let err = instance.check(&io).unwrap_err().to_string();
+    assert_eq!(err, super::CAPTURE_FAILED, "the system's text stays out of the window");
+    assert_eq!(instance.logged.as_deref(), Some("the device answered 0x88890004"), "and goes to the log");
+    // A check without an error (here: the new choice is not running) ends the failure, so the
+    // same text from a later capture is logged again.
+    let mut other = Settings::new();
+    other.set("app", "other.exe");
+    let _ = studiocraft_plugin::SourceInstance::update(&mut instance, &other, &io);
+    assert_eq!(instance.logged, None);
+    // The capture limit and a system without support keep their own texts.
+    assert_eq!(instance.shown_error(AppAudioError::Limit.to_string()), AppAudioError::Limit.to_string());
+    instance.unsupported = Some("needs a newer system".into());
+    assert_eq!(instance.shown_error("needs a newer system".into()), "needs a newer system");
+    drop(instance);
+    drop(usage);
+}
+
+#[test]
+fn the_only_setting_is_the_application() {
+    // Process loopback records a process tree or everything except it, so the source offers no
+    // switch that would turn the capture into the second.
+    let schema = super::schema(&craft_app_audio::AppList::default(), None);
+    let keys: Vec<&str> = schema.fields.iter().map(|f| f.key.as_str()).collect();
+    assert_eq!(keys, ["app"]);
+}
+
+#[test]
+fn every_error_the_window_shows_has_a_message_row_in_every_catalog() {
+    let shown = [
+        super::CAPTURE_FAILED.to_string(),
+        craft_app_audio::NOT_AVAILABLE.to_string(),
+        craft_app_audio::NEEDS_NEWER_WINDOWS.to_string(),
+        AppAudioError::Limit.to_string(),
+    ];
+    let locales = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../ui-egui/i18n/locales");
+    let mut catalogs = 0;
+    for entry in std::fs::read_dir(&locales).unwrap() {
+        let path = entry.unwrap().path().join("studiocraft.tsv");
+        let text = std::fs::read_to_string(&path).unwrap();
+        for msg in &shown {
+            let row =
+                text.lines().find_map(|l| l.strip_prefix("@msg\t").and_then(|r| r.strip_prefix(msg.as_str())).and_then(|r| r.strip_prefix('\t')));
+            assert!(row.is_some_and(|t| !t.trim().is_empty()), "{} has no row for {msg:?}", path.display());
+        }
+        catalogs += 1;
+    }
+    assert_eq!(catalogs, 19);
+}
+
+#[test]
 fn a_capture_dropped_after_the_application_quits_closes_its_gate() {
     let fake = FakeBackend::new();
     fake.set_apps(vec![app("player.exe", 40, true)]);
@@ -329,7 +393,7 @@ fn a_source_captures_its_application_into_the_mixer() {
         assert!(Instant::now() < deadline);
         std::thread::yield_now();
     }
-    assert_eq!(fake.opened(), [Target { pid: 40, include_children: true }]);
+    assert_eq!(fake.opened(), [Target { pid: 40 }]);
     // 480 frames do not fill a 1024-frame block; wait for later packets.
     let block = loop {
         if let Some(b) = audio.pop() {

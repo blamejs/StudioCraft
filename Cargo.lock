@@ -1334,6 +1334,7 @@ dependencies = [
 name = "craft-app-audio"
 version = "0.1.0-alpha.1"
 dependencies = [
+ "arc-swap",
  "serde",
  "serde_json",
  "sysinfo",
@@ -5975,6 +5976,7 @@ dependencies = [
  "criterion",
  "image",
  "jpeg-encoder",
+ "log",
  "serde_json",
  "stats_alloc",
  "studiocraft-media",

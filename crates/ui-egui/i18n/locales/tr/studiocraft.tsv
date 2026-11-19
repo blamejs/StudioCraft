@@ -141,7 +141,6 @@
 	Hotkeys	Kısayol Tuşları
 	Image	Resim
 	Image mask	Resim maskesi
-	Include child processes	Alt süreçleri dahil et
 	Import…	İçe Aktar…
 	Key color	Anahtar rengi
 	Key color spill reduction	Anahtar renk sızıntısını azaltma
@@ -404,6 +403,10 @@
 	Unlock	Kilidi Aç
 	Unmute	Sesi aç
 @msg	A plug-in could not be loaded: {error}	Bir eklenti yüklenemedi: {error}
+@msg	The application's audio could not be captured. The capture is opened again shortly.	Uygulamanın sesi yakalanamadı. Yakalama birazdan yeniden açılacak.
+@msg	Capturing one application's audio is not available on this system yet.	Tek bir uygulamanın sesini yakalama bu sistemde henüz kullanılamıyor.
+@msg	Capturing one application needs Windows 11 or Windows Server 2022. Audio output capture still records everything the computer plays.	Tek bir uygulamayı yakalamak için Windows 11 veya Windows Server 2022 gerekir. Ses çıkışı yakalama, bilgisayarın çaldığı her şeyi kaydetmeye devam eder.
+@msg	32 applications are already being captured	Zaten 32 uygulama yakalanıyor
 @msg	Drawing again on {adapter}	Yeniden {adapter} ile çiziliyor
 @msg	No graphics device could be opened again: {error}	Hiçbir grafik aygıtı yeniden açılamadı: {error}
 @msg	No graphics hardware can be used; drawing in software, which is slower	Grafik donanımı kullanılamıyor; yazılımla çiziliyor, bu daha yavaştır

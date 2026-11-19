@@ -137,7 +137,6 @@
 	Hotkeys	Sneltoetsen
 	Image	Afbeelding
 	Image mask	Afbeeldingsmasker
-	Include child processes	Onderliggende processen opnemen
 	Import…	Importeren…
 	Key color	Keykleur
 	Key color spill reduction	Overloopvermindering van de keykleur
@@ -393,6 +392,10 @@
 	Unlock	Ontgrendelen
 	Unmute	Dempen opheffen
 @msg	A plug-in could not be loaded: {error}	Een plug-in kon niet worden geladen: {error}
+@msg	The application's audio could not be captured. The capture is opened again shortly.	Het geluid van de toepassing kon niet worden opgenomen. De opname wordt zo opnieuw geopend.
+@msg	Capturing one application's audio is not available on this system yet.	Het geluid van één toepassing opnemen is op dit systeem nog niet beschikbaar.
+@msg	Capturing one application needs Windows 11 or Windows Server 2022. Audio output capture still records everything the computer plays.	Eén toepassing opnemen vereist Windows 11 of Windows Server 2022. Audio-uitvoer opnemen neemt nog steeds alles op wat de computer afspeelt.
+@msg	32 applications are already being captured	Er worden al 32 toepassingen opgenomen
 @msg	Drawing again on {adapter}	Tekent weer met {adapter}
 @msg	No graphics device could be opened again: {error}	Er kon geen grafisch apparaat opnieuw worden geopend: {error}
 @msg	No graphics hardware can be used; drawing in software, which is slower	Er is geen bruikbare grafische hardware; er wordt in software getekend, wat langzamer is

@@ -141,7 +141,6 @@
 	Hotkeys	Snabbtangenter
 	Image	Bild
 	Image mask	Bildmask
-	Include child processes	Ta med underprocesser
 	Import…	Importera…
 	Key color	Nyckelfärg
 	Key color spill reduction	Minskning av färgspill
@@ -403,6 +402,10 @@
 	Unlock	Lås upp
 	Unmute	Ljud på
 @msg	A plug-in could not be loaded: {error}	Ett insticksprogram kunde inte läsas in: {error}
+@msg	The application's audio could not be captured. The capture is opened again shortly.	Programmets ljud kunde inte spelas in. Inspelningen öppnas igen strax.
+@msg	Capturing one application's audio is not available on this system yet.	Att spela in ljudet från ett enskilt program är ännu inte tillgängligt på det här systemet.
+@msg	Capturing one application needs Windows 11 or Windows Server 2022. Audio output capture still records everything the computer plays.	Att spela in ett enskilt program kräver Windows 11 eller Windows Server 2022. Ljud från ljudutgång spelar fortfarande in allt som datorn spelar upp.
+@msg	32 applications are already being captured	32 program spelas redan in
 @msg	Drawing again on {adapter}	Ritar igen med {adapter}
 @msg	No graphics device could be opened again: {error}	Ingen grafikenhet kunde öppnas igen: {error}
 @msg	No graphics hardware can be used; drawing in software, which is slower	Ingen grafikhårdvara kan användas; ritar med programvara, vilket är långsammare

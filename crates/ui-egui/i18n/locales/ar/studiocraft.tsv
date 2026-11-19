@@ -144,7 +144,6 @@
 	Hotkeys	مفاتيح الاختصار
 	Image	صورة
 	Image mask	قناع صورة
-	Include child processes	تضمين العمليات الفرعية
 	Import…	استيراد…
 	Key color	لون المفتاح
 	Key color spill reduction	تقليل انتشار لون المفتاح
@@ -400,6 +399,10 @@
 	{program} did not report its version	لم يُبلغ {program} عن إصداره
 	{status} · {mb} MB	{status} · {mb} ميغابايت
 @msg	A plug-in could not be loaded: {error}	تعذّر تحميل مكوّن إضافي: {error}
+@msg	The application's audio could not be captured. The capture is opened again shortly.	تعذّر التقاط صوت التطبيق. سيُعاد فتح الالتقاط بعد قليل.
+@msg	Capturing one application's audio is not available on this system yet.	التقاط صوت تطبيق واحد غير متاح على هذا النظام بعد.
+@msg	Capturing one application needs Windows 11 or Windows Server 2022. Audio output capture still records everything the computer plays.	يتطلب التقاط تطبيق واحد Windows 11 أو Windows Server 2022. لا يزال «التقاط مخرج الصوت» يسجّل كل ما يشغّله الحاسوب.
+@msg	32 applications are already being captured	يجري بالفعل التقاط 32 تطبيقًا
 @msg	Audio monitoring could not start: {error}	تعذّر بدء مراقبة الصوت: {error}
 @msg	Audio monitoring stopped: {error}	توقفت مراقبة الصوت: {error}
 @msg	Could not check for updates: {error}	تعذّر التحقق من التحديثات: {error}

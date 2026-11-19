@@ -28,6 +28,11 @@ use crate::{AudioFeed, FeedStats};
 
 /// How often the source's thread checks its capture and the application list.
 const CHECK: Duration = Duration::from_millis(250);
+/// The source's error after a capture failed or stopped responding. The window shows each
+/// source error through its `@msg` row; the system's own text goes to the log.
+pub(crate) const CAPTURE_FAILED: &str = "The application's audio could not be captured. The capture is opened again shortly.";
+/// The source's error when the system reports no reason of its own.
+const UNAVAILABLE: &str = craft_app_audio::NOT_AVAILABLE;
 /// Lets one capture's callback reach the mixer until the source closes it. The callback passes
 /// with one compare-and-swap and no lock; closing waits only while a callback is inside. The
 /// callback turns samples into blocks and queues them without blocking, so that wait lasts one
@@ -113,7 +118,6 @@ pub(crate) trait Env {
 /// The source's state machine, with no threads of its own, so tests drive it step by step.
 pub(crate) struct Machine<H> {
     pub(crate) key: Option<AppKey>,
-    pub(crate) include_children: bool,
     pub(crate) state: State,
     pub(crate) handle: Option<H>,
     backoff: Backoff,
@@ -122,18 +126,16 @@ pub(crate) struct Machine<H> {
 }
 
 impl<H: Handle> Machine<H> {
-    pub(crate) fn new(key: Option<AppKey>, include_children: bool) -> Self {
-        Machine { key, include_children, state: State::Unbound, handle: None, backoff: Backoff::default(), error: None }
+    pub(crate) fn new(key: Option<AppKey>) -> Self {
+        Machine { key, state: State::Unbound, handle: None, backoff: Backoff::default(), error: None }
     }
 
-    /// Choose another application, or another child-process setting: the capture starts over.
-    /// Returns whether anything changed.
-    pub(crate) fn rebind(&mut self, key: Option<AppKey>, include_children: bool) -> bool {
-        if key == self.key && include_children == self.include_children {
+    /// Choose another application: the capture starts over. Returns whether anything changed.
+    pub(crate) fn rebind(&mut self, key: Option<AppKey>) -> bool {
+        if key == self.key {
             return false;
         }
         self.key = key;
-        self.include_children = include_children;
         self.handle = None;
         self.backoff.reset();
         self.error = None;
@@ -208,7 +210,7 @@ impl<H: Handle> Machine<H> {
         let Some(pid) = found else {
             return self.settle(State::Waiting);
         };
-        match env.open(&key, Target { pid, include_children: self.include_children }) {
+        match env.open(&key, Target { pid }) {
             Ok(h) => {
                 self.handle = Some(h);
                 self.state = State::Binding;
@@ -257,10 +259,6 @@ fn key_of(s: &Settings) -> Option<AppKey> {
     s.str("app").and_then(AppKey::decode)
 }
 
-fn children_of(s: &Settings) -> bool {
-    s.bool("include_children").unwrap_or(true)
-}
-
 fn schema(list: &AppList, saved: Option<&Settings>) -> SettingsSchema {
     let mut options = vec![ChoiceOption::new("", "Choose an application")];
     // Programs whose files share a name show their paths, so the entries differ.
@@ -279,10 +277,7 @@ fn schema(list: &AppList, saved: Option<&Settings>) -> SettingsSchema {
         };
         options.push(ChoiceOption::new(key.encode(), shown));
     }
-    SettingsSchema::new(vec![
-        Field::new("app", "Application", FieldKind::Choice { options }, ""),
-        Field::new("include_children", "Include child processes", FieldKind::Bool, true),
-    ])
+    SettingsSchema::new(vec![Field::new("app", "Application", FieldKind::Choice { options }, "")])
 }
 
 struct Instance {
@@ -295,23 +290,30 @@ struct Instance {
     stats: Option<Arc<FeedStats>>,
     /// Open while the newest capture may hand samples to the mixer.
     gate: Option<Arc<Gate>>,
+    /// The last failure written to the log, so each one is logged once.
+    logged: Option<String>,
 }
 
 impl Instance {
     fn new(discovery: Discovery, settings: &Settings) -> Instance {
         let support = discovery.support();
-        let unsupported = (!support.supported).then(|| support.reason.unwrap_or_else(|| "capturing one application is not available here".into()));
+        let unsupported = (!support.supported).then(|| support.reason.unwrap_or_else(|| UNAVAILABLE.into()));
         let usage = discovery.acquire();
         let list = discovery.snapshot();
-        Instance {
-            discovery,
-            _use: usage,
-            unsupported,
-            list,
-            machine: Machine::new(key_of(settings), children_of(settings)),
-            stats: None,
-            gate: None,
+        Instance { discovery, _use: usage, unsupported, list, machine: Machine::new(key_of(settings)), stats: None, gate: None, logged: None }
+    }
+
+    /// The error the window shows for the machine's `why`: the system's reason it cannot capture,
+    /// the capture limit, or [`CAPTURE_FAILED`] for every other failure, whose own text is logged.
+    fn shown_error(&mut self, why: String) -> String {
+        if self.unsupported.as_deref() == Some(why.as_str()) || why == AppAudioError::Limit.to_string() {
+            return why;
         }
+        if self.logged.as_deref() != Some(why.as_str()) {
+            log::warn!("application audio capture: {why}");
+            self.logged = Some(why);
+        }
+        CAPTURE_FAILED.to_string()
     }
 
     /// A new choice: the earlier capture's samples stop reaching the mixer, and once its callback
@@ -347,7 +349,12 @@ impl Instance {
         if let (Some(h), Some(s)) = (&self.machine.handle, &self.stats) {
             h.set_feed_counters(s.dropped.load(Ordering::Relaxed), s.pool_exhausted.load(Ordering::Relaxed));
         }
-        result.map_err(PluginError::Failed)
+        if result.is_ok() {
+            // A capture that runs, or an application that is not running, ends the failure; the
+            // next one is logged even when its text is the same.
+            self.logged = None;
+        }
+        result.map_err(|why| PluginError::Failed(self.shown_error(why)))
     }
 }
 
@@ -359,7 +366,7 @@ impl SourceInstance for Instance {
         self.check(io)
     }
     fn update(&mut self, s: &Settings, io: &SourceIo) -> Result<(), PluginError> {
-        if self.machine.rebind(key_of(s), children_of(s)) {
+        if self.machine.rebind(key_of(s)) {
             self.start_over(io);
         }
         self.check(io)

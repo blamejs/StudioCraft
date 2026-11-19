@@ -42,8 +42,8 @@ show PipeWire's devices by their descriptions, with the default device first.
 
 An Application audio capture source records what one application plays, and nothing else the
 computer plays. Its Properties list the running applications that have an audio session on any
-active playback device, with the ones playing sound first. **Include child processes**, on by
-default, also captures the processes the application starts. The source names the application by
+active playback device, with the ones playing sound first. The capture also records the processes
+the application starts. The source names the application by
 its program file and folder, so it keeps capturing after the application quits and starts again,
 and after an update moves the program when no other program with that file name runs.
 Applications whose program files share a name are listed with their folders. While the
@@ -57,8 +57,8 @@ captured together.
 Capturing one application uses Windows process loopback capture
 ([`AUDIOCLIENT_PROCESS_LOOPBACK_PARAMS`](https://learn.microsoft.com/en-us/windows/win32/api/audioclientactivationparams/ns-audioclientactivationparams-audioclient_process_loopback_params)),
 which needs Windows build 20348 or later: Windows 11 or Windows Server 2022. On earlier Windows
-builds, macOS and Linux the source lists no applications and says why, and Desktop audio still
-captures everything the computer plays. The `app_audio.list` and `app_audio.status` commands
+builds, macOS and Linux the source lists no applications and says why, and Audio output capture
+still records everything the computer plays. The `app_audio.list` and `app_audio.status` commands
 report the same lists and support ([Control and automation](#control-and-automation)).
 
 ### Camera

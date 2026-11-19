@@ -37,8 +37,8 @@ together. Sessions shared by several processes and the system sounds session are
 - **Discovery.** One thread per `Discovery`, started by the first `acquire` and stopped when the
   last `DiscoveryUse` is dropped. It lists the applications every 1 s, and at once when an
   endpoint is added, removed or changed or a session changes state. Each list that differs from
-  the one before is published as an `Arc<AppList>` with a generation number: readers compare
-  `generation()`, an atomic, and take the list's lock only to clone the `Arc` when it changed.
+  the one before is published as an `Arc<AppList>` with a generation number through an `ArcSwap`:
+  readers compare `generation()`, an atomic, and load the list without a lock when it changed.
   While `set_visible(true)` is in force, and for the time given to each `read_peaks_for` call, it
   reads every application's meter about 30 times a second into the `PeakTable`. Commands reach it through a queue of 16; a full queue drops the
   command.

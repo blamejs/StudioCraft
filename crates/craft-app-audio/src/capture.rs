@@ -20,12 +20,10 @@ pub fn now_ms() -> u64 {
     u64::try_from(EPOCH.get_or_init(Instant::now).elapsed().as_millis()).unwrap_or(u64::MAX)
 }
 
-/// The process a capture records.
+/// The process a capture records, with its child processes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 pub struct Target {
     pub pid: u32,
-    /// Record the process's child processes too.
-    pub include_children: bool,
 }
 
 /// Where a capture is.

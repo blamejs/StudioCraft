@@ -146,6 +146,14 @@ pub fn system_backend() -> Arc<dyn Backend> {
     }
 }
 
+/// Why a system other than Windows does not capture one application. Interfaces show it through a
+/// translation row with this text.
+pub const NOT_AVAILABLE: &str = "Capturing one application's audio is not available on this system yet.";
+/// Why a Windows build before 20348 does not capture one application. Interfaces show it through a
+/// translation row with this text.
+pub const NEEDS_NEWER_WINDOWS: &str =
+    "Capturing one application needs Windows 11 or Windows Server 2022. Audio output capture still records everything the computer plays.";
+
 /// The backend for systems without application capture yet.
 #[cfg(not(windows))]
 struct Unsupported;
@@ -153,7 +161,7 @@ struct Unsupported;
 #[cfg(not(windows))]
 impl Backend for Unsupported {
     fn support(&self) -> Support {
-        Support::no("Capturing one application's audio is not available on this system yet.")
+        Support::no(NOT_AVAILABLE)
     }
 
     fn watch(&self, _wake: Wake) -> Result<Box<dyn Watcher>, AppAudioError> {

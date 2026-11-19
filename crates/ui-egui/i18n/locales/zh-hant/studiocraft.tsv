@@ -141,7 +141,6 @@
 	Hotkeys	快速鍵
 	Image	影像
 	Image mask	影像遮罩
-	Include child processes	包含子處理程序
 	Import…	匯入…
 	Key color	去背顏色
 	Key color spill reduction	減少去背色溢出
@@ -403,6 +402,10 @@
 	Unlock	解除鎖定
 	Unmute	取消靜音
 @msg	A plug-in could not be loaded: {error}	無法載入外掛程式：{error}
+@msg	The application's audio could not be captured. The capture is opened again shortly.	無法擷取該應用程式的音訊。稍後將重新開啟擷取。
+@msg	Capturing one application's audio is not available on this system yet.	此系統尚不支援擷取單一應用程式的音訊。
+@msg	Capturing one application needs Windows 11 or Windows Server 2022. Audio output capture still records everything the computer plays.	擷取單一應用程式需要 Windows 11 或 Windows Server 2022。「音訊輸出擷取」仍會錄製電腦播放的所有聲音。
+@msg	32 applications are already being captured	已在擷取 32 個應用程式
 @msg	Drawing again on {adapter}	已重新使用 {adapter} 繪製
 @msg	No graphics device could be opened again: {error}	無法重新開啟圖形裝置：{error}
 @msg	No graphics hardware can be used; drawing in software, which is slower	無法使用圖形硬體；改用軟體繪製，速度較慢

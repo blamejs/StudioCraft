@@ -141,7 +141,6 @@
 	Hotkeys	Горячие клавиши
 	Image	Изображение
 	Image mask	Маска изображения
-	Include child processes	Включать дочерние процессы
 	Import…	Импорт…
 	Key color	Ключевой цвет
 	Key color spill reduction	Подавление засветки ключевым цветом
@@ -412,6 +411,10 @@
 	Unlock	Разблокировать
 	Unmute	Включить звук
 @msg	A plug-in could not be loaded: {error}	Не удалось загрузить модуль: {error}
+@msg	The application's audio could not be captured. The capture is opened again shortly.	Не удалось захватить звук приложения. Захват скоро будет открыт снова.
+@msg	Capturing one application's audio is not available on this system yet.	Захват звука одного приложения пока недоступен в этой системе.
+@msg	Capturing one application needs Windows 11 or Windows Server 2022. Audio output capture still records everything the computer plays.	Для захвата одного приложения нужна Windows 11 или Windows Server 2022. «Захват выходного звука» по-прежнему записывает всё, что воспроизводит компьютер.
+@msg	32 applications are already being captured	Уже захватываются 32 приложения
 @msg	Drawing again on {adapter}	Отрисовка снова идёт через {adapter}
 @msg	No graphics device could be opened again: {error}	Не удалось снова открыть графическое устройство: {error}
 @msg	No graphics hardware can be used; drawing in software, which is slower	Графическое оборудование недоступно; отрисовка идёт программно, это медленнее

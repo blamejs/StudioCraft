@@ -145,7 +145,6 @@
 	Hotkeys	Hotkeys
 	Image	Image
 	Image mask	Image mask
-	Include child processes	Include child processes
 	Import…	Import…
 	Intel Quick Sync H.264	Intel Quick Sync H.264
 	Inter (SIL OFL 1.1)	Inter (SIL OFL 1.1)
@@ -452,6 +451,10 @@
 	Power saving	Power saving
 	Software (slower)	Software (slower)
 @msg	A plug-in could not be loaded: {error}	A plug-in could not be loaded: {error}
+@msg	The application's audio could not be captured. The capture is opened again shortly.	The application's audio could not be captured. The capture is opened again shortly.
+@msg	Capturing one application's audio is not available on this system yet.	Capturing one application's audio is not available on this system yet.
+@msg	Capturing one application needs Windows 11 or Windows Server 2022. Audio output capture still records everything the computer plays.	Capturing one application needs Windows 11 or Windows Server 2022. Audio output capture still records everything the computer plays.
+@msg	32 applications are already being captured	32 applications are already being captured
 @msg	Drawing again on {adapter}	Drawing again on {adapter}
 @msg	No graphics device could be opened again: {error}	No graphics device could be opened again: {error}
 @msg	No graphics hardware can be used; drawing in software, which is slower	No graphics hardware can be used; drawing in software, which is slower

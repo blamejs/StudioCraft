@@ -9,6 +9,8 @@ use std::sync::{Arc, Condvar, Mutex, OnceLock, Weak};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
+use arc_swap::ArcSwap;
+
 use crate::capture::CaptureShared;
 use crate::{
     AppAudioError, AppCapture, AppInfo, AppKey, AppList, Backend, CaptureState, CaptureStatus, MAX_CAPTURES, OnData, PEAK_SLOTS, PeakTable, Support,
@@ -42,9 +44,11 @@ struct Run {
 
 struct Inner {
     backend: Arc<dyn Backend>,
-    /// The newest list. Only the discovery thread and readers on the interface's or a command's
-    /// thread take this lock, and each holds it for one `Arc` clone.
-    slot: Mutex<Arc<AppList>>,
+    /// The newest list, read without a lock.
+    list: ArcSwap<AppList>,
+    /// Taken only by writers of the list and by callers that choose to wait for one
+    /// ([`Discovery::wait_newer`], [`Discovery::fresh_list`]); readers of the list never take it.
+    slot: Mutex<()>,
     /// Signaled after each new list, for [`Discovery::wait_newer`].
     published: Condvar,
     generation: AtomicU64,
@@ -118,7 +122,8 @@ impl Discovery {
         Discovery {
             inner: Arc::new(Inner {
                 backend,
-                slot: Mutex::new(Arc::new(AppList::default())),
+                list: ArcSwap::from_pointee(AppList::default()),
+                slot: Mutex::new(()),
                 published: Condvar::new(),
                 generation: AtomicU64::new(0),
                 peaks: PeakTable::default(),
@@ -200,9 +205,9 @@ impl Discovery {
         self.inner.run.lock().is_ok_and(|r| r.tx.is_some())
     }
 
-    /// The newest list.
+    /// The newest list, read without a lock.
     pub fn snapshot(&self) -> Arc<AppList> {
-        self.inner.slot.lock().map(|s| Arc::clone(&s)).unwrap_or_default()
+        self.inner.list.load_full()
     }
 
     /// The newest list's generation, read without a lock: compare it with a list's
@@ -214,11 +219,10 @@ impl Discovery {
     /// Wait until a list newer than generation `after` is published, or `timeout` passes, and
     /// return the newest list.
     pub fn wait_newer(&self, after: u64, timeout: Duration) -> Arc<AppList> {
-        let Ok(guard) = self.inner.slot.lock() else { return self.snapshot() };
-        match self.inner.published.wait_timeout_while(guard, timeout, |s| s.generation <= after) {
-            Ok((s, _)) => Arc::clone(&s),
-            Err(_) => self.snapshot(),
+        if let Ok(guard) = self.inner.slot.lock() {
+            drop(self.inner.published.wait_timeout_while(guard, timeout, |_| self.inner.list.load().generation <= after));
         }
+        self.snapshot()
     }
 
     /// The newest list once the running thread has scanned at least once, waiting at most
@@ -226,8 +230,11 @@ impl Discovery {
     /// left over from an earlier run is never returned as current.
     pub fn fresh_list(&self, timeout: Duration) -> Option<Arc<AppList>> {
         let guard = self.inner.slot.lock().ok()?;
-        let (slot, _) = self.inner.published.wait_timeout_while(guard, timeout, |_| !self.inner.fresh.load(Ordering::Acquire)).ok()?;
-        self.inner.fresh.load(Ordering::Acquire).then(|| Arc::clone(&slot))
+        let (guard, _) = self.inner.published.wait_timeout_while(guard, timeout, |_| !self.inner.fresh.load(Ordering::Acquire)).ok()?;
+        // Read under the lock, as `start` resets `fresh` under it, so the list belongs to this run.
+        let list = self.inner.fresh.load(Ordering::Acquire).then(|| self.snapshot());
+        drop(guard);
+        list
     }
 
     /// Read peak levels while `visible` is true (a panel shows the list). Costs nothing otherwise.
@@ -367,13 +374,15 @@ impl Discovery {
 
 /// Publish a new list when it differs from the newest one.
 fn publish(inner: &Inner, apps: Option<Vec<AppInfo>>, error: Option<String>) {
-    let Ok(mut slot) = inner.slot.lock() else { return };
-    let apps = apps.unwrap_or_else(|| slot.apps.clone());
-    if slot.apps == apps && slot.error == error && inner.generation.load(Ordering::Acquire) > 0 {
+    // The lock orders writers and the wake of waiters; readers load the list without it.
+    let Ok(slot) = inner.slot.lock() else { return };
+    let current = inner.list.load();
+    let apps = apps.unwrap_or_else(|| current.apps.clone());
+    if current.apps == apps && current.error == error && inner.generation.load(Ordering::Acquire) > 0 {
         return;
     }
     let generation = inner.generation.load(Ordering::Acquire).saturating_add(1);
-    *slot = Arc::new(AppList { generation, apps, error });
+    inner.list.store(Arc::new(AppList { generation, apps, error }));
     inner.generation.store(generation, Ordering::Release);
     drop(slot);
     inner.published.notify_all();

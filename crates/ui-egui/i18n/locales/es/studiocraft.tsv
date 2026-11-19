@@ -141,7 +141,6 @@
 	Hotkeys	Atajos de teclado
 	Image	Imagen
 	Image mask	Máscara de imagen
-	Include child processes	Incluir procesos secundarios
 	Import…	Importar…
 	Key color	Color clave
 	Key color spill reduction	Reducción del derrame del color clave
@@ -406,6 +405,10 @@
 	Unlock	Desbloquear
 	Unmute	Activar sonido
 @msg	A plug-in could not be loaded: {error}	No se pudo cargar un complemento: {error}
+@msg	The application's audio could not be captured. The capture is opened again shortly.	No se pudo capturar el audio de la aplicación. La captura se abrirá de nuevo en breve.
+@msg	Capturing one application's audio is not available on this system yet.	La captura del audio de una sola aplicación aún no está disponible en este sistema.
+@msg	Capturing one application needs Windows 11 or Windows Server 2022. Audio output capture still records everything the computer plays.	Capturar una sola aplicación requiere Windows 11 o Windows Server 2022. Captura de salida de audio sigue grabando todo lo que reproduce el equipo.
+@msg	32 applications are already being captured	Ya se están capturando 32 aplicaciones
 @msg	Drawing again on {adapter}	Se vuelve a dibujar con {adapter}
 @msg	No graphics device could be opened again: {error}	No se pudo volver a abrir ningún dispositivo gráfico: {error}
 @msg	No graphics hardware can be used; drawing in software, which is slower	No se puede usar ningún hardware gráfico; se dibuja por software, que es más lento

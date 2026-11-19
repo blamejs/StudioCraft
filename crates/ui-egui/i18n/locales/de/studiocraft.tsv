@@ -133,7 +133,6 @@
 	Hotkeys	Tastenkürzel
 	Image	Bild
 	Image mask	Bildmaske
-	Include child processes	Untergeordnete Prozesse einbeziehen
 	Import…	Importieren…
 	Key color	Schlüsselfarbe
 	Key color spill reduction	Farbsaum der Schlüsselfarbe verringern
@@ -387,6 +386,10 @@
 	Unlock	Entsperren
 	Unmute	Stummschaltung aufheben
 @msg	A plug-in could not be loaded: {error}	Ein Plug-in konnte nicht geladen werden: {error}
+@msg	The application's audio could not be captured. The capture is opened again shortly.	Der Ton der Anwendung konnte nicht aufgenommen werden. Die Aufnahme wird gleich erneut geöffnet.
+@msg	Capturing one application's audio is not available on this system yet.	Der Ton einer einzelnen Anwendung kann auf diesem System noch nicht aufgenommen werden.
+@msg	Capturing one application needs Windows 11 or Windows Server 2022. Audio output capture still records everything the computer plays.	Die Aufnahme einer einzelnen Anwendung erfordert Windows 11 oder Windows Server 2022. „Audioausgang aufnehmen“ nimmt weiterhin alles auf, was der Computer wiedergibt.
+@msg	32 applications are already being captured	Es werden bereits 32 Anwendungen aufgenommen
 @msg	Drawing again on {adapter}	Zeichnet wieder mit {adapter}
 @msg	No graphics device could be opened again: {error}	Es konnte kein Grafikgerät wieder geöffnet werden: {error}
 @msg	No graphics hardware can be used; drawing in software, which is slower	Keine Grafikhardware nutzbar; es wird in Software gezeichnet, was langsamer ist

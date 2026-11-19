@@ -36,7 +36,7 @@ const BUFFER_HNS: i64 = 200_000;
 /// failed. A signaled wait starts the count over.
 const MAX_EARLY_WAITS: u32 = 50;
 
-const UNSUPPORTED: &str = "Capturing one application needs Windows 11 or Windows Server 2022. Desktop audio still captures everything.";
+const UNSUPPORTED: &str = crate::NEEDS_NEWER_WINDOWS;
 
 fn failed(e: impl std::fmt::Display) -> AppAudioError {
     AppAudioError::Failed(e.to_string())
@@ -86,7 +86,9 @@ impl Backend for WinBackend {
     fn capture(&self, target: Target, shared: &CaptureShared, on_data: &mut OnData) -> Result<(), AppAudioError> {
         let _ = wasapi::initialize_mta();
         shared.beat();
-        let mut client = AudioClient::new_application_loopback_client(target.pid, target.include_children)
+        // `true` is PROCESS_LOOPBACK_MODE_INCLUDE_TARGET_PROCESS_TREE. The only other mode,
+        // `false`, records every process except this tree.
+        let mut client = AudioClient::new_application_loopback_client(target.pid, true)
             .map_err(|e| AppAudioError::Unsupported(format!("the system did not start the capture: {e}")))?;
         shared.beat();
         let format = WaveFormat::new(32, 32, SampleType::Float, SAMPLE_RATE as usize, CHANNELS, None);

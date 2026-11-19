@@ -141,7 +141,6 @@
 	Hotkeys	快捷键
 	Image	图像
 	Image mask	图像蒙版
-	Include child processes	包括子进程
 	Import…	导入…
 	Key color	键控颜色
 	Key color spill reduction	键控颜色溢色抑制
@@ -403,6 +402,10 @@
 	Power saving	节能
 	Software (slower)	软件（较慢）
 @msg	A plug-in could not be loaded: {error}	无法加载插件：{error}
+@msg	The application's audio could not be captured. The capture is opened again shortly.	无法采集该应用程序的音频。稍后将重新打开采集。
+@msg	Capturing one application's audio is not available on this system yet.	此系统尚不支持采集单个应用程序的音频。
+@msg	Capturing one application needs Windows 11 or Windows Server 2022. Audio output capture still records everything the computer plays.	采集单个应用程序需要 Windows 11 或 Windows Server 2022。“音频输出采集”仍会录制计算机播放的所有声音。
+@msg	32 applications are already being captured	已在采集 32 个应用程序
 @msg	Drawing again on {adapter}	已重新使用 {adapter} 绘制
 @msg	No graphics device could be opened again: {error}	无法重新打开图形设备：{error}
 @msg	No graphics hardware can be used; drawing in software, which is slower	无法使用图形硬件；改用软件绘制，速度较慢
