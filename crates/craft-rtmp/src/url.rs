@@ -80,6 +80,11 @@ impl Endpoint {
         &self.app
     }
 
+    /// The query string after `?` in the application name, which may hold a token, or `None`.
+    pub fn query(&self) -> Option<&str> {
+        self.app.split_once('?').map(|(_, query)| query)
+    }
+
     /// The `tcUrl` sent in `connect`: the scheme, the host, the port when the URL gave one, and
     /// the application name.
     pub fn tc_url(&self) -> String {

@@ -170,6 +170,8 @@ pub struct Publisher {
     out: ChunkWriter,
     inbound: ChunkReader,
     key: StreamKey,
+    /// The URL's query string, kept out of errors like the key.
+    query: Option<String>,
     stream_id: u32,
     stall_timeout: Duration,
     /// While [`Publisher::connect`] runs, the setup deadline. The transport holds the same deadline
@@ -220,6 +222,7 @@ impl Publisher {
             out: ChunkWriter::new(),
             inbound: ChunkReader::new(MAX_SERVER_MESSAGE),
             key: config.key.clone(),
+            query: config.endpoint.query().map(str::to_owned),
             stream_id: 0,
             stall_timeout: config.stall_timeout,
             setup_deadline: Some(deadline),
@@ -524,8 +527,8 @@ impl Publisher {
     }
 
     fn rejected(&self, command: &'static str, code: &str, description: &str) -> Error {
-        let key = self.key.expose();
-        Error::Rejected { command, code: redact(code, key), description: redact(description, key) }
+        let (key, query) = (self.key.expose(), self.query.as_deref());
+        Error::Rejected { command, code: redact(code, key, query), description: redact(description, key, query) }
     }
 
     /// Acts on a protocol control or user control message. Set Chunk Size and Abort Message were

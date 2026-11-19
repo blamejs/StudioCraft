@@ -25,7 +25,8 @@
 //!
 //! [`StreamKey`] prints as `StreamKey(<redacted>)`. No error, `Debug` output or log line of this
 //! crate holds the key: text a server sends back, such as a refusal's description, has every
-//! occurrence of the key replaced with `<stream key>` before it goes into an [`Error`].
+//! occurrence of the key replaced with `<stream key>`, and of the URL's query string with
+//! `<redacted>`, before it goes into an [`Error`].
 //!
 //! # Threads and cost
 //!

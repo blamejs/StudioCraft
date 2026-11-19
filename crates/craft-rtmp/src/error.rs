@@ -38,7 +38,8 @@ pub enum Error {
         /// The status code the server sent, such as `NetStream.Publish.BadName`, or empty.
         code: String,
         /// The server's description, shortened to 256 characters, with control characters
-        /// removed and the stream key replaced by `<stream key>`.
+        /// removed, the stream key replaced by `<stream key>`, and the URL's query string replaced
+        /// by `<redacted>`.
         description: String,
     },
     /// An earlier write failed or stalled, or the server ended the stream, so the connection is
@@ -88,11 +89,43 @@ impl std::error::Error for Error {
 /// The longest server description kept in [`Error::Rejected`], in characters.
 pub(crate) const MAX_DESCRIPTION: usize = 256;
 
-/// Text from the server made safe for an error: every occurrence of `key` replaced, control
-/// characters removed, and at most [`MAX_DESCRIPTION`] characters kept.
-pub(crate) fn redact(text: &str, key: &str) -> String {
-    let replaced = if key.is_empty() { text.to_owned() } else { text.replace(key, "<stream key>") };
-    replaced.chars().filter(|c| !c.is_control()).take(MAX_DESCRIPTION).collect()
+/// Text from the server made safe for an error: control characters removed, every occurrence of
+/// `key` replaced with `<stream key>`, the URL's `query` string replaced with `<redacted>` where it
+/// stands apart, and at most [`MAX_DESCRIPTION`] characters kept. The query stands apart when no
+/// letter, digit or one of `-_~%` touches it, so a short query such as `on` leaves
+/// `NetConnection.Connect.Rejected` as it is, and a query followed by `.` or `,` is still replaced.
+///
+/// One pass reads the text and stops once [`MAX_DESCRIPTION`] characters are kept. At each
+/// position the longer of the two secrets that matches is replaced, so the work is the text's
+/// length plus [`MAX_DESCRIPTION`] times the two secrets' length.
+pub(crate) fn redact(text: &str, key: &str, query: Option<&str>) -> String {
+    let clean = |s: &str| -> String { s.chars().filter(|c| !c.is_control()).collect() };
+    let mut secrets = [(clean(key), "<stream key>", false), (clean(query.unwrap_or("")), "<redacted>", true)];
+    secrets.sort_by_key(|(secret, _, _)| std::cmp::Reverse(secret.len()));
+    let text = clean(text);
+    let joins = |c: Option<char>| c.is_some_and(|c| c.is_alphanumeric() || "-_~%".contains(c));
+    let mut out = String::new();
+    let mut kept = 0;
+    let mut i = 0;
+    while kept < MAX_DESCRIPTION
+        && let Some(c) = text.get(i..).and_then(|rest| rest.chars().next())
+    {
+        let rest = &text[i..];
+        let before = text[..i].chars().next_back();
+        let found = secrets.iter().find(|(secret, _, apart)| {
+            !secret.is_empty() && rest.starts_with(secret.as_str()) && !(*apart && (joins(before) || joins(rest[secret.len()..].chars().next())))
+        });
+        if let Some((secret, mark, _)) = found {
+            out.push_str(mark);
+            kept += mark.chars().count();
+            i += secret.len();
+        } else {
+            out.push(c);
+            kept += 1;
+            i += c.len_utf8();
+        }
+    }
+    out.chars().take(MAX_DESCRIPTION).collect()
 }
 
 /// An error from a write: a timed-out write is a stall.

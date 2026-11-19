@@ -78,7 +78,8 @@ License: MIT OR Apache-2.0.
 
 `StreamKey` prints as `StreamKey(<redacted>)`, and `Endpoint`'s `Debug` output leaves out the
 query string. Text from the server that goes into an error has every occurrence of the key replaced
-with `<stream key>`, control characters removed, and at most 256 characters kept.
+with `<stream key>`, the URL's query string replaced with `<redacted>` wherever no letter, digit
+or one of `-_~%` touches it, control characters removed, and at most 256 characters kept.
 
 ## Threads and cost
 

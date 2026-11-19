@@ -12,6 +12,7 @@ use super::server::{Conn, STREAM_ID, WINDOW, info, s, spawn};
 #[cfg(feature = "rtmps")]
 use crate::TlsRoots;
 use crate::chunk::{csid, msg_type, user_control};
+use crate::error::redact;
 use crate::publisher::acked_total;
 use crate::transport::{Socket, set_test_clock};
 use crate::{Config, Error, Kind, Message, Publisher};
@@ -273,6 +274,57 @@ fn refused_connect_and_create_stream_are_errors() {
         assert_no_key(&e);
         server.join().unwrap();
     }
+}
+
+#[test]
+fn a_refusal_that_repeats_the_url_hides_its_query() {
+    const TOKEN: &str = "token=t0ken_abc";
+    let (url, server) = spawn(|stream| {
+        let mut c = Conn::new(stream);
+        c.handshake().unwrap();
+        let (_, values) = c.recv_command().unwrap();
+        let tc_url = values[2].get("tcUrl").and_then(Value::as_str).unwrap().to_owned();
+        assert!(tc_url.ends_with(TOKEN), "{tc_url}");
+        c.status(0, "error", "NetConnection.Connect.Rejected", &format!("Bad {tc_url} for {KEY}")).unwrap();
+        c.recv().ok();
+    });
+    let e = Publisher::connect(&config(&format!("{url}?{TOKEN}"))).unwrap_err();
+    match &e {
+        Error::Rejected { description, .. } => assert_eq!(description, &format!("Bad {url}?<redacted> for <stream key>")),
+        e => panic!("{e:?}"),
+    }
+    assert!(!e.to_string().contains(TOKEN), "{e}");
+    assert_no_key(&e);
+    server.join().unwrap();
+}
+
+#[test]
+fn a_short_query_leaves_status_codes_alone() {
+    let code = "NetConnection.Connect.Rejected";
+    assert_eq!(redact(code, KEY, Some("on")), code);
+    assert_eq!(redact("rtmp://h/app?on rejected", KEY, Some("on")), "rtmp://h/app?<redacted> rejected");
+    assert_eq!(redact("why? no", KEY, Some("")), "why? no");
+}
+
+#[test]
+fn a_query_without_the_url_is_hidden() {
+    let query = Some("token=t0ken_abc&user=me");
+    assert_eq!(redact("bad token=t0ken_abc&user=me", KEY, query), "bad <redacted>");
+    assert_eq!(redact("Bad rtmp://h/app?token=t0ken_abc&user=me.", KEY, query), "Bad rtmp://h/app?<redacted>.");
+    assert_eq!(redact("(token=t0ken_abc&user=me), again", KEY, query), "(<redacted>), again");
+    assert_eq!(redact("xtoken=t0ken_abc&user=me", KEY, query), "xtoken=t0ken_abc&user=me");
+    assert_eq!(redact("token=t0ken_abc&user=me_2", KEY, query), "token=t0ken_abc&user=me_2");
+}
+
+#[test]
+fn redaction_sees_through_control_characters_and_keeps_256_characters() {
+    // A control character inside the key is removed before the key is looked for.
+    assert_eq!(redact("live_s3cret\u{1}_key!", KEY, None), "<stream key>!");
+    // A long text with secrets in it: the result stops at 256 characters.
+    let text = format!("{} t=1 {KEY} {}", "x".repeat(10), "y ".repeat(60_000));
+    let out = redact(&text, KEY, Some("t=1"));
+    assert!(out.starts_with("xxxxxxxxxx <redacted> <stream key> y y"), "{out}");
+    assert_eq!(out.chars().count(), 256);
 }
 
 #[test]
