@@ -6,6 +6,7 @@
 //! - [`queue`]: bounded lock-free queues between threads.
 //! - [`mix`]: mixing, gain and level metering.
 //! - [`stats`]: counters the stats window reads without locking.
+//! - [`tap`]: copies of a mixer input or of the program mix, block by block, for a writer thread.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 pub mod audio;
@@ -14,6 +15,7 @@ pub mod mix;
 pub mod pool;
 pub mod queue;
 pub mod stats;
+pub mod tap;
 pub mod video;
 
 pub use craft_time::{FrameRate, Tick};

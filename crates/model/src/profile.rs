@@ -235,7 +235,76 @@ impl Default for ReplaySettings {
     }
 }
 
-/// A named set of video, audio, output, stream and replay buffer settings.
+/// When audio tracks are recorded.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AudioTracksWhen {
+    /// While a recording runs.
+    #[default]
+    Recording,
+    /// While the stream runs.
+    Streaming,
+    /// While a recording or the stream runs.
+    Either,
+}
+
+impl AudioTracksWhen {
+    pub const ALL: [AudioTracksWhen; 3] = [AudioTracksWhen::Recording, AudioTracksWhen::Streaming, AudioTracksWhen::Either];
+
+    /// The name commands and files use.
+    pub fn id(self) -> &'static str {
+        match self {
+            AudioTracksWhen::Recording => "recording",
+            AudioTracksWhen::Streaming => "streaming",
+            AudioTracksWhen::Either => "either",
+        }
+    }
+}
+
+/// Audio tracks: each source set to record its own track, and the program mix, written to WAV
+/// files beside the recording.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AudioTracksSettings {
+    pub enabled: bool,
+    pub when: AudioTracksWhen,
+    /// Whether the program mix gets a file too.
+    pub include_program: bool,
+    /// Memory that holds audio waiting for the disk, in MiB.
+    pub buffer_mib: u32,
+    /// Size at which a track's file is closed and the next part begins, in GiB.
+    pub segment_gib: u32,
+}
+
+impl AudioTracksSettings {
+    /// The write buffers the audio tracks take, in MiB.
+    pub const BUFFER_MIB: std::ops::RangeInclusive<u32> = 16..=1024;
+    /// The file sizes the audio tracks take, in GiB.
+    pub const SEGMENT_GIB: std::ops::RangeInclusive<u32> = 1..=3;
+
+    /// The first value out of its range, as an error message.
+    pub fn check(&self) -> Result<(), String> {
+        let range = |name: &str, v: u32, r: std::ops::RangeInclusive<u32>| {
+            if r.contains(&v) { Ok(()) } else { Err(format!("audio_tracks.{name} is {v}; it must be from {} to {}", r.start(), r.end())) }
+        };
+        range("buffer_mib", self.buffer_mib, Self::BUFFER_MIB)?;
+        range("segment_gib", self.segment_gib, Self::SEGMENT_GIB)
+    }
+
+    /// These settings with each size brought into its range.
+    pub fn sanitized(self) -> Self {
+        let clamp = |v: u32, r: std::ops::RangeInclusive<u32>| v.clamp(*r.start(), *r.end());
+        Self { buffer_mib: clamp(self.buffer_mib, Self::BUFFER_MIB), segment_gib: clamp(self.segment_gib, Self::SEGMENT_GIB), ..self }
+    }
+}
+
+impl Default for AudioTracksSettings {
+    fn default() -> Self {
+        Self { enabled: false, when: AudioTracksWhen::Recording, include_program: true, buffer_mib: 96, segment_gib: 1 }
+    }
+}
+
+/// A named set of video, audio, output, stream, replay buffer and audio tracks settings.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Profile {
@@ -245,6 +314,7 @@ pub struct Profile {
     pub output: OutputSettings,
     pub stream: StreamSettings,
     pub replay: ReplaySettings,
+    pub audio_tracks: AudioTracksSettings,
 }
 
 #[cfg(test)]

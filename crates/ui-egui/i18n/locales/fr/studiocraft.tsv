@@ -445,3 +445,40 @@
 @msg	The stream stopped: {error}	Le stream s'est arrêté : {error}
 @msg	ffmpeg at {path} was not found	ffmpeg est introuvable à {path}
 menu	Transform	Transformer
+	Record as its own track	Enregistrer comme piste distincte
+	Audio tracks write this source to a WAV file of its own (Settings › Output › Audio tracks)	Les pistes audio écrivent cette source dans son propre fichier WAV (Paramètres › Sortie › Pistes audio)
+	Audio tracks	Pistes audio
+	Write each recorded source and the program mix to its own WAV file	Écrire chaque source enregistrée et le mixage du programme dans son propre fichier WAV
+	Write them while	Les écrire quand
+	Include the program mix	Inclure le mixage du programme
+	Write buffer	Tampon d'écriture
+	MiB	Mio
+	File size	Taille de fichier
+	GiB	Gio
+	Audio tracks: {tracks}, about {gb} GiB an hour; the buffer holds {seconds} s of audio while the disk is slow	Pistes audio : {tracks}, environ {gb} Gio par heure ; le tampon conserve {seconds} s d'audio quand le disque est lent
+	A recording runs	Un enregistrement est en cours
+	The stream runs	Le stream est en cours
+	A recording or the stream runs	Un enregistrement ou le stream est en cours
+	The disk is almost full; audio tracks stop before the recording or the stream runs out of space	Le disque est presque plein ; les pistes audio s'arrêtent avant que l'enregistrement ou le stream manque d'espace
+	This take has made as many audio track files as it can; sources added since are not recorded to their own files	Cette prise a créé autant de fichiers de pistes audio qu'elle le peut ; les sources ajoutées depuis ne sont pas enregistrées dans leurs propres fichiers
+	More sources are set to record their own track than can be recorded at once; the later ones are not recorded	Plus de sources sont réglées pour enregistrer leur propre piste qu'il n'est possible d'en enregistrer à la fois ; les dernières ne sont pas enregistrées
+	Audio tracks: {tracks}; {lost} s of audio lost while the disk was slow	Pistes audio : {tracks} ; {lost} s d'audio perdues quand le disque était lent
+	TRACKS	PISTES
+	TRACKS stopped	PISTES arrêtées
+	Audio tracks stopped early; the status message gives the reason	Les pistes audio se sont arrêtées plus tôt ; le message d'état en donne la raison
+	Record as Its Own Track	Enregistrer comme piste distincte
+	Audio Tracks Status	État des pistes audio
+	Repair Audio Tracks	Réparer les pistes audio
+@msg	Audio tracks stopped at {time}: the disk is full	Pistes audio arrêtées à {time} : le disque est plein
+@msg	Audio tracks stopped at {time}: the disk is almost full	Pistes audio arrêtées à {time} : le disque est presque plein
+@msg	Audio tracks stopped at {time}: the files could not be created	Pistes audio arrêtées à {time} : les fichiers n'ont pas pu être créés
+@msg	Audio tracks stopped at {time}: the free space on the disk could not be read	Pistes audio arrêtées à {time} : l'espace libre du disque n'a pas pu être lu
+@msg	Audio tracks stopped at {time}: there is not enough memory for the write buffer	Pistes audio arrêtées à {time} : la mémoire est insuffisante pour le tampon d'écriture
+@msg	Audio tracks stopped at {time}: a file could not be written	Pistes audio arrêtées à {time} : un fichier n'a pas pu être écrit
+@msg	Audio tracks could not start: {error}	Les pistes audio n'ont pas pu démarrer : {error}
+@msg	Audio tracks repaired after the app closed during a take: {folders}	Pistes audio réparées après la fermeture de l'application pendant une prise : {folders}
+@msg	Audio tracks could not be repaired: {takes}	Les pistes audio n'ont pas pu être réparées : {takes}
+@msg	Audio tracks repaired after the app closed during a take: {folders} and {more} more	Pistes audio réparées après la fermeture de l'application pendant une prise : {folders} et {more} de plus
+@msg	Audio tracks could not be repaired: {takes} and {more} more	Les pistes audio n'ont pas pu être réparées : {takes} et {more} de plus
+@msg	Audio tracks could not be repaired: {takes}. Takes repaired: {count}	Les pistes audio n'ont pas pu être réparées : {takes}. Prises réparées : {count}
+@msg	Audio tracks could not be repaired: {takes} and {more} more. Takes repaired: {count}	Les pistes audio n'ont pas pu être réparées : {takes} et {more} de plus. Prises réparées : {count}

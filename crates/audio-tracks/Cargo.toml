@@ -1,0 +1,32 @@
+[package]
+name = "studiocraft-audio-tracks"
+description = "StudioCraft audio tracks: each recorded source and the program mix written to its own WAV file on writer threads, with a journal and repair after a crash"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+studiocraft-model.workspace = true
+studiocraft-media.workspace = true
+craft-time.workspace = true
+crossbeam-queue.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+log.workspace = true
+# The WAV header of 32-bit float files.
+craft-audio = { workspace = true, features = ["pcm-encode"] }
+# Free space on the disk the audio tracks are written to.
+fs4.workspace = true
+
+[dev-dependencies]
+criterion.workspace = true
+# Reads back what the writer wrote.
+craft-audio = { workspace = true, features = ["pcm-encode", "decode-native"] }
+
+[[bench]]
+name = "collect"
+harness = false
+
+[lints]
+workspace = true
