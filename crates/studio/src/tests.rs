@@ -1089,7 +1089,7 @@ mod audio_tracks {
         // Without the recording folder nothing is repaired.
         let _ = std::fs::remove_dir_all(&dir);
         let r = s.run("audio_tracks.repair", &json!({"folder": sibling.to_string_lossy()}));
-        assert!(r.is_err_and(|e| e.to_string().contains("recording folder")));
+        assert!(r.is_err_and(|e| e.to_string().contains("could not be read, so nothing is repaired")));
         let _ = std::fs::remove_dir_all(&sibling);
     }
 }
