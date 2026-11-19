@@ -386,6 +386,7 @@ fn runtime_commands_are_handed_to_the_app() {
         ("replay.stop", RuntimeAction::StopReplay),
         ("replay.toggle", RuntimeAction::ToggleReplay),
         ("replay.save", RuntimeAction::SaveReplay),
+        ("audio_tracks.status", RuntimeAction::AudioTracksStatus),
         ("app.settings", RuntimeAction::OpenSettings),
         ("app.exit", RuntimeAction::Exit),
     ] {
@@ -393,6 +394,41 @@ fn runtime_commands_are_handed_to_the_app() {
         assert_eq!(o.runtime, Some(action), "{id}");
         assert!(!o.changed);
     }
+    let o = run(&mut e, "audio_tracks.repair", json!({"folder": "D:/Videos"})).unwrap();
+    assert_eq!(o.runtime, Some(RuntimeAction::AudioTracksRepair { folder: "D:/Videos".into() }));
+    assert!(!o.changed);
+    for bad in [json!({}), json!({"folder": ""}), json!({"folder": "  "}), json!({"folder": 3})] {
+        assert!(run(&mut e, "audio_tracks.repair", bad.clone()).is_err(), "{bad}");
+    }
+}
+
+#[test]
+fn a_source_is_set_to_record_its_own_track_or_not() {
+    let mut e = engine();
+    run(&mut e, "source.add", json!({"kind": "mic", "name": "Mic"})).unwrap();
+    let flag = |e: &Engine| e.collection().source_by_name("Mic").map(|s| (s.audio.record_track, s.audio.records_track()));
+    assert_eq!(flag(&e), Some((None, true)), "a source heard in the program records by default");
+    let rev = e.revision();
+    assert!(!run(&mut e, "source.set_record_track", json!({"source": "Mic", "on": true})).unwrap().changed, "on, as it already records");
+    assert_eq!((flag(&e), e.revision()), (Some((None, true)), rev), "it keeps following its monitoring");
+    run(&mut e, "source.monitor", json!({"source": "Mic", "mode": "monitor_only"})).unwrap();
+    assert_eq!(flag(&e), Some((None, false)), "a monitor-only source does not until it is set");
+    run(&mut e, "source.set_record_track", json!({"source": "Mic", "on": true})).unwrap();
+    assert_eq!(flag(&e), Some((Some(true), true)));
+    assert_eq!(e.undo_label(), Some("Record as Its Own Track"));
+    let rev = e.revision();
+    assert!(!run(&mut e, "source.set_record_track", json!({"source": "Mic", "on": true})).unwrap().changed, "the same value is no change");
+    assert_eq!(e.revision(), rev);
+    assert_eq!(e.undo_label(), Some("Record as Its Own Track"));
+    run(&mut e, "edit.undo", json!({})).unwrap();
+    assert_eq!(flag(&e), Some((None, false)), "one undo step");
+    for bad in [json!({"source": "Mic"}), json!({"source": "Mic", "on": "yes"}), json!({"source": "Mic", "on": null})] {
+        assert!(run(&mut e, "source.set_record_track", bad.clone()).is_err(), "{bad}");
+    }
+    add_color(&mut e, "Video");
+    let silent = run(&mut e, "source.set_record_track", json!({"source": "Video", "on": true}));
+    assert!(matches!(silent, Err(EngineError::Invalid(m)) if m.contains("no audio")));
+    assert!(matches!(run(&mut e, "source.set_record_track", json!({"source": "ghost", "on": true})), Err(EngineError::NoSource(_))));
 }
 
 #[test]
@@ -509,6 +545,8 @@ fn every_spec_is_reachable() {
             "source.mute" => json!({"source": 1, "muted": true}),
             "source.sync_offset" => json!({"source": 1, "ms": 100}),
             "source.monitor" => json!({"source": 1, "mode": "monitor_only"}),
+            "source.set_record_track" => json!({"source": 1, "on": true}),
+            "audio_tracks.repair" => json!({"folder": "x"}),
             "item.remove" | "item.duplicate" => json!({"item": 1}),
             "item.move" => json!({"item": 1, "to": "up"}),
             "item.transform" => json!({"item": 1, "transform": {}}),

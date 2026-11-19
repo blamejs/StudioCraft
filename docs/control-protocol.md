@@ -51,6 +51,23 @@ milliseconds, a whole number from 0 to 5000; a source without audio is an error.
 plays the source on the monitoring device and leaves it out of recordings and streams.
 `document.inspect` reports `monitoring` with the profile's `device`, whether it is `playing`, and
 the device's `rate` and `channels` while it plays.
+`source.set_record_track` takes `{"source", "on"}`, where `on` is `true` or `false`, and sets
+whether audio tracks write the source to a WAV file of its own; a source without audio is an
+error, and Edit › Undo takes it back. Setting the value a source already has from its monitoring
+setting changes nothing and adds no undo step. Until it is set, a source whose monitoring setting
+sends it to the program mix (`off` or `monitor_and_output`) is written and a monitor-only source is
+not. A take writes at most 64 tracks at once, the program mix included; sources after that, in the
+collection's order, are not written. Counting sources that left or were replaced during it, one
+take makes at most 256 tracks, each split into parts by the file size limit; a source after that is
+not written. `audio_tracks.status` takes no params and returns the audio tracks settings, the
+output the running take follows (`anchor`, `recording` or `stream`), whether a repair runs
+(`repairing`), what the last repair did (`last_repair`), and the last take's state, as
+`document.inspect`'s `audio_tracks` entry does. `audio_tracks.repair` takes `{"folder"}` and
+repairs the takes in it that ended without finishing their files, on a background thread; it
+returns `{"started": true, "folder"}` at once. When the repair ends, `last_repair` holds
+`{"repaired": [{"folder", "files": [{"file", "seconds"}]}], "failed": [{"folder", "error"}]}`,
+where `failed` lists each take that could not be repaired, such as one whose journal does not read.
+An empty `folder`, one that does not exist and a fifth repair while four run are errors. A take that is still being written, or that another repair holds, is left unchanged.
 
 `dock.layout_save` takes `{"name"}` and saves every dock setting under that name, replacing a
 layout whose name differs only in case; it returns `{"saved", "replaced"}`. Without `name` it

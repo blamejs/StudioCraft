@@ -439,3 +439,40 @@
 @msg	The stream stopped: {error}	La transmisión se detuvo: {error}
 @msg	ffmpeg at {path} was not found	No se encontró ffmpeg en {path}
 menu	Transform	Transformar
+	Record as its own track	Grabar como pista propia
+	Audio tracks write this source to a WAV file of its own (Settings › Output › Audio tracks)	Las pistas de audio escriben esta fuente en su propio archivo WAV (Configuración › Salida › Pistas de audio)
+	Audio tracks	Pistas de audio
+	Write each recorded source and the program mix to its own WAV file	Escribir cada fuente grabada y la mezcla del programa en su propio archivo WAV
+	Write them while	Escribirlas mientras
+	Include the program mix	Incluir la mezcla del programa
+	Write buffer	Búfer de escritura
+	MiB	MiB
+	File size	Tamaño de archivo
+	GiB	GiB
+	Audio tracks: {tracks}, about {gb} GiB an hour; the buffer holds {seconds} s of audio while the disk is slow	Pistas de audio: {tracks}, unos {gb} GiB por hora; el búfer guarda {seconds} s de audio mientras el disco va lento
+	A recording runs	Hay una grabación en curso
+	The stream runs	La transmisión está en curso
+	A recording or the stream runs	Hay una grabación o la transmisión en curso
+	The disk is almost full; audio tracks stop before the recording or the stream runs out of space	El disco está casi lleno; las pistas de audio se detienen antes de que la grabación o la transmisión se queden sin espacio
+	This take has made as many audio track files as it can; sources added since are not recorded to their own files	Esta toma ya creó todos los archivos de pistas de audio que puede; las fuentes añadidas desde entonces no se graban en archivos propios
+	More sources are set to record their own track than can be recorded at once; the later ones are not recorded	Hay más fuentes configuradas para grabar su propia pista de las que se pueden grabar a la vez; las últimas no se graban
+	Audio tracks: {tracks}; {lost} s of audio lost while the disk was slow	Pistas de audio: {tracks}; {lost} s de audio perdidos mientras el disco iba lento
+	TRACKS	PISTAS
+	TRACKS stopped	PISTAS detenidas
+	Audio tracks stopped early; the status message gives the reason	Las pistas de audio se detuvieron antes de tiempo; el mensaje de estado indica el motivo
+	Record as Its Own Track	Grabar como pista propia
+	Audio Tracks Status	Estado de las pistas de audio
+	Repair Audio Tracks	Reparar pistas de audio
+@msg	Audio tracks stopped at {time}: the disk is full	Las pistas de audio se detuvieron en {time}: el disco está lleno
+@msg	Audio tracks stopped at {time}: the disk is almost full	Las pistas de audio se detuvieron en {time}: el disco está casi lleno
+@msg	Audio tracks stopped at {time}: the files could not be created	Las pistas de audio se detuvieron en {time}: no se pudieron crear los archivos
+@msg	Audio tracks stopped at {time}: the free space on the disk could not be read	Las pistas de audio se detuvieron en {time}: no se pudo leer el espacio libre del disco
+@msg	Audio tracks stopped at {time}: there is not enough memory for the write buffer	Las pistas de audio se detuvieron en {time}: no hay memoria suficiente para el búfer de escritura
+@msg	Audio tracks stopped at {time}: a file could not be written	Las pistas de audio se detuvieron en {time}: no se pudo escribir un archivo
+@msg	Audio tracks could not start: {error}	Las pistas de audio no pudieron iniciarse: {error}
+@msg	Audio tracks repaired after the app closed during a take: {folders}	Pistas de audio reparadas tras cerrarse la aplicación durante una toma: {folders}
+@msg	Audio tracks could not be repaired: {takes}	No se pudieron reparar las pistas de audio: {takes}
+@msg	Audio tracks repaired after the app closed during a take: {folders} and {more} more	Pistas de audio reparadas tras cerrarse la aplicación durante una toma: {folders} y {more} más
+@msg	Audio tracks could not be repaired: {takes} and {more} more	No se pudieron reparar las pistas de audio: {takes} y {more} más
+@msg	Audio tracks could not be repaired: {takes}. Takes repaired: {count}	No se pudieron reparar las pistas de audio: {takes}. Tomas reparadas: {count}
+@msg	Audio tracks could not be repaired: {takes} and {more} more. Takes repaired: {count}	No se pudieron reparar las pistas de audio: {takes} y {more} más. Tomas reparadas: {count}

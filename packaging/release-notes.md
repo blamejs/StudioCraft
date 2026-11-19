@@ -10,7 +10,7 @@ StudioCraft {{version}} is an alpha prerelease. Expect missing features and bugs
 
 The Windows files and the macOS app are signed, and the macOS app is notarized. The Linux `.rpm`, `.deb` and `.flatpak` packages are signed with the release key in `release-signing-key.asc`, and every Linux file has a detached `.asc` signature beside it.
 
-Streaming, and recording with an encoder other than H.264, run a separately installed `ffmpeg`, which no package includes. The Flatpak cannot run an `ffmpeg` installed on the system. Every package records MKV files with H.264 without `ffmpeg`.
+Streaming, and recording with an encoder other than H.264, run a separately installed `ffmpeg`, which no package includes. The Flatpak cannot run an `ffmpeg` installed on the system. Every package, the Flatpak included, records MKV files with H.264 (built in) without `ffmpeg`.
 
 ## Verify the downloads
 

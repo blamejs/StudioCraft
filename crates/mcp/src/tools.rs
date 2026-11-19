@@ -224,9 +224,10 @@ fn studio_tool_definitions() -> Vec<Value> {
         tool(
             "source_audio",
             "Set a source's audio",
-            "Set how a source's audio is mixed: `sync_offset_ms` delays it to line it up with its picture, and `monitor` plays it on \
-             the monitoring device in Settings › Audio (`monitor_only` also leaves it out of recordings and streams). Returns the \
-             source's audio settings. A value out of range is an error and changes nothing.",
+            "Set how a source's audio is mixed: `sync_offset_ms` delays it to line it up with its picture, `monitor` plays it on \
+             the monitoring device in Settings › Audio (`monitor_only` also leaves it out of recordings and streams), and \
+             `record_track` sets whether audio tracks write it to a file of its own. Returns the source's audio settings. A value \
+             out of range is an error and changes nothing.",
             json!({
                 "source": {"type": ["integer", "string"], "description": "The source's id or name."},
                 "sync_offset_ms": {
@@ -239,6 +240,11 @@ fn studio_tool_definitions() -> Vec<Value> {
                     "type": "string",
                     "enum": studiocraft_model::MonitorMode::ALL.map(|m| m.id()),
                     "description": "Whether the audio plays on the monitoring device, and whether it stays in recordings and streams.",
+                },
+                "record_track": {
+                    "type": "boolean",
+                    "description": "Whether audio tracks write the source to a file of its own. Until set, a source heard in the program \
+                                    mix is written and a monitor-only source is not.",
                 },
             }),
             &["source"],
@@ -349,6 +355,30 @@ fn studio_tool_definitions() -> Vec<Value> {
             json!({}),
             &[],
             ADDS,
+        ),
+        tool(
+            "audio_tracks_status",
+            "Audio tracks state",
+            "The audio tracks settings, the output the running take follows (`anchor`), and the last take's state (recording, \
+             finishing, done or stopped), folder, track count, seconds, bytes written, seconds of audio lost before the disk, \
+             whether free space is low, and why and when it stopped early. `repairing` is true while a repair runs, and \
+             `last_repair` holds what the last repair did.",
+            json!({}),
+            &[],
+            READS,
+        ),
+        tool(
+            "audio_tracks_repair",
+            "Repair audio tracks",
+            "Repair the audio tracks of takes that ended without finishing their files (the app or the computer stopped during the \
+             take): each file is cut to its whole frames and its header is written for them. `folder` is a take's `Audio Files` \
+             folder, its `<name> Audio` folder, or the recording folder that holds such folders. The repair runs in the \
+             background and this returns `started` at once; audio_tracks_status then shows `repairing` until it ends, and \
+             `last_repair` with each take repaired, its files and their seconds, and each take that could not be repaired. Takes \
+             that ended normally are left as they are.",
+            json!({"folder": {"type": "string", "description": "The folder to look in."}}),
+            &["folder"],
+            RECORDS,
         ),
         tool(
             "output_status",
@@ -794,11 +824,19 @@ fn source_audio(b: &mut dyn Backend, args: &Args) -> Result<Value, McpError> {
             None => return Err(McpError::Invalid("`monitor` must be off, monitor_only or monitor_and_output".into())),
         },
     };
+    let record_track = match args.get("record_track") {
+        None => None,
+        Some(Value::Bool(on)) => Some(*on),
+        Some(_) => return Err(McpError::Invalid("`record_track` must be true or false".into())),
+    };
     if let Some(ms) = offset {
         run(b, "source.sync_offset", json!({"source": source, "ms": ms}))?;
     }
     if let Some(mode) = monitor {
         run(b, "source.monitor", json!({"source": source, "mode": mode}))?;
+    }
+    if let Some(on) = record_track {
+        run(b, "source.set_record_track", json!({"source": source, "on": on}))?;
     }
     let state = b.call("document.inspect", json!({"detail": "summary"}))?;
     let sources = state.pointer("/collection/sources").and_then(Value::as_array).cloned().unwrap_or_default();
@@ -859,6 +897,8 @@ fn dispatch(b: &mut dyn Backend, name: &str, args: &Args) -> Result<Value, McpEr
         "replay_stop" => output_command(b, "replay.stop", "replay"),
         "replay_save" => output_command(b, "replay.save", "replay"),
         "output_status" => Ok(text(&outputs(b)?)),
+        "audio_tracks_status" => Ok(text(&run(b, "audio_tracks.status", json!({}))?)),
+        "audio_tracks_repair" => Ok(text(&run(b, "audio_tracks.repair", json!({"folder": req_str(args, "folder")?}))?)),
         other => Err(McpError::Invalid(format!("there is no tool `{other}`"))),
     }
 }

@@ -314,6 +314,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "arc-swap"
+version = "1.9.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "84a22b5d51209f6de83d37a0b33d320acb8da88823e42a94c075140708f032a5"
+dependencies = [
+ "rustversion",
+]
+
+[[package]]
 name = "arg_enum_proc_macro"
 version = "0.3.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1335,6 +1344,8 @@ version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=7780b4f58ec3d56b1f908c8fa3b1258fabae3880#7780b4f58ec3d56b1f908c8fa3b1258fabae3880"
 dependencies = [
  "craft-media",
+ "craft-xml",
+ "log",
  "thiserror 2.0.21",
 ]
 
@@ -1586,6 +1597,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-packet"
+version = "0.1.0-alpha.1"
+dependencies = [
+ "arc-swap",
+ "criterion",
+ "crossbeam-queue",
+ "crossbeam-utils",
+ "proptest",
+ "stats_alloc",
+]
+
+[[package]]
 name = "craft-quit"
 version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=7780b4f58ec3d56b1f908c8fa3b1258fabae3880#7780b4f58ec3d56b1f908c8fa3b1258fabae3880"
@@ -1710,6 +1733,16 @@ dependencies = [
  "objc2 0.6.5",
  "objc2-app-kit 0.3.2",
  "wayland-client",
+]
+
+[[package]]
+name = "craft-xml"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=7780b4f58ec3d56b1f908c8fa3b1258fabae3880#7780b4f58ec3d56b1f908c8fa3b1258fabae3880"
+dependencies = [
+ "quick-xml 0.41.0",
+ "serde",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -2442,6 +2475,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cb4cb245038516f5f85277875cdaa4f7d2c9a0fa0468de06ed190163b1581fcf"
 dependencies = [
  "percent-encoding",
+]
+
+[[package]]
+name = "fs4"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7e72ed92b67c146290f88e9c89d60ca163ea417a446f61ffd7b72df3e7f1dfd5"
+dependencies = [
+ "rustix 1.1.6",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -5697,6 +5740,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
 
 [[package]]
+name = "stats_alloc"
+version = "0.1.10"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5c0e04424e733e69714ca1bbb9204c1a57f09f5493439520f9f68c132ad25eec"
+
+[[package]]
 name = "studiocraft"
 version = "0.1.0-alpha.1"
 dependencies = [
@@ -5718,12 +5767,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "studiocraft-audio-tracks"
+version = "0.1.0-alpha.1"
+dependencies = [
+ "craft-audio",
+ "craft-time",
+ "criterion",
+ "crossbeam-queue",
+ "fs4",
+ "log",
+ "serde",
+ "serde_json",
+ "studiocraft-media",
+ "studiocraft-model",
+]
+
+[[package]]
 name = "studiocraft-cli"
 version = "0.1.0-alpha.1"
 dependencies = [
  "serde_json",
+ "studiocraft-audio-tracks",
  "studiocraft-engine",
  "studiocraft-mcp",
+ "studiocraft-media",
  "studiocraft-model",
  "studiocraft-render",
  "studiocraft-studio",
@@ -5746,6 +5813,7 @@ name = "studiocraft-engine"
 version = "0.1.0-alpha.1"
 dependencies = [
  "craft-audio-dsp",
+ "criterion",
  "log",
  "serde",
  "serde_json",
@@ -5893,6 +5961,7 @@ dependencies = [
  "image",
  "log",
  "serde_json",
+ "studiocraft-audio-tracks",
  "studiocraft-encode",
  "studiocraft-engine",
  "studiocraft-media",
@@ -5930,6 +5999,7 @@ dependencies = [
  "pollster 0.4.0",
  "serde",
  "serde_json",
+ "studiocraft-audio-tracks",
  "studiocraft-engine",
  "studiocraft-media",
  "studiocraft-model",

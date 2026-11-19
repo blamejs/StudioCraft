@@ -190,6 +190,12 @@ impl Headless {
         self.studio.output(kind).is_some_and(|s| s.active || s.stopping)
     }
 
+    /// Whether a stream starts audio tracks with the current settings.
+    fn tracks_follow_stream(&self) -> bool {
+        let t = &self.studio.profile().audio_tracks;
+        t.enabled && matches!(t.when, studiocraft_model::AudioTracksWhen::Streaming | studiocraft_model::AudioTracksWhen::Either)
+    }
+
     /// Refuse a command that would stream without permission or reach a file outside the roots,
     /// before anything runs.
     fn guard(&self, cmd: &Command) -> Result<(), McpError> {
@@ -214,6 +220,15 @@ impl Headless {
             Command::ReplaySave {} => {
                 let folder = recording_folder(&self.studio.profile().output.folder);
                 self.allowed(&folder, Access::Write)?;
+            }
+            // Audio tracks of a stream go to the recording folder.
+            Command::StreamStart {} | Command::StreamToggle {} if starts_stream && self.tracks_follow_stream() => {
+                let folder = recording_folder(&self.studio.profile().output.folder);
+                self.allowed(&folder, Access::Write)?;
+            }
+            // Repair rewrites the files it finds.
+            Command::AudioTracksRepair { folder } => {
+                self.allowed(Path::new(folder), Access::Write)?;
             }
             Command::SourceAdd { kind, settings: Some(settings), .. } => {
                 if let Ok(plugin) = registry.source(kind) {

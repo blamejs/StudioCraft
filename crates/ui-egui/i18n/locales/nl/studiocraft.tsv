@@ -426,3 +426,40 @@
 @msg	The stream stopped: {error}	De stream is gestopt: {error}
 @msg	ffmpeg at {path} was not found	ffmpeg is niet gevonden op {path}
 menu	Transform	Transformeren
+	Record as its own track	Als eigen spoor opnemen
+	Audio tracks write this source to a WAV file of its own (Settings › Output › Audio tracks)	Audiosporen schrijven deze bron naar een eigen WAV-bestand (Instellingen › Uitvoer › Audiosporen)
+	Audio tracks	Audiosporen
+	Write each recorded source and the program mix to its own WAV file	Elke opgenomen bron en de programmamix naar een eigen WAV-bestand schrijven
+	Write them while	Schrijven terwijl
+	Include the program mix	Programmamix meenemen
+	Write buffer	Schrijfbuffer
+	MiB	MiB
+	File size	Bestandsgrootte
+	GiB	GiB
+	Audio tracks: {tracks}, about {gb} GiB an hour; the buffer holds {seconds} s of audio while the disk is slow	Audiosporen: {tracks}, ongeveer {gb} GiB per uur; de buffer houdt {seconds} s audio vast terwijl de schijf traag is
+	A recording runs	Er loopt een opname
+	The stream runs	De stream loopt
+	A recording or the stream runs	Er loopt een opname of de stream
+	The disk is almost full; audio tracks stop before the recording or the stream runs out of space	De schijf is bijna vol; de audiosporen stoppen voordat de opname of de stream geen ruimte meer heeft
+	This take has made as many audio track files as it can; sources added since are not recorded to their own files	Deze opname heeft zoveel audiospoorbestanden gemaakt als mogelijk is; bronnen die daarna zijn toegevoegd worden niet in eigen bestanden opgenomen
+	More sources are set to record their own track than can be recorded at once; the later ones are not recorded	Er zijn meer bronnen ingesteld om een eigen spoor op te nemen dan er tegelijk kunnen worden opgenomen; de latere worden niet opgenomen
+	Audio tracks: {tracks}; {lost} s of audio lost while the disk was slow	Audiosporen: {tracks}; {lost} s audio verloren terwijl de schijf traag was
+	TRACKS	SPOREN
+	TRACKS stopped	SPOREN gestopt
+	Audio tracks stopped early; the status message gives the reason	De audiosporen zijn vroegtijdig gestopt; het statusbericht noemt de reden
+	Record as Its Own Track	Als eigen spoor opnemen
+	Audio Tracks Status	Status van audiosporen
+	Repair Audio Tracks	Audiosporen herstellen
+@msg	Audio tracks stopped at {time}: the disk is full	Audiosporen gestopt op {time}: de schijf is vol
+@msg	Audio tracks stopped at {time}: the disk is almost full	Audiosporen gestopt op {time}: de schijf is bijna vol
+@msg	Audio tracks stopped at {time}: the files could not be created	Audiosporen gestopt op {time}: de bestanden konden niet worden gemaakt
+@msg	Audio tracks stopped at {time}: the free space on the disk could not be read	Audiosporen gestopt op {time}: de vrije ruimte op de schijf kon niet worden gelezen
+@msg	Audio tracks stopped at {time}: there is not enough memory for the write buffer	Audiosporen gestopt op {time}: er is niet genoeg geheugen voor de schrijfbuffer
+@msg	Audio tracks stopped at {time}: a file could not be written	Audiosporen gestopt op {time}: een bestand kon niet worden geschreven
+@msg	Audio tracks could not start: {error}	Audiosporen konden niet starten: {error}
+@msg	Audio tracks repaired after the app closed during a take: {folders}	Audiosporen hersteld nadat de app tijdens een opname werd gesloten: {folders}
+@msg	Audio tracks could not be repaired: {takes}	Audiosporen konden niet worden hersteld: {takes}
+@msg	Audio tracks repaired after the app closed during a take: {folders} and {more} more	Audiosporen hersteld nadat de app tijdens een opname werd gesloten: {folders} en {more} meer
+@msg	Audio tracks could not be repaired: {takes} and {more} more	Audiosporen konden niet worden hersteld: {takes} en {more} meer
+@msg	Audio tracks could not be repaired: {takes}. Takes repaired: {count}	Audiosporen konden niet worden hersteld: {takes}. Herstelde opnamen: {count}
+@msg	Audio tracks could not be repaired: {takes} and {more} more. Takes repaired: {count}	Audiosporen konden niet worden hersteld: {takes} en {more} meer. Herstelde opnamen: {count}

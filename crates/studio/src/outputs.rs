@@ -79,6 +79,8 @@ struct Active {
     instance: Box<dyn OutputInstance>,
     stats: Arc<EncoderStats>,
     started: Instant,
+    /// The studio clock's time of the output's first frame and sample.
+    start: Tick,
     target: String,
     /// The hardware encoder it runs, chosen by the `hardware` choice or by name.
     hardware: Option<HardwareRun>,
@@ -202,6 +204,11 @@ impl Outputs {
 
     pub(crate) fn stats(&self) -> Vec<Arc<EncoderStats>> {
         self.active.values().map(|a| Arc::clone(&a.stats)).collect()
+    }
+
+    /// The studio clock's time of the first frame and sample of `kind`, while it runs.
+    pub(crate) fn start_of(&self, kind: OutputKind) -> Option<Tick> {
+        self.active.get(&kind).map(|a| a.start)
     }
 
     pub(crate) fn state(&self, kind: OutputKind) -> Option<OutputState> {
@@ -826,7 +833,8 @@ impl Studio {
         let v = self.profile.video.sanitized();
         let stats = Arc::new(EncoderStats::default());
         let video = VideoFormat { width: v.output_width, height: v.output_height, fps_num: v.fps_num, fps_den: v.fps_den, pixel: PixelFormat::Nv12 };
-        let job = planned.job(encoder, video, program, Arc::clone(&stats), self.clock.now());
+        let start = self.clock.now();
+        let job = planned.job(encoder, video, program, Arc::clone(&stats), start);
         let output = registry.output(planned.output_id)?;
         let mut settings = planned.settings;
         let reserved = match kind {
@@ -839,9 +847,12 @@ impl Studio {
             }
             OutputKind::Streaming | OutputKind::Replay => None,
         };
+        // Audio tracks start with the output, so their first sample is the output's.
+        self.audio_tracks_output_starting(kind, start, reserved.as_deref());
         let instance = match output.start(&settings, job) {
             Ok(instance) => instance,
             Err(e) => {
+                self.audio_tracks_output_failed(kind);
                 if let Some(path) = reserved {
                     let _ = std::fs::remove_file(path);
                 }
@@ -852,7 +863,7 @@ impl Studio {
         let id = self.outputs.next_id;
         self.mixer.send(MixerCmd::AddOutput { id, queue: instance.audio() });
         let target = instance.target();
-        self.outputs.active.insert(kind, Active { id, instance, stats, started: Instant::now(), target, hardware });
+        self.outputs.active.insert(kind, Active { id, instance, stats, started: Instant::now(), start, target, hardware });
         self.update_encode_target();
         Ok(())
     }
@@ -1145,6 +1156,7 @@ mod tests {
             instance: Box::new(FailedOutput),
             stats: Arc::new(EncoderStats::default()),
             started: Instant::now(),
+            start: Tick(0),
             target: String::new(),
             hardware,
         };

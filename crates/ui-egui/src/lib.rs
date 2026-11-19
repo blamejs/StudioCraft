@@ -580,6 +580,7 @@ impl StudioApp {
             w.adapters = self.render.as_ref().map(|rs| rs.available_adapters.iter().map(|a| Candidate::of(a, None)).collect()).unwrap_or_default();
             w.drawing_with = self.studio.gpu().and_then(Gpu::adapter).map(|a| a.name.clone());
             w.gpu_notices = self.window_gpu.notices.clone();
+            w.track_sources = self.studio.audio_track_sources();
             self.settings = Some(w);
         }
     }
@@ -1668,6 +1669,9 @@ impl StudioApp {
         let rec = self.studio.output(OutputKind::Recording);
         let live = self.studio.output(OutputKind::Streaming);
         let replay = self.studio.output(OutputKind::Replay);
+        let outputs_run = [&rec, &live].into_iter().flatten().any(|s| s.active);
+        let source_limit = self.studio.audio_tracks_source_limit();
+        let tracks = self.studio.audio_tracks_status().and_then(|s| tracks_item(s, outputs_run, source_limit));
         let height = theme::sizes(ui.ctx()).bar_status;
         let line = theme::palette(ui.ctx()).line;
         let frame = egui::Frame::side_top_panel(ui.style()).inner_margin(egui::Margin::symmetric(8, 0));
@@ -1675,7 +1679,8 @@ impl StudioApp {
             ui.with_layout(craft_ui::direction::row(ui), |ui| {
                 if let Some((text, error)) = notice {
                     let color = if error { ui.visuals().warn_fg_color } else { ui.visuals().text_color() };
-                    ui.colored_label(color, text);
+                    // A message longer than the bar is cut off, so the whole text is on hover.
+                    ui.colored_label(color, text.clone()).on_hover_text(text);
                 }
                 ui.with_layout(craft_ui::direction::trailing(ui), |ui| {
                     let fps = format!("{fps:.2}");
@@ -1690,6 +1695,11 @@ impl StudioApp {
                             let t = s.elapsed.as_secs();
                             ui.colored_label(Color32::from_rgb(230, 70, 60), format!("{tag} {:02}:{:02}:{:02}", t / 3600, (t / 60) % 60, t % 60));
                         }
+                    }
+                    if let Some((text, warn, hover)) = tracks {
+                        ui.separator();
+                        let color = if warn { ui.visuals().warn_fg_color } else { ui.visuals().text_color() };
+                        ui.colored_label(color, text).on_hover_text(hover);
                     }
                 });
             });
@@ -2087,6 +2097,46 @@ fn output_status(o: &studiocraft_studio::OutputState) -> String {
         (OutputStatus::Running, _) => tl!("Running").to_string(),
         (OutputStatus::Stopped, _) => tl!("Stopped").to_string(),
         (OutputStatus::Failed(e), _) => craft_i18n::fmt(tl!("Failed: {error}"), &[("error", e)]),
+    }
+}
+
+/// The audio tracks item of the status bar: its text, whether it shows as a warning, and its
+/// hover text. It shows while a take runs or finishes, and after a take stopped early while the
+/// recording or the stream that started it still runs.
+/// `source_limit` says that sources set to record were left out by the limit on tracks at once.
+fn tracks_item(s: &studiocraft_studio::AudioTracksStatus, outputs_run: bool, source_limit: bool) -> Option<(String, bool, String)> {
+    use studiocraft_studio::AudioTracksState as S;
+    let t = s.seconds() as u64;
+    let clock = format!("{:02}:{:02}:{:02}", t / 3600, (t / 60) % 60, t % 60);
+    let tracks = s.tracks().to_string();
+    match s.state()? {
+        S::Recording | S::Finishing => {
+            let mut warnings = Vec::new();
+            if s.low_space() {
+                warnings.push(tl!("The disk is almost full; audio tracks stop before the recording or the stream runs out of space"));
+            }
+            if s.track_limit() {
+                warnings.push(tl!("This take has made as many audio track files as it can; sources added since are not recorded to their own files"));
+            }
+            if source_limit {
+                warnings.push(tl!("More sources are set to record their own track than can be recorded at once; the later ones are not recorded"));
+            }
+            let warn = !warnings.is_empty();
+            let hover = if warnings.is_empty() {
+                let lost = format!("{:.1}", s.dropped_seconds());
+                craft_i18n::fmt(
+                    tl!("Audio tracks: {tracks}; {lost} s of audio lost while the disk was slow"),
+                    &[("tracks", &tracks), ("lost", &lost)],
+                )
+            } else {
+                warnings.join("\n")
+            };
+            Some((format!("{} {clock}", tl!("TRACKS")), warn, hover))
+        }
+        S::Stopped if outputs_run => {
+            Some((tl!("TRACKS stopped").to_string(), true, tl!("Audio tracks stopped early; the status message gives the reason").to_string()))
+        }
+        S::Stopped | S::Done => None,
     }
 }
 

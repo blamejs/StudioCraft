@@ -437,3 +437,40 @@
 @msg	The stream stopped: {error}	Yayın durdu: {error}
 @msg	ffmpeg at {path} was not found	{path} konumundaki ffmpeg bulunamadı
 menu	Transform	Dönüştür
+	Record as its own track	Ayrı bir parça olarak kaydet
+	Audio tracks write this source to a WAV file of its own (Settings › Output › Audio tracks)	Ses parçaları bu kaynağı kendi WAV dosyasına yazar (Ayarlar › Çıkış › Ses parçaları)
+	Audio tracks	Ses parçaları
+	Write each recorded source and the program mix to its own WAV file	Kaydedilen her kaynağı ve program miksini kendi WAV dosyasına yaz
+	Write them while	Şu sırada yaz
+	Include the program mix	Program miksini ekle
+	Write buffer	Yazma arabelleği
+	MiB	MiB
+	File size	Dosya boyutu
+	GiB	GiB
+	Audio tracks: {tracks}, about {gb} GiB an hour; the buffer holds {seconds} s of audio while the disk is slow	Ses parçaları: {tracks}, saatte yaklaşık {gb} GiB; arabellek, disk yavaşken {seconds} sn ses tutar
+	A recording runs	Bir kayıt sürerken
+	The stream runs	Yayın sürerken
+	A recording or the stream runs	Bir kayıt veya yayın sürerken
+	The disk is almost full; audio tracks stop before the recording or the stream runs out of space	Disk neredeyse dolu; ses parçaları, kaydın veya yayının yeri bitmeden durur
+	This take has made as many audio track files as it can; sources added since are not recorded to their own files	Bu çekim oluşturabileceği kadar ses parçası dosyası oluşturdu; o zamandan beri eklenen kaynaklar kendi dosyalarına kaydedilmez
+	More sources are set to record their own track than can be recorded at once; the later ones are not recorded	Kendi parçasını kaydetmek üzere ayarlı kaynak sayısı aynı anda kaydedilebilecek sayıdan fazla; sonrakiler kaydedilmez
+	Audio tracks: {tracks}; {lost} s of audio lost while the disk was slow	Ses parçaları: {tracks}; disk yavaşken {lost} sn ses kaybedildi
+	TRACKS	PARÇALAR
+	TRACKS stopped	PARÇALAR durdu
+	Audio tracks stopped early; the status message gives the reason	Ses parçaları erken durdu; nedeni durum iletisinde yer alır
+	Record as Its Own Track	Ayrı Bir Parça Olarak Kaydet
+	Audio Tracks Status	Ses Parçalarının Durumu
+	Repair Audio Tracks	Ses Parçalarını Onar
+@msg	Audio tracks stopped at {time}: the disk is full	Ses parçaları {time} anında durdu: disk dolu
+@msg	Audio tracks stopped at {time}: the disk is almost full	Ses parçaları {time} anında durdu: disk neredeyse dolu
+@msg	Audio tracks stopped at {time}: the files could not be created	Ses parçaları {time} anında durdu: dosyalar oluşturulamadı
+@msg	Audio tracks stopped at {time}: the free space on the disk could not be read	Ses parçaları {time} anında durdu: diskteki boş alan okunamadı
+@msg	Audio tracks stopped at {time}: there is not enough memory for the write buffer	Ses parçaları {time} anında durdu: yazma arabelleği için yeterli bellek yok
+@msg	Audio tracks stopped at {time}: a file could not be written	Ses parçaları {time} anında durdu: bir dosya yazılamadı
+@msg	Audio tracks could not start: {error}	Ses parçaları başlatılamadı: {error}
+@msg	Audio tracks repaired after the app closed during a take: {folders}	Uygulama bir çekim sırasında kapandığı için ses parçaları onarıldı: {folders}
+@msg	Audio tracks could not be repaired: {takes}	Ses parçaları onarılamadı: {takes}
+@msg	Audio tracks repaired after the app closed during a take: {folders} and {more} more	Uygulama bir çekim sırasında kapandığı için ses parçaları onarıldı: {folders} ve {more} tane daha
+@msg	Audio tracks could not be repaired: {takes} and {more} more	Ses parçaları onarılamadı: {takes} ve {more} tane daha
+@msg	Audio tracks could not be repaired: {takes}. Takes repaired: {count}	Ses parçaları onarılamadı: {takes}. Onarılan çekimler: {count}
+@msg	Audio tracks could not be repaired: {takes} and {more} more. Takes repaired: {count}	Ses parçaları onarılamadı: {takes} ve {more} tane daha. Onarılan çekimler: {count}
