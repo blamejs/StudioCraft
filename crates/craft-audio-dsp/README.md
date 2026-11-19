@@ -96,4 +96,4 @@ The crate combines two crates from the ArtCraft apps, with changes:
 
 Copyright (c) 2026 ArtCraft Team and the FilmCraft contributors.
 Copyright (c) 2026 ArtCraft Team and the SoundCraft contributors.
-Copyright (c) 2026 The StudioCraft contributors.
+Copyright (c) 2026 The Craft contributors.
