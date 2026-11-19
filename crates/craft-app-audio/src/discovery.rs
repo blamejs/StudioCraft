@@ -471,12 +471,20 @@ fn discover(inner: &Arc<Inner>, rx: &Receiver<Cmd>, wake: &Wake, epoch: u64) {
                 next_scan = Instant::now() + Duration::from_millis(RESCAN_MS);
             }
             if visible && now >= next_peak {
+                // Read under the run lock, as a new run frees and assigns rows under it, so a run
+                // that stops cannot write a level into a row another application has since. Each
+                // reading asks the meter interfaces the scan opened for one value apiece.
+                let Ok(run) = inner.run.lock() else { break };
+                if !mine() {
+                    break;
+                }
                 let peaks = &inner.peaks;
                 w.peaks(&apps, &mut |i, p| {
                     if let Some(s) = apps.get(i).and_then(|a| a.slot) {
                         peaks.set(usize::from(s), p);
                     }
                 });
+                drop(run);
                 next_peak = Instant::now() + Duration::from_millis(PEAK_MS);
             }
         }

@@ -91,8 +91,14 @@ fn a_saved_choice_keeps_its_program_when_another_with_the_same_name_starts() {
     let mut c = b.clone();
     c.path = r"D:\C\game.exe".into();
     c.pids = vec![12];
-    let list = AppList { generation: 4, apps: vec![b, c], error: None };
+    let list = AppList { generation: 4, apps: vec![b.clone(), c], error: None };
     assert_eq!(list.find(&saved), None);
+    // A folder name with letters outside ASCII matches after the same lower-casing.
+    let mut e = app("game.exe", 13, false);
+    e.path = r"D:\ÉQUIPE\game.exe".into();
+    let saved_e = AppKey::decode(&e.choice()).unwrap();
+    let list = AppList { generation: 5, apps: vec![b, e], error: None };
+    assert_eq!(list.find(&saved_e).map(|x| x.pids[0]), Some(13));
 }
 
 #[test]

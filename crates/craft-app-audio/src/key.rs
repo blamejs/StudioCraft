@@ -56,9 +56,9 @@ impl AppKey {
     }
 
     /// Whether an application listed as `other` is this one: the same name, and the same path when
-    /// this key has one.
+    /// this key has one, compared after the lower-casing [`AppKey::with_path`] applies.
     pub fn matches(&self, other: &AppKey, other_path: &str) -> bool {
-        self.name == other.name && self.path.as_ref().is_none_or(|p| p.eq_ignore_ascii_case(other_path))
+        self.name == other.name && self.path.as_ref().is_none_or(|p| *p == other_path.trim().to_lowercase())
     }
 
     /// A number for the key, the same on every run (64-bit FNV-1a of the encoded key), never 0.
