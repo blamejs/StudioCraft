@@ -92,9 +92,11 @@ impl Journal {
     /// Open the journal in `dir` to append to it, with its lines, locked while it is open. `None`
     /// when another journal handle holds the lock: the take is still being written or repaired.
     /// A last line cut short by a crash is removed, so the lines appended next read back. A
-    /// journal that is a link is refused.
+    /// journal that is a link, or that has more than one name (hard link), is refused.
     pub fn open_idle(dir: &Path) -> std::io::Result<Option<(Journal, Vec<Line>)>> {
-        let mut file = crate::open::no_follow(OpenOptions::new().read(true).write(true), &dir.join(FILE_NAME))?;
+        let path = dir.join(FILE_NAME);
+        let mut file = crate::open::no_follow(OpenOptions::new().read(true).write(true), &path)?;
+        crate::open::one_name(&file, &path)?;
         match file.try_lock() {
             Ok(()) => {}
             Err(std::fs::TryLockError::WouldBlock) => return Ok(None),
@@ -261,6 +263,21 @@ mod tests {
         f.set_len(MAX_BYTES + 1).unwrap();
         drop(f);
         assert!(!ended(&dir).unwrap(), "a journal that ends in zeros did not end");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_journal_with_another_name_is_not_opened_for_repair() {
+        let dir = scratch("hard-link");
+        let take = dir.join("take");
+        std::fs::create_dir_all(&take).unwrap();
+        // A last line cut short, which opening for repair would remove.
+        let text = b"{\"stop\":{\"reason\":\"x\"}}\n{\"st";
+        std::fs::write(dir.join("elsewhere"), text).unwrap();
+        std::fs::hard_link(dir.join("elsewhere"), take.join(FILE_NAME)).unwrap();
+        let err = Journal::open_idle(&take).err().unwrap_or_else(|| panic!("a journal with two names was opened"));
+        assert!(err.to_string().contains("2 names"), "{err}");
+        assert_eq!(std::fs::read(dir.join("elsewhere")).unwrap(), text, "the other name's file is unchanged");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
