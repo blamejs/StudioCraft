@@ -941,6 +941,27 @@ fn a_failed_write_keeps_the_whole_frames_it_got_out() {
     assert_eq!(read(&dir.join("Mic.wav")), want);
 }
 
+/// A take that ends after a failure releases its journal, so the journal reads and repair can
+/// open it while the writer is still open.
+#[test]
+fn an_abandoned_take_that_ended_reads_while_its_writer_is_open() {
+    let dir = scratch("abandoned-open");
+    let mut rig = Rig::new(config(&dir), 4);
+    let a = spec(1, "Mic");
+    rig.c.set_start(Tick(500));
+    rig.c.set_tracks(vec![a.clone()]);
+    for n in 0..4 {
+        feed(&a.slot, 1, n);
+    }
+    rig.pump().unwrap();
+    rig.w.abandon(StopReason::DiskFull);
+    let lines = journal::read(&dir).unwrap();
+    assert!(matches!(lines.last(), Some(Line::End { .. })), "{lines:?}");
+    assert!(journal::ended(&dir).unwrap());
+    assert!(journal::Journal::open_idle(&dir).unwrap().is_some(), "the lock is off");
+    drop(rig);
+}
+
 #[test]
 fn takes_given_the_same_folder_name_each_get_their_own_folder() {
     let recording = scratch("folders").parent().and_then(Path::parent).unwrap().to_path_buf();
@@ -1003,10 +1024,10 @@ fn a_sync_journals_the_tracks_that_grew_and_the_dropouts_that_ended() {
     rig.w.sync().unwrap();
     // Nothing grew since: the next sync adds no sync line.
     rig.w.sync().unwrap();
+    // On Windows the journal of a take still being written cannot be read, so it is read after
+    // the end, which adds no sync line.
+    rig.end().unwrap();
     let f = BLOCK_FRAMES as u64;
     let lines: Vec<Line> = journal::read(&dir).unwrap().into_iter().filter(|l| matches!(l, Line::Sync { .. } | Line::Dropout { .. })).collect();
-    assert_eq!(lines, [Line::Dropout { track: 0, at: f, frames: 2 * f }, Line::Sync { tracks: vec![(0, 4 * f)] }]);
-    rig.end().unwrap();
-    let lines = journal::read(&dir).unwrap();
-    assert_eq!(lines.iter().filter(|l| matches!(l, Line::Dropout { .. })).count(), 1, "the dropout is journaled once");
+    assert_eq!(lines, [Line::Dropout { track: 0, at: f, frames: 2 * f }, Line::Sync { tracks: vec![(0, 4 * f)] }], "the dropout is journaled once");
 }
