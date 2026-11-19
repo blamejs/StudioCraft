@@ -222,6 +222,34 @@ impl<'a> Checked<'a> {
         self.body.emit(out, &[], &[])?;
         Ok(self.len)
     }
+
+    /// The body as its codec header and its data, which together are the bytes
+    /// [`Checked::write_to`] writes, for every body but [`Body::AvcAnnexB`] (`None`). A sender that
+    /// splits a message into pieces, such as RTMP chunks, writes the two slices without copying
+    /// them into one buffer.
+    pub fn parts(&self) -> Option<Parts<'a>> {
+        self.body.parts().map(|(header, n, data)| Parts { header, header_len: n as u8, data })
+    }
+}
+
+/// A checked body's codec header and data, from [`Checked::parts`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Parts<'a> {
+    header: [u8; 5],
+    header_len: u8,
+    data: &'a [u8],
+}
+
+impl<'a> Parts<'a> {
+    /// The bytes before the data: 5 for video, 2 for audio, none for script data.
+    pub fn header(&self) -> &[u8] {
+        &self.header[..usize::from(self.header_len)]
+    }
+
+    /// The data after the header.
+    pub fn data(&self) -> &'a [u8] {
+        self.data
+    }
 }
 
 /// Writes every slice, as `Write::write_all` does for one.
