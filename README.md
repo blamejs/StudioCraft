@@ -1,4 +1,41 @@
-# StudioCraft
+<p align="center">
+  <img src="https://raw.githubusercontent.com/blamejs/StudioCraft/main/assets/app-icon/hicolor/256x256/apps/ai.storyteller.studiocraft.png" width="128" height="128" alt="StudioCraft icon: an engraving-style panda seated on a rounded purple tile">
+</p>
+
+<h1 align="center">StudioCraft</h1>
+
+<p align="center">
+  <b>Record and live-stream scenes with an open-source studio app written in Rust.</b>
+</p>
+
+<p align="center">
+  <img alt="Status: alpha" src="https://img.shields.io/badge/status-alpha-8a4f8b?style=flat-square">
+  <img alt="Written in Rust" src="https://img.shields.io/badge/written%20in-Rust-b83a24?style=flat-square&logo=rust&logoColor=white">
+  <img alt="Runs on Windows, macOS and Linux" src="https://img.shields.io/badge/runs%20on-Windows%20%C2%B7%20macOS%20%C2%B7%20Linux-555555?style=flat-square">
+  <img alt="License: MIT OR Apache-2.0" src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-555555?style=flat-square">
+  <a href="https://github.com/blamejs/StudioCraft/releases"><img alt="Latest release" src="https://img.shields.io/github/v/release/blamejs/StudioCraft?include_prereleases&style=flat-square&label=release"></a>
+  <br>
+  <a href="https://github.com/blamejs/StudioCraft/actions/workflows/ci.yml"><img alt="CI status" src="https://github.com/blamejs/StudioCraft/actions/workflows/ci.yml/badge.svg?branch=main"></a>
+  <a href="https://github.com/blamejs/StudioCraft/actions/workflows/github-code-scanning/codeql"><img alt="CodeQL status" src="https://github.com/blamejs/StudioCraft/actions/workflows/github-code-scanning/codeql/badge.svg?branch=main"></a>
+  <a href="https://socket.dev"><img alt="Dependencies checked by Socket" src="https://img.shields.io/badge/dependencies-checked%20by%20Socket-555555?style=flat-square"></a>
+</p>
+
+<br>
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/blamejs/StudioCraft/main/docs/images/main-window.png" alt="The StudioCraft main window: a scene with a looping fractal video above a caption bar fills the preview, with the video selected. Below it, the Scenes dock lists four scenes, the Sources dock lists the scene's four sources, and the Audio Mixer dock shows meters and faders for three audio sources" width="100%">
+  <br><sub><b>The main window</b>: the preview above, and the Scenes, Sources and Audio Mixer docks below</sub>
+</p>
+
+<p align="center">
+  <a href="#a-look-around">A look around</a> ·
+  <a href="#download-and-install">Download</a> ·
+  <a href="#quick-start">Quick start</a> ·
+  <a href="#features-at-a-glance">Features</a> ·
+  <a href="#documentation">Documentation</a> ·
+  <a href="#building-from-source">Building from source</a> ·
+  <a href="#license">License</a>
+</p>
 
 StudioCraft records and live-streams scenes. A scene is a stack of sources: displays, windows,
 cameras, pictures, text, colors, media files and audio devices. You arrange the sources on a
@@ -7,6 +44,37 @@ Real-Time Messaging Protocol (RTMP) server.
 
 StudioCraft is written in Rust and draws its window with egui and wgpu. It runs on Windows, macOS
 and Linux.
+
+## A look around
+
+<table>
+<tr>
+<td width="50%" valign="top">
+  <img src="https://raw.githubusercontent.com/blamejs/StudioCraft/main/docs/images/studio-mode.png" alt="Studio mode: the Be Right Back scene waits in the preview on the left and the Starting Soon scene plays in the program on the right. The Transition, Cut and Fade buttons sit between them, and Swipe is chosen in the transition picker" width="100%">
+  <p align="center"><sub><b>Studio mode</b>: edit the next scene beside the live one, then send it to the program</sub></p>
+</td>
+<td width="50%" valign="top">
+  <img src="https://raw.githubusercontent.com/blamejs/StudioCraft/main/docs/images/transition.png" alt="A swipe transition halfway through: the Feature scene, a fractal video above a caption bar, moves across the preview and pushes the Starting Soon scene out of view" width="100%">
+  <p align="center"><sub><b>Transitions</b>: cut, fade, fade through a color or swipe, with easing</sub></p>
+</td>
+</tr>
+<tr>
+<td width="50%" valign="top">
+  <img src="https://raw.githubusercontent.com/blamejs/StudioCraft/main/docs/images/audio-mixer.png" alt="The Filters window for the Music bed source shows a compressor with its threshold, ratio, attack, release and output gain. Below it, the Audio Mixer dock shows the meters and faders of the Feature loop, Music bed and Room tone sources" width="100%">
+  <p align="center"><sub><b>Audio Mixer and filters</b>: meters, faders and a compressor on a music bed</sub></p>
+</td>
+<td width="50%" valign="top">
+  <img src="https://raw.githubusercontent.com/blamejs/StudioCraft/main/docs/images/settings.png" alt="The Settings window on its Stream tab: an example RTMP server address, a hidden stream key, the video and audio bitrates, the x264 encoder with its CPU usage preset, and the keyframe interval" width="100%">
+  <p align="center"><sub><b>Settings</b>: General, Stream, Output, Audio, Video and Hotkeys tabs</sub></p>
+</td>
+</tr>
+<tr>
+<td colspan="2" valign="top">
+  <img src="https://raw.githubusercontent.com/blamejs/StudioCraft/main/docs/images/scopes.png" alt="The Scopes window shows the RGB parade of the program output: the red, green and blue levels of a scene with a fractal video above a caption bar" width="100%">
+  <p align="center"><sub><b>Scopes</b>: a waveform, an RGB parade, a histogram, or a YUV or HLS vectorscope of the program</sub></p>
+</td>
+</tr>
+</table>
 
 ## Download and install
 

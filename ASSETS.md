@@ -3,8 +3,8 @@
 Every picture, sound, font or video file in the repository is listed here with its author, source
 and license. `cargo xtask assets` fails when a file is missing from this list.
 
-The asset files are the app icon in `assets/app-icon` and the three interface faces in
-`assets/fonts`. The interface icons are drawn from shapes in `crates/ui-egui/src/icons.rs`. The
+The asset files are the app icon in `assets/app-icon`, the three interface faces in
+`assets/fonts` and the screenshots in `docs/images`. The interface icons are drawn from shapes in `crates/ui-egui/src/icons.rs`. The
 interface faces are built into every build (`crates/ui-egui/src/fonts.rs`). When
 `CRAFT_FONTS_DIR` is set at build time, the faces of a craft-fonts checkout outside this repository
 are built in after them, for the scripts they lack, and egui's built-in fonts come last.
@@ -49,6 +49,12 @@ icon grid: the tile takes 824/1024 of the side, centered on a transparent canvas
 | `assets/fonts/JetBrainsMono-Regular.ttf` | The JetBrains Mono Project Authors | https://github.com/JetBrains/JetBrainsMono | OFL-1.1 (`assets/fonts/OFL-JetBrainsMono.txt`) |
 | `assets/fonts/OFL-Inter.txt` | The Inter Project Authors | https://github.com/rsms/inter | The license text of the Inter files |
 | `assets/fonts/OFL-JetBrainsMono.txt` | The JetBrains Mono Project Authors | https://github.com/JetBrains/JetBrainsMono | The license text of the JetBrains Mono file |
+| `docs/images/main-window.png` | StudioCraft contributors | Screenshot of StudioCraft | MIT OR Apache-2.0 |
+| `docs/images/studio-mode.png` | StudioCraft contributors | Screenshot of StudioCraft | MIT OR Apache-2.0 |
+| `docs/images/transition.png` | StudioCraft contributors | Screenshot of StudioCraft | MIT OR Apache-2.0 |
+| `docs/images/audio-mixer.png` | StudioCraft contributors | Screenshot of StudioCraft | MIT OR Apache-2.0 |
+| `docs/images/settings.png` | StudioCraft contributors | Screenshot of StudioCraft | MIT OR Apache-2.0 |
+| `docs/images/scopes.png` | StudioCraft contributors | Screenshot of StudioCraft | MIT OR Apache-2.0 |
 
 Where each file is used:
 
@@ -61,3 +67,4 @@ Where each file is used:
 - `studiocraft.ico`: the Windows installer's icon.
 - `hicolor/<size>`: the Linux icon theme sizes for packages that install
   `share/icons/hicolor/<size>/apps/ai.storyteller.studiocraft.png`.
+- `docs/images`: the screenshots in `README.md`.
