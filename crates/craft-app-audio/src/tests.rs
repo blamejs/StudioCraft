@@ -24,6 +24,10 @@ fn a_key_is_the_lower_case_file_name_and_round_trips() {
     assert!(AppKey::from_exe("  ").is_none());
     assert!(AppKey::decode("").is_none());
     assert!(AppKey::decode(&"x".repeat(5000)).is_none(), "an oversized name is refused");
+    // Only the forms `encode` writes are read.
+    assert!(AppKey::decode("player.exe|").is_none(), "a `|` with no path");
+    assert!(AppKey::decode(r"C:\other\player.exe").is_none(), "a full path in place of the name");
+    assert!(AppKey::decode(r"c:\other\player.exe|c:\other\player.exe").is_none());
     // A program at a long path, up to Windows' longest, saves a choice that reads back.
     let mut deep = crate::fake::app("deep.exe", 1, false);
     deep.path = format!(r"C:\{}\deep.exe", "d".repeat(4000));

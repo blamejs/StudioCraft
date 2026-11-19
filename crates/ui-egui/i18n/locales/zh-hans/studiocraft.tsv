@@ -406,6 +406,7 @@
 @msg	Capturing one application's audio is not available on this system yet.	此系统尚不支持采集单个应用程序的音频。
 @msg	Capturing one application needs Windows 11 or Windows Server 2022. Audio output capture still records everything the computer plays.	采集单个应用程序需要 Windows 11 或 Windows Server 2022。“音频输出采集”仍会录制计算机播放的所有声音。
 @msg	32 applications are already being captured	已在采集 32 个应用程序
+@msg	The application setting is not a value from the application list.	应用程序设置不是应用程序列表中的值。
 @msg	Drawing again on {adapter}	已重新使用 {adapter} 绘制
 @msg	No graphics device could be opened again: {error}	无法重新打开图形设备：{error}
 @msg	No graphics hardware can be used; drawing in software, which is slower	无法使用图形硬件；改用软件绘制，速度较慢

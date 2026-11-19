@@ -31,6 +31,8 @@ const CHECK: Duration = Duration::from_millis(250);
 /// The source's error after a capture failed or stopped responding. The window shows each
 /// source error through its `@msg` row; the system's own text goes to the log.
 pub(crate) const CAPTURE_FAILED: &str = "The application's audio could not be captured. The capture is opened again shortly.";
+/// The error for an `app` setting that is neither empty nor an application value.
+pub(crate) const BAD_APP: &str = "The application setting is not a value from the application list.";
 /// The source's error when the system reports no reason of its own.
 const UNAVAILABLE: &str = craft_app_audio::NOT_AVAILABLE;
 /// Lets one capture's callback reach the mixer until the source closes it. The callback passes
@@ -255,8 +257,25 @@ impl Env for Live<'_> {
     }
 }
 
+/// The saved choice, read leniently for the settings form: a value that is not an application
+/// key lists nothing extra.
 fn key_of(s: &Settings) -> Option<AppKey> {
     s.str("app").and_then(AppKey::decode)
+}
+
+/// The chosen application: `None` when `app` is missing, null or empty, and an error when it is
+/// any other value that is not an application key.
+fn checked_key(s: &Settings) -> Result<Option<AppKey>, PluginError> {
+    let raw = match s.get("app") {
+        None | Some(serde_json::Value::Null) => return Ok(None),
+        Some(raw) => raw,
+    };
+    let bad = || PluginError::Failed(BAD_APP.to_string());
+    match raw.as_str() {
+        Some(text) if text.trim().is_empty() => Ok(None),
+        Some(text) => AppKey::decode(text).map(Some).ok_or_else(bad),
+        None => Err(bad()),
+    }
 }
 
 fn schema(list: &AppList, saved: Option<&Settings>) -> SettingsSchema {
@@ -295,12 +314,12 @@ struct Instance {
 }
 
 impl Instance {
-    fn new(discovery: Discovery, settings: &Settings) -> Instance {
+    fn new(discovery: Discovery, key: Option<AppKey>) -> Instance {
         let support = discovery.support();
         let unsupported = (!support.supported).then(|| support.reason.unwrap_or_else(|| UNAVAILABLE.into()));
         let usage = discovery.acquire();
         let list = discovery.snapshot();
-        Instance { discovery, _use: usage, unsupported, list, machine: Machine::new(key_of(settings)), stats: None, gate: None, logged: None }
+        Instance { discovery, _use: usage, unsupported, list, machine: Machine::new(key), stats: None, gate: None, logged: None }
     }
 
     /// The error the window shows for the machine's `why`: the system's reason it cannot capture,
@@ -366,7 +385,8 @@ impl SourceInstance for Instance {
         self.check(io)
     }
     fn update(&mut self, s: &Settings, io: &SourceIo) -> Result<(), PluginError> {
-        if self.machine.rebind(key_of(s)) {
+        // A value that is not an application key changes nothing: the capture keeps running.
+        if self.machine.rebind(checked_key(s)?) {
             self.start_over(io);
         }
         self.check(io)
@@ -425,7 +445,7 @@ impl Source for AppAudioSource {
         SourceCaps { video: false, audio: true }
     }
     fn create(&self, settings: &Settings, io: &SourceIo) -> Result<Box<dyn SourceInstance>, PluginError> {
-        let mut i = Instance::new(self.discovery.clone(), settings);
+        let mut i = Instance::new(self.discovery.clone(), checked_key(settings)?);
         // A failure here is reported by the next check as well; the source still starts, silent.
         let _ = i.check(io);
         Ok(Box::new(i))

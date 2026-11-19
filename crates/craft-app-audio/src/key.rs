@@ -41,17 +41,26 @@ impl AppKey {
         }
     }
 
-    /// A key from [`AppKey::encode`]'s text, which reads every key `encode` writes. `None` for an
-    /// empty or oversized text.
+    /// A key from [`AppKey::encode`]'s text, which reads every key `encode` writes. `None` for any
+    /// other text: an empty or oversized one, a name with a folder in it, or a `|` with no path
+    /// after it.
     pub fn decode(text: &str) -> Option<AppKey> {
         if text.len() > MAX_KEY_BYTES + 1 + MAX_PATH_BYTES {
             return None;
         }
-        match text.split_once('|') {
+        let (name, path) = match text.split_once('|') {
+            Some((name, path)) => (name, Some(path)),
+            None => (text, None),
+        };
+        if name.contains(['\\', '/']) {
+            return None;
+        }
+        let key = AppKey::from_exe(name)?;
+        match path {
+            None => Some(key),
             // A path no Windows program has, measured after lower-casing, is refused rather than
-            // read as the name alone.
-            Some((name, path)) => AppKey::from_exe(name).map(|k| k.with_path(path)).filter(|k| k.path.is_some() || path.trim().is_empty()),
-            None => AppKey::from_exe(text),
+            // read as the name alone, and so is an empty one.
+            Some(path) => Some(key.with_path(path)).filter(|k| k.path.is_some()),
         }
     }
 

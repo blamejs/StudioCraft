@@ -406,6 +406,7 @@
 @msg	Capturing one application's audio is not available on this system yet.	이 시스템에서는 아직 한 애플리케이션의 오디오 캡처를 사용할 수 없습니다.
 @msg	Capturing one application needs Windows 11 or Windows Server 2022. Audio output capture still records everything the computer plays.	한 애플리케이션 캡처에는 Windows 11 또는 Windows Server 2022가 필요합니다. 오디오 출력 캡처는 계속 컴퓨터에서 재생되는 모든 소리를 녹음합니다.
 @msg	32 applications are already being captured	이미 애플리케이션 32개를 캡처하고 있습니다
+@msg	The application setting is not a value from the application list.	애플리케이션 설정이 애플리케이션 목록의 값이 아닙니다.
 @msg	Drawing again on {adapter}	{adapter}(으)로 다시 그리는 중
 @msg	No graphics device could be opened again: {error}	그래픽 장치를 다시 열 수 없습니다: {error}
 @msg	No graphics hardware can be used; drawing in software, which is slower	그래픽 하드웨어를 사용할 수 없어 소프트웨어로 그립니다(더 느림)

@@ -409,6 +409,7 @@
 @msg	Capturing one application's audio is not available on this system yet.	La captura del audio de una sola aplicación aún no está disponible en este sistema.
 @msg	Capturing one application needs Windows 11 or Windows Server 2022. Audio output capture still records everything the computer plays.	Capturar una sola aplicación requiere Windows 11 o Windows Server 2022. Captura de salida de audio sigue grabando todo lo que reproduce el equipo.
 @msg	32 applications are already being captured	Ya se están capturando 32 aplicaciones
+@msg	The application setting is not a value from the application list.	El ajuste de aplicación no es un valor de la lista de aplicaciones.
 @msg	Drawing again on {adapter}	Se vuelve a dibujar con {adapter}
 @msg	No graphics device could be opened again: {error}	No se pudo volver a abrir ningún dispositivo gráfico: {error}
 @msg	No graphics hardware can be used; drawing in software, which is slower	No se puede usar ningún hardware gráfico; se dibuja por software, que es más lento

@@ -407,6 +407,7 @@
 @msg	Capturing one application's audio is not available on this system yet.	Tek bir uygulamanın sesini yakalama bu sistemde henüz kullanılamıyor.
 @msg	Capturing one application needs Windows 11 or Windows Server 2022. Audio output capture still records everything the computer plays.	Tek bir uygulamayı yakalamak için Windows 11 veya Windows Server 2022 gerekir. Ses çıkışı yakalama, bilgisayarın çaldığı her şeyi kaydetmeye devam eder.
 @msg	32 applications are already being captured	Zaten 32 uygulama yakalanıyor
+@msg	The application setting is not a value from the application list.	Uygulama ayarı, uygulama listesindeki bir değer değil.
 @msg	Drawing again on {adapter}	Yeniden {adapter} ile çiziliyor
 @msg	No graphics device could be opened again: {error}	Hiçbir grafik aygıtı yeniden açılamadı: {error}
 @msg	No graphics hardware can be used; drawing in software, which is slower	Grafik donanımı kullanılamıyor; yazılımla çiziliyor, bu daha yavaştır

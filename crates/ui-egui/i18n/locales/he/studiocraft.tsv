@@ -396,6 +396,7 @@
 @msg	Capturing one application's audio is not available on this system yet.	לכידת השמע של יישום יחיד עדיין אינה זמינה במערכת זו.
 @msg	Capturing one application needs Windows 11 or Windows Server 2022. Audio output capture still records everything the computer plays.	לכידת יישום יחיד דורשת Windows 11 או Windows Server 2022. "לכידת פלט שמע" עדיין מקליטה את כל מה שהמחשב מנגן.
 @msg	32 applications are already being captured	כבר נלכדים 32 יישומים
+@msg	The application setting is not a value from the application list.	הגדרת היישום אינה ערך מרשימת היישומים.
 @msg	Audio monitoring could not start: {error}	לא ניתן להתחיל את ניטור השמע: {error}
 @msg	Audio monitoring stopped: {error}	ניטור השמע נעצר: {error}
 @msg	Could not check for updates: {error}	לא ניתן לבדוק עדכונים: {error}

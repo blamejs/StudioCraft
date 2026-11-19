@@ -396,6 +396,7 @@
 @msg	Capturing one application's audio is not available on this system yet.	Het geluid van één toepassing opnemen is op dit systeem nog niet beschikbaar.
 @msg	Capturing one application needs Windows 11 or Windows Server 2022. Audio output capture still records everything the computer plays.	Eén toepassing opnemen vereist Windows 11 of Windows Server 2022. Audio-uitvoer opnemen neemt nog steeds alles op wat de computer afspeelt.
 @msg	32 applications are already being captured	Er worden al 32 toepassingen opgenomen
+@msg	The application setting is not a value from the application list.	De toepassingsinstelling is geen waarde uit de lijst met toepassingen.
 @msg	Drawing again on {adapter}	Tekent weer met {adapter}
 @msg	No graphics device could be opened again: {error}	Er kon geen grafisch apparaat opnieuw worden geopend: {error}
 @msg	No graphics hardware can be used; drawing in software, which is slower	Er is geen bruikbare grafische hardware; er wordt in software getekend, wat langzamer is

@@ -187,7 +187,9 @@ An Application audio capture source's `app` setting takes the `app` value: the p
 in lower case, `|`, and the program's path in lower case. A value finds the listed application at
 its path; when none is there, it finds the one application with that file name, so a program that
 moved after an update is still found. A value of the file name alone finds an application only
-while one listed application has that file name. `app_audio.status` returns `support` (`supported`,
+while one listed application has that file name. An empty or missing `app` chooses no application;
+any other value that is not in this form is refused with an error, and the source keeps its current
+choice. `app_audio.status` returns `support` (`supported`,
 `reason` and `permission`), `captures`, `max_captures`, the summed `dropped_blocks` and
 `pool_exhausted` counters, and `running` with each capture's `app`, `pid`, `state`, `packets`,
 `dropped_blocks` and `pool_exhausted`. When the system cannot capture one application,

@@ -291,9 +291,7 @@ fn the_window_is_given_a_fixed_message_for_a_failed_capture() {
     let usage = discovery.acquire();
     discovery.wait_newer(0, Duration::from_secs(10));
     let io = SourceIo::new(MasterClock::new());
-    let mut settings = Settings::new();
-    settings.set("app", "player.exe");
-    let mut instance = super::Instance::new(discovery.clone(), &settings);
+    let mut instance = super::Instance::new(discovery.clone(), AppKey::from_exe("player.exe"));
     instance.check(&io).unwrap();
     let handle = instance.machine.handle.as_ref().expect("the capture opened");
     assert_eq!(handle.wait_ended(Duration::from_secs(10)), CaptureState::Failed);
@@ -315,6 +313,34 @@ fn the_window_is_given_a_fixed_message_for_a_failed_capture() {
 }
 
 #[test]
+fn an_application_value_that_is_not_a_key_is_refused() {
+    let fake = FakeBackend::new();
+    fake.set_apps(vec![app("player.exe", 40, true)]);
+    let source = AppAudioSource::new(Discovery::new(Arc::new(fake.clone())));
+    let io = SourceIo::new(MasterClock::new());
+    let with = |v: serde_json::Value| Settings::new().with("app", v);
+    // Missing, null and empty mean no application.
+    assert!(source.create(&Settings::new(), &io).is_ok());
+    assert!(source.create(&with(serde_json::Value::Null), &io).is_ok());
+    assert!(source.create(&with(" ".into()), &io).is_ok());
+    // Anything else that is not a key is an error, not a silent source.
+    for bad in [
+        serde_json::json!(5),
+        serde_json::json!("|c:\\x.exe"),
+        serde_json::json!("player.exe|"),
+        serde_json::json!("c:\\other\\player.exe"),
+        serde_json::json!("x".repeat(5000)),
+    ] {
+        let err = source.create(&with(bad.clone()), &io).err().map(|e| e.to_string()).unwrap_or_default();
+        assert_eq!(err, super::BAD_APP, "{bad}");
+    }
+    // An update with a bad value is refused and keeps the current choice.
+    let mut instance = source.create(&with("player.exe".into()), &io).unwrap();
+    assert!(instance.update(&with(serde_json::json!(5)), &io).is_err());
+    assert!(instance.update(&with("player.exe".into()), &io).is_ok());
+}
+
+#[test]
 fn the_only_setting_is_the_application() {
     // Process loopback records a process tree or everything except it, so the source offers no
     // switch that would turn the capture into the second.
@@ -327,6 +353,7 @@ fn the_only_setting_is_the_application() {
 fn every_error_the_window_shows_has_a_message_row_in_every_catalog() {
     let shown = [
         super::CAPTURE_FAILED.to_string(),
+        super::BAD_APP.to_string(),
         craft_app_audio::NOT_AVAILABLE.to_string(),
         craft_app_audio::NEEDS_NEWER_WINDOWS.to_string(),
         AppAudioError::Limit.to_string(),
@@ -355,9 +382,7 @@ fn a_capture_dropped_after_the_application_quits_closes_its_gate() {
     let usage = discovery.acquire();
     let first = discovery.wait_newer(0, Duration::from_secs(10));
     let io = SourceIo::new(MasterClock::new());
-    let mut settings = Settings::new();
-    settings.set("app", "player.exe");
-    let mut instance = super::Instance::new(discovery.clone(), &settings);
+    let mut instance = super::Instance::new(discovery.clone(), AppKey::from_exe("player.exe"));
     instance.check(&io).unwrap();
     let gate = instance.gate.clone().expect("the capture has a gate");
     fake.set_apps(Vec::new());
