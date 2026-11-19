@@ -12,7 +12,7 @@ use super::server::{Conn, STREAM_ID, WINDOW, info, s, spawn};
 #[cfg(feature = "rtmps")]
 use crate::TlsRoots;
 use crate::chunk::{csid, msg_type, user_control};
-use crate::transport::Socket;
+use crate::transport::{Socket, set_test_clock};
 use crate::{Config, Error, Kind, Message, Publisher};
 
 const KEY: &str = "live_s3cret_key";
@@ -349,27 +349,34 @@ fn a_server_that_never_answers_times_out() {
 
 #[test]
 fn a_server_that_trickles_the_handshake_times_out() {
-    let (done_tx, done_rx) = mpsc::channel::<()>();
+    let (tick_tx, tick_rx) = mpsc::channel::<()>();
     let (url, server) = spawn(move |mut stream: TcpStream| {
         let mut c0c1 = vec![0u8; 1537];
         stream.read_exact(&mut c0c1).unwrap();
-        // One byte of S0 and S1 every 10 ms, each well within the setup timeout, until the client
-        // gives up. Returns how many bytes went out first.
+        // One byte of S0 and S1 for each read or write the client starts, until the client drops
+        // its clock. Returns how many bytes went out.
         let mut sent = 0;
-        loop {
+        while tick_rx.recv().is_ok() {
             if sent < 1537 && stream.write_all(&[if sent == 0 { 3 } else { 0 }]).is_ok() {
                 sent += 1;
             }
-            match done_rx.recv_timeout(Duration::from_millis(10)) {
-                Err(mpsc::RecvTimeoutError::Timeout) => {}
-                _ => return sent,
-            }
         }
+        sent
     });
+    // The client's clock moves 100 ms on at each read or write, so each read waits well within
+    // the setup timeout, and each tick lets the server send the next byte.
+    let start = Instant::now();
+    let mut ticks = 0;
+    set_test_clock(Some(Box::new(move || {
+        ticks += 1;
+        let _ = tick_tx.send(());
+        start + Duration::from_millis(100) * ticks
+    })));
     let mut c = config(&url);
     c.setup_timeout = Duration::from_secs(1);
-    let e = Publisher::connect(&c).unwrap_err();
-    done_tx.send(()).unwrap();
+    let result = Publisher::connect(&c);
+    set_test_clock(None);
+    let e = result.unwrap_err();
     assert!(matches!(e, Error::Timeout("handshake")), "{e:?}");
     // Without the overall deadline, every byte would restart the read timeout and the client would
     // read all of S0 and S1.

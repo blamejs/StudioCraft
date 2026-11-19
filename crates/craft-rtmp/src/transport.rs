@@ -20,12 +20,35 @@ impl Socket {
     /// The time left before the deadline, or `None` without one.
     fn left(&self) -> io::Result<Option<Duration>> {
         let Some(deadline) = self.deadline else { return Ok(None) };
-        let left = deadline.saturating_duration_since(Instant::now());
+        let left = deadline.saturating_duration_since(now());
         if left.is_zero() {
             return Err(io::Error::from(io::ErrorKind::TimedOut));
         }
         Ok(Some(left))
     }
+}
+
+/// The time the deadline is checked against.
+#[cfg(not(test))]
+fn now() -> Instant {
+    Instant::now()
+}
+
+#[cfg(test)]
+thread_local! {
+    static TEST_CLOCK: std::cell::RefCell<Option<Box<dyn FnMut() -> Instant>>> = const { std::cell::RefCell::new(None) };
+}
+
+/// The time the deadline is checked against: the calling thread's test clock when one is set.
+#[cfg(test)]
+fn now() -> Instant {
+    TEST_CLOCK.with_borrow_mut(|clock| clock.as_mut().map(|f| f())).unwrap_or_else(Instant::now)
+}
+
+/// Sets or clears the clock that sockets on the calling thread check their deadline against.
+#[cfg(test)]
+pub fn set_test_clock(clock: Option<Box<dyn FnMut() -> Instant>>) {
+    TEST_CLOCK.set(clock);
 }
 
 impl Read for Socket {
