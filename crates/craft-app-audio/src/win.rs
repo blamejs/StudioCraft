@@ -24,6 +24,9 @@ use crate::{AppAudioError, AppInfo, AppKey, Backend, CAPTURE_WAIT_MS, CHANNELS, 
 const MIN_BUILD: u32 = 20_348;
 /// How far up the parent chain a capture target is looked for.
 const MAX_PARENT_DEPTH: usize = 16;
+/// While a capture target is a parent of a session's process, the process table is read again
+/// after this many scans (about 5 s), so a parent that exits is noticed.
+const ANCESTRY_SCANS: u64 = 5;
 /// Bytes of one captured frame: two `f32` channels.
 const FRAME_BYTES: usize = 4 * CHANNELS;
 /// The capture buffer holds 250 ms to start with, and grows only for a larger packet.
@@ -79,6 +82,8 @@ impl Backend for WinBackend {
             system: System::new(),
             pids: BTreeSet::new(),
             new_session: false,
+            parent_targets: false,
+            table_scan: 0,
             scan: 0,
         }))
     }
@@ -189,6 +194,10 @@ struct WinWatcher {
     /// A session appeared since the process table was last read. A process that reuses an ended
     /// process's id has a session of its own, so its details are read again.
     new_session: bool,
+    /// The last scan found a capture target above a session's own process.
+    parent_targets: bool,
+    /// The scan that last read the process table.
+    table_scan: u64,
     scan: u64,
 }
 
@@ -242,13 +251,16 @@ impl WinWatcher {
         Ok(())
     }
 
-    /// Bring the process table up to date when the session processes changed or a session
-    /// appeared.
+    /// Bring the process table up to date when the session processes changed, a session appeared,
+    /// or a capture target is a parent process and [`ANCESTRY_SCANS`] scans have passed: a parent
+    /// can exit while its child keeps the session.
     fn read_processes(&mut self) {
         let pids: BTreeSet<u32> = self.sessions.values().map(|s| s.pid).collect();
-        if pids == self.pids && !self.new_session {
+        let ancestry_due = self.parent_targets && self.scan.wrapping_sub(self.table_scan) >= ANCESTRY_SCANS;
+        if pids == self.pids && !self.new_session && !ancestry_due {
             return;
         }
+        self.table_scan = self.scan;
         // Names and parents of every process, then program paths for the session processes.
         self.system.refresh_processes_specifics(ProcessesToUpdate::All, true, ProcessRefreshKind::nothing());
         let list: Vec<Pid> = pids.iter().map(|p| Pid::from_u32(*p)).collect();
@@ -283,11 +295,13 @@ impl Watcher for WinWatcher {
         // from: a playing session before a silent one, then the lowest process id.
         let mut apps: BTreeMap<(String, String), AppInfo> = BTreeMap::new();
         let mut chosen: BTreeMap<(String, String), (bool, u32)> = BTreeMap::new();
+        let mut parent_targets = false;
         for s in self.sessions.values() {
             let Some(exe) = self.exe_name(s.pid) else { continue };
             let Some(key) = AppKey::from_exe(&exe) else { continue };
             let path = self.system.process(Pid::from_u32(s.pid)).and_then(|p| p.exe()).map(|p| p.display().to_string()).unwrap_or_default();
             let target = self.target(s.pid, &key);
+            parent_targets |= target != s.pid;
             let name = exe.rsplit_once('.').map_or(exe.as_str(), |(stem, _)| stem).to_string();
             let group = (key.name.clone(), path.to_lowercase());
             let better = chosen.get(&group).is_none_or(|&(active, pid)| (s.active, std::cmp::Reverse(s.pid)) > (active, std::cmp::Reverse(pid)));
@@ -307,6 +321,7 @@ impl Watcher for WinWatcher {
                 entry.target_pid = target;
             }
         }
+        self.parent_targets = parent_targets;
         Ok(apps
             .into_values()
             .map(|mut a| {
