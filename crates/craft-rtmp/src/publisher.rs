@@ -536,13 +536,7 @@ impl Publisher {
         match m.header.type_id {
             msg_type::ACK => {
                 if let Some(seq) = u32_at(0) {
-                    // The sequence number wraps at 4 GiB: carry on from the last value. A number
-                    // that would count more bytes than were sent is stale or wrong, and is ignored.
-                    let low = self.bytes_acked as u32;
-                    let acked = self.bytes_acked + u64::from(seq.wrapping_sub(low));
-                    if acked <= self.bytes_sent {
-                        self.bytes_acked = acked;
-                    }
+                    self.bytes_acked = acked_total(self.bytes_acked, self.bytes_sent, seq);
                 }
             }
             msg_type::WINDOW_ACK_SIZE => {
@@ -602,6 +596,15 @@ impl Publisher {
         }
         Ok(())
     }
+}
+
+/// The byte count an Acknowledgement's sequence number `seq` gives, after `acked` bytes were
+/// acknowledged and `sent` bytes were sent. The server's count only grows and wraps at 4 GiB, so
+/// the number counts forward from the last one. A number that would count more bytes than were
+/// sent is stale or wrong, and `acked` stays.
+pub(crate) fn acked_total(acked: u64, sent: u64, seq: u32) -> u64 {
+    let total = acked + u64::from(seq.wrapping_sub(acked as u32));
+    if total <= sent { total } else { acked }
 }
 
 /// An `onStatus` message's info object.

@@ -12,6 +12,7 @@ use super::server::{Conn, STREAM_ID, WINDOW, info, s, spawn};
 #[cfg(feature = "rtmps")]
 use crate::TlsRoots;
 use crate::chunk::{csid, msg_type, user_control};
+use crate::publisher::acked_total;
 use crate::transport::{Socket, set_test_clock};
 use crate::{Config, Error, Kind, Message, Publisher};
 
@@ -398,6 +399,24 @@ fn a_passed_deadline_stops_reads_and_writes_with_data_waiting() {
     let mut late = Socket::new(stream, Some(Instant::now()));
     assert_eq!(late.read(&mut buf).unwrap_err().kind(), io::ErrorKind::TimedOut);
     assert_eq!(late.write(&[0]).unwrap_err().kind(), io::ErrorKind::TimedOut);
+}
+
+#[test]
+fn acknowledgements_count_on_past_4_gib() {
+    const WRAP: u64 = 1 << 32;
+    // Before the first wrap.
+    assert_eq!(acked_total(0, 5000, 3000), 3000);
+    // A window larger than 2 GiB.
+    assert_eq!(acked_total(0, 3 << 30, 3 << 30), 3 << 30);
+    // After a wrap, a small number counts from the wrap.
+    assert_eq!(acked_total(WRAP - 100, WRAP + 500, 200), WRAP + 200);
+    assert_eq!(acked_total(3 * WRAP - 100, 3 * WRAP + 500, 200), 3 * WRAP + 200);
+    // A number from just before the wrap, read after it, counts before the wrap.
+    assert_eq!(acked_total(WRAP - 500, WRAP + 500, u32::MAX - 99), WRAP - 100);
+    // A number that would count more bytes than were sent is ignored, a stale one included.
+    assert_eq!(acked_total(3000, 5000, 6000), 3000);
+    assert_eq!(acked_total(WRAP + 2000, WRAP + 3000, 4000), WRAP + 2000);
+    assert_eq!(acked_total(WRAP + 2000, WRAP + 3000, 1000), WRAP + 2000);
 }
 
 #[test]
