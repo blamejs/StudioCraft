@@ -475,7 +475,8 @@ fn application_audio_queries_list_apps_and_captures_without_changing_anything() 
     fake.set_peak(&player.key, 0.5);
     fake.set_apps(vec![player, app("browser.exe", 41, false)]);
     let mut e = engine();
-    e.set_app_audio(craft_app_audio::Discovery::new(Arc::new(fake.clone())));
+    let discovery = craft_app_audio::Discovery::new(Arc::new(fake.clone()));
+    e.set_app_audio(discovery.clone());
     let (rev, undo) = (e.revision(), e.undo_label());
     let list = run(&mut e, "app_audio.list", json!({})).unwrap();
     assert!(!list.changed && list.runtime.is_none());
@@ -487,7 +488,7 @@ fn application_audio_queries_list_apps_and_captures_without_changing_anything() 
     assert_eq!(list.result["apps"][1]["target_pid"], 41);
     assert!(list.result["apps"][0]["peak"].is_number(), "the list has meter rows: {}", list.result);
     // Asking again after the meters were read shows the level.
-    assert!(fake.wait_peak_reads(1, std::time::Duration::from_secs(10)));
+    assert!(discovery.wait_peak_passes(1, std::time::Duration::from_secs(10)));
     let again = run(&mut e, "app_audio.list", json!({})).unwrap();
     assert_eq!(again.result["apps"][0]["peak"], 0.5);
     let status = run(&mut e, "app_audio.status", json!({})).unwrap();

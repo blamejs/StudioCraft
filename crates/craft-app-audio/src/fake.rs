@@ -34,6 +34,8 @@ struct State {
     watch_error: Option<String>,
     hold_next: bool,
     held: bool,
+    hold_peaks: bool,
+    peaks_held: bool,
     watchers_dropped: usize,
 }
 
@@ -102,6 +104,28 @@ impl FakeBackend {
         self.with(|s| s.peaks.insert(key.clone(), peak));
     }
 
+    /// Make the meter of `key` give no reading, as a meter that fails does.
+    pub fn clear_peak(&self, key: &AppKey) {
+        self.with(|s| s.peaks.remove(key));
+    }
+
+    /// Make the next meter reading wait, as a meter call stuck in the system does, until
+    /// [`FakeBackend::release_peaks`].
+    pub fn hold_next_peaks(&self) {
+        self.with(|s| s.hold_peaks = true);
+    }
+
+    /// Wait until a meter reading is held, or `timeout` passes. Returns whether one is.
+    pub fn wait_peaks_held(&self, timeout: Duration) -> bool {
+        let Ok(guard) = self.shared.state.lock() else { return false };
+        self.shared.changed.wait_timeout_while(guard, timeout, |s| !s.peaks_held).is_ok_and(|(s, _)| s.peaks_held)
+    }
+
+    /// Let a held meter reading finish.
+    pub fn release_peaks(&self) {
+        self.with(|s| s.peaks_held = false);
+    }
+
     /// What a capture of `pid` does (by default it delivers silence).
     pub fn set_behavior(&self, pid: u32, behavior: Behavior) {
         self.with(|s| s.behaviors.insert(pid, behavior));
@@ -165,13 +189,21 @@ impl Watcher for FakeWatcher {
     }
 
     fn peaks(&mut self, apps: &[AppInfo], out: &mut dyn FnMut(usize, f32)) {
-        let peaks = self.0.with(|s| s.peaks.clone());
+        let (peaks, hold) = self.0.with(|s| {
+            let hold = std::mem::take(&mut s.hold_peaks);
+            s.peaks_held |= hold;
+            (s.peaks.clone(), hold)
+        });
+        if hold && let Ok(guard) = self.0.shared.state.lock() {
+            drop(self.0.shared.changed.wait_while(guard, |s| s.peaks_held));
+        }
         for (i, a) in apps.iter().enumerate() {
             if let Some(p) = peaks.get(&a.key) {
                 out(i, *p);
             }
         }
-        // Counted after the levels are written, so a test that waits for the count sees them.
+        // The levels reach the table after this returns: a test that reads them waits with
+        // `Discovery::wait_peak_passes`.
         self.0.with(|s| s.peak_reads += 1);
     }
 }

@@ -53,6 +53,8 @@ struct Inner {
     published: Condvar,
     generation: AtomicU64,
     peaks: PeakTable,
+    /// Peak readings whose levels are in `peaks`, for [`Discovery::wait_peak_passes`].
+    peak_passes: AtomicU64,
     visible: AtomicBool,
     /// Peak levels are also read until this time ([`crate::now_ms`]), for readers that poll.
     peaks_until: AtomicU64,
@@ -102,6 +104,14 @@ fn mark_fresh(inner: &Inner, epoch: u64) {
     }
 }
 
+/// Count a peak reading whose levels are in the table, and wake [`Discovery::wait_peak_passes`].
+fn mark_peak_pass(inner: &Inner) {
+    let Ok(slot) = inner.slot.lock() else { return };
+    inner.peak_passes.fetch_add(1, Ordering::AcqRel);
+    drop(slot);
+    inner.published.notify_all();
+}
+
 fn leased(inner: &Inner) -> bool {
     crate::now_ms() < inner.lease_until.load(Ordering::Acquire)
 }
@@ -127,6 +137,7 @@ impl Discovery {
                 published: Condvar::new(),
                 generation: AtomicU64::new(0),
                 peaks: PeakTable::default(),
+                peak_passes: AtomicU64::new(0),
                 visible: AtomicBool::new(false),
                 peaks_until: AtomicU64::new(0),
                 lease_until: AtomicU64::new(0),
@@ -235,6 +246,20 @@ impl Discovery {
         let list = self.inner.fresh.load(Ordering::Acquire).then(|| self.snapshot());
         drop(guard);
         list
+    }
+
+    /// Peak readings that have put their levels in the table so far.
+    pub fn peak_passes(&self) -> u64 {
+        self.inner.peak_passes.load(Ordering::Acquire)
+    }
+
+    /// Wait until `n` peak readings in all have put their levels in the table, or `timeout`
+    /// passes. Returns whether they have.
+    pub fn wait_peak_passes(&self, n: u64, timeout: Duration) -> bool {
+        let Ok(guard) = self.inner.slot.lock() else { return false };
+        let passes = || self.inner.peak_passes.load(Ordering::Acquire);
+        drop(self.inner.published.wait_timeout_while(guard, timeout, |_| passes() < n));
+        passes() >= n
     }
 
     /// Read peak levels while `visible` is true (a panel shows the list). Costs nothing otherwise.
@@ -418,6 +443,8 @@ fn discover(inner: &Arc<Inner>, rx: &Receiver<Cmd>, wake: &Wake, epoch: u64) {
     let mut watcher: Option<Box<dyn Watcher>> = None;
     let mut slots: BTreeMap<AppKey, u8> = BTreeMap::new();
     let mut apps: Vec<AppInfo> = Vec::new();
+    // One peak reading's levels, by peak row, allocated once.
+    let mut read: Vec<f32> = vec![0.0; PEAK_SLOTS];
     let now = Instant::now();
     let (mut next_watch, mut next_scan, mut next_peak) = (now, now, now);
     while mine() {
@@ -471,19 +498,26 @@ fn discover(inner: &Arc<Inner>, rx: &Receiver<Cmd>, wake: &Wake, epoch: u64) {
                 next_scan = Instant::now() + Duration::from_millis(RESCAN_MS);
             }
             if visible && now >= next_peak {
-                // Read under the run lock, as a new run frees and assigns rows under it, so a run
-                // that stops cannot write a level into a row another application has since. Each
-                // reading asks the meter interfaces the scan opened for one value apiece.
+                // The meters are read without a lock, since a meter call can stall. An application
+                // with no reading this time reads 0.
+                read.fill(0.0);
+                w.peaks(&apps, &mut |i, p| {
+                    if let Some(r) = apps.get(i).and_then(|a| a.slot).and_then(|s| read.get_mut(usize::from(s))) {
+                        *r = p;
+                    }
+                });
+                // Written under the run lock, as a new run frees and assigns rows under it, so a
+                // run that stopped during the reading writes no level into another application's
+                // row.
                 let Ok(run) = inner.run.lock() else { break };
                 if !mine() {
                     break;
                 }
-                let peaks = &inner.peaks;
-                w.peaks(&apps, &mut |i, p| {
-                    if let Some(s) = apps.get(i).and_then(|a| a.slot) {
-                        peaks.set(usize::from(s), p);
-                    }
-                });
+                for s in apps.iter().filter_map(|a| a.slot).map(usize::from) {
+                    inner.peaks.set(s, read.get(s).copied().unwrap_or(0.0));
+                }
+                // Counted while the run lock still keeps another run from freeing the rows.
+                mark_peak_pass(inner);
                 drop(run);
                 next_peak = Instant::now() + Duration::from_millis(PEAK_MS);
             }

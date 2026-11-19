@@ -188,10 +188,51 @@ fn peaks_are_read_only_while_visible() {
     let list = d.wait_newer(0, WAIT);
     assert_eq!(d.peak(&list.apps[0]), Some(0.0), "no reading before the list is shown");
     d.set_visible(true);
-    assert!(fake.wait_peak_reads(1, WAIT));
+    assert!(d.wait_peak_passes(1, WAIT));
     assert_eq!(d.peak(&list.apps[0]), Some(0.25));
 }
 
+#[test]
+fn a_meter_with_no_reading_shows_silence_rather_than_its_last_level() {
+    let fake = FakeBackend::new();
+    let player = app("player.exe", 40, true);
+    fake.set_peak(&player.key, 0.25);
+    fake.set_apps(vec![player.clone()]);
+    let d = discovery(&fake);
+    let _usage = d.acquire();
+    let list = d.wait_newer(0, WAIT);
+    d.set_visible(true);
+    assert!(d.wait_peak_passes(1, WAIT));
+    assert_eq!(d.peak(&list.apps[0]), Some(0.25));
+    fake.clear_peak(&player.key);
+    // A reading under way may have started before the clear; the one after it starts after.
+    let passes = d.peak_passes();
+    assert!(d.wait_peak_passes(passes + 2, WAIT));
+    assert_eq!(d.peak(&list.apps[0]), Some(0.0));
+}
+
+#[test]
+fn a_stuck_meter_does_not_hold_up_the_last_source_ending() {
+    let fake = FakeBackend::new();
+    fake.set_apps(vec![app("player.exe", 40, true)]);
+    let d = discovery(&fake);
+    let usage = d.acquire();
+    d.wait_newer(0, WAIT);
+    fake.hold_next_peaks();
+    d.set_visible(true);
+    assert!(fake.wait_peaks_held(WAIT));
+    // Dropping the last use takes the run lock; it returns while the meter is still stuck.
+    let (done_tx, done_rx) = sync_channel(1);
+    let dropper = std::thread::spawn(move || {
+        drop(usage);
+        let _ = done_tx.send(());
+    });
+    let returned = done_rx.recv_timeout(WAIT).is_ok();
+    fake.release_peaks();
+    let _ = dropper.join();
+    assert!(returned, "dropping the last use waited for the meter");
+    assert!(fake.wait_watchers_dropped(1, WAIT));
+}
 #[test]
 fn a_lease_keeps_the_list_current_and_then_ends_by_itself() {
     let fake = FakeBackend::new();
@@ -250,7 +291,7 @@ fn a_run_stopped_during_its_scan_leaves_the_next_runs_list_and_peak_rows_alone()
     let current = d.list_now();
     assert_eq!(current.apps[0].name, "browser");
     d.set_visible(true);
-    assert!(fake.wait_peak_reads(1, WAIT));
+    assert!(d.wait_peak_passes(1, WAIT));
     // The stuck scan returns the player list into a run that has stopped.
     fake.release_scan();
     assert!(fake.wait_watchers_dropped(1, WAIT));
@@ -271,7 +312,7 @@ fn peaks_are_read_for_a_while_after_a_poll() {
     let _usage = d.acquire();
     let list = d.wait_newer(0, WAIT);
     d.read_peaks_for(Duration::from_secs(60));
-    assert!(fake.wait_peak_reads(1, WAIT));
+    assert!(d.wait_peak_passes(1, WAIT));
     assert_eq!(d.peak(&list.apps[0]), Some(0.5));
 }
 
