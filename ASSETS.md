@@ -5,9 +5,9 @@ and license. `cargo xtask assets` fails when a file is missing from this list. T
 author, source and license tables give each file's full path from the repository root in backticks.
 The notes and the "Where each file is used" table use short names.
 
-The asset files are the app icon in `assets/app-icon` and the three interface faces in
-`assets/fonts`. The interface icons are drawn from shapes in `crates/ui-egui/src/icons.rs` and are
-not files.
+The asset files are the app icon in `assets/app-icon`, the three interface faces in
+`assets/fonts` and the screenshots in `docs/images`. The interface icons are drawn from shapes in
+`crates/ui-egui/src/icons.rs` and are not files.
 
 ## App icon
 
@@ -66,6 +66,12 @@ The font files and their license texts have these authors, sources and licenses:
 | `assets/fonts/JetBrainsMono-Regular.ttf` | The JetBrains Mono Project Authors | https://github.com/JetBrains/JetBrainsMono | OFL-1.1 (`assets/fonts/OFL-JetBrainsMono.txt`) |
 | `assets/fonts/OFL-Inter.txt` | The Inter Project Authors | https://github.com/rsms/inter | The license text of the Inter files |
 | `assets/fonts/OFL-JetBrainsMono.txt` | The JetBrains Mono Project Authors | https://github.com/JetBrains/JetBrainsMono | The license text of the JetBrains Mono file |
+| `docs/images/main-window.png` | StudioCraft contributors | Screenshot of StudioCraft | MIT OR Apache-2.0 |
+| `docs/images/studio-mode.png` | StudioCraft contributors | Screenshot of StudioCraft | MIT OR Apache-2.0 |
+| `docs/images/transition.png` | StudioCraft contributors | Screenshot of StudioCraft | MIT OR Apache-2.0 |
+| `docs/images/audio-mixer.png` | StudioCraft contributors | Screenshot of StudioCraft | MIT OR Apache-2.0 |
+| `docs/images/settings.png` | StudioCraft contributors | Screenshot of StudioCraft | MIT OR Apache-2.0 |
+| `docs/images/scopes.png` | StudioCraft contributors | Screenshot of StudioCraft | MIT OR Apache-2.0 |
 
 ## Test fixtures
 
@@ -83,3 +89,4 @@ and they are licensed MIT OR Apache-2.0. The files are `collection-v1.json` to
 | `studiocraft.icns` | The macOS app bundle's icon (`StudioCraft.icns`). |
 | `studiocraft.ico` | The Windows installer's icon. |
 | `hicolor/<size>` | The Linux icon theme sizes for packages that install `share/icons/hicolor/<size>/apps/ai.storyteller.studiocraft.png`. |
+| `docs/images` | The screenshots in `README.md`. |
