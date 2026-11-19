@@ -91,9 +91,12 @@ impl Journal {
 
     /// Open the journal in `dir` to append to it, with its lines, locked while it is open. `None`
     /// when another journal handle holds the lock: the take is still being written or repaired.
-    /// A last line cut short by a crash is removed, so the lines appended next read back.
+    /// A last line cut short by a crash is removed, so the lines appended next read back. A
+    /// journal that is a link, or that has more than one name (hard link), is refused.
     pub fn open_idle(dir: &Path) -> std::io::Result<Option<(Journal, Vec<Line>)>> {
-        let mut file = OpenOptions::new().read(true).write(true).open(dir.join(FILE_NAME))?;
+        let path = dir.join(FILE_NAME);
+        let mut file = crate::open::no_follow(OpenOptions::new().read(true).write(true), &path)?;
+        crate::open::one_name(&file, &path)?;
         match file.try_lock() {
             Ok(()) => {}
             Err(std::fs::TryLockError::WouldBlock) => return Ok(None),
@@ -158,15 +161,15 @@ impl Journal {
 }
 
 /// The lines of the journal in `dir`. A last line cut short by a crash is left out; other lines
-/// that do not read are an error.
+/// that do not read are an error, and so is a journal that is a link.
 pub fn read(dir: &Path) -> std::io::Result<Vec<Line>> {
-    parse(&read_bounded(&mut File::open(dir.join(FILE_NAME))?)?).map(|(lines, _)| lines)
+    parse(&read_bounded(&mut crate::open::no_follow(OpenOptions::new().read(true), &dir.join(FILE_NAME))?)?).map(|(lines, _)| lines)
 }
 
 /// Whether the journal in `dir` ends with its `End` line, read from its last 64 KiB only, so a
 /// journal of any length is answered without reading it whole.
 pub fn ended(dir: &Path) -> std::io::Result<bool> {
-    let mut file = File::open(dir.join(FILE_NAME))?;
+    let mut file = crate::open::no_follow(OpenOptions::new().read(true), &dir.join(FILE_NAME))?;
     let len = file.metadata()?.len();
     let from = len.saturating_sub(TAIL_BYTES);
     file.seek(SeekFrom::Start(from))?;
@@ -270,6 +273,21 @@ mod tests {
         f.set_len(MAX_BYTES + 1).unwrap();
         drop(f);
         assert!(!ended(&dir).unwrap(), "a journal that ends in zeros did not end");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_journal_with_another_name_is_not_opened_for_repair() {
+        let dir = scratch("hard-link");
+        let take = dir.join("take");
+        std::fs::create_dir_all(&take).unwrap();
+        // A last line cut short, which opening for repair would remove.
+        let text = b"{\"stop\":{\"reason\":\"x\"}}\n{\"st";
+        std::fs::write(dir.join("elsewhere"), text).unwrap();
+        std::fs::hard_link(dir.join("elsewhere"), take.join(FILE_NAME)).unwrap();
+        let err = Journal::open_idle(&take).err().unwrap_or_else(|| panic!("a journal with two names was opened"));
+        assert!(err.to_string().contains("2 names"), "{err}");
+        assert_eq!(std::fs::read(dir.join("elsewhere")).unwrap(), text, "the other name's file is unchanged");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

@@ -707,6 +707,33 @@ fn repair_follows_no_links_out_of_the_folder() {
     let _ = std::fs::remove_dir_all(outside.parent().and_then(Path::parent).unwrap());
 }
 
+/// A track file or journal swapped for a link after repair looked at the folder is still not
+/// opened: every open refuses a link.
+#[cfg(unix)]
+#[test]
+fn track_files_and_journals_that_are_links_are_not_opened() {
+    use std::os::unix::fs::symlink;
+    let outside = scratch("swap-outside");
+    crashed_take(&outside);
+    let mic_len = std::fs::metadata(outside.join("Mic.wav")).unwrap().len();
+    let journal_bytes = std::fs::read(outside.join(journal::FILE_NAME)).unwrap();
+    let inside = scratch("swap-inside");
+    std::fs::create_dir_all(&inside).unwrap();
+    symlink(outside.join("Mic.wav"), inside.join("Mic.wav")).unwrap();
+    symlink(outside.join(journal::FILE_NAME), inside.join(journal::FILE_NAME)).unwrap();
+    let mic = inside.join("Mic.wav");
+    assert!(wav::check(&mic).is_err(), "check opened a link");
+    assert!(wav::cut(&mic, 0).is_err(), "cut opened a link");
+    assert!(wav::repair(&mic).is_err(), "repair opened a link");
+    assert!(journal::read(&inside).is_err(), "the journal was read through a link");
+    assert!(journal::ended(&inside).is_err(), "the journal's end was read through a link");
+    assert!(journal::Journal::open_idle(&inside).is_err(), "the journal was opened through a link");
+    assert_eq!(std::fs::metadata(outside.join("Mic.wav")).unwrap().len(), mic_len, "nothing outside was written");
+    assert_eq!(std::fs::read(outside.join(journal::FILE_NAME)).unwrap(), journal_bytes, "the journal outside was not changed");
+    let _ = std::fs::remove_dir_all(inside.parent().and_then(Path::parent).unwrap());
+    let _ = std::fs::remove_dir_all(outside.parent().and_then(Path::parent).unwrap());
+}
+
 /// The `bext` time reference of the WAV at `path`, read as the audio editor reads it.
 fn time_reference(path: &Path) -> u64 {
     craft_audio::probe(&std::fs::read(path).unwrap(), Some("wav")).unwrap().bwf.unwrap().time_reference
@@ -939,6 +966,125 @@ fn a_failed_write_keeps_the_whole_frames_it_got_out() {
     assert!(matches!(lines.last(), Some(Line::End { .. })), "{lines:?}");
     let want = [(0..3).flat_map(|n| samples(1, n)).collect::<Vec<f32>>(), vec![0.0; 4]].concat();
     assert_eq!(read(&dir.join("Mic.wav")), want);
+}
+
+/// Append `lines` to the journal of the take in `dir`.
+fn append_lines(dir: &Path, lines: &[Line]) {
+    let mut j = std::fs::OpenOptions::new().append(true).open(dir.join(journal::FILE_NAME)).unwrap();
+    for line in lines {
+        std::io::Write::write_all(&mut j, format!("{}\n", serde_json::to_string(line).unwrap()).as_bytes()).unwrap();
+    }
+}
+
+#[test]
+fn a_cut_part_that_is_not_a_track_file_leaves_the_take_unfinished_and_the_file_in_place() {
+    let dir = scratch("cut-not-wav");
+    crashed_take(&dir);
+    std::fs::write(dir.join("notes.txt"), b"not audio").unwrap();
+    let mic_len = std::fs::metadata(dir.join("Mic.wav")).unwrap().len();
+    append_lines(
+        &dir,
+        &[Line::File { track: 0, name: "Mic".into(), file: "notes.txt".into(), segment: 2, first_frame: 4_096 }, Line::Cut { track: 0, frames: 10 }],
+    );
+    let err = recover::repair(&dir).unwrap_err();
+    assert!(err.to_string().contains("notes.txt"), "{err}");
+    assert_eq!(std::fs::read(dir.join("notes.txt")).unwrap(), b"not audio", "the file was not removed");
+    assert_eq!(std::fs::metadata(dir.join("Mic.wav")).unwrap().len(), mic_len, "Mic.wav was not cut before the error");
+    let recording = dir.parent().and_then(Path::parent).unwrap();
+    assert_eq!(recover::unfinished(recording), vec![dir.clone()], "the journal was not ended");
+    let _ = std::fs::remove_dir_all(recording);
+}
+
+#[test]
+fn a_cut_never_removes_the_first_file_of_a_track() {
+    let dir = scratch("cut-first-file");
+    crashed_take(&dir);
+    // A second track whose only file the journal says starts after the cut.
+    std::fs::copy(dir.join("Mic.wav"), dir.join("Desk.wav")).unwrap();
+    append_lines(
+        &dir,
+        &[Line::File { track: 1, name: "Desk".into(), file: "Desk.wav".into(), segment: 1, first_frame: 4_096 }, Line::Cut { track: 1, frames: 10 }],
+    );
+    let r = recover::repair(&dir).unwrap().unwrap();
+    assert!(dir.join("Desk.wav").exists(), "the track's first file was removed");
+    assert!(r.files.iter().any(|(f, _)| f == "Desk.wav"), "{:?}", r.files);
+    let _ = std::fs::remove_dir_all(dir.parent().and_then(Path::parent).unwrap());
+}
+
+/// Repair of the crashed take in `dir` after `lines` fails with an error naming `named`, and
+/// leaves `Mic.wav` as it was and the take unfinished.
+fn repair_refused(dir: &Path, lines: &[Line], named: &str) {
+    let mic = std::fs::read(dir.join("Mic.wav")).unwrap();
+    append_lines(dir, lines);
+    let err = recover::repair(dir).unwrap_err();
+    assert!(err.to_string().contains(named), "{err}");
+    assert_eq!(std::fs::read(dir.join("Mic.wav")).unwrap(), mic, "Mic.wav was changed before the error");
+    let recording = dir.parent().and_then(Path::parent).unwrap();
+    assert_eq!(recover::unfinished(recording), vec![dir.to_path_buf()], "the journal was not ended");
+}
+
+#[test]
+fn a_cut_part_named_like_a_kept_file_in_other_letter_case_is_refused() {
+    for (tag, part) in [("upper", "MIC.WAV"), ("upper-stem", "MIC.wav")] {
+        let dir = scratch(&format!("cut-case-{tag}"));
+        crashed_take(&dir);
+        let lines =
+            [Line::File { track: 0, name: "Mic".into(), file: part.into(), segment: 2, first_frame: 4_096 }, Line::Cut { track: 0, frames: 10 }];
+        repair_refused(&dir, &lines, part);
+        assert!(dir.join("Mic.wav").exists(), "{part}: Mic.wav was removed");
+        let _ = std::fs::remove_dir_all(dir.parent().and_then(Path::parent).unwrap());
+    }
+}
+
+#[test]
+fn a_cut_part_that_is_a_hard_link_to_a_kept_file_is_refused() {
+    let dir = scratch("cut-hard-link");
+    crashed_take(&dir);
+    std::fs::hard_link(dir.join("Mic.wav"), dir.join("Mic part 2.wav")).unwrap();
+    let lines = [
+        Line::File { track: 0, name: "Mic".into(), file: "Mic part 2.wav".into(), segment: 2, first_frame: 4_096 },
+        Line::Cut { track: 0, frames: 10 },
+    ];
+    repair_refused(&dir, &lines, "Mic part 2.wav");
+    assert!(dir.join("Mic.wav").exists() && dir.join("Mic part 2.wav").exists());
+    let _ = std::fs::remove_dir_all(dir.parent().and_then(Path::parent).unwrap());
+}
+
+#[test]
+fn a_track_file_with_another_name_is_not_rewritten() {
+    let dir = scratch("kept-hard-link");
+    crashed_take(&dir);
+    std::fs::hard_link(dir.join("Mic.wav"), dir.join("elsewhere.bin")).unwrap();
+    repair_refused(&dir, &[], "Mic.wav");
+    let _ = std::fs::remove_dir_all(dir.parent().and_then(Path::parent).unwrap());
+}
+
+#[test]
+fn a_track_file_named_with_a_tilde_by_an_earlier_writer_is_repaired() {
+    let dir = scratch("tilde-name");
+    crashed_take(&dir);
+    std::fs::copy(dir.join("Mic.wav"), dir.join("Desk~1.wav")).unwrap();
+    append_lines(&dir, &[Line::File { track: 1, name: "Desk~1".into(), file: "Desk~1.wav".into(), segment: 1, first_frame: 0 }]);
+    let done = recover::repair(&dir).unwrap().unwrap_or_else(|| panic!("the take was skipped"));
+    let names: Vec<&str> = done.files.iter().map(|(f, _)| f.as_str()).collect();
+    assert_eq!(names, ["Mic.wav", "Desk~1.wav"]);
+    let _ = std::fs::remove_dir_all(dir.parent().and_then(Path::parent).unwrap());
+}
+
+#[cfg(windows)]
+#[test]
+fn a_track_file_named_as_another_files_short_name_is_refused() {
+    let dir = scratch("short-name");
+    crashed_take(&dir);
+    std::fs::copy(dir.join("Mic.wav"), dir.join("Microphone track.wav")).unwrap();
+    if !dir.join("MICROP~1.wav").exists() {
+        eprintln!("skipped: the volume makes no short names");
+        let _ = std::fs::remove_dir_all(dir.parent().and_then(Path::parent).unwrap());
+        return;
+    }
+    let lines = [Line::File { track: 1, name: "Desk".into(), file: "MICROP~1.wav".into(), segment: 1, first_frame: 0 }];
+    repair_refused(&dir, &lines, "MICROP~1.wav");
+    let _ = std::fs::remove_dir_all(dir.parent().and_then(Path::parent).unwrap());
 }
 
 /// A take that ends after a failure releases its journal, so the journal reads and repair can

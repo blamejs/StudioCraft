@@ -117,7 +117,8 @@ flags. The two flags keep the headless backend's file access inside the folders 
   `replay.save`. With audio tracks on for the stream, the recording folder is also checked for
   `stream_start`, `stream.start` and a `stream.toggle` that would start the stream.
   `audio_tracks_repair` and `audio_tracks.repair` rewrite files, so their `folder` must lie inside
-  a write root.
+  a write root. With or without roots, the studio repairs only the recording folder and the
+  folders inside it.
 - `--collection <file>` is opened through the same checks, so the file and the files it names
   must lie inside a read root.
 
@@ -129,8 +130,15 @@ flags. The two flags keep the headless backend's file access inside the folders 
   file that does not exist yet, its nearest existing folder's links are followed and the rest must
   be plain names, so `..` below a missing folder and a link that leads nowhere are refused.
 - The result is compared with each root folder name by folder name: `/work2/x` is not inside
-  `/work`. On Windows case is ignored, and device names (`CON`, `NUL`, `COM1`) and a `:` after the
-  drive are refused.
+  `/work`. On Windows case is ignored, and device names (`CON`, `NUL`, `COM1`), a `:` after the
+  drive, a file or folder name that ends in a dot or a space, and a path that starts with `\\?\` or
+  `\\.\` are refused.
+- A call runs with the path that was checked: the path settings a command stores or a collection
+  opens with, and the `folder` a repair reads, are the absolute paths with their links followed.
+  Before a command that writes to the recording folder runs, the recording folder setting is set
+  to that folder's checked path, and the setting keeps it afterwards. A
+  path that resolves to a name that is not valid Unicode is refused, and so is one whose stored
+  text, checked again, resolves to a different path.
 - A refused call fails before anything runs. Without either flag nothing is checked.
 - The roots apply to the headless backend only. Combining them, `--allow-streaming` or
   `--collection` with a port is an error at startup (exit code 2).
@@ -185,7 +193,7 @@ error -32602. A command that fails is a tool result with `isError: true` and the
 | `replay_stop` | none | Runs `replay.stop`, then returns the replay buffer's state. Replays being saved are still written. |
 | `replay_save` | none | Runs `replay.save`, which writes what the replay buffer holds to a new MKV file in the recording folder in the background, then returns the replay buffer's state. It is an error when the replay buffer is not running or holds nothing yet. |
 | `audio_tracks_status` | none | Runs `audio_tracks.status` and returns the settings (`enabled`, `when`, `include_program`, `buffer_mib`, `segment_gib`), `active` and `finishing` (takes still writing), `repairing` (true while a repair runs) and `last_repair` (what the last repair did, as below), while a take runs the `anchor` it follows (`recording` or `stream`) and the `take_buffer_mib` and `take_segment_gib` it started with (a changed write buffer or file size applies from the next take), and for the last take its `state` (`recording`, `finishing`, `done` or `stopped`), `folder` (once the take's thread has made it), `tracks`, `seconds`, `bytes`, `dropped_seconds`, `low_space`, `track_limit` (true once a source was left without a file because the take made its 256 tracks) and `source_limit` (true while a take runs and more sources are set to record their own track than the 64 tracks recorded at once, the program included; the later sources are not recorded), with `stopped_at` and `reason` when it stopped early. |
-| `audio_tracks_repair` | `folder` | Runs `audio_tracks.repair`, which repairs the takes in `folder` (a take's `Audio Files` folder, its `<name> Audio` folder, or a folder holding such folders) that ended without finishing their files, on a background thread, and returns `started` and `folder` at once. When it ends, `audio_tracks_status` shows `last_repair` with `repaired`, each take's `folder` with its `files` and their `seconds`, and `failed`, each take that could not be repaired with its `folder` and `error`. A folder that does not exist is an error. At most 4 repairs run at once. |
+| `audio_tracks_repair` | `folder` | Runs `audio_tracks.repair`, which repairs the takes in `folder` (a take's `Audio Files` folder, its `<name> Audio` folder, or a folder holding such folders) that ended without finishing their files, on a background thread, and returns `started` and `folder` at once. When it ends, `audio_tracks_status` shows `last_repair` with `repaired`, each take's `folder` with its `files` and their `seconds`, and `failed`, each take that could not be repaired with its `folder` and `error`. `folder` must be the recording folder or a folder inside it, with links followed; a folder outside it, or one that does not exist, is an error. At most 4 repairs run at once. |
 | `output_status` | none | Returns the `recording`, `streaming` and `replay` entries of `document.inspect`: `active`, `status`, `target` (the file or server) and `seconds`. The `replay` entry also has `saving` (replays still being written) and, while it runs, `bytes` (the bytes it holds). |
 
 `transform` is an object with `position` `{x, y}` (the top-left corner in canvas pixels), `scale`

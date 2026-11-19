@@ -13,14 +13,15 @@
 //!   that leads nowhere.
 //! - The result must be a root or lie inside one, compared folder name by folder name, so `/work2`
 //!   is not inside `/work`. On Windows the comparison ignores case, and device names (`CON`,
-//!   `NUL`, `COM1` and the like) and a `:` after the drive are refused.
+//!   `NUL`, `COM1` and the like), a `:` after the drive, a file or folder name that ends in a dot
+//!   or a space, and a path that starts with `\\?\` or `\\.\` are refused.
 //!
 //! A path is checked and then opened. Another program that swaps a folder for a link between the
 //! two steps can still reach outside the roots; the roots confine the client, not the computer.
 
 use std::ffi::OsString;
 use std::fmt;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Component, Path, PathBuf, Prefix};
 
 /// Reading a file or writing one.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -62,6 +63,10 @@ pub enum AccessError {
     Device { path: PathBuf },
     #[error("{} has a `:` in a file or folder name", .path.display())]
     Stream { path: PathBuf },
+    #[error("{} has a file or folder name that ends in a dot or a space", .path.display())]
+    TrailingDotOrSpace { path: PathBuf },
+    #[error("{} starts with `\\\\?\\` or `\\\\.\\`; give the path without that prefix", .path.display())]
+    Verbatim { path: PathBuf },
     #[error("{} goes up with `..` below a folder that does not exist", .path.display())]
     ParentOfMissing { path: PathBuf },
     #[error("{} is a link to something that does not exist", .path.display())]
@@ -149,8 +154,9 @@ fn open_all(paths: &[PathBuf], access: Access) -> Result<Vec<PathBuf>, AccessErr
     Ok(out)
 }
 
-/// `path` without the `\\?\` prefix Windows' canonical paths carry, for people to read.
-fn shown(path: &Path) -> PathBuf {
+/// `path` without the `\\?\` prefix Windows' canonical paths carry, for people to read and for
+/// settings that are saved.
+pub(crate) fn shown(path: &Path) -> PathBuf {
     if !cfg!(windows) {
         return path.to_path_buf();
     }
@@ -169,14 +175,26 @@ fn resolve(path: &Path) -> Result<PathBuf, AccessError> {
     }
     if cfg!(windows) {
         for c in path.components() {
-            if let Component::Normal(name) = c {
-                let name = name.to_string_lossy();
-                if is_device_name(&name) {
-                    return Err(AccessError::Device { path: path.to_path_buf() });
+            match c {
+                // These prefixes turn off the name rules below for the rest of the path.
+                Component::Prefix(p)
+                    if matches!(p.kind(), Prefix::Verbatim(_) | Prefix::VerbatimUNC(..) | Prefix::VerbatimDisk(_) | Prefix::DeviceNS(_)) =>
+                {
+                    return Err(AccessError::Verbatim { path: path.to_path_buf() });
                 }
-                if name.contains(':') {
-                    return Err(AccessError::Stream { path: path.to_path_buf() });
+                Component::Normal(name) => {
+                    let name = name.to_string_lossy();
+                    if is_device_name(&name) {
+                        return Err(AccessError::Device { path: path.to_path_buf() });
+                    }
+                    if name.contains(':') {
+                        return Err(AccessError::Stream { path: path.to_path_buf() });
+                    }
+                    if name.ends_with(['.', ' ']) {
+                        return Err(AccessError::TrailingDotOrSpace { path: path.to_path_buf() });
+                    }
                 }
+                _ => {}
             }
         }
     }
@@ -355,5 +373,22 @@ mod tests {
         for name in ["COM0", "COM10", "console", "show.json"] {
             assert!(!is_device_name(name), "{name}");
         }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn verbatim_paths_and_names_ending_in_a_dot_or_a_space_are_refused() {
+        let (base, roots) = folders("verbatim");
+        let inside = base.join("in/show.json");
+        let verbatim = PathBuf::from(format!(r"\\?\{}", std::path::absolute(&inside).unwrap().display()));
+        assert!(matches!(roots.check(&verbatim, Access::Read), Err(AccessError::Verbatim { .. })));
+        let device = PathBuf::from(format!(r"\\.\{}", std::path::absolute(&inside).unwrap().display()));
+        assert!(matches!(roots.check(&device, Access::Read), Err(AccessError::Verbatim { .. })));
+        for name in ["show.json.", "show.json ", "sub./x.json", "sub /x.json"] {
+            let e = roots.check(&base.join("in").join(name), Access::Read).unwrap_err();
+            assert!(matches!(e, AccessError::TrailingDotOrSpace { .. }), "{name}: {e}");
+        }
+        assert!(roots.check(&inside, Access::Read).is_ok());
+        let _ = std::fs::remove_dir_all(base);
     }
 }

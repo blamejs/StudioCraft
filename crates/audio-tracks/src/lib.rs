@@ -28,6 +28,7 @@ pub mod collect;
 pub mod disk;
 pub mod journal;
 pub mod names;
+mod open;
 pub mod recover;
 pub mod space;
 pub mod wav;

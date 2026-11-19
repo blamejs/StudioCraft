@@ -294,8 +294,11 @@ their files, on a background thread; it returns `{"started": true, "folder"}` at
 repair ends, `last_repair` holds
 `{"repaired": [{"folder", "files": [{"file", "seconds"}]}], "failed": [{"folder", "error"}]}`,
 where `failed` lists each take that could not be repaired, such as one whose journal does not read.
-An empty `folder`, one that does not exist and a fifth repair while four run are errors. A take
-that is still being written, or that another repair holds, is left unchanged.
+`folder` must be the recording folder or a folder inside it, compared with the links of both
+followed, and the repair reads the folder at that resolved path. An empty `folder`, one that does
+not exist, one outside the recording folder, a recording folder that does not exist and a fifth
+repair while four run are errors. A take that is still being written, or that another repair
+holds, is left unchanged.
 
 ### `dock.layout_save`, `dock.layout_apply` and `dock.layout_remove`
 
