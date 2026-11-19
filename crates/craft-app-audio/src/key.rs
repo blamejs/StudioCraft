@@ -8,7 +8,7 @@ const MAX_KEY_BYTES: usize = 1024;
 const MAX_PATH_BYTES: usize = 32_767 * 3;
 
 /// An application, named so the name survives the application quitting and starting again with a
-/// new process id. On Windows it is the program file's name in lower case (`chrome.exe`). `path`,
+/// new process id. On Windows it is the program file's name in lower case (`player.exe`). `path`,
 /// the program file's full path in lower case, is set only to tell apart two running applications
 /// whose files have the same name.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]

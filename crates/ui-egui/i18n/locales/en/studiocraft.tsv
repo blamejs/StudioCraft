@@ -454,7 +454,9 @@
 @msg	The application's audio could not be captured. The capture is opened again shortly.	The application's audio could not be captured. The capture is opened again shortly.
 @msg	Capturing one application's audio is not available on this system yet.	Capturing one application's audio is not available on this system yet.
 @msg	Capturing one application needs Windows 11 or Windows Server 2022. Audio output capture still records everything the computer plays.	Capturing one application needs Windows 11 or Windows Server 2022. Audio output capture still records everything the computer plays.
-@msg	32 applications are already being captured	32 applications are already being captured
+@msg	The most applications that can be captured at once are already being captured.	The most applications that can be captured at once are already being captured.
+@msg	The system refused to capture this application's audio. The capture is tried again every 5 seconds.	The system refused to capture this application's audio. The capture is tried again every 5 seconds.
+@msg	The running applications could not be listed. The list is read again shortly.	The running applications could not be listed. The list is read again shortly.
 @msg	The application setting is not a value from the application list.	The application setting is not a value from the application list.
 @msg	Drawing again on {adapter}	Drawing again on {adapter}
 @msg	No graphics device could be opened again: {error}	No graphics device could be opened again: {error}

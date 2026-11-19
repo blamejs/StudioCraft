@@ -414,7 +414,9 @@
 @msg	The application's audio could not be captured. The capture is opened again shortly.	Не вдалося захопити звук застосунку. Захоплення невдовзі буде відкрито знову.
 @msg	Capturing one application's audio is not available on this system yet.	Захоплення звуку одного застосунку в цій системі поки недоступне.
 @msg	Capturing one application needs Windows 11 or Windows Server 2022. Audio output capture still records everything the computer plays.	Для захоплення одного застосунку потрібна Windows 11 або Windows Server 2022. «Захоплення вихідного звуку» і надалі записує все, що відтворює комп’ютер.
-@msg	32 applications are already being captured	Уже захоплюється 32 застосунки
+@msg	The most applications that can be captured at once are already being captured.	Уже захоплюється найбільша кількість застосунків, яку можна захоплювати одночасно.
+@msg	The system refused to capture this application's audio. The capture is tried again every 5 seconds.	Система відмовила в захопленні звуку цього застосунку. Захоплення повторюється кожні 5 секунд.
+@msg	The running applications could not be listed. The list is read again shortly.	Не вдалося отримати список запущених застосунків. Список невдовзі буде прочитано знову.
 @msg	The application setting is not a value from the application list.	Параметр застосунку не є значенням зі списку застосунків.
 @msg	Drawing again on {adapter}	Малювання знову йде через {adapter}
 @msg	No graphics device could be opened again: {error}	Не вдалося знову відкрити графічний пристрій: {error}

@@ -94,12 +94,26 @@ impl Engine {
         self.app_audio = discovery;
     }
 
+    /// Answers at once and never waits for the system. Until the running discovery thread has
+    /// scanned, the answer has `listing: true` and the last list read, if any; before any scan it
+    /// has no applications.
     fn app_audio_list(&self) -> Value {
+        let support = self.app_audio.support();
+        if !support.supported {
+            return json!({"supported": false, "listing": false, "error": support.reason, "apps": []});
+        }
         // The list stays current for a while, and a caller that asks again within the peak time
         // sees the meters' levels.
         self.app_audio.lease(APP_AUDIO_LEASE);
         self.app_audio.read_peaks_for(APP_AUDIO_PEAK_TIME);
-        let list = self.app_audio.list_now();
+        // Read before a stuck thread is replaced: the replacement has not scanned yet.
+        let stalled = self.app_audio.stalled();
+        self.app_audio.recover();
+        let (list, listing) = match self.app_audio.fresh_list(std::time::Duration::ZERO) {
+            Some(list) => (list, false),
+            None => (self.app_audio.snapshot(), true),
+        };
+        let error = if stalled || self.app_audio.stalled() { Some(craft_app_audio::LIST_STALLED.to_string()) } else { list.error.clone() };
         let apps: Vec<Value> = list
             .apps
             .iter()
@@ -112,16 +126,18 @@ impl Engine {
                     "target_pid": a.target_pid,
                     "playing": a.playing,
                     "peak": self.app_audio.peak(a),
+                    "within": a.within,
                 })
             })
             .collect();
-        json!({"supported": self.app_audio.support().supported, "error": list.error, "apps": apps})
+        json!({"supported": true, "listing": listing, "error": error, "apps": apps})
     }
 
     fn app_audio_status(&self) -> Value {
         let captures = self.app_audio.captures();
         json!({
             "support": self.app_audio.support(),
+            "discovery_stalled": self.app_audio.stalled(),
             "captures": captures.len(),
             "max_captures": craft_app_audio::MAX_CAPTURES,
             "dropped_blocks": captures.iter().map(|c| c.dropped_blocks).sum::<u64>(),

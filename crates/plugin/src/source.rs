@@ -124,6 +124,8 @@ impl VideoOut {
 pub struct AudioOut {
     queue: Fifo<PooledBlock>,
     pool: Arc<AudioPool>,
+    /// While set, the mixer reads nothing from the queue.
+    held: AtomicBool,
 }
 
 /// Blocks of audio a source may queue before the oldest is dropped (about 0.7 s).
@@ -131,7 +133,7 @@ pub const AUDIO_QUEUE_BLOCKS: usize = 32;
 
 impl Default for AudioOut {
     fn default() -> Self {
-        Self { queue: Fifo::new(AUDIO_QUEUE_BLOCKS), pool: block_pool() }
+        Self { queue: Fifo::new(AUDIO_QUEUE_BLOCKS), pool: block_pool(), held: AtomicBool::new(false) }
     }
 }
 
@@ -145,13 +147,32 @@ impl AudioOut {
         self.queue.push(block);
     }
 
-    /// The oldest queued block (mixer side).
+    /// The oldest queued block (mixer side), or `None` while the queue is held.
     pub fn pop(&self) -> Option<PooledBlock> {
+        if self.held.load(Ordering::Acquire) {
+            return None;
+        }
         self.queue.pop()
     }
 
+    /// The blocks the mixer can read: 0 while the queue is held.
     pub fn queued(&self) -> usize {
+        if self.held.load(Ordering::Acquire) {
+            return 0;
+        }
         self.queue.len()
+    }
+
+    /// Hold the queue, or release it. While it is held the mixer reads nothing, and blocks pushed
+    /// in the meantime wait in the queue (the oldest are dropped when it is full) until
+    /// [`AudioOut::clear`] throws them away or the hold is released.
+    pub fn hold(&self, on: bool) {
+        self.held.store(on, Ordering::Release);
+    }
+
+    /// Throw away every queued block, held or not (source side).
+    pub fn clear(&self) {
+        while self.queue.pop().is_some() {}
     }
 
     /// Blocks dropped because the mixer fell behind.
@@ -197,6 +218,22 @@ mod tests {
         assert_eq!(v.size(), Some((8, 4)));
         assert!(matches!(v.take(), Some(VideoContent::Frame(_))));
         assert_eq!(v.replaced(), 1);
+    }
+
+    #[test]
+    fn a_held_audio_queue_gives_the_mixer_nothing() {
+        let a = AudioOut::default();
+        a.push(a.block());
+        a.hold(true);
+        a.push(a.block());
+        assert_eq!(a.queued(), 0);
+        assert!(a.pop().is_none(), "the mixer reads nothing while the queue is held");
+        a.hold(false);
+        assert_eq!(a.queued(), 2, "the blocks waited in the queue");
+        a.hold(true);
+        a.clear();
+        a.hold(false);
+        assert!(a.pop().is_none(), "clear throws the blocks away while the queue is held");
     }
 
     #[test]

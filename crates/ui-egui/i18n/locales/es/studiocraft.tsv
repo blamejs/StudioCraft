@@ -408,7 +408,9 @@
 @msg	The application's audio could not be captured. The capture is opened again shortly.	No se pudo capturar el audio de la aplicación. La captura se abrirá de nuevo en breve.
 @msg	Capturing one application's audio is not available on this system yet.	La captura del audio de una sola aplicación aún no está disponible en este sistema.
 @msg	Capturing one application needs Windows 11 or Windows Server 2022. Audio output capture still records everything the computer plays.	Capturar una sola aplicación requiere Windows 11 o Windows Server 2022. Captura de salida de audio sigue grabando todo lo que reproduce el equipo.
-@msg	32 applications are already being captured	Ya se están capturando 32 aplicaciones
+@msg	The most applications that can be captured at once are already being captured.	Ya se está capturando el máximo de aplicaciones que se pueden capturar a la vez.
+@msg	The system refused to capture this application's audio. The capture is tried again every 5 seconds.	El sistema rechazó capturar el audio de esta aplicación. La captura se vuelve a intentar cada 5 segundos.
+@msg	The running applications could not be listed. The list is read again shortly.	No se pudieron enumerar las aplicaciones en ejecución. La lista se volverá a leer en breve.
 @msg	The application setting is not a value from the application list.	El ajuste de aplicación no es un valor de la lista de aplicaciones.
 @msg	Drawing again on {adapter}	Se vuelve a dibujar con {adapter}
 @msg	No graphics device could be opened again: {error}	No se pudo volver a abrir ningún dispositivo gráfico: {error}

@@ -52,18 +52,18 @@ fn a_key_with_a_path_matches_only_that_path() {
 }
 
 #[test]
-fn arranging_puts_playing_apps_first_and_tells_same_named_files_apart() {
+fn arranging_sorts_by_name_and_tells_same_named_files_apart() {
     let mut a = app("game.exe", 10, false);
     a.path = r"D:\A\game.exe".into();
     let mut b = app("game.exe", 11, true);
     b.path = r"D:\B\game.exe".into();
-    let mut apps = vec![app("zoom.exe", 3, false), a, app("beta.exe", 4, false), b];
+    let mut apps = vec![app("viewer.exe", 3, true), b, app("beta.exe", 4, false), a];
     AppList::arrange(&mut apps);
     let names: Vec<&str> = apps.iter().map(|a| a.name.as_str()).collect();
-    assert_eq!(names, ["game", "beta", "game", "zoom"]);
-    assert_eq!(apps[0].key.path.as_deref(), Some(r"d:\b\game.exe"));
-    assert_eq!(apps[2].key.path.as_deref(), Some(r"d:\a\game.exe"));
-    assert_eq!(apps[1].key.path, None, "a unique name keeps a key without a path");
+    assert_eq!(names, ["beta", "game", "game", "viewer"], "the order does not depend on which applications play");
+    assert_eq!(apps[1].key.path.as_deref(), Some(r"d:\a\game.exe"));
+    assert_eq!(apps[2].key.path.as_deref(), Some(r"d:\b\game.exe"));
+    assert_eq!(apps[0].key.path, None, "a unique name keeps a key without a path");
     let list = AppList { generation: 1, apps, error: None };
     assert_eq!(list.find(&AppKey::from_exe("game.exe").unwrap().with_path(r"D:\A\game.exe")).map(|a| a.pids[0]), Some(10));
 }
@@ -123,17 +123,31 @@ fn peak_rows_keep_their_apps_and_stop_at_64() {
     assert_eq!(apps.iter().filter(|a| a.slot.is_some()).count(), PEAK_SLOTS);
     assert!(apps[64..].iter().all(|a| a.slot.is_none()), "the apps past the 64th have no meter");
     let row = apps[5].slot.unwrap();
-    peaks.set(usize::from(row), 0.5);
-    assert_eq!(peaks.get(row, &apps[5].key), Some(0.5));
-    assert_eq!(peaks.get(row, &apps[6].key), None, "another app's row reads nothing");
+    assert_eq!(apps[5].key_id, apps[5].key.id(), "the key's id is worked out with the row");
+    let now = now_ms();
+    assert_eq!(peaks.get(row, apps[5].key_id, now), None, "a row with no reading yet reads nothing");
+    peaks.set(usize::from(row), 0.5, now);
+    assert_eq!(peaks.get(row, apps[5].key_id, now), Some(0.5));
+    assert_eq!(peaks.get(row, apps[6].key.id(), now), None, "another app's row reads nothing");
     // App 0 quits: its row is freed and given to the first app without one.
     let gone = apps.remove(0);
     discovery::assign_slots(&peaks, &mut slots, &mut apps);
     assert_eq!(apps[4].slot, Some(row), "an app keeps its row across scans");
-    assert_eq!(peaks.get(gone.slot.unwrap(), &gone.key), None);
+    assert_eq!(peaks.get(gone.slot.unwrap(), gone.key.id(), now), None);
     assert!(apps[63].slot.is_some(), "the freed row went to the next app");
-    peaks.set(usize::from(row), f32::NAN);
-    assert_eq!(peaks.get(row, &apps[4].key), Some(0.0), "a reading that is not a number is stored as 0");
+    peaks.set(usize::from(row), f32::NAN, now);
+    assert_eq!(peaks.get(row, apps[4].key_id, now), Some(0.0), "a reading that is not a number is stored as 0");
+}
+
+#[test]
+fn a_level_left_from_a_reading_that_stopped_reads_nothing() {
+    let peaks = PeakTable::default();
+    let key = AppKey::from_exe("player.exe").unwrap();
+    peaks.assign(3, key.id());
+    peaks.set(3, 0.75, 1_000);
+    assert_eq!(peaks.get(3, key.id(), 1_000 + PEAK_FRESH_MS), Some(0.75), "current within the fresh time");
+    assert_eq!(peaks.get(3, key.id(), 1_001 + PEAK_FRESH_MS), None, "an old level is not reported as the current one");
+    assert_eq!(peaks.get(3, 0, 1_000), None, "id 0 names no application");
 }
 
 #[test]
@@ -168,13 +182,33 @@ fn an_unchanged_list_is_not_published_again() {
     let _usage = d.acquire();
     let first = d.wait_newer(0, WAIT);
     let scans = fake.scans();
-    d.refresh();
     fake.set_apps(vec![app("player.exe", 40, true)]);
-    // Wait for two more scans by asking for peaks, which the thread reads after each wake.
-    d.set_visible(true);
-    assert!(fake.wait_peak_reads(1, WAIT));
-    assert!(fake.scans() > scans);
+    d.refresh();
+    let deadline = Instant::now() + WAIT;
+    while fake.scans() <= scans {
+        assert!(Instant::now() < deadline, "the refresh scanned again");
+        std::thread::yield_now();
+    }
     assert_eq!(d.generation(), first.generation);
+}
+
+#[test]
+fn a_burst_of_wakes_scans_at_most_once_per_quarter_second() {
+    let fake = FakeBackend::new();
+    fake.set_apps(vec![app("player.exe", 40, true)]);
+    let d = discovery(&fake);
+    let _usage = d.acquire();
+    d.wait_newer(0, WAIT);
+    let scans = fake.scans();
+    let started = Instant::now();
+    // A device or session event storm.
+    for _ in 0..200 {
+        d.refresh();
+        std::thread::yield_now();
+    }
+    let elapsed = started.elapsed().as_millis();
+    let allowed = 1 + usize::try_from(elapsed / 250).unwrap_or(usize::MAX) + 1;
+    assert!(fake.scans() - scans <= allowed, "{} scans in {elapsed} ms", fake.scans() - scans);
 }
 
 #[test]
@@ -186,14 +220,14 @@ fn peaks_are_read_only_while_visible() {
     let d = discovery(&fake);
     let _usage = d.acquire();
     let list = d.wait_newer(0, WAIT);
-    assert_eq!(d.peak(&list.apps[0]), Some(0.0), "no reading before the list is shown");
+    assert_eq!(d.peak(&list.apps[0]), None, "no reading before the list is shown, which is not the same as silence");
     d.set_visible(true);
     assert!(d.wait_peak_passes(1, WAIT));
     assert_eq!(d.peak(&list.apps[0]), Some(0.25));
 }
 
 #[test]
-fn a_meter_with_no_reading_shows_silence_rather_than_its_last_level() {
+fn a_meter_with_no_reading_shows_no_level_rather_than_its_last_one() {
     let fake = FakeBackend::new();
     let player = app("player.exe", 40, true);
     fake.set_peak(&player.key, 0.25);
@@ -208,7 +242,7 @@ fn a_meter_with_no_reading_shows_silence_rather_than_its_last_level() {
     // A reading under way may have started before the clear; the one after it starts after.
     let passes = d.peak_passes();
     assert!(d.wait_peak_passes(passes + 2, WAIT));
-    assert_eq!(d.peak(&list.apps[0]), Some(0.0));
+    assert_eq!(d.peak(&list.apps[0]), None, "a meter that gives no reading is not the same as silence");
 }
 
 #[test]
@@ -266,7 +300,7 @@ fn a_restarted_discovery_does_not_return_the_earlier_runs_list() {
     // The player quits while nothing runs; the next run lists what runs now.
     fake.set_apps(vec![app("browser.exe", 41, false)]);
     let _usage = d.acquire();
-    let names: Vec<String> = d.list_now().apps.iter().map(|a| a.name.clone()).collect();
+    let names: Vec<String> = d.fresh_list(WAIT).unwrap().apps.iter().map(|a| a.name.clone()).collect();
     assert_eq!(names, ["browser"]);
 }
 
@@ -288,7 +322,7 @@ fn a_run_stopped_during_its_scan_leaves_the_next_runs_list_and_peak_rows_alone()
     fake.set_apps(vec![browser]);
     drop(first);
     let _second = d.acquire();
-    let current = d.list_now();
+    let current = d.fresh_list(WAIT).unwrap();
     assert_eq!(current.apps[0].name, "browser");
     d.set_visible(true);
     assert!(d.wait_peak_passes(1, WAIT));
@@ -323,8 +357,7 @@ fn a_system_without_support_starts_nothing_and_says_why() {
     let d = discovery(&fake);
     let _usage = d.acquire();
     assert!(!d.running());
-    let list = d.list_now();
-    assert_eq!(list.error.as_deref(), Some("needs a newer system"));
+    assert_eq!(d.support().reason.as_deref(), Some("needs a newer system"));
     let key = AppKey::from_exe("player.exe").unwrap();
     let r = d.open_capture(key, Target { pid: 4 }, Box::new(|_| {}));
     assert!(matches!(r, Err(AppAudioError::Unsupported(_))));
@@ -342,14 +375,68 @@ fn a_watch_failure_is_published() {
 }
 
 #[test]
-fn list_now_scans_once_when_nothing_runs() {
+fn a_fresh_list_is_not_waited_for_with_a_zero_timeout() {
     let fake = FakeBackend::new();
     fake.set_apps(vec![app("player.exe", 40, true)]);
     let d = discovery(&fake);
-    let list = d.list_now();
-    assert_eq!(list.apps.len(), 1);
-    assert!(list.error.is_none());
-    assert!(!d.running(), "listing once does not keep a thread");
+    fake.hold_next_scan();
+    let _usage = d.acquire();
+    assert!(fake.wait_scan_held(WAIT));
+    // The first scan is stuck: the caller gets no list instead of waiting.
+    assert!(d.fresh_list(Duration::ZERO).is_none());
+    fake.release_scan();
+    assert_eq!(d.fresh_list(WAIT).map(|l| l.apps.len()), Some(1));
+}
+
+#[test]
+fn a_stuck_discovery_thread_is_replaced_once() {
+    let fake = FakeBackend::new();
+    fake.set_apps(vec![app("player.exe", 40, true)]);
+    let d = discovery(&fake);
+    let _usage = d.acquire();
+    let first = d.fresh_list(WAIT).unwrap();
+    // Any call longer than 0 ms counts as stuck from here on.
+    d.set_stall_limits(ACTIVATE_MS, WEDGE_MS, 0);
+    fake.hold_next_scan();
+    d.refresh();
+    assert!(fake.wait_scan_stalled(&d, 1, WAIT), "the stuck scan shows as a stall");
+    // The browser starts while the first thread is stuck; the thread that replaces it lists it.
+    fake.set_apps(vec![app("browser.exe", 41, true)]);
+    assert!(d.recover(), "a new thread starts beside the stuck one");
+    let second = d.wait_newer(first.generation, WAIT);
+    assert_eq!(second.apps[0].name, "browser");
+    // The new thread sticks as well: no third thread starts while the first is still stuck.
+    fake.hold_next_scan();
+    d.refresh();
+    assert!(fake.wait_scan_stalled(&d, 2, WAIT), "the second stuck scan shows as a stall");
+    assert!(!d.recover(), "at most one stuck thread is left beside the running one");
+    fake.release_scan();
+    assert!(fake.wait_watchers_dropped(1, WAIT), "the first stuck thread ends once its call returns");
+}
+
+#[test]
+fn a_start_put_off_behind_stuck_threads_has_no_fresh_list() {
+    let fake = FakeBackend::new();
+    fake.set_apps(vec![app("player.exe", 40, true)]);
+    let d = discovery(&fake);
+    let usage = d.acquire();
+    assert!(d.fresh_list(WAIT).is_some());
+    d.set_stall_limits(ACTIVATE_MS, WEDGE_MS, 0);
+    fake.hold_next_scan();
+    d.refresh();
+    assert!(fake.wait_scan_stalled(&d, 1, WAIT), "the stuck scan shows as a stall");
+    assert!(d.recover());
+    assert!(d.fresh_list(WAIT).is_some(), "the replacement scans once");
+    fake.hold_next_scan();
+    d.refresh();
+    assert!(fake.wait_scan_stalled(&d, 2, WAIT), "the second stuck scan shows as a stall");
+    // Both threads are alive, so the next start waits for one of them to end.
+    drop(usage);
+    let _usage = d.acquire();
+    assert!(!d.running(), "the start is put off");
+    assert!(d.fresh_list(Duration::ZERO).is_none(), "the stopped run's list is not current");
+    fake.release_scan();
+    assert!(d.fresh_list(WAIT).is_some(), "the start put off runs once a thread ends");
 }
 
 #[test]
@@ -386,7 +473,7 @@ fn a_failed_capture_reports_its_error_once() {
     let d = discovery(&fake);
     let cap = d.open_capture(AppKey::from_exe("a.exe").unwrap(), Target { pid: 9 }, Box::new(|_| {})).unwrap();
     assert_eq!(cap.wait(WAIT), CaptureState::Failed);
-    assert_eq!(cap.take_error().as_deref(), Some("the process has no audio"));
+    assert_eq!(cap.take_error(), Some(AppAudioError::Failed("the process has no audio".into())));
     assert_eq!(cap.take_error(), None);
     assert!(!cap.stalled(now_ms() + 60_000), "a failed capture is not stalled");
     assert_eq!(d.capture_count(), 0, "the count goes down before the state changes");
@@ -404,6 +491,138 @@ fn a_capture_that_stops_reporting_counts_as_stalled() {
     assert!(cap.stalled(now + WEDGE_MS + 500), "no report for longer than the limit");
     // Dropping it does not wait for the thread.
     drop(cap);
+}
+
+#[test]
+fn a_refusal_and_an_exited_target_are_told_apart_from_other_failures() {
+    let fake = FakeBackend::new();
+    fake.set_behavior(9, Behavior::Deny("access denied".into()));
+    fake.set_behavior(10, Behavior::Exit);
+    let d = discovery(&fake);
+    let key = AppKey::from_exe("a.exe").unwrap();
+    let denied = d.open_capture(key.clone(), Target { pid: 9 }, Box::new(|_| {})).unwrap();
+    assert_eq!(denied.wait(WAIT), CaptureState::Failed);
+    assert_eq!(denied.take_error(), Some(AppAudioError::Denied("access denied".into())));
+    let exited = d.open_capture(key, Target { pid: 10 }, Box::new(|_| {})).unwrap();
+    assert_eq!(exited.wait(WAIT), CaptureState::Failed);
+    assert!(matches!(exited.take_error(), Some(AppAudioError::NotRunning(_))));
+}
+
+#[test]
+fn a_started_capture_with_no_audio_yet_is_not_running() {
+    let fake = FakeBackend::new();
+    fake.set_behavior(9, Behavior::Quiet);
+    let d = discovery(&fake);
+    let cap = d.open_capture(AppKey::from_exe("a.exe").unwrap(), Target { pid: 9 }, Box::new(|_| {})).unwrap();
+    let deadline = Instant::now() + WAIT;
+    while cap.state() == CaptureState::Starting {
+        assert!(Instant::now() < deadline, "the stream started");
+        std::thread::yield_now();
+    }
+    assert_eq!(cap.state(), CaptureState::Started, "no packet has arrived");
+    assert_eq!(d.captures()[0].state, CaptureState::Started);
+    assert_eq!(cap.packets(), 0);
+}
+
+#[test]
+fn a_capture_whose_device_goes_away_fails_after_it_ran() {
+    let fake = FakeBackend::new();
+    fake.set_behavior(9, Behavior::FailAfter { packets: 3, error: "the device was removed".into() });
+    let d = discovery(&fake);
+    let cap = d.open_capture(AppKey::from_exe("a.exe").unwrap(), Target { pid: 9 }, Box::new(|_| {})).unwrap();
+    assert_eq!(cap.wait_ended(WAIT), CaptureState::Failed);
+    assert_eq!(cap.packets(), 3);
+    assert_eq!(cap.take_error(), Some(AppAudioError::Failed("the device was removed".into())));
+}
+
+#[test]
+fn an_activation_gets_longer_than_a_started_capture_before_it_counts_as_stalled() {
+    let fake = FakeBackend::new();
+    fake.set_behavior(9, Behavior::Hang);
+    let d = discovery(&fake);
+    let cap = d.open_capture(AppKey::from_exe("a.exe").unwrap(), Target { pid: 9 }, Box::new(|_| {})).unwrap();
+    assert!(fake.wait_hanging(1, WAIT));
+    let now = now_ms();
+    assert_eq!(cap.state(), CaptureState::Starting);
+    assert!(!cap.stalled(now + WEDGE_MS + 500), "a slow activation is not torn down after the started bound");
+    assert!(cap.stalled(now + ACTIVATE_MS + 500));
+    fake.release_hangs();
+    assert_eq!(cap.wait_ended(WAIT), CaptureState::Ended);
+}
+
+#[test]
+fn stuck_capture_threads_of_different_applications_are_bounded() {
+    let fake = FakeBackend::new();
+    let d = discovery(&fake);
+    d.set_stall_limits(0, WEDGE_MS, DISCOVERY_WEDGE_MS);
+    for i in 0..MAX_STUCK_CAPTURES {
+        let pid = 100 + u32::try_from(i).unwrap();
+        fake.set_behavior(pid, Behavior::Hang);
+        let key = AppKey::from_exe(&format!("app{i}.exe")).unwrap();
+        let cap = d.open_capture(key, Target { pid }, Box::new(|_| {})).unwrap();
+        assert!(fake.wait_hanging(i + 1, WAIT));
+        while !cap.stalled(now_ms()) {
+            std::thread::yield_now();
+        }
+        drop(cap);
+    }
+    assert_eq!(d.capture_count(), 0, "stuck captures no longer count against the limit");
+    // Another application would add one more stuck thread: no capture starts until one ends.
+    let next = d.open_capture(AppKey::from_exe("other.exe").unwrap(), Target { pid: 20 }, Box::new(|_| {}));
+    assert!(matches!(next, Err(AppAudioError::Limit)), "{:?}", next.err());
+    assert_eq!(fake.hanging(), MAX_STUCK_CAPTURES, "no further thread was started");
+    fake.release_hangs();
+}
+
+#[test]
+fn a_stuck_capture_gives_back_its_place_and_is_not_started_again_beside_itself() {
+    let fake = FakeBackend::new();
+    fake.set_behavior(9, Behavior::Hang);
+    let d = discovery(&fake);
+    // Activations count as stuck after 0 ms here.
+    d.set_stall_limits(0, WEDGE_MS, DISCOVERY_WEDGE_MS);
+    let key = AppKey::from_exe("a.exe").unwrap();
+    let cap = d.open_capture(key.clone(), Target { pid: 9 }, Box::new(|_| {})).unwrap();
+    assert!(fake.wait_hanging(1, WAIT));
+    let deadline = Instant::now() + WAIT;
+    while !cap.stalled(now_ms()) {
+        assert!(Instant::now() < deadline, "the hung activation counts as stalled");
+        std::thread::yield_now();
+    }
+    assert_eq!(d.capture_count(), 1);
+    drop(cap);
+    assert_eq!(d.capture_count(), 0, "the owner let go of a stuck capture: it no longer counts against the limit");
+    assert!(d.captures().is_empty(), "nor is it reported as a running capture");
+    // The same application is not captured again while its earlier thread is stuck.
+    let again = d.open_capture(key.clone(), Target { pid: 9 }, Box::new(|_| {}));
+    assert!(matches!(again, Err(AppAudioError::Busy(_))), "{:?}", again.err());
+    assert_eq!(fake.hanging(), 1, "no second thread was started");
+    // Other applications still capture.
+    let other = d.open_capture(AppKey::from_exe("b.exe").unwrap(), Target { pid: 20 }, Box::new(|_| {})).unwrap();
+    assert_eq!(other.wait(WAIT), CaptureState::Running);
+    assert_eq!(d.capture_count(), 1);
+    // Once the stuck call returns, its thread ends without counting itself off a second time.
+    fake.release_hangs();
+    let deadline = Instant::now() + WAIT;
+    let next = loop {
+        match d.open_capture(key.clone(), Target { pid: 9 }, Box::new(|_| {})) {
+            Err(AppAudioError::Busy(_)) => {
+                assert!(Instant::now() < deadline, "the stuck thread ended");
+                std::thread::yield_now();
+            }
+            r => break r,
+        }
+    };
+    let next = next.unwrap();
+    assert_eq!(next.wait_ended(WAIT), CaptureState::Ended, "a released hang returns at once");
+    drop(next);
+    drop(other);
+    let deadline = Instant::now() + WAIT;
+    while d.capture_count() != 0 {
+        assert!(Instant::now() < deadline, "every place was given back once");
+        std::thread::yield_now();
+    }
+    assert_eq!(d.capture_count(), 0);
 }
 
 #[test]
@@ -434,11 +653,7 @@ fn the_system_backend_answers() {
     if !s.supported {
         assert!(s.reason.as_deref().is_some_and(|r| !r.is_empty()));
     }
-    let list = Discovery::system().list_now();
-    if !s.supported {
-        assert_eq!(list.error, s.reason);
-        assert!(list.apps.is_empty());
-    }
+    assert_eq!(Discovery::system().support(), s);
 }
 
 #[test]

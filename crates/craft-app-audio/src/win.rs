@@ -9,12 +9,13 @@
 //!   system's conversion, since such a client cannot report a mix format.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
 use wasapi::{
     AudioClient, AudioMeterInformation, DeviceEnumerator, DeviceEventCallbacks, DeviceEventRegistration, Direction, EventCallbacks,
-    EventRegistration, SampleType, SessionState, StreamMode, WaveFormat,
+    EventRegistration, SampleType, SessionState, StreamMode, WasapiError, WaveFormat,
 };
 
 use crate::{AppAudioError, AppInfo, AppKey, Backend, CAPTURE_WAIT_MS, CHANNELS, CaptureShared, OnData, SAMPLE_RATE, Support, Target, Wake, Watcher};
@@ -24,9 +25,6 @@ use crate::{AppAudioError, AppInfo, AppKey, Backend, CAPTURE_WAIT_MS, CHANNELS, 
 const MIN_BUILD: u32 = 20_348;
 /// How far up the parent chain a capture target is looked for.
 const MAX_PARENT_DEPTH: usize = 16;
-/// While a capture target is a parent of a session's process, the process table is read again
-/// after this many scans (about 5 s), so a parent that exits is noticed.
-const ANCESTRY_SCANS: u64 = 5;
 /// Bytes of one captured frame: two `f32` channels.
 const FRAME_BYTES: usize = 4 * CHANNELS;
 /// The capture buffer holds 250 ms to start with, and grows only for a larger packet.
@@ -38,6 +36,13 @@ const BUFFER_HNS: i64 = 200_000;
 /// Unsignaled waits in a row that return before half their time, after which the capture counts as
 /// failed. A signaled wait starts the count over.
 const MAX_EARLY_WAITS: u32 = 50;
+/// A meter reading above this (about -60 dBFS) counts as sound.
+const LOUD: f32 = 0.001;
+/// A session that read as sound within this many scans (about 3 s) counts as making sound when an
+/// instance is chosen.
+const LOUD_SCANS: u64 = 3;
+/// `E_ACCESSDENIED`.
+const E_ACCESSDENIED: i32 = i32::from_ne_bytes(0x8007_0005_u32.to_ne_bytes());
 
 const UNSUPPORTED: &str = crate::NEEDS_NEWER_WINDOWS;
 
@@ -45,8 +50,43 @@ fn failed(e: impl std::fmt::Display) -> AppAudioError {
     AppAudioError::Failed(e.to_string())
 }
 
+/// The Windows build number, read once: it does not change while the app runs.
 fn build() -> Option<u32> {
-    System::kernel_version()?.trim().parse().ok()
+    static BUILD: OnceLock<Option<u32>> = OnceLock::new();
+    *BUILD.get_or_init(|| System::kernel_version()?.trim().parse().ok())
+}
+
+/// Whether process `pid` exists now.
+fn process_exists(pid: u32) -> bool {
+    let mut system = System::new();
+    let pid = Pid::from_u32(pid);
+    system.refresh_processes_specifics(ProcessesToUpdate::Some(&[pid]), true, ProcessRefreshKind::nothing());
+    system.process(pid).is_some()
+}
+
+/// What an activation failure means: the system refused, the target has exited, or another
+/// failure.
+fn activation_error(pid: u32, e: &WasapiError) -> AppAudioError {
+    if let WasapiError::Windows(w) = e
+        && w.code().0 == E_ACCESSDENIED
+    {
+        return AppAudioError::Denied(format!("the system refused to capture process {pid}: {e}"));
+    }
+    if !process_exists(pid) {
+        return AppAudioError::NotRunning(format!("process {pid}"));
+    }
+    AppAudioError::Failed(format!("the system did not start the capture: {e}"))
+}
+
+/// The error of a call that sets up a capture after activation: a refusal is `Denied`, as in
+/// [`activation_error`], so the source waits as long as for a refused activation.
+fn setup_error(e: &WasapiError) -> AppAudioError {
+    if let WasapiError::Windows(w) = e
+        && w.code().0 == E_ACCESSDENIED
+    {
+        return AppAudioError::Denied(format!("the system refused to capture: {e}"));
+    }
+    failed(e)
 }
 
 pub(crate) struct WinBackend;
@@ -83,7 +123,7 @@ impl Backend for WinBackend {
             pids: BTreeSet::new(),
             new_session: false,
             parent_targets: false,
-            table_scan: 0,
+            targets: BTreeMap::new(),
             scan: 0,
         }))
     }
@@ -93,18 +133,18 @@ impl Backend for WinBackend {
         shared.beat();
         // `true` is PROCESS_LOOPBACK_MODE_INCLUDE_TARGET_PROCESS_TREE. The only other mode,
         // `false`, records every process except this tree.
-        let mut client = AudioClient::new_application_loopback_client(target.pid, true)
-            .map_err(|e| AppAudioError::Unsupported(format!("the system did not start the capture: {e}")))?;
+        let mut client = AudioClient::new_application_loopback_client(target.pid, true).map_err(|e| activation_error(target.pid, &e))?;
         shared.beat();
         let format = WaveFormat::new(32, 32, SampleType::Float, SAMPLE_RATE as usize, CHANNELS, None);
         let mode = StreamMode::EventsShared { autoconvert: true, buffer_duration_hns: BUFFER_HNS };
-        client.initialize_client(&format, Direction::Capture, mode, None).map_err(failed)?;
-        let event = client.set_get_eventhandle().map_err(failed)?;
-        let reader = client.get_audiocaptureclient().map_err(failed)?;
-        client.start_stream().map_err(failed)?;
-        shared.running();
+        client.initialize_client(&format, Direction::Capture, mode, None).map_err(|e| setup_error(&e))?;
+        let event = client.set_get_eventhandle().map_err(|e| setup_error(&e))?;
+        let reader = client.get_audiocaptureclient().map_err(|e| setup_error(&e))?;
+        client.start_stream().map_err(|e| setup_error(&e))?;
+        shared.started();
         let mut bytes = vec![0u8; START_FRAMES * FRAME_BYTES];
         let mut samples = vec![0f32; START_FRAMES * CHANNELS];
+        let mut flowing = false;
         // wasapi reports a failed wait as a timeout. A wait that keeps returning long before its
         // time is a failed one.
         let mut early = 0u32;
@@ -127,7 +167,7 @@ impl Backend for WinBackend {
                 early = 0;
             }
             // Read after a timeout too: a capture whose device or process is gone reports it here.
-            let read = drain(&reader, &mut bytes, &mut samples, shared, on_data);
+            let read = drain(&reader, &mut bytes, &mut samples, shared, on_data, &mut flowing);
             if let Err(e) = read {
                 break Err(e);
             }
@@ -137,13 +177,15 @@ impl Backend for WinBackend {
     }
 }
 
-/// Read every packet the system has, convert it and hand it on.
+/// Read every packet the system has, convert it and hand it on. The first packet marks the
+/// capture running.
 fn drain(
     reader: &wasapi::AudioCaptureClient,
     bytes: &mut Vec<u8>,
     samples: &mut Vec<f32>,
     shared: &CaptureShared,
     on_data: &mut OnData,
+    flowing: &mut bool,
 ) -> Result<(), AppAudioError> {
     loop {
         let frames = usize::try_from(reader.get_next_packet_size().map_err(failed)?.unwrap_or(0)).unwrap_or(usize::MAX);
@@ -170,6 +212,10 @@ fn drain(
         if let Some(packet) = samples.get(..count) {
             on_data(packet);
             shared.packet();
+            if !*flowing {
+                *flowing = true;
+                shared.running();
+            }
         }
     }
 }
@@ -180,7 +226,25 @@ struct Session {
     meter: Option<AudioMeterInformation>,
     _events: Option<EventRegistration>,
     seen: u64,
+    /// The capture target of this session's process tree, from the last scan.
+    target: u32,
+    /// The scan in which the meter last read as sound, 0 when it never has.
+    loud: u64,
 }
+
+impl Session {
+    /// Read the meter, and remember a reading above [`LOUD`] as scan `scan`.
+    fn read(&mut self, scan: u64) -> Option<f32> {
+        let p = self.meter.as_ref().and_then(|m| m.get_peak_value().ok())?;
+        if p > LOUD {
+            self.loud = scan;
+        }
+        Some(p)
+    }
+}
+
+/// A program file name and its lower-case path: one listed application.
+type Group = (String, String);
 
 struct WinWatcher {
     enumerator: DeviceEnumerator,
@@ -189,15 +253,15 @@ struct WinWatcher {
     /// Sessions by their instance id, kept across scans so each registers for state changes once.
     sessions: BTreeMap<String, Session>,
     system: System,
-    /// The session processes the process table was last read for.
+    /// The session processes the program paths were last read for.
     pids: BTreeSet<u32>,
     /// A session appeared since the process table was last read. A process that reuses an ended
     /// process's id has a session of its own, so its details are read again.
     new_session: bool,
     /// The last scan found a capture target above a session's own process.
     parent_targets: bool,
-    /// The scan that last read the process table.
-    table_scan: u64,
+    /// The process tree each application's capture took in the last scan.
+    targets: BTreeMap<Group, u32>,
     scan: u64,
 }
 
@@ -239,6 +303,8 @@ impl WinWatcher {
                         meter: control.get_audiometerinformation().ok(),
                         _events: control.register_session_notification(events).ok(),
                         seen: scan,
+                        target: pid,
+                        loud: 0,
                     }
                 });
                 session.pid = pid;
@@ -251,20 +317,28 @@ impl WinWatcher {
         Ok(())
     }
 
-    /// Bring the process table up to date when the session processes changed, a session appeared,
-    /// or a capture target is a parent process and [`ANCESTRY_SCANS`] scans have passed: a parent
-    /// can exit while its child keeps the session.
+    /// Bring the process table up to date when the session processes changed or a session
+    /// appeared, and on every scan while a capture target is a parent process: a parent can exit
+    /// while its child keeps the session, and Windows can give its id to a new process. Each read
+    /// is one system snapshot of the processes; a parent whose id is reused within one scan
+    /// (about 1 s) is still read as the parent until the next one.
     fn read_processes(&mut self) {
         let pids: BTreeSet<u32> = self.sessions.values().map(|s| s.pid).collect();
-        let ancestry_due = self.parent_targets && self.scan.wrapping_sub(self.table_scan) >= ANCESTRY_SCANS;
-        if pids == self.pids && !self.new_session && !ancestry_due {
+        let changed = pids != self.pids || self.new_session;
+        if !changed && !self.parent_targets {
             return;
         }
-        self.table_scan = self.scan;
-        // Names and parents of every process, then program paths for the session processes.
+        // Names and parents of every process, removing the ones that ended.
         self.system.refresh_processes_specifics(ProcessesToUpdate::All, true, ProcessRefreshKind::nothing());
-        let list: Vec<Pid> = pids.iter().map(|p| Pid::from_u32(*p)).collect();
-        self.system.refresh_processes_specifics(ProcessesToUpdate::Some(&list), false, ProcessRefreshKind::nothing().with_exe(UpdateKind::Always));
+        if changed {
+            // Program paths for the session processes.
+            let list: Vec<Pid> = pids.iter().map(|p| Pid::from_u32(*p)).collect();
+            self.system.refresh_processes_specifics(
+                ProcessesToUpdate::Some(&list),
+                false,
+                ProcessRefreshKind::nothing().with_exe(UpdateKind::Always),
+            );
+        }
         self.pids = pids;
         self.new_session = false;
     }
@@ -273,71 +347,147 @@ impl WinWatcher {
         self.system.process(Pid::from_u32(pid)).map(|p| p.name().to_string_lossy().into_owned())
     }
 
+    /// The parent of `pid`, when the table has one that started no later than `pid` did. A
+    /// process that started later holds a reused id, not the parent.
+    fn parent(&self, pid: u32) -> Option<u32> {
+        let child = self.system.process(Pid::from_u32(pid))?;
+        let parent = child.parent()?.as_u32();
+        let p = self.system.process(Pid::from_u32(parent))?;
+        (parent != pid && p.start_time() <= child.start_time()).then_some(parent)
+    }
+
     /// The topmost process above `pid` whose program file has the name `key`.
     fn target(&self, pid: u32, key: &AppKey) -> u32 {
         let mut top = pid;
         for _ in 0..MAX_PARENT_DEPTH {
-            let parent = self.system.process(Pid::from_u32(top)).and_then(|p| p.parent()).map(|p| p.as_u32());
-            match parent {
-                Some(p) if p != top && self.exe_name(p).and_then(|n| AppKey::from_exe(&n)).is_some_and(|k| k.name == key.name) => top = p,
+            match self.parent(top) {
+                Some(p) if self.exe_name(p).and_then(|n| AppKey::from_exe(&n)).is_some_and(|k| k.name == key.name) => top = p,
                 _ => break,
             }
         }
         top
     }
+
+    /// The first of `targets` above `pid` in its parent chain.
+    fn inside(&self, pid: u32, targets: &BTreeMap<u32, String>) -> Option<String> {
+        let mut at = pid;
+        for _ in 0..MAX_PARENT_DEPTH {
+            at = self.parent(at)?;
+            if let Some(choice) = targets.get(&at) {
+                return Some(choice.clone());
+            }
+        }
+        None
+    }
+}
+
+/// One process tree of an application: whether it made sound lately, whether a stream runs.
+#[derive(Clone, Copy, Default)]
+struct Tree {
+    loud: bool,
+    active: bool,
+}
+
+/// The tree a capture of one application takes. The tree taken last time stays while it makes
+/// sound, or while no other tree does, so two instances whose streams start and stop do not make
+/// the source capture again and again. Otherwise the tree that made sound lately, then one with a
+/// running stream, then the lowest process id.
+fn choose(trees: &BTreeMap<u32, Tree>, previous: Option<u32>) -> Option<u32> {
+    if let Some(p) = previous
+        && let Some(t) = trees.get(&p)
+        && (t.loud || !trees.iter().any(|(pid, other)| *pid != p && other.loud))
+    {
+        return Some(p);
+    }
+    trees.iter().max_by_key(|(pid, t)| (t.loud, t.active, std::cmp::Reverse(**pid))).map(|(pid, _)| *pid)
 }
 
 impl Watcher for WinWatcher {
     fn scan(&mut self) -> Result<Vec<AppInfo>, AppAudioError> {
         self.read_sessions()?;
         self.read_processes();
-        // Applications by program file name and path, and the session each one's target comes
-        // from: a playing session before a silent one, then the lowest process id.
-        let mut apps: BTreeMap<(String, String), AppInfo> = BTreeMap::new();
-        let mut chosen: BTreeMap<(String, String), (bool, u32)> = BTreeMap::new();
-        let mut parent_targets = false;
-        for s in self.sessions.values() {
+        // Each session's application, path and capture target.
+        let mut rows: Vec<(String, Group, AppKey, String, String, u32)> = Vec::new();
+        for (id, s) in &self.sessions {
             let Some(exe) = self.exe_name(s.pid) else { continue };
             let Some(key) = AppKey::from_exe(&exe) else { continue };
             let path = self.system.process(Pid::from_u32(s.pid)).and_then(|p| p.exe()).map(|p| p.display().to_string()).unwrap_or_default();
             let target = self.target(s.pid, &key);
-            parent_targets |= target != s.pid;
             let name = exe.rsplit_once('.').map_or(exe.as_str(), |(stem, _)| stem).to_string();
-            let group = (key.name.clone(), path.to_lowercase());
-            let better = chosen.get(&group).is_none_or(|&(active, pid)| (s.active, std::cmp::Reverse(s.pid)) > (active, std::cmp::Reverse(pid)));
-            if better {
-                chosen.insert(group.clone(), (s.active, s.pid));
+            rows.push((id.clone(), (key.name.clone(), path.to_lowercase()), key, name, path, target));
+        }
+        let scan = self.scan;
+        let mut parent_targets = false;
+        let mut trees: BTreeMap<Group, BTreeMap<u32, Tree>> = BTreeMap::new();
+        for (id, group, _, _, _, target) in &rows {
+            let Some(s) = self.sessions.get_mut(id) else { continue };
+            s.target = *target;
+            parent_targets |= *target != s.pid;
+            trees.entry(group.clone()).or_default().entry(*target).or_default();
+        }
+        // Where an application runs as separate instances, each instance's meter is read now, so
+        // the choice goes by sound and not only by whether a stream runs.
+        for (id, group, _, _, _, target) in &rows {
+            let several = trees.get(group).is_some_and(|t| t.len() > 1);
+            let Some(s) = self.sessions.get_mut(id) else { continue };
+            if several {
+                s.read(scan);
             }
-            let entry =
-                apps.entry(group).or_insert_with(|| AppInfo { key, name, path, pids: Vec::new(), target_pid: target, playing: false, slot: None });
+            if let Some(t) = trees.get_mut(group).and_then(|t| t.get_mut(target)) {
+                t.loud |= s.loud != 0 && scan.wrapping_sub(s.loud) <= LOUD_SCANS;
+                t.active |= s.active;
+            }
+        }
+        self.parent_targets = parent_targets;
+        let previous = std::mem::take(&mut self.targets);
+        let mut apps: BTreeMap<Group, AppInfo> = BTreeMap::new();
+        for (id, group, key, name, path, _) in rows {
+            let Some(s) = self.sessions.get(&id) else { continue };
+            let target = match self.targets.get(&group) {
+                Some(t) => *t,
+                None => {
+                    let t = trees.get(&group).and_then(|t| choose(t, previous.get(&group).copied())).unwrap_or(s.pid);
+                    self.targets.insert(group.clone(), t);
+                    t
+                }
+            };
+            let entry = apps.entry(group).or_insert_with(|| AppInfo {
+                key,
+                name,
+                path,
+                pids: Vec::new(),
+                target_pid: target,
+                playing: false,
+                within: None,
+                slot: None,
+                key_id: 0,
+            });
             if !entry.pids.contains(&s.pid) {
                 entry.pids.push(s.pid);
             }
             entry.playing |= s.active;
-            // A capture takes one process tree. When separate instances of a program run, it
-            // takes the playing one, and a source captures again when another instance starts
-            // playing instead.
-            if better {
-                entry.target_pid = target;
-            }
         }
-        self.parent_targets = parent_targets;
-        Ok(apps
-            .into_values()
-            .map(|mut a| {
-                a.pids.sort_unstable();
-                a
-            })
-            .collect())
+        // An application whose target runs under another listed application's target has that
+        // tree recorded by the other application's capture too.
+        let by_target: BTreeMap<u32, String> = apps.values().map(|a| (a.target_pid, a.choice())).collect();
+        let mut apps: Vec<AppInfo> = apps.into_values().collect();
+        for a in &mut apps {
+            a.pids.sort_unstable();
+            a.within = self.inside(a.target_pid, &by_target);
+        }
+        Ok(apps)
     }
 
     fn peaks(&mut self, apps: &[AppInfo], out: &mut dyn FnMut(usize, f32)) {
+        // A lane's meter reads the sessions of the process tree its capture records, so the
+        // meter and the captured audio come from the same instance.
+        let scan = self.scan;
         for (i, app) in apps.iter().enumerate() {
             let peak = self
                 .sessions
-                .values()
-                .filter(|s| app.pids.contains(&s.pid))
-                .filter_map(|s| s.meter.as_ref().and_then(|m| m.get_peak_value().ok()))
+                .values_mut()
+                .filter(|s| s.target == app.target_pid && app.pids.contains(&s.pid))
+                .filter_map(|s| s.read(scan))
                 .fold(None, |acc: Option<f32>, p| Some(acc.map_or(p, |a| a.max(p))));
             if let Some(p) = peak {
                 out(i, p);

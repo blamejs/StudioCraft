@@ -19,6 +19,13 @@ impl Backoff {
         Duration::from_millis(ms)
     }
 
+    /// The wait after a failure that will not clear up soon (the system refused): the longest
+    /// one, at once.
+    pub fn fail_long(&mut self) -> Duration {
+        self.failures = self.failures.max(STEPS_MS.len());
+        self.fail()
+    }
+
     /// The capture works again: the next failure waits the shortest time.
     pub fn reset(&mut self) {
         self.failures = 0;

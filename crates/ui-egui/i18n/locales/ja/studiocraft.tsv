@@ -405,7 +405,9 @@
 @msg	The application's audio could not be captured. The capture is opened again shortly.	アプリケーションの音声をキャプチャできませんでした。まもなくキャプチャを開き直します。
 @msg	Capturing one application's audio is not available on this system yet.	このシステムでは、1 つのアプリケーションの音声のキャプチャはまだ利用できません。
 @msg	Capturing one application needs Windows 11 or Windows Server 2022. Audio output capture still records everything the computer plays.	1 つのアプリケーションのキャプチャには Windows 11 または Windows Server 2022 が必要です。音声出力キャプチャでは引き続きコンピューターで再生されるすべての音を録音できます。
-@msg	32 applications are already being captured	すでに 32 個のアプリケーションをキャプチャしています
+@msg	The most applications that can be captured at once are already being captured.	同時にキャプチャできる最大数のアプリケーションをすでにキャプチャしています。
+@msg	The system refused to capture this application's audio. The capture is tried again every 5 seconds.	システムがこのアプリケーションの音声のキャプチャを拒否しました。キャプチャは 5 秒ごとに再試行されます。
+@msg	The running applications could not be listed. The list is read again shortly.	実行中のアプリケーションを一覧にできませんでした。まもなく一覧を読み直します。
 @msg	The application setting is not a value from the application list.	アプリケーションの設定がアプリケーション一覧の値ではありません。
 @msg	Drawing again on {adapter}	{adapter} で描画を再開しました
 @msg	No graphics device could be opened again: {error}	グラフィックデバイスを再び開けませんでした: {error}

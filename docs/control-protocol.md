@@ -177,25 +177,39 @@ chosen camera offers. A camera's `device` is its name and the system's id joined
 code: `MJPG`, `YUYV`, `NV12`, `GREY`, `RGB3` or `BGR3`), or `""` for the camera's default.
 
 The engine commands `app_audio.list` and `app_audio.status` also only read, and take no
-parameters. `app_audio.list` returns `{"supported", "error", "apps"}`: each application has `app`,
-`name`, `path`, `pids`, `target_pid`, `playing` and `peak`. `playing` is true while one of the
-application's audio sessions is active, which includes a paused or silent stream; `peak` gives the
-level. Each `app_audio.list` keeps the
-application list current for the next 60 s and has the meters read for the next 2 s, so `peak` is
-0 on a first call and the newest level, 0 to 1, on a call made within 2 s of the one before.
-`peak` is `null` for an application past the 64th, which has no meter row.
+parameters. `app_audio.list` returns `{"supported", "listing", "error", "apps"}` at once and does
+not wait for the system. Before the discovery thread's first scan, `listing` is `true` and `apps`
+is empty; ask again. Each application has `app`, `name`, `path`, `pids`, `target_pid`, `playing`,
+`peak` and `within`. Applications are sorted by name. `playing` is true while one of the
+application's audio sessions is active, which includes a paused or silent stream. `peak` gives the
+level, 0 to 1, of the process tree a capture of the application records. `within` is the `app`
+value of another listed application whose capture already records the process tree under
+`target_pid`, or `null`. Other instances of the application, in trees of their own, are not part of
+that capture.
+Each `app_audio.list` keeps the application list current for the next 60 s and has the meters read
+for the next 2 s. `peak` is `null` on a first call, for a reading older than 250 ms, while the
+system's meter gives no reading, and for an
+application past the 64th, which has no meter row; it holds the newest level on a call made within
+2 s of the one before. When the discovery thread is stuck in a system call, `error` says so and the
+list is the last one read.
 
 An Application audio capture source's `app` setting takes the `app` value: the program file's name
-in lower case, `|`, and the program's path in lower case. A value finds the listed application at
-its path; when none is there, it finds the one application with that file name, so a program that
-moved after an update is still found. A value of the file name alone finds an application only
-while one listed application has that file name. An empty or missing `app` chooses no application;
-any other value that is not in this form is refused with an error, and the source keeps its current
-choice. `app_audio.status` returns `support` (`supported`,
-`reason` and `permission`), `captures`, `max_captures`, the summed `dropped_blocks` and
-`pool_exhausted` counters, and `running` with each capture's `app`, `pid`, `state`, `packets`,
-`dropped_blocks` and `pool_exhausted`. When the system cannot capture one application,
-`supported` is `false` and `error` and `reason` say why.
+in lower case, `|`, and the program's path in lower case. This is version 1 of the setting. A value
+finds the listed application at its path, in any letter case; when none is there, it finds the one
+application with that file name, so a program that moved after an update is still found. A value of
+the file name alone finds an application only while one listed application has that file name. An
+empty or missing `app` chooses no application. An update with any other value that is not in this
+form is refused with an error, and the source keeps its current choice. A saved collection with such
+a value still loads: the source stays silent and reports the error until another application is
+chosen. `app_audio.status` returns `support` (`supported`, `reason` and `permission`),
+`discovery_stalled`, `captures`, `max_captures`, the summed `dropped_blocks` and `pool_exhausted`
+counters, and `running` with each capture's `app`, `pid`, `state`, `packets`, `dropped_blocks` and
+`pool_exhausted`. `state` is `starting` while the system activates the capture, `started` once the
+stream runs and before audio arrives, then `running`, `failed` or `ended`. A capture whose owner let
+go of it while it was stuck in a system call is not listed and does not count against
+`max_captures`; while 8 such captures are still stuck, no new capture starts. When the system
+cannot capture one application, `supported` is `false` and `error`
+and `reason` say why.
 
 ```sh
 studiocraft-cli send 9876 engine.execute '{"command": "app.links", "params": {"link": "issues"}}'

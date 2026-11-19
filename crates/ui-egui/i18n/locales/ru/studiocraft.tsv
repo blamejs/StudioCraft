@@ -414,7 +414,9 @@
 @msg	The application's audio could not be captured. The capture is opened again shortly.	Не удалось захватить звук приложения. Захват скоро будет открыт снова.
 @msg	Capturing one application's audio is not available on this system yet.	Захват звука одного приложения пока недоступен в этой системе.
 @msg	Capturing one application needs Windows 11 or Windows Server 2022. Audio output capture still records everything the computer plays.	Для захвата одного приложения нужна Windows 11 или Windows Server 2022. «Захват выходного звука» по-прежнему записывает всё, что воспроизводит компьютер.
-@msg	32 applications are already being captured	Уже захватываются 32 приложения
+@msg	The most applications that can be captured at once are already being captured.	Уже захватывается наибольшее число приложений, которое можно захватывать одновременно.
+@msg	The system refused to capture this application's audio. The capture is tried again every 5 seconds.	Система отказала в захвате звука этого приложения. Захват повторяется каждые 5 секунд.
+@msg	The running applications could not be listed. The list is read again shortly.	Не удалось получить список запущенных приложений. Список скоро будет прочитан снова.
 @msg	The application setting is not a value from the application list.	Параметр приложения не является значением из списка приложений.
 @msg	Drawing again on {adapter}	Отрисовка снова идёт через {adapter}
 @msg	No graphics device could be opened again: {error}	Не удалось снова открыть графическое устройство: {error}

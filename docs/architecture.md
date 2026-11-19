@@ -67,8 +67,8 @@ gives no value for that column.
 | Thread | Input queue | Bound | Drop policy | Cost per frame |
 | --- | --- | --- | --- | --- |
 | Source | None; it publishes video into a `VideoOut` slot and audio into a lock-free queue | The audio queue holds 32 blocks (`plugin::source::AUDIO_QUEUE_BLOCKS`), and at each tick the mixer keeps at most 4 (`engine::mixer::MAX_QUEUED_BLOCKS`) | A full queue drops its oldest block, and the mixer drops the oldest blocks beyond 4 | |
-| Audio capture | The device's thread | On Linux, a conversion buffer allocated before the stream starts | | |
-| Application audio discovery | System notifications and commands | A command queue of 16 (`craft_app_audio::discovery::COMMANDS`); the list is one `Arc<AppList>` slot, and the meters are 64 atomic rows | A full command queue drops the command; a new list replaces the old one | A scan every 1 s; meter reads 30 times a second while the list is shown |
+| Audio capture | The device's thread | On Linux, a conversion buffer allocated before the stream starts; a feed keeps at most 16 blocks per callback (`sources::FEED_BLOCKS`, about 340 ms) | Blocks past 16 in one callback drop the oldest and are counted | |
+| Application audio discovery | System notifications and commands | A command queue of 16 (`craft_app_audio::discovery::COMMANDS`); the list is one `Arc<AppList>` slot, and the meters are 64 atomic rows | A full command queue drops the command; a new list replaces the old one | A scan every 1 s, and at most every 250 ms after notifications; meter reads 30 times a second while a caller asks for them |
 | Application audio capture | The system's packets, waited for 200 ms at a time | Buffers sized for the largest packet so far (250 ms to start, 2 s at most); a feed keeps at most 16 blocks per call (`sources::FEED_BLOCKS`) | Blocks past 16 in one call drop the oldest and are counted | 3.77 µs to turn a 10 ms packet into blocks, without allocating |
 | Screen capture (Linux) | The PipeWire stream | `FrameSlot`: the newest frame and up to 2 spares | A newer frame replaces a frame the source has not taken | One copy of the picture |
 | Camera capture | The camera library | `FrameSlot`: the newest frame and up to 2 spares | A newer frame replaces a frame the source has not taken; a frame that cannot be converted goes back to the spares | One conversion of the picture |
@@ -103,28 +103,42 @@ reopens the device. The rest of the app keeps running.
 `craft-app-audio` runs one discovery thread while an Application audio capture source exists or
 anything else holds a `DiscoveryUse`, and stops it when the last one is dropped. On Windows the
 thread lists the audio sessions of every active playback device every second, and at once when a
-device is added, removed or changed or a session changes state. It reads process names and parents
-only when the set of session processes changes. A list that differs from the one before is
-published as an `Arc<AppList>` with a generation number through an `ArcSwap`, so a reader compares
-one atomic and loads the list, without a lock, only when it changed. While `set_visible(true)` is in force the thread reads each
-application's session meters about 30 times a second into 64 rows of atomics, which readers read
-without a lock. Settings and commands never list applications themselves: a source's schema reads
-the newest list, and `app_audio.list` scans once on a short-lived thread when no discovery thread
-runs.
+device is added, removed or changed or a session changes state; scans stay at least 250 ms apart
+however many notifications arrive. It reads process names and parents when the set of session
+processes changes, and on every scan while a capture target is a parent process, so a parent that
+exits is noticed within one scan. A list that differs from the one before is published as an
+`Arc<AppList>` with a generation number through an `ArcSwap`, so a reader compares one atomic and
+loads the list, without a lock, only when it changed. While `set_visible(true)` is in force, or for
+the time given to `read_peaks_for`, the thread reads each application's session meters about 30
+times a second into 64 rows of atomics. Each row holds the key's id, the level and the time of the
+reading, and readers read it without a lock; a reading older than 250 ms reads as none. Settings and
+commands never list applications themselves and never wait for a scan: a source's schema and
+`app_audio.list` read the newest list.
+
+When the discovery thread has been inside one system call for more than 5 s, the list reports
+`discovery_stalled` and an error. The next source check or `app_audio.list` starts a new thread
+beside the stuck one, which ends when its call returns. While two discovery threads are alive, no
+third one starts.
 
 Each captured application has its own thread. It waits for the system's packets at most 200 ms at
 a time, reports a heartbeat each time, converts each packet into buffers it reuses, and hands the
 samples to the source's `AudioFeed`, which queues blocks for the mixer without allocating once the
-block pool is warm. The source's thread checks the capture every 250 ms. A capture that has not
-reported for 2 s counts as stalled. The source drops it, and the reaper thread joins its thread
-once it ends, so neither the source nor any other capture waits on a capture stuck in a system call.
-A failed capture opens again after 250 ms, 500 ms, 1 s, 2 s and then every 5 s, and a 33rd capture
-is refused. Each capture's callback passes a gate with one compare-and-swap. When the source's
-application changes, the source closes the old gate, waits for a callback inside it to finish its
-push, and empties the queue, so the mixer does not play the earlier application's audio.
+block pool is warm. The source's thread checks the capture every 250 ms. A capture still asking the
+system to activate it counts as stalled after 10 s, and one the system started counts as stalled
+after 2 s without a report. The source drops it, and the reaper thread joins its thread once it
+ends, so neither the source nor any other capture waits on a capture stuck in a system call. A
+dropped stalled capture stops counting against the limit of 32 at once, and the same application
+is not captured again until its stuck thread returns. While 8 such stuck threads are alive, no
+capture starts. A failed capture opens again after 250 ms,
+500 ms, 1 s, 2 s and then every 5 s, and a 33rd capture is refused. Each capture's callback passes a
+gate with one compare-and-swap. When the source's application changes, the source closes the old
+gate, waits at most 2 ms for a callback inside it to finish its push, and empties the queue, so the
+mixer does not play the earlier application's audio. When a callback is still inside after 2 ms,
+because the system stopped scheduling its thread, the source opens no new capture until the
+callback has left, and then empties the queue again.
 
-A settings form or an `app_audio.list` request keeps the discovery thread running for 60 s
-without a source, and waits at most 1 s or 2 s for a newly started thread's first scan.
+A settings form, each check of the list's stamp by an open form, and an `app_audio.list` request
+keep the discovery thread running for 60 s without a source.
 
 ### Screen capture threads
 

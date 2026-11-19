@@ -1,12 +1,13 @@
 //! Per-application audio for a Craft app's mixer:
 //!
 //! - [`Discovery`] keeps a list of the running applications that have audio ([`AppList`]),
-//!   current as they start and quit, on one thread of its own. While a panel shows the list it
-//!   also reads each application's peak level into a fixed table of atomics, without capturing
-//!   the application.
+//!   current as they start and quit, on one thread of its own. While a caller asks for them
+//!   ([`Discovery::set_visible`], [`Discovery::read_peaks_for`]) it also reads each application's
+//!   peak level into a fixed table of atomics, without capturing the application.
 //! - [`Discovery::open_capture`] captures one application's audio on a thread of its own, as
 //!   48 kHz stereo `f32` samples, and hands each packet to a callback. A capture that stops
-//!   answering is torn down off the caller's thread.
+//!   answering is torn down off the caller's thread, and stops counting against
+//!   [`MAX_CAPTURES`].
 //! - [`Backend`] is the operating system's side. Windows 11 and Windows Server 2022 (build 20348)
 //!   and later capture through WASAPI process loopback. Other systems report capture as
 //!   unsupported with a reason. [`fake::FakeBackend`] is a scripted backend for tests.
@@ -28,10 +29,10 @@ use std::sync::Arc;
 
 pub use backoff::Backoff;
 pub use capture::{AppCapture, CaptureShared, CaptureState, CaptureStatus, OnData, Target, now_ms};
-pub use discovery::{Discovery, DiscoveryUse, RESCAN_MS};
+pub use discovery::{DISCOVERY_WEDGE_MS, Discovery, DiscoveryUse, RESCAN_MS};
 pub use key::AppKey;
 pub use list::{AppInfo, AppList};
-pub use peaks::{PEAK_SLOTS, PeakTable};
+pub use peaks::{PEAK_FRESH_MS, PEAK_SLOTS, PeakTable};
 
 /// The sample rate of captured audio.
 pub const SAMPLE_RATE: u32 = 48_000;
@@ -39,8 +40,14 @@ pub const SAMPLE_RATE: u32 = 48_000;
 pub const CHANNELS: usize = 2;
 /// The most application captures that run at once.
 pub const MAX_CAPTURES: usize = 32;
-/// A capture that has not reported for this long while it should be running counts as stalled.
+/// The most capture threads that are stuck in a system call after their owners let go. They no
+/// longer count against [`MAX_CAPTURES`]; while this many are alive, no new capture starts.
+pub const MAX_STUCK_CAPTURES: usize = 8;
+/// A capture that has not reported for this long after the system started it counts as stalled.
 pub const WEDGE_MS: u64 = 2_000;
+/// A capture still asking the system to start it counts as stalled after this long. The system
+/// does not report while it activates a capture, and an activation can take seconds.
+pub const ACTIVATE_MS: u64 = 10_000;
 /// How long a capture thread waits for the system before it checks for a stop request.
 pub const CAPTURE_WAIT_MS: u32 = 200;
 
@@ -54,9 +61,21 @@ pub enum AppAudioError {
     /// The application is not running, or has no audio.
     #[error("{0} is not running")]
     NotRunning(String),
-    /// [`MAX_CAPTURES`] captures already run.
-    #[error("{MAX_CAPTURES} applications are already being captured")]
+    /// [`MAX_CAPTURES`] captures already run, or [`MAX_STUCK_CAPTURES`] threads of earlier
+    /// captures are stuck in a system call. The text does not name the number, so a
+    /// translation row keeps matching when the limit changes.
+    #[error("The most applications that can be captured at once are already being captured.")]
     Limit,
+    /// The system refused to capture this application; the text is the system's.
+    #[error("{0}")]
+    Denied(String),
+    /// An earlier capture of this application is stuck in a system call, so no other one starts
+    /// until it returns.
+    #[error("an earlier capture of {0} is still waiting for the system")]
+    Busy(String),
+    /// The running applications could not be listed; the text says why.
+    #[error("{0}")]
+    List(String),
     /// The system reported an error.
     #[error("{0}")]
     Failed(String),
@@ -70,7 +89,8 @@ pub enum Permission {
     NotNeeded,
     /// The person allowed it.
     Granted,
-    /// The person refused it in the system's privacy settings.
+    /// The person refused it in the system's privacy settings. Windows asks for no such
+    /// permission, so no backend in this crate reports it yet.
     Denied,
 }
 
@@ -119,8 +139,10 @@ pub trait Backend: Send + Sync + 'static {
 
     /// Capture `target` until `shared` asks to stop, giving each packet of 48 kHz stereo samples
     /// to `on_data`. Runs on a capture thread of its own. It must call [`CaptureShared::beat`] at
-    /// least every [`CAPTURE_WAIT_MS`] while it waits, call [`CaptureShared::running`] once the
-    /// system delivers audio, and return when [`CaptureShared::stopping`] is true.
+    /// least every [`CAPTURE_WAIT_MS`] while it waits, call [`CaptureShared::started`] once the
+    /// system has started the stream, call [`CaptureShared::running`] when the first packet
+    /// arrives, and return when [`CaptureShared::stopping`] is true. A target that has exited is
+    /// reported as [`AppAudioError::NotRunning`], and a refusal as [`AppAudioError::Denied`].
     fn capture(&self, target: Target, shared: &CaptureShared, on_data: &mut OnData) -> Result<(), AppAudioError>;
 }
 
@@ -153,6 +175,8 @@ pub const NOT_AVAILABLE: &str = "Capturing one application's audio is not availa
 /// translation row with this text.
 pub const NEEDS_NEWER_WINDOWS: &str =
     "Capturing one application needs Windows 11 or Windows Server 2022. Audio output capture still records everything the computer plays.";
+/// The error a list reader gets while the discovery thread is stuck in a system call.
+pub const LIST_STALLED: &str = "the system stopped answering while the applications were listed";
 
 /// The backend for systems without application capture yet.
 #[cfg(not(windows))]

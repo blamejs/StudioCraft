@@ -21,8 +21,17 @@ pub struct AppInfo {
     /// Whether one of the application's audio sessions is active: a stream is running, which may
     /// be paused or silent. The level is in the peak row.
     pub playing: bool,
+    /// The `app` value ([`AppInfo::choice`]) of another listed application whose capture already
+    /// records the process tree a capture of this one takes, because `target_pid` is a child
+    /// process of that application's target. Capturing both records that tree twice. Other
+    /// instances of this application, in trees of their own, are not part of it.
+    pub within: Option<String>,
     /// The application's row in the [`crate::PeakTable`], or `None` past the table's last row.
     pub slot: Option<u8>,
+    /// [`AppKey::id`] of `key`, worked out once when the row is assigned, so meter reads do not
+    /// encode the key again. 0 before a row is assigned.
+    #[serde(skip)]
+    pub key_id: u64,
 }
 
 /// The applications one scan found.
@@ -62,9 +71,10 @@ impl AppList {
         }
     }
 
-    /// Sort playing applications first, then by name, and keep keys unique: when two listed
-    /// applications have program files of the same name in different folders, each key gets its
-    /// path.
+    /// Sort by name, and keep keys unique: when two listed applications have program files of the
+    /// same name in different folders, each key gets its path. The order does not depend on which
+    /// applications play, so a list someone is choosing from does not reorder when a stream
+    /// starts or stops.
     pub fn arrange(apps: &mut [AppInfo]) {
         let mut names: Vec<&str> = apps.iter().map(|a| a.key.name.as_str()).collect();
         names.sort_unstable();
@@ -75,8 +85,6 @@ impl AppList {
                 a.key = a.key.clone().with_path(&path);
             }
         }
-        apps.sort_by(|a, b| {
-            b.playing.cmp(&a.playing).then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase())).then_with(|| a.key.cmp(&b.key))
-        });
+        apps.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()).then_with(|| a.key.cmp(&b.key)));
     }
 }

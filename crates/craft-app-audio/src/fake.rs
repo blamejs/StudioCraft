@@ -11,12 +11,25 @@ use crate::{AppAudioError, AppInfo, AppKey, Backend, CaptureShared, OnData, Perm
 #[derive(Clone, Debug, PartialEq)]
 pub enum Behavior {
     /// Delivers a packet of `frames` stereo frames of `value`, then reports running and delivers
-    /// another every 5 ms.
+    /// another each time it has waited 5 ms for a stop request.
     Deliver { frames: usize, value: f32 },
+    /// Delivers `packets` packets as `Deliver` does, then fails with this text, as a capture
+    /// whose device goes away does.
+    FailAfter { packets: u64, error: String },
     /// Fails at once with this text.
     Fail(String),
-    /// Starts, then stops reporting, as a capture stuck in a system call does.
+    /// The system refuses at once with this text ([`AppAudioError::Denied`]).
+    Deny(String),
+    /// The target has exited ([`AppAudioError::NotRunning`]).
+    Exit,
+    /// Starts and runs, then stops reporting until it is asked to stop, as a capture stuck in a
+    /// wait does.
     Stall,
+    /// Never returns from asking the system to start, and does not look at stop requests, until
+    /// [`FakeBackend::release_hangs`], as an activation stuck in the system does.
+    Hang,
+    /// The system starts the stream, and no audio arrives until it is asked to stop.
+    Quiet,
     /// Starts and ends without an error.
     End,
 }
@@ -34,9 +47,13 @@ struct State {
     watch_error: Option<String>,
     hold_next: bool,
     held: bool,
+    /// Scans that have been held, in all.
+    holds: usize,
     hold_peaks: bool,
     peaks_held: bool,
     watchers_dropped: usize,
+    hangs_released: bool,
+    hanging: usize,
 }
 
 #[derive(Default)]
@@ -55,7 +72,7 @@ pub struct FakeBackend {
 pub fn app(exe: &str, pid: u32, playing: bool) -> AppInfo {
     let key = AppKey::from_exe(exe).unwrap_or(AppKey { name: exe.to_string(), path: None });
     let name = key.name.strip_suffix(".exe").unwrap_or(&key.name).to_string();
-    AppInfo { key, name, path: format!("C:\\Apps\\{exe}"), pids: vec![pid], target_pid: pid, playing, slot: None }
+    AppInfo { key, name, path: format!("C:\\Apps\\{exe}"), pids: vec![pid], target_pid: pid, playing, within: None, slot: None, key_id: 0 }
 }
 
 impl FakeBackend {
@@ -153,9 +170,48 @@ impl FakeBackend {
         self.shared.changed.wait_timeout_while(guard, timeout, |s| !s.held).is_ok_and(|(s, _)| s.held)
     }
 
+    /// Wait until the `n`th scan held since the backend was made is stuck and `discovery` reports
+    /// the stall, or `timeout` passes. Returns whether it does.
+    /// With a discovery bound of 0 ms the held scan has set the running thread's marker before it
+    /// began, so the wait after that is for the clock to pass the bound, not for another thread.
+    /// It ends early when the scan is released, and `timeout` bounds it when the thread stops
+    /// while the scan is held.
+    pub fn wait_scan_stalled(&self, discovery: &crate::Discovery, n: usize, timeout: Duration) -> bool {
+        let deadline = std::time::Instant::now() + timeout;
+        let Ok(guard) = self.shared.state.lock() else { return false };
+        let held = |s: &State| s.held && s.holds >= n;
+        if !self.shared.changed.wait_timeout_while(guard, timeout, |s| !held(s)).is_ok_and(|(s, _)| held(&s)) {
+            return false;
+        }
+        while !discovery.stalled() {
+            if !self.shared.state.lock().is_ok_and(|s| s.held) || std::time::Instant::now() >= deadline {
+                return false;
+            }
+            std::thread::yield_now();
+        }
+        true
+    }
+
     /// Let a held scan return what it read.
     pub fn release_scan(&self) {
         self.with(|s| s.held = false);
+    }
+
+    /// Captures stuck in [`Behavior::Hang`] now.
+    pub fn hanging(&self) -> usize {
+        self.with(|s| s.hanging)
+    }
+
+    /// Wait until `n` captures are stuck in [`Behavior::Hang`], or `timeout` passes. Returns
+    /// whether they are.
+    pub fn wait_hanging(&self, n: usize, timeout: Duration) -> bool {
+        let Ok(guard) = self.shared.state.lock() else { return false };
+        self.shared.changed.wait_timeout_while(guard, timeout, |s| s.hanging < n).is_ok_and(|(s, _)| s.hanging >= n)
+    }
+
+    /// Let every capture in [`Behavior::Hang`] return, and later ones return at once.
+    pub fn release_hangs(&self) {
+        self.with(|s| s.hangs_released = true);
     }
 
     /// Wait until `n` watchers have been dropped in all, as a discovery thread does when it ends,
@@ -180,6 +236,7 @@ impl Watcher for FakeWatcher {
             s.scans += 1;
             let hold = std::mem::take(&mut s.hold_next);
             s.held |= hold;
+            s.holds += usize::from(hold);
             (s.apps.clone(), hold)
         });
         if hold && let Ok(guard) = self.0.shared.state.lock() {
@@ -231,32 +288,69 @@ impl Backend for FakeBackend {
         });
         match behavior.unwrap_or(Behavior::Deliver { frames: 480, value: 0.0 }) {
             Behavior::Fail(e) => Err(AppAudioError::Failed(e)),
+            Behavior::Deny(e) => Err(AppAudioError::Denied(e)),
+            Behavior::Exit => Err(AppAudioError::NotRunning(format!("process {}", target.pid))),
             Behavior::End => {
+                shared.started();
                 shared.running();
+                Ok(())
+            }
+            Behavior::Hang => {
+                if let Ok(mut guard) = self.shared.state.lock() {
+                    guard.hanging += 1;
+                    self.shared.changed.notify_all();
+                    while !guard.hangs_released {
+                        guard = match self.shared.changed.wait(guard) {
+                            Ok(g) => g,
+                            Err(p) => p.into_inner(),
+                        };
+                    }
+                    guard.hanging -= 1;
+                    self.shared.changed.notify_all();
+                }
                 Ok(())
             }
             Behavior::Stall => {
+                shared.started();
                 shared.running();
-                while !shared.stopping() {
-                    std::thread::sleep(Duration::from_millis(5));
+                // No heartbeat while it waits, as a thread stuck in a wait gives none.
+                while !shared.wait_stop(Duration::from_secs(60)) {}
+                Ok(())
+            }
+            Behavior::Quiet => {
+                shared.started();
+                while !shared.wait_stop(PACE) {
+                    shared.beat();
                 }
                 Ok(())
             }
-            Behavior::Deliver { frames, value } => {
-                let packet = vec![value; frames.saturating_mul(2)];
-                // The first packet arrives before the capture reports running, so a test that
-                // waits for the running state finds it delivered.
-                on_data(&packet);
-                shared.packet();
-                shared.running();
-                while !shared.stopping() {
-                    shared.beat();
-                    on_data(&packet);
-                    shared.packet();
-                    std::thread::sleep(Duration::from_millis(5));
-                }
-                Ok(())
+            Behavior::Deliver { frames, value } => deliver(shared, on_data, frames, value, u64::MAX).map(|_| ()),
+            Behavior::FailAfter { packets, error } => {
+                deliver(shared, on_data, 480, 0.0, packets)?;
+                if shared.stopping() { Ok(()) } else { Err(AppAudioError::Failed(error)) }
             }
         }
     }
+}
+
+/// How long a delivering capture waits for a stop request between packets.
+const PACE: Duration = Duration::from_millis(5);
+
+/// Deliver up to `limit` packets, each after waiting [`PACE`] for a stop request.
+fn deliver(shared: &CaptureShared, on_data: &mut OnData, frames: usize, value: f32, limit: u64) -> Result<u64, AppAudioError> {
+    let packet = vec![value; frames.saturating_mul(2)];
+    shared.started();
+    // The first packet arrives before the capture reports running, so a test that waits for the
+    // running state finds it delivered.
+    on_data(&packet);
+    shared.packet();
+    shared.running();
+    let mut sent = 1;
+    while sent < limit && !shared.wait_stop(PACE) {
+        shared.beat();
+        on_data(&packet);
+        shared.packet();
+        sent += 1;
+    }
+    Ok(sent)
 }

@@ -406,7 +406,9 @@
 @msg	The application's audio could not be captured. The capture is opened again shortly.	Uygulamanın sesi yakalanamadı. Yakalama birazdan yeniden açılacak.
 @msg	Capturing one application's audio is not available on this system yet.	Tek bir uygulamanın sesini yakalama bu sistemde henüz kullanılamıyor.
 @msg	Capturing one application needs Windows 11 or Windows Server 2022. Audio output capture still records everything the computer plays.	Tek bir uygulamayı yakalamak için Windows 11 veya Windows Server 2022 gerekir. Ses çıkışı yakalama, bilgisayarın çaldığı her şeyi kaydetmeye devam eder.
-@msg	32 applications are already being captured	Zaten 32 uygulama yakalanıyor
+@msg	The most applications that can be captured at once are already being captured.	Aynı anda yakalanabilecek en fazla sayıda uygulama zaten yakalanıyor.
+@msg	The system refused to capture this application's audio. The capture is tried again every 5 seconds.	Sistem bu uygulamanın sesini yakalamayı reddetti. Yakalama her 5 saniyede bir yeniden denenir.
+@msg	The running applications could not be listed. The list is read again shortly.	Çalışan uygulamalar listelenemedi. Liste birazdan yeniden okunacak.
 @msg	The application setting is not a value from the application list.	Uygulama ayarı, uygulama listesindeki bir değer değil.
 @msg	Drawing again on {adapter}	Yeniden {adapter} ile çiziliyor
 @msg	No graphics device could be opened again: {error}	Hiçbir grafik aygıtı yeniden açılamadı: {error}

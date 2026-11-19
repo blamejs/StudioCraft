@@ -1,6 +1,6 @@
 //! The discovery thread: it lists the running applications with audio while anything needs the
-//! list, publishes each new list for any thread to read, and reads peak levels while a panel shows
-//! them.
+//! list, publishes each new list for any thread to read, and reads peak levels while a caller asks
+//! for them.
 
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
@@ -13,22 +13,26 @@ use arc_swap::ArcSwap;
 
 use crate::capture::CaptureShared;
 use crate::{
-    AppAudioError, AppCapture, AppInfo, AppKey, AppList, Backend, CaptureState, CaptureStatus, MAX_CAPTURES, OnData, PEAK_SLOTS, PeakTable, Support,
-    Target, Wake, Watcher,
+    AppAudioError, AppCapture, AppInfo, AppKey, AppList, Backend, CaptureState, CaptureStatus, MAX_CAPTURES, MAX_STUCK_CAPTURES, OnData, PEAK_SLOTS,
+    PeakTable, Support, Target, Wake, Watcher,
 };
 
 /// How often the thread lists the applications again, in milliseconds, besides the times a system
 /// notification wakes it.
 pub const RESCAN_MS: u64 = 1_000;
-/// How often peak levels are read while a panel shows them (about 30 times a second).
+/// The shortest time between two scans, however often system notifications wake the thread.
+const MIN_RESCAN_MS: u64 = 250;
+/// How often peak levels are read while a caller asks for them (about 30 times a second).
 const PEAK_MS: u64 = 33;
 /// How long to wait before watching again after the system refused.
 const RETRY_WATCH_MS: u64 = 5_000;
 /// Commands that can wait for the thread; a command that finds the queue full is dropped.
 const COMMANDS: usize = 16;
-/// How long [`Discovery::list_now`] waits for a scan.
-const LIST_NOW_WAIT: Duration = Duration::from_secs(2);
-const LIST_TIMEOUT: &str = "the system did not list the applications in time";
+/// A discovery thread inside one system call for longer than this counts as stuck.
+pub const DISCOVERY_WEDGE_MS: u64 = 5_000;
+/// The most discovery threads alive at once: the running one and at most one stuck in a system
+/// call beside it.
+const MAX_DISCOVERY_THREADS: usize = 2;
 
 pub(crate) enum Cmd {
     Rescan,
@@ -40,6 +44,9 @@ struct Run {
     users: usize,
     tx: Option<SyncSender<Cmd>>,
     thread: Option<JoinHandle<()>>,
+    /// A start was put off because too many discovery threads were alive; the next thread that
+    /// ends starts a run when one is still wanted.
+    pending: bool,
 }
 
 struct Inner {
@@ -65,8 +72,23 @@ struct Inner {
     /// Which run of the thread may publish; a thread from an earlier run stops at its next wake.
     epoch: AtomicU64,
     run: Mutex<Run>,
-    captures: AtomicUsize,
+    /// Captures that count against [`MAX_CAPTURES`].
+    captures: Arc<AtomicUsize>,
     live: Mutex<Vec<Weak<CaptureShared>>>,
+    /// When the running thread entered its current system call ([`crate::now_ms`] plus 1), 0
+    /// while it is not in one. Each run writes its own marker, and a run that stops is given a
+    /// new one, so a thread of a stopped run cannot change the running thread's marker.
+    busy_since: ArcSwap<AtomicU64>,
+    /// When a start was put off because too many discovery threads were still alive
+    /// ([`crate::now_ms`] plus 1), 0 while no start waits.
+    waiting_since: AtomicU64,
+    /// Discovery threads that have not ended, stuck ones included.
+    alive: AtomicUsize,
+    /// The stall bounds, in milliseconds: a capture activating, a started capture, and the
+    /// discovery thread in one system call.
+    activate_ms: AtomicU64,
+    wedge_ms: AtomicU64,
+    discovery_wedge_ms: AtomicU64,
 }
 
 /// The list of running applications with audio, and the captures of them. Clones share one
@@ -116,13 +138,78 @@ fn leased(inner: &Inner) -> bool {
     crate::now_ms() < inner.lease_until.load(Ordering::Acquire)
 }
 
+/// Whether the running thread has been in one system call, or a start has waited for earlier
+/// threads to end, for longer than the bound.
+fn stalled(inner: &Inner) -> bool {
+    let now = crate::now_ms().saturating_add(1);
+    let bound = inner.discovery_wedge_ms.load(Ordering::Relaxed);
+    let over = |since: u64| since != 0 && now.saturating_sub(since) > bound;
+    over(inner.busy_since.load().load(Ordering::Acquire)) || over(inner.waiting_since.load(Ordering::Acquire))
+}
+
 fn stop(inner: &Inner, run: &mut Run) {
-    inner.epoch.fetch_add(1, Ordering::AcqRel);
+    // Under the list's lock, as `mark_fresh` checks the epoch, so the list of the stopped run is
+    // not current while no run has scanned since, even when the next start is put off.
+    {
+        let _slot = inner.slot.lock();
+        inner.fresh.store(false, Ordering::Release);
+        inner.epoch.fetch_add(1, Ordering::AcqRel);
+    }
+    // A thread stuck in a call no longer counts as the running one.
+    inner.busy_since.store(Arc::new(AtomicU64::new(0)));
     if let Some(tx) = run.tx.take() {
         let _ = tx.try_send(Cmd::Stop);
     }
     if let Some(t) = run.thread.take() {
         crate::reaper::reap(t);
+    }
+}
+
+/// Start the thread unless it runs, the system has no support, or too many discovery threads are
+/// still alive (one stuck in a system call beside one that has not ended yet). A start put off
+/// that way happens when one of them ends; [`stalled`] reports it once it has waited longer than
+/// the bound.
+fn start(inner: &Arc<Inner>, run: &mut Run) {
+    if run.tx.is_some() || !inner.backend.support().supported {
+        return;
+    }
+    if inner.alive.load(Ordering::Acquire) >= MAX_DISCOVERY_THREADS {
+        if !run.pending {
+            run.pending = true;
+            inner.waiting_since.store(crate::now_ms().saturating_add(1), Ordering::Release);
+        }
+        return;
+    }
+    run.pending = false;
+    inner.waiting_since.store(0, Ordering::Release);
+    let (tx, rx) = sync_channel(COMMANDS);
+    // Under the list's lock, as `mark_fresh` checks the epoch, so a thread of an earlier run
+    // cannot mark the new run's list fresh.
+    let epoch = {
+        let _slot = inner.slot.lock();
+        inner.fresh.store(false, Ordering::Release);
+        inner.epoch.fetch_add(1, Ordering::AcqRel) + 1
+    };
+    // The new run assigns every peak row again; rows an earlier run left are freed here,
+    // under the run lock its scans also take.
+    for row in 0..PEAK_SLOTS {
+        inner.peaks.free(row);
+    }
+    let busy = Arc::new(AtomicU64::new(0));
+    inner.busy_since.store(Arc::clone(&busy));
+    inner.alive.fetch_add(1, Ordering::AcqRel);
+    let thread_inner = Arc::clone(inner);
+    let wake = Wake(tx.clone());
+    let spawned = std::thread::Builder::new().name("app audio discovery".into()).spawn(move || discover(&thread_inner, &rx, &wake, epoch, &busy));
+    match spawned {
+        Ok(t) => {
+            run.tx = Some(tx);
+            run.thread = Some(t);
+        }
+        Err(e) => {
+            inner.alive.fetch_sub(1, Ordering::AcqRel);
+            publish(inner, None, Some(format!("the application list could not start: {e}")));
+        }
     }
 }
 
@@ -143,11 +230,27 @@ impl Discovery {
                 lease_until: AtomicU64::new(0),
                 fresh: AtomicBool::new(false),
                 epoch: AtomicU64::new(0),
-                run: Mutex::new(Run { users: 0, tx: None, thread: None }),
-                captures: AtomicUsize::new(0),
+                run: Mutex::new(Run { users: 0, tx: None, thread: None, pending: false }),
+                captures: Arc::new(AtomicUsize::new(0)),
                 live: Mutex::new(Vec::new()),
+                busy_since: ArcSwap::from_pointee(AtomicU64::new(0)),
+                waiting_since: AtomicU64::new(0),
+                alive: AtomicUsize::new(0),
+                activate_ms: AtomicU64::new(crate::ACTIVATE_MS),
+                wedge_ms: AtomicU64::new(crate::WEDGE_MS),
+                discovery_wedge_ms: AtomicU64::new(DISCOVERY_WEDGE_MS),
             }),
         }
+    }
+
+    /// Change the stall bounds, in milliseconds, from [`crate::ACTIVATE_MS`], [`crate::WEDGE_MS`]
+    /// and [`DISCOVERY_WEDGE_MS`]: for a capture still activating, a started capture, and the
+    /// discovery thread inside one system call. Captures opened later use the new bounds. Tests
+    /// use it to reach a stall without waiting seconds.
+    pub fn set_stall_limits(&self, activate_ms: u64, wedge_ms: u64, discovery_ms: u64) {
+        self.inner.activate_ms.store(activate_ms, Ordering::Relaxed);
+        self.inner.wedge_ms.store(wedge_ms, Ordering::Relaxed);
+        self.inner.discovery_wedge_ms.store(discovery_ms, Ordering::Relaxed);
     }
 
     /// The one discovery of this process, on the system's backend.
@@ -166,7 +269,7 @@ impl Discovery {
     pub fn acquire(&self) -> DiscoveryUse {
         if let Ok(mut run) = self.inner.run.lock() {
             run.users = run.users.saturating_add(1);
-            self.start(&mut run);
+            start(&self.inner, &mut run);
         }
         DiscoveryUse { inner: Arc::clone(&self.inner) }
     }
@@ -178,42 +281,36 @@ impl Discovery {
         let until = crate::now_ms().saturating_add(u64::try_from(time.as_millis()).unwrap_or(u64::MAX));
         self.inner.lease_until.fetch_max(until, Ordering::AcqRel);
         if let Ok(mut run) = self.inner.run.lock() {
-            self.start(&mut run);
-        }
-    }
-
-    fn start(&self, run: &mut Run) {
-        if run.tx.is_some() || !self.support().supported {
-            return;
-        }
-        let (tx, rx) = sync_channel(COMMANDS);
-        // Under the list's lock, as `mark_fresh` checks the epoch, so a thread of an earlier run
-        // cannot mark the new run's list fresh.
-        let epoch = {
-            let _slot = self.inner.slot.lock();
-            self.inner.fresh.store(false, Ordering::Release);
-            self.inner.epoch.fetch_add(1, Ordering::AcqRel) + 1
-        };
-        // The new run assigns every peak row again; rows an earlier run left are freed here,
-        // under the run lock its scans also take.
-        for row in 0..PEAK_SLOTS {
-            self.inner.peaks.free(row);
-        }
-        let inner = Arc::clone(&self.inner);
-        let wake = Wake(tx.clone());
-        let spawned = std::thread::Builder::new().name("app audio discovery".into()).spawn(move || discover(&inner, &rx, &wake, epoch));
-        match spawned {
-            Ok(t) => {
-                run.tx = Some(tx);
-                run.thread = Some(t);
-            }
-            Err(e) => self.publish_error(&format!("the application list could not start: {e}")),
+            start(&self.inner, &mut run);
         }
     }
 
     /// Whether the thread runs.
     pub fn running(&self) -> bool {
         self.inner.run.lock().is_ok_and(|r| r.tx.is_some())
+    }
+
+    /// Whether the running thread has been inside one system call for longer than
+    /// [`DISCOVERY_WEDGE_MS`] (or the bound [`Discovery::set_stall_limits`] set), so the list is
+    /// no longer kept current. Read without a lock.
+    pub fn stalled(&self) -> bool {
+        stalled(&self.inner)
+    }
+
+    /// When the running thread is stuck in a system call, leave it and start another, once: while
+    /// one stuck thread is still alive, no further thread is started beside it. Returns whether a
+    /// new thread started. Costs one atomic read when nothing is stuck.
+    pub fn recover(&self) -> bool {
+        if !self.stalled() {
+            return false;
+        }
+        let Ok(mut run) = self.inner.run.lock() else { return false };
+        if run.tx.is_none() || !self.stalled() || self.inner.alive.load(Ordering::Acquire) >= MAX_DISCOVERY_THREADS {
+            return false;
+        }
+        stop(&self.inner, &mut run);
+        start(&self.inner, &mut run);
+        run.tx.is_some()
     }
 
     /// The newest list, read without a lock.
@@ -238,7 +335,8 @@ impl Discovery {
 
     /// The newest list once the running thread has scanned at least once, waiting at most
     /// `timeout` for that first scan. `None` when the thread has not scanned in time, so a list
-    /// left over from an earlier run is never returned as current.
+    /// left over from an earlier run is never returned as current. With a zero `timeout` it does
+    /// not wait.
     pub fn fresh_list(&self, timeout: Duration) -> Option<Arc<AppList>> {
         let guard = self.inner.slot.lock().ok()?;
         let (guard, _) = self.inner.published.wait_timeout_while(guard, timeout, |_| !self.inner.fresh.load(Ordering::Acquire)).ok()?;
@@ -262,7 +360,8 @@ impl Discovery {
         passes() >= n
     }
 
-    /// Read peak levels while `visible` is true (a panel shows the list). Costs nothing otherwise.
+    /// Read peak levels while `visible` is true, for a caller that shows meters. Nothing is read
+    /// otherwise.
     pub fn set_visible(&self, visible: bool) {
         self.inner.visible.store(visible, Ordering::Release);
         self.send(Cmd::Wake);
@@ -289,111 +388,96 @@ impl Discovery {
         }
     }
 
-    /// The application's newest peak level, 0 to 1, while the list is visible.
+    /// The application's current peak level, 0 to 1. `None` when no meter reading of it is
+    /// current: before the first reading, once readings have stopped for longer than
+    /// [`crate::PEAK_FRESH_MS`], and past the table's last row.
     pub fn peak(&self, app: &AppInfo) -> Option<f32> {
-        app.slot.and_then(|s| self.inner.peaks.get(s, &app.key))
+        let id = if app.key_id != 0 { app.key_id } else { app.key.id() };
+        app.slot.and_then(|s| self.inner.peaks.get(s, id, crate::now_ms()))
     }
 
-    /// The list now: the thread's newest list while it runs, once it has scanned, or else one scan
-    /// on a thread of its own; either way it waits at most 2 s and then returns an empty list with
-    /// the error. On a system without support, an empty list with the reason.
-    pub fn list_now(&self) -> Arc<AppList> {
-        let support = self.support();
-        if !support.supported {
-            return Arc::new(AppList { generation: 0, apps: Vec::new(), error: support.reason });
-        }
-        if self.running() {
-            // The thread's own scan is the one to wait for; a second scan beside it would wait on
-            // the same system calls.
-            return self
-                .fresh_list(LIST_NOW_WAIT)
-                .unwrap_or_else(|| Arc::new(AppList { generation: self.generation(), apps: Vec::new(), error: Some(LIST_TIMEOUT.into()) }));
-        }
-        let (tx, rx) = sync_channel(1);
-        let backend = Arc::clone(&self.inner.backend);
-        let (wake_tx, _wake_rx) = sync_channel(1);
-        let spawned = std::thread::Builder::new().name("app audio scan".into()).spawn(move || {
-            let result = backend.watch(Wake(wake_tx)).and_then(|mut w| w.scan());
-            let _ = tx.send(result);
-        });
-        let result = match spawned {
-            Ok(t) => {
-                let r = rx.recv_timeout(LIST_NOW_WAIT);
-                if r.is_ok() {
-                    let _ = t.join();
-                } else {
-                    crate::reaper::reap(t);
-                }
-                r.unwrap_or_else(|_| Err(AppAudioError::Failed(LIST_TIMEOUT.into())))
-            }
-            Err(e) => Err(AppAudioError::Failed(e.to_string())),
-        };
-        match result {
-            Ok(mut apps) => {
-                AppList::arrange(&mut apps);
-                Arc::new(AppList { generation: self.generation(), apps, error: None })
-            }
-            Err(e) => Arc::new(AppList { generation: self.generation(), apps: Vec::new(), error: Some(e.to_string()) }),
-        }
-    }
-
-    /// Captures that run now.
+    /// Captures that count against [`MAX_CAPTURES`] now.
     pub fn capture_count(&self) -> usize {
         self.inner.captures.load(Ordering::Acquire)
     }
 
-    /// Each capture that has not ended, with its counters.
+    /// Each capture whose owner holds it and that has not ended, with its counters.
     pub fn captures(&self) -> Vec<CaptureStatus> {
         let Ok(mut live) = self.inner.live.lock() else { return Vec::new() };
         live.retain(|w| w.strong_count() > 0);
-        live.iter().filter_map(Weak::upgrade).map(|s| s.status()).filter(|s| !matches!(s.state, CaptureState::Ended | CaptureState::Failed)).collect()
+        live.iter()
+            .filter_map(Weak::upgrade)
+            .filter(|s| !s.abandoned())
+            .map(|s| s.status())
+            .filter(|s| !matches!(s.state, CaptureState::Ended | CaptureState::Failed))
+            .collect()
     }
 
     /// Capture `target` (the application `key`), giving each packet to `on_data` on the capture's
-    /// own thread. Returns at once; the capture reports [`crate::CaptureState::Running`] once the
-    /// system delivers audio. At most [`MAX_CAPTURES`] run at once.
+    /// own thread. Returns at once; the capture reports [`crate::CaptureState::Running`] once
+    /// audio arrives. At most [`MAX_CAPTURES`] count at once. While an earlier capture of `key`
+    /// that its owner let go is stuck in a system call, no new one starts
+    /// ([`AppAudioError::Busy`]), so a stuck application costs one thread, not one per retry.
+    /// While [`MAX_STUCK_CAPTURES`] such threads of any applications are alive, no capture starts
+    /// ([`AppAudioError::Limit`]).
     pub fn open_capture(&self, key: AppKey, target: Target, mut on_data: OnData) -> Result<AppCapture, AppAudioError> {
         let support = self.support();
         if !support.supported {
             return Err(AppAudioError::Unsupported(support.reason.unwrap_or_default()));
         }
-        if self.inner.captures.fetch_add(1, Ordering::AcqRel) >= MAX_CAPTURES {
-            self.inner.captures.fetch_sub(1, Ordering::AcqRel);
-            return Err(AppAudioError::Limit);
-        }
-        let shared = Arc::new(CaptureShared::new(key, target));
-        if let Ok(mut live) = self.inner.live.lock() {
+        let shared = {
+            let Ok(mut live) = self.inner.live.lock() else { return Err(AppAudioError::Failed("the capture list is unavailable".into())) };
             live.retain(|w| w.strong_count() > 0);
+            let now = crate::now_ms();
+            let mut busy = false;
+            for s in live.iter().filter_map(Weak::upgrade).filter(|s| s.abandoned() && s.stalled(now)) {
+                // A thread that got stuck after its owner let go gives its place back here.
+                s.release();
+                busy |= *s.key() == key;
+            }
+            if busy {
+                return Err(AppAudioError::Busy(key.to_string()));
+            }
+            // Threads whose owners let go and that no longer count against the limit: only the
+            // thread itself still holds its capture, so each one is a thread still alive.
+            let stuck = live
+                .iter()
+                .filter_map(Weak::upgrade)
+                .filter(|s| s.abandoned() && !s.counted() && !matches!(s.state(), CaptureState::Ended | CaptureState::Failed))
+                .count();
+            if stuck >= MAX_STUCK_CAPTURES {
+                return Err(AppAudioError::Limit);
+            }
+            if self.inner.captures.fetch_add(1, Ordering::AcqRel) >= MAX_CAPTURES {
+                self.inner.captures.fetch_sub(1, Ordering::AcqRel);
+                return Err(AppAudioError::Limit);
+            }
+            let limits = (self.inner.activate_ms.load(Ordering::Relaxed), self.inner.wedge_ms.load(Ordering::Relaxed));
+            let shared = Arc::new(CaptureShared::new(key, target, Arc::clone(&self.inner.captures), limits));
             live.push(Arc::downgrade(&shared));
-        }
-        let (inner, thread_shared) = (Arc::clone(&self.inner), Arc::clone(&shared));
+            shared
+        };
+        let (backend, thread_shared) = (Arc::clone(&self.inner.backend), Arc::clone(&shared));
         let spawned = std::thread::Builder::new().name("app audio capture".into()).spawn(move || {
-            // Counts the capture until its thread ends, even when it ends long after its owner let go.
-            struct Running(Arc<Inner>);
-            impl Drop for Running {
+            // Gives the capture's place back even if the backend panics.
+            struct Release(Arc<CaptureShared>);
+            impl Drop for Release {
                 fn drop(&mut self) {
-                    self.0.captures.fetch_sub(1, Ordering::AcqRel);
+                    self.0.release();
                 }
             }
-            thread_shared.beat();
-            // The count goes down before the state says the capture ended.
-            let result = {
-                let running = Running(inner);
-                running.0.backend.capture(target, &thread_shared, &mut on_data)
-            };
-            thread_shared.finish(result.map_err(|e| e.to_string()));
+            let guard = Release(thread_shared);
+            guard.0.beat();
+            let result = backend.capture(target, &guard.0, &mut on_data);
+            guard.0.finish(result);
         });
         match spawned {
             Ok(t) => Ok(AppCapture::new(shared, t)),
             Err(e) => {
-                self.inner.captures.fetch_sub(1, Ordering::AcqRel);
+                shared.release();
                 Err(AppAudioError::Failed(format!("the capture could not start: {e}")))
             }
         }
-    }
-
-    fn publish_error(&self, error: &str) {
-        publish(&self.inner, None, Some(error.to_string()));
     }
 }
 
@@ -424,13 +508,14 @@ pub(crate) fn assign_slots(peaks: &PeakTable, slots: &mut BTreeMap<AppKey, u8>, 
         keep
     });
     for a in apps.iter_mut() {
+        a.key_id = a.key.id();
         a.slot = match slots.get(&a.key) {
             Some(s) => Some(*s),
             None => {
                 let free = (0..PEAK_SLOTS).filter_map(|i| u8::try_from(i).ok()).find(|i| !slots.values().any(|v| v == i));
                 if let Some(s) = free {
                     slots.insert(a.key.clone(), s);
-                    peaks.assign(usize::from(s), &a.key);
+                    peaks.assign(usize::from(s), a.key_id);
                 }
                 free
             }
@@ -438,15 +523,20 @@ pub(crate) fn assign_slots(peaks: &PeakTable, slots: &mut BTreeMap<AppKey, u8>, 
     }
 }
 
-fn discover(inner: &Arc<Inner>, rx: &Receiver<Cmd>, wake: &Wake, epoch: u64) {
+fn discover(inner: &Arc<Inner>, rx: &Receiver<Cmd>, wake: &Wake, epoch: u64, busy: &AtomicU64) {
     let mine = || inner.epoch.load(Ordering::Acquire) == epoch;
+    // Marks the time this run spends in a system call, so a stuck call shows in `stalled`. The
+    // marker is this run's own; once the run stops, `stalled` no longer reads it.
+    let enter = || busy.store(crate::now_ms().saturating_add(1), Ordering::Release);
+    let leave = || busy.store(0, Ordering::Release);
     let mut watcher: Option<Box<dyn Watcher>> = None;
     let mut slots: BTreeMap<AppKey, u8> = BTreeMap::new();
     let mut apps: Vec<AppInfo> = Vec::new();
-    // One peak reading's levels, by peak row, allocated once.
-    let mut read: Vec<f32> = vec![0.0; PEAK_SLOTS];
+    // One peak reading's levels, by peak row, and which rows got one, allocated once.
+    let mut read: Vec<Option<f32>> = vec![None; PEAK_SLOTS];
     let now = Instant::now();
     let (mut next_watch, mut next_scan, mut next_peak) = (now, now, now);
+    let mut last_scan: Option<Instant> = None;
     while mine() {
         // A lease that ran out with no use left stops the thread.
         if !leased(inner)
@@ -459,7 +549,10 @@ fn discover(inner: &Arc<Inner>, rx: &Receiver<Cmd>, wake: &Wake, epoch: u64) {
         }
         let now = Instant::now();
         if watcher.is_none() && now >= next_watch {
-            match inner.backend.watch(wake.clone()) {
+            enter();
+            let watched = inner.backend.watch(wake.clone());
+            leave();
+            match watched {
                 Ok(w) => {
                     watcher = Some(w);
                     next_scan = now;
@@ -478,7 +571,9 @@ fn discover(inner: &Arc<Inner>, rx: &Receiver<Cmd>, wake: &Wake, epoch: u64) {
         let visible = inner.visible.load(Ordering::Acquire) || crate::now_ms() < inner.peaks_until.load(Ordering::Acquire);
         if let Some(w) = watcher.as_mut() {
             if now >= next_scan {
+                enter();
                 let scanned = w.scan();
+                leave();
                 // Under the run lock, where runs start and stop, so a run stopped during the scan
                 // changes neither the list nor the peak rows of a run started since.
                 let Ok(_run) = inner.run.lock() else { break };
@@ -495,17 +590,21 @@ fn discover(inner: &Arc<Inner>, rx: &Receiver<Cmd>, wake: &Wake, epoch: u64) {
                     Err(e) => publish(inner, None, Some(e.to_string())),
                 }
                 mark_fresh(inner, epoch);
-                next_scan = Instant::now() + Duration::from_millis(RESCAN_MS);
+                let done = Instant::now();
+                last_scan = Some(done);
+                next_scan = done + Duration::from_millis(RESCAN_MS);
             }
             if visible && now >= next_peak {
                 // The meters are read without a lock, since a meter call can stall. An application
-                // with no reading this time reads 0.
-                read.fill(0.0);
+                // with no reading this time has no level, rather than its last one.
+                read.fill(None);
+                enter();
                 w.peaks(&apps, &mut |i, p| {
                     if let Some(r) = apps.get(i).and_then(|a| a.slot).and_then(|s| read.get_mut(usize::from(s))) {
-                        *r = p;
+                        *r = Some(p);
                     }
                 });
+                leave();
                 // Written under the run lock, as a new run frees and assigns rows under it, so a
                 // run that stopped during the reading writes no level into another application's
                 // row.
@@ -513,8 +612,12 @@ fn discover(inner: &Arc<Inner>, rx: &Receiver<Cmd>, wake: &Wake, epoch: u64) {
                 if !mine() {
                     break;
                 }
+                let stamp = crate::now_ms();
                 for s in apps.iter().filter_map(|a| a.slot).map(usize::from) {
-                    inner.peaks.set(s, read.get(s).copied().unwrap_or(0.0));
+                    match read.get(s).copied().flatten() {
+                        Some(p) => inner.peaks.set(s, p, stamp),
+                        None => inner.peaks.clear(s),
+                    }
                 }
                 // Counted while the run lock still keeps another run from freeing the rows.
                 mark_peak_pass(inner);
@@ -528,16 +631,34 @@ fn discover(inner: &Arc<Inner>, rx: &Receiver<Cmd>, wake: &Wake, epoch: u64) {
         }
         match rx.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
             Ok(Cmd::Stop) | Err(RecvTimeoutError::Disconnected) => break,
-            Ok(Cmd::Rescan) => next_scan = Instant::now(),
+            Ok(Cmd::Rescan) => {
+                // Notifications can arrive in bursts; scans stay at least MIN_RESCAN_MS apart.
+                let now = Instant::now();
+                let soonest = last_scan.map_or(now, |t| (t + Duration::from_millis(MIN_RESCAN_MS)).max(now));
+                next_scan = next_scan.min(soonest);
+            }
             Ok(Cmd::Wake) | Err(RecvTimeoutError::Timeout) => {}
         }
     }
+    drop(watcher);
+    let Ok(mut run) = inner.run.lock() else {
+        inner.alive.fetch_sub(1, Ordering::AcqRel);
+        return;
+    };
     // A run started since this one stopped freed every row when it started and owns them now.
-    if let Ok(run) = inner.run.lock()
-        && run.tx.is_none()
-    {
+    if run.tx.is_none() {
         for s in slots.values() {
             inner.peaks.free(usize::from(*s));
+        }
+    }
+    inner.alive.fetch_sub(1, Ordering::AcqRel);
+    // A start put off while this thread was alive happens now, if the list is still wanted.
+    if run.pending {
+        if run.tx.is_none() && (run.users > 0 || leased(inner)) {
+            start(inner, &mut run);
+        } else {
+            run.pending = false;
+            inner.waiting_since.store(0, Ordering::Release);
         }
     }
 }

@@ -42,17 +42,20 @@ show PipeWire's devices by their descriptions, with the default device first.
 
 An Application audio capture source records what one application plays, and nothing else the
 computer plays. Its Properties list the running applications that have an audio session on any
-active playback device, with the ones whose audio stream is running first. The capture also records the processes
-the application starts. The source names the application by
-its program file and folder, so it keeps capturing after the application quits and starts again,
-and after an update moves the program when no other program with that file name runs.
-Applications whose program files share a name are listed with their folders. While the
-application is not running, the source is silent. When a capture fails, the source opens it again
-after 250 ms, 500 ms, 1 s, 2 s and then every 5 s, and the source's status shows the error. At
-most 32 applications are captured at once. When several separate copies of one program run, the
-list shows one entry for them and the source captures one copy, the one whose audio stream is
-running. It switches when another copy's stream starts running instead, and two copies playing at
-once are not captured together.
+active playback device, sorted by name. The capture also records the processes the application
+starts. The source names the application by its program file and folder, so it keeps capturing
+after the application quits and starts again, and after an update moves the program when no other
+program with that file name runs. Applications whose program files share a name are listed with
+their folders. While the application is not running, the source is silent. When a capture fails,
+the source opens it again after 250 ms, 500 ms, 1 s, 2 s and then every 5 s, and the source shows an
+error in the window; the system's own text goes to the log. When the system refuses the capture,
+the source waits 5 s at once. A saved choice whose value is not an application value loads as a
+silent source with an error. At most 32 applications are captured at once. When several separate
+copies of one program run, the list shows one entry for them and the source captures one copy: the
+copy captured last time while it makes sound or no other copy does, otherwise the copy that made
+sound in the last 3 seconds, then one whose audio stream is running. Two copies playing at once are
+not captured together. An application started by another listed application, such as a helper
+program, is already recorded by that application's capture.
 
 Capturing one application uses Windows process loopback capture
 ([`AUDIOCLIENT_PROCESS_LOOPBACK_PARAMS`](https://learn.microsoft.com/en-us/windows/win32/api/audioclientactivationparams/ns-audioclientactivationparams-audioclient_process_loopback_params)),

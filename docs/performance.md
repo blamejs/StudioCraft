@@ -40,7 +40,8 @@ them.
 At 100 packets a second that is about 0.04% of one core for each captured application.
 `crates/sources/tests/alloc.rs` checks that a warm feed does not allocate or free memory over
 10 seconds of packets. The discovery thread does not run on the audio path: it lists the
-applications once a second and reads their meters 30 times a second only while the list is shown.
+applications once a second, at most every 250 ms after system notifications, and reads their
+meters 30 times a second only while a caller asks for them (`set_visible` or `read_peaks_for`).
 
 ### Timing run
 

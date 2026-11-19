@@ -305,8 +305,9 @@ fn studio_tool_definitions() -> Vec<Value> {
             "app_audio",
             "Application audio",
             "`list`: the running applications that have audio, each with the `app` value an `app_audio` source takes, whether it plays \
-             sound now and its peak level. `status`: whether this system captures one application's audio, and the captures running \
-             now with their counters.",
+             sound now, its peak level and the listed application whose capture already records it. It answers at once: before the \
+             first scan `listing` is true and no applications are listed, so ask again. `status`: whether this system captures one \
+             application's audio, and the captures running now with their counters.",
             json!({"action": {"type": "string", "enum": ["list", "status"], "description": "What to read."}}),
             &["action"],
             READS,
