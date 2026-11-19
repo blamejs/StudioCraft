@@ -13,7 +13,7 @@ use super::server::{Conn, STREAM_ID, WINDOW, info, s, spawn};
 use crate::TlsRoots;
 use crate::chunk::{csid, msg_type, user_control};
 use crate::error::redact;
-use crate::publisher::acked_total;
+use crate::publisher::{Acks, acked_total};
 use crate::transport::{Socket, set_test_clock};
 use crate::{Config, Error, Kind, Message, Publisher};
 
@@ -456,19 +456,62 @@ fn a_passed_deadline_stops_reads_and_writes_with_data_waiting() {
 #[test]
 fn acknowledgements_count_on_past_4_gib() {
     const WRAP: u64 = 1 << 32;
+    const W: u32 = 2_500_000;
     // Before the first wrap.
-    assert_eq!(acked_total(0, 5000, 3000), 3000);
-    // A window larger than 2 GiB.
-    assert_eq!(acked_total(0, 3 << 30, 3 << 30), 3 << 30);
+    assert_eq!(acked_total(0, 5000, 3000, W), 3000);
+    // A window larger than 2 GiB allows a step of that size; without it the step is stale.
+    assert_eq!(acked_total(0, 3 << 30, 3 << 30, 3 << 30), 3 << 30);
+    assert_eq!(acked_total(0, 3 << 30, 3 << 30, W), 0);
     // After a wrap, a small number counts from the wrap.
-    assert_eq!(acked_total(WRAP - 100, WRAP + 500, 200), WRAP + 200);
-    assert_eq!(acked_total(3 * WRAP - 100, 3 * WRAP + 500, 200), 3 * WRAP + 200);
+    assert_eq!(acked_total(WRAP - 100, WRAP + 500, 200, W), WRAP + 200);
+    assert_eq!(acked_total(3 * WRAP - 100, 3 * WRAP + 500, 200, W), 3 * WRAP + 200);
     // A number from just before the wrap, read after it, counts before the wrap.
-    assert_eq!(acked_total(WRAP - 500, WRAP + 500, u32::MAX - 99), WRAP - 100);
+    assert_eq!(acked_total(WRAP - 500, WRAP + 500, u32::MAX - 99, W), WRAP - 100);
     // A number that would count more bytes than were sent is ignored, a stale one included.
-    assert_eq!(acked_total(3000, 5000, 6000), 3000);
-    assert_eq!(acked_total(WRAP + 2000, WRAP + 3000, 4000), WRAP + 2000);
-    assert_eq!(acked_total(WRAP + 2000, WRAP + 3000, 1000), WRAP + 2000);
+    assert_eq!(acked_total(3000, 5000, 6000, W), 3000);
+    assert_eq!(acked_total(WRAP + 2000, WRAP + 3000, 4000, W), WRAP + 2000);
+    assert_eq!(acked_total(WRAP + 2000, WRAP + 3000, 1000, W), WRAP + 2000);
+}
+
+#[test]
+fn a_stale_acknowledgement_is_not_a_wrap_when_more_than_4_gib_is_unacknowledged() {
+    const WRAP: u64 = 1 << 32;
+    const W: u32 = 2_500_000;
+    // More than 4 GiB sent past the last acknowledgement, so the count cannot rule out a wrap.
+    let sent = 3 * WRAP;
+    // A number 1000 bytes behind the last one is stale, not a step of almost 4 GiB.
+    assert_eq!(acked_total(WRAP + 2000, sent, 1000, W), WRAP + 2000);
+    assert_eq!(acked_total(WRAP + 2000, sent, 2000u32.wrapping_sub(W), W), WRAP + 2000);
+    // With a 3 GiB window the step may be up to 3.5 GiB, and a stale number is still not a wrap.
+    assert_eq!(acked_total(WRAP + 2000, sent, 1000, 3 << 30), WRAP + 2000);
+    assert_eq!(acked_total(WRAP + 2000, sent, 2000 + (7 << 29), 3 << 30), WRAP + 2000 + (7 << 29));
+    assert_eq!(acked_total(WRAP + 2000, sent, 2000 + (7 << 29) + 1, 3 << 30), WRAP + 2000);
+    // The next real acknowledgement still counts, across a wrap too.
+    assert_eq!(acked_total(WRAP + 2000, sent, 2000 + W, W), WRAP + 2000 + u64::from(W));
+    assert_eq!(acked_total(2 * WRAP - 100, sent, W, W), 2 * WRAP + u64::from(W));
+}
+
+#[test]
+fn an_acknowledgement_due_under_a_larger_window_counts_after_the_window_shrinks() {
+    const BIG: u32 = 3 << 30;
+    const SMALL: u32 = 1 << 20;
+    let sent = 4u64 << 32;
+    let mut acks = Acks::default();
+    acks.announce(BIG, 100);
+    acks.ack(1000, sent);
+    assert_eq!(acks.total, 1000);
+    // The smaller window goes out after the server's next acknowledgement was already due.
+    let shrunk_at = 1000 + u64::from(BIG) + 50;
+    acks.announce(SMALL, shrunk_at);
+    acks.ack(1000 + BIG, sent);
+    assert_eq!(acks.total, 1000 + u64::from(BIG));
+    // Once the server has counted the announcement, steps are judged by the smaller window.
+    acks.ack(1000 + BIG + 100 + SMALL, sent);
+    assert_eq!(acks.total, shrunk_at + 50 + u64::from(SMALL));
+    acks.ack((acks.total as u32).wrapping_sub(1000), sent);
+    assert_eq!(acks.total, shrunk_at + 50 + u64::from(SMALL));
+    acks.ack((acks.total as u32).wrapping_add(3 << 30), sent);
+    assert_eq!(acks.total, shrunk_at + 50 + u64::from(SMALL));
 }
 
 #[test]

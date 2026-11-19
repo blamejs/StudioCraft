@@ -157,7 +157,9 @@ pub struct Stats {
     pub bytes_received: u64,
     /// The byte count of the server's last acknowledgement, or 0 before the first. The server
     /// counts what it received; the counter is 32 bits on the wire, and this value carries on past
-    /// 4 GiB.
+    /// 4 GiB. An acknowledgement further ahead of the last one than halfway from the client's
+    /// announced window to 4 GiB is taken as stale and not counted; after a smaller window is
+    /// announced, the larger one applies until the server has counted the announcement.
     pub bytes_acked: u64,
     /// The window the server asked for with Set Peer Bandwidth, or 0. The client does not hold back
     /// sends to stay within it; `bytes_sent - bytes_acked` shows how far ahead the client is.
@@ -189,7 +191,7 @@ pub struct Publisher {
     out_window_sent: u32,
     peer_bandwidth: u32,
     hard_limit: bool,
-    bytes_acked: u64,
+    acks: Acks,
     broken: bool,
     /// A reused buffer for commands and control messages.
     scratch: Vec<u8>,
@@ -235,7 +237,7 @@ impl Publisher {
             out_window_sent: 0,
             peer_bandwidth: 0,
             hard_limit: false,
-            bytes_acked: 0,
+            acks: Acks::default(),
             broken: false,
             scratch: Vec::with_capacity(512),
         };
@@ -337,7 +339,7 @@ impl Publisher {
         Stats {
             bytes_sent: self.bytes_sent,
             bytes_received: self.inbound.received() + self.handshake_received,
-            bytes_acked: self.bytes_acked,
+            bytes_acked: self.acks.total,
             peer_bandwidth: self.peer_bandwidth,
         }
     }
@@ -539,7 +541,7 @@ impl Publisher {
         match m.header.type_id {
             msg_type::ACK => {
                 if let Some(seq) = u32_at(0) {
-                    self.bytes_acked = acked_total(self.bytes_acked, self.bytes_sent, seq);
+                    self.acks.ack(seq, self.bytes_sent);
                 }
             }
             msg_type::WINDOW_ACK_SIZE => {
@@ -570,6 +572,7 @@ impl Publisher {
                         if w != self.out_window_sent {
                             self.send_control(msg_type::WINDOW_ACK_SIZE, &w.to_be_bytes())?;
                             self.out_window_sent = w;
+                            self.acks.announce(w, self.bytes_sent);
                         }
                     }
                 }
@@ -602,12 +605,49 @@ impl Publisher {
 }
 
 /// The byte count an Acknowledgement's sequence number `seq` gives, after `acked` bytes were
-/// acknowledged and `sent` bytes were sent. The server's count only grows and wraps at 4 GiB, so
-/// the number counts forward from the last one. A number that would count more bytes than were
-/// sent is stale or wrong, and `acked` stays.
-pub(crate) fn acked_total(acked: u64, sent: u64, seq: u32) -> u64 {
-    let total = acked + u64::from(seq.wrapping_sub(acked as u32));
-    if total <= sent { total } else { acked }
+/// acknowledged and `sent` bytes were sent, with `window` the last window the client announced
+/// (0 before the first). The server's count only grows and wraps at 4 GiB, so the number counts
+/// forward from the last one. The server acknowledges after each window (§5.4.4), so a step
+/// forward of more than halfway from the window to 4 GiB (2 GiB before a window is announced) is a
+/// stale number read as a wrap. A stale number, and one that would count more bytes than were
+/// sent, leave `acked` as it is.
+pub(crate) fn acked_total(acked: u64, sent: u64, seq: u32, window: u32) -> u64 {
+    let step = u64::from(seq.wrapping_sub(acked as u32));
+    let limit = ((1u64 << 32) + u64::from(window)) / 2;
+    let total = acked.saturating_add(step);
+    if step <= limit && total <= sent { total } else { acked }
+}
+
+/// The server's acknowledgements, counted past 4 GiB.
+#[derive(Debug, Default)]
+pub(crate) struct Acks {
+    /// The byte count of the last acknowledgement accepted.
+    pub(crate) total: u64,
+    /// The window [`acked_total`] judges a step by: the largest one announced until the server has
+    /// counted the bytes that carried the newest one, and then the newest one.
+    window: u32,
+    /// The newest window announced.
+    newest: u32,
+    /// The bytes sent up to and including the newest announcement.
+    newest_at: u64,
+}
+
+impl Acks {
+    /// Records a Window Acknowledgement Size sent once `sent` bytes, the message included, were
+    /// sent. Acknowledgements due under a larger earlier window may still arrive.
+    pub(crate) fn announce(&mut self, window: u32, sent: u64) {
+        self.window = self.window.max(window);
+        self.newest = window;
+        self.newest_at = sent;
+    }
+
+    /// Counts an Acknowledgement's sequence number after `sent` bytes were sent.
+    pub(crate) fn ack(&mut self, seq: u32, sent: u64) {
+        self.total = acked_total(self.total, sent, seq, self.window);
+        if self.total >= self.newest_at {
+            self.window = self.newest;
+        }
+    }
 }
 
 /// An `onStatus` message's info object.
