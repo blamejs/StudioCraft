@@ -220,8 +220,10 @@ impl Headless {
 
     /// Refuse a command that would stream without permission or reach a file outside the roots,
     /// before anything runs. The command to run: with roots, each path it names is replaced by the
-    /// path the roots resolved, so it acts on the file or folder that was checked.
-    fn guard(&self, mut cmd: Command) -> Result<Command, McpError> {
+    /// path the roots resolved, so it acts on the file or folder that was checked. With it, the
+    /// recording folder the roots resolved, as the text the setting is to hold, when the command
+    /// writes there.
+    fn guard(&self, mut cmd: Command) -> Result<(Command, Option<String>), McpError> {
         let starts_stream = match &cmd {
             Command::StreamStart {} => true,
             Command::StreamToggle {} => !self.running(OutputKind::Streaming),
@@ -230,22 +232,18 @@ impl Headless {
         if starts_stream && !self.options.allow_streaming {
             return Err(McpError::NotAllowed(STREAMING_REFUSED.into()));
         }
-        let Some(roots) = &self.options.roots else { return Ok(cmd) };
+        let Some(roots) = &self.options.roots else { return Ok((cmd, None)) };
         let registry = self.studio.registry();
+        let mut recording = None;
         match &mut cmd {
             Command::RecordStart {} | Command::RecordToggle {} if !self.running(OutputKind::Recording) => {
-                let folder = recording_folder(&self.studio.profile().output.folder);
-                self.allowed(&folder, Access::Write)?;
+                recording = Some(self.checked_recording_folder(roots)?);
             }
             // A saved replay goes to the recording folder too.
-            Command::ReplaySave {} => {
-                let folder = recording_folder(&self.studio.profile().output.folder);
-                self.allowed(&folder, Access::Write)?;
-            }
+            Command::ReplaySave {} => recording = Some(self.checked_recording_folder(roots)?),
             // Audio tracks of a stream go to the recording folder.
             Command::StreamStart {} | Command::StreamToggle {} if starts_stream && self.tracks_follow_stream() => {
-                let folder = recording_folder(&self.studio.profile().output.folder);
-                self.allowed(&folder, Access::Write)?;
+                recording = Some(self.checked_recording_folder(roots)?);
             }
             // Repair rewrites the files it finds.
             Command::AudioTracksRepair { folder } => {
@@ -275,7 +273,26 @@ impl Headless {
             }
             _ => {}
         }
-        Ok(cmd)
+        Ok((cmd, recording))
+    }
+
+    /// The recording folder held to the write roots, as the text the setting is to hold: the path
+    /// the roots resolved.
+    fn checked_recording_folder(&self, roots: &Roots) -> Result<String, McpError> {
+        let resolved = self.allowed(&recording_folder(&self.studio.profile().output.folder), Access::Write)?;
+        setting_text(roots, &resolved, Access::Write)
+    }
+
+    /// Set the recording folder to `text` when the setting holds another text, so a command writes
+    /// to the folder the roots checked.
+    fn hold_recording_folder(&mut self, text: String) -> Result<(), McpError> {
+        if self.studio.profile().output.folder == text {
+            return Ok(());
+        }
+        let mut profile = self.studio.profile().clone();
+        profile.output.folder = text;
+        self.studio.set_profile(profile)?;
+        Ok(())
     }
 
     fn open(&mut self, p: &Params) -> Result<Value, McpError> {
@@ -314,7 +331,10 @@ impl Headless {
             )));
         }
         let cmd = Command::from_parts(id, &params).map_err(|e| McpError::Studio(StudioError::Engine(EngineError::Invalid(e))))?;
-        let cmd = self.guard(cmd)?;
+        let (cmd, recording) = self.guard(cmd)?;
+        if let Some(text) = recording {
+            self.hold_recording_folder(text)?;
+        }
         let (result, _) = self.studio.execute(cmd)?;
         Ok(result)
     }

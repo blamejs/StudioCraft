@@ -335,6 +335,15 @@ fn audio_tracks_writes_are_held_to_the_write_roots() {
         let text = error_text(&call(&mut s, tool, args.clone()));
         assert!(text.contains("outside the write roots"), "{tool} {args}: {text}");
     }
+    // Inside a write root but outside the recording folder, the studio refuses it.
+    let text = error_text(&call(&mut s, "audio_tracks_repair", json!({"folder": text_of(&dir.join("out"))})));
+    assert!(text.contains("not inside the recording folder"), "{text}");
+    let roots = Roots::new(&[dir.join("in")], &[dir.join("out")]).unwrap();
+    let mut h = Headless::with_options(None, ServerOptions { allow_streaming: false, roots: Some(roots) }).unwrap();
+    let mut profile = h.studio().profile().clone();
+    profile.output.folder = text_of(&dir.join("out"));
+    h.studio_mut().set_profile(profile).unwrap();
+    let mut s = Server::new(Box::new(h)).unwrap();
     let inside = ok_json(&call(&mut s, "audio_tracks_repair", json!({"folder": text_of(&dir.join("out"))})));
     assert_eq!(inside["started"], json!(true), "{inside}");
     let _ = std::fs::remove_dir_all(&dir);
@@ -1227,6 +1236,27 @@ fn replay_save_is_held_to_the_write_roots() {
     for (tool, args) in [("replay_save", json!({})), ("command_run", json!({"id": "replay.save"}))] {
         let text = error_text(&call(&mut s, tool, args));
         assert!(text.contains("outside the write roots"), "{tool}: {text}");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn commands_that_write_to_the_recording_folder_use_the_folder_the_roots_checked() {
+    let dir = root_folders("recording-held");
+    std::fs::create_dir_all(dir.join("out").join("sub")).unwrap();
+    let checked = text_of(&crate::roots::shown(&std::fs::canonicalize(dir.join("out")).unwrap()));
+    let given = text_of(&dir.join("out").join("sub").join(".."));
+    for id in ["record.start", "record.toggle", "replay.save", "stream.start", "stream.toggle"] {
+        let roots = Roots::new(&[], &[dir.join("out")]).unwrap();
+        let mut h = Headless::with_options(None, ServerOptions { allow_streaming: true, roots: Some(roots) }).unwrap();
+        let mut profile = h.studio().profile().clone();
+        profile.output.folder = given.clone();
+        profile.audio_tracks.enabled = true;
+        profile.audio_tracks.when = studiocraft_model::AudioTracksWhen::Either;
+        h.studio_mut().set_profile(profile).unwrap();
+        // Without a graphics device the command itself fails; the setting it ran with is kept.
+        let _ = h.call("engine.execute", json!({"command": id, "params": {}}));
+        assert_eq!(h.studio().profile().output.folder, checked, "{id}");
     }
     let _ = std::fs::remove_dir_all(&dir);
 }
