@@ -1,0 +1,24 @@
+[package]
+name = "craft-app-audio"
+description = "Per-application audio: which running applications have audio, a peak meter for each without capturing it, and capturing one application's audio"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+arc-swap = { workspace = true }
+serde = { workspace = true }
+thiserror = { workspace = true }
+
+# Process loopback capture, audio sessions and their peak meters through WASAPI; process names and
+# parents, and the Windows build number, through sysinfo.
+[target.'cfg(windows)'.dependencies]
+wasapi = { workspace = true }
+sysinfo = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }

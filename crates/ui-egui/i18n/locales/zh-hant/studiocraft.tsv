@@ -14,6 +14,8 @@
 	Alpha mask (alpha channel)	Alpha 遮罩（Alpha 通道）
 	Alpha mask (color channel)	Alpha 遮罩（色彩通道）
 	Apply	套用
+	Application	應用程式
+	Application audio capture	應用程式音訊擷取
 	Apply Dock Layout	套用停駐版面
 	Attack (ms)	起音時間 (ms)
 	Audio	音訊
@@ -42,6 +44,7 @@
 	Center to Screen	置於畫面中央
 	Check for updates at start	啟動時檢查更新
 	Check for Updates…	檢查更新…
+	Choose an application	選擇應用程式
 	Choose in the system picker	在系統選擇器中選擇
 	Chroma key	色度鍵
 	Close	關閉
@@ -401,6 +404,13 @@
 	Unlock	解除鎖定
 	Unmute	取消靜音
 @msg	A plug-in could not be loaded: {error}	無法載入外掛程式：{error}
+@msg	The application's audio could not be captured. The capture is opened again shortly.	無法擷取該應用程式的音訊。稍後將重新開啟擷取。
+@msg	Capturing one application's audio is not available on this system yet.	此系統尚不支援擷取單一應用程式的音訊。
+@msg	Capturing one application needs Windows 11 or Windows Server 2022. Audio output capture still records everything the computer plays.	擷取單一應用程式需要 Windows 11 或 Windows Server 2022。「音訊輸出擷取」仍會錄製電腦播放的所有聲音。
+@msg	The most applications that can be captured at once are already being captured.	已在擷取可同時擷取的最多數量的應用程式。
+@msg	The system refused to capture this application's audio. The capture is tried again every 5 seconds.	系統拒絕擷取該應用程式的音訊。每 5 秒重試一次擷取。
+@msg	The running applications could not be listed. The list is read again shortly.	無法列出正在執行的應用程式。稍後將重新讀取清單。
+@msg	The application setting is not a value from the application list.	應用程式設定不是應用程式清單中的值。
 @msg	Drawing again on {adapter}	已重新使用 {adapter} 繪製
 @msg	No graphics device could be opened again: {error}	無法重新開啟圖形裝置：{error}
 @msg	No graphics hardware can be used; drawing in software, which is slower	無法使用圖形硬體；改用軟體繪製，速度較慢

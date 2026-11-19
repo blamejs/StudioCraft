@@ -14,6 +14,8 @@
 	Alpha mask (alpha channel)	アルファマスク (アルファチャンネル)
 	Alpha mask (color channel)	アルファマスク (カラーチャンネル)
 	Apply	適用
+	Application	アプリケーション
+	Application audio capture	アプリケーション音声キャプチャ
 	Apply Dock Layout	ドックレイアウトを適用
 	Attack (ms)	アタック (ms)
 	Audio	音声
@@ -42,6 +44,7 @@
 	Center to Screen	画面の中央に配置
 	Check for updates at start	起動時にアップデートを確認
 	Check for Updates…	アップデートを確認…
+	Choose an application	アプリケーションを選択
 	Choose in the system picker	システムの選択画面で選ぶ
 	Chroma key	クロマキー
 	Close	閉じる
@@ -401,6 +404,13 @@
 	Unlock	ロックを解除
 	Unmute	ミュートを解除
 @msg	A plug-in could not be loaded: {error}	プラグインを読み込めませんでした: {error}
+@msg	The application's audio could not be captured. The capture is opened again shortly.	アプリケーションの音声をキャプチャできませんでした。まもなくキャプチャを開き直します。
+@msg	Capturing one application's audio is not available on this system yet.	このシステムでは、1 つのアプリケーションの音声のキャプチャはまだ利用できません。
+@msg	Capturing one application needs Windows 11 or Windows Server 2022. Audio output capture still records everything the computer plays.	1 つのアプリケーションのキャプチャには Windows 11 または Windows Server 2022 が必要です。音声出力キャプチャでは引き続きコンピューターで再生されるすべての音を録音できます。
+@msg	The most applications that can be captured at once are already being captured.	同時にキャプチャできる最大数のアプリケーションをすでにキャプチャしています。
+@msg	The system refused to capture this application's audio. The capture is tried again every 5 seconds.	システムがこのアプリケーションの音声のキャプチャを拒否しました。キャプチャは 5 秒ごとに再試行されます。
+@msg	The running applications could not be listed. The list is read again shortly.	実行中のアプリケーションを一覧にできませんでした。まもなく一覧を読み直します。
+@msg	The application setting is not a value from the application list.	アプリケーションの設定がアプリケーション一覧の値ではありません。
 @msg	Drawing again on {adapter}	{adapter} で描画を再開しました
 @msg	No graphics device could be opened again: {error}	グラフィックデバイスを再び開けませんでした: {error}
 @msg	No graphics hardware can be used; drawing in software, which is slower	使用できるグラフィックハードウェアがありません。ソフトウェアで描画するため低速です

@@ -14,6 +14,8 @@
 	Alpha mask (alpha channel)	알파 마스크 (알파 채널)
 	Alpha mask (color channel)	알파 마스크 (색상 채널)
 	Apply	적용
+	Application	애플리케이션
+	Application audio capture	애플리케이션 오디오 캡처
 	Apply Dock Layout	도크 레이아웃 적용
 	Attack (ms)	어택 (ms)
 	Audio	오디오
@@ -42,6 +44,7 @@
 	Center to Screen	화면 가운데에 배치
 	Check for updates at start	시작할 때 업데이트 확인
 	Check for Updates…	업데이트 확인…
+	Choose an application	애플리케이션 선택
 	Choose in the system picker	시스템 선택 창에서 고르기
 	Chroma key	크로마 키
 	Close	닫기
@@ -401,6 +404,13 @@
 	Power saving	절전
 	Software (slower)	소프트웨어 (느림)
 @msg	A plug-in could not be loaded: {error}	플러그인을 불러올 수 없습니다: {error}
+@msg	The application's audio could not be captured. The capture is opened again shortly.	애플리케이션 오디오를 캡처할 수 없습니다. 잠시 후 캡처를 다시 엽니다.
+@msg	Capturing one application's audio is not available on this system yet.	이 시스템에서는 아직 한 애플리케이션의 오디오 캡처를 사용할 수 없습니다.
+@msg	Capturing one application needs Windows 11 or Windows Server 2022. Audio output capture still records everything the computer plays.	한 애플리케이션 캡처에는 Windows 11 또는 Windows Server 2022가 필요합니다. 오디오 출력 캡처는 계속 컴퓨터에서 재생되는 모든 소리를 녹음합니다.
+@msg	The most applications that can be captured at once are already being captured.	동시에 캡처할 수 있는 최대 수의 애플리케이션을 이미 캡처하고 있습니다.
+@msg	The system refused to capture this application's audio. The capture is tried again every 5 seconds.	시스템이 이 애플리케이션의 오디오 캡처를 거부했습니다. 5초마다 캡처를 다시 시도합니다.
+@msg	The running applications could not be listed. The list is read again shortly.	실행 중인 애플리케이션 목록을 가져올 수 없습니다. 잠시 후 목록을 다시 읽습니다.
+@msg	The application setting is not a value from the application list.	애플리케이션 설정이 애플리케이션 목록의 값이 아닙니다.
 @msg	Drawing again on {adapter}	{adapter}(으)로 다시 그리는 중
 @msg	No graphics device could be opened again: {error}	그래픽 장치를 다시 열 수 없습니다: {error}
 @msg	No graphics hardware can be used; drawing in software, which is slower	그래픽 하드웨어를 사용할 수 없어 소프트웨어로 그립니다(더 느림)

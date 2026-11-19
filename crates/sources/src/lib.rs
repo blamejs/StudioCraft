@@ -11,10 +11,12 @@
 //! | `camera` | a video capture device, such as a webcam or a capture card |
 //! | `audio_input` | a microphone or line input |
 //! | `audio_output` | what a speaker or headphone device plays (Windows) |
+//! | `app_audio` | what one application plays (Windows 11 and Windows Server 2022) |
 //!
 //! Filters: `gain`, `noise_gate`, `compressor`, `limiter`, `equalizer` (audio), `color_correction`,
 //! `chroma_key`, `color_key`, `crop_pad`, `sharpen`, `image_mask`, `scroll` (video).
 
+mod app_audio;
 mod audio;
 mod camera;
 mod capture;
@@ -25,6 +27,7 @@ mod media;
 mod text;
 
 use std::collections::VecDeque;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
 
 use studiocraft_media::Tick;
@@ -33,6 +36,7 @@ use studiocraft_media::clock::MasterClock;
 use studiocraft_model::Settings;
 use studiocraft_plugin::{AUDIO_QUEUE_BLOCKS, AudioOut, PluginError, Registry};
 
+pub use app_audio::AppAudioSource;
 pub use audio::{AudioInput, AudioOutput};
 pub use camera::CameraSource;
 pub use capture::{DisplayCapture, WindowCapture};
@@ -56,6 +60,7 @@ pub fn register_all(reg: &mut Registry, ffmpeg: &FfmpegSetting) -> Result<(), Pl
     reg.register_source(Arc::new(CameraSource))?;
     reg.register_source(Arc::new(AudioInput))?;
     reg.register_source(Arc::new(AudioOutput))?;
+    reg.register_source(Arc::new(AppAudioSource::new(craft_app_audio::Discovery::system())))?;
     reg.register_filter(Arc::new(filters::Gain))?;
     reg.register_filter(Arc::new(filters::NoiseGate))?;
     reg.register_filter(Arc::new(filters::Compressor))?;
@@ -76,28 +81,52 @@ pub(crate) fn uint(s: &Settings, key: &str, default: u32, min: u32, max: u32) ->
     s.i64(key).map_or(default, |v| u32::try_from(v.clamp(i64::from(min), i64::from(max))).unwrap_or(default))
 }
 
+/// A feed's counters, shared with the source that reports them.
+#[derive(Debug, Default)]
+pub struct FeedStats {
+    /// Blocks dropped because one call completed more than [`AUDIO_QUEUE_BLOCKS`].
+    pub dropped: AtomicU64,
+    /// Blocks made past the block pool's capacity because every block it keeps was in use. The
+    /// blocks the pool makes while it fills up to its capacity are not counted.
+    pub pool_exhausted: AtomicU64,
+}
+
 /// Device samples to pipeline blocks. The last block a callback completes is stamped with the
-/// clock, and each earlier one a block's duration before the one after it.
-pub(crate) struct AudioFeed {
+/// clock, and each earlier one a block's duration before the one after it. After the block pool
+/// has warmed up, a push does not allocate.
+pub struct AudioFeed {
     reblocker: Reblocker,
     audio: Arc<AudioOut>,
     clock: MasterClock,
     /// The blocks of one callback, at most [`AUDIO_QUEUE_BLOCKS`]: the newest ones.
     pending: VecDeque<PooledBlock>,
+    stats: Arc<FeedStats>,
 }
 
 impl AudioFeed {
-    pub(crate) fn new(rate: u32, channels: usize, audio: Arc<AudioOut>, clock: MasterClock) -> Self {
-        Self { reblocker: Reblocker::new(rate, channels), audio, clock, pending: VecDeque::with_capacity(AUDIO_QUEUE_BLOCKS) }
+    /// A feed of interleaved samples at `rate` with `channels` channels into `audio`.
+    pub fn new(rate: u32, channels: usize, audio: Arc<AudioOut>, clock: MasterClock) -> Self {
+        Self { reblocker: Reblocker::new(rate, channels), audio, clock, pending: VecDeque::with_capacity(AUDIO_QUEUE_BLOCKS), stats: Arc::default() }
     }
 
-    pub(crate) fn push(&mut self, samples: &[f32]) {
-        let (audio, pending) = (&self.audio, &mut self.pending);
+    /// The feed's counters.
+    pub fn stats(&self) -> Arc<FeedStats> {
+        Arc::clone(&self.stats)
+    }
+
+    /// Turn `samples` into blocks and queue them for the mixer.
+    pub fn push(&mut self, samples: &[f32]) {
+        let (audio, pending, stats) = (&self.audio, &mut self.pending, &self.stats);
         self.reblocker.push(samples, |b| {
             // The queue keeps only its newest blocks, so the older blocks of a callback that
             // completes more are dropped here, and the block goes back to the pool.
             if pending.len() >= AUDIO_QUEUE_BLOCKS {
                 pending.pop_front();
+                stats.dropped.fetch_add(1, Ordering::Relaxed);
+            }
+            // Checked after a dropped block went back to the pool, so it counts only real misses.
+            if audio.pool_exhausted() {
+                stats.pool_exhausted.fetch_add(1, Ordering::Relaxed);
             }
             let mut block = audio.block();
             block.samples.clear();
@@ -125,7 +154,7 @@ mod tests {
         let ffmpeg = FfmpegSetting::default();
         register_all(&mut reg, &ffmpeg).unwrap();
         assert!(register_all(&mut reg, &ffmpeg).is_err(), "a second registration is refused");
-        for id in ["color", "image", "text", "media", "display_capture", "window_capture", "camera", "audio_input", "audio_output"] {
+        for id in ["color", "image", "text", "media", "display_capture", "window_capture", "camera", "audio_input", "audio_output", "app_audio"] {
             assert!(reg.source(id).is_ok(), "{id}");
         }
     }
@@ -145,6 +174,50 @@ mod tests {
         assert_eq!(pts[1] - pts[0], step);
         assert_eq!(pts[2] - pts[1], step);
         assert!(pts[2] >= before && pts[2] <= after, "the last block is stamped when the callback ends");
+    }
+
+    #[test]
+    fn a_callback_past_the_feed_capacity_drops_the_oldest_blocks_and_counts_them() {
+        let audio = Arc::new(AudioOut::default());
+        let mut feed = AudioFeed::new(SAMPLE_RATE, 2, Arc::clone(&audio), MasterClock::new());
+        let capacity = feed.pending.capacity();
+        // Four blocks more than the feed keeps in one callback, each filled with its own number, and
+        // one frame more, since the reblocker holds the last frame back.
+        let blocks = AUDIO_QUEUE_BLOCKS + 4;
+        let samples: Vec<f32> = (0..=blocks).flat_map(|k| std::iter::repeat_n(k as f32 / 100.0, BLOCK_FRAMES * 2)).collect();
+        feed.push(&samples);
+        let kept: Vec<f32> = std::iter::from_fn(|| audio.pop()).map(|b| b.samples[0]).collect();
+        assert_eq!(kept, (4..blocks).map(|k| k as f32 / 100.0).collect::<Vec<_>>(), "the newest blocks are kept");
+        assert_eq!(feed.stats().dropped.load(Ordering::Relaxed), 4);
+        assert_eq!(feed.pending.capacity(), capacity, "the buffer did not grow");
+        assert_eq!(capacity, AUDIO_QUEUE_BLOCKS);
+    }
+
+    #[test]
+    fn a_feed_counts_blocks_made_after_the_pool_ran_dry() {
+        let audio = Arc::new(AudioOut::default());
+        let mut feed = AudioFeed::new(SAMPLE_RATE, 2, Arc::clone(&audio), MasterClock::new());
+        // Hold every block the pool keeps, so the next push finds it empty.
+        let held: Vec<_> = std::iter::from_fn(|| (!audio.pool_exhausted()).then(|| audio.block())).collect();
+        assert!(!held.is_empty());
+        // Two blocks, and the frame the reblocker holds back.
+        feed.push(&vec![0.0; (BLOCK_FRAMES * 2 + 1) * 2]);
+        assert_eq!(feed.stats().pool_exhausted.load(Ordering::Relaxed), 2);
+        drop(held);
+    }
+
+    #[test]
+    fn a_block_dropped_for_capacity_is_reused_without_counting_a_miss() {
+        let audio = Arc::new(AudioOut::default());
+        let mut feed = AudioFeed::new(SAMPLE_RATE, 2, Arc::clone(&audio), MasterClock::new());
+        // Leave exactly as many free blocks as the feed keeps.
+        let mut held: Vec<_> = std::iter::from_fn(|| (!audio.pool_exhausted()).then(|| audio.block())).collect();
+        held.truncate(held.len() - AUDIO_QUEUE_BLOCKS);
+        // One block more than the feed keeps: the last one reuses the block the oldest one returns.
+        feed.push(&vec![0.0; (BLOCK_FRAMES * (AUDIO_QUEUE_BLOCKS + 1) + 1) * 2]);
+        assert_eq!(feed.stats().dropped.load(Ordering::Relaxed), 1);
+        assert_eq!(feed.stats().pool_exhausted.load(Ordering::Relaxed), 0);
+        drop(held);
     }
 
     #[test]

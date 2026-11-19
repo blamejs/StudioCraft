@@ -1331,6 +1331,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-app-audio"
+version = "0.1.0-alpha.1"
+dependencies = [
+ "arc-swap",
+ "serde",
+ "serde_json",
+ "sysinfo",
+ "thiserror 2.0.21",
+ "wasapi",
+]
+
+[[package]]
 name = "craft-atomic"
 version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=2dc55f434142ce20e4b89c5986199849a65f6f8b#2dc55f434142ce20e4b89c5986199849a65f6f8b"
@@ -3882,6 +3894,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0676bb32a98c1a483ce53e500a81ad9c3d5b3f7c920c28c24e9cb0980d0b5bc8"
 
 [[package]]
+name = "ntapi"
+version = "0.4.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c3b335231dfd352ffb0f8017f3b6027a4917f7df785ea2143d8af2adc66980ae"
+dependencies = [
+ "winapi",
+]
+
+[[package]]
 name = "num-bigint"
 version = "0.4.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4230,6 +4251,16 @@ dependencies = [
  "bitflags 2.13.2",
  "block2 0.6.2",
  "objc2 0.6.5",
+ "objc2-core-foundation",
+]
+
+[[package]]
+name = "objc2-io-kit"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "33fafba39597d6dc1fb709123dfa8289d39406734be322956a69f0931c73bb15"
+dependencies = [
+ "libc",
  "objc2-core-foundation",
 ]
 
@@ -5826,6 +5857,7 @@ dependencies = [
 name = "studiocraft-engine"
 version = "0.1.0-alpha.1"
 dependencies = [
+ "craft-app-audio",
  "craft-audio-dsp",
  "criterion",
  "log",
@@ -5949,6 +5981,7 @@ name = "studiocraft-sources"
 version = "0.1.0-alpha.1"
 dependencies = [
  "ab_glyph",
+ "craft-app-audio",
  "craft-audio",
  "craft-audio-dsp",
  "craft-color",
@@ -5956,9 +5989,12 @@ dependencies = [
  "craft-font-catalog",
  "craft-image-codecs",
  "craft-media",
+ "criterion",
  "image",
  "jpeg-encoder",
+ "log",
  "serde_json",
+ "stats_alloc",
  "studiocraft-media",
  "studiocraft-model",
  "studiocraft-platform",
@@ -6075,6 +6111,20 @@ dependencies = [
  "libc",
  "wasm-bindgen",
  "web-sys",
+]
+
+[[package]]
+name = "sysinfo"
+version = "0.38.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "92ab6a2f8bfe508deb3c6406578252e491d299cbbf3bc0529ecc3313aee4a52f"
+dependencies = [
+ "libc",
+ "memchr",
+ "ntapi",
+ "objc2-core-foundation",
+ "objc2-io-kit",
+ "windows 0.62.2",
 ]
 
 [[package]]
@@ -6610,6 +6660,19 @@ checksum = "29790946404f91d9c5d06f9874efddea1dc06c5efe94541a7d6863108e3a5e4b"
 dependencies = [
  "same-file",
  "winapi-util",
+]
+
+[[package]]
+name = "wasapi"
+version = "0.27.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "58b35dbcb6fae6fbaba9f6f52a22686bb405978ee112ed6eb33d98bd63c97583"
+dependencies = [
+ "log",
+ "num-integer",
+ "thiserror 2.0.21",
+ "windows 0.62.2",
+ "windows-core 0.62.2",
 ]
 
 [[package]]
