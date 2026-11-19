@@ -5,10 +5,10 @@ APIs, without the `ffmpeg` program. It loads the drivers at run time. Building t
 require a vendor SDK, and on a system without the hardware an encoder returns an error and does not
 crash.
 
-Only the private `nvenc_ffi`, `mf_ffi` and `vt_ffi` modules contain `unsafe` code. The Media
-Foundation calls go through the `windows` crate's bindings, and the VideoToolbox calls go through
-the `objc2-video-toolbox`, `objc2-core-media`, `objc2-core-video` and `objc2-core-foundation`
-bindings.
+Only the private `nvenc_ffi`, `mf_ffi`, `vt_ffi` and `vaapi_ffi` modules contain `unsafe` code. The
+Media Foundation calls go through the `windows` crate's bindings, and the VideoToolbox calls go
+through the `objc2-video-toolbox`, `objc2-core-media`, `objc2-core-video` and
+`objc2-core-foundation` bindings.
 
 ## Contents
 
@@ -23,6 +23,9 @@ bindings.
 | `mf::available(codec)` | It reports whether Media Foundation lists a hardware encoder that writes `codec` and opens. |
 | `vt::Encoder` | This runs the hardware H.264 High and HEVC Main encoders of macOS VideoToolbox, from NV12 frames. It has the same `Config`, `encode`, `flush` and `codec_private` as NVENC. A session that VideoToolbox reports as software is not used. Quality is `(100 - 2 × level) / 100`. Bitrate is constant on macOS 13 and later, and otherwise an average bitrate with a one-second ceiling. It uses no B-frames and BT.709 limited range. |
 | `vt::available(codec)` | It reports whether VideoToolbox opens a hardware encoder that writes `codec`. |
+| `vaapi::Encoder` | This runs the VA-API hardware H.264 (High, Main or Constrained Baseline) and HEVC Main encoders on 64-bit Linux (`libva.so.2`, `libva-drm.so.2`), from NV12 frames. It uses the first `/dev/dri/renderD*` node whose driver encodes the codec. It has the same `Config`, `encode`, `flush` and `codec_private` as NVENC. Quality is a constant QP at the level, or a variable bitrate where the driver has no constant QP. Constant bitrate uses a one-second buffer. It writes IDR and P pictures only, and HEVC sizes are multiples of the driver's smallest coding block. |
+| `vaapi::available(codec)` | It reports whether a VA-API driver opens an encoder that writes `codec`. |
+| `vaapi::copy_nv12`, `vaapi::packet` | These are the two passes the VA-API encoder makes over each frame on the CPU: `copy_nv12` copies the frame into a surface's pitched planes, and `packet` turns the coded picture into a packet. |
 | `annexb::nals`, `to_length_prefixed`, `parameter_sets` | `nals` splits an Annex B stream into network abstraction layer (NAL) units. `to_length_prefixed` writes a sample without parameter sets or delimiters, and `parameter_sets` returns the parameter sets. |
 | `avc::avcc`, `hevc::hvcc` | These build the decoder configuration records of ISO/IEC 14496-15 and check them against the stream that was asked for. |
 
@@ -45,7 +48,20 @@ for packet in enc.flush()? {
 }
 ```
 
-`mf::Encoder` and `vt::Encoder` take the same `Config` with `Input::Nv12`.
+`mf::Encoder`, `vt::Encoder` and `vaapi::Encoder` take the same `Config` with `Input::Nv12`.
+
+`vaapi::Encoder` keeps up to four frames in flight, each in its own surface and coded buffer.
+`encode` copies the frame into a free surface and submits it, and waits for the GPU only when all
+four are taken, for the frame submitted three frames before. With libva 2.9 or later and a
+driver that has `vaSyncSurface2`, a frame the GPU has not finished after two seconds is an error;
+with an older libva the wait has no limit. The surfaces, coded buffers and the buffer that
+collects coded data are made once in `Encoder::new`. Each frame still allocates on the CPU side:
+the packet it returns, and the `Vec` of packets when one comes out. In the driver, each frame
+creates and destroys its picture and slice parameter buffers (and on an IDR picture the sequence,
+rate and frame rate buffers) and maps its surface with `vaDeriveImage`. Coded data is copied out
+of the mapped coded buffer and then into the length-prefixed packet. `cargo bench -p
+craft-hwenc-native` measures the copy and the packet, and a 1080p encode where a VA-API H.264
+encoder is present; the copy bench writes into heap memory, not a mapped surface.
 
 ## Limits and failures
 
@@ -53,11 +69,13 @@ for packet in enc.flush()? {
   `Error::NoDevice`.
 - Off macOS, and on a Mac without a hardware encoder for the codec, `vt::Encoder::new` returns
   `Error::NoDevice`.
+- Off 64-bit Linux, without libva, and without a driver that encodes the codec,
+  `vaapi::Encoder::new` returns `Error::NoDevice`.
 
 ## Tests
 
-The NVENC layout tests compare every structure the crate passes to the driver with the C header's
-sizes and offsets, and they run on every platform.
+The NVENC and VA-API layout tests compare every structure the crate passes to the driver with the
+C header's sizes and offsets, and they run on every platform.
 
 ## Sources
 

@@ -27,7 +27,7 @@ crate in the same layer. `cargo xtask layers` checks this against the table in
 | L0 | `craft-gpu-device` | Choosing and opening a wgpu device: the user's adapter choice, corrections for drivers that crash, a software fallback, a capability report, and device health with recovery after a device loss. It depends on no StudioCraft crate. |
 | L0 | `craft-gpu-yuv` | RGBA to NV12, P010 and I420 on the GPU with scaling, in BT.601, BT.709 and BT.2020 at limited or full range, and the same conversion on the CPU. It depends on no StudioCraft crate. |
 | L0 | `craft-hwenc` | The hardware encoders ffmpeg runs, a one-frame test encode of each with results kept for the session, and an automatic choice ordered by the graphics adapter's vendor with a software fallback. It depends on no StudioCraft crate. |
-| L0 | `craft-hwenc-native` | Hardware encoders called through their drivers: NVENC H.264 and HEVC from NV12 or P010 frames on Windows (Direct3D 11) and 64-bit Linux (CUDA), the Windows Media Foundation and macOS VideoToolbox hardware H.264 and HEVC encoders from NV12 frames, the Annex B helpers, and the `avcC` and `hvcC` records. Its private `nvenc_ffi`, `mf_ffi` and `vt_ffi` modules are the only code that calls the drivers. It depends on no StudioCraft crate. |
+| L0 | `craft-hwenc-native` | Hardware encoders called through their drivers: NVENC H.264 and HEVC from NV12 or P010 frames on Windows (Direct3D 11) and 64-bit Linux (CUDA), the Windows Media Foundation, macOS VideoToolbox and Linux VA-API hardware H.264 and HEVC encoders from NV12 frames, the Annex B helpers, and the `avcC` and `hvcC` records. Its private `nvenc_ffi`, `mf_ffi`, `vt_ffi` and `vaapi_ffi` modules are the only code that calls the drivers. It depends on no StudioCraft crate. |
 | L0 | `craft-app-audio` | Per-application audio: the running applications that have audio, kept current by one discovery thread, a lock-free peak meter for each, and the capture of one application's audio as 48 kHz stereo `f32` with backoff, stall detection and a limit of 32 captures. Windows build 20348 and later capture through WASAPI process loopback; other systems report it as unsupported. It depends on no StudioCraft crate. |
 | L1 | `studiocraft-plugin` | The `Source`, `Filter`, `Transition`, `Encoder` and `Output` traits and the `Registry` they are registered in. |
 | L1 | `craft-rtmp` | A blocking RTMP and RTMPS publish client on `std::net`: the handshake, chunking, the `connect`, `createStream`, `publish` and `deleteStream` commands, acknowledgements, and a timeout on every step, with the stream key kept out of errors and `Debug` output. It sends `craft-flv` bodies, starts no threads, and is built for native targets only. It depends on no StudioCraft crate. |
@@ -480,6 +480,17 @@ Release file names and package ids are in [docs/releasing.md](releasing.md#file-
   | NVIDIA NVENC H.264 or HEVC (built in) | `craft-hwenc-native`, which loads the NVIDIA driver at run time |
   | Windows Media Foundation H.264 or HEVC (built in) | `craft-hwenc-native`, which loads `mfplat.dll` at run time |
   | Apple VideoToolbox H.264 or HEVC (built in) | `craft-hwenc-native` on macOS, which calls the VideoToolbox framework |
+  | VA-API H.264 or HEVC (built in) | `craft-hwenc-native` on 64-bit Linux, which loads `libva.so.2` and `libva-drm.so.2` at run time |
+
+  The VA-API encoder runs on the recording's encoder thread, as the other built-in encoders do. It
+  keeps four frames in flight, so the thread waits for the GPU only when all four surfaces are
+  taken, and then for the frame submitted three frames before. Frames reach it as NV12 in memory
+  and are copied into a surface, so a frame rendered on the GPU is read back to the CPU and
+  uploaded again. VA-API can import a DMA-BUF as a surface; the encoder does not do this yet, and
+  the copy costs 80 µs at 1080p and 1.2 ms at 4K on the encoder thread. The VA-API test that
+  lists the encoder in Settings initializes the driver of every render node on the calling
+  thread. When every node's driver lists no encoder for the codec, that answer stands until
+  StudioCraft restarts and later tests do not initialize the drivers again.
 
   `craft-flv` writes and reads the FLV tags and AMF0 values that RTMP carries, `craft-packet`
   fans encoded packets out to several destinations, and `craft-rtmp` publishes a stream to an RTMP

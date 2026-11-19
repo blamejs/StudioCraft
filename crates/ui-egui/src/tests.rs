@@ -554,8 +554,8 @@ fn available_encoders_lists_the_built_in_ones_without_ffmpeg() {
     let _ = std::fs::remove_dir_all(&dir);
     let list = a.encoders.clone().unwrap();
     assert!(list.iter().any(|(name, _, ok)| name == "H.264 (built in)" && *ok), "{list:?}");
-    // The built-in NVENC, Media Foundation and VideoToolbox encoders are ready where their hardware
-    // encoder opens.
+    // The built-in NVENC, Media Foundation, VideoToolbox and VA-API encoders are ready where their
+    // hardware encoder opens.
     assert!(list.iter().filter(|(name, _, _)| !name.ends_with("(built in)")).all(|(_, _, ok)| !ok), "{list:?}");
     let missing = a.encoders_ffmpeg.clone().map(|m| (m.english(), m.shown_in(&crate::i18n::I18N, crate::i18n::I18N.from_code("de").unwrap())));
     let (english, german) = missing.unwrap_or_default();

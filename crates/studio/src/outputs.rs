@@ -6,10 +6,7 @@ use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-use craft_hwenc::{
-    Cancel, Candidate, Choice, Error as HwError, FfmpegProber, Input, Os, Outcome, PROBE_HEIGHT, PROBE_WIDTH, Preference, ProbeCache, Prober, Target,
-    Vendor,
-};
+use craft_hwenc::{Cancel, Candidate, Choice, Error as HwError, FfmpegProber, Input, Os, Outcome, Preference, ProbeCache, Prober, Target, Vendor};
 use studiocraft_encode::SessionError;
 use studiocraft_encode::hardware::{self, Hardware};
 use studiocraft_engine::mixer::MixerCmd;
@@ -527,17 +524,20 @@ fn encoder_failed(candidate: &Candidate, error: &str) -> bool {
 }
 
 /// Tests the hardware encoders for an MKV recording: an encoder that also runs in this process
-/// (NVENC, Media Foundation and VideoToolbox H.264 and HEVC) is tested by opening it there and
-/// encoding one frame, and the others are tested in the ffmpeg program.
+/// (NVENC, Media Foundation, VideoToolbox and VA-API H.264 and HEVC) is tested by opening it there and
+/// encoding one frame at the recording's size, and the others are tested in the ffmpeg program.
 struct BuiltInFirst {
     ffmpeg: FfmpegProber,
+    /// The recording's width and height, which a VA-API HEVC driver may refuse.
+    size: (u32, u32),
     fps: (u32, u32),
     rate: RateControl,
 }
 
 impl BuiltInFirst {
     fn test(&self, encoder: &dyn Hardware) -> Outcome {
-        let params = VideoParams { width: PROBE_WIDTH, height: PROBE_HEIGHT, fps_num: self.fps.0, fps_den: self.fps.1, rate: self.rate };
+        let (width, height) = self.size;
+        let params = VideoParams { width, height, fps_num: self.fps.0, fps_den: self.fps.1, rate: self.rate };
         let mut session = match encoder.try_open(&params) {
             Ok(s) => s,
             // Not kept in the test cache: the next start tests again.
@@ -545,7 +545,14 @@ impl BuiltInFirst {
             Err(SessionError::Other(PluginError::Unavailable(why))) => return Outcome::NoDevice(why),
             Err(SessionError::Other(e)) => return Outcome::Failed(e.to_string()),
         };
-        let gray = [vec![16u8; (PROBE_WIDTH * PROBE_HEIGHT) as usize], vec![128u8; (PROBE_WIDTH * PROBE_HEIGHT / 2) as usize]].concat();
+        // A gray NV12 frame, allocated fallibly: an 8192 × 8192 output needs 96 MiB.
+        let luma = (width as usize).saturating_mul(height as usize);
+        let mut gray = Vec::new();
+        if let Err(e) = gray.try_reserve_exact(luma.saturating_add(luma / 2)) {
+            return Outcome::Failed(format!("no memory for a {width}x{height} test frame: {e}"));
+        }
+        gray.resize(luma, 16u8);
+        gray.resize(luma + luma / 2, 128u8);
         let mut packets = Vec::new();
         if let Err(e) = session.encode(&gray, 0, &mut packets) {
             return Outcome::Failed(e.to_string());
@@ -585,7 +592,12 @@ impl Prober for BuiltInFirst {
     fn args(&self, candidate: &'static Candidate, input: Input) -> Vec<String> {
         match hardware::for_candidate(candidate.id).filter(|_| input == Input::Nv12) {
             // Kept apart from the ffmpeg encoder's results in the cache.
-            Some(encoder) => vec![encoder.id().to_string(), format!("{:?}", self.rate), format!("{}/{}", self.fps.0, self.fps.1)],
+            Some(encoder) => vec![
+                encoder.id().to_string(),
+                format!("{:?}", self.rate),
+                format!("{}/{}", self.fps.0, self.fps.1),
+                format!("{}x{}", self.size.0, self.size.1),
+            ],
             None => self.ffmpeg.args(candidate, input),
         }
     }
@@ -691,8 +703,11 @@ impl Studio {
         let stream = kind == OutputKind::Streaming;
         let lossless = planned.rate == RateControl::Lossless;
         let built_in = runs_built_in(&self.profile, kind, planned.rate);
-        let prober: Box<dyn Prober + Send> =
-            if built_in { Box::new(BuiltInFirst { ffmpeg, fps: (v.fps_num, v.fps_den.max(1)), rate: planned.rate }) } else { Box::new(ffmpeg) };
+        let prober: Box<dyn Prober + Send> = if built_in {
+            Box::new(BuiltInFirst { ffmpeg, size: (v.output_width, v.output_height), fps: (v.fps_num, v.fps_den.max(1)), rate: planned.rate })
+        } else {
+            Box::new(ffmpeg)
+        };
         let preference = named.map_or_else(|| self.profile.output.hardware_encoder.clone(), String::from);
         // A test passed before another output took an encoder says nothing about a second session.
         let encoding = self.outputs.active.values().any(|a| a.hardware.is_some());
@@ -786,20 +801,22 @@ impl Studio {
         let mut hardware = None;
         let program = if encoder.ffmpeg().is_some() || encoder.id() == HARDWARE {
             let located = ffmpeg::locate(&self.profile.output.ffmpeg_path).map_err(|e| StudioError::Output(e.to_string()));
-            // The `hardware` choice of an MKV recording can still run NVENC, Media Foundation or
-            // VideoToolbox without ffmpeg.
+            // A VA-API encoder chosen by name is tested too, to find the render node it encodes on.
+            let vaapi = craft_hwenc::candidate(encoder.id()).filter(|c| c.api == craft_hwenc::Api::Vaapi).map(|c| c.id);
+            // The `hardware` choice of an MKV recording can still run NVENC, Media Foundation,
+            // VideoToolbox or VA-API without ffmpeg, and a VA-API encoder chosen by name can still
+            // run VA-API.
+            let tested = encoder.id() == HARDWARE || vaapi.is_some();
             let (program, missing) = match located {
                 Ok(program) => (program, None),
-                Err(e) if encoder.id() == HARDWARE && runs_built_in(&self.profile, kind, planned.rate) => (PathBuf::new(), Some(e)),
+                Err(e) if tested && runs_built_in(&self.profile, kind, planned.rate) => (PathBuf::new(), Some(e)),
                 Err(e) => return Err(e),
             };
             let offered = match missing {
                 Some(_) => Vec::new(),
                 None => self.outputs.encoders.entry(program.clone()).or_insert_with(|| ffmpeg::encoders(&program)).clone(),
             };
-            // A VA-API encoder chosen by name is tested too, to find the render node it encodes on.
-            let vaapi = craft_hwenc::candidate(encoder.id()).filter(|c| c.api == craft_hwenc::Api::Vaapi).map(|c| c.id);
-            if encoder.id() == HARDWARE || vaapi.is_some() {
+            if tested {
                 let Some((id, run, notice)) = self.outputs.resolved.remove(&kind) else {
                     // The tests can take seconds each, so they run on their own thread, and
                     // `finish_hardware_tests` starts the output when they end.
@@ -1023,12 +1040,14 @@ mod tests {
         assert_eq!(built_in_twin(("mf_hevc".into(), Some(run("mf_hevc")), None)).0, "mf_native_hevc");
         assert_eq!(built_in_twin(("vt_h264".into(), Some(run("vt_h264")), None)).0, "vt_native_h264");
         assert_eq!(built_in_twin(("vt_hevc".into(), Some(run("vt_hevc")), None)).0, "vt_native_hevc");
+        assert_eq!(built_in_twin(("vaapi_h264".into(), Some(run("vaapi_h264")), None)).0, "vaapi_native_h264");
+        assert_eq!(built_in_twin(("vaapi_hevc".into(), Some(run("vaapi_hevc")), None)).0, "vaapi_native_hevc");
         assert_eq!(built_in_twin(("amf_h264".into(), Some(run("amf_h264")), None)).0, "amf_h264", "no built-in twin");
         assert_eq!(built_in_twin(("x264".into(), None, None)).0, "x264");
 
         // The ffmpeg program does not exist: only the in-process test can say anything else.
         let ffmpeg = FfmpegProber::new("missing-ffmpeg-for-the-test", Vec::new());
-        let p = BuiltInFirst { ffmpeg, fps: (30, 1), rate: RateControl::Quality(23) };
+        let p = BuiltInFirst { ffmpeg, size: (1920, 1080), fps: (30, 1), rate: RateControl::Quality(23) };
         let nvenc = craft_hwenc::candidate("nvenc_h264").unwrap();
         let amf = craft_hwenc::candidate("amf_h264").unwrap();
         match p.probe(nvenc, Input::Nv12, &Cancel::new()) {
@@ -1052,6 +1071,14 @@ mod tests {
             other => panic!("{other:?}"),
         }
         assert_eq!(p.runs_in(vt), Path::new(IN_PROCESS));
+        // So is VA-API.
+        let vaapi = craft_hwenc::candidate("vaapi_h264").unwrap();
+        match p.probe(vaapi, Input::Nv12, &Cancel::new()) {
+            Outcome::Works => {}
+            Outcome::NoDevice(why) => assert!(why.starts_with("VA-API H.264 (built in) cannot "), "{why}"),
+            other => panic!("{other:?}"),
+        }
+        assert_eq!(p.runs_in(vaapi), Path::new(IN_PROCESS));
         // AMF is tested in ffmpeg; a missing ffmpeg does not stop the tests before NVENC.
         assert!(matches!(p.probe(amf, Input::Nv12, &Cancel::new()), Outcome::NoDevice(why) if why.contains("was not found")));
         let canceled = Cancel::new();
@@ -1060,8 +1087,12 @@ mod tests {
         assert_ne!(p.args(nvenc, Input::Nv12), p.ffmpeg.args(nvenc, Input::Nv12), "kept apart in the cache");
         assert_eq!(p.args(amf, Input::Nv12), p.ffmpeg.args(amf, Input::Nv12));
         let ffmpeg = FfmpegProber::new("missing-ffmpeg-for-the-test", Vec::new());
-        let at_60 = BuiltInFirst { ffmpeg, fps: (60, 1), rate: RateControl::Quality(23) };
+        let at_60 = BuiltInFirst { ffmpeg, size: (1920, 1080), fps: (60, 1), rate: RateControl::Quality(23) };
         assert_ne!(at_60.args(nvenc, Input::Nv12), p.args(nvenc, Input::Nv12), "another frame rate is tested again");
+        let ffmpeg = FfmpegProber::new("missing-ffmpeg-for-the-test", Vec::new());
+        let at_720p = BuiltInFirst { ffmpeg, size: (1280, 720), fps: (30, 1), rate: RateControl::Quality(23) };
+        let hevc = craft_hwenc::candidate("vaapi_hevc").unwrap();
+        assert_ne!(at_720p.args(hevc, Input::Nv12), p.args(hevc, Input::Nv12), "another size is tested again");
         // A failure of the built-in encoder while it records does not stop ffmpeg's NVENC.
         assert_eq!((p.runs_in(nvenc), p.runs_in(amf)), (Path::new(IN_PROCESS), p.program()));
         let cache = ProbeCache::new();
