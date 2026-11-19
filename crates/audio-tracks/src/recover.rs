@@ -115,6 +115,20 @@ pub fn repair(dir: &Path) -> std::io::Result<Option<Repaired>> {
             ));
         }
     }
+    // On Windows a name with `~` can be another file's short name, which a listing of the folder
+    // does not show. Such a name that opens must be listed under its own name.
+    if names.iter().any(|n| n.contains('~')) {
+        let listed: std::collections::HashSet<String> =
+            std::fs::read_dir(dir)?.filter_map(Result::ok).filter_map(|e| e.file_name().into_string().ok()).map(|n| n.to_lowercase()).collect();
+        for name in names.iter().filter(|n| n.contains('~') && !listed.contains(&n.to_lowercase())) {
+            if std::fs::symlink_metadata(dir.join(name)).is_ok() {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!("the journal names {name:?}, which is another file's short name in the take's folder"),
+                ));
+            }
+        }
+    }
     // A cut the writer journaled is finished here too, since the take may have stopped part way
     // through it: a part that starts at or after the end, after an earlier part of its track, is
     // removed, and the file holding the end keeps only the frames before it. A track's first file

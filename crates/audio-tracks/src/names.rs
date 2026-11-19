@@ -59,12 +59,14 @@ pub fn sanitize(name: &str, n: usize) -> String {
 
 /// Whether `file` has the form of a track file's name the writer makes: a name [`sanitize`] keeps
 /// as it is, possibly followed by a number and a part number, then `.wav`, in at most 255 bytes.
-/// A name with a character [`sanitize`] removes, one that starts with a space, ends in a dot or a
-/// space before `.wav`, or names a Windows device is not.
+/// A name may hold `~`, which earlier writers kept (0.1.0-alpha.1). A name with another character
+/// [`sanitize`] removes, one that starts with a space, ends in a dot or a space before `.wav`, or
+/// names a Windows device is not.
 pub fn is_track_file(file: &str) -> bool {
     let Some(stem) = file.strip_suffix(".wav") else { return false };
     let device = stem.split('.').next().is_some_and(|s| reserved(s.trim_end()));
-    file.len() <= 255 && !stem.is_empty() && !stem.chars().any(removed) && !stem.starts_with(' ') && !stem.ends_with(['.', ' ']) && !device
+    let bad_char = stem.chars().any(|c| c != '~' && removed(c));
+    file.len() <= 255 && !stem.is_empty() && !bad_char && !stem.starts_with(' ') && !stem.ends_with(['.', ' ']) && !device
 }
 
 /// The first of `base`, `base 2`, `base 3` … not in `used` (compared without letter case), which
@@ -114,7 +116,8 @@ mod tests {
 
     #[test]
     fn only_names_the_writer_makes_are_track_files() {
-        for ok in ["Mic.wav", "Mic 2.wav", "Mic part 2.wav", "_con.wav", "Música 🎤.wav", "Game.v2.wav"] {
+        // `~` was kept by earlier writers; repair checks such a name against the folder's listing.
+        for ok in ["Mic.wav", "Mic 2.wav", "Mic part 2.wav", "_con.wav", "Música 🎤.wav", "Game.v2.wav", "Mic~1.wav"] {
             assert!(is_track_file(ok), "{ok}");
         }
         for bad in [
@@ -126,7 +129,6 @@ mod tests {
             " Mic.wav",
             "Mic.wav.",
             "Mic.wav ",
-            "MICPAR~1.wav",
             "a:b.wav",
             "con.wav",
             "../Mic.wav",

@@ -1060,6 +1060,34 @@ fn a_track_file_with_another_name_is_not_rewritten() {
 }
 
 #[test]
+fn a_track_file_named_with_a_tilde_by_an_earlier_writer_is_repaired() {
+    let dir = scratch("tilde-name");
+    crashed_take(&dir);
+    std::fs::copy(dir.join("Mic.wav"), dir.join("Desk~1.wav")).unwrap();
+    append_lines(&dir, &[Line::File { track: 1, name: "Desk~1".into(), file: "Desk~1.wav".into(), segment: 1, first_frame: 0 }]);
+    let done = recover::repair(&dir).unwrap().unwrap_or_else(|| panic!("the take was skipped"));
+    let names: Vec<&str> = done.files.iter().map(|(f, _)| f.as_str()).collect();
+    assert_eq!(names, ["Mic.wav", "Desk~1.wav"]);
+    let _ = std::fs::remove_dir_all(dir.parent().and_then(Path::parent).unwrap());
+}
+
+#[cfg(windows)]
+#[test]
+fn a_track_file_named_as_another_files_short_name_is_refused() {
+    let dir = scratch("short-name");
+    crashed_take(&dir);
+    std::fs::copy(dir.join("Mic.wav"), dir.join("Microphone track.wav")).unwrap();
+    if !dir.join("MICROP~1.wav").exists() {
+        eprintln!("skipped: the volume makes no short names");
+        let _ = std::fs::remove_dir_all(dir.parent().and_then(Path::parent).unwrap());
+        return;
+    }
+    let lines = [Line::File { track: 1, name: "Desk".into(), file: "MICROP~1.wav".into(), segment: 1, first_frame: 0 }];
+    repair_refused(&dir, &lines, "MICROP~1.wav");
+    let _ = std::fs::remove_dir_all(dir.parent().and_then(Path::parent).unwrap());
+}
+
+#[test]
 fn takes_given_the_same_folder_name_each_get_their_own_folder() {
     let recording = scratch("folders").parent().and_then(Path::parent).unwrap().to_path_buf();
     let cfg = DiskConfig { folder_stem: Some("2026-11-18 21-00-00".into()), ..config(&recording) };
