@@ -1,8 +1,10 @@
 //! Opening a take's files without following a link in the last name of the path. On Unix a
-//! symbolic link is refused. On Windows the reparse point itself is opened, and one whose tag is a
-//! name surrogate (a symbolic link, a junction or another mount point) is refused; other reparse
-//! points, such as cloud file placeholders and deduplicated files, are opened as the file they are.
-//! Anything that is not a file, a folder included, is refused.
+//! symbolic link is refused. On Windows the reparse point itself is opened and never followed. A
+//! reparse point whose tag has the name-surrogate bit (`0x2000_0000`) set is refused: symbolic
+//! links (`IO_REPARSE_TAG_SYMLINK`), junctions (`IO_REPARSE_TAG_MOUNT_POINT`) and every other tag
+//! with that bit. A reparse point whose tag lacks the bit, such as a cloud file placeholder or a
+//! deduplicated file, is opened as itself and accepted when it is a file. Anything that is not a
+//! file, a folder included, is refused.
 
 use std::fs::{File, OpenOptions};
 use std::path::Path;
