@@ -1,13 +1,16 @@
 # Mechanics
 
-The timing and tuning values StudioCraft uses, where each one lives in the code, and where it came
-from. `mechanics.json` holds the same values for tools.
+This file lists the timing and tuning values StudioCraft uses, where each one lives in the code,
+and where it came from. `mechanics.json` holds the same values for tools. No code compares the two
+files, so a change to one must be copied to the other by hand.
 
-A value marked **estimated** is a common choice for studio software, and it has not been checked
-against public documentation or measured in another program. A value with a named source follows
-that source. When a value is
-confirmed from public documentation, add the page's URL as its source and remove the estimate mark
-in both files.
+## Sources of the values
+
+A value marked **estimated** in the Source column is a common choice for studio software, and it
+has not been checked against public documentation or measured in another program. A value with a
+named source follows that source. When a value is confirmed from public documentation, add the
+page's URL as its source in both files, remove the estimate mark here, and set its `estimated`
+field to `false` in `mechanics.json`.
 
 ## Video
 
@@ -22,7 +25,7 @@ in both files.
 | Largest side of a Linux display or window capture | 8192 px | `platform::portal::MAX_SIDE` | estimated |
 | Spare frames a Linux display or window capture reuses | 2 | `platform::screen_frames::SPARE_FRAMES` | estimated |
 | Spare frames a camera capture reuses | 2 | `platform::screen_frames::SPARE_FRAMES` | estimated |
-| Camera format when none is chosen | the largest picture up to 1920 × 1080 at 30 fps or more | `platform::camera::default_format` | estimated |
+| Camera format when none is chosen | The largest picture up to 1920 × 1080 at 30 fps or more | `platform::camera::default_format` | estimated |
 | Camera frames in a row that cannot be read before the capture fails | 30 | `platform::camera::BAD_FRAMES` | estimated |
 | Cameras whose formats are remembered while they are busy | 32 | `platform::camera::KNOWN_CAMERAS` | estimated |
 | Gray formats listed for one Linux camera | 64 | `platform::camera_gray::MOST` | estimated |
@@ -48,7 +51,7 @@ in both files.
 
 | Value | Setting | Code | Source |
 | --- | --- | --- | --- |
-| Default transition | fade | `model::collection::TransitionConfig::default` | estimated |
+| Default transition | Fade | `model::collection::TransitionConfig::default` | estimated |
 | Default duration | 300 ms | `model::collection::TransitionConfig::default` | estimated |
 | Longest duration | 20 000 ms | `model::collection::MAX_TRANSITION_MS` | estimated |
 | Audio fade on a scene change | 300 ms | `engine::mixer` (`set_fade_ms`) | estimated |
@@ -64,8 +67,8 @@ in both files.
 | Block size | 1024 frames | `media::audio::BLOCK_FRAMES` | estimated |
 | Blocks queued per output | 4 | `engine::mixer::MAX_QUEUED_BLOCKS` | estimated |
 | Audio sync offset | 0 ms (0 to 5000 ms) | `model::collection::AudioState`, `model::collection::MAX_SYNC_OFFSET_MS` | estimated |
-| Monitoring mode | off | `model::collection::MonitorMode` | estimated |
-| Monitoring device | the system's default output | `model::profile::DEFAULT_AUDIO_DEVICE` | estimated |
+| Monitoring mode | Off | `model::collection::MonitorMode` | estimated |
+| Monitoring device | The system's default output | `model::profile::DEFAULT_AUDIO_DEVICE` | estimated |
 | Blocks queued for the monitoring device | 4 | `studio::monitor::MONITOR_QUEUE_BLOCKS` | estimated |
 | Blocks the monitoring device waits for before it plays | 2 | `studio::monitor::PRIME_BLOCKS` | estimated |
 | Linux capture format | 48 000 Hz, 2 channels, 32-bit float | `platform::audio::imp::CAPTURE_FORMAT` | estimated |
@@ -83,17 +86,17 @@ in both files.
 | Limiter ceiling / release | −1 dB / 60 ms | `sources::filters::Limiter` | estimated |
 | Limiter look-ahead | 5 ms | `craft_audio_dsp::effects::dynamics::Limiter::LOOKAHEAD_MS` | estimated |
 | Equalizer bands | 200 Hz low shelf, 1 kHz peak, 5 kHz high shelf | `sources::filters::Equalizer` | estimated |
-| Loudness windows | momentary 400 ms, short-term 3 s | `craft_audio_dsp::loudness` | ITU-R BS.1770-4 and EBU R 128 |
+| Loudness windows | Momentary 400 ms, short-term 3 s | `craft_audio_dsp::loudness` | ITU-R BS.1770-4 and EBU R 128 |
 
 ## Recording and streaming
 
 | Value | Setting | Code | Source |
 | --- | --- | --- | --- |
-| Recording quality levels (x264 CRF) | Compact 28, High 23, Pristine 16, Lossless | `model::profile::RecordingQuality::quality_level` | estimated |
+| Recording quality levels (x264 CRF) | Compact 28, High 23, Pristine 16, Lossless (no CRF: x264 records with `-qp 0`, and the ffmpeg NVENC H.264 and HEVC encoders record with `-tune lossless`; every other encoder, NVENC AV1 included, returns an error for Lossless) | `model::profile::RecordingQuality::quality_level` | estimated |
 | Stream video bitrate | 6000 kbps | `model::profile::StreamSettings::default` | estimated |
 | Stream audio bitrate | 160 kbps | `model::profile::StreamSettings::default` | estimated |
 | Keyframe interval | 2 s | `model::profile::StreamSettings::default` | estimated |
-| Default encoder | software x264 | `model::profile::OutputSettings::default` | estimated |
+| Default encoder | Software x264 | `model::profile::OutputSettings::default` | estimated |
 | x264 preset | veryfast | `outputs::encoders::VideoEncoder::schema` | estimated |
 | NVENC preset | P5 | `outputs::encoders::VideoEncoder::schema` | estimated |
 | H.264 (built in) preset | Speed (of Speed, Balanced and Quality) | `encode::h264::H264::schema` | estimated |
@@ -106,8 +109,8 @@ in both files.
 | Built-in recording encoder lag before it fails | 10 s | `outputs::native::MAX_LAG_NS` | estimated |
 | Recording file name | `YYYY-MM-DD HH-MM-SS.<ext>` | `studio::outputs::recording_path` | estimated |
 | Replay buffer length | 20 s (5 to 3600 s) | `model::profile::ReplaySettings` | estimated |
-| Replay buffer memory limit | 512 MB (32 to 16384 MB) | `model::profile::ReplaySettings` | estimated |
-| Replay buffer encoders | H.264 (built in) at the recording's quality (High for Lossless), AAC at 192 kbps | `studio::outputs::plan` | estimated |
+| Replay buffer memory limit | 512 MB (32 to 16384 MB; the code counts 1024 × 1024 bytes per MB) | `model::profile::ReplaySettings` | estimated |
+| Replay buffer encoders | H.264 (built in) at the recording's quality, AAC at 192 kbps. A recording set to Lossless gives the replay buffer High. | `studio::outputs::plan` | estimated |
 | Replays saved at once (waiting for the buffer or being written) | 8 | `outputs::replay::MAX_SAVES` | estimated |
 | Replay save wait for the buffer's packets | 5 s | `outputs::replay::ANSWER_WAIT` | estimated |
 | Saved replay file name | `Replay YYYY-MM-DD HH-MM-SS.mkv` | `studio::outputs::replay_path` | estimated |
@@ -130,10 +133,10 @@ in both files.
 | --- | --- | --- | --- |
 | Snap distance | 8 screen points (Alt turns it off) | `ui-egui::preview::SNAP_POINTS` | estimated |
 | Undo steps kept | 200 | `engine::history::LIMIT` | estimated |
-| Changes merged into one undo step | same key within 750 ms | `engine::history::COALESCE` | estimated |
+| Changes merged into one undo step | Same key within 750 ms | `engine::history::COALESCE` | estimated |
 | Scene shortcuts | Ctrl+1 to Ctrl+9 | `ui-egui::commands::SCENE_HOTKEYS` | estimated |
 | Autosave after a change | 800 ms | `ui-egui::AUTOSAVE` | estimated |
 | Dock widths when none is set (the last shown dock takes the rest) | Scenes 300, Sources 340, Audio Mixer 400 points | `ui-egui::strip::DEFAULT_WIDTHS` | estimated |
-| Undocked dock window | the dock's default width by 200 points to start, at least 200 by 120 points | `ui-egui::StudioApp::dock_windows` | estimated |
+| Undocked dock window | The dock's default width by 200 points to start, at least 200 by 120 points | `ui-egui::StudioApp::dock_windows` | estimated |
 | Saved dock layouts | 32 | `ui-egui::store::MAX_DOCK_LAYOUTS` | estimated |
 | Status notices shown | 8 s (errors 24 s) | `ui-egui::NOTICE_S` | estimated |

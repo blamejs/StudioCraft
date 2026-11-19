@@ -18,8 +18,10 @@ License: MIT OR Apache-2.0.
   stream start again from 0 after it sends the sequence headers and metadata again.
 - `Body::check` checks a body once and returns a `Checked` body with its length.
   `Writer::write_checked` and `Checked::write_to` write it without checking it again, so one body
-  goes to several FLV writers or RTMP chunk streams. `annexb_to_nalus` converts an Annex B access
-  unit to length-prefixed NAL units once, for `Body::AvcNalus`.
+  goes to several FLV writers or RTMP chunk streams. `Checked::parts` returns the bytes before the
+  data and the data as two slices, for a vectored write, for every body but Annex B.
+  `annexb_to_nalus` converts an Annex B access unit to length-prefixed NAL units once, for
+  `Body::AvcNalus`.
 - `Body` is a tag's body:
 
   | `Body` | Tag type | Bytes before the data | Data |

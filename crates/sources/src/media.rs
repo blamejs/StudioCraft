@@ -1,16 +1,22 @@
-//! A video or audio file, played in real time by ffmpeg.
+//! A video or audio file, played in real time.
 //!
-//! Two ffmpeg processes read the file at its own speed (`-re`): one writes RGBA pictures (PAM
-//! images, which carry their size) and one writes 48 kHz stereo samples. A reader thread for
-//! each publishes into the source's outputs.
+//! An Ogg file that holds one Vorbis stream at 8 to 192 kHz and nothing else plays in this process: a player thread
+//! reads it packet by packet with `craft-audio`'s Vorbis decoder and publishes the samples at the file's own speed.
+//! Every other file plays through ffmpeg. Two ffmpeg processes read the file at its own speed
+//! (`-re`): one writes RGBA pictures (PAM images, which carry their size) and one writes 48 kHz
+//! stereo samples. A reader thread for each publishes into the source's outputs.
 
 use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Stdio};
-use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, OnceLock};
 use std::thread::JoinHandle;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
+use craft_audio::vorbis::decoder::Decoder;
+use craft_media::FileReader;
+use craft_media::ogg::{self, Codec, OggFile};
 use studiocraft_media::audio::SAMPLE_RATE;
 use studiocraft_media::clock::MasterClock;
 use studiocraft_media::video::PixelFormat;
@@ -53,7 +59,9 @@ impl Source for MediaSource {
     }
     fn create(&self, settings: &Settings, io: &SourceIo) -> Result<Box<dyn SourceInstance>, PluginError> {
         let configured = self.ffmpeg.read().map(|s| s.clone()).unwrap_or_default();
-        let program = ffmpeg::locate(&configured).map_err(|e| PluginError::Unavailable(e.to_string()))?;
+        // An Ogg Vorbis file plays without ffmpeg, so a missing ffmpeg is reported only for the
+        // files that need it.
+        let program = ffmpeg::locate(&configured).map_err(|e| e.to_string());
         let mut i = Instance::new(program);
         i.restart(settings, io)?;
         Ok(Box::new(i))
@@ -61,16 +69,20 @@ impl Source for MediaSource {
 }
 
 struct Instance {
-    program: PathBuf,
+    /// The ffmpeg program, or why it was not found.
+    program: Result<PathBuf, String>,
     file: String,
     looping: bool,
     children: Vec<Child>,
     /// The threads reading the children's output. They are joined when the children stop, so
     /// nothing read from an earlier file is published after the next file starts.
     readers: Vec<JoinHandle<()>>,
+    /// The Ogg Vorbis player of the file playing now, and what it shares with this instance.
+    player_thread: Option<JoinHandle<()>>,
+    player: Arc<PlayerState>,
     /// The settings of a restart that failed, tried again on the next produce.
     retry: Option<Settings>,
-    /// Why ffmpeg ended before the file did.
+    /// Why ffmpeg, or the Ogg Vorbis player, ended before the file did.
     failure: Option<String>,
     /// The ffmpeg processes started for the file, and how many of them ended with an error. A
     /// file without video, or without sound, ends one of them at once.
@@ -85,13 +97,15 @@ impl Drop for Instance {
 }
 
 impl Instance {
-    fn new(program: PathBuf) -> Self {
+    fn new(program: Result<PathBuf, String>) -> Self {
         Instance {
             program,
             file: String::new(),
             looping: false,
             children: Vec::new(),
             readers: Vec::new(),
+            player_thread: None,
+            player: Arc::default(),
             retry: None,
             failure: None,
             started: 0,
@@ -107,6 +121,17 @@ impl Instance {
         // An ended process closes its output, so each reader reaches the end and returns.
         for r in self.readers.drain(..) {
             let _ = r.join();
+        }
+        // The player sees the flag before its next packet, or wakes from its wait to see it. A
+        // player still indexing its file is not waited for: it checks the flag once the index is
+        // read and ends without publishing anything.
+        self.player.stopping.store(true, Ordering::SeqCst);
+        let indexing = self.player.indexing.load(Ordering::SeqCst);
+        if let Some(p) = self.player_thread.take() {
+            p.thread().unpark();
+            if !indexing {
+                let _ = p.join();
+            }
         }
     }
 
@@ -125,6 +150,7 @@ impl Instance {
 
     fn start(&mut self, s: &Settings, io: &SourceIo) -> Result<(), PluginError> {
         self.stop();
+        self.player = Arc::default();
         self.file = s.str("file").unwrap_or_default().to_string();
         self.looping = s.bool("loop").unwrap_or(false);
         if self.file.trim().is_empty() {
@@ -135,10 +161,30 @@ impl Instance {
         if !path.is_file() {
             return Err(PluginError::Failed(format!("{} was not found", path.display())));
         }
-        let video = self.spawn(path, &["-map", "0:v:0?", "-an", "-f", "image2pipe", "-c:v", "pam", "-pix_fmt", "rgba", "pipe:1"])?;
+        let path = path.to_path_buf();
+        match read_ogg_head(&path) {
+            OggHead::Vorbis => return self.start_player(path, io),
+            OggHead::VorbisRateOutOfRange(rate) => {
+                if let Err(e) = &self.program {
+                    let (low, high) = (VORBIS_RATES.start(), VORBIS_RATES.end());
+                    return Err(PluginError::Unavailable(format!(
+                        "{} has a sample rate of {rate} Hz; Ogg Vorbis files outside {low} to {high} Hz play only through ffmpeg, and {e}",
+                        path.display()
+                    )));
+                }
+            }
+            OggHead::Other => {}
+        }
+        self.start_ffmpeg(&path, io)
+    }
+
+    /// Play the file through two ffmpeg processes and their reader threads.
+    fn start_ffmpeg(&mut self, path: &Path, io: &SourceIo) -> Result<(), PluginError> {
+        let program = self.program.clone().map_err(PluginError::Unavailable)?;
+        let video = self.spawn(&program, path, &["-map", "0:v:0?", "-an", "-f", "image2pipe", "-c:v", "pam", "-pix_fmt", "rgba", "pipe:1"])?;
         self.children.push(video);
         let rate = SAMPLE_RATE.to_string();
-        match self.spawn(path, &["-map", "0:a:0?", "-vn", "-f", "f32le", "-ac", "2", "-ar", &rate, "pipe:1"]) {
+        match self.spawn(&program, path, &["-map", "0:a:0?", "-vn", "-f", "f32le", "-ac", "2", "-ar", &rate, "pipe:1"]) {
             Ok(audio) => self.children.push(audio),
             Err(e) => {
                 // Stop the video process that already started.
@@ -169,8 +215,49 @@ impl Instance {
         Ok(())
     }
 
-    fn spawn(&self, input: &Path, output: &[&str]) -> Result<Child, PluginError> {
-        let mut cmd = ffmpeg::command(&self.program);
+    /// Play an Ogg Vorbis file on a thread of its own, which indexes it, decodes it packet by
+    /// packet and publishes the samples at the file's own speed. A file that turns out to hold
+    /// more than its one Vorbis stream (a chained file, or one with other streams later on), or
+    /// whose rate is outside [`VORBIS_RATES`], is left to ffmpeg on the next produce.
+    fn start_player(&mut self, path: PathBuf, io: &SourceIo) -> Result<(), PluginError> {
+        let state = Arc::clone(&self.player);
+        let (looping, audio, clock) = (self.looping, Arc::clone(&io.audio), io.clock);
+        state.indexing.store(true, Ordering::SeqCst);
+        let started = std::thread::Builder::new().name("media vorbis player".into()).spawn(move || {
+            let opened = VorbisFile::open(&path);
+            state.indexing.store(false, Ordering::SeqCst);
+            if state.stopping.load(Ordering::SeqCst) {
+                return;
+            }
+            let played = match opened {
+                Ok(Some(mut file)) => {
+                    // Playing time starts once the file is indexed.
+                    let begin = Instant::now();
+                    let mut feed = AudioFeed::new(file.sample_rate(), 2, audio, clock);
+                    file.play(looping, &mut |at| wait_until(&state.stopping, begin, at), &mut |s| feed.push(s))
+                }
+                Ok(None) => {
+                    let _ = state.end.set(PlayerEnd::NeedsFfmpeg);
+                    Ok(())
+                }
+                Err(e) => Err(e),
+            };
+            if let Err(e) = played {
+                let _ = state.end.set(PlayerEnd::Failed(format!("{} could not be played: {e}", path.display())));
+            }
+        });
+        match started {
+            Ok(handle) => self.player_thread = Some(handle),
+            Err(e) => {
+                self.player.indexing.store(false, Ordering::SeqCst);
+                return Err(PluginError::failed(e));
+            }
+        }
+        Ok(())
+    }
+
+    fn spawn(&self, program: &Path, input: &Path, output: &[&str]) -> Result<Child, PluginError> {
+        let mut cmd = ffmpeg::command(program);
         cmd.args(["-hide_banner", "-loglevel", "error", "-nostdin", "-re"]);
         if self.looping {
             cmd.args(["-stream_loop", "-1"]);
@@ -207,6 +294,24 @@ impl SourceInstance for Instance {
                 self.failure = Some(format!("ffmpeg could not read {} ({status})", self.file));
             }
         }
+        match self.player.end.get() {
+            Some(PlayerEnd::Failed(e)) => self.failure = Some(e.clone()),
+            Some(PlayerEnd::NeedsFfmpeg) => {
+                // The player has ended; ffmpeg plays the file from here.
+                if let Some(p) = self.player_thread.take() {
+                    let _ = p.join();
+                }
+                self.player = Arc::default();
+                let path = PathBuf::from(&self.file);
+                let started = self.start_ffmpeg(&path, io);
+                self.started = self.children.len();
+                if let Err(e) = started {
+                    self.failure = Some(e.to_string());
+                    return Err(e);
+                }
+            }
+            None => {}
+        }
         self.failure.clone().map_or(Ok(()), |e| Err(PluginError::Failed(e)))
     }
     fn update(&mut self, s: &Settings, io: &SourceIo) -> Result<(), PluginError> {
@@ -216,6 +321,246 @@ impl SourceInstance for Instance {
             self.restart(s, io)?;
         }
         Ok(())
+    }
+}
+
+/// Bytes read from the start of a file to find its first Ogg streams. The streams multiplexed at
+/// the start of a file each begin with a page of their own before any other page (RFC 3533 §4), and
+/// a Vorbis stream's first page holds only its 30-byte identification header.
+const OGG_HEAD: u64 = 64 << 10;
+
+/// The sample rates, in Hz, of the Vorbis streams the player plays. A stream at any other rate
+/// plays through ffmpeg.
+const VORBIS_RATES: std::ops::RangeInclusive<u32> = 8_000..=192_000;
+
+/// What the first page of each stream at the start of an Ogg file shows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OggHead {
+    /// Every stream there is Vorbis, at a rate in [`VORBIS_RATES`].
+    Vorbis,
+    /// Every stream there is Vorbis, and this one's rate is outside [`VORBIS_RATES`].
+    VorbisRateOutOfRange(u32),
+    /// Not an Ogg file, or one with a stream that is not Vorbis.
+    Other,
+}
+
+/// The streams at the start of the file, from the first page of each. A file with video, or any
+/// other stream there, plays through ffmpeg. The player checks the whole file again once it has
+/// indexed it, for streams chained later on.
+fn read_ogg_head(path: &Path) -> OggHead {
+    let mut head = Vec::new();
+    let read = std::fs::File::open(path).and_then(|f| f.take(OGG_HEAD).read_to_end(&mut head));
+    if read.is_err() {
+        return OggHead::Other;
+    }
+    ogg_head(&head)
+}
+
+/// Whether `head` starts with the first pages of one or more Ogg streams, all of them Vorbis, and
+/// whether each one's identification header gives a sample rate in [`VORBIS_RATES`].
+fn ogg_head(head: &[u8]) -> OggHead {
+    let (mut at, mut streams, mut rate_out_of_range) = (0usize, 0usize, None);
+    // A page: "OggS", version 0, flags (2 marks a stream's first page), granule, serial,
+    // sequence, checksum, then the segment count and table at 26 and 27 (RFC 3533 §6).
+    while let Some(page) = head.get(at..).filter(|p| p.len() >= 27 && p.starts_with(b"OggS\0")) {
+        let first_of_stream = page.get(5).is_some_and(|f| f & 2 != 0);
+        if !first_of_stream {
+            break;
+        }
+        let segments = page.get(26).map_or(0, |&n| usize::from(n));
+        let Some(table) = page.get(27..27 + segments) else { return OggHead::Other };
+        let body = 27 + segments;
+        if !page.get(body..).is_some_and(|b| b.starts_with(b"\x01vorbis")) {
+            return OggHead::Other;
+        }
+        // The identification header: the packet type and "vorbis", a 32-bit version, the channel
+        // count, then the sample rate as a little-endian 32-bit number (Vorbis I §4.2.2).
+        let Some(rate) = page.get(body + 12..body + 16).and_then(|b| b.try_into().ok()).map(u32::from_le_bytes) else {
+            return OggHead::Other;
+        };
+        if !VORBIS_RATES.contains(&rate) {
+            rate_out_of_range.get_or_insert(rate);
+        }
+        streams += 1;
+        at = at.saturating_add(body).saturating_add(table.iter().map(|&n| usize::from(n)).sum());
+    }
+    match (streams, rate_out_of_range) {
+        (0, _) => OggHead::Other,
+        (_, Some(rate)) => OggHead::VorbisRateOutOfRange(rate),
+        (_, None) => OggHead::Vorbis,
+    }
+}
+
+/// The largest Vorbis audio packet the player reads. A larger one is skipped as damaged, unread.
+const MAX_PACKET_BYTES: u32 = 8 << 20;
+
+/// What an Ogg Vorbis player shares with its source instance. Each file started gets a new one.
+#[derive(Default)]
+struct PlayerState {
+    /// Set to stop the player.
+    stopping: AtomicBool,
+    /// Set while the player reads the file's index; it publishes nothing until it is done.
+    indexing: AtomicBool,
+    /// Why the player ended before the file did.
+    end: OnceLock<PlayerEnd>,
+}
+
+enum PlayerEnd {
+    /// The file could not be read or decoded.
+    Failed(String),
+    /// The file holds more than one stream, or its sample rate is outside [`VORBIS_RATES`], and it
+    /// plays through ffmpeg instead.
+    NeedsFfmpeg,
+}
+
+/// Wait until `at` after `begin`. `false` when the player is to stop.
+fn wait_until(stopping: &AtomicBool, begin: Instant, at: Duration) -> bool {
+    loop {
+        if stopping.load(Ordering::Acquire) {
+            return false;
+        }
+        match at.checked_sub(begin.elapsed()) {
+            Some(left) if !left.is_zero() => std::thread::park_timeout(left),
+            _ => return true,
+        }
+    }
+}
+
+/// An indexed Ogg Vorbis file and the decoder of its first Vorbis stream.
+struct VorbisFile {
+    src: FileReader,
+    ogg: OggFile,
+    stream: usize,
+    decoder: Decoder,
+    /// The stream's length in samples per channel, from its last granule position.
+    length: Option<u64>,
+    downmix: Downmix,
+}
+
+impl VorbisFile {
+    /// Index the file and read the three header packets. Only the index and one packet at a time
+    /// are held in memory; `craft-media` bounds the index by the file's size. `None` when the file
+    /// holds any stream besides one Vorbis stream, or its sample rate is outside [`VORBIS_RATES`].
+    /// The decoder refuses a header without channels or with block sizes that Vorbis I §4.2.2 does
+    /// not allow.
+    fn open(path: &Path) -> Result<Option<Self>, String> {
+        let src = FileReader::open(path).map_err(|e| e.to_string())?;
+        let ogg = ogg::open(&src).map_err(|e| e.to_string())?;
+        let stream = 0;
+        let Some(s) = ogg.streams.first().filter(|s| ogg.streams.len() == 1 && s.codec == Codec::Vorbis) else { return Ok(None) };
+        let [id, comment, setup, ..] = s.headers.as_slice() else { return Err("the Vorbis stream ends before its setup header".into()) };
+        let decoder = Decoder::new(id, comment, setup).map_err(|e| e.to_string())?;
+        if !VORBIS_RATES.contains(&decoder.identification().sample_rate) {
+            return Ok(None);
+        }
+        let length = s.last_granule.and_then(|g| u64::try_from(g).ok());
+        let downmix = Downmix::new(usize::from(decoder.identification().channels));
+        Ok(Some(VorbisFile { src, ogg, stream, decoder, length, downmix }))
+    }
+
+    fn sample_rate(&self) -> u32 {
+        self.decoder.identification().sample_rate
+    }
+
+    /// Decode the file from the start, once or until stopped when `looping`, and hand `sink`
+    /// interleaved stereo samples. `pace` gets the playing time of each packet's first sample,
+    /// counted from the start of playback, before the packet is read; `false` stops. A packet that
+    /// does not decode, or is larger than [`MAX_PACKET_BYTES`], is skipped as a damaged one; one that
+    /// cannot be read ends playback.
+    fn play(&mut self, looping: bool, pace: &mut dyn FnMut(Duration) -> bool, sink: &mut dyn FnMut(&[f32])) -> Result<(), String> {
+        let sizes: Vec<u32> = self.ogg.streams.get(self.stream).map(|s| s.packets.iter().map(|p| p.size).collect()).unwrap_or_default();
+        let rate = u64::from(self.sample_rate().max(1));
+        let mut stereo = Vec::new();
+        let mut played = 0u64;
+        loop {
+            self.decoder.reset();
+            let mut this_pass = 0u64;
+            for (i, &size) in sizes.iter().enumerate() {
+                let at = Duration::from_secs(played / rate) + Duration::from_nanos(played % rate * 1_000_000_000 / rate);
+                if !pace(at) {
+                    return Ok(());
+                }
+                if size > MAX_PACKET_BYTES {
+                    continue;
+                }
+                let packet = self.ogg.read_packet(&self.src, self.stream, i).map_err(|e| e.to_string())?;
+                let Ok(pcm) = self.decoder.decode_packet(&packet) else { continue };
+                let mut frames = pcm.first().map_or(0, Vec::len);
+                // The last granule position ends the stream inside its last packet.
+                if let Some(left) = self.length.map(|n| n.saturating_sub(this_pass)) {
+                    frames = frames.min(usize::try_from(left).unwrap_or(usize::MAX));
+                }
+                if frames == 0 {
+                    continue;
+                }
+                self.downmix.interleave(&pcm, frames, &mut stereo);
+                sink(&stereo);
+                let frames = u64::try_from(frames).unwrap_or(u64::MAX);
+                this_pass = this_pass.saturating_add(frames);
+                played = played.saturating_add(frames);
+            }
+            // A file with no samples to play is not looped, so the thread does not spin.
+            if !looping || this_pass == 0 {
+                return Ok(());
+            }
+        }
+    }
+}
+
+/// Stereo from a Vorbis stream's channels, in the channel order of Vorbis I §4.3.9. The center
+/// goes to both sides at -3 dB, side and rear channels to their own side at -3 dB, the rear
+/// center to both sides at -6 dB, and the LFE channel is left out. The gains are then scaled down
+/// so that the channels of one side, all at full scale, add up to full scale at most. Past eight
+/// channels the order is the file's own, and the first two channels are the left and the right.
+struct Downmix {
+    /// The (left, right) gains of each channel.
+    gains: Vec<[f32; 2]>,
+}
+
+impl Downmix {
+    fn new(channels: usize) -> Self {
+        const LEFT: [f32; 2] = [1.0, 0.0];
+        const RIGHT: [f32; 2] = [0.0, 1.0];
+        const CENTER: [f32; 2] = [std::f32::consts::FRAC_1_SQRT_2; 2];
+        const LEFT_SIDE: [f32; 2] = [std::f32::consts::FRAC_1_SQRT_2, 0.0];
+        const RIGHT_SIDE: [f32; 2] = [0.0, std::f32::consts::FRAC_1_SQRT_2];
+        const REAR_CENTER: [f32; 2] = [0.5, 0.5];
+        const NONE: [f32; 2] = [0.0, 0.0];
+        let order: &[[f32; 2]] = match channels {
+            1 => &[[1.0, 1.0]],
+            2 => &[LEFT, RIGHT],
+            3 => &[LEFT, CENTER, RIGHT],
+            4 => &[LEFT, RIGHT, LEFT_SIDE, RIGHT_SIDE],
+            5 => &[LEFT, CENTER, RIGHT, LEFT_SIDE, RIGHT_SIDE],
+            6 => &[LEFT, CENTER, RIGHT, LEFT_SIDE, RIGHT_SIDE, NONE],
+            7 => &[LEFT, CENTER, RIGHT, LEFT_SIDE, RIGHT_SIDE, REAR_CENTER, NONE],
+            8 => &[LEFT, CENTER, RIGHT, LEFT_SIDE, RIGHT_SIDE, LEFT_SIDE, RIGHT_SIDE, NONE],
+            _ => &[LEFT, RIGHT],
+        };
+        let mut gains = vec![NONE; channels.max(1)];
+        for (g, o) in gains.iter_mut().zip(order) {
+            *g = *o;
+        }
+        let loudest = gains.iter().fold([0.0f32; 2], |s, g| [s[0] + g[0], s[1] + g[1]]);
+        let scale = loudest[0].max(loudest[1]).max(1.0);
+        for g in &mut gains {
+            *g = [g[0] / scale, g[1] / scale];
+        }
+        Downmix { gains }
+    }
+
+    /// The first `frames` samples of each channel of `pcm`, as interleaved stereo in `out`.
+    fn interleave(&self, pcm: &[Vec<f32>], frames: usize, out: &mut Vec<f32>) {
+        out.clear();
+        for f in 0..frames {
+            let (mut l, mut r) = (0.0, 0.0);
+            for (channel, g) in pcm.iter().zip(&self.gains) {
+                let s = channel.get(f).copied().unwrap_or(0.0);
+                l += s * g[0];
+                r += s * g[1];
+            }
+            out.extend_from_slice(&[l, r]);
+        }
     }
 }
 
@@ -335,7 +680,7 @@ mod tests {
         let io = SourceIo::new(MasterClock::new());
         let settings = Settings::new().with("file", file.to_string_lossy().as_ref());
         // No program is started: the file check fails first, and then the program is missing.
-        let mut i = Instance::new(dir.join("no-such-program"));
+        let mut i = Instance::new(Ok(dir.join("no-such-program")));
         let first = i.update(&settings, &io);
         assert!(first.as_ref().is_err_and(|e| e.to_string().contains("was not found")), "{first:?}");
         assert!(matches!(io.video.take(), Some(VideoContent::Empty)), "nothing from an earlier file is shown");
@@ -358,7 +703,7 @@ mod tests {
         let file = dir.join("bad.mkv");
         std::fs::write(&file, b"not a video").unwrap();
         let io = SourceIo::new(MasterClock::new());
-        let mut i = Instance::new(program);
+        let mut i = Instance::new(Ok(program));
         i.update(&Settings::new().with("file", file.to_string_lossy().as_ref()), &io).unwrap();
         // One process ending with an error is a file without that stream, and is not reported.
         // The other is held out of the check until then, since `false` ends at once.
@@ -439,7 +784,7 @@ mod tests {
         let io = SourceIo::new(MasterClock::new());
         // A picture from the file played before.
         io.video.publish(VideoContent::Solid { rgba: [255; 4], width: 64, height: 48 });
-        let mut i = Instance::new(program);
+        let mut i = Instance::new(Ok(program));
         let started = i.update(&Settings::new().with("file", file.to_string_lossy().as_ref()), &io);
         let shown = io.video.take();
         drop(i);
@@ -452,7 +797,7 @@ mod tests {
     #[test]
     fn stopping_waits_for_the_readers() {
         let io = SourceIo::new(MasterClock::new());
-        let mut i = Instance::new(PathBuf::from("no-such-program"));
+        let mut i = Instance::new(Ok(PathBuf::from("no-such-program")));
         let (go, wait) = std::sync::mpsc::channel::<()>();
         let video = Arc::clone(&io.video);
         // A reader with one last picture of the earlier file still to publish.
@@ -467,5 +812,342 @@ mod tests {
             matches!(io.video.take(), Some(VideoContent::Solid { .. })),
             "the reader finished before stop returned, so the next file's content comes after it"
         );
+    }
+
+    /// An Ogg Vorbis file of `frames` frames at 48 kHz, each channel a sine at its own pitch.
+    fn ogg_vorbis(channels: u16, frames: usize) -> Vec<u8> {
+        let mut buf = craft_audio::AudioBuffer::new(48_000, channels, frames);
+        for (c, ch) in buf.channels.iter_mut().enumerate() {
+            for (i, s) in ch.iter_mut().enumerate() {
+                *s = 0.5 * (i as f32 * 0.01 * (c as f32 + 1.0)).sin();
+            }
+        }
+        craft_audio::encode_ogg_vorbis(&buf, &craft_audio::OggVorbisOptions::default()).unwrap()
+    }
+
+    /// The length of the first page of `ogg`.
+    fn first_page(ogg: &[u8]) -> usize {
+        let segments = usize::from(ogg[26]);
+        27 + segments + ogg[27..27 + segments].iter().map(|&n| usize::from(n)).sum::<usize>()
+    }
+
+    /// `bytes` written to `name` in a new folder; remove the folder when done.
+    fn temp_file(test: &str, name: &str, bytes: &[u8]) -> (PathBuf, PathBuf) {
+        let dir = std::env::temp_dir().join(format!("studiocraft-media-{test}-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join(name);
+        std::fs::write(&file, bytes).unwrap();
+        (dir, file)
+    }
+
+    #[test]
+    fn ogg_files_whose_streams_are_all_vorbis_are_recognized() {
+        let vorbis = ogg_vorbis(2, 4800);
+        let first = first_page(&vorbis);
+        assert_eq!(ogg_head(&vorbis), OggHead::Vorbis);
+        // The same first page for a Theora video stream.
+        let mut theora = vorbis[..first].to_vec();
+        let body = 27 + usize::from(theora[26]);
+        theora[body..body + 7].copy_from_slice(b"\x80theora");
+        assert_eq!(ogg_head(&theora), OggHead::Other);
+        // A stream of a codec this source does not know.
+        let mut unknown = vorbis[..first].to_vec();
+        unknown[body..body + 7].copy_from_slice(b"\x01vorbit");
+        assert_eq!(ogg_head(&unknown), OggHead::Other);
+        // A Vorbis stream and a Theora stream: the file has video.
+        let mut both = vorbis[..first].to_vec();
+        both.extend_from_slice(&theora);
+        assert_eq!(ogg_head(&both), OggHead::Other);
+        // Two Vorbis streams.
+        let mut two = vorbis[..first].to_vec();
+        two.extend_from_slice(&vorbis);
+        assert_eq!(ogg_head(&two), OggHead::Vorbis);
+        assert_eq!(ogg_head(b""), OggHead::Other);
+        assert_eq!(ogg_head(b"not a video"), OggHead::Other);
+        // A first page that ends before its packet does, or inside the sample rate.
+        assert_eq!(ogg_head(&vorbis[..28]), OggHead::Other);
+        assert_eq!(ogg_head(&vorbis[..body + 14]), OggHead::Other);
+    }
+
+    /// The Ogg Vorbis file `src` with its identification header changed by `edit`.
+    fn with_identification(src: &[u8], edit: impl FnOnce(&mut Vec<u8>)) -> Vec<u8> {
+        let parsed = ogg::open(src).unwrap();
+        let stream = &parsed.streams[0];
+        let mut w = ogg::PageWriter::new(1);
+        let mut headers = stream.headers.clone();
+        edit(&mut headers[0]);
+        let mut bytes = Vec::new();
+        for h in &headers {
+            bytes.extend(w.header(h));
+        }
+        for i in 0..stream.packets.len() {
+            bytes.extend(w.packet(&parsed.read_packet(src, 0, i).unwrap(), 0));
+        }
+        bytes.extend(w.finish(stream.last_granule));
+        bytes
+    }
+
+    /// The Ogg Vorbis file `src` with the sample rate in its identification header set to `rate`.
+    fn at_rate(src: &[u8], rate: u32) -> Vec<u8> {
+        with_identification(src, |id| id[12..16].copy_from_slice(&rate.to_le_bytes()))
+    }
+
+    #[test]
+    fn ogg_vorbis_files_outside_the_sample_rates_play_through_ffmpeg() {
+        let base = ogg_vorbis(2, 4800);
+        for rate in [0, 1, 7_999, 192_001, u32::MAX] {
+            let bytes = at_rate(&base, rate);
+            assert_eq!(ogg_head(&bytes), OggHead::VorbisRateOutOfRange(rate));
+            let (dir, file) = temp_file(&format!("vorbis-rate-{rate}"), "rate.ogg", &bytes);
+            let opened = VorbisFile::open(&file).map(|f| f.is_some());
+            let _ = std::fs::remove_dir_all(&dir);
+            // The decoder itself refuses a rate of 0.
+            assert_ne!(opened, Ok(true), "{rate} Hz is not played by the player");
+            if rate != 0 {
+                assert_eq!(opened, Ok(false), "{rate} Hz is left to ffmpeg");
+            }
+        }
+        for rate in [8_000, 44_100, 192_000] {
+            let bytes = at_rate(&base, rate);
+            assert_eq!(ogg_head(&bytes), OggHead::Vorbis, "{rate} Hz");
+            let (dir, file) = temp_file(&format!("vorbis-rate-{rate}"), "rate.ogg", &bytes);
+            let opened = VorbisFile::open(&file).map(|f| f.map(|f| f.sample_rate()));
+            let _ = std::fs::remove_dir_all(&dir);
+            assert_eq!(opened, Ok(Some(rate)));
+        }
+    }
+
+    #[test]
+    fn an_ogg_vorbis_file_outside_the_sample_rates_reports_a_missing_ffmpeg() {
+        let (dir, file) = temp_file("vorbis-rate-no-ffmpeg", "rate.ogg", &at_rate(&ogg_vorbis(2, 4800), 1));
+        let io = SourceIo::new(MasterClock::new());
+        let mut i = Instance::new(Err("ffmpeg (set its location in Settings › Output) was not found".into()));
+        let started = i.update(&Settings::new().with("file", file.to_string_lossy().as_ref()), &io);
+        let player = i.player_thread.is_some();
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(!player, "no player thread is started");
+        assert!(
+            matches!(&started, Err(PluginError::Unavailable(e)) if e.contains("sample rate of 1 Hz") && e.contains("was not found")),
+            "{started:?}"
+        );
+    }
+
+    #[test]
+    fn identification_headers_without_channels_or_with_bad_block_sizes_are_refused() {
+        let base = ogg_vorbis(2, 4800);
+        // The channel count, and the block size exponents: the short one in the low four bits.
+        let cases: [(&str, fn(&mut Vec<u8>)); 4] = [
+            ("no channels", |id| id[11] = 0),
+            ("short block of 32", |id| id[28] = 0xB5),
+            ("long block of 16384", |id| id[28] = 0xE8),
+            ("short block above the long one", |id| id[28] = 0x9B),
+        ];
+        for (what, edit) in cases {
+            let bytes = with_identification(&base, edit);
+            let (dir, file) = temp_file("vorbis-bad-id", "bad.ogg", &bytes);
+            let opened = VorbisFile::open(&file).map(|f| f.is_some());
+            let _ = std::fs::remove_dir_all(&dir);
+            assert!(opened.is_err(), "{what}: {opened:?}");
+        }
+    }
+
+    #[test]
+    fn an_ogg_vorbis_file_plays_every_sample_once_in_order() {
+        let frames = 12_345;
+        let bytes = ogg_vorbis(2, frames);
+        let (dir, file) = temp_file("vorbis-once", "tone.ogg", &bytes);
+        let mut f = VorbisFile::open(&file).unwrap().unwrap();
+        let (mut times, mut out) = (Vec::new(), Vec::new());
+        let played = f.play(
+            false,
+            &mut |at| {
+                times.push(at);
+                true
+            },
+            &mut |s| out.extend_from_slice(s),
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+        played.unwrap();
+        let decoded = craft_audio::vorbis::decoder::decode_ogg(&bytes).unwrap();
+        let expected: Vec<f32> = (0..frames).flat_map(|i| [decoded.channels[0][i], decoded.channels[1][i]]).collect();
+        assert_eq!(out, expected, "the file's frames, trimmed to its last granule position");
+        assert_eq!(times.first(), Some(&Duration::ZERO));
+        assert!(times.windows(2).all(|w| w[0] <= w[1]));
+        assert!(times.last().is_some_and(|t| t.as_secs_f64() < frames as f64 / 48_000.0));
+    }
+
+    #[test]
+    fn a_looping_ogg_vorbis_file_starts_again_until_stopped() {
+        let bytes = ogg_vorbis(1, 4800);
+        let (dir, file) = temp_file("vorbis-loop", "tone.ogg", &bytes);
+        let mut f = VorbisFile::open(&file).unwrap().unwrap();
+        let mut out = Vec::new();
+        let played = f.play(true, &mut |at| at < Duration::from_millis(250), &mut |s| out.extend_from_slice(s));
+        let _ = std::fs::remove_dir_all(&dir);
+        played.unwrap();
+        // 0.1 s per pass, as stereo: past two passes when it stops at 0.25 s.
+        let pass = 4800 * 2;
+        assert!(out.len() > 2 * pass, "{}", out.len());
+        assert_eq!(out[..pass], out[pass..2 * pass], "each pass plays the file from its start");
+        assert!(out.as_chunks::<2>().0.iter().all(|[l, r]| l == r), "a mono file plays on both sides");
+    }
+
+    #[test]
+    fn a_looping_ogg_vorbis_file_without_samples_ends() {
+        let bytes = ogg_vorbis(2, 0);
+        let (dir, file) = temp_file("vorbis-empty", "empty.ogg", &bytes);
+        let opened = VorbisFile::open(&file);
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut f = opened.unwrap().unwrap();
+        let mut packets = 0;
+        let played = f.play(
+            true,
+            &mut |_| {
+                packets += 1;
+                packets < 1000
+            },
+            &mut |_| {},
+        );
+        assert!(played.is_ok());
+        assert!(packets < 10, "the player ends instead of starting the empty file again ({packets} packets)");
+    }
+
+    #[test]
+    fn an_audio_packet_past_the_size_limit_is_skipped() {
+        let frames = 9600;
+        let base = ogg_vorbis(2, frames);
+        let parsed = ogg::open(&base[..]).unwrap();
+        let stream = &parsed.streams[0];
+        // The same stream, with the fourth audio packet padded past the limit. Bits after a
+        // packet's audio are not read, so the padded packet would still decode.
+        let mut w = ogg::PageWriter::new(1);
+        let mut bytes = Vec::new();
+        for h in &stream.headers {
+            bytes.extend(w.header(h));
+        }
+        for i in 0..stream.packets.len() {
+            let mut p = parsed.read_packet(&base[..], 0, i).unwrap();
+            if i == 3 {
+                p.resize(MAX_PACKET_BYTES as usize + 1, 0);
+            }
+            bytes.extend(w.packet(&p, 0));
+        }
+        bytes.extend(w.finish(Some(frames as i64)));
+        let (dir, file) = temp_file("vorbis-big-packet", "big.ogg", &bytes);
+        let mut out = Vec::new();
+        let played = VorbisFile::open(&file).map(|f| f.map(|mut f| f.play(false, &mut |_| true, &mut |s| out.extend_from_slice(s))));
+        let _ = std::fs::remove_dir_all(&dir);
+        played.unwrap().unwrap().unwrap();
+        assert!(!out.is_empty() && out.len() < frames * 2, "the padded packet's samples are missing: {}", out.len());
+    }
+
+    #[test]
+    fn surround_channels_are_mixed_to_stereo_without_clipping() {
+        let mut out = Vec::new();
+        // 5.1 in Vorbis order: left, center, right, left surround, right surround, LFE.
+        let surround = Downmix::new(6);
+        let only = |c: usize| (0..6).map(|i| vec![if i == c { 1.0 } else { 0.0 }]).collect::<Vec<_>>();
+        surround.interleave(&only(1), 1, &mut out);
+        assert!(out[0] > 0.0 && out[0] == out[1], "the center is on both sides: {out:?}");
+        surround.interleave(&only(3), 1, &mut out);
+        assert!(out[0] > 0.0 && out[1] == 0.0, "the left surround is on the left: {out:?}");
+        surround.interleave(&only(5), 1, &mut out);
+        assert_eq!(out, [0.0, 0.0], "the LFE channel is left out");
+        surround.interleave(&vec![vec![1.0]; 6], 1, &mut out);
+        assert!(out.iter().all(|s| (s - 1.0).abs() < 1e-6), "every channel at full scale stays at full scale: {out:?}");
+
+        Downmix::new(1).interleave(&[vec![0.5, -0.25]], 2, &mut out);
+        assert_eq!(out, [0.5, 0.5, -0.25, -0.25]);
+        Downmix::new(2).interleave(&[vec![0.5], vec![-0.25]], 1, &mut out);
+        assert_eq!(out, [0.5, -0.25]);
+        let nine: Vec<Vec<f32>> = (0..9).map(|i| vec![i as f32 / 10.0]).collect();
+        Downmix::new(9).interleave(&nine, 1, &mut out);
+        assert_eq!(out, [0.0, 0.1], "past eight channels the first two are the left and the right");
+    }
+
+    #[test]
+    fn an_ogg_vorbis_file_plays_without_ffmpeg() {
+        let (dir, file) = temp_file("vorbis-no-ffmpeg", "tone.ogg", &ogg_vorbis(2, 48_000 * 3));
+        let other = dir.join("clip.mkv");
+        std::fs::write(&other, b"not a video").unwrap();
+        let io = SourceIo::new(MasterClock::new());
+        let mut i = Instance::new(Err("ffmpeg (set its location in Settings › Output) was not found".into()));
+        let started = i.update(&Settings::new().with("file", file.to_string_lossy().as_ref()), &io);
+        let player = (i.player_thread.is_some(), i.children.len());
+        // The player sees the stop before the file ends.
+        i.stop();
+        let produced = i.produce(&io);
+        let needs_ffmpeg = i.update(&Settings::new().with("file", other.to_string_lossy().as_ref()), &io);
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(started.is_ok(), "{started:?}");
+        assert_eq!(player, (true, 0), "a player thread and no ffmpeg");
+        assert!(produced.is_ok(), "{produced:?}");
+        assert!(matches!(&needs_ffmpeg, Err(PluginError::Unavailable(e)) if e.contains("was not found")), "{needs_ffmpeg:?}");
+    }
+
+    #[test]
+    fn an_ogg_vorbis_file_that_cannot_be_decoded_is_reported() {
+        // The identification header's page alone: the comment and setup headers are missing.
+        let bytes = ogg_vorbis(2, 4800);
+        let (dir, file) = temp_file("vorbis-cut", "cut.ogg", &bytes[..first_page(&bytes)]);
+        let io = SourceIo::new(MasterClock::new());
+        let mut i = Instance::new(Err("ffmpeg (set its location in Settings › Output) was not found".into()));
+        let started = i.update(&Settings::new().with("file", file.to_string_lossy().as_ref()), &io);
+        // Once the player has ended, its error is in place.
+        let _ = i.player_thread.take().map(JoinHandle::join);
+        let first = i.produce(&io);
+        let second = i.produce(&io);
+        i.update(&Settings::new(), &io).unwrap();
+        let cleared = i.produce(&io);
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(started.is_ok(), "{started:?}");
+        assert!(first.is_err_and(|e| e.to_string().contains("could not be played")));
+        assert!(second.is_err(), "the error stays");
+        assert!(cleared.is_ok(), "{cleared:?}");
+    }
+
+    #[test]
+    fn a_chained_ogg_vorbis_file_plays_through_ffmpeg() {
+        // Two Vorbis streams one after the other, each with its own serial number.
+        let first = ogg_vorbis(2, 4800);
+        let parsed = ogg::open(&first[..]).unwrap();
+        let mut w = ogg::PageWriter::new(2);
+        let mut bytes = first.clone();
+        for h in &parsed.streams[0].headers {
+            bytes.extend(w.header(h));
+        }
+        for i in 0..parsed.streams[0].packets.len() {
+            bytes.extend(w.packet(&parsed.read_packet(&first[..], 0, i).unwrap(), 0));
+        }
+        bytes.extend(w.finish(Some(4800)));
+        let (dir, file) = temp_file("vorbis-chained", "chained.ogg", &bytes);
+        let opened = VorbisFile::open(&file).map(|f| f.is_none());
+        let io = SourceIo::new(MasterClock::new());
+        let mut i = Instance::new(Err("ffmpeg (set its location in Settings › Output) was not found".into()));
+        let started = i.update(&Settings::new().with("file", file.to_string_lossy().as_ref()), &io);
+        let _ = i.player_thread.take().map(JoinHandle::join);
+        let produced = i.produce(&io);
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(opened, Ok(true), "the player leaves the file to ffmpeg");
+        assert!(started.is_ok(), "the first stream at the start of the file is Vorbis: {started:?}");
+        assert!(matches!(&produced, Err(PluginError::Unavailable(e)) if e.contains("was not found")), "{produced:?}");
+    }
+
+    #[test]
+    fn stopping_does_not_wait_for_a_player_reading_its_index() {
+        let mut i = Instance::new(Ok(PathBuf::from("no-such-program")));
+        let (go, wait) = std::sync::mpsc::channel::<()>();
+        let state = Arc::clone(&i.player);
+        state.indexing.store(true, Ordering::SeqCst);
+        // A player still reading its index until the test lets it go.
+        i.player_thread = Some(std::thread::spawn(move || {
+            let _ = wait.recv();
+            state.indexing.store(false, Ordering::SeqCst);
+        }));
+        i.stop();
+        let stopped = i.player.stopping.load(Ordering::SeqCst);
+        go.send(()).unwrap();
+        assert!(stopped, "the player ends without publishing once its index is read");
+        assert!(i.player_thread.is_none());
     }
 }

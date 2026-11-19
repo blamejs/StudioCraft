@@ -477,6 +477,34 @@ fn one_checked_body_goes_to_several_writers() {
 }
 
 #[test]
+fn parts_hold_the_bytes_write_to_writes() {
+    let nalus = [0, 0, 0, 2, 0x65, 0xAA];
+    let script = {
+        let mut s = Vec::new();
+        Metadata::h264_aac(1280, 720, 30.0, 3000, 128, 48000, true).encode(&mut s).unwrap();
+        s
+    };
+    let bodies = [
+        Body::AvcSequenceHeader(&AVCC),
+        Body::AvcNalus { key: true, composition_time: -40, data: &nalus },
+        Body::AvcNalus { key: false, composition_time: 0x12_3456, data: &nalus },
+        Body::AvcEndOfSequence,
+        Body::AacSequenceHeader(&ASC),
+        Body::AacRaw(&[0x21, 0x10]),
+        Body::Script(&script),
+    ];
+    for body in bodies {
+        let checked = body.check().unwrap();
+        let parts = checked.parts().unwrap();
+        let mut whole = Vec::new();
+        checked.write_to(&mut whole).unwrap();
+        assert_eq!([parts.header(), parts.data()].concat(), whole, "{body:?}");
+    }
+    let au = [0, 0, 0, 1, 0x65, 0xAA];
+    assert!(Body::AvcAnnexB { key: true, composition_time: 0, data: &au }.check().unwrap().parts().is_none());
+}
+
+#[test]
 fn reset_timestamps_lets_a_long_stream_start_again() {
     let mut w = Writer::new(Vec::new(), Header { audio: true, video: false }).unwrap();
     w.write(i32::MAX, &Body::AacRaw(&[0x21])).unwrap();

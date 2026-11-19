@@ -1,16 +1,20 @@
 # Performance
 
+This file holds StudioCraft's time budgets, the measured baselines and the commands that measure
+them. The rules for threads, queues and hot paths are in
+[AGENTS.md section 6](../AGENTS.md#6-performance).
+
 ## Budgets
 
 - At 60 fps the compositor has 16.7 ms per frame. Drawing the program scene must stay well under
   that, so encoders and the window have time too.
 - One audio block is 1024 frames at 48 kHz, which is 21.3 ms. Mixing every source into one block
   must stay under 1 ms.
-- The frame loop and the mixer loop do not allocate. Frames and audio blocks come from pools.
 
 ## Baselines
 
-Measured on 2026-11-15 on Linux, release builds.
+The criterion benches and the timing run below were measured on 2026-11-15 on Linux, in release
+builds. The encoder and FLV sections name their own dates and hardware.
 
 ### Criterion benches
 
@@ -40,6 +44,15 @@ boxes (one rotated) and nothing else, at 60 fps for 10 seconds, without a window
 
 The frame time is the time the compositor thread spends on one frame after its tick, from the
 start of drawing to the end of submitting it to the GPU.
+
+### GPU YUV conversion
+
+`cargo bench -p craft-gpu-yuv` times four conversions on the GPU: `gpu nv12 1080p`,
+`gpu p010 1080p`, `gpu nv12 4k`, and `gpu nv12 4k to 1080p`, which scales a 4K picture down to
+1080p. Each timing runs from the conversion passes to a mapped read-back buffer and includes the
+read-back. The bench also times `cpu nv12 1080p`, a reference conversion on the CPU. On a machine
+without a graphics adapter only the CPU case runs. This page records no baseline for these
+benches yet.
 
 ### Audio tracks
 
@@ -90,50 +103,55 @@ A longer stall loses more; a larger buffer (up to 1024 MiB) holds more.
 
 ### Built-in H.264 encoder
 
-Measured on 2026-11-17 on Linux (AMD EPYC 9R14, 128 hardware threads), release build.
-`cargo run --release -p studiocraft-encode --example encode_bench -- 3 <threads>` codes 3 seconds
+This bench was measured on 2026-11-17 on Linux (AMD EPYC 9R14, 128 hardware threads), in a
+release build. `cargo run --release -p studiocraft-encode --example encode_bench -- 3 <threads>` codes 3 seconds
 of moving pictures per case after one second of warm-up, in quality mode at level 23. The frames
 cycle through one second of different pictures. A recording runs the encoder on the computer's
 hardware threads minus two, so 6 threads stands for an 8-thread computer and 14 threads for a
-16-thread one; the other cores of this machine were idle. The table gives the share of real time:
-the time spent coding over the length of the video. A recording keeps up only while it is under
-100%; one that stays above it fails after the video falls 10 seconds behind the sound.
+16-thread one. The other cores of this machine were idle. The table gives the share of real time:
+the time spent coding over the length of the video. A recording keeps up only while the share is
+under 100%. A recording that stays above 100% fails after the video falls 10 seconds behind the
+sound.
 
-| Size | Frame rate | Preset | 6 threads | 14 threads | 126 threads |
+| Size | Frame rate (fps) | Preset | 6 threads | 14 threads | 126 threads |
 | --- | --- | --- | --- | --- | --- |
-| 1280×720 | 30 | Speed | 42% | 25% | 30% |
-| 1280×720 | 30 | Balanced | 72% | 40% | 45% |
-| 1280×720 | 30 | Quality | 133% | 70% | 74% |
-| 1280×720 | 60 | Speed | 92% | 50% | 56% |
-| 1280×720 | 60 | Balanced | 158% | 77% | 87% |
-| 1280×720 | 60 | Quality | 265% | 132% | 142% |
-| 1920×1080 | 30 | Speed | 92% | 45% | 49% |
-| 1920×1080 | 30 | Balanced | 164% | 74% | 74% |
-| 1920×1080 | 30 | Quality | 294% | 130% | 107% |
-| 1920×1080 | 60 | Speed | 174% | 86% | 88% |
-| 1920×1080 | 60 | Balanced | 320% | 154% | 133% |
-| 1920×1080 | 60 | Quality | 571% | 256% | 223% |
+| 1280 × 720 | 30 | Speed | 42% | 25% | 30% |
+| 1280 × 720 | 30 | Balanced | 72% | 40% | 45% |
+| 1280 × 720 | 30 | Quality | 133% | 70% | 74% |
+| 1280 × 720 | 60 | Speed | 92% | 50% | 56% |
+| 1280 × 720 | 60 | Balanced | 158% | 77% | 87% |
+| 1280 × 720 | 60 | Quality | 265% | 132% | 142% |
+| 1920 × 1080 | 30 | Speed | 92% | 45% | 49% |
+| 1920 × 1080 | 30 | Balanced | 164% | 74% | 74% |
+| 1920 × 1080 | 30 | Quality | 294% | 130% | 107% |
+| 1920 × 1080 | 60 | Speed | 174% | 86% | 88% |
+| 1920 × 1080 | 60 | Balanced | 320% | 154% | 133% |
+| 1920 × 1080 | 60 | Quality | 571% | 256% | 223% |
 
-With 6 threads, 720p at 30 fps keeps up on Speed and Balanced, and 1080p at 30 fps and 720p at
-60 fps keep up on Speed only, near the limit. 1080p at 60 fps does not keep up on any preset. With
-14 threads or more, 1080p at 60 fps keeps up on Speed only, and 1080p at 30 fps on Speed and
-Balanced. More than 14 threads gives little: the encoder splits a picture into at most one slice
-per four rows of macroblocks (17 slices at 1080p, 12 at 720p). Speed is the encoder's default
-preset.
+With 6 threads, 720p at 30 fps keeps up on Speed and Balanced. 1080p at 30 fps and 720p at 60 fps
+keep up on Speed only, at 92% of real time. 1080p at 60 fps does not keep up on any preset. With
+14 threads or more, 1080p at 60 fps keeps up on Speed only, and 1080p at 30 fps keeps up on Speed
+and Balanced. Going from 14 to 126 threads changes the share by between 10 points slower and
+33 points faster in the encoder table. The encoder splits a picture into at most one slice per four
+rows of macroblocks (17 slices at 1080p, 12 at 720p). Speed is the encoder's default preset.
 
 ### FLV tags
 
-Measured on 2026-11-18 on Linux (AMD EPYC 9R14), release build. `cargo bench -p craft-flv` writes
-and reads one second of a 6000 kb/s, 60 fps H.264 stream with 160 kb/s AAC: 60 video tags of about
+This bench was measured on 2026-11-18 on Linux (AMD EPYC 9R14), in a release build.
+`cargo bench -p craft-flv` writes and reads one second of a 6000 kb/s, 60 fps H.264 stream with
+160 kb/s AAC: 60 video tags of about
 12 500 bytes and 47 audio tags of 426 bytes, 770 KB in all, into buffers that keep their capacity.
 
-The destination benches send the same second to 4 outputs. "Annex B per destination" gives every
-output the Annex B access units, so each output scans them for start codes twice, once to measure
-the tag and once to write it. "Converted once" converts each access unit with `annexb_to_nalus`
-once, checks each body once with `Body::check`, and writes the one result to every output with
-`Writer::write_checked`, or with `Checked::write_to` for RTMP message bodies. "With zero bytes" uses
-pseudo-random slice data with emulation prevention applied, so about one byte in 256 is 0, as in
-entropy-coded slices; the other Annex B input has no zero bytes in its slices.
+The destination benches send the same second to 4 outputs:
+
+- "Annex B per destination" gives every output the Annex B access units, so each output scans them
+  for start codes twice, once to measure the tag and once to write it.
+- "Converted once" converts each access unit with `annexb_to_nalus` once, checks each body once
+  with `Body::check`, and writes the one result to every output with `Writer::write_checked`, or
+  with `Checked::write_to` for RTMP message bodies.
+- "With zero bytes" uses pseudo-random slice data with emulation prevention applied, so about one
+  byte in 256 is 0, as in entropy-coded slices. The other Annex B input has no zero bytes in its
+  slices.
 
 | Bench | Median | Range (95%) |
 | --- | --- | --- |
@@ -191,12 +209,37 @@ woken for each packet, 0.20% of one core for one second of stream. With `wake_ev
 as without one. The `parked` timings depend on the load on the host's other cores: another run on
 the same host measured 5.630 ms for 8 parked receivers, 2.9 times the figure above.
 
+### RTMP chunking
+
+Measured on 2026-11-18 on Linux (AMD EPYC 9R14), release build. `cargo bench -p craft-rtmp`
+chunks one second of a 6000 kb/s, 60 fps H.264 stream with 160 kb/s AAC with `ChunkWriter`: 60
+video messages of 12 505 bytes and 47 audio messages of 428 bytes, 770 KB in all, each written as
+its codec bytes and its data.
+
+- `sink`: into `io::sink()` at the 4096-byte chunk size the publisher sets and at the default 128
+  bytes, which times building the chunk headers and slices.
+- `vec`: into a `Vec` that keeps its capacity, which adds copying every byte.
+- `tcp`: into a loopback TCP socket that another thread drains, which adds the system calls.
+
+| Bench | Median | Range (95%) |
+| --- | --- | --- |
+| `sink/chunk 1 s at 4096 bytes` | 4.509 µs | 4.439 to 4.582 µs |
+| `sink/chunk 1 s at 128 bytes` | 23.38 µs | 22.99 to 23.71 µs |
+| `vec/chunk 1 s at 4096 bytes into a Vec` | 17.80 µs | 17.54 to 18.08 µs |
+| `tcp/send 1 s at 4096 bytes over loopback TCP` | 1.253 ms | 1.194 to 1.304 ms |
+
+At the 4096-byte chunk size, chunking one second of stream costs 4.5 µs of one core, about 42 ns
+per message, and allocates nothing. Sending it over loopback TCP costs 1.25 ms, 0.13% of one core,
+almost all of it in the system calls. An earlier run on the same host measured 1.505 ms for the
+TCP bench.
+
 ## Measuring
 
 - Run the criterion benches with `cargo bench -p <crate>`.
 - Run the timing run with `cargo run --release -p studiocraft-cli -- bench <seconds>`.
 - Run the audio tracks stall run with `cargo run --release -p studiocraft-cli -- bench audio-tracks`.
 - Run the encoder bench with `cargo run --release -p studiocraft-encode --example encode_bench -- <seconds> [<threads>]`.
-- In the app, View › Stats shows the same counters while you work.
+- In the app, View › Stats shows the frames drawn, the frames drawn late and the last and average
+  frame times while you work.
 
 Record new baselines here when a change moves them by more than 10%.
