@@ -15,6 +15,8 @@
 	Alpha mask (alpha channel)	Masque alpha (canal alpha)
 	Alpha mask (color channel)	Masque alpha (canal de couleur)
 	Apply	Appliquer
+	Application	Application
+	Application audio capture	Capture audio d'application
 	Apply Dock Layout	Appliquer la disposition des docks
 	Attack (ms)	Attaque (ms)
 	Audio	Audio
@@ -43,6 +45,7 @@
 	Center to Screen	Centrer à l'écran
 	Check for updates at start	Rechercher les mises à jour au démarrage
 	Check for Updates…	Rechercher les mises à jour…
+	Choose an application	Choisir une application
 	Choose in the system picker	Choisir dans le sélecteur du système
 	Chroma key	Incrustation chroma
 	Close	Fermer
@@ -408,6 +411,13 @@
 	Unlock	Déverrouiller
 	Unmute	Rétablir le son
 @msg	A plug-in could not be loaded: {error}	Un plug-in n'a pas pu être chargé : {error}
+@msg	The application's audio could not be captured. The capture is opened again shortly.	L'audio de l'application n'a pas pu être capturé. La capture est rouverte sous peu.
+@msg	Capturing one application's audio is not available on this system yet.	La capture de l'audio d'une seule application n'est pas encore disponible sur ce système.
+@msg	Capturing one application needs Windows 11 or Windows Server 2022. Audio output capture still records everything the computer plays.	La capture d'une seule application nécessite Windows 11 ou Windows Server 2022. Capture de sortie audio enregistre toujours tout ce que l'ordinateur lit.
+@msg	The most applications that can be captured at once are already being captured.	Le nombre maximal d'applications pouvant être capturées en même temps est déjà atteint.
+@msg	The system refused to capture this application's audio. The capture is tried again every 5 seconds.	Le système a refusé de capturer l'audio de cette application. La capture est retentée toutes les 5 secondes.
+@msg	The running applications could not be listed. The list is read again shortly.	Les applications en cours d'exécution n'ont pas pu être listées. La liste est relue sous peu.
+@msg	The application setting is not a value from the application list.	Le réglage de l'application n'est pas une valeur de la liste des applications.
 @msg	Drawing again on {adapter}	Rendu rétabli avec {adapter}
 @msg	No graphics device could be opened again: {error}	Aucun périphérique graphique n'a pu être rouvert : {error}
 @msg	No graphics hardware can be used; drawing in software, which is slower	Aucun matériel graphique n'est utilisable ; rendu logiciel, plus lent

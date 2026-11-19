@@ -14,6 +14,8 @@
 	Alpha mask (alpha channel)	Alfamasker (alfakanaal)
 	Alpha mask (color channel)	Alfamasker (kleurkanaal)
 	Apply	Toepassen
+	Application	Toepassing
+	Application audio capture	Toepassingsaudio opnemen
 	Apply Dock Layout	Dockindeling toepassen
 	Attack (ms)	Aanzet (ms)
 	Audio bitrate	Audiobitrate
@@ -40,6 +42,7 @@
 	Center to Screen	Centreren op scherm
 	Check for updates at start	Bij het starten op updates controleren
 	Check for Updates…	Op updates controleren…
+	Choose an application	Kies een toepassing
 	Choose in the system picker	Kiezen in de systeemkiezer
 	Chroma key	Chromakey
 	Close	Sluiten
@@ -389,6 +392,13 @@
 	Unlock	Ontgrendelen
 	Unmute	Dempen opheffen
 @msg	A plug-in could not be loaded: {error}	Een plug-in kon niet worden geladen: {error}
+@msg	The application's audio could not be captured. The capture is opened again shortly.	Het geluid van de toepassing kon niet worden opgenomen. De opname wordt zo opnieuw geopend.
+@msg	Capturing one application's audio is not available on this system yet.	Het geluid van één toepassing opnemen is op dit systeem nog niet beschikbaar.
+@msg	Capturing one application needs Windows 11 or Windows Server 2022. Audio output capture still records everything the computer plays.	Eén toepassing opnemen vereist Windows 11 of Windows Server 2022. Audio-uitvoer opnemen neemt nog steeds alles op wat de computer afspeelt.
+@msg	The most applications that can be captured at once are already being captured.	Er worden al zoveel toepassingen opgenomen als tegelijk mogelijk is.
+@msg	The system refused to capture this application's audio. The capture is tried again every 5 seconds.	Het systeem weigerde het geluid van deze toepassing op te nemen. De opname wordt elke 5 seconden opnieuw geprobeerd.
+@msg	The running applications could not be listed. The list is read again shortly.	De actieve toepassingen konden niet worden opgesomd. De lijst wordt zo opnieuw gelezen.
+@msg	The application setting is not a value from the application list.	De toepassingsinstelling is geen waarde uit de lijst met toepassingen.
 @msg	Drawing again on {adapter}	Tekent weer met {adapter}
 @msg	No graphics device could be opened again: {error}	Er kon geen grafisch apparaat opnieuw worden geopend: {error}
 @msg	No graphics hardware can be used; drawing in software, which is slower	Er is geen bruikbare grafische hardware; er wordt in software getekend, wat langzamer is

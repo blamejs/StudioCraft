@@ -264,6 +264,12 @@ pub enum Command {
         #[serde(default)]
         settings: Option<Settings>,
     },
+    /// The running applications that have audio, with their peak levels.
+    #[serde(rename = "app_audio.list")]
+    AppAudioList {},
+    /// Whether this system captures one application's audio, and the captures running now.
+    #[serde(rename = "app_audio.status")]
+    AppAudioStatus {},
 }
 
 impl Command {
@@ -338,6 +344,8 @@ impl Command {
             Command::AppInfo {} => "app.info",
             Command::PluginList {} => "plugin.list",
             Command::SourceSchema { .. } => "source.schema",
+            Command::AppAudioList {} => "app_audio.list",
+            Command::AppAudioStatus {} => "app_audio.status",
         }
     }
 
@@ -426,6 +434,8 @@ const SPECS: &[CommandSpec] = &[
     spec("app.info", "About StudioCraft Info", "", Undo::NotUndoable),
     spec("plugin.list", "List Plug-ins", "", Undo::NotUndoable),
     spec("source.schema", "Source Settings Fields", "kind: plug-in id, settings?", Undo::NotUndoable),
+    spec("app_audio.list", "List Applications with Audio", "", Undo::NotUndoable),
+    spec("app_audio.status", "Application Audio Status", "", Undo::NotUndoable),
 ];
 
 /// Every command's description.
@@ -452,6 +462,8 @@ mod tests {
             Command::PluginList {},
             Command::SourceSchema { kind: "camera".into(), settings: None },
             Command::SourceSchema { kind: "camera".into(), settings: Some(Settings::new().with("device", "Desk")) },
+            Command::AppAudioList {},
+            Command::AppAudioStatus {},
         ];
         for c in samples {
             let v = serde_json::to_value(&c).unwrap();

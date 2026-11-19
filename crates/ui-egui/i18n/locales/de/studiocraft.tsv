@@ -15,6 +15,8 @@
 	Alpha mask (alpha channel)	Alphamaske (Alphakanal)
 	Alpha mask (color channel)	Alphamaske (Farbkanal)
 	Apply	Anwenden
+	Application	Anwendung
+	Application audio capture	Anwendungsaudio aufnehmen
 	Apply Dock Layout	Dock-Layout anwenden
 	Attack (ms)	Ansprechzeit (ms)
 	Audio	Audio
@@ -42,6 +44,7 @@
 	Center to Screen	Auf dem Bildschirm zentrieren
 	Check for updates at start	Beim Start nach Updates suchen
 	Check for Updates…	Nach Updates suchen…
+	Choose an application	Anwendung auswählen
 	Choose in the system picker	In der Systemauswahl wählen
 	Close	Schließen
 	Close below (dB)	Schließen unter (dB)
@@ -383,6 +386,13 @@
 	Unlock	Entsperren
 	Unmute	Stummschaltung aufheben
 @msg	A plug-in could not be loaded: {error}	Ein Plug-in konnte nicht geladen werden: {error}
+@msg	The application's audio could not be captured. The capture is opened again shortly.	Der Ton der Anwendung konnte nicht aufgenommen werden. Die Aufnahme wird gleich erneut geöffnet.
+@msg	Capturing one application's audio is not available on this system yet.	Der Ton einer einzelnen Anwendung kann auf diesem System noch nicht aufgenommen werden.
+@msg	Capturing one application needs Windows 11 or Windows Server 2022. Audio output capture still records everything the computer plays.	Die Aufnahme einer einzelnen Anwendung erfordert Windows 11 oder Windows Server 2022. „Audioausgang aufnehmen“ nimmt weiterhin alles auf, was der Computer wiedergibt.
+@msg	The most applications that can be captured at once are already being captured.	Es werden bereits so viele Anwendungen aufgenommen, wie gleichzeitig möglich sind.
+@msg	The system refused to capture this application's audio. The capture is tried again every 5 seconds.	Das System hat die Aufnahme des Tons dieser Anwendung abgelehnt. Die Aufnahme wird alle 5 Sekunden erneut versucht.
+@msg	The running applications could not be listed. The list is read again shortly.	Die laufenden Anwendungen konnten nicht aufgelistet werden. Die Liste wird gleich erneut gelesen.
+@msg	The application setting is not a value from the application list.	Die Anwendungseinstellung ist kein Wert aus der Anwendungsliste.
 @msg	Drawing again on {adapter}	Zeichnet wieder mit {adapter}
 @msg	No graphics device could be opened again: {error}	Es konnte kein Grafikgerät wieder geöffnet werden: {error}
 @msg	No graphics hardware can be used; drawing in software, which is slower	Keine Grafikhardware nutzbar; es wird in Software gezeichnet, was langsamer ist

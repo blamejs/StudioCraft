@@ -14,6 +14,8 @@
 	Alpha mask (alpha channel)	Maska alfa (kanał alfa)
 	Alpha mask (color channel)	Maska alfa (kanał koloru)
 	Apply	Zastosuj
+	Application	Aplikacja
+	Application audio capture	Przechwytywanie dźwięku aplikacji
 	Apply Dock Layout	Zastosuj układ paneli
 	Attack (ms)	Atak (ms)
 	Audio	Dźwięk
@@ -42,6 +44,7 @@
 	Center to Screen	Wyśrodkuj na ekranie
 	Check for updates at start	Sprawdzaj aktualizacje przy uruchomieniu
 	Check for Updates…	Sprawdź aktualizacje…
+	Choose an application	Wybierz aplikację
 	Choose in the system picker	Wybierz w systemowym oknie wyboru
 	Chroma key	Kluczowanie chrominancji
 	Close	Zamknij
@@ -398,6 +401,13 @@
 	Unlock	Odblokuj
 	Unmute	Wyłącz wyciszenie
 @msg	A plug-in could not be loaded: {error}	Nie można wczytać wtyczki: {error}
+@msg	The application's audio could not be captured. The capture is opened again shortly.	Nie można przechwycić dźwięku aplikacji. Przechwytywanie zostanie wkrótce otwarte ponownie.
+@msg	Capturing one application's audio is not available on this system yet.	Przechwytywanie dźwięku jednej aplikacji nie jest jeszcze dostępne w tym systemie.
+@msg	Capturing one application needs Windows 11 or Windows Server 2022. Audio output capture still records everything the computer plays.	Przechwytywanie jednej aplikacji wymaga systemu Windows 11 lub Windows Server 2022. Przechwytywanie wyjścia dźwięku nadal nagrywa wszystko, co odtwarza komputer.
+@msg	The most applications that can be captured at once are already being captured.	Przechwytywana jest już największa liczba aplikacji, jaką można przechwytywać jednocześnie.
+@msg	The system refused to capture this application's audio. The capture is tried again every 5 seconds.	System odmówił przechwycenia dźwięku tej aplikacji. Przechwytywanie jest ponawiane co 5 sekund.
+@msg	The running applications could not be listed. The list is read again shortly.	Nie można wyświetlić listy uruchomionych aplikacji. Lista zostanie wkrótce odczytana ponownie.
+@msg	The application setting is not a value from the application list.	Ustawienie aplikacji nie jest wartością z listy aplikacji.
 @msg	Drawing again on {adapter}	Ponowne rysowanie za pomocą {adapter}
 @msg	No graphics device could be opened again: {error}	Nie można ponownie otworzyć urządzenia graficznego: {error}
 @msg	No graphics hardware can be used; drawing in software, which is slower	Nie można użyć sprzętu graficznego; rysowanie programowe, które jest wolniejsze

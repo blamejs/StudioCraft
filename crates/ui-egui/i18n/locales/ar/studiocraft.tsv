@@ -14,6 +14,8 @@
 	Alpha mask (alpha channel)	قناع ألفا (قناة ألفا)
 	Alpha mask (color channel)	قناع ألفا (قناة اللون)
 	Apply	تطبيق
+	Application	التطبيق
+	Application audio capture	التقاط صوت التطبيق
 	Apply Dock Layout	تطبيق تخطيط اللوحات
 	Attack (ms)	زمن الاستجابة (مللي ثانية)
 	Audio	الصوت
@@ -42,6 +44,7 @@
 	Center to Screen	توسيط في الشاشة
 	Check for updates at start	التحقق من التحديثات عند البدء
 	Check for Updates…	التحقق من التحديثات…
+	Choose an application	اختر تطبيقًا
 	Choose in the system picker	الاختيار في نافذة الاختيار في النظام
 	Chroma key	مفتاح الكروما
 	Close	إغلاق
@@ -396,6 +399,13 @@
 	{program} did not report its version	لم يُبلغ {program} عن إصداره
 	{status} · {mb} MB	{status} · {mb} ميغابايت
 @msg	A plug-in could not be loaded: {error}	تعذّر تحميل مكوّن إضافي: {error}
+@msg	The application's audio could not be captured. The capture is opened again shortly.	تعذّر التقاط صوت التطبيق. سيُعاد فتح الالتقاط بعد قليل.
+@msg	Capturing one application's audio is not available on this system yet.	التقاط صوت تطبيق واحد غير متاح على هذا النظام بعد.
+@msg	Capturing one application needs Windows 11 or Windows Server 2022. Audio output capture still records everything the computer plays.	يتطلب التقاط تطبيق واحد Windows 11 أو Windows Server 2022. لا يزال «التقاط مخرج الصوت» يسجّل كل ما يشغّله الحاسوب.
+@msg	The most applications that can be captured at once are already being captured.	يجري بالفعل التقاط أكبر عدد من التطبيقات يمكن التقاطه في وقت واحد.
+@msg	The system refused to capture this application's audio. The capture is tried again every 5 seconds.	رفض النظام التقاط صوت هذا التطبيق. تُعاد محاولة الالتقاط كل 5 ثوانٍ.
+@msg	The running applications could not be listed. The list is read again shortly.	تعذّر سرد التطبيقات قيد التشغيل. ستُقرأ القائمة مجددًا بعد قليل.
+@msg	The application setting is not a value from the application list.	إعداد التطبيق ليس قيمة من قائمة التطبيقات.
 @msg	Audio monitoring could not start: {error}	تعذّر بدء مراقبة الصوت: {error}
 @msg	Audio monitoring stopped: {error}	توقفت مراقبة الصوت: {error}
 @msg	Could not check for updates: {error}	تعذّر التحقق من التحديثات: {error}

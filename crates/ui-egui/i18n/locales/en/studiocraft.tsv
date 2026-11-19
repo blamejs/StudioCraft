@@ -17,6 +17,8 @@
 	AMD AMF H.264	AMD AMF H.264
 	Apache 2.0	Apache 2.0
 	Apply	Apply
+	Application	Application
+	Application audio capture	Application audio capture
 	Apply Dock Layout	Apply Dock Layout
 	Attack (ms)	Attack (ms)
 	Audio	Audio
@@ -46,6 +48,7 @@
 	Center to Screen	Center to Screen
 	Check for updates at start	Check for updates at start
 	Check for Updates…	Check for Updates…
+	Choose an application	Choose an application
 	Choose in the system picker	Choose in the system picker
 	Chroma key	Chroma key
 	Close	Close
@@ -448,6 +451,13 @@
 	Power saving	Power saving
 	Software (slower)	Software (slower)
 @msg	A plug-in could not be loaded: {error}	A plug-in could not be loaded: {error}
+@msg	The application's audio could not be captured. The capture is opened again shortly.	The application's audio could not be captured. The capture is opened again shortly.
+@msg	Capturing one application's audio is not available on this system yet.	Capturing one application's audio is not available on this system yet.
+@msg	Capturing one application needs Windows 11 or Windows Server 2022. Audio output capture still records everything the computer plays.	Capturing one application needs Windows 11 or Windows Server 2022. Audio output capture still records everything the computer plays.
+@msg	The most applications that can be captured at once are already being captured.	The most applications that can be captured at once are already being captured.
+@msg	The system refused to capture this application's audio. The capture is tried again every 5 seconds.	The system refused to capture this application's audio. The capture is tried again every 5 seconds.
+@msg	The running applications could not be listed. The list is read again shortly.	The running applications could not be listed. The list is read again shortly.
+@msg	The application setting is not a value from the application list.	The application setting is not a value from the application list.
 @msg	Drawing again on {adapter}	Drawing again on {adapter}
 @msg	No graphics device could be opened again: {error}	No graphics device could be opened again: {error}
 @msg	No graphics hardware can be used; drawing in software, which is slower	No graphics hardware can be used; drawing in software, which is slower
