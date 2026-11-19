@@ -54,7 +54,7 @@ and Linux.
   <p align="center"><sub><b>Studio mode</b>: edit the next scene beside the live one, then send it to the program</sub></p>
 </td>
 <td width="50%" valign="top">
-  <img src="https://raw.githubusercontent.com/blamejs/StudioCraft/main/docs/images/transition.png" alt="A swipe transition halfway through: the Feature scene, a fractal video above a caption bar, moves across the preview and pushes the Starting Soon scene out of view" width="100%">
+  <img src="https://raw.githubusercontent.com/blamejs/StudioCraft/main/docs/images/transition.png" alt="A swipe transition halfway through: the Feature scene, a fractal video above a caption bar, slides in from the left and covers the Starting Soon scene" width="100%">
   <p align="center"><sub><b>Transitions</b>: cut, fade, fade through a color or swipe, with easing</sub></p>
 </td>
 </tr>

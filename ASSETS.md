@@ -4,8 +4,9 @@ Every picture, sound, font or video file in the repository is listed here with i
 and license. `cargo xtask assets` fails when a file is missing from this list.
 
 The asset files are the app icon in `assets/app-icon`, the three interface faces in
-`assets/fonts` and the screenshots in `docs/images`. The interface icons are drawn from shapes in `crates/ui-egui/src/icons.rs`. The
-interface faces are built into every build (`crates/ui-egui/src/fonts.rs`). When
+`assets/fonts` and the screenshots in `docs/images`. The interface icons are drawn from shapes in
+`crates/ui-egui/src/icons.rs`. The interface faces are built into every build
+(`crates/ui-egui/src/fonts.rs`). When
 `CRAFT_FONTS_DIR` is set at build time, the faces of a craft-fonts checkout outside this repository
 are built in after them, for the scripts they lack, and egui's built-in fonts come last.
 
