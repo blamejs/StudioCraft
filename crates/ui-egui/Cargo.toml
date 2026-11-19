@@ -18,6 +18,7 @@ studiocraft-engine = { workspace = true }
 studiocraft-render = { workspace = true }
 studiocraft-platform = { workspace = true }
 studiocraft-studio = { workspace = true }
+studiocraft-audio-tracks = { workspace = true }
 egui = { workspace = true }
 egui-wgpu = { workspace = true }
 eframe = { workspace = true, features = ["wgpu", "x11", "wayland"] }

@@ -44,7 +44,7 @@ pub struct FileFormat {
 
 /// Scene collections.
 pub const COLLECTION: FileFormat =
-    FileFormat { name: "studiocraft.scene-collection", version: 3, migrations: &[collection_v1_to_v2, collection_v2_to_v3] };
+    FileFormat { name: "studiocraft.scene-collection", version: 4, migrations: &[collection_v1_to_v2, collection_v2_to_v3, collection_v3_to_v4] };
 
 /// Collection version 1 to 2: each source's audio has a sync offset (`sync_offset_ms`), 0 for the
 /// sources of an older file.
@@ -76,9 +76,28 @@ fn collection_v2_to_v3(data: &mut Value) -> Result<(), String> {
     Ok(())
 }
 
+/// Collection version 3 to 4: each source's audio says whether audio tracks record it to a file
+/// of its own (`record_track`); `null` for the sources of an older file, which records the
+/// sources heard in the program.
+fn collection_v3_to_v4(data: &mut Value) -> Result<(), String> {
+    let data = data.as_object_mut().ok_or("the collection is not an object")?;
+    if let Some(Value::Array(sources)) = data.get_mut("sources") {
+        for source in sources.iter_mut().filter_map(Value::as_object_mut) {
+            let audio = source.entry("audio").or_insert_with(|| json!({}));
+            if let Value::Object(a) = audio {
+                a.entry("record_track").or_insert(Value::Null);
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Profiles.
-pub const PROFILE: FileFormat =
-    FileFormat { name: "studiocraft.profile", version: 5, migrations: &[profile_v1_to_v2, profile_v2_to_v3, profile_v3_to_v4, profile_v4_to_v5] };
+pub const PROFILE: FileFormat = FileFormat {
+    name: "studiocraft.profile",
+    version: 6,
+    migrations: &[profile_v1_to_v2, profile_v2_to_v3, profile_v3_to_v4, profile_v4_to_v5, profile_v5_to_v6],
+};
 
 /// Profile version 1 to 2: the recording and the stream each keep the settings of their video
 /// encoders (`encoder_settings`, empty until the user changes one).
@@ -119,6 +138,15 @@ fn profile_v4_to_v5(data: &mut Value) -> Result<(), String> {
     if let Value::Object(o) = output {
         o.entry("hardware_encoder").or_insert_with(|| json!("auto"));
     }
+    Ok(())
+}
+
+/// Profile version 5 to 6: audio tracks (`audio_tracks`), off, recorded while a recording runs,
+/// with the program mix, a 96 MiB buffer and 1 GiB files.
+fn profile_v5_to_v6(data: &mut Value) -> Result<(), String> {
+    let data = data.as_object_mut().ok_or("the profile is not an object")?;
+    data.entry("audio_tracks")
+        .or_insert_with(|| json!({"enabled": false, "when": "recording", "include_program": true, "buffer_mib": 96, "segment_gib": 1}));
     Ok(())
 }
 
@@ -196,12 +224,13 @@ pub fn write_profile(p: &Profile) -> Result<String, FormatError> {
     PROFILE.write(p)
 }
 
-/// A profile from a file's text, migrated, with video and replay buffer settings brought into
-/// range.
+/// A profile from a file's text, migrated, with video, replay buffer and audio tracks settings
+/// brought into range.
 pub fn read_profile(text: &str) -> Result<Profile, FormatError> {
     let mut p: Profile = PROFILE.read(text)?;
     p.video = p.video.sanitized();
     p.replay = p.replay.sanitized();
+    p.audio_tracks = p.audio_tracks.sanitized();
     Ok(p)
 }
 
@@ -214,6 +243,7 @@ mod tests {
         (1, include_str!("../fixtures/collection-v1.json")),
         (2, include_str!("../fixtures/collection-v2.json")),
         (3, include_str!("../fixtures/collection-v3.json")),
+        (4, include_str!("../fixtures/collection-v4.json")),
     ];
     const PROFILE_FIXTURES: &[(u32, &str)] = &[
         (1, include_str!("../fixtures/profile-v1.json")),
@@ -221,6 +251,7 @@ mod tests {
         (3, include_str!("../fixtures/profile-v3.json")),
         (4, include_str!("../fixtures/profile-v4.json")),
         (5, include_str!("../fixtures/profile-v5.json")),
+        (6, include_str!("../fixtures/profile-v6.json")),
     ];
 
     fn covers_every_version(format: &FileFormat, fixtures: &[(u32, &str)]) {
@@ -345,6 +376,63 @@ mod tests {
         let p = read_profile(v5).unwrap();
         assert_eq!(p.output.hardware_encoder, "nvenc_hevc");
         assert_eq!(read_profile(&write_profile(&p).unwrap()).unwrap(), p);
+    }
+
+    #[test]
+    fn collections_keep_whether_each_source_records_its_own_track() {
+        for (v, text) in &COLLECTION_FIXTURES[..3] {
+            let c = read_collection(text, "Scene").unwrap();
+            assert!(c.sources.iter().all(|s| s.audio.record_track.is_none()), "version {v} follows the program");
+            let mic = c.source_by_name("Microphone").map(|s| s.audio.records_track());
+            assert_eq!(mic, if *v < 3 { Some(true) } else { Some(false) }, "version {v}: a monitor-only source is left out");
+        }
+        let (_, v4) = COLLECTION_FIXTURES[3];
+        let c = read_collection(v4, "Scene").unwrap();
+        let flag = |name: &str| c.source_by_name(name).map(|s| (s.audio.record_track, s.audio.records_track()));
+        assert_eq!(flag("Background"), Some((None, true)));
+        assert_eq!(flag("Title"), Some((Some(false), false)));
+        assert_eq!(flag("Microphone"), Some((Some(true), true)), "set on, a monitor-only source is recorded");
+        assert_eq!(read_collection(&write_collection(&c).unwrap(), "Scene").unwrap(), c);
+        let wrong = v4.replace("\"record_track\": true", "\"record_track\": \"yes\"");
+        assert!(matches!(read_collection(&wrong, "Scene"), Err(FormatError::Data(_))), "a flag that is not a boolean refuses the file");
+    }
+
+    #[test]
+    fn profiles_keep_the_audio_tracks_settings_and_bring_sizes_into_range() {
+        for (v, text) in &PROFILE_FIXTURES[..5] {
+            let p = read_profile(text).unwrap();
+            assert_eq!(p.audio_tracks, crate::profile::AudioTracksSettings::default(), "version {v} gets the defaults");
+            assert!(!p.audio_tracks.enabled, "version {v}: audio tracks are off");
+        }
+        let (_, v6) = PROFILE_FIXTURES[5];
+        let p = read_profile(v6).unwrap();
+        let want = crate::profile::AudioTracksSettings {
+            enabled: true,
+            when: crate::profile::AudioTracksWhen::Either,
+            include_program: false,
+            buffer_mib: 256,
+            segment_gib: 1,
+        };
+        assert_eq!(p.audio_tracks, want);
+        assert_eq!(read_profile(&write_profile(&p).unwrap()).unwrap(), p);
+        // A size out of range is brought into it, so the rest of the profile is kept.
+        for (from, to, buffer, segment) in [
+            ("\"buffer_mib\": 256", "\"buffer_mib\": 15", 16, 1),
+            ("\"buffer_mib\": 256", "\"buffer_mib\": 1025", 1024, 1),
+            ("\"segment_gib\": 1", "\"segment_gib\": 0", 256, 1),
+            ("\"segment_gib\": 1", "\"segment_gib\": 4", 256, 3),
+        ] {
+            let p = read_profile(&v6.replace(from, to)).unwrap();
+            assert_eq!((p.audio_tracks.buffer_mib, p.audio_tracks.segment_gib, p.audio_tracks.enabled), (buffer, segment, true), "{to}");
+        }
+        // A value of the wrong kind still refuses the file.
+        for (from, to) in [("\"either\"", "\"sometimes\""), ("\"segment_gib\": 1", "\"segment_gib\": -1")] {
+            let bad = v6.replace(from, to);
+            assert!(matches!(read_profile(&bad), Err(FormatError::Data(_))), "{to} refuses the file");
+        }
+        for (from, to) in [("\"buffer_mib\": 256", "\"buffer_mib\": 16"), ("\"segment_gib\": 1", "\"segment_gib\": 3")] {
+            assert!(read_profile(&v6.replace(from, to)).is_ok(), "{to} is in range");
+        }
     }
 
     #[test]

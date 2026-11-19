@@ -144,7 +144,7 @@ describes how it picks one.
 
 MP4 and MOV recordings, recordings at the Lossless quality level, streams, and recordings with
 x264 or a hardware encoder outside the built-in ones run in a separately installed `ffmpeg`.
-A Media file source also plays its file through `ffmpeg`. StudioCraft looks for `ffmpeg` on the `PATH`, or at the location set in Settings › Output.
+A Media file source plays Ogg Vorbis files at 8 to 192 kHz without `ffmpeg`, and plays every other file through `ffmpeg`. StudioCraft looks for `ffmpeg` on the `PATH`, or at the location set in Settings › Output.
 Recording uses x264 until H.264 (built in) is chosen in Settings › Output. No release package
 includes `ffmpeg`. The `.deb` and `.rpm` packages list it as a recommended package. The Flatpak
 runtime has no `ffmpeg`, and the Flatpak sandbox cannot run an `ffmpeg` installed on the system.
@@ -160,6 +160,39 @@ the recording folder, and the buffer keeps running. Settings › Output sets the
 seconds, 20 by default) and the memory limit (32 to 16384 MB, 512 by default). Start or Stop
 Replay Buffer and Save Replay can be given shortcuts in Settings › Hotkeys. While the buffer runs,
 the status bar shows REPLAY with the time it has run.
+
+### Audio tracks
+
+Settings › Output › Audio tracks writes each audio source and the program mix to their own 32-bit
+float 48 kHz stereo WAV files while a recording, the stream or either runs. The files go to
+`<recording name> Audio/Audio Files/` beside the recording, or
+`Stream YYYY-MM-DD HH-MM-SS Audio/Audio Files/` for a stream alone: `00 Program.wav` and one file
+per source, named after the source. When the folder name is taken, the take uses
+`<name> (2) Audio`, `<name> (3) Audio` and so on. A source's Properties window has a "Record as its
+own track" check. Until it is set, a source whose monitoring setting sends it to the program mix is
+recorded.
+
+A take follows one output. With Either, it follows the recording while one runs and the stream
+otherwise: a recording that starts or stops during a stream ends the take, and the next take starts
+in its own folder. When the recording then fails to start, its folder is removed and the stream's
+next take starts from the moment the earlier one ended. A take that starts with its output starts at the output's first sample and ends
+at the time the output stopped. Every file of a take starts at the same moment, including the file
+of a source added during the take, and keeps time through gaps and a slow disk, which are filled
+with silence. Every file ends at the take's end, except the file of a source removed for more than
+60 seconds, which ends where the source left. Each file carries
+a broadcast WAV `bext` chunk (EBU Tech 3285): its time reference is the sample, at 48 kHz, of the
+recording's or stream's timeline that the file's first sample is at. It is 0 for a take that
+started with its recording, and the take's start for a take that started later, such as after the
+setting was turned on during a recording.
+
+A file that reaches the file size limit (1 GiB by default, 1 to 3 GiB) continues in
+`<name> part N.wav`, whose time reference is where that part starts. An editor that limits the
+length of an imported file may need the 1 GiB setting for long takes. A full or failing disk stops
+only the audio tracks, and the status bar gives the reason. The take's files keep every whole frame
+that reached the disk and are finished at once; a failure while the take was finishing its files
+leaves it for repair. A take cut short by a crash is repaired
+at the next start, or with `studiocraft-cli audio-tracks repair <folder>`. Each repaired file keeps
+the audio that reached the disk, so the files of a repaired take can end at different points.
 
 ## Streaming
 

@@ -1,31 +1,35 @@
 # craft-hwenc-native
 
-Hardware video encoders for the Craft apps, called through the drivers' own encode APIs instead of
-the ffmpeg program. The drivers are loaded at run time, so building needs no vendor SDK, and a
-system without the hardware gets an error instead of a crash.
+craft-hwenc-native runs hardware video encoders for the Craft apps through the drivers' own encode
+APIs, without the `ffmpeg` program. It loads the drivers at run time. Building the crate does not
+require a vendor SDK, and on a system without the hardware an encoder returns an error and does not
+crash.
 
-Licensed under MIT OR Apache-2.0. See NOTICE for the sources.
+Only the private `nvenc_ffi`, `mf_ffi`, `vt_ffi` and `vaapi_ffi` modules contain `unsafe` code. The
+Media Foundation calls go through the `windows` crate's bindings, and the VideoToolbox calls go
+through the `objc2-video-toolbox`, `objc2-core-media`, `objc2-core-video` and
+`objc2-core-foundation` bindings.
 
 ## Contents
 
-| Item | What |
+| Item | Description |
 |---|---|
-| `nvenc::Encoder` | NVENC: H.264 High and HEVC Main from NV12 frames, HEVC Main 10 from P010 frames; Direct3D 11 on Windows (`nvEncodeAPI64.dll`), the CUDA driver on 64-bit Linux (`libnvidia-encode.so.1`) |
-| `nvenc::Config` | codec, input layout, size (even, within the GPU's limits), frame rate, `Rate::Quality(1..=51)` or `Rate::Cbr(kbps)`, keyframe interval |
-| `nvenc::Encoder::encode`, `flush` | packed frames in, 4-byte length-prefixed packets out in input order, each with its timestamp and keyframe flag; preset P5, high-quality tuning, no B-frames, BT.709 limited range |
-| `nvenc::Encoder::codec_private` | the `avcC` or `hvcC` record for the container |
-| `nvenc::available(codec)` | whether this system can open an NVENC session that writes `codec` |
-| `mf::Encoder` | the hardware H.264 and HEVC encoder MFTs that Windows Media Foundation lists (`mfplat.dll`), from NV12 frames; the same `Config`, `encode`, `flush` and `codec_private` as NVENC; quality `100 - 2 × level`, constant bitrate with a one-second buffer, no B-frames, BT.709 limited range |
-| `mf::available(codec)` | whether Media Foundation lists a hardware encoder that writes `codec` and opens |
-| `vt::Encoder` | the hardware H.264 High and HEVC Main encoders of macOS VideoToolbox, from NV12 frames; the same `Config`, `encode`, `flush` and `codec_private` as NVENC; a session that VideoToolbox reports as software is not used; quality `(100 - 2 × level) / 100`, constant bitrate on macOS 13 and later and otherwise an average bitrate with a one-second ceiling, no B-frames, BT.709 limited range |
-| `vt::available(codec)` | whether VideoToolbox opens a hardware encoder that writes `codec` |
-| `vaapi::Encoder` | the VA-API hardware H.264 (High, Main or Constrained Baseline) and HEVC Main encoders on 64-bit Linux (`libva.so.2`, `libva-drm.so.2`), on the first `/dev/dri/renderD*` node whose driver encodes the codec, from NV12 frames; the same `Config`, `encode`, `flush` and `codec_private` as NVENC; constant QP at the level (a variable bitrate where the driver has no constant QP), constant bitrate with a one-second buffer, IDR and P pictures only; HEVC sizes are multiples of the driver's smallest coding block |
-| `vaapi::available(codec)` | whether a VA-API driver opens an encoder that writes `codec` |
-| `vaapi::copy_nv12`, `vaapi::packet` | the two passes the VA-API encoder makes over each frame on the CPU: the copy into a surface's pitched planes, and the coded picture to a packet |
-| `annexb::nals`, `to_length_prefixed`, `parameter_sets` | Annex B streams split into NAL units; samples without parameter sets or delimiters |
-| `avc::avcc`, `hevc::hvcc` | the decoder configuration records of ISO/IEC 14496-15, checked against the stream that was asked for |
+| `nvenc::Encoder` | This is NVIDIA's NVENC encoder: H.264 High and HEVC Main from NV12 frames, and HEVC Main 10 from P010 frames. It uses Direct3D 11 on Windows (`nvEncodeAPI64.dll`) and the CUDA driver on 64-bit Linux (`libnvidia-encode.so.1`). |
+| `nvenc::Config` | It sets the codec, input layout, size (even, within the GPU's limits), frame rate, `Rate::Quality(1..=51)` or `Rate::Cbr(kbps)`, and keyframe interval. |
+| `nvenc::Encoder::encode`, `flush` | Packed frames go in, and 4-byte length-prefixed packets come out in input order, each with its timestamp and keyframe flag. The encoder uses preset P5, high-quality tuning, no B-frames and BT.709 limited range. |
+| `nvenc::Encoder::codec_private` | It returns the `avcC` or `hvcC` record for the container. |
+| `nvenc::available(codec)` | It reports whether this system can open an NVENC session that writes `codec`. |
+| `mf::Encoder` | This runs the hardware H.264 and HEVC encoder MFTs (Media Foundation transforms) that Windows Media Foundation lists (`mfplat.dll`), from NV12 frames. It has the same `Config`, `encode`, `flush` and `codec_private` as NVENC. Quality is `100 - 2 × level`, constant bitrate uses a one-second buffer, and it uses no B-frames and BT.709 limited range. |
+| `mf::available(codec)` | It reports whether Media Foundation lists a hardware encoder that writes `codec` and opens. |
+| `vt::Encoder` | This runs the hardware H.264 High and HEVC Main encoders of macOS VideoToolbox, from NV12 frames. It has the same `Config`, `encode`, `flush` and `codec_private` as NVENC. A session that VideoToolbox reports as software is not used. Quality is `(100 - 2 × level) / 100`. Bitrate is constant on macOS 13 and later, and otherwise an average bitrate with a one-second ceiling. It uses no B-frames and BT.709 limited range. |
+| `vt::available(codec)` | It reports whether VideoToolbox opens a hardware encoder that writes `codec`. |
+| `vaapi::Encoder` | This runs the VA-API hardware H.264 (High, Main or Constrained Baseline) and HEVC Main encoders on 64-bit Linux (`libva.so.2`, `libva-drm.so.2`), from NV12 frames. It uses the first `/dev/dri/renderD*` node whose driver encodes the codec. It has the same `Config`, `encode`, `flush` and `codec_private` as NVENC. Quality is a constant QP at the level, or a variable bitrate where the driver has no constant QP. Constant bitrate uses a one-second buffer. It writes IDR and P pictures only, and HEVC sizes are multiples of the driver's smallest coding block. |
+| `vaapi::available(codec)` | It reports whether a VA-API driver opens an encoder that writes `codec`. |
+| `vaapi::copy_nv12`, `vaapi::packet` | These are the two passes the VA-API encoder makes over each frame on the CPU: `copy_nv12` copies the frame into a surface's pitched planes, and `packet` turns the coded picture into a packet. |
+| `annexb::nals`, `to_length_prefixed`, `parameter_sets` | `nals` splits an Annex B stream into network abstraction layer (NAL) units. `to_length_prefixed` writes a sample without parameter sets or delimiters, and `parameter_sets` returns the parameter sets. |
+| `avc::avcc`, `hevc::hvcc` | These build the decoder configuration records of ISO/IEC 14496-15 and check them against the stream that was asked for. |
 
-## Use
+## Usage
 
 ```rust
 use craft_hwenc_native::Codec;
@@ -44,11 +48,7 @@ for packet in enc.flush()? {
 }
 ```
 
-`mf::Encoder` takes the same `Config` with `Input::Nv12`. Off Windows, and on Windows without a
-hardware encoder MFT, `Encoder::new` returns `Error::NoDevice`. `vt::Encoder` also takes
-`Input::Nv12`. Off macOS, and on a Mac without a hardware encoder for the codec, `Encoder::new`
-returns `Error::NoDevice`. `vaapi::Encoder` also takes `Input::Nv12`. Off 64-bit Linux, without
-libva, and without a driver that encodes the codec, `Encoder::new` returns `Error::NoDevice`.
+`mf::Encoder`, `vt::Encoder` and `vaapi::Encoder` take the same `Config` with `Input::Nv12`.
 
 `vaapi::Encoder` keeps up to four frames in flight, each in its own surface and coded buffer.
 `encode` copies the frame into a free surface and submits it, and waits for the GPU only when all
@@ -63,8 +63,32 @@ of the mapped coded buffer and then into the length-prefixed packet. `cargo benc
 craft-hwenc-native` measures the copy and the packet, and a 1080p encode where a VA-API H.264
 encoder is present; the copy bench writes into heap memory, not a mapped surface.
 
-Only the private `nvenc_ffi`, `mf_ffi`, `vt_ffi` and `vaapi_ffi` modules contain `unsafe` code.
+## Limits and failures
+
+- Off Windows, and on Windows without a hardware encoder MFT, `mf::Encoder::new` returns
+  `Error::NoDevice`.
+- Off macOS, and on a Mac without a hardware encoder for the codec, `vt::Encoder::new` returns
+  `Error::NoDevice`.
+- Off 64-bit Linux, without libva, and without a driver that encodes the codec,
+  `vaapi::Encoder::new` returns `Error::NoDevice`.
+
+## Tests
+
 The NVENC and VA-API layout tests compare every structure the crate passes to the driver with the
-C header's sizes and offsets, and they run on every platform. The Media Foundation calls go through the `windows`
-crate's bindings, and the VideoToolbox calls go through the `objc2-video-toolbox`,
-`objc2-core-media`, `objc2-core-video` and `objc2-core-foundation` bindings.
+C header's sizes and offsets, and they run on every platform.
+
+## Sources
+
+- ISO/IEC 14496-15 for the `avcC` and `hvcC` decoder configuration records.
+- NVIDIA's `nvEncodeAPI.h` (Video Codec SDK, API 12.1) for the NVENC structures.
+
+## License
+
+The crate is licensed under MIT OR Apache-2.0, at your option.
+
+`NOTICE` lists the code this crate took from FilmCraft's `crates/platform`, with the FilmCraft
+commit and copyright: the NVENC backend, the Annex B helpers, the HEVC parameter-set reading and the
+layout tests; the Media Foundation loading, COM setup, sample creation, MFT enumeration and output
+reading; and the VideoToolbox session setup, pixel buffer filling, output callback and
+parameter-set reading. It also names NVIDIA's `nvEncodeAPI.h` as the source of the NVENC
+declarations, with NVIDIA's copyright and MIT license.

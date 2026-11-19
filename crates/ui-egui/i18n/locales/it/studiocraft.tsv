@@ -434,3 +434,40 @@
 @msg	The stream stopped: {error}	La diretta si è interrotta: {error}
 @msg	ffmpeg at {path} was not found	ffmpeg non trovato in {path}
 menu	Transform	Trasforma
+	Record as its own track	Registra come traccia a sé
+	Audio tracks write this source to a WAV file of its own (Settings › Output › Audio tracks)	Le tracce audio scrivono questa sorgente in un file WAV a sé (Impostazioni › Uscita › Tracce audio)
+	Audio tracks	Tracce audio
+	Write each recorded source and the program mix to its own WAV file	Scrivi ogni sorgente registrata e il mix del programma in un file WAV a sé
+	Write them while	Scrivile quando
+	Include the program mix	Includi il mix del programma
+	Write buffer	Buffer di scrittura
+	MiB	MiB
+	File size	Dimensione file
+	GiB	GiB
+	Audio tracks: {tracks}, about {gb} GiB an hour; the buffer holds {seconds} s of audio while the disk is slow	Tracce audio: {tracks}, circa {gb} GiB all'ora; il buffer contiene {seconds} s di audio mentre il disco è lento
+	A recording runs	È in corso una registrazione
+	The stream runs	È in corso lo streaming
+	A recording or the stream runs	È in corso una registrazione o lo streaming
+	The disk is almost full; audio tracks stop before the recording or the stream runs out of space	Il disco è quasi pieno; le tracce audio si fermano prima che la registrazione o lo streaming esauriscano lo spazio
+	This take has made as many audio track files as it can; sources added since are not recorded to their own files	Questa ripresa ha creato tutti i file di tracce audio che può; le sorgenti aggiunte da allora non vengono registrate in file propri
+	More sources are set to record their own track than can be recorded at once; the later ones are not recorded	Ci sono più sorgenti impostate per registrare una propria traccia di quante se ne possano registrare insieme; le ultime non vengono registrate
+	Audio tracks: {tracks}; {lost} s of audio lost while the disk was slow	Tracce audio: {tracks}; {lost} s di audio persi mentre il disco era lento
+	TRACKS	TRACCE
+	TRACKS stopped	TRACCE fermate
+	Audio tracks stopped early; the status message gives the reason	Le tracce audio si sono fermate in anticipo; il messaggio di stato ne indica il motivo
+	Record as Its Own Track	Registra come traccia a sé
+	Audio Tracks Status	Stato delle tracce audio
+	Repair Audio Tracks	Ripara tracce audio
+@msg	Audio tracks stopped at {time}: the disk is full	Tracce audio fermate a {time}: il disco è pieno
+@msg	Audio tracks stopped at {time}: the disk is almost full	Tracce audio fermate a {time}: il disco è quasi pieno
+@msg	Audio tracks stopped at {time}: the files could not be created	Tracce audio fermate a {time}: non è stato possibile creare i file
+@msg	Audio tracks stopped at {time}: the free space on the disk could not be read	Tracce audio fermate a {time}: non è stato possibile leggere lo spazio libero sul disco
+@msg	Audio tracks stopped at {time}: there is not enough memory for the write buffer	Tracce audio fermate a {time}: la memoria non è sufficiente per il buffer di scrittura
+@msg	Audio tracks stopped at {time}: a file could not be written	Tracce audio fermate a {time}: non è stato possibile scrivere un file
+@msg	Audio tracks could not start: {error}	Impossibile avviare le tracce audio: {error}
+@msg	Audio tracks repaired after the app closed during a take: {folders}	Tracce audio riparate dopo la chiusura dell'app durante una ripresa: {folders}
+@msg	Audio tracks could not be repaired: {takes}	Impossibile riparare le tracce audio: {takes}
+@msg	Audio tracks repaired after the app closed during a take: {folders} and {more} more	Tracce audio riparate dopo la chiusura dell'app durante una ripresa: {folders} e altre {more}
+@msg	Audio tracks could not be repaired: {takes} and {more} more	Impossibile riparare le tracce audio: {takes} e altre {more}
+@msg	Audio tracks could not be repaired: {takes}. Takes repaired: {count}	Impossibile riparare le tracce audio: {takes}. Riprese riparate: {count}
+@msg	Audio tracks could not be repaired: {takes} and {more} more. Takes repaired: {count}	Impossibile riparare le tracce audio: {takes} e altre {more}. Riprese riparate: {count}

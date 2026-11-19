@@ -48,6 +48,7 @@ Each shared crate in `crates/` has a README that describes it for use in other a
   automatically.
 - [craft-hwenc-native](../crates/craft-hwenc-native/README.md) calls hardware encoders through
   their drivers.
+- [craft-rtmp](../crates/craft-rtmp/README.md) publishes a stream to an RTMP or RTMPS server.
 - [craft-scopes](../crates/craft-scopes/README.md) computes waveforms, parades, histograms and
   vectorscopes.
 - [craft-tsmux](../crates/craft-tsmux/README.md) writes MPEG-2 transport streams.

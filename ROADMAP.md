@@ -9,6 +9,7 @@ description in [docs/features.md](docs/features.md).
 
 - Scenes, sources and scene items can be moved, resized, rotated, locked, hidden and undone ([Sources](docs/features.md#sources)).
 - Color, image, text, media file, display capture, window capture, camera, audio input and audio output sources are built in ([Built-in sources](docs/features.md#built-in-sources)).
+- The media file source plays Ogg Vorbis files at 8 to 192 kHz without ffmpeg, through `craft-audio`'s Vorbis decoder, and mixes files with more than two channels down to stereo ([When `ffmpeg` is needed](docs/features.md#when-ffmpeg-is-needed)).
 - Cameras are captured on Windows (Media Foundation), macOS (AVFoundation) and Linux (V4L2), with the camera and its format chosen in the source's Properties ([Camera](docs/features.md#camera)).
 - Audio input and output are captured on Linux through the PipeWire sound server, which lists its devices with the default first ([Audio capture on Linux](docs/features.md#audio-capture-on-linux)).
 - Displays and windows are captured on Linux through the desktop's screen-cast portal and PipeWire ([Display and window capture on Linux](docs/features.md#display-and-window-capture-on-linux)).
@@ -33,6 +34,7 @@ description in [docs/features.md](docs/features.md).
 - MKV files are recorded with the built-in H.264 and AAC encoders without ffmpeg ([Encoders](docs/features.md#encoders)).
 - MKV, MP4 and MOV files, including recordings at the Lossless quality level, are recorded through an external ffmpeg ([When `ffmpeg` is needed](docs/features.md#when-ffmpeg-is-needed)).
 - The replay buffer keeps the last 5 to 3600 seconds in memory and saves them to an MKV file while it keeps running ([Replay buffer](docs/features.md#replay-buffer)).
+- Each audio source and the program mix are written to their own WAV files while a recording or the stream runs, and takes cut short by a crash are repaired ([Audio tracks](docs/features.md#audio-tracks)).
 
 ### Streaming
 
@@ -79,7 +81,8 @@ description in [docs/features.md](docs/features.md).
    to right in every language.
 2. **Multiple outputs (in progress).** StudioCraft will stream to several destinations at once and
    offer a virtual camera. `craft-flv` already writes and reads the FLV tags and AMF0 values an
-   RTMP stream carries.
+   RTMP stream carries. `craft-packet` shares each encoded packet by reference with every
+   destination's bounded ring. `craft-rtmp` publishes a stream to an RTMP or RTMPS server.
 3. **Web build.** The model and plugin crates already build for WebAssembly. A browser editor for
    scene collections is the first step.
 4. **Frames on the GPU from capture to the encoder.** Captured frames will stay on the GPU until

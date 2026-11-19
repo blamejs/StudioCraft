@@ -16,6 +16,9 @@ pub use collection::{AudioState, FilterConfig, MonitorMode, Scene, SceneCollecti
 pub use format::FormatError;
 pub use geom::{Crop, Transform, Vec2};
 pub use ids::{FilterId, ItemId, SceneId, SourceId};
-pub use profile::{AudioSettings, OutputSettings, Profile, RecordingFormat, RecordingQuality, ReplaySettings, StreamSettings, VideoSettings};
+pub use profile::{
+    AudioSettings, AudioTracksSettings, AudioTracksWhen, OutputSettings, Profile, RecordingFormat, RecordingQuality, ReplaySettings, StreamSettings,
+    VideoSettings,
+};
 pub use schema::{ChoiceOption, Field, FieldKind, PathMode, SettingsSchema};
 pub use settings::Settings;

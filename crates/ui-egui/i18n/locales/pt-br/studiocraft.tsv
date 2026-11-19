@@ -437,3 +437,40 @@
 @msg	The stream stopped: {error}	A transmissão parou: {error}
 @msg	ffmpeg at {path} was not found	O ffmpeg não foi encontrado em {path}
 menu	Transform	Transformar
+	Record as its own track	Gravar como faixa própria
+	Audio tracks write this source to a WAV file of its own (Settings › Output › Audio tracks)	As faixas de áudio gravam esta fonte em um arquivo WAV próprio (Configurações › Saída › Faixas de áudio)
+	Audio tracks	Faixas de áudio
+	Write each recorded source and the program mix to its own WAV file	Gravar cada fonte gravada e a mixagem do programa em um arquivo WAV próprio
+	Write them while	Gravá-las enquanto
+	Include the program mix	Incluir a mixagem do programa
+	Write buffer	Buffer de gravação
+	MiB	MiB
+	File size	Tamanho do arquivo
+	GiB	GiB
+	Audio tracks: {tracks}, about {gb} GiB an hour; the buffer holds {seconds} s of audio while the disk is slow	Faixas de áudio: {tracks}, cerca de {gb} GiB por hora; o buffer guarda {seconds} s de áudio enquanto o disco está lento
+	A recording runs	Uma gravação está em andamento
+	The stream runs	A transmissão está em andamento
+	A recording or the stream runs	Uma gravação ou a transmissão está em andamento
+	The disk is almost full; audio tracks stop before the recording or the stream runs out of space	O disco está quase cheio; as faixas de áudio param antes que a gravação ou a transmissão fique sem espaço
+	This take has made as many audio track files as it can; sources added since are not recorded to their own files	Esta tomada já criou todos os arquivos de faixas de áudio que pode; as fontes adicionadas depois não são gravadas em arquivos próprios
+	More sources are set to record their own track than can be recorded at once; the later ones are not recorded	Há mais fontes configuradas para gravar a própria faixa do que é possível gravar ao mesmo tempo; as últimas não são gravadas
+	Audio tracks: {tracks}; {lost} s of audio lost while the disk was slow	Faixas de áudio: {tracks}; {lost} s de áudio perdidos enquanto o disco estava lento
+	TRACKS	FAIXAS
+	TRACKS stopped	FAIXAS paradas
+	Audio tracks stopped early; the status message gives the reason	As faixas de áudio pararam antes do tempo; a mensagem de status informa o motivo
+	Record as Its Own Track	Gravar como faixa própria
+	Audio Tracks Status	Status das faixas de áudio
+	Repair Audio Tracks	Reparar faixas de áudio
+@msg	Audio tracks stopped at {time}: the disk is full	As faixas de áudio pararam em {time}: o disco está cheio
+@msg	Audio tracks stopped at {time}: the disk is almost full	As faixas de áudio pararam em {time}: o disco está quase cheio
+@msg	Audio tracks stopped at {time}: the files could not be created	As faixas de áudio pararam em {time}: não foi possível criar os arquivos
+@msg	Audio tracks stopped at {time}: the free space on the disk could not be read	As faixas de áudio pararam em {time}: não foi possível ler o espaço livre do disco
+@msg	Audio tracks stopped at {time}: there is not enough memory for the write buffer	As faixas de áudio pararam em {time}: não há memória suficiente para o buffer de gravação
+@msg	Audio tracks stopped at {time}: a file could not be written	As faixas de áudio pararam em {time}: não foi possível gravar um arquivo
+@msg	Audio tracks could not start: {error}	Não foi possível iniciar as faixas de áudio: {error}
+@msg	Audio tracks repaired after the app closed during a take: {folders}	Faixas de áudio reparadas depois que o app fechou durante uma tomada: {folders}
+@msg	Audio tracks could not be repaired: {takes}	Não foi possível reparar as faixas de áudio: {takes}
+@msg	Audio tracks repaired after the app closed during a take: {folders} and {more} more	Faixas de áudio reparadas depois que o app fechou durante uma tomada: {folders} e mais {more}
+@msg	Audio tracks could not be repaired: {takes} and {more} more	Não foi possível reparar as faixas de áudio: {takes} e mais {more}
+@msg	Audio tracks could not be repaired: {takes}. Takes repaired: {count}	Não foi possível reparar as faixas de áudio: {takes}. Tomadas reparadas: {count}
+@msg	Audio tracks could not be repaired: {takes} and {more} more. Takes repaired: {count}	Não foi possível reparar as faixas de áudio: {takes} e mais {more}. Tomadas reparadas: {count}

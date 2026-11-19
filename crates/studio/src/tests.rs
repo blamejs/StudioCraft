@@ -751,3 +751,328 @@ fn graphics_notices_name_the_adapter_and_the_count() {
     let failed = gpu_notice(&N::DeviceFailed { adapter: "GPU".into(), error: "out of memory".into() });
     assert_eq!(failed.text(), "The graphics adapter GPU could not be opened: out of memory");
 }
+
+mod audio_tracks {
+    use studiocraft_audio_tracks::journal::{self, Line};
+    use studiocraft_model::AudioTracksWhen;
+
+    use super::*;
+
+    fn studio(name: &str, enabled: bool) -> (Studio, std::path::PathBuf) {
+        let dir = std::env::temp_dir().join(format!("studiocraft-tracks-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut p = Profile::default();
+        p.output.folder = dir.to_string_lossy().into_owned();
+        p.audio_tracks.enabled = enabled;
+        p.audio_tracks.when = AudioTracksWhen::Streaming;
+        p.audio_tracks.buffer_mib = 16;
+        let mut s = studio_with(None, SceneCollection::new("Test", "Scene"), p);
+        s.run("source.add", &json!({"kind": "audio_input", "name": "Mic"})).unwrap();
+        s.run("source.add", &json!({"kind": "audio_output", "name": "Desk"})).unwrap();
+        s.run("source.monitor", &json!({"source": "Desk", "mode": "monitor_only"})).unwrap();
+        (s, dir)
+    }
+
+    fn sources(s: &Studio) -> Vec<SourceId> {
+        s.audio_tracks.recorded.clone()
+    }
+
+    /// Tick until the running take is ready. Bounded by a count of ticks, so a fault fails the
+    /// test instead of hanging it.
+    fn armed(s: &mut Studio) {
+        let mut spins = 0u64;
+        while !s.audio_tracks_take().is_some_and(|t| t.status().ready()) {
+            spins += 1;
+            assert!(spins < 50_000_000, "the take never became ready");
+            s.tick();
+            std::thread::yield_now();
+        }
+    }
+
+    #[test]
+    fn with_the_setting_off_nothing_is_made() {
+        let (mut s, dir) = studio("off", false);
+        s.test_streaming = true;
+        s.tick();
+        s.run("source.set_record_track", &json!({"source": "Mic", "on": true})).unwrap();
+        s.tick();
+        assert!(s.audio_tracks_idle(), "no take, tap, thread or repair");
+        assert_eq!(s.mixer.taps_applied(), 0);
+        assert!(!dir.exists(), "no folder is made");
+        assert_eq!(s.state_json()["audio_tracks"]["active"], json!(false));
+    }
+
+    #[test]
+    fn a_take_records_at_most_64_tracks() {
+        let (mut s, dir) = studio("many", true);
+        for n in 0..70 {
+            s.run("source.add", &json!({"kind": "audio_input", "name": format!("Mic {n}")})).unwrap();
+        }
+        // Mic and the 70 added sources want tracks; with the program that is 72.
+        assert_eq!(s.audio_track_sources(), studiocraft_audio_tracks::MAX_TRACKS - 1);
+        s.test_streaming = true;
+        s.tick();
+        armed(&mut s);
+        assert_eq!(sources(&s).len(), studiocraft_audio_tracks::MAX_TRACKS - 1);
+        assert_eq!(s.audio_tracks.slots.len(), studiocraft_audio_tracks::MAX_TRACKS - 1, "no tap for the sources after the limit");
+        assert!(s.audio_tracks_source_limit(), "the sources left out are reported");
+        assert_eq!(s.state_json()["audio_tracks"]["source_limit"], json!(true));
+        // With 9 fewer sources set to record, every one fits.
+        for n in 0..9 {
+            s.run("source.set_record_track", &json!({"source": format!("Mic {n}"), "on": false})).unwrap();
+        }
+        s.tick();
+        assert!(!s.audio_tracks_source_limit());
+        s.test_streaming = false;
+        s.tick();
+        drop(s);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_take_records_the_program_and_the_program_sources_and_follows_changes() {
+        let (mut s, dir) = studio("on", true);
+        s.test_streaming = true;
+        s.tick();
+        assert_eq!(s.audio_tracks.generation, 1, "the taps go to the mixer with the take's start");
+        armed(&mut s);
+        assert_eq!(s.audio_tracks.generation, 1, "an unchanged collection sends nothing more");
+        assert_eq!(s.state_json()["audio_tracks"]["anchor"], json!("stream"));
+        let mic = s.collection().source_by_name("Mic").map(|x| x.id).unwrap();
+        let desk = s.collection().source_by_name("Desk").map(|x| x.id).unwrap();
+        assert!(s.audio_tracks_take().is_some());
+        assert_eq!(sources(&s), [mic], "a monitor-only source is left out until it is set");
+        assert!(s.audio_tracks.program.is_some());
+        s.run("source.set_record_track", &json!({"source": "Desk", "on": true})).unwrap();
+        assert_eq!(sources(&s), [mic, desk]);
+        s.run("source.set_record_track", &json!({"source": "Mic", "on": false})).unwrap();
+        assert_eq!(sources(&s), [desk]);
+        assert_eq!(s.state_json()["audio_tracks"]["state"], json!("recording"));
+        // A new write buffer applies from the next take, and the status says which one runs.
+        let mut p = s.profile().clone();
+        p.audio_tracks.buffer_mib = 32;
+        s.set_profile(p).unwrap();
+        let status = s.state_json()["audio_tracks"].clone();
+        assert_eq!((status["buffer_mib"].clone(), status["take_buffer_mib"].clone()), (json!(32), json!(16)));
+        s.test_streaming = false;
+        s.tick();
+        assert!(s.state_json()["audio_tracks"].get("take_buffer_mib").is_none());
+        assert!(s.audio_tracks_take().is_none() && s.audio_tracks.slots.is_empty(), "stop removes the taps at once");
+        s.finish_audio_tracks_blocking();
+        let take = std::fs::read_dir(&dir).unwrap().flatten().map(|e| e.path()).find(|p| p.to_string_lossy().contains("Stream ")).unwrap();
+        let lines = journal::read(&take.join("Audio Files")).unwrap();
+        assert!(matches!(lines.last(), Some(Line::End { .. })), "{lines:?}");
+        drop(s);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_new_collection_during_a_take_gives_its_sources_their_own_files() {
+        let (mut s, dir) = studio("replace", true);
+        s.test_streaming = true;
+        s.tick();
+        armed(&mut s);
+        let mic = s.collection().source_by_name("Mic").map(|x| x.id).unwrap();
+        s.load_collection(SceneCollection::new("Other", "Scene"));
+        s.run("source.add", &json!({"kind": "audio_input", "name": "Guitar"})).unwrap();
+        let guitar = s.collection().source_by_name("Guitar").map(|x| x.id).unwrap();
+        assert_eq!(guitar, mic, "the new collection reuses the id");
+        s.tick();
+        let status = Arc::clone(s.audio_tracks_status().unwrap());
+        s.test_streaming = false;
+        s.tick();
+        s.finish_audio_tracks_blocking();
+        assert_eq!(status.tracks(), 3, "the program, Mic and Guitar each have a track");
+        drop(s);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_full_disk_stops_only_the_audio_tracks_and_removes_their_taps() {
+        let (mut s, dir) = studio("full", true);
+        s.test_faults.full_after_bytes = Some(0);
+        s.test_streaming = true;
+        s.tick();
+        armed(&mut s);
+        let status = Arc::clone(s.audio_tracks_status().unwrap());
+        // The mixer fills the first chunk; the disk thread's write of it fails. The loop is
+        // bounded by a count of yields, so a fault fails the test instead of hanging it.
+        let mut spins = 0u64;
+        while status.state() != Some(AudioTracksState::Stopped) {
+            spins += 1;
+            assert!(spins < 200_000_000, "the take never stopped: {:?}", status.state());
+            std::thread::yield_now();
+        }
+        s.tick();
+        assert_eq!(status.reason(), Some(AudioTracksStopReason::DiskFull));
+        assert!(s.audio_tracks_take().is_none() && s.audio_tracks.slots.is_empty() && s.audio_tracks.program.is_none());
+        let generation = s.audio_tracks.generation;
+        let notices: Vec<String> = s.take_notices().into_iter().map(|n| n.text()).collect();
+        assert!(notices.iter().any(|n| n.starts_with("Audio tracks stopped at ") && n.ends_with(": the disk is full")), "{notices:?}");
+        // Its threads end; the stop was reported once and is not reported again.
+        let mut spins = 0u64;
+        while !s.audio_tracks.finishing.is_empty() {
+            spins += 1;
+            assert!(spins < 200_000_000, "the take never finished");
+            s.tick();
+            std::thread::yield_now();
+        }
+        let again: Vec<String> = s.take_notices().into_iter().map(|n| n.text()).collect();
+        assert!(!again.iter().any(|n| n.starts_with("Audio tracks stopped")), "reported twice: {again:?}");
+        s.tick();
+        assert!(s.audio_tracks_take().is_none(), "no new take while the stream still runs");
+        assert_eq!(s.audio_tracks.generation, generation);
+        assert_eq!(s.state_json()["audio_tracks"]["reason"], json!("the disk is full"));
+        s.test_streaming = false;
+        s.tick();
+        s.test_faults.full_after_bytes = None;
+        s.test_streaming = true;
+        s.tick();
+        assert!(s.audio_tracks_take().is_some(), "the next stream starts a take again");
+        drop(s);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_output_that_stops_in_the_tick_that_sees_an_early_stop_lets_the_next_one_record() {
+        let (mut s, dir) = studio("full-then-stop", true);
+        s.test_faults.full_after_bytes = Some(0);
+        s.test_streaming = true;
+        s.tick();
+        armed(&mut s);
+        let status = Arc::clone(s.audio_tracks_status().unwrap());
+        let mut spins = 0u64;
+        while status.state() != Some(AudioTracksState::Stopped) {
+            spins += 1;
+            assert!(spins < 200_000_000, "the take never stopped: {:?}", status.state());
+            std::thread::yield_now();
+        }
+        // The stream stops before the studio sees the early stop; both are seen in one tick.
+        s.test_streaming = false;
+        s.tick();
+        s.test_faults.full_after_bytes = None;
+        s.test_streaming = true;
+        s.tick();
+        assert!(s.audio_tracks_take().is_some(), "the next stream starts a take");
+        drop(s);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn settings_out_of_range_are_refused_and_change_nothing() {
+        let (mut s, dir) = studio("range", false);
+        let mut p = s.profile().clone();
+        p.audio_tracks.enabled = true;
+        p.audio_tracks.segment_gib = 0;
+        let e = s.set_profile(p).unwrap_err().to_string();
+        assert!(e.contains("audio_tracks.segment_gib"), "{e}");
+        assert!(!s.profile().audio_tracks.enabled, "the settings stay as they were");
+        drop(s);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_write_that_fails_while_the_take_finishes_is_reported() {
+        let (mut s, dir) = studio("finish-full", true);
+        s.test_faults.full_after_bytes = Some(0);
+        s.test_streaming = true;
+        s.tick();
+        armed(&mut s);
+        let status = Arc::clone(s.audio_tracks_status().unwrap());
+        // Some audio reaches the collect thread, less than a chunk, so nothing is written yet.
+        let mut spins = 0u64;
+        while status.seconds() == 0.0 {
+            spins += 1;
+            assert!(spins < 200_000_000, "no audio reached the take");
+            std::thread::yield_now();
+        }
+        s.test_streaming = false;
+        s.tick();
+        let early: Vec<String> = s.take_notices().into_iter().map(|n| n.text()).collect();
+        assert!(!early.iter().any(|n| n.starts_with("Audio tracks stopped")), "stopping is not an error: {early:?}");
+        // The last chunk is written while the take finishes, and that write fails.
+        let mut spins = 0u64;
+        while !s.audio_tracks.finishing.is_empty() {
+            spins += 1;
+            assert!(spins < 200_000_000, "the take never finished");
+            s.tick();
+            std::thread::yield_now();
+        }
+        assert_eq!(status.state(), Some(AudioTracksState::Stopped));
+        let notices: Vec<String> = s.take_notices().into_iter().map(|n| n.text()).collect();
+        assert!(notices.iter().any(|n| n.starts_with("Audio tracks stopped at ") && n.ends_with(": the disk is full")), "{notices:?}");
+        drop(s);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_take_follows_the_recording_when_it_starts_and_is_thrown_away_when_it_fails() {
+        let (mut s, dir) = studio("anchor", true);
+        let mut p = s.profile().clone();
+        p.audio_tracks.when = AudioTracksWhen::Either;
+        s.set_profile(p).unwrap();
+        s.test_streaming = true;
+        s.tick();
+        armed(&mut s);
+        assert_eq!(s.state_json()["audio_tracks"]["anchor"], json!("stream"));
+        // A recording starts while the stream runs: the stream's take ends and one beside the
+        // recording starts before the recording's first sample.
+        let rec = dir.join("2026-11-18 21-00-00.mkv");
+        let now = s.clock.now();
+        s.audio_tracks_output_starting(OutputKind::Recording, now, Some(&rec));
+        assert_eq!(s.state_json()["audio_tracks"]["anchor"], json!("recording"));
+        assert_eq!(s.audio_tracks.finishing.len(), 1);
+        // The recording does not start: its take, folder and files are removed, and the stream's
+        // take continues at once from where it ended.
+        s.audio_tracks_output_failed(OutputKind::Recording);
+        assert!(s.audio_tracks_take().is_some(), "the stream has a take again");
+        assert_eq!(s.state_json()["audio_tracks"]["anchor"], json!("stream"));
+        s.test_streaming = false;
+        s.tick();
+        s.finish_audio_tracks_blocking();
+        assert!(!dir.join("2026-11-18 21-00-00 Audio").exists(), "the take of a recording that never started leaves nothing");
+        let streams: Vec<std::path::PathBuf> = std::fs::read_dir(&dir)
+            .unwrap()
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| p.file_name().is_some_and(|n| n.to_string_lossy().starts_with("Stream ")))
+            .collect();
+        assert_eq!(streams.len(), 2, "the stream's take before the recording and the one after it");
+        // The stream started at tick 0 in this test, so the second take's time reference is
+        // where the first one ended.
+        let mut offsets: Vec<u64> = streams
+            .iter()
+            .filter_map(|d| journal::read(&d.join("Audio Files")).ok())
+            .filter_map(|lines| {
+                lines.into_iter().find_map(|l| match l {
+                    Line::Start { offset_frames, .. } => Some(offset_frames),
+                    _ => None,
+                })
+            })
+            .collect();
+        offsets.sort_unstable();
+        assert_eq!(offsets.len(), 2);
+        assert_eq!(offsets[1], u64::try_from(now.0 / studiocraft_audio_tracks::collect::FRAME_TICKS).unwrap());
+        drop(s);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn audio_tracks_status_and_repair_are_commands() {
+        let (mut s, dir) = studio("cmd", false);
+        let (v, _) = s.run("audio_tracks.status", &json!({})).unwrap();
+        assert_eq!((v["enabled"].clone(), v["buffer_mib"].clone()), (json!(false), json!(16)));
+        std::fs::create_dir_all(&dir).unwrap();
+        // The repair runs on its own thread and the command returns at once.
+        let (v, _) = s.run("audio_tracks.repair", &json!({"folder": dir.to_string_lossy()})).unwrap();
+        assert_eq!(v["started"], json!(true));
+        assert_eq!(s.state_json()["audio_tracks"]["repairing"], json!(true));
+        assert_eq!(s.audio_tracks_repair_result(), Some(json!({"repaired": [], "failed": []})));
+        assert_eq!(s.state_json()["audio_tracks"]["repairing"], json!(false));
+        assert_eq!(s.state_json()["audio_tracks"]["last_repair"], json!({"repaired": [], "failed": []}));
+        let missing = s.run("audio_tracks.repair", &json!({"folder": dir.join("missing").to_string_lossy()}));
+        assert!(missing.is_err(), "a folder that is not there is an error");
+        assert_eq!(s.state_json()["audio_tracks"]["repairing"], json!(false), "and starts no repair");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}

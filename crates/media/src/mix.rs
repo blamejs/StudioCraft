@@ -45,6 +45,34 @@ pub fn mix_into(out: &mut [f32], input: &[f32], gain: f32) -> BlockLevels {
     BlockLevels { peak, rms: sum.map(|s| (s / frames).sqrt()) }
 }
 
+/// [`mix_into`] that also stores what it adds into `tap`, in the same pass: `tap[i]` becomes
+/// `input[i] * gain`. Samples of `tap` past the shorter of `out` and `input` are left alone.
+pub fn mix_into_tap(out: &mut [f32], input: &[f32], gain: f32, tap: &mut [f32]) -> BlockLevels {
+    let gain = if gain.is_finite() { gain.max(0.0) } else { 0.0 };
+    let mut peak = [0f32; CHANNELS];
+    let mut sum = [0f32; CHANNELS];
+    let frames_out = out.as_chunks_mut::<CHANNELS>().0.iter_mut();
+    for ((frame_out, frame_in), frame_tap) in frames_out.zip(input.as_chunks::<CHANNELS>().0).zip(tap.as_chunks_mut::<CHANNELS>().0) {
+        for c in 0..CHANNELS {
+            let s = frame_in[c] * gain;
+            frame_out[c] += s;
+            frame_tap[c] = s;
+            peak[c] = peak[c].max(s.abs());
+            sum[c] += s * s;
+        }
+    }
+    let frames = (input.len().min(out.len()).min(tap.len()) / CHANNELS).max(1) as f32;
+    BlockLevels { peak, rms: sum.map(|s| (s / frames).sqrt()) }
+}
+
+/// Store `input * gain` into `out`, sample by sample, as far as the shorter of the two goes.
+pub fn scale_into(out: &mut [f32], input: &[f32], gain: f32) {
+    let gain = if gain.is_finite() { gain.max(0.0) } else { 0.0 };
+    for (o, s) in out.iter_mut().zip(input) {
+        *o = s * gain;
+    }
+}
+
 /// The levels of `block` without mixing it anywhere.
 pub fn measure(block: &[f32], gain: f32) -> BlockLevels {
     let mut scratch = [0f32; BLOCK_SAMPLES];
@@ -155,6 +183,21 @@ mod tests {
         assert!((l.rms[1] - 0.25).abs() < 1e-6);
         let none = mix_into(&mut out, &input, f32::NAN);
         assert_eq!(none.peak, [0.0, 0.0]);
+    }
+
+    #[test]
+    fn mixing_with_a_tap_adds_the_same_and_stores_what_it_added() {
+        let input: Vec<f32> = (0..BLOCK_SAMPLES).map(|i| (i % 50) as f32 / 100.0 - 0.25).collect();
+        let (mut plain, mut tapped) = (vec![0.1f32; BLOCK_SAMPLES], vec![0.1f32; BLOCK_SAMPLES]);
+        let mut tap = vec![9.0f32; BLOCK_SAMPLES];
+        let a = mix_into(&mut plain, &input, 0.7);
+        let b = mix_into_tap(&mut tapped, &input, 0.7, &mut tap);
+        assert_eq!(plain, tapped, "the mix is the same with or without a tap");
+        assert_eq!(a, b, "and so are the levels");
+        assert!(tap.iter().zip(&input).all(|(t, s)| *t == s * 0.7), "the tap holds exactly what was added");
+        let mut tap = vec![9.0f32; BLOCK_SAMPLES];
+        mix_into_tap(&mut tapped, &input, f32::NAN, &mut tap);
+        assert!(tap.iter().all(|t| *t == 0.0), "a gain that is not a number adds silence and stores it");
     }
 
     #[test]
