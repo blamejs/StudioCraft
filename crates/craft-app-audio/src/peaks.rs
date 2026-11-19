@@ -48,13 +48,20 @@ impl PeakTable {
     pub(crate) fn set(&self, slot: usize, peak: f32) {
         if let Some(s) = self.slots.get(slot) {
             let p = if peak.is_finite() { peak.clamp(0.0, 1.0) } else { 0.0 };
-            s.peak.store(p.to_bits(), Ordering::Relaxed);
+            // Released, so a reader that sees this level also sees the key the row had then.
+            s.peak.store(p.to_bits(), Ordering::Release);
         }
     }
 
-    /// The peak level in row `slot`, when that row still belongs to `key`.
+    /// The peak level in row `slot`, when that row belongs to `key` both before and after the
+    /// level is read, so a row given to another application meanwhile reads `None`.
     pub fn get(&self, slot: u8, key: &AppKey) -> Option<f32> {
         let s = self.slots.get(usize::from(slot))?;
-        (s.key.load(Ordering::Acquire) == key.id()).then(|| f32::from_bits(s.peak.load(Ordering::Relaxed)))
+        let id = key.id();
+        if s.key.load(Ordering::Acquire) != id {
+            return None;
+        }
+        let peak = f32::from_bits(s.peak.load(Ordering::Acquire));
+        (s.key.load(Ordering::Acquire) == id).then_some(peak)
     }
 }

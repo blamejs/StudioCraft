@@ -42,7 +42,7 @@ show PipeWire's devices by their descriptions, with the default device first.
 
 An Application audio capture source records what one application plays, and nothing else the
 computer plays. Its Properties list the running applications that have an audio session on any
-active playback device, with the ones playing sound first. The capture also records the processes
+active playback device, with the ones whose audio stream is running first. The capture also records the processes
 the application starts. The source names the application by
 its program file and folder, so it keeps capturing after the application quits and starts again,
 and after an update moves the program when no other program with that file name runs.
@@ -50,9 +50,9 @@ Applications whose program files share a name are listed with their folders. Whi
 application is not running, the source is silent. When a capture fails, the source opens it again
 after 250 ms, 500 ms, 1 s, 2 s and then every 5 s, and the source's status shows the error. At
 most 32 applications are captured at once. When several separate copies of one program run, the
-list shows one entry for them and the source captures one copy, the one playing sound. It
-switches when another copy starts playing instead, and two copies playing at once are not
-captured together.
+list shows one entry for them and the source captures one copy, the one whose audio stream is
+running. It switches when another copy's stream starts running instead, and two copies playing at
+once are not captured together.
 
 Capturing one application uses Windows process loopback capture
 ([`AUDIOCLIENT_PROCESS_LOOPBACK_PARAMS`](https://learn.microsoft.com/en-us/windows/win32/api/audioclientactivationparams/ns-audioclientactivationparams-audioclient_process_loopback_params)),

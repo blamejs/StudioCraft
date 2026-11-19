@@ -18,7 +18,8 @@ pub struct AppInfo {
     /// has the same name, so capturing it with its child processes includes every process of the
     /// application.
     pub target_pid: u32,
-    /// Whether the application plays sound now.
+    /// Whether one of the application's audio sessions is active: a stream is running, which may
+    /// be paused or silent. The level is in the peak row.
     pub playing: bool,
     /// The application's row in the [`crate::PeakTable`], or `None` past the table's last row.
     pub slot: Option<u8>,

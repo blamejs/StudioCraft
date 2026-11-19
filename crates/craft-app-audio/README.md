@@ -28,7 +28,9 @@ On Windows the key is the program file's name. A capture targets the topmost pro
 parent chain whose file has the same name, and includes that process's child processes, so an
 application that plays from several processes is captured whole. When separate instances of one
 program run, each with its own process tree, the list shows them as one application and a
-capture takes one tree: a playing instance before a silent one, then the lowest process id. A
+capture takes one tree: an instance with an active audio session before one without, then the
+lowest process id. An active session has a running stream, which may be paused or silent; the
+meter gives the level. A
 source captures again when that choice changes. Two instances that play at once are not captured
 together. Sessions shared by several processes and the system sounds session are not listed.
 

@@ -178,7 +178,9 @@ code: `MJPG`, `YUYV`, `NV12`, `GREY`, `RGB3` or `BGR3`), or `""` for the camera'
 
 The engine commands `app_audio.list` and `app_audio.status` also only read, and take no
 parameters. `app_audio.list` returns `{"supported", "error", "apps"}`: each application has `app`,
-`name`, `path`, `pids`, `target_pid`, `playing` and `peak`. Each `app_audio.list` keeps the
+`name`, `path`, `pids`, `target_pid`, `playing` and `peak`. `playing` is true while one of the
+application's audio sessions is active, which includes a paused or silent stream; `peak` gives the
+level. Each `app_audio.list` keeps the
 application list current for the next 60 s and has the meters read for the next 2 s, so `peak` is
 0 on a first call and the newest level, 0 to 1, on a call made within 2 s of the one before.
 `peak` is `null` for an application past the 64th, which has no meter row.
