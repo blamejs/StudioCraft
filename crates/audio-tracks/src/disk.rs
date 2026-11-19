@@ -465,9 +465,11 @@ impl Writer {
         // journal stays open, for repair to finish.
         if ok {
             self.end = self.files.iter().flatten().map(|f| f.base + f.frames).max().unwrap_or(0).max(self.end);
-            let _ = self.journal.write(&Line::End { frames: self.end });
+            ok = self.journal.write(&Line::End { frames: self.end }).is_ok();
         }
-        let _ = self.journal.sync();
+        if self.journal.sync().is_ok() && ok {
+            let _ = self.journal.release();
+        }
     }
 
     fn check_space(&mut self) -> Result<(), Failure> {
@@ -526,7 +528,10 @@ impl Writer {
             f.file.sync_all().map_err(Failure::io)?;
         }
         self.journal.write(&Line::End { frames: self.end }).map_err(Failure::io)?;
-        self.journal.sync().map_err(Failure::io)
+        self.journal.sync().map_err(Failure::io)?;
+        // The take is complete on the disk, so a failed release does not fail the take.
+        let _ = self.journal.release();
+        Ok(())
     }
 
     fn write_chunk(&mut self, chunk: &Chunk) -> Result<(), Failure> {

@@ -30,6 +30,7 @@ crate in the same layer. `cargo xtask layers` checks this against the table in
 | L0 | `craft-hwenc-native` | Hardware encoders called through their drivers: NVENC H.264 and HEVC from NV12 or P010 frames on Windows (Direct3D 11) and 64-bit Linux (CUDA), the Windows Media Foundation and macOS VideoToolbox hardware H.264 and HEVC encoders from NV12 frames, the Annex B helpers, and the `avcC` and `hvcC` records. Its private `nvenc_ffi`, `mf_ffi` and `vt_ffi` modules are the only code that calls the drivers. It depends on no StudioCraft crate. |
 | L0 | `craft-app-audio` | Per-application audio: the running applications that have audio, kept current by one discovery thread, a lock-free peak meter for each, and the capture of one application's audio as 48 kHz stereo `f32` with backoff, stall detection and a limit of 32 captures. Windows build 20348 and later capture through WASAPI process loopback; other systems report it as unsupported. It depends on no StudioCraft crate. |
 | L1 | `studiocraft-plugin` | The `Source`, `Filter`, `Transition`, `Encoder` and `Output` traits and the `Registry` they are registered in. |
+| L1 | `craft-rtmp` | A blocking RTMP and RTMPS publish client on `std::net`: the handshake, chunking, the `connect`, `createStream`, `publish` and `deleteStream` commands, acknowledgements, and a timeout on every step, with the stream key kept out of errors and `Debug` output. It sends `craft-flv` bodies, starts no threads, and is built for native targets only. It depends on no StudioCraft crate. |
 | L2 | `studiocraft-engine` | Commands with stable ids, undo and redo, source threads, the audio mixer thread and the frame scheduler. |
 | L2 | `studiocraft-render` | The wgpu compositor: scenes, filters, transitions, and frame conversion for encoders. |
 | L2 | `studiocraft-platform` | Display, window, camera and audio capture, locating ffmpeg, and opening folders and links. |
@@ -67,9 +68,9 @@ gives no value for that column.
 | Thread | Input queue | Bound | Drop policy | Cost per frame |
 | --- | --- | --- | --- | --- |
 | Source | None; it publishes video into a `VideoOut` slot and audio into a lock-free queue | The audio queue holds 32 blocks (`plugin::source::AUDIO_QUEUE_BLOCKS`), and at each tick the mixer keeps at most 4 (`engine::mixer::MAX_QUEUED_BLOCKS`) | A full queue drops its oldest block, and the mixer drops the oldest blocks beyond 4 | |
-| Audio capture | The device's thread | On Linux, a conversion buffer allocated before the stream starts; a feed keeps at most 16 blocks per callback (`sources::FEED_BLOCKS`, about 340 ms) | Blocks past 16 in one callback drop the oldest and are counted | |
+| Audio capture | The device's thread | On Linux, a conversion buffer allocated before the stream starts; a feed keeps at most 32 blocks per callback (`plugin::source::AUDIO_QUEUE_BLOCKS`, about 680 ms) | Blocks past 32 in one callback drop the oldest and are counted | |
 | Application audio discovery | System notifications and commands | A command queue of 16 (`craft_app_audio::discovery::COMMANDS`); the list is one `Arc<AppList>` slot, and the meters are 64 atomic rows | A full command queue drops the command; a new list replaces the old one | A scan every 1 s, and at most every 250 ms after notifications; meter reads 30 times a second while a caller asks for them |
-| Application audio capture | The system's packets, waited for 200 ms at a time | Buffers sized for the largest packet so far (250 ms to start, 2 s at most); a feed keeps at most 16 blocks per call (`sources::FEED_BLOCKS`) | Blocks past 16 in one call drop the oldest and are counted | 3.77 µs to turn a 10 ms packet into blocks, without allocating |
+| Application audio capture | The system's packets, waited for 200 ms at a time | Buffers sized for the largest packet so far (250 ms to start, 2 s at most); a feed keeps at most 32 blocks per call (`plugin::source::AUDIO_QUEUE_BLOCKS`) | Blocks past 32 in one call drop the oldest and are counted | 3.77 µs to turn a 10 ms packet into blocks, without allocating |
 | Screen capture (Linux) | The PipeWire stream | `FrameSlot`: the newest frame and up to 2 spares | A newer frame replaces a frame the source has not taken | One copy of the picture |
 | Camera capture | The camera library | `FrameSlot`: the newest frame and up to 2 spares | A newer frame replaces a frame the source has not taken; a frame that cannot be converted goes back to the spares | One conversion of the picture |
 | Mixer | One 1024-frame block from every audible source | 4 blocks per source; each output's audio queue holds 256 blocks | The oldest source blocks beyond 4 are dropped | No allocation; the delay lines are allocated with the input list |
@@ -480,8 +481,14 @@ Release file names and package ids are in [docs/releasing.md](releasing.md#file-
   | Windows Media Foundation H.264 or HEVC (built in) | `craft-hwenc-native`, which loads `mfplat.dll` at run time |
   | Apple VideoToolbox H.264 or HEVC (built in) | `craft-hwenc-native` on macOS, which calls the VideoToolbox framework |
 
-  `craft-flv` writes and reads the FLV tags and AMF0 values that RTMP carries, and `craft-packet`
-  fans encoded packets out to several destinations. No output uses either yet.
+  `craft-flv` writes and reads the FLV tags and AMF0 values that RTMP carries, `craft-packet`
+  fans encoded packets out to several destinations, and `craft-rtmp` publishes a stream to an RTMP
+  or RTMPS server. No output uses them yet.
+- **Media files.** The media file source plays an Ogg file that holds one Vorbis stream at 8 to
+  192 kHz and nothing else on a thread of its own, with the `craft-media` Ogg reader and the
+  `craft-audio` Vorbis decoder. The thread holds the file's packet index and one packet at a time,
+  and waits for each packet's time before publishing it. Every other file, chained Ogg files and
+  Vorbis streams at other rates included, plays through two ffmpeg processes.
 
 ## Dependency licenses
 

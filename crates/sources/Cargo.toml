@@ -16,11 +16,14 @@ craft-font-catalog.workspace = true
 craft-color-transform.workspace = true
 craft-audio-dsp.workspace = true
 craft-app-audio.workspace = true
+craft-audio = { workspace = true, features = ["vorbis-decode"] }
+craft-media = { workspace = true, features = ["ogg"] }
 ab_glyph.workspace = true
 serde_json.workspace = true
 log.workspace = true
 
 [dev-dependencies]
+craft-audio = { workspace = true, features = ["vorbis-encode"] }
 craft-color.workspace = true
 image.workspace = true
 jpeg-encoder.workspace = true
