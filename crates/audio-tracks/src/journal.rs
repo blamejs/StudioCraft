@@ -79,7 +79,7 @@ impl Journal {
         }
     }
 
-    /// Create the journal in `dir`, locked for as long as the journal is open. [`Journal::open_idle`]
+    /// Create the journal in `dir`, locked until it is released or closed. [`Journal::open_idle`]
     /// skips a locked journal, so repair never touches a take that is still being written.
     pub fn create(dir: &Path) -> std::io::Result<Journal> {
         // Write access, not append: cutting back a failed write sets the length, which needs it
@@ -147,6 +147,13 @@ impl Journal {
 
     pub fn sync(&mut self) -> std::io::Result<()> {
         self.file.sync_data()
+    }
+
+    /// Release the lock once the `End` line is on the disk. Repair leaves a take that ended alone,
+    /// and on Windows a locked journal cannot be read through another handle, so [`read`] and
+    /// [`ended`] answer for the take while this handle is still open.
+    pub fn release(&mut self) -> std::io::Result<()> {
+        self.file.unlock()
     }
 }
 
@@ -250,7 +257,10 @@ mod tests {
         for n in 0..4_000 {
             j.write(&Line::Sync { tracks: vec![(0, n), (1, n)] }).unwrap();
         }
+        // On Windows a journal is read through another handle only once its lock is off.
+        drop(j);
         assert!(!ended(&dir).unwrap());
+        let (mut j, _) = Journal::open_idle(&dir).unwrap().unwrap();
         j.write(&Line::End { frames: 4_000 }).unwrap();
         drop(j);
         assert!(std::fs::metadata(dir.join(FILE_NAME)).unwrap().len() > TAIL_BYTES);
@@ -260,6 +270,20 @@ mod tests {
         f.set_len(MAX_BYTES + 1).unwrap();
         drop(f);
         assert!(!ended(&dir).unwrap(), "a journal that ends in zeros did not end");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_released_journal_reads_while_its_handle_is_open() {
+        let dir = scratch("released");
+        let mut j = Journal::create(&dir).unwrap();
+        j.write(&Line::End { frames: 0 }).unwrap();
+        j.sync().unwrap();
+        j.release().unwrap();
+        assert_eq!(read(&dir).unwrap(), [Line::End { frames: 0 }]);
+        assert!(ended(&dir).unwrap());
+        assert!(Journal::open_idle(&dir).unwrap().is_some(), "the lock is off");
+        drop(j);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

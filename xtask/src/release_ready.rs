@@ -169,22 +169,52 @@ pub fn merged_in_range(prs: Vec<PullRequest>, commits: &HashSet<String>) -> Vec<
     merged
 }
 
-/// One `- #N title by @author` line for each pull request.
+/// One ``- #N `title` by @author`` line for each pull request, with the title written by
+/// [`code_span`].
 pub fn pull_request_list(prs: &[PullRequest]) -> String {
     prs.iter()
         .map(|pr| {
-            if pr.author.is_empty() {
-                format!("- #{} {}\n", pr.number, pr.title)
-            } else {
-                format!("- #{} {} by @{}\n", pr.number, pr.title, pr.author)
+            let mut line = format!("- #{}", pr.number);
+            let title = code_span(&pr.title);
+            if !title.is_empty() {
+                line.push(' ');
+                line.push_str(&title);
             }
+            if !pr.author.is_empty() {
+                line.push_str(" by @");
+                line.push_str(&pr.author);
+            }
+            line.push('\n');
+            line
         })
         .collect()
 }
 
+/// `text` as a Markdown code span on one line, so GitHub shows it as written: no emphasis, links,
+/// HTML, entities, mentions or references. Each control character, line breaks included, becomes
+/// a space. The fence is one backtick longer than the longest run of backticks in `text`, with a
+/// space inside each end when `text` starts or ends with a backtick or a space. Text that is empty
+/// or only spaces gives an empty string.
+pub fn code_span(text: &str) -> String {
+    let text: String = text.chars().map(|c| if c.is_control() { ' ' } else { c }).collect();
+    if text.trim_matches(' ').is_empty() {
+        return String::new();
+    }
+    let mut longest = 0;
+    let mut run = 0;
+    for c in text.chars() {
+        run = if c == '`' { run + 1 } else { 0 };
+        longest = longest.max(run);
+    }
+    let fence = "`".repeat(longest + 1);
+    let pad = if text.starts_with(['`', ' ']) || text.ends_with(['`', ' ']) { " " } else { "" };
+    format!("{fence}{pad}{text}{pad}{fence}")
+}
+
 /// `template` with `{{version}}`, `{{count}}`, `{{since}}`, `{{pull_requests}}` and `{{changes}}`
 /// filled in. `{{changes}}` is the compare link from the previous tag, or the commit list of `tag`
-/// for the first alpha.
+/// for the first alpha. `{{pull_requests}}` is filled in last, so a placeholder in a title stays
+/// as written.
 pub fn render_notes(template: &str, version: &str, tag: &str, previous: Option<&str>, repo: &str, prs: &[PullRequest]) -> String {
     let since = previous.map_or_else(|| "the start of the repository".to_string(), |p| p.to_string());
     let changes = match previous {
@@ -195,8 +225,8 @@ pub fn render_notes(template: &str, version: &str, tag: &str, previous: Option<&
         .replace("{{version}}", version)
         .replace("{{count}}", &prs.len().to_string())
         .replace("{{since}}", &since)
-        .replace("{{pull_requests}}", pull_request_list(prs).trim_end())
         .replace("{{changes}}", &changes)
+        .replace("{{pull_requests}}", pull_request_list(prs).trim_end())
 }
 
 #[cfg(test)]
@@ -262,11 +292,50 @@ mod tests {
         let first = render_notes(template, "0.1.0-alpha.1", "v0.1.0-alpha.1", None, "o/r", &prs);
         assert_eq!(
             first,
-            "0.1.0-alpha.1: 2 since the start of the repository\n- #1 Change 1 by @someone\n- #2 Change 2 by @someone\n\
+            "0.1.0-alpha.1: 2 since the start of the repository\n- #1 `Change 1` by @someone\n- #2 `Change 2` by @someone\n\
              https://github.com/o/r/commits/v0.1.0-alpha.1\n"
         );
         let next = render_notes(template, "0.1.0-alpha.2", "v0.1.0-alpha.2", Some("v0.1.0-alpha.1"), "o/r", &[]);
         assert_eq!(next, "0.1.0-alpha.2: 0 since v0.1.0-alpha.1\n\nhttps://github.com/o/r/compare/v0.1.0-alpha.1...v0.1.0-alpha.2\n");
+    }
+
+    #[test]
+    fn code_span_holds_any_title() {
+        assert_eq!(code_span("Outputs: a change"), "`Outputs: a change`");
+        assert_eq!(code_span("<b>&amp; @someone #12 https://example.com</b>"), "`<b>&amp; @someone #12 https://example.com</b>`");
+        // The fence is longer than any run of backticks inside, padded when an end is a backtick.
+        assert_eq!(code_span("a `b` c"), "``a `b` c``");
+        assert_eq!(code_span("``x``"), "``` ``x`` ```");
+        assert_eq!(code_span("`"), "`` ` ``");
+        assert_eq!(code_span(" lead"), "`  lead `");
+        // Control characters, line breaks included, become spaces.
+        assert_eq!(code_span("a\nb\r\nc\td\u{1b}[31m"), "`a b  c d [31m`");
+        assert_eq!(code_span("\n## heading"), "`  ## heading `");
+        assert_eq!(code_span("Übersicht: 日本語"), "`Übersicht: 日本語`");
+        assert_eq!(code_span(""), "");
+        assert_eq!(code_span(" \n "), "");
+    }
+
+    #[test]
+    fn titles_are_plain_text_in_the_notes() {
+        let mut hostile = pr(7, "a");
+        hostile.title = "<img src=x onerror=alert(1)> [link](https://example.com) **bold** `code` &amp; @someone\r\n## heading".into();
+        let template = "{{pull_requests}}\n{{changes}}\n";
+        let notes = render_notes(template, "0.1.0-alpha.1", "v0.1.0-alpha.1", None, "o/r", &[hostile]);
+        assert_eq!(
+            notes,
+            "- #7 ``<img src=x onerror=alert(1)> [link](https://example.com) **bold** `code` &amp; @someone  ## heading`` by @someone\n\
+             https://github.com/o/r/commits/v0.1.0-alpha.1\n"
+        );
+        // A title that holds a placeholder is not filled in.
+        let mut placeholder = pr(8, "b");
+        placeholder.title = "{{changes}} {{version}}".into();
+        let notes = render_notes(template, "0.1.0-alpha.1", "v0.1.0-alpha.1", None, "o/r", &[placeholder]);
+        assert_eq!(notes, "- #8 `{{changes}} {{version}}` by @someone\nhttps://github.com/o/r/commits/v0.1.0-alpha.1\n");
+        // An empty title leaves no empty code span.
+        let mut empty = pr(9, "c");
+        empty.title = String::new();
+        assert_eq!(pull_request_list(&[empty]), "- #9 by @someone\n");
     }
 
     #[test]
