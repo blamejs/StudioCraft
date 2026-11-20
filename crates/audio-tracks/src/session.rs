@@ -124,6 +124,10 @@ pub fn build_with(name: &str, lines: &[Line], left_out: u64, frames: impl Fn(&st
         ids.push((t.journal_track, id, shown));
         let mut clips = Vec::with_capacity(t.files.len());
         for (file, first) in &t.files {
+            // Only a name in the writer's format points into the take's folder.
+            if !crate::names::is_track_file(file) {
+                continue;
+            }
             let Some(n) = frames(file).filter(|n| *n > 0) else { continue };
             let source = SourceId(s.alloc());
             let stem = Path::new(file).file_stem().map(|f| f.to_string_lossy().into_owned()).unwrap_or_else(|| file.clone());
@@ -344,13 +348,15 @@ mod tests {
             file(0, "Mic", "Mic.wav", 1, 0, false),
             file(0, "Mic", "Mic part 2.wav", 2, 10, false),
             file(1, "Quiet", "Quiet.wav", 1, 0, false),
+            file(1, "Quiet", "../Elsewhere.wav", 2, 10, false),
         ];
         let s = build("Show", &lines, |f| match f {
             "Mic.wav" => Some(10),
             "Quiet.wav" => Some(0),
+            "../Elsewhere.wav" => Some(10),
             _ => None,
         });
-        assert_eq!(s.sources.len(), 1, "the removed part and the empty file have no source");
+        assert_eq!(s.sources.len(), 1, "the removed part, the empty file and a name outside the folder have no source");
         assert_eq!(s.tracks.len(), 2, "a track whose file is empty is still listed");
         let text = craft_scraft_format::write_session(&s, craft_scraft_format::MAX_SESSION_BYTES).unwrap();
         let back = Session::from_json(&text).unwrap();
