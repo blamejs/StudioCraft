@@ -84,6 +84,7 @@ pub fn build_with(name: &str, lines: &[Line], left_out: u64, frames: impl Fn(&st
     let mut dropouts: Vec<(usize, u64, u64)> = Vec::new();
     let mut markers: Vec<(u64, &str)> = Vec::new();
     let mut unlisted = 0u64;
+    let mut beyond = 0u64;
     let mut stopped: Option<&str> = None;
     for line in lines {
         match line {
@@ -105,8 +106,10 @@ pub fn build_with(name: &str, lines: &[Line], left_out: u64, frames: impl Fn(&st
                     built.files.push((file.clone(), *first_frame));
                 }
             }
-            Line::Dropout { track, at, frames } => dropouts.push((*track, *at, *frames)),
-            Line::Marker { at, name } => markers.push((*at, name.as_str())),
+            // Each list keeps at most the locations a session can list; the rest are counted.
+            Line::Dropout { track, at, frames } if dropouts.len() < MAX_LOCATIONS => dropouts.push((*track, *at, *frames)),
+            Line::Marker { at, name } if markers.len() < MAX_LOCATIONS => markers.push((*at, name.as_str())),
+            Line::Dropout { .. } | Line::Marker { .. } => beyond = beyond.saturating_add(1),
             Line::Unlisted { frames } => unlisted = unlisted.saturating_add(*frames),
             Line::Stop { reason } => stopped = Some(reason.as_str()),
             _ => {}
@@ -154,7 +157,7 @@ pub fn build_with(name: &str, lines: &[Line], left_out: u64, frames: impl Fn(&st
     // Markers set during the take come first; dropouts fill the room left.
     let listed_markers = markers.len().min(MAX_LOCATIONS);
     let listed_dropouts = dropouts.len().min(MAX_LOCATIONS - listed_markers);
-    let not_listed = left_out.saturating_add((markers.len() - listed_markers + dropouts.len() - listed_dropouts) as u64);
+    let not_listed = left_out.saturating_add(beyond).saturating_add((markers.len() - listed_markers + dropouts.len() - listed_dropouts) as u64);
     let mut locations: Vec<MemoryLocation> = Vec::with_capacity(listed_markers + listed_dropouts);
     let location = |s: &mut Session, name: String, kind: MarkerKind, start: u64, end: u64, track: Option<TrackId>| MemoryLocation {
         id: MarkerId(s.alloc()),
@@ -339,6 +342,19 @@ mod tests {
         let lines = [start(0), file(0, &long, "x.wav", 1, 0, false), Line::Dropout { track: 0, at: 0, frames: 1 }];
         let s = build("Show", &lines, |_| Some(10));
         assert!(s.markers.iter().all(|m| m.name.chars().count() <= craft_scraft_format::MAX_NAME_CHARS));
+    }
+
+    #[test]
+    fn locations_past_the_limit_in_a_long_journal_are_counted() {
+        let mut lines = vec![start(0), file(0, "Mic", "Mic.wav", 1, 0, false)];
+        lines.extend((0..5).map(|n| Line::Dropout { track: 0, at: n, frames: 1 }));
+        lines.extend((0..MAX_LOCATIONS as u64 + 3).map(|n| Line::Marker { at: n, name: format!("M{n}") }));
+        lines.extend((0..MAX_LOCATIONS as u64 + 2).map(|n| Line::Dropout { track: 0, at: n, frames: 1 }));
+        let s = build("Show", &lines, |_| Some(1_000));
+        assert_eq!(s.markers.len(), MAX_LOCATIONS);
+        assert!(s.markers.iter().all(|m| m.kind == MarkerKind::Marker), "markers take the room first");
+        let more = MAX_LOCATIONS + 10;
+        assert!(s.comments.contains(&format!("{more} more markers and dropouts")), "3 markers and every dropout: {}", s.comments);
     }
 
     #[test]
