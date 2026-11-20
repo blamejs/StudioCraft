@@ -504,3 +504,35 @@ menu	Transform	变换
 @msg	The audio editor did not start ({error}); the folder {folder} is shown instead	音频编辑器未能启动（{error}）；改为显示文件夹 {folder}
 @msg	Audio tracks saved in {folder}	音频轨道已保存到 {folder}
 @msg	The audio tracks could not be opened: {error}	无法打开音频轨道：{error}
+@msg	`{command}` needs `{key}`	`{command}` 需要 `{key}`
+@msg	`{command}`: unknown dock `{name}` (one of {docks})	`{command}`：未知的停靠面板 `{name}`（可选 {docks}）
+@msg	`{command}`: `path` must be a file path	`{command}`：`path` 必须是文件路径
+@msg	`{command}` needs `path` when no file dialog can be shown	无法显示文件对话框时，`{command}` 需要 `path`
+@msg	The scene collection could not be imported: {error}	无法导入场景集合：{error}
+@msg	The scene collection could not be exported: {error}	无法导出场景集合：{error}
+@msg	there is no free name for the scene collection `{name}`	场景集合 `{name}` 没有可用的名称
+@msg	select a source first	请先选择一个来源
+@msg	the source has not shown a picture yet	该来源尚未显示画面
+@msg	settings are kept in memory only (--no-prefs)	设置仅保存在内存中（--no-prefs）
+@msg	`scopes.kind`: unknown scope `{name}` (one of {scopes})	`scopes.kind`：未知的示波器 `{name}`（可选 {scopes}）
+@msg	`dock.move`: `to` is `left` or `right`, not `{to}`	`dock.move`：`to` 应为 `left` 或 `right`，而不是 `{to}`
+@msg	`dock.float` needs `floating`: true or false	`dock.float` 需要 `floating`：true 或 false
+@msg	`dock.layout_save`: `name` is a string	`dock.layout_save`：`name` 应为字符串
+@msg	there is no dock layout named `{name}`	没有名为 `{name}` 的停靠布局
+@msg	there is no link for `{command}`	没有 `{command}` 的链接
+@msg	unknown command `{command}`	未知命令 `{command}`
+@msg	there is already a profile named `{name}`	已有名为 `{name}` 的配置文件
+@msg	there is already a scene collection named `{name}`	已有名为 `{name}` 的场景集合
+@msg	the last scene collection can't be removed	无法删除最后一个场景集合
+@msg	the last profile can't be removed	无法删除最后一个配置文件
+@msg	update checks are off in this session (--no-prefs, a scripted run or a test)	此会话中已关闭检查更新（--no-prefs、脚本运行或测试）
+@msg	there are already {count} dock layouts; remove one first	已有 {count} 个停靠布局；请先删除一个
+@msg	a name needs 1 to 100 characters	名称需要 1 到 100 个字符
+@msg	a name can't start or end with a space, or end with a period	名称不能以空格开头或结尾，也不能以句点结尾
+@msg	a name can't contain {character}	名称不能包含 {character}
+@msg	`{name}` is reserved by the system	`{name}` 是系统保留的名称
+@msg	`video.canvas_from_display`: the size of the display the window is on is not known; pass `display`	`video.canvas_from_display`：不知道窗口所在显示器的大小；请传入 `display`
+@msg	`video.canvas_from_display`: `display` is a display id from `video.displays`	`video.canvas_from_display`：`display` 应为 `video.displays` 中的显示器 ID
+@msg	there is no display `{id}`: the system lists no displays	没有显示器 `{id}`：系统未列出任何显示器
+@msg	there is no display `{id}` (the displays are {ids})	没有显示器 `{id}`（显示器有 {ids}）
+@msg	a {width} × {height} display can't be the canvas: each side must be from {min} to {max} pixels	{width} × {height} 的显示器不能作为画布：每条边必须为 {min} 到 {max} 像素

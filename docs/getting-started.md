@@ -21,8 +21,8 @@ release, the Linux `.rpm`, `.deb` and `.flatpak` packages are signed with the re
 release carries these Linux signatures only when it was signed with the release key. An alpha's
 release notes show how to verify the downloads against `SHA256SUMS.txt` and `SHA3-512SUMS.txt`.
 
-No package includes `ffmpeg`. You need it for streaming, for some kinds of recording, as
-[First stream](#first-stream) describes, and for Media file sources that play files other than Ogg Vorbis at 8 to 192 kHz. The `.deb` and `.rpm` packages list `ffmpeg` as a
+No package includes `ffmpeg`. You need it for some kinds of recording, as
+[First recording](#first-recording) describes, and for Media file sources that play files other than Ogg Vorbis at 8 to 192 kHz. The `.deb` and `.rpm` packages list `ffmpeg` as a
 recommended package, so `apt` and `dnf` usually install it with them. The Flatpak runtime has no
 `ffmpeg`, and the Flatpak sandbox cannot run an `ffmpeg` installed on the system.
 
@@ -60,21 +60,16 @@ encoder needs what.
 
 ## First stream
 
-Streaming needs an `ffmpeg` that StudioCraft can run. The Flatpak cannot run an `ffmpeg` installed
-on the system, so to stream on Linux, install another package, such as the `.AppImage`, `.deb` or
-`.rpm`.
+Streaming does not need `ffmpeg`, and works in every package, the Flatpak included.
 
-1. Install `ffmpeg` so that it is on the `PATH`, or set its location in Settings › Output ›
-   ffmpeg program.
-2. In Settings › Stream, enter the Server and the Stream key your streaming service gives you.
+1. In Settings › Stream, enter the Server and the Stream key your streaming service gives you.
    Click OK.
-3. Click Go Live on the menu row. Click it again to stop the stream.
+2. Click Go Live on the menu row. Click it again to stop the stream.
 
-A new profile streams at 6000 kbps video and 160 kbps audio with a keyframe every 2 s, using the
-software x264 encoder. Settings › Stream changes these values, and
+A new profile streams at 6000 kbps video and 160 kbps audio with a keyframe every 2 s, using
+H.264 (built in). Settings › Stream changes these values, and
 [MECHANICS.md](../MECHANICS.md#recording-and-streaming) lists every default.
-[Troubleshooting](troubleshooting.md#recording-and-streaming) covers a stream that does not start
-because `ffmpeg` was not found.
+[Troubleshooting](troubleshooting.md#recording-and-streaming) covers a stream that does not start.
 
 ## Where StudioCraft keeps your files
 

@@ -503,3 +503,35 @@ menu	Transform	Transformar
 @msg	The audio editor did not start ({error}); the folder {folder} is shown instead	O editor de áudio não foi iniciado ({error}); a pasta {folder} é mostrada no lugar
 @msg	Audio tracks saved in {folder}	Faixas de áudio salvas em {folder}
 @msg	The audio tracks could not be opened: {error}	Não foi possível abrir as faixas de áudio: {error}
+@msg	`{command}` needs `{key}`	`{command}` precisa de `{key}`
+@msg	`{command}`: unknown dock `{name}` (one of {docks})	`{command}`: painel desconhecido `{name}` (um de {docks})
+@msg	`{command}`: `path` must be a file path	`{command}`: `path` deve ser um caminho de arquivo
+@msg	`{command}` needs `path` when no file dialog can be shown	`{command}` precisa de `path` quando nenhuma caixa de diálogo de arquivos pode ser mostrada
+@msg	The scene collection could not be imported: {error}	Não foi possível importar a coleção de cenas: {error}
+@msg	The scene collection could not be exported: {error}	Não foi possível exportar a coleção de cenas: {error}
+@msg	there is no free name for the scene collection `{name}`	não há nome livre para a coleção de cenas `{name}`
+@msg	select a source first	selecione uma fonte primeiro
+@msg	the source has not shown a picture yet	a fonte ainda não mostrou nenhuma imagem
+@msg	settings are kept in memory only (--no-prefs)	as configurações ficam apenas na memória (--no-prefs)
+@msg	`scopes.kind`: unknown scope `{name}` (one of {scopes})	`scopes.kind`: monitor de sinal desconhecido `{name}` (um de {scopes})
+@msg	`dock.move`: `to` is `left` or `right`, not `{to}`	`dock.move`: `to` é `left` ou `right`, não `{to}`
+@msg	`dock.float` needs `floating`: true or false	`dock.float` precisa de `floating`: true ou false
+@msg	`dock.layout_save`: `name` is a string	`dock.layout_save`: `name` é um texto
+@msg	there is no dock layout named `{name}`	não há layout dos painéis chamado `{name}`
+@msg	there is no link for `{command}`	não há link para `{command}`
+@msg	unknown command `{command}`	comando desconhecido `{command}`
+@msg	there is already a profile named `{name}`	já existe um perfil chamado `{name}`
+@msg	there is already a scene collection named `{name}`	já existe uma coleção de cenas chamada `{name}`
+@msg	the last scene collection can't be removed	a última coleção de cenas não pode ser removida
+@msg	the last profile can't be removed	o último perfil não pode ser removido
+@msg	update checks are off in this session (--no-prefs, a scripted run or a test)	a busca por atualizações está desativada nesta sessão (--no-prefs, uma execução por script ou um teste)
+@msg	there are already {count} dock layouts; remove one first	já existem {count} layouts dos painéis; remova um primeiro
+@msg	a name needs 1 to 100 characters	um nome precisa ter de 1 a 100 caracteres
+@msg	a name can't start or end with a space, or end with a period	um nome não pode começar nem terminar com espaço, nem terminar com ponto
+@msg	a name can't contain {character}	um nome não pode conter {character}
+@msg	`{name}` is reserved by the system	`{name}` é reservado pelo sistema
+@msg	`video.canvas_from_display`: the size of the display the window is on is not known; pass `display`	`video.canvas_from_display`: o tamanho da tela em que a janela está não é conhecido; informe `display`
+@msg	`video.canvas_from_display`: `display` is a display id from `video.displays`	`video.canvas_from_display`: `display` é um id de tela de `video.displays`
+@msg	there is no display `{id}`: the system lists no displays	não há tela `{id}`: o sistema não lista nenhuma tela
+@msg	there is no display `{id}` (the displays are {ids})	não há tela `{id}` (as telas são {ids})
+@msg	a {width} × {height} display can't be the canvas: each side must be from {min} to {max} pixels	uma tela de {width} × {height} não pode ser a tela de pintura: cada lado deve ter de {min} a {max} pixels

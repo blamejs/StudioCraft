@@ -98,9 +98,9 @@ To make a first recording, which does not need `ffmpeg`:
    (⌘,) on macOS. In the Output tab, set Video encoder to H.264 (built in) and keep Format at MKV.
 3. Click Record, and click it again to stop. The file goes to your Videos folder.
 
-To stream, install `ffmpeg` on the `PATH` (or set its location in Settings › Output), enter the
-Server and Stream key in Settings › Stream, and click Go Live. Streaming, and recording with an
-encoder other than H.264 (built in), need `ffmpeg`.
+To stream, enter the Server and Stream key in Settings › Stream and click Go Live. Streams run
+in StudioCraft without `ffmpeg`. Recording with an encoder other than the built-in ones needs
+`ffmpeg`.
 
 ## Features at a glance
 

@@ -485,3 +485,35 @@ menu	Transform	שינוי צורה
 @msg	The audio editor did not start ({error}); the folder {folder} is shown instead	עורך השמע לא הופעל ({error}); במקומו מוצגת התיקייה {folder}
 @msg	Audio tracks saved in {folder}	רצועות השמע נשמרו ב־{folder}
 @msg	The audio tracks could not be opened: {error}	לא ניתן היה לפתוח את רצועות השמע: {error}
+@msg	`{command}` needs `{key}`	`{command}` דורש `{key}`
+@msg	`{command}`: unknown dock `{name}` (one of {docks})	`{command}`: חלונית לא ידועה `{name}` (אחת מתוך {docks})
+@msg	`{command}`: `path` must be a file path	`{command}`: `path` חייב להיות נתיב לקובץ
+@msg	`{command}` needs `path` when no file dialog can be shown	`{command}` דורש `path` כשלא ניתן להציג חלון בחירת קבצים
+@msg	The scene collection could not be imported: {error}	לא ניתן לייבא את אוסף הסצנות: {error}
+@msg	The scene collection could not be exported: {error}	לא ניתן לייצא את אוסף הסצנות: {error}
+@msg	there is no free name for the scene collection `{name}`	אין שם פנוי לאוסף הסצנות `{name}`
+@msg	select a source first	יש לבחור מקור תחילה
+@msg	the source has not shown a picture yet	המקור עדיין לא הציג תמונה
+@msg	settings are kept in memory only (--no-prefs)	ההגדרות נשמרות בזיכרון בלבד (--no-prefs)
+@msg	`scopes.kind`: unknown scope `{name}` (one of {scopes})	`scopes.kind`: מכשיר מדידה לא ידוע `{name}` (אחד מתוך {scopes})
+@msg	`dock.move`: `to` is `left` or `right`, not `{to}`	`dock.move`: הערך של `to` הוא `left` או `right`, לא `{to}`
+@msg	`dock.float` needs `floating`: true or false	`dock.float` דורש `floating`: true או false
+@msg	`dock.layout_save`: `name` is a string	`dock.layout_save`: `name` חייב להיות מחרוזת
+@msg	there is no dock layout named `{name}`	אין פריסת חלוניות בשם `{name}`
+@msg	there is no link for `{command}`	אין קישור עבור `{command}`
+@msg	unknown command `{command}`	פקודה לא ידועה `{command}`
+@msg	there is already a profile named `{name}`	כבר יש פרופיל בשם `{name}`
+@msg	there is already a scene collection named `{name}`	כבר יש אוסף סצנות בשם `{name}`
+@msg	the last scene collection can't be removed	לא ניתן להסיר את אוסף הסצנות האחרון
+@msg	the last profile can't be removed	לא ניתן להסיר את הפרופיל האחרון
+@msg	update checks are off in this session (--no-prefs, a scripted run or a test)	בדיקת העדכונים כבויה בהפעלה זו (--no-prefs, הרצה מתוך סקריפט או בדיקה)
+@msg	there are already {count} dock layouts; remove one first	כבר יש {count} פריסות חלוניות; יש להסיר אחת תחילה
+@msg	a name needs 1 to 100 characters	שם צריך להכיל 1 עד 100 תווים
+@msg	a name can't start or end with a space, or end with a period	שם לא יכול להתחיל או להסתיים ברווח, או להסתיים בנקודה
+@msg	a name can't contain {character}	שם לא יכול להכיל {character}
+@msg	`{name}` is reserved by the system	`{name}` שמור למערכת
+@msg	`video.canvas_from_display`: the size of the display the window is on is not known; pass `display`	`video.canvas_from_display`: גודל המסך שעליו נמצא החלון אינו ידוע; יש להעביר `display`
+@msg	`video.canvas_from_display`: `display` is a display id from `video.displays`	`video.canvas_from_display`: `display` הוא מזהה מסך מתוך `video.displays`
+@msg	there is no display `{id}`: the system lists no displays	אין מסך `{id}`: המערכת לא מציגה אף מסך
+@msg	there is no display `{id}` (the displays are {ids})	אין מסך `{id}` (המסכים הם {ids})
+@msg	a {width} × {height} display can't be the canvas: each side must be from {min} to {max} pixels	מסך בגודל {width} × {height} לא יכול לשמש כמשטח: כל צלע צריכה להיות בין {min} ל-{max} פיקסלים

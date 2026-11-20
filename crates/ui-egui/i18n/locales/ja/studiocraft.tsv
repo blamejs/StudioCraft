@@ -504,3 +504,35 @@ menu	Transform	変形
 @msg	The audio editor did not start ({error}); the folder {folder} is shown instead	オーディオエディターを起動できませんでした ({error})。代わりにフォルダー {folder} を表示します
 @msg	Audio tracks saved in {folder}	オーディオトラックを {folder} に保存しました
 @msg	The audio tracks could not be opened: {error}	オーディオトラックを開けませんでした: {error}
+@msg	`{command}` needs `{key}`	`{command}` には `{key}` が必要です
+@msg	`{command}`: unknown dock `{name}` (one of {docks})	`{command}`: 不明なドック `{name}` ({docks} のいずれか)
+@msg	`{command}`: `path` must be a file path	`{command}`: `path` はファイルパスでなければなりません
+@msg	`{command}` needs `path` when no file dialog can be shown	ファイルダイアログを表示できない場合、`{command}` には `path` が必要です
+@msg	The scene collection could not be imported: {error}	シーンコレクションを読み込めませんでした: {error}
+@msg	The scene collection could not be exported: {error}	シーンコレクションを書き出せませんでした: {error}
+@msg	there is no free name for the scene collection `{name}`	シーンコレクション `{name}` に使える名前がありません
+@msg	select a source first	先にソースを選択してください
+@msg	the source has not shown a picture yet	ソースはまだ映像を表示していません
+@msg	settings are kept in memory only (--no-prefs)	設定はメモリ内にのみ保持されています (--no-prefs)
+@msg	`scopes.kind`: unknown scope `{name}` (one of {scopes})	`scopes.kind`: 不明なスコープ `{name}` ({scopes} のいずれか)
+@msg	`dock.move`: `to` is `left` or `right`, not `{to}`	`dock.move`: `to` は `{to}` ではなく `left` または `right` です
+@msg	`dock.float` needs `floating`: true or false	`dock.float` には `floating` (true または false) が必要です
+@msg	`dock.layout_save`: `name` is a string	`dock.layout_save`: `name` は文字列です
+@msg	there is no dock layout named `{name}`	`{name}` という名前のドックレイアウトはありません
+@msg	there is no link for `{command}`	`{command}` のリンクはありません
+@msg	unknown command `{command}`	不明なコマンド `{command}`
+@msg	there is already a profile named `{name}`	`{name}` という名前のプロファイルはすでにあります
+@msg	there is already a scene collection named `{name}`	`{name}` という名前のシーンコレクションはすでにあります
+@msg	the last scene collection can't be removed	最後のシーンコレクションは削除できません
+@msg	the last profile can't be removed	最後のプロファイルは削除できません
+@msg	update checks are off in this session (--no-prefs, a scripted run or a test)	このセッションではアップデートの確認がオフです (--no-prefs、スクリプトによる実行、またはテスト)
+@msg	there are already {count} dock layouts; remove one first	ドックレイアウトはすでに {count} 個あります。先に 1 つ削除してください
+@msg	a name needs 1 to 100 characters	名前は 1 から 100 文字にしてください
+@msg	a name can't start or end with a space, or end with a period	名前の先頭と末尾にスペースは使えず、末尾にピリオドも使えません
+@msg	a name can't contain {character}	名前に {character} は使えません
+@msg	`{name}` is reserved by the system	`{name}` はシステムで予約されています
+@msg	`video.canvas_from_display`: the size of the display the window is on is not known; pass `display`	`video.canvas_from_display`: このウィンドウがあるディスプレイのサイズがわかりません。`display` を指定してください
+@msg	`video.canvas_from_display`: `display` is a display id from `video.displays`	`video.canvas_from_display`: `display` は `video.displays` のディスプレイ ID です
+@msg	there is no display `{id}`: the system lists no displays	ディスプレイ `{id}` はありません: システムはディスプレイを 1 つも一覧に出していません
+@msg	there is no display `{id}` (the displays are {ids})	ディスプレイ `{id}` はありません (ディスプレイは {ids})
+@msg	a {width} × {height} display can't be the canvas: each side must be from {min} to {max} pixels	{width} × {height} のディスプレイはキャンバスにできません: 各辺は {min} から {max} ピクセルにしてください

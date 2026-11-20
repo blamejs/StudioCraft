@@ -513,3 +513,35 @@ menu	Transform	Перетворення
 @msg	The audio editor did not start ({error}); the folder {folder} is shown instead	Звуковий редактор не запустився ({error}); натомість показано теку {folder}
 @msg	Audio tracks saved in {folder}	Звукові доріжки збережено в {folder}
 @msg	The audio tracks could not be opened: {error}	Не вдалося відкрити звукові доріжки: {error}
+@msg	`{command}` needs `{key}`	`{command}` потребує `{key}`
+@msg	`{command}`: unknown dock `{name}` (one of {docks})	`{command}`: невідома панель `{name}` (одна з {docks})
+@msg	`{command}`: `path` must be a file path	`{command}`: `path` має бути шляхом до файлу
+@msg	`{command}` needs `path` when no file dialog can be shown	`{command}` потребує `path`, коли діалог вибору файлу показати не можна
+@msg	The scene collection could not be imported: {error}	Не вдалося імпортувати колекцію сцен: {error}
+@msg	The scene collection could not be exported: {error}	Не вдалося експортувати колекцію сцен: {error}
+@msg	there is no free name for the scene collection `{name}`	немає вільної назви для колекції сцен `{name}`
+@msg	select a source first	спочатку виберіть джерело
+@msg	the source has not shown a picture yet	джерело ще не показало зображення
+@msg	settings are kept in memory only (--no-prefs)	налаштування зберігаються лише в пам'яті (--no-prefs)
+@msg	`scopes.kind`: unknown scope `{name}` (one of {scopes})	`scopes.kind`: невідомий графік сигналу `{name}` (один з {scopes})
+@msg	`dock.move`: `to` is `left` or `right`, not `{to}`	`dock.move`: `to` може бути `left` або `right`, але не `{to}`
+@msg	`dock.float` needs `floating`: true or false	`dock.float` потребує `floating`: true або false
+@msg	`dock.layout_save`: `name` is a string	`dock.layout_save`: `name` має бути рядком
+@msg	there is no dock layout named `{name}`	немає розкладки панелей з назвою `{name}`
+@msg	there is no link for `{command}`	немає посилання для `{command}`
+@msg	unknown command `{command}`	невідома команда `{command}`
+@msg	there is already a profile named `{name}`	профіль з назвою `{name}` уже є
+@msg	there is already a scene collection named `{name}`	колекція сцен з назвою `{name}` уже є
+@msg	the last scene collection can't be removed	останню колекцію сцен не можна видалити
+@msg	the last profile can't be removed	останній профіль не можна видалити
+@msg	update checks are off in this session (--no-prefs, a scripted run or a test)	перевірку оновлень у цьому сеансі вимкнено (--no-prefs, запуск зі скрипту або тест)
+@msg	there are already {count} dock layouts; remove one first	розкладок панелей уже {count}; спочатку видаліть одну
+@msg	a name needs 1 to 100 characters	назва має містити від 1 до 100 символів
+@msg	a name can't start or end with a space, or end with a period	назва не може починатися чи закінчуватися пробілом і не може закінчуватися крапкою
+@msg	a name can't contain {character}	назва не може містити {character}
+@msg	`{name}` is reserved by the system	назву `{name}` зарезервовано системою
+@msg	`video.canvas_from_display`: the size of the display the window is on is not known; pass `display`	`video.canvas_from_display`: розмір екрана, на якому є вікно, невідомий; укажіть `display`
+@msg	`video.canvas_from_display`: `display` is a display id from `video.displays`	`video.canvas_from_display`: `display` має бути ідентифікатором екрана з `video.displays`
+@msg	there is no display `{id}`: the system lists no displays	немає екрана `{id}`: система не повідомляє про жоден екран
+@msg	there is no display `{id}` (the displays are {ids})	немає екрана `{id}` (є екрани {ids})
+@msg	a {width} × {height} display can't be the canvas: each side must be from {min} to {max} pixels	екран {width} × {height} не може бути полотном: кожна сторона має бути від {min} до {max} пікселів

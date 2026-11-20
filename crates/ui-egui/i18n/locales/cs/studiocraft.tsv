@@ -504,3 +504,35 @@ menu	Transform	Transformace
 @msg	The audio editor did not start ({error}); the folder {folder} is shown instead	Zvukový editor se nespustil ({error}); místo něj se zobrazí složka {folder}
 @msg	Audio tracks saved in {folder}	Zvukové stopy uloženy do {folder}
 @msg	The audio tracks could not be opened: {error}	Zvukové stopy nelze otevřít: {error}
+@msg	`{command}` needs `{key}`	`{command}` potřebuje `{key}`
+@msg	`{command}`: unknown dock `{name}` (one of {docks})	`{command}`: neznámý panel `{name}` (jeden z {docks})
+@msg	`{command}`: `path` must be a file path	`{command}`: `path` musí být cesta k souboru
+@msg	`{command}` needs `path` when no file dialog can be shown	`{command}` potřebuje `path`, když nelze zobrazit dialog pro výběr souboru
+@msg	The scene collection could not be imported: {error}	Kolekci scén nelze importovat: {error}
+@msg	The scene collection could not be exported: {error}	Kolekci scén nelze exportovat: {error}
+@msg	there is no free name for the scene collection `{name}`	pro kolekci scén `{name}` není volný název
+@msg	select a source first	nejprve vyberte zdroj
+@msg	the source has not shown a picture yet	zdroj zatím nezobrazil žádný obraz
+@msg	settings are kept in memory only (--no-prefs)	nastavení se uchovává jen v paměti (--no-prefs)
+@msg	`scopes.kind`: unknown scope `{name}` (one of {scopes})	`scopes.kind`: neznámý měřič obrazu `{name}` (jeden z {scopes})
+@msg	`dock.move`: `to` is `left` or `right`, not `{to}`	`dock.move`: `to` je `left` nebo `right`, ne `{to}`
+@msg	`dock.float` needs `floating`: true or false	`dock.float` potřebuje `floating`: true nebo false
+@msg	`dock.layout_save`: `name` is a string	`dock.layout_save`: `name` je řetězec
+@msg	there is no dock layout named `{name}`	rozvržení panelů s názvem `{name}` neexistuje
+@msg	there is no link for `{command}`	pro `{command}` neexistuje odkaz
+@msg	unknown command `{command}`	neznámý příkaz `{command}`
+@msg	there is already a profile named `{name}`	profil s názvem `{name}` už existuje
+@msg	there is already a scene collection named `{name}`	kolekce scén s názvem `{name}` už existuje
+@msg	the last scene collection can't be removed	poslední kolekci scén nelze odebrat
+@msg	the last profile can't be removed	poslední profil nelze odebrat
+@msg	update checks are off in this session (--no-prefs, a scripted run or a test)	kontrola aktualizací je v této relaci vypnutá (--no-prefs, spuštění skriptem nebo test)
+@msg	there are already {count} dock layouts; remove one first	rozvržení panelů je už {count}; nejprve jedno odeberte
+@msg	a name needs 1 to 100 characters	název musí mít 1 až 100 znaků
+@msg	a name can't start or end with a space, or end with a period	název nesmí začínat ani končit mezerou ani končit tečkou
+@msg	a name can't contain {character}	název nesmí obsahovat {character}
+@msg	`{name}` is reserved by the system	`{name}` je vyhrazen systémem
+@msg	`video.canvas_from_display`: the size of the display the window is on is not known; pass `display`	`video.canvas_from_display`: velikost obrazovky, na které je okno, není známa; zadejte `display`
+@msg	`video.canvas_from_display`: `display` is a display id from `video.displays`	`video.canvas_from_display`: `display` je ID obrazovky z `video.displays`
+@msg	there is no display `{id}`: the system lists no displays	obrazovka `{id}` neexistuje: systém neuvádí žádné obrazovky
+@msg	there is no display `{id}` (the displays are {ids})	obrazovka `{id}` neexistuje (obrazovky jsou {ids})
+@msg	a {width} × {height} display can't be the canvas: each side must be from {min} to {max} pixels	obrazovka {width} × {height} nemůže být plátnem: každá strana musí mít {min} až {max} pixelů

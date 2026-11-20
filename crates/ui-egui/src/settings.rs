@@ -331,12 +331,23 @@ impl SettingsWindow {
         let s = &mut self.draft.stream;
         let kbps = |n: u32| craft_i18n::fmt(tl!("{n} kbps"), &[("n", &n.to_string())]);
         egui::Grid::new("stream-grid").num_columns(2).spacing([12.0, 8.0]).show(ui, |ui| {
+            // The fields edit the first destination. The key field shows the profile's key when
+            // that destination uses it and is empty otherwise; typing a key makes it use the
+            // profile's key.
             ui.label(tl!("Server"));
-            ui.add(egui::TextEdit::singleline(&mut s.server).hint_text("rtmp://live.example.com/app").desired_width(320.0));
+            let mut server = s.primary_server().to_string();
+            if ui.add(egui::TextEdit::singleline(&mut server).hint_text("rtmp://live.example.com/app").desired_width(320.0)).changed() {
+                s.primary_mut().server = server;
+            }
             ui.end_row();
             ui.label(tl!("Stream key"));
             ui.horizontal(|ui| {
-                ui.add(egui::TextEdit::singleline(&mut s.key).password(!self.show_key).desired_width(240.0));
+                let profile_key = s.destinations.first().is_none_or(|d| d.key == studiocraft_model::KeyRef::Profile);
+                let mut key = if profile_key { s.key.clone() } else { String::new() };
+                if ui.add(egui::TextEdit::singleline(&mut key).password(!self.show_key).desired_width(240.0)).changed() {
+                    s.key = key;
+                    s.primary_mut().key = studiocraft_model::KeyRef::Profile;
+                }
                 ui.toggle_value(&mut self.show_key, tl!("Show"));
             });
             ui.end_row();
@@ -710,14 +721,14 @@ fn hardware_encoder_label(id: &str) -> String {
 }
 
 /// The video encoders a recording (`streaming` false) or a stream can choose, each with whether
-/// it can start: encoders the output cannot run are left out (a stream runs no built-in encoder,
-/// and carries H.264 only), and ones the ffmpeg program does not list cannot start.
+/// it can start: encoders the output cannot run are left out (a stream runs the built-in
+/// encoders only, and carries H.264 only), and ones the ffmpeg program does not list cannot start.
 fn listed_encoders<'a>(registry: &'a Registry, offered: &[String], streaming: bool) -> Vec<(&'a dyn studiocraft_plugin::Encoder, bool)> {
-    let env = EncoderEnv { builtin: !streaming, ..EncoderEnv::ffmpeg(offered) };
+    let env = EncoderEnv { builtin: true, ..EncoderEnv::ffmpeg(offered) };
     registry
         .encoders()
         .iter()
-        .filter(|e| e.kind() == EncoderKind::Video && (!streaming || e.streams()))
+        .filter(|e| e.kind() == EncoderKind::Video && (!streaming || (e.streams() && e.ffmpeg().is_none())))
         .filter_map(|e| {
             let availability = e.availability(&env);
             (availability != Availability::NotRunHere).then_some((e.as_ref(), availability.can_start()))
@@ -730,7 +741,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn recordings_list_the_built_in_encoder_and_streams_do_not() {
+    fn recordings_list_every_encoder_and_streams_the_built_in_ones() {
         let app = crate::StudioApp::boot(crate::store::Store::memory(), None, Vec::new());
         let registry = app.studio().registry();
         let offered = vec!["libx264".to_string()];
@@ -739,8 +750,9 @@ mod tests {
         assert!(recording.contains(&("h264", true)), "{recording:?}");
         assert!(recording.contains(&("x264", true)), "{recording:?}");
         let streaming = ids(true);
-        assert!(!streaming.iter().any(|(id, _)| *id == "h264"), "{streaming:?}");
-        assert!(streaming.contains(&("x264", true)), "{streaming:?}");
+        assert!(streaming.contains(&("h264", true)), "{streaming:?}");
+        assert!(!streaming.iter().any(|(id, _)| *id == "x264" || *id == "nvenc_h264"), "{streaming:?}");
+        assert!(!streaming.iter().any(|(id, _)| *id == "nvenc_native_hevc"), "a stream carries H.264: {streaming:?}");
         // Without an ffmpeg program the built-in encoder can still record.
         assert!(listed_encoders(registry, &[], false).iter().any(|(e, ok)| e.id() == "h264" && *ok));
     }

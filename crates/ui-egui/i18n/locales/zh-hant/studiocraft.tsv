@@ -504,3 +504,35 @@ menu	Transform	變形
 @msg	The audio editor did not start ({error}); the folder {folder} is shown instead	音訊編輯器未能啟動（{error}）；改為顯示資料夾 {folder}
 @msg	Audio tracks saved in {folder}	音訊軌道已儲存到 {folder}
 @msg	The audio tracks could not be opened: {error}	無法開啟音訊軌道：{error}
+@msg	`{command}` needs `{key}`	`{command}` 需要 `{key}`
+@msg	`{command}`: unknown dock `{name}` (one of {docks})	`{command}`：未知的停駐面板 `{name}`（可選 {docks}）
+@msg	`{command}`: `path` must be a file path	`{command}`：`path` 必須是檔案路徑
+@msg	`{command}` needs `path` when no file dialog can be shown	無法顯示檔案對話方塊時，`{command}` 需要 `path`
+@msg	The scene collection could not be imported: {error}	無法匯入場景集合：{error}
+@msg	The scene collection could not be exported: {error}	無法匯出場景集合：{error}
+@msg	there is no free name for the scene collection `{name}`	場景集合 `{name}` 沒有可用的名稱
+@msg	select a source first	請先選取一個來源
+@msg	the source has not shown a picture yet	該來源尚未顯示畫面
+@msg	settings are kept in memory only (--no-prefs)	設定只保存在記憶體中（--no-prefs）
+@msg	`scopes.kind`: unknown scope `{name}` (one of {scopes})	`scopes.kind`：未知的示波器 `{name}`（可選 {scopes}）
+@msg	`dock.move`: `to` is `left` or `right`, not `{to}`	`dock.move`：`to` 應為 `left` 或 `right`，而不是 `{to}`
+@msg	`dock.float` needs `floating`: true or false	`dock.float` 需要 `floating`：true 或 false
+@msg	`dock.layout_save`: `name` is a string	`dock.layout_save`：`name` 應為字串
+@msg	there is no dock layout named `{name}`	沒有名為 `{name}` 的停駐版面
+@msg	there is no link for `{command}`	沒有 `{command}` 的連結
+@msg	unknown command `{command}`	未知的命令 `{command}`
+@msg	there is already a profile named `{name}`	已有名為 `{name}` 的設定檔
+@msg	there is already a scene collection named `{name}`	已有名為 `{name}` 的場景集合
+@msg	the last scene collection can't be removed	無法移除最後一個場景集合
+@msg	the last profile can't be removed	無法移除最後一個設定檔
+@msg	update checks are off in this session (--no-prefs, a scripted run or a test)	此工作階段已關閉檢查更新（--no-prefs、指令碼執行或測試）
+@msg	there are already {count} dock layouts; remove one first	已有 {count} 個停駐版面；請先移除一個
+@msg	a name needs 1 to 100 characters	名稱需要 1 到 100 個字元
+@msg	a name can't start or end with a space, or end with a period	名稱不能以空格開頭或結尾，也不能以句點結尾
+@msg	a name can't contain {character}	名稱不能包含 {character}
+@msg	`{name}` is reserved by the system	`{name}` 是系統保留的名稱
+@msg	`video.canvas_from_display`: the size of the display the window is on is not known; pass `display`	`video.canvas_from_display`：不知道視窗所在顯示器的大小；請傳入 `display`
+@msg	`video.canvas_from_display`: `display` is a display id from `video.displays`	`video.canvas_from_display`：`display` 應為 `video.displays` 中的顯示器 ID
+@msg	there is no display `{id}`: the system lists no displays	沒有顯示器 `{id}`：系統未列出任何顯示器
+@msg	there is no display `{id}` (the displays are {ids})	沒有顯示器 `{id}`（顯示器有 {ids}）
+@msg	a {width} × {height} display can't be the canvas: each side must be from {min} to {max} pixels	{width} × {height} 的顯示器不能作為畫布：每條邊必須為 {min} 到 {max} 像素

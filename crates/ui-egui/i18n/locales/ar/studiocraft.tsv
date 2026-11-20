@@ -492,3 +492,35 @@ menu	Transform	التحويل
 @msg	The audio editor did not start ({error}); the folder {folder} is shown instead	لم يبدأ محرر الصوت ({error})؛ يُعرض المجلد {folder} بدلًا منه
 @msg	Audio tracks saved in {folder}	حُفظت المسارات الصوتية في {folder}
 @msg	The audio tracks could not be opened: {error}	تعذّر فتح المسارات الصوتية: {error}
+@msg	`{command}` needs `{key}`	يحتاج `{command}` إلى `{key}`
+@msg	`{command}`: unknown dock `{name}` (one of {docks})	`{command}`: لوحة غير معروفة `{name}` (إحدى {docks})
+@msg	`{command}`: `path` must be a file path	`{command}`: يجب أن يكون `path` مسار ملف
+@msg	`{command}` needs `path` when no file dialog can be shown	يحتاج `{command}` إلى `path` عندما يتعذّر عرض نافذة اختيار الملفات
+@msg	The scene collection could not be imported: {error}	تعذّر استيراد مجموعة المشاهد: {error}
+@msg	The scene collection could not be exported: {error}	تعذّر تصدير مجموعة المشاهد: {error}
+@msg	there is no free name for the scene collection `{name}`	لا يوجد اسم متاح لمجموعة المشاهد `{name}`
+@msg	select a source first	اختر مصدرًا أولًا
+@msg	the source has not shown a picture yet	لم يعرض المصدر صورة بعد
+@msg	settings are kept in memory only (--no-prefs)	تُحفظ الإعدادات في الذاكرة فقط (--no-prefs)
+@msg	`scopes.kind`: unknown scope `{name}` (one of {scopes})	`scopes.kind`: أداة قياس غير معروفة `{name}` (إحدى {scopes})
+@msg	`dock.move`: `to` is `left` or `right`, not `{to}`	`dock.move`: قيمة `to` هي `left` أو `right`، وليست `{to}`
+@msg	`dock.float` needs `floating`: true or false	يحتاج `dock.float` إلى `floating`: true أو false
+@msg	`dock.layout_save`: `name` is a string	`dock.layout_save`: يجب أن يكون `name` نصًا
+@msg	there is no dock layout named `{name}`	لا يوجد تخطيط لوحات باسم `{name}`
+@msg	there is no link for `{command}`	لا يوجد رابط لـ `{command}`
+@msg	unknown command `{command}`	أمر غير معروف `{command}`
+@msg	there is already a profile named `{name}`	يوجد ملف تعريف باسم `{name}` بالفعل
+@msg	there is already a scene collection named `{name}`	توجد مجموعة مشاهد باسم `{name}` بالفعل
+@msg	the last scene collection can't be removed	لا يمكن إزالة آخر مجموعة مشاهد
+@msg	the last profile can't be removed	لا يمكن إزالة آخر ملف تعريف
+@msg	update checks are off in this session (--no-prefs, a scripted run or a test)	التحقق من التحديثات متوقف في هذه الجلسة (--no-prefs، أو تشغيل بنص برمجي، أو اختبار)
+@msg	there are already {count} dock layouts; remove one first	يوجد بالفعل {count} من تخطيطات اللوحات؛ أزل واحدًا أولًا
+@msg	a name needs 1 to 100 characters	يجب أن يتكوّن الاسم من 1 إلى 100 حرف
+@msg	a name can't start or end with a space, or end with a period	لا يمكن أن يبدأ الاسم أو ينتهي بمسافة، ولا أن ينتهي بنقطة
+@msg	a name can't contain {character}	لا يمكن أن يحتوي الاسم على {character}
+@msg	`{name}` is reserved by the system	`{name}` محجوز للنظام
+@msg	`video.canvas_from_display`: the size of the display the window is on is not known; pass `display`	`video.canvas_from_display`: حجم الشاشة التي عليها النافذة غير معروف؛ مرّر `display`
+@msg	`video.canvas_from_display`: `display` is a display id from `video.displays`	`video.canvas_from_display`: قيمة `display` هي معرّف شاشة من `video.displays`
+@msg	there is no display `{id}`: the system lists no displays	لا توجد شاشة `{id}`: لا يعرض النظام أي شاشات
+@msg	there is no display `{id}` (the displays are {ids})	لا توجد شاشة `{id}` (الشاشات هي {ids})
+@msg	a {width} × {height} display can't be the canvas: each side must be from {min} to {max} pixels	لا يمكن أن تكون شاشة بحجم {width} × {height} هي اللوحة: يجب أن يكون كل ضلع من {min} إلى {max} بكسل

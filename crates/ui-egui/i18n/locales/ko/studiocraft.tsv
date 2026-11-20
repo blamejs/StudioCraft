@@ -504,3 +504,35 @@ menu	Transform	변형
 @msg	The audio editor did not start ({error}); the folder {folder} is shown instead	오디오 편집기가 시작되지 않았습니다({error}). 대신 {folder} 폴더를 표시합니다
 @msg	Audio tracks saved in {folder}	오디오 트랙을 {folder}에 저장했습니다
 @msg	The audio tracks could not be opened: {error}	오디오 트랙을 열 수 없습니다: {error}
+@msg	`{command}` needs `{key}`	`{command}`에는 `{key}`이(가) 필요합니다
+@msg	`{command}`: unknown dock `{name}` (one of {docks})	`{command}`: 알 수 없는 도크 `{name}` ({docks} 중 하나)
+@msg	`{command}`: `path` must be a file path	`{command}`: `path`는 파일 경로여야 합니다
+@msg	`{command}` needs `path` when no file dialog can be shown	파일 대화 상자를 표시할 수 없을 때 `{command}`에는 `path`가 필요합니다
+@msg	The scene collection could not be imported: {error}	장면 모음을 가져올 수 없습니다: {error}
+@msg	The scene collection could not be exported: {error}	장면 모음을 내보낼 수 없습니다: {error}
+@msg	there is no free name for the scene collection `{name}`	장면 모음 `{name}`에 사용할 수 있는 이름이 없습니다
+@msg	select a source first	먼저 소스를 선택하세요
+@msg	the source has not shown a picture yet	소스가 아직 화면을 표시하지 않았습니다
+@msg	settings are kept in memory only (--no-prefs)	설정이 메모리에만 보관됩니다 (--no-prefs)
+@msg	`scopes.kind`: unknown scope `{name}` (one of {scopes})	`scopes.kind`: 알 수 없는 스코프 `{name}` ({scopes} 중 하나)
+@msg	`dock.move`: `to` is `left` or `right`, not `{to}`	`dock.move`: `to`는 `{to}`이(가) 아니라 `left` 또는 `right`입니다
+@msg	`dock.float` needs `floating`: true or false	`dock.float`에는 `floating`(true 또는 false)이 필요합니다
+@msg	`dock.layout_save`: `name` is a string	`dock.layout_save`: `name`은 문자열입니다
+@msg	there is no dock layout named `{name}`	이름이 `{name}`인 도크 레이아웃이 없습니다
+@msg	there is no link for `{command}`	`{command}`에 대한 링크가 없습니다
+@msg	unknown command `{command}`	알 수 없는 명령 `{command}`
+@msg	there is already a profile named `{name}`	이름이 `{name}`인 프로필이 이미 있습니다
+@msg	there is already a scene collection named `{name}`	이름이 `{name}`인 장면 모음이 이미 있습니다
+@msg	the last scene collection can't be removed	마지막 장면 모음은 제거할 수 없습니다
+@msg	the last profile can't be removed	마지막 프로필은 제거할 수 없습니다
+@msg	update checks are off in this session (--no-prefs, a scripted run or a test)	이 세션에서는 업데이트 확인이 꺼져 있습니다 (--no-prefs, 스크립트 실행 또는 테스트)
+@msg	there are already {count} dock layouts; remove one first	도크 레이아웃이 이미 {count}개 있습니다. 먼저 하나를 제거하세요
+@msg	a name needs 1 to 100 characters	이름은 1~100자여야 합니다
+@msg	a name can't start or end with a space, or end with a period	이름은 공백으로 시작하거나 끝날 수 없고 마침표로 끝날 수 없습니다
+@msg	a name can't contain {character}	이름에 {character}을(를) 포함할 수 없습니다
+@msg	`{name}` is reserved by the system	`{name}`은(는) 시스템에서 예약한 이름입니다
+@msg	`video.canvas_from_display`: the size of the display the window is on is not known; pass `display`	`video.canvas_from_display`: 이 창이 있는 디스플레이의 크기를 알 수 없습니다. `display`를 지정하세요
+@msg	`video.canvas_from_display`: `display` is a display id from `video.displays`	`video.canvas_from_display`: `display`는 `video.displays`의 디스플레이 ID입니다
+@msg	there is no display `{id}`: the system lists no displays	디스플레이 `{id}`이(가) 없습니다: 시스템에 표시되는 디스플레이가 없습니다
+@msg	there is no display `{id}` (the displays are {ids})	디스플레이 `{id}`이(가) 없습니다 (디스플레이: {ids})
+@msg	a {width} × {height} display can't be the canvas: each side must be from {min} to {max} pixels	{width} × {height} 디스플레이는 캔버스가 될 수 없습니다: 각 변은 {min}~{max}픽셀이어야 합니다

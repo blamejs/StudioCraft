@@ -246,9 +246,9 @@ The packaging scripts in `packaging/` write the files to `dist/release/`:
 
 ## Streaming and `ffmpeg`
 
-Streaming, and recording with an encoder other than H.264 (built in), run a separately installed
-`ffmpeg`, which none of the packages include. The Flatpak sandbox cannot run an `ffmpeg` installed
-on the system. Every package, the Flatpak included, records MKV files with H.264 (built in) without
+Recording with an encoder other than the built-in ones runs a separately installed `ffmpeg`, which
+none of the packages include. The Flatpak sandbox cannot run an `ffmpeg` installed on the system.
+Every package, the Flatpak included, streams and records MKV files with H.264 (built in) without
 `ffmpeg`.
 
 ## Package ids

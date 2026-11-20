@@ -7,6 +7,7 @@ use serde_json::{Value, json};
 use studiocraft_engine::command::Undo;
 use studiocraft_studio::OutputKind;
 
+use crate::i18n::Msg;
 use crate::{APP_NAME, StudioApp, commands};
 
 /// The docks in the order they are laid out, by the names `ui.inspect` reports.
@@ -228,10 +229,11 @@ impl StudioApp {
                     Ok(json!({"dialog": "prompt", "closed": true, "name": name}))
                 }
                 Err(e) => {
+                    let english = e.english();
                     if let Some(p) = &mut self.prompt {
-                        p.error = Some(e.clone());
+                        p.error = Some(e);
                     }
-                    Err(e)
+                    Err(english)
                 }
             };
         }
@@ -291,7 +293,7 @@ impl StudioApp {
                 "about": self.about,
                 "stats": self.store.prefs().stats,
                 "encoders": self.encoders.is_some(),
-                "prompt": self.prompt.as_ref().map(|p| json!({"title": p.what.title(), "text": p.text, "error": p.error})),
+                "prompt": self.prompt.as_ref().map(|p| json!({"title": p.what.title(), "text": p.text, "error": p.error.as_ref().map(Msg::english)})),
                 "confirm_exit": self.confirm_exit,
                 "updates": self.updates.window_open || self.updates.updater.prompt_open(),
             },

@@ -513,3 +513,35 @@ menu	Transform	Transformer
 @msg	The audio editor did not start ({error}); the folder {folder} is shown instead	L'éditeur audio n'a pas démarré ({error}) ; le dossier {folder} est affiché à la place
 @msg	Audio tracks saved in {folder}	Pistes audio enregistrées dans {folder}
 @msg	The audio tracks could not be opened: {error}	Les pistes audio n'ont pas pu être ouvertes : {error}
+@msg	`{command}` needs `{key}`	`{command}` nécessite `{key}`
+@msg	`{command}`: unknown dock `{name}` (one of {docks})	`{command}` : dock inconnu `{name}` (parmi {docks})
+@msg	`{command}`: `path` must be a file path	`{command}` : `path` doit être un chemin de fichier
+@msg	`{command}` needs `path` when no file dialog can be shown	`{command}` nécessite `path` quand aucune boîte de dialogue de fichier ne peut s'afficher
+@msg	The scene collection could not be imported: {error}	La collection de scènes n'a pas pu être importée : {error}
+@msg	The scene collection could not be exported: {error}	La collection de scènes n'a pas pu être exportée : {error}
+@msg	there is no free name for the scene collection `{name}`	aucun nom n'est libre pour la collection de scènes `{name}`
+@msg	select a source first	sélectionnez d'abord une source
+@msg	the source has not shown a picture yet	la source n'a pas encore affiché d'image
+@msg	settings are kept in memory only (--no-prefs)	les paramètres sont conservés en mémoire uniquement (--no-prefs)
+@msg	`scopes.kind`: unknown scope `{name}` (one of {scopes})	`scopes.kind` : scope vidéo inconnu `{name}` (parmi {scopes})
+@msg	`dock.move`: `to` is `left` or `right`, not `{to}`	`dock.move` : `to` vaut `left` ou `right`, pas `{to}`
+@msg	`dock.float` needs `floating`: true or false	`dock.float` nécessite `floating` : true ou false
+@msg	`dock.layout_save`: `name` is a string	`dock.layout_save` : `name` est une chaîne
+@msg	there is no dock layout named `{name}`	aucune disposition des docks ne s'appelle `{name}`
+@msg	there is no link for `{command}`	aucun lien pour `{command}`
+@msg	unknown command `{command}`	commande inconnue `{command}`
+@msg	there is already a profile named `{name}`	un profil s'appelle déjà `{name}`
+@msg	there is already a scene collection named `{name}`	une collection de scènes s'appelle déjà `{name}`
+@msg	the last scene collection can't be removed	la dernière collection de scènes ne peut pas être supprimée
+@msg	the last profile can't be removed	le dernier profil ne peut pas être supprimé
+@msg	update checks are off in this session (--no-prefs, a scripted run or a test)	la recherche de mises à jour est désactivée dans cette session (--no-prefs, une exécution par script ou un test)
+@msg	there are already {count} dock layouts; remove one first	il y a déjà {count} dispositions des docks ; supprimez-en une d'abord
+@msg	a name needs 1 to 100 characters	un nom doit comporter de 1 à 100 caractères
+@msg	a name can't start or end with a space, or end with a period	un nom ne peut ni commencer ni finir par une espace, ni finir par un point
+@msg	a name can't contain {character}	un nom ne peut pas contenir {character}
+@msg	`{name}` is reserved by the system	`{name}` est réservé par le système
+@msg	`video.canvas_from_display`: the size of the display the window is on is not known; pass `display`	`video.canvas_from_display` : la taille de l'écran où se trouve la fenêtre est inconnue ; indiquez `display`
+@msg	`video.canvas_from_display`: `display` is a display id from `video.displays`	`video.canvas_from_display` : `display` est un identifiant d'écran de `video.displays`
+@msg	there is no display `{id}`: the system lists no displays	aucun écran `{id}` : le système ne liste aucun écran
+@msg	there is no display `{id}` (the displays are {ids})	aucun écran `{id}` (les écrans sont {ids})
+@msg	a {width} × {height} display can't be the canvas: each side must be from {min} to {max} pixels	un écran de {width} × {height} ne peut pas servir de canevas : chaque côté doit faire de {min} à {max} pixels

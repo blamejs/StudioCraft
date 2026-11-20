@@ -503,3 +503,35 @@ menu	Transform	Przekształć
 @msg	The audio editor did not start ({error}); the folder {folder} is shown instead	Edytor audio się nie uruchomił ({error}); zamiast niego wyświetlono folder {folder}
 @msg	Audio tracks saved in {folder}	Zapisano ścieżki audio w {folder}
 @msg	The audio tracks could not be opened: {error}	Nie można otworzyć ścieżek audio: {error}
+@msg	`{command}` needs `{key}`	`{command}` wymaga `{key}`
+@msg	`{command}`: unknown dock `{name}` (one of {docks})	`{command}`: nieznany panel `{name}` (jeden z {docks})
+@msg	`{command}`: `path` must be a file path	`{command}`: `path` musi być ścieżką pliku
+@msg	`{command}` needs `path` when no file dialog can be shown	`{command}` wymaga `path`, gdy nie można wyświetlić okna wyboru plików
+@msg	The scene collection could not be imported: {error}	Nie można zaimportować kolekcji scen: {error}
+@msg	The scene collection could not be exported: {error}	Nie można wyeksportować kolekcji scen: {error}
+@msg	there is no free name for the scene collection `{name}`	nie ma wolnej nazwy dla kolekcji scen `{name}`
+@msg	select a source first	najpierw wybierz źródło
+@msg	the source has not shown a picture yet	źródło nie pokazało jeszcze obrazu
+@msg	settings are kept in memory only (--no-prefs)	ustawienia są przechowywane tylko w pamięci (--no-prefs)
+@msg	`scopes.kind`: unknown scope `{name}` (one of {scopes})	`scopes.kind`: nieznany miernik obrazu `{name}` (jeden z {scopes})
+@msg	`dock.move`: `to` is `left` or `right`, not `{to}`	`dock.move`: `to` to `left` lub `right`, nie `{to}`
+@msg	`dock.float` needs `floating`: true or false	`dock.float` wymaga `floating`: true lub false
+@msg	`dock.layout_save`: `name` is a string	`dock.layout_save`: `name` jest ciągiem znaków
+@msg	there is no dock layout named `{name}`	nie ma układu paneli o nazwie `{name}`
+@msg	there is no link for `{command}`	nie ma łącza dla `{command}`
+@msg	unknown command `{command}`	nieznane polecenie `{command}`
+@msg	there is already a profile named `{name}`	profil o nazwie `{name}` już istnieje
+@msg	there is already a scene collection named `{name}`	kolekcja scen o nazwie `{name}` już istnieje
+@msg	the last scene collection can't be removed	nie można usunąć ostatniej kolekcji scen
+@msg	the last profile can't be removed	nie można usunąć ostatniego profilu
+@msg	update checks are off in this session (--no-prefs, a scripted run or a test)	sprawdzanie aktualizacji jest wyłączone w tej sesji (--no-prefs, uruchomienie ze skryptu lub test)
+@msg	there are already {count} dock layouts; remove one first	liczba układów paneli osiągnęła już {count}; najpierw usuń jeden
+@msg	a name needs 1 to 100 characters	nazwa musi mieć od 1 do 100 znaków
+@msg	a name can't start or end with a space, or end with a period	nazwa nie może zaczynać się ani kończyć spacją ani kończyć się kropką
+@msg	a name can't contain {character}	nazwa nie może zawierać {character}
+@msg	`{name}` is reserved by the system	nazwa `{name}` jest zarezerwowana przez system
+@msg	`video.canvas_from_display`: the size of the display the window is on is not known; pass `display`	`video.canvas_from_display`: rozmiar ekranu, na którym jest okno, nie jest znany; podaj `display`
+@msg	`video.canvas_from_display`: `display` is a display id from `video.displays`	`video.canvas_from_display`: `display` to identyfikator ekranu z `video.displays`
+@msg	there is no display `{id}`: the system lists no displays	nie ma ekranu `{id}`: system nie podaje żadnych ekranów
+@msg	there is no display `{id}` (the displays are {ids})	nie ma ekranu `{id}` (dostępne ekrany: {ids})
+@msg	a {width} × {height} display can't be the canvas: each side must be from {min} to {max} pixels	ekran {width} × {height} nie może być płótnem: każdy bok musi mieć od {min} do {max} pikseli

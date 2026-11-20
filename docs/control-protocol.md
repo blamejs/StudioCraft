@@ -80,6 +80,8 @@ collections).
 `engine.execute` runs every engine command (for example `scene.add`, `source.add`,
 `item.transform`, `record.toggle`, `studio.transition`) and every window command (for example
 `view.stats`, `profile.new`, `selection.fit`). A failed command is an error with its message.
+The message is in English. The window's status bar shows it as well, in the interface language
+when the language's catalog has the message.
 [Commands with their own parameters](#commands-with-their-own-parameters) describes `app.info`,
 `app.links`, `app.check_updates`, `plugin.list`, `source.schema`, `source.sync_offset`,
 `source.monitor`, `source.set_record_track`, `audio_tracks.status`, `audio_tracks.repair`,

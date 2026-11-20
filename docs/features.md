@@ -155,27 +155,29 @@ Recordings opens the folder.
 
 ### Encoders
 
-x264 is the default encoder for recordings and streams. Settings › Output and Settings › Stream
-show the chosen encoder's settings, such as the x264 and NVENC presets.
+x264 is the default encoder for recordings, and H.264 (built in) for streams. Settings › Output and
+Settings › Stream show the chosen encoder's settings, such as the x264 and NVENC presets.
 
 | Encoder | Records | Needs `ffmpeg` | Systems |
 | --- | --- | --- | --- |
-| Software (x264) | MKV, MP4 and MOV at every level, and streams | Yes | All |
-| H.264 (built in) | MKV at Compact, High and Pristine, with a Speed, Balanced or Quality preset | No | All |
-| Hardware (set in Settings › Video) | MKV, MP4 and MOV, and streams, with the hardware encoder set in Settings › Video › Hardware acceleration | Yes, except for the built-in encoders below | All |
+| Software (x264) | MKV, MP4 and MOV at every level | Yes | All |
+| H.264 (built in) | MKV at Compact, High and Pristine, with a Speed, Balanced or Quality preset, and streams | No | All |
+| Hardware (set in Settings › Video) | MKV, MP4 and MOV, and streams, with the hardware encoder set in Settings › Video › Hardware acceleration | Yes, except for the built-in encoders below and for streams | All |
 | NVIDIA NVENC H.264 and HEVC (built in) | MKV, through the NVIDIA driver | No | Windows and 64-bit Linux |
 | Windows Media Foundation H.264 and HEVC (built in) | MKV, with the hardware encoders Media Foundation lists | No | Windows |
 | Apple VideoToolbox H.264 and HEVC (built in) | MKV, with the VideoToolbox hardware encoders | No | macOS |
 | VA-API H.264 and HEVC (built in) | MKV, with the VA-API hardware encoders through libva | No | 64-bit Linux |
 
 H.264 (built in) uses StudioCraft's own H.264 and AAC encoders. The Hardware encoder uses the
-built-in hardware encoders for MKV recordings. [Hardware acceleration](#hardware-acceleration)
+built-in hardware encoders for MKV recordings, and the built-in hardware H.264 encoders for streams,
+with H.264 (built in) when none works. [Hardware acceleration](#hardware-acceleration)
 describes how it picks one.
 
 ### When `ffmpeg` is needed
 
-MP4 and MOV recordings, recordings at the Lossless quality level, streams, and recordings with
-x264 or a hardware encoder outside the built-in ones run in a separately installed `ffmpeg`.
+MP4 and MOV recordings, recordings at the Lossless quality level, and recordings with x264 or a
+hardware encoder outside the built-in ones run in a separately installed `ffmpeg`. Streams do not
+need it.
 A Media file source plays Ogg Vorbis files at 8 to 192 kHz without `ffmpeg`, and plays every other file through `ffmpeg`. StudioCraft looks for `ffmpeg` on the `PATH`, or at the location set in Settings › Output.
 Recording uses x264 until H.264 (built in) is chosen in Settings › Output. No release package
 includes `ffmpeg`. The `.deb` and `.rpm` packages list it as a recommended package. The Flatpak
@@ -252,11 +254,23 @@ in Settings › Hotkeys.
 
 ## Streaming
 
-StudioCraft streams to a Real-Time Messaging Protocol (RTMP) server at a constant bitrate. Set the
-server and the stream key in Settings › Stream, then click Go Live. Streams run in `ffmpeg` with
-x264 or a hardware encoder ([When `ffmpeg` is needed](#when-ffmpeg-is-needed)). Settings › Stream
-also sets the video bitrate, the audio bitrate, the video encoder and the keyframe interval. The
-defaults are listed in [MECHANICS.md](../MECHANICS.md#recording-and-streaming).
+StudioCraft streams to Real-Time Messaging Protocol (RTMP and RTMPS) servers at a constant
+bitrate. Set the server and the stream key in Settings › Stream, then click Go Live. Streams run
+in StudioCraft with H.264 (built in) or a built-in hardware H.264 encoder, without `ffmpeg`.
+Settings › Stream also sets the video bitrate, the audio bitrate, the video encoder and the
+keyframe interval. The defaults are listed in
+[MECHANICS.md](../MECHANICS.md#recording-and-streaming).
+
+A profile holds up to 16 stream destinations, each with its own server, key and on or off setting.
+Settings › Stream edits the first one. A stream sends to every destination that is on, and each
+destination connects, reconnects and stops on its own: one that fails does not stop the others.
+A lost connection is tried again after 2, 4, 8 and 16 s and then every 30 s, and a destination gives
+up after 10 failed tries in a row. The stream fails when no destination is sending or trying to.
+A key written at the end of the server address, as in `rtmp://host/app/key`, is used as the stream
+key when the key field is empty, and the stream's status leaves it out of the address it shows.
+
+The stream key in Settings › Stream is saved in the profile file as plain text. A destination can
+instead use a key held only for the running session, which is never saved.
 
 ## Hardware acceleration
 
@@ -270,8 +284,8 @@ again on a new device, and after 3 losses in 10 minutes it draws in software.
 **Hardware encoder** picks the encoder that recordings and streams use when their encoder is
 Hardware: Automatic, Software only, or one of the listed hardware encoders. Software only uses
 x264 without testing the hardware encoders. Automatic tests each candidate with a one-frame
-encode, in an order set by the graphics adapter's vendor, and uses x264 when none works. The
-candidates run in `ffmpeg`:
+encode, in an order set by the graphics adapter's vendor, and uses x264 when none works, or
+H.264 (built in) for a stream. The candidates run in `ffmpeg`, except for a stream:
 
 | Family | Codecs |
 | --- | --- |
@@ -284,7 +298,8 @@ candidates run in `ffmpeg`:
 
 For an MKV recording that is not at the Lossless level, StudioCraft tests each candidate that has
 a built-in encoder in the following list with that built-in encoder, inside its own process
-instead of in `ffmpeg`. When such a candidate is chosen, the recording uses the built-in encoder:
+instead of in `ffmpeg`. When such a candidate is chosen, the recording uses the built-in encoder.
+A stream tests only the H.264 candidates in this list, and skips every other candidate:
 
 - NVIDIA NVENC H.264 and HEVC (built in) run through the NVIDIA driver on Windows and 64-bit
   Linux.
