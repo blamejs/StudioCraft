@@ -491,3 +491,35 @@ menu	Transform	Transformera
 @msg	Audio tracks could not be repaired: {takes} and {more} more	Ljudspåren kunde inte repareras: {takes} och {more} till
 @msg	Audio tracks could not be repaired: {takes}. Takes repaired: {count}	Ljudspåren kunde inte repareras: {takes}. Reparerade tagningar: {count}
 @msg	Audio tracks could not be repaired: {takes} and {more} more. Takes repaired: {count}	Ljudspåren kunde inte repareras: {takes} och {more} till. Reparerade tagningar: {count}
+@msg	`{command}` needs `{key}`	`{command}` behöver `{key}`
+@msg	`{command}`: unknown dock `{name}` (one of {docks})	`{command}`: okänd panel `{name}` (en av {docks})
+@msg	`{command}`: `path` must be a file path	`{command}`: `path` måste vara en filsökväg
+@msg	`{command}` needs `path` when no file dialog can be shown	`{command}` behöver `path` när ingen fildialog kan visas
+@msg	The scene collection could not be imported: {error}	Scensamlingen kunde inte importeras: {error}
+@msg	The scene collection could not be exported: {error}	Scensamlingen kunde inte exporteras: {error}
+@msg	there is no free name for the scene collection `{name}`	det finns inget ledigt namn för scensamlingen `{name}`
+@msg	select a source first	välj en källa först
+@msg	the source has not shown a picture yet	källan har inte visat någon bild än
+@msg	settings are kept in memory only (--no-prefs)	inställningarna sparas bara i minnet (--no-prefs)
+@msg	`scopes.kind`: unknown scope `{name}` (one of {scopes})	`scopes.kind`: okänd videomätare `{name}` (en av {scopes})
+@msg	`dock.move`: `to` is `left` or `right`, not `{to}`	`dock.move`: `to` är `left` eller `right`, inte `{to}`
+@msg	`dock.float` needs `floating`: true or false	`dock.float` behöver `floating`: true eller false
+@msg	`dock.layout_save`: `name` is a string	`dock.layout_save`: `name` är en sträng
+@msg	there is no dock layout named `{name}`	det finns ingen panellayout som heter `{name}`
+@msg	there is no link for `{command}`	det finns ingen länk för `{command}`
+@msg	unknown command `{command}`	okänt kommando `{command}`
+@msg	there is already a profile named `{name}`	det finns redan en profil som heter `{name}`
+@msg	there is already a scene collection named `{name}`	det finns redan en scensamling som heter `{name}`
+@msg	the last scene collection can't be removed	den sista scensamlingen kan inte tas bort
+@msg	the last profile can't be removed	den sista profilen kan inte tas bort
+@msg	update checks are off in this session (--no-prefs, a scripted run or a test)	sökning efter uppdateringar är avstängd i den här sessionen (--no-prefs, en skriptkörning eller ett test)
+@msg	there are already {count} dock layouts; remove one first	det finns redan {count} panellayouter; ta bort en först
+@msg	a name needs 1 to 100 characters	ett namn behöver 1 till 100 tecken
+@msg	a name can't start or end with a space, or end with a period	ett namn kan inte börja eller sluta med ett mellanslag, eller sluta med en punkt
+@msg	a name can't contain {character}	ett namn kan inte innehålla {character}
+@msg	`{name}` is reserved by the system	`{name}` är reserverat av systemet
+@msg	`video.canvas_from_display`: the size of the display the window is on is not known; pass `display`	`video.canvas_from_display`: storleken på skärmen som fönstret finns på är okänd; ange `display`
+@msg	`video.canvas_from_display`: `display` is a display id from `video.displays`	`video.canvas_from_display`: `display` är ett skärm-id från `video.displays`
+@msg	there is no display `{id}`: the system lists no displays	det finns ingen skärm `{id}`: systemet listar inga skärmar
+@msg	there is no display `{id}` (the displays are {ids})	det finns ingen skärm `{id}` (skärmarna är {ids})
+@msg	a {width} × {height} display can't be the canvas: each side must be from {min} to {max} pixels	en skärm på {width} × {height} kan inte vara arbetsytan: varje sida måste vara {min} till {max} pixlar

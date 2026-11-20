@@ -500,3 +500,35 @@ menu	Transform	Преобразование
 @msg	Audio tracks could not be repaired: {takes} and {more} more	Не удалось восстановить звуковые дорожки: {takes} и ещё {more}
 @msg	Audio tracks could not be repaired: {takes}. Takes repaired: {count}	Не удалось восстановить звуковые дорожки: {takes}. Восстановлено дублей: {count}
 @msg	Audio tracks could not be repaired: {takes} and {more} more. Takes repaired: {count}	Не удалось восстановить звуковые дорожки: {takes} и ещё {more}. Восстановлено дублей: {count}
+@msg	`{command}` needs `{key}`	`{command}` требует `{key}`
+@msg	`{command}`: unknown dock `{name}` (one of {docks})	`{command}`: неизвестная панель `{name}` (одна из {docks})
+@msg	`{command}`: `path` must be a file path	`{command}`: `path` должен быть путём к файлу
+@msg	`{command}` needs `path` when no file dialog can be shown	`{command}` требует `path`, когда диалог выбора файла показать нельзя
+@msg	The scene collection could not be imported: {error}	Не удалось импортировать коллекцию сцен: {error}
+@msg	The scene collection could not be exported: {error}	Не удалось экспортировать коллекцию сцен: {error}
+@msg	there is no free name for the scene collection `{name}`	нет свободного имени для коллекции сцен `{name}`
+@msg	select a source first	сначала выберите источник
+@msg	the source has not shown a picture yet	источник ещё не показал изображение
+@msg	settings are kept in memory only (--no-prefs)	настройки хранятся только в памяти (--no-prefs)
+@msg	`scopes.kind`: unknown scope `{name}` (one of {scopes})	`scopes.kind`: неизвестный график сигнала `{name}` (один из {scopes})
+@msg	`dock.move`: `to` is `left` or `right`, not `{to}`	`dock.move`: `to` может быть `left` или `right`, но не `{to}`
+@msg	`dock.float` needs `floating`: true or false	`dock.float` требует `floating`: true или false
+@msg	`dock.layout_save`: `name` is a string	`dock.layout_save`: `name` должен быть строкой
+@msg	there is no dock layout named `{name}`	нет раскладки панелей с именем `{name}`
+@msg	there is no link for `{command}`	нет ссылки для `{command}`
+@msg	unknown command `{command}`	неизвестная команда `{command}`
+@msg	there is already a profile named `{name}`	профиль с именем `{name}` уже есть
+@msg	there is already a scene collection named `{name}`	коллекция сцен с именем `{name}` уже есть
+@msg	the last scene collection can't be removed	последнюю коллекцию сцен нельзя удалить
+@msg	the last profile can't be removed	последний профиль нельзя удалить
+@msg	update checks are off in this session (--no-prefs, a scripted run or a test)	проверка обновлений в этом сеансе выключена (--no-prefs, запуск из скрипта или тест)
+@msg	there are already {count} dock layouts; remove one first	раскладок панелей уже {count}; сначала удалите одну
+@msg	a name needs 1 to 100 characters	имя должно содержать от 1 до 100 символов
+@msg	a name can't start or end with a space, or end with a period	имя не может начинаться или заканчиваться пробелом и не может заканчиваться точкой
+@msg	a name can't contain {character}	имя не может содержать {character}
+@msg	`{name}` is reserved by the system	имя `{name}` зарезервировано системой
+@msg	`video.canvas_from_display`: the size of the display the window is on is not known; pass `display`	`video.canvas_from_display`: размер экрана, на котором находится окно, неизвестен; укажите `display`
+@msg	`video.canvas_from_display`: `display` is a display id from `video.displays`	`video.canvas_from_display`: `display` должен быть идентификатором экрана из `video.displays`
+@msg	there is no display `{id}`: the system lists no displays	нет экрана `{id}`: система не сообщает ни об одном экране
+@msg	there is no display `{id}` (the displays are {ids})	нет экрана `{id}` (есть экраны {ids})
+@msg	a {width} × {height} display can't be the canvas: each side must be from {min} to {max} pixels	экран {width} × {height} не может быть холстом: каждая сторона должна быть от {min} до {max} пикселей
