@@ -34,6 +34,13 @@ pub const UI_COMMANDS: &[(&str, &str)] = &[
     ("view.status_bar", "Status Bar"),
     ("view.fullscreen", "Full-Screen Interface"),
     ("view.lock_preview", "Lock Preview"),
+    ("view.streaming", "Streaming"),
+    ("stream.destinations", "List Stream Destinations"),
+    ("stream.destination_add", "Add Stream Destination"),
+    ("stream.destination_remove", "Remove Stream Destination"),
+    ("stream.destination_set", "Change Stream Destination"),
+    ("stream.destination_start", "Start Stream Destination"),
+    ("stream.destination_stop", "Stop Stream Destination"),
     ("dock.scenes", "Scenes"),
     ("dock.sources", "Sources"),
     ("dock.mixer", "Audio Mixer"),
@@ -89,6 +96,13 @@ pub fn ui_params(id: &str) -> &'static str {
         "profile.switch" | "collection.switch" => "name: string",
         "collection.import" | "collection.export" => "path?: string",
         "scopes.kind" => "kind: string (waveform, parade, histogram, vectorscopeYuv or vectorscopeHls)",
+        "stream.destination_add" => {
+            "name?: string, server?: string, enabled?: boolean, key?: string (profile, held or none), held_name?: string (with key held)"
+        }
+        "stream.destination_set" => {
+            "id: string, name?: string, server?: string, enabled?: boolean, key?: string (profile, held or none), held_name?: string (with key held)"
+        }
+        "stream.destination_remove" | "stream.destination_start" | "stream.destination_stop" => "id: string",
         "dock.move" => "dock: string (scenes, sources or mixer), to: string (left or right)",
         "dock.float" => "dock: string (scenes, sources or mixer), floating: boolean (true for a window of its own, false for the strip)",
         "dock.layout_save" => "name?: string (without it the window asks for one)",
@@ -236,6 +250,7 @@ pub fn menu_bar(s: &MenuState) -> MenuBar {
             check("studio.toggle", "Studio Mode"),
             check("view.stats", "Stats"),
             check("view.scopes", "Scopes"),
+            check("view.streaming", "Streaming"),
             check("view.status_bar", "Status Bar"),
         ],
     )

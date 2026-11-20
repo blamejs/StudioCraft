@@ -71,6 +71,7 @@ impl StudioApp {
             id if id.starts_with("selection.") => ItemState { enabled: self.selection().is_some(), checked: None },
             "view.stats" => on(p.stats),
             "view.scopes" => on(p.scopes),
+            "view.streaming" => on(self.streaming.is_some()),
             "view.status_bar" => on(p.status_bar),
             "view.lock_preview" => on(p.lock_preview),
             "view.fullscreen" => on(self.fullscreen),

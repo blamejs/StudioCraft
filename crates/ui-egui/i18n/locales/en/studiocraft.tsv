@@ -4,13 +4,16 @@
 	`{shortcut}`: {error}	`{shortcut}`: {error}
 	a camera was not found	a camera was not found
 	A recording, stream or replay buffer is running. Exiting stops it; a recording is finished and saved first, and the replay buffer's unsaved video is lost.	A recording, stream or replay buffer is running. Exiting stops it; a recording is finished and saved first, and the replay buffer's unsaved video is lost.
+	A key for this session only	A key for this session only
 	About StudioCraft	About StudioCraft
 	About {app}	About {app}
 	Add	Add
 	Add a filter to change how this source looks or sounds.	Add a filter to change how this source looks or sounds.
 	Add a scene	Add a scene
 	Add a source	Add a source
+	Add Destination	Add Destination
 	Add Scene	Add Scene
+	Add Stream Destination	Add Stream Destination
 	Alignment	Alignment
 	Alpha mask (alpha channel)	Alpha mask (alpha channel)
 	Alpha mask (color channel)	Alpha mask (color channel)
@@ -52,6 +55,7 @@
 	Ceiling (dB)	Ceiling (dB)
 	Center	Center
 	Center to Screen	Center to Screen
+	Change Stream Destination	Change Stream Destination
 	Check for updates at start	Check for updates at start
 	Check for Updates…	Check for Updates…
 	Choose an application	Choose an application
@@ -65,6 +69,7 @@
 	Community	Community
 	Compact (small files)	Compact (small files)
 	Compressor	Compressor
+	Connecting	Connecting
 	Contrast	Contrast
 	could not connect to the PipeWire sound server	could not connect to the PipeWire sound server
 	CPU usage preset (faster uses less CPU)	CPU usage preset (faster uses less CPU)
@@ -118,6 +123,7 @@
 	Fit to Screen	Fit to Screen
 	Font	Font
 	Font family	Font family
+	Forget	Forget
 	Format	Format
 	Frame time (average)	Frame time (average)
 	Frame time (last)	Frame time (last)
@@ -146,6 +152,8 @@
 	High (dB)	High (dB)
 	Histogram	Histogram
 	HLS vectorscope	HLS vectorscope
+	Hold	Hold
+	Held for this session as {name} and never saved	Held for this session as {name} and never saved
 	Hold (ms)	Hold (ms)
 	Horizontal speed (px/s)	Horizontal speed (px/s)
 	Hotkeys	Hotkeys
@@ -158,6 +166,7 @@
 	kbps	kbps
 	Key color	Key color
 	Key color spill reduction	Key color spill reduction
+	Key for this session	Key for this session
 	Keyframe interval	Keyframe interval
 	Language	Language
 	Left	Left
@@ -166,7 +175,9 @@
 	Limit width	Limit width
 	Limiter	Limiter
 	Linear	Linear
+	List Stream Destinations	List Stream Destinations
 	LIVE	LIVE
+	Live	Live
 	Layouts	Layouts
 	Live, {time}	Live, {time}
 	Lock (it can't be moved in the preview)	Lock (it can't be moved in the preview)
@@ -207,12 +218,18 @@
 	New…	New…
 	No audio sources are heard in this scene.	No audio sources are heard in this scene.
 	No contributors listed yet	No contributors listed yet
+	No destinations yet. Add one to stream to it.	No destinations yet. Add one to stream to it.
 	No filters yet.	No filters yet.
 	No graphics device: the preview is off	No graphics device: the preview is off
+	No key is held for this session yet	No key is held for this session yet
 	No separate key; a key at the end of the server address is used	No separate key; a key at the end of the server address is used
+	No server set	No server set
 	No sources in this scene. Add one with +.	No sources in this scene. Add one with +.
 	Noise gate	Noise gate
 	None	None
+	None (a key at the end of the server address)	None (a key at the end of the server address)
+	Not in this stream; it is sent to from the next start	Not in this stream; it is sent to from the next start
+	Off	Off
 	not in this ffmpeg	not in this ffmpeg
 	NVIDIA NVENC H.264	NVIDIA NVENC H.264
 	NVIDIA NVENC H.264 (built in)	NVIDIA NVENC H.264 (built in)
@@ -275,6 +292,7 @@
 	Remove Dock Layout	Remove Dock Layout
 	Remove Layout	Remove Layout
 	Remove Selected Source	Remove Selected Source
+	Remove Stream Destination	Remove Stream Destination
 	Remove the selected scene	Remove the selected scene
 	Remove the selected source from the scene	Remove the selected source from the scene
 	Rename	Rename
@@ -302,6 +320,7 @@
 	Running	Running
 	s	s
 	Saturation	Saturation
+	Save	Save
 	Save Dock Layout	Save Dock Layout
 	Save Dock Layout…	Save Dock Layout…
 	Save Replay	Save Replay
@@ -313,7 +332,11 @@
 	Scopes	Scopes
 	Scroll	Scroll
 	Send the preview to the program	Send the preview to the program
+	Send to this destination when the stream starts	Send to this destination when the stream starts
+	Sent to when the stream starts	Sent to when the stream starts
 	Server	Server
+	Server and key changes are used from the next start of the stream.	Server and key changes are used from the next start of the stream.
+	Session key name	Session key name
 	Set for each session as {name} and never saved; a key typed here is saved in this profile	Set for each session as {name} and never saved; a key typed here is saved in this profile
 	Settings	Settings
 	sharing stopped	sharing stopped
@@ -333,24 +356,30 @@
 	Sources	Sources
 	Sources set to monitoring in their Properties window play on this device.	Sources set to monitoring in their Properties window play on this device.
 	Speed	Speed
+	Start	Start
 	Start or Stop Recording	Start or Stop Recording
 	Start or Stop Replay Buffer	Start or Stop Replay Buffer
 	Start or Stop Streaming	Start or Stop Streaming
 	Start Recording	Start Recording
 	Start Replay Buffer	Start Replay Buffer
+	Start Stream Destination	Start Stream Destination
 	Start Streaming	Start Streaming
 	Starting…	Starting…
 	Stats	Stats
 	Status Bar	Status Bar
+	Stop	Stop
 	Stop and Exit	Stop and Exit
 	Stop Recording	Stop Recording
 	Stop Replay Buffer	Stop Replay Buffer
+	Stop Stream Destination	Stop Stream Destination
 	Stop Streaming	Stop Streaming
+	Stop this destination before removing it	Stop this destination before removing it
 	Stopped	Stopped
 	Stopping Replay Buffer…	Stopping Replay Buffer…
 	Stopping…	Stopping…
 	Stream	Stream
 	Stream key	Stream key
+	Streaming	Streaming
 	Stretch image	Stretch image
 	Stretch to Screen	Stretch to Screen
 	Studio	Studio
@@ -382,6 +411,7 @@
 	the desktop has no screen-cast portal	the desktop has no screen-cast portal
 	The interface fonts Inter and JetBrains Mono are under the SIL Open Font License 1.1.	The interface fonts Inter and JetBrains Mono are under the SIL Open Font License 1.1.
 	The licenses of the third-party crates StudioCraft uses are checked by `cargo xtask licenses`.	The licenses of the third-party crates StudioCraft uses are checked by `cargo xtask licenses`.
+	The profile's stream key	The profile's stream key
 	The scope could not be computed: {error}	The scope could not be computed: {error}
 	The scopes need a graphics device to read the program.	The scopes need a graphics device to read the program.
 	the screen capture could not start	the screen capture could not start
@@ -396,6 +426,7 @@
 	Transition Controls	Transition Controls
 	Transition settings	Transition settings
 	Transition to Program	Transition to Program
+	Trying again (try {attempt}): {error}	Trying again (try {attempt}): {error}
 	Type	Type
 	Type shortcuts such as Ctrl+1 or Shift+F5; separate several with commas.	Type shortcuts such as Ctrl+1 or Shift+F5; separate several with commas.
 	ultrafast	ultrafast
@@ -452,7 +483,9 @@
 @msg	{encoder} stopped working; the next start tries another encoder	{encoder} stopped working; the next start tries another encoder
 	{fps} fps  {ms} ms	{fps} fps  {ms} ms
 	{ms} ms	{ms} ms
+	rtmp://live.example.com/app	rtmp://live.example.com/app
 	{n} kbps	{n} kbps
+	{n} of {max} destinations	{n} of {max} destinations
 	{program} did not report its version	{program} did not report its version
 	{status} · {mb} MB	{status} · {mb} MB
 	Automatic (fastest)	Automatic (fastest)
@@ -558,6 +591,19 @@ menu	Transform	Transform
 @msg	`dock.float` needs `floating`: true or false	`dock.float` needs `floating`: true or false
 @msg	`dock.layout_save`: `name` is a string	`dock.layout_save`: `name` is a string
 @msg	there is no dock layout named `{name}`	there is no dock layout named `{name}`
+@msg	`{command}` needs `id`: a destination id	`{command}` needs `id`: a destination id
+@msg	`{command}`: `{key}` is a string	`{command}`: `{key}` is a string
+@msg	`{command}`: `{key}` is true or false	`{command}`: `{key}` is true or false
+@msg	`{command}`: `{key}` has a control character	`{command}`: `{key}` has a control character
+@msg	`{command}`: `name` is longer than {max} characters	`{command}`: `name` is longer than {max} characters
+@msg	`{command}`: `server` is longer than {max} bytes	`{command}`: `server` is longer than {max} bytes
+@msg	`{command}`: `key` is `profile`, `held` or `none`, not `{key}`	`{command}`: `key` is `profile`, `held` or `none`, not `{key}`
+@msg	`{command}`: `held_name` goes with `key`: `held`	`{command}`: `held_name` goes with `key`: `held`
+@msg	`{command}`: `held_name` is 1 to {max} bytes	`{command}`: `held_name` is 1 to {max} bytes
+@msg	a profile holds at most {max} stream destinations	a profile holds at most {max} stream destinations
+@msg	there is no stream destination `{id}`	there is no stream destination `{id}`
+@msg	stop the stream destination `{id}` before removing it	stop the stream destination `{id}` before removing it
+@msg	the running stream was started with another profile	the running stream was started with another profile
 @msg	there is no link for `{command}`	there is no link for `{command}`
 @msg	unknown command `{command}`	unknown command `{command}`
 @msg	there is already a profile named `{name}`	there is already a profile named `{name}`

@@ -470,6 +470,8 @@ fn every_label_chosen_at_run_time_has_an_english_row() {
     let mut labels: Vec<&str> = crate::docks::MOVES.iter().map(|(_, l)| *l).collect();
     labels.extend(RecordingQuality::ALL.map(crate::settings::quality_label));
     labels.extend(studiocraft_model::AudioTracksWhen::ALL.map(crate::settings::when_label));
+    // The Stream key choices of the Streaming window.
+    labels.extend(crate::streaming::KeyChoice::ALL.map(crate::streaming::KeyChoice::label));
     labels.extend(
         [
             Named::NewProfile,

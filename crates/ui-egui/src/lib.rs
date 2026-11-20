@@ -22,6 +22,7 @@ mod preview;
 mod scopes;
 mod settings;
 pub mod store;
+mod streaming;
 pub mod strip;
 pub mod theme;
 mod title_bar;
@@ -77,6 +78,12 @@ pub(crate) enum Act {
     },
     /// End the current drag in the undo history.
     Seal,
+    /// Hold `key` for this session under `name` for the stream destinations that use it; an
+    /// empty key forgets it. The key is never saved, so it is not a command parameter.
+    HoldStreamKey {
+        name: String,
+        key: String,
+    },
 }
 
 impl Act {
@@ -179,6 +186,8 @@ pub struct StudioApp {
     properties: Vec<Properties>,
     filters: Vec<Filters>,
     settings: Option<SettingsWindow>,
+    /// The Streaming window while it is open.
+    streaming: Option<streaming::StreamingPanel>,
     transition_schema: Option<SettingsSchema>,
     prompt: Option<Prompt>,
     about: bool,
@@ -302,6 +311,7 @@ impl StudioApp {
             properties: Vec::new(),
             filters: Vec::new(),
             settings: None,
+            streaming: None,
             transition_schema: None,
             prompt: None,
             about: false,
@@ -540,6 +550,7 @@ impl StudioApp {
                 json!({
                     "selected_item": self.selected,
                     "settings_open": self.settings.is_some(),
+                    "streaming_open": self.streaming.is_some(),
                     "properties_open": self.properties.iter().map(|p| p.source).collect::<Vec<_>>(),
                     "filters_open": self.filters.iter().map(|f| f.source).collect::<Vec<_>>(),
                     "about_open": self.about,
@@ -858,6 +869,7 @@ impl StudioApp {
             }
             "view.status_bar" => return Ok(self.toggle_pref(|p| &mut p.status_bar)),
             "view.lock_preview" => return Ok(self.toggle_pref(|p| &mut p.lock_preview)),
+            id if id == "view.streaming" || id.starts_with("stream.destination") => return self.streaming_command(cmd),
             "view.fullscreen" => {
                 self.fullscreen = !self.fullscreen;
                 ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(self.fullscreen));
@@ -1108,6 +1120,12 @@ impl StudioApp {
                 if what == Named::RenameProfile && old != name && !case_only {
                     self.store.remove_profile(&old)?;
                 }
+                if what == Named::RenameProfile {
+                    self.studio.stream_profile_renamed(&old, name);
+                    if let Some(panel) = self.streaming.as_mut().filter(|p| p.profile == old) {
+                        panel.profile = name.to_string();
+                    }
+                }
                 self.store.update(|pr| pr.profile = name.to_string());
             }
             Named::NewCollection | Named::DuplicateCollection | Named::RenameCollection => {
@@ -1191,6 +1209,7 @@ impl StudioApp {
         let next = self.profiles.iter().find(|n| **n != current).cloned().ok_or_else(|| tmsg!("the last profile can't be removed"))?;
         self.switch_profile(&next)?;
         self.store.remove_profile(&current)?;
+        self.studio.stream_profile_removed(&current);
         self.refresh_lists();
         Ok(())
     }
@@ -1228,6 +1247,7 @@ impl StudioApp {
                 }
             }
             Act::Seal => self.studio.seal_history(),
+            Act::HoldStreamKey { name, key } => self.studio.hold_stream_key(&name, &key),
         }
     }
 
@@ -1858,6 +1878,7 @@ impl StudioApp {
         }
 
         self.scopes_window(ctx, acts);
+        self.streaming_window(ctx, acts);
 
         if let Some(list) = &self.encoders {
             let mut open = true;
