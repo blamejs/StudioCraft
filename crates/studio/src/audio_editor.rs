@@ -42,10 +42,27 @@ impl Launcher for SystemLauncher {
     }
 
     fn find_on_path(&self, name: &str) -> Option<PathBuf> {
-        let path = std::env::var_os("PATH")?;
-        let names: Vec<String> = if cfg!(windows) { vec![format!("{name}.exe"), name.to_string()] } else { vec![name.to_string()] };
-        std::env::split_paths(&path).flat_map(|dir| names.iter().map(move |n| dir.join(n))).find(|p| p.is_file())
+        find_in(&std::env::var_os("PATH")?, name)
     }
+}
+
+/// The program `name` in the first folder of `path` (a `PATH` value) that holds it. Folders that are
+/// not absolute (an empty entry is the current folder) are passed over, and so on Unix is a file
+/// without execute permission.
+fn find_in(path: &std::ffi::OsStr, name: &str) -> Option<PathBuf> {
+    let names: Vec<String> = if cfg!(windows) { vec![format!("{name}.exe"), name.to_string()] } else { vec![name.to_string()] };
+    std::env::split_paths(path).filter(|dir| dir.is_absolute()).flat_map(|dir| names.iter().map(move |n| dir.join(n))).find(|p| runnable(p))
+}
+
+#[cfg(unix)]
+fn runnable(p: &Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::metadata(p).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+}
+
+#[cfg(not(unix))]
+fn runnable(p: &Path) -> bool {
+    p.is_file()
 }
 
 /// What an opening did.
@@ -157,6 +174,31 @@ pub(crate) mod tests {
         let err = open_session(&nothing, &session, "").unwrap_err();
         assert!(err.contains("could not be shown: no file manager"), "{err}");
         assert_eq!(*fake.log.lock().unwrap(), vec![format!("folder {}", folder.display()); 2]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_path_search_passes_over_a_file_that_cannot_run() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = std::env::temp_dir().join(format!("studiocraft-path-search-{}", std::process::id()));
+        let (first, second) = (root.join("first"), root.join("second"));
+        for (dir, mode) in [(&first, 0o644), (&second, 0o755)] {
+            std::fs::create_dir_all(dir).unwrap();
+            let file = dir.join(EDITOR_PROGRAM);
+            std::fs::write(&file, "#!/bin/sh\n").unwrap();
+            std::fs::set_permissions(&file, std::fs::Permissions::from_mode(mode)).unwrap();
+        }
+        std::fs::create_dir_all(root.join("empty").join(EDITOR_PROGRAM)).unwrap();
+        let path = std::env::join_paths([root.join("missing"), root.join("empty"), first.clone(), second.clone()]).unwrap();
+        assert_eq!(find_in(&path, EDITOR_PROGRAM), Some(second.join(EDITOR_PROGRAM)), "a folder and a file that cannot run are passed over");
+        assert_eq!(find_in(&std::env::join_paths([first]).unwrap(), EDITOR_PROGRAM), None);
+        assert_eq!(find_in(std::ffi::OsStr::new(""), EDITOR_PROGRAM), None, "an empty PATH holds nothing");
+        // A relative folder is passed over, even when it reaches a folder that holds the program.
+        let up: PathBuf = std::env::current_dir().unwrap().components().skip(1).map(|_| "..").collect();
+        let relative = up.join(second.strip_prefix("/").unwrap());
+        assert!(relative.join(EDITOR_PROGRAM).is_file(), "{}", relative.display());
+        assert_eq!(find_in(&std::env::join_paths([relative]).unwrap(), EDITOR_PROGRAM), None);
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
