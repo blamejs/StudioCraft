@@ -259,12 +259,14 @@ and `reason` say why.
 `app_audio.lanes` also only reads and takes no parameters. It returns the lanes of the Application
 Audio dock as `{"supported", "reason", "listing", "error", "lanes"}`: a lane for each `audio_input`
 source, then a lane for each listed application, then a lane for each routed application that is
-not running. Each lane has `kind` (`microphone` or `application`), `name`, `app` (`null` for a
-microphone), `source` (the id of the source that carries it, or `null`), `routed`,
-`routed_heard`, `heard`, `gain`, `muted`, `peak`, `running`, `playing` and `within`. `routed` is
-true when the source is a global audio source. `routed_heard` is true when a global audio source
-of the lane reaches the program, that is, its monitoring is not `monitor_only`. `heard` is true when the source is a global audio source or is shown in the
-program scene, and its monitoring is not `monitor_only`.
+not running. When the program hears more than one source of an application, each source after
+the first gets a lane of its own, named after the source, with `app` set to `null`. Each lane has
+`kind` (`microphone` or `application`), `name`, `app` (`null` for a microphone), `source` (the id
+of the source that carries it, or `null`), `routed`, `routed_heard`, `heard`, `gain`, `muted`,
+`peak`, `running`, `playing` and `within`. `routed` is true when the source is a global audio
+source. `routed_heard` is true when a global audio source of the lane reaches the program, that
+is, its monitoring is not `monitor_only`. `heard` is true when the source is a global audio source
+or is shown in the program scene, and its monitoring is not `monitor_only`.
 
 `app_audio.route` takes `app` (a value from `app_audio.lanes` or `app_audio.list`) and `routed`.
 With `routed: true` it returns `{"source": id}`: the global audio source that already captures the
@@ -280,9 +282,10 @@ application out of the global audio sources, removes the ones no scene shows, an
 in another folder, which captures the listed program only because it has the same file name, is
 taken out of the global audio sources and kept. Sources match an application the way a capture
 source finds it, so a source saved before the program moved to a new folder is that program's
-source. These values are errors: one
-that is not in the `app` form, an application that is not listed and has no source, and a file
-name alone that matches sources for programs at different paths while neither is listed. Both
+source. While no listed application matches the value and sources of the collection name programs
+at more than one path with its file name, the value matches only sources saved with exactly that
+value, so a file name alone matches only sources saved by file name. These values are errors: one
+that is not in the `app` form, and an application that is not listed and has no source. Both
 directions are one undo step, and a call that changes nothing records none.
 
 ```sh

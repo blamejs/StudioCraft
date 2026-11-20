@@ -161,8 +161,10 @@ it clear, and checking it routes the application again.
 
 When one application runs inside another one's process tree, such as a helper program, the capture
 of the outer one already records it, and the dock does not route one of them while the program
-hears the other. A routed application that quits keeps its lane. When two listed programs have the same
-file name, their lanes show the folder as well.
+hears the other. A routed application that quits keeps its lane. When two listed programs have the
+same file name, their lanes show the folder as well. When the program hears two sources of one
+application, the second source gets a lane of its own, named after the source, with its own volume
+slider and mute button and no check box.
 
 A lane with a source has a volume slider in dB and a mute button, and its settings menu opens the
 source's Properties… (sync offset and monitoring) and Filters…. The dock is hidden in a new

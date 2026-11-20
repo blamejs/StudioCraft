@@ -827,6 +827,104 @@ fn a_lane_with_two_sources_acts_on_the_one_the_program_hears() {
     assert_eq!(player["routed_heard"].as_bool(), Some(true), "routing again puts a routed source in the program: {player}");
 }
 
+fn add_app_source(c: &mut SceneCollection, name: &str, app: &str, monitor: studiocraft_model::MonitorMode) -> SourceId {
+    let id = SourceId(c.alloc_id());
+    c.sources.push(SourceConfig {
+        id,
+        kind: crate::lanes::APP_AUDIO_KIND.into(),
+        kind_version: 1,
+        name: name.into(),
+        settings: Settings::new().with("app", app),
+        filters: vec![],
+        audio: studiocraft_model::AudioState { monitor, ..Default::default() },
+    });
+    c.global_audio.push(id);
+    id
+}
+
+#[test]
+fn a_second_source_the_program_hears_gets_a_lane_of_its_own() {
+    let (mut e, _fake, _discovery) = lane_engine();
+    let mut c = e.collection().clone();
+    let one = add_app_source(&mut c, "Player one", PLAYER, studiocraft_model::MonitorMode::MonitorAndOutput);
+    let two = add_app_source(&mut c, "Player two", PLAYER, studiocraft_model::MonitorMode::MonitorAndOutput);
+    e.load(c);
+    let r = run(&mut e, "app_audio.lanes", json!({})).unwrap().result;
+    let sources: Vec<(Option<u64>, bool)> = r["lanes"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|l| l["kind"] == "application" && l["source"].is_u64())
+        .map(|l| (l["source"].as_u64(), l["app"].is_null()))
+        .collect();
+    assert_eq!(sources, vec![(Some(one.0), false), (Some(two.0), true)], "its mute and volume act on that source: {r}");
+    for field in ["playing", "peak", "within"] {
+        assert_eq!(lane(&r, "Player two")[field], lane(&r, "player")[field], "the application's {field} is the same on both");
+    }
+}
+
+#[test]
+fn a_quit_applications_lane_keeps_the_route_key_with_a_path() {
+    let (mut e, fake, discovery) = lane_engine();
+    let mut c = e.collection().clone();
+    add_app_source(&mut c, "Game", r"game.exe|c:\a\game.exe", studiocraft_model::MonitorMode::MonitorOnly);
+    add_app_source(&mut c, "Game anywhere", "game.exe", studiocraft_model::MonitorMode::MonitorAndOutput);
+    e.load(c);
+    let generation = discovery.generation();
+    fake.set_apps(vec![]);
+    assert!(discovery.wait_newer(generation, std::time::Duration::from_secs(10)).apps.is_empty());
+    let r = run(&mut e, "app_audio.lanes", json!({})).unwrap().result;
+    assert_eq!(lane(&r, "Game anywhere")["app"], r"game.exe|c:\a\game.exe", "{r}");
+}
+
+#[test]
+fn a_quit_program_at_each_path_keeps_a_lane_of_its_own() {
+    let (mut e, fake, discovery) = lane_engine();
+    let mut c = e.collection().clone();
+    add_app_source(&mut c, "Game anywhere", "game.exe", studiocraft_model::MonitorMode::MonitorAndOutput);
+    add_app_source(&mut c, "Game A", r"game.exe|c:\a\game.exe", studiocraft_model::MonitorMode::MonitorAndOutput);
+    add_app_source(&mut c, "Game B", r"game.exe|c:\b\game.exe", studiocraft_model::MonitorMode::MonitorAndOutput);
+    e.load(c);
+    let generation = discovery.generation();
+    fake.set_apps(vec![]);
+    assert!(discovery.wait_newer(generation, std::time::Duration::from_secs(10)).apps.is_empty());
+    let r = run(&mut e, "app_audio.lanes", json!({})).unwrap().result;
+    let apps: Vec<&str> = r["lanes"].as_array().into_iter().flatten().filter_map(|l| l["app"].as_str()).collect();
+    assert_eq!(apps, vec![r"game.exe|c:\a\game.exe", r"game.exe|c:\b\game.exe", "game.exe"], "{r}");
+    // Each lane's key unroutes that lane's sources and no other.
+    let saved = e.collection().clone();
+    run(&mut e, "app_audio.route", json!({"app": "game.exe", "routed": false})).unwrap();
+    let names: Vec<&str> = e.collection().sources.iter().map(|s| s.name.as_str()).collect();
+    assert_eq!(names, vec!["Microphone", "Game A", "Game B"]);
+    e.load(saved);
+    run(&mut e, "app_audio.route", json!({"app": r"game.exe|c:\b\game.exe", "routed": false})).unwrap();
+    let names: Vec<&str> = e.collection().sources.iter().map(|s| s.name.as_str()).collect();
+    assert_eq!(names, vec!["Microphone", "Game anywhere", "Game A"]);
+    // With one path left, the file-name source shares its lane and its key.
+    let r = run(&mut e, "app_audio.lanes", json!({})).unwrap().result;
+    let apps: Vec<&str> = r["lanes"].as_array().into_iter().flatten().filter_map(|l| l["app"].as_str()).collect();
+    assert_eq!(apps, vec![r"game.exe|c:\a\game.exe"], "{r}");
+    run(&mut e, "app_audio.route", json!({"app": r"game.exe|c:\a\game.exe", "routed": false})).unwrap();
+    assert_eq!(e.collection().sources.len(), 1);
+}
+
+#[test]
+fn a_quit_applications_lane_shows_the_routed_source_the_program_hears() {
+    let (mut e, fake, discovery) = lane_engine();
+    let mut c = e.collection().clone();
+    add_app_source(&mut c, "Quiet", PLAYER, studiocraft_model::MonitorMode::MonitorOnly);
+    let loud = add_app_source(&mut c, "Loud", PLAYER, studiocraft_model::MonitorMode::MonitorAndOutput);
+    e.load(c);
+    let generation = discovery.generation();
+    fake.set_apps(vec![]);
+    assert!(discovery.wait_newer(generation, std::time::Duration::from_secs(10)).apps.is_empty());
+    let r = run(&mut e, "app_audio.lanes", json!({})).unwrap().result;
+    let l = lane(&r, "Loud");
+    assert_eq!(l["source"].as_u64(), Some(loud.0), "{r}");
+    assert_eq!((l["heard"].as_bool(), l["routed_heard"].as_bool()), (Some(true), Some(true)));
+    assert!(r["lanes"].as_array().is_some_and(|ls| !ls.iter().any(|l| l["name"] == "Quiet")), "one lane for the application: {r}");
+}
+
 #[test]
 fn a_source_saved_before_the_program_moved_is_its_lane_and_is_routed_again() {
     let (mut e, _fake, _discovery) = lane_engine();

@@ -760,14 +760,15 @@ impl Engine {
         let key = craft_app_audio::AppKey::decode(app.trim())
             .ok_or_else(|| EngineError::Invalid(format!("`{app}` is not an application; app_audio.lanes lists them")))?;
         let list = self.app_audio.snapshot();
-        let matched: Vec<(SourceId, craft_app_audio::AppKey)> =
+        let mut matched: Vec<(SourceId, craft_app_audio::AppKey)> =
             c.sources.iter().filter_map(|s| source_key(s).filter(|k| same_app(k, &key, &list)).map(|k| (s.id, k))).collect();
         let listed = list.find(&key).is_some();
         if !listed {
-            // A file name alone that matches sources for programs at different paths names none of
-            // them.
-            if matched.iter().any(|(_, k)| matched.iter().any(|(_, o)| !same_app(k, o, &list))) {
-                return Err(EngineError::Invalid(format!("`{app}` names more than one application; give the value app_audio.lanes lists")));
+            // While sources name programs at more than one path with this file name, a source keyed
+            // by the file name alone belongs to none of them: a value matches only sources with
+            // exactly its key, as its lane in app_audio.lanes shows.
+            if crate::lanes::shared_name(c, &key.name) {
+                matched.retain(|(_, k)| *k == key);
             }
             if matched.is_empty() {
                 return Err(EngineError::Invalid(format!(

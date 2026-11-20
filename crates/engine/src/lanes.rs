@@ -30,6 +30,8 @@ pub struct Lane {
     /// application (with its folder when another listed program has the same file name).
     pub name: String,
     /// An application lane's `app` value, as `app_audio.route` and the `app_audio` source take it.
+    /// `None` for a microphone, and for the lane of a second source the program hears for an
+    /// application that already has a lane.
     pub app: Option<String>,
     /// The source that carries the lane's audio. An application lane has none until it is routed.
     pub source: Option<SourceId>,
@@ -93,6 +95,14 @@ pub fn same_app(a: &AppKey, b: &AppKey, list: &AppList) -> bool {
     }
 }
 
+/// Whether sources of collection `c` name more than one program path with file name `name`. A
+/// source keyed by that file name alone then stands for neither path.
+pub fn shared_name(c: &SceneCollection, name: &str) -> bool {
+    let mut paths = c.sources.iter().filter_map(source_key).filter(|k| k.name == name).filter_map(|k| k.path);
+    let first = paths.next();
+    paths.any(|p| Some(&p) != first.as_ref())
+}
+
 /// The sources the program hears: the global audio sources and the visible items of the program
 /// scene, leaving out the sources whose monitoring keeps them out of the program.
 pub fn heard(c: &SceneCollection) -> HashSet<SourceId> {
@@ -151,20 +161,47 @@ pub fn lanes(c: &SceneCollection, list: &AppList, peak: impl Fn(&AppInfo) -> Opt
         l.playing = a.playing;
         l.within = a.within.clone();
         out.push(l);
+        let extra = matching.iter().skip(1).filter_map(|i| apps.get(*i)).filter(|(s, _)| heard.contains(&s.id));
+        for (s, _) in extra {
+            let mut l = lane(LaneKind::Application, s.name.clone(), Some(s), c, &heard);
+            l.running = true;
+            l.playing = a.playing;
+            l.within = a.within.clone();
+            l.peak = peak(a);
+            out.push(l);
+        }
     }
     // Applications that are not running keep a lane while a source for them is routed, so they
-    // can be unrouted. Two sources for one application share a lane.
-    let mut gone: Vec<(&SourceConfig, &AppKey)> = Vec::new();
-    for ((s, k), u) in apps.iter().zip(&used) {
-        if *u || !global(s) || gone.iter().any(|(_, g)| same_app(g, k, list)) {
-            continue;
+    // can be unrouted. Sources for one program path share a lane, a source the program hears
+    // first. A source keyed by file name alone joins the path with that file name when the
+    // collection names only one, and otherwise has a lane of its own, as `app_audio.route`
+    // matches it.
+    let mut gone: Vec<(&AppKey, Vec<&SourceConfig>)> = Vec::new();
+    let unused = || apps.iter().zip(&used).filter(|((s, _), u)| !**u && global(s)).map(|(a, _)| a);
+    for (s, k) in unused().filter(|(_, k)| k.path.is_some()) {
+        match gone.iter_mut().find(|(g, _)| *g == k) {
+            Some((_, g)) => g.push(s),
+            None => gone.push((k, vec![s])),
         }
-        gone.push((s, k));
     }
-    for (s, _) in gone {
-        let mut l = lane(LaneKind::Application, s.name.clone(), Some(s), c, &heard);
-        l.app = s.settings.str("app").map(str::to_string);
+    for (s, k) in unused().filter(|(_, k)| k.path.is_none()) {
+        let path = (!shared_name(c, &k.name)).then(|| gone.iter().position(|(g, _)| g.path.is_some() && g.name == k.name)).flatten();
+        let at = path.or_else(|| gone.iter().position(|(g, _)| *g == k));
+        match at.and_then(|i| gone.get_mut(i)) {
+            Some((_, g)) => g.push(s),
+            None => gone.push((k, vec![s])),
+        }
+    }
+    for (key, mut group) in gone {
+        group.sort_by_key(|s| !heard.contains(&s.id));
+        let Some(first) = group.first() else { continue };
+        let mut l = lane(LaneKind::Application, first.name.clone(), Some(first), c, &heard);
+        // The route key is the group's own key, so routing it acts on every source of the lane.
+        l.app = group.iter().find(|s| source_key(s).as_ref() == Some(key)).and_then(|s| s.settings.str("app")).map(str::to_string);
         out.push(l);
+        for s in group.iter().skip(1).filter(|s| heard.contains(&s.id)) {
+            out.push(lane(LaneKind::Application, s.name.clone(), Some(s), c, &heard));
+        }
     }
     out
 }
