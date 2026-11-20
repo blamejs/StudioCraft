@@ -5936,12 +5936,16 @@ name = "studiocraft-outputs"
 version = "0.1.0-alpha.1"
 dependencies = [
  "craft-audio",
+ "craft-flv",
  "craft-hwenc",
  "craft-media",
+ "craft-packet",
+ "craft-rtmp",
  "craft-video",
  "crossbeam-queue",
  "log",
  "portable-atomic",
+ "serde_json",
  "studiocraft-encode",
  "studiocraft-media",
  "studiocraft-model",

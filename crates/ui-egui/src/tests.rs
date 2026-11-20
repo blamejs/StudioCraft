@@ -533,12 +533,12 @@ fn profiles_keep_their_own_settings() {
     let ctx = egui::Context::default();
     a.named(Named::DuplicateProfile, "Stream").unwrap();
     let mut p = a.studio().profile().clone();
-    p.stream.server = "rtmp://example.invalid/live".into();
+    p.stream.primary_mut().server = "rtmp://example.invalid/live".into();
     a.studio.set_profile(p).unwrap();
     run(&mut a, &ctx, "profile.switch", json!({"name": DEFAULT_NAME})).unwrap();
-    assert_eq!(a.studio().profile().stream.server, "");
+    assert_eq!(a.studio().profile().stream.primary_server(), "");
     run(&mut a, &ctx, "profile.switch", json!({"name": "Stream"})).unwrap();
-    assert_eq!(a.studio().profile().stream.server, "rtmp://example.invalid/live");
+    assert_eq!(a.studio().profile().stream.primary_server(), "rtmp://example.invalid/live");
     assert!(a.named(Named::NewProfile, "bad/name").is_err());
 }
 

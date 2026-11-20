@@ -75,6 +75,8 @@ pub(crate) struct Item {
     /// video keyframe its presentation time.
     pub(crate) order_ns: i64,
     pub(crate) pts_ns: i64,
+    /// The decoding time; the presentation time for sound.
+    pub(crate) dts_ns: i64,
     pub(crate) keyframe: bool,
     pub(crate) data: Vec<u8>,
 }
@@ -344,6 +346,15 @@ impl Native {
     }
 
     fn start_file(job: &OutputJob, path: &Path, packets: PacketQueue, disk_wait: Duration) -> Result<Native, PluginError> {
+        // A cluster ends at a keyframe, so the keyframe interval bounds what a file cut short loses
+        // and what the writer holds in memory.
+        if let RateControl::Bitrate { keyframe_s, .. } = job.rate
+            && keyframe_s > RECORDING_KEYFRAME_S
+        {
+            return Err(PluginError::Failed(format!(
+                "an MKV recording through the built-in encoders needs a keyframe at least every {RECORDING_KEYFRAME_S} seconds, not every {keyframe_s}"
+            )));
+        }
         let open = |tracks: Vec<TrackSpec>| -> Result<Box<dyn Sink>, PluginError> {
             let file = File::create(path).map_err(|e| PluginError::Failed(format!("{} could not be written: {e}", path.display())))?;
             let out = Counted { inner: BufWriter::with_capacity(1 << 20, file), pos: 0, stats: Arc::clone(&job.stats) };
@@ -368,15 +379,6 @@ impl Native {
         }
         if v.pixel != PixelFormat::Nv12 {
             return Err(PluginError::Failed("the built-in encoders take NV12 frames".into()));
-        }
-        // A cluster ends at a keyframe, so the keyframe interval bounds what a file cut short loses
-        // and what the writer holds in memory.
-        if let RateControl::Bitrate { keyframe_s, .. } = job.rate
-            && keyframe_s > RECORDING_KEYFRAME_S
-        {
-            return Err(PluginError::Failed(format!(
-                "an MKV recording through the built-in encoders needs a keyframe at least every {RECORDING_KEYFRAME_S} seconds, not every {keyframe_s}"
-            )));
         }
         let params = VideoParams { width: v.width, height: v.height, fps_num: v.fps_num, fps_den: v.fps_den, rate: job.rate };
         let session = job.video_encoder.open(&job.video_encoder_settings, &params)?;
@@ -513,6 +515,7 @@ fn send_video(out: &mut Vec<Packet>, shared: &Shared, rate: (u32, u32), last: &m
             track: Track::Video,
             order_ns: frames_ns(order, rate.0, rate.1),
             pts_ns: frames_ns(p.pts, rate.0, rate.1),
+            dts_ns: frames_ns(p.dts, rate.0, rate.1),
             keyframe: p.keyframe,
             data: p.data,
         };
@@ -591,7 +594,7 @@ fn encode_audio(mut session: AacSession, q: &Fifo<PooledBlock>, shared: &Shared,
         for data in out.drain(..) {
             let at = samples_ns(units * 1024) - delay_ns;
             units += 1;
-            if !shared.send(Item { track: Track::Audio, order_ns: at, pts_ns: at, keyframe: true, data }) {
+            if !shared.send(Item { track: Track::Audio, order_ns: at, pts_ns: at, dts_ns: at, keyframe: true, data }) {
                 return false;
             }
         }
