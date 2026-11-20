@@ -14,6 +14,8 @@
 	Alpha mask (alpha channel)	Alfamask (alfakanal)
 	Alpha mask (color channel)	Alfamask (färgkanal)
 	Apply	Verkställ
+	Application	Program
+	Application audio capture	Ljud från program
 	Apply Dock Layout	Använd panellayout
 	Attack (ms)	Attacktid (ms)
 	Audio	Ljud
@@ -42,6 +44,7 @@
 	Center to Screen	Centrera på skärmen
 	Check for updates at start	Sök efter uppdateringar vid start
 	Check for Updates…	Sök efter uppdateringar…
+	Choose an application	Välj ett program
 	Choose in the system picker	Välj i systemets valdialog
 	Chroma key	Chroma key
 	Close	Stäng
@@ -126,6 +129,8 @@
 	Windows Media Foundation HEVC (built in)	Windows Media Foundation HEVC (inbyggd)
 	Apple VideoToolbox H.264 (built in)	Apple VideoToolbox H.264 (inbyggd)
 	Apple VideoToolbox HEVC (built in)	Apple VideoToolbox HEVC (inbyggd)
+	VA-API H.264 (built in)	VA-API H.264 (inbyggd)
+	VA-API HEVC (built in)	VA-API HEVC (inbyggd)
 	Height	Höjd
 	Help	Hjälp
 	Hide	Dölj
@@ -399,6 +404,13 @@
 	Unlock	Lås upp
 	Unmute	Ljud på
 @msg	A plug-in could not be loaded: {error}	Ett insticksprogram kunde inte läsas in: {error}
+@msg	The application's audio could not be captured. The capture is opened again shortly.	Programmets ljud kunde inte spelas in. Inspelningen öppnas igen strax.
+@msg	Capturing one application's audio is not available on this system yet.	Att spela in ljudet från ett enskilt program är ännu inte tillgängligt på det här systemet.
+@msg	Capturing one application needs Windows 11 or Windows Server 2022. Audio output capture still records everything the computer plays.	Att spela in ett enskilt program kräver Windows 11 eller Windows Server 2022. Ljud från ljudutgång spelar fortfarande in allt som datorn spelar upp.
+@msg	The most applications that can be captured at once are already being captured.	Så många program som kan spelas in samtidigt spelas redan in.
+@msg	The system refused to capture this application's audio. The capture is tried again every 5 seconds.	Systemet vägrade spela in programmets ljud. Inspelningen försöks igen var 5:e sekund.
+@msg	The running applications could not be listed. The list is read again shortly.	De program som körs kunde inte listas. Listan läses in igen strax.
+@msg	The application setting is not a value from the application list.	Programinställningen är inte ett värde från programlistan.
 @msg	Drawing again on {adapter}	Ritar igen med {adapter}
 @msg	No graphics device could be opened again: {error}	Ingen grafikenhet kunde öppnas igen: {error}
 @msg	No graphics hardware can be used; drawing in software, which is slower	Ingen grafikhårdvara kan användas; ritar med programvara, vilket är långsammare

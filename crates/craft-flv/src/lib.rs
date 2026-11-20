@@ -36,7 +36,7 @@ use std::fmt;
 use std::io::{self, Write};
 
 pub use body::{
-    AAC_TAG_HEADER, AnnexB, Body, CODEC_AVC, Checked, MAX_COMPOSITION_TIME, MIN_COMPOSITION_TIME, Nalus, SOUND_FORMAT_AAC, annexb_to_nalus,
+    AAC_TAG_HEADER, AnnexB, Body, CODEC_AVC, Checked, MAX_COMPOSITION_TIME, MIN_COMPOSITION_TIME, Nalus, Parts, SOUND_FORMAT_AAC, annexb_to_nalus,
 };
 pub use read::{Audio, Reader, Tag, Video, parse_audio, parse_script, parse_video};
 

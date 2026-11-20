@@ -34,6 +34,7 @@ craft-gpu-device = { path = "crates/craft-gpu-device" }
 craft-gpu-yuv = { path = "crates/craft-gpu-yuv" }
 craft-hwenc = { path = "crates/craft-hwenc" }
 craft-hwenc-native = { path = "crates/craft-hwenc-native" }
+craft-app-audio = { path = "crates/craft-app-audio" }
 
 # foundation
 thiserror = "2"
@@ -50,6 +51,11 @@ crossbeam-utils = "0.8"
 arc-swap = "1"
 # Tests and benches only: a global allocator that counts allocations.
 stats_alloc = "0.1"
+# RTMPS: TLS with the ring provider, and the system's certificate checks.
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
+rustls-platform-verifier = "0.7"
+# Tests only: key pairs and signatures for the loopback RTMPS server's certificates.
+ring = "0.17"
 # A 128-bit atomic for the position the two recording writers share.
 portable-atomic = "1"
 # Local time for recording file names.
@@ -58,6 +64,11 @@ chrono = { version = "0.4", default-features = false, features = ["clock"] }
 dirs = "7"
 # Free space on the disk audio tracks are written to, without unsafe code here.
 fs4 = { version = "1.1", default-features = false, features = ["sync"] }
+# O_NOFOLLOW, to open audio track files without following a link.
+libc = "0.2"
+# The volume serial number, file index and link count of an audio track file on Windows, without
+# unsafe code here.
+winapi-util = "0.1"
 criterion = { version = "0.8", default-features = false, features = ["cargo_bench_support"] }
 # contributors/people.toml, read by the engine's build script.
 toml = "1"
@@ -76,6 +87,10 @@ proptest = "1"
 ab_glyph = "0.2"
 # Audio devices: input capture, and output (loopback) capture on Windows.
 cpal = "0.16"
+# Capturing one application's audio, audio sessions and their peak meters on Windows.
+wasapi = "0.27"
+# Process names and parents, and the Windows build number, for application audio.
+sysinfo = { version = "0.38", default-features = false, features = ["system"] }
 # Display and window capture.
 xcap = "0.9"
 # Audio devices on Linux, through the PipeWire sound server.
@@ -103,33 +118,34 @@ eframe = { version = "0.37", default-features = false }
 egui-wgpu = "0.37"
 
 # Shared Craft crates: storytold/craft-libs, MIT OR Apache-2.0, pinned to one rev.
-craft-ui = { git = "https://github.com/storytold/craft-libs", rev = "7780b4f58ec3d56b1f908c8fa3b1258fabae3880", features = ["serde"] }
-craft-menu = { git = "https://github.com/storytold/craft-libs", rev = "7780b4f58ec3d56b1f908c8fa3b1258fabae3880" }
-craft-keymap = { git = "https://github.com/storytold/craft-libs", rev = "7780b4f58ec3d56b1f908c8fa3b1258fabae3880", features = ["egui"] }
-craft-settings = { git = "https://github.com/storytold/craft-libs", rev = "7780b4f58ec3d56b1f908c8fa3b1258fabae3880" }
-craft-dialogs = { git = "https://github.com/storytold/craft-libs", rev = "7780b4f58ec3d56b1f908c8fa3b1258fabae3880" }
-craft-quit = { git = "https://github.com/storytold/craft-libs", rev = "7780b4f58ec3d56b1f908c8fa3b1258fabae3880", features = ["egui"] }
-craft-mcp = { git = "https://github.com/storytold/craft-libs", rev = "7780b4f58ec3d56b1f908c8fa3b1258fabae3880" }
-craft-control-protocol = { git = "https://github.com/storytold/craft-libs", rev = "7780b4f58ec3d56b1f908c8fa3b1258fabae3880" }
-craft-jsonrpc = { git = "https://github.com/storytold/craft-libs", rev = "7780b4f58ec3d56b1f908c8fa3b1258fabae3880" }
-craft-time = { git = "https://github.com/storytold/craft-libs", rev = "7780b4f58ec3d56b1f908c8fa3b1258fabae3880" }
-craft-font-catalog = { git = "https://github.com/storytold/craft-libs", rev = "7780b4f58ec3d56b1f908c8fa3b1258fabae3880" }
-craft-image-codecs = { git = "https://github.com/storytold/craft-libs", rev = "7780b4f58ec3d56b1f908c8fa3b1258fabae3880" }
-craft-color = { git = "https://github.com/storytold/craft-libs", rev = "7780b4f58ec3d56b1f908c8fa3b1258fabae3880" }
-craft-atomic = { git = "https://github.com/storytold/craft-libs", rev = "7780b4f58ec3d56b1f908c8fa3b1258fabae3880" }
-craft-fonts-build = { git = "https://github.com/storytold/craft-libs", rev = "7780b4f58ec3d56b1f908c8fa3b1258fabae3880" }
-craft-i18n = { git = "https://github.com/storytold/craft-libs", rev = "7780b4f58ec3d56b1f908c8fa3b1258fabae3880" }
-# The Matroska writer for recordings, and in tests the demuxers that read back what the writers here produce.
-craft-media ={ git = "https://github.com/storytold/craft-libs", rev = "7780b4f58ec3d56b1f908c8fa3b1258fabae3880", default-features = false }
+craft-ui = { git = "https://github.com/storytold/craft-libs", rev = "2dc55f434142ce20e4b89c5986199849a65f6f8b", features = ["serde"] }
+craft-menu = { git = "https://github.com/storytold/craft-libs", rev = "2dc55f434142ce20e4b89c5986199849a65f6f8b" }
+craft-keymap = { git = "https://github.com/storytold/craft-libs", rev = "2dc55f434142ce20e4b89c5986199849a65f6f8b", features = ["egui"] }
+craft-settings = { git = "https://github.com/storytold/craft-libs", rev = "2dc55f434142ce20e4b89c5986199849a65f6f8b" }
+craft-dialogs = { git = "https://github.com/storytold/craft-libs", rev = "2dc55f434142ce20e4b89c5986199849a65f6f8b" }
+craft-quit = { git = "https://github.com/storytold/craft-libs", rev = "2dc55f434142ce20e4b89c5986199849a65f6f8b", features = ["egui"] }
+craft-mcp = { git = "https://github.com/storytold/craft-libs", rev = "2dc55f434142ce20e4b89c5986199849a65f6f8b" }
+craft-control-protocol = { git = "https://github.com/storytold/craft-libs", rev = "2dc55f434142ce20e4b89c5986199849a65f6f8b" }
+craft-jsonrpc = { git = "https://github.com/storytold/craft-libs", rev = "2dc55f434142ce20e4b89c5986199849a65f6f8b" }
+craft-time = { git = "https://github.com/storytold/craft-libs", rev = "2dc55f434142ce20e4b89c5986199849a65f6f8b" }
+craft-font-catalog = { git = "https://github.com/storytold/craft-libs", rev = "2dc55f434142ce20e4b89c5986199849a65f6f8b" }
+craft-image-codecs = { git = "https://github.com/storytold/craft-libs", rev = "2dc55f434142ce20e4b89c5986199849a65f6f8b" }
+craft-color = { git = "https://github.com/storytold/craft-libs", rev = "2dc55f434142ce20e4b89c5986199849a65f6f8b" }
+craft-atomic = { git = "https://github.com/storytold/craft-libs", rev = "2dc55f434142ce20e4b89c5986199849a65f6f8b" }
+craft-fonts-build = { git = "https://github.com/storytold/craft-libs", rev = "2dc55f434142ce20e4b89c5986199849a65f6f8b" }
+craft-i18n = { git = "https://github.com/storytold/craft-libs", rev = "2dc55f434142ce20e4b89c5986199849a65f6f8b" }
+# The Matroska writer for recordings, the Ogg reader for Ogg Vorbis media files, and in tests the demuxers that read
+# back what the writers here produce.
+craft-media ={ git = "https://github.com/storytold/craft-libs", rev = "2dc55f434142ce20e4b89c5986199849a65f6f8b", default-features = false }
 # Help › Check for Updates, the check at start and finishing an update the app installed itself.
-craft-update = { git = "https://github.com/storytold/craft-libs", rev = "7780b4f58ec3d56b1f908c8fa3b1258fabae3880", features = ["egui"] }
+craft-update = { git = "https://github.com/storytold/craft-libs", rev = "2dc55f434142ce20e4b89c5986199849a65f6f8b", features = ["egui"] }
 # Who draws the window frame (the desktop or the app), and the menu strip as the title bar.
-craft-window = { git = "https://github.com/storytold/craft-libs", rev = "7780b4f58ec3d56b1f908c8fa3b1258fabae3880", features = ["egui"] }
-# The built-in H.264 encoder (and its decoder, for tests) and the AAC encoder.
-craft-video = { git = "https://github.com/storytold/craft-libs", rev = "7780b4f58ec3d56b1f908c8fa3b1258fabae3880", default-features = false, features = ["h264-encode", "threads"] }
-craft-audio = { git = "https://github.com/storytold/craft-libs", rev = "7780b4f58ec3d56b1f908c8fa3b1258fabae3880", default-features = false, features = ["aac-encode"] }
+craft-window = { git = "https://github.com/storytold/craft-libs", rev = "2dc55f434142ce20e4b89c5986199849a65f6f8b", features = ["egui"] }
+# The built-in H.264 encoder (and its decoder, for tests), the AAC encoder and the Vorbis decoder.
+craft-video = { git = "https://github.com/storytold/craft-libs", rev = "2dc55f434142ce20e4b89c5986199849a65f6f8b", default-features = false, features = ["h264-encode", "threads"] }
+craft-audio = { git = "https://github.com/storytold/craft-libs", rev = "2dc55f434142ce20e4b89c5986199849a65f6f8b", default-features = false, features = ["aac-encode"] }
 # The audio editor's session file, written for the audio tracks of a take.
-craft-scraft-format = { git = "https://github.com/storytold/craft-libs", rev = "7780b4f58ec3d56b1f908c8fa3b1258fabae3880" }
+craft-scraft-format = { git = "https://github.com/storytold/craft-libs", rev = "2dc55f434142ce20e4b89c5986199849a65f6f8b" }
 
 # egui 0.37 and winit: the suite's forks (storytold/egui, storytold/winit), as craft-libs pins them.
 [patch.crates-io]

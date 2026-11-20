@@ -13,7 +13,7 @@ use crate::{Backend, Headless, MAX_BATCH_STEPS, McpError, Remote, Roots, Server,
 
 const TOKEN: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
-const TOOLS: [&str; 29] = [
+const TOOLS: [&str; 30] = [
     "command_list",
     "command_run",
     "command_batch",
@@ -32,6 +32,7 @@ const TOOLS: [&str; 29] = [
     "collection_save",
     "app_links",
     "source_schema",
+    "app_audio",
     "record_start",
     "record_stop",
     "stream_start",
@@ -240,6 +241,22 @@ fn source_schema_lists_a_camera_sources_fields() {
 }
 
 #[test]
+fn app_audio_reports_the_systems_support_and_lists() {
+    let mut s = server();
+    let status = ok_json(&call(&mut s, "app_audio", json!({"action": "status"})));
+    let supported = status["support"]["supported"].as_bool().unwrap();
+    assert_eq!(status["max_captures"], 32, "{status}");
+    let list = ok_json(&call(&mut s, "app_audio", json!({"action": "list"})));
+    assert_eq!(list["supported"], supported);
+    assert!(list["apps"].is_array(), "{list}");
+    if !supported {
+        assert!(list["error"].as_str().is_some_and(|e| !e.is_empty()), "an unsupported system says why: {list}");
+    }
+    assert!(error_text(&call(&mut s, "app_audio", json!({"action": "capture"}))).contains("capture"));
+    error_text(&call(&mut s, "app_audio", json!({})));
+}
+
+#[test]
 fn source_audio_sets_the_sync_offset() {
     let mut s = server();
     let set = ok_json(&call(&mut s, "source_audio", json!({"source": "Microphone", "sync_offset_ms": 180})));
@@ -338,6 +355,15 @@ fn audio_tracks_writes_are_held_to_the_write_roots() {
         let text = error_text(&call(&mut s, tool, args.clone()));
         assert!(text.contains("outside the write roots"), "{tool} {args}: {text}");
     }
+    // Inside a write root but outside the recording folder, the studio refuses it.
+    let text = error_text(&call(&mut s, "audio_tracks_repair", json!({"folder": text_of(&dir.join("out"))})));
+    assert!(text.contains("not inside the recording folder"), "{text}");
+    let roots = Roots::new(&[dir.join("in")], &[dir.join("out")]).unwrap();
+    let mut h = Headless::with_options(None, ServerOptions { allow_streaming: false, roots: Some(roots) }).unwrap();
+    let mut profile = h.studio().profile().clone();
+    profile.output.folder = text_of(&dir.join("out"));
+    h.studio_mut().set_profile(profile).unwrap();
+    let mut s = Server::new(Box::new(h)).unwrap();
     let inside = ok_json(&call(&mut s, "audio_tracks_repair", json!({"folder": text_of(&dir.join("out"))})));
     assert_eq!(inside["started"], json!(true), "{inside}");
     let _ = std::fs::remove_dir_all(&dir);
@@ -1141,7 +1167,55 @@ fn source_files_are_held_to_the_read_roots() {
     assert!(text.contains("outside the read roots"), "{text}");
     let doc = ok_json(&call(&mut s, "doc_inspect", json!({"detail": "full"})));
     let logo = doc["collection"]["sources"].as_array().unwrap().iter().find(|x| x["name"] == "Logo").cloned().unwrap();
-    assert_eq!(logo["settings"]["file"].as_str(), Some(inside.as_str()), "{logo}");
+    assert_eq!(logo["settings"]["file"].as_str(), Some(resolved_text(&dir.join("in/logo.png")).as_str()), "{logo}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// `p` with its links followed, as the roots store a path they checked.
+fn resolved_text(p: &std::path::Path) -> String {
+    text_of(&crate::roots::shown(&std::fs::canonicalize(p).unwrap()))
+}
+
+#[test]
+fn a_source_file_is_set_to_the_path_the_roots_checked() {
+    let dir = root_folders("resolved-roots");
+    std::fs::create_dir_all(dir.join("in/sub")).unwrap();
+    std::fs::write(dir.join("in/logo.png"), b"not a picture").unwrap();
+    let mut s = confined(&[dir.join("in")], &[dir.join("out")]);
+    let roundabout = text_of(&dir.join("in").join("sub").join("..").join("logo.png"));
+    ok_json(&call(&mut s, "source_add", json!({"kind": "image", "name": "Logo", "settings": {"file": roundabout}})));
+    let logo_file = |s: &mut Server| {
+        let doc = ok_json(&call(s, "doc_inspect", json!({"detail": "full"})));
+        let logo = doc["collection"]["sources"].as_array().unwrap().iter().find(|x| x["name"] == "Logo").cloned().unwrap();
+        logo["settings"]["file"].as_str().map(str::to_owned)
+    };
+    let want = resolved_text(&dir.join("in/logo.png"));
+    assert_eq!(logo_file(&mut s).as_deref(), Some(want.as_str()));
+    // A collection opened from a file is set to the checked paths too.
+    let mut free = server();
+    ok_json(&call(&mut free, "source_add", json!({"kind": "image", "name": "Logo", "settings": {"file": roundabout}})));
+    ok_json(&call(&mut free, "collection_save", json!({"path": text_of(&dir.join("in/roundabout.json"))})));
+    ok_json(&call(&mut s, "collection_open", json!({"path": text_of(&dir.join("in/roundabout.json"))})));
+    assert_eq!(logo_file(&mut s).as_deref(), Some(want.as_str()));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[cfg(windows)]
+#[test]
+fn a_checked_path_is_stored_only_when_its_text_names_the_same_path() {
+    use crate::headless::setting_text;
+    use crate::roots::Access;
+    let dir = root_folders("stored-text");
+    std::fs::write(dir.join("in/logo.png"), b"not a picture").unwrap();
+    let roots = Roots::new(&[dir.join("in")], &[dir.join("out")]).unwrap();
+    let logo = std::fs::canonicalize(dir.join("in/logo.png")).unwrap();
+    assert_eq!(setting_text(&roots, &logo, Access::Read).unwrap(), resolved_text(&dir.join("in/logo.png")));
+    // Without `\\?\`, Windows drops the dot that ends this name and reads logo.png instead.
+    let dotted = std::path::PathBuf::from(format!("{}.", logo.display()));
+    std::fs::write(&dotted, b"another file").unwrap();
+    let e = setting_text(&roots, &dotted, Access::Read).unwrap_err();
+    assert!(e.to_string().contains("ends in a dot"), "{e}");
+    let _ = std::fs::remove_file(&dotted);
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -1213,6 +1287,27 @@ fn replay_save_is_held_to_the_write_roots() {
     for (tool, args) in [("replay_save", json!({})), ("command_run", json!({"id": "replay.save"}))] {
         let text = error_text(&call(&mut s, tool, args));
         assert!(text.contains("outside the write roots"), "{tool}: {text}");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn commands_that_write_to_the_recording_folder_use_the_folder_the_roots_checked() {
+    let dir = root_folders("recording-held");
+    std::fs::create_dir_all(dir.join("out").join("sub")).unwrap();
+    let checked = text_of(&crate::roots::shown(&std::fs::canonicalize(dir.join("out")).unwrap()));
+    let given = text_of(&dir.join("out").join("sub").join(".."));
+    for id in ["record.start", "record.toggle", "replay.save", "stream.start", "stream.toggle"] {
+        let roots = Roots::new(&[], &[dir.join("out")]).unwrap();
+        let mut h = Headless::with_options(None, ServerOptions { allow_streaming: true, roots: Some(roots) }).unwrap();
+        let mut profile = h.studio().profile().clone();
+        profile.output.folder = given.clone();
+        profile.audio_tracks.enabled = true;
+        profile.audio_tracks.when = studiocraft_model::AudioTracksWhen::Either;
+        h.studio_mut().set_profile(profile).unwrap();
+        // Without a graphics device the command itself fails; the setting it ran with is kept.
+        let _ = h.call("engine.execute", json!({"command": id, "params": {}}));
+        assert_eq!(h.studio().profile().output.folder, checked, "{id}");
     }
     let _ = std::fs::remove_dir_all(&dir);
 }

@@ -24,6 +24,7 @@ shown or hidden, and every change can be undone.
 | Camera | A webcam or capture card. | Windows (Media Foundation), macOS (AVFoundation) and Linux (V4L2) |
 | Audio input capture | A microphone or other input device. | Windows, macOS and Linux |
 | Audio output capture | The sound the computer plays (desktop audio). | Windows and Linux |
+| Application audio capture | The sound one application plays. | Windows 11 and Windows Server 2022 |
 
 ### Display and window capture on Linux
 
@@ -36,6 +37,32 @@ stopped, changing any of the source's properties opens the picker again.
 
 On Linux, audio input and output capture go through the PipeWire sound server. The device lists
 show PipeWire's devices by their descriptions, with the default device first.
+
+### Application audio capture
+
+An Application audio capture source records what one application plays, and nothing else the
+computer plays. Its Properties list the running applications that have an audio session on any
+active playback device, sorted by name. The capture also records the processes the application
+starts. The source names the application by its program file and folder, so it keeps capturing
+after the application quits and starts again, and after an update moves the program when no other
+program with that file name runs. Applications whose program files share a name are listed with
+their folders. While the application is not running, the source is silent. When a capture fails,
+the source opens it again after 250 ms, 500 ms, 1 s, 2 s and then every 5 s, and the source shows an
+error in the window; the system's own text goes to the log. When the system refuses the capture,
+the source waits 5 s at once. A saved choice whose value is not an application value loads as a
+silent source with an error. At most 32 applications are captured at once. When several separate
+copies of one program run, the list shows one entry for them and the source captures one copy: the
+copy captured last time while it makes sound or no other copy does, otherwise the copy that made
+sound in the last 3 seconds, then one whose audio stream is running. Two copies playing at once are
+not captured together. An application started by another listed application, such as a helper
+program, is already recorded by that application's capture.
+
+Capturing one application uses Windows process loopback capture
+([`AUDIOCLIENT_PROCESS_LOOPBACK_PARAMS`](https://learn.microsoft.com/en-us/windows/win32/api/audioclientactivationparams/ns-audioclientactivationparams-audioclient_process_loopback_params)),
+which needs Windows build 20348 or later: Windows 11 or Windows Server 2022. On earlier Windows
+builds, macOS and Linux the source lists no applications and says why, and Audio output capture
+still records everything the computer plays. The `app_audio.list` and `app_audio.status` commands
+report the same lists and support ([Control and automation](#control-and-automation)).
 
 ### Camera
 
@@ -134,6 +161,7 @@ show the chosen encoder's settings, such as the x264 and NVENC presets.
 | NVIDIA NVENC H.264 and HEVC (built in) | MKV, through the NVIDIA driver | No | Windows and 64-bit Linux |
 | Windows Media Foundation H.264 and HEVC (built in) | MKV, with the hardware encoders Media Foundation lists | No | Windows |
 | Apple VideoToolbox H.264 and HEVC (built in) | MKV, with the VideoToolbox hardware encoders | No | macOS |
+| VA-API H.264 and HEVC (built in) | MKV, with the VA-API hardware encoders through libva | No | 64-bit Linux |
 
 H.264 (built in) uses StudioCraft's own H.264 and AAC encoders. The Hardware encoder uses the
 built-in hardware encoders for MKV recordings. [Hardware acceleration](#hardware-acceleration)
@@ -143,7 +171,7 @@ describes how it picks one.
 
 MP4 and MOV recordings, recordings at the Lossless quality level, streams, and recordings with
 x264 or a hardware encoder outside the built-in ones run in a separately installed `ffmpeg`.
-A Media file source also plays its file through `ffmpeg`. StudioCraft looks for `ffmpeg` on the `PATH`, or at the location set in Settings › Output.
+A Media file source plays Ogg Vorbis files at 8 to 192 kHz without `ffmpeg`, and plays every other file through `ffmpeg`. StudioCraft looks for `ffmpeg` on the `PATH`, or at the location set in Settings › Output.
 Recording uses x264 until H.264 (built in) is chosen in Settings › Output. No release package
 includes `ffmpeg`. The `.deb` and `.rpm` packages list it as a recommended package. The Flatpak
 runtime has no `ffmpeg`, and the Flatpak sandbox cannot run an `ffmpeg` installed on the system.
@@ -252,6 +280,9 @@ instead of in `ffmpeg`. When such a candidate is chosen, the recording uses the 
 - Windows Media Foundation H.264 and HEVC (built in) run the hardware encoders Media Foundation
   lists, on Windows.
 - Apple VideoToolbox H.264 and HEVC (built in) run the VideoToolbox hardware encoders, on macOS.
+- VA-API H.264 and HEVC (built in) run the VA-API hardware encoders through libva, on 64-bit
+  Linux. VA-API H.264 or HEVC chosen by name is tested the same way, and then records with the
+  built-in encoder.
 
 The compositor converts the program to the encoders' frame format on the GPU.
 

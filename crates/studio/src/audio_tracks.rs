@@ -568,15 +568,14 @@ impl Studio {
     /// Repair the takes in `folder` on a background thread, for `audio_tracks.repair`. Returns
     /// at once; the result comes as notices and as the status's `last_repair`, and the status
     /// shows `repairing` until then. A take another repair holds is left to that repair.
+    ///
+    /// `folder` must be the recording folder or a folder inside it, compared with the links of
+    /// both followed; the repair runs on that resolved path.
     pub(crate) fn repair_audio_tracks(&mut self, folder: &str) -> Result<Value, crate::StudioError> {
         if self.audio_tracks.repairs.len() >= MAX_REPAIRS {
             return Err(crate::StudioError::Output(format!("{MAX_REPAIRS} repairs of audio tracks are already running")));
         }
-        let path = PathBuf::from(folder);
-        // One metadata read, so a folder that is not there is an error and not a started repair.
-        if !path.is_dir() {
-            return Err(crate::StudioError::Output(format!("{folder} is not a folder")));
-        }
+        let path = repair_folder(folder, &recording_folder(&self.profile.output.folder))?;
         let for_thread = path.clone();
         let spawned = std::thread::Builder::new().name("audio-tracks-repair".into()).spawn(move || {
             if for_thread.is_dir() {
@@ -590,7 +589,7 @@ impl Studio {
             Ok(h) => self.audio_tracks.repairs.push(h),
             Err(e) => return Err(crate::StudioError::Output(format!("the repair could not start: {e}"))),
         }
-        Ok(json!({"started": true, "folder": path.display().to_string()}))
+        Ok(json!({"started": true, "folder": folder}))
     }
 
     /// Wait for the repairs started here and take their results as the next tick would, for
@@ -724,6 +723,23 @@ fn take_place(recording: Option<&Path>, folder: &Path) -> (PathBuf, String) {
         ),
         None => (folder.to_path_buf(), format!("Stream {}", chrono::Local::now().format("%Y-%m-%d %H-%M-%S"))),
     }
+}
+
+/// `folder` with its links followed, when it is a folder and lies inside `recording` (the
+/// recording folder, its links followed too) or is that folder. Takes are written only there.
+fn repair_folder(folder: &str, recording: &Path) -> Result<PathBuf, crate::StudioError> {
+    let err = crate::StudioError::Output;
+    // One metadata read, so a folder that is not there is an error and not a started repair.
+    let path = std::fs::canonicalize(folder).map_err(|_| err(format!("{folder} is not a folder")))?;
+    if !path.is_dir() {
+        return Err(err(format!("{folder} is not a folder")));
+    }
+    let root = std::fs::canonicalize(recording)
+        .map_err(|e| err(format!("the recording folder {} could not be read, so nothing is repaired: {e}", recording.display())))?;
+    if !path.starts_with(&root) {
+        return Err(err(format!("{folder} is not inside the recording folder {}; only takes there are repaired", recording.display())));
+    }
+    Ok(path)
 }
 
 /// Send `specs` to the take. With `after`, the take applies them once the mixer has applied that

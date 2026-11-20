@@ -578,6 +578,9 @@ impl Writer {
             };
         }
         ok &= self.journal.sync().is_ok();
+        if ok {
+            let _ = self.journal.release();
+        }
         ok
     }
 
@@ -643,7 +646,10 @@ impl Writer {
         // left for repair, which writes the session.
         self.end_session().map_err(Failure::io)?;
         self.journal.write(&Line::End { frames: self.end }).map_err(Failure::io)?;
-        self.journal.sync().map_err(Failure::io)
+        self.journal.sync().map_err(Failure::io)?;
+        // The take is complete on the disk, so a failed release does not fail the take.
+        let _ = self.journal.release();
+        Ok(())
     }
 
     fn write_chunk(&mut self, chunk: &Chunk) -> Result<(), Failure> {

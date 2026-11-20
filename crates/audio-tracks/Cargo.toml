@@ -22,6 +22,14 @@ fs4.workspace = true
 craft-scraft-format.workspace = true
 craft-atomic.workspace = true
 
+[target.'cfg(unix)'.dependencies]
+# Opens the take's files without following a link.
+libc.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+# Tells which file a name opens and how many names it has.
+winapi-util.workspace = true
+
 [dev-dependencies]
 criterion.workspace = true
 # Reads back what the writer wrote.

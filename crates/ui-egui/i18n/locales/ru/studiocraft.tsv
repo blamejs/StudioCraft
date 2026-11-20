@@ -14,6 +14,8 @@
 	Alpha mask (alpha channel)	Альфа-маска (альфа-канал)
 	Alpha mask (color channel)	Альфа-маска (цветовой канал)
 	Apply	Применить
+	Application	Приложение
+	Application audio capture	Захват звука приложения
 	Apply Dock Layout	Применить раскладку панелей
 	Attack (ms)	Атака (мс)
 	Audio	Звук
@@ -42,6 +44,7 @@
 	Center to Screen	Выровнять по центру экрана
 	Check for updates at start	Проверять обновления при запуске
 	Check for Updates…	Проверить обновления…
+	Choose an application	Выберите приложение
 	Choose in the system picker	Выбрать в системном окне выбора
 	Chroma key	Хромакей
 	Close	Закрыть
@@ -126,6 +129,8 @@
 	Windows Media Foundation HEVC (built in)	Windows Media Foundation HEVC (встроенный)
 	Apple VideoToolbox H.264 (built in)	Apple VideoToolbox H.264 (встроенный)
 	Apple VideoToolbox HEVC (built in)	Apple VideoToolbox HEVC (встроенный)
+	VA-API H.264 (built in)	VA-API H.264 (встроенный)
+	VA-API HEVC (built in)	VA-API HEVC (встроенный)
 	Height	Высота
 	Help	Справка
 	Hide	Скрыть
@@ -408,6 +413,13 @@
 	Unlock	Разблокировать
 	Unmute	Включить звук
 @msg	A plug-in could not be loaded: {error}	Не удалось загрузить модуль: {error}
+@msg	The application's audio could not be captured. The capture is opened again shortly.	Не удалось захватить звук приложения. Захват скоро будет открыт снова.
+@msg	Capturing one application's audio is not available on this system yet.	Захват звука одного приложения пока недоступен в этой системе.
+@msg	Capturing one application needs Windows 11 or Windows Server 2022. Audio output capture still records everything the computer plays.	Для захвата одного приложения нужна Windows 11 или Windows Server 2022. «Захват выходного звука» по-прежнему записывает всё, что воспроизводит компьютер.
+@msg	The most applications that can be captured at once are already being captured.	Уже захватывается наибольшее число приложений, которое можно захватывать одновременно.
+@msg	The system refused to capture this application's audio. The capture is tried again every 5 seconds.	Система отказала в захвате звука этого приложения. Захват повторяется каждые 5 секунд.
+@msg	The running applications could not be listed. The list is read again shortly.	Не удалось получить список запущенных приложений. Список скоро будет прочитан снова.
+@msg	The application setting is not a value from the application list.	Параметр приложения не является значением из списка приложений.
 @msg	Drawing again on {adapter}	Отрисовка снова идёт через {adapter}
 @msg	No graphics device could be opened again: {error}	Не удалось снова открыть графическое устройство: {error}
 @msg	No graphics hardware can be used; drawing in software, which is slower	Графическое оборудование недоступно; отрисовка идёт программно, это медленнее

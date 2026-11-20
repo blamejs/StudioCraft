@@ -1,13 +1,14 @@
 [package]
 name = "craft-hwenc-native"
-description = "Hardware video encoders called through the drivers' own APIs: NVENC H.264 and HEVC from NV12 or P010 frames, the Windows Media Foundation hardware H.264 and HEVC encoders, and the macOS VideoToolbox hardware H.264 and HEVC encoders from NV12 frames, with the avcC and hvcC records built from the parameter sets the encoder writes"
+description = "Hardware video encoders called through the drivers' own APIs: NVENC H.264 and HEVC from NV12 or P010 frames, and the Windows Media Foundation, macOS VideoToolbox and Linux VA-API hardware H.264 and HEVC encoders from NV12 frames, with the avcC and hvcC records built from the parameter sets the encoder writes"
 version = "0.1.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 publish = false
 
 # One of the crates `cargo xtask unsafe` lets opt in to unsafe code (AGENTS.md 0.3): only the
-# `nvenc_ffi`, `mf_ffi` and `vt_ffi` modules allow it, and every unsafe block carries a SAFETY comment.
+# `nvenc_ffi`, `mf_ffi`, `vt_ffi` and `vaapi_ffi` modules allow it, and every unsafe block carries a
+# SAFETY comment.
 [lints.rust]
 unsafe_code = "deny"
 unsafe_op_in_unsafe_fn = "deny"
@@ -44,11 +45,19 @@ windows = { version = "0.62", features = [
     "Win32_System_Variant",
 ] }
 
-# 64-bit Linux: `libnvidia-encode.so.1` and `libcuda.so.1` are loaded at run time, so building
-# needs no NVIDIA headers or libraries.
+# 64-bit Linux: `libnvidia-encode.so.1` and `libcuda.so.1` for NVENC, and `libva.so.2` and
+# `libva-drm.so.2` for VA-API, are loaded at run time, so building needs no NVIDIA or libva
+# headers or libraries.
 [target.'cfg(all(target_os = "linux", target_pointer_width = "64"))'.dependencies]
 libloading = "0.8"
 log.workspace = true
+
+[dev-dependencies]
+criterion.workspace = true
+
+[[bench]]
+name = "vaapi"
+harness = false
 
 # macOS: VideoToolbox, CoreMedia, CoreVideo and CoreFoundation through the objc2 bindings.
 [target.'cfg(target_os = "macos")'.dependencies]

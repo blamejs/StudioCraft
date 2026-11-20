@@ -2,6 +2,7 @@
 
 use std::sync::Arc;
 
+use craft_app_audio::Discovery;
 use serde_json::{Value, json};
 use studiocraft_model::collection::MAX_TRANSITION_MS;
 use studiocraft_model::{FilterConfig, FilterId, ItemId, Scene, SceneCollection, SceneId, SceneItem, SourceConfig, SourceId};
@@ -42,6 +43,11 @@ pub enum EngineError {
 /// Longest scene, source or filter name, in characters.
 pub const MAX_NAME: usize = 256;
 
+/// How long after an `app_audio.list` the application meters are read.
+const APP_AUDIO_PEAK_TIME: std::time::Duration = std::time::Duration::from_secs(2);
+/// How long after an `app_audio.list` the application list is kept current.
+const APP_AUDIO_LEASE: std::time::Duration = std::time::Duration::from_secs(60);
+
 /// What a command did.
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct Outcome {
@@ -73,12 +79,71 @@ pub struct Engine {
     revision: u64,
     /// Changes since the collection was last saved.
     dirty: bool,
+    /// The running applications with audio, for `app_audio.list` and `app_audio.status`.
+    app_audio: Discovery,
 }
 
 impl Engine {
     pub fn new(collection: SceneCollection, registry: Arc<Registry>) -> Self {
         let studio_mode = false;
-        Self { collection, history: History::default(), registry, studio_mode, revision: 1, dirty: false }
+        Self { collection, history: History::default(), registry, studio_mode, revision: 1, dirty: false, app_audio: Discovery::system() }
+    }
+
+    /// List applications through `discovery` instead of the system's.
+    pub fn set_app_audio(&mut self, discovery: Discovery) {
+        self.app_audio = discovery;
+    }
+
+    /// Answers at once and never waits for the system. Until the running discovery thread has
+    /// scanned, the answer has `listing: true` and the last list read, if any; before any scan it
+    /// has no applications.
+    fn app_audio_list(&self) -> Value {
+        let support = self.app_audio.support();
+        if !support.supported {
+            return json!({"supported": false, "listing": false, "error": support.reason, "apps": []});
+        }
+        // The list stays current for a while, and a caller that asks again within the peak time
+        // sees the meters' levels.
+        self.app_audio.lease(APP_AUDIO_LEASE);
+        self.app_audio.read_peaks_for(APP_AUDIO_PEAK_TIME);
+        // Read before a stuck thread is replaced: the replacement has not scanned yet.
+        let stalled = self.app_audio.stalled();
+        self.app_audio.recover();
+        let (list, listing) = match self.app_audio.fresh_list(std::time::Duration::ZERO) {
+            Some(list) => (list, false),
+            None => (self.app_audio.snapshot(), true),
+        };
+        let error = if stalled || self.app_audio.stalled() { Some(craft_app_audio::LIST_STALLED.to_string()) } else { list.error.clone() };
+        let apps: Vec<Value> = list
+            .apps
+            .iter()
+            .map(|a| {
+                json!({
+                    "app": a.choice(),
+                    "name": a.name,
+                    "path": a.path,
+                    "pids": a.pids,
+                    "target_pid": a.target_pid,
+                    "playing": a.playing,
+                    "peak": self.app_audio.peak(a),
+                    "within": a.within,
+                })
+            })
+            .collect();
+        json!({"supported": true, "listing": listing, "error": error, "apps": apps})
+    }
+
+    fn app_audio_status(&self) -> Value {
+        let captures = self.app_audio.captures();
+        json!({
+            "support": self.app_audio.support(),
+            "discovery_stalled": self.app_audio.stalled(),
+            "captures": captures.len(),
+            "max_captures": craft_app_audio::MAX_CAPTURES,
+            "dropped_blocks": captures.iter().map(|c| c.dropped_blocks).sum::<u64>(),
+            "pool_exhausted": captures.iter().map(|c| c.pool_exhausted).sum::<u64>(),
+            "running": captures,
+        })
     }
 
     pub fn collection(&self) -> &SceneCollection {
@@ -212,6 +277,8 @@ impl Engine {
                 let result = serde_json::to_value(schema).map_err(|e| EngineError::Invalid(e.to_string()))?;
                 Ok(Outcome { changed: false, runtime: None, result: json!({"schema": result}) })
             }
+            Command::AppAudioList {} => Ok(Outcome { changed: false, runtime: None, result: self.app_audio_list() }),
+            Command::AppAudioStatus {} => Ok(Outcome { changed: false, runtime: None, result: self.app_audio_status() }),
             cmd => self.edit(cmd),
         }
     }

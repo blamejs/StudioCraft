@@ -468,6 +468,68 @@ fn link_and_info_queries_change_nothing() {
     assert_eq!(e.undo_label(), undo);
 }
 
+#[test]
+fn application_audio_queries_list_apps_and_captures_without_changing_anything() {
+    use craft_app_audio::fake::{FakeBackend, app};
+    let fake = FakeBackend::new();
+    let player = app("player.exe", 40, true);
+    fake.set_peak(&player.key, 0.5);
+    fake.set_apps(vec![player, app("browser.exe", 41, false)]);
+    let mut e = engine();
+    let discovery = craft_app_audio::Discovery::new(Arc::new(fake.clone()));
+    e.set_app_audio(discovery.clone());
+    let (rev, undo) = (e.revision(), e.undo_label());
+    let wait = std::time::Duration::from_secs(10);
+    // The first scan sticks in the system: the command answers at once, without applications.
+    fake.hold_next_scan();
+    let first = run(&mut e, "app_audio.list", json!({})).unwrap();
+    assert!(!first.changed && first.runtime.is_none());
+    assert_eq!(first.result["supported"], true);
+    assert_eq!(first.result["listing"], true, "{}", first.result);
+    assert_eq!(first.result["apps"], json!([]));
+    assert!(fake.wait_scan_held(wait));
+    fake.release_scan();
+    assert!(discovery.fresh_list(wait).is_some());
+    let list = run(&mut e, "app_audio.list", json!({})).unwrap();
+    assert_eq!(list.result["listing"], false);
+    assert_eq!(list.result["error"], serde_json::Value::Null);
+    assert_eq!(list.result["apps"][0]["name"], "browser", "applications are listed by name: {}", list.result);
+    assert_eq!(list.result["apps"][0]["target_pid"], 41);
+    assert_eq!(list.result["apps"][1]["app"], r"player.exe|c:\apps\player.exe", "{}", list.result);
+    assert_eq!(list.result["apps"][1]["playing"], true);
+    assert_eq!(list.result["apps"][1]["within"], serde_json::Value::Null);
+    // Asking again right after a meter reading shows the level.
+    let passes = discovery.peak_passes();
+    assert!(discovery.wait_peak_passes(passes + 1, wait));
+    let again = run(&mut e, "app_audio.list", json!({})).unwrap();
+    assert_eq!(again.result["apps"][1]["peak"], 0.5, "{}", again.result);
+    // A scan sticks in the system: the answer keeps the last list and says the list is stuck,
+    // while a new discovery thread starts.
+    discovery.set_stall_limits(craft_app_audio::ACTIVATE_MS, craft_app_audio::WEDGE_MS, 0);
+    fake.hold_next_scan();
+    discovery.refresh();
+    assert!(fake.wait_scan_stalled(&discovery, 2, wait), "the stuck scan shows as a stall");
+    let stuck = run(&mut e, "app_audio.list", json!({})).unwrap();
+    assert_eq!(stuck.result["error"], craft_app_audio::LIST_STALLED, "{}", stuck.result);
+    assert_eq!(stuck.result["apps"].as_array().map(Vec::len), Some(2), "the last list is kept: {}", stuck.result);
+    fake.release_scan();
+    discovery.set_stall_limits(craft_app_audio::ACTIVATE_MS, craft_app_audio::WEDGE_MS, craft_app_audio::DISCOVERY_WEDGE_MS);
+    let status = run(&mut e, "app_audio.status", json!({})).unwrap();
+    assert_eq!(status.result["support"]["supported"], true);
+    assert_eq!(status.result["discovery_stalled"], false);
+    assert_eq!(status.result["captures"], 0);
+    assert_eq!(status.result["max_captures"], 32);
+    assert!(run(&mut e, "app_audio.list", json!({"app": "x"})).is_err(), "the list takes no parameters");
+    fake.set_support(craft_app_audio::Support::no("needs a newer system"));
+    let none = run(&mut e, "app_audio.list", json!({})).unwrap();
+    assert_eq!(none.result["supported"], false);
+    assert_eq!(none.result["error"], "needs a newer system");
+    assert_eq!(none.result["apps"], json!([]));
+    assert_eq!(e.revision(), rev);
+    assert!(!e.is_dirty());
+    assert_eq!(e.undo_label(), undo);
+}
+
 /// A source whose `mode` choices depend on its `device`.
 struct DeviceSource;
 impl Plugin for DeviceSource {

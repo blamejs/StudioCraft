@@ -9,9 +9,11 @@ description in [docs/features.md](docs/features.md).
 
 - Scenes, sources and scene items can be moved, resized, rotated, locked, hidden and undone ([Sources](docs/features.md#sources)).
 - Color, image, text, media file, display capture, window capture, camera, audio input and audio output sources are built in ([Built-in sources](docs/features.md#built-in-sources)).
+- The media file source plays Ogg Vorbis files at 8 to 192 kHz without ffmpeg, through `craft-audio`'s Vorbis decoder, and mixes files with more than two channels down to stereo ([When `ffmpeg` is needed](docs/features.md#when-ffmpeg-is-needed)).
 - Cameras are captured on Windows (Media Foundation), macOS (AVFoundation) and Linux (V4L2), with the camera and its format chosen in the source's Properties ([Camera](docs/features.md#camera)).
 - Audio input and output are captured on Linux through the PipeWire sound server, which lists its devices with the default first ([Audio capture on Linux](docs/features.md#audio-capture-on-linux)).
 - Displays and windows are captured on Linux through the desktop's screen-cast portal and PipeWire ([Display and window capture on Linux](docs/features.md#display-and-window-capture-on-linux)).
+- One application's audio is captured on Windows 11 and Windows Server 2022, chosen from the running applications that have audio and followed across restarts ([Application audio capture](docs/features.md#application-audio-capture)).
 
 ### Filters
 
@@ -45,7 +47,7 @@ description in [docs/features.md](docs/features.md).
 - Settings › Video › Hardware acceleration chooses the graphics adapter, and the app recovers from a device loss ([Hardware acceleration](docs/features.md#hardware-acceleration)).
 - The compositor converts the program to NV12 on the GPU for the encoders (`craft-gpu-yuv`) ([Hardware acceleration](docs/features.md#hardware-acceleration)).
 - The Hardware video encoder runs the hardware encoder set in Settings › Video › Hardware acceleration. Automatic tests each candidate with one frame, in an order set by the adapter's vendor, and falls back to x264 (`craft-hwenc`) ([Hardware acceleration](docs/features.md#hardware-acceleration)).
-- NVIDIA NVENC, Windows Media Foundation and Apple VideoToolbox H.264 and HEVC (built in) record MKV files in StudioCraft's own process (`craft-hwenc-native`) ([Hardware acceleration](docs/features.md#hardware-acceleration)).
+- NVIDIA NVENC, Windows Media Foundation, Apple VideoToolbox and VA-API H.264 and HEVC (built in) record MKV files in StudioCraft's own process (`craft-hwenc-native`) ([Hardware acceleration](docs/features.md#hardware-acceleration)).
 
 ### Interface
 
@@ -82,8 +84,16 @@ description in [docs/features.md](docs/features.md).
 2. **Multiple outputs (in progress).** StudioCraft will stream to several destinations at once and
    offer a virtual camera. `craft-flv` already writes and reads the FLV tags and AMF0 values an
    RTMP stream carries. `craft-packet` shares each encoded packet by reference with every
-   destination's bounded ring.
+   destination's bounded ring. `craft-rtmp` publishes a stream to an RTMP or RTMPS server.
 3. **Web build.** The model and plugin crates already build for WebAssembly. A browser editor for
    scene collections is the first step.
 4. **Frames on the GPU from capture to the encoder.** Captured frames will stay on the GPU until
    the encoder reads them.
+5. **Application Audio panel.** A dock will list the running applications as lanes with live
+   meters: a lane routed to the mix is shown in color, and one that is not is grayed out while its
+   meter keeps moving. Each application and microphone lane gets enable and route switches, gain
+   with boost above 0 dB, filters, a sync offset, track assignment, mute and monitoring. The
+   `app_audio` source and the application list it reads are already built in.
+6. **Application audio on macOS and Linux.** The application list, meters and capture will use
+   ScreenCaptureKit on macOS and PipeWire's per-application streams on Linux. Both systems report
+   it as unsupported today.

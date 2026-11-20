@@ -14,6 +14,8 @@
 	Alpha mask (alpha channel)	Maska alfa (kanál alfa)
 	Alpha mask (color channel)	Maska alfa (barevný kanál)
 	Apply	Použít
+	Application	Aplikace
+	Application audio capture	Zachytávání zvuku aplikace
 	Apply Dock Layout	Použít rozvržení panelů
 	Attack (ms)	Náběh (ms)
 	Audio	Zvuk
@@ -42,6 +44,7 @@
 	Center to Screen	Vystředit na obrazovku
 	Check for updates at start	Při spuštění hledat aktualizace
 	Check for Updates…	Vyhledat aktualizace…
+	Choose an application	Vyberte aplikaci
 	Choose in the system picker	Vybrat v systémovém dialogu
 	Chroma key	Chroma key
 	Close	Zavřít
@@ -126,6 +129,8 @@
 	Windows Media Foundation HEVC (built in)	Windows Media Foundation HEVC (vestavěný)
 	Apple VideoToolbox H.264 (built in)	Apple VideoToolbox H.264 (vestavěný)
 	Apple VideoToolbox HEVC (built in)	Apple VideoToolbox HEVC (vestavěný)
+	VA-API H.264 (built in)	VA-API H.264 (vestavěný)
+	VA-API HEVC (built in)	VA-API HEVC (vestavěný)
 	Height	Výška
 	Help	Nápověda
 	Hide	Skrýt
@@ -399,6 +404,13 @@
 	Unlock	Odemknout
 	Unmute	Zrušit ztlumení
 @msg	A plug-in could not be loaded: {error}	Zásuvný modul nelze načíst: {error}
+@msg	The application's audio could not be captured. The capture is opened again shortly.	Zvuk aplikace nelze zachytit. Zachytávání se brzy otevře znovu.
+@msg	Capturing one application's audio is not available on this system yet.	Zachytávání zvuku jedné aplikace zatím není v tomto systému k dispozici.
+@msg	Capturing one application needs Windows 11 or Windows Server 2022. Audio output capture still records everything the computer plays.	Zachytávání jedné aplikace vyžaduje Windows 11 nebo Windows Server 2022. Zachytávání zvukového výstupu dál nahrává vše, co počítač přehrává.
+@msg	The most applications that can be captured at once are already being captured.	Již se zachytává nejvyšší počet aplikací, který lze zachytávat najednou.
+@msg	The system refused to capture this application's audio. The capture is tried again every 5 seconds.	Systém odmítl zachytit zvuk této aplikace. Zachycení se zkouší znovu každých 5 sekund.
+@msg	The running applications could not be listed. The list is read again shortly.	Spuštěné aplikace nelze vypsat. Seznam se brzy načte znovu.
+@msg	The application setting is not a value from the application list.	Nastavení aplikace není hodnota ze seznamu aplikací.
 @msg	Drawing again on {adapter}	Znovu se kreslí pomocí {adapter}
 @msg	No graphics device could be opened again: {error}	Grafické zařízení nelze znovu otevřít: {error}
 @msg	No graphics hardware can be used; drawing in software, which is slower	Grafický hardware nelze použít; kreslí se softwarově, což je pomalejší

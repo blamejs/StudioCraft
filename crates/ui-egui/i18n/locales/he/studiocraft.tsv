@@ -14,6 +14,8 @@
 	Alpha mask (alpha channel)	מסכת אלפא (ערוץ אלפא)
 	Alpha mask (color channel)	מסכת אלפא (ערוץ צבע)
 	Apply	החלה
+	Application	יישום
+	Application audio capture	לכידת שמע של יישום
 	Apply Dock Layout	החלת פריסת חלוניות
 	Attack (ms)	זמן תגובה (אלפיות שנייה)
 	Audio	שמע
@@ -42,6 +44,7 @@
 	Center to Screen	מרכוז במסך
 	Check for updates at start	בדיקת עדכונים בהפעלה
 	Check for Updates…	בדיקת עדכונים…
+	Choose an application	בחירת יישום
 	Choose in the system picker	בחירה בבורר של המערכת
 	Chroma key	מפתח כרומה
 	Close	סגירה
@@ -129,6 +132,8 @@
 	Windows Media Foundation HEVC (built in)	Windows Media Foundation HEVC (מובנה)
 	Apple VideoToolbox H.264 (built in)	Apple VideoToolbox H.264 (מובנה)
 	Apple VideoToolbox HEVC (built in)	Apple VideoToolbox HEVC (מובנה)
+	VA-API H.264 (built in)	VA-API H.264 (מובנה)
+	VA-API HEVC (built in)	VA-API HEVC (מובנה)
 	Height	גובה
 	Help	עזרה
 	Hide	הסתרה
@@ -389,6 +394,13 @@
 	{encoder} (not in this ffmpeg)	{encoder} (לא קיים ב־ffmpeg זה)
 	{program} did not report its version	{program} לא דיווח על הגרסה שלו
 @msg	A plug-in could not be loaded: {error}	לא ניתן לטעון תוסף: {error}
+@msg	The application's audio could not be captured. The capture is opened again shortly.	לא ניתן ללכוד את השמע של היישום. הלכידה תיפתח שוב בקרוב.
+@msg	Capturing one application's audio is not available on this system yet.	לכידת השמע של יישום יחיד עדיין אינה זמינה במערכת זו.
+@msg	Capturing one application needs Windows 11 or Windows Server 2022. Audio output capture still records everything the computer plays.	לכידת יישום יחיד דורשת Windows 11 או Windows Server 2022. "לכידת פלט שמע" עדיין מקליטה את כל מה שהמחשב מנגן.
+@msg	The most applications that can be captured at once are already being captured.	כבר נלכד המספר המרבי של יישומים שאפשר ללכוד בו־זמנית.
+@msg	The system refused to capture this application's audio. The capture is tried again every 5 seconds.	המערכת סירבה ללכוד את השמע של יישום זה. הלכידה מנוסה שוב כל 5 שניות.
+@msg	The running applications could not be listed. The list is read again shortly.	לא ניתן להציג את היישומים הפועלים. הרשימה תיקרא שוב בקרוב.
+@msg	The application setting is not a value from the application list.	הגדרת היישום אינה ערך מרשימת היישומים.
 @msg	Audio monitoring could not start: {error}	לא ניתן להתחיל את ניטור השמע: {error}
 @msg	Audio monitoring stopped: {error}	ניטור השמע נעצר: {error}
 @msg	Could not check for updates: {error}	לא ניתן לבדוק עדכונים: {error}

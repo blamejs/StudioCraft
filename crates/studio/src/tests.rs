@@ -712,7 +712,7 @@ fn without_ffmpeg_only_an_mkv_recording_tests_the_hardware_encoders() {
     p.stream.server = "rtmp://127.0.0.1/live".into();
     let mut s = studio_with(Some(noop_gpu()), SceneCollection::new("Test", "Scene"), p.clone());
     s.start_output(OutputKind::Recording).unwrap();
-    assert!(s.testing_hardware(OutputKind::Recording), "NVENC, Media Foundation and VideoToolbox can still run in this process");
+    assert!(s.testing_hardware(OutputKind::Recording), "NVENC, Media Foundation, VideoToolbox and VA-API can still run in this process");
     while s.testing_hardware(OutputKind::Recording) {
         s.tick();
         std::thread::yield_now();
@@ -721,6 +721,22 @@ fn without_ffmpeg_only_an_mkv_recording_tests_the_hardware_encoders() {
     let e = s.start_output(OutputKind::Streaming).unwrap_err().to_string();
     assert!(e.contains("ffmpeg"), "{e}");
     assert!(!s.testing_hardware(OutputKind::Streaming));
+    // A VA-API encoder chosen by name is tested in the process too; another named encoder needs
+    // ffmpeg.
+    for (named, tests) in [("vaapi_hevc", true), ("nvenc_h264", false)] {
+        let mut named_p = p.clone();
+        named_p.output.video_encoder = named.into();
+        let mut s = studio_with(Some(noop_gpu()), SceneCollection::new("Test", "Scene"), named_p);
+        match s.start_output(OutputKind::Recording) {
+            Ok(()) => assert!(tests && s.testing_hardware(OutputKind::Recording), "{named}"),
+            Err(e) => assert!(!tests && e.to_string().contains("ffmpeg"), "{named}: {e}"),
+        }
+        while s.testing_hardware(OutputKind::Recording) {
+            s.tick();
+            std::thread::yield_now();
+        }
+        s.stop_output(OutputKind::Recording);
+    }
     p.output.format = studiocraft_model::RecordingFormat::Mp4;
     let mut s = studio_with(Some(noop_gpu()), SceneCollection::new("Test", "Scene"), p);
     assert!(s.start_output(OutputKind::Recording).is_err(), "an MP4 recording runs in ffmpeg");
@@ -1148,5 +1164,38 @@ mod audio_tracks {
         assert_eq!(log.len(), 1, "{log:?}");
         assert!(log[0].starts_with("folder "), "{log:?}");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_repair_reads_only_folders_inside_the_recording_folder() {
+        let (mut s, dir) = studio("repair-roots", false);
+        let take = dir.join("Show Audio").join("Audio Files");
+        std::fs::create_dir_all(&take).unwrap();
+        // A sibling whose name starts with the recording folder's is outside it.
+        let sibling = std::path::PathBuf::from(format!("{}-other", dir.display()));
+        std::fs::create_dir_all(&sibling).unwrap();
+        #[cfg_attr(not(unix), allow(unused_mut))]
+        let mut outside = vec![sibling.clone(), dir.join("Show Audio").join("..").join("..")];
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(&sibling, dir.join("link")).unwrap();
+            outside.push(dir.join("link"));
+        }
+        for folder in &outside {
+            let r = s.run("audio_tracks.repair", &json!({"folder": folder.to_string_lossy()}));
+            let Err(e) = r else { panic!("{} was repaired", folder.display()) };
+            assert!(e.to_string().contains("not inside the recording folder"), "{}: {e}", folder.display());
+            assert_eq!(s.state_json()["audio_tracks"]["repairing"], json!(false), "{} started a repair", folder.display());
+        }
+        for folder in [dir.clone(), take, dir.join("Show Audio").join("..")] {
+            let (v, _) = s.run("audio_tracks.repair", &json!({"folder": folder.to_string_lossy()})).unwrap();
+            assert_eq!(v["started"], json!(true), "{}", folder.display());
+            assert_eq!(s.audio_tracks_repair_result(), Some(json!({"repaired": [], "failed": []})));
+        }
+        // Without the recording folder nothing is repaired.
+        let _ = std::fs::remove_dir_all(&dir);
+        let r = s.run("audio_tracks.repair", &json!({"folder": sibling.to_string_lossy()}));
+        assert!(r.is_err_and(|e| e.to_string().contains("could not be read, so nothing is repaired")));
+        let _ = std::fs::remove_dir_all(&sibling);
     }
 }

@@ -15,6 +15,14 @@ The VideoToolbox session setup, pixel buffer filling, output callback and parame
 src/vt_ffi/session.rs come from FilmCraft's `crates/platform/src/videotoolbox_encode.rs` (same
 repository, commit and license).
 
+The libva loading, DRM display opening and render node listing in src/vaapi_ffi/session.rs come
+from FilmCraft's `crates/platform/src/vaapi/va.rs` and `ffi.rs` (same repository, commit and
+license).
+
 The declarations in src/nvenc_ffi/abi.rs are transcribed from NVIDIA's `nvEncodeAPI.h` (Video
 Codec SDK, API 12.1), Copyright (c) 2010-2023 NVIDIA Corporation, under the MIT license whose
 text is at the top of that file.
+
+The declarations in src/vaapi_ffi/abi.rs are transcribed from libva's `va.h`, `va_enc_h264.h`,
+`va_enc_hevc.h` and `va_drm.h` (libva 2.22.0), Copyright (c) 2007-2009 Intel Corporation, under
+the MIT license whose text is at the top of that file.

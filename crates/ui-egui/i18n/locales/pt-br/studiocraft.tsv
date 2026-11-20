@@ -14,6 +14,8 @@
 	Alpha mask (alpha channel)	Máscara alfa (canal alfa)
 	Alpha mask (color channel)	Máscara alfa (canal de cor)
 	Apply	Aplicar
+	Application	Aplicativo
+	Application audio capture	Captura de áudio de aplicativo
 	Apply Dock Layout	Aplicar layout dos painéis
 	Attack (ms)	Ataque (ms)
 	Audio	Áudio
@@ -42,6 +44,7 @@
 	Center to Screen	Centralizar na tela
 	Check for updates at start	Procurar atualizações ao iniciar
 	Check for Updates…	Procurar atualizações…
+	Choose an application	Escolha um aplicativo
 	Choose in the system picker	Escolher no seletor do sistema
 	Chroma key	Chroma key
 	Close	Fechar
@@ -126,6 +129,8 @@
 	Windows Media Foundation HEVC (built in)	Windows Media Foundation HEVC (integrado)
 	Apple VideoToolbox H.264 (built in)	Apple VideoToolbox H.264 (integrado)
 	Apple VideoToolbox HEVC (built in)	Apple VideoToolbox HEVC (integrado)
+	VA-API H.264 (built in)	VA-API H.264 (integrado)
+	VA-API HEVC (built in)	VA-API HEVC (integrado)
 	Height	Altura
 	Help	Ajuda
 	Hide	Ocultar
@@ -398,6 +403,13 @@
 	Unlock	Desbloquear
 	Unmute	Ativar som
 @msg	A plug-in could not be loaded: {error}	Não foi possível carregar um plug-in: {error}
+@msg	The application's audio could not be captured. The capture is opened again shortly.	Não foi possível capturar o áudio do aplicativo. A captura será aberta novamente em instantes.
+@msg	Capturing one application's audio is not available on this system yet.	A captura do áudio de um único aplicativo ainda não está disponível neste sistema.
+@msg	Capturing one application needs Windows 11 or Windows Server 2022. Audio output capture still records everything the computer plays.	Capturar um único aplicativo requer Windows 11 ou Windows Server 2022. Captura de saída de áudio continua gravando tudo o que o computador reproduz.
+@msg	The most applications that can be captured at once are already being captured.	O número máximo de aplicativos que podem ser capturados ao mesmo tempo já está sendo capturado.
+@msg	The system refused to capture this application's audio. The capture is tried again every 5 seconds.	O sistema recusou a captura do áudio deste aplicativo. A captura é tentada novamente a cada 5 segundos.
+@msg	The running applications could not be listed. The list is read again shortly.	Não foi possível listar os aplicativos em execução. A lista será lida novamente em instantes.
+@msg	The application setting is not a value from the application list.	A configuração de aplicativo não é um valor da lista de aplicativos.
 @msg	Drawing again on {adapter}	Desenhando novamente com {adapter}
 @msg	No graphics device could be opened again: {error}	Não foi possível abrir de novo um dispositivo gráfico: {error}
 @msg	No graphics hardware can be used; drawing in software, which is slower	Nenhum hardware gráfico pode ser usado; desenhando por software, que é mais lento

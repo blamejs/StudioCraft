@@ -36,6 +36,7 @@ pub mod disk;
 pub mod journal;
 pub mod markers;
 pub mod names;
+mod open;
 pub mod recover;
 pub mod session;
 pub mod space;

@@ -131,7 +131,8 @@ The notes follow the template `packaging/release-notes.md`, in this order:
 4. The Verify the downloads section gives the commands that verify the checksum files and their
    signatures.
 5. The Changes section gives the number of pull requests merged since the previous alpha, lists
-   them, and links the full list of changes.
+   them, and links the full list of changes. The command writes each title as a code span on one
+   line, so GitHub shows it as written, without formatting, links, HTML or mentions.
 
 ## Signing and secrets
 
