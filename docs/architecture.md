@@ -36,7 +36,7 @@ crate in the same layer. `cargo xtask layers` checks this against the table in
 | L2 | `studiocraft-encode` | The built-in encoders: H.264 video from NV12 frames and AAC audio from the mixer's blocks. |
 | L3 | `studiocraft-sources` | The built-in sources and filters. |
 | L3 | `studiocraft-audio-tracks` | Audio tracks: the collect and disk threads that write each recorded source and the program mix to WAV files, the take journal, and the repair of takes cut short. |
-| L3 | `studiocraft-outputs` | Recording and streaming through an ffmpeg process, Matroska recording through the built-in encoders, and the video encoders. |
+| L3 | `studiocraft-outputs` | Recording through an ffmpeg process, Matroska recording through the built-in encoders, streaming through the built-in encoders to several RTMP and RTMPS destinations, and the video encoders. |
 | L4 | `studiocraft-studio` | The running studio: sources, mixer, compositor, transitions and outputs behind one command interface. |
 | L5 | `studiocraft-ui-egui` | The window: menus, preview, docks, properties, filters and settings. |
 | L5 | `studiocraft-mcp` | The MCP server: its tools, resources, resource templates, prompts and completions, a studio in the same process without a window (with its file roots and streaming gate), and the control channel client that sends calls to the app. |
@@ -292,8 +292,14 @@ the thread parks while it has nothing to do.
 
 ### Output threads
 
-A stream, or a recording with an ffmpeg encoder, runs an ffmpeg process with one writer thread for
-video and one for audio (`outputs/src/writer.rs`).
+A recording with an ffmpeg encoder runs an ffmpeg process with one writer thread for video and one
+for audio (`outputs/src/writer.rs`).
+
+A stream runs the same encode threads as a built-in recording. Its third thread shares each packet
+once through `craft-packet` and offers it to every destination without waiting for a network. Each
+destination that sends has its own thread, which publishes with `craft-rtmp` from a ring that holds
+4 s of the stream (`outputs/src/stream.rs`). A destination that falls behind loses packets up to
+the next keyframe, and a destination that fails, stops or reconnects does not affect the others.
 
 A recording with H.264 (built in) runs a video encode thread, an audio encode thread and a file
 thread that writes the Matroska file (`outputs/src/native.rs`). The encode threads hand packets to
@@ -385,7 +391,7 @@ starts its `VideoSession`, which takes NV12 frames and returns packets.
 | --- | --- |
 | Recording | Built-in and ffmpeg encoders. With a built-in encoder it writes MKV files only. |
 | Replay buffer (plugin id `replay`) | The built-in encoders only. Its `OutputInstance::replay` returns a `ReplayClip` that writes the buffer's packets to a file. |
-| Stream | The ffmpeg encoders only. |
+| Stream | The built-in H.264 encoders only. |
 
 `studiocraft-encode` holds the built-in H.264 encoder (`studiocraft_encode::H264`, plugin id
 `h264`) and the AAC encoder (`studiocraft_encode::AacSession`) that built-in recordings use for

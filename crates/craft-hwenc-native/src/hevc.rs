@@ -4,11 +4,14 @@
 //!
 //! The profile, tier, compatibility flags, constraint flags, level, chroma format, bit depths and
 //! temporal layers come from the SPS (ITU-T H.265 7.3.2.2.1 and 7.3.3). The arrays are complete:
-//! the parameter sets are in the record only, never in the samples.
+//! the parameter sets are in the record only, never in the samples. `craft-media`'s
+//! [`HevcConfig`] writes the record.
+
+use craft_media::bitstream::{BitReader, unescape_rbsp};
+use craft_media::isobmff::{HevcConfig, HevcNalArray};
 
 use crate::Codec;
 use crate::annexb::nal_type;
-use crate::bits::{Bits, Truncated, unescape};
 
 /// The fields of an HEVC SPS the record repeats, and the picture size after cropping.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -35,24 +38,24 @@ impl Sps {
         if nal_type(Codec::Hevc, nal) != Some(33) {
             return Err("not an HEVC SPS NAL unit".into());
         }
-        let rbsp = unescape(nal.get(2..).unwrap_or_default());
-        Self::read(&mut Bits::new(&rbsp)).map_err(|_| "the HEVC SPS is truncated".to_string())?
+        let rbsp = unescape_rbsp(nal.get(2..).unwrap_or_default());
+        Self::read(&mut BitReader::new(&rbsp)).map_err(|_| "the HEVC SPS is truncated".to_string())?
     }
 
-    fn read(b: &mut Bits) -> Result<Result<Sps, String>, Truncated> {
-        let _vps_id = b.bits(4)?;
-        let max_sub_layers_minus1 = b.bits(3)? as u8;
-        let temporal_id_nesting = b.bit()? == 1;
-        let profile_space = b.bits(2)? as u8;
-        let tier = b.bit()? == 1;
-        let profile_idc = b.bits(5)? as u8;
-        let compatibility = b.bits(32)?;
-        let constraints = (u64::from(b.bits(16)?) << 32) | u64::from(b.bits(32)?);
-        let level_idc = b.bits(8)? as u8;
+    fn read(b: &mut BitReader) -> craft_media::bitstream::Result<Result<Sps, String>> {
+        let _vps_id = b.read_bits(4)?;
+        let max_sub_layers_minus1 = b.read_bits(3)? as u8;
+        let temporal_id_nesting = b.read_bit()?;
+        let profile_space = b.read_bits(2)? as u8;
+        let tier = b.read_bit()?;
+        let profile_idc = b.read_bits(5)? as u8;
+        let compatibility = b.read_bits(32)?;
+        let constraints = b.read_bits_u64(48)?;
+        let level_idc = b.read_bits(8)? as u8;
         let subs = usize::from(max_sub_layers_minus1);
         let mut present = Vec::with_capacity(subs);
         for _ in 0..subs {
-            present.push((b.bit()? == 1, b.bit()? == 1));
+            present.push((b.read_bit()?, b.read_bit()?));
         }
         if subs > 0 {
             b.skip(2 * (8 - subs))?;
@@ -65,17 +68,17 @@ impl Sps {
                 b.skip(8)?;
             }
         }
-        let _sps_id = b.ue()?;
-        let chroma_format_idc = b.ue()?;
-        let separate_planes = chroma_format_idc == 3 && b.bit()? == 1;
-        let width = b.ue()?;
-        let height = b.ue()?;
+        let _sps_id = b.read_ue()?;
+        let chroma_format_idc = b.read_ue()?;
+        let separate_planes = chroma_format_idc == 3 && b.read_bit()?;
+        let width = b.read_ue()?;
+        let height = b.read_ue()?;
         let (mut left, mut right, mut top, mut bottom) = (0, 0, 0, 0);
-        if b.bit()? == 1 {
-            (left, right, top, bottom) = (b.ue()?, b.ue()?, b.ue()?, b.ue()?);
+        if b.read_bit()? {
+            (left, right, top, bottom) = (b.read_ue()?, b.read_ue()?, b.read_ue()?, b.read_ue()?);
         }
-        let bit_depth_luma = b.ue()?.saturating_add(8);
-        let bit_depth_chroma = b.ue()?.saturating_add(8);
+        let bit_depth_luma = b.read_ue()?.saturating_add(8);
+        let bit_depth_chroma = b.read_ue()?.saturating_add(8);
         // H.265 Table 6-1: the conformance window counts chroma samples
         let (sub_w, sub_h) = match (chroma_format_idc, separate_planes) {
             (1, _) => (2, 2),
@@ -135,27 +138,31 @@ pub fn hvcc(vps: &[u8], sps: &[u8], pps: &[u8], size: (u32, u32), bit_depth: u32
     if s.size != size {
         return Err(format!("the encoder wrote {}x{} pictures for {}x{} frames", s.size.0, s.size.1, size.0, size.1));
     }
-    let mut out = vec![1, (s.profile_space << 6) | (u8::from(s.tier) << 5) | s.profile_idc];
-    out.extend_from_slice(&s.compatibility.to_be_bytes());
-    out.extend_from_slice(&s.constraints.to_be_bytes()[2..]);
-    out.push(s.level_idc);
-    // min_spatial_segmentation_idc 0 and parallelismType 0: not specified
-    out.extend_from_slice(&[0xf0, 0x00, 0xfc]);
-    out.push(0xfc | (s.chroma_format_idc as u8 & 3));
-    out.push(0xf8 | ((bit_depth - 8) as u8 & 7));
-    out.push(0xf8 | ((bit_depth - 8) as u8 & 7));
-    // avgFrameRate 0 (unspecified); constantFrameRate 0, numTemporalLayers, temporalIdNested,
-    // lengthSizeMinusOne 3
-    out.extend_from_slice(&[0, 0]);
-    out.push(((s.max_sub_layers_minus1.saturating_add(1) & 7) << 3) | (u8::from(s.temporal_id_nesting) << 2) | 3);
-    out.push(3);
-    for (nal, kind) in [(vps, 32u8), (sps, 33), (pps, 34)] {
-        out.push(0x80 | kind);
-        out.extend_from_slice(&1u16.to_be_bytes());
-        out.extend_from_slice(&(nal.len() as u16).to_be_bytes());
-        out.extend_from_slice(nal);
+    Ok(HevcConfig {
+        general_profile_space: s.profile_space,
+        general_tier_flag: s.tier,
+        general_profile_idc: s.profile_idc,
+        general_profile_compatibility_flags: s.compatibility,
+        general_constraint_indicator_flags: s.constraints,
+        general_level_idc: s.level_idc,
+        // min_spatial_segmentation_idc 0 and parallelismType 0: not specified
+        min_spatial_segmentation_idc: 0,
+        parallelism_type: 0,
+        chroma_format_idc: 1,
+        bit_depth_luma: bit_depth as u8,
+        bit_depth_chroma: bit_depth as u8,
+        // avgFrameRate 0 (unspecified) and constantFrameRate 0
+        avg_frame_rate: 0,
+        constant_frame_rate: 0,
+        num_temporal_layers: s.max_sub_layers_minus1.saturating_add(1),
+        temporal_id_nested: s.temporal_id_nesting,
+        length_size: 4,
+        arrays: [(vps, 32u8), (sps, 33), (pps, 34)]
+            .into_iter()
+            .map(|(nal, nal_type)| HevcNalArray { completeness: true, nal_type, nalus: vec![nal.to_vec()] })
+            .collect(),
     }
-    Ok(out)
+    .to_bytes())
 }
 
 #[cfg(test)]
@@ -195,7 +202,7 @@ mod tests {
         let (v, s, p) = (unhex(VPS), unhex(SPS), unhex(PPS));
         let r = hvcc(&v, &s, &p, (1280, 720), 8).unwrap();
         // the profile, tier, level record is the SPS's own 12 bytes after its first RBSP byte
-        let rbsp = unescape(&s[2..]);
+        let rbsp = unescape_rbsp(&s[2..]);
         assert_eq!(&r[1..13], &rbsp[1..13]);
         assert_eq!(&r[13..23], &[0xf0, 0, 0xfc, 0xfd, 0xf8, 0xf8, 0, 0, 0x0f, 3]);
         let mut at = 23;

@@ -494,3 +494,35 @@ menu	Transform	Transformar
 @msg	Audio tracks could not be repaired: {takes} and {more} more	No se pudieron reparar las pistas de audio: {takes} y {more} más
 @msg	Audio tracks could not be repaired: {takes}. Takes repaired: {count}	No se pudieron reparar las pistas de audio: {takes}. Tomas reparadas: {count}
 @msg	Audio tracks could not be repaired: {takes} and {more} more. Takes repaired: {count}	No se pudieron reparar las pistas de audio: {takes} y {more} más. Tomas reparadas: {count}
+@msg	`{command}` needs `{key}`	`{command}` necesita `{key}`
+@msg	`{command}`: unknown dock `{name}` (one of {docks})	`{command}`: panel desconocido `{name}` (uno de {docks})
+@msg	`{command}`: `path` must be a file path	`{command}`: `path` debe ser una ruta de archivo
+@msg	`{command}` needs `path` when no file dialog can be shown	`{command}` necesita `path` cuando no se puede mostrar ningún cuadro de diálogo de archivos
+@msg	The scene collection could not be imported: {error}	No se pudo importar la colección de escenas: {error}
+@msg	The scene collection could not be exported: {error}	No se pudo exportar la colección de escenas: {error}
+@msg	there is no free name for the scene collection `{name}`	no hay ningún nombre libre para la colección de escenas `{name}`
+@msg	select a source first	primero selecciona una fuente
+@msg	the source has not shown a picture yet	la fuente aún no ha mostrado ninguna imagen
+@msg	settings are kept in memory only (--no-prefs)	la configuración se guarda solo en memoria (--no-prefs)
+@msg	`scopes.kind`: unknown scope `{name}` (one of {scopes})	`scopes.kind`: monitor de señal desconocido `{name}` (uno de {scopes})
+@msg	`dock.move`: `to` is `left` or `right`, not `{to}`	`dock.move`: `to` es `left` o `right`, no `{to}`
+@msg	`dock.float` needs `floating`: true or false	`dock.float` necesita `floating`: true o false
+@msg	`dock.layout_save`: `name` is a string	`dock.layout_save`: `name` es una cadena de texto
+@msg	there is no dock layout named `{name}`	no hay ningún diseño de paneles llamado `{name}`
+@msg	there is no link for `{command}`	no hay ningún enlace para `{command}`
+@msg	unknown command `{command}`	comando desconocido `{command}`
+@msg	there is already a profile named `{name}`	ya hay un perfil llamado `{name}`
+@msg	there is already a scene collection named `{name}`	ya hay una colección de escenas llamada `{name}`
+@msg	the last scene collection can't be removed	no se puede quitar la última colección de escenas
+@msg	the last profile can't be removed	no se puede quitar el último perfil
+@msg	update checks are off in this session (--no-prefs, a scripted run or a test)	la búsqueda de actualizaciones está desactivada en esta sesión (--no-prefs, una ejecución con script o una prueba)
+@msg	there are already {count} dock layouts; remove one first	ya hay {count} diseños de paneles; quita uno primero
+@msg	a name needs 1 to 100 characters	un nombre necesita de 1 a 100 caracteres
+@msg	a name can't start or end with a space, or end with a period	un nombre no puede empezar ni terminar con un espacio, ni terminar con un punto
+@msg	a name can't contain {character}	un nombre no puede contener {character}
+@msg	`{name}` is reserved by the system	`{name}` está reservado por el sistema
+@msg	`video.canvas_from_display`: the size of the display the window is on is not known; pass `display`	`video.canvas_from_display`: no se conoce el tamaño de la pantalla en la que está la ventana; indica `display`
+@msg	`video.canvas_from_display`: `display` is a display id from `video.displays`	`video.canvas_from_display`: `display` es un id de pantalla de `video.displays`
+@msg	there is no display `{id}`: the system lists no displays	no hay ninguna pantalla `{id}`: el sistema no muestra ninguna pantalla
+@msg	there is no display `{id}` (the displays are {ids})	no hay ninguna pantalla `{id}` (las pantallas son {ids})
+@msg	a {width} × {height} display can't be the canvas: each side must be from {min} to {max} pixels	una pantalla de {width} × {height} no puede ser el lienzo: cada lado debe tener de {min} a {max} píxeles

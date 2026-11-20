@@ -167,13 +167,57 @@ impl OutputSettings {
     }
 }
 
+/// Where a destination's stream key is kept.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum KeyRef {
+    /// No key: the server's address is all the service needs.
+    #[default]
+    None,
+    /// The profile's own key, [`StreamSettings::key`], which is saved in the profile file as
+    /// plain text, as profiles of version 6 and earlier saved it.
+    Profile,
+    /// A key the studio holds in memory under this name for the session. It is never written
+    /// to the profile file.
+    Held(String),
+}
+
+/// One place a stream is sent to.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Destination {
+    /// Names the destination in commands and status; unique within the profile.
+    pub id: String,
+    /// The name shown for it.
+    pub name: String,
+    /// Whether starting the stream sends to it.
+    pub enabled: bool,
+    /// The RTMP server, `rtmp://host/app` or `rtmps://host/app`.
+    pub server: String,
+    pub key: KeyRef,
+}
+
+impl Default for Destination {
+    fn default() -> Self {
+        Self { id: String::new(), name: String::new(), enabled: true, server: String::new(), key: KeyRef::None }
+    }
+}
+
+/// Most destinations a profile holds.
+pub const MAX_DESTINATIONS: usize = 16;
+/// Longest destination id, in bytes.
+pub const MAX_DESTINATION_ID: usize = 64;
+/// The id of the destination a profile of version 6 or earlier streamed to.
+pub const PRIMARY_DESTINATION: &str = "main";
+
 /// Where and how to stream.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct StreamSettings {
-    /// The RTMP server, `rtmp://host/app` or `rtmps://host/app`.
-    pub server: String,
-    /// The stream key the service gave the user.
+    /// The places the stream is sent to, in the order they are listed.
+    pub destinations: Vec<Destination>,
+    /// The stream key of each destination whose key is [`KeyRef::Profile`]. It is saved in the
+    /// profile file as plain text, as earlier versions saved it.
     pub key: String,
     pub video_bitrate_kbps: u32,
     pub audio_bitrate_kbps: u32,
@@ -187,11 +231,11 @@ pub struct StreamSettings {
 impl Default for StreamSettings {
     fn default() -> Self {
         Self {
-            server: String::new(),
+            destinations: Vec::new(),
             key: String::new(),
             video_bitrate_kbps: 6000,
             audio_bitrate_kbps: 160,
-            video_encoder: "x264".into(),
+            video_encoder: "h264".into(),
             encoder_settings: BTreeMap::new(),
             keyframe_interval_s: 2,
         }
@@ -203,6 +247,46 @@ impl StreamSettings {
     /// defaults apply.
     pub fn video_encoder_settings(&self) -> Settings {
         self.encoder_settings.get(&self.video_encoder).cloned().unwrap_or_default()
+    }
+
+    /// The destination with id `id`.
+    pub fn destination(&self, id: &str) -> Option<&Destination> {
+        self.destinations.iter().find(|d| d.id == id)
+    }
+
+    /// The first destination, added with the profile's key when the list is empty. Settings ›
+    /// Stream edits this one.
+    pub fn primary_mut(&mut self) -> &mut Destination {
+        if self.destinations.is_empty() {
+            self.destinations.push(Destination { id: PRIMARY_DESTINATION.into(), key: KeyRef::Profile, ..Destination::default() });
+        }
+        // Not empty: a destination was added above.
+        &mut self.destinations[0]
+    }
+
+    /// The server of the first destination; empty when there is none.
+    pub fn primary_server(&self) -> &str {
+        self.destinations.first().map_or("", |d| d.server.as_str())
+    }
+
+    /// The first problem with the destinations, as an error message: too many, an empty or long
+    /// id, or an id used twice.
+    pub fn check(&self) -> Result<(), String> {
+        if self.destinations.len() > MAX_DESTINATIONS {
+            return Err(format!("the stream has {} destinations; at most {MAX_DESTINATIONS} are allowed", self.destinations.len()));
+        }
+        for (i, d) in self.destinations.iter().enumerate() {
+            if d.id.trim().is_empty() {
+                return Err(format!("destination {} has no id", i + 1));
+            }
+            if d.id.len() > MAX_DESTINATION_ID {
+                return Err(format!("destination {} has an id longer than {MAX_DESTINATION_ID} bytes", i + 1));
+            }
+            if self.destinations[..i].iter().any(|o| o.id == d.id) {
+                return Err(format!("the destination id `{}` is used twice", d.id));
+            }
+        }
+        Ok(())
     }
 }
 

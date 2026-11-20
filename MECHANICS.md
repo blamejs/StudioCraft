@@ -96,6 +96,12 @@ field to `false` in `mechanics.json`.
 | Stream video bitrate | 6000 kbps | `model::profile::StreamSettings::default` | estimated |
 | Stream audio bitrate | 160 kbps | `model::profile::StreamSettings::default` | estimated |
 | Keyframe interval | 2 s | `model::profile::StreamSettings::default` | estimated |
+| Stream encoder | H.264 (built in) | `model::profile::StreamSettings::default` | estimated |
+| Stream destinations in a profile | at most 16 | `model::profile::MAX_DESTINATIONS` | estimated |
+| Stream destination ring | 4 s of the stream | `outputs::stream::RING_SECONDS` | estimated |
+| Waits before a stream destination tries again | 2, 4, 8 and 16 s, then every 30 s | `outputs::stream::RETRY_DELAYS` | estimated |
+| Failed tries in a row before a stream destination gives up | 10 | `outputs::stream::MAX_TRIES` | estimated |
+| Stream connection that counts as lasting | 30 s | `outputs::stream::STABLE_AFTER` | estimated |
 | Default encoder | Software x264 | `model::profile::OutputSettings::default` | estimated |
 | x264 preset | veryfast | `outputs::encoders::VideoEncoder::schema` | estimated |
 | NVENC preset | P5 | `outputs::encoders::VideoEncoder::schema` | estimated |

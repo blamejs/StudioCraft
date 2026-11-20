@@ -27,7 +27,7 @@ pub use encoder::{Availability, Codec, Encoder, EncoderEnv, EncoderKind, FfmpegE
 pub use filter::{
     Animation, AnimationStep, EffectImage, Filter, FilterInstance, FilterTarget, MAX_EFFECT_SIDE, Reframe, VIDEO_EFFECT_PARAMS, VideoEffect,
 };
-pub use output::{Output, OutputInstance, OutputJob, OutputStatus, ReplayClip, VideoFormat};
+pub use output::{DestinationState, DestinationStatus, Output, OutputInstance, OutputJob, OutputStatus, ReplayClip, VideoFormat};
 pub use registry::Registry;
 pub use source::{AUDIO_QUEUE_BLOCKS, AudioOut, Pace, Source, SourceCaps, SourceInstance, SourceIo, VideoContent, VideoOut};
 pub use studiocraft_model::{Settings, SettingsSchema};

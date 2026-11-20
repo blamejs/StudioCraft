@@ -95,8 +95,8 @@ fn collection_v3_to_v4(data: &mut Value) -> Result<(), String> {
 /// Profiles.
 pub const PROFILE: FileFormat = FileFormat {
     name: "studiocraft.profile",
-    version: 6,
-    migrations: &[profile_v1_to_v2, profile_v2_to_v3, profile_v3_to_v4, profile_v4_to_v5, profile_v5_to_v6],
+    version: 7,
+    migrations: &[profile_v1_to_v2, profile_v2_to_v3, profile_v3_to_v4, profile_v4_to_v5, profile_v5_to_v6, profile_v6_to_v7],
 };
 
 /// Profile version 1 to 2: the recording and the stream each keep the settings of their video
@@ -147,6 +147,47 @@ fn profile_v5_to_v6(data: &mut Value) -> Result<(), String> {
     let data = data.as_object_mut().ok_or("the profile is not an object")?;
     data.entry("audio_tracks")
         .or_insert_with(|| json!({"enabled": false, "when": "recording", "include_program": true, "buffer_mib": 96, "segment_gib": 1}));
+    Ok(())
+}
+
+/// Profile version 6 to 7: the stream has a list of destinations (`stream.destinations`). The
+/// server of an older file becomes one destination, `main`, which is on and uses the profile's
+/// key (`stream.key`, kept as it was); a file without a server gets no destination. The stream
+/// runs the built-in encoders, so a stream encoder that ran inside ffmpeg is replaced by the
+/// built-in encoder of the same kind: `x264` by `h264`, and NVENC, Media Foundation,
+/// VideoToolbox and VA-API H.264 by their built-in forms, and AMF and Quick Sync H.264, which have
+/// none, by the hardware choice (`hardware`). Other encoders are kept, and a stream that starts
+/// with one asks for another.
+fn profile_v6_to_v7(data: &mut Value) -> Result<(), String> {
+    let data = data.as_object_mut().ok_or("the profile is not an object")?;
+    let stream = data.entry("stream").or_insert_with(|| json!({}));
+    let Value::Object(s) = stream else { return Err("the stream settings are not an object".into()) };
+    let server = match s.remove("server") {
+        None | Some(Value::Null) => String::new(),
+        Some(Value::String(server)) => server,
+        Some(_) => return Err("the stream server is not text".into()),
+    };
+    let destinations = if server.trim().is_empty() {
+        json!([])
+    } else {
+        json!([{"id": crate::profile::PRIMARY_DESTINATION, "name": "", "enabled": true, "server": server, "key": "profile"}])
+    };
+    s.insert("destinations".into(), destinations);
+    if let Some(Value::String(encoder)) = s.get_mut("video_encoder") {
+        let built_in = match encoder.as_str() {
+            "x264" => Some("h264"),
+            "nvenc_h264" => Some("nvenc_native_h264"),
+            "mf_h264" => Some("mf_native_h264"),
+            "vt_h264" => Some("vt_native_h264"),
+            "vaapi_h264" => Some("vaapi_native_h264"),
+            // These run only inside ffmpeg; the hardware choice picks one that runs here.
+            "amf_h264" | "qsv_h264" => Some("hardware"),
+            _ => None,
+        };
+        if let Some(id) = built_in {
+            *encoder = id.to_string();
+        }
+    }
     Ok(())
 }
 
@@ -219,15 +260,19 @@ pub fn read_collection(text: &str, default_scene_name: &str) -> Result<SceneColl
     Ok(c)
 }
 
-/// A profile file's text.
+/// A profile file's text. A profile whose stream destinations break a rule of
+/// [`crate::StreamSettings::check`] is refused, as [`read_profile`] refuses its file.
 pub fn write_profile(p: &Profile) -> Result<String, FormatError> {
+    p.stream.check().map_err(FormatError::Data)?;
     PROFILE.write(p)
 }
 
 /// A profile from a file's text, migrated, with video, replay buffer and audio tracks settings
-/// brought into range.
+/// brought into range. A file whose stream destinations break a rule of
+/// [`crate::StreamSettings::check`] is refused.
 pub fn read_profile(text: &str) -> Result<Profile, FormatError> {
     let mut p: Profile = PROFILE.read(text)?;
+    p.stream.check().map_err(FormatError::Data)?;
     p.video = p.video.sanitized();
     p.replay = p.replay.sanitized();
     p.audio_tracks = p.audio_tracks.sanitized();
@@ -252,6 +297,7 @@ mod tests {
         (4, include_str!("../fixtures/profile-v4.json")),
         (5, include_str!("../fixtures/profile-v5.json")),
         (6, include_str!("../fixtures/profile-v6.json")),
+        (7, include_str!("../fixtures/profile-v7.json")),
     ];
 
     fn covers_every_version(format: &FileFormat, fixtures: &[(u32, &str)]) {
@@ -290,7 +336,7 @@ mod tests {
         let (_, v2) = PROFILE_FIXTURES[1];
         let p = read_profile(v2).unwrap();
         assert_eq!(p.output.video_encoder_settings().str("preset"), Some("fast"));
-        assert_eq!(p.stream.video_encoder_settings().str("preset"), Some("p4"));
+        assert_eq!(p.stream.encoder_settings.get("nvenc_h264").and_then(|s| s.str("preset")), Some("p4"), "kept under the encoder it was saved for");
         let mut other = p.clone();
         other.output.video_encoder = "nvenc_h264".into();
         assert_eq!(other.output.video_encoder_settings(), crate::Settings::new(), "another encoder does not take x264's preset");
@@ -433,6 +479,101 @@ mod tests {
         for (from, to) in [("\"buffer_mib\": 256", "\"buffer_mib\": 16"), ("\"segment_gib\": 1", "\"segment_gib\": 3")] {
             assert!(read_profile(&v6.replace(from, to)).is_ok(), "{to} is in range");
         }
+    }
+
+    #[test]
+    fn a_profile_with_one_server_streams_to_one_destination_with_the_profile_key() {
+        use crate::profile::{Destination, KeyRef, PRIMARY_DESTINATION};
+        for (v, text) in &PROFILE_FIXTURES[..6] {
+            let p = read_profile(text).unwrap();
+            let want = Destination {
+                id: PRIMARY_DESTINATION.into(),
+                name: String::new(),
+                enabled: true,
+                server: "rtmp://localhost/live".into(),
+                key: KeyRef::Profile,
+            };
+            assert_eq!(p.stream.destinations, vec![want], "version {v}");
+            assert_eq!(p.stream.key, "test", "version {v} keeps its key");
+            // Version 1 streams with x264, the later fixtures with NVENC.
+            let built_in = if *v == 1 { "h264" } else { "nvenc_native_h264" };
+            assert_eq!(p.stream.video_encoder, built_in, "version {v}: the built-in form of the encoder");
+        }
+        let (_, v6) = PROFILE_FIXTURES[5];
+        let no_server = v6.replace("\"server\": \"rtmp://localhost/live\", ", "");
+        assert!(read_profile(&no_server).unwrap().stream.destinations.is_empty(), "no server, no destination");
+        let blank = v6.replace("\"rtmp://localhost/live\"", "\"  \"");
+        assert!(read_profile(&blank).unwrap().stream.destinations.is_empty(), "a blank server is no destination");
+        let not_text = v6.replace("\"rtmp://localhost/live\"", "5");
+        assert!(matches!(read_profile(&not_text), Err(FormatError::Migration { from: 6, .. })), "a server that is not text refuses the file");
+        let changed = [
+            ("x264", "h264"),
+            ("mf_h264", "mf_native_h264"),
+            ("vt_h264", "vt_native_h264"),
+            ("vaapi_h264", "vaapi_native_h264"),
+            ("amf_h264", "hardware"),
+            ("qsv_h264", "hardware"),
+        ];
+        for (from, to) in changed {
+            let text = v6.replace("\"video_encoder\": \"nvenc_h264\"", &format!("\"video_encoder\": \"{from}\""));
+            assert_eq!(read_profile(&text).unwrap().stream.video_encoder, to);
+        }
+        for kept in ["hardware", "h264", "nvenc_native_h264"] {
+            let text = v6.replace("\"video_encoder\": \"nvenc_h264\"", &format!("\"video_encoder\": \"{kept}\""));
+            assert_eq!(read_profile(&text).unwrap().stream.video_encoder, kept);
+        }
+        assert_eq!(
+            read_profile(&v6.replace("\"video_encoder\": \"hardware\"", "\"video_encoder\": \"x264\"")).unwrap().output.video_encoder,
+            "x264",
+            "recordings keep ffmpeg's x264"
+        );
+    }
+
+    #[test]
+    fn profiles_keep_each_destination_and_refuse_bad_lists() {
+        use crate::profile::{KeyRef, MAX_DESTINATIONS};
+        let (_, v7) = PROFILE_FIXTURES[6];
+        let p = read_profile(v7).unwrap();
+        let keys: Vec<(&str, bool, &KeyRef)> = p.stream.destinations.iter().map(|d| (d.id.as_str(), d.enabled, &d.key)).collect();
+        assert_eq!(keys, [("main", true, &KeyRef::Profile), ("backup", false, &KeyRef::Held("backup".into())), ("open", true, &KeyRef::None)]);
+        assert_eq!(p.stream.destination("backup").map(|d| d.server.as_str()), Some("rtmps://backup.localhost/app"));
+        let text = write_profile(&p).unwrap();
+        assert_eq!(read_profile(&text).unwrap(), p);
+        assert_eq!(text.matches("\"test\"").count(), 1, "only the profile's own key is in the file");
+        let twice = v7.replace("\"id\": \"backup\"", "\"id\": \"main\"");
+        assert!(matches!(read_profile(&twice), Err(FormatError::Data(m)) if m.contains("used twice")));
+        let empty = v7.replace("\"id\": \"backup\"", "\"id\": \" \"");
+        assert!(matches!(read_profile(&empty), Err(FormatError::Data(m)) if m.contains("no id")));
+        let long = v7.replace("\"id\": \"backup\"", &format!("\"id\": \"{}\"", "b".repeat(65)));
+        assert!(matches!(read_profile(&long), Err(FormatError::Data(m)) if m.contains("longer than 64")));
+        let unknown = v7.replace("\"key\": \"none\"", "\"key\": \"vault\"");
+        assert!(matches!(read_profile(&unknown), Err(FormatError::Data(_))), "an unknown key place refuses the file");
+        let mut many = p.clone();
+        many.stream.destinations = (0..=MAX_DESTINATIONS).map(|i| crate::Destination { id: format!("d{i}"), ..Default::default() }).collect();
+        assert!(matches!(write_profile(&many), Err(FormatError::Data(m)) if m.contains("at most 16")), "a profile that could not be read back");
+        many.stream.destinations.pop();
+        let sixteen = write_profile(&many).unwrap();
+        assert!(read_profile(&sixteen).is_ok(), "16 destinations are allowed");
+        let mut file: Value = serde_json::from_str(&sixteen).unwrap();
+        let Some(Value::Array(list)) = file.pointer_mut("/data/stream/destinations") else { panic!("no destinations in {sixteen}") };
+        list.push(json!({"id": "d16"}));
+        assert!(matches!(read_profile(&file.to_string()), Err(FormatError::Data(m)) if m.contains("at most 16")));
+        let mut twice = p.clone();
+        twice.stream.destinations[1].id = "main".into();
+        assert!(matches!(write_profile(&twice), Err(FormatError::Data(m)) if m.contains("used twice")));
+    }
+
+    #[test]
+    fn the_primary_destination_is_made_with_the_profile_key() {
+        let mut s = crate::StreamSettings::default();
+        assert_eq!(s.primary_server(), "");
+        s.primary_mut().server = "rtmp://a/live".into();
+        assert_eq!(s.destinations.len(), 1);
+        assert_eq!((s.destinations[0].id.as_str(), &s.destinations[0].key), ("main", &crate::KeyRef::Profile));
+        s.destinations.push(crate::Destination { id: "b".into(), server: "rtmp://b/live".into(), ..Default::default() });
+        s.primary_mut().enabled = false;
+        assert!(!s.destinations[0].enabled && s.destinations[1].enabled, "the first destination is the one edited");
+        assert_eq!(s.primary_server(), "rtmp://a/live");
     }
 
     #[test]

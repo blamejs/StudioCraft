@@ -7,7 +7,7 @@
 //! - [`annexb`] splits Annex B byte streams into NAL units and writes the 4-byte length-prefixed
 //!   samples a container stores.
 //! - [`avc`] and [`hevc`] build the `avcC` and `hvcC` records from the parameter sets an encoder
-//!   writes.
+//!   writes, with `craft-media`'s record writers.
 //!
 //! The encoders take a [`Config`] and return [`Packet`]s or an [`Error`]. The system calls are in
 //! private modules with `unsafe` allowed; every item this crate exports is safe.
@@ -16,7 +16,6 @@
 
 pub mod annexb;
 pub mod avc;
-mod bits;
 pub mod hevc;
 pub mod mf;
 #[allow(unsafe_code)]
