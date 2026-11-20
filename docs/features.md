@@ -270,7 +270,10 @@ A key written at the end of the server address, as in `rtmp://host/app/key`, is 
 key when the key field is empty, and the stream's status leaves it out of the address it shows.
 
 The stream key in Settings › Stream is saved in the profile file as plain text. A destination can
-instead use a key held only for the running session, which is never saved.
+instead use a key held only for the running session, which is never saved. A line under the key
+field says where the first destination's key comes from: this profile, a key given for each session,
+or no separate key, when a key at the end of the server address is used if there is one. Typing a
+key in the field saves it in the profile.
 
 ## Hardware acceleration
 

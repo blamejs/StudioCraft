@@ -209,6 +209,7 @@
 	No contributors listed yet	No contributors listed yet
 	No filters yet.	No filters yet.
 	No graphics device: the preview is off	No graphics device: the preview is off
+	No separate key; a key at the end of the server address is used	No separate key; a key at the end of the server address is used
 	No sources in this scene. Add one with +.	No sources in this scene. Add one with +.
 	Noise gate	Noise gate
 	None	None
@@ -304,6 +305,7 @@
 	Save Dock Layout	Save Dock Layout
 	Save Dock Layout…	Save Dock Layout…
 	Save Replay	Save Replay
+	Saved in this profile as plain text	Saved in this profile as plain text
 	Scene Collection	Scene Collection
 	Scene {n}	Scene {n}
 	Scenes	Scenes
@@ -312,6 +314,7 @@
 	Scroll	Scroll
 	Send the preview to the program	Send the preview to the program
 	Server	Server
+	Set for each session as {name} and never saved; a key typed here is saved in this profile	Set for each session as {name} and never saved; a key typed here is saved in this profile
 	Settings	Settings
 	sharing stopped	sharing stopped
 	Sharpen	Sharpen
