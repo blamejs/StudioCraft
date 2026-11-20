@@ -6,7 +6,7 @@ use std::sync::{Arc, OnceLock};
 use studiocraft_media::Tick;
 use studiocraft_media::queue::Fifo;
 use studiocraft_media::video::PixelFormat;
-use studiocraft_model::{Crop, SourceId, Transform, Vec2};
+use studiocraft_model::{Crop, Settings, SourceId, Transform, Vec2};
 use studiocraft_plugin::{Animation, Easing, Plugin, Reframe, Transition, VIDEO_EFFECT_PARAMS, VideoContent, VideoEffect, VideoOut};
 
 use super::*;
@@ -476,6 +476,87 @@ fn every_built_in_transition_compiles() {
         draw(&mut c, Plan { transition: Some(desc), ..Plan::default() }, Tick(5));
         let errors = c.take_errors();
         assert!(errors.is_empty(), "{}: {errors:?}", t.id());
+    }
+}
+
+/// Each built-in draws the same frames as before it moved to `craft-transitions`: the old shader
+/// and parameters and the plug-in's are drawn over the same two patterned scenes at fixed times
+/// and compared byte for byte.
+#[test]
+fn built_in_transitions_draw_the_same_frames_as_before() {
+    use crate::transitions::tests::{before, built_ins};
+    let Some(mut c) = compositor(16, 16) else { return };
+    let pattern = |seed: u8| -> Vec<[u8; 4]> {
+        (0..=255u8).map(|i| [i.wrapping_mul(seed), (i / 16).wrapping_mul(17), (i % 16).wrapping_mul(16) ^ seed, 255]).collect()
+    };
+    let old_scene = frame(&pattern(3), 16, 16);
+    let new_scene = frame(&pattern(7), 16, 16);
+    let settings = [
+        Settings::default(),
+        Settings::default().with("color", "#3366cc").with("direction", "top").with("fade_easing", "ease_in").with("swipe_easing", "ease_out"),
+        Settings::default().with("color", "#ffffff80").with("direction", "right").with("swipe_easing", "linear"),
+        Settings::default().with("direction", "bottom").with("fade_easing", "ease_in_out"),
+    ];
+    for t in built_ins() {
+        for (n, s) in settings.iter().enumerate() {
+            let desc = |key: String, wgsl: &'static str, params: [f32; 4], ease: Easing| TransitionDesc {
+                from: SceneDesc { items: vec![item(1, &old_scene, at(0.0, 0.0))] },
+                key,
+                wgsl,
+                params,
+                start: Tick(1000),
+                duration: Tick(1000),
+                ease,
+            };
+            let old = desc(format!("before.{}", t.id()), before::shader(t.id()), before::params(t.id(), s), before::easing(t.id(), s));
+            let new = desc(t.id().into(), t.shader(), t.params(s), t.easing(s));
+            let plan = |d: &TransitionDesc| Plan {
+                program: SceneDesc { items: vec![item(2, &new_scene, at(0.0, 0.0))] },
+                transition: Some(d.clone()),
+                preview: None,
+            };
+            for now in [1000, 1250, 1500, 1750, 1999] {
+                let want = draw(&mut c, plan(&old), Tick(now));
+                let got = draw(&mut c, plan(&new), Tick(now));
+                let errors = c.take_errors();
+                assert!(errors.is_empty(), "{}: {errors:?}", t.id());
+                assert!(want == got, "{} with settings {n} at {now}", t.id());
+            }
+        }
+    }
+}
+
+/// The CPU blend of `craft-transitions` gives the colors the GPU draws.
+#[test]
+fn the_cpu_blends_match_the_gpu() {
+    use craft_transitions::{Edge, Kind, Params};
+    let Some(mut c) = compositor(16, 16) else { return };
+    let red = solid([255, 0, 0, 255], 16, 16);
+    let blue = solid([0, 0, 255, 255], 16, 16);
+    let params = Params { color: [0, 255, 0, 255], edge: Edge::Left, ..Params::default() };
+    for kind in Kind::ALL {
+        for (now, t) in [(0, 0.0f32), (250, 0.25), (500, 0.5), (750, 0.75)] {
+            let desc = TransitionDesc {
+                from: SceneDesc { items: vec![item(1, &red, at(0.0, 0.0))] },
+                key: kind.id().into(),
+                wgsl: kind.shader(),
+                params: kind.uniform(&params),
+                start: Tick(0),
+                duration: Tick(1000),
+                ease: Easing::Linear,
+            };
+            let plan = Plan { program: SceneDesc { items: vec![item(2, &blue, at(0.0, 0.0))] }, transition: Some(desc), preview: None };
+            let px = draw(&mut c, plan, Tick(now));
+            let errors = c.take_errors();
+            assert!(errors.is_empty(), "{}: {errors:?}", kind.id());
+            for x in [1, 6, 9, 14] {
+                let uv = [(x as f32 + 0.5) / 16.0, 0.5];
+                let want = kind.blend([1.0, 0.0, 0.0, 1.0], [0.0, 0.0, 1.0, 1.0], uv, t, kind.uniform(&params), |_| [0.0, 0.0, 1.0, 1.0]);
+                let want = want.map(|v| (v * 255.0).round() as u8);
+                let got = pixel(&px, 16, x, 8);
+                assert!(close(got, want), "{} at {t}, x {x}: {got:?} vs {want:?}", kind.id());
+            }
+        }
     }
 }
 

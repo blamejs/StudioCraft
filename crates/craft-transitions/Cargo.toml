@@ -1,0 +1,22 @@
+[package]
+name = "craft-transitions"
+description = "Scene transitions for the Craft apps: Cut, Fade, Fade through color and Swipe as WGSL blends with typed, versioned parameters, their eases, audio gains and a CPU reference of each blend"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[features]
+default = ["serde"]
+# Reading and writing `Params`, `Kind`, `Edge` and `Ease` with serde.
+serde = ["dep:serde"]
+
+[dependencies]
+craft-ease = { workspace = true }
+serde = { workspace = true, optional = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }

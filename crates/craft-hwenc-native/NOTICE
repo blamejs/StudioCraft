@@ -19,6 +19,10 @@ The libva loading, DRM display opening and render node listing in src/vaapi_ffi/
 from FilmCraft's `crates/platform/src/vaapi/va.rs` and `ffi.rs` (same repository, commit and
 license).
 
+The libva base declarations in src/vaapi_ffi/abi.rs come from FilmCraft's
+`crates/platform/src/vaapi/ffi.rs` (same repository, commit and license). The encode structures
+added to them are transcribed from libva's headers.
+
 The declarations in src/nvenc_ffi/abi.rs are transcribed from NVIDIA's `nvEncodeAPI.h` (Video
 Codec SDK, API 12.1), Copyright (c) 2010-2023 NVIDIA Corporation, under the MIT license whose
 text is at the top of that file.

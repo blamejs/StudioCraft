@@ -110,6 +110,7 @@ const WASM_CRATES: &[&str] = &[
     "craft-scopes",
     "craft-audio-dsp",
     "craft-ease",
+    "craft-transitions",
 ];
 
 fn wasm() -> Result<(), String> {
