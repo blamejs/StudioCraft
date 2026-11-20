@@ -1366,6 +1366,15 @@ name = "craft-audio-dsp"
 version = "0.1.0-alpha.1"
 
 [[package]]
+name = "craft-cms"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=a49329e71e32ad93794ab595c41f33209a7d2220#a49329e71e32ad93794ab595c41f33209a7d2220"
+dependencies = [
+ "md-5",
+ "rayon",
+]
+
+[[package]]
 name = "craft-color"
 version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=a49329e71e32ad93794ab595c41f33209a7d2220#a49329e71e32ad93794ab595c41f33209a7d2220"
@@ -1375,11 +1384,12 @@ dependencies = [
 
 [[package]]
 name = "craft-color-transform"
-version = "0.1.0-alpha.1"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=a49329e71e32ad93794ab595c41f33209a7d2220#a49329e71e32ad93794ab595c41f33209a7d2220"
 dependencies = [
+ "craft-cms",
  "craft-color",
  "serde",
- "serde_json",
 ]
 
 [[package]]
@@ -1690,14 +1700,6 @@ dependencies = [
  "craft-ease",
  "serde",
  "serde_json",
-]
-
-[[package]]
-name = "craft-tsmux"
-version = "0.1.0-alpha.1"
-dependencies = [
- "craft-media",
- "proptest",
 ]
 
 [[package]]
@@ -3584,6 +3586,16 @@ checksum = "8ea1f30cedd69f0a2954655f7188c6a834246d2bcf1e315e2ac40c4b24dc9519"
 dependencies = [
  "cfg-if 1.0.5",
  "rayon",
+]
+
+[[package]]
+name = "md-5"
+version = "0.10.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d89e7ee0cfbedfc4da3340218492196241d89eefb6dab27de5df917a6d2e78cf"
+dependencies = [
+ "cfg-if 1.0.5",
+ "digest",
 ]
 
 [[package]]

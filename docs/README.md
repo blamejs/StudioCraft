@@ -36,8 +36,6 @@ Each shared crate in `crates/` has a README that describes it for use in other a
 
 - [craft-audio-dsp](../crates/craft-audio-dsp/README.md) holds audio effects, the loudness meter
   and resampling.
-- [craft-color-transform](../crates/craft-color-transform/README.md) holds color spaces, white
-  balance, tone curves and tone mapping.
 - [craft-ease](../crates/craft-ease/README.md) holds easing curves, keyed tracks, motion paths and
   springs.
 - [craft-flv](../crates/craft-flv/README.md) writes and reads FLV tags and AMF0 values.
@@ -53,7 +51,6 @@ Each shared crate in `crates/` has a README that describes it for use in other a
   vectorscopes.
 - [craft-transitions](../crates/craft-transitions/README.md) holds the Cut, Fade, Fade through
   color and Swipe transitions.
-- [craft-tsmux](../crates/craft-tsmux/README.md) writes MPEG-2 transport streams.
 
 ## Release
 
