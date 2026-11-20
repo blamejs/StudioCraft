@@ -113,6 +113,8 @@ field to `false` in `mechanics.json`.
 | Built-in AAC bitrates | 32 to 512 kbps | `encode::aac::KBPS` | estimated |
 | Built-in recording packet queue | 64 MiB and 3 s of media | `outputs::native::QUEUE_BYTES`, `outputs::native::QUEUE_SPAN_NS` | estimated |
 | Built-in recording encoder lag before it fails | 10 s | `outputs::native::MAX_LAG_NS` | estimated |
+| Wait for one hardware encoder test | 5 s | `studio::outputs::PROBE_TIMEOUT` | estimated |
+| Wait for the hardware encoder tests of one start together | 10 s | `studio::outputs::PROBE_BUDGET` | estimated |
 | Recording file name | `YYYY-MM-DD HH-MM-SS.<ext>` | `studio::outputs::recording_path` | estimated |
 | Replay buffer length | 20 s (5 to 3600 s) | `model::profile::ReplaySettings` | estimated |
 | Replay buffer memory limit | 512 MB (32 to 16384 MB; the code counts 1024 × 1024 bytes per MB) | `model::profile::ReplaySettings` | estimated |
@@ -142,7 +144,7 @@ field to `false` in `mechanics.json`.
 | Changes merged into one undo step | Same key within 750 ms | `engine::history::COALESCE` | estimated |
 | Scene shortcuts | Ctrl+1 to Ctrl+9 | `ui-egui::commands::SCENE_HOTKEYS` | estimated |
 | Autosave after a change | 800 ms | `ui-egui::AUTOSAVE` | estimated |
-| Dock widths when none is set (the last shown dock takes the rest) | Scenes 300, Sources 340, Audio Mixer 400 points | `ui-egui::strip::DEFAULT_WIDTHS` | estimated |
+| Dock widths when none is set (the last shown dock takes the rest) | Scenes 300, Sources 340, Audio Mixer 400, Application Audio 360 points | `ui-egui::strip::DEFAULT_WIDTHS` | estimated |
 | Undocked dock window | The dock's default width by 200 points to start, at least 200 by 120 points | `ui-egui::StudioApp::dock_windows` | estimated |
 | Saved dock layouts | 32 | `ui-egui::store::MAX_DOCK_LAYOUTS` | estimated |
 | Status notices shown | 8 s (errors 24 s) | `ui-egui::NOTICE_S` | estimated |

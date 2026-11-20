@@ -3,8 +3,8 @@
 //! The strip is 200 points tall, or 30% of the window's height when that is less, and never less
 //! than 120 points. A height set by dragging the strip's top edge replaces the default and is kept
 //! between 120 points and 45% of the window's height. Every shown dock but the last one has a
-//! width of its own (Scenes 300, Sources 340 and Audio Mixer 400 points by default); the last shown
-//! dock takes the rest. No column is narrower than 200 points while the strip has room for that,
+//! width of its own (Scenes 300, Sources 340, Audio Mixer 400 and Application Audio 360 points by
+//! default); the last shown dock takes the rest. No column is narrower than 200 points while the strip has room for that,
 //! and a 1 point divider separates two columns.
 
 /// The default strip height and the share of the window it may take by default.
@@ -17,8 +17,13 @@ pub const MAX_SHARE: f32 = 0.45;
 pub const MIN_WIDTH: f32 = 200.0;
 /// The width of the line between two columns.
 pub const DIVIDER: f32 = 1.0;
-/// The default widths of Scenes, Sources and Audio Mixer, by dock index.
-pub const DEFAULT_WIDTHS: [f32; 3] = [300.0, 340.0, 400.0];
+/// The default widths of Scenes, Sources, Audio Mixer and Application Audio, by dock index.
+pub const DEFAULT_WIDTHS: [f32; crate::store::DOCK_COUNT] = [300.0, 340.0, 400.0, 360.0];
+
+/// The default width of dock `i`; an index past the last dock gets the last dock's width.
+pub fn default_width(i: usize) -> f32 {
+    DEFAULT_WIDTHS.get(i).or(DEFAULT_WIDTHS.last()).copied().unwrap_or(MIN_WIDTH)
+}
 
 /// A saved size that can be used: finite and above zero. Zero is saved for a size the user has
 /// not set.
@@ -40,12 +45,12 @@ pub fn height(window: f32, saved: f32) -> f32 {
     }
 }
 
-/// The width of each shown dock (indexes 0 Scenes, 1 Sources, 2 Audio Mixer, from left to right)
-/// across `total` points, from the saved widths by dock index. The last column takes the room
-/// the others leave; when that is less than [`MIN_WIDTH`], the other columns give up width down to
-/// [`MIN_WIDTH`], in proportion to what they have above it. When even that is not enough, every
-/// column gets the same share.
-pub fn widths(total: f32, shown: &[u8], saved: [f32; 3]) -> Vec<f32> {
+/// The width of each shown dock (indexes 0 Scenes, 1 Sources, 2 Audio Mixer, 3 Application Audio,
+/// from left to right) across `total` points, from the saved widths by dock index. The last column
+/// takes the room the others leave; when that is less than [`MIN_WIDTH`], the other columns give
+/// up width down to [`MIN_WIDTH`], in proportion to what they have above it. When even that is not
+/// enough, every column gets the same share.
+pub fn widths<const N: usize>(total: f32, shown: &[u8], saved: [f32; N]) -> Vec<f32> {
     let n = shown.len();
     if n == 0 {
         return Vec::new();
@@ -59,8 +64,8 @@ pub fn widths(total: f32, shown: &[u8], saved: [f32; 3]) -> Vec<f32> {
     let mut out: Vec<f32> = shown[..n - 1]
         .iter()
         .map(|i| {
-            let k = usize::from(*i).min(2);
-            usable(saved[k]).unwrap_or(DEFAULT_WIDTHS[k]).clamp(MIN_WIDTH, widest)
+            let k = usize::from(*i);
+            saved.get(k).copied().and_then(usable).unwrap_or_else(|| default_width(k)).clamp(MIN_WIDTH, widest)
         })
         .collect();
     let fixed: f32 = out.iter().sum();
@@ -95,14 +100,15 @@ pub fn drag(widths: &[f32], k: usize, delta: f32) -> Vec<f32> {
 /// the drawn widths that [`drag`] returned. Only the two columns beside that divider change; the
 /// last shown column takes the rest and keeps no width, and every other column keeps the width that
 /// was saved for it.
-pub fn save(saved: [f32; 3], shown: &[u8], moved: &[f32], k: usize) -> [f32; 3] {
+pub fn save<const N: usize>(saved: [f32; N], shown: &[u8], moved: &[f32], k: usize) -> [f32; N] {
     let mut out = saved;
     let last = shown.len().saturating_sub(1);
     for j in [k, k + 1] {
         if j < last
             && let (Some(i), Some(w)) = (shown.get(j), moved.get(j))
+            && let Some(o) = out.get_mut(usize::from(*i))
         {
-            out[usize::from(*i).min(2)] = *w;
+            *o = *w;
         }
     }
     out
@@ -210,5 +216,18 @@ mod tests {
         let w = widths(1280.0, &shown, [0.0, 0.0, 0.0]);
         let out = save([0.0, 0.0, 0.0], &shown, &drag(&w, 0, 25.0), 0);
         assert_eq!(out, [275.0, 0.0, 425.0], "the mixer and Scenes, beside the first divider");
+    }
+
+    #[test]
+    fn application_audio_has_a_width_of_its_own_in_the_strip() {
+        let none = [0.0; crate::store::DOCK_COUNT];
+        assert_eq!(widths(1280.0, &[0, 1, 2, 3], none), [300.0, 340.0, 400.0, 237.0]);
+        assert_eq!(widths(1280.0, &[3, 2], none), [360.0, 919.0], "360 points by default once it is not last");
+        assert_eq!(widths(1280.0, &[3, 2], [0.0, 0.0, 0.0, 420.0]), [420.0, 859.0]);
+        assert_eq!(widths(1280.0, &[9, 2], none), [360.0, 919.0], "an index past the last dock reads the last default");
+        let shown = [3, 0, 1];
+        let w = widths(1280.0, &shown, none);
+        assert_eq!(save(none, &shown, &drag(&w, 0, 15.0), 0), [285.0, 0.0, 0.0, 375.0]);
+        assert_eq!(save([0.0; 3], &[9, 0], &[300.0, 900.0], 0), [0.0; 3], "an index past the saved widths is not saved");
     }
 }

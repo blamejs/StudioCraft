@@ -462,7 +462,8 @@ fn every_literal_the_macros_look_up_has_an_english_row() {
 
 /// Labels that reach `tl!` through a variable: the move items of the Scenes and Sources menus, the
 /// recording qualities, the titles of the name prompts, and the other states of the buttons in
-/// the Sources and Audio Mixer docks.
+/// the Sources and Audio Mixer docks, the routing labels of the Application Audio dock, and the
+/// titles of the docks' own windows.
 #[test]
 fn every_label_chosen_at_run_time_has_an_english_row() {
     use crate::Named;
@@ -485,6 +486,9 @@ fn every_label_chosen_at_run_time_has_an_english_row() {
         .map(Named::title),
     );
     labels.extend(["Hide", "Show", "Lock (it can't be moved in the preview)", "Unlock", "Mute", "Unmute"]);
+    labels.extend(crate::docks::ROUTE_ITEMS);
+    labels.extend(crate::docks::ROUTE_TIPS);
+    labels.extend(crate::control::DOCK_TITLES);
     let en = english();
     let missing: Vec<String> = labels.iter().filter(|l| !en.contains(&(String::new(), l.to_string()))).map(|l| format!("\t{l}\t{l}")).collect();
     assert!(missing.is_empty(), "labels with no row in i18n/locales/en/studiocraft.tsv:\n{}", missing.join("\n"));

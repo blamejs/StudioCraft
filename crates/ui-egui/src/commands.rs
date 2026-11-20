@@ -44,6 +44,7 @@ pub const UI_COMMANDS: &[(&str, &str)] = &[
     ("dock.scenes", "Scenes"),
     ("dock.sources", "Sources"),
     ("dock.mixer", "Audio Mixer"),
+    ("dock.app_audio", "Application Audio"),
     ("dock.controls", "Output Controls"),
     ("dock.transitions", "Transition Controls"),
     ("dock.move", "Move Dock"),
@@ -103,8 +104,8 @@ pub fn ui_params(id: &str) -> &'static str {
             "id: string, name?: string, server?: string, enabled?: boolean, key?: string (profile, held or none), held_name?: string (with key held)"
         }
         "stream.destination_remove" | "stream.destination_start" | "stream.destination_stop" => "id: string",
-        "dock.move" => "dock: string (scenes, sources or mixer), to: string (left or right)",
-        "dock.float" => "dock: string (scenes, sources or mixer), floating: boolean (true for a window of its own, false for the strip)",
+        "dock.move" => "dock: string (scenes, sources, mixer or app_audio), to: string (left or right)",
+        "dock.float" => "dock: string (scenes, sources, mixer or app_audio), floating: boolean (true for a window of its own, false for the strip)",
         "dock.layout_save" => "name?: string (without it the window asks for one)",
         "dock.layout_apply" | "dock.layout_remove" => "name: string",
         "video.canvas_from_display" => "display?: string (an id from video.displays; without it, the display the window is on)",
@@ -261,6 +262,7 @@ pub fn menu_bar(s: &MenuState) -> MenuBar {
             check("dock.scenes", "Scenes"),
             check("dock.sources", "Sources"),
             check("dock.mixer", "Audio Mixer"),
+            check("dock.app_audio", "Application Audio"),
             // The two groups of the output bar: Edit and Studio, Record and Go Live; and the
             // transition picker with its duration.
             check("dock.controls", "Output Controls"),
@@ -295,7 +297,10 @@ pub fn menu_bar(s: &MenuState) -> MenuBar {
         Node::Separator,
     ];
     collection.extend(list("collection.switch", s.collections, s.collection));
-    let tools = Menu::new(title("Tools"), vec![item("tools.encoders", "Available Encoders")]);
+    let tools = Menu::new(
+        title("Tools"),
+        vec![item("tools.encoders", "Available Encoders"), item("hardware_encoders.retest", "Test Hardware Encoders Again")],
+    );
     let community = COMMUNITY.iter().map(|(id, _, label)| item(id, label)).collect();
     let help = Menu::new(
         title("Help"),
@@ -366,6 +371,7 @@ mod tests {
                 ("dock.scenes", "Scenes", Some(false)),
                 ("dock.sources", "Sources", Some(false)),
                 ("dock.mixer", "Audio Mixer", Some(false)),
+                ("dock.app_audio", "Application Audio", Some(false)),
                 ("dock.controls", "Output Controls", Some(false)),
                 ("dock.transitions", "Transition Controls", Some(false)),
                 ("dock.layout_save", "Save Dock Layout…", None),
