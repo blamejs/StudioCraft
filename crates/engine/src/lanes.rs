@@ -3,7 +3,9 @@
 
 use std::collections::HashSet;
 
-use craft_app_audio::{AppInfo, AppKey, AppList};
+/// The key an application lane's `app` value encodes, for [`crate::Engine::app_audio_peak`].
+pub use craft_app_audio::AppKey;
+use craft_app_audio::{AppInfo, AppList};
 use serde::Serialize;
 use studiocraft_model::{SceneCollection, SourceConfig, SourceId};
 

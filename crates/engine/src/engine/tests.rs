@@ -676,6 +676,55 @@ fn routing_an_application_mixes_it_with_the_microphone_in_every_scene() {
 }
 
 #[test]
+fn an_applications_level_is_read_on_its_own_between_lane_reads() {
+    let (e, fake, discovery) = lane_engine();
+    let player = craft_app_audio::AppKey::decode(PLAYER).unwrap();
+    assert_eq!(e.app_audio_peak(&player), Some(0.5));
+    fake.set_peak(&craft_app_audio::fake::app("player.exe", 40, true).key, 0.25);
+    let passes = discovery.peak_passes();
+    assert!(discovery.wait_peak_passes(passes + 2, std::time::Duration::from_secs(10)));
+    assert_eq!(e.app_audio_peak(&player), Some(0.25));
+    assert_eq!(e.app_audio_peak(&craft_app_audio::AppKey::decode(EDITOR).unwrap()), None, "an application that is not listed");
+}
+
+#[test]
+fn two_applications_whose_captures_overlap_are_not_routed_together() {
+    let (mut e, fake, discovery) = lane_engine();
+    // The player runs inside the browser's process tree, so the browser's capture records it.
+    let mut player = craft_app_audio::fake::app("player.exe", 40, true);
+    player.within = Some(BROWSER.into());
+    let generation = discovery.generation();
+    fake.set_apps(vec![player, craft_app_audio::fake::app("browser.exe", 41, false)]);
+    assert!(discovery.wait_newer(generation, std::time::Duration::from_secs(10)).apps.iter().any(|a| a.within.is_some()));
+    for (first, second) in [(BROWSER, PLAYER), (PLAYER, BROWSER)] {
+        run(&mut e, "app_audio.route", json!({"app": first, "routed": true})).unwrap();
+        let before = e.collection().clone();
+        assert!(run(&mut e, "app_audio.route", json!({"app": second, "routed": true})).is_err(), "{second} after {first}");
+        assert_eq!(e.collection(), &before);
+        assert!(!run(&mut e, "app_audio.route", json!({"app": first, "routed": true})).unwrap().changed, "routing {first} again is allowed");
+        run(&mut e, "app_audio.route", json!({"app": first, "routed": false})).unwrap();
+    }
+}
+
+#[test]
+fn an_application_two_levels_inside_a_routed_one_is_not_routed() {
+    let (mut e, fake, discovery) = lane_engine();
+    // The player runs inside the browser, and the browser inside the editor.
+    let mut player = craft_app_audio::fake::app("player.exe", 40, true);
+    player.within = Some(BROWSER.into());
+    let mut browser = craft_app_audio::fake::app("browser.exe", 41, false);
+    browser.within = Some(EDITOR.into());
+    let generation = discovery.generation();
+    fake.set_apps(vec![player, browser, craft_app_audio::fake::app("editor.exe", 42, false)]);
+    assert_eq!(discovery.wait_newer(generation, std::time::Duration::from_secs(10)).apps.len(), 3);
+    for (first, second) in [(EDITOR, PLAYER), (PLAYER, EDITOR)] {
+        run(&mut e, "app_audio.route", json!({"app": first, "routed": true})).unwrap();
+        assert!(run(&mut e, "app_audio.route", json!({"app": second, "routed": true})).is_err(), "{second} after {first}");
+        run(&mut e, "app_audio.route", json!({"app": first, "routed": false})).unwrap();
+    }
+}
+
+#[test]
 fn routing_a_source_set_to_monitor_only_puts_it_in_the_program() {
     let (mut e, _fake, _discovery) = lane_engine();
     let id: SourceId =

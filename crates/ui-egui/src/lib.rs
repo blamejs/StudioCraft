@@ -174,9 +174,9 @@ pub struct StudioApp {
     selected: Option<ItemId>,
     renaming: Option<(Rename, String)>,
     meters: HashMap<SourceId, MeterBallistics>,
-    /// The Application Audio dock's meters, by lane, apart from the Audio Mixer's so that a source
-    /// shown in both docks is advanced once per frame in each.
-    lane_meters: HashMap<docks::LaneId, MeterBallistics>,
+    /// The Application Audio dock's lanes and meters, apart from the Audio Mixer's meters so that
+    /// a source shown in both docks is advanced once per frame in each.
+    lanes: docks::LaneCache,
     last_frame: Option<Instant>,
     properties: Vec<Properties>,
     filters: Vec<Filters>,
@@ -300,7 +300,7 @@ impl StudioApp {
             selected: None,
             renaming: None,
             meters: HashMap::new(),
-            lane_meters: HashMap::new(),
+            lanes: docks::LaneCache::default(),
             last_frame: None,
             properties: Vec::new(),
             filters: Vec::new(),
@@ -1472,7 +1472,7 @@ impl StudioApp {
             selected: self.selected,
             renaming: &mut self.renaming,
             meters: &mut self.meters,
-            lane_meters: &mut self.lane_meters,
+            lanes: &mut self.lanes,
             dt,
             place: Some((0, shown.len())),
         };
@@ -1590,7 +1590,7 @@ impl StudioApp {
             selected: self.selected,
             renaming: &mut self.renaming,
             meters: &mut self.meters,
-            lane_meters: &mut self.lane_meters,
+            lanes: &mut self.lanes,
             dt,
             place: None,
         };

@@ -644,6 +644,20 @@ fn the_docks_menu_shows_and_hides_the_output_bar_groups() {
 }
 
 #[test]
+fn the_application_audio_dock_reads_its_lanes_again_when_the_collection_changes() {
+    let mut a = app();
+    let ctx = egui::Context::default();
+    let names = |a: &StudioApp| -> Vec<String> { a.lanes.lanes().map(|l| l.lanes.iter().map(|l| l.name.clone()).collect()).unwrap_or_default() };
+    let now = std::time::Instant::now();
+    a.lanes.refresh(&a.studio, now);
+    assert!(names(&a).contains(&"Microphone".to_string()), "{:?}", names(&a));
+    run(&mut a, &ctx, "source.rename", json!({"source": "Microphone", "name": "Desk mic"})).unwrap();
+    // The same instant: only the collection's change makes the lanes due.
+    a.lanes.refresh(&a.studio, now);
+    assert!(names(&a).contains(&"Desk mic".to_string()), "{:?}", names(&a));
+}
+
+#[test]
 fn the_application_audio_dock_is_hidden_until_the_docks_menu_shows_it() {
     let mut a = app();
     let ctx = egui::Context::default();

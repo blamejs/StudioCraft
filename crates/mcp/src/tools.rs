@@ -320,7 +320,8 @@ fn studio_tool_definitions() -> Vec<Value> {
             "Hear one application in the program in every scene, together with the microphone, or stop hearing it, as the check box \
              of its lane in the Application Audio panel does. `app` is a lane's or a listed application's `app` value. Routing adds \
              an Application audio capture source for it to the global audio sources, or uses one the collection already has; \
-             only an application in the current list gets a new source. Unrouting takes it out of them; a scene that shows it \
+             only an application in the current list gets a new source. It is refused while another routed application's \
+             capture records this one's processes, or the reverse. Unrouting takes it out of them; a scene that shows it \
              still plays it. Returns the source's id. Undo takes it back.",
             json!({
                 "app": {"type": "string", "description": "The application's `app` value from the `app_audio` tool's lanes or list."},

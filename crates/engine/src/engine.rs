@@ -153,6 +153,13 @@ impl Engine {
         crate::lanes::Lanes { supported: support.supported, reason: support.reason, listing, error, lanes }
     }
 
+    /// The newest level of the listed application `key` names, 0 to 1, as `app_audio.lanes`
+    /// reports it in `peak`. It reads the list and the meter without allocating.
+    pub fn app_audio_peak(&self, key: &craft_app_audio::AppKey) -> Option<f32> {
+        let list = self.app_audio.snapshot();
+        list.find(key).and_then(|a| self.app_audio.peak(a))
+    }
+
     fn app_audio_status(&self) -> Value {
         let captures = self.app_audio.captures();
         json!({
@@ -782,6 +789,40 @@ impl Engine {
                 matched.iter().filter(|(id, k)| removed.contains(id) && !shown.contains(id) && own(k)).map(|(id, _)| *id).collect();
             c.sources.retain(|s| !drop.contains(&s.id));
             return Ok((json!({"sources": removed}), None));
+        }
+        // A capture of one listed application can record another one's processes (`within`).
+        // Routing either while the other is routed would put that audio in the program twice.
+        if let Some(me) = list.find(&key)
+            && !ours.iter().any(|id| c.global_audio.contains(id))
+        {
+            let is_routed = |other: &craft_app_audio::AppInfo| {
+                c.global_audio.iter().filter_map(|g| c.source(*g)).filter_map(source_key).any(|k| same_app(&k, &other.key, &list))
+            };
+            // `within` names the nearest listed application around one; its own `within` names the
+            // next one out. The walk stops after as many steps as the list has applications.
+            let outer = |a: &craft_app_audio::AppInfo| -> Vec<String> {
+                let mut out = Vec::new();
+                let mut at = a.within.clone();
+                while let Some(w) = at.take()
+                    && out.len() < list.apps.len()
+                    && !out.contains(&w)
+                {
+                    at = list.apps.iter().find(|b| b.choice() == w).and_then(|b| b.within.clone());
+                    out.push(w);
+                }
+                out
+            };
+            let (mine, around_me) = (me.choice(), outer(me));
+            let overlap = list.apps.iter().filter(|o| !std::ptr::eq(*o, me)).find(|o| {
+                let related = around_me.contains(&o.choice()) || outer(o).contains(&mine);
+                related && is_routed(o)
+            });
+            if let Some(o) = overlap {
+                return Err(EngineError::Invalid(format!(
+                    "one capture would record the other's processes: {} is routed, so stop routing it before routing {}",
+                    o.name, me.name
+                )));
+            }
         }
         // An existing source is used, a routed one first and then one whose audio already reaches
         // the program. A source set to monitor only is set to monitor and output, so the program

@@ -147,11 +147,14 @@ only.
 The check box of an application lane routes the application into the program in every scene,
 together with the microphone. Routing adds an Application audio capture source for the application
 to the global audio sources, or uses a source of the collection that already captures it, and
-sets that source's monitoring to monitor and output when it was monitor only. Clearing
-the check box takes that source out of the global audio sources, and Edit › Undo puts it back. A
-source that the program scene shows is still heard after its check box is cleared. A routed
-application that quits keeps its lane. When two listed programs have the same file name, their
-lanes show the folder as well.
+sets that source's monitoring to monitor and output when it was monitor only. Clearing the check
+box takes that source out of the global audio sources, and Edit › Undo puts it back. A source that
+the program scene shows is still heard after its check box is cleared.
+
+When one application runs inside another one's process tree, such as a helper program, the capture
+of the outer one already records it, and the dock does not route one of them while the other is
+routed. A routed application that quits keeps its lane. When two listed programs have the same
+file name, their lanes show the folder as well.
 
 A lane with a source has a volume slider in dB and a mute button, and its settings menu opens the
 source's Properties… (sync offset and monitoring) and Filters…. The dock is hidden in a new

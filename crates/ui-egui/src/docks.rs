@@ -6,7 +6,7 @@ use std::collections::HashMap;
 
 use egui::{Color32, Rect, RichText, Sense, TextStyle, Ui, pos2, vec2};
 use serde_json::json;
-use studiocraft_engine::lanes::{Lane, LaneKind};
+use studiocraft_engine::lanes::{AppKey, Lane, LaneKind, Lanes};
 use studiocraft_media::mix::{BlockLevels, METER_FLOOR_DB, MeterBallistics, from_db, to_db};
 use studiocraft_model::{ItemId, SceneId, SourceId};
 use studiocraft_studio::Studio;
@@ -22,7 +22,7 @@ pub struct DockState<'a> {
     pub renaming: &'a mut Option<(Rename, String)>,
     pub meters: &'a mut HashMap<SourceId, MeterBallistics>,
     /// The Application Audio dock's meters.
-    pub lane_meters: &'a mut HashMap<LaneId, MeterBallistics>,
+    pub lanes: &'a mut LaneCache,
     /// Seconds since the meters were last advanced.
     pub dt: f32,
     /// The place of the dock being drawn among the docks in the strip, and how many are in the
@@ -499,6 +499,59 @@ pub fn lane_id(lane: &Lane) -> LaneId {
     }
 }
 
+/// How often the Application Audio dock reads its lanes again while the collection does not
+/// change, in seconds.
+pub const LANE_REFRESH: f32 = 0.1;
+
+/// The Application Audio dock's lanes and a meter for each. The dock reads the lanes again when
+/// the collection changes and otherwise at most every [`LANE_REFRESH`] seconds, so a frame in
+/// between does not rebuild them.
+#[derive(Default)]
+pub struct LaneCache {
+    lanes: Option<Lanes>,
+    ids: Vec<LaneId>,
+    /// The application of each lane without a source, whose meter reads the system's level.
+    keys: Vec<Option<AppKey>>,
+    meters: Vec<MeterBallistics>,
+    revision: u64,
+    read_at: Option<std::time::Instant>,
+}
+
+impl LaneCache {
+    /// Reads the lanes again when they are due, and otherwise reads each application's newest
+    /// level for a lane without a source. A lane keeps its meter across reads.
+    pub fn refresh(&mut self, studio: &Studio, now: std::time::Instant) {
+        let revision = studio.engine().revision();
+        let fresh = self.read_at.is_some_and(|at| now.saturating_duration_since(at).as_secs_f32() < LANE_REFRESH);
+        if let Some(lanes) = &mut self.lanes
+            && revision == self.revision
+            && fresh
+        {
+            for (lane, key) in lanes.lanes.iter_mut().zip(&self.keys) {
+                if let Some(key) = key {
+                    lane.peak = studio.engine().app_audio_peak(key);
+                }
+            }
+            return;
+        }
+        let lanes = studio.engine().app_audio_lanes();
+        self.keys = lanes.lanes.iter().map(|l| l.app.as_deref().filter(|_| l.source.is_none()).and_then(AppKey::decode)).collect();
+        let ids: Vec<LaneId> = lanes.lanes.iter().map(lane_id).collect();
+        let mut old: Vec<(LaneId, MeterBallistics)> = self.ids.drain(..).zip(self.meters.drain(..)).collect();
+        self.meters = ids.iter().map(|id| old.iter().position(|(o, _)| o == id).map(|i| old.swap_remove(i).1).unwrap_or_default()).collect();
+        self.ids = ids;
+        self.lanes = Some(lanes);
+        self.revision = revision;
+        self.read_at = Some(now);
+    }
+
+    /// The lanes last read, if any.
+    #[cfg(test)]
+    pub fn lanes(&self) -> Option<&Lanes> {
+        self.lanes.as_ref()
+    }
+}
+
 /// What a lane's meter shows: the source's level in the mix when the source has one, and else the
 /// application's level as the system reports it. A lane without either shows silence, so its
 /// meter falls.
@@ -549,9 +602,11 @@ fn lane_menu(ui: &mut Ui, lane: &Lane, acts: &mut Vec<Act>) {
 pub fn app_audio(ui: &mut Ui, studio: &Studio, st: &mut DockState, acts: &mut Vec<Act>) -> Drawn {
     let mut drawn = header(ui, "Application Audio", |_, _| ());
     dock_menu(ui, &mut drawn, "app_audio", st.place, acts);
-    let lanes = studio.engine().app_audio_lanes();
-    let ids: Vec<LaneId> = lanes.lanes.iter().map(lane_id).collect();
-    st.lane_meters.retain(|id, _| ids.contains(id));
+    st.lanes.refresh(studio, std::time::Instant::now());
+    let LaneCache { lanes: Some(lanes), meters, .. } = &mut *st.lanes else {
+        return drawn;
+    };
+    let dt = st.dt;
     let area = egui::ScrollArea::vertical().id_salt("app_audio").auto_shrink([false, false]);
     area.show(&mut body(ui), |ui| {
         let warn = ui.visuals().warn_fg_color;
@@ -570,9 +625,8 @@ pub fn app_audio(ui: &mut Ui, studio: &Studio, st: &mut DockState, acts: &mut Ve
         if lanes.lanes.is_empty() {
             ui.weak(tl!("No microphones or applications with audio."));
         }
-        for (lane, id) in lanes.lanes.iter().zip(ids) {
-            let m = st.lane_meters.entry(id).or_default();
-            m.update(lane_levels(lane, lane.source.and_then(|s| studio.levels(s))), st.dt);
+        for (lane, m) in lanes.lanes.iter().zip(meters.iter_mut()) {
+            m.update(lane_levels(lane, lane.source.and_then(|s| studio.levels(s))), dt);
             let gray = !lane.heard;
             craft_ui::direction::horizontal(ui, |ui| {
                 if lane.kind == LaneKind::Application
