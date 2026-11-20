@@ -92,8 +92,10 @@ records.
 
 `cargo bench -p craft-rtmp` chunks one second of a 6000 kb/s, 60 fps H.264 stream with 160 kb/s
 AAC (60 video messages of 12 500 bytes and 47 audio messages of 426 bytes): into `io::sink` at the
-4096 and 128-byte chunk sizes, into a `Vec`, and over loopback TCP; docs/performance.md lists the
-results. At 4096 bytes, chunking one second costs 4.5 µs.
+4096 and 128-byte chunk sizes, into a `Vec`, and over loopback TCP. On Linux (AMD EPYC 9R14) in a
+release build, on 2026-11-18, chunking that second into `io::sink` took 4.509 µs at 4096 bytes and
+23.38 µs at 128 bytes, chunking it into a `Vec` at 4096 bytes took 17.80 µs, and sending it over
+loopback TCP at 4096 bytes took 1.253 ms, almost all of it in the system calls.
 
 ## Example
 

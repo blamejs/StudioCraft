@@ -108,8 +108,12 @@ it holds the largest tag and keeps that capacity until the caller shrinks it.
 
 `cargo bench -p craft-flv` writes and reads one second of a 6000 kb/s, 60 fps stream with
 160 kb/s AAC (60 video tags of about 12 500 bytes and 47 audio tags), to one output and to 4, with
-Annex B input converted per destination or once; docs/performance.md lists the results. With the
-conversion shared, 4 destinations cost 170.5 µs per second of stream.
+Annex B input converted per destination or once. On Linux (AMD EPYC 9R14) in a release build, on
+2026-11-18, writing that second to one output took 191.0 µs from Annex B input and 15.78 µs from
+length-prefixed input, and reading and parsing it took 15.53 µs. Writing it to 4 destinations took
+820.5 µs with the Annex B input converted for each destination and 170.5 µs with it converted once,
+and 161.1 µs as RTMP message bodies converted once. Runs on that host vary by up to 15% from one
+run to the next.
 
 ## Example
 
