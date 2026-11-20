@@ -38,6 +38,12 @@
 	camera access is not allowed in the system's privacy settings	доступ до камери заборонено в налаштуваннях конфіденційності системи
 	Cancel	Скасувати
 	Canvas size	Розмір полотна
+	Canvas Size from Display	Розмір полотна за екраном
+	List Displays	Список екранів
+	Match display	За екраном
+	Choose a display	Виберіть екран
+	The display this window is on	Екран, на якому розташоване це вікно
+	{name}: {width} × {height}	{name}: {width} × {height}
 	Capture rate (frames per second)	Частота захоплення (кадрів за секунду)
 	Ceiling (dB)	Граничний рівень (дБ)
 	Center	По центру

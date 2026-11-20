@@ -122,12 +122,10 @@ description in [docs/features.md](docs/features.md).
     computer while a recording or the stream runs. A Live Captions source shows the text on the
     program, or on the preview only, the stream carries it as closed captions, and `.srt` and
     `.vtt` files are written beside the recording.
-12. **Canvas size from the display, and snapping while resizing.** Settings › Video will offer a
-    canvas that matches a chosen display and follows it when the display's resolution changes,
-    with common sizes as presets. Today a resized item keeps its aspect ratio unless Shift is
-    held, and an unrotated item snaps to the canvas edges and center only while it is moved.
-    Snapping will also work while an item is resized, keeping the aspect ratio, and items will
-    snap to each other's edges.
+12. **Canvas size from the display (partly done).** Moves and resizes snap to the canvas and to
+    other items, and Settings › Video sets the canvas to a chosen display's size
+    ([Sources](docs/features.md#sources)). The canvas will follow the display when its resolution
+    or scaling changes.
 13. **AMD and Intel encoders in StudioCraft's own process, and hardware decoding.** The AMD AMF and
     Intel Quick Sync encoders run only through `ffmpeg` today. They will run in StudioCraft's own
     process like the NVENC, Media Foundation, VideoToolbox and VA-API encoders. Media file sources

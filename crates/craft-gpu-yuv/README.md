@@ -31,7 +31,8 @@ its position is the center of those pixels. A reduction of more than 8:1 along a
 of the source between taps.
 
 The passes write unsigned-integer textures (`R8Uint`, `Rg8Uint`, `R16Uint`, `Rg16Uint`). The
-shader rounds each value half to even. P010 does not need wgpu's 16-bit norm feature.
+shader and `cpu::convert` round a half up, as `INT` in BT.709 and BT.2020 and `Round` in BT.2100
+do, so a full-range Cb or Cr that computes to 0.5 is code 1. P010 does not need wgpu's 16-bit norm feature.
 
 ## Limits and failures
 
@@ -44,6 +45,7 @@ shader rounds each value half to even. P010 does not need wgpu's 16-bit norm fea
   offsets or a `usize` frame is `Error::Overflow`.
 - `Converter::planes` refuses a read-back layout larger than the device's largest buffer
   (`Error::BufferLimit`), and `cpu::convert` refuses an output side over `cpu::MAX_SIDE` (16,384).
+  When `cpu::convert` cannot allocate the frame, it returns `Error::Memory`.
 - The source view must be a 2D view of a filterable float format, such as `Rgba8Unorm`,
   `Bgra8Unorm` or `Rgba16Float`.
 - `copy_to_buffer` needs an offset that is a multiple of `wgpu::COPY_BYTES_PER_ROW_ALIGNMENT`

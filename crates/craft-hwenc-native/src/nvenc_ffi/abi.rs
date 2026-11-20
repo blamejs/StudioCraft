@@ -286,7 +286,9 @@ pub struct NV_ENC_CONFIG_HEVC {
 }
 
 pub const HEVC_OUTPUT_AUD: u32 = 1 << 4;
+pub const HEVC_DISABLE_SPSPPS: u32 = 1 << 6;
 pub const HEVC_REPEAT_SPSPPS: u32 = 1 << 7;
+pub const HEVC_ENABLE_INTRA_REFRESH: u32 = 1 << 8;
 /// `chromaFormatIDC` (2 bits) and `pixelBitDepthMinus8` (3 bits) share the flags word.
 pub const HEVC_CHROMA_FORMAT_SHIFT: u32 = 9;
 pub const HEVC_CHROMA_FORMAT_MASK: u32 = 3 << HEVC_CHROMA_FORMAT_SHIFT;

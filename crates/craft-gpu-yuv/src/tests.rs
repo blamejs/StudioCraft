@@ -57,6 +57,24 @@ fn full_range_spans_every_code() {
 }
 
 #[test]
+fn an_exact_half_rounds_up() {
+    // Full-range BT.709 cyan has Cr = 128 + 255 × -0.5 = 0.5 exactly, which INT rounds to 1.
+    let c = Conversion::new(Format::Nv12, Matrix::Bt709, Range::Full);
+    assert_eq!(cpu([0, 255, 255], c)[2], 1);
+}
+
+#[test]
+fn a_frame_buffer_that_cannot_be_allocated_is_an_error() {
+    // A request past `isize::MAX` bytes fails on every allocator, so the failure path runs
+    // without exhausting memory.
+    assert_eq!(cpu::reserve::<u8>(usize::MAX).unwrap_err(), Error::Memory { bytes: usize::MAX });
+    assert_eq!(cpu::reserve::<u16>(usize::MAX / 2).unwrap_err(), Error::Memory { bytes: usize::MAX - 1 });
+    let room = cpu::reserve::<u8>(4096).unwrap();
+    assert!(room.is_empty() && room.capacity() >= 4096);
+    assert_eq!(Error::Memory { bytes: 16 }.to_string(), "a buffer of 16 bytes could not be allocated");
+}
+
+#[test]
 fn p010_holds_ten_bit_codes_in_the_high_bits() {
     let limited = Conversion::new(Format::P010, Matrix::Bt2020, Range::Limited);
     assert_eq!(cpu([255, 255, 255], limited), [940, 512, 512]);
@@ -164,6 +182,19 @@ fn unpack_refuses_a_layout_that_was_changed_after_it_was_made() {
         assert_eq!(bad.unpack(&padded, &mut frame), Err(Error::Layout), "change {n}");
     }
     assert_eq!(Error::Layout.to_string(), "the frame layout does not match its format and size");
+}
+
+#[test]
+fn sizes_of_a_changed_layout_saturate_instead_of_overflowing() {
+    let mut l = FrameLayout::new(Format::I420, 4, 2).unwrap();
+    let huge = PlaneLayout { width: u32::MAX, height: u32::MAX, texel_bytes: 4, offset: 0, bytes_per_row: 0 };
+    assert_eq!(huge.row_bytes(), u32::MAX);
+    l.planes = vec![PlaneLayout { height: 1, ..huge }];
+    let full = usize::try_from(u64::from(u32::MAX) * 4).unwrap_or(usize::MAX);
+    assert_eq!(l.frame_bytes(), full, "a row past u32::MAX bytes counts in full");
+    l.planes = vec![huge; 3];
+    assert_eq!(l.frame_bytes(), usize::MAX);
+    assert_eq!(l.unpack(&[], &mut []), Err(Error::Layout));
 }
 
 #[test]
@@ -322,6 +353,17 @@ fn the_gpu_matches_the_cpu_when_scaling() {
         let g = gpu_convert(&device, &queue, &odd, 37, 23, c, 20, 12);
         assert_close(&g, &cpu::convert(&odd, 37, 23, c, 20, 12).unwrap(), c, "37×23 to 20×12");
     }
+}
+
+#[test]
+fn the_gpu_rounds_an_exact_half_up() {
+    let Some((device, queue)) = device() else { return };
+    // Full-range BT.709 cyan: Cr computes to 0.5, which is code 1, as on the CPU.
+    let c = Conversion::new(Format::Nv12, Matrix::Bt709, Range::Full);
+    let px = solid(4, 4, [0, 255, 255]);
+    let g = gpu_convert(&device, &queue, &px, 4, 4, c, 4, 4);
+    assert_eq!(g, cpu::convert(&px, 4, 4, c, 4, 4).unwrap());
+    assert_eq!(first(&g, c.format, 4, 4)[2], 1);
 }
 
 #[test]

@@ -16,6 +16,11 @@ GitHub release named `StudioCraft v<version>`, tagged `v<version>`. The workflow
 then adds `SHA3-512SUMS.txt`. Each of the two files has one `<hex>  <file name>` line for every
 file in the release on every platform, and both are computed after the Linux packages are signed.
 
+Before the builds start, the `credits` job runs the shared `refresh-contributors.yml` workflow at the
+same commit. It writes `contributors/contributors.json` for the commit being built, and every build
+uses that file, so the About window lists the people whose commits are in the release. Local builds
+use the copy in the repository, which a release does not update.
+
 The release workflow builds Windows `x64` and `arm64`, macOS `universal`, and Linux `x86_64` and
 `aarch64`. It does not build the FreeBSD, `riscv64` or WebAssembly files.
 

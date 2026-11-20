@@ -1460,3 +1460,120 @@ fn arabic_and_hebrew_run_the_window_right_to_left() {
     assert!(!is_rtl(&ctx));
     assert!(!ctx.global_style().right_to_left);
 }
+
+/// A frame on a display of `points` at `ppp` pixels per point.
+fn frame_on_display(app: &mut StudioApp, ctx: &egui::Context, points: egui::Vec2, ppp: f32) {
+    let info = egui::ViewportInfo { monitor_size: Some(points), native_pixels_per_point: Some(ppp), ..Default::default() };
+    let raw = RawInput {
+        screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1280.0, 800.0))),
+        viewports: std::iter::once((egui::ViewportId::ROOT, info)).collect(),
+        ..RawInput::default()
+    };
+    let mut out = ctx.run_ui(raw, |ui| app.frame(ui));
+    out.textures_delta.clear();
+}
+
+#[test]
+fn the_canvas_takes_the_size_of_the_display_the_window_is_on() {
+    let mut a = app();
+    let ctx = egui::Context::default();
+    frame(&mut a, &ctx, vec![]);
+    let e = run(&mut a, &ctx, "video.canvas_from_display", json!({})).unwrap_err();
+    assert!(e.contains("not known"), "{e}");
+    assert_eq!(a.studio().canvas(), (1920, 1080), "nothing changed");
+
+    frame_on_display(&mut a, &ctx, egui::vec2(1512.0, 982.0), 2.0);
+    a.open_settings(crate::settings::Tab::Video);
+    let r = run(&mut a, &ctx, "video.canvas_from_display", json!({})).unwrap();
+    assert_eq!(r, json!({"width": 3024, "height": 1964, "changed": true}));
+    assert_eq!(a.studio().canvas(), (3024, 1964));
+    assert_eq!(a.studio().profile().video.output_width, 1920, "the output size stays");
+    let saved = a.store().load_profile(DEFAULT_NAME).unwrap();
+    assert_eq!((saved.video.base_width, saved.video.base_height), (3024, 1964), "the profile is saved");
+    let draft = &a.settings.as_ref().unwrap().draft.video;
+    assert_eq!((draft.base_width, draft.base_height), (3024, 1964), "the open Settings window follows");
+
+    // The same size again changes nothing, but an edited Settings draft follows it.
+    a.settings.as_mut().unwrap().draft.video.base_width = 1280;
+    let r = run(&mut a, &ctx, "video.canvas_from_display", json!({})).unwrap();
+    assert_eq!(r["changed"], json!(false));
+    assert_eq!(a.settings.as_ref().unwrap().draft.video.base_width, 3024);
+    let listed = run(&mut a, &ctx, "video.displays", json!({})).unwrap();
+    assert_eq!(listed["window"], json!({"width": 3024, "height": 1964}));
+    assert!(listed["displays"].is_array());
+
+    // An odd side is rounded down to an even one.
+    frame_on_display(&mut a, &ctx, egui::vec2(1281.0, 721.0), 1.0);
+    let r = run(&mut a, &ctx, "video.canvas_from_display", json!({})).unwrap();
+    assert_eq!((r["width"].clone(), r["height"].clone()), (json!(1280), json!(720)));
+
+    // Too large for a canvas.
+    frame_on_display(&mut a, &ctx, egui::vec2(5120.0, 2880.0), 2.0);
+    let e = run(&mut a, &ctx, "video.canvas_from_display", json!({})).unwrap_err();
+    assert!(e.contains("8192"), "{e}");
+    assert_eq!(a.studio().canvas(), (1280, 720));
+}
+
+#[test]
+fn a_canvas_size_that_cant_be_saved_is_an_error() {
+    let dir = temp_dir("canvas-save-fails");
+    std::fs::create_dir_all(&dir).unwrap();
+    let (store, _) = Store::open(craft_settings::Location::Dir(dir.clone()));
+    let mut a = StudioApp::boot(store, None, Vec::new());
+    // A file where the profiles folder goes makes the save fail.
+    let profiles = dir.join("profiles");
+    let _ = std::fs::remove_dir_all(&profiles);
+    std::fs::write(&profiles, b"").unwrap();
+    let ctx = egui::Context::default();
+    frame_on_display(&mut a, &ctx, egui::vec2(1280.0, 720.0), 1.0);
+    let r = run(&mut a, &ctx, "video.canvas_from_display", json!({}));
+    // Once the profiles folder can be written, the same size again is saved.
+    std::fs::remove_file(&profiles).unwrap();
+    let again = run(&mut a, &ctx, "video.canvas_from_display", json!({}));
+    let saved = a.store().load_profile(DEFAULT_NAME).map(|p| (p.video.base_width, p.video.base_height));
+    let _ = std::fs::remove_dir_all(&dir);
+    let e = r.unwrap_err();
+    assert!(e.contains("could not be saved"), "{e}");
+    assert_eq!(again.unwrap()["changed"], json!(false));
+    assert_eq!(saved, Ok((1280, 720)));
+}
+
+#[test]
+fn the_canvas_from_a_display_refuses_bad_parameters() {
+    let mut a = app();
+    let ctx = egui::Context::default();
+    frame(&mut a, &ctx, vec![]);
+    let e = run(&mut a, &ctx, "video.canvas_from_display", json!({"display": 3})).unwrap_err();
+    assert!(e.contains("display id"), "{e}");
+    let e = run(&mut a, &ctx, "video.canvas_from_display", json!({"display": null})).unwrap_err();
+    assert!(e.contains("display id"), "{e}");
+    let e = run(&mut a, &ctx, "video.canvas_from_display", json!({"display": "no such display \u{1}/.."})).unwrap_err();
+    assert!(e.contains("there is no display"), "{e}");
+    assert_eq!(a.studio().canvas(), (1920, 1080));
+}
+
+#[test]
+fn display_sizes_are_checked() {
+    let d = |id: &str| DisplayInfo { id: id.into(), name: "Screen".into(), width: 2560, height: 1440, primary: false };
+    let list = [d("1"), d("7")];
+    assert_eq!(find_display(&list, "7").map(|d| d.id.as_str()), Ok("7"));
+    assert_eq!(find_display(&list, "9").unwrap_err(), "there is no display `9` (the displays are 1, 7)");
+    assert!(find_display(&[], "1").unwrap_err().contains("lists no displays"));
+    assert_eq!(canvas_for((16, 8192)), Ok((16, 8192)));
+    assert!(canvas_for((15, 1080)).is_err());
+    assert!(canvas_for((1920, 8193)).is_err());
+    assert!(canvas_for((0, 0)).is_err());
+    let info = |monitor_size: Option<egui::Vec2>, native_pixels_per_point: Option<f32>| egui::ViewportInfo {
+        monitor_size,
+        native_pixels_per_point,
+        ..Default::default()
+    };
+    assert_eq!(window_display(&info(Some(egui::vec2(1280.0, 800.0)), Some(1.5)), 1.0), Some((1920, 1200)));
+    // With the interface zoomed to 125%, a 1920 x 1200 display is 1536 x 960 points.
+    assert_eq!(window_display(&info(Some(egui::vec2(1536.0, 960.0)), Some(1.0)), 1.25), Some((1920, 1200)));
+    assert_eq!(window_display(&info(None, Some(1.0)), 1.0), None);
+    assert_eq!(window_display(&info(Some(egui::vec2(1280.0, 800.0)), None), 1.0), None);
+    assert_eq!(window_display(&info(Some(egui::vec2(f32::NAN, 800.0)), Some(1.0)), 1.0), None);
+    assert_eq!(window_display(&info(Some(egui::vec2(0.0, 800.0)), Some(1.0)), 1.0), None);
+    assert_eq!(window_display(&info(Some(egui::vec2(1e30, 800.0)), Some(1.0)), 1.0), None);
+}
