@@ -51,6 +51,8 @@ Each shared crate in `crates/` has a README that describes it for use in other a
 - [craft-rtmp](../crates/craft-rtmp/README.md) publishes a stream to an RTMP or RTMPS server.
 - [craft-scopes](../crates/craft-scopes/README.md) computes waveforms, parades, histograms and
   vectorscopes.
+- [craft-transitions](../crates/craft-transitions/README.md) holds the Cut, Fade, Fade through
+  color and Swipe transitions.
 - [craft-tsmux](../crates/craft-tsmux/README.md) writes MPEG-2 transport streams.
 
 ## Release
