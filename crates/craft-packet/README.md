@@ -108,8 +108,11 @@ by one thread at a time; any thread may hold a `Control` or a `Monitor`.
   reading, take a minute of a 6000 kb/s stream shared from one pool.
 - `cargo bench -p craft-packet` measures publishing to 1, 4, 8 and 16 subscribers drained on the
   bench thread, publishing to receivers parked on their own threads, and sharing and publishing
-  with and without a stalled ring of 10 000 packets. It fails when a timed part allocates. The
-  results are in StudioCraft's `docs/performance.md`.
+  with and without a stalled ring of 10 000 packets. It fails when a timed part allocates. Each
+  timing covers one second of a 60 fps stream (107 packets). On Linux (AMD EPYC 9R14) in a release
+  build, on 2026-11-18, publishing that second took 14.47 µs to 8 subscribers (7 drained and
+  1 that never reads), 1.952 ms to 8 parked receivers, and 615.8 µs to 8 parked receivers woken
+  every 3 packets. The parked timings depend on the load on the host's other cores.
 
 ## Dependencies
 
