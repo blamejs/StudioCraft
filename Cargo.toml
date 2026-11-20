@@ -35,6 +35,9 @@ craft-hwenc = { path = "crates/craft-hwenc" }
 craft-hwenc-native = { path = "crates/craft-hwenc-native" }
 craft-app-audio = { path = "crates/craft-app-audio" }
 craft-transitions = { path = "crates/craft-transitions" }
+craft-flv = { path = "crates/craft-flv" }
+craft-packet = { path = "crates/craft-packet" }
+craft-rtmp = { path = "crates/craft-rtmp" }
 
 # foundation
 thiserror = "2"

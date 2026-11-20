@@ -71,6 +71,52 @@ pub trait OutputInstance: Send {
     fn replay(&self) -> Result<Box<dyn ReplayClip>, PluginError> {
         Err(PluginError::Unavailable("only the replay buffer keeps what it encodes".into()))
     }
+    /// Each destination of a stream, in the order the stream was started with; empty for other
+    /// outputs.
+    fn destinations(&self) -> Vec<DestinationState> {
+        Vec::new()
+    }
+    /// Start sending to the destination `id` of a running stream, which was started with it.
+    /// With `key`, a destination that is not sending starts with that stream key. Starting one
+    /// that is already sending does nothing, and it keeps its key.
+    fn start_destination(&self, id: &str, key: Option<&str>) -> Result<(), PluginError> {
+        let _ = key;
+        Err(PluginError::Unavailable(format!("this output has no destination `{id}`")))
+    }
+    /// Stop sending to the destination `id` of a running stream; the others go on.
+    fn stop_destination(&self, id: &str) -> Result<(), PluginError> {
+        Err(PluginError::Unavailable(format!("this output has no destination `{id}`")))
+    }
+}
+
+/// What a stream's destination is doing.
+#[derive(Clone, Debug, PartialEq)]
+pub enum DestinationStatus {
+    /// Connecting for the first time.
+    Connecting,
+    /// Connected and sending.
+    Live,
+    /// The connection was lost or could not be made; the next try is `attempt`.
+    Retrying { attempt: u32, error: String },
+    /// Stopped by request, or never started because it is off.
+    Stopped,
+    /// Given up on: the server refused the stream, or every try failed.
+    Failed(String),
+}
+
+/// One destination of a running stream.
+#[derive(Clone, Debug, PartialEq)]
+pub struct DestinationState {
+    pub id: String,
+    /// The server, without the key.
+    pub target: String,
+    pub status: DestinationStatus,
+    /// Bytes sent over the connections made so far.
+    pub bytes: u64,
+    /// Packets this destination lost because it fell behind.
+    pub dropped: u64,
+    /// Connections lost and made again.
+    pub reconnects: u32,
 }
 
 /// The video and sound a replay buffer held when it was asked for them. Writing the clip does not

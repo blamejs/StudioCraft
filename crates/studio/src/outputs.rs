@@ -15,12 +15,13 @@ use studiocraft_media::audio::SAMPLE_RATE;
 use studiocraft_media::queue::Fifo;
 use studiocraft_media::stats::EncoderStats;
 use studiocraft_media::video::{PixelFormat, PooledFrame};
-use studiocraft_model::{Profile, RecordingFormat, RecordingQuality, Settings};
+use studiocraft_model::{KeyRef, Profile, RecordingFormat, RecordingQuality, Settings};
 use studiocraft_outputs::encoders::HARDWARE;
 use studiocraft_outputs::replay::MAX_SAVES;
 use studiocraft_platform::ffmpeg;
 use studiocraft_plugin::{
-    Availability, Encoder, EncoderEnv, EncoderKind, OutputInstance, OutputJob, OutputStatus, PluginError, RateControl, VideoFormat, VideoParams,
+    Availability, DestinationState, Encoder, EncoderEnv, EncoderKind, OutputInstance, OutputJob, OutputStatus, PluginError, RateControl, VideoFormat,
+    VideoParams,
 };
 
 use crate::{Notice, Studio, StudioError};
@@ -136,6 +137,11 @@ pub(crate) struct Outputs {
     canceled: Vec<JoinHandle<Result<Resolved, StudioError>>>,
     /// Hardware choices whose tests finished, for the start that follows.
     resolved: HashMap<OutputKind, Resolved>,
+    /// Stream keys held for this session by name, for destinations whose key is
+    /// [`KeyRef::Held`]. They are never saved.
+    held_keys: HashMap<String, String>,
+    /// Where the key of each destination of the last stream started comes from, by id.
+    stream_keys: HashMap<String, KeyRef>,
 }
 
 /// What [`resolve_hardware`] gives: the encoder id, the hardware encoder when it is one, and a
@@ -214,7 +220,8 @@ impl Outputs {
                 active: true,
                 stopping: false,
                 status: a.instance.status(),
-                target: a.target.clone(),
+                // A stream's destinations start and stop while it runs.
+                target: if kind == OutputKind::Streaming { a.instance.target() } else { a.target.clone() },
                 elapsed: a.started.elapsed(),
                 bytes: a.stats.bytes.load(std::sync::atomic::Ordering::Relaxed),
             });
@@ -244,7 +251,7 @@ impl Outputs {
     /// audio queue.
     fn stop(&mut self, kind: OutputKind, failed: bool) -> Option<u64> {
         let a = self.active.remove(&kind)?;
-        let target = a.target.clone();
+        let target = if kind == OutputKind::Streaming { a.instance.target() } else { a.target.clone() };
         // The instance stays reachable here, so it can be stopped on this thread when no thread
         // can be started for it.
         let cell = Arc::new(Mutex::new(Some(a.instance)));
@@ -438,7 +445,8 @@ fn plan(p: &Profile, kind: OutputKind) -> Plan {
         },
         OutputKind::Streaming => Plan {
             output_id: "rtmp",
-            settings: Settings::new().with("server", p.stream.server.as_str()).with("key", p.stream.key.as_str()),
+            // The destinations and their keys are added at the start ([`stream_settings`]).
+            settings: Settings::new(),
             encoder_id: p.stream.video_encoder.clone(),
             encoder_settings: p.stream.video_encoder_settings(),
             rate: RateControl::Bitrate {
@@ -466,6 +474,30 @@ fn plan(p: &Profile, kind: OutputKind) -> Plan {
 /// The video encoder the replay buffer runs.
 const REPLAY_ENCODER: &str = "h264";
 
+/// The stream output's settings for profile `p`: each destination with its server and its key,
+/// the profile's key or one of `held`, the keys held for this session by name.
+fn stream_settings(p: &Profile, held: &HashMap<String, String>) -> Result<Settings, StudioError> {
+    p.stream.check().map_err(StudioError::Output)?;
+    if !p.stream.destinations.iter().any(|d| d.enabled && !d.server.trim().is_empty()) {
+        return Err(StudioError::Output("set a server in Settings › Stream first".into()));
+    }
+    let mut list = Vec::new();
+    for d in &p.stream.destinations {
+        let key = match &d.key {
+            KeyRef::None => "",
+            KeyRef::Profile => p.stream.key.as_str(),
+            // A destination that is off needs no key until it is started.
+            KeyRef::Held(name) => match held.get(name) {
+                Some(key) => key.as_str(),
+                None if !d.enabled => "",
+                None => return Err(StudioError::Output(format!("the stream key `{name}` for destination `{}` is not set for this session", d.id))),
+            },
+        };
+        list.push(serde_json::json!({ "id": d.id, "server": d.server.trim(), "key": key, "enabled": d.enabled }));
+    }
+    Ok(Settings::new().with("destinations", list))
+}
+
 impl Plan {
     /// The job that runs `encoder` with this plan's encoder settings, rate and audio bitrate.
     fn job(&self, encoder: Arc<dyn Encoder>, video: VideoFormat, ffmpeg: PathBuf, stats: Arc<EncoderStats>, start: Tick) -> OutputJob {
@@ -484,13 +516,13 @@ impl Plan {
 }
 
 /// Where the output `kind` can run encoders, when the ffmpeg program listed `offered` (empty when
-/// that list could not be read): recordings and the replay buffer also run the built-in ones.
-fn encoder_env(offered: &[String], kind: OutputKind) -> EncoderEnv<'_> {
-    EncoderEnv { builtin: kind != OutputKind::Streaming, ..EncoderEnv::ffmpeg(offered) }
+/// that list could not be read): every output also runs the built-in ones.
+fn encoder_env(offered: &[String]) -> EncoderEnv<'_> {
+    EncoderEnv { builtin: true, ..EncoderEnv::ffmpeg(offered) }
 }
 
 /// Whether the output `kind` can start with `encoder`, when the ffmpeg program listed `offered`
-/// (empty when that list could not be read).
+/// (empty when that list could not be read). A stream runs the built-in encoders only.
 fn check_encoder(encoder: &dyn Encoder, offered: &[String], kind: OutputKind) -> Result<(), StudioError> {
     let tab = match kind {
         OutputKind::Recording | OutputKind::Replay => "Output",
@@ -499,7 +531,13 @@ fn check_encoder(encoder: &dyn Encoder, offered: &[String], kind: OutputKind) ->
     if encoder.kind() != EncoderKind::Video {
         return Err(StudioError::Output(format!("{} is not a video encoder; choose another encoder in Settings › {tab}", encoder.name())));
     }
-    match encoder.availability(&encoder_env(offered, kind)) {
+    if kind == OutputKind::Streaming && encoder.ffmpeg().is_some() {
+        return Err(StudioError::Output(format!(
+            "{} runs inside ffmpeg, and streams run the built-in encoders; choose another encoder in Settings › Stream",
+            encoder.name()
+        )));
+    }
+    match encoder.availability(&encoder_env(offered)) {
         a if a.can_start() => Ok(()),
         Availability::NotRunHere => {
             Err(StudioError::Output(format!("{} cannot run in a {}; choose another encoder in Settings › {tab}", encoder.name(), kind.noun())))
@@ -523,11 +561,14 @@ fn encoder_failed(candidate: &Candidate, error: &str) -> bool {
     }
 }
 
-/// Tests the hardware encoders for an MKV recording: an encoder that also runs in this process
-/// (NVENC, Media Foundation, VideoToolbox and VA-API H.264 and HEVC) is tested by opening it there and
-/// encoding one frame at the recording's size, and the others are tested in the ffmpeg program.
+/// Tests the hardware encoders for an MKV recording or a stream: an encoder that also runs in this
+/// process (NVENC, Media Foundation, VideoToolbox and VA-API H.264 and HEVC) is tested by opening it
+/// there and encoding one frame at the output's size. For a recording the others are tested in the
+/// ffmpeg program; a stream does not use them.
 struct BuiltInFirst {
     ffmpeg: FfmpegProber,
+    /// Encoders that run only inside ffmpeg are not used.
+    in_process_only: bool,
     /// The recording's width and height, which a VA-API HEVC driver may refuse.
     size: (u32, u32),
     fps: (u32, u32),
@@ -582,6 +623,7 @@ impl Prober for BuiltInFirst {
         match hardware::for_candidate(candidate.id).filter(|_| input == Input::Nv12) {
             Some(_) if cancel.is_canceled() => Outcome::Canceled,
             Some(encoder) => self.test(encoder),
+            None if self.in_process_only => Outcome::NoDevice(format!("{} runs only inside ffmpeg", candidate.name)),
             // Without ffmpeg the encoders that run in this process are still tested.
             None => match self.ffmpeg.probe(candidate, input, cancel) {
                 Outcome::FfmpegMissing(why) => Outcome::NoDevice(why),
@@ -604,9 +646,13 @@ impl Prober for BuiltInFirst {
 }
 
 /// Whether the `hardware` choice of output `kind` runs the built-in hardware encoders in this
-/// process: an MKV recording that is not lossless, since they have no lossless mode.
+/// process: a stream, and an MKV recording that is not lossless, since they have no lossless mode.
 fn runs_built_in(p: &Profile, kind: OutputKind, rate: RateControl) -> bool {
-    kind == OutputKind::Recording && p.output.format == RecordingFormat::Mkv && rate != RateControl::Lossless
+    match kind {
+        OutputKind::Streaming => true,
+        OutputKind::Recording => p.output.format == RecordingFormat::Mkv && rate != RateControl::Lossless,
+        OutputKind::Replay => false,
+    }
 }
 
 /// `resolved` with a hardware encoder that also runs in this process replaced by that built-in
@@ -648,10 +694,11 @@ fn resolve_hardware(
             for (c, outcome) in &tried {
                 log::info!("{} was not used: {outcome}", c.name);
             }
-            let notice = (auto && !tried.is_empty()).then(|| {
-                Notice::new("No hardware encoder passed its test; using {encoder}", vec![("encoder", "Software (x264)".to_string())], false)
-            });
-            Ok((SOFTWARE_ENCODER.to_string(), None, notice))
+            // A stream falls back to the built-in H.264 encoder, a recording to x264.
+            let (software, label) = if stream { (STREAM_SOFTWARE_ENCODER, "H.264 (built in)") } else { (SOFTWARE_ENCODER, "Software (x264)") };
+            let notice = (auto && !tried.is_empty())
+                .then(|| Notice::new("No hardware encoder passed its test; using {encoder}", vec![("encoder", label.to_string())], false));
+            Ok((software.to_string(), None, notice))
         }
         Err(HwError::Canceled) => Err(StudioError::Output("the hardware encoder tests were canceled".into())),
         Err(e) => Err(StudioError::Output(format!("{e}; choose another hardware encoder in Settings › Video"))),
@@ -660,6 +707,8 @@ fn resolve_hardware(
 
 /// The encoder the `hardware` choice falls back to.
 const SOFTWARE_ENCODER: &str = "x264";
+/// The encoder the `hardware` choice of a stream falls back to.
+const STREAM_SOFTWARE_ENCODER: &str = REPLAY_ENCODER;
 
 /// The saved settings of encoder `id` for the output `kind`.
 fn encoder_settings(p: &Profile, kind: OutputKind, id: &str) -> Settings {
@@ -668,6 +717,44 @@ fn encoder_settings(p: &Profile, kind: OutputKind, id: &str) -> Settings {
 }
 
 impl Studio {
+    /// Hold `key` for this session under `name`, for the stream destinations whose key is
+    /// [`KeyRef::Held`] with that name; an empty key forgets it. Held keys are never saved. A
+    /// running stream keeps the keys it started with, and a destination started again with
+    /// [`Studio::set_stream_destination`] takes the key held then.
+    pub fn hold_stream_key(&mut self, name: &str, key: &str) {
+        if key.is_empty() {
+            self.outputs.held_keys.remove(name);
+        } else {
+            self.outputs.held_keys.insert(name.to_string(), key.to_string());
+        }
+    }
+
+    /// Each destination of the running stream, in the profile's order; empty while no stream runs.
+    pub fn stream_destinations(&self) -> Vec<DestinationState> {
+        self.outputs.active.get(&OutputKind::Streaming).map(|a| a.instance.destinations()).unwrap_or_default()
+    }
+
+    /// Start (`on`) or stop sending to the destination `id` of the running stream; the other
+    /// destinations go on.
+    pub fn set_stream_destination(&mut self, id: &str, on: bool) -> Result<(), StudioError> {
+        let Some(a) = self.outputs.active.get(&OutputKind::Streaming) else {
+            return Err(StudioError::Output("the stream is not running".into()));
+        };
+        if !on {
+            return Ok(a.instance.stop_destination(id)?);
+        }
+        // A held key is looked up again, so one held after the stream started is used. Where a
+        // key comes from is what it was when the stream started.
+        let key = match self.outputs.stream_keys.get(id) {
+            Some(KeyRef::Held(name)) => match self.outputs.held_keys.get(name) {
+                Some(key) => Some(key.as_str()),
+                None => return Err(StudioError::Output(format!("the stream key `{name}` for destination `{id}` is not set for this session"))),
+            },
+            _ => None,
+        };
+        Ok(a.instance.start_destination(id, key)?)
+    }
+
     pub(crate) fn toggle_output(&mut self, kind: OutputKind) -> Result<(), StudioError> {
         if self.outputs.active.contains_key(&kind) || self.outputs.testing.contains_key(&kind) {
             self.stop_output(kind);
@@ -675,6 +762,12 @@ impl Studio {
         } else {
             self.start_output(kind)
         }
+    }
+
+    /// How many ffmpeg programs were asked for their encoder lists.
+    #[cfg(test)]
+    pub(crate) fn ffmpeg_lists_read(&self) -> usize {
+        self.outputs.encoders.len()
     }
 
     /// Whether `kind` waits for its hardware encoder tests.
@@ -704,7 +797,13 @@ impl Studio {
         let lossless = planned.rate == RateControl::Lossless;
         let built_in = runs_built_in(&self.profile, kind, planned.rate);
         let prober: Box<dyn Prober + Send> = if built_in {
-            Box::new(BuiltInFirst { ffmpeg, size: (v.output_width, v.output_height), fps: (v.fps_num, v.fps_den.max(1)), rate: planned.rate })
+            Box::new(BuiltInFirst {
+                ffmpeg,
+                in_process_only: stream,
+                size: (v.output_width, v.output_height),
+                fps: (v.fps_num, v.fps_den.max(1)),
+                rate: planned.rate,
+            })
         } else {
             Box::new(ffmpeg)
         };
@@ -792,25 +891,34 @@ impl Studio {
         if self.video.is_none() {
             return Err(StudioError::Output("nothing can be recorded or streamed without the graphics device".into()));
         }
-        if kind == OutputKind::Streaming && self.profile.stream.server.trim().is_empty() {
-            return Err(StudioError::Output("set a server in Settings › Stream first".into()));
-        }
         let mut planned = plan(&self.profile, kind);
+        if kind == OutputKind::Streaming {
+            planned.settings = stream_settings(&self.profile, &self.outputs.held_keys)?;
+            self.outputs.stream_keys = self.profile.stream.destinations.iter().map(|d| (d.id.clone(), d.key.clone())).collect();
+        }
         let registry = Arc::clone(self.engine.registry());
         let mut encoder = registry.encoder(&planned.encoder_id)?;
+        if kind == OutputKind::Streaming && encoder.ffmpeg().is_some() {
+            // Refused before looking for the ffmpeg program, which a stream does not run.
+            check_encoder(encoder.as_ref(), &[], kind)?;
+        }
         let mut hardware = None;
         let program = if encoder.ffmpeg().is_some() || encoder.id() == HARDWARE {
-            let located = ffmpeg::locate(&self.profile.output.ffmpeg_path).map_err(|e| StudioError::Output(e.to_string()));
             // A VA-API encoder chosen by name is tested too, to find the render node it encodes on.
             let vaapi = craft_hwenc::candidate(encoder.id()).filter(|c| c.api == craft_hwenc::Api::Vaapi).map(|c| c.id);
             // The `hardware` choice of an MKV recording can still run NVENC, Media Foundation,
             // VideoToolbox or VA-API without ffmpeg, and a VA-API encoder chosen by name can still
             // run VA-API.
             let tested = encoder.id() == HARDWARE || vaapi.is_some();
-            let (program, missing) = match located {
-                Ok(program) => (program, None),
-                Err(e) if tested && runs_built_in(&self.profile, kind, planned.rate) => (PathBuf::new(), Some(e)),
-                Err(e) => return Err(e),
+            let (program, missing) = if kind == OutputKind::Streaming {
+                // A stream runs no ffmpeg, so none is looked for or run.
+                (PathBuf::new(), Some(StudioError::Output("a stream runs the built-in encoders only".into())))
+            } else {
+                match ffmpeg::locate(&self.profile.output.ffmpeg_path).map_err(|e| StudioError::Output(e.to_string())) {
+                    Ok(program) => (program, None),
+                    Err(e) if tested && runs_built_in(&self.profile, kind, planned.rate) => (PathBuf::new(), Some(e)),
+                    Err(e) => return Err(e),
+                }
             };
             let offered = match missing {
                 Some(_) => Vec::new(),
@@ -977,6 +1085,70 @@ mod tests {
     }
 
     #[test]
+    fn a_stream_falls_back_to_the_built_in_encoder_and_runs_none_inside_ffmpeg() {
+        let none = fake(craft_hwenc::Outcome::NoDevice("no device".into()));
+        let (id, run, notice) = resolve_hardware("auto", 0x10de, true, false, &none, &ProbeCache::new(), &Cancel::new()).unwrap();
+        assert_eq!((id.as_str(), run), ("h264", None));
+        if let Some(n) = notice {
+            assert_eq!(n.text(), "No hardware encoder passed its test; using H.264 (built in)");
+        }
+        let (id, _, _) = resolve_hardware("software", 0x10de, true, false, &none, &ProbeCache::new(), &Cancel::new()).unwrap();
+        assert_eq!(id, "h264");
+        let prober = BuiltInFirst {
+            ffmpeg: FfmpegProber::new(PathBuf::from("no-such-ffmpeg"), Vec::new()),
+            in_process_only: true,
+            size: (64, 48),
+            fps: (30, 1),
+            rate: RateControl::Bitrate { kbps: 1000, keyframe_s: 2 },
+        };
+        for c in craft_hwenc::CANDIDATES.iter().filter(|c| hardware::for_candidate(c.id).is_none()) {
+            let outcome = prober.probe(c, Input::Nv12, &Cancel::new());
+            assert!(matches!(&outcome, craft_hwenc::Outcome::NoDevice(why) if why.contains("runs only inside ffmpeg")), "{}: {outcome:?}", c.id);
+        }
+    }
+
+    #[test]
+    fn a_stream_sends_each_destination_with_its_key() {
+        use studiocraft_model::Destination;
+        let mut p = Profile::default();
+        let Err(StudioError::Output(e)) = stream_settings(&p, &HashMap::new()) else { panic!("a stream without a server") };
+        assert_eq!(e, "set a server in Settings › Stream first");
+        p.stream.key = "profile-key".into();
+        let d = |id: &str, server: &str, key: KeyRef, enabled: bool| Destination {
+            id: id.into(),
+            server: server.into(),
+            key,
+            enabled,
+            ..Destination::default()
+        };
+        p.stream.destinations = vec![
+            d("main", " rtmp://a/live ", KeyRef::Profile, true),
+            d("b", "rtmp://b/live", KeyRef::Held("b".into()), true),
+            d("c", "rtmp://c/live/name", KeyRef::None, true),
+            d("d", "rtmp://d/live", KeyRef::Held("d".into()), false),
+        ];
+        let Err(StudioError::Output(e)) = stream_settings(&p, &HashMap::new()) else { panic!("a held key that is not set") };
+        assert_eq!(e, "the stream key `b` for destination `b` is not set for this session");
+        let held = HashMap::from([("b".to_string(), "held-key".to_string())]);
+        let settings = stream_settings(&p, &held).unwrap();
+        let want = serde_json::json!([
+            { "id": "main", "server": "rtmp://a/live", "key": "profile-key", "enabled": true },
+            { "id": "b", "server": "rtmp://b/live", "key": "held-key", "enabled": true },
+            { "id": "c", "server": "rtmp://c/live/name", "key": "", "enabled": true },
+            { "id": "d", "server": "rtmp://d/live", "key": "", "enabled": false },
+        ]);
+        assert_eq!(settings.get("destinations"), Some(&want));
+        assert_eq!(studiocraft_outputs::stream_targets(&settings).map(|t| t.len()), Ok(4));
+        p.stream.destinations[1].id = "main".into();
+        let Err(StudioError::Output(e)) = stream_settings(&p, &held) else { panic!("an id used twice") };
+        assert!(e.contains("used twice"), "{e}");
+        for on in &mut p.stream.destinations {
+            on.enabled = false;
+        }
+        assert!(stream_settings(&p, &held).is_err(), "every destination is off");
+    }
+
+    #[test]
     fn a_named_hardware_encoder_that_fails_or_a_canceled_test_stops_the_start_with_a_clear_error() {
         let Some(c) = craft_hwenc::auto_order(Vendor::Nvidia, Os::current(), craft_hwenc::Codec::H264).first().copied() else { return };
         let busy = fake(craft_hwenc::Outcome::Busy("incompatible client key".into()));
@@ -1047,7 +1219,7 @@ mod tests {
 
         // The ffmpeg program does not exist: only the in-process test can say anything else.
         let ffmpeg = FfmpegProber::new("missing-ffmpeg-for-the-test", Vec::new());
-        let p = BuiltInFirst { ffmpeg, size: (1920, 1080), fps: (30, 1), rate: RateControl::Quality(23) };
+        let p = BuiltInFirst { ffmpeg, in_process_only: false, size: (1920, 1080), fps: (30, 1), rate: RateControl::Quality(23) };
         let nvenc = craft_hwenc::candidate("nvenc_h264").unwrap();
         let amf = craft_hwenc::candidate("amf_h264").unwrap();
         match p.probe(nvenc, Input::Nv12, &Cancel::new()) {
@@ -1087,10 +1259,10 @@ mod tests {
         assert_ne!(p.args(nvenc, Input::Nv12), p.ffmpeg.args(nvenc, Input::Nv12), "kept apart in the cache");
         assert_eq!(p.args(amf, Input::Nv12), p.ffmpeg.args(amf, Input::Nv12));
         let ffmpeg = FfmpegProber::new("missing-ffmpeg-for-the-test", Vec::new());
-        let at_60 = BuiltInFirst { ffmpeg, size: (1920, 1080), fps: (60, 1), rate: RateControl::Quality(23) };
+        let at_60 = BuiltInFirst { ffmpeg, in_process_only: false, size: (1920, 1080), fps: (60, 1), rate: RateControl::Quality(23) };
         assert_ne!(at_60.args(nvenc, Input::Nv12), p.args(nvenc, Input::Nv12), "another frame rate is tested again");
         let ffmpeg = FfmpegProber::new("missing-ffmpeg-for-the-test", Vec::new());
-        let at_720p = BuiltInFirst { ffmpeg, size: (1280, 720), fps: (30, 1), rate: RateControl::Quality(23) };
+        let at_720p = BuiltInFirst { ffmpeg, in_process_only: false, size: (1280, 720), fps: (30, 1), rate: RateControl::Quality(23) };
         let hevc = craft_hwenc::candidate("vaapi_hevc").unwrap();
         assert_ne!(at_720p.args(hevc, Input::Nv12), p.args(hevc, Input::Nv12), "another size is tested again");
         // A failure of the built-in encoder while it records does not stop ffmpeg's NVENC.
@@ -1268,16 +1440,19 @@ mod tests {
         let x264 = studiocraft_outputs::encoders::all().into_iter().next().unwrap();
         let other = ["libx265".to_string()];
         let listed = ["libx264".to_string()];
-        assert!(check_encoder(&x264, &listed, OutputKind::Streaming).is_ok());
+        assert!(check_encoder(&x264, &listed, OutputKind::Recording).is_ok());
         assert!(check_encoder(&x264, &[], OutputKind::Recording).is_ok(), "an unknown list does not rule it out");
-        for (kind, tab) in [(OutputKind::Recording, "Settings › Output"), (OutputKind::Streaming, "Settings › Stream")] {
-            let Err(StudioError::Output(m)) = check_encoder(&x264, &other, kind) else { panic!("x264 started without libx264") };
-            assert!(m.contains("no libx264 encoder") && m.ends_with(tab), "{m}");
+        let Err(StudioError::Output(m)) = check_encoder(&x264, &other, OutputKind::Recording) else { panic!("x264 started without libx264") };
+        assert!(m.contains("no libx264 encoder") && m.ends_with("Settings › Output"), "{m}");
+        // A stream runs the built-in encoders only, whatever ffmpeg offers.
+        for offered in [&listed[..], &other[..], &[]] {
+            let Err(StudioError::Output(m)) = check_encoder(&x264, offered, OutputKind::Streaming) else { panic!("a stream started with x264") };
+            assert!(m.contains("runs inside ffmpeg") && m.ends_with("Settings › Stream"), "{m}");
         }
     }
 
     #[test]
-    fn a_built_in_encoder_records_and_does_not_stream() {
+    fn a_built_in_encoder_records_and_streams() {
         struct Builtin(studiocraft_plugin::Codec);
         impl Plugin for Builtin {
             fn id(&self) -> &'static str {
@@ -1298,15 +1473,14 @@ mod tests {
         let video = Builtin(studiocraft_plugin::Codec::H264);
         let listed = ["libx264".to_string()];
         for offered in [&listed[..], &[]] {
-            let Err(StudioError::Output(m)) = check_encoder(&video, offered, OutputKind::Streaming) else { panic!("a built-in encoder started") };
-            assert_eq!(m, "Built-in cannot run in a stream; choose another encoder in Settings › Stream");
+            assert!(check_encoder(&video, offered, OutputKind::Streaming).is_ok(), "streams run built-in encoders");
             assert!(check_encoder(&video, offered, OutputKind::Recording).is_ok(), "recordings run built-in encoders");
         }
         let mut registry = studiocraft_plugin::Registry::new();
         studiocraft_outputs::register_all(&mut registry).unwrap();
         let h264 = registry.encoder("h264").unwrap();
         assert!(check_encoder(h264.as_ref(), &[], OutputKind::Recording).is_ok());
-        assert!(check_encoder(h264.as_ref(), &[], OutputKind::Streaming).is_err());
+        assert!(check_encoder(h264.as_ref(), &[], OutputKind::Streaming).is_ok());
         let audio = Builtin(studiocraft_plugin::Codec::Aac);
         let Err(StudioError::Output(m)) = check_encoder(&audio, &listed, OutputKind::Recording) else { panic!("an audio encoder started as video") };
         assert_eq!(m, "Built-in is not a video encoder; choose another encoder in Settings › Output");

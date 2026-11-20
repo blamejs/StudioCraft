@@ -39,7 +39,7 @@ description in [docs/features.md](docs/features.md).
 
 ### Streaming
 
-- Streams go to an RTMP server through an external ffmpeg, with the encoder's settings in Settings › Stream ([Streaming](docs/features.md#streaming)).
+- Streams go to one or more RTMP and RTMPS servers from StudioCraft through the built-in H.264 encoders, each destination connecting, reconnecting and stopping on its own, with the encoder's settings in Settings › Stream ([Streaming](docs/features.md#streaming)).
 
 ### Hardware acceleration
 

@@ -1,22 +1,24 @@
 //! Recording, streaming and the replay buffer.
 //!
-//! With an ffmpeg encoder, both outputs run an ffmpeg process ([`writer`]): a recording writes a
-//! Matroska, MP4 or QuickTime file, and a stream sends FLV over RTMP or RTMPS. With the built-in
-//! encoders, a recording writes a Matroska file from this process ([`native`]). The video encoders
+//! With an ffmpeg encoder, a recording runs an ffmpeg process ([`writer`]) that writes a Matroska,
+//! MP4 or QuickTime file. With the built-in encoders, a recording writes a Matroska file from this
+//! process ([`native`]). A stream runs the built-in encoders and sends FLV over RTMP or RTMPS from
+//! this process to each of its destinations ([`stream`]). The video encoders
 //! ffmpeg offers are plug-ins ([`encoders`]), and so are the built-in ones: H.264
 //! ([`studiocraft_encode::H264`]), NVENC H.264 and HEVC ([`studiocraft_encode::Nvenc`]), the
 //! Media Foundation hardware H.264 and HEVC encoders ([`studiocraft_encode::MediaFoundation`]),
 //! the VideoToolbox hardware H.264 and HEVC encoders ([`studiocraft_encode::VideoToolbox`]) and
 //! the VA-API hardware H.264 and HEVC encoders ([`studiocraft_encode::VaApi`]). The
 //! hardware choice ([`encoders::Hardware`]) is resolved by the studio to one of the ffmpeg encoders,
-//! or to a built-in hardware encoder for an MKV recording or the replay buffer, before an output
-//! starts. The
+//! or to a built-in hardware encoder for an MKV recording, a stream or the replay buffer, before an
+//! output starts. The
 //! replay buffer ([`replay`]) runs the built-in encoders and keeps their newest packets in memory
 //! until a save writes them to a Matroska file.
 
 pub mod encoders;
 pub mod native;
 pub mod replay;
+pub mod stream;
 pub mod writer;
 
 use std::path::Path;
@@ -29,6 +31,7 @@ use studiocraft_model::{Field, FieldKind, PathMode, Settings, SettingsSchema};
 use studiocraft_plugin::{EncoderKind, Output, OutputInstance, OutputJob, OutputStatus, Plugin, PluginError, RateControl, Registry};
 
 use crate::native::Native;
+pub use crate::stream::{Streaming, Target};
 use crate::writer::{Writer, audio_args};
 
 /// Register the recording, the stream, the replay buffer and every video encoder: the ffmpeg
@@ -188,7 +191,10 @@ impl Output for Recording {
     }
 }
 
-/// A live stream to an RTMP or RTMPS server.
+/// A live stream to one or more RTMP or RTMPS servers, through the built-in encoders ([`stream`]).
+///
+/// The settings hold `destinations`, a list of `{id, server, key, enabled}` objects. Without that
+/// list, `server` and `key` give one destination with the id `main`.
 pub struct Stream;
 
 impl Plugin for Stream {
@@ -206,41 +212,47 @@ impl Plugin for Stream {
     }
 }
 
-/// The URL ffmpeg publishes to: the server with the key appended.
-pub fn stream_url(server: &str, key: &str) -> Result<String, PluginError> {
-    let server = server.trim();
-    let lower = server.to_ascii_lowercase();
-    if !(lower.starts_with("rtmp://") || lower.starts_with("rtmps://")) {
-        return Err(PluginError::Failed("the server must start with rtmp:// or rtmps://".into()));
+/// The destinations in a stream's settings.
+pub fn stream_targets(settings: &Settings) -> Result<Vec<Target>, PluginError> {
+    let Some(list) = settings.get("destinations") else {
+        let server = settings.str("server").unwrap_or_default();
+        return Ok(vec![Target { id: "main".into(), server: server.into(), key: settings.str("key").unwrap_or_default().into(), enabled: true }]);
+    };
+    let Some(list) = list.as_array() else {
+        return Err(PluginError::Failed("the stream's destinations are not a list".into()));
+    };
+    let most = craft_packet::MAX_SUBSCRIBERS;
+    if list.len() > most {
+        return Err(PluginError::Failed(format!("a stream can have at most {most} destinations, not {}", list.len())));
     }
-    let key = key.trim();
-    if key.chars().any(char::is_whitespace) {
-        return Err(PluginError::Failed("the stream key cannot contain spaces".into()));
-    }
-    Ok(if key.is_empty() { server.to_string() } else { format!("{}/{key}", server.trim_end_matches('/')) })
+    list.iter()
+        .enumerate()
+        .map(|(i, d)| {
+            let text = |key: &str| -> Result<String, PluginError> {
+                match d.get(key) {
+                    None | Some(serde_json::Value::Null) => Ok(String::new()),
+                    Some(serde_json::Value::String(s)) => Ok(s.clone()),
+                    Some(_) => Err(PluginError::Failed(format!("destination {} has a {key} that is not text", i + 1))),
+                }
+            };
+            let enabled = match d.get("enabled") {
+                None => true,
+                Some(v) => {
+                    v.as_bool().ok_or_else(|| PluginError::Failed(format!("destination {} has an enabled flag that is not true or false", i + 1)))?
+                }
+            };
+            if !d.is_object() {
+                return Err(PluginError::Failed(format!("destination {} is not an object", i + 1)));
+            }
+            Ok(Target { id: text("id")?, server: text("server")?, key: text("key")?, enabled })
+        })
+        .collect()
 }
 
 impl Output for Stream {
     fn start(&self, settings: &Settings, job: OutputJob) -> Result<Box<dyn OutputInstance>, PluginError> {
-        let server = settings.str("server").unwrap_or_default();
-        let url = stream_url(server, settings.str("key").unwrap_or_default())?;
-        if !matches!(job.rate, RateControl::Bitrate { .. }) {
-            return Err(PluginError::Failed("streams need a bitrate".into()));
-        }
-        if job.video_encoder.kind() != EncoderKind::Video || !job.video_encoder.streams() {
-            return Err(PluginError::Failed(format!("streams need an H.264 encoder, and {} is not one", job.video_encoder.name())));
-        }
-        if job.video_encoder.ffmpeg().is_none() {
-            return Err(PluginError::Failed(format!(
-                "{} records files only; choose an ffmpeg encoder for streams in Settings › Output",
-                job.video_encoder.name()
-            )));
-        }
-        let codec = codec_args(&job, None)?;
-        let out = vec!["-f".into(), "flv".into(), "-flvflags".into(), "no_duration_filesize".into(), url];
-        let writer = Writer::start(&job, &codec, &out, settings.str("key").unwrap_or_default().trim())?;
-        // The key is a secret: the target shown is the server alone.
-        Ok(Box::new(Running { backend: Backend::Ffmpeg(writer), target: server.trim().to_string() }))
+        let targets = stream_targets(settings)?;
+        Ok(Box::new(Streaming::start(&job, targets)?))
     }
 }
 
