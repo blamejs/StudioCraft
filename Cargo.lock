@@ -1684,6 +1684,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-transitions"
+version = "0.1.0-alpha.1"
+dependencies = [
+ "craft-ease",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "craft-tsmux"
 version = "0.1.0-alpha.1"
 dependencies = [
@@ -5967,6 +5976,7 @@ dependencies = [
  "bytemuck",
  "craft-gpu-device",
  "craft-gpu-yuv",
+ "craft-transitions",
  "criterion",
  "crossbeam-queue",
  "log",
