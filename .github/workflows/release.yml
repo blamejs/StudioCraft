@@ -39,11 +39,11 @@ jobs:
     permissions:
       contents: write
       packages: write
-    # Pinned to craft-common-actions main at 2026-11-16T01:19Z, the commit ci.yml's gate uses; move
+    # Pinned to craft-common-actions main at 2026-11-20T17:16Z, the commit ci.yml's gate uses; move
     # the pin to take later changes. The pin covers the workflow file only: the shared workflow calls
     # its own actions (import-signing-key, sign-rpms, draft-release and others) at @main. Its linux
     # and flatpak jobs import LINUX_SIGNING_KEY in the job that builds and packages the app.
-    uses: storytold/craft-common-actions/.github/workflows/release.yml@59d1ecc4ea15ab59f8d60d38b147d5016c1f1385
+    uses: storytold/craft-common-actions/.github/workflows/release.yml@0bef64f155fcea81edbd9542381777358bfbdcf4
     with:
       dry-run: ${{ github.event_name == 'schedule' || inputs.dry-run == true }}
       app-name: studiocraft
@@ -132,7 +132,7 @@ jobs:
           cat SHA3-512SUMS.txt
       - name: Import the Linux signing key
         id: key
-        uses: storytold/craft-common-actions/actions/import-signing-key@59d1ecc4ea15ab59f8d60d38b147d5016c1f1385
+        uses: storytold/craft-common-actions/actions/import-signing-key@0bef64f155fcea81edbd9542381777358bfbdcf4
         with:
           key: ${{ github.ref == 'refs/heads/release' && secrets.LINUX_SIGNING_KEY || '' }}
       - name: Sign SHA3-512SUMS.txt
