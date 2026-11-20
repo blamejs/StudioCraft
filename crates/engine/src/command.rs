@@ -70,6 +70,8 @@ pub enum RuntimeAction {
     AudioTracksMarker {
         name: Option<String>,
     },
+    /// Forget the hardware encoders' test results, so the next start tests them again.
+    RetestHardwareEncoders,
     OpenSettings,
     Exit,
 }
@@ -261,6 +263,10 @@ pub enum Command {
         #[serde(default, deserialize_with = "given_string")]
         name: Option<String>,
     },
+    /// Forget the hardware encoders' test results, in the session and in the file that keeps
+    /// them, so the next recording or stream tests them again.
+    #[serde(rename = "hardware_encoders.retest")]
+    RetestHardwareEncoders {},
     #[serde(rename = "app.settings")]
     OpenSettings {},
     #[serde(rename = "app.exit")]
@@ -363,6 +369,7 @@ impl Command {
             Command::AudioTracksRepair { .. } => "audio_tracks.repair",
             Command::AudioTracksOpenLast {} => "audio_tracks.open_last",
             Command::AudioTracksMarker { .. } => "audio_tracks.marker",
+            Command::RetestHardwareEncoders {} => "hardware_encoders.retest",
             Command::OpenSettings {} => "app.settings",
             Command::Exit {} => "app.exit",
             Command::AppLinks { .. } => "app.links",
@@ -455,6 +462,7 @@ const SPECS: &[CommandSpec] = &[
     spec("audio_tracks.repair", "Repair Audio Tracks", "folder: path to a take's folder or the recording folder", Undo::NotUndoable),
     spec("audio_tracks.open_last", "Open Last Audio Tracks in Editor", "", Undo::NotUndoable),
     spec("audio_tracks.marker", "Add Audio Tracks Marker", "name?: the marker's name, 1 to 256 characters", Undo::NotUndoable),
+    spec("hardware_encoders.retest", "Test Hardware Encoders Again", "", Undo::NotUndoable),
     spec("app.settings", "Settings", "", Undo::NotUndoable),
     spec("app.exit", "Exit", "", Undo::NotUndoable),
     spec("app.links", "Community Links", "link?: discord|website|github|issues", Undo::NotUndoable),

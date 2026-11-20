@@ -155,6 +155,8 @@ fn interface_commands_come_back_as_actions() {
     assert_eq!(s.run("app.settings", &json!({})).unwrap().1, Some(UiAction::OpenSettings));
     assert_eq!(s.run("app.exit", &json!({})).unwrap().1, Some(UiAction::Exit));
     assert_eq!(s.run("scene.add", &json!({})).unwrap().1, None);
+    // Without a file the results are only forgotten for the session.
+    assert_eq!(s.run("hardware_encoders.retest", &json!({})).unwrap(), (serde_json::Value::Null, None));
 }
 
 #[test]

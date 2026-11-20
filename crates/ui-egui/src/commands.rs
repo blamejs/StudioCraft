@@ -284,7 +284,10 @@ pub fn menu_bar(s: &MenuState) -> MenuBar {
         Node::Separator,
     ];
     collection.extend(list("collection.switch", s.collections, s.collection));
-    let tools = Menu::new(title("Tools"), vec![item("tools.encoders", "Available Encoders")]);
+    let tools = Menu::new(
+        title("Tools"),
+        vec![item("tools.encoders", "Available Encoders"), item("hardware_encoders.retest", "Test Hardware Encoders Again")],
+    );
     let community = COMMUNITY.iter().map(|(id, _, label)| item(id, label)).collect();
     let help = Menu::new(
         title("Help"),

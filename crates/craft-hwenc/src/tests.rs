@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::*;
 
@@ -314,4 +314,386 @@ fn a_real_software_encode_passes_and_an_unknown_codec_fails() {
     assert!(matches!(&bad_option, Outcome::Failed(_)), "an option the encoder rejects fails the test: {bad_option:?}");
     cancel.cancel();
     assert_eq!(probe_codec(&ffmpeg, &args(&["-c:v", "mpeg4"]), Input::Nv12, &cancel, timeout), Outcome::Canceled);
+    let version = ffmpeg_version(&ffmpeg, &Cancel::new(), timeout);
+    assert!(version.starts_with("ffmpeg version") && version.contains(" bytes; modified "), "{version}");
+}
+
+/// A clock that moves only when a wait pauses on it or a test moves it.
+struct TestClock {
+    start: Instant,
+    passed: Mutex<Duration>,
+}
+
+impl TestClock {
+    fn new() -> Self {
+        TestClock { start: Instant::now(), passed: Mutex::new(Duration::ZERO) }
+    }
+    fn passed(&self) -> Duration {
+        *self.passed.lock().unwrap()
+    }
+    fn advance(&self, d: Duration) {
+        *self.passed.lock().unwrap() += d;
+    }
+}
+
+impl Clock for TestClock {
+    fn now(&self) -> Instant {
+        self.start + self.passed()
+    }
+    fn pause(&self, d: Duration) {
+        self.advance(d);
+    }
+}
+
+/// A started program that ends after `ends_after` looks (never when `None`), sets `cancel` at
+/// look `cancel_at`, or cannot be read.
+#[derive(Default)]
+struct Program {
+    looks: usize,
+    ends_after: Option<usize>,
+    cancel_at: Option<(usize, Cancel)>,
+    unreadable: bool,
+    stops: usize,
+}
+
+impl crate::probe::Running for Program {
+    type Status = &'static str;
+    fn try_wait(&mut self) -> std::io::Result<Option<&'static str>> {
+        self.looks += 1;
+        if let Some((at, cancel)) = &self.cancel_at
+            && *at == self.looks
+        {
+            cancel.cancel();
+        }
+        if self.unreadable {
+            return Err(std::io::Error::other("no such process"));
+        }
+        Ok(self.ends_after.filter(|n| self.looks >= *n).map(|_| "ended"))
+    }
+    fn stop(&mut self) {
+        self.stops += 1;
+    }
+}
+
+#[test]
+fn a_test_encode_that_never_ends_is_stopped_at_its_timeout_on_the_given_clock() {
+    use crate::probe::{Ended, wait_for};
+    let clock = TestClock::new();
+    let mut hung = Program::default();
+    assert_eq!(wait_for(&mut hung, &Cancel::new(), Duration::from_secs(5), &clock), Ended::TimedOut);
+    assert_eq!(clock.passed(), Duration::from_secs(5), "the wait stops at the timeout, not past it");
+    assert_eq!((hung.looks, hung.stops), (1001, 1), "one look every 5 ms, then one stop");
+    let clock = TestClock::new();
+    let mut ends = Program { ends_after: Some(3), ..Program::default() };
+    assert_eq!(wait_for(&mut ends, &Cancel::new(), Duration::from_secs(5), &clock), Ended::Exited("ended"));
+    assert_eq!((clock.passed(), ends.stops), (Duration::from_millis(10), 0));
+    let cancel = Cancel::new();
+    let mut canceled = Program { cancel_at: Some((2, cancel.clone())), ..Program::default() };
+    assert_eq!(wait_for(&mut canceled, &cancel, Duration::from_secs(5), &TestClock::new()), Ended::Canceled);
+    assert_eq!((canceled.looks, canceled.stops), (2, 1));
+    let mut unreadable = Program { unreadable: true, ..Program::default() };
+    assert!(matches!(wait_for(&mut unreadable, &Cancel::new(), Duration::from_secs(5), &TestClock::new()), Ended::Failed(_)));
+    assert_eq!(unreadable.stops, 1);
+    let mut no_time = Program::default();
+    assert_eq!(wait_for(&mut no_time, &Cancel::new(), Duration::ZERO, &TestClock::new()), Ended::TimedOut);
+    assert_eq!(no_time.looks, 1);
+    assert_eq!(Outcome::TimedOut(Duration::from_millis(2500)).to_string(), "the test encode did not finish in 2.500 s");
+}
+
+/// A prober whose tests take a set time on a [`TestClock`]: a test given less time than it takes
+/// times out after the time it was given.
+struct Timed<'a> {
+    clock: &'a TestClock,
+    answers: HashMap<&'static str, (Outcome, Duration)>,
+    asked: Mutex<Vec<&'static str>>,
+}
+
+impl Prober for Timed<'_> {
+    fn program(&self) -> &Path {
+        Path::new("timed-ffmpeg")
+    }
+    fn probe(&self, c: &'static Candidate, input: Input, cancel: &Cancel) -> Outcome {
+        self.probe_within(c, input, cancel, Duration::from_secs(5))
+    }
+    fn probe_within(&self, c: &'static Candidate, _: Input, _: &Cancel, limit: Duration) -> Outcome {
+        self.asked.lock().unwrap().push(c.id);
+        let (answer, takes) = self.answers.get(c.id).cloned().unwrap_or((Outcome::NoDevice("timed".into()), Duration::from_secs(1)));
+        let limit = limit.min(Duration::from_secs(5));
+        if takes > limit {
+            self.clock.advance(limit);
+            return Outcome::TimedOut(limit);
+        }
+        self.clock.advance(takes);
+        answer
+    }
+    fn timeout(&self) -> Option<Duration> {
+        Some(Duration::from_secs(5))
+    }
+}
+
+#[test]
+fn the_tests_of_one_choice_stop_when_their_budget_is_used() {
+    let clock = TestClock::new();
+    let secs = Duration::from_secs;
+    let prober = Timed {
+        clock: &clock,
+        answers: [
+            ("nvenc_h264", (Outcome::NoDevice("no NVIDIA device".into()), secs(4))),
+            ("mf_h264", (Outcome::Works, secs(60))),
+            ("amf_h264", (Outcome::NoDevice("no AMD device".into()), secs(1))),
+            ("qsv_h264", (Outcome::Works, secs(1))),
+        ]
+        .into_iter()
+        .collect(),
+        asked: Mutex::new(Vec::new()),
+    };
+    let cache = ProbeCache::new();
+    let t = target(Vendor::Nvidia, Os::Windows);
+    let budget = Budget { total: secs(8), clock: &clock };
+    let Choice::Software { tried } = resolve_within(&Preference::Auto, t, &prober, &cache, &Cancel::new(), budget).unwrap() else {
+        panic!("software expected")
+    };
+    assert_eq!(clock.passed(), secs(8), "the tests stop when the budget is used");
+    let found: Vec<_> = tried.iter().map(|(c, o)| (c.id, o.clone())).collect();
+    let not_tested = Outcome::NotTested("the tests had used their 8 s".into());
+    assert_eq!(
+        found,
+        [
+            ("nvenc_h264", Outcome::NoDevice("no NVIDIA device".into())),
+            ("mf_h264", Outcome::TimedOut(secs(4))),
+            ("amf_h264", not_tested.clone()),
+            ("qsv_h264", not_tested),
+        ]
+    );
+    let mf = candidate("mf_h264").unwrap();
+    assert_eq!(cache.get(&prober, mf, Input::Nv12), None, "a test the budget cut short is tested again");
+    assert_eq!(cache.get(&prober, candidate("qsv_h264").unwrap(), Input::Nv12), None, "a candidate not tested is tested later");
+    // The next start: NVENC is kept, Media Foundation hangs for its whole timeout and is kept.
+    let choice = resolve_within(&Preference::Auto, t, &prober, &cache, &Cancel::new(), budget).unwrap();
+    assert_eq!(choice, Choice::Hardware(candidate("qsv_h264").unwrap()));
+    assert_eq!(cache.get(&prober, mf, Input::Nv12), Some(Outcome::TimedOut(secs(5))));
+    assert_eq!(clock.passed(), secs(8 + 5 + 1 + 1));
+    let asked = prober.asked.lock().unwrap().clone();
+    assert_eq!(asked, ["nvenc_h264", "mf_h264", "mf_h264", "amf_h264", "qsv_h264"]);
+    // A third start reads every outcome from the cache and takes no time.
+    assert_eq!(resolve_within(&Preference::Auto, t, &prober, &cache, &Cancel::new(), budget).unwrap(), choice);
+    assert_eq!((clock.passed(), prober.asked.lock().unwrap().len()), (secs(15), 5));
+    let named = resolve_within(
+        &Preference::Named("mf_h264".into()),
+        t,
+        &prober,
+        &ProbeCache::new(),
+        &Cancel::new(),
+        Budget { total: secs(2), clock: &clock },
+    );
+    assert_eq!(named, Err(Error::Failed { candidate: mf, outcome: Outcome::TimedOut(secs(2)) }), "a named encoder's test has the budget too");
+}
+
+/// A file in a folder of its own under the system's temporary folder.
+fn temp_file(name: &str) -> PathBuf {
+    let dir = std::env::temp_dir().join(format!("craft-hwenc-{}-{name}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    dir.join("hardware-encoder-tests.txt")
+}
+
+fn fingerprint() -> Fingerprint {
+    Fingerprint {
+        program: PathBuf::from("fake-ffmpeg"),
+        ffmpeg_version: "ffmpeg version 8.0; 1000 bytes; modified 1.000000000".into(),
+        driver: "10de:2684 GPU 591.44".into(),
+        also: vec![PathBuf::from("<in process>")],
+    }
+}
+
+#[test]
+fn saved_outcomes_are_read_back_for_the_same_ffmpeg_and_driver() {
+    let path = temp_file("hit");
+    assert_eq!(ProbeCache::new().load(&path, &fingerprint()), Loaded::Missing);
+    let fake = Fake::new(&[
+        ("nvenc_h264", Outcome::NoDevice("line one\tcolumn\nline two \\ end".into())),
+        ("mf_h264", Outcome::Works),
+        ("amf_h264", Outcome::Busy("no free session".into())),
+        ("qsv_h264", Outcome::Works),
+    ]);
+    let cache = ProbeCache::new();
+    let t = target(Vendor::Nvidia, Os::Windows);
+    assert_eq!(resolve(&Preference::Auto, t, &fake, &cache, &Cancel::new()).unwrap(), Choice::Hardware(candidate("mf_h264").unwrap()));
+    for id in ["amf_h264", "qsv_h264"] {
+        cache.outcome(&fake, candidate(id).unwrap(), Input::Nv12, &Cancel::new());
+    }
+    // A failure while encoding leaves the candidate out of the file, so the next session tests it.
+    cache.mark_failed(fake.program(), candidate("qsv_h264").unwrap(), "the device was lost");
+    assert_eq!(cache.save(&path, &fingerprint()).unwrap(), 2, "NVENC and Media Foundation; a busy device is not saved");
+    let next = ProbeCache::new();
+    assert_eq!(next.load(&path, &fingerprint()), Loaded::Read(2));
+    let quiet = Fake::new(&[("nvenc_h264", Outcome::Works)]);
+    assert_eq!(resolve(&Preference::Auto, t, &quiet, &next, &Cancel::new()).unwrap(), Choice::Hardware(candidate("mf_h264").unwrap()));
+    assert!(quiet.asked().is_empty(), "every outcome came from the file: {:?}", quiet.asked());
+    assert_eq!(next.get(&quiet, candidate("nvenc_h264").unwrap(), Input::Nv12), Some(Outcome::NoDevice("line one\tcolumn\nline two \\ end".into())));
+    assert_eq!(next.get(&quiet, candidate("qsv_h264").unwrap(), Input::Nv12), None);
+    // Encode arguments are part of what is kept.
+    struct WithArgs(Fake);
+    impl Prober for WithArgs {
+        fn program(&self) -> &Path {
+            self.0.program()
+        }
+        fn probe(&self, c: &'static Candidate, i: Input, cancel: &Cancel) -> Outcome {
+            self.0.probe(c, i, cancel)
+        }
+        fn args(&self, _: &'static Candidate, _: Input) -> Vec<String> {
+            vec!["-c:v".into(), "h264_nvenc".into(), "-metadata".into(), "title=a\tb".into()]
+        }
+    }
+    let with_args = WithArgs(Fake::new(&[("nvenc_h264", Outcome::Works)]));
+    let nvenc = candidate("nvenc_h264").unwrap();
+    next.outcome(&with_args, nvenc, Input::Nv12, &Cancel::new());
+    next.save(&path, &fingerprint()).unwrap();
+    let again = ProbeCache::new();
+    assert_eq!(again.load(&path, &fingerprint()), Loaded::Read(3));
+    assert_eq!(again.get(&with_args, nvenc, Input::Nv12), Some(Outcome::Works));
+    // An outcome this session already has is kept over the file's.
+    let mine = ProbeCache::new();
+    mine.outcome(&Fake::new(&[("mf_h264", Outcome::Failed("mine".into()))]), candidate("mf_h264").unwrap(), Input::Nv12, &Cancel::new());
+    mine.load(&path, &fingerprint());
+    assert_eq!(mine.get(&quiet, candidate("mf_h264").unwrap(), Input::Nv12), Some(Outcome::Failed("mine".into())));
+    let _ = std::fs::remove_dir_all(path.parent().unwrap());
+}
+
+#[test]
+fn a_file_saved_for_another_ffmpeg_or_driver_is_not_read() {
+    let path = temp_file("stale");
+    let cache = ProbeCache::new();
+    let fake = Fake::new(&[("nvenc_h264", Outcome::Works)]);
+    let nvenc = candidate("nvenc_h264").unwrap();
+    cache.outcome(&fake, nvenc, Input::Nv12, &Cancel::new());
+    cache.save(&path, &fingerprint()).unwrap();
+    let changes = [
+        Fingerprint { ffmpeg_version: "ffmpeg version 8.1; 1000 bytes; modified 1.000000000".into(), ..fingerprint() },
+        Fingerprint { ffmpeg_version: "ffmpeg version 8.0; 1001 bytes; modified 2.000000000".into(), ..fingerprint() },
+        Fingerprint { driver: "10de:2684 GPU 595.02".into(), ..fingerprint() },
+        Fingerprint { program: PathBuf::from("other-ffmpeg"), ..fingerprint() },
+        Fingerprint { also: Vec::new(), ..fingerprint() },
+    ];
+    for f in &changes {
+        let fresh = ProbeCache::new();
+        assert_eq!(fresh.load(&path, f), Loaded::Stale, "{f:?}");
+        assert_eq!(fresh.get(&fake, nvenc, Input::Nv12), None);
+    }
+    let text = std::fs::read_to_string(&path).unwrap();
+    std::fs::write(&path, text.replacen(&format!("outcomes {CACHE_VERSION}\n"), &format!("outcomes {}\n", CACHE_VERSION + 1), 1)).unwrap();
+    assert_eq!(ProbeCache::new().load(&path, &fingerprint()), Loaded::Stale, "another file version");
+    // Saving for the new fingerprint replaces the file.
+    cache.save(&path, &changes[2]).unwrap();
+    assert_eq!(ProbeCache::new().load(&path, &changes[2]), Loaded::Read(1));
+    assert_eq!(ProbeCache::new().load(&path, &fingerprint()), Loaded::Stale);
+    let _ = std::fs::remove_dir_all(path.parent().unwrap());
+}
+
+#[test]
+fn a_damaged_or_oversized_file_is_not_read() {
+    let path = temp_file("corrupt");
+    let head = format!(
+        "craft-hwenc test outcomes {CACHE_VERSION}\nprogram\tfake-ffmpeg\nffmpeg\tffmpeg version 8.0; 1000 bytes; modified 1.000000000\ndriver\t10de:2684 GPU 591.44\nalso\t<in process>\n"
+    );
+    let good = "outcome\tfake-ffmpeg\tnvenc_h264\tnv12\tworks\t\t-c:v\th264_nvenc\n";
+    let damaged: Vec<(String, Vec<u8>)> = vec![
+        ("not a cache file".into(), b"hello\n".to_vec()),
+        ("an empty file".into(), Vec::new()),
+        ("no driver line".into(), format!("craft-hwenc test outcomes {CACHE_VERSION}\nprogram\tfake-ffmpeg\nffmpeg\tx\n").into_bytes()),
+        ("a version that is not a number".into(), b"craft-hwenc test outcomes one\n".to_vec()),
+        ("an unknown escape".into(), format!("{head}outcome\tfake-ffmpeg\tnvenc_h264\tnv12\tfailed\tbad \\q\n").into_bytes()),
+        ("an unknown encoder".into(), format!("{head}{good}outcome\tfake-ffmpeg\tnvenc_h999\tnv12\tworks\t\n").into_bytes()),
+        ("an unknown result".into(), format!("{head}outcome\tfake-ffmpeg\tnvenc_h264\tnv12\tmaybe\t\n").into_bytes()),
+        ("an unknown input".into(), format!("{head}outcome\tfake-ffmpeg\tnvenc_h264\tyuv444\tworks\t\n").into_bytes()),
+        ("a cut-off outcome".into(), format!("{head}outcome\tfake-ffmpeg\tnvenc_h264\n").into_bytes()),
+        ("a program the file does not name".into(), format!("{head}outcome\telsewhere\tnvenc_h264\tnv12\tworks\t\n").into_bytes()),
+        ("an unknown line".into(), format!("{head}{good}rm -rf /\n").into_bytes()),
+        ("not UTF-8".into(), [head.as_bytes(), b"outcome\tfake-ffmpeg\tnvenc_h264\tnv12\tfailed\t\xff\xfe\n"].concat()),
+        ("too many outcomes".into(), format!("{head}{}", good.repeat(4097)).into_bytes()),
+    ];
+    let fake = Fake::new(&[]);
+    let nvenc = candidate("nvenc_h264").unwrap();
+    for (what, bytes) in damaged {
+        std::fs::write(&path, &bytes).unwrap();
+        let cache = ProbeCache::new();
+        assert!(matches!(cache.load(&path, &fingerprint()), Loaded::Corrupt(_)), "{what}");
+        assert_eq!(cache.get(&fake, nvenc, Input::Nv12), None, "{what}: nothing is read");
+    }
+    std::fs::write(&path, format!("{head}{good}")).unwrap();
+    assert_eq!(ProbeCache::new().load(&path, &fingerprint()), Loaded::Read(1), "the same file undamaged");
+    // A file past the limit is refused before it is read.
+    let big = std::fs::File::create(&path).unwrap();
+    big.set_len(MAX_CACHE_BYTES + 1).unwrap();
+    assert_eq!(ProbeCache::new().load(&path, &fingerprint()), Loaded::Corrupt("it is larger than 1024 KiB".into()));
+    // A folder in the file's place is an error, not a crash.
+    let _ = std::fs::remove_file(&path);
+    std::fs::create_dir_all(&path).unwrap();
+    assert!(matches!(ProbeCache::new().load(&path, &fingerprint()), Loaded::Corrupt(_)));
+    assert!(ProbeCache::new().save(&path, &fingerprint()).is_err());
+    assert_eq!(ffmpeg_version(Path::new("no-such-dir/ffmpeg"), &Cancel::new(), Duration::from_secs(1)), "unknown");
+    let _ = std::fs::remove_dir_all(path.parent().unwrap());
+}
+
+#[test]
+fn a_saved_file_stays_within_what_is_read_back() {
+    let path = temp_file("big");
+    let cache = ProbeCache::new();
+    {
+        let mut outcomes = cache.outcomes.lock().unwrap();
+        for i in 0..400 {
+            let args = vec![format!("-preset {i:04} {}", "x".repeat(4000))];
+            outcomes.insert((PathBuf::from("fake-ffmpeg"), "nvenc_h264", Input::Nv12, args), Outcome::Works);
+        }
+    }
+    let saved = cache.save(&path, &fingerprint()).unwrap();
+    assert!((1..400).contains(&saved), "{saved} of 400 outcomes fit");
+    assert!(std::fs::metadata(&path).unwrap().len() <= MAX_CACHE_BYTES);
+    assert_eq!(ProbeCache::new().load(&path, &fingerprint()), Loaded::Read(saved));
+    let huge = Fingerprint { driver: "d".repeat(2 << 20), ..fingerprint() };
+    assert!(cache.save(&path, &huge).is_err(), "a fingerprint past the limit is not written");
+    let _ = std::fs::remove_dir_all(path.parent().unwrap());
+}
+
+#[test]
+fn a_saved_va_api_test_names_the_render_node_it_passed_on() {
+    use crate::disk::saved_vaapi_node;
+    let devices = ["/dev/dri/renderD128".to_string(), "/dev/dri/renderD129".to_string()];
+    let vaapi = candidate("vaapi_hevc").unwrap();
+    let key = |id: &'static str, node: &str| {
+        (PathBuf::from("ffmpeg"), id, Input::Nv12, vec!["-vaapi_device".to_string(), node.to_string(), "-c:v".into(), "hevc_vaapi".into()])
+    };
+    let later = key("vaapi_hevc", "/dev/dri/renderD129");
+    assert_eq!(saved_vaapi_node(&later, &devices), Some((vaapi, "/dev/dri/renderD129")));
+    assert_eq!(saved_vaapi_node(&key("vaapi_hevc", "/dev/dri/renderD140"), &devices), None, "a node this system does not have");
+    assert_eq!(saved_vaapi_node(&key("nvenc_hevc", "/dev/dri/renderD129"), &devices), None, "not a VA-API encoder");
+    let mut cut = later.clone();
+    cut.3.truncate(1);
+    assert_eq!(saved_vaapi_node(&cut, &devices), None, "no node after -vaapi_device");
+}
+
+#[test]
+fn a_va_api_test_is_saved_with_the_node_it_passed_on() {
+    use crate::candidate::use_vaapi_device;
+    let path = temp_file("vaapi");
+    let vaapi = candidate("vaapi_h264").unwrap();
+    let fake = Fake::new(&[("vaapi_h264", Outcome::Works)]);
+    let cache = ProbeCache::new();
+    // The test passed on the node this system lists last, whatever node its arguments named.
+    let node = vaapi_devices().pop().unwrap();
+    assert_eq!(cache.outcome(&fake, vaapi, Input::Nv12, &Cancel::new()), Outcome::Works);
+    use_vaapi_device(vaapi, &node);
+    assert_eq!(cache.save(&path, &fingerprint()).unwrap(), 1);
+    let text = std::fs::read_to_string(&path).unwrap();
+    assert!(text.contains(&format!("-vaapi_device\t{node}\t")), "{text}");
+    // Kept apart from the node, the outcome is found whatever node the arguments name.
+    let next = ProbeCache::new();
+    assert_eq!(next.load(&path, &fingerprint()), Loaded::Read(1));
+    assert_eq!(next.get(&fake, vaapi, Input::Nv12), Some(Outcome::Works));
+    // A pass on a node this system no longer has is tested again.
+    std::fs::write(&path, text.replace(&node, "/dev/dri/renderD999")).unwrap();
+    let gone = ProbeCache::new();
+    assert_eq!(gone.load(&path, &fingerprint()), Loaded::Read(0));
+    assert_eq!(gone.get(&fake, vaapi, Input::Nv12), None);
+    let _ = std::fs::remove_dir_all(path.parent().unwrap());
 }

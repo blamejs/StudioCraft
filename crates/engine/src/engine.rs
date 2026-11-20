@@ -269,6 +269,7 @@ impl Engine {
                 }
                 Ok(Outcome::runtime(RuntimeAction::AudioTracksMarker { name }))
             }
+            Command::RetestHardwareEncoders {} => Ok(Outcome::runtime(RuntimeAction::RetestHardwareEncoders)),
             Command::OpenSettings {} => Ok(Outcome::runtime(RuntimeAction::OpenSettings)),
             Command::Exit {} => Ok(Outcome::runtime(RuntimeAction::Exit)),
             // Queries: no history step, no revision bump, no change to the dirty flag.

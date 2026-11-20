@@ -288,7 +288,13 @@ again on a new device, and after 3 losses in 10 minutes it draws in software.
 Hardware: Automatic, Software only, or one of the listed hardware encoders. Software only uses
 x264 without testing the hardware encoders. Automatic tests each candidate with a one-frame
 encode, in an order set by the graphics adapter's vendor, and uses x264 when none works, or
-H.264 (built in) for a stream. The candidates run in `ffmpeg`, except for a stream:
+H.264 (built in) for a stream. One test stops after 5 s, and the tests of one start stop after
+10 s together; a candidate left untested is tested at the next start. The results are kept in
+`hardware-encoder-tests.txt` in the settings folder, for the `ffmpeg` program, its version, the
+graphics driver and the StudioCraft version they were found with. A change to any of them, or a
+new graphics device after a device loss, tests the encoders again. Tools › Test Hardware Encoders
+Again (the `hardware_encoders.retest` command) forgets the results and removes the file. The
+candidates run in `ffmpeg`, except for a stream:
 
 | Family | Codecs |
 | --- | --- |

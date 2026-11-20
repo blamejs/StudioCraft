@@ -39,7 +39,7 @@ use studiocraft_sources::FfmpegSetting;
 
 pub use audio_tracks::{PROGRAM_NAME, clock_text};
 pub use files::FileError;
-pub use outputs::{OutputKind, OutputState, recording_folder, recording_path, replay_path};
+pub use outputs::{HARDWARE_TESTS_FILE, OutputKind, OutputState, recording_folder, recording_path, replay_path};
 pub use studiocraft_audio_tracks::{State as AudioTracksState, Status as AudioTracksStatus, StopReason as AudioTracksStopReason};
 pub use studiocraft_platform::PlatformError;
 pub use studiocraft_platform::audio::{AudioSink, Fill, Format, OnError, Playing, SystemSink};
@@ -377,6 +377,7 @@ impl Studio {
                 RuntimeAction::StopReplay => self.stop_output(OutputKind::Replay),
                 RuntimeAction::ToggleReplay => self.toggle_output(OutputKind::Replay)?,
                 RuntimeAction::SaveReplay => self.save_replay()?,
+                RuntimeAction::RetestHardwareEncoders => self.retest_hardware_encoders()?,
                 RuntimeAction::OpenSettings => ui = Some(UiAction::OpenSettings),
                 RuntimeAction::Exit => ui = Some(UiAction::Exit),
             }
