@@ -18,41 +18,53 @@ use crate::i18n::Msg;
 
 /// Which docks are shown, their order in the dock strip, and the sizes set by dragging the dock
 /// strip's edges. A size of 0 is not set and uses the default in [`crate::strip`]; Docks › Reset
-/// Docks sets them all back to 0 and the order back to Scenes, Sources, Audio Mixer.
+/// Docks sets them all back to 0 and the order back to Scenes, Sources, Audio Mixer, Application
+/// Audio.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Docks {
     pub scenes: bool,
     pub sources: bool,
     pub mixer: bool,
+    /// The Application Audio dock. It is hidden until Docks › Application Audio shows it.
+    pub app_audio: bool,
     pub transitions: bool,
     pub controls: bool,
     /// The dock strip's height in points.
     pub height: f32,
-    /// The widths of the Scenes, Sources and Audio Mixer docks in points; the last dock in the
-    /// strip takes the rest.
+    /// The widths of the Scenes, Sources, Audio Mixer and Application Audio docks in points; the
+    /// last dock in the strip takes the rest.
     pub scenes_width: f32,
     pub sources_width: f32,
     pub mixer_width: f32,
-    /// The docks from left to right by index (0 Scenes, 1 Sources, 2 Audio Mixer). Read it with
-    /// [`Docks::order`].
+    pub app_audio_width: f32,
+    /// The docks from left to right by index (0 Scenes, 1 Sources, 2 Audio Mixer, 3 Application
+    /// Audio). Read it with [`Docks::order`].
     #[serde(deserialize_with = "lenient_order")]
-    pub order: [u8; 3],
-    /// The docks shown in a window of their own instead of in the strip, by index.
-    pub floating: [bool; 3],
+    pub order: [u8; DOCK_COUNT],
+    /// The docks shown in a window of their own instead of in the strip, by index. A saved list
+    /// with fewer entries (from before Application Audio) reads the missing ones as their defaults.
+    #[serde(deserialize_with = "lenient_len")]
+    pub floating: [bool; DOCK_COUNT],
     /// Where each floating dock's window was last moved to, as its top-left corner in points, by
     /// index. A place is used only when `window_placed` is set for that dock.
-    pub window_pos: [[f32; 2]; 3],
+    #[serde(deserialize_with = "lenient_len")]
+    pub window_pos: [[f32; 2]; DOCK_COUNT],
     /// Whether each dock's window has a saved place; without one the window takes its default
     /// place.
-    pub window_placed: [bool; 3],
+    #[serde(deserialize_with = "lenient_len")]
+    pub window_placed: [bool; DOCK_COUNT],
     /// The size of each floating dock's window with its frame, in points, by index; `[0, 0]` is
     /// not set and gives the window its default size.
-    pub window_size: [[f32; 2]; 3],
+    #[serde(deserialize_with = "lenient_len")]
+    pub window_size: [[f32; 2]; DOCK_COUNT],
 }
 
+/// How many docks there are: Scenes, Sources, Audio Mixer and Application Audio.
+pub const DOCK_COUNT: usize = 4;
+
 /// The docks' order by default.
-pub const DOCK_ORDER: [u8; 3] = [0, 1, 2];
+pub const DOCK_ORDER: [u8; DOCK_COUNT] = [0, 1, 2, 3];
 
 impl Default for Docks {
     fn default() -> Self {
@@ -60,25 +72,61 @@ impl Default for Docks {
             scenes: true,
             sources: true,
             mixer: true,
+            app_audio: false,
             transitions: true,
             controls: true,
             height: 0.0,
             scenes_width: 0.0,
             sources_width: 0.0,
             mixer_width: 0.0,
+            app_audio_width: 0.0,
             order: DOCK_ORDER,
-            floating: [false; 3],
-            window_pos: [[0.0; 2]; 3],
-            window_placed: [false; 3],
-            window_size: [[0.0; 2]; 3],
+            floating: [false; DOCK_COUNT],
+            window_pos: [[0.0; 2]; DOCK_COUNT],
+            window_placed: [false; DOCK_COUNT],
+            window_size: [[0.0; 2]; DOCK_COUNT],
         }
     }
 }
 
-/// Reads a saved order. Only the first three entries of a list are kept, and the rest are skipped
-/// without being stored. An entry that is not a whole number from 0 to 255, or a value that is not
-/// a list, reads as unknown ([`u8::MAX`]), which [`Docks::order`] replaces with the default order.
-fn lenient_order<'de, D: serde::Deserializer<'de>>(d: D) -> Result<[u8; 3], D::Error> {
+/// Reads a list of [`DOCK_COUNT`] values by dock index. A shorter list, saved before a dock was
+/// added, reads the missing entries as their defaults; entries past the last dock are skipped
+/// without being stored. An entry of the wrong type is an error, as in a list of the full length.
+fn lenient_len<'de, D, T, const N: usize>(d: D) -> Result<[T; N], D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de> + Default + Copy,
+{
+    use serde::de::{IgnoredAny, SeqAccess, Visitor};
+
+    struct List<T, const N: usize>(std::marker::PhantomData<T>);
+
+    impl<'de, T: Deserialize<'de> + Default + Copy, const N: usize> Visitor<'de> for List<T, N> {
+        type Value = [T; N];
+        fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+            f.write_str("a list with a value for each dock")
+        }
+        fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<[T; N], A::Error> {
+            let mut out = [T::default(); N];
+            for o in &mut out {
+                match seq.next_element::<T>()? {
+                    Some(v) => *o = v,
+                    None => return Ok(out),
+                }
+            }
+            while seq.next_element::<IgnoredAny>()?.is_some() {}
+            Ok(out)
+        }
+    }
+
+    d.deserialize_seq(List::<T, N>(std::marker::PhantomData))
+}
+
+/// Reads a saved order. Only the first [`DOCK_COUNT`] entries of a list are kept, and the rest are
+/// skipped without being stored. An entry that is not a whole number from 0 to 255, or a value
+/// that is not a list, reads as unknown ([`u8::MAX`]), which [`Docks::order`] replaces with the
+/// default order.
+fn lenient_order<'de, D: serde::Deserializer<'de>>(d: D) -> Result<[u8; DOCK_COUNT], D::Error> {
     use serde::de::{self, IgnoredAny, MapAccess, SeqAccess, Visitor};
 
     /// One value read as a dock index, or [`u8::MAX`] when it is not one.
@@ -141,12 +189,12 @@ fn lenient_order<'de, D: serde::Deserializer<'de>>(d: D) -> Result<[u8; 3], D::E
     struct Order;
 
     impl<'de> Visitor<'de> for Order {
-        type Value = [u8; 3];
+        type Value = [u8; DOCK_COUNT];
         fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
             f.write_str("a list of dock indexes")
         }
-        fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<[u8; 3], A::Error> {
-            let mut out = [u8::MAX; 3];
+        fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<[u8; DOCK_COUNT], A::Error> {
+            let mut out = [u8::MAX; DOCK_COUNT];
             for o in &mut out {
                 match seq.next_element::<Slot>()? {
                     Some(Slot(v)) => *o = v,
@@ -156,36 +204,36 @@ fn lenient_order<'de, D: serde::Deserializer<'de>>(d: D) -> Result<[u8; 3], D::E
             while seq.next_element::<IgnoredAny>()?.is_some() {}
             Ok(out)
         }
-        fn visit_bool<E: de::Error>(self, _: bool) -> Result<[u8; 3], E> {
-            Ok([u8::MAX; 3])
+        fn visit_bool<E: de::Error>(self, _: bool) -> Result<[u8; DOCK_COUNT], E> {
+            Ok([u8::MAX; DOCK_COUNT])
         }
-        fn visit_i64<E: de::Error>(self, _: i64) -> Result<[u8; 3], E> {
-            Ok([u8::MAX; 3])
+        fn visit_i64<E: de::Error>(self, _: i64) -> Result<[u8; DOCK_COUNT], E> {
+            Ok([u8::MAX; DOCK_COUNT])
         }
-        fn visit_u64<E: de::Error>(self, _: u64) -> Result<[u8; 3], E> {
-            Ok([u8::MAX; 3])
+        fn visit_u64<E: de::Error>(self, _: u64) -> Result<[u8; DOCK_COUNT], E> {
+            Ok([u8::MAX; DOCK_COUNT])
         }
-        fn visit_f64<E: de::Error>(self, _: f64) -> Result<[u8; 3], E> {
-            Ok([u8::MAX; 3])
+        fn visit_f64<E: de::Error>(self, _: f64) -> Result<[u8; DOCK_COUNT], E> {
+            Ok([u8::MAX; DOCK_COUNT])
         }
-        fn visit_str<E: de::Error>(self, _: &str) -> Result<[u8; 3], E> {
-            Ok([u8::MAX; 3])
+        fn visit_str<E: de::Error>(self, _: &str) -> Result<[u8; DOCK_COUNT], E> {
+            Ok([u8::MAX; DOCK_COUNT])
         }
-        fn visit_bytes<E: de::Error>(self, _: &[u8]) -> Result<[u8; 3], E> {
-            Ok([u8::MAX; 3])
+        fn visit_bytes<E: de::Error>(self, _: &[u8]) -> Result<[u8; DOCK_COUNT], E> {
+            Ok([u8::MAX; DOCK_COUNT])
         }
-        fn visit_unit<E: de::Error>(self) -> Result<[u8; 3], E> {
-            Ok([u8::MAX; 3])
+        fn visit_unit<E: de::Error>(self) -> Result<[u8; DOCK_COUNT], E> {
+            Ok([u8::MAX; DOCK_COUNT])
         }
-        fn visit_none<E: de::Error>(self) -> Result<[u8; 3], E> {
-            Ok([u8::MAX; 3])
+        fn visit_none<E: de::Error>(self) -> Result<[u8; DOCK_COUNT], E> {
+            Ok([u8::MAX; DOCK_COUNT])
         }
-        fn visit_some<D: serde::Deserializer<'de>>(self, d: D) -> Result<[u8; 3], D::Error> {
+        fn visit_some<D: serde::Deserializer<'de>>(self, d: D) -> Result<[u8; DOCK_COUNT], D::Error> {
             d.deserialize_any(Order)
         }
-        fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<[u8; 3], A::Error> {
+        fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<[u8; DOCK_COUNT], A::Error> {
             while map.next_entry::<IgnoredAny, IgnoredAny>()?.is_some() {}
-            Ok([u8::MAX; 3])
+            Ok([u8::MAX; DOCK_COUNT])
         }
     }
 
@@ -196,7 +244,7 @@ impl Docks {
     /// The docks from left to right. A saved order that leaves a dock out, names one twice or
     /// names an unknown one keeps its usable part, followed by the docks it misses in their
     /// default order.
-    pub fn order(&self) -> [u8; 3] {
+    pub fn order(&self) -> [u8; DOCK_COUNT] {
         let mut out = DOCK_ORDER;
         let mut n = 0;
         for i in self.order.iter().chain(DOCK_ORDER.iter()) {
@@ -213,7 +261,9 @@ impl Docks {
         match i {
             0 => self.scenes,
             1 => self.sources,
-            _ => self.mixer,
+            2 => self.mixer,
+            3 => self.app_audio,
+            _ => false,
         }
     }
 
@@ -265,8 +315,8 @@ impl Docks {
     }
 
     /// The saved widths by dock index.
-    pub fn widths(&self) -> [f32; 3] {
-        [self.scenes_width, self.sources_width, self.mixer_width]
+    pub fn widths(&self) -> [f32; DOCK_COUNT] {
+        [self.scenes_width, self.sources_width, self.mixer_width, self.app_audio_width]
     }
 
     /// Move dock `i` past the nearest dock in the strip on its left (`left`) or its right. False
@@ -460,13 +510,16 @@ impl Prefs {
 impl craft_settings::Settings for Prefs {
     const APP_ID: &'static str = "studiocraft";
     /// Version 2 adds `docks.mixer_width` and `docks.order`, version 3 adds `docks.floating`,
-    /// `docks.window_pos`, `docks.window_placed` and `docks.window_size`, and version 4 adds
-    /// `dock_layouts`.
-    const SCHEMA_VERSION: u32 = 4;
+    /// `docks.window_pos`, `docks.window_placed` and `docks.window_size`, version 4 adds
+    /// `dock_layouts`, and version 5 adds `docks.app_audio` and `docks.app_audio_width` and a
+    /// fourth entry, for Application Audio, in each list kept by dock index.
+    const SCHEMA_VERSION: u32 = 5;
 
-    /// Each version up to 4: an older file lacks the keys its next version adds, so the docks keep
-    /// their saved settings and read the new keys as their defaults (every dock in the strip, no
-    /// saved window places or sizes, no saved layouts). The file is left as it is.
+    /// Each version up to 5: an older file lacks the keys its next version adds, so the docks keep
+    /// their saved settings and read the new keys as their defaults (every dock but Application
+    /// Audio in the strip, no saved window places or sizes, no saved layouts). Lists kept by dock
+    /// index that are one entry short read the missing entry as its default. The file is left as
+    /// it is.
     fn migrate(from: u32, doc: &mut craft_settings::DocumentMut) -> Result<(), craft_settings::MigrateError> {
         let _ = (from, doc);
         Ok(())
@@ -887,7 +940,7 @@ mod tests {
         s.update(|p| p.docks.height = 250.0);
         s.flush().unwrap();
         let text = std::fs::read_to_string(dir.join("config.toml")).unwrap();
-        assert!(text.contains("schema_version = 4"), "{text}");
+        assert!(text.contains("schema_version = 5"), "{text}");
         let (again, _) = Store::open(Location::Dir(dir.clone()));
         assert_eq!(again.prefs().docks, Docks { height: 250.0, ..want });
         let _ = std::fs::remove_dir_all(&dir);
@@ -902,14 +955,15 @@ mod tests {
         std::fs::write(dir.join("config.toml"), v2).unwrap();
         let (mut s, _) = Store::open(Location::Dir(dir.clone()));
         let d = s.prefs().docks;
-        assert_eq!(d, Docks { mixer_width: 420.0, order: [2, 0, 1], ..Docks::default() });
-        assert_eq!((d.floating, d.window_pos(0)), ([false; 3], None));
+        assert_eq!(d, Docks { mixer_width: 420.0, order: [2, 0, 1, u8::MAX], ..Docks::default() });
+        assert_eq!(d.order(), [2, 0, 1, 3]);
+        assert_eq!((d.floating, d.window_pos(0)), ([false; DOCK_COUNT], None));
         s.update(|p| p.docks.floating[1] = true);
         s.flush().unwrap();
         let text = std::fs::read_to_string(dir.join("config.toml")).unwrap();
-        assert!(text.contains("schema_version = 4"), "{text}");
+        assert!(text.contains("schema_version = 5"), "{text}");
         let (again, _) = Store::open(Location::Dir(dir.clone()));
-        assert_eq!(again.prefs().docks.floating, [false, true, false]);
+        assert_eq!(again.prefs().docks.floating, [false, true, false, false]);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -933,9 +987,50 @@ mod tests {
         let p = again.prefs();
         assert_eq!(p.dock_layout_names(), ["Talk", "Game"]);
         let talk = p.dock_layout("talk").map(|l| l.docks);
-        assert_eq!(talk.map(|d| (d.mixer, d.floating)), Some((false, [false, true, false])));
+        assert_eq!(talk.map(|d| (d.mixer, d.floating)), Some((false, [false, true, false, false])));
         assert_eq!(p.dock_layout("Game").map(|l| l.docks.mixer), Some(true));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_version_4_config_keeps_its_docks_and_hides_application_audio() {
+        let dir = std::env::temp_dir().join(format!("studiocraft-store-prefs-v4-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let v4 = "schema_version = 4\n\n[docks]\norder = [2, 0, 1]\nfloating = [false, false, true]\nwindow_pos = [[0.0, 0.0], [0.0, 0.0], [40.0, 60.0]]\n\
+                  window_placed = [false, false, true]\nwindow_size = [[0.0, 0.0], [0.0, 0.0], [420.0, 300.0]]\n\n\
+                  [[dock_layouts]]\nname = \"Talk\"\n\n[dock_layouts.docks]\nsources = false\nfloating = [true, false, false]\n";
+        std::fs::write(dir.join("config.toml"), v4).unwrap();
+        let (mut s, problems) = Store::open(Location::Dir(dir.clone()));
+        assert!(problems.is_empty(), "{problems:?}");
+        let d = s.prefs().docks;
+        assert!(!d.app_audio, "Application Audio starts hidden");
+        assert_eq!(d.order(), [2, 0, 1, 3], "Application Audio goes after the saved order");
+        assert_eq!(d.floating, [false, false, true, false]);
+        assert_eq!((d.window_pos(2), d.window_size(2), d.window_pos(3)), (Some([40.0, 60.0]), Some([420.0, 300.0]), None));
+        assert_eq!(d.shown(), [0, 1]);
+        assert_eq!(s.prefs().dock_layout("Talk").map(|l| l.docks.floating), Some([true, false, false, false]));
+        s.update(|p| {
+            p.docks.app_audio = true;
+            p.docks.floating[3] = true;
+        });
+        s.flush().unwrap();
+        let text = std::fs::read_to_string(dir.join("config.toml")).unwrap();
+        assert!(text.contains("schema_version = 5"), "{text}");
+        let (again, _) = Store::open(Location::Dir(dir.clone()));
+        assert_eq!(again.prefs().docks.floating_shown(), [2, 3]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn lists_kept_by_dock_index_read_short_lists_and_cut_long_ones() {
+        let read = |text: &str| serde_json::from_str::<Docks>(text);
+        assert_eq!(read(r#"{"floating": [true]}"#).ok().map(|d| d.floating), Some([true, false, false, false]));
+        assert_eq!(read(r#"{"floating": [true, true, true, true, true, true]}"#).ok().map(|d| d.floating), Some([true; DOCK_COUNT]));
+        assert_eq!(read(r#"{"window_size": [[1.0, 2.0]]}"#).ok().map(|d| d.window_size), Some([[1.0, 2.0], [0.0; 2], [0.0; 2], [0.0; 2]]));
+        assert_eq!(read(r#"{"floating": []}"#).ok().map(|d| d.floating), Some([false; DOCK_COUNT]));
+        assert!(read(r#"{"floating": ["yes"]}"#).is_err(), "a value of the wrong type is still an error");
+        assert!(read(r#"{"floating": true}"#).is_err(), "so is a value that is not a list");
     }
 
     #[test]
@@ -980,7 +1075,7 @@ mod tests {
         assert_eq!(d.window_pos(2), None);
         assert_eq!(d.window_pos(9), None, "an unknown dock");
         assert!(!d.place_window(9, [1.0, 1.0], [300.0, 200.0]));
-        d.floating = [true, false, true];
+        d.floating = [true, false, true, false];
         d.mixer = false;
         assert_eq!((d.shown(), d.floating_shown()), (vec![1], vec![0]), "a hidden dock is in neither list");
     }
@@ -1005,21 +1100,22 @@ mod tests {
 
     #[test]
     fn a_saved_dock_order_is_kept_and_a_damaged_one_is_repaired() {
-        let with = |order: [u8; 3]| Docks { order, ..Docks::default() };
-        assert_eq!(with([2, 0, 1]).order(), [2, 0, 1]);
-        assert_eq!(with([2, 2, 2]).order(), [2, 0, 1], "a dock named twice keeps its first place");
-        assert_eq!(with([9, 1, 200]).order(), [1, 0, 2], "unknown docks are left out");
-        assert_eq!(with([u8::MAX; 3]).order(), DOCK_ORDER);
+        let with = |order: [u8; DOCK_COUNT]| Docks { order, ..Docks::default() };
+        assert_eq!(with([2, 0, 1, 3]).order(), [2, 0, 1, 3]);
+        assert_eq!(with([2, 2, 2, 2]).order(), [2, 0, 1, 3], "a dock named twice keeps its first place");
+        assert_eq!(with([9, 1, 200, 3]).order(), [1, 3, 0, 2], "unknown docks are left out");
+        assert_eq!(with([u8::MAX; DOCK_COUNT]).order(), DOCK_ORDER);
         let read = |text: &str| serde_json::from_str::<Docks>(text).map(|d| d.order());
-        assert_eq!(read(r#"{"order": [1, 2, 0]}"#).ok(), Some([1, 2, 0]));
-        assert_eq!(read(r#"{"order": [1]}"#).ok(), Some([1, 0, 2]), "a short list is filled in");
-        assert_eq!(read(r#"{"order": [1, 0, 2, 2, 1]}"#).ok(), Some([1, 0, 2]), "a long list is cut");
-        assert_eq!(read(r#"{"order": [-1, 300, 2]}"#).ok(), Some([2, 0, 1]));
+        assert_eq!(read(r#"{"order": [1, 2, 0]}"#).ok(), Some([1, 2, 0, 3]), "a list saved before Application Audio");
+        assert_eq!(read(r#"{"order": [3, 1, 2, 0]}"#).ok(), Some([3, 1, 2, 0]));
+        assert_eq!(read(r#"{"order": [1]}"#).ok(), Some([1, 0, 2, 3]), "a short list is filled in");
+        assert_eq!(read(r#"{"order": [1, 0, 2, 2, 1]}"#).ok(), Some([1, 0, 2, 3]), "a long list is cut");
+        assert_eq!(read(r#"{"order": [-1, 300, 2]}"#).ok(), Some([2, 0, 1, 3]));
         assert_eq!(read(r#"{"order": "left"}"#).ok(), Some(DOCK_ORDER), "not a list");
         assert_eq!(read(r#"{"order": [1.5, "x", 0]}"#).ok(), Some(DOCK_ORDER), "a list of other things");
-        assert_eq!(read(r#"{"order": [[2], {"a": 1}, 2, 0]}"#).ok(), Some([2, 0, 1]), "lists and tables in the list are skipped");
+        assert_eq!(read(r#"{"order": [[2], {"a": 1}, 2, 0]}"#).ok(), Some([2, 0, 1, 3]), "lists and tables in the list are skipped");
         let long = format!(r#"{{"order": [2, 1{}]}}"#, ", 0".repeat(100_000));
-        assert_eq!(read(&long).ok(), Some([2, 1, 0]), "only the first three entries are read");
+        assert_eq!(read(&long).ok(), Some([2, 1, 0, 3]), "only the first four entries are read");
         assert_eq!(read("{}").ok(), Some(DOCK_ORDER));
     }
 
@@ -1027,15 +1123,18 @@ mod tests {
     fn shift_passes_over_hidden_docks_and_stops_at_the_ends() {
         let mut d = Docks::default();
         assert!(d.shift(2, true));
-        assert_eq!(d.order(), [0, 2, 1]);
+        assert_eq!(d.order(), [0, 2, 1, 3]);
         assert!(!d.shift(0, true), "the first dock cannot move left");
-        assert_eq!(d.order(), [0, 2, 1]);
+        assert_eq!(d.order(), [0, 2, 1, 3]);
         d.mixer = false;
         assert!(d.shift(0, false), "Scenes passes the hidden mixer and lands right of Sources");
-        assert_eq!(d.order(), [2, 1, 0]);
+        assert_eq!(d.order(), [2, 1, 0, 3]);
         assert_eq!(d.shown(), [1, 0]);
-        assert!(!d.shift(0, false), "nothing shown on its right");
+        assert!(!d.shift(0, false), "nothing shown on its right: Application Audio is hidden");
         assert!(!d.shift(1, true), "only the hidden mixer is on its left");
-        assert_eq!(d.order(), [2, 1, 0]);
+        assert_eq!(d.order(), [2, 1, 0, 3]);
+        d.app_audio = true;
+        assert!(d.shift(3, true), "Application Audio moves left once it is shown");
+        assert_eq!(d.order(), [2, 1, 3, 0]);
     }
 }

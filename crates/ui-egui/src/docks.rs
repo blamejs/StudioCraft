@@ -1,12 +1,13 @@
-//! The docks under the preview: Scenes, Sources and Audio Mixer. The transition and output
-//! controls are in the output bar ([`crate::output_bar`]). Each dock has a header with its title
-//! and its actions ([`crate::kit::panel_header`]) and no footer.
+//! The docks under the preview: Scenes, Sources, Audio Mixer and Application Audio. The transition
+//! and output controls are in the output bar ([`crate::output_bar`]). Each dock has a header with
+//! its title and its actions ([`crate::kit::panel_header`]) and no footer.
 
 use std::collections::HashMap;
 
 use egui::{Color32, Rect, RichText, Sense, TextStyle, Ui, pos2, vec2};
 use serde_json::json;
-use studiocraft_media::mix::{METER_FLOOR_DB, MeterBallistics, from_db, to_db};
+use studiocraft_engine::lanes::{AppKey, Lane, LaneKind, Lanes};
+use studiocraft_media::mix::{BlockLevels, METER_FLOOR_DB, MeterBallistics, from_db, to_db};
 use studiocraft_model::{ItemId, SceneId, SourceId};
 use studiocraft_studio::Studio;
 
@@ -20,6 +21,8 @@ pub struct DockState<'a> {
     pub selected: Option<ItemId>,
     pub renaming: &'a mut Option<(Rename, String)>,
     pub meters: &'a mut HashMap<SourceId, MeterBallistics>,
+    /// The Application Audio dock's meters.
+    pub lanes: &'a mut LaneCache,
     /// Seconds since the meters were last advanced.
     pub dt: f32,
     /// The place of the dock being drawn among the docks in the strip, and how many are in the
@@ -479,6 +482,230 @@ pub fn mixer(ui: &mut Ui, studio: &Studio, st: &mut DockState, acts: &mut Vec<Ac
     drawn
 }
 
+/// An Application Audio lane, for its meter: the source that carries it, or before it has one,
+/// the application it names.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum LaneId {
+    Source(SourceId),
+    App(String),
+}
+
+/// The meter key of `lane`.
+pub fn lane_id(lane: &Lane) -> LaneId {
+    match (lane.source, &lane.app) {
+        (Some(s), _) => LaneId::Source(s),
+        (None, Some(app)) => LaneId::App(app.clone()),
+        (None, None) => LaneId::App(lane.name.clone()),
+    }
+}
+
+/// How often the Application Audio dock reads its lanes again while the collection does not
+/// change, in seconds.
+pub const LANE_REFRESH: f32 = 0.1;
+
+/// The Application Audio dock's lanes and a meter for each. The dock reads the lanes again when
+/// the collection changes and otherwise at most every [`LANE_REFRESH`] seconds, so a frame in
+/// between does not rebuild them.
+#[derive(Default)]
+pub struct LaneCache {
+    lanes: Option<Lanes>,
+    ids: Vec<LaneId>,
+    /// The application of each lane without a source, whose meter reads the system's level.
+    keys: Vec<Option<AppKey>>,
+    meters: Vec<MeterBallistics>,
+    revision: u64,
+    read_at: Option<std::time::Instant>,
+}
+
+impl LaneCache {
+    /// Reads the lanes again when they are due, and otherwise reads each application's newest
+    /// level for a lane without a source. A lane keeps its meter across reads.
+    pub fn refresh(&mut self, studio: &Studio, now: std::time::Instant) {
+        let revision = studio.engine().revision();
+        let fresh = self.read_at.is_some_and(|at| now.saturating_duration_since(at).as_secs_f32() < LANE_REFRESH);
+        if let Some(lanes) = &mut self.lanes
+            && revision == self.revision
+            && fresh
+        {
+            for (lane, key) in lanes.lanes.iter_mut().zip(&self.keys) {
+                if let Some(key) = key {
+                    lane.peak = studio.engine().app_audio_peak(key);
+                }
+            }
+            return;
+        }
+        let lanes = studio.engine().app_audio_lanes();
+        self.keys = lanes.lanes.iter().map(|l| l.app.as_deref().filter(|_| l.source.is_none()).and_then(AppKey::decode)).collect();
+        let ids: Vec<LaneId> = lanes.lanes.iter().map(lane_id).collect();
+        let mut old: Vec<(LaneId, MeterBallistics)> = self.ids.drain(..).zip(self.meters.drain(..)).collect();
+        self.meters = ids.iter().map(|id| old.iter().position(|(o, _)| o == id).map(|i| old.swap_remove(i).1).unwrap_or_default()).collect();
+        self.ids = ids;
+        self.lanes = Some(lanes);
+        self.revision = revision;
+        self.read_at = Some(now);
+    }
+
+    /// The lanes last read, if any.
+    #[cfg(test)]
+    pub fn lanes(&self) -> Option<&Lanes> {
+        self.lanes.as_ref()
+    }
+}
+
+/// What a lane's meter shows: the source's level in the mix for a lane with a source, and the
+/// application's level as the system reports it for a lane without one. A lane without a reading
+/// shows silence, so its meter falls.
+pub fn lane_levels(lane: &Lane, source: Option<BlockLevels>) -> BlockLevels {
+    if lane.source.is_some() {
+        return source.unwrap_or_default();
+    }
+    lane.peak.filter(|p| p.is_finite()).map(|p| BlockLevels { peak: [p.clamp(0.0, 1.0); 2], rms: [0.0; 2] }).unwrap_or_default()
+}
+
+/// Whether the dock warns that the program can hear a routed application twice: once through its
+/// own capture and once through a desktop audio source that is not muted, when both record the
+/// same output device. The routed application is running and its source is not muted.
+pub fn desktop_doubles(lanes: &Lanes) -> bool {
+    lanes.desktop_heard && lanes.lanes.iter().any(|l| l.kind == LaneKind::Application && l.routed_heard && !l.muted && l.running)
+}
+
+/// Whether an application lane's check box is checked: a routed source of the lane reaches the
+/// program. A lane whose routed source is set to monitor only is unchecked, so checking it routes
+/// the application again.
+pub fn lane_checked(lane: &Lane) -> bool {
+    lane.routed_heard
+}
+
+/// The settings-menu item that routes an application lane, for a lane not routed and a routed one.
+pub(crate) const ROUTE_ITEMS: [&str; 2] = ["Hear in Every Scene", "Stop Hearing in Every Scene"];
+/// The tip of an application lane's check box, for a lane not routed and a routed one.
+pub(crate) const ROUTE_TIPS: [&str; 2] =
+    ["Hear this application in every scene, with the microphone", "Stop hearing this application in every scene"];
+
+/// The lane's settings menu: routing for an application, and the properties and filters of the
+/// lane's source.
+fn lane_menu(ui: &mut Ui, lane: &Lane, acts: &mut Vec<Act>) {
+    icons::menu(ui, Icon::Gear, tl!("Lane settings"), |ui| {
+        if lane.kind == LaneKind::Application
+            && let Some(app) = &lane.app
+        {
+            let label = ROUTE_ITEMS[usize::from(lane_checked(lane))];
+            if ui.button(tl!(label)).clicked() {
+                acts.push(Act::run("app_audio.route", json!({"app": app, "routed": !lane_checked(lane)})));
+                ui.close();
+            }
+        }
+        if let Some(s) = lane.source {
+            if lane.kind == LaneKind::Application {
+                ui.separator();
+            }
+            if ui.button(tid!("selection.properties", "Properties…")).clicked() {
+                acts.push(Act::Properties(s));
+                ui.close();
+            }
+            if ui.button(tid!("selection.filters", "Filters…")).clicked() {
+                acts.push(Act::Filters(s));
+                ui.close();
+            }
+        }
+    });
+}
+
+/// The Application Audio dock: a lane for each microphone source and each running application
+/// with audio, each with a live meter, drawn gray while the program does not hear it. The check
+/// box of an application lane routes it into the program in every scene, together with the
+/// microphone (`app_audio.route`). A lane with a source has its volume and mute, and its settings
+/// menu opens the source's properties and filters.
+pub fn app_audio(ui: &mut Ui, studio: &Studio, st: &mut DockState, acts: &mut Vec<Act>) -> Drawn {
+    let mut drawn = header(ui, "Application Audio", |_, _| ());
+    dock_menu(ui, &mut drawn, "app_audio", st.place, acts);
+    st.lanes.refresh(studio, std::time::Instant::now());
+    let LaneCache { lanes: Some(lanes), meters, .. } = &mut *st.lanes else {
+        return drawn;
+    };
+    let dt = st.dt;
+    let area = egui::ScrollArea::vertical().id_salt("app_audio").auto_shrink([false, false]);
+    area.show(&mut body(ui), |ui| {
+        let warn = ui.visuals().warn_fg_color;
+        match (&lanes.reason, &lanes.error) {
+            (Some(reason), _) if !lanes.supported => {
+                ui.weak(crate::i18n::Msg::plain(reason.clone()).shown());
+            }
+            (_, Some(e)) => {
+                ui.colored_label(warn, crate::i18n::Msg::plain(e.clone()).shown());
+            }
+            _ if lanes.listing => {
+                ui.weak(tl!("Looking for applications with audio…"));
+            }
+            _ => {}
+        }
+        if lanes.lanes.is_empty() {
+            ui.weak(tl!("No microphones or applications with audio."));
+        }
+        if desktop_doubles(lanes) {
+            ui.colored_label(
+                warn,
+                tl!("Desktop audio also records a routed application that plays on the same device, so the program can hear it twice."),
+            );
+        }
+        for (lane, m) in lanes.lanes.iter().zip(meters.iter_mut()) {
+            m.update(lane_levels(lane, lane.source.and_then(|s| studio.levels(s))), dt);
+            let gray = !lane.heard;
+            craft_ui::direction::horizontal(ui, |ui| {
+                if lane.kind == LaneKind::Application
+                    && let Some(app) = &lane.app
+                {
+                    let mut on = lane_checked(lane);
+                    let tip = ROUTE_TIPS[usize::from(on)];
+                    if ui.checkbox(&mut on, "").on_hover_text(tl!(tip)).changed() {
+                        acts.push(Act::run("app_audio.route", json!({"app": app, "routed": on})));
+                    }
+                }
+                let mut name = RichText::new(&lane.name).strong();
+                if gray {
+                    name = name.color(ui.visuals().weak_text_color());
+                }
+                let r = ui.label(name);
+                if lane.kind == LaneKind::Application && !lane.running {
+                    let _ = r.on_hover_text(tl!("This application is not running."));
+                }
+                ui.with_layout(craft_ui::direction::trailing(ui), |ui| {
+                    lane_menu(ui, lane, acts);
+                    if let Some(s) = lane.source {
+                        let (icon, tip, tint) = if lane.muted {
+                            (Icon::Muted, "Unmute", Color32::from_rgb(230, 60, 50))
+                        } else {
+                            (Icon::Speaker, "Mute", Color32::TRANSPARENT)
+                        };
+                        if icons::sized(ui, icon, tl!(tip), true, vec2(26.0, 22.0), tint) {
+                            acts.push(Act::run("source.mute", json!({"source": s, "muted": !lane.muted})));
+                        }
+                        ui.monospace(gain_text(lane.gain));
+                    }
+                });
+            });
+            if let Some(e) = lane.source.and_then(|s| studio.source_error(s)) {
+                ui.colored_label(warn, crate::i18n::Msg::plain(e).shown());
+            }
+            meter(ui, m, gray || lane.muted);
+            let mut db = to_db(lane.gain).max(METER_FLOOR_DB);
+            let slider = egui::Slider::new(&mut db, METER_FLOOR_DB..=0.0).show_value(false).trailing_fill(true);
+            let r = ui.add_enabled(lane.source.is_some(), slider);
+            if let Some(s) = lane.source {
+                if r.changed() {
+                    let gain = if db <= METER_FLOOR_DB { 0.0 } else { from_db(db) };
+                    acts.push(Act::run("source.volume", json!({"source": s, "gain": gain})));
+                }
+                if r.drag_stopped() {
+                    acts.push(Act::Seal);
+                }
+            }
+            ui.add_space(6.0);
+        }
+    });
+    drawn
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -497,5 +724,67 @@ mod tests {
         assert_eq!(gain_text(1.0), "0.0 dB");
         assert_eq!(gain_text(0.0), "-inf dB");
         assert_eq!(gain_text(0.5), "-6.0 dB");
+    }
+
+    fn app_lane(source: Option<SourceId>, peak: Option<f32>) -> Lane {
+        Lane {
+            kind: LaneKind::Application,
+            name: "player.exe".into(),
+            app: Some("player.exe|c:\\apps\\player.exe".into()),
+            source,
+            routed: source.is_some(),
+            routed_heard: source.is_some(),
+            heard: source.is_some(),
+            gain: 1.0,
+            muted: false,
+            peak,
+            running: true,
+            playing: peak.is_some(),
+            within: None,
+        }
+    }
+
+    #[test]
+    fn a_lane_meters_its_source_and_else_the_applications_level() {
+        let mixed = BlockLevels { peak: [0.25, 0.5], rms: [0.1, 0.2] };
+        assert_eq!(lane_levels(&app_lane(Some(SourceId(3)), Some(0.9)), Some(mixed)), mixed, "the source's level in the mix");
+        assert_eq!(lane_levels(&app_lane(None, Some(0.4)), None).peak, [0.4, 0.4]);
+        assert_eq!(lane_levels(&app_lane(None, Some(7.0)), None).peak, [1.0, 1.0], "a reading over full scale is held at it");
+        assert_eq!(lane_levels(&app_lane(None, Some(f32::NAN)), None), BlockLevels::default());
+        assert_eq!(lane_levels(&app_lane(None, None), None), BlockLevels::default(), "no reading falls to silence");
+        assert_eq!(lane_levels(&app_lane(Some(SourceId(3)), Some(0.9)), None), BlockLevels::default(), "a source not in the mix is silent");
+    }
+
+    #[test]
+    fn the_dock_warns_while_desktop_audio_also_plays_a_routed_application() {
+        let mut lanes =
+            Lanes { supported: true, reason: None, listing: false, error: None, lanes: vec![app_lane(Some(SourceId(3)), None)], desktop_heard: true };
+        assert!(desktop_doubles(&lanes));
+        lanes.lanes[0].routed_heard = false;
+        assert!(!desktop_doubles(&lanes), "no routed application reaches the program");
+        lanes.lanes[0].routed_heard = true;
+        lanes.lanes[0].muted = true;
+        assert!(!desktop_doubles(&lanes), "the routed source is muted");
+        lanes.lanes[0].muted = false;
+        lanes.lanes[0].running = false;
+        assert!(!desktop_doubles(&lanes), "the routed application quit");
+        lanes.lanes[0].running = true;
+        lanes.desktop_heard = false;
+        assert!(!desktop_doubles(&lanes), "desktop audio muted or not heard");
+    }
+
+    #[test]
+    fn a_routed_lane_the_program_does_not_hear_is_unchecked() {
+        assert!(lane_checked(&app_lane(Some(SourceId(3)), None)));
+        // Routed but set to monitor only, while another source of it is shown in the scene.
+        let monitor_only = Lane { routed_heard: false, ..app_lane(Some(SourceId(3)), None) };
+        assert!(!lane_checked(&monitor_only), "checking it routes the application again");
+        assert!(!lane_checked(&app_lane(None, None)));
+    }
+
+    #[test]
+    fn a_lane_keeps_its_meter_by_source_once_it_has_one() {
+        assert_eq!(lane_id(&app_lane(None, None)), LaneId::App("player.exe|c:\\apps\\player.exe".into()));
+        assert_eq!(lane_id(&app_lane(Some(SourceId(3)), None)), LaneId::Source(SourceId(3)));
     }
 }

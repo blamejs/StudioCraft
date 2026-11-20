@@ -27,6 +27,7 @@ description in [docs/features.md](docs/features.md).
 ### Audio
 
 - The audio mixer has meters, faders and mute, and each source has a sync offset of 0 to 5000 ms ([Audio](docs/features.md#audio)).
+- The Application Audio dock lists the microphones and the running applications that have audio as lanes with live meters, and routes an application into the program in every scene, together with the microphone ([Application Audio dock](docs/features.md#application-audio-dock)).
 - The mixer measures the final mix's loudness, and the window does not show the readings yet ([Audio](docs/features.md#audio)).
 - Audio monitoring works on Windows and macOS, with each source off, monitor only or monitor and output ([Audio](docs/features.md#audio)).
 
@@ -96,11 +97,12 @@ description in [docs/features.md](docs/features.md).
    the encoder reads them.
 5. **Application Audio panel (partly done).** The Application audio capture source records one
    application's audio on Windows 11 and Windows Server 2022
-   ([Application audio capture](docs/features.md#application-audio-capture)). A dock will list
-   the running applications as lanes with live meters: a lane routed to the mix is shown in
-   color, and one that is not is grayed out while its meter keeps moving. Each application and
-   microphone lane gets enable and route switches, gain with boost above 0 dB, filters, a sync
-   offset, track assignment, mute and monitoring.
+   ([Application audio capture](docs/features.md#application-audio-capture)). The Application
+   Audio dock lists microphones and running applications as lanes with live meters, grays a lane
+   the program does not hear, and routes an application into every scene
+   ([Application Audio dock](docs/features.md#application-audio-dock)). Each lane has volume up to
+   0 dB, mute, filters, a sync offset and monitoring. Gain with boost above 0 dB and track
+   assignment are still to be built.
 6. **Application audio on macOS and Linux.** The application list, meters and capture will use
    ScreenCaptureKit on macOS and PipeWire's per-application streams on Linux. Both systems report
    it as unsupported today.

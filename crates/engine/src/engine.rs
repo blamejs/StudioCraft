@@ -99,21 +99,9 @@ impl Engine {
     /// has no applications.
     fn app_audio_list(&self) -> Value {
         let support = self.app_audio.support();
-        if !support.supported {
+        let Some((list, listing, error)) = self.read_apps() else {
             return json!({"supported": false, "listing": false, "error": support.reason, "apps": []});
-        }
-        // The list stays current for a while, and a caller that asks again within the peak time
-        // sees the meters' levels.
-        self.app_audio.lease(APP_AUDIO_LEASE);
-        self.app_audio.read_peaks_for(APP_AUDIO_PEAK_TIME);
-        // Read before a stuck thread is replaced: the replacement has not scanned yet.
-        let stalled = self.app_audio.stalled();
-        self.app_audio.recover();
-        let (list, listing) = match self.app_audio.fresh_list(std::time::Duration::ZERO) {
-            Some(list) => (list, false),
-            None => (self.app_audio.snapshot(), true),
         };
-        let error = if stalled || self.app_audio.stalled() { Some(craft_app_audio::LIST_STALLED.to_string()) } else { list.error.clone() };
         let apps: Vec<Value> = list
             .apps
             .iter()
@@ -131,6 +119,46 @@ impl Engine {
             })
             .collect();
         json!({"supported": true, "listing": listing, "error": error, "apps": apps})
+    }
+
+    /// The newest application list, whether it is still being read, and why it could not be read;
+    /// `None` when this system does not capture one application. Never waits for the system.
+    fn read_apps(&self) -> Option<(Arc<craft_app_audio::AppList>, bool, Option<String>)> {
+        if !self.app_audio.support().supported {
+            return None;
+        }
+        // The list stays current for a while, and a caller that asks again within the peak time
+        // sees the meters' levels.
+        self.app_audio.lease(APP_AUDIO_LEASE);
+        self.app_audio.read_peaks_for(APP_AUDIO_PEAK_TIME);
+        // Read before a stuck thread is replaced: the replacement has not scanned yet.
+        let stalled = self.app_audio.stalled();
+        self.app_audio.recover();
+        let (list, listing) = match self.app_audio.fresh_list(std::time::Duration::ZERO) {
+            Some(list) => (list, false),
+            None => (self.app_audio.snapshot(), true),
+        };
+        let error = if stalled || self.app_audio.stalled() { Some(craft_app_audio::LIST_STALLED.to_string()) } else { list.error.clone() };
+        Some((list, listing, error))
+    }
+
+    /// The lanes of the Application Audio panel. Like `app_audio.list` it answers at once, and
+    /// asking keeps the list current and the application meters read. Without application capture
+    /// the lanes are the microphones and any application sources the collection holds.
+    pub fn app_audio_lanes(&self) -> crate::lanes::Lanes {
+        let support = self.app_audio.support();
+        let empty = Arc::new(craft_app_audio::AppList::default());
+        let (list, listing, error) = self.read_apps().unwrap_or((empty, false, None));
+        let lanes = crate::lanes::lanes(&self.collection, &list, |a| self.app_audio.peak(a));
+        let desktop_heard = crate::lanes::desktop_heard(&self.collection);
+        crate::lanes::Lanes { supported: support.supported, reason: support.reason, listing, error, lanes, desktop_heard }
+    }
+
+    /// The newest level of the listed application `key` names, 0 to 1, as `app_audio.lanes`
+    /// reports it in `peak`. It reads the list and the meter without allocating.
+    pub fn app_audio_peak(&self, key: &craft_app_audio::AppKey) -> Option<f32> {
+        let list = self.app_audio.snapshot();
+        list.find(key).and_then(|a| self.app_audio.peak(a))
     }
 
     fn app_audio_status(&self) -> Value {
@@ -279,6 +307,10 @@ impl Engine {
             }
             Command::AppAudioList {} => Ok(Outcome { changed: false, runtime: None, result: self.app_audio_list() }),
             Command::AppAudioStatus {} => Ok(Outcome { changed: false, runtime: None, result: self.app_audio_status() }),
+            Command::AppAudioLanes {} => {
+                let result = serde_json::to_value(self.app_audio_lanes()).map_err(|e| EngineError::Invalid(e.to_string()))?;
+                Ok(Outcome { changed: false, runtime: None, result })
+            }
             cmd => self.edit(cmd),
         }
     }
@@ -558,6 +590,7 @@ impl Engine {
                 }
                 Ok((Value::Null, None))
             }
+            Command::AppAudioRoute { app, routed } => self.route_app(c, &app, routed),
             Command::ItemRemove { scene, item } => {
                 let scene = self.scene_or_edit(&scene)?;
                 let item = self.item_id(scene, &item)?;
@@ -716,6 +749,137 @@ impl Engine {
             }
             other => Err(EngineError::Invalid(format!("`{}` is not a scene collection change", other.id()))),
         }
+    }
+
+    /// `app_audio.route`. Routing adds the application's source to the global audio sources, so
+    /// it is heard in every scene together with the microphone: a source the collection already
+    /// has for the application, or else a new `app_audio` source named after it. Routing an
+    /// application that is already routed changes nothing. Unrouting takes every source for the
+    /// application out of the global audio sources and removes those no scene shows; a source a
+    /// scene shows stays in that scene.
+    fn route_app(&self, c: &mut SceneCollection, app: &str, routed: bool) -> Result<(Value, Option<String>), EngineError> {
+        use crate::lanes::{APP_AUDIO_KIND, same_app, source_key};
+        let key = craft_app_audio::AppKey::decode(app.trim())
+            .ok_or_else(|| EngineError::Invalid(format!("`{app}` is not an application; app_audio.lanes lists them")))?;
+        let list = self.app_audio.snapshot();
+        let mut matched: Vec<(SourceId, craft_app_audio::AppKey)> =
+            c.sources.iter().filter_map(|s| source_key(s).filter(|k| same_app(k, &key, &list)).map(|k| (s.id, k))).collect();
+        let listed = list.find(&key).is_some();
+        if !listed {
+            // While sources name programs at more than one path with this file name, a source keyed
+            // by the file name alone belongs to none of them: a value matches only sources with
+            // exactly its key, as its lane in app_audio.lanes shows.
+            if crate::lanes::shared_name(c, &key.name) {
+                matched.retain(|(_, k)| *k == key);
+            }
+            if matched.is_empty() {
+                return Err(EngineError::Invalid(format!(
+                    "`{app}` is not running with audio and has no source; app_audio.lanes lists the applications"
+                )));
+            }
+        }
+        let ours: Vec<SourceId> = matched.iter().map(|(id, _)| *id).collect();
+        if !routed {
+            let removed: Vec<SourceId> = c.global_audio.iter().copied().filter(|g| ours.contains(g)).collect();
+            c.global_audio.retain(|g| !removed.contains(g));
+            // A source taken out here is removed when no scene shows it and it names this program
+            // itself: the value given, the listed program at its own path, or, for a program that
+            // is not listed, any of its sources. A source saved for another folder that the list
+            // only matches by file name is kept.
+            let shown: std::collections::BTreeSet<SourceId> = c.scenes.iter().flat_map(|s| s.items.iter().map(|i| i.source)).collect();
+            let own = |k: &craft_app_audio::AppKey| !listed || *k == key || list.find(k).is_some_and(|a| k.matches(&a.key, &a.path));
+            let drop: Vec<SourceId> =
+                matched.iter().filter(|(id, k)| removed.contains(id) && !shown.contains(id) && own(k)).map(|(id, _)| *id).collect();
+            c.sources.retain(|s| !drop.contains(&s.id));
+            return Ok((json!({"sources": removed}), None));
+        }
+        let in_program = |c: &SceneCollection, id: &SourceId| c.source(*id).is_some_and(|s| s.audio.monitor.in_program());
+        let heard = crate::lanes::heard(c);
+        // A capture of one listed application can record another one's processes (`within`).
+        // Routing either while the program hears the other would put that audio in the program
+        // twice. The check is skipped only when routing changes nothing.
+        if let Some(me) = list.find(&key)
+            && !ours.iter().any(|id| c.global_audio.contains(id) && in_program(c, id))
+        {
+            let is_routed = |other: &craft_app_audio::AppInfo| {
+                heard.iter().filter_map(|g| c.source(*g)).filter_map(source_key).any(|k| same_app(&k, &other.key, &list))
+            };
+            // `within` names the nearest listed application around one; its own `within` names the
+            // next one out. The walk stops after as many steps as the list has applications.
+            let outer = |a: &craft_app_audio::AppInfo| -> Vec<String> {
+                let mut out = Vec::new();
+                let mut at = a.within.clone();
+                while let Some(w) = at.take()
+                    && out.len() < list.apps.len()
+                    && !out.contains(&w)
+                {
+                    at = list.apps.iter().find(|b| b.choice() == w).and_then(|b| b.within.clone());
+                    out.push(w);
+                }
+                out
+            };
+            let (mine, around_me) = (me.choice(), outer(me));
+            let overlap = list.apps.iter().filter(|o| !std::ptr::eq(*o, me)).find(|o| {
+                let related = around_me.contains(&o.choice()) || outer(o).contains(&mine);
+                related && is_routed(o)
+            });
+            if let Some(o) = overlap {
+                // Which of the other application's heard sources are global, and which the program
+                // scene shows; a source can be both.
+                let other = |g: &&SourceId| c.source(**g).and_then(source_key).is_some_and(|k| same_app(&k, &o.key, &list));
+                let in_scene = |g: &SourceId| c.scene(c.program_scene).is_some_and(|s| s.items.iter().any(|i| i.visible && i.source == *g));
+                let routed = heard.iter().filter(other).any(|g| c.global_audio.contains(g));
+                let shown = heard.iter().filter(other).any(in_scene);
+                let remedy = match (routed, shown) {
+                    (true, true) => format!("stop routing {} and hide its source in the program scene first", o.name),
+                    (true, false) => format!("stop routing {} first", o.name),
+                    _ => format!("hide {}'s source in the program scene first", o.name),
+                };
+                return Err(EngineError::Invalid(format!(
+                    "the program already hears {}, and its capture or the capture of {} would record the other's processes; {remedy}",
+                    o.name, me.name
+                )));
+            }
+        }
+        // An existing source is used: one the program already hears, then a routed one, then one
+        // that allows program output. A source set to monitor only is set to monitor and output,
+        // so the program hears it.
+        let mut existing: Vec<SourceId> = ours.clone();
+        existing.sort_by_key(|id| (!heard.contains(id), !c.global_audio.contains(id), !in_program(c, id)));
+        if let Some(id) = existing.first().copied() {
+            if !c.global_audio.contains(&id) {
+                c.global_audio.push(id);
+            }
+            if let Some(s) = c.sources.iter_mut().find(|s| s.id == id)
+                && !s.audio.monitor.in_program()
+            {
+                s.audio.monitor = studiocraft_model::MonitorMode::MonitorAndOutput;
+            }
+            return Ok((json!({"source": id}), None));
+        }
+        // A new source is made only for an application that is listed now; the source's settings
+        // keep any value they are given, so they cannot tell an unknown name from a listed one.
+        let Some(found) = list.find(&key) else {
+            return Err(EngineError::Invalid(format!("`{app}` is not running with audio; app_audio.lanes lists the applications")));
+        };
+        let plugin = self.registry.source(APP_AUDIO_KIND)?;
+        let settings = Settings::new().with("app", found.choice());
+        let schema = plugin.schema_for(&settings);
+        check_settings(&schema, &settings, None)?;
+        let settings = schema.normalize(&settings);
+        let name = c.unique_source_name(&checked_name(&found.name).unwrap_or_else(|_| plugin.name().to_string()));
+        let id = SourceId(c.alloc_id());
+        c.sources.push(SourceConfig {
+            id,
+            kind: APP_AUDIO_KIND.into(),
+            kind_version: plugin.version(),
+            name,
+            settings,
+            filters: Vec::new(),
+            audio: Default::default(),
+        });
+        c.global_audio.push(id);
+        Ok((json!({"source": id}), None))
     }
 
     /// The collection, the studio mode and the scene in each view, for scripts.

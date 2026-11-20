@@ -140,6 +140,39 @@ A source's Properties window sets two more audio options:
 Monitored sources play on the device chosen in Settings › Audio. Monitoring works on Windows and
 macOS.
 
+### Application Audio dock
+
+Docks › Application Audio shows a dock that lists a lane for each audio input source, then a lane
+for each running application that has audio. Each lane has a live meter. A lane the program does
+not hear is drawn gray. The meter of a lane with a source shows the source's level in the mix,
+and is silent while the mix has no level for it. The meter of an application lane without a
+source shows the level the system reports for the application, without capturing it. The program hears a lane when its source is a global
+audio source or is shown in the program scene, unless the source's monitoring is set to monitor
+only.
+
+The check box of an application lane routes the application into the program in every scene,
+together with the microphone. Desktop audio also records what a routed application plays on the
+device it captures. While the program hears Desktop audio unmuted and a running application is
+routed and not muted, the dock warns that the program can hear that application twice. Routing adds an Application audio capture source for the application
+to the global audio sources, or uses a source of the collection that already captures it, and
+sets that source's monitoring to monitor and output when it was monitor only. Clearing the check
+box takes that source out of the global audio sources, and Edit › Undo puts it back. A source that
+the program scene shows is still heard after its check box is cleared. The check box is
+checked only while a routed source reaches the program. A routed source set to monitor only leaves
+it clear, and checking it routes the application again.
+
+When one application runs inside another one's process tree, such as a helper program, the capture
+of the outer one already records it, and the dock does not route one of them while the program
+hears the other. A routed application that quits keeps its lane. When two listed programs have the
+same file name, their lanes show the folder as well. When the program hears two sources of one
+application, the second source gets a lane of its own, named after the source, with its own volume
+slider and mute button and no check box.
+
+A lane with a source has a volume slider in dB and a mute button, and its settings menu opens the
+source's Properties… (sync offset and monitoring) and Filters…. The dock is hidden in a new
+layout. On a system that cannot capture one application's audio, the dock lists the microphones
+and says why no applications are listed.
+
 ## Recording
 
 Recordings are MKV, MP4 or MOV files at four quality levels: Compact, High, Pristine and Lossless.
@@ -317,12 +350,13 @@ bar's overflow menu. Docks › Output Controls and Docks › Transition Controls
 
 ### Docks
 
-Scenes, Sources and Audio Mixer sit in a strip under the preview. Each dock has a 24-point header
+Scenes, Sources and Audio Mixer sit in a strip under the preview, and Application Audio joins them
+when Docks › Application Audio shows it. Each dock has a 24-point header
 with the title at its start and the dock's actions at its end, and no footer. When the dock is
 narrow, the header keeps its actions and shortens the title. 1-point dividers separate the docks.
 
 The strip is 200 points tall, or 30% of the window's height when that is less, and never under 120
-points. Scenes, Sources and Audio Mixer start 300, 340 and 400 points wide
+points. Scenes, Sources, Audio Mixer and Application Audio start 300, 340, 400 and 360 points wide
 ([MECHANICS.md](../MECHANICS.md#editing)), and the last shown dock takes the rest. No dock is
 narrower than 200 points while the window has room.
 

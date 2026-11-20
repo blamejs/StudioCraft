@@ -530,6 +530,586 @@ fn application_audio_queries_list_apps_and_captures_without_changing_anything() 
     assert_eq!(e.undo_label(), undo);
 }
 
+/// An application audio source whose `app` choices are `apps`.
+struct TestAppAudio(Vec<String>);
+impl Plugin for TestAppAudio {
+    fn id(&self) -> &'static str {
+        crate::lanes::APP_AUDIO_KIND
+    }
+    fn name(&self) -> &'static str {
+        "Application audio capture"
+    }
+    fn schema(&self) -> SettingsSchema {
+        let mut options = vec![studiocraft_model::ChoiceOption::new("", "Choose an application")];
+        options.extend(self.0.iter().map(|a| studiocraft_model::ChoiceOption::new(a.clone(), a.clone())));
+        SettingsSchema::new(vec![Field::new("app", "Application", FieldKind::Choice { options }, "")])
+    }
+}
+impl Source for TestAppAudio {
+    fn caps(&self) -> SourceCaps {
+        SourceCaps { video: false, audio: true }
+    }
+    fn create(&self, _: &Settings, _: &SourceIo) -> Result<Box<dyn SourceInstance>, PluginError> {
+        Err(PluginError::Unavailable("test".into()))
+    }
+}
+
+const PLAYER: &str = r"player.exe|c:\apps\player.exe";
+const BROWSER: &str = r"browser.exe|c:\apps\browser.exe";
+/// A value the test source's settings accept, as the real source keeps a saved choice, for an
+/// application that is not running.
+const EDITOR: &str = r"editor.exe|c:\apps\editor.exe";
+
+/// An engine with a microphone and a scripted list holding a player that plays at half level and
+/// a browser, once the list has been read.
+fn lane_engine() -> (Engine, craft_app_audio::fake::FakeBackend, craft_app_audio::Discovery) {
+    use craft_app_audio::fake::{FakeBackend, app};
+    let mut r = Registry::new();
+    r.register_source(Arc::new(TestSource("color", SourceCaps { video: true, audio: false }))).unwrap();
+    r.register_source(Arc::new(TestSource(crate::lanes::MIC_KIND, SourceCaps { video: false, audio: true }))).unwrap();
+    r.register_source(Arc::new(TestAppAudio(vec![PLAYER.into(), BROWSER.into(), EDITOR.into()]))).unwrap();
+    let mut c = SceneCollection::new("Test", "Scene");
+    let mic = SourceId(c.alloc_id());
+    c.sources.push(SourceConfig {
+        id: mic,
+        kind: crate::lanes::MIC_KIND.into(),
+        kind_version: 1,
+        name: "Microphone".into(),
+        settings: Settings::new(),
+        filters: vec![],
+        audio: Default::default(),
+    });
+    c.global_audio.push(mic);
+    let fake = FakeBackend::new();
+    let player = app("player.exe", 40, true);
+    fake.set_peak(&player.key, 0.5);
+    fake.set_apps(vec![player, app("browser.exe", 41, false)]);
+    let mut e = Engine::new(c, Arc::new(r));
+    let discovery = craft_app_audio::Discovery::new(Arc::new(fake.clone()));
+    e.set_app_audio(discovery.clone());
+    let wait = std::time::Duration::from_secs(10);
+    e.app_audio_lanes();
+    assert!(discovery.fresh_list(wait).is_some());
+    let passes = discovery.peak_passes();
+    assert!(discovery.wait_peak_passes(passes + 1, wait));
+    (e, fake, discovery)
+}
+
+fn lane<'a>(lanes: &'a serde_json::Value, name: &str) -> &'a serde_json::Value {
+    lanes["lanes"].as_array().and_then(|l| l.iter().find(|l| l["name"] == name)).unwrap_or_else(|| panic!("no lane {name}: {lanes}"))
+}
+
+#[test]
+fn the_lanes_list_microphones_then_applications_and_gray_those_not_heard() {
+    let (mut e, _fake, _discovery) = lane_engine();
+    let (rev, undo) = (e.revision(), e.undo_label());
+    let o = run(&mut e, "app_audio.lanes", json!({})).unwrap();
+    assert!(!o.changed && o.runtime.is_none());
+    let names: Vec<&str> = o.result["lanes"].as_array().unwrap().iter().filter_map(|l| l["name"].as_str()).collect();
+    assert_eq!(names, ["Microphone", "browser", "player"], "{}", o.result);
+    let mic = lane(&o.result, "Microphone");
+    assert_eq!(
+        (mic["kind"].as_str(), mic["routed"].as_bool(), mic["heard"].as_bool(), mic["peak"].is_null()),
+        (Some("microphone"), Some(true), Some(true), true)
+    );
+    let player = lane(&o.result, "player");
+    assert_eq!(player["kind"], "application");
+    assert_eq!(player["app"], PLAYER);
+    assert_eq!((player["routed"].as_bool(), player["heard"].as_bool()), (Some(false), Some(false)), "an application is not heard until it is routed");
+    assert_eq!(player["source"], serde_json::Value::Null);
+    assert_eq!(player["peak"], 0.5, "its level is read without capturing it: {}", o.result);
+    assert_eq!((player["running"].as_bool(), player["playing"].as_bool()), (Some(true), Some(true)));
+    assert_eq!(lane(&o.result, "browser")["playing"], false);
+    assert_eq!(o.result["supported"], true);
+    assert_eq!(e.revision(), rev);
+    assert_eq!(e.undo_label(), undo);
+    assert!(run(&mut e, "app_audio.lanes", json!({"app": PLAYER})).is_err(), "the lanes take no parameters");
+}
+
+#[test]
+fn routing_an_application_mixes_it_with_the_microphone_in_every_scene() {
+    let (mut e, fake, discovery) = lane_engine();
+    let o = run(&mut e, "app_audio.route", json!({"app": PLAYER, "routed": true})).unwrap();
+    assert!(o.changed);
+    let id: SourceId = serde_json::from_value(o.result["source"].clone()).unwrap();
+    let c = e.collection();
+    let s = c.source(id).unwrap();
+    assert_eq!((s.kind.as_str(), s.name.as_str(), s.settings.str("app")), (crate::lanes::APP_AUDIO_KIND, "player", Some(PLAYER)));
+    assert_eq!(c.global_audio.len(), 2, "the microphone stays: {:?}", c.global_audio);
+    assert!(c.global_audio.contains(&id));
+    assert_eq!(e.undo_label(), Some("Route Application Audio"));
+    let lanes = run(&mut e, "app_audio.lanes", json!({})).unwrap().result;
+    let player = lane(&lanes, "player");
+    assert_eq!((player["routed"].as_bool(), player["heard"].as_bool(), player["source"].as_u64()), (Some(true), Some(true), Some(id.0)), "{lanes}");
+    // Routing it again changes nothing and adds no undo step.
+    let rev = e.revision();
+    let again = run(&mut e, "app_audio.route", json!({"app": PLAYER, "routed": true})).unwrap();
+    assert!(!again.changed);
+    assert_eq!(again.result["source"].as_u64(), Some(id.0));
+    assert_eq!(e.revision(), rev);
+    run(&mut e, "edit.undo", json!({})).unwrap();
+    assert!(e.collection().source(id).is_none(), "undo takes the routing back");
+    assert_eq!(e.undo_label(), None);
+    run(&mut e, "edit.redo", json!({})).unwrap();
+    // The application quits: its lane stays, routed and not running, so it can be unrouted.
+    let generation = discovery.generation();
+    fake.set_apps(vec![craft_app_audio::fake::app("browser.exe", 41, false)]);
+    assert_eq!(discovery.wait_newer(generation, std::time::Duration::from_secs(10)).apps.len(), 1);
+    let lanes = run(&mut e, "app_audio.lanes", json!({})).unwrap().result;
+    let gone = lane(&lanes, "player");
+    assert_eq!((gone["running"].as_bool(), gone["routed"].as_bool(), gone["app"].as_str()), (Some(false), Some(true), Some(PLAYER)), "{lanes}");
+    let off = run(&mut e, "app_audio.route", json!({"app": PLAYER, "routed": false})).unwrap();
+    assert!(off.changed);
+    assert_eq!(off.result["sources"], json!([id.0]));
+    assert!(e.collection().source(id).is_none(), "a source no scene shows is removed");
+    assert_eq!(e.collection().global_audio.len(), 1);
+    let lanes = run(&mut e, "app_audio.lanes", json!({})).unwrap().result;
+    assert!(lanes["lanes"].as_array().unwrap().iter().all(|l| l["name"] != "player"), "{lanes}");
+    // With no source left and the application not running, the value names nothing.
+    let rev = e.revision();
+    assert!(run(&mut e, "app_audio.route", json!({"app": PLAYER, "routed": false})).is_err());
+    assert_eq!(e.revision(), rev);
+    // A listed application that is not routed unroutes without a change.
+    let off = run(&mut e, "app_audio.route", json!({"app": BROWSER, "routed": false})).unwrap();
+    assert!(!off.changed);
+    assert_eq!(off.result["sources"], json!([]));
+    assert_eq!(e.revision(), rev);
+}
+
+#[test]
+fn an_applications_level_is_read_on_its_own_between_lane_reads() {
+    let (e, fake, discovery) = lane_engine();
+    let player = craft_app_audio::AppKey::decode(PLAYER).unwrap();
+    assert_eq!(e.app_audio_peak(&player), Some(0.5));
+    fake.set_peak(&craft_app_audio::fake::app("player.exe", 40, true).key, 0.25);
+    let passes = discovery.peak_passes();
+    assert!(discovery.wait_peak_passes(passes + 2, std::time::Duration::from_secs(10)));
+    assert_eq!(e.app_audio_peak(&player), Some(0.25));
+    assert_eq!(e.app_audio_peak(&craft_app_audio::AppKey::decode(EDITOR).unwrap()), None, "an application that is not listed");
+}
+
+#[test]
+fn two_applications_whose_captures_overlap_are_not_routed_together() {
+    let (mut e, fake, discovery) = lane_engine();
+    // The player runs inside the browser's process tree, so the browser's capture records it.
+    let mut player = craft_app_audio::fake::app("player.exe", 40, true);
+    player.within = Some(BROWSER.into());
+    let generation = discovery.generation();
+    fake.set_apps(vec![player, craft_app_audio::fake::app("browser.exe", 41, false)]);
+    assert!(discovery.wait_newer(generation, std::time::Duration::from_secs(10)).apps.iter().any(|a| a.within.is_some()));
+    for (first, second) in [(BROWSER, PLAYER), (PLAYER, BROWSER)] {
+        run(&mut e, "app_audio.route", json!({"app": first, "routed": true})).unwrap();
+        let before = e.collection().clone();
+        assert!(run(&mut e, "app_audio.route", json!({"app": second, "routed": true})).is_err(), "{second} after {first}");
+        assert_eq!(e.collection(), &before);
+        assert!(!run(&mut e, "app_audio.route", json!({"app": first, "routed": true})).unwrap().changed, "routing {first} again is allowed");
+        let err = run(&mut e, "app_audio.route", json!({"app": second, "routed": true})).err().map(|e| e.to_string()).unwrap_or_default();
+        assert!(err.contains("stop routing"), "{err}");
+        run(&mut e, "app_audio.route", json!({"app": first, "routed": false})).unwrap();
+    }
+    // The browser heard only through the program scene: hiding it is the remedy.
+    run(&mut e, "source.add", json!({"kind": crate::lanes::APP_AUDIO_KIND, "name": "Browser", "settings": {"app": BROWSER}})).unwrap();
+    let err = run(&mut e, "app_audio.route", json!({"app": PLAYER, "routed": true})).err().map(|e| e.to_string()).unwrap_or_default();
+    assert!(err.contains("hide browser's source"), "{err}");
+    // Routed and shown in the program scene: both changes are named.
+    run(&mut e, "app_audio.route", json!({"app": BROWSER, "routed": true})).unwrap();
+    let err = run(&mut e, "app_audio.route", json!({"app": PLAYER, "routed": true})).err().map(|e| e.to_string()).unwrap_or_default();
+    assert!(err.contains("stop routing browser and hide its source"), "{err}");
+}
+
+#[test]
+fn routing_uses_the_source_the_program_scene_already_plays() {
+    let (mut e, _fake, _discovery) = lane_engine();
+    // A source no scene shows comes first in the collection; a later one is shown in the scene.
+    let mut c = e.collection().clone();
+    let spare = SourceId(c.alloc_id());
+    c.sources.push(SourceConfig {
+        id: spare,
+        kind: crate::lanes::APP_AUDIO_KIND.into(),
+        kind_version: 1,
+        name: "Spare".into(),
+        settings: Settings::new().with("app", PLAYER),
+        filters: vec![],
+        audio: Default::default(),
+    });
+    e.load(c);
+    let o = run(&mut e, "source.add", json!({"kind": crate::lanes::APP_AUDIO_KIND, "name": "Shown", "settings": {"app": PLAYER}})).unwrap();
+    let shown: SourceId = serde_json::from_value(o.result["source"].clone()).unwrap();
+    let r = run(&mut e, "app_audio.route", json!({"app": PLAYER, "routed": true})).unwrap();
+    assert_eq!(r.result["source"].as_u64(), Some(shown.0), "no second capture of what the scene plays");
+    assert!(!e.collection().global_audio.contains(&spare));
+}
+
+#[test]
+fn turning_on_a_monitor_only_route_checks_for_overlap_too() {
+    let (mut e, fake, discovery) = lane_engine();
+    let mut player = craft_app_audio::fake::app("player.exe", 40, true);
+    player.within = Some(BROWSER.into());
+    let generation = discovery.generation();
+    fake.set_apps(vec![player, craft_app_audio::fake::app("browser.exe", 41, false)]);
+    assert!(discovery.wait_newer(generation, std::time::Duration::from_secs(10)).apps.iter().any(|a| a.within.is_some()));
+    let mut c = e.collection().clone();
+    let quiet = SourceId(c.alloc_id());
+    c.sources.push(SourceConfig {
+        id: quiet,
+        kind: crate::lanes::APP_AUDIO_KIND.into(),
+        kind_version: 1,
+        name: "Player".into(),
+        settings: Settings::new().with("app", PLAYER),
+        filters: vec![],
+        audio: studiocraft_model::AudioState { monitor: studiocraft_model::MonitorMode::MonitorOnly, ..Default::default() },
+    });
+    c.global_audio.push(quiet);
+    e.load(c);
+    run(&mut e, "app_audio.route", json!({"app": BROWSER, "routed": true})).unwrap();
+    let before = e.collection().clone();
+    assert!(run(&mut e, "app_audio.route", json!({"app": PLAYER, "routed": true})).is_err());
+    assert_eq!(e.collection(), &before, "the monitor-only source stays out of the program");
+}
+
+#[test]
+fn an_application_two_levels_inside_a_routed_one_is_not_routed() {
+    let (mut e, fake, discovery) = lane_engine();
+    // The player runs inside the browser, and the browser inside the editor.
+    let mut player = craft_app_audio::fake::app("player.exe", 40, true);
+    player.within = Some(BROWSER.into());
+    let mut browser = craft_app_audio::fake::app("browser.exe", 41, false);
+    browser.within = Some(EDITOR.into());
+    let generation = discovery.generation();
+    fake.set_apps(vec![player, browser, craft_app_audio::fake::app("editor.exe", 42, false)]);
+    assert_eq!(discovery.wait_newer(generation, std::time::Duration::from_secs(10)).apps.len(), 3);
+    for (first, second) in [(EDITOR, PLAYER), (PLAYER, EDITOR)] {
+        run(&mut e, "app_audio.route", json!({"app": first, "routed": true})).unwrap();
+        assert!(run(&mut e, "app_audio.route", json!({"app": second, "routed": true})).is_err(), "{second} after {first}");
+        run(&mut e, "app_audio.route", json!({"app": first, "routed": false})).unwrap();
+    }
+}
+
+#[test]
+fn routing_a_source_set_to_monitor_only_puts_it_in_the_program() {
+    let (mut e, _fake, _discovery) = lane_engine();
+    let id: SourceId =
+        serde_json::from_value(run(&mut e, "app_audio.route", json!({"app": PLAYER, "routed": true})).unwrap().result["source"].clone()).unwrap();
+    run(&mut e, "source.monitor", json!({"source": id.0, "mode": "monitor_only"})).unwrap();
+    let player = lane(&run(&mut e, "app_audio.lanes", json!({})).unwrap().result, "player").clone();
+    assert_eq!((player["routed"].as_bool(), player["heard"].as_bool()), (Some(true), Some(false)));
+    let r = run(&mut e, "app_audio.route", json!({"app": PLAYER, "routed": true})).unwrap();
+    assert!(r.changed);
+    assert_eq!(e.collection().source(id).map(|s| s.audio.monitor), Some(studiocraft_model::MonitorMode::MonitorAndOutput));
+    let player = lane(&run(&mut e, "app_audio.lanes", json!({})).unwrap().result, "player").clone();
+    assert_eq!(player["heard"], true);
+}
+
+#[test]
+fn a_lane_with_two_sources_acts_on_the_one_the_program_hears() {
+    let (mut e, _fake, _discovery) = lane_engine();
+    let o = run(&mut e, "source.add", json!({"kind": crate::lanes::APP_AUDIO_KIND, "name": "Shown", "settings": {"app": PLAYER}})).unwrap();
+    let shown: SourceId = serde_json::from_value(o.result["source"].clone()).unwrap();
+    let mut c = e.collection().clone();
+    let quiet = SourceId(c.alloc_id());
+    let audio = studiocraft_model::AudioState { monitor: studiocraft_model::MonitorMode::MonitorOnly, ..Default::default() };
+    c.sources.push(SourceConfig {
+        id: quiet,
+        kind: crate::lanes::APP_AUDIO_KIND.into(),
+        kind_version: 1,
+        name: "Monitor".into(),
+        settings: Settings::new().with("app", PLAYER),
+        filters: vec![],
+        audio,
+    });
+    c.global_audio.push(quiet);
+    e.load(c);
+    let player = lane(&run(&mut e, "app_audio.lanes", json!({})).unwrap().result, "player").clone();
+    assert_eq!(player["source"].as_u64(), Some(shown.0), "the scene's source reaches the program: {player}");
+    assert_eq!((player["routed"].as_bool(), player["heard"].as_bool()), (Some(true), Some(true)));
+    assert_eq!(player["routed_heard"].as_bool(), Some(false), "the routed source is monitor only");
+    run(&mut e, "app_audio.route", json!({"app": PLAYER, "routed": true})).unwrap();
+    let player = lane(&run(&mut e, "app_audio.lanes", json!({})).unwrap().result, "player").clone();
+    assert_eq!(player["routed_heard"].as_bool(), Some(true), "routing again puts a routed source in the program: {player}");
+}
+
+fn add_app_source(c: &mut SceneCollection, name: &str, app: &str, monitor: studiocraft_model::MonitorMode) -> SourceId {
+    let id = SourceId(c.alloc_id());
+    c.sources.push(SourceConfig {
+        id,
+        kind: crate::lanes::APP_AUDIO_KIND.into(),
+        kind_version: 1,
+        name: name.into(),
+        settings: Settings::new().with("app", app),
+        filters: vec![],
+        audio: studiocraft_model::AudioState { monitor, ..Default::default() },
+    });
+    c.global_audio.push(id);
+    id
+}
+
+#[test]
+fn the_lanes_say_whether_the_program_hears_desktop_audio() {
+    let mut c = SceneCollection::new("Test", "Scene");
+    assert!(!crate::lanes::desktop_heard(&c));
+    let id = SourceId(c.alloc_id());
+    c.sources.push(SourceConfig {
+        id,
+        kind: crate::lanes::DESKTOP_KIND.into(),
+        kind_version: 1,
+        name: "Desktop audio".into(),
+        settings: Settings::new(),
+        filters: vec![],
+        audio: Default::default(),
+    });
+    assert!(!crate::lanes::desktop_heard(&c), "a source no scene shows and not global");
+    c.global_audio.push(id);
+    assert!(crate::lanes::desktop_heard(&c));
+    if let Some(s) = c.sources.iter_mut().find(|s| s.id == id) {
+        s.audio.muted = true;
+    }
+    assert!(!crate::lanes::desktop_heard(&c), "muted");
+}
+
+#[test]
+fn a_second_source_the_program_hears_gets_a_lane_of_its_own() {
+    let (mut e, _fake, _discovery) = lane_engine();
+    let mut c = e.collection().clone();
+    let one = add_app_source(&mut c, "Player one", PLAYER, studiocraft_model::MonitorMode::MonitorAndOutput);
+    let two = add_app_source(&mut c, "Player two", PLAYER, studiocraft_model::MonitorMode::MonitorAndOutput);
+    e.load(c);
+    let r = run(&mut e, "app_audio.lanes", json!({})).unwrap().result;
+    let sources: Vec<(Option<u64>, bool)> = r["lanes"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|l| l["kind"] == "application" && l["source"].is_u64())
+        .map(|l| (l["source"].as_u64(), l["app"].is_null()))
+        .collect();
+    assert_eq!(sources, vec![(Some(one.0), false), (Some(two.0), true)], "its mute and volume act on that source: {r}");
+    for field in ["playing", "peak", "within"] {
+        assert_eq!(lane(&r, "Player two")[field], lane(&r, "player")[field], "the application's {field} is the same on both");
+    }
+}
+
+#[test]
+fn a_quit_applications_lane_keeps_the_route_key_with_a_path() {
+    let (mut e, fake, discovery) = lane_engine();
+    let mut c = e.collection().clone();
+    add_app_source(&mut c, "Game", r"game.exe|c:\a\game.exe", studiocraft_model::MonitorMode::MonitorOnly);
+    add_app_source(&mut c, "Game anywhere", "game.exe", studiocraft_model::MonitorMode::MonitorAndOutput);
+    e.load(c);
+    let generation = discovery.generation();
+    fake.set_apps(vec![]);
+    assert!(discovery.wait_newer(generation, std::time::Duration::from_secs(10)).apps.is_empty());
+    let r = run(&mut e, "app_audio.lanes", json!({})).unwrap().result;
+    assert_eq!(lane(&r, "Game anywhere")["app"], r"game.exe|c:\a\game.exe", "{r}");
+}
+
+#[test]
+fn a_quit_program_at_each_path_keeps_a_lane_of_its_own() {
+    let (mut e, fake, discovery) = lane_engine();
+    let mut c = e.collection().clone();
+    add_app_source(&mut c, "Game anywhere", "game.exe", studiocraft_model::MonitorMode::MonitorAndOutput);
+    add_app_source(&mut c, "Game A", r"game.exe|c:\a\game.exe", studiocraft_model::MonitorMode::MonitorAndOutput);
+    add_app_source(&mut c, "Game B", r"game.exe|c:\b\game.exe", studiocraft_model::MonitorMode::MonitorAndOutput);
+    e.load(c);
+    let generation = discovery.generation();
+    fake.set_apps(vec![]);
+    assert!(discovery.wait_newer(generation, std::time::Duration::from_secs(10)).apps.is_empty());
+    let r = run(&mut e, "app_audio.lanes", json!({})).unwrap().result;
+    let apps: Vec<&str> = r["lanes"].as_array().into_iter().flatten().filter_map(|l| l["app"].as_str()).collect();
+    assert_eq!(apps, vec![r"game.exe|c:\a\game.exe", r"game.exe|c:\b\game.exe", "game.exe"], "{r}");
+    // Each lane's key unroutes that lane's sources and no other.
+    let saved = e.collection().clone();
+    run(&mut e, "app_audio.route", json!({"app": "game.exe", "routed": false})).unwrap();
+    let names: Vec<&str> = e.collection().sources.iter().map(|s| s.name.as_str()).collect();
+    assert_eq!(names, vec!["Microphone", "Game A", "Game B"]);
+    e.load(saved);
+    run(&mut e, "app_audio.route", json!({"app": r"game.exe|c:\b\game.exe", "routed": false})).unwrap();
+    let names: Vec<&str> = e.collection().sources.iter().map(|s| s.name.as_str()).collect();
+    assert_eq!(names, vec!["Microphone", "Game anywhere", "Game A"]);
+    // With one path left, the file-name source shares its lane and its key.
+    let r = run(&mut e, "app_audio.lanes", json!({})).unwrap().result;
+    let apps: Vec<&str> = r["lanes"].as_array().into_iter().flatten().filter_map(|l| l["app"].as_str()).collect();
+    assert_eq!(apps, vec![r"game.exe|c:\a\game.exe"], "{r}");
+    run(&mut e, "app_audio.route", json!({"app": r"game.exe|c:\a\game.exe", "routed": false})).unwrap();
+    assert_eq!(e.collection().sources.len(), 1);
+}
+
+#[test]
+fn a_quit_applications_lane_shows_the_routed_source_the_program_hears() {
+    let (mut e, fake, discovery) = lane_engine();
+    let mut c = e.collection().clone();
+    add_app_source(&mut c, "Quiet", PLAYER, studiocraft_model::MonitorMode::MonitorOnly);
+    let loud = add_app_source(&mut c, "Loud", PLAYER, studiocraft_model::MonitorMode::MonitorAndOutput);
+    e.load(c);
+    let generation = discovery.generation();
+    fake.set_apps(vec![]);
+    assert!(discovery.wait_newer(generation, std::time::Duration::from_secs(10)).apps.is_empty());
+    let r = run(&mut e, "app_audio.lanes", json!({})).unwrap().result;
+    let l = lane(&r, "Loud");
+    assert_eq!(l["source"].as_u64(), Some(loud.0), "{r}");
+    assert_eq!((l["heard"].as_bool(), l["routed_heard"].as_bool()), (Some(true), Some(true)));
+    assert!(r["lanes"].as_array().is_some_and(|ls| !ls.iter().any(|l| l["name"] == "Quiet")), "one lane for the application: {r}");
+}
+
+#[test]
+fn a_source_saved_before_the_program_moved_is_its_lane_and_is_routed_again() {
+    let (mut e, _fake, _discovery) = lane_engine();
+    let mut c = e.collection().clone();
+    let old = SourceId(c.alloc_id());
+    c.sources.push(SourceConfig {
+        id: old,
+        kind: crate::lanes::APP_AUDIO_KIND.into(),
+        kind_version: 1,
+        name: "Player".into(),
+        settings: Settings::new().with("app", r"player.exe|c:\old\player.exe"),
+        filters: vec![],
+        audio: Default::default(),
+    });
+    e.load(c);
+    let player = lane(&run(&mut e, "app_audio.lanes", json!({})).unwrap().result, "player").clone();
+    assert_eq!(player["source"].as_u64(), Some(old.0), "the capture source follows the program to its new folder: {player}");
+    let r = run(&mut e, "app_audio.route", json!({"app": PLAYER, "routed": true})).unwrap();
+    assert_eq!(r.result["source"].as_u64(), Some(old.0), "no second capture of the same program");
+    assert_eq!(e.collection().sources.iter().filter(|s| s.kind == crate::lanes::APP_AUDIO_KIND).count(), 1);
+}
+
+#[test]
+fn unrouting_a_program_stops_every_capture_of_it_and_keeps_a_source_saved_for_another_folder() {
+    let (mut e, _fake, _discovery) = lane_engine();
+    // The player is listed at c:\apps; a second source was saved for a copy in another folder.
+    let mut c = e.collection().clone();
+    let mut ids = Vec::new();
+    for (name, app) in [("Here", PLAYER), ("Old copy", r"player.exe|c:\old\player.exe")] {
+        let id = SourceId(c.alloc_id());
+        c.sources.push(SourceConfig {
+            id,
+            kind: crate::lanes::APP_AUDIO_KIND.into(),
+            kind_version: 1,
+            name: name.into(),
+            settings: Settings::new().with("app", app),
+            filters: vec![],
+            audio: Default::default(),
+        });
+        c.global_audio.push(id);
+        ids.push(id);
+    }
+    e.load(c);
+    // Both capture the listed player, so the program stops hearing it through either.
+    let off = run(&mut e, "app_audio.route", json!({"app": PLAYER, "routed": false})).unwrap();
+    assert_eq!(off.result["sources"], json!([ids[0].0, ids[1].0]));
+    assert!(e.collection().source(ids[0]).is_none(), "the source for the player itself is removed");
+    assert!(e.collection().source(ids[1]).is_some(), "the source saved for the other folder is kept");
+    assert!(e.collection().global_audio.iter().all(|g| !ids.contains(g)));
+}
+
+#[test]
+fn a_file_name_that_matches_two_unlisted_programs_routes_neither() {
+    let (mut e, fake, discovery) = lane_engine();
+    let mut c = e.collection().clone();
+    for (name, path) in [("Game A", r"game.exe|c:\a\game.exe"), ("Game B", r"game.exe|c:\b\game.exe")] {
+        let id = SourceId(c.alloc_id());
+        c.sources.push(SourceConfig {
+            id,
+            kind: crate::lanes::APP_AUDIO_KIND.into(),
+            kind_version: 1,
+            name: name.into(),
+            settings: Settings::new().with("app", path),
+            filters: vec![],
+            audio: Default::default(),
+        });
+        c.global_audio.push(id);
+    }
+    e.load(c);
+    let generation = discovery.generation();
+    fake.set_apps(vec![]);
+    assert!(discovery.wait_newer(generation, std::time::Duration::from_secs(10)).apps.is_empty());
+    let before = e.collection().clone();
+    for routed in [false, true] {
+        assert!(run(&mut e, "app_audio.route", json!({"app": "game.exe", "routed": routed})).is_err(), "routed: {routed}");
+    }
+    assert_eq!(e.collection(), &before);
+    run(&mut e, "app_audio.route", json!({"app": r"game.exe|c:\a\game.exe", "routed": false})).unwrap();
+    let names: Vec<&str> = e.collection().sources.iter().map(|s| s.name.as_str()).collect();
+    assert!(names.contains(&"Game B") && !names.contains(&"Game A"), "only the program at its path is unrouted: {names:?}");
+}
+
+#[test]
+fn routing_reuses_a_source_a_scene_shows_and_unrouting_leaves_it_in_its_scene() {
+    let (mut e, _fake, _discovery) = lane_engine();
+    let o = run(&mut e, "source.add", json!({"kind": crate::lanes::APP_AUDIO_KIND, "name": "Game", "settings": {"app": BROWSER}})).unwrap();
+    let id: SourceId = serde_json::from_value(o.result["source"].clone()).unwrap();
+    let item: ItemId = serde_json::from_value(o.result["item"].clone()).unwrap();
+    let browser = |e: &mut Engine| lane(&run(e, "app_audio.lanes", json!({})).unwrap().result, "browser").clone();
+    let state = |l: &serde_json::Value| (l["routed"].as_bool(), l["heard"].as_bool());
+    assert_eq!(state(&browser(&mut e)), (Some(false), Some(true)), "a source the program scene shows is heard without being routed");
+    run(&mut e, "item.visible", json!({"item": item, "visible": false})).unwrap();
+    let l = browser(&mut e);
+    assert_eq!(state(&l), (Some(false), Some(false)), "a hidden item is not heard");
+    assert_eq!(l["source"].as_u64(), Some(id.0), "the lane carries the scene's source");
+    let r = run(&mut e, "app_audio.route", json!({"app": BROWSER, "routed": true})).unwrap();
+    assert_eq!(r.result["source"].as_u64(), Some(id.0), "the scene's source is routed, not a new one");
+    assert_eq!(e.collection().sources.iter().filter(|s| s.kind == crate::lanes::APP_AUDIO_KIND).count(), 1);
+    assert_eq!(state(&browser(&mut e)), (Some(true), Some(true)));
+    run(&mut e, "app_audio.route", json!({"app": BROWSER, "routed": false})).unwrap();
+    assert!(e.collection().source(id).is_some(), "the scene still shows it");
+    assert!(!e.collection().global_audio.contains(&id));
+    run(&mut e, "item.visible", json!({"item": item, "visible": true})).unwrap();
+    assert_eq!(state(&browser(&mut e)), (Some(false), Some(true)), "unrouted, the scene's item is still heard");
+}
+
+#[test]
+fn a_lane_monitored_only_is_not_heard_by_the_program() {
+    let (mut e, _fake, _discovery) = lane_engine();
+    run(&mut e, "source.monitor", json!({"source": "Microphone", "mode": "monitor_only"})).unwrap();
+    let mic = lane(&run(&mut e, "app_audio.lanes", json!({})).unwrap().result, "Microphone").clone();
+    assert_eq!((mic["routed"].as_bool(), mic["heard"].as_bool()), (Some(true), Some(false)), "{mic}");
+    run(&mut e, "source.monitor", json!({"source": "Microphone", "mode": "monitor_and_output"})).unwrap();
+    let mic = lane(&run(&mut e, "app_audio.lanes", json!({})).unwrap().result, "Microphone").clone();
+    assert_eq!(mic["heard"], true);
+}
+
+#[test]
+fn unrouting_removes_only_the_applications_own_sources() {
+    let (mut e, _fake, _discovery) = lane_engine();
+    // A loaded collection can hold a source that no scene shows; unrouting leaves it alone.
+    let mut c = e.collection().clone();
+    let spare = SourceId(c.alloc_id());
+    c.sources.push(SourceConfig {
+        id: spare,
+        kind: "color".into(),
+        kind_version: 1,
+        name: "Spare".into(),
+        settings: Settings::new(),
+        filters: vec![],
+        audio: Default::default(),
+    });
+    e.load(c);
+    let r = run(&mut e, "app_audio.route", json!({"app": PLAYER, "routed": true})).unwrap();
+    let id: SourceId = serde_json::from_value(r.result["source"].clone()).unwrap();
+    run(&mut e, "app_audio.route", json!({"app": PLAYER, "routed": false})).unwrap();
+    assert!(e.collection().source(id).is_none(), "the routed source no scene shows is removed");
+    assert!(e.collection().source(spare).is_some(), "another source no scene shows stays");
+}
+
+#[test]
+fn a_route_to_something_that_is_not_an_application_is_refused() {
+    let (mut e, _fake, _discovery) = lane_engine();
+    let before = e.collection().clone();
+    // Empty, a name with a folder in it, and applications that are not running: one by its file
+    // name alone, and one whose value the source's settings accept.
+    let bad = [
+        json!({"app": "", "routed": true}),
+        json!({"app": "dir/player.exe", "routed": true}),
+        json!({"app": "editor.exe", "routed": true}),
+        json!({"app": EDITOR, "routed": true}),
+    ];
+    for bad in bad {
+        assert!(run(&mut e, "app_audio.route", bad.clone()).is_err(), "{bad}");
+    }
+    assert!(run(&mut e, "app_audio.route", json!({"app": PLAYER})).is_err(), "`routed` is required");
+    assert!(run(&mut e, "app_audio.route", json!({"app": PLAYER, "routed": "yes"})).is_err());
+    assert_eq!(e.collection(), &before);
+    assert_eq!(e.undo_label(), None);
+}
+
 /// A source whose `mode` choices depend on its `device`.
 struct DeviceSource;
 impl Plugin for DeviceSource {
@@ -622,6 +1202,7 @@ fn every_spec_is_reachable() {
             "transition.set" => json!({"kind": "fade"}),
             "transition.duration" => json!({"ms": 100}),
             "transition.settings" => json!({"settings": {}}),
+            "app_audio.route" => json!({"app": "player.exe", "routed": true}),
             _ => json!({}),
         };
         let c = Command::from_parts(s.id, &params).unwrap_or_else(|e| panic!("{e}"));
