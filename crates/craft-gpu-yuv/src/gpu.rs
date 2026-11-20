@@ -120,8 +120,12 @@ fn area(pos: vec2<f32>) -> vec3<f32> {{
     return sum / (nf.x * nf.y);
 }}
 
+// A half rounds up, as INT and Round do in the recommendations; WGSL's round() takes it to the
+// even neighbor. The fraction v - floor(v) is exact in f32, where floor(v + 0.5) would take a
+// value just below a half up. Values below 0 clamp to 0 either way.
 fn code(v: f32) -> u32 {{
-    return u32(clamp(round(v), 0.0, MAX)) << SHIFT;
+    let f = floor(v);
+    return u32(clamp(select(f, f + 1.0, v - f >= 0.5), 0.0, MAX)) << SHIFT;
 }}
 
 @fragment fn fs_luma(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<u32> {{
