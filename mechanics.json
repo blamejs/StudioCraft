@@ -105,6 +105,8 @@
     {"name": "built-in recording queue bytes", "group": "output", "value": 64, "unit": "MiB", "code": "outputs::native::QUEUE_BYTES", "estimated": true},
     {"name": "built-in recording queue span", "group": "output", "value": 3, "unit": "s", "code": "outputs::native::QUEUE_SPAN_NS", "estimated": true},
     {"name": "built-in recording encoder lag limit", "group": "output", "value": 10, "unit": "s", "code": "outputs::native::MAX_LAG_NS", "estimated": true},
+    {"name": "hardware encoder test wait", "group": "output", "value": 5, "unit": "s", "code": "studio::outputs::PROBE_TIMEOUT", "estimated": true},
+    {"name": "hardware encoder tests wait for one start", "group": "output", "value": 10, "unit": "s", "code": "studio::outputs::PROBE_BUDGET", "estimated": true},
     {"name": "recording file name", "group": "output", "value": "%Y-%m-%d %H-%M-%S", "code": "studio::outputs::recording_path", "estimated": true},
     {"name": "replay buffer length", "group": "output", "value": 20, "unit": "s", "code": "model::profile::ReplaySettings", "estimated": true},
     {"name": "replay buffer shortest length", "group": "output", "value": 5, "unit": "s", "code": "model::profile::ReplaySettings::SECONDS", "estimated": true},

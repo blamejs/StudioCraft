@@ -2,11 +2,15 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-use craft_hwenc::{Cancel, Candidate, Choice, Error as HwError, FfmpegProber, Input, Os, Outcome, Preference, ProbeCache, Prober, Target, Vendor};
+use craft_hwenc::{
+    Budget, Cancel, Candidate, Choice, Clock, Error as HwError, FfmpegProber, Fingerprint, Input, Loaded, Os, Outcome, Preference, ProbeCache,
+    Prober, SystemClock, Target, Vendor,
+};
 use studiocraft_encode::SessionError;
 use studiocraft_encode::hardware::{self, Hardware};
 use studiocraft_engine::mixer::MixerCmd;
@@ -97,6 +101,117 @@ struct HardwareRun {
 /// The longest one test encode of a hardware encoder may take.
 const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// The longest the hardware encoder tests of one start may take together.
+const PROBE_BUDGET: Duration = Duration::from_secs(10);
+
+/// The file in the settings folder that keeps the hardware encoders' test results between
+/// sessions.
+pub const HARDWARE_TESTS_FILE: &str = "hardware-encoder-tests.txt";
+
+/// Where the test results are kept between sessions, and what saves them.
+#[derive(Default)]
+struct Saved {
+    /// The file; none keeps the results for the session only.
+    path: Option<PathBuf>,
+    /// Set once the session's cache has read the file.
+    read: Arc<AtomicBool>,
+    /// Raised when the results are forgotten; a test thread started before saves nothing.
+    epoch: Arc<AtomicU64>,
+    /// Held while the file is written or removed.
+    writing: Arc<Mutex<()>>,
+    /// The epoch and fingerprint the file was last saved for, so an encoder that fails while it
+    /// runs is taken out of the file as well.
+    last: Arc<Mutex<Option<(u64, Fingerprint)>>>,
+    /// The last fingerprint and the program file's size and modification time it was made for, so
+    /// `ffmpeg -version` runs again only after the program changed.
+    known: Arc<Mutex<Option<(String, Fingerprint)>>>,
+}
+
+/// The driver text of the saved tests' fingerprint: the graphics adapter's ids, name and driver,
+/// and this build's version, so an update tests the built-in encoders again.
+fn tested_with(adapter: Option<String>) -> String {
+    format!("{}; StudioCraft {}", adapter.unwrap_or_default(), env!("CARGO_PKG_VERSION"))
+}
+
+/// What a test thread reads from and saves to the file of [`Saved`].
+struct SavedRun {
+    path: PathBuf,
+    /// The ffmpeg program the tests run in.
+    program: PathBuf,
+    /// The graphics adapter's ids and name, and its driver's name and version.
+    driver: String,
+    /// [`Saved::read`] of the cache the tests use.
+    read: Arc<AtomicBool>,
+    /// [`Saved::epoch`] when the tests started, and the current one.
+    epoch: u64,
+    current: Arc<AtomicU64>,
+    writing: Arc<Mutex<()>>,
+    last: Arc<Mutex<Option<(u64, Fingerprint)>>>,
+    known: Arc<Mutex<Option<(String, Fingerprint)>>>,
+}
+
+impl SavedRun {
+    /// The fingerprint of the ffmpeg program and the driver. The file's results are read into
+    /// `cache` first, once per cache. When the program was replaced while the app runs, the
+    /// session's results for the old one are forgotten.
+    fn read(&self, cache: &ProbeCache, cancel: &Cancel) -> Fingerprint {
+        let stamp = craft_hwenc::program_stamp(&self.program);
+        let known = self.known.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone();
+        let f = match (stamp, known) {
+            (Some(s), Some((was, f))) if s == was && f.program == self.program && f.driver == self.driver => f,
+            (stamp, known) => {
+                let mut f = Fingerprint::of(&self.program, self.driver.clone(), cancel, PROBE_TIMEOUT);
+                f.also.push(PathBuf::from(IN_PROCESS));
+                if cancel.is_canceled() {
+                    return f;
+                }
+                if known.is_some_and(|(_, k)| k.program == f.program && k.ffmpeg_version != f.ffmpeg_version) {
+                    cache.clear();
+                }
+                if let Some(s) = stamp {
+                    *self.known.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some((s, f.clone()));
+                }
+                f
+            }
+        };
+        // A canceled `-version` gives no version, so the file is read by the next tests instead.
+        if !cancel.is_canceled() && !self.read.swap(true, Ordering::SeqCst) {
+            match cache.load(&self.path, &f) {
+                Loaded::Corrupt(why) => log::warn!("the saved hardware encoder tests at {} were not read: {why}", self.path.display()),
+                loaded => log::info!("{}: {loaded}", self.path.display()),
+            }
+        }
+        f
+    }
+
+    /// Save `cache` for `fingerprint`, unless the results were forgotten since the tests started.
+    fn save(&self, cache: &ProbeCache, fingerprint: &Fingerprint) {
+        let _writing = self.writing.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if self.current.load(Ordering::SeqCst) != self.epoch {
+            return;
+        }
+        match cache.save(&self.path, fingerprint) {
+            Ok(_) => *self.last.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some((self.epoch, fingerprint.clone())),
+            Err(e) => log::warn!("the hardware encoder tests could not be saved to {}: {e}", self.path.display()),
+        }
+    }
+}
+
+impl Saved {
+    /// Save `cache` again for the fingerprint it was last saved for, which leaves out the
+    /// encoders that failed while they ran. Nothing is written when the results were forgotten
+    /// since then.
+    fn save_again(&self, cache: &ProbeCache) {
+        let Some(path) = &self.path else { return };
+        let _writing = self.writing.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let last = self.last.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone();
+        let Some((_, fingerprint)) = last.filter(|(e, _)| *e == self.epoch.load(Ordering::SeqCst)) else { return };
+        if let Err(e) = cache.save(path, &fingerprint) {
+            log::warn!("the hardware encoder tests could not be saved to {}: {e}", path.display());
+        }
+    }
+}
+
 /// The notice when the hardware encoder tests could not run at all.
 const TESTS_FAILED: &str = "The hardware encoder tests could not run: {error}";
 
@@ -126,6 +241,8 @@ pub(crate) struct Outputs {
     finished: Vec<Option<Notice>>,
     /// The hardware encoders' test results for this session.
     probes: Arc<ProbeCache>,
+    /// The file that keeps them between sessions.
+    saved: Saved,
     /// Held by a running test, so tests for two outputs do not hold an encoder at once.
     probing: Arc<Mutex<()>>,
     /// How often the graphics device changed; a test for an earlier device is not used.
@@ -294,6 +411,7 @@ impl Outputs {
             ev.notices.push(Notice::new(template, vec![("error", e.to_string())], true));
             if let Some(hw) = hardware.filter(|hw| encoder_failed(hw.candidate, &e)) {
                 self.probes.mark_failed(&hw.program, hw.candidate, e.clone());
+                self.saved.save_again(&self.probes);
                 if hw.auto {
                     let args = vec![("encoder", hw.candidate.name.to_string())];
                     ev.notices.push(Notice::new("{encoder} stopped working; the next start tries another encoder", args, true));
@@ -349,6 +467,31 @@ impl Outputs {
         // are tested again.
         self.probes = Arc::default();
         self.device_changes += 1;
+        // The file is not read again, so every encoder is tested on the new device, and the next
+        // save replaces the file.
+        self.saved.read = Arc::new(AtomicBool::new(true));
+        self.saved.epoch.fetch_add(1, Ordering::SeqCst);
+    }
+
+    /// Keep the hardware encoders' test results in `file` between sessions, or for the session
+    /// only with none.
+    pub(crate) fn keep_tests_in(&mut self, file: Option<PathBuf>) {
+        // Tests already running save nothing, and the next tests read the new file.
+        self.saved.epoch.fetch_add(1, Ordering::SeqCst);
+        self.saved = Saved { path: file, ..Saved::default() };
+    }
+
+    /// Forget the hardware encoders' test results and remove the file that keeps them, so the next
+    /// start tests every encoder again.
+    pub(crate) fn retest_hardware(&mut self) -> Result<(), StudioError> {
+        self.forget_hardware_tests();
+        let Some(path) = &self.saved.path else { return Ok(()) };
+        let _writing = self.saved.writing.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        match std::fs::remove_file(path) {
+            Ok(()) => Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(e) => Err(StudioError::Output(format!("the saved hardware encoder tests at {} could not be removed: {e}", path.display()))),
+        }
     }
 
     /// Finish everything before the app closes.
@@ -576,33 +719,117 @@ struct BuiltInFirst {
 }
 
 impl BuiltInFirst {
-    fn test(&self, encoder: &dyn Hardware) -> Outcome {
-        let (width, height) = self.size;
-        let params = VideoParams { width, height, fps_num: self.fps.0, fps_den: self.fps.1, rate: self.rate };
-        let mut session = match encoder.try_open(&params) {
-            Ok(s) => s,
-            // Not kept in the test cache: the next start tests again.
-            Err(SessionError::Busy(why)) => return Outcome::Busy(why),
-            Err(SessionError::Other(PluginError::Unavailable(why))) => return Outcome::NoDevice(why),
-            Err(SessionError::Other(e)) => return Outcome::Failed(e.to_string()),
+    /// Test `encoder` on its own thread, waiting at most `limit` and the ffmpeg tests' timeout.
+    fn test_within(&self, encoder: &'static dyn Hardware, cancel: &Cancel, limit: Duration) -> Outcome {
+        // A test left running at its limit may still hold the encoder.
+        if left_running(encoder.id()) {
+            return Outcome::Busy(format!("the last test of {} has not ended", encoder.name()));
+        }
+        let (size, fps, rate) = (self.size, self.fps, self.rate);
+        let limit = self.ffmpeg.timeout().map_or(limit, |t| t.min(limit));
+        let end = TestEnd { id: encoder.id().to_string(), done: Arc::default() };
+        let done = Arc::clone(&end.done);
+        let work = move || {
+            let _end = end;
+            test_encoder(encoder, size, fps, rate)
         };
-        // A gray NV12 frame, allocated fallibly: an 8192 × 8192 output needs 96 MiB.
-        let luma = (width as usize).saturating_mul(height as usize);
-        let mut gray = Vec::new();
-        if let Err(e) = gray.try_reserve_exact(luma.saturating_add(luma / 2)) {
-            return Outcome::Failed(format!("no memory for a {width}x{height} test frame: {e}"));
+        let o = wait_on_thread(work, cancel, limit, &SystemClock);
+        if matches!(o, Outcome::TimedOut(_) | Outcome::Canceled) {
+            leave_running(encoder.id(), &done);
         }
-        gray.resize(luma, 16u8);
-        gray.resize(luma + luma / 2, 128u8);
-        let mut packets = Vec::new();
-        if let Err(e) = session.encode(&gray, 0, &mut packets) {
-            return Outcome::Failed(e.to_string());
-        }
-        if let Err(e) = session.flush(&mut packets) {
-            return Outcome::Failed(e.to_string());
-        }
-        if packets.is_empty() { Outcome::Failed(format!("{} returned no packet for its test frame", encoder.name())) } else { Outcome::Works }
+        o
     }
+}
+
+/// The ids of the built-in encoders whose test was left running on its thread.
+static LEFT_RUNNING: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+/// Whether a test of built-in encoder `id` was left running and has not ended.
+fn left_running(id: &str) -> bool {
+    LEFT_RUNNING.lock().unwrap_or_else(std::sync::PoisonError::into_inner).iter().any(|r| r == id)
+}
+
+/// Record that the test of `id` was left running, unless it is `done` already.
+fn leave_running(id: &str, done: &AtomicBool) {
+    let mut left = LEFT_RUNNING.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    if !done.load(Ordering::SeqCst) {
+        left.push(id.to_string());
+    }
+}
+
+/// The end of a built-in encoder's test on its thread, which takes it off [`LEFT_RUNNING`].
+struct TestEnd {
+    id: String,
+    done: Arc<AtomicBool>,
+}
+
+impl Drop for TestEnd {
+    fn drop(&mut self) {
+        let mut left = LEFT_RUNNING.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        self.done.store(true, Ordering::SeqCst);
+        left.retain(|r| *r != self.id);
+    }
+}
+
+/// How often [`wait_on_thread`] looks for the test's outcome.
+const IN_PROCESS_POLL: Duration = Duration::from_millis(5);
+
+/// Run `work` on its own thread and wait for its outcome for at most `limit` on `clock`. A test
+/// that does not end in time, or is canceled, is left to end on its thread, and its outcome is
+/// dropped.
+fn wait_on_thread(work: impl FnOnce() -> Outcome + Send + 'static, cancel: &Cancel, limit: Duration, clock: &dyn Clock) -> Outcome {
+    let (tx, rx) = std::sync::mpsc::sync_channel(1);
+    let spawned = std::thread::Builder::new().name("hardware-encoder-test".into()).spawn(move || {
+        let _ = tx.send(work());
+    });
+    if let Err(e) = spawned {
+        return Outcome::Failed(format!("the test could not start: {e}"));
+    }
+    let started = clock.now();
+    loop {
+        match rx.try_recv() {
+            Ok(o) => return o,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => return Outcome::Failed("the test ended without a result".into()),
+            Err(std::sync::mpsc::TryRecvError::Empty) => {}
+        }
+        if cancel.is_canceled() {
+            return Outcome::Canceled;
+        }
+        let elapsed = clock.now().saturating_duration_since(started);
+        if elapsed >= limit {
+            return Outcome::TimedOut(limit);
+        }
+        clock.pause(IN_PROCESS_POLL.min(limit - elapsed));
+    }
+}
+
+/// Open `encoder` at `size`, `fps` and `rate`, and encode one gray frame.
+fn test_encoder(encoder: &dyn Hardware, size: (u32, u32), fps: (u32, u32), rate: RateControl) -> Outcome {
+    let (width, height) = size;
+    let params = VideoParams { width, height, fps_num: fps.0, fps_den: fps.1, rate };
+    let mut session = match encoder.try_open(&params) {
+        Ok(s) => s,
+        // Not kept in the test cache: the next start tests again.
+        Err(SessionError::Busy(why)) => return Outcome::Busy(why),
+        Err(SessionError::Other(PluginError::Unavailable(why))) => return Outcome::NoDevice(why),
+        Err(SessionError::Other(e)) => return Outcome::Failed(e.to_string()),
+    };
+    // A gray NV12 frame, allocated fallibly: an 8192 × 8192 output needs 96 MiB.
+    let luma = (width as usize).saturating_mul(height as usize);
+    let mut gray = Vec::new();
+    if let Err(e) = gray.try_reserve_exact(luma.saturating_add(luma / 2)) {
+        return Outcome::Failed(format!("no memory for a {width}x{height} test frame: {e}"));
+    }
+    gray.resize(luma, 16u8);
+    gray.resize(luma + luma / 2, 128u8);
+    let mut packets = Vec::new();
+    if let Err(e) = session.encode(&gray, 0, &mut packets) {
+        return Outcome::Failed(e.to_string());
+    }
+    if let Err(e) = session.flush(&mut packets) {
+        return Outcome::Failed(e.to_string());
+    }
+    if packets.is_empty() { Outcome::Failed(format!("{} returned no packet for its test frame", encoder.name())) } else { Outcome::Works }
 }
 
 /// The path the tests and failures of the encoders that run in this process are kept under, apart
@@ -620,16 +847,22 @@ impl Prober for BuiltInFirst {
         }
     }
     fn probe(&self, candidate: &'static Candidate, input: Input, cancel: &Cancel) -> Outcome {
+        self.probe_within(candidate, input, cancel, Duration::MAX)
+    }
+    fn probe_within(&self, candidate: &'static Candidate, input: Input, cancel: &Cancel, limit: Duration) -> Outcome {
         match hardware::for_candidate(candidate.id).filter(|_| input == Input::Nv12) {
             Some(_) if cancel.is_canceled() => Outcome::Canceled,
-            Some(encoder) => self.test(encoder),
+            Some(encoder) => self.test_within(encoder, cancel, limit),
             None if self.in_process_only => Outcome::NoDevice(format!("{} runs only inside ffmpeg", candidate.name)),
             // Without ffmpeg the encoders that run in this process are still tested.
-            None => match self.ffmpeg.probe(candidate, input, cancel) {
+            None => match self.ffmpeg.probe_within(candidate, input, cancel, limit) {
                 Outcome::FfmpegMissing(why) => Outcome::NoDevice(why),
                 o => o,
             },
         }
+    }
+    fn timeout(&self) -> Option<Duration> {
+        self.ffmpeg.timeout()
     }
     fn args(&self, candidate: &'static Candidate, input: Input) -> Vec<String> {
         match hardware::for_candidate(candidate.id).filter(|_| input == Input::Nv12) {
@@ -688,7 +921,7 @@ fn resolve_hardware(
         _ => craft_hwenc::Codec::H264,
     };
     let target = Target { vendor: Vendor::from_pci_id(vendor), os: Os::current(), codec, input: Input::Nv12, lossless };
-    match craft_hwenc::resolve(&preference, target, prober, cache, cancel) {
+    match craft_hwenc::resolve_within(&preference, target, prober, cache, cancel, Budget::new(PROBE_BUDGET)) {
         Ok(Choice::Hardware(c)) => Ok((c.id.to_string(), Some(HardwareRun { candidate: c, program: prober.runs_in(c).to_path_buf(), auto }), None)),
         Ok(Choice::Software { tried }) => {
             for (c, outcome) in &tried {
@@ -717,6 +950,19 @@ fn encoder_settings(p: &Profile, kind: OutputKind, id: &str) -> Settings {
 }
 
 impl Studio {
+    /// Keep the hardware encoders' test results between sessions in `file`, or for the session
+    /// only with none. The file holds the results for one ffmpeg program, its version and the
+    /// graphics driver; a file for others is replaced at the next save.
+    pub fn keep_hardware_tests_in(&mut self, file: Option<PathBuf>) {
+        self.outputs.keep_tests_in(file);
+    }
+
+    /// Forget the hardware encoders' test results, in the session and in the file that keeps
+    /// them, so the next start tests every encoder again.
+    pub fn retest_hardware_encoders(&mut self) -> Result<(), StudioError> {
+        self.outputs.retest_hardware()
+    }
+
     /// Hold `key` for this session under `name`, for the stream destinations whose key is
     /// [`KeyRef::Held`] with that name; an empty key forgets it. Held keys are never saved. A
     /// running stream keeps the keys it started with, and a destination started again with
@@ -791,8 +1037,10 @@ impl Studio {
                 Some((c.id, a))
             })
             .collect();
-        let ffmpeg = FfmpegProber::new(program, offered).with_timeout(PROBE_TIMEOUT).with_encode_args(Box::new(move |c, _| args.get(c.id).cloned()));
-        let vendor = self.gpu.as_ref().and_then(|g| g.adapter()).map_or(0, |a| a.vendor);
+        let ffmpeg =
+            FfmpegProber::new(program.clone(), offered).with_timeout(PROBE_TIMEOUT).with_encode_args(Box::new(move |c, _| args.get(c.id).cloned()));
+        let adapter = self.gpu.as_ref().and_then(|g| g.adapter());
+        let vendor = adapter.map_or(0, |a| a.vendor);
         let stream = kind == OutputKind::Streaming;
         let lossless = planned.rate == RateControl::Lossless;
         let built_in = runs_built_in(&self.profile, kind, planned.rate);
@@ -811,6 +1059,21 @@ impl Studio {
         // A test passed before another output took an encoder says nothing about a second session.
         let encoding = self.outputs.active.values().any(|a| a.hardware.is_some());
         let cache = if encoding { Arc::new(self.outputs.probes.without_outcomes()) } else { Arc::clone(&self.outputs.probes) };
+        // The results kept between sessions are read into, and saved from, the session's cache.
+        // Software only tests nothing, so it does not run `ffmpeg -version` for the file either.
+        let software = Preference::parse(&preference) == Preference::Software;
+        let file = if encoding || software { None } else { self.outputs.saved.path.clone() };
+        let disk = file.map(|path| SavedRun {
+            path,
+            program,
+            driver: tested_with(adapter.map(|a| format!("{:04x}:{:04x} {} {} {}", a.vendor, a.device, a.name, a.driver, a.driver_info))),
+            read: Arc::clone(&self.outputs.saved.read),
+            epoch: self.outputs.saved.epoch.load(Ordering::SeqCst),
+            current: Arc::clone(&self.outputs.saved.epoch),
+            writing: Arc::clone(&self.outputs.saved.writing),
+            last: Arc::clone(&self.outputs.saved.last),
+            known: Arc::clone(&self.outputs.saved.known),
+        });
         let cancel = Cancel::new();
         let c = cancel.clone();
         let earlier = std::mem::take(&mut self.outputs.canceled);
@@ -820,7 +1083,13 @@ impl Studio {
                 let _ = h.join();
             }
             let _one_at_a_time = probing.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            let fingerprint = disk.as_ref().map(|d| d.read(&cache, &c));
             let resolved = resolve_hardware(&preference, vendor, stream, lossless, prober.as_ref(), &cache, &c);
+            if let (Some(d), Some(f)) = (&disk, &fingerprint)
+                && !c.is_canceled()
+            {
+                d.save(&cache, f);
+            }
             if built_in { resolved.map(built_in_twin) } else { resolved }
         });
         match handle {
@@ -1308,6 +1577,173 @@ mod tests {
         old.mark_failed(Path::new("ffmpeg"), nvenc, "old device");
         assert_eq!(o.probes.get(&prober, nvenc, craft_hwenc::Input::Nv12), None);
         assert_eq!(o.device_changes, 1, "tests started before the change are run again");
+    }
+
+    /// The [`SavedRun`] a test thread of `o` gets, as [`Studio::test_hardware`] makes it.
+    fn saved_run(o: &Outputs, driver: &str) -> SavedRun {
+        SavedRun { driver: driver.into(), ..saved_run_at(o, o.saved.path.clone().unwrap()) }
+    }
+
+    /// [`saved_run`] for the file at `path`.
+    fn saved_run_at(o: &Outputs, path: PathBuf) -> SavedRun {
+        SavedRun {
+            path,
+            program: PathBuf::from("fake-ffmpeg"),
+            driver: "10de:2684 GPU 591.44".into(),
+            read: Arc::clone(&o.saved.read),
+            epoch: o.saved.epoch.load(Ordering::SeqCst),
+            current: Arc::clone(&o.saved.epoch),
+            writing: Arc::clone(&o.saved.writing),
+            last: Arc::clone(&o.saved.last),
+            known: Arc::clone(&o.saved.known),
+        }
+    }
+
+    #[test]
+    fn hardware_encoder_tests_are_kept_between_sessions_until_they_are_retested() {
+        let dir = std::env::temp_dir().join(format!("studiocraft-hwtests-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let file = dir.join(HARDWARE_TESTS_FILE);
+        let nvenc = craft_hwenc::candidate("nvenc_h264").unwrap();
+        let works = fake(craft_hwenc::Outcome::Works);
+        let cancel = Cancel::new();
+        let mut o = Outputs { saved: Saved { path: Some(file.clone()), ..Saved::default() }, ..Outputs::default() };
+        let run = saved_run(&o, "10de:2684 GPU 591.44");
+        let f = run.read(&o.probes, &cancel);
+        assert_eq!(f.also, [PathBuf::from(IN_PROCESS)]);
+        o.probes.outcome(&works, nvenc, Input::Nv12, &cancel);
+        run.save(&o.probes, &f);
+        assert!(file.is_file());
+        // The next session reads the file once, before its first tests.
+        let next = Outputs { saved: Saved { path: Some(file.clone()), ..Saved::default() }, ..Outputs::default() };
+        let run = saved_run(&next, "10de:2684 GPU 591.44");
+        run.read(&next.probes, &cancel);
+        assert_eq!(next.probes.get(&works, nvenc, Input::Nv12), Some(craft_hwenc::Outcome::Works));
+        next.probes.clear();
+        run.read(&next.probes, &cancel);
+        assert_eq!(next.probes.get(&works, nvenc, Input::Nv12), None, "the file is read once per session");
+        // Another driver does not read it.
+        let other = Outputs { saved: Saved { path: Some(file.clone()), ..Saved::default() }, ..Outputs::default() };
+        saved_run(&other, "10de:2684 GPU 595.02").read(&other.probes, &cancel);
+        assert_eq!(other.probes.get(&works, nvenc, Input::Nv12), None);
+        // After a device change the encoders are tested again, though the file is for this driver.
+        let mut changed = Outputs { saved: Saved { path: Some(file.clone()), ..Saved::default() }, ..Outputs::default() };
+        changed.forget_hardware_tests();
+        saved_run(&changed, "10de:2684 GPU 591.44").read(&changed.probes, &cancel);
+        assert_eq!(changed.probes.get(&works, nvenc, Input::Nv12), None, "a device change is tested again");
+        // A test thread started before a retest saves nothing, and the file is gone.
+        let stale = saved_run(&o, "10de:2684 GPU 591.44");
+        o.retest_hardware().unwrap();
+        assert!(!file.exists());
+        assert_eq!(o.probes.get(&works, nvenc, Input::Nv12), None);
+        stale.save(&o.probes, &f);
+        assert!(!file.exists(), "a test from before the retest does not write the file again");
+        o.retest_hardware().unwrap();
+        // Nor does one from before the file changed.
+        let stale = saved_run(&o, "10de:2684 GPU 591.44");
+        o.keep_tests_in(None);
+        stale.save(&o.probes, &f);
+        assert!(!file.exists(), "a test from before the file changed does not write the old file");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_encoder_that_fails_while_it_runs_is_taken_out_of_the_saved_tests() {
+        let dir = std::env::temp_dir().join(format!("studiocraft-hwfailed-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let file = dir.join(HARDWARE_TESTS_FILE);
+        let nvenc = craft_hwenc::candidate("nvenc_h264").unwrap();
+        let works = fake(craft_hwenc::Outcome::Works);
+        let cancel = Cancel::new();
+        let o = Outputs { saved: Saved { path: Some(file.clone()), ..Saved::default() }, ..Outputs::default() };
+        let run = saved_run(&o, "10de:2684 GPU 591.44");
+        let f = run.read(&o.probes, &cancel);
+        o.probes.outcome(&works, nvenc, Input::Nv12, &cancel);
+        run.save(&o.probes, &f);
+        o.probes.mark_failed(works.runs_in(nvenc), nvenc, "lost its device");
+        o.saved.save_again(&o.probes);
+        let next = ProbeCache::new();
+        assert_eq!(next.load(&file, &f), Loaded::Read(0));
+        assert_eq!(next.get(&works, nvenc, Input::Nv12), None, "the next session tests it again");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_saved_tests_are_for_one_build_of_the_app() {
+        let with = tested_with(Some("10de:2684 GPU 591.44".into()));
+        assert_eq!(with, format!("10de:2684 GPU 591.44; StudioCraft {}", env!("CARGO_PKG_VERSION")));
+        assert!(tested_with(None).ends_with(env!("CARGO_PKG_VERSION")));
+    }
+
+    #[test]
+    fn a_replaced_ffmpeg_program_is_tested_again_in_the_same_session() {
+        let dir = std::env::temp_dir().join(format!("studiocraft-hwprogram-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        // A file that does not run: `-version` gives no line, and its size tells the versions apart.
+        let program = dir.join("ffmpeg");
+        std::fs::write(&program, b"one").unwrap();
+        let nvenc = craft_hwenc::candidate("nvenc_h264").unwrap();
+        let works = fake(craft_hwenc::Outcome::Works);
+        let cancel = Cancel::new();
+        let o = Outputs::default();
+        let run = SavedRun { program: program.clone(), ..saved_run_at(&o, dir.join(HARDWARE_TESTS_FILE)) };
+        let first = run.read(&o.probes, &cancel);
+        o.probes.outcome(&works, nvenc, Input::Nv12, &cancel);
+        assert_eq!(run.read(&o.probes, &cancel), first, "the same program gives the same fingerprint");
+        assert_eq!(o.probes.get(&works, nvenc, Input::Nv12), Some(Outcome::Works));
+        std::fs::write(&program, b"a newer build").unwrap();
+        assert_ne!(run.read(&o.probes, &cancel), first);
+        assert_eq!(o.probes.get(&works, nvenc, Input::Nv12), None, "the old program's results are forgotten");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A clock that moves only when it is paused.
+    struct StepClock(Instant, Mutex<Duration>);
+
+    impl Clock for StepClock {
+        fn now(&self) -> Instant {
+            self.0 + *self.1.lock().unwrap()
+        }
+        fn pause(&self, d: Duration) {
+            *self.1.lock().unwrap() += d;
+        }
+    }
+
+    #[test]
+    fn an_in_process_encoder_test_that_never_ends_is_left_at_its_limit() {
+        let clock = StepClock(Instant::now(), Mutex::new(Duration::ZERO));
+        let (release, stuck) = std::sync::mpsc::channel::<()>();
+        let work = move || {
+            let _ = stuck.recv();
+            Outcome::Works
+        };
+        assert_eq!(wait_on_thread(work, &Cancel::new(), Duration::from_secs(5), &clock), Outcome::TimedOut(Duration::from_secs(5)));
+        assert_eq!(*clock.1.lock().unwrap(), Duration::from_secs(5));
+        drop(release);
+        let canceled = Cancel::new();
+        canceled.cancel();
+        let (_release, stuck) = std::sync::mpsc::channel::<()>();
+        let work = move || {
+            let _ = stuck.recv();
+            Outcome::Works
+        };
+        assert_eq!(wait_on_thread(work, &canceled, Duration::from_secs(5), &clock), Outcome::Canceled);
+        // Until a test left running ends, the same encoder is not tested again.
+        let end = TestEnd { id: "test-only-encoder".into(), done: Arc::default() };
+        leave_running("test-only-encoder", &end.done);
+        assert!(left_running("test-only-encoder"));
+        assert!(!left_running("another-test-only-encoder"));
+        drop(end);
+        assert!(!left_running("test-only-encoder"));
+        // A test that ended before it was left is not recorded.
+        let end = TestEnd { id: "test-only-encoder".into(), done: Arc::default() };
+        let done = Arc::clone(&end.done);
+        drop(end);
+        leave_running("test-only-encoder", &done);
+        assert!(!left_running("test-only-encoder"));
+        assert_eq!(wait_on_thread(|| Outcome::Works, &Cancel::new(), Duration::MAX, &clock), Outcome::Works);
+        assert!(matches!(wait_on_thread(|| panic!("a driver fault"), &Cancel::new(), Duration::MAX, &clock), Outcome::Failed(_)));
     }
 
     #[test]

@@ -64,6 +64,8 @@ pub enum RuntimeAction {
     AudioTracksRepair {
         folder: String,
     },
+    /// Forget the hardware encoders' test results, so the next start tests them again.
+    RetestHardwareEncoders,
     OpenSettings,
     Exit,
 }
@@ -243,6 +245,10 @@ pub enum Command {
     /// take's `Audio Files` folder, its `<name> Audio` folder or the recording folder holding them.
     #[serde(rename = "audio_tracks.repair")]
     AudioTracksRepair { folder: String },
+    /// Forget the hardware encoders' test results, in the session and in the file that keeps
+    /// them, so the next recording or stream tests them again.
+    #[serde(rename = "hardware_encoders.retest")]
+    RetestHardwareEncoders {},
     #[serde(rename = "app.settings")]
     OpenSettings {},
     #[serde(rename = "app.exit")]
@@ -338,6 +344,7 @@ impl Command {
             Command::ReplaySave {} => "replay.save",
             Command::AudioTracksStatus {} => "audio_tracks.status",
             Command::AudioTracksRepair { .. } => "audio_tracks.repair",
+            Command::RetestHardwareEncoders {} => "hardware_encoders.retest",
             Command::OpenSettings {} => "app.settings",
             Command::Exit {} => "app.exit",
             Command::AppLinks { .. } => "app.links",
@@ -428,6 +435,7 @@ const SPECS: &[CommandSpec] = &[
     spec("replay.save", "Save Replay", "", Undo::NotUndoable),
     spec("audio_tracks.status", "Audio Tracks Status", "", Undo::NotUndoable),
     spec("audio_tracks.repair", "Repair Audio Tracks", "folder: path to a take's folder or the recording folder", Undo::NotUndoable),
+    spec("hardware_encoders.retest", "Test Hardware Encoders Again", "", Undo::NotUndoable),
     spec("app.settings", "Settings", "", Undo::NotUndoable),
     spec("app.exit", "Exit", "", Undo::NotUndoable),
     spec("app.links", "Community Links", "link?: discord|website|github|issues", Undo::NotUndoable),

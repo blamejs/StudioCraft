@@ -1,6 +1,6 @@
 [package]
 name = "craft-hwenc"
-description = "Hardware video encoders run through the ffmpeg program: a candidate table per API and codec, a one-frame test encode of each candidate with results cached per session, and an automatic choice ordered by the graphics adapter's vendor with a software fallback"
+description = "Hardware video encoders run through the ffmpeg program: a candidate table per API and codec, a one-frame test encode of each candidate with results cached per session or in a file, and an automatic choice ordered by the graphics adapter's vendor with a software fallback"
 version = "0.1.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
