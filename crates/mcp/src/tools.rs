@@ -54,6 +54,8 @@ const RECORDS: Hints = Hints { read_only: false, destructive: false, idempotent:
 const PUBLISHES: Hints = Hints { read_only: false, destructive: false, idempotent: true, open_world: true };
 /// Opening a file in another program: each call starts the program again.
 const LAUNCHES: Hints = Hints { read_only: false, destructive: false, idempotent: false, open_world: false };
+/// Adding a marker to the running take: each call adds another.
+const MARKS: Hints = Hints { read_only: false, destructive: false, idempotent: false, open_world: false };
 
 fn tool(name: &str, title: &str, description: &str, properties: Value, required: &[&str], hints: Hints) -> Value {
     json!({
@@ -403,6 +405,17 @@ fn studio_tool_definitions() -> Vec<Value> {
             json!({}),
             &[],
             LAUNCHES,
+        ),
+        tool(
+            "audio_tracks_marker",
+            "Mark the running take of audio tracks",
+            "Add a marker to the running take of audio tracks at this moment; the take's session file lists it at that sample. \
+             `name` is 1 to 256 characters with no control characters (default \"Marker N\", the take's Nth marker). Returns the \
+             marker's `name` and `seconds` from the take's start. An error when no take runs, when the take is ending, and when \
+             1,024 markers are waiting to be written.",
+            json!({"name": {"type": "string", "description": "The marker's name (default: \"Marker N\")."}}),
+            &[],
+            MARKS,
         ),
         tool(
             "output_status",
@@ -929,6 +942,11 @@ fn dispatch(b: &mut dyn Backend, name: &str, args: &Args) -> Result<Value, McpEr
         "audio_tracks_status" => Ok(text(&run(b, "audio_tracks.status", json!({}))?)),
         "audio_tracks_repair" => Ok(text(&run(b, "audio_tracks.repair", json!({"folder": req_str(args, "folder")?}))?)),
         "audio_tracks_open_last" => Ok(text(&run(b, "audio_tracks.open_last", json!({}))?)),
+        // `name: null` goes on to the command, which refuses it, instead of naming the marker.
+        "audio_tracks_marker" => {
+            let params = Value::Object(args.get("name").map(|v| ("name".to_owned(), v.clone())).into_iter().collect());
+            Ok(text(&run(b, "audio_tracks.marker", params)?))
+        }
         other => Err(McpError::Invalid(format!("there is no tool `{other}`"))),
     }
 }

@@ -66,6 +66,10 @@ pub enum RuntimeAction {
     },
     /// Open the session of the last take of audio tracks in the audio editor.
     AudioTracksOpenLast,
+    /// Mark the running take of audio tracks now, named `name` or numbered when it is `None`.
+    AudioTracksMarker {
+        name: Option<String>,
+    },
     OpenSettings,
     Exit,
 }
@@ -249,6 +253,14 @@ pub enum Command {
     /// cannot be started.
     #[serde(rename = "audio_tracks.open_last")]
     AudioTracksOpenLast {},
+    /// Mark the running take of audio tracks at this moment, named `name` or numbered; the
+    /// take's session lists the marker.
+    #[serde(rename = "audio_tracks.marker")]
+    AudioTracksMarker {
+        /// Absent gives a numbered marker; `null` or any value that is not a string is an error.
+        #[serde(default, deserialize_with = "given_string")]
+        name: Option<String>,
+    },
     #[serde(rename = "app.settings")]
     OpenSettings {},
     #[serde(rename = "app.exit")]
@@ -276,6 +288,11 @@ pub enum Command {
     /// Whether this system captures one application's audio, and the captures running now.
     #[serde(rename = "app_audio.status")]
     AppAudioStatus {},
+}
+
+/// A parameter that may be left out but, when given, is a string: `null` is refused.
+fn given_string<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<String>, D::Error> {
+    String::deserialize(d).map(Some)
 }
 
 impl Command {
@@ -345,6 +362,7 @@ impl Command {
             Command::AudioTracksStatus {} => "audio_tracks.status",
             Command::AudioTracksRepair { .. } => "audio_tracks.repair",
             Command::AudioTracksOpenLast {} => "audio_tracks.open_last",
+            Command::AudioTracksMarker { .. } => "audio_tracks.marker",
             Command::OpenSettings {} => "app.settings",
             Command::Exit {} => "app.exit",
             Command::AppLinks { .. } => "app.links",
@@ -436,6 +454,7 @@ const SPECS: &[CommandSpec] = &[
     spec("audio_tracks.status", "Audio Tracks Status", "", Undo::NotUndoable),
     spec("audio_tracks.repair", "Repair Audio Tracks", "folder: path to a take's folder or the recording folder", Undo::NotUndoable),
     spec("audio_tracks.open_last", "Open Last Audio Tracks in Editor", "", Undo::NotUndoable),
+    spec("audio_tracks.marker", "Add Audio Tracks Marker", "name?: the marker's name, 1 to 256 characters", Undo::NotUndoable),
     spec("app.settings", "Settings", "", Undo::NotUndoable),
     spec("app.exit", "Exit", "", Undo::NotUndoable),
     spec("app.links", "Community Links", "link?: discord|website|github|issues", Undo::NotUndoable),

@@ -486,6 +486,7 @@ menu	Transform	変形
 @msg	Audio tracks could not be repaired: {takes}. Takes repaired: {count}	オーディオトラックを修復できませんでした: {takes}。修復したテイク: {count}
 @msg	Audio tracks could not be repaired: {takes} and {more} more. Takes repaired: {count}	オーディオトラックを修復できませんでした: {takes} ほか {more} 件。修復したテイク: {count}
 	Open Last Audio Tracks in Editor	最後のオーディオトラックをエディターで開く
+	Add Audio Tracks Marker	オーディオトラックにマーカーを追加
 	After a take	テイクの後
 	Nothing	何もしない
 	Show the folder	フォルダーを表示

@@ -486,6 +486,7 @@ menu	Transform	變形
 @msg	Audio tracks could not be repaired: {takes}. Takes repaired: {count}	無法修復音訊軌道：{takes}。已修復的錄製：{count}
 @msg	Audio tracks could not be repaired: {takes} and {more} more. Takes repaired: {count}	無法修復音訊軌道：{takes} 及另外 {more} 個。已修復的錄製：{count}
 	Open Last Audio Tracks in Editor	在編輯器中開啟最近的音訊軌道
+	Add Audio Tracks Marker	為音訊軌道新增標記
 	After a take	錄製結束後
 	Nothing	不執行任何動作
 	Show the folder	顯示資料夾

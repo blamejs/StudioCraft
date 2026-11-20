@@ -487,6 +487,7 @@ menu	Transform	Dönüştür
 @msg	Audio tracks could not be repaired: {takes}. Takes repaired: {count}	Ses parçaları onarılamadı: {takes}. Onarılan çekimler: {count}
 @msg	Audio tracks could not be repaired: {takes} and {more} more. Takes repaired: {count}	Ses parçaları onarılamadı: {takes} ve {more} tane daha. Onarılan çekimler: {count}
 	Open Last Audio Tracks in Editor	Son Ses Parçalarını Düzenleyicide Aç
+	Add Audio Tracks Marker	Ses Parçalarına İşaretçi Ekle
 	After a take	Bir çekimden sonra
 	Nothing	Hiçbir şey
 	Show the folder	Klasörü göster

@@ -495,6 +495,7 @@ menu	Transform	Transformer
 @msg	Audio tracks could not be repaired: {takes}. Takes repaired: {count}	Les pistes audio n'ont pas pu être réparées : {takes}. Prises réparées : {count}
 @msg	Audio tracks could not be repaired: {takes} and {more} more. Takes repaired: {count}	Les pistes audio n'ont pas pu être réparées : {takes} et {more} de plus. Prises réparées : {count}
 	Open Last Audio Tracks in Editor	Ouvrir les dernières pistes audio dans l'éditeur
+	Add Audio Tracks Marker	Ajouter un marqueur aux pistes audio
 	After a take	Après une prise
 	Nothing	Rien
 	Show the folder	Afficher le dossier

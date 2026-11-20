@@ -78,12 +78,13 @@ pub struct TakeMarkers {
     /// Take frame 0 on the studio's clock, when the take has a start time.
     origin: Option<Tick>,
     status: Arc<Status>,
+    kept: Arc<AtomicU64>,
     dropped: Arc<AtomicU64>,
 }
 
 impl TakeMarkers {
     pub(crate) fn new(queue: MarkerQueue, origin: Option<Tick>, status: Arc<Status>) -> TakeMarkers {
-        TakeMarkers { queue, origin, status, dropped: Arc::new(AtomicU64::new(0)) }
+        TakeMarkers { queue, origin, status, kept: Arc::new(AtomicU64::new(0)), dropped: Arc::new(AtomicU64::new(0)) }
     }
 
     /// The take frame of `at` on the studio's clock: frames since the take's start, or for a take
@@ -110,7 +111,13 @@ impl TakeMarkers {
             self.dropped.fetch_add(1, Ordering::Relaxed);
             return false;
         }
+        self.kept.fetch_add(1, Ordering::Relaxed);
         true
+    }
+
+    /// Markers the take kept.
+    pub fn kept(&self) -> u64 {
+        self.kept.load(Ordering::Relaxed)
     }
 
     /// Markers that were not kept because the queue was full or the take was asked to stop.
@@ -134,7 +141,7 @@ mod tests {
         assert!(m.add(Tick(1_000 + 48_000 * FRAME_TICKS), "Goal"));
         assert!(m.add_frame(7, &"x".repeat(MAX_NAME_CHARS + 10)));
         assert!(!m.add_frame(9, "No room"), "the queue holds two");
-        assert_eq!(m.dropped(), 1);
+        assert_eq!((m.kept(), m.dropped()), (2, 1));
         assert_eq!(queue.pop(), Some(Marker { at: 48_000, name: "Goal".into() }));
         assert_eq!(queue.pop().map(|m| m.name.chars().count()), Some(MAX_NAME_CHARS));
         status.state.store(crate::State::Finishing as u8, Ordering::Release);

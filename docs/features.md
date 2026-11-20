@@ -226,7 +226,10 @@ for the audio editor. The file appears with no tracks when the take starts and i
 full session when the take ends, stops early or is repaired. The session holds one track for each
 of the take's tracks, the program mix first. Each file is one clip at the sample of the output's timeline where the
 file starts, and each part follows the one before it. Each dropout (audio lost before the disk) is
-a selection on its track's marker lane, and a session lists at most 10,000 markers and dropouts.
+a selection on its track's marker lane. File › Add Audio Tracks Marker (`audio_tracks.marker`, which
+can be given a shortcut in Settings › Hotkeys) marks the running take at that moment, and the
+session lists each such marker at its sample. A session lists at most 10,000 markers and dropouts,
+markers first.
 Its comments say when the take stopped early and how many markers and dropouts it left out. When the
 full session cannot be written, for example on a full disk, the take stops with that error and is
 left unfinished, and a repair of the take writes the session.
@@ -235,7 +238,8 @@ Settings › Output › Audio tracks › After a take sets what happens when a t
 Nothing (the default), Show the folder, or Open in the audio editor. Audio editor sets the editor's
 program; when it is empty, `soundcraft` on the `PATH` is used. When the editor cannot be found or
 started, the take's folder opens instead and the status bar gives the reason. A take that ends
-because the next one starts (a recording that starts or stops during a stream) opens nothing.
+because the next one starts (a recording that starts or stops during a stream) opens nothing. A
+take that ends because the app closes is opened as the app closes.
 File › Open Last Audio Tracks in Editor opens the last session again, and can be given a shortcut
 in Settings › Hotkeys.
 

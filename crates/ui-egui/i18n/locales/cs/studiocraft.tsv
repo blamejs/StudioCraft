@@ -486,6 +486,7 @@ menu	Transform	Transformace
 @msg	Audio tracks could not be repaired: {takes}. Takes repaired: {count}	Zvukové stopy nelze opravit: {takes}. Opravené záznamy: {count}
 @msg	Audio tracks could not be repaired: {takes} and {more} more. Takes repaired: {count}	Zvukové stopy nelze opravit: {takes} a {more} dalších. Opravené záznamy: {count}
 	Open Last Audio Tracks in Editor	Otevřít poslední zvukové stopy v editoru
+	Add Audio Tracks Marker	Přidat značku do zvukových stop
 	After a take	Po záznamu
 	Nothing	Nic
 	Show the folder	Zobrazit složku

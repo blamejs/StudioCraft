@@ -366,6 +366,7 @@ impl Studio {
                 RuntimeAction::AudioTracksStatus => result = self.audio_tracks_json(),
                 RuntimeAction::AudioTracksRepair { folder } => result = self.repair_audio_tracks(&folder)?,
                 RuntimeAction::AudioTracksOpenLast => result = self.open_last_audio_tracks()?,
+                RuntimeAction::AudioTracksMarker { name } => result = self.add_audio_tracks_marker(name)?,
                 RuntimeAction::StartRecording => self.start_output(OutputKind::Recording)?,
                 RuntimeAction::StopRecording => self.stop_output(OutputKind::Recording),
                 RuntimeAction::ToggleRecording => self.toggle_output(OutputKind::Recording)?,

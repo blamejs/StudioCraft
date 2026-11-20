@@ -476,6 +476,7 @@ menu	Transform	Transformeren
 @msg	Audio tracks could not be repaired: {takes}. Takes repaired: {count}	Audiosporen konden niet worden hersteld: {takes}. Herstelde opnamen: {count}
 @msg	Audio tracks could not be repaired: {takes} and {more} more. Takes repaired: {count}	Audiosporen konden niet worden hersteld: {takes} en {more} meer. Herstelde opnamen: {count}
 	Open Last Audio Tracks in Editor	Laatste audiosporen openen in editor
+	Add Audio Tracks Marker	Markering toevoegen aan audiosporen
 	After a take	Na een opname
 	Nothing	Niets
 	Show the folder	Map tonen

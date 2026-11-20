@@ -467,6 +467,7 @@ menu	Transform	שינוי צורה
 @msg	Audio tracks could not be repaired: {takes}. Takes repaired: {count}	לא ניתן היה לתקן את רצועות השמע: {takes}. טייקים שתוקנו: {count}
 @msg	Audio tracks could not be repaired: {takes} and {more} more. Takes repaired: {count}	לא ניתן היה לתקן את רצועות השמע: {takes} ועוד {more}. טייקים שתוקנו: {count}
 	Open Last Audio Tracks in Editor	פתיחת רצועות השמע האחרונות בעורך
+	Add Audio Tracks Marker	הוספת סמן לרצועות השמע
 	After a take	אחרי טייק
 	Nothing	כלום
 	Show the folder	הצגת התיקייה

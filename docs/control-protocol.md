@@ -83,7 +83,7 @@ collections).
 [Commands with their own parameters](#commands-with-their-own-parameters) describes `app.info`,
 `app.links`, `app.check_updates`, `plugin.list`, `source.schema`, `source.sync_offset`,
 `source.monitor`, `source.set_record_track`, `audio_tracks.status`, `audio_tracks.repair`,
-`audio_tracks.open_last` and the `dock.layout_*` commands.
+`audio_tracks.open_last`, `audio_tracks.marker` and the `dock.layout_*` commands.
 
 Each entry of `engine.commands` has these fields:
 
@@ -301,13 +301,19 @@ repair while four run are errors. A take that is still being written, or that an
 holds, is left unchanged. Each repaired take's entry also has `session`, the session file the
 repair wrote, or `null` for a take that did not make its own folder.
 
-### `audio_tracks.open_last`
+### `audio_tracks.open_last` and `audio_tracks.marker`
 
 `audio_tracks.open_last` takes no params and opens the last take's session file in the audio
 editor on a background thread, or the take's folder when the editor cannot be found or started; it
 returns `{"started": true, "session"}` at once, and a notice reports what happened. The last session
 is the last one a take wrote when it ended or a repair wrote, and `audio_tracks.status` returns it
 as `last_session`. No session yet and a fifth opening while four run are errors.
+
+`audio_tracks.marker` takes `{"name"}` and marks the running take at this moment; the take's
+session lists the marker at that sample. `name` is 1 to 256 characters, not only spaces, with no
+control characters; without it the marker is "Marker N", the take's Nth marker. It returns
+`{"name", "seconds"}`, where `seconds` counts from the take's first sample. No running take, a take
+that is ending, and 1,024 markers waiting to be written are errors.
 
 ### `dock.layout_save`, `dock.layout_apply` and `dock.layout_remove`
 

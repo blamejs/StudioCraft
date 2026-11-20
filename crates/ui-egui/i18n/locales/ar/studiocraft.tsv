@@ -474,6 +474,7 @@ menu	Transform	التحويل
 @msg	Audio tracks could not be repaired: {takes}. Takes repaired: {count}	تعذّر إصلاح المسارات الصوتية: {takes}. اللقطات التي أُصلحت: {count}
 @msg	Audio tracks could not be repaired: {takes} and {more} more. Takes repaired: {count}	تعذّر إصلاح المسارات الصوتية: {takes} و{more} غيرها. اللقطات التي أُصلحت: {count}
 	Open Last Audio Tracks in Editor	فتح آخر المسارات الصوتية في المحرر
+	Add Audio Tracks Marker	إضافة علامة إلى المسارات الصوتية
 	After a take	بعد اللقطة
 	Nothing	لا شيء
 	Show the folder	إظهار المجلد

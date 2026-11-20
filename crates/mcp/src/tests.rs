@@ -13,7 +13,7 @@ use crate::{Backend, Headless, MAX_BATCH_STEPS, McpError, Remote, Roots, Server,
 
 const TOKEN: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
-const TOOLS: [&str; 30] = [
+const TOOLS: [&str; 31] = [
     "command_list",
     "command_run",
     "command_batch",
@@ -43,6 +43,7 @@ const TOOLS: [&str; 30] = [
     "audio_tracks_status",
     "audio_tracks_repair",
     "audio_tracks_open_last",
+    "audio_tracks_marker",
     "output_status",
 ];
 
@@ -333,6 +334,12 @@ fn source_audio_sets_whether_the_source_records_its_own_track() {
     error_text(&call(&mut s, "audio_tracks_repair", json!({})));
     let none = error_text(&call(&mut s, "audio_tracks_open_last", json!({})));
     assert!(none.contains("no take of audio tracks has ended"), "{none}");
+    let idle = error_text(&call(&mut s, "audio_tracks_marker", json!({"name": "Goal"})));
+    assert!(idle.contains("no take of audio tracks is running"), "{idle}");
+    let bad = error_text(&call(&mut s, "audio_tracks_marker", json!({"name": ""})));
+    assert!(bad.contains("a marker's name is 1 to 256 characters"), "{bad}");
+    let null = error_text(&call(&mut s, "audio_tracks_marker", json!({"name": null})));
+    assert!(null.contains("audio_tracks.marker"), "a null name is refused, not numbered: {null}");
 }
 
 #[test]

@@ -486,6 +486,7 @@ menu	Transform	Transformera
 @msg	Audio tracks could not be repaired: {takes}. Takes repaired: {count}	Ljudspåren kunde inte repareras: {takes}. Reparerade tagningar: {count}
 @msg	Audio tracks could not be repaired: {takes} and {more} more. Takes repaired: {count}	Ljudspåren kunde inte repareras: {takes} och {more} till. Reparerade tagningar: {count}
 	Open Last Audio Tracks in Editor	Öppna senaste ljudspåren i redigeraren
+	Add Audio Tracks Marker	Lägg till markör i ljudspåren
 	After a take	Efter en tagning
 	Nothing	Ingenting
 	Show the folder	Visa mappen

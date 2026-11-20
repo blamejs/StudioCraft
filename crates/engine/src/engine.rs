@@ -13,6 +13,9 @@ use crate::command::{Command, ItemRef, Move, RuntimeAction, SceneRef, SourceRef,
 use crate::history::History;
 use crate::links;
 
+/// Characters a marker's name holds at most (`audio_tracks.marker`).
+pub const MAX_MARKER_NAME_CHARS: usize = 256;
+
 /// Why a command did not run. Shown to the user as is.
 #[derive(Debug, Error, Clone, PartialEq)]
 pub enum EngineError {
@@ -256,6 +259,16 @@ impl Engine {
                 Ok(Outcome::runtime(RuntimeAction::AudioTracksRepair { folder }))
             }
             Command::AudioTracksOpenLast {} => Ok(Outcome::runtime(RuntimeAction::AudioTracksOpenLast)),
+            Command::AudioTracksMarker { name } => {
+                if let Some(n) = &name
+                    && (n.trim().is_empty() || n.chars().count() > MAX_MARKER_NAME_CHARS || n.chars().any(char::is_control))
+                {
+                    return Err(EngineError::Invalid(format!(
+                        "a marker's name is 1 to {MAX_MARKER_NAME_CHARS} characters, not only spaces, with no control characters"
+                    )));
+                }
+                Ok(Outcome::runtime(RuntimeAction::AudioTracksMarker { name }))
+            }
             Command::OpenSettings {} => Ok(Outcome::runtime(RuntimeAction::OpenSettings)),
             Command::Exit {} => Ok(Outcome::runtime(RuntimeAction::Exit)),
             // Queries: no history step, no revision bump, no change to the dirty flag.

@@ -482,6 +482,7 @@ menu	Transform	Trasforma
 @msg	Audio tracks could not be repaired: {takes}. Takes repaired: {count}	Impossibile riparare le tracce audio: {takes}. Riprese riparate: {count}
 @msg	Audio tracks could not be repaired: {takes} and {more} more. Takes repaired: {count}	Impossibile riparare le tracce audio: {takes} e altre {more}. Riprese riparate: {count}
 	Open Last Audio Tracks in Editor	Apri le ultime tracce audio nell'editor
+	Add Audio Tracks Marker	Aggiungi un marcatore alle tracce audio
 	After a take	Dopo una ripresa
 	Nothing	Niente
 	Show the folder	Mostra la cartella

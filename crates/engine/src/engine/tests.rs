@@ -401,6 +401,18 @@ fn runtime_commands_are_handed_to_the_app() {
     for bad in [json!({}), json!({"folder": ""}), json!({"folder": "  "}), json!({"folder": 3})] {
         assert!(run(&mut e, "audio_tracks.repair", bad.clone()).is_err(), "{bad}");
     }
+    let o = run(&mut e, "audio_tracks.marker", json!({})).unwrap();
+    assert_eq!(o.runtime, Some(RuntimeAction::AudioTracksMarker { name: None }));
+    let longest = "é".repeat(crate::engine::MAX_MARKER_NAME_CHARS);
+    let o = run(&mut e, "audio_tracks.marker", json!({"name": longest})).unwrap();
+    assert_eq!(o.runtime, Some(RuntimeAction::AudioTracksMarker { name: Some(longest) }));
+    assert!(!o.changed);
+    let too_long = "x".repeat(crate::engine::MAX_MARKER_NAME_CHARS + 1);
+    for bad in
+        [json!({"name": ""}), json!({"name": "   "}), json!({"name": too_long}), json!({"name": "a\nb"}), json!({"name": 3}), json!({"name": null})]
+    {
+        assert!(run(&mut e, "audio_tracks.marker", bad.clone()).is_err(), "{bad}");
+    }
 }
 
 #[test]

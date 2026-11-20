@@ -1114,6 +1114,37 @@ mod audio_tracks {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    #[test]
+    fn a_marker_set_during_a_take_is_in_its_session() {
+        let (mut s, dir) = studio("take-marker", true);
+        let none = s.run("audio_tracks.marker", &json!({})).unwrap_err().to_string();
+        assert!(none.contains("no take of audio tracks is running"), "{none}");
+        s.test_streaming = true;
+        s.tick();
+        armed(&mut s);
+        let (v, _) = s.run("audio_tracks.marker", &json!({"name": "Goal"})).unwrap();
+        assert_eq!(v["name"], json!("Goal"));
+        assert!(v["seconds"].as_f64().is_some_and(|t| t >= 0.0), "{v}");
+        let (v, _) = s.run("audio_tracks.marker", &json!({})).unwrap();
+        assert_eq!(v["name"], json!("Marker 2"), "an unnamed marker is numbered in the take");
+        s.test_streaming = false;
+        s.tick();
+        let mut spins = 0u64;
+        while !s.audio_tracks.finishing.is_empty() {
+            spins += 1;
+            assert!(spins < 200_000_000, "the take never finished");
+            s.tick();
+            std::thread::yield_now();
+        }
+        let session = s.state_json()["audio_tracks"]["last_session"].as_str().map(std::path::PathBuf::from).unwrap();
+        let text = std::fs::read_to_string(&session).unwrap();
+        assert!(text.contains("\"Goal\"") && text.contains("\"Marker 2\""), "{text}");
+        let after = s.run("audio_tracks.marker", &json!({})).unwrap_err().to_string();
+        assert!(after.contains("no take of audio tracks is running"), "{after}");
+        drop(s);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// A studio whose takes show their folder when they end, through `fake`.
     fn showing_folders(name: &str, fake: &Arc<crate::audio_editor::tests::Fake>) -> (Studio, std::path::PathBuf) {
         let (mut s, dir) = studio(name, true);
@@ -1147,7 +1178,41 @@ mod audio_tracks {
         }
         s.tick();
         s.audio_tracks_opened();
-        assert_eq!(fake.log.lock().unwrap().len(), 2, "{:?}", fake.log.lock().unwrap());
+        let log = fake.log.lock().unwrap().clone();
+        assert_eq!(log.len(), 2, "{log:?}");
+        drop(s);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_take_that_ends_for_the_next_one_opens_nothing_when_both_end_between_two_ticks() {
+        let fake = Arc::new(crate::audio_editor::tests::Fake::default());
+        let (mut s, dir) = showing_folders("after-stop-next", &fake);
+        let mut p = s.profile().clone();
+        p.audio_tracks.when = AudioTracksWhen::Either;
+        s.set_profile(p).unwrap();
+        s.test_streaming = true;
+        s.tick();
+        armed(&mut s);
+        // A recording starts during the stream: the stream's take ends for the recording's.
+        let rec = dir.join("2026-11-20 09-00-00.mkv");
+        let now = s.clock.now();
+        s.audio_tracks_output_starting(OutputKind::Recording, now, Some(&rec));
+        s.test_streaming = false;
+        s.stop_audio_tracks();
+        assert_eq!(s.audio_tracks.finishing.len(), 2, "both takes are still finishing");
+        let mut spins = 0u64;
+        while !s.audio_tracks.finishing.iter().all(|f| f.0.finished()) {
+            spins += 1;
+            assert!(spins < 200_000_000, "the takes never finished");
+            s.mixer.free_retired();
+            std::thread::yield_now();
+        }
+        s.tick();
+        s.audio_tracks_opened();
+        let log = fake.log.lock().unwrap().clone();
+        let folder = dir.join("2026-11-20 09-00-00 Audio");
+        assert_eq!(log, [format!("folder {}", folder.display())], "only the recording's take opens");
         drop(s);
         let _ = std::fs::remove_dir_all(&dir);
     }

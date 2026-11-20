@@ -489,6 +489,7 @@ menu	Transform	Transformar
 @msg	Audio tracks could not be repaired: {takes}. Takes repaired: {count}	No se pudieron reparar las pistas de audio: {takes}. Tomas reparadas: {count}
 @msg	Audio tracks could not be repaired: {takes} and {more} more. Takes repaired: {count}	No se pudieron reparar las pistas de audio: {takes} y {more} más. Tomas reparadas: {count}
 	Open Last Audio Tracks in Editor	Abrir las últimas pistas de audio en el editor
+	Add Audio Tracks Marker	Añadir un marcador a las pistas de audio
 	After a take	Después de una toma
 	Nothing	Nada
 	Show the folder	Mostrar la carpeta

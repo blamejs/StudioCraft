@@ -495,6 +495,7 @@ menu	Transform	Преобразование
 @msg	Audio tracks could not be repaired: {takes}. Takes repaired: {count}	Не удалось восстановить звуковые дорожки: {takes}. Восстановлено дублей: {count}
 @msg	Audio tracks could not be repaired: {takes} and {more} more. Takes repaired: {count}	Не удалось восстановить звуковые дорожки: {takes} и ещё {more}. Восстановлено дублей: {count}
 	Open Last Audio Tracks in Editor	Открыть последние звуковые дорожки в редакторе
+	Add Audio Tracks Marker	Добавить маркер в звуковые дорожки
 	After a take	После дубля
 	Nothing	Ничего
 	Show the folder	Показать папку
