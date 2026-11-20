@@ -702,8 +702,68 @@ fn two_applications_whose_captures_overlap_are_not_routed_together() {
         assert!(run(&mut e, "app_audio.route", json!({"app": second, "routed": true})).is_err(), "{second} after {first}");
         assert_eq!(e.collection(), &before);
         assert!(!run(&mut e, "app_audio.route", json!({"app": first, "routed": true})).unwrap().changed, "routing {first} again is allowed");
+        let err = run(&mut e, "app_audio.route", json!({"app": second, "routed": true})).err().map(|e| e.to_string()).unwrap_or_default();
+        assert!(err.contains("stop routing"), "{err}");
         run(&mut e, "app_audio.route", json!({"app": first, "routed": false})).unwrap();
     }
+    // The browser heard only through the program scene: hiding it is the remedy.
+    run(&mut e, "source.add", json!({"kind": crate::lanes::APP_AUDIO_KIND, "name": "Browser", "settings": {"app": BROWSER}})).unwrap();
+    let err = run(&mut e, "app_audio.route", json!({"app": PLAYER, "routed": true})).err().map(|e| e.to_string()).unwrap_or_default();
+    assert!(err.contains("hide browser's source"), "{err}");
+    // Routed and shown in the program scene: both changes are named.
+    run(&mut e, "app_audio.route", json!({"app": BROWSER, "routed": true})).unwrap();
+    let err = run(&mut e, "app_audio.route", json!({"app": PLAYER, "routed": true})).err().map(|e| e.to_string()).unwrap_or_default();
+    assert!(err.contains("stop routing browser and hide its source"), "{err}");
+}
+
+#[test]
+fn routing_uses_the_source_the_program_scene_already_plays() {
+    let (mut e, _fake, _discovery) = lane_engine();
+    // A source no scene shows comes first in the collection; a later one is shown in the scene.
+    let mut c = e.collection().clone();
+    let spare = SourceId(c.alloc_id());
+    c.sources.push(SourceConfig {
+        id: spare,
+        kind: crate::lanes::APP_AUDIO_KIND.into(),
+        kind_version: 1,
+        name: "Spare".into(),
+        settings: Settings::new().with("app", PLAYER),
+        filters: vec![],
+        audio: Default::default(),
+    });
+    e.load(c);
+    let o = run(&mut e, "source.add", json!({"kind": crate::lanes::APP_AUDIO_KIND, "name": "Shown", "settings": {"app": PLAYER}})).unwrap();
+    let shown: SourceId = serde_json::from_value(o.result["source"].clone()).unwrap();
+    let r = run(&mut e, "app_audio.route", json!({"app": PLAYER, "routed": true})).unwrap();
+    assert_eq!(r.result["source"].as_u64(), Some(shown.0), "no second capture of what the scene plays");
+    assert!(!e.collection().global_audio.contains(&spare));
+}
+
+#[test]
+fn turning_on_a_monitor_only_route_checks_for_overlap_too() {
+    let (mut e, fake, discovery) = lane_engine();
+    let mut player = craft_app_audio::fake::app("player.exe", 40, true);
+    player.within = Some(BROWSER.into());
+    let generation = discovery.generation();
+    fake.set_apps(vec![player, craft_app_audio::fake::app("browser.exe", 41, false)]);
+    assert!(discovery.wait_newer(generation, std::time::Duration::from_secs(10)).apps.iter().any(|a| a.within.is_some()));
+    let mut c = e.collection().clone();
+    let quiet = SourceId(c.alloc_id());
+    c.sources.push(SourceConfig {
+        id: quiet,
+        kind: crate::lanes::APP_AUDIO_KIND.into(),
+        kind_version: 1,
+        name: "Player".into(),
+        settings: Settings::new().with("app", PLAYER),
+        filters: vec![],
+        audio: studiocraft_model::AudioState { monitor: studiocraft_model::MonitorMode::MonitorOnly, ..Default::default() },
+    });
+    c.global_audio.push(quiet);
+    e.load(c);
+    run(&mut e, "app_audio.route", json!({"app": BROWSER, "routed": true})).unwrap();
+    let before = e.collection().clone();
+    assert!(run(&mut e, "app_audio.route", json!({"app": PLAYER, "routed": true})).is_err());
+    assert_eq!(e.collection(), &before, "the monitor-only source stays out of the program");
 }
 
 #[test]

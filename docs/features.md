@@ -152,8 +152,8 @@ box takes that source out of the global audio sources, and Edit › Undo puts it
 the program scene shows is still heard after its check box is cleared.
 
 When one application runs inside another one's process tree, such as a helper program, the capture
-of the outer one already records it, and the dock does not route one of them while the other is
-routed. A routed application that quits keeps its lane. When two listed programs have the same
+of the outer one already records it, and the dock does not route one of them while the program
+hears the other. A routed application that quits keeps its lane. When two listed programs have the same
 file name, their lanes show the folder as well.
 
 A lane with a source has a volume slider in dB and a mute button, and its settings menu opens the

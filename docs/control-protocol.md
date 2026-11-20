@@ -270,9 +270,10 @@ With `routed: true` it returns `{"source": id}`: the global audio source that al
 application, or a source of the collection that captures it, added to the global audio sources, or
 a new Application audio capture source named after the application. A new source is made only for
 an application in the current list. A routed source set to `monitor_only` is set to
-`monitor_and_output`. Routing an application is an error while another listed application is
-routed and one of the two names the other in `within`, since one capture records the other's
-processes. With `routed: false` it takes every source that captures the
+`monitor_and_output`. Routing an application is an error while the program hears another
+listed application, through a global audio source or the program scene, and one of the two names
+the other in `within`, directly or through the applications between them, since one capture
+records the other's processes. With `routed: false` it takes every source that captures the
 application out of the global audio sources, removes the ones no scene shows, and returns
 `{"sources": [ids]}`; a scene that shows one of them still plays it. A source saved for a program
 in another folder, which captures the listed program only because it has the same file name, is

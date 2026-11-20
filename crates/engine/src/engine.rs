@@ -790,13 +790,16 @@ impl Engine {
             c.sources.retain(|s| !drop.contains(&s.id));
             return Ok((json!({"sources": removed}), None));
         }
+        let in_program = |c: &SceneCollection, id: &SourceId| c.source(*id).is_some_and(|s| s.audio.monitor.in_program());
+        let heard = crate::lanes::heard(c);
         // A capture of one listed application can record another one's processes (`within`).
-        // Routing either while the other is routed would put that audio in the program twice.
+        // Routing either while the program hears the other would put that audio in the program
+        // twice. The check is skipped only when routing changes nothing.
         if let Some(me) = list.find(&key)
-            && !ours.iter().any(|id| c.global_audio.contains(id))
+            && !ours.iter().any(|id| c.global_audio.contains(id) && in_program(c, id))
         {
             let is_routed = |other: &craft_app_audio::AppInfo| {
-                c.global_audio.iter().filter_map(|g| c.source(*g)).filter_map(source_key).any(|k| same_app(&k, &other.key, &list))
+                heard.iter().filter_map(|g| c.source(*g)).filter_map(source_key).any(|k| same_app(&k, &other.key, &list))
             };
             // `within` names the nearest listed application around one; its own `within` names the
             // next one out. The walk stops after as many steps as the list has applications.
@@ -818,18 +821,28 @@ impl Engine {
                 related && is_routed(o)
             });
             if let Some(o) = overlap {
+                // Which of the other application's heard sources are global, and which the program
+                // scene shows; a source can be both.
+                let other = |g: &&SourceId| c.source(**g).and_then(source_key).is_some_and(|k| same_app(&k, &o.key, &list));
+                let in_scene = |g: &SourceId| c.scene(c.program_scene).is_some_and(|s| s.items.iter().any(|i| i.visible && i.source == *g));
+                let routed = heard.iter().filter(other).any(|g| c.global_audio.contains(g));
+                let shown = heard.iter().filter(other).any(in_scene);
+                let remedy = match (routed, shown) {
+                    (true, true) => format!("stop routing {} and hide its source in the program scene first", o.name),
+                    (true, false) => format!("stop routing {} first", o.name),
+                    _ => format!("hide {}'s source in the program scene first", o.name),
+                };
                 return Err(EngineError::Invalid(format!(
-                    "one capture would record the other's processes: {} is routed, so stop routing it before routing {}",
+                    "the program already hears {}, and its capture or the capture of {} would record the other's processes; {remedy}",
                     o.name, me.name
                 )));
             }
         }
-        // An existing source is used, a routed one first and then one whose audio already reaches
-        // the program. A source set to monitor only is set to monitor and output, so the program
-        // hears it.
-        let in_program = |c: &SceneCollection, id: &SourceId| c.source(*id).is_some_and(|s| s.audio.monitor.in_program());
+        // An existing source is used: one the program already hears, then a routed one, then one
+        // that allows program output. A source set to monitor only is set to monitor and output,
+        // so the program hears it.
         let mut existing: Vec<SourceId> = ours.clone();
-        existing.sort_by_key(|id| (!c.global_audio.contains(id), !in_program(c, id)));
+        existing.sort_by_key(|id| (!heard.contains(id), !c.global_audio.contains(id), !in_program(c, id)));
         if let Some(id) = existing.first().copied() {
             if !c.global_audio.contains(&id) {
                 c.global_audio.push(id);
