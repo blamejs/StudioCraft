@@ -249,8 +249,8 @@ because the next one starts (a recording that starts or stops during a stream) o
 does a take whose files are complete only after a newer take has opened. Takes that the app finds
 complete at the same time open in the order they ended. A take that ends because the app closes
 is opened as the app closes, and the app waits up to 3 seconds for the editor or the folder to open.
-File › Open Last Audio Tracks in Editor opens the newest take's session again, and can be given a shortcut
-in Settings › Hotkeys.
+File › Open Last Audio Tracks in Editor opens the newest take's session again, or the session of a
+repair started after that take stopped, and can be given a shortcut in Settings › Hotkeys.
 
 ## Streaming
 

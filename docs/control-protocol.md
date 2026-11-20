@@ -309,8 +309,9 @@ repair wrote, or `null` for a take that did not make its own folder.
 `audio_tracks.open_last` takes no params and opens the last take's session file in the audio
 editor on a background thread, or the take's folder when the editor cannot be found or started; it
 returns `{"started": true, "session"}` at once, and a notice reports what happened. The last session
-is the last one a take wrote when it ended or a repair wrote, and `audio_tracks.status` returns it
-as `last_session`. No session yet and a fifth opening while four run are errors.
+belongs to the take that stopped last or the repair that started last, of those that wrote one; a
+take or repair that finishes after a newer one does not replace it. `audio_tracks.status` returns
+it as `last_session`. No session yet and a fifth opening while four run are errors.
 
 `audio_tracks.marker` takes `{"name"}` and marks the running take at this moment; the take's
 session lists the marker at that sample. `name` is 1 to 256 characters, not only spaces, with no

@@ -1246,6 +1246,80 @@ mod audio_tracks {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// Start a repair that writes `session` once `go` is sent, as a repair that takes a while.
+    fn held_repair(s: &mut Studio, session: &std::path::Path) -> std::sync::mpsc::Sender<()> {
+        let (go, wait) = std::sync::mpsc::channel::<()>();
+        let session = session.to_path_buf();
+        let h = std::thread::spawn(move || {
+            let _ = wait.recv();
+            let dir = session.with_file_name("Audio Files");
+            let repaired = studiocraft_audio_tracks::recover::Repaired { dir, files: Vec::new(), synced: Vec::new(), session: Some(session) };
+            studiocraft_audio_tracks::recover::Outcome { repaired: vec![repaired], failed: Vec::new() }
+        });
+        s.push_repair(h);
+        go
+    }
+
+    /// Run the repairs that are ready to end and take their results.
+    fn end_repairs(s: &mut Studio, go: std::sync::mpsc::Sender<()>) {
+        let _ = go.send(());
+        let _ = s.audio_tracks_repair_result();
+    }
+
+    #[test]
+    fn a_repair_that_finishes_after_a_newer_take_keeps_that_take_as_the_last() {
+        let fake = Arc::new(crate::audio_editor::tests::Fake::default());
+        let (mut s, dir) = showing_folders("after-stop-repair", &fake);
+        let old = dir.join("Old Audio").join("Old.scraft");
+        let go = held_repair(&mut s, &old);
+        // A take starts and ends while the repair runs.
+        s.test_streaming = true;
+        s.tick();
+        armed(&mut s);
+        s.test_streaming = false;
+        s.tick();
+        let mut spins = 0u64;
+        while !s.audio_tracks.finishing.is_empty() {
+            spins += 1;
+            assert!(spins < 200_000_000, "the take never finished");
+            s.tick();
+            std::thread::yield_now();
+        }
+        let take = s.audio_tracks_last_session().map(std::path::Path::to_path_buf);
+        assert!(take.is_some());
+        end_repairs(&mut s, go);
+        assert_eq!(s.audio_tracks_last_session().map(std::path::Path::to_path_buf), take, "the repair started before the take stopped");
+        // A repair started after that replaces it.
+        let newer = dir.join("Newer Audio").join("Newer.scraft");
+        let go = held_repair(&mut s, &newer);
+        end_repairs(&mut s, go);
+        assert_eq!(s.audio_tracks_last_session(), Some(newer.as_path()));
+        // A take that stopped before a repair started still opens when it ends after the repair,
+        // and the repair's session stays the last one.
+        s.test_streaming = true;
+        s.tick();
+        armed(&mut s);
+        s.test_streaming = false;
+        s.tick();
+        let held = s.audio_tracks.finishing.remove(0);
+        let later = dir.join("Later Audio").join("Later.scraft");
+        let go = held_repair(&mut s, &later);
+        end_repairs(&mut s, go);
+        s.audio_tracks.finishing.push(held);
+        let mut spins = 0u64;
+        while !s.audio_tracks.finishing.is_empty() {
+            spins += 1;
+            assert!(spins < 200_000_000, "the take never finished");
+            s.tick();
+            std::thread::yield_now();
+        }
+        s.audio_tracks_opened();
+        assert_eq!(fake.log.lock().unwrap().len(), 2, "each take opens its folder");
+        assert_eq!(s.audio_tracks_last_session(), Some(later.as_path()));
+        drop(s);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn a_take_that_ends_for_the_next_one_opens_nothing_when_both_end_between_two_ticks() {
         let fake = Arc::new(crate::audio_editor::tests::Fake::default());

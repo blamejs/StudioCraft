@@ -89,14 +89,16 @@ pub(crate) struct AudioTracks {
     /// The write buffer and file size the running take uses; changed settings apply from the
     /// next take.
     take_sizes: Option<(u32, u32)>,
-    /// Repairs running on their own threads, at launch or for `audio_tracks.repair`.
-    repairs: Vec<JoinHandle<Outcome>>,
+    /// Repairs running on their own threads, at launch or for `audio_tracks.repair`, each with its
+    /// place in `stop_order`'s count.
+    repairs: Vec<(JoinHandle<Outcome>, u64)>,
     /// What the last repair did, for the status.
     last_repair: Option<Value>,
     /// Sources set to record their own track were left out, because more than
     /// [`MAX_TRACKS`] tracks would run at once.
     source_limit: bool,
-    /// The session file of the last take that ended with one, or of the last take repaired.
+    /// The session file of the take that stopped last or the repair started last, of those that
+    /// ended with one.
     last_session: Option<PathBuf>,
     /// Openings of a session or a folder running on their own threads.
     opening: Vec<JoinHandle<Result<Opened, String>>>,
@@ -104,12 +106,16 @@ pub(crate) struct AudioTracks {
     pub(crate) launcher: Option<Arc<dyn Launcher>>,
     /// The takes still finishing that ended because the next one started.
     handed_on: Vec<Arc<studiocraft_audio_tracks::Status>>,
-    /// The takes still finishing, each with its place in the order the takes stopped, and the
-    /// place of the take whose session is `last_session`: a take that finishes after a newer one
-    /// does not replace that one's session.
+    /// The takes still finishing, each with its place in the order the takes stopped and the
+    /// repairs started (`stops` counts both).
     stop_order: Vec<(Arc<studiocraft_audio_tracks::Status>, u64)>,
     stops: u64,
-    last_session_stop: u64,
+    /// The place of the newest take that ended with a session: a take that finishes after a newer
+    /// one opens nothing.
+    newest_take_stop: u64,
+    /// The place of the take or repair whose session is `last_session`: one that finishes after a
+    /// newer one does not replace that one's session.
+    last_session_place: u64,
 }
 
 impl Studio {
@@ -503,11 +509,16 @@ impl Studio {
         // runs.
         let after = self.profile.audio_tracks.after_stop;
         for (session, next, place) in sessions {
-            // A take that finishes after a newer one has ended neither replaces nor follows it.
-            let newest = place >= self.audio_tracks.last_session_stop;
+            // A take that finishes after a newer one has ended neither replaces nor follows it. A
+            // repair started after the take stopped keeps its session as the last one, and the
+            // take still opens.
+            let newest = place >= self.audio_tracks.newest_take_stop;
             if newest {
+                self.audio_tracks.newest_take_stop = place;
+            }
+            if place >= self.audio_tracks.last_session_place {
                 self.audio_tracks.last_session = Some(session.clone());
-                self.audio_tracks.last_session_stop = place;
+                self.audio_tracks.last_session_place = place;
             }
             if after != AfterStop::Nothing
                 && newest
@@ -518,13 +529,19 @@ impl Studio {
                 self.notices.push(Notice::new("The audio tracks could not be opened: {error}", vec![("error", e)], true));
             }
         }
-        while let Some(i) = self.audio_tracks.repairs.iter().position(JoinHandle::is_finished) {
-            let Ok(out) = self.audio_tracks.repairs.swap_remove(i).join() else { continue };
+        while let Some(i) = self.audio_tracks.repairs.iter().position(|(h, _)| h.is_finished()) {
+            let (handle, place) = self.audio_tracks.repairs.swap_remove(i);
+            let Ok(out) = handle.join() else { continue };
             for (dir, e) in &out.failed {
                 log::warn!("audio tracks: repair: {}: {e}", dir.display());
             }
-            if let Some(session) = out.repaired.iter().rev().find_map(|r| r.session.clone()) {
+            // A repair that finishes after a newer take or repair has ended does not replace that
+            // one's session.
+            if let Some(session) = out.repaired.iter().rev().find_map(|r| r.session.clone())
+                && place >= self.audio_tracks.last_session_place
+            {
                 self.audio_tracks.last_session = Some(session);
+                self.audio_tracks.last_session_place = place;
             }
             self.notices.extend(repair_notices(&out));
             self.audio_tracks.last_repair = Some(repair_json(&out));
@@ -631,9 +648,16 @@ impl Studio {
         let folder = recording_folder(&self.profile.output.folder);
         let spawned = std::thread::Builder::new().name("audio-tracks-repair".into()).spawn(move || recover::repair_each(&folder));
         match spawned {
-            Ok(h) => self.audio_tracks.repairs.push(h),
+            Ok(h) => self.push_repair(h),
             Err(e) => log::warn!("audio tracks: the repair thread could not start: {e}"),
         }
+    }
+
+    /// Keep a started repair with its place after the takes stopped and the repairs started
+    /// before it.
+    pub(crate) fn push_repair(&mut self, h: JoinHandle<Outcome>) {
+        self.audio_tracks.stops += 1;
+        self.audio_tracks.repairs.push((h, self.audio_tracks.stops));
     }
 
     /// Repair the takes in `folder` on a background thread, for `audio_tracks.repair`. Returns
@@ -657,7 +681,7 @@ impl Studio {
             }
         });
         match spawned {
-            Ok(h) => self.audio_tracks.repairs.push(h),
+            Ok(h) => self.push_repair(h),
             Err(e) => return Err(crate::StudioError::Output(format!("the repair could not start: {e}"))),
         }
         Ok(json!({"started": true, "folder": folder}))
@@ -667,7 +691,7 @@ impl Studio {
     /// tests.
     #[cfg(test)]
     pub(crate) fn audio_tracks_repair_result(&mut self) -> Option<Value> {
-        while self.audio_tracks.repairs.iter().any(|h| !h.is_finished()) {
+        while self.audio_tracks.repairs.iter().any(|(h, _)| !h.is_finished()) {
             std::thread::yield_now();
         }
         self.finish_audio_tracks();
