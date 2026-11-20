@@ -15,11 +15,25 @@ use studiocraft_plugin::VideoFormat;
 use super::*;
 
 #[test]
-fn stream_urls_join_server_and_key() {
-    assert_eq!(stream_url("rtmp://live.example.com/app/", "abc").unwrap(), "rtmp://live.example.com/app/abc");
-    assert_eq!(stream_url(" rtmps://x/app ", "").unwrap(), "rtmps://x/app");
-    assert!(stream_url("http://x", "k").is_err());
-    assert!(stream_url("rtmp://x", "a b").is_err());
+fn a_stream_reads_its_destinations_or_one_server() {
+    let one = stream_targets(&Settings::new().with("server", "rtmp://x/app").with("key", "k")).unwrap();
+    assert_eq!(one, vec![Target { id: "main".into(), server: "rtmp://x/app".into(), key: "k".into(), enabled: true }]);
+    let list = serde_json::json!([
+        { "id": "a", "server": "rtmp://a/live", "key": "1" },
+        { "id": "b", "server": "rtmps://b/live", "key": null, "enabled": false },
+    ]);
+    let two = stream_targets(&Settings::new().with("destinations", list).with("server", "rtmp://ignored/live")).unwrap();
+    assert_eq!(two.iter().map(|t| (t.id.as_str(), t.enabled)).collect::<Vec<_>>(), [("a", true), ("b", false)]);
+    assert_eq!(two[1].key, "");
+    for bad in [serde_json::json!({}), serde_json::json!([1]), serde_json::json!([{ "id": 2 }]), serde_json::json!([{ "id": "a", "enabled": "yes" }])]
+    {
+        assert!(stream_targets(&Settings::new().with("destinations", bad.clone())).is_err(), "{bad}");
+    }
+    // A list longer than a stream takes is refused before its entries are read.
+    let most = craft_packet::MAX_SUBSCRIBERS;
+    let long: Vec<serde_json::Value> = (0..=most).map(|_| serde_json::json!(1)).collect();
+    let Err(e) = stream_targets(&Settings::new().with("destinations", long)) else { panic!("a list that is too long") };
+    assert!(e.to_string().contains(&format!("at most {most} destinations")), "{e}");
 }
 
 #[test]
@@ -237,11 +251,10 @@ fn the_built_in_encoders_are_listed_after_the_ffmpeg_ones() {
 }
 
 #[test]
-fn a_stream_refuses_the_built_in_encoder() {
-    let mut j = job(PathBuf::from("no-such-ffmpeg"), RateControl::Bitrate { kbps: 1000, keyframe_s: 2 });
-    j.video_encoder = Arc::new(studiocraft_encode::H264);
-    let Err(e) = Stream.start(&Settings::new().with("server", "rtmp://127.0.0.1:9/live"), j) else { panic!("the stream started") };
-    assert!(e.to_string().contains("records files only"), "{e}");
+fn a_stream_refuses_an_ffmpeg_encoder() {
+    let j = job(PathBuf::from("no-such-ffmpeg"), RateControl::Bitrate { kbps: 1000, keyframe_s: 2 });
+    let Err(e) = Stream.start(&Settings::new().with("server", "rtmp://127.0.0.1:9/live").with("key", "k"), j) else { panic!("the stream started") };
+    assert!(e.to_string().contains("runs inside ffmpeg"), "{e}");
 }
 
 #[test]
@@ -283,20 +296,15 @@ fn a_recording_stopped_at_once_is_still_finished() {
     assert!(r.is_ok(), "{r:?}");
 }
 
-#[test]
-fn a_bad_destination_is_reported() {
-    let Ok(program) = ffmpeg::locate("") else { return };
-    let j = job(program, RateControl::Bitrate { kbps: 500, keyframe_s: 2 });
-    // Nothing listens on port 9 of this machine.
-    let mut out = Stream.start(&Settings::new().with("server", "rtmp://127.0.0.1:9/live").with("key", "k"), j).unwrap();
-    let deadline = Instant::now() + Duration::from_secs(15);
-    while !matches!(out.status(), OutputStatus::Failed(_)) && Instant::now() < deadline {
-        std::thread::sleep(Duration::from_millis(50));
-    }
-    assert!(matches!(out.status(), OutputStatus::Failed(_)), "{:?}", out.status());
-    assert!(out.stop().is_err());
+/// [`job`] with the built-in H.264 encoder at a bitrate, as a stream runs.
+fn stream_job(keyframe_s: u32) -> OutputJob {
+    let mut j = job(PathBuf::new(), RateControl::Bitrate { kbps: 500, keyframe_s });
+    j.video_encoder = Arc::new(studiocraft_encode::H264);
+    j.video_encoder_settings = Settings::new();
+    j
 }
 
+/// An independent receiver: the ffmpeg program reads the stream and writes it to an FLV file.
 #[test]
 fn streams_over_rtmp_to_a_local_server() {
     let Ok(program) = ffmpeg::locate("") else { return };
@@ -315,8 +323,7 @@ fn streams_over_rtmp_to_a_local_server() {
         .spawn()
         .unwrap();
     std::thread::sleep(Duration::from_millis(700));
-    let j = job(program.clone(), RateControl::Bitrate { kbps: 500, keyframe_s: 1 });
-    let mut out = Stream.start(&Settings::new().with("server", url.as_str()).with("key", "secret"), j).unwrap();
+    let mut out = Stream.start(&Settings::new().with("server", url.as_str()).with("key", "secret"), stream_job(1)).unwrap();
     assert_eq!(out.target(), url, "the key is not shown");
     feed(out.as_ref(), 1.5);
     out.stop().unwrap();

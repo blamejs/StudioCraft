@@ -26,6 +26,8 @@ type_complexity = "allow"
 undocumented_unsafe_blocks = "deny"
 
 [dependencies]
+# The bit reader, the Annex B and length-prefixed splitters, and the avcC and hvcC record writers.
+craft-media = { workspace = true, features = ["isobmff"] }
 crossbeam-queue.workspace = true
 
 # Windows: NVENC runs on a Direct3D 11 device of the NVIDIA adapter, and the driver's

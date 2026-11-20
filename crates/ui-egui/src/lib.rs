@@ -130,7 +130,7 @@ impl Named {
 struct Prompt {
     what: Named,
     text: String,
-    error: Option<String>,
+    error: Option<Msg>,
 }
 
 /// A status bar message: kept in English, translated when the status bar shows it.
@@ -470,8 +470,8 @@ impl StudioApp {
 
     /// Save the current scene collection before another one replaces it. When the save fails,
     /// the error is returned and the current collection stays open with its changes.
-    fn save_before_leaving(&mut self) -> Result<(), String> {
-        self.store.save_collection(self.studio.collection()).map_err(|e| format!("The scene collection could not be saved: {e}"))?;
+    fn save_before_leaving(&mut self) -> Result<(), Msg> {
+        self.store.save_collection(self.studio.collection()).map_err(|e| tmsg!("The scene collection could not be saved: {error}", error = e))?;
         self.studio.mark_saved();
         Ok(())
     }
@@ -490,7 +490,7 @@ impl StudioApp {
     /// Make the canvas `size` (each side rounded down to an even number) and save the profile.
     /// The output size stays as it is. An open Settings window shows the new canvas size. A
     /// profile that can't be saved is an error, and the new size stays in use until the app quits.
-    fn set_canvas(&mut self, size: (u32, u32)) -> Result<Value, String> {
+    fn set_canvas(&mut self, size: (u32, u32)) -> Result<Value, Msg> {
         let mut p = self.studio.profile().clone();
         let v = studiocraft_model::VideoSettings { base_width: size.0, base_height: size.1, ..p.video }.sanitized();
         let (width, height) = (v.base_width, v.base_height);
@@ -505,7 +505,7 @@ impl StudioApp {
             w.draft.video.base_height = height;
         }
         // Saved even when the size was already in use, so a save that failed before is retried.
-        self.store.save_profile(self.studio.profile()).map_err(|e| format!("The profile could not be saved: {e}"))?;
+        self.store.save_profile(self.studio.profile()).map_err(|e| tmsg!("The profile could not be saved: {error}", error = e))?;
         Ok(json!({"width": width, "height": height, "changed": changed}))
     }
 
@@ -570,17 +570,18 @@ impl StudioApp {
         v
     }
 
-    /// Run a command by id: an engine command or one of the window's. Errors are shown in the
-    /// status bar and returned.
+    /// Run a command by id: an engine command or one of the window's. An error is shown in the
+    /// status bar in the interface language and returned in English.
     pub fn perform(&mut self, ctx: &egui::Context, cmd: &CommandRef) -> Result<Value, String> {
         let r = if commands::is_ui_command(&cmd.id) { self.ui_command(ctx, cmd) } else { self.engine_command(ctx, cmd) };
-        if let Err(e) = &r {
-            self.notify(e.clone(), true);
-        }
-        r
+        r.map_err(|e| {
+            let english = e.english();
+            self.notify(e, true);
+            english
+        })
     }
 
-    fn engine_command(&mut self, ctx: &egui::Context, cmd: &CommandRef) -> Result<Value, String> {
+    fn engine_command(&mut self, ctx: &egui::Context, cmd: &CommandRef) -> Result<Value, Msg> {
         let (result, ui) = self.studio.run(&cmd.id, &cmd.params).map_err(|e| e.to_string())?;
         match ui {
             Some(UiAction::OpenSettings) => self.open_settings(Tab::Stream),
@@ -650,47 +651,45 @@ impl StudioApp {
         }
     }
 
-    fn param_str<'a>(cmd: &'a CommandRef, key: &str) -> Result<&'a str, String> {
-        cmd.params.get(key).and_then(Value::as_str).ok_or_else(|| format!("`{}` needs `{key}`", cmd.id))
+    fn param_str<'a>(cmd: &'a CommandRef, key: &str) -> Result<&'a str, Msg> {
+        cmd.params.get(key).and_then(Value::as_str).ok_or_else(|| tmsg!("`{command}` needs `{key}`", command = cmd.id, key = key))
     }
 
     /// The `dock` parameter as a dock index, or an error naming the docks.
-    fn param_dock(cmd: &CommandRef) -> Result<u8, String> {
+    fn param_dock(cmd: &CommandRef) -> Result<u8, Msg> {
         let name = Self::param_str(cmd, "dock")?;
-        control::DOCK_NAMES
-            .iter()
-            .position(|n| *n == name)
-            .and_then(|i| u8::try_from(i).ok())
-            .ok_or_else(|| format!("`{}`: unknown dock `{name}` (one of {})", cmd.id, control::DOCK_NAMES.join(", ")))
+        control::DOCK_NAMES.iter().position(|n| *n == name).and_then(|i| u8::try_from(i).ok()).ok_or_else(|| {
+            tmsg!("`{command}`: unknown dock `{name}` (one of {docks})", command = cmd.id, name = name, docks = control::DOCK_NAMES.join(", "))
+        })
     }
 
     /// The optional `path` parameter: `None` when it is left out, an error when it is not a
     /// non-empty string.
-    fn param_path(cmd: &CommandRef) -> Result<Option<PathBuf>, String> {
+    fn param_path(cmd: &CommandRef) -> Result<Option<PathBuf>, Msg> {
         match cmd.params.get("path") {
             None | Some(Value::Null) => Ok(None),
             Some(Value::String(p)) if !p.trim().is_empty() => Ok(Some(PathBuf::from(p))),
-            Some(_) => Err(format!("`{}`: `path` must be a file path", cmd.id)),
+            Some(_) => Err(tmsg!("`{command}`: `path` must be a file path", command = cmd.id)),
         }
     }
 
     /// Queue a file dialog for a scene collection file, or fail when no dialog can be shown.
-    fn ask_collection_path(&mut self, cmd: &CommandRef, dialog: craft_dialogs::FileDialog, then: Then) -> Result<(), String> {
-        let dialogs = self.dialogs.as_mut().ok_or_else(|| format!("`{}` needs `path` when no file dialog can be shown", cmd.id))?;
+    fn ask_collection_path(&mut self, cmd: &CommandRef, dialog: craft_dialogs::FileDialog, then: Then) -> Result<(), Msg> {
+        let dialogs = self.dialogs.as_mut().ok_or_else(|| tmsg!("`{command}` needs `path` when no file dialog can be shown", command = cmd.id))?;
         dialogs.ask(dialog.filter("Scene collection", &["json"]), then);
         Ok(())
     }
 
     /// Read the scene collection file at `path`, add it to the saved collections under a name no
     /// other collection uses, and switch to it.
-    fn import_collection(&mut self, path: &Path) -> Result<Value, String> {
-        let mut c = read_collection_file(path).map_err(|e| format!("The scene collection could not be imported: {e}"))?;
+    fn import_collection(&mut self, path: &Path) -> Result<Value, Msg> {
+        let mut c = read_collection_file(path).map_err(|e| tmsg!("The scene collection could not be imported: {error}", error = e))?;
         let stem = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
         let base = [c.name.as_str(), stem.as_str()].into_iter().find(|n| check_name(n).is_ok()).unwrap_or("Imported").to_string();
         let name = self.unique_collection_name(&base)?;
         c.name = name.clone();
         self.save_before_leaving()?;
-        self.store.save_collection(&c).map_err(|e| format!("The scene collection could not be imported: {e}"))?;
+        self.store.save_collection(&c).map_err(|e| tmsg!("The scene collection could not be imported: {error}", error = e))?;
         self.load_collection(c);
         self.refresh_lists();
         self.notify(tmsg!("Imported the scene collection `{name}`", name = name), false);
@@ -699,17 +698,17 @@ impl StudioApp {
 
     /// Write the current scene collection to `path`. It is saved in the settings folder first; when
     /// that save fails, the collection stays marked as changed and autosave tries again.
-    fn export_collection(&mut self, path: &Path) -> Result<Value, String> {
+    fn export_collection(&mut self, path: &Path) -> Result<Value, Msg> {
         self.save_collection();
         studiocraft_studio::files::write_collection_file(path, self.studio.collection())
-            .map_err(|e| format!("The scene collection could not be exported: {e}"))?;
+            .map_err(|e| tmsg!("The scene collection could not be exported: {error}", error = e))?;
         self.notify(tmsg!("Exported the scene collection to {path}", path = craft_i18n::ltr(&path.display().to_string())), false);
         Ok(json!({"path": path.to_string_lossy()}))
     }
 
     /// `base`, or `base 2`, `base 3` and so on, whichever no collection uses (names are compared
     /// without case).
-    fn unique_collection_name(&self, base: &str) -> Result<String, String> {
+    fn unique_collection_name(&self, base: &str) -> Result<String, Msg> {
         let taken = |n: &str| self.collections.iter().any(|c| c.eq_ignore_ascii_case(n));
         if !taken(base) {
             return Ok(base.to_string());
@@ -719,7 +718,7 @@ impl StudioApp {
         (2..=10_000u32)
             .map(|i| format!("{short} {i}"))
             .find(|n| !taken(n) && check_name(n).is_ok())
-            .ok_or_else(|| format!("there is no free name for the scene collection `{base}`"))
+            .ok_or_else(|| tmsg!("there is no free name for the scene collection `{name}`", name = base))
     }
 
     /// Save the Language setting (`auto`, or a language code; a code this build does not offer
@@ -820,9 +819,9 @@ impl StudioApp {
         }
     }
 
-    fn selection_transform(&mut self, f: impl FnOnce(Transform, (u32, u32), (u32, u32)) -> Transform) -> Result<Value, String> {
-        let (item, source, t) = self.selection().ok_or("select a source first")?;
-        let native = self.studio.source_size(source).ok_or("the source has not shown a picture yet")?;
+    fn selection_transform(&mut self, f: impl FnOnce(Transform, (u32, u32), (u32, u32)) -> Transform) -> Result<Value, Msg> {
+        let (item, source, t) = self.selection().ok_or_else(|| tmsg!("select a source first"))?;
+        let native = self.studio.source_size(source).ok_or_else(|| tmsg!("the source has not shown a picture yet"))?;
         let canvas = self.studio.canvas();
         // The command refuses values out of range; a fit or a nudge stops at the limits instead.
         let t = f(t, native, canvas).sanitized();
@@ -831,14 +830,14 @@ impl StudioApp {
         Ok(r.0)
     }
 
-    fn ui_command(&mut self, ctx: &egui::Context, cmd: &CommandRef) -> Result<Value, String> {
+    fn ui_command(&mut self, ctx: &egui::Context, cmd: &CommandRef) -> Result<Value, Msg> {
         match cmd.id.as_str() {
             "file.show_recordings" => {
                 let folder = studiocraft_studio::recording_folder(&self.studio.profile().output.folder);
                 studiocraft_platform::shell::open_folder(&folder).map_err(|e| e.to_string())?;
             }
             "file.show_settings_folder" => {
-                let dir = self.store.dir().ok_or("settings are kept in memory only (--no-prefs)")?.to_path_buf();
+                let dir = self.store.dir().ok_or_else(|| tmsg!("settings are kept in memory only (--no-prefs)"))?.to_path_buf();
                 studiocraft_platform::shell::open_folder(&dir).map_err(|e| e.to_string())?;
             }
             "view.stats" => return Ok(self.toggle_pref(|p| &mut p.stats)),
@@ -851,7 +850,7 @@ impl StudioApp {
                 let name = Self::param_str(cmd, "kind")?;
                 let kind = craft_scopes::ScopeKind::ALL.into_iter().find(|k| k.name() == name).ok_or_else(|| {
                     let known: Vec<&str> = craft_scopes::ScopeKind::ALL.iter().map(|k| k.name()).collect();
-                    format!("`scopes.kind`: unknown scope `{name}` (one of {})", known.join(", "))
+                    tmsg!("`scopes.kind`: unknown scope `{name}` (one of {scopes})", name = name, scopes = known.join(", "))
                 })?;
                 if scopes::kind_of(&self.store.prefs().scope_kind) != kind {
                     self.store.update(|p| p.scope_kind = kind.name().to_string());
@@ -875,7 +874,7 @@ impl StudioApp {
                 let left = match Self::param_str(cmd, "to")? {
                     "left" => true,
                     "right" => false,
-                    to => return Err(format!("`dock.move`: `to` is `left` or `right`, not `{to}`")),
+                    to => return Err(tmsg!("`dock.move`: `to` is `left` or `right`, not `{to}`", to = to)),
                 };
                 let mut docks = self.store.prefs().docks;
                 let moved = docks.shift(i, left);
@@ -887,7 +886,8 @@ impl StudioApp {
             }
             "dock.float" => {
                 let i = Self::param_dock(cmd)?;
-                let floating = cmd.params.get("floating").and_then(Value::as_bool).ok_or("`dock.float` needs `floating`: true or false")?;
+                let floating =
+                    cmd.params.get("floating").and_then(Value::as_bool).ok_or_else(|| tmsg!("`dock.float` needs `floating`: true or false"))?;
                 let changed = self.store.prefs().docks.is_floating(i) != floating;
                 if changed {
                     self.store.update(|p| {
@@ -904,13 +904,14 @@ impl StudioApp {
                     self.ask_name(Named::SaveDockLayout, "");
                     return Ok(json!({"asking": true}));
                 };
-                let name = name.as_str().ok_or("`dock.layout_save`: `name` is a string")?;
+                let name = name.as_str().ok_or_else(|| tmsg!("`dock.layout_save`: `name` is a string"))?;
                 let replaced = self.save_dock_layout(name)?;
                 return Ok(json!({"saved": name, "replaced": replaced}));
             }
             "dock.layout_apply" => {
                 let name = Self::param_str(cmd, "name")?;
-                let layout = self.store.prefs().dock_layout(name).cloned().ok_or_else(|| format!("there is no dock layout named `{name}`"))?;
+                let layout =
+                    self.store.prefs().dock_layout(name).cloned().ok_or_else(|| tmsg!("there is no dock layout named `{name}`", name = name))?;
                 self.set_docks(layout.docks);
                 return Ok(json!({"applied": layout.name}));
             }
@@ -919,7 +920,7 @@ impl StudioApp {
                 let mut removed = false;
                 self.store.update(|p| removed = p.remove_dock_layout(&name));
                 if !removed {
-                    return Err(format!("there is no dock layout named `{name}`"));
+                    return Err(tmsg!("there is no dock layout named `{name}`", name = name));
                 }
                 return Ok(json!({"removed": name}));
             }
@@ -976,13 +977,13 @@ impl StudioApp {
                 let size = match cmd.params.get("display") {
                     None => ctx
                         .input(|i| window_display(i.viewport(), zoom))
-                        .ok_or("`video.canvas_from_display`: the size of the display the window is on is not known; pass `display`")?,
+                        .ok_or_else(|| tmsg!("`video.canvas_from_display`: the size of the display the window is on is not known; pass `display`"))?,
                     Some(Value::String(id)) => {
                         let list = studiocraft_platform::display::displays();
                         let d = find_display(&list, id)?;
                         (d.width, d.height)
                     }
-                    Some(_) => return Err("`video.canvas_from_display`: `display` is a display id from `video.displays`".into()),
+                    Some(_) => return Err(tmsg!("`video.canvas_from_display`: `display` is a display id from `video.displays`")),
                 };
                 return self.set_canvas(canvas_for(size)?);
             }
@@ -1014,15 +1015,15 @@ impl StudioApp {
                 self.encoders = Some(list);
             }
             "selection.properties" => {
-                let (_, source, _) = self.selection().ok_or("select a source first")?;
+                let (_, source, _) = self.selection().ok_or_else(|| tmsg!("select a source first"))?;
                 self.open_properties(source);
             }
             "selection.filters" => {
-                let (_, source, _) = self.selection().ok_or("select a source first")?;
+                let (_, source, _) = self.selection().ok_or_else(|| tmsg!("select a source first"))?;
                 self.open_filters(source);
             }
             "selection.remove" => {
-                let (item, _, _) = self.selection().ok_or("select a source first")?;
+                let (item, _, _) = self.selection().ok_or_else(|| tmsg!("select a source first"))?;
                 self.studio.run("item.remove", &json!({"item": item})).map_err(|e| e.to_string())?;
                 self.selected = None;
             }
@@ -1049,11 +1050,11 @@ impl StudioApp {
                 }
             }
             id @ ("help.discord" | "help.website" | "help.github" | "help.issues") => {
-                let url = commands::community_link(id).ok_or_else(|| format!("there is no link for `{id}`"))?;
+                let url = commands::community_link(id).ok_or_else(|| tmsg!("there is no link for `{command}`", command = id))?;
                 studiocraft_platform::shell::open_url(url).map_err(|e| e.to_string())?;
                 return Ok(json!({"url": url}));
             }
-            other => return Err(format!("unknown command `{other}`")),
+            other => return Err(tmsg!("unknown command `{command}`", command = other)),
         }
         Ok(Value::Null)
     }
@@ -1069,7 +1070,7 @@ impl StudioApp {
     }
 
     /// Save the current docks as the layout `name`; whether a layout with that name was replaced.
-    fn save_dock_layout(&mut self, name: &str) -> Result<bool, String> {
+    fn save_dock_layout(&mut self, name: &str) -> Result<bool, Msg> {
         let mut result = Ok(false);
         self.store.update(|p| result = p.save_dock_layout(name));
         result
@@ -1079,19 +1080,19 @@ impl StudioApp {
         self.prompt = Some(Prompt { what, text: text.to_string(), error: None });
     }
 
-    fn named(&mut self, what: Named, name: &str) -> Result<(), String> {
+    fn named(&mut self, what: Named, name: &str) -> Result<(), Msg> {
         check_name(name)?;
         let taken = |list: &[String]| list.iter().any(|n| n.eq_ignore_ascii_case(name));
         match what {
             Named::NewProfile | Named::DuplicateProfile | Named::RenameProfile => {
                 if taken(&self.profiles) && !(what == Named::RenameProfile && name.eq_ignore_ascii_case(&self.studio.profile().name)) {
-                    return Err(format!("there is already a profile named `{name}`"));
+                    return Err(tmsg!("there is already a profile named `{name}`", name = name));
                 }
                 let old = self.studio.profile().name.clone();
                 let mut p = if what == Named::NewProfile { Profile::default() } else { self.studio.profile().clone() };
                 p.name = name.to_string();
                 let previous = self.studio.profile().clone();
-                self.store.save_profile(&previous).map_err(|e| format!("The profile could not be saved: {e}"))?;
+                self.store.save_profile(&previous).map_err(|e| tmsg!("The profile could not be saved: {error}", error = e))?;
                 // The new profile is applied first, so no file is written for one that cannot be.
                 self.studio.set_profile(p.clone()).map_err(|e| e.to_string())?;
                 // On a disk that ignores case, `Show` and `show` are one file: a rename that
@@ -1103,7 +1104,7 @@ impl StudioApp {
                         let _ = self.store.rename_profile(name, &old);
                     }
                     let _ = self.studio.set_profile(previous);
-                    return Err(e);
+                    return Err(e.into());
                 }
                 if what == Named::RenameProfile && old != name && !case_only {
                     self.store.remove_profile(&old)?;
@@ -1112,7 +1113,7 @@ impl StudioApp {
             }
             Named::NewCollection | Named::DuplicateCollection | Named::RenameCollection => {
                 if taken(&self.collections) && !(what == Named::RenameCollection && name.eq_ignore_ascii_case(&self.studio.collection().name)) {
-                    return Err(format!("there is already a scene collection named `{name}`"));
+                    return Err(tmsg!("there is already a scene collection named `{name}`", name = name));
                 }
                 let old = self.studio.collection().name.clone();
                 let mut c = if what == Named::NewCollection { default_collection(name) } else { self.studio.collection().clone() };
@@ -1126,7 +1127,7 @@ impl StudioApp {
                     if case_only {
                         let _ = self.store.rename_collection(name, &old);
                     }
-                    return Err(e);
+                    return Err(e.into());
                 }
                 self.load_collection(c);
                 if what == Named::RenameCollection && old != name && !case_only {
@@ -1153,7 +1154,7 @@ impl StudioApp {
         self.store.update(|p| p.collection = name);
     }
 
-    fn switch_collection(&mut self, name: &str) -> Result<(), String> {
+    fn switch_collection(&mut self, name: &str) -> Result<(), Msg> {
         if name == self.studio.collection().name {
             return Ok(());
         }
@@ -1164,31 +1165,31 @@ impl StudioApp {
         Ok(())
     }
 
-    fn switch_profile(&mut self, name: &str) -> Result<(), String> {
+    fn switch_profile(&mut self, name: &str) -> Result<(), Msg> {
         if name == self.studio.profile().name {
             return Ok(());
         }
         let p = self.store.load_profile(name)?;
         // A profile whose settings cannot be saved stays open, so they are not lost.
-        self.store.save_profile(self.studio.profile()).map_err(|e| format!("The profile could not be saved: {e}"))?;
+        self.store.save_profile(self.studio.profile()).map_err(|e| tmsg!("The profile could not be saved: {error}", error = e))?;
         self.studio.set_profile(p).map_err(|e| e.to_string())?;
         self.store.update(|pr| pr.profile = name.to_string());
         self.settings = None;
         Ok(())
     }
 
-    fn remove_collection(&mut self) -> Result<(), String> {
+    fn remove_collection(&mut self) -> Result<(), Msg> {
         let current = self.studio.collection().name.clone();
-        let next = self.collections.iter().find(|n| **n != current).cloned().ok_or("the last scene collection can't be removed")?;
+        let next = self.collections.iter().find(|n| **n != current).cloned().ok_or_else(|| tmsg!("the last scene collection can't be removed"))?;
         self.switch_collection(&next)?;
         self.store.remove_collection(&current)?;
         self.refresh_lists();
         Ok(())
     }
 
-    fn remove_profile(&mut self) -> Result<(), String> {
+    fn remove_profile(&mut self) -> Result<(), Msg> {
         let current = self.studio.profile().name.clone();
-        let next = self.profiles.iter().find(|n| **n != current).cloned().ok_or("the last profile can't be removed")?;
+        let next = self.profiles.iter().find(|n| **n != current).cloned().ok_or_else(|| tmsg!("the last profile can't be removed"))?;
         self.switch_profile(&next)?;
         self.store.remove_profile(&current)?;
         self.refresh_lists();
@@ -1977,7 +1978,7 @@ impl StudioApp {
                 let r = ui.add(egui::TextEdit::singleline(&mut p.text).desired_width(280.0));
                 r.request_focus();
                 if let Some(e) = &p.error {
-                    ui.colored_label(ui.visuals().error_fg_color, Msg::plain(e.as_str()).shown());
+                    ui.colored_label(ui.visuals().error_fg_color, e.shown());
                 }
                 ui.horizontal(|ui| {
                     if ui.button(tl!("OK")).clicked() || ui.input(|i| i.key_pressed(egui::Key::Enter)) {
@@ -2211,25 +2212,31 @@ fn window_display(info: &egui::ViewportInfo, zoom: f32) -> Option<(u32, u32)> {
 }
 
 /// The listed display with `id`, or an error naming the listed ids.
-fn find_display<'a>(list: &'a [DisplayInfo], id: &str) -> Result<&'a DisplayInfo, String> {
+fn find_display<'a>(list: &'a [DisplayInfo], id: &str) -> Result<&'a DisplayInfo, Msg> {
     list.iter().find(|d| d.id == id).ok_or_else(|| {
         let ids: Vec<&str> = list.iter().map(|d| d.id.as_str()).collect();
         if ids.is_empty() {
-            format!("there is no display `{id}`: the system lists no displays")
+            tmsg!("there is no display `{id}`: the system lists no displays", id = id)
         } else {
-            format!("there is no display `{id}` (the displays are {})", ids.join(", "))
+            tmsg!("there is no display `{id}` (the displays are {ids})", id = id, ids = ids.join(", "))
         }
     })
 }
 
 /// A display size as a canvas size, or an error when a side is outside the canvas's range.
-fn canvas_for((width, height): (u32, u32)) -> Result<(u32, u32), String> {
+fn canvas_for((width, height): (u32, u32)) -> Result<(u32, u32), Msg> {
     use studiocraft_model::profile::{MAX_SIDE, MIN_SIDE};
     let ok = |v: u32| (MIN_SIDE..=MAX_SIDE).contains(&v);
     if ok(width) && ok(height) {
         Ok((width, height))
     } else {
-        Err(format!("a {width} × {height} display can't be the canvas: each side must be from {MIN_SIDE} to {MAX_SIDE} pixels"))
+        Err(tmsg!(
+            "a {width} × {height} display can't be the canvas: each side must be from {min} to {max} pixels",
+            width = width,
+            height = height,
+            min = MIN_SIDE,
+            max = MAX_SIDE,
+        ))
     }
 }
 

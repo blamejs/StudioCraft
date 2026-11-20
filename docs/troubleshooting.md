@@ -6,7 +6,7 @@ bold label is the symptom or the message the app shows.
 ## Recording and streaming
 
 **"ffmpeg (set its location in Settings › Output) was not found" or "ffmpeg at {path} was not
-found".** Streams, MP4 and MOV recordings, recordings at the Lossless quality level, and
+found".** MP4 and MOV recordings, recordings at the Lossless quality level, and
 recordings with x264 or an `ffmpeg` hardware encoder run in a separately installed `ffmpeg`, Media
 file sources play files other than Ogg Vorbis at 8 to 192 kHz through it, and StudioCraft could not find it. Install `ffmpeg` so that it is on the `PATH`, or set its location
 in Settings › Output › ffmpeg program. Tools › Available Encoders lists the encoders the installed
@@ -17,11 +17,12 @@ encoder in Settings › Output to H.264 (built in) and record MKV files.
 offer that encoder. Pick another encoder, or install an `ffmpeg` build that has it.
 
 **The Flatpak cannot find `ffmpeg`.** The Flatpak runtime has no `ffmpeg`, and the Flatpak sandbox
-cannot run an `ffmpeg` installed on the system. Record MKV files with H.264 (built in), or use
-another package to stream.
+cannot run an `ffmpeg` installed on the system. Record MKV files with H.264 (built in). Streams do
+not need `ffmpeg`.
 
 **"No hardware encoder passed its test; using {encoder}".** With the Hardware encoder set to
-Automatic, StudioCraft tests each hardware encoder with one frame and uses x264 when none works.
+Automatic, StudioCraft tests each hardware encoder with one frame and uses x264 when none works,
+or H.264 (built in) for a stream.
 Check that the graphics driver is installed, or pick a hardware encoder in Settings › Video ›
 Hardware acceleration. The results are kept between sessions. After a fix that does not change
 the driver or `ffmpeg`, choose Tools › Test Hardware Encoders Again, and the next recording or

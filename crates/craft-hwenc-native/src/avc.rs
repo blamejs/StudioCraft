@@ -1,8 +1,10 @@
 //! The `avcC` record (ISO/IEC 14496-15 5.3.2.1, `AVCDecoderConfigurationRecord`) of an H.264
 //! stream, built from the SPS and PPS the encoder wrote. Matroska stores it as the track's
-//! `CodecPrivate` (`V_MPEG4/ISO/AVC`) and MP4 as the `avcC` box.
+//! `CodecPrivate` (`V_MPEG4/ISO/AVC`) and MP4 as the `avcC` box. `craft-media`'s [`AvcConfig`]
+//! writes the record.
 
-use crate::bits::{Bits, Truncated, unescape};
+use craft_media::bitstream::{BitReader, unescape_rbsp};
+use craft_media::isobmff::AvcConfig;
 
 /// The fields of an H.264 SPS (ITU-T H.264 7.3.2.1.1) the record repeats.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -28,21 +30,23 @@ impl Sps {
         if nal.first().map(|b| b & 0x1f) != Some(7) {
             return Err("not an H.264 SPS NAL unit".into());
         }
-        let rbsp = unescape(nal.get(1..).unwrap_or_default());
-        let truncated = |_: Truncated| "the H.264 SPS is truncated".to_string();
-        let mut b = Bits::new(&rbsp);
-        let profile_idc = b.bits(8).map_err(truncated)? as u8;
-        let constraints = b.bits(8).map_err(truncated)? as u8;
-        let level_idc = b.bits(8).map_err(truncated)? as u8;
-        let _seq_parameter_set_id = b.ue().map_err(truncated)?;
+        let rbsp = unescape_rbsp(nal.get(1..).unwrap_or_default());
+        Self::read(&mut BitReader::new(&rbsp)).map_err(|_| "the H.264 SPS is truncated".to_string())
+    }
+
+    fn read(b: &mut BitReader) -> craft_media::bitstream::Result<Sps> {
+        let profile_idc = b.read_bits(8)? as u8;
+        let constraints = b.read_bits(8)? as u8;
+        let level_idc = b.read_bits(8)? as u8;
+        let _seq_parameter_set_id = b.read_ue()?;
         let (mut chroma_format_idc, mut bit_depth_luma, mut bit_depth_chroma) = (1, 8, 8);
         if has_chroma_info(profile_idc) {
-            chroma_format_idc = b.ue().map_err(truncated)?;
+            chroma_format_idc = b.read_ue()?;
             if chroma_format_idc == 3 {
-                let _separate_colour_plane_flag = b.bit().map_err(truncated)?;
+                let _separate_colour_plane_flag = b.read_bit()?;
             }
-            bit_depth_luma = b.ue().map_err(truncated)?.saturating_add(8);
-            bit_depth_chroma = b.ue().map_err(truncated)?.saturating_add(8);
+            bit_depth_luma = b.read_ue()?.saturating_add(8);
+            bit_depth_chroma = b.read_ue()?.saturating_add(8);
         }
         Ok(Sps { profile_idc, constraints, level_idc, chroma_format_idc, bit_depth_luma, bit_depth_chroma })
     }
@@ -62,22 +66,34 @@ pub fn avcc(sps: &[u8], pps: &[u8]) -> Result<Vec<u8>, String> {
             s.chroma_format_idc, s.bit_depth_luma, s.bit_depth_chroma
         ));
     }
-    let sps_len = u16::try_from(sps.len()).map_err(|_| "the SPS is too long for an avcC record".to_string())?;
-    let pps_len = u16::try_from(pps.len()).map_err(|_| "the PPS is too long for an avcC record".to_string())?;
-    let mut out = vec![1, s.profile_idc, s.constraints, s.level_idc, 0xfc | 3, 0xe0 | 1];
-    out.extend_from_slice(&sps_len.to_be_bytes());
-    out.extend_from_slice(sps);
-    out.push(1);
-    out.extend_from_slice(&pps_len.to_be_bytes());
-    out.extend_from_slice(pps);
-    // 14496-15 adds the chroma format and bit depths for the High profiles 100, 110, 122 and 144
-    if matches!(s.profile_idc, 100 | 110 | 122 | 144) {
-        out.push(0xfc | (s.chroma_format_idc as u8 & 3));
-        out.push(0xf8 | (s.bit_depth_luma.saturating_sub(8) as u8 & 7));
-        out.push(0xf8 | (s.bit_depth_chroma.saturating_sub(8) as u8 & 7));
-        out.push(0);
+    // `AvcConfig::to_bytes` writes each length as a `u16` without checking it
+    if u16::try_from(sps.len()).is_err() {
+        return Err("the SPS is too long for an avcC record".into());
     }
-    Ok(out)
+    if u16::try_from(pps.len()).is_err() {
+        return Err("the PPS is too long for an avcC record".into());
+    }
+    // 14496-15 adds the chroma format and bit depths for the High profiles 100, 110, 122 and 144
+    let ext = if matches!(s.profile_idc, 100 | 110 | 122 | 144) {
+        vec![
+            0xfc | (s.chroma_format_idc as u8 & 3),
+            0xf8 | (s.bit_depth_luma.saturating_sub(8) as u8 & 7),
+            0xf8 | (s.bit_depth_chroma.saturating_sub(8) as u8 & 7),
+            0,
+        ]
+    } else {
+        Vec::new()
+    };
+    Ok(AvcConfig {
+        profile: s.profile_idc,
+        compatibility: s.constraints,
+        level: s.level_idc,
+        length_size: 4,
+        sps: vec![sps.to_vec()],
+        pps: vec![pps.to_vec()],
+        ext,
+    }
+    .to_bytes())
 }
 
 #[cfg(test)]

@@ -302,7 +302,7 @@ fn a_flush_that_fails_fails_the_recording() {
 }
 
 fn item(track: Track, order_ns: i64, bytes: usize) -> Item {
-    Item { track, order_ns, pts_ns: order_ns, keyframe: true, data: vec![0; bytes] }
+    Item { track, order_ns, pts_ns: order_ns, dts_ns: order_ns, keyframe: true, data: vec![0; bytes] }
 }
 
 #[test]

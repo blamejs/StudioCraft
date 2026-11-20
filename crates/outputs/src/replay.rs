@@ -189,7 +189,7 @@ struct RingSink {
 
 impl Sink for RingSink {
     fn write(&mut self, item: Item) -> Result<(), String> {
-        let Item { track, order_ns, pts_ns, keyframe, data } = item;
+        let Item { track, order_ns, pts_ns, keyframe, data, .. } = item;
         self.ring.push(Held { track, order_ns, pts_ns, keyframe, data: Arc::new(data) });
         self.stats.bytes.store(self.ring.bytes() as u64, Ordering::Relaxed);
         self.requests.held_ns.store(self.ring.held_ns().unwrap_or(-1), Ordering::Release);

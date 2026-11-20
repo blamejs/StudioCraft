@@ -11,13 +11,11 @@ use craft_update::updater::{Action, CheckSource, Status, Updater};
 use craft_update::{CheckResultDialog, CheckResultResponse, Release};
 use serde_json::{Value, json};
 
+use crate::i18n::Msg;
 use crate::{StudioApp, UPDATE_APP};
 
 /// The version this build reports.
 const VERSION: &str = env!("CARGO_PKG_VERSION");
-
-/// Why `app.check_updates` does nothing in this session.
-pub(crate) const OFF: &str = "update checks are off in this session (--no-prefs, a scripted run or a test)";
 
 /// The update prompt and dialogs in the interface language.
 fn translate(text: &str, args: &[(&str, &str)]) -> String {
@@ -85,10 +83,11 @@ impl StudioApp {
 }
 
 /// `app.check_updates`: start a check whose result the window shows.
-pub(crate) fn check(app: &mut StudioApp, ctx: &egui::Context) -> Result<Value, String> {
+pub(crate) fn check(app: &mut StudioApp, ctx: &egui::Context) -> Result<Value, Msg> {
     let rt = &mut app.updates;
     if !rt.online {
-        return Err(OFF.into());
+        // Why `app.check_updates` does nothing in this session.
+        return Err(tmsg!("update checks are off in this session (--no-prefs, a scripted run or a test)"));
     }
     rt.window_open = true;
     rt.updater.check_now(ctx);
@@ -282,7 +281,7 @@ mod tests {
         assert!(a.store().prefs().check_updates, "the check at start is on by default");
         let ctx = egui::Context::default();
         let e = a.perform(&ctx, &craft_keymap::CommandRef::new("app.check_updates")).unwrap_err();
-        assert_eq!(e, OFF);
+        assert_eq!(e, "update checks are off in this session (--no-prefs, a scripted run or a test)");
         for _ in 0..3 {
             frame(&mut a, &ctx);
         }

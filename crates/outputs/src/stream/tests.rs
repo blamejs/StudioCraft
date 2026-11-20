@@ -1,0 +1,523 @@
+use std::io::{self, Read, Write};
+use std::net::{TcpListener, TcpStream};
+use std::sync::mpsc;
+
+use craft_flv::amf0::{self, Value};
+use craft_rtmp::{ChunkReader, ChunkWriter, MAX_MESSAGE, Message, MessageHeader, csid, msg_type, user_control};
+
+use super::*;
+use crate::native::tests::{Feeder, job};
+
+/// The size of the handshake's C1, C2, S1 and S2 packets.
+const PACKET: usize = 1536;
+/// The stream id the test server gives in its answer to createStream.
+const STREAM_ID: u32 = 1;
+/// How long a test waits for something that should happen at once before it fails. Only a broken
+/// build waits this long.
+const GUARD: Duration = Duration::from_secs(60);
+
+/// What the test server does with one connection.
+#[derive(Clone, Copy, Debug)]
+enum Plan {
+    /// Take the stream and read it until the publisher closes it.
+    Accept,
+    /// Refuse the publish command.
+    Refuse,
+    /// Take the stream and drop the connection after this many audio and video messages.
+    DropAfter(usize),
+}
+
+/// What the test server saw.
+#[derive(Clone, Debug, PartialEq)]
+enum Seen {
+    /// The publish command, with the stream's name.
+    Publish(String),
+    /// An audio or video message: video or not, its first two bytes, and its timestamp.
+    Media { video: bool, head: [u8; 2], timestamp: u32 },
+    /// The connection ended.
+    Closed,
+}
+
+/// One server connection.
+struct Conn {
+    s: TcpStream,
+    reader: ChunkReader,
+    writer: ChunkWriter,
+}
+
+impl Conn {
+    fn handshake(&mut self) -> io::Result<()> {
+        let mut c0c1 = vec![0u8; 1 + PACKET];
+        self.s.read_exact(&mut c0c1)?;
+        let mut reply = vec![3, 0, 0, 0, 7, 0, 0, 0, 0];
+        reply.extend((0..PACKET - 8).map(|i| (i * 7) as u8));
+        reply.extend_from_slice(&c0c1[1..]);
+        self.s.write_all(&reply)?;
+        let mut c2 = vec![0u8; PACKET];
+        self.s.read_exact(&mut c2)
+    }
+
+    fn recv(&mut self) -> Result<Message, craft_rtmp::Error> {
+        let mut buf = [0u8; 16 * 1024];
+        loop {
+            if let Some(m) = self.reader.next_message()? {
+                return Ok(m);
+            }
+            match self.s.read(&mut buf) {
+                Ok(0) => return Err(craft_rtmp::Error::Closed),
+                Ok(n) => self.reader.push(&buf[..n]),
+                Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
+                Err(e) => return Err(craft_rtmp::Error::Io(e)),
+            }
+        }
+    }
+
+    fn send(&mut self, csid: u32, type_id: u8, stream_id: u32, payload: &[u8]) -> io::Result<()> {
+        self.writer.write_message(&mut self.s, &MessageHeader { csid, type_id, stream_id, timestamp: 0 }, &[payload])?;
+        self.s.flush()
+    }
+
+    fn command(&mut self, stream_id: u32, values: &[Value]) -> io::Result<()> {
+        let mut b = Vec::new();
+        for v in values {
+            v.write(&mut b).unwrap();
+        }
+        self.send(csid::COMMAND, msg_type::COMMAND, stream_id, &b)
+    }
+
+    fn status(&mut self, level: &str, code: &str) -> io::Result<()> {
+        self.command(STREAM_ID, &[s("onStatus"), Value::Number(0.0), Value::Null, info(level, code)])
+    }
+
+    /// Answers everything up to the publish command, and returns the stream's name.
+    fn serve_until_publish(&mut self) -> Result<String, craft_rtmp::Error> {
+        loop {
+            let m = self.recv()?;
+            if m.header.type_id != msg_type::COMMAND {
+                continue;
+            }
+            let values = amf0::read_all(&m.payload).unwrap();
+            let name = values[0].as_str().unwrap_or_default().to_owned();
+            let txn = values[1].clone();
+            let io = craft_rtmp::Error::Io;
+            match name.as_str() {
+                "connect" => {
+                    let window = 2_500_000u32.to_be_bytes();
+                    self.send(csid::CONTROL, msg_type::WINDOW_ACK_SIZE, 0, &window).map_err(io)?;
+                    let mut bw = window.to_vec();
+                    bw.push(2);
+                    self.send(csid::CONTROL, msg_type::SET_PEER_BANDWIDTH, 0, &bw).map_err(io)?;
+                    let mut begin = user_control::STREAM_BEGIN.to_be_bytes().to_vec();
+                    begin.extend_from_slice(&0u32.to_be_bytes());
+                    self.send(csid::CONTROL, msg_type::USER_CONTROL, 0, &begin).map_err(io)?;
+                    let props = Value::Object(vec![("fmsVer".into(), s("test/1,0"))]);
+                    self.command(0, &[s("_result"), txn, props, info("status", "NetConnection.Connect.Success")]).map_err(io)?;
+                }
+                "releaseStream" => self.command(0, &[s("_result"), txn, Value::Null, Value::Undefined]).map_err(io)?,
+                "createStream" => self.command(0, &[s("_result"), txn, Value::Null, Value::Number(f64::from(STREAM_ID))]).map_err(io)?,
+                "publish" => return Ok(values.get(3).and_then(Value::as_str).unwrap_or_default().to_owned()),
+                _ => {}
+            }
+        }
+    }
+
+    /// Runs `plan`, telling `seen` what arrives.
+    fn run(&mut self, plan: Plan, seen: &mpsc::Sender<Seen>) -> Result<(), craft_rtmp::Error> {
+        self.handshake().map_err(craft_rtmp::Error::Io)?;
+        let name = self.serve_until_publish()?;
+        let _ = seen.send(Seen::Publish(name));
+        if let Plan::Refuse = plan {
+            self.status("error", "NetStream.Publish.BadName").map_err(craft_rtmp::Error::Io)?;
+        } else {
+            self.status("status", "NetStream.Publish.Start").map_err(craft_rtmp::Error::Io)?;
+        }
+        let mut media = 0;
+        loop {
+            let m = self.recv()?;
+            let video = m.header.type_id == msg_type::VIDEO;
+            if video || m.header.type_id == msg_type::AUDIO {
+                let head = [m.payload.first().copied().unwrap_or(0), m.payload.get(1).copied().unwrap_or(0)];
+                let _ = seen.send(Seen::Media { video, head, timestamp: m.header.timestamp });
+                media += 1;
+                if matches!(plan, Plan::DropAfter(n) if media >= n) {
+                    return Ok(());
+                }
+            }
+        }
+    }
+}
+
+fn s(v: &str) -> Value {
+    Value::String(v.to_owned())
+}
+
+fn info(level: &str, code: &str) -> Value {
+    Value::Object(vec![("level".into(), s(level)), ("code".into(), s(code)), ("description".into(), s("Test."))])
+}
+
+/// A loopback server that runs one plan on each connection, in order, and then stops listening.
+/// Returns its `rtmp://` URL and what it sees.
+fn server(plans: Vec<Plan>) -> (String, mpsc::Receiver<Seen>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        for plan in plans {
+            let Ok((s, _)) = listener.accept() else { return };
+            let mut c = Conn { s, reader: ChunkReader::new(MAX_MESSAGE), writer: ChunkWriter::new() };
+            let _ = c.run(plan, &tx);
+            drop(c);
+            let _ = tx.send(Seen::Closed);
+        }
+    });
+    (format!("rtmp://127.0.0.1:{port}/live"), rx)
+}
+
+/// A loopback address nothing listens on.
+fn closed_url() -> String {
+    let port = TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+    format!("rtmp://127.0.0.1:{port}/live")
+}
+
+fn target(id: &str, server: &str, key: &str) -> Target {
+    Target { id: id.into(), server: server.into(), key: key.into(), enabled: true }
+}
+
+/// Short waits before a try again, for the tests.
+fn quick() -> Timing {
+    Timing { retry: vec![Duration::from_millis(1)], max_tries: 3, ..Timing::default() }
+}
+
+/// Feeds the stream on a thread of its own until it is dropped.
+struct Feed {
+    stop: Arc<AtomicBool>,
+    thread: Option<JoinHandle<()>>,
+}
+
+impl Feed {
+    fn new(out: &Streaming) -> Feed {
+        let (video, audio) = (out.video(), out.audio());
+        let stop = Arc::new(AtomicBool::new(false));
+        let flag = Arc::clone(&stop);
+        let thread = std::thread::spawn(move || {
+            let mut f = Feeder::default();
+            while !flag.load(Ordering::SeqCst) {
+                f.feed(&video, &audio, 0.1);
+            }
+        });
+        Feed { stop, thread: Some(thread) }
+    }
+}
+
+impl Drop for Feed {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::SeqCst);
+        if let Some(t) = self.thread.take() {
+            let _ = t.join();
+        }
+    }
+}
+
+/// The next thing `rx` sees.
+fn next(rx: &mpsc::Receiver<Seen>) -> Seen {
+    rx.recv_timeout(GUARD).unwrap_or_else(|e| panic!("the server saw nothing more: {e}"))
+}
+
+/// Takes what `rx` sees up to `count` media messages, and returns those messages.
+fn media(rx: &mpsc::Receiver<Seen>, count: usize) -> Vec<Seen> {
+    let mut got = Vec::new();
+    while got.len() < count {
+        match next(rx) {
+            m @ Seen::Media { .. } => got.push(m),
+            Seen::Closed => panic!("the connection ended after {} media messages", got.len()),
+            Seen::Publish(_) => {}
+        }
+    }
+    got
+}
+
+/// Takes what `rx` sees until the connection ends.
+fn until_closed(rx: &mpsc::Receiver<Seen>) {
+    while next(rx) != Seen::Closed {}
+}
+
+/// Waits until `f` holds for the state of the destination `id`, checking again each time its
+/// status is set. [`GUARD`] only ends a test that would otherwise hang.
+fn until(out: &Streaming, id: &str, f: impl Fn(&DestinationState) -> bool) -> DestinationState {
+    let Ok(dest) = out.hub.find(id) else { panic!("no destination `{id}`") };
+    loop {
+        let seen = *lock(&dest.changes);
+        let d = dest.state();
+        if f(&d) {
+            return d;
+        }
+        let changes = lock(&dest.changes);
+        let (changes, waited) = dest.changed.wait_timeout_while(changes, GUARD, |c| *c == seen).unwrap_or_else(PoisonError::into_inner);
+        drop(changes);
+        assert!(!waited.timed_out(), "{d:?}");
+    }
+}
+
+/// Each connection sends the H.264 and AAC sequence headers first, then a keyframe.
+fn starts_with_headers_and_a_keyframe(m: &[Seen]) {
+    let heads: Vec<(bool, [u8; 2])> = m
+        .iter()
+        .take(3)
+        .map(|s| match s {
+            Seen::Media { video, head, .. } => (*video, *head),
+            other => panic!("{other:?}"),
+        })
+        .collect();
+    assert_eq!(heads, [(true, [0x17, 0]), (false, [0xAF, 0]), (true, [0x17, 1])]);
+}
+
+#[test]
+fn a_refused_destination_does_not_stop_the_other() {
+    let (a, seen_a) = server(vec![Plan::Accept]);
+    let (b, seen_b) = server(vec![Plan::Refuse]);
+    let job = job(RateControl::Bitrate { kbps: 400, keyframe_s: 1 });
+    let mut out = Streaming::start_timed(&job, vec![target("a", &a, "key-a"), target("b", &b, "key-b")], quick()).unwrap();
+    let feed = Feed::new(&out);
+    assert_eq!(next(&seen_a), Seen::Publish("key-a".into()));
+    starts_with_headers_and_a_keyframe(&media(&seen_a, 3));
+    assert_eq!(next(&seen_b), Seen::Publish("key-b".into()));
+    let b = until(&out, "b", |d| matches!(d.status, DestinationStatus::Failed(_)));
+    assert!(matches!(&b.status, DestinationStatus::Failed(e) if e.contains("NetStream.Publish.BadName")), "{b:?}");
+    until_closed(&seen_b);
+    // The other destination goes on after the refusal, and the stream runs.
+    media(&seen_a, 30);
+    let a = until(&out, "a", |d| d.status == DestinationStatus::Live);
+    assert!(a.bytes > 0 && a.reconnects == 0, "{a:?}");
+    assert!(matches!(out.status(), OutputStatus::Starting | OutputStatus::Running), "{:?}", out.status());
+    // The keys appear in no state, target or status.
+    let shown = format!("{:?} {:?} {}", out.destinations(), out.status(), out.target());
+    assert!(!shown.contains("key-a") && !shown.contains("key-b"), "{shown}");
+    drop(feed);
+    out.stop().unwrap();
+    until_closed(&seen_a);
+    assert_eq!(until(&out, "a", |_| true).status, DestinationStatus::Stopped);
+}
+
+#[test]
+fn a_lost_connection_is_made_again() {
+    let (a, seen) = server(vec![Plan::DropAfter(12), Plan::Accept]);
+    let job = job(RateControl::Bitrate { kbps: 400, keyframe_s: 1 });
+    let mut out = Streaming::start_timed(&job, vec![target("a", &a, "k")], quick()).unwrap();
+    let feed = Feed::new(&out);
+    starts_with_headers_and_a_keyframe(&media(&seen, 12));
+    until_closed(&seen);
+    // The second connection starts again with the headers and a keyframe, timed from 0.
+    assert_eq!(next(&seen), Seen::Publish("k".into()));
+    let again = media(&seen, 20);
+    starts_with_headers_and_a_keyframe(&again);
+    assert!(matches!(again[2], Seen::Media { timestamp: 0, .. }), "{again:?}");
+    let d = until(&out, "a", |d| d.status == DestinationStatus::Live && d.reconnects == 1);
+    assert!(d.bytes > 0, "{d:?}");
+    drop(feed);
+    out.stop().unwrap();
+    until_closed(&seen);
+}
+
+#[test]
+fn connections_lost_soon_after_they_are_made_count_as_failed_tries() {
+    let job = job(RateControl::Bitrate { kbps: 400, keyframe_s: 1 });
+    // The server would take more connections than the destination tries.
+    let (a, seen) = server(vec![Plan::DropAfter(2); 6]);
+    let mut out = Streaming::start_timed(&job, vec![target("a", &a, "k")], quick()).unwrap();
+    let feed = Feed::new(&out);
+    let d = until(&out, "a", |d| matches!(d.status, DestinationStatus::Failed(_)));
+    let DestinationStatus::Failed(e) = &d.status else { panic!("{d:?}") };
+    assert!(e.contains("gave up after 3 tries") && !e.contains("could not connect"), "{e}");
+    assert_eq!(d.reconnects, 3);
+    drop(feed);
+    assert!(out.stop().is_err());
+    drop(seen);
+    // Connections that last count from one again, so the destination goes on.
+    let (b, seen) = server(vec![Plan::DropAfter(2), Plan::DropAfter(2), Plan::DropAfter(2), Plan::Accept]);
+    let mut out = Streaming::start_timed(&job, vec![target("b", &b, "k")], Timing { stable: Duration::ZERO, ..quick() }).unwrap();
+    let feed = Feed::new(&out);
+    let d = until(&out, "b", |d| d.reconnects == 3 && d.status == DestinationStatus::Live);
+    assert!(d.bytes > 0, "{d:?}");
+    drop(feed);
+    out.stop().unwrap();
+    drop(seen);
+}
+
+#[test]
+fn one_destination_stops_and_starts_while_the_other_goes_on() {
+    let (a, seen_a) = server(vec![Plan::Accept]);
+    let (b, seen_b) = server(vec![Plan::Accept, Plan::Accept]);
+    let job = job(RateControl::Bitrate { kbps: 400, keyframe_s: 1 });
+    let mut off = target("c", &closed_url(), "k");
+    off.enabled = false;
+    let mut out = Streaming::start_timed(&job, vec![target("a", &a, "k"), target("b", &b, "k"), off], quick()).unwrap();
+    let feed = Feed::new(&out);
+    media(&seen_a, 5);
+    media(&seen_b, 5);
+    // A destination that is off is not started.
+    assert_eq!(until(&out, "c", |_| true).status, DestinationStatus::Stopped);
+    out.stop_destination("b").unwrap();
+    until_closed(&seen_b);
+    assert_eq!(until(&out, "b", |d| !matches!(d.status, DestinationStatus::Live)).status, DestinationStatus::Stopped);
+    assert_eq!(out.target(), a, "the target lists the destinations that send");
+    media(&seen_a, 20);
+    // Started again with a key, it publishes with that key.
+    out.start_destination("b", Some("k2")).unwrap();
+    assert_eq!(next(&seen_b), Seen::Publish("k2".into()));
+    starts_with_headers_and_a_keyframe(&media(&seen_b, 3));
+    assert_eq!(out.target(), format!("{a}, {b}"));
+    media(&seen_a, 5);
+    // Starting one that is sending does nothing, and an unknown one is an error.
+    out.start_destination("a", None).unwrap();
+    out.start_destination("b", Some("k3")).unwrap();
+    assert_eq!(*lock(&out.hub.find("b").unwrap().key), "k2", "a destination that sends keeps its key");
+    assert!(out.start_destination("x", None).is_err() && out.stop_destination("x").is_err());
+    drop(feed);
+    out.stop().unwrap();
+    until_closed(&seen_a);
+    until_closed(&seen_b);
+    assert!(out.start_destination("b", None).is_err(), "a stopped stream starts no destination");
+}
+
+#[test]
+fn the_stream_fails_when_every_destination_fails() {
+    let job = job(RateControl::Bitrate { kbps: 400, keyframe_s: 1 });
+    let mut one = Streaming::start_timed(&job, vec![target("a", &closed_url(), "k")], quick()).unwrap();
+    until(&one, "a", |d| matches!(d.status, DestinationStatus::Failed(_)));
+    let OutputStatus::Failed(e) = one.status() else { panic!("{:?}", one.status()) };
+    assert!(e.contains("gave up after 3 tries"), "{e}");
+    // The stop reports the failure, so it is not shown as a stream that ended well.
+    let Err(stopped) = one.stop() else { panic!("a failed stream stopped without its failure") };
+    assert!(stopped.to_string().contains("gave up after 3 tries"), "{stopped}");
+    assert!(one.stop().is_ok(), "a second stop does nothing");
+
+    let (live, seen) = server(vec![Plan::Accept]);
+    let mut two = Streaming::start_timed(&job, vec![target("a", &closed_url(), "k"), target("b", &live, "k")], quick()).unwrap();
+    let feed = Feed::new(&two);
+    media(&seen, 3);
+    until(&two, "a", |d| matches!(d.status, DestinationStatus::Failed(_)));
+    assert!(matches!(two.status(), OutputStatus::Starting | OutputStatus::Running), "one destination still sends: {:?}", two.status());
+    two.stop_destination("b").unwrap();
+    until_closed(&seen);
+    drop(feed);
+    assert!(two.stop().is_err(), "the one left sending was stopped and the other failed");
+
+    let mut both = Streaming::start_timed(&job, vec![target("a", &closed_url(), "k"), target("b", &closed_url(), "k")], quick()).unwrap();
+    until(&both, "a", |d| matches!(d.status, DestinationStatus::Failed(_)));
+    until(&both, "b", |d| matches!(d.status, DestinationStatus::Failed(_)));
+    let OutputStatus::Failed(e) = both.status() else { panic!("{:?}", both.status()) };
+    assert!(e.starts_with("every destination failed") && e.contains("a: ") && e.contains("b: "), "{e}");
+    assert!(both.stop().is_err());
+}
+
+#[test]
+fn a_stream_keeps_a_keyframe_interval_longer_than_a_recording_takes() {
+    let job = job(RateControl::Bitrate { kbps: 400, keyframe_s: 10 });
+    let mut out = Streaming::start_timed(&job, vec![target("a", &closed_url(), "k")], quick()).unwrap();
+    // The destination may have given up already; the stop then reports it.
+    let _ = out.stop();
+}
+
+#[test]
+fn destinations_are_checked_before_the_stream_starts() {
+    let j = job(RateControl::Bitrate { kbps: 400, keyframe_s: 2 });
+    let ok = "rtmp://127.0.0.1:9/live";
+    let mut off = target("a", ok, "k");
+    off.enabled = false;
+    let cases: Vec<(Vec<Target>, &str)> = vec![
+        (vec![], "no destination"),
+        (vec![target("", ok, "k")], "has no id"),
+        (vec![target("a", ok, "k"), target("a", ok, "k")], "used twice"),
+        (vec![target("a", "http://x/live", "k")], "destination `a`: the server URL is not valid"),
+        (vec![target("a", ok, "a key")], "destination `a`: the stream key is not valid"),
+        (vec![target("a", "rtmp://127.0.0.1:9/live", "")], "the stream key is not valid"),
+        (vec![off], "every destination is off"),
+        ((0..=MAX_SUBSCRIBERS).map(|i| target(&i.to_string(), ok, "k")).collect(), "at most 64 destinations"),
+    ];
+    for (targets, want) in cases {
+        let Err(e) = Streaming::start_timed(&j, targets, quick()) else { panic!("{want}: the stream started") };
+        assert!(e.to_string().contains(want), "{want}: {e}");
+    }
+    let Err(e) = Streaming::start_timed(&job(RateControl::Quality(23)), vec![target("a", ok, "k")], quick()) else { panic!("started") };
+    assert!(e.to_string().contains("bitrate"), "{e}");
+}
+
+#[test]
+fn a_destination_that_is_off_is_checked_when_it_starts() {
+    let mut off = target("b", "rtmp://127.0.0.1:9/live", "");
+    off.enabled = false;
+    let mut out =
+        Streaming::start_timed(&job(RateControl::Bitrate { kbps: 400, keyframe_s: 2 }), vec![target("a", &closed_url(), "k"), off], quick()).unwrap();
+    let Err(e) = out.start_destination("b", None) else { panic!("a destination without a key started") };
+    assert!(e.to_string().contains("destination `b`: the stream key is not valid"), "{e}");
+    assert!(out.start_destination("b", Some(" ")).is_err(), "a blank key");
+    assert_eq!(until(&out, "b", |_| true).status, DestinationStatus::Stopped);
+    // Given a key later, it starts.
+    out.start_destination("b", Some("late")).unwrap();
+    assert_ne!(until(&out, "b", |_| true).status, DestinationStatus::Stopped);
+    let _ = out.stop();
+}
+
+#[test]
+fn a_key_at_the_end_of_the_address_is_split_off() {
+    let with_key = target("a", " rtmp://host/live/name ", "").config().unwrap();
+    assert_eq!((with_key.endpoint.app(), with_key.key.expose()), ("live", "name"));
+    let separate = target("a", "rtmps://host/app/", "secret").config().unwrap();
+    assert_eq!((separate.endpoint.app(), separate.key.expose()), ("app", "secret"));
+    assert!(target("a", "rtmp://host/live", "").config().is_err());
+    assert_eq!(split_name("rtmp://host/a/b/c"), Some(("rtmp://host/a/b", "c")));
+    assert_eq!(split_name("rtmp://host/live"), None);
+    assert_eq!(split_name("rtmp://host/live/name?auth=t"), Some(("rtmp://host/live", "name?auth=t")));
+    assert!(!format!("{:?}", target("a", "rtmp://h/live", "secret")).contains("secret"));
+    // A name at the end of the address is a key too, and status and logs leave it out.
+    assert_eq!(target("a", " rtmp://host/live/name/ ", "").shown(), "rtmp://host/live");
+    assert_eq!(target("a", "rtmp://host/live/name", "k").shown(), "rtmp://host/live/name");
+    assert!(!format!("{:?}", target("a", "rtmp://h/live/secret", "")).contains("secret"));
+    assert_eq!(target("a", "rtmps://host/app?token=secret", "k").shown(), "rtmps://host/app?<redacted>");
+    assert_eq!(target("a", "rtmp://host/live/name?token=secret", "").shown(), "rtmp://host/live?<redacted>");
+}
+
+#[test]
+fn after_a_video_packet_is_left_out_video_waits_for_a_keyframe() {
+    let fanout = Fanout::new();
+    let control = fanout.control();
+    let rates =
+        StreamRates { video_packets_per_second: 30, audio_packets_per_second: 47, bits_per_second: 1_000_000, ticks_per_second: 1_000_000_000 };
+    let mut rx = control.subscribe(RingConfig::for_stream(&rates, RING_SECONDS)).unwrap();
+    let refused = Arc::new(AtomicU64::new(0));
+    let mut sink = Publish { fanout, pool: PacketPool::new(16, 0).unwrap(), refused: Arc::clone(&refused), video_gap: false };
+    let item = |track, at: i64, keyframe, data: Vec<u8>| Item { track, order_ns: at, pts_ns: at, dts_ns: at, keyframe, data };
+    let mut write = |i: Item| sink.write(i).unwrap();
+    write(item(Track::Video, 0, true, vec![1]));
+    // A buffer larger than a packet may be is refused, and so are the frames after it.
+    let mut too_large = Vec::with_capacity(craft_packet::MAX_BUFFER_BYTES + 1);
+    too_large.push(2);
+    write(item(Track::Video, 1, false, too_large));
+    write(item(Track::Audio, 1, true, vec![3]));
+    write(item(Track::Video, 2, false, vec![4]));
+    write(item(Track::Video, 3, true, vec![5]));
+    write(item(Track::Video, 4, false, vec![6]));
+    drop(write);
+    drop(sink);
+    let mut got = Vec::new();
+    while let Ok(p) = rx.try_recv() {
+        got.push(p.data()[0]);
+    }
+    assert_eq!(got, [1, 3, 5, 6]);
+    assert_eq!(refused.load(Ordering::Relaxed), 2);
+}
+
+#[test]
+fn timestamps_count_from_the_first_packet_in_milliseconds() {
+    let mut pool = PacketPool::new(4, 0).unwrap();
+    let mut data = vec![0, 0, 0, 1, 0x65];
+    // A frame shown 2 frames after it is decoded, at 30 fps.
+    let p = pool.share(&mut data, Info::video(5_066_666_667, 5_000_000_000, false)).unwrap();
+    let Some((t, Body::AvcNalus { composition_time, .. })) = body(&p, 4_000_000_000) else { panic!("not video") };
+    assert_eq!((t, composition_time), (1000, 66));
+    let mut early = vec![0x21];
+    let p = pool.share(&mut early, Info::audio(3_990_000_000)).unwrap();
+    assert!(matches!(body(&p, 4_000_000_000), Some((0, Body::AacRaw(_)))), "a packet before the first one is sent at 0");
+    assert_eq!(Timing::default().delay(1), Duration::from_secs(2));
+    assert_eq!(Timing::default().delay(9), Duration::from_secs(30));
+}

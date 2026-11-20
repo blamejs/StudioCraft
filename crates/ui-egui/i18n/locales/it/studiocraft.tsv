@@ -487,3 +487,35 @@ menu	Transform	Trasforma
 @msg	Audio tracks could not be repaired: {takes} and {more} more	Impossibile riparare le tracce audio: {takes} e altre {more}
 @msg	Audio tracks could not be repaired: {takes}. Takes repaired: {count}	Impossibile riparare le tracce audio: {takes}. Riprese riparate: {count}
 @msg	Audio tracks could not be repaired: {takes} and {more} more. Takes repaired: {count}	Impossibile riparare le tracce audio: {takes} e altre {more}. Riprese riparate: {count}
+@msg	`{command}` needs `{key}`	`{command}` richiede `{key}`
+@msg	`{command}`: unknown dock `{name}` (one of {docks})	`{command}`: pannello sconosciuto `{name}` (uno tra {docks})
+@msg	`{command}`: `path` must be a file path	`{command}`: `path` deve essere un percorso di file
+@msg	`{command}` needs `path` when no file dialog can be shown	`{command}` richiede `path` quando non è possibile mostrare una finestra di dialogo dei file
+@msg	The scene collection could not be imported: {error}	Impossibile importare la raccolta di scene: {error}
+@msg	The scene collection could not be exported: {error}	Impossibile esportare la raccolta di scene: {error}
+@msg	there is no free name for the scene collection `{name}`	non c'è un nome libero per la raccolta di scene `{name}`
+@msg	select a source first	seleziona prima una sorgente
+@msg	the source has not shown a picture yet	la sorgente non ha ancora mostrato un'immagine
+@msg	settings are kept in memory only (--no-prefs)	le impostazioni sono tenute solo in memoria (--no-prefs)
+@msg	`scopes.kind`: unknown scope `{name}` (one of {scopes})	`scopes.kind`: monitor di segnale sconosciuto `{name}` (uno tra {scopes})
+@msg	`dock.move`: `to` is `left` or `right`, not `{to}`	`dock.move`: `to` è `left` o `right`, non `{to}`
+@msg	`dock.float` needs `floating`: true or false	`dock.float` richiede `floating`: true o false
+@msg	`dock.layout_save`: `name` is a string	`dock.layout_save`: `name` è una stringa
+@msg	there is no dock layout named `{name}`	non esiste un layout dei pannelli chiamato `{name}`
+@msg	there is no link for `{command}`	non c'è un collegamento per `{command}`
+@msg	unknown command `{command}`	comando sconosciuto `{command}`
+@msg	there is already a profile named `{name}`	esiste già un profilo chiamato `{name}`
+@msg	there is already a scene collection named `{name}`	esiste già una raccolta di scene chiamata `{name}`
+@msg	the last scene collection can't be removed	l'ultima raccolta di scene non può essere rimossa
+@msg	the last profile can't be removed	l'ultimo profilo non può essere rimosso
+@msg	update checks are off in this session (--no-prefs, a scripted run or a test)	il controllo degli aggiornamenti è disattivato in questa sessione (--no-prefs, un'esecuzione da script o un test)
+@msg	there are already {count} dock layouts; remove one first	ci sono già {count} layout dei pannelli; rimuovine prima uno
+@msg	a name needs 1 to 100 characters	un nome deve avere da 1 a 100 caratteri
+@msg	a name can't start or end with a space, or end with a period	un nome non può iniziare o finire con uno spazio, né finire con un punto
+@msg	a name can't contain {character}	un nome non può contenere {character}
+@msg	`{name}` is reserved by the system	`{name}` è riservato dal sistema
+@msg	`video.canvas_from_display`: the size of the display the window is on is not known; pass `display`	`video.canvas_from_display`: la dimensione dello schermo su cui si trova la finestra non è nota; indica `display`
+@msg	`video.canvas_from_display`: `display` is a display id from `video.displays`	`video.canvas_from_display`: `display` è un id di schermo di `video.displays`
+@msg	there is no display `{id}`: the system lists no displays	non esiste uno schermo `{id}`: il sistema non elenca alcuno schermo
+@msg	there is no display `{id}` (the displays are {ids})	non esiste uno schermo `{id}` (gli schermi sono {ids})
+@msg	a {width} × {height} display can't be the canvas: each side must be from {min} to {max} pixels	uno schermo di {width} × {height} non può essere l'area di lavoro: ogni lato deve avere da {min} a {max} pixel
