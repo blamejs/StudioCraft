@@ -1137,6 +1137,41 @@ mod audio_tracks {
     }
 
     #[test]
+    fn a_take_handed_to_an_output_that_fails_opens_when_nothing_follows_it() {
+        let (mut s, dir) = studio("handoff-fails", true);
+        let fake = Arc::new(crate::audio_editor::tests::Fake::default());
+        s.audio_tracks.launcher = Some(fake.clone());
+        let mut p = s.profile().clone();
+        p.audio_tracks.when = AudioTracksWhen::Either;
+        p.audio_tracks.after_stop = studiocraft_model::AfterStop::OpenEditor;
+        s.set_profile(p).unwrap();
+        s.test_streaming = true;
+        s.tick();
+        armed(&mut s);
+        // A recording starts and hands the stream's take on; the stream stops before the
+        // recording fails, so no take continues the stream's.
+        let rec = dir.join("2026-11-18 22-00-00.mkv");
+        let now = s.clock.now();
+        s.audio_tracks_output_starting(OutputKind::Recording, now, Some(&rec));
+        s.test_streaming = false;
+        s.audio_tracks_output_failed(OutputKind::Recording);
+        assert!(s.audio_tracks_take().is_none(), "nothing follows the stream's take");
+        let mut spins = 0u64;
+        while !s.audio_tracks.finishing.is_empty() {
+            spins += 1;
+            assert!(spins < 200_000_000, "the takes never finished");
+            s.tick();
+            std::thread::yield_now();
+        }
+        s.audio_tracks_opened();
+        let session = s.state_json()["audio_tracks"]["last_session"].as_str().map(std::path::PathBuf::from).unwrap();
+        let folder = session.parent().unwrap().to_path_buf();
+        assert_eq!(*fake.log.lock().unwrap(), [format!("folder {}", folder.display())], "the stream's take opens as the last one");
+        drop(s);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn audio_tracks_status_and_repair_are_commands() {
         let (mut s, dir) = studio("cmd", false);
         let (v, _) = s.run("audio_tracks.status", &json!({})).unwrap();

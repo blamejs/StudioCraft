@@ -226,6 +226,11 @@ impl Studio {
         {
             self.start_audio_tracks(anchor, end);
         }
+        // With no take after it, the ended take is the last one and opens as any other does.
+        // `keep_handoff_if_started` already did this when the thrown-away take never started.
+        if cut_for.is_some() && thrown.is_some() && self.audio_tracks.take.is_none() {
+            self.audio_tracks.handed_on.pop();
+        }
         if let Some(take) = thrown {
             self.audio_tracks.finishing.push((take, true));
         }
