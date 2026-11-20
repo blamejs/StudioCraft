@@ -491,6 +491,19 @@ menu	Transform	變形
 @msg	Audio tracks could not be repaired: {takes} and {more} more	無法修復音訊軌道：{takes} 及另外 {more} 個
 @msg	Audio tracks could not be repaired: {takes}. Takes repaired: {count}	無法修復音訊軌道：{takes}。已修復的錄製：{count}
 @msg	Audio tracks could not be repaired: {takes} and {more} more. Takes repaired: {count}	無法修復音訊軌道：{takes} 及另外 {more} 個。已修復的錄製：{count}
+	Open Last Audio Tracks in Editor	在編輯器中開啟最近的音訊軌道
+	Add Audio Tracks Marker	為音訊軌道新增標記
+	After a take	錄製結束後
+	Nothing	不執行任何動作
+	Show the folder	顯示資料夾
+	Open in the audio editor	在音訊編輯器中開啟
+	Audio editor	音訊編輯器
+	The audio editor on the PATH	PATH 中的音訊編輯器
+	Programs	程式
+@msg	Audio tracks opened in the audio editor: {session}	已在音訊編輯器中開啟音訊軌道：{session}
+@msg	The audio editor did not start ({error}); the folder {folder} is shown instead	音訊編輯器未能啟動（{error}）；改為顯示資料夾 {folder}
+@msg	Audio tracks saved in {folder}	音訊軌道已儲存到 {folder}
+@msg	The audio tracks could not be opened: {error}	無法開啟音訊軌道：{error}
 @msg	`{command}` needs `{key}`	`{command}` 需要 `{key}`
 @msg	`{command}`: unknown dock `{name}` (one of {docks})	`{command}`：未知的停駐面板 `{name}`（可選 {docks}）
 @msg	`{command}`: `path` must be a file path	`{command}`：`path` 必須是檔案路徑

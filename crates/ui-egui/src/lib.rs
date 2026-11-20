@@ -1831,6 +1831,12 @@ impl StudioApp {
                         filter_name: "ffmpeg".into(),
                         extensions: if cfg!(windows) { vec!["exe".into()] } else { vec![] },
                     },
+                    Pick::AudioEditor => Browse {
+                        key: String::new(),
+                        mode: studiocraft_model::PathMode::OpenFile,
+                        filter_name: tl!("Programs").to_string(),
+                        extensions: if cfg!(windows) { vec!["exe".into()] } else { vec![] },
+                    },
                 };
                 self.browse(b, Then::Settings(pick));
             }

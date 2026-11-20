@@ -13,6 +13,9 @@ use crate::command::{Command, ItemRef, Move, RuntimeAction, SceneRef, SourceRef,
 use crate::history::History;
 use crate::links;
 
+/// Characters a marker's name holds at most (`audio_tracks.marker`).
+pub const MAX_MARKER_NAME_CHARS: usize = 256;
+
 /// Why a command did not run. Shown to the user as is.
 #[derive(Debug, Error, Clone, PartialEq)]
 pub enum EngineError {
@@ -282,6 +285,17 @@ impl Engine {
                     return Err(EngineError::Invalid("the folder to repair is empty".into()));
                 }
                 Ok(Outcome::runtime(RuntimeAction::AudioTracksRepair { folder }))
+            }
+            Command::AudioTracksOpenLast {} => Ok(Outcome::runtime(RuntimeAction::AudioTracksOpenLast)),
+            Command::AudioTracksMarker { name } => {
+                if let Some(n) = &name
+                    && (n.trim().is_empty() || n.chars().count() > MAX_MARKER_NAME_CHARS || n.chars().any(char::is_control))
+                {
+                    return Err(EngineError::Invalid(format!(
+                        "a marker's name is 1 to {MAX_MARKER_NAME_CHARS} characters, not only spaces, with no control characters"
+                    )));
+                }
+                Ok(Outcome::runtime(RuntimeAction::AudioTracksMarker { name }))
             }
             Command::RetestHardwareEncoders {} => Ok(Outcome::runtime(RuntimeAction::RetestHardwareEncoders)),
             Command::OpenSettings {} => Ok(Outcome::runtime(RuntimeAction::OpenSettings)),

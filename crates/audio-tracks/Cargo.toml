@@ -1,6 +1,6 @@
 [package]
 name = "studiocraft-audio-tracks"
-description = "StudioCraft audio tracks: each recorded source and the program mix written to its own WAV file on writer threads, with a journal and repair after a crash"
+description = "StudioCraft audio tracks: each recorded source and the program mix written to its own WAV file on writer threads, with a journal, repair after a crash and a session file for the audio editor"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -18,6 +18,9 @@ log.workspace = true
 craft-audio = { workspace = true, features = ["pcm-encode"] }
 # Free space on the disk the audio tracks are written to.
 fs4.workspace = true
+# The session file that opens a take's tracks in the audio editor, written in one step.
+craft-scraft-format.workspace = true
+craft-atomic.workspace = true
 
 [target.'cfg(unix)'.dependencies]
 # Opens the take's files without following a link.
@@ -34,6 +37,10 @@ craft-audio = { workspace = true, features = ["pcm-encode", "decode-native"] }
 
 [[bench]]
 name = "collect"
+harness = false
+
+[[bench]]
+name = "session"
 harness = false
 
 [lints]

@@ -491,6 +491,19 @@ menu	Transform	Transformera
 @msg	Audio tracks could not be repaired: {takes} and {more} more	Ljudspåren kunde inte repareras: {takes} och {more} till
 @msg	Audio tracks could not be repaired: {takes}. Takes repaired: {count}	Ljudspåren kunde inte repareras: {takes}. Reparerade tagningar: {count}
 @msg	Audio tracks could not be repaired: {takes} and {more} more. Takes repaired: {count}	Ljudspåren kunde inte repareras: {takes} och {more} till. Reparerade tagningar: {count}
+	Open Last Audio Tracks in Editor	Öppna senaste ljudspåren i redigeraren
+	Add Audio Tracks Marker	Lägg till markör i ljudspåren
+	After a take	Efter en tagning
+	Nothing	Ingenting
+	Show the folder	Visa mappen
+	Open in the audio editor	Öppna i ljudredigeraren
+	Audio editor	Ljudredigerare
+	The audio editor on the PATH	Ljudredigeraren i PATH
+	Programs	Program
+@msg	Audio tracks opened in the audio editor: {session}	Ljudspåren öppnades i ljudredigeraren: {session}
+@msg	The audio editor did not start ({error}); the folder {folder} is shown instead	Ljudredigeraren startade inte ({error}); mappen {folder} visas i stället
+@msg	Audio tracks saved in {folder}	Ljudspåren sparades i {folder}
+@msg	The audio tracks could not be opened: {error}	Ljudspåren kunde inte öppnas: {error}
 @msg	`{command}` needs `{key}`	`{command}` behöver `{key}`
 @msg	`{command}`: unknown dock `{name}` (one of {docks})	`{command}`: okänd panel `{name}` (en av {docks})
 @msg	`{command}`: `path` must be a file path	`{command}`: `path` måste vara en filsökväg

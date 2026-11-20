@@ -17,7 +17,7 @@ pub use format::FormatError;
 pub use geom::{Crop, Transform, Vec2};
 pub use ids::{FilterId, ItemId, SceneId, SourceId};
 pub use profile::{
-    AudioSettings, AudioTracksSettings, AudioTracksWhen, Destination, KeyRef, OutputSettings, Profile, RecordingFormat, RecordingQuality,
+    AfterStop, AudioSettings, AudioTracksSettings, AudioTracksWhen, Destination, KeyRef, OutputSettings, Profile, RecordingFormat, RecordingQuality,
     ReplaySettings, StreamSettings, VideoSettings,
 };
 pub use schema::{ChoiceOption, Field, FieldKind, PathMode, SettingsSchema};

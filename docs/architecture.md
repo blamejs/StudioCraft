@@ -353,6 +353,22 @@ stored for it. At most 2 takes finish their files at once; a new take waits for 
 the app closes it waits up to 10 seconds for takes to finish. While audio tracks are off no tap,
 pool or thread exists, and the mixer checks one `Option` per input.
 
+The disk thread also writes the take's session file (`session.rs`), with `craft-atomic` so a reader
+sees the old file or the new one. It writes one with no tracks when it makes the take's folder and
+the full one once the files are complete or a failure stopped the take. It builds the session from
+the journal lines it kept in memory and the files' lengths, without reading the journal back, and
+keeps at most 10,000 markers and as many dropouts. The full session is written before the
+journal's `End` line, so a take or a repair whose session write fails stays unfinished and the next
+repair writes it. Repair writes the session again from the journal when the journal's `start` line
+has `session: true`, which a take sets when it makes its own folder; it writes no session for a take
+recorded into a folder it did not make.
+Markers come from `TakeMarkers` (`markers.rs`): any thread pushes one into a bounded queue of 1,024
+without waiting, a full queue drops the marker and counts it, and the disk thread journals the
+queue with each sync. Before its last read of the queue the disk thread closes it and waits for an
+add already pushing, so a marker the take accepted is in the journal. Opening a session in the audio editor or showing its folder runs on an
+`audio-tracks-open` thread (at most 4 at once) through the `Launcher` trait
+(`studio/src/audio_editor.rs`); a started editor is waited on by an `audio-editor-wait` thread.
+
 ### Window thread
 
 The window reads `Studio` state, runs commands, and shows statistics.

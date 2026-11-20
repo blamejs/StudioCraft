@@ -84,8 +84,9 @@ The message is in English. The window's status bar shows it as well, in the inte
 when the language's catalog has the message.
 [Commands with their own parameters](#commands-with-their-own-parameters) describes `app.info`,
 `app.links`, `app.check_updates`, `plugin.list`, `source.schema`, `source.sync_offset`,
-`source.monitor`, `source.set_record_track`, `audio_tracks.status`, `audio_tracks.repair`, the
-`dock.layout_*` commands, `video.displays` and `video.canvas_from_display`.
+`source.monitor`, `source.set_record_track`, `audio_tracks.status`, `audio_tracks.repair`,
+`audio_tracks.open_last`, `audio_tracks.marker`, the `dock.layout_*` commands, `video.displays`
+and `video.canvas_from_display`.
 
 Each entry of `engine.commands` has these fields:
 
@@ -335,7 +336,23 @@ where `failed` lists each take that could not be repaired, such as one whose jou
 followed, and the repair reads the folder at that resolved path. An empty `folder`, one that does
 not exist, one outside the recording folder, a recording folder that does not exist and a fifth
 repair while four run are errors. A take that is still being written, or that another repair
-holds, is left unchanged.
+holds, is left unchanged. Each repaired take's entry also has `session`, the session file the
+repair wrote, or `null` for a take that did not make its own folder.
+
+### `audio_tracks.open_last` and `audio_tracks.marker`
+
+`audio_tracks.open_last` takes no params and opens the last take's session file in the audio
+editor on a background thread, or the take's folder when the editor cannot be found or started; it
+returns `{"started": true, "session"}` at once, and a notice reports what happened. The last session
+belongs to the take that stopped last or the repair that started last, of those that wrote one; a
+take or repair that finishes after a newer one does not replace it. `audio_tracks.status` returns
+it as `last_session`. No session yet and a fifth opening while four run are errors.
+
+`audio_tracks.marker` takes `{"name"}` and marks the running take at this moment; the take's
+session lists the marker at that sample. `name` is 1 to 256 characters, not only spaces, with no
+control characters; without it the marker is "Marker N", the take's Nth marker. It returns
+`{"name", "seconds"}`, where `seconds` counts from the take's first sample. No running take, a take
+that is ending, and 1,024 markers waiting to be written are errors.
 
 ### `dock.layout_save`, `dock.layout_apply` and `dock.layout_remove`
 

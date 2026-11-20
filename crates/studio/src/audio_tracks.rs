@@ -11,6 +11,11 @@
 //! output starts at the output's first sample; a take started later (the setting turned on, or
 //! the anchor changed) starts at that time, and each file's `bext` time reference says where on
 //! the output's timeline it starts. A take ends at the time its output stopped.
+//!
+//! A take's disk thread writes its session file for the audio editor. When the take's files are
+//! complete and no other take has started, the "after a take" setting opens the session in the
+//! audio editor or shows its folder, on a short thread of its own ([`crate::audio_editor`]);
+//! `audio_tracks.open_last` does the same for the last session on request.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -25,8 +30,9 @@ use studiocraft_audio_tracks::{DiskConfig, Faults, MAX_TRACKS, State, StopAfter,
 use studiocraft_engine::mixer::{MixerCmd, TapSet};
 use studiocraft_media::Tick;
 use studiocraft_media::tap::TapSlot;
-use studiocraft_model::{AudioTracksWhen, SourceId};
+use studiocraft_model::{AfterStop, AudioTracksWhen, SourceId};
 
+use crate::audio_editor::{self, Launcher, Opened, SystemLauncher};
 use crate::{Notice, OutputKind, Studio, recording_folder};
 
 /// The program mix's file name, first in a folder's listing.
@@ -39,8 +45,15 @@ const MAX_FINISHING: usize = 2;
 /// left to its threads, and its journal lets the next launch repair it.
 const CLOSE_WAIT: Duration = Duration::from_secs(10);
 
+/// How long the app waits, as it closes, for the editor or file manager to start for the take
+/// that ended then.
+const OPEN_WAIT: Duration = Duration::from_secs(3);
+
 /// Repairs that may run at once.
 const MAX_REPAIRS: usize = 4;
+
+/// Openings in the audio editor or the file manager that may run at once.
+const MAX_OPENING: usize = 4;
 
 /// The audio tracks part of the studio.
 #[derive(Default)]
@@ -76,13 +89,33 @@ pub(crate) struct AudioTracks {
     /// The write buffer and file size the running take uses; changed settings apply from the
     /// next take.
     take_sizes: Option<(u32, u32)>,
-    /// Repairs running on their own threads, at launch or for `audio_tracks.repair`.
-    repairs: Vec<JoinHandle<Outcome>>,
+    /// Repairs running on their own threads, at launch or for `audio_tracks.repair`, each with its
+    /// place in `stop_order`'s count.
+    repairs: Vec<(JoinHandle<Outcome>, u64)>,
     /// What the last repair did, for the status.
     last_repair: Option<Value>,
     /// Sources set to record their own track were left out, because more than
     /// [`MAX_TRACKS`] tracks would run at once.
     source_limit: bool,
+    /// The session file of the take that stopped last or the repair started last, of those that
+    /// ended with one.
+    last_session: Option<PathBuf>,
+    /// Openings of a session or a folder running on their own threads.
+    opening: Vec<JoinHandle<Result<Opened, String>>>,
+    /// What starts the editor and the file manager; the system's when unset.
+    pub(crate) launcher: Option<Arc<dyn Launcher>>,
+    /// The takes still finishing that ended because the next one started.
+    handed_on: Vec<Arc<studiocraft_audio_tracks::Status>>,
+    /// The takes still finishing, each with its place in the order the takes stopped and the
+    /// repairs started (`stops` counts both).
+    stop_order: Vec<(Arc<studiocraft_audio_tracks::Status>, u64)>,
+    stops: u64,
+    /// The place of the newest take that ended with a session: a take that finishes after a newer
+    /// one opens nothing.
+    newest_take_stop: u64,
+    /// The place of the take or repair whose session is `last_session`: one that finishes after a
+    /// newer one does not replace that one's session.
+    last_session_place: u64,
 }
 
 impl Studio {
@@ -110,8 +143,9 @@ impl Studio {
             // The anchor changed (Either: the recording started or stopped while the stream
             // runs): the take ends, and one that follows the new anchor starts now.
             Some(a) if running => {
-                self.stop_audio_tracks();
+                self.hand_on_audio_tracks_at(self.clock.now());
                 self.start_audio_tracks(a, self.clock.now());
+                self.keep_handoff_if_started(true);
             }
             // After an early stop or a failed start, the next take waits until the outputs stop.
             Some(a) if !self.audio_tracks.reported => self.start_audio_tracks(a, self.clock.now()),
@@ -141,11 +175,11 @@ impl Studio {
     /// `kind` is about to start at `start` on the studio clock: start the take that follows it
     /// now, before its first sample, so the take's first sample is the output's.
     pub(crate) fn audio_tracks_output_starting(&mut self, kind: OutputKind, start: Tick, recording: Option<&Path>) {
-        let s = self.profile.audio_tracks;
-        if !s.enabled || self.audio_tracks.reported {
+        let (enabled, when) = (self.profile.audio_tracks.enabled, self.profile.audio_tracks.when);
+        if !enabled || self.audio_tracks.reported {
             return;
         }
-        let follows = match s.when {
+        let follows = match when {
             AudioTracksWhen::Recording => kind == OutputKind::Recording,
             AudioTracksWhen::Streaming => kind == OutputKind::Streaming,
             AudioTracksWhen::Either => {
@@ -156,11 +190,13 @@ impl Studio {
         if !follows {
             return;
         }
-        if self.audio_tracks.take.is_some() {
+        let handed = self.audio_tracks.take.is_some();
+        if handed {
             self.audio_tracks.cut_for = self.audio_tracks.anchor.map(|a| (kind, a, start));
-            self.stop_audio_tracks_at(start);
+            self.hand_on_audio_tracks_at(start);
         }
         self.start_audio_tracks_for((kind, start), start, recording.map(Path::to_path_buf));
+        self.keep_handoff_if_started(handed);
     }
 
     /// `kind` did not start after [`Studio::audio_tracks_output_starting`]: its take is thrown
@@ -189,6 +225,11 @@ impl Studio {
             && self.audio_tracks_anchor() == Some(anchor)
         {
             self.start_audio_tracks(anchor, end);
+        }
+        // With no take after it, the ended take is the last one and opens as any other does.
+        // `keep_handoff_if_started` already did this when the thrown-away take never started.
+        if cut_for.is_some() && thrown.is_some() && self.audio_tracks.take.is_none() {
+            self.audio_tracks.handed_on.pop();
         }
         if let Some(take) = thrown {
             self.audio_tracks.finishing.push((take, true));
@@ -277,7 +318,7 @@ impl Studio {
         let specs = self.audio_track_specs();
         self.audio_tracks.source_limit = self.track_sources().1;
         let outputs = self.output_bytes_per_second();
-        let settings = self.profile.audio_tracks;
+        let settings = self.profile.audio_tracks.clone();
         let tracks = specs.len() as u64;
         let cfg = TakeConfig {
             disk: DiskConfig {
@@ -417,31 +458,180 @@ impl Studio {
         } else {
             take.stop_at(end);
         }
+        self.audio_tracks.stops += 1;
+        self.audio_tracks.stop_order.push((Arc::clone(take.status()), self.audio_tracks.stops));
         self.audio_tracks.finishing.push((take, false));
     }
 
-    /// Drop the takes whose files are complete, and report repairs made at launch.
+    /// After a take was handed on: when the next one did not start, the ended take opens as any
+    /// other does.
+    fn keep_handoff_if_started(&mut self, handed: bool) {
+        if handed && self.audio_tracks.take.is_none() {
+            self.audio_tracks.handed_on.pop();
+        }
+    }
+
+    /// Stop the take at `end` because the next one starts there: its session opens nothing when
+    /// it ends, since the outputs go on.
+    fn hand_on_audio_tracks_at(&mut self, end: Tick) {
+        self.stop_audio_tracks_at(end);
+        if let Some((t, _)) = self.audio_tracks.finishing.last() {
+            self.audio_tracks.handed_on.push(Arc::clone(t.status()));
+        }
+    }
+
+    /// Drop the takes whose files are complete, open the session of one that ended as the "after
+    /// a take" setting says, and report repairs and openings that ended.
     fn finish_audio_tracks(&mut self) {
         // A take that failed while it was finishing its files is reported like an early stop.
         let mut failed = Vec::new();
+        // Each ended take's session, with whether the take ended because the next one started.
+        let mut sessions = Vec::new();
+        let handed_on = &mut self.audio_tracks.handed_on;
+        let stop_order = &mut self.audio_tracks.stop_order;
         self.audio_tracks.finishing.retain(|(t, reported)| {
             let done = t.finished();
-            if done && !reported && t.status().state() == Some(State::Stopped) {
+            if !done {
+                return true;
+            }
+            if !reported && t.status().state() == Some(State::Stopped) {
                 failed.push(Arc::clone(t.status()));
             }
-            !done
+            let next = handed_on.iter().position(|h| Arc::ptr_eq(h, t.status())).map(|i| handed_on.swap_remove(i)).is_some();
+            let place = stop_order.iter().position(|(h, _)| Arc::ptr_eq(h, t.status())).map_or(0, |i| stop_order.swap_remove(i).1);
+            if let Some(s) = t.status().session() {
+                sessions.push((s.to_path_buf(), next, place));
+            }
+            false
         });
+        sessions.sort_by_key(|s| s.2);
         for status in failed {
             self.notices.push(stop_notice(&status));
         }
-        while let Some(i) = self.audio_tracks.repairs.iter().position(JoinHandle::is_finished) {
-            let Ok(out) = self.audio_tracks.repairs.swap_remove(i).join() else { continue };
+        // Each take that ended since the last tick opens, in the order they ended; the last one is
+        // the session `audio_tracks.open_last` opens. A take that ended because the next one
+        // started opens nothing, since the outputs go on, and so does any take while another one
+        // runs.
+        let after = self.profile.audio_tracks.after_stop;
+        for (session, next, place) in sessions {
+            // A take that finishes after a newer one has ended neither replaces nor follows it. A
+            // repair started after the take stopped keeps its session as the last one, and the
+            // take still opens.
+            let newest = place >= self.audio_tracks.newest_take_stop;
+            if newest {
+                self.audio_tracks.newest_take_stop = place;
+            }
+            if place >= self.audio_tracks.last_session_place {
+                self.audio_tracks.last_session = Some(session.clone());
+                self.audio_tracks.last_session_place = place;
+            }
+            if after != AfterStop::Nothing
+                && newest
+                && !next
+                && self.audio_tracks.take.is_none()
+                && let Err(e) = self.start_opening(session, after == AfterStop::OpenEditor)
+            {
+                self.notices.push(Notice::new("The audio tracks could not be opened: {error}", vec![("error", e)], true));
+            }
+        }
+        while let Some(i) = self.audio_tracks.repairs.iter().position(|(h, _)| h.is_finished()) {
+            let (handle, place) = self.audio_tracks.repairs.swap_remove(i);
+            let Ok(out) = handle.join() else { continue };
             for (dir, e) in &out.failed {
                 log::warn!("audio tracks: repair: {}: {e}", dir.display());
+            }
+            // A repair that finishes after a newer take or repair has ended does not replace that
+            // one's session.
+            if let Some(session) = out.repaired.iter().rev().find_map(|r| r.session.clone())
+                && place >= self.audio_tracks.last_session_place
+            {
+                self.audio_tracks.last_session = Some(session);
+                self.audio_tracks.last_session_place = place;
             }
             self.notices.extend(repair_notices(&out));
             self.audio_tracks.last_repair = Some(repair_json(&out));
         }
+        while let Some(i) = self.audio_tracks.opening.iter().position(JoinHandle::is_finished) {
+            let notice = match self.audio_tracks.opening.swap_remove(i).join() {
+                Ok(Ok(opened)) => opened_notice(&opened),
+                Ok(Err(e)) => Some(Notice::new("The audio tracks could not be opened: {error}", vec![("error", e)], true)),
+                Err(_) => {
+                    Some(Notice::new("The audio tracks could not be opened: {error}", vec![("error", "the opening stopped on a fault".into())], true))
+                }
+            };
+            self.notices.extend(notice);
+        }
+    }
+
+    /// Open `session` in the audio editor (`editor`) or show its folder, on a thread of its own.
+    /// An error naming the cause when [`MAX_OPENING`] openings are running or the thread could
+    /// not start.
+    fn start_opening(&mut self, session: PathBuf, editor: bool) -> Result<(), String> {
+        if self.audio_tracks.opening.len() >= MAX_OPENING {
+            log::warn!("audio tracks: {MAX_OPENING} openings are running; {} is not opened", session.display());
+            return Err(format!("{MAX_OPENING} openings of audio tracks are already running"));
+        }
+        let launcher: Arc<dyn Launcher> = self.audio_tracks.launcher.clone().unwrap_or_else(|| Arc::new(SystemLauncher));
+        let editor_path = self.profile.audio_tracks.editor_path.clone();
+        let spawned = std::thread::Builder::new().name("audio-tracks-open".into()).spawn(move || {
+            if editor { audio_editor::open_session(&*launcher, &session, &editor_path) } else { audio_editor::show_folder(&*launcher, &session) }
+        });
+        match spawned {
+            Ok(h) => {
+                self.audio_tracks.opening.push(h);
+                Ok(())
+            }
+            Err(e) => {
+                log::warn!("audio tracks: the opening thread could not start: {e}");
+                Err(format!("the opening thread could not start: {e}"))
+            }
+        }
+    }
+
+    /// Open the session of the last take in the audio editor, or its folder when the editor
+    /// cannot be started, for `audio_tracks.open_last`. Returns at once; what happened comes as a
+    /// notice.
+    pub(crate) fn open_last_audio_tracks(&mut self) -> Result<Value, crate::StudioError> {
+        let err = crate::StudioError::Output;
+        let Some(session) = self.audio_tracks.last_session.clone() else {
+            let running = self.audio_tracks.take.is_some() || !self.audio_tracks.finishing.is_empty();
+            return Err(err(if running {
+                "the take of audio tracks is still being written; its session opens once it ends".into()
+            } else {
+                "no take of audio tracks has ended since StudioCraft started".into()
+            }));
+        };
+        self.start_opening(session.clone(), true).map_err(err)?;
+        Ok(json!({"started": true, "session": session.display().to_string()}))
+    }
+
+    /// Mark the running take now, for `audio_tracks.marker`: the marker is named `name`, or
+    /// "Marker N" for the take's Nth marker. Returns its name and its time in the take.
+    pub(crate) fn add_audio_tracks_marker(&mut self, name: Option<String>) -> Result<Value, crate::StudioError> {
+        let err = crate::StudioError::Output;
+        let Some(take) = &self.audio_tracks.take else {
+            return Err(err("no take of audio tracks is running".into()));
+        };
+        let markers = take.markers();
+        let name = name.unwrap_or_else(|| format!("Marker {}", markers.kept().saturating_add(1)));
+        let frame = markers.frame(self.clock.now());
+        if !markers.add_frame(frame, &name) {
+            return Err(err(format!(
+                "the marker was not kept: the take is ending or {} markers are waiting to be written",
+                studiocraft_audio_tracks::markers::QUEUED
+            )));
+        }
+        Ok(json!({"name": name, "seconds": frame as f64 / 48_000.0}))
+    }
+
+    /// Wait for the openings started here and take their notices as the next tick would, for
+    /// tests.
+    #[cfg(test)]
+    pub(crate) fn audio_tracks_opened(&mut self) {
+        while self.audio_tracks.opening.iter().any(|h| !h.is_finished()) {
+            std::thread::yield_now();
+        }
+        self.finish_audio_tracks();
     }
 
     fn report_audio_tracks_stop(&mut self) {
@@ -463,9 +653,16 @@ impl Studio {
         let folder = recording_folder(&self.profile.output.folder);
         let spawned = std::thread::Builder::new().name("audio-tracks-repair".into()).spawn(move || recover::repair_each(&folder));
         match spawned {
-            Ok(h) => self.audio_tracks.repairs.push(h),
+            Ok(h) => self.push_repair(h),
             Err(e) => log::warn!("audio tracks: the repair thread could not start: {e}"),
         }
+    }
+
+    /// Keep a started repair with its place after the takes stopped and the repairs started
+    /// before it.
+    pub(crate) fn push_repair(&mut self, h: JoinHandle<Outcome>) {
+        self.audio_tracks.stops += 1;
+        self.audio_tracks.repairs.push((h, self.audio_tracks.stops));
     }
 
     /// Repair the takes in `folder` on a background thread, for `audio_tracks.repair`. Returns
@@ -489,7 +686,7 @@ impl Studio {
             }
         });
         match spawned {
-            Ok(h) => self.audio_tracks.repairs.push(h),
+            Ok(h) => self.push_repair(h),
             Err(e) => return Err(crate::StudioError::Output(format!("the repair could not start: {e}"))),
         }
         Ok(json!({"started": true, "folder": folder}))
@@ -499,7 +696,7 @@ impl Studio {
     /// tests.
     #[cfg(test)]
     pub(crate) fn audio_tracks_repair_result(&mut self) -> Option<Value> {
-        while self.audio_tracks.repairs.iter().any(|h| !h.is_finished()) {
+        while self.audio_tracks.repairs.iter().any(|(h, _)| !h.is_finished()) {
             std::thread::yield_now();
         }
         self.finish_audio_tracks();
@@ -512,7 +709,8 @@ impl Studio {
         let mut v = json!({
             "enabled": s.enabled, "when": s.when.id(), "include_program": s.include_program, "buffer_mib": s.buffer_mib,
             "segment_gib": s.segment_gib, "active": self.audio_tracks.take.is_some(), "finishing": self.audio_tracks.finishing.len(),
-            "repairing": !self.audio_tracks.repairs.is_empty(),
+            "repairing": !self.audio_tracks.repairs.is_empty(), "after_stop": s.after_stop.id(), "editor_path": s.editor_path,
+            "last_session": self.audio_tracks.last_session.as_ref().map(|p| p.display().to_string()),
         });
         if let (Some(o), Some(r)) = (v.as_object_mut(), &self.audio_tracks.last_repair) {
             o.insert("last_repair".into(), r.clone());
@@ -557,6 +755,17 @@ impl Studio {
         self.audio_tracks.last.as_ref()
     }
 
+    /// The session file `audio_tracks.open_last` opens: the last take's that ended with one, or
+    /// the last one a repair wrote.
+    pub fn audio_tracks_last_session(&self) -> Option<&Path> {
+        self.audio_tracks.last_session.as_deref()
+    }
+
+    /// Whether a take runs, so `audio_tracks.marker` can mark it.
+    pub fn audio_tracks_running(&self) -> bool {
+        self.audio_tracks.take.is_some()
+    }
+
     /// Bytes a second the running outputs write to disk or send: what each has written so far,
     /// or the stream settings' bitrate when that is more.
     fn output_bytes_per_second(&self) -> u64 {
@@ -583,13 +792,49 @@ impl Studio {
     }
 
     /// Stop the take and wait for its files, when the app closes, for at most [`CLOSE_WAIT`] in
-    /// all. A take still writing then is left to finish on its own threads.
+    /// all. A take still writing then is left to finish on its own threads. When the last take
+    /// finished with its session, that session is opened as the "after a take" setting says.
+    /// Openings still starting, that one included, are waited for for at most [`OPEN_WAIT`] more.
     pub(crate) fn finish_audio_tracks_blocking(&mut self) {
         self.stop_audio_tracks();
         let deadline = Instant::now() + CLOSE_WAIT;
+        let mut last = None;
+        let handed_on = std::mem::take(&mut self.audio_tracks.handed_on);
+        self.audio_tracks.stop_order.clear();
         for (t, _) in self.audio_tracks.finishing.drain(..) {
-            if !t.join_until(deadline) {
+            let status = Arc::clone(t.status());
+            let finished = t.join_until(deadline);
+            if !finished {
                 log::warn!("audio tracks: a take was still writing when the app closed; the next launch repairs it if it does not finish");
+            }
+            // Only the last take opens: one that ended for the next one, or one that did not
+            // finish, opens nothing, and neither does an earlier take in its place.
+            let next = handed_on.iter().any(|h| Arc::ptr_eq(h, &status));
+            last = status.session().filter(|_| finished && !next).map(Path::to_path_buf);
+            if let Some(s) = status.session().filter(|_| finished) {
+                self.audio_tracks.last_session = Some(s.to_path_buf());
+            }
+        }
+        let after = self.profile.audio_tracks.after_stop;
+        if let Some(session) = last
+            && after != AfterStop::Nothing
+            && let Err(e) = self.start_opening(session, after == AfterStop::OpenEditor)
+        {
+            log::warn!("audio tracks: the take that ended as the app closed could not be opened: {e}");
+        }
+        // Openings that are still starting, this one and earlier ones, have their own time, so a
+        // take that used up `deadline` still opens.
+        let opened_by = Instant::now() + OPEN_WAIT;
+        for h in self.audio_tracks.opening.drain(..) {
+            while !h.is_finished() && Instant::now() < opened_by {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            if h.is_finished() {
+                if let Ok(Err(e)) = h.join() {
+                    log::warn!("audio tracks: a session could not be opened as the app closed: {e}");
+                }
+            } else {
+                log::warn!("audio tracks: the audio editor or file manager was still starting when the app closed");
             }
         }
     }
@@ -672,11 +917,30 @@ fn repair_json(out: &Outcome) -> Value {
         .iter()
         .map(|r| {
             let files: Vec<Value> = r.files.iter().map(|(f, n)| json!({"file": f, "seconds": *n as f64 / 48_000.0})).collect();
-            json!({"folder": r.dir.display().to_string(), "files": files})
+            let session = r.session.as_ref().map(|p| p.display().to_string());
+            json!({"folder": r.dir.display().to_string(), "files": files, "session": session})
         })
         .collect();
     let failed: Vec<Value> = out.failed.iter().map(|(d, e)| json!({"folder": d.display().to_string(), "error": e.to_string()})).collect();
     json!({"repaired": takes, "failed": failed})
+}
+
+/// The notice for an opening that ended: the session opened in the editor, the folder shown with
+/// the reason the editor did not start, or the folder shown as asked.
+fn opened_notice(opened: &Opened) -> Option<Notice> {
+    match opened {
+        Opened::Editor { session, .. } => {
+            Some(Notice::new("Audio tracks opened in the audio editor: {session}", vec![("session", session.display().to_string())], false))
+        }
+        Opened::Folder { folder, editor_error: Some(why) } => Some(Notice::new(
+            "The audio editor did not start ({error}); the folder {folder} is shown instead",
+            vec![("error", why.clone()), ("folder", folder.display().to_string())],
+            true,
+        )),
+        Opened::Folder { folder, editor_error: None } => {
+            Some(Notice::new("Audio tracks saved in {folder}", vec![("folder", folder.display().to_string())], false))
+        }
+    }
 }
 
 /// Takes a repair notice names at most; it counts the rest.
@@ -758,7 +1022,7 @@ mod tests {
         // Many takes: the first three are named and the rest counted, in both notices.
         let dirs: Vec<PathBuf> = (1..=5).map(|i| PathBuf::from(format!("T{i}"))).collect();
         let out = Outcome {
-            repaired: dirs.iter().map(|d| recover::Repaired { dir: d.clone(), files: Vec::new(), synced: Vec::new() }).collect(),
+            repaired: dirs.iter().map(|d| recover::Repaired { dir: d.clone(), files: Vec::new(), synced: Vec::new(), session: None }).collect(),
             failed: dirs.iter().map(|d| (d.clone(), std::io::Error::other("bad"))).collect(),
         };
         let notices = repair_notices(&out);
@@ -772,7 +1036,7 @@ mod tests {
             vec![("takes", "T1 (bad); T2 (bad); T3 (bad)".to_string()), ("more", "2".to_string()), ("count", "5".to_string())]
         );
         let one = Outcome {
-            repaired: vec![recover::Repaired { dir: dirs[0].clone(), files: Vec::new(), synced: Vec::new() }],
+            repaired: vec![recover::Repaired { dir: dirs[0].clone(), files: Vec::new(), synced: Vec::new(), session: None }],
             failed: vec![(dirs[1].clone(), std::io::Error::other("bad"))],
         };
         let notices = repair_notices(&one);
