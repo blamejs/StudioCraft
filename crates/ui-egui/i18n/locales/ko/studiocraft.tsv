@@ -38,6 +38,12 @@
 	camera access is not allowed in the system's privacy settings	시스템 개인 정보 설정에서 카메라 접근이 허용되지 않았습니다
 	Cancel	취소
 	Canvas size	캔버스 크기
+	Canvas Size from Display	디스플레이에서 캔버스 크기 가져오기
+	List Displays	디스플레이 목록
+	Match display	디스플레이에 맞추기
+	Choose a display	디스플레이 선택
+	The display this window is on	이 창이 있는 디스플레이
+	{name}: {width} × {height}	{name}: {width} × {height}
 	Capture rate (frames per second)	캡처 속도 (초당 프레임)
 	Ceiling (dB)	상한 (dB)
 	Center	가운데

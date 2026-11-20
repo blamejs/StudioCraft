@@ -266,6 +266,26 @@ fn bit_field_masks_match_the_header() {
 }
 
 #[test]
+fn an_hevc_session_clears_the_preset_flags_for_parameter_sets_delimiters_and_intra_refresh() {
+    use super::session::hevc_flags;
+    for ten_bit in [false, true] {
+        let flags = hevc_flags(u32::MAX, ten_bit);
+        for (bit, name) in [
+            (HEVC_OUTPUT_AUD, "outputAUD"),
+            (HEVC_DISABLE_SPSPPS, "disableSPSPPS"),
+            (HEVC_REPEAT_SPSPPS, "repeatSPSPPS"),
+            (HEVC_ENABLE_INTRA_REFRESH, "enableIntraRefresh"),
+        ] {
+            assert_eq!(flags & bit, 0, "{name}, ten_bit {ten_bit}");
+        }
+        assert_eq!((flags & HEVC_CHROMA_FORMAT_MASK) >> HEVC_CHROMA_FORMAT_SHIFT, 1, "4:2:0, ten_bit {ten_bit}");
+        assert_eq!((flags & HEVC_PIXEL_BIT_DEPTH_MASK) >> HEVC_PIXEL_BIT_DEPTH_SHIFT, u32::from(ten_bit) * 2, "bit depth, ten_bit {ten_bit}");
+        assert_eq!(flags & 1, 1, "useConstrainedIntraPred keeps the preset's value");
+        assert_eq!(hevc_flags(0, ten_bit) & 1, 0, "useConstrainedIntraPred keeps the preset's value");
+    }
+}
+
+#[test]
 fn a_full_session_count_is_busy_and_other_open_failures_are_not() {
     use super::session::busy;
     for s in [NV_ENC_ERR_OUT_OF_MEMORY, NV_ENC_ERR_ENCODER_BUSY, NV_ENC_ERR_INCOMPATIBLE_CLIENT_KEY] {

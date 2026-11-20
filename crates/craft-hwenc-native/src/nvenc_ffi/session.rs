@@ -237,6 +237,19 @@ pub(crate) fn busy(s: NvStatus) -> bool {
     matches!(s, NV_ENC_ERR_OUT_OF_MEMORY | NV_ENC_ERR_ENCODER_BUSY | NV_ENC_ERR_INCOMPATIBLE_CLIENT_KEY)
 }
 
+/// The HEVC `flags` word for a session, from the one the preset gave: no access unit delimiters,
+/// no repeated or disabled parameter sets, no intra refresh, and 4:2:0 at 8 or 10 bits. The other
+/// flags keep the preset's values.
+pub(crate) fn hevc_flags(preset: u32, ten_bit: bool) -> u32 {
+    let clear =
+        HEVC_OUTPUT_AUD | HEVC_DISABLE_SPSPPS | HEVC_REPEAT_SPSPPS | HEVC_ENABLE_INTRA_REFRESH | HEVC_CHROMA_FORMAT_MASK | HEVC_PIXEL_BIT_DEPTH_MASK;
+    let mut flags = (preset & !clear) | (1 << HEVC_CHROMA_FORMAT_SHIFT);
+    if ten_bit {
+        flags |= 2 << HEVC_PIXEL_BIT_DEPTH_SHIFT;
+    }
+    flags
+}
+
 impl Session {
     /// Open a session on the system's NVIDIA GPU, or say why not.
     pub fn open() -> Result<Session, OpenError> {
@@ -369,11 +382,7 @@ impl Session {
                     h.minCUSize = NV_ENC_HEVC_CUSIZE_AUTOSELECT;
                     h.maxCUSize = NV_ENC_HEVC_CUSIZE_AUTOSELECT;
                     h.idrPeriod = p.gop.max(1);
-                    h.flags &= !(HEVC_OUTPUT_AUD | HEVC_REPEAT_SPSPPS | HEVC_CHROMA_FORMAT_MASK | HEVC_PIXEL_BIT_DEPTH_MASK);
-                    h.flags |= 1 << HEVC_CHROMA_FORMAT_SHIFT;
-                    if p.ten_bit {
-                        h.flags |= 2 << HEVC_PIXEL_BIT_DEPTH_SHIFT;
-                    }
+                    h.flags = hevc_flags(h.flags, p.ten_bit);
                     h.maxNumRefFramesInDPB = 0;
                     let vui = &mut h.hevcVUIParameters;
                     vui.videoSignalTypePresentFlag = 1;

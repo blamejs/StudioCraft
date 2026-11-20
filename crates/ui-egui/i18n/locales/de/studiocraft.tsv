@@ -39,6 +39,12 @@
 	camera access is not allowed in the system's privacy settings	der Kamerazugriff ist in den Datenschutzeinstellungen des Systems nicht erlaubt
 	Cancel	Abbrechen
 	Canvas size	Leinwandgröße
+	Canvas Size from Display	Leinwandgröße vom Bildschirm
+	List Displays	Bildschirme auflisten
+	Match display	An Bildschirm anpassen
+	Choose a display	Bildschirm wählen
+	The display this window is on	Der Bildschirm mit diesem Fenster
+	{name}: {width} × {height}	{name}: {width} × {height}
 	Capture rate (frames per second)	Aufnahmerate (Bilder pro Sekunde)
 	Center	Mitte
 	Center to Screen	Auf dem Bildschirm zentrieren

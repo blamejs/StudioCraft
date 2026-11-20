@@ -38,6 +38,12 @@
 	camera access is not allowed in the system's privacy settings	システムのプライバシー設定でカメラへのアクセスが許可されていません
 	Cancel	キャンセル
 	Canvas size	キャンバスサイズ
+	Canvas Size from Display	ディスプレイからキャンバスサイズを設定
+	List Displays	ディスプレイを一覧表示
+	Match display	ディスプレイに合わせる
+	Choose a display	ディスプレイを選択
+	The display this window is on	このウィンドウがあるディスプレイ
+	{name}: {width} × {height}	{name}：{width} × {height}
 	Capture rate (frames per second)	キャプチャレート (フレーム/秒)
 	Ceiling (dB)	上限 (dB)
 	Center	中央

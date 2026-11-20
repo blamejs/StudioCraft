@@ -49,7 +49,7 @@ fn is_read_only(method: &str, params: &Value) -> bool {
         "engine.execute" | "run" => {
             matches!(
                 params.get("command").and_then(Value::as_str),
-                Some("app.links" | "app.info" | "plugin.list" | "source.schema" | "app_audio.list" | "app_audio.status")
+                Some("app.links" | "app.info" | "plugin.list" | "source.schema" | "app_audio.list" | "app_audio.status" | "video.displays")
             )
         }
         _ => false,
@@ -224,6 +224,8 @@ mod tests {
         assert!(is_read_only("engine.execute", &json!({"command": "source.schema"})));
         assert!(is_read_only("engine.execute", &json!({"command": "app_audio.list"})));
         assert!(is_read_only("run", &json!({"command": "app_audio.status"})));
+        assert!(is_read_only("engine.execute", &json!({"command": "video.displays"})));
+        assert!(!is_read_only("engine.execute", &json!({"command": "video.canvas_from_display"})));
         assert!(!is_read_only("engine.execute", &json!({"command": "scene.add"})));
         assert!(!is_read_only("ui.click", &json!({})));
     }

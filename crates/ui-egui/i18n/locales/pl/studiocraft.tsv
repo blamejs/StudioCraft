@@ -38,6 +38,12 @@
 	camera access is not allowed in the system's privacy settings	dostęp do kamery nie jest dozwolony w ustawieniach prywatności systemu
 	Cancel	Anuluj
 	Canvas size	Rozmiar płótna
+	Canvas Size from Display	Rozmiar płótna według ekranu
+	List Displays	Wyświetl listę ekranów
+	Match display	Dopasuj do ekranu
+	Choose a display	Wybierz ekran
+	The display this window is on	Ekran, na którym jest to okno
+	{name}: {width} × {height}	{name}: {width} × {height}
 	Capture rate (frames per second)	Częstotliwość przechwytywania (klatki na sekundę)
 	Ceiling (dB)	Pułap (dB)
 	Center	Środek

@@ -1,0 +1,25 @@
+{
+  "schema": 1,
+  "repo": "blamejs/StudioCraft",
+  "branch": "main",
+  "head": "3eeee494a07400e00e8067c4483746c55881c7a7",
+  "head_date": "2026-11-20T18:03:11Z",
+  "commits": 339,
+  "unattributed_commits": 0,
+  "contributors": [
+    {
+      "login": "dotCooCoo",
+      "people_entry": false,
+      "github_name": null,
+      "prs": 93,
+      "commits": 339,
+      "lines_added": 145009,
+      "lines_deleted": 7537,
+      "binary_added": 21,
+      "binary_deleted": 0,
+      "first_commit": "2026-11-16T20:33:31Z",
+      "last_commit": "2026-11-20T18:03:11Z"
+    }
+  ],
+  "models": []
+}

@@ -38,6 +38,12 @@
 	camera access is not allowed in the system's privacy settings	系统隐私设置不允许访问摄像头
 	Cancel	取消
 	Canvas size	画布大小
+	Canvas Size from Display	按显示器设置画布大小
+	List Displays	列出显示器
+	Match display	匹配显示器
+	Choose a display	选择显示器
+	The display this window is on	此窗口所在的显示器
+	{name}: {width} × {height}	{name}：{width} × {height}
 	Capture rate (frames per second)	采集速率（每秒帧数）
 	Ceiling (dB)	峰值上限 (dB)
 	Center	居中
