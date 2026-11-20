@@ -557,6 +557,18 @@ menu	Transform	Transform
 @msg	The audio editor did not start ({error}); the folder {folder} is shown instead	The audio editor did not start ({error}); the folder {folder} is shown instead
 @msg	Audio tracks saved in {folder}	Audio tracks saved in {folder}
 @msg	The audio tracks could not be opened: {error}	The audio tracks could not be opened: {error}
+	Application Audio	Application Audio
+	Lane settings	Lane settings
+	Hear in Every Scene	Hear in Every Scene
+	Stop Hearing in Every Scene	Stop Hearing in Every Scene
+	Hear this application in every scene, with the microphone	Hear this application in every scene, with the microphone
+	Stop hearing this application in every scene	Stop hearing this application in every scene
+	Looking for applications with audio…	Looking for applications with audio…
+	No microphones or applications with audio.	No microphones or applications with audio.
+	Desktop audio also records a routed application that plays on the same device, so the program can hear it twice.	Desktop audio also records a routed application that plays on the same device, so the program can hear it twice.
+	This application is not running.	This application is not running.
+	List Audio Lanes	List Audio Lanes
+	Route Application Audio	Route Application Audio
 @msg	`{command}` needs `{key}`	`{command}` needs `{key}`
 @msg	`{command}`: unknown dock `{name}` (one of {docks})	`{command}`: unknown dock `{name}` (one of {docks})
 @msg	`{command}`: `path` must be a file path	`{command}`: `path` must be a file path

@@ -13,7 +13,7 @@ use crate::{Backend, Headless, MAX_BATCH_STEPS, McpError, Remote, Roots, Server,
 
 const TOKEN: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
-const TOOLS: [&str; 31] = [
+const TOOLS: [&str; 32] = [
     "command_list",
     "command_run",
     "command_batch",
@@ -33,6 +33,7 @@ const TOOLS: [&str; 31] = [
     "app_links",
     "source_schema",
     "app_audio",
+    "app_audio_route",
     "record_start",
     "record_stop",
     "stream_start",
@@ -255,6 +256,29 @@ fn app_audio_reports_the_systems_support_and_lists() {
     }
     assert!(error_text(&call(&mut s, "app_audio", json!({"action": "capture"}))).contains("capture"));
     error_text(&call(&mut s, "app_audio", json!({})));
+    let lanes = ok_json(&call(&mut s, "app_audio", json!({"action": "lanes"})));
+    assert_eq!(lanes["supported"], supported);
+    let mics: Vec<&Value> = lanes["lanes"].as_array().unwrap().iter().filter(|l| l["kind"] == "microphone").collect();
+    assert_eq!(mics.len(), 1, "the new collection's microphone: {lanes}");
+    assert_eq!(mics[0]["routed"], true, "a global audio source is heard: {lanes}");
+}
+
+#[test]
+fn app_audio_route_checks_its_arguments_and_the_application() {
+    let mut s = server();
+    let before = ok_json(&call(&mut s, "doc_inspect", json!({})));
+    error_text(&call(&mut s, "app_audio_route", json!({"routed": true})));
+    error_text(&call(&mut s, "app_audio_route", json!({"app": "player.exe"})));
+    error_text(&call(&mut s, "app_audio_route", json!({"app": "player.exe", "routed": "yes"})));
+    error_text(&call(&mut s, "app_audio_route", json!({"app": "", "routed": true})));
+    error_text(&call(&mut s, "app_audio_route", json!({"app": "apps/player.exe", "routed": true})));
+    // An application that is not running with audio and has no source is refused either way, and
+    // nothing changes.
+    let unknown = format!("zz-not-running-{}.exe|c:\\none\\zz.exe", std::process::id());
+    for routed in [true, false] {
+        error_text(&call(&mut s, "app_audio_route", json!({"app": unknown, "routed": routed})));
+    }
+    assert_eq!(ok_json(&call(&mut s, "doc_inspect", json!({})))["collection"], before["collection"]);
 }
 
 #[test]

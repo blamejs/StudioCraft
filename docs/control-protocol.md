@@ -146,10 +146,10 @@ dialog is open the request is an error.
 | --- | --- |
 | `window` | `{"width", "height"}` in points. |
 | `dialogs` | `settings`, `about`, `stats`, `encoders`, `confirm_exit` and `updates` (the update prompt or the result of Help › Check for Updates; each `true` or `false`), `properties` and `filters` (the ids of the sources whose windows are open) and `prompt` (`{"title", "text", "error"}` of the name prompt, or `null`). |
-| `docks` | Each shown dock in the strip (`scenes`, `sources`, `mixer`) from left to right, with its `rect`: `{"x", "y", "width", "height"}`; its `header` rect; its `title` rect, where a right-click opens the dock's menu; `title_truncated`, whether the title was shortened to fit; and `actions`, each header action with its `name` (`add`, `remove`, `up`, `down`, `properties`) and `rect`, from left to right. |
+| `docks` | Each shown dock in the strip (`scenes`, `sources`, `mixer`, `app_audio`) from left to right, with its `rect`: `{"x", "y", "width", "height"}`; its `header` rect; its `title` rect, where a right-click opens the dock's menu; `title_truncated`, whether the title was shortened to fit; and `actions`, each header action with its `name` (`add`, `remove`, `up`, `down`, `properties`) and `rect`, from left to right. |
 | `floating_docks` | Each shown dock in a window of its own, with the same fields as `docks`; its `rect` is the window's. |
 | `dock_layouts` | The names of the saved dock layouts, in the order they were first saved. |
-| `dock_strip` | The strip that holds the docks, or `null` when every dock is hidden: its `rect` and `height`, `saved_height` (the height set by dragging its top edge, or `null`) and `saved_widths` (`scenes`, `sources` and `mixer`, each a width set by dragging a divider, or `null`) and `order`, every dock's name from left to right, hidden ones included. |
+| `dock_strip` | The strip that holds the docks, or `null` when every dock is hidden: its `rect` and `height`, `saved_height` (the height set by dragging its top edge, or `null`) and `saved_widths` (`scenes`, `sources`, `mixer` and `app_audio`, each a width set by dragging a divider, or `null`) and `order`, every dock's name from left to right, hidden ones included. |
 | `output_bar` | The menu row: its `rect`; `transitions`, where the transition picker is (`inline`, `overflow` behind an icon button, or `hidden` by Docks › Transition Controls); `compact`, whether Record and Go Live leave out their labels; and `parts`, each drawn part with its `name` (`menus`, `mode`, `transition`, `duration`, `transition_settings`, `transition_overflow`, `record`, `stream`) and `rect`, from left to right. |
 | `preview` | The editable view's `rect` and `scale` (points per canvas pixel), or `null` before it is drawn. In studio mode this is the preview; otherwise it is the program. |
 | `studio_mode` | Whether studio mode is on. |
@@ -259,9 +259,44 @@ go of it while it was stuck in a system call is not listed and does not count ag
 cannot capture one application, `supported` is `false` and `error`
 and `reason` say why.
 
+`app_audio.lanes` also only reads and takes no parameters. It returns the lanes of the Application
+Audio dock as `{"supported", "reason", "listing", "error", "lanes", "desktop_heard"}`.
+`desktop_heard` is true when the program hears an `audio_output` source that is not muted; that
+capture also records what a routed application plays on the device it captures. `lanes` holds a lane for each `audio_input`
+source, then a lane for each listed application, then a lane for each routed application that is
+not running. When the program hears more than one source of an application, each source after
+the first gets a lane of its own, named after the source, with `app` set to `null`. Each lane has
+`kind` (`microphone` or `application`), `name`, `app` (`null` for a microphone), `source` (the id
+of the source that carries it, or `null`), `routed`, `routed_heard`, `heard`, `gain`, `muted`,
+`peak`, `running`, `playing` and `within`. `routed` is true when the source is a global audio
+source. `routed_heard` is true when a global audio source of the lane reaches the program, that
+is, its monitoring is not `monitor_only`. `heard` is true when the source is a global audio source
+or is shown in the program scene, and its monitoring is not `monitor_only`.
+
+`app_audio.route` takes `app` (a value from `app_audio.lanes` or `app_audio.list`) and `routed`.
+With `routed: true` it returns `{"source": id}`: the global audio source that already captures the
+application, or a source of the collection that captures it, added to the global audio sources, or
+a new Application audio capture source named after the application. A new source is made only for
+an application in the current list. A routed source set to `monitor_only` is set to
+`monitor_and_output`. Routing an application is an error while the program hears another
+listed application, through a global audio source or the program scene, and one of the two names
+the other in `within`, directly or through the applications between them, since one capture
+records the other's processes. With `routed: false` it takes every source that captures the
+application out of the global audio sources, removes the ones no scene shows, and returns
+`{"sources": [ids]}`; a scene that shows one of them still plays it. A source saved for a program
+in another folder, which captures the listed program only because it has the same file name, is
+taken out of the global audio sources and kept. Sources match an application the way a capture
+source finds it, so a source saved before the program moved to a new folder is that program's
+source. While no listed application matches the value and sources of the collection name programs
+at more than one path with its file name, the value matches only sources saved with exactly that
+value, so a file name alone matches only sources saved by file name. These values are errors: one
+that is not in the `app` form, and an application that is not listed and has no source. Both
+directions are one undo step, and a call that changes nothing records none.
+
 ```sh
 studiocraft-cli send 9876 engine.execute '{"command": "app.links", "params": {"link": "issues"}}'
 studiocraft-cli send 9876 engine.execute '{"command": "app_audio.list"}'
+studiocraft-cli send 9876 engine.execute '{"command": "app_audio.route", "params": {"app": "player.exe|c:\\apps\\player.exe", "routed": true}}'
 ```
 
 ### `source.sync_offset` and `source.monitor`

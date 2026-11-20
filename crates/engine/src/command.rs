@@ -294,6 +294,14 @@ pub enum Command {
     /// Whether this system captures one application's audio, and the captures running now.
     #[serde(rename = "app_audio.status")]
     AppAudioStatus {},
+    /// The lanes of the Application Audio panel: each microphone source and each running
+    /// application with audio, with whether the program hears it.
+    #[serde(rename = "app_audio.lanes")]
+    AppAudioLanes {},
+    /// Mix the application `app` (a value from `app_audio.lanes` or `app_audio.list`) into the
+    /// program in every scene, together with the microphone, or stop doing so.
+    #[serde(rename = "app_audio.route")]
+    AppAudioRoute { app: String, routed: bool },
 }
 
 /// A parameter that may be left out but, when given, is a string: `null` is refused.
@@ -378,6 +386,8 @@ impl Command {
             Command::SourceSchema { .. } => "source.schema",
             Command::AppAudioList {} => "app_audio.list",
             Command::AppAudioStatus {} => "app_audio.status",
+            Command::AppAudioLanes {} => "app_audio.lanes",
+            Command::AppAudioRoute { .. } => "app_audio.route",
         }
     }
 
@@ -471,6 +481,8 @@ const SPECS: &[CommandSpec] = &[
     spec("source.schema", "Source Settings Fields", "kind: plug-in id, settings?", Undo::NotUndoable),
     spec("app_audio.list", "List Applications with Audio", "", Undo::NotUndoable),
     spec("app_audio.status", "Application Audio Status", "", Undo::NotUndoable),
+    spec("app_audio.lanes", "List Audio Lanes", "", Undo::NotUndoable),
+    spec("app_audio.route", "Route Application Audio", "app: value from app_audio.lanes, routed: bool", Undo::Undoable),
 ];
 
 /// Every command's description.
@@ -499,6 +511,8 @@ mod tests {
             Command::SourceSchema { kind: "camera".into(), settings: Some(Settings::new().with("device", "Desk")) },
             Command::AppAudioList {},
             Command::AppAudioStatus {},
+            Command::AppAudioLanes {},
+            Command::AppAudioRoute { app: "player.exe".into(), routed: true },
         ];
         for c in samples {
             let v = serde_json::to_value(&c).unwrap();

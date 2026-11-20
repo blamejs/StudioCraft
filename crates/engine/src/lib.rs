@@ -6,6 +6,7 @@
 //! - [`credits`]: the contributors listed in the About window.
 //! - [`history`]: undo and redo of model changes.
 //! - [`host`]: one thread per source, created from the registry.
+//! - [`lanes`]: the lanes of the Application Audio panel.
 //! - [`links`]: the community and project links and the app's identity.
 //! - [`mixer`]: the audio mixer thread.
 //! - [`scheduler`]: the thread that wakes the compositor once per frame on the master clock.
@@ -18,6 +19,7 @@ mod credits_gen;
 mod engine;
 pub mod history;
 pub mod host;
+pub mod lanes;
 pub mod links;
 pub mod mixer;
 pub mod scheduler;
