@@ -18,6 +18,8 @@
 
 use std::collections::VecDeque;
 
+use craft_media::bitstream::length_prefixed_nals;
+
 use crate::mf::set_types;
 use crate::vt_ffi::{OpenError, Output, Params, Session};
 use crate::{Codec, avc, hevc};
@@ -82,17 +84,9 @@ fn check(cfg: &Config) -> Result<(), Error> {
 
 /// The NAL units of a 4-byte length-prefixed sample.
 fn units(data: &[u8]) -> Result<Vec<&[u8]>, String> {
-    let mut out = Vec::new();
-    let mut rest = data;
-    while !rest.is_empty() {
-        let (len, tail) = rest.split_first_chunk::<4>().ok_or("a sample ends inside a NAL unit length")?;
-        let len = u32::from_be_bytes(*len) as usize;
-        let (nal, tail) = tail.split_at_checked(len).ok_or("a NAL unit runs past the end of its sample")?;
-        if nal.is_empty() {
-            return Err("a sample holds an empty NAL unit".into());
-        }
-        out.push(nal);
-        rest = tail;
+    let out = length_prefixed_nals(data, 4).map_err(|_| "a NAL unit or its length runs past the end of its sample".to_string())?;
+    if out.iter().any(|n| n.is_empty()) {
+        return Err("a sample holds an empty NAL unit".into());
     }
     Ok(out)
 }
