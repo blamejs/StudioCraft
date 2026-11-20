@@ -34,7 +34,16 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # Writes contributors/contributors.json for the commit being built. Every build in the release
+  # job installs it before compiling, and the About window lists the people it names.
+  credits:
+    permissions:
+      contents: read
+      pull-requests: read
+    uses: storytold/craft-common-actions/.github/workflows/refresh-contributors.yml@0bef64f155fcea81edbd9542381777358bfbdcf4
+
   release:
+    needs: credits
     # The shared workflow creates the draft release, which needs write access to contents.
     permissions:
       contents: write
@@ -49,6 +58,7 @@ jobs:
       app-name: studiocraft
       app-title: StudioCraft
       version: ${{ inputs.version }}
+      contributors-artifact: ${{ needs.credits.outputs.artifact-name }}
       # Windows, macOS and Linux (AppImage, deb, rpm, tar.gz and Flatpak) only.
       has-web: false
       has-riscv64: false
