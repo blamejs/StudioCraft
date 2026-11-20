@@ -1159,13 +1159,21 @@ mod audio_tracks {
     fn takes_that_end_between_two_ticks_each_show_their_folder() {
         let fake = Arc::new(crate::audio_editor::tests::Fake::default());
         let (mut s, dir) = showing_folders("after-stop-two", &fake);
+        // The first take is held back from the studio while the second runs, so no tick sees it
+        // finish before the second ends.
+        let mut held = None;
         for _ in 0..2 {
             s.test_streaming = true;
             s.tick();
             armed(&mut s);
             s.test_streaming = false;
             s.tick();
+            if held.is_none() {
+                held = Some(s.audio_tracks.finishing.remove(0));
+            }
         }
+        s.audio_tracks.finishing.extend(held);
+        s.audio_tracks.finishing.swap(0, 1);
         assert_eq!(s.audio_tracks.finishing.len(), 2, "both takes are still finishing");
         // Both takes finish before the next tick looks at them; the mixer's handed-back tap sets
         // are freed here as a tick would.
@@ -1185,6 +1193,42 @@ mod audio_tracks {
         s.audio_tracks_opened();
         let log = fake.log.lock().unwrap().clone();
         assert_eq!(log.len(), 2, "{log:?}");
+        assert_eq!(s.audio_tracks_last_session().map(std::path::Path::to_path_buf), newer);
+        drop(s);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_older_take_that_finishes_after_a_newer_one_opens_nothing() {
+        let fake = Arc::new(crate::audio_editor::tests::Fake::default());
+        let (mut s, dir) = showing_folders("after-stop-late", &fake);
+        s.test_streaming = true;
+        s.tick();
+        armed(&mut s);
+        s.test_streaming = false;
+        s.tick();
+        // The older take is held back from the studio until the newer one has been seen, as when
+        // its files take longer to finish. The tick that stopped it has not looked at it yet.
+        let older = s.audio_tracks.finishing.remove(0);
+        s.test_streaming = true;
+        s.tick();
+        armed(&mut s);
+        s.test_streaming = false;
+        s.tick();
+        let mut spins = 0u64;
+        while !(older.0.finished() && s.audio_tracks.finishing.iter().all(|f| f.0.finished())) {
+            spins += 1;
+            assert!(spins < 200_000_000, "the takes never finished");
+            s.mixer.free_retired();
+            std::thread::yield_now();
+        }
+        let newer = s.audio_tracks.finishing[0].0.status().session().map(std::path::Path::to_path_buf);
+        s.tick();
+        s.audio_tracks.finishing.push(older);
+        s.tick();
+        s.audio_tracks_opened();
+        let log = fake.log.lock().unwrap().clone();
+        assert_eq!(log.len(), 1, "only the newer take opens: {log:?}");
         assert_eq!(s.audio_tracks_last_session().map(std::path::Path::to_path_buf), newer);
         drop(s);
         let _ = std::fs::remove_dir_all(&dir);

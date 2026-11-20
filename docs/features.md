@@ -243,9 +243,11 @@ Settings › Output › Audio tracks › After a take sets what happens when a t
 Nothing (the default), Show the folder, or Open in the audio editor. Audio editor sets the editor's
 program; when it is empty, `soundcraft` on the `PATH` is used. When the editor cannot be found or
 started, the take's folder opens instead and the status bar gives the reason. A take that ends
-because the next one starts (a recording that starts or stops during a stream) opens nothing. A
-take that ends because the app closes is opened as the app closes.
-File › Open Last Audio Tracks in Editor opens the last session again, and can be given a shortcut
+because the next one starts (a recording that starts or stops during a stream) opens nothing, and so
+does a take whose files are complete only after a newer take has opened. Takes that the app finds
+complete at the same time open in the order they ended. A take that ends because the app closes
+is opened as the app closes, and the app waits up to 3 seconds for the editor or the folder to open.
+File › Open Last Audio Tracks in Editor opens the newest take's session again, and can be given a shortcut
 in Settings › Hotkeys.
 
 ## Streaming

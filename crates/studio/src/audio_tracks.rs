@@ -503,11 +503,14 @@ impl Studio {
         // runs.
         let after = self.profile.audio_tracks.after_stop;
         for (session, next, place) in sessions {
-            if place >= self.audio_tracks.last_session_stop {
+            // A take that finishes after a newer one has ended neither replaces nor follows it.
+            let newest = place >= self.audio_tracks.last_session_stop;
+            if newest {
                 self.audio_tracks.last_session = Some(session.clone());
                 self.audio_tracks.last_session_stop = place;
             }
             if after != AfterStop::Nothing
+                && newest
                 && !next
                 && self.audio_tracks.take.is_none()
                 && let Err(e) = self.start_opening(session, after == AfterStop::OpenEditor)
@@ -761,8 +764,8 @@ impl Studio {
 
     /// Stop the take and wait for its files, when the app closes, for at most [`CLOSE_WAIT`] in
     /// all. A take still writing then is left to finish on its own threads. When the last take
-    /// finished with its session, that session is opened as the "after a take" setting says, and
-    /// the opening is waited for for at most [`OPEN_WAIT`] more.
+    /// finished with its session, that session is opened as the "after a take" setting says.
+    /// Openings still starting, that one included, are waited for for at most [`OPEN_WAIT`] more.
     pub(crate) fn finish_audio_tracks_blocking(&mut self) {
         self.stop_audio_tracks();
         let deadline = Instant::now() + CLOSE_WAIT;
@@ -784,14 +787,14 @@ impl Studio {
             }
         }
         let after = self.profile.audio_tracks.after_stop;
-        let Some(session) = last else { return };
-        if after == AfterStop::Nothing {
-            return;
-        }
-        if let Err(e) = self.start_opening(session, after == AfterStop::OpenEditor) {
+        if let Some(session) = last
+            && after != AfterStop::Nothing
+            && let Err(e) = self.start_opening(session, after == AfterStop::OpenEditor)
+        {
             log::warn!("audio tracks: the take that ended as the app closed could not be opened: {e}");
         }
-        // The opening has its own time, so a take that used up `deadline` still opens.
+        // Openings that are still starting, this one and earlier ones, have their own time, so a
+        // take that used up `deadline` still opens.
         let opened_by = Instant::now() + OPEN_WAIT;
         for h in self.audio_tracks.opening.drain(..) {
             while !h.is_finished() && Instant::now() < opened_by {
@@ -799,7 +802,7 @@ impl Studio {
             }
             if h.is_finished() {
                 if let Ok(Err(e)) = h.join() {
-                    log::warn!("audio tracks: the take that ended as the app closed could not be opened: {e}");
+                    log::warn!("audio tracks: a session could not be opened as the app closed: {e}");
                 }
             } else {
                 log::warn!("audio tracks: the audio editor or file manager was still starting when the app closed");
