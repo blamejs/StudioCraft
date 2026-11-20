@@ -14,6 +14,8 @@ use studiocraft_model::format::{MAX_FILE_BYTES, read_collection, read_profile, w
 use studiocraft_model::{Profile, SceneCollection};
 use studiocraft_render::device::Preference;
 
+use crate::i18n::Msg;
+
 /// Which docks are shown, their order in the dock strip, and the sizes set by dragging the dock
 /// strip's edges. A size of 0 is not set and uses the default in [`crate::strip`]; Docks › Reset
 /// Docks sets them all back to 0 and the order back to Scenes, Sources, Audio Mixer.
@@ -433,7 +435,7 @@ impl Prefs {
 
     /// Save the current docks as the layout `name`, replacing a layout with that name (ignoring
     /// case). Returns whether one was replaced.
-    pub fn save_dock_layout(&mut self, name: &str) -> Result<bool, String> {
+    pub fn save_dock_layout(&mut self, name: &str) -> Result<bool, Msg> {
         check_name(name)?;
         let docks = self.docks;
         if let Some(l) = self.dock_layouts.iter_mut().find(|l| l.name.eq_ignore_ascii_case(name)) {
@@ -441,7 +443,7 @@ impl Prefs {
             return Ok(true);
         }
         if self.dock_layouts.len() >= MAX_DOCK_LAYOUTS {
-            return Err(format!("there are already {MAX_DOCK_LAYOUTS} dock layouts; remove one first"));
+            return Err(tmsg!("there are already {count} dock layouts; remove one first", count = MAX_DOCK_LAYOUTS));
         }
         self.dock_layouts.push(DockLayout { name: name.to_string(), docks });
         Ok(false)
@@ -488,25 +490,25 @@ pub struct Store {
 }
 
 /// Why a collection or profile name can't be used as a file name.
-pub fn check_name(name: &str) -> Result<(), String> {
+pub fn check_name(name: &str) -> Result<(), Msg> {
     const RESERVED: [&str; 22] = [
         "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5",
         "LPT6", "LPT7", "LPT8", "LPT9",
     ];
     let trimmed = name.trim();
     if trimmed.is_empty() || trimmed.chars().count() > 100 {
-        return Err("a name needs 1 to 100 characters".into());
+        return Err(tmsg!("a name needs 1 to 100 characters"));
     }
     if trimmed != name || name.ends_with('.') {
-        return Err("a name can't start or end with a space, or end with a period".into());
+        return Err(tmsg!("a name can't start or end with a space, or end with a period"));
     }
     if let Some(c) = name.chars().find(|c| c.is_control() || "<>:\"/\\|?*".contains(*c)) {
-        return Err(format!("a name can't contain {c:?}"));
+        return Err(tmsg!("a name can't contain {character}", character = format!("{c:?}")));
     }
     // Windows reserves a device name followed by any extension too (`CON.txt`).
     let stem = name.split('.').next().unwrap_or(name).trim_end();
     if RESERVED.iter().any(|r| r.eq_ignore_ascii_case(stem)) {
-        return Err(format!("`{name}` is reserved by the system"));
+        return Err(tmsg!("`{name}` is reserved by the system", name = name));
     }
     Ok(())
 }
@@ -593,7 +595,7 @@ impl Store {
     }
 
     fn read(&self, kind: &str, name: &str) -> Result<String, String> {
-        check_name(name)?;
+        check_name(name).map_err(|e| e.english())?;
         match &self.files {
             Files::Dir(d) => {
                 let path = d.join(kind).join(format!("{name}.json"));
@@ -604,7 +606,7 @@ impl Store {
     }
 
     fn write(&mut self, kind: &str, name: &str, text: String) -> Result<(), String> {
-        check_name(name)?;
+        check_name(name).map_err(|e| e.english())?;
         match &mut self.files {
             Files::Dir(d) => {
                 let folder = d.join(kind);
@@ -620,7 +622,7 @@ impl Store {
     }
 
     fn remove(&mut self, kind: &str, name: &str) -> Result<(), String> {
-        check_name(name)?;
+        check_name(name).map_err(|e| e.english())?;
         match &mut self.files {
             Files::Dir(d) => {
                 let path = d.join(kind).join(format!("{name}.json"));
@@ -640,8 +642,8 @@ impl Store {
     /// Give the file `old` the name `new`, in one step: also on a disk that ignores case, where
     /// `Show` and `show` name one file.
     fn rename(&mut self, kind: &str, old: &str, new: &str) -> Result<(), String> {
-        check_name(old)?;
-        check_name(new)?;
+        check_name(old).map_err(|e| e.english())?;
+        check_name(new).map_err(|e| e.english())?;
         let taken = || format!("`{new}` already exists");
         match &mut self.files {
             Files::Dir(d) => {

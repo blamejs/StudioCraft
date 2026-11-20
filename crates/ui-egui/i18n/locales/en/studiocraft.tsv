@@ -540,3 +540,35 @@ menu	Transform	Transform
 @msg	Audio tracks could not be repaired: {takes} and {more} more	Audio tracks could not be repaired: {takes} and {more} more
 @msg	Audio tracks could not be repaired: {takes}. Takes repaired: {count}	Audio tracks could not be repaired: {takes}. Takes repaired: {count}
 @msg	Audio tracks could not be repaired: {takes} and {more} more. Takes repaired: {count}	Audio tracks could not be repaired: {takes} and {more} more. Takes repaired: {count}
+@msg	`{command}` needs `{key}`	`{command}` needs `{key}`
+@msg	`{command}`: unknown dock `{name}` (one of {docks})	`{command}`: unknown dock `{name}` (one of {docks})
+@msg	`{command}`: `path` must be a file path	`{command}`: `path` must be a file path
+@msg	`{command}` needs `path` when no file dialog can be shown	`{command}` needs `path` when no file dialog can be shown
+@msg	The scene collection could not be imported: {error}	The scene collection could not be imported: {error}
+@msg	The scene collection could not be exported: {error}	The scene collection could not be exported: {error}
+@msg	there is no free name for the scene collection `{name}`	there is no free name for the scene collection `{name}`
+@msg	select a source first	select a source first
+@msg	the source has not shown a picture yet	the source has not shown a picture yet
+@msg	settings are kept in memory only (--no-prefs)	settings are kept in memory only (--no-prefs)
+@msg	`scopes.kind`: unknown scope `{name}` (one of {scopes})	`scopes.kind`: unknown scope `{name}` (one of {scopes})
+@msg	`dock.move`: `to` is `left` or `right`, not `{to}`	`dock.move`: `to` is `left` or `right`, not `{to}`
+@msg	`dock.float` needs `floating`: true or false	`dock.float` needs `floating`: true or false
+@msg	`dock.layout_save`: `name` is a string	`dock.layout_save`: `name` is a string
+@msg	there is no dock layout named `{name}`	there is no dock layout named `{name}`
+@msg	there is no link for `{command}`	there is no link for `{command}`
+@msg	unknown command `{command}`	unknown command `{command}`
+@msg	there is already a profile named `{name}`	there is already a profile named `{name}`
+@msg	there is already a scene collection named `{name}`	there is already a scene collection named `{name}`
+@msg	the last scene collection can't be removed	the last scene collection can't be removed
+@msg	the last profile can't be removed	the last profile can't be removed
+@msg	update checks are off in this session (--no-prefs, a scripted run or a test)	update checks are off in this session (--no-prefs, a scripted run or a test)
+@msg	there are already {count} dock layouts; remove one first	there are already {count} dock layouts; remove one first
+@msg	a name needs 1 to 100 characters	a name needs 1 to 100 characters
+@msg	a name can't start or end with a space, or end with a period	a name can't start or end with a space, or end with a period
+@msg	a name can't contain {character}	a name can't contain {character}
+@msg	`{name}` is reserved by the system	`{name}` is reserved by the system
+@msg	`video.canvas_from_display`: the size of the display the window is on is not known; pass `display`	`video.canvas_from_display`: the size of the display the window is on is not known; pass `display`
+@msg	`video.canvas_from_display`: `display` is a display id from `video.displays`	`video.canvas_from_display`: `display` is a display id from `video.displays`
+@msg	there is no display `{id}`: the system lists no displays	there is no display `{id}`: the system lists no displays
+@msg	there is no display `{id}` (the displays are {ids})	there is no display `{id}` (the displays are {ids})
+@msg	a {width} × {height} display can't be the canvas: each side must be from {min} to {max} pixels	a {width} × {height} display can't be the canvas: each side must be from {min} to {max} pixels

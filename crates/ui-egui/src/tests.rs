@@ -1519,8 +1519,8 @@ fn display_sizes_are_checked() {
     let d = |id: &str| DisplayInfo { id: id.into(), name: "Screen".into(), width: 2560, height: 1440, primary: false };
     let list = [d("1"), d("7")];
     assert_eq!(find_display(&list, "7").map(|d| d.id.as_str()), Ok("7"));
-    assert_eq!(find_display(&list, "9").unwrap_err(), "there is no display `9` (the displays are 1, 7)");
-    assert!(find_display(&[], "1").unwrap_err().contains("lists no displays"));
+    assert_eq!(find_display(&list, "9").unwrap_err().english(), "there is no display `9` (the displays are 1, 7)");
+    assert!(find_display(&[], "1").unwrap_err().english().contains("lists no displays"));
     assert_eq!(canvas_for((16, 8192)), Ok((16, 8192)));
     assert!(canvas_for((15, 1080)).is_err());
     assert!(canvas_for((1920, 8193)).is_err());
@@ -1538,4 +1538,31 @@ fn display_sizes_are_checked() {
     assert_eq!(window_display(&info(Some(egui::vec2(f32::NAN, 800.0)), Some(1.0)), 1.0), None);
     assert_eq!(window_display(&info(Some(egui::vec2(0.0, 800.0)), Some(1.0)), 1.0), None);
     assert_eq!(window_display(&info(Some(egui::vec2(1e30, 800.0)), Some(1.0)), 1.0), None);
+}
+
+#[test]
+fn window_command_errors_are_shown_translated_and_returned_in_english() {
+    let mut a = app();
+    a.set_language("de");
+    let ctx = egui::Context::default();
+    let e = run(&mut a, &ctx, "dock.layout_apply", json!({"name": "Talk"})).unwrap_err();
+    assert_eq!(e, "there is no dock layout named `Talk`");
+    let Some((note, _)) = a.notices.back() else { panic!("no notice") };
+    assert!(note.error);
+    assert_eq!(note.msg.english(), e);
+    assert_eq!(note.msg.shown(), "es gibt kein Dock-Layout namens `Talk`");
+    let notices = a.hud()["ui"]["notices"].clone();
+    assert_eq!(notices.as_array().and_then(|n| n.last()).map(|n| n["text"].clone()), Some(json!(e)));
+
+    // A name the prompt refuses stays in the prompt, translated, and the control channel gets it
+    // in English.
+    run(&mut a, &ctx, "dock.layout_save", json!({})).unwrap();
+    let e = a.answer_dialog(&ctx, true, Some("a/b")).unwrap_err();
+    assert_eq!(e, "a name can't contain '/'");
+    assert_eq!(a.ui_inspect(&ctx)["dialogs"]["prompt"]["error"], json!(e));
+    assert_eq!(a.prompt.as_ref().and_then(|p| p.error.as_ref()).map(Msg::shown).as_deref(), Some("ein Name darf '/' nicht enthalten"));
+    let e = canvas_for((8, 4)).unwrap_err();
+    assert_eq!(e.english(), "a 8 × 4 display can't be the canvas: each side must be from 16 to 8192 pixels");
+    assert_eq!(e.shown(), "ein Bildschirm mit 8 × 4 kann nicht die Leinwand sein: jede Seite muss 16 bis 8192 Pixel haben");
+    a.set_language("en");
 }

@@ -474,3 +474,35 @@ menu	Transform	Transformieren
 @msg	Audio tracks could not be repaired: {takes} and {more} more	Audiospuren konnten nicht repariert werden: {takes} und {more} weitere
 @msg	Audio tracks could not be repaired: {takes}. Takes repaired: {count}	Audiospuren konnten nicht repariert werden: {takes}. Reparierte Aufnahmen: {count}
 @msg	Audio tracks could not be repaired: {takes} and {more} more. Takes repaired: {count}	Audiospuren konnten nicht repariert werden: {takes} und {more} weitere. Reparierte Aufnahmen: {count}
+@msg	`{command}` needs `{key}`	`{command}` benötigt `{key}`
+@msg	`{command}`: unknown dock `{name}` (one of {docks})	`{command}`: unbekanntes Dock `{name}` (eines von {docks})
+@msg	`{command}`: `path` must be a file path	`{command}`: `path` muss ein Dateipfad sein
+@msg	`{command}` needs `path` when no file dialog can be shown	`{command}` benötigt `path`, wenn kein Dateidialog angezeigt werden kann
+@msg	The scene collection could not be imported: {error}	Die Szenensammlung konnte nicht importiert werden: {error}
+@msg	The scene collection could not be exported: {error}	Die Szenensammlung konnte nicht exportiert werden: {error}
+@msg	there is no free name for the scene collection `{name}`	es gibt keinen freien Namen für die Szenensammlung `{name}`
+@msg	select a source first	wählen Sie zuerst eine Quelle aus
+@msg	the source has not shown a picture yet	die Quelle hat noch kein Bild gezeigt
+@msg	settings are kept in memory only (--no-prefs)	die Einstellungen werden nur im Speicher gehalten (--no-prefs)
+@msg	`scopes.kind`: unknown scope `{name}` (one of {scopes})	`scopes.kind`: unbekannter Scope `{name}` (einer von {scopes})
+@msg	`dock.move`: `to` is `left` or `right`, not `{to}`	`dock.move`: `to` ist `left` oder `right`, nicht `{to}`
+@msg	`dock.float` needs `floating`: true or false	`dock.float` benötigt `floating`: true oder false
+@msg	`dock.layout_save`: `name` is a string	`dock.layout_save`: `name` ist eine Zeichenkette
+@msg	there is no dock layout named `{name}`	es gibt kein Dock-Layout namens `{name}`
+@msg	there is no link for `{command}`	es gibt keinen Link für `{command}`
+@msg	unknown command `{command}`	unbekannter Befehl `{command}`
+@msg	there is already a profile named `{name}`	es gibt bereits ein Profil namens `{name}`
+@msg	there is already a scene collection named `{name}`	es gibt bereits eine Szenensammlung namens `{name}`
+@msg	the last scene collection can't be removed	die letzte Szenensammlung kann nicht entfernt werden
+@msg	the last profile can't be removed	das letzte Profil kann nicht entfernt werden
+@msg	update checks are off in this session (--no-prefs, a scripted run or a test)	die Suche nach Updates ist in dieser Sitzung ausgeschaltet (--no-prefs, ein Skriptlauf oder ein Test)
+@msg	there are already {count} dock layouts; remove one first	es gibt bereits {count} Dock-Layouts; entfernen Sie zuerst eines
+@msg	a name needs 1 to 100 characters	ein Name braucht 1 bis 100 Zeichen
+@msg	a name can't start or end with a space, or end with a period	ein Name darf nicht mit einem Leerzeichen beginnen oder enden und nicht mit einem Punkt enden
+@msg	a name can't contain {character}	ein Name darf {character} nicht enthalten
+@msg	`{name}` is reserved by the system	`{name}` ist vom System reserviert
+@msg	`video.canvas_from_display`: the size of the display the window is on is not known; pass `display`	`video.canvas_from_display`: die Größe des Bildschirms mit diesem Fenster ist nicht bekannt; geben Sie `display` an
+@msg	`video.canvas_from_display`: `display` is a display id from `video.displays`	`video.canvas_from_display`: `display` ist eine Bildschirm-ID aus `video.displays`
+@msg	there is no display `{id}`: the system lists no displays	es gibt keinen Bildschirm `{id}`: das System listet keine Bildschirme auf
+@msg	there is no display `{id}` (the displays are {ids})	es gibt keinen Bildschirm `{id}` (die Bildschirme sind {ids})
+@msg	a {width} × {height} display can't be the canvas: each side must be from {min} to {max} pixels	ein Bildschirm mit {width} × {height} kann nicht die Leinwand sein: jede Seite muss {min} bis {max} Pixel haben

@@ -481,3 +481,35 @@ menu	Transform	Transformeren
 @msg	Audio tracks could not be repaired: {takes} and {more} more	Audiosporen konden niet worden hersteld: {takes} en {more} meer
 @msg	Audio tracks could not be repaired: {takes}. Takes repaired: {count}	Audiosporen konden niet worden hersteld: {takes}. Herstelde opnamen: {count}
 @msg	Audio tracks could not be repaired: {takes} and {more} more. Takes repaired: {count}	Audiosporen konden niet worden hersteld: {takes} en {more} meer. Herstelde opnamen: {count}
+@msg	`{command}` needs `{key}`	`{command}` heeft `{key}` nodig
+@msg	`{command}`: unknown dock `{name}` (one of {docks})	`{command}`: onbekend dock `{name}` (een van {docks})
+@msg	`{command}`: `path` must be a file path	`{command}`: `path` moet een bestandspad zijn
+@msg	`{command}` needs `path` when no file dialog can be shown	`{command}` heeft `path` nodig als er geen bestandsvenster kan worden getoond
+@msg	The scene collection could not be imported: {error}	De scèneverzameling kon niet worden geïmporteerd: {error}
+@msg	The scene collection could not be exported: {error}	De scèneverzameling kon niet worden geëxporteerd: {error}
+@msg	there is no free name for the scene collection `{name}`	er is geen vrije naam voor de scèneverzameling `{name}`
+@msg	select a source first	selecteer eerst een bron
+@msg	the source has not shown a picture yet	de bron heeft nog geen beeld getoond
+@msg	settings are kept in memory only (--no-prefs)	instellingen worden alleen in het geheugen bewaard (--no-prefs)
+@msg	`scopes.kind`: unknown scope `{name}` (one of {scopes})	`scopes.kind`: onbekende videometer `{name}` (een van {scopes})
+@msg	`dock.move`: `to` is `left` or `right`, not `{to}`	`dock.move`: `to` is `left` of `right`, niet `{to}`
+@msg	`dock.float` needs `floating`: true or false	`dock.float` heeft `floating` nodig: true of false
+@msg	`dock.layout_save`: `name` is a string	`dock.layout_save`: `name` is een tekenreeks
+@msg	there is no dock layout named `{name}`	er is geen dockindeling met de naam `{name}`
+@msg	there is no link for `{command}`	er is geen link voor `{command}`
+@msg	unknown command `{command}`	onbekende opdracht `{command}`
+@msg	there is already a profile named `{name}`	er is al een profiel met de naam `{name}`
+@msg	there is already a scene collection named `{name}`	er is al een scèneverzameling met de naam `{name}`
+@msg	the last scene collection can't be removed	de laatste scèneverzameling kan niet worden verwijderd
+@msg	the last profile can't be removed	het laatste profiel kan niet worden verwijderd
+@msg	update checks are off in this session (--no-prefs, a scripted run or a test)	controleren op updates staat uit in deze sessie (--no-prefs, een scriptrun of een test)
+@msg	there are already {count} dock layouts; remove one first	er zijn al {count} dockindelingen; verwijder er eerst een
+@msg	a name needs 1 to 100 characters	een naam heeft 1 tot 100 tekens nodig
+@msg	a name can't start or end with a space, or end with a period	een naam kan niet beginnen of eindigen met een spatie, of eindigen met een punt
+@msg	a name can't contain {character}	een naam kan geen {character} bevatten
+@msg	`{name}` is reserved by the system	`{name}` is gereserveerd door het systeem
+@msg	`video.canvas_from_display`: the size of the display the window is on is not known; pass `display`	`video.canvas_from_display`: de grootte van het beeldscherm waarop het venster staat is niet bekend; geef `display` op
+@msg	`video.canvas_from_display`: `display` is a display id from `video.displays`	`video.canvas_from_display`: `display` is een beeldscherm-id uit `video.displays`
+@msg	there is no display `{id}`: the system lists no displays	er is geen beeldscherm `{id}`: het systeem toont geen beeldschermen
+@msg	there is no display `{id}` (the displays are {ids})	er is geen beeldscherm `{id}` (de beeldschermen zijn {ids})
+@msg	a {width} × {height} display can't be the canvas: each side must be from {min} to {max} pixels	een beeldscherm van {width} × {height} kan niet het canvas zijn: elke zijde moet {min} tot {max} pixels zijn

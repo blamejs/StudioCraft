@@ -492,3 +492,35 @@ menu	Transform	Dönüştür
 @msg	Audio tracks could not be repaired: {takes} and {more} more	Ses parçaları onarılamadı: {takes} ve {more} tane daha
 @msg	Audio tracks could not be repaired: {takes}. Takes repaired: {count}	Ses parçaları onarılamadı: {takes}. Onarılan çekimler: {count}
 @msg	Audio tracks could not be repaired: {takes} and {more} more. Takes repaired: {count}	Ses parçaları onarılamadı: {takes} ve {more} tane daha. Onarılan çekimler: {count}
+@msg	`{command}` needs `{key}`	`{command}` için `{key}` gerekir
+@msg	`{command}`: unknown dock `{name}` (one of {docks})	`{command}`: bilinmeyen panel `{name}` (şunlardan biri olmalı: {docks})
+@msg	`{command}`: `path` must be a file path	`{command}`: `path` bir dosya yolu olmalıdır
+@msg	`{command}` needs `path` when no file dialog can be shown	Dosya iletişim kutusu gösterilemediğinde `{command}` için `path` gerekir
+@msg	The scene collection could not be imported: {error}	Sahne koleksiyonu içe aktarılamadı: {error}
+@msg	The scene collection could not be exported: {error}	Sahne koleksiyonu dışa aktarılamadı: {error}
+@msg	there is no free name for the scene collection `{name}`	`{name}` sahne koleksiyonu için boş ad yok
+@msg	select a source first	önce bir kaynak seçin
+@msg	the source has not shown a picture yet	kaynak henüz bir görüntü göstermedi
+@msg	settings are kept in memory only (--no-prefs)	ayarlar yalnızca bellekte tutuluyor (--no-prefs)
+@msg	`scopes.kind`: unknown scope `{name}` (one of {scopes})	`scopes.kind`: bilinmeyen video ölçümü `{name}` (şunlardan biri olmalı: {scopes})
+@msg	`dock.move`: `to` is `left` or `right`, not `{to}`	`dock.move`: `to` değeri `{to}` değil, `left` ya da `right` olmalıdır
+@msg	`dock.float` needs `floating`: true or false	`dock.float` için `floating` gerekir: true ya da false
+@msg	`dock.layout_save`: `name` is a string	`dock.layout_save`: `name` bir metin olmalıdır
+@msg	there is no dock layout named `{name}`	`{name}` adlı bir panel düzeni yok
+@msg	there is no link for `{command}`	`{command}` için bağlantı yok
+@msg	unknown command `{command}`	bilinmeyen komut `{command}`
+@msg	there is already a profile named `{name}`	`{name}` adlı bir profil zaten var
+@msg	there is already a scene collection named `{name}`	`{name}` adlı bir sahne koleksiyonu zaten var
+@msg	the last scene collection can't be removed	son sahne koleksiyonu kaldırılamaz
+@msg	the last profile can't be removed	son profil kaldırılamaz
+@msg	update checks are off in this session (--no-prefs, a scripted run or a test)	bu oturumda güncelleme denetimi kapalı (--no-prefs, betikle çalıştırma ya da test)
+@msg	there are already {count} dock layouts; remove one first	zaten {count} panel düzeni var; önce birini kaldırın
+@msg	a name needs 1 to 100 characters	bir ad 1 ile 100 karakter arasında olmalıdır
+@msg	a name can't start or end with a space, or end with a period	bir ad boşlukla başlayamaz ya da bitemez ve noktayla bitemez
+@msg	a name can't contain {character}	bir ad {character} içeremez
+@msg	`{name}` is reserved by the system	`{name}` sistem tarafından ayrılmıştır
+@msg	`video.canvas_from_display`: the size of the display the window is on is not known; pass `display`	`video.canvas_from_display`: pencerenin bulunduğu ekranın boyutu bilinmiyor; `display` verin
+@msg	`video.canvas_from_display`: `display` is a display id from `video.displays`	`video.canvas_from_display`: `display`, `video.displays` içindeki bir ekran kimliğidir
+@msg	there is no display `{id}`: the system lists no displays	`{id}` ekranı yok: sistem hiçbir ekran listelemiyor
+@msg	there is no display `{id}` (the displays are {ids})	`{id}` ekranı yok (ekranlar: {ids})
+@msg	a {width} × {height} display can't be the canvas: each side must be from {min} to {max} pixels	{width} × {height} boyutundaki bir ekran tuval olamaz: her kenar {min} ile {max} piksel arasında olmalıdır
