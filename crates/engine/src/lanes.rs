@@ -73,6 +73,18 @@ pub struct Lanes {
     /// Why the applications could not be listed. English.
     pub error: Option<String>,
     pub lanes: Vec<Lane>,
+    /// Whether the program hears a desktop audio source that is not muted. A desktop audio
+    /// capture also records what a routed application plays on that device.
+    pub desktop_heard: bool,
+}
+
+/// The kind of a desktop audio source, which captures what plays on an output device.
+pub const DESKTOP_KIND: &str = "audio_output";
+
+/// Whether the program hears a desktop audio source of `c` that is not muted.
+pub fn desktop_heard(c: &SceneCollection) -> bool {
+    let heard = heard(c);
+    c.sources.iter().any(|s| s.kind == DESKTOP_KIND && !s.audio.muted && heard.contains(&s.id))
 }
 
 /// The application an `app_audio` source's `app` setting names.

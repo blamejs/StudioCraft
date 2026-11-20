@@ -562,6 +562,13 @@ pub fn lane_levels(lane: &Lane, source: Option<BlockLevels>) -> BlockLevels {
     lane.peak.filter(|p| p.is_finite()).map(|p| BlockLevels { peak: [p.clamp(0.0, 1.0); 2], rms: [0.0; 2] }).unwrap_or_default()
 }
 
+/// Whether the dock warns that the program can hear a routed application twice: once through its
+/// own capture and once through a desktop audio source that is not muted, when both record the
+/// same output device. The routed application is running and its source is not muted.
+pub fn desktop_doubles(lanes: &Lanes) -> bool {
+    lanes.desktop_heard && lanes.lanes.iter().any(|l| l.kind == LaneKind::Application && l.routed_heard && !l.muted && l.running)
+}
+
 /// Whether an application lane's check box is checked: a routed source of the lane reaches the
 /// program. A lane whose routed source is set to monitor only is unchecked, so checking it routes
 /// the application again.
@@ -634,6 +641,12 @@ pub fn app_audio(ui: &mut Ui, studio: &Studio, st: &mut DockState, acts: &mut Ve
         }
         if lanes.lanes.is_empty() {
             ui.weak(tl!("No microphones or applications with audio."));
+        }
+        if desktop_doubles(lanes) {
+            ui.colored_label(
+                warn,
+                tl!("Desktop audio also records a routed application that plays on the same device, so the program can hear it twice."),
+            );
         }
         for (lane, m) in lanes.lanes.iter().zip(meters.iter_mut()) {
             m.update(lane_levels(lane, lane.source.and_then(|s| studio.levels(s))), dt);
@@ -740,6 +753,24 @@ mod tests {
         assert_eq!(lane_levels(&app_lane(None, Some(f32::NAN)), None), BlockLevels::default());
         assert_eq!(lane_levels(&app_lane(None, None), None), BlockLevels::default(), "no reading falls to silence");
         assert_eq!(lane_levels(&app_lane(Some(SourceId(3)), Some(0.9)), None), BlockLevels::default(), "a source not in the mix is silent");
+    }
+
+    #[test]
+    fn the_dock_warns_while_desktop_audio_also_plays_a_routed_application() {
+        let mut lanes =
+            Lanes { supported: true, reason: None, listing: false, error: None, lanes: vec![app_lane(Some(SourceId(3)), None)], desktop_heard: true };
+        assert!(desktop_doubles(&lanes));
+        lanes.lanes[0].routed_heard = false;
+        assert!(!desktop_doubles(&lanes), "no routed application reaches the program");
+        lanes.lanes[0].routed_heard = true;
+        lanes.lanes[0].muted = true;
+        assert!(!desktop_doubles(&lanes), "the routed source is muted");
+        lanes.lanes[0].muted = false;
+        lanes.lanes[0].running = false;
+        assert!(!desktop_doubles(&lanes), "the routed application quit");
+        lanes.lanes[0].running = true;
+        lanes.desktop_heard = false;
+        assert!(!desktop_doubles(&lanes), "desktop audio muted or not heard");
     }
 
     #[test]

@@ -548,6 +548,7 @@ menu	Transform	Transform
 	Stop hearing this application in every scene	Stop hearing this application in every scene
 	Looking for applications with audio…	Looking for applications with audio…
 	No microphones or applications with audio.	No microphones or applications with audio.
+	Desktop audio also records a routed application that plays on the same device, so the program can hear it twice.	Desktop audio also records a routed application that plays on the same device, so the program can hear it twice.
 	This application is not running.	This application is not running.
 	List Audio Lanes	List Audio Lanes
 	Route Application Audio	Route Application Audio

@@ -151,7 +151,9 @@ audio source or is shown in the program scene, unless the source's monitoring is
 only.
 
 The check box of an application lane routes the application into the program in every scene,
-together with the microphone. Routing adds an Application audio capture source for the application
+together with the microphone. Desktop audio also records what a routed application plays on the
+device it captures. While the program hears Desktop audio unmuted and a running application is
+routed and not muted, the dock warns that the program can hear that application twice. Routing adds an Application audio capture source for the application
 to the global audio sources, or uses a source of the collection that already captures it, and
 sets that source's monitoring to monitor and output when it was monitor only. Clearing the check
 box takes that source out of the global audio sources, and Edit › Undo puts it back. A source that

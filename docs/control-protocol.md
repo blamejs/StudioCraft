@@ -257,7 +257,9 @@ cannot capture one application, `supported` is `false` and `error`
 and `reason` say why.
 
 `app_audio.lanes` also only reads and takes no parameters. It returns the lanes of the Application
-Audio dock as `{"supported", "reason", "listing", "error", "lanes"}`: a lane for each `audio_input`
+Audio dock as `{"supported", "reason", "listing", "error", "lanes", "desktop_heard"}`.
+`desktop_heard` is true when the program hears an `audio_output` source that is not muted; that
+capture also records what a routed application plays on the device it captures. `lanes` holds a lane for each `audio_input`
 source, then a lane for each listed application, then a lane for each routed application that is
 not running. When the program hears more than one source of an application, each source after
 the first gets a lane of its own, named after the source, with `app` set to `null`. Each lane has

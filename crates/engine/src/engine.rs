@@ -150,7 +150,8 @@ impl Engine {
         let empty = Arc::new(craft_app_audio::AppList::default());
         let (list, listing, error) = self.read_apps().unwrap_or((empty, false, None));
         let lanes = crate::lanes::lanes(&self.collection, &list, |a| self.app_audio.peak(a));
-        crate::lanes::Lanes { supported: support.supported, reason: support.reason, listing, error, lanes }
+        let desktop_heard = crate::lanes::desktop_heard(&self.collection);
+        crate::lanes::Lanes { supported: support.supported, reason: support.reason, listing, error, lanes, desktop_heard }
     }
 
     /// The newest level of the listed application `key` names, 0 to 1, as `app_audio.lanes`

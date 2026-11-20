@@ -843,6 +843,29 @@ fn add_app_source(c: &mut SceneCollection, name: &str, app: &str, monitor: studi
 }
 
 #[test]
+fn the_lanes_say_whether_the_program_hears_desktop_audio() {
+    let mut c = SceneCollection::new("Test", "Scene");
+    assert!(!crate::lanes::desktop_heard(&c));
+    let id = SourceId(c.alloc_id());
+    c.sources.push(SourceConfig {
+        id,
+        kind: crate::lanes::DESKTOP_KIND.into(),
+        kind_version: 1,
+        name: "Desktop audio".into(),
+        settings: Settings::new(),
+        filters: vec![],
+        audio: Default::default(),
+    });
+    assert!(!crate::lanes::desktop_heard(&c), "a source no scene shows and not global");
+    c.global_audio.push(id);
+    assert!(crate::lanes::desktop_heard(&c));
+    if let Some(s) = c.sources.iter_mut().find(|s| s.id == id) {
+        s.audio.muted = true;
+    }
+    assert!(!crate::lanes::desktop_heard(&c), "muted");
+}
+
+#[test]
 fn a_second_source_the_program_hears_gets_a_lane_of_its_own() {
     let (mut e, _fake, _discovery) = lane_engine();
     let mut c = e.collection().clone();
