@@ -552,11 +552,21 @@ impl LaneCache {
     }
 }
 
-/// What a lane's meter shows: the source's level in the mix when the source has one, and else the
-/// application's level as the system reports it. A lane without either shows silence, so its
-/// meter falls.
+/// What a lane's meter shows: the source's level in the mix for a lane with a source, and the
+/// application's level as the system reports it for a lane without one. A lane without a reading
+/// shows silence, so its meter falls.
 pub fn lane_levels(lane: &Lane, source: Option<BlockLevels>) -> BlockLevels {
-    source.or_else(|| lane.peak.filter(|p| p.is_finite()).map(|p| BlockLevels { peak: [p.clamp(0.0, 1.0); 2], rms: [0.0; 2] })).unwrap_or_default()
+    if lane.source.is_some() {
+        return source.unwrap_or_default();
+    }
+    lane.peak.filter(|p| p.is_finite()).map(|p| BlockLevels { peak: [p.clamp(0.0, 1.0); 2], rms: [0.0; 2] }).unwrap_or_default()
+}
+
+/// Whether an application lane's check box is checked: a routed source of the lane reaches the
+/// program. A lane whose routed source is set to monitor only is unchecked, so checking it routes
+/// the application again.
+pub fn lane_checked(lane: &Lane) -> bool {
+    lane.routed_heard
 }
 
 /// The settings-menu item that routes an application lane, for a lane not routed and a routed one.
@@ -572,9 +582,9 @@ fn lane_menu(ui: &mut Ui, lane: &Lane, acts: &mut Vec<Act>) {
         if lane.kind == LaneKind::Application
             && let Some(app) = &lane.app
         {
-            let label = ROUTE_ITEMS[usize::from(lane.routed)];
+            let label = ROUTE_ITEMS[usize::from(lane_checked(lane))];
             if ui.button(tl!(label)).clicked() {
-                acts.push(Act::run("app_audio.route", json!({"app": app, "routed": !lane.routed})));
+                acts.push(Act::run("app_audio.route", json!({"app": app, "routed": !lane_checked(lane)})));
                 ui.close();
             }
         }
@@ -632,8 +642,8 @@ pub fn app_audio(ui: &mut Ui, studio: &Studio, st: &mut DockState, acts: &mut Ve
                 if lane.kind == LaneKind::Application
                     && let Some(app) = &lane.app
                 {
-                    let mut on = lane.routed;
-                    let tip = ROUTE_TIPS[usize::from(lane.routed)];
+                    let mut on = lane_checked(lane);
+                    let tip = ROUTE_TIPS[usize::from(on)];
                     if ui.checkbox(&mut on, "").on_hover_text(tl!(tip)).changed() {
                         acts.push(Act::run("app_audio.route", json!({"app": app, "routed": on})));
                     }
@@ -710,6 +720,7 @@ mod tests {
             app: Some("player.exe|c:\\apps\\player.exe".into()),
             source,
             routed: source.is_some(),
+            routed_heard: source.is_some(),
             heard: source.is_some(),
             gain: 1.0,
             muted: false,
@@ -728,6 +739,16 @@ mod tests {
         assert_eq!(lane_levels(&app_lane(None, Some(7.0)), None).peak, [1.0, 1.0], "a reading over full scale is held at it");
         assert_eq!(lane_levels(&app_lane(None, Some(f32::NAN)), None), BlockLevels::default());
         assert_eq!(lane_levels(&app_lane(None, None), None), BlockLevels::default(), "no reading falls to silence");
+        assert_eq!(lane_levels(&app_lane(Some(SourceId(3)), Some(0.9)), None), BlockLevels::default(), "a source not in the mix is silent");
+    }
+
+    #[test]
+    fn a_routed_lane_the_program_does_not_hear_is_unchecked() {
+        assert!(lane_checked(&app_lane(Some(SourceId(3)), None)));
+        // Routed but set to monitor only, while another source of it is shown in the scene.
+        let monitor_only = Lane { routed_heard: false, ..app_lane(Some(SourceId(3)), None) };
+        assert!(!lane_checked(&monitor_only), "checking it routes the application again");
+        assert!(!lane_checked(&app_lane(None, None)));
     }
 
     #[test]

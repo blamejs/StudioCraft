@@ -309,7 +309,7 @@ fn studio_tool_definitions() -> Vec<Value> {
              first scan `listing` is true and no applications are listed, so ask again. `status`: whether this system captures one \
              application's audio, and the captures running now with their counters. `lanes`: the lanes of the Application Audio \
              panel, microphones first and then applications, each with its source, whether it is a global audio source \
-             (`routed`) and whether the program hears it (`heard`), its volume, mute and the application's peak level.",
+             (`routed`), whether a global audio source of it reaches the program (`routed_heard`) and whether the program hears it (`heard`), its volume, mute and the application's peak level.",
             json!({"action": {"type": "string", "enum": ["list", "status", "lanes"], "description": "What to read."}}),
             &["action"],
             READS,

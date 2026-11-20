@@ -260,9 +260,10 @@ and `reason` say why.
 Audio dock as `{"supported", "reason", "listing", "error", "lanes"}`: a lane for each `audio_input`
 source, then a lane for each listed application, then a lane for each routed application that is
 not running. Each lane has `kind` (`microphone` or `application`), `name`, `app` (`null` for a
-microphone), `source` (the id of the source that carries it, or `null`), `routed`, `heard`,
-`gain`, `muted`, `peak`, `running`, `playing` and `within`. `routed` is true when the source is a
-global audio source. `heard` is true when the source is a global audio source or is shown in the
+microphone), `source` (the id of the source that carries it, or `null`), `routed`,
+`routed_heard`, `heard`, `gain`, `muted`, `peak`, `running`, `playing` and `within`. `routed` is
+true when the source is a global audio source. `routed_heard` is true when a global audio source
+of the lane reaches the program, that is, its monitoring is not `monitor_only`. `heard` is true when the source is a global audio source or is shown in the
 program scene, and its monitoring is not `monitor_only`.
 
 `app_audio.route` takes `app` (a value from `app_audio.lanes` or `app_audio.list`) and `routed`.

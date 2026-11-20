@@ -36,6 +36,9 @@ pub struct Lane {
     /// Whether the lane's source is a global audio source, which every scene hears. This is what
     /// `app_audio.route` sets.
     pub routed: bool,
+    /// Whether a global audio source of the lane reaches the program: one whose monitoring does
+    /// not leave it out of the program.
+    pub routed_heard: bool,
     /// Whether the program hears the lane: its source is routed or shown in the program scene,
     /// and its monitoring does not leave it out of the program.
     pub heard: bool,
@@ -105,6 +108,7 @@ fn lane(kind: LaneKind, name: String, source: Option<&SourceConfig>, c: &SceneCo
         app: None,
         source: source.map(|s| s.id),
         routed: source.is_some_and(|s| c.global_audio.contains(&s.id)),
+        routed_heard: source.is_some_and(|s| c.global_audio.contains(&s.id) && heard.contains(&s.id)),
         heard: source.is_some_and(|s| heard.contains(&s.id)),
         gain: source.map_or(1.0, |s| s.audio.gain),
         muted: source.is_some_and(|s| s.audio.muted),
@@ -139,6 +143,7 @@ pub fn lanes(c: &SceneCollection, list: &AppList, peak: impl Fn(&AppInfo) -> Opt
         let name = if shared && !a.path.is_empty() { format!("{} ({})", a.name, a.path) } else { a.name.clone() };
         let mut l = lane(LaneKind::Application, name, source, c, &heard);
         l.routed = matching.iter().any(|i| apps.get(*i).is_some_and(|(s, _)| global(s)));
+        l.routed_heard = matching.iter().any(|i| apps.get(*i).is_some_and(|(s, _)| global(s) && heard.contains(&s.id)));
         l.heard = matching.iter().any(|i| apps.get(*i).is_some_and(|(s, _)| heard.contains(&s.id)));
         l.app = Some(source.and_then(|s| s.settings.str("app")).map_or_else(|| a.choice(), str::to_string));
         l.peak = peak(a);

@@ -139,8 +139,9 @@ macOS.
 
 Docks › Application Audio shows a dock that lists a lane for each audio input source, then a lane
 for each running application that has audio. Each lane has a live meter. A lane the program does
-not hear is drawn gray, and its meter still moves: an application's meter shows the level the
-system reports for it, without capturing it. The program hears a lane when its source is a global
+not hear is drawn gray. The meter of a lane with a source shows the source's level in the mix,
+and is silent while the mix has no level for it. The meter of an application lane without a
+source shows the level the system reports for the application, without capturing it. The program hears a lane when its source is a global
 audio source or is shown in the program scene, unless the source's monitoring is set to monitor
 only.
 
@@ -149,7 +150,9 @@ together with the microphone. Routing adds an Application audio capture source f
 to the global audio sources, or uses a source of the collection that already captures it, and
 sets that source's monitoring to monitor and output when it was monitor only. Clearing the check
 box takes that source out of the global audio sources, and Edit › Undo puts it back. A source that
-the program scene shows is still heard after its check box is cleared.
+the program scene shows is still heard after its check box is cleared. The check box is
+checked only while a routed source reaches the program. A routed source set to monitor only leaves
+it clear, and checking it routes the application again.
 
 When one application runs inside another one's process tree, such as a helper program, the capture
 of the outer one already records it, and the dock does not route one of them while the program

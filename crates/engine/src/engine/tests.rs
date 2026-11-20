@@ -821,6 +821,10 @@ fn a_lane_with_two_sources_acts_on_the_one_the_program_hears() {
     let player = lane(&run(&mut e, "app_audio.lanes", json!({})).unwrap().result, "player").clone();
     assert_eq!(player["source"].as_u64(), Some(shown.0), "the scene's source reaches the program: {player}");
     assert_eq!((player["routed"].as_bool(), player["heard"].as_bool()), (Some(true), Some(true)));
+    assert_eq!(player["routed_heard"].as_bool(), Some(false), "the routed source is monitor only");
+    run(&mut e, "app_audio.route", json!({"app": PLAYER, "routed": true})).unwrap();
+    let player = lane(&run(&mut e, "app_audio.lanes", json!({})).unwrap().result, "player").clone();
+    assert_eq!(player["routed_heard"].as_bool(), Some(true), "routing again puts a routed source in the program: {player}");
 }
 
 #[test]
