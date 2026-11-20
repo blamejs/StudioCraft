@@ -82,8 +82,8 @@ collections).
 `view.stats`, `profile.new`, `selection.fit`). A failed command is an error with its message.
 [Commands with their own parameters](#commands-with-their-own-parameters) describes `app.info`,
 `app.links`, `app.check_updates`, `plugin.list`, `source.schema`, `source.sync_offset`,
-`source.monitor`, `source.set_record_track`, `audio_tracks.status`, `audio_tracks.repair` and the
-`dock.layout_*` commands.
+`source.monitor`, `source.set_record_track`, `audio_tracks.status`, `audio_tracks.repair`, the
+`dock.layout_*` commands, `video.displays` and `video.canvas_from_display`.
 
 Each entry of `engine.commands` has these fields:
 
@@ -309,6 +309,24 @@ error.
 
 `dock.layout_apply` and `dock.layout_remove` take `{"name"}`, compared without regard to case, and
 return `{"applied"}` or `{"removed"}`; a name no layout has is an error.
+
+### `video.displays` and `video.canvas_from_display`
+
+`video.displays` takes no parameters and returns `{"displays", "window"}`. `displays` lists each
+display the system reports as `{"id", "name", "width", "height", "primary"}`, with sizes in pixels;
+on Linux the list is empty because the desktop's picker chooses the display. `window` is
+`{"width", "height"}` of the display the window is on, or `null` when the windowing system does
+not report it.
+
+`video.canvas_from_display` takes `{"display"?}` and sets the canvas size to that display's size
+in pixels. Without `display` it uses the display the window is on. Each side is rounded down to an
+even number, and the output size is not changed. The profile is saved, also when the canvas
+already had that size. An open Settings window shows the new canvas size. It returns
+`{"width", "height", "changed"}`. These are errors: a `display` that is not a string (`null`
+included), an id that `video.displays` does not list, a display with a side under 16 or over 8192
+pixels, an unknown size for the window's display, a change while the recording, the stream or the
+replay buffer runs, and a profile that can't be saved. After a failed save the new canvas size stays
+in use until the app quits.
 
 ## Command line
 

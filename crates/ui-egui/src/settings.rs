@@ -58,6 +58,8 @@ pub struct SettingsWindow {
     pub(crate) ffmpeg_version: Result<String, String>,
     /// The output devices the system listed when the window opened.
     output_devices: Vec<DeviceInfo>,
+    /// The displays the system listed when the window opened, for the canvas size.
+    displays: Vec<studiocraft_platform::display::DisplayInfo>,
     /// The Graphics adapter setting.
     pub graphics_adapter: Preference,
     /// The adapters the window's graphics instance lists.
@@ -216,6 +218,7 @@ impl SettingsWindow {
             offered,
             ffmpeg_version,
             output_devices: studiocraft_platform::audio::devices(DeviceKind::Output),
+            displays: studiocraft_platform::display::displays(),
             graphics_adapter: Preference::Auto,
             adapters: Vec::new(),
             drawing_with: None,
@@ -479,6 +482,30 @@ impl SettingsWindow {
             ui.label(tl!("Canvas size"));
             size_combo(ui, "base-size", &mut v.base_width, &mut v.base_height);
             ui.end_row();
+            // Sizes from the displays: the one the window is on, then the listed ones. A display
+            // too large or too small for a canvas is shown and can't be picked.
+            let zoom = ui.ctx().zoom_factor();
+            let here = ui.ctx().input(|i| crate::window_display(i.viewport(), zoom));
+            let mut choices: Vec<(String, (u32, u32))> = Vec::with_capacity(self.displays.len() + 1);
+            if let Some(s) = here {
+                choices.push((tl!("The display this window is on").to_string(), s));
+            }
+            choices.extend(self.displays.iter().map(|d| (d.name.clone(), (d.width, d.height))));
+            if !choices.is_empty() {
+                ui.label(tl!("Match display"));
+                craft_ui::ComboBox::from_id_salt("match-display").selected_text(tl!("Choose a display")).show_ui(ui, |ui| {
+                    for (name, (w, h)) in &choices {
+                        let fits = crate::canvas_for((*w, *h)).is_ok();
+                        let on = v.base_width == *w && v.base_height == *h;
+                        let (width, height) = (w.to_string(), h.to_string());
+                        let label = craft_i18n::fmt(tl!("{name}: {width} × {height}"), &[("name", name), ("width", &width), ("height", &height)]);
+                        if ui.add_enabled(fits, egui::Button::selectable(on, label)).clicked() {
+                            (v.base_width, v.base_height) = (*w, *h);
+                        }
+                    }
+                });
+                ui.end_row();
+            }
             ui.label(tl!("Output size"));
             size_combo(ui, "output-size", &mut v.output_width, &mut v.output_height);
             ui.end_row();
