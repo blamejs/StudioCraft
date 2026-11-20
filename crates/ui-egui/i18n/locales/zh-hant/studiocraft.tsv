@@ -38,6 +38,12 @@
 	camera access is not allowed in the system's privacy settings	系統隱私權設定不允許存取攝影機
 	Cancel	取消
 	Canvas size	畫布大小
+	Canvas Size from Display	依顯示器設定畫布大小
+	List Displays	列出顯示器
+	Match display	符合顯示器
+	Choose a display	選擇顯示器
+	The display this window is on	此視窗所在的顯示器
+	{name}: {width} × {height}	{name}：{width} × {height}
 	Capture rate (frames per second)	擷取速率（每秒影格數）
 	Ceiling (dB)	峰值上限 (dB)
 	Center	置中

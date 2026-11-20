@@ -38,6 +38,12 @@
 	camera access is not allowed in the system's privacy settings	الوصول إلى الكاميرا غير مسموح به في إعدادات الخصوصية في النظام
 	Cancel	إلغاء
 	Canvas size	حجم اللوحة
+	Canvas Size from Display	حجم اللوحة من الشاشة
+	List Displays	عرض قائمة الشاشات
+	Match display	مطابقة الشاشة
+	Choose a display	اختر شاشة
+	The display this window is on	الشاشة التي توجد عليها هذه النافذة
+	{name}: {width} × {height}	{name}: {width} × {height}
 	Capture rate (frames per second)	معدل الالتقاط (إطارات في الثانية)
 	Ceiling (dB)	الحد الأقصى (ديسيبل)
 	Center	الوسط

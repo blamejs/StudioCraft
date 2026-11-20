@@ -7,8 +7,13 @@ sizes and bitrates, are listed in [MECHANICS.md](../MECHANICS.md).
 ## Sources
 
 A scene is a stack of sources. You add, rename, duplicate, reorder and remove scenes and sources.
-In the preview you drag, resize and rotate sources, and they snap to the canvas edges and center.
-You can lock a source so it can't be moved, or lock the whole preview. Each scene item can be
+In the preview you drag, resize and rotate sources. A source that is not rotated snaps when an
+edge or its center line comes within 8 points of a canvas edge, a canvas center line, or an edge or
+center line of another visible source, and a line shows what it snapped to. A move snaps on each
+axis. A corner drag snaps the edges it moves and keeps the aspect ratio: the edge closer to its
+line snaps and the other edge follows the ratio. With Shift held the corner drag changes the ratio
+and each edge snaps on its own. Holding Alt (Option on macOS) turns snapping off. One drag is one
+undo step. You can lock a source so it can't be moved, or lock the whole preview. Each scene item can be
 shown or hidden, and every change can be undone.
 
 ### Built-in sources
@@ -413,7 +418,7 @@ discards them.
 | Stream | Server, Stream key, Video bitrate, Audio bitrate, Video encoder and Keyframe interval. |
 | Output | Recording folder, Format, Quality, Video encoder and its settings, the `ffmpeg` program, Replay buffer length and Replay buffer memory limit. |
 | Audio | Monitoring device, the device monitored sources play on. |
-| Video | Canvas size, Output size and Frames per second, and the Hardware acceleration section with Graphics adapter and Hardware encoder. Video settings can't change while recording, streaming or running the replay buffer. |
+| Video | Canvas size, Match display (sets the canvas size to the display the window is on or to a listed display; on Linux only the window's display is offered), Output size and Frames per second, and the Hardware acceleration section with Graphics adapter and Hardware encoder. Video settings can't change while recording, streaming or running the replay buffer. |
 | Hotkeys | A shortcut for each command. |
 
 ## Control and automation

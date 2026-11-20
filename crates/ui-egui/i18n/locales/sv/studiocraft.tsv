@@ -38,6 +38,12 @@
 	camera access is not allowed in the system's privacy settings	kameraåtkomst tillåts inte i systemets integritetsinställningar
 	Cancel	Avbryt
 	Canvas size	Arbetsytans storlek
+	Canvas Size from Display	Arbetsytans storlek från skärm
+	List Displays	Visa skärmar
+	Match display	Anpassa till skärm
+	Choose a display	Välj en skärm
+	The display this window is on	Skärmen som det här fönstret är på
+	{name}: {width} × {height}	{name}: {width} × {height}
 	Capture rate (frames per second)	Fångstfrekvens (bildrutor per sekund)
 	Ceiling (dB)	Maxnivå (dB)
 	Center	Mitten

@@ -38,6 +38,12 @@
 	camera access is not allowed in the system's privacy settings	доступ к камере запрещён в настройках конфиденциальности системы
 	Cancel	Отмена
 	Canvas size	Размер холста
+	Canvas Size from Display	Размер холста по экрану
+	List Displays	Список экранов
+	Match display	По экрану
+	Choose a display	Выберите экран
+	The display this window is on	Экран, на котором находится это окно
+	{name}: {width} × {height}	{name}: {width} × {height}
 	Capture rate (frames per second)	Частота захвата (кадров в секунду)
 	Ceiling (dB)	Потолок (дБ)
 	Center	По центру

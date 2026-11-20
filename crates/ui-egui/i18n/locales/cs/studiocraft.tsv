@@ -38,6 +38,12 @@
 	camera access is not allowed in the system's privacy settings	přístup ke kameře není povolen v nastavení soukromí systému
 	Cancel	Zrušit
 	Canvas size	Velikost plátna
+	Canvas Size from Display	Velikost plátna podle obrazovky
+	List Displays	Vypsat obrazovky
+	Match display	Podle obrazovky
+	Choose a display	Vyberte obrazovku
+	The display this window is on	Obrazovka, na které je toto okno
+	{name}: {width} × {height}	{name}: {width} × {height}
 	Capture rate (frames per second)	Rychlost zachytávání (snímků za sekundu)
 	Ceiling (dB)	Horní mez (dB)
 	Center	Na střed

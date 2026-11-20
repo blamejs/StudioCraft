@@ -1,33 +1,10 @@
 //! Annex B byte streams (ITU-T H.264 and H.265 Annex B): the NAL units between start codes, and
-//! the samples a container stores, each NAL unit after a 4-byte big-endian length.
+//! the samples a container stores, each NAL unit after a 4-byte big-endian length. [`nals`] is
+//! `craft-media`'s `annexb_nals`, which splits the stream at its start codes.
+
+pub use craft_media::bitstream::annexb_nals as nals;
 
 use crate::Codec;
-
-/// The NAL units of an Annex B byte stream (start codes `00 00 01` and `00 00 00 01`). Zero bytes
-/// before a start code belong to it.
-pub fn nals(data: &[u8]) -> Vec<&[u8]> {
-    let mut starts = Vec::new();
-    let mut i = 0usize;
-    while let Some(w) = data.get(i..i.saturating_add(3)) {
-        if w == [0, 0, 1] {
-            starts.push(i + 3);
-            i += 3;
-        } else {
-            i += 1;
-        }
-    }
-    let mut out = Vec::with_capacity(starts.len());
-    for (k, &s) in starts.iter().enumerate() {
-        let mut e = starts.get(k + 1).map_or(data.len(), |n| n.saturating_sub(3));
-        while e > s && data.get(e - 1) == Some(&0) {
-            e -= 1;
-        }
-        if let Some(n) = data.get(s..e).filter(|n| !n.is_empty()) {
-            out.push(n);
-        }
-    }
-    out
-}
 
 /// The NAL unit type of `nal`, or `None` when it is too short for its header.
 pub fn nal_type(codec: Codec, nal: &[u8]) -> Option<u8> {

@@ -32,6 +32,11 @@
 //! The crate starts no threads. One producer thread shares and publishes packets; each receiver is
 //! used by one thread at a time; any thread may hold a [`Control`] or a [`Monitor`].
 //!
+//! A [`Fanout`] has one producer: [`Fanout::publish`] takes `&mut self`, and packets are published
+//! in `dts` order. When video and audio are encoded on two threads, both threads send their packets
+//! to one thread, which interleaves them by `dts` and publishes them. Putting the [`Fanout`] behind
+//! a lock instead makes each encoder wait for the other while it publishes.
+//!
 //! - [`Fanout::publish`] reads the subscriber list without a lock and, for each subscriber, adds
 //!   one to the packet's reference counts and pushes it into a lock-free bounded queue. It never
 //!   blocks or allocates. It wakes a receiver only when that receiver is parked and
@@ -44,14 +49,23 @@
 //! - Adding or removing a subscriber copies the subscriber list on the thread that asks. The old
 //!   list and a ring whose receiver is gone are freed on such a thread, never on the producer's.
 //!
+//! # Encoders' packets
+//!
+//! [`Info`] converts from the built-in H.264 encoder's packets (the `h264` feature) and from the
+//! hardware encoders' packets (the `hwenc-native` feature), both on by default. A conversion
+//! returns a [`ConvertError`] for a packet with no bytes, a decoding time after its presentation
+//! time, or a keyframe flag that does not match an H.264 packet's picture type.
+//!
 //! No `unsafe` code.
 
 #![warn(missing_docs)]
 
+mod convert;
 mod fanout;
 mod packet;
 mod ring;
 
+pub use convert::ConvertError;
 pub use fanout::{Control, Fanout};
 pub use packet::{Info, Kind, PacketPool, ShareError, SharedPacket};
 pub use ring::{

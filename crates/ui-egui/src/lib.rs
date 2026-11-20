@@ -40,6 +40,7 @@ use egui::{Color32, RichText, Ui};
 use serde_json::{Value, json};
 use studiocraft_media::mix::MeterBallistics;
 use studiocraft_model::{ItemId, Profile, SceneCollection, SceneId, SettingsSchema, SourceId, Transform, Vec2};
+use studiocraft_platform::display::DisplayInfo;
 use studiocraft_render::Gpu;
 use studiocraft_render::device::{Candidate, Preference};
 use studiocraft_studio::files::read_collection_file;
@@ -483,6 +484,28 @@ impl StudioApp {
                 false
             }
         }
+    }
+
+    /// Make the canvas `size` (each side rounded down to an even number) and save the profile.
+    /// The output size stays as it is. An open Settings window shows the new canvas size. A
+    /// profile that can't be saved is an error, and the new size stays in use until the app quits.
+    fn set_canvas(&mut self, size: (u32, u32)) -> Result<Value, String> {
+        let mut p = self.studio.profile().clone();
+        let v = studiocraft_model::VideoSettings { base_width: size.0, base_height: size.1, ..p.video }.sanitized();
+        let (width, height) = (v.base_width, v.base_height);
+        p.video.base_width = width;
+        p.video.base_height = height;
+        let changed = self.studio.canvas() != (width, height);
+        if changed {
+            self.studio.set_profile(p).map_err(|e| e.to_string())?;
+        }
+        if let Some(w) = &mut self.settings {
+            w.draft.video.base_width = width;
+            w.draft.video.base_height = height;
+        }
+        // Saved even when the size was already in use, so a save that failed before is retried.
+        self.store.save_profile(self.studio.profile()).map_err(|e| format!("The profile could not be saved: {e}"))?;
+        Ok(json!({"width": width, "height": height, "changed": changed}))
     }
 
     /// Save everything now (the app is closing); whether the scene collection, the profile and
@@ -938,6 +961,30 @@ impl StudioApp {
                     self.ask_collection_path(cmd, craft_dialogs::FileDialog::save().file_name(name), Then::ExportCollection)?;
                 }
             },
+            "video.displays" => {
+                let list: Vec<Value> = studiocraft_platform::display::displays()
+                    .into_iter()
+                    .map(|d| json!({"id": d.id, "name": d.name, "width": d.width, "height": d.height, "primary": d.primary}))
+                    .collect();
+                let zoom = ctx.zoom_factor();
+                let window = ctx.input(|i| window_display(i.viewport(), zoom)).map(|(w, h)| json!({"width": w, "height": h}));
+                return Ok(json!({"displays": list, "window": window}));
+            }
+            "video.canvas_from_display" => {
+                let zoom = ctx.zoom_factor();
+                let size = match cmd.params.get("display") {
+                    None => ctx
+                        .input(|i| window_display(i.viewport(), zoom))
+                        .ok_or("`video.canvas_from_display`: the size of the display the window is on is not known; pass `display`")?,
+                    Some(Value::String(id)) => {
+                        let list = studiocraft_platform::display::displays();
+                        let d = find_display(&list, id)?;
+                        (d.width, d.height)
+                    }
+                    Some(_) => return Err("`video.canvas_from_display`: `display` is a display id from `video.displays`".into()),
+                };
+                return self.set_canvas(canvas_for(size)?);
+            }
             "tools.encoders" => {
                 // Without the ffmpeg program only the built-in encoders are available, and the
                 // window says why.
@@ -2154,6 +2201,41 @@ fn free_name(base: &str, taken: impl Fn(&str) -> bool) -> String {
     }
     let stem = if check_name(&format!("{base} 10000")).is_ok() { base } else { DEFAULT_NAME };
     (2..10_000).map(|n| format!("{stem} {n}")).find(|n| !taken(n)).unwrap_or_else(|| format!("{stem} 10000"))
+}
+
+/// The size in pixels of the display the window is on, when the windowing system reports it.
+/// egui reports the size in points at `zoom` times the display's own pixels per point.
+fn window_display(info: &egui::ViewportInfo, zoom: f32) -> Option<(u32, u32)> {
+    let size = info.monitor_size?;
+    let ppp = info.native_pixels_per_point? * zoom;
+    let side = |v: f32| {
+        let p = (v * ppp).round();
+        (p.is_finite() && p >= 1.0 && p <= u32::MAX as f32).then_some(p as u32)
+    };
+    Some((side(size.x)?, side(size.y)?))
+}
+
+/// The listed display with `id`, or an error naming the listed ids.
+fn find_display<'a>(list: &'a [DisplayInfo], id: &str) -> Result<&'a DisplayInfo, String> {
+    list.iter().find(|d| d.id == id).ok_or_else(|| {
+        let ids: Vec<&str> = list.iter().map(|d| d.id.as_str()).collect();
+        if ids.is_empty() {
+            format!("there is no display `{id}`: the system lists no displays")
+        } else {
+            format!("there is no display `{id}` (the displays are {})", ids.join(", "))
+        }
+    })
+}
+
+/// A display size as a canvas size, or an error when a side is outside the canvas's range.
+fn canvas_for((width, height): (u32, u32)) -> Result<(u32, u32), String> {
+    use studiocraft_model::profile::{MAX_SIDE, MIN_SIDE};
+    let ok = |v: u32| (MIN_SIDE..=MAX_SIDE).contains(&v);
+    if ok(width) && ok(height) {
+        Ok((width, height))
+    } else {
+        Err(format!("a {width} × {height} display can't be the canvas: each side must be from {MIN_SIDE} to {MAX_SIDE} pixels"))
+    }
 }
 
 #[cfg(test)]

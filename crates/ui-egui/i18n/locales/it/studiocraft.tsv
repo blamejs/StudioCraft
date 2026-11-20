@@ -37,6 +37,12 @@
 	camera access is not allowed in the system's privacy settings	l'accesso alla fotocamera non è consentito nelle impostazioni di privacy del sistema
 	Cancel	Annulla
 	Canvas size	Dimensione dell'area di lavoro
+	Canvas Size from Display	Dimensione dell'area di lavoro dallo schermo
+	List Displays	Elenca gli schermi
+	Match display	Adatta allo schermo
+	Choose a display	Scegli uno schermo
+	The display this window is on	Lo schermo su cui si trova questa finestra
+	{name}: {width} × {height}	{name}: {width} × {height}
 	Capture rate (frames per second)	Frequenza di cattura (fotogrammi al secondo)
 	Ceiling (dB)	Tetto (dB)
 	Center	Centro

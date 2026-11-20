@@ -101,16 +101,8 @@ fn test() -> Result<(), String> {
 }
 
 /// Crates with no operating-system or GPU dependency, which the web build will use.
-const WASM_CRATES: &[&str] = &[
-    "studiocraft-model",
-    "studiocraft-plugin",
-    "craft-tsmux",
-    "craft-flv",
-    "craft-color-transform",
-    "craft-scopes",
-    "craft-audio-dsp",
-    "craft-ease",
-];
+const WASM_CRATES: &[&str] =
+    &["studiocraft-model", "studiocraft-plugin", "craft-flv", "craft-scopes", "craft-audio-dsp", "craft-ease", "craft-transitions"];
 
 fn wasm() -> Result<(), String> {
     let mut c = cargo();

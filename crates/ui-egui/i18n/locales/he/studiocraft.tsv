@@ -38,6 +38,12 @@
 	camera access is not allowed in the system's privacy settings	הגישה למצלמה אינה מותרת בהגדרות הפרטיות של המערכת
 	Cancel	ביטול
 	Canvas size	גודל משטח
+	Canvas Size from Display	גודל משטח לפי המסך
+	List Displays	הצגת רשימת המסכים
+	Match display	התאמה למסך
+	Choose a display	בחירת מסך
+	The display this window is on	המסך שבו נמצא החלון הזה
+	{name}: {width} × {height}	{name}: {width} × {height}
 	Capture rate (frames per second)	קצב לכידה (פריימים לשנייה)
 	Ceiling (dB)	תקרה (dB)
 	Center	מרכז

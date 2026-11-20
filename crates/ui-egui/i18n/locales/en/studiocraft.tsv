@@ -42,6 +42,12 @@
 	camera access is not allowed in the system's privacy settings	camera access is not allowed in the system's privacy settings
 	Cancel	Cancel
 	Canvas size	Canvas size
+	Canvas Size from Display	Canvas Size from Display
+	List Displays	List Displays
+	Match display	Match display
+	Choose a display	Choose a display
+	The display this window is on	The display this window is on
+	{name}: {width} × {height}	{name}: {width} × {height}
 	Capture rate (frames per second)	Capture rate (frames per second)
 	Ceiling (dB)	Ceiling (dB)
 	Center	Center

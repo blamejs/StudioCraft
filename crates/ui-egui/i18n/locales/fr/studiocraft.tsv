@@ -39,6 +39,12 @@
 	camera access is not allowed in the system's privacy settings	l'accès à la caméra n'est pas autorisé dans les réglages de confidentialité du système
 	Cancel	Annuler
 	Canvas size	Taille du canevas
+	Canvas Size from Display	Taille du canevas d'après l'écran
+	List Displays	Lister les écrans
+	Match display	Adapter à l'écran
+	Choose a display	Choisir un écran
+	The display this window is on	L'écran où se trouve cette fenêtre
+	{name}: {width} × {height}	{name} : {width} × {height}
 	Capture rate (frames per second)	Fréquence de capture (images par seconde)
 	Ceiling (dB)	Plafond (dB)
 	Center	Centre
