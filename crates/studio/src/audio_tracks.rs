@@ -104,6 +104,12 @@ pub(crate) struct AudioTracks {
     pub(crate) launcher: Option<Arc<dyn Launcher>>,
     /// The takes still finishing that ended because the next one started.
     handed_on: Vec<Arc<studiocraft_audio_tracks::Status>>,
+    /// The takes still finishing, each with its place in the order the takes stopped, and the
+    /// place of the take whose session is `last_session`: a take that finishes after a newer one
+    /// does not replace that one's session.
+    stop_order: Vec<(Arc<studiocraft_audio_tracks::Status>, u64)>,
+    stops: u64,
+    last_session_stop: u64,
 }
 
 impl Studio {
@@ -441,11 +447,11 @@ impl Studio {
         } else {
             take.stop_at(end);
         }
+        self.audio_tracks.stops += 1;
+        self.audio_tracks.stop_order.push((Arc::clone(take.status()), self.audio_tracks.stops));
         self.audio_tracks.finishing.push((take, false));
     }
 
-    /// Stop the take at `end` because the next one starts there: its session opens nothing when
-    /// it ends, since the outputs go on.
     /// After a take was handed on: when the next one did not start, the ended take opens as any
     /// other does.
     fn keep_handoff_if_started(&mut self, handed: bool) {
@@ -454,6 +460,8 @@ impl Studio {
         }
     }
 
+    /// Stop the take at `end` because the next one starts there: its session opens nothing when
+    /// it ends, since the outputs go on.
     fn hand_on_audio_tracks_at(&mut self, end: Tick) {
         self.stop_audio_tracks_at(end);
         if let Some((t, _)) = self.audio_tracks.finishing.last() {
@@ -469,6 +477,7 @@ impl Studio {
         // Each ended take's session, with whether the take ended because the next one started.
         let mut sessions = Vec::new();
         let handed_on = &mut self.audio_tracks.handed_on;
+        let stop_order = &mut self.audio_tracks.stop_order;
         self.audio_tracks.finishing.retain(|(t, reported)| {
             let done = t.finished();
             if !done {
@@ -478,11 +487,13 @@ impl Studio {
                 failed.push(Arc::clone(t.status()));
             }
             let next = handed_on.iter().position(|h| Arc::ptr_eq(h, t.status())).map(|i| handed_on.swap_remove(i)).is_some();
+            let place = stop_order.iter().position(|(h, _)| Arc::ptr_eq(h, t.status())).map_or(0, |i| stop_order.swap_remove(i).1);
             if let Some(s) = t.status().session() {
-                sessions.push((s.to_path_buf(), next));
+                sessions.push((s.to_path_buf(), next, place));
             }
             false
         });
+        sessions.sort_by_key(|s| s.2);
         for status in failed {
             self.notices.push(stop_notice(&status));
         }
@@ -491,8 +502,11 @@ impl Studio {
         // started opens nothing, since the outputs go on, and so does any take while another one
         // runs.
         let after = self.profile.audio_tracks.after_stop;
-        for (session, next) in sessions {
-            self.audio_tracks.last_session = Some(session.clone());
+        for (session, next, place) in sessions {
+            if place >= self.audio_tracks.last_session_stop {
+                self.audio_tracks.last_session = Some(session.clone());
+                self.audio_tracks.last_session_stop = place;
+            }
             if after != AfterStop::Nothing
                 && !next
                 && self.audio_tracks.take.is_none()
@@ -754,6 +768,7 @@ impl Studio {
         let deadline = Instant::now() + CLOSE_WAIT;
         let mut last = None;
         let handed_on = std::mem::take(&mut self.audio_tracks.handed_on);
+        self.audio_tracks.stop_order.clear();
         for (t, _) in self.audio_tracks.finishing.drain(..) {
             let status = Arc::clone(t.status());
             let finished = t.join_until(deadline);

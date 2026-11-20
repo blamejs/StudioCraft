@@ -1176,10 +1176,16 @@ mod audio_tracks {
             s.mixer.free_retired();
             std::thread::yield_now();
         }
+        // The newer take is looked at first, as when it finishes writing before the older one:
+        // the last session is still the newer take's.
+        let newer = s.audio_tracks.finishing[1].0.status().session().map(std::path::Path::to_path_buf);
+        assert!(newer.is_some());
+        s.audio_tracks.finishing.swap(0, 1);
         s.tick();
         s.audio_tracks_opened();
         let log = fake.log.lock().unwrap().clone();
         assert_eq!(log.len(), 2, "{log:?}");
+        assert_eq!(s.audio_tracks_last_session().map(std::path::Path::to_path_buf), newer);
         drop(s);
         let _ = std::fs::remove_dir_all(&dir);
     }
