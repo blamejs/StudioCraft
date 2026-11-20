@@ -1,6 +1,6 @@
 [package]
 name = "craft-packet"
-description = "Encoded packets shared by reference and fanned out to bounded per-subscriber rings, with byte caps, keyframe-aligned drops, stale-packet skipping and per-subscriber counters"
+description = "Encoded packets shared by reference and fanned out to bounded per-subscriber rings, with byte caps, keyframe-aligned drops, stale-packet skipping and per-subscriber counters, and packet info from the H.264 and hardware encoders' packets"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -9,10 +9,19 @@ publish = false
 [lints]
 workspace = true
 
+[features]
+default = ["h264", "hwenc-native"]
+# `Info` from the built-in H.264 encoder's packets (`craft_video::h264::Packet`).
+h264 = ["dep:craft-video", "craft-video/h264-encode"]
+# `Info` from the hardware encoders' packets (`craft_hwenc_native::Packet`).
+hwenc-native = ["dep:craft-hwenc-native"]
+
 [dependencies]
 crossbeam-queue = { workspace = true }
 crossbeam-utils = { workspace = true }
 arc-swap = { workspace = true }
+craft-video = { workspace = true, optional = true }
+craft-hwenc-native = { workspace = true, optional = true }
 
 [dev-dependencies]
 proptest = { workspace = true }
