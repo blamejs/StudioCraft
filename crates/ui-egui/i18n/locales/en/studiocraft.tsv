@@ -534,3 +534,14 @@ menu	Transform	Transform
 @msg	Audio tracks could not be repaired: {takes} and {more} more	Audio tracks could not be repaired: {takes} and {more} more
 @msg	Audio tracks could not be repaired: {takes}. Takes repaired: {count}	Audio tracks could not be repaired: {takes}. Takes repaired: {count}
 @msg	Audio tracks could not be repaired: {takes} and {more} more. Takes repaired: {count}	Audio tracks could not be repaired: {takes} and {more} more. Takes repaired: {count}
+	Application Audio	Application Audio
+	Lane settings	Lane settings
+	Hear in Every Scene	Hear in Every Scene
+	Stop Hearing in Every Scene	Stop Hearing in Every Scene
+	Hear this application in every scene, with the microphone	Hear this application in every scene, with the microphone
+	Stop hearing this application in every scene	Stop hearing this application in every scene
+	Looking for applications with audio…	Looking for applications with audio…
+	No microphones or applications with audio.	No microphones or applications with audio.
+	This application is not running.	This application is not running.
+	List Audio Lanes	List Audio Lanes
+	Route Application Audio	Route Application Audio

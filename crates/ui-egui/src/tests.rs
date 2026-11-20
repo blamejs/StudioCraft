@@ -643,6 +643,29 @@ fn the_docks_menu_shows_and_hides_the_output_bar_groups() {
     assert_eq!(docks, [json!("scenes"), json!("sources"), json!("mixer")]);
 }
 
+#[test]
+fn the_application_audio_dock_is_hidden_until_the_docks_menu_shows_it() {
+    let mut a = app();
+    let ctx = egui::Context::default();
+    let docks = |a: &mut StudioApp| -> Vec<Value> {
+        a.ui_inspect(&ctx)["docks"].as_array().cloned().unwrap_or_default().into_iter().map(|d| d["dock"].clone()).collect()
+    };
+    frame(&mut a, &ctx, vec![]);
+    assert!(!docks(&mut a).contains(&json!("app_audio")));
+    assert_eq!(run(&mut a, &ctx, "dock.app_audio", json!({})).unwrap(), json!({"on": true}));
+    for _ in 0..2 {
+        frame(&mut a, &ctx, vec![]);
+    }
+    assert_eq!(docks(&mut a), [json!("scenes"), json!("sources"), json!("mixer"), json!("app_audio")]);
+    // The new collection's microphone is its first lane, heard by the program.
+    let lanes = run(&mut a, &ctx, "app_audio.lanes", json!({})).unwrap();
+    assert_eq!(lanes["lanes"][0]["kind"], json!("microphone"), "{lanes}");
+    assert_eq!(lanes["lanes"][0]["routed"], json!(true), "{lanes}");
+    assert_eq!(run(&mut a, &ctx, "dock.app_audio", json!({})).unwrap(), json!({"on": false}));
+    frame(&mut a, &ctx, vec![]);
+    assert!(!docks(&mut a).contains(&json!("app_audio")));
+}
+
 fn rect_of(v: &Value) -> egui::Rect {
     let f = |k: &str| v[k].as_f64().unwrap_or(f64::NAN) as f32;
     egui::Rect::from_min_size(egui::pos2(f("x"), f("y")), egui::vec2(f("width"), f("height")))
@@ -762,7 +785,8 @@ fn dock_move_rearranges_the_strip_and_reset_puts_it_back() {
     let size = egui::vec2(1280.0, 800.0);
     frame_at(&mut a, &ctx, size);
     let r = run(&mut a, &ctx, "dock.move", json!({"dock": "mixer", "to": "left"})).unwrap();
-    assert_eq!(r, json!({"moved": true, "order": ["scenes", "mixer", "sources"]}));
+    // The order lists every dock, the hidden Application Audio dock included.
+    assert_eq!(r, json!({"moved": true, "order": ["scenes", "mixer", "sources", "app_audio"]}));
     frame_at(&mut a, &ctx, size);
     assert_eq!(dock_order(&a, &ctx), ["scenes", "mixer", "sources"]);
     let widths: Vec<f32> = a.ui_inspect(&ctx)["docks"].as_array().unwrap_or(&Vec::new()).iter().map(|d| rect_of(&d["rect"]).width()).collect();

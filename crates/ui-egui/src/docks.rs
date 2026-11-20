@@ -1,12 +1,13 @@
-//! The docks under the preview: Scenes, Sources and Audio Mixer. The transition and output
-//! controls are in the output bar ([`crate::output_bar`]). Each dock has a header with its title
-//! and its actions ([`crate::kit::panel_header`]) and no footer.
+//! The docks under the preview: Scenes, Sources, Audio Mixer and Application Audio. The transition
+//! and output controls are in the output bar ([`crate::output_bar`]). Each dock has a header with
+//! its title and its actions ([`crate::kit::panel_header`]) and no footer.
 
 use std::collections::HashMap;
 
 use egui::{Color32, Rect, RichText, Sense, TextStyle, Ui, pos2, vec2};
 use serde_json::json;
-use studiocraft_media::mix::{METER_FLOOR_DB, MeterBallistics, from_db, to_db};
+use studiocraft_engine::lanes::{Lane, LaneKind};
+use studiocraft_media::mix::{BlockLevels, METER_FLOOR_DB, MeterBallistics, from_db, to_db};
 use studiocraft_model::{ItemId, SceneId, SourceId};
 use studiocraft_studio::Studio;
 
@@ -20,6 +21,8 @@ pub struct DockState<'a> {
     pub selected: Option<ItemId>,
     pub renaming: &'a mut Option<(Rename, String)>,
     pub meters: &'a mut HashMap<SourceId, MeterBallistics>,
+    /// The Application Audio dock's meters.
+    pub lane_meters: &'a mut HashMap<LaneId, MeterBallistics>,
     /// Seconds since the meters were last advanced.
     pub dt: f32,
     /// The place of the dock being drawn among the docks in the strip, and how many are in the
@@ -479,6 +482,153 @@ pub fn mixer(ui: &mut Ui, studio: &Studio, st: &mut DockState, acts: &mut Vec<Ac
     drawn
 }
 
+/// An Application Audio lane, for its meter: the source that carries it, or before it has one,
+/// the application it names.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum LaneId {
+    Source(SourceId),
+    App(String),
+}
+
+/// The meter key of `lane`.
+pub fn lane_id(lane: &Lane) -> LaneId {
+    match (lane.source, &lane.app) {
+        (Some(s), _) => LaneId::Source(s),
+        (None, Some(app)) => LaneId::App(app.clone()),
+        (None, None) => LaneId::App(lane.name.clone()),
+    }
+}
+
+/// What a lane's meter shows: the source's level in the mix when the source has one, and else the
+/// application's level as the system reports it. A lane without either shows silence, so its
+/// meter falls.
+pub fn lane_levels(lane: &Lane, source: Option<BlockLevels>) -> BlockLevels {
+    source.or_else(|| lane.peak.filter(|p| p.is_finite()).map(|p| BlockLevels { peak: [p.clamp(0.0, 1.0); 2], rms: [0.0; 2] })).unwrap_or_default()
+}
+
+/// The settings-menu item that routes an application lane, for a lane not routed and a routed one.
+pub(crate) const ROUTE_ITEMS: [&str; 2] = ["Hear in Every Scene", "Stop Hearing in Every Scene"];
+/// The tip of an application lane's check box, for a lane not routed and a routed one.
+pub(crate) const ROUTE_TIPS: [&str; 2] =
+    ["Hear this application in every scene, with the microphone", "Stop hearing this application in every scene"];
+
+/// The lane's settings menu: routing for an application, and the properties and filters of the
+/// lane's source.
+fn lane_menu(ui: &mut Ui, lane: &Lane, acts: &mut Vec<Act>) {
+    icons::menu(ui, Icon::Gear, tl!("Lane settings"), |ui| {
+        if lane.kind == LaneKind::Application
+            && let Some(app) = &lane.app
+        {
+            let label = ROUTE_ITEMS[usize::from(lane.routed)];
+            if ui.button(tl!(label)).clicked() {
+                acts.push(Act::run("app_audio.route", json!({"app": app, "routed": !lane.routed})));
+                ui.close();
+            }
+        }
+        if let Some(s) = lane.source {
+            if lane.kind == LaneKind::Application {
+                ui.separator();
+            }
+            if ui.button(tid!("selection.properties", "Properties…")).clicked() {
+                acts.push(Act::Properties(s));
+                ui.close();
+            }
+            if ui.button(tid!("selection.filters", "Filters…")).clicked() {
+                acts.push(Act::Filters(s));
+                ui.close();
+            }
+        }
+    });
+}
+
+/// The Application Audio dock: a lane for each microphone source and each running application
+/// with audio, each with a live meter, drawn gray while the program does not hear it. The check
+/// box of an application lane routes it into the program in every scene, together with the
+/// microphone (`app_audio.route`). A lane with a source has its volume and mute, and its settings
+/// menu opens the source's properties and filters.
+pub fn app_audio(ui: &mut Ui, studio: &Studio, st: &mut DockState, acts: &mut Vec<Act>) -> Drawn {
+    let mut drawn = header(ui, "Application Audio", |_, _| ());
+    dock_menu(ui, &mut drawn, "app_audio", st.place, acts);
+    let lanes = studio.engine().app_audio_lanes();
+    let ids: Vec<LaneId> = lanes.lanes.iter().map(lane_id).collect();
+    st.lane_meters.retain(|id, _| ids.contains(id));
+    let area = egui::ScrollArea::vertical().id_salt("app_audio").auto_shrink([false, false]);
+    area.show(&mut body(ui), |ui| {
+        let warn = ui.visuals().warn_fg_color;
+        match (&lanes.reason, &lanes.error) {
+            (Some(reason), _) if !lanes.supported => {
+                ui.weak(crate::i18n::Msg::plain(reason.clone()).shown());
+            }
+            (_, Some(e)) => {
+                ui.colored_label(warn, crate::i18n::Msg::plain(e.clone()).shown());
+            }
+            _ if lanes.listing => {
+                ui.weak(tl!("Looking for applications with audio…"));
+            }
+            _ => {}
+        }
+        if lanes.lanes.is_empty() {
+            ui.weak(tl!("No microphones or applications with audio."));
+        }
+        for (lane, id) in lanes.lanes.iter().zip(ids) {
+            let m = st.lane_meters.entry(id).or_default();
+            m.update(lane_levels(lane, lane.source.and_then(|s| studio.levels(s))), st.dt);
+            let gray = !lane.heard;
+            craft_ui::direction::horizontal(ui, |ui| {
+                if lane.kind == LaneKind::Application
+                    && let Some(app) = &lane.app
+                {
+                    let mut on = lane.routed;
+                    let tip = ROUTE_TIPS[usize::from(lane.routed)];
+                    if ui.checkbox(&mut on, "").on_hover_text(tl!(tip)).changed() {
+                        acts.push(Act::run("app_audio.route", json!({"app": app, "routed": on})));
+                    }
+                }
+                let mut name = RichText::new(&lane.name).strong();
+                if gray {
+                    name = name.color(ui.visuals().weak_text_color());
+                }
+                let r = ui.label(name);
+                if lane.kind == LaneKind::Application && !lane.running {
+                    let _ = r.on_hover_text(tl!("This application is not running."));
+                }
+                ui.with_layout(craft_ui::direction::trailing(ui), |ui| {
+                    lane_menu(ui, lane, acts);
+                    if let Some(s) = lane.source {
+                        let (icon, tip, tint) = if lane.muted {
+                            (Icon::Muted, "Unmute", Color32::from_rgb(230, 60, 50))
+                        } else {
+                            (Icon::Speaker, "Mute", Color32::TRANSPARENT)
+                        };
+                        if icons::sized(ui, icon, tl!(tip), true, vec2(26.0, 22.0), tint) {
+                            acts.push(Act::run("source.mute", json!({"source": s, "muted": !lane.muted})));
+                        }
+                        ui.monospace(gain_text(lane.gain));
+                    }
+                });
+            });
+            if let Some(e) = lane.source.and_then(|s| studio.source_error(s)) {
+                ui.colored_label(warn, crate::i18n::Msg::plain(e).shown());
+            }
+            meter(ui, m, gray || lane.muted);
+            let mut db = to_db(lane.gain).max(METER_FLOOR_DB);
+            let slider = egui::Slider::new(&mut db, METER_FLOOR_DB..=0.0).show_value(false).trailing_fill(true);
+            let r = ui.add_enabled(lane.source.is_some(), slider);
+            if let Some(s) = lane.source {
+                if r.changed() {
+                    let gain = if db <= METER_FLOOR_DB { 0.0 } else { from_db(db) };
+                    acts.push(Act::run("source.volume", json!({"source": s, "gain": gain})));
+                }
+                if r.drag_stopped() {
+                    acts.push(Act::Seal);
+                }
+            }
+            ui.add_space(6.0);
+        }
+    });
+    drawn
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -497,5 +647,38 @@ mod tests {
         assert_eq!(gain_text(1.0), "0.0 dB");
         assert_eq!(gain_text(0.0), "-inf dB");
         assert_eq!(gain_text(0.5), "-6.0 dB");
+    }
+
+    fn app_lane(source: Option<SourceId>, peak: Option<f32>) -> Lane {
+        Lane {
+            kind: LaneKind::Application,
+            name: "player.exe".into(),
+            app: Some("player.exe|c:\\apps\\player.exe".into()),
+            source,
+            routed: source.is_some(),
+            heard: source.is_some(),
+            gain: 1.0,
+            muted: false,
+            peak,
+            running: true,
+            playing: peak.is_some(),
+            within: None,
+        }
+    }
+
+    #[test]
+    fn a_lane_meters_its_source_and_else_the_applications_level() {
+        let mixed = BlockLevels { peak: [0.25, 0.5], rms: [0.1, 0.2] };
+        assert_eq!(lane_levels(&app_lane(Some(SourceId(3)), Some(0.9)), Some(mixed)), mixed, "the source's level in the mix");
+        assert_eq!(lane_levels(&app_lane(None, Some(0.4)), None).peak, [0.4, 0.4]);
+        assert_eq!(lane_levels(&app_lane(None, Some(7.0)), None).peak, [1.0, 1.0], "a reading over full scale is held at it");
+        assert_eq!(lane_levels(&app_lane(None, Some(f32::NAN)), None), BlockLevels::default());
+        assert_eq!(lane_levels(&app_lane(None, None), None), BlockLevels::default(), "no reading falls to silence");
+    }
+
+    #[test]
+    fn a_lane_keeps_its_meter_by_source_once_it_has_one() {
+        assert_eq!(lane_id(&app_lane(None, None)), LaneId::App("player.exe|c:\\apps\\player.exe".into()));
+        assert_eq!(lane_id(&app_lane(Some(SourceId(3)), None)), LaneId::Source(SourceId(3)));
     }
 }
