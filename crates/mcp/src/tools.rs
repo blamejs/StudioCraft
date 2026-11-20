@@ -52,6 +52,8 @@ const RUNS: Hints = Hints { read_only: false, destructive: true, idempotent: fal
 const RECORDS: Hints = Hints { read_only: false, destructive: false, idempotent: true, open_world: false };
 /// Starting or stopping the stream, which goes out to the configured server.
 const PUBLISHES: Hints = Hints { read_only: false, destructive: false, idempotent: true, open_world: true };
+/// Opening a file in another program: each call starts the program again.
+const LAUNCHES: Hints = Hints { read_only: false, destructive: false, idempotent: false, open_world: false };
 
 fn tool(name: &str, title: &str, description: &str, properties: Value, required: &[&str], hints: Hints) -> Value {
     json!({
@@ -379,6 +381,17 @@ fn studio_tool_definitions() -> Vec<Value> {
             json!({"folder": {"type": "string", "description": "The folder to look in."}}),
             &["folder"],
             RECORDS,
+        ),
+        tool(
+            "audio_tracks_open_last",
+            "Open the last audio tracks in the audio editor",
+            "Open the session file of the last take of audio tracks (`<name> Audio/<name>.scraft`, written when the take ended or \
+             was repaired) in the audio editor: the program at the editor path setting, or `soundcraft` on the PATH. When the \
+             editor cannot be found or started, the take's folder opens in the file manager instead. The opening runs in the \
+             background and this returns `started` and `session` at once. An error when no take has ended since the app started.",
+            json!({}),
+            &[],
+            LAUNCHES,
         ),
         tool(
             "output_status",
@@ -899,6 +912,7 @@ fn dispatch(b: &mut dyn Backend, name: &str, args: &Args) -> Result<Value, McpEr
         "output_status" => Ok(text(&outputs(b)?)),
         "audio_tracks_status" => Ok(text(&run(b, "audio_tracks.status", json!({}))?)),
         "audio_tracks_repair" => Ok(text(&run(b, "audio_tracks.repair", json!({"folder": req_str(args, "folder")?}))?)),
+        "audio_tracks_open_last" => Ok(text(&run(b, "audio_tracks.open_last", json!({}))?)),
         other => Err(McpError::Invalid(format!("there is no tool `{other}`"))),
     }
 }

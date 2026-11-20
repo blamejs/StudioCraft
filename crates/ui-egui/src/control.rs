@@ -76,6 +76,7 @@ impl StudioApp {
             "studio.toggle" => on(engine.studio_mode()),
             "replay.toggle" => on(self.studio.output(OutputKind::Replay).is_some_and(|s| s.active)),
             "replay.save" => ItemState { enabled: self.studio.output(OutputKind::Replay).is_some_and(|s| s.active), checked: None },
+            "audio_tracks.open_last" => ItemState { enabled: self.studio.audio_tracks_last_session().is_some(), checked: None },
             "dock.scenes" => on(p.docks.scenes),
             "dock.sources" => on(p.docks.sources),
             "dock.mixer" => on(p.docks.mixer),

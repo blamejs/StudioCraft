@@ -469,3 +469,15 @@ menu	Transform	Trasforma
 @msg	Audio tracks could not be repaired: {takes} and {more} more	Impossibile riparare le tracce audio: {takes} e altre {more}
 @msg	Audio tracks could not be repaired: {takes}. Takes repaired: {count}	Impossibile riparare le tracce audio: {takes}. Riprese riparate: {count}
 @msg	Audio tracks could not be repaired: {takes} and {more} more. Takes repaired: {count}	Impossibile riparare le tracce audio: {takes} e altre {more}. Riprese riparate: {count}
+	Open Last Audio Tracks in Editor	Apri le ultime tracce audio nell'editor
+	After a take	Dopo una ripresa
+	Nothing	Niente
+	Show the folder	Mostra la cartella
+	Open in the audio editor	Apri nell'editor audio
+	Audio editor	Editor audio
+	The audio editor on the PATH	L'editor audio nel PATH
+	Programs	Programmi
+@msg	Audio tracks opened in the audio editor: {session}	Tracce audio aperte nell'editor audio: {session}
+@msg	The audio editor did not start ({error}); the folder {folder} is shown instead	L'editor audio non si è avviato ({error}); viene mostrata invece la cartella {folder}
+@msg	Audio tracks saved in {folder}	Tracce audio salvate in {folder}
+@msg	The audio tracks could not be opened: {error}	Impossibile aprire le tracce audio: {error}

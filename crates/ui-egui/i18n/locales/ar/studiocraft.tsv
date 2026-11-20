@@ -461,3 +461,15 @@ menu	Transform	التحويل
 @msg	Audio tracks could not be repaired: {takes} and {more} more	تعذّر إصلاح المسارات الصوتية: {takes} و{more} غيرها
 @msg	Audio tracks could not be repaired: {takes}. Takes repaired: {count}	تعذّر إصلاح المسارات الصوتية: {takes}. اللقطات التي أُصلحت: {count}
 @msg	Audio tracks could not be repaired: {takes} and {more} more. Takes repaired: {count}	تعذّر إصلاح المسارات الصوتية: {takes} و{more} غيرها. اللقطات التي أُصلحت: {count}
+	Open Last Audio Tracks in Editor	فتح آخر المسارات الصوتية في المحرر
+	After a take	بعد اللقطة
+	Nothing	لا شيء
+	Show the folder	إظهار المجلد
+	Open in the audio editor	الفتح في محرر الصوت
+	Audio editor	محرر الصوت
+	The audio editor on the PATH	محرر الصوت في PATH
+	Programs	البرامج
+@msg	Audio tracks opened in the audio editor: {session}	فُتحت المسارات الصوتية في محرر الصوت: {session}
+@msg	The audio editor did not start ({error}); the folder {folder} is shown instead	لم يبدأ محرر الصوت ({error})؛ يُعرض المجلد {folder} بدلًا منه
+@msg	Audio tracks saved in {folder}	حُفظت المسارات الصوتية في {folder}
+@msg	The audio tracks could not be opened: {error}	تعذّر فتح المسارات الصوتية: {error}

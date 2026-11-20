@@ -261,9 +261,36 @@ impl AudioTracksWhen {
     }
 }
 
+/// What happens when a take of audio tracks ends and its session file is written.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AfterStop {
+    /// Nothing more.
+    #[default]
+    Nothing,
+    /// The take's folder opens in the file manager.
+    ShowFolder,
+    /// The take's session opens in the audio editor, or its folder in the file manager when the
+    /// editor cannot be started.
+    OpenEditor,
+}
+
+impl AfterStop {
+    pub const ALL: [AfterStop; 3] = [AfterStop::Nothing, AfterStop::ShowFolder, AfterStop::OpenEditor];
+
+    /// The name commands and files use.
+    pub fn id(self) -> &'static str {
+        match self {
+            AfterStop::Nothing => "nothing",
+            AfterStop::ShowFolder => "show_folder",
+            AfterStop::OpenEditor => "open_editor",
+        }
+    }
+}
+
 /// Audio tracks: each source set to record its own track, and the program mix, written to WAV
 /// files beside the recording.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AudioTracksSettings {
     pub enabled: bool,
@@ -274,6 +301,10 @@ pub struct AudioTracksSettings {
     pub buffer_mib: u32,
     /// Size at which a track's file is closed and the next part begins, in GiB.
     pub segment_gib: u32,
+    /// What happens when a take ends.
+    pub after_stop: AfterStop,
+    /// The audio editor's program; empty to look it up on the `PATH`.
+    pub editor_path: String,
 }
 
 impl AudioTracksSettings {
@@ -281,6 +312,8 @@ impl AudioTracksSettings {
     pub const BUFFER_MIB: std::ops::RangeInclusive<u32> = 16..=1024;
     /// The file sizes the audio tracks take, in GiB.
     pub const SEGMENT_GIB: std::ops::RangeInclusive<u32> = 1..=3;
+    /// Bytes an editor path holds at most.
+    pub const MAX_EDITOR_PATH: usize = 4096;
 
     /// The first value out of its range, as an error message.
     pub fn check(&self) -> Result<(), String> {
@@ -288,19 +321,37 @@ impl AudioTracksSettings {
             if r.contains(&v) { Ok(()) } else { Err(format!("audio_tracks.{name} is {v}; it must be from {} to {}", r.start(), r.end())) }
         };
         range("buffer_mib", self.buffer_mib, Self::BUFFER_MIB)?;
-        range("segment_gib", self.segment_gib, Self::SEGMENT_GIB)
+        range("segment_gib", self.segment_gib, Self::SEGMENT_GIB)?;
+        if !Self::editor_path_ok(&self.editor_path) {
+            return Err(format!("audio_tracks.editor_path must be at most {} bytes and hold no NUL character", Self::MAX_EDITOR_PATH));
+        }
+        Ok(())
     }
 
-    /// These settings with each size brought into its range.
+    fn editor_path_ok(path: &str) -> bool {
+        path.len() <= Self::MAX_EDITOR_PATH && !path.contains('\0')
+    }
+
+    /// These settings with each size brought into its range, and an editor path that cannot be
+    /// one cleared.
     pub fn sanitized(self) -> Self {
         let clamp = |v: u32, r: std::ops::RangeInclusive<u32>| v.clamp(*r.start(), *r.end());
-        Self { buffer_mib: clamp(self.buffer_mib, Self::BUFFER_MIB), segment_gib: clamp(self.segment_gib, Self::SEGMENT_GIB), ..self }
+        let editor_path = if Self::editor_path_ok(&self.editor_path) { self.editor_path } else { String::new() };
+        Self { buffer_mib: clamp(self.buffer_mib, Self::BUFFER_MIB), segment_gib: clamp(self.segment_gib, Self::SEGMENT_GIB), editor_path, ..self }
     }
 }
 
 impl Default for AudioTracksSettings {
     fn default() -> Self {
-        Self { enabled: false, when: AudioTracksWhen::Recording, include_program: true, buffer_mib: 96, segment_gib: 1 }
+        Self {
+            enabled: false,
+            when: AudioTracksWhen::Recording,
+            include_program: true,
+            buffer_mib: 96,
+            segment_gib: 1,
+            after_stop: AfterStop::Nothing,
+            editor_path: String::new(),
+        }
     }
 }
 

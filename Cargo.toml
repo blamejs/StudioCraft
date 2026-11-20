@@ -128,6 +128,8 @@ craft-window = { git = "https://github.com/storytold/craft-libs", rev = "7780b4f
 # The built-in H.264 encoder (and its decoder, for tests) and the AAC encoder.
 craft-video = { git = "https://github.com/storytold/craft-libs", rev = "7780b4f58ec3d56b1f908c8fa3b1258fabae3880", default-features = false, features = ["h264-encode", "threads"] }
 craft-audio = { git = "https://github.com/storytold/craft-libs", rev = "7780b4f58ec3d56b1f908c8fa3b1258fabae3880", default-features = false, features = ["aac-encode"] }
+# The audio editor's session file, written for the audio tracks of a take.
+craft-scraft-format = { git = "https://github.com/storytold/craft-libs", rev = "7780b4f58ec3d56b1f908c8fa3b1258fabae3880" }
 
 # egui 0.37 and winit: the suite's forks (storytold/egui, storytold/winit), as craft-libs pins them.
 [patch.crates-io]

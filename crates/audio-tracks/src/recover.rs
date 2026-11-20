@@ -2,7 +2,8 @@
 //! during the take): each file is cut to its whole frames and given a header for them, with its
 //! `bext` time reference kept. Each file keeps the audio it holds, so the files of a repaired take
 //! can end at different points: the chunks still in memory at the crash are lost, and their
-//! length differs from track to track.
+//! length differs from track to track. A take that made its own folder gets its session file
+//! written again from its journal and the repaired files' lengths ([`crate::session`]).
 
 use std::path::{Path, PathBuf};
 
@@ -18,6 +19,9 @@ pub struct Repaired {
     /// Frames the journal's last sync recorded for each file, which a repaired file holds at
     /// least.
     pub synced: Vec<(String, u64)>,
+    /// The take's session file, written again from the journal and the repaired files. `None`
+    /// for a take that did not make its own folder, which has no session.
+    pub session: Option<PathBuf>,
 }
 
 /// The `Audio Files` folders under `folder` whose take did not end: `folder` itself, its
@@ -160,10 +164,24 @@ pub fn repair(dir: &Path) -> std::io::Result<Option<Repaired>> {
     // A part after the first starts later in the take, so the take ends after its last frame.
     let start = |name: &str| starts.iter().find(|(f, _)| f == name).map_or(0, |(_, s)| *s);
     let end = files.iter().map(|(f, n)| start(f).saturating_add(*n)).max().unwrap_or(0);
+    // The session is rebuilt from the journal and the repaired files, as a take that finished
+    // writes it, before the journal ends. A session that cannot be written leaves the take
+    // unfinished, so the next repair writes it. Only a take whose journal says it made its own
+    // folder has a session: a take recorded into a folder it did not make leaves the files beside
+    // that folder alone.
+    let owns_session = lines.iter().any(|l| matches!(l, Line::Start { session: true, .. }));
+    let session = if owns_session {
+        Some(
+            crate::session::write_from(dir, &lines, 0, |f| crate::session::file_frames(dir, f))
+                .map_err(|e| std::io::Error::new(e.kind(), format!("the session file could not be written: {e}")))?,
+        )
+    } else {
+        None
+    };
     j.write(&Line::Repaired { files: files.clone() })?;
     j.write(&Line::End { frames: end })?;
     j.sync()?;
-    Ok(Some(Repaired { dir: dir.to_path_buf(), files, synced }))
+    Ok(Some(Repaired { dir: dir.to_path_buf(), files, synced, session }))
 }
 
 /// What repairing the takes under a folder did.

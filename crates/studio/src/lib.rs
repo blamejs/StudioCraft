@@ -6,6 +6,7 @@
 //! and the control channel all go through [`Studio::execute`]; after each change the studio
 //! brings the running parts in line with the collection.
 
+pub mod audio_editor;
 mod audio_tracks;
 pub mod capture;
 pub mod files;
@@ -364,6 +365,7 @@ impl Studio {
             match action {
                 RuntimeAction::AudioTracksStatus => result = self.audio_tracks_json(),
                 RuntimeAction::AudioTracksRepair { folder } => result = self.repair_audio_tracks(&folder)?,
+                RuntimeAction::AudioTracksOpenLast => result = self.open_last_audio_tracks()?,
                 RuntimeAction::StartRecording => self.start_output(OutputKind::Recording)?,
                 RuntimeAction::StopRecording => self.stop_output(OutputKind::Recording),
                 RuntimeAction::ToggleRecording => self.toggle_output(OutputKind::Recording)?,

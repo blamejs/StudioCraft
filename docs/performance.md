@@ -85,6 +85,19 @@ disk takes nothing for 40 seconds from second 5, with the default 96 MiB write b
 | Every file the full 60 s long | yes |
 | Feeder late | 0 ms |
 
+Measured on 2026-11-19 on Linux with `cargo bench -p studiocraft-audio-tracks --bench session`, in
+one run on one machine, for a 24-hour take of 9 tracks in 1 GiB parts (225 files) with 1,000
+markers and 100 dropouts:
+
+| Bench | Median | Range (95%) |
+| --- | --- | --- |
+| `session_build_9_tracks_24h_1000_markers` | 233.88 µs | 232.42 to 235.52 µs |
+| `session_write_9_tracks_24h_1000_markers` | 10.08 ms | 9.84 to 10.34 ms |
+
+The disk thread builds and writes the session once when a take starts and once after its files
+are complete, so neither runs on the per-block path. The write includes serializing the session
+and replacing the file with `craft-atomic`.
+
 The lost audio is replaced with silence in place, so each file still has the take's full length.
 A longer stall loses more; a larger buffer (up to 1024 MiB) holds more.
 

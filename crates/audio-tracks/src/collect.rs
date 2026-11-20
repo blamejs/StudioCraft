@@ -81,6 +81,8 @@ pub enum ToDisk {
     Track {
         track: usize,
         name: String,
+        /// The program mix's track (a spec with no source).
+        program: bool,
     },
     Chunk(Chunk),
     /// The end of the take, after every chunk and every dropout.
@@ -281,7 +283,7 @@ impl Collector {
                     let track = self.tracks.len();
                     let base = crate::names::sanitize(&spec.name, track + 1);
                     let name = crate::names::unique(&base, &mut self.used_names);
-                    self.send(ToDisk::Track { track, name });
+                    self.send(ToDisk::Track { track, name, program: spec.source.is_none() });
                     self.tracks.push(Track {
                         source: spec.source,
                         slot: Some(spec.slot),
@@ -880,7 +882,7 @@ mod tests {
         let take = |seen: &mut Vec<String>| {
             while let Some(m) = out.pop() {
                 seen.push(match m {
-                    ToDisk::Track { track, name } => format!("track {track} {name}"),
+                    ToDisk::Track { track, name, .. } => format!("track {track} {name}"),
                     ToDisk::Chunk(ch) => {
                         let s = format!("chunk {}", ch.track);
                         let _ = free.push(ch.data);

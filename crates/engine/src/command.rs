@@ -64,6 +64,8 @@ pub enum RuntimeAction {
     AudioTracksRepair {
         folder: String,
     },
+    /// Open the session of the last take of audio tracks in the audio editor.
+    AudioTracksOpenLast,
     OpenSettings,
     Exit,
 }
@@ -243,6 +245,10 @@ pub enum Command {
     /// take's `Audio Files` folder, its `<name> Audio` folder or the recording folder holding them.
     #[serde(rename = "audio_tracks.repair")]
     AudioTracksRepair { folder: String },
+    /// Open the session of the last take in the audio editor, or its folder when the editor
+    /// cannot be started.
+    #[serde(rename = "audio_tracks.open_last")]
+    AudioTracksOpenLast {},
     #[serde(rename = "app.settings")]
     OpenSettings {},
     #[serde(rename = "app.exit")]
@@ -332,6 +338,7 @@ impl Command {
             Command::ReplaySave {} => "replay.save",
             Command::AudioTracksStatus {} => "audio_tracks.status",
             Command::AudioTracksRepair { .. } => "audio_tracks.repair",
+            Command::AudioTracksOpenLast {} => "audio_tracks.open_last",
             Command::OpenSettings {} => "app.settings",
             Command::Exit {} => "app.exit",
             Command::AppLinks { .. } => "app.links",
@@ -420,6 +427,7 @@ const SPECS: &[CommandSpec] = &[
     spec("replay.save", "Save Replay", "", Undo::NotUndoable),
     spec("audio_tracks.status", "Audio Tracks Status", "", Undo::NotUndoable),
     spec("audio_tracks.repair", "Repair Audio Tracks", "folder: path to a take's folder or the recording folder", Undo::NotUndoable),
+    spec("audio_tracks.open_last", "Open Last Audio Tracks in Editor", "", Undo::NotUndoable),
     spec("app.settings", "Settings", "", Undo::NotUndoable),
     spec("app.exit", "Exit", "", Undo::NotUndoable),
     spec("app.links", "Community Links", "link?: discord|website|github|issues", Undo::NotUndoable),

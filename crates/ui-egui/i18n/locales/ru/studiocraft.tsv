@@ -482,3 +482,15 @@ menu	Transform	Преобразование
 @msg	Audio tracks could not be repaired: {takes} and {more} more	Не удалось восстановить звуковые дорожки: {takes} и ещё {more}
 @msg	Audio tracks could not be repaired: {takes}. Takes repaired: {count}	Не удалось восстановить звуковые дорожки: {takes}. Восстановлено дублей: {count}
 @msg	Audio tracks could not be repaired: {takes} and {more} more. Takes repaired: {count}	Не удалось восстановить звуковые дорожки: {takes} и ещё {more}. Восстановлено дублей: {count}
+	Open Last Audio Tracks in Editor	Открыть последние звуковые дорожки в редакторе
+	After a take	После дубля
+	Nothing	Ничего
+	Show the folder	Показать папку
+	Open in the audio editor	Открыть в звуковом редакторе
+	Audio editor	Звуковой редактор
+	The audio editor on the PATH	Звуковой редактор из PATH
+	Programs	Программы
+@msg	Audio tracks opened in the audio editor: {session}	Звуковые дорожки открыты в звуковом редакторе: {session}
+@msg	The audio editor did not start ({error}); the folder {folder} is shown instead	Звуковой редактор не запустился ({error}); вместо него показана папка {folder}
+@msg	Audio tracks saved in {folder}	Звуковые дорожки сохранены в {folder}
+@msg	The audio tracks could not be opened: {error}	Не удалось открыть звуковые дорожки: {error}

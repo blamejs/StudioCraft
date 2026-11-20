@@ -230,6 +230,12 @@ impl Headless {
             Command::AudioTracksRepair { folder } => {
                 self.allowed(Path::new(folder), Access::Write)?;
             }
+            // The editor or the file manager opens the last session.
+            Command::AudioTracksOpenLast {} => {
+                if let Some(session) = self.studio.audio_tracks_last_session() {
+                    self.allowed(session, Access::Read)?;
+                }
+            }
             Command::SourceAdd { kind, settings: Some(settings), .. } => {
                 if let Ok(plugin) = registry.source(kind) {
                     self.check_paths(&plugin.schema(), settings)?;

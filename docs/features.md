@@ -193,6 +193,24 @@ leaves it for repair. A take cut short by a crash is repaired
 at the next start, or with `studiocraft-cli audio-tracks repair <folder>`. Each repaired file keeps
 the audio that reached the disk, so the files of a repaired take can end at different points.
 
+A take that makes its own `<name> Audio` folder also writes `<name>.scraft` there, a session file
+for the audio editor. The file appears with no tracks when the take starts and is replaced with the
+full session when the take ends, stops early or is repaired. The session holds one track for each
+of the take's tracks, the program mix first. Each file is one clip at the sample of the output's timeline where the
+file starts, and each part follows the one before it. Each dropout (audio lost before the disk) is
+a selection on its track's marker lane, and a session lists at most 10,000 markers and dropouts.
+Its comments say when the take stopped early and how many markers and dropouts it left out. When the
+full session cannot be written, for example on a full disk, the take stops with that error and is
+left unfinished, and a repair of the take writes the session.
+
+Settings › Output › Audio tracks › After a take sets what happens when a take's files are complete:
+Nothing (the default), Show the folder, or Open in the audio editor. Audio editor sets the editor's
+program; when it is empty, `soundcraft` on the `PATH` is used. When the editor cannot be found or
+started, the take's folder opens instead and the status bar gives the reason. A take that ends
+because the next one starts (a recording that starts or stops during a stream) opens nothing.
+File › Open Last Audio Tracks in Editor opens the last session again, and can be given a shortcut
+in Settings › Hotkeys.
+
 ## Streaming
 
 StudioCraft streams to a Real-Time Messaging Protocol (RTMP) server at a constant bitrate. Set the

@@ -190,6 +190,7 @@ impl Engine {
                 }
                 Ok(Outcome::runtime(RuntimeAction::AudioTracksRepair { folder }))
             }
+            Command::AudioTracksOpenLast {} => Ok(Outcome::runtime(RuntimeAction::AudioTracksOpenLast)),
             Command::OpenSettings {} => Ok(Outcome::runtime(RuntimeAction::OpenSettings)),
             Command::Exit {} => Ok(Outcome::runtime(RuntimeAction::Exit)),
             // Queries: no history step, no revision bump, no change to the dirty flag.

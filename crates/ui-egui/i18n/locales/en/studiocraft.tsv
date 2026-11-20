@@ -522,3 +522,15 @@ menu	Transform	Transform
 @msg	Audio tracks could not be repaired: {takes} and {more} more	Audio tracks could not be repaired: {takes} and {more} more
 @msg	Audio tracks could not be repaired: {takes}. Takes repaired: {count}	Audio tracks could not be repaired: {takes}. Takes repaired: {count}
 @msg	Audio tracks could not be repaired: {takes} and {more} more. Takes repaired: {count}	Audio tracks could not be repaired: {takes} and {more} more. Takes repaired: {count}
+	Open Last Audio Tracks in Editor	Open Last Audio Tracks in Editor
+	After a take	After a take
+	Nothing	Nothing
+	Show the folder	Show the folder
+	Open in the audio editor	Open in the audio editor
+	Audio editor	Audio editor
+	The audio editor on the PATH	The audio editor on the PATH
+	Programs	Programs
+@msg	Audio tracks opened in the audio editor: {session}	Audio tracks opened in the audio editor: {session}
+@msg	The audio editor did not start ({error}); the folder {folder} is shown instead	The audio editor did not start ({error}); the folder {folder} is shown instead
+@msg	Audio tracks saved in {folder}	Audio tracks saved in {folder}
+@msg	The audio tracks could not be opened: {error}	The audio tracks could not be opened: {error}

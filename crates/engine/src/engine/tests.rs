@@ -387,6 +387,7 @@ fn runtime_commands_are_handed_to_the_app() {
         ("replay.toggle", RuntimeAction::ToggleReplay),
         ("replay.save", RuntimeAction::SaveReplay),
         ("audio_tracks.status", RuntimeAction::AudioTracksStatus),
+        ("audio_tracks.open_last", RuntimeAction::AudioTracksOpenLast),
         ("app.settings", RuntimeAction::OpenSettings),
         ("app.exit", RuntimeAction::Exit),
     ] {

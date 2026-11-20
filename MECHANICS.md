@@ -123,6 +123,13 @@ in both files.
 | Audio tracks folder | `<recording name> Audio/Audio Files`, or `Stream YYYY-MM-DD HH-MM-SS Audio/Audio Files` for a stream alone | `studio::audio_tracks::take_place` | estimated |
 | Audio tracks takes finishing before the next take waits | 2 | `studio::audio_tracks::MAX_FINISHING` | estimated |
 | Audio tracks wait for takes when the app closes | 10 s | `studio::audio_tracks::CLOSE_WAIT` | estimated |
+| Audio tracks session file | `<recording name> Audio/<recording name>.scraft` (session format version 1) | `audio_tracks::session::path_for` | estimated |
+| Markers and dropouts a session lists | 10,000 | `audio_tracks::session::MAX_LOCATIONS` | estimated |
+| Markers waiting for the disk thread | 1,024 | `audio_tracks::markers::QUEUED` | estimated |
+| Characters kept of a marker's name | 256 | `audio_tracks::markers::MAX_NAME_CHARS` | estimated |
+| After a take | Nothing | `model::profile::AfterStop` | estimated |
+| Audio editor looked up on the `PATH` | `soundcraft` | `studio::audio_editor::EDITOR_PROGRAM` | estimated |
+| Openings of a session or folder at once | 4 | `studio::audio_tracks::MAX_OPENING` | estimated |
 
 ## Editing
 

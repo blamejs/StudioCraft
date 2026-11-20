@@ -473,3 +473,15 @@ menu	Transform	변형
 @msg	Audio tracks could not be repaired: {takes} and {more} more	오디오 트랙을 복구할 수 없습니다: {takes} 외 {more}개
 @msg	Audio tracks could not be repaired: {takes}. Takes repaired: {count}	오디오 트랙을 복구할 수 없습니다: {takes}. 복구된 테이크: {count}
 @msg	Audio tracks could not be repaired: {takes} and {more} more. Takes repaired: {count}	오디오 트랙을 복구할 수 없습니다: {takes} 외 {more}개. 복구된 테이크: {count}
+	Open Last Audio Tracks in Editor	마지막 오디오 트랙을 편집기에서 열기
+	After a take	테이크 후
+	Nothing	아무것도 하지 않음
+	Show the folder	폴더 보기
+	Open in the audio editor	오디오 편집기에서 열기
+	Audio editor	오디오 편집기
+	The audio editor on the PATH	PATH의 오디오 편집기
+	Programs	프로그램
+@msg	Audio tracks opened in the audio editor: {session}	오디오 트랙을 오디오 편집기에서 열었습니다: {session}
+@msg	The audio editor did not start ({error}); the folder {folder} is shown instead	오디오 편집기가 시작되지 않았습니다({error}). 대신 {folder} 폴더를 표시합니다
+@msg	Audio tracks saved in {folder}	오디오 트랙을 {folder}에 저장했습니다
+@msg	The audio tracks could not be opened: {error}	오디오 트랙을 열 수 없습니다: {error}

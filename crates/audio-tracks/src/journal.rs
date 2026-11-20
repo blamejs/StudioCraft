@@ -27,7 +27,9 @@ pub enum Line {
     /// the take follows no output. Take frame 0 is `offset_frames` frames into that timeline, at
     /// `origin_tick` on the studio's clock (none when frame 0 is the first block the take got).
     /// Each file's `bext` time reference is `offset_frames` plus the file's `first_frame`.
-    /// `started_unix_ms` is the wall-clock time of take frame 0, when known.
+    /// `started_unix_ms` is the wall-clock time of take frame 0, when known. `session` is true
+    /// when the take made its own folder and writes a session file there (false in journals
+    /// written before it).
     Start {
         version: u32,
         sample_rate: u32,
@@ -36,9 +38,22 @@ pub enum Line {
         origin_tick: Option<i64>,
         offset_frames: u64,
         started_unix_ms: Option<i64>,
+        #[serde(default)]
+        session: bool,
     },
     /// A track's file was opened. `first_frame` is the take frame its first sample is at.
-    File { track: usize, name: String, file: String, segment: u32, first_frame: u64 },
+    /// `program` is true for the program mix's track (false in journals written before it).
+    File {
+        track: usize,
+        name: String,
+        file: String,
+        segment: u32,
+        first_frame: u64,
+        #[serde(default)]
+        program: bool,
+    },
+    /// A marker set during the take ([`crate::TakeMarkers`]), at take frame `at`.
+    Marker { at: u64, name: String },
     /// After a sync: frames each track's current file held on disk, for the tracks whose files
     /// grew since the last sync.
     Sync { tracks: Vec<(usize, u64)> },

@@ -1059,4 +1059,94 @@ mod audio_tracks {
         assert_eq!(s.state_json()["audio_tracks"]["repairing"], json!(false), "and starts no repair");
         let _ = std::fs::remove_dir_all(&dir);
     }
+
+    #[test]
+    fn a_take_that_ends_opens_its_session_and_a_missing_editor_shows_its_folder() {
+        let (mut s, dir) = studio("after-stop", true);
+        let fake = Arc::new(crate::audio_editor::tests::Fake::default());
+        s.audio_tracks.launcher = Some(fake.clone());
+        let mut p = s.profile().clone();
+        p.audio_tracks.after_stop = studiocraft_model::AfterStop::OpenEditor;
+        s.set_profile(p).unwrap();
+        let none = s.run("audio_tracks.open_last", &json!({})).unwrap_err().to_string();
+        assert!(none.contains("no take of audio tracks has ended"), "{none}");
+        s.test_streaming = true;
+        s.tick();
+        armed(&mut s);
+        s.test_streaming = false;
+        s.tick();
+        let mut spins = 0u64;
+        while !s.audio_tracks.finishing.is_empty() {
+            spins += 1;
+            assert!(spins < 200_000_000, "the take never finished");
+            s.tick();
+            std::thread::yield_now();
+        }
+        s.audio_tracks_opened();
+        let session = s.state_json()["audio_tracks"]["last_session"].as_str().map(std::path::PathBuf::from).unwrap();
+        assert!(session.is_file() && session.extension().is_some_and(|e| e == "scraft"), "{}", session.display());
+        let folder = session.parent().unwrap().to_path_buf();
+        assert_eq!(*fake.log.lock().unwrap(), [format!("folder {}", folder.display())], "the editor is not on the PATH, so the folder opens");
+        let notices: Vec<String> = s.take_notices().into_iter().map(|n| n.text()).collect();
+        assert!(notices.iter().any(|n| n.starts_with("The audio editor did not start") && n.contains(&folder.display().to_string())), "{notices:?}");
+        // The command opens the same session again, and returns before the opening ends.
+        let (v, _) = s.run("audio_tracks.open_last", &json!({})).unwrap();
+        assert_eq!(v["session"], json!(session.display().to_string()));
+        s.audio_tracks_opened();
+        assert_eq!(fake.log.lock().unwrap().len(), 2);
+        drop(s);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A studio whose takes show their folder when they end, through `fake`.
+    fn showing_folders(name: &str, fake: &Arc<crate::audio_editor::tests::Fake>) -> (Studio, std::path::PathBuf) {
+        let (mut s, dir) = studio(name, true);
+        s.audio_tracks.launcher = Some(fake.clone());
+        let mut p = s.profile().clone();
+        p.audio_tracks.after_stop = studiocraft_model::AfterStop::ShowFolder;
+        s.set_profile(p).unwrap();
+        (s, dir)
+    }
+
+    #[test]
+    fn takes_that_end_between_two_ticks_each_show_their_folder() {
+        let fake = Arc::new(crate::audio_editor::tests::Fake::default());
+        let (mut s, dir) = showing_folders("after-stop-two", &fake);
+        for _ in 0..2 {
+            s.test_streaming = true;
+            s.tick();
+            armed(&mut s);
+            s.test_streaming = false;
+            s.tick();
+        }
+        assert_eq!(s.audio_tracks.finishing.len(), 2, "both takes are still finishing");
+        // Both takes finish before the next tick looks at them; the mixer's handed-back tap sets
+        // are freed here as a tick would.
+        let mut spins = 0u64;
+        while !s.audio_tracks.finishing.iter().all(|f| f.0.finished()) {
+            spins += 1;
+            assert!(spins < 200_000_000, "the takes never finished");
+            s.mixer.free_retired();
+            std::thread::yield_now();
+        }
+        s.tick();
+        s.audio_tracks_opened();
+        assert_eq!(fake.log.lock().unwrap().len(), 2, "{:?}", fake.log.lock().unwrap());
+        drop(s);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_take_running_when_the_app_closes_shows_its_folder() {
+        let fake = Arc::new(crate::audio_editor::tests::Fake::default());
+        let (mut s, dir) = showing_folders("after-stop-close", &fake);
+        s.test_streaming = true;
+        s.tick();
+        armed(&mut s);
+        drop(s);
+        let log = fake.log.lock().unwrap().clone();
+        assert_eq!(log.len(), 1, "{log:?}");
+        assert!(log[0].starts_with("folder "), "{log:?}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

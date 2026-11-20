@@ -34,6 +34,7 @@ description in [docs/features.md](docs/features.md).
 - MKV, MP4 and MOV files, including recordings at the Lossless quality level, are recorded through an external ffmpeg ([When `ffmpeg` is needed](docs/features.md#when-ffmpeg-is-needed)).
 - The replay buffer keeps the last 5 to 3600 seconds in memory and saves them to an MKV file while it keeps running ([Replay buffer](docs/features.md#replay-buffer)).
 - Each audio source and the program mix are written to their own WAV files while a recording or the stream runs, and takes cut short by a crash are repaired ([Audio tracks](docs/features.md#audio-tracks)).
+- Each take of audio tracks writes a session file for the audio editor, with markers set during the take and dropouts marked, and can open it in the editor when it ends ([Audio tracks](docs/features.md#audio-tracks)).
 
 ### Streaming
 

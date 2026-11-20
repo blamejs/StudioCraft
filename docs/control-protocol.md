@@ -68,6 +68,13 @@ returns `{"started": true, "folder"}` at once. When the repair ends, `last_repai
 `{"repaired": [{"folder", "files": [{"file", "seconds"}]}], "failed": [{"folder", "error"}]}`,
 where `failed` lists each take that could not be repaired, such as one whose journal does not read.
 An empty `folder`, one that does not exist and a fifth repair while four run are errors. A take that is still being written, or that another repair holds, is left unchanged.
+Each repaired take's entry also has `session`, the session file the repair wrote, or `null` for a
+take that did not make its own folder.
+`audio_tracks.open_last` takes no params and opens the last take's session file in the audio
+editor on a background thread, or the take's folder when the editor cannot be found or started; it
+returns `{"started": true, "session"}` at once, and a notice reports what happened. The last session
+is the last one a take wrote when it ended or a repair wrote, and `audio_tracks.status` returns it
+as `last_session`. No session yet and a fifth opening while four run are errors.
 
 `dock.layout_save` takes `{"name"}` and saves every dock setting under that name, replacing a
 layout whose name differs only in case; it returns `{"saved", "replaced"}`. Without `name` it
