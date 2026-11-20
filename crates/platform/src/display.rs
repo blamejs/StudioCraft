@@ -42,6 +42,15 @@ impl DisplayCapture {
     }
 }
 
+/// A size in a display's reported units as pixels, `scale` pixels to the unit. A scale that is
+/// not a finite number from 1/8 to 8 is taken as 1.
+#[cfg_attr(not(any(windows, target_os = "macos")), allow(dead_code))]
+fn pixels(width: u32, height: u32, scale: f32) -> (u32, u32) {
+    let k = if scale.is_finite() && (0.125..=8.0).contains(&scale) { f64::from(scale) } else { 1.0 };
+    let side = |v: u32| (f64::from(v) * k).round().clamp(0.0, f64::from(u32::MAX)) as u32;
+    (side(width), side(height))
+}
+
 /// Copy an RGBA picture into `frame`.
 #[cfg(any(windows, target_os = "macos"))]
 pub(crate) fn fill(frame: &mut VideoFrame, width: u32, height: u32, rgba: &[u8]) -> Result<(), PlatformError> {
@@ -57,7 +66,7 @@ mod imp {
     use studiocraft_media::video::VideoFrame;
     use xcap::Monitor;
 
-    use super::{DisplayInfo, fill};
+    use super::{DisplayInfo, fill, pixels};
     use crate::PlatformError;
 
     pub fn displays() -> Vec<DisplayInfo> {
@@ -66,13 +75,25 @@ mod imp {
 
     fn info(m: &Monitor) -> Option<DisplayInfo> {
         let name = m.friendly_name().or_else(|_| m.name()).unwrap_or_default();
+        let (width, height) = pixels(m.width().ok()?, m.height().ok()?, scale(m));
         Some(DisplayInfo {
             id: m.id().ok()?.to_string(),
             name: if name.is_empty() { "Display".into() } else { name },
-            width: m.width().ok()?,
-            height: m.height().ok()?,
+            width,
+            height,
             primary: m.is_primary().unwrap_or(false),
         })
+    }
+
+    /// Pixels per reported unit: macOS reports a display's size in points, Windows in pixels.
+    #[cfg(target_os = "macos")]
+    fn scale(m: &Monitor) -> f32 {
+        m.scale_factor().unwrap_or(1.0)
+    }
+
+    #[cfg(windows)]
+    fn scale(_m: &Monitor) -> f32 {
+        1.0
     }
 
     pub struct Capture {
@@ -162,6 +183,17 @@ mod tests {
         if cap.grab(&mut f).is_ok() {
             assert!(f.is_consistent());
         }
+    }
+
+    #[test]
+    fn a_size_in_points_becomes_pixels() {
+        assert_eq!(pixels(1512, 982, 2.0), (3024, 1964));
+        assert_eq!(pixels(1920, 1080, 1.0), (1920, 1080));
+        assert_eq!(pixels(1280, 800, 1.5), (1920, 1200));
+        for bad in [f32::NAN, f32::INFINITY, 0.0, -2.0, 100.0] {
+            assert_eq!(pixels(1920, 1080, bad), (1920, 1080), "{bad}");
+        }
+        assert_eq!(pixels(u32::MAX, 1, 8.0), (u32::MAX, 8));
     }
 
     #[cfg(any(windows, target_os = "macos"))]

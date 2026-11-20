@@ -58,6 +58,8 @@ pub const UI_COMMANDS: &[(&str, &str)] = &[
     ("collection.import", "Import Scene Collection…"),
     ("collection.export", "Export Scene Collection…"),
     ("tools.encoders", "Available Encoders"),
+    ("video.displays", "List Displays"),
+    ("video.canvas_from_display", "Canvas Size from Display"),
     ("selection.properties", "Properties…"),
     ("selection.filters", "Filters…"),
     ("selection.remove", "Remove Selected Source"),
@@ -91,6 +93,7 @@ pub fn ui_params(id: &str) -> &'static str {
         "dock.float" => "dock: string (scenes, sources or mixer), floating: boolean (true for a window of its own, false for the strip)",
         "dock.layout_save" => "name?: string (without it the window asks for one)",
         "dock.layout_apply" | "dock.layout_remove" => "name: string",
+        "video.canvas_from_display" => "display?: string (an id from video.displays; without it, the display the window is on)",
         _ => "",
     }
 }

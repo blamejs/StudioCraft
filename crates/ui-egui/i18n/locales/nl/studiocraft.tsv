@@ -36,6 +36,12 @@
 	camera access is not allowed in the system's privacy settings	cameratoegang is niet toegestaan in de privacyinstellingen van het systeem
 	Cancel	Annuleren
 	Canvas size	Canvasgrootte
+	Canvas Size from Display	Canvasgrootte van beeldscherm
+	List Displays	Beeldschermen weergeven
+	Match display	Aan beeldscherm aanpassen
+	Choose a display	Kies een beeldscherm
+	The display this window is on	Het beeldscherm waarop dit venster staat
+	{name}: {width} × {height}	{name}: {width} × {height}
 	Capture rate (frames per second)	Opnamesnelheid (beelden per seconde)
 	Ceiling (dB)	Plafond (dB)
 	Center	Midden

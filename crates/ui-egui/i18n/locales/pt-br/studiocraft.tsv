@@ -38,6 +38,12 @@
 	camera access is not allowed in the system's privacy settings	o acesso à câmera não é permitido nas configurações de privacidade do sistema
 	Cancel	Cancelar
 	Canvas size	Tamanho da tela de pintura
+	Canvas Size from Display	Tamanho da tela de pintura pela tela
+	List Displays	Listar telas
+	Match display	Igualar à tela
+	Choose a display	Escolha uma tela
+	The display this window is on	A tela em que esta janela está
+	{name}: {width} × {height}	{name}: {width} × {height}
 	Capture rate (frames per second)	Taxa de captura (quadros por segundo)
 	Ceiling (dB)	Teto (dB)
 	Center	Centro

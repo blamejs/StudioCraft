@@ -38,6 +38,12 @@
 	camera access is not allowed in the system's privacy settings	sistemin gizlilik ayarlarında kamera erişimine izin verilmiyor
 	Cancel	İptal
 	Canvas size	Tuval boyutu
+	Canvas Size from Display	Ekrandan tuval boyutu
+	List Displays	Ekranları listele
+	Match display	Ekrana eşle
+	Choose a display	Bir ekran seçin
+	The display this window is on	Bu pencerenin bulunduğu ekran
+	{name}: {width} × {height}	{name}: {width} × {height}
 	Capture rate (frames per second)	Yakalama hızı (saniyedeki kare)
 	Ceiling (dB)	Tavan (dB)
 	Center	Orta
