@@ -98,7 +98,7 @@ impl SourceInstance for Instance {
     }
 }
 
-fn load_font(family: &str) -> Result<craft_font_catalog::FontData, PluginError> {
+pub(crate) fn load_font(family: &str) -> Result<craft_font_catalog::FontData, PluginError> {
     let catalog = Catalog::global();
     if !catalog.is_ready() {
         catalog.rescan();
@@ -113,7 +113,7 @@ fn load_font(family: &str) -> Result<craft_font_catalog::FontData, PluginError> 
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-struct Style {
+pub(crate) struct Style {
     size: f32,
     color: [u8; 4],
     align: f32,
@@ -123,7 +123,7 @@ struct Style {
 }
 
 impl Style {
-    fn read(s: &Settings) -> Style {
+    pub(crate) fn read(s: &Settings) -> Style {
         Style {
             size: uint(s, "size", 96, 6, 1024) as f32,
             color: s.color("color").unwrap_or([255; 4]),
@@ -140,7 +140,7 @@ impl Style {
 }
 
 /// Draw `text` into `out` as straight-alpha RGBA; the picture's size.
-fn render<F: Font>(font: &F, text: &str, style: &Style, out: &mut Vec<u8>) -> Result<(u32, u32), PluginError> {
+pub(crate) fn render<F: Font>(font: &F, text: &str, style: &Style, out: &mut Vec<u8>) -> Result<(u32, u32), PluginError> {
     let scaled = font.as_scaled(PxScale::from(style.size));
     let line_height = scaled.ascent() - scaled.descent() + scaled.line_gap();
     let widths: Vec<f32> = text

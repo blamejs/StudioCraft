@@ -2,11 +2,12 @@
 //!
 //! [`Studio`] owns the [`Engine`] (the scene collection and its undo history) and everything that
 //! runs from it: one thread per source, the audio mixer, the compositor's frame thread, the
-//! scene transition in progress, and the recording and stream. The interface, hotkeys, scripts
-//! and the control channel all go through [`Studio::execute`]; after each change the studio
-//! brings the running parts in line with the collection.
+//! scene transition in progress, the recording and stream, and live captions. The interface,
+//! hotkeys, scripts and the control channel all go through [`Studio::execute`]; after each change
+//! the studio brings the running parts in line with the collection.
 
 mod audio_tracks;
+mod captions;
 pub mod capture;
 pub mod files;
 mod monitor;
@@ -37,6 +38,7 @@ use studiocraft_render::{CanvasViews, CaptureRequest, Compositor, Gpu, RenderSha
 use studiocraft_sources::FfmpegSetting;
 
 pub use audio_tracks::{PROGRAM_NAME, clock_text};
+pub use captions::{CaptionState, Loader as CaptionLoader, ModelFileFilter, default_models_dir};
 pub use files::FileError;
 pub use outputs::{OutputKind, OutputState, recording_folder, recording_path, replay_path};
 pub use studiocraft_audio_tracks::{State as AudioTracksState, Status as AudioTracksStatus, StopReason as AudioTracksStopReason};
@@ -238,6 +240,8 @@ pub struct Studio {
     monitor: monitor::Monitor,
     /// Each recorded source and the program mix written to its own file.
     audio_tracks: audio_tracks::AudioTracks,
+    /// Speech recognition of the program audio, and the caption files of recordings.
+    captions: captions::Captions,
     /// Faults the tests put into the audio tracks' disk side.
     #[cfg(test)]
     test_faults: studiocraft_audio_tracks::Faults,
@@ -310,6 +314,7 @@ impl Studio {
             scope_feed: None,
             monitor: monitor::Monitor::new(Arc::new(studiocraft_platform::audio::SystemSink)),
             audio_tracks: audio_tracks::AudioTracks::default(),
+            captions: captions::Captions::default(),
             #[cfg(test)]
             test_faults: studiocraft_audio_tracks::Faults::default(),
             #[cfg(test)]
@@ -350,6 +355,9 @@ impl Studio {
             self.quick = Some((kind, *ms));
         }
         let transition = matches!(cmd, Command::StudioTransition { .. });
+        // Finished caption work is collected first, so a status reads the current state and a
+        // start or download does not meet a worker that has already ended.
+        self.sync_captions();
         let outcome = self.engine.execute(cmd);
         let outcome = match outcome {
             Ok(o) => o,
@@ -374,11 +382,18 @@ impl Studio {
                 RuntimeAction::StopReplay => self.stop_output(OutputKind::Replay),
                 RuntimeAction::ToggleReplay => self.toggle_output(OutputKind::Replay)?,
                 RuntimeAction::SaveReplay => self.save_replay()?,
+                RuntimeAction::CaptionsStart { model, language } => result = self.start_captions(model, language)?,
+                RuntimeAction::CaptionsStop => self.stop_captions(),
+                RuntimeAction::CaptionsToggle => result = self.toggle_captions()?,
+                RuntimeAction::CaptionsStatus => result = self.captions_json(),
+                RuntimeAction::CaptionsDownload { model } => result = self.download_speech_model(model)?,
+                RuntimeAction::CaptionsDownloadCancel => self.cancel_speech_model_download(),
                 RuntimeAction::OpenSettings => ui = Some(UiAction::OpenSettings),
                 RuntimeAction::Exit => ui = Some(UiAction::Exit),
             }
             // A recording or stream that started or stopped starts or stops the audio tracks now.
             self.sync_audio_tracks();
+            self.sync_captions();
         }
         if outcome.changed {
             self.refresh();
@@ -466,6 +481,7 @@ impl Studio {
             self.mixer.send(MixerCmd::RemoveOutput { id });
         }
         self.sync_audio_tracks();
+        self.sync_captions();
         self.mixer.free_retired();
     }
 
@@ -835,6 +851,7 @@ impl Studio {
             }
             o.insert("monitoring".into(), monitoring);
             o.insert("audio_tracks".into(), self.audio_tracks_json());
+            o.insert("captions".into(), self.captions_json());
             o.insert(
                 "stats".into(),
                 json!({
@@ -887,6 +904,8 @@ impl Drop for Studio {
         self.stop_audio_tracks();
         self.outputs.stop_all_blocking();
         self.finish_audio_tracks_blocking();
+        // Caption files of a recording that just stopped are written before the studio closes.
+        self.finish_captions_blocking();
     }
 }
 

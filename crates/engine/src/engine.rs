@@ -255,6 +255,22 @@ impl Engine {
                 }
                 Ok(Outcome::runtime(RuntimeAction::AudioTracksRepair { folder }))
             }
+            Command::CaptionsStart { model, language } => {
+                if model.as_deref().is_some_and(|m| m.trim().is_empty()) || language.as_deref().is_some_and(|l| l.trim().is_empty()) {
+                    return Err(EngineError::Invalid("the speech model or language is empty".into()));
+                }
+                Ok(Outcome::runtime(RuntimeAction::CaptionsStart { model, language }))
+            }
+            Command::CaptionsStop {} => Ok(Outcome::runtime(RuntimeAction::CaptionsStop)),
+            Command::CaptionsToggle {} => Ok(Outcome::runtime(RuntimeAction::CaptionsToggle)),
+            Command::CaptionsStatus {} => Ok(Outcome::runtime(RuntimeAction::CaptionsStatus)),
+            Command::CaptionsDownload { model } => {
+                if model.as_deref().is_some_and(|m| m.trim().is_empty()) {
+                    return Err(EngineError::Invalid("the speech model is empty".into()));
+                }
+                Ok(Outcome::runtime(RuntimeAction::CaptionsDownload { model }))
+            }
+            Command::CaptionsDownloadCancel {} => Ok(Outcome::runtime(RuntimeAction::CaptionsDownloadCancel)),
             Command::OpenSettings {} => Ok(Outcome::runtime(RuntimeAction::OpenSettings)),
             Command::Exit {} => Ok(Outcome::runtime(RuntimeAction::Exit)),
             // Queries: no history step, no revision bump, no change to the dirty flag.

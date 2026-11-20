@@ -1,6 +1,6 @@
 [package]
 name = "studiocraft-sources"
-description = "Built-in sources and filters: color, image, text, media file, display and window capture, audio devices, application audio"
+description = "Built-in sources and filters: color, image, text, media file, display and window capture, audio devices, application audio, live captions"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -16,6 +16,8 @@ craft-font-catalog.workspace = true
 craft-color-transform.workspace = true
 craft-audio-dsp.workspace = true
 craft-app-audio.workspace = true
+# The speech model catalog the Live Captions source offers.
+craft-speech.workspace = true
 craft-audio = { workspace = true, features = ["vorbis-decode"] }
 craft-media = { workspace = true, features = ["ogg"] }
 ab_glyph.workspace = true

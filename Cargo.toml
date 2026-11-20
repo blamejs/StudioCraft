@@ -38,6 +38,7 @@ craft-transitions = { path = "crates/craft-transitions" }
 craft-flv = { path = "crates/craft-flv" }
 craft-packet = { path = "crates/craft-packet" }
 craft-rtmp = { path = "crates/craft-rtmp" }
+craft-speech = { path = "crates/craft-speech" }
 
 # foundation
 thiserror = "2"
@@ -75,6 +76,17 @@ winapi-util = "0.1"
 criterion = { version = "0.8", default-features = false, features = ["cargo_bench_support"] }
 # contributors/people.toml, read by the engine's build script.
 toml = "1"
+# Speech models: the SHA-256 of each downloaded file.
+sha2 = "0.10"
+# Speech models: the spectrogram's frames on every core.
+rayon = "1"
+# Speech models: Whisper inference on the CPU, pure Rust.
+candle-core = { version = "0.9", default-features = false }
+candle-nn = { version = "0.9", default-features = false }
+# Speech models: downloads over HTTPS with rustls and the system's certificate checks.
+ureq = { version = "3", default-features = false, features = ["rustls-no-provider", "_ring", "platform-verifier"] }
+# Tests only: temporary folders.
+tempfile = "3"
 
 # gpu (the wgpu eframe and egui-wgpu use)
 wgpu = "30"
@@ -139,6 +151,8 @@ craft-color-transform = { git = "https://github.com/storytold/craft-libs", rev =
 craft-atomic = { git = "https://github.com/storytold/craft-libs", rev = "a49329e71e32ad93794ab595c41f33209a7d2220" }
 craft-fonts-build = { git = "https://github.com/storytold/craft-libs", rev = "a49329e71e32ad93794ab595c41f33209a7d2220" }
 craft-i18n = { git = "https://github.com/storytold/craft-libs", rev = "a49329e71e32ad93794ab595c41f33209a7d2220" }
+# Caption cues and the SubRip, WebVTT and plain-text files written beside a recording.
+craft-captions = { git = "https://github.com/storytold/craft-libs", rev = "a49329e71e32ad93794ab595c41f33209a7d2220" }
 # The Matroska writer for recordings, the Ogg reader for Ogg Vorbis media files, and in tests the demuxers that read
 # back what the writers here produce.
 craft-media ={ git = "https://github.com/storytold/craft-libs", rev = "a49329e71e32ad93794ab595c41f33209a7d2220", default-features = false }

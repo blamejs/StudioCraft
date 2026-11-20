@@ -30,6 +30,7 @@ shown or hidden, and every change can be undone.
 | Audio input capture | A microphone or other input device. | Windows, macOS and Linux |
 | Audio output capture | The sound the computer plays (desktop audio). | Windows and Linux |
 | Application audio capture | The sound one application plays. | Windows 11 and Windows Server 2022 |
+| Live Captions | The words heard in the program audio, while live captions run. | All |
 
 ### Display and window capture on Linux
 
@@ -227,6 +228,32 @@ that reached the disk and are finished at once; a failure while the take was fin
 leaves it for repair. A take cut short by a crash is repaired
 at the next start, or with `studiocraft-cli audio-tracks repair <folder>`. Each repaired file keeps
 the audio that reached the disk, so the files of a repaired take can end at different points.
+
+### Live captions
+
+Tools › Live Captions turns the program audio into text on this computer with a Whisper speech
+model. A Live Captions source shows the text on the program: by default the last 2 lines of up to
+42 characters in white on a translucent black box. A line is cleared 4 seconds after it last changed. Its
+Properties window sets the speech model and language that Tools › Live Captions starts with, and
+the lines, characters per line, font, size, colors, outline and alignment. The phrase being spoken
+appears at once and is corrected when it is finished.
+
+| Model | Download | Notes |
+| --- | --- | --- |
+| Whisper tiny | 146 MiB | Fastest, least accurate |
+| Whisper base | 280 MiB | The default |
+| Whisper small | 925 MiB | Most accurate, and slowest |
+
+A model is downloaded once, with Tools › Download Speech Model (the model the first Live Captions
+source names) or `captions.download`, into `StudioCraft/models` in the user's local
+data folder (`%LOCALAPPDATA%` on Windows, `~/Library/Application Support` on macOS,
+`~/.local/share` on Linux). Each file is checked against its size and SHA-256 sum. Recognition runs
+on the processor, and no audio leaves the computer.
+
+A recording that ran while captions ran gets caption files beside it: `<recording name>.srt`,
+`.vtt` and a plain-text `.txt`, timed from the recording's start. A recording in which no phrase
+was recognized gets no caption files. A file of that name that already
+exists is not replaced. Start or Stop Live Captions can be given a shortcut in Settings › Hotkeys.
 
 ## Streaming
 

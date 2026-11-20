@@ -1242,6 +1242,64 @@ fn replay_tools_report_the_replay_buffer() {
 }
 
 #[test]
+fn speech_models_are_held_to_the_roots() {
+    let dir = root_folders("speech-roots");
+    let roots = Roots::new(&[dir.join("in")], &[dir.join("out")]).unwrap();
+    let mut h = Headless::with_options(None, ServerOptions { allow_streaming: false, roots: Some(roots) }).unwrap();
+    h.studio_mut().set_models_dir(dir.join("outside"));
+    let mut s = Server::new(Box::new(h)).unwrap();
+    let text = error_text(&call(&mut s, "command_run", json!({"id": "captions.download", "params": {"model": "whisper-tiny"}})));
+    assert!(text.contains("outside the write roots"), "{text}");
+    assert!(!dir.join("outside").join("whisper-tiny").exists(), "nothing was downloaded");
+    for id in ["captions.start", "captions.toggle"] {
+        let text = error_text(&call(&mut s, "command_run", json!({"id": id, "params": {}})));
+        assert!(text.contains("outside the read roots"), "{id}: {text}");
+    }
+    // The status does not look at model files outside the read roots.
+    let status = ok_json(&call(&mut s, "command_run", json!({"id": "captions.status", "params": {}})));
+    let rows = status["models"].as_array().unwrap();
+    assert!(!rows.is_empty() && rows.iter().all(|m| m["downloaded"].is_null()), "{status}");
+    let roots = Roots::new(&[dir.join("outside")], &[]).unwrap();
+    let mut h = Headless::with_options(None, ServerOptions { allow_streaming: false, roots: Some(roots) }).unwrap();
+    h.studio_mut().set_models_dir(dir.join("outside"));
+    let mut s = Server::new(Box::new(h)).unwrap();
+    let status = ok_json(&call(&mut s, "command_run", json!({"id": "captions.status", "params": {}})));
+    assert!(status["models"].as_array().unwrap().iter().all(|m| m["downloaded"] == false), "{status}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_linked_speech_model_folder_is_held_to_the_roots() {
+    let dir = root_folders("speech-link-roots");
+    let target = dir.join("outside").join("linked");
+    std::fs::create_dir_all(&target).unwrap();
+    // `captions.toggle` names no model, so it reads the default one.
+    for root in ["in", "out"] {
+        std::fs::create_dir_all(dir.join(root).join("models")).unwrap();
+        for model in ["whisper-tiny", "whisper-base"] {
+            std::os::unix::fs::symlink(&target, dir.join(root).join("models").join(model)).unwrap();
+        }
+    }
+    let roots = Roots::new(&[dir.join("in")], &[dir.join("out")]).unwrap();
+    let mut h = Headless::with_options(None, ServerOptions { allow_streaming: false, roots: Some(roots.clone()) }).unwrap();
+    h.studio_mut().set_models_dir(dir.join("out").join("models"));
+    let mut s = Server::new(Box::new(h)).unwrap();
+    let text = error_text(&call(&mut s, "command_run", json!({"id": "captions.download", "params": {"model": "whisper-tiny"}})));
+    assert!(text.contains("outside the write roots"), "{text}");
+    assert_eq!(std::fs::read_dir(&target).unwrap().count(), 0, "nothing was written through the link");
+    let mut h = Headless::with_options(None, ServerOptions { allow_streaming: false, roots: Some(roots) }).unwrap();
+    h.studio_mut().set_models_dir(dir.join("in").join("models"));
+    let mut s = Server::new(Box::new(h)).unwrap();
+    for id in ["captions.start", "captions.toggle"] {
+        let params = if id == "captions.start" { json!({"model": "whisper-tiny"}) } else { json!({}) };
+        let text = error_text(&call(&mut s, "command_run", json!({"id": id, "params": params})));
+        assert!(text.contains("outside the read roots"), "{id}: {text}");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn replay_save_is_held_to_the_write_roots() {
     let dir = root_folders("replay-roots");
     let roots = Roots::new(&[dir.join("in")], &[dir.join("out")]).unwrap();

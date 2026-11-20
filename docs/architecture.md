@@ -26,6 +26,7 @@ crate in the same layer. `cargo xtask layers` checks this against the table in
 | L0 | `craft-hwenc` | The hardware encoders ffmpeg runs, a one-frame test encode of each with results kept for the session, and an automatic choice ordered by the graphics adapter's vendor with a software fallback. It depends on no StudioCraft crate. |
 | L0 | `craft-hwenc-native` | Hardware encoders called through their drivers: NVENC H.264 and HEVC from NV12 or P010 frames on Windows (Direct3D 11) and 64-bit Linux (CUDA), the Windows Media Foundation, macOS VideoToolbox and Linux VA-API hardware H.264 and HEVC encoders from NV12 frames, the Annex B helpers, and the `avcC` and `hvcC` records. Its private `nvenc_ffi`, `mf_ffi`, `vt_ffi` and `vaapi_ffi` modules are the only code that calls the drivers. It depends on no StudioCraft crate. |
 | L0 | `craft-app-audio` | Per-application audio: the running applications that have audio, kept current by one discovery thread, a lock-free peak meter for each, and the capture of one application's audio as 48 kHz stereo `f32` with backoff, stall detection and a limit of 32 captures. Windows build 20348 and later capture through WASAPI process loopback; other systems report it as unsupported. It depends on no StudioCraft crate. |
+| L0 | `craft-speech` | Speech to text: the catalog of Whisper models with their pinned URLs, sizes and SHA-256 sums, their download and check, Whisper on the CPU with word times (feature `whisper`), voice detection, conversion to mono 16 kHz, and live captioning that turns a stream of audio into partial and finished phrases. It depends on no StudioCraft crate. |
 | L1 | `studiocraft-plugin` | The `Source`, `Filter`, `Transition`, `Encoder` and `Output` traits and the `Registry` they are registered in. |
 | L1 | `craft-rtmp` | A blocking RTMP and RTMPS publish client on `std::net`: the handshake, chunking, the `connect`, `createStream`, `publish` and `deleteStream` commands, acknowledgements, and a timeout on every step, with the stream key kept out of errors and `Debug` output. It sends `craft-flv` bodies, starts no threads, and is built for native targets only. It depends on no StudioCraft crate. |
 | L1 | `craft-transitions` | The Cut, Fade, Fade through color and Swipe transitions: each one's WGSL blend, the values its shader reads, its ease from `craft-ease`, the gains of the old and new audio, and the same blend on the CPU, with typed parameters that carry a version for apps that save them. It depends on no StudioCraft crate. |
@@ -37,7 +38,7 @@ crate in the same layer. `cargo xtask layers` checks this against the table in
 | L3 | `studiocraft-sources` | The built-in sources and filters. |
 | L3 | `studiocraft-audio-tracks` | Audio tracks: the collect and disk threads that write each recorded source and the program mix to WAV files, the take journal, and the repair of takes cut short. |
 | L3 | `studiocraft-outputs` | Recording through an ffmpeg process, Matroska recording through the built-in encoders, streaming through the built-in encoders to several RTMP and RTMPS destinations, and the video encoders. |
-| L4 | `studiocraft-studio` | The running studio: sources, mixer, compositor, transitions and outputs behind one command interface. |
+| L4 | `studiocraft-studio` | The running studio: sources, mixer, compositor, transitions, outputs and live captions behind one command interface. |
 | L5 | `studiocraft-ui-egui` | The window: menus, preview, docks, properties, filters and settings. |
 | L5 | `studiocraft-mcp` | The MCP server: its tools, resources, resource templates, prompts and completions, a studio in the same process without a window (with its file roots and streaming gate), and the control channel client that sends calls to the app. |
 | app | `studiocraft` | The desktop binary, its control channel and the screenshot and self-test harness. |
@@ -80,6 +81,8 @@ gives no value for that column.
 | Replay buffer | The encode threads' packets | A ring bounded by length and bytes | | |
 | Audio tracks collect | Each recorded track's tap of mixer blocks | 32 blocks per tap with its own pool of 34, and a write buffer of 16 to 1024 1 MiB chunks, at least 2 for each recorded track | A full tap reuses its own oldest block; an empty write buffer drops blocks, logs them and writes silence in their place | One 8 KiB copy per track per block |
 | Audio tracks disk | The collect thread's chunks | The chunk count of the write buffer | A full or failing disk stops only the audio tracks | Sequential 1 MiB writes |
+| Captions reader | The mixer's program blocks | 64 blocks, and 60 s of mono 16 kHz audio | A full queue drops its oldest block; audio pushed out of the 60 s buffer, and blocks that never arrived, are passed on as gaps | One small copy per block |
+| Captions recognizer | The reader's buffer | | A recognizer slower than speech falls behind, and the reader's buffer then drops its oldest audio | One Whisper run per partial or finished phrase |
 | Window | `Studio` state | | | |
 
 ### Source threads
@@ -352,6 +355,25 @@ mixer has applied the matching tap change, so a source that stops being recorded
 stored for it. At most 2 takes finish their files at once; a new take waits for one of them. When
 the app closes it waits up to 10 seconds for takes to finish. While audio tracks are off no tap,
 pool or thread exists, and the mixer checks one `Option` per input.
+
+### Live captions threads
+
+`captions.start` (`studio/src/captions.rs`) adds an output queue of 64 blocks to the mixer and
+starts two threads. The `captions-reader` thread empties the queue every 10 ms, converts each block
+to mono 16 kHz (`craft_speech::resample`), and keeps at most 60 s of it. A block whose time does not
+follow the one before it is kept as a gap of that length, so phrase times stay on the studio clock.
+The `captions-recognizer` thread loads the model, then gives the audio to
+`craft_speech::live::LiveCaptioner`. Partial phrases are checked every second at first, and less often
+when a check takes longer than half of that. Each partial and finished phrase goes to the
+`CaptionBoard` that Live Captions sources draw, and each finished phrase is kept as a cue for caption
+files. `Studio::tick` starts a `captions-files` thread that writes `.srt`, `.vtt` and `.txt` files
+beside a recording that ran while captions ran: once every phrase before the recording's end is
+final, when captions stop, or 30 s after the recording stopped. A stop removes the queue; the recognizer finishes the audio it was given and ends
+the open phrase. When the app closes, the recognizer gets up to 10 s to finish the audio it holds.
+It is then told to stop and gets 2 s more; a recognizer still loading its model after that is not
+waited for. The caption files of a recording that just stopped are then written, and the app waits
+for every `captions-files` thread. A model download
+is told to stop and is not waited for. While captions are stopped no queue or thread exists.
 
 ### Window thread
 

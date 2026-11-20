@@ -1,6 +1,6 @@
 [package]
 name = "studiocraft-studio"
-description = "The running studio: sources, mixer, compositor, transitions, recording and streaming behind one command interface"
+description = "The running studio: sources, mixer, compositor, transitions, recording, streaming and live captions behind one command interface"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -29,10 +29,15 @@ dirs.workspace = true
 craft-atomic.workspace = true
 # Still captures for render previews, encoded as PNG.
 image.workspace = true
+# Live captions: speech recognition of the program audio, and the downloads of its models.
+craft-speech = { workspace = true, features = ["whisper", "download"] }
+# Caption files written beside a recording.
+craft-captions.workspace = true
 
 [dev-dependencies]
 # The noop backend opens devices without a GPU in the device-loss tests.
 wgpu = { workspace = true, features = ["noop"] }
+tempfile.workspace = true
 
 [lints]
 workspace = true

@@ -64,6 +64,21 @@ pub enum RuntimeAction {
     AudioTracksRepair {
         folder: String,
     },
+    /// Start live captions of the program audio with `model` and `language` (`None`: from the
+    /// first Live Captions source, else the defaults).
+    CaptionsStart {
+        model: Option<String>,
+        language: Option<String>,
+    },
+    CaptionsStop,
+    CaptionsToggle,
+    /// The state of live captions and of the speech models.
+    CaptionsStatus,
+    /// Download the speech model `model`.
+    CaptionsDownload {
+        model: Option<String>,
+    },
+    CaptionsDownloadCancel,
     OpenSettings,
     Exit,
 }
@@ -243,6 +258,31 @@ pub enum Command {
     /// take's `Audio Files` folder, its `<name> Audio` folder or the recording folder holding them.
     #[serde(rename = "audio_tracks.repair")]
     AudioTracksRepair { folder: String },
+    /// Start live captions of the program audio. `model` is a speech model id and `language` an
+    /// ISO 639-1 code or `auto`; each one left out comes from the first Live Captions source, or
+    /// else the default.
+    #[serde(rename = "captions.start")]
+    CaptionsStart {
+        #[serde(default)]
+        model: Option<String>,
+        #[serde(default)]
+        language: Option<String>,
+    },
+    #[serde(rename = "captions.stop")]
+    CaptionsStop {},
+    #[serde(rename = "captions.toggle")]
+    CaptionsToggle {},
+    /// Whether live captions run, and which speech models are downloaded.
+    #[serde(rename = "captions.status")]
+    CaptionsStatus {},
+    /// Download a speech model into the models folder.
+    #[serde(rename = "captions.download")]
+    CaptionsDownload {
+        #[serde(default)]
+        model: Option<String>,
+    },
+    #[serde(rename = "captions.download_cancel")]
+    CaptionsDownloadCancel {},
     #[serde(rename = "app.settings")]
     OpenSettings {},
     #[serde(rename = "app.exit")]
@@ -338,6 +378,12 @@ impl Command {
             Command::ReplaySave {} => "replay.save",
             Command::AudioTracksStatus {} => "audio_tracks.status",
             Command::AudioTracksRepair { .. } => "audio_tracks.repair",
+            Command::CaptionsStart { .. } => "captions.start",
+            Command::CaptionsStop {} => "captions.stop",
+            Command::CaptionsToggle {} => "captions.toggle",
+            Command::CaptionsStatus {} => "captions.status",
+            Command::CaptionsDownload { .. } => "captions.download",
+            Command::CaptionsDownloadCancel {} => "captions.download_cancel",
             Command::OpenSettings {} => "app.settings",
             Command::Exit {} => "app.exit",
             Command::AppLinks { .. } => "app.links",
@@ -428,6 +474,12 @@ const SPECS: &[CommandSpec] = &[
     spec("replay.save", "Save Replay", "", Undo::NotUndoable),
     spec("audio_tracks.status", "Audio Tracks Status", "", Undo::NotUndoable),
     spec("audio_tracks.repair", "Repair Audio Tracks", "folder: path to a take's folder or the recording folder", Undo::NotUndoable),
+    spec("captions.start", "Start Live Captions", "model?: speech model id, language?: ISO 639-1 code or auto", Undo::NotUndoable),
+    spec("captions.stop", "Stop Live Captions", "", Undo::NotUndoable),
+    spec("captions.toggle", "Start or Stop Live Captions", "", Undo::NotUndoable),
+    spec("captions.status", "Live Captions Status", "", Undo::NotUndoable),
+    spec("captions.download", "Download Speech Model", "model?: speech model id", Undo::NotUndoable),
+    spec("captions.download_cancel", "Cancel Speech Model Download", "", Undo::NotUndoable),
     spec("app.settings", "Settings", "", Undo::NotUndoable),
     spec("app.exit", "Exit", "", Undo::NotUndoable),
     spec("app.links", "Community Links", "link?: discord|website|github|issues", Undo::NotUndoable),
@@ -464,6 +516,13 @@ mod tests {
             Command::SourceSchema { kind: "camera".into(), settings: Some(Settings::new().with("device", "Desk")) },
             Command::AppAudioList {},
             Command::AppAudioStatus {},
+            Command::CaptionsStart { model: None, language: None },
+            Command::CaptionsStart { model: Some("whisper-tiny".into()), language: Some("de".into()) },
+            Command::CaptionsStop {},
+            Command::CaptionsToggle {},
+            Command::CaptionsStatus {},
+            Command::CaptionsDownload { model: Some("whisper-base".into()) },
+            Command::CaptionsDownloadCancel {},
         ];
         for c in samples {
             let v = serde_json::to_value(&c).unwrap();

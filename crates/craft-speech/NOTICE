@@ -1,0 +1,14 @@
+craft-speech
+Copyright (c) 2026 The Craft contributors.
+Licensed under the MIT License or the Apache License, Version 2.0, at your option
+(LICENSE-MIT and LICENSE-APACHE at the repository root).
+
+This crate contains code from the following project, under the same licenses:
+
+FilmCraft (https://github.com/storytold/filmcraft), crates/speech
+Copyright (c) 2026 ArtCraft Team and the FilmCraft contributors.
+Licensed under the MIT License or the Apache License, Version 2.0, at your option.
+
+The Whisper model weights are not part of this crate. They are downloaded on request from
+OpenAI's repositories at https://huggingface.co/openai, under the MIT License
+(https://github.com/openai/whisper/blob/main/LICENSE).

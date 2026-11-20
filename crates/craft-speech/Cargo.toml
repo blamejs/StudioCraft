@@ -1,0 +1,30 @@
+[package]
+name = "craft-speech"
+description = "Speech-to-text on the device: the Transcriber trait, the Whisper model catalog and verified downloader, Whisper inference in pure Rust (candle), and live phrase-by-phrase captioning"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[features]
+default = []
+# Whisper inference on the CPU through candle (pure Rust).
+whisper = ["dep:candle-core", "dep:candle-nn"]
+# Model downloads over HTTPS (rustls with ring, the system's certificate checks).
+download = ["dep:ureq"]
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+sha2 = { workspace = true }
+rayon = { workspace = true }
+candle-core = { workspace = true, optional = true }
+candle-nn = { workspace = true, optional = true }
+ureq = { workspace = true, optional = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
