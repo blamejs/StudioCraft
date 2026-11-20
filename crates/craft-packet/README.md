@@ -80,10 +80,44 @@ receiver returns `RecvError::Closed`, it returns `Closed` from then on. A packet
 offering while `Control::unsubscribe` runs may reach the ring after that. The receiver's next call
 releases it, counting it as discarded, so it does not keep a pool packet.
 
+## Encoders' packets
+
+`Info` converts with `TryFrom` from two encoders' packet types. Each conversion reads the packet's
+timestamps and keyframe flag and leaves its bytes in place, so the caller passes the packet's
+`data` to `PacketPool::share` next:
+
+```rust
+let info = Info::try_from(&packet)?;
+let shared = pool.share(&mut packet.data, info)?;
+```
+
+- `craft_video::h264::Packet`, from the built-in H.264 encoder (the `h264` feature): `pts` and
+  `dts` are kept as the encoder gives them, so pictures reordered for B-frames keep their decoding
+  order.
+- `craft_hwenc_native::Packet`, from the NVENC, Media Foundation, VideoToolbox and VA-API encoders
+  (the `hwenc-native` feature): these encoders do not reorder pictures, so `dts` is the packet's
+  `pts`.
+
+Both features are on by default; `default-features = false` builds the pool and the rings alone.
+A conversion returns `ConvertError::Empty` for a packet with no bytes and
+`ConvertError::DecodedAfterShown` for a `dts` later than its `pts`. An H.264 packet whose keyframe
+flag does not match its picture type (only an IDR picture is a keyframe) returns
+`ConvertError::KeyframeMismatch`. The HEVC encoder's packet in `craft-video` carries no
+timestamps, so an `Info` for it is made with `Info::video`, from the timestamps the caller passed
+to the encoder.
+
 ## Threads and cost
 
 The crate starts no threads. One producer thread shares and publishes packets; each receiver is used
 by one thread at a time; any thread may hold a `Control` or a `Monitor`.
+
+A `Fanout` has one producer. `Fanout::publish`, `Fanout::share` and `Fanout::share_copy` take
+`&mut self`, and packets are published in `dts` order. When video and audio are encoded on two
+threads, both threads send their packets to one thread, which interleaves them by `dts` and
+publishes them. Putting the `Fanout` behind a lock instead makes each encoder wait for the other
+while it publishes. A `PacketPool` is also used by one thread at a time. Encoder threads that share
+packets from pools of their own call `PacketPool::share`, which returns `ShareError::PoolFull` when
+the pool is full. Only `Fanout::share`, on the publishing thread, empties a ring to make room.
 
 - `Fanout::publish` reads the subscriber list without a lock, through `arc-swap`. For each
   subscriber it adds one to the packet's reference counts and pushes the packet into a bounded
@@ -113,5 +147,6 @@ by one thread at a time; any thread may hold a `Control` or a `Monitor`.
 
 ## Dependencies
 
-`crossbeam-queue`, `crossbeam-utils` and `arc-swap`, all MIT OR Apache-2.0. The tests and benches
-also use `proptest`, `criterion` and `stats_alloc`.
+`crossbeam-queue`, `crossbeam-utils` and `arc-swap`, all MIT OR Apache-2.0. With the default
+features it also depends on `craft-video` and `craft-hwenc-native`, MIT OR Apache-2.0. The tests
+and benches also use `proptest`, `criterion` and `stats_alloc`.

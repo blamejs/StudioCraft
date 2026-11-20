@@ -1614,6 +1614,8 @@ name = "craft-packet"
 version = "0.1.0-alpha.1"
 dependencies = [
  "arc-swap",
+ "craft-hwenc-native",
+ "craft-video",
  "criterion",
  "crossbeam-queue",
  "crossbeam-utils",
