@@ -280,7 +280,8 @@ impl StudioApp {
             }
         };
         let gpu = render.as_ref().map(|rs| Gpu::new(rs.device.clone(), rs.queue.clone()).with_adapter(Candidate::of(&rs.adapter, None)));
-        let studio = Studio::new(gpu, collection, profile, Arc::new(registry), ffmpeg);
+        let mut studio = Studio::new(gpu, collection, profile, Arc::new(registry), ffmpeg);
+        studio.keep_hardware_tests_in(store.dir().map(|d| d.join(studiocraft_studio::HARDWARE_TESTS_FILE)));
         store.update(|p| {
             p.profile = studio.profile().name.clone();
             p.collection = studio.collection().name.clone();

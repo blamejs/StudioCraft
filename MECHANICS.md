@@ -107,6 +107,8 @@ field to `false` in `mechanics.json`.
 | Built-in AAC bitrates | 32 to 512 kbps | `encode::aac::KBPS` | estimated |
 | Built-in recording packet queue | 64 MiB and 3 s of media | `outputs::native::QUEUE_BYTES`, `outputs::native::QUEUE_SPAN_NS` | estimated |
 | Built-in recording encoder lag before it fails | 10 s | `outputs::native::MAX_LAG_NS` | estimated |
+| Wait for one hardware encoder test | 5 s | `studio::outputs::PROBE_TIMEOUT` | estimated |
+| Wait for the hardware encoder tests of one start together | 10 s | `studio::outputs::PROBE_BUDGET` | estimated |
 | Recording file name | `YYYY-MM-DD HH-MM-SS.<ext>` | `studio::outputs::recording_path` | estimated |
 | Replay buffer length | 20 s (5 to 3600 s) | `model::profile::ReplaySettings` | estimated |
 | Replay buffer memory limit | 512 MB (32 to 16384 MB; the code counts 1024 × 1024 bytes per MB) | `model::profile::ReplaySettings` | estimated |

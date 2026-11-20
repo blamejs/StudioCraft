@@ -23,7 +23,9 @@ another package to stream.
 **"No hardware encoder passed its test; using {encoder}".** With the Hardware encoder set to
 Automatic, StudioCraft tests each hardware encoder with one frame and uses x264 when none works.
 Check that the graphics driver is installed, or pick a hardware encoder in Settings › Video ›
-Hardware acceleration.
+Hardware acceleration. The results are kept between sessions. After a fix that does not change
+the driver or `ffmpeg`, choose Tools › Test Hardware Encoders Again, and the next recording or
+stream tests the encoders again.
 
 **"{encoder} stopped working; the next start tries another encoder".** A hardware encoder failed
 while it ran. The next recording or stream tries another encoder.

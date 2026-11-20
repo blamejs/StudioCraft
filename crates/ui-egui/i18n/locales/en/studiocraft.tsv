@@ -527,6 +527,7 @@ menu	Transform	Transform
 	Record as Its Own Track	Record as Its Own Track
 	Audio Tracks Status	Audio Tracks Status
 	Repair Audio Tracks	Repair Audio Tracks
+	Test Hardware Encoders Again	Test Hardware Encoders Again
 @msg	Audio tracks stopped at {time}: the disk is full	Audio tracks stopped at {time}: the disk is full
 @msg	Audio tracks stopped at {time}: the disk is almost full	Audio tracks stopped at {time}: the disk is almost full
 @msg	Audio tracks stopped at {time}: the files could not be created	Audio tracks stopped at {time}: the files could not be created
