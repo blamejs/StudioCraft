@@ -184,6 +184,71 @@ fn streaming_needs_a_server() {
     assert!(e.to_string().contains("server"), "{e}");
 }
 
+/// A thread that hands over each connection `listener` takes.
+fn connections(listener: std::net::TcpListener) -> std::sync::mpsc::Receiver<std::net::TcpStream> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        for s in listener.incoming().flatten() {
+            if tx.send(s).is_err() {
+                return;
+            }
+        }
+    });
+    rx
+}
+
+#[test]
+fn a_running_streams_destinations_start_and_stop_one_at_a_time() {
+    use studiocraft_model::{Destination, KeyRef};
+    use studiocraft_plugin::DestinationStatus;
+    // Only a broken build waits this long for a connection that should come at once.
+    const GUARD: Duration = Duration::from_secs(60);
+    let listen = || {
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("rtmp://127.0.0.1:{}/live", l.local_addr().unwrap().port());
+        (url, connections(l))
+    };
+    let ((a_url, a), (b_url, b)) = (listen(), listen());
+    let mut p = small_profile();
+    p.stream.key = "profile-key".into();
+    p.stream.destinations = vec![
+        Destination { id: "a".into(), server: a_url, key: KeyRef::Profile, ..Destination::default() },
+        Destination { id: "b".into(), server: b_url, key: KeyRef::Held("b".into()), enabled: false, ..Destination::default() },
+    ];
+    let mut s = studio_with(Some(noop_gpu()), SceneCollection::new("Test", "Scene"), p);
+    let Err(e) = s.set_stream_destination("a", true) else { panic!("a destination started without a stream") };
+    assert!(e.to_string().contains("the stream is not running"), "{e}");
+    assert!(s.stream_destinations().is_empty());
+    s.start_output(OutputKind::Streaming).unwrap();
+    let a_conn = a.recv_timeout(GUARD).expect("the destination that is on connects at the start");
+    let status = |s: &Studio, id: &str| s.stream_destinations().into_iter().find(|d| d.id == id).map(|d| d.status);
+    let ids: Vec<String> = s.stream_destinations().into_iter().map(|d| d.id).collect();
+    assert_eq!(ids, ["a", "b"], "in the profile's order");
+    assert_eq!(status(&s, "b"), Some(DestinationStatus::Stopped), "a destination that is off is not started");
+    // Its held key is not set, so it does not start.
+    let Err(e) = s.set_stream_destination("b", true) else { panic!("started without its held key") };
+    assert!(e.to_string().contains("the stream key `b` for destination `b` is not set for this session"), "{e}");
+    assert_eq!(status(&s, "b"), Some(DestinationStatus::Stopped));
+    // A key held after the stream started is used.
+    s.hold_stream_key("b", "late");
+    s.set_stream_destination("b", true).unwrap();
+    let b_conn = b.recv_timeout(GUARD).expect("the destination started connects");
+    assert!(!matches!(status(&s, "b"), Some(DestinationStatus::Stopped | DestinationStatus::Failed(_))), "{:?}", status(&s, "b"));
+    // Stopped while it connects; the outputs crate's tests follow the destination until it ends.
+    s.set_stream_destination("b", false).unwrap();
+    drop(b_conn);
+    // The other destination goes on, and the output keeps running.
+    assert!(!matches!(status(&s, "a"), Some(DestinationStatus::Stopped | DestinationStatus::Failed(_))), "{:?}", status(&s, "a"));
+    assert!(s.output(OutputKind::Streaming).is_some_and(|o| o.active));
+    // A forgotten key is looked up again, and an unknown destination is an error.
+    s.hold_stream_key("b", "");
+    assert!(s.set_stream_destination("b", true).is_err(), "the held key was forgotten");
+    assert!(s.set_stream_destination("x", true).is_err() && s.set_stream_destination("x", false).is_err());
+    drop(a_conn);
+    s.stop_output(OutputKind::Streaming);
+    assert!(s.stream_destinations().is_empty(), "no stream runs");
+}
+
 #[test]
 fn the_profile_changes_the_canvas() {
     let mut s = headless();

@@ -379,6 +379,59 @@ fn one_destination_stops_and_starts_while_the_other_goes_on() {
     assert!(out.start_destination("b", None).is_err(), "a stopped stream starts no destination");
 }
 
+/// A loopback server that takes one connection, says when it has it, and answers nothing until
+/// `go` tells it what to do: `true` runs [`Plan::Accept`], `false` drops the connection.
+fn held_server() -> (String, mpsc::Receiver<()>, mpsc::Sender<bool>, mpsc::Receiver<Seen>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let (accepted_tx, accepted) = mpsc::channel();
+    let (go, go_rx) = mpsc::channel::<bool>();
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let Ok((s, _)) = listener.accept() else { return };
+        let _ = accepted_tx.send(());
+        let mut c = Conn { s, reader: ChunkReader::new(MAX_MESSAGE), writer: ChunkWriter::new() };
+        if go_rx.recv_timeout(GUARD) == Ok(true) {
+            let _ = c.run(Plan::Accept, &tx);
+        }
+        drop(c);
+        let _ = tx.send(Seen::Closed);
+    });
+    (format!("rtmp://127.0.0.1:{port}/live"), accepted, go, rx)
+}
+
+#[test]
+fn a_stop_that_lands_while_a_destination_connects_is_honored() {
+    let job = job(RateControl::Bitrate { kbps: 400, keyframe_s: 1 });
+    // The connect goes on to publish after the stop: the destination closes without sending.
+    // The connect fails after the stop: the destination stops instead of trying again.
+    for completes in [true, false] {
+        let (a, accepted, go, seen) = held_server();
+        let mut out = Streaming::start_timed(&job, vec![target("a", &a, "k")], quick()).unwrap();
+        let feed = Feed::new(&out);
+        accepted.recv_timeout(GUARD).unwrap();
+        assert_eq!(until(&out, "a", |_| true).status, DestinationStatus::Connecting);
+        out.stop_destination("a").unwrap();
+        // The thread is still inside the connect, so the stop has not ended it yet.
+        assert_eq!(until(&out, "a", |_| true).status, DestinationStatus::Connecting, "completes: {completes}");
+        go.send(completes).unwrap();
+        if completes {
+            assert_eq!(next(&seen), Seen::Publish("k".into()));
+        }
+        assert_eq!(next(&seen), Seen::Closed, "completes: {completes}: nothing was sent after the stop");
+        let d = until(&out, "a", |d| !matches!(d.status, DestinationStatus::Connecting));
+        assert_eq!((d.status, d.reconnects), (DestinationStatus::Stopped, 0), "completes: {completes}");
+        let dest = out.hub.find("a").unwrap();
+        // The thread sets the status and ends with its slot locked.
+        let slot = lock(&dest.thread);
+        assert!(!dest.running(), "completes: {completes}: the thread ended");
+        drop(slot);
+        assert!(out.target().is_empty(), "completes: {completes}: {}", out.target());
+        drop(feed);
+        out.stop().unwrap();
+    }
+}
+
 #[test]
 fn the_stream_fails_when_every_destination_fails() {
     let job = job(RateControl::Bitrate { kbps: 400, keyframe_s: 1 });
