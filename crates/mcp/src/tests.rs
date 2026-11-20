@@ -387,6 +387,10 @@ fn audio_tracks_open_last_is_held_to_the_read_roots() {
     std::fs::write(take.join("take.journal"), format!("{start}\n")).unwrap();
     let roots = Roots::new(&[dir.join("in")], &[dir.join("out")]).unwrap();
     let mut h = Headless::with_options(None, ServerOptions { allow_streaming: false, roots: Some(roots) }).unwrap();
+    // Repair works only inside the recording folder.
+    let mut profile = h.studio().profile().clone();
+    profile.output.folder = text_of(&dir.join("out"));
+    h.studio_mut().set_profile(profile).unwrap();
     h.studio_mut().run("audio_tracks.repair", &json!({"folder": text_of(&take)})).unwrap();
     let mut spins = 0u64;
     while h.studio().audio_tracks_last_session().is_none() {
