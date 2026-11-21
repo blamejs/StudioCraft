@@ -80,6 +80,8 @@ impl StudioApp {
             "replay.save" => ItemState { enabled: self.studio.output(OutputKind::Replay).is_some_and(|s| s.active), checked: None },
             "record.marker" => ItemState { enabled: self.studio.output(OutputKind::Recording).is_some_and(|s| s.active), checked: None },
             "captions.toggle" => on(matches!(self.studio.captions_state(), CaptionState::Loading | CaptionState::Running)),
+            "pause.toggle" => on(self.studio.paused().is_some()),
+            "pause.extend" => ItemState { enabled: self.studio.paused().is_some(), checked: None },
             "audio_tracks.open_last" => ItemState { enabled: self.studio.audio_tracks_last_session().is_some(), checked: None },
             "audio_tracks.marker" => ItemState { enabled: self.studio.audio_tracks_running(), checked: None },
             "dock.scenes" => on(p.docks.scenes),

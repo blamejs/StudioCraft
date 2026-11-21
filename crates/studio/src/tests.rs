@@ -1944,3 +1944,256 @@ mod captions {
         s.finish_captions_blocking();
     }
 }
+
+mod pause_screen {
+    use super::*;
+
+    /// The ids of the sources a plan draws in the program, bottom to top.
+    fn program_sources(s: &mut Studio) -> Vec<u64> {
+        s.plan().program.items.iter().map(|i| i.source.0).collect()
+    }
+
+    /// The ids of the sources the running transition starts from.
+    fn transition_from(s: &mut Studio) -> Vec<u64> {
+        s.plan().transition.as_ref().map(|t| t.from.items.iter().map(|i| i.source.0).collect()).unwrap_or_default()
+    }
+
+    /// The pause screen's background draws under this id while no source holds it.
+    const BACKGROUND: u64 = u64::MAX;
+
+    fn with_a_scene_source() -> (Studio, u64) {
+        let mut s = headless();
+        let (out, _) = s.run("source.add", &json!({"kind": "color", "name": "Card"})).unwrap();
+        let id = out["source"].as_u64().unwrap_or_else(|| panic!("{out}"));
+        s.tick();
+        (s, id)
+    }
+
+    #[test]
+    fn a_pause_shows_the_pause_screen_and_resuming_shows_the_scene() {
+        let (mut s, card) = with_a_scene_source();
+        s.transition = None;
+        assert_eq!(program_sources(&mut s), [card]);
+        let rev = s.engine().revision();
+        let dirty = s.engine().is_dirty();
+        let (status, _) = s.run("pause.start", &json!({"countdown_s": 90})).unwrap();
+        assert_eq!(status["paused"], json!(true));
+        assert_eq!(status["countdown"]["total_s"], json!(90));
+        assert_eq!(program_sources(&mut s).first(), Some(&BACKGROUND), "the background is drawn first");
+        assert_eq!(transition_from(&mut s), [card], "the collection's fade runs from the scene into the pause screen");
+        assert_eq!((s.engine().revision(), s.engine().is_dirty()), (rev, dirty), "a pause changes nothing in the collection");
+        assert_eq!(s.state_json()["pause"]["paused"], json!(true));
+        s.run("pause.stop", &json!({})).unwrap();
+        assert_eq!(program_sources(&mut s), [card]);
+        assert_eq!(transition_from(&mut s).first(), Some(&BACKGROUND), "the fade back runs from the pause screen");
+        assert!(s.pause_layers.is_some(), "the pause screen keeps drawing until the fade has ended");
+        assert_eq!(s.run("pause.status", &json!({})).unwrap().0, json!({"paused": false}));
+        let notices: Vec<&str> = s.take_notices().iter().map(|n| n.template).collect();
+        assert!(notices.contains(&"The program is paused") && notices.contains(&"The program resumed"), "{notices:?}");
+        // Once the fade has ended, the pause screen's threads stop.
+        s.transition = None;
+        s.tick();
+        assert!(s.pause_layers.is_none());
+    }
+
+    #[test]
+    fn resuming_or_adding_time_while_not_paused_is_an_error() {
+        let mut s = headless();
+        assert!(s.run("pause.stop", &json!({})).is_err());
+        assert!(s.run("pause.extend", &json!({"seconds": 60})).is_err());
+        assert!(s.pause.is_none());
+    }
+
+    #[test]
+    fn toggling_pauses_with_the_profile_settings_and_resumes() {
+        let mut profile = Profile::default();
+        profile.pause.countdown_s = 0;
+        profile.pause.mute_scene = false;
+        let mut s = studio_with(None, SceneCollection::new("Test", "Scene"), profile);
+        let (status, _) = s.run("pause.toggle", &json!({})).unwrap();
+        assert_eq!((status["paused"].clone(), status["countdown"].clone()), (json!(true), Value::Null), "no countdown: the profile's 0");
+        let (status, _) = s.run("pause.toggle", &json!({})).unwrap();
+        assert_eq!(status, json!({"paused": false}), "resuming reports the status too");
+        assert!(s.pause.is_none());
+    }
+
+    #[test]
+    fn settings_with_a_countdown_text_without_its_time_are_refused() {
+        let mut s = headless();
+        let mut p = s.profile().clone();
+        p.pause.text = "Back soon".into();
+        assert!(s.set_profile(p).is_err());
+        assert_ne!(s.profile().pause.text, "Back soon", "the old settings stay");
+    }
+
+    #[test]
+    fn a_file_the_screen_cannot_show_is_an_error_and_does_not_pause() {
+        let mut s = headless();
+        for bad in ["song.mp3", "notes.txt", "noextension"] {
+            assert!(s.run("pause.start", &json!({"media": bad})).is_err(), "{bad}");
+        }
+        assert!(s.pause.is_none());
+        // While paused, a bad file is refused and the pause keeps its media.
+        s.run("pause.start", &json!({"media": ""})).unwrap();
+        assert!(s.run("pause.start", &json!({"media": "x.doc"})).is_err());
+        assert_eq!(s.pause.as_ref().map(|p| p.settings.media.as_str()), Some(""));
+    }
+
+    #[test]
+    fn values_given_while_paused_apply_without_a_new_transition() {
+        let mut s = headless();
+        s.run("transition.set", &json!({"kind": "cut"})).unwrap();
+        s.transition = None;
+        s.run("pause.start", &json!({"countdown_s": 600})).unwrap();
+        assert!(s.transition.is_none(), "a cut shows the pause screen at once");
+        s.run("transition.set", &json!({"kind": "fade"})).unwrap();
+        let (status, _) = s.run("pause.start", &json!({"countdown_s": 30, "at_zero": "resume"})).unwrap();
+        assert!(s.transition.is_none(), "no new transition while paused");
+        assert_eq!(status["countdown"]["total_s"], json!(30));
+        assert_eq!(status["countdown"]["at_zero"], json!("resume"));
+        let (status, _) = s.run("pause.extend", &json!({"seconds": 60})).unwrap();
+        assert_eq!(status["countdown"]["total_s"], json!(90));
+    }
+
+    #[test]
+    fn a_scene_switch_while_paused_changes_what_resuming_shows() {
+        let (mut s, _) = with_a_scene_source();
+        s.run("pause.start", &json!({})).unwrap();
+        s.transition = None;
+        s.run("scene.add", &json!({"name": "After the break"})).unwrap();
+        assert!(s.transition.is_none(), "the scene changes under the pause screen");
+        assert_eq!(program_sources(&mut s).first(), Some(&BACKGROUND));
+        let second = s.collection().program_scene;
+        s.run("pause.stop", &json!({})).unwrap();
+        assert_eq!(s.shown_program, second, "resuming shows the new scene");
+        assert!(program_sources(&mut s).is_empty(), "the new scene is empty");
+    }
+
+    #[test]
+    fn pausing_during_the_fade_back_turns_the_fade_around_where_it_stands() {
+        let mut s = headless();
+        s.run("pause.start", &json!({})).unwrap();
+        s.transition = None;
+        s.run("pause.stop", &json!({})).unwrap();
+        // The fade back is held at its very start, so turning it around leaves nothing to run.
+        let Some(t) = &mut s.transition else { panic!("the collection's fade runs") };
+        t.start = Tick(s.clock.now().0.saturating_add(10_000_000_000));
+        s.run("pause.start", &json!({})).unwrap();
+        let Some(t) = &s.transition else { panic!("a fade runs into the pause screen") };
+        assert!(matches!(t.from, Origin::Scene(_)));
+        assert!(t.start.0.saturating_add(t.duration.0) <= s.clock.now().0, "the new fade starts where the old one stood");
+    }
+
+    #[test]
+    fn a_swipe_starts_over_instead_of_turning_around() {
+        let mut s = headless();
+        s.run("transition.set", &json!({"kind": "swipe"})).unwrap();
+        s.run("pause.start", &json!({})).unwrap();
+        s.transition = None;
+        s.run("pause.stop", &json!({})).unwrap();
+        let Some(t) = &mut s.transition else { panic!("the collection's swipe runs") };
+        t.start = Tick(s.clock.now().0.saturating_add(10_000_000_000));
+        let before = s.clock.now().0;
+        s.run("pause.start", &json!({})).unwrap();
+        let Some(t) = &s.transition else { panic!("a swipe runs into the pause screen") };
+        assert!(t.start.0 >= before, "the new swipe starts from the beginning");
+    }
+
+    #[test]
+    fn pausing_during_the_fade_back_keeps_the_layers_that_draw() {
+        let mut s = headless();
+        s.run("pause.start", &json!({})).unwrap();
+        let before = s.plan().program.items[0].video.clone();
+        s.run("pause.stop", &json!({})).unwrap();
+        assert!(s.transition.is_some(), "the fade back runs");
+        s.run("pause.start", &json!({})).unwrap();
+        let after = s.plan().program.items[0].video.clone();
+        assert!(Arc::ptr_eq(&before, &after), "the background's thread was kept");
+    }
+
+    #[test]
+    fn an_eased_fade_turns_around_at_the_blend_it_shows() {
+        let mut s = headless();
+        s.run("transition.set", &json!({"kind": "fade"})).unwrap();
+        s.run("transition.settings", &json!({"settings": {"fade_easing": "ease_in"}})).unwrap();
+        s.run("pause.start", &json!({})).unwrap();
+        s.transition = None;
+        s.run("pause.stop", &json!({})).unwrap();
+        // A quarter of the fade back's time has passed, where ease in shows 1/16 of the scene.
+        let Some(t) = &mut s.transition else { panic!("the collection's fade runs") };
+        t.start = Tick(s.clock.now().0.saturating_sub(t.duration.0 / 4));
+        s.run("pause.start", &json!({})).unwrap();
+        let Some(t) = &s.transition else { panic!("a fade runs into the pause screen") };
+        // The new fade shows 15/16 of the pause screen, which ease in reaches at sqrt(15)/4 of
+        // its time (0.968); turning the time around would give 0.75.
+        let along = s.clock.now().0.saturating_sub(t.start.0) as f64 / t.duration.0 as f64;
+        assert!(along > 0.9, "{along}");
+    }
+
+    #[test]
+    fn the_progress_showing_a_blend_inverts_the_ease() {
+        let quad_in = |x: f64| x * x;
+        assert!((progress_showing(quad_in, 0.0625) - 0.25).abs() < 1e-9);
+        assert!((progress_showing(|x| x, 0.4) - 0.4).abs() < 1e-9);
+        assert!(progress_showing(quad_in, 0.0) < 1e-9, "at the start");
+        assert!(progress_showing(|_| 0.0, 0.5) > 0.999_999, "a blend that never gets there gives the end");
+    }
+
+    #[test]
+    fn a_scene_switch_during_the_fade_back_keeps_the_fade_from_the_pause_screen() {
+        let (mut s, _) = with_a_scene_source();
+        s.run("pause.start", &json!({})).unwrap();
+        s.transition = None;
+        s.run("pause.stop", &json!({})).unwrap();
+        assert_eq!(transition_from(&mut s).first(), Some(&BACKGROUND), "the fade back runs");
+        s.run("scene.add", &json!({"name": "After the break"})).unwrap();
+        let second = s.collection().program_scene;
+        assert_eq!(transition_from(&mut s).first(), Some(&BACKGROUND), "the fade still runs from the pause screen");
+        assert_eq!(s.shown_program, second, "and ends on the new scene");
+        assert!(program_sources(&mut s).is_empty(), "the new scene is empty");
+    }
+
+    #[test]
+    fn the_countdown_at_zero_resumes_once_when_set_to_resume() {
+        let mut s = headless();
+        s.run("pause.start", &json!({"countdown_s": 300, "at_zero": "resume"})).unwrap();
+        s.take_notices();
+        // The countdown's end is moved to the start of the clock instead of waiting for it.
+        if let Some(p) = &mut s.pause {
+            p.deadline_ms = Some(0);
+        }
+        s.tick();
+        assert!(s.pause.is_none(), "zero resumed the program");
+        s.tick();
+        let notices: Vec<&str> = s.take_notices().iter().map(|n| n.template).collect();
+        assert_eq!(notices.iter().filter(|n| **n == "The countdown ended").count(), 1, "{notices:?}");
+        assert!(notices.contains(&"The program resumed"), "{notices:?}");
+    }
+
+    #[test]
+    fn the_countdown_at_zero_keeps_the_screen_with_the_text_at_zero() {
+        let mut s = headless();
+        s.run("pause.start", &json!({"countdown_s": 300})).unwrap();
+        if let Some(p) = &mut s.pause {
+            p.deadline_ms = Some(0);
+        }
+        s.tick();
+        s.tick();
+        let status = s.pause_json();
+        assert_eq!((status["paused"].clone(), status["countdown"]["reached"].clone()), (json!(true), json!(true)));
+        let notices: Vec<&str> = s.take_notices().iter().map(|n| n.template).collect();
+        assert_eq!(notices.iter().filter(|n| **n == "The countdown ended").count(), 1, "{notices:?}");
+        let now = s.now_ms();
+        assert_eq!(s.pause.as_ref().and_then(|p| p.text(now)).as_deref(), Some("Back in a moment"));
+    }
+
+    #[test]
+    fn a_pause_lasts_through_a_new_collection_and_ends_only_on_resume() {
+        let mut s = headless();
+        s.run("pause.start", &json!({})).unwrap();
+        s.load_collection(SceneCollection::new("Other", "Main"));
+        s.tick();
+        assert!(s.pause.is_some(), "a new collection does not resume the program");
+        assert_eq!(program_sources(&mut s).first(), Some(&BACKGROUND));
+    }
+}

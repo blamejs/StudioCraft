@@ -271,6 +271,18 @@ impl Headless {
             Command::CaptionsToggle {} if !matches!(self.studio.captions_state(), CaptionState::Loading | CaptionState::Running) => {
                 self.speech_model_allowed(None, Access::Read)?;
             }
+            // The pause screen reads its picture or video.
+            Command::PauseStart { media: Some(media), .. } if !media.trim().is_empty() => {
+                let resolved = self.allowed(Path::new(media.as_str()), Access::Read)?;
+                *media = setting_text(roots, &resolved, Access::Read)?;
+            }
+            // A pause that starts without its own media shows the profile's.
+            Command::PauseStart { media: None, .. } | Command::PauseToggle {} if self.studio.paused().is_none() => {
+                let media = self.studio.profile().pause.media.clone();
+                if !media.trim().is_empty() {
+                    self.allowed(Path::new(&media), Access::Read)?;
+                }
+            }
             // Repair rewrites the files it finds.
             Command::AudioTracksRepair { folder } => {
                 let resolved = self.allowed(Path::new(folder.as_str()), Access::Write)?;
@@ -475,6 +487,9 @@ impl Headless {
 impl Backend for Headless {
     fn call(&mut self, method: &str, params: Value) -> Result<Value, McpError> {
         let p = object(params)?;
+        // Without a window, the studio's housekeeping (a transition's end, the pause screen's
+        // countdown and its end at zero) runs before each call and in `idle`.
+        self.studio.tick();
         let result = self.answer(method, &p);
         // Without a window nobody reads the status messages; keep them out of memory.
         for n in self.studio.take_notices() {
@@ -485,6 +500,13 @@ impl Backend for Headless {
 
     fn has_ui(&self) -> bool {
         false
+    }
+
+    fn idle(&mut self) {
+        self.studio.tick();
+        for n in self.studio.take_notices() {
+            log::debug!("{}", n.text());
+        }
     }
 
     fn describe(&self) -> String {

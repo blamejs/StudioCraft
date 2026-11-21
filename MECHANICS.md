@@ -141,6 +141,13 @@ field to `false` in `mechanics.json`.
 | After a take | Nothing | `model::profile::AfterStop` | estimated |
 | Audio editor looked up on the `PATH` | `soundcraft` | `studio::audio_editor::EDITOR_PROGRAM` | estimated |
 | Openings of a session or folder at once | 4 | `studio::audio_tracks::MAX_OPENING` | estimated |
+| Pause screen countdown | 300 s (0 for none, up to 43,200 s) | `model::profile::PauseSettings` | estimated |
+| Pause screen countdown text | `Back in {time}`, then `Back in a moment` at zero (at most 200 characters each) | `model::profile::PauseSettings` | estimated |
+| Pause screen at zero | Keep the pause screen | `model::profile::PauseAtZero` | estimated |
+| Pause screen countdown format | `m:ss`, and `h:mm:ss` from one hour, with the seconds rounded up | `studio::pause::countdown_text` | estimated |
+| Pause screen text | bottom center, inside a margin of 5% of each side, 6% of the canvas height (2 to 15%, and 6 to 1,024 pixels), white with a 4-pixel black outline (0 to 64) | `model::profile::PauseSettings`, `studio::pause::text_position`, `studio::pause::text_px` | estimated |
+| Pause screen background | `#101014ff`, with the picture or video fitted inside the canvas | `model::profile::PauseSettings` | estimated |
+| Pause screen program audio | muted, with the transition's fade | `model::profile::PauseSettings`, `engine::mixer::MixerCmd::Hold` | estimated |
 
 ## Editing
 

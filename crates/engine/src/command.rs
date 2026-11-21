@@ -6,7 +6,7 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use studiocraft_model::{FitMode, ItemId, SceneId, Settings, SourceId, Transform};
+use studiocraft_model::{FitMode, ItemId, PauseAtZero, SceneId, Settings, SourceId, Transform};
 
 /// A scene by id or by name.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -109,6 +109,23 @@ pub enum RuntimeAction {
     },
     /// Forget the hardware encoders' test results, so the next start tests them again.
     RetestHardwareEncoders,
+    /// Show the pause screen on the program, with the profile's settings and, for this pause only,
+    /// each given value in place of its setting. While paused, apply the given values.
+    PauseStart {
+        media: Option<String>,
+        countdown_s: Option<u32>,
+        at_zero: Option<PauseAtZero>,
+    },
+    /// Show the program scene again.
+    PauseStop,
+    /// Pause with the profile's settings when not paused, else resume.
+    PauseToggle,
+    /// Add `seconds` to the countdown.
+    PauseExtend {
+        seconds: u32,
+    },
+    /// Whether the program is paused, and the countdown.
+    PauseStatus,
     OpenSettings,
     Exit,
 }
@@ -372,6 +389,30 @@ pub enum Command {
     /// them, so the next recording or stream tests them again.
     #[serde(rename = "hardware_encoders.retest")]
     RetestHardwareEncoders {},
+    /// Show the pause screen on the program, and on every recording, stream and replay buffer.
+    /// Each value given replaces its profile setting for this pause only: `media` a picture or
+    /// video file (`""` for none), `countdown_s` the countdown in seconds (0 for none), `at_zero`
+    /// `keep` or `resume`. While paused, the given values apply without a new transition.
+    #[serde(rename = "pause.start")]
+    PauseStart {
+        #[serde(default, deserialize_with = "given_string", skip_serializing_if = "Option::is_none")]
+        media: Option<String>,
+        #[serde(default, deserialize_with = "given_u32", skip_serializing_if = "Option::is_none")]
+        countdown_s: Option<u32>,
+        #[serde(default, deserialize_with = "given_string", skip_serializing_if = "Option::is_none")]
+        at_zero: Option<String>,
+    },
+    /// Show the program scene again, with the collection's transition.
+    #[serde(rename = "pause.stop")]
+    PauseStop {},
+    #[serde(rename = "pause.toggle")]
+    PauseToggle {},
+    /// Add `seconds` to the countdown of the running pause.
+    #[serde(rename = "pause.extend")]
+    PauseExtend { seconds: u32 },
+    /// Whether the program is paused, since when, and the countdown.
+    #[serde(rename = "pause.status")]
+    PauseStatus {},
     #[serde(rename = "app.settings")]
     OpenSettings {},
     #[serde(rename = "app.exit")]
@@ -412,6 +453,11 @@ pub enum Command {
 /// A parameter that may be left out but, when given, is a string: `null` is refused.
 fn given_string<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<String>, D::Error> {
     String::deserialize(d).map(Some)
+}
+
+/// A parameter that may be left out but, when given, is a whole number: `null` is refused.
+fn given_u32<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<u32>, D::Error> {
+    u32::deserialize(d).map(Some)
 }
 
 impl Command {
@@ -494,6 +540,11 @@ impl Command {
             Command::AudioTracksOpenLast {} => "audio_tracks.open_last",
             Command::AudioTracksMarker { .. } => "audio_tracks.marker",
             Command::RetestHardwareEncoders {} => "hardware_encoders.retest",
+            Command::PauseStart { .. } => "pause.start",
+            Command::PauseStop {} => "pause.stop",
+            Command::PauseToggle {} => "pause.toggle",
+            Command::PauseExtend { .. } => "pause.extend",
+            Command::PauseStatus {} => "pause.status",
             Command::OpenSettings {} => "app.settings",
             Command::Exit {} => "app.exit",
             Command::AppLinks { .. } => "app.links",
@@ -610,6 +661,16 @@ const SPECS: &[CommandSpec] = &[
     spec("audio_tracks.open_last", "Open Last Audio Tracks in Editor", "", Undo::NotUndoable),
     spec("audio_tracks.marker", "Add Audio Tracks Marker", "name?: the marker's name, 1 to 256 characters", Undo::NotUndoable),
     spec("hardware_encoders.retest", "Test Hardware Encoders Again", "", Undo::NotUndoable),
+    spec(
+        "pause.start",
+        "Pause Program",
+        "media?: picture or video path, \"\" for none, countdown_s?: 0..43200, at_zero?: keep|resume",
+        Undo::NotUndoable,
+    ),
+    spec("pause.stop", "Resume Program", "", Undo::NotUndoable),
+    spec("pause.toggle", "Pause or Resume Program", "", Undo::NotUndoable),
+    spec("pause.extend", "Add Time to the Pause", "seconds: 1..43200", Undo::NotUndoable),
+    spec("pause.status", "Pause Status", "", Undo::NotUndoable),
     spec("app.settings", "Settings", "", Undo::NotUndoable),
     spec("app.exit", "Exit", "", Undo::NotUndoable),
     spec("app.links", "Community Links", "link?: discord|website|github|issues", Undo::NotUndoable),
@@ -657,6 +718,12 @@ mod tests {
             Command::CaptionsDownloadCancel {},
             Command::AppAudioLanes {},
             Command::AppAudioRoute { app: "player.exe".into(), routed: true },
+            Command::PauseStart { media: None, countdown_s: None, at_zero: None },
+            Command::PauseStart { media: Some("break.png".into()), countdown_s: Some(600), at_zero: Some("resume".into()) },
+            Command::PauseStop {},
+            Command::PauseToggle {},
+            Command::PauseExtend { seconds: 60 },
+            Command::PauseStatus {},
         ];
         for c in samples {
             let v = serde_json::to_value(&c).unwrap();
