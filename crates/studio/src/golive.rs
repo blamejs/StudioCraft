@@ -389,11 +389,13 @@ fn destinations(i: &Input, out: &mut Vec<Item>) {
         };
         let target = Target { id: d.id.clone(), server: d.server.clone(), key: key.to_string(), enabled: true };
         if let Err(e) = target.check() {
-            out.push(if key.trim().is_empty() && matches!(d.key, KeyRef::Profile) {
-                // Without a key, the address must end with the stream's name.
-                item(Check::Problem, "Destination {name} has no stream key", vec![])
-            } else {
-                item(Check::Problem, "Destination {name} cannot be used: {error}", vec![("error", clip(&e))])
+            // Without a key, the address must end with the stream's name; the key is named as
+            // missing only when the address works with one.
+            let keyless = key.trim().is_empty() && matches!(d.key, KeyRef::Profile);
+            let error = if keyless { Target { key: "key".into(), ..target }.check().err() } else { Some(e) };
+            out.push(match error {
+                None => item(Check::Problem, "Destination {name} has no stream key", vec![]),
+                Some(e) => item(Check::Problem, "Destination {name} cannot be used: {error}", vec![("error", clip(&e))]),
             });
             continue;
         }
@@ -743,6 +745,9 @@ mod tests {
         // An address that ends with the stream's name needs no key, as a start reads it.
         f.profile.stream.destinations[1].server = "rtmp://a/live/name".into();
         assert_eq!(find(&items_of(&f), "destination:nokey").state, Check::Unknown);
+        // A bad address is named rather than the missing key, since a key would not fix it.
+        f.profile.stream.destinations[1].server = "http://a/live".into();
+        assert_eq!(find(&items_of(&f), "destination:nokey").template, "Destination {name} cannot be used: {error}");
     }
 
     #[test]
