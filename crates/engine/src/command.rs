@@ -73,6 +73,8 @@ pub enum RuntimeAction {
     RecordingMarker {
         name: Option<String>,
     },
+    /// The recordings, saved replays and takes of audio tracks in the recording folder.
+    RecordingsList,
     StartStreaming,
     StopStreaming,
     ToggleStreaming,
@@ -335,6 +337,10 @@ pub enum Command {
         #[serde(default, deserialize_with = "given_string")]
         name: Option<String>,
     },
+    /// List the recordings, saved replays and takes of audio tracks in the recording folder, with
+    /// each recording's marker timeline and take, newest first.
+    #[serde(rename = "recordings.list")]
+    RecordingsList {},
     #[serde(rename = "stream.start")]
     StreamStart {},
     #[serde(rename = "stream.stop")]
@@ -545,6 +551,7 @@ impl Command {
             Command::RecordStop {} => "record.stop",
             Command::RecordToggle {} => "record.toggle",
             Command::RecordMarker { .. } => "record.marker",
+            Command::RecordingsList {} => "recordings.list",
             Command::StreamStart {} => "stream.start",
             Command::StreamStop {} => "stream.stop",
             Command::StreamToggle {} => "stream.toggle",
@@ -668,6 +675,7 @@ const SPECS: &[CommandSpec] = &[
     spec("record.stop", "Stop Recording", "", Undo::NotUndoable),
     spec("record.toggle", "Start or Stop Recording", "", Undo::NotUndoable),
     spec("record.marker", "Add Recording Marker", "name?: the marker's name, 1 to 256 characters", Undo::NotUndoable),
+    spec("recordings.list", "List Recordings", "", Undo::NotUndoable),
     spec("stream.start", "Start Streaming", "", Undo::NotUndoable),
     spec("stream.stop", "Stop Streaming", "", Undo::NotUndoable),
     spec("stream.toggle", "Start or Stop Streaming", "", Undo::NotUndoable),
@@ -728,6 +736,7 @@ mod tests {
             Command::StudioToggle {},
             Command::RecordToggle {},
             Command::GoLiveCheck {},
+            Command::RecordingsList {},
             Command::Exit {},
             Command::AppLinks { link: Some("github".into()) },
             Command::AppLinks { link: None },
