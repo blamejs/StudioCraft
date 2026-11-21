@@ -45,10 +45,11 @@ struct Slot<G> {
     target: String,
     cap: Option<G>,
     retry_at: Instant,
-    /// The window's newest picture, taken at most once a second.
+    /// The window's newest picture: copied at every frame while it is presented, captured once a
+    /// second while it is not.
     picture: VideoFrame,
     has_picture: bool,
-    /// When the window's picture is next kept: captured while it is not presented, copied while it is.
+    /// When the window is next captured while it is not presented.
     warm_at: Instant,
     /// Why the person ended the capture; it is not opened again until the settings change.
     stopped: Option<PluginError>,
@@ -185,13 +186,11 @@ impl<G: Grab> Staged<G> {
                             Grabbed::Picture => {
                                 frame.pts = io.clock.now();
                                 self.size = (frame.width, frame.height);
-                                if slot.warm_at <= now {
-                                    slot.warm_at = now + WARM;
-                                    slot.has_picture =
-                                        slot.picture.reshape(frame.width, frame.height, frame.format) && slot.picture.data.len() == frame.data.len();
-                                    if slot.has_picture {
-                                        slot.picture.data.copy_from_slice(&frame.data);
-                                    }
+                                slot.warm_at = now + WARM;
+                                slot.has_picture =
+                                    slot.picture.reshape(frame.width, frame.height, frame.format) && slot.picture.data.len() == frame.data.len();
+                                if slot.has_picture {
+                                    slot.picture.data.copy_from_slice(&frame.data);
                                 }
                                 io.video.publish(VideoContent::Frame(frame));
                                 Shown::Picture

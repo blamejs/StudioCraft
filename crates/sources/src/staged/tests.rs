@@ -168,14 +168,18 @@ fn every_window_keeps_its_last_picture_after_it_closes() {
     // The window in the background closes; its next background capture fails.
     window("keep-b", None);
     s.produce_at(&io, t + WARM).unwrap();
-    s.update_at(&hold.clone().with("presented", 2), &io, t + WARM);
-    assert!(s.produce_at(&io, t + WARM).is_err());
+    // A newer picture of the presented window, within the same second.
+    let soon = t + WARM + Duration::from_millis(100);
+    window("keep-a", Some(12));
+    s.produce_at(&io, soon).unwrap();
+    s.update_at(&hold.clone().with("presented", 2), &io, soon);
+    assert!(s.produce_at(&io, soon).is_err());
     assert_eq!(shown(&io), Some(22), "the background window's last picture");
     // The window presented before closes too; its picture was kept while it was presented.
     window("keep-a", None);
-    s.update_at(&hold.clone().with("presented", 1), &io, t + WARM);
-    assert!(s.produce_at(&io, t + WARM).is_err());
-    assert_eq!(shown(&io), Some(11), "the presented window's last picture");
+    s.update_at(&hold.clone().with("presented", 1), &io, soon);
+    assert!(s.produce_at(&io, soon).is_err());
+    assert_eq!(shown(&io), Some(12), "the presented window's last picture");
 }
 
 #[test]
