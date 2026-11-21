@@ -86,7 +86,7 @@ when the language's catalog has the message.
 `app.links`, `app.check_updates`, `plugin.list`, `source.schema`, `source.sync_offset`,
 `source.monitor`, `source.set_record_track`, the `present.*` commands, `audio_tracks.status`, `audio_tracks.repair`,
 `audio_tracks.open_last`, `audio_tracks.marker`, `record.marker`, `recordings.list`, the `captions.*` commands, the
-`dock.layout_*` commands, `video.displays`, `video.canvas_from_display` and `canvas.relayout`.
+`dock.layout_*` commands, `golive.check`, `video.displays`, `video.canvas_from_display` and `canvas.relayout`.
 
 Each entry of `engine.commands` has these fields:
 
@@ -535,6 +535,34 @@ error.
 
 `dock.layout_apply` and `dock.layout_remove` take `{"name"}`, compared without regard to case, and
 return `{"applied"}` or `{"removed"}`; a name no layout has is an error.
+
+### `golive.check`
+
+`golive.check` takes no params and lists what would stop the stream from starting or spoil it. It
+returns `{"ready", "problems", "unknown", "more_sources", "items"}`. `ready` is `true` only when
+every item is `pass`; `problems` and `unknown` count the items in those states. Each item is
+`{"id", "state", "text", "template", "args", "fix"}`. `state` is `pass`, `problem` or `unknown`.
+`text` is an English sentence; `template` is the same sentence with `{name}` placeholders and
+`args` holds their values, so the window can show it in the interface language. `fix` is the id
+of the command that fixes a problem, and `null` for an item that passes or is unknown and for a
+problem no command fixes.
+
+The items come in this order:
+
+| `id` | What it checks | `fix` |
+| --- | --- | --- |
+| `destination:<id>` | One item for each destination that is on, with `destination`, its id. A destination with no server, with no key (the profile's key is empty and the server's address does not end with the stream's name, or its session key is not held), or whose server and key give an address a start refuses, is a problem. While a stream of this profile runs, a `live` destination passes, a `connecting` one, one added after the stream started, and one whose server or key changed after the stream started are unknown, and a `retrying`, `failed` or `stopped` one is a problem. While no stream runs, a destination passes only when it was live on an earlier stream of this session with the same server and key, and is a problem when it was retrying or had failed when last seen; one that has not connected yet is unknown, never `pass`. | `view.streaming` |
+| `destinations` | In place of the destination items: no destination is on, or the list cannot be used (too many, an empty id, an id used twice). Always a problem. | `view.streaming` |
+| `encoder` | The stream's video encoder. An encoder that is not installed, does not write H.264 or cannot run in a stream is a problem; the `hardware` choice is unknown; its tests run when the stream starts. Without the graphics device this item is a problem with no `fix`. | `app.settings` |
+| `recording_space` | The free space in the recording folder, or in the nearest folder above it that exists, with `free_bytes`. Less than 10 GB, a limit StudioCraft chose, is a problem, and so is a folder whose free space cannot be read or a file in its place. A folder that has not answered within 250 ms is unknown until a later check reads it; at most four folders are read at once. | `app.settings` |
+| `source:<id>` | Each source that is not working, with `source`, its id, and the error it reports, for example for a window that was closed or a camera that was unplugged. A source that did not start is a problem too. A source whose plug-in is not installed is a problem with no `fix`. At most 32 sources are listed; `more_sources` counts the others. | `selection.properties` |
+| `sources` | In place of the source items when every source is working. Always `pass`. | |
+| `captions` | Live captions. Running passes and starting is unknown. Off, stopping or failed is a problem when the scene collection has a Live Captions source, and passes when it has none. A Live Captions source in a build without speech recognition is a problem with no `fix`. | `captions.toggle` |
+
+`view.streaming`, `app.settings` and `selection.properties` are window commands; run
+`selection.properties` after selecting an item that shows the source. Error texts in a sentence are cut to 300
+characters. The check changes nothing: it does not save the profile, change the scene collection
+or add an undo step. A parameter is an error.
 
 ### `view.streaming` and the `stream.destination` commands
 
