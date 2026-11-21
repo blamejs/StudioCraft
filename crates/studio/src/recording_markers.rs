@@ -73,7 +73,7 @@ pub(crate) struct Ended {
     pub rate: FrameRate,
     /// The recording's length by the clock, from its first frame to its stop.
     pub length: Tick,
-    /// The frames the encoder was handed. The timeline's clip is no longer than this.
+    /// The encoder counters. The timeline's clip holds the frames the encoder was handed.
     pub written: Option<Written>,
     pub markers: Vec<Marker>,
 }
@@ -161,16 +161,16 @@ fn time_range(start: i64, duration: i64, rate: FrameRate) -> Value {
 /// The OpenTimelineIO timeline for `ended`: the recording, named by its file name relative to the
 /// timeline file, as one clip on a video track and an audio track, and each marker at the frame
 /// that holds its time in the recording, without the gaps the recording left out before it. The
-/// clip holds the frames that start before the stop, and no more frames than the encoder was
-/// handed. A marker after the last frame is put on the last frame.
+/// clip holds the frames the encoder was handed, or without encoder counters the frames that start
+/// before the stop. A marker after the last frame is put on the last frame.
 pub(crate) fn timeline(ended: &Ended) -> Value {
     let rate = ended.rate.sane();
     let file = ended.recording.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
     let title = ended.recording.file_stem().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
     // The frames that start before the stop.
-    let by_clock = if ended.length.0 > 0 { rate.frame_at(Tick(ended.length.0 - 1)).saturating_add(1) } else { 1 };
-    // A stall before the stop leaves fewer frames in the file. A recording is at least one frame.
-    let frames = ended.written.as_ref().map_or(by_clock, |w| by_clock.min(w.frames())).max(1);
+    let by_clock = || if ended.length.0 > 0 { rate.frame_at(Tick(ended.length.0 - 1)).saturating_add(1) } else { 1 };
+    // A recording is at least one frame.
+    let frames = ended.written.as_ref().map_or_else(by_clock, Written::frames).max(1);
     let available = time_range(0, frames, rate);
     let clip = json!({
         "OTIO_SCHEMA": "Clip.2",
@@ -472,7 +472,7 @@ mod tests {
     }
 
     #[test]
-    fn the_clip_is_no_longer_than_the_frames_the_encoder_was_handed() {
+    fn the_clip_holds_the_frames_the_encoder_was_handed() {
         let mut ended = Ended {
             recording: PathBuf::from("a.mkv"),
             rate: FrameRate::new(30, 1),
@@ -486,9 +486,9 @@ mod tests {
         assert_eq!(clip["source_range"]["duration"]["value"], 240.0);
         assert_eq!(clip["media_references"]["DEFAULT_MEDIA"]["available_range"]["duration"]["value"], 240.0);
         assert_eq!(v["tracks"]["markers"][0]["marked_range"]["start_time"]["value"], 239.0, "a marker past the file is put on its last frame");
-        // More frames than the clock gives keep the clock's length, and none still gives one frame.
-        ended.written = Some(written(400));
-        assert_eq!(timeline(&ended)["tracks"]["children"][0]["children"][0]["source_range"]["duration"]["value"], 300.0);
+        // A last frame placed past the stop is in the file too, and none still gives one frame.
+        ended.written = Some(written(301));
+        assert_eq!(timeline(&ended)["tracks"]["children"][0]["children"][0]["source_range"]["duration"]["value"], 301.0);
         ended.written = Some(written(0));
         assert_eq!(timeline(&ended)["tracks"]["children"][0]["children"][0]["source_range"]["duration"]["value"], 1.0);
     }
