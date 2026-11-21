@@ -108,7 +108,12 @@ Capturing one application uses Windows process loopback capture
 which needs Windows build 20348 or later: Windows 11 or Windows Server 2022.
 
 On Linux the list holds the applications that have a playback stream on the PipeWire sound server,
-named by the program file of the process that owns the stream. The capture links each of
+named by the program file of the process that owns the stream. A stream that the sound server
+passes on for an application using the PulseAudio interface names its own process, and nothing
+checks that name. StudioCraft counts such a stream for the process it names only while that
+process has an open connection to the PulseAudio socket. When the process has none, or when
+StudioCraft cannot read the process's open files or the system's socket list, the stream is not
+listed or captured. The capture links each of
 the application's playback streams, and those of the processes it starts, to a recording stream of
 StudioCraft's own, and links streams that start later as they appear. The application still plays
 on its own device. Linux lists no meter levels, so when several copies run the source keeps the

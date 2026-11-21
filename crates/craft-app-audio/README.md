@@ -53,8 +53,22 @@ that file's device and inode in the kernel's socket diagnostics, held in `/proc/
 process that root runs (the owner of
 `/proc/<pid>`) whose program file is named `pipewire` or `pipewire-pulse`. A socket that still
 listens after its file was removed, or after another socket was bound at the same path, is not the
-sound server's. The sound server does not check those claims, so such a
-stream can name another process. A stream whose client has no
+sound server's. The sound server does not check those claims, so the backend attributes such a
+stream to the process it claims only when that process holds an open connection to one of those
+listening sockets now. The kernel's socket diagnostics report every connected Unix socket with the
+file it is bound to and the socket at the other end (`UDIAG_SHOW_VFS`, `UDIAG_SHOW_PEER`); a socket
+the server accepted is bound to the listening socket's file, so the client ends of the connections
+are the peers of the connected sockets bound to that file's device and inode. The claimed process
+must hold one of them in `/proc/<pid>/fd`. Neither step needs root for the user's own processes.
+The check runs again each time the list thread rebuilds its list (when a followed stream, or the
+client that owns one, appears, goes or changes), with one read of the socket table for all the
+streams. The claimed process must keep its start time from `/proc/<pid>/stat`, read before and
+after the check, so a process id the system gives to a later process during the check is not
+credited. When the claimed process holds no such connection, or when its open
+files or the socket table cannot be read, the stream is not attributed to any process and is not
+listed or captured. A process that holds its own PulseAudio connection can still be named by
+another client's stream, and a client in another network namespace is not found. A stream whose
+client has no
 `pipewire.sec.pid` is not listed. The key is the file name of `/proc/<pid>/exe`, and the path is
 the program file's path. Names the stream reports, and the command name a process sets for itself
 in `/proc/<pid>/comm`, are not used. A process whose program file is not shown (normally another
@@ -133,9 +147,14 @@ tests wait on the discovery's and the capture's own signals.
 
 `src/linux/graph.rs` tests the Linux backend's parts that need no server: reading stream and port
 properties, hostile process ids, stream attribution by the server's process id and through the
-sound server, names taken from the process table, channel sides, `/proc/<pid>/stat` with parentheses in
+sound server, forwarded streams whose claimed process holds a PulseAudio connection, holds none or
+cannot be checked, the socket diagnostics request and reply with peers, names taken from the
+process table, channel sides, `/proc/<pid>/stat` with parentheses in
 the program name, process trees and parent loops, the links a capture plans and their limit, and
 the application list with its choice between instances. `src/linux.rs` tests the socket lookup, the
-sample buffer, packet positions across dropped audio, streams taking their client's process id, a
+sample buffer, packet positions across dropped audio, streams taking their client's process id,
+forwarded streams checked again when their process closes its connection or ends during the check,
+one read of the socket table for all streams, open files
+read from a test `/proc` folder, the client end of a real connection to a socket file, a
 target that is gone or whose id another process now holds, and a server that cannot be reached: the list reports it
 without the discovery waiting, and a capture fails at once.

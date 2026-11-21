@@ -42,6 +42,27 @@ fn a_key_is_the_lower_case_file_name_and_round_trips() {
 }
 
 #[test]
+fn names_that_differ_in_spaces_are_different_keys() {
+    let plain = AppKey::from_exe("/usr/bin/player").unwrap();
+    let leading = AppKey::from_exe("/usr/bin/ player").unwrap();
+    let trailing = AppKey::from_exe("/usr/bin/player ").unwrap();
+    assert_eq!((plain.name.as_str(), leading.name.as_str(), trailing.name.as_str()), ("player", " player", "player "));
+    assert_ne!(plain.id(), leading.id());
+    assert_ne!(plain.id(), trailing.id());
+    for k in [&plain, &leading, &trailing] {
+        assert_eq!(AppKey::decode(&k.encode()).as_ref(), Some(k), "each name reads back as written");
+    }
+    assert_eq!(AppKey::decode("player"), Some(plain.clone()), "a name saved without spaces still reads");
+    // A choice saved for `player` does not pick ` player`, the only program running.
+    let mut spaced = app(" player", 20, true);
+    spaced.path = "/usr/bin/ player".into();
+    let list = AppList { generation: 1, apps: vec![spaced], error: None };
+    assert_eq!(list.find(&plain), None);
+    assert_eq!(list.find(&leading).map(|a| a.pids[0]), Some(20));
+    assert!(AppKey::from_exe(" \t ").is_none(), "a name of spaces only");
+}
+
+#[test]
 fn a_key_with_a_path_matches_only_that_path() {
     let listed = AppKey::from_exe("game.exe").unwrap();
     let any = AppKey::from_exe("game.exe").unwrap();

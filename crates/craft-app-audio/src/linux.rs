@@ -8,7 +8,11 @@
 //!   so the backend binds each playback node to read the rest, and a client's registry properties
 //!   hold the process id the server read from its socket (`pipewire.sec.pid`). Each stream is
 //!   attributed to a process from these by `graph::attribute`, and each application is named by
-//!   its process's program file, never by names the stream reports. A thread of the backend's own
+//!   its process's program file, never by names the stream reports. A stream the sound server
+//!   forwards from its PulseAudio socket carries only the process id its client wrote, so it is
+//!   attributed to that process only while the process holds an open connection to that socket:
+//!   the kernel's socket diagnostics give the client ends of the connections to the socket, and
+//!   the process's open files in `/proc` must hold one of them. A thread of the backend's own
 //!   keeps the registry and wakes the discovery when a stream starts, stops or changes state.
 //! - Capture: a capture stream that the session manager does not connect, asking for 48 kHz
 //!   stereo `f32`, and a link from each output port of every playback stream of the target's
@@ -21,7 +25,7 @@
 
 mod graph;
 
-use std::cell::{Cell, RefCell};
+use std::cell::{Cell, OnceCell, RefCell};
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{PipeReader, PipeWriter, Read};
 use std::path::{Path, PathBuf};
@@ -144,16 +148,30 @@ impl Procs for ProcFs {
     fn server_sockets(&self) -> Vec<u64> {
         bound_listeners(&pulse_sockets(|k| std::env::var(k).ok(), &machine_names()))
     }
+
+    fn started(&self, pid: u32) -> Option<u64> {
+        started_at(pid)
+    }
+
+    fn pulse_connections(&self) -> Option<BTreeSet<u64>> {
+        connections_to(&pulse_sockets(|k| std::env::var(k).ok(), &machine_names()))
+    }
+
+    fn holds(&self, pid: u32, inodes: &BTreeSet<u64>) -> Option<bool> {
+        holds_at(Path::new("/proc"), pid, inodes)
+    }
 }
 
-/// Every listening Unix socket bound to a file, as `(socket inode, file device, file inode)`, from
-/// the kernel's socket diagnostics (https://man7.org/linux/man-pages/man7/sock_diag.7.html). Each
-/// reply is read up to [`MAX_DIAG_BYTES`] in all.
-fn listeners() -> Option<Vec<graph::Listener>> {
+/// Every Unix socket in one of `states` that is bound to a file, with the attributes `show` asks
+/// for, from the kernel's socket diagnostics
+/// (https://man7.org/linux/man-pages/man7/sock_diag.7.html). Each reply is read up to
+/// [`MAX_DIAG_BYTES`] in all. The diagnostics list the sockets of this process's network
+/// namespace, and need no privileges.
+fn unix_sockets(states: u32, show: u32) -> Option<Vec<graph::Bound>> {
     use rustix::net::{AddressFamily, RecvFlags, SendFlags, SocketType, netlink, sockopt};
     let fd = rustix::net::socket(AddressFamily::NETLINK, SocketType::DGRAM, Some(netlink::SOCK_DIAG)).ok()?;
     sockopt::set_socket_timeout(&fd, sockopt::Timeout::Recv, Some(DIAG_WAIT)).ok()?;
-    rustix::net::sendto(&fd, &graph::diag_request(), SendFlags::empty(), &netlink::SocketAddrNetlink::new(0, 0)).ok()?;
+    rustix::net::sendto(&fd, &graph::diag_request(states, show), SendFlags::empty(), &netlink::SocketAddrNetlink::new(0, 0)).ok()?;
     let mut found = Vec::new();
     let mut buf = vec![0u8; DIAG_BUFFER];
     let mut read = 0usize;
@@ -173,22 +191,45 @@ fn listeners() -> Option<Vec<graph::Listener>> {
 /// was removed, and a socket bound to a file that was removed and made again by another socket, is
 /// not among them.
 fn bound_listeners(paths: &[PathBuf]) -> Vec<u64> {
-    use std::os::unix::fs::{FileTypeExt, MetadataExt};
-    let files: Vec<(u64, u64)> =
-        paths.iter().filter_map(|p| std::fs::metadata(p).ok()).filter(|m| m.file_type().is_socket()).map(|m| (m.dev(), m.ino())).collect();
+    let files = socket_files(paths);
     if files.is_empty() {
         return Vec::new();
     }
-    let Some(listeners) = listeners() else { return Vec::new() };
+    let Some(listeners) = unix_sockets(graph::LISTEN_STATES, graph::SHOW_VFS) else { return Vec::new() };
     files.iter().filter_map(|(dev, ino)| graph::bound_to(&listeners, *dev, *ino)).collect()
+}
+
+/// The device and inode of each of the files at `paths` that is a socket now.
+fn socket_files(paths: &[PathBuf]) -> Vec<(u64, u64)> {
+    use std::os::unix::fs::{FileTypeExt, MetadataExt};
+    paths.iter().filter_map(|p| std::fs::metadata(p).ok()).filter(|m| m.file_type().is_socket()).map(|m| (m.dev(), m.ino())).collect()
+}
+
+/// The inodes of the client ends of the connections to the sockets the files at `paths` lead to
+/// now. The kernel binds each socket a server accepts to the file of its listening socket, and
+/// reports the socket at the other end of each connection, so the client ends are the peers of
+/// the connected sockets bound to one of the files. A socket bound to a file that was removed is
+/// bound to another inode, and is not counted. `None` when no file at `paths` is a socket, or when
+/// the system's socket table cannot be read. A client in another network namespace, such as some
+/// sandboxed applications, is not counted.
+fn connections_to(paths: &[PathBuf]) -> Option<BTreeSet<u64>> {
+    let files = socket_files(paths);
+    if files.is_empty() {
+        return None;
+    }
+    let connected = unix_sockets(graph::CONNECTED_STATES, graph::SHOW_VFS | graph::SHOW_PEER)?;
+    Some(graph::connections(&connected, &files))
 }
 
 /// A process table for the streams of the client object `client`: it asks the one it wraps
 /// whether the client's process is the sound server only when `servers` has no answer for the
-/// client, since the answer reads the process's open files.
+/// client, since the answer reads the process's open files. The PulseAudio connections are read
+/// from the system's socket table once for each `connections`, when the first forwarded stream
+/// needs them.
 struct Remembered<'a> {
     procs: &'a dyn Procs,
     servers: &'a RefCell<BTreeMap<u32, bool>>,
+    connections: &'a OnceCell<Option<BTreeSet<u64>>>,
     client: u32,
 }
 
@@ -214,6 +255,18 @@ impl Procs for Remembered<'_> {
 
     fn server_sockets(&self) -> Vec<u64> {
         self.procs.server_sockets()
+    }
+
+    fn started(&self, pid: u32) -> Option<u64> {
+        self.procs.started(pid)
+    }
+
+    fn pulse_connections(&self) -> Option<BTreeSet<u64>> {
+        self.connections.get_or_init(|| self.procs.pulse_connections()).clone()
+    }
+
+    fn holds(&self, pid: u32, inodes: &BTreeSet<u64>) -> Option<bool> {
+        self.procs.holds(pid, inodes)
     }
 }
 
@@ -264,12 +317,20 @@ fn pulse_sockets(var: impl Fn(&str) -> Option<String>, local: &[String]) -> Vec<
 
 /// Whether `pid` holds one of the sockets whose inodes are in `inodes`.
 fn holds_any(pid: u32, inodes: &[u64]) -> bool {
+    !inodes.is_empty() && holds_at(Path::new("/proc"), pid, &inodes.iter().copied().collect()) == Some(true)
+}
+
+/// Whether `pid` holds one of the sockets whose inodes are in `inodes`, from the links in
+/// `<proc_root>/<pid>/fd`, each of which reads `socket:[<inode>]` for a socket. The system lets a
+/// user read the open files of the user's own processes. `None` when the folder cannot be read:
+/// the process is gone, or belongs to another user.
+fn holds_at(proc_root: &Path, pid: u32, inodes: &BTreeSet<u64>) -> Option<bool> {
+    let fds = std::fs::read_dir(proc_root.join(pid.to_string()).join("fd")).ok()?;
     if inodes.is_empty() {
-        return false;
+        return Some(false);
     }
     let wanted: Vec<String> = inodes.iter().map(|inode| format!("socket:[{inode}]")).collect();
-    let Ok(fds) = std::fs::read_dir(format!("/proc/{pid}/fd")) else { return false };
-    fds.take(MAX_FDS).flatten().any(|fd| std::fs::read_link(fd.path()).is_ok_and(|l| wanted.iter().any(|w| l.as_os_str() == w.as_str())))
+    Some(fds.take(MAX_FDS).flatten().any(|fd| std::fs::read_link(fd.path()).is_ok_and(|l| wanted.iter().any(|w| l.as_os_str() == w.as_str()))))
 }
 
 /// The start time of `pid`, which tells the process apart from a later one given the same id.
@@ -496,7 +557,9 @@ struct Streams {
 
 impl Streams {
     /// The followed streams attributed to their processes; a stream attributed to none is left
-    /// out.
+    /// out. Whether the process a forwarded stream claims holds a PulseAudio connection is checked
+    /// again on each call, which the list thread makes whenever a followed stream, or the client
+    /// that owns one, appears, goes or changes.
     fn attributed(&self, procs: &dyn Procs) -> BTreeMap<u32, StreamNode> {
         if let (Ok(mut servers), Ok(mut sockets)) = (self.servers.try_borrow_mut(), self.sockets.try_borrow_mut()) {
             let now = procs.server_sockets();
@@ -506,12 +569,13 @@ impl Streams {
             }
             servers.retain(|client, _| self.clients.contains_key(client));
         }
+        let connections = OnceCell::new();
         self.nodes
             .iter()
             .filter_map(|(id, f)| {
                 let client = f.client?;
                 let real = self.clients.get(&client).copied();
-                let procs = Remembered { procs, servers: &self.servers, client };
+                let procs = Remembered { procs, servers: &self.servers, connections: &connections, client };
                 graph::attribute(f.claimed, real, &procs).map(|pid| (*id, StreamNode { pid, running: f.running }))
             })
             .collect()
@@ -1464,6 +1528,126 @@ mod tests {
         fn server_sockets(&self) -> Vec<u64> {
             self.1.borrow().clone()
         }
+        fn started(&self, _: u32) -> Option<u64> {
+            Some(1)
+        }
+        fn pulse_connections(&self) -> Option<BTreeSet<u64>> {
+            Some(BTreeSet::new())
+        }
+        fn holds(&self, _: u32, _: &BTreeSet<u64>) -> Option<bool> {
+            Some(true)
+        }
+    }
+
+    /// The sound server is process 7. Each process's start time and the PulseAudio connection
+    /// sockets it holds can change; a process missing from `fds` has open files that cannot be
+    /// read, and `connections` of `None` is a socket table that cannot be read. Reads of the
+    /// socket table are counted.
+    #[derive(Default)]
+    struct Forwarding {
+        starts: RefCell<BTreeMap<u32, u64>>,
+        fds: RefCell<BTreeMap<u32, BTreeSet<u64>>>,
+        connections: RefCell<Option<BTreeSet<u64>>>,
+        reads: Cell<u32>,
+        /// A process whose start time changes once it has been asked about.
+        ends_when_asked: Cell<Option<u32>>,
+    }
+
+    impl Procs for Forwarding {
+        fn parent(&self, _: u32) -> Option<u32> {
+            None
+        }
+        fn exe(&self, _: u32) -> Option<String> {
+            None
+        }
+        fn sound_server(&self, pid: u32) -> bool {
+            pid == 7
+        }
+        fn started(&self, pid: u32) -> Option<u64> {
+            self.starts.borrow().get(&pid).copied()
+        }
+        fn pulse_connections(&self) -> Option<BTreeSet<u64>> {
+            self.reads.set(self.reads.get() + 1);
+            self.connections.borrow().clone()
+        }
+        fn holds(&self, pid: u32, inodes: &BTreeSet<u64>) -> Option<bool> {
+            if self.ends_when_asked.get() == Some(pid) {
+                self.starts.borrow_mut().insert(pid, 99);
+            }
+            self.fds.borrow().get(&pid).map(|held| !held.is_disjoint(inodes))
+        }
+    }
+
+    #[test]
+    fn a_forwarded_stream_is_credited_only_while_its_process_holds_a_pulseaudio_connection() {
+        let mut s = Streams::default();
+        s.clients.insert(30, 7);
+        s.clients.insert(31, 40);
+        // Forwarded streams that claim 20, which holds a connection, 21, which holds none, and 22,
+        // whose open files cannot be read; and a native client's stream that claims 20.
+        s.nodes.insert(100, Followed { client: Some(30), claimed: Some(20), running: true });
+        s.nodes.insert(101, Followed { client: Some(30), claimed: Some(21), running: true });
+        s.nodes.insert(102, Followed { client: Some(30), claimed: Some(22), running: true });
+        s.nodes.insert(103, Followed { client: Some(31), claimed: Some(20), running: false });
+        let f = Forwarding::default();
+        f.starts.replace(BTreeMap::from([(20, 5), (21, 5), (22, 5), (40, 5)]));
+        f.fds.replace(BTreeMap::from([(20, BTreeSet::from([500, 9])), (21, BTreeSet::from([9])), (40, BTreeSet::new())]));
+        f.connections.replace(Some(BTreeSet::from([500, 501])));
+        let native = || (103, StreamNode { pid: 40, running: false });
+        assert_eq!(s.attributed(&f), BTreeMap::from([(100, StreamNode { pid: 20, running: true }), native()]));
+        assert_eq!(f.reads.get(), 1, "the socket table is read once for all the streams");
+        // Process 20 closes its connection while its stream is still listed.
+        f.fds.borrow_mut().insert(20, BTreeSet::from([9]));
+        assert_eq!(s.attributed(&f), BTreeMap::from([native()]), "the connection is checked again");
+        f.fds.borrow_mut().insert(20, BTreeSet::from([501]));
+        assert!(s.attributed(&f).contains_key(&100));
+        // The socket table cannot be read.
+        f.connections.replace(None);
+        assert_eq!(s.attributed(&f), BTreeMap::from([native()]));
+        f.connections.replace(Some(BTreeSet::from([501])));
+        // A process that is gone is not credited.
+        f.starts.borrow_mut().remove(&20);
+        assert_eq!(s.attributed(&f), BTreeMap::from([native()]));
+        // Process 20 ends while it is checked, and its id goes to a later process.
+        f.starts.borrow_mut().insert(20, 5);
+        f.ends_when_asked.set(Some(20));
+        assert_eq!(s.attributed(&f), BTreeMap::from([native()]), "a process id that changed hands during the check");
+    }
+
+    #[test]
+    fn a_process_holds_a_socket_when_one_of_its_open_files_is_that_socket() {
+        let root = std::env::temp_dir().join(format!("studiocraft-app-audio-{}-proc", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let fd = root.join("42").join("fd");
+        std::fs::create_dir_all(&fd).unwrap();
+        std::os::unix::fs::symlink("socket:[777]", fd.join("3")).unwrap();
+        std::os::unix::fs::symlink("/dev/null", fd.join("4")).unwrap();
+        std::os::unix::fs::symlink("pipe:[778]", fd.join("5")).unwrap();
+        assert_eq!(holds_at(&root, 42, &BTreeSet::from([777])), Some(true));
+        assert_eq!(holds_at(&root, 42, &BTreeSet::from([776, 777])), Some(true));
+        assert_eq!(holds_at(&root, 42, &BTreeSet::from([778])), Some(false), "a pipe is not a socket");
+        assert_eq!(holds_at(&root, 42, &BTreeSet::new()), Some(false));
+        assert_eq!(holds_at(&root, 43, &BTreeSet::from([777])), None, "a process whose open files cannot be read");
+        assert_eq!(holds_at(&root.join("missing"), 42, &BTreeSet::from([777])), None, "an unreadable process table");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn the_client_end_of_a_connection_to_a_socket_file_is_found() {
+        let me = std::process::id();
+        let path = std::env::temp_dir().join(format!("studiocraft-app-audio-{me}-connected"));
+        let _ = std::fs::remove_file(&path);
+        let listener = std::os::unix::net::UnixListener::bind(&path).unwrap();
+        assert_eq!(connections_to(std::slice::from_ref(&path)), Some(BTreeSet::new()), "no connections yet");
+        let client = std::os::unix::net::UnixStream::connect(&path).unwrap();
+        let (accepted, _) = listener.accept().unwrap();
+        let peers = connections_to(std::slice::from_ref(&path)).unwrap();
+        assert_eq!(peers, BTreeSet::from([socket_inode(&client)]), "the client's end, not the server's");
+        assert!(!peers.contains(&socket_inode(&accepted)));
+        assert_eq!(holds_at(Path::new("/proc"), me, &peers), Some(true));
+        assert_eq!(connections_to(&[path.with_extension("other")]), None, "no socket at the path");
+        drop((client, accepted, listener));
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]

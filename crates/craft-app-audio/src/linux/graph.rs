@@ -46,14 +46,17 @@ pub(super) fn parse_id(text: Option<&str>) -> Option<u32> {
 ///
 /// - Without `real`, the stream is attributed to no process.
 /// - A client that is the system's own sound server (see [`Procs::sound_server`]) forwards the
-///   streams of the applications that connect to its PulseAudio socket, so its streams are
-///   attributed to the process they claim; a stream of its own, or one that claims no other
-///   process, is attributed to none.
+///   streams of the applications that connect to its PulseAudio socket. The client of such a
+///   stream writes the process id itself, so the stream is attributed to the process it claims
+///   only when that process holds an open connection to the PulseAudio socket now (see
+///   [`Procs::pulse_client`]). When the process holds none, or when that cannot be read, the
+///   stream is attributed to none, and so is a stream of the server's own or one that claims no
+///   other process.
 /// - Any other client's streams are attributed to the client's own process, whatever they claim.
 pub(super) fn attribute(claimed: Option<u32>, real: Option<u32>, procs: &dyn Procs) -> Option<u32> {
     let real = real.filter(|p| *p != 0)?;
     if procs.sound_server(real) {
-        return claimed.filter(|c| *c != real);
+        return claimed.filter(|c| *c != real && procs.pulse_client(*c) == Some(true));
     }
     Some(real)
 }
@@ -114,9 +117,27 @@ pub(super) trait Procs {
     /// that root runs whose program file is named `pipewire` or `pipewire-pulse`.
     fn sound_server(&self, pid: u32) -> bool;
     /// The inodes of the listening sockets the user's PulseAudio addresses lead to now. When they
-    /// change, [`Procs::sound_server`] may answer differently.
+    /// change, [`Procs::sound_server`] and [`Procs::pulse_client`] may answer differently.
     fn server_sockets(&self) -> Vec<u64> {
         Vec::new()
+    }
+    /// The start time of `pid`, which tells the process apart from a later one given the same id.
+    fn started(&self, pid: u32) -> Option<u64>;
+    /// The inodes of the client ends of the open connections to the listening sockets the user's
+    /// PulseAudio addresses lead to now. `None` when no such socket is found or the system's
+    /// socket table cannot be read.
+    fn pulse_connections(&self) -> Option<BTreeSet<u64>>;
+    /// Whether `pid` holds one of the sockets whose inodes are in `inodes`. `None` when its open
+    /// files cannot be read: the process is gone, or belongs to another user.
+    fn holds(&self, pid: u32, inodes: &BTreeSet<u64>) -> Option<bool>;
+    /// Whether `pid` holds an open connection to a listening socket the user's PulseAudio
+    /// addresses lead to now. `None` when that cannot be read. The process must keep its start
+    /// time across the check, so a process id the system gives to a later process during the
+    /// check gets no answer.
+    fn pulse_client(&self, pid: u32) -> Option<bool> {
+        let start = self.started(pid)?;
+        let holds = self.holds(pid, &self.pulse_connections()?)?;
+        (self.started(pid) == Some(start)).then_some(holds)
     }
 }
 
@@ -132,13 +153,16 @@ pub(super) fn parse_stat(text: &str) -> Option<(u32, u64)> {
     Some((parent, start))
 }
 
-/// A listening Unix socket bound to a file: the socket's inode, and the device and inode of the
-/// file, as the kernel's socket diagnostics report them.
+/// A Unix socket bound to a file: the socket's inode, the device and inode of the file, as the
+/// kernel's socket diagnostics report them, and the inode of the socket at the other end of its
+/// connection when it has one and the request asked for it. The kernel gives the socket a server
+/// accepts the file of the listening socket it came from.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) struct Listener {
+pub(super) struct Bound {
     pub socket: u64,
     pub dev: u32,
     pub ino: u32,
+    pub peer: Option<u64>,
 }
 
 /// `SOCK_DIAG_BY_FAMILY`, the message type of a socket diagnostics request and its replies.
@@ -151,27 +175,34 @@ const DUMP_REQUEST: u16 = 0x0001 | 0x0300;
 /// `AF_UNIX`.
 const AF_UNIX: u8 = 1;
 /// `1 << TCP_LISTEN`: listening sockets only.
-const LISTEN_STATES: u32 = 1 << 10;
+pub(super) const LISTEN_STATES: u32 = 1 << 10;
+/// `1 << TCP_ESTABLISHED`: connected sockets only.
+pub(super) const CONNECTED_STATES: u32 = 1 << 1;
 /// `UDIAG_SHOW_VFS`: the device and inode of the file a socket is bound to.
-const SHOW_VFS: u32 = 0x2;
-/// `UNIX_DIAG_VFS`, the attribute that holds them.
+pub(super) const SHOW_VFS: u32 = 0x2;
+/// `UDIAG_SHOW_PEER`: the inode of the socket at the other end of a connection.
+pub(super) const SHOW_PEER: u32 = 0x4;
+/// `UNIX_DIAG_VFS` and `UNIX_DIAG_PEER`, the attributes that hold them. `linux/unix_diag.h`
+/// numbers the attributes from `UNIX_DIAG_NAME` = 0, with no `UNIX_DIAG_NONE` before it.
 const UNIX_DIAG_VFS: u16 = 1;
+const UNIX_DIAG_PEER: u16 = 2;
 /// The sizes of `struct nlmsghdr`, `struct unix_diag_msg` and `struct rtattr`.
 const NLMSG_HEADER: usize = 16;
 const DIAG_MSG: usize = 16;
 const RTA_HEADER: usize = 4;
 
-/// The request for every listening Unix socket with the file it is bound to: a `struct nlmsghdr`
-/// followed by a `struct unix_diag_req` (`linux/sock_diag.h`, `linux/unix_diag.h`).
-pub(super) fn diag_request() -> [u8; 40] {
+/// The request for every Unix socket in one of `states` (a mask of `1 << state`), with the
+/// attributes `show` asks for: a `struct nlmsghdr` followed by a `struct unix_diag_req`
+/// (`linux/sock_diag.h`, `linux/unix_diag.h`).
+pub(super) fn diag_request(states: u32, show: u32) -> [u8; 40] {
     let mut req = [0u8; 40];
     req[0..4].copy_from_slice(&40u32.to_ne_bytes());
     req[4..6].copy_from_slice(&SOCK_DIAG_BY_FAMILY.to_ne_bytes());
     req[6..8].copy_from_slice(&DUMP_REQUEST.to_ne_bytes());
     req[8..12].copy_from_slice(&1u32.to_ne_bytes());
     req[16] = AF_UNIX;
-    req[20..24].copy_from_slice(&LISTEN_STATES.to_ne_bytes());
-    req[28..32].copy_from_slice(&SHOW_VFS.to_ne_bytes());
+    req[20..24].copy_from_slice(&states.to_ne_bytes());
+    req[28..32].copy_from_slice(&show.to_ne_bytes());
     req
 }
 
@@ -194,9 +225,9 @@ fn u32_at(buf: &[u8], at: usize) -> Option<u32> {
     Some(u32::from_ne_bytes(buf.get(at..at + 4)?.try_into().ok()?))
 }
 
-/// Adds the bound listening sockets in one received part of a socket diagnostics listing to
+/// Adds the sockets bound to a file in one received part of a socket diagnostics listing to
 /// `found`. A socket that is not bound to a file is skipped.
-pub(super) fn parse_diag(buf: &[u8], found: &mut Vec<Listener>) -> Diag {
+pub(super) fn parse_diag(buf: &[u8], found: &mut Vec<Bound>) -> Diag {
     let mut at = 0;
     while at < buf.len() {
         let (Some(len), Some(kind)) = (u32_at(buf, at), u16_at(buf, at + 4)) else { return Diag::Failed };
@@ -210,6 +241,7 @@ pub(super) fn parse_diag(buf: &[u8], found: &mut Vec<Listener>) -> Diag {
             SOCK_DIAG_BY_FAMILY => {
                 let msg = &buf[at + NLMSG_HEADER..at + len];
                 let Some(socket) = u32_at(msg, 4) else { return Diag::Failed };
+                let (mut file, mut peer) = (None, None);
                 let mut a = DIAG_MSG;
                 while a + RTA_HEADER <= msg.len() {
                     let (Some(rta_len), Some(rta_kind)) = (u16_at(msg, a), u16_at(msg, a + 2)) else { break };
@@ -217,12 +249,19 @@ pub(super) fn parse_diag(buf: &[u8], found: &mut Vec<Listener>) -> Diag {
                     if rta_len < RTA_HEADER || a + rta_len > msg.len() {
                         break;
                     }
-                    if rta_kind == UNIX_DIAG_VFS
-                        && let (Some(ino), Some(dev)) = (u32_at(msg, a + RTA_HEADER), u32_at(msg, a + RTA_HEADER + 4))
-                    {
-                        found.push(Listener { socket: u64::from(socket), dev, ino });
+                    match rta_kind {
+                        UNIX_DIAG_VFS => {
+                            if let (Some(ino), Some(dev)) = (u32_at(msg, a + RTA_HEADER), u32_at(msg, a + RTA_HEADER + 4)) {
+                                file = Some((dev, ino));
+                            }
+                        }
+                        UNIX_DIAG_PEER => peer = u32_at(msg, a + RTA_HEADER).filter(|p| *p != 0).map(u64::from),
+                        _ => {}
                     }
                     a += rta_len.next_multiple_of(4);
+                }
+                if let Some((dev, ino)) = file {
+                    found.push(Bound { socket: u64::from(socket), dev, ino, peer });
                 }
             }
             _ => {}
@@ -240,12 +279,23 @@ pub(super) fn kernel_dev(st_dev: u64) -> u64 {
     (major << 20) | minor
 }
 
-/// The listening socket bound to the file with device `st_dev` and inode `st_ino`, as `stat`
+/// Whether `socket` is bound to the file with device `st_dev` and inode `st_ino`, as `stat`
 /// reports them. The diagnostics hold the low 32 bits of the inode.
-pub(super) fn bound_to(listeners: &[Listener], st_dev: u64, st_ino: u64) -> Option<u64> {
-    let dev = kernel_dev(st_dev);
-    let ino = st_ino & u64::from(u32::MAX);
-    listeners.iter().find(|l| u64::from(l.dev) == dev && u64::from(l.ino) == ino).map(|l| l.socket)
+fn is_bound_to(socket: &Bound, st_dev: u64, st_ino: u64) -> bool {
+    u64::from(socket.dev) == kernel_dev(st_dev) && u64::from(socket.ino) == st_ino & u64::from(u32::MAX)
+}
+
+/// The listening socket bound to the file with device `st_dev` and inode `st_ino`, as `stat`
+/// reports them.
+pub(super) fn bound_to(listeners: &[Bound], st_dev: u64, st_ino: u64) -> Option<u64> {
+    listeners.iter().find(|l| is_bound_to(l, st_dev, st_ino)).map(|l| l.socket)
+}
+
+/// The client ends of the connections to the socket files `files`, given as `(st_dev, st_ino)`:
+/// the peers of the connected sockets bound to one of the files, which are the sockets the server
+/// accepted.
+pub(super) fn connections(connected: &[Bound], files: &[(u64, u64)]) -> BTreeSet<u64> {
+    connected.iter().filter(|s| files.iter().any(|(dev, ino)| is_bound_to(s, *dev, *ino))).filter_map(|s| s.peer).collect()
 }
 
 /// The file name of a program path, or of a program name.
@@ -413,12 +463,15 @@ pub(super) fn apps(nodes: &BTreeMap<u32, StreamNode>, procs: &dyn Procs, previou
 mod tests {
     use super::*;
 
-    /// A process table: each process's parent and program path, and the processes that run the
-    /// sound server.
+    /// A process table: each process's parent and program path, the processes that run the sound
+    /// server, the processes that hold a connection to the PulseAudio socket, and whether those
+    /// connections can be read at all.
     #[derive(Default)]
     struct Table {
         procs: BTreeMap<u32, (Option<u32>, &'static str)>,
         servers: BTreeSet<u32>,
+        pulse: BTreeSet<u32>,
+        unreadable: bool,
     }
 
     impl Table {
@@ -429,6 +482,11 @@ mod tests {
 
         fn server(mut self, pid: u32) -> Table {
             self.servers.insert(pid);
+            self
+        }
+
+        fn pulse(mut self, pid: u32) -> Table {
+            self.pulse.insert(pid);
             self
         }
     }
@@ -444,6 +502,19 @@ mod tests {
 
         fn sound_server(&self, pid: u32) -> bool {
             self.servers.contains(&pid)
+        }
+
+        fn started(&self, pid: u32) -> Option<u64> {
+            self.procs.contains_key(&pid).then_some(1)
+        }
+
+        /// Each process in `pulse` holds the socket with inode 1000 more than its id.
+        fn pulse_connections(&self) -> Option<BTreeSet<u64>> {
+            (!self.unreadable).then(|| self.pulse.iter().map(|p| u64::from(*p) + 1000).collect())
+        }
+
+        fn holds(&self, pid: u32, inodes: &BTreeSet<u64>) -> Option<bool> {
+            self.procs.contains_key(&pid).then(|| self.pulse.contains(&pid) && inodes.contains(&(u64::from(pid) + 1000)))
         }
     }
 
@@ -473,14 +544,29 @@ mod tests {
         assert_eq!(attribute(Some(20), Some(10), &t), Some(10), "a client that claims another process gets its own");
         assert_eq!(attribute(Some(10), None, &t), None, "without the server's process id nothing is attributed");
         assert_eq!(attribute(Some(10), Some(0), &t), None);
+        // Whether the claimed process holds a PulseAudio connection does not matter here.
+        let t = t.pulse(20);
+        assert_eq!(attribute(Some(20), Some(10), &t), Some(10), "a native client's stream keeps its own process");
+        let unreadable = Table { unreadable: true, ..Table::default().with(10, Some(1), "/usr/bin/player") };
+        assert_eq!(attribute(Some(20), Some(10), &unreadable), Some(10));
     }
 
     #[test]
     fn the_sound_servers_streams_are_attributed_to_the_process_they_claim() {
-        let t = Table::default().with(5, Some(1), "/usr/bin/pipewire-pulse").server(5).with(20, Some(1), "/usr/bin/browser");
+        let t = Table::default().with(5, Some(1), "/usr/bin/pipewire-pulse").server(5).with(20, Some(1), "/usr/bin/browser").pulse(20);
         assert_eq!(attribute(Some(20), Some(5), &t), Some(20), "a stream forwarded from the PulseAudio socket");
         assert_eq!(attribute(None, Some(5), &t), None, "the server's stream without a process");
         assert_eq!(attribute(Some(5), Some(5), &t), None, "the server's own stream");
+    }
+
+    #[test]
+    fn a_forwarded_stream_needs_its_process_to_hold_a_pulseaudio_connection() {
+        let t = Table::default().with(5, Some(1), "/usr/bin/pipewire-pulse").server(5).with(20, Some(1), "/usr/bin/browser").pulse(20);
+        let t = t.with(30, Some(1), "/usr/bin/player");
+        assert_eq!(attribute(Some(30), Some(5), &t), None, "a claimed process with no PulseAudio connection");
+        assert_eq!(attribute(Some(99), Some(5), &t), None, "a claimed process that is not running");
+        let unreadable = Table { unreadable: true, ..t };
+        assert_eq!(attribute(Some(20), Some(5), &unreadable), None, "connections that cannot be read");
     }
 
     #[test]
@@ -519,6 +605,12 @@ mod tests {
     /// One reply message for a listening socket with inode `socket`, and the file it is bound to
     /// when `vfs` holds its inode and device.
     fn diag_msg(socket: u32, vfs: Option<(u32, u32)>) -> Vec<u8> {
+        diag_msg_with_peer(socket, vfs, None)
+    }
+
+    /// One reply message for a socket with inode `socket`, the file it is bound to when `vfs`
+    /// holds its inode and device, and the socket at the other end when `peer` holds its inode.
+    fn diag_msg_with_peer(socket: u32, vfs: Option<(u32, u32)>, peer: Option<u32>) -> Vec<u8> {
         let mut body = vec![AF_UNIX, 1, 10, 0];
         body.extend_from_slice(&socket.to_ne_bytes());
         body.extend_from_slice(&[0; 8]);
@@ -526,6 +618,11 @@ mod tests {
         body.extend_from_slice(&7u16.to_ne_bytes());
         body.extend_from_slice(&0u16.to_ne_bytes());
         body.extend_from_slice(b"abc\0");
+        if let Some(peer) = peer {
+            body.extend_from_slice(&8u16.to_ne_bytes());
+            body.extend_from_slice(&UNIX_DIAG_PEER.to_ne_bytes());
+            body.extend_from_slice(&peer.to_ne_bytes());
+        }
         if let Some((ino, dev)) = vfs {
             body.extend_from_slice(&12u16.to_ne_bytes());
             body.extend_from_slice(&UNIX_DIAG_VFS.to_ne_bytes());
@@ -546,13 +643,16 @@ mod tests {
 
     #[test]
     fn the_request_asks_for_listening_unix_sockets_with_their_files() {
-        let req = diag_request();
+        let req = diag_request(LISTEN_STATES, SHOW_VFS);
         assert_eq!(u32_at(&req, 0), Some(40));
         assert_eq!(u16_at(&req, 4), Some(SOCK_DIAG_BY_FAMILY));
         assert_eq!(u16_at(&req, 6), Some(0x0301));
         assert_eq!(req[16], AF_UNIX);
         assert_eq!(u32_at(&req, 20), Some(1 << 10));
         assert_eq!(u32_at(&req, 28), Some(SHOW_VFS));
+        let req = diag_request(CONNECTED_STATES, SHOW_VFS | SHOW_PEER);
+        assert_eq!(u32_at(&req, 20), Some(1 << 1));
+        assert_eq!(u32_at(&req, 28), Some(0x6));
     }
 
     #[test]
@@ -564,7 +664,7 @@ mod tests {
         assert_eq!(parse_diag(&buf, &mut found), Diag::More);
         assert_eq!(
             found,
-            [Listener { socket: 41000, dev: 45, ino: 900 }, Listener { socket: 41002, dev: 46, ino: 901 }],
+            [Bound { socket: 41000, dev: 45, ino: 900, peer: None }, Bound { socket: 41002, dev: 46, ino: 901, peer: None }],
             "a socket with no file is skipped"
         );
         assert_eq!(parse_diag(&header(NLMSG_DONE, vec![0; 4]), &mut found), Diag::Done);
@@ -584,11 +684,27 @@ mod tests {
         assert_eq!(kernel_dev(0x801), (8 << 20) | 1);
         assert_eq!(kernel_dev(0x1001_0301), (259 << 20) | 65537);
         assert_eq!(kernel_dev(45), 45);
-        let listeners = [Listener { socket: 7, dev: 45, ino: 900 }, Listener { socket: 8, dev: 46, ino: 900 }];
+        let listeners = [Bound { socket: 7, dev: 45, ino: 900, peer: None }, Bound { socket: 8, dev: 46, ino: 900, peer: None }];
         assert_eq!(bound_to(&listeners, 46, 900), Some(8));
         assert_eq!(bound_to(&listeners, 45, (1 << 32) | 900), Some(7), "the diagnostics hold the low 32 bits");
         assert_eq!(bound_to(&listeners, 45, 901), None);
         assert_eq!(bound_to(&listeners, 47, 900), None);
+    }
+
+    #[test]
+    fn the_client_ends_of_connections_to_a_socket_file_are_the_accepted_sockets_peers() {
+        let mut buf = diag_msg_with_peer(50, Some((900, 45)), Some(60));
+        buf.extend(diag_msg_with_peer(51, Some((900, 45)), Some(61)));
+        buf.extend(diag_msg_with_peer(52, Some((901, 45)), Some(62)));
+        buf.extend(diag_msg_with_peer(53, None, Some(50)));
+        buf.extend(diag_msg_with_peer(54, Some((900, 45)), None));
+        let mut found = Vec::new();
+        assert_eq!(parse_diag(&buf, &mut found), Diag::More);
+        assert_eq!(found[0], Bound { socket: 50, dev: 45, ino: 900, peer: Some(60) });
+        assert_eq!(connections(&found, &[(45, 900)]), BTreeSet::from([60, 61]), "another file's connections and unbound sockets are not counted");
+        assert_eq!(connections(&found, &[(45, 900), (45, 901)]), BTreeSet::from([60, 61, 62]));
+        assert!(connections(&found, &[]).is_empty());
+        assert!(connections(&found, &[(46, 900)]).is_empty());
     }
 
     #[test]
