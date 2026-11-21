@@ -1,6 +1,7 @@
 //! Filters on a source's video or audio.
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, Ordering};
 
 use studiocraft_model::Settings;
 
@@ -216,6 +217,38 @@ pub trait FilterInstance: Send {
     fn process_audio(&mut self, block: &mut [f32]) {
         let _ = block;
     }
+    /// The handle to this filter's gain-reduction reading, for an audio filter that reduces
+    /// gain. The filter writes the reading after each [`process_audio`](Self::process_audio)
+    /// call; every call to `meter` returns a handle to the same reading.
+    fn meter(&self) -> Option<FilterMeter> {
+        None
+    }
+}
+
+/// A filter's gain reduction during its last processed block, in dB (0 or more), shared between
+/// the mixer thread that writes it and any thread that reads it. Writing and reading take no
+/// lock and allocate nothing; cloning shares the same reading.
+#[derive(Clone, Debug, Default)]
+pub struct FilterMeter(Arc<AtomicU32>);
+
+impl FilterMeter {
+    /// A reading of 0 dB.
+    pub fn new() -> Self {
+        Self::default()
+    }
+    /// Stores `db`. A value that is not a finite number of 0 or more is stored as 0.
+    pub fn set(&self, db: f32) {
+        let db = if db.is_finite() && db > 0.0 { db } else { 0.0 };
+        self.0.store(db.to_bits(), Ordering::Relaxed);
+    }
+    /// The last stored reading, in dB.
+    pub fn get(&self) -> f32 {
+        f32::from_bits(self.0.load(Ordering::Relaxed))
+    }
+    /// True when both handles share one reading.
+    pub fn same(&self, other: &FilterMeter) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
 }
 
 #[cfg(test)]
@@ -235,6 +268,35 @@ mod tests {
             assert!(EffectImage::new(w, h, vec![0; len]).is_none(), "{w} x {h}, {len} bytes");
         }
         assert!(EffectImage::new(MAX_EFFECT_SIDE, 1, vec![0; MAX_EFFECT_SIDE as usize * 4]).is_some());
+    }
+
+    #[test]
+    fn a_filter_meter_shares_one_reading_and_stores_only_non_negative_numbers() {
+        let m = FilterMeter::new();
+        assert_eq!(m.get(), 0.0);
+        let reader = m.clone();
+        assert!(reader.same(&m));
+        assert!(!FilterMeter::new().same(&m));
+        m.set(12.5);
+        assert_eq!(reader.get(), 12.5);
+        for bad in [-3.0, -0.0, f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            m.set(7.0);
+            m.set(bad);
+            assert_eq!(reader.get().to_bits(), 0.0f32.to_bits(), "{bad}");
+        }
+        m.set(f32::MAX);
+        assert_eq!(reader.get(), f32::MAX);
+    }
+
+    #[test]
+    fn a_filter_instance_has_no_meter_by_default() {
+        struct Plain;
+        impl FilterInstance for Plain {
+            fn update(&mut self, _: &Settings) -> Result<(), PluginError> {
+                Ok(())
+            }
+        }
+        assert!(Plain.meter().is_none());
     }
 
     #[test]
