@@ -221,8 +221,11 @@ fn a_running_streams_destinations_start_and_stop_one_at_a_time() {
     let Err(e) = s.set_stream_destination("a", true) else { panic!("a destination started without a stream") };
     assert!(e.to_string().contains("the stream is not running"), "{e}");
     assert!(s.stream_destinations().is_empty());
+    assert_eq!(s.stream_profile(), None);
     s.start_output(OutputKind::Streaming).unwrap();
     let a_conn = a.recv_timeout(GUARD).expect("the destination that is on connects at the start");
+    let name = s.profile().name.clone();
+    assert_eq!(s.stream_profile(), Some(name.as_str()), "the stream names the profile it started with");
     let status = |s: &Studio, id: &str| s.stream_destinations().into_iter().find(|d| d.id == id).map(|d| d.status);
     let ids: Vec<String> = s.stream_destinations().into_iter().map(|d| d.id).collect();
     assert_eq!(ids, ["a", "b"], "in the profile's order");
@@ -232,7 +235,9 @@ fn a_running_streams_destinations_start_and_stop_one_at_a_time() {
     assert!(e.to_string().contains("the stream key `b` for destination `b` is not set for this session"), "{e}");
     assert_eq!(status(&s, "b"), Some(DestinationStatus::Stopped));
     // A key held after the stream started is used.
+    assert!(!s.stream_key_held("b"));
     s.hold_stream_key("b", "late");
+    assert!(s.stream_key_held("b") && !s.stream_key_held("late"));
     s.set_stream_destination("b", true).unwrap();
     let b_conn = b.recv_timeout(GUARD).expect("the destination started connects");
     assert!(!matches!(status(&s, "b"), Some(DestinationStatus::Stopped | DestinationStatus::Failed(_))), "{:?}", status(&s, "b"));
@@ -244,11 +249,29 @@ fn a_running_streams_destinations_start_and_stop_one_at_a_time() {
     assert!(s.output(OutputKind::Streaming).is_some_and(|o| o.active));
     // A forgotten key is looked up again, and an unknown destination is an error.
     s.hold_stream_key("b", "");
+    assert!(!s.stream_key_held("b"));
     assert!(s.set_stream_destination("b", true).is_err(), "the held key was forgotten");
     assert!(s.set_stream_destination("x", true).is_err() && s.set_stream_destination("x", false).is_err());
+    // Another profile put in use keeps the running stream's profile name.
+    let mut other = s.profile().clone();
+    other.name = "Other".into();
+    s.set_profile(other).unwrap();
+    assert_eq!(s.stream_profile(), Some(name.as_str()));
+    s.stream_profile_renamed("Other", "Third");
+    assert_eq!(s.stream_profile(), Some(name.as_str()), "only the stream's own profile is followed");
+    s.stream_profile_renamed(&name, "Renamed");
+    assert_eq!(s.stream_profile(), Some("Renamed"));
+    // Once its profile is removed, the stream belongs to none, even to a new profile of that name.
+    s.stream_profile_removed("Other");
+    assert_eq!(s.stream_profile(), Some("Renamed"));
+    s.stream_profile_removed("Renamed");
+    assert_eq!(s.stream_profile(), None);
+    s.stream_profile_renamed("Renamed", "Again");
+    assert_eq!(s.stream_profile(), None);
     drop(a_conn);
     s.stop_output(OutputKind::Streaming);
     assert!(s.stream_destinations().is_empty(), "no stream runs");
+    assert_eq!(s.stream_profile(), None);
 }
 
 #[test]

@@ -335,6 +335,25 @@ field says where the first destination's key comes from: this profile, a key giv
 or no separate key, when a key at the end of the server address is used if there is one. Typing a
 key in the field saves it in the profile.
 
+View › Streaming opens the Streaming window, which lists every destination of the profile. Each
+row shows the destination's on or off setting, its server, where its key comes from and what it is
+doing. A key at the end of a server address, and any query, are shown as dots. While the stream
+runs, each destination shows its own status: connecting, live, trying again with the error, stopped
+or failed with the error, so one destination's error does not hide another's status. Start and
+Stop send to one destination or stop sending to it while the others go on. A destination added
+after the stream started is sent to from the next start, and so are changes to a server or a key.
+
+Add Destination adds one, up to 16. The first destination uses the profile's stream key; the
+others have no key of their own until one is chosen, so the profile's key is not sent to another
+service. Edit opens a destination's name, server and key source. The server field hides its text
+until Show is pressed. Save closes the details once the change is made; a change that is refused
+leaves them open with what was typed. A destination whose key is held for the session has a field for that key:
+Hold keeps the typed key in memory for this session and Forget drops it. Remove deletes a
+destination; one that is sending must be stopped first. Each change is saved in the profile; a change
+that cannot be saved is undone. When Settings is open, the changed destination is also changed in
+its Stream tab, and edits not yet applied there to other destinations stay. A new destination
+never takes the id of one the running stream still holds.
+
 ## Hardware acceleration
 
 Settings › Video › Hardware acceleration holds two settings.

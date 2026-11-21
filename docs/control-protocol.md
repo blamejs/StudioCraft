@@ -399,6 +399,44 @@ error.
 `dock.layout_apply` and `dock.layout_remove` take `{"name"}`, compared without regard to case, and
 return `{"applied"}` or `{"removed"}`; a name no layout has is an error.
 
+### `view.streaming` and the `stream.destination` commands
+
+`view.streaming` opens the Streaming window, or closes it when it is open, and returns `{"on"}`.
+
+`stream.destinations` takes no parameters and returns `{"destinations", "running", "max"}`.
+`max` is 16. Each destination is `{"id", "name", "enabled", "server", "key", "status"}`, where
+`key` is `profile`, `held` or `none` and `server` shows a key at the end of the address, and any
+query, as dots. A destination whose key is held adds `held_name` and `held`, whether a key is held
+under that name now. `status` is `idle` while no stream runs, `not_in_stream` for a destination
+added after the stream started, and otherwise `connecting`, `live`, `retrying`, `stopped` or
+`failed`. While the stream runs a destination also has `bytes`, `dropped` and `reconnects`; a
+`retrying` one has `attempt` and `error`, and a `failed` one has `error`.
+
+`stream.destination_add` takes `{"name"?, "server"?, "enabled"?, "key"?, "held_name"?}` and returns
+`{"id"}`. The first destination of a profile gets the id `main` and the profile's key; later ones
+get `destination-2`, `destination-3` and so on, and no key of their own unless `key` says
+otherwise. `enabled` is `true` when it is left out.
+
+`stream.destination_set` takes `{"id", "name"?, "server"?, "enabled"?, "key"?, "held_name"?}` and
+changes only the fields given; it returns `{"id", "changed"}`, and a call that changes nothing does
+not save the profile. With `key` set to `held`, `held_name` names the session key; without it the
+destination keeps its held name, or uses its id.
+
+`stream.destination_remove` takes `{"id"}` and returns `{"removed"}`. A destination that is sending
+or trying to is not removed until it is stopped.
+
+`stream.destination_start` and `stream.destination_stop` take `{"id"}` and start or stop sending to
+that destination of the running stream; the others go on. They return `{"id", "on"}`.
+
+These are errors: a missing or unknown `id`, a 17th destination, a `name` over 128 characters, a
+`server` over 4096 bytes, a `name` or `server` with a control character, a `key` other than
+`profile`, `held` or `none`, `held_name` without `key` `held` or outside 1 to 64 bytes, a parameter
+of the wrong type, a start or stop while no stream runs or while the running stream was started with
+another profile, and a start of a destination whose held key is not set. While a stream of another
+profile runs, each destination's `status` is `not_in_stream`. Each change is saved in the profile, and an open Settings window shows the new
+destinations. Keys held for the session are set in the Streaming window only and are not command
+parameters.
+
 ### `video.displays` and `video.canvas_from_display`
 
 `video.displays` takes no parameters and returns `{"displays", "window"}`. `displays` lists each

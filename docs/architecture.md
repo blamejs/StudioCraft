@@ -467,6 +467,7 @@ fonts and title bar. The following table lists the code for each part.
 | Docks | `ui-egui/src/docks.rs`, with `kit/panel_header.rs` for each dock's header |
 | Dock strip size | `ui-egui/src/strip.rs`; the strip's top edge and the dividers are `craft-ui` `ResizeHandle`s |
 | Dock commands | `dock.move` (Move Left and Move Right), `dock.float` (Undock), `dock.layout_save`, `dock.layout_apply` and `dock.layout_remove` |
+| Streaming window and its `stream.destination*` commands | `ui-egui/src/streaming.rs` |
 | Saved dock sizes, order, visibility, undocked windows and layouts | `config.toml`, with layouts under `dock_layouts` |
 | Font stack | `ui-egui/src/fonts.rs`, built with `craft-ui`'s `UiFonts`: Inter Regular for the proportional family, Inter SemiBold for the `semibold` family (dock, section and dialog titles) and JetBrains Mono for the monospace family, all embedded from `assets/fonts`. `StudioApp::install_fonts` installs the stack at start, and the window installs it again on the first frame after the interface language changes. |
 | Title bar | `src/titlebar.rs` decides whether the app draws it, from `craft-window`, and `crates/ui-egui/src/title_bar.rs` draws the menu strip as the title bar |
