@@ -86,7 +86,7 @@ fn untranslated(texts: &[String], data: &BTreeSet<String>) -> Vec<String> {
         .filter(|t| t.chars().any(char::is_alphabetic))
         .filter(|t| !data.contains(t.as_str()))
         .filter(|t| !t.contains("://"))
-        .filter(|t| !t.split(',').all(|k| Binding::parse(k.trim()).is_ok()))
+        .filter(|t| !crate::settings::split_bindings(t).iter().all(|k| Binding::parse(k).is_ok()))
         .cloned()
         .collect()
 }
