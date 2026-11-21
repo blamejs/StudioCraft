@@ -440,6 +440,28 @@ fn audio_tracks_open_last_is_held_to_the_read_roots() {
 }
 
 #[test]
+fn recordings_list_is_held_to_the_read_roots() {
+    let dir = root_folders("recordings-roots");
+    let roots = Roots::new(&[dir.join("in")], &[dir.join("out")]).unwrap();
+    let mut h = Headless::with_options(None, ServerOptions { allow_streaming: false, roots: Some(roots) }).unwrap();
+    let mut profile = h.studio().profile().clone();
+    profile.output.folder = text_of(&dir.join("out"));
+    h.studio_mut().set_profile(profile).unwrap();
+    let mut s = Server::new(Box::new(h)).unwrap();
+    let text = error_text(&call(&mut s, "command_run", json!({"id": "recordings.list"})));
+    assert!(text.contains("outside the read roots"), "a write root is not enough to list its files: {text}");
+    let roots = Roots::new(&[dir.join("in")], &[dir.join("out")]).unwrap();
+    let mut h = Headless::with_options(None, ServerOptions { allow_streaming: false, roots: Some(roots) }).unwrap();
+    let mut profile = h.studio().profile().clone();
+    profile.output.folder = text_of(&dir.join("in"));
+    h.studio_mut().set_profile(profile).unwrap();
+    let mut s = Server::new(Box::new(h)).unwrap();
+    let r = ok_json(&call(&mut s, "command_run", json!({"id": "recordings.list"})));
+    assert_eq!(r["folder"], json!(text_of(&dir.join("in"))), "{r}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn the_pause_tools_pause_and_resume_the_program() {
     let mut s = server();
     let paused = ok_json(&call(&mut s, "pause_start", json!({"countdown_s": 120, "at_zero": "resume", "media": null})));

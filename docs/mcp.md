@@ -126,7 +126,8 @@ flags. The two flags keep the headless backend's file access inside the folders 
   caption status reports `downloaded` as null for a model outside the read roots. `audio_tracks_repair` and `audio_tracks.repair` rewrite files, so their `folder` must lie inside
   a write root. With or without roots, the studio repairs only the recording folder and the
   folders inside it. `audio_tracks_open_last` and `audio_tracks.open_last` need the last session
-  file inside a read root.
+  file inside a read root. `recordings.list` names the files in the recording folder, so that
+  folder must lie inside a read root.
 - `--collection <file>` is opened through the same checks, so the file and the files it names
   must lie inside a read root.
 

@@ -611,6 +611,7 @@ menu	Transform	Transform
 	Open Last Audio Tracks in Editor	Open Last Audio Tracks in Editor
 	Add Audio Tracks Marker	Add Audio Tracks Marker
 	Add Recording Marker	Add Recording Marker
+	List Recordings	List Recordings
 @msg	Markers saved to {path}	Markers saved to {path}
 @msg	The markers could not be saved: {error}	The markers could not be saved: {error}
 	After a take	After a take
@@ -733,6 +734,7 @@ menu	Transform	Transform
 	Pause or Resume Program	Pause or Resume Program
 	Add Time to the Pause	Add Time to the Pause
 	Pause Status	Pause Status
+	Session Events	Session Events
 	Add a Minute to the Pause	Add a Minute to the Pause
 	Pause screen	Pause screen
 	Picture or video	Picture or video

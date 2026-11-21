@@ -769,6 +769,10 @@ impl OutputInstance for Streaming {
         self.hub.dests.iter().map(|d| d.state()).collect()
     }
 
+    fn reconnects(&self) -> u64 {
+        self.hub.dests.iter().map(|d| u64::from(d.reconnects.load(Ordering::Relaxed))).sum()
+    }
+
     fn start_destination(&self, id: &str, key: Option<&str>) -> Result<(), PluginError> {
         let d = self.hub.find(id)?;
         if self.stopped || self.hub.control.is_ended() {
