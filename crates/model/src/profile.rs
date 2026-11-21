@@ -52,7 +52,47 @@ impl VideoSettings {
     pub fn fps(&self) -> f64 {
         f64::from(self.fps_num) / f64::from(self.fps_den.max(1))
     }
+
+    /// The output size that is `scale` (a numerator and a denominator) of the canvas: each side
+    /// rounded down to an even number, between [`MIN_SIDE`] and [`MAX_SIDE`].
+    pub fn scaled_output(&self, scale: (u32, u32)) -> (u32, u32) {
+        let v = self.sanitized();
+        let side = |base: u32| {
+            let s = u64::from(base) * u64::from(scale.0) / u64::from(scale.1.max(1));
+            let s = u32::try_from(s).unwrap_or(MAX_SIDE).clamp(MIN_SIDE, MAX_SIDE);
+            (s / 2) * 2
+        };
+        (side(v.base_width), side(v.base_height))
+    }
+
+    /// The entry of [`OUTPUT_SCALES`] that gives the current output size, if exactly one does.
+    /// On a canvas so small that several entries give the same size, the output size counts as
+    /// typed: no entry is shown as chosen, and a new canvas size leaves the output size as it is.
+    pub fn output_scale(&self) -> Option<(u32, u32)> {
+        let v = self.sanitized();
+        let mut matching = OUTPUT_SCALES.into_iter().filter(|s| v.scaled_output(*s) == (v.output_width, v.output_height));
+        match (matching.next(), matching.next()) {
+            (Some(s), None) => Some(s),
+            _ => None,
+        }
+    }
+
+    /// These settings with a canvas of `width` x `height`. An output size that was one of
+    /// [`OUTPUT_SCALES`] of the old canvas becomes the same share of the new one; any other output
+    /// size stays.
+    pub fn with_canvas(self, width: u32, height: u32) -> VideoSettings {
+        let scale = self.output_scale();
+        let mut v = VideoSettings { base_width: width, base_height: height, ..self.sanitized() }.sanitized();
+        if let Some(s) = scale {
+            (v.output_width, v.output_height) = v.scaled_output(s);
+        }
+        v
+    }
 }
+
+/// The output sizes offered as a share of the canvas, as numerators and denominators: 100%, 75%,
+/// two thirds and 50%.
+pub const OUTPUT_SCALES: [(u32, u32); 4] = [(1, 1), (3, 4), (2, 3), (1, 2)];
 
 /// Audio format of the mix, and the device monitored sources play on.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -463,5 +503,32 @@ mod tests {
         assert_eq!((v.fps_num, v.fps_den), (1, 1));
         let ntsc = VideoSettings { fps_num: 30_000, fps_den: 1001, ..VideoSettings::default() }.sanitized();
         assert!((ntsc.fps() - 29.97).abs() < 0.01);
+    }
+
+    #[test]
+    fn output_scales_follow_the_canvas() {
+        let v = VideoSettings { output_width: 1280, output_height: 720, ..VideoSettings::default() };
+        assert_eq!(v.output_scale(), Some((2, 3)));
+        assert_eq!(v.scaled_output((3, 4)), (1440, 810));
+        // 1080 x 3 / 4 = 810 stays; 1366 / 2 = 683 rounds down to 682.
+        let w = v.with_canvas(2560, 1440);
+        assert_eq!((w.base_width, w.base_height, w.output_width, w.output_height), (2560, 1440, 1706, 960));
+        let half = VideoSettings { base_width: 1366, base_height: 768, output_width: 682, output_height: 384, ..VideoSettings::default() };
+        assert_eq!(half.output_scale(), Some((1, 2)));
+        // A typed output size that is no share of the canvas stays as it is.
+        let custom = VideoSettings { output_width: 1000, output_height: 500, ..VideoSettings::default() };
+        assert_eq!(custom.output_scale(), None);
+        let c = custom.with_canvas(1080, 1920);
+        assert_eq!((c.base_width, c.base_height, c.output_width, c.output_height), (1080, 1920, 1000, 500));
+        // Sides stay in range and even: a tiny canvas and a hostile denominator.
+        let tiny = VideoSettings { base_width: 16, base_height: 16, output_width: 16, output_height: 16, ..VideoSettings::default() };
+        assert_eq!(tiny.scaled_output((1, 2)), (16, 16));
+        // Every share gives 16 x 16 here, so none is taken as chosen and the size stays.
+        assert_eq!(tiny.output_scale(), None);
+        let grown = tiny.with_canvas(1920, 1080);
+        assert_eq!((grown.output_width, grown.output_height), (16, 16));
+        assert_eq!(v.scaled_output((u32::MAX, 0)), (8192, 8192));
+        let odd = v.with_canvas(1001, 99_999);
+        assert_eq!((odd.base_width, odd.base_height, odd.output_width, odd.output_height), (1000, 8192, 666, 5460));
     }
 }

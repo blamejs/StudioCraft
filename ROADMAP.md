@@ -123,8 +123,9 @@ description in [docs/features.md](docs/features.md).
     computer while a recording or the stream runs. A Live Captions source shows the text on the
     program, or on the preview only, the stream carries it as closed captions, and `.srt` and
     `.vtt` files are written beside the recording.
-12. **Canvas size from the display (partly done).** Moves and resizes snap to the canvas and to
-    other items, and Settings › Video sets the canvas to a chosen display's size
+12. **Canvas size from the display (partly done).** Moves and resizes snap to the canvas, its safe
+    areas and other items, Settings › Video sets the canvas to a chosen display's size and the
+    output to a share of the canvas, and scenes are laid out again when the canvas size changes
     ([Sources](docs/features.md#sources)). The canvas will follow the display when its resolution
     or scaling changes.
 13. **AMD and Intel encoders in StudioCraft's own process, and hardware decoding.** The AMD AMF and

@@ -2,7 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::geom::Transform;
+use crate::geom::{FitMode, Transform};
 use crate::ids::{FilterId, ItemId, SceneId, SourceId};
 use crate::settings::Settings;
 
@@ -121,6 +121,9 @@ pub struct SceneItem {
     pub visible: bool,
     #[serde(default)]
     pub locked: bool,
+    /// How the item was sized to the canvas, kept until its transform is changed another way.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fit: Option<FitMode>,
 }
 
 /// A scene: items drawn bottom to top (the last item is on top).
@@ -373,7 +376,7 @@ mod tests {
         });
         let item = ItemId(c.alloc_id());
         if let Some(s) = c.scene_mut(SceneId(1)) {
-            s.items.push(SceneItem { id: item, source: src, transform: Transform::default(), visible: true, locked: false });
+            s.items.push(SceneItem { id: item, source: src, transform: Transform::default(), visible: true, locked: false, fit: None });
         }
         c
     }

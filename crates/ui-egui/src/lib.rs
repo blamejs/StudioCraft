@@ -40,7 +40,7 @@ use craft_ui::layout::{ResizeHandle, ResizeHandleStyle, SplitAxis};
 use egui::{Color32, RichText, Ui};
 use serde_json::{Value, json};
 use studiocraft_media::mix::MeterBallistics;
-use studiocraft_model::{ItemId, Profile, SceneCollection, SceneId, SettingsSchema, SourceId, Transform, Vec2};
+use studiocraft_model::{FitMode, ItemId, Profile, SceneCollection, SceneId, SettingsSchema, SourceId, Transform, Vec2};
 use studiocraft_platform::display::DisplayInfo;
 use studiocraft_render::Gpu;
 use studiocraft_render::device::{Candidate, Preference};
@@ -508,25 +508,38 @@ impl StudioApp {
     }
 
     /// Make the canvas `size` (each side rounded down to an even number) and save the profile.
-    /// The output size stays as it is. An open Settings window shows the new canvas size. A
-    /// profile that can't be saved is an error, and the new size stays in use until the app quits.
+    /// An output size that was a share of the canvas in [`studiocraft_model::OUTPUT_SCALES`]
+    /// becomes the same share of the new canvas; any other output size stays. The studio lays out
+    /// the scenes for the new size. An open Settings window shows the new sizes. A profile that
+    /// can't be saved is an error, and the old sizes and layout come back, so the scene
+    /// collection is not saved with a layout for a canvas the saved profile does not have.
     fn set_canvas(&mut self, size: (u32, u32)) -> Result<Value, Msg> {
-        let mut p = self.studio.profile().clone();
-        let v = studiocraft_model::VideoSettings { base_width: size.0, base_height: size.1, ..p.video }.sanitized();
+        let previous = self.studio.profile().clone();
+        let mut p = previous.clone();
+        let v = p.video.with_canvas(size.0, size.1);
         let (width, height) = (v.base_width, v.base_height);
-        p.video.base_width = width;
-        p.video.base_height = height;
         let changed = self.studio.canvas() != (width, height);
         if changed {
+            (p.video.base_width, p.video.base_height) = (width, height);
+            (p.video.output_width, p.video.output_height) = (v.output_width, v.output_height);
             self.studio.set_profile(p).map_err(|e| e.to_string())?;
         }
-        if let Some(w) = &mut self.settings {
-            w.draft.video.base_width = width;
-            w.draft.video.base_height = height;
-        }
         // Saved even when the size was already in use, so a save that failed before is retried.
-        self.store.save_profile(self.studio.profile()).map_err(|e| tmsg!("The profile could not be saved: {error}", error = e))?;
-        Ok(json!({"width": width, "height": height, "changed": changed}))
+        if let Err(e) = self.store.save_profile(self.studio.profile()) {
+            if changed {
+                let _ = self.studio.restore_profile(previous);
+            }
+            return Err(tmsg!("The profile could not be saved: {error}", error = e));
+        }
+        let out = self.studio.video_settings();
+        if let Some(w) = &mut self.settings {
+            // The draft's own output size follows its canvas by the same rule, so an unsaved
+            // output size typed into the draft stays.
+            let before = w.draft.video;
+            (w.draft.video.base_width, w.draft.video.base_height) = (width, height);
+            settings::follow_canvas(before, &mut w.draft.video);
+        }
+        Ok(json!({"width": width, "height": height, "output": {"width": out.output_width, "height": out.output_height}, "changed": changed}))
     }
 
     /// Save everything now (the app is closing); whether the scene collection, the profile and
@@ -632,11 +645,17 @@ impl StudioApp {
     }
 
     /// Put the settings OK or Apply gave in force; whether the studio took them (it refuses video
-    /// changes while an output runs, and then nothing is applied).
+    /// changes while an output runs, and then nothing is applied). A new canvas size whose
+    /// profile can't be saved is taken back with its layout, and nothing is applied either.
     fn apply_settings(&mut self, a: settings::Apply) -> bool {
+        let previous = self.studio.profile().clone();
         match self.studio.set_profile(a.profile) {
             Ok(()) => {
-                self.save_profile();
+                let canvas_moved = (previous.video.sanitized().base_width, previous.video.sanitized().base_height) != self.studio.canvas();
+                if !self.save_profile() && canvas_moved {
+                    let _ = self.studio.restore_profile(previous);
+                    return false;
+                }
                 self.keymap.set_overrides(a.overrides.clone());
                 self.store.update(|p| {
                     p.hotkeys = a.overrides;
@@ -841,12 +860,22 @@ impl StudioApp {
     }
 
     fn selection_transform(&mut self, f: impl FnOnce(Transform, (u32, u32), (u32, u32)) -> Transform) -> Result<Value, Msg> {
+        self.selection_placed(None, f)
+    }
+
+    /// Fit, fill or stretch the selected item to the canvas, and keep the mode for a new canvas
+    /// size.
+    fn selection_fit(&mut self, mode: FitMode) -> Result<Value, Msg> {
+        self.selection_placed(Some(mode), |t, n, c| mode.place(t, n, c))
+    }
+
+    fn selection_placed(&mut self, fit: Option<FitMode>, f: impl FnOnce(Transform, (u32, u32), (u32, u32)) -> Transform) -> Result<Value, Msg> {
         let (item, source, t) = self.selection().ok_or_else(|| tmsg!("select a source first"))?;
         let native = self.studio.source_size(source).ok_or_else(|| tmsg!("the source has not shown a picture yet"))?;
         let canvas = self.studio.canvas();
         // The command refuses values out of range; a fit or a nudge stops at the limits instead.
         let t = f(t, native, canvas).sanitized();
-        let r = self.studio.run("item.transform", &json!({"item": item, "transform": t})).map_err(|e| e.to_string())?;
+        let r = self.studio.run("item.transform", &json!({"item": item, "transform": t, "fit": fit})).map_err(|e| e.to_string())?;
         self.studio.seal_history();
         Ok(r.0)
     }
@@ -1050,12 +1079,9 @@ impl StudioApp {
                 self.studio.run("item.remove", &json!({"item": item})).map_err(|e| e.to_string())?;
                 self.selected = None;
             }
-            "selection.fit" => return self.selection_transform(|t, n, c| Transform { crop: t.crop, ..Transform::fit(t.crop.apply(n.0, n.1), c) }),
-            "selection.stretch" => {
-                return self.selection_transform(|t, n, c| {
-                    Transform { position: Vec2::ZERO, rotation: 0.0, ..t }.with_size(n, Vec2::new(c.0 as f32, c.1 as f32))
-                });
-            }
+            "selection.fit" => return self.selection_fit(FitMode::Fit),
+            "selection.fill" => return self.selection_fit(FitMode::Fill),
+            "selection.stretch" => return self.selection_fit(FitMode::Stretch),
             "selection.center" => {
                 return self.selection_transform(|t, n, c| {
                     let s = t.size(n);
@@ -1126,7 +1152,7 @@ impl StudioApp {
                     if case_only {
                         let _ = self.store.rename_profile(name, &old);
                     }
-                    let _ = self.studio.set_profile(previous);
+                    let _ = self.studio.restore_profile(previous);
                     return Err(e.into());
                 }
                 if what == Named::RenameProfile && old != name && !case_only {

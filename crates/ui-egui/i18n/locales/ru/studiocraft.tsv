@@ -545,3 +545,8 @@ menu	Transform	Преобразование
 @msg	there is no display `{id}`: the system lists no displays	нет экрана `{id}`: система не сообщает ни об одном экране
 @msg	there is no display `{id}` (the displays are {ids})	нет экрана `{id}` (есть экраны {ids})
 @msg	a {width} × {height} display can't be the canvas: each side must be from {min} to {max} pixels	экран {width} × {height} не может быть холстом: каждая сторона должна быть от {min} до {max} пикселей
+	Output scale	Масштаб вывода
+	Custom	Другой
+	{percent}% ({width} × {height})	{percent} % ({width} × {height})
+	Fill Screen	Заполнить экран
+@msg	The scenes could not be laid out for the new canvas: {error}	Не удалось расположить сцены для нового холста: {error}

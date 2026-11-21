@@ -536,3 +536,7 @@ menu	Transform	변형
 @msg	there is no display `{id}`: the system lists no displays	디스플레이 `{id}`이(가) 없습니다: 시스템에 표시되는 디스플레이가 없습니다
 @msg	there is no display `{id}` (the displays are {ids})	디스플레이 `{id}`이(가) 없습니다 (디스플레이: {ids})
 @msg	a {width} × {height} display can't be the canvas: each side must be from {min} to {max} pixels	{width} × {height} 디스플레이는 캔버스가 될 수 없습니다: 각 변은 {min}~{max}픽셀이어야 합니다
+	Output scale	출력 배율
+	Custom	사용자 지정
+	Fill Screen	화면 채우기
+@msg	The scenes could not be laid out for the new canvas: {error}	새 캔버스에 맞게 장면을 배치할 수 없습니다: {error}

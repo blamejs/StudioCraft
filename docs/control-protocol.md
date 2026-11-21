@@ -86,7 +86,7 @@ when the language's catalog has the message.
 `app.links`, `app.check_updates`, `plugin.list`, `source.schema`, `source.sync_offset`,
 `source.monitor`, `source.set_record_track`, `audio_tracks.status`, `audio_tracks.repair`,
 `audio_tracks.open_last`, `audio_tracks.marker`, the `captions.*` commands, the `dock.layout_*`
-commands, `video.displays` and `video.canvas_from_display`.
+commands, `video.displays`, `video.canvas_from_display` and `canvas.relayout`.
 
 Each entry of `engine.commands` has these fields:
 
@@ -459,13 +459,44 @@ or `null` when the windowing system does not report it.
 
 `video.canvas_from_display` takes `{"display"?}` and sets the canvas size to that display's size
 in pixels. Without `display` it uses the display the window is on. Each side is rounded down to an
-even number, and the output size is not changed. The profile is saved, also when the canvas
-already had that size. An open Settings window shows the new canvas size. It returns
-`{"width", "height", "changed"}`. These are errors: a `display` that is not a string (`null`
-included), an id that `video.displays` does not list, a display with a side under 16 or over 8192
-pixels, an unknown size for the window's display, a change while the recording, the stream or the
-replay buffer runs, and a profile that can't be saved. After a failed save the new canvas size stays
-in use until the app quits.
+even number. An output size of 100%, 75%, 66% (two thirds) or 50% of the old canvas becomes the
+same share of the new canvas, rounded down to even sides; any other output size is not changed. The
+scenes are laid out for the new size as `canvas.relayout` describes. The profile is saved, also
+when the canvas already had that size. An open Settings window shows the new canvas and output
+sizes. It returns `{"width", "height", "output": {"width", "height"}, "changed"}`. These are
+errors: a `display` that is not a string (`null` included), an id that `video.displays` does not
+list, a display with a side under 16 or over 8192 pixels, an unknown size for the window's display,
+a change while the recording, the stream or the replay buffer runs, and a profile that can't be
+saved. After a failed save the old canvas size, output size and layout come back, and the undo
+history holds no step for the layout change.
+
+### `canvas.relayout`
+
+`canvas.relayout` takes `{"from": {"width", "height"}, "to": {"width", "height"}, "sizes"?,
+"items"?}` and places every item of every scene, locked and hidden items included, for a canvas
+that changed from `from` to `to`. `sizes` is a list of `{"source", "width", "height"}` with the
+size each source shows at. `items` is a list of item ids; when it is given, only those items are
+placed. The app runs it, as one undo step, whenever the canvas size changes: from Settings ›
+Video, from `video.canvas_from_display`, or by switching to a profile with another canvas size.
+
+- An item with a fit mode is placed by that mode on the new canvas: `fit` shows the whole source
+  inside the canvas, `fill` covers the canvas, and `stretch` makes the source the canvas's size.
+  The crop is kept and the rotation becomes 0. Fit to Screen, Fill Screen and Stretch to Screen
+  set the mode, and so does `item.transform` with `fit`. An `item.transform` without `fit` clears
+  it.
+- Any other item keeps its center at the same place in proportion to the canvas. Its size is
+  multiplied by the square root of the product of the width and height factors, so changing the
+  canvas back gives the old layout.
+- An item whose source is not in `sizes` keeps its top-left corner at the same place in proportion
+  instead, with the same size factor. When the app runs the command, the sources that show
+  nothing at that moment are left out of `sizes`. An item of such a source that has a fit mode is
+  placed by its mode once the source shows a picture, as its own undo step, while it still has
+  its mode and the place the canvas change gave it.
+- With `from` equal to `to`, only items with a fit mode whose source is in `sizes` can move.
+
+These are errors: a side of `from` or `to` under 16 or over 8192 pixels, a `sizes` entry for a
+source the collection does not have, a source listed twice, a source side under 1 or over 65536
+pixels, an `items` entry for an item the collection does not have, and an item listed twice.
 
 ## Command line
 

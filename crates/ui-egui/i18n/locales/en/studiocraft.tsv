@@ -51,6 +51,10 @@
 	Choose a display	Choose a display
 	The display this window is on	The display this window is on
 	{name}: {width} × {height}	{name}: {width} × {height}
+	Output scale	Output scale
+	Custom	Custom
+	{percent}% ({width} × {height})	{percent}% ({width} × {height})
+	Fill Screen	Fill Screen
 	Capture rate (frames per second)	Capture rate (frames per second)
 	Ceiling (dB)	Ceiling (dB)
 	Center	Center
@@ -691,3 +695,4 @@ menu	Transform	Transform
 @msg	Speech model {model} could not be downloaded: {error}	Speech model {model} could not be downloaded: {error}
 @msg	Captions saved to {path}	Captions saved to {path}
 @msg	The captions could not be saved: {error}	The captions could not be saved: {error}
+@msg	The scenes could not be laid out for the new canvas: {error}	The scenes could not be laid out for the new canvas: {error}

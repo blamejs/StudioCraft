@@ -216,11 +216,13 @@ fn studio_tool_definitions() -> Vec<Value> {
         tool(
             "item_transform",
             "Transform a scene item",
-            "Set a scene item's position, scale, rotation and crop.",
+            "Set a scene item's position, scale, rotation and crop. `fit` records that the transform fits, fills or stretches \
+             the item to the canvas, so a new canvas size places it the same way; without it the item is kept in proportion.",
             json!({
                 "item": {"type": ["integer", "string"], "description": "The item's id, or the name of the source it shows."},
                 "scene": scene_ref("item's (default: the scene being edited)"),
                 "transform": transform_schema(),
+                "fit": {"type": "string", "enum": ["fit", "fill", "stretch"], "description": "How the transform sizes the item to the canvas."},
             }),
             &["item", "transform"],
             SETS,
@@ -933,7 +935,7 @@ fn dispatch(b: &mut dyn Backend, name: &str, args: &Args) -> Result<Value, McpEr
             req_str(args, "kind")?;
             Ok(text(&run(b, "source.add", pick(args, &["kind", "scene", "name", "settings", "transform"]))?))
         }
-        "item_transform" => Ok(text(&run(b, "item.transform", pick(args, &["item", "scene", "transform"]))?)),
+        "item_transform" => Ok(text(&run(b, "item.transform", pick(args, &["item", "scene", "transform", "fit"]))?)),
         "source_audio" => source_audio(b, args),
         "transition_set" => transition_set(b, args),
         "studio_transition" => Ok(text(&run(b, "studio.transition", pick(args, &["kind", "ms"]))?)),

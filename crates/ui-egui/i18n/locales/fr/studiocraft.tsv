@@ -545,3 +545,8 @@ menu	Transform	Transformer
 @msg	there is no display `{id}`: the system lists no displays	aucun écran `{id}` : le système ne liste aucun écran
 @msg	there is no display `{id}` (the displays are {ids})	aucun écran `{id}` (les écrans sont {ids})
 @msg	a {width} × {height} display can't be the canvas: each side must be from {min} to {max} pixels	un écran de {width} × {height} ne peut pas servir de canevas : chaque côté doit faire de {min} à {max} pixels
+	Output scale	Échelle de sortie
+	Custom	Personnalisé
+	{percent}% ({width} × {height})	{percent} % ({width} × {height})
+	Fill Screen	Remplir l'écran
+@msg	The scenes could not be laid out for the new canvas: {error}	Les scènes n'ont pas pu être disposées pour le nouveau canevas : {error}

@@ -6,7 +6,7 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use studiocraft_model::{ItemId, SceneId, Settings, SourceId, Transform};
+use studiocraft_model::{FitMode, ItemId, SceneId, Settings, SourceId, Transform};
 
 /// A scene by id or by name.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -30,6 +30,24 @@ pub enum SourceRef {
 pub enum ItemRef {
     Id(ItemId),
     Source(String),
+}
+
+/// A canvas size in pixels.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CanvasSize {
+    pub width: u32,
+    pub height: u32,
+}
+
+/// Longest side of a [`SourceSize`], in pixels.
+pub const MAX_SOURCE_SIDE: u32 = 65_536;
+
+/// The size a source shows at, in pixels.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SourceSize {
+    pub source: SourceId,
+    pub width: u32,
+    pub height: u32,
 }
 
 /// Where a reordered entry goes.
@@ -186,6 +204,9 @@ pub enum Command {
         scene: Option<SceneRef>,
         item: ItemRef,
         transform: Transform,
+        /// How `transform` sized the item to the canvas; omitted for any other change.
+        #[serde(default)]
+        fit: Option<FitMode>,
     },
     #[serde(rename = "item.visible")]
     ItemVisible {
@@ -200,6 +221,18 @@ pub enum Command {
         scene: Option<SceneRef>,
         item: ItemRef,
         locked: bool,
+    },
+    /// Place every item of every scene for a canvas that changed from `from` to `to`
+    /// ([`Transform::relayout`]), or only the items in `items` when given; `sizes` gives the
+    /// sizes of the sources that show a picture.
+    #[serde(rename = "canvas.relayout")]
+    CanvasRelayout {
+        from: CanvasSize,
+        to: CanvasSize,
+        #[serde(default)]
+        sizes: Vec<SourceSize>,
+        #[serde(default)]
+        items: Option<Vec<ItemId>>,
     },
 
     #[serde(rename = "filter.add")]
@@ -392,6 +425,7 @@ impl Command {
             Command::ItemTransform { .. } => "item.transform",
             Command::ItemVisible { .. } => "item.visible",
             Command::ItemLock { .. } => "item.lock",
+            Command::CanvasRelayout { .. } => "canvas.relayout",
             Command::FilterAdd { .. } => "filter.add",
             Command::FilterRemove { .. } => "filter.remove",
             Command::FilterSettings { .. } => "filter.settings",
@@ -490,9 +524,15 @@ const SPECS: &[CommandSpec] = &[
     spec("item.remove", "Remove Source from Scene", "item: id or source name, scene?", Undo::Undoable),
     spec("item.duplicate", "Duplicate Source", "item: id or source name, scene?", Undo::Undoable),
     spec("item.move", "Move Source", "item, scene?, to: up|down|top|bottom|{to: index}", Undo::Undoable),
-    spec("item.transform", "Transform Source", "item, scene?, transform: {position, size, rotation, crop}", Undo::Undoable),
+    spec("item.transform", "Transform Source", "item, scene?, transform: {position, size, rotation, crop}, fit?: fit|fill|stretch", Undo::Undoable),
     spec("item.visible", "Show or Hide Source", "item, scene?, visible: bool", Undo::Undoable),
     spec("item.lock", "Lock Source", "item, scene?, locked: bool", Undo::Undoable),
+    spec(
+        "canvas.relayout",
+        "Lay Out for Canvas Size",
+        "from: {width, height}, to: {width, height}, sizes?: [{source: id, width, height}], items?: [item id]",
+        Undo::Undoable,
+    ),
     spec("filter.add", "Add Filter", "source, kind: plug-in id, name?", Undo::Undoable),
     spec("filter.remove", "Remove Filter", "source, filter: id", Undo::Undoable),
     spec("filter.settings", "Filter Properties", "source, filter: id, settings: object", Undo::Undoable),

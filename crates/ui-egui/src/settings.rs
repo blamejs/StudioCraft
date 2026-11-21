@@ -8,7 +8,9 @@ use craft_keymap::{Binding, CommandRef, Keymap, MAX_BINDING_TEXT, Overrides};
 use egui::{RichText, Ui};
 use studiocraft_audio_tracks::space::TRACK_BYTES_PER_SECOND;
 use studiocraft_model::profile::DEFAULT_AUDIO_DEVICE;
-use studiocraft_model::{AfterStop, AudioTracksSettings, AudioTracksWhen, KeyRef, Profile, RecordingFormat, RecordingQuality, ReplaySettings};
+use studiocraft_model::{
+    AfterStop, AudioTracksSettings, AudioTracksWhen, KeyRef, Profile, RecordingFormat, RecordingQuality, ReplaySettings, VideoSettings,
+};
 use studiocraft_platform::audio::{DeviceInfo, DeviceKind};
 use studiocraft_plugin::{Availability, EncoderEnv, EncoderKind, Registry, Settings};
 
@@ -113,10 +115,32 @@ pub const TABS: [(Tab, &str); 6] = [
 
 const FPS: [(&str, u32, u32); 8] =
     [("24", 24, 1), ("25", 25, 1), ("29.97", 30000, 1001), ("30", 30, 1), ("48", 48, 1), ("50", 50, 1), ("59.94", 60000, 1001), ("60", 60, 1)];
-const SIZES: [(u32, u32); 6] = [(3840, 2160), (2560, 1440), (1920, 1080), (1600, 900), (1280, 720), (852, 480)];
+const SIZES: [(u32, u32); 7] = [(3840, 2160), (2560, 1440), (1920, 1080), (1600, 900), (1280, 720), (852, 480), (1080, 1920)];
 const AUDIO_KBPS: [u32; 7] = [64, 96, 128, 160, 192, 256, 320];
 /// Seconds between readings of the display list while the Video page is shown.
 const DISPLAYS_EVERY: f64 = 1.0;
+
+/// After an edit of the draft's canvas size: an output size that was a share of the old canvas
+/// in [`studiocraft_model::OUTPUT_SCALES`] becomes the same share of the new one. A changed
+/// output size, or one that was no such share, stays.
+pub(crate) fn follow_canvas(before: VideoSettings, v: &mut VideoSettings) {
+    let canvas_moved = (v.base_width, v.base_height) != (before.base_width, before.base_height);
+    let output_kept = (v.output_width, v.output_height) == (before.output_width, before.output_height);
+    if canvas_moved
+        && output_kept
+        && let Some(s) = before.output_scale()
+    {
+        (v.output_width, v.output_height) = v.scaled_output(s);
+    }
+}
+
+/// An output scale's entry: its percentage and the output size it gives for `v`'s canvas.
+fn scale_label(v: &VideoSettings, scale: (u32, u32)) -> String {
+    let (w, h) = v.scaled_output(scale);
+    let percent = (u64::from(scale.0) * 100 / u64::from(scale.1.max(1))).to_string();
+    let (width, height) = (w.to_string(), h.to_string());
+    craft_i18n::fmt(tl!("{percent}% ({width} × {height})"), &[("percent", &percent), ("width", &width), ("height", &height)])
+}
 
 fn bindings_text(keymap: &Keymap, cmd: &CommandRef) -> String {
     let home = craft_keymap::Scope::app();
@@ -580,6 +604,7 @@ impl SettingsWindow {
         }
         ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64(DISPLAYS_EVERY));
         let v = &mut self.draft.video;
+        let before = *v;
         let size_combo = |ui: &mut Ui, id: &str, w: &mut u32, h: &mut u32| {
             ui.horizontal(|ui| {
                 ui.add(egui::DragValue::new(w).range(16..=8192));
@@ -622,8 +647,20 @@ impl SettingsWindow {
                 });
                 ui.end_row();
             }
+            follow_canvas(before, v);
             ui.label(tl!("Output size"));
             size_combo(ui, "output-size", &mut v.output_width, &mut v.output_height);
+            ui.end_row();
+            ui.label(tl!("Output scale"));
+            let scale = v.output_scale();
+            let current = scale.map_or_else(|| tl!("Custom").to_string(), |s| scale_label(v, s));
+            craft_ui::ComboBox::from_id_salt("output-scale").selected_text(current).show_ui(ui, |ui| {
+                for s in studiocraft_model::OUTPUT_SCALES {
+                    if ui.selectable_label(scale == Some(s), scale_label(v, s)).clicked() {
+                        (v.output_width, v.output_height) = v.scaled_output(s);
+                    }
+                }
+            });
             ui.end_row();
             ui.label(tl!("Frames per second"));
             let current = FPS
@@ -844,6 +881,28 @@ mod tests {
         assert!(!streaming.iter().any(|(id, _)| *id == "nvenc_native_hevc"), "a stream carries H.264: {streaming:?}");
         // Without an ffmpeg program the built-in encoder can still record.
         assert!(listed_encoders(registry, &[], false).iter().any(|(e, ok)| e.id() == "h264" && *ok));
+    }
+
+    #[test]
+    fn the_draft_output_follows_its_canvas_at_a_scale() {
+        let before = VideoSettings { output_width: 1280, output_height: 720, ..VideoSettings::default() };
+        let mut v = VideoSettings { base_width: 2560, base_height: 1440, ..before };
+        follow_canvas(before, &mut v);
+        assert_eq!((v.output_width, v.output_height), (1706, 960));
+        // An output size the same edit changed, or one that is no share of the canvas, stays.
+        let mut v = VideoSettings { base_width: 2560, base_height: 1440, output_width: 1000, ..before };
+        follow_canvas(before, &mut v);
+        assert_eq!((v.output_width, v.output_height), (1000, 720));
+        let custom = VideoSettings { output_width: 1000, output_height: 500, ..VideoSettings::default() };
+        let mut v = VideoSettings { base_width: 1080, base_height: 1920, ..custom };
+        follow_canvas(custom, &mut v);
+        assert_eq!((v.output_width, v.output_height), (1000, 500));
+        // Without a canvas change nothing moves.
+        let mut v = before;
+        follow_canvas(before, &mut v);
+        assert_eq!(v, before);
+        assert_eq!(scale_label(&before, (2, 3)), "66% (1280 × 720)");
+        assert_eq!(scale_label(&before, (1, 1)), "100% (1920 × 1080)");
     }
 
     /// The texts drawn by `f`.

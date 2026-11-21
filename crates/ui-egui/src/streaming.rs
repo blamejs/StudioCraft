@@ -552,7 +552,7 @@ impl StudioApp {
         }
         self.studio.set_profile(p).map_err(|e| e.to_string())?;
         if let Err(e) = self.store.save_profile(self.studio.profile()) {
-            let _ = self.studio.set_profile(previous);
+            let _ = self.studio.restore_profile(previous);
             return Err(tmsg!("The profile could not be saved: {error}", error = e));
         }
         if let Some(w) = &mut self.settings {
