@@ -15,9 +15,11 @@ through the `objc2-video-toolbox`, `objc2-core-media`, `objc2-core-video` and
 | Item | Description |
 |---|---|
 | `nvenc::Encoder` | This is NVIDIA's NVENC encoder: H.264 High and HEVC Main from NV12 frames, and HEVC Main 10 from P010 frames. It uses Direct3D 11 on Windows (`nvEncodeAPI64.dll`) and the CUDA driver on 64-bit Linux (`libnvidia-encode.so.1`). |
-| `nvenc::Config` | It sets the codec, input layout, size (even, within the GPU's limits), frame rate, `Rate::Quality(1..=51)` or `Rate::Cbr(kbps)`, and keyframe interval. |
-| `nvenc::Encoder::encode`, `flush` | Packed frames go in, and 4-byte length-prefixed packets come out in input order, each with its timestamp and keyframe flag. The encoder uses preset P5, high-quality tuning, no B-frames and BT.709 limited range. |
+| `nvenc::Config` | It sets the codec, input layout, size (even, within the GPU's limits), frame rate, `Rate::Quality(1..=51)` or `Rate::Cbr(kbps)`, keyframe interval and `Color`. |
+| `nvenc::Encoder::encode`, `flush` | Packed frames go in, and 4-byte length-prefixed packets come out in input order, each with its timestamp and keyframe flag. The encoder uses preset P5, high-quality tuning, no B-frames and limited range. The VUI declares the `Color` of the `Config`. |
 | `nvenc::Encoder::on_d3d11`, `encode_texture` | On Windows, `on_d3d11` opens an encoder on the caller's Direct3D 11 device (an NVIDIA adapter's), and `encode_texture` encodes an NV12 or P010 `ID3D11Texture2D` of the encoder's size made on that device. The encoder reads the texture's first subresource on the GPU, so the frame is not copied to system memory. |
+| `Color` | This is the color signal of a stream: `Color::Bt709`, `Color::Hlg` (BT.2020 with the HLG transfer) or `Color::Pq { mastering, light }` (BT.2020 with the PQ transfer). NVENC writes `Hlg` and `Pq` as HEVC Main 10 from P010 frames. For `Pq`, a `MasteringDisplay` and a `ContentLight` that are set go in front of every IDR picture as the mastering display colour volume (payload type 137) and content light level (payload type 144) SEI messages. The other encoders return `Error::Unsupported` for any color but `Bt709`. |
+| `MasteringDisplay`, `ContentLight` | These hold the PQ static metadata: the mastering display's primaries and white point in units of 0.00002 and its peak and black luminance in units of 0.0001 cd/m², and MaxCLL and MaxFALL in cd/m². A chromaticity above 50,000, a black level at or above the peak, and a MaxFALL above a nonzero MaxCLL return `Error::Unsupported`. `MasteringDisplay::bt2020_d65` fills in the BT.2020 primaries and the D65 white point. |
 | `nvenc::Encoder::codec_private` | It returns the `avcC` or `hvcC` record for the container. |
 | `nvenc::available(codec)` | It reports whether this system can open an NVENC session that writes `codec`. |
 | `mf::Encoder` | This runs the hardware H.264 and HEVC encoder MFTs (Media Foundation transforms) that Windows Media Foundation lists (`mfplat.dll`), from NV12 frames. It has the same `Config`, `encode`, `flush` and `codec_private` as NVENC. Quality is `100 - 2 × level`, constant bitrate uses a one-second buffer, and it uses no B-frames and BT.709 limited range. |
@@ -34,9 +36,9 @@ through the `objc2-video-toolbox`, `objc2-core-media`, `objc2-core-video` and
 
 ```rust
 use craft_hwenc_native::Codec;
-use craft_hwenc_native::nvenc::{Config, Encoder, Input, Rate};
+use craft_hwenc_native::nvenc::{Color, Config, Encoder, Input, Rate};
 
-let cfg = Config { codec: Codec::Hevc, input: Input::Nv12, width: 1920, height: 1080, fps: (60, 1), rate: Rate::Quality(23), keyint: 120 };
+let cfg = Config { codec: Codec::Hevc, input: Input::Nv12, width: 1920, height: 1080, fps: (60, 1), rate: Rate::Quality(23), keyint: 120, color: Color::Bt709 };
 let mut enc = Encoder::new(&cfg)?;
 let record = enc.codec_private().to_vec();
 for (pts, frame) in frames.enumerate() {
@@ -49,7 +51,20 @@ for packet in enc.flush()? {
 }
 ```
 
-`mf::Encoder`, `vt::Encoder` and `vaapi::Encoder` take the same `Config` with `Input::Nv12`.
+`mf::Encoder`, `vt::Encoder` and `vaapi::Encoder` take the same `Config` with `Input::Nv12` and
+`Color::Bt709`.
+
+An HDR10 stream on NVENC takes P010 frames and a PQ color with its metadata:
+
+```rust
+use craft_hwenc_native::nvenc::{Color, Config, ContentLight, Input, MasteringDisplay};
+
+let color = Color::Pq {
+    mastering: Some(MasteringDisplay::bt2020_d65(10_000_000, 50)),
+    light: Some(ContentLight { max_cll: 1000, max_fall: 400 }),
+};
+let cfg = Config { input: Input::P010, color, ..cfg };
+```
 
 On Windows, frames that are already on the GPU go in as textures:
 
@@ -100,6 +115,8 @@ C header's sizes and offsets, and they run on every platform.
 
 - ISO/IEC 14496-15 for the `avcC` and `hvcC` decoder configuration records.
 - NVIDIA's `nvEncodeAPI.h` (Video Codec SDK, API 12.1) for the NVENC structures.
+- ITU-T H.273 for the color code points, and ITU-T H.265 Annex D (D.2.28 and D.2.35) for the
+  mastering display colour volume and content light level SEI payloads.
 
 ## License
 

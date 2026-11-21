@@ -7,6 +7,9 @@
 //!   (https://learn.microsoft.com/en-us/windows/win32/api/audioclientactivationparams/ns-audioclientactivationparams-audioclient_process_loopback_params),
 //!   which needs Windows build 20348 or later. The format is set to 48 kHz stereo `f32` with the
 //!   system's conversion, since such a client cannot report a mix format.
+//! - Packet times: `IAudioCaptureClient::GetBuffer` gives each packet's device position, its
+//!   performance counter time and its flags
+//!   (https://learn.microsoft.com/en-us/windows/win32/api/audioclient/nf-audioclient-iaudiocaptureclient-getbuffer).
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::OnceLock;
@@ -18,7 +21,10 @@ use wasapi::{
     EventRegistration, SampleType, SessionState, StreamMode, WasapiError, WaveFormat,
 };
 
-use crate::{AppAudioError, AppInfo, AppKey, Backend, CAPTURE_WAIT_MS, CHANNELS, CaptureShared, OnData, SAMPLE_RATE, Support, Target, Wake, Watcher};
+use crate::{
+    AppAudioError, AppInfo, AppKey, Backend, CAPTURE_WAIT_MS, CHANNELS, CaptureShared, OnData, PacketInfo, SAMPLE_RATE, Support, Target, Wake,
+    Watcher,
+};
 
 /// The first Windows build with process loopback capture (Windows Server 2022; Windows 11 is
 /// later).
@@ -210,8 +216,10 @@ fn drain(
             }
         }
         if let Some(packet) = samples.get(..count) {
-            on_data(packet);
-            shared.packet();
+            let info =
+                PacketInfo::from_system(info.index, info.timestamp, info.flags.data_discontinuity, info.flags.timestamp_error, info.flags.silent);
+            on_data(packet, info);
+            shared.packet(&info);
             if !*flowing {
                 *flowing = true;
                 shared.running();

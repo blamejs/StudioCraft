@@ -11,13 +11,15 @@
 //!   is not copied to system memory and back. A 3840x2160 NV12 frame is 12,441,600 bytes.
 //! - The encoder uses preset P5 with high-quality tuning and no B-frames, so packets come out in
 //!   the order the frames went in and each packet's decoding time is its presentation time.
-//! - The stream's VUI says BT.709 at limited range.
+//! - The stream's VUI declares the [`Config::color`] signal at limited range: BT.709, or for HEVC
+//!   Main 10 BT.2020 with PQ or HLG. A PQ stream's mastering display and content light level SEI
+//!   messages go in front of every IDR picture.
 
 use std::collections::VecDeque;
 
 use crate::nvenc_ffi::{self, Locked, Session, Submitted};
 use crate::{Codec, annexb, avc, hevc};
-pub use crate::{Config, Error, Input, Packet, Rate};
+pub use crate::{Color, Config, ContentLight, Error, Input, MasteringDisplay, Packet, Rate};
 /// The Direct3D 11 types texture input takes, from the `windows` crate this crate builds with.
 #[cfg(target_os = "windows")]
 pub use windows::Win32::Graphics::Direct3D11::{ID3D11Device, ID3D11Texture2D};
@@ -70,6 +72,10 @@ fn check(cfg: &Config) -> Result<(), Error> {
     if cfg.input == Input::P010 && cfg.codec != Codec::Hevc {
         return bad("P010 frames are encoded as HEVC Main 10 only".into());
     }
+    if cfg.color.is_hdr() && (cfg.codec != Codec::Hevc || cfg.input != Input::P010) {
+        return bad("high dynamic range is encoded as HEVC Main 10 from P010 frames only".into());
+    }
+    cfg.color.check().map_err(Error::Unsupported)?;
     match cfg.rate {
         Rate::Quality(q) if !(1..=51).contains(&q) => bad(format!("the quality level {q} is outside 1 to 51")),
         Rate::Cbr(0) => bad("a bitrate of 0 kbit/s".into()),
@@ -126,7 +132,8 @@ impl Encoder {
             Rate::Quality(q) => nvenc_ffi::Rate::Quality(q),
             Rate::Cbr(kbps) => nvenc_ffi::Rate::Cbr(kbps),
         };
-        let params = nvenc_ffi::Params { codec, width: w, height: h, fps: cfg.fps, rate, gop: cfg.keyint.max(1), ten_bit, textures };
+        let params =
+            nvenc_ffi::Params { codec, width: w, height: h, fps: cfg.fps, rate, gop: cfg.keyint.max(1), ten_bit, color: cfg.color, textures };
         session.initialize(&params, RING).map_err(Error::Unsupported)?;
         let sets = session.sequence_params().map_err(Error::Failed)?;
         let record = match cfg.codec {
@@ -355,7 +362,7 @@ mod tests {
     use super::*;
 
     fn cfg(codec: Codec, input: Input) -> Config {
-        Config { codec, input, width: 256, height: 144, fps: (30, 1), rate: Rate::Quality(23), keyint: 60 }
+        Config { codec, input, width: 256, height: 144, fps: (30, 1), rate: Rate::Quality(23), keyint: 60, color: Color::Bt709 }
     }
 
     #[test]
@@ -406,6 +413,26 @@ mod tests {
             Config { rate: Rate::Quality(0), ..ok },
             Config { rate: Rate::Quality(52), ..ok },
             Config { rate: Rate::Cbr(0), ..ok },
+        ] {
+            assert!(matches!(check(&bad), Err(Error::Unsupported(_))), "{bad:?}");
+            assert!(matches!(Encoder::new(&bad), Err(Error::Unsupported(_))), "{bad:?} reached the driver");
+        }
+    }
+
+    #[test]
+    fn high_dynamic_range_is_hevc_main_10_and_its_metadata_is_checked() {
+        let display = MasteringDisplay::bt2020_d65(10_000_000, 50);
+        let light = ContentLight { max_cll: 1000, max_fall: 400 };
+        let main10 = cfg(Codec::Hevc, Input::P010);
+        for color in [Color::Hlg, Color::Pq { mastering: Some(display), light: Some(light) }, Color::Pq { mastering: None, light: None }] {
+            assert_eq!(check(&Config { color, ..main10 }), Ok(()), "{color:?}");
+        }
+        for bad in [
+            Config { color: Color::Hlg, ..cfg(Codec::Hevc, Input::Nv12) },
+            Config { color: Color::Hlg, ..cfg(Codec::H264, Input::Nv12) },
+            Config { color: Color::Pq { mastering: None, light: None }, ..cfg(Codec::Hevc, Input::Nv12) },
+            Config { color: Color::Pq { mastering: Some(MasteringDisplay::bt2020_d65(50, 50)), light: None }, ..main10 },
+            Config { color: Color::Pq { mastering: None, light: Some(ContentLight { max_cll: 100, max_fall: 200 }) }, ..main10 },
         ] {
             assert!(matches!(check(&bad), Err(Error::Unsupported(_))), "{bad:?}");
             assert!(matches!(Encoder::new(&bad), Err(Error::Unsupported(_))), "{bad:?} reached the driver");
@@ -513,5 +540,35 @@ mod tests {
         let Ok(mut e) = Encoder::new(&cfg(Codec::H264, Input::Nv12)) else { return };
         let t = nvenc_ffi::test_texture(&device, 256, 144, false).unwrap();
         assert!(e.encode_texture(&t, 0).is_err());
+    }
+
+    #[test]
+    fn a_pq_stream_carries_its_metadata_on_idr_pictures_when_a_gpu_is_present() {
+        let color =
+            Color::Pq { mastering: Some(MasteringDisplay::bt2020_d65(10_000_000, 50)), light: Some(ContentLight { max_cll: 1000, max_fall: 400 }) };
+        let Ok(mut e) = Encoder::new(&Config { color, keyint: 4, ..cfg(Codec::Hevc, Input::P010) }) else { return };
+        let frame = vec![0x80u8; Input::P010.frame_bytes(256, 144)];
+        let mut packets = Vec::new();
+        for pts in 0..6 {
+            packets.extend(e.encode(&frame, pts).unwrap());
+        }
+        packets.extend(e.flush().unwrap());
+        // A prefix SEI NAL unit (type 39) holding the 24-byte mastering display message (type 137)
+        // comes on the IDR pictures 0 and 4 only.
+        let has_sei = |p: &Packet| {
+            let mut rest = p.data.as_slice();
+            while let [a, b, c, d, tail @ ..] = rest {
+                let n = u32::from_be_bytes([*a, *b, *c, *d]) as usize;
+                let Some(nal) = tail.get(..n) else { return false };
+                if matches!(nal, [h, ..] if (h >> 1) & 0x3f == 39) && nal.windows(2).any(|w| w == [137, 24]) {
+                    return true;
+                }
+                rest = &tail[n..];
+            }
+            false
+        };
+        let with_sei: Vec<i64> = packets.iter().filter(|p| has_sei(p)).map(|p| p.pts).collect();
+        assert_eq!(with_sei, [0, 4]);
+        assert!(packets.iter().filter(|p| p.keyframe).all(has_sei));
     }
 }

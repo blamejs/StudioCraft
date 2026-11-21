@@ -400,10 +400,63 @@ pub struct NV_ENC_CREATE_BITSTREAM_BUFFER {
     pub reserved2: [*mut c_void; 64],
 }
 
-/// `NV_ENC_CODEC_PIC_PARAMS`: a union of codec structures, all zero here.
+/// `NV_ENC_SEI_PAYLOAD`: a user SEI message (payload type and bytes) for a picture.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct NV_ENC_SEI_PAYLOAD {
+    pub payloadSize: u32,
+    pub payloadType: u32,
+    pub payload: *mut u8,
+}
+
+/// `NV_ENC_CLOCK_TIMESTAMP_SET`: countingType:1, discontinuityFlag:1, cntDroppedFrames:1, nFrames:8,
+/// secondsValue:6, minutesValue:6, hoursValue:5, reserved2:4 in `bits`, then the time offset.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct NV_ENC_CLOCK_TIMESTAMP_SET {
+    pub bits: u32,
+    pub timeOffset: u32,
+}
+
+/// `NV_ENC_TIME_CODE` (`MAX_NUM_CLOCK_TS` is 3).
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct NV_ENC_TIME_CODE {
+    pub displayPicStruct: u32,
+    pub clockTimestamp: [NV_ENC_CLOCK_TIMESTAMP_SET; 3],
+}
+
+/// `NV_ENC_PIC_PARAMS_HEVC`: the per-picture HEVC parameters; all zero but the SEI payload array here.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct NV_ENC_PIC_PARAMS_HEVC {
+    pub displayPOCSyntax: u32,
+    pub refPicFlag: u32,
+    pub temporalId: u32,
+    pub forceIntraRefreshWithFrameCnt: u32,
+    /// constrainedFrame:1, sliceModeDataUpdate:1, ltrMarkFrame:1, ltrUseFrames:1, reservedBitFields:28.
+    pub flags: u32,
+    pub sliceTypeData: *mut u8,
+    pub sliceTypeArrayCnt: u32,
+    pub sliceMode: u32,
+    pub sliceModeData: u32,
+    pub ltrMarkFrameIdx: u32,
+    pub ltrUseFrameBitmap: u32,
+    pub ltrUsageMode: u32,
+    pub seiPayloadArrayCnt: u32,
+    pub reserved: u32,
+    pub seiPayloadArray: *mut NV_ENC_SEI_PAYLOAD,
+    pub timeCode: NV_ENC_TIME_CODE,
+    pub reserved2: [u32; 237],
+    pub reserved3: [*mut c_void; 61],
+}
+
+/// `NV_ENC_CODEC_PIC_PARAMS`: a union of codec structures (H.264 and AV1 stay opaque inside
+/// `reserved`).
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub union NV_ENC_CODEC_PIC_PARAMS {
+    pub hevcPicParams: NV_ENC_PIC_PARAMS_HEVC,
     pub reserved: [u32; 388],
     align: [*mut c_void; 0],
 }

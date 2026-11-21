@@ -16,7 +16,7 @@ use std::collections::VecDeque;
 
 use crate::mf_ffi::{self, OpenError, Output, Params, Transform};
 use crate::{Codec, annexb, avc, hevc};
-pub use crate::{Config, Error, Input, Packet, Rate};
+pub use crate::{Color, Config, Error, Input, Packet, Rate};
 
 impl From<OpenError> for Error {
     fn from(e: OpenError) -> Error {
@@ -41,7 +41,7 @@ pub fn driver() -> Result<(), Error> {
 /// stream at 30 frames per second. It opens the encoder and closes it again.
 pub fn available(codec: Codec) -> Result<(), Error> {
     driver()?;
-    let cfg = Config { codec, input: Input::Nv12, width: 256, height: 144, fps: (30, 1), rate: Rate::Quality(23), keyint: 60 };
+    let cfg = Config { codec, input: Input::Nv12, width: 256, height: 144, fps: (30, 1), rate: Rate::Quality(23), keyint: 60, color: Color::Bt709 };
     Transform::open(&params(&cfg)).map(drop).map_err(Error::from)
 }
 
@@ -67,6 +67,9 @@ fn check(cfg: &Config) -> Result<(), Error> {
     }
     if cfg.input != Input::Nv12 {
         return bad("the Media Foundation encoders take NV12 frames only".into());
+    }
+    if cfg.color != Color::Bt709 {
+        return bad("the Media Foundation encoders write BT.709 only".into());
     }
     match cfg.rate {
         Rate::Quality(q) if !(1..=51).contains(&q) => bad(format!("the quality level {q} is outside 1 to 51")),
@@ -294,7 +297,7 @@ mod tests {
     use super::*;
 
     fn cfg(codec: Codec) -> Config {
-        Config { codec, input: Input::Nv12, width: 256, height: 144, fps: (30, 1), rate: Rate::Quality(23), keyint: 60 }
+        Config { codec, input: Input::Nv12, width: 256, height: 144, fps: (30, 1), rate: Rate::Quality(23), keyint: 60, color: Color::Bt709 }
     }
 
     /// An Annex B access unit of the NAL units `nals`, each a header byte (two for HEVC) and one
@@ -324,6 +327,8 @@ mod tests {
             Config { fps: (30, 0), ..ok },
             Config { fps: (0, 1), ..ok },
             Config { input: Input::P010, ..ok },
+            Config { color: Color::Hlg, ..ok },
+            Config { color: Color::Pq { mastering: None, light: None }, ..ok },
             Config { rate: Rate::Quality(0), ..ok },
             Config { rate: Rate::Quality(52), ..ok },
             Config { rate: Rate::Cbr(0), ..ok },

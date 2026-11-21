@@ -9,6 +9,8 @@
 //!   samples a container stores.
 //! - [`avc`] and [`hevc`] build the `avcC` and `hvcC` records from the parameter sets an encoder
 //!   writes, with `craft-media`'s record writers.
+//! - [`hdr`] holds the color signal a stream declares ([`Color`]): BT.709, or BT.2020 with PQ or
+//!   HLG, and the SEI messages of the PQ static metadata.
 //!
 //! The encoders take a [`Config`] and return [`Packet`]s or an [`Error`]. The system calls are in
 //! private modules with `unsafe` allowed; every item this crate exports is safe.
@@ -17,6 +19,7 @@
 
 pub mod annexb;
 pub mod avc;
+pub mod hdr;
 pub mod hevc;
 pub mod mf;
 #[allow(unsafe_code)]
@@ -30,6 +33,8 @@ mod vaapi_ffi;
 pub mod vt;
 #[allow(unsafe_code)]
 mod vt_ffi;
+
+pub use hdr::{Color, ContentLight, MasteringDisplay};
 
 /// The codec of a stream.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -83,6 +88,9 @@ pub struct Config {
     pub rate: Rate,
     /// Frames from one keyframe to the next.
     pub keyint: u32,
+    /// The color signal the stream declares. NVENC writes high dynamic range as HEVC Main 10 from
+    /// P010 frames; the other encoders write BT.709 only.
+    pub color: Color,
 }
 
 /// One encoded frame: 4-byte length-prefixed NAL units without parameter sets.
