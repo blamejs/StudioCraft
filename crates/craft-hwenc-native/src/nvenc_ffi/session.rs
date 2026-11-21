@@ -7,6 +7,8 @@ use std::sync::OnceLock;
 
 use super::abi::*;
 use super::device::Device;
+use crate::Color;
+use crate::hdr::Sei;
 
 /// The driver's entry points, loaded once.
 struct Api {
@@ -146,6 +148,8 @@ pub struct Params {
     pub gop: u32,
     /// HEVC Main 10 from P010 pictures; otherwise 8-bit (H.264 High or HEVC Main) from NV12.
     pub ten_bit: bool,
+    /// HEVC: the VUI color description and the SEI messages of every IDR picture. H.264 is BT.709.
+    pub color: Color,
 }
 
 /// An input buffer locked for writing: luma rows at `pitch` bytes per row, then the interleaved
@@ -190,6 +194,15 @@ pub struct Session {
     /// `NV_ENC_BUFFER_FORMAT_*` of the input buffers, and its bytes per sample.
     fmt: u32,
     bytes_per_sample: usize,
+    /// The SEI messages of every IDR picture. The payload bytes and the array of descriptors are
+    /// heap blocks the session owns for its whole life, so the pointers handed to the driver stay
+    /// valid however the `Session` value moves and however long the driver keeps a picture queued.
+    sei_payloads: Vec<Box<[u8]>>,
+    sei_array: Box<[NV_ENC_SEI_PAYLOAD]>,
+    /// Pictures the driver took, and the distance between IDR pictures, to know which pictures get
+    /// the SEI messages.
+    submitted: u64,
+    gop: u64,
 }
 
 // SAFETY: a session and its buffers are driver objects used from one thread at a time (every call
@@ -250,6 +263,25 @@ pub(crate) fn hevc_flags(preset: u32, ten_bit: bool) -> u32 {
     flags
 }
 
+/// Whether the picture submitted after `submitted` others gets the session's `messages` SEI
+/// messages: with no B-frames the pictures go in display order, and every `gop`-th one from the
+/// first is an IDR picture.
+pub(crate) fn carries_sei(messages: usize, submitted: u64, gop: u64) -> bool {
+    messages > 0 && submitted.is_multiple_of(gop.max(1))
+}
+
+/// The SEI payloads as heap blocks, and the driver's descriptors pointing at them. Moving the
+/// returned values does not move the blocks, so the pointers stay valid while both are kept.
+pub(crate) fn sei_descriptors(messages: &[Sei]) -> Result<(Vec<Box<[u8]>>, Box<[NV_ENC_SEI_PAYLOAD]>), String> {
+    let mut payloads: Vec<Box<[u8]>> = messages.iter().map(|m| m.payload.clone().into_boxed_slice()).collect();
+    let mut array = Vec::with_capacity(payloads.len());
+    for (m, bytes) in messages.iter().zip(payloads.iter_mut()) {
+        let size = u32::try_from(bytes.len()).map_err(|_| "an SEI payload longer than 4 GiB".to_string())?;
+        array.push(NV_ENC_SEI_PAYLOAD { payloadSize: size, payloadType: m.payload_type, payload: bytes.as_mut_ptr() });
+    }
+    Ok((payloads, array.into_boxed_slice()))
+}
+
 impl Session {
     /// Open a session on the system's NVIDIA GPU, or say why not.
     pub fn open() -> Result<Session, OpenError> {
@@ -278,7 +310,20 @@ impl Session {
             }
             enc
         };
-        Ok(Session { api, enc, _device: device, slots: Vec::new(), size: (0, 0), out_size: 0, fmt: NV_ENC_BUFFER_FORMAT_NV12, bytes_per_sample: 1 })
+        Ok(Session {
+            api,
+            enc,
+            _device: device,
+            slots: Vec::new(),
+            size: (0, 0),
+            out_size: 0,
+            fmt: NV_ENC_BUFFER_FORMAT_NV12,
+            bytes_per_sample: 1,
+            sei_payloads: Vec::new(),
+            sei_array: Box::new([]),
+            submitted: 0,
+            gop: 1,
+        })
     }
 
     /// The encoder's limits for `codec`; an error when the GPU cannot encode it.
@@ -312,7 +357,15 @@ impl Session {
         if p.ten_bit && p.codec != Codec::Hevc {
             return Err("10-bit encoding is HEVC Main 10 only".into());
         }
+        if p.color != Color::Bt709 && p.codec != Codec::Hevc {
+            return Err("H.264 is written as BT.709 only".into());
+        }
         (self.fmt, self.bytes_per_sample) = if p.ten_bit { (NV_ENC_BUFFER_FORMAT_YUV420_10BIT, 2) } else { (NV_ENC_BUFFER_FORMAT_NV12, 1) };
+        self.gop = u64::from(p.gop.max(1));
+        self.submitted = 0;
+        let (sei_payloads, sei_array) = sei_descriptors(&p.color.sei())?;
+        (self.sei_payloads, self.sei_array) = (sei_payloads, sei_array);
+        let (primaries, transfer, matrix) = p.color.code_points();
         let preset_fn = self.api.list.nvEncGetEncodePresetConfigEx.ok_or("the driver has no nvEncGetEncodePresetConfigEx")?;
         let init_fn = self.api.list.nvEncInitializeEncoder.ok_or("the driver has no nvEncInitializeEncoder")?;
         // SAFETY: zeroed parameter blocks with their versions; the preset call fills `preset`, and
@@ -389,9 +442,9 @@ impl Session {
                     vui.videoFormat = NV_ENC_VUI_VIDEO_FORMAT_UNSPECIFIED;
                     vui.videoFullRangeFlag = 0;
                     vui.colourDescriptionPresentFlag = 1;
-                    vui.colourPrimaries = NV_ENC_VUI_COLOR_PRIMARIES_BT709;
-                    vui.transferCharacteristics = NV_ENC_VUI_TRANSFER_CHARACTERISTIC_BT709;
-                    vui.colourMatrix = NV_ENC_VUI_MATRIX_COEFFS_BT709;
+                    vui.colourPrimaries = u32::from(primaries);
+                    vui.transferCharacteristics = u32::from(transfer);
+                    vui.colourMatrix = u32::from(matrix);
                     // the encoder derives the HEVC timing from frameRateNum and frameRateDen
                     vui.timingInfoPresentFlag = 0;
                     vui.numUnitInTicks = 0;
@@ -521,9 +574,19 @@ impl Session {
             }
             l.pitch
         };
-        // SAFETY: a zeroed parameter block with its version; the buffers are this session's.
+        let idr = carries_sei(self.sei_array.len(), self.submitted, self.gop);
+        // SAFETY: a zeroed parameter block with its version; the buffers are this session's. The SEI
+        // descriptor array and the payload bytes it points to are heap blocks owned by `self` that
+        // stay allocated and unmoved until the session is dropped, so they outlive this call and
+        // the time the driver keeps the picture queued. Only an HEVC session has SEI messages
+        // (`initialize`), so the HEVC member of the union is the codec's own.
         let st = unsafe {
             let mut e: NV_ENC_PIC_PARAMS = std::mem::zeroed();
+            if idr {
+                let hevc = &mut e.codecPicParams.hevcPicParams;
+                hevc.seiPayloadArrayCnt = u32::try_from(self.sei_array.len()).unwrap_or(0);
+                hevc.seiPayloadArray = self.sei_array.as_mut_ptr();
+            }
             e.version = NV_ENC_PIC_PARAMS_VER;
             e.inputWidth = w;
             e.inputHeight = h;
@@ -536,11 +599,14 @@ impl Session {
             e.inputDuration = 1;
             encode(self.enc, &mut e)
         };
-        match st {
-            NV_ENC_SUCCESS => Ok(Submitted::Ready),
-            NV_ENC_ERR_NEED_MORE_INPUT => Ok(Submitted::NeedMoreInput),
-            s => Err(status("encoding a picture", s, self.enc, self.api)),
-        }
+        let submitted = match st {
+            NV_ENC_SUCCESS => Submitted::Ready,
+            NV_ENC_ERR_NEED_MORE_INPUT => Submitted::NeedMoreInput,
+            s => return Err(status("encoding a picture", s, self.enc, self.api)),
+        };
+        // A refused picture is not counted, so the IDR count stays in step with the driver's.
+        self.submitted = self.submitted.saturating_add(1);
+        Ok(submitted)
     }
 
     /// Tell the encoder the stream ends: every picture it still holds becomes ready.

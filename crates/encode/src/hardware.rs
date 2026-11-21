@@ -11,7 +11,7 @@
 use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
-use craft_hwenc_native::{Codec as NativeCodec, Config, Input, Rate};
+use craft_hwenc_native::{Codec as NativeCodec, Color, Config, Input, Rate};
 use studiocraft_plugin::{Encoder, Packet, PluginError, RateControl, VideoParams, VideoSession};
 
 use crate::h264::{KBPS, KEYFRAME_S, RECORDING_KEYFRAME_S};
@@ -160,7 +160,16 @@ pub(crate) fn config(codec: NativeCodec, params: &VideoParams, encoder: &str) ->
             return Err(PluginError::Unavailable(format!("{encoder} cannot record losslessly; choose another encoder in Settings › Output")));
         }
     };
-    Ok(Config { codec, input: Input::Nv12, width: params.width, height: params.height, fps: (params.fps_num, params.fps_den), rate, keyint })
+    Ok(Config {
+        codec,
+        input: Input::Nv12,
+        width: params.width,
+        height: params.height,
+        fps: (params.fps_num, params.fps_den),
+        rate,
+        keyint,
+        color: Color::Bt709,
+    })
 }
 
 /// The packets of a built-in hardware encoder as the plugin's packets.
