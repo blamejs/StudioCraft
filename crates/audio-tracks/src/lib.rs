@@ -21,7 +21,7 @@
 //! [`StopReason::WriteFailed`].
 //!
 //! A take writes `take.journal` beside its files; [`recover`] repairs the files of a take that
-//! ended without its journal's last line.
+//! ended without its journal's last line, and [`takes`] lists the takes in a recording folder.
 //!
 //! A take that makes its own folder also writes a session file for the audio editor there
 //! ([`session`]): one with no tracks when the take starts, and the full one, built from the
@@ -40,6 +40,7 @@ mod open;
 pub mod recover;
 pub mod session;
 pub mod space;
+pub mod takes;
 pub mod wav;
 
 use std::panic::AssertUnwindSafe;
