@@ -6,7 +6,6 @@
 //! that is left and is shortened with an ellipsis when it does not fit, with the whole title in its
 //! tooltip. A dock has no footer: every action it offers is in its header.
 
-// port: P3 (language, direction and framework words) reads the direction from the env here.
 use crate::i18n as direction;
 use egui::{Color32, FontId, Rect, RichText, Sense, Ui, UiBuilder, pos2, vec2};
 
@@ -113,9 +112,14 @@ mod tests {
         run_in(false, width, title, n)
     }
 
+    /// As [`run`], with the window's root direction right to left when `rtl` is set.
     fn run_in(rtl: bool, width: f32, title: &str, n: usize) -> (PanelHeaderResponse<Vec<Rect>>, Vec<egui::epaint::ClippedShape>) {
-        let ctx = egui::Context::default();
-        ctx.all_styles_mut(|s| s.right_to_left = rtl);
+        use craft_ui::runtime::env::{Direction, RootEnv};
+        use craft_ui::runtime::frame::FrameInput;
+
+        let ctx = crate::test_context();
+        let direction = if rtl { Direction::Rtl } else { Direction::Ltr };
+        craft_ui::shell::embed::before_input(&ctx, |_| FrameInput::new(RootEnv::new().direction(direction)));
         let raw = RawInput { screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(width, 200.0))), ..RawInput::default() };
         let st = style();
         let mut out = None;

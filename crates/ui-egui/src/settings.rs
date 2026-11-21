@@ -2,12 +2,16 @@
 //! the profile, the Language setting, the update check at start and the graphics adapter (in the
 //! Video tab's Hardware acceleration section), applied with OK or Apply.
 
-// port: P16 (Settings on PreferencesWindow) replaces these egui combo boxes with `Select`.
+// port: P16 (Settings on PreferencesWindow) replaces the egui combo boxes left here. The Presets
+// and Match display boxes are menus under a fixed caption, which `Select` does not offer; the
+// others can hold a saved value that is not among their options, which `Select` does not show.
 #![expect(clippy::disallowed_types, reason = "craft-ui no longer has its combo box; Settings moves to `Select`")]
 
 use std::collections::BTreeMap;
 
 use craft_keymap::{Binding, CommandRef, Keymap, MAX_BINDING_TEXT, Overrides};
+use craft_ui::contract::{Bind, Entry, Props as _, Show as _};
+use craft_ui::pickers::Select;
 use egui::{ComboBox, RichText, Ui};
 use studiocraft_audio_tracks::space::TRACK_BYTES_PER_SECOND;
 use studiocraft_model::profile::DEFAULT_AUDIO_DEVICE;
@@ -448,19 +452,12 @@ impl SettingsWindow {
             });
             ui.end_row();
             ui.label(tl!("Format"));
-            ComboBox::from_id_salt("format").selected_text(o.format.extension().to_uppercase()).show_ui(ui, |ui| {
-                for f in RecordingFormat::ALL {
-                    ui.selectable_value(&mut o.format, f, f.extension().to_uppercase());
-                }
-            });
+            let formats: Vec<_> = RecordingFormat::ALL.iter().map(|&f| Entry::new(f, f.extension().to_uppercase())).collect();
+            let _ = Select::new(tl!("Format"), Bind::bound(&mut o.format), &formats).id_salt("format").show(ui);
             ui.end_row();
             ui.label(tl!("Quality"));
-            let label = |q: RecordingQuality| tl!(quality_label(q));
-            ComboBox::from_id_salt("quality").selected_text(label(o.quality)).width(260.0).show_ui(ui, |ui| {
-                for q in RecordingQuality::ALL {
-                    ui.selectable_value(&mut o.quality, q, label(q));
-                }
-            });
+            let qualities: Vec<_> = RecordingQuality::ALL.iter().map(|&q| Entry::new(q, tl!(quality_label(q)))).collect();
+            let _ = Select::new(tl!("Quality"), Bind::bound(&mut o.quality), &qualities).id_salt("quality").show(ui);
             ui.end_row();
             ui.label(tl!("Video encoder"));
             Self::encoder_combo(ui, "record-encoder", registry, &self.offered, &mut o.video_encoder, false);
@@ -504,12 +501,8 @@ impl SettingsWindow {
         ui.add_enabled_ui(t.enabled, |ui| {
             egui::Grid::new("audio-tracks-grid").num_columns(2).spacing([12.0, 8.0]).show(ui, |ui| {
                 ui.label(tl!("Write them while"));
-                let label = |w: AudioTracksWhen| tl!(when_label(w));
-                ComboBox::from_id_salt("audio-tracks-when").selected_text(label(t.when)).width(260.0).show_ui(ui, |ui| {
-                    for w in AudioTracksWhen::ALL {
-                        ui.selectable_value(&mut t.when, w, label(w));
-                    }
-                });
+                let whens: Vec<_> = AudioTracksWhen::ALL.iter().map(|&w| Entry::new(w, tl!(when_label(w)))).collect();
+                let _ = Select::new(tl!("Write them while"), Bind::bound(&mut t.when), &whens).id_salt("audio-tracks-when").show(ui);
                 ui.end_row();
                 ui.label("");
                 ui.checkbox(&mut t.include_program, tl!("Include the program mix"));
@@ -521,12 +514,8 @@ impl SettingsWindow {
                 ui.add(egui::DragValue::new(&mut t.segment_gib).range(AudioTracksSettings::SEGMENT_GIB).suffix(format!(" {}", tl!("GiB"))));
                 ui.end_row();
                 ui.label(tl!("After a take"));
-                let label = |a: AfterStop| tl!(after_stop_label(a));
-                ComboBox::from_id_salt("audio-tracks-after-stop").selected_text(label(t.after_stop)).width(260.0).show_ui(ui, |ui| {
-                    for a in AfterStop::ALL {
-                        ui.selectable_value(&mut t.after_stop, a, label(a));
-                    }
-                });
+                let afters: Vec<_> = AfterStop::ALL.iter().map(|&a| Entry::new(a, tl!(after_stop_label(a)))).collect();
+                let _ = Select::new(tl!("After a take"), Bind::bound(&mut t.after_stop), &afters).id_salt("audio-tracks-after-stop").show(ui);
                 ui.end_row();
                 ui.label(tl!("Audio editor"));
                 ui.horizontal(|ui| {
@@ -643,16 +632,12 @@ impl SettingsWindow {
         egui::Grid::new("hardware-grid").num_columns(2).spacing([12.0, 8.0]).show(ui, |ui| {
             ui.label(tl!("Graphics adapter"));
             ui.vertical(|ui| {
-                ComboBox::from_id_salt("graphics-adapter").selected_text(hardware::label(chosen, listed)).width(320.0).show_ui(ui, |ui| {
-                    let mut choices = hardware::choices(listed);
-                    if !choices.contains(chosen) {
-                        choices.push(chosen.clone());
-                    }
-                    for c in choices {
-                        let text = hardware::label(&c, listed);
-                        ui.selectable_value(chosen, c, text);
-                    }
-                });
+                let mut choices = hardware::choices(listed);
+                if !choices.contains(chosen) {
+                    choices.push(chosen.clone());
+                }
+                let adapters: Vec<_> = choices.into_iter().map(|c| Entry::new(c.clone(), hardware::label(&c, listed))).collect();
+                let _ = Select::new(tl!("Graphics adapter"), Bind::bound(&mut *chosen), &adapters).id_salt("graphics-adapter").show(ui);
                 ui.label(RichText::new(tl!("Takes effect the next time StudioCraft starts.")).small().weak());
             });
             ui.end_row();

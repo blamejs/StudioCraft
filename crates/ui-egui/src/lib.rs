@@ -36,7 +36,8 @@ use std::time::{Duration, Instant};
 use craft_host::target::ShellInfo;
 use craft_keymap::{CommandRef, Keymap, Overrides};
 use craft_menu::MenuBar;
-use craft_ui::contract::Tracked;
+use craft_ui::contract::{Bind, Entry, Props as _, Show as _, Tracked};
+use craft_ui::pickers::Select;
 use craft_ui::runtime::commands::{AppCatalog, CommandInput};
 use craft_ui::runtime::env::RootEnv;
 use craft_ui::runtime::frame::{FrameInput, FrameOutput};
@@ -815,15 +816,13 @@ impl StudioApp {
         }
         let mut open = true;
         egui::Window::new(tid!("view.scopes", "Scopes")).id(egui::Id::unique("scopes")).open(&mut open).default_width(520.0).show(ctx, |ui| {
-            // port: P12a (Scopes window) replaces this egui combo box with `Select`.
-            #[expect(clippy::disallowed_types, reason = "craft-ui no longer has its combo box; the Scopes window moves to `Select`")]
-            egui::ComboBox::from_id_salt("scope-kind").selected_text(tl!(kind.label())).show_ui(ui, |ui| {
-                for k in scopes::MENU_ORDER {
-                    if ui.selectable_label(k == kind, tl!(k.label())).clicked() && k != kind {
-                        acts.push(Act::run("scopes.kind", json!({"kind": k.name()})));
-                    }
-                }
-            });
+            let kinds: Vec<_> = scopes::MENU_ORDER.iter().map(|&k| Entry::new(k, tl!(k.label()))).collect();
+            let picked = Select::new(tid!("view.scopes", "Scopes"), Bind::given(kind), &kinds).id_salt("scope-kind").show(ui);
+            if let Some(&k) = picked.events.committed()
+                && k != kind
+            {
+                acts.push(Act::run("scopes.kind", json!({"kind": k.name()})));
+            }
             let latest = s.latest.as_ref().filter(|p| p.kind == kind);
             match latest {
                 None if !has_gpu => {
@@ -2010,13 +2009,8 @@ impl StudioApp {
                 i18n::horizontal(ui, |ui| {
                     ui.strong(tl!("Credits"));
                     ui.with_layout(i18n::trailing(ui), |ui| {
-                        // port: P18 (About, credits and licenses) replaces this egui combo box.
-                        #[expect(clippy::disallowed_types, reason = "craft-ui no longer has its combo box; the credits list moves to `Select`")]
-                        egui::ComboBox::from_id_salt("credit-names").selected_text(tl!(mode.label())).show_ui(ui, |ui| {
-                            for m in credits::NameMode::ALL {
-                                ui.selectable_value(mode, m, tl!(m.label()));
-                            }
-                        });
+                        let modes: Vec<_> = credits::NameMode::ALL.iter().map(|&m| Entry::new(m, tl!(m.label()))).collect();
+                        let _ = Select::new(tl!("Show"), Bind::bound(&mut *mode), &modes).id_salt("credit-names").show(ui);
                         ui.label(tl!("Show"));
                     });
                 });

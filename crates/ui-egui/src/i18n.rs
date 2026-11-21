@@ -127,13 +127,10 @@ pub(crate) fn framework_words() -> std::sync::Arc<craft_i18n::Words> {
     })
 }
 
-// port: P3 (language, direction and framework words) replaces these with the root direction
-// read from the env. They take the place of the removed `craft_ui::direction` helpers and read
-// the direction the runtime writes into egui's style from the frame's root values.
-
-/// Whether `ui` lays out right to left.
+/// Whether `ui` lays out right to left: the direction its env has, which the frame's root values
+/// set.
 pub(crate) fn is_rtl(ui: &egui::Ui) -> bool {
-    ui.style().right_to_left
+    craft_ui::runtime::env::Env::of(ui).view().direction().is_rtl()
 }
 
 /// A row that starts at the reading start.
