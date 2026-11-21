@@ -99,10 +99,10 @@ pub fn ui_params(id: &str) -> &'static str {
         "collection.import" | "collection.export" => "path?: string",
         "scopes.kind" => "kind: string (waveform, parade, histogram, vectorscopeYuv or vectorscopeHls)",
         "stream.destination_add" => {
-            "name?: string, server?: string, enabled?: boolean, key?: string (profile, held or none), held_name?: string (with key held)"
+            "service?: string (a streaming service id, or empty for a custom server), name?: string, server?: string, enabled?: boolean, key?: string (profile, held or none), held_name?: string (with key held)"
         }
         "stream.destination_set" => {
-            "id: string, name?: string, server?: string, enabled?: boolean, key?: string (profile, held or none), held_name?: string (with key held)"
+            "id: string, service?: string (a streaming service id, or empty for a custom server), name?: string, server?: string, enabled?: boolean, key?: string (profile, held or none), held_name?: string (with key held)"
         }
         "stream.destination_remove" | "stream.destination_start" | "stream.destination_stop" => "id: string",
         "dock.move" => "dock: string (scenes, sources, mixer or app_audio), to: string (left or right)",

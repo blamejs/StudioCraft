@@ -235,11 +235,15 @@ pub struct Destination {
     /// The RTMP server, `rtmp://host/app` or `rtmps://host/app`.
     pub server: String,
     pub key: KeyRef,
+    /// The id of the streaming service it was set up for ([`crate::services::SERVICES`]); empty
+    /// for a server of the user's own choosing. A service id this version does not know is kept
+    /// and shown as a custom server.
+    pub service: String,
 }
 
 impl Default for Destination {
     fn default() -> Self {
-        Self { id: String::new(), name: String::new(), enabled: true, server: String::new(), key: KeyRef::None }
+        Self { id: String::new(), name: String::new(), enabled: true, server: String::new(), key: KeyRef::None, service: String::new() }
     }
 }
 
