@@ -8,13 +8,23 @@ sizes and bitrates, are listed in [MECHANICS.md](../MECHANICS.md).
 
 A scene is a stack of sources. You add, rename, duplicate, reorder and remove scenes and sources.
 In the preview you drag, resize and rotate sources. A source that is not rotated snaps when an
-edge or its center line comes within 8 points of a canvas edge, a canvas center line, or an edge or
+edge or its center line comes within 8 points of a canvas edge, a canvas center line, an edge of
+the action safe area (3.5% in from each canvas edge) or the title safe area (5% in), or an edge or
 center line of another visible source, and a line shows what it snapped to. A move snaps on each
 axis. A corner drag snaps the edges it moves and keeps the aspect ratio: the edge closer to its
 line snaps and the other edge follows the ratio. With Shift held the corner drag changes the ratio
 and each edge snaps on its own. Holding Alt (Option on macOS) turns snapping off. One drag is one
 undo step. You can lock a source so it can't be moved, or lock the whole preview. Each scene item can be
 shown or hidden, and every change can be undone.
+
+The Transform menu (in Edit and in a source's context menu) has Fit to Screen, which shows the
+whole source in the canvas at its aspect ratio; Fill Screen, which covers the canvas at the
+source's aspect ratio and leaves the parts past the canvas edges out of the picture; and Stretch to
+Screen, which makes the source the canvas's size. When the canvas size changes, every scene is laid
+out for the new size in one undo step: a source that was fit, filled or stretched with these
+commands is fit, filled or stretched again, and any other source keeps its place in proportion to
+the canvas ([`canvas.relayout`](control-protocol.md#canvasrelayout)). Moving, resizing, rotating
+or cropping a source ends its fit, fill or stretch.
 
 ### Built-in sources
 
@@ -524,7 +534,7 @@ discards them.
 | Stream | Server, Stream key, Video bitrate, Audio bitrate, Video encoder and Keyframe interval. |
 | Output | Recording folder, Format, Quality, Video encoder and its settings, the `ffmpeg` program, Replay buffer length and Replay buffer memory limit. |
 | Audio | Monitoring device, the device monitored sources play on. |
-| Video | Canvas size, Match display (sets the canvas size to the display the window is on or to a listed display; on Linux only the window's display is offered), Output size and Frames per second, and the Hardware acceleration section with Graphics adapter and Hardware encoder. Video settings can't change while recording, streaming or running the replay buffer. |
+| Video | Canvas size (the presets include 1080 × 1920 for vertical video), Match display (sets the canvas size to the display the window is on or to a listed display; on Linux only the window's display is offered), Output size, Output scale (100%, 75%, 66% or 50% of the canvas; an output size at one of these shares stays at that share when the canvas size changes) and Frames per second, and the Hardware acceleration section with Graphics adapter and Hardware encoder. Video settings can't change while recording, streaming or running the replay buffer. |
 | Hotkeys | A shortcut for each command. |
 
 ## Control and automation

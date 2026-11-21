@@ -536,3 +536,8 @@ menu	Transform	Transformace
 @msg	there is no display `{id}`: the system lists no displays	obrazovka `{id}` neexistuje: systém neuvádí žádné obrazovky
 @msg	there is no display `{id}` (the displays are {ids})	obrazovka `{id}` neexistuje (obrazovky jsou {ids})
 @msg	a {width} × {height} display can't be the canvas: each side must be from {min} to {max} pixels	obrazovka {width} × {height} nemůže být plátnem: každá strana musí mít {min} až {max} pixelů
+	Output scale	Měřítko výstupu
+	Custom	Vlastní
+	{percent}% ({width} × {height})	{percent} % ({width} × {height})
+	Fill Screen	Vyplnit obrazovku
+@msg	The scenes could not be laid out for the new canvas: {error}	Scény nešlo rozmístit pro nové plátno: {error}

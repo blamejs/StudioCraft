@@ -43,8 +43,11 @@ pub struct FileFormat {
 }
 
 /// Scene collections.
-pub const COLLECTION: FileFormat =
-    FileFormat { name: "studiocraft.scene-collection", version: 4, migrations: &[collection_v1_to_v2, collection_v2_to_v3, collection_v3_to_v4] };
+pub const COLLECTION: FileFormat = FileFormat {
+    name: "studiocraft.scene-collection",
+    version: 5,
+    migrations: &[collection_v1_to_v2, collection_v2_to_v3, collection_v3_to_v4, collection_v4_to_v5],
+};
 
 /// Collection version 1 to 2: each source's audio has a sync offset (`sync_offset_ms`), 0 for the
 /// sources of an older file.
@@ -86,6 +89,23 @@ fn collection_v3_to_v4(data: &mut Value) -> Result<(), String> {
             let audio = source.entry("audio").or_insert_with(|| json!({}));
             if let Value::Object(a) = audio {
                 a.entry("record_track").or_insert(Value::Null);
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Collection version 4 to 5: each scene item can keep how it was sized to the canvas (`fit`:
+/// `"fit"`, `"fill"` or `"stretch"`). The items of an older file get `null`, and a new canvas size
+/// keeps them in proportion.
+fn collection_v4_to_v5(data: &mut Value) -> Result<(), String> {
+    let data = data.as_object_mut().ok_or("the collection is not an object")?;
+    if let Some(Value::Array(scenes)) = data.get_mut("scenes") {
+        for scene in scenes.iter_mut().filter_map(Value::as_object_mut) {
+            if let Some(Value::Array(items)) = scene.get_mut("items") {
+                for item in items.iter_mut().filter_map(Value::as_object_mut) {
+                    item.entry("fit").or_insert(Value::Null);
+                }
             }
         }
     }
@@ -302,6 +322,7 @@ mod tests {
         (2, include_str!("../fixtures/collection-v2.json")),
         (3, include_str!("../fixtures/collection-v3.json")),
         (4, include_str!("../fixtures/collection-v4.json")),
+        (5, include_str!("../fixtures/collection-v5.json")),
     ];
     const PROFILE_FIXTURES: &[(u32, &str)] = &[
         (1, include_str!("../fixtures/profile-v1.json")),
@@ -455,6 +476,21 @@ mod tests {
         assert_eq!(read_collection(&write_collection(&c).unwrap(), "Scene").unwrap(), c);
         let wrong = v4.replace("\"record_track\": true", "\"record_track\": \"yes\"");
         assert!(matches!(read_collection(&wrong, "Scene"), Err(FormatError::Data(_))), "a flag that is not a boolean refuses the file");
+    }
+
+    #[test]
+    fn collections_keep_each_item_fit_mode() {
+        for (v, text) in &COLLECTION_FIXTURES[..4] {
+            let c = read_collection(text, "Scene").unwrap();
+            assert!(c.scenes.iter().flat_map(|s| &s.items).all(|i| i.fit.is_none()), "version {v} has no fit modes");
+        }
+        let (_, v5) = COLLECTION_FIXTURES[4];
+        let c = read_collection(v5, "Scene").unwrap();
+        let fits: Vec<_> = c.scenes[0].items.iter().map(|i| i.fit).collect();
+        assert_eq!(fits, [Some(crate::FitMode::Fill), None]);
+        assert_eq!(read_collection(&write_collection(&c).unwrap(), "Scene").unwrap(), c);
+        let unknown = v5.replace("\"fit\": \"fill\"", "\"fit\": \"cover\"");
+        assert!(matches!(read_collection(&unknown, "Scene"), Err(FormatError::Data(_))), "an unknown mode refuses the file");
     }
 
     #[test]

@@ -539,3 +539,7 @@ menu	Transform	Transformar
 @msg	there is no display `{id}`: the system lists no displays	no hay ninguna pantalla `{id}`: el sistema no muestra ninguna pantalla
 @msg	there is no display `{id}` (the displays are {ids})	no hay ninguna pantalla `{id}` (las pantallas son {ids})
 @msg	a {width} × {height} display can't be the canvas: each side must be from {min} to {max} pixels	una pantalla de {width} × {height} no puede ser el lienzo: cada lado debe tener de {min} a {max} píxeles
+	Output scale	Escala de salida
+	Custom	Personalizado
+	Fill Screen	Llenar la pantalla
+@msg	The scenes could not be laid out for the new canvas: {error}	No se pudieron reorganizar las escenas para el nuevo lienzo: {error}

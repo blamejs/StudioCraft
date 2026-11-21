@@ -72,6 +72,7 @@ pub const UI_COMMANDS: &[(&str, &str)] = &[
     ("selection.filters", "Filters…"),
     ("selection.remove", "Remove Selected Source"),
     ("selection.fit", "Fit to Screen"),
+    ("selection.fill", "Fill Screen"),
     ("selection.stretch", "Stretch to Screen"),
     ("selection.center", "Center to Screen"),
     ("selection.reset", "Reset Transform"),
@@ -119,6 +120,7 @@ pub fn ui_undoable(id: &str) -> bool {
         id,
         "selection.remove"
             | "selection.fit"
+            | "selection.fill"
             | "selection.stretch"
             | "selection.center"
             | "selection.reset"
@@ -229,6 +231,7 @@ pub fn menu_bar(s: &MenuState) -> MenuBar {
             item("selection.rotate_ccw", "Rotate 90° Counterclockwise"),
             Node::Separator,
             item("selection.fit", "Fit to Screen"),
+            item("selection.fill", "Fill Screen"),
             item("selection.stretch", "Stretch to Screen"),
             item("selection.center", "Center to Screen"),
         ],

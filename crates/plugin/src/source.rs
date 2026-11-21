@@ -1,7 +1,8 @@
 //! Sources: what scenes show and the mixer hears.
 
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering, fence};
+use std::sync::mpsc::SyncSender;
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use studiocraft_media::audio::{AudioPool, PooledBlock, block_pool};
@@ -67,11 +68,13 @@ pub struct VideoOut {
     size: AtomicU64,
     /// Whether anything has been published, a picture or nothing.
     published: AtomicBool,
+    /// Told once when the first content is published ([`VideoOut::notify_published`]).
+    first: OnceLock<SyncSender<()>>,
 }
 
 impl Default for VideoOut {
     fn default() -> Self {
-        Self { mailbox: Latest::new(), pool: frame_pool(), size: AtomicU64::new(0), published: AtomicBool::new(false) }
+        Self { mailbox: Latest::new(), pool: frame_pool(), size: AtomicU64::new(0), published: AtomicBool::new(false), first: OnceLock::new() }
     }
 }
 
@@ -90,12 +93,34 @@ impl VideoOut {
         };
         self.size.store((u64::from(size.0) << 32) | u64::from(size.1), Ordering::Relaxed);
         self.mailbox.publish(content);
-        self.published.store(true, Ordering::Release);
+        if !self.published.load(Ordering::Acquire) && !self.published.swap(true, Ordering::SeqCst) {
+            fence(Ordering::SeqCst);
+            if let Some(tx) = self.first.get() {
+                let _ = tx.try_send(());
+            }
+        }
     }
 
     /// Whether the source has published its first content, `Empty` included.
     pub fn published(&self) -> bool {
         self.published.load(Ordering::Acquire)
+    }
+
+    /// Sends `()` on `tx` when the first content is published, or at once when it already has
+    /// been. The call does not wait, and `publish` does not wait on the receiver: a full channel
+    /// drops the message. The message can arrive twice when the first content is published
+    /// during the call. Returns `false`, without sending, when a channel was already given.
+    pub fn notify_published(&self, tx: SyncSender<()>) -> bool {
+        if self.first.set(tx).is_err() {
+            return false;
+        }
+        fence(Ordering::SeqCst);
+        if self.published.load(Ordering::SeqCst)
+            && let Some(tx) = self.first.get()
+        {
+            let _ = tx.try_send(());
+        }
+        true
     }
 
     /// The newest content since the last call (compositor side).
@@ -243,6 +268,45 @@ mod tests {
         v.publish(VideoContent::Empty);
         assert!(v.published(), "a source with nothing to show has still answered");
         assert_eq!(v.size(), None);
+    }
+
+    #[test]
+    fn video_out_tells_a_waiter_about_its_first_content_without_waiting() {
+        use std::sync::mpsc::{TryRecvError, sync_channel};
+        // Given before the first content: nothing arrives until it is published, and the caller
+        // carries on in the meantime.
+        let v = VideoOut::default();
+        let (tx, rx) = sync_channel(1);
+        assert!(v.notify_published(tx));
+        assert_eq!(rx.try_recv(), Err(TryRecvError::Empty), "the content is late");
+        v.publish(VideoContent::Solid { rgba: [0; 4], width: 640, height: 360 });
+        assert_eq!(rx.try_recv(), Ok(()));
+        assert_eq!(v.size(), Some((640, 360)), "the size is known when the message arrives");
+        // Later content sends nothing more, and a full channel does not hold up `publish`.
+        v.publish(VideoContent::Empty);
+        assert_eq!(rx.try_recv(), Err(TryRecvError::Empty));
+        // Given after the first content: the message is sent at once.
+        let (tx, rx) = sync_channel(1);
+        let late = VideoOut::default();
+        late.publish(VideoContent::Empty);
+        assert!(late.notify_published(tx));
+        assert_eq!(rx.try_recv(), Ok(()));
+        // A second channel is refused.
+        let (tx, rx) = sync_channel(1);
+        assert!(!late.notify_published(tx));
+        assert_eq!(rx.try_recv(), Err(TryRecvError::Disconnected));
+    }
+
+    #[test]
+    fn video_out_tells_a_waiter_on_another_thread() {
+        let v = Arc::new(VideoOut::default());
+        let (tx, rx) = std::sync::mpsc::sync_channel(1);
+        let source = Arc::clone(&v);
+        let t = std::thread::spawn(move || source.publish(VideoContent::Solid { rgba: [0; 4], width: 8, height: 2 }));
+        assert!(v.notify_published(tx));
+        rx.recv().unwrap();
+        assert_eq!(v.size(), Some((8, 2)));
+        t.join().unwrap();
     }
 
     #[test]

@@ -517,3 +517,7 @@ menu	Transform	שינוי צורה
 @msg	there is no display `{id}`: the system lists no displays	אין מסך `{id}`: המערכת לא מציגה אף מסך
 @msg	there is no display `{id}` (the displays are {ids})	אין מסך `{id}` (המסכים הם {ids})
 @msg	a {width} × {height} display can't be the canvas: each side must be from {min} to {max} pixels	מסך בגודל {width} × {height} לא יכול לשמש כמשטח: כל צלע צריכה להיות בין {min} ל-{max} פיקסלים
+	Output scale	קנה מידה של פלט
+	Custom	מותאם אישית
+	Fill Screen	מילוי המסך
+@msg	The scenes could not be laid out for the new canvas: {error}	לא ניתן היה לסדר את הסצנות למשטח החדש: {error}

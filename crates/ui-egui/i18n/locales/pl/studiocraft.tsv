@@ -535,3 +535,7 @@ menu	Transform	Przekształć
 @msg	there is no display `{id}`: the system lists no displays	nie ma ekranu `{id}`: system nie podaje żadnych ekranów
 @msg	there is no display `{id}` (the displays are {ids})	nie ma ekranu `{id}` (dostępne ekrany: {ids})
 @msg	a {width} × {height} display can't be the canvas: each side must be from {min} to {max} pixels	ekran {width} × {height} nie może być płótnem: każdy bok musi mieć od {min} do {max} pikseli
+	Output scale	Skala wyjścia
+	Custom	Niestandardowy
+	Fill Screen	Wypełnij ekran
+@msg	The scenes could not be laid out for the new canvas: {error}	Nie udało się rozmieścić scen dla nowego płótna: {error}

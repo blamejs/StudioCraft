@@ -287,6 +287,279 @@ fn the_profile_changes_the_canvas() {
 }
 
 #[test]
+fn a_new_canvas_lays_out_the_scenes_as_one_undo_step() {
+    let mut s = headless();
+    // An image without a file never shows a picture, so it is placed by its corner.
+    s.run("source.add", &json!({"kind": "image", "name": "Logo", "transform": {"position": {"x": 960.0, "y": 540.0}}})).unwrap();
+    s.seal_history();
+    let at = |s: &Studio| s.collection().scenes[0].items[0].transform;
+    let mut p = s.profile().clone();
+    p.video.base_width = 1280;
+    p.video.base_height = 720;
+    s.set_profile(p.clone()).unwrap();
+    let t = at(&s);
+    assert!((t.position.x - 640.0).abs() < 0.01 && (t.position.y - 360.0).abs() < 0.01, "{t:?}");
+    assert!((t.scale.x - 2.0 / 3.0).abs() < 0.001, "{t:?}");
+    // Other settings leave the layout alone.
+    p.video.fps_num = 60;
+    s.set_profile(p).unwrap();
+    assert_eq!(at(&s), t);
+    s.run("edit.undo", &json!({})).unwrap();
+    assert_eq!(at(&s).position.x, 960.0, "one undo step takes the layout back");
+}
+
+#[test]
+fn a_filled_source_that_shows_nothing_at_a_canvas_change_fills_it_once_it_shows_a_picture() {
+    let mut s = headless();
+    let r = s.run("source.add", &json!({"kind": "color", "name": "Back", "settings": {"width": 400, "height": 300}})).unwrap();
+    let item = r.0["item"].clone();
+    let source = s.collection().scenes[0].items[0].source;
+    let (tx, rx) = std::sync::mpsc::sync_channel(1);
+    assert!(s.notify_source_shown(source, tx));
+    rx.recv().unwrap();
+    let native = s.source_size(source).unwrap();
+    let fill = studiocraft_model::Transform::fill(native, (1920, 1080));
+    s.run("item.transform", &json!({"item": item, "transform": fill, "fit": "fill"})).unwrap();
+    // The source loses its picture just before the canvas changes.
+    let video = Arc::clone(&s.sources.io(source).unwrap().video);
+    video.publish(studiocraft_plugin::VideoContent::Empty);
+    assert_eq!(s.source_size(source), None);
+    let mut p = s.profile().clone();
+    (p.video.base_width, p.video.base_height) = (1080, 1920);
+    s.set_profile(p).unwrap();
+    let at = |s: &Studio| s.collection().scenes[0].items[0].transform;
+    assert_ne!(at(&s), studiocraft_model::Transform::fill(native, (1080, 1920)));
+    s.tick();
+    assert_ne!(at(&s), studiocraft_model::Transform::fill(native, (1080, 1920)), "nothing to place by yet");
+    // A picture too large to lay out by is not placed by; one of another size that follows is.
+    video.publish(studiocraft_plugin::VideoContent::Solid { rgba: [0; 4], width: 70_000, height: 300 });
+    s.tick();
+    assert_ne!(at(&s), studiocraft_model::Transform::fill(native, (1080, 1920)), "too large to place by");
+    // When the picture comes back, the item fills the new canvas.
+    video.publish(studiocraft_plugin::VideoContent::Solid { rgba: [0; 4], width: 400, height: 300 });
+    s.tick();
+    assert_eq!(at(&s), studiocraft_model::Transform::fill(native, (1080, 1920)));
+    assert_eq!(s.collection().scenes[0].items[0].fit, Some(studiocraft_model::FitMode::Fill));
+    // Once placed, it is not placed again: a move made later stays.
+    let moved = studiocraft_model::Transform { position: studiocraft_model::Vec2::new(5.0, 5.0), ..at(&s) };
+    s.run("item.transform", &json!({"item": item, "transform": moved})).unwrap();
+    s.tick();
+    assert_eq!(at(&s), moved);
+
+    // A layout that is undone, or taken back after a failed save, has nothing left to place.
+    let fill = studiocraft_model::Transform::fill(native, (1080, 1920));
+    s.run("item.transform", &json!({"item": item, "transform": fill, "fit": "fill"})).unwrap();
+    s.seal_history();
+    let tall = s.profile().clone();
+    let mut wide = tall.clone();
+    (wide.video.base_width, wide.video.base_height) = (1920, 1080);
+    video.publish(studiocraft_plugin::VideoContent::Empty);
+    s.set_profile(wide.clone()).unwrap();
+    s.run("edit.undo", &json!({})).unwrap();
+    video.publish(studiocraft_plugin::VideoContent::Solid { rgba: [0; 4], width: 400, height: 300 });
+    s.tick();
+    assert_eq!(at(&s), fill, "undo took the layout back");
+    // Redoing the layout puts the item back in the wait.
+    video.publish(studiocraft_plugin::VideoContent::Empty);
+    s.run("edit.redo", &json!({})).unwrap();
+    video.publish(studiocraft_plugin::VideoContent::Solid { rgba: [0; 4], width: 400, height: 300 });
+    s.tick();
+    assert_eq!(at(&s), studiocraft_model::Transform::fill(native, (1920, 1080)), "redo waits again");
+    s.run("edit.undo", &json!({})).unwrap();
+    s.run("edit.undo", &json!({})).unwrap();
+    assert_eq!(at(&s), fill);
+    // Undoing an unrelated edit leaves the wait as it is.
+    s.set_profile(tall.clone()).unwrap();
+    assert_eq!(at(&s), fill);
+    video.publish(studiocraft_plugin::VideoContent::Empty);
+    s.set_profile(wide.clone()).unwrap();
+    s.run("scene.add", &json!({"name": "Other"})).unwrap();
+    s.run("edit.undo", &json!({})).unwrap();
+    video.publish(studiocraft_plugin::VideoContent::Solid { rgba: [0; 4], width: 400, height: 300 });
+    s.tick();
+    assert_eq!(at(&s), studiocraft_model::Transform::fill(native, (1920, 1080)), "an unrelated undo keeps the wait");
+    s.run("edit.undo", &json!({})).unwrap();
+    s.run("edit.undo", &json!({})).unwrap();
+    assert_eq!(at(&s), fill);
+    s.set_profile(tall.clone()).unwrap();
+    assert_eq!(at(&s), fill);
+    video.publish(studiocraft_plugin::VideoContent::Empty);
+    s.set_profile(wide).unwrap();
+    s.restore_profile(tall).unwrap();
+    video.publish(studiocraft_plugin::VideoContent::Solid { rgba: [0; 4], width: 400, height: 300 });
+    s.tick();
+    assert_eq!(at(&s), fill, "the restore took the layout back");
+}
+
+#[test]
+fn restoring_a_profile_also_takes_back_placements_of_items_that_waited() {
+    let mut s = headless();
+    let r = s.run("source.add", &json!({"kind": "color", "name": "Back", "settings": {"width": 400, "height": 300}})).unwrap();
+    let item = r.0["item"].clone();
+    let source = s.collection().scenes[0].items[0].source;
+    let (tx, rx) = std::sync::mpsc::sync_channel(1);
+    assert!(s.notify_source_shown(source, tx));
+    rx.recv().unwrap();
+    let fill = studiocraft_model::Transform::fill((400, 300), (1920, 1080));
+    s.run("item.transform", &json!({"item": item, "transform": fill, "fit": "fill"})).unwrap();
+    s.seal_history();
+    s.mark_saved();
+    let video = Arc::clone(&s.sources.io(source).unwrap().video);
+    video.publish(studiocraft_plugin::VideoContent::Empty);
+    let previous = s.profile().clone();
+    let mut p = previous.clone();
+    (p.video.base_width, p.video.base_height) = (1080, 1920);
+    s.set_profile(p).unwrap();
+    video.publish(studiocraft_plugin::VideoContent::Solid { rgba: [0; 4], width: 400, height: 300 });
+    s.tick();
+    let at = |s: &Studio| s.collection().scenes[0].items[0].transform;
+    assert_eq!(at(&s), studiocraft_model::Transform::fill((400, 300), (1080, 1920)));
+    s.restore_profile(previous).unwrap();
+    assert_eq!(at(&s), fill);
+    assert!(!s.engine().is_dirty(), "the collection is clean again");
+    assert_eq!(s.engine().undo_label(), Some("Transform Source"), "no layout step is left");
+}
+
+#[test]
+fn an_undone_layout_places_no_waiting_item_that_it_left_in_place() {
+    let mut s = headless();
+    let mut added = Vec::new();
+    for name in ["Moved", "Waiting"] {
+        let r = s.run("source.add", &json!({"kind": "color", "name": name, "settings": {"width": 400, "height": 300}})).unwrap();
+        let item = studiocraft_model::ItemId(r.0["item"].as_u64().unwrap());
+        let source = s.collection().scenes[0].item(item).unwrap().source;
+        let (tx, rx) = std::sync::mpsc::sync_channel(1);
+        assert!(s.notify_source_shown(source, tx));
+        rx.recv().unwrap();
+        added.push((item, Arc::clone(&s.sources.io(source).unwrap().video)));
+    }
+    let ((moved, _), (waiting, video)) = (added[0].clone(), added[1].clone());
+    let centered = studiocraft_model::Transform { position: studiocraft_model::Vec2::new(960.0, 540.0), ..Default::default() };
+    s.run("item.transform", &json!({"item": moved.0, "transform": centered})).unwrap();
+    s.run("item.transform", &json!({"item": waiting.0, "transform": studiocraft_model::Transform::default(), "fit": "fill"})).unwrap();
+    s.seal_history();
+    video.publish(studiocraft_plugin::VideoContent::Empty);
+    let mut p = s.profile().clone();
+    (p.video.base_width, p.video.base_height) = (1080, 1920);
+    s.set_profile(p).unwrap();
+    let at = |s: &Studio, item| s.collection().scenes[0].item(item).unwrap().transform;
+    assert_ne!(at(&s, moved), centered);
+    assert_eq!(at(&s, waiting), studiocraft_model::Transform::default(), "the layout left it in place");
+    s.run("edit.undo", &json!({})).unwrap();
+    assert_eq!(at(&s, moved), centered);
+    // A move made after the undo does not bring the layout back.
+    let elsewhere = studiocraft_model::Transform { position: studiocraft_model::Vec2::new(10.0, 10.0), ..Default::default() };
+    s.run("item.transform", &json!({"item": moved.0, "transform": elsewhere})).unwrap();
+    video.publish(studiocraft_plugin::VideoContent::Solid { rgba: [0; 4], width: 400, height: 300 });
+    s.tick();
+    assert_eq!(at(&s, waiting), studiocraft_model::Transform::default(), "the undo took the layout back");
+}
+
+#[test]
+fn items_waiting_for_a_picture_keep_waiting_through_other_undo_steps() {
+    let mut s = headless();
+    let mut added = Vec::new();
+    for name in ["A", "B"] {
+        let r = s.run("source.add", &json!({"kind": "color", "name": name, "settings": {"width": 400, "height": 300}})).unwrap();
+        let item = studiocraft_model::ItemId(r.0["item"].as_u64().unwrap());
+        let source = s.collection().scenes[0].item(item).unwrap().source;
+        let (tx, rx) = std::sync::mpsc::sync_channel(1);
+        assert!(s.notify_source_shown(source, tx));
+        rx.recv().unwrap();
+        let fill = studiocraft_model::Transform::fill((400, 300), (1920, 1080));
+        s.run("item.transform", &json!({"item": item, "transform": fill, "fit": "fill"})).unwrap();
+        s.seal_history();
+        added.push((item, Arc::clone(&s.sources.io(source).unwrap().video)));
+    }
+    let at = |s: &Studio, item| s.collection().scenes[0].item(item).unwrap().transform;
+    let tall = studiocraft_model::Transform::fill((400, 300), (1080, 1920));
+    let picture = || studiocraft_plugin::VideoContent::Solid { rgba: [0; 4], width: 400, height: 300 };
+    let ((a, a_video), (b, b_video)) = (added[0].clone(), added[1].clone());
+    a_video.publish(studiocraft_plugin::VideoContent::Empty);
+    b_video.publish(studiocraft_plugin::VideoContent::Empty);
+    let mut p = s.profile().clone();
+    (p.video.base_width, p.video.base_height) = (1080, 1920);
+    s.set_profile(p).unwrap();
+    let relaid = at(&s, a);
+    // A is placed first; undoing that placement leaves B waiting.
+    a_video.publish(picture());
+    s.tick();
+    assert_eq!(at(&s, a), tall);
+    s.run("edit.undo", &json!({})).unwrap();
+    assert_eq!(at(&s, a), relaid);
+    b_video.publish(picture());
+    s.tick();
+    assert_eq!(at(&s, b), tall, "B still waited");
+    assert_eq!(at(&s, a), relaid, "an undone placement is not made again");
+    // A waiting item that is removed and brought back by undo still waits.
+    b_video.publish(studiocraft_plugin::VideoContent::Empty);
+    let mut p = s.profile().clone();
+    (p.video.base_width, p.video.base_height) = (1920, 1080);
+    s.set_profile(p).unwrap();
+    let wide = studiocraft_model::Transform::fill((400, 300), (1920, 1080));
+    assert_ne!(at(&s, b), wide);
+    s.run("item.remove", &json!({"item": b.0})).unwrap();
+    s.tick();
+    s.run("edit.undo", &json!({})).unwrap();
+    let source = s.collection().scenes[0].item(b).unwrap().source;
+    let (tx, rx) = std::sync::mpsc::sync_channel(1);
+    assert!(s.notify_source_shown(source, tx));
+    rx.recv().unwrap();
+    s.sources.io(source).unwrap().video.publish(picture());
+    s.tick();
+    assert_eq!(at(&s, b), wide, "the item that came back was placed");
+    // Another mode set while the item waits ends the wait.
+    b_video.publish(studiocraft_plugin::VideoContent::Empty);
+    s.sources.io(source).unwrap().video.publish(studiocraft_plugin::VideoContent::Empty);
+    let mut p = s.profile().clone();
+    (p.video.base_width, p.video.base_height) = (1080, 1920);
+    s.set_profile(p).unwrap();
+    let waiting = at(&s, b);
+    s.run("item.transform", &json!({"item": b.0, "transform": waiting, "fit": "fit"})).unwrap();
+    s.sources.io(source).unwrap().video.publish(picture());
+    s.tick();
+    assert_eq!(at(&s, b), waiting, "the edit ended the wait");
+}
+
+#[test]
+fn restoring_a_profile_takes_back_its_layout_change_without_a_history_step() {
+    let mut s = headless();
+    s.run("source.add", &json!({"kind": "image", "name": "Logo", "transform": {"position": {"x": 960.0, "y": 540.0}}})).unwrap();
+    s.seal_history();
+    let at = |s: &Studio| s.collection().scenes[0].items[0].transform;
+    let before = at(&s);
+    s.mark_saved();
+    let previous = s.profile().clone();
+    let mut p = previous.clone();
+    (p.video.base_width, p.video.base_height) = (1280, 720);
+    s.set_profile(p.clone()).unwrap();
+    assert_ne!(at(&s), before);
+    assert!(s.engine().is_dirty());
+    // The new profile could not be saved: the old one comes back with its layout, and the
+    // history holds no step for either change.
+    s.restore_profile(previous.clone()).unwrap();
+    assert_eq!(s.canvas(), (1920, 1080));
+    assert_eq!(at(&s), before);
+    assert!(!s.engine().is_dirty(), "a saved collection stays saved");
+    assert_eq!(s.engine().redo_label(), None, "the layout change is not left to redo");
+    s.run("edit.undo", &json!({})).unwrap();
+    assert!(s.collection().scenes[0].items.is_empty(), "the next undo takes back the edit before the canvas change");
+
+    // An edit after the canvas change keeps its own step, and the restore lays the scenes out
+    // again instead.
+    s.run("edit.redo", &json!({})).unwrap();
+    s.seal_history();
+    s.set_profile(p).unwrap();
+    let item = s.collection().scenes[0].items[0].id;
+    s.run("item.visible", &json!({"item": item, "visible": false})).unwrap();
+    s.restore_profile(previous).unwrap();
+    assert_eq!(s.canvas(), (1920, 1080));
+    assert!(!s.collection().scenes[0].items[0].visible, "the later edit stays");
+    let t = at(&s);
+    assert!((t.position.x - 960.0).abs() < 0.01 && (t.scale.x - 1.0).abs() < 0.001, "{t:?}");
+}
+
+#[test]
 fn volume_changes_are_undoable_and_reach_the_collection() {
     let mut s = headless();
     s.run("source.add", &json!({"kind": "color", "name": "Back"})).unwrap();

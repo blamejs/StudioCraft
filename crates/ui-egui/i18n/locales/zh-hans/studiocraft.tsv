@@ -536,3 +536,7 @@ menu	Transform	变换
 @msg	there is no display `{id}`: the system lists no displays	没有显示器 `{id}`：系统未列出任何显示器
 @msg	there is no display `{id}` (the displays are {ids})	没有显示器 `{id}`（显示器有 {ids}）
 @msg	a {width} × {height} display can't be the canvas: each side must be from {min} to {max} pixels	{width} × {height} 的显示器不能作为画布：每条边必须为 {min} 到 {max} 像素
+	Output scale	输出缩放
+	Custom	自定义
+	Fill Screen	填满屏幕
+@msg	The scenes could not be laid out for the new canvas: {error}	无法为新画布排列场景：{error}

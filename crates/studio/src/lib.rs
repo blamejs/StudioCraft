@@ -18,21 +18,22 @@ mod wiring;
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
-use std::sync::mpsc::{RecvTimeoutError, sync_channel};
+use std::sync::mpsc::{RecvTimeoutError, SyncSender, sync_channel};
 use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
+use studiocraft_engine::command::MAX_SOURCE_SIDE;
 use studiocraft_engine::host::SourceSet;
 use studiocraft_engine::mixer::{LoudnessReading, Mixer, MixerCmd};
 use studiocraft_engine::scheduler::Scheduler;
-use studiocraft_engine::{Command, Engine, EngineError, RuntimeAction};
+use studiocraft_engine::{CanvasSize, Command, Engine, EngineError, RuntimeAction, SourceSize};
 use studiocraft_media::clock::{MasterClock, tick_of};
 use studiocraft_media::mix::{BlockLevels, Levels};
 use studiocraft_media::queue::Fifo;
 use studiocraft_media::stats::{EncoderStats, RenderStats, Snapshot};
 use studiocraft_media::video::PooledFrame;
 use studiocraft_media::{FrameRate, Tick};
-use studiocraft_model::{Profile, SceneCollection, SceneId, Settings, SourceId, VideoSettings};
+use studiocraft_model::{FitMode, ItemId, Profile, SceneCollection, SceneId, Settings, SourceId, Transform, VideoSettings};
 use studiocraft_plugin::{PluginError, Registry};
 use studiocraft_render::device::{Recovery, RecoveryPolicy};
 use studiocraft_render::{CanvasViews, CaptureRequest, Compositor, Gpu, RenderShared};
@@ -208,6 +209,15 @@ struct Running {
     settings: Settings,
 }
 
+/// An item with a fit mode whose source showed nothing at a canvas change, with its mode and
+/// the transform that change gave it ([`Studio::place_fit_later`]).
+struct FitLater {
+    item: ItemId,
+    source: SourceId,
+    fit: FitMode,
+    transform: Transform,
+}
+
 pub struct Studio {
     engine: Engine,
     clock: MasterClock,
@@ -235,6 +245,19 @@ pub struct Studio {
     /// The program scene the compositor shows (or is transitioning to).
     shown_program: SceneId,
     seen_revision: u64,
+    /// The undo step of the last layout change for a new canvas, and whether the collection had
+    /// unsaved changes before it ([`Studio::restore_profile`]).
+    relaid_at: Option<(u64, bool)>,
+    /// The undo steps of the placements [`Studio::place_fit_later`] made after that change.
+    fit_placed: Vec<u64>,
+    /// Sources with an item placed by a fit mode that showed nothing at the last canvas change
+    /// ([`Studio::place_fit_later`]), each with the transform that change gave it.
+    fit_later: Vec<FitLater>,
+    /// The undo step of the last canvas change's layout, `None` when it moved nothing.
+    fit_layout: Option<u64>,
+    /// The collection revision, and the count and a digest of the waiting items whose sources
+    /// showed a picture with those pictures' sizes, when [`Studio::place_fit_later`] last looked.
+    fit_seen: Option<(u64, usize, u64)>,
     outputs: outputs::Outputs,
     notices: Vec<Notice>,
     /// Where the scopes' copy of the program goes, and the largest size it is drawn at.
@@ -320,6 +343,11 @@ impl Studio {
             quick: None,
             shown_program,
             seen_revision: 0,
+            relaid_at: None,
+            fit_placed: Vec::new(),
+            fit_later: Vec::new(),
+            fit_layout: None,
+            fit_seen: None,
             outputs: outputs::Outputs::default(),
             notices: Vec::new(),
             scope_feed: None,
@@ -436,6 +464,11 @@ impl Studio {
         // The mixer drops the old sources' taps before it gets the new sources.
         self.audio_tracks_collection_replaced();
         self.engine.load(collection);
+        self.fit_later.clear();
+        self.fit_layout = None;
+        self.fit_seen = None;
+        self.relaid_at = None;
+        self.fit_placed.clear();
         self.transition = None;
         self.shown_program = self.engine.collection().program_scene;
         self.refresh();
@@ -468,6 +501,7 @@ impl Studio {
         if self.engine.revision() != self.seen_revision {
             self.refresh();
         }
+        self.place_fit_later();
         if let Some(t) = &self.transition
             && self.clock.now().0 >= t.start.0.saturating_add(t.duration.0)
         {
@@ -725,6 +759,13 @@ impl Studio {
         (size.0 > 0 && size.1 > 0).then_some(size)
     }
 
+    /// Sends `()` on `tx` once a running source has published its first content, or at once when
+    /// it already has. The call does not wait. Returns `false` when the source is not running or
+    /// was already given a channel.
+    pub fn notify_source_shown(&self, id: SourceId, tx: SyncSender<()>) -> bool {
+        self.sources.io(id).is_some_and(|io| io.video.notify_published(tx))
+    }
+
     /// Why a source is not working, if it is not.
     pub fn source_error(&self, id: SourceId) -> Option<String> {
         self.sources.error(id)
@@ -808,8 +849,63 @@ impl Studio {
     }
 
     /// Apply new settings. Video changes restart the compositor; they are refused while a
-    /// recording or stream runs.
+    /// recording or stream runs. A new canvas size lays out every scene for it
+    /// (`canvas.relayout`), as one undo step.
     pub fn set_profile(&mut self, profile: Profile) -> Result<(), StudioError> {
+        let (from, to) = self.apply_profile(profile)?;
+        if from != to {
+            self.relayout(from, to);
+        }
+        Ok(())
+    }
+
+    /// Put back the settings that a [`Studio::set_profile`] call replaced, for example after the
+    /// new profile could not be saved. When that call laid out the scenes for a new canvas and
+    /// nothing changed the collection since but the placements of items that waited for a
+    /// picture, those placements and the layout change are taken back and dropped, so neither
+    /// undo nor redo offers them. Otherwise this works as `set_profile`.
+    pub fn restore_profile(&mut self, previous: Profile) -> Result<(), StudioError> {
+        let relaid_at = self.relaid_at.take();
+        let placed = std::mem::take(&mut self.fit_placed);
+        let (from, to) = self.apply_profile(previous)?;
+        if from == to {
+            return Ok(());
+        }
+        if let Some((step, was_dirty)) = relaid_at
+            && self.engine.steps_after(step).is_some_and(|after| after.iter().all(|s| placed.contains(s)))
+            && self.discard_down_to(step)
+        {
+            if !was_dirty {
+                self.engine.mark_saved();
+            }
+            // The items waited to be placed for the layout that was just taken back.
+            self.fit_later.clear();
+            self.fit_layout = None;
+            self.refresh();
+            self.sync_audio_tracks();
+        } else {
+            self.relayout(from, to);
+        }
+        Ok(())
+    }
+
+    /// Take back and drop the undo steps down to and including `step`. Returns whether `step`
+    /// was dropped.
+    fn discard_down_to(&mut self, step: u64) -> bool {
+        while self.engine.step_holds(step) {
+            let top = self.engine.last_step();
+            if !self.engine.discard_last_step() {
+                return false;
+            }
+            if top == Some(step) {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Apply new settings without laying out the scenes. Returns the old and the new canvas size.
+    fn apply_profile(&mut self, profile: Profile) -> Result<((u32, u32), (u32, u32)), StudioError> {
         profile.audio_tracks.check().map_err(StudioError::Output)?;
         let video_changed = profile.video.sanitized() != self.profile.video.sanitized();
         if video_changed && self.outputs.any_active() {
@@ -819,6 +915,7 @@ impl Studio {
             f.clone_from(&profile.output.ffmpeg_path);
         }
         let tracks_on = profile.audio_tracks.enabled && !self.profile.audio_tracks.enabled;
+        let old_canvas = self.canvas();
         self.profile = profile;
         if video_changed {
             self.restart_video();
@@ -828,7 +925,115 @@ impl Studio {
             self.repair_audio_tracks_at_launch();
         }
         self.sync_audio_tracks();
-        Ok(())
+        Ok((old_canvas, self.canvas()))
+    }
+
+    /// The sizes of the sources `ids` that show a picture now, for `canvas.relayout`.
+    fn shown_sizes(&self, ids: impl Iterator<Item = SourceId>) -> Vec<SourceSize> {
+        ids.filter_map(|id| self.source_size(id).map(|(width, height)| SourceSize { source: id, width, height }))
+            .filter(|s| s.width <= MAX_SOURCE_SIDE && s.height <= MAX_SOURCE_SIDE)
+            .collect()
+    }
+
+    /// Lay out every scene for a canvas that changed from `from` to `to`, as one undo step. The
+    /// sources that show a picture are placed by their size. An item with a fit mode whose source
+    /// shows nothing now is placed by its mode once the source shows a picture
+    /// ([`Studio::place_fit_later`]). A failure is shown as a notice.
+    fn relayout(&mut self, from: (u32, u32), to: (u32, u32)) {
+        let sizes = self.shown_sizes(self.engine.collection().sources.iter().map(|s| s.id));
+        let size = |(width, height): (u32, u32)| CanvasSize { width, height };
+        self.engine.seal_history();
+        let before = self.engine.revision();
+        let was_dirty = self.engine.is_dirty();
+        self.relaid_at = None;
+        self.fit_layout = None;
+        self.fit_seen = None;
+        self.fit_placed.clear();
+        match self.execute(Command::CanvasRelayout { from: size(from), to: size(to), sizes: sizes.clone(), items: None }) {
+            Ok(_) if self.engine.revision() != before => {
+                self.relaid_at = self.engine.last_step().map(|step| (step, was_dirty));
+                self.fit_layout = self.engine.last_step();
+            }
+            Ok(_) => {}
+            Err(e) => {
+                self.notices.push(Notice::new("The scenes could not be laid out for the new canvas: {error}", vec![("error", e.to_string())], true));
+            }
+        }
+        self.engine.seal_history();
+        self.fit_later = self
+            .engine
+            .collection()
+            .scenes
+            .iter()
+            .flat_map(|s| &s.items)
+            .filter(|i| !sizes.iter().any(|s| s.source == i.source))
+            .filter_map(|i| i.fit.map(|fit| FitLater { item: i.id, source: i.source, fit, transform: i.transform }))
+            .collect();
+    }
+
+    /// Place the items with a fit mode whose sources showed nothing at the last canvas change,
+    /// once those sources show a picture: by their mode on the current canvas, as one undo step.
+    /// An item is placed only while the undo step of that change's layout is in effect and the
+    /// item still has its mode and the transform that change gave it. An undo that takes that
+    /// layout back, or a later edit, leaves it where it is; a redo, or an undo that brings back a
+    /// removed item, makes it wait again. Once the layout step can no longer be undone or redone
+    /// (a new edit after its undo, or the oldest steps dropped), nothing waits.
+    fn place_fit_later(&mut self) {
+        // This runs every frame. Until a waiting source starts to show a picture, its picture
+        // changes size or the collection changes, it allocates nothing.
+        // An FNV-1a digest over the list, which keeps its order.
+        let mut shown = 0;
+        let mut ids = 0xcbf2_9ce4_8422_2325_u64;
+        for (i, w) in self.fit_later.iter().enumerate() {
+            if let Some((width, height)) = self.sources.size(w.source) {
+                shown += 1;
+                for v in [i as u64, u64::from(width), u64::from(height)] {
+                    ids = (ids ^ v).wrapping_mul(0x0100_0000_01b3);
+                }
+            }
+        }
+        let seen = (self.engine.revision(), shown, ids);
+        if shown == 0 || self.fit_seen == Some(seen) {
+            return;
+        }
+        self.fit_seen = Some(seen);
+        if let Some(step) = self.fit_layout
+            && !self.engine.step_holds(step)
+        {
+            return;
+        }
+        let c = self.engine.collection();
+        let waiting: Vec<&FitLater> = self
+            .fit_later
+            .iter()
+            .filter(|w| {
+                c.scenes
+                    .iter()
+                    .flat_map(|s| &s.items)
+                    .any(|i| i.id == w.item && i.source == w.source && i.fit == Some(w.fit) && i.transform == w.transform)
+            })
+            .collect();
+        let mut sources: Vec<SourceId> = waiting.iter().map(|w| w.source).collect();
+        sources.sort_unstable();
+        sources.dedup();
+        let ready = self.shown_sizes(sources.into_iter());
+        let items: Vec<ItemId> = waiting.iter().filter(|w| ready.iter().any(|s| s.source == w.source)).map(|w| w.item).collect();
+        if items.is_empty() {
+            return;
+        }
+        self.fit_later.retain(|w| !items.contains(&w.item));
+        let (width, height) = self.canvas();
+        let canvas = CanvasSize { width, height };
+        self.engine.seal_history();
+        let before = self.engine.revision();
+        match self.execute(Command::CanvasRelayout { from: canvas, to: canvas, sizes: ready, items: Some(items) }) {
+            Ok(_) if self.engine.revision() != before => self.fit_placed.extend(self.engine.last_step()),
+            Ok(_) => {}
+            Err(e) => {
+                self.notices.push(Notice::new("The scenes could not be laid out for the new canvas: {error}", vec![("error", e.to_string())], true));
+            }
+        }
+        self.engine.seal_history();
     }
 
     pub fn video_settings(&self) -> VideoSettings {

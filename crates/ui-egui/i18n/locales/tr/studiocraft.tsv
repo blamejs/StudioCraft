@@ -537,3 +537,8 @@ menu	Transform	Dönüştür
 @msg	there is no display `{id}`: the system lists no displays	`{id}` ekranı yok: sistem hiçbir ekran listelemiyor
 @msg	there is no display `{id}` (the displays are {ids})	`{id}` ekranı yok (ekranlar: {ids})
 @msg	a {width} × {height} display can't be the canvas: each side must be from {min} to {max} pixels	{width} × {height} boyutundaki bir ekran tuval olamaz: her kenar {min} ile {max} piksel arasında olmalıdır
+	Output scale	Çıkış ölçeği
+	Custom	Özel
+	{percent}% ({width} × {height})	%{percent} ({width} × {height})
+	Fill Screen	Ekranı Doldur
+@msg	The scenes could not be laid out for the new canvas: {error}	Sahneler yeni tuvale göre yerleştirilemedi: {error}
