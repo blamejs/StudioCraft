@@ -377,6 +377,10 @@ fn recording_needs_the_graphics_device() {
     assert_eq!(s.state_json()["recording"]["active"], json!(false));
     let e = s.run("record.marker", &json!({"name": "Goal"})).unwrap_err();
     assert_eq!(e.to_string(), "no recording is running");
+    let e = s.run("marker.add", &json!({"name": "Goal"})).unwrap_err();
+    assert_eq!(e.to_string(), "neither a recording nor a take of audio tracks is running");
+    let (v, _) = s.run("marker.list", &json!({})).unwrap();
+    assert_eq!(v, json!({"running": false, "markers": []}));
 }
 
 #[test]
@@ -1935,6 +1939,58 @@ mod audio_tracks {
         assert!(text.contains("\"Goal\"") && text.contains("\"Marker 2\""), "{text}");
         let after = s.run("audio_tracks.marker", &json!({})).unwrap_err().to_string();
         assert!(after.contains("no take of audio tracks is running"), "{after}");
+        drop(s);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_session_marker_goes_to_the_take_and_is_listed() {
+        let (mut s, dir) = studio("session-marker", true);
+        s.test_streaming = true;
+        s.tick();
+        armed(&mut s);
+        let (v, _) = s.run("marker.add", &json!({"name": "Goal"})).unwrap();
+        assert_eq!((v["index"].clone(), v["name"].clone()), (json!(1), json!("Goal")));
+        assert_eq!(v["recording"], json!(null), "no recording runs");
+        assert!(v["audio_tracks"]["seconds"].as_f64().is_some_and(|t| t >= 0.0), "{v}");
+        let (v, _) = s.run("marker.add", &json!({})).unwrap();
+        assert_eq!(v["name"], json!("Marker 2"), "an unnamed marker is numbered in the session");
+        let (list, _) = s.run("marker.list", &json!({})).unwrap();
+        assert_eq!(list["running"], json!(true));
+        let listed: Vec<&str> = list["markers"].as_array().unwrap().iter().map(|m| m["name"].as_str().unwrap()).collect();
+        assert_eq!(listed, ["Goal", "Marker 2"]);
+        s.test_streaming = false;
+        s.tick();
+        let mut spins = 0u64;
+        while !s.audio_tracks.finishing.is_empty() {
+            spins += 1;
+            assert!(spins < 200_000_000, "the take never finished");
+            s.tick();
+            std::thread::yield_now();
+        }
+        let session = s.state_json()["audio_tracks"]["last_session"].as_str().map(std::path::PathBuf::from).unwrap();
+        let text = std::fs::read_to_string(&session).unwrap();
+        assert!(text.contains("\"Goal\"") && text.contains("\"Marker 2\""), "{text}");
+        // The ended session's markers stay listed until the next session starts.
+        let (list, _) = s.run("marker.list", &json!({})).unwrap();
+        assert_eq!(list["running"], json!(false));
+        assert_eq!(list["markers"].as_array().unwrap().len(), 2);
+        let e = s.run("marker.add", &json!({})).unwrap_err().to_string();
+        assert_eq!(e, "neither a recording nor a take of audio tracks is running");
+        s.test_streaming = true;
+        s.tick();
+        armed(&mut s);
+        let (list, _) = s.run("marker.list", &json!({})).unwrap();
+        assert_eq!(list, json!({"running": true, "markers": []}), "a new take starts a new session");
+        s.test_streaming = false;
+        s.tick();
+        let mut spins = 0u64;
+        while !s.audio_tracks.finishing.is_empty() {
+            spins += 1;
+            assert!(spins < 200_000_000, "the second take never finished");
+            s.tick();
+            std::thread::yield_now();
+        }
         drop(s);
         let _ = std::fs::remove_dir_all(&dir);
     }

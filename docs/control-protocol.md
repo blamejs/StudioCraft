@@ -85,7 +85,7 @@ when the language's catalog has the message.
 [Commands with their own parameters](#commands-with-their-own-parameters) describes `app.info`,
 `app.links`, `app.check_updates`, `plugin.list`, `source.schema`, `source.sync_offset`,
 `source.monitor`, `audio.loudness`, `source.set_record_track`, the `present.*` commands, `audio_tracks.status`, `audio_tracks.repair`,
-`audio_tracks.open_last`, `audio_tracks.marker`, `record.marker`, `recordings.list`, the `captions.*` commands, the
+`audio_tracks.open_last`, `audio_tracks.marker`, `record.marker`, `marker.add`, `marker.list`, `recordings.list`, the `captions.*` commands, the
 `dock.layout_*` commands, `golive.check`, `video.displays`, `video.canvas_from_display` and `canvas.relayout`.
 
 Each entry of `engine.commands` has these fields:
@@ -427,6 +427,27 @@ marker. It returns `{"name", "seconds"}`, where `seconds` counts from the record
 and leaves out the time the recording has skipped so far while the computer was suspended. No running recording and a recording that already holds 10,000 markers are errors. When the
 recording stops, `<recording name>.otio` is written beside it with each marker at its frame
 ([Recording markers](features.md#recording-markers)).
+
+### `marker.add` and `marker.list`
+
+`marker.add` takes `{"name"}` and marks the running recording and the running take of audio
+tracks at this moment with one marker, as `record.marker` and `audio_tracks.marker` do. A session
+lasts from the start of the first of those two outputs until both have stopped. `name` follows the
+rules of `audio_tracks.marker`; without it both outputs name the marker "Marker N", the session's
+Nth marker. It returns `{"index", "name", "seconds", "recording", "audio_tracks"}`: `index` is the
+marker's number in the session from 1, and `seconds` counts from the session's start (the
+recording's start, or the moment StudioCraft saw a take that started alone). `recording` and
+`audio_tracks` are each `{"seconds"}`, the marker's time in that output as `record.marker` and
+`audio_tracks.marker` return it, `{"error"}` when the output runs and did not keep the marker, or
+`null` when the output does not run. When one output does not keep the marker, the other keeps it.
+No running recording or take, no output keeping the marker, and a session that already holds
+10,000 markers (StudioCraft's own limit) are errors, and an error keeps no marker in the session.
+
+`marker.list` takes no params and returns `{"running", "markers"}`. `markers` lists the session's
+markers oldest first, each `{"index", "name", "seconds", "recording", "audio_tracks"}` with
+`recording` and `audio_tracks` each `{"seconds"}` or `null` for an output that did not keep it.
+`running` is `false` after the session has ended; the list then holds that session's markers until
+the next session starts.
 
 ### `recordings.list`
 

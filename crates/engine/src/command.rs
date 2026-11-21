@@ -129,6 +129,13 @@ pub enum RuntimeAction {
     AudioTracksMarker {
         name: Option<String>,
     },
+    /// Mark the running recording and the running take of audio tracks now with one marker,
+    /// named `name` or numbered when it is `None`.
+    MarkerAdd {
+        name: Option<String>,
+    },
+    /// The markers of the running session, or of the last one.
+    MarkerList,
     /// Forget the hardware encoders' test results, so the next start tests them again.
     RetestHardwareEncoders,
     /// The gain reduction of `filter`, a filter of `source`, as the mixer last measured it.
@@ -443,6 +450,17 @@ pub enum Command {
         #[serde(default, deserialize_with = "given_string")]
         name: Option<String>,
     },
+    /// Mark the running recording and the running take of audio tracks at this moment with one
+    /// marker, named `name` or numbered in the session.
+    #[serde(rename = "marker.add")]
+    MarkerAdd {
+        /// Absent gives a numbered marker; `null` or any value that is not a string is an error.
+        #[serde(default, deserialize_with = "given_string", skip_serializing_if = "Option::is_none")]
+        name: Option<String>,
+    },
+    /// The markers `marker.add` set in the running session, or in the last one.
+    #[serde(rename = "marker.list")]
+    MarkerList {},
     /// Forget the hardware encoders' test results, in the session and in the file that keeps
     /// them, so the next recording or stream tests them again.
     #[serde(rename = "hardware_encoders.retest")]
@@ -641,6 +659,8 @@ impl Command {
             Command::CaptionsDownloadCancel {} => "captions.download_cancel",
             Command::AudioTracksOpenLast {} => "audio_tracks.open_last",
             Command::AudioTracksMarker { .. } => "audio_tracks.marker",
+            Command::MarkerAdd { .. } => "marker.add",
+            Command::MarkerList {} => "marker.list",
             Command::RetestHardwareEncoders {} => "hardware_encoders.retest",
             Command::PauseStart { .. } => "pause.start",
             Command::PauseStop {} => "pause.stop",
@@ -773,6 +793,8 @@ const SPECS: &[CommandSpec] = &[
     spec("captions.download_cancel", "Cancel Speech Model Download", "", Undo::NotUndoable),
     spec("audio_tracks.open_last", "Open Last Audio Tracks in Editor", "", Undo::NotUndoable),
     spec("audio_tracks.marker", "Add Audio Tracks Marker", "name?: the marker's name, 1 to 256 characters", Undo::NotUndoable),
+    spec("marker.add", "Add Marker", "name?: the marker's name, 1 to 256 characters", Undo::NotUndoable),
+    spec("marker.list", "List Markers", "", Undo::NotUndoable),
     spec("hardware_encoders.retest", "Test Hardware Encoders Again", "", Undo::NotUndoable),
     spec(
         "pause.start",
@@ -844,6 +866,9 @@ mod tests {
             Command::PauseToggle {},
             Command::PauseExtend { seconds: 60 },
             Command::PauseStatus {},
+            Command::MarkerAdd { name: None },
+            Command::MarkerAdd { name: Some("Goal".into()) },
+            Command::MarkerList {},
             Command::SessionEvents { since: None },
             Command::SessionEvents { since: Some(42) },
         ];

@@ -379,6 +379,11 @@ impl Engine {
                 check_marker_name(name.as_deref())?;
                 Ok(Outcome::runtime(RuntimeAction::AudioTracksMarker { name }))
             }
+            Command::MarkerAdd { name } => {
+                check_marker_name(name.as_deref())?;
+                Ok(Outcome::runtime(RuntimeAction::MarkerAdd { name }))
+            }
+            Command::MarkerList {} => Ok(Outcome::runtime(RuntimeAction::MarkerList)),
             Command::RetestHardwareEncoders {} => Ok(Outcome::runtime(RuntimeAction::RetestHardwareEncoders)),
             Command::FilterMeter { source, filter } => {
                 let id = self.source_id(&source)?;

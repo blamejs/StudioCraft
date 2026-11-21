@@ -286,6 +286,15 @@ next free number up to 999, and the status bar names the file. A recording witho
 timeline file, and neither does a recording whose file could not be finished; the status bar says
 the markers could not be saved.
 
+The `marker.add` command marks the running recording and the running take of
+[audio tracks](#audio-tracks) at the same moment with one marker. Both outputs get the same name,
+"Marker N" for the session's Nth marker when none is given. A session lasts from the start of the
+first of the two outputs until both have stopped, and holds at most 10,000 markers (StudioCraft's
+own limit). When one output does not keep a marker, for example because 1,024 markers are waiting
+to be written to the take, the reply names the cause and the other output keeps it. `marker.list`
+lists the session's markers, and after the session ends it lists that session's markers until the
+next session starts ([`marker.add` and `marker.list`](control-protocol.md#markeradd-and-markerlist)).
+
 ### Replay buffer
 
 File › Replay Buffer keeps the last seconds of the program in memory with the built-in H.264 and
