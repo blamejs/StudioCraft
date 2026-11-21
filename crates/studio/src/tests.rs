@@ -174,6 +174,8 @@ fn recording_needs_the_graphics_device() {
     assert!(matches!(e, StudioError::Output(_)), "{e}");
     assert!(s.output(OutputKind::Recording).is_none());
     assert_eq!(s.state_json()["recording"]["active"], json!(false));
+    let e = s.run("record.marker", &json!({"name": "Goal"})).unwrap_err();
+    assert_eq!(e.to_string(), "no recording is running");
 }
 
 #[test]
@@ -764,20 +766,31 @@ fn records_a_file() {
     let state = s.output(OutputKind::Recording).unwrap();
     assert!(state.active);
     assert!(state.target.ends_with(".mkv"), "{}", state.target);
+    let (marker, _) = s.run("record.marker", &json!({"name": "Goal"})).unwrap();
+    assert_eq!(marker["name"], json!("Goal"));
     std::thread::sleep(Duration::from_millis(1500));
     s.tick();
     s.run("record.stop", &json!({})).unwrap();
     let until = Instant::now() + Duration::from_secs(30);
-    let mut saved = None;
-    while Instant::now() < until && saved.is_none() {
+    let (mut saved, mut markers) = (None, None);
+    while Instant::now() < until && (saved.is_none() || markers.is_none()) {
         s.tick();
-        saved = s.take_notices().into_iter().find(|n| n.text().starts_with("Recording saved"));
+        for n in s.take_notices() {
+            if n.text().starts_with("Recording saved") {
+                saved = Some(n);
+            } else if n.text().starts_with("Markers saved") {
+                markers = Some(n);
+            }
+        }
         std::thread::sleep(Duration::from_millis(50));
     }
     let saved = saved.expect("the recording finishes");
     assert!(!saved.error);
     let size = std::fs::metadata(&state.target).map(|m| m.len()).unwrap_or(0);
     assert!(size > 1000, "{} is {size} bytes", state.target);
+    assert!(markers.is_some_and(|n| !n.error), "the marker file is written");
+    let timeline = std::fs::read_to_string(std::path::Path::new(&state.target).with_extension("otio")).unwrap();
+    assert!(timeline.contains("\"Goal\""), "{timeline}");
     drop(s);
     let _ = std::fs::remove_dir_all(&dir);
 }

@@ -13,8 +13,19 @@ use crate::command::{CanvasSize, Command, ItemRef, MAX_SOURCE_SIDE, Move, Runtim
 use crate::history::History;
 use crate::links;
 
-/// Characters a marker's name holds at most (`audio_tracks.marker`).
+/// Characters a marker's name holds at most (`audio_tracks.marker` and `record.marker`).
 pub const MAX_MARKER_NAME_CHARS: usize = 256;
+
+/// An error unless `name` is absent or 1 to [`MAX_MARKER_NAME_CHARS`] characters, not only
+/// spaces, with no control characters.
+fn check_marker_name(name: Option<&str>) -> Result<(), EngineError> {
+    match name {
+        Some(n) if n.trim().is_empty() || n.chars().count() > MAX_MARKER_NAME_CHARS || n.chars().any(char::is_control) => Err(EngineError::Invalid(
+            format!("a marker's name is 1 to {MAX_MARKER_NAME_CHARS} characters, not only spaces, with no control characters"),
+        )),
+        _ => Ok(()),
+    }
+}
 
 /// Why a command did not run. Shown to the user as is.
 #[derive(Debug, Error, Clone, PartialEq)]
@@ -294,6 +305,10 @@ impl Engine {
             Command::RecordStart {} => Ok(Outcome::runtime(RuntimeAction::StartRecording)),
             Command::RecordStop {} => Ok(Outcome::runtime(RuntimeAction::StopRecording)),
             Command::RecordToggle {} => Ok(Outcome::runtime(RuntimeAction::ToggleRecording)),
+            Command::RecordMarker { name } => {
+                check_marker_name(name.as_deref())?;
+                Ok(Outcome::runtime(RuntimeAction::RecordingMarker { name }))
+            }
             Command::StreamStart {} => Ok(Outcome::runtime(RuntimeAction::StartStreaming)),
             Command::StreamStop {} => Ok(Outcome::runtime(RuntimeAction::StopStreaming)),
             Command::StreamToggle {} => Ok(Outcome::runtime(RuntimeAction::ToggleStreaming)),
@@ -326,13 +341,7 @@ impl Engine {
             Command::CaptionsDownloadCancel {} => Ok(Outcome::runtime(RuntimeAction::CaptionsDownloadCancel)),
             Command::AudioTracksOpenLast {} => Ok(Outcome::runtime(RuntimeAction::AudioTracksOpenLast)),
             Command::AudioTracksMarker { name } => {
-                if let Some(n) = &name
-                    && (n.trim().is_empty() || n.chars().count() > MAX_MARKER_NAME_CHARS || n.chars().any(char::is_control))
-                {
-                    return Err(EngineError::Invalid(format!(
-                        "a marker's name is 1 to {MAX_MARKER_NAME_CHARS} characters, not only spaces, with no control characters"
-                    )));
-                }
+                check_marker_name(name.as_deref())?;
                 Ok(Outcome::runtime(RuntimeAction::AudioTracksMarker { name }))
             }
             Command::RetestHardwareEncoders {} => Ok(Outcome::runtime(RuntimeAction::RetestHardwareEncoders)),

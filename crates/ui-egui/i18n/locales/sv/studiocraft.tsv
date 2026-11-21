@@ -493,6 +493,9 @@ menu	Transform	Transformera
 @msg	Audio tracks could not be repaired: {takes} and {more} more. Takes repaired: {count}	Ljudspåren kunde inte repareras: {takes} och {more} till. Reparerade tagningar: {count}
 	Open Last Audio Tracks in Editor	Öppna senaste ljudspåren i redigeraren
 	Add Audio Tracks Marker	Lägg till markör i ljudspåren
+	Add Recording Marker	Lägg till markör i inspelningen
+@msg	Markers saved to {path}	Markörerna sparades som {path}
+@msg	The markers could not be saved: {error}	Markörerna kunde inte sparas: {error}
 	After a take	Efter en tagning
 	Nothing	Ingenting
 	Show the folder	Visa mappen

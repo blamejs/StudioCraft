@@ -583,6 +583,9 @@ menu	Transform	Transform
 @msg	Audio tracks could not be repaired: {takes} and {more} more. Takes repaired: {count}	Audio tracks could not be repaired: {takes} and {more} more. Takes repaired: {count}
 	Open Last Audio Tracks in Editor	Open Last Audio Tracks in Editor
 	Add Audio Tracks Marker	Add Audio Tracks Marker
+	Add Recording Marker	Add Recording Marker
+@msg	Markers saved to {path}	Markers saved to {path}
+@msg	The markers could not be saved: {error}	The markers could not be saved: {error}
 	After a take	After a take
 	Nothing	Nothing
 	Show the folder	Show the folder

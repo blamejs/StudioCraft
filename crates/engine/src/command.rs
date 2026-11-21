@@ -69,6 +69,10 @@ pub enum RuntimeAction {
     StartRecording,
     StopRecording,
     ToggleRecording,
+    /// Mark the running recording now, named `name` or numbered when it is `None`.
+    RecordingMarker {
+        name: Option<String>,
+    },
     StartStreaming,
     StopStreaming,
     ToggleStreaming,
@@ -279,6 +283,14 @@ pub enum Command {
     RecordStop {},
     #[serde(rename = "record.toggle")]
     RecordToggle {},
+    /// Mark the running recording at this moment, named `name` or numbered; the timeline file
+    /// written beside the recording lists the marker.
+    #[serde(rename = "record.marker")]
+    RecordMarker {
+        /// Absent gives a numbered marker; `null` or any value that is not a string is an error.
+        #[serde(default, deserialize_with = "given_string")]
+        name: Option<String>,
+    },
     #[serde(rename = "stream.start")]
     StreamStart {},
     #[serde(rename = "stream.stop")]
@@ -440,6 +452,7 @@ impl Command {
             Command::RecordStart {} => "record.start",
             Command::RecordStop {} => "record.stop",
             Command::RecordToggle {} => "record.toggle",
+            Command::RecordMarker { .. } => "record.marker",
             Command::StreamStart {} => "stream.start",
             Command::StreamStop {} => "stream.stop",
             Command::StreamToggle {} => "stream.toggle",
@@ -547,6 +560,7 @@ const SPECS: &[CommandSpec] = &[
     spec("record.start", "Start Recording", "", Undo::NotUndoable),
     spec("record.stop", "Stop Recording", "", Undo::NotUndoable),
     spec("record.toggle", "Start or Stop Recording", "", Undo::NotUndoable),
+    spec("record.marker", "Add Recording Marker", "name?: the marker's name, 1 to 256 characters", Undo::NotUndoable),
     spec("stream.start", "Start Streaming", "", Undo::NotUndoable),
     spec("stream.stop", "Stop Streaming", "", Undo::NotUndoable),
     spec("stream.toggle", "Start or Stop Streaming", "", Undo::NotUndoable),

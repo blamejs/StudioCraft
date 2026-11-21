@@ -481,6 +481,9 @@ menu	Transform	التحويل
 @msg	Audio tracks could not be repaired: {takes} and {more} more. Takes repaired: {count}	تعذّر إصلاح المسارات الصوتية: {takes} و{more} غيرها. اللقطات التي أُصلحت: {count}
 	Open Last Audio Tracks in Editor	فتح آخر المسارات الصوتية في المحرر
 	Add Audio Tracks Marker	إضافة علامة إلى المسارات الصوتية
+	Add Recording Marker	إضافة علامة إلى التسجيل
+@msg	Markers saved to {path}	حُفظت العلامات في {path}
+@msg	The markers could not be saved: {error}	تعذّر حفظ العلامات: {error}
 	After a take	بعد اللقطة
 	Nothing	لا شيء
 	Show the folder	إظهار المجلد

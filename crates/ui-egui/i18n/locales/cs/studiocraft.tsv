@@ -493,6 +493,9 @@ menu	Transform	Transformace
 @msg	Audio tracks could not be repaired: {takes} and {more} more. Takes repaired: {count}	Zvukové stopy nelze opravit: {takes} a {more} dalších. Opravené záznamy: {count}
 	Open Last Audio Tracks in Editor	Otevřít poslední zvukové stopy v editoru
 	Add Audio Tracks Marker	Přidat značku do zvukových stop
+	Add Recording Marker	Přidat značku do nahrávky
+@msg	Markers saved to {path}	Značky byly uloženy do {path}
+@msg	The markers could not be saved: {error}	Značky nelze uložit: {error}
 	After a take	Po záznamu
 	Nothing	Nic
 	Show the folder	Zobrazit složku

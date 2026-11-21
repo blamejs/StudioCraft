@@ -493,6 +493,9 @@ menu	Transform	变换
 @msg	Audio tracks could not be repaired: {takes} and {more} more. Takes repaired: {count}	无法修复音频轨道：{takes} 及另外 {more} 个。已修复的录制：{count}
 	Open Last Audio Tracks in Editor	在编辑器中打开最近的音频轨道
 	Add Audio Tracks Marker	为音频轨道添加标记
+	Add Recording Marker	为录制添加标记
+@msg	Markers saved to {path}	标记已保存到 {path}
+@msg	The markers could not be saved: {error}	无法保存标记：{error}
 	After a take	录制结束后
 	Nothing	无操作
 	Show the folder	显示文件夹
