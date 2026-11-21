@@ -20,6 +20,7 @@ mod icons;
 pub mod kit;
 mod logos;
 mod output_bar;
+mod pause_banner;
 mod preview;
 mod scopes;
 mod settings;
@@ -245,6 +246,8 @@ pub struct StudioApp {
     dock_strip: Option<egui::Rect>,
     /// Where the top row and the parts of the output bar were drawn last.
     output_bar: output_bar::Drawn,
+    /// The paused banner above the program, and the resume announcement after it.
+    pause_banner: pause_banner::State,
     /// Help › Check for Updates, the check at start and the update prompt.
     updates: updates_ui::Runtime,
     /// The window buttons when the app draws the window frame; `None` when the desktop draws it.
@@ -360,6 +363,7 @@ impl StudioApp {
             dock_window_gen: 0,
             dock_strip: None,
             output_bar: output_bar::Drawn::default(),
+            pause_banner: pause_banner::State::default(),
             updates: updates_ui::Runtime::default(),
             title_bar: None,
             fonts_for: None,
@@ -1212,6 +1216,12 @@ impl StudioApp {
             "selection.rotate_cw" => return self.selection_transform(|t, _, _| Transform { rotation: t.rotation + 90.0, ..t }.sanitized()),
             "selection.rotate_ccw" => return self.selection_transform(|t, _, _| Transform { rotation: t.rotation + 270.0, ..t }.sanitized()),
             "app.about" => self.about = true,
+            "pause.settings" => {
+                self.open_settings(Tab::Stream);
+                if let Some(w) = &mut self.settings {
+                    w.show_pause_screen();
+                }
+            }
             "app.check_updates" => return updates_ui::check(self, ctx),
             "app.licenses" => {
                 if self.licenses.is_none() {
@@ -1652,7 +1662,10 @@ impl StudioApp {
         if let (Some(rs), Some(v)) = (&self.render, self.studio.views()) {
             self.textures.sync(rs, &v);
         }
-        let area = ui.available_rect_before_wrap();
+        let mut area = ui.available_rect_before_wrap();
+        let mut top =
+            ui.new_child(egui::UiBuilder::new().max_rect(area.shrink2(egui::vec2(4.0, 0.0))).layout(egui::Layout::top_down(egui::Align::Min)));
+        area.min.y += self.show_pause_banner(&mut top, acts);
         if !self.studio.engine().studio_mode() {
             self.edit_view(ui, area.shrink(4.0), acts);
             return;

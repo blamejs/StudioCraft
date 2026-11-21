@@ -81,6 +81,7 @@ gives no value for that column.
 | Replay buffer | The encode threads' packets | A ring bounded by length and bytes | | |
 | Audio tracks collect | Each recorded track's tap of mixer blocks | 32 blocks per tap with its own pool of 34, and a write buffer of 16 to 1024 1 MiB chunks, at least 2 for each recorded track | A full tap reuses its own oldest block; an empty write buffer drops blocks, logs them and writes silence in their place | One 8 KiB copy per track per block |
 | Audio tracks disk | The collect thread's chunks | The chunk count of the write buffer | A full or failing disk stops only the audio tracks | Sequential 1 MiB writes |
+| Recordings scan | A `recordings.list` call when no scan runs | One scan at a time; 500 folder entries for files and 500 for takes | The scan stops looking at files after 5 s (`recordings::SCAN_LIMIT`), and `recordings.list` returns the last finished scan while one runs | None; it runs only when called |
 | Captions reader | The mixer's program blocks | 64 blocks, and 60 s of mono 16 kHz audio | A full queue drops its oldest block; audio pushed out of the 60 s buffer, and blocks that never arrived, are passed on as gaps | One small copy per block |
 | Captions recognizer | The reader's buffer | | A recognizer slower than speech falls behind, and the reader's buffer then drops its oldest audio | One Whisper run per partial or finished phrase |
 | Window | `Studio` state | | | |
@@ -403,6 +404,11 @@ is told to stop and is not waited for. While captions are stopped no queue or th
 ### Window thread
 
 The window reads `Studio` state, runs commands, and shows statistics.
+`Studio` keeps the session's scene switches, stream reconnects, pauses and resumes for
+`session.events` (`studio/src/events.rs`) on this thread, in a ring of the last 1,000 events whose
+room is reserved with the first event, so adding one takes no lock and does not grow the ring. While
+a stream runs, `Studio::tick` and a stream stop read the sum of the destinations' reconnect counters
+(`OutputInstance::reconnects`), and read the destinations' states only when that sum changed.
 
 ## Extension points
 

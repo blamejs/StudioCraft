@@ -89,6 +89,8 @@ pub enum RuntimeAction {
     RecordingMarker {
         name: Option<String>,
     },
+    /// The recordings, saved replays and takes of audio tracks in the recording folder.
+    RecordingsList,
     StartStreaming,
     StopStreaming,
     ToggleStreaming,
@@ -142,6 +144,11 @@ pub enum RuntimeAction {
     },
     /// Whether the program is paused, and the countdown.
     PauseStatus,
+    /// The session's scene switches, stream reconnects, pauses and resumes after the event
+    /// numbered `since` (all of them when it is `None`).
+    SessionEvents {
+        since: Option<u64>,
+    },
     OpenSettings,
     Exit,
 }
@@ -355,6 +362,10 @@ pub enum Command {
         #[serde(default, deserialize_with = "given_string")]
         name: Option<String>,
     },
+    /// List the recordings, saved replays and takes of audio tracks in the recording folder, with
+    /// each recording's marker timeline and take, newest first.
+    #[serde(rename = "recordings.list")]
+    RecordingsList {},
     #[serde(rename = "stream.start")]
     StreamStart {},
     #[serde(rename = "stream.stop")]
@@ -440,6 +451,13 @@ pub enum Command {
     /// Whether the program is paused, since when, and the countdown.
     #[serde(rename = "pause.status")]
     PauseStatus {},
+    /// The scene switches, stream reconnects, pauses and resumes of the session, after the event
+    /// numbered `since` or all the kept ones.
+    #[serde(rename = "session.events")]
+    SessionEvents {
+        #[serde(default, deserialize_with = "given_u64", skip_serializing_if = "Option::is_none")]
+        since: Option<u64>,
+    },
     #[serde(rename = "app.settings")]
     OpenSettings {},
     #[serde(rename = "app.exit")]
@@ -514,6 +532,11 @@ fn thumbnail_scenes<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<SceneR
     d.deserialize_seq(Scenes)
 }
 
+/// A parameter that may be left out but, when given, is a whole number: `null` is refused.
+fn given_u64<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<u64>, D::Error> {
+    u64::deserialize(d).map(Some)
+}
+
 impl Command {
     /// A command from its id and parameters (`null` or absent parameters mean none).
     pub fn from_parts(id: &str, params: &Value) -> Result<Command, String> {
@@ -577,6 +600,7 @@ impl Command {
             Command::RecordStop {} => "record.stop",
             Command::RecordToggle {} => "record.toggle",
             Command::RecordMarker { .. } => "record.marker",
+            Command::RecordingsList {} => "recordings.list",
             Command::StreamStart {} => "stream.start",
             Command::StreamStop {} => "stream.stop",
             Command::StreamToggle {} => "stream.toggle",
@@ -600,6 +624,7 @@ impl Command {
             Command::PauseToggle {} => "pause.toggle",
             Command::PauseExtend { .. } => "pause.extend",
             Command::PauseStatus {} => "pause.status",
+            Command::SessionEvents { .. } => "session.events",
             Command::OpenSettings {} => "app.settings",
             Command::Exit {} => "app.exit",
             Command::AppLinks { .. } => "app.links",
@@ -704,6 +729,7 @@ const SPECS: &[CommandSpec] = &[
     spec("record.stop", "Stop Recording", "", Undo::NotUndoable),
     spec("record.toggle", "Start or Stop Recording", "", Undo::NotUndoable),
     spec("record.marker", "Add Recording Marker", "name?: the marker's name, 1 to 256 characters", Undo::NotUndoable),
+    spec("recordings.list", "List Recordings", "", Undo::NotUndoable),
     spec("stream.start", "Start Streaming", "", Undo::NotUndoable),
     spec("stream.stop", "Stop Streaming", "", Undo::NotUndoable),
     spec("stream.toggle", "Start or Stop Streaming", "", Undo::NotUndoable),
@@ -732,6 +758,7 @@ const SPECS: &[CommandSpec] = &[
     spec("pause.toggle", "Pause or Resume Program", "", Undo::NotUndoable),
     spec("pause.extend", "Add Time to the Pause", "seconds: 1..43200", Undo::NotUndoable),
     spec("pause.status", "Pause Status", "", Undo::NotUndoable),
+    spec("session.events", "Session Events", "since?: number of the last event already read", Undo::NotUndoable),
     spec("app.settings", "Settings", "", Undo::NotUndoable),
     spec("app.exit", "Exit", "", Undo::NotUndoable),
     spec("app.links", "Community Links", "link?: discord|website|github|issues", Undo::NotUndoable),
@@ -763,6 +790,7 @@ mod tests {
             Command::ItemMove { scene: None, item: ItemRef::Id(ItemId(3)), to: Move::To(2) },
             Command::StudioToggle {},
             Command::RecordToggle {},
+            Command::RecordingsList {},
             Command::Exit {},
             Command::AppLinks { link: Some("github".into()) },
             Command::AppLinks { link: None },
@@ -787,6 +815,8 @@ mod tests {
             Command::PauseToggle {},
             Command::PauseExtend { seconds: 60 },
             Command::PauseStatus {},
+            Command::SessionEvents { since: None },
+            Command::SessionEvents { since: Some(42) },
         ];
         for c in samples {
             let v = serde_json::to_value(&c).unwrap();

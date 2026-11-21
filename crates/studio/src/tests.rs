@@ -206,6 +206,49 @@ mod scene_thumbnails {
 }
 
 #[test]
+fn session_events_list_scene_switches_pauses_and_resumes_in_order() {
+    let mut s = headless();
+    let first = s.collection().program_scene.0;
+    assert_eq!(s.run("session.events", &json!({})).unwrap().0, json!({"events": [], "last": 0, "dropped": 0}));
+    s.run("scene.add", &json!({"name": "Second"})).unwrap();
+    let second = s.collection().program_scene.0;
+    assert_ne!(first, second, "a new scene goes on the program");
+    s.run("scene.select", &json!({"scene": "Second"})).unwrap();
+    s.run("pause.start", &json!({"countdown_s": 0})).unwrap();
+    s.run("scene.select", &json!({"scene": "Scene"})).unwrap();
+    s.run("pause.extend", &json!({"seconds": 5})).unwrap();
+    s.run("pause.stop", &json!({})).unwrap();
+    s.run("studio.toggle", &json!({})).unwrap();
+    s.run("scene.select", &json!({"scene": "Second"})).unwrap();
+    s.run("studio.toggle", &json!({})).unwrap();
+    let rev = s.engine().revision();
+    let (v, _) = s.run("session.events", &json!({})).unwrap();
+    assert_eq!(s.engine().revision(), rev, "reading the events changes nothing");
+    let kinds: Vec<&str> = v["events"].as_array().map(|a| a.iter().filter_map(|e| e["kind"].as_str()).collect()).unwrap_or_default();
+    // Selecting the scene the program already shows, adding time and choosing a preview scene in
+    // studio mode are not switches.
+    assert_eq!(kinds, ["scene", "pause", "scene", "resume"], "{v}");
+    let e = &v["events"];
+    assert_eq!(e[0]["from"], json!({"id": first, "name": "Scene"}));
+    assert_eq!(e[0]["to"], json!({"id": second, "name": "Second"}));
+    assert_eq!(e[2]["to"], json!({"id": first, "name": "Scene"}), "a switch under the pause screen is listed");
+    assert_eq!(e[0]["recording_s"], Value::Null, "nothing was recorded");
+    let seqs: Vec<u64> = e.as_array().map(|a| a.iter().filter_map(|e| e["seq"].as_u64()).collect()).unwrap_or_default();
+    assert_eq!(seqs, [1, 2, 3, 4]);
+    let times: Vec<u64> = e.as_array().map(|a| a.iter().filter_map(|e| e["time_ms"].as_u64()).collect()).unwrap_or_default();
+    assert!(times.windows(2).all(|w| w[0] <= w[1]), "{times:?}");
+    let (tail, _) = s.run("session.events", &json!({"since": 2})).unwrap();
+    assert_eq!(tail["events"].as_array().map(Vec::len), Some(2));
+    assert_eq!((tail["last"].clone(), tail["dropped"].clone()), (json!(4), json!(0)));
+    // Removing the program scene switches to another one; the removed scene has no name left.
+    s.run("scene.remove", &json!({"scene": "Scene"})).unwrap();
+    let (v, _) = s.run("session.events", &json!({"since": 4})).unwrap();
+    assert_eq!(v["events"][0]["from"], json!({"id": first, "name": null}), "{v}");
+    assert_eq!(v["events"][0]["to"]["id"], json!(second));
+    assert!(s.run("session.events", &json!({"since": -1})).is_err());
+}
+
+#[test]
 fn studio_mode_quick_transitions_apply_to_one_switch() {
     let mut s = headless();
     s.run("scene.add", &json!({"name": "Second"})).unwrap();

@@ -10,11 +10,13 @@ pub mod audio_editor;
 mod audio_tracks;
 mod captions;
 pub mod capture;
+mod events;
 pub mod files;
 mod monitor;
 mod outputs;
 mod pause;
 mod recording_markers;
+mod recordings;
 mod wiring;
 
 use std::collections::HashMap;
@@ -360,6 +362,8 @@ pub struct Studio {
     captions: captions::Captions,
     /// Markers set during the recording, and the timeline files of recordings that stopped.
     recording_markers: recording_markers::RecordingMarkers,
+    /// The scan of the recording folder for `recordings.list`, and its last result.
+    recordings: recordings::Recordings,
     /// The running pause, while the program is paused.
     pause: Option<pause::PauseState>,
     /// The threads that draw the pause screen: while paused, and until the transition back to
@@ -370,6 +374,9 @@ pub struct Studio {
     pause_seen: Option<PauseSeen>,
     /// The program audio's last pause fade; `None` before the first, with the whole mix heard.
     hold_fade: Option<HoldFade>,
+    /// Scene switches, stream reconnects, pauses and resumes during the session, for
+    /// `session.events`.
+    events: events::Events,
     /// Faults the tests put into the audio tracks' disk side.
     #[cfg(test)]
     test_faults: studiocraft_audio_tracks::Faults,
@@ -459,10 +466,12 @@ impl Studio {
             audio_tracks: audio_tracks::AudioTracks::default(),
             captions: captions::Captions::new(captions),
             recording_markers: recording_markers::RecordingMarkers::default(),
+            recordings: recordings::Recordings::default(),
             pause: None,
             pause_layers: None,
             pause_seen: None,
             hold_fade: None,
+            events: events::Events::default(),
             #[cfg(test)]
             test_faults: studiocraft_audio_tracks::Faults::default(),
             #[cfg(test)]
@@ -524,6 +533,7 @@ impl Studio {
                 RuntimeAction::AudioTracksOpenLast => result = self.open_last_audio_tracks()?,
                 RuntimeAction::AudioTracksMarker { name } => result = self.add_audio_tracks_marker(name)?,
                 RuntimeAction::RecordingMarker { name } => result = self.add_recording_marker(name)?,
+                RuntimeAction::RecordingsList => result = self.list_recordings()?,
                 RuntimeAction::StartRecording => self.start_output(OutputKind::Recording)?,
                 RuntimeAction::StopRecording => self.stop_output(OutputKind::Recording),
                 RuntimeAction::ToggleRecording => self.toggle_output(OutputKind::Recording)?,
@@ -553,6 +563,7 @@ impl Studio {
                 }
                 RuntimeAction::PauseExtend { seconds } => result = self.extend_pause(seconds)?,
                 RuntimeAction::PauseStatus => result = self.pause_json(),
+                RuntimeAction::SessionEvents { since } => result = self.events.json(since),
                 RuntimeAction::OpenSettings => ui = Some(UiAction::OpenSettings),
                 RuntimeAction::Exit => ui = Some(UiAction::Exit),
             }
@@ -650,6 +661,8 @@ impl Studio {
         self.monitor.poll(&self.mixer, &mut self.notices);
         self.finish_hardware_tests();
         let events = self.outputs.poll();
+        // After the poll, which sees the last lost connections of a stream that failed.
+        self.note_reconnects();
         for n in events.notices {
             self.notices.push(n);
         }
@@ -749,6 +762,10 @@ impl Studio {
         let program = c.program_scene;
         let quick = self.quick.take();
         let resuming = matches!(&self.transition, Some(t) if t.from == Origin::Pause);
+        let switched = (program != self.shown_program).then(|| {
+            let named = |id| (id, c.scene(id).map(|s| s.name.clone()));
+            events::Kind::Scene { from: named(self.shown_program), to: named(program) }
+        });
         if program != self.shown_program && (self.pause.is_some() || resuming) {
             // While paused, the scene changes under the pause screen; the program shows it when
             // it resumes. A running fade back from the pause screen ends on the new scene.
@@ -775,6 +792,9 @@ impl Studio {
             });
             let fade = if self.transition.is_some() { ms } else { 0 };
             self.mixer.send(MixerCmd::FadeMs(fade));
+        }
+        if let Some(kind) = switched {
+            self.note_event(kind);
         }
         let mix = self.wiring.mixer_inputs(self.engine.collection(), self.engine.registry(), &self.sources, &mut self.levels, &mut self.notices);
         if let Some(cmds) = mix {
@@ -928,6 +948,31 @@ impl Studio {
         u64::try_from(self.clock.elapsed().as_millis()).unwrap_or(u64::MAX)
     }
 
+    /// Keep `kind` in the session's events, with the time now and how far into the running
+    /// recording and stream it is.
+    fn note_event(&mut self, kind: events::Kind) {
+        let stream = self.outputs.start_of(OutputKind::Streaming);
+        self.note_event_in(kind, stream);
+    }
+
+    /// [`Studio::note_event`] for an event of the stream that started at `stream`, which may have
+    /// stopped since.
+    fn note_event_in(&mut self, kind: events::Kind, stream: Option<Tick>) {
+        let now = self.clock.now();
+        let into = |start: Option<Tick>| start.map(|start| duration_of(Tick(now.0.saturating_sub(start.0))).as_secs_f64());
+        let (recording_s, stream_s) = (into(self.outputs.start_of(OutputKind::Recording)), into(stream));
+        let time_ms = self.now_ms();
+        self.events.push(time_ms, recording_s, stream_s, kind);
+    }
+
+    /// Keep a reconnect event for each stream destination that lost its connection since the
+    /// last look.
+    fn note_reconnects(&mut self) {
+        for (kind, stream) in self.outputs.reconnects_now() {
+            self.note_event_in(kind, Some(stream));
+        }
+    }
+
     /// Start a transition in the program from `from` to what the program shows now, with the
     /// collection's transition, and fade the program mix in or out with it when the pause holds
     /// the scene's audio.
@@ -1033,6 +1078,7 @@ impl Studio {
         self.pause_seen = None;
         self.begin_pause_transition(Origin::Scene(self.shown_program), hold.then_some(true));
         self.notices.push(Notice::new("The program is paused", vec![], false));
+        self.note_event(events::Kind::Pause);
         self.publish();
         Ok(self.pause_json())
     }
@@ -1049,6 +1095,7 @@ impl Studio {
         }
         self.pause_seen = None;
         self.notices.push(Notice::new("The program resumed", vec![], false));
+        self.note_event(events::Kind::Resume);
         self.publish();
         Ok(())
     }

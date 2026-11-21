@@ -85,7 +85,7 @@ when the language's catalog has the message.
 [Commands with their own parameters](#commands-with-their-own-parameters) describes `app.info`,
 `app.links`, `app.check_updates`, `plugin.list`, `source.schema`, `source.sync_offset`,
 `source.monitor`, `source.set_record_track`, the `present.*` commands, `audio_tracks.status`, `audio_tracks.repair`,
-`audio_tracks.open_last`, `audio_tracks.marker`, `record.marker`, the `captions.*` commands, the
+`audio_tracks.open_last`, `audio_tracks.marker`, `record.marker`, `recordings.list`, the `captions.*` commands, the
 `dock.layout_*` commands, `video.displays`, `video.canvas_from_display` and `canvas.relayout`.
 
 Each entry of `engine.commands` has these fields:
@@ -402,6 +402,48 @@ and leaves out the time the recording has skipped so far while the computer was 
 recording stops, `<recording name>.otio` is written beside it with each marker at its frame
 ([Recording markers](features.md#recording-markers)).
 
+### `recordings.list`
+
+`recordings.list` takes no params and lists what the recording folder holds, newest first: each
+`.mkv`, `.mp4` and `.mov` file with its marker timeline and its take of audio tracks, each saved
+replay (`Replay <date and time>.mkv`), and each take of audio tracks that has no recording file,
+such as a stream's take. The folder is scanned on a background thread. The command returns at once
+with the last finished scan and starts a new scan when none runs, so the first call returns an
+empty list with `scanning` true, and a later call returns that scan. It returns
+`{"folder", "scanning", "scanned_unix_ms", "recordings", "unreadable", "more", "timed_out"}`:
+
+| Field | Value |
+| --- | --- |
+| `folder` | The recording folder. A scan of another folder, made before the recording folder changed, is not returned. |
+| `scanning` | `true` while a newer scan of the recording folder runs. A scan of the folder before it changed runs to its end first, and the new folder's scan starts at the next call after that. |
+| `scanned_unix_ms` | When the returned scan ended, in milliseconds since 1970, or `null` before the first scan of the folder ends. |
+| `recordings` | The entries, described below. |
+| `unreadable` | `[{"path", "error"}]`: the folder, files and takes that could not be read. |
+| `more` | `true` when the folder holds more than 500 entries; the scan reads the first 500 the system lists. |
+| `timed_out` | `true` when the scan stopped looking at files after 5 seconds; the takes are not listed then. |
+
+Each entry of `recordings` has `name` (the file's name without its extension, or the take's name),
+`kind` (`recording`, `replay` or `audio_tracks` for a take without a recording file),
+`started_unix_ms`, `file`, `format` (`mkv`, `mp4` or `mov`), `bytes`, `modified_unix_ms`,
+`timeline` and `audio_tracks`; fields that do not apply are `null`. `started_unix_ms` is the date
+and time in the file's name read as local time, else the take's start. The list is sorted by it, or
+by `modified_unix_ms` when it is `null`. A recording's `timeline` is `<name>.otio` beside it, and
+its `audio_tracks` is the take in `<name> Audio`. When that name was taken, the timeline or take
+named `<name> (N)` can belong to it instead, unless a recording has that name. Of these, a
+recording takes the take that started nearest its start, and the timeline last changed nearest its
+file's last change, when one is within 10 seconds; otherwise it takes the one of its own name, and
+then the first numbered one. Of two recordings of one name, such as `<name>.mkv` and
+`<name>.mp4`, the one last changed first is matched first. A timeline or take made more than 10 seconds before the recording
+started does not belong to it, so one left from an older recording of the same name is listed on its
+own (a take) or not at all (a timeline). `audio_tracks` holds the take's `folder` (its `Audio Files` folder, which
+`audio_tracks.repair` takes), `session`, `state` (`finished`, `needs_repair` or `recording`),
+`started_unix_ms`, `seconds`, `tracks`, `bytes`, `missing_files`, `dropouts`, `lost_seconds`,
+`markers`, `repaired` and `stopped` (why the take stopped early, or `null`).
+
+The scan follows no link inside the folder and looks into no folder other than the takes'. The
+500 entries, 5 seconds and 10 seconds are StudioCraft's own limits. One scan runs at a time. Over MCP with
+roots, the recording folder must be inside a read root.
+
 ### `captions.*`
 
 `captions.start` takes `{"model"?, "language"?}` and starts live captions of the program audio. A
@@ -462,6 +504,27 @@ without one, else `total_s`, `remaining_ms`, `at_zero` and `reached`), `media`, 
 showing, or `null`).
 
 None of these commands changes the scene collection or adds an undo step.
+
+### `session.events`
+
+`session.events` takes `{"since"?}` and returns `{"events", "last", "dropped"}`: the scene
+switches, stream reconnects, pauses and resumes since the app started, oldest first. The app keeps
+the last 1,000 events, a limit StudioCraft sets. Each event has `seq` (counting up from 1),
+`kind`, `time_ms` (milliseconds since the app started), and `recording_s` and `stream_s` (how far
+into the running recording and stream it happened, in seconds, or `null` when none runs). A
+`scene` event has `from` and `to`, each `{"id", "name"}`; a scene that was removed by then has a
+`null` name. A `reconnect` event has `destination` (the destination's id), `count` (its lost
+connections in this stream so far) and `lost` (how many of them it lost since the app last looked,
+which is once per interface frame and when the stream stops). Connections lost after the stream
+was asked to stop are not listed. A `pause` or `resume` event has nothing more. Scene and
+destination names longer than 256 characters are cut to 256.
+
+With `since`, only the events with a larger `seq` are returned. `last` is the `seq` of the newest
+event (0 before the first), which a caller passes as `since` next time. `dropped` counts the events
+after `since` that the app no longer keeps. A `since` that is not a whole number of 0 or more is an
+error. A switch of the program scene while paused is listed when it happens; a scene chosen for the
+preview in studio mode is not a switch until it goes to the program. Opening another scene
+collection is not listed. The command does not change the scene collection or add an undo step.
 
 ### `dock.layout_save`, `dock.layout_apply` and `dock.layout_remove`
 
