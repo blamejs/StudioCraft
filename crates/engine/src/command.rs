@@ -6,7 +6,7 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use studiocraft_model::{FitMode, ItemId, PauseAtZero, SceneId, Settings, SourceId, Transform};
+use studiocraft_model::{FilterId, FitMode, ItemId, PauseAtZero, SceneId, Settings, SourceId, Transform};
 
 /// A scene by id or by name.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -131,6 +131,11 @@ pub enum RuntimeAction {
     },
     /// Forget the hardware encoders' test results, so the next start tests them again.
     RetestHardwareEncoders,
+    /// The gain reduction of `filter`, a filter of `source`, as the mixer last measured it.
+    FilterMeter {
+        source: SourceId,
+        filter: FilterId,
+    },
     /// Show the pause screen on the program, with the profile's settings and, for this pause only,
     /// each given value in place of its setting. While paused, apply the given values.
     PauseStart {
@@ -327,6 +332,9 @@ pub enum Command {
     FilterSettings { source: SourceRef, filter: u64, settings: Settings },
     #[serde(rename = "filter.enable")]
     FilterEnable { source: SourceRef, filter: u64, enabled: bool },
+    /// The gain reduction of a running compressor, limiter or noise gate.
+    #[serde(rename = "filter.meter")]
+    FilterMeter { source: SourceRef, filter: u64 },
 
     #[serde(rename = "transition.set")]
     TransitionSet { kind: String },
@@ -601,6 +609,7 @@ impl Command {
             Command::FilterRemove { .. } => "filter.remove",
             Command::FilterSettings { .. } => "filter.settings",
             Command::FilterEnable { .. } => "filter.enable",
+            Command::FilterMeter { .. } => "filter.meter",
             Command::TransitionSet { .. } => "transition.set",
             Command::TransitionDuration { .. } => "transition.duration",
             Command::TransitionSettings { .. } => "transition.settings",
@@ -732,6 +741,7 @@ const SPECS: &[CommandSpec] = &[
     spec("filter.remove", "Remove Filter", "source, filter: id", Undo::Undoable),
     spec("filter.settings", "Filter Properties", "source, filter: id, settings: object", Undo::Undoable),
     spec("filter.enable", "Enable Filter", "source, filter: id, enabled: bool", Undo::Undoable),
+    spec("filter.meter", "Filter Gain Reduction", "source, filter: id", Undo::NotUndoable),
     spec("transition.set", "Set Transition", "kind: plug-in id", Undo::Undoable),
     spec("transition.duration", "Set Transition Duration", "ms: milliseconds", Undo::Undoable),
     spec("transition.settings", "Transition Properties", "settings: object", Undo::Undoable),
@@ -804,6 +814,7 @@ mod tests {
             Command::SceneThumbnails { scenes: vec![SceneRef::Id(SceneId(2)), SceneRef::Name("Main".into())], fps: None },
             Command::SceneThumbnails { scenes: vec![], fps: Some(4.0) },
             Command::ItemMove { scene: None, item: ItemRef::Id(ItemId(3)), to: Move::To(2) },
+            Command::FilterMeter { source: SourceRef::Name("Mic".into()), filter: 7 },
             Command::StudioToggle {},
             Command::RecordToggle {},
             Command::GoLiveCheck {},

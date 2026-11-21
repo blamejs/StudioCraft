@@ -323,6 +323,35 @@ fn a_source_with_nothing_to_show_still_settles() {
 }
 
 #[test]
+fn filter_meter_reads_a_compressor_and_is_null_for_a_filter_without_a_meter() {
+    let mut s = headless();
+    let (out, _) = s.run("source.add", &json!({"kind": "audio_input", "name": "Mic"})).unwrap();
+    let mic = out["source"].as_u64().unwrap_or_else(|| panic!("{out}"));
+    s.run("source.add", &json!({"kind": "color", "name": "Card"})).unwrap();
+    let add = |s: &mut Studio, source: &str, kind: &str| {
+        let (out, _) = s.run("filter.add", &json!({"source": source, "kind": kind})).unwrap();
+        out["filter"].as_u64().unwrap_or_else(|| panic!("{out}"))
+    };
+    let (comp, gain, crop) = (add(&mut s, "Mic", "compressor"), add(&mut s, "Mic", "gain"), add(&mut s, "Card", "crop_pad"));
+    let meter = |s: &mut Studio, source: serde_json::Value, filter: u64| s.run("filter.meter", &json!({"source": source, "filter": filter}));
+    let (rev, dirty) = (s.engine().revision(), s.engine().is_dirty());
+    for source in [json!("Mic"), json!(mic)] {
+        assert_eq!(meter(&mut s, source, comp).unwrap(), (json!({"gain_reduction_db": 0.0}), None), "a compressor fed nothing");
+    }
+    assert_eq!(meter(&mut s, json!("Mic"), gain).unwrap().0, serde_json::Value::Null, "gain has no meter");
+    assert_eq!(meter(&mut s, json!("Card"), crop).unwrap().0, serde_json::Value::Null, "a video filter");
+    assert_eq!((s.engine().revision(), s.engine().is_dirty()), (rev, dirty), "a reading changes nothing");
+    s.run("filter.enable", &json!({"source": "Mic", "filter": comp, "enabled": false})).unwrap();
+    assert_eq!(meter(&mut s, json!("Mic"), comp).unwrap().0, serde_json::Value::Null, "a disabled filter does not run");
+    s.run("filter.enable", &json!({"source": "Mic", "filter": comp, "enabled": true})).unwrap();
+    assert_eq!(meter(&mut s, json!("Mic"), comp).unwrap().0, json!({"gain_reduction_db": 0.0}));
+    assert!(meter(&mut s, json!("Card"), comp).is_err(), "a filter of another source");
+    assert!(meter(&mut s, json!("Ghost"), comp).is_err());
+    s.run("filter.remove", &json!({"source": "Mic", "filter": comp})).unwrap();
+    assert!(meter(&mut s, json!("Mic"), comp).is_err(), "a removed filter");
+}
+
+#[test]
 fn interface_commands_come_back_as_actions() {
     let mut s = headless();
     assert_eq!(s.run("app.settings", &json!({})).unwrap().1, Some(UiAction::OpenSettings));
