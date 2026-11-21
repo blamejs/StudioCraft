@@ -35,7 +35,7 @@ use studiocraft_media::queue::Fifo;
 use studiocraft_media::stats::{EncoderStats, RenderStats, Snapshot};
 use studiocraft_media::video::PooledFrame;
 use studiocraft_media::{FrameRate, Tick};
-use studiocraft_model::{FitMode, ItemId, PauseAtZero, Profile, SceneCollection, SceneId, Settings, SourceId, Transform, VideoSettings};
+use studiocraft_model::{FilterId, FitMode, ItemId, PauseAtZero, Profile, SceneCollection, SceneId, Settings, SourceId, Transform, VideoSettings};
 use studiocraft_plugin::{PluginError, Registry};
 use studiocraft_render::device::{Recovery, RecoveryPolicy};
 use studiocraft_render::{CanvasViews, CaptureRequest, Compositor, Gpu, RenderShared};
@@ -517,6 +517,7 @@ impl Studio {
                 RuntimeAction::CaptionsDownload { model } => result = self.download_speech_model(model)?,
                 RuntimeAction::CaptionsDownloadCancel => self.cancel_speech_model_download(),
                 RuntimeAction::RetestHardwareEncoders => self.retest_hardware_encoders()?,
+                RuntimeAction::FilterMeter { source, filter } => result = self.filter_meter_json(source, filter),
                 RuntimeAction::PauseStart { media, countdown_s, at_zero } => result = self.start_pause(media, countdown_s, at_zero)?,
                 RuntimeAction::PauseStop => self.stop_pause()?,
                 RuntimeAction::PauseToggle => {
@@ -949,6 +950,13 @@ impl Studio {
         state.extend(now_ms, seconds);
         self.tick_pause();
         Ok(self.pause_json())
+    }
+
+    /// `{"gain_reduction_db"}`, the gain reduction `filter` of `source` measured in the mixer's
+    /// last block, rounded to 0.01 dB, or `null` when the mixer does not run that filter or the
+    /// filter has no meter.
+    pub fn filter_meter_json(&self, source: SourceId, filter: FilterId) -> Value {
+        self.wiring.filter_meter(source, filter).map_or(Value::Null, |db| json!({"gain_reduction_db": (f64::from(db) * 100.0).round() / 100.0}))
     }
 
     /// Whether the program is paused, since when, and the countdown.

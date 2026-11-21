@@ -311,6 +311,19 @@ plays the source on the monitoring device and leaves it out of recordings and st
 `document.inspect` reports `monitoring` with the profile's `device`, whether it is `playing`, and
 the device's `rate` and `channels` while it plays.
 
+### `filter.meter`
+
+`filter.meter` takes `{"source", "filter"}`, where `source` is a source's id or name and `filter`
+is the id of one of its filters, and returns `{"gain_reduction_db"}`: how far the filter turned the
+source's audio down in the last block the mixer processed, in dB, 0 or more, rounded to 0.01 dB.
+The compressor, the limiter and the noise gate have a reading; the noise gate's stops at 60 dB,
+the range of StudioCraft's audio meters. The reading is 0 until the mixer has processed a block
+with the filter's current settings. It is `null` for a filter without a reading (gain, the
+equalizer and the video filters) and for a filter the mixer does not run: a disabled filter, a
+filter whose settings were refused, and a filter of a source that is not running. An unknown
+source, and a filter id that is not one of the source's filters, are errors. The command does not
+change the scene collection or add an undo step.
+
 ### `source.set_record_track`, `audio_tracks.status` and `audio_tracks.repair`
 
 `source.set_record_track` takes `{"source", "on"}`, where `on` is `true` or `false`, and sets
