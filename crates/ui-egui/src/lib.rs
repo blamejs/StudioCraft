@@ -191,6 +191,9 @@ pub struct StudioApp {
     settings: Option<SettingsWindow>,
     /// The Streaming window while it is open.
     streaming: Option<streaming::StreamingPanel>,
+    /// Whether the command being performed comes from the user's own action in the window (a
+    /// button, a menu item or a field), not from the control channel.
+    from_user: bool,
     transition_schema: Option<SettingsSchema>,
     prompt: Option<Prompt>,
     about: bool,
@@ -318,6 +321,7 @@ impl StudioApp {
             filters: Vec::new(),
             settings: None,
             streaming: None,
+            from_user: false,
             transition_schema: None,
             prompt: None,
             about: false,
@@ -1239,7 +1243,9 @@ impl StudioApp {
     fn act(&mut self, ctx: &egui::Context, act: Act) {
         match act {
             Act::Run(cmd) => {
+                self.from_user = true;
                 let _ = self.perform(ctx, &cmd);
+                self.from_user = false;
             }
             Act::Select(id) => self.selected = id,
             Act::Properties(s) => self.open_properties(s),
