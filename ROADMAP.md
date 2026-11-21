@@ -127,9 +127,9 @@ description in [docs/features.md](docs/features.md).
     `.vtt` files are written beside the recording.
 12. **Canvas size from the display (partly done).** Moves and resizes snap to the canvas, its safe
     areas and other items, Settings › Video sets the canvas to a chosen display's size and the
-    output to a share of the canvas, and scenes are laid out again when the canvas size changes
-    ([Sources](docs/features.md#sources)). The canvas will follow the display when its resolution
-    or scaling changes.
+    output to a share of the canvas, and scenes are laid out again when the canvas size changes.
+    The canvas then follows that display when its resolution or scaling changes
+    ([Sources](docs/features.md#sources)).
 13. **AMD and Intel encoders in StudioCraft's own process, and hardware decoding.** The AMD AMF and
     Intel Quick Sync encoders run only through `ffmpeg` today. They will run in StudioCraft's own
     process like the NVENC, Media Foundation, VideoToolbox and VA-API encoders. Media file sources
