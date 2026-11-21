@@ -84,7 +84,7 @@ The message is in English. The window's status bar shows it as well, in the inte
 when the language's catalog has the message.
 [Commands with their own parameters](#commands-with-their-own-parameters) describes `app.info`,
 `app.links`, `app.check_updates`, `plugin.list`, `source.schema`, `source.sync_offset`,
-`source.monitor`, `source.set_record_track`, the `present.*` commands, `audio_tracks.status`, `audio_tracks.repair`,
+`source.monitor`, `audio.loudness`, `source.set_record_track`, the `present.*` commands, `audio_tracks.status`, `audio_tracks.repair`,
 `audio_tracks.open_last`, `audio_tracks.marker`, `record.marker`, `recordings.list`, the `captions.*` commands, the
 `dock.layout_*` commands, `video.displays`, `video.canvas_from_display` and `canvas.relayout`.
 
@@ -310,6 +310,19 @@ whole number from 0 to 5000; a source without audio is an error.
 plays the source on the monitoring device and leaves it out of recordings and streams.
 `document.inspect` reports `monitoring` with the profile's `device`, whether it is `playing`, and
 the device's `rate` and `channels` while it plays.
+
+### `audio.loudness`
+
+`audio.loudness` takes no parameters and returns the final mix's loudness as the mixer measures it
+(ITU-R BS.1770-4, EBU R 128) since the mixer started: `momentary_lufs` (the last 400 ms),
+`short_term_lufs` (the last 3 s), `integrated_lufs`, `range_lu` and `true_peak_dbtp`. A reading is
+`null` while it is minus infinity: for silence, before 400 ms or 3 s of program have played, and
+for the integrated value until a block passes the gates. `range_lu` is 0 with too little signal.
+`generation` counts the mixer's published readings; a reply with the same `generation` as an
+earlier one holds the same readings. `target` is the profile's loudness band, `{"low_lufs",
+"high_lufs"}`. Its default, −18 to −14 LUFS, is StudioCraft's own value. A profile file whose band
+has a bound outside −60 to 0 LUFS, or a low bound that is not below the high bound, is refused, and
+such a profile is not saved.
 
 ### `source.set_record_track`, `audio_tracks.status` and `audio_tracks.repair`
 

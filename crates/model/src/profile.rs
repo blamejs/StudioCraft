@@ -94,8 +94,9 @@ impl VideoSettings {
 /// two thirds and 50%.
 pub const OUTPUT_SCALES: [(u32, u32); 4] = [(1, 1), (3, 4), (2, 3), (1, 2)];
 
-/// Audio format of the mix, and the device monitored sources play on.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+/// Audio format of the mix, the device monitored sources play on, and the program loudness the
+/// profile aims for.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AudioSettings {
     pub sample_rate: u32,
@@ -103,6 +104,8 @@ pub struct AudioSettings {
     /// empty) for the system's default output. A name the system does not list is reported
     /// when monitoring starts.
     pub monitoring_device: String,
+    /// The band the program's loudness should stay in.
+    pub loudness_target: LoudnessTarget,
 }
 
 /// The device name that stands for the system's default device.
@@ -110,7 +113,49 @@ pub const DEFAULT_AUDIO_DEVICE: &str = "default";
 
 impl Default for AudioSettings {
     fn default() -> Self {
-        Self { sample_rate: 48_000, monitoring_device: DEFAULT_AUDIO_DEVICE.into() }
+        Self { sample_rate: 48_000, monitoring_device: DEFAULT_AUDIO_DEVICE.into(), loudness_target: LoudnessTarget::default() }
+    }
+}
+
+/// The band of program loudness a profile aims for, from `low_lufs` to `high_lufs` in LUFS.
+/// The default, −18 to −14 LUFS, and the allowed range, −60 to 0 LUFS, are StudioCraft's own
+/// values.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct LoudnessTarget {
+    pub low_lufs: f64,
+    pub high_lufs: f64,
+}
+
+impl LoudnessTarget {
+    /// The lowest bound a band may have, in LUFS.
+    pub const MIN_LUFS: f64 = -60.0;
+    /// The highest bound a band may have, in LUFS.
+    pub const MAX_LUFS: f64 = 0.0;
+
+    /// An error when a bound is not a number in [`Self::MIN_LUFS`] to [`Self::MAX_LUFS`], or
+    /// when `low_lufs` is not below `high_lufs`.
+    pub fn check(&self) -> Result<(), String> {
+        let in_range = |v: f64| v.is_finite() && (Self::MIN_LUFS..=Self::MAX_LUFS).contains(&v);
+        if !in_range(self.low_lufs) || !in_range(self.high_lufs) {
+            return Err(format!(
+                "the loudness target must be between {} and {} LUFS (it is {} to {})",
+                Self::MIN_LUFS,
+                Self::MAX_LUFS,
+                self.low_lufs,
+                self.high_lufs
+            ));
+        }
+        if self.low_lufs >= self.high_lufs {
+            return Err(format!("the loudness target's low bound ({} LUFS) must be below its high bound ({} LUFS)", self.low_lufs, self.high_lufs));
+        }
+        Ok(())
+    }
+}
+
+impl Default for LoudnessTarget {
+    fn default() -> Self {
+        Self { low_lufs: -18.0, high_lufs: -14.0 }
     }
 }
 

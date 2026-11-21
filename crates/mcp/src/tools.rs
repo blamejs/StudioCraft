@@ -429,6 +429,17 @@ fn studio_tool_definitions() -> Vec<Value> {
             ADDS,
         ),
         tool(
+            "audio_loudness",
+            "Program loudness",
+            "The final mix's loudness as the mixer measures it (ITU-R BS.1770-4, EBU R 128): `momentary_lufs` (the last 400 ms), \
+             `short_term_lufs` (the last 3 s), `integrated_lufs` and `true_peak_dbtp`, each `null` while there is nothing to \
+             measure yet, and `range_lu`, 0 with too little signal; `generation`, which stays the same until the mixer publishes new readings; and `target`, the \
+             profile's loudness band (`low_lufs` to `high_lufs`).",
+            json!({}),
+            &[],
+            READS,
+        ),
+        tool(
             "audio_tracks_status",
             "Audio tracks state",
             "The audio tracks settings, the output the running take follows (`anchor`), and the last take's state (recording, \
@@ -1013,6 +1024,7 @@ fn dispatch(b: &mut dyn Backend, name: &str, args: &Args) -> Result<Value, McpEr
         "replay_stop" => output_command(b, "replay.stop", "replay"),
         "replay_save" => output_command(b, "replay.save", "replay"),
         "output_status" => Ok(text(&outputs(b)?)),
+        "audio_loudness" => Ok(text(&run(b, "audio.loudness", json!({}))?)),
         "audio_tracks_status" => Ok(text(&run(b, "audio_tracks.status", json!({}))?)),
         "audio_tracks_repair" => Ok(text(&run(b, "audio_tracks.repair", json!({"folder": req_str(args, "folder")?}))?)),
         "audio_tracks_open_last" => Ok(text(&run(b, "audio_tracks.open_last", json!({}))?)),
