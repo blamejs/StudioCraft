@@ -319,7 +319,7 @@ fn an_empty_presented_slot_shows_the_placeholder() {
     let io = io();
     let t = Instant::now();
     let mut s = Staged::<Fake>::new(&staging("", "").with("presented", 3), t);
-    assert_eq!(s.produce_at(&io, t), Err(PluginError::Unavailable("no window is staged in the presented slot".into())));
+    assert_eq!(s.produce_at(&io, t), Err(PluginError::Unavailable("nothing is staged in the presented slot".into())));
     assert!(matches!(io.video.take(), Some(VideoContent::Solid { rgba: [1, 2, 3, 255], width: 1920, height: 1080 })));
     let mut s = Staged::<Fake>::new(&staging("", "").with("placeholder", "hold"), t);
     assert!(s.produce_at(&io, t).is_err());

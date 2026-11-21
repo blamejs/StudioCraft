@@ -1514,9 +1514,9 @@ fn present_commands_refuse_empty_slots_and_other_sources() {
     add_color(&mut e, "Plain");
     assert_eq!(
         run(&mut e, "present.window", json!({"source": "Stage", "index": 4})),
-        Err(EngineError::Invalid("no window is staged in slot 4".into()))
+        Err(EngineError::Invalid("nothing is staged in slot 4".into()))
     );
-    assert_eq!(run(&mut e, "present.window", json!({"index": 4})), Err(EngineError::Invalid("no window is staged in slot 4".into())));
+    assert_eq!(run(&mut e, "present.window", json!({"index": 4})), Err(EngineError::Invalid("nothing is staged in slot 4".into())));
     for bad in [0, 7] {
         let r = run(&mut e, "present.window", json!({"source": "Stage", "index": bad}));
         assert_eq!(r, Err(EngineError::Invalid("the slot must be a number from 1 to 6".into())), "{bad}");
@@ -1526,7 +1526,7 @@ fn present_commands_refuse_empty_slots_and_other_sources() {
     assert_eq!(run(&mut e, "present.next", json!({"source": "Plain"})), Err(EngineError::Invalid("`Plain` is not a Staged windows source".into())));
     assert!(matches!(run(&mut e, "present.next", json!({"source": "ghost"})), Err(EngineError::NoSource(_))));
     run(&mut e, "source.settings", json!({"source": "Stage", "settings": {"window2": ""}})).unwrap();
-    assert_eq!(run(&mut e, "present.previous", json!({"source": "Stage"})), Err(EngineError::Invalid("no window is staged".into())));
+    assert_eq!(run(&mut e, "present.previous", json!({"source": "Stage"})), Err(EngineError::Invalid("nothing is staged".into())));
 }
 
 #[test]

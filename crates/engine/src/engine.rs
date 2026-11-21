@@ -574,8 +574,8 @@ impl Engine {
         }
         if !found {
             return Err(EngineError::Invalid(match how {
-                Present::Slot(n) => format!("no window is staged in slot {n}"),
-                Present::Next | Present::Previous => "no window is staged".into(),
+                Present::Slot(n) => format!("nothing is staged in slot {n}"),
+                Present::Next | Present::Previous => "nothing is staged".into(),
             }));
         }
         Ok((json!({"presented": presented}), None))

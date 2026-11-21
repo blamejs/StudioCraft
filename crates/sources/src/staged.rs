@@ -261,7 +261,7 @@ impl<G: Grab> Staged<G> {
                     }
                 },
             },
-            _ => Shown::Placeholder(PluginError::Unavailable("no window is staged in the presented slot".into())),
+            _ => Shown::Placeholder(PluginError::Unavailable("nothing is staged in the presented slot".into())),
         };
         match shown {
             Shown::Picture => {
