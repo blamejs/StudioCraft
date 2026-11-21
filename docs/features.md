@@ -512,6 +512,11 @@ A stream tests only the H.264 candidates in this list, and skips every other can
 
 The compositor converts the program to the encoders' frame format on the GPU.
 
+The compositor can also draw a small picture of each of up to 16 scenes, for scene lists. Each
+picture fits a 256 × 144 box by default, keeps the canvas's aspect ratio, and is redrawn at most 4
+times a second. The pictures stay on the GPU. Scenes past the sixteenth are not drawn and are
+counted.
+
 ## Interface
 
 ### Theme

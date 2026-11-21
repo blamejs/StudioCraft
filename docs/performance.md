@@ -47,6 +47,23 @@ At 100 packets a second that is about 0.04% of one core for each captured applic
 applications once a second, at most every 250 ms after system notifications, and reads their
 meters 30 times a second only while a caller asks for them (`set_visible` or `read_peaks_for`).
 
+### Audio filters
+
+Measured on 2026-11-21 on Linux, release build. `cargo bench -p studiocraft-sources --bench
+audio_filters` times the mixer thread's work for one 1024-frame stereo block through each filter
+that reports gain reduction, including the write of its reading.
+
+| Bench | Median | Range (95%) |
+| --- | --- | --- |
+| `Noise gate, 1024-frame stereo block` | 3.08 µs | 3.05 to 3.11 µs |
+| `Compressor, 1024-frame stereo block` | 22.97 µs | 22.89 to 23.05 µs |
+| `Limiter, 1024-frame stereo block` | 56.43 µs | 56.25 to 56.66 µs |
+
+At 46.875 blocks a second the limiter, the most expensive of the three, takes about 0.26% of one
+core for each source that carries it. Each filter writes its reading with one atomic store per
+block, and readers load it without a lock. `crates/sources/tests/filter_meter_alloc.rs` checks
+that the three filters do not allocate or free memory over about 10 seconds of blocks.
+
 ### Timing run
 
 `studiocraft-cli bench 10` draws a 1080p scene with a background, four overlapping translucent
