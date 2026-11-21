@@ -1595,6 +1595,57 @@ fn a_canvas_size_that_cant_be_saved_is_an_error() {
 }
 
 #[test]
+fn a_display_size_the_canvas_had_follows_the_display_only_once_saved() {
+    let dir = temp_dir("follow-same-size-save-fails");
+    std::fs::create_dir_all(&dir).unwrap();
+    let (store, _) = Store::open(craft_settings::Location::Dir(dir.clone()));
+    let mut a = StudioApp::boot(store, None, Vec::new());
+    let old = a.studio().canvas();
+    listed(&mut a, vec![screen("2", "Side", old.0, old.1)]);
+    let profiles = dir.join("profiles");
+    let _ = std::fs::remove_dir_all(&profiles);
+    std::fs::write(&profiles, b"").unwrap();
+    let ctx = egui::Context::default();
+    let r = run(&mut a, &ctx, "video.canvas_from_display", json!({"display": "2"}));
+    let followed = a.followed_display().is_some();
+    std::fs::remove_file(&profiles).unwrap();
+    let again = run(&mut a, &ctx, "video.canvas_from_display", json!({"display": "2"}));
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(r.unwrap_err().contains("could not be saved"));
+    assert!(!followed, "a failed save follows no display");
+    assert_eq!(again.unwrap()["follows"], json!("2"));
+}
+
+#[test]
+fn a_display_picked_in_settings_is_not_followed_when_the_profile_cant_be_saved() {
+    let dir = temp_dir("settings-follow-save-fails");
+    std::fs::create_dir_all(&dir).unwrap();
+    let (store, _) = Store::open(craft_settings::Location::Dir(dir.clone()));
+    let mut a = StudioApp::boot(store, None, Vec::new());
+    let old = a.studio().canvas();
+    let profiles = dir.join("profiles");
+    let _ = std::fs::remove_dir_all(&profiles);
+    std::fs::write(&profiles, b"").unwrap();
+    a.open_settings(crate::settings::Tab::Video);
+    let w = a.settings.as_ref().unwrap();
+    let apply = crate::settings::Apply {
+        profile: w.draft.clone(),
+        overrides: a.keymap.overrides().clone(),
+        language: w.language.clone(),
+        check_updates: w.check_updates,
+        system_title_bar: w.system_title_bar,
+        graphics_adapter: w.graphics_adapter.clone(),
+        canvas_display: Some(Some(screen("2", "Side", old.0, old.1))),
+    };
+    a.apply_settings(apply);
+    let followed = a.followed_display().is_some();
+    let _ = std::fs::remove_file(&profiles);
+    let _ = std::fs::remove_dir_all(&dir);
+    assert_eq!(a.studio().canvas(), old);
+    assert!(!followed, "a failed save follows no display");
+}
+
+#[test]
 fn a_canvas_size_from_settings_that_cant_be_saved_is_taken_back() {
     let dir = temp_dir("settings-canvas-save-fails");
     std::fs::create_dir_all(&dir).unwrap();

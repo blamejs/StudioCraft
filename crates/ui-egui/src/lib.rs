@@ -748,14 +748,15 @@ impl StudioApp {
         match self.studio.set_profile(a.profile) {
             Ok(()) => {
                 let canvas_moved = (previous.video.sanitized().base_width, previous.video.sanitized().base_height) != self.studio.canvas();
-                if !self.save_profile() && canvas_moved {
+                let saved = self.save_profile();
+                if !saved && canvas_moved {
                     let _ = self.studio.restore_profile(previous);
                     return false;
                 }
-                // A canvas size picked from a display follows it, and a pick that names no display
-                // ends the following. Any other new size follows no display, which the next frame
-                // finds.
-                if let Some(pick) = &a.canvas_display {
+                // Once the profile is saved, a canvas size picked from a display follows it, and a
+                // pick that names no display ends the following. Any other new size follows no
+                // display, which the next frame finds.
+                if saved && let Some(pick) = &a.canvas_display {
                     self.follow_display(pick.as_ref());
                     // A later size typed in the open window is not taken as that pick.
                     if let Some(w) = &mut self.settings {
@@ -1152,13 +1153,9 @@ impl StudioApp {
                 };
                 let display = display.cloned();
                 let size = canvas_for(size)?;
-                let r = self.set_canvas(size);
-                // Whenever the canvas has the display's size: a failed save takes a new size back,
-                // and keeps a size the canvas already had.
-                if self.studio.canvas() == canvas_size(size) {
-                    self.follow_display(display.as_ref());
-                }
-                let mut r = r?;
+                // The canvas follows the display only once the profile is saved.
+                let mut r = self.set_canvas(size)?;
+                self.follow_display(display.as_ref());
                 r["follows"] = self.followed_display().map_or(Value::Null, |l| json!(l.id));
                 return Ok(r);
             }
