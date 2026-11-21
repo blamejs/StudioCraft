@@ -16,4 +16,10 @@ costs.
   `studiocraft-cli audio-tracks repair <folder>` runs it from the command line. The disk thread
   holds a lock on `take.journal` for the whole take, and repair skips a take whose journal is
   locked, so it does not modify a take that another thread or process is still writing.
+- `takes::list(folder)` lists the takes in a recording folder, newest first: each take's name,
+  start time, length, track count, size, dropouts, markers and missing files, and whether it
+  finished, needs repair or is still being written, read from its journal and the lengths of its
+  files. It reads at most 500 entries of the folder, looks only at
+  `<entry>/Audio Files/take.journal` in each, does not follow links, and counts a take whose
+  journal cannot be read instead of stopping.
 - `cargo bench -p studiocraft-audio-tracks` measures the collect thread's work per block.

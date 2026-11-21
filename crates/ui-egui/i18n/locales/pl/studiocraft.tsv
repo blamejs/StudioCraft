@@ -131,8 +131,10 @@
 	H.264 (built in)	H.264 (wbudowany)
 	NVIDIA NVENC H.264 (built in)	NVIDIA NVENC H.264 (wbudowany)
 	NVIDIA NVENC HEVC (built in)	NVIDIA NVENC HEVC (wbudowany)
+	NVIDIA NVENC AV1 (built in)	NVIDIA NVENC AV1 (wbudowany)
 	Windows Media Foundation H.264 (built in)	Windows Media Foundation H.264 (wbudowany)
 	Windows Media Foundation HEVC (built in)	Windows Media Foundation HEVC (wbudowany)
+	Windows Media Foundation AV1 (built in)	Windows Media Foundation AV1 (wbudowany)
 	Apple VideoToolbox H.264 (built in)	Apple VideoToolbox H.264 (wbudowany)
 	Apple VideoToolbox HEVC (built in)	Apple VideoToolbox HEVC (wbudowany)
 	VA-API H.264 (built in)	VA-API H.264 (wbudowany)
@@ -375,6 +377,24 @@
 	Width	Szerokość
 	Window	Okno
 	Window capture	Przechwytywanie okna
+	Staged windows	Przygotowane okna
+	Window 1	Okno 1
+	Window 2	Okno 2
+	Window 3	Okno 3
+	Window 4	Okno 4
+	Window 5	Okno 5
+	Window 6	Okno 6
+	Presented window	Pokazywane okno
+	While the presented window cannot be shown	Gdy nie można pokazać pokazywanego okna
+	Show a color	Pokaż kolor
+	Keep the last picture	Zachowaj ostatni obraz
+	Placeholder color	Kolor zastępczy
+	no window is staged in the presented slot	w pokazywanym miejscu nie ma przygotowanego okna
+	waiting for the window	oczekiwanie na okno
+	Present Staged Window	Pokaż przygotowane okno
+	Present Next Staged Window	Pokaż następne przygotowane okno
+	Present Previous Staged Window	Pokaż poprzednie przygotowane okno
+	Present Staged Window {n}	Pokaż przygotowane okno {n}
 	Your Videos folder	Twój folder Wideo
 	YUV vectorscope	Wektoroskop YUV
 	{device} (not connected)	{device} (niepodłączone)
@@ -492,6 +512,9 @@ menu	Transform	Przekształć
 @msg	Audio tracks could not be repaired: {takes} and {more} more. Takes repaired: {count}	Nie można naprawić ścieżek audio: {takes} i {more} innych. Naprawione nagrania: {count}
 	Open Last Audio Tracks in Editor	Otwórz ostatnie ścieżki audio w edytorze
 	Add Audio Tracks Marker	Dodaj znacznik do ścieżek audio
+	Add Recording Marker	Dodaj znacznik do nagrania
+@msg	Markers saved to {path}	Znaczniki zapisano w {path}
+@msg	The markers could not be saved: {error}	Nie można zapisać znaczników: {error}
 	After a take	Po nagraniu
 	Nothing	Nic
 	Show the folder	Pokaż folder
@@ -535,3 +558,7 @@ menu	Transform	Przekształć
 @msg	there is no display `{id}`: the system lists no displays	nie ma ekranu `{id}`: system nie podaje żadnych ekranów
 @msg	there is no display `{id}` (the displays are {ids})	nie ma ekranu `{id}` (dostępne ekrany: {ids})
 @msg	a {width} × {height} display can't be the canvas: each side must be from {min} to {max} pixels	ekran {width} × {height} nie może być płótnem: każdy bok musi mieć od {min} do {max} pikseli
+	Output scale	Skala wyjścia
+	Custom	Niestandardowy
+	Fill Screen	Wypełnij ekran
+@msg	The scenes could not be laid out for the new canvas: {error}	Nie udało się rozmieścić scen dla nowego płótna: {error}

@@ -67,6 +67,7 @@ field to `false` in `mechanics.json`.
 | Block size | 1024 frames | `media::audio::BLOCK_FRAMES` | estimated |
 | Blocks queued per output | 4 | `engine::mixer::MAX_QUEUED_BLOCKS` | estimated |
 | Audio sync offset | 0 ms (0 to 5000 ms) | `model::collection::AudioState`, `model::collection::MAX_SYNC_OFFSET_MS` | estimated |
+| Source volume | 0 dB (silence to +20 dB, gain 0 to 10) | `model::collection::AudioState`, `model::collection::MAX_GAIN_DB`, `model::collection::MAX_GAIN` | estimated |
 | Monitoring mode | Off | `model::collection::MonitorMode` | estimated |
 | Monitoring device | The system's default output | `model::profile::DEFAULT_AUDIO_DEVICE` | estimated |
 | Blocks queued for the monitoring device | 4 | `studio::monitor::MONITOR_QUEUE_BLOCKS` | estimated |
@@ -87,6 +88,8 @@ field to `false` in `mechanics.json`.
 | Limiter look-ahead | 5 ms | `craft_audio_dsp::effects::dynamics::Limiter::LOOKAHEAD_MS` | estimated |
 | Equalizer bands | 200 Hz low shelf, 1 kHz peak, 5 kHz high shelf | `sources::filters::Equalizer` | estimated |
 | Loudness windows | Momentary 400 ms, short-term 3 s | `craft_audio_dsp::loudness` | ITU-R BS.1770-4 and EBU R 128 |
+| Program loudness target | −18 to −14 LUFS | `model::profile::LoudnessTarget::default` | estimated |
+| Loudness target range | −60 to 0 LUFS | `model::profile::LoudnessTarget::MIN_LUFS`, `MAX_LUFS` | estimated |
 
 ## Recording and streaming
 
@@ -141,6 +144,13 @@ field to `false` in `mechanics.json`.
 | After a take | Nothing | `model::profile::AfterStop` | estimated |
 | Audio editor looked up on the `PATH` | `soundcraft` | `studio::audio_editor::EDITOR_PROGRAM` | estimated |
 | Openings of a session or folder at once | 4 | `studio::audio_tracks::MAX_OPENING` | estimated |
+| Pause screen countdown | 300 s (0 for none, up to 43,200 s) | `model::profile::PauseSettings` | estimated |
+| Pause screen countdown text | `Back in {time}`, then `Back in a moment` at zero (at most 200 characters each) | `model::profile::PauseSettings` | estimated |
+| Pause screen at zero | Keep the pause screen | `model::profile::PauseAtZero` | estimated |
+| Pause screen countdown format | `m:ss`, and `h:mm:ss` from one hour, with the seconds rounded up | `studio::pause::countdown_text` | estimated |
+| Pause screen text | bottom center, inside a margin of 5% of each side, 6% of the canvas height (2 to 15%, and 6 to 1,024 pixels), white with a 4-pixel black outline (0 to 64) | `model::profile::PauseSettings`, `studio::pause::text_position`, `studio::pause::text_px` | estimated |
+| Pause screen background | `#101014ff`, with the picture or video fitted inside the canvas | `model::profile::PauseSettings` | estimated |
+| Pause screen program audio | muted, with the transition's fade | `model::profile::PauseSettings`, `engine::mixer::MixerCmd::Hold` | estimated |
 
 ## Editing
 

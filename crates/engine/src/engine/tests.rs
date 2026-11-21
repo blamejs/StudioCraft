@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use serde_json::json;
-use studiocraft_model::{Field, FieldKind, Settings, SettingsSchema, Transform, Vec2};
+use studiocraft_model::{Field, FieldKind, FitMode, Settings, SettingsSchema, Transform, Vec2};
 use studiocraft_plugin::{Filter, FilterInstance, FilterTarget, Plugin, PluginError, Source, SourceCaps, SourceInstance, SourceIo, Transition};
 
 use super::*;
@@ -120,6 +120,48 @@ fn scene_add_rename_duplicate_move_remove() {
     }
     assert!(matches!(run(&mut e, "scene.remove", json!({"scene": "Scene"})), Err(EngineError::LastScene)));
     assert!(e.collection().problems().is_empty());
+}
+
+#[test]
+fn scene_thumbnails_name_known_scenes_once_at_a_bounded_rate() {
+    let mut e = engine();
+    run(&mut e, "scene.add", json!({"name": "B"})).unwrap();
+    let thumbnails = |e: &mut Engine, params| run(e, "scene.thumbnails", params).map(|o| (o.changed, o.runtime));
+    let b = e.collection().scene_by_name("B").unwrap().id;
+    let wanted = |scenes, fps| (false, Some(RuntimeAction::SceneThumbnails { scenes, fps }));
+    // By id or name, in the order given, 2 a second when left out.
+    assert_eq!(thumbnails(&mut e, json!({"scenes": ["B", 1]})).unwrap(), wanted(vec![b, SceneId(1)], 2.0));
+    assert_eq!(thumbnails(&mut e, json!({"scenes": [1], "fps": 4})).unwrap(), wanted(vec![SceneId(1)], 4.0));
+    assert_eq!(thumbnails(&mut e, json!({"scenes": [1], "fps": 0.1})).unwrap(), wanted(vec![SceneId(1)], 0.1));
+    // An empty list stops drawing.
+    assert_eq!(thumbnails(&mut e, json!({"scenes": []})).unwrap(), wanted(vec![], 2.0));
+    // Bad lists and rates are errors, not clamped.
+    assert!(matches!(thumbnails(&mut e, json!({"scenes": ["Nope"]})), Err(EngineError::NoScene(_))));
+    assert!(matches!(thumbnails(&mut e, json!({"scenes": [99]})), Err(EngineError::NoScene(_))));
+    let twice = thumbnails(&mut e, json!({"scenes": [1, "Scene"]})).unwrap_err();
+    assert!(twice.to_string().contains("more than once"), "{twice}");
+    // A rate too low to repeat within a `Duration` (1e-20) would draw once, so it is refused too.
+    for fps in [json!(0), json!(-1), json!(0.09), json!(1e-20), json!(4.01), json!(60), json!(null), json!("2")] {
+        assert!(thumbnails(&mut e, json!({"scenes": [1], "fps": fps})).is_err(), "fps {fps}");
+    }
+    assert!(thumbnails(&mut e, json!({})).is_err(), "the list is required");
+    assert!(thumbnails(&mut e, json!({"scenes": null})).is_err());
+    // At most 16 scenes.
+    for i in 0..15 {
+        run(&mut e, "scene.add", json!({"name": format!("S{i}")})).unwrap();
+    }
+    let all: Vec<SceneId> = e.collection().scenes.iter().map(|s| s.id).collect();
+    assert_eq!(all.len(), 17);
+    assert_eq!(thumbnails(&mut e, json!({"scenes": all[..16]})).unwrap(), wanted(all[..16].to_vec(), 2.0));
+    let many = thumbnails(&mut e, json!({"scenes": all})).unwrap_err();
+    assert!(many.to_string().contains("more than 16 scenes"), "{many}");
+    // A built command with too many scenes is refused too.
+    let built = e.execute(C::SceneThumbnails { scenes: all.iter().map(|&id| SceneRef::Id(id)).collect(), fps: None }).unwrap_err();
+    assert!(built.to_string().contains("at most 16"), "{built}");
+    // Nothing changes in the collection or its history.
+    let (revision, undo) = (e.revision(), e.undo_label());
+    thumbnails(&mut e, json!({"scenes": [1]})).unwrap();
+    assert_eq!((e.revision(), e.undo_label()), (revision, undo));
 }
 
 #[test]
@@ -243,18 +285,113 @@ fn transform_visibility_and_lock() {
 }
 
 #[test]
+fn canvas_relayout_places_every_scene_in_one_undo_step() {
+    let mut e = engine();
+    let (fit_src, fit) = add_color(&mut e, "Fit");
+    let fit_t = Transform::fit((640, 480), (1920, 1080));
+    run(&mut e, "item.transform", json!({"item": fit, "transform": fit_t, "fit": "fit"})).unwrap();
+    run(&mut e, "scene.add", json!({"name": "Other"})).unwrap();
+    let (_, corner) = add_color(&mut e, "Corner");
+    let corner_t = Transform { position: Vec2::new(960.0, 540.0), ..Transform::default() };
+    run(&mut e, "item.transform", json!({"item": corner, "transform": corner_t})).unwrap();
+    run(&mut e, "item.lock", json!({"item": corner, "locked": true})).unwrap();
+    e.seal_history();
+    let before = e.collection().clone();
+    let size = |w: u32, h: u32| json!({"width": w, "height": h});
+    // Bad parameters are refused and change nothing.
+    for bad in [
+        json!({"from": size(8, 1080), "to": size(1280, 720)}),
+        json!({"from": size(1920, 1080), "to": size(1280, 9000)}),
+        json!({"from": size(1920, 1080), "to": size(1280, 720), "sizes": [{"source": 999, "width": 640, "height": 480}]}),
+        json!({"from": size(1920, 1080), "to": size(1280, 720), "sizes": [{"source": fit_src, "width": 0, "height": 480}]}),
+        json!({"from": size(1920, 1080), "to": size(1280, 720), "sizes": [{"source": fit_src, "width": 640, "height": 480}, {"source": fit_src, "width": 640, "height": 480}]}),
+        json!({"from": size(1920, 1080), "to": "1280x720"}),
+        json!({"from": size(1920, 1080), "to": size(1280, 720), "items": [999]}),
+        json!({"from": size(1920, 1080), "to": size(1280, 720), "items": [fit, fit]}),
+    ] {
+        assert!(run(&mut e, "canvas.relayout", bad.clone()).is_err(), "{bad}");
+    }
+    assert_eq!(e.collection(), &before);
+    let sizes = json!([{"source": fit_src, "width": 640, "height": 480}]);
+    run(&mut e, "canvas.relayout", json!({"from": size(1920, 1080), "to": size(1080, 1920), "sizes": sizes})).unwrap();
+    let c = e.collection();
+    let t = |item: ItemId| c.scenes.iter().find_map(|s| s.item(item)).unwrap().transform;
+    assert_eq!(t(fit), Transform::fit((640, 480), (1080, 1920)), "a fit item is fit again");
+    // Without a size, the top-left corner keeps its place in proportion; locked items move too.
+    let p = t(corner).position;
+    assert!((p.x - 540.0).abs() < 0.01 && (p.y - 960.0).abs() < 0.01, "{p:?}");
+    run(&mut e, "edit.undo", json!({})).unwrap();
+    assert_eq!(e.collection().scenes, before.scenes, "one undo step takes the whole layout back");
+    // The same size again changes nothing and records no step.
+    let same = run(&mut e, "canvas.relayout", json!({"from": size(1920, 1080), "to": size(1920, 1080), "sizes": sizes})).unwrap();
+    assert!(!same.changed);
+    assert_eq!(e.redo_label(), Some("Lay Out for Canvas Size"), "a recorded step would have dropped the redo");
+    // With `items`, only those items are placed.
+    run(&mut e, "canvas.relayout", json!({"from": size(1920, 1080), "to": size(1080, 1920), "sizes": sizes, "items": [corner]})).unwrap();
+    let c = e.collection();
+    let t = |item: ItemId| c.scenes.iter().find_map(|s| s.item(item)).unwrap().transform;
+    let was = |item: ItemId| before.scenes.iter().find_map(|s| s.item(item)).unwrap().transform;
+    assert_eq!(t(fit), was(fit), "an item not listed stays");
+    assert_ne!(t(corner), was(corner));
+}
+
+#[test]
+fn a_fit_mode_stays_until_the_transform_changes_another_way() {
+    let mut e = engine();
+    let (_, item) = add_color(&mut e, "Back");
+    let fit_of = |e: &Engine| e.collection().scenes[0].item(item).unwrap().fit;
+    let t = Transform::fit((640, 480), (1920, 1080));
+    run(&mut e, "item.transform", json!({"item": item, "transform": t, "fit": "fill"})).unwrap();
+    assert_eq!(fit_of(&e), Some(FitMode::Fill));
+    assert!(run(&mut e, "item.transform", json!({"item": item, "transform": t, "fit": "cover"})).is_err());
+    assert_eq!(fit_of(&e), Some(FitMode::Fill), "a bad mode changes nothing");
+    // A duplicate keeps the mode; a move without one clears it.
+    let dup = run(&mut e, "item.duplicate", json!({"item": item})).unwrap().result["item"].as_u64().unwrap();
+    assert_eq!(e.collection().scenes[0].item(ItemId(dup)).unwrap().fit, Some(FitMode::Fill));
+    let moved = Transform { position: Vec2::new(10.0, 0.0), ..t };
+    run(&mut e, "item.transform", json!({"item": item, "transform": moved})).unwrap();
+    assert_eq!(fit_of(&e), None);
+}
+
+#[test]
 fn volume_and_mute() {
     let mut e = engine();
     let o = run(&mut e, "source.add", json!({"kind": "mic", "name": "Mic"})).unwrap();
     let src: SourceId = serde_json::from_value(o.result["source"].clone()).unwrap();
     run(&mut e, "source.volume", json!({"source": "Mic", "gain": 0.25})).unwrap();
-    for bad in [2.0, -0.1] {
+    for bad in [11.0, -0.1] {
         assert!(matches!(run(&mut e, "source.volume", json!({"source": "Mic", "gain": bad})), Err(EngineError::Invalid(_))), "{bad}");
     }
     assert_eq!(e.collection().source(src).unwrap().audio.gain, 0.25);
     run(&mut e, "source.mute", json!({"source": src, "muted": true})).unwrap();
     assert!(e.collection().source(src).unwrap().audio.muted);
     assert!(run(&mut e, "source.volume", json!({"source": "Mic", "gain": "loud"})).is_err());
+}
+
+#[test]
+fn volume_boosts_up_to_the_top() {
+    use studiocraft_model::collection::MAX_GAIN;
+    let mut e = engine();
+    let o = run(&mut e, "source.add", json!({"kind": "mic", "name": "Mic"})).unwrap();
+    let src: SourceId = serde_json::from_value(o.result["source"].clone()).unwrap();
+    let gain = |e: &Engine| e.collection().source(src).unwrap().audio.gain;
+    run(&mut e, "source.volume", json!({"source": "Mic", "gain": 4.0})).unwrap();
+    assert_eq!(gain(&e), 4.0);
+    e.seal_history();
+    run(&mut e, "source.volume", json!({"source": "Mic", "gain": MAX_GAIN})).unwrap();
+    assert_eq!(gain(&e), MAX_GAIN, "the top is accepted");
+    e.seal_history();
+    for bad in [MAX_GAIN + 0.01, 1000.0, f32::NAN, f32::INFINITY, f32::NEG_INFINITY, -0.01] {
+        let err = e.execute(C::SourceVolume { source: SourceRef::Id(src), gain: bad }).unwrap_err();
+        assert!(matches!(&err, EngineError::Invalid(m) if m == "the volume must be a number from 0 to 10 (+20 dB)"), "{bad}: {err:?}");
+        assert_eq!(gain(&e), MAX_GAIN, "{bad} changes nothing");
+    }
+    // Setting the volume it already has is no change and no undo step: one undo goes back to 4.
+    let rev = e.revision();
+    assert!(!run(&mut e, "source.volume", json!({"source": "Mic", "gain": MAX_GAIN})).unwrap().changed);
+    assert_eq!(e.revision(), rev);
+    run(&mut e, "edit.undo", json!({})).unwrap();
+    assert_eq!(gain(&e), 4.0);
 }
 
 #[test]
@@ -327,6 +464,36 @@ fn filters_match_what_the_source_produces() {
 }
 
 #[test]
+fn a_filter_meter_reading_is_handed_to_the_app_for_a_filter_of_that_source() {
+    let mut e = engine();
+    add_color(&mut e, "Video");
+    let mic = run(&mut e, "source.add", json!({"kind": "mic", "name": "Mic"})).unwrap().result["source"].as_u64().unwrap();
+    let f = run(&mut e, "filter.add", json!({"source": "Mic", "kind": "gain"})).unwrap().result["filter"].as_u64().unwrap();
+    let expected = RuntimeAction::FilterMeter { source: SourceId(mic), filter: FilterId(f) };
+    for (source, enabled) in [(json!("Mic"), true), (json!(mic), true), (json!("Mic"), false)] {
+        run(&mut e, "filter.enable", json!({"source": "Mic", "filter": f, "enabled": enabled})).unwrap();
+        let (rev, history) = (e.revision(), e.undo_label());
+        let o = run(&mut e, "filter.meter", json!({"source": source, "filter": f})).unwrap();
+        assert_eq!(o.runtime, Some(expected.clone()), "{source}, enabled {enabled}");
+        assert!(!o.changed);
+        assert_eq!((e.revision(), e.undo_label()), (rev, history), "a reading is not a change or an undo step");
+    }
+    assert!(matches!(run(&mut e, "filter.meter", json!({"source": "Video", "filter": f})), Err(EngineError::NoFilter(n)) if n == f));
+    assert!(matches!(run(&mut e, "filter.meter", json!({"source": "Mic", "filter": f + 1000})), Err(EngineError::NoFilter(_))));
+    assert!(matches!(run(&mut e, "filter.meter", json!({"source": "ghost", "filter": f})), Err(EngineError::NoSource(_))));
+    for bad in [
+        json!({"source": "Mic"}),
+        json!({"filter": f}),
+        json!({"source": "Mic", "filter": -1}),
+        json!({"source": "Mic", "filter": "1"}),
+        json!({"source": "Mic", "filter": null}),
+        json!({"source": "Mic", "filter": f, "flter": f}),
+    ] {
+        assert!(run(&mut e, "filter.meter", bad.clone()).is_err(), "{bad}");
+    }
+}
+
+#[test]
 fn transitions() {
     let mut e = engine();
     run(&mut e, "transition.set", json!({"kind": "cut"})).unwrap();
@@ -379,13 +546,16 @@ fn runtime_commands_are_handed_to_the_app() {
         ("record.start", RuntimeAction::StartRecording),
         ("record.stop", RuntimeAction::StopRecording),
         ("record.toggle", RuntimeAction::ToggleRecording),
+        ("recordings.list", RuntimeAction::RecordingsList),
         ("stream.start", RuntimeAction::StartStreaming),
         ("stream.stop", RuntimeAction::StopStreaming),
         ("stream.toggle", RuntimeAction::ToggleStreaming),
+        ("golive.check", RuntimeAction::GoLiveCheck),
         ("replay.start", RuntimeAction::StartReplay),
         ("replay.stop", RuntimeAction::StopReplay),
         ("replay.toggle", RuntimeAction::ToggleReplay),
         ("replay.save", RuntimeAction::SaveReplay),
+        ("audio.loudness", RuntimeAction::AudioLoudness),
         ("audio_tracks.status", RuntimeAction::AudioTracksStatus),
         ("audio_tracks.open_last", RuntimeAction::AudioTracksOpenLast),
         ("hardware_encoders.retest", RuntimeAction::RetestHardwareEncoders),
@@ -396,6 +566,7 @@ fn runtime_commands_are_handed_to_the_app() {
         assert_eq!(o.runtime, Some(action), "{id}");
         assert!(!o.changed);
     }
+    assert!(run(&mut e, "golive.check", json!({"items": ["encoder"]})).is_err(), "the check takes no parameters");
     let o = run(&mut e, "audio_tracks.repair", json!({"folder": "D:/Videos"})).unwrap();
     assert_eq!(o.runtime, Some(RuntimeAction::AudioTracksRepair { folder: "D:/Videos".into() }));
     assert!(!o.changed);
@@ -413,6 +584,86 @@ fn runtime_commands_are_handed_to_the_app() {
         [json!({"name": ""}), json!({"name": "   "}), json!({"name": too_long}), json!({"name": "a\nb"}), json!({"name": 3}), json!({"name": null})]
     {
         assert!(run(&mut e, "audio_tracks.marker", bad.clone()).is_err(), "{bad}");
+    }
+}
+
+#[test]
+fn a_recording_marker_is_handed_to_the_app_with_a_checked_name() {
+    let mut e = engine();
+    let o = run(&mut e, "record.marker", json!({})).unwrap();
+    assert_eq!(o.runtime, Some(RuntimeAction::RecordingMarker { name: None }));
+    let longest = "é".repeat(crate::engine::MAX_MARKER_NAME_CHARS);
+    let o = run(&mut e, "record.marker", json!({"name": longest})).unwrap();
+    assert_eq!(o.runtime, Some(RuntimeAction::RecordingMarker { name: Some(longest) }));
+    assert!(!o.changed);
+    let too_long = "x".repeat(crate::engine::MAX_MARKER_NAME_CHARS + 1);
+    for bad in
+        [json!({"name": ""}), json!({"name": "   "}), json!({"name": too_long}), json!({"name": "a\tb"}), json!({"name": 3}), json!({"name": null})]
+    {
+        assert!(run(&mut e, "record.marker", bad.clone()).is_err(), "{bad}");
+    }
+}
+
+#[test]
+fn pause_commands_are_handed_to_the_app_with_checked_values() {
+    let mut e = engine();
+    let rev = e.revision();
+    for (id, params, action) in [
+        ("pause.start", json!({}), RuntimeAction::PauseStart { media: None, countdown_s: None, at_zero: None }),
+        (
+            "pause.start",
+            json!({"media": "", "countdown_s": 0, "at_zero": "keep"}),
+            RuntimeAction::PauseStart { media: Some(String::new()), countdown_s: Some(0), at_zero: Some(PauseAtZero::Keep) },
+        ),
+        (
+            "pause.start",
+            json!({"media": "C:/break.png", "countdown_s": 43_200, "at_zero": "resume"}),
+            RuntimeAction::PauseStart { media: Some("C:/break.png".into()), countdown_s: Some(43_200), at_zero: Some(PauseAtZero::Resume) },
+        ),
+        ("pause.stop", json!({}), RuntimeAction::PauseStop),
+        ("pause.toggle", json!({}), RuntimeAction::PauseToggle),
+        ("pause.extend", json!({"seconds": 1}), RuntimeAction::PauseExtend { seconds: 1 }),
+        ("pause.extend", json!({"seconds": 43_200}), RuntimeAction::PauseExtend { seconds: 43_200 }),
+        ("pause.status", json!({}), RuntimeAction::PauseStatus),
+    ] {
+        let o = run(&mut e, id, params.clone()).unwrap_or_else(|err| panic!("{id} {params}: {err}"));
+        assert_eq!(o.runtime, Some(action), "{id} {params}");
+        assert!(!o.changed, "{id} changes no collection");
+    }
+    assert_eq!(e.revision(), rev, "a pause is not a change to the collection");
+    assert!(e.undo_label().is_none(), "a pause is not an undo step");
+    for (id, bad) in [
+        ("pause.start", json!({"countdown_s": 43_201})),
+        ("pause.start", json!({"countdown_s": -1})),
+        ("pause.start", json!({"countdown_s": "300"})),
+        ("pause.start", json!({"countdown_s": null})),
+        ("pause.start", json!({"at_zero": "restart"})),
+        ("pause.start", json!({"at_zero": "Keep"})),
+        ("pause.start", json!({"media": null})),
+        ("pause.start", json!({"media": 5})),
+        ("pause.start", json!({"media": "a\u{0}b.png"})),
+        ("pause.start", json!({"meda": "x.png"})),
+        ("pause.extend", json!({"seconds": 0})),
+        ("pause.extend", json!({"seconds": 43_201})),
+        ("pause.extend", json!({})),
+    ] {
+        assert!(run(&mut e, id, bad.clone()).is_err(), "{id} {bad}");
+    }
+}
+
+#[test]
+fn session_events_are_read_by_the_app_from_a_checked_number() {
+    let mut e = engine();
+    let rev = e.revision();
+    for (params, since) in [(json!({}), None), (json!({"since": 0}), Some(0)), (json!({"since": u64::MAX}), Some(u64::MAX))] {
+        let o = run(&mut e, "session.events", params.clone()).unwrap_or_else(|err| panic!("{params}: {err}"));
+        assert_eq!(o.runtime, Some(RuntimeAction::SessionEvents { since }), "{params}");
+        assert!(!o.changed);
+    }
+    assert_eq!(e.revision(), rev, "reading the events is not a change to the collection");
+    assert!(e.undo_label().is_none(), "reading the events is not an undo step");
+    for bad in [json!({"since": -1}), json!({"since": 1.5}), json!({"since": "3"}), json!({"since": null}), json!({"snce": 3})] {
+        assert!(run(&mut e, "session.events", bad.clone()).is_err(), "{bad}");
     }
 }
 
@@ -1235,6 +1486,98 @@ fn unknown_references_are_errors() {
     assert!(e.state_json()["collection"]["scenes"].is_array());
 }
 
+fn staging_engine() -> Engine {
+    let mut r = Registry::new();
+    r.register_source(Arc::new(TestSource("color", SourceCaps { video: true, audio: false }))).unwrap();
+    r.register_source(Arc::new(TestSource(staged::KIND, SourceCaps { video: true, audio: false }))).unwrap();
+    Engine::new(SceneCollection::new("Test", "Scene"), Arc::new(r))
+}
+
+fn presented(e: &Engine, name: &str) -> Option<i64> {
+    e.collection().source_by_name(name).and_then(|s| s.settings.i64(staged::PRESENTED))
+}
+
+#[test]
+fn present_commands_step_through_the_staged_windows() {
+    let mut e = staging_engine();
+    let slots = json!({"window1": "a.exe\u{1f}A", "window3": "b.exe\u{1f}B", "window6": "c.exe\u{1f}C", "presented": 1});
+    run(&mut e, "source.add", json!({"kind": staged::KIND, "name": "Stage", "settings": slots})).unwrap();
+    run(&mut e, "source.add", json!({"kind": staged::KIND, "name": "Other", "settings": {"window2": "d.exe\u{1f}D", "presented": 2}})).unwrap();
+    add_color(&mut e, "Plain");
+    let history = e.undo_label();
+
+    let o = run(&mut e, "present.next", json!({"source": "Stage"})).unwrap();
+    assert!(o.changed);
+    assert_eq!(o.result["presented"][0]["slot"], 3, "{}", o.result);
+    assert_eq!(presented(&e, "Stage"), Some(3), "the empty slot 2 is skipped");
+    run(&mut e, "present.next", json!({"source": "Stage"})).unwrap();
+    run(&mut e, "present.next", json!({"source": "Stage"})).unwrap();
+    assert_eq!(presented(&e, "Stage"), Some(1), "it wraps around");
+    run(&mut e, "present.previous", json!({"source": "Stage"})).unwrap();
+    assert_eq!(presented(&e, "Stage"), Some(6));
+    run(&mut e, "present.window", json!({"source": "Stage", "index": 3})).unwrap();
+    assert_eq!(presented(&e, "Stage"), Some(3));
+    assert_eq!(presented(&e, "Other"), Some(2), "a named source changes alone");
+    assert_eq!(e.undo_label(), history, "presenting a window is not an undo step");
+    assert!(e.is_dirty(), "the presented window is saved with the collection");
+
+    // Without a source, every Staged windows source that has a window in the slot changes.
+    let o = run(&mut e, "present.window", json!({"index": 1})).unwrap();
+    assert_eq!(o.result["presented"].as_array().map(Vec::len), Some(1), "{}", o.result);
+    assert_eq!((presented(&e, "Stage"), presented(&e, "Other")), (Some(1), Some(2)));
+    run(&mut e, "present.next", json!({})).unwrap();
+    assert_eq!((presented(&e, "Stage"), presented(&e, "Other")), (Some(3), Some(2)));
+    let same = run(&mut e, "present.window", json!({"source": "Other", "index": 2})).unwrap();
+    assert!(!same.changed, "presenting the presented window changes nothing");
+    assert_eq!(same.result["presented"], json!([]), "and reports no source");
+}
+
+#[test]
+fn present_commands_refuse_empty_slots_and_other_sources() {
+    let mut e = staging_engine();
+    assert_eq!(run(&mut e, "present.next", json!({})), Err(EngineError::Invalid("there is no Staged windows source".into())));
+    run(&mut e, "source.add", json!({"kind": staged::KIND, "name": "Stage", "settings": {"window2": "a.exe\u{1f}A"}})).unwrap();
+    add_color(&mut e, "Plain");
+    assert_eq!(
+        run(&mut e, "present.window", json!({"source": "Stage", "index": 4})),
+        Err(EngineError::Invalid("no window is staged in slot 4".into()))
+    );
+    assert_eq!(run(&mut e, "present.window", json!({"index": 4})), Err(EngineError::Invalid("no window is staged in slot 4".into())));
+    for bad in [0, 7] {
+        let r = run(&mut e, "present.window", json!({"source": "Stage", "index": bad}));
+        assert_eq!(r, Err(EngineError::Invalid("the slot must be a number from 1 to 6".into())), "{bad}");
+    }
+    assert!(run(&mut e, "present.window", json!({"source": "Stage", "index": -1})).is_err());
+    assert!(run(&mut e, "present.window", json!({"source": "Stage", "index": "2"})).is_err());
+    assert_eq!(run(&mut e, "present.next", json!({"source": "Plain"})), Err(EngineError::Invalid("`Plain` is not a Staged windows source".into())));
+    assert!(matches!(run(&mut e, "present.next", json!({"source": "ghost"})), Err(EngineError::NoSource(_))));
+    run(&mut e, "source.settings", json!({"source": "Stage", "settings": {"window2": ""}})).unwrap();
+    assert_eq!(run(&mut e, "present.previous", json!({"source": "Stage"})), Err(EngineError::Invalid("no window is staged".into())));
+}
+
+#[test]
+fn undo_keeps_the_presented_window() {
+    let mut e = staging_engine();
+    run(&mut e, "source.add", json!({"kind": staged::KIND, "name": "Stage", "settings": {"window1": "a.exe\u{1f}A", "window2": "b.exe\u{1f}B"}}))
+        .unwrap();
+    add_color(&mut e, "Plain");
+    run(&mut e, "present.window", json!({"source": "Stage", "index": 2})).unwrap();
+    run(&mut e, "edit.undo", json!({})).unwrap();
+    assert!(e.collection().source_by_name("Plain").is_none(), "the undo took the last edit back");
+    assert_eq!(presented(&e, "Stage"), Some(2), "and left the presented window alone");
+
+    // Presented window in Properties is no undo step either; a change to another setting is.
+    let history = e.undo_label();
+    let mut settings = e.collection().source_by_name("Stage").map(|s| s.settings.to_json()).unwrap_or_default();
+    settings["presented"] = json!(1);
+    run(&mut e, "source.settings", json!({"source": "Stage", "settings": settings})).unwrap();
+    assert_eq!(presented(&e, "Stage"), Some(1));
+    assert_eq!(e.undo_label(), history, "a change to the presented window alone");
+    settings["window3"] = json!("c.exe\u{1f}C");
+    run(&mut e, "source.settings", json!({"source": "Stage", "settings": settings})).unwrap();
+    assert_ne!(e.undo_label(), history, "a change to a slot");
+}
+
 #[test]
 fn every_spec_is_reachable() {
     // Each listed id parses with suitable parameters, so menus and scripts can reach all of them.
@@ -1245,6 +1588,7 @@ fn every_spec_is_reachable() {
             "scene.duplicate" => json!({"scene": 1}),
             "scene.move" => json!({"scene": 1, "to": "up"}),
             "scene.select_index" => json!({"index": 1}),
+            "scene.thumbnails" => json!({"scenes": [1]}),
             "source.add" | "source.schema" => json!({"kind": "color"}),
             "source.add_existing" => json!({"source": 1}),
             "source.rename" => json!({"source": 1, "name": "x"}),
@@ -1254,20 +1598,24 @@ fn every_spec_is_reachable() {
             "source.sync_offset" => json!({"source": 1, "ms": 100}),
             "source.monitor" => json!({"source": 1, "mode": "monitor_only"}),
             "source.set_record_track" => json!({"source": 1, "on": true}),
+            "present.window" => json!({"index": 1}),
             "audio_tracks.repair" => json!({"folder": "x"}),
             "item.remove" | "item.duplicate" => json!({"item": 1}),
             "item.move" => json!({"item": 1, "to": "up"}),
             "item.transform" => json!({"item": 1, "transform": {}}),
+            "canvas.relayout" => json!({"from": {"width": 1920, "height": 1080}, "to": {"width": 1280, "height": 720}}),
             "item.visible" => json!({"item": 1, "visible": true}),
             "item.lock" => json!({"item": 1, "locked": true}),
             "filter.add" => json!({"source": 1, "kind": "gain"}),
             "filter.remove" => json!({"source": 1, "filter": 1}),
             "filter.settings" => json!({"source": 1, "filter": 1, "settings": {}}),
             "filter.enable" => json!({"source": 1, "filter": 1, "enabled": true}),
+            "filter.meter" => json!({"source": 1, "filter": 1}),
             "transition.set" => json!({"kind": "fade"}),
             "transition.duration" => json!({"ms": 100}),
             "transition.settings" => json!({"settings": {}}),
             "app_audio.route" => json!({"app": "player.exe", "routed": true}),
+            "pause.extend" => json!({"seconds": 60}),
             _ => json!({}),
         };
         let c = Command::from_parts(s.id, &params).unwrap_or_else(|e| panic!("{e}"));

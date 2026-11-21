@@ -64,7 +64,14 @@ fn destinations_are_added_up_to_the_limit() {
     let d = a.studio.profile().stream.destination("destination-2").cloned().unwrap();
     assert_eq!(
         d,
-        Destination { id: "destination-2".into(), name: "Backup".into(), enabled: false, server: "rtmp://b.example/app".into(), key: KeyRef::None }
+        Destination {
+            id: "destination-2".into(),
+            name: "Backup".into(),
+            enabled: false,
+            server: "rtmp://b.example/app".into(),
+            key: KeyRef::None,
+            service: String::new()
+        }
     );
     a.act(&ctx, Act::run("stream.destination_add", json!({"key": "held", "held_name": "night"})));
     assert_eq!(a.studio.profile().stream.destination("destination-3").map(|d| d.key.clone()), Some(KeyRef::Held("night".into())));
@@ -190,8 +197,11 @@ fn a_destination_is_removed_and_its_open_details_close() {
     run(&mut a, &ctx, "stream.destination_add", json!({})).unwrap();
     run(&mut a, &ctx, "stream.destination_remove", json!({"id": "destination-2"})).unwrap();
     assert_eq!(ids(&a), ["main"]);
-    a.streaming =
-        Some(StreamingPanel { editing: a.studio.profile().stream.destination("main").map(Edit::of), profile: a.studio.profile().name.clone() });
+    a.streaming = Some(StreamingPanel {
+        editing: a.studio.profile().stream.destination("main").map(Edit::of),
+        profile: a.studio.profile().name.clone(),
+        ..StreamingPanel::default()
+    });
     assert_eq!(run(&mut a, &ctx, "stream.destination_remove", json!({"id": "main"})).unwrap(), json!({"removed": "main"}));
     assert!(ids(&a).is_empty());
     assert!(a.streaming.as_ref().is_some_and(|p| p.editing.is_none()));
@@ -498,10 +508,10 @@ fn open_details_save_what_was_typed() {
     e.server = "rtmp://b2.example/live".into();
     e.held_key = "typed".into();
     let p = e.params();
-    assert_eq!(p, json!({"id": "b", "name": "B", "server": "rtmp://b2.example/live", "key": "held", "held_name": "night"}));
+    assert_eq!(p, json!({"id": "b", "service": "", "name": "B", "server": "rtmp://b2.example/live", "key": "held", "held_name": "night"}));
     assert!(!p.to_string().contains("typed"), "a key typed for the session is not a command parameter");
     e.key = KeyChoice::Profile;
-    assert_eq!(e.params(), json!({"id": "b", "name": "B", "server": "rtmp://b2.example/live", "key": "profile"}));
+    assert_eq!(e.params(), json!({"id": "b", "service": "", "name": "B", "server": "rtmp://b2.example/live", "key": "profile"}));
     // The details of a destination are drawn with its fields, and the server field hides its text.
     let stream = StreamSettings { destinations: vec![d.clone()], ..StreamSettings::default() };
     let held = |n: &str| n == "night";
@@ -529,5 +539,129 @@ fn open_details_save_what_was_typed() {
     }
     let texts = drawn(|ui| show(ui, &view, &mut panel, &mut acts));
     assert!(texts.iter().any(|t| t == "rtmp://c.example/live/secret-c"), "{texts:?}");
+    assert!(acts.is_empty(), "drawing does nothing");
+}
+
+/// The preset of the service `id`.
+fn preset(id: &str) -> &'static services::Service {
+    services::service(id).unwrap_or_else(|| panic!("no {id} preset"))
+}
+
+#[test]
+fn a_destination_added_for_a_service_takes_its_documented_server() {
+    let mut a = app();
+    let ctx = egui::Context::default();
+    let twitch = preset("twitch");
+    // The preset's server counts as a new server for the profile's key.
+    let e = run(&mut a, &ctx, "stream.destination_add", json!({"service": "twitch"})).unwrap_err();
+    assert!(e.contains("would send the profile's stream key to a new server"), "{e}");
+    assert!(ids(&a).is_empty());
+    run(&mut a, &ctx, "stream.destination_add", json!({"service": "twitch", "key": "none"})).unwrap();
+    let d = a.studio.profile().stream.destinations[0].clone();
+    assert_eq!((d.service.as_str(), Some(d.server.as_str()), d.name.as_str()), ("twitch", twitch.server, ""));
+    // A service that shows each account its own server leaves the server empty.
+    run(&mut a, &ctx, "stream.destination_add", json!({"service": "youtube"})).unwrap();
+    let d = a.studio.profile().stream.destination("destination-2").cloned().unwrap();
+    assert_eq!((d.service.as_str(), d.server.as_str()), ("youtube", ""));
+    // A server given with the service is used.
+    run(&mut a, &ctx, "stream.destination_add", json!({"service": "facebook", "server": "rtmp://mine.example/live"})).unwrap();
+    let d = a.studio.profile().stream.destination("destination-3").cloned().unwrap();
+    assert_eq!((d.service.as_str(), d.server.as_str()), ("facebook", "rtmp://mine.example/live"));
+    let e = run(&mut a, &ctx, "stream.destination_add", json!({"service": "unknown"})).unwrap_err();
+    assert!(e.contains("`service` is empty or one of") && e.contains("twitch"), "{e}");
+    let e = run(&mut a, &ctx, "stream.destination_add", json!({"service": 3})).unwrap_err();
+    assert!(e.contains("`service` is a string"), "{e}");
+    assert_eq!(ids(&a).len(), 3);
+    let list = run(&mut a, &ctx, "stream.destinations", json!({})).unwrap();
+    let services: Vec<&str> = list["destinations"].as_array().unwrap().iter().filter_map(|d| d["service"].as_str()).collect();
+    assert_eq!(services, ["twitch", "youtube", "facebook"]);
+}
+
+#[test]
+fn changing_the_service_replaces_a_preset_server_and_keeps_a_typed_one() {
+    let mut a = app();
+    let ctx = egui::Context::default();
+    let (twitch, facebook) = (preset("twitch"), preset("facebook"));
+    run(&mut a, &ctx, "stream.destination_add", json!({"service": "twitch", "key": "none"})).unwrap();
+    let main = |a: &StudioApp| a.studio.profile().stream.destinations[0].clone();
+    run(&mut a, &ctx, "stream.destination_set", json!({"id": "main", "service": "facebook"})).unwrap();
+    assert_eq!((main(&a).service.as_str(), Some(main(&a).server.as_str())), ("facebook", facebook.server));
+    // A service without a shared server clears the preset's and turns the destination off.
+    run(&mut a, &ctx, "stream.destination_set", json!({"id": "main", "service": "youtube"})).unwrap();
+    assert_eq!((main(&a).server.as_str(), main(&a).enabled), ("", false));
+    // A server and `enabled` given with the service win.
+    run(&mut a, &ctx, "stream.destination_set", json!({"id": "main", "service": "kick", "server": "rtmp://k.example/app", "enabled": true})).unwrap();
+    assert_eq!((main(&a).service.as_str(), main(&a).server.as_str(), main(&a).enabled), ("kick", "rtmp://k.example/app", true));
+    // A server the user typed is kept through every change of service.
+    for id in ["twitch", "youtube", ""] {
+        run(&mut a, &ctx, "stream.destination_set", json!({"id": "main", "service": id})).unwrap();
+        assert_eq!((main(&a).server.as_str(), main(&a).enabled), ("rtmp://k.example/app", true), "{id}");
+    }
+    assert_eq!(main(&a).service, "");
+    run(&mut a, &ctx, "stream.destination_set", json!({"id": "main", "server": ""})).unwrap();
+    run(&mut a, &ctx, "stream.destination_set", json!({"id": "main", "service": "twitch"})).unwrap();
+    assert_eq!(Some(main(&a).server.as_str()), twitch.server, "an empty server takes the preset's");
+    let e = run(&mut a, &ctx, "stream.destination_set", json!({"id": "main", "service": "unknown"})).unwrap_err();
+    assert!(e.contains("`service` is empty or one of"), "{e}");
+    // A key going with a preset's server counts as a new server.
+    let e = run(&mut a, &ctx, "stream.destination_set", json!({"id": "main", "service": "facebook", "key": "held"})).unwrap_err();
+    assert!(e.contains("would send its session key to a new server"), "{e}");
+    assert_eq!(Some(main(&a).server.as_str()), twitch.server, "a refused change changes nothing");
+    // A service without a shared server, saved with the account's server, stays on.
+    assert!(main(&a).enabled);
+    let mut e = Edit::of(&main(&a));
+    e.set_service("youtube");
+    assert_eq!(e.server, "");
+    e.server = "rtmp://y.example/live".into();
+    a.act(&ctx, Act::run("stream.destination_set", e.params()));
+    assert_eq!((main(&a).service.as_str(), main(&a).server.as_str(), main(&a).enabled), ("youtube", "rtmp://y.example/live", true));
+}
+
+#[test]
+fn saving_the_details_of_a_service_destination_keeps_it_on() {
+    let mut a = app();
+    let ctx = egui::Context::default();
+    run(&mut a, &ctx, "stream.destination_add", json!({"service": "youtube"})).unwrap();
+    let d = a.studio.profile().stream.destinations[0].clone();
+    assert!(d.enabled && d.server.is_empty());
+    let mut e = Edit::of(&d);
+    e.name = "Channel".into();
+    a.act(&ctx, Act::run("stream.destination_set", e.params()));
+    let d = a.studio.profile().stream.destinations[0].clone();
+    assert_eq!(
+        (d.name.as_str(), d.service.as_str(), d.server.as_str(), d.enabled),
+        ("Channel", "youtube", "", true),
+        "the same service changes nothing"
+    );
+    // A service this version does not know is kept as it is.
+    let cmd = CommandRef::with_params("stream.destination_set", json!({"service": "future"}));
+    assert_eq!(service_param(&cmd, Some("future")).ok(), Some(Some("future".to_string())));
+    assert!(service_param(&cmd, Some("")).is_err());
+}
+
+#[test]
+fn the_details_change_the_server_with_the_service_and_link_to_its_page() {
+    let (twitch, kick) = (preset("twitch"), preset("kick"));
+    let d = Destination { id: "main".into(), service: "twitch".into(), server: twitch.server.unwrap_or_default().into(), ..Destination::default() };
+    let mut e = Edit::of(&d);
+    e.set_service("kick");
+    assert_eq!((e.service.as_str(), e.server.as_str()), ("kick", ""));
+    e.server = "rtmp://typed.example/app".into();
+    e.set_service("twitch");
+    assert_eq!(e.server, "rtmp://typed.example/app", "a typed server is kept");
+    // A row names the service, and the details of a service without a shared server say where to
+    // find the account's server and key.
+    let d = Destination { id: "main".into(), service: "kick".into(), ..Destination::default() };
+    let stream = StreamSettings { destinations: vec![d.clone()], ..StreamSettings::default() };
+    let held = |_: &str| false;
+    let view = View { stream: &stream, running: false, live: &[], held: &held };
+    let mut panel = StreamingPanel { editing: Some(Edit::of(&d)), ..StreamingPanel::default() };
+    let mut acts = Vec::new();
+    let texts = drawn(|ui| show(ui, &view, &mut panel, &mut acts));
+    let stream_to = craft_i18n::fmt(tl!("Stream to {service}"), &[("service", kick.name)]);
+    let find = craft_i18n::fmt(tl!("{service} shows the server and key for your account."), &[("service", kick.name)]);
+    for want in [kick.name, stream_to.as_str(), "Service", find.as_str(), "Where to find them", "Add Destination"] {
+        assert!(texts.iter().any(|t| t == want), "{want} in {texts:?}");
+    }
     assert!(acts.is_empty(), "drawing does nothing");
 }

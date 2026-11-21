@@ -5,10 +5,11 @@ use std::path::Path;
 use craft_audio_dsp::{AudioEffect, create_effect};
 use craft_color_transform::{Mat3, SRGB, cct};
 use studiocraft_media::audio::{BLOCK_FRAMES, CHANNELS, SAMPLE_RATE};
-use studiocraft_media::mix::{from_db, to_db};
+use studiocraft_media::mix::{METER_FLOOR_DB, from_db, to_db};
 use studiocraft_model::{ChoiceOption, Field, FieldKind, PathMode, Settings, SettingsSchema};
 use studiocraft_plugin::{
-    Animation, EffectImage, Filter, FilterInstance, FilterTarget, MAX_EFFECT_SIDE, Plugin, PluginError, Reframe, VIDEO_EFFECT_PARAMS, VideoEffect,
+    Animation, EffectImage, Filter, FilterInstance, FilterMeter, FilterTarget, MAX_EFFECT_SIDE, Plugin, PluginError, Reframe, VIDEO_EFFECT_PARAMS,
+    VideoEffect,
 };
 
 use crate::image::{PICTURE_EXTENSIONS, load as load_picture};
@@ -88,7 +89,17 @@ impl Filter for NoiseGate {
         FilterTarget::Audio
     }
     fn create(&self, settings: &Settings) -> Result<Box<dyn FilterInstance>, PluginError> {
-        let mut g = GateInstance { open_db: -26.0, close_db: -32.0, attack: 0.0, release: 0.0, hold_s: 0.2, held: 0.0, open: false, gain: 0.0 };
+        let mut g = GateInstance {
+            open_db: -26.0,
+            close_db: -32.0,
+            attack: 0.0,
+            release: 0.0,
+            hold_s: 0.2,
+            held: 0.0,
+            open: false,
+            gain: 0.0,
+            meter: FilterMeter::new(),
+        };
         g.update(settings)?;
         Ok(Box::new(g))
     }
@@ -105,6 +116,8 @@ struct GateInstance {
     held: f32,
     open: bool,
     gain: f32,
+    /// The deepest attenuation during the last block, at most the meter's 60 dB range.
+    meter: FilterMeter,
 }
 
 fn per_frame(ms: f32) -> f32 {
@@ -134,12 +147,19 @@ impl FilterInstance for GateInstance {
         }
         let (target, step) = if self.open { (1.0, self.attack) } else { (0.0, self.release) };
         let (frames, part) = block.as_chunks_mut::<CHANNELS>();
+        let mut least = if frames.is_empty() { self.gain } else { 1.0f32 };
         for frame in frames {
             self.gain = if self.gain < target { (self.gain + step).min(target) } else { (self.gain - step).max(target) };
+            least = least.min(self.gain);
             frame.iter_mut().for_each(|s| *s *= self.gain);
         }
         // A trailing part frame is silenced, as the effect filters do.
         part.fill(0.0);
+        // A closed gate's gain of 0 is an infinite cut; the reading stops at the meter's range.
+        self.meter.set((-to_db(least)).min(-METER_FLOOR_DB));
+    }
+    fn meter(&self) -> Option<FilterMeter> {
+        Some(self.meter.clone())
     }
 }
 
@@ -222,12 +242,16 @@ struct DspFilter {
     /// The block split into its two channels; sized when the filter is created.
     left: Vec<f32>,
     right: Vec<f32>,
+    /// The effect's gain reduction during the last block, for an effect that reduces gain.
+    meter: Option<FilterMeter>,
 }
 
 impl DspFilter {
-    fn create(effect: &str, settings: &'static [DspSetting], s: &Settings) -> Result<Box<dyn FilterInstance>, PluginError> {
+    /// A filter running `effect`; `metered` gives it a gain-reduction meter.
+    fn create(effect: &str, settings: &'static [DspSetting], metered: bool, s: &Settings) -> Result<Box<dyn FilterInstance>, PluginError> {
         let fx = create_effect(effect, SAMPLE_RATE as f32, CHANNELS).ok_or_else(|| PluginError::Failed(format!("no audio effect `{effect}`")))?;
-        let mut f = DspFilter { fx, settings, left: vec![0.0; BLOCK_FRAMES], right: vec![0.0; BLOCK_FRAMES] };
+        let meter = metered.then(FilterMeter::new);
+        let mut f = DspFilter { fx, settings, left: vec![0.0; BLOCK_FRAMES], right: vec![0.0; BLOCK_FRAMES], meter };
         f.update(s)?;
         Ok(Box::new(f))
     }
@@ -251,6 +275,8 @@ impl FilterInstance for DspFilter {
         let whole = block.len() - block.len() % CHANNELS;
         let (block, part) = block.split_at_mut(whole);
         part.fill(0.0);
+        // The deepest reduction over the block's chunks; `None` when no frame was processed.
+        let mut deepest: Option<f32> = None;
         for chunk in block.chunks_mut(BLOCK_FRAMES * CHANNELS) {
             let frames = chunk.len() / CHANNELS;
             let (left, right) = (&mut self.left[..frames], &mut self.right[..frames]);
@@ -263,7 +289,15 @@ impl FilterInstance for DspFilter {
                 f[0] = left[i];
                 f[1] = right[i];
             }
+            deepest = Some(deepest.unwrap_or(0.0).max(self.fx.gain_reduction_db()));
         }
+        // A block with no whole frame keeps the last reading.
+        if let (Some(m), Some(db)) = (&self.meter, deepest) {
+            m.set(db);
+        }
+    }
+    fn meter(&self) -> Option<FilterMeter> {
+        self.meter.clone()
     }
 }
 
@@ -305,7 +339,7 @@ impl Filter for Compressor {
         FilterTarget::Audio
     }
     fn create(&self, settings: &Settings) -> Result<Box<dyn FilterInstance>, PluginError> {
-        DspFilter::create("compressor", COMPRESSOR, settings)
+        DspFilter::create("compressor", COMPRESSOR, true, settings)
     }
 }
 
@@ -340,7 +374,7 @@ impl Filter for Limiter {
         FilterTarget::Audio
     }
     fn create(&self, settings: &Settings) -> Result<Box<dyn FilterInstance>, PluginError> {
-        DspFilter::create("limiter", LIMITER, settings)
+        DspFilter::create("limiter", LIMITER, true, settings)
     }
 }
 
@@ -375,7 +409,7 @@ impl Filter for Equalizer {
         FilterTarget::Audio
     }
     fn create(&self, settings: &Settings) -> Result<Box<dyn FilterInstance>, PluginError> {
-        DspFilter::create("simple_eq", EQUALIZER, settings)
+        DspFilter::create("simple_eq", EQUALIZER, false, settings)
     }
 }
 
@@ -1122,6 +1156,86 @@ mod tests {
         let mut x = tone(997.0, 1.0, 20);
         let peak = to_db(run_peak(l.as_mut(), &mut x, 10));
         assert!((-6.5..=-6.0).contains(&peak), "{peak} dBFS");
+    }
+
+    #[test]
+    fn the_compressor_and_the_limiter_publish_their_gain_reduction() {
+        // −6 dBFS through a −18 dB threshold at 4:1 cuts about 9 dB; a 0 dBFS tone under a −6 dB
+        // ceiling is cut by about 6 dB.
+        let cases: [(&dyn Filter, Settings, f32, std::ops::RangeInclusive<f32>); 2] = [
+            (&Compressor, Compressor.schema().defaults().with("ratio", 4.0), from_db(-6.0), 7.5..=10.5),
+            (&Limiter, Limiter.schema().defaults().with("ceiling_db", -6.0), 1.0, 5.5..=6.5),
+        ];
+        for (filter, s, amp, range) in cases {
+            let id = filter.id();
+            let mut f = filter.create(&s).unwrap();
+            let meter = f.meter().unwrap_or_else(|| panic!("{id} has a meter"));
+            assert!(f.meter().is_some_and(|m| m.same(&meter)), "{id}: one reading");
+            assert_eq!(meter.get(), 0.0, "{id} before any audio");
+            run_peak(f.as_mut(), &mut tone(997.0, amp, 40), 1);
+            assert!(range.contains(&meter.get()), "{id}: {} dB", meter.get());
+            // A block without a whole frame keeps the reading.
+            let before = meter.get();
+            f.process_audio(&mut [0.5]);
+            assert_eq!(meter.get(), before, "{id}");
+            // An update keeps the same reading.
+            f.update(&s).unwrap();
+            assert!(f.meter().is_some_and(|m| m.same(&meter)), "{id} after an update");
+            // Silence lets the reduction fall back to 0.
+            run_peak(f.as_mut(), &mut vec![0.0; 40 * BLOCK_SAMPLES], 1);
+            assert!(meter.get() < 0.01, "{id} after silence: {} dB", meter.get());
+        }
+    }
+
+    #[test]
+    fn a_long_block_reads_the_deepest_reduction_of_its_parts() {
+        let s = Compressor.schema().defaults().with("ratio", 4.0);
+        let mut c = Compressor.create(&s).unwrap();
+        let meter = c.meter().unwrap();
+        // Loud blocks followed by about 0.4 s of quiet ones in the same call: the reduction
+        // relaxes to nearly 0 by the end, but the reading is the loud part's.
+        let mut x = tone(997.0, from_db(-6.0), 8);
+        x.extend(tone(997.0, from_db(-60.0), 20));
+        c.process_audio(&mut x);
+        assert!(meter.get() > 7.0, "{} dB", meter.get());
+    }
+
+    #[test]
+    fn the_gate_publishes_how_far_it_turns_the_source_down() {
+        let s = NoiseGate.schema().defaults().with("hold_ms", 0).with("release_ms", 1).with("attack_ms", 1);
+        let mut g = NoiseGate.create(&s).unwrap();
+        let meter = g.meter().unwrap();
+        assert!(g.meter().is_some_and(|m| m.same(&meter)));
+        // Open on loud input: no reduction.
+        g.process_audio(&mut vec![0.5f32; BLOCK_SAMPLES]);
+        g.process_audio(&mut vec![0.5f32; BLOCK_SAMPLES]);
+        assert_eq!(meter.get(), 0.0);
+        // Closed on quiet input: the gain of 0 reads as the meter's full 60 dB.
+        g.process_audio(&mut vec![0.001f32; BLOCK_SAMPLES]);
+        g.process_audio(&mut vec![0.001f32; BLOCK_SAMPLES]);
+        assert_eq!(meter.get(), -METER_FLOOR_DB);
+        // A block without a whole frame reads the gate's present gain.
+        g.process_audio(&mut [0.001]);
+        assert_eq!(meter.get(), -METER_FLOOR_DB);
+        // Opening over 1 s, the first block reads its first, nearly closed frame; about 1.3 s of
+        // loud blocks later the gate is open.
+        let slow = s.clone().with("attack_ms", 1000);
+        g.update(&slow).unwrap();
+        g.process_audio(&mut vec![0.5f32; BLOCK_SAMPLES]);
+        assert!(meter.get() > 20.0 && meter.get() <= -METER_FLOOR_DB, "{} dB", meter.get());
+        for _ in 0..60 {
+            g.process_audio(&mut vec![0.5f32; BLOCK_SAMPLES]);
+        }
+        assert!(meter.get() < 0.5, "{} dB", meter.get());
+    }
+
+    #[test]
+    fn filters_that_do_not_reduce_gain_have_no_meter() {
+        let audio: [&dyn Filter; 2] = [&Gain, &Equalizer];
+        for f in audio {
+            assert!(f.create(&f.schema().defaults()).unwrap().meter().is_none(), "{}", f.id());
+        }
+        assert!(ColorCorrection.create(&ColorCorrection.schema().defaults()).unwrap().meter().is_none());
     }
 
     #[test]

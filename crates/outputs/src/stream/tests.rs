@@ -313,6 +313,7 @@ fn a_lost_connection_is_made_again() {
     assert!(matches!(again[2], Seen::Media { timestamp: 0, .. }), "{again:?}");
     let d = until(&out, "a", |d| d.status == DestinationStatus::Live && d.reconnects == 1);
     assert!(d.bytes > 0, "{d:?}");
+    assert_eq!(out.reconnects(), 1, "the sum over the destinations");
     drop(feed);
     out.stop().unwrap();
     until_closed(&seen);
@@ -338,6 +339,7 @@ fn connections_lost_soon_after_they_are_made_count_as_failed_tries() {
     let feed = Feed::new(&out);
     let d = until(&out, "b", |d| d.reconnects == 3 && d.status == DestinationStatus::Live);
     assert!(d.bytes > 0, "{d:?}");
+    assert_eq!(out.reconnects(), 3);
     drop(feed);
     out.stop().unwrap();
     drop(seen);
@@ -528,6 +530,20 @@ fn a_key_at_the_end_of_the_address_is_split_off() {
     assert!(!format!("{:?}", target("a", "rtmp://h/live/secret", "")).contains("secret"));
     assert_eq!(target("a", "rtmps://host/app?token=secret", "k").shown(), "rtmps://host/app?<redacted>");
     assert_eq!(target("a", "rtmp://host/live/name?token=secret", "").shown(), "rtmp://host/live?<redacted>");
+}
+
+/// Every server a streaming service preset fills in connects over TLS with the key as given.
+#[test]
+fn every_preset_server_is_an_rtmps_address_the_client_takes() {
+    let servers: Vec<(&str, &str)> = studiocraft_model::SERVICES.iter().filter_map(|s| s.server.map(|server| (s.id, server))).collect();
+    assert!(!servers.is_empty());
+    for (id, server) in servers {
+        let c = target(id, server, "live_key").config().unwrap_or_else(|e| panic!("{id}: {server}: {e}"));
+        assert!(c.endpoint.tls(), "{id}");
+        assert_eq!((c.endpoint.port(), c.key.expose()), (443, "live_key"), "{id}");
+        assert!(!c.endpoint.app().is_empty() && !c.endpoint.app().ends_with('/'), "{id}: {}", c.endpoint.app());
+        assert_eq!(target(id, server, "live_key").shown(), server, "{id}: the server is shown as the preset gives it");
+    }
 }
 
 #[test]

@@ -1,16 +1,19 @@
 //! The Streaming window (View › Streaming): every stream destination of the profile with its on or
-//! off setting, its server with the key hidden, where its key comes from and, while the stream
-//! runs, what it is doing. Each change runs one of the window's `stream.destination*` commands.
+//! off setting, the streaming service it is set up for with the service's logo where the service
+//! allows it, its server with the key hidden, where its key comes from and, while the stream runs,
+//! what it is doing. Each change runs one of the window's `stream.destination*` commands.
 
-use egui::{RichText, Ui};
+use egui::{RichText, Role, Sense, Ui, WidgetInfo, vec2};
 use serde_json::{Value, json};
 use studiocraft_model::profile::{MAX_DESTINATION_ID, MAX_DESTINATIONS, PRIMARY_DESTINATION};
+use studiocraft_model::services::{self, SERVICES};
 use studiocraft_model::{Destination, KeyRef, StreamSettings};
 use studiocraft_plugin::{DestinationState, DestinationStatus};
 use studiocraft_studio::OutputKind;
 
 use crate::i18n::Msg;
 use crate::kit::tokens::Palette;
+use crate::logos::{self, Logos, ROW_TILE};
 use crate::settings::key_source;
 use crate::theme;
 use crate::{Act, StudioApp};
@@ -27,12 +30,16 @@ pub(crate) struct StreamingPanel {
     pub(crate) editing: Option<Edit>,
     /// The name of the profile the open details belong to.
     pub(crate) profile: String,
+    /// The decoded service logos.
+    pub(crate) logos: Logos,
 }
 
 /// The open details of one destination. Nothing changes until Save.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct Edit {
     pub(crate) id: String,
+    /// The id of the streaming service the destination is set up for; empty for a custom server.
+    pub(crate) service: String,
     pub(crate) name: String,
     pub(crate) server: String,
     pub(crate) key: KeyChoice,
@@ -86,17 +93,39 @@ impl KeyChoice {
 impl Edit {
     fn of(d: &Destination) -> Edit {
         let held_name = if let KeyRef::Held(n) = &d.key { n.clone() } else { d.id.clone() };
-        Edit { id: d.id.clone(), name: d.name.clone(), server: d.server.clone(), key: KeyChoice::of(&d.key), held_name, ..Edit::default() }
+        Edit {
+            id: d.id.clone(),
+            service: d.service.clone(),
+            name: d.name.clone(),
+            server: d.server.clone(),
+            key: KeyChoice::of(&d.key),
+            held_name,
+            ..Edit::default()
+        }
     }
 
     /// The `stream.destination_set` parameters that save these details.
     pub(crate) fn params(&self) -> Value {
-        let mut p = json!({"id": self.id, "name": self.name, "server": self.server, "key": self.key.name()});
+        let mut p = json!({"id": self.id, "service": self.service, "name": self.name, "server": self.server, "key": self.key.name()});
         if self.key == KeyChoice::Held {
             p["held_name"] = json!(self.held_name);
         }
         p
     }
+
+    /// Choose the service `id` (empty for a custom server), changing the server as a change of
+    /// service does on save ([`services::set_service`]).
+    fn set_service(&mut self, id: &str) {
+        let mut d = Destination { server: std::mem::take(&mut self.server), service: self.service.clone(), ..Destination::default() };
+        services::set_service(&mut d, id);
+        self.server = d.server;
+        self.service = d.service;
+    }
+}
+
+/// The name of the service a destination was set up for, or Custom server.
+fn service_name(id: &str) -> String {
+    services::service(id).map_or_else(|| tl!("Custom server").to_string(), |svc| svc.name.to_string())
 }
 
 /// `server` as the window shows it: a user name and password before the host, a part after the
@@ -201,10 +230,22 @@ pub(crate) fn show(ui: &mut Ui, view: &View, panel: &mut StreamingPanel, acts: &
     let count = view.stream.destinations.len();
     ui.horizontal(|ui| {
         let full = count >= MAX_DESTINATIONS;
-        let add = ui.add_enabled(!full, egui::Button::new(tl!("Add Destination")));
-        if add.clicked() {
-            acts.push(Act::run("stream.destination_add", json!({})));
-        }
+        // A destination for a streaming service, or for a server of the user's own choosing.
+        ui.add_enabled_ui(!full, |ui| {
+            ui.menu_button(tl!("Add Destination"), |ui| {
+                for svc in SERVICES {
+                    if ui.button(svc.name).clicked() {
+                        acts.push(Act::run("stream.destination_add", json!({"service": svc.id})));
+                        ui.close();
+                    }
+                }
+                ui.separator();
+                if ui.button(tl!("Custom server")).clicked() {
+                    acts.push(Act::run("stream.destination_add", json!({})));
+                    ui.close();
+                }
+            });
+        });
         ui.weak(craft_i18n::fmt(tl!("{n} of {max} destinations"), &[("n", &count.to_string()), ("max", &MAX_DESTINATIONS.to_string())]));
     });
     if count == 0 {
@@ -232,8 +273,25 @@ fn row(
     acts: &mut Vec<Act>,
     palette: &Palette,
 ) {
-    let title = if d.name.trim().is_empty() { d.id.clone() } else { d.name.clone() };
+    let preset = services::service(&d.service);
+    let title = match preset {
+        _ if !d.name.trim().is_empty() => d.name.clone(),
+        Some(svc) => svc.name.to_string(),
+        None => d.id.clone(),
+    };
     ui.horizontal(|ui| {
+        // A destination set up for a service shows the service's logo where it may stand beside
+        // text at this size, and a plain tile otherwise.
+        if preset.is_some() {
+            let (tile, _) = ui.allocate_exact_size(vec2(ROW_TILE, ROW_TILE), Sense::hover());
+            if ui.is_rect_visible(tile) {
+                let radius = theme::sizes(ui.ctx()).radius_control;
+                match logos::logo(&d.service).filter(|l| l.fits_row(ROW_TILE, ui.ctx().pixels_per_point())) {
+                    Some(l) => panel.logos.paint(ui, tile, l, palette, radius),
+                    None => Logos::paint_plain(ui, tile, palette, radius),
+                }
+            }
+        }
         let mut on = d.enabled;
         if ui.checkbox(&mut on, RichText::new(title).strong()).on_hover_text(tl!("Send to this destination when the stream starts")).changed() {
             acts.push(Act::run("stream.destination_set", json!({"id": d.id, "enabled": on})));
@@ -259,6 +317,9 @@ fn row(
             }
         });
     });
+    if let Some(svc) = preset {
+        ui.label(RichText::new(craft_i18n::fmt(tl!("Stream to {service}"), &[("service", svc.name)])).small());
+    }
     let server = if d.server.trim().is_empty() { tl!("No server set").to_string() } else { shown_server(&d.server) };
     ui.monospace(server);
     ui.label(RichText::new(panel_key_source(&d.key)).small().weak());
@@ -274,33 +335,81 @@ fn row(
         Tone::Warn => palette.warn,
     };
     ui.colored_label(color, text);
-    if let Some(e) = panel.editing.as_mut().filter(|e| e.id == d.id) {
-        let close = details(ui, e, view, acts);
+    let StreamingPanel { editing, logos, .. } = panel;
+    if let Some(e) = editing.as_mut().filter(|e| e.id == d.id) {
+        let close = details(ui, e, view, logos, acts);
         if close {
-            panel.editing = None;
+            *editing = None;
         }
     }
 }
 
+/// The logo of the service `e` is set up for, on a row of its own at its full size, linked to the
+/// service's page about streaming.
+fn details_logo(ui: &mut Ui, e: &Edit, logos: &mut Logos, acts: &mut Vec<Act>) {
+    let (Some(svc), Some(l)) = (services::service(&e.service), logos::logo(&e.service)) else { return };
+    let tile = l.header_tile(ui.ctx().pixels_per_point());
+    let (rect, r) = ui.allocate_exact_size(vec2(l.header_width(tile), tile), Sense::click());
+    let hint = craft_i18n::fmt(tl!("Where {service} shows your server and key"), &[("service", svc.name)]);
+    r.widget_info(|| WidgetInfo::labeled(Role::Link, true, &hint));
+    if ui.is_rect_visible(rect) {
+        let p = theme::palette(ui.ctx());
+        logos.paint(ui, rect, l, p, theme::sizes(ui.ctx()).radius_surface);
+    }
+    if r.on_hover_text(&hint).clicked() {
+        acts.push(Act::OpenUrl(svc.source.to_string()));
+    }
+    ui.add_space(l.header_gap(tile));
+}
+
 /// The open details of a destination; whether they closed.
-fn details(ui: &mut Ui, e: &mut Edit, view: &View, acts: &mut Vec<Act>) -> bool {
+fn details(ui: &mut Ui, e: &mut Edit, view: &View, logos: &mut Logos, acts: &mut Vec<Act>) -> bool {
     let mut close = false;
     egui::Frame::group(ui.style()).show(ui, |ui| {
+        details_logo(ui, e, logos, acts);
         egui::Grid::new("destination-details").num_columns(2).spacing([12.0, 6.0]).show(ui, |ui| {
+            ui.label(tl!("Service"));
+            craft_ui::ComboBox::from_id_salt("destination-service").selected_text(service_name(&e.service)).width(260.0).show_ui(ui, |ui| {
+                if ui.selectable_label(e.service.is_empty(), tl!("Custom server")).clicked() && !e.service.is_empty() {
+                    e.set_service("");
+                }
+                for svc in SERVICES {
+                    if ui.selectable_label(e.service == svc.id, svc.name).clicked() && e.service != svc.id {
+                        e.set_service(svc.id);
+                    }
+                }
+            });
+            ui.end_row();
             ui.label(tl!("Name"));
-            ui.add(egui::TextEdit::singleline(&mut e.name).char_limit(MAX_NAME).desired_width(260.0));
+            let preset = services::service(&e.service);
+            let name_hint = preset.map_or("", |svc| svc.name);
+            ui.add(egui::TextEdit::singleline(&mut e.name).char_limit(MAX_NAME).hint_text(name_hint).desired_width(260.0));
             ui.end_row();
             ui.label(tl!("Server"));
+            // A service that shows each account its own server says where to find it.
+            let own_server = preset.filter(|svc| svc.server.is_none());
+            let server_hint = if own_server.is_some() { tl!("Copy it from your account") } else { tl!("rtmp://live.example.com/app") };
             // The address can hold a key, so the field hides its text until Show.
-            ui.horizontal(|ui| {
-                ui.add(
-                    egui::TextEdit::singleline(&mut e.server)
-                        .password(!e.show_server)
-                        .hint_text(tl!("rtmp://live.example.com/app"))
-                        .char_limit(MAX_SERVER)
-                        .desired_width(260.0),
-                );
-                ui.toggle_value(&mut e.show_server, tl!("Show"));
+            ui.vertical(|ui| {
+                ui.horizontal(|ui| {
+                    ui.add(
+                        egui::TextEdit::singleline(&mut e.server)
+                            .password(!e.show_server)
+                            .hint_text(server_hint)
+                            .char_limit(MAX_SERVER)
+                            .desired_width(260.0),
+                    );
+                    ui.toggle_value(&mut e.show_server, tl!("Show"));
+                });
+                if let Some(svc) = own_server {
+                    ui.horizontal(|ui| {
+                        let text = craft_i18n::fmt(tl!("{service} shows the server and key for your account."), &[("service", svc.name)]);
+                        ui.label(RichText::new(text).small().weak());
+                        if ui.link(tl!("Where to find them")).clicked() {
+                            acts.push(Act::OpenUrl(svc.source.to_string()));
+                        }
+                    });
+                }
             });
             ui.end_row();
             ui.label(tl!("Stream key"));
@@ -384,6 +493,18 @@ fn key_param(cmd: &craft_keymap::CommandRef, id: &str, current: Option<&KeyRef>)
         return Err(tmsg!("`{command}`: `held_name` goes with `key`: `held`", command = cmd.id));
     }
     Ok(Some(key))
+}
+
+/// The `service` parameter: the id of a streaming service in [`SERVICES`], or empty for a server
+/// of the user's own choosing. `current` is the destination's service, which is accepted as it is
+/// even when this version does not know it.
+fn service_param(cmd: &craft_keymap::CommandRef, current: Option<&str>) -> Result<Option<String>, Msg> {
+    let Some(id) = opt_str(cmd, "service")? else { return Ok(None) };
+    if !id.is_empty() && services::service(id).is_none() && current != Some(id) {
+        let ids: Vec<&str> = SERVICES.iter().map(|s| s.id).collect();
+        return Err(tmsg!("`{command}`: `service` is empty or one of {ids}, not `{service}`", command = cmd.id, ids = ids.join(", "), service = id));
+    }
+    Ok(Some(id.to_string()))
 }
 
 /// The `name` parameter, trimmed, at most [`MAX_NAME`] characters.
@@ -496,6 +617,7 @@ fn listed(d: &Destination, running: bool, live: Option<&DestinationState>, held:
         "id": d.id,
         "name": d.name,
         "enabled": d.enabled,
+        "service": d.service,
         "server": shown_server(&d.server),
         "key": KeyChoice::of(&d.key).name(),
     });
@@ -552,7 +674,7 @@ impl StudioApp {
         }
         self.studio.set_profile(p).map_err(|e| e.to_string())?;
         if let Err(e) = self.store.save_profile(self.studio.profile()) {
-            let _ = self.studio.set_profile(previous);
+            let _ = self.studio.restore_profile(previous);
             return Err(tmsg!("The profile could not be saved: {error}", error = e));
         }
         if let Some(w) = &mut self.settings {
@@ -587,8 +709,11 @@ impl StudioApp {
         self.sync_streaming_profile();
         match cmd.id.as_str() {
             "view.streaming" => {
-                self.streaming =
-                    if self.streaming.is_some() { None } else { Some(StreamingPanel { editing: None, profile: self.studio.profile().name.clone() }) };
+                self.streaming = if self.streaming.is_some() {
+                    None
+                } else {
+                    Some(StreamingPanel { profile: self.studio.profile().name.clone(), ..StreamingPanel::default() })
+                };
                 Ok(json!({"on": self.streaming.is_some()}))
             }
             "stream.destinations" => {
@@ -607,7 +732,10 @@ impl StudioApp {
             }
             "stream.destination_add" => {
                 let name = name_param(cmd)?;
-                let server = server_param(cmd)?;
+                let service = service_param(cmd, None)?.unwrap_or_default();
+                // A service that documents one ingest server for every account fills it in.
+                let preset_server = services::service(&service).and_then(|svc| svc.server).map(str::to_string);
+                let server = server_param(cmd)?.or(preset_server);
                 let enabled = opt_bool(cmd, "enabled")?;
                 let live = self.live_destinations();
                 let current = &self.studio.profile().stream;
@@ -625,6 +753,7 @@ impl StudioApp {
                     enabled: enabled.unwrap_or(true),
                     server: server.unwrap_or_default(),
                     key,
+                    service,
                 };
                 self.change_destinations(&id, |s| {
                     if s.destinations.len() >= MAX_DESTINATIONS {
@@ -667,22 +796,41 @@ impl StudioApp {
                 let changed = self.change_destinations(&id, |s| {
                     let d = s.destinations.iter_mut().find(|d| d.id == id).ok_or_else(|| tmsg!("there is no stream destination `{id}`", id = id))?;
                     let key = key_param(cmd, &id, Some(&d.key))?;
-                    if !from_user {
-                        let after = (key.as_ref().unwrap_or(&d.key), server.as_deref().unwrap_or(&d.server));
-                        guard_stream_key(&cmd.id, &id, key.as_ref(), opt_str(cmd, "held_name")?, Some((&d.key, &d.server)), after)?;
+                    let mut next = d.clone();
+                    // A change of service changes the server as the service's preset does; a
+                    // `server` or `enabled` given with it wins, and a destination given a server
+                    // keeps its on or off setting.
+                    if let Some(svc) = service_param(cmd, Some(&d.service))?
+                        && svc != d.service
+                    {
+                        services::set_service(&mut next, &svc);
                     }
                     if let Some(n) = &name {
-                        d.name.clone_from(n);
+                        next.name.clone_from(n);
                     }
                     if let Some(v) = &server {
-                        d.server.clone_from(v);
+                        next.server.clone_from(v);
+                        if !v.is_empty() {
+                            next.enabled = d.enabled;
+                        }
                     }
                     if let Some(on) = enabled {
-                        d.enabled = on;
+                        next.enabled = on;
                     }
-                    if let Some(k) = key {
-                        d.key = k;
+                    if let Some(k) = key.clone() {
+                        next.key = k;
                     }
+                    if !from_user {
+                        guard_stream_key(
+                            &cmd.id,
+                            &id,
+                            key.as_ref(),
+                            opt_str(cmd, "held_name")?,
+                            Some((&d.key, &d.server)),
+                            (&next.key, &next.server),
+                        )?;
+                    }
+                    *d = next;
                     Ok(())
                 })?;
                 if let Some(panel) = &mut self.streaming

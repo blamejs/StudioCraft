@@ -21,7 +21,7 @@ fn shared_gpu() -> Option<Gpu> {
 }
 
 /// A studio without audio devices or a graphics device.
-fn headless() -> Studio {
+pub(crate) fn headless() -> Studio {
     studio_with(None, SceneCollection::new("Test", "Scene"), Profile::default())
 }
 
@@ -74,6 +74,178 @@ fn a_cut_switches_at_once() {
     s.run("scene.add", &json!({"name": "Second"})).unwrap();
     s.run("scene.select", &json!({"scene": "Second"})).unwrap();
     assert!(s.transition_progress().is_none());
+}
+
+mod scene_thumbnails {
+    use super::*;
+
+    /// The source ids each requested scene picture draws, bottom to top, in slot order.
+    fn drawn(s: &Studio) -> Vec<Vec<u64>> {
+        s.thumbnail_request().map(|r| r.scenes.iter().map(|d| d.items.iter().map(|i| i.source.0).collect()).collect()).unwrap_or_default()
+    }
+
+    #[test]
+    fn the_named_scenes_are_drawn_in_order_until_none_is_named() {
+        let mut s = headless();
+        let (out, _) = s.run("source.add", &json!({"kind": "color", "name": "Card"})).unwrap();
+        let card = out["source"].as_u64().unwrap_or_else(|| panic!("{out}"));
+        s.run("scene.add", &json!({"name": "Break"})).unwrap();
+        s.tick();
+        let first = s.collection().scene_by_name("Scene").map(|c| c.id).unwrap();
+        let brk = s.collection().scene_by_name("Break").map(|c| c.id).unwrap();
+        assert!(s.thumbnail_request().is_none(), "no picture is drawn before one is asked for");
+        assert!(s.thumbnail_scenes().is_empty());
+
+        let (out, _) = s.run("scene.thumbnails", &json!({"scenes": ["Break", "Scene"]})).unwrap();
+        assert_eq!(out, json!({"scenes": [brk, first], "fps": 2.0}));
+        assert_eq!(s.thumbnail_scenes(), [brk, first]);
+        assert_eq!(drawn(&s), [vec![], vec![card]]);
+        let request = s.thumbnail_request().unwrap();
+        assert_eq!((request.fps, request.size), (2.0, (256, 144)));
+        assert_eq!(request.keys, [1, 2], "each slot has a key of its own");
+        // A reordered list keeps each scene's key, so only the slots matter to the compositor.
+        s.run("scene.thumbnails", &json!({"scenes": ["Scene", "Break"]})).unwrap();
+        assert_eq!(s.thumbnail_request().map(|r| r.keys), Some(vec![2, 1]));
+        s.run("scene.thumbnails", &json!({"scenes": ["Break", "Scene"]})).unwrap();
+        assert!(s.thumbnail_views().is_none(), "nothing is drawn without a graphics device");
+
+        // A refused call keeps the last list.
+        assert!(s.run("scene.thumbnails", &json!({"scenes": ["Nope"]})).is_err());
+        assert!(s.run("scene.thumbnails", &json!({"scenes": [first], "fps": 5})).is_err());
+        assert_eq!(s.thumbnail_scenes(), [brk, first]);
+
+        // A scene's change reaches its picture, and the rate is the one asked for.
+        s.run("source.add", &json!({"kind": "color", "name": "Logo", "scene": "Break"})).unwrap();
+        s.run("scene.thumbnails", &json!({"scenes": ["Break", "Scene"], "fps": 4})).unwrap();
+        assert_eq!(drawn(&s)[0].len(), 1);
+        assert_eq!(s.thumbnail_request().map(|r| r.fps), Some(4.0));
+
+        // A removed scene leaves the list, and the pictures stop when none is left.
+        let undo = s.engine.undo_label();
+        s.run("scene.remove", &json!({"scene": "Break"})).unwrap();
+        s.tick();
+        assert_eq!(s.thumbnail_scenes(), [first]);
+        assert_eq!(drawn(&s), [vec![card]]);
+        assert_ne!(s.engine.undo_label(), undo);
+        let undo = s.engine.undo_label();
+        let (out, _) = s.run("scene.thumbnails", &json!({"scenes": []})).unwrap();
+        assert_eq!(out, json!({"scenes": [], "fps": null}));
+        assert!(s.thumbnail_request().is_none());
+        assert_eq!(s.engine.undo_label(), undo, "no undo step");
+        s.run("scene.add", &json!({"name": "Only"})).unwrap();
+        s.run("scene.thumbnails", &json!({"scenes": ["Only"]})).unwrap();
+        s.run("scene.remove", &json!({"scene": "Only"})).unwrap();
+        s.tick();
+        assert!(s.thumbnail_scenes().is_empty());
+        assert!(s.thumbnail_request().is_none());
+
+        // Another collection's scene ids can match these, so its scenes are not drawn.
+        s.run("scene.thumbnails", &json!({"scenes": [first]})).unwrap();
+        let old_key = s.thumbnail_request().map(|r| r.keys);
+        s.load_collection(SceneCollection::new("Other", "Scene"));
+        assert!(s.collection().scene(first).is_some(), "the new collection has a scene with the same id");
+        assert!(s.thumbnail_scenes().is_empty());
+        assert!(s.thumbnail_request().is_none());
+        // Asked for again, its slot gets a new key, so the compositor draws it at once.
+        s.run("scene.thumbnails", &json!({"scenes": [first]})).unwrap();
+        let new_key = s.thumbnail_request().map(|r| r.keys);
+        assert!(new_key.is_some() && new_key != old_key, "{old_key:?} {new_key:?}");
+    }
+
+    #[test]
+    fn the_compositor_hears_of_scene_pictures_only_while_some_are_shown() {
+        let mut s = studio_with(Some(noop_gpu()), SceneCollection::new("Test", "Scene"), small_profile());
+        let sent = |s: &Studio| s.video.as_ref().map(|v| v.thumbnails_sent.clone());
+        let sends = |s: &Studio| s.video.as_ref().map_or(0, |v| v.thumbnail_sends);
+        assert!(matches!(sent(&s), Some(None)), "the compositor runs and draws no scene picture");
+        // A list view asks for no pictures, so collection changes send the compositor nothing.
+        s.run("source.add", &json!({"kind": "color", "name": "Card"})).unwrap();
+        s.tick();
+        assert!(matches!(sent(&s), Some(None)));
+        assert_eq!(sends(&s), 0);
+
+        s.run("scene.thumbnails", &json!({"scenes": ["Scene"]})).unwrap();
+        let first = sent(&s).flatten().expect("the pictures are asked for");
+        assert_eq!((first.scenes.len(), first.scenes[0].items.len(), first.fps), (1, 1, 2.0));
+        assert_eq!(sends(&s), 1);
+        // The same list again sends nothing new.
+        s.run("scene.thumbnails", &json!({"scenes": ["Scene"]})).unwrap();
+        assert!(sent(&s).flatten().is_some_and(|r| Arc::ptr_eq(&r, &first)));
+        assert_eq!(sends(&s), 1);
+        // A change to a drawn scene sends the scene as it is now.
+        s.run("source.add", &json!({"kind": "color", "name": "Logo"})).unwrap();
+        s.tick();
+        assert!(sent(&s).flatten().is_some_and(|r| r.scenes[0].items.len() == 2));
+        let before = sends(&s);
+        s.run("scene.thumbnails", &json!({"scenes": []})).unwrap();
+        assert!(matches!(sent(&s), Some(None)), "an empty list stops the pictures");
+        assert_eq!(sends(&s), before + 1, "the stop is sent once");
+        assert!(s.thumbnail_views().is_none());
+        // After the stop, changes send nothing again.
+        s.run("source.add", &json!({"kind": "color", "name": "Third"})).unwrap();
+        s.tick();
+        assert_eq!(sends(&s), before + 1);
+
+        // Textures with fewer slots than the list has scenes are withheld until new ones arrive.
+        let mut comp = Compositor::new(noop_gpu(), 32, 18).unwrap();
+        let one_slot = ThumbnailRequest { scenes: vec![studiocraft_render::SceneDesc::default()], ..ThumbnailRequest::default() };
+        comp.set_thumbnails(Some(Arc::new(one_slot)));
+        let one = comp.thumbnail_views().expect("the request makes one slot");
+        assert_eq!(one.slots.len(), 1);
+        s.run("scene.thumbnails", &json!({"scenes": ["Scene"]})).unwrap();
+        if let Some(v) = &mut s.video {
+            v.thumbnail_views = Some(Arc::clone(&one));
+        }
+        assert!(s.thumbnail_views().is_some_and(|v| Arc::ptr_eq(&v, &one)));
+        s.run("scene.add", &json!({"name": "Two"})).unwrap();
+        s.run("scene.thumbnails", &json!({"scenes": ["Scene", "Two"]})).unwrap();
+        assert!(s.thumbnail_views().is_none(), "one slot for two scenes");
+        s.run("scene.thumbnails", &json!({"scenes": ["Two"]})).unwrap();
+        assert!(s.thumbnail_views().is_some());
+    }
+}
+
+#[test]
+fn session_events_list_scene_switches_pauses_and_resumes_in_order() {
+    let mut s = headless();
+    let first = s.collection().program_scene.0;
+    assert_eq!(s.run("session.events", &json!({})).unwrap().0, json!({"events": [], "last": 0, "dropped": 0}));
+    s.run("scene.add", &json!({"name": "Second"})).unwrap();
+    let second = s.collection().program_scene.0;
+    assert_ne!(first, second, "a new scene goes on the program");
+    s.run("scene.select", &json!({"scene": "Second"})).unwrap();
+    s.run("pause.start", &json!({"countdown_s": 0})).unwrap();
+    s.run("scene.select", &json!({"scene": "Scene"})).unwrap();
+    s.run("pause.extend", &json!({"seconds": 5})).unwrap();
+    s.run("pause.stop", &json!({})).unwrap();
+    s.run("studio.toggle", &json!({})).unwrap();
+    s.run("scene.select", &json!({"scene": "Second"})).unwrap();
+    s.run("studio.toggle", &json!({})).unwrap();
+    let rev = s.engine().revision();
+    let (v, _) = s.run("session.events", &json!({})).unwrap();
+    assert_eq!(s.engine().revision(), rev, "reading the events changes nothing");
+    let kinds: Vec<&str> = v["events"].as_array().map(|a| a.iter().filter_map(|e| e["kind"].as_str()).collect()).unwrap_or_default();
+    // Selecting the scene the program already shows, adding time and choosing a preview scene in
+    // studio mode are not switches.
+    assert_eq!(kinds, ["scene", "pause", "scene", "resume"], "{v}");
+    let e = &v["events"];
+    assert_eq!(e[0]["from"], json!({"id": first, "name": "Scene"}));
+    assert_eq!(e[0]["to"], json!({"id": second, "name": "Second"}));
+    assert_eq!(e[2]["to"], json!({"id": first, "name": "Scene"}), "a switch under the pause screen is listed");
+    assert_eq!(e[0]["recording_s"], Value::Null, "nothing was recorded");
+    let seqs: Vec<u64> = e.as_array().map(|a| a.iter().filter_map(|e| e["seq"].as_u64()).collect()).unwrap_or_default();
+    assert_eq!(seqs, [1, 2, 3, 4]);
+    let times: Vec<u64> = e.as_array().map(|a| a.iter().filter_map(|e| e["time_ms"].as_u64()).collect()).unwrap_or_default();
+    assert!(times.windows(2).all(|w| w[0] <= w[1]), "{times:?}");
+    let (tail, _) = s.run("session.events", &json!({"since": 2})).unwrap();
+    assert_eq!(tail["events"].as_array().map(Vec::len), Some(2));
+    assert_eq!((tail["last"].clone(), tail["dropped"].clone()), (json!(4), json!(0)));
+    // Removing the program scene switches to another one; the removed scene has no name left.
+    s.run("scene.remove", &json!({"scene": "Scene"})).unwrap();
+    let (v, _) = s.run("session.events", &json!({"since": 4})).unwrap();
+    assert_eq!(v["events"][0]["from"], json!({"id": first, "name": null}), "{v}");
+    assert_eq!(v["events"][0]["to"]["id"], json!(second));
+    assert!(s.run("session.events", &json!({"since": -1})).is_err());
 }
 
 #[test]
@@ -151,6 +323,35 @@ fn a_source_with_nothing_to_show_still_settles() {
 }
 
 #[test]
+fn filter_meter_reads_a_compressor_and_is_null_for_a_filter_without_a_meter() {
+    let mut s = headless();
+    let (out, _) = s.run("source.add", &json!({"kind": "audio_input", "name": "Mic"})).unwrap();
+    let mic = out["source"].as_u64().unwrap_or_else(|| panic!("{out}"));
+    s.run("source.add", &json!({"kind": "color", "name": "Card"})).unwrap();
+    let add = |s: &mut Studio, source: &str, kind: &str| {
+        let (out, _) = s.run("filter.add", &json!({"source": source, "kind": kind})).unwrap();
+        out["filter"].as_u64().unwrap_or_else(|| panic!("{out}"))
+    };
+    let (comp, gain, crop) = (add(&mut s, "Mic", "compressor"), add(&mut s, "Mic", "gain"), add(&mut s, "Card", "crop_pad"));
+    let meter = |s: &mut Studio, source: serde_json::Value, filter: u64| s.run("filter.meter", &json!({"source": source, "filter": filter}));
+    let (rev, dirty) = (s.engine().revision(), s.engine().is_dirty());
+    for source in [json!("Mic"), json!(mic)] {
+        assert_eq!(meter(&mut s, source, comp).unwrap(), (json!({"gain_reduction_db": 0.0}), None), "a compressor fed nothing");
+    }
+    assert_eq!(meter(&mut s, json!("Mic"), gain).unwrap().0, serde_json::Value::Null, "gain has no meter");
+    assert_eq!(meter(&mut s, json!("Card"), crop).unwrap().0, serde_json::Value::Null, "a video filter");
+    assert_eq!((s.engine().revision(), s.engine().is_dirty()), (rev, dirty), "a reading changes nothing");
+    s.run("filter.enable", &json!({"source": "Mic", "filter": comp, "enabled": false})).unwrap();
+    assert_eq!(meter(&mut s, json!("Mic"), comp).unwrap().0, serde_json::Value::Null, "a disabled filter does not run");
+    s.run("filter.enable", &json!({"source": "Mic", "filter": comp, "enabled": true})).unwrap();
+    assert_eq!(meter(&mut s, json!("Mic"), comp).unwrap().0, json!({"gain_reduction_db": 0.0}));
+    assert!(meter(&mut s, json!("Card"), comp).is_err(), "a filter of another source");
+    assert!(meter(&mut s, json!("Ghost"), comp).is_err());
+    s.run("filter.remove", &json!({"source": "Mic", "filter": comp})).unwrap();
+    assert!(meter(&mut s, json!("Mic"), comp).is_err(), "a removed filter");
+}
+
+#[test]
 fn interface_commands_come_back_as_actions() {
     let mut s = headless();
     assert_eq!(s.run("app.settings", &json!({})).unwrap().1, Some(UiAction::OpenSettings));
@@ -174,6 +375,8 @@ fn recording_needs_the_graphics_device() {
     assert!(matches!(e, StudioError::Output(_)), "{e}");
     assert!(s.output(OutputKind::Recording).is_none());
     assert_eq!(s.state_json()["recording"]["active"], json!(false));
+    let e = s.run("record.marker", &json!({"name": "Goal"})).unwrap_err();
+    assert_eq!(e.to_string(), "no recording is running");
 }
 
 #[test]
@@ -185,6 +388,75 @@ fn streaming_needs_a_server() {
     let mut s = studio_with(Some(gpu), SceneCollection::new("Test", "Scene"), Profile::default());
     let e = s.run("stream.start", &json!({})).unwrap_err();
     assert!(e.to_string().contains("server"), "{e}");
+}
+
+/// The go-live check's item `id` in the result `r`.
+fn golive_item<'a>(r: &'a serde_json::Value, id: &str) -> &'a serde_json::Value {
+    r["items"].as_array().and_then(|a| a.iter().find(|i| i["id"] == id)).unwrap_or_else(|| panic!("no item {id} in {r}"))
+}
+
+#[test]
+fn the_golive_check_lists_each_item_and_changes_nothing() {
+    use studiocraft_model::{AudioState, Destination, KeyRef, SourceConfig};
+    let mut c = SceneCollection::new("Test", "Scene");
+    let mut ids = Vec::new();
+    for (kind, name) in [("no_such_plugin", "Old plug-in"), ("captions", "Captions")] {
+        let id = SourceId(c.alloc_id());
+        ids.push(id);
+        c.sources.push(SourceConfig {
+            id,
+            kind: kind.into(),
+            kind_version: 1,
+            name: name.into(),
+            settings: Settings::new(),
+            filters: vec![],
+            audio: AudioState::default(),
+        });
+    }
+    let mut p = Profile::default();
+    p.output.folder = std::env::temp_dir().display().to_string();
+    let mut s = studio_with(Some(noop_gpu()), c, p);
+    // A wait with no time limit, so the check takes the reader's answer.
+    s.golive.set_space_reader(Arc::new(|_p: &Path| Ok(golive::MIN_FREE_BYTES * 2)), Duration::MAX);
+    let (rev, dirty) = (s.engine().revision(), s.engine().is_dirty());
+
+    let r = s.run("golive.check", &json!({})).unwrap().0;
+    assert_eq!(r["ready"], json!(false));
+    let d = golive_item(&r, "destinations");
+    assert_eq!((&d["state"], &d["fix"], &d["text"]), (&json!("problem"), &json!("view.streaming"), &json!("No stream destination is turned on")));
+    assert_eq!(golive_item(&r, "encoder")["state"], json!("pass"), "{r}");
+    let space = golive_item(&r, "recording_space");
+    assert_eq!((&space["state"], &space["free_bytes"]), (&json!("pass"), &json!(golive::MIN_FREE_BYTES * 2)));
+    let old = golive_item(&r, &format!("source:{}", ids[0].0));
+    assert_eq!((&old["state"], &old["fix"], &old["source"]), (&json!("problem"), &json!(null), &json!(ids[0].0)));
+    assert_eq!(old["args"]["kind"], json!("no_such_plugin"));
+    let captions = golive_item(&r, "captions");
+    assert_eq!((&captions["state"], &captions["fix"]), (&json!("problem"), &json!("captions.toggle")), "a Live Captions source and captions off");
+    let problems = r["items"].as_array().map_or(0, |a| a.iter().filter(|i| i["state"] == "problem").count());
+    assert!(problems >= 3, "{r}");
+    assert_eq!((r["problems"].as_u64(), r["more_sources"].as_u64()), (Some(problems as u64), Some(0)), "{r}");
+
+    // A destination whose session key is not held is a problem until the key is held, and then
+    // unknown: it has not connected yet.
+    let mut p = s.profile().clone();
+    p.stream.destinations = vec![Destination {
+        id: "main".into(),
+        server: "rtmp://example.invalid/live".into(),
+        key: KeyRef::Held("k".into()),
+        ..Destination::default()
+    }];
+    s.set_profile(p).unwrap();
+    let r = s.run("golive.check", &json!({})).unwrap().0;
+    assert_eq!(golive_item(&r, "destination:main")["state"], json!("problem"));
+    s.hold_stream_key("k", "secret");
+    let r = s.run("golive.check", &json!({})).unwrap().0;
+    let d = golive_item(&r, "destination:main");
+    assert_eq!((&d["state"], &d["fix"], &d["destination"]), (&json!("unknown"), &json!(null), &json!("main")));
+    assert!(!r.to_string().contains("secret"), "the key is never in the result");
+
+    assert_eq!((s.engine().revision(), s.engine().is_dirty()), (rev, dirty), "the check changes no collection");
+    assert!(s.engine().undo_label().is_none(), "and adds no undo step");
+    assert!(s.run("golive.check", &json!({"fix": true})).is_err());
 }
 
 /// A thread that hands over each connection `listener` takes.
@@ -284,6 +556,314 @@ fn the_profile_changes_the_canvas() {
     s.set_profile(p).unwrap();
     assert_eq!(s.canvas(), (1280, 720));
     assert_eq!(s.state_json()["canvas"]["width"], json!(1280));
+}
+
+#[test]
+fn a_new_canvas_lays_out_the_scenes_as_one_undo_step() {
+    let mut s = headless();
+    // An image without a file never shows a picture, so it is placed by its corner.
+    s.run("source.add", &json!({"kind": "image", "name": "Logo", "transform": {"position": {"x": 960.0, "y": 540.0}}})).unwrap();
+    s.seal_history();
+    let at = |s: &Studio| s.collection().scenes[0].items[0].transform;
+    let mut p = s.profile().clone();
+    p.video.base_width = 1280;
+    p.video.base_height = 720;
+    s.set_profile(p.clone()).unwrap();
+    let t = at(&s);
+    assert!((t.position.x - 640.0).abs() < 0.01 && (t.position.y - 360.0).abs() < 0.01, "{t:?}");
+    assert!((t.scale.x - 2.0 / 3.0).abs() < 0.001, "{t:?}");
+    // Other settings leave the layout alone.
+    p.video.fps_num = 60;
+    s.set_profile(p).unwrap();
+    assert_eq!(at(&s), t);
+    s.run("edit.undo", &json!({})).unwrap();
+    assert_eq!(at(&s).position.x, 960.0, "one undo step takes the layout back");
+}
+
+#[test]
+fn a_filled_source_that_shows_nothing_at_a_canvas_change_fills_it_once_it_shows_a_picture() {
+    let mut s = headless();
+    let r = s.run("source.add", &json!({"kind": "color", "name": "Back", "settings": {"width": 400, "height": 300}})).unwrap();
+    let item = r.0["item"].clone();
+    let source = s.collection().scenes[0].items[0].source;
+    let (tx, rx) = std::sync::mpsc::sync_channel(1);
+    assert!(s.notify_source_shown(source, tx));
+    rx.recv().unwrap();
+    let native = s.source_size(source).unwrap();
+    let fill = studiocraft_model::Transform::fill(native, (1920, 1080));
+    s.run("item.transform", &json!({"item": item, "transform": fill, "fit": "fill"})).unwrap();
+    // The source loses its picture just before the canvas changes.
+    let video = Arc::clone(&s.sources.io(source).unwrap().video);
+    video.publish(studiocraft_plugin::VideoContent::Empty);
+    assert_eq!(s.source_size(source), None);
+    let mut p = s.profile().clone();
+    (p.video.base_width, p.video.base_height) = (1080, 1920);
+    s.set_profile(p).unwrap();
+    let at = |s: &Studio| s.collection().scenes[0].items[0].transform;
+    assert_ne!(at(&s), studiocraft_model::Transform::fill(native, (1080, 1920)));
+    s.tick();
+    assert_ne!(at(&s), studiocraft_model::Transform::fill(native, (1080, 1920)), "nothing to place by yet");
+    // A picture too large to lay out by is not placed by; one of another size that follows is.
+    video.publish(studiocraft_plugin::VideoContent::Solid { rgba: [0; 4], width: 70_000, height: 300 });
+    s.tick();
+    assert_ne!(at(&s), studiocraft_model::Transform::fill(native, (1080, 1920)), "too large to place by");
+    // When the picture comes back, the item fills the new canvas.
+    video.publish(studiocraft_plugin::VideoContent::Solid { rgba: [0; 4], width: 400, height: 300 });
+    s.tick();
+    assert_eq!(at(&s), studiocraft_model::Transform::fill(native, (1080, 1920)));
+    assert_eq!(s.collection().scenes[0].items[0].fit, Some(studiocraft_model::FitMode::Fill));
+    // Once placed, it is not placed again: a move made later stays.
+    let moved = studiocraft_model::Transform { position: studiocraft_model::Vec2::new(5.0, 5.0), ..at(&s) };
+    s.run("item.transform", &json!({"item": item, "transform": moved})).unwrap();
+    s.tick();
+    assert_eq!(at(&s), moved);
+
+    // A layout that is undone, or taken back after a failed save, has nothing left to place.
+    let fill = studiocraft_model::Transform::fill(native, (1080, 1920));
+    s.run("item.transform", &json!({"item": item, "transform": fill, "fit": "fill"})).unwrap();
+    s.seal_history();
+    let tall = s.profile().clone();
+    let mut wide = tall.clone();
+    (wide.video.base_width, wide.video.base_height) = (1920, 1080);
+    video.publish(studiocraft_plugin::VideoContent::Empty);
+    s.set_profile(wide.clone()).unwrap();
+    s.run("edit.undo", &json!({})).unwrap();
+    video.publish(studiocraft_plugin::VideoContent::Solid { rgba: [0; 4], width: 400, height: 300 });
+    s.tick();
+    assert_eq!(at(&s), fill, "undo took the layout back");
+    // Redoing the layout puts the item back in the wait.
+    video.publish(studiocraft_plugin::VideoContent::Empty);
+    s.run("edit.redo", &json!({})).unwrap();
+    video.publish(studiocraft_plugin::VideoContent::Solid { rgba: [0; 4], width: 400, height: 300 });
+    s.tick();
+    assert_eq!(at(&s), studiocraft_model::Transform::fill(native, (1920, 1080)), "redo waits again");
+    s.run("edit.undo", &json!({})).unwrap();
+    s.run("edit.undo", &json!({})).unwrap();
+    assert_eq!(at(&s), fill);
+    // Undoing an unrelated edit leaves the wait as it is.
+    s.set_profile(tall.clone()).unwrap();
+    assert_eq!(at(&s), fill);
+    video.publish(studiocraft_plugin::VideoContent::Empty);
+    s.set_profile(wide.clone()).unwrap();
+    s.run("scene.add", &json!({"name": "Other"})).unwrap();
+    s.run("edit.undo", &json!({})).unwrap();
+    video.publish(studiocraft_plugin::VideoContent::Solid { rgba: [0; 4], width: 400, height: 300 });
+    s.tick();
+    assert_eq!(at(&s), studiocraft_model::Transform::fill(native, (1920, 1080)), "an unrelated undo keeps the wait");
+    s.run("edit.undo", &json!({})).unwrap();
+    s.run("edit.undo", &json!({})).unwrap();
+    assert_eq!(at(&s), fill);
+    s.set_profile(tall.clone()).unwrap();
+    assert_eq!(at(&s), fill);
+    video.publish(studiocraft_plugin::VideoContent::Empty);
+    s.set_profile(wide).unwrap();
+    s.restore_profile(tall).unwrap();
+    video.publish(studiocraft_plugin::VideoContent::Solid { rgba: [0; 4], width: 400, height: 300 });
+    s.tick();
+    assert_eq!(at(&s), fill, "the restore took the layout back");
+}
+
+#[test]
+fn restoring_a_profile_also_takes_back_placements_of_items_that_waited() {
+    let mut s = headless();
+    let r = s.run("source.add", &json!({"kind": "color", "name": "Back", "settings": {"width": 400, "height": 300}})).unwrap();
+    let item = r.0["item"].clone();
+    let source = s.collection().scenes[0].items[0].source;
+    let (tx, rx) = std::sync::mpsc::sync_channel(1);
+    assert!(s.notify_source_shown(source, tx));
+    rx.recv().unwrap();
+    let fill = studiocraft_model::Transform::fill((400, 300), (1920, 1080));
+    s.run("item.transform", &json!({"item": item, "transform": fill, "fit": "fill"})).unwrap();
+    s.seal_history();
+    s.mark_saved();
+    let video = Arc::clone(&s.sources.io(source).unwrap().video);
+    video.publish(studiocraft_plugin::VideoContent::Empty);
+    let previous = s.profile().clone();
+    let mut p = previous.clone();
+    (p.video.base_width, p.video.base_height) = (1080, 1920);
+    s.set_profile(p).unwrap();
+    video.publish(studiocraft_plugin::VideoContent::Solid { rgba: [0; 4], width: 400, height: 300 });
+    s.tick();
+    let at = |s: &Studio| s.collection().scenes[0].items[0].transform;
+    assert_eq!(at(&s), studiocraft_model::Transform::fill((400, 300), (1080, 1920)));
+    s.restore_profile(previous).unwrap();
+    assert_eq!(at(&s), fill);
+    assert!(!s.engine().is_dirty(), "the collection is clean again");
+    assert_eq!(s.engine().undo_label(), Some("Transform Source"), "no layout step is left");
+}
+
+#[test]
+fn restoring_a_profile_keeps_a_change_made_after_its_layout() {
+    let mut s = headless();
+    s.run("source.add", &json!({"kind": "image", "name": "Logo", "transform": {"position": {"x": 960.0, "y": 540.0}}})).unwrap();
+    s.run("scene.add", &json!({"name": "Other"})).unwrap();
+    s.seal_history();
+    s.mark_saved();
+    let previous = s.profile().clone();
+    let mut p = previous.clone();
+    (p.video.base_width, p.video.base_height) = (1080, 1920);
+    s.set_profile(p).unwrap();
+    let other = s.collection().scenes.iter().map(|sc| sc.id).find(|id| *id != s.collection().program_scene).unwrap();
+    s.run("scene.select", &json!({"scene": other.0})).unwrap();
+    let shown = s.collection().program_scene;
+    assert_eq!(shown, other);
+    s.restore_profile(previous).unwrap();
+    assert_eq!(s.collection().program_scene, shown, "the scene shown since stays");
+    assert!(s.engine().is_dirty(), "the change is still unsaved");
+
+    // A layout undone and redone before the restore is still taken back.
+    s.mark_saved();
+    let previous = s.profile().clone();
+    let before = s.collection().clone();
+    let newest = s.engine().last_step();
+    let mut p = previous.clone();
+    (p.video.base_width, p.video.base_height) = (1280, 720);
+    s.set_profile(p).unwrap();
+    s.run("edit.undo", &json!({})).unwrap();
+    s.run("edit.redo", &json!({})).unwrap();
+    s.restore_profile(previous).unwrap();
+    assert_eq!(s.collection().scenes, before.scenes);
+    assert!(!s.engine().is_dirty());
+    assert_eq!(s.engine().last_step(), newest, "no step is left for the layout");
+}
+
+#[test]
+fn an_undone_layout_places_no_waiting_item_that_it_left_in_place() {
+    let mut s = headless();
+    let mut added = Vec::new();
+    for name in ["Moved", "Waiting"] {
+        let r = s.run("source.add", &json!({"kind": "color", "name": name, "settings": {"width": 400, "height": 300}})).unwrap();
+        let item = studiocraft_model::ItemId(r.0["item"].as_u64().unwrap());
+        let source = s.collection().scenes[0].item(item).unwrap().source;
+        let (tx, rx) = std::sync::mpsc::sync_channel(1);
+        assert!(s.notify_source_shown(source, tx));
+        rx.recv().unwrap();
+        added.push((item, Arc::clone(&s.sources.io(source).unwrap().video)));
+    }
+    let ((moved, _), (waiting, video)) = (added[0].clone(), added[1].clone());
+    let centered = studiocraft_model::Transform { position: studiocraft_model::Vec2::new(960.0, 540.0), ..Default::default() };
+    s.run("item.transform", &json!({"item": moved.0, "transform": centered})).unwrap();
+    s.run("item.transform", &json!({"item": waiting.0, "transform": studiocraft_model::Transform::default(), "fit": "fill"})).unwrap();
+    s.seal_history();
+    video.publish(studiocraft_plugin::VideoContent::Empty);
+    let mut p = s.profile().clone();
+    (p.video.base_width, p.video.base_height) = (1080, 1920);
+    s.set_profile(p).unwrap();
+    let at = |s: &Studio, item| s.collection().scenes[0].item(item).unwrap().transform;
+    assert_ne!(at(&s, moved), centered);
+    assert_eq!(at(&s, waiting), studiocraft_model::Transform::default(), "the layout left it in place");
+    s.run("edit.undo", &json!({})).unwrap();
+    assert_eq!(at(&s, moved), centered);
+    // A move made after the undo does not bring the layout back.
+    let elsewhere = studiocraft_model::Transform { position: studiocraft_model::Vec2::new(10.0, 10.0), ..Default::default() };
+    s.run("item.transform", &json!({"item": moved.0, "transform": elsewhere})).unwrap();
+    video.publish(studiocraft_plugin::VideoContent::Solid { rgba: [0; 4], width: 400, height: 300 });
+    s.tick();
+    assert_eq!(at(&s, waiting), studiocraft_model::Transform::default(), "the undo took the layout back");
+}
+
+#[test]
+fn items_waiting_for_a_picture_keep_waiting_through_other_undo_steps() {
+    let mut s = headless();
+    let mut added = Vec::new();
+    for name in ["A", "B"] {
+        let r = s.run("source.add", &json!({"kind": "color", "name": name, "settings": {"width": 400, "height": 300}})).unwrap();
+        let item = studiocraft_model::ItemId(r.0["item"].as_u64().unwrap());
+        let source = s.collection().scenes[0].item(item).unwrap().source;
+        let (tx, rx) = std::sync::mpsc::sync_channel(1);
+        assert!(s.notify_source_shown(source, tx));
+        rx.recv().unwrap();
+        let fill = studiocraft_model::Transform::fill((400, 300), (1920, 1080));
+        s.run("item.transform", &json!({"item": item, "transform": fill, "fit": "fill"})).unwrap();
+        s.seal_history();
+        added.push((item, Arc::clone(&s.sources.io(source).unwrap().video)));
+    }
+    let at = |s: &Studio, item| s.collection().scenes[0].item(item).unwrap().transform;
+    let tall = studiocraft_model::Transform::fill((400, 300), (1080, 1920));
+    let picture = || studiocraft_plugin::VideoContent::Solid { rgba: [0; 4], width: 400, height: 300 };
+    let ((a, a_video), (b, b_video)) = (added[0].clone(), added[1].clone());
+    a_video.publish(studiocraft_plugin::VideoContent::Empty);
+    b_video.publish(studiocraft_plugin::VideoContent::Empty);
+    let mut p = s.profile().clone();
+    (p.video.base_width, p.video.base_height) = (1080, 1920);
+    s.set_profile(p).unwrap();
+    let relaid = at(&s, a);
+    // A is placed first; undoing that placement leaves B waiting.
+    a_video.publish(picture());
+    s.tick();
+    assert_eq!(at(&s, a), tall);
+    s.run("edit.undo", &json!({})).unwrap();
+    assert_eq!(at(&s, a), relaid);
+    b_video.publish(picture());
+    s.tick();
+    assert_eq!(at(&s, b), tall, "B still waited");
+    assert_eq!(at(&s, a), relaid, "an undone placement is not made again");
+    // A waiting item that is removed and brought back by undo still waits.
+    b_video.publish(studiocraft_plugin::VideoContent::Empty);
+    let mut p = s.profile().clone();
+    (p.video.base_width, p.video.base_height) = (1920, 1080);
+    s.set_profile(p).unwrap();
+    let wide = studiocraft_model::Transform::fill((400, 300), (1920, 1080));
+    assert_ne!(at(&s, b), wide);
+    s.run("item.remove", &json!({"item": b.0})).unwrap();
+    s.tick();
+    s.run("edit.undo", &json!({})).unwrap();
+    let source = s.collection().scenes[0].item(b).unwrap().source;
+    let (tx, rx) = std::sync::mpsc::sync_channel(1);
+    assert!(s.notify_source_shown(source, tx));
+    rx.recv().unwrap();
+    s.sources.io(source).unwrap().video.publish(picture());
+    s.tick();
+    assert_eq!(at(&s, b), wide, "the item that came back was placed");
+    // Another mode set while the item waits ends the wait.
+    b_video.publish(studiocraft_plugin::VideoContent::Empty);
+    s.sources.io(source).unwrap().video.publish(studiocraft_plugin::VideoContent::Empty);
+    let mut p = s.profile().clone();
+    (p.video.base_width, p.video.base_height) = (1080, 1920);
+    s.set_profile(p).unwrap();
+    let waiting = at(&s, b);
+    s.run("item.transform", &json!({"item": b.0, "transform": waiting, "fit": "fit"})).unwrap();
+    s.sources.io(source).unwrap().video.publish(picture());
+    s.tick();
+    assert_eq!(at(&s, b), waiting, "the edit ended the wait");
+}
+
+#[test]
+fn restoring_a_profile_takes_back_its_layout_change_without_a_history_step() {
+    let mut s = headless();
+    s.run("source.add", &json!({"kind": "image", "name": "Logo", "transform": {"position": {"x": 960.0, "y": 540.0}}})).unwrap();
+    s.seal_history();
+    let at = |s: &Studio| s.collection().scenes[0].items[0].transform;
+    let before = at(&s);
+    s.mark_saved();
+    let previous = s.profile().clone();
+    let mut p = previous.clone();
+    (p.video.base_width, p.video.base_height) = (1280, 720);
+    s.set_profile(p.clone()).unwrap();
+    assert_ne!(at(&s), before);
+    assert!(s.engine().is_dirty());
+    // The new profile could not be saved: the old one comes back with its layout, and the
+    // history holds no step for either change.
+    s.restore_profile(previous.clone()).unwrap();
+    assert_eq!(s.canvas(), (1920, 1080));
+    assert_eq!(at(&s), before);
+    assert!(!s.engine().is_dirty(), "a saved collection stays saved");
+    assert_eq!(s.engine().redo_label(), None, "the layout change is not left to redo");
+    s.run("edit.undo", &json!({})).unwrap();
+    assert!(s.collection().scenes[0].items.is_empty(), "the next undo takes back the edit before the canvas change");
+
+    // An edit after the canvas change keeps its own step, and the restore lays the scenes out
+    // again instead.
+    s.run("edit.redo", &json!({})).unwrap();
+    s.seal_history();
+    s.set_profile(p).unwrap();
+    let item = s.collection().scenes[0].items[0].id;
+    s.run("item.visible", &json!({"item": item, "visible": false})).unwrap();
+    s.restore_profile(previous).unwrap();
+    assert_eq!(s.canvas(), (1920, 1080));
+    assert!(!s.collection().scenes[0].items[0].visible, "the later edit stays");
+    let t = at(&s);
+    assert!((t.position.x - 960.0).abs() < 0.01 && (t.scale.x - 1.0).abs() < 0.001, "{t:?}");
 }
 
 #[test]
@@ -456,20 +1036,31 @@ fn records_a_file() {
     let state = s.output(OutputKind::Recording).unwrap();
     assert!(state.active);
     assert!(state.target.ends_with(".mkv"), "{}", state.target);
+    let (marker, _) = s.run("record.marker", &json!({"name": "Goal"})).unwrap();
+    assert_eq!(marker["name"], json!("Goal"));
     std::thread::sleep(Duration::from_millis(1500));
     s.tick();
     s.run("record.stop", &json!({})).unwrap();
     let until = Instant::now() + Duration::from_secs(30);
-    let mut saved = None;
-    while Instant::now() < until && saved.is_none() {
+    let (mut saved, mut markers) = (None, None);
+    while Instant::now() < until && (saved.is_none() || markers.is_none()) {
         s.tick();
-        saved = s.take_notices().into_iter().find(|n| n.text().starts_with("Recording saved"));
+        for n in s.take_notices() {
+            if n.text().starts_with("Recording saved") {
+                saved = Some(n);
+            } else if n.text().starts_with("Markers saved") {
+                markers = Some(n);
+            }
+        }
         std::thread::sleep(Duration::from_millis(50));
     }
     let saved = saved.expect("the recording finishes");
     assert!(!saved.error);
     let size = std::fs::metadata(&state.target).map(|m| m.len()).unwrap_or(0);
     assert!(size > 1000, "{} is {size} bytes", state.target);
+    assert!(markers.is_some_and(|n| !n.error), "the marker file is written");
+    let timeline = std::fs::read_to_string(std::path::Path::new(&state.target).with_extension("otio")).unwrap();
+    assert!(timeline.contains("\"Goal\""), "{timeline}");
     drop(s);
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -633,6 +1224,71 @@ mod monitoring {
         s.set_profile(p).unwrap();
         assert_eq!(sink.live(), 1, "another device opens");
     }
+}
+
+#[test]
+fn loudness_readings_are_numbers_or_null_with_the_target() {
+    use studiocraft_engine::mixer::LoudnessReading;
+    use studiocraft_model::LoudnessTarget;
+    let target = LoudnessTarget::default();
+    let silent = LoudnessReading {
+        momentary_lufs: f64::NEG_INFINITY,
+        short_term_lufs: f64::NEG_INFINITY,
+        integrated_lufs: f64::NEG_INFINITY,
+        range_lu: 0.0,
+        true_peak_dbtp: f64::NEG_INFINITY,
+        generation: 0,
+    };
+    assert_eq!(
+        loudness_json(&silent, &target),
+        json!({
+            "momentary_lufs": null, "short_term_lufs": null, "integrated_lufs": null, "range_lu": 0.0, "true_peak_dbtp": null,
+            "generation": 0, "target": {"low_lufs": -18.0, "high_lufs": -14.0},
+        })
+    );
+    let playing = LoudnessReading {
+        momentary_lufs: -15.5,
+        short_term_lufs: -16.25,
+        integrated_lufs: -17.0,
+        range_lu: 4.5,
+        true_peak_dbtp: -1.5,
+        generation: 940,
+    };
+    let v = loudness_json(&playing, &LoudnessTarget { low_lufs: -24.0, high_lufs: -22.0 });
+    assert_eq!(
+        v,
+        json!({
+            "momentary_lufs": -15.5, "short_term_lufs": -16.25, "integrated_lufs": -17.0, "range_lu": 4.5, "true_peak_dbtp": -1.5,
+            "generation": 940, "target": {"low_lufs": -24.0, "high_lufs": -22.0},
+        })
+    );
+    let nan = LoudnessReading { momentary_lufs: f64::NAN, true_peak_dbtp: f64::INFINITY, ..playing };
+    let v = loudness_json(&nan, &target);
+    assert_eq!((v["momentary_lufs"].clone(), v["true_peak_dbtp"].clone()), (json!(null), json!(null)), "only numbers JSON can hold");
+}
+
+#[test]
+fn audio_loudness_reports_the_mix_and_the_profile_target() {
+    let mut s = headless();
+    let (v, ui) = s.run("audio.loudness", &json!({})).unwrap();
+    assert!(ui.is_none());
+    assert_eq!(v["target"], json!({"low_lufs": -18.0, "high_lufs": -14.0}), "the default band: {v}");
+    for key in ["momentary_lufs", "short_term_lufs", "integrated_lufs", "range_lu", "true_peak_dbtp", "generation"] {
+        assert!(v.get(key).is_some(), "{key} in {v}");
+    }
+    let mut p = s.profile().clone();
+    p.audio.loudness_target = studiocraft_model::LoudnessTarget { low_lufs: -24.0, high_lufs: -22.0 };
+    s.set_profile(p.clone()).unwrap();
+    let (v, _) = s.run("audio.loudness", &json!({})).unwrap();
+    assert_eq!(v["target"], json!({"low_lufs": -24.0, "high_lufs": -22.0}), "the profile in use");
+    for (low_lufs, high_lufs) in [(-14.0, -18.0), (-70.0, -14.0), (f64::NAN, -14.0)] {
+        let mut wrong = p.clone();
+        wrong.audio.loudness_target = studiocraft_model::LoudnessTarget { low_lufs, high_lufs };
+        let e = s.set_profile(wrong).unwrap_err().to_string();
+        assert!(e.contains("loudness target"), "{e}");
+    }
+    assert_eq!(s.profile().audio.loudness_target, p.audio.loudness_target, "a refused band leaves the profile as it was");
+    assert!(s.run("audio.loudness", &json!({"reset": true})).is_err(), "an unknown parameter is an error");
 }
 
 #[test]
@@ -1621,5 +2277,454 @@ mod captions {
         s.run("captions.start", &json!({})).unwrap();
         assert!(!matches!(s.captions_state(), CaptionState::Failed(why) if why.contains("broken weights")));
         s.finish_captions_blocking();
+    }
+}
+
+mod pause_screen {
+    use super::*;
+
+    /// The ids of the sources a plan draws in the program, bottom to top.
+    fn program_sources(s: &mut Studio) -> Vec<u64> {
+        s.plan().program.items.iter().map(|i| i.source.0).collect()
+    }
+
+    /// The ids of the sources the running transition starts from.
+    fn transition_from(s: &mut Studio) -> Vec<u64> {
+        s.plan().transition.as_ref().map(|t| t.from.items.iter().map(|i| i.source.0).collect()).unwrap_or_default()
+    }
+
+    /// The pause screen's background draws under this id while no source holds it.
+    const BACKGROUND: u64 = u64::MAX;
+
+    fn with_a_scene_source() -> (Studio, u64) {
+        let mut s = headless();
+        let (out, _) = s.run("source.add", &json!({"kind": "color", "name": "Card"})).unwrap();
+        let id = out["source"].as_u64().unwrap_or_else(|| panic!("{out}"));
+        s.tick();
+        (s, id)
+    }
+
+    #[test]
+    fn a_pause_shows_the_pause_screen_and_resuming_shows_the_scene() {
+        let (mut s, card) = with_a_scene_source();
+        s.transition = None;
+        assert_eq!(program_sources(&mut s), [card]);
+        let rev = s.engine().revision();
+        let dirty = s.engine().is_dirty();
+        let (status, _) = s.run("pause.start", &json!({"countdown_s": 90})).unwrap();
+        assert_eq!(status["paused"], json!(true));
+        assert_eq!(status["countdown"]["total_s"], json!(90));
+        assert_eq!(program_sources(&mut s).first(), Some(&BACKGROUND), "the background is drawn first");
+        assert_eq!(transition_from(&mut s), [card], "the collection's fade runs from the scene into the pause screen");
+        assert_eq!((s.engine().revision(), s.engine().is_dirty()), (rev, dirty), "a pause changes nothing in the collection");
+        assert_eq!(s.state_json()["pause"]["paused"], json!(true));
+        s.run("pause.stop", &json!({})).unwrap();
+        assert_eq!(program_sources(&mut s), [card]);
+        assert_eq!(transition_from(&mut s).first(), Some(&BACKGROUND), "the fade back runs from the pause screen");
+        assert!(s.pause_layers.is_some(), "the pause screen keeps drawing until the fade has ended");
+        assert_eq!(s.run("pause.status", &json!({})).unwrap().0, json!({"paused": false}));
+        let notices: Vec<&str> = s.take_notices().iter().map(|n| n.template).collect();
+        assert!(notices.contains(&"The program is paused") && notices.contains(&"The program resumed"), "{notices:?}");
+        // Once the fade has ended, the pause screen's threads stop.
+        s.transition = None;
+        s.tick();
+        assert!(s.pause_layers.is_none());
+    }
+
+    #[test]
+    fn resuming_or_adding_time_while_not_paused_is_an_error() {
+        let mut s = headless();
+        assert!(s.run("pause.stop", &json!({})).is_err());
+        assert!(s.run("pause.extend", &json!({"seconds": 60})).is_err());
+        assert!(s.pause.is_none());
+    }
+
+    #[test]
+    fn toggling_pauses_with_the_profile_settings_and_resumes() {
+        let mut profile = Profile::default();
+        profile.pause.countdown_s = 0;
+        profile.pause.mute_scene = false;
+        let mut s = studio_with(None, SceneCollection::new("Test", "Scene"), profile);
+        let (status, _) = s.run("pause.toggle", &json!({})).unwrap();
+        assert_eq!((status["paused"].clone(), status["countdown"].clone()), (json!(true), Value::Null), "no countdown: the profile's 0");
+        let (status, _) = s.run("pause.toggle", &json!({})).unwrap();
+        assert_eq!(status, json!({"paused": false}), "resuming reports the status too");
+        assert!(s.pause.is_none());
+    }
+
+    #[test]
+    fn settings_with_a_countdown_text_without_its_time_are_refused() {
+        let mut s = headless();
+        let mut p = s.profile().clone();
+        p.pause.text = "Back soon".into();
+        assert!(s.set_profile(p).is_err());
+        assert_ne!(s.profile().pause.text, "Back soon", "the old settings stay");
+    }
+
+    #[test]
+    fn a_file_the_screen_cannot_show_is_an_error_and_does_not_pause() {
+        let mut s = headless();
+        for bad in ["song.mp3", "notes.txt", "noextension"] {
+            assert!(s.run("pause.start", &json!({"media": bad})).is_err(), "{bad}");
+        }
+        assert!(s.pause.is_none());
+        // While paused, a bad file is refused and the pause keeps its media.
+        s.run("pause.start", &json!({"media": ""})).unwrap();
+        assert!(s.run("pause.start", &json!({"media": "x.doc"})).is_err());
+        assert_eq!(s.pause.as_ref().map(|p| p.settings.media.as_str()), Some(""));
+    }
+
+    #[test]
+    fn values_given_while_paused_apply_without_a_new_transition() {
+        let mut s = headless();
+        s.run("transition.set", &json!({"kind": "cut"})).unwrap();
+        s.transition = None;
+        s.run("pause.start", &json!({"countdown_s": 600})).unwrap();
+        assert!(s.transition.is_none(), "a cut shows the pause screen at once");
+        s.run("transition.set", &json!({"kind": "fade"})).unwrap();
+        let (status, _) = s.run("pause.start", &json!({"countdown_s": 30, "at_zero": "resume"})).unwrap();
+        assert!(s.transition.is_none(), "no new transition while paused");
+        assert_eq!(status["countdown"]["total_s"], json!(30));
+        assert_eq!(status["countdown"]["at_zero"], json!("resume"));
+        let (status, _) = s.run("pause.extend", &json!({"seconds": 60})).unwrap();
+        assert_eq!(status["countdown"]["total_s"], json!(90));
+    }
+
+    #[test]
+    fn a_scene_switch_while_paused_changes_what_resuming_shows() {
+        let (mut s, _) = with_a_scene_source();
+        s.run("pause.start", &json!({})).unwrap();
+        s.transition = None;
+        s.run("scene.add", &json!({"name": "After the break"})).unwrap();
+        assert!(s.transition.is_none(), "the scene changes under the pause screen");
+        assert_eq!(program_sources(&mut s).first(), Some(&BACKGROUND));
+        let second = s.collection().program_scene;
+        s.run("pause.stop", &json!({})).unwrap();
+        assert_eq!(s.shown_program, second, "resuming shows the new scene");
+        assert!(program_sources(&mut s).is_empty(), "the new scene is empty");
+    }
+
+    #[test]
+    fn pausing_during_the_fade_back_turns_the_fade_around_where_it_stands() {
+        let mut s = headless();
+        s.run("pause.start", &json!({})).unwrap();
+        s.transition = None;
+        s.run("pause.stop", &json!({})).unwrap();
+        // The fade back is held at its very start, so turning it around leaves nothing to run.
+        let Some(t) = &mut s.transition else { panic!("the collection's fade runs") };
+        t.start = Tick(s.clock.now().0.saturating_add(10_000_000_000));
+        s.run("pause.start", &json!({})).unwrap();
+        let Some(t) = &s.transition else { panic!("a fade runs into the pause screen") };
+        assert!(matches!(t.from, Origin::Scene(_)));
+        assert!(t.start.0.saturating_add(t.duration.0) <= s.clock.now().0, "the new fade starts where the old one stood");
+    }
+
+    #[test]
+    fn a_swipe_starts_over_instead_of_turning_around() {
+        let mut s = headless();
+        s.run("transition.set", &json!({"kind": "swipe"})).unwrap();
+        s.run("pause.start", &json!({})).unwrap();
+        s.transition = None;
+        s.run("pause.stop", &json!({})).unwrap();
+        let Some(t) = &mut s.transition else { panic!("the collection's swipe runs") };
+        t.start = Tick(s.clock.now().0.saturating_add(10_000_000_000));
+        let before = s.clock.now().0;
+        s.run("pause.start", &json!({})).unwrap();
+        let Some(t) = &s.transition else { panic!("a swipe runs into the pause screen") };
+        assert!(t.start.0 >= before, "the new swipe starts from the beginning");
+    }
+
+    #[test]
+    fn pausing_during_the_fade_back_keeps_the_layers_that_draw() {
+        let mut s = headless();
+        s.run("pause.start", &json!({})).unwrap();
+        let before = s.plan().program.items[0].video.clone();
+        s.run("pause.stop", &json!({})).unwrap();
+        assert!(s.transition.is_some(), "the fade back runs");
+        s.run("pause.start", &json!({})).unwrap();
+        let after = s.plan().program.items[0].video.clone();
+        assert!(Arc::ptr_eq(&before, &after), "the background's thread was kept");
+    }
+
+    #[test]
+    fn an_eased_fade_turns_around_at_the_blend_it_shows() {
+        let mut s = headless();
+        s.run("transition.set", &json!({"kind": "fade"})).unwrap();
+        s.run("transition.settings", &json!({"settings": {"fade_easing": "ease_in"}})).unwrap();
+        s.run("pause.start", &json!({})).unwrap();
+        s.transition = None;
+        s.run("pause.stop", &json!({})).unwrap();
+        // A quarter of the fade back's time has passed, where ease in shows 1/16 of the scene.
+        let Some(t) = &mut s.transition else { panic!("the collection's fade runs") };
+        t.start = Tick(s.clock.now().0.saturating_sub(t.duration.0 / 4));
+        s.run("pause.start", &json!({})).unwrap();
+        let Some(t) = &s.transition else { panic!("a fade runs into the pause screen") };
+        // The new fade shows 15/16 of the pause screen, which ease in reaches at sqrt(15)/4 of
+        // its time (0.968); turning the time around would give 0.75.
+        let along = s.clock.now().0.saturating_sub(t.start.0) as f64 / t.duration.0 as f64;
+        assert!(along > 0.9, "{along}");
+    }
+
+    #[test]
+    fn the_progress_showing_a_blend_inverts_the_ease() {
+        let quad_in = |x: f64| x * x;
+        assert!((progress_showing(quad_in, 0.0625) - 0.25).abs() < 1e-9);
+        assert!((progress_showing(|x| x, 0.4) - 0.4).abs() < 1e-9);
+        assert!(progress_showing(quad_in, 0.0) < 1e-9, "at the start");
+        assert!(progress_showing(|_| 0.0, 0.5) > 0.999_999, "a blend that never gets there gives the end");
+    }
+
+    #[test]
+    fn a_turned_around_fade_ends_the_audio_fade_with_the_picture() {
+        // Linear: halfway back takes half the time, at the full fade's rate.
+        assert_eq!(turned_fade_ms(1000, 0.5, 0.5), 1000);
+        // Ease in, turned around a quarter of the way: the picture has 1 - sqrt(15)/4 of its time
+        // left, and the audio a quarter of its range to go back in that time.
+        let left = 1.0 - 15f64.sqrt() / 4.0;
+        assert_eq!(turned_fade_ms(1000, 0.25, left), (1000.0 * left / 0.25).round() as u32);
+        assert!(turned_fade_ms(1000, 0.25, left) < 200, "the audio does not run on after the picture");
+        assert_eq!(turned_fade_ms(1000, 0.0, 0.3), 1000, "audio with nothing to move keeps the length for the scene sources' fades");
+        assert_eq!(turned_fade_ms(u32::MAX, 1e-12, 1.0), u32::MAX, "no overflow");
+    }
+
+    #[test]
+    fn the_program_audio_ends_its_fade_with_the_picture_after_each_turn() {
+        let mut s = headless();
+        s.run("transition.set", &json!({"kind": "fade"})).unwrap();
+        s.run("transition.settings", &json!({"settings": {"fade_easing": "ease_out"}})).unwrap();
+        s.run("pause.start", &json!({})).unwrap();
+        for turn in 0..4 {
+            // A third of the running fade's time passes, for the picture and for the audio.
+            let (Some(t), Some(h)) = (&mut s.transition, &mut s.hold_fade) else { panic!("turn {turn}: a fade runs with the audio") };
+            let third = t.duration.0 / 3;
+            t.start = Tick(t.start.0.saturating_sub(third));
+            h.start = Tick(h.start.0.saturating_sub(third));
+            let id = if s.pause.is_some() { "pause.stop" } else { "pause.start" };
+            s.run(id, &json!({})).unwrap();
+            let now = s.clock.now();
+            let (Some(t), Some(h)) = (&s.transition, &s.hold_fade) else { panic!("turn {turn}: the fade was turned around") };
+            let picture_left = duration_of(Tick(t.start.0.saturating_add(t.duration.0).saturating_sub(now.0))).as_secs_f64() * 1000.0;
+            let audio_left = (if h.down { h.from } else { 1.0 - h.from }) * f64::from(h.ms);
+            assert!((picture_left - audio_left).abs() < 5.0, "turn {turn}: the picture has {picture_left} ms left, the audio {audio_left} ms");
+        }
+    }
+
+    #[test]
+    fn a_scene_switch_during_the_fade_back_keeps_the_fade_from_the_pause_screen() {
+        let (mut s, _) = with_a_scene_source();
+        s.run("pause.start", &json!({})).unwrap();
+        s.transition = None;
+        s.run("pause.stop", &json!({})).unwrap();
+        assert_eq!(transition_from(&mut s).first(), Some(&BACKGROUND), "the fade back runs");
+        s.run("scene.add", &json!({"name": "After the break"})).unwrap();
+        let second = s.collection().program_scene;
+        assert_eq!(transition_from(&mut s).first(), Some(&BACKGROUND), "the fade still runs from the pause screen");
+        assert_eq!(s.shown_program, second, "and ends on the new scene");
+        assert!(program_sources(&mut s).is_empty(), "the new scene is empty");
+    }
+
+    #[test]
+    fn the_countdown_at_zero_resumes_once_when_set_to_resume() {
+        let mut s = headless();
+        s.run("pause.start", &json!({"countdown_s": 300, "at_zero": "resume"})).unwrap();
+        s.take_notices();
+        // The countdown's end is moved to the start of the clock instead of waiting for it.
+        if let Some(p) = &mut s.pause {
+            p.deadline_ms = Some(0);
+        }
+        s.tick();
+        assert!(s.pause.is_none(), "zero resumed the program");
+        s.tick();
+        let notices: Vec<&str> = s.take_notices().iter().map(|n| n.template).collect();
+        assert_eq!(notices.iter().filter(|n| **n == "The countdown ended").count(), 1, "{notices:?}");
+        assert!(notices.contains(&"The program resumed"), "{notices:?}");
+    }
+
+    #[test]
+    fn the_countdown_at_zero_keeps_the_screen_with_the_text_at_zero() {
+        let mut s = headless();
+        s.run("pause.start", &json!({"countdown_s": 300})).unwrap();
+        if let Some(p) = &mut s.pause {
+            p.deadline_ms = Some(0);
+        }
+        s.tick();
+        s.tick();
+        let status = s.pause_json();
+        assert_eq!((status["paused"].clone(), status["countdown"]["reached"].clone()), (json!(true), json!(true)));
+        let notices: Vec<&str> = s.take_notices().iter().map(|n| n.template).collect();
+        assert_eq!(notices.iter().filter(|n| **n == "The countdown ended").count(), 1, "{notices:?}");
+        let now = s.now_ms();
+        assert_eq!(s.pause.as_ref().and_then(|p| p.text(now)).as_deref(), Some("Back in a moment"));
+    }
+
+    #[test]
+    fn a_pause_lasts_through_a_new_collection_and_ends_only_on_resume() {
+        let mut s = headless();
+        s.run("pause.start", &json!({})).unwrap();
+        s.load_collection(SceneCollection::new("Other", "Main"));
+        s.tick();
+        assert!(s.pause.is_some(), "a new collection does not resume the program");
+        assert_eq!(program_sources(&mut s).first(), Some(&BACKGROUND));
+    }
+
+    /// The picture source. The first instance it creates takes `told` and `go`. When its first
+    /// load does not fail, it sends `false` on `told` at once. When it fails, the source thread
+    /// stores the error and tries again later; that second load sends `true` and waits on `go`
+    /// before it runs, so the test reads the stored error while the thread waits. When that
+    /// instance ends first, the receiver sees the channel close.
+    struct Telling {
+        inner: Arc<dyn studiocraft_plugin::Source>,
+        told: std::sync::Mutex<Option<std::sync::mpsc::Sender<bool>>>,
+        go: std::sync::Mutex<Option<std::sync::mpsc::Receiver<()>>>,
+    }
+
+    impl studiocraft_plugin::Plugin for Telling {
+        fn id(&self) -> &'static str {
+            self.inner.id()
+        }
+        fn name(&self) -> &'static str {
+            self.inner.name()
+        }
+        fn schema(&self) -> studiocraft_model::SettingsSchema {
+            self.inner.schema()
+        }
+    }
+
+    impl studiocraft_plugin::Source for Telling {
+        fn caps(&self) -> studiocraft_plugin::SourceCaps {
+            self.inner.caps()
+        }
+        fn create(&self, settings: &Settings, io: &studiocraft_plugin::SourceIo) -> Result<Box<dyn studiocraft_plugin::SourceInstance>, PluginError> {
+            let told = self.told.lock().ok().and_then(|mut t| t.take());
+            let go = self.go.lock().ok().and_then(|mut g| g.take());
+            Ok(Box::new(TellingInstance { inner: self.inner.create(settings, io)?, told, go, loads: 0 }))
+        }
+    }
+
+    struct TellingInstance {
+        inner: Box<dyn studiocraft_plugin::SourceInstance>,
+        told: Option<std::sync::mpsc::Sender<bool>>,
+        go: Option<std::sync::mpsc::Receiver<()>>,
+        loads: u32,
+    }
+
+    impl studiocraft_plugin::SourceInstance for TellingInstance {
+        fn pace(&self) -> studiocraft_plugin::Pace {
+            self.inner.pace()
+        }
+        fn produce(&mut self, io: &studiocraft_plugin::SourceIo) -> Result<(), PluginError> {
+            self.loads += 1;
+            if self.loads == 2
+                && let Some(tx) = self.told.take()
+            {
+                // The thread stored the first load's error before this call.
+                let _ = tx.send(true);
+                if let Some(go) = self.go.take() {
+                    let _ = go.recv();
+                }
+            }
+            let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.inner.produce(io)));
+            // A first load that panics is told as one that did not fail, so the test stops.
+            if self.loads == 1
+                && !matches!(r, Ok(Err(_)))
+                && let Some(tx) = self.told.take()
+            {
+                let _ = tx.send(false);
+            }
+            r.unwrap_or_else(|p| std::panic::resume_unwind(p))
+        }
+        fn update(&mut self, settings: &Settings, io: &studiocraft_plugin::SourceIo) -> Result<(), PluginError> {
+            self.inner.update(settings, io)
+        }
+    }
+
+    /// A studio whose picture source is a [`Telling`], with its `told` receiver and `go` sender.
+    fn telling_studio() -> (Studio, std::sync::mpsc::Receiver<bool>, std::sync::mpsc::Sender<()>) {
+        let ffmpeg: FfmpegSetting = Arc::new(RwLock::new(String::new()));
+        let captions = Arc::new(CaptionBoard::new());
+        let all = builtin_registry(&ffmpeg, &captions).unwrap();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let (go_tx, go_rx) = std::sync::mpsc::channel();
+        let (told, go) = (std::sync::Mutex::new(Some(tx)), std::sync::Mutex::new(Some(go_rx)));
+        let telling = Arc::new(Telling { inner: all.source("image").unwrap(), told, go });
+        let mut reg = Registry::new();
+        for p in all.sources() {
+            if p.id() == "image" {
+                reg.register_source(telling.clone()).unwrap();
+            } else {
+                reg.register_source(p.clone()).unwrap();
+            }
+        }
+        for p in all.filters() {
+            reg.register_filter(p.clone()).unwrap();
+        }
+        for p in all.transitions() {
+            reg.register_transition(p.clone()).unwrap();
+        }
+        let s = Studio::new(None, SceneCollection::new("Test", "Scene"), Profile::default(), Arc::new(reg), ffmpeg, captions);
+        (s, rx, go_tx)
+    }
+
+    /// Pause on `media` with a minute's countdown, wait for the picture to fail, and check that
+    /// the screen still shows its background and countdown and reports the error.
+    fn pauses_with_a_media_error(media: &std::path::Path) {
+        // The source thread waits before its second load until `_go` is dropped at the end.
+        let (mut s, failed, _go) = telling_studio();
+        let media = media.to_string_lossy().into_owned();
+        let (status, _) = s.run("pause.start", &json!({"media": media, "countdown_s": 60})).unwrap();
+        assert_eq!((status["paused"].clone(), status["countdown"]["total_s"].clone()), (json!(true), json!(60)), "{status}");
+        assert_eq!(program_sources(&mut s).first(), Some(&BACKGROUND), "the background is up");
+        let now = s.now_ms();
+        assert_eq!(s.pause.as_ref().and_then(|p| p.text(now)).as_deref(), Some("Back in 1:00"), "the countdown is up");
+        let error = match s.pause_json()["media_error"].as_str() {
+            // The error was already stored.
+            Some(e) => e.to_owned(),
+            None => {
+                // Once the second load is told, the first load's error is stored and the thread
+                // waits, so nothing holds the error while it is read.
+                assert_eq!(failed.recv(), Ok(true), "the picture's first load failed");
+                s.pause_json()["media_error"].as_str().map(str::to_owned).unwrap_or_else(|| panic!("the status reports no error"))
+            }
+        };
+        assert!(error.contains(&media), "{error}");
+        assert_eq!(s.pause_json()["paused"], json!(true), "the pause continues");
+        s.tick();
+        let notices: Vec<String> = s.take_notices().iter().map(|n| n.template.to_string()).collect();
+        assert!(notices.iter().any(|n| n == pause::MEDIA_NOTICE), "{notices:?}");
+    }
+
+    #[test]
+    fn a_missing_picture_still_pauses_and_reports_the_error() {
+        let dir = tempfile::tempdir().unwrap();
+        pauses_with_a_media_error(&dir.path().join("missing.png"));
+    }
+
+    #[test]
+    fn a_picture_wider_than_a_frame_still_pauses_and_reports_the_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("wide.bmp");
+        // A 24-bit picture one pixel wider than the 16,384-pixel frame limit, with all its pixels
+        // present.
+        let (w, h): (u32, u32) = (16_385, 1);
+        let row = (w * 3).div_ceil(4) * 4;
+        let mut bmp = Vec::new();
+        bmp.extend(b"BM");
+        bmp.extend((54 + row * h).to_le_bytes());
+        bmp.extend(0u32.to_le_bytes());
+        bmp.extend(54u32.to_le_bytes());
+        bmp.extend(40u32.to_le_bytes());
+        bmp.extend(w.to_le_bytes());
+        bmp.extend(h.to_le_bytes());
+        bmp.extend(1u16.to_le_bytes());
+        bmp.extend(24u16.to_le_bytes());
+        bmp.extend(0u32.to_le_bytes());
+        bmp.extend((row * h).to_le_bytes());
+        bmp.extend(2835u32.to_le_bytes());
+        bmp.extend(2835u32.to_le_bytes());
+        bmp.extend(0u32.to_le_bytes());
+        bmp.extend(0u32.to_le_bytes());
+        bmp.resize(bmp.len() + (row * h) as usize, 0x80);
+        std::fs::write(&path, bmp).unwrap();
+        pauses_with_a_media_error(&path);
     }
 }

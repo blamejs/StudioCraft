@@ -8,7 +8,10 @@ use craft_keymap::{Binding, CommandRef, Keymap, MAX_BINDING_TEXT, Overrides};
 use egui::{RichText, Ui};
 use studiocraft_audio_tracks::space::TRACK_BYTES_PER_SECOND;
 use studiocraft_model::profile::DEFAULT_AUDIO_DEVICE;
-use studiocraft_model::{AfterStop, AudioTracksSettings, AudioTracksWhen, KeyRef, Profile, RecordingFormat, RecordingQuality, ReplaySettings};
+use studiocraft_model::{
+    AfterStop, AudioTracksSettings, AudioTracksWhen, FitMode, KeyRef, PauseAnchor, PauseAtZero, PauseSettings, Profile, RecordingFormat,
+    RecordingQuality, ReplaySettings, VideoSettings,
+};
 use studiocraft_platform::audio::{DeviceInfo, DeviceKind};
 use studiocraft_plugin::{Availability, EncoderEnv, EncoderKind, Registry, Settings};
 
@@ -33,6 +36,7 @@ pub enum Pick {
     RecordingFolder,
     Ffmpeg,
     AudioEditor,
+    PauseMedia,
 }
 
 struct Hotkey {
@@ -59,8 +63,16 @@ pub struct SettingsWindow {
     pub(crate) ffmpeg_version: Result<String, String>,
     /// The output devices the system listed when the window opened.
     output_devices: Vec<DeviceInfo>,
-    /// The displays the system listed when the window opened, for the canvas size.
+    /// The displays the system listed at the last reading, for the canvas size.
     displays: Vec<studiocraft_platform::display::DisplayInfo>,
+    /// The display last picked under Match display, which the canvas follows once applied with
+    /// that display's size. `Some(None)` when the display the window is on was picked and no
+    /// single listed display has its size; `None` until something is picked.
+    pub canvas_display: Option<Option<studiocraft_platform::display::DisplayInfo>>,
+    /// Reads the display list.
+    list_displays: fn() -> Vec<studiocraft_platform::display::DisplayInfo>,
+    /// When the Video page last read the display list, in the window's input time.
+    displays_read: Option<f64>,
     /// The Graphics adapter setting.
     pub graphics_adapter: Preference,
     /// The adapters the window's graphics instance lists.
@@ -72,6 +84,8 @@ pub struct SettingsWindow {
     pub gpu_notices: Vec<Msg>,
     /// The sources set to record their own track, for the audio tracks size estimate.
     pub track_sources: usize,
+    /// The Pause screen section's first field takes the keyboard focus on the next frame.
+    focus_pause: bool,
 }
 
 /// The settings OK or Apply puts in force.
@@ -87,6 +101,9 @@ pub struct Apply {
     pub system_title_bar: bool,
     /// The Graphics adapter setting.
     pub graphics_adapter: Preference,
+    /// The display picked under Match display, when one was picked; see
+    /// [`SettingsWindow::canvas_display`].
+    pub canvas_display: Option<Option<studiocraft_platform::display::DisplayInfo>>,
 }
 
 /// What the window asks for this frame.
@@ -109,8 +126,32 @@ pub const TABS: [(Tab, &str); 6] = [
 
 const FPS: [(&str, u32, u32); 8] =
     [("24", 24, 1), ("25", 25, 1), ("29.97", 30000, 1001), ("30", 30, 1), ("48", 48, 1), ("50", 50, 1), ("59.94", 60000, 1001), ("60", 60, 1)];
-const SIZES: [(u32, u32); 6] = [(3840, 2160), (2560, 1440), (1920, 1080), (1600, 900), (1280, 720), (852, 480)];
+const SIZES: [(u32, u32); 7] = [(3840, 2160), (2560, 1440), (1920, 1080), (1600, 900), (1280, 720), (852, 480), (1080, 1920)];
 const AUDIO_KBPS: [u32; 7] = [64, 96, 128, 160, 192, 256, 320];
+/// Seconds between readings of the display list while the Video page is shown.
+const DISPLAYS_EVERY: f64 = 1.0;
+
+/// After an edit of the draft's canvas size: an output size that was a share of the old canvas
+/// in [`studiocraft_model::OUTPUT_SCALES`] becomes the same share of the new one. A changed
+/// output size, or one that was no such share, stays.
+pub(crate) fn follow_canvas(before: VideoSettings, v: &mut VideoSettings) {
+    let canvas_moved = (v.base_width, v.base_height) != (before.base_width, before.base_height);
+    let output_kept = (v.output_width, v.output_height) == (before.output_width, before.output_height);
+    if canvas_moved
+        && output_kept
+        && let Some(s) = before.output_scale()
+    {
+        (v.output_width, v.output_height) = v.scaled_output(s);
+    }
+}
+
+/// An output scale's entry: its percentage and the output size it gives for `v`'s canvas.
+fn scale_label(v: &VideoSettings, scale: (u32, u32)) -> String {
+    let (w, h) = v.scaled_output(scale);
+    let percent = (u64::from(scale.0) * 100 / u64::from(scale.1.max(1))).to_string();
+    let (width, height) = (w.to_string(), h.to_string());
+    craft_i18n::fmt(tl!("{percent}% ({width} × {height})"), &[("percent", &percent), ("width", &width), ("height", &height)])
+}
 
 fn bindings_text(keymap: &Keymap, cmd: &CommandRef) -> String {
     let home = craft_keymap::Scope::app();
@@ -188,12 +229,15 @@ fn probe(path: &str) -> (Vec<String>, Result<String, String>) {
 }
 
 /// A shortcut list entry's label in the interface language: a command without parameters by its
-/// command id, `Show Scene {n}` by its template, and any other by its English label.
+/// command id, `Show Scene {n}` and `Present Staged Window {n}` by their templates, and any other
+/// by its English label.
 fn hotkey_label(command: &CommandRef, label: &str) -> String {
-    if command.id == "scene.select_index"
-        && let Some(n) = command.params.get("index").and_then(serde_json::Value::as_u64)
-    {
-        return craft_i18n::fmt(tl!("Show Scene {n}"), &[("n", &n.to_string())]);
+    if let Some(n) = command.params.get("index").and_then(serde_json::Value::as_u64) {
+        match command.id.as_str() {
+            "scene.select_index" => return craft_i18n::fmt(tl!("Show Scene {n}"), &[("n", &n.to_string())]),
+            "present.window" => return craft_i18n::fmt(tl!("Present Staged Window {n}"), &[("n", &n.to_string())]),
+            _ => {}
+        }
     }
     if command.params.is_null() { i18n::command_label(&command.id, label).to_string() } else { tl!(label).to_string() }
 }
@@ -236,6 +280,47 @@ pub(crate) fn after_stop_label(a: AfterStop) -> &'static str {
         AfterStop::Nothing => "Nothing",
         AfterStop::ShowFolder => "Show the folder",
         AfterStop::OpenEditor => "Open in the audio editor",
+    }
+}
+
+/// What the pause screen does when its countdown reaches zero, as the Stream tab shows it.
+pub(crate) fn at_zero_label(z: PauseAtZero) -> &'static str {
+    match z {
+        PauseAtZero::Keep => "Keep the pause screen",
+        PauseAtZero::Resume => "Resume the program",
+    }
+}
+
+/// Where the pause screen's countdown text goes, as the Stream tab shows it.
+pub(crate) fn anchor_label(a: PauseAnchor) -> &'static str {
+    match a {
+        PauseAnchor::TopLeft => "Top left",
+        PauseAnchor::TopCenter => "Top center",
+        PauseAnchor::TopRight => "Top right",
+        PauseAnchor::MiddleLeft => "Middle left",
+        PauseAnchor::Center => "Center",
+        PauseAnchor::MiddleRight => "Middle right",
+        PauseAnchor::BottomLeft => "Bottom left",
+        PauseAnchor::BottomCenter => "Bottom center",
+        PauseAnchor::BottomRight => "Bottom right",
+    }
+}
+
+/// How the pause screen fits its picture or video, as the Stream tab shows it.
+pub(crate) fn fit_label(f: FitMode) -> &'static str {
+    match f {
+        FitMode::Fit => "Fit inside the canvas",
+        FitMode::Fill => "Fill the canvas",
+        FitMode::Stretch => "Stretch to the canvas",
+    }
+}
+
+/// A color button for a `#rrggbbaa` setting; an unreadable value shows as white.
+fn color_button(ui: &mut Ui, value: &mut String) {
+    let parsed = Settings::new().with("c", value.clone()).color("c").unwrap_or([255, 255, 255, 255]);
+    let mut c = egui::Color32::from_rgba_unmultiplied(parsed[0], parsed[1], parsed[2], parsed[3]);
+    if ui.color_edit_button_srgba(&mut c).changed() {
+        *value = crate::forms::color_text(c.to_srgba_unmultiplied());
     }
 }
 
@@ -287,12 +372,35 @@ impl SettingsWindow {
             ffmpeg_version,
             output_devices: studiocraft_platform::audio::devices(DeviceKind::Output),
             displays: studiocraft_platform::display::displays(),
+            canvas_display: None,
+            list_displays: studiocraft_platform::display::displays,
+            displays_read: None,
             graphics_adapter: Preference::Auto,
             adapters: Vec::new(),
             drawing_with: None,
             gpu_notices: Vec::new(),
             track_sources: 0,
+            focus_pause: false,
         }
+    }
+
+    /// The tab shown.
+    #[cfg(test)]
+    pub fn tab(&self) -> Tab {
+        self.tab
+    }
+
+    /// Show the Stream tab and move the keyboard focus to the Pause screen section's first field
+    /// on the next frame.
+    pub fn show_pause_screen(&mut self) {
+        self.tab = Tab::Stream;
+        self.focus_pause = true;
+    }
+
+    /// Whether the Pause screen section still waits for the focus.
+    #[cfg(test)]
+    pub fn pause_focus_pending(&self) -> bool {
+        self.focus_pause
     }
 
     /// Set a path chosen in a dialog.
@@ -305,6 +413,7 @@ impl SettingsWindow {
                 (self.offered, self.ffmpeg_version) = probe(&self.draft.output.ffmpeg_path);
             }
             Pick::AudioEditor => self.draft.audio_tracks.editor_path = text,
+            Pick::PauseMedia => self.draft.pause.media = text,
         }
     }
 
@@ -429,6 +538,90 @@ impl SettingsWindow {
             Self::encoder_form(ui, "stream-encoder-settings", registry, &s.video_encoder, &mut s.encoder_settings);
             ui.label(tl!("Keyframe interval"));
             ui.add(egui::DragValue::new(&mut s.keyframe_interval_s).range(1..=20).suffix(format!(" {}", tl!("s"))));
+            ui.end_row();
+        });
+    }
+
+    /// The Pause screen section of the Stream tab: what Pause Program shows in the program.
+    fn pause_screen(&mut self, ui: &mut Ui, out: &mut Outcome) {
+        ui.label(RichText::new(tl!("Pause screen")).strong());
+        ui.add_space(4.0);
+        let p = &mut self.draft.pause;
+        let focus = &mut self.focus_pause;
+        egui::Grid::new("pause-grid").num_columns(2).spacing([12.0, 8.0]).show(ui, |ui| {
+            ui.label(tl!("Picture or video"));
+            ui.horizontal(|ui| {
+                let r = ui.add(egui::TextEdit::singleline(&mut p.media).hint_text(tl!("None")).desired_width(240.0));
+                if std::mem::take(focus) {
+                    r.request_focus();
+                    r.scroll_to_me(Some(egui::Align::Center));
+                }
+                if ui.button(tl!("Browse…")).clicked() {
+                    out.pick = Some(Pick::PauseMedia);
+                }
+            });
+            ui.end_row();
+            ui.label(tl!("Picture size"));
+            let label = |f: FitMode| tl!(fit_label(f));
+            craft_ui::ComboBox::from_id_salt("pause-fit").selected_text(label(p.fit)).width(220.0).show_ui(ui, |ui| {
+                for f in [FitMode::Fit, FitMode::Fill, FitMode::Stretch] {
+                    ui.selectable_value(&mut p.fit, f, label(f));
+                }
+            });
+            ui.end_row();
+            ui.label(tl!("Background"));
+            color_button(ui, &mut p.background);
+            ui.end_row();
+            ui.label(tl!("Countdown"));
+            ui.add(egui::DragValue::new(&mut p.countdown_s).range(PauseSettings::COUNTDOWN_S).speed(5.0).suffix(format!(" {}", tl!("s"))))
+                .on_hover_text(tl!("0 shows no countdown"));
+            ui.end_row();
+            ui.label(tl!("Countdown text"));
+            ui.vertical(|ui| {
+                ui.add(egui::TextEdit::singleline(&mut p.text).char_limit(PauseSettings::MAX_TEXT).desired_width(240.0));
+                if let Err(e) = PauseSettings::check_text(&p.text) {
+                    ui.colored_label(ui.visuals().error_fg_color, Msg::plain(e.as_str()).shown());
+                } else {
+                    ui.label(RichText::new(tl!("{time} shows the time left")).small().weak());
+                }
+            });
+            ui.end_row();
+            ui.label(tl!("At zero"));
+            let label = |z: PauseAtZero| tl!(at_zero_label(z));
+            craft_ui::ComboBox::from_id_salt("pause-at-zero").selected_text(label(p.at_zero)).width(220.0).show_ui(ui, |ui| {
+                for z in PauseAtZero::ALL {
+                    ui.selectable_value(&mut p.at_zero, z, label(z));
+                }
+            });
+            ui.end_row();
+            ui.label(tl!("Text at zero"));
+            ui.add(egui::TextEdit::singleline(&mut p.zero_text).char_limit(PauseSettings::MAX_TEXT).desired_width(240.0));
+            ui.end_row();
+            ui.label(tl!("Text position"));
+            let label = |a: PauseAnchor| tl!(anchor_label(a));
+            craft_ui::ComboBox::from_id_salt("pause-anchor").selected_text(label(p.anchor)).width(220.0).show_ui(ui, |ui| {
+                for a in PauseAnchor::ALL {
+                    ui.selectable_value(&mut p.anchor, a, label(a));
+                }
+            });
+            ui.end_row();
+            ui.label(tl!("Text size"));
+            ui.add(egui::DragValue::new(&mut p.size_pct).range(PauseSettings::SIZE_PCT).suffix(format!(" {}", tl!("% of the canvas height"))));
+            ui.end_row();
+            ui.label(tl!("Font"));
+            ui.add(egui::TextEdit::singleline(&mut p.font).hint_text(tl!("Font family")).desired_width(240.0));
+            ui.end_row();
+            ui.label(tl!("Text color"));
+            color_button(ui, &mut p.color);
+            ui.end_row();
+            ui.label(tl!("Outline width"));
+            ui.add(egui::DragValue::new(&mut p.outline).range(PauseSettings::OUTLINE));
+            ui.end_row();
+            ui.label(tl!("Outline color"));
+            color_button(ui, &mut p.outline_color);
+            ui.end_row();
+            ui.label("");
+            ui.checkbox(&mut p.mute_scene, tl!("Mute the program audio while paused"));
             ui.end_row();
         });
     }
@@ -563,7 +756,16 @@ impl SettingsWindow {
     }
 
     fn video(&mut self, ui: &mut Ui) {
+        // On Linux the list arrives after the window opens, and displays can be connected while
+        // the page is shown.
+        let now = ui.ctx().input(|i| i.time);
+        if self.displays_read.is_none_or(|read| now - read >= DISPLAYS_EVERY || now < read) {
+            self.displays_read = Some(now);
+            self.displays = (self.list_displays)();
+        }
+        ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64(DISPLAYS_EVERY));
         let v = &mut self.draft.video;
+        let before = *v;
         let size_combo = |ui: &mut Ui, id: &str, w: &mut u32, h: &mut u32| {
             ui.horizontal(|ui| {
                 ui.add(egui::DragValue::new(w).range(16..=8192));
@@ -586,28 +788,44 @@ impl SettingsWindow {
             // too large or too small for a canvas is shown and can't be picked.
             let zoom = ui.ctx().zoom_factor();
             let here = ui.ctx().input(|i| crate::window_display(i.viewport(), zoom));
-            let mut choices: Vec<(String, (u32, u32))> = Vec::with_capacity(self.displays.len() + 1);
+            // Each choice with the display the canvas then follows.
+            let mut choices: Vec<(String, (u32, u32), Option<&studiocraft_platform::display::DisplayInfo>)> =
+                Vec::with_capacity(self.displays.len() + 1);
             if let Some(s) = here {
-                choices.push((tl!("The display this window is on").to_string(), s));
+                choices.push((tl!("The display this window is on").to_string(), s, crate::follow::of_size(&self.displays, s)));
             }
-            choices.extend(self.displays.iter().map(|d| (d.name.clone(), (d.width, d.height))));
+            choices.extend(self.displays.iter().map(|d| (d.name.clone(), (d.width, d.height), Some(d))));
             if !choices.is_empty() {
                 ui.label(tl!("Match display"));
+                let picked = &mut self.canvas_display;
                 craft_ui::ComboBox::from_id_salt("match-display").selected_text(tl!("Choose a display")).show_ui(ui, |ui| {
-                    for (name, (w, h)) in &choices {
+                    for (name, (w, h), display) in &choices {
                         let fits = crate::canvas_for((*w, *h)).is_ok();
                         let on = v.base_width == *w && v.base_height == *h;
                         let (width, height) = (w.to_string(), h.to_string());
                         let label = craft_i18n::fmt(tl!("{name}: {width} × {height}"), &[("name", name), ("width", &width), ("height", &height)]);
                         if ui.add_enabled(fits, egui::Button::selectable(on, label)).clicked() {
                             (v.base_width, v.base_height) = (*w, *h);
+                            *picked = Some(display.cloned());
                         }
                     }
                 });
                 ui.end_row();
             }
+            follow_canvas(before, v);
             ui.label(tl!("Output size"));
             size_combo(ui, "output-size", &mut v.output_width, &mut v.output_height);
+            ui.end_row();
+            ui.label(tl!("Output scale"));
+            let scale = v.output_scale();
+            let current = scale.map_or_else(|| tl!("Custom").to_string(), |s| scale_label(v, s));
+            craft_ui::ComboBox::from_id_salt("output-scale").selected_text(current).show_ui(ui, |ui| {
+                for s in studiocraft_model::OUTPUT_SCALES {
+                    if ui.selectable_label(scale == Some(s), scale_label(v, s)).clicked() {
+                        (v.output_width, v.output_height) = v.scaled_output(s);
+                    }
+                }
+            });
             ui.end_row();
             ui.label(tl!("Frames per second"));
             let current = FPS
@@ -717,7 +935,16 @@ impl SettingsWindow {
             ui.separator();
             match self.tab {
                 Tab::General => self.general(ui),
-                Tab::Stream => self.stream(ui, registry),
+                Tab::Stream => {
+                    // The tab scrolls when the window is shorter than its fields, and Pause Screen
+                    // Settings… scrolls it to the Pause screen section.
+                    let height = (ctx.content_rect().height() - 160.0).max(200.0);
+                    egui::ScrollArea::vertical().id_salt("stream-tab").max_height(height).show(ui, |ui| {
+                        self.stream(ui, registry);
+                        ui.add_space(12.0);
+                        self.pause_screen(ui, &mut out);
+                    });
+                }
                 Tab::Output => self.output(ui, registry, &mut out),
                 Tab::Audio => self.audio(ui),
                 Tab::Video => self.video(ui),
@@ -741,6 +968,7 @@ impl SettingsWindow {
                                 check_updates: self.check_updates,
                                 system_title_bar: self.system_title_bar,
                                 graphics_adapter: self.graphics_adapter.clone(),
+                                canvas_display: self.canvas_display.clone(),
                             });
                             out.close |= ok;
                         }
@@ -828,6 +1056,28 @@ mod tests {
         assert!(!streaming.iter().any(|(id, _)| *id == "nvenc_native_hevc"), "a stream carries H.264: {streaming:?}");
         // Without an ffmpeg program the built-in encoder can still record.
         assert!(listed_encoders(registry, &[], false).iter().any(|(e, ok)| e.id() == "h264" && *ok));
+    }
+
+    #[test]
+    fn the_draft_output_follows_its_canvas_at_a_scale() {
+        let before = VideoSettings { output_width: 1280, output_height: 720, ..VideoSettings::default() };
+        let mut v = VideoSettings { base_width: 2560, base_height: 1440, ..before };
+        follow_canvas(before, &mut v);
+        assert_eq!((v.output_width, v.output_height), (1706, 960));
+        // An output size the same edit changed, or one that is no share of the canvas, stays.
+        let mut v = VideoSettings { base_width: 2560, base_height: 1440, output_width: 1000, ..before };
+        follow_canvas(before, &mut v);
+        assert_eq!((v.output_width, v.output_height), (1000, 720));
+        let custom = VideoSettings { output_width: 1000, output_height: 500, ..VideoSettings::default() };
+        let mut v = VideoSettings { base_width: 1080, base_height: 1920, ..custom };
+        follow_canvas(custom, &mut v);
+        assert_eq!((v.output_width, v.output_height), (1000, 500));
+        // Without a canvas change nothing moves.
+        let mut v = before;
+        follow_canvas(before, &mut v);
+        assert_eq!(v, before);
+        assert_eq!(scale_label(&before, (2, 3)), "66% (1280 × 720)");
+        assert_eq!(scale_label(&before, (1, 1)), "100% (1920 × 1080)");
     }
 
     /// The texts drawn by `f`.
@@ -954,6 +1204,45 @@ mod tests {
         assert_eq!(w.graphics_adapter, Preference::LowPower, "drawing the tab changes nothing");
         assert!(texts.iter().any(|t| t == tl!("Hardware encoder")), "{texts:?}");
         assert!(texts.iter().any(|t| t == tl!("Automatic (the first that passes a test)")), "the default is shown: {texts:?}");
+    }
+
+    #[test]
+    fn the_video_page_reads_the_display_list_again_while_shown() {
+        use studiocraft_platform::display::DisplayInfo;
+        fn display(name: &str) -> DisplayInfo {
+            DisplayInfo { id: name.into(), name: name.into(), width: 1920, height: 1080, primary: false }
+        }
+        fn none() -> Vec<DisplayInfo> {
+            Vec::new()
+        }
+        fn one() -> Vec<DisplayInfo> {
+            vec![display("DP-1")]
+        }
+        fn two() -> Vec<DisplayInfo> {
+            vec![display("DP-1"), display("HDMI-A-1")]
+        }
+        let ctx = egui::Context::default();
+        let mut w = SettingsWindow::new(&Profile::default(), &crate::commands::keymap(Overrides::new()), Tab::Video, i18n::AUTO, true);
+        let draw = |w: &mut SettingsWindow, time: f64| {
+            let input = egui::RawInput { time: Some(time), ..Default::default() };
+            let mut out = ctx.run_ui(input, |ui| w.video(ui));
+            out.textures_delta.clear();
+        };
+        // The window opened before the system answered.
+        w.displays = Vec::new();
+        w.list_displays = none;
+        draw(&mut w, 10.0);
+        assert!(w.displays.is_empty());
+        // The answer arrives; the page shows it within a second, without reopening.
+        w.list_displays = one;
+        draw(&mut w, 10.5);
+        assert!(w.displays.is_empty(), "read at most once a second");
+        draw(&mut w, 11.0);
+        assert_eq!(w.displays, one());
+        // A display connected while the page is shown.
+        w.list_displays = two;
+        draw(&mut w, 12.0);
+        assert_eq!(w.displays, two());
     }
 
     #[test]

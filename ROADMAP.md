@@ -9,6 +9,7 @@ description in [docs/features.md](docs/features.md).
 
 - Scenes, sources and scene items can be moved, resized, rotated, locked, hidden and undone ([Sources](docs/features.md#sources)).
 - Color, image, text, media file, display capture, window capture, camera, audio input and audio output sources are built in ([Built-in sources](docs/features.md#built-in-sources)).
+- A Staged windows source keeps up to six windows capturing and presents one, swapped by `present.window`, `present.next`, `present.previous` or their hotkeys, with a placeholder while the presented window is closed or minimized, on Windows and macOS ([Staged windows](docs/features.md#staged-windows)).
 - The media file source plays Ogg Vorbis files at 8 to 192 kHz without ffmpeg, through `craft-audio`'s Vorbis decoder, and mixes files with more than two channels down to stereo ([When `ffmpeg` is needed](docs/features.md#when-ffmpeg-is-needed)).
 - Cameras are captured on Windows (Media Foundation), macOS (AVFoundation) and Linux (V4L2), with the camera and its format chosen in the source's Properties ([Camera](docs/features.md#camera)).
 - Audio input and output are captured on Linux through the PipeWire sound server, which lists its devices with the default first ([Audio capture on Linux](docs/features.md#audio-capture-on-linux)).
@@ -28,7 +29,7 @@ description in [docs/features.md](docs/features.md).
 
 - The audio mixer has meters, faders and mute, and each source has a sync offset of 0 to 5000 ms ([Audio](docs/features.md#audio)).
 - The Application Audio dock lists the microphones and the running applications that have audio as lanes with live meters, and routes an application into the program in every scene, together with the microphone ([Application Audio dock](docs/features.md#application-audio-dock)).
-- The mixer measures the final mix's loudness, and the window does not show the readings yet ([Audio](docs/features.md#audio)).
+- The mixer measures the final mix's loudness, and `audio.loudness` reports it with the profile's loudness target; the window does not show the readings yet ([Audio](docs/features.md#audio)).
 - Audio monitoring works on Windows and macOS, with each source off, monitor only or monitor and output ([Audio](docs/features.md#audio)).
 
 ### Recording
@@ -42,11 +43,15 @@ description in [docs/features.md](docs/features.md).
 ### Streaming
 
 - Streams go to one or more RTMP and RTMPS servers from StudioCraft through the built-in H.264 encoders, each destination connecting, reconnecting and stopping on its own, with the encoder's settings in Settings › Stream ([Streaming](docs/features.md#streaming)).
+- `golive.check` lists what would stop a stream or spoil it (destinations, the encoder, free space for recordings, sources and live captions), each item passing, a problem or unknown, and the window does not show it yet ([Streaming](docs/features.md#streaming)).
+- Pause Program shows a pause screen in the program, and so in every recording, stream and replay buffer: a background color, a picture or a looping video, and a countdown that keeps the screen or resumes the program at zero. The Pause button after Go Live, with its menu of countdowns, and File › Pause Program start it; the button, a banner above the program with +1 min and Resume, and File › Resume Program end it ([Pause screen](docs/features.md#pause-screen)).
 
 ### Hardware acceleration
 
 - Settings › Video › Hardware acceleration chooses the graphics adapter, and the app recovers from a device loss ([Hardware acceleration](docs/features.md#hardware-acceleration)).
 - The compositor converts the program to NV12 on the GPU for the encoders (`craft-gpu-yuv`) ([Hardware acceleration](docs/features.md#hardware-acceleration)).
+- The compositor draws small pictures of up to 16 scenes on request, at most 4 times a second, on the GPU without reading them back ([Hardware acceleration](docs/features.md#hardware-acceleration)).
+- `scene.thumbnails` names the scenes whose pictures are drawn, 2 times a second by default, and stops them with an empty list ([Control protocol](docs/control-protocol.md#scenethumbnails)).
 - The Hardware video encoder runs the hardware encoder set in Settings › Video › Hardware acceleration. Automatic tests each candidate with one frame, in an order set by the adapter's vendor, and falls back to x264 (`craft-hwenc`) ([Hardware acceleration](docs/features.md#hardware-acceleration)).
 - NVIDIA NVENC, Windows Media Foundation, Apple VideoToolbox and VA-API H.264 and HEVC (built in) record MKV files in StudioCraft's own process (`craft-hwenc-native`) ([Hardware acceleration](docs/features.md#hardware-acceleration)).
 
@@ -101,9 +106,9 @@ description in [docs/features.md](docs/features.md).
    ([Application audio capture](docs/features.md#application-audio-capture)). The Application
    Audio dock lists microphones and running applications as lanes with live meters, grays a lane
    the program does not hear, and routes an application into every scene
-   ([Application Audio dock](docs/features.md#application-audio-dock)). Each lane has volume up to
-   0 dB, mute, filters, a sync offset and monitoring. Gain with boost above 0 dB and track
-   assignment are still to be built.
+   ([Application Audio dock](docs/features.md#application-audio-dock)). Each lane has volume with up to
+   +20 dB of boost, mute, filters, a sync offset and monitoring. Track assignment is still to be
+   built.
 6. **Application audio on macOS and Linux (partly done).** Linux lists the applications that
    have PipeWire playback streams and captures one by linking its streams to a capture stream
    ([Application audio capture](docs/features.md#application-audio-capture)). Linux shows no
@@ -116,8 +121,10 @@ description in [docs/features.md](docs/features.md).
    stop all of them, a group or one with a single click, after checking the settings first. Each
    kind of service adds what its public interface offers, such as a list of ingest servers, the
    title and category, stream health, the viewer count and chat.
-9. **Markers for editing.** A hotkey will drop a marker while a recording or the stream runs, and
-   the recording will open in FilmCraft with the markers on its timeline.
+9. **Markers for editing (partly done).** File › Add Recording Marker, or its hotkey, marks the
+   running recording, and a timeline file written beside the recording opens in FilmCraft with
+   the markers on it ([Recording markers](docs/features.md#recording-markers)). Markers on the
+   stream are still to be built.
 10. **Raw and on-demand recordings.** A recording will be written twice: a raw copy for editing,
     with its tracks kept apart, and a copy that matches the stream for posting as a video on
     demand.
@@ -125,10 +132,11 @@ description in [docs/features.md](docs/features.md).
     computer while a recording or the stream runs. A Live Captions source shows the text on the
     program, or on the preview only, the stream carries it as closed captions, and `.srt` and
     `.vtt` files are written beside the recording.
-12. **Canvas size from the display (partly done).** Moves and resizes snap to the canvas and to
-    other items, and Settings › Video sets the canvas to a chosen display's size
-    ([Sources](docs/features.md#sources)). The canvas will follow the display when its resolution
-    or scaling changes.
+12. **Canvas size from the display (partly done).** Moves and resizes snap to the canvas, its safe
+    areas and other items, Settings › Video sets the canvas to a chosen display's size and the
+    output to a share of the canvas, and scenes are laid out again when the canvas size changes.
+    The canvas then follows that display when its resolution or scaling changes
+    ([Sources](docs/features.md#sources)).
 13. **AMD and Intel encoders in StudioCraft's own process, and hardware decoding.** The AMD AMF and
     Intel Quick Sync encoders run only through `ffmpeg` today. They will run in StudioCraft's own
     process like the NVENC, Media Foundation, VideoToolbox and VA-API encoders. Media file sources
@@ -144,7 +152,8 @@ description in [docs/features.md](docs/features.md).
     settings, filters and audio in place, and every change applies at once and can be undone. A
     dock layout with the canvas in the middle, the sources on one side and the inspector on the
     other will be offered beside the current layout.
-16. **Staged windows.** Several windows or displays can be picked ahead of time and swapped onto
-    the program with a click, a hotkey or a command, without a scene for each. Staged windows
-    keep capturing in the background, so the new window shows on the next frame. A window that
-    closes or minimizes shows a placeholder instead of the desktop behind it.
+16. **Staged windows (partly done).** A Staged windows source holds up to six windows, keeps them
+    capturing in the background, and swaps the presented one from its Properties, a hotkey or a
+    command, showing a color or the last picture while that window is closed or minimized
+    ([Staged windows](docs/features.md#staged-windows)). Staging displays, a dock of staged windows
+    with live thumbnails to click, and a transition on each swap are still to be built.

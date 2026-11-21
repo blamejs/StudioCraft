@@ -1,7 +1,7 @@
 //! The preview and program views: the compositor's canvas textures drawn in the window, and the
-//! handles that move and resize the selected item. Moves and resizes snap to the canvas's edges
-//! and center lines and to other items' edges and center lines; Alt (Option on macOS) turns
-//! snapping off while it is held.
+//! handles that move and resize the selected item. Moves and resizes snap to the canvas's edges,
+//! center lines and safe areas and to other items' edges and center lines; Alt (Option on macOS)
+//! turns snapping off while it is held.
 
 use egui::{Color32, Pos2, Rect, Sense, Stroke, StrokeKind, TextureId, Ui, Vec2 as EVec2, pos2, vec2};
 use studiocraft_model::{ItemId, Transform, Vec2};
@@ -116,8 +116,9 @@ pub struct SnapLines {
 }
 
 impl SnapLines {
-    /// The canvas's edges and center lines, and the edges and center lines of every other visible
-    /// item that has shown something and is turned by a multiple of 90 degrees.
+    /// The canvas's edges and center lines, the edges and center lines of every other visible
+    /// item that has shown something and is turned by a multiple of 90 degrees, and the edges of
+    /// the canvas's safe areas ([`SAFE_MARGINS`]).
     pub fn new(canvas: (u32, u32), items: &[EditItem], dragged: ItemId) -> SnapLines {
         let (w, h) = (canvas.0 as f32, canvas.1 as f32);
         let mut lines = SnapLines { x: vec![0.0, w * 0.5, w], y: vec![0.0, h * 0.5, h] };
@@ -139,9 +140,17 @@ impl SnapLines {
             lines.x.extend([min.x, (min.x + max.x) * 0.5, max.x]);
             lines.y.extend([min.y, (min.y + max.y) * 0.5, max.y]);
         }
+        for m in SAFE_MARGINS {
+            lines.x.extend([w * m, w * (1.0 - m)]);
+            lines.y.extend([h * m, h * (1.0 - m)]);
+        }
         lines
     }
 }
+
+/// The edges of the canvas's safe areas, as a share of each side measured from its edges: the
+/// action safe area and the title safe area.
+pub const SAFE_MARGINS: [f32; 2] = [0.035, 0.05];
 
 /// The lines a drag snapped to this frame, drawn as guides: a vertical line at `x`, a horizontal
 /// line at `y`.
@@ -566,10 +575,26 @@ mod tests {
         let turned = item(6, Transform { position: Vec2::ZERO, rotation: 90.0, ..Transform::default() }, (100, 40));
         let dragged = item(1, Transform::default(), (10, 10));
         let lines = SnapLines::new((1920, 1080), &[hidden, waiting, tilted, turned, dragged], ItemId(1));
-        assert_eq!(lines.x.len(), 6, "{lines:?}");
+        assert_eq!(lines.x.len(), 10, "{lines:?}");
         assert!(close(Vec2::new(lines.x[3], lines.y[3]), Vec2::new(30.0, -30.0)), "{lines:?}");
         assert!(close(Vec2::new(lines.x[5], lines.y[5]), Vec2::new(70.0, 70.0)), "{lines:?}");
         assert_eq!(&lines.x[..3], &[0.0, 960.0, 1920.0]);
         assert_eq!(&lines.y[..3], &[0.0, 540.0, 1080.0]);
+    }
+
+    #[test]
+    fn moves_and_resizes_snap_to_the_safe_areas() {
+        let lines = canvas_lines();
+        // Action safe is 3.5% in from each edge, title safe 5%: 67.2 and 96 across, 37.8 and 54 down.
+        for (x, y) in [(67.2, 37.8), (96.0, 54.0), (1852.8, 1042.2), (1824.0, 1026.0)] {
+            assert!(lines.x.iter().any(|l| (l - x).abs() < 0.01) && lines.y.iter().any(|l| (l - y).abs() < 0.01), "{x}, {y}: {lines:?}");
+        }
+        let (m, g) = moved(Transform::default(), (100, 100), Vec2::new(92.0, 300.0), &lines, 8.0);
+        assert!(close(m.position, Vec2::new(96.0, 300.0)), "{m:?}");
+        assert_eq!(g, Guides { x: Some(96.0), y: None });
+        // The bottom right corner of a 100 x 50 item snaps to the title safe area's right edge.
+        let (r, g) = resized(Transform::default(), (100, 50), 2, Vec2::new(1820.0, 600.0), false, &lines, 8.0);
+        assert!(close(r.size((100, 50)), Vec2::new(1824.0, 912.0)), "{r:?}");
+        assert_eq!(g, Guides { x: Some(1824.0), y: None });
     }
 }

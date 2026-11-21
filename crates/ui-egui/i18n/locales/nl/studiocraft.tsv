@@ -128,8 +128,10 @@
 	H.264 (built in)	H.264 (ingebouwd)
 	NVIDIA NVENC H.264 (built in)	NVIDIA NVENC H.264 (ingebouwd)
 	NVIDIA NVENC HEVC (built in)	NVIDIA NVENC HEVC (ingebouwd)
+	NVIDIA NVENC AV1 (built in)	NVIDIA NVENC AV1 (ingebouwd)
 	Windows Media Foundation H.264 (built in)	Windows Media Foundation H.264 (ingebouwd)
 	Windows Media Foundation HEVC (built in)	Windows Media Foundation HEVC (ingebouwd)
+	Windows Media Foundation AV1 (built in)	Windows Media Foundation AV1 (ingebouwd)
 	Apple VideoToolbox H.264 (built in)	Apple VideoToolbox H.264 (ingebouwd)
 	Apple VideoToolbox HEVC (built in)	Apple VideoToolbox HEVC (ingebouwd)
 	VA-API H.264 (built in)	VA-API H.264 (ingebouwd)
@@ -366,6 +368,24 @@
 	Width	Breedte
 	Window	Venster
 	Window capture	Vensteropname
+	Staged windows	Klaargezette vensters
+	Window 1	Venster 1
+	Window 2	Venster 2
+	Window 3	Venster 3
+	Window 4	Venster 4
+	Window 5	Venster 5
+	Window 6	Venster 6
+	Presented window	Getoond venster
+	While the presented window cannot be shown	Als het getoonde venster niet getoond kan worden
+	Show a color	Een kleur tonen
+	Keep the last picture	Het laatste beeld houden
+	Placeholder color	Plaatsvervangende kleur
+	no window is staged in the presented slot	er staat geen venster klaar op de getoonde plaats
+	waiting for the window	wachten op het venster
+	Present Staged Window	Klaargezet venster tonen
+	Present Next Staged Window	Volgend klaargezet venster tonen
+	Present Previous Staged Window	Vorig klaargezet venster tonen
+	Present Staged Window {n}	Klaargezet venster {n} tonen
 	Your Videos folder	Je map Video's
 	YUV vectorscope	YUV-vectorscoop
 	{device} (not connected)	{device} (niet aangesloten)
@@ -483,6 +503,9 @@ menu	Transform	Transformeren
 @msg	Audio tracks could not be repaired: {takes} and {more} more. Takes repaired: {count}	Audiosporen konden niet worden hersteld: {takes} en {more} meer. Herstelde opnamen: {count}
 	Open Last Audio Tracks in Editor	Laatste audiosporen openen in editor
 	Add Audio Tracks Marker	Markering toevoegen aan audiosporen
+	Add Recording Marker	Markering toevoegen aan opname
+@msg	Markers saved to {path}	Markeringen opgeslagen in {path}
+@msg	The markers could not be saved: {error}	De markeringen konden niet worden opgeslagen: {error}
 	After a take	Na een opname
 	Nothing	Niets
 	Show the folder	Map tonen
@@ -526,3 +549,7 @@ menu	Transform	Transformeren
 @msg	there is no display `{id}`: the system lists no displays	er is geen beeldscherm `{id}`: het systeem toont geen beeldschermen
 @msg	there is no display `{id}` (the displays are {ids})	er is geen beeldscherm `{id}` (de beeldschermen zijn {ids})
 @msg	a {width} × {height} display can't be the canvas: each side must be from {min} to {max} pixels	een beeldscherm van {width} × {height} kan niet het canvas zijn: elke zijde moet {min} tot {max} pixels zijn
+	Output scale	Uitvoerschaal
+	Custom	Aangepast
+	Fill Screen	Scherm vullen
+@msg	The scenes could not be laid out for the new canvas: {error}	De scènes konden niet voor het nieuwe canvas worden ingedeeld: {error}

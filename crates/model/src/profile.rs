@@ -52,10 +52,51 @@ impl VideoSettings {
     pub fn fps(&self) -> f64 {
         f64::from(self.fps_num) / f64::from(self.fps_den.max(1))
     }
+
+    /// The output size that is `scale` (a numerator and a denominator) of the canvas: each side
+    /// rounded down to an even number, between [`MIN_SIDE`] and [`MAX_SIDE`].
+    pub fn scaled_output(&self, scale: (u32, u32)) -> (u32, u32) {
+        let v = self.sanitized();
+        let side = |base: u32| {
+            let s = u64::from(base) * u64::from(scale.0) / u64::from(scale.1.max(1));
+            let s = u32::try_from(s).unwrap_or(MAX_SIDE).clamp(MIN_SIDE, MAX_SIDE);
+            (s / 2) * 2
+        };
+        (side(v.base_width), side(v.base_height))
+    }
+
+    /// The entry of [`OUTPUT_SCALES`] that gives the current output size, if exactly one does.
+    /// On a canvas so small that several entries give the same size, the output size counts as
+    /// typed: no entry is shown as chosen, and a new canvas size leaves the output size as it is.
+    pub fn output_scale(&self) -> Option<(u32, u32)> {
+        let v = self.sanitized();
+        let mut matching = OUTPUT_SCALES.into_iter().filter(|s| v.scaled_output(*s) == (v.output_width, v.output_height));
+        match (matching.next(), matching.next()) {
+            (Some(s), None) => Some(s),
+            _ => None,
+        }
+    }
+
+    /// These settings with a canvas of `width` x `height`. An output size that was one of
+    /// [`OUTPUT_SCALES`] of the old canvas becomes the same share of the new one; any other output
+    /// size stays.
+    pub fn with_canvas(self, width: u32, height: u32) -> VideoSettings {
+        let scale = self.output_scale();
+        let mut v = VideoSettings { base_width: width, base_height: height, ..self.sanitized() }.sanitized();
+        if let Some(s) = scale {
+            (v.output_width, v.output_height) = v.scaled_output(s);
+        }
+        v
+    }
 }
 
-/// Audio format of the mix, and the device monitored sources play on.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+/// The output sizes offered as a share of the canvas, as numerators and denominators: 100%, 75%,
+/// two thirds and 50%.
+pub const OUTPUT_SCALES: [(u32, u32); 4] = [(1, 1), (3, 4), (2, 3), (1, 2)];
+
+/// Audio format of the mix, the device monitored sources play on, and the program loudness the
+/// profile aims for.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AudioSettings {
     pub sample_rate: u32,
@@ -63,6 +104,8 @@ pub struct AudioSettings {
     /// empty) for the system's default output. A name the system does not list is reported
     /// when monitoring starts.
     pub monitoring_device: String,
+    /// The band the program's loudness should stay in.
+    pub loudness_target: LoudnessTarget,
 }
 
 /// The device name that stands for the system's default device.
@@ -70,7 +113,49 @@ pub const DEFAULT_AUDIO_DEVICE: &str = "default";
 
 impl Default for AudioSettings {
     fn default() -> Self {
-        Self { sample_rate: 48_000, monitoring_device: DEFAULT_AUDIO_DEVICE.into() }
+        Self { sample_rate: 48_000, monitoring_device: DEFAULT_AUDIO_DEVICE.into(), loudness_target: LoudnessTarget::default() }
+    }
+}
+
+/// The band of program loudness a profile aims for, from `low_lufs` to `high_lufs` in LUFS.
+/// The default, −18 to −14 LUFS, and the allowed range, −60 to 0 LUFS, are StudioCraft's own
+/// values.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct LoudnessTarget {
+    pub low_lufs: f64,
+    pub high_lufs: f64,
+}
+
+impl LoudnessTarget {
+    /// The lowest bound a band may have, in LUFS.
+    pub const MIN_LUFS: f64 = -60.0;
+    /// The highest bound a band may have, in LUFS.
+    pub const MAX_LUFS: f64 = 0.0;
+
+    /// An error when a bound is not a number in [`Self::MIN_LUFS`] to [`Self::MAX_LUFS`], or
+    /// when `low_lufs` is not below `high_lufs`.
+    pub fn check(&self) -> Result<(), String> {
+        let in_range = |v: f64| v.is_finite() && (Self::MIN_LUFS..=Self::MAX_LUFS).contains(&v);
+        if !in_range(self.low_lufs) || !in_range(self.high_lufs) {
+            return Err(format!(
+                "the loudness target must be between {} and {} LUFS (it is {} to {})",
+                Self::MIN_LUFS,
+                Self::MAX_LUFS,
+                self.low_lufs,
+                self.high_lufs
+            ));
+        }
+        if self.low_lufs >= self.high_lufs {
+            return Err(format!("the loudness target's low bound ({} LUFS) must be below its high bound ({} LUFS)", self.low_lufs, self.high_lufs));
+        }
+        Ok(())
+    }
+}
+
+impl Default for LoudnessTarget {
+    fn default() -> Self {
+        Self { low_lufs: -18.0, high_lufs: -14.0 }
     }
 }
 
@@ -195,11 +280,15 @@ pub struct Destination {
     /// The RTMP server, `rtmp://host/app` or `rtmps://host/app`.
     pub server: String,
     pub key: KeyRef,
+    /// The id of the streaming service it was set up for ([`crate::services::SERVICES`]); empty
+    /// for a server of the user's own choosing. A service id this version does not know is kept
+    /// and shown as a custom server.
+    pub service: String,
 }
 
 impl Default for Destination {
     fn default() -> Self {
-        Self { id: String::new(), name: String::new(), enabled: true, server: String::new(), key: KeyRef::None }
+        Self { id: String::new(), name: String::new(), enabled: true, server: String::new(), key: KeyRef::None, service: String::new() }
     }
 }
 
@@ -439,7 +528,203 @@ impl Default for AudioTracksSettings {
     }
 }
 
-/// A named set of video, audio, output, stream, replay buffer and audio tracks settings.
+/// What the pause screen does when its countdown reaches zero.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PauseAtZero {
+    /// The pause screen stays, and the text at zero replaces the countdown.
+    #[default]
+    Keep,
+    /// The program resumes, as Resume does.
+    Resume,
+}
+
+impl PauseAtZero {
+    pub const ALL: [PauseAtZero; 2] = [PauseAtZero::Keep, PauseAtZero::Resume];
+
+    /// The name commands and files use.
+    pub fn id(self) -> &'static str {
+        match self {
+            PauseAtZero::Keep => "keep",
+            PauseAtZero::Resume => "resume",
+        }
+    }
+
+    /// The value named `id`.
+    pub fn from_id(id: &str) -> Option<PauseAtZero> {
+        Self::ALL.into_iter().find(|v| v.id() == id)
+    }
+}
+
+/// Where the countdown text sits on the canvas.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PauseAnchor {
+    TopLeft,
+    TopCenter,
+    TopRight,
+    MiddleLeft,
+    Center,
+    MiddleRight,
+    BottomLeft,
+    #[default]
+    BottomCenter,
+    BottomRight,
+}
+
+impl PauseAnchor {
+    pub const ALL: [PauseAnchor; 9] = [
+        PauseAnchor::TopLeft,
+        PauseAnchor::TopCenter,
+        PauseAnchor::TopRight,
+        PauseAnchor::MiddleLeft,
+        PauseAnchor::Center,
+        PauseAnchor::MiddleRight,
+        PauseAnchor::BottomLeft,
+        PauseAnchor::BottomCenter,
+        PauseAnchor::BottomRight,
+    ];
+
+    /// Where the anchor is across and down the area inside the margins: 0 is the left or top edge,
+    /// 1 the right or bottom edge.
+    pub fn fractions(self) -> (f32, f32) {
+        let i = Self::ALL.iter().position(|a| *a == self).unwrap_or(7);
+        ((i % 3) as f32 * 0.5, (i / 3) as f32 * 0.5)
+    }
+}
+
+/// The pause screen: what the program shows while it is paused, and its countdown.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PauseSettings {
+    /// A picture or video file shown over the background; empty for none.
+    pub media: String,
+    /// How the picture or video is sized to the canvas.
+    pub fit: crate::FitMode,
+    /// The color under the picture or video, `#rrggbbaa`.
+    pub background: String,
+    /// The countdown's length in seconds; 0 for no countdown.
+    pub countdown_s: u32,
+    /// The countdown text, with one `{time}` where the remaining time goes.
+    pub text: String,
+    pub at_zero: PauseAtZero,
+    /// The text shown in place of the countdown once it reaches zero, when the pause screen stays.
+    pub zero_text: String,
+    pub anchor: PauseAnchor,
+    /// The text's height as a share of the canvas height, in percent.
+    pub size_pct: u32,
+    /// The font family; empty for the default.
+    pub font: String,
+    pub color: String,
+    /// The outline's width in pixels.
+    pub outline: u32,
+    pub outline_color: String,
+    /// Whether the program mix fades out while paused. Monitoring and each source's own audio
+    /// track keep the source's audio.
+    pub mute_scene: bool,
+}
+
+impl PauseSettings {
+    /// The countdown lengths, in seconds (12 hours at most).
+    pub const COUNTDOWN_S: std::ops::RangeInclusive<u32> = 0..=43_200;
+    /// The text sizes, in percent of the canvas height.
+    pub const SIZE_PCT: std::ops::RangeInclusive<u32> = 2..=15;
+    /// The outline widths, in pixels.
+    pub const OUTLINE: std::ops::RangeInclusive<u32> = 0..=64;
+    /// Most characters in the countdown text and the text at zero.
+    pub const MAX_TEXT: usize = 200;
+    /// Longest media path, in bytes.
+    pub const MAX_MEDIA_PATH: usize = 4096;
+    /// Where the remaining time goes in the countdown text.
+    pub const TIME: &'static str = "{time}";
+
+    /// An error unless `text` is a countdown text: at most [`Self::MAX_TEXT`] characters with
+    /// exactly one `{time}`.
+    pub fn check_text(text: &str) -> Result<(), String> {
+        if text.chars().count() > Self::MAX_TEXT {
+            return Err(format!("the countdown text is longer than {} characters", Self::MAX_TEXT));
+        }
+        match text.matches(Self::TIME).count() {
+            1 => Ok(()),
+            0 => Err("the countdown text needs {time} where the remaining time goes".into()),
+            _ => Err("the countdown text holds {time} more than once".into()),
+        }
+    }
+
+    /// An error unless `path` can be a media path: at most [`Self::MAX_MEDIA_PATH`] bytes, with no
+    /// NUL character.
+    pub fn check_media(path: &str) -> Result<(), String> {
+        if path.len() > Self::MAX_MEDIA_PATH || path.contains('\0') {
+            return Err(format!("the pause media path must be at most {} bytes and hold no NUL character", Self::MAX_MEDIA_PATH));
+        }
+        Ok(())
+    }
+
+    /// The first value out of its range, as an error message.
+    pub fn check(&self) -> Result<(), String> {
+        let range = |name: &str, v: u32, r: std::ops::RangeInclusive<u32>| {
+            if r.contains(&v) { Ok(()) } else { Err(format!("pause.{name} is {v}; it must be from {} to {}", r.start(), r.end())) }
+        };
+        range("countdown_s", self.countdown_s, Self::COUNTDOWN_S)?;
+        range("size_pct", self.size_pct, Self::SIZE_PCT)?;
+        range("outline", self.outline, Self::OUTLINE)?;
+        Self::check_media(&self.media)?;
+        Self::check_text(&self.text)?;
+        if self.zero_text.chars().count() > Self::MAX_TEXT {
+            return Err(format!("the text at zero is longer than {} characters", Self::MAX_TEXT));
+        }
+        for (name, c) in [("background", &self.background), ("color", &self.color), ("outline_color", &self.outline_color)] {
+            if crate::settings::parse_color(c).is_none() {
+                return Err(format!("pause.{name} is not a color like #rrggbbaa"));
+            }
+        }
+        Ok(())
+    }
+
+    /// These settings with each number brought into its range, and each text, color or path that
+    /// breaks a rule of [`PauseSettings::check`] replaced by its default.
+    pub fn sanitized(self) -> Self {
+        let d = Self::default();
+        let clamp = |v: u32, r: std::ops::RangeInclusive<u32>| v.clamp(*r.start(), *r.end());
+        let color = |c: String, default: String| if crate::settings::parse_color(&c).is_some() { c } else { default };
+        Self {
+            media: if Self::check_media(&self.media).is_ok() { self.media } else { d.media },
+            countdown_s: clamp(self.countdown_s, Self::COUNTDOWN_S),
+            text: if Self::check_text(&self.text).is_ok() { self.text } else { d.text },
+            zero_text: if self.zero_text.chars().count() <= Self::MAX_TEXT { self.zero_text } else { d.zero_text },
+            size_pct: clamp(self.size_pct, Self::SIZE_PCT),
+            outline: clamp(self.outline, Self::OUTLINE),
+            background: color(self.background, d.background),
+            color: color(self.color, d.color),
+            outline_color: color(self.outline_color, d.outline_color),
+            ..self
+        }
+    }
+}
+
+impl Default for PauseSettings {
+    fn default() -> Self {
+        Self {
+            media: String::new(),
+            fit: crate::FitMode::Fit,
+            background: "#101014ff".into(),
+            countdown_s: 300,
+            text: "Back in {time}".into(),
+            at_zero: PauseAtZero::Keep,
+            zero_text: "Back in a moment".into(),
+            anchor: PauseAnchor::BottomCenter,
+            size_pct: 6,
+            font: String::new(),
+            color: "#ffffffff".into(),
+            outline: 4,
+            outline_color: "#000000ff".into(),
+            mute_scene: true,
+        }
+    }
+}
+
+/// A named set of video, audio, output, stream, replay buffer, audio tracks and pause screen
+/// settings.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Profile {
@@ -450,6 +735,7 @@ pub struct Profile {
     pub stream: StreamSettings,
     pub replay: ReplaySettings,
     pub audio_tracks: AudioTracksSettings,
+    pub pause: PauseSettings,
 }
 
 #[cfg(test)]
@@ -463,5 +749,84 @@ mod tests {
         assert_eq!((v.fps_num, v.fps_den), (1, 1));
         let ntsc = VideoSettings { fps_num: 30_000, fps_den: 1001, ..VideoSettings::default() }.sanitized();
         assert!((ntsc.fps() - 29.97).abs() < 0.01);
+    }
+
+    #[test]
+    fn output_scales_follow_the_canvas() {
+        let v = VideoSettings { output_width: 1280, output_height: 720, ..VideoSettings::default() };
+        assert_eq!(v.output_scale(), Some((2, 3)));
+        assert_eq!(v.scaled_output((3, 4)), (1440, 810));
+        // 1080 x 3 / 4 = 810 stays; 1366 / 2 = 683 rounds down to 682.
+        let w = v.with_canvas(2560, 1440);
+        assert_eq!((w.base_width, w.base_height, w.output_width, w.output_height), (2560, 1440, 1706, 960));
+        let half = VideoSettings { base_width: 1366, base_height: 768, output_width: 682, output_height: 384, ..VideoSettings::default() };
+        assert_eq!(half.output_scale(), Some((1, 2)));
+        // A typed output size that is no share of the canvas stays as it is.
+        let custom = VideoSettings { output_width: 1000, output_height: 500, ..VideoSettings::default() };
+        assert_eq!(custom.output_scale(), None);
+        let c = custom.with_canvas(1080, 1920);
+        assert_eq!((c.base_width, c.base_height, c.output_width, c.output_height), (1080, 1920, 1000, 500));
+        // Sides stay in range and even: a tiny canvas and a hostile denominator.
+        let tiny = VideoSettings { base_width: 16, base_height: 16, output_width: 16, output_height: 16, ..VideoSettings::default() };
+        assert_eq!(tiny.scaled_output((1, 2)), (16, 16));
+        // Every share gives 16 x 16 here, so none is taken as chosen and the size stays.
+        assert_eq!(tiny.output_scale(), None);
+        let grown = tiny.with_canvas(1920, 1080);
+        assert_eq!((grown.output_width, grown.output_height), (16, 16));
+        assert_eq!(v.scaled_output((u32::MAX, 0)), (8192, 8192));
+        let odd = v.with_canvas(1001, 99_999);
+        assert_eq!((odd.base_width, odd.base_height, odd.output_width, odd.output_height), (1000, 8192, 666, 5460));
+    }
+
+    #[test]
+    fn the_countdown_text_holds_time_exactly_once() {
+        assert!(PauseSettings::check_text("Back in {time}").is_ok());
+        assert!(PauseSettings::check_text("{time}").is_ok());
+        assert!(PauseSettings::check_text("Back soon").unwrap_err().contains("{time}"));
+        assert!(PauseSettings::check_text("{time} / {time}").unwrap_err().contains("more than once"));
+        let at_limit = format!("{}{{time}}", "x".repeat(PauseSettings::MAX_TEXT - 6));
+        assert!(PauseSettings::check_text(&at_limit).is_ok(), "200 characters");
+        assert!(PauseSettings::check_text(&format!("x{at_limit}")).is_err(), "201 characters");
+        // Characters are counted, not bytes.
+        assert!(PauseSettings::check_text(&format!("{}{{time}}", "é".repeat(PauseSettings::MAX_TEXT - 6))).is_ok());
+    }
+
+    #[test]
+    fn pause_settings_are_checked_and_brought_into_range() {
+        let d = PauseSettings::default();
+        assert!(d.check().is_ok());
+        assert_eq!((d.countdown_s, d.at_zero, d.anchor, d.size_pct, d.mute_scene), (300, PauseAtZero::Keep, PauseAnchor::BottomCenter, 6, true));
+        for bad in [
+            PauseSettings { countdown_s: 43_201, ..d.clone() },
+            PauseSettings { size_pct: 1, ..d.clone() },
+            PauseSettings { size_pct: 16, ..d.clone() },
+            PauseSettings { outline: 65, ..d.clone() },
+            PauseSettings { text: "no placeholder".into(), ..d.clone() },
+            PauseSettings { zero_text: "z".repeat(201), ..d.clone() },
+            PauseSettings { background: "blue".into(), ..d.clone() },
+            PauseSettings { media: "a\0b.png".into(), ..d.clone() },
+        ] {
+            assert!(bad.check().is_err(), "{bad:?}");
+            assert_eq!(bad.clone().sanitized().check(), Ok(()), "{bad:?}");
+        }
+        let edges = PauseSettings { countdown_s: 43_200, size_pct: 15, outline: 0, ..d.clone() };
+        assert_eq!(edges.check(), Ok(()));
+        assert_eq!(edges.clone().sanitized(), edges);
+        let s = PauseSettings { countdown_s: u32::MAX, size_pct: 0, text: "x".into(), color: "#zz".into(), ..d.clone() }.sanitized();
+        assert_eq!((s.countdown_s, s.size_pct, s.text.as_str(), s.color.as_str()), (43_200, 2, "Back in {time}", "#ffffffff"));
+    }
+
+    #[test]
+    fn pause_choices_have_stable_names_and_places() {
+        assert_eq!(PauseAtZero::ALL.map(PauseAtZero::id), ["keep", "resume"]);
+        assert_eq!(PauseAtZero::from_id("resume"), Some(PauseAtZero::Resume));
+        assert_eq!(PauseAtZero::from_id("Resume"), None);
+        assert_eq!(PauseAnchor::TopLeft.fractions(), (0.0, 0.0));
+        assert_eq!(PauseAnchor::Center.fractions(), (0.5, 0.5));
+        assert_eq!(PauseAnchor::BottomCenter.fractions(), (0.5, 1.0));
+        assert_eq!(PauseAnchor::BottomRight.fractions(), (1.0, 1.0));
+        let names: Vec<String> = PauseAnchor::ALL.iter().map(|a| serde_json::to_value(a).unwrap().as_str().unwrap_or("").to_string()).collect();
+        assert_eq!(names[0], "top_left");
+        assert_eq!(names[8], "bottom_right");
     }
 }

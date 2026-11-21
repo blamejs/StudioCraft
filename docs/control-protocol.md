@@ -84,9 +84,9 @@ The message is in English. The window's status bar shows it as well, in the inte
 when the language's catalog has the message.
 [Commands with their own parameters](#commands-with-their-own-parameters) describes `app.info`,
 `app.links`, `app.check_updates`, `plugin.list`, `source.schema`, `source.sync_offset`,
-`source.monitor`, `source.set_record_track`, `audio_tracks.status`, `audio_tracks.repair`,
-`audio_tracks.open_last`, `audio_tracks.marker`, the `captions.*` commands, the `dock.layout_*`
-commands, `video.displays` and `video.canvas_from_display`.
+`source.monitor`, `audio.loudness`, `source.set_record_track`, the `present.*` commands, `audio_tracks.status`, `audio_tracks.repair`,
+`audio_tracks.open_last`, `audio_tracks.marker`, `record.marker`, `recordings.list`, the `captions.*` commands, the
+`dock.layout_*` commands, `golive.check`, `video.displays`, `video.canvas_from_display` and `canvas.relayout`.
 
 Each entry of `engine.commands` has these fields:
 
@@ -300,6 +300,29 @@ studiocraft-cli send 9876 engine.execute '{"command": "app_audio.list"}'
 studiocraft-cli send 9876 engine.execute '{"command": "app_audio.route", "params": {"app": "player.exe|c:\\apps\\player.exe", "routed": true}}'
 ```
 
+### `scene.thumbnails`
+
+`scene.thumbnails` takes `{"scenes", "fps"?}` and has the compositor draw a small picture of each
+scene in `scenes`, for a scene list. `scenes` is a list of scene ids or names, at most 16, and the
+picture of the scene at position `i` goes into slot `i` of the thumbnail textures. `fps` is how many
+times a second each picture is redrawn: from 0.1 (once every 10 seconds) to 4, and 2 when it is
+left out. These
+limits and the default are StudioCraft's own. Each call replaces the last call's list, and
+`{"scenes": []}` stops drawing the pictures. A scene that is removed from the collection leaves the
+list, and the pictures stop when no scene is left. When the list changes, a slot whose scene
+changed keeps its last picture until the compositor draws the new scene into it. The compositor
+draws two such slots a frame, before any other slot, so 16 changed slots take 8 frames.
+
+It returns `{"scenes", "fps"}` with the list and rate now drawn, or `{"scenes": [], "fps": null}`
+when none is drawn. More than 16 scenes, a scene that does not exist, a scene given twice, and an
+`fps` outside that range are errors, and the last list stays drawn. The command changes nothing in
+the scene collection and adds no undo step. Without a graphics device the list is kept and nothing
+is drawn.
+
+```sh
+studiocraft-cli send 9876 engine.execute '{"command": "scene.thumbnails", "params": {"scenes": ["Talk", "Break"]}}'
+```
+
 ### `source.sync_offset` and `source.monitor`
 
 `source.sync_offset` takes `{"source", "ms"}` and delays the source's audio by `ms` milliseconds, a
@@ -310,6 +333,32 @@ whole number from 0 to 5000; a source without audio is an error.
 plays the source on the monitoring device and leaves it out of recordings and streams.
 `document.inspect` reports `monitoring` with the profile's `device`, whether it is `playing`, and
 the device's `rate` and `channels` while it plays.
+
+### `filter.meter`
+
+`filter.meter` takes `{"source", "filter"}`, where `source` is a source's id or name and `filter`
+is the id of one of its filters, and returns `{"gain_reduction_db"}`: how far the filter turned the
+source's audio down in the last block the mixer processed, in dB, 0 or more, rounded to 0.01 dB.
+The compressor, the limiter and the noise gate have a reading; the noise gate's stops at 60 dB,
+the range of StudioCraft's audio meters. The reading is 0 until the mixer has processed a block
+with the filter's current settings. It is `null` for a filter without a reading (gain, the
+equalizer and the video filters) and for a filter the mixer does not run: a disabled filter, a
+filter whose settings were refused, and a filter of a source that is not running. An unknown
+source, and a filter id that is not one of the source's filters, are errors. The command does not
+change the scene collection or add an undo step.
+
+### `audio.loudness`
+
+`audio.loudness` takes no parameters and returns the final mix's loudness as the mixer measures it
+(ITU-R BS.1770-4, EBU R 128) since the mixer started: `momentary_lufs` (the last 400 ms),
+`short_term_lufs` (the last 3 s), `integrated_lufs`, `range_lu` and `true_peak_dbtp`. A reading is
+`null` while it is minus infinity: for silence, before 400 ms or 3 s of program have played, and
+for the integrated value until a block passes the gates. `range_lu` is 0 with too little signal.
+`generation` counts the mixer's published readings; a reply with the same `generation` as an
+earlier one holds the same readings. `target` is the profile's loudness band, `{"low_lufs",
+"high_lufs"}`. Its default, −18 to −14 LUFS, is StudioCraft's own value. A profile file whose band
+has a bound outside −60 to 0 LUFS, or a low bound that is not below the high bound, is refused, and
+such a profile is not saved.
 
 ### `source.set_record_track`, `audio_tracks.status` and `audio_tracks.repair`
 
@@ -340,6 +389,21 @@ repair while four run are errors. A take that is still being written, or that an
 holds, is left unchanged. Each repaired take's entry also has `session`, the session file the
 repair wrote, or `null` for a take that did not make its own folder.
 
+### `present.window`, `present.next` and `present.previous`
+
+These commands change which window a [Staged windows](features.md#staged-windows) source
+(`staged_windows`) presents. `present.window` takes `{"index", "source"?}`, where `index` is a slot
+from 1 to 6, and presents the window in that slot. `present.next` and `present.previous` take
+`{"source"?}` and present the next or the previous slot that holds a window, wrapping around.
+`source` is a source's id or name. Without it, the command changes every Staged windows source in
+the collection that has a window in the slot it moves to. Each returns
+`{"presented": [{"source", "slot"}]}` with the sources it changed; a source that already presents
+that slot is left out. The presented slot is the source's `presented` setting, so it is saved with
+the collection. The commands add no undo step, and neither does a `source.settings` call that
+changes only `presented`. Edit › Undo leaves the presented slot as it is. A `source` that is not a Staged windows
+source, a collection without one, an `index` outside 1 to 6, and a slot with no window in any
+target are errors.
+
 ### `audio_tracks.open_last` and `audio_tracks.marker`
 
 `audio_tracks.open_last` takes no params and opens the last take's session file in the audio
@@ -354,6 +418,57 @@ session lists the marker at that sample. `name` is 1 to 256 characters, not only
 control characters; without it the marker is "Marker N", the take's Nth marker. It returns
 `{"name", "seconds"}`, where `seconds` counts from the take's first sample. No running take, a take
 that is ending, and 1,024 markers waiting to be written are errors.
+
+### `record.marker`
+
+`record.marker` takes `{"name"}` and marks the running recording at this moment. `name` follows
+the rules of `audio_tracks.marker`; without it the marker is "Marker N", the recording's Nth
+marker. It returns `{"name", "seconds"}`, where `seconds` counts from the recording's first frame
+and leaves out the time the recording has skipped so far while the computer was suspended. No running recording and a recording that already holds 10,000 markers are errors. When the
+recording stops, `<recording name>.otio` is written beside it with each marker at its frame
+([Recording markers](features.md#recording-markers)).
+
+### `recordings.list`
+
+`recordings.list` takes no params and lists what the recording folder holds, newest first: each
+`.mkv`, `.mp4` and `.mov` file with its marker timeline and its take of audio tracks, each saved
+replay (`Replay <date and time>.mkv`), and each take of audio tracks that has no recording file,
+such as a stream's take. The folder is scanned on a background thread. The command returns at once
+with the last finished scan and starts a new scan when none runs, so the first call returns an
+empty list with `scanning` true, and a later call returns that scan. It returns
+`{"folder", "scanning", "scanned_unix_ms", "recordings", "unreadable", "more", "timed_out"}`:
+
+| Field | Value |
+| --- | --- |
+| `folder` | The recording folder. A scan of another folder, made before the recording folder changed, is not returned. |
+| `scanning` | `true` while a newer scan of the recording folder runs. A scan of the folder before it changed runs to its end first, and the new folder's scan starts at the next call after that. |
+| `scanned_unix_ms` | When the returned scan ended, in milliseconds since 1970, or `null` before the first scan of the folder ends. |
+| `recordings` | The entries, described below. |
+| `unreadable` | `[{"path", "error"}]`: the folder, files and takes that could not be read. |
+| `more` | `true` when the folder holds more than 500 entries; the scan reads the first 500 the system lists. |
+| `timed_out` | `true` when the scan stopped looking at files after 5 seconds; the takes are not listed then. |
+
+Each entry of `recordings` has `name` (the file's name without its extension, or the take's name),
+`kind` (`recording`, `replay` or `audio_tracks` for a take without a recording file),
+`started_unix_ms`, `file`, `format` (`mkv`, `mp4` or `mov`), `bytes`, `modified_unix_ms`,
+`timeline` and `audio_tracks`; fields that do not apply are `null`. `started_unix_ms` is the date
+and time in the file's name read as local time, else the take's start. The list is sorted by it, or
+by `modified_unix_ms` when it is `null`. A recording's `timeline` is `<name>.otio` beside it, and
+its `audio_tracks` is the take in `<name> Audio`. When that name was taken, the timeline or take
+named `<name> (N)` can belong to it instead, unless a recording has that name. Of these, a
+recording takes the take that started nearest its start, and the timeline last changed nearest its
+file's last change, when one is within 10 seconds; otherwise it takes the one of its own name, and
+then the first numbered one. Of two recordings of one name, such as `<name>.mkv` and
+`<name>.mp4`, the one last changed first is matched first. A timeline or take made more than 10 seconds before the recording
+started does not belong to it, so one left from an older recording of the same name is listed on its
+own (a take) or not at all (a timeline). `audio_tracks` holds the take's `folder` (its `Audio Files` folder, which
+`audio_tracks.repair` takes), `session`, `state` (`finished`, `needs_repair` or `recording`),
+`started_unix_ms`, `seconds`, `tracks`, `bytes`, `missing_files`, `dropouts`, `lost_seconds`,
+`markers`, `repaired` and `stopped` (why the take stopped early, or `null`).
+
+The scan follows no link inside the folder and looks into no folder other than the takes'. The
+500 entries, 5 seconds and 10 seconds are StudioCraft's own limits. One scan runs at a time. Over MCP with
+roots, the recording folder must be inside a read root.
 
 ### `captions.*`
 
@@ -390,6 +505,53 @@ files are written once the phrases up to the recording's end are finished, when 
 30 s after the recording ends. The app checks this on every frame; the headless MCP server checks
 it on each request and when it exits.
 
+### `pause.*`
+
+`pause.start` takes `{"media"?, "countdown_s"?, "at_zero"?}` and shows the pause screen in the
+program with the scene collection's transition. Each value given replaces its profile setting for
+this pause only: `media` is a picture or video file (`""` for none), `countdown_s` is 0 to 43,200
+seconds (0 for no countdown) and `at_zero` is `keep` or `resume`. A `null` value, a file type that
+is not a picture or video, a path longer than 4,096 bytes or holding a NUL character, and a value
+out of range are errors. While paused, the values given apply at once without a new transition,
+and a given `countdown_s` starts the countdown again. It returns what `pause.status` returns.
+
+`pause.stop` takes no params and shows the program scene again with the scene collection's
+transition. It is an error when the program is not paused. `pause.toggle` pauses with the profile's
+settings, or resumes, and returns what `pause.status` returns.
+
+`pause.extend` takes `{"seconds"}`, 1 to 43,200, and adds that time to the countdown, up to 43,200 s
+left. A countdown that has reached zero, or a pause without one, counts down from `seconds`. It is
+an error when the program is not paused. It returns what `pause.status` returns.
+
+`pause.status` takes no params and returns what `document.inspect`'s `pause` entry holds:
+`{"paused": false}`, or `paused: true` with `since_ms` (the time paused), `countdown` (`null`
+without one, else `total_s`, `remaining_ms`, `at_zero` and `reached`), `media`, `media_error`
+(why the picture or video is not showing, or `null`) and `text_error` (why the countdown text is not
+showing, or `null`).
+
+None of these commands changes the scene collection or adds an undo step.
+
+### `session.events`
+
+`session.events` takes `{"since"?}` and returns `{"events", "last", "dropped"}`: the scene
+switches, stream reconnects, pauses and resumes since the app started, oldest first. The app keeps
+the last 1,000 events, a limit StudioCraft sets. Each event has `seq` (counting up from 1),
+`kind`, `time_ms` (milliseconds since the app started), and `recording_s` and `stream_s` (how far
+into the running recording and stream it happened, in seconds, or `null` when none runs). A
+`scene` event has `from` and `to`, each `{"id", "name"}`; a scene that was removed by then has a
+`null` name. A `reconnect` event has `destination` (the destination's id), `count` (its lost
+connections in this stream so far) and `lost` (how many of them it lost since the app last looked,
+which is once per interface frame and when the stream stops). Connections lost after the stream
+was asked to stop are not listed. A `pause` or `resume` event has nothing more. Scene and
+destination names longer than 256 characters are cut to 256.
+
+With `since`, only the events with a larger `seq` are returned. `last` is the `seq` of the newest
+event (0 before the first), which a caller passes as `since` next time. `dropped` counts the events
+after `since` that the app no longer keeps. A `since` that is not a whole number of 0 or more is an
+error. A switch of the program scene while paused is listed when it happens; a scene chosen for the
+preview in studio mode is not a switch until it goes to the program. Opening another scene
+collection is not listed. The command does not change the scene collection or add an undo step.
+
 ### `dock.layout_save`, `dock.layout_apply` and `dock.layout_remove`
 
 `dock.layout_save` takes `{"name"}` and saves every dock setting under that name, replacing a
@@ -400,12 +562,41 @@ error.
 `dock.layout_apply` and `dock.layout_remove` take `{"name"}`, compared without regard to case, and
 return `{"applied"}` or `{"removed"}`; a name no layout has is an error.
 
+### `golive.check`
+
+`golive.check` takes no params and lists what would stop the stream from starting or spoil it. It
+returns `{"ready", "problems", "unknown", "more_sources", "items"}`. `ready` is `true` only when
+every item is `pass`; `problems` and `unknown` count the items in those states. Each item is
+`{"id", "state", "text", "template", "args", "fix"}`. `state` is `pass`, `problem` or `unknown`.
+`text` is an English sentence; `template` is the same sentence with `{name}` placeholders and
+`args` holds their values, so the window can show it in the interface language. `fix` is the id
+of the command that fixes a problem, and `null` for an item that passes or is unknown and for a
+problem no command fixes.
+
+The items come in this order:
+
+| `id` | What it checks | `fix` |
+| --- | --- | --- |
+| `destination:<id>` | One item for each destination that is on, with `destination`, its id. A destination with no server, with no key (the profile's key is empty and the server's address does not end with the stream's name, or its session key is not held), or whose server and key give an address a start refuses, is a problem. While a stream of this profile runs, a `live` destination passes, a `connecting` one, one added after the stream started, and one whose server or key changed after the stream started are unknown, and a `retrying`, `failed` or `stopped` one is a problem. While no stream runs, a destination passes only when it was live on an earlier stream of this session with the same server and key, and is a problem when it was retrying or had failed when last seen; one that has not connected yet is unknown, never `pass`. | `view.streaming` |
+| `destinations` | In place of the destination items: no destination is on, or the list cannot be used (too many, an empty id, an id used twice). Always a problem. | `view.streaming` |
+| `encoder` | The stream's video encoder. An encoder that is not installed, does not write H.264 or cannot run in a stream is a problem; the `hardware` choice is unknown; its tests run when the stream starts. Without the graphics device this item is a problem with no `fix`. | `app.settings` |
+| `recording_space` | The free space in the recording folder, or in the nearest folder above it that exists, with `free_bytes`. Less than 10 GB, a limit StudioCraft chose, is a problem, and so is a folder whose free space cannot be read or a file in its place. A folder that has not answered within 250 ms is unknown until a later check reads it; at most four folders are read at once. | `app.settings` |
+| `source:<id>` | Each source that is not working, with `source`, its id, and the error it reports, for example for a window that was closed or a camera that was unplugged. A source that did not start is a problem too. A source whose plug-in is not installed is a problem with no `fix`. At most 32 sources are listed; `more_sources` counts the others. | `selection.properties` |
+| `sources` | In place of the source items when every source is working. Always `pass`. | |
+| `captions` | Live captions. Running passes and starting is unknown. Off, stopping or failed is a problem when the scene collection has a Live Captions source, and passes when it has none. A Live Captions source in a build without speech recognition is a problem with no `fix`. | `captions.toggle` |
+
+`view.streaming`, `app.settings` and `selection.properties` are window commands; run
+`selection.properties` after selecting an item that shows the source. Error texts in a sentence are cut to 300
+characters. The check changes nothing: it does not save the profile, change the scene collection
+or add an undo step. A parameter is an error.
+
 ### `view.streaming` and the `stream.destination` commands
 
 `view.streaming` opens the Streaming window, or closes it when it is open, and returns `{"on"}`.
 
 `stream.destinations` takes no parameters and returns `{"destinations", "running", "max"}`.
-`max` is 16. Each destination is `{"id", "name", "enabled", "server", "key", "status"}`, where
+`max` is 16. Each destination is `{"id", "name", "enabled", "service", "server", "key", "status"}`,
+where `service` is the id of the streaming service it is set up for or empty for a custom server,
 `key` is `profile`, `held` or `none` and `server` shows a user name and password before the host, a
 key at the end of the address, and any query, as dots. A destination whose key is held adds `held_name` and `held`, whether a key is held
 under that name now. `status` is `idle` while no stream runs, `not_in_stream` for a destination
@@ -413,15 +604,23 @@ added after the stream started, and otherwise `connecting`, `live`, `retrying`, 
 `failed`. While the stream runs a destination also has `bytes`, `dropped` and `reconnects`; a
 `retrying` one has `attempt` and `error`, and a `failed` one has `error`.
 
-`stream.destination_add` takes `{"name"?, "server"?, "enabled"?, "key"?, "held_name"?}` and returns
-`{"id"}`. The first destination of a profile gets the id `main` and the profile's key; later ones
-get `destination-2`, `destination-3` and so on, and no key of their own unless `key` says
-otherwise. `enabled` is `true` when it is left out.
+`stream.destination_add` takes `{"service"?, "name"?, "server"?, "enabled"?, "key"?, "held_name"?}`
+and returns `{"id"}`. `service` is the id of one of the seven streaming services, or empty for a
+custom server; the error for an unknown `service` lists the ids. A service that documents one ingest
+server for every account fills in that server when `server` is left out. The first destination of a
+profile gets the id `main` and the profile's key; later ones get `destination-2`, `destination-3`
+and so on, and no key of their own unless `key` says otherwise. `enabled` is `true` when it is left
+out.
 
-`stream.destination_set` takes `{"id", "name"?, "server"?, "enabled"?, "key"?, "held_name"?}` and
-changes only the fields given; it returns `{"id", "changed"}`, and a call that changes nothing does
-not save the profile. With `key` set to `held`, `held_name` names the session key; without it the
-destination keeps its held name, or uses its id.
+`stream.destination_set` takes `{"id", "service"?, "name"?, "server"?, "enabled"?, "key"?,
+"held_name"?}` and changes only the fields given; it returns `{"id", "changed"}`, and a call that
+changes nothing does not save the profile. A new `service` replaces a server that is empty or that
+is one of the services' documented servers: with that service's server, or, for a service that
+shows each account its own server, with no server, and the destination is turned off. Any other
+server is kept, also on a change to a custom server. A `server` or `enabled` given in the same call is used instead, and a destination
+given a server that is not empty keeps its on or off setting. A destination keeps a
+`service` this version does not know until a call changes it. With `key` set to `held`,
+`held_name` names the session key; without it the destination keeps its held name, or uses its id.
 
 A command does not send the profile's stream key, or a key held for the session, to a server the
 user did not send it to. Only the destination `main` takes `key` `profile` from a command. A
@@ -440,7 +639,8 @@ that destination of the running stream; the others go on. They return `{"id", "o
 These are errors: a missing or unknown `id`, a 17th destination, a `name` over 128 characters, a
 `server` over 4096 bytes, a `name` or `server` with a control character, a `server` with a user
 name or password before the host (`rtmp://user:pass@host/app`), a `key` other than
-`profile`, `held` or `none`, `held_name` without `key` `held` or outside 1 to 64 bytes, a parameter
+`profile`, `held` or `none`, `held_name` without `key` `held` or outside 1 to 64 bytes, a `service`
+that is not empty and is not a streaming service id, a parameter
 of the wrong type, a start or stop while no stream runs or while the running stream was started with
 another profile, and a start of a destination whose held key is not set. While a stream of another
 profile runs, each destination's `status` is `not_in_stream`. Each change is saved in the profile, and an open Settings window shows the new
@@ -451,19 +651,64 @@ parameters.
 
 `video.displays` takes no parameters and returns `{"displays", "window"}`. `displays` lists each
 display the system reports as `{"id", "name", "width", "height", "primary"}`, with sizes in pixels;
-on Linux the list is empty because the desktop's picker chooses the display. `window` is
-`{"width", "height"}` of the display the window is on, or `null` when the windowing system does
-not report it.
+on Linux the list holds Wayland's outputs, where no display is `primary`, or RandR's monitors
+under X11. The app reads the Linux list in the background when it starts and again after each
+call, and a call returns the list read before it, so a display added or removed shows from the
+second call after the change. `window` is `{"width", "height"}` of the display the window is on,
+or `null` when the windowing system does not report it.
 
 `video.canvas_from_display` takes `{"display"?}` and sets the canvas size to that display's size
 in pixels. Without `display` it uses the display the window is on. Each side is rounded down to an
-even number, and the output size is not changed. The profile is saved, also when the canvas
-already had that size. An open Settings window shows the new canvas size. It returns
-`{"width", "height", "changed"}`. These are errors: a `display` that is not a string (`null`
-included), an id that `video.displays` does not list, a display with a side under 16 or over 8192
-pixels, an unknown size for the window's display, a change while the recording, the stream or the
-replay buffer runs, and a profile that can't be saved. After a failed save the new canvas size stays
-in use until the app quits.
+even number. An output size of 100%, 75%, 66% (two thirds) or 50% of the old canvas becomes the
+same share of the new canvas, rounded down to even sides; any other output size is not changed. The
+scenes are laid out for the new size as `canvas.relayout` describes. The profile is saved, also
+when the canvas already had that size. An open Settings window shows the new canvas and output
+sizes. It returns `{"width", "height", "output": {"width", "height"}, "changed", "follows"}`. These
+are errors: a `display` that is not a string (`null` included), an id that `video.displays` does not
+list, a display with a side under 16 or over 8192 pixels, an unknown size for the window's display,
+a change while the recording, the stream or the replay buffer runs, and a profile that can't be
+saved. After a failed save the old canvas size, output size and layout come back, and the undo
+history holds no step for the layout change.
+
+Afterward the canvas follows the display: while the same profile is in use and its canvas size has
+not been set another way, the canvas takes the display's new size when its resolution or scaling
+changes. The window lists the displays every 2 seconds, and at once when the display the window is
+on reports a new size. A display that is not connected is followed again when it is; when its id
+has changed, it is found by its name if no other listed display has that name. A new size that is
+outside the canvas's range is not taken. While the recording, the stream or the replay buffer runs
+the canvas keeps its size, and it takes the display's size after they stop. When the profile can't
+be saved, the new size is taken back, its error is shown once, and each look tries the size again.
+`follows` is the id of the followed display, or `null` when the canvas follows none: without
+`display`, the display the window is on is followed only when it is the only listed display of its
+size.
+
+### `canvas.relayout`
+
+`canvas.relayout` takes `{"from": {"width", "height"}, "to": {"width", "height"}, "sizes"?,
+"items"?}` and places every item of every scene, locked and hidden items included, for a canvas
+that changed from `from` to `to`. `sizes` is a list of `{"source", "width", "height"}` with the
+size each source shows at. `items` is a list of item ids; when it is given, only those items are
+placed. The app runs it, as one undo step, whenever the canvas size changes: from Settings ›
+Video, from `video.canvas_from_display`, or by switching to a profile with another canvas size.
+
+- An item with a fit mode is placed by that mode on the new canvas: `fit` shows the whole source
+  inside the canvas, `fill` covers the canvas, and `stretch` makes the source the canvas's size.
+  The crop is kept and the rotation becomes 0. Fit to Screen, Fill Screen and Stretch to Screen
+  set the mode, and so does `item.transform` with `fit`. An `item.transform` without `fit` clears
+  it.
+- Any other item keeps its center at the same place in proportion to the canvas. Its size is
+  multiplied by the square root of the product of the width and height factors, so changing the
+  canvas back gives the old layout.
+- An item whose source is not in `sizes` keeps its top-left corner at the same place in proportion
+  instead, with the same size factor. When the app runs the command, the sources that show
+  nothing at that moment are left out of `sizes`. An item of such a source that has a fit mode is
+  placed by its mode once the source shows a picture, as its own undo step, while it still has
+  its mode and the place the canvas change gave it.
+- With `from` equal to `to`, only items with a fit mode whose source is in `sizes` can move.
+
+These are errors: a side of `from` or `to` under 16 or over 8192 pixels, a `sizes` entry for a
+source the collection does not have, a source listed twice, a source side under 1 or over 65536
+pixels, an `items` entry for an item the collection does not have, and an item listed twice.
 
 ## Command line
 

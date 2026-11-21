@@ -35,6 +35,7 @@ pub const UI_COMMANDS: &[(&str, &str)] = &[
     ("view.fullscreen", "Full-Screen Interface"),
     ("view.lock_preview", "Lock Preview"),
     ("view.streaming", "Streaming"),
+    ("pause.settings", "Pause Screen Settings…"),
     ("stream.destinations", "List Stream Destinations"),
     ("stream.destination_add", "Add Stream Destination"),
     ("stream.destination_remove", "Remove Stream Destination"),
@@ -72,6 +73,7 @@ pub const UI_COMMANDS: &[(&str, &str)] = &[
     ("selection.filters", "Filters…"),
     ("selection.remove", "Remove Selected Source"),
     ("selection.fit", "Fit to Screen"),
+    ("selection.fill", "Fill Screen"),
     ("selection.stretch", "Stretch to Screen"),
     ("selection.center", "Center to Screen"),
     ("selection.reset", "Reset Transform"),
@@ -98,17 +100,19 @@ pub fn ui_params(id: &str) -> &'static str {
         "collection.import" | "collection.export" => "path?: string",
         "scopes.kind" => "kind: string (waveform, parade, histogram, vectorscopeYuv or vectorscopeHls)",
         "stream.destination_add" => {
-            "name?: string, server?: string, enabled?: boolean, key?: string (profile, held or none), held_name?: string (with key held)"
+            "service?: string (a streaming service id, or empty for a custom server), name?: string, server?: string, enabled?: boolean, key?: string (profile, held or none), held_name?: string (with key held)"
         }
         "stream.destination_set" => {
-            "id: string, name?: string, server?: string, enabled?: boolean, key?: string (profile, held or none), held_name?: string (with key held)"
+            "id: string, service?: string (a streaming service id, or empty for a custom server), name?: string, server?: string, enabled?: boolean, key?: string (profile, held or none), held_name?: string (with key held)"
         }
         "stream.destination_remove" | "stream.destination_start" | "stream.destination_stop" => "id: string",
         "dock.move" => "dock: string (scenes, sources, mixer or app_audio), to: string (left or right)",
         "dock.float" => "dock: string (scenes, sources, mixer or app_audio), floating: boolean (true for a window of its own, false for the strip)",
         "dock.layout_save" => "name?: string (without it the window asks for one)",
         "dock.layout_apply" | "dock.layout_remove" => "name: string",
-        "video.canvas_from_display" => "display?: string (an id from video.displays; without it, the display the window is on)",
+        "video.canvas_from_display" => {
+            "display?: string (an id from video.displays; without it, the display the window is on). The canvas then follows the display's resolution and scaling"
+        }
         _ => "",
     }
 }
@@ -119,6 +123,7 @@ pub fn ui_undoable(id: &str) -> bool {
         id,
         "selection.remove"
             | "selection.fit"
+            | "selection.fill"
             | "selection.stretch"
             | "selection.center"
             | "selection.reset"
@@ -138,9 +143,12 @@ pub fn catalog() -> Vec<Bindable> {
         bindable(c("edit.undo"), "Undo", &["Cmd+Z"]),
         bindable(c("edit.redo"), "Redo", &["Cmd+Y", "Cmd+Shift+Z"]),
         bindable(c("record.toggle"), "Start or Stop Recording", &[]),
+        bindable(c("record.marker"), "Add Recording Marker", &[]),
         bindable(c("stream.toggle"), "Start or Stop Streaming", &[]),
         bindable(c("replay.toggle"), "Start or Stop Replay Buffer", &[]),
         bindable(c("replay.save"), "Save Replay", &[]),
+        bindable(c("pause.toggle"), "Pause or Resume Program", &[]),
+        bindable(CommandRef::with_params("pause.extend", json!({"seconds": 60})), "Add a Minute to the Pause", &[]),
         bindable(c("captions.toggle"), "Start or Stop Live Captions", &[]),
         bindable(c("captions.download"), "Download Speech Model", &[]),
         bindable(c("audio_tracks.open_last"), "Open Last Audio Tracks in Editor", &[]),
@@ -163,6 +171,12 @@ pub fn catalog() -> Vec<Bindable> {
     for i in 1..=SCENE_HOTKEYS {
         let cmd = CommandRef::with_params("scene.select_index", json!({"index": i}));
         list.push(bindable(cmd, &format!("Show Scene {i}"), &[&format!("Cmd+{i}")]));
+    }
+    list.push(bindable(c("present.next"), "Present Next Staged Window", &[]));
+    list.push(bindable(c("present.previous"), "Present Previous Staged Window", &[]));
+    for i in 1..=studiocraft_model::staged::SLOTS {
+        let cmd = CommandRef::with_params("present.window", json!({"index": i}));
+        list.push(bindable(cmd, &format!("Present Staged Window {i}"), &[]));
     }
     list
 }
@@ -210,8 +224,16 @@ pub fn menu_bar(s: &MenuState) -> MenuBar {
             Node::Separator,
             Node::Item(Item::new(CommandRef::new("replay.toggle"), crate::i18n::command_label("replay.toggle", "Replay Buffer")).check(false)),
             item("replay.save", "Save Replay"),
+            item("record.marker", "Add Recording Marker"),
             item("audio_tracks.marker", "Add Audio Tracks Marker"),
             item("audio_tracks.open_last", "Open Last Audio Tracks in Editor"),
+            Node::Separator,
+            item("pause.start", "Pause Program"),
+            item("pause.stop", "Resume Program"),
+            Node::Item(Item::new(
+                CommandRef::with_params("pause.extend", json!({"seconds": 60})),
+                crate::i18n::command_label("pause.extend", "Add a Minute to the Pause"),
+            )),
             Node::Separator,
             item("app.settings", "Settings"),
             item("file.show_settings_folder", "Show Settings Folder"),
@@ -229,6 +251,7 @@ pub fn menu_bar(s: &MenuState) -> MenuBar {
             item("selection.rotate_ccw", "Rotate 90° Counterclockwise"),
             Node::Separator,
             item("selection.fit", "Fit to Screen"),
+            item("selection.fill", "Fill Screen"),
             item("selection.stretch", "Stretch to Screen"),
             item("selection.center", "Center to Screen"),
         ],
@@ -354,6 +377,18 @@ mod tests {
         let scene3 = km.bindings(&CommandRef::with_params("scene.select_index", json!({"index": 3})));
         assert_eq!(scene3.len(), 1);
         assert!(km.problems().is_empty(), "{:?}", km.problems());
+    }
+
+    #[test]
+    fn staged_windows_can_be_given_shortcuts() {
+        let list = catalog();
+        let listed = |cmd: &CommandRef| list.iter().any(|b| &b.command == cmd);
+        assert!(listed(&CommandRef::new("present.next")) && listed(&CommandRef::new("present.previous")));
+        for i in 1..=studiocraft_model::staged::SLOTS {
+            assert!(listed(&CommandRef::with_params("present.window", json!({"index": i}))), "slot {i}");
+        }
+        let km = keymap(Overrides::new());
+        assert!(km.bindings(&CommandRef::new("present.next")).is_empty(), "no shortcut until one is set");
     }
 
     #[test]

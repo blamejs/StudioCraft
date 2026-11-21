@@ -134,8 +134,10 @@
 	H.264 (built in)	H.264 (مدمج)
 	NVIDIA NVENC H.264 (built in)	NVIDIA NVENC H.264 (مدمج)
 	NVIDIA NVENC HEVC (built in)	NVIDIA NVENC HEVC (مدمج)
+	NVIDIA NVENC AV1 (built in)	NVIDIA NVENC AV1 (مدمج)
 	Windows Media Foundation H.264 (built in)	Windows Media Foundation H.264 (مدمج)
 	Windows Media Foundation HEVC (built in)	Windows Media Foundation HEVC (مدمج)
+	Windows Media Foundation AV1 (built in)	Windows Media Foundation AV1 (مدمج)
 	Apple VideoToolbox H.264 (built in)	Apple VideoToolbox H.264 (مدمج)
 	Apple VideoToolbox HEVC (built in)	Apple VideoToolbox HEVC (مدمج)
 	VA-API H.264 (built in)	VA-API H.264 (مدمج)
@@ -394,6 +396,24 @@
 	Width	العرض
 	Window	النافذة
 	Window capture	التقاط النافذة
+	Staged windows	النوافذ المجهزة
+	Window 1	النافذة 1
+	Window 2	النافذة 2
+	Window 3	النافذة 3
+	Window 4	النافذة 4
+	Window 5	النافذة 5
+	Window 6	النافذة 6
+	Presented window	النافذة المعروضة
+	While the presented window cannot be shown	عندما يتعذر عرض النافذة المعروضة
+	Show a color	عرض لون
+	Keep the last picture	إبقاء آخر صورة
+	Placeholder color	لون العنصر البديل
+	no window is staged in the presented slot	لا توجد نافذة مجهزة في الخانة المعروضة
+	waiting for the window	في انتظار النافذة
+	Present Staged Window	عرض نافذة مجهزة
+	Present Next Staged Window	عرض النافذة المجهزة التالية
+	Present Previous Staged Window	عرض النافذة المجهزة السابقة
+	Present Staged Window {n}	عرض النافذة المجهزة {n}
 	Your Videos folder	مجلد مقاطع الفيديو
 	YUV vectorscope	مخطط المتجهات YUV
 	{db} dB	{db} ديسيبل
@@ -481,6 +501,9 @@ menu	Transform	التحويل
 @msg	Audio tracks could not be repaired: {takes} and {more} more. Takes repaired: {count}	تعذّر إصلاح المسارات الصوتية: {takes} و{more} غيرها. اللقطات التي أُصلحت: {count}
 	Open Last Audio Tracks in Editor	فتح آخر المسارات الصوتية في المحرر
 	Add Audio Tracks Marker	إضافة علامة إلى المسارات الصوتية
+	Add Recording Marker	إضافة علامة إلى التسجيل
+@msg	Markers saved to {path}	حُفظت العلامات في {path}
+@msg	The markers could not be saved: {error}	تعذّر حفظ العلامات: {error}
 	After a take	بعد اللقطة
 	Nothing	لا شيء
 	Show the folder	إظهار المجلد
@@ -524,3 +547,7 @@ menu	Transform	التحويل
 @msg	there is no display `{id}`: the system lists no displays	لا توجد شاشة `{id}`: لا يعرض النظام أي شاشات
 @msg	there is no display `{id}` (the displays are {ids})	لا توجد شاشة `{id}` (الشاشات هي {ids})
 @msg	a {width} × {height} display can't be the canvas: each side must be from {min} to {max} pixels	لا يمكن أن تكون شاشة بحجم {width} × {height} هي اللوحة: يجب أن يكون كل ضلع من {min} إلى {max} بكسل
+	Output scale	مقياس الإخراج
+	Custom	مخصص
+	Fill Screen	ملء الشاشة
+@msg	The scenes could not be laid out for the new canvas: {error}	تعذّر ترتيب المشاهد للوحة الجديدة: {error}

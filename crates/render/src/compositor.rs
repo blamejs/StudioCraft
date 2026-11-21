@@ -15,7 +15,7 @@ use studiocraft_model::{Crop, SourceId, Vec2};
 use studiocraft_plugin::{EffectImage, VIDEO_EFFECT_PARAMS, VideoContent, VideoEffect, VideoOut};
 
 use crate::nv12::{EncodeTarget, Nv12};
-use crate::plan::{ItemDesc, Plan, SceneDesc};
+use crate::plan::{ItemDesc, MAX_THUMBNAILS, Plan, SceneDesc, ThumbnailRequest};
 use crate::{CANVAS_FORMAT, CANVAS_VIEW_FORMAT, Gpu, RenderError, shaders};
 
 /// Values in one uniform slot.
@@ -49,6 +49,12 @@ pub struct RenderShared {
     pub errors: Fifo<RenderError>,
     /// Still captures waiting for the next frame. A full queue refuses new requests.
     pub captures: ArrayQueue<CaptureRequest>,
+    /// Start, change or stop drawing small pictures of scenes.
+    pub thumbnails: Latest<Option<Arc<ThumbnailRequest>>>,
+    /// New thumbnail textures for the interface, published when they are recreated.
+    pub thumbnail_views: Latest<Arc<ThumbnailViews>>,
+    /// Scenes of the newest thumbnail request past [`crate::MAX_THUMBNAILS`], which are not drawn.
+    pub thumbnails_skipped: AtomicUsize,
 }
 
 /// Still capture requests waiting at once.
@@ -66,6 +72,9 @@ impl Default for RenderShared {
             scope_skipped: AtomicU64::new(0),
             errors: Fifo::new(16),
             captures: ArrayQueue::new(CAPTURE_SLOTS),
+            thumbnails: Latest::new(),
+            thumbnail_views: Latest::new(),
+            thumbnails_skipped: AtomicUsize::new(0),
         }
     }
 }
@@ -149,6 +158,31 @@ pub struct CanvasViews {
     pub generation: u64,
     pub program: Ring,
     pub preview: Ring,
+}
+
+/// The small pictures of a [`ThumbnailRequest`]'s scenes, sampled through sRGB views like
+/// [`CanvasViews`]. The textures are kept while requests come in; a request with more scenes or
+/// another picture size replaces them.
+pub struct ThumbnailViews {
+    pub width: u32,
+    pub height: u32,
+    /// Changes whenever the textures are recreated.
+    pub generation: u64,
+    /// One ring per slot: slot `i` shows scene `i` of the request. There can be more slots than
+    /// the newest request has scenes; those keep their last picture.
+    pub slots: Vec<Ring>,
+}
+
+/// A thumbnail texture and the view the compositor draws into.
+struct Plain {
+    texture: wgpu::Texture,
+    view: wgpu::TextureView,
+}
+
+/// The thumbnail textures: a ring of [`RING_LEN`] for each slot, all of one size.
+struct ThumbPool {
+    targets: Vec<Vec<Plain>>,
+    views: Arc<ThumbnailViews>,
 }
 
 /// A canvas-size render target and the bind group that samples it.
@@ -315,6 +349,32 @@ pub struct Compositor {
     errors: Vec<RenderError>,
     /// Captures asked for before this frame's plan was taken: they are answered with this frame.
     waiting: Vec<CaptureRequest>,
+    /// The scenes drawn as small pictures, if any.
+    thumbs: Option<Arc<ThumbnailRequest>>,
+    thumb_pool: Option<ThumbPool>,
+    thumb_generation: u64,
+    /// When each thumbnail slot was last drawn into its current textures.
+    thumb_last: [Option<Tick>; MAX_THUMBNAILS],
+    /// The slots the newest request has not drawn yet.
+    thumb_fresh: [bool; MAX_THUMBNAILS],
+}
+
+/// Most thumbnails one frame draws. Due thumbnails wait for later frames, oldest first, so their
+/// cost is spread over frames instead of landing on one.
+const THUMBNAILS_PER_FRAME: usize = 2;
+
+/// The thumbnail slots a frame draws: the first `.1` entries of `.0`.
+type Picks = ([usize; THUMBNAILS_PER_FRAME], usize);
+
+/// Whether two scenes draw the same sources in the same order; their transforms and filters may
+/// differ.
+fn same_sources(a: &SceneDesc, b: &SceneDesc) -> bool {
+    a.items.len() == b.items.len() && a.items.iter().zip(&b.items).all(|(x, y)| x.source == y.source)
+}
+
+/// The items of the slots in `picks`.
+fn picked_items<'a>(req: &'a ThumbnailRequest, picks: &'a [usize]) -> impl Iterator<Item = &'a ItemDesc> {
+    picks.iter().filter_map(|&s| req.drawn().get(s)).flat_map(|scene| scene.items.iter())
 }
 
 /// Largest canvas side.
@@ -362,6 +422,11 @@ impl Compositor {
             frame_no: 0,
             errors: Vec::new(),
             waiting: Vec::with_capacity(CAPTURE_SLOTS),
+            thumbs: None,
+            thumb_pool: None,
+            thumb_generation: 0,
+            thumb_last: [None; MAX_THUMBNAILS],
+            thumb_fresh: [false; MAX_THUMBNAILS],
         })
     }
 
@@ -393,14 +458,65 @@ impl Compositor {
         let (program, preview, scratch, scratch_bind, views) = make_canvas(&self.gpu, &self.pipes, width, height, self.generation);
         (self.width, self.height) = (width, height);
         (self.program, self.preview, self.scratch, self.scratch_bind, self.views) = (program, preview, scratch, scratch_bind, views);
+        self.ensure_thumb_pool();
     }
 
     /// Draw `plan` from the next frame on, compiling the shaders and uploading the filter
-    /// pictures it needs first. Pictures the plan no longer uses are released.
+    /// pictures it needs first. Pictures that neither the plan nor the thumbnails use are released.
     pub fn set_plan(&mut self, plan: Arc<Plan>) {
+        if let Some(t) = &plan.transition
+            && !self.pipes.transitions.contains_key(&t.key)
+        {
+            let p = self.compile(&t.key, &shaders::transition(t.wgsl), Layout::Two, "fs_transition");
+            self.pipes.transitions.insert(t.key.clone(), p);
+        }
+        self.plan = plan;
+        self.prepare();
+    }
+
+    /// Start, change or stop drawing small pictures of scenes, compiling the shaders and uploading
+    /// the filter pictures they need first. Each frame draws at most two pictures, oldest first.
+    /// A picture is redrawn at most at the request's rate, counted from the last time its slot was
+    /// drawn, so a new request does not draw sooner, unless the slot now shows other sources or
+    /// another key (a reordered or replaced scene). A request that draws once draws each slot
+    /// once, over the next frames.
+    pub fn set_thumbnails(&mut self, request: Option<Arc<ThumbnailRequest>>) {
+        // A slot that now shows other sources or another key is drawn again soon, not after the
+        // rate's interval.
+        if let Some(new) = &request {
+            for (s, scene) in new.drawn().iter().enumerate() {
+                let old_req = self.thumbs.as_ref();
+                let old = old_req.and_then(|t| t.drawn().get(s));
+                let same_key = old_req.is_some_and(|t| t.keys.get(s) == new.keys.get(s));
+                if !(same_key && old.is_some_and(|old| same_sources(old, scene))) {
+                    self.thumb_last[s] = None;
+                }
+            }
+        }
+        self.thumbs = request;
+        self.thumb_fresh = [true; MAX_THUMBNAILS];
+        self.prepare();
+        self.ensure_thumb_pool();
+    }
+
+    /// The thumbnail textures, once a request with scenes has been made.
+    pub fn thumbnail_views(&self) -> Option<Arc<ThumbnailViews>> {
+        self.thumb_pool.as_ref().map(|p| Arc::clone(&p.views))
+    }
+
+    /// Scenes of the current thumbnail request past [`crate::MAX_THUMBNAILS`], which are not drawn.
+    pub fn thumbnails_skipped(&self) -> usize {
+        self.thumbs.as_ref().map_or(0, |t| t.skipped())
+    }
+
+    /// Compile the shaders and upload the filter pictures that the plan and the thumbnail request
+    /// need, and release the pictures and animation clocks neither uses.
+    fn prepare(&mut self) {
+        let plan = Arc::clone(&self.plan);
+        let thumbs = self.thumbs.clone();
         let mut used = HashSet::new();
         let mut animations = HashSet::new();
-        for item in plan.items() {
+        for item in plan.items().chain(thumbs.iter().flat_map(|t| t.items())) {
             for fx in &item.effects {
                 if let Some(a) = &fx.animation {
                     animations.insert(a.id());
@@ -426,13 +542,6 @@ impl Compositor {
         for id in animations {
             self.started.entry(id).or_insert(None);
         }
-        if let Some(t) = &plan.transition
-            && !self.pipes.transitions.contains_key(&t.key)
-        {
-            let p = self.compile(&t.key, &shaders::transition(t.wgsl), Layout::Two, "fs_transition");
-            self.pipes.transitions.insert(t.key.clone(), p);
-        }
-        self.plan = plan;
     }
 
     /// Put `image` on the GPU unless it is there already. A picture larger than the device's
@@ -514,6 +623,7 @@ impl Compositor {
             }
             return;
         }
+        let thumb_generation = self.thumb_generation;
         if let Some((w, h)) = shared.canvas.take() {
             let generation = self.generation;
             self.set_canvas(w, h);
@@ -535,11 +645,20 @@ impl Compositor {
         if let Some(p) = shared.plan.take() {
             self.set_plan(p);
         }
+        if let Some(t) = shared.thumbnails.take() {
+            self.set_thumbnails(t);
+            shared.thumbnails_skipped.store(self.thumbnails_skipped(), Ordering::Relaxed);
+        }
         for e in self.errors.drain(..) {
             shared.errors.push(e);
         }
         self.frame(now, &shared.readback_lost);
         shared.scope_skipped.store(self.scope_skipped(), Ordering::Relaxed);
+        if self.thumb_generation != thumb_generation
+            && let Some(views) = self.thumbnail_views()
+        {
+            shared.thumbnail_views.publish(views);
+        }
         let mut waiting = std::mem::take(&mut self.waiting);
         for req in waiting.drain(..) {
             // A caller that gave up has dropped its receiver; nothing waits for the answer.
@@ -572,6 +691,16 @@ impl Compositor {
             slots += 1 + item.effects.len() as u64;
             self.sync_source(item);
         }
+        // Sources seen only in thumbnails are uploaded only on the frames that draw them.
+        let picks = self.thumbnails_due(now);
+        let picks = &picks.0[..picks.1];
+        let thumbs = if picks.is_empty() { None } else { self.thumbs.clone() };
+        if let Some(req) = &thumbs {
+            for item in picked_items(req, picks) {
+                slots += 1 + item.effects.len() as u64;
+                self.sync_source(item);
+            }
+        }
         if self.frame_no.is_multiple_of(SWEEP_FRAMES) {
             self.sources.retain(|_, s| Arc::strong_count(&s.video) > 1);
         }
@@ -579,7 +708,7 @@ impl Compositor {
         self.uniforms.begin(&device, &self.pipes.uniform_layout, slots);
         let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("frame") });
 
-        for item in plan.items() {
+        for item in plan.items().chain(thumbs.iter().flat_map(|t| picked_items(t, picks))) {
             if !item.effects.is_empty()
                 && let Some(st) = self.sources.get_mut(&item.source)
             {
@@ -620,6 +749,14 @@ impl Compositor {
             qi = Some(i);
         }
 
+        if let (Some(req), Some(pool)) = (&thumbs, &self.thumb_pool) {
+            for &s in picks {
+                let (Some(scene), Some(ring), Some(targets)) = (req.drawn().get(s), pool.views.slots.get(s), pool.targets.get(s)) else { continue };
+                let i = ring.latest().map_or(0, |i| (i + 1) % RING_LEN);
+                draw_scene(&ctx, &mut self.uniforms, &mut enc, &targets[i].view, scene);
+            }
+        }
+
         let copied = self.nv12.as_mut().is_some_and(|n| convert(n, &self.pipes.yuv, &mut enc, program, now, readback_lost));
         let scope_copied = self.scope_nv12.as_mut().is_some_and(|n| convert(n, &self.pipes.yuv, &mut enc, program, now, &self.scope_skipped));
 
@@ -628,6 +765,15 @@ impl Compositor {
         self.views.program.publish(pi);
         if let Some(i) = qi {
             self.views.preview.publish(i);
+        }
+        if let (Some(_), Some(pool)) = (&thumbs, &self.thumb_pool) {
+            for &s in picks {
+                if let Some(ring) = pool.views.slots.get(s) {
+                    ring.publish(ring.latest().map_or(0, |i| (i + 1) % RING_LEN));
+                    self.thumb_last[s] = Some(now);
+                    self.thumb_fresh[s] = false;
+                }
+            }
         }
         for (n, copied) in [(&mut self.nv12, copied), (&mut self.scope_nv12, scope_copied)] {
             if copied && let Some(n) = n {
@@ -707,10 +853,66 @@ impl Compositor {
         read_rgba(&self.gpu, &target.texture, self.width, self.height).map(Some)
     }
 
-    /// Wait until the GPU has finished every frame submitted so far, and hand finished
-    /// read-backs to the encoders.
+    /// Read the newest picture of thumbnail slot `slot` back (premultiplied alpha), if one was
+    /// drawn. Waits for the GPU; meant for tests and benchmarks.
+    pub fn read_thumbnail(&self, slot: usize) -> Result<Option<Vec<u8>>, RenderError> {
+        let Some(pool) = &self.thumb_pool else { return Ok(None) };
+        let Some(i) = pool.views.slots.get(slot).and_then(Ring::latest) else { return Ok(None) };
+        let target = pool.targets.get(slot).and_then(|t| t.get(i)).ok_or_else(|| RenderError::Device("no thumbnail picture".into()))?;
+        read_rgba(&self.gpu, &target.texture, pool.views.width, pool.views.height).map(Some)
+    }
+
+    /// The thumbnail slots this frame draws, at most [`THUMBNAILS_PER_FRAME`], oldest first. A
+    /// slot is due when it has not been drawn into its textures, when the request's interval has
+    /// passed since its last drawing (or the clock went back), or, for a request that draws once,
+    /// when the request has not drawn it.
+    fn thumbnails_due(&self, now: Tick) -> Picks {
+        let mut picks: Picks = ([0; THUMBNAILS_PER_FRAME], 0);
+        let Some(req) = &self.thumbs else { return picks };
+        let interval = req.interval();
+        let due = |s: usize| match (interval, self.thumb_last[s]) {
+            (_, None) => true,
+            (None, Some(_)) => self.thumb_fresh[s],
+            (Some(interval), Some(last)) => now.0 < last.0 || now.0.saturating_sub(last.0) >= interval.0,
+        };
+        while picks.1 < THUMBNAILS_PER_FRAME {
+            let taken = &picks.0[..picks.1];
+            let next =
+                (0..req.drawn().len()).filter(|&s| due(s) && !taken.contains(&s)).min_by_key(|&s| self.thumb_last[s].map_or(i64::MIN, |t| t.0));
+            let Some(s) = next else { break };
+            picks.0[picks.1] = s;
+            picks.1 += 1;
+        }
+        picks
+    }
+
+    /// Make the thumbnail textures fit the request: its picture size at the current canvas, and a
+    /// slot for each scene it draws. Textures that already fit are kept, so frames never make
+    /// them; textures made again hold nothing, and each slot is due at once.
+    fn ensure_thumb_pool(&mut self) {
+        let Some(req) = self.thumbs.clone().filter(|r| !r.drawn().is_empty()) else { return };
+        let (w, h) = req.picture_size((self.width, self.height), self.gpu.device.limits().max_texture_dimension_2d);
+        let count = req.drawn().len();
+        let kept = self.thumb_pool.as_ref().filter(|p| (p.views.width, p.views.height) == (w, h));
+        if kept.is_some_and(|p| p.targets.len() >= count) {
+            return;
+        }
+        let count = count.max(kept.map_or(0, |p| p.targets.len()));
+        self.thumb_generation += 1;
+        self.thumb_pool = Some(make_thumb_pool(&self.gpu, w, h, count, self.thumb_generation));
+        self.thumb_last = [None; MAX_THUMBNAILS];
+    }
+
+    /// Wait until the GPU has finished every frame submitted so far and every read-back's
+    /// callback has run, and hand finished read-backs to the encoders. Another thread polling the
+    /// same device (the window) may run a callback after the GPU wait returns; this waits for it
+    /// for at most `MAP_WAIT`.
     pub fn finish(&mut self, readback_lost: &AtomicU64) {
-        let _ = self.gpu.wait();
+        if self.gpu.wait().is_ok() {
+            for n in [&self.nv12, &self.scope_nv12].into_iter().flatten() {
+                n.wait_mapped(MAP_WAIT);
+            }
+        }
         if let Some(n) = &mut self.nv12 {
             n.collect(readback_lost);
         }
@@ -1101,6 +1303,24 @@ fn make_canvas(
     });
     let views = Arc::new(CanvasViews { width: w, height: h, generation, program: program_ring, preview: preview_ring });
     (program, preview, scratch, scratch_bind, views)
+}
+
+fn make_thumb_pool(gpu: &Gpu, w: u32, h: u32, count: usize, generation: u64) -> ThumbPool {
+    let usage = wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_SRC;
+    let (targets, slots) = (0..count)
+        .map(|_| {
+            let (targets, views): (Vec<_>, Vec<_>) = (0..RING_LEN)
+                .map(|_| {
+                    let texture = texture(&gpu.device, "scene thumbnail", w, h, CANVAS_FORMAT, usage, &[CANVAS_VIEW_FORMAT]);
+                    let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+                    let srgb = texture.create_view(&wgpu::TextureViewDescriptor { format: Some(CANVAS_VIEW_FORMAT), ..Default::default() });
+                    (Plain { texture, view }, srgb)
+                })
+                .unzip();
+            (targets, Ring { views, latest: AtomicUsize::new(0), drawn: AtomicBool::new(false) })
+        })
+        .unzip();
+    ThumbPool { targets, views: Arc::new(ThumbnailViews { width: w, height: h, generation, slots }) }
 }
 
 fn pipeline(

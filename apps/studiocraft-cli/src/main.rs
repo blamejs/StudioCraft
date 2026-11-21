@@ -145,7 +145,7 @@ fn bench_collection() -> SceneCollection {
             rotation: if i == 3 { 15.0 } else { 0.0 },
             ..Default::default()
         };
-        c.scenes[0].items.push(studiocraft_model::SceneItem { id: item, source: id, transform, visible: true, locked: false });
+        c.scenes[0].items.push(studiocraft_model::SceneItem { id: item, source: id, transform, visible: true, locked: false, fit: None });
     }
     c
 }

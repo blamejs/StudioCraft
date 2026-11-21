@@ -131,8 +131,10 @@
 	H.264 (built in)	H.264 (yerleşik)
 	NVIDIA NVENC H.264 (built in)	NVIDIA NVENC H.264 (yerleşik)
 	NVIDIA NVENC HEVC (built in)	NVIDIA NVENC HEVC (yerleşik)
+	NVIDIA NVENC AV1 (built in)	NVIDIA NVENC AV1 (yerleşik)
 	Windows Media Foundation H.264 (built in)	Windows Media Foundation H.264 (yerleşik)
 	Windows Media Foundation HEVC (built in)	Windows Media Foundation HEVC (yerleşik)
+	Windows Media Foundation AV1 (built in)	Windows Media Foundation AV1 (yerleşik)
 	Apple VideoToolbox H.264 (built in)	Apple VideoToolbox H.264 (yerleşik)
 	Apple VideoToolbox HEVC (built in)	Apple VideoToolbox HEVC (yerleşik)
 	VA-API H.264 (built in)	VA-API H.264 (yerleşik)
@@ -376,6 +378,24 @@
 	Width	Genişlik
 	Window	Pencere
 	Window capture	Pencere yakalama
+	Staged windows	Hazırlanan pencereler
+	Window 1	Pencere 1
+	Window 2	Pencere 2
+	Window 3	Pencere 3
+	Window 4	Pencere 4
+	Window 5	Pencere 5
+	Window 6	Pencere 6
+	Presented window	Gösterilen pencere
+	While the presented window cannot be shown	Gösterilen pencere gösterilemediğinde
+	Show a color	Bir renk göster
+	Keep the last picture	Son görüntüyü koru
+	Placeholder color	Yer tutucu rengi
+	no window is staged in the presented slot	gösterilen yuvada hazırlanmış pencere yok
+	waiting for the window	pencere bekleniyor
+	Present Staged Window	Hazırlanan pencereyi göster
+	Present Next Staged Window	Sonraki hazırlanan pencereyi göster
+	Present Previous Staged Window	Önceki hazırlanan pencereyi göster
+	Present Staged Window {n}	Hazırlanan pencere {n} göster
 	Your Videos folder	Videolar klasörünüz
 	YUV vectorscope	YUV vektörskop
 	{device} (not connected)	{device} (bağlı değil)
@@ -494,6 +514,9 @@ menu	Transform	Dönüştür
 @msg	Audio tracks could not be repaired: {takes} and {more} more. Takes repaired: {count}	Ses parçaları onarılamadı: {takes} ve {more} tane daha. Onarılan çekimler: {count}
 	Open Last Audio Tracks in Editor	Son Ses Parçalarını Düzenleyicide Aç
 	Add Audio Tracks Marker	Ses Parçalarına İşaretçi Ekle
+	Add Recording Marker	Kayda İşaretçi Ekle
+@msg	Markers saved to {path}	İşaretçiler {path} konumuna kaydedildi
+@msg	The markers could not be saved: {error}	İşaretçiler kaydedilemedi: {error}
 	After a take	Bir çekimden sonra
 	Nothing	Hiçbir şey
 	Show the folder	Klasörü göster
@@ -537,3 +560,8 @@ menu	Transform	Dönüştür
 @msg	there is no display `{id}`: the system lists no displays	`{id}` ekranı yok: sistem hiçbir ekran listelemiyor
 @msg	there is no display `{id}` (the displays are {ids})	`{id}` ekranı yok (ekranlar: {ids})
 @msg	a {width} × {height} display can't be the canvas: each side must be from {min} to {max} pixels	{width} × {height} boyutundaki bir ekran tuval olamaz: her kenar {min} ile {max} piksel arasında olmalıdır
+	Output scale	Çıkış ölçeği
+	Custom	Özel
+	{percent}% ({width} × {height})	%{percent} ({width} × {height})
+	Fill Screen	Ekranı Doldur
+@msg	The scenes could not be laid out for the new canvas: {error}	Sahneler yeni tuvale göre yerleştirilemedi: {error}

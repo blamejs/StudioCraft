@@ -12,12 +12,15 @@ pub mod commands;
 mod control;
 pub mod credits;
 mod docks;
+mod follow;
 pub mod fonts;
 mod forms;
 pub mod hardware;
 mod icons;
 pub mod kit;
+mod logos;
 mod output_bar;
+mod pause_banner;
 mod preview;
 mod scopes;
 mod settings;
@@ -40,7 +43,7 @@ use craft_ui::layout::{ResizeHandle, ResizeHandleStyle, SplitAxis};
 use egui::{Color32, RichText, Ui};
 use serde_json::{Value, json};
 use studiocraft_media::mix::MeterBallistics;
-use studiocraft_model::{ItemId, Profile, SceneCollection, SceneId, SettingsSchema, SourceId, Transform, Vec2};
+use studiocraft_model::{FitMode, ItemId, Profile, SceneCollection, SceneId, SettingsSchema, SourceId, Transform, Vec2};
 use studiocraft_platform::display::DisplayInfo;
 use studiocraft_render::Gpu;
 use studiocraft_render::device::{Candidate, Preference};
@@ -84,6 +87,8 @@ pub(crate) enum Act {
         name: String,
         key: String,
     },
+    /// Open a public web page in the browser.
+    OpenUrl(String),
 }
 
 impl Act {
@@ -241,6 +246,8 @@ pub struct StudioApp {
     dock_strip: Option<egui::Rect>,
     /// Where the top row and the parts of the output bar were drawn last.
     output_bar: output_bar::Drawn,
+    /// The paused banner above the program, and the resume announcement after it.
+    pause_banner: pause_banner::State,
     /// Help › Check for Updates, the check at start and the update prompt.
     updates: updates_ui::Runtime,
     /// The window buttons when the app draws the window frame; `None` when the desktop draws it.
@@ -251,12 +258,18 @@ pub struct StudioApp {
     window_gpu: WindowGpu,
     /// Whether [`Self::logic`] ticked the studio since the last frame was drawn.
     ticked_in_logic: bool,
+    /// Lists the displays, and looks at them while the canvas follows one.
+    displays: follow::Watch,
+    /// The profile whose canvas could not take a followed display's size because the profile
+    /// could not be saved, with that size and the store's count of profile saves at the time.
+    followed_unsaved: Option<(String, (u32, u32), u64)>,
 }
 
 impl StudioApp {
     /// Open the collection and profile used last (or new ones), and start the studio on the
     /// window's graphics device.
     pub fn boot(mut store: Store, render: Option<egui_wgpu::RenderState>, problems: Vec<String>) -> StudioApp {
+        studiocraft_platform::display::prefetch();
         let ffmpeg = Arc::new(RwLock::new(String::new()));
         let captions = Arc::new(CaptionBoard::new());
         let mut notices: Vec<Msg> = Vec::new();
@@ -350,11 +363,14 @@ impl StudioApp {
             dock_window_gen: 0,
             dock_strip: None,
             output_bar: output_bar::Drawn::default(),
+            pause_banner: pause_banner::State::default(),
             updates: updates_ui::Runtime::default(),
             title_bar: None,
             fonts_for: None,
             window_gpu: WindowGpu::default(),
             ticked_in_logic: false,
+            displays: follow::Watch::new(Arc::new(studiocraft_platform::display::displays)),
+            followed_unsaved: None,
         };
         if new_collection {
             app.collection_on_disk = app.save_collection();
@@ -507,25 +523,123 @@ impl StudioApp {
     }
 
     /// Make the canvas `size` (each side rounded down to an even number) and save the profile.
-    /// The output size stays as it is. An open Settings window shows the new canvas size. A
-    /// profile that can't be saved is an error, and the new size stays in use until the app quits.
+    /// An output size that was a share of the canvas in [`studiocraft_model::OUTPUT_SCALES`]
+    /// becomes the same share of the new canvas; any other output size stays. The studio lays out
+    /// the scenes for the new size. An open Settings window shows the new sizes. A profile that
+    /// can't be saved is an error, and the old sizes and layout come back, so the scene
+    /// collection is not saved with a layout for a canvas the saved profile does not have.
     fn set_canvas(&mut self, size: (u32, u32)) -> Result<Value, Msg> {
-        let mut p = self.studio.profile().clone();
-        let v = studiocraft_model::VideoSettings { base_width: size.0, base_height: size.1, ..p.video }.sanitized();
+        let previous = self.studio.profile().clone();
+        let mut p = previous.clone();
+        let v = p.video.with_canvas(size.0, size.1);
         let (width, height) = (v.base_width, v.base_height);
-        p.video.base_width = width;
-        p.video.base_height = height;
         let changed = self.studio.canvas() != (width, height);
         if changed {
+            (p.video.base_width, p.video.base_height) = (width, height);
+            (p.video.output_width, p.video.output_height) = (v.output_width, v.output_height);
             self.studio.set_profile(p).map_err(|e| e.to_string())?;
         }
-        if let Some(w) = &mut self.settings {
-            w.draft.video.base_width = width;
-            w.draft.video.base_height = height;
-        }
         // Saved even when the size was already in use, so a save that failed before is retried.
-        self.store.save_profile(self.studio.profile()).map_err(|e| tmsg!("The profile could not be saved: {error}", error = e))?;
-        Ok(json!({"width": width, "height": height, "changed": changed}))
+        if let Err(e) = self.store.save_profile(self.studio.profile()) {
+            if changed {
+                let _ = self.studio.restore_profile(previous);
+            }
+            return Err(tmsg!("The profile could not be saved: {error}", error = e));
+        }
+        let out = self.studio.video_settings();
+        if let Some(w) = &mut self.settings {
+            // The draft's own output size follows its canvas by the same rule, so an unsaved
+            // output size typed into the draft stays.
+            let before = w.draft.video;
+            (w.draft.video.base_width, w.draft.video.base_height) = (width, height);
+            settings::follow_canvas(before, &mut w.draft.video);
+        }
+        Ok(json!({"width": width, "height": height, "output": {"width": out.output_width, "height": out.output_height}, "changed": changed}))
+    }
+
+    /// Make the canvas follow `display`, when the canvas has that display's size; with `None`, or
+    /// another size, the canvas follows no display.
+    fn follow_display(&mut self, display: Option<&DisplayInfo>) {
+        let canvas = self.studio.canvas();
+        let profile = self.studio.profile().name.clone();
+        let link = display.filter(|d| canvas_size((d.width, d.height)) == canvas).map(|d| store::CanvasDisplay {
+            profile: profile.clone(),
+            id: d.id.clone(),
+            name: d.name.clone(),
+            width: canvas.0,
+            height: canvas.1,
+        });
+        if self.store.prefs().canvas_display(&profile) != link.as_ref() {
+            self.store.update(|p| match link {
+                Some(l) => p.set_canvas_display(l),
+                None => p.forget_canvas_display(&profile),
+            });
+        }
+    }
+
+    /// The display the canvas of the profile in use follows.
+    fn followed_display(&self) -> Option<&store::CanvasDisplay> {
+        self.store.prefs().canvas_display(&self.studio.profile().name)
+    }
+
+    /// While the canvas follows a display, give it that display's new size when the display's
+    /// resolution or scaling changes. The displays are listed on another thread, and this takes
+    /// the list when it has arrived, so a slow listing never holds up the window.
+    fn follow_displays(&mut self, ctx: &egui::Context, now: Instant) {
+        let Some(link) = self.followed_display() else { return };
+        if self.studio.canvas() != (link.width, link.height) {
+            // The canvas size was set another way, so it no longer comes from the display.
+            let profile = link.profile.clone();
+            self.store.update(|p| p.forget_canvas_display(&profile));
+            return;
+        }
+        let zoom = ctx.zoom_factor();
+        let hint = ctx.input(|i| window_display(i.viewport(), zoom));
+        if let Some(list) = self.displays.poll(now, hint) {
+            self.displays_listed(&list);
+        }
+    }
+
+    /// The displays a look found while the canvas follows one of them.
+    fn displays_listed(&mut self, list: &[DisplayInfo]) {
+        let Some(link) = self.followed_display().cloned() else { return };
+        if self.studio.canvas() != (link.width, link.height) {
+            return;
+        }
+        // A display that is not connected is followed again once it is.
+        let Some(d) = follow::find(list, &link) else { return };
+        let (id, name) = (d.id.clone(), d.name.clone());
+        let Ok(size) = canvas_for((d.width, d.height)) else { return };
+        let target = canvas_size(size);
+        let before = self.studio.canvas();
+        // A canvas size typed in the open Settings window and not yet applied is kept, with the
+        // draft's output size.
+        let typed = self.settings.as_ref().map(|w| w.draft.video).filter(|v| (v.base_width, v.base_height) != before);
+        // The video settings can't change while an output runs; a later look takes the size once
+        // the outputs stop.
+        let busy = target != before && self.outputs_running();
+        let result = if target == before || busy { Ok(Value::Null) } else { self.set_canvas(size) };
+        if let (Some(w), Some(v)) = (&mut self.settings, typed) {
+            w.draft.video = v;
+        }
+        let canvas = self.studio.canvas();
+        let now = store::CanvasDisplay { width: canvas.0, height: canvas.1, id, name, ..link.clone() };
+        if canvas == target && now != link {
+            self.store.update(|p| p.set_canvas_display(now));
+        }
+        // A size whose profile can't be saved is taken back, and each look tries it again. Its
+        // error is shown once, and again after another size fails or a profile save succeeds.
+        let failed = (self.studio.profile().name.clone(), target, self.store.profile_saves());
+        match result {
+            Ok(_) if !busy => self.followed_unsaved = None,
+            Ok(_) => {}
+            Err(e) => {
+                if self.followed_unsaved.as_ref() != Some(&failed) {
+                    self.notify(e, true);
+                }
+                self.followed_unsaved = Some(failed);
+            }
+        }
     }
 
     /// Save everything now (the app is closing); whether the scene collection, the profile and
@@ -631,11 +745,28 @@ impl StudioApp {
     }
 
     /// Put the settings OK or Apply gave in force; whether the studio took them (it refuses video
-    /// changes while an output runs, and then nothing is applied).
+    /// changes while an output runs, and then nothing is applied). A new canvas size whose
+    /// profile can't be saved is taken back with its layout, and nothing is applied either.
     fn apply_settings(&mut self, a: settings::Apply) -> bool {
+        let previous = self.studio.profile().clone();
         match self.studio.set_profile(a.profile) {
             Ok(()) => {
-                self.save_profile();
+                let canvas_moved = (previous.video.sanitized().base_width, previous.video.sanitized().base_height) != self.studio.canvas();
+                let saved = self.save_profile();
+                if !saved && canvas_moved {
+                    let _ = self.studio.restore_profile(previous);
+                    return false;
+                }
+                // Once the profile is saved, a canvas size picked from a display follows it, and a
+                // pick that names no display ends the following. Any other new size follows no
+                // display, which the next frame finds.
+                if saved && let Some(pick) = &a.canvas_display {
+                    self.follow_display(pick.as_ref());
+                    // A later size typed in the open window is not taken as that pick.
+                    if let Some(w) = &mut self.settings {
+                        w.canvas_display = None;
+                    }
+                }
                 self.keymap.set_overrides(a.overrides.clone());
                 self.store.update(|p| {
                     p.hotkeys = a.overrides;
@@ -840,12 +971,22 @@ impl StudioApp {
     }
 
     fn selection_transform(&mut self, f: impl FnOnce(Transform, (u32, u32), (u32, u32)) -> Transform) -> Result<Value, Msg> {
+        self.selection_placed(None, f)
+    }
+
+    /// Fit, fill or stretch the selected item to the canvas, and keep the mode for a new canvas
+    /// size.
+    fn selection_fit(&mut self, mode: FitMode) -> Result<Value, Msg> {
+        self.selection_placed(Some(mode), |t, n, c| mode.place(t, n, c))
+    }
+
+    fn selection_placed(&mut self, fit: Option<FitMode>, f: impl FnOnce(Transform, (u32, u32), (u32, u32)) -> Transform) -> Result<Value, Msg> {
         let (item, source, t) = self.selection().ok_or_else(|| tmsg!("select a source first"))?;
         let native = self.studio.source_size(source).ok_or_else(|| tmsg!("the source has not shown a picture yet"))?;
         let canvas = self.studio.canvas();
         // The command refuses values out of range; a fit or a nudge stops at the limits instead.
         let t = f(t, native, canvas).sanitized();
-        let r = self.studio.run("item.transform", &json!({"item": item, "transform": t})).map_err(|e| e.to_string())?;
+        let r = self.studio.run("item.transform", &json!({"item": item, "transform": t, "fit": fit})).map_err(|e| e.to_string())?;
         self.studio.seal_history();
         Ok(r.0)
     }
@@ -986,7 +1127,9 @@ impl StudioApp {
                 }
             },
             "video.displays" => {
-                let list: Vec<Value> = studiocraft_platform::display::displays()
+                let list: Vec<Value> = self
+                    .displays
+                    .list()
                     .into_iter()
                     .map(|d| json!({"id": d.id, "name": d.name, "width": d.width, "height": d.height, "primary": d.primary}))
                     .collect();
@@ -996,18 +1139,29 @@ impl StudioApp {
             }
             "video.canvas_from_display" => {
                 let zoom = ctx.zoom_factor();
-                let size = match cmd.params.get("display") {
-                    None => ctx
-                        .input(|i| window_display(i.viewport(), zoom))
-                        .ok_or_else(|| tmsg!("`video.canvas_from_display`: the size of the display the window is on is not known; pass `display`"))?,
+                let list = self.displays.list();
+                // The canvas follows the display it came from. The display the window is on is
+                // followed when it is the only listed display of its size.
+                let (size, display) = match cmd.params.get("display") {
+                    None => {
+                        let size = ctx.input(|i| window_display(i.viewport(), zoom)).ok_or_else(|| {
+                            tmsg!("`video.canvas_from_display`: the size of the display the window is on is not known; pass `display`")
+                        })?;
+                        (size, follow::of_size(&list, size))
+                    }
                     Some(Value::String(id)) => {
-                        let list = studiocraft_platform::display::displays();
                         let d = find_display(&list, id)?;
-                        (d.width, d.height)
+                        ((d.width, d.height), Some(d))
                     }
                     Some(_) => return Err(tmsg!("`video.canvas_from_display`: `display` is a display id from `video.displays`")),
                 };
-                return self.set_canvas(canvas_for(size)?);
+                let display = display.cloned();
+                let size = canvas_for(size)?;
+                // The canvas follows the display only once the profile is saved.
+                let mut r = self.set_canvas(size)?;
+                self.follow_display(display.as_ref());
+                r["follows"] = self.followed_display().map_or(Value::Null, |l| json!(l.id));
+                return Ok(r);
             }
             "tools.encoders" => {
                 // Without the ffmpeg program only the built-in encoders are available, and the
@@ -1049,12 +1203,9 @@ impl StudioApp {
                 self.studio.run("item.remove", &json!({"item": item})).map_err(|e| e.to_string())?;
                 self.selected = None;
             }
-            "selection.fit" => return self.selection_transform(|t, n, c| Transform { crop: t.crop, ..Transform::fit(t.crop.apply(n.0, n.1), c) }),
-            "selection.stretch" => {
-                return self.selection_transform(|t, n, c| {
-                    Transform { position: Vec2::ZERO, rotation: 0.0, ..t }.with_size(n, Vec2::new(c.0 as f32, c.1 as f32))
-                });
-            }
+            "selection.fit" => return self.selection_fit(FitMode::Fit),
+            "selection.fill" => return self.selection_fit(FitMode::Fill),
+            "selection.stretch" => return self.selection_fit(FitMode::Stretch),
             "selection.center" => {
                 return self.selection_transform(|t, n, c| {
                     let s = t.size(n);
@@ -1065,6 +1216,12 @@ impl StudioApp {
             "selection.rotate_cw" => return self.selection_transform(|t, _, _| Transform { rotation: t.rotation + 90.0, ..t }.sanitized()),
             "selection.rotate_ccw" => return self.selection_transform(|t, _, _| Transform { rotation: t.rotation + 270.0, ..t }.sanitized()),
             "app.about" => self.about = true,
+            "pause.settings" => {
+                self.open_settings(Tab::Stream);
+                if let Some(w) = &mut self.settings {
+                    w.show_pause_screen();
+                }
+            }
             "app.check_updates" => return updates_ui::check(self, ctx),
             "app.licenses" => {
                 if self.licenses.is_none() {
@@ -1110,6 +1267,10 @@ impl StudioApp {
                 if taken(&self.profiles) && !(what == Named::RenameProfile && name.eq_ignore_ascii_case(&self.studio.profile().name)) {
                     return Err(tmsg!("there is already a profile named `{name}`", name = name));
                 }
+                // A new or duplicated profile becomes the open one, which is a switch.
+                if what != Named::RenameProfile && self.studio.paused().is_some() {
+                    return Err(tmsg!("Resume before switching the profile"));
+                }
                 let old = self.studio.profile().name.clone();
                 let mut p = if what == Named::NewProfile { Profile::default() } else { self.studio.profile().clone() };
                 p.name = name.to_string();
@@ -1125,7 +1286,7 @@ impl StudioApp {
                     if case_only {
                         let _ = self.store.rename_profile(name, &old);
                     }
-                    let _ = self.studio.set_profile(previous);
+                    let _ = self.studio.restore_profile(previous);
                     return Err(e.into());
                 }
                 if what == Named::RenameProfile && old != name && !case_only {
@@ -1137,7 +1298,23 @@ impl StudioApp {
                         panel.profile = name.to_string();
                     }
                 }
-                self.store.update(|pr| pr.profile = name.to_string());
+                self.store.update(|pr| {
+                    pr.profile = name.to_string();
+                    // A renamed or duplicated profile's canvas follows the display the original's
+                    // did; a new profile's follows none.
+                    let link = if what == Named::NewProfile || old == name { None } else { pr.canvas_display(&old).cloned() };
+                    if what == Named::RenameProfile && old != name {
+                        pr.forget_canvas_display(&old);
+                    }
+                    match link {
+                        Some(mut l) => {
+                            l.profile = name.to_string();
+                            pr.set_canvas_display(l);
+                        }
+                        None if old != name => pr.forget_canvas_display(name),
+                        None => {}
+                    }
+                });
             }
             Named::NewCollection | Named::DuplicateCollection | Named::RenameCollection => {
                 if taken(&self.collections) && !(what == Named::RenameCollection && name.eq_ignore_ascii_case(&self.studio.collection().name)) {
@@ -1197,6 +1374,10 @@ impl StudioApp {
         if name == self.studio.profile().name {
             return Ok(());
         }
+        // The running pause shows the settings of the profile it started with.
+        if self.studio.paused().is_some() {
+            return Err(tmsg!("Resume before switching the profile"));
+        }
         let p = self.store.load_profile(name)?;
         // A profile whose settings cannot be saved stays open, so they are not lost.
         self.store.save_profile(self.studio.profile()).map_err(|e| tmsg!("The profile could not be saved: {error}", error = e))?;
@@ -1220,6 +1401,7 @@ impl StudioApp {
         let next = self.profiles.iter().find(|n| **n != current).cloned().ok_or_else(|| tmsg!("the last profile can't be removed"))?;
         self.switch_profile(&next)?;
         self.store.remove_profile(&current)?;
+        self.store.update(|p| p.forget_canvas_display(&current));
         self.studio.stream_profile_removed(&current);
         self.refresh_lists();
         Ok(())
@@ -1261,6 +1443,11 @@ impl StudioApp {
             }
             Act::Seal => self.studio.seal_history(),
             Act::HoldStreamKey { name, key } => self.studio.hold_stream_key(&name, &key),
+            Act::OpenUrl(url) => {
+                if let Err(e) = studiocraft_platform::shell::open_url(&url) {
+                    self.notify(e.to_string(), true);
+                }
+            }
         }
     }
 
@@ -1340,6 +1527,7 @@ impl StudioApp {
         {
             self.save_collection();
         }
+        self.follow_displays(ctx, now);
         self.store.tick();
         let at_start = self.store.prefs().check_updates;
         if let Some(e) = updates_ui::tick(&mut self.updates, ctx, at_start) {
@@ -1474,7 +1662,10 @@ impl StudioApp {
         if let (Some(rs), Some(v)) = (&self.render, self.studio.views()) {
             self.textures.sync(rs, &v);
         }
-        let area = ui.available_rect_before_wrap();
+        let mut area = ui.available_rect_before_wrap();
+        let mut top =
+            ui.new_child(egui::UiBuilder::new().max_rect(area.shrink2(egui::vec2(4.0, 0.0))).layout(egui::Layout::top_down(egui::Align::Min)));
+        area.min.y += self.show_pause_banner(&mut top, acts);
         if !self.studio.engine().studio_mode() {
             self.edit_view(ui, area.shrink(4.0), acts);
             return;
@@ -1769,6 +1960,7 @@ impl StudioApp {
         let outputs_run = [&rec, &live].into_iter().flatten().any(|s| s.active);
         let source_limit = self.studio.audio_tracks_source_limit();
         let tracks = self.studio.audio_tracks_status().and_then(|s| tracks_item(s, outputs_run, source_limit));
+        let pause = pause_item(self.studio.paused(), self.studio.paused_for_ms());
         let height = theme::sizes(ui.ctx()).bar_status;
         let line = theme::palette(ui.ctx()).line;
         let frame = egui::Frame::side_top_panel(ui.style()).inner_margin(egui::Margin::symmetric(8, 0));
@@ -1797,6 +1989,10 @@ impl StudioApp {
                         ui.separator();
                         let color = if warn { ui.visuals().warn_fg_color } else { ui.visuals().text_color() };
                         ui.colored_label(color, text).on_hover_text(hover);
+                    }
+                    if let Some((text, hover)) = pause {
+                        ui.separator();
+                        ui.colored_label(ui.visuals().warn_fg_color, text).on_hover_text(hover);
                     }
                 });
             });
@@ -1863,6 +2059,12 @@ impl StudioApp {
                         mode: studiocraft_model::PathMode::OpenFile,
                         filter_name: tl!("Programs").to_string(),
                         extensions: if cfg!(windows) { vec!["exe".into()] } else { vec![] },
+                    },
+                    Pick::PauseMedia => Browse {
+                        key: String::new(),
+                        mode: studiocraft_model::PathMode::OpenFile,
+                        filter_name: tl!("Pictures and videos").to_string(),
+                        extensions: studiocraft_studio::pause_media_extensions(self.studio.registry()),
                     },
                 };
                 self.browse(b, Then::Settings(pick));
@@ -2204,6 +2406,19 @@ fn output_status(o: &studiocraft_studio::OutputState) -> String {
     }
 }
 
+/// The pause item of the status bar while the program is paused: `PAUSED` with the countdown's
+/// time left, and the time paused on hover. `paused` holds the countdown's time left in
+/// milliseconds, or `None` when the pause has no countdown.
+fn pause_item(paused: Option<Option<u64>>, for_ms: Option<u64>) -> Option<(String, String)> {
+    let left = paused?;
+    let text = match left {
+        Some(ms) => format!("{} {}", tl!("PAUSED"), studiocraft_studio::countdown_text(ms)),
+        None => tl!("PAUSED").to_string(),
+    };
+    let since = studiocraft_studio::paused_text(for_ms.unwrap_or(0));
+    Some((text, craft_i18n::fmt(tl!("Paused for {time}"), &[("time", &since)])))
+}
+
 /// The audio tracks item of the status bar: its text, whether it shows as a warning, and its
 /// hover text. It shows while a take runs or finishes, and after a take stopped early while the
 /// recording or the stream that started it still runs.
@@ -2293,6 +2508,12 @@ fn canvas_for((width, height): (u32, u32)) -> Result<(u32, u32), Msg> {
             max = MAX_SIDE,
         ))
     }
+}
+
+/// The canvas size a profile takes for `size`: each side in the canvas's range and even.
+fn canvas_size((width, height): (u32, u32)) -> (u32, u32) {
+    let v = studiocraft_model::VideoSettings { base_width: width, base_height: height, ..Default::default() }.sanitized();
+    (v.base_width, v.base_height)
 }
 
 #[cfg(test)]

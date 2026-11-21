@@ -131,8 +131,10 @@
 	H.264 (built in)	H.264 (inbyggd)
 	NVIDIA NVENC H.264 (built in)	NVIDIA NVENC H.264 (inbyggd)
 	NVIDIA NVENC HEVC (built in)	NVIDIA NVENC HEVC (inbyggd)
+	NVIDIA NVENC AV1 (built in)	NVIDIA NVENC AV1 (inbyggd)
 	Windows Media Foundation H.264 (built in)	Windows Media Foundation H.264 (inbyggd)
 	Windows Media Foundation HEVC (built in)	Windows Media Foundation HEVC (inbyggd)
+	Windows Media Foundation AV1 (built in)	Windows Media Foundation AV1 (inbyggd)
 	Apple VideoToolbox H.264 (built in)	Apple VideoToolbox H.264 (inbyggd)
 	Apple VideoToolbox HEVC (built in)	Apple VideoToolbox HEVC (inbyggd)
 	VA-API H.264 (built in)	VA-API H.264 (inbyggd)
@@ -376,6 +378,24 @@
 	Width	Bredd
 	Window	Fönster
 	Window capture	Fönsterinspelning
+	Staged windows	Förberedda fönster
+	Window 1	Fönster 1
+	Window 2	Fönster 2
+	Window 3	Fönster 3
+	Window 4	Fönster 4
+	Window 5	Fönster 5
+	Window 6	Fönster 6
+	Presented window	Visat fönster
+	While the presented window cannot be shown	När det visade fönstret inte kan visas
+	Show a color	Visa en färg
+	Keep the last picture	Behåll den senaste bilden
+	Placeholder color	Platshållarfärg
+	no window is staged in the presented slot	inget fönster är förberett på den visade platsen
+	waiting for the window	väntar på fönstret
+	Present Staged Window	Visa förberett fönster
+	Present Next Staged Window	Visa nästa förberedda fönster
+	Present Previous Staged Window	Visa föregående förberedda fönster
+	Present Staged Window {n}	Visa förberett fönster {n}
 	Your Videos folder	Din videomapp
 	YUV vectorscope	YUV-vektorskop
 	{device} (not connected)	{device} (inte ansluten)
@@ -493,6 +513,9 @@ menu	Transform	Transformera
 @msg	Audio tracks could not be repaired: {takes} and {more} more. Takes repaired: {count}	Ljudspåren kunde inte repareras: {takes} och {more} till. Reparerade tagningar: {count}
 	Open Last Audio Tracks in Editor	Öppna senaste ljudspåren i redigeraren
 	Add Audio Tracks Marker	Lägg till markör i ljudspåren
+	Add Recording Marker	Lägg till markör i inspelningen
+@msg	Markers saved to {path}	Markörerna sparades som {path}
+@msg	The markers could not be saved: {error}	Markörerna kunde inte sparas: {error}
 	After a take	Efter en tagning
 	Nothing	Ingenting
 	Show the folder	Visa mappen
@@ -536,3 +559,8 @@ menu	Transform	Transformera
 @msg	there is no display `{id}`: the system lists no displays	det finns ingen skärm `{id}`: systemet listar inga skärmar
 @msg	there is no display `{id}` (the displays are {ids})	det finns ingen skärm `{id}` (skärmarna är {ids})
 @msg	a {width} × {height} display can't be the canvas: each side must be from {min} to {max} pixels	en skärm på {width} × {height} kan inte vara arbetsytan: varje sida måste vara {min} till {max} pixlar
+	Output scale	Utdataskala
+	Custom	Anpassad
+	{percent}% ({width} × {height})	{percent} % ({width} × {height})
+	Fill Screen	Fyll skärmen
+@msg	The scenes could not be laid out for the new canvas: {error}	Scenerna kunde inte ordnas för den nya arbetsytan: {error}

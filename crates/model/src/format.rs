@@ -43,8 +43,11 @@ pub struct FileFormat {
 }
 
 /// Scene collections.
-pub const COLLECTION: FileFormat =
-    FileFormat { name: "studiocraft.scene-collection", version: 4, migrations: &[collection_v1_to_v2, collection_v2_to_v3, collection_v3_to_v4] };
+pub const COLLECTION: FileFormat = FileFormat {
+    name: "studiocraft.scene-collection",
+    version: 5,
+    migrations: &[collection_v1_to_v2, collection_v2_to_v3, collection_v3_to_v4, collection_v4_to_v5],
+};
 
 /// Collection version 1 to 2: each source's audio has a sync offset (`sync_offset_ms`), 0 for the
 /// sources of an older file.
@@ -92,11 +95,39 @@ fn collection_v3_to_v4(data: &mut Value) -> Result<(), String> {
     Ok(())
 }
 
+/// Collection version 4 to 5: each scene item can keep how it was sized to the canvas (`fit`:
+/// `"fit"`, `"fill"` or `"stretch"`). The items of an older file get `null`, and a new canvas size
+/// keeps them in proportion.
+fn collection_v4_to_v5(data: &mut Value) -> Result<(), String> {
+    let data = data.as_object_mut().ok_or("the collection is not an object")?;
+    if let Some(Value::Array(scenes)) = data.get_mut("scenes") {
+        for scene in scenes.iter_mut().filter_map(Value::as_object_mut) {
+            if let Some(Value::Array(items)) = scene.get_mut("items") {
+                for item in items.iter_mut().filter_map(Value::as_object_mut) {
+                    item.entry("fit").or_insert(Value::Null);
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Profiles.
 pub const PROFILE: FileFormat = FileFormat {
     name: "studiocraft.profile",
-    version: 8,
-    migrations: &[profile_v1_to_v2, profile_v2_to_v3, profile_v3_to_v4, profile_v4_to_v5, profile_v5_to_v6, profile_v6_to_v7, profile_v7_to_v8],
+    version: 11,
+    migrations: &[
+        profile_v1_to_v2,
+        profile_v2_to_v3,
+        profile_v3_to_v4,
+        profile_v4_to_v5,
+        profile_v5_to_v6,
+        profile_v6_to_v7,
+        profile_v7_to_v8,
+        profile_v8_to_v9,
+        profile_v9_to_v10,
+        profile_v10_to_v11,
+    ],
 };
 
 /// Profile version 1 to 2: the recording and the stream each keep the settings of their video
@@ -204,6 +235,42 @@ fn profile_v7_to_v8(data: &mut Value) -> Result<(), String> {
     Ok(())
 }
 
+/// Profile version 8 to 9: each stream destination names the streaming service it was set up for
+/// (`service`); an older file's destinations are servers of the user's own choosing (empty).
+fn profile_v8_to_v9(data: &mut Value) -> Result<(), String> {
+    let data = data.as_object_mut().ok_or("the profile is not an object")?;
+    if let Some(Value::Object(s)) = data.get_mut("stream")
+        && let Some(Value::Array(destinations)) = s.get_mut("destinations")
+    {
+        for d in destinations.iter_mut().filter_map(Value::as_object_mut) {
+            d.entry("service").or_insert_with(|| json!(""));
+        }
+    }
+    Ok(())
+}
+
+/// Profile version 9 to 10: the pause screen (`pause`): no media on a `#101014ff` background, a
+/// 300 second countdown reading "Back in {time}" at the bottom center, which keeps the screen at
+/// zero, and the program mix held while paused.
+fn profile_v9_to_v10(data: &mut Value) -> Result<(), String> {
+    let data = data.as_object_mut().ok_or("the profile is not an object")?;
+    let defaults = serde_json::to_value(crate::PauseSettings::default()).map_err(|e| e.to_string())?;
+    data.entry("pause").or_insert(defaults);
+    Ok(())
+}
+
+/// Profile version 10 to 11: the program's loudness target (`audio.loudness_target`), −18 to
+/// −14 LUFS.
+fn profile_v10_to_v11(data: &mut Value) -> Result<(), String> {
+    let data = data.as_object_mut().ok_or("the profile is not an object")?;
+    let defaults = serde_json::to_value(crate::LoudnessTarget::default()).map_err(|e| e.to_string())?;
+    let audio = data.entry("audio").or_insert_with(|| json!({}));
+    if let Value::Object(a) = audio {
+        a.entry("loudness_target").or_insert(defaults);
+    }
+    Ok(())
+}
+
 /// Largest file accepted, in bytes.
 pub const MAX_FILE_BYTES: usize = 64 << 20;
 
@@ -274,21 +341,26 @@ pub fn read_collection(text: &str, default_scene_name: &str) -> Result<SceneColl
 }
 
 /// A profile file's text. A profile whose stream destinations break a rule of
-/// [`crate::StreamSettings::check`] is refused, as [`read_profile`] refuses its file.
+/// [`crate::StreamSettings::check`], or whose loudness target breaks a rule of
+/// [`crate::LoudnessTarget::check`], is refused, as [`read_profile`] refuses its file.
 pub fn write_profile(p: &Profile) -> Result<String, FormatError> {
     p.stream.check().map_err(FormatError::Data)?;
+    p.audio.loudness_target.check().map_err(FormatError::Data)?;
     PROFILE.write(p)
 }
 
-/// A profile from a file's text, migrated, with video, replay buffer and audio tracks settings
-/// brought into range. A file whose stream destinations break a rule of
-/// [`crate::StreamSettings::check`] is refused.
+/// A profile from a file's text, migrated, with video, replay buffer, audio tracks and pause
+/// screen settings brought into range. A file whose stream destinations break a rule of
+/// [`crate::StreamSettings::check`], or whose loudness target breaks a rule of
+/// [`crate::LoudnessTarget::check`], is refused.
 pub fn read_profile(text: &str) -> Result<Profile, FormatError> {
     let mut p: Profile = PROFILE.read(text)?;
     p.stream.check().map_err(FormatError::Data)?;
+    p.audio.loudness_target.check().map_err(FormatError::Data)?;
     p.video = p.video.sanitized();
     p.replay = p.replay.sanitized();
     p.audio_tracks = p.audio_tracks.sanitized();
+    p.pause = p.pause.sanitized();
     Ok(p)
 }
 
@@ -302,6 +374,7 @@ mod tests {
         (2, include_str!("../fixtures/collection-v2.json")),
         (3, include_str!("../fixtures/collection-v3.json")),
         (4, include_str!("../fixtures/collection-v4.json")),
+        (5, include_str!("../fixtures/collection-v5.json")),
     ];
     const PROFILE_FIXTURES: &[(u32, &str)] = &[
         (1, include_str!("../fixtures/profile-v1.json")),
@@ -312,6 +385,9 @@ mod tests {
         (6, include_str!("../fixtures/profile-v6.json")),
         (7, include_str!("../fixtures/profile-v7.json")),
         (8, include_str!("../fixtures/profile-v8.json")),
+        (9, include_str!("../fixtures/profile-v9.json")),
+        (10, include_str!("../fixtures/profile-v10.json")),
+        (11, include_str!("../fixtures/profile-v11.json")),
     ];
 
     fn covers_every_version(format: &FileFormat, fixtures: &[(u32, &str)]) {
@@ -393,6 +469,25 @@ mod tests {
     }
 
     #[test]
+    fn collections_keep_each_source_gain_with_its_boost() {
+        use crate::collection::MAX_GAIN;
+        for (v, text) in COLLECTION_FIXTURES {
+            let c = read_collection(text, "Scene").unwrap();
+            let gains: Vec<f32> = c.sources.iter().map(|s| s.audio.gain).collect();
+            assert_eq!(gains, [1.0, 1.0, 0.5], "version {v} keeps its gains");
+        }
+        let (_, newest) = COLLECTION_FIXTURES[COLLECTION_FIXTURES.len() - 1];
+        let gain_of = |text: &str| read_collection(text, "Scene").unwrap().source_by_name("Microphone").map(|s| s.audio.gain);
+        let boosted = newest.replace("\"gain\": 0.5", "\"gain\": 4.0");
+        let c = read_collection(&boosted, "Scene").unwrap();
+        assert_eq!(c.source_by_name("Microphone").map(|s| s.audio.gain), Some(4.0));
+        assert_eq!(read_collection(&write_collection(&c).unwrap(), "Scene").unwrap(), c, "a boosted gain saves and reloads");
+        assert_eq!(gain_of(&newest.replace("\"gain\": 0.5", "\"gain\": 10.0")), Some(MAX_GAIN));
+        assert_eq!(gain_of(&newest.replace("\"gain\": 0.5", "\"gain\": 1000.0")), Some(MAX_GAIN), "a gain above the top is brought down to it");
+        assert_eq!(gain_of(&newest.replace("\"gain\": 0.5", "\"gain\": -2.0")), Some(0.0), "a negative gain is brought up to 0");
+    }
+
+    #[test]
     fn collections_keep_each_source_monitoring_mode() {
         for (v, text) in &COLLECTION_FIXTURES[..2] {
             let c = read_collection(text, "Scene").unwrap();
@@ -458,6 +553,21 @@ mod tests {
     }
 
     #[test]
+    fn collections_keep_each_item_fit_mode() {
+        for (v, text) in &COLLECTION_FIXTURES[..4] {
+            let c = read_collection(text, "Scene").unwrap();
+            assert!(c.scenes.iter().flat_map(|s| &s.items).all(|i| i.fit.is_none()), "version {v} has no fit modes");
+        }
+        let (_, v5) = COLLECTION_FIXTURES[4];
+        let c = read_collection(v5, "Scene").unwrap();
+        let fits: Vec<_> = c.scenes[0].items.iter().map(|i| i.fit).collect();
+        assert_eq!(fits, [Some(crate::FitMode::Fill), None]);
+        assert_eq!(read_collection(&write_collection(&c).unwrap(), "Scene").unwrap(), c);
+        let unknown = v5.replace("\"fit\": \"fill\"", "\"fit\": \"cover\"");
+        assert!(matches!(read_collection(&unknown, "Scene"), Err(FormatError::Data(_))), "an unknown mode refuses the file");
+    }
+
+    #[test]
     fn profiles_keep_the_audio_tracks_settings_and_bring_sizes_into_range() {
         for (v, text) in &PROFILE_FIXTURES[..5] {
             let p = read_profile(text).unwrap();
@@ -498,6 +608,68 @@ mod tests {
     }
 
     #[test]
+    fn profiles_keep_the_pause_screen() {
+        use crate::{FitMode, PauseAnchor, PauseAtZero, PauseSettings};
+        for (v, text) in &PROFILE_FIXTURES[..9] {
+            assert_eq!(read_profile(text).unwrap().pause, PauseSettings::default(), "version {v} gets the defaults");
+        }
+        let (_, v10) = PROFILE_FIXTURES[9];
+        let p = read_profile(v10).unwrap();
+        let s = &p.pause;
+        assert_eq!((s.media.as_str(), s.fit, s.countdown_s, s.text.as_str()), ("C:/Media/break.mp4", FitMode::Fill, 600, "Starting again in {time}"));
+        assert_eq!((s.at_zero, s.anchor, s.size_pct, s.mute_scene), (PauseAtZero::Resume, PauseAnchor::TopRight, 9, false));
+        assert_eq!(read_profile(&write_profile(&p).unwrap()).unwrap(), p);
+        // Values out of range are brought into range; the rest of the profile is kept.
+        let wide = v10.replace("\"countdown_s\": 600", "\"countdown_s\": 99999").replace("\"size_pct\": 9", "\"size_pct\": 40");
+        let p = read_profile(&wide).unwrap();
+        assert_eq!((p.pause.countdown_s, p.pause.size_pct, p.replay.seconds), (43_200, 15, 45));
+        let no_time = v10.replace("Starting again in {time}", "Starting again");
+        assert_eq!(read_profile(&no_time).unwrap().pause.text, "Back in {time}", "a text without {{time}} reads as the default");
+        assert!(matches!(read_profile(&v10.replace("\"resume\"", "\"restart\"")), Err(FormatError::Data(_))), "an unknown value refuses the file");
+    }
+
+    #[test]
+    fn profiles_keep_the_loudness_target() {
+        use crate::LoudnessTarget;
+        for (v, text) in &PROFILE_FIXTURES[..10] {
+            assert_eq!(read_profile(text).unwrap().audio.loudness_target, LoudnessTarget::default(), "version {v} gets the default");
+        }
+        assert_eq!(LoudnessTarget::default(), LoudnessTarget { low_lufs: -18.0, high_lufs: -14.0 });
+        let (_, v11) = PROFILE_FIXTURES[10];
+        let p = read_profile(v11).unwrap();
+        assert_eq!(p.audio.loudness_target, LoudnessTarget { low_lufs: -24.5, high_lufs: -22.0 });
+        assert_eq!(p.audio.monitoring_device, "Headphones (USB)", "the rest of the audio settings is kept");
+        assert_eq!(read_profile(&write_profile(&p).unwrap()).unwrap(), p);
+        let omitted = v11.replace(", \"loudness_target\": { \"low_lufs\": -24.5, \"high_lufs\": -22 }", "");
+        assert_eq!(read_profile(&omitted).unwrap().audio.loudness_target, LoudnessTarget::default(), "an omitted target is the default");
+        let edges = v11.replace("-24.5", "-60").replace("\"high_lufs\": -22", "\"high_lufs\": 0");
+        assert_eq!(read_profile(&edges).unwrap().audio.loudness_target, LoudnessTarget { low_lufs: -60.0, high_lufs: 0.0 }, "the range's ends");
+        let bad = [
+            ("-24.5", "-60.5"),
+            ("\"high_lufs\": -22", "\"high_lufs\": 0.5"),
+            ("-24.5", "-22"),
+            ("-24.5", "-20"),
+            ("-24.5", "\"loud\""),
+            ("-24.5", "null"),
+            ("-24.5", "1e999"),
+        ];
+        for (from, to) in bad {
+            assert!(read_profile(&v11.replace(from, to)).is_err(), "{to} refuses the file");
+        }
+        for target in [
+            LoudnessTarget { low_lufs: -14.0, high_lufs: -18.0 },
+            LoudnessTarget { low_lufs: -16.0, high_lufs: -16.0 },
+            LoudnessTarget { low_lufs: f64::NAN, high_lufs: -14.0 },
+            LoudnessTarget { low_lufs: -18.0, high_lufs: f64::INFINITY },
+            LoudnessTarget { low_lufs: -61.0, high_lufs: -14.0 },
+        ] {
+            let mut wrong = p.clone();
+            wrong.audio.loudness_target = target;
+            assert!(matches!(write_profile(&wrong), Err(FormatError::Data(m)) if m.contains("loudness target")), "{target:?} is not written");
+        }
+    }
+
+    #[test]
     fn profiles_keep_what_happens_after_a_take_and_the_editor_path() {
         let (_, v7) = PROFILE_FIXTURES[6];
         let old = read_profile(v7).unwrap();
@@ -532,6 +704,7 @@ mod tests {
                 enabled: true,
                 server: "rtmp://localhost/live".into(),
                 key: KeyRef::Profile,
+                service: String::new(),
             };
             assert_eq!(p.stream.destinations, vec![want], "version {v}");
             assert_eq!(p.stream.key, "test", "version {v} keeps its key");
@@ -601,6 +774,27 @@ mod tests {
         let mut twice = p.clone();
         twice.stream.destinations[1].id = "main".into();
         assert!(matches!(write_profile(&twice), Err(FormatError::Data(m)) if m.contains("used twice")));
+    }
+
+    #[test]
+    fn profiles_keep_the_service_each_destination_was_set_up_for() {
+        for (v, text) in &PROFILE_FIXTURES[..8] {
+            let p = read_profile(text).unwrap();
+            assert!(p.stream.destinations.iter().all(|d| d.service.is_empty()), "version {v}: every destination is a custom server");
+        }
+        let (_, v9) = PROFILE_FIXTURES[8];
+        let p = read_profile(v9).unwrap();
+        let services: Vec<(&str, &str)> = p.stream.destinations.iter().map(|d| (d.id.as_str(), d.service.as_str())).collect();
+        assert_eq!(services, [("main", "twitch"), ("backup", ""), ("open", "retired-service")]);
+        assert_eq!(crate::services::service(&p.stream.destinations[0].service).map(|s| s.id), Some("twitch"));
+        assert_eq!(crate::services::service(&p.stream.destinations[2].service), None, "an unknown service is kept and has no preset");
+        assert_eq!(read_profile(&write_profile(&p).unwrap()).unwrap(), p);
+        let wrong = v9.replace("\"service\": \"twitch\"", "\"service\": 3");
+        assert!(matches!(read_profile(&wrong), Err(FormatError::Data(_))), "a service that is not text refuses the file");
+        // A destination of an older file that already names a service keeps it.
+        let (_, v8) = PROFILE_FIXTURES[7];
+        let named = v8.replace("\"key\": \"profile\" }", "\"key\": \"profile\", \"service\": \"youtube\" }");
+        assert_eq!(read_profile(&named).unwrap().stream.destinations[0].service, "youtube");
     }
 
     #[test]

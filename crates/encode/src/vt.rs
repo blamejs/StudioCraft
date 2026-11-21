@@ -60,12 +60,14 @@ impl Plugin for VideoToolbox {
         match self.codec {
             NativeCodec::H264 => "vt_native_h264",
             NativeCodec::Hevc => "vt_native_hevc",
+            NativeCodec::Av1 => "vt_native_av1",
         }
     }
     fn name(&self) -> &'static str {
         match self.codec {
             NativeCodec::H264 => "Apple VideoToolbox H.264 (built in)",
             NativeCodec::Hevc => "Apple VideoToolbox HEVC (built in)",
+            NativeCodec::Av1 => "Apple VideoToolbox AV1 (built in)",
         }
     }
     fn schema(&self) -> SettingsSchema {
@@ -78,6 +80,7 @@ impl Encoder for VideoToolbox {
         match self.codec {
             NativeCodec::H264 => Codec::H264,
             NativeCodec::Hevc => Codec::Hevc,
+            NativeCodec::Av1 => Codec::Av1,
         }
     }
     fn open(&self, _settings: &Settings, params: &VideoParams) -> Result<Box<dyn VideoSession>, PluginError> {

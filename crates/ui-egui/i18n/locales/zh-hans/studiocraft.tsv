@@ -131,8 +131,10 @@
 	H.264 (built in)	H.264（内置）
 	NVIDIA NVENC H.264 (built in)	NVIDIA NVENC H.264（内置）
 	NVIDIA NVENC HEVC (built in)	NVIDIA NVENC HEVC（内置）
+	NVIDIA NVENC AV1 (built in)	NVIDIA NVENC AV1（内置）
 	Windows Media Foundation H.264 (built in)	Windows Media Foundation H.264（内置）
 	Windows Media Foundation HEVC (built in)	Windows Media Foundation HEVC（内置）
+	Windows Media Foundation AV1 (built in)	Windows Media Foundation AV1（内置）
 	Apple VideoToolbox H.264 (built in)	Apple VideoToolbox H.264（内置）
 	Apple VideoToolbox HEVC (built in)	Apple VideoToolbox HEVC（内置）
 	VA-API H.264 (built in)	VA-API H.264（内置）
@@ -376,6 +378,24 @@
 	Width	宽度
 	Window	窗口
 	Window capture	窗口采集
+	Staged windows	待播窗口
+	Window 1	窗口 1
+	Window 2	窗口 2
+	Window 3	窗口 3
+	Window 4	窗口 4
+	Window 5	窗口 5
+	Window 6	窗口 6
+	Presented window	当前显示的窗口
+	While the presented window cannot be shown	当前显示的窗口无法显示时
+	Show a color	显示颜色
+	Keep the last picture	保留最后的画面
+	Placeholder color	占位颜色
+	no window is staged in the presented slot	当前显示的位置没有待播窗口
+	waiting for the window	正在等待窗口
+	Present Staged Window	显示待播窗口
+	Present Next Staged Window	显示下一个待播窗口
+	Present Previous Staged Window	显示上一个待播窗口
+	Present Staged Window {n}	显示待播窗口 {n}
 	Your Videos folder	“视频”文件夹
 	YUV vectorscope	YUV 矢量示波器
 	{device} (not connected)	{device}（未连接）
@@ -493,6 +513,9 @@ menu	Transform	变换
 @msg	Audio tracks could not be repaired: {takes} and {more} more. Takes repaired: {count}	无法修复音频轨道：{takes} 及另外 {more} 个。已修复的录制：{count}
 	Open Last Audio Tracks in Editor	在编辑器中打开最近的音频轨道
 	Add Audio Tracks Marker	为音频轨道添加标记
+	Add Recording Marker	为录制添加标记
+@msg	Markers saved to {path}	标记已保存到 {path}
+@msg	The markers could not be saved: {error}	无法保存标记：{error}
 	After a take	录制结束后
 	Nothing	无操作
 	Show the folder	显示文件夹
@@ -536,3 +559,7 @@ menu	Transform	变换
 @msg	there is no display `{id}`: the system lists no displays	没有显示器 `{id}`：系统未列出任何显示器
 @msg	there is no display `{id}` (the displays are {ids})	没有显示器 `{id}`（显示器有 {ids}）
 @msg	a {width} × {height} display can't be the canvas: each side must be from {min} to {max} pixels	{width} × {height} 的显示器不能作为画布：每条边必须为 {min} 到 {max} 像素
+	Output scale	输出缩放
+	Custom	自定义
+	Fill Screen	填满屏幕
+@msg	The scenes could not be laid out for the new canvas: {error}	无法为新画布排列场景：{error}

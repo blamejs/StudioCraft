@@ -131,8 +131,10 @@
 	H.264 (built in)	H.264 (вбудований)
 	NVIDIA NVENC H.264 (built in)	NVIDIA NVENC H.264 (вбудований)
 	NVIDIA NVENC HEVC (built in)	NVIDIA NVENC HEVC (вбудований)
+	NVIDIA NVENC AV1 (built in)	NVIDIA NVENC AV1 (вбудований)
 	Windows Media Foundation H.264 (built in)	Windows Media Foundation H.264 (вбудований)
 	Windows Media Foundation HEVC (built in)	Windows Media Foundation HEVC (вбудований)
+	Windows Media Foundation AV1 (built in)	Windows Media Foundation AV1 (вбудований)
 	Apple VideoToolbox H.264 (built in)	Apple VideoToolbox H.264 (вбудований)
 	Apple VideoToolbox HEVC (built in)	Apple VideoToolbox HEVC (вбудований)
 	VA-API H.264 (built in)	VA-API H.264 (вбудований)
@@ -376,6 +378,24 @@
 	Width	Ширина
 	Window	Вікно
 	Window capture	Захоплення вікна
+	Staged windows	Підготовлені вікна
+	Window 1	Вікно 1
+	Window 2	Вікно 2
+	Window 3	Вікно 3
+	Window 4	Вікно 4
+	Window 5	Вікно 5
+	Window 6	Вікно 6
+	Presented window	Показуване вікно
+	While the presented window cannot be shown	Коли показуване вікно не можна показати
+	Show a color	Показати колір
+	Keep the last picture	Залишити останній кадр
+	Placeholder color	Колір заглушки
+	no window is staged in the presented slot	у показуваній комірці немає підготовленого вікна
+	waiting for the window	очікування вікна
+	Present Staged Window	Показати підготовлене вікно
+	Present Next Staged Window	Показати наступне підготовлене вікно
+	Present Previous Staged Window	Показати попереднє підготовлене вікно
+	Present Staged Window {n}	Показати підготовлене вікно {n}
 	Your Videos folder	Ваша тека «Відео»
 	YUV vectorscope	Вектороскоп YUV
 	{device} (not connected)	{device} (не під’єднано)
@@ -502,6 +522,9 @@ menu	Transform	Перетворення
 @msg	Audio tracks could not be repaired: {takes} and {more} more. Takes repaired: {count}	Не вдалося відновити звукові доріжки: {takes} і ще {more}. Відновлено дублів: {count}
 	Open Last Audio Tracks in Editor	Відкрити останні звукові доріжки в редакторі
 	Add Audio Tracks Marker	Додати маркер до звукових доріжок
+	Add Recording Marker	Додати маркер до запису
+@msg	Markers saved to {path}	Маркери збережено до {path}
+@msg	The markers could not be saved: {error}	Не вдалося зберегти маркери: {error}
 	After a take	Після дубля
 	Nothing	Нічого
 	Show the folder	Показати теку
@@ -545,3 +568,8 @@ menu	Transform	Перетворення
 @msg	there is no display `{id}`: the system lists no displays	немає екрана `{id}`: система не повідомляє про жоден екран
 @msg	there is no display `{id}` (the displays are {ids})	немає екрана `{id}` (є екрани {ids})
 @msg	a {width} × {height} display can't be the canvas: each side must be from {min} to {max} pixels	екран {width} × {height} не може бути полотном: кожна сторона має бути від {min} до {max} пікселів
+	Output scale	Масштаб виводу
+	Custom	Інший
+	{percent}% ({width} × {height})	{percent} % ({width} × {height})
+	Fill Screen	Заповнити екран
+@msg	The scenes could not be laid out for the new canvas: {error}	Не вдалося розташувати сцени для нового полотна: {error}

@@ -131,8 +131,10 @@
 	H.264 (built in)	H.264 (내장)
 	NVIDIA NVENC H.264 (built in)	NVIDIA NVENC H.264 (내장)
 	NVIDIA NVENC HEVC (built in)	NVIDIA NVENC HEVC (내장)
+	NVIDIA NVENC AV1 (built in)	NVIDIA NVENC AV1 (내장)
 	Windows Media Foundation H.264 (built in)	Windows Media Foundation H.264 (내장)
 	Windows Media Foundation HEVC (built in)	Windows Media Foundation HEVC (내장)
+	Windows Media Foundation AV1 (built in)	Windows Media Foundation AV1 (내장)
 	Apple VideoToolbox H.264 (built in)	Apple VideoToolbox H.264 (내장)
 	Apple VideoToolbox HEVC (built in)	Apple VideoToolbox HEVC (내장)
 	VA-API H.264 (built in)	VA-API H.264 (내장)
@@ -376,6 +378,24 @@
 	Width	너비
 	Window	창
 	Window capture	창 캡처
+	Staged windows	대기 창
+	Window 1	창 1
+	Window 2	창 2
+	Window 3	창 3
+	Window 4	창 4
+	Window 5	창 5
+	Window 6	창 6
+	Presented window	표시 중인 창
+	While the presented window cannot be shown	표시 중인 창을 보여 줄 수 없을 때
+	Show a color	색 표시
+	Keep the last picture	마지막 화면 유지
+	Placeholder color	대체 화면 색
+	no window is staged in the presented slot	표시 중인 칸에 대기 창이 없습니다
+	waiting for the window	창을 기다리는 중
+	Present Staged Window	대기 창 표시
+	Present Next Staged Window	다음 대기 창 표시
+	Present Previous Staged Window	이전 대기 창 표시
+	Present Staged Window {n}	대기 창 {n} 표시
 	Your Videos folder	내 비디오 폴더
 	YUV vectorscope	YUV 벡터스코프
 	{device} (not connected)	{device} (연결 안 됨)
@@ -493,6 +513,9 @@ menu	Transform	변형
 @msg	Audio tracks could not be repaired: {takes} and {more} more. Takes repaired: {count}	오디오 트랙을 복구할 수 없습니다: {takes} 외 {more}개. 복구된 테이크: {count}
 	Open Last Audio Tracks in Editor	마지막 오디오 트랙을 편집기에서 열기
 	Add Audio Tracks Marker	오디오 트랙에 마커 추가
+	Add Recording Marker	녹화에 마커 추가
+@msg	Markers saved to {path}	마커를 {path}에 저장했습니다
+@msg	The markers could not be saved: {error}	마커를 저장할 수 없습니다: {error}
 	After a take	테이크 후
 	Nothing	아무것도 하지 않음
 	Show the folder	폴더 보기
@@ -536,3 +559,7 @@ menu	Transform	변형
 @msg	there is no display `{id}`: the system lists no displays	디스플레이 `{id}`이(가) 없습니다: 시스템에 표시되는 디스플레이가 없습니다
 @msg	there is no display `{id}` (the displays are {ids})	디스플레이 `{id}`이(가) 없습니다 (디스플레이: {ids})
 @msg	a {width} × {height} display can't be the canvas: each side must be from {min} to {max} pixels	{width} × {height} 디스플레이는 캔버스가 될 수 없습니다: 각 변은 {min}~{max}픽셀이어야 합니다
+	Output scale	출력 배율
+	Custom	사용자 지정
+	Fill Screen	화면 채우기
+@msg	The scenes could not be laid out for the new canvas: {error}	새 캔버스에 맞게 장면을 배치할 수 없습니다: {error}

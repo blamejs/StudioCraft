@@ -13,7 +13,7 @@ use crate::{Backend, Headless, MAX_BATCH_STEPS, McpError, Remote, Roots, Server,
 
 const TOKEN: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
-const TOOLS: [&str; 32] = [
+const TOOLS: [&str; 36] = [
     "command_list",
     "command_run",
     "command_batch",
@@ -36,11 +36,15 @@ const TOOLS: [&str; 32] = [
     "app_audio_route",
     "record_start",
     "record_stop",
+    "record_marker",
     "stream_start",
     "stream_stop",
+    "pause_start",
+    "pause_stop",
     "replay_start",
     "replay_stop",
     "replay_save",
+    "audio_loudness",
     "audio_tracks_status",
     "audio_tracks_repair",
     "audio_tracks_open_last",
@@ -228,6 +232,10 @@ fn source_add_with_an_unknown_kind_is_a_tool_error() {
     let doc = ok_json(&call(&mut s, "doc_inspect", json!({})));
     let items = doc["collection"]["scenes"][0]["items"].as_array().unwrap();
     assert!(items.iter().any(|i| i["transform"]["rotation"] == json!(15.0)), "{doc}");
+    ok_json(&call(&mut s, "item_transform", json!({"item": "Backdrop", "transform": {}, "fit": "fill"})));
+    let doc = ok_json(&call(&mut s, "doc_inspect", json!({})));
+    assert!(doc["collection"]["scenes"][0]["items"].as_array().unwrap().iter().any(|i| i["fit"] == json!("fill")), "{doc}");
+    error_text(&call(&mut s, "item_transform", json!({"item": "Backdrop", "transform": {}, "fit": "cover"})));
 }
 
 #[test]
@@ -353,6 +361,11 @@ fn source_audio_sets_whether_the_source_records_its_own_track() {
         (json!(false), json!(0)),
         "a refused value changes nothing"
     );
+    let loudness = ok_json(&call(&mut s, "audio_loudness", json!({})));
+    assert_eq!(loudness["target"], json!({"low_lufs": -18.0, "high_lufs": -14.0}), "{loudness}");
+    assert!(loudness["generation"].is_u64() && loudness.get("integrated_lufs").is_some(), "{loudness}");
+    let extra = call(&mut s, "audio_loudness", json!({"reset": true}));
+    assert_eq!(extra["error"]["code"], json!(-32602), "an unknown argument is invalid params: {extra}");
     let status = ok_json(&call(&mut s, "audio_tracks_status", json!({})));
     assert_eq!((status["enabled"].clone(), status["active"].clone()), (json!(false), json!(false)), "{status}");
     error_text(&call(&mut s, "audio_tracks_repair", json!({})));
@@ -428,6 +441,156 @@ fn audio_tracks_open_last_is_held_to_the_read_roots() {
     for (tool, args) in [("audio_tracks_open_last", json!({})), ("command_run", json!({"id": "audio_tracks.open_last"}))] {
         let text = error_text(&call(&mut s, tool, args.clone()));
         assert!(text.contains("outside the read roots"), "{tool} {args}: {text}");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn recordings_list_is_held_to_the_read_roots() {
+    let dir = root_folders("recordings-roots");
+    let roots = Roots::new(&[dir.join("in")], &[dir.join("out")]).unwrap();
+    let mut h = Headless::with_options(None, ServerOptions { allow_streaming: false, roots: Some(roots) }).unwrap();
+    let mut profile = h.studio().profile().clone();
+    profile.output.folder = text_of(&dir.join("out"));
+    h.studio_mut().set_profile(profile).unwrap();
+    let mut s = Server::new(Box::new(h)).unwrap();
+    let text = error_text(&call(&mut s, "command_run", json!({"id": "recordings.list"})));
+    assert!(text.contains("outside the read roots"), "a write root is not enough to list its files: {text}");
+    let roots = Roots::new(&[dir.join("in")], &[dir.join("out")]).unwrap();
+    let mut h = Headless::with_options(None, ServerOptions { allow_streaming: false, roots: Some(roots) }).unwrap();
+    let mut profile = h.studio().profile().clone();
+    profile.output.folder = text_of(&dir.join("in"));
+    h.studio_mut().set_profile(profile).unwrap();
+    let mut s = Server::new(Box::new(h)).unwrap();
+    let r = ok_json(&call(&mut s, "command_run", json!({"id": "recordings.list"})));
+    assert_eq!(r["folder"], json!(text_of(&dir.join("in"))), "{r}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn the_pause_tools_pause_and_resume_the_program() {
+    let mut s = server();
+    let paused = ok_json(&call(&mut s, "pause_start", json!({"countdown_s": 120, "at_zero": "resume", "media": null})));
+    assert_eq!((paused["paused"].clone(), paused["countdown"]["total_s"].clone()), (json!(true), json!(120)), "{paused}");
+    assert_eq!(paused["countdown"]["at_zero"], json!("resume"));
+    assert!(error_text(&call(&mut s, "pause_start", json!({"countdown_s": 43_201}))).contains("43200"));
+    assert!(error_text(&call(&mut s, "pause_start", json!({"at_zero": "later"}))).contains("at_zero"));
+    assert!(error_text(&call(&mut s, "pause_start", json!({"media": "song.mp3"}))).contains("picture or video"));
+    assert_eq!(ok_json(&call(&mut s, "pause_stop", json!({}))), json!({"paused": false}));
+    assert!(error_text(&call(&mut s, "pause_stop", json!({}))).contains("not paused"));
+}
+
+#[test]
+fn the_pause_media_is_held_to_the_read_roots() {
+    let dir = root_folders("pause-roots");
+    let outside = text_of(&dir.join("outside").join("break.png"));
+    let roots = Roots::new(&[dir.join("in")], &[dir.join("out")]).unwrap();
+    let mut h = Headless::with_options(None, ServerOptions { allow_streaming: false, roots: Some(roots) }).unwrap();
+    let mut profile = h.studio().profile().clone();
+    profile.pause.media = outside.clone();
+    h.studio_mut().set_profile(profile).unwrap();
+    let mut s = Server::new(Box::new(h)).unwrap();
+    for (tool, args) in [
+        ("pause_start", json!({"media": outside})),
+        ("pause_start", json!({})),
+        ("command_run", json!({"id": "pause.toggle"})),
+        ("command_run", json!({"id": "pause.start", "params": {"media": outside}})),
+    ] {
+        let text = error_text(&call(&mut s, tool, args.clone()));
+        assert!(text.contains("outside the read roots"), "{tool} {args}: {text}");
+    }
+    // A pause without media, or with a picture inside the roots, starts.
+    let inside = text_of(&dir.join("in").join("break.png"));
+    let paused = ok_json(&call(&mut s, "pause_start", json!({"media": inside})));
+    assert_eq!(paused["paused"], json!(true), "{paused}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// `p` relative to the working directory, when both are on the same drive or root.
+fn relative_to_cwd(p: &std::path::Path) -> Option<std::path::PathBuf> {
+    let cwd = std::fs::canonicalize(std::env::current_dir().ok()?).ok()?;
+    let p = std::fs::canonicalize(p).ok()?;
+    let (from, to): (Vec<_>, Vec<_>) = (cwd.components().collect(), p.components().collect());
+    if from.first() != to.first() {
+        return None;
+    }
+    let common = from.iter().zip(&to).take_while(|(a, b)| a == b).count();
+    let mut rel: std::path::PathBuf = std::iter::repeat_n(std::path::Component::ParentDir, from.len() - common).collect();
+    rel.extend(&to[common..]);
+    Some(rel)
+}
+
+#[test]
+fn a_pause_without_its_own_media_opens_the_file_the_roots_checked() {
+    let dir = root_folders("pause-held");
+    std::fs::create_dir_all(dir.join("in").join("sub")).unwrap();
+    std::fs::write(dir.join("in").join("break.png"), b"not a picture").unwrap();
+    let checked = resolved_text(&dir.join("in").join("break.png"));
+    let mut given = vec![text_of(&dir.join("in").join("sub").join("..").join("break.png"))];
+    given.extend(relative_to_cwd(&dir.join("in").join("break.png")).map(|p| text_of(&p)));
+    for media in &given {
+        for id in ["pause.start", "pause.toggle"] {
+            let roots = Roots::new(&[dir.join("in")], &[]).unwrap();
+            let mut h = Headless::with_options(None, ServerOptions { allow_streaming: false, roots: Some(roots) }).unwrap();
+            let mut profile = h.studio().profile().clone();
+            profile.pause.media.clone_from(media);
+            h.studio_mut().set_profile(profile).unwrap();
+            // A refused pause leaves the setting as it was.
+            if id == "pause.start" {
+                assert!(h.call("engine.execute", json!({"command": id, "params": {"countdown_s": 43_201}})).is_err());
+                assert_eq!(&h.studio().profile().pause.media, media, "{media}");
+            }
+            let status = h.call("engine.execute", json!({"command": id, "params": {}})).unwrap();
+            assert_eq!(status["media"].as_str(), Some(checked.as_str()), "{id} with {media}: {status}");
+            assert_eq!(h.studio().profile().pause.media, checked, "{id} with {media}");
+        }
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_linked_pause_media_file_is_held_to_the_read_roots() {
+    let dir = root_folders("pause-link");
+    std::fs::write(dir.join("outside").join("break.png"), b"not a picture").unwrap();
+    let link = dir.join("in").join("break.png");
+    #[cfg(unix)]
+    let made = std::os::unix::fs::symlink(dir.join("outside").join("break.png"), &link);
+    // Windows lets only some accounts create links; without the right the case is skipped.
+    #[cfg(windows)]
+    let made = std::os::windows::fs::symlink_file(dir.join("outside").join("break.png"), &link);
+    if made.is_err() {
+        let _ = std::fs::remove_dir_all(&dir);
+        return;
+    }
+    let roots = Roots::new(&[dir.join("in")], &[]).unwrap();
+    let mut h = Headless::with_options(None, ServerOptions { allow_streaming: false, roots: Some(roots) }).unwrap();
+    let mut profile = h.studio().profile().clone();
+    profile.pause.media = text_of(&link);
+    h.studio_mut().set_profile(profile).unwrap();
+    let mut s = Server::new(Box::new(h)).unwrap();
+    for (tool, args) in [("pause_start", json!({})), ("command_run", json!({"id": "pause.toggle"}))] {
+        let text = error_text(&call(&mut s, tool, args.clone()));
+        assert!(text.contains("outside the read roots"), "{tool} {args}: {text}");
+    }
+    // A link inside the roots whose target the screen would not show as a picture or video is
+    // refused, given or from the profile.
+    std::fs::write(dir.join("in").join("blob"), b"not a picture").unwrap();
+    let named = dir.join("in").join("named.png");
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(dir.join("in").join("blob"), &named).unwrap();
+    #[cfg(windows)]
+    std::os::windows::fs::symlink_file(dir.join("in").join("blob"), &named).unwrap();
+    let roots = Roots::new(&[dir.join("in")], &[]).unwrap();
+    let mut h = Headless::with_options(None, ServerOptions { allow_streaming: false, roots: Some(roots) }).unwrap();
+    let mut profile = h.studio().profile().clone();
+    profile.pause.media = text_of(&named);
+    h.studio_mut().set_profile(profile).unwrap();
+    let mut s = Server::new(Box::new(h)).unwrap();
+    for (tool, args) in
+        [("pause_start", json!({})), ("command_run", json!({"id": "pause.toggle"})), ("pause_start", json!({"media": text_of(&named)}))]
+    {
+        let text = error_text(&call(&mut s, tool, args.clone()));
+        assert!(text.contains("not a picture or video file"), "{tool} {args}: {text}");
     }
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -737,6 +900,61 @@ fn serve_answers_each_line() {
         format!("{}\n{}\n", json!({"jsonrpc": "2.0", "id": 1, "method": "ping"}), json!({"jsonrpc": "2.0", "method": "notifications/initialized"}));
     let mut out = Vec::new();
     s.serve(&mut input.as_bytes(), &mut out).unwrap();
+    let text = String::from_utf8(out).unwrap();
+    assert_eq!(text.lines().count(), 1, "{text}");
+}
+
+/// A backend that reports each idle run on a channel.
+struct Idler {
+    inner: Headless,
+    idled: std::sync::mpsc::Sender<()>,
+}
+
+impl Backend for Idler {
+    fn call(&mut self, method: &str, params: Value) -> Result<Value, McpError> {
+        self.inner.call(method, params)
+    }
+    fn has_ui(&self) -> bool {
+        false
+    }
+    fn describe(&self) -> String {
+        self.inner.describe()
+    }
+    fn idle(&mut self) {
+        // The test may have stopped listening once it saw the first run.
+        let _ = self.idled.send(());
+    }
+}
+
+/// Input whose bytes arrive over a channel; it ends when the sender is dropped.
+struct Gate(std::sync::mpsc::Receiver<Vec<u8>>);
+
+impl std::io::Read for Gate {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let Ok(bytes) = self.0.recv() else { return Ok(0) };
+        let n = bytes.len().min(buf.len());
+        buf[..n].copy_from_slice(&bytes[..n]);
+        Ok(n)
+    }
+}
+
+#[test]
+fn serve_idle_answers_each_line_and_runs_the_idle_work_while_the_client_is_quiet() {
+    let (idled, idle_runs) = std::sync::mpsc::channel();
+    let (feed, gate) = std::sync::mpsc::channel::<Vec<u8>>();
+    let backend = Idler { inner: Headless::new().unwrap(), idled };
+    let mut s = Server::new(Box::new(backend)).unwrap();
+    // The client sends one message, waits for an idle run, then closes its input.
+    let client = std::thread::spawn(move || {
+        feed.send(format!("{}\n", json!({"jsonrpc": "2.0", "id": 1, "method": "ping"})).into_bytes()).unwrap();
+        idle_runs.recv().unwrap();
+        drop(feed);
+    });
+    let mut out = Vec::new();
+    s.serve_idle(BufReader::new(Gate(gate)), &mut out, std::time::Duration::from_millis(1)).unwrap();
+    // Without an idle run, dropping the server ends the client's wait with an error.
+    drop(s);
+    assert!(client.join().is_ok(), "the idle work ran before the input ended");
     let text = String::from_utf8(out).unwrap();
     assert_eq!(text.lines().count(), 1, "{text}");
 }
@@ -1060,6 +1278,9 @@ fn output_tools_carry_their_hints() {
     // Each call starts the audio editor or a file manager.
     let h = hints("audio_tracks_open_last");
     assert_eq!((h["readOnlyHint"].as_bool(), h["idempotentHint"].as_bool()), (Some(false), Some(false)));
+    // Each call adds another marker.
+    let h = hints("record_marker");
+    assert_eq!((h["readOnlyHint"].as_bool(), h["idempotentHint"].as_bool()), (Some(false), Some(false)));
 }
 
 #[test]
@@ -1070,6 +1291,17 @@ fn output_status_starts_with_nothing_running() {
     // Stopping what does not run changes nothing.
     assert_eq!(ok_json(&call(&mut s, "record_stop", json!({})))["recording"]["active"], false);
     assert_eq!(ok_json(&call(&mut s, "stream_stop", json!({})))["streaming"]["active"], false);
+}
+
+#[test]
+fn record_marker_needs_a_running_recording_and_a_checked_name() {
+    let mut s = server();
+    let idle = error_text(&call(&mut s, "record_marker", json!({"name": "Goal"})));
+    assert!(idle.contains("no recording is running"), "{idle}");
+    let bad = error_text(&call(&mut s, "record_marker", json!({"name": ""})));
+    assert!(bad.contains("a marker's name is 1 to 256 characters"), "{bad}");
+    let null = error_text(&call(&mut s, "record_marker", json!({"name": null})));
+    assert!(null.contains("record.marker"), "a null name is refused, not numbered: {null}");
 }
 
 #[test]

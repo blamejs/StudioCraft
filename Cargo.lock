@@ -6573,6 +6573,8 @@ dependencies = [
  "studiocraft-media",
  "thiserror 2.0.21",
  "v4l",
+ "wayland-client",
+ "x11rb",
  "xcap",
  "zune-jpeg",
 ]

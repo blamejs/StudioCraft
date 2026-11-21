@@ -131,8 +131,10 @@
 	H.264 (built in)	H.264 (内蔵)
 	NVIDIA NVENC H.264 (built in)	NVIDIA NVENC H.264 (内蔵)
 	NVIDIA NVENC HEVC (built in)	NVIDIA NVENC HEVC (内蔵)
+	NVIDIA NVENC AV1 (built in)	NVIDIA NVENC AV1 (内蔵)
 	Windows Media Foundation H.264 (built in)	Windows Media Foundation H.264 (内蔵)
 	Windows Media Foundation HEVC (built in)	Windows Media Foundation HEVC (内蔵)
+	Windows Media Foundation AV1 (built in)	Windows Media Foundation AV1 (内蔵)
 	Apple VideoToolbox H.264 (built in)	Apple VideoToolbox H.264 (内蔵)
 	Apple VideoToolbox HEVC (built in)	Apple VideoToolbox HEVC (内蔵)
 	VA-API H.264 (built in)	VA-API H.264 (内蔵)
@@ -376,6 +378,24 @@
 	Width	幅
 	Window	ウィンドウ
 	Window capture	ウィンドウキャプチャ
+	Staged windows	待機ウィンドウ
+	Window 1	ウィンドウ 1
+	Window 2	ウィンドウ 2
+	Window 3	ウィンドウ 3
+	Window 4	ウィンドウ 4
+	Window 5	ウィンドウ 5
+	Window 6	ウィンドウ 6
+	Presented window	表示中のウィンドウ
+	While the presented window cannot be shown	表示中のウィンドウを表示できないとき
+	Show a color	色を表示
+	Keep the last picture	最後の画像を保持
+	Placeholder color	代替表示の色
+	no window is staged in the presented slot	表示中の枠に待機ウィンドウがありません
+	waiting for the window	ウィンドウを待っています
+	Present Staged Window	待機ウィンドウを表示
+	Present Next Staged Window	次の待機ウィンドウを表示
+	Present Previous Staged Window	前の待機ウィンドウを表示
+	Present Staged Window {n}	待機ウィンドウ {n} を表示
 	Your Videos folder	ビデオフォルダー
 	YUV vectorscope	YUV ベクトルスコープ
 	{device} (not connected)	{device} (未接続)
@@ -493,6 +513,9 @@ menu	Transform	変形
 @msg	Audio tracks could not be repaired: {takes} and {more} more. Takes repaired: {count}	オーディオトラックを修復できませんでした: {takes} ほか {more} 件。修復したテイク: {count}
 	Open Last Audio Tracks in Editor	最後のオーディオトラックをエディターで開く
 	Add Audio Tracks Marker	オーディオトラックにマーカーを追加
+	Add Recording Marker	録画にマーカーを追加
+@msg	Markers saved to {path}	マーカーを {path} に保存しました
+@msg	The markers could not be saved: {error}	マーカーを保存できませんでした: {error}
 	After a take	テイクの後
 	Nothing	何もしない
 	Show the folder	フォルダーを表示
@@ -536,3 +559,7 @@ menu	Transform	変形
 @msg	there is no display `{id}`: the system lists no displays	ディスプレイ `{id}` はありません: システムはディスプレイを 1 つも一覧に出していません
 @msg	there is no display `{id}` (the displays are {ids})	ディスプレイ `{id}` はありません (ディスプレイは {ids})
 @msg	a {width} × {height} display can't be the canvas: each side must be from {min} to {max} pixels	{width} × {height} のディスプレイはキャンバスにできません: 各辺は {min} から {max} ピクセルにしてください
+	Output scale	出力スケール
+	Custom	カスタム
+	Fill Screen	画面を埋める
+@msg	The scenes could not be laid out for the new canvas: {error}	新しいキャンバスにシーンを配置できませんでした: {error}

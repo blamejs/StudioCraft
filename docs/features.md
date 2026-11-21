@@ -8,13 +8,23 @@ sizes and bitrates, are listed in [MECHANICS.md](../MECHANICS.md).
 
 A scene is a stack of sources. You add, rename, duplicate, reorder and remove scenes and sources.
 In the preview you drag, resize and rotate sources. A source that is not rotated snaps when an
-edge or its center line comes within 8 points of a canvas edge, a canvas center line, or an edge or
+edge or its center line comes within 8 points of a canvas edge, a canvas center line, an edge of
+the action safe area (3.5% in from each canvas edge) or the title safe area (5% in), or an edge or
 center line of another visible source, and a line shows what it snapped to. A move snaps on each
 axis. A corner drag snaps the edges it moves and keeps the aspect ratio: the edge closer to its
 line snaps and the other edge follows the ratio. With Shift held the corner drag changes the ratio
 and each edge snaps on its own. Holding Alt (Option on macOS) turns snapping off. One drag is one
 undo step. You can lock a source so it can't be moved, or lock the whole preview. Each scene item can be
 shown or hidden, and every change can be undone.
+
+The Transform menu (in Edit and in a source's context menu) has Fit to Screen, which shows the
+whole source in the canvas at its aspect ratio; Fill Screen, which covers the canvas at the
+source's aspect ratio and leaves the parts past the canvas edges out of the picture; and Stretch to
+Screen, which makes the source the canvas's size. When the canvas size changes, every scene is laid
+out for the new size in one undo step: a source that was fit, filled or stretched with these
+commands is fit, filled or stretched again, and any other source keeps its place in proportion to
+the canvas ([`canvas.relayout`](control-protocol.md#canvasrelayout)). Moving, resizing, rotating
+or cropping a source ends its fit, fill or stretch.
 
 ### Built-in sources
 
@@ -26,6 +36,7 @@ shown or hidden, and every change can be undone.
 | Media file | A media file. | All |
 | Display capture | A whole display. | Windows, macOS and Linux |
 | Window capture | One window. | Windows, macOS and Linux |
+| Staged windows | One of up to six windows picked ahead of time, swapped from its Properties, a hotkey or a command ([Staged windows](#staged-windows)). | Windows and macOS |
 | Camera | A webcam or capture card. | Windows (Media Foundation), macOS (AVFoundation) and Linux (V4L2) |
 | Audio input capture | A microphone or other input device. | Windows, macOS and Linux |
 | Audio output capture | The sound the computer plays (desktop audio). | Windows and Linux |
@@ -37,7 +48,36 @@ shown or hidden, and every change can be undone.
 On Linux, display and window capture go through the desktop's screen-cast portal
 (`xdg-desktop-portal` with a backend for your desktop) and PipeWire. The desktop's own picker
 asks for the display or window when the source starts. After the picker is canceled or sharing is
-stopped, changing any of the source's properties opens the picker again.
+stopped, changing any of the source's properties opens the picker again. The list of displays
+for the canvas size (Settings › Video › Match display and `video.displays`) does not use the
+picker: it comes from the Wayland compositor's outputs, or from RandR under X11.
+
+### Staged windows
+
+A Staged windows source holds up to six windows, chosen in its Properties as Window 1 to Window
+6, and shows one of them: the window in the slot that Presented window names. Every staged window
+keeps its capture open. The presented window is captured at the capture rate and each of the
+others once a second, so a swap shows the new window on the next frame without opening its
+capture again. A slot keeps its window after the window closes. Every 2 seconds the source looks
+for it again: first a window with the same program and title, then one with the same title, then
+another window of the same program.
+
+To swap the presented window, change Presented window in the Properties, or run
+`present.window` (a slot), `present.next` or `present.previous`
+([`present.*`](control-protocol.md#presentwindow-presentnext-and-presentprevious)). Next and
+previous skip empty slots and wrap around. Settings › Hotkeys lists Present Next Staged Window,
+Present Previous Staged Window and Present Staged Window 1 to 6, with no shortcut until you set
+one. Without a source named, these commands change every Staged windows source in the scene
+collection that has a window in the slot they move to. The presented slot is saved with the
+collection. Swapping the presented window, from the Properties or otherwise, is not an undo step,
+and Edit › Undo does not change it.
+
+While the presented window cannot be captured (it closed or is minimized, or its slot is empty),
+the source shows the placeholder that "While the presented window cannot be shown" selects: a
+color, black by default, at the size of the last picture (1920 x 1080 before the first one), or
+the last picture of that window. After
+a swap, the source never shows the picture of the window presented before. The source is not
+offered on Linux, where the desktop's picker chooses each captured window.
 
 ### Audio capture on Linux
 
@@ -116,7 +156,7 @@ compressor, limiter and a three-band equalizer.
 | Image mask | Uses a picture file as an alpha mask (from its brightness or its alpha) or blends it with the source (multiply, add or subtract). The picture is stretched over the source or centered at its own size, and the filter then applies a color and an opacity. |
 | Scroll | Moves a source's picture at a horizontal and a vertical speed in pixels per second. The picture repeats (Loop) or moves out once, in an area whose width and height can be limited. |
 | Sharpen | Makes edges crisper by a Sharpness from 0 to 1. |
-| Gain, noise gate, compressor, limiter and equalizer | Change the level and tone of a source's audio. |
+| Gain, noise gate, compressor, limiter and equalizer | Change the level and tone of a source's audio. The noise gate, compressor and limiter report how far they turn the audio down through [`filter.meter`](control-protocol.md#filtermeter). |
 
 [MECHANICS.md](../MECHANICS.md#video) lists each filter's default values and limits.
 
@@ -138,8 +178,14 @@ system's default output device, and Microphone, the default input device. Deskto
 sound on Windows and Linux only.
 
 The Audio Mixer dock shows peak and RMS meters with peak hold, a volume fader in dB, and a mute
-button for every audible source. The mixer also measures the final mix's loudness (momentary,
-short-term, integrated, loudness range and true peak). The window does not show these readings
+button for every audible source. The fader runs from silence to +20 dB of boost (StudioCraft's own
+limit), with a mark at 0 dB. A boosted source is louder than its input, and the final mix is still
+clipped at full scale. The `source.volume` command takes a linear `gain` from 0 to 10, where 1 is
+0 dB and 10 is +20 dB; a value outside that range, or one that is not a number, is an error and
+changes nothing. The mixer also measures the final mix's loudness (momentary,
+short-term, integrated, loudness range and true peak). Each profile keeps a loudness target band,
+−18 to −14 LUFS by default (StudioCraft's own value). The `audio.loudness` command and the MCP
+tool `audio_loudness` report the readings with the band. The window does not show these readings
 yet.
 
 A source's Properties window sets two more audio options:
@@ -179,7 +225,8 @@ same file name, their lanes show the folder as well. When the program hears two 
 application, the second source gets a lane of its own, named after the source, with its own volume
 slider and mute button and no check box.
 
-A lane with a source has a volume slider in dB and a mute button, and its settings menu opens the
+A lane with a source has a volume slider in dB, from silence to +20 dB with a mark at 0 dB, the same
+as the Audio Mixer's fader, and a mute button. Its settings menu opens the
 source's Properties… (sync offset and monitoring) and Filters…. The dock is hidden in a new
 layout. On a system that cannot capture one application's audio, the dock lists the microphones
 and says why no applications are listed.
@@ -229,6 +276,25 @@ runtime has no `ffmpeg`, and the Flatpak sandbox cannot run an `ffmpeg` installe
 
 Tools › Available Encoders lists the built-in encoders and the encoders the installed `ffmpeg`
 offers, and says when `ffmpeg` was not found.
+
+### Recording markers
+
+File › Add Recording Marker (`record.marker`, which can be given a shortcut in Settings › Hotkeys)
+marks the running recording at that moment. A marker is named "Marker N" for the recording's Nth
+marker, and a recording holds at most 10,000 markers. When a recording with at least one marker
+stops, or the app closes during it, StudioCraft finishes the recording file and then writes
+`<recording name>.otio` beside it: an
+[OpenTimelineIO](https://opentimelineio.readthedocs.io) timeline with the recording as one clip on
+a video track and on an audio track, and each marker on the timeline at the frame that holds its
+time. A marker's time leaves out the time the recording skipped while the computer was suspended.
+The clip is as long as the frames written to the recording file, so a recording whose encoder fell
+behind before the stop gets a shorter clip, and a marker past the clip's end goes on its last
+frame. The timeline names the recording by its file name, so the two files can be moved together.
+File › Import in FilmCraft opens the timeline as a sequence with the markers on it. A file of that
+name that already exists is not replaced: the timeline goes to `<recording name> (2).otio`, or the
+next free number up to 999, and the status bar names the file. A recording without markers gets no
+timeline file, and neither does a recording whose file could not be finished; the status bar says
+the markers could not be saved.
 
 ### Replay buffer
 
@@ -353,16 +419,79 @@ or failed with the error, so one destination's error does not hide another's sta
 Stop send to one destination or stop sending to it while the others go on. A destination added
 after the stream started is sent to from the next start, and so are changes to a server or a key.
 
-Add Destination adds one, up to 16. The first destination uses the profile's stream key; the
-others have no key of their own until one is chosen, so the profile's key is not sent to another
-service. Edit opens a destination's name, server and key source. The server field hides its text
-until Show is pressed. Save closes the details once the change is made; a change that is refused
+Add Destination adds one, up to 16, for one of seven streaming services or for a custom server.
+The first destination uses the profile's stream key; the others have no key of their own until one
+is chosen, so the profile's key is not sent to another service. A service that documents one ingest
+server for every account fills in that server. For the other services the details link to the
+service's page that shows the account's server and key. Edit opens a destination's service, name,
+server and key source. Choosing another service replaces a server that is empty or that is one of
+the services' documented servers, and keeps any other server. A service without a shared server leaves the server
+empty, and a destination saved for it without a server is turned off. The server field hides its text until Show is pressed. A row
+shows the service it streams to, and the row and the details show a service's logo only where the
+service publishes one for this use, at no less than the size its guidelines allow (`ASSETS.md`). Save closes the details once the change is made; a change that is refused
 leaves them open with what was typed. A destination whose key is held for the session has a field for that key:
 Hold keeps the typed key in memory for this session and Forget drops it. Remove deletes a
 destination; one that is sending must be stopped first. Each change is saved in the profile; a change
 that cannot be saved is undone. When Settings is open, the changed destination is also changed in
 its Stream tab, and edits not yet applied there to other destinations stay. A new destination
 never takes the id of one the running stream still holds.
+
+The `golive.check` command lists what would stop the stream from starting or spoil it. It has an
+item for each destination that is on, the stream's video encoder, the free space in the recording
+folder, each source that is not working, and live captions. Each item passes, is a problem, or is
+unknown, and a problem names the command that fixes it. A destination passes only while it is live,
+or when it was live on an earlier stream of this session with the same server and key; one that has
+not connected yet is unknown. Less than 10 GB free in the recording folder, a limit StudioCraft
+chose, is a problem. Live captions that are off are a problem only when a Live Captions source is
+in the scene collection. The window does not show the check yet
+([Control protocol](control-protocol.md#golivecheck)).
+
+### Pause screen
+
+File › Pause Program shows the pause screen in the program in place of the program scene, with
+the scene collection's transition. Every recording, stream and replay buffer shows it too. File ›
+Resume Program shows the program scene again with the same transition. File › Add a Minute to the
+Pause adds 60 s to the countdown. Pause or Resume Program and Add a Minute to the Pause can be given
+shortcuts in Settings › Hotkeys.
+
+The Pause button sits after Go Live on the menu row. A click on it pauses with the profile's settings.
+While paused, it is filled amber and reads Resume with the time left, or with the time paused when
+there is no countdown, and a click resumes. Its arrow opens a menu: Pause for 1, 2, 5, 10 or 15
+Minutes and Pause Without a Countdown pause with that countdown (while paused, they start the
+countdown again from now), and Pause Screen Settings… opens Settings at the Stream tab with the
+keyboard focus in the Pause screen section. The `pause.settings` window command does the same.
+
+While paused, an amber banner above the program reads "Paused. Viewers see the pause screen." with
+the time left ("Back in 4:32."), the time paused ("Paused for 2:10.") or "The countdown ended.", and
+has +1 min and Resume buttons. Screen readers announce the banner when the pause starts and when the
+countdown reaches zero, and announce "The program resumed" after Resume; they do not announce each
+second. The status bar shows PAUSED with the time left, and the time paused on hover.
+
+The pause screen draws, from the bottom up, a background color, one picture or one video, and the
+countdown text. A video loops and plays without its sound, and a video file that holds only sound
+shows nothing over the background. A GIF plays as a video, so an animated GIF loops; like other
+videos it needs ffmpeg. The countdown text holds `{time}` once,
+where the time left goes, as `4:07` or, from one hour, `1:02:07`. When the countdown reaches zero,
+the pause screen either stays and shows the text at zero, or the program resumes. A countdown of 0
+shows no text and does not end the pause.
+
+Settings › Stream › Pause screen sets the picture or video, how it is sized to the canvas, the
+background, the countdown and its text, what happens at zero, the text at zero, where the text
+sits, its size as a share of the canvas height, its font, color and outline, and whether the
+program audio is muted. The defaults are listed in
+[MECHANICS.md](../MECHANICS.md#recording-and-streaming). Changes apply from the next pause.
+`pause.start` can give a pause its own picture or video, countdown and choice at zero.
+
+While the program audio is muted, every source the program hears fades out with the transition and
+fades back in when the program resumes. Monitoring and each source's own audio track keep the
+source's audio. A pause is not saved in the scene collection or the profile, and it is not an undo
+step. A program scene switched to while paused shows when the program resumes. Pausing during the
+fade back, or resuming during the fade in, turns a Fade or Fade through color around from the
+picture it shows; other transitions start from the beginning. A picture or video
+that can't be read is reported in the status bar, and the pause screen keeps its background and
+text. A countdown text that can't be drawn is reported the same way. Settings whose countdown text
+does not hold `{time}` exactly once are refused. While paused, switching to, creating, duplicating or
+removing a profile is refused with "Resume before switching the profile".
 
 ## Hardware acceleration
 
@@ -410,6 +539,16 @@ A stream tests only the H.264 candidates in this list, and skips every other can
 
 The compositor converts the program to the encoders' frame format on the GPU.
 
+The compositor can also draw a small picture of each of up to 16 scenes, for scene lists. Each
+picture fits a 256 × 144 box by default, keeps the canvas's aspect ratio, and is redrawn at most 4
+times a second. The pictures stay on the GPU. Scenes past the sixteenth are not drawn and are
+counted.
+
+The [`scene.thumbnails`](control-protocol.md#scenethumbnails) command names the scenes to draw and
+how often: 2 times a second by default. While no command has named any, or after one names none,
+the compositor draws no scene pictures, so a scene list that shows only names adds no work to a
+frame.
+
 ## Interface
 
 ### Theme
@@ -423,10 +562,11 @@ and the focus ring have at least 3:1.
 ### Menu row and output controls
 
 The menu row is 32 points tall. It holds the menu titles at the start of the row, and at the end
-an Edit and Studio switch, the transition picker with its duration, and Record and Go Live with
-their timers. When the row is too narrow, the transition picker moves behind an icon button
-first, then Record and Go Live leave out their labels, and last the menu titles move into the menu
-bar's overflow menu. Docks › Output Controls and Docks › Transition Controls show and hide the two groups.
+an Edit and Studio switch, the transition picker with its duration, Record and Go Live with
+their timers, and the Pause button with its menu arrow ([Pause screen](#pause-screen)). When the
+row is too narrow, the transition picker moves behind an icon button first, then Record, Go Live and
+Pause leave out their labels and keep the glyph and timer, and last the menu titles move into the
+menu bar's overflow menu. In a right-to-left interface the row is mirrored. Docks › Output Controls and Docks › Transition Controls show and hide the two groups.
 
 ### Docks
 
@@ -520,7 +660,8 @@ Settings › Hotkeys lists every command that can take a shortcut and changes it
 shortcuts such as Ctrl+1 or Shift+F5, and separate several with commas. Ctrl+1 to Ctrl+9 on
 Windows and Linux, and ⌘1 to ⌘9 on macOS, show the first nine scenes. The list includes Start or
 Stop Recording, Start or Stop Streaming, Start or Stop Replay Buffer, Save Replay, Transition to
-Program, Cut to Program and Studio Mode.
+Program, Cut to Program, Studio Mode and the commands that swap a
+[staged window](#staged-windows).
 
 ## Settings
 
@@ -531,10 +672,10 @@ discards them.
 | Tab | Settings |
 | --- | --- |
 | General | Language, Check for updates at start, and Use system title bar (from the next start). |
-| Stream | Server, Stream key, Video bitrate, Audio bitrate, Video encoder and Keyframe interval. |
+| Stream | Server, Stream key, Video bitrate, Audio bitrate, Video encoder and Keyframe interval, and the Pause screen section ([Pause screen](#pause-screen)). |
 | Output | Recording folder, Format, Quality, Video encoder and its settings, the `ffmpeg` program, Replay buffer length and Replay buffer memory limit. |
 | Audio | Monitoring device, the device monitored sources play on. |
-| Video | Canvas size, Match display (sets the canvas size to the display the window is on or to a listed display; on Linux only the window's display is offered), Output size and Frames per second, and the Hardware acceleration section with Graphics adapter and Hardware encoder. Video settings can't change while recording, streaming or running the replay buffer. |
+| Video | Canvas size (the presets include 1080 × 1920 for vertical video), Match display (sets the canvas size to the display the window is on or to a listed display. Once applied, the canvas follows that display when its resolution or scaling changes, until the canvas size is set another way. The display the window is on is followed only when no other listed display has its size), Output size, Output scale (100%, 75%, 66% or 50% of the canvas; an output size at one of these shares stays at that share when the canvas size changes) and Frames per second, and the Hardware acceleration section with Graphics adapter and Hardware encoder. Video settings can't change while recording, streaming or running the replay buffer. |
 | Hotkeys | A shortcut for each command. |
 
 ## Control and automation

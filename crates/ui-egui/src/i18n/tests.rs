@@ -74,6 +74,8 @@ fn data(app: &StudioApp) -> BTreeSet<String> {
     if let Some(list) = &app.encoders {
         out.extend(list.iter().map(|(_, codec, _)| codec.clone()));
     }
+    // The streaming services' names are their own.
+    out.extend(studiocraft_model::SERVICES.iter().map(|s| s.name.to_string()));
     out
 }
 
@@ -472,6 +474,14 @@ fn every_label_chosen_at_run_time_has_an_english_row() {
     labels.extend(RecordingQuality::ALL.map(crate::settings::quality_label));
     labels.extend(studiocraft_model::AudioTracksWhen::ALL.map(crate::settings::when_label));
     labels.extend(studiocraft_model::AfterStop::ALL.map(crate::settings::after_stop_label));
+    // The Pause screen choices of the Stream tab.
+    labels.extend(studiocraft_model::PauseAtZero::ALL.map(crate::settings::at_zero_label));
+    labels.extend(studiocraft_model::PauseAnchor::ALL.map(crate::settings::anchor_label));
+    labels.extend(
+        [studiocraft_model::FitMode::Fit, studiocraft_model::FitMode::Fill, studiocraft_model::FitMode::Stretch].map(crate::settings::fit_label),
+    );
+    // The entries of the Pause button's menu.
+    labels.extend(crate::output_bar::pause_menu().into_iter().map(|(l, _)| l));
     // The Stream key choices of the Streaming window.
     labels.extend(crate::streaming::KeyChoice::ALL.map(crate::streaming::KeyChoice::label));
     labels.extend(
@@ -496,9 +506,9 @@ fn every_label_chosen_at_run_time_has_an_english_row() {
 }
 
 /// The settings that list what the system has (devices, a camera's formats, displays, windows,
-/// running applications): their option labels are names from the system, apart from the fixed
-/// first entries, which have their own rows.
-const SYSTEM_LISTS: &[&str] = &["device", "format", "display", "window", "app"];
+/// the slots of a Staged windows source, running applications): their option labels are names
+/// from the system, apart from the fixed first entries, which have their own rows.
+const SYSTEM_LISTS: &[&str] = &["device", "format", "display", "window", "window1", "window2", "window3", "window4", "window5", "window6", "app"];
 
 #[test]
 fn every_plug_in_name_and_setting_label_has_an_english_row() {
