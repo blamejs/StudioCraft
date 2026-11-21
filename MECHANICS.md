@@ -87,6 +87,8 @@ field to `false` in `mechanics.json`.
 | Limiter look-ahead | 5 ms | `craft_audio_dsp::effects::dynamics::Limiter::LOOKAHEAD_MS` | estimated |
 | Equalizer bands | 200 Hz low shelf, 1 kHz peak, 5 kHz high shelf | `sources::filters::Equalizer` | estimated |
 | Loudness windows | Momentary 400 ms, short-term 3 s | `craft_audio_dsp::loudness` | ITU-R BS.1770-4 and EBU R 128 |
+| Program loudness target | −18 to −14 LUFS | `model::profile::LoudnessTarget::default` | estimated |
+| Loudness target range | −60 to 0 LUFS | `model::profile::LoudnessTarget::MIN_LUFS`, `MAX_LUFS` | estimated |
 
 ## Recording and streaming
 

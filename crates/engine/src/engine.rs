@@ -327,6 +327,7 @@ impl Engine {
             Command::ReplayStop {} => Ok(Outcome::runtime(RuntimeAction::StopReplay)),
             Command::ReplayToggle {} => Ok(Outcome::runtime(RuntimeAction::ToggleReplay)),
             Command::ReplaySave {} => Ok(Outcome::runtime(RuntimeAction::SaveReplay)),
+            Command::AudioLoudness {} => Ok(Outcome::runtime(RuntimeAction::AudioLoudness)),
             Command::AudioTracksStatus {} => Ok(Outcome::runtime(RuntimeAction::AudioTracksStatus)),
             Command::AudioTracksRepair { folder } => {
                 if folder.trim().is_empty() {

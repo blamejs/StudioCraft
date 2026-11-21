@@ -13,7 +13,7 @@ use crate::{Backend, Headless, MAX_BATCH_STEPS, McpError, Remote, Roots, Server,
 
 const TOKEN: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
-const TOOLS: [&str; 35] = [
+const TOOLS: [&str; 36] = [
     "command_list",
     "command_run",
     "command_batch",
@@ -44,6 +44,7 @@ const TOOLS: [&str; 35] = [
     "replay_start",
     "replay_stop",
     "replay_save",
+    "audio_loudness",
     "audio_tracks_status",
     "audio_tracks_repair",
     "audio_tracks_open_last",
@@ -360,6 +361,11 @@ fn source_audio_sets_whether_the_source_records_its_own_track() {
         (json!(false), json!(0)),
         "a refused value changes nothing"
     );
+    let loudness = ok_json(&call(&mut s, "audio_loudness", json!({})));
+    assert_eq!(loudness["target"], json!({"low_lufs": -18.0, "high_lufs": -14.0}), "{loudness}");
+    assert!(loudness["generation"].is_u64() && loudness.get("integrated_lufs").is_some(), "{loudness}");
+    let extra = call(&mut s, "audio_loudness", json!({"reset": true}));
+    assert_eq!(extra["error"]["code"], json!(-32602), "an unknown argument is invalid params: {extra}");
     let status = ok_json(&call(&mut s, "audio_tracks_status", json!({})));
     assert_eq!((status["enabled"].clone(), status["active"].clone()), (json!(false), json!(false)), "{status}");
     error_text(&call(&mut s, "audio_tracks_repair", json!({})));

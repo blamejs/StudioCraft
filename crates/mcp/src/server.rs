@@ -29,8 +29,8 @@ studio_transition moves the preview to the program. record_start and record_stop
 for the video editor, stream_start and \
 stream_stop the stream to the configured RTMP server, replay_start, replay_stop and replay_save the replay buffer, and \
 output_status reports all three. pause_start shows the pause screen and its countdown in the program, and pause_stop resumes the \
-program. source_audio sets a source's audio sync offset, monitoring and whether it records its own track; \
-audio_tracks_status reports the audio tracks, audio_tracks_marker marks the running take, audio_tracks_repair repairs takes cut \
+program. source_audio sets a source's audio sync offset, monitoring and whether it records its own track; audio_loudness \
+reports the program's loudness and the profile's loudness target; audio_tracks_status reports the audio tracks, audio_tracks_marker marks the running take, audio_tracks_repair repairs takes cut \
 short by a crash and audio_tracks_open_last opens the last take's session in the audio editor. prompts/list has ready-made workflows \
 (build_scene, lower_third, check_collection), completion/complete finishes a command id, a scene or source name or a plug-in kind, \
 and studiocraft://scene/{id}, studiocraft://source/{id}, studiocraft://command/{id} and studiocraft://plugin/{kind} read one thing \

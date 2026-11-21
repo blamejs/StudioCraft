@@ -1,0 +1,25 @@
+{
+  "format": "studiocraft.profile",
+  "version": 11,
+  "data": {
+    "name": "Fixture",
+    "video": { "base_width": 1280, "base_height": 720, "output_width": 1280, "output_height": 720, "fps_num": 60, "fps_den": 1 },
+    "audio": { "sample_rate": 48000, "monitoring_device": "Headphones (USB)", "loudness_target": { "low_lufs": -24.5, "high_lufs": -22 } },
+    "output": { "folder": "", "format": "mkv", "quality": "high", "video_encoder": "hardware", "encoder_settings": { "x264": { "preset": "fast" } }, "ffmpeg_path": "", "hardware_encoder": "nvenc_hevc" },
+    "stream": {
+      "destinations": [
+        { "id": "main", "name": "Main", "enabled": true, "server": "rtmps://ingest.localhost/app", "key": "profile", "service": "twitch" },
+        { "id": "backup", "name": "Backup", "enabled": false, "server": "rtmps://backup.localhost/app", "key": { "held": "backup" }, "service": "" },
+        { "id": "open", "name": "Open", "enabled": true, "server": "rtmp://open.localhost/live", "key": "none", "service": "retired-service" }
+      ],
+      "key": "test", "video_bitrate_kbps": 4500, "audio_bitrate_kbps": 160, "video_encoder": "nvenc_native_h264", "encoder_settings": { "nvenc_h264": { "preset": "p4" } }, "keyframe_interval_s": 2
+    },
+    "replay": { "seconds": 45, "memory_mb": 1024 },
+    "audio_tracks": { "enabled": true, "when": "either", "include_program": false, "buffer_mib": 256, "segment_gib": 1, "after_stop": "open_editor", "editor_path": "C:/Tools/Editor/editor.exe" },
+    "pause": {
+      "media": "C:/Media/break.mp4", "fit": "fill", "background": "#202030ff", "countdown_s": 600, "text": "Starting again in {time}",
+      "at_zero": "resume", "zero_text": "Any moment now", "anchor": "top_right", "size_pct": 9, "font": "Inter", "color": "#ffd700ff",
+      "outline": 2, "outline_color": "#101010ff", "mute_scene": false
+    }
+  }
+}
