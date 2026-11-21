@@ -123,6 +123,48 @@ fn scene_add_rename_duplicate_move_remove() {
 }
 
 #[test]
+fn scene_thumbnails_name_known_scenes_once_at_a_bounded_rate() {
+    let mut e = engine();
+    run(&mut e, "scene.add", json!({"name": "B"})).unwrap();
+    let thumbnails = |e: &mut Engine, params| run(e, "scene.thumbnails", params).map(|o| (o.changed, o.runtime));
+    let b = e.collection().scene_by_name("B").unwrap().id;
+    let wanted = |scenes, fps| (false, Some(RuntimeAction::SceneThumbnails { scenes, fps }));
+    // By id or name, in the order given, 2 a second when left out.
+    assert_eq!(thumbnails(&mut e, json!({"scenes": ["B", 1]})).unwrap(), wanted(vec![b, SceneId(1)], 2.0));
+    assert_eq!(thumbnails(&mut e, json!({"scenes": [1], "fps": 4})).unwrap(), wanted(vec![SceneId(1)], 4.0));
+    assert_eq!(thumbnails(&mut e, json!({"scenes": [1], "fps": 0.1})).unwrap(), wanted(vec![SceneId(1)], 0.1));
+    // An empty list stops drawing.
+    assert_eq!(thumbnails(&mut e, json!({"scenes": []})).unwrap(), wanted(vec![], 2.0));
+    // Bad lists and rates are errors, not clamped.
+    assert!(matches!(thumbnails(&mut e, json!({"scenes": ["Nope"]})), Err(EngineError::NoScene(_))));
+    assert!(matches!(thumbnails(&mut e, json!({"scenes": [99]})), Err(EngineError::NoScene(_))));
+    let twice = thumbnails(&mut e, json!({"scenes": [1, "Scene"]})).unwrap_err();
+    assert!(twice.to_string().contains("more than once"), "{twice}");
+    // A rate too low to repeat within a `Duration` (1e-20) would draw once, so it is refused too.
+    for fps in [json!(0), json!(-1), json!(0.09), json!(1e-20), json!(4.01), json!(60), json!(null), json!("2")] {
+        assert!(thumbnails(&mut e, json!({"scenes": [1], "fps": fps})).is_err(), "fps {fps}");
+    }
+    assert!(thumbnails(&mut e, json!({})).is_err(), "the list is required");
+    assert!(thumbnails(&mut e, json!({"scenes": null})).is_err());
+    // At most 16 scenes.
+    for i in 0..15 {
+        run(&mut e, "scene.add", json!({"name": format!("S{i}")})).unwrap();
+    }
+    let all: Vec<SceneId> = e.collection().scenes.iter().map(|s| s.id).collect();
+    assert_eq!(all.len(), 17);
+    assert_eq!(thumbnails(&mut e, json!({"scenes": all[..16]})).unwrap(), wanted(all[..16].to_vec(), 2.0));
+    let many = thumbnails(&mut e, json!({"scenes": all})).unwrap_err();
+    assert!(many.to_string().contains("more than 16 scenes"), "{many}");
+    // A built command with too many scenes is refused too.
+    let built = e.execute(C::SceneThumbnails { scenes: all.iter().map(|&id| SceneRef::Id(id)).collect(), fps: None }).unwrap_err();
+    assert!(built.to_string().contains("at most 16"), "{built}");
+    // Nothing changes in the collection or its history.
+    let (revision, undo) = (e.revision(), e.undo_label());
+    thumbnails(&mut e, json!({"scenes": [1]})).unwrap();
+    assert_eq!((e.revision(), e.undo_label()), (revision, undo));
+}
+
+#[test]
 fn duplicated_scenes_share_their_sources() {
     let mut e = engine();
     let (src, _) = add_color(&mut e, "Bg");
@@ -452,6 +494,7 @@ fn runtime_commands_are_handed_to_the_app() {
         ("stream.start", RuntimeAction::StartStreaming),
         ("stream.stop", RuntimeAction::StopStreaming),
         ("stream.toggle", RuntimeAction::ToggleStreaming),
+        ("golive.check", RuntimeAction::GoLiveCheck),
         ("replay.start", RuntimeAction::StartReplay),
         ("replay.stop", RuntimeAction::StopReplay),
         ("replay.toggle", RuntimeAction::ToggleReplay),
@@ -467,6 +510,7 @@ fn runtime_commands_are_handed_to_the_app() {
         assert_eq!(o.runtime, Some(action), "{id}");
         assert!(!o.changed);
     }
+    assert!(run(&mut e, "golive.check", json!({"items": ["encoder"]})).is_err(), "the check takes no parameters");
     let o = run(&mut e, "audio_tracks.repair", json!({"folder": "D:/Videos"})).unwrap();
     assert_eq!(o.runtime, Some(RuntimeAction::AudioTracksRepair { folder: "D:/Videos".into() }));
     assert!(!o.changed);
@@ -1488,6 +1532,7 @@ fn every_spec_is_reachable() {
             "scene.duplicate" => json!({"scene": 1}),
             "scene.move" => json!({"scene": 1, "to": "up"}),
             "scene.select_index" => json!({"index": 1}),
+            "scene.thumbnails" => json!({"scenes": [1]}),
             "source.add" | "source.schema" => json!({"kind": "color"}),
             "source.add_existing" => json!({"source": 1}),
             "source.rename" => json!({"source": 1, "name": "x"}),

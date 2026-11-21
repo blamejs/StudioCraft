@@ -421,6 +421,16 @@ that cannot be saved is undone. When Settings is open, the changed destination i
 its Stream tab, and edits not yet applied there to other destinations stay. A new destination
 never takes the id of one the running stream still holds.
 
+The `golive.check` command lists what would stop the stream from starting or spoil it. It has an
+item for each destination that is on, the stream's video encoder, the free space in the recording
+folder, each source that is not working, and live captions. Each item passes, is a problem, or is
+unknown, and a problem names the command that fixes it. A destination passes only while it is live,
+or when it was live on an earlier stream of this session with the same server and key; one that has
+not connected yet is unknown. Less than 10 GB free in the recording folder, a limit StudioCraft
+chose, is a problem. Live captions that are off are a problem only when a Live Captions source is
+in the scene collection. The window does not show the check yet
+([Control protocol](control-protocol.md#golivecheck)).
+
 ### Pause screen
 
 File › Pause Program shows the pause screen in the program in place of the program scene, with
@@ -518,6 +528,11 @@ The compositor can also draw a small picture of each of up to 16 scenes, for sce
 picture fits a 256 × 144 box by default, keeps the canvas's aspect ratio, and is redrawn at most 4
 times a second. The pictures stay on the GPU. Scenes past the sixteenth are not drawn and are
 counted.
+
+The [`scene.thumbnails`](control-protocol.md#scenethumbnails) command names the scenes to draw and
+how often: 2 times a second by default. While no command has named any, or after one names none,
+the compositor draws no scene pictures, so a scene list that shows only names adds no work to a
+frame.
 
 ## Interface
 

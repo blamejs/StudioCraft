@@ -12,7 +12,10 @@ use studiocraft_model::{
 use studiocraft_plugin::{PluginError, Registry, Settings, SettingsSchema};
 use thiserror::Error;
 
-use crate::command::{CanvasSize, Command, ItemRef, MAX_SOURCE_SIDE, Move, RuntimeAction, SceneRef, SourceRef, Undo};
+use crate::command::{
+    CanvasSize, Command, DEFAULT_THUMBNAIL_FPS, ItemRef, MAX_SOURCE_SIDE, MAX_THUMBNAIL_FPS, MAX_THUMBNAIL_SCENES, MIN_THUMBNAIL_FPS, Move,
+    RuntimeAction, SceneRef, SourceRef, Undo,
+};
 use crate::history::History;
 use crate::links;
 
@@ -313,6 +316,24 @@ impl Engine {
                     .ok_or_else(|| EngineError::NoScene(format!("at position {index}")))?;
                 Ok(self.select(id))
             }
+            Command::SceneThumbnails { scenes, fps } => {
+                if scenes.len() > MAX_THUMBNAIL_SCENES {
+                    return Err(EngineError::Invalid(format!("{} scenes are given; at most {MAX_THUMBNAIL_SCENES} are drawn at once", scenes.len())));
+                }
+                let fps = fps.unwrap_or(DEFAULT_THUMBNAIL_FPS);
+                if !(MIN_THUMBNAIL_FPS..=MAX_THUMBNAIL_FPS).contains(&fps) {
+                    return Err(EngineError::Invalid(format!("fps is {fps}; it must be from {MIN_THUMBNAIL_FPS} to {MAX_THUMBNAIL_FPS}")));
+                }
+                let mut ids = Vec::with_capacity(scenes.len());
+                for r in &scenes {
+                    let id = self.scene_id(r)?;
+                    if ids.contains(&id) {
+                        return Err(EngineError::Invalid(format!("scene {id} is given more than once")));
+                    }
+                    ids.push(id);
+                }
+                Ok(Outcome::runtime(RuntimeAction::SceneThumbnails { scenes: ids, fps }))
+            }
             Command::RecordStart {} => Ok(Outcome::runtime(RuntimeAction::StartRecording)),
             Command::RecordStop {} => Ok(Outcome::runtime(RuntimeAction::StopRecording)),
             Command::RecordToggle {} => Ok(Outcome::runtime(RuntimeAction::ToggleRecording)),
@@ -324,6 +345,7 @@ impl Engine {
             Command::StreamStart {} => Ok(Outcome::runtime(RuntimeAction::StartStreaming)),
             Command::StreamStop {} => Ok(Outcome::runtime(RuntimeAction::StopStreaming)),
             Command::StreamToggle {} => Ok(Outcome::runtime(RuntimeAction::ToggleStreaming)),
+            Command::GoLiveCheck {} => Ok(Outcome::runtime(RuntimeAction::GoLiveCheck)),
             Command::ReplayStart {} => Ok(Outcome::runtime(RuntimeAction::StartReplay)),
             Command::ReplayStop {} => Ok(Outcome::runtime(RuntimeAction::StopReplay)),
             Command::ReplayToggle {} => Ok(Outcome::runtime(RuntimeAction::ToggleReplay)),

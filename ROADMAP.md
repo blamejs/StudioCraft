@@ -43,6 +43,7 @@ description in [docs/features.md](docs/features.md).
 ### Streaming
 
 - Streams go to one or more RTMP and RTMPS servers from StudioCraft through the built-in H.264 encoders, each destination connecting, reconnecting and stopping on its own, with the encoder's settings in Settings › Stream ([Streaming](docs/features.md#streaming)).
+- `golive.check` lists what would stop a stream or spoil it (destinations, the encoder, free space for recordings, sources and live captions), each item passing, a problem or unknown, and the window does not show it yet ([Streaming](docs/features.md#streaming)).
 - Pause Program shows a pause screen in the program, and so in every recording, stream and replay buffer: a background color, a picture or a looping video, and a countdown that keeps the screen or resumes the program at zero. The Pause button after Go Live, with its menu of countdowns, and File › Pause Program start it; the button, a banner above the program with +1 min and Resume, and File › Resume Program end it ([Pause screen](docs/features.md#pause-screen)).
 
 ### Hardware acceleration
@@ -50,6 +51,7 @@ description in [docs/features.md](docs/features.md).
 - Settings › Video › Hardware acceleration chooses the graphics adapter, and the app recovers from a device loss ([Hardware acceleration](docs/features.md#hardware-acceleration)).
 - The compositor converts the program to NV12 on the GPU for the encoders (`craft-gpu-yuv`) ([Hardware acceleration](docs/features.md#hardware-acceleration)).
 - The compositor draws small pictures of up to 16 scenes on request, at most 4 times a second, on the GPU without reading them back ([Hardware acceleration](docs/features.md#hardware-acceleration)).
+- `scene.thumbnails` names the scenes whose pictures are drawn, 2 times a second by default, and stops them with an empty list ([Control protocol](docs/control-protocol.md#scenethumbnails)).
 - The Hardware video encoder runs the hardware encoder set in Settings › Video › Hardware acceleration. Automatic tests each candidate with one frame, in an order set by the adapter's vendor, and falls back to x264 (`craft-hwenc`) ([Hardware acceleration](docs/features.md#hardware-acceleration)).
 - NVIDIA NVENC, Windows Media Foundation, Apple VideoToolbox and VA-API H.264 and HEVC (built in) record MKV files in StudioCraft's own process (`craft-hwenc-native`) ([Hardware acceleration](docs/features.md#hardware-acceleration)).
 
