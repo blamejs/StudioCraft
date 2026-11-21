@@ -1430,6 +1430,7 @@ name = "craft-app-audio"
 version = "0.1.0-alpha.1"
 dependencies = [
  "arc-swap",
+ "pipewire",
  "serde",
  "serde_json",
  "sysinfo",

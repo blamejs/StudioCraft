@@ -52,6 +52,48 @@ fn a_key_with_a_path_matches_only_that_path() {
 }
 
 #[test]
+fn a_linux_path_keeps_its_letter_case() {
+    let listed = AppKey::from_exe("player").unwrap();
+    let upper = listed.clone().with_path(" /Apps/player");
+    assert_eq!(upper.encode(), "player|/Apps/player");
+    let spaced = listed.clone().with_path("/Apps/player ");
+    assert_eq!(spaced.encode(), "player|/Apps/player ", "a Linux file name may end in a space");
+    assert!(!spaced.matches(&listed, "/Apps/player"));
+    let mut plain = app("player", 12, false);
+    plain.path = "/Apps/player".into();
+    let only_plain = AppList { generation: 1, apps: vec![plain], error: None };
+    assert_eq!(only_plain.find(&spaced), None, "a path that differs by a trailing space is another program");
+    assert_eq!(listed.clone().with_path(" C:\\Apps\\Player.exe ").encode(), "player|c:\\apps\\player.exe");
+    assert_eq!(AppKey::decode(&upper.encode()), Some(upper.clone()));
+    assert!(upper.matches(&listed, "/Apps/player"));
+    assert!(!upper.matches(&listed, "/apps/player"), "another program on a case-sensitive file system");
+    let mut a = app("player", 10, false);
+    a.path = "/Apps/player".into();
+    let mut b = app("player", 11, false);
+    b.path = "/apps/player".into();
+    let mut apps = vec![a.clone(), b.clone()];
+    AppList::arrange(&mut apps);
+    let list = AppList { generation: 1, apps, error: None };
+    assert_ne!(a.choice(), b.choice());
+    assert_eq!(list.find(&AppKey::decode(&a.choice()).unwrap()).map(|x| x.pids[0]), Some(10));
+    assert_eq!(list.find(&AppKey::decode(&b.choice()).unwrap()).map(|x| x.pids[0]), Some(11));
+    // With only the other program running, a saved choice does not take it for a moved copy.
+    let only_b = AppList { generation: 2, apps: vec![b.clone()], error: None };
+    assert_eq!(only_b.find(&AppKey::decode(&a.choice()).unwrap()), None);
+    let mut moved = a.clone();
+    moved.path = "/opt/player".into();
+    let only_moved = AppList { generation: 3, apps: vec![moved.clone()], error: None };
+    assert_eq!(only_moved.find(&AppKey::decode(&a.choice()).unwrap()).map(|x| x.pids[0]), Some(10), "a program that moved is found");
+    let both = AppList { generation: 4, apps: vec![b.clone(), moved], error: None };
+    assert_eq!(both.find(&AppKey::decode(&a.choice()).unwrap()), None, "two others with the name: none");
+    // A `|` separates the name from the path, so a name with one has no key; one in a folder
+    // name reads back.
+    assert_eq!(AppKey::from_exe("/opt/a|b"), None);
+    let piped = AppKey::from_exe("/opt/a|b/player").unwrap().with_path("/opt/a|b/player");
+    assert_eq!(AppKey::decode(&piped.encode()), Some(piped));
+}
+
+#[test]
 fn arranging_sorts_by_name_and_tells_same_named_files_apart() {
     let mut a = app("game.exe", 10, false);
     a.path = r"D:\A\game.exe".into();

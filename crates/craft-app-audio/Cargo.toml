@@ -20,5 +20,9 @@ thiserror = { workspace = true }
 wasapi = { workspace = true }
 sysinfo = { workspace = true }
 
+# Playback streams, capture streams and links through the PipeWire server.
+[target.'cfg(target_os = "linux")'.dependencies]
+pipewire = { workspace = true }
+
 [dev-dependencies]
 serde_json = { workspace = true }
