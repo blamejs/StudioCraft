@@ -270,6 +270,14 @@ most 480 × 270 and sends it to the window's scopes queue. Each texel of either 
 part of the program it covers (up to 4 × 4 bilinear taps), and chroma is at half width and half
 height. A hard edge in the program therefore shows on the scopes as intermediate levels.
 
+A `ThumbnailRequest` (`RenderShared::thumbnails`) asks the compositor to draw up to 16 scenes into
+small textures of their own, at most 4 times a second each (2 by default). A frame draws at most
+two of them, oldest first, so the cost of a set of pictures is spread over several frames. A source
+that appears only in thumbnails is uploaded only on the frames that draw it. The textures are kept
+while requests come in. When a request has more scenes, or a request or canvas change alters the
+picture size, they are made again before the next frame and published on
+`RenderShared::thumbnail_views`. Nothing is read back.
+
 **Graphics devices.** The window opens its device on the adapter Settings › Video › Hardware
 acceleration names (`graphics_adapter` in `config.toml`), through `craft-gpu-device`'s `pick`.
 

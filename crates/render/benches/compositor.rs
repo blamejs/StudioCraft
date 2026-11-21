@@ -4,14 +4,16 @@
 use std::hint::black_box;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
+use std::time::Duration;
 
 use criterion::{Criterion, criterion_group, criterion_main};
 use studiocraft_media::Tick;
+use studiocraft_media::clock::tick_of;
 use studiocraft_media::queue::Fifo;
 use studiocraft_media::video::PixelFormat;
 use studiocraft_model::{SourceId, Transform, Vec2};
 use studiocraft_plugin::{VideoContent, VideoOut};
-use studiocraft_render::{Compositor, EncodeTarget, Gpu, ItemDesc, Plan, SceneDesc};
+use studiocraft_render::{Compositor, EncodeTarget, Gpu, ItemDesc, Plan, SceneDesc, ThumbnailRequest};
 
 fn scene(capture: &Arc<VideoOut>) -> SceneDesc {
     let mut items = vec![ItemDesc { source: SourceId(1), video: Arc::clone(capture), transform: Transform::default(), effects: vec![] }];
@@ -53,6 +55,22 @@ fn bench(c: &mut Criterion) {
             comp.finish(&lost);
         })
     });
+
+    // The same frame, 1/60 s apart on the clock, with nine scene thumbnails at 2 pictures per
+    // second: in each half second, five frames draw two or one of them, so this is the average
+    // cost per frame they add.
+    let scenes: Vec<SceneDesc> = (0..9).map(|_| scene(&capture)).collect();
+    comp.set_thumbnails(Some(Arc::new(ThumbnailRequest { scenes, fps: 2.0, ..ThumbnailRequest::default() })));
+    let mut frames = 0u64;
+    c.bench_function("compositor/1080p 9 items + 1080p upload + 9 thumbnails at 2 fps", |b| {
+        b.iter(|| {
+            publish_capture(&capture);
+            frames += 1;
+            comp.frame(tick_of(Duration::from_micros(frames * 16_667)), &lost);
+            comp.finish(&lost);
+        })
+    });
+    comp.set_thumbnails(None);
 
     let sink = Arc::new(Fifo::new(8));
     comp.set_encode(Some(EncodeTarget { width: 1920, height: 1080, sinks: vec![Arc::clone(&sink)] }));

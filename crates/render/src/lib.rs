@@ -4,7 +4,8 @@
 //! source's video filters as GPU passes, draws the items of the program scene (and, in studio
 //! mode, the preview scene) bottom to top at the canvas size, blends two scenes during a
 //! transition, and, while a recording or stream runs, converts the program picture to NV12 at the
-//! output size and reads it back for the encoders.
+//! output size and reads it back for the encoders. On request it also draws small pictures of
+//! other scenes, for scene lists, at a capped rate (see [`ThumbnailRequest`]).
 //!
 //! Frames stay on the GPU from upload to the canvas. The interface shows the canvas textures
 //! directly; only encoders read pixels back, through a ring of buffers that never makes the
@@ -26,9 +27,11 @@ use craft_gpu_device::{Candidate, DeviceHealth, Fault};
 #[cfg(not(target_arch = "wasm32"))]
 use craft_gpu_device::{Notice, OpenError, Preference, Request};
 
-pub use compositor::{CAPTURE_SLOTS, CanvasViews, Capture, CaptureRequest, Compositor, RenderShared, Ring, View, unpremultiply};
+pub use compositor::{CAPTURE_SLOTS, CanvasViews, Capture, CaptureRequest, Compositor, RenderShared, Ring, ThumbnailViews, View, unpremultiply};
 pub use nv12::EncodeTarget;
-pub use plan::{ItemDesc, Plan, SceneDesc, TransitionDesc};
+pub use plan::{
+    ItemDesc, MAX_THUMBNAIL_FPS, MAX_THUMBNAIL_SIDE, MAX_THUMBNAILS, MIN_THUMBNAIL_SIDE, Plan, SceneDesc, ThumbnailRequest, TransitionDesc,
+};
 
 /// Format of the canvas textures. Pixels are sRGB-encoded and composited as stored; the
 /// interface samples them through an sRGB view (see [`CanvasViews`]).
