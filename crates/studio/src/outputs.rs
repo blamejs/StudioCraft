@@ -333,6 +333,12 @@ impl Outputs {
         self.active.get(&kind).map(|a| a.start)
     }
 
+    /// The encoder counters of `kind`, while it runs. They keep counting until its file is
+    /// finished.
+    pub(crate) fn stats_of(&self, kind: OutputKind) -> Option<Arc<EncoderStats>> {
+        self.active.get(&kind).map(|a| Arc::clone(&a.stats))
+    }
+
     pub(crate) fn state(&self, kind: OutputKind) -> Option<OutputState> {
         if let Some(a) = self.active.get(&kind) {
             return Some(OutputState {

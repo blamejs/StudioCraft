@@ -8,9 +8,12 @@
 //! exists is not replaced: the timeline is written as `<recording name> (2).otio`, and so on.
 
 use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use std::thread::JoinHandle;
 
 use serde_json::{Value, json};
+use studiocraft_media::stats::EncoderStats;
 use studiocraft_media::{FrameRate, Tick};
 
 use crate::outputs::OutputKind;
@@ -26,13 +29,36 @@ pub(crate) struct Marker {
     pub name: String,
 }
 
+/// The encoder counters of a recording. Each frame handed to the encoder is one frame of the
+/// file, so once the file is finished they hold the number of frames in it.
+#[derive(Clone, Debug)]
+pub(crate) struct Written(pub Arc<EncoderStats>);
+
+impl PartialEq for Written {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+impl Written {
+    fn frames(&self) -> i64 {
+        i64::try_from(self.0.frames.load(Ordering::Relaxed)).unwrap_or(i64::MAX)
+    }
+}
+
+/// What [`MarkerWatch::observe`] looks up for a new recording: its file, its frame rate and its
+/// encoder counters.
+pub(crate) type Target = (PathBuf, FrameRate, Option<Written>);
+
 /// A recording that stopped with markers, waiting for its timeline file.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct Ended {
     pub recording: PathBuf,
     pub rate: FrameRate,
-    /// The recording's length, from its first frame to its stop.
+    /// The recording's length by the clock, from its first frame to its stop.
     pub length: Tick,
+    /// The frames the encoder was handed. The timeline's clip is no longer than this.
+    pub written: Option<Written>,
     pub markers: Vec<Marker>,
 }
 
@@ -40,6 +66,7 @@ struct Watched {
     start: Tick,
     recording: PathBuf,
     rate: FrameRate,
+    written: Option<Written>,
     markers: Vec<Marker>,
 }
 
@@ -52,8 +79,9 @@ pub(crate) struct MarkerWatch {
 
 impl MarkerWatch {
     /// Follow the recording that started at `start` (a recording is told apart by its start).
-    /// `target` gives its file and frame rate and is called only when a new recording is seen.
-    pub(crate) fn observe(&mut self, start: Option<Tick>, target: impl FnOnce() -> Option<(PathBuf, FrameRate)>, now: Tick) -> Option<Ended> {
+    /// `target` gives its file, frame rate and encoder counters, and is called only when a new
+    /// recording is seen.
+    pub(crate) fn observe(&mut self, start: Option<Tick>, target: impl FnOnce() -> Option<Target>, now: Tick) -> Option<Ended> {
         let ended = match (&self.recording, start) {
             (Some(w), Some(s)) if w.start == s => None,
             (Some(_), _) => self.recording.take(),
@@ -61,12 +89,18 @@ impl MarkerWatch {
         };
         if self.recording.is_none()
             && let Some(start) = start
-            && let Some((recording, rate)) = target()
+            && let Some((recording, rate, written)) = target()
         {
-            self.recording = Some(Watched { start, recording, rate, markers: Vec::new() });
+            self.recording = Some(Watched { start, recording, rate, written, markers: Vec::new() });
         }
         let w = ended.filter(|w| !w.markers.is_empty())?;
-        Some(Ended { length: Tick(now.0.saturating_sub(w.start.0).max(0)), recording: w.recording, rate: w.rate, markers: w.markers })
+        Some(Ended {
+            length: Tick(now.0.saturating_sub(w.start.0).max(0)),
+            recording: w.recording,
+            rate: w.rate,
+            written: w.written,
+            markers: w.markers,
+        })
     }
 
     /// Mark the watched recording at `now`: named `name`, or "Marker N" for its Nth marker.
@@ -109,13 +143,16 @@ fn time_range(start: i64, duration: i64, rate: FrameRate) -> Value {
 
 /// The OpenTimelineIO timeline for `ended`: the recording, named by its file name relative to the
 /// timeline file, as one clip on a video track and an audio track, and each marker at the frame
-/// that holds its time. A marker after the last frame is put on the last frame.
+/// that holds its time. The clip holds the frames that start before the stop, and no more frames
+/// than the encoder was handed. A marker after the last frame is put on the last frame.
 pub(crate) fn timeline(ended: &Ended) -> Value {
     let rate = ended.rate.sane();
     let file = ended.recording.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
     let title = ended.recording.file_stem().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-    // The frames that start before the stop; a recording is at least one frame.
-    let frames = if ended.length.0 > 0 { rate.frame_at(Tick(ended.length.0 - 1)).saturating_add(1) } else { 1 };
+    // The frames that start before the stop.
+    let by_clock = if ended.length.0 > 0 { rate.frame_at(Tick(ended.length.0 - 1)).saturating_add(1) } else { 1 };
+    // A stall before the stop leaves fewer frames in the file. A recording is at least one frame.
+    let frames = ended.written.as_ref().map_or(by_clock, |w| by_clock.min(w.frames())).max(1);
     let available = time_range(0, frames, rate);
     let clip = json!({
         "OTIO_SCHEMA": "Clip.2",
@@ -237,7 +274,8 @@ impl Studio {
         let video = self.profile.video.sanitized();
         let target = || {
             let path = PathBuf::from(outputs.state(OutputKind::Recording)?.target);
-            Some((path, FrameRate::new(i64::from(video.fps_num), i64::from(video.fps_den))))
+            let written = outputs.stats_of(OutputKind::Recording).map(Written);
+            Some((path, FrameRate::new(i64::from(video.fps_num), i64::from(video.fps_den)), written))
         };
         if let Some(ended) = self.recording_markers.watch.observe(start, target, now) {
             self.recording_markers.finishing.push(ended);
@@ -316,8 +354,14 @@ mod tests {
         Tick::from_units(ms, 1000)
     }
 
-    fn rec(name: &str) -> Option<(PathBuf, FrameRate)> {
-        Some((PathBuf::from(name), FrameRate::new(30, 1)))
+    fn rec(name: &str) -> Option<Target> {
+        Some((PathBuf::from(name), FrameRate::new(30, 1), None))
+    }
+
+    fn written(frames: u64) -> Written {
+        let stats = EncoderStats::default();
+        stats.frames.store(frames, Ordering::Relaxed);
+        Written(Arc::new(stats))
     }
 
     #[test]
@@ -365,6 +409,7 @@ mod tests {
             recording: PathBuf::from("/rec/Recording 2026-11-21 10-00-00.mkv"),
             rate: FrameRate::new(30000, 1001),
             length: t(10_000),
+            written: None,
             markers: vec![Marker { at: t(1000), name: "Goal".into() }, Marker { at: t(60_000), name: "Late".into() }],
         };
         let v = timeline(&ended);
@@ -392,6 +437,7 @@ mod tests {
             recording: PathBuf::from("a.mkv"),
             rate: FrameRate::new(30, 1),
             length: t(1010),
+            written: None,
             markers: vec![Marker { at: t(1005), name: "End".into() }],
         };
         let v = timeline(&ended);
@@ -400,6 +446,41 @@ mod tests {
         // Stopped on a frame's start, the recording ends with the frame before it.
         ended.length = t(1000);
         assert_eq!(timeline(&ended)["tracks"]["children"][0]["children"][0]["source_range"]["duration"]["value"], 30.0);
+    }
+
+    #[test]
+    fn the_clip_is_no_longer_than_the_frames_the_encoder_was_handed() {
+        let mut ended = Ended {
+            recording: PathBuf::from("a.mkv"),
+            rate: FrameRate::new(30, 1),
+            length: t(10_000),
+            written: Some(written(240)),
+            markers: vec![Marker { at: t(9000), name: "Late".into() }],
+        };
+        // The encoder stalled 2 s before the stop: the file holds 240 frames, not 300.
+        let v = timeline(&ended);
+        let clip = &v["tracks"]["children"][0]["children"][0];
+        assert_eq!(clip["source_range"]["duration"]["value"], 240.0);
+        assert_eq!(clip["media_references"]["DEFAULT_MEDIA"]["available_range"]["duration"]["value"], 240.0);
+        assert_eq!(v["tracks"]["markers"][0]["marked_range"]["start_time"]["value"], 239.0, "a marker past the file is put on its last frame");
+        // More frames than the clock gives keep the clock's length, and none still gives one frame.
+        ended.written = Some(written(400));
+        assert_eq!(timeline(&ended)["tracks"]["children"][0]["children"][0]["source_range"]["duration"]["value"], 300.0);
+        ended.written = Some(written(0));
+        assert_eq!(timeline(&ended)["tracks"]["children"][0]["children"][0]["source_range"]["duration"]["value"], 1.0);
+    }
+
+    #[test]
+    fn the_recording_keeps_the_encoder_counters_it_started_with() {
+        let mut w = MarkerWatch::default();
+        let counters = written(0);
+        let target = Some((PathBuf::from("a.mkv"), FrameRate::new(30, 1), Some(counters.clone())));
+        w.observe(Some(t(0)), || target, t(0));
+        w.add(t(500), None).unwrap();
+        counters.0.frames.store(15, Ordering::Relaxed);
+        let ended = w.observe(None, || None, t(1000)).unwrap();
+        assert_eq!(ended.written, Some(counters));
+        assert_eq!(ended.written.unwrap().frames(), 15, "the count is read when the timeline is made, not when the recording stops");
     }
 
     #[test]
@@ -415,6 +496,7 @@ mod tests {
             recording: dir.path().join("take.mkv"),
             rate: FrameRate::new(60, 1),
             length: t(0),
+            written: None,
             markers: vec![Marker { at: t(0), name: "Start".into() }],
         };
         let path = write_timeline(&ended).unwrap();
@@ -439,6 +521,7 @@ mod tests {
             recording: recording.clone(),
             rate: FrameRate::new(30, 1),
             length: t(1000),
+            written: None,
             markers: vec![Marker { at: t(500), name: "Half".into() }],
         });
         studio.sync_recording_markers();
