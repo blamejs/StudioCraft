@@ -74,4 +74,5 @@ fixed transcripts and reach no network. `tests/whisper_model.rs` transcribes rea
 
 ## License
 
-MIT OR Apache-2.0. The crate contains code from FilmCraft's `crates/speech`; see `NOTICE`.
+MIT OR Apache-2.0. The crate contains code from https://github.com/storytold/filmcraft
+(`crates/speech`); see `NOTICE`.
