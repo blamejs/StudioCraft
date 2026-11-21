@@ -430,7 +430,8 @@ Minute to the Pause can be given shortcuts in Settings › Hotkeys.
 
 The pause screen draws, from the bottom up, a background color, one picture or one video, and the
 countdown text. A video loops and plays without its sound, and a video file that holds only sound
-shows nothing over the background. The countdown text holds `{time}` once,
+shows nothing over the background. A GIF plays as a video, so an animated GIF loops; like other
+videos it needs ffmpeg. The countdown text holds `{time}` once,
 where the time left goes, as `4:07` or, from one hour, `1:02:07`. When the countdown reaches zero,
 the pause screen either stays and shows the text at zero, or the program resumes. A countdown of 0
 shows no text and does not end the pause.
@@ -450,7 +451,8 @@ fade back, or resuming during the fade in, turns a Fade or Fade through color ar
 picture it shows; other transitions start from the beginning. A picture or video
 that can't be read is reported in the status bar, and the pause screen keeps its background and
 text. A countdown text that can't be drawn is reported the same way. Settings whose countdown text
-does not hold `{time}` exactly once are refused.
+does not hold `{time}` exactly once are refused. While paused, switching to, creating, duplicating or
+removing a profile is refused with "Resume before switching the profile".
 
 ## Hardware acceleration
 

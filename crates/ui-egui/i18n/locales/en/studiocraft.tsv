@@ -676,6 +676,7 @@ menu	Transform	Transform
 @msg	there is already a scene collection named `{name}`	there is already a scene collection named `{name}`
 @msg	the last scene collection can't be removed	the last scene collection can't be removed
 @msg	the last profile can't be removed	the last profile can't be removed
+@msg	Resume before switching the profile	Resume before switching the profile
 @msg	update checks are off in this session (--no-prefs, a scripted run or a test)	update checks are off in this session (--no-prefs, a scripted run or a test)
 @msg	there are already {count} dock layouts; remove one first	there are already {count} dock layouts; remove one first
 @msg	a name needs 1 to 100 characters	a name needs 1 to 100 characters

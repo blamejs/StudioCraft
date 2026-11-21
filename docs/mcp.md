@@ -110,7 +110,11 @@ flags. The two flags keep the headless backend's file access inside the folders 
 - Every file a call reads must lie inside a read root: `collection_open`, the files a scene
   collection's sources, filters and transition name when it is opened, and the path settings of
   `source.add`, `source.settings`, `filter.settings` and `transition.settings` (for example the
-  `file` of an `image` or `media` source), whichever tool runs them.
+  `file` of an `image` or `media` source), whichever tool runs them. The pause screen reads the
+  `media` given to `pause_start` or `pause.start`, and the profile's pause picture or video for a
+  pause started without `media` or with `pause.toggle`, so that file must lie inside a read root.
+  The pause screen picks how to show a file by its name, so a picture or video name that leads
+  through a link to a file whose name is not a picture or video is refused.
 - Every file a call writes must lie inside a write root: `collection_save`, and the recording
   folder (Settings › Output, or the Videos folder when it is empty) for `record_start`,
   `record.start` and a `record.toggle` that would start a recording, and for `replay_save` and
@@ -140,7 +144,9 @@ flags. The two flags keep the headless backend's file access inside the folders 
 - A call runs with the path that was checked: the path settings a command stores or a collection
   opens with, and the `folder` a repair reads, are the absolute paths with their links followed.
   Before a command that writes to the recording folder runs, the recording folder setting is set
-  to that folder's checked path, and the setting keeps it afterwards. A
+  to that folder's checked path, and the setting keeps it afterwards. Before a pause that shows the
+  profile's picture or video starts, the pause media setting is set to that file's checked path;
+  when the pause is refused, the setting keeps the text it held. A
   path that resolves to a name that is not valid Unicode is refused, and so is one whose stored
   text, checked again, resolves to a different path.
 - A refused call fails before anything runs. Without either flag nothing is checked.

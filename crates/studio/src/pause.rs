@@ -37,6 +37,10 @@ pub(crate) fn free_ids(taken: impl Fn(SourceId) -> bool) -> [SourceId; 3] {
 /// Media file types that hold sound only, which the pause screen does not take.
 const SOUND_ONLY: [&str; 6] = ["mp3", "wav", "flac", "ogg", "m4a", "aac"];
 
+/// Picture file types that can be animated, which the pause screen plays as a looping video when
+/// the video source takes them.
+const ANIMATED: [&str; 1] = ["gif"];
+
 /// The notice for a picture or video the pause screen can't show.
 pub(crate) const MEDIA_NOTICE: &str = "The pause screen's media could not be shown: {error}";
 
@@ -87,11 +91,13 @@ pub fn media_extensions(registry: &Registry) -> Vec<String> {
     all
 }
 
-/// The plug-in that shows `path`: `image` for a picture, `media` for a video. An error for a file
-/// type neither takes, or one that holds sound only.
+/// The plug-in that shows `path`: `image` for a picture, `media` for a video or a picture type that
+/// can be animated. An error for a file type neither takes, or one that holds sound only.
 pub(crate) fn media_kind(registry: &Registry, path: &str) -> Result<&'static str, String> {
     let ext = Path::new(path).extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase).unwrap_or_default();
-    if !ext.is_empty() && extensions_of(registry, "image").contains(&ext) {
+    if ANIMATED.contains(&ext.as_str()) && extensions_of(registry, "media").contains(&ext) {
+        Ok("media")
+    } else if !ext.is_empty() && extensions_of(registry, "image").contains(&ext) {
         Ok("image")
     } else if !ext.is_empty() && !SOUND_ONLY.contains(&ext.as_str()) && extensions_of(registry, "media").contains(&ext) {
         Ok("media")
@@ -524,6 +530,7 @@ mod tests {
         assert_eq!(media_kind(&reg, "break.jpeg"), Ok("image"));
         assert_eq!(media_kind(&reg, "/v/loop.mp4"), Ok("media"));
         assert_eq!(media_kind(&reg, "loop.webm"), Ok("media"));
+        assert_eq!(media_kind(&reg, "spinner.GIF"), Ok("media"), "an animated picture plays and loops");
         for bad in ["song.mp3", "voice.wav", "notes.txt", "noextension", ".png", ""] {
             assert!(media_kind(&reg, bad).is_err(), "{bad}");
         }

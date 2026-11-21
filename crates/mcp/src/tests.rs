@@ -478,6 +478,95 @@ fn the_pause_media_is_held_to_the_read_roots() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// `p` relative to the working directory, when both are on the same drive or root.
+fn relative_to_cwd(p: &std::path::Path) -> Option<std::path::PathBuf> {
+    let cwd = std::fs::canonicalize(std::env::current_dir().ok()?).ok()?;
+    let p = std::fs::canonicalize(p).ok()?;
+    let (from, to): (Vec<_>, Vec<_>) = (cwd.components().collect(), p.components().collect());
+    if from.first() != to.first() {
+        return None;
+    }
+    let common = from.iter().zip(&to).take_while(|(a, b)| a == b).count();
+    let mut rel: std::path::PathBuf = std::iter::repeat_n(std::path::Component::ParentDir, from.len() - common).collect();
+    rel.extend(&to[common..]);
+    Some(rel)
+}
+
+#[test]
+fn a_pause_without_its_own_media_opens_the_file_the_roots_checked() {
+    let dir = root_folders("pause-held");
+    std::fs::create_dir_all(dir.join("in").join("sub")).unwrap();
+    std::fs::write(dir.join("in").join("break.png"), b"not a picture").unwrap();
+    let checked = resolved_text(&dir.join("in").join("break.png"));
+    let mut given = vec![text_of(&dir.join("in").join("sub").join("..").join("break.png"))];
+    given.extend(relative_to_cwd(&dir.join("in").join("break.png")).map(|p| text_of(&p)));
+    for media in &given {
+        for id in ["pause.start", "pause.toggle"] {
+            let roots = Roots::new(&[dir.join("in")], &[]).unwrap();
+            let mut h = Headless::with_options(None, ServerOptions { allow_streaming: false, roots: Some(roots) }).unwrap();
+            let mut profile = h.studio().profile().clone();
+            profile.pause.media.clone_from(media);
+            h.studio_mut().set_profile(profile).unwrap();
+            // A refused pause leaves the setting as it was.
+            if id == "pause.start" {
+                assert!(h.call("engine.execute", json!({"command": id, "params": {"countdown_s": 43_201}})).is_err());
+                assert_eq!(&h.studio().profile().pause.media, media, "{media}");
+            }
+            let status = h.call("engine.execute", json!({"command": id, "params": {}})).unwrap();
+            assert_eq!(status["media"].as_str(), Some(checked.as_str()), "{id} with {media}: {status}");
+            assert_eq!(h.studio().profile().pause.media, checked, "{id} with {media}");
+        }
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_linked_pause_media_file_is_held_to_the_read_roots() {
+    let dir = root_folders("pause-link");
+    std::fs::write(dir.join("outside").join("break.png"), b"not a picture").unwrap();
+    let link = dir.join("in").join("break.png");
+    #[cfg(unix)]
+    let made = std::os::unix::fs::symlink(dir.join("outside").join("break.png"), &link);
+    // Windows lets only some accounts create links; without the right the case is skipped.
+    #[cfg(windows)]
+    let made = std::os::windows::fs::symlink_file(dir.join("outside").join("break.png"), &link);
+    if made.is_err() {
+        let _ = std::fs::remove_dir_all(&dir);
+        return;
+    }
+    let roots = Roots::new(&[dir.join("in")], &[]).unwrap();
+    let mut h = Headless::with_options(None, ServerOptions { allow_streaming: false, roots: Some(roots) }).unwrap();
+    let mut profile = h.studio().profile().clone();
+    profile.pause.media = text_of(&link);
+    h.studio_mut().set_profile(profile).unwrap();
+    let mut s = Server::new(Box::new(h)).unwrap();
+    for (tool, args) in [("pause_start", json!({})), ("command_run", json!({"id": "pause.toggle"}))] {
+        let text = error_text(&call(&mut s, tool, args.clone()));
+        assert!(text.contains("outside the read roots"), "{tool} {args}: {text}");
+    }
+    // A link inside the roots whose target the screen would not show as a picture or video is
+    // refused, given or from the profile.
+    std::fs::write(dir.join("in").join("blob"), b"not a picture").unwrap();
+    let named = dir.join("in").join("named.png");
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(dir.join("in").join("blob"), &named).unwrap();
+    #[cfg(windows)]
+    std::os::windows::fs::symlink_file(dir.join("in").join("blob"), &named).unwrap();
+    let roots = Roots::new(&[dir.join("in")], &[]).unwrap();
+    let mut h = Headless::with_options(None, ServerOptions { allow_streaming: false, roots: Some(roots) }).unwrap();
+    let mut profile = h.studio().profile().clone();
+    profile.pause.media = text_of(&named);
+    h.studio_mut().set_profile(profile).unwrap();
+    let mut s = Server::new(Box::new(h)).unwrap();
+    for (tool, args) in
+        [("pause_start", json!({})), ("command_run", json!({"id": "pause.toggle"})), ("pause_start", json!({"media": text_of(&named)}))]
+    {
+        let text = error_text(&call(&mut s, tool, args.clone()));
+        assert!(text.contains("not a picture or video file"), "{tool} {args}: {text}");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn transition_tools_set_the_kind_and_length() {
     let mut s = server();

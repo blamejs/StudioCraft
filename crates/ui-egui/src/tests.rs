@@ -2124,6 +2124,31 @@ fn the_tools_menu_pauses_the_program_and_the_status_bar_shows_the_countdown() {
 }
 
 #[test]
+fn the_profile_is_not_switched_or_removed_while_the_program_is_paused() {
+    let mut a = app();
+    let ctx = egui::Context::default();
+    a.named(Named::NewProfile, "Second").unwrap();
+    run(&mut a, &ctx, "pause.toggle", json!({})).unwrap();
+    let e = run(&mut a, &ctx, "profile.switch", json!({"name": DEFAULT_NAME})).unwrap_err();
+    assert_eq!(e, "Resume before switching the profile");
+    assert!(a.remove_profile().is_err(), "removing the profile switches to another");
+    for what in [Named::NewProfile, Named::DuplicateProfile] {
+        let e = a.named(what, "Third").unwrap_err();
+        assert_eq!(e.english(), "Resume before switching the profile", "{what:?}");
+    }
+    a.named(Named::RenameProfile, "Renamed").unwrap();
+    assert_eq!(a.studio().profile().name, "Renamed", "a rename keeps the open profile");
+    assert!(!a.store().profiles().contains(&"Third".to_string()), "no profile was added");
+    a.named(Named::RenameProfile, "Second").unwrap();
+    assert_eq!(a.studio().profile().name, "Second");
+    assert!(a.store().profiles().contains(&"Second".to_string()), "the profile was not removed");
+    assert!(a.studio().paused().is_some(), "the pause continues");
+    run(&mut a, &ctx, "pause.toggle", json!({})).unwrap();
+    run(&mut a, &ctx, "profile.switch", json!({"name": DEFAULT_NAME})).unwrap();
+    assert_eq!(a.studio().profile().name, DEFAULT_NAME);
+}
+
+#[test]
 fn the_pause_status_item_shows_the_time_left_and_the_time_paused() {
     assert_eq!(pause_item(None, None), None, "nothing while not paused");
     assert_eq!(pause_item(Some(Some(247_000)), Some(61_500)), Some(("PAUSED 4:07".into(), "Paused for 1:01".into())));

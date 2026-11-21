@@ -1257,6 +1257,10 @@ impl StudioApp {
                 if taken(&self.profiles) && !(what == Named::RenameProfile && name.eq_ignore_ascii_case(&self.studio.profile().name)) {
                     return Err(tmsg!("there is already a profile named `{name}`", name = name));
                 }
+                // A new or duplicated profile becomes the open one, which is a switch.
+                if what != Named::RenameProfile && self.studio.paused().is_some() {
+                    return Err(tmsg!("Resume before switching the profile"));
+                }
                 let old = self.studio.profile().name.clone();
                 let mut p = if what == Named::NewProfile { Profile::default() } else { self.studio.profile().clone() };
                 p.name = name.to_string();
@@ -1359,6 +1363,10 @@ impl StudioApp {
     fn switch_profile(&mut self, name: &str) -> Result<(), Msg> {
         if name == self.studio.profile().name {
             return Ok(());
+        }
+        // The running pause shows the settings of the profile it started with.
+        if self.studio.paused().is_some() {
+            return Err(tmsg!("Resume before switching the profile"));
         }
         let p = self.store.load_profile(name)?;
         // A profile whose settings cannot be saved stays open, so they are not lost.

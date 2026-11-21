@@ -29,7 +29,7 @@ use studiocraft_engine::host::SourceSet;
 use studiocraft_engine::mixer::{LoudnessReading, Mixer, MixerCmd};
 use studiocraft_engine::scheduler::Scheduler;
 use studiocraft_engine::{CanvasSize, Command, Engine, EngineError, RuntimeAction, SourceSize};
-use studiocraft_media::clock::{MasterClock, tick_of};
+use studiocraft_media::clock::{MasterClock, duration_of, tick_of};
 use studiocraft_media::mix::{BlockLevels, Levels};
 use studiocraft_media::queue::Fifo;
 use studiocraft_media::stats::{EncoderStats, RenderStats, Snapshot};
@@ -234,6 +234,39 @@ fn progress_showing(shown: impl Fn(f64) -> f64, target: f64) -> f64 {
     hi
 }
 
+/// The fade length to send the mixer for a pause transition of `ms` that has the `left` share of
+/// its time to run. The mixer moves the program audio at one rate over its whole range, so the
+/// length is the one that moves the audio's `distance` share of that range in the time left.
+/// Audio with no distance to go keeps `ms`, which the scene sources' own fades also run at.
+fn turned_fade_ms(ms: u32, distance: f64, left: f64) -> u32 {
+    if distance <= 0.0 {
+        return ms;
+    }
+    (f64::from(ms) * left.clamp(0.0, 1.0) / distance.min(1.0)).round().min(f64::from(u32::MAX)) as u32
+}
+
+/// The program audio's pause fade as last sent to the mixer.
+#[derive(Clone, Copy, Debug)]
+struct HoldFade {
+    /// When it started.
+    start: Tick,
+    /// The level it started from: 1 for the whole program mix, 0 for silence.
+    from: f64,
+    /// Whether it fades to silence.
+    down: bool,
+    /// Its length for the whole range, in milliseconds.
+    ms: u32,
+}
+
+impl HoldFade {
+    /// The level at `now`.
+    fn level(&self, now: Tick) -> f64 {
+        let moved =
+            if self.ms == 0 { 1.0 } else { duration_of(Tick(now.0.saturating_sub(self.start.0))).as_secs_f64() * 1000.0 / f64::from(self.ms) };
+        if self.down { (self.from - moved).max(0.0) } else { (self.from + moved).min(1.0) }
+    }
+}
+
 /// A scene transition running in the program.
 #[derive(Clone)]
 struct Running {
@@ -314,6 +347,8 @@ pub struct Studio {
     /// What the pause screen's text and placement were last brought in line with
     /// ([`Studio::tick_pause`]).
     pause_seen: Option<PauseSeen>,
+    /// The program audio's last pause fade; `None` before the first, with the whole mix heard.
+    hold_fade: Option<HoldFade>,
     /// Faults the tests put into the audio tracks' disk side.
     #[cfg(test)]
     test_faults: studiocraft_audio_tracks::Faults,
@@ -404,6 +439,7 @@ impl Studio {
             pause: None,
             pause_layers: None,
             pause_seen: None,
+            hold_fade: None,
             #[cfg(test)]
             test_faults: studiocraft_audio_tracks::Faults::default(),
             #[cfg(test)]
@@ -800,16 +836,22 @@ impl Studio {
         let registry = self.engine.registry();
         let shown = |kind: &str, settings: &Settings, p: f64| registry.transition(kind).map_or(p, |e| e.easing(settings).apply(p));
         let turns = |t: &&Running| (t.from == Origin::Pause) != (from == Origin::Pause) && t.kind == kind && TURNS_AROUND.contains(&kind.as_str());
-        let start = self.transition.as_ref().filter(turns).map_or(now, |t| {
+        let q = self.transition.as_ref().filter(turns).map_or(0.0, |t| {
             let total = t.duration.0.max(1);
             let p = now.0.saturating_sub(t.start.0).clamp(0, total) as f64 / total as f64;
             let target = (1.0 - shown(&t.kind, &t.settings, p)).clamp(0.0, 1.0);
-            let q = progress_showing(|x| shown(&kind, &settings, x), target);
-            Tick(now.0.saturating_sub((duration.0 as f64 * q).round() as i64))
+            progress_showing(|x| shown(&kind, &settings, x), target)
         });
+        let start = Tick(now.0.saturating_sub((duration.0 as f64 * q).round() as i64));
         self.transition = (!instant && ms > 0 && still_there).then_some(Running { from, start, duration, kind, settings });
         if let Some(on) = hold {
-            self.mixer.send(MixerCmd::FadeMs(if self.transition.is_some() { ms } else { 0 }));
+            // The program audio goes the rest of its way from where it is now, and ends its fade
+            // when the picture ends its transition.
+            let level = self.hold_fade.map_or(1.0, |h| h.level(now));
+            let distance = if on { level } else { 1.0 - level };
+            let fade = if self.transition.is_some() { turned_fade_ms(ms, distance, 1.0 - q) } else { 0 };
+            self.hold_fade = Some(HoldFade { start: now, from: level, down: on, ms: fade });
+            self.mixer.send(MixerCmd::FadeMs(fade));
             self.mixer.send(MixerCmd::Hold(on));
         }
     }
