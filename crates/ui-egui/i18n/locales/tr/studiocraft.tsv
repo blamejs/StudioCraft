@@ -378,6 +378,24 @@
 	Width	Genişlik
 	Window	Pencere
 	Window capture	Pencere yakalama
+	Staged windows	Hazırlanan pencereler
+	Window 1	Pencere 1
+	Window 2	Pencere 2
+	Window 3	Pencere 3
+	Window 4	Pencere 4
+	Window 5	Pencere 5
+	Window 6	Pencere 6
+	Presented window	Gösterilen pencere
+	While the presented window cannot be shown	Gösterilen pencere gösterilemediğinde
+	Show a color	Bir renk göster
+	Keep the last picture	Son görüntüyü koru
+	Placeholder color	Yer tutucu rengi
+	no window is staged in the presented slot	gösterilen yuvada hazırlanmış pencere yok
+	waiting for the window	pencere bekleniyor
+	Present Staged Window	Hazırlanan pencereyi göster
+	Present Next Staged Window	Sonraki hazırlanan pencereyi göster
+	Present Previous Staged Window	Önceki hazırlanan pencereyi göster
+	Present Staged Window {n}	Hazırlanan pencere {n} göster
 	Your Videos folder	Videolar klasörünüz
 	YUV vectorscope	YUV vektörskop
 	{device} (not connected)	{device} (bağlı değil)

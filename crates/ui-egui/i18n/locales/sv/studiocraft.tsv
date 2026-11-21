@@ -378,6 +378,24 @@
 	Width	Bredd
 	Window	Fönster
 	Window capture	Fönsterinspelning
+	Staged windows	Förberedda fönster
+	Window 1	Fönster 1
+	Window 2	Fönster 2
+	Window 3	Fönster 3
+	Window 4	Fönster 4
+	Window 5	Fönster 5
+	Window 6	Fönster 6
+	Presented window	Visat fönster
+	While the presented window cannot be shown	När det visade fönstret inte kan visas
+	Show a color	Visa en färg
+	Keep the last picture	Behåll den senaste bilden
+	Placeholder color	Platshållarfärg
+	no window is staged in the presented slot	inget fönster är förberett på den visade platsen
+	waiting for the window	väntar på fönstret
+	Present Staged Window	Visa förberett fönster
+	Present Next Staged Window	Visa nästa förberedda fönster
+	Present Previous Staged Window	Visa föregående förberedda fönster
+	Present Staged Window {n}	Visa förberett fönster {n}
 	Your Videos folder	Din videomapp
 	YUV vectorscope	YUV-vektorskop
 	{device} (not connected)	{device} (inte ansluten)

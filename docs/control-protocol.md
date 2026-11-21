@@ -84,7 +84,7 @@ The message is in English. The window's status bar shows it as well, in the inte
 when the language's catalog has the message.
 [Commands with their own parameters](#commands-with-their-own-parameters) describes `app.info`,
 `app.links`, `app.check_updates`, `plugin.list`, `source.schema`, `source.sync_offset`,
-`source.monitor`, `source.set_record_track`, `audio_tracks.status`, `audio_tracks.repair`,
+`source.monitor`, `source.set_record_track`, the `present.*` commands, `audio_tracks.status`, `audio_tracks.repair`,
 `audio_tracks.open_last`, `audio_tracks.marker`, `record.marker`, the `captions.*` commands, the
 `dock.layout_*` commands, `video.displays`, `video.canvas_from_display` and `canvas.relayout`.
 
@@ -339,6 +339,21 @@ not exist, one outside the recording folder, a recording folder that does not ex
 repair while four run are errors. A take that is still being written, or that another repair
 holds, is left unchanged. Each repaired take's entry also has `session`, the session file the
 repair wrote, or `null` for a take that did not make its own folder.
+
+### `present.window`, `present.next` and `present.previous`
+
+These commands change which window a [Staged windows](features.md#staged-windows) source
+(`staged_windows`) presents. `present.window` takes `{"index", "source"?}`, where `index` is a slot
+from 1 to 6, and presents the window in that slot. `present.next` and `present.previous` take
+`{"source"?}` and present the next or the previous slot that holds a window, wrapping around.
+`source` is a source's id or name. Without it, the command changes every Staged windows source in
+the collection that has a window in the slot it moves to. Each returns
+`{"presented": [{"source", "slot"}]}` with the sources it changed; a source that already presents
+that slot is left out. The presented slot is the source's `presented` setting, so it is saved with
+the collection. The commands add no undo step, and neither does a `source.settings` call that
+changes only `presented`. Edit › Undo leaves the presented slot as it is. A `source` that is not a Staged windows
+source, a collection without one, an `index` outside 1 to 6, and a slot with no window in any
+target are errors.
 
 ### `audio_tracks.open_last` and `audio_tracks.marker`
 

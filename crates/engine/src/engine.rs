@@ -5,6 +5,7 @@ use std::sync::Arc;
 use craft_app_audio::Discovery;
 use serde_json::{Value, json};
 use studiocraft_model::collection::MAX_TRANSITION_MS;
+use studiocraft_model::staged;
 use studiocraft_model::{FilterConfig, FilterId, ItemId, Scene, SceneCollection, SceneId, SceneItem, SourceConfig, SourceId};
 use studiocraft_plugin::{PluginError, Registry, Settings, SettingsSchema};
 use thiserror::Error;
@@ -25,6 +26,14 @@ fn check_marker_name(name: Option<&str>) -> Result<(), EngineError> {
         )),
         _ => Ok(()),
     }
+}
+
+/// Which slot a `present.*` command presents.
+#[derive(Clone, Copy)]
+enum Present {
+    Slot(usize),
+    Next,
+    Previous,
 }
 
 /// Why a command did not run. Shown to the user as is.
@@ -388,6 +397,14 @@ impl Engine {
                 // What is on the program and in the preview is not part of undo.
                 c.program_scene = if c.scene(self.collection.program_scene).is_some() { self.collection.program_scene } else { c.program_scene };
                 c.preview_scene = self.collection.preview_scene.filter(|p| c.scene(*p).is_some()).or(c.preview_scene);
+                // Neither is the window each Staged windows source presents.
+                for s in c.sources.iter_mut().filter(|s| s.kind == staged::KIND) {
+                    if let Some(n) =
+                        self.collection.source(s.id).filter(|now| now.kind == staged::KIND).and_then(|now| now.settings.get(staged::PRESENTED))
+                    {
+                        s.settings.set(staged::PRESENTED, n.clone());
+                    }
+                }
                 c.repair("Scene");
                 self.collection = c;
                 self.bump();
@@ -415,12 +432,14 @@ impl Engine {
     /// An undoable change: applied to a copy, recorded, then swapped in.
     fn edit(&mut self, cmd: Command) -> Result<Outcome, EngineError> {
         let label = cmd.spec().map_or("Edit", |s| s.label);
-        let undoable = cmd.spec().is_none_or(|s| s.undo == Undo::Undoable);
+        let mut undoable = cmd.spec().is_none_or(|s| s.undo == Undo::Undoable);
         let mut c = self.collection.clone();
         let (result, key) = self.apply(&mut c, cmd)?;
         if c == self.collection {
             return Ok(Outcome { changed: false, runtime: None, result });
         }
+        // Undo leaves the presented windows alone, so a change to them alone is no undo step.
+        undoable &= !only_presented_differs(&self.collection, &c);
         let before = std::mem::replace(&mut self.collection, c);
         if undoable {
             self.history.record(label, before, key);
@@ -458,6 +477,49 @@ impl Engine {
                 s.items.iter().rev().find(|i| i.source == src.id).map(|i| i.id).ok_or_else(|| EngineError::NoItem(format!("showing `{name}`")))
             }
         }
+    }
+
+    /// Change the presented slot of the Staged windows source `source`, or of every one when it is
+    /// `None`. A source whose slot is empty is left as it is; it is an error when none changes.
+    fn present(&self, c: &mut SceneCollection, source: Option<&SourceRef>, how: Present) -> Result<(Value, Option<String>), EngineError> {
+        let targets: Vec<SourceId> = match source {
+            Some(r) => {
+                let id = self.source_id(r)?;
+                match c.source(id) {
+                    Some(s) if s.kind == staged::KIND => vec![id],
+                    Some(s) => return Err(EngineError::Invalid(format!("`{}` is not a Staged windows source", s.name))),
+                    None => return Err(EngineError::NoSource(id.to_string())),
+                }
+            }
+            None => c.sources.iter().filter(|s| s.kind == staged::KIND).map(|s| s.id).collect(),
+        };
+        if targets.is_empty() {
+            return Err(EngineError::Invalid("there is no Staged windows source".into()));
+        }
+        let mut presented = Vec::new();
+        let mut found = false;
+        for id in targets {
+            let Some(s) = c.source_mut(id) else { continue };
+            let slot = match how {
+                Present::Slot(n) => staged::staged(&s.settings, n).map(|_| n),
+                Present::Next => staged::step(&s.settings, true),
+                Present::Previous => staged::step(&s.settings, false),
+            };
+            if let Some(n) = slot {
+                found = true;
+                if staged::presented(&s.settings) != n {
+                    s.settings.set(staged::PRESENTED, n);
+                    presented.push(json!({"source": id, "slot": n}));
+                }
+            }
+        }
+        if !found {
+            return Err(EngineError::Invalid(match how {
+                Present::Slot(n) => format!("no window is staged in slot {n}"),
+                Present::Next | Present::Previous => "no window is staged".into(),
+            }));
+        }
+        Ok((json!({"presented": presented}), None))
     }
 
     /// Apply an undoable command to `c`; returns the result and the coalescing key.
@@ -602,6 +664,14 @@ impl Engine {
                 };
                 Ok((Value::Null, Some(format!("source.settings:{id}"))))
             }
+            Command::PresentWindow { source, index } => {
+                if !(1..=staged::SLOTS).contains(&index) {
+                    return Err(EngineError::Invalid(format!("the slot must be a number from 1 to {}", staged::SLOTS)));
+                }
+                self.present(c, source.as_ref(), Present::Slot(index))
+            }
+            Command::PresentNext { source } => self.present(c, source.as_ref(), Present::Next),
+            Command::PresentPrevious { source } => self.present(c, source.as_ref(), Present::Previous),
             Command::SourceVolume { source, gain } => {
                 let id = self.source_id(&source)?;
                 let s = c.source_mut(id).ok_or_else(|| EngineError::NoSource(id.to_string()))?;
@@ -1007,6 +1077,21 @@ impl Engine {
 
 fn item_name(c: &SceneCollection, scene: SceneId, item: ItemId) -> String {
     c.scene(scene).and_then(|s| s.item(item)).and_then(|i| c.source(i.source)).map_or_else(|| item.to_string(), |s| s.name.clone())
+}
+
+/// Whether `a` and `b` differ only in the window their Staged windows sources present.
+fn only_presented_differs(a: &SceneCollection, b: &SceneCollection) -> bool {
+    if !b.sources.iter().any(|s| s.kind == staged::KIND) {
+        return false;
+    }
+    let unpresented = |c: &SceneCollection| {
+        let mut c = c.clone();
+        for s in c.sources.iter_mut().filter(|s| s.kind == staged::KIND) {
+            s.settings.set(staged::PRESENTED, Value::Null);
+        }
+        c
+    };
+    unpresented(a) == unpresented(b)
 }
 
 /// Remove sources no scene places and that are not global audio sources.

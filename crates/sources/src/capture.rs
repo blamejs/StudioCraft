@@ -11,23 +11,23 @@ use studiocraft_plugin::{Pace, Plugin, PluginError, Source, SourceCaps, SourceIn
 use crate::uint;
 
 /// How long a lost display or window waits before it is looked for again.
-const REOPEN: Duration = Duration::from_secs(2);
+pub(crate) const REOPEN: Duration = Duration::from_secs(2);
 
 /// Whether the desktop's own picker chooses the display or window (Linux).
 const PICKER: bool = cfg!(target_os = "linux");
 
 const CHOOSE_IN_PICKER: &str = "Choose in the system picker";
 
-fn rate_field() -> Field {
+pub(crate) fn rate_field() -> Field {
     Field::new("fps", "Capture rate (frames per second)", FieldKind::Int { min: 1, max: 60 }, 30)
 }
 
-fn period(s: &Settings) -> Duration {
+pub(crate) fn period(s: &Settings) -> Duration {
     Duration::from_secs_f64(1.0 / f64::from(uint(s, "fps", 30, 1, 60)))
 }
 
 /// What a grab gave.
-enum Grabbed {
+pub(crate) enum Grabbed {
     Picture,
     /// The capture runs and the picture has not changed; the last one stays on screen.
     Unchanged,
@@ -51,8 +51,8 @@ impl From<Result<(), PlatformError>> for Grabbed {
     }
 }
 
-/// What both captures do with their OS capture object.
-trait Grab {
+/// What the captures do with their OS capture object.
+pub(crate) trait Grab {
     fn open(target: &str) -> Result<Self, PluginError>
     where
         Self: Sized;

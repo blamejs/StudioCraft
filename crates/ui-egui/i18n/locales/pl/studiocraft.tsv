@@ -377,6 +377,24 @@
 	Width	Szerokość
 	Window	Okno
 	Window capture	Przechwytywanie okna
+	Staged windows	Przygotowane okna
+	Window 1	Okno 1
+	Window 2	Okno 2
+	Window 3	Okno 3
+	Window 4	Okno 4
+	Window 5	Okno 5
+	Window 6	Okno 6
+	Presented window	Pokazywane okno
+	While the presented window cannot be shown	Gdy nie można pokazać pokazywanego okna
+	Show a color	Pokaż kolor
+	Keep the last picture	Zachowaj ostatni obraz
+	Placeholder color	Kolor zastępczy
+	no window is staged in the presented slot	w pokazywanym miejscu nie ma przygotowanego okna
+	waiting for the window	oczekiwanie na okno
+	Present Staged Window	Pokaż przygotowane okno
+	Present Next Staged Window	Pokaż następne przygotowane okno
+	Present Previous Staged Window	Pokaż poprzednie przygotowane okno
+	Present Staged Window {n}	Pokaż przygotowane okno {n}
 	Your Videos folder	Twój folder Wideo
 	YUV vectorscope	Wektoroskop YUV
 	{device} (not connected)	{device} (niepodłączone)

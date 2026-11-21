@@ -374,6 +374,24 @@
 	Width	Larghezza
 	Window	Finestra
 	Window capture	Cattura finestra
+	Staged windows	Finestre preparate
+	Window 1	Finestra 1
+	Window 2	Finestra 2
+	Window 3	Finestra 3
+	Window 4	Finestra 4
+	Window 5	Finestra 5
+	Window 6	Finestra 6
+	Presented window	Finestra presentata
+	While the presented window cannot be shown	Quando la finestra presentata non può essere mostrata
+	Show a color	Mostra un colore
+	Keep the last picture	Mantieni l’ultima immagine
+	Placeholder color	Colore segnaposto
+	no window is staged in the presented slot	nessuna finestra è preparata nella posizione presentata
+	waiting for the window	in attesa della finestra
+	Present Staged Window	Presenta finestra preparata
+	Present Next Staged Window	Presenta la finestra preparata successiva
+	Present Previous Staged Window	Presenta la finestra preparata precedente
+	Present Staged Window {n}	Presenta la finestra preparata {n}
 	Your Videos folder	La tua cartella Video
 	YUV vectorscope	Vettorscopio YUV
 	{device} (not connected)	{device} (non collegato)

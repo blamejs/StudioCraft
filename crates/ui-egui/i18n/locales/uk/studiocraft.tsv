@@ -378,6 +378,24 @@
 	Width	Ширина
 	Window	Вікно
 	Window capture	Захоплення вікна
+	Staged windows	Підготовлені вікна
+	Window 1	Вікно 1
+	Window 2	Вікно 2
+	Window 3	Вікно 3
+	Window 4	Вікно 4
+	Window 5	Вікно 5
+	Window 6	Вікно 6
+	Presented window	Показуване вікно
+	While the presented window cannot be shown	Коли показуване вікно не можна показати
+	Show a color	Показати колір
+	Keep the last picture	Залишити останній кадр
+	Placeholder color	Колір заглушки
+	no window is staged in the presented slot	у показуваній комірці немає підготовленого вікна
+	waiting for the window	очікування вікна
+	Present Staged Window	Показати підготовлене вікно
+	Present Next Staged Window	Показати наступне підготовлене вікно
+	Present Previous Staged Window	Показати попереднє підготовлене вікно
+	Present Staged Window {n}	Показати підготовлене вікно {n}
 	Your Videos folder	Ваша тека «Відео»
 	YUV vectorscope	Вектороскоп YUV
 	{device} (not connected)	{device} (не під’єднано)

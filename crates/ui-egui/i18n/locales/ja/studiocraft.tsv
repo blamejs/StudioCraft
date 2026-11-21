@@ -378,6 +378,24 @@
 	Width	幅
 	Window	ウィンドウ
 	Window capture	ウィンドウキャプチャ
+	Staged windows	待機ウィンドウ
+	Window 1	ウィンドウ 1
+	Window 2	ウィンドウ 2
+	Window 3	ウィンドウ 3
+	Window 4	ウィンドウ 4
+	Window 5	ウィンドウ 5
+	Window 6	ウィンドウ 6
+	Presented window	表示中のウィンドウ
+	While the presented window cannot be shown	表示中のウィンドウを表示できないとき
+	Show a color	色を表示
+	Keep the last picture	最後の画像を保持
+	Placeholder color	代替表示の色
+	no window is staged in the presented slot	表示中の枠に待機ウィンドウがありません
+	waiting for the window	ウィンドウを待っています
+	Present Staged Window	待機ウィンドウを表示
+	Present Next Staged Window	次の待機ウィンドウを表示
+	Present Previous Staged Window	前の待機ウィンドウを表示
+	Present Staged Window {n}	待機ウィンドウ {n} を表示
 	Your Videos folder	ビデオフォルダー
 	YUV vectorscope	YUV ベクトルスコープ
 	{device} (not connected)	{device} (未接続)

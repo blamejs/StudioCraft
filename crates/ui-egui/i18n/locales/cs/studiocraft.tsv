@@ -378,6 +378,24 @@
 	Width	Šířka
 	Window	Okno
 	Window capture	Zachytávání okna
+	Staged windows	Připravená okna
+	Window 1	Okno 1
+	Window 2	Okno 2
+	Window 3	Okno 3
+	Window 4	Okno 4
+	Window 5	Okno 5
+	Window 6	Okno 6
+	Presented window	Zobrazené okno
+	While the presented window cannot be shown	Když zobrazené okno nelze ukázat
+	Show a color	Zobrazit barvu
+	Keep the last picture	Ponechat poslední obraz
+	Placeholder color	Barva zástupného obrazu
+	no window is staged in the presented slot	ve zobrazené pozici není připravené žádné okno
+	waiting for the window	čeká se na okno
+	Present Staged Window	Zobrazit připravené okno
+	Present Next Staged Window	Zobrazit další připravené okno
+	Present Previous Staged Window	Zobrazit předchozí připravené okno
+	Present Staged Window {n}	Zobrazit připravené okno {n}
 	Your Videos folder	Vaše složka Videa
 	YUV vectorscope	Vektorskop YUV
 	{device} (not connected)	{device} (nepřipojeno)

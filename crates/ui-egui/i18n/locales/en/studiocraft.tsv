@@ -467,6 +467,24 @@
 	Width	Width
 	Window	Window
 	Window capture	Window capture
+	Staged windows	Staged windows
+	Window 1	Window 1
+	Window 2	Window 2
+	Window 3	Window 3
+	Window 4	Window 4
+	Window 5	Window 5
+	Window 6	Window 6
+	Presented window	Presented window
+	While the presented window cannot be shown	While the presented window cannot be shown
+	Show a color	Show a color
+	Keep the last picture	Keep the last picture
+	Placeholder color	Placeholder color
+	no window is staged in the presented slot	no window is staged in the presented slot
+	waiting for the window	waiting for the window
+	Present Staged Window	Present Staged Window
+	Present Next Staged Window	Present Next Staged Window
+	Present Previous Staged Window	Present Previous Staged Window
+	Present Staged Window {n}	Present Staged Window {n}
 	Windows Media Foundation H.264	Windows Media Foundation H.264
 	X	X
 	Y	Y

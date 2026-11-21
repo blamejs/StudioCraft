@@ -396,6 +396,24 @@
 	Width	العرض
 	Window	النافذة
 	Window capture	التقاط النافذة
+	Staged windows	النوافذ المجهزة
+	Window 1	النافذة 1
+	Window 2	النافذة 2
+	Window 3	النافذة 3
+	Window 4	النافذة 4
+	Window 5	النافذة 5
+	Window 6	النافذة 6
+	Presented window	النافذة المعروضة
+	While the presented window cannot be shown	عندما يتعذر عرض النافذة المعروضة
+	Show a color	عرض لون
+	Keep the last picture	إبقاء آخر صورة
+	Placeholder color	لون العنصر البديل
+	no window is staged in the presented slot	لا توجد نافذة مجهزة في الخانة المعروضة
+	waiting for the window	في انتظار النافذة
+	Present Staged Window	عرض نافذة مجهزة
+	Present Next Staged Window	عرض النافذة المجهزة التالية
+	Present Previous Staged Window	عرض النافذة المجهزة السابقة
+	Present Staged Window {n}	عرض النافذة المجهزة {n}
 	Your Videos folder	مجلد مقاطع الفيديو
 	YUV vectorscope	مخطط المتجهات YUV
 	{db} dB	{db} ديسيبل
