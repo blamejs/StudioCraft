@@ -17,6 +17,7 @@ through the `objc2-video-toolbox`, `objc2-core-media`, `objc2-core-video` and
 | `nvenc::Encoder` | This is NVIDIA's NVENC encoder: H.264 High and HEVC Main from NV12 frames, and HEVC Main 10 from P010 frames. It uses Direct3D 11 on Windows (`nvEncodeAPI64.dll`) and the CUDA driver on 64-bit Linux (`libnvidia-encode.so.1`). |
 | `nvenc::Config` | It sets the codec, input layout, size (even, within the GPU's limits), frame rate, `Rate::Quality(1..=51)` or `Rate::Cbr(kbps)`, and keyframe interval. |
 | `nvenc::Encoder::encode`, `flush` | Packed frames go in, and 4-byte length-prefixed packets come out in input order, each with its timestamp and keyframe flag. The encoder uses preset P5, high-quality tuning, no B-frames and BT.709 limited range. |
+| `nvenc::Encoder::on_d3d11`, `encode_texture` | On Windows, `on_d3d11` opens an encoder on the caller's Direct3D 11 device (an NVIDIA adapter's), and `encode_texture` encodes an NV12 or P010 `ID3D11Texture2D` of the encoder's size made on that device. The encoder reads the texture's first subresource on the GPU, so the frame is not copied to system memory. |
 | `nvenc::Encoder::codec_private` | It returns the `avcC` or `hvcC` record for the container. |
 | `nvenc::available(codec)` | It reports whether this system can open an NVENC session that writes `codec`. |
 | `mf::Encoder` | This runs the hardware H.264 and HEVC encoder MFTs (Media Foundation transforms) that Windows Media Foundation lists (`mfplat.dll`), from NV12 frames. It has the same `Config`, `encode`, `flush` and `codec_private` as NVENC. Quality is `100 - 2 × level`, constant bitrate uses a one-second buffer, and it uses no B-frames and BT.709 limited range. |
@@ -49,6 +50,24 @@ for packet in enc.flush()? {
 ```
 
 `mf::Encoder`, `vt::Encoder` and `vaapi::Encoder` take the same `Config` with `Input::Nv12`.
+
+On Windows, frames that are already on the GPU go in as textures:
+
+```rust
+let mut enc = Encoder::on_d3d11(&cfg, &device)?;
+for (pts, texture) in textures.enumerate() {
+    for packet in enc.encode_texture(&texture, pts as i64)? {
+        write(packet);
+    }
+}
+```
+
+The encoder registers each texture with the driver the first time it sees it and keeps the last 64
+registered, so a pool of textures that the caller reuses is registered once. A texture whose
+picture is still inside the encoder is refused with an error; keep a texture unchanged until the
+packet with its timestamp has come out. A texture of another size, format or device is an error,
+and so is a call to `encode` on a texture encoder or to `encode_texture` on one opened with
+`Encoder::new`. The encoder opened with `on_d3d11` creates no input buffers in system memory.
 
 `vaapi::Encoder` keeps up to four frames in flight, each in its own surface and coded buffer.
 `encode` copies the frame into a free surface and submits it, and waits for the GPU only when all

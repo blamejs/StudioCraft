@@ -1,5 +1,6 @@
-//! The device an encode session is opened on: a Direct3D 11 device of the first NVIDIA adapter on
-//! Windows, the retained primary CUDA context of device 0 on Linux. The handles stay in this module.
+//! The device an encode session is opened on: a Direct3D 11 device of the first NVIDIA adapter (or
+//! the caller's own device, for texture input) on Windows, the retained primary CUDA context of
+//! device 0 on Linux. The handles stay in this module.
 
 use std::ffi::c_void;
 
@@ -7,6 +8,8 @@ use std::ffi::c_void;
 pub use cuda::Device;
 #[cfg(target_os = "windows")]
 pub use directx::Device;
+#[cfg(all(test, target_os = "windows"))]
+pub use directx::{test_device, test_texture};
 #[cfg(not(any(target_os = "windows", all(target_os = "linux", target_pointer_width = "64"))))]
 pub use none::Device;
 
@@ -51,9 +54,62 @@ mod directx {
             nvidia_device().map(Self)
         }
 
+        /// The caller's device, so the session can read textures made on it.
+        pub fn shared(device: ID3D11Device) -> Self {
+            Self(device)
+        }
+
+        pub fn d3d11(&self) -> &ID3D11Device {
+            &self.0
+        }
+
         pub fn as_raw(&self) -> *mut c_void {
             self.0.as_raw()
         }
+    }
+
+    /// A new Direct3D 11 device on the first NVIDIA adapter, for tests.
+    #[cfg(test)]
+    pub fn test_device() -> Result<ID3D11Device, String> {
+        nvidia_device()
+    }
+
+    /// A `width` × `height` NV12 (or P010 when `ten_bit`) texture on `device`, every sample set to
+    /// mid gray, made the way an encoder input texture is: default usage, bound as a render target.
+    #[cfg(test)]
+    pub fn test_texture(
+        device: &ID3D11Device,
+        width: u32,
+        height: u32,
+        ten_bit: bool,
+    ) -> Result<windows::Win32::Graphics::Direct3D11::ID3D11Texture2D, String> {
+        use windows::Win32::Graphics::Direct3D11::{D3D11_BIND_RENDER_TARGET, D3D11_SUBRESOURCE_DATA, D3D11_TEXTURE2D_DESC, D3D11_USAGE_DEFAULT};
+        use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT_NV12, DXGI_FORMAT_P010, DXGI_SAMPLE_DESC};
+        let samples = (width as usize) * (height as usize) * 3 / 2;
+        let (format, data, pitch) = if ten_bit {
+            let gray: Vec<u8> = std::iter::repeat_n(0x8000u16.to_le_bytes(), samples).flatten().collect();
+            (DXGI_FORMAT_P010, gray, width * 2)
+        } else {
+            (DXGI_FORMAT_NV12, vec![128u8; samples], width)
+        };
+        let desc = D3D11_TEXTURE2D_DESC {
+            Width: width,
+            Height: height,
+            MipLevels: 1,
+            ArraySize: 1,
+            Format: format,
+            SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
+            Usage: D3D11_USAGE_DEFAULT,
+            BindFlags: D3D11_BIND_RENDER_TARGET.0 as u32,
+            CPUAccessFlags: 0,
+            MiscFlags: 0,
+        };
+        let init = D3D11_SUBRESOURCE_DATA { pSysMem: data.as_ptr().cast(), SysMemPitch: pitch, SysMemSlicePitch: 0 };
+        let mut texture = None;
+        // SAFETY: `desc` and `init` describe `data`, which holds the luma rows followed by the
+        // chroma rows at `pitch` bytes each and outlives the call; `texture` is a valid out-pointer.
+        unsafe { device.CreateTexture2D(&desc, Some(&init), Some(&mut texture)) }.map_err(|e| e.to_string())?;
+        texture.ok_or_else(|| "CreateTexture2D returned no texture".into())
     }
 
     fn nvidia_device() -> Result<ID3D11Device, String> {
