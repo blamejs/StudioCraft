@@ -36,7 +36,7 @@ crate in the same layer. `cargo xtask layers` checks this against the table in
 | L2 | `studiocraft-platform` | Display, window, camera and audio capture, locating ffmpeg, and opening folders and links. |
 | L2 | `studiocraft-encode` | The built-in encoders: H.264 video from NV12 frames and AAC audio from the mixer's blocks. |
 | L3 | `studiocraft-sources` | The built-in sources and filters. |
-| L3 | `studiocraft-audio-tracks` | Audio tracks: the collect and disk threads that write each recorded source and the program mix to WAV files, the take journal, and the repair of takes cut short. |
+| L3 | `studiocraft-audio-tracks` | Audio tracks: the collect and disk threads that write each recorded source and the program mix to WAV files, the take journal, the repair of takes cut short, and the listing of the takes in a folder. |
 | L3 | `studiocraft-outputs` | Recording through an ffmpeg process, Matroska recording through the built-in encoders, streaming through the built-in encoders to several RTMP and RTMPS destinations, and the video encoders. |
 | L4 | `studiocraft-studio` | The running studio: sources, mixer, compositor, transitions, outputs and live captions behind one command interface. |
 | L5 | `studiocraft-ui-egui` | The window: menus, preview, docks, properties, filters and settings. |
