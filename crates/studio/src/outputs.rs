@@ -259,6 +259,8 @@ pub(crate) struct Outputs {
     held_keys: HashMap<String, String>,
     /// Where the key of each destination of the last stream started comes from, by id.
     stream_keys: HashMap<String, KeyRef>,
+    /// The name of the profile the last stream started with; `None` once that profile is removed.
+    stream_profile: Option<String>,
 }
 
 /// What [`resolve_hardware`] gives: the encoder id, the hardware encoder when it is one, and a
@@ -975,6 +977,32 @@ impl Studio {
         }
     }
 
+    /// Whether a key is held for this session under `name`.
+    pub fn stream_key_held(&self, name: &str) -> bool {
+        self.outputs.held_keys.contains_key(name)
+    }
+
+    /// The name of the profile the running stream started with; `None` while no stream runs or
+    /// once that profile was removed.
+    pub fn stream_profile(&self) -> Option<&str> {
+        self.outputs.stream_profile.as_deref().filter(|_| self.outputs.active.contains_key(&OutputKind::Streaming))
+    }
+
+    /// Record that the profile `old` was renamed `new`, so a stream it started stays its stream.
+    pub fn stream_profile_renamed(&mut self, old: &str, new: &str) {
+        if self.outputs.stream_profile.as_deref() == Some(old) {
+            self.outputs.stream_profile = Some(new.to_string());
+        }
+    }
+
+    /// Record that the profile `name` was removed, so a later profile with the same name does not
+    /// take over a stream it started.
+    pub fn stream_profile_removed(&mut self, name: &str) {
+        if self.outputs.stream_profile.as_deref() == Some(name) {
+            self.outputs.stream_profile = None;
+        }
+    }
+
     /// Each destination of the running stream, in the profile's order; empty while no stream runs.
     pub fn stream_destinations(&self) -> Vec<DestinationState> {
         self.outputs.active.get(&OutputKind::Streaming).map(|a| a.instance.destinations()).unwrap_or_default()
@@ -1164,6 +1192,7 @@ impl Studio {
         if kind == OutputKind::Streaming {
             planned.settings = stream_settings(&self.profile, &self.outputs.held_keys)?;
             self.outputs.stream_keys = self.profile.stream.destinations.iter().map(|d| (d.id.clone(), d.key.clone())).collect();
+            self.outputs.stream_profile = Some(self.profile.name.clone());
         }
         let registry = Arc::clone(self.engine.registry());
         let mut encoder = registry.encoder(&planned.encoder_id)?;

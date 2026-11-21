@@ -472,6 +472,8 @@ fn every_label_chosen_at_run_time_has_an_english_row() {
     labels.extend(RecordingQuality::ALL.map(crate::settings::quality_label));
     labels.extend(studiocraft_model::AudioTracksWhen::ALL.map(crate::settings::when_label));
     labels.extend(studiocraft_model::AfterStop::ALL.map(crate::settings::after_stop_label));
+    // The Stream key choices of the Streaming window.
+    labels.extend(crate::streaming::KeyChoice::ALL.map(crate::streaming::KeyChoice::label));
     labels.extend(
         [
             Named::NewProfile,
