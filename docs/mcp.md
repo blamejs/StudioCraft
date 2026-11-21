@@ -166,7 +166,8 @@ Units are the same in every tool, resource and prompt:
 - Canvas coordinates are pixels, x to the right and y down, with the origin at the top-left. The
   default canvas is 1920 × 1080.
 - Rotation is in degrees.
-- Volume gain is 0 to 1.
+- Volume gain is linear, 0 to 10. A gain of 1 is 0 dB and 10 is +20 dB of boost, StudioCraft's own
+  limit.
 - Durations and audio sync offsets are in milliseconds.
 - The window tools take window points, with (0, 0) at the window's top left.
 

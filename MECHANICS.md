@@ -67,6 +67,7 @@ field to `false` in `mechanics.json`.
 | Block size | 1024 frames | `media::audio::BLOCK_FRAMES` | estimated |
 | Blocks queued per output | 4 | `engine::mixer::MAX_QUEUED_BLOCKS` | estimated |
 | Audio sync offset | 0 ms (0 to 5000 ms) | `model::collection::AudioState`, `model::collection::MAX_SYNC_OFFSET_MS` | estimated |
+| Source volume | 0 dB (silence to +20 dB, gain 0 to 10) | `model::collection::AudioState`, `model::collection::MAX_GAIN_DB`, `model::collection::MAX_GAIN` | estimated |
 | Monitoring mode | Off | `model::collection::MonitorMode` | estimated |
 | Monitoring device | The system's default output | `model::profile::DEFAULT_AUDIO_DEVICE` | estimated |
 | Blocks queued for the monitoring device | 4 | `studio::monitor::MONITOR_QUEUE_BLOCKS` | estimated |

@@ -734,10 +734,11 @@ impl Engine {
             Command::SourceVolume { source, gain } => {
                 let id = self.source_id(&source)?;
                 let s = c.source_mut(id).ok_or_else(|| EngineError::NoSource(id.to_string()))?;
-                s.audio.gain = if gain.is_finite() && (0.0..=1.0).contains(&gain) {
+                use studiocraft_model::collection::{MAX_GAIN, MAX_GAIN_DB};
+                s.audio.gain = if gain.is_finite() && (0.0..=MAX_GAIN).contains(&gain) {
                     gain
                 } else {
-                    return Err(EngineError::Invalid("the volume must be a number from 0 to 1".into()));
+                    return Err(EngineError::Invalid(format!("the volume must be a number from 0 to {MAX_GAIN} (+{MAX_GAIN_DB} dB)")));
                 };
                 Ok((Value::Null, Some(format!("source.volume:{id}"))))
             }

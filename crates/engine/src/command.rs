@@ -712,7 +712,7 @@ const SPECS: &[CommandSpec] = &[
     spec("source.add_existing", "Add Existing Source", "source: id or name, scene?", Undo::Undoable),
     spec("source.rename", "Rename Source", "source: id or name, name: string", Undo::Undoable),
     spec("source.settings", "Source Properties", "source: id or name, settings: object", Undo::Undoable),
-    spec("source.volume", "Set Volume", "source: id or name, gain: 0..1", Undo::Undoable),
+    spec("source.volume", "Set Volume", "source: id or name, gain: 0..10 linear (1 is 0 dB, 10 is +20 dB)", Undo::Undoable),
     spec("source.mute", "Mute", "source: id or name, muted: bool", Undo::Undoable),
     spec("source.sync_offset", "Set Sync Offset", "source: id or name, ms: 0..5000 milliseconds the audio is delayed", Undo::Undoable),
     spec("source.monitor", "Audio Monitoring", "source: id or name, mode: off|monitor_only|monitor_and_output", Undo::Undoable),

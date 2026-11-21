@@ -47,6 +47,8 @@
     {"name": "blocks queued per output", "group": "audio", "value": 4, "unit": "blocks", "code": "engine::mixer::MAX_QUEUED_BLOCKS", "estimated": true},
     {"name": "audio sync offset", "group": "audio", "value": 0, "unit": "ms", "code": "model::collection::AudioState::default", "estimated": true},
     {"name": "longest audio sync offset", "group": "audio", "value": 5000, "unit": "ms", "code": "model::collection::MAX_SYNC_OFFSET_MS", "estimated": true},
+    {"name": "source volume", "group": "audio", "value": 0, "unit": "dB", "code": "model::collection::AudioState::default", "estimated": true},
+    {"name": "most source volume boost", "group": "audio", "value": 20, "unit": "dB", "code": "model::collection::MAX_GAIN_DB", "estimated": true},
     {"name": "monitoring mode", "group": "audio", "value": "off", "code": "model::collection::MonitorMode", "estimated": true},
     {"name": "monitoring device", "group": "audio", "value": "default", "code": "model::profile::DEFAULT_AUDIO_DEVICE", "estimated": true},
     {"name": "blocks queued for the monitoring device", "group": "audio", "value": 4, "unit": "blocks", "code": "studio::monitor::MONITOR_QUEUE_BLOCKS", "estimated": true},

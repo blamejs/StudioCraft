@@ -813,6 +813,31 @@ mod tests {
     }
 
     #[test]
+    fn a_boosted_input_is_louder_than_unity_and_the_mix_still_clips() {
+        let mut m = MixState::new(Arc::new(Levels::default()));
+        let a = Arc::new(AudioOut::default());
+        let (ia, la) = input(1, &a, 1.0, true);
+        m.apply(MixerCmd::Inputs(vec![ia]));
+        let out = Arc::new(Fifo::new(8));
+        m.apply(MixerCmd::AddOutput { id: 1, queue: Arc::clone(&out) });
+        feed(&a, 0.05);
+        m.tick(Tick(1));
+        let unity = out.pop().unwrap().samples[0];
+        assert!((unity - 0.05).abs() < 1e-6);
+
+        m.apply(MixerCmd::Gain { source: SourceId(1), gain: studiocraft_model::collection::MAX_GAIN, muted: false });
+        feed(&a, 0.05);
+        m.tick(Tick(2));
+        let boosted = out.pop().unwrap().samples[0];
+        assert!((boosted - 0.5).abs() < 1e-6, "+20 dB is ten times the level: {boosted}");
+        assert!((la.load().peak[0] - 0.5).abs() < 1e-6, "the meter reads the boosted level");
+
+        feed(&a, 0.5);
+        m.tick(Tick(3));
+        assert_eq!(out.pop().unwrap().samples[0], 1.0, "the final mix is clipped as before");
+    }
+
+    #[test]
     fn an_output_that_stops_reading_does_not_make_the_mixer_allocate() {
         let mut m = MixState::new(Arc::new(Levels::default()));
         let out = Arc::new(Fifo::new(256));

@@ -168,7 +168,11 @@ system's default output device, and Microphone, the default input device. Deskto
 sound on Windows and Linux only.
 
 The Audio Mixer dock shows peak and RMS meters with peak hold, a volume fader in dB, and a mute
-button for every audible source. The mixer also measures the final mix's loudness (momentary,
+button for every audible source. The fader runs from silence to +20 dB of boost (StudioCraft's own
+limit), with a mark at 0 dB. A boosted source is louder than its input, and the final mix is still
+clipped at full scale. The `source.volume` command takes a linear `gain` from 0 to 10, where 1 is
+0 dB and 10 is +20 dB; a value outside that range, or one that is not a number, is an error and
+changes nothing. The mixer also measures the final mix's loudness (momentary,
 short-term, integrated, loudness range and true peak). Each profile keeps a loudness target band,
 −18 to −14 LUFS by default (StudioCraft's own value). The `audio.loudness` command and the MCP
 tool `audio_loudness` report the readings with the band. The window does not show these readings
@@ -211,7 +215,8 @@ same file name, their lanes show the folder as well. When the program hears two 
 application, the second source gets a lane of its own, named after the source, with its own volume
 slider and mute button and no check box.
 
-A lane with a source has a volume slider in dB and a mute button, and its settings menu opens the
+A lane with a source has a volume slider in dB, from silence to +20 dB with a mark at 0 dB, the same
+as the Audio Mixer's fader, and a mute button. Its settings menu opens the
 source's Properties… (sync offset and monitoring) and Filters…. The dock is hidden in a new
 layout. On a system that cannot capture one application's audio, the dock lists the microphones
 and says why no applications are listed.
