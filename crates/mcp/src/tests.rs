@@ -13,7 +13,7 @@ use crate::{Backend, Headless, MAX_BATCH_STEPS, McpError, Remote, Roots, Server,
 
 const TOKEN: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
-const TOOLS: [&str; 32] = [
+const TOOLS: [&str; 33] = [
     "command_list",
     "command_run",
     "command_batch",
@@ -36,6 +36,7 @@ const TOOLS: [&str; 32] = [
     "app_audio_route",
     "record_start",
     "record_stop",
+    "record_marker",
     "stream_start",
     "stream_stop",
     "replay_start",
@@ -1064,6 +1065,9 @@ fn output_tools_carry_their_hints() {
     // Each call starts the audio editor or a file manager.
     let h = hints("audio_tracks_open_last");
     assert_eq!((h["readOnlyHint"].as_bool(), h["idempotentHint"].as_bool()), (Some(false), Some(false)));
+    // Each call adds another marker.
+    let h = hints("record_marker");
+    assert_eq!((h["readOnlyHint"].as_bool(), h["idempotentHint"].as_bool()), (Some(false), Some(false)));
 }
 
 #[test]
@@ -1074,6 +1078,17 @@ fn output_status_starts_with_nothing_running() {
     // Stopping what does not run changes nothing.
     assert_eq!(ok_json(&call(&mut s, "record_stop", json!({})))["recording"]["active"], false);
     assert_eq!(ok_json(&call(&mut s, "stream_stop", json!({})))["streaming"]["active"], false);
+}
+
+#[test]
+fn record_marker_needs_a_running_recording_and_a_checked_name() {
+    let mut s = server();
+    let idle = error_text(&call(&mut s, "record_marker", json!({"name": "Goal"})));
+    assert!(idle.contains("no recording is running"), "{idle}");
+    let bad = error_text(&call(&mut s, "record_marker", json!({"name": ""})));
+    assert!(bad.contains("a marker's name is 1 to 256 characters"), "{bad}");
+    let null = error_text(&call(&mut s, "record_marker", json!({"name": null})));
+    assert!(null.contains("record.marker"), "a null name is refused, not numbered: {null}");
 }
 
 #[test]

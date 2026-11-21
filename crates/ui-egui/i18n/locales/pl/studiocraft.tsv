@@ -492,6 +492,9 @@ menu	Transform	Przekształć
 @msg	Audio tracks could not be repaired: {takes} and {more} more. Takes repaired: {count}	Nie można naprawić ścieżek audio: {takes} i {more} innych. Naprawione nagrania: {count}
 	Open Last Audio Tracks in Editor	Otwórz ostatnie ścieżki audio w edytorze
 	Add Audio Tracks Marker	Dodaj znacznik do ścieżek audio
+	Add Recording Marker	Dodaj znacznik do nagrania
+@msg	Markers saved to {path}	Znaczniki zapisano w {path}
+@msg	The markers could not be saved: {error}	Nie można zapisać znaczników: {error}
 	After a take	Po nagraniu
 	Nothing	Nic
 	Show the folder	Pokaż folder

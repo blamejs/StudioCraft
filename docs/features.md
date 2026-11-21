@@ -232,6 +232,25 @@ runtime has no `ffmpeg`, and the Flatpak sandbox cannot run an `ffmpeg` installe
 Tools › Available Encoders lists the built-in encoders and the encoders the installed `ffmpeg`
 offers, and says when `ffmpeg` was not found.
 
+### Recording markers
+
+File › Add Recording Marker (`record.marker`, which can be given a shortcut in Settings › Hotkeys)
+marks the running recording at that moment. A marker is named "Marker N" for the recording's Nth
+marker, and a recording holds at most 10,000 markers. When a recording with at least one marker
+stops, or the app closes during it, StudioCraft finishes the recording file and then writes
+`<recording name>.otio` beside it: an
+[OpenTimelineIO](https://opentimelineio.readthedocs.io) timeline with the recording as one clip on
+a video track and on an audio track, and each marker on the timeline at the frame that holds its
+time. A marker's time leaves out the time the recording skipped while the computer was suspended.
+The clip is as long as the frames written to the recording file, so a recording whose encoder fell
+behind before the stop gets a shorter clip, and a marker past the clip's end goes on its last
+frame. The timeline names the recording by its file name, so the two files can be moved together.
+File › Import in FilmCraft opens the timeline as a sequence with the markers on it. A file of that
+name that already exists is not replaced: the timeline goes to `<recording name> (2).otio`, or the
+next free number up to 999, and the status bar names the file. A recording without markers gets no
+timeline file, and neither does a recording whose file could not be finished; the status bar says
+the markers could not be saved.
+
 ### Replay buffer
 
 File › Replay Buffer keeps the last seconds of the program in memory with the built-in H.264 and

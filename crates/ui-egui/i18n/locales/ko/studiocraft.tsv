@@ -493,6 +493,9 @@ menu	Transform	변형
 @msg	Audio tracks could not be repaired: {takes} and {more} more. Takes repaired: {count}	오디오 트랙을 복구할 수 없습니다: {takes} 외 {more}개. 복구된 테이크: {count}
 	Open Last Audio Tracks in Editor	마지막 오디오 트랙을 편집기에서 열기
 	Add Audio Tracks Marker	오디오 트랙에 마커 추가
+	Add Recording Marker	녹화에 마커 추가
+@msg	Markers saved to {path}	마커를 {path}에 저장했습니다
+@msg	The markers could not be saved: {error}	마커를 저장할 수 없습니다: {error}
 	After a take	테이크 후
 	Nothing	아무것도 하지 않음
 	Show the folder	폴더 보기

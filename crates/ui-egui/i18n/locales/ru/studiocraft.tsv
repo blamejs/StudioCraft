@@ -502,6 +502,9 @@ menu	Transform	Преобразование
 @msg	Audio tracks could not be repaired: {takes} and {more} more. Takes repaired: {count}	Не удалось восстановить звуковые дорожки: {takes} и ещё {more}. Восстановлено дублей: {count}
 	Open Last Audio Tracks in Editor	Открыть последние звуковые дорожки в редакторе
 	Add Audio Tracks Marker	Добавить маркер в звуковые дорожки
+	Add Recording Marker	Добавить маркер в запись
+@msg	Markers saved to {path}	Маркеры сохранены в {path}
+@msg	The markers could not be saved: {error}	Не удалось сохранить маркеры: {error}
 	After a take	После дубля
 	Nothing	Ничего
 	Show the folder	Показать папку

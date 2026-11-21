@@ -486,6 +486,23 @@ fn runtime_commands_are_handed_to_the_app() {
 }
 
 #[test]
+fn a_recording_marker_is_handed_to_the_app_with_a_checked_name() {
+    let mut e = engine();
+    let o = run(&mut e, "record.marker", json!({})).unwrap();
+    assert_eq!(o.runtime, Some(RuntimeAction::RecordingMarker { name: None }));
+    let longest = "é".repeat(crate::engine::MAX_MARKER_NAME_CHARS);
+    let o = run(&mut e, "record.marker", json!({"name": longest})).unwrap();
+    assert_eq!(o.runtime, Some(RuntimeAction::RecordingMarker { name: Some(longest) }));
+    assert!(!o.changed);
+    let too_long = "x".repeat(crate::engine::MAX_MARKER_NAME_CHARS + 1);
+    for bad in
+        [json!({"name": ""}), json!({"name": "   "}), json!({"name": too_long}), json!({"name": "a\tb"}), json!({"name": 3}), json!({"name": null})]
+    {
+        assert!(run(&mut e, "record.marker", bad.clone()).is_err(), "{bad}");
+    }
+}
+
+#[test]
 fn caption_commands_are_handed_to_the_app() {
     let mut e = engine();
     for (id, params, action) in [

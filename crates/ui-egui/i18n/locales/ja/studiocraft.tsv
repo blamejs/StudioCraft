@@ -493,6 +493,9 @@ menu	Transform	変形
 @msg	Audio tracks could not be repaired: {takes} and {more} more. Takes repaired: {count}	オーディオトラックを修復できませんでした: {takes} ほか {more} 件。修復したテイク: {count}
 	Open Last Audio Tracks in Editor	最後のオーディオトラックをエディターで開く
 	Add Audio Tracks Marker	オーディオトラックにマーカーを追加
+	Add Recording Marker	録画にマーカーを追加
+@msg	Markers saved to {path}	マーカーを {path} に保存しました
+@msg	The markers could not be saved: {error}	マーカーを保存できませんでした: {error}
 	After a take	テイクの後
 	Nothing	何もしない
 	Show the folder	フォルダーを表示

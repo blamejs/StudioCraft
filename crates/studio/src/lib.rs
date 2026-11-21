@@ -13,6 +13,7 @@ pub mod capture;
 pub mod files;
 mod monitor;
 mod outputs;
+mod recording_markers;
 mod wiring;
 
 use std::collections::HashMap;
@@ -269,6 +270,8 @@ pub struct Studio {
     audio_tracks: audio_tracks::AudioTracks,
     /// Speech recognition of the program audio, and the caption files of recordings.
     captions: captions::Captions,
+    /// Markers set during the recording, and the timeline files of recordings that stopped.
+    recording_markers: recording_markers::RecordingMarkers,
     /// Faults the tests put into the audio tracks' disk side.
     #[cfg(test)]
     test_faults: studiocraft_audio_tracks::Faults,
@@ -355,6 +358,7 @@ impl Studio {
             monitor: monitor::Monitor::new(Arc::new(studiocraft_platform::audio::SystemSink)),
             audio_tracks: audio_tracks::AudioTracks::default(),
             captions: captions::Captions::new(captions),
+            recording_markers: recording_markers::RecordingMarkers::default(),
             #[cfg(test)]
             test_faults: studiocraft_audio_tracks::Faults::default(),
             #[cfg(test)]
@@ -414,6 +418,7 @@ impl Studio {
                 RuntimeAction::AudioTracksRepair { folder } => result = self.repair_audio_tracks(&folder)?,
                 RuntimeAction::AudioTracksOpenLast => result = self.open_last_audio_tracks()?,
                 RuntimeAction::AudioTracksMarker { name } => result = self.add_audio_tracks_marker(name)?,
+                RuntimeAction::RecordingMarker { name } => result = self.add_recording_marker(name)?,
                 RuntimeAction::StartRecording => self.start_output(OutputKind::Recording)?,
                 RuntimeAction::StopRecording => self.stop_output(OutputKind::Recording),
                 RuntimeAction::ToggleRecording => self.toggle_output(OutputKind::Recording)?,
@@ -437,6 +442,7 @@ impl Studio {
             // A recording or stream that started or stopped starts or stops the audio tracks now.
             self.sync_audio_tracks();
             self.sync_captions();
+            self.sync_recording_markers();
         }
         if outcome.changed {
             self.refresh();
@@ -531,6 +537,7 @@ impl Studio {
         }
         self.sync_audio_tracks();
         self.sync_captions();
+        self.sync_recording_markers();
         self.mixer.free_retired();
     }
 
@@ -1130,10 +1137,13 @@ impl Drop for Studio {
         // Recordings and audio tracks are finished, not cut off, when the app closes. Both are
         // asked to stop before either is waited for, so neither runs on while the other ends.
         self.stop_audio_tracks();
+        let closed = self.clock.now();
         self.outputs.stop_all_blocking();
         self.finish_audio_tracks_blocking();
         // Caption files of a recording that just stopped are written before the studio closes.
         self.finish_captions_blocking();
+        // So is the marker file, with the recording ending when the app closed.
+        self.finish_recording_markers_blocking(closed);
     }
 }
 

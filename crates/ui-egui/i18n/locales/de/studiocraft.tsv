@@ -476,6 +476,9 @@ menu	Transform	Transformieren
 @msg	Audio tracks could not be repaired: {takes} and {more} more. Takes repaired: {count}	Audiospuren konnten nicht repariert werden: {takes} und {more} weitere. Reparierte Aufnahmen: {count}
 	Open Last Audio Tracks in Editor	Letzte Audiospuren im Editor öffnen
 	Add Audio Tracks Marker	Marke in den Audiospuren setzen
+	Add Recording Marker	Marke in der Aufnahme setzen
+@msg	Markers saved to {path}	Marken gespeichert unter {path}
+@msg	The markers could not be saved: {error}	Die Marken konnten nicht gespeichert werden: {error}
 	After a take	Nach einer Aufnahme
 	Nothing	Nichts
 	Show the folder	Ordner anzeigen

@@ -85,8 +85,8 @@ when the language's catalog has the message.
 [Commands with their own parameters](#commands-with-their-own-parameters) describes `app.info`,
 `app.links`, `app.check_updates`, `plugin.list`, `source.schema`, `source.sync_offset`,
 `source.monitor`, `source.set_record_track`, `audio_tracks.status`, `audio_tracks.repair`,
-`audio_tracks.open_last`, `audio_tracks.marker`, the `captions.*` commands, the `dock.layout_*`
-commands, `video.displays`, `video.canvas_from_display` and `canvas.relayout`.
+`audio_tracks.open_last`, `audio_tracks.marker`, `record.marker`, the `captions.*` commands, the
+`dock.layout_*` commands, `video.displays`, `video.canvas_from_display` and `canvas.relayout`.
 
 Each entry of `engine.commands` has these fields:
 
@@ -354,6 +354,15 @@ session lists the marker at that sample. `name` is 1 to 256 characters, not only
 control characters; without it the marker is "Marker N", the take's Nth marker. It returns
 `{"name", "seconds"}`, where `seconds` counts from the take's first sample. No running take, a take
 that is ending, and 1,024 markers waiting to be written are errors.
+
+### `record.marker`
+
+`record.marker` takes `{"name"}` and marks the running recording at this moment. `name` follows
+the rules of `audio_tracks.marker`; without it the marker is "Marker N", the recording's Nth
+marker. It returns `{"name", "seconds"}`, where `seconds` counts from the recording's first frame
+and leaves out the time the recording has skipped so far while the computer was suspended. No running recording and a recording that already holds 10,000 markers are errors. When the
+recording stops, `<recording name>.otio` is written beside it with each marker at its frame
+([Recording markers](features.md#recording-markers)).
 
 ### `captions.*`
 

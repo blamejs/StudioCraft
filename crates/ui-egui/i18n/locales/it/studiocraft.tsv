@@ -489,6 +489,9 @@ menu	Transform	Trasforma
 @msg	Audio tracks could not be repaired: {takes} and {more} more. Takes repaired: {count}	Impossibile riparare le tracce audio: {takes} e altre {more}. Riprese riparate: {count}
 	Open Last Audio Tracks in Editor	Apri le ultime tracce audio nell'editor
 	Add Audio Tracks Marker	Aggiungi un marcatore alle tracce audio
+	Add Recording Marker	Aggiungi un marcatore alla registrazione
+@msg	Markers saved to {path}	Marcatori salvati in {path}
+@msg	The markers could not be saved: {error}	Impossibile salvare i marcatori: {error}
 	After a take	Dopo una ripresa
 	Nothing	Niente
 	Show the folder	Mostra la cartella

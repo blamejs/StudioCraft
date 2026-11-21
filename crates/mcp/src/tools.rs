@@ -54,7 +54,7 @@ const RECORDS: Hints = Hints { read_only: false, destructive: false, idempotent:
 const PUBLISHES: Hints = Hints { read_only: false, destructive: false, idempotent: true, open_world: true };
 /// Opening a file in another program: each call starts the program again.
 const LAUNCHES: Hints = Hints { read_only: false, destructive: false, idempotent: false, open_world: false };
-/// Adding a marker to the running take: each call adds another.
+/// Adding a marker to the running take or recording: each call adds another.
 const MARKS: Hints = Hints { read_only: false, destructive: false, idempotent: false, open_world: false };
 
 fn tool(name: &str, title: &str, description: &str, properties: Value, required: &[&str], hints: Hints) -> Value {
@@ -352,6 +352,17 @@ fn studio_tool_definitions() -> Vec<Value> {
             json!({}),
             &[],
             RECORDS,
+        ),
+        tool(
+            "record_marker",
+            "Mark the running recording",
+            "Add a marker to the running recording at this moment, as Add Recording Marker does. When a recording with markers stops, \
+             `<recording name>.otio` is written beside it with each marker at its frame. `name` is 1 to 256 characters with no control \
+             characters (default \"Marker N\", the recording's Nth marker). Returns the marker's `name` and `seconds` from the \
+             recording's start. An error when no recording runs and when the recording already holds 10,000 markers.",
+            json!({"name": {"type": "string", "description": "The marker's name (default: \"Marker N\")."}}),
+            &[],
+            MARKS,
         ),
         tool(
             "stream_start",
@@ -959,6 +970,11 @@ fn dispatch(b: &mut dyn Backend, name: &str, args: &Args) -> Result<Value, McpEr
         }
         "record_start" => output_command(b, "record.start", "recording"),
         "record_stop" => output_command(b, "record.stop", "recording"),
+        // `name: null` goes on to the command, which refuses it, instead of naming the marker.
+        "record_marker" => {
+            let params = Value::Object(args.get("name").map(|v| ("name".to_owned(), v.clone())).into_iter().collect());
+            Ok(text(&run(b, "record.marker", params)?))
+        }
         "stream_start" => output_command(b, "stream.start", "streaming"),
         "stream_stop" => output_command(b, "stream.stop", "streaming"),
         "replay_start" => output_command(b, "replay.start", "replay"),
