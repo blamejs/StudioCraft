@@ -409,14 +409,16 @@ fn server_param(cmd: &craft_keymap::CommandRef) -> Result<Option<String>, Msg> {
 }
 
 /// Refuses a change a command makes without the user's own action in the window when it would
-/// send the profile's stream key where the user did not send it: `key` `profile` for a
-/// destination other than the primary one, or the profile's key going with a server it did not
-/// go with before. `before` is the destination's key and server before the change, `None` for a
-/// new destination; `after` is the same after it.
-fn guard_profile_key(
+/// send a stream key where the user did not send it: `key` `profile` for a destination other
+/// than the primary one, a `held_name` the destination did not already use, or the profile's key
+/// or a held key going with a server it did not go with before. `held_name` is the command's
+/// `held_name` parameter. `before` is the destination's key and server before the change, `None`
+/// for a new destination; `after` is the same after it.
+fn guard_stream_key(
     command: &str,
     id: &str,
     key_given: Option<&KeyRef>,
+    held_name: Option<&str>,
     before: Option<(&KeyRef, &str)>,
     after: (&KeyRef, &str),
 ) -> Result<(), Msg> {
@@ -428,16 +430,35 @@ fn guard_profile_key(
             id = id
         ));
     }
-    let paired = |(key, server): (&KeyRef, &str)| (*key == KeyRef::Profile && !server.trim().is_empty()).then(|| server.trim().to_string());
-    let now = paired(after);
-    if now.is_some() && now != before.and_then(paired) {
+    if held_name.is_some()
+        && let Some(KeyRef::Held(name)) = key_given
+        && before.map(|(key, _)| key) != key_given
+    {
         return Err(tmsg!(
-            "`{command}`: `{id}` would send the profile's stream key to a new server; give `key`: `held` or `none` with the server, or make the change in the Streaming window",
+            "`{command}`: `{id}` does not use the session key `{name}`; give `key`: `held` without `held_name`, or choose its session key in the Streaming window",
+            command = command,
+            id = id,
+            name = name
+        ));
+    }
+    let paired =
+        |(key, server): (&KeyRef, &str)| (*key != KeyRef::None && !server.trim().is_empty()).then(|| (key.clone(), server.trim().to_string()));
+    let now = paired(after);
+    if now.is_none() || now == before.and_then(paired) {
+        return Ok(());
+    }
+    if *after.0 == KeyRef::Profile {
+        return Err(tmsg!(
+            "`{command}`: `{id}` would send the profile's stream key to a new server; give `key`: `none` with the server, or make the change in the Streaming window",
             command = command,
             id = id
         ));
     }
-    Ok(())
+    Err(tmsg!(
+        "`{command}`: `{id}` would send its session key to a new server; give `key`: `none` with the server, or make the change in the Streaming window",
+        command = command,
+        id = id
+    ))
 }
 
 /// An optional text parameter, trimmed; an error when it holds a control character.
@@ -595,7 +616,8 @@ impl StudioApp {
                 let key_given = key_param(cmd, &id, None)?;
                 let key = key_given.clone().unwrap_or(if first { KeyRef::Profile } else { KeyRef::None });
                 if !self.from_user {
-                    guard_profile_key(&cmd.id, &id, key_given.as_ref(), None, (&key, server.as_deref().unwrap_or("")))?;
+                    let held_name = opt_str(cmd, "held_name")?;
+                    guard_stream_key(&cmd.id, &id, key_given.as_ref(), held_name, None, (&key, server.as_deref().unwrap_or("")))?;
                 }
                 let d = Destination {
                     id: id.clone(),
@@ -647,7 +669,7 @@ impl StudioApp {
                     let key = key_param(cmd, &id, Some(&d.key))?;
                     if !from_user {
                         let after = (key.as_ref().unwrap_or(&d.key), server.as_deref().unwrap_or(&d.server));
-                        guard_profile_key(&cmd.id, &id, key.as_ref(), Some((&d.key, &d.server)), after)?;
+                        guard_stream_key(&cmd.id, &id, key.as_ref(), opt_str(cmd, "held_name")?, Some((&d.key, &d.server)), after)?;
                     }
                     if let Some(n) = &name {
                         d.name.clone_from(n);

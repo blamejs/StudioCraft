@@ -422,11 +422,13 @@ changes only the fields given; it returns `{"id", "changed"}`, and a call that c
 not save the profile. With `key` set to `held`, `held_name` names the session key; without it the
 destination keeps its held name, or uses its id.
 
-A command does not send the profile's stream key to a server the user did not send it to. Only the
-destination `main` takes `key` `profile` from a command, and a command that would leave a
-destination with the profile's key and a server other than the one it had with that key is
-refused: give `key` `held` or `none` with the new server. The Streaming window's own Add
-Destination and Save make these changes.
+A command does not send the profile's stream key, or a key held for the session, to a server the
+user did not send it to. Only the destination `main` takes `key` `profile` from a command. A
+command's `held_name` must be the name the destination already uses, so a command cannot give a
+destination the session key of another one. A command that would leave a destination with the
+profile's key or a held key and a server other than the one it had with that key is refused: give
+`key` `none` with the new server. The Streaming window's own Add Destination and Save make these
+changes.
 
 `stream.destination_remove` takes `{"id"}` and returns `{"removed"}`. A destination that is sending
 or trying to is not removed until it is stopped.
