@@ -36,7 +36,7 @@ or cropping a source ends its fit, fill or stretch.
 | Media file | A media file. | All |
 | Display capture | A whole display. | Windows, macOS and Linux |
 | Window capture | One window. | Windows, macOS and Linux |
-| Staged windows | One of up to six windows picked ahead of time, swapped from its Properties, a hotkey or a command ([Staged windows](#staged-windows)). | Windows and macOS |
+| Staged windows | One of up to six windows or displays picked ahead of time, swapped from its Properties, a hotkey or a command ([Staged windows](#staged-windows)). | Windows and macOS |
 | Camera | A webcam or capture card. | Windows (Media Foundation), macOS (AVFoundation) and Linux (V4L2) |
 | Audio input capture | A microphone or other input device. | Windows, macOS and Linux |
 | Audio output capture | The sound the computer plays (desktop audio). | Windows and Linux |
@@ -54,30 +54,36 @@ picker: it comes from the Wayland compositor's outputs, or from RandR under X11.
 
 ### Staged windows
 
-A Staged windows source holds up to six windows, chosen in its Properties as Window 1 to Window
-6, and shows one of them: the window in the slot that Presented window names. Every staged window
-keeps its capture open. The presented window is captured at the capture rate and each of the
-others once a second, so a swap shows the new window on the next frame without opening its
-capture again. A slot keeps its window after the window closes. Every 2 seconds the source looks
-for it again: first a window with the same program and title, then one with the same title, then
-another window of the same program.
+A Staged windows source holds up to six windows or displays, chosen in its Properties as Window 1
+to Window 6, and shows one of them: the window or display in the slot that Presented window
+names. Each slot's list offers the open windows and then the connected displays. Every staged
+window or display keeps its capture open. The presented one is captured at the capture rate and
+each of the others once a second, so a swap shows the new window or display on the next frame
+without opening its capture again. A slot keeps its window after the window closes. Every 2
+seconds the source looks for it again: first a window with the same program and title, then one
+with the same title, then another window of the same program. A slot also keeps its display while
+the display is disconnected, and every 2 seconds the source looks for a display with the same id;
+until one is connected, the source reports that the display is not connected. A slot that holds a
+display saves the character U+001E followed by the display's id, the id a Display capture source
+saves for that display. Any other value is a window, so collections saved before displays could
+be staged open with the same windows.
 
-To swap the presented window, change Presented window in the Properties, or run
+To swap the presented window or display, change Presented window in the Properties, or run
 `present.window` (a slot), `present.next` or `present.previous`
 ([`present.*`](control-protocol.md#presentwindow-presentnext-and-presentprevious)). Next and
 previous skip empty slots and wrap around. Settings › Hotkeys lists Present Next Staged Window,
 Present Previous Staged Window and Present Staged Window 1 to 6, with no shortcut until you set
 one. Without a source named, these commands change every Staged windows source in the scene
-collection that has a window in the slot they move to. The presented slot is saved with the
-collection. Swapping the presented window, from the Properties or otherwise, is not an undo step,
-and Edit › Undo does not change it.
+collection that has a window or display in the slot they move to. The presented slot is saved
+with the collection. Swapping the presented slot, from the Properties or otherwise, is not an undo
+step, and Edit › Undo does not change it.
 
-While the presented window cannot be captured (it closed or is minimized, or its slot is empty),
-the source shows the placeholder that "While the presented window cannot be shown" selects: a
-color, black by default, at the size of the last picture (1920 x 1080 before the first one), or
-the last picture of that window. After
-a swap, the source never shows the picture of the window presented before. The source is not
-offered on Linux, where the desktop's picker chooses each captured window.
+While the presented window or display cannot be captured (the window closed or is minimized, the
+display is disconnected, or the slot is empty), the source shows the placeholder that "While the
+presented window cannot be shown" selects: a color, black by default, at the size of the last
+picture (1920 x 1080 before the first one), or the last picture of that window or display. After
+a swap, the source never shows the picture of the window or display presented before. The source
+is not offered on Linux, where the desktop's picker chooses each captured window and display.
 
 ### Audio capture on Linux
 
@@ -646,7 +652,7 @@ shortcuts such as Ctrl+1 or Shift+F5, and separate several with commas. Ctrl+1 t
 Windows and Linux, and ⌘1 to ⌘9 on macOS, show the first nine scenes. The list includes Start or
 Stop Recording, Start or Stop Streaming, Start or Stop Replay Buffer, Save Replay, Transition to
 Program, Cut to Program, Studio Mode and the commands that swap a
-[staged window](#staged-windows).
+[staged window or display](#staged-windows).
 
 ## Settings
 

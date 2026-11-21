@@ -1,5 +1,5 @@
-//! The settings of a Staged windows source: the windows staged in its slots and the slot it
-//! presents. The source (`studiocraft-sources`) captures the windows, and the engine's
+//! The settings of a Staged windows source: the windows and displays staged in its slots and the
+//! slot it presents. The source (`studiocraft-sources`) captures them, and the engine's
 //! `present.*` commands change the presented slot.
 
 use crate::Settings;
@@ -7,17 +7,33 @@ use crate::Settings;
 /// The plug-in id of the Staged windows source.
 pub const KIND: &str = "staged_windows";
 
-/// How many windows one source stages.
+/// How many windows or displays one source stages.
 pub const SLOTS: usize = 6;
 
-/// The setting key of each slot, in order. A slot holds a window key, or `""` when it is empty.
+/// The setting key of each slot, in order. A slot holds a window key, a display key
+/// ([`display_key`]), or `""` when it is empty.
 pub const SLOT_KEYS: [&str; SLOTS] = ["window1", "window2", "window3", "window4", "window5", "window6"];
 
 /// The setting that holds the presented slot, 1 to [`SLOTS`].
 pub const PRESENTED: &str = "presented";
 
-/// The window staged in slot `n` (1 is the first), or `None` when the slot is empty or there is no
-/// such slot.
+/// The first character of a slot value that holds a display. The rest of the value is the
+/// display's id, in the form the Display capture source stores in its `display` setting. A value
+/// that does not start with it is a window key.
+pub const DISPLAY_MARK: char = '\u{1e}';
+
+/// The slot value that stages the display with `id`.
+pub fn display_key(id: &str) -> String {
+    format!("{DISPLAY_MARK}{id}")
+}
+
+/// The display id in the slot value `key`, or `None` when the value holds a window.
+pub fn display_id(key: &str) -> Option<&str> {
+    key.strip_prefix(DISPLAY_MARK)
+}
+
+/// The window or display staged in slot `n` (1 is the first), or `None` when the slot is empty or
+/// there is no such slot.
 pub fn staged(s: &Settings, n: usize) -> Option<&str> {
     let key = SLOT_KEYS.get(n.checked_sub(1)?)?;
     s.str(key).filter(|w| !w.is_empty())
@@ -28,9 +44,9 @@ pub fn presented(s: &Settings) -> usize {
     s.i64(PRESENTED).and_then(|n| usize::try_from(n).ok()).filter(|n| (1..=SLOTS).contains(n)).unwrap_or(1)
 }
 
-/// The next slot that holds a window after the presented one (`forward`), or before it,
-/// wrapping around. It is the presented slot itself when that is the only slot that holds a window,
-/// and `None` when every slot is empty.
+/// The next slot that holds a window or display after the presented one (`forward`), or before
+/// it, wrapping around. It is the presented slot itself when that is the only slot that is not
+/// empty, and `None` when every slot is empty.
 pub fn step(s: &Settings, forward: bool) -> Option<usize> {
     let from = presented(s);
     (1..=SLOTS)
@@ -58,6 +74,18 @@ mod tests {
         assert_eq!(staged(&s, 3), None);
         assert_eq!(staged(&s, 0), None);
         assert_eq!(staged(&s, SLOTS + 1), None);
+    }
+
+    #[test]
+    fn a_display_key_is_the_mark_and_the_display_id_and_a_window_key_is_not_one() {
+        assert_eq!(display_key("65537"), "\u{1e}65537");
+        assert_eq!(display_id(&display_key("65537")), Some("65537"));
+        for window in ["app.exe\u{1f}Window 1", "A title only", "\u{1f}Untitled program", ""] {
+            assert_eq!(display_id(window), None, "{window:?}");
+        }
+        let s = slots(&[], 1).with("window4", display_key("2"));
+        assert_eq!(staged(&s, 4), Some("\u{1e}2"));
+        assert_eq!(step(&s, true), Some(4), "a display counts as a filled slot");
     }
 
     #[test]

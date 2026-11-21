@@ -150,8 +150,9 @@ description in [docs/features.md](docs/features.md).
     settings, filters and audio in place, and every change applies at once and can be undone. A
     dock layout with the canvas in the middle, the sources on one side and the inspector on the
     other will be offered beside the current layout.
-16. **Staged windows (partly done).** A Staged windows source holds up to six windows, keeps them
-    capturing in the background, and swaps the presented one from its Properties, a hotkey or a
-    command, showing a color or the last picture while that window is closed or minimized
-    ([Staged windows](docs/features.md#staged-windows)). Staging displays, a dock of staged windows
-    with live thumbnails to click, and a transition on each swap are still to be built.
+16. **Staged windows (partly done).** A Staged windows source holds up to six windows or displays,
+    keeps them capturing in the background, and swaps the presented one from its Properties, a
+    hotkey or a command, showing a color or the last picture while that window is closed or
+    minimized or that display is disconnected ([Staged windows](docs/features.md#staged-windows)).
+    A dock of staged windows with live thumbnails to click, and a transition on each swap are still
+    to be built.
