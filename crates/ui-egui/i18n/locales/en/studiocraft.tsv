@@ -147,6 +147,7 @@
 	Gamma	Gamma
 	General	General
 	Go Live	Go Live
+	Go-Live Check	Go-Live Check
 	H.264	H.264
 	H.264 (built in)	H.264 (built in)
 	Height	Height
@@ -592,6 +593,7 @@ menu	Transform	Transform
 	TRACKS stopped	TRACKS stopped
 	Audio tracks stopped early; the status message gives the reason	Audio tracks stopped early; the status message gives the reason
 	Record as Its Own Track	Record as Its Own Track
+	Program Loudness	Program Loudness
 	Audio Tracks Status	Audio Tracks Status
 	Repair Audio Tracks	Repair Audio Tracks
 	Test Hardware Encoders Again	Test Hardware Encoders Again
@@ -766,6 +768,24 @@ menu	Transform	Transform
 	Mute the program audio while paused	Mute the program audio while paused
 	PAUSED	PAUSED
 	Paused for {time}	Paused for {time}
+	Pause	Pause
+	Resume	Resume
+	Resume, {time} left	Resume, {time} left
+	Resume, paused for {time}	Resume, paused for {time}
+	Pause options	Pause options
+	Pause for 1 Minute	Pause for 1 Minute
+	Pause for 2 Minutes	Pause for 2 Minutes
+	Pause for 5 Minutes	Pause for 5 Minutes
+	Pause for 10 Minutes	Pause for 10 Minutes
+	Pause for 15 Minutes	Pause for 15 Minutes
+	Pause Without a Countdown	Pause Without a Countdown
+	Pause Screen Settings…	Pause Screen Settings…
+	+1 min	+1 min
+	Paused. Viewers see the pause screen.	Paused. Viewers see the pause screen.
+	Paused. Viewers see the pause screen. Back in {time}.	Paused. Viewers see the pause screen. Back in {time}.
+	Paused. Viewers see the pause screen. The countdown ended.	Paused. Viewers see the pause screen. The countdown ended.
+	Paused for {time}. Viewers see the pause screen.	Paused for {time}. Viewers see the pause screen.
+	The program resumed	The program resumed
 @msg	The program is paused	The program is paused
 @msg	The program resumed	The program resumed
 @msg	The countdown ended	The countdown ended

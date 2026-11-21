@@ -35,6 +35,7 @@ pub const UI_COMMANDS: &[(&str, &str)] = &[
     ("view.fullscreen", "Full-Screen Interface"),
     ("view.lock_preview", "Lock Preview"),
     ("view.streaming", "Streaming"),
+    ("pause.settings", "Pause Screen Settings…"),
     ("stream.destinations", "List Stream Destinations"),
     ("stream.destination_add", "Add Stream Destination"),
     ("stream.destination_remove", "Remove Stream Destination"),
@@ -227,6 +228,13 @@ pub fn menu_bar(s: &MenuState) -> MenuBar {
             item("audio_tracks.marker", "Add Audio Tracks Marker"),
             item("audio_tracks.open_last", "Open Last Audio Tracks in Editor"),
             Node::Separator,
+            item("pause.start", "Pause Program"),
+            item("pause.stop", "Resume Program"),
+            Node::Item(Item::new(
+                CommandRef::with_params("pause.extend", json!({"seconds": 60})),
+                crate::i18n::command_label("pause.extend", "Add a Minute to the Pause"),
+            )),
+            Node::Separator,
             item("app.settings", "Settings"),
             item("file.show_settings_folder", "Show Settings Folder"),
             Node::Separator,
@@ -321,12 +329,6 @@ pub fn menu_bar(s: &MenuState) -> MenuBar {
     let tools = Menu::new(
         title("Tools"),
         vec![
-            Node::Item(Item::new(CommandRef::new("pause.toggle"), crate::i18n::command_label("pause.toggle", "Pause Program")).check(false)),
-            Node::Item(Item::new(
-                CommandRef::with_params("pause.extend", json!({"seconds": 60})),
-                crate::i18n::command_label("pause.extend", "Add a Minute to the Pause"),
-            )),
-            Node::Separator,
             Node::Item(Item::new(CommandRef::new("captions.toggle"), crate::i18n::command_label("captions.toggle", "Live Captions")).check(false)),
             item("captions.download", "Download Speech Model"),
             Node::Separator,

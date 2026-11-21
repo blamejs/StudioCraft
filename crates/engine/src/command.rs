@@ -6,7 +6,7 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use studiocraft_model::{FitMode, ItemId, PauseAtZero, SceneId, Settings, SourceId, Transform};
+use studiocraft_model::{FilterId, FitMode, ItemId, PauseAtZero, SceneId, Settings, SourceId, Transform};
 
 /// A scene by id or by name.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -62,10 +62,26 @@ pub enum Move {
     To(usize),
 }
 
+/// Most scenes `scene.thumbnails` draws at once, StudioCraft's own limit.
+pub const MAX_THUMBNAIL_SCENES: usize = 16;
+/// Fewest pictures a second `scene.thumbnails` draws of each scene (one every 10 seconds),
+/// StudioCraft's own limit.
+pub const MIN_THUMBNAIL_FPS: f32 = 0.1;
+/// Most pictures a second `scene.thumbnails` draws of each scene, StudioCraft's own limit.
+pub const MAX_THUMBNAIL_FPS: f32 = 4.0;
+/// Pictures a second `scene.thumbnails` draws of each scene when `fps` is left out.
+pub const DEFAULT_THUMBNAIL_FPS: f32 = 2.0;
+
 /// Something the engine cannot do itself: the app performs it.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RuntimeAction {
+    /// Draw small pictures of `scenes`, in this order, `fps` times a second each; none when the
+    /// list is empty.
+    SceneThumbnails {
+        scenes: Vec<SceneId>,
+        fps: f32,
+    },
     StartRecording,
     StopRecording,
     ToggleRecording,
@@ -78,10 +94,14 @@ pub enum RuntimeAction {
     StartStreaming,
     StopStreaming,
     ToggleStreaming,
+    /// List what would stop the stream from starting or spoil it.
+    GoLiveCheck,
     StartReplay,
     StopReplay,
     ToggleReplay,
     SaveReplay,
+    /// The program's loudness readings and the profile's loudness target.
+    AudioLoudness,
     /// The state of the audio tracks.
     AudioTracksStatus,
     /// Repair the audio tracks of takes in `folder` that ended without finishing their files.
@@ -118,6 +138,11 @@ pub enum RuntimeAction {
     MarkerList,
     /// Forget the hardware encoders' test results, so the next start tests them again.
     RetestHardwareEncoders,
+    /// The gain reduction of `filter`, a filter of `source`, as the mixer last measured it.
+    FilterMeter {
+        source: SourceId,
+        filter: FilterId,
+    },
     /// Show the pause screen on the program, with the profile's settings and, for this pause only,
     /// each given value in place of its setting. While paused, apply the given values.
     PauseStart {
@@ -171,6 +196,17 @@ pub enum Command {
     /// Show the scene at a position in the Scenes list (1 is the first), as `scene.select`.
     #[serde(rename = "scene.select_index")]
     SceneSelectIndex { index: usize },
+    /// Draw a small picture of each of `scenes`, in this order, `fps` times a second, for a scene
+    /// list; an empty list stops drawing them. Each call replaces the last one's list.
+    #[serde(rename = "scene.thumbnails")]
+    SceneThumbnails {
+        /// More than [`MAX_THUMBNAIL_SCENES`] is an error while reading, before a longer list is
+        /// held.
+        #[serde(deserialize_with = "thumbnail_scenes")]
+        scenes: Vec<SceneRef>,
+        #[serde(default, deserialize_with = "given_f32", skip_serializing_if = "Option::is_none")]
+        fps: Option<f32>,
+    },
 
     #[serde(rename = "source.add")]
     SourceAdd {
@@ -303,6 +339,9 @@ pub enum Command {
     FilterSettings { source: SourceRef, filter: u64, settings: Settings },
     #[serde(rename = "filter.enable")]
     FilterEnable { source: SourceRef, filter: u64, enabled: bool },
+    /// The gain reduction of a running compressor, limiter or noise gate.
+    #[serde(rename = "filter.meter")]
+    FilterMeter { source: SourceRef, filter: u64 },
 
     #[serde(rename = "transition.set")]
     TransitionSet { kind: String },
@@ -352,6 +391,10 @@ pub enum Command {
     StreamStop {},
     #[serde(rename = "stream.toggle")]
     StreamToggle {},
+    /// What would stop the stream from starting or spoil it: each item with its state and the
+    /// command that fixes a problem.
+    #[serde(rename = "golive.check")]
+    GoLiveCheck {},
     #[serde(rename = "replay.start")]
     ReplayStart {},
     #[serde(rename = "replay.stop")]
@@ -360,6 +403,10 @@ pub enum Command {
     ReplayToggle {},
     #[serde(rename = "replay.save")]
     ReplaySave {},
+    /// The final mix's loudness (momentary, short-term, integrated, range and true peak) and the
+    /// profile's loudness target.
+    #[serde(rename = "audio.loudness")]
+    AudioLoudness {},
     #[serde(rename = "audio_tracks.status")]
     AudioTracksStatus {},
     /// Repair the audio tracks of takes that ended without finishing their files: `folder` is a
@@ -496,6 +543,33 @@ fn given_u32<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<u32>, D::E
     u32::deserialize(d).map(Some)
 }
 
+/// A parameter that may be left out but, when given, is a number: `null` is refused.
+fn given_f32<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<f32>, D::Error> {
+    f32::deserialize(d).map(Some)
+}
+
+/// `scene.thumbnails`' list of scenes, refused once it passes [`MAX_THUMBNAIL_SCENES`] entries.
+fn thumbnail_scenes<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<SceneRef>, D::Error> {
+    struct Scenes;
+    impl<'de> serde::de::Visitor<'de> for Scenes {
+        type Value = Vec<SceneRef>;
+        fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+            write!(f, "a list of at most {MAX_THUMBNAIL_SCENES} scene ids or names")
+        }
+        fn visit_seq<A: serde::de::SeqAccess<'de>>(self, mut seq: A) -> Result<Self::Value, A::Error> {
+            let mut scenes = Vec::with_capacity(seq.size_hint().unwrap_or(0).min(MAX_THUMBNAIL_SCENES));
+            while let Some(scene) = seq.next_element()? {
+                if scenes.len() == MAX_THUMBNAIL_SCENES {
+                    return Err(serde::de::Error::custom(format_args!("more than {MAX_THUMBNAIL_SCENES} scenes are given")));
+                }
+                scenes.push(scene);
+            }
+            Ok(scenes)
+        }
+    }
+    d.deserialize_seq(Scenes)
+}
+
 /// A parameter that may be left out but, when given, is a whole number: `null` is refused.
 fn given_u64<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<u64>, D::Error> {
     u64::deserialize(d).map(Some)
@@ -529,6 +603,7 @@ impl Command {
             Command::SceneMove { .. } => "scene.move",
             Command::SceneSelect { .. } => "scene.select",
             Command::SceneSelectIndex { .. } => "scene.select_index",
+            Command::SceneThumbnails { .. } => "scene.thumbnails",
             Command::SourceAdd { .. } => "source.add",
             Command::SourceAddExisting { .. } => "source.add_existing",
             Command::SourceRename { .. } => "source.rename",
@@ -552,6 +627,7 @@ impl Command {
             Command::FilterRemove { .. } => "filter.remove",
             Command::FilterSettings { .. } => "filter.settings",
             Command::FilterEnable { .. } => "filter.enable",
+            Command::FilterMeter { .. } => "filter.meter",
             Command::TransitionSet { .. } => "transition.set",
             Command::TransitionDuration { .. } => "transition.duration",
             Command::TransitionSettings { .. } => "transition.settings",
@@ -567,10 +643,12 @@ impl Command {
             Command::StreamStart {} => "stream.start",
             Command::StreamStop {} => "stream.stop",
             Command::StreamToggle {} => "stream.toggle",
+            Command::GoLiveCheck {} => "golive.check",
             Command::ReplayStart {} => "replay.start",
             Command::ReplayStop {} => "replay.stop",
             Command::ReplayToggle {} => "replay.toggle",
             Command::ReplaySave {} => "replay.save",
+            Command::AudioLoudness {} => "audio.loudness",
             Command::AudioTracksStatus {} => "audio_tracks.status",
             Command::AudioTracksRepair { .. } => "audio_tracks.repair",
             Command::CaptionsStart { .. } => "captions.start",
@@ -644,6 +722,12 @@ const SPECS: &[CommandSpec] = &[
     spec("scene.move", "Move Scene", "scene: id or name, to: up|down|top|bottom|{to: index}", Undo::Undoable),
     spec("scene.select", "Show Scene", "scene: id or name", Undo::NotUndoable),
     spec("scene.select_index", "Show Scene by Position", "index: 1-based position in the Scenes list", Undo::NotUndoable),
+    spec(
+        "scene.thumbnails",
+        "Draw Scene Pictures",
+        "scenes: up to 16 scene ids or names, [] to stop, fps?: 0.1 to 4 pictures a second (2 by default)",
+        Undo::NotUndoable,
+    ),
     spec("source.add", "Add Source", "kind: plug-in id, scene?, name?, settings?, transform?", Undo::Undoable),
     spec("source.add_existing", "Add Existing Source", "source: id or name, scene?", Undo::Undoable),
     spec("source.rename", "Rename Source", "source: id or name, name: string", Undo::Undoable),
@@ -677,6 +761,7 @@ const SPECS: &[CommandSpec] = &[
     spec("filter.remove", "Remove Filter", "source, filter: id", Undo::Undoable),
     spec("filter.settings", "Filter Properties", "source, filter: id, settings: object", Undo::Undoable),
     spec("filter.enable", "Enable Filter", "source, filter: id, enabled: bool", Undo::Undoable),
+    spec("filter.meter", "Filter Gain Reduction", "source, filter: id", Undo::NotUndoable),
     spec("transition.set", "Set Transition", "kind: plug-in id", Undo::Undoable),
     spec("transition.duration", "Set Transition Duration", "ms: milliseconds", Undo::Undoable),
     spec("transition.settings", "Transition Properties", "settings: object", Undo::Undoable),
@@ -692,10 +777,12 @@ const SPECS: &[CommandSpec] = &[
     spec("stream.start", "Start Streaming", "", Undo::NotUndoable),
     spec("stream.stop", "Stop Streaming", "", Undo::NotUndoable),
     spec("stream.toggle", "Start or Stop Streaming", "", Undo::NotUndoable),
+    spec("golive.check", "Go-Live Check", "", Undo::NotUndoable),
     spec("replay.start", "Start Replay Buffer", "", Undo::NotUndoable),
     spec("replay.stop", "Stop Replay Buffer", "", Undo::NotUndoable),
     spec("replay.toggle", "Start or Stop Replay Buffer", "", Undo::NotUndoable),
     spec("replay.save", "Save Replay", "", Undo::NotUndoable),
+    spec("audio.loudness", "Program Loudness", "", Undo::NotUndoable),
     spec("audio_tracks.status", "Audio Tracks Status", "", Undo::NotUndoable),
     spec("audio_tracks.repair", "Repair Audio Tracks", "folder: path to a take's folder or the recording folder", Undo::NotUndoable),
     spec("captions.start", "Start Live Captions", "model?: speech model id, language?: ISO 639-1 code or auto", Undo::NotUndoable),
@@ -746,9 +833,13 @@ mod tests {
         let samples = vec![
             Command::SceneAdd { name: None },
             Command::SceneSelect { scene: SceneRef::Name("Main".into()) },
+            Command::SceneThumbnails { scenes: vec![SceneRef::Id(SceneId(2)), SceneRef::Name("Main".into())], fps: None },
+            Command::SceneThumbnails { scenes: vec![], fps: Some(4.0) },
             Command::ItemMove { scene: None, item: ItemRef::Id(ItemId(3)), to: Move::To(2) },
+            Command::FilterMeter { source: SourceRef::Name("Mic".into()), filter: 7 },
             Command::StudioToggle {},
             Command::RecordToggle {},
+            Command::GoLiveCheck {},
             Command::RecordingsList {},
             Command::Exit {},
             Command::AppLinks { link: Some("github".into()) },
@@ -764,6 +855,7 @@ mod tests {
             Command::CaptionsStop {},
             Command::CaptionsToggle {},
             Command::CaptionsStatus {},
+            Command::AudioLoudness {},
             Command::CaptionsDownload { model: Some("whisper-base".into()) },
             Command::CaptionsDownloadCancel {},
             Command::AppAudioLanes {},
@@ -816,5 +908,16 @@ mod tests {
         assert!(Command::from_parts("no.such", &json!({})).unwrap_err().contains("unknown command"));
         assert!(Command::from_parts("scene.rename", &json!({"scene": 1})).unwrap_err().contains("scene.rename"));
         assert!(Command::from_parts("scene.add", &json!([1, 2])).is_err());
+    }
+
+    #[test]
+    fn a_long_scene_list_is_refused_while_it_is_read() {
+        let sixteen: Vec<u64> = (1..=16).collect();
+        let c = Command::from_parts("scene.thumbnails", &json!({"scenes": sixteen})).unwrap();
+        assert!(matches!(c, Command::SceneThumbnails { ref scenes, .. } if scenes.len() == 16));
+        let huge: Vec<u64> = (1..=100_000).collect();
+        let e = Command::from_parts("scene.thumbnails", &json!({"scenes": huge})).unwrap_err();
+        assert!(e.contains("more than 16 scenes are given"), "{e}");
+        assert!(Command::from_parts("scene.thumbnails", &json!({"scenes": "Main"})).is_err());
     }
 }

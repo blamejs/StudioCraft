@@ -84,9 +84,9 @@ The message is in English. The window's status bar shows it as well, in the inte
 when the language's catalog has the message.
 [Commands with their own parameters](#commands-with-their-own-parameters) describes `app.info`,
 `app.links`, `app.check_updates`, `plugin.list`, `source.schema`, `source.sync_offset`,
-`source.monitor`, `source.set_record_track`, the `present.*` commands, `audio_tracks.status`, `audio_tracks.repair`,
+`source.monitor`, `audio.loudness`, `source.set_record_track`, the `present.*` commands, `audio_tracks.status`, `audio_tracks.repair`,
 `audio_tracks.open_last`, `audio_tracks.marker`, `record.marker`, `marker.add`, `marker.list`, `recordings.list`, the `captions.*` commands, the
-`dock.layout_*` commands, `video.displays`, `video.canvas_from_display` and `canvas.relayout`.
+`dock.layout_*` commands, `golive.check`, `video.displays`, `video.canvas_from_display` and `canvas.relayout`.
 
 Each entry of `engine.commands` has these fields:
 
@@ -300,6 +300,29 @@ studiocraft-cli send 9876 engine.execute '{"command": "app_audio.list"}'
 studiocraft-cli send 9876 engine.execute '{"command": "app_audio.route", "params": {"app": "player.exe|c:\\apps\\player.exe", "routed": true}}'
 ```
 
+### `scene.thumbnails`
+
+`scene.thumbnails` takes `{"scenes", "fps"?}` and has the compositor draw a small picture of each
+scene in `scenes`, for a scene list. `scenes` is a list of scene ids or names, at most 16, and the
+picture of the scene at position `i` goes into slot `i` of the thumbnail textures. `fps` is how many
+times a second each picture is redrawn: from 0.1 (once every 10 seconds) to 4, and 2 when it is
+left out. These
+limits and the default are StudioCraft's own. Each call replaces the last call's list, and
+`{"scenes": []}` stops drawing the pictures. A scene that is removed from the collection leaves the
+list, and the pictures stop when no scene is left. When the list changes, a slot whose scene
+changed keeps its last picture until the compositor draws the new scene into it. The compositor
+draws two such slots a frame, before any other slot, so 16 changed slots take 8 frames.
+
+It returns `{"scenes", "fps"}` with the list and rate now drawn, or `{"scenes": [], "fps": null}`
+when none is drawn. More than 16 scenes, a scene that does not exist, a scene given twice, and an
+`fps` outside that range are errors, and the last list stays drawn. The command changes nothing in
+the scene collection and adds no undo step. Without a graphics device the list is kept and nothing
+is drawn.
+
+```sh
+studiocraft-cli send 9876 engine.execute '{"command": "scene.thumbnails", "params": {"scenes": ["Talk", "Break"]}}'
+```
+
 ### `source.sync_offset` and `source.monitor`
 
 `source.sync_offset` takes `{"source", "ms"}` and delays the source's audio by `ms` milliseconds, a
@@ -310,6 +333,32 @@ whole number from 0 to 5000; a source without audio is an error.
 plays the source on the monitoring device and leaves it out of recordings and streams.
 `document.inspect` reports `monitoring` with the profile's `device`, whether it is `playing`, and
 the device's `rate` and `channels` while it plays.
+
+### `filter.meter`
+
+`filter.meter` takes `{"source", "filter"}`, where `source` is a source's id or name and `filter`
+is the id of one of its filters, and returns `{"gain_reduction_db"}`: how far the filter turned the
+source's audio down in the last block the mixer processed, in dB, 0 or more, rounded to 0.01 dB.
+The compressor, the limiter and the noise gate have a reading; the noise gate's stops at 60 dB,
+the range of StudioCraft's audio meters. The reading is 0 until the mixer has processed a block
+with the filter's current settings. It is `null` for a filter without a reading (gain, the
+equalizer and the video filters) and for a filter the mixer does not run: a disabled filter, a
+filter whose settings were refused, and a filter of a source that is not running. An unknown
+source, and a filter id that is not one of the source's filters, are errors. The command does not
+change the scene collection or add an undo step.
+
+### `audio.loudness`
+
+`audio.loudness` takes no parameters and returns the final mix's loudness as the mixer measures it
+(ITU-R BS.1770-4, EBU R 128) since the mixer started: `momentary_lufs` (the last 400 ms),
+`short_term_lufs` (the last 3 s), `integrated_lufs`, `range_lu` and `true_peak_dbtp`. A reading is
+`null` while it is minus infinity: for silence, before 400 ms or 3 s of program have played, and
+for the integrated value until a block passes the gates. `range_lu` is 0 with too little signal.
+`generation` counts the mixer's published readings; a reply with the same `generation` as an
+earlier one holds the same readings. `target` is the profile's loudness band, `{"low_lufs",
+"high_lufs"}`. Its default, −18 to −14 LUFS, is StudioCraft's own value. A profile file whose band
+has a bound outside −60 to 0 LUFS, or a low bound that is not below the high bound, is refused, and
+such a profile is not saved.
 
 ### `source.set_record_track`, `audio_tracks.status` and `audio_tracks.repair`
 
@@ -533,6 +582,34 @@ error.
 
 `dock.layout_apply` and `dock.layout_remove` take `{"name"}`, compared without regard to case, and
 return `{"applied"}` or `{"removed"}`; a name no layout has is an error.
+
+### `golive.check`
+
+`golive.check` takes no params and lists what would stop the stream from starting or spoil it. It
+returns `{"ready", "problems", "unknown", "more_sources", "items"}`. `ready` is `true` only when
+every item is `pass`; `problems` and `unknown` count the items in those states. Each item is
+`{"id", "state", "text", "template", "args", "fix"}`. `state` is `pass`, `problem` or `unknown`.
+`text` is an English sentence; `template` is the same sentence with `{name}` placeholders and
+`args` holds their values, so the window can show it in the interface language. `fix` is the id
+of the command that fixes a problem, and `null` for an item that passes or is unknown and for a
+problem no command fixes.
+
+The items come in this order:
+
+| `id` | What it checks | `fix` |
+| --- | --- | --- |
+| `destination:<id>` | One item for each destination that is on, with `destination`, its id. A destination with no server, with no key (the profile's key is empty and the server's address does not end with the stream's name, or its session key is not held), or whose server and key give an address a start refuses, is a problem. While a stream of this profile runs, a `live` destination passes, a `connecting` one, one added after the stream started, and one whose server or key changed after the stream started are unknown, and a `retrying`, `failed` or `stopped` one is a problem. While no stream runs, a destination passes only when it was live on an earlier stream of this session with the same server and key, and is a problem when it was retrying or had failed when last seen; one that has not connected yet is unknown, never `pass`. | `view.streaming` |
+| `destinations` | In place of the destination items: no destination is on, or the list cannot be used (too many, an empty id, an id used twice). Always a problem. | `view.streaming` |
+| `encoder` | The stream's video encoder. An encoder that is not installed, does not write H.264 or cannot run in a stream is a problem; the `hardware` choice is unknown; its tests run when the stream starts. Without the graphics device this item is a problem with no `fix`. | `app.settings` |
+| `recording_space` | The free space in the recording folder, or in the nearest folder above it that exists, with `free_bytes`. Less than 10 GB, a limit StudioCraft chose, is a problem, and so is a folder whose free space cannot be read or a file in its place. A folder that has not answered within 250 ms is unknown until a later check reads it; at most four folders are read at once. | `app.settings` |
+| `source:<id>` | Each source that is not working, with `source`, its id, and the error it reports, for example for a window that was closed or a camera that was unplugged. A source that did not start is a problem too. A source whose plug-in is not installed is a problem with no `fix`. At most 32 sources are listed; `more_sources` counts the others. | `selection.properties` |
+| `sources` | In place of the source items when every source is working. Always `pass`. | |
+| `captions` | Live captions. Running passes and starting is unknown. Off, stopping or failed is a problem when the scene collection has a Live Captions source, and passes when it has none. A Live Captions source in a build without speech recognition is a problem with no `fix`. | `captions.toggle` |
+
+`view.streaming`, `app.settings` and `selection.properties` are window commands; run
+`selection.properties` after selecting an item that shows the source. Error texts in a sentence are cut to 300
+characters. The check changes nothing: it does not save the profile, change the scene collection
+or add an undo step. A parameter is an error.
 
 ### `view.streaming` and the `stream.destination` commands
 
