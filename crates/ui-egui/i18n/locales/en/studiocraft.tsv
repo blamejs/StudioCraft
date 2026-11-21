@@ -480,8 +480,9 @@
 	Show a color	Show a color
 	Keep the last picture	Keep the last picture
 	Placeholder color	Placeholder color
-	no window is staged in the presented slot	no window is staged in the presented slot
+	nothing is staged in the presented slot	nothing is staged in the presented slot
 	waiting for the window	waiting for the window
+	the display is not connected	the display is not connected
 	Present Staged Window	Present Staged Window
 	Present Next Staged Window	Present Next Staged Window
 	Present Previous Staged Window	Present Previous Staged Window

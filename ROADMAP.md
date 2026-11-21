@@ -9,7 +9,7 @@ description in [docs/features.md](docs/features.md).
 
 - Scenes, sources and scene items can be moved, resized, rotated, locked, hidden and undone ([Sources](docs/features.md#sources)).
 - Color, image, text, media file, display capture, window capture, camera, audio input and audio output sources are built in ([Built-in sources](docs/features.md#built-in-sources)).
-- A Staged windows source keeps up to six windows capturing and presents one, swapped by `present.window`, `present.next`, `present.previous` or their hotkeys, with a placeholder while the presented window is closed or minimized, on Windows and macOS ([Staged windows](docs/features.md#staged-windows)).
+- A Staged windows source keeps up to six windows or displays capturing and presents one, swapped by `present.window`, `present.next`, `present.previous` or their hotkeys, with a placeholder while the presented window is closed or minimized or the presented display is disconnected, on Windows and macOS ([Staged windows](docs/features.md#staged-windows)).
 - The media file source plays Ogg Vorbis files at 8 to 192 kHz without ffmpeg, through `craft-audio`'s Vorbis decoder, and mixes files with more than two channels down to stereo ([When `ffmpeg` is needed](docs/features.md#when-ffmpeg-is-needed)).
 - Cameras are captured on Windows (Media Foundation), macOS (AVFoundation) and Linux (V4L2), with the camera and its format chosen in the source's Properties ([Camera](docs/features.md#camera)).
 - Audio input and output are captured on Linux through the PipeWire sound server, which lists its devices with the default first ([Audio capture on Linux](docs/features.md#audio-capture-on-linux)).
@@ -151,8 +151,9 @@ description in [docs/features.md](docs/features.md).
     settings, filters and audio in place, and every change applies at once and can be undone. A
     dock layout with the canvas in the middle, the sources on one side and the inspector on the
     other will be offered beside the current layout.
-16. **Staged windows (partly done).** A Staged windows source holds up to six windows, keeps them
-    capturing in the background, and swaps the presented one from its Properties, a hotkey or a
-    command, showing a color or the last picture while that window is closed or minimized
-    ([Staged windows](docs/features.md#staged-windows)). Staging displays, a dock of staged windows
-    with live thumbnails to click, and a transition on each swap are still to be built.
+16. **Staged windows (partly done).** A Staged windows source holds up to six windows or displays,
+    keeps them capturing in the background, and swaps the presented one from its Properties, a
+    hotkey or a command, showing a color or the last picture while that window is closed or
+    minimized or that display is disconnected ([Staged windows](docs/features.md#staged-windows)).
+    A dock of staged windows with live thumbnails to click, and a transition on each swap are still
+    to be built.

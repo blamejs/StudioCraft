@@ -461,7 +461,7 @@ impl Engine {
                 // What is on the program and in the preview is not part of undo.
                 c.program_scene = if c.scene(self.collection.program_scene).is_some() { self.collection.program_scene } else { c.program_scene };
                 c.preview_scene = self.collection.preview_scene.filter(|p| c.scene(*p).is_some()).or(c.preview_scene);
-                // Neither is the window each Staged windows source presents.
+                // Neither is the slot each Staged windows source presents.
                 for s in c.sources.iter_mut().filter(|s| s.kind == staged::KIND) {
                     if let Some(n) =
                         self.collection.source(s.id).filter(|now| now.kind == staged::KIND).and_then(|now| now.settings.get(staged::PRESENTED))
@@ -579,8 +579,8 @@ impl Engine {
         }
         if !found {
             return Err(EngineError::Invalid(match how {
-                Present::Slot(n) => format!("no window is staged in slot {n}"),
-                Present::Next | Present::Previous => "no window is staged".into(),
+                Present::Slot(n) => format!("nothing is staged in slot {n}"),
+                Present::Next | Present::Previous => "nothing is staged".into(),
             }));
         }
         Ok((json!({"presented": presented}), None))
@@ -1144,7 +1144,7 @@ fn item_name(c: &SceneCollection, scene: SceneId, item: ItemId) -> String {
     c.scene(scene).and_then(|s| s.item(item)).and_then(|i| c.source(i.source)).map_or_else(|| item.to_string(), |s| s.name.clone())
 }
 
-/// Whether `a` and `b` differ only in the window their Staged windows sources present.
+/// Whether `a` and `b` differ only in the slot their Staged windows sources present.
 fn only_presented_differs(a: &SceneCollection, b: &SceneCollection) -> bool {
     if !b.sources.iter().any(|s| s.kind == staged::KIND) {
         return false;

@@ -1,22 +1,74 @@
-//! The Staged windows source: up to six windows captured at once, one of them presented.
+//! The Staged windows source: up to six windows or displays captured at once, one of them
+//! presented.
 //!
-//! Every staged window keeps its capture open. The presented window is captured at the source's
-//! rate, and each of the others once a second, so a swap shows the new window at once. While the
-//! presented window cannot be captured (it closed, is minimized, or its slot is empty), the source
-//! shows a color or keeps the last picture instead of anything behind the window.
+//! Every staged window or display keeps its capture open. The presented one is captured at the
+//! source's rate, and each of the others once a second, so a swap shows the new one at once. While
+//! the presented window or display cannot be captured (a window closed or is minimized, a display
+//! is disconnected, or the slot is empty), the source shows a color or keeps the last picture
+//! instead of anything behind it.
 
 use std::time::{Duration, Instant};
 
 use studiocraft_media::video::VideoFrame;
 use studiocraft_model::staged::{self, PRESENTED, SLOT_KEYS, SLOTS};
 use studiocraft_model::{ChoiceOption, Field, FieldKind, Settings, SettingsSchema};
+use studiocraft_platform::PlatformError;
+use studiocraft_platform::display::{self, DisplayCapture, DisplayInfo};
 use studiocraft_platform::window::{self, WindowCapture as Window, WindowInfo};
 use studiocraft_plugin::{Pace, Plugin, PluginError, Source, SourceCaps, SourceInstance, SourceIo, VideoContent};
 
-use crate::capture::{Grab, Grabbed, REOPEN, period, rate_field};
+use crate::capture::{Grab, Grabbed, REOPEN, display_label, period, rate_field};
 
-/// How often a staged window that is not presented is captured.
+/// How often a staged window or display that is not presented is captured.
 const WARM: Duration = Duration::from_secs(1);
+
+/// Why a staged display cannot be opened.
+const NOT_CONNECTED: &str = "the display is not connected";
+
+/// What a slot captures: the window or the display its value names
+/// ([`staged::display_id`]).
+pub(crate) enum Target<W, D> {
+    Window(W),
+    Display(D),
+}
+
+impl<W: Grab, D: Grab> Grab for Target<W, D> {
+    fn open(target: &str) -> Result<Self, PluginError> {
+        match staged::display_id(target) {
+            Some(id) => D::open(id).map(Target::Display),
+            None => W::open(target).map(Target::Window),
+        }
+    }
+    fn grab(&mut self, frame: &mut VideoFrame) -> Grabbed {
+        match self {
+            Target::Window(w) => w.grab(frame),
+            Target::Display(d) => d.grab(frame),
+        }
+    }
+}
+
+/// A staged display. It opens only the display with that id while the display is connected; the
+/// Display capture source opens the primary display when its display is missing.
+pub(crate) struct Screen(DisplayCapture);
+
+impl Grab for Screen {
+    fn open(id: &str) -> Result<Self, PluginError> {
+        match DisplayCapture::open_exact(id) {
+            Ok(cap) => Ok(Screen(cap)),
+            Err(PlatformError::NotFound(_)) => Err(PluginError::Unavailable(NOT_CONNECTED.into())),
+            Err(e) => Err(PluginError::Unavailable(e.to_string())),
+        }
+    }
+    fn grab(&mut self, frame: &mut VideoFrame) -> Grabbed {
+        self.0.grab(frame).into()
+    }
+}
+
+/// Whether a display key names a display that can exist: its id is the decimal number the system
+/// gives a display. Any window key can name a window.
+fn possible(key: &str) -> bool {
+    staged::display_id(key).is_none_or(|id| !id.is_empty() && id.bytes().all(|b| b.is_ascii_digit()))
+}
 
 /// The size of the placeholder color before any picture was shown.
 const PLACEHOLDER_SIZE: (u32, u32) = (1920, 1080);
@@ -24,7 +76,7 @@ const PLACEHOLDER_SIZE: (u32, u32) = (1920, 1080);
 /// The label of each slot's setting.
 const SLOT_LABELS: [&str; SLOTS] = ["Window 1", "Window 2", "Window 3", "Window 4", "Window 5", "Window 6"];
 
-/// What the source shows while the presented window cannot be captured.
+/// What the source shows while the presented window or display cannot be captured.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Placeholder {
     /// The last picture stays on screen.
@@ -40,16 +92,16 @@ fn placeholder(s: &Settings) -> Placeholder {
     }
 }
 
-/// One slot: its window and that window's capture.
+/// One slot: its window or display and that capture.
 struct Slot<G> {
     target: String,
     cap: Option<G>,
     retry_at: Instant,
-    /// The window's newest picture: copied at every frame while it is presented, captured once a
+    /// The newest picture: copied at every frame while the slot is presented, captured once a
     /// second while it is not.
     picture: VideoFrame,
     has_picture: bool,
-    /// When the window is next captured while it is not presented.
+    /// When the slot is next captured while it is not presented.
     warm_at: Instant,
     /// Why the person ended the capture; it is not opened again until the settings change.
     stopped: Option<PluginError>,
@@ -116,7 +168,7 @@ impl<G: Grab> Slot<G> {
         self.stopped = Some(e);
     }
 
-    /// Capture the window into the slot's own picture.
+    /// Capture the window or display into the slot's own picture.
     fn warm(&mut self, now: Instant) {
         self.warm_at = now + WARM;
         if self.ensure_open(now, false).is_err() {
@@ -126,19 +178,19 @@ impl<G: Grab> Slot<G> {
         match cap.grab(&mut self.picture) {
             Grabbed::Picture => self.has_picture = true,
             Grabbed::Unchanged | Grabbed::Waiting => {}
-            // The last picture stays, for a swap to the window while it is closed.
+            // The last picture stays, for a swap to the slot while it cannot be captured.
             Grabbed::Lost(e) => self.lose(now, e),
             Grabbed::Stopped(e) => self.stop(e),
         }
     }
 }
 
-/// What showing the presented window gave.
+/// What showing the presented slot gave.
 enum Shown {
     Picture,
     /// Nothing new to show; the last picture stays.
     Kept,
-    /// The window cannot be captured now; the placeholder goes up.
+    /// The window or display cannot be captured now; the placeholder goes up.
     Placeholder(PluginError),
     Waiting,
 }
@@ -154,7 +206,7 @@ pub(crate) struct Staged<G: Grab> {
     showing_placeholder: bool,
     /// The size of the last picture shown, which a placeholder color takes.
     size: (u32, u32),
-    /// Whether the next frame is the first or follows a swap, so it never shows the window shown before.
+    /// Whether the next frame is the first or follows a swap, so it never shows the slot shown before.
     fresh: bool,
 }
 
@@ -171,9 +223,9 @@ impl<G: Grab> Staged<G> {
         }
     }
 
-    /// Show the presented window. `swap` is set when the presented window just changed: then a
-    /// window that cannot be captured shows its own last picture or nothing, never the picture of
-    /// the window shown before.
+    /// Show the presented slot. `swap` is set when the presented slot just changed: then a window
+    /// or display that cannot be captured shows its own last picture or nothing, never the picture
+    /// of the slot shown before.
     fn show(&mut self, io: &SourceIo, now: Instant, swap: bool) -> Result<(), PluginError> {
         let shown = match self.slots.get_mut(self.presented.saturating_sub(1)) {
             Some(slot) if !slot.target.is_empty() => match slot.ensure_open(now, swap) {
@@ -209,7 +261,7 @@ impl<G: Grab> Staged<G> {
                     }
                 },
             },
-            _ => Shown::Placeholder(PluginError::Unavailable("no window is staged in the presented slot".into())),
+            _ => Shown::Placeholder(PluginError::Unavailable("nothing is staged in the presented slot".into())),
         };
         match shown {
             Shown::Picture => {
@@ -261,7 +313,7 @@ impl<G: Grab> Staged<G> {
                     io.video.publish(VideoContent::Solid { rgba, width, height });
                 }
             }
-            // While the window is presented, its last picture stays; after a swap, only its own.
+            // While the slot is presented, its last picture stays; after a swap, only its own.
             Placeholder::Hold => {
                 if swap {
                     self.show_cached(io);
@@ -271,7 +323,7 @@ impl<G: Grab> Staged<G> {
         self.showing_placeholder = true;
     }
 
-    /// Capture every staged window that is not presented and is due.
+    /// Capture every staged window or display that is not presented and is due.
     fn warm_due(&mut self, now: Instant) {
         let presented = self.presented.saturating_sub(1);
         for (i, slot) in self.slots.iter_mut().enumerate() {
@@ -343,17 +395,25 @@ impl Plugin for StagedWindows {
     fn schema(&self) -> SettingsSchema {
         self.schema_for(&Settings::new())
     }
-    /// The open windows, and each staged window that is not open now, so its slot keeps it.
+    /// The open windows, the connected displays, and each staged window or display that is not
+    /// open or connected now, so its slot keeps it. A display key whose id is not a number is not
+    /// offered, so it is an error to supply one.
     fn schema_for(&self, settings: &Settings) -> SettingsSchema {
         let listed = window::windows();
+        let screens = display::displays();
         let mut fields: Vec<Field> = SLOT_KEYS
             .iter()
             .zip(SLOT_LABELS)
             .map(|(key, label)| {
                 let mut options = vec![ChoiceOption::new("", "None")];
                 options.extend(listed.iter().map(|w| ChoiceOption::new(w.key(), w.label())));
-                if let Some(saved) = settings.str(key).filter(|k| !k.is_empty() && !options.iter().any(|o| o.value == *k)) {
-                    options.push(ChoiceOption::new(saved, WindowInfo::parse_key(saved).label()));
+                options.extend(screens.iter().map(|d| ChoiceOption::new(staged::display_key(&d.id), display_label(d))));
+                if let Some(saved) = settings.str(key).filter(|k| !k.is_empty() && possible(k) && !options.iter().any(|o| o.value == *k)) {
+                    let label = match staged::display_id(saved) {
+                        Some(id) => id.to_string(),
+                        None => WindowInfo::parse_key(saved).label(),
+                    };
+                    options.push(ChoiceOption::new(saved, label));
                 }
                 Field::new(key, label, FieldKind::Choice { options }, "")
             })
@@ -365,6 +425,20 @@ impl Plugin for StagedWindows {
         fields.push(rate_field());
         SettingsSchema::new(fields)
     }
+    /// Changes when a display is connected or disconnected.
+    fn lists_stamp(&self) -> Option<u64> {
+        Some(stamp(&display::displays()))
+    }
+}
+
+/// A value for a list of displays that changes when the list does.
+fn stamp(list: &[DisplayInfo]) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    for d in list {
+        (&d.id, &d.name, d.width, d.height).hash(&mut h);
+    }
+    h.finish()
 }
 
 impl Source for StagedWindows {
@@ -372,7 +446,7 @@ impl Source for StagedWindows {
         SourceCaps { video: true, audio: false }
     }
     fn create(&self, settings: &Settings, _io: &SourceIo) -> Result<Box<dyn SourceInstance>, PluginError> {
-        Ok(Box::new(Staged::<Window>::new(settings, Instant::now())))
+        Ok(Box::new(Staged::<Target<Window, Screen>>::new(settings, Instant::now())))
     }
 }
 

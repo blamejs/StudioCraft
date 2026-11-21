@@ -248,21 +248,22 @@ pub enum Command {
     /// Whether audio tracks record the source to a file of its own.
     #[serde(rename = "source.set_record_track")]
     SourceSetRecordTrack { source: SourceRef, on: bool },
-    /// Present the window staged in slot `index` (1 is the first) of a Staged windows source, or
-    /// of every one that has a window in that slot when `source` is absent.
+    /// Present the window or display staged in slot `index` (1 is the first) of a Staged windows
+    /// source, or of every one whose slot is not empty when `source` is absent.
     #[serde(rename = "present.window")]
     PresentWindow {
         #[serde(default)]
         source: Option<SourceRef>,
         index: usize,
     },
-    /// Present the next staged window, wrapping around, on one Staged windows source or on all.
+    /// Present the next staged window or display, wrapping around, on one Staged windows source or
+    /// on all.
     #[serde(rename = "present.next")]
     PresentNext {
         #[serde(default)]
         source: Option<SourceRef>,
     },
-    /// Present the staged window before the presented one, wrapping around.
+    /// Present the staged window or display before the presented one, wrapping around.
     #[serde(rename = "present.previous")]
     PresentPrevious {
         #[serde(default)]

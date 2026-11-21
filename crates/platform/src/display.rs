@@ -39,7 +39,14 @@ impl DisplayCapture {
     /// Capture the display with `id`; an empty or unknown id captures the primary display. On
     /// Linux this opens the desktop's picker and returns without waiting for the choice.
     pub fn open(id: &str) -> Result<DisplayCapture, PlatformError> {
-        Ok(DisplayCapture { inner: imp::Capture::open(id)? })
+        Ok(DisplayCapture { inner: imp::Capture::open(id, true)? })
+    }
+
+    /// Capture the display with `id`, or fail with [`PlatformError::NotFound`] when no connected
+    /// display has that id. On Linux this opens the desktop's picker, as [`DisplayCapture::open`]
+    /// does.
+    pub fn open_exact(id: &str) -> Result<DisplayCapture, PlatformError> {
+        Ok(DisplayCapture { inner: imp::Capture::open(id, false)? })
     }
 
     /// The current picture into `frame` (RGBA, or BGRA on Linux). On Linux the picture arrives
@@ -109,11 +116,13 @@ mod imp {
     }
 
     impl Capture {
-        pub fn open(id: &str) -> Result<Capture, PlatformError> {
+        /// The display with `id`; with `fallback`, the primary display (or the first) when no
+        /// display has that id.
+        pub fn open(id: &str, fallback: bool) -> Result<Capture, PlatformError> {
             let all = Monitor::all().map_err(PlatformError::failed)?;
             let by_id = all.iter().position(|m| m.id().ok().map(|i| i.to_string()).as_deref() == Some(id));
-            let primary = all.iter().position(|m| m.is_primary().unwrap_or(false));
-            let index = by_id.or(primary).or((!all.is_empty()).then_some(0)).ok_or_else(|| PlatformError::NotFound("a display".into()))?;
+            let primary = all.iter().position(|m| m.is_primary().unwrap_or(false)).or((!all.is_empty()).then_some(0));
+            let index = if fallback { by_id.or(primary) } else { by_id }.ok_or_else(|| PlatformError::NotFound("a display".into()))?;
             let monitor = all.into_iter().nth(index).ok_or_else(|| PlatformError::NotFound("a display".into()))?;
             Ok(Capture { monitor })
         }
@@ -142,7 +151,7 @@ mod imp {
     pub struct Capture(PortalCapture);
 
     impl Capture {
-        pub fn open(_id: &str) -> Result<Capture, PlatformError> {
+        pub fn open(_id: &str, _fallback: bool) -> Result<Capture, PlatformError> {
             Ok(Capture(PortalCapture::open(Kind::Display)?))
         }
 
@@ -166,7 +175,7 @@ mod imp {
     pub struct Capture;
 
     impl Capture {
-        pub fn open(_id: &str) -> Result<Capture, PlatformError> {
+        pub fn open(_id: &str, _fallback: bool) -> Result<Capture, PlatformError> {
             Err(PlatformError::Unsupported)
         }
 
@@ -202,6 +211,16 @@ mod tests {
             assert_eq!(pixels(1920, 1080, bad), (1920, 1080), "{bad}");
         }
         assert_eq!(pixels(u32::MAX, 1, 8.0), (u32::MAX, 8));
+    }
+
+    #[cfg(any(windows, target_os = "macos"))]
+    #[test]
+    fn an_exact_open_does_not_fall_back_to_another_display() {
+        assert!(DisplayCapture::open_exact("no such display").is_err());
+        // Where a display exists, its own id opens it.
+        if let Some(first) = displays().first() {
+            assert!(DisplayCapture::open_exact(&first.id).is_ok());
+        }
     }
 
     #[cfg(any(windows, target_os = "macos"))]

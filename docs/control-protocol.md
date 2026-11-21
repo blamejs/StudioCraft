@@ -391,17 +391,17 @@ repair wrote, or `null` for a take that did not make its own folder.
 
 ### `present.window`, `present.next` and `present.previous`
 
-These commands change which window a [Staged windows](features.md#staged-windows) source
+These commands change which window or display a [Staged windows](features.md#staged-windows) source
 (`staged_windows`) presents. `present.window` takes `{"index", "source"?}`, where `index` is a slot
-from 1 to 6, and presents the window in that slot. `present.next` and `present.previous` take
-`{"source"?}` and present the next or the previous slot that holds a window, wrapping around.
+from 1 to 6, and presents the window or display in that slot. `present.next` and `present.previous` take
+`{"source"?}` and present the next or the previous slot that is not empty, wrapping around.
 `source` is a source's id or name. Without it, the command changes every Staged windows source in
-the collection that has a window in the slot it moves to. Each returns
+the collection that has a window or display in the slot it moves to. Each returns
 `{"presented": [{"source", "slot"}]}` with the sources it changed; a source that already presents
 that slot is left out. The presented slot is the source's `presented` setting, so it is saved with
 the collection. The commands add no undo step, and neither does a `source.settings` call that
 changes only `presented`. Edit › Undo leaves the presented slot as it is. A `source` that is not a Staged windows
-source, a collection without one, an `index` outside 1 to 6, and a slot with no window in any
+source, a collection without one, an `index` outside 1 to 6, and a slot that is empty in every
 target are errors.
 
 ### `audio_tracks.open_last` and `audio_tracks.marker`

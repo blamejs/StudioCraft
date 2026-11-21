@@ -390,7 +390,7 @@
 	Show a color	色を表示
 	Keep the last picture	最後の画像を保持
 	Placeholder color	代替表示の色
-	no window is staged in the presented slot	表示中の枠に待機ウィンドウがありません
+	nothing is staged in the presented slot	表示中の枠に待機しているものがありません
 	waiting for the window	ウィンドウを待っています
 	Present Staged Window	待機ウィンドウを表示
 	Present Next Staged Window	次の待機ウィンドウを表示

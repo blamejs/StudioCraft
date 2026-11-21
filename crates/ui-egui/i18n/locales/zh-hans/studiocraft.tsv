@@ -390,7 +390,7 @@
 	Show a color	显示颜色
 	Keep the last picture	保留最后的画面
 	Placeholder color	占位颜色
-	no window is staged in the presented slot	当前显示的位置没有待播窗口
+	nothing is staged in the presented slot	当前显示的位置没有待播内容
 	waiting for the window	正在等待窗口
 	Present Staged Window	显示待播窗口
 	Present Next Staged Window	显示下一个待播窗口

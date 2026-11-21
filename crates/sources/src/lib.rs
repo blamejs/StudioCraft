@@ -8,7 +8,7 @@
 //! | `media` | a video or audio file, played through ffmpeg |
 //! | `display_capture` | a display |
 //! | `window_capture` | one program window |
-//! | `staged_windows` | one of up to six windows captured at once, swapped by `present.*` commands (Windows and macOS) |
+//! | `staged_windows` | one of up to six windows or displays captured at once, swapped by `present.*` commands (Windows and macOS) |
 //! | `camera` | a video capture device, such as a webcam or a capture card |
 //! | `audio_input` | a microphone or line input |
 //! | `audio_output` | what a speaker or headphone device plays (Windows) |

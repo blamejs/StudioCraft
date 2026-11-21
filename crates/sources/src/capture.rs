@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 
 use studiocraft_model::{ChoiceOption, Field, FieldKind, Settings, SettingsSchema};
 use studiocraft_platform::PlatformError;
-use studiocraft_platform::display::{self, DisplayCapture as Display};
+use studiocraft_platform::display::{self, DisplayCapture as Display, DisplayInfo};
 use studiocraft_platform::window::{self, WindowCapture as Window};
 use studiocraft_plugin::{Pace, Plugin, PluginError, Source, SourceCaps, SourceInstance, SourceIo, VideoContent};
 
@@ -20,6 +20,11 @@ const CHOOSE_IN_PICKER: &str = "Choose in the system picker";
 
 pub(crate) fn rate_field() -> Field {
     Field::new("fps", "Capture rate (frames per second)", FieldKind::Int { min: 1, max: 60 }, 30)
+}
+
+/// A display's label in lists: `name: width x height`.
+pub(crate) fn display_label(d: &DisplayInfo) -> String {
+    format!("{}: {} x {}", d.name, d.width, d.height)
 }
 
 pub(crate) fn period(s: &Settings) -> Duration {
@@ -169,7 +174,7 @@ impl Plugin for DisplayCapture {
         let mut options = vec![ChoiceOption::new("", if PICKER { CHOOSE_IN_PICKER } else { "Primary display" })];
         // Where the picker chooses the display, the listed displays are not offered.
         if !PICKER {
-            options.extend(display::displays().into_iter().map(|d| ChoiceOption::new(d.id, format!("{}: {} x {}", d.name, d.width, d.height))));
+            options.extend(display::displays().iter().map(|d| ChoiceOption::new(d.id.clone(), display_label(d))));
         }
         SettingsSchema::new(vec![Field::new("display", "Display", FieldKind::Choice { options }, ""), rate_field()])
     }
