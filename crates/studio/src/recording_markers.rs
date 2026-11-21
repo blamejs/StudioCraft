@@ -6,6 +6,10 @@
 //! with the recording as one clip on a video track and on an audio track, and each marker on the
 //! timeline at its frame. FilmCraft's File › Import reads it. A file of that name that already
 //! exists is not replaced: the timeline is written as `<recording name> (2).otio`, and so on.
+//!
+//! `marker.add` sets one marker on the running recording and the running take of audio tracks at
+//! once, and keeps it in the session's list that `marker.list` returns. A session lasts from the
+//! start of the first of those two outputs until both have stopped.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -133,6 +137,147 @@ impl MarkerWatch {
         w.markers.push(marker.clone());
         let placed = in_recording(w.written.as_ref(), marker.at);
         Ok((marker, placed))
+    }
+}
+
+/// What one output did with a marker of `marker.add`.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum Placed {
+    /// The output does not run.
+    Off,
+    /// The output kept the marker at this time, in seconds from the output's start.
+    Kept(f64),
+    /// The output runs and did not keep the marker, for this reason.
+    Failed(String),
+}
+
+impl Placed {
+    /// From what an output's mark returned: `None` when the output does not run.
+    fn of(mark: Option<Result<f64, String>>) -> Placed {
+        match mark {
+            None => Placed::Off,
+            Some(Ok(seconds)) => Placed::Kept(seconds),
+            Some(Err(e)) => Placed::Failed(e),
+        }
+    }
+
+    fn json(&self) -> Value {
+        match self {
+            Placed::Off => Value::Null,
+            Placed::Kept(seconds) => json!({"seconds": seconds}),
+            Placed::Failed(e) => json!({"error": e}),
+        }
+    }
+}
+
+/// A marker `marker.add` set: its number in the session (from 1), its name, its time from the
+/// session's start, and its time in each output that kept it.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct SessionMarker {
+    pub index: usize,
+    pub name: String,
+    pub seconds: f64,
+    pub recording: Option<f64>,
+    pub audio_tracks: Option<f64>,
+}
+
+impl SessionMarker {
+    fn json(&self) -> Value {
+        let kept = |s: Option<f64>| s.map_or(Value::Null, |s| json!({"seconds": s}));
+        json!({
+            "index": self.index,
+            "name": self.name,
+            "seconds": self.seconds,
+            "recording": kept(self.recording),
+            "audio_tracks": kept(self.audio_tracks),
+        })
+    }
+}
+
+/// The markers of a session: the time while the recording or a take of audio tracks runs, from
+/// the start of the first of them until both have stopped. The last session's markers stay listed
+/// until the next session starts.
+#[derive(Default)]
+pub(crate) struct MarkerSession {
+    /// The session's start on the studio clock, while it runs.
+    start: Option<Tick>,
+    markers: Vec<SessionMarker>,
+}
+
+impl MarkerSession {
+    /// Follow the recording that started at `recording` and whether a take runs. A session starts
+    /// when one of them runs and no session runs, at the recording's start or at `now` for a take
+    /// alone. It ends when a look finds neither running, so a take that hands over to the next one
+    /// while a stream runs keeps the session. Runs after each runtime command and each tick.
+    pub(crate) fn observe(&mut self, recording: Option<Tick>, take_runs: bool, now: Tick) {
+        let runs = recording.is_some() || take_runs;
+        if runs && self.start.is_none() {
+            self.start = Some(recording.unwrap_or(now));
+            self.markers.clear();
+        } else if !runs {
+            self.start = None;
+        }
+    }
+
+    /// Whether a session runs.
+    pub(crate) fn running(&self) -> bool {
+        self.start.is_some()
+    }
+
+    /// The number and name of the next marker: `name`, or "Marker N" for the session's Nth
+    /// marker. An error when no session runs or the session holds [`MAX_MARKERS`].
+    pub(crate) fn next(&self, name: Option<String>) -> Result<(usize, String), String> {
+        if self.start.is_none() {
+            return Err("neither a recording nor a take of audio tracks is running".into());
+        }
+        if self.markers.len() >= MAX_MARKERS {
+            return Err(format!("a session holds at most {MAX_MARKERS} markers"));
+        }
+        let index = self.markers.len() + 1;
+        Ok((index, name.unwrap_or_else(|| format!("Marker {index}"))))
+    }
+
+    /// Keep the marker [`MarkerSession::next`] numbered, set at `now`, with what each output did
+    /// with it. Returns the marker's number, name, time from the session's start and each
+    /// output's result. When no output kept it, nothing is kept and the error names each cause.
+    pub(crate) fn push(&mut self, (index, name): (usize, String), now: Tick, recording: Placed, audio_tracks: Placed) -> Result<Value, String> {
+        let Some(start) = self.start else {
+            return Err("neither a recording nor a take of audio tracks is running".into());
+        };
+        let kept = |p: &Placed| match p {
+            Placed::Kept(s) => Some(*s),
+            _ => None,
+        };
+        let marker = SessionMarker {
+            index,
+            name,
+            seconds: Tick(now.0.saturating_sub(start.0).max(0)).seconds(),
+            recording: kept(&recording),
+            audio_tracks: kept(&audio_tracks),
+        };
+        if marker.recording.is_none() && marker.audio_tracks.is_none() {
+            let causes: Vec<String> = [("the recording", &recording), ("the audio tracks", &audio_tracks)]
+                .into_iter()
+                .filter_map(|(output, p)| match p {
+                    Placed::Failed(e) => Some(format!("{output}: {e}")),
+                    _ => None,
+                })
+                .collect();
+            if causes.is_empty() {
+                return Err("neither a recording nor a take of audio tracks is running".into());
+            }
+            return Err(format!("the marker was not kept ({})", causes.join("; ")));
+        }
+        let mut v = marker.json();
+        v["recording"] = recording.json();
+        v["audio_tracks"] = audio_tracks.json();
+        self.markers.push(marker);
+        Ok(v)
+    }
+
+    /// The session's markers, oldest first, and whether the session runs.
+    pub(crate) fn json(&self) -> Value {
+        json!({"running": self.running(), "markers": self.markers.iter().map(SessionMarker::json).collect::<Vec<_>>()})
     }
 }
 
@@ -272,11 +417,12 @@ pub(crate) fn write_timeline(ended: &Ended) -> Result<PathBuf, String> {
     }
 }
 
-/// The markers of the running recording, the recordings whose files are still being finished, and
-/// the timeline files being written.
+/// The markers of the running recording, the recordings whose files are still being finished, the
+/// timeline files being written, and the markers of the session.
 #[derive(Default)]
 pub(crate) struct RecordingMarkers {
     watch: MarkerWatch,
+    session: MarkerSession,
     finishing: Vec<Ended>,
     writes: Vec<JoinHandle<Result<PathBuf, String>>>,
 }
@@ -298,6 +444,8 @@ impl Studio {
         if let Some(ended) = self.recording_markers.watch.observe(start, target, now) {
             self.recording_markers.finishing.push(ended);
         }
+        let take_runs = self.audio_tracks_running();
+        self.recording_markers.session.observe(start, take_runs, now);
         self.write_finished_marker_files();
         self.report_marker_files(false);
     }
@@ -337,6 +485,29 @@ impl Studio {
         let now = self.clock.now();
         let (marker, placed) = self.recording_markers.watch.add(now, name).map_err(StudioError::Output)?;
         Ok(json!({"name": marker.name, "seconds": placed.seconds()}))
+    }
+
+    /// Mark the running recording and the running take of audio tracks now with one marker, for
+    /// `marker.add`: named `name`, or "Marker N" for the session's Nth marker. An output that
+    /// does not keep it is reported, and the other keeps it.
+    pub(crate) fn add_marker(&mut self, name: Option<String>) -> Result<Value, StudioError> {
+        self.sync_recording_markers();
+        let now = self.clock.now();
+        let next = self.recording_markers.session.next(name).map_err(StudioError::Output)?;
+        let recording = if self.outputs.start_of(OutputKind::Recording).is_some() {
+            Placed::of(Some(self.recording_markers.watch.add(now, Some(next.1.clone())).map(|(_, placed)| placed.seconds())))
+        } else {
+            Placed::Off
+        };
+        let audio_tracks = Placed::of(self.mark_audio_tracks(now, &next.1));
+        self.recording_markers.session.push(next, now, recording, audio_tracks).map_err(StudioError::Output)
+    }
+
+    /// The markers `marker.add` set in the running session, or in the last one, for
+    /// `marker.list`.
+    pub(crate) fn marker_list(&mut self) -> Value {
+        self.sync_recording_markers();
+        self.recording_markers.session.json()
     }
 
     /// End the running recording's markers at `closed`, the time the app closed, write the
@@ -504,6 +675,92 @@ mod tests {
         let ended = w.observe(None, || None, t(1000)).unwrap();
         assert_eq!(ended.written, Some(counters));
         assert_eq!(ended.written.unwrap().frames(), 15, "the count is read when the timeline is made, not when the recording stops");
+    }
+
+    fn names(s: &MarkerSession) -> Vec<String> {
+        s.markers.iter().map(|m| m.name.clone()).collect()
+    }
+
+    fn add(s: &mut MarkerSession, now: Tick, name: Option<&str>, recording: Placed, audio_tracks: Placed) -> Result<Value, String> {
+        let next = s.next(name.map(str::to_owned))?;
+        s.push(next, now, recording, audio_tracks)
+    }
+
+    #[test]
+    fn a_session_lasts_while_the_recording_or_a_take_runs() {
+        let mut s = MarkerSession::default();
+        let idle = "neither a recording nor a take of audio tracks is running";
+        assert_eq!(s.next(None).unwrap_err(), idle);
+        // The recording starts at 1 s and is seen at 2 s: the session starts with the recording.
+        s.observe(Some(t(1000)), false, t(2000));
+        assert!(s.running());
+        let v = add(&mut s, t(4000), None, Placed::Kept(3.0), Placed::Off).unwrap();
+        assert_eq!((v["index"].clone(), v["name"].clone(), v["seconds"].clone()), (json!(1), json!("Marker 1"), json!(3.0)));
+        // A take joins, the recording stops, and a new recording starts while the take runs:
+        // all of it is one session.
+        s.observe(Some(t(1000)), true, t(5000));
+        s.observe(None, true, t(6000));
+        s.observe(Some(t(7000)), true, t(7000));
+        add(&mut s, t(8000), Some("Goal"), Placed::Kept(1.0), Placed::Kept(3.0)).unwrap();
+        assert_eq!(names(&s), ["Marker 1", "Goal"]);
+        // Both stop: the markers stay listed, and no marker can be added.
+        s.observe(None, false, t(9000));
+        assert!(!s.running());
+        assert_eq!(s.json()["markers"].as_array().unwrap().len(), 2);
+        assert_eq!(s.json()["running"], json!(false));
+        assert_eq!(s.next(None).unwrap_err(), idle);
+        // A take alone starts the next session at the moment it is seen, with a new count.
+        s.observe(None, true, t(20_000));
+        assert!(s.running() && names(&s).is_empty());
+        let v = add(&mut s, t(21_500), None, Placed::Off, Placed::Kept(1.5)).unwrap();
+        assert_eq!((v["name"].clone(), v["seconds"].clone()), (json!("Marker 1"), json!(1.5)));
+    }
+
+    #[test]
+    fn a_take_handed_over_when_a_recording_starts_keeps_the_session() {
+        let mut s = MarkerSession::default();
+        // A stream's take runs; a recording starts and the take hands over to a new one, so
+        // the recording and the take both differ from the last look.
+        s.observe(None, true, t(0));
+        add(&mut s, t(500), None, Placed::Off, Placed::Kept(0.5)).unwrap();
+        s.observe(Some(t(9000)), true, t(9000));
+        let v = add(&mut s, t(10_000), None, Placed::Kept(1.0), Placed::Kept(0.0)).unwrap();
+        assert_eq!((v["index"].clone(), v["seconds"].clone()), (json!(2), json!(10.0)));
+        assert_eq!(names(&s), ["Marker 1", "Marker 2"]);
+    }
+
+    #[test]
+    fn an_output_that_does_not_keep_the_marker_is_reported_and_the_other_keeps_it() {
+        let mut s = MarkerSession::default();
+        s.observe(Some(t(0)), true, t(0));
+        let full = "the marker was not kept: the take is ending or 1024 markers are waiting to be written";
+        let v = add(&mut s, t(2000), Some("Goal"), Placed::Kept(2.0), Placed::Failed(full.into())).unwrap();
+        assert_eq!(v["recording"], json!({"seconds": 2.0}));
+        assert_eq!(v["audio_tracks"], json!({"error": full}));
+        let v = add(&mut s, t(3000), None, Placed::Failed("a recording holds at most 10000 markers".into()), Placed::Kept(3.0)).unwrap();
+        assert_eq!(v["name"], json!("Marker 2"));
+        assert_eq!(v["recording"]["error"], json!("a recording holds at most 10000 markers"));
+        // Neither keeps it: an error naming both, and the session's count does not move.
+        let e = add(&mut s, t(4000), None, Placed::Failed("r".into()), Placed::Failed("a".into())).unwrap_err();
+        assert_eq!(e, "the marker was not kept (the recording: r; the audio tracks: a)");
+        let e = add(&mut s, t(4000), None, Placed::Off, Placed::Failed("a".into())).unwrap_err();
+        assert_eq!(e, "the marker was not kept (the audio tracks: a)");
+        let listed = s.json();
+        let markers = listed["markers"].as_array().unwrap();
+        assert_eq!(markers.len(), 2);
+        assert_eq!(markers[0], json!({"index": 1, "name": "Goal", "seconds": 2.0, "recording": {"seconds": 2.0}, "audio_tracks": null}));
+        assert_eq!(markers[1]["audio_tracks"], json!({"seconds": 3.0}));
+        assert_eq!(add(&mut s, t(5000), None, Placed::Kept(5.0), Placed::Off).unwrap()["index"], json!(3));
+    }
+
+    #[test]
+    fn a_session_holds_at_most_the_marker_limit() {
+        let mut s = MarkerSession::default();
+        s.observe(None, true, t(0));
+        for _ in 0..MAX_MARKERS {
+            add(&mut s, t(1), None, Placed::Off, Placed::Kept(0.0)).unwrap();
+        }
+        assert_eq!(s.next(None).unwrap_err(), format!("a session holds at most {MAX_MARKERS} markers"));
     }
 
     #[test]

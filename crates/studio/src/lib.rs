@@ -509,6 +509,8 @@ impl Studio {
                 RuntimeAction::AudioTracksOpenLast => result = self.open_last_audio_tracks()?,
                 RuntimeAction::AudioTracksMarker { name } => result = self.add_audio_tracks_marker(name)?,
                 RuntimeAction::RecordingMarker { name } => result = self.add_recording_marker(name)?,
+                RuntimeAction::MarkerAdd { name } => result = self.add_marker(name)?,
+                RuntimeAction::MarkerList => result = self.marker_list(),
                 RuntimeAction::RecordingsList => result = self.list_recordings()?,
                 RuntimeAction::StartRecording => self.start_output(OutputKind::Recording)?,
                 RuntimeAction::StopRecording => self.stop_output(OutputKind::Recording),
