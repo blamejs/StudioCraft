@@ -54,6 +54,7 @@ fn is_read_only(method: &str, params: &Value) -> bool {
                         | "app.info"
                         | "plugin.list"
                         | "source.schema"
+                        | "filter.meter"
                         | "app_audio.list"
                         | "app_audio.status"
                         | "app_audio.lanes"
@@ -231,6 +232,8 @@ mod tests {
         assert!(is_read_only("document.inspect", &json!({})));
         assert!(is_read_only("engine.execute", &json!({"command": "app.links"})));
         assert!(is_read_only("engine.execute", &json!({"command": "source.schema"})));
+        assert!(is_read_only("run", &json!({"command": "filter.meter", "params": {"source": "Mic", "filter": 3}})));
+        assert!(!is_read_only("run", &json!({"command": "filter.enable"})), "enabling changes the collection");
         assert!(is_read_only("engine.execute", &json!({"command": "app_audio.list"})));
         assert!(is_read_only("run", &json!({"command": "app_audio.status"})));
         assert!(is_read_only("run", &json!({"command": "app_audio.lanes"})));

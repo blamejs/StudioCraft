@@ -396,6 +396,36 @@ fn filters_match_what_the_source_produces() {
 }
 
 #[test]
+fn a_filter_meter_reading_is_handed_to_the_app_for_a_filter_of_that_source() {
+    let mut e = engine();
+    add_color(&mut e, "Video");
+    let mic = run(&mut e, "source.add", json!({"kind": "mic", "name": "Mic"})).unwrap().result["source"].as_u64().unwrap();
+    let f = run(&mut e, "filter.add", json!({"source": "Mic", "kind": "gain"})).unwrap().result["filter"].as_u64().unwrap();
+    let expected = RuntimeAction::FilterMeter { source: SourceId(mic), filter: FilterId(f) };
+    for (source, enabled) in [(json!("Mic"), true), (json!(mic), true), (json!("Mic"), false)] {
+        run(&mut e, "filter.enable", json!({"source": "Mic", "filter": f, "enabled": enabled})).unwrap();
+        let (rev, history) = (e.revision(), e.undo_label());
+        let o = run(&mut e, "filter.meter", json!({"source": source, "filter": f})).unwrap();
+        assert_eq!(o.runtime, Some(expected.clone()), "{source}, enabled {enabled}");
+        assert!(!o.changed);
+        assert_eq!((e.revision(), e.undo_label()), (rev, history), "a reading is not a change or an undo step");
+    }
+    assert!(matches!(run(&mut e, "filter.meter", json!({"source": "Video", "filter": f})), Err(EngineError::NoFilter(n)) if n == f));
+    assert!(matches!(run(&mut e, "filter.meter", json!({"source": "Mic", "filter": f + 1000})), Err(EngineError::NoFilter(_))));
+    assert!(matches!(run(&mut e, "filter.meter", json!({"source": "ghost", "filter": f})), Err(EngineError::NoSource(_))));
+    for bad in [
+        json!({"source": "Mic"}),
+        json!({"filter": f}),
+        json!({"source": "Mic", "filter": -1}),
+        json!({"source": "Mic", "filter": "1"}),
+        json!({"source": "Mic", "filter": null}),
+        json!({"source": "Mic", "filter": f, "flter": f}),
+    ] {
+        assert!(run(&mut e, "filter.meter", bad.clone()).is_err(), "{bad}");
+    }
+}
+
+#[test]
 fn transitions() {
     let mut e = engine();
     run(&mut e, "transition.set", json!({"kind": "cut"})).unwrap();
@@ -1491,6 +1521,7 @@ fn every_spec_is_reachable() {
             "filter.remove" => json!({"source": 1, "filter": 1}),
             "filter.settings" => json!({"source": 1, "filter": 1, "settings": {}}),
             "filter.enable" => json!({"source": 1, "filter": 1, "enabled": true}),
+            "filter.meter" => json!({"source": 1, "filter": 1}),
             "transition.set" => json!({"kind": "fade"}),
             "transition.duration" => json!({"ms": 100}),
             "transition.settings" => json!({"settings": {}}),

@@ -356,6 +356,12 @@ impl Engine {
                 Ok(Outcome::runtime(RuntimeAction::AudioTracksMarker { name }))
             }
             Command::RetestHardwareEncoders {} => Ok(Outcome::runtime(RuntimeAction::RetestHardwareEncoders)),
+            Command::FilterMeter { source, filter } => {
+                let id = self.source_id(&source)?;
+                let s = self.collection.source(id).ok_or_else(|| EngineError::NoSource(id.to_string()))?;
+                let f = s.filters.iter().find(|f| f.id.0 == filter).ok_or(EngineError::NoFilter(filter))?;
+                Ok(Outcome::runtime(RuntimeAction::FilterMeter { source: id, filter: f.id }))
+            }
             Command::PauseStart { media, countdown_s, at_zero } => {
                 if let Some(m) = &media {
                     PauseSettings::check_media(m).map_err(EngineError::Invalid)?;
