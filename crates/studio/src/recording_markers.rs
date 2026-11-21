@@ -1,11 +1,11 @@
 //! Markers set while a recording runs, written beside the recording for the video editor.
 //!
-//! `recording.marker` marks the running recording at that moment. When a recording that has at
-//! least one marker stops, `<recording name>.otio` is written beside it on a `recording-markers`
-//! thread: an OpenTimelineIO timeline (https://opentimelineio.readthedocs.io) with the recording
-//! as one clip on a video track and on an audio track, and each marker on the timeline at its
-//! frame. FilmCraft's File › Import reads it. A file of that name that already exists is not
-//! replaced.
+//! `record.marker` marks the running recording at that moment. When a recording that has at least
+//! one marker stops and its file is finished, `<recording name>.otio` is written beside it on a
+//! `recording-markers` thread: an OpenTimelineIO timeline (https://opentimelineio.readthedocs.io)
+//! with the recording as one clip on a video track and on an audio track, and each marker on the
+//! timeline at its frame. FilmCraft's File › Import reads it. A file of that name that already
+//! exists is not replaced: the timeline is written as `<recording name> (2).otio`, and so on.
 
 use std::path::PathBuf;
 use std::thread::JoinHandle;
@@ -180,13 +180,33 @@ pub(crate) fn timeline(ended: &Ended) -> Value {
     })
 }
 
-/// Write `<recording>.otio` for `ended`; the path written. A file that exists is left as it is
-/// and reported as an error, and a file that could not be written in full is removed.
+/// Names a timeline file tries before it gives up: `<recording>.otio`, then `<recording> (2).otio`
+/// up to this number.
+const MAX_NAME_NUMBER: u32 = 999;
+
+/// Write `<recording>.otio` for `ended`; the path written. A file that exists is left as it is,
+/// and the next free name of `<recording> (N).otio` is used instead. A file that could not be
+/// written in full is removed.
 pub(crate) fn write_timeline(ended: &Ended) -> Result<PathBuf, String> {
     use std::io::Write;
-    let path = ended.recording.with_extension("otio");
-    let bytes = serde_json::to_vec_pretty(&timeline(ended)).map_err(|e| format!("{}: {e}", path.display()))?;
-    let mut file = std::fs::OpenOptions::new().write(true).create_new(true).open(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let first = ended.recording.with_extension("otio");
+    let bytes = serde_json::to_vec_pretty(&timeline(ended)).map_err(|e| format!("{}: {e}", first.display()))?;
+    let stem = ended.recording.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+    let mut opened = None;
+    for n in 1..=MAX_NAME_NUMBER {
+        let path = if n == 1 { first.clone() } else { first.with_file_name(format!("{stem} ({n}).otio")) };
+        match std::fs::OpenOptions::new().write(true).create_new(true).open(&path) {
+            Ok(file) => {
+                opened = Some((path, file));
+                break;
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(e) => return Err(format!("{}: {e}", path.display())),
+        }
+    }
+    let Some((path, mut file)) = opened else {
+        return Err(format!("{}: {MAX_NAME_NUMBER} timeline files with this name already exist", first.display()));
+    };
     match file.write_all(&bytes).and_then(|()| file.sync_all()) {
         Ok(()) => Ok(path),
         Err(e) => {
@@ -197,16 +217,19 @@ pub(crate) fn write_timeline(ended: &Ended) -> Result<PathBuf, String> {
     }
 }
 
-/// The markers of the running recording, and the timeline files being written.
+/// The markers of the running recording, the recordings whose files are still being finished, and
+/// the timeline files being written.
 #[derive(Default)]
 pub(crate) struct RecordingMarkers {
     watch: MarkerWatch,
+    finishing: Vec<Ended>,
     writes: Vec<JoinHandle<Result<PathBuf, String>>>,
 }
 
 impl Studio {
     /// Follow the recording for markers, and start writing the timeline of a recording that
-    /// stopped with markers. Runs each tick and after each runtime command.
+    /// stopped with markers once its file is finished. Runs each tick and after each runtime
+    /// command.
     pub(crate) fn sync_recording_markers(&mut self) {
         let now = self.clock.now();
         let start = self.outputs.start_of(OutputKind::Recording);
@@ -216,22 +239,37 @@ impl Studio {
             let path = PathBuf::from(outputs.state(OutputKind::Recording)?.target);
             Some((path, FrameRate::new(i64::from(video.fps_num), i64::from(video.fps_den))))
         };
-        let ended = self.recording_markers.watch.observe(start, target, now);
-        self.write_marker_file(ended);
+        if let Some(ended) = self.recording_markers.watch.observe(start, target, now) {
+            self.recording_markers.finishing.push(ended);
+        }
+        self.write_finished_marker_files();
         self.report_marker_files(false);
+    }
+
+    /// Start writing the timelines of the recordings whose files are finished.
+    fn write_finished_marker_files(&mut self) {
+        let outputs = &self.outputs;
+        let finished = |e: &Ended| !outputs.finishing(OutputKind::Recording, &e.recording.to_string_lossy());
+        if !self.recording_markers.finishing.iter().any(finished) {
+            return;
+        }
+        let (ready, waiting): (Vec<_>, Vec<_>) = std::mem::take(&mut self.recording_markers.finishing).into_iter().partition(finished);
+        self.recording_markers.finishing = waiting;
+        for ended in ready {
+            self.write_marker_file(ended);
+        }
     }
 
     /// Start writing the timeline of `ended` on a thread of its own, so a slow disk does not hold
     /// up a frame.
-    fn write_marker_file(&mut self, ended: Option<Ended>) {
-        let Some(ended) = ended else { return };
+    fn write_marker_file(&mut self, ended: Ended) {
         match std::thread::Builder::new().name("recording-markers".into()).spawn(move || write_timeline(&ended)) {
             Ok(h) => self.recording_markers.writes.push(h),
             Err(e) => self.notices.push(Notice::new("The markers could not be saved: {error}", vec![("error", e.to_string())], true)),
         }
     }
 
-    /// Mark the running recording now, for `recording.marker`: the marker is named `name`, or
+    /// Mark the running recording now, for `record.marker`: the marker is named `name`, or
     /// "Marker N" for the recording's Nth marker. Returns its name and its time in the recording.
     pub(crate) fn add_recording_marker(&mut self, name: Option<String>) -> Result<Value, StudioError> {
         self.sync_recording_markers();
@@ -240,11 +278,16 @@ impl Studio {
         Ok(json!({"name": marker.name, "seconds": marker.at.seconds()}))
     }
 
-    /// End the running recording's markers at `closed`, the time the app closed, write its
-    /// timeline, and wait for every timeline file being written.
+    /// End the running recording's markers at `closed`, the time the app closed, write the
+    /// timelines still to be written, and wait for every timeline file. Runs after the outputs
+    /// have finished their files.
     pub(crate) fn finish_recording_markers_blocking(&mut self, closed: Tick) {
-        let ended = self.recording_markers.watch.observe(None, || None, closed);
-        self.write_marker_file(ended);
+        if let Some(ended) = self.recording_markers.watch.observe(None, || None, closed) {
+            self.recording_markers.finishing.push(ended);
+        }
+        for ended in std::mem::take(&mut self.recording_markers.finishing) {
+            self.write_marker_file(ended);
+        }
         self.report_marker_files(true);
     }
 
@@ -379,6 +422,33 @@ mod tests {
         let v: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
         assert_eq!(v["tracks"]["children"][0]["children"][0]["source_range"]["duration"]["value"], 1.0, "a recording is at least one frame");
         assert_eq!(v["tracks"]["markers"][0]["marked_range"]["start_time"]["value"], 0.0);
-        assert!(write_timeline(&ended).is_err(), "an existing file is not replaced");
+        let before = std::fs::read(&path).unwrap();
+        let second = write_timeline(&ended).unwrap();
+        assert_eq!(second, dir.path().join("take (2).otio"), "an existing file is not replaced");
+        assert_eq!(std::fs::read(&path).unwrap(), before);
+        assert_eq!(write_timeline(&ended).unwrap(), dir.path().join("take (3).otio"));
+    }
+
+    #[test]
+    fn the_timeline_waits_until_the_recording_file_is_finished() {
+        let dir = tempfile::tempdir().unwrap();
+        let recording = dir.path().join("take.mkv");
+        let mut studio = crate::tests::headless();
+        let hold = studio.outputs.hold_finishing(OutputKind::Recording, &recording.to_string_lossy());
+        studio.recording_markers.finishing.push(Ended {
+            recording: recording.clone(),
+            rate: FrameRate::new(30, 1),
+            length: t(1000),
+            markers: vec![Marker { at: t(500), name: "Half".into() }],
+        });
+        studio.sync_recording_markers();
+        assert!(studio.recording_markers.writes.is_empty(), "nothing is written while the recording is finishing");
+        assert!(!dir.path().join("take.otio").exists());
+        drop(hold);
+        studio.outputs.finish_held(OutputKind::Recording);
+        studio.sync_recording_markers();
+        studio.report_marker_files(true);
+        assert!(dir.path().join("take.otio").exists());
+        assert!(studio.take_notices().iter().any(|n| n.text().starts_with("Markers saved to")));
     }
 }

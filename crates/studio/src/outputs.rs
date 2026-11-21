@@ -453,6 +453,34 @@ impl Outputs {
         self.saving.len()
     }
 
+    /// Whether a stopped `kind` writing to `target` is still finishing its file.
+    pub(crate) fn finishing(&self, kind: OutputKind, target: &str) -> bool {
+        self.stopping.iter().any(|s| s.kind == kind && s.target == target)
+    }
+
+    /// A stopped `kind` writing to `target` that finishes its file when the returned sender is
+    /// dropped, for tests.
+    #[cfg(test)]
+    pub(crate) fn hold_finishing(&mut self, kind: OutputKind, target: &str) -> std::sync::mpsc::Sender<()> {
+        let (tx, rx) = std::sync::mpsc::channel::<()>();
+        let handle = std::thread::spawn(move || {
+            let _ = rx.recv();
+            Ok(())
+        });
+        self.stopping.push(Stopping { kind, target: target.to_string(), failed: false, handle });
+        tx
+    }
+
+    /// Wait for every held `kind` from [`Self::hold_finishing`] to finish and forget it, for tests.
+    #[cfg(test)]
+    pub(crate) fn finish_held(&mut self, kind: OutputKind) {
+        let (held, rest): (Vec<_>, Vec<_>) = self.stopping.drain(..).partition(|s| s.kind == kind);
+        self.stopping = rest;
+        for s in held {
+            let _ = s.handle.join();
+        }
+    }
+
     /// An error while [`MAX_SAVES`] replays are being written: each one holds its packets in
     /// memory until its file is written.
     fn check_save_room(&self) -> Result<(), StudioError> {

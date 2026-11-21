@@ -21,7 +21,7 @@ fn shared_gpu() -> Option<Gpu> {
 }
 
 /// A studio without audio devices or a graphics device.
-fn headless() -> Studio {
+pub(crate) fn headless() -> Studio {
     studio_with(None, SceneCollection::new("Test", "Scene"), Profile::default())
 }
 

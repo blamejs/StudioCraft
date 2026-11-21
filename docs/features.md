@@ -237,13 +237,15 @@ offers, and says when `ffmpeg` was not found.
 File › Add Recording Marker (`record.marker`, which can be given a shortcut in Settings › Hotkeys)
 marks the running recording at that moment. A marker is named "Marker N" for the recording's Nth
 marker, and a recording holds at most 10,000 markers. When a recording with at least one marker
-stops, or the app closes during it, StudioCraft writes `<recording name>.otio` beside it: an
+stops, or the app closes during it, StudioCraft finishes the recording file and then writes
+`<recording name>.otio` beside it: an
 [OpenTimelineIO](https://opentimelineio.readthedocs.io) timeline with the recording as one clip on
 a video track and on an audio track, and each marker on the timeline at the frame that holds its
 time. The timeline names the recording by its file name, so the two files can be moved together.
 File › Import in FilmCraft opens the timeline as a sequence with the markers on it. A file of that
-name that already exists is not replaced, and the status bar reports it. A recording without
-markers gets no timeline file.
+name that already exists is not replaced: the timeline goes to `<recording name> (2).otio`, or the
+next free number up to 999, and the status bar names the file. A recording without markers gets no
+timeline file.
 
 ### Replay buffer
 
