@@ -1,11 +1,15 @@
-//! NVIDIA's NVENC encoder through the driver's encode API (API 12.1): H.264 High and HEVC Main from
-//! NV12 frames, HEVC Main 10 from P010 frames. It runs on Windows (a Direct3D 11 device of the
-//! NVIDIA adapter, `nvEncodeAPI64.dll`) and 64-bit Linux (the CUDA driver's primary context,
-//! `libnvidia-encode.so.1`). Building needs no NVIDIA SDK: the driver is loaded at run time.
+//! NVIDIA's NVENC encoder through the driver's encode API (API 12.1): H.264 High, HEVC Main and
+//! 8-bit AV1 Main from NV12 frames, HEVC Main 10 and 10-bit AV1 Main from P010 frames. It runs on
+//! Windows (a Direct3D 11 device of the NVIDIA adapter, `nvEncodeAPI64.dll`) and 64-bit Linux (the
+//! CUDA driver's primary context, `libnvidia-encode.so.1`). Building needs no NVIDIA SDK: the
+//! driver is loaded at run time. AV1 needs a GPU whose encoder writes AV1 (Ada Lovelace and later);
+//! on others [`Encoder::new`] returns [`Error::Unsupported`].
 //!
-//! - Frames go in through input buffers in system memory and come out as Annex B, which
-//!   [`Encoder`] turns into 4-byte length-prefixed samples with the parameter sets in the `avcC`
-//!   or `hvcC` record ([`Encoder::codec_private`]).
+//! - Frames go in through input buffers in system memory. H.264 and HEVC come out as Annex B,
+//!   which [`Encoder`] turns into 4-byte length-prefixed samples with the parameter sets in the
+//!   `avcC` or `hvcC` record ([`Encoder::codec_private`]). AV1 comes out as OBUs with their sizes,
+//!   which [`crate::av1::Stream`] turns into samples, with the sequence header in the `av1C`
+//!   record.
 //! - On Windows, an encoder opened with `Encoder::on_d3d11` on the caller's Direct3D 11 device
 //!   reads NV12 or P010 textures on the GPU (`Encoder::encode_texture`), so a frame the GPU made
 //!   is not copied to system memory and back. A 3840x2160 NV12 frame is 12,441,600 bytes.
@@ -13,12 +17,13 @@
 //!   the order the frames went in and each packet's decoding time is its presentation time.
 //! - The stream's VUI declares the [`Config::color`] signal at limited range: BT.709, or for HEVC
 //!   Main 10 BT.2020 with PQ or HLG. A PQ stream's mastering display and content light level SEI
-//!   messages go in front of every IDR picture.
+//!   messages go in front of every IDR picture. AV1 is BT.709 at limited range, in the sequence
+//!   header's color description.
 
 use std::collections::VecDeque;
 
 use crate::nvenc_ffi::{self, Locked, Session, Submitted};
-use crate::{Codec, annexb, avc, hevc};
+use crate::{Codec, annexb, av1, avc, hevc};
 pub use crate::{Color, Config, ContentLight, Error, Input, MasteringDisplay, Packet, Rate};
 /// The Direct3D 11 types texture input takes, from the `windows` crate this crate builds with.
 #[cfg(target_os = "windows")]
@@ -56,6 +61,7 @@ fn ffi_codec(codec: Codec) -> nvenc_ffi::Codec {
     match codec {
         Codec::H264 => nvenc_ffi::Codec::H264,
         Codec::Hevc => nvenc_ffi::Codec::Hevc,
+        Codec::Av1 => nvenc_ffi::Codec::Av1,
     }
 }
 
@@ -69,8 +75,8 @@ fn check(cfg: &Config) -> Result<(), Error> {
     if cfg.fps.0 == 0 || cfg.fps.1 == 0 {
         return bad(format!("the frame rate {}/{} is not a rate", cfg.fps.0, cfg.fps.1));
     }
-    if cfg.input == Input::P010 && cfg.codec != Codec::Hevc {
-        return bad("P010 frames are encoded as HEVC Main 10 only".into());
+    if cfg.input == Input::P010 && cfg.codec == Codec::H264 {
+        return bad("P010 frames are encoded as HEVC Main 10 or 10-bit AV1 only".into());
     }
     if cfg.color.is_hdr() && (cfg.codec != Codec::Hevc || cfg.input != Input::P010) {
         return bad("high dynamic range is encoded as HEVC Main 10 from P010 frames only".into());
@@ -88,6 +94,8 @@ pub struct Encoder {
     session: Session,
     cfg: Config,
     record: Vec<u8>,
+    /// The sequence header an AV1 stream's samples are checked against.
+    av1: Option<av1::Stream>,
     free: Vec<usize>,
     /// Slots submitted and not read yet, in submission order, and how many of them are ready.
     pending: VecDeque<usize>,
@@ -136,6 +144,8 @@ impl Encoder {
             nvenc_ffi::Params { codec, width: w, height: h, fps: cfg.fps, rate, gop: cfg.keyint.max(1), ten_bit, color: cfg.color, textures };
         session.initialize(&params, RING).map_err(Error::Unsupported)?;
         let sets = session.sequence_params().map_err(Error::Failed)?;
+        let depth: u8 = if ten_bit { 10 } else { 8 };
+        let mut stream = None;
         let record = match cfg.codec {
             Codec::H264 => match annexb::parameter_sets(Codec::H264, &sets, &[(7, "SPS"), (8, "PPS")]).map_err(Error::Failed)?.as_slice() {
                 [sps, pps] => avc::avcc(sps, pps),
@@ -143,10 +153,11 @@ impl Encoder {
             },
             Codec::Hevc => {
                 match annexb::parameter_sets(Codec::Hevc, &sets, &[(32, "VPS"), (33, "SPS"), (34, "PPS")]).map_err(Error::Failed)?.as_slice() {
-                    [vps, sps, pps] => hevc::hvcc(vps, sps, pps, (w, h), if ten_bit { 10 } else { 8 }),
+                    [vps, sps, pps] => hevc::hvcc(vps, sps, pps, (w, h), depth.into()),
                     _ => Err("the encoder returned no VPS, SPS or PPS".into()),
                 }
             }
+            Codec::Av1 => av1::Stream::new(&sets, depth).map(|s| stream.insert(s).record().to_vec()),
         }
         .map_err(Error::Failed)?;
         let slots = session.slots();
@@ -154,6 +165,7 @@ impl Encoder {
             session,
             cfg: *cfg,
             record,
+            av1: stream,
             free: (0..slots).rev().collect(),
             pending: VecDeque::new(),
             ready: 0,
@@ -163,7 +175,7 @@ impl Encoder {
         })
     }
 
-    /// The `avcC` (H.264) or `hvcC` (HEVC) record a container stores with the track.
+    /// The `avcC` (H.264), `hvcC` (HEVC) or `av1C` (AV1) record a container stores with the track.
     pub fn codec_private(&self) -> &[u8] {
         &self.record
     }
@@ -332,8 +344,12 @@ impl Encoder {
         // Otherwise the read failed with the texture still mapped, and the slot is not used again:
         // the driver may still read the texture. The session unmaps it when it ends.
         let o = read.map_err(Error::Failed)?;
-        let data = annexb::to_length_prefixed(self.cfg.codec, &o.data).map_err(Error::Failed)?;
-        Ok(Packet { data, pts: i64::try_from(o.pts).unwrap_or(i64::MAX), keyframe: o.key })
+        let pts = i64::try_from(o.pts).unwrap_or(i64::MAX);
+        let (data, keyframe) = match &self.av1 {
+            Some(stream) => stream.sample(&o.data).map_err(Error::Failed)?,
+            None => (annexb::to_length_prefixed(self.cfg.codec, &o.data).map_err(Error::Failed)?, o.key),
+        };
+        Ok(Packet { data, pts, keyframe })
     }
 }
 
@@ -404,6 +420,8 @@ mod tests {
     fn configurations_the_encoder_cannot_take_are_refused_before_the_driver() {
         let ok = cfg(Codec::Hevc, Input::P010);
         assert_eq!(check(&ok), Ok(()));
+        assert_eq!(check(&Config { codec: Codec::Av1, ..ok }), Ok(()), "10-bit AV1");
+        assert_eq!(check(&cfg(Codec::Av1, Input::Nv12)), Ok(()));
         for bad in [
             Config { width: 255, ..ok },
             Config { height: 0, ..ok },
@@ -430,6 +448,8 @@ mod tests {
         for bad in [
             Config { color: Color::Hlg, ..cfg(Codec::Hevc, Input::Nv12) },
             Config { color: Color::Hlg, ..cfg(Codec::H264, Input::Nv12) },
+            Config { color: Color::Hlg, ..cfg(Codec::Av1, Input::P010) },
+            Config { color: Color::Pq { mastering: None, light: None }, ..cfg(Codec::Av1, Input::P010) },
             Config { color: Color::Pq { mastering: None, light: None }, ..cfg(Codec::Hevc, Input::Nv12) },
             Config { color: Color::Pq { mastering: Some(MasteringDisplay::bt2020_d65(50, 50)), light: None }, ..main10 },
             Config { color: Color::Pq { mastering: None, light: Some(ContentLight { max_cll: 100, max_fall: 200 }) }, ..main10 },
@@ -444,14 +464,14 @@ mod tests {
         // On a machine without an NVIDIA GPU (every CI runner) opening is a `NoDevice` error,
         // never a panic; with one, the encoder opens and writes its record, or says that the GPU
         // does not write the codec or has no free session.
-        for (codec, input) in [(Codec::H264, Input::Nv12), (Codec::Hevc, Input::Nv12)] {
+        for (codec, input) in [(Codec::H264, Input::Nv12), (Codec::Hevc, Input::Nv12), (Codec::Av1, Input::Nv12), (Codec::Av1, Input::P010)] {
             match Encoder::new(&cfg(codec, input)) {
                 Ok(e) => assert!(!e.codec_private().is_empty()),
                 Err(Error::NoDevice(why) | Error::Unsupported(why) | Error::Busy(why)) => assert!(!why.is_empty()),
                 Err(other) => panic!("{codec:?}: {other}"),
             }
         }
-        for codec in [Codec::H264, Codec::Hevc] {
+        for codec in [Codec::H264, Codec::Hevc, Codec::Av1] {
             match available(codec) {
                 Ok(()) => {}
                 Err(Error::NoDevice(why) | Error::Unsupported(why) | Error::Busy(why)) => assert!(!why.is_empty()),
@@ -480,12 +500,13 @@ mod tests {
     fn an_encoder_reads_textures_on_the_gpu_when_an_nvidia_adapter_is_present() {
         // Every CI runner lacks an NVIDIA adapter, and the test returns at the first step there.
         let Ok(device) = nvenc_ffi::test_device() else { return };
-        for (codec, input) in [(Codec::H264, Input::Nv12), (Codec::Hevc, Input::Nv12), (Codec::Hevc, Input::P010)] {
+        for (codec, input) in [(Codec::H264, Input::Nv12), (Codec::Hevc, Input::Nv12), (Codec::Hevc, Input::P010), (Codec::Av1, Input::Nv12)] {
             let c = cfg(codec, input);
             let mut e = match Encoder::on_d3d11(&c, &device) {
                 Ok(e) => e,
                 Err(Error::Busy(_)) => return,
-                Err(Error::Unsupported(why)) if input == Input::P010 => {
+                // 10-bit and AV1 need newer GPUs
+                Err(Error::Unsupported(why)) if input == Input::P010 || codec == Codec::Av1 => {
                     assert!(!why.is_empty());
                     continue;
                 }
@@ -570,5 +591,26 @@ mod tests {
         let with_sei: Vec<i64> = packets.iter().filter(|p| has_sei(p)).map(|p| p.pts).collect();
         assert_eq!(with_sei, [0, 4]);
         assert!(packets.iter().filter(|p| p.keyframe).all(has_sei));
+    }
+
+    #[test]
+    fn an_av1_encoder_writes_its_sequence_header_in_the_record_when_a_gpu_is_present() {
+        for (input, depth) in [(Input::Nv12, 8), (Input::P010, 10)] {
+            let Ok(mut e) = Encoder::new(&cfg(Codec::Av1, input)) else { continue };
+            let record = craft_media::isobmff::Av1Config::parse(e.codec_private()).unwrap();
+            assert_eq!((record.seq_profile, record.high_bitdepth), (0, depth == 10));
+            let frame = vec![0u8; input.frame_bytes(256, 144)];
+            let mut packets = Vec::new();
+            for pts in 0..10 {
+                packets.extend(e.encode(&frame, pts).unwrap());
+            }
+            packets.extend(e.flush().unwrap());
+            assert_eq!(packets.iter().map(|p| p.pts).collect::<Vec<_>>(), (0..10).collect::<Vec<_>>());
+            assert!(packets[0].keyframe);
+            for p in &packets {
+                let obus = av1::obus(&p.data).unwrap();
+                assert!(obus.iter().all(|o| o.kind != av1::OBU_TEMPORAL_DELIMITER), "{input:?}");
+            }
+        }
     }
 }

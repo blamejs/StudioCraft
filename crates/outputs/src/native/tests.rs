@@ -396,6 +396,12 @@ fn the_video_track_names_the_encoder_codec() {
     j.video_encoder = Arc::new(studiocraft_encode::Nvenc::HEVC);
     let hevc = tracks(&j, vec![2], &aac);
     assert_eq!((hevc[0].codec_id.as_str(), hevc[0].codec_private.as_slice()), ("V_MPEGH/ISO/HEVC", &[2u8][..]));
+    for av1 in [Arc::new(studiocraft_encode::Nvenc::AV1) as Arc<dyn studiocraft_plugin::Encoder>, Arc::new(studiocraft_encode::MediaFoundation::AV1)]
+    {
+        j.video_encoder = av1;
+        let t = tracks(&j, vec![0x81, 3], &aac);
+        assert_eq!((t[0].codec_id.as_str(), t[0].codec_private.as_slice()), ("V_AV1", &[0x81u8, 3][..]));
+    }
 }
 
 #[test]

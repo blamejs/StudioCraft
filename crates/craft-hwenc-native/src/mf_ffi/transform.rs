@@ -7,7 +7,8 @@
 //! - The rate control, the keyframe interval and the B-frame count are set through `ICodecAPI`
 //!   before the media types. An encoder whose B-frame count cannot be set to 0, and does not
 //!   report 0, is skipped.
-//! - Frames go in as samples in system memory, and output samples are read back to Annex B bytes.
+//! - Frames go in as samples in system memory, and output samples are read back to bytes: Annex B
+//!   for H.264 and HEVC, OBUs for AV1.
 //!   Output samples this side allocates have the alignment the encoder asks for.
 //! - Each `METransformHaveOutput` event reads one sample, and each `METransformNeedInput` event
 //!   takes one frame.
@@ -26,9 +27,10 @@ use windows::Win32::Media::MediaFoundation::{
     MF_MT_MPEG2_PROFILE, MF_MT_PIXEL_ASPECT_RATIO, MF_MT_SUBTYPE, MF_MT_TRANSFER_FUNCTION, MF_MT_VIDEO_NOMINAL_RANGE, MF_MT_VIDEO_PRIMARIES,
     MF_MT_YUV_MATRIX, MF_TRANSFORM_ASYNC, MF_TRANSFORM_ASYNC_UNLOCK, MFMediaType_Video, MFNominalRange_16_235, MFT_MESSAGE_COMMAND_DRAIN,
     MFT_MESSAGE_NOTIFY_BEGIN_STREAMING, MFT_MESSAGE_NOTIFY_END_OF_STREAM, MFT_MESSAGE_NOTIFY_END_STREAMING, MFT_MESSAGE_NOTIFY_START_OF_STREAM,
-    MFT_OUTPUT_DATA_BUFFER, MFT_OUTPUT_STREAM_CAN_PROVIDE_SAMPLES, MFT_OUTPUT_STREAM_PROVIDES_SAMPLES, MFVideoFormat_H264, MFVideoFormat_HEVC,
-    MFVideoFormat_NV12, MFVideoInterlace_Progressive, MFVideoPrimaries_BT709, MFVideoTransFunc_709, MFVideoTransferMatrix_BT709,
-    eAVEncCommonRateControlMode_CBR, eAVEncCommonRateControlMode_Quality, eAVEncH264VProfile_High, eAVEncH265VProfile_Main_420_8,
+    MFT_OUTPUT_DATA_BUFFER, MFT_OUTPUT_STREAM_CAN_PROVIDE_SAMPLES, MFT_OUTPUT_STREAM_PROVIDES_SAMPLES, MFVideoFormat_AV1, MFVideoFormat_H264,
+    MFVideoFormat_HEVC, MFVideoFormat_NV12, MFVideoInterlace_Progressive, MFVideoPrimaries_BT709, MFVideoTransFunc_709, MFVideoTransferMatrix_BT709,
+    eAVEncAV1VProfile_Main_420_8, eAVEncCommonRateControlMode_CBR, eAVEncCommonRateControlMode_Quality, eAVEncH264VProfile_High,
+    eAVEncH265VProfile_Main_420_8,
 };
 use windows::Win32::System::Variant::VARIANT;
 use windows::core::{GUID, Interface};
@@ -106,6 +108,7 @@ impl Transform {
         let (subtype, label) = match p.codec {
             Codec::H264 => (MFVideoFormat_H264, "H.264"),
             Codec::Hevc => (MFVideoFormat_HEVC, "HEVC"),
+            Codec::Av1 => (MFVideoFormat_AV1, "AV1"),
         };
         let found = api.encoders(subtype).map_err(OpenError::NoDevice)?;
         if found.is_empty() {
@@ -216,6 +219,7 @@ impl Transform {
         let profile = match p.codec {
             Codec::H264 => eAVEncH264VProfile_High.0 as u32,
             Codec::Hevc => eAVEncH265VProfile_Main_420_8.0 as u32,
+            Codec::Av1 => eAVEncAV1VProfile_Main_420_8.0 as u32,
         };
         let output = self.api.media_type()?;
         describe(&output, p, subtype).map_err(|e| format!("{name}: {e}"))?;
@@ -254,8 +258,8 @@ impl Transform {
         Ok(())
     }
 
-    /// The parameter sets the output type carries, as Annex B, when it carries them and they are
-    /// at most [`MAX_HEADER`] bytes.
+    /// The parameter sets the output type carries (Annex B, or for AV1 OBUs or an `av1C` record),
+    /// when it carries them and they are at most [`MAX_HEADER`] bytes.
     fn read_header(&self) -> Option<Vec<u8>> {
         // SAFETY: plain COM calls on live interfaces; `GetBlob` writes at most the length of the
         // buffer it is given, which is the size `GetBlobSize` reported.
@@ -273,7 +277,7 @@ impl Transform {
         }
     }
 
-    /// The parameter sets the encoder's output type carries, as Annex B, when it carries them.
+    /// The parameter sets the encoder's output type carries, when it carries them.
     pub fn sequence_header(&self) -> Option<&[u8]> {
         self.header.as_deref()
     }

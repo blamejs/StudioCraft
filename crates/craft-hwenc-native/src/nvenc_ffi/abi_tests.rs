@@ -30,6 +30,7 @@ fn sizes_and_alignments_match_the_header() {
         ),
         (size_of::<NV_ENC_CONFIG_H264>(), align_of::<NV_ENC_CONFIG_H264>(), (1792, 8), "NV_ENC_CONFIG_H264"),
         (size_of::<NV_ENC_CONFIG_HEVC>(), align_of::<NV_ENC_CONFIG_HEVC>(), (1560, 8), "NV_ENC_CONFIG_HEVC"),
+        (size_of::<NV_ENC_CONFIG_AV1>(), align_of::<NV_ENC_CONFIG_AV1>(), (1552, 8), "NV_ENC_CONFIG_AV1"),
         (size_of::<NV_ENC_CODEC_CONFIG>(), align_of::<NV_ENC_CODEC_CONFIG>(), (1792, 8), "NV_ENC_CODEC_CONFIG"),
         (size_of::<NV_ENC_CONFIG>(), align_of::<NV_ENC_CONFIG>(), (3584, 8), "NV_ENC_CONFIG"),
         (size_of::<NV_ENC_PRESET_CONFIG>(), align_of::<NV_ENC_PRESET_CONFIG>(), (5128, 8), "NV_ENC_PRESET_CONFIG"),
@@ -105,7 +106,27 @@ fn field_offsets_match_the_header() {
         (offset_of!(NV_ENC_CONFIG_HEVC, reserved1), 192, "NV_ENC_CONFIG_HEVC.reserved1"),
         (offset_of!(NV_ENC_CONFIG_HEVC, reserved2), 1048, "NV_ENC_CONFIG_HEVC.reserved2"),
         (offset_of!(NV_ENC_CODEC_CONFIG, h264Config), 0, "NV_ENC_CODEC_CONFIG.h264Config"),
+        (offset_of!(NV_ENC_CONFIG_AV1, tier), 4, "NV_ENC_CONFIG_AV1.tier"),
+        (offset_of!(NV_ENC_CONFIG_AV1, minPartSize), 8, "NV_ENC_CONFIG_AV1.minPartSize"),
+        (offset_of!(NV_ENC_CONFIG_AV1, maxPartSize), 12, "NV_ENC_CONFIG_AV1.maxPartSize"),
+        (offset_of!(NV_ENC_CONFIG_AV1, flags), 16, "NV_ENC_CONFIG_AV1.flags"),
+        (offset_of!(NV_ENC_CONFIG_AV1, idrPeriod), 20, "NV_ENC_CONFIG_AV1.idrPeriod"),
+        (offset_of!(NV_ENC_CONFIG_AV1, maxNumRefFramesInDPB), 32, "NV_ENC_CONFIG_AV1.maxNumRefFramesInDPB"),
+        (offset_of!(NV_ENC_CONFIG_AV1, tileWidths), 48, "NV_ENC_CONFIG_AV1.tileWidths"),
+        (offset_of!(NV_ENC_CONFIG_AV1, tileHeights), 56, "NV_ENC_CONFIG_AV1.tileHeights"),
+        (offset_of!(NV_ENC_CONFIG_AV1, colorPrimaries), 68, "NV_ENC_CONFIG_AV1.colorPrimaries"),
+        (offset_of!(NV_ENC_CONFIG_AV1, transferCharacteristics), 72, "NV_ENC_CONFIG_AV1.transferCharacteristics"),
+        (offset_of!(NV_ENC_CONFIG_AV1, matrixCoefficients), 76, "NV_ENC_CONFIG_AV1.matrixCoefficients"),
+        (offset_of!(NV_ENC_CONFIG_AV1, colorRange), 80, "NV_ENC_CONFIG_AV1.colorRange"),
+        (offset_of!(NV_ENC_CONFIG_AV1, chromaSamplePosition), 84, "NV_ENC_CONFIG_AV1.chromaSamplePosition"),
+        (offset_of!(NV_ENC_CONFIG_AV1, useBFramesAsRef), 88, "NV_ENC_CONFIG_AV1.useBFramesAsRef"),
+        (offset_of!(NV_ENC_CONFIG_AV1, filmGrainParams), 96, "NV_ENC_CONFIG_AV1.filmGrainParams"),
+        (offset_of!(NV_ENC_CONFIG_AV1, numFwdRefs), 104, "NV_ENC_CONFIG_AV1.numFwdRefs"),
+        (offset_of!(NV_ENC_CONFIG_AV1, numBwdRefs), 108, "NV_ENC_CONFIG_AV1.numBwdRefs"),
+        (offset_of!(NV_ENC_CONFIG_AV1, reserved1), 112, "NV_ENC_CONFIG_AV1.reserved1"),
+        (offset_of!(NV_ENC_CONFIG_AV1, reserved2), 1056, "NV_ENC_CONFIG_AV1.reserved2"),
         (offset_of!(NV_ENC_CODEC_CONFIG, hevcConfig), 0, "NV_ENC_CODEC_CONFIG.hevcConfig"),
+        (offset_of!(NV_ENC_CODEC_CONFIG, av1Config), 0, "NV_ENC_CODEC_CONFIG.av1Config"),
         (offset_of!(NV_ENC_CONFIG, profileGUID), 4, "NV_ENC_CONFIG.profileGUID"),
         (offset_of!(NV_ENC_CONFIG, gopLength), 20, "NV_ENC_CONFIG.gopLength"),
         (offset_of!(NV_ENC_CONFIG, frameIntervalP), 24, "NV_ENC_CONFIG.frameIntervalP"),
@@ -278,6 +299,9 @@ fn constants_match_the_header() {
         (i64::from(NV_ENC_LEVEL_AUTOSELECT), 0, "NV_ENC_LEVEL_AUTOSELECT"),
         (i64::from(NV_ENC_TIER_HEVC_MAIN), 0, "NV_ENC_TIER_HEVC_MAIN"),
         (i64::from(NV_ENC_HEVC_CUSIZE_AUTOSELECT), 0, "NV_ENC_HEVC_CUSIZE_AUTOSELECT"),
+        (i64::from(NV_ENC_LEVEL_AV1_AUTOSELECT), 24, "NV_ENC_LEVEL_AV1_AUTOSELECT"),
+        (i64::from(NV_ENC_TIER_AV1_0), 0, "NV_ENC_TIER_AV1_0"),
+        (i64::from(NV_ENC_AV1_PART_SIZE_AUTOSELECT), 0, "NV_ENC_AV1_PART_SIZE_AUTOSELECT"),
         (i64::from(NV_ENC_H264_ENTROPY_CODING_MODE_CABAC), 1, "NV_ENC_H264_ENTROPY_CODING_MODE_CABAC"),
         (i64::from(NV_ENC_VUI_VIDEO_FORMAT_UNSPECIFIED), 5, "NV_ENC_VUI_VIDEO_FORMAT_UNSPECIFIED"),
         (i64::from(NV_ENC_VUI_COLOR_PRIMARIES_BT709), 1, "NV_ENC_VUI_COLOR_PRIMARIES_BT709"),
@@ -319,6 +343,8 @@ fn guids_match_the_header() {
     assert_eq!(NV_ENC_CODEC_HEVC_GUID.to_u128(), 0x790cdc8845224d7b9425bda9975f7603, "NV_ENC_CODEC_HEVC_GUID");
     assert_eq!(NV_ENC_HEVC_PROFILE_MAIN_GUID.to_u128(), 0xb514c39ab55b40fa878ff1253b4dfdec, "NV_ENC_HEVC_PROFILE_MAIN_GUID");
     assert_eq!(NV_ENC_HEVC_PROFILE_MAIN10_GUID.to_u128(), 0xfa4d2b6c3a5b411a80180a3f5e3c9be5, "NV_ENC_HEVC_PROFILE_MAIN10_GUID");
+    assert_eq!(NV_ENC_CODEC_AV1_GUID.to_u128(), 0x0a3522890aa74759862d5d15cd16d254, "NV_ENC_CODEC_AV1_GUID");
+    assert_eq!(NV_ENC_AV1_PROFILE_MAIN_GUID.to_u128(), 0x5f2a39f5f14e4f959a9eb76d568fcf97, "NV_ENC_AV1_PROFILE_MAIN_GUID");
 }
 
 /// The bit-field masks of the `flags` words: the C compiler's layout of each bit-field set alone.
@@ -332,6 +358,37 @@ fn bit_field_masks_match_the_header() {
     assert_eq!(HEVC_PIXEL_BIT_DEPTH_MASK, 0x3800, "NV_ENC_CONFIG_HEVC.pixelBitDepthMinus8");
     assert_eq!(HEVC_CHROMA_FORMAT_MASK >> HEVC_CHROMA_FORMAT_SHIFT, 3, "chromaFormatIDC is 2 bits");
     assert_eq!(HEVC_PIXEL_BIT_DEPTH_MASK >> HEVC_PIXEL_BIT_DEPTH_SHIFT, 7, "pixelBitDepthMinus8 is 3 bits");
+    assert_eq!(AV1_OUTPUT_ANNEXB, 0x1, "NV_ENC_CONFIG_AV1.outputAnnexBFormat");
+    assert_eq!(AV1_DISABLE_SEQ_HDR, 0x10, "NV_ENC_CONFIG_AV1.disableSeqHdr");
+    assert_eq!(AV1_REPEAT_SEQ_HDR, 0x20, "NV_ENC_CONFIG_AV1.repeatSeqHdr");
+    assert_eq!(AV1_ENABLE_INTRA_REFRESH, 0x40, "NV_ENC_CONFIG_AV1.enableIntraRefresh");
+    assert_eq!(AV1_CHROMA_FORMAT_MASK, 0x180, "NV_ENC_CONFIG_AV1.chromaFormatIDC");
+    assert_eq!(AV1_FILM_GRAIN, 0x800, "NV_ENC_CONFIG_AV1.enableFilmGrainParams");
+    assert_eq!(AV1_INPUT_BIT_DEPTH_MASK, 0x7000, "NV_ENC_CONFIG_AV1.inputPixelBitDepthMinus8");
+    assert_eq!(AV1_PIXEL_BIT_DEPTH_MASK, 0x38000, "NV_ENC_CONFIG_AV1.pixelBitDepthMinus8");
+}
+
+#[test]
+fn an_av1_session_writes_sized_obus_with_one_sequence_header_and_no_film_grain() {
+    use super::session::av1_flags;
+    for ten_bit in [false, true] {
+        let flags = av1_flags(u32::MAX, ten_bit);
+        for (bit, name) in [
+            (AV1_OUTPUT_ANNEXB, "outputAnnexBFormat"),
+            (AV1_DISABLE_SEQ_HDR, "disableSeqHdr"),
+            (AV1_REPEAT_SEQ_HDR, "repeatSeqHdr"),
+            (AV1_ENABLE_INTRA_REFRESH, "enableIntraRefresh"),
+            (AV1_FILM_GRAIN, "enableFilmGrainParams"),
+        ] {
+            assert_eq!(flags & bit, 0, "{name}, ten_bit {ten_bit}");
+        }
+        let depth = u32::from(ten_bit) * 2;
+        assert_eq!((flags & AV1_CHROMA_FORMAT_MASK) >> AV1_CHROMA_FORMAT_SHIFT, 1, "4:2:0, ten_bit {ten_bit}");
+        assert_eq!((flags & AV1_INPUT_BIT_DEPTH_MASK) >> AV1_INPUT_BIT_DEPTH_SHIFT, depth, "input depth, ten_bit {ten_bit}");
+        assert_eq!((flags & AV1_PIXEL_BIT_DEPTH_MASK) >> AV1_PIXEL_BIT_DEPTH_SHIFT, depth, "stream depth, ten_bit {ten_bit}");
+        assert_eq!(flags & 0x2, 0x2, "enableTimingInfo keeps the preset's value");
+        assert_eq!(av1_flags(0, ten_bit) & 0x2, 0, "enableTimingInfo keeps the preset's value");
+    }
 }
 
 #[test]
