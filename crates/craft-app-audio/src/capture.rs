@@ -10,9 +10,34 @@ use serde::Serialize;
 
 use crate::{AppAudioError, AppKey};
 
-/// Receives each packet of interleaved 48 kHz stereo `f32` samples, on the capture thread. It
-/// must not block.
-pub type OnData = Box<dyn FnMut(&[f32]) + Send>;
+/// Receives each packet of interleaved 48 kHz stereo `f32` samples with where the packet sits on
+/// the system's clocks, on the capture thread. It must not block.
+pub type OnData = Box<dyn FnMut(&[f32], PacketInfo) + Send>;
+
+/// Where a captured packet sits on the system's clocks, and whether audio was lost before it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
+pub struct PacketInfo {
+    /// The position of the packet's first frame in the system's stream, in frames from the start
+    /// of the capture.
+    pub position: u64,
+    /// The system's performance counter time at which the packet's first frame was recorded, in
+    /// 100 ns units: on Windows, `QueryPerformanceCounter` scaled to 100 ns. `None` when the
+    /// system marked the time as uncertain.
+    pub qpc_100ns: Option<u64>,
+    /// The system lost audio between the previous packet and this one.
+    pub discontinuity: bool,
+    /// The system marked the packet silent; its samples are zeros.
+    pub silent: bool,
+}
+
+impl PacketInfo {
+    /// The packet as the system describes it: the device position and performance counter time
+    /// of its first frame, and the system's flags for a gap before it, an uncertain time and
+    /// silence.
+    pub fn from_system(position: u64, qpc_100ns: u64, discontinuity: bool, timestamp_error: bool, silent: bool) -> PacketInfo {
+        PacketInfo { position, qpc_100ns: (!timestamp_error).then_some(qpc_100ns), discontinuity, silent }
+    }
+}
 
 /// Milliseconds since the first call in this process: the clock heartbeats are stamped with.
 pub fn now_ms() -> u64 {
@@ -68,6 +93,7 @@ pub struct CaptureShared {
     state: AtomicU8,
     heartbeat: AtomicU64,
     packets: AtomicU64,
+    discontinuities: AtomicU64,
     stop: AtomicBool,
     error: Mutex<Option<AppAudioError>>,
     /// Signaled when the state changes or a stop is asked for.
@@ -92,6 +118,7 @@ impl CaptureShared {
             state: AtomicU8::new(STARTING),
             heartbeat: AtomicU64::new(now_ms()),
             packets: AtomicU64::new(0),
+            discontinuities: AtomicU64::new(0),
             stop: AtomicBool::new(false),
             error: Mutex::new(None),
             changed: Condvar::new(),
@@ -133,9 +160,12 @@ impl CaptureShared {
         self.changed.notify_all();
     }
 
-    /// A packet arrived.
-    pub fn packet(&self) {
+    /// A packet arrived, described by `info`.
+    pub fn packet(&self, info: &PacketInfo) {
         self.packets.fetch_add(1, Ordering::Relaxed);
+        if info.discontinuity {
+            self.discontinuities.fetch_add(1, Ordering::Relaxed);
+        }
     }
 
     /// Whether the owner asked the capture to stop.
@@ -212,6 +242,7 @@ impl CaptureShared {
             pid: self.target.pid,
             state: self.state(),
             packets: self.packets.load(Ordering::Relaxed),
+            discontinuities: self.discontinuities.load(Ordering::Relaxed),
             dropped_blocks: self.feed_dropped.load(Ordering::Relaxed),
             pool_exhausted: self.feed_starved.load(Ordering::Relaxed),
         }
@@ -226,6 +257,8 @@ pub struct CaptureStatus {
     pub state: CaptureState,
     /// Packets the system delivered.
     pub packets: u64,
+    /// Packets the system marked as following lost audio.
+    pub discontinuities: u64,
     /// Blocks the app's feed dropped because more arrived at once than it holds.
     pub dropped_blocks: u64,
     /// Blocks the app's feed had to allocate because its block pool was empty.
@@ -291,6 +324,11 @@ impl AppCapture {
     /// Packets delivered so far.
     pub fn packets(&self) -> u64 {
         self.shared.packets.load(Ordering::Relaxed)
+    }
+
+    /// Packets so far that the system marked as following lost audio.
+    pub fn discontinuities(&self) -> u64 {
+        self.shared.discontinuities.load(Ordering::Relaxed)
     }
 
     /// Record the app's feed counters, for [`crate::Discovery::captures`].

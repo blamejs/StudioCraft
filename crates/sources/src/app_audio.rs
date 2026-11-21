@@ -326,7 +326,7 @@ impl Env for Live<'_> {
         *self.stats = Some(feed.stats());
         let gate = Arc::new(Gate::new());
         *self.gate = Some(Arc::clone(&gate));
-        self.discovery.open_capture(key.clone(), target, Box::new(move |samples: &[f32]| gate.pass(|| feed.push(samples)))).map(Some)
+        self.discovery.open_capture(key.clone(), target, Box::new(move |samples: &[f32], _| gate.pass(|| feed.push(samples)))).map(Some)
     }
 }
 
