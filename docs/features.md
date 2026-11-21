@@ -29,7 +29,7 @@ shown or hidden, and every change can be undone.
 | Camera | A webcam or capture card. | Windows (Media Foundation), macOS (AVFoundation) and Linux (V4L2) |
 | Audio input capture | A microphone or other input device. | Windows, macOS and Linux |
 | Audio output capture | The sound the computer plays (desktop audio). | Windows and Linux |
-| Application audio capture | The sound one application plays. | Windows 11 and Windows Server 2022 |
+| Application audio capture | The sound one application plays. | Windows 11, Windows Server 2022 and Linux (PipeWire) |
 | Live Captions | The words heard in the program audio, while live captions run. | All |
 
 ### Display and window capture on Linux
@@ -65,10 +65,20 @@ program, is already recorded by that application's capture.
 
 Capturing one application uses Windows process loopback capture
 ([`AUDIOCLIENT_PROCESS_LOOPBACK_PARAMS`](https://learn.microsoft.com/en-us/windows/win32/api/audioclientactivationparams/ns-audioclientactivationparams-audioclient_process_loopback_params)),
-which needs Windows build 20348 or later: Windows 11 or Windows Server 2022. On earlier Windows
-builds, macOS and Linux the source lists no applications and says why, and Audio output capture
-still records everything the computer plays. The `app_audio.list` and `app_audio.status` commands
-report the same lists and support ([Control and automation](#control-and-automation)).
+which needs Windows build 20348 or later: Windows 11 or Windows Server 2022.
+
+On Linux the list holds the applications that have a playback stream on the PipeWire sound server,
+named by the program file of the process that owns the stream. The capture links each of
+the application's playback streams, and those of the processes it starts, to a recording stream of
+StudioCraft's own, and links streams that start later as they appear. The application still plays
+on its own device. Linux lists no meter levels, so when several copies run the source keeps the
+copy captured last time while its stream runs or no other copy's does, otherwise it takes a copy
+whose stream is running, then the one with the lowest process id.
+
+On earlier Windows builds, macOS and Linux without the PipeWire server the source lists no
+applications and says why, and Audio output capture still records everything the computer plays.
+The `app_audio.list` and `app_audio.status` commands report the same lists and support
+([Control and automation](#control-and-automation)).
 
 ### Camera
 
