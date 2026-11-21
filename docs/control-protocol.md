@@ -85,8 +85,8 @@ when the language's catalog has the message.
 [Commands with their own parameters](#commands-with-their-own-parameters) describes `app.info`,
 `app.links`, `app.check_updates`, `plugin.list`, `source.schema`, `source.sync_offset`,
 `source.monitor`, `source.set_record_track`, `audio_tracks.status`, `audio_tracks.repair`,
-`audio_tracks.open_last`, `audio_tracks.marker`, the `dock.layout_*` commands, `video.displays`
-and `video.canvas_from_display`.
+`audio_tracks.open_last`, `audio_tracks.marker`, the `captions.*` commands, the `dock.layout_*`
+commands, `video.displays` and `video.canvas_from_display`.
 
 Each entry of `engine.commands` has these fields:
 
@@ -353,6 +353,41 @@ session lists the marker at that sample. `name` is 1 to 256 characters, not only
 control characters; without it the marker is "Marker N", the take's Nth marker. It returns
 `{"name", "seconds"}`, where `seconds` counts from the take's first sample. No running take, a take
 that is ending, and 1,024 markers waiting to be written are errors.
+
+### `captions.*`
+
+`captions.start` takes `{"model"?, "language"?}` and starts live captions of the program audio. A
+value left out comes from the first Live Captions source in the collection, and then defaults to
+`whisper-base` and `auto` (the language is detected). `model` is an id from `captions.status`;
+`language` is one of the 99 ISO 639 codes the models recognize, such as `en`, or `auto`. It returns
+`{"model", "language"}`. An unknown model, a model that is not downloaded, another language code, an
+empty value and a start while captions run or are still stopping are errors. `captions.stop` stops them; the phrase being spoken
+is finished first. `captions.toggle` starts or stops them and returns what `captions.start`
+returns, or `{"running": false}`.
+
+`captions.status` takes no params and returns what `document.inspect`'s `captions` entry holds:
+`state` (`loading`, `running`, `stopping`, `stopped` or `failed: <reason>`, which stays until the
+next start), `model` and `language`
+of the running captions, `available` (false in a build without speech recognition), `models_dir`,
+`models` (each with `id`, `name`, `bytes`, `downloaded`, `license` and `source`), `download` (the
+`model` being downloaded with `done` and `total` bytes, or null), `cues` (finished phrases kept for
+caption files), `gaps` (program blocks that arrived out of step) and `pending_files` (recordings
+waiting for their caption files).
+
+`captions.download` takes `{"model"?}` and downloads that model into `models_dir` on a background
+thread. A model left out comes from the first Live Captions source, and then defaults to
+`whisper-base`. It returns `{"model", "downloading": true, "bytes"}` at once. A file already there
+with its pinned size and SHA-256 sum is kept; every other file is downloaded and checked against
+them, and a file that fails the check is deleted. A status message reports
+the end of the download. `captions.download_cancel` stops it. An unknown model and a second
+download while one runs are errors.
+
+A recording that ran while captions ran gets `<recording name>.srt`, `.vtt` and `.txt` beside it,
+timed from the recording's start. A recording in which no phrase was recognized gets no caption
+files. A file of that name that already exists is not replaced. The
+files are written once the phrases up to the recording's end are finished, when captions stop, or
+30 s after the recording ends. The app checks this on every frame; the headless MCP server checks
+it on each request and when it exits.
 
 ### `dock.layout_save`, `dock.layout_apply` and `dock.layout_remove`
 

@@ -9,8 +9,9 @@ use super::*;
 
 fn studio_with(gpu: Option<Gpu>, collection: SceneCollection, profile: Profile) -> Studio {
     let ffmpeg: FfmpegSetting = Arc::new(RwLock::new(String::new()));
-    let registry = Arc::new(builtin_registry(&ffmpeg).unwrap());
-    Studio::new(gpu, collection, profile, registry, ffmpeg)
+    let captions = Arc::new(CaptionBoard::new());
+    let registry = Arc::new(builtin_registry(&ffmpeg, &captions).unwrap());
+    Studio::new(gpu, collection, profile, registry, ffmpeg, captions)
 }
 
 /// One device for every test in this binary; opening many devices at once crashes some drivers.
@@ -36,7 +37,7 @@ fn the_default_collection_hears_desktop_audio_and_the_microphone() {
 #[test]
 fn every_builtin_plugin_registers() {
     let ffmpeg: FfmpegSetting = Arc::new(RwLock::new(String::new()));
-    let reg = builtin_registry(&ffmpeg).unwrap();
+    let reg = builtin_registry(&ffmpeg, &Arc::new(CaptionBoard::new())).unwrap();
     for t in ["fade", "cut", "fade_color", "swipe"] {
         assert!(reg.transition(t).is_ok(), "{t}");
     }
@@ -1523,5 +1524,102 @@ mod audio_tracks {
         let r = s.run("audio_tracks.repair", &json!({"folder": sibling.to_string_lossy()}));
         assert!(r.is_err_and(|e| e.to_string().contains("could not be read, so nothing is repaired")));
         let _ = std::fs::remove_dir_all(&sibling);
+    }
+}
+
+mod captions {
+    use super::*;
+    use craft_speech::{Options, ProgressFn, SpeechError, Transcriber, Transcript};
+    use studiocraft_plugin::{SourceIo, VideoContent};
+
+    struct Quiet;
+    impl Transcriber for Quiet {
+        fn id(&self) -> String {
+            "quiet".into()
+        }
+        fn transcribe(&self, _: &[f32], _: &Options, _: ProgressFn) -> Result<Transcript, SpeechError> {
+            Ok(Transcript::default())
+        }
+    }
+
+    fn captioned() -> Studio {
+        headless()
+    }
+
+    #[test]
+    fn each_studio_shows_only_the_captions_it_heard() {
+        let (a, b) = (headless(), headless());
+        assert!(!Arc::ptr_eq(&a.caption_board(), &b.caption_board()));
+        a.caption_board().push_final("only for the first studio", Tick::from_units(0, 1000));
+        let source = b.registry().source("captions").unwrap();
+        let io = SourceIo::new(MasterClock::new());
+        let mut i = source.create(&source.schema().defaults().with("clear_after", 0), &io).unwrap();
+        i.produce(&io).unwrap();
+        assert!(matches!(io.video.take(), Some(VideoContent::Empty)), "the second studio's source shows nothing");
+    }
+
+    #[test]
+    fn captions_need_a_downloaded_model_and_valid_settings() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut s = captioned();
+        s.set_models_dir(dir.path().to_path_buf());
+        let e = s.run("captions.start", &json!({})).unwrap_err().to_string();
+        assert!(e.contains("not downloaded") && e.contains("captions.download"), "{e}");
+        let e = s.run("captions.start", &json!({"model": "nope"})).unwrap_err().to_string();
+        assert!(e.contains("no speech model `nope`"), "{e}");
+        let e = s.run("captions.start", &json!({"model": "whisper-tiny", "language": "English"})).unwrap_err().to_string();
+        assert!(e.contains("not a language the speech models recognize"), "{e}");
+        let e = s.run("captions.start", &json!({"model": "whisper-tiny", "language": "zz"})).unwrap_err().to_string();
+        assert!(e.contains("not a language the speech models recognize"), "{e}");
+        let e = s.run("captions.download", &json!({"model": "nope"})).unwrap_err().to_string();
+        assert!(e.contains("no speech model `nope`"), "{e}");
+        assert_eq!(s.captions_state(), CaptionState::Stopped);
+        let status = s.run("captions.status", &json!({})).unwrap().0;
+        assert_eq!(status["state"], "stopped");
+        assert_eq!(status["models"].as_array().map(Vec::len), Some(craft_speech::models::catalog().len()));
+        assert!(status["models"].as_array().unwrap().iter().all(|m| m["downloaded"] == false));
+        assert_eq!(s.state_json()["captions"], status);
+        assert!(!dir.path().join("whisper-base").exists(), "a failed start downloads nothing");
+    }
+
+    #[test]
+    fn captions_start_once_and_stop_with_a_notice() {
+        let mut s = captioned();
+        s.set_caption_loader(Arc::new(|_: &Path, _: &str| Ok(Arc::new(Quiet) as Arc<dyn Transcriber>)));
+        let (v, _) = s.run("captions.start", &json!({"model": "whisper-tiny", "language": "de"})).unwrap();
+        assert_eq!(v, json!({"model": "whisper-tiny", "language": "de"}));
+        assert!(matches!(s.captions_state(), CaptionState::Loading | CaptionState::Running));
+        let e = s.run("captions.start", &json!({})).unwrap_err().to_string();
+        assert!(e.contains("already running"), "{e}");
+        assert_eq!(s.state_json()["captions"]["model"], "whisper-tiny");
+        assert_eq!(s.run("captions.toggle", &json!({})).unwrap().0, json!({"running": false}));
+        s.finish_captions_blocking();
+        assert_eq!(s.captions_state(), CaptionState::Stopped);
+        let notices: Vec<&str> = s.take_notices().iter().map(|n| n.template).collect();
+        assert!(notices.contains(&"Live captions started with {model}"), "{notices:?}");
+        assert!(notices.contains(&"Live captions stopped"), "{notices:?}");
+        // Stopped, it starts again.
+        s.run("captions.toggle", &json!({})).unwrap();
+        assert!(matches!(s.captions_state(), CaptionState::Loading | CaptionState::Running));
+    }
+
+    #[test]
+    fn a_failed_model_load_is_reported_and_ends_the_run() {
+        let mut s = captioned();
+        s.set_caption_loader(Arc::new(|_: &Path, _: &str| Err(SpeechError::Model("broken weights".into()))));
+        s.run("captions.start", &json!({})).unwrap();
+        s.finish_captions_blocking();
+        let notices = s.take_notices();
+        let failed = notices.iter().find(|n| n.template == "Live captions stopped: {error}");
+        assert!(failed.is_some_and(|n| n.error && n.text().contains("broken weights")), "{notices:?}");
+        assert!(!notices.iter().any(|n| n.template == "Live captions stopped"), "{notices:?}");
+        // The failure stays readable after the run ends, until the next start.
+        assert!(matches!(s.captions_state(), CaptionState::Failed(why) if why.contains("broken weights")));
+        let (status, _) = s.run("captions.status", &json!({})).unwrap();
+        assert!(status["state"].as_str().is_some_and(|t| t.starts_with("failed") && t.contains("broken weights")), "{status}");
+        s.set_caption_loader(Arc::new(|_: &Path, _: &str| Err(SpeechError::Model("still broken".into()))));
+        s.run("captions.start", &json!({})).unwrap();
+        assert!(!matches!(s.captions_state(), CaptionState::Failed(why) if why.contains("broken weights")));
+        s.finish_captions_blocking();
     }
 }

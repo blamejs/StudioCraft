@@ -141,6 +141,8 @@ pub fn catalog() -> Vec<Bindable> {
         bindable(c("stream.toggle"), "Start or Stop Streaming", &[]),
         bindable(c("replay.toggle"), "Start or Stop Replay Buffer", &[]),
         bindable(c("replay.save"), "Save Replay", &[]),
+        bindable(c("captions.toggle"), "Start or Stop Live Captions", &[]),
+        bindable(c("captions.download"), "Download Speech Model", &[]),
         bindable(c("audio_tracks.open_last"), "Open Last Audio Tracks in Editor", &[]),
         bindable(c("audio_tracks.marker"), "Add Audio Tracks Marker", &[]),
         bindable(c("studio.toggle"), "Studio Mode", &[]).toggle(),
@@ -303,7 +305,13 @@ pub fn menu_bar(s: &MenuState) -> MenuBar {
     collection.extend(list("collection.switch", s.collections, s.collection));
     let tools = Menu::new(
         title("Tools"),
-        vec![item("tools.encoders", "Available Encoders"), item("hardware_encoders.retest", "Test Hardware Encoders Again")],
+        vec![
+            Node::Item(Item::new(CommandRef::new("captions.toggle"), crate::i18n::command_label("captions.toggle", "Live Captions")).check(false)),
+            item("captions.download", "Download Speech Model"),
+            Node::Separator,
+            item("tools.encoders", "Available Encoders"),
+            item("hardware_encoders.retest", "Test Hardware Encoders Again"),
+        ],
     );
     let community = COMMUNITY.iter().map(|(id, _, label)| item(id, label)).collect();
     let help = Menu::new(

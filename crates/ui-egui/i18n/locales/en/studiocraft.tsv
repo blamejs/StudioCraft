@@ -647,3 +647,42 @@ menu	Transform	Transform
 @msg	there is no display `{id}`: the system lists no displays	there is no display `{id}`: the system lists no displays
 @msg	there is no display `{id}` (the displays are {ids})	there is no display `{id}` (the displays are {ids})
 @msg	a {width} × {height} display can't be the canvas: each side must be from {min} to {max} pixels	a {width} × {height} display can't be the canvas: each side must be from {min} to {max} pixels
+	Live Captions	Live Captions
+	Speech model	Speech model
+	Whisper tiny (multilingual)	Whisper tiny (multilingual)
+	Whisper base (multilingual)	Whisper base (multilingual)
+	Whisper small (multilingual)	Whisper small (multilingual)
+	Detect	Detect
+	English	English
+	Spanish	Spanish
+	French	French
+	German	German
+	Italian	Italian
+	Portuguese	Portuguese
+	Dutch	Dutch
+	Polish	Polish
+	Russian	Russian
+	Ukrainian	Ukrainian
+	Turkish	Turkish
+	Arabic	Arabic
+	Hindi	Hindi
+	Japanese	Japanese
+	Korean	Korean
+	Chinese	Chinese
+	Lines	Lines
+	Characters per line	Characters per line
+	Clear after (seconds, 0 keeps the text)	Clear after (seconds, 0 keeps the text)
+	Start Live Captions	Start Live Captions
+	Stop Live Captions	Stop Live Captions
+	Start or Stop Live Captions	Start or Stop Live Captions
+	Live Captions Status	Live Captions Status
+	Download Speech Model	Download Speech Model
+	Cancel Speech Model Download	Cancel Speech Model Download
+@msg	Live captions started with {model}	Live captions started with {model}
+@msg	Live captions stopped	Live captions stopped
+@msg	Live captions stopped: {error}	Live captions stopped: {error}
+@msg	Speech model {model} downloaded	Speech model {model} downloaded
+@msg	The download of speech model {model} was canceled	The download of speech model {model} was canceled
+@msg	Speech model {model} could not be downloaded: {error}	Speech model {model} could not be downloaded: {error}
+@msg	Captions saved to {path}	Captions saved to {path}
+@msg	The captions could not be saved: {error}	The captions could not be saved: {error}

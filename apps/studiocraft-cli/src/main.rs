@@ -13,7 +13,7 @@ use serde_json::json;
 use studiocraft_model::{Profile, SceneCollection};
 use studiocraft_render::Gpu;
 use studiocraft_studio::files::read_collection_file;
-use studiocraft_studio::{Studio, builtin_registry};
+use studiocraft_studio::{CaptionBoard, Studio, builtin_registry};
 
 const USAGE: &str = "\
 usage:
@@ -77,7 +77,7 @@ fn check(paths: &[String]) -> Result<(), String> {
         return Err("name at least one file".into());
     }
     let ffmpeg = Arc::new(RwLock::new(String::new()));
-    let registry = builtin_registry(&ffmpeg).map_err(|e| e.to_string())?;
+    let registry = builtin_registry(&ffmpeg, &Arc::new(CaptionBoard::new())).map_err(|e| e.to_string())?;
     let mut failed = false;
     for p in paths {
         // The file's size is checked before it is read.
@@ -153,10 +153,11 @@ fn bench_collection() -> SceneCollection {
 fn bench(seconds: f64) -> Result<(), String> {
     let gpu = Gpu::headless().map_err(|e| format!("no graphics device: {e}"))?;
     let ffmpeg = Arc::new(RwLock::new(String::new()));
-    let registry = Arc::new(builtin_registry(&ffmpeg).map_err(|e| e.to_string())?);
+    let captions = Arc::new(CaptionBoard::new());
+    let registry = Arc::new(builtin_registry(&ffmpeg, &captions).map_err(|e| e.to_string())?);
     let mut profile = Profile::default();
     profile.video.fps_num = 60;
-    let mut studio = Studio::new(Some(gpu), bench_collection(), profile, registry, ffmpeg);
+    let mut studio = Studio::new(Some(gpu), bench_collection(), profile, registry, ffmpeg, captions);
     let until = Instant::now() + Duration::try_from_secs_f64(seconds).map_err(|e| e.to_string())?;
     while Instant::now() < until {
         studio.tick();

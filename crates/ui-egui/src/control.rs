@@ -5,7 +5,7 @@ use craft_keymap::CommandRef;
 use craft_menu::{ItemState, LayoutOptions, MenuBar, Node, Target};
 use serde_json::{Value, json};
 use studiocraft_engine::command::Undo;
-use studiocraft_studio::OutputKind;
+use studiocraft_studio::{CaptionState, OutputKind};
 
 use crate::i18n::Msg;
 use crate::{APP_NAME, StudioApp, commands};
@@ -78,6 +78,7 @@ impl StudioApp {
             "studio.toggle" => on(engine.studio_mode()),
             "replay.toggle" => on(self.studio.output(OutputKind::Replay).is_some_and(|s| s.active)),
             "replay.save" => ItemState { enabled: self.studio.output(OutputKind::Replay).is_some_and(|s| s.active), checked: None },
+            "captions.toggle" => on(matches!(self.studio.captions_state(), CaptionState::Loading | CaptionState::Running)),
             "audio_tracks.open_last" => ItemState { enabled: self.studio.audio_tracks_last_session().is_some(), checked: None },
             "audio_tracks.marker" => ItemState { enabled: self.studio.audio_tracks_running(), checked: None },
             "dock.scenes" => on(p.docks.scenes),

@@ -116,7 +116,10 @@ flags. The two flags keep the headless backend's file access inside the folders 
   `record.start` and a `record.toggle` that would start a recording, and for `replay_save` and
   `replay.save`. With audio tracks on for the stream, the recording folder is also checked for
   `stream_start`, `stream.start` and a `stream.toggle` that would start the stream.
-  `audio_tracks_repair` and `audio_tracks.repair` rewrite files, so their `folder` must lie inside
+  `captions.download` writes a speech model into the models folder, so that folder, the model's
+  folder and its files must lie inside a write root. `captions.start`, and a `captions.toggle` that
+  would start captions, read a model from that folder, so they must lie inside a read root. The
+  caption status reports `downloaded` as null for a model outside the read roots. `audio_tracks_repair` and `audio_tracks.repair` rewrite files, so their `folder` must lie inside
   a write root. With or without roots, the studio repairs only the recording folder and the
   folders inside it. `audio_tracks_open_last` and `audio_tracks.open_last` need the last session
   file inside a read root.

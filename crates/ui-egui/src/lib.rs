@@ -45,7 +45,7 @@ use studiocraft_platform::display::DisplayInfo;
 use studiocraft_render::Gpu;
 use studiocraft_render::device::{Candidate, Preference};
 use studiocraft_studio::files::read_collection_file;
-use studiocraft_studio::{OutputKind, Studio, UiAction, builtin_registry, default_collection};
+use studiocraft_studio::{CaptionBoard, OutputKind, Studio, UiAction, builtin_registry, default_collection};
 
 use crate::forms::{Browse, Filters, Properties};
 use crate::i18n::Msg;
@@ -255,8 +255,9 @@ impl StudioApp {
     /// window's graphics device.
     pub fn boot(mut store: Store, render: Option<egui_wgpu::RenderState>, problems: Vec<String>) -> StudioApp {
         let ffmpeg = Arc::new(RwLock::new(String::new()));
+        let captions = Arc::new(CaptionBoard::new());
         let mut notices: Vec<Msg> = Vec::new();
-        let registry = match builtin_registry(&ffmpeg) {
+        let registry = match builtin_registry(&ffmpeg, &captions) {
             Ok(r) => r,
             Err(e) => {
                 notices.push(tmsg!("A plug-in could not be loaded: {error}", error = e));
@@ -292,7 +293,7 @@ impl StudioApp {
             }
         };
         let gpu = render.as_ref().map(|rs| Gpu::new(rs.device.clone(), rs.queue.clone()).with_adapter(Candidate::of(&rs.adapter, None)));
-        let mut studio = Studio::new(gpu, collection, profile, Arc::new(registry), ffmpeg);
+        let mut studio = Studio::new(gpu, collection, profile, Arc::new(registry), ffmpeg, captions);
         studio.keep_hardware_tests_in(store.dir().map(|d| d.join(studiocraft_studio::HARDWARE_TESTS_FILE)));
         store.update(|p| {
             p.profile = studio.profile().name.clone();

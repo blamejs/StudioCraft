@@ -12,7 +12,7 @@ use studiocraft_model::{FieldKind, PathMode, Profile, SceneCollection, Settings,
 use studiocraft_render::Gpu;
 use studiocraft_studio::capture::{MAX_PNG_SIDE, png, scaled_size};
 use studiocraft_studio::files::read_collection_file;
-use studiocraft_studio::{OutputKind, Studio, StudioError, View, builtin_registry, default_collection, recording_folder};
+use studiocraft_studio::{CaptionBoard, CaptionState, OutputKind, Studio, StudioError, View, builtin_registry, default_collection, recording_folder};
 
 use crate::backend::{Backend, McpError};
 use crate::roots::{Access, Roots, shown};
@@ -129,8 +129,13 @@ impl Headless {
     /// A studio on `gpu` held to `options`.
     pub fn with_options(gpu: Option<Gpu>, options: ServerOptions) -> Result<Headless, McpError> {
         let ffmpeg = Arc::new(RwLock::new(String::new()));
-        let registry = builtin_registry(&ffmpeg).map_err(|e| McpError::Studio(e.into()))?;
-        let studio = Studio::new(gpu, default_collection("Untitled"), Profile::default(), Arc::new(registry), ffmpeg);
+        let captions = Arc::new(CaptionBoard::new());
+        let registry = builtin_registry(&ffmpeg, &captions).map_err(|e| McpError::Studio(e.into()))?;
+        let mut studio = Studio::new(gpu, default_collection("Untitled"), Profile::default(), Arc::new(registry), ffmpeg, captions);
+        // The status looks at speech model files only inside the read roots.
+        if let Some(roots) = options.roots.clone() {
+            studio.set_model_file_filter(Some(Arc::new(move |p: &Path| roots.check(p, Access::Read).is_ok())));
+        }
         Ok(Headless { studio, options })
     }
 
@@ -154,6 +159,16 @@ impl Headless {
             Some(roots) => Ok(roots.check(path, access)?),
             None => Ok(path.to_path_buf()),
         }
+    }
+
+    /// The models folder, and the folder and files of speech model `model` in it, held to the
+    /// roots, so a link inside the models folder cannot lead outside them.
+    fn speech_model_allowed(&self, model: Option<&str>, access: Access) -> Result<(), McpError> {
+        self.allowed(self.studio.models_dir(), access)?;
+        for path in self.studio.speech_model_paths(model) {
+            self.allowed(&path, access)?;
+        }
+        Ok(())
     }
 
     /// Every path field of `schema` set in `settings`, held to the roots: `settings` with each such
@@ -244,6 +259,17 @@ impl Headless {
             // Audio tracks of a stream go to the recording folder.
             Command::StreamStart {} | Command::StreamToggle {} if starts_stream && self.tracks_follow_stream() => {
                 recording = Some(self.checked_recording_folder(roots)?);
+            }
+            // A speech model is downloaded into the models folder.
+            Command::CaptionsDownload { model } => {
+                self.speech_model_allowed(model.as_deref(), Access::Write)?;
+            }
+            // Starting captions reads a speech model from the models folder.
+            Command::CaptionsStart { model, .. } => {
+                self.speech_model_allowed(model.as_deref(), Access::Read)?;
+            }
+            Command::CaptionsToggle {} if !matches!(self.studio.captions_state(), CaptionState::Loading | CaptionState::Running) => {
+                self.speech_model_allowed(None, Access::Read)?;
             }
             // Repair rewrites the files it finds.
             Command::AudioTracksRepair { folder } => {

@@ -417,6 +417,39 @@ fn runtime_commands_are_handed_to_the_app() {
 }
 
 #[test]
+fn caption_commands_are_handed_to_the_app() {
+    let mut e = engine();
+    for (id, params, action) in [
+        ("captions.start", json!({}), RuntimeAction::CaptionsStart { model: None, language: None }),
+        (
+            "captions.start",
+            json!({"model": "whisper-tiny", "language": "fr"}),
+            RuntimeAction::CaptionsStart { model: Some("whisper-tiny".into()), language: Some("fr".into()) },
+        ),
+        ("captions.stop", json!({}), RuntimeAction::CaptionsStop),
+        ("captions.toggle", json!({}), RuntimeAction::CaptionsToggle),
+        ("captions.status", json!({}), RuntimeAction::CaptionsStatus),
+        ("captions.download", json!({}), RuntimeAction::CaptionsDownload { model: None }),
+        ("captions.download", json!({"model": "whisper-base"}), RuntimeAction::CaptionsDownload { model: Some("whisper-base".into()) }),
+        ("captions.download_cancel", json!({}), RuntimeAction::CaptionsDownloadCancel),
+    ] {
+        let o = run(&mut e, id, params).unwrap();
+        assert_eq!(o.runtime, Some(action), "{id}");
+        assert!(!o.changed);
+    }
+    for (id, bad) in [
+        ("captions.start", json!({"model": ""})),
+        ("captions.start", json!({"language": " "})),
+        ("captions.start", json!({"model": 3})),
+        ("captions.start", json!({"modle": "whisper-tiny"})),
+        ("captions.download", json!({"model": ""})),
+        ("captions.download", json!({"model": 3})),
+    ] {
+        assert!(run(&mut e, id, bad.clone()).is_err(), "{id} {bad}");
+    }
+}
+
+#[test]
 fn a_source_is_set_to_record_its_own_track_or_not() {
     let mut e = engine();
     run(&mut e, "source.add", json!({"kind": "mic", "name": "Mic"})).unwrap();

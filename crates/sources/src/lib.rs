@@ -12,6 +12,7 @@
 //! | `audio_input` | a microphone or line input |
 //! | `audio_output` | what a speaker or headphone device plays (Windows) |
 //! | `app_audio` | what one application plays (Windows 11 and Windows Server 2022) |
+//! | `captions` | the live captions of the program audio, from the studio's [`CaptionBoard`] |
 //!
 //! Filters: `gain`, `noise_gate`, `compressor`, `limiter`, `equalizer` (audio), `color_correction`,
 //! `chroma_key`, `color_key`, `crop_pad`, `sharpen`, `image_mask`, `scroll` (video).
@@ -19,6 +20,7 @@
 mod app_audio;
 mod audio;
 mod camera;
+pub mod captions;
 mod capture;
 mod color;
 pub mod filters;
@@ -39,6 +41,7 @@ use studiocraft_plugin::{AUDIO_QUEUE_BLOCKS, AudioOut, PluginError, Registry};
 pub use app_audio::AppAudioSource;
 pub use audio::{AudioInput, AudioOutput};
 pub use camera::CameraSource;
+pub use captions::{CaptionBoard, CaptionsSource};
 pub use capture::{DisplayCapture, WindowCapture};
 pub use color::ColorSource;
 pub use image::ImageSource;
@@ -49,8 +52,8 @@ pub use text::TextSource;
 /// that run ffmpeg.
 pub type FfmpegSetting = Arc<RwLock<String>>;
 
-/// Register every built-in source and filter.
-pub fn register_all(reg: &mut Registry, ffmpeg: &FfmpegSetting) -> Result<(), PluginError> {
+/// Register every built-in source and filter. The Live Captions sources draw the text on `captions`.
+pub fn register_all(reg: &mut Registry, ffmpeg: &FfmpegSetting, captions: &Arc<CaptionBoard>) -> Result<(), PluginError> {
     reg.register_source(Arc::new(ColorSource))?;
     reg.register_source(Arc::new(ImageSource))?;
     reg.register_source(Arc::new(TextSource))?;
@@ -61,6 +64,7 @@ pub fn register_all(reg: &mut Registry, ffmpeg: &FfmpegSetting) -> Result<(), Pl
     reg.register_source(Arc::new(AudioInput))?;
     reg.register_source(Arc::new(AudioOutput))?;
     reg.register_source(Arc::new(AppAudioSource::new(craft_app_audio::Discovery::system())))?;
+    reg.register_source(Arc::new(CaptionsSource::new(Arc::clone(captions))))?;
     reg.register_filter(Arc::new(filters::Gain))?;
     reg.register_filter(Arc::new(filters::NoiseGate))?;
     reg.register_filter(Arc::new(filters::Compressor))?;
@@ -152,9 +156,12 @@ mod tests {
     fn everything_registers_once() {
         let mut reg = Registry::new();
         let ffmpeg = FfmpegSetting::default();
-        register_all(&mut reg, &ffmpeg).unwrap();
-        assert!(register_all(&mut reg, &ffmpeg).is_err(), "a second registration is refused");
-        for id in ["color", "image", "text", "media", "display_capture", "window_capture", "camera", "audio_input", "audio_output", "app_audio"] {
+        let board = Arc::new(CaptionBoard::new());
+        register_all(&mut reg, &ffmpeg, &board).unwrap();
+        assert!(register_all(&mut reg, &ffmpeg, &board).is_err(), "a second registration is refused");
+        for id in
+            ["color", "image", "text", "media", "display_capture", "window_capture", "camera", "audio_input", "audio_output", "app_audio", "captions"]
+        {
             assert!(reg.source(id).is_ok(), "{id}");
         }
     }
