@@ -104,7 +104,7 @@ names on a plain tile.
 
 StudioCraft contributors wrote the JSON files in `crates/model/fixtures` for the save-format tests,
 and they are licensed MIT OR Apache-2.0. The files are `collection-v1.json` to
-`collection-v5.json` and `profile-v1.json` to `profile-v10.json`.
+`collection-v5.json` and `profile-v1.json` to `profile-v11.json`.
 
 ## Where each file is used
 

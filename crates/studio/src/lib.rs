@@ -38,7 +38,9 @@ use studiocraft_media::queue::Fifo;
 use studiocraft_media::stats::{EncoderStats, RenderStats, Snapshot};
 use studiocraft_media::video::PooledFrame;
 use studiocraft_media::{FrameRate, Tick};
-use studiocraft_model::{FilterId, FitMode, ItemId, PauseAtZero, Profile, SceneCollection, SceneId, Settings, SourceId, Transform, VideoSettings};
+use studiocraft_model::{
+    FilterId, FitMode, ItemId, LoudnessTarget, PauseAtZero, Profile, SceneCollection, SceneId, Settings, SourceId, Transform, VideoSettings,
+};
 use studiocraft_plugin::{PluginError, Registry};
 use studiocraft_render::device::{Recovery, RecoveryPolicy};
 use studiocraft_render::{CanvasViews, CaptureRequest, Compositor, Gpu, RenderShared, ThumbnailRequest, ThumbnailViews};
@@ -407,6 +409,21 @@ pub fn scope_size(canvas: (u32, u32), max_w: u32, max_h: u32) -> (u32, u32) {
     (even(w), even(h))
 }
 
+/// What `audio.loudness` reports: the readings of `reading`, each `null` while it is −∞ (silence,
+/// or too little of the program since the start or a reset), and the band of `target`.
+fn loudness_json(reading: &LoudnessReading, target: &LoudnessTarget) -> Value {
+    let finite = |v: f64| if v.is_finite() { json!(v) } else { Value::Null };
+    json!({
+        "momentary_lufs": finite(reading.momentary_lufs),
+        "short_term_lufs": finite(reading.short_term_lufs),
+        "integrated_lufs": finite(reading.integrated_lufs),
+        "range_lu": finite(reading.range_lu),
+        "true_peak_dbtp": finite(reading.true_peak_dbtp),
+        "generation": reading.generation,
+        "target": {"low_lufs": target.low_lufs, "high_lufs": target.high_lufs},
+    })
+}
+
 impl Studio {
     /// A studio for `collection` with `profile`. Without `gpu` nothing is composited (the
     /// command-line tool and tests); with one, the compositor starts at once. Live captions write
@@ -532,6 +549,7 @@ impl Studio {
         let mut result = outcome.result;
         if let Some(action) = outcome.runtime {
             match action {
+                RuntimeAction::AudioLoudness => result = loudness_json(&self.master_loudness(), &self.profile.audio.loudness_target),
                 RuntimeAction::SceneThumbnails { scenes, fps } => result = self.set_thumbnails(scenes, fps),
                 RuntimeAction::AudioTracksStatus => result = self.audio_tracks_json(),
                 RuntimeAction::AudioTracksRepair { folder } => result = self.repair_audio_tracks(&folder)?,
@@ -1425,6 +1443,7 @@ impl Studio {
     fn apply_profile(&mut self, profile: Profile) -> Result<((u32, u32), (u32, u32)), StudioError> {
         profile.audio_tracks.check().map_err(StudioError::Output)?;
         profile.pause.check().map_err(StudioError::Output)?;
+        profile.audio.loudness_target.check().map_err(StudioError::Output)?;
         let video_changed = profile.video.sanitized() != self.profile.video.sanitized();
         if video_changed && self.outputs.any_active() {
             return Err(StudioError::Output("stop recording, streaming and the replay buffer before changing the video settings".into()));

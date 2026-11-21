@@ -77,6 +77,8 @@
     {"name": "equalizer high shelf", "group": "audio", "value": 5000, "unit": "Hz", "code": "sources::filters::Equalizer", "estimated": true},
     {"name": "momentary loudness window", "group": "audio", "value": 400, "unit": "ms", "code": "craft_audio_dsp::loudness", "estimated": false, "source": "ITU-R BS.1770-4; EBU R 128"},
     {"name": "short-term loudness window", "group": "audio", "value": 3, "unit": "s", "code": "craft_audio_dsp::loudness", "estimated": false, "source": "ITU-R BS.1770-4; EBU R 128"},
+    {"name": "program loudness target", "group": "audio", "value": [-18, -14], "unit": "LUFS", "code": "model::profile::LoudnessTarget::default", "estimated": true},
+    {"name": "loudness target range", "group": "audio", "value": [-60, 0], "unit": "LUFS", "code": "model::profile::LoudnessTarget::MIN_LUFS", "estimated": true},
     {"name": "recording quality compact (CRF)", "group": "output", "value": 28, "code": "model::profile::RecordingQuality::quality_level", "estimated": true},
     {"name": "recording quality high (CRF)", "group": "output", "value": 23, "code": "model::profile::RecordingQuality::quality_level", "estimated": true},
     {"name": "recording quality pristine (CRF)", "group": "output", "value": 16, "code": "model::profile::RecordingQuality::quality_level", "estimated": true},

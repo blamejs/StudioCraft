@@ -100,6 +100,8 @@ pub enum RuntimeAction {
     StopReplay,
     ToggleReplay,
     SaveReplay,
+    /// The program's loudness readings and the profile's loudness target.
+    AudioLoudness,
     /// The state of the audio tracks.
     AudioTracksStatus,
     /// Repair the audio tracks of takes in `folder` that ended without finishing their files.
@@ -394,6 +396,10 @@ pub enum Command {
     ReplayToggle {},
     #[serde(rename = "replay.save")]
     ReplaySave {},
+    /// The final mix's loudness (momentary, short-term, integrated, range and true peak) and the
+    /// profile's loudness target.
+    #[serde(rename = "audio.loudness")]
+    AudioLoudness {},
     #[serde(rename = "audio_tracks.status")]
     AudioTracksStatus {},
     /// Repair the audio tracks of takes that ended without finishing their files: `folder` is a
@@ -624,6 +630,7 @@ impl Command {
             Command::ReplayStop {} => "replay.stop",
             Command::ReplayToggle {} => "replay.toggle",
             Command::ReplaySave {} => "replay.save",
+            Command::AudioLoudness {} => "audio.loudness",
             Command::AudioTracksStatus {} => "audio_tracks.status",
             Command::AudioTracksRepair { .. } => "audio_tracks.repair",
             Command::CaptionsStart { .. } => "captions.start",
@@ -755,6 +762,7 @@ const SPECS: &[CommandSpec] = &[
     spec("replay.stop", "Stop Replay Buffer", "", Undo::NotUndoable),
     spec("replay.toggle", "Start or Stop Replay Buffer", "", Undo::NotUndoable),
     spec("replay.save", "Save Replay", "", Undo::NotUndoable),
+    spec("audio.loudness", "Program Loudness", "", Undo::NotUndoable),
     spec("audio_tracks.status", "Audio Tracks Status", "", Undo::NotUndoable),
     spec("audio_tracks.repair", "Repair Audio Tracks", "folder: path to a take's folder or the recording folder", Undo::NotUndoable),
     spec("captions.start", "Start Live Captions", "model?: speech model id, language?: ISO 639-1 code or auto", Undo::NotUndoable),
@@ -825,6 +833,7 @@ mod tests {
             Command::CaptionsStop {},
             Command::CaptionsToggle {},
             Command::CaptionsStatus {},
+            Command::AudioLoudness {},
             Command::CaptionsDownload { model: Some("whisper-base".into()) },
             Command::CaptionsDownloadCancel {},
             Command::AppAudioLanes {},
