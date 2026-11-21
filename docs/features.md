@@ -517,6 +517,11 @@ picture fits a 256 × 144 box by default, keeps the canvas's aspect ratio, and i
 times a second. The pictures stay on the GPU. Scenes past the sixteenth are not drawn and are
 counted.
 
+The [`scene.thumbnails`](control-protocol.md#scenethumbnails) command names the scenes to draw and
+how often: 2 times a second by default. While no command has named any, or after one names none,
+the compositor draws no scene pictures, so a scene list that shows only names adds no work to a
+frame.
+
 ## Interface
 
 ### Theme

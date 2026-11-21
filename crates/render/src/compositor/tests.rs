@@ -793,7 +793,8 @@ fn thumbnails_draw_each_scene_at_the_canvas_aspect() {
     let (red, green) = (solid([255, 0, 0, 255], 64, 32), solid([0, 255, 0, 255], 32, 32));
     let blue = solid([0, 0, 255, 255], 64, 32);
     c.set_plan(Arc::new(Plan { program: one_item_scene(3, &blue), ..Plan::default() }));
-    let request = ThumbnailRequest { scenes: vec![one_item_scene(1, &red), one_item_scene(2, &green)], fps: 2.0, size: (16, 16) };
+    let request =
+        ThumbnailRequest { scenes: vec![one_item_scene(1, &red), one_item_scene(2, &green)], size: (16, 16), ..ThumbnailRequest::default() };
     c.set_thumbnails(Some(Arc::new(request)));
     c.frame(Tick(0), &AtomicU64::new(0));
     let views = c.thumbnail_views().unwrap();
@@ -822,8 +823,11 @@ fn thumbnail_filters_run_and_keep_their_pictures_when_the_plan_changes() {
     inverted.effects = vec![VideoEffect::new("test.invert", INVERT, params)];
     let mut pictured = item(2, &solid([0, 255, 0, 255], 16, 16), Transform::default());
     pictured.effects = vec![VideoEffect { image: Some(red_and_blue()), ..VideoEffect::new("test.picture", PICTURE, [0.0; VIDEO_EFFECT_PARAMS]) }];
-    let request =
-        ThumbnailRequest { scenes: vec![SceneDesc { items: vec![inverted] }, SceneDesc { items: vec![pictured] }], fps: 2.0, size: (16, 16) };
+    let request = ThumbnailRequest {
+        scenes: vec![SceneDesc { items: vec![inverted] }, SceneDesc { items: vec![pictured] }],
+        size: (16, 16),
+        ..ThumbnailRequest::default()
+    };
     c.set_thumbnails(Some(Arc::new(request)));
     // A new plan without these filters keeps the picture the thumbnails read.
     c.set_plan(Arc::new(Plan::default()));
@@ -912,6 +916,32 @@ fn a_slot_whose_scene_changed_is_drawn_without_waiting_for_the_rate() {
     c.set_thumbnails(thumbnails(vec![two, one_item_scene(1, &a)], 2.0));
     c.frame(ms(300), &lost);
     assert_eq!(drawn(&c), [Some(2), Some(1)]);
+}
+
+#[test]
+fn a_slot_whose_key_changed_is_drawn_without_waiting_for_the_rate() {
+    let mut c = noop_compositor(32, 18);
+    let a = solid([255, 0, 0, 255], 32, 18);
+    let lost = AtomicU64::new(0);
+    let keyed = |keys: Vec<u64>, x: f32| {
+        let scenes = vec![SceneDesc { items: vec![item(1, &a, at(x, 0.0))] }, one_item_scene(1, &a)];
+        Some(Arc::new(ThumbnailRequest { scenes, keys, ..ThumbnailRequest::default() }))
+    };
+    c.set_thumbnails(keyed(vec![7, 8], 0.0));
+    c.frame(ms(0), &lost);
+    assert_eq!(drawn(&c), [Some(0), Some(0)]);
+    // The same keys keep the rate.
+    c.set_thumbnails(keyed(vec![7, 8], 4.0));
+    c.frame(ms(100), &lost);
+    assert_eq!(drawn(&c), [Some(0), Some(0)]);
+    // Another scene with the same sources in slot 0 is drawn at once; slot 1 waits.
+    c.set_thumbnails(keyed(vec![9, 8], 8.0));
+    c.frame(ms(200), &lost);
+    assert_eq!(drawn(&c), [Some(1), Some(0)]);
+    // A key that is dropped counts as a change too.
+    c.set_thumbnails(keyed(vec![9], 8.0));
+    c.frame(ms(300), &lost);
+    assert_eq!(drawn(&c), [Some(1), Some(1)]);
 }
 
 #[test]

@@ -9,7 +9,7 @@ use studiocraft_media::Tick;
 use studiocraft_media::mix::Levels;
 use studiocraft_model::{FilterId, MonitorMode, SceneCollection, SceneId, Settings, SourceId};
 use studiocraft_plugin::{AudioOut, FilterInstance, FilterTarget, Reframe, Registry};
-use studiocraft_render::{ItemDesc, Plan, SceneDesc, TransitionDesc};
+use studiocraft_render::{ItemDesc, Plan, SceneDesc, ThumbnailRequest, TransitionDesc};
 
 use crate::Notice;
 
@@ -100,6 +100,18 @@ impl Wiring {
             })
         });
         Plan { program, transition, preview }
+    }
+
+    /// Small pictures of `scenes`, in this order, `fps` times a second, for a scene list, with the
+    /// slot keys `keys`, so a slot that shows another scene is drawn again soon. Call after
+    /// [`Wiring::plan`], which brings the video filters in line with the collection.
+    pub(crate) fn thumbnails(&self, c: &SceneCollection, sources: &SourceSet, scenes: &[SceneId], keys: &[u64], fps: f32) -> ThumbnailRequest {
+        ThumbnailRequest {
+            scenes: scenes.iter().map(|&id| self.scene(c, id, sources)).collect(),
+            fps,
+            keys: keys.to_vec(),
+            ..ThumbnailRequest::default()
+        }
     }
 
     fn scene(&self, c: &SceneCollection, id: SceneId, sources: &SourceSet) -> SceneDesc {
