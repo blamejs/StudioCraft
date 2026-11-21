@@ -405,8 +405,8 @@ return `{"applied"}` or `{"removed"}`; a name no layout has is an error.
 
 `stream.destinations` takes no parameters and returns `{"destinations", "running", "max"}`.
 `max` is 16. Each destination is `{"id", "name", "enabled", "server", "key", "status"}`, where
-`key` is `profile`, `held` or `none` and `server` shows a key at the end of the address, and any
-query, as dots. A destination whose key is held adds `held_name` and `held`, whether a key is held
+`key` is `profile`, `held` or `none` and `server` shows a user name and password before the host, a
+key at the end of the address, and any query, as dots. A destination whose key is held adds `held_name` and `held`, whether a key is held
 under that name now. `status` is `idle` while no stream runs, `not_in_stream` for a destination
 added after the stream started, and otherwise `connecting`, `live`, `retrying`, `stopped` or
 `failed`. While the stream runs a destination also has `bytes`, `dropped` and `reconnects`; a
@@ -422,6 +422,14 @@ changes only the fields given; it returns `{"id", "changed"}`, and a call that c
 not save the profile. With `key` set to `held`, `held_name` names the session key; without it the
 destination keeps its held name, or uses its id.
 
+A command does not send the profile's stream key, or a key held for the session, to a server the
+user did not send it to. Only the destination `main` takes `key` `profile` from a command. A
+command's `held_name` must be the name the destination already uses, so a command cannot give a
+destination the session key of another one. A command that would leave a destination with the
+profile's key or a held key and a server other than the one it had with that key is refused: give
+`key` `none` with the new server. The Streaming window's own Add Destination and Save make these
+changes.
+
 `stream.destination_remove` takes `{"id"}` and returns `{"removed"}`. A destination that is sending
 or trying to is not removed until it is stopped.
 
@@ -429,7 +437,8 @@ or trying to is not removed until it is stopped.
 that destination of the running stream; the others go on. They return `{"id", "on"}`.
 
 These are errors: a missing or unknown `id`, a 17th destination, a `name` over 128 characters, a
-`server` over 4096 bytes, a `name` or `server` with a control character, a `key` other than
+`server` over 4096 bytes, a `name` or `server` with a control character, a `server` with a user
+name or password before the host (`rtmp://user:pass@host/app`), a `key` other than
 `profile`, `held` or `none`, `held_name` without `key` `held` or outside 1 to 64 bytes, a parameter
 of the wrong type, a start or stop while no stream runs or while the running stream was started with
 another profile, and a start of a destination whose held key is not set. While a stream of another

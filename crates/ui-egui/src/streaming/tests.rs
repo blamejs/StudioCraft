@@ -42,7 +42,7 @@ fn the_window_opens_and_closes_from_the_view_menu() {
     assert_eq!(run(&mut a, &ctx, "view.streaming", json!({})).unwrap(), json!({"on": true}));
     assert_eq!(a.hud()["ui"]["streaming_open"], json!(true));
     assert_eq!(a.item_state("view.streaming").checked, Some(true));
-    run(&mut a, &ctx, "stream.destination_add", json!({"server": "rtmp://a.example/live/secret"})).unwrap();
+    run(&mut a, &ctx, "stream.destination_add", json!({"server": "rtmp://a.example/live/secret", "key": "none"})).unwrap();
     let raw = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1280.0, 800.0))), ..Default::default() };
     let mut out = ctx.run_ui(raw, |ui| a.frame(ui));
     out.textures_delta.clear();
@@ -66,7 +66,7 @@ fn destinations_are_added_up_to_the_limit() {
         d,
         Destination { id: "destination-2".into(), name: "Backup".into(), enabled: false, server: "rtmp://b.example/app".into(), key: KeyRef::None }
     );
-    run(&mut a, &ctx, "stream.destination_add", json!({"key": "held", "held_name": "night"})).unwrap();
+    a.act(&ctx, Act::run("stream.destination_add", json!({"key": "held", "held_name": "night"})));
     assert_eq!(a.studio.profile().stream.destination("destination-3").map(|d| d.key.clone()), Some(KeyRef::Held("night".into())));
     while ids(&a).len() < MAX_DESTINATIONS {
         run(&mut a, &ctx, "stream.destination_add", json!({})).unwrap();
@@ -98,6 +98,9 @@ fn bad_parameters_are_refused_and_change_nothing() {
         ("stream.destination_add", json!({"server": long_server}), "`server` is longer than 4096 bytes"),
         ("stream.destination_add", json!({"server": "rtmp://h/app\nx"}), "`server` has a control character"),
         ("stream.destination_add", json!({"server": "rtmp://h/app\n"}), "`server` has a control character"),
+        ("stream.destination_add", json!({"server": "rtmp://user:pass@h/app"}), "`server` has a user name or password"),
+        ("stream.destination_add", json!({"server": "rtmps://p@ss@h:443/app/key"}), "`server` has a user name or password"),
+        ("stream.destination_set", json!({"id": "main", "server": "rtmp://u@h"}), "`server` has a user name or password"),
         ("stream.destination_add", json!({"name": "\tBackup"}), "`name` has a control character"),
         ("stream.destination_add", json!({"key": "secret"}), "`key` is `profile`, `held` or `none`"),
         ("stream.destination_add", json!({"held_name": "x"}), "`held_name` goes with `key`: `held`"),
@@ -121,13 +124,15 @@ fn a_destination_is_changed_and_an_unchanged_one_is_not_saved_again() {
     let mut a = app();
     let ctx = egui::Context::default();
     run(&mut a, &ctx, "stream.destination_add", json!({})).unwrap();
-    let r = run(&mut a, &ctx, "stream.destination_set", json!({"id": "main", "name": "Main", "server": "rtmp://m.example/live", "key": "held"}));
+    let r = run(&mut a, &ctx, "stream.destination_set", json!({"id": "main", "name": "Main", "key": "held"}));
     assert_eq!(r.unwrap(), json!({"id": "main", "changed": true}));
+    a.act(&ctx, Act::run("stream.destination_set", json!({"id": "main", "server": "rtmp://m.example/live"})));
     let d = a.studio.profile().stream.destination("main").cloned().unwrap();
     assert_eq!((d.name.as_str(), d.server.as_str(), d.key), ("Main", "rtmp://m.example/live", KeyRef::Held("main".into())));
     // A held key keeps its name when `held_name` is left out, and takes a new one when it is given.
-    run(&mut a, &ctx, "stream.destination_set", json!({"id": "main", "key": "held", "held_name": "evening"})).unwrap();
+    a.act(&ctx, Act::run("stream.destination_set", json!({"id": "main", "key": "held", "held_name": "evening"})));
     run(&mut a, &ctx, "stream.destination_set", json!({"id": "main", "key": "held"})).unwrap();
+    run(&mut a, &ctx, "stream.destination_set", json!({"id": "main", "key": "held", "held_name": "evening"})).unwrap();
     assert_eq!(a.studio.profile().stream.destination("main").map(|d| d.key.clone()), Some(KeyRef::Held("evening".into())));
     let r = run(&mut a, &ctx, "stream.destination_set", json!({"id": "main", "name": "Main", "enabled": true}));
     assert_eq!(r.unwrap(), json!({"id": "main", "changed": false}));
@@ -141,7 +146,7 @@ fn changes_reach_an_open_settings_window() {
     let mut a = app();
     let ctx = egui::Context::default();
     run(&mut a, &ctx, "app.settings", json!({})).unwrap();
-    run(&mut a, &ctx, "stream.destination_add", json!({"server": "rtmp://a.example/live"})).unwrap();
+    run(&mut a, &ctx, "stream.destination_add", json!({"server": "rtmp://a.example/live", "key": "none"})).unwrap();
     let draft = a.settings.as_ref().map(|w| w.draft.stream.destinations.clone()).unwrap();
     assert_eq!(draft, a.studio.profile().stream.destinations);
     // An unsaved edit in Settings stays when another destination changes.
@@ -196,9 +201,10 @@ fn a_destination_is_removed_and_its_open_details_close() {
 fn the_list_hides_keys_and_says_which_held_keys_are_set() {
     let mut a = app();
     let ctx = egui::Context::default();
-    run(&mut a, &ctx, "stream.destination_add", json!({"server": "rtmp://a.example/live"})).unwrap();
+    // The window's own action gives the first destination the profile's key with a server.
+    a.act(&ctx, Act::run("stream.destination_add", json!({"server": "rtmp://a.example/live"})));
     run(&mut a, &ctx, "stream.destination_add", json!({"server": "rtmp://b.example/live/secret-key?auth=token"})).unwrap();
-    run(&mut a, &ctx, "stream.destination_add", json!({"server": "rtmp://c.example/live/room", "key": "held"})).unwrap();
+    a.act(&ctx, Act::run("stream.destination_add", json!({"server": "rtmp://c.example/live/room", "key": "held"})));
     let list = run(&mut a, &ctx, "stream.destinations", json!({})).unwrap();
     assert_eq!(list["running"], json!(false));
     assert_eq!(list["max"], json!(16));
@@ -236,10 +242,10 @@ fn a_change_that_cant_be_saved_is_put_back_and_can_be_made_again() {
     let profiles = dir.join("profiles");
     let _ = std::fs::remove_dir_all(&profiles);
     std::fs::write(&profiles, b"").unwrap();
-    let r = run(&mut a, &ctx, "stream.destination_add", json!({"server": "rtmp://a.example/live"}));
+    let r = run(&mut a, &ctx, "stream.destination_add", json!({"server": "rtmp://a.example/live", "key": "none"}));
     let after_failure = ids(&a);
     std::fs::remove_file(&profiles).unwrap();
-    let again = run(&mut a, &ctx, "stream.destination_add", json!({"server": "rtmp://a.example/live"}));
+    let again = run(&mut a, &ctx, "stream.destination_add", json!({"server": "rtmp://a.example/live", "key": "none"}));
     let saved = a.store.load_profile(&a.studio.profile().name).map(|p| p.stream.destinations.len());
     let _ = std::fs::remove_dir_all(&dir);
     assert!(r.unwrap_err().contains("could not be saved"));
@@ -268,7 +274,7 @@ fn a_change_reaches_only_its_own_destination_in_an_open_settings_draft() {
     if let Some(w) = &mut a.settings {
         w.draft.stream.destinations = vec![Destination { id: "main".into(), server: "rtmp://typed.example/live".into(), ..Destination::default() }];
     }
-    run(&mut a, &ctx, "stream.destination_add", json!({"server": "rtmp://a.example/live"})).unwrap();
+    run(&mut a, &ctx, "stream.destination_add", json!({"server": "rtmp://a.example/live", "key": "none"})).unwrap();
     let draft = a.settings.as_ref().map(|w| w.draft.stream.destinations.clone()).unwrap();
     assert_eq!(draft, a.studio.profile().stream.destinations, "the added destination replaces the draft's one with its id");
 }
@@ -278,7 +284,7 @@ fn switching_profiles_closes_open_details() {
     let mut a = app();
     let ctx = egui::Context::default();
     run(&mut a, &ctx, "view.streaming", json!({})).unwrap();
-    run(&mut a, &ctx, "stream.destination_add", json!({"server": "rtmp://a.example/live"})).unwrap();
+    run(&mut a, &ctx, "stream.destination_add", json!({"server": "rtmp://a.example/live", "key": "none"})).unwrap();
     assert!(a.streaming.as_ref().is_some_and(|p| p.editing.is_some()));
     a.named(crate::Named::DuplicateProfile, "Other").unwrap();
     run(&mut a, &ctx, "stream.destinations", json!({})).unwrap();
@@ -315,6 +321,113 @@ fn servers_are_shown_without_their_key() {
     assert_eq!(shown_server("rtmps://h/app?auth=x"), "rtmps://h/app?•••");
     assert_eq!(shown_server(""), "");
     assert_eq!(shown_server("not a url/with/slashes"), "not a url/with/slashes");
+    // A user name and password before the host are hidden up to the authority's last `@`.
+    assert_eq!(shown_server("rtmp://user:pass@h/app"), "rtmp://•••@h/app");
+    assert_eq!(shown_server("rtmps://u:p@ss@h:443/app/key"), "rtmps://•••@h:443/app/•••");
+    assert_eq!(shown_server("rtmp://u:pa?ss@h"), "rtmp://•••@h");
+    assert_eq!(shown_server("rtmp://u:pass@h?auth=x"), "rtmp://•••@h?•••");
+    assert_eq!(shown_server("rtmp://h/app/a@b"), "rtmp://h/app/•••", "an `@` after the host is not a user name");
+}
+
+#[test]
+fn commands_do_not_send_the_profile_key_to_a_new_server() {
+    let mut a = app();
+    let ctx = egui::Context::default();
+    let refused = |a: &mut StudioApp, params: Value, want: &str| {
+        let before = a.studio.profile().clone();
+        let id = if params.get("id").is_some() { "stream.destination_set" } else { "stream.destination_add" };
+        let e = run(a, &ctx, id, params.clone()).unwrap_err();
+        assert!(e.contains(want), "{params}: {e}");
+        assert_eq!(*a.studio.profile(), before, "{params}");
+    };
+    let new_server = "would send the profile's stream key to a new server";
+    let only_main = "only the destination `main` takes `key`: `profile`";
+    // A first destination added by a command with a server keeps the profile's key only from the window.
+    refused(&mut a, json!({"server": "rtmp://other.example/live"}), new_server);
+    refused(&mut a, json!({"server": "rtmp://other.example/live", "key": "profile"}), new_server);
+    run(&mut a, &ctx, "stream.destination_add", json!({})).unwrap();
+    assert_eq!(a.studio.profile().stream.destinations[0].key, KeyRef::Profile);
+    refused(&mut a, json!({"id": "main", "server": "rtmp://other.example/live"}), new_server);
+    refused(&mut a, json!({"id": "main", "server": " rtmp://other.example/live ", "key": "profile"}), new_server);
+    // Other destinations never take the profile's key from a command.
+    refused(&mut a, json!({"key": "profile"}), only_main);
+    run(&mut a, &ctx, "stream.destination_add", json!({"server": "rtmp://b.example/live"})).unwrap();
+    refused(&mut a, json!({"id": "destination-2", "key": "profile"}), only_main);
+    // The primary destination's server changes with another key, and the profile's key does not come back to it.
+    run(&mut a, &ctx, "stream.destination_set", json!({"id": "main", "server": "rtmp://m.example/live", "key": "none"})).unwrap();
+    refused(&mut a, json!({"id": "main", "key": "profile"}), new_server);
+    // Changes that leave the profile's key with the server it already goes to are made.
+    a.act(&ctx, Act::run("stream.destination_set", json!({"id": "main", "key": "profile"})));
+    assert_eq!(a.studio.profile().stream.destinations[0].key, KeyRef::Profile, "the window sets the key");
+    let r = run(&mut a, &ctx, "stream.destination_set", json!({"id": "main", "server": "rtmp://m.example/live", "key": "profile", "name": "Main"}));
+    assert_eq!(r.unwrap(), json!({"id": "main", "changed": true}));
+    run(&mut a, &ctx, "stream.destination_set", json!({"id": "main", "server": ""})).unwrap();
+    refused(&mut a, json!({"id": "main", "server": "rtmp://m.example/live"}), new_server);
+    run(&mut a, &ctx, "stream.destination_set", json!({"id": "main", "server": "rtmp://m.example/live", "key": "none"})).unwrap();
+    // The window's own Save sends the profile's key wherever the user typed.
+    a.act(&ctx, Act::run("stream.destination_set", json!({"id": "destination-2", "server": "rtmp://b2.example/live", "key": "profile"})));
+    let d = a.studio.profile().stream.destination("destination-2").cloned().unwrap();
+    assert_eq!((d.server.as_str(), d.key), ("rtmp://b2.example/live", KeyRef::Profile));
+    // A command after the window's action is a command again.
+    refused(&mut a, json!({"id": "destination-2", "server": "rtmp://other.example/live"}), new_server);
+}
+
+#[test]
+fn commands_do_not_send_a_held_key_to_a_new_server() {
+    let mut a = app();
+    let ctx = egui::Context::default();
+    let refused = |a: &mut StudioApp, params: Value, want: &str| {
+        let before = a.studio.profile().clone();
+        let id = if params.get("id").is_some() { "stream.destination_set" } else { "stream.destination_add" };
+        let e = run(a, &ctx, id, params.clone()).err().unwrap_or_else(|| panic!("{params} was made"));
+        assert!(e.contains(want), "{params}: {e}");
+        assert_eq!(*a.studio.profile(), before, "{params}");
+    };
+    let new_server = "would send its session key to a new server";
+    let not_used = "does not use the session key `night`";
+    let key = |a: &StudioApp, id: &str| a.studio.profile().stream.destination(id).map(|d| (d.server.clone(), d.key.clone()));
+    let night = || ("rtmp://n.example/live".to_string(), KeyRef::Held("night".into()));
+    a.act(&ctx, Act::run("stream.destination_add", json!({})));
+    a.act(&ctx, Act::run("stream.destination_add", json!({"server": "rtmp://n.example/live", "key": "held", "held_name": "night"})));
+    assert_eq!(key(&a, "destination-2"), Some(night()), "the window adds a held key with a server");
+    // A new destination takes neither a held key with a server nor another destination's held key.
+    refused(&mut a, json!({"server": "rtmp://other.example/live", "key": "held"}), new_server);
+    refused(&mut a, json!({"key": "held", "held_name": "night"}), not_used);
+    refused(&mut a, json!({"server": "rtmp://n.example/live", "key": "held", "held_name": "night"}), not_used);
+    // A destination's held key does not go to a new server, and the destination does not take another held key.
+    refused(&mut a, json!({"id": "destination-2", "server": "rtmp://other.example/live"}), new_server);
+    refused(&mut a, json!({"id": "destination-2", "server": " rtmp://other.example/live ", "key": "held"}), new_server);
+    refused(&mut a, json!({"id": "main", "key": "held", "held_name": "night"}), not_used);
+    let r = run(
+        &mut a,
+        &ctx,
+        "stream.destination_set",
+        json!({"id": "destination-2", "server": " rtmp://n.example/live", "key": "held", "held_name": "night"}),
+    );
+    assert_eq!(r.unwrap(), json!({"id": "destination-2", "changed": false}), "the name the destination already uses is taken");
+    run(&mut a, &ctx, "stream.destination_set", json!({"id": "destination-2", "name": "Night"})).unwrap();
+    // An empty server and then a new one is refused.
+    run(&mut a, &ctx, "stream.destination_set", json!({"id": "destination-2", "server": ""})).unwrap();
+    refused(&mut a, json!({"id": "destination-2", "server": "rtmp://other.example/live"}), new_server);
+    // No key and then the held key again is refused.
+    a.act(&ctx, Act::run("stream.destination_set", json!({"id": "destination-2", "server": "rtmp://n.example/live"})));
+    assert_eq!(key(&a, "destination-2"), Some(night()));
+    run(&mut a, &ctx, "stream.destination_set", json!({"id": "destination-2", "key": "none"})).unwrap();
+    refused(&mut a, json!({"id": "destination-2", "key": "held"}), new_server);
+    refused(&mut a, json!({"id": "destination-2", "key": "held", "held_name": "night"}), not_used);
+    // A removal and then an add with the same id is refused the held key with a server.
+    run(&mut a, &ctx, "stream.destination_remove", json!({"id": "destination-2"})).unwrap();
+    refused(&mut a, json!({"server": "rtmp://n.example/live", "key": "held"}), new_server);
+    refused(&mut a, json!({"key": "held", "held_name": "night"}), not_used);
+    assert_eq!(run(&mut a, &ctx, "stream.destination_add", json!({"key": "held"})).unwrap(), json!({"id": "destination-2"}));
+    refused(&mut a, json!({"id": "destination-2", "server": "rtmp://n.example/live"}), new_server);
+    // The window's own Save sends the held key wherever the user typed, and a command after it is a command again.
+    a.act(
+        &ctx,
+        Act::run("stream.destination_set", json!({"id": "destination-2", "server": "rtmp://n.example/live", "key": "held", "held_name": "night"})),
+    );
+    assert_eq!(key(&a, "destination-2"), Some(night()));
+    refused(&mut a, json!({"id": "destination-2", "server": "rtmp://other.example/live"}), new_server);
 }
 
 #[test]

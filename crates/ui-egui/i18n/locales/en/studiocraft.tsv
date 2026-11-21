@@ -623,6 +623,11 @@ menu	Transform	Transform
 @msg	`{command}`: `{key}` has a control character	`{command}`: `{key}` has a control character
 @msg	`{command}`: `name` is longer than {max} characters	`{command}`: `name` is longer than {max} characters
 @msg	`{command}`: `server` is longer than {max} bytes	`{command}`: `server` is longer than {max} bytes
+@msg	`{command}`: `server` has a user name or password before the host, which is not supported	`{command}`: `server` has a user name or password before the host, which is not supported
+@msg	`{command}`: only the destination `{primary}` takes `key`: `profile` from a command; choose the profile's key for `{id}` in the Streaming window	`{command}`: only the destination `{primary}` takes `key`: `profile` from a command; choose the profile's key for `{id}` in the Streaming window
+@msg	`{command}`: `{id}` would send the profile's stream key to a new server; give `key`: `none` with the server, or make the change in the Streaming window	`{command}`: `{id}` would send the profile's stream key to a new server; give `key`: `none` with the server, or make the change in the Streaming window
+@msg	`{command}`: `{id}` would send its session key to a new server; give `key`: `none` with the server, or make the change in the Streaming window	`{command}`: `{id}` would send its session key to a new server; give `key`: `none` with the server, or make the change in the Streaming window
+@msg	`{command}`: `{id}` does not use the session key `{name}`; give `key`: `held` without `held_name`, or choose its session key in the Streaming window	`{command}`: `{id}` does not use the session key `{name}`; give `key`: `held` without `held_name`, or choose its session key in the Streaming window
 @msg	`{command}`: `key` is `profile`, `held` or `none`, not `{key}`	`{command}`: `key` is `profile`, `held` or `none`, not `{key}`
 @msg	`{command}`: `held_name` goes with `key`: `held`	`{command}`: `held_name` goes with `key`: `held`
 @msg	`{command}`: `held_name` is 1 to {max} bytes	`{command}`: `held_name` is 1 to {max} bytes

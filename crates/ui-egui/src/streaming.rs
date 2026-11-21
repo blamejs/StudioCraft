@@ -99,13 +99,18 @@ impl Edit {
     }
 }
 
-/// `server` as the window shows it: a part after the application, which can be a key, and a
-/// query are shown as dots, whichever key source the destination uses.
+/// `server` as the window shows it: a user name and password before the host, a part after the
+/// application, which can be a key, and a query are shown as dots, whichever key source the
+/// destination uses.
 pub(crate) fn shown_server(server: &str) -> String {
     let s = server.trim();
-    let (s, query) = match s.split_once('?') {
+    let hidden = match user_info(s) {
+        Some((start, at)) => format!("{}•••{}", s.get(..start).unwrap_or(""), s.get(at..).unwrap_or("")),
+        None => s.to_string(),
+    };
+    let (s, query) = match hidden.split_once('?') {
         Some((a, _)) => (a, true),
-        None => (s, false),
+        None => (hidden.as_str(), false),
     };
     let base = s.trim_end_matches('/');
     let mut out = match split_name(base) {
@@ -125,6 +130,16 @@ fn split_name(url: &str) -> Option<&str> {
     let (base, name) = url.rsplit_once('/')?;
     let (_, app) = base.get(start..)?.split_once('/')?;
     (!app.is_empty() && !name.is_empty()).then_some(base)
+}
+
+/// Where the user name of `url` starts and where the last `@` of its authority is, when the
+/// authority (the text between `://` and the next `/`) has one, as in `rtmp://user:pass@host/app`.
+fn user_info(url: &str) -> Option<(usize, usize)> {
+    let start = url.find("://")?.checked_add(3)?;
+    let rest = url.get(start..)?;
+    let authority = rest.split('/').next().unwrap_or(rest);
+    let at = authority.rfind('@')?;
+    Some((start, start.checked_add(at)?))
 }
 
 /// Where a destination's key comes from, as the Streaming window says it.
@@ -380,13 +395,70 @@ fn name_param(cmd: &craft_keymap::CommandRef) -> Result<Option<String>, Msg> {
     Ok(v)
 }
 
-/// The `server` parameter, trimmed, at most [`MAX_SERVER`] bytes.
+/// The `server` parameter, trimmed, at most [`MAX_SERVER`] bytes, without a user name or password
+/// before the host, which the stream does not connect with either.
 fn server_param(cmd: &craft_keymap::CommandRef) -> Result<Option<String>, Msg> {
     let v = text_param(cmd, "server")?;
     if v.as_ref().is_some_and(|v| v.len() > MAX_SERVER) {
         return Err(tmsg!("`{command}`: `server` is longer than {max} bytes", command = cmd.id, max = MAX_SERVER));
     }
+    if v.as_deref().and_then(user_info).is_some() {
+        return Err(tmsg!("`{command}`: `server` has a user name or password before the host, which is not supported", command = cmd.id));
+    }
     Ok(v)
+}
+
+/// Refuses a change a command makes without the user's own action in the window when it would
+/// send a stream key where the user did not send it: `key` `profile` for a destination other
+/// than the primary one, a `held_name` the destination did not already use, or the profile's key
+/// or a held key going with a server it did not go with before. `held_name` is the command's
+/// `held_name` parameter. `before` is the destination's key and server before the change, `None`
+/// for a new destination; `after` is the same after it.
+fn guard_stream_key(
+    command: &str,
+    id: &str,
+    key_given: Option<&KeyRef>,
+    held_name: Option<&str>,
+    before: Option<(&KeyRef, &str)>,
+    after: (&KeyRef, &str),
+) -> Result<(), Msg> {
+    if key_given == Some(&KeyRef::Profile) && id != PRIMARY_DESTINATION {
+        return Err(tmsg!(
+            "`{command}`: only the destination `{primary}` takes `key`: `profile` from a command; choose the profile's key for `{id}` in the Streaming window",
+            command = command,
+            primary = PRIMARY_DESTINATION,
+            id = id
+        ));
+    }
+    if held_name.is_some()
+        && let Some(KeyRef::Held(name)) = key_given
+        && before.map(|(key, _)| key) != key_given
+    {
+        return Err(tmsg!(
+            "`{command}`: `{id}` does not use the session key `{name}`; give `key`: `held` without `held_name`, or choose its session key in the Streaming window",
+            command = command,
+            id = id,
+            name = name
+        ));
+    }
+    let paired =
+        |(key, server): (&KeyRef, &str)| (*key != KeyRef::None && !server.trim().is_empty()).then(|| (key.clone(), server.trim().to_string()));
+    let now = paired(after);
+    if now.is_none() || now == before.and_then(paired) {
+        return Ok(());
+    }
+    if *after.0 == KeyRef::Profile {
+        return Err(tmsg!(
+            "`{command}`: `{id}` would send the profile's stream key to a new server; give `key`: `none` with the server, or make the change in the Streaming window",
+            command = command,
+            id = id
+        ));
+    }
+    Err(tmsg!(
+        "`{command}`: `{id}` would send its session key to a new server; give `key`: `none` with the server, or make the change in the Streaming window",
+        command = command,
+        id = id
+    ))
 }
 
 /// An optional text parameter, trimmed; an error when it holds a control character.
@@ -541,7 +613,12 @@ impl StudioApp {
                 let current = &self.studio.profile().stream;
                 let id = new_id(current, &live);
                 let first = current.destinations.is_empty();
-                let key = key_param(cmd, &id, None)?.unwrap_or(if first { KeyRef::Profile } else { KeyRef::None });
+                let key_given = key_param(cmd, &id, None)?;
+                let key = key_given.clone().unwrap_or(if first { KeyRef::Profile } else { KeyRef::None });
+                if !self.from_user {
+                    let held_name = opt_str(cmd, "held_name")?;
+                    guard_stream_key(&cmd.id, &id, key_given.as_ref(), held_name, None, (&key, server.as_deref().unwrap_or("")))?;
+                }
                 let d = Destination {
                     id: id.clone(),
                     name: name.unwrap_or_default(),
@@ -586,9 +663,14 @@ impl StudioApp {
                 let name = name_param(cmd)?;
                 let server = server_param(cmd)?;
                 let enabled = opt_bool(cmd, "enabled")?;
+                let from_user = self.from_user;
                 let changed = self.change_destinations(&id, |s| {
                     let d = s.destinations.iter_mut().find(|d| d.id == id).ok_or_else(|| tmsg!("there is no stream destination `{id}`", id = id))?;
                     let key = key_param(cmd, &id, Some(&d.key))?;
+                    if !from_user {
+                        let after = (key.as_ref().unwrap_or(&d.key), server.as_deref().unwrap_or(&d.server));
+                        guard_stream_key(&cmd.id, &id, key.as_ref(), opt_str(cmd, "held_name")?, Some((&d.key, &d.server)), after)?;
+                    }
                     if let Some(n) = &name {
                         d.name.clone_from(n);
                     }
