@@ -175,6 +175,9 @@ pub struct StudioApp {
     selected: Option<ItemId>,
     renaming: Option<(Rename, String)>,
     meters: HashMap<SourceId, MeterBallistics>,
+    /// The Application Audio dock's lanes and meters, apart from the Audio Mixer's meters so that
+    /// a source shown in both docks is advanced once per frame in each.
+    lanes: docks::LaneCache,
     last_frame: Option<Instant>,
     properties: Vec<Properties>,
     filters: Vec<Filters>,
@@ -213,11 +216,11 @@ pub struct StudioApp {
     floating_rects: Vec<(usize, egui::Rect, docks::Drawn)>,
     /// Where each floating dock's window is this session, by dock index, while it differs from the
     /// place saved when the pointer was last released.
-    dock_window_at: [Option<egui::Pos2>; 3],
+    dock_window_at: [Option<egui::Pos2>; store::DOCK_COUNT],
     /// Whether the user moved or resized each floating dock's window since its place was saved.
-    dock_window_touched: [bool; 3],
+    dock_window_touched: [bool; store::DOCK_COUNT],
     /// Where each floating dock's window was drawn last frame, and the main window's size then.
-    dock_window_drawn: [Option<egui::Rect>; 3],
+    dock_window_drawn: [Option<egui::Rect>; store::DOCK_COUNT],
     dock_viewport: Option<egui::Vec2>,
     /// Counts the dock windows' resets this session. It is part of their ids, so a window opened
     /// after a reset starts at its default size instead of the size egui kept for the old one.
@@ -280,7 +283,8 @@ impl StudioApp {
             }
         };
         let gpu = render.as_ref().map(|rs| Gpu::new(rs.device.clone(), rs.queue.clone()).with_adapter(Candidate::of(&rs.adapter, None)));
-        let studio = Studio::new(gpu, collection, profile, Arc::new(registry), ffmpeg);
+        let mut studio = Studio::new(gpu, collection, profile, Arc::new(registry), ffmpeg);
+        studio.keep_hardware_tests_in(store.dir().map(|d| d.join(studiocraft_studio::HARDWARE_TESTS_FILE)));
         store.update(|p| {
             p.profile = studio.profile().name.clone();
             p.collection = studio.collection().name.clone();
@@ -298,6 +302,7 @@ impl StudioApp {
             selected: None,
             renaming: None,
             meters: HashMap::new(),
+            lanes: docks::LaneCache::default(),
             last_frame: None,
             properties: Vec::new(),
             filters: Vec::new(),
@@ -323,9 +328,9 @@ impl StudioApp {
             last_view: None,
             dock_rects: Vec::with_capacity(control::DOCK_NAMES.len()),
             floating_rects: Vec::new(),
-            dock_window_at: [None; 3],
-            dock_window_touched: [false; 3],
-            dock_window_drawn: [None; 3],
+            dock_window_at: [None; store::DOCK_COUNT],
+            dock_window_touched: [false; store::DOCK_COUNT],
+            dock_window_drawn: [None; store::DOCK_COUNT],
             dock_viewport: None,
             dock_window_gen: 0,
             dock_strip: None,
@@ -866,6 +871,7 @@ impl StudioApp {
             "dock.scenes" => return Ok(self.toggle_pref(|p| &mut p.docks.scenes)),
             "dock.sources" => return Ok(self.toggle_pref(|p| &mut p.docks.sources)),
             "dock.mixer" => return Ok(self.toggle_pref(|p| &mut p.docks.mixer)),
+            "dock.app_audio" => return Ok(self.toggle_pref(|p| &mut p.docks.app_audio)),
             "dock.transitions" => return Ok(self.toggle_pref(|p| &mut p.docks.transitions)),
             "dock.controls" => return Ok(self.toggle_pref(|p| &mut p.docks.controls)),
             "dock.move" => {
@@ -1062,9 +1068,9 @@ impl StudioApp {
     /// `docks` holds.
     fn set_docks(&mut self, docks: store::Docks) {
         self.store.update(|p| p.docks = docks);
-        self.dock_window_at = [None; 3];
-        self.dock_window_touched = [false; 3];
-        self.dock_window_drawn = [None; 3];
+        self.dock_window_at = [None; store::DOCK_COUNT];
+        self.dock_window_touched = [false; store::DOCK_COUNT];
+        self.dock_window_drawn = [None; store::DOCK_COUNT];
         self.dock_window_gen = self.dock_window_gen.wrapping_add(1);
     }
 
@@ -1511,13 +1517,19 @@ impl StudioApp {
         let window = ctx.viewport_rect().height();
         let height = strip::height(window, d.height);
         let handle_style = ResizeHandleStyle { hovered: palette.line_strong, dragged: palette.accent, focused: palette.focus };
-        let mut st =
-            docks::DockState { selected: self.selected, renaming: &mut self.renaming, meters: &mut self.meters, dt, place: Some((0, shown.len())) };
+        let mut st = docks::DockState {
+            selected: self.selected,
+            renaming: &mut self.renaming,
+            meters: &mut self.meters,
+            lanes: &mut self.lanes,
+            dt,
+            place: Some((0, shown.len())),
+        };
         let studio = &self.studio;
         let rects = &mut self.dock_rects;
         let saved = d.widths();
         // Widths after a divider moved this frame, by dock index.
-        let mut new_widths: Option<[f32; 3]> = None;
+        let mut new_widths: Option<[f32; store::DOCK_COUNT]> = None;
         let most = strip::max_height(window);
         let panel = egui::Panel::bottom("docks").exact_size(height).show_separator_line(false).frame(egui::Frame::NONE.fill(palette.surface)).show(
             ui,
@@ -1554,6 +1566,7 @@ impl StudioApp {
                     let drawn = match i {
                         0 => docks::scenes(&mut col, studio, &mut st, acts),
                         1 => docks::sources(&mut col, studio, &mut st, acts),
+                        3 => docks::app_audio(&mut col, studio, &mut st, acts),
                         _ => docks::mixer(&mut col, studio, &mut st, acts),
                     };
                     rects.push((usize::from(*i), rect, drawn));
@@ -1603,10 +1616,11 @@ impl StudioApp {
         let new_height = (r.delta != 0.0).then(|| strip::height(window, height - r.delta));
         if new_widths.is_some() || new_height.is_some_and(|h| h != height) {
             self.store.update(|p| {
-                if let Some([a, b, c]) = new_widths {
+                if let Some([a, b, c, e]) = new_widths {
                     p.docks.scenes_width = a;
                     p.docks.sources_width = b;
                     p.docks.mixer_width = c;
+                    p.docks.app_audio_width = e;
                 }
                 if let Some(h) = new_height {
                     p.docks.height = h;
@@ -1621,7 +1635,14 @@ impl StudioApp {
     fn dock_windows(&mut self, ctx: &egui::Context, acts: &mut Vec<Act>, dt: f32) {
         self.floating_rects.clear();
         let d = self.store.prefs().docks;
-        let mut st = docks::DockState { selected: self.selected, renaming: &mut self.renaming, meters: &mut self.meters, dt, place: None };
+        let mut st = docks::DockState {
+            selected: self.selected,
+            renaming: &mut self.renaming,
+            meters: &mut self.meters,
+            lanes: &mut self.lanes,
+            dt,
+            place: None,
+        };
         let studio = &self.studio;
         let pointer_down = ctx.input(|i| i.pointer.any_down());
         let interacting = pointer_down || ctx.input(|i| i.pointer.any_released());
@@ -1633,9 +1654,9 @@ impl StudioApp {
         let viewport = ctx.viewport_rect().size();
         let same_viewport = self.dock_viewport.replace(viewport) == Some(viewport);
         for i in d.floating_shown() {
-            let k = usize::from(i).min(2);
+            let k = usize::from(i).min(store::DOCK_COUNT - 1);
             // Window sizes are outer sizes, with the frame's margins and stroke in them.
-            let size = d.window_size(i).map_or(egui::vec2(strip::DEFAULT_WIDTHS[k], strip::DEFAULT_HEIGHT), |[w, h]| egui::vec2(w, h));
+            let size = d.window_size(i).map_or(egui::vec2(strip::default_width(k), strip::DEFAULT_HEIGHT), |[w, h]| egui::vec2(w, h));
             let mut window = egui::Window::new(tl!(control::DOCK_TITLES[k]))
                 .id(egui::Id::unique("dock-window").with((k, self.dock_window_gen)))
                 .title_bar(false)
@@ -1656,6 +1677,7 @@ impl StudioApp {
                 let drawn = match i {
                     0 => docks::scenes(ui, studio, &mut st, acts),
                     1 => docks::sources(ui, studio, &mut st, acts),
+                    3 => docks::app_audio(ui, studio, &mut st, acts),
                     _ => docks::mixer(ui, studio, &mut st, acts),
                 };
                 let grab = drawn.grab;
@@ -1807,6 +1829,12 @@ impl StudioApp {
                         key: String::new(),
                         mode: studiocraft_model::PathMode::OpenFile,
                         filter_name: "ffmpeg".into(),
+                        extensions: if cfg!(windows) { vec!["exe".into()] } else { vec![] },
+                    },
+                    Pick::AudioEditor => Browse {
+                        key: String::new(),
+                        mode: studiocraft_model::PathMode::OpenFile,
+                        filter_name: tl!("Programs").to_string(),
                         extensions: if cfg!(windows) { vec!["exe".into()] } else { vec![] },
                     },
                 };

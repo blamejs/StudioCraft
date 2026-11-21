@@ -3,6 +3,12 @@
 //!
 //! [`Writer`] runs on the disk thread and is the only code of a take that touches the filesystem.
 //! It owns every open file and the journal; chunks go back to the collector's pool once written.
+//! When the take makes its own folder it also writes a first session file there, with no tracks
+//! yet. The session written when the take ends replaces it before the journal's `End` line, so a
+//! take whose last session could not be written stays unfinished for repair ([`Writer::session`]). The
+//! writer keeps the journal lines the session is built from in memory, with at most
+//! [`crate::session::MAX_LOCATIONS`] markers and as many dropouts, so the session needs no
+//! read of the journal.
 
 use std::fs::{File, OpenOptions};
 use std::io::{Seek, SeekFrom, Write};
@@ -13,6 +19,7 @@ use crossbeam_queue::ArrayQueue;
 
 use crate::collect::{Chunk, Dropout, ToDisk};
 use crate::journal::{Journal, Line};
+use crate::markers::MarkerQueue;
 use crate::wav::{self, FRAME_BYTES};
 
 /// Silence written for a gap, a piece at a time.
@@ -246,6 +253,19 @@ pub struct Writer {
     finishing: bool,
     /// The take ended and is to be thrown away.
     discard: bool,
+    /// The tracks of the program mix.
+    programs: std::collections::HashSet<usize>,
+    /// Markers set during the take, journaled with the dropouts.
+    markers: Option<MarkerQueue>,
+    /// The journal lines the session is built from: the start, the files, the markers, the
+    /// dropouts, the audio lost unlisted and an early stop.
+    session_lines: Vec<Line>,
+    /// Markers and dropouts kept in `session_lines`, and those journaled but not kept there.
+    kept_markers: usize,
+    kept_dropouts: usize,
+    left_out: u64,
+    /// The session written when the take ended.
+    session: Option<PathBuf>,
 }
 
 /// Folder names tried for a take's folder before the take stops.
@@ -258,6 +278,9 @@ fn remove_folders(cfg: &DiskConfig, dir: &std::path::Path) {
     if cfg.folder_stem.is_some()
         && let Some(take) = dir.parent()
     {
+        if let Some(session) = crate::session::path_for(dir) {
+            let _ = std::fs::remove_file(session);
+        }
         let _ = std::fs::remove_dir(take);
     }
 }
@@ -307,6 +330,7 @@ impl Writer {
             origin_tick: t.origin_tick,
             offset_frames: t.offset_frames,
             started_unix_ms: t.started_unix_ms,
+            session: cfg.folder_stem.is_some(),
         };
         let head = wav::header_len().map_err(fail)?;
         let mut w = Writer {
@@ -325,13 +349,70 @@ impl Writer {
             closed: Vec::new(),
             finishing: false,
             discard: false,
+            programs: std::collections::HashSet::new(),
+            markers: None,
+            session_lines: Vec::new(),
+            kept_markers: 0,
+            kept_dropouts: 0,
+            left_out: 0,
+            session: None,
         };
         // A take that cannot start leaves no folder or journal behind for repair to find.
         if let Err(e) = w.journal.write(&start).map_err(fail).and_then(|()| w.check_space()) {
             w.discard_files();
             return Err(e);
         }
+        w.session_lines.push(start);
+        // The first session, before any track: the take's own folder is the editor's session
+        // folder from the start. The session written at the end replaces it, so a failure here
+        // only costs this one.
+        if w.cfg.folder_stem.is_some()
+            && let Err(e) = crate::session::write_from(&w.dir, &w.session_lines, 0, |_| None)
+        {
+            log::warn!("audio tracks: the first session file could not be written: {e}");
+        }
         Ok(w)
+    }
+
+    /// The session written when the take ended: `None` for a take that made no folder of its own,
+    /// one thrown away, and one that has not ended with every file complete.
+    pub fn session(&self) -> Option<&std::path::Path> {
+        self.session.as_deref()
+    }
+
+    /// Write the take's session from what it journaled and the lengths of its files, replacing
+    /// the first one, before the journal's `End` line. A take without a folder of its own, or one
+    /// thrown away, has none.
+    fn end_session(&mut self) -> std::io::Result<()> {
+        if self.cfg.folder_stem.is_none() || self.discard {
+            return Ok(());
+        }
+        let dir = &self.dir;
+        let path = crate::session::write_from(dir, &self.session_lines, self.left_out, |f| crate::session::file_frames(dir, f))?;
+        self.session = Some(path);
+        Ok(())
+    }
+
+    /// Keep `line` for the session, a marker or a dropout only while fewer than the session
+    /// lists are kept.
+    fn keep(&mut self, line: Line) {
+        let max = crate::session::MAX_LOCATIONS;
+        let room = match line {
+            Line::Marker { .. } => (self.kept_markers < max).then(|| self.kept_markers += 1).is_some(),
+            Line::Dropout { .. } => (self.kept_dropouts < max).then(|| self.kept_dropouts += 1).is_some(),
+            _ => true,
+        };
+        if room {
+            self.session_lines.push(line);
+        } else {
+            self.left_out += 1;
+        }
+    }
+
+    /// Journal the markers that come in through `queue` ([`crate::TakeMarkers`]).
+    pub fn with_markers(mut self, queue: MarkerQueue) -> Writer {
+        self.markers = Some(queue);
+        self
     }
 
     pub fn progress(&self) -> Progress {
@@ -363,13 +444,16 @@ impl Writer {
     /// Handle one message from the collector. True at the end of the take.
     pub fn handle(&mut self, msg: ToDisk) -> Result<bool, Failure> {
         match msg {
-            ToDisk::Track { track, name } => {
+            ToDisk::Track { track, name, program } => {
                 if self.names.len() <= track {
                     self.names.resize(track + 1, None);
                     self.files.resize_with(track + 1, || None);
                 }
                 if let Some(n) = self.names.get_mut(track) {
                     *n = Some(name);
+                }
+                if program {
+                    self.programs.insert(track);
                 }
                 Ok(false)
             }
@@ -432,18 +516,37 @@ impl Writer {
         self.check_space()
     }
 
-    /// Journal the dropouts the collector has sent.
+    /// Take no more markers before the last read of them, so a marker the take accepted is
+    /// journaled.
+    fn close_markers(&self) {
+        if let Some(q) = &self.markers {
+            q.close();
+        }
+    }
+
+    /// Journal the dropouts and the markers that came in since the last time.
     fn journal_dropouts(&mut self) -> Result<(), Failure> {
         while let Some(d) = self.dropq.pop() {
-            self.journal.write(&Line::Dropout { track: d.track, at: d.at, frames: d.frames }).map_err(Failure::io)?;
+            let line = Line::Dropout { track: d.track, at: d.at, frames: d.frames };
+            self.journal.write(&line).map_err(Failure::io)?;
+            self.keep(line);
+        }
+        while let Some(m) = self.markers.as_ref().and_then(|q| q.pop()) {
+            let line = Line::Marker { at: m.at, name: m.name };
+            self.journal.write(&line).map_err(Failure::io)?;
+            self.keep(line);
         }
         Ok(())
     }
 
     /// Note the reason in the journal and close the files with their headers, after a failure.
-    pub fn abandon(&mut self, reason: StopReason) {
+    /// True when every file is complete and the journal ended, so the take needs no repair.
+    pub fn abandon(&mut self, reason: StopReason) -> bool {
+        self.close_markers();
         let mut ok = self.journal_dropouts().is_ok() && !self.finishing;
-        ok &= self.journal.write(&Line::Stop { reason: reason.text().into() }).is_ok();
+        let stop = Line::Stop { reason: reason.text().into() };
+        ok &= self.journal.write(&stop).is_ok();
+        self.keep(stop);
         // A write that failed part way can leave whole frames and part of one; each file keeps the
         // whole frames on the disk, as repair would.
         let head = self.head;
@@ -465,11 +568,20 @@ impl Writer {
         // journal stays open, for repair to finish.
         if ok {
             self.end = self.files.iter().flatten().map(|f| f.base + f.frames).max().unwrap_or(0).max(self.end);
-            ok = self.journal.write(&Line::End { frames: self.end }).is_ok();
+            // A session that could not be written leaves the take for repair, which writes it.
+            ok = match self.end_session() {
+                Ok(()) => self.journal.write(&Line::End { frames: self.end }).is_ok(),
+                Err(e) => {
+                    log::warn!("audio tracks: the session file could not be written: {e}");
+                    false
+                }
+            };
         }
-        if self.journal.sync().is_ok() && ok {
+        ok &= self.journal.sync().is_ok();
+        if ok {
             let _ = self.journal.release();
         }
+        ok
     }
 
     fn check_space(&mut self) -> Result<(), Failure> {
@@ -519,14 +631,20 @@ impl Writer {
                 self.room(track, 0)?;
             }
         }
+        self.close_markers();
         self.journal_dropouts()?;
         if unlisted > 0 {
-            self.journal.write(&Line::Unlisted { frames: unlisted }).map_err(Failure::io)?;
+            let line = Line::Unlisted { frames: unlisted };
+            self.journal.write(&line).map_err(Failure::io)?;
+            self.keep(line);
         }
         self.refresh_headers()?;
         for f in self.files.iter_mut().flatten() {
             f.file.sync_all().map_err(Failure::io)?;
         }
+        // A session that cannot be written stops the take before its `End` line, so the take is
+        // left for repair, which writes the session.
+        self.end_session().map_err(Failure::io)?;
         self.journal.write(&Line::End { frames: self.end }).map_err(Failure::io)?;
         self.journal.sync().map_err(Failure::io)?;
         // The take is complete on the disk, so a failed release does not fail the take.
@@ -602,7 +720,10 @@ impl Writer {
         let t = &self.cfg.timing;
         let stamp = wav::Stamp { time_reference: t.offset_frames.saturating_add(base), date: t.date.clone(), time: t.time.clone() };
         file.write_all(&wav::header(0, &stamp).map_err(fail)?).map_err(Failure::io)?;
-        self.journal.write(&Line::File { track, name, file: file_name.clone(), segment, first_frame: base }).map_err(Failure::io)?;
+        let program = self.programs.contains(&track);
+        let line = Line::File { track, name, file: file_name.clone(), segment, first_frame: base, program };
+        self.journal.write(&line).map_err(Failure::io)?;
+        self.keep(line);
         if self.files.len() <= track {
             self.files.resize_with(track + 1, || None);
         }

@@ -79,6 +79,14 @@ pub enum RuntimeAction {
         model: Option<String>,
     },
     CaptionsDownloadCancel,
+    /// Open the session of the last take of audio tracks in the audio editor.
+    AudioTracksOpenLast,
+    /// Mark the running take of audio tracks now, named `name` or numbered when it is `None`.
+    AudioTracksMarker {
+        name: Option<String>,
+    },
+    /// Forget the hardware encoders' test results, so the next start tests them again.
+    RetestHardwareEncoders,
     OpenSettings,
     Exit,
 }
@@ -283,6 +291,22 @@ pub enum Command {
     },
     #[serde(rename = "captions.download_cancel")]
     CaptionsDownloadCancel {},
+    /// Open the session of the last take in the audio editor, or its folder when the editor
+    /// cannot be started.
+    #[serde(rename = "audio_tracks.open_last")]
+    AudioTracksOpenLast {},
+    /// Mark the running take of audio tracks at this moment, named `name` or numbered; the
+    /// take's session lists the marker.
+    #[serde(rename = "audio_tracks.marker")]
+    AudioTracksMarker {
+        /// Absent gives a numbered marker; `null` or any value that is not a string is an error.
+        #[serde(default, deserialize_with = "given_string")]
+        name: Option<String>,
+    },
+    /// Forget the hardware encoders' test results, in the session and in the file that keeps
+    /// them, so the next recording or stream tests them again.
+    #[serde(rename = "hardware_encoders.retest")]
+    RetestHardwareEncoders {},
     #[serde(rename = "app.settings")]
     OpenSettings {},
     #[serde(rename = "app.exit")]
@@ -310,6 +334,19 @@ pub enum Command {
     /// Whether this system captures one application's audio, and the captures running now.
     #[serde(rename = "app_audio.status")]
     AppAudioStatus {},
+    /// The lanes of the Application Audio panel: each microphone source and each running
+    /// application with audio, with whether the program hears it.
+    #[serde(rename = "app_audio.lanes")]
+    AppAudioLanes {},
+    /// Mix the application `app` (a value from `app_audio.lanes` or `app_audio.list`) into the
+    /// program in every scene, together with the microphone, or stop doing so.
+    #[serde(rename = "app_audio.route")]
+    AppAudioRoute { app: String, routed: bool },
+}
+
+/// A parameter that may be left out but, when given, is a string: `null` is refused.
+fn given_string<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<String>, D::Error> {
+    String::deserialize(d).map(Some)
 }
 
 impl Command {
@@ -384,6 +421,9 @@ impl Command {
             Command::CaptionsStatus {} => "captions.status",
             Command::CaptionsDownload { .. } => "captions.download",
             Command::CaptionsDownloadCancel {} => "captions.download_cancel",
+            Command::AudioTracksOpenLast {} => "audio_tracks.open_last",
+            Command::AudioTracksMarker { .. } => "audio_tracks.marker",
+            Command::RetestHardwareEncoders {} => "hardware_encoders.retest",
             Command::OpenSettings {} => "app.settings",
             Command::Exit {} => "app.exit",
             Command::AppLinks { .. } => "app.links",
@@ -392,6 +432,8 @@ impl Command {
             Command::SourceSchema { .. } => "source.schema",
             Command::AppAudioList {} => "app_audio.list",
             Command::AppAudioStatus {} => "app_audio.status",
+            Command::AppAudioLanes {} => "app_audio.lanes",
+            Command::AppAudioRoute { .. } => "app_audio.route",
         }
     }
 
@@ -480,6 +522,9 @@ const SPECS: &[CommandSpec] = &[
     spec("captions.status", "Live Captions Status", "", Undo::NotUndoable),
     spec("captions.download", "Download Speech Model", "model?: speech model id", Undo::NotUndoable),
     spec("captions.download_cancel", "Cancel Speech Model Download", "", Undo::NotUndoable),
+    spec("audio_tracks.open_last", "Open Last Audio Tracks in Editor", "", Undo::NotUndoable),
+    spec("audio_tracks.marker", "Add Audio Tracks Marker", "name?: the marker's name, 1 to 256 characters", Undo::NotUndoable),
+    spec("hardware_encoders.retest", "Test Hardware Encoders Again", "", Undo::NotUndoable),
     spec("app.settings", "Settings", "", Undo::NotUndoable),
     spec("app.exit", "Exit", "", Undo::NotUndoable),
     spec("app.links", "Community Links", "link?: discord|website|github|issues", Undo::NotUndoable),
@@ -488,6 +533,8 @@ const SPECS: &[CommandSpec] = &[
     spec("source.schema", "Source Settings Fields", "kind: plug-in id, settings?", Undo::NotUndoable),
     spec("app_audio.list", "List Applications with Audio", "", Undo::NotUndoable),
     spec("app_audio.status", "Application Audio Status", "", Undo::NotUndoable),
+    spec("app_audio.lanes", "List Audio Lanes", "", Undo::NotUndoable),
+    spec("app_audio.route", "Route Application Audio", "app: value from app_audio.lanes, routed: bool", Undo::Undoable),
 ];
 
 /// Every command's description.
@@ -523,6 +570,8 @@ mod tests {
             Command::CaptionsStatus {},
             Command::CaptionsDownload { model: Some("whisper-base".into()) },
             Command::CaptionsDownloadCancel {},
+            Command::AppAudioLanes {},
+            Command::AppAudioRoute { app: "player.exe".into(), routed: true },
         ];
         for c in samples {
             let v = serde_json::to_value(&c).unwrap();

@@ -167,8 +167,12 @@ static VAAPI_DEVICES: std::sync::RwLock<Option<std::collections::HashMap<&'stati
 /// The render node `candidate` encodes on with VA-API: the one its test encode last passed on,
 /// else the first of [`vaapi_devices`].
 pub fn vaapi_device(candidate: &Candidate) -> String {
-    let passed = VAAPI_DEVICES.read().unwrap_or_else(std::sync::PoisonError::into_inner).as_ref().and_then(|m| m.get(candidate.id).cloned());
-    passed.or_else(|| vaapi_devices().into_iter().next()).unwrap_or_else(|| DEFAULT_RENDER_NODE.to_string())
+    passed_vaapi_device(candidate).or_else(|| vaapi_devices().into_iter().next()).unwrap_or_else(|| DEFAULT_RENDER_NODE.to_string())
+}
+
+/// The render node `candidate`'s test encode last passed on, if any.
+pub(crate) fn passed_vaapi_device(candidate: &Candidate) -> Option<String> {
+    VAAPI_DEVICES.read().unwrap_or_else(std::sync::PoisonError::into_inner).as_ref().and_then(|m| m.get(candidate.id).cloned())
 }
 
 /// Use `node` for `candidate`'s VA-API encodes that follow.

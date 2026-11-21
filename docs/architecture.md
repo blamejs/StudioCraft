@@ -23,7 +23,7 @@ crate in the same layer. `cargo xtask layers` checks this against the table in
 | L0 | `craft-ease` | Easing curves, keyed tracks, constant-speed Bezier motion paths and damped springs. It depends on no StudioCraft crate. |
 | L0 | `craft-gpu-device` | Choosing and opening a wgpu device: the user's adapter choice, corrections for drivers that crash, a software fallback, a capability report, and device health with recovery after a device loss. It depends on no StudioCraft crate. |
 | L0 | `craft-gpu-yuv` | RGBA to NV12, P010 and I420 on the GPU with scaling, in BT.601, BT.709 and BT.2020 at limited or full range, and the same conversion on the CPU. It depends on no StudioCraft crate. |
-| L0 | `craft-hwenc` | The hardware encoders ffmpeg runs, a one-frame test encode of each with results kept for the session, and an automatic choice ordered by the graphics adapter's vendor with a software fallback. It depends on no StudioCraft crate. |
+| L0 | `craft-hwenc` | The hardware encoders ffmpeg runs, a one-frame test encode of each with results kept for the session or in a file tied to the `ffmpeg` program, its version and the driver, and an automatic choice ordered by the graphics adapter's vendor with a software fallback. It depends on no StudioCraft crate. |
 | L0 | `craft-hwenc-native` | Hardware encoders called through their drivers: NVENC H.264 and HEVC from NV12 or P010 frames on Windows (Direct3D 11) and 64-bit Linux (CUDA), the Windows Media Foundation, macOS VideoToolbox and Linux VA-API hardware H.264 and HEVC encoders from NV12 frames, the Annex B helpers, and the `avcC` and `hvcC` records. Its private `nvenc_ffi`, `mf_ffi`, `vt_ffi` and `vaapi_ffi` modules are the only code that calls the drivers. It depends on no StudioCraft crate. |
 | L0 | `craft-app-audio` | Per-application audio: the running applications that have audio, kept current by one discovery thread, a lock-free peak meter for each, and the capture of one application's audio as 48 kHz stereo `f32` with backoff, stall detection and a limit of 32 captures. Windows build 20348 and later capture through WASAPI process loopback; other systems report it as unsupported. It depends on no StudioCraft crate. |
 | L0 | `craft-speech` | Speech to text: the catalog of Whisper models with their pinned URLs, sizes and SHA-256 sums, their download and check, Whisper on the CPU with word times (feature `whisper`), voice detection, conversion to mono 16 kHz, and live captioning that turns a stream of audio into partial and finished phrases. It depends on no StudioCraft crate. |
@@ -355,6 +355,22 @@ mixer has applied the matching tap change, so a source that stops being recorded
 stored for it. At most 2 takes finish their files at once; a new take waits for one of them. When
 the app closes it waits up to 10 seconds for takes to finish. While audio tracks are off no tap,
 pool or thread exists, and the mixer checks one `Option` per input.
+
+The disk thread also writes the take's session file (`session.rs`), with `craft-atomic` so a reader
+sees the old file or the new one. It writes one with no tracks when it makes the take's folder and
+the full one once the files are complete or a failure stopped the take. It builds the session from
+the journal lines it kept in memory and the files' lengths, without reading the journal back, and
+keeps at most 10,000 markers and as many dropouts. The full session is written before the
+journal's `End` line, so a take or a repair whose session write fails stays unfinished and the next
+repair writes it. Repair writes the session again from the journal when the journal's `start` line
+has `session: true`, which a take sets when it makes its own folder; it writes no session for a take
+recorded into a folder it did not make.
+Markers come from `TakeMarkers` (`markers.rs`): any thread pushes one into a bounded queue of 1,024
+without waiting, a full queue drops the marker and counts it, and the disk thread journals the
+queue with each sync. Before its last read of the queue the disk thread closes it and waits for an
+add already pushing, so a marker the take accepted is in the journal. Opening a session in the audio editor or showing its folder runs on an
+`audio-tracks-open` thread (at most 4 at once) through the `Launcher` trait
+(`studio/src/audio_editor.rs`); a started editor is waited on by an `audio-editor-wait` thread.
 
 ### Live captions threads
 

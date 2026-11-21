@@ -4,8 +4,11 @@ use std::collections::HashMap;
 use std::fmt;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, PoisonError};
+use std::time::Duration;
 
-use crate::{Cancel, Candidate, Codec, Input, Os, Outcome, Prober, Vendor, auto_order, candidate};
+use crate::candidate::with_vaapi_device;
+use crate::probe::seconds;
+use crate::{Api, Cancel, Candidate, Clock, Codec, Input, Os, Outcome, Prober, SystemClock, Vendor, auto_order, candidate};
 
 /// Which encoder to use.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -75,16 +78,34 @@ impl fmt::Display for Error {
 impl std::error::Error for Error {}
 
 /// One kept test: the ffmpeg program, the candidate, the input format and the encode arguments.
-type Key = (PathBuf, &'static str, Input, Vec<String>);
+pub(crate) type Key = (PathBuf, &'static str, Input, Vec<String>);
 
 /// The test outcomes of one session, per ffmpeg program, candidate, input format and encode
-/// arguments. Canceled tests, a missing ffmpeg and a device with no free session are not kept, so
-/// they are tried again.
+/// arguments. Canceled tests, a missing ffmpeg, a device with no free session, a candidate that was
+/// not tested and a test stopped before the prober's own timeout are not kept, so they are tried
+/// again. [`ProbeCache::save`] and [`ProbeCache::load`] keep the outcomes between sessions.
 #[derive(Debug, Default)]
 pub struct ProbeCache {
-    outcomes: Mutex<HashMap<Key, Outcome>>,
+    pub(crate) outcomes: Mutex<HashMap<Key, Outcome>>,
     /// Candidates that failed while they encoded, per ffmpeg program, with the error.
-    failed: Mutex<HashMap<(PathBuf, &'static str), String>>,
+    pub(crate) failed: Mutex<HashMap<(PathBuf, &'static str), String>>,
+}
+
+/// The encode arguments a test is kept under. A VA-API candidate's render node is left out: the
+/// node its test passed on is kept apart, and the encodes that follow use it.
+pub(crate) fn key_args(candidate: &Candidate, args: Vec<String>) -> Vec<String> {
+    if candidate.api == Api::Vaapi { with_vaapi_device(&args, "") } else { args }
+}
+
+/// Whether `prober`'s outcome `o` is kept for the session.
+fn kept(prober: &dyn Prober, o: &Outcome) -> bool {
+    match o {
+        // A busy device has a free session again once another program stops encoding.
+        Outcome::Canceled | Outcome::FfmpegMissing(_) | Outcome::Busy(_) | Outcome::NotTested(_) => false,
+        // A test that a shorter limit stopped could still finish in the prober's own time.
+        Outcome::TimedOut(after) => prober.timeout().is_none_or(|t| *after >= t),
+        _ => true,
+    }
 }
 
 impl ProbeCache {
@@ -98,7 +119,7 @@ impl ProbeCache {
         if let Some(why) = self.failed.lock().unwrap_or_else(PoisonError::into_inner).get(&(program.clone(), candidate.id)) {
             return Some(Outcome::Failed(why.clone()));
         }
-        let key = (program, candidate.id, input, prober.args(candidate, input));
+        let key = (program, candidate.id, input, key_args(candidate, prober.args(candidate, input)));
         self.outcomes.lock().unwrap_or_else(PoisonError::into_inner).get(&key).cloned()
     }
 
@@ -109,9 +130,22 @@ impl ProbeCache {
         }
         // The lock is not held during the test, so another thread can read other outcomes.
         let o = prober.probe(candidate, input, cancel);
-        // A busy device has a free session again once another program stops encoding.
-        if !matches!(o, Outcome::Canceled | Outcome::FfmpegMissing(_) | Outcome::Busy(_)) {
-            let key = (prober.runs_in(candidate).to_path_buf(), candidate.id, input, prober.args(candidate, input));
+        self.keep(prober, candidate, input, o)
+    }
+
+    /// The kept outcome of `candidate`, or a new test with `prober` that stops after `limit` at
+    /// the latest.
+    pub fn outcome_within(&self, prober: &dyn Prober, candidate: &'static Candidate, input: Input, cancel: &Cancel, limit: Duration) -> Outcome {
+        if let Some(o) = self.get(prober, candidate, input) {
+            return o;
+        }
+        let o = prober.probe_within(candidate, input, cancel, limit);
+        self.keep(prober, candidate, input, o)
+    }
+
+    fn keep(&self, prober: &dyn Prober, candidate: &'static Candidate, input: Input, o: Outcome) -> Outcome {
+        if kept(prober, &o) {
+            let key = (prober.runs_in(candidate).to_path_buf(), candidate.id, input, key_args(candidate, prober.args(candidate, input)));
             self.outcomes.lock().unwrap_or_else(PoisonError::into_inner).insert(key, o.clone());
         }
         o
@@ -149,9 +183,48 @@ pub struct Target {
     pub lossless: bool,
 }
 
-/// The encoder `preference` gives for `target`, testing candidates with `prober` and keeping the
-/// outcomes in `cache`.
+/// The time [`resolve`] gives the tests of one choice.
+pub const DEFAULT_BUDGET: Duration = Duration::from_secs(30);
+
+/// The time the tests of one choice may take together, measured on `clock`. Once it has passed,
+/// the candidates that have no kept outcome are reported as [`Outcome::NotTested`], and a test
+/// that is running is stopped by [`Prober::probe_within`]. A prober that implements only
+/// [`Prober::probe`] stops a running test at its own limit instead.
+#[derive(Clone, Copy)]
+pub struct Budget<'a> {
+    pub total: Duration,
+    pub clock: &'a dyn Clock,
+}
+
+impl Budget<'static> {
+    /// `total` on the system's clock.
+    pub fn new(total: Duration) -> Self {
+        Budget { total, clock: &SystemClock }
+    }
+}
+
+/// The encoder `preference` gives for `target`, testing candidates with `prober` within
+/// [`DEFAULT_BUDGET`] and keeping the outcomes in `cache`.
 pub fn resolve(preference: &Preference, target: Target, prober: &dyn Prober, cache: &ProbeCache, cancel: &Cancel) -> Result<Choice, Error> {
+    resolve_within(preference, target, prober, cache, cancel, Budget::new(DEFAULT_BUDGET))
+}
+
+/// [`resolve`] with the tests together taking at most `budget`.
+pub fn resolve_within(
+    preference: &Preference,
+    target: Target,
+    prober: &dyn Prober,
+    cache: &ProbeCache,
+    cancel: &Cancel,
+    budget: Budget<'_>,
+) -> Result<Choice, Error> {
+    let started = budget.clock.now();
+    let left = || budget.total.saturating_sub(budget.clock.now().saturating_duration_since(started));
+    let outcome = |c: &'static Candidate| match cache.get(prober, c, target.input) {
+        Some(o) => o,
+        None if left().is_zero() => Outcome::NotTested(format!("the tests had used their {}", seconds(budget.total))),
+        None => cache.outcome_within(prober, c, target.input, cancel, left()),
+    };
     match preference {
         Preference::Software => Ok(Choice::Software { tried: Vec::new() }),
         Preference::Named(id) => {
@@ -165,7 +238,7 @@ pub fn resolve(preference: &Preference, target: Target, prober: &dyn Prober, cac
             if target.lossless && !c.lossless() {
                 return Err(Error::Mismatch { candidate: c, why: "cannot record losslessly" });
             }
-            match cache.outcome(prober, c, target.input, cancel) {
+            match outcome(c) {
                 Outcome::Works => Ok(Choice::Hardware(c)),
                 Outcome::Canceled => Err(Error::Canceled),
                 outcome => Err(Error::Failed { candidate: c, outcome }),
@@ -174,7 +247,7 @@ pub fn resolve(preference: &Preference, target: Target, prober: &dyn Prober, cac
         Preference::Auto => {
             let mut tried = Vec::new();
             for c in auto_order(target.vendor, target.os, target.codec).into_iter().filter(|c| !target.lossless || c.lossless()) {
-                match cache.outcome(prober, c, target.input, cancel) {
+                match outcome(c) {
                     Outcome::Works => return Ok(Choice::Hardware(c)),
                     Outcome::Canceled => return Err(Error::Canceled),
                     // Without ffmpeg no other candidate can run either.

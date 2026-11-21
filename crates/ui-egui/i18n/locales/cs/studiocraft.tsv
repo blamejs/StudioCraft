@@ -491,6 +491,19 @@ menu	Transform	Transformace
 @msg	Audio tracks could not be repaired: {takes} and {more} more	Zvukové stopy nelze opravit: {takes} a {more} dalších
 @msg	Audio tracks could not be repaired: {takes}. Takes repaired: {count}	Zvukové stopy nelze opravit: {takes}. Opravené záznamy: {count}
 @msg	Audio tracks could not be repaired: {takes} and {more} more. Takes repaired: {count}	Zvukové stopy nelze opravit: {takes} a {more} dalších. Opravené záznamy: {count}
+	Open Last Audio Tracks in Editor	Otevřít poslední zvukové stopy v editoru
+	Add Audio Tracks Marker	Přidat značku do zvukových stop
+	After a take	Po záznamu
+	Nothing	Nic
+	Show the folder	Zobrazit složku
+	Open in the audio editor	Otevřít ve zvukovém editoru
+	Audio editor	Zvukový editor
+	The audio editor on the PATH	Zvukový editor z PATH
+	Programs	Programy
+@msg	Audio tracks opened in the audio editor: {session}	Zvukové stopy otevřeny ve zvukovém editoru: {session}
+@msg	The audio editor did not start ({error}); the folder {folder} is shown instead	Zvukový editor se nespustil ({error}); místo něj se zobrazí složka {folder}
+@msg	Audio tracks saved in {folder}	Zvukové stopy uloženy do {folder}
+@msg	The audio tracks could not be opened: {error}	Zvukové stopy nelze otevřít: {error}
 @msg	`{command}` needs `{key}`	`{command}` potřebuje `{key}`
 @msg	`{command}`: unknown dock `{name}` (one of {docks})	`{command}`: neznámý panel `{name}` (jeden z {docks})
 @msg	`{command}`: `path` must be a file path	`{command}`: `path` musí být cesta k souboru

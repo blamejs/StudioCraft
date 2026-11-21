@@ -11,9 +11,9 @@ use crate::i18n::Msg;
 use crate::{APP_NAME, StudioApp, commands};
 
 /// The docks in the order they are laid out, by the names `ui.inspect` reports.
-pub(crate) const DOCK_NAMES: [&str; 3] = ["scenes", "sources", "mixer"];
+pub(crate) const DOCK_NAMES: [&str; crate::store::DOCK_COUNT] = ["scenes", "sources", "mixer", "app_audio"];
 /// The docks' titles in English, in the same order.
-pub(crate) const DOCK_TITLES: [&str; 3] = ["Scenes", "Sources", "Audio Mixer"];
+pub(crate) const DOCK_TITLES: [&str; crate::store::DOCK_COUNT] = ["Scenes", "Sources", "Audio Mixer", "Application Audio"];
 
 /// Longest menu path accepted, in bytes.
 pub const MAX_MENU_PATH: usize = 1024;
@@ -78,9 +78,12 @@ impl StudioApp {
             "replay.toggle" => on(self.studio.output(OutputKind::Replay).is_some_and(|s| s.active)),
             "replay.save" => ItemState { enabled: self.studio.output(OutputKind::Replay).is_some_and(|s| s.active), checked: None },
             "captions.toggle" => on(matches!(self.studio.captions_state(), CaptionState::Loading | CaptionState::Running)),
+            "audio_tracks.open_last" => ItemState { enabled: self.studio.audio_tracks_last_session().is_some(), checked: None },
+            "audio_tracks.marker" => ItemState { enabled: self.studio.audio_tracks_running(), checked: None },
             "dock.scenes" => on(p.docks.scenes),
             "dock.sources" => on(p.docks.sources),
             "dock.mixer" => on(p.docks.mixer),
+            "dock.app_audio" => on(p.docks.app_audio),
             "dock.transitions" => on(p.docks.transitions),
             "dock.controls" => on(p.docks.controls),
             "dock.layout_apply" | "dock.layout_remove" => ItemState { enabled: !p.dock_layouts.is_empty(), checked: None },
@@ -277,6 +280,7 @@ impl StudioApp {
                     "scenes": crate::strip::usable(d.scenes_width),
                     "sources": crate::strip::usable(d.sources_width),
                     "mixer": crate::strip::usable(d.mixer_width),
+                    "app_audio": crate::strip::usable(d.app_audio_width),
                 },
                 "order": d.order().iter().filter_map(|i| DOCK_NAMES.get(usize::from(*i)).copied()).collect::<Vec<_>>(),
             })

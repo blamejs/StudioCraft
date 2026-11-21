@@ -490,6 +490,19 @@ menu	Transform	Przekształć
 @msg	Audio tracks could not be repaired: {takes} and {more} more	Nie można naprawić ścieżek audio: {takes} i {more} innych
 @msg	Audio tracks could not be repaired: {takes}. Takes repaired: {count}	Nie można naprawić ścieżek audio: {takes}. Naprawione nagrania: {count}
 @msg	Audio tracks could not be repaired: {takes} and {more} more. Takes repaired: {count}	Nie można naprawić ścieżek audio: {takes} i {more} innych. Naprawione nagrania: {count}
+	Open Last Audio Tracks in Editor	Otwórz ostatnie ścieżki audio w edytorze
+	Add Audio Tracks Marker	Dodaj znacznik do ścieżek audio
+	After a take	Po nagraniu
+	Nothing	Nic
+	Show the folder	Pokaż folder
+	Open in the audio editor	Otwórz w edytorze audio
+	Audio editor	Edytor audio
+	The audio editor on the PATH	Edytor audio z PATH
+	Programs	Programy
+@msg	Audio tracks opened in the audio editor: {session}	Otwarto ścieżki audio w edytorze audio: {session}
+@msg	The audio editor did not start ({error}); the folder {folder} is shown instead	Edytor audio się nie uruchomił ({error}); zamiast niego wyświetlono folder {folder}
+@msg	Audio tracks saved in {folder}	Zapisano ścieżki audio w {folder}
+@msg	The audio tracks could not be opened: {error}	Nie można otworzyć ścieżek audio: {error}
 @msg	`{command}` needs `{key}`	`{command}` wymaga `{key}`
 @msg	`{command}`: unknown dock `{name}` (one of {docks})	`{command}`: nieznany panel `{name}` (jeden z {docks})
 @msg	`{command}`: `path` must be a file path	`{command}`: `path` musi być ścieżką pliku

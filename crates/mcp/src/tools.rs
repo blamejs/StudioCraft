@@ -52,6 +52,10 @@ const RUNS: Hints = Hints { read_only: false, destructive: true, idempotent: fal
 const RECORDS: Hints = Hints { read_only: false, destructive: false, idempotent: true, open_world: false };
 /// Starting or stopping the stream, which goes out to the configured server.
 const PUBLISHES: Hints = Hints { read_only: false, destructive: false, idempotent: true, open_world: true };
+/// Opening a file in another program: each call starts the program again.
+const LAUNCHES: Hints = Hints { read_only: false, destructive: false, idempotent: false, open_world: false };
+/// Adding a marker to the running take: each call adds another.
+const MARKS: Hints = Hints { read_only: false, destructive: false, idempotent: false, open_world: false };
 
 fn tool(name: &str, title: &str, description: &str, properties: Value, required: &[&str], hints: Hints) -> Value {
     json!({
@@ -307,10 +311,28 @@ fn studio_tool_definitions() -> Vec<Value> {
             "`list`: the running applications that have audio, each with the `app` value an `app_audio` source takes, whether it plays \
              sound now, its peak level and the listed application whose capture already records it. It answers at once: before the \
              first scan `listing` is true and no applications are listed, so ask again. `status`: whether this system captures one \
-             application's audio, and the captures running now with their counters.",
-            json!({"action": {"type": "string", "enum": ["list", "status"], "description": "What to read."}}),
+             application's audio, and the captures running now with their counters. `lanes`: the lanes of the Application Audio \
+             panel, microphones first and then applications, each with its source, whether it is a global audio source \
+             (`routed`), whether a global audio source of it reaches the program (`routed_heard`) and whether the program hears it (`heard`), its volume, mute and the application's peak level.",
+            json!({"action": {"type": "string", "enum": ["list", "status", "lanes"], "description": "What to read."}}),
             &["action"],
             READS,
+        ),
+        tool(
+            "app_audio_route",
+            "Route application audio",
+            "Hear one application in the program in every scene, together with the microphone, or stop hearing it, as the check box \
+             of its lane in the Application Audio panel does. `app` is a lane's or a listed application's `app` value. Routing adds \
+             an Application audio capture source for it to the global audio sources, or uses one the collection already has; \
+             only an application in the current list gets a new source. It is refused while the program hears another \
+             application, routed or shown in the program scene, whose capture records this one's processes, or the reverse. Unrouting takes it out of them; a scene that shows it \
+             still plays it. Returns the source's id. Undo takes it back.",
+            json!({
+                "app": {"type": "string", "description": "The application's `app` value from the `app_audio` tool's lanes or list."},
+                "routed": {"type": "boolean", "description": "true to hear the application in the program, false to stop."},
+            }),
+            &["app", "routed"],
+            SETS,
         ),
         tool(
             "record_start",
@@ -390,6 +412,28 @@ fn studio_tool_definitions() -> Vec<Value> {
             json!({"folder": {"type": "string", "description": "The folder to look in."}}),
             &["folder"],
             RECORDS,
+        ),
+        tool(
+            "audio_tracks_open_last",
+            "Open the last audio tracks in the audio editor",
+            "Open the session file of the last take of audio tracks (`<name> Audio/<name>.scraft`, written when the take ended or \
+             was repaired) in the audio editor: the program at the editor path setting, or `soundcraft` on the PATH. When the \
+             editor cannot be found or started, the take's folder opens in the file manager instead. The opening runs in the \
+             background and this returns `started` and `session` at once. An error when no take has ended since the app started.",
+            json!({}),
+            &[],
+            LAUNCHES,
+        ),
+        tool(
+            "audio_tracks_marker",
+            "Mark the running take of audio tracks",
+            "Add a marker to the running take of audio tracks at this moment; the take's session file lists it at that sample. \
+             `name` is 1 to 256 characters with no control characters (default \"Marker N\", the take's Nth marker). Returns the \
+             marker's `name` and `seconds` from the take's start. An error when no take runs, when the take is ending, and when \
+             1,024 markers are waiting to be written.",
+            json!({"name": {"type": "string", "description": "The marker's name (default: \"Marker N\")."}}),
+            &[],
+            MARKS,
         ),
         tool(
             "output_status",
@@ -903,8 +947,14 @@ fn dispatch(b: &mut dyn Backend, name: &str, args: &Args) -> Result<Value, McpEr
         "app_audio" => match req_str(args, "action")? {
             "list" => Ok(text(&run(b, "app_audio.list", json!({}))?)),
             "status" => Ok(text(&run(b, "app_audio.status", json!({}))?)),
-            other => Err(McpError::Invalid(format!("`action` must be list or status, not `{other}`"))),
+            "lanes" => Ok(text(&run(b, "app_audio.lanes", json!({}))?)),
+            other => Err(McpError::Invalid(format!("`action` must be list, status or lanes, not `{other}`"))),
         },
+        "app_audio_route" => {
+            let app = req_str(args, "app")?;
+            let routed = args.get("routed").and_then(Value::as_bool).ok_or_else(|| McpError::Invalid("`routed` must be true or false".into()))?;
+            Ok(text(&run(b, "app_audio.route", json!({"app": app, "routed": routed}))?))
+        }
         "record_start" => output_command(b, "record.start", "recording"),
         "record_stop" => output_command(b, "record.stop", "recording"),
         "stream_start" => output_command(b, "stream.start", "streaming"),
@@ -915,6 +965,12 @@ fn dispatch(b: &mut dyn Backend, name: &str, args: &Args) -> Result<Value, McpEr
         "output_status" => Ok(text(&outputs(b)?)),
         "audio_tracks_status" => Ok(text(&run(b, "audio_tracks.status", json!({}))?)),
         "audio_tracks_repair" => Ok(text(&run(b, "audio_tracks.repair", json!({"folder": req_str(args, "folder")?}))?)),
+        "audio_tracks_open_last" => Ok(text(&run(b, "audio_tracks.open_last", json!({}))?)),
+        // `name: null` goes on to the command, which refuses it, instead of naming the marker.
+        "audio_tracks_marker" => {
+            let params = Value::Object(args.get("name").map(|v| ("name".to_owned(), v.clone())).into_iter().collect());
+            Ok(text(&run(b, "audio_tracks.marker", params)?))
+        }
         other => Err(McpError::Invalid(format!("there is no tool `{other}`"))),
     }
 }

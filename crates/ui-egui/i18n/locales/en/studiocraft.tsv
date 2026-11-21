@@ -209,6 +209,7 @@
 	No contributors listed yet	No contributors listed yet
 	No filters yet.	No filters yet.
 	No graphics device: the preview is off	No graphics device: the preview is off
+	No separate key; a key at the end of the server address is used	No separate key; a key at the end of the server address is used
 	No sources in this scene. Add one with +.	No sources in this scene. Add one with +.
 	Noise gate	Noise gate
 	None	None
@@ -304,6 +305,7 @@
 	Save Dock Layout	Save Dock Layout
 	Save Dock Layout…	Save Dock Layout…
 	Save Replay	Save Replay
+	Saved in this profile as plain text	Saved in this profile as plain text
 	Scene Collection	Scene Collection
 	Scene {n}	Scene {n}
 	Scenes	Scenes
@@ -312,6 +314,7 @@
 	Scroll	Scroll
 	Send the preview to the program	Send the preview to the program
 	Server	Server
+	Set for each session as {name} and never saved; a key typed here is saved in this profile	Set for each session as {name} and never saved; a key typed here is saved in this profile
 	Settings	Settings
 	sharing stopped	sharing stopped
 	Sharpen	Sharpen
@@ -527,6 +530,7 @@ menu	Transform	Transform
 	Record as Its Own Track	Record as Its Own Track
 	Audio Tracks Status	Audio Tracks Status
 	Repair Audio Tracks	Repair Audio Tracks
+	Test Hardware Encoders Again	Test Hardware Encoders Again
 @msg	Audio tracks stopped at {time}: the disk is full	Audio tracks stopped at {time}: the disk is full
 @msg	Audio tracks stopped at {time}: the disk is almost full	Audio tracks stopped at {time}: the disk is almost full
 @msg	Audio tracks stopped at {time}: the files could not be created	Audio tracks stopped at {time}: the files could not be created
@@ -540,6 +544,31 @@ menu	Transform	Transform
 @msg	Audio tracks could not be repaired: {takes} and {more} more	Audio tracks could not be repaired: {takes} and {more} more
 @msg	Audio tracks could not be repaired: {takes}. Takes repaired: {count}	Audio tracks could not be repaired: {takes}. Takes repaired: {count}
 @msg	Audio tracks could not be repaired: {takes} and {more} more. Takes repaired: {count}	Audio tracks could not be repaired: {takes} and {more} more. Takes repaired: {count}
+	Open Last Audio Tracks in Editor	Open Last Audio Tracks in Editor
+	Add Audio Tracks Marker	Add Audio Tracks Marker
+	After a take	After a take
+	Nothing	Nothing
+	Show the folder	Show the folder
+	Open in the audio editor	Open in the audio editor
+	Audio editor	Audio editor
+	The audio editor on the PATH	The audio editor on the PATH
+	Programs	Programs
+@msg	Audio tracks opened in the audio editor: {session}	Audio tracks opened in the audio editor: {session}
+@msg	The audio editor did not start ({error}); the folder {folder} is shown instead	The audio editor did not start ({error}); the folder {folder} is shown instead
+@msg	Audio tracks saved in {folder}	Audio tracks saved in {folder}
+@msg	The audio tracks could not be opened: {error}	The audio tracks could not be opened: {error}
+	Application Audio	Application Audio
+	Lane settings	Lane settings
+	Hear in Every Scene	Hear in Every Scene
+	Stop Hearing in Every Scene	Stop Hearing in Every Scene
+	Hear this application in every scene, with the microphone	Hear this application in every scene, with the microphone
+	Stop hearing this application in every scene	Stop hearing this application in every scene
+	Looking for applications with audio…	Looking for applications with audio…
+	No microphones or applications with audio.	No microphones or applications with audio.
+	Desktop audio also records a routed application that plays on the same device, so the program can hear it twice.	Desktop audio also records a routed application that plays on the same device, so the program can hear it twice.
+	This application is not running.	This application is not running.
+	List Audio Lanes	List Audio Lanes
+	Route Application Audio	Route Application Audio
 @msg	`{command}` needs `{key}`	`{command}` needs `{key}`
 @msg	`{command}`: unknown dock `{name}` (one of {docks})	`{command}`: unknown dock `{name}` (one of {docks})
 @msg	`{command}`: `path` must be a file path	`{command}`: `path` must be a file path

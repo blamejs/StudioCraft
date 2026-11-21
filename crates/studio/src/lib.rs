@@ -6,6 +6,7 @@
 //! hotkeys, scripts and the control channel all go through [`Studio::execute`]; after each change
 //! the studio brings the running parts in line with the collection.
 
+pub mod audio_editor;
 mod audio_tracks;
 mod captions;
 pub mod capture;
@@ -40,7 +41,7 @@ use studiocraft_sources::FfmpegSetting;
 pub use audio_tracks::{PROGRAM_NAME, clock_text};
 pub use captions::{CaptionState, Loader as CaptionLoader, ModelFileFilter, default_models_dir};
 pub use files::FileError;
-pub use outputs::{OutputKind, OutputState, recording_folder, recording_path, replay_path};
+pub use outputs::{HARDWARE_TESTS_FILE, OutputKind, OutputState, recording_folder, recording_path, replay_path};
 pub use studiocraft_audio_tracks::{State as AudioTracksState, Status as AudioTracksStatus, StopReason as AudioTracksStopReason};
 pub use studiocraft_platform::PlatformError;
 pub use studiocraft_platform::audio::{AudioSink, Fill, Format, OnError, Playing, SystemSink};
@@ -372,6 +373,8 @@ impl Studio {
             match action {
                 RuntimeAction::AudioTracksStatus => result = self.audio_tracks_json(),
                 RuntimeAction::AudioTracksRepair { folder } => result = self.repair_audio_tracks(&folder)?,
+                RuntimeAction::AudioTracksOpenLast => result = self.open_last_audio_tracks()?,
+                RuntimeAction::AudioTracksMarker { name } => result = self.add_audio_tracks_marker(name)?,
                 RuntimeAction::StartRecording => self.start_output(OutputKind::Recording)?,
                 RuntimeAction::StopRecording => self.stop_output(OutputKind::Recording),
                 RuntimeAction::ToggleRecording => self.toggle_output(OutputKind::Recording)?,
@@ -388,6 +391,7 @@ impl Studio {
                 RuntimeAction::CaptionsStatus => result = self.captions_json(),
                 RuntimeAction::CaptionsDownload { model } => result = self.download_speech_model(model)?,
                 RuntimeAction::CaptionsDownloadCancel => self.cancel_speech_model_download(),
+                RuntimeAction::RetestHardwareEncoders => self.retest_hardware_encoders()?,
                 RuntimeAction::OpenSettings => ui = Some(UiAction::OpenSettings),
                 RuntimeAction::Exit => ui = Some(UiAction::Exit),
             }

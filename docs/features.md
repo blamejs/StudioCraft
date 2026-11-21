@@ -141,6 +141,39 @@ A source's Properties window sets two more audio options:
 Monitored sources play on the device chosen in Settings › Audio. Monitoring works on Windows and
 macOS.
 
+### Application Audio dock
+
+Docks › Application Audio shows a dock that lists a lane for each audio input source, then a lane
+for each running application that has audio. Each lane has a live meter. A lane the program does
+not hear is drawn gray. The meter of a lane with a source shows the source's level in the mix,
+and is silent while the mix has no level for it. The meter of an application lane without a
+source shows the level the system reports for the application, without capturing it. The program hears a lane when its source is a global
+audio source or is shown in the program scene, unless the source's monitoring is set to monitor
+only.
+
+The check box of an application lane routes the application into the program in every scene,
+together with the microphone. Desktop audio also records what a routed application plays on the
+device it captures. While the program hears Desktop audio unmuted and a running application is
+routed and not muted, the dock warns that the program can hear that application twice. Routing adds an Application audio capture source for the application
+to the global audio sources, or uses a source of the collection that already captures it, and
+sets that source's monitoring to monitor and output when it was monitor only. Clearing the check
+box takes that source out of the global audio sources, and Edit › Undo puts it back. A source that
+the program scene shows is still heard after its check box is cleared. The check box is
+checked only while a routed source reaches the program. A routed source set to monitor only leaves
+it clear, and checking it routes the application again.
+
+When one application runs inside another one's process tree, such as a helper program, the capture
+of the outer one already records it, and the dock does not route one of them while the program
+hears the other. A routed application that quits keeps its lane. When two listed programs have the
+same file name, their lanes show the folder as well. When the program hears two sources of one
+application, the second source gets a lane of its own, named after the source, with its own volume
+slider and mute button and no check box.
+
+A lane with a source has a volume slider in dB and a mute button, and its settings menu opens the
+source's Properties… (sync offset and monitoring) and Filters…. The dock is hidden in a new
+layout. On a system that cannot capture one application's audio, the dock lists the microphones
+and says why no applications are listed.
+
 ## Recording
 
 Recordings are MKV, MP4 or MOV files at four quality levels: Compact, High, Pristine and Lossless.
@@ -229,6 +262,30 @@ leaves it for repair. A take cut short by a crash is repaired
 at the next start, or with `studiocraft-cli audio-tracks repair <folder>`. Each repaired file keeps
 the audio that reached the disk, so the files of a repaired take can end at different points.
 
+A take that makes its own `<name> Audio` folder also writes `<name>.scraft` there, a session file
+for the audio editor. The file appears with no tracks when the take starts and is replaced with the
+full session when the take ends, stops early or is repaired. The session holds one track for each
+of the take's tracks, the program mix first. Each file is one clip at the sample of the output's timeline where the
+file starts, and each part follows the one before it. Each dropout (audio lost before the disk) is
+a selection on its track's marker lane. File › Add Audio Tracks Marker (`audio_tracks.marker`, which
+can be given a shortcut in Settings › Hotkeys) marks the running take at that moment, and the
+session lists each such marker at its sample. A session lists at most 10,000 markers and dropouts,
+markers first.
+Its comments say when the take stopped early and how many markers and dropouts it left out. When the
+full session cannot be written, for example on a full disk, the take stops with that error and is
+left unfinished, and a repair of the take writes the session.
+
+Settings › Output › Audio tracks › After a take sets what happens when a take's files are complete:
+Nothing (the default), Show the folder, or Open in the audio editor. Audio editor sets the editor's
+program; when it is empty, `soundcraft` on the `PATH` is used. When the editor cannot be found or
+started, the take's folder opens instead and the status bar gives the reason. A take that ends
+because the next one starts (a recording that starts or stops during a stream) opens nothing, and so
+does a take whose files are complete only after a newer take has opened. Takes that the app finds
+complete at the same time open in the order they ended. A take that ends because the app closes
+is opened as the app closes, and the app waits up to 3 seconds for the editor or the folder to open.
+File › Open Last Audio Tracks in Editor opens the newest take's session again, or the session of a
+repair started after that take stopped, and can be given a shortcut in Settings › Hotkeys.
+
 ### Live captions
 
 Tools › Live Captions turns the program audio into text on this computer with a Whisper speech
@@ -273,7 +330,10 @@ A key written at the end of the server address, as in `rtmp://host/app/key`, is 
 key when the key field is empty, and the stream's status leaves it out of the address it shows.
 
 The stream key in Settings › Stream is saved in the profile file as plain text. A destination can
-instead use a key held only for the running session, which is never saved.
+instead use a key held only for the running session, which is never saved. A line under the key
+field says where the first destination's key comes from: this profile, a key given for each session,
+or no separate key, when a key at the end of the server address is used if there is one. Typing a
+key in the field saves it in the profile.
 
 ## Hardware acceleration
 
@@ -288,7 +348,13 @@ again on a new device, and after 3 losses in 10 minutes it draws in software.
 Hardware: Automatic, Software only, or one of the listed hardware encoders. Software only uses
 x264 without testing the hardware encoders. Automatic tests each candidate with a one-frame
 encode, in an order set by the graphics adapter's vendor, and uses x264 when none works, or
-H.264 (built in) for a stream. The candidates run in `ffmpeg`, except for a stream:
+H.264 (built in) for a stream. One test stops after 5 s, and the tests of one start stop after
+10 s together; a candidate left untested is tested at the next start. The results are kept in
+`hardware-encoder-tests.txt` in the settings folder, for the `ffmpeg` program, its version, the
+graphics driver and the StudioCraft version they were found with. A change to any of them, or a
+new graphics device after a device loss, tests the encoders again. Tools › Test Hardware Encoders
+Again (the `hardware_encoders.retest` command) forgets the results and removes the file. The
+candidates run in `ffmpeg`, except for a stream:
 
 | Family | Codecs |
 | --- | --- |
@@ -335,12 +401,13 @@ bar's overflow menu. Docks › Output Controls and Docks › Transition Controls
 
 ### Docks
 
-Scenes, Sources and Audio Mixer sit in a strip under the preview. Each dock has a 24-point header
+Scenes, Sources and Audio Mixer sit in a strip under the preview, and Application Audio joins them
+when Docks › Application Audio shows it. Each dock has a 24-point header
 with the title at its start and the dock's actions at its end, and no footer. When the dock is
 narrow, the header keeps its actions and shortens the title. 1-point dividers separate the docks.
 
 The strip is 200 points tall, or 30% of the window's height when that is less, and never under 120
-points. Scenes, Sources and Audio Mixer start 300, 340 and 400 points wide
+points. Scenes, Sources, Audio Mixer and Application Audio start 300, 340, 400 and 360 points wide
 ([MECHANICS.md](../MECHANICS.md#editing)), and the last shown dock takes the rest. No dock is
 narrower than 200 points while the window has room.
 

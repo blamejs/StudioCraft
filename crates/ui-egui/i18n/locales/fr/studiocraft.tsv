@@ -500,6 +500,19 @@ menu	Transform	Transformer
 @msg	Audio tracks could not be repaired: {takes} and {more} more	Les pistes audio n'ont pas pu être réparées : {takes} et {more} de plus
 @msg	Audio tracks could not be repaired: {takes}. Takes repaired: {count}	Les pistes audio n'ont pas pu être réparées : {takes}. Prises réparées : {count}
 @msg	Audio tracks could not be repaired: {takes} and {more} more. Takes repaired: {count}	Les pistes audio n'ont pas pu être réparées : {takes} et {more} de plus. Prises réparées : {count}
+	Open Last Audio Tracks in Editor	Ouvrir les dernières pistes audio dans l'éditeur
+	Add Audio Tracks Marker	Ajouter un marqueur aux pistes audio
+	After a take	Après une prise
+	Nothing	Rien
+	Show the folder	Afficher le dossier
+	Open in the audio editor	Ouvrir dans l'éditeur audio
+	Audio editor	Éditeur audio
+	The audio editor on the PATH	L'éditeur audio du PATH
+	Programs	Programmes
+@msg	Audio tracks opened in the audio editor: {session}	Pistes audio ouvertes dans l'éditeur audio : {session}
+@msg	The audio editor did not start ({error}); the folder {folder} is shown instead	L'éditeur audio n'a pas démarré ({error}) ; le dossier {folder} est affiché à la place
+@msg	Audio tracks saved in {folder}	Pistes audio enregistrées dans {folder}
+@msg	The audio tracks could not be opened: {error}	Les pistes audio n'ont pas pu être ouvertes : {error}
 @msg	`{command}` needs `{key}`	`{command}` nécessite `{key}`
 @msg	`{command}`: unknown dock `{name}` (one of {docks})	`{command}` : dock inconnu `{name}` (parmi {docks})
 @msg	`{command}`: `path` must be a file path	`{command}` : `path` doit être un chemin de fichier

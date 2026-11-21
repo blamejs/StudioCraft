@@ -95,8 +95,8 @@ fn collection_v3_to_v4(data: &mut Value) -> Result<(), String> {
 /// Profiles.
 pub const PROFILE: FileFormat = FileFormat {
     name: "studiocraft.profile",
-    version: 7,
-    migrations: &[profile_v1_to_v2, profile_v2_to_v3, profile_v3_to_v4, profile_v4_to_v5, profile_v5_to_v6, profile_v6_to_v7],
+    version: 8,
+    migrations: &[profile_v1_to_v2, profile_v2_to_v3, profile_v3_to_v4, profile_v4_to_v5, profile_v5_to_v6, profile_v6_to_v7, profile_v7_to_v8],
 };
 
 /// Profile version 1 to 2: the recording and the stream each keep the settings of their video
@@ -187,6 +187,19 @@ fn profile_v6_to_v7(data: &mut Value) -> Result<(), String> {
         if let Some(id) = built_in {
             *encoder = id.to_string();
         }
+    }
+    Ok(())
+}
+
+/// Profile version 7 to 8: a take of audio tracks that ends does nothing more
+/// (`audio_tracks.after_stop`, `nothing`), and the audio editor is looked up on the `PATH`
+/// (`audio_tracks.editor_path`, empty).
+fn profile_v7_to_v8(data: &mut Value) -> Result<(), String> {
+    let data = data.as_object_mut().ok_or("the profile is not an object")?;
+    let tracks = data.entry("audio_tracks").or_insert_with(|| json!({}));
+    if let Value::Object(t) = tracks {
+        t.entry("after_stop").or_insert_with(|| json!("nothing"));
+        t.entry("editor_path").or_insert_with(|| json!(""));
     }
     Ok(())
 }
@@ -298,6 +311,7 @@ mod tests {
         (5, include_str!("../fixtures/profile-v5.json")),
         (6, include_str!("../fixtures/profile-v6.json")),
         (7, include_str!("../fixtures/profile-v7.json")),
+        (8, include_str!("../fixtures/profile-v8.json")),
     ];
 
     fn covers_every_version(format: &FileFormat, fixtures: &[(u32, &str)]) {
@@ -458,8 +472,10 @@ mod tests {
             include_program: false,
             buffer_mib: 256,
             segment_gib: 1,
+            after_stop: crate::profile::AfterStop::Nothing,
+            editor_path: String::new(),
         };
-        assert_eq!(p.audio_tracks, want);
+        assert_eq!(p.audio_tracks, want, "a version 6 profile does nothing after a take and looks the editor up on the PATH");
         assert_eq!(read_profile(&write_profile(&p).unwrap()).unwrap(), p);
         // A size out of range is brought into it, so the rest of the profile is kept.
         for (from, to, buffer, segment) in [
@@ -478,6 +494,30 @@ mod tests {
         }
         for (from, to) in [("\"buffer_mib\": 256", "\"buffer_mib\": 16"), ("\"segment_gib\": 1", "\"segment_gib\": 3")] {
             assert!(read_profile(&v6.replace(from, to)).is_ok(), "{to} is in range");
+        }
+    }
+
+    #[test]
+    fn profiles_keep_what_happens_after_a_take_and_the_editor_path() {
+        let (_, v7) = PROFILE_FIXTURES[6];
+        let old = read_profile(v7).unwrap();
+        assert_eq!(old.audio_tracks.after_stop, crate::profile::AfterStop::Nothing, "a version 7 profile does nothing after a take");
+        assert_eq!(old.audio_tracks.editor_path, "", "a version 7 profile looks the editor up on the PATH");
+        let (_, v8) = PROFILE_FIXTURES[7];
+        let p = read_profile(v8).unwrap();
+        assert_eq!(p.audio_tracks.after_stop, crate::profile::AfterStop::OpenEditor);
+        assert_eq!(p.audio_tracks.editor_path, "C:/Tools/Editor/editor.exe");
+        assert_eq!(read_profile(&write_profile(&p).unwrap()).unwrap(), p);
+        for (id, want) in [("nothing", crate::profile::AfterStop::Nothing), ("show_folder", crate::profile::AfterStop::ShowFolder)] {
+            let p = read_profile(&v8.replace("\"open_editor\"", &format!("\"{id}\""))).unwrap();
+            assert_eq!(p.audio_tracks.after_stop, want, "{id}");
+        }
+        assert!(matches!(read_profile(&v8.replace("\"open_editor\"", "\"launch\"")), Err(FormatError::Data(_))), "an unknown value refuses the file");
+        // A path too long to be one, or holding a NUL, is cleared so the rest of the profile is kept.
+        let long = "x".repeat(crate::profile::AudioTracksSettings::MAX_EDITOR_PATH + 1);
+        for bad in [long.as_str(), "C:/a\\u0000b.exe"] {
+            let p = read_profile(&v8.replace("C:/Tools/Editor/editor.exe", bad)).unwrap();
+            assert_eq!((p.audio_tracks.editor_path.as_str(), p.audio_tracks.enabled), ("", true), "{bad}");
         }
     }
 

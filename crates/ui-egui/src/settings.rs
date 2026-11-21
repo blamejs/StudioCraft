@@ -8,7 +8,7 @@ use craft_keymap::{Binding, CommandRef, Keymap, Overrides};
 use egui::{RichText, Ui};
 use studiocraft_audio_tracks::space::TRACK_BYTES_PER_SECOND;
 use studiocraft_model::profile::DEFAULT_AUDIO_DEVICE;
-use studiocraft_model::{AudioTracksSettings, AudioTracksWhen, Profile, RecordingFormat, RecordingQuality, ReplaySettings};
+use studiocraft_model::{AfterStop, AudioTracksSettings, AudioTracksWhen, KeyRef, Profile, RecordingFormat, RecordingQuality, ReplaySettings};
 use studiocraft_platform::audio::{DeviceInfo, DeviceKind};
 use studiocraft_plugin::{Availability, EncoderEnv, EncoderKind, Registry, Settings};
 
@@ -32,6 +32,7 @@ pub enum Tab {
 pub enum Pick {
     RecordingFolder,
     Ffmpeg,
+    AudioEditor,
 }
 
 struct Hotkey {
@@ -171,6 +172,15 @@ pub(crate) fn when_label(w: AudioTracksWhen) -> &'static str {
     }
 }
 
+/// What happens after a take of audio tracks, as the Output tab shows it.
+pub(crate) fn after_stop_label(a: AfterStop) -> &'static str {
+    match a {
+        AfterStop::Nothing => "Nothing",
+        AfterStop::ShowFolder => "Show the folder",
+        AfterStop::OpenEditor => "Open in the audio editor",
+    }
+}
+
 /// The audio tracks' disk use in GiB an hour, and how many seconds the write buffer holds, both
 /// as text, for `sources` recorded sources and the program when it is included. `None` when
 /// there is no track to write.
@@ -236,6 +246,7 @@ impl SettingsWindow {
                 self.draft.output.ffmpeg_path = text;
                 (self.offered, self.ffmpeg_version) = probe(&self.draft.output.ffmpeg_path);
             }
+            Pick::AudioEditor => self.draft.audio_tracks.editor_path = text,
         }
     }
 
@@ -321,8 +332,8 @@ impl SettingsWindow {
         let kbps = |n: u32| craft_i18n::fmt(tl!("{n} kbps"), &[("n", &n.to_string())]);
         egui::Grid::new("stream-grid").num_columns(2).spacing([12.0, 8.0]).show(ui, |ui| {
             // The fields edit the first destination. The key field shows the profile's key when
-            // that destination uses it and is empty otherwise; typing a key makes it use the
-            // profile's key.
+            // that destination uses it and is empty otherwise, and the line under it says where
+            // the key comes from; typing a key makes it use the profile's key.
             ui.label(tl!("Server"));
             let mut server = s.primary_server().to_string();
             if ui.add(egui::TextEdit::singleline(&mut server).hint_text("rtmp://live.example.com/app").desired_width(320.0)).changed() {
@@ -330,14 +341,18 @@ impl SettingsWindow {
             }
             ui.end_row();
             ui.label(tl!("Stream key"));
-            ui.horizontal(|ui| {
-                let profile_key = s.destinations.first().is_none_or(|d| d.key == studiocraft_model::KeyRef::Profile);
-                let mut key = if profile_key { s.key.clone() } else { String::new() };
-                if ui.add(egui::TextEdit::singleline(&mut key).password(!self.show_key).desired_width(240.0)).changed() {
-                    s.key = key;
-                    s.primary_mut().key = studiocraft_model::KeyRef::Profile;
-                }
-                ui.toggle_value(&mut self.show_key, tl!("Show"));
+            ui.vertical(|ui| {
+                ui.horizontal(|ui| {
+                    let profile_key = s.destinations.first().is_none_or(|d| d.key == KeyRef::Profile);
+                    let mut key = if profile_key { s.key.clone() } else { String::new() };
+                    if ui.add(egui::TextEdit::singleline(&mut key).password(!self.show_key).desired_width(240.0)).changed() {
+                        s.key = key;
+                        s.primary_mut().key = KeyRef::Profile;
+                    }
+                    ui.toggle_value(&mut self.show_key, tl!("Show"));
+                });
+                let source = s.destinations.first().map_or(&KeyRef::Profile, |d| &d.key);
+                ui.label(RichText::new(key_source(source)).small().weak());
             });
             ui.end_row();
             ui.label(tl!("Video bitrate"));
@@ -416,11 +431,11 @@ impl SettingsWindow {
             ui.end_row();
         });
         ui.add_space(12.0);
-        self.audio_tracks(ui);
+        self.audio_tracks(ui, out);
     }
 
     /// The Audio tracks section of the Output tab.
-    fn audio_tracks(&mut self, ui: &mut Ui) {
+    fn audio_tracks(&mut self, ui: &mut Ui, out: &mut Outcome) {
         ui.label(RichText::new(tl!("Audio tracks")).strong());
         ui.add_space(4.0);
         let t = &mut self.draft.audio_tracks;
@@ -443,6 +458,22 @@ impl SettingsWindow {
                 ui.end_row();
                 ui.label(tl!("File size"));
                 ui.add(egui::DragValue::new(&mut t.segment_gib).range(AudioTracksSettings::SEGMENT_GIB).suffix(format!(" {}", tl!("GiB"))));
+                ui.end_row();
+                ui.label(tl!("After a take"));
+                let label = |a: AfterStop| tl!(after_stop_label(a));
+                craft_ui::ComboBox::from_id_salt("audio-tracks-after-stop").selected_text(label(t.after_stop)).width(260.0).show_ui(ui, |ui| {
+                    for a in AfterStop::ALL {
+                        ui.selectable_value(&mut t.after_stop, a, label(a));
+                    }
+                });
+                ui.end_row();
+                ui.label(tl!("Audio editor"));
+                ui.horizontal(|ui| {
+                    ui.add(egui::TextEdit::singleline(&mut t.editor_path).hint_text(tl!("The audio editor on the PATH")).desired_width(240.0));
+                    if ui.button(tl!("Browse…")).clicked() {
+                        out.pick = Some(Pick::AudioEditor);
+                    }
+                });
                 ui.end_row();
             });
             // With no track to write there is no disk use to estimate.
@@ -684,6 +715,17 @@ fn hardware_encoder_choices(offered: &[String], saved: &str) -> Vec<String> {
     ids
 }
 
+/// Where a destination's stream key comes from, as the Stream key field says it.
+pub(crate) fn key_source(key: &KeyRef) -> String {
+    match key {
+        KeyRef::Profile => tl!("Saved in this profile as plain text").to_string(),
+        KeyRef::Held(name) => {
+            craft_i18n::fmt(tl!("Set for each session as {name} and never saved; a key typed here is saved in this profile"), &[("name", name)])
+        }
+        KeyRef::None => tl!("No separate key; a key at the end of the server address is used").to_string(),
+    }
+}
+
 /// The shown name of a Hardware encoder setting value.
 fn hardware_encoder_label(id: &str) -> String {
     match craft_hwenc::Preference::parse(id) {
@@ -730,6 +772,51 @@ mod tests {
         assert!(listed_encoders(registry, &[], false).iter().any(|(e, ok)| e.id() == "h264" && *ok));
     }
 
+    /// The texts drawn by `f`.
+    fn drawn(f: impl FnMut(&mut Ui)) -> Vec<String> {
+        let ctx = egui::Context::default();
+        let mut out = ctx.run_ui(egui::RawInput::default(), f);
+        out.textures_delta.clear();
+        out.shapes
+            .iter()
+            .filter_map(|s| match &s.shape {
+                egui::Shape::Text(t) => Some(t.galley.text().to_string()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn the_stream_key_field_says_where_its_key_comes_from() {
+        let app = crate::StudioApp::boot(crate::store::Store::memory(), None, Vec::new());
+        let registry = app.studio().registry();
+        let km = crate::commands::keymap(Overrides::new());
+        let mut p = Profile::default();
+        p.stream.key = "profile-secret".into();
+        let cases = [
+            (None, key_source(&KeyRef::Profile)),
+            (Some(KeyRef::Profile), key_source(&KeyRef::Profile)),
+            (Some(KeyRef::Held("night".into())), key_source(&KeyRef::Held("night".into()))),
+            (Some(KeyRef::None), key_source(&KeyRef::None)),
+        ];
+        for (key, want) in cases {
+            if let Some(key) = &key {
+                p.stream.primary_mut().key = key.clone();
+            }
+            let mut w = SettingsWindow::new(&p, &km, Tab::Stream, i18n::AUTO, true);
+            w.show_key = true;
+            let texts = drawn(|ui| w.stream(ui, registry));
+            assert!(texts.contains(&want), "{key:?}: {want} in {texts:?}");
+            // Only a destination that uses the profile's key shows it.
+            let shows = key.is_none() || key == Some(KeyRef::Profile);
+            assert_eq!(texts.iter().any(|t| t == "profile-secret"), shows, "{key:?}: {texts:?}");
+            assert_eq!(w.draft, p, "{key:?}: drawing the tab changes nothing");
+        }
+        assert!(key_source(&KeyRef::Held("night".into())).contains("night"));
+        let texts = [key_source(&KeyRef::Profile), key_source(&KeyRef::Held("x".into())), key_source(&KeyRef::None)];
+        assert!(texts[0] != texts[1] && texts[1] != texts[2] && texts[0] != texts[2], "{texts:?}");
+    }
+
     #[test]
     fn the_audio_tab_names_the_default_a_listed_device_and_a_missing_one() {
         let listed = vec![DeviceInfo { id: "Speakers (USB)".into(), name: "Speakers (USB)".into(), default: true }];
@@ -762,7 +849,9 @@ mod tests {
         p.audio_tracks.enabled = true;
         let mut w = SettingsWindow::new(&p, &crate::commands::keymap(Overrides::new()), Tab::Output, i18n::AUTO, true);
         w.track_sources = 2;
-        let mut out = ctx.run_ui(egui::RawInput::default(), |ui| w.audio_tracks(ui));
+        let mut outcome = Outcome::default();
+        let mut out = ctx.run_ui(egui::RawInput::default(), |ui| w.audio_tracks(ui, &mut outcome));
+        assert!(outcome.pick.is_none(), "drawing the section asks for no dialog");
         let texts: Vec<String> = out
             .shapes
             .iter()
@@ -773,7 +862,12 @@ mod tests {
             .collect();
         out.textures_delta.clear();
         assert!(texts.iter().any(|t| t.starts_with("Audio tracks: 3, about 3.9 GiB an hour")), "{texts:?}");
+        assert!(texts.iter().any(|t| t == "After a take") && texts.iter().any(|t| t == "Nothing"), "{texts:?}");
         assert_eq!(w.draft.audio_tracks, p.audio_tracks, "drawing the section changes nothing");
+        // A program chosen in the dialog becomes the editor path.
+        let editor = std::path::Path::new("Tools").join("editor.exe");
+        w.picked(Pick::AudioEditor, &editor);
+        assert_eq!(w.draft.audio_tracks.editor_path, editor.to_string_lossy());
     }
 
     #[test]

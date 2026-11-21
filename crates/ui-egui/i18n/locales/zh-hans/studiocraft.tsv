@@ -491,6 +491,19 @@ menu	Transform	变换
 @msg	Audio tracks could not be repaired: {takes} and {more} more	无法修复音频轨道：{takes} 及另外 {more} 个
 @msg	Audio tracks could not be repaired: {takes}. Takes repaired: {count}	无法修复音频轨道：{takes}。已修复的录制：{count}
 @msg	Audio tracks could not be repaired: {takes} and {more} more. Takes repaired: {count}	无法修复音频轨道：{takes} 及另外 {more} 个。已修复的录制：{count}
+	Open Last Audio Tracks in Editor	在编辑器中打开最近的音频轨道
+	Add Audio Tracks Marker	为音频轨道添加标记
+	After a take	录制结束后
+	Nothing	无操作
+	Show the folder	显示文件夹
+	Open in the audio editor	在音频编辑器中打开
+	Audio editor	音频编辑器
+	The audio editor on the PATH	PATH 中的音频编辑器
+	Programs	程序
+@msg	Audio tracks opened in the audio editor: {session}	已在音频编辑器中打开音频轨道：{session}
+@msg	The audio editor did not start ({error}); the folder {folder} is shown instead	音频编辑器未能启动（{error}）；改为显示文件夹 {folder}
+@msg	Audio tracks saved in {folder}	音频轨道已保存到 {folder}
+@msg	The audio tracks could not be opened: {error}	无法打开音频轨道：{error}
 @msg	`{command}` needs `{key}`	`{command}` 需要 `{key}`
 @msg	`{command}`: unknown dock `{name}` (one of {docks})	`{command}`：未知的停靠面板 `{name}`（可选 {docks}）
 @msg	`{command}`: `path` must be a file path	`{command}`：`path` 必须是文件路径

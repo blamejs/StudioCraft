@@ -500,6 +500,19 @@ menu	Transform	Перетворення
 @msg	Audio tracks could not be repaired: {takes} and {more} more	Не вдалося відновити звукові доріжки: {takes} і ще {more}
 @msg	Audio tracks could not be repaired: {takes}. Takes repaired: {count}	Не вдалося відновити звукові доріжки: {takes}. Відновлено дублів: {count}
 @msg	Audio tracks could not be repaired: {takes} and {more} more. Takes repaired: {count}	Не вдалося відновити звукові доріжки: {takes} і ще {more}. Відновлено дублів: {count}
+	Open Last Audio Tracks in Editor	Відкрити останні звукові доріжки в редакторі
+	Add Audio Tracks Marker	Додати маркер до звукових доріжок
+	After a take	Після дубля
+	Nothing	Нічого
+	Show the folder	Показати теку
+	Open in the audio editor	Відкрити у звуковому редакторі
+	Audio editor	Звуковий редактор
+	The audio editor on the PATH	Звуковий редактор із PATH
+	Programs	Програми
+@msg	Audio tracks opened in the audio editor: {session}	Звукові доріжки відкрито у звуковому редакторі: {session}
+@msg	The audio editor did not start ({error}); the folder {folder} is shown instead	Звуковий редактор не запустився ({error}); натомість показано теку {folder}
+@msg	Audio tracks saved in {folder}	Звукові доріжки збережено в {folder}
+@msg	The audio tracks could not be opened: {error}	Не вдалося відкрити звукові доріжки: {error}
 @msg	`{command}` needs `{key}`	`{command}` потребує `{key}`
 @msg	`{command}`: unknown dock `{name}` (one of {docks})	`{command}`: невідома панель `{name}` (одна з {docks})
 @msg	`{command}`: `path` must be a file path	`{command}`: `path` має бути шляхом до файлу
