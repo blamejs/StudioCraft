@@ -76,6 +76,11 @@ pub trait OutputInstance: Send {
     fn destinations(&self) -> Vec<DestinationState> {
         Vec::new()
     }
+    /// The sum of [`DestinationState::reconnects`] over the destinations of a stream, read without
+    /// allocating; 0 for other outputs.
+    fn reconnects(&self) -> u64 {
+        0
+    }
     /// Start sending to the destination `id` of a running stream, which was started with it.
     /// With `key`, a destination that is not sending starts with that stream key. Starting one
     /// that is already sending does nothing, and it keeps its key.

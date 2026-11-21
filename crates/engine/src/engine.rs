@@ -382,6 +382,7 @@ impl Engine {
                 Ok(Outcome::runtime(RuntimeAction::PauseExtend { seconds }))
             }
             Command::PauseStatus {} => Ok(Outcome::runtime(RuntimeAction::PauseStatus)),
+            Command::SessionEvents { since } => Ok(Outcome::runtime(RuntimeAction::SessionEvents { since })),
             Command::OpenSettings {} => Ok(Outcome::runtime(RuntimeAction::OpenSettings)),
             Command::Exit {} => Ok(Outcome::runtime(RuntimeAction::Exit)),
             // Queries: no history step, no revision bump, no change to the dirty flag.

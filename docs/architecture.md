@@ -395,6 +395,11 @@ is told to stop and is not waited for. While captions are stopped no queue or th
 ### Window thread
 
 The window reads `Studio` state, runs commands, and shows statistics.
+`Studio` keeps the session's scene switches, stream reconnects, pauses and resumes for
+`session.events` (`studio/src/events.rs`) on this thread, in a ring of the last 1,000 events whose
+room is reserved with the first event, so adding one takes no lock and does not grow the ring. While
+a stream runs, `Studio::tick` and a stream stop read the sum of the destinations' reconnect counters
+(`OutputInstance::reconnects`), and read the destinations' states only when that sum changed.
 
 ## Extension points
 
