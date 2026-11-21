@@ -451,9 +451,11 @@ parameters.
 
 `video.displays` takes no parameters and returns `{"displays", "window"}`. `displays` lists each
 display the system reports as `{"id", "name", "width", "height", "primary"}`, with sizes in pixels;
-on Linux the list is empty because the desktop's picker chooses the display. `window` is
-`{"width", "height"}` of the display the window is on, or `null` when the windowing system does
-not report it.
+on Linux the list holds Wayland's outputs, where no display is `primary`, or RandR's monitors
+under X11. The app reads the Linux list in the background when it starts and again after each
+call, and a call returns the list read before it, so a display added or removed shows from the
+second call after the change. `window` is `{"width", "height"}` of the display the window is on,
+or `null` when the windowing system does not report it.
 
 `video.canvas_from_display` takes `{"display"?}` and sets the canvas size to that display's size
 in pixels. Without `display` it uses the display the window is on. Each side is rounded down to an

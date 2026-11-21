@@ -47,7 +47,9 @@ or cropping a source ends its fit, fill or stretch.
 On Linux, display and window capture go through the desktop's screen-cast portal
 (`xdg-desktop-portal` with a backend for your desktop) and PipeWire. The desktop's own picker
 asks for the display or window when the source starts. After the picker is canceled or sharing is
-stopped, changing any of the source's properties opens the picker again.
+stopped, changing any of the source's properties opens the picker again. The list of displays
+for the canvas size (Settings › Video › Match display and `video.displays`) does not use the
+picker: it comes from the Wayland compositor's outputs, or from RandR under X11.
 
 ### Audio capture on Linux
 
@@ -534,7 +536,7 @@ discards them.
 | Stream | Server, Stream key, Video bitrate, Audio bitrate, Video encoder and Keyframe interval. |
 | Output | Recording folder, Format, Quality, Video encoder and its settings, the `ffmpeg` program, Replay buffer length and Replay buffer memory limit. |
 | Audio | Monitoring device, the device monitored sources play on. |
-| Video | Canvas size (the presets include 1080 × 1920 for vertical video), Match display (sets the canvas size to the display the window is on or to a listed display; on Linux only the window's display is offered), Output size, Output scale (100%, 75%, 66% or 50% of the canvas; an output size at one of these shares stays at that share when the canvas size changes) and Frames per second, and the Hardware acceleration section with Graphics adapter and Hardware encoder. Video settings can't change while recording, streaming or running the replay buffer. |
+| Video | Canvas size (the presets include 1080 × 1920 for vertical video), Match display (sets the canvas size to the display the window is on or to a listed display), Output size, Output scale (100%, 75%, 66% or 50% of the canvas; an output size at one of these shares stays at that share when the canvas size changes) and Frames per second, and the Hardware acceleration section with Graphics adapter and Hardware encoder. Video settings can't change while recording, streaming or running the replay buffer. |
 | Hotkeys | A shortcut for each command. |
 
 ## Control and automation
