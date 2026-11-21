@@ -27,6 +27,8 @@ impl MediaFoundation {
     pub const H264: MediaFoundation = MediaFoundation { codec: NativeCodec::H264 };
     /// Media Foundation HEVC, registered as `mf_native_hevc`.
     pub const HEVC: MediaFoundation = MediaFoundation { codec: NativeCodec::Hevc };
+    /// Media Foundation AV1, registered as `mf_native_av1`.
+    pub const AV1: MediaFoundation = MediaFoundation { codec: NativeCodec::Av1 };
 
     /// Open a session for `params` without a registry.
     pub fn session(&self, params: &VideoParams) -> Result<MfSession, PluginError> {
@@ -63,12 +65,14 @@ impl Plugin for MediaFoundation {
         match self.codec {
             NativeCodec::H264 => "mf_native_h264",
             NativeCodec::Hevc => "mf_native_hevc",
+            NativeCodec::Av1 => "mf_native_av1",
         }
     }
     fn name(&self) -> &'static str {
         match self.codec {
             NativeCodec::H264 => "Windows Media Foundation H.264 (built in)",
             NativeCodec::Hevc => "Windows Media Foundation HEVC (built in)",
+            NativeCodec::Av1 => "Windows Media Foundation AV1 (built in)",
         }
     }
     fn schema(&self) -> SettingsSchema {
@@ -81,6 +85,7 @@ impl Encoder for MediaFoundation {
         match self.codec {
             NativeCodec::H264 => Codec::H264,
             NativeCodec::Hevc => Codec::Hevc,
+            NativeCodec::Av1 => Codec::Av1,
         }
     }
     fn open(&self, _settings: &Settings, params: &VideoParams) -> Result<Box<dyn VideoSession>, PluginError> {

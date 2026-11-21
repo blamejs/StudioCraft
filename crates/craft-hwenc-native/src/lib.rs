@@ -1,14 +1,17 @@
 //! Hardware video encoders called through their drivers' own APIs, without the ffmpeg program.
 //!
-//! - [`nvenc`] encodes H.264 and HEVC on NVIDIA GPUs through NVENC, on Windows and 64-bit Linux,
-//!   from frames in memory or, on Windows, from Direct3D 11 textures.
-//! - [`mf`] encodes H.264 and HEVC with the hardware encoders that Windows Media Foundation lists.
+//! - [`nvenc`] encodes H.264, HEVC and AV1 on NVIDIA GPUs through NVENC, on Windows and 64-bit
+//!   Linux, from frames in memory or, on Windows, from Direct3D 11 textures.
+//! - [`mf`] encodes H.264, HEVC and AV1 with the hardware encoders that Windows Media Foundation
+//!   lists.
 //! - [`vt`] encodes H.264 and HEVC with the hardware encoders of macOS VideoToolbox.
 //! - [`vaapi`] encodes H.264 and HEVC with the VA-API hardware encoders on 64-bit Linux.
 //! - [`annexb`] splits Annex B byte streams into NAL units and writes the 4-byte length-prefixed
 //!   samples a container stores.
 //! - [`avc`] and [`hevc`] build the `avcC` and `hvcC` records from the parameter sets an encoder
 //!   writes, with `craft-media`'s record writers.
+//! - [`av1`] splits AV1 temporal units into OBUs, builds the `av1C` record from the sequence
+//!   header, and writes the samples a container stores.
 //! - [`hdr`] holds the color signal a stream declares ([`Color`]): BT.709, or BT.2020 with PQ or
 //!   HLG, and the SEI messages of the PQ static metadata.
 //!
@@ -18,6 +21,7 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
 pub mod annexb;
+pub mod av1;
 pub mod avc;
 pub mod hdr;
 pub mod hevc;
@@ -41,6 +45,9 @@ pub use hdr::{Color, ContentLight, MasteringDisplay};
 pub enum Codec {
     H264,
     Hevc,
+    /// AV1 Main profile. NVENC and Media Foundation encode it; VideoToolbox and VA-API return
+    /// [`Error::Unsupported`].
+    Av1,
 }
 
 /// The layout of the frames an encoder takes.
@@ -49,7 +56,7 @@ pub enum Input {
     /// 8-bit 4:2:0: the luma rows, then the interleaved Cb and Cr rows at half height.
     Nv12,
     /// 10-bit 4:2:0 in 16-bit little-endian samples with the value in the high 10 bits, the
-    /// planes laid out as NV12. HEVC only (Main 10).
+    /// planes laid out as NV12. HEVC Main 10 and 10-bit AV1 Main, on NVENC only.
     P010,
 }
 
@@ -93,7 +100,8 @@ pub struct Config {
     pub color: Color,
 }
 
-/// One encoded frame: 4-byte length-prefixed NAL units without parameter sets.
+/// One encoded frame: 4-byte length-prefixed NAL units without parameter sets for H.264 and HEVC,
+/// or AV1 OBUs with their sizes and without temporal delimiters (see [`av1::Stream::sample`]).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Packet {
     pub data: Vec<u8>,

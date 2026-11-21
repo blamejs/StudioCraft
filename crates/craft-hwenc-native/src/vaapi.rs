@@ -1,6 +1,7 @@
 //! The VA-API hardware H.264 and HEVC encoders on 64-bit Linux (Intel's and Mesa's drivers among
 //! others). Frames go in as NV12 in system memory and come out as 4-byte length-prefixed samples,
-//! with the parameter sets in the `avcC` or `hvcC` record ([`Encoder::codec_private`]).
+//! with the parameter sets in the `avcC` or `hvcC` record ([`Encoder::codec_private`]). AV1 is
+//! [`Error::Unsupported`].
 //!
 //! - The encoder runs on the first `/dev/dri/renderD*` node, in number order, whose driver has an
 //!   encode entry point for the codec: H.264 High, Main or Constrained Baseline, HEVC Main.
@@ -50,6 +51,7 @@ pub fn available(codec: Codec) -> Result<(), Error> {
     driver()?;
     // Both sides are multiples of 64, the largest smallest coding block an HEVC driver reports.
     let cfg = Config { codec, input: Input::Nv12, width: 256, height: 192, fps: (30, 1), rate: Rate::Quality(23), keyint: 60, color: Color::Bt709 };
+    check(&cfg)?;
     Session::open(&params(&cfg)).map(drop).map_err(Error::from)
 }
 
@@ -76,9 +78,15 @@ fn params(cfg: &Config) -> Params {
 /// The widest and tallest frame this crate sends to a VA-API encoder.
 const MAX_SIDE: u32 = 8192;
 
+/// Why an AV1 stream does not open.
+const NO_AV1: &str = "this crate's VA-API encoder writes H.264 and HEVC only";
+
 /// Check `cfg` without VA-API: sizes, frame rate, rate and input.
 fn check(cfg: &Config) -> Result<(), Error> {
     let bad = |e: String| Err(Error::Unsupported(e));
+    if cfg.codec == Codec::Av1 {
+        return bad(NO_AV1.into());
+    }
     let (w, h) = (cfg.width, cfg.height);
     if w == 0 || h == 0 || w % 2 != 0 || h % 2 != 0 {
         return bad(format!("{w}x{h}: the encoder needs even, nonzero dimensions"));
@@ -140,6 +148,7 @@ fn record_of(cfg: &Config, sets: &[Vec<u8>]) -> Result<Vec<u8>, Error> {
     match (cfg.codec, sets) {
         (Codec::H264, [sps, pps]) => avc::avcc(sps, pps),
         (Codec::Hevc, [vps, sps, pps]) => hevc::hvcc(vps, sps, pps, (cfg.width, cfg.height), 8),
+        (Codec::Av1, _) => Err(NO_AV1.into()),
         _ => Err("the encoder returned no parameter sets".into()),
     }
     .map_err(Error::Failed)
@@ -149,6 +158,9 @@ fn record_of(cfg: &Config, sets: &[Vec<u8>]) -> Result<Vec<u8>, Error> {
 /// when `idr` is set. Its parameter sets must be `sets` (SPS and PPS, or VPS, SPS and PPS), the
 /// ones in the record; the packet goes out without them. [`Encoder`] makes each packet with it.
 pub fn packet(codec: Codec, sets: &[Vec<u8>], data: &[u8], pts: i64, idr: bool) -> Result<Packet, Error> {
+    if codec == Codec::Av1 {
+        return Err(Error::Unsupported(NO_AV1.into()));
+    }
     let types = set_types(codec);
     let mut keyframe = false;
     let mut out = Vec::with_capacity(data.len());
@@ -161,7 +173,7 @@ pub fn packet(codec: Codec, sets: &[Vec<u8>], data: &[u8], pts: i64, idr: bool) 
             return Err(Error::Failed(format!("the encoder changed its {name}")));
         }
         let (dropped, key) = match (codec, t) {
-            (_, None) => (true, false),
+            (_, None) | (Codec::Av1, _) => (true, false),
             (Codec::H264, Some(t)) => (matches!(t, 7..=9), t == 5),
             (Codec::Hevc, Some(t)) => (matches!(t, 32..=37), (16..=21).contains(&t)),
         };
@@ -319,10 +331,13 @@ mod tests {
             Config { rate: Rate::Quality(52), ..ok },
             Config { rate: Rate::Cbr(0), ..ok },
             Config { rate: Rate::Cbr(u32::MAX / 1000 + 1), ..ok },
+            Config { codec: Codec::Av1, ..ok },
         ] {
             assert!(matches!(check(&bad), Err(Error::Unsupported(_))), "{bad:?}");
             assert!(matches!(Encoder::new(&bad), Err(Error::Unsupported(_))), "{bad:?} reached VA-API");
         }
+        assert!(matches!(available(Codec::Av1), Err(Error::NoDevice(_) | Error::Unsupported(_))));
+        assert!(matches!(packet(Codec::Av1, &[], &[0x12, 0], 0, true), Err(Error::Unsupported(_))));
     }
 
     #[test]

@@ -239,8 +239,10 @@
 	NVIDIA NVENC H.264 (built in)	NVIDIA NVENC H.264 (built in)
 	NVIDIA NVENC HEVC	NVIDIA NVENC HEVC
 	NVIDIA NVENC HEVC (built in)	NVIDIA NVENC HEVC (built in)
+	NVIDIA NVENC AV1 (built in)	NVIDIA NVENC AV1 (built in)
 	Windows Media Foundation H.264 (built in)	Windows Media Foundation H.264 (built in)
 	Windows Media Foundation HEVC (built in)	Windows Media Foundation HEVC (built in)
+	Windows Media Foundation AV1 (built in)	Windows Media Foundation AV1 (built in)
 	Apple VideoToolbox H.264 (built in)	Apple VideoToolbox H.264 (built in)
 	Apple VideoToolbox HEVC (built in)	Apple VideoToolbox HEVC (built in)
 	VA-API H.264 (built in)	VA-API H.264 (built in)

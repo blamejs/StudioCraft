@@ -25,12 +25,15 @@ impl Nvenc {
     pub const H264: Nvenc = Nvenc { codec: NativeCodec::H264 };
     /// NVENC HEVC, registered as `nvenc_native_hevc`.
     pub const HEVC: Nvenc = Nvenc { codec: NativeCodec::Hevc };
+    /// NVENC AV1, registered as `nvenc_native_av1`.
+    pub const AV1: Nvenc = Nvenc { codec: NativeCodec::Av1 };
 
     /// The encoder that runs `candidate` (a `craft_hwenc` candidate id) in this process, if any.
     pub fn for_candidate(candidate: &str) -> Option<Nvenc> {
         match candidate {
             "nvenc_h264" => Some(Nvenc::H264),
             "nvenc_hevc" => Some(Nvenc::HEVC),
+            "nvenc_av1" => Some(Nvenc::AV1),
             _ => None,
         }
     }
@@ -70,12 +73,14 @@ impl Plugin for Nvenc {
         match self.codec {
             NativeCodec::H264 => "nvenc_native_h264",
             NativeCodec::Hevc => "nvenc_native_hevc",
+            NativeCodec::Av1 => "nvenc_native_av1",
         }
     }
     fn name(&self) -> &'static str {
         match self.codec {
             NativeCodec::H264 => "NVIDIA NVENC H.264 (built in)",
             NativeCodec::Hevc => "NVIDIA NVENC HEVC (built in)",
+            NativeCodec::Av1 => "NVIDIA NVENC AV1 (built in)",
         }
     }
     fn schema(&self) -> SettingsSchema {
@@ -88,6 +93,7 @@ impl Encoder for Nvenc {
         match self.codec {
             NativeCodec::H264 => Codec::H264,
             NativeCodec::Hevc => Codec::Hevc,
+            NativeCodec::Av1 => Codec::Av1,
         }
     }
     fn open(&self, _settings: &Settings, params: &VideoParams) -> Result<Box<dyn VideoSession>, PluginError> {
@@ -202,7 +208,8 @@ mod tests {
     fn the_hardware_candidates_map_to_their_built_in_twins() {
         assert_eq!(Nvenc::for_candidate("nvenc_h264").map(|n| n.id()), Some("nvenc_native_h264"));
         assert_eq!(Nvenc::for_candidate("nvenc_hevc").map(|n| (n.id(), n.codec())), Some(("nvenc_native_hevc", Codec::Hevc)));
-        assert_eq!(Nvenc::for_candidate("nvenc_av1"), None);
+        assert_eq!(Nvenc::for_candidate("nvenc_av1").map(|n| (n.id(), n.codec())), Some(("nvenc_native_av1", Codec::Av1)));
+        assert_eq!(Nvenc::AV1.name(), "NVIDIA NVENC AV1 (built in)");
         assert_eq!(Nvenc::for_candidate("amf_h264"), None);
     }
 
