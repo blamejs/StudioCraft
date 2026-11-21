@@ -313,6 +313,7 @@ fn a_lost_connection_is_made_again() {
     assert!(matches!(again[2], Seen::Media { timestamp: 0, .. }), "{again:?}");
     let d = until(&out, "a", |d| d.status == DestinationStatus::Live && d.reconnects == 1);
     assert!(d.bytes > 0, "{d:?}");
+    assert_eq!(out.reconnects(), 1, "the sum over the destinations");
     drop(feed);
     out.stop().unwrap();
     until_closed(&seen);
@@ -338,6 +339,7 @@ fn connections_lost_soon_after_they_are_made_count_as_failed_tries() {
     let feed = Feed::new(&out);
     let d = until(&out, "b", |d| d.reconnects == 3 && d.status == DestinationStatus::Live);
     assert!(d.bytes > 0, "{d:?}");
+    assert_eq!(out.reconnects(), 3);
     drop(feed);
     out.stop().unwrap();
     drop(seen);
