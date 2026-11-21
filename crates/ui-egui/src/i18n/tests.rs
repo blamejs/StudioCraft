@@ -474,6 +474,12 @@ fn every_label_chosen_at_run_time_has_an_english_row() {
     labels.extend(RecordingQuality::ALL.map(crate::settings::quality_label));
     labels.extend(studiocraft_model::AudioTracksWhen::ALL.map(crate::settings::when_label));
     labels.extend(studiocraft_model::AfterStop::ALL.map(crate::settings::after_stop_label));
+    // The Pause screen choices of the Stream tab.
+    labels.extend(studiocraft_model::PauseAtZero::ALL.map(crate::settings::at_zero_label));
+    labels.extend(studiocraft_model::PauseAnchor::ALL.map(crate::settings::anchor_label));
+    labels.extend(
+        [studiocraft_model::FitMode::Fit, studiocraft_model::FitMode::Fill, studiocraft_model::FitMode::Stretch].map(crate::settings::fit_label),
+    );
     // The Stream key choices of the Streaming window.
     labels.extend(crate::streaming::KeyChoice::ALL.map(crate::streaming::KeyChoice::label));
     labels.extend(

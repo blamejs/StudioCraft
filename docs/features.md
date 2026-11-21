@@ -419,6 +419,41 @@ that cannot be saved is undone. When Settings is open, the changed destination i
 its Stream tab, and edits not yet applied there to other destinations stay. A new destination
 never takes the id of one the running stream still holds.
 
+### Pause screen
+
+Tools › Pause Program shows the pause screen in the program in place of the program scene, with
+the scene collection's transition. Every recording, stream and replay buffer shows it too. Tools ›
+Pause Program again, or Resume Program over the control channel, shows the program scene again with
+the same transition. The status bar shows PAUSED with the time left, and the time paused on hover.
+Tools › Add a Minute to the Pause adds 60 s to the countdown. Pause or Resume Program and Add a
+Minute to the Pause can be given shortcuts in Settings › Hotkeys.
+
+The pause screen draws, from the bottom up, a background color, one picture or one video, and the
+countdown text. A video loops and plays without its sound, and a video file that holds only sound
+shows nothing over the background. A GIF plays as a video, so an animated GIF loops; like other
+videos it needs ffmpeg. The countdown text holds `{time}` once,
+where the time left goes, as `4:07` or, from one hour, `1:02:07`. When the countdown reaches zero,
+the pause screen either stays and shows the text at zero, or the program resumes. A countdown of 0
+shows no text and does not end the pause.
+
+Settings › Stream › Pause screen sets the picture or video, how it is sized to the canvas, the
+background, the countdown and its text, what happens at zero, the text at zero, where the text
+sits, its size as a share of the canvas height, its font, color and outline, and whether the
+program audio is muted. The defaults are listed in
+[MECHANICS.md](../MECHANICS.md#recording-and-streaming). Changes apply from the next pause.
+`pause.start` can give a pause its own picture or video, countdown and choice at zero.
+
+While the program audio is muted, every source the program hears fades out with the transition and
+fades back in when the program resumes. Monitoring and each source's own audio track keep the
+source's audio. A pause is not saved in the scene collection or the profile, and it is not an undo
+step. A program scene switched to while paused shows when the program resumes. Pausing during the
+fade back, or resuming during the fade in, turns a Fade or Fade through color around from the
+picture it shows; other transitions start from the beginning. A picture or video
+that can't be read is reported in the status bar, and the pause screen keeps its background and
+text. A countdown text that can't be drawn is reported the same way. Settings whose countdown text
+does not hold `{time}` exactly once are refused. While paused, switching to, creating, duplicating or
+removing a profile is refused with "Resume before switching the profile".
+
 ## Hardware acceleration
 
 Settings › Video › Hardware acceleration holds two settings.
@@ -592,7 +627,7 @@ discards them.
 | Tab | Settings |
 | --- | --- |
 | General | Language, Check for updates at start, and Use system title bar (from the next start). |
-| Stream | Server, Stream key, Video bitrate, Audio bitrate, Video encoder and Keyframe interval. |
+| Stream | Server, Stream key, Video bitrate, Audio bitrate, Video encoder and Keyframe interval, and the Pause screen section ([Pause screen](#pause-screen)). |
 | Output | Recording folder, Format, Quality, Video encoder and its settings, the `ffmpeg` program, Replay buffer length and Replay buffer memory limit. |
 | Audio | Monitoring device, the device monitored sources play on. |
 | Video | Canvas size (the presets include 1080 × 1920 for vertical video), Match display (sets the canvas size to the display the window is on or to a listed display. Once applied, the canvas follows that display when its resolution or scaling changes, until the canvas size is set another way. The display the window is on is followed only when no other listed display has its size), Output size, Output scale (100%, 75%, 66% or 50% of the canvas; an output size at one of these shares stays at that share when the canvas size changes) and Frames per second, and the Hardware acceleration section with Graphics adapter and Hardware encoder. Video settings can't change while recording, streaming or running the replay buffer. |

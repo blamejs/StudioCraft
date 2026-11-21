@@ -6,7 +6,9 @@ use craft_app_audio::Discovery;
 use serde_json::{Value, json};
 use studiocraft_model::collection::MAX_TRANSITION_MS;
 use studiocraft_model::staged;
-use studiocraft_model::{FilterConfig, FilterId, ItemId, Scene, SceneCollection, SceneId, SceneItem, SourceConfig, SourceId};
+use studiocraft_model::{
+    FilterConfig, FilterId, ItemId, PauseAtZero, PauseSettings, Scene, SceneCollection, SceneId, SceneItem, SourceConfig, SourceId,
+};
 use studiocraft_plugin::{PluginError, Registry, Settings, SettingsSchema};
 use thiserror::Error;
 
@@ -354,6 +356,32 @@ impl Engine {
                 Ok(Outcome::runtime(RuntimeAction::AudioTracksMarker { name }))
             }
             Command::RetestHardwareEncoders {} => Ok(Outcome::runtime(RuntimeAction::RetestHardwareEncoders)),
+            Command::PauseStart { media, countdown_s, at_zero } => {
+                if let Some(m) = &media {
+                    PauseSettings::check_media(m).map_err(EngineError::Invalid)?;
+                }
+                if let Some(s) = countdown_s
+                    && !PauseSettings::COUNTDOWN_S.contains(&s)
+                {
+                    return Err(EngineError::Invalid(format!("countdown_s is {s}; it must be from 0 to {}", PauseSettings::COUNTDOWN_S.end())));
+                }
+                let at_zero = match at_zero.as_deref() {
+                    None => None,
+                    Some(id) => Some(
+                        PauseAtZero::from_id(id).ok_or_else(|| EngineError::Invalid(format!("at_zero is `{id}`; it must be `keep` or `resume`")))?,
+                    ),
+                };
+                Ok(Outcome::runtime(RuntimeAction::PauseStart { media, countdown_s, at_zero }))
+            }
+            Command::PauseStop {} => Ok(Outcome::runtime(RuntimeAction::PauseStop)),
+            Command::PauseToggle {} => Ok(Outcome::runtime(RuntimeAction::PauseToggle)),
+            Command::PauseExtend { seconds } => {
+                if seconds == 0 || seconds > *PauseSettings::COUNTDOWN_S.end() {
+                    return Err(EngineError::Invalid(format!("seconds is {seconds}; it must be from 1 to {}", PauseSettings::COUNTDOWN_S.end())));
+                }
+                Ok(Outcome::runtime(RuntimeAction::PauseExtend { seconds }))
+            }
+            Command::PauseStatus {} => Ok(Outcome::runtime(RuntimeAction::PauseStatus)),
             Command::OpenSettings {} => Ok(Outcome::runtime(RuntimeAction::OpenSettings)),
             Command::Exit {} => Ok(Outcome::runtime(RuntimeAction::Exit)),
             // Queries: no history step, no revision bump, no change to the dirty flag.

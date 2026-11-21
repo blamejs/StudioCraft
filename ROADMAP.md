@@ -43,6 +43,7 @@ description in [docs/features.md](docs/features.md).
 ### Streaming
 
 - Streams go to one or more RTMP and RTMPS servers from StudioCraft through the built-in H.264 encoders, each destination connecting, reconnecting and stopping on its own, with the encoder's settings in Settings › Stream ([Streaming](docs/features.md#streaming)).
+- Pause Program shows a pause screen in the program, and so in every recording, stream and replay buffer: a background color, a picture or a looping video, and a countdown that keeps the screen or resumes the program at zero ([Pause screen](docs/features.md#pause-screen)).
 
 ### Hardware acceleration
 

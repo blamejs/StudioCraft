@@ -9,7 +9,8 @@ use egui::{RichText, Ui};
 use studiocraft_audio_tracks::space::TRACK_BYTES_PER_SECOND;
 use studiocraft_model::profile::DEFAULT_AUDIO_DEVICE;
 use studiocraft_model::{
-    AfterStop, AudioTracksSettings, AudioTracksWhen, KeyRef, Profile, RecordingFormat, RecordingQuality, ReplaySettings, VideoSettings,
+    AfterStop, AudioTracksSettings, AudioTracksWhen, FitMode, KeyRef, PauseAnchor, PauseAtZero, PauseSettings, Profile, RecordingFormat,
+    RecordingQuality, ReplaySettings, VideoSettings,
 };
 use studiocraft_platform::audio::{DeviceInfo, DeviceKind};
 use studiocraft_plugin::{Availability, EncoderEnv, EncoderKind, Registry, Settings};
@@ -35,6 +36,7 @@ pub enum Pick {
     RecordingFolder,
     Ffmpeg,
     AudioEditor,
+    PauseMedia,
 }
 
 struct Hotkey {
@@ -279,6 +281,47 @@ pub(crate) fn after_stop_label(a: AfterStop) -> &'static str {
     }
 }
 
+/// What the pause screen does when its countdown reaches zero, as the Stream tab shows it.
+pub(crate) fn at_zero_label(z: PauseAtZero) -> &'static str {
+    match z {
+        PauseAtZero::Keep => "Keep the pause screen",
+        PauseAtZero::Resume => "Resume the program",
+    }
+}
+
+/// Where the pause screen's countdown text goes, as the Stream tab shows it.
+pub(crate) fn anchor_label(a: PauseAnchor) -> &'static str {
+    match a {
+        PauseAnchor::TopLeft => "Top left",
+        PauseAnchor::TopCenter => "Top center",
+        PauseAnchor::TopRight => "Top right",
+        PauseAnchor::MiddleLeft => "Middle left",
+        PauseAnchor::Center => "Center",
+        PauseAnchor::MiddleRight => "Middle right",
+        PauseAnchor::BottomLeft => "Bottom left",
+        PauseAnchor::BottomCenter => "Bottom center",
+        PauseAnchor::BottomRight => "Bottom right",
+    }
+}
+
+/// How the pause screen fits its picture or video, as the Stream tab shows it.
+pub(crate) fn fit_label(f: FitMode) -> &'static str {
+    match f {
+        FitMode::Fit => "Fit inside the canvas",
+        FitMode::Fill => "Fill the canvas",
+        FitMode::Stretch => "Stretch to the canvas",
+    }
+}
+
+/// A color button for a `#rrggbbaa` setting; an unreadable value shows as white.
+fn color_button(ui: &mut Ui, value: &mut String) {
+    let parsed = Settings::new().with("c", value.clone()).color("c").unwrap_or([255, 255, 255, 255]);
+    let mut c = egui::Color32::from_rgba_unmultiplied(parsed[0], parsed[1], parsed[2], parsed[3]);
+    if ui.color_edit_button_srgba(&mut c).changed() {
+        *value = crate::forms::color_text(c.to_srgba_unmultiplied());
+    }
+}
+
 /// The audio tracks' disk use in GiB an hour, and how many seconds the write buffer holds, both
 /// as text, for `sources` recorded sources and the program when it is included. `None` when
 /// there is no track to write.
@@ -348,6 +391,7 @@ impl SettingsWindow {
                 (self.offered, self.ffmpeg_version) = probe(&self.draft.output.ffmpeg_path);
             }
             Pick::AudioEditor => self.draft.audio_tracks.editor_path = text,
+            Pick::PauseMedia => self.draft.pause.media = text,
         }
     }
 
@@ -472,6 +516,85 @@ impl SettingsWindow {
             Self::encoder_form(ui, "stream-encoder-settings", registry, &s.video_encoder, &mut s.encoder_settings);
             ui.label(tl!("Keyframe interval"));
             ui.add(egui::DragValue::new(&mut s.keyframe_interval_s).range(1..=20).suffix(format!(" {}", tl!("s"))));
+            ui.end_row();
+        });
+    }
+
+    /// The Pause screen section of the Stream tab: what Pause Program shows in the program.
+    fn pause_screen(&mut self, ui: &mut Ui, out: &mut Outcome) {
+        ui.label(RichText::new(tl!("Pause screen")).strong());
+        ui.add_space(4.0);
+        let p = &mut self.draft.pause;
+        egui::Grid::new("pause-grid").num_columns(2).spacing([12.0, 8.0]).show(ui, |ui| {
+            ui.label(tl!("Picture or video"));
+            ui.horizontal(|ui| {
+                ui.add(egui::TextEdit::singleline(&mut p.media).hint_text(tl!("None")).desired_width(240.0));
+                if ui.button(tl!("Browse…")).clicked() {
+                    out.pick = Some(Pick::PauseMedia);
+                }
+            });
+            ui.end_row();
+            ui.label(tl!("Picture size"));
+            let label = |f: FitMode| tl!(fit_label(f));
+            craft_ui::ComboBox::from_id_salt("pause-fit").selected_text(label(p.fit)).width(220.0).show_ui(ui, |ui| {
+                for f in [FitMode::Fit, FitMode::Fill, FitMode::Stretch] {
+                    ui.selectable_value(&mut p.fit, f, label(f));
+                }
+            });
+            ui.end_row();
+            ui.label(tl!("Background"));
+            color_button(ui, &mut p.background);
+            ui.end_row();
+            ui.label(tl!("Countdown"));
+            ui.add(egui::DragValue::new(&mut p.countdown_s).range(PauseSettings::COUNTDOWN_S).speed(5.0).suffix(format!(" {}", tl!("s"))))
+                .on_hover_text(tl!("0 shows no countdown"));
+            ui.end_row();
+            ui.label(tl!("Countdown text"));
+            ui.vertical(|ui| {
+                ui.add(egui::TextEdit::singleline(&mut p.text).char_limit(PauseSettings::MAX_TEXT).desired_width(240.0));
+                if let Err(e) = PauseSettings::check_text(&p.text) {
+                    ui.colored_label(ui.visuals().error_fg_color, Msg::plain(e.as_str()).shown());
+                } else {
+                    ui.label(RichText::new(tl!("{time} shows the time left")).small().weak());
+                }
+            });
+            ui.end_row();
+            ui.label(tl!("At zero"));
+            let label = |z: PauseAtZero| tl!(at_zero_label(z));
+            craft_ui::ComboBox::from_id_salt("pause-at-zero").selected_text(label(p.at_zero)).width(220.0).show_ui(ui, |ui| {
+                for z in PauseAtZero::ALL {
+                    ui.selectable_value(&mut p.at_zero, z, label(z));
+                }
+            });
+            ui.end_row();
+            ui.label(tl!("Text at zero"));
+            ui.add(egui::TextEdit::singleline(&mut p.zero_text).char_limit(PauseSettings::MAX_TEXT).desired_width(240.0));
+            ui.end_row();
+            ui.label(tl!("Text position"));
+            let label = |a: PauseAnchor| tl!(anchor_label(a));
+            craft_ui::ComboBox::from_id_salt("pause-anchor").selected_text(label(p.anchor)).width(220.0).show_ui(ui, |ui| {
+                for a in PauseAnchor::ALL {
+                    ui.selectable_value(&mut p.anchor, a, label(a));
+                }
+            });
+            ui.end_row();
+            ui.label(tl!("Text size"));
+            ui.add(egui::DragValue::new(&mut p.size_pct).range(PauseSettings::SIZE_PCT).suffix(format!(" {}", tl!("% of the canvas height"))));
+            ui.end_row();
+            ui.label(tl!("Font"));
+            ui.add(egui::TextEdit::singleline(&mut p.font).hint_text(tl!("Font family")).desired_width(240.0));
+            ui.end_row();
+            ui.label(tl!("Text color"));
+            color_button(ui, &mut p.color);
+            ui.end_row();
+            ui.label(tl!("Outline width"));
+            ui.add(egui::DragValue::new(&mut p.outline).range(PauseSettings::OUTLINE));
+            ui.end_row();
+            ui.label(tl!("Outline color"));
+            color_button(ui, &mut p.outline_color);
+            ui.end_row();
+            ui.label("");
+            ui.checkbox(&mut p.mute_scene, tl!("Mute the program audio while paused"));
             ui.end_row();
         });
     }
@@ -785,7 +908,11 @@ impl SettingsWindow {
             ui.separator();
             match self.tab {
                 Tab::General => self.general(ui),
-                Tab::Stream => self.stream(ui, registry),
+                Tab::Stream => {
+                    self.stream(ui, registry);
+                    ui.add_space(12.0);
+                    self.pause_screen(ui, &mut out);
+                }
                 Tab::Output => self.output(ui, registry, &mut out),
                 Tab::Audio => self.audio(ui),
                 Tab::Video => self.video(ui),

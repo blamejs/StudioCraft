@@ -503,6 +503,53 @@ fn a_recording_marker_is_handed_to_the_app_with_a_checked_name() {
 }
 
 #[test]
+fn pause_commands_are_handed_to_the_app_with_checked_values() {
+    let mut e = engine();
+    let rev = e.revision();
+    for (id, params, action) in [
+        ("pause.start", json!({}), RuntimeAction::PauseStart { media: None, countdown_s: None, at_zero: None }),
+        (
+            "pause.start",
+            json!({"media": "", "countdown_s": 0, "at_zero": "keep"}),
+            RuntimeAction::PauseStart { media: Some(String::new()), countdown_s: Some(0), at_zero: Some(PauseAtZero::Keep) },
+        ),
+        (
+            "pause.start",
+            json!({"media": "C:/break.png", "countdown_s": 43_200, "at_zero": "resume"}),
+            RuntimeAction::PauseStart { media: Some("C:/break.png".into()), countdown_s: Some(43_200), at_zero: Some(PauseAtZero::Resume) },
+        ),
+        ("pause.stop", json!({}), RuntimeAction::PauseStop),
+        ("pause.toggle", json!({}), RuntimeAction::PauseToggle),
+        ("pause.extend", json!({"seconds": 1}), RuntimeAction::PauseExtend { seconds: 1 }),
+        ("pause.extend", json!({"seconds": 43_200}), RuntimeAction::PauseExtend { seconds: 43_200 }),
+        ("pause.status", json!({}), RuntimeAction::PauseStatus),
+    ] {
+        let o = run(&mut e, id, params.clone()).unwrap_or_else(|err| panic!("{id} {params}: {err}"));
+        assert_eq!(o.runtime, Some(action), "{id} {params}");
+        assert!(!o.changed, "{id} changes no collection");
+    }
+    assert_eq!(e.revision(), rev, "a pause is not a change to the collection");
+    assert!(e.undo_label().is_none(), "a pause is not an undo step");
+    for (id, bad) in [
+        ("pause.start", json!({"countdown_s": 43_201})),
+        ("pause.start", json!({"countdown_s": -1})),
+        ("pause.start", json!({"countdown_s": "300"})),
+        ("pause.start", json!({"countdown_s": null})),
+        ("pause.start", json!({"at_zero": "restart"})),
+        ("pause.start", json!({"at_zero": "Keep"})),
+        ("pause.start", json!({"media": null})),
+        ("pause.start", json!({"media": 5})),
+        ("pause.start", json!({"media": "a\u{0}b.png"})),
+        ("pause.start", json!({"meda": "x.png"})),
+        ("pause.extend", json!({"seconds": 0})),
+        ("pause.extend", json!({"seconds": 43_201})),
+        ("pause.extend", json!({})),
+    ] {
+        assert!(run(&mut e, id, bad.clone()).is_err(), "{id} {bad}");
+    }
+}
+
+#[test]
 fn caption_commands_are_handed_to_the_app() {
     let mut e = engine();
     for (id, params, action) in [
@@ -1448,6 +1495,7 @@ fn every_spec_is_reachable() {
             "transition.duration" => json!({"ms": 100}),
             "transition.settings" => json!({"settings": {}}),
             "app_audio.route" => json!({"app": "player.exe", "routed": true}),
+            "pause.extend" => json!({"seconds": 60}),
             _ => json!({}),
         };
         let c = Command::from_parts(s.id, &params).unwrap_or_else(|e| panic!("{e}"));

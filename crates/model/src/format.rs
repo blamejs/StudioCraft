@@ -115,7 +115,7 @@ fn collection_v4_to_v5(data: &mut Value) -> Result<(), String> {
 /// Profiles.
 pub const PROFILE: FileFormat = FileFormat {
     name: "studiocraft.profile",
-    version: 9,
+    version: 10,
     migrations: &[
         profile_v1_to_v2,
         profile_v2_to_v3,
@@ -125,6 +125,7 @@ pub const PROFILE: FileFormat = FileFormat {
         profile_v6_to_v7,
         profile_v7_to_v8,
         profile_v8_to_v9,
+        profile_v9_to_v10,
     ],
 };
 
@@ -247,6 +248,16 @@ fn profile_v8_to_v9(data: &mut Value) -> Result<(), String> {
     Ok(())
 }
 
+/// Profile version 9 to 10: the pause screen (`pause`): no media on a `#101014ff` background, a
+/// 300 second countdown reading "Back in {time}" at the bottom center, which keeps the screen at
+/// zero, and the program mix held while paused.
+fn profile_v9_to_v10(data: &mut Value) -> Result<(), String> {
+    let data = data.as_object_mut().ok_or("the profile is not an object")?;
+    let defaults = serde_json::to_value(crate::PauseSettings::default()).map_err(|e| e.to_string())?;
+    data.entry("pause").or_insert(defaults);
+    Ok(())
+}
+
 /// Largest file accepted, in bytes.
 pub const MAX_FILE_BYTES: usize = 64 << 20;
 
@@ -323,8 +334,8 @@ pub fn write_profile(p: &Profile) -> Result<String, FormatError> {
     PROFILE.write(p)
 }
 
-/// A profile from a file's text, migrated, with video, replay buffer and audio tracks settings
-/// brought into range. A file whose stream destinations break a rule of
+/// A profile from a file's text, migrated, with video, replay buffer, audio tracks and pause
+/// screen settings brought into range. A file whose stream destinations break a rule of
 /// [`crate::StreamSettings::check`] is refused.
 pub fn read_profile(text: &str) -> Result<Profile, FormatError> {
     let mut p: Profile = PROFILE.read(text)?;
@@ -332,6 +343,7 @@ pub fn read_profile(text: &str) -> Result<Profile, FormatError> {
     p.video = p.video.sanitized();
     p.replay = p.replay.sanitized();
     p.audio_tracks = p.audio_tracks.sanitized();
+    p.pause = p.pause.sanitized();
     Ok(p)
 }
 
@@ -357,6 +369,7 @@ mod tests {
         (7, include_str!("../fixtures/profile-v7.json")),
         (8, include_str!("../fixtures/profile-v8.json")),
         (9, include_str!("../fixtures/profile-v9.json")),
+        (10, include_str!("../fixtures/profile-v10.json")),
     ];
 
     fn covers_every_version(format: &FileFormat, fixtures: &[(u32, &str)]) {
@@ -555,6 +568,27 @@ mod tests {
         for (from, to) in [("\"buffer_mib\": 256", "\"buffer_mib\": 16"), ("\"segment_gib\": 1", "\"segment_gib\": 3")] {
             assert!(read_profile(&v6.replace(from, to)).is_ok(), "{to} is in range");
         }
+    }
+
+    #[test]
+    fn profiles_keep_the_pause_screen() {
+        use crate::{FitMode, PauseAnchor, PauseAtZero, PauseSettings};
+        for (v, text) in &PROFILE_FIXTURES[..9] {
+            assert_eq!(read_profile(text).unwrap().pause, PauseSettings::default(), "version {v} gets the defaults");
+        }
+        let (_, v10) = PROFILE_FIXTURES[9];
+        let p = read_profile(v10).unwrap();
+        let s = &p.pause;
+        assert_eq!((s.media.as_str(), s.fit, s.countdown_s, s.text.as_str()), ("C:/Media/break.mp4", FitMode::Fill, 600, "Starting again in {time}"));
+        assert_eq!((s.at_zero, s.anchor, s.size_pct, s.mute_scene), (PauseAtZero::Resume, PauseAnchor::TopRight, 9, false));
+        assert_eq!(read_profile(&write_profile(&p).unwrap()).unwrap(), p);
+        // Values out of range are brought into range; the rest of the profile is kept.
+        let wide = v10.replace("\"countdown_s\": 600", "\"countdown_s\": 99999").replace("\"size_pct\": 9", "\"size_pct\": 40");
+        let p = read_profile(&wide).unwrap();
+        assert_eq!((p.pause.countdown_s, p.pause.size_pct, p.replay.seconds), (43_200, 15, 45));
+        let no_time = v10.replace("Starting again in {time}", "Starting again");
+        assert_eq!(read_profile(&no_time).unwrap().pause.text, "Back in {time}", "a text without {{time}} reads as the default");
+        assert!(matches!(read_profile(&v10.replace("\"resume\"", "\"restart\"")), Err(FormatError::Data(_))), "an unknown value refuses the file");
     }
 
     #[test]

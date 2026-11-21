@@ -146,6 +146,8 @@ pub fn catalog() -> Vec<Bindable> {
         bindable(c("stream.toggle"), "Start or Stop Streaming", &[]),
         bindable(c("replay.toggle"), "Start or Stop Replay Buffer", &[]),
         bindable(c("replay.save"), "Save Replay", &[]),
+        bindable(c("pause.toggle"), "Pause or Resume Program", &[]),
+        bindable(CommandRef::with_params("pause.extend", json!({"seconds": 60})), "Add a Minute to the Pause", &[]),
         bindable(c("captions.toggle"), "Start or Stop Live Captions", &[]),
         bindable(c("captions.download"), "Download Speech Model", &[]),
         bindable(c("audio_tracks.open_last"), "Open Last Audio Tracks in Editor", &[]),
@@ -319,6 +321,12 @@ pub fn menu_bar(s: &MenuState) -> MenuBar {
     let tools = Menu::new(
         title("Tools"),
         vec![
+            Node::Item(Item::new(CommandRef::new("pause.toggle"), crate::i18n::command_label("pause.toggle", "Pause Program")).check(false)),
+            Node::Item(Item::new(
+                CommandRef::with_params("pause.extend", json!({"seconds": 60})),
+                crate::i18n::command_label("pause.extend", "Add a Minute to the Pause"),
+            )),
+            Node::Separator,
             Node::Item(Item::new(CommandRef::new("captions.toggle"), crate::i18n::command_label("captions.toggle", "Live Captions")).check(false)),
             item("captions.download", "Download Speech Model"),
             Node::Separator,

@@ -110,7 +110,11 @@ flags. The two flags keep the headless backend's file access inside the folders 
 - Every file a call reads must lie inside a read root: `collection_open`, the files a scene
   collection's sources, filters and transition name when it is opened, and the path settings of
   `source.add`, `source.settings`, `filter.settings` and `transition.settings` (for example the
-  `file` of an `image` or `media` source), whichever tool runs them.
+  `file` of an `image` or `media` source), whichever tool runs them. The pause screen reads the
+  `media` given to `pause_start` or `pause.start`, and the profile's pause picture or video for a
+  pause started without `media` or with `pause.toggle`, so that file must lie inside a read root.
+  The pause screen picks how to show a file by its name, so a picture or video name that leads
+  through a link to a file whose name is not a picture or video is refused.
 - Every file a call writes must lie inside a write root: `collection_save`, and the recording
   folder (Settings › Output, or the Videos folder when it is empty) for `record_start`,
   `record.start` and a `record.toggle` that would start a recording, and for `replay_save` and
@@ -140,7 +144,9 @@ flags. The two flags keep the headless backend's file access inside the folders 
 - A call runs with the path that was checked: the path settings a command stores or a collection
   opens with, and the `folder` a repair reads, are the absolute paths with their links followed.
   Before a command that writes to the recording folder runs, the recording folder setting is set
-  to that folder's checked path, and the setting keeps it afterwards. A
+  to that folder's checked path, and the setting keeps it afterwards. Before a pause that shows the
+  profile's picture or video starts, the pause media setting is set to that file's checked path;
+  when the pause is refused, the setting keeps the text it held. A
   path that resolves to a name that is not valid Unicode is refused, and so is one whose stored
   text, checked again, resolves to a different path.
 - A refused call fails before anything runs. Without either flag nothing is checked.
@@ -195,6 +201,8 @@ error -32602. A command that fails is a tool result with `isError: true` and the
 | `record_marker` | `name?` | Runs `record.marker`, which marks the running recording at this moment. When the recording stops, `<recording name>.otio` is written beside it with each marker at its frame. `name` is 1 to 256 characters with no control characters (default "Marker N", the recording's Nth marker). Returns the marker's `name` and `seconds` from the recording's first frame. It is an error when no recording runs and when the recording already holds 10,000 markers. |
 | `stream_start` | none | Runs `stream.start`, then returns the stream's state. The tool is marked `openWorldHint: true`. The headless backend refuses it without `--allow-streaming`. |
 | `stream_stop` | none | Runs `stream.stop`, then returns the stream's state. The tool is marked `openWorldHint: true`. |
+| `pause_start` | `media?`, `countdown_s?`, `at_zero?` | Runs [`pause.start`](control-protocol.md#pause), which shows the pause screen in the program, so every recording, stream and replay buffer shows it too, and returns the pause's state as `pause.status` gives it. Each value given replaces its profile setting for this pause only: `media` is a picture or video file (`""` for none), `countdown_s` is 0 to 43,200 seconds (0 for none) and `at_zero` is `keep` or `resume`. A `null` value counts as not given. With read roots, `media` and, for a pause started without `media`, the profile's picture or video must be inside them. In the headless backend the countdown and its end at zero are updated at the start of each tool call. |
+| `pause_stop` | none | Runs `pause.stop`, which shows the program scene again with the scene collection's transition, then returns `{"paused": false}`. It is an error when the program is not paused. |
 | `replay_start` | none | Runs `replay.start`, then returns the replay buffer's state. Nothing happens when it already runs. |
 | `replay_stop` | none | Runs `replay.stop`, then returns the replay buffer's state. Replays being saved are still written. |
 | `replay_save` | none | Runs `replay.save`, which writes what the replay buffer holds to a new MKV file in the recording folder in the background, then returns the replay buffer's state. It is an error when the replay buffer is not running or holds nothing yet. |

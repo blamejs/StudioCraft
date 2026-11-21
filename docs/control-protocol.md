@@ -414,6 +414,32 @@ files are written once the phrases up to the recording's end are finished, when 
 30 s after the recording ends. The app checks this on every frame; the headless MCP server checks
 it on each request and when it exits.
 
+### `pause.*`
+
+`pause.start` takes `{"media"?, "countdown_s"?, "at_zero"?}` and shows the pause screen in the
+program with the scene collection's transition. Each value given replaces its profile setting for
+this pause only: `media` is a picture or video file (`""` for none), `countdown_s` is 0 to 43,200
+seconds (0 for no countdown) and `at_zero` is `keep` or `resume`. A `null` value, a file type that
+is not a picture or video, a path longer than 4,096 bytes or holding a NUL character, and a value
+out of range are errors. While paused, the values given apply at once without a new transition,
+and a given `countdown_s` starts the countdown again. It returns what `pause.status` returns.
+
+`pause.stop` takes no params and shows the program scene again with the scene collection's
+transition. It is an error when the program is not paused. `pause.toggle` pauses with the profile's
+settings, or resumes, and returns what `pause.status` returns.
+
+`pause.extend` takes `{"seconds"}`, 1 to 43,200, and adds that time to the countdown, up to 43,200 s
+left. A countdown that has reached zero, or a pause without one, counts down from `seconds`. It is
+an error when the program is not paused. It returns what `pause.status` returns.
+
+`pause.status` takes no params and returns what `document.inspect`'s `pause` entry holds:
+`{"paused": false}`, or `paused: true` with `since_ms` (the time paused), `countdown` (`null`
+without one, else `total_s`, `remaining_ms`, `at_zero` and `reached`), `media`, `media_error`
+(why the picture or video is not showing, or `null`) and `text_error` (why the countdown text is not
+showing, or `null`).
+
+None of these commands changes the scene collection or adds an undo step.
+
 ### `dock.layout_save`, `dock.layout_apply` and `dock.layout_remove`
 
 `dock.layout_save` takes `{"name"}` and saves every dock setting under that name, replacing a

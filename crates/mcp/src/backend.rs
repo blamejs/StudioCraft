@@ -52,4 +52,6 @@ pub trait Backend {
     fn has_ui(&self) -> bool;
     /// One line for the server instructions.
     fn describe(&self) -> String;
+    /// Run housekeeping while the MCP client sends nothing ([`crate::Server::serve_idle`]).
+    fn idle(&mut self) {}
 }

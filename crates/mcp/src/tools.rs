@@ -56,6 +56,8 @@ const PUBLISHES: Hints = Hints { read_only: false, destructive: false, idempoten
 const LAUNCHES: Hints = Hints { read_only: false, destructive: false, idempotent: false, open_world: false };
 /// Adding a marker to the running take or recording: each call adds another.
 const MARKS: Hints = Hints { read_only: false, destructive: false, idempotent: false, open_world: false };
+/// Pausing the program: each call starts the countdown again.
+const PAUSES: Hints = Hints { read_only: false, destructive: false, idempotent: false, open_world: false };
 
 fn tool(name: &str, title: &str, description: &str, properties: Value, required: &[&str], hints: Hints) -> Value {
     json!({
@@ -374,6 +376,30 @@ fn studio_tool_definitions() -> Vec<Value> {
             PUBLISHES,
         ),
         tool("stream_stop", "Stop streaming", "Stop the stream, as Stop Streaming does. Returns the stream's state.", json!({}), &[], PUBLISHES),
+        tool(
+            "pause_start",
+            "Pause the program",
+            "Show the pause screen in the program, and so in every recording, stream and replay buffer, as Pause Program does: the \
+             background color, a picture or a looping video, and a countdown, from Settings › Stream › Pause screen. Each value given \
+             replaces its setting for this pause only. While paused, the values given apply at once and the countdown starts again. \
+             Returns the pause's state. An error for a file that is not a picture or video.",
+            json!({
+                "media": {"type": "string", "description": "A picture or video file to show (\"\" for none)."},
+                "countdown_s": {"type": "integer", "minimum": 0, "maximum": 43200, "description": "The countdown in seconds (0 for none)."},
+                "at_zero": {"type": "string", "enum": ["keep", "resume"], "description": "At zero, keep the pause screen with its text at zero, or resume."}
+            }),
+            &[],
+            PAUSES,
+        ),
+        tool(
+            "pause_stop",
+            "Resume the program",
+            "Show the program scene again with the scene collection's transition, as Resume Program does. Returns the pause's state. An \
+             error when the program is not paused.",
+            json!({}),
+            &[],
+            SETS,
+        ),
         tool(
             "replay_start",
             "Start the replay buffer",
@@ -977,6 +1003,12 @@ fn dispatch(b: &mut dyn Backend, name: &str, args: &Args) -> Result<Value, McpEr
         }
         "stream_start" => output_command(b, "stream.start", "streaming"),
         "stream_stop" => output_command(b, "stream.stop", "streaming"),
+        // A `null` value counts as not given, as in the other tools that pick their arguments.
+        "pause_start" => Ok(text(&run(b, "pause.start", pick(args, &["media", "countdown_s", "at_zero"]))?)),
+        "pause_stop" => {
+            run(b, "pause.stop", json!({}))?;
+            Ok(text(&run(b, "pause.status", json!({}))?))
+        }
         "replay_start" => output_command(b, "replay.start", "replay"),
         "replay_stop" => output_command(b, "replay.stop", "replay"),
         "replay_save" => output_command(b, "replay.save", "replay"),

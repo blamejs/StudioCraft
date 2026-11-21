@@ -28,7 +28,7 @@ pub struct FormEvent {
     pub browse: Option<Browse>,
 }
 
-fn color_text(c: [u8; 4]) -> String {
+pub(crate) fn color_text(c: [u8; 4]) -> String {
     format!("#{:02x}{:02x}{:02x}{:02x}", c[0], c[1], c[2], c[3])
 }
 

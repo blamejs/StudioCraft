@@ -96,8 +96,11 @@ pub fn run(args: &[String]) -> Result<(), CliError> {
         }
     };
     let mut server = Server::new(backend).map_err(failed)?;
-    server.serve(&mut std::io::stdin().lock(), &mut std::io::stdout()).map_err(failed)
+    server.serve_idle(std::io::BufReader::new(std::io::stdin()), &mut std::io::stdout(), IDLE).map_err(failed)
 }
+
+/// How often the in-process studio's housekeeping runs while the MCP client sends nothing.
+const IDLE: std::time::Duration = std::time::Duration::from_millis(100);
 
 #[cfg(test)]
 mod tests {

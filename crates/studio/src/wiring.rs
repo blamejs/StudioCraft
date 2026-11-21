@@ -52,6 +52,12 @@ fn problem(name: &str, e: &impl std::fmt::Display) -> Notice {
     Notice::new("{name}: {problem}", vec![("name", name.to_string()), ("problem", e.to_string())], true)
 }
 
+/// What a transition starts from: a scene of the collection, or the pause screen as drawn.
+pub(crate) enum Shown {
+    Scene(SceneId),
+    Pause(SceneDesc),
+}
+
 #[derive(Default)]
 pub(crate) struct Wiring {
     video_filters: HashMap<FilterId, VideoFilter>,
@@ -62,24 +68,29 @@ pub(crate) struct Wiring {
 }
 
 impl Wiring {
-    /// The compositor's plan: the program scene, the preview scene in studio mode, and the
-    /// transition from `transition.0` when one runs.
+    /// The compositor's plan: the program scene, or `pause` while the program is paused, the
+    /// preview scene in studio mode, and the transition from `transition.0` when one runs.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn plan(
         &mut self,
         c: &SceneCollection,
         studio_mode: bool,
         registry: &Registry,
         sources: &SourceSet,
-        transition: Option<(SceneId, Tick, Tick, &str, &Settings)>,
+        pause: Option<SceneDesc>,
+        transition: Option<(Shown, Tick, Tick, &str, &Settings)>,
         notices: &mut Vec<Notice>,
     ) -> Plan {
         self.sync_video_filters(c, registry, notices);
-        let program = self.scene(c, c.program_scene, sources);
+        let program = pause.unwrap_or_else(|| self.scene(c, c.program_scene, sources));
         let preview = studio_mode.then(|| self.scene(c, c.preview_scene.unwrap_or(c.program_scene), sources));
         let transition = transition.and_then(|(from, start, duration, kind, settings)| {
             let t = registry.transition(kind).ok()?;
             Some(TransitionDesc {
-                from: self.scene(c, from, sources),
+                from: match from {
+                    Shown::Scene(id) => self.scene(c, id, sources),
+                    Shown::Pause(desc) => desc,
+                },
                 key: t.id().to_string(),
                 wgsl: t.shader(),
                 params: t.params(settings),

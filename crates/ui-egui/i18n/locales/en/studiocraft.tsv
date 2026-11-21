@@ -676,6 +676,7 @@ menu	Transform	Transform
 @msg	there is already a scene collection named `{name}`	there is already a scene collection named `{name}`
 @msg	the last scene collection can't be removed	the last scene collection can't be removed
 @msg	the last profile can't be removed	the last profile can't be removed
+@msg	Resume before switching the profile	Resume before switching the profile
 @msg	update checks are off in this session (--no-prefs, a scripted run or a test)	update checks are off in this session (--no-prefs, a scripted run or a test)
 @msg	there are already {count} dock layouts; remove one first	there are already {count} dock layouts; remove one first
 @msg	a name needs 1 to 100 characters	a name needs 1 to 100 characters
@@ -727,3 +728,47 @@ menu	Transform	Transform
 @msg	Captions saved to {path}	Captions saved to {path}
 @msg	The captions could not be saved: {error}	The captions could not be saved: {error}
 @msg	The scenes could not be laid out for the new canvas: {error}	The scenes could not be laid out for the new canvas: {error}
+	Pause Program	Pause Program
+	Resume Program	Resume Program
+	Pause or Resume Program	Pause or Resume Program
+	Add Time to the Pause	Add Time to the Pause
+	Pause Status	Pause Status
+	Add a Minute to the Pause	Add a Minute to the Pause
+	Pause screen	Pause screen
+	Picture or video	Picture or video
+	Pictures and videos	Pictures and videos
+	Picture size	Picture size
+	Fit inside the canvas	Fit inside the canvas
+	Fill the canvas	Fill the canvas
+	Stretch to the canvas	Stretch to the canvas
+	Countdown	Countdown
+	0 shows no countdown	0 shows no countdown
+	Countdown text	Countdown text
+	{time} shows the time left	{time} shows the time left
+	At zero	At zero
+	Keep the pause screen	Keep the pause screen
+	Resume the program	Resume the program
+	Text at zero	Text at zero
+	Text position	Text position
+	Top left	Top left
+	Top center	Top center
+	Top right	Top right
+	Middle left	Middle left
+	Middle right	Middle right
+	Bottom left	Bottom left
+	Bottom center	Bottom center
+	Bottom right	Bottom right
+	Text size	Text size
+	% of the canvas height	% of the canvas height
+	Text color	Text color
+	Mute the program audio while paused	Mute the program audio while paused
+	PAUSED	PAUSED
+	Paused for {time}	Paused for {time}
+@msg	The program is paused	The program is paused
+@msg	The program resumed	The program resumed
+@msg	The countdown ended	The countdown ended
+@msg	The pause screen's media could not be shown: {error}	The pause screen's media could not be shown: {error}
+@msg	The pause screen's countdown could not be shown: {error}	The pause screen's countdown could not be shown: {error}
+@msg	the countdown text needs {time} where the remaining time goes	the countdown text needs {time} where the remaining time goes
+@msg	the countdown text holds {time} more than once	the countdown text holds {time} more than once
+@msg	the countdown text is longer than 200 characters	the countdown text is longer than 200 characters

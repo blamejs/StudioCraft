@@ -1257,6 +1257,10 @@ impl StudioApp {
                 if taken(&self.profiles) && !(what == Named::RenameProfile && name.eq_ignore_ascii_case(&self.studio.profile().name)) {
                     return Err(tmsg!("there is already a profile named `{name}`", name = name));
                 }
+                // A new or duplicated profile becomes the open one, which is a switch.
+                if what != Named::RenameProfile && self.studio.paused().is_some() {
+                    return Err(tmsg!("Resume before switching the profile"));
+                }
                 let old = self.studio.profile().name.clone();
                 let mut p = if what == Named::NewProfile { Profile::default() } else { self.studio.profile().clone() };
                 p.name = name.to_string();
@@ -1359,6 +1363,10 @@ impl StudioApp {
     fn switch_profile(&mut self, name: &str) -> Result<(), Msg> {
         if name == self.studio.profile().name {
             return Ok(());
+        }
+        // The running pause shows the settings of the profile it started with.
+        if self.studio.paused().is_some() {
+            return Err(tmsg!("Resume before switching the profile"));
         }
         let p = self.store.load_profile(name)?;
         // A profile whose settings cannot be saved stays open, so they are not lost.
@@ -1939,6 +1947,7 @@ impl StudioApp {
         let outputs_run = [&rec, &live].into_iter().flatten().any(|s| s.active);
         let source_limit = self.studio.audio_tracks_source_limit();
         let tracks = self.studio.audio_tracks_status().and_then(|s| tracks_item(s, outputs_run, source_limit));
+        let pause = pause_item(self.studio.paused(), self.studio.paused_for_ms());
         let height = theme::sizes(ui.ctx()).bar_status;
         let line = theme::palette(ui.ctx()).line;
         let frame = egui::Frame::side_top_panel(ui.style()).inner_margin(egui::Margin::symmetric(8, 0));
@@ -1967,6 +1976,10 @@ impl StudioApp {
                         ui.separator();
                         let color = if warn { ui.visuals().warn_fg_color } else { ui.visuals().text_color() };
                         ui.colored_label(color, text).on_hover_text(hover);
+                    }
+                    if let Some((text, hover)) = pause {
+                        ui.separator();
+                        ui.colored_label(ui.visuals().warn_fg_color, text).on_hover_text(hover);
                     }
                 });
             });
@@ -2033,6 +2046,12 @@ impl StudioApp {
                         mode: studiocraft_model::PathMode::OpenFile,
                         filter_name: tl!("Programs").to_string(),
                         extensions: if cfg!(windows) { vec!["exe".into()] } else { vec![] },
+                    },
+                    Pick::PauseMedia => Browse {
+                        key: String::new(),
+                        mode: studiocraft_model::PathMode::OpenFile,
+                        filter_name: tl!("Pictures and videos").to_string(),
+                        extensions: studiocraft_studio::pause_media_extensions(self.studio.registry()),
                     },
                 };
                 self.browse(b, Then::Settings(pick));
@@ -2372,6 +2391,19 @@ fn output_status(o: &studiocraft_studio::OutputState) -> String {
         (OutputStatus::Stopped, _) => tl!("Stopped").to_string(),
         (OutputStatus::Failed(e), _) => craft_i18n::fmt(tl!("Failed: {error}"), &[("error", e)]),
     }
+}
+
+/// The pause item of the status bar while the program is paused: `PAUSED` with the countdown's
+/// time left, and the time paused on hover. `paused` holds the countdown's time left in
+/// milliseconds, or `None` when the pause has no countdown.
+fn pause_item(paused: Option<Option<u64>>, for_ms: Option<u64>) -> Option<(String, String)> {
+    let left = paused?;
+    let text = match left {
+        Some(ms) => format!("{} {}", tl!("PAUSED"), studiocraft_studio::countdown_text(ms)),
+        None => tl!("PAUSED").to_string(),
+    };
+    let since = studiocraft_studio::paused_text(for_ms.unwrap_or(0));
+    Some((text, craft_i18n::fmt(tl!("Paused for {time}"), &[("time", &since)])))
 }
 
 /// The audio tracks item of the status bar: its text, whether it shows as a warning, and its
