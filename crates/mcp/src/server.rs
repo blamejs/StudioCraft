@@ -22,7 +22,7 @@ const VERSIONS: [&str; 2] = [craft_mcp::PROTOCOL_VERSION, "2024-11-05"];
 pub const INSTRUCTIONS: &str = "StudioCraft is a recording and live-streaming studio. A scene collection holds scenes, sources \
 (cameras, screens, pictures, text, media, audio devices) and scene items, which place a source in a scene. Coordinates are canvas \
 pixels, x to the right and y down, with the origin at the top-left; the default canvas is 1920x1080. Rotation is in degrees, volume \
-gain is 0 to 1 and durations are in milliseconds. Every action is a command: command_list shows ids and parameters, command_run runs \
+gain is 0 to 10 (1 is 0 dB and 10 is +20 dB) and durations are in milliseconds. Every action is a command: command_list shows ids and parameters, command_run runs \
 one and command_batch runs several. A typical flow is scene_add, then source_add {kind, settings}, then item_transform, then \
 render_preview to look at the result and doc_inspect to read ids back. Studio mode keeps a preview scene and a program scene; \
 studio_transition moves the preview to the program. record_start and record_stop control the recording, record_marker marks it \

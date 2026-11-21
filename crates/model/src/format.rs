@@ -469,6 +469,25 @@ mod tests {
     }
 
     #[test]
+    fn collections_keep_each_source_gain_with_its_boost() {
+        use crate::collection::MAX_GAIN;
+        for (v, text) in COLLECTION_FIXTURES {
+            let c = read_collection(text, "Scene").unwrap();
+            let gains: Vec<f32> = c.sources.iter().map(|s| s.audio.gain).collect();
+            assert_eq!(gains, [1.0, 1.0, 0.5], "version {v} keeps its gains");
+        }
+        let (_, newest) = COLLECTION_FIXTURES[COLLECTION_FIXTURES.len() - 1];
+        let gain_of = |text: &str| read_collection(text, "Scene").unwrap().source_by_name("Microphone").map(|s| s.audio.gain);
+        let boosted = newest.replace("\"gain\": 0.5", "\"gain\": 4.0");
+        let c = read_collection(&boosted, "Scene").unwrap();
+        assert_eq!(c.source_by_name("Microphone").map(|s| s.audio.gain), Some(4.0));
+        assert_eq!(read_collection(&write_collection(&c).unwrap(), "Scene").unwrap(), c, "a boosted gain saves and reloads");
+        assert_eq!(gain_of(&newest.replace("\"gain\": 0.5", "\"gain\": 10.0")), Some(MAX_GAIN));
+        assert_eq!(gain_of(&newest.replace("\"gain\": 0.5", "\"gain\": 1000.0")), Some(MAX_GAIN), "a gain above the top is brought down to it");
+        assert_eq!(gain_of(&newest.replace("\"gain\": 0.5", "\"gain\": -2.0")), Some(0.0), "a negative gain is brought up to 0");
+    }
+
+    #[test]
     fn collections_keep_each_source_monitoring_mode() {
         for (v, text) in &COLLECTION_FIXTURES[..2] {
             let c = read_collection(text, "Scene").unwrap();

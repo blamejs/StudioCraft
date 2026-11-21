@@ -648,6 +648,7 @@ menu	Transform	Transform
 @msg	there is no free name for the scene collection `{name}`	there is no free name for the scene collection `{name}`
 @msg	select a source first	select a source first
 @msg	the source has not shown a picture yet	the source has not shown a picture yet
+@msg	the volume must be a number from 0 to 10 (+20 dB)	the volume must be a number from 0 to 10 (+20 dB)
 @msg	settings are kept in memory only (--no-prefs)	settings are kept in memory only (--no-prefs)
 @msg	`scopes.kind`: unknown scope `{name}` (one of {scopes})	`scopes.kind`: unknown scope `{name}` (one of {scopes})
 @msg	`dock.move`: `to` is `left` or `right`, not `{to}`	`dock.move`: `to` is `left` or `right`, not `{to}`

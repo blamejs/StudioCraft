@@ -106,9 +106,9 @@ description in [docs/features.md](docs/features.md).
    ([Application audio capture](docs/features.md#application-audio-capture)). The Application
    Audio dock lists microphones and running applications as lanes with live meters, grays a lane
    the program does not hear, and routes an application into every scene
-   ([Application Audio dock](docs/features.md#application-audio-dock)). Each lane has volume up to
-   0 dB, mute, filters, a sync offset and monitoring. Gain with boost above 0 dB and track
-   assignment are still to be built.
+   ([Application Audio dock](docs/features.md#application-audio-dock)). Each lane has volume with up to
+   +20 dB of boost, mute, filters, a sync offset and monitoring. Track assignment is still to be
+   built.
 6. **Application audio on macOS and Linux.** The application list, meters and capture will use
    ScreenCaptureKit on macOS and PipeWire's per-application streams on Linux. Both systems report
    it as unsupported today.

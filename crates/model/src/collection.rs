@@ -63,7 +63,7 @@ impl MonitorMode {
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AudioState {
-    /// Linear gain, 0 to 1 (the fader's 0 dB is 1).
+    /// Linear gain, 0 to [`MAX_GAIN`] (the fader's 0 dB is 1; above 1 boosts the source).
     pub gain: f32,
     pub muted: bool,
     /// How long the mixer delays the source's audio, in milliseconds, 0 to
@@ -79,6 +79,12 @@ pub struct AudioState {
 
 /// Longest audio sync offset accepted, in milliseconds.
 pub const MAX_SYNC_OFFSET_MS: u32 = 5_000;
+
+/// Most boost a source's volume accepts, in dB above the fader's 0 dB.
+pub const MAX_GAIN_DB: f32 = 20.0;
+
+/// Highest linear gain a source's volume accepts: [`MAX_GAIN_DB`] above 0 dB.
+pub const MAX_GAIN: f32 = 10.0;
 
 impl Default for AudioState {
     fn default() -> Self {
@@ -314,7 +320,8 @@ impl SceneCollection {
 
     /// Repairs what [`SceneCollection::problems`] reports where a repair keeps the user's work:
     /// items of missing sources are dropped, a missing program scene falls back to the first
-    /// scene (one is created when there is none), and `next_id` moves past every id.
+    /// scene (one is created when there is none), `next_id` moves past every id, and a source's
+    /// gain outside 0 to [`MAX_GAIN`] is brought into that range.
     pub fn repair(&mut self, default_scene_name: &str) {
         let sources: std::collections::BTreeSet<SourceId> = self.sources.iter().map(|s| s.id).collect();
         for s in &mut self.scenes {
@@ -347,6 +354,7 @@ impl SceneCollection {
         self.transition.duration_ms = self.transition.duration_ms.min(MAX_TRANSITION_MS);
         for s in &mut self.sources {
             s.audio.sync_offset_ms = s.audio.sync_offset_ms.min(MAX_SYNC_OFFSET_MS);
+            s.audio.gain = if s.audio.gain.is_finite() { s.audio.gain.clamp(0.0, MAX_GAIN) } else { 1.0 };
         }
     }
 }
@@ -434,5 +442,10 @@ mod tests {
         full.program_scene = full.scenes[0].id;
         full.repair("Scene");
         assert!(full.problems().iter().any(|p| p.contains("no new ids")), "{:?}", full.problems());
+    }
+
+    #[test]
+    fn the_top_gain_is_the_top_boost_in_decibels() {
+        assert!((10f32.powf(MAX_GAIN_DB / 20.0) - MAX_GAIN).abs() < 1e-5);
     }
 }

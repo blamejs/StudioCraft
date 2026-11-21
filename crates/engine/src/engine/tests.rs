@@ -359,13 +359,39 @@ fn volume_and_mute() {
     let o = run(&mut e, "source.add", json!({"kind": "mic", "name": "Mic"})).unwrap();
     let src: SourceId = serde_json::from_value(o.result["source"].clone()).unwrap();
     run(&mut e, "source.volume", json!({"source": "Mic", "gain": 0.25})).unwrap();
-    for bad in [2.0, -0.1] {
+    for bad in [11.0, -0.1] {
         assert!(matches!(run(&mut e, "source.volume", json!({"source": "Mic", "gain": bad})), Err(EngineError::Invalid(_))), "{bad}");
     }
     assert_eq!(e.collection().source(src).unwrap().audio.gain, 0.25);
     run(&mut e, "source.mute", json!({"source": src, "muted": true})).unwrap();
     assert!(e.collection().source(src).unwrap().audio.muted);
     assert!(run(&mut e, "source.volume", json!({"source": "Mic", "gain": "loud"})).is_err());
+}
+
+#[test]
+fn volume_boosts_up_to_the_top() {
+    use studiocraft_model::collection::MAX_GAIN;
+    let mut e = engine();
+    let o = run(&mut e, "source.add", json!({"kind": "mic", "name": "Mic"})).unwrap();
+    let src: SourceId = serde_json::from_value(o.result["source"].clone()).unwrap();
+    let gain = |e: &Engine| e.collection().source(src).unwrap().audio.gain;
+    run(&mut e, "source.volume", json!({"source": "Mic", "gain": 4.0})).unwrap();
+    assert_eq!(gain(&e), 4.0);
+    e.seal_history();
+    run(&mut e, "source.volume", json!({"source": "Mic", "gain": MAX_GAIN})).unwrap();
+    assert_eq!(gain(&e), MAX_GAIN, "the top is accepted");
+    e.seal_history();
+    for bad in [MAX_GAIN + 0.01, 1000.0, f32::NAN, f32::INFINITY, f32::NEG_INFINITY, -0.01] {
+        let err = e.execute(C::SourceVolume { source: SourceRef::Id(src), gain: bad }).unwrap_err();
+        assert!(matches!(&err, EngineError::Invalid(m) if m == "the volume must be a number from 0 to 10 (+20 dB)"), "{bad}: {err:?}");
+        assert_eq!(gain(&e), MAX_GAIN, "{bad} changes nothing");
+    }
+    // Setting the volume it already has is no change and no undo step: one undo goes back to 4.
+    let rev = e.revision();
+    assert!(!run(&mut e, "source.volume", json!({"source": "Mic", "gain": MAX_GAIN})).unwrap().changed);
+    assert_eq!(e.revision(), rev);
+    run(&mut e, "edit.undo", json!({})).unwrap();
+    assert_eq!(gain(&e), 4.0);
 }
 
 #[test]

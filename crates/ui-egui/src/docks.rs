@@ -8,6 +8,7 @@ use egui::{Color32, Rect, RichText, Sense, TextStyle, Ui, pos2, vec2};
 use serde_json::json;
 use studiocraft_engine::lanes::{AppKey, Lane, LaneKind, Lanes};
 use studiocraft_media::mix::{BlockLevels, METER_FLOOR_DB, MeterBallistics, from_db, to_db};
+use studiocraft_model::collection::{MAX_GAIN, MAX_GAIN_DB};
 use studiocraft_model::{ItemId, SceneId, SourceId};
 use studiocraft_studio::Studio;
 
@@ -410,8 +411,40 @@ fn meter(ui: &mut Ui, m: &MeterBallistics, muted: bool) {
 
 fn gain_text(gain: f32) -> String {
     let db = to_db(gain);
-    let value = if db <= METER_FLOOR_DB { "-inf".to_string() } else { format!("{db:.1}") };
+    let value = if db <= METER_FLOOR_DB {
+        "-inf".to_string()
+    } else if db >= 0.05 {
+        format!("+{db:.1}")
+    } else {
+        format!("{db:.1}")
+    };
     craft_i18n::fmt(tl!("{db} dB"), &[("db", &value)])
+}
+
+/// The gain for a volume slider at `db`: the meter floor is silence and the top is [`MAX_GAIN`].
+fn fader_gain(db: f32) -> f32 {
+    if db <= METER_FLOOR_DB { 0.0 } else { from_db(db).min(MAX_GAIN) }
+}
+
+/// Where 0 dB sits on a volume slider drawn in `r`. The slider keeps its round handle inside `r`,
+/// so the ends of its rail are inset by the handle's radius, `r.height() / 2.5`.
+fn fader_zero_x(r: Rect) -> f32 {
+    let inset = (r.height() / 2.5).min(r.width() / 2.0);
+    let t = -METER_FLOOR_DB / (MAX_GAIN_DB - METER_FLOOR_DB);
+    r.left() + inset + t * (r.width() - 2.0 * inset)
+}
+
+/// A volume slider from the meter floor to [`MAX_GAIN_DB`] of boost, with a mark under its rail
+/// at 0 dB. Returns the slider's response and the gain it was moved to.
+fn volume_slider(ui: &mut Ui, gain: f32, enabled: bool) -> (egui::Response, f32) {
+    let mark = ui.painter().add(egui::Shape::Noop);
+    let mut db = to_db(gain).clamp(METER_FLOOR_DB, MAX_GAIN_DB);
+    let slider = egui::Slider::new(&mut db, METER_FLOOR_DB..=MAX_GAIN_DB).show_value(false).trailing_fill(true);
+    let r = ui.add_enabled(enabled, slider);
+    let x = fader_zero_x(r.rect);
+    let line = egui::Shape::line_segment([pos2(x, r.rect.top()), pos2(x, r.rect.bottom())], (1.0, ui.visuals().weak_text_color()));
+    ui.painter().set(mark, line);
+    (r, fader_gain(db))
 }
 
 pub fn mixer(ui: &mut Ui, studio: &Studio, st: &mut DockState, acts: &mut Vec<Act>) -> Drawn {
@@ -468,10 +501,8 @@ pub fn mixer(ui: &mut Ui, studio: &Studio, st: &mut DockState, acts: &mut Vec<Ac
                 ui.colored_label(ui.visuals().warn_fg_color, crate::i18n::Msg::plain(e).shown());
             }
             meter(ui, m, s.audio.muted);
-            let mut db = to_db(s.audio.gain).max(METER_FLOOR_DB);
-            let r = ui.add(egui::Slider::new(&mut db, METER_FLOOR_DB..=0.0).show_value(false).trailing_fill(true));
+            let (r, gain) = volume_slider(ui, s.audio.gain, true);
             if r.changed() {
-                let gain = if db <= METER_FLOOR_DB { 0.0 } else { from_db(db) };
                 acts.push(Act::run("source.volume", json!({"source": s.id, "gain": gain})));
             }
             if r.drag_stopped() {
@@ -689,12 +720,9 @@ pub fn app_audio(ui: &mut Ui, studio: &Studio, st: &mut DockState, acts: &mut Ve
                 ui.colored_label(warn, crate::i18n::Msg::plain(e).shown());
             }
             meter(ui, m, gray || lane.muted);
-            let mut db = to_db(lane.gain).max(METER_FLOOR_DB);
-            let slider = egui::Slider::new(&mut db, METER_FLOOR_DB..=0.0).show_value(false).trailing_fill(true);
-            let r = ui.add_enabled(lane.source.is_some(), slider);
+            let (r, gain) = volume_slider(ui, lane.gain, lane.source.is_some());
             if let Some(s) = lane.source {
                 if r.changed() {
-                    let gain = if db <= METER_FLOOR_DB { 0.0 } else { from_db(db) };
                     acts.push(Act::run("source.volume", json!({"source": s, "gain": gain})));
                 }
                 if r.drag_stopped() {
@@ -725,6 +753,21 @@ mod tests {
         assert_eq!(gain_text(1.0), "0.0 dB");
         assert_eq!(gain_text(0.0), "-inf dB");
         assert_eq!(gain_text(0.5), "-6.0 dB");
+        assert_eq!(gain_text(MAX_GAIN), "+20.0 dB");
+    }
+
+    #[test]
+    fn volume_sliders_reach_the_top_boost_with_0_db_marked() {
+        assert_eq!(fader_gain(METER_FLOOR_DB), 0.0);
+        assert!((fader_gain(0.0) - 1.0).abs() < 1e-6);
+        assert!((fader_gain(MAX_GAIN_DB) - MAX_GAIN).abs() < 1e-5);
+        assert!(fader_gain(MAX_GAIN_DB) <= MAX_GAIN, "the top never asks for more than the engine accepts");
+        // A 200 by 20 slider insets its rail by 8 at each end: -60..=+20 dB over 184 points puts
+        // 0 dB three quarters of the way along.
+        let r = Rect::from_min_size(pos2(10.0, 0.0), vec2(200.0, 20.0));
+        assert!((fader_zero_x(r) - (10.0 + 8.0 + 0.75 * 184.0)).abs() < 1e-4);
+        let narrow = Rect::from_min_size(pos2(0.0, 0.0), vec2(4.0, 20.0));
+        assert!((narrow.left()..=narrow.right()).contains(&fader_zero_x(narrow)), "a slider narrower than its handle keeps the mark inside");
     }
 
     fn app_lane(source: Option<SourceId>, peak: Option<f32>) -> Lane {
