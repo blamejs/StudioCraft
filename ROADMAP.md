@@ -124,9 +124,10 @@ description in [docs/features.md](docs/features.md).
     program, or on the preview only, the stream carries it as closed captions, and `.srt` and
     `.vtt` files are written beside the recording.
 12. **Canvas size from the display (partly done).** Moves and resizes snap to the canvas and to
-    other items, and Settings › Video sets the canvas to a chosen display's size
-    ([Sources](docs/features.md#sources)). The canvas will follow the display when its resolution
-    or scaling changes.
+    other items, and Settings › Video sets the canvas to a chosen display's size. The canvas then
+    follows that display when its resolution or scaling changes
+    ([Sources](docs/features.md#sources)). On Linux, displays will be listed without the
+    desktop's picker where the desktop allows it.
 13. **AMD and Intel encoders in StudioCraft's own process, and hardware decoding.** The AMD AMF and
     Intel Quick Sync encoders run only through `ffmpeg` today. They will run in StudioCraft's own
     process like the NVENC, Media Foundation, VideoToolbox and VA-API encoders. Media file sources

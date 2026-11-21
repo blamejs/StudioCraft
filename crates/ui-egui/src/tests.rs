@@ -189,6 +189,7 @@ fn a_new_graphics_adapter_choice_is_saved_and_forgets_the_old_losses() {
             check_updates: w.check_updates,
             system_title_bar: w.system_title_bar,
             graphics_adapter: choice,
+            canvas_display: None,
         })
     };
     // the same choice keeps the losses
@@ -1476,6 +1477,7 @@ fn frame_on_display(app: &mut StudioApp, ctx: &egui::Context, points: egui::Vec2
 #[test]
 fn the_canvas_takes_the_size_of_the_display_the_window_is_on() {
     let mut a = app();
+    a.displays = follow::Watch::new(Arc::new(Vec::new));
     let ctx = egui::Context::default();
     frame(&mut a, &ctx, vec![]);
     let e = run(&mut a, &ctx, "video.canvas_from_display", json!({})).unwrap_err();
@@ -1485,7 +1487,7 @@ fn the_canvas_takes_the_size_of_the_display_the_window_is_on() {
     frame_on_display(&mut a, &ctx, egui::vec2(1512.0, 982.0), 2.0);
     a.open_settings(crate::settings::Tab::Video);
     let r = run(&mut a, &ctx, "video.canvas_from_display", json!({})).unwrap();
-    assert_eq!(r, json!({"width": 3024, "height": 1964, "changed": true}));
+    assert_eq!(r, json!({"width": 3024, "height": 1964, "changed": true, "follows": null}), "no listed display has its size");
     assert_eq!(a.studio().canvas(), (3024, 1964));
     assert_eq!(a.studio().profile().video.output_width, 1920, "the output size stays");
     let saved = a.store().load_profile(DEFAULT_NAME).unwrap();
@@ -1550,6 +1552,363 @@ fn the_canvas_from_a_display_refuses_bad_parameters() {
     let e = run(&mut a, &ctx, "video.canvas_from_display", json!({"display": "no such display \u{1}/.."})).unwrap_err();
     assert!(e.contains("there is no display"), "{e}");
     assert_eq!(a.studio().canvas(), (1920, 1080));
+}
+
+fn screen(id: &str, name: &str, width: u32, height: u32) -> DisplayInfo {
+    DisplayInfo { id: id.into(), name: name.into(), width, height, primary: false }
+}
+
+/// The app lists `list`, which the test can change.
+fn listed(a: &mut StudioApp, list: Vec<DisplayInfo>) -> Arc<std::sync::Mutex<Vec<DisplayInfo>>> {
+    let shared = Arc::new(std::sync::Mutex::new(list));
+    let theirs = shared.clone();
+    a.displays = follow::Watch::new(Arc::new(move || theirs.lock().unwrap().clone()));
+    shared
+}
+
+/// Let the displays be looked at, at `now`, and wait until that look has ended.
+fn look(a: &mut StudioApp, ctx: &egui::Context, now: Instant) {
+    a.follow_displays(ctx, now);
+    while a.displays.looking() {
+        std::thread::yield_now();
+        a.follow_displays(ctx, now);
+    }
+}
+
+/// The display the canvas of the profile in use follows.
+fn canvas_link(a: &StudioApp) -> (String, String, u32, u32) {
+    a.followed_display().map_or_else(Default::default, |l| (l.profile.clone(), l.id.clone(), l.width, l.height))
+}
+
+#[test]
+fn the_canvas_follows_the_display_it_came_from() {
+    let mut a = app();
+    let shown = listed(&mut a, vec![screen("1", "Main", 1920, 1080), screen("2", "Side", 2560, 1440)]);
+    let ctx = egui::Context::default();
+    let r = run(&mut a, &ctx, "video.canvas_from_display", json!({"display": "2"})).unwrap();
+    assert_eq!(r["follows"], json!("2"));
+    assert_eq!(canvas_link(&a), (DEFAULT_NAME.to_string(), "2".to_string(), 2560, 1440));
+    let mut t = Instant::now();
+
+    // The display's resolution changes.
+    shown.lock().unwrap()[1] = screen("2", "Side", 3840, 2160);
+    look(&mut a, &ctx, t);
+    assert_eq!(a.studio().canvas(), (3840, 2160));
+    let saved = a.store().load_profile(DEFAULT_NAME).unwrap();
+    assert_eq!((saved.video.base_width, saved.video.base_height), (3840, 2160), "the profile is saved");
+    assert_eq!(canvas_link(&a).2, 3840, "and still follows the display");
+
+    // Another display changing does nothing.
+    shown.lock().unwrap()[0] = screen("1", "Main", 1280, 720);
+    t += follow::LOOK;
+    look(&mut a, &ctx, t);
+    assert_eq!(a.studio().canvas(), (3840, 2160));
+
+    // A display that is not connected is followed again when it is, under a new id.
+    shown.lock().unwrap().pop();
+    t += follow::LOOK;
+    look(&mut a, &ctx, t);
+    assert_eq!(a.studio().canvas(), (3840, 2160));
+    assert_eq!(canvas_link(&a).1, "2");
+    shown.lock().unwrap().push(screen("9", "Side", 1920, 1200));
+    t += follow::LOOK;
+    look(&mut a, &ctx, t);
+    assert_eq!(a.studio().canvas(), (1920, 1200));
+    assert_eq!(canvas_link(&a), (DEFAULT_NAME.to_string(), "9".to_string(), 1920, 1200));
+
+    // An odd side is rounded down to an even one, and a display too large for a canvas is not
+    // followed until it fits again.
+    shown.lock().unwrap()[1] = screen("9", "Side", 1281, 721);
+    t += follow::LOOK;
+    look(&mut a, &ctx, t);
+    assert_eq!(a.studio().canvas(), (1280, 720));
+    shown.lock().unwrap()[1] = screen("9", "Side", 10_000, 5000);
+    t += follow::LOOK;
+    look(&mut a, &ctx, t);
+    assert_eq!(a.studio().canvas(), (1280, 720));
+    shown.lock().unwrap()[1] = screen("9", "Side", 2560, 1600);
+    t += follow::LOOK;
+    look(&mut a, &ctx, t);
+    assert_eq!(a.studio().canvas(), (2560, 1600));
+
+    // The displays are not looked at before it is time.
+    shown.lock().unwrap()[1] = screen("9", "Side", 1920, 1080);
+    a.follow_displays(&ctx, t + follow::LOOK - Duration::from_millis(1));
+    assert!(!a.displays.looking());
+}
+
+#[test]
+fn an_open_settings_window_shows_the_followed_size_unless_another_was_typed() {
+    let mut a = app();
+    let shown = listed(&mut a, vec![screen("2", "Side", 2560, 1440)]);
+    let ctx = egui::Context::default();
+    run(&mut a, &ctx, "video.canvas_from_display", json!({"display": "2"})).unwrap();
+    a.open_settings(crate::settings::Tab::Video);
+    let draft = |a: &StudioApp| {
+        let v = &a.settings.as_ref().unwrap().draft.video;
+        (v.base_width, v.base_height)
+    };
+    shown.lock().unwrap()[0] = screen("2", "Side", 3840, 2160);
+    let t = Instant::now();
+    look(&mut a, &ctx, t);
+    assert_eq!(a.studio().canvas(), (3840, 2160));
+    assert_eq!(draft(&a), (3840, 2160));
+    // A size typed and not yet applied stays.
+    let v = &mut a.settings.as_mut().unwrap().draft.video;
+    (v.base_width, v.base_height) = (1280, 720);
+    shown.lock().unwrap()[0] = screen("2", "Side", 1920, 1080);
+    look(&mut a, &ctx, t + follow::LOOK);
+    assert_eq!(a.studio().canvas(), (1920, 1080));
+    assert_eq!(draft(&a), (1280, 720));
+}
+
+#[test]
+fn a_followed_size_that_cant_be_saved_is_saved_at_a_later_look() {
+    let dir = temp_dir("follow-save-fails");
+    std::fs::create_dir_all(&dir).unwrap();
+    let (store, _) = Store::open(craft_settings::Location::Dir(dir.clone()));
+    let mut a = StudioApp::boot(store, None, Vec::new());
+    let shown = listed(&mut a, vec![screen("2", "Side", 2560, 1440)]);
+    let ctx = egui::Context::default();
+    run(&mut a, &ctx, "video.canvas_from_display", json!({"display": "2"})).unwrap();
+    // A file where the profiles folder goes makes the save fail.
+    let profiles = dir.join("profiles");
+    let _ = std::fs::remove_dir_all(&profiles);
+    std::fs::write(&profiles, b"").unwrap();
+    shown.lock().unwrap()[0] = screen("2", "Side", 3840, 2160);
+    let mut t = Instant::now();
+    let before = a.notices.len();
+    look(&mut a, &ctx, t);
+    let canvas = a.studio().canvas();
+    let told = a.notices.len() - before;
+    // The failure is shown once, not at every look.
+    t += follow::LOOK;
+    look(&mut a, &ctx, t);
+    let told_again = a.notices.len() - before;
+    // Once the profiles folder can be written, the next look saves the size.
+    std::fs::remove_file(&profiles).unwrap();
+    t += follow::LOOK;
+    look(&mut a, &ctx, t);
+    let saved = a.store().load_profile(DEFAULT_NAME).map(|p| (p.video.base_width, p.video.base_height));
+    let _ = std::fs::remove_dir_all(&dir);
+    assert_eq!(canvas, (3840, 2160));
+    assert_eq!(told, 1);
+    assert_eq!(told_again, 1);
+    assert_eq!(saved, Ok((3840, 2160)));
+    assert_eq!(canvas_link(&a).2, 3840);
+}
+
+#[test]
+fn a_followed_size_that_cant_be_saved_after_another_save_worked_is_shown_again() {
+    let dir = temp_dir("follow-save-fails-twice");
+    std::fs::create_dir_all(&dir).unwrap();
+    let (store, _) = Store::open(craft_settings::Location::Dir(dir.clone()));
+    let mut a = StudioApp::boot(store, None, Vec::new());
+    let shown = listed(&mut a, vec![screen("2", "Side", 2560, 1440)]);
+    let ctx = egui::Context::default();
+    run(&mut a, &ctx, "video.canvas_from_display", json!({"display": "2"})).unwrap();
+    let profiles = dir.join("profiles");
+    let _ = std::fs::remove_dir_all(&profiles);
+    std::fs::write(&profiles, b"").unwrap();
+    shown.lock().unwrap()[0] = screen("2", "Side", 3840, 2160);
+    let mut t = Instant::now();
+    let before = a.notices.len();
+    look(&mut a, &ctx, t);
+    // The profile is saved another way, and then a new size can't be saved.
+    std::fs::remove_file(&profiles).unwrap();
+    let saved_all = a.save_all();
+    std::fs::remove_dir_all(&profiles).unwrap();
+    std::fs::write(&profiles, b"").unwrap();
+    shown.lock().unwrap()[0] = screen("2", "Side", 1920, 1080);
+    t += follow::LOOK;
+    look(&mut a, &ctx, t);
+    let canvas = a.studio().canvas();
+    let told = a.notices.len() - before;
+    let _ = std::fs::remove_file(&profiles);
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(saved_all);
+    assert_eq!(canvas, (1920, 1080));
+    assert_eq!(told, 2);
+}
+
+#[test]
+fn each_followed_size_that_cant_be_saved_is_shown() {
+    let dir = temp_dir("follow-save-fails-new-size");
+    std::fs::create_dir_all(&dir).unwrap();
+    let (store, _) = Store::open(craft_settings::Location::Dir(dir.clone()));
+    let mut a = StudioApp::boot(store, None, Vec::new());
+    let shown = listed(&mut a, vec![screen("2", "Side", 2560, 1440)]);
+    let ctx = egui::Context::default();
+    run(&mut a, &ctx, "video.canvas_from_display", json!({"display": "2"})).unwrap();
+    let profiles = dir.join("profiles");
+    let _ = std::fs::remove_dir_all(&profiles);
+    std::fs::write(&profiles, b"").unwrap();
+    shown.lock().unwrap()[0] = screen("2", "Side", 3840, 2160);
+    let mut t = Instant::now();
+    let before = a.notices.len();
+    look(&mut a, &ctx, t);
+    // The display changes again while the profile still can't be saved.
+    shown.lock().unwrap()[0] = screen("2", "Side", 1920, 1080);
+    t += follow::LOOK;
+    look(&mut a, &ctx, t);
+    let canvas = a.studio().canvas();
+    let told = a.notices.len() - before;
+    let _ = std::fs::remove_file(&profiles);
+    let _ = std::fs::remove_dir_all(&dir);
+    assert_eq!(canvas, (1920, 1080));
+    assert_eq!(told, 2);
+}
+
+#[test]
+fn a_canvas_set_another_way_follows_no_display() {
+    let mut a = app();
+    let shown = listed(&mut a, vec![screen("2", "Side", 2560, 1440)]);
+    let ctx = egui::Context::default();
+    run(&mut a, &ctx, "video.canvas_from_display", json!({"display": "2"})).unwrap();
+    let mut p = a.studio().profile().clone();
+    (p.video.base_width, p.video.base_height) = (1280, 720);
+    a.studio.set_profile(p).unwrap();
+    let t = Instant::now();
+    look(&mut a, &ctx, t);
+    assert_eq!(canvas_link(&a), (String::new(), String::new(), 0, 0));
+    shown.lock().unwrap()[0] = screen("2", "Side", 3840, 2160);
+    look(&mut a, &ctx, t + follow::LOOK);
+    assert_eq!(a.studio().canvas(), (1280, 720));
+}
+
+#[test]
+fn the_display_the_window_is_on_is_followed_when_its_size_tells_it_apart() {
+    let mut a = app();
+    let shown = listed(&mut a, vec![screen("1", "Main", 1920, 1080), screen("2", "Side", 2560, 1440)]);
+    let ctx = egui::Context::default();
+    frame_on_display(&mut a, &ctx, egui::vec2(1280.0, 720.0), 2.0);
+    let r = run(&mut a, &ctx, "video.canvas_from_display", json!({})).unwrap();
+    assert_eq!(r["follows"], json!("2"));
+    // Two displays of that size can't be told apart.
+    shown.lock().unwrap()[0] = screen("1", "Main", 2560, 1440);
+    let r = run(&mut a, &ctx, "video.canvas_from_display", json!({})).unwrap();
+    assert_eq!(r["follows"], json!(null));
+    assert_eq!(canvas_link(&a).0, "");
+}
+
+#[test]
+fn only_the_profile_whose_canvas_came_from_a_display_follows_it() {
+    let mut a = app();
+    let shown = listed(&mut a, vec![screen("1", "Main", 1280, 720), screen("2", "Side", 2560, 1440)]);
+    let ctx = egui::Context::default();
+    run(&mut a, &ctx, "video.canvas_from_display", json!({"display": "2"})).unwrap();
+    a.named(Named::RenameProfile, "Show").unwrap();
+    assert_eq!(canvas_link(&a).0, "Show", "a renamed profile still follows");
+    a.named(Named::DuplicateProfile, "Show 2").unwrap();
+    assert_eq!(canvas_link(&a), ("Show 2".to_string(), "2".to_string(), 2560, 1440), "and so does a copy");
+    a.switch_profile("Show").unwrap();
+    a.named(Named::NewProfile, "Other").unwrap();
+    assert_eq!(canvas_link(&a).0, "", "the new profile's canvas came from no display");
+    shown.lock().unwrap()[1] = screen("2", "Side", 3840, 2160);
+    let mut t = Instant::now();
+    look(&mut a, &ctx, t);
+    assert_eq!(a.studio().canvas(), (1920, 1080));
+    // Each profile keeps the display its canvas follows.
+    run(&mut a, &ctx, "video.canvas_from_display", json!({"display": "1"})).unwrap();
+    a.switch_profile("Show").unwrap();
+    t += follow::LOOK;
+    look(&mut a, &ctx, t);
+    assert_eq!(a.studio().canvas(), (3840, 2160));
+    shown.lock().unwrap()[0] = screen("1", "Main", 1920, 1200);
+    a.switch_profile("Other").unwrap();
+    t += follow::LOOK;
+    look(&mut a, &ctx, t);
+    assert_eq!(a.studio().canvas(), (1920, 1200));
+    // A removed profile's display is forgotten.
+    a.remove_profile().unwrap();
+    assert!(a.store.prefs().canvas_display("Other").is_none());
+    assert_eq!(canvas_link(&a).0, a.studio().profile().name, "the next profile still follows");
+}
+
+#[test]
+fn the_displays_canvases_follow_are_kept_within_bounds() {
+    let mut p = store::Prefs::default();
+    for n in 0..store::MAX_CANVAS_DISPLAYS + 3 {
+        p.set_canvas_display(store::CanvasDisplay { profile: format!("P{n}"), ..Default::default() });
+    }
+    assert_eq!(p.canvas_displays.len(), store::MAX_CANVAS_DISPLAYS);
+    assert!(p.canvas_display("P0").is_none(), "the earliest is forgotten first");
+    p.set_canvas_display(store::CanvasDisplay { profile: "P10".into(), id: "4".into(), ..Default::default() });
+    assert_eq!(p.canvas_displays.len(), store::MAX_CANVAS_DISPLAYS, "a profile has one");
+    assert_eq!(p.canvas_display("P10").map(|l| l.id.as_str()), Some("4"));
+    let back: store::Prefs = serde_json::from_value(serde_json::to_value(&p).unwrap()).unwrap();
+    assert_eq!(back.canvas_displays, p.canvas_displays);
+    let many: Vec<Value> = (0..store::MAX_CANVAS_DISPLAYS + 5).map(|n| json!({"profile": format!("Q{n}")})).collect();
+    let read: store::Prefs = serde_json::from_value(json!({"canvas_displays": many})).unwrap();
+    assert_eq!(read.canvas_displays.len(), store::MAX_CANVAS_DISPLAYS, "a longer list is cut");
+}
+
+#[test]
+fn a_display_picked_in_settings_is_followed_once_applied() {
+    let mut a = app();
+    listed(&mut a, vec![screen("2", "Side", 2560, 1440)]);
+    let apply = |a: &mut StudioApp, size: (u32, u32), display: Option<Option<DisplayInfo>>| {
+        let w = a.settings.as_ref().unwrap();
+        let mut profile = w.draft.clone();
+        (profile.video.base_width, profile.video.base_height) = size;
+        a.apply_settings(crate::settings::Apply {
+            profile,
+            overrides: a.keymap.overrides().clone(),
+            language: w.language.clone(),
+            check_updates: w.check_updates,
+            system_title_bar: w.system_title_bar,
+            graphics_adapter: w.graphics_adapter.clone(),
+            canvas_display: display,
+        })
+    };
+    a.open_settings(crate::settings::Tab::Video);
+    // The size was edited after the pick.
+    assert!(apply(&mut a, (2000, 1440), Some(Some(screen("2", "Side", 2560, 1440)))));
+    assert_eq!(canvas_link(&a).0, "");
+    a.settings.as_mut().unwrap().canvas_display = Some(Some(screen("2", "Side", 2560, 1440)));
+    assert!(apply(&mut a, (2560, 1440), Some(Some(screen("2", "Side", 2560, 1440)))));
+    assert_eq!(canvas_link(&a), (DEFAULT_NAME.to_string(), "2".to_string(), 2560, 1440));
+    assert_eq!(a.settings.as_ref().unwrap().canvas_display, None, "the pick is used once");
+    // Applying other settings with nothing picked keeps it.
+    assert!(apply(&mut a, (2560, 1440), None));
+    assert_eq!(canvas_link(&a).1, "2");
+    // A pick that names no display (two displays of the window's size) ends it.
+    assert!(apply(&mut a, (2560, 1440), Some(None)));
+    assert_eq!(canvas_link(&a).0, "");
+}
+
+#[test]
+fn a_slow_display_listing_does_not_hold_up_the_window() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let mut a = app();
+    let shown = Arc::new(std::sync::Mutex::new(vec![screen("2", "Side", 2560, 1440)]));
+    let slow = Arc::new(AtomicBool::new(false));
+    let (go, wait) = std::sync::mpsc::channel::<()>();
+    let wait = std::sync::Mutex::new(wait);
+    let (theirs, slow_there) = (shown.clone(), slow.clone());
+    a.displays = follow::Watch::new(Arc::new(move || {
+        if slow_there.load(Ordering::Acquire) {
+            let _ = wait.lock().unwrap().recv();
+        }
+        theirs.lock().unwrap().clone()
+    }));
+    let ctx = egui::Context::default();
+    run(&mut a, &ctx, "video.canvas_from_display", json!({"display": "2"})).unwrap();
+    slow.store(true, Ordering::Release);
+    shown.lock().unwrap()[0] = screen("2", "Side", 3840, 2160);
+    a.follow_displays(&ctx, Instant::now());
+    assert!(a.displays.looking());
+    let before = a.frames();
+    for _ in 0..20 {
+        frame(&mut a, &ctx, vec![]);
+    }
+    assert_eq!(a.frames(), before + 20, "the window keeps drawing");
+    assert!(a.displays.looking(), "while the look waits");
+    assert_eq!(a.studio().canvas(), (2560, 1440));
+    go.send(()).unwrap();
+    let t = Instant::now();
+    look(&mut a, &ctx, t);
+    assert_eq!(a.studio().canvas(), (3840, 2160));
 }
 
 #[test]

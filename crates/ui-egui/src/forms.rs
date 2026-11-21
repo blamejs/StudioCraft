@@ -195,7 +195,7 @@ type Stamper = Arc<dyn Fn() -> Option<u64> + Send + Sync>;
 const WATCH: Duration = Duration::from_secs(3);
 
 /// Where a read on another thread leaves its value.
-struct Reply<T> {
+pub(crate) struct Reply<T> {
     value: Latest<T>,
     /// Set after the value is left, or when the read stopped without one.
     done: AtomicBool,
@@ -209,7 +209,7 @@ impl<T> Default for Reply<T> {
 
 impl<T> Reply<T> {
     /// The value once the read has ended: `Some(None)` when it stopped without one.
-    fn ended(&self) -> Option<Option<T>> {
+    pub(crate) fn ended(&self) -> Option<Option<T>> {
         if let Some(value) = self.value.take() {
             return Some(Some(value));
         }
@@ -229,24 +229,35 @@ impl<T> Drop for Ends<T> {
 
 /// Run `read` on a thread of its own; its value arrives in the returned reply. When no thread
 /// can be started, `read` runs here.
-fn read_off<T, F>(read: Arc<F>) -> Arc<Reply<T>>
+pub(crate) fn read_off<T, F>(read: Arc<F>) -> Arc<Reply<T>>
+where
+    T: Send + 'static,
+    F: Fn() -> T + Send + Sync + ?Sized + 'static,
+{
+    if let Some(reply) = try_read_off(read.clone()) {
+        return reply;
+    }
+    // The reply is taken like any other.
+    let reply = Arc::new(Reply::default());
+    reply.value.publish(read());
+    reply.done.store(true, Ordering::Release);
+    reply
+}
+
+/// Run `read` on a thread of its own; its value arrives in the returned reply. `None` when no
+/// thread can be started.
+pub(crate) fn try_read_off<T, F>(read: Arc<F>) -> Option<Arc<Reply<T>>>
 where
     T: Send + 'static,
     F: Fn() -> T + Send + Sync + ?Sized + 'static,
 {
     let reply = Arc::new(Reply::default());
     let ends = Ends(reply.clone());
-    let theirs = read.clone();
     let started = std::thread::Builder::new().name("studiocraft-properties".into()).spawn(move || {
         // The window may have closed or asked again; then nobody takes it.
-        ends.0.value.publish(theirs());
+        ends.0.value.publish(read());
     });
-    if started.is_err() {
-        // The reply is taken like any other.
-        reply.value.publish(read());
-        reply.done.store(true, Ordering::Release);
-    }
-    reply
+    started.ok().map(|_| reply)
 }
 
 /// Looks for devices plugged in or out while a Properties window is open.

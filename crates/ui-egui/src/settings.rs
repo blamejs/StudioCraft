@@ -61,6 +61,10 @@ pub struct SettingsWindow {
     output_devices: Vec<DeviceInfo>,
     /// The displays the system listed when the window opened, for the canvas size.
     displays: Vec<studiocraft_platform::display::DisplayInfo>,
+    /// The display last picked under Match display, which the canvas follows once applied with
+    /// that display's size. `Some(None)` when the display the window is on was picked and no
+    /// single listed display has its size; `None` until something is picked.
+    pub canvas_display: Option<Option<studiocraft_platform::display::DisplayInfo>>,
     /// The Graphics adapter setting.
     pub graphics_adapter: Preference,
     /// The adapters the window's graphics instance lists.
@@ -87,6 +91,9 @@ pub struct Apply {
     pub system_title_bar: bool,
     /// The Graphics adapter setting.
     pub graphics_adapter: Preference,
+    /// The display picked under Match display, when one was picked; see
+    /// [`SettingsWindow::canvas_display`].
+    pub canvas_display: Option<Option<studiocraft_platform::display::DisplayInfo>>,
 }
 
 /// What the window asks for this frame.
@@ -287,6 +294,7 @@ impl SettingsWindow {
             ffmpeg_version,
             output_devices: studiocraft_platform::audio::devices(DeviceKind::Output),
             displays: studiocraft_platform::display::displays(),
+            canvas_display: None,
             graphics_adapter: Preference::Auto,
             adapters: Vec::new(),
             drawing_with: None,
@@ -586,21 +594,25 @@ impl SettingsWindow {
             // too large or too small for a canvas is shown and can't be picked.
             let zoom = ui.ctx().zoom_factor();
             let here = ui.ctx().input(|i| crate::window_display(i.viewport(), zoom));
-            let mut choices: Vec<(String, (u32, u32))> = Vec::with_capacity(self.displays.len() + 1);
+            // Each choice with the display the canvas then follows.
+            let mut choices: Vec<(String, (u32, u32), Option<&studiocraft_platform::display::DisplayInfo>)> =
+                Vec::with_capacity(self.displays.len() + 1);
             if let Some(s) = here {
-                choices.push((tl!("The display this window is on").to_string(), s));
+                choices.push((tl!("The display this window is on").to_string(), s, crate::follow::of_size(&self.displays, s)));
             }
-            choices.extend(self.displays.iter().map(|d| (d.name.clone(), (d.width, d.height))));
+            choices.extend(self.displays.iter().map(|d| (d.name.clone(), (d.width, d.height), Some(d))));
             if !choices.is_empty() {
                 ui.label(tl!("Match display"));
+                let picked = &mut self.canvas_display;
                 craft_ui::ComboBox::from_id_salt("match-display").selected_text(tl!("Choose a display")).show_ui(ui, |ui| {
-                    for (name, (w, h)) in &choices {
+                    for (name, (w, h), display) in &choices {
                         let fits = crate::canvas_for((*w, *h)).is_ok();
                         let on = v.base_width == *w && v.base_height == *h;
                         let (width, height) = (w.to_string(), h.to_string());
                         let label = craft_i18n::fmt(tl!("{name}: {width} × {height}"), &[("name", name), ("width", &width), ("height", &height)]);
                         if ui.add_enabled(fits, egui::Button::selectable(on, label)).clicked() {
                             (v.base_width, v.base_height) = (*w, *h);
+                            *picked = Some(display.cloned());
                         }
                     }
                 });
@@ -741,6 +753,7 @@ impl SettingsWindow {
                                 check_updates: self.check_updates,
                                 system_title_bar: self.system_title_bar,
                                 graphics_adapter: self.graphics_adapter.clone(),
+                                canvas_display: self.canvas_display.clone(),
                             });
                             out.close |= ok;
                         }

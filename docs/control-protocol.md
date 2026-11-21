@@ -458,11 +458,22 @@ not report it.
 in pixels. Without `display` it uses the display the window is on. Each side is rounded down to an
 even number, and the output size is not changed. The profile is saved, also when the canvas
 already had that size. An open Settings window shows the new canvas size. It returns
-`{"width", "height", "changed"}`. These are errors: a `display` that is not a string (`null`
+`{"width", "height", "changed", "follows"}`. These are errors: a `display` that is not a string (`null`
 included), an id that `video.displays` does not list, a display with a side under 16 or over 8192
 pixels, an unknown size for the window's display, a change while the recording, the stream or the
 replay buffer runs, and a profile that can't be saved. After a failed save the new canvas size stays
 in use until the app quits.
+
+Afterward the canvas follows the display: while the same profile is in use and its canvas size has
+not been set another way, the canvas takes the display's new size when its resolution or scaling
+changes. The window lists the displays every 2 seconds, and at once when the display the window is
+on reports a new size. A display that is not connected is followed again when it is; when its id
+has changed, it is found by its name if no other listed display has that name. A new size that is
+outside the canvas's range is not taken. While the recording, the stream or the replay buffer runs
+the canvas keeps its size, and it takes the display's size after they stop. `follows` is the id of
+the followed display, or `null` when the canvas follows none: without `display`, the display the
+window is on is followed only when it is the only listed display of its size, so on Linux, where
+the list is empty, nothing is followed.
 
 ## Command line
 

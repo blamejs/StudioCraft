@@ -108,7 +108,9 @@ pub fn ui_params(id: &str) -> &'static str {
         "dock.float" => "dock: string (scenes, sources, mixer or app_audio), floating: boolean (true for a window of its own, false for the strip)",
         "dock.layout_save" => "name?: string (without it the window asks for one)",
         "dock.layout_apply" | "dock.layout_remove" => "name: string",
-        "video.canvas_from_display" => "display?: string (an id from video.displays; without it, the display the window is on)",
+        "video.canvas_from_display" => {
+            "display?: string (an id from video.displays; without it, the display the window is on). The canvas then follows the display's resolution and scaling"
+        }
         _ => "",
     }
 }
