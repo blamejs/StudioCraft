@@ -482,6 +482,27 @@ showing, or `null`).
 
 None of these commands changes the scene collection or adds an undo step.
 
+### `session.events`
+
+`session.events` takes `{"since"?}` and returns `{"events", "last", "dropped"}`: the scene
+switches, stream reconnects, pauses and resumes since the app started, oldest first. The app keeps
+the last 1,000 events, a limit StudioCraft sets. Each event has `seq` (counting up from 1),
+`kind`, `time_ms` (milliseconds since the app started), and `recording_s` and `stream_s` (how far
+into the running recording and stream it happened, in seconds, or `null` when none runs). A
+`scene` event has `from` and `to`, each `{"id", "name"}`; a scene that was removed by then has a
+`null` name. A `reconnect` event has `destination` (the destination's id), `count` (its lost
+connections in this stream so far) and `lost` (how many of them it lost since the app last looked,
+which is once per interface frame and when the stream stops). Connections lost after the stream
+was asked to stop are not listed. A `pause` or `resume` event has nothing more. Scene and
+destination names longer than 256 characters are cut to 256.
+
+With `since`, only the events with a larger `seq` are returned. `last` is the `seq` of the newest
+event (0 before the first), which a caller passes as `since` next time. `dropped` counts the events
+after `since` that the app no longer keeps. A `since` that is not a whole number of 0 or more is an
+error. A switch of the program scene while paused is listed when it happens; a scene chosen for the
+preview in studio mode is not a switch until it goes to the program. Opening another scene
+collection is not listed. The command does not change the scene collection or add an undo step.
+
 ### `dock.layout_save`, `dock.layout_apply` and `dock.layout_remove`
 
 `dock.layout_save` takes `{"name"}` and saves every dock setting under that name, replacing a
