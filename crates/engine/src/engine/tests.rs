@@ -552,6 +552,22 @@ fn pause_commands_are_handed_to_the_app_with_checked_values() {
 }
 
 #[test]
+fn session_events_are_read_by_the_app_from_a_checked_number() {
+    let mut e = engine();
+    let rev = e.revision();
+    for (params, since) in [(json!({}), None), (json!({"since": 0}), Some(0)), (json!({"since": u64::MAX}), Some(u64::MAX))] {
+        let o = run(&mut e, "session.events", params.clone()).unwrap_or_else(|err| panic!("{params}: {err}"));
+        assert_eq!(o.runtime, Some(RuntimeAction::SessionEvents { since }), "{params}");
+        assert!(!o.changed);
+    }
+    assert_eq!(e.revision(), rev, "reading the events is not a change to the collection");
+    assert!(e.undo_label().is_none(), "reading the events is not an undo step");
+    for bad in [json!({"since": -1}), json!({"since": 1.5}), json!({"since": "3"}), json!({"since": null}), json!({"snce": 3})] {
+        assert!(run(&mut e, "session.events", bad.clone()).is_err(), "{bad}");
+    }
+}
+
+#[test]
 fn caption_commands_are_handed_to_the_app() {
     let mut e = engine();
     for (id, params, action) in [

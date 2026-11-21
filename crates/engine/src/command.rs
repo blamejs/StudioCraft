@@ -128,6 +128,11 @@ pub enum RuntimeAction {
     },
     /// Whether the program is paused, and the countdown.
     PauseStatus,
+    /// The session's scene switches, stream reconnects, pauses and resumes after the event
+    /// numbered `since` (all of them when it is `None`).
+    SessionEvents {
+        since: Option<u64>,
+    },
     OpenSettings,
     Exit,
 }
@@ -419,6 +424,13 @@ pub enum Command {
     /// Whether the program is paused, since when, and the countdown.
     #[serde(rename = "pause.status")]
     PauseStatus {},
+    /// The scene switches, stream reconnects, pauses and resumes of the session, after the event
+    /// numbered `since` or all the kept ones.
+    #[serde(rename = "session.events")]
+    SessionEvents {
+        #[serde(default, deserialize_with = "given_u64", skip_serializing_if = "Option::is_none")]
+        since: Option<u64>,
+    },
     #[serde(rename = "app.settings")]
     OpenSettings {},
     #[serde(rename = "app.exit")]
@@ -464,6 +476,11 @@ fn given_string<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<String>
 /// A parameter that may be left out but, when given, is a whole number: `null` is refused.
 fn given_u32<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<u32>, D::Error> {
     u32::deserialize(d).map(Some)
+}
+
+/// A parameter that may be left out but, when given, is a whole number: `null` is refused.
+fn given_u64<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<u64>, D::Error> {
+    u64::deserialize(d).map(Some)
 }
 
 impl Command {
@@ -552,6 +569,7 @@ impl Command {
             Command::PauseToggle {} => "pause.toggle",
             Command::PauseExtend { .. } => "pause.extend",
             Command::PauseStatus {} => "pause.status",
+            Command::SessionEvents { .. } => "session.events",
             Command::OpenSettings {} => "app.settings",
             Command::Exit {} => "app.exit",
             Command::AppLinks { .. } => "app.links",
@@ -679,6 +697,7 @@ const SPECS: &[CommandSpec] = &[
     spec("pause.toggle", "Pause or Resume Program", "", Undo::NotUndoable),
     spec("pause.extend", "Add Time to the Pause", "seconds: 1..43200", Undo::NotUndoable),
     spec("pause.status", "Pause Status", "", Undo::NotUndoable),
+    spec("session.events", "Session Events", "since?: number of the last event already read", Undo::NotUndoable),
     spec("app.settings", "Settings", "", Undo::NotUndoable),
     spec("app.exit", "Exit", "", Undo::NotUndoable),
     spec("app.links", "Community Links", "link?: discord|website|github|issues", Undo::NotUndoable),
@@ -733,6 +752,8 @@ mod tests {
             Command::PauseToggle {},
             Command::PauseExtend { seconds: 60 },
             Command::PauseStatus {},
+            Command::SessionEvents { since: None },
+            Command::SessionEvents { since: Some(42) },
         ];
         for c in samples {
             let v = serde_json::to_value(&c).unwrap();

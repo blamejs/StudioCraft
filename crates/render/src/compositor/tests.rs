@@ -11,7 +11,7 @@ use studiocraft_plugin::{Animation, Easing, Plugin, Reframe, Transition, VIDEO_E
 
 use super::*;
 use crate::transitions::Fade;
-use crate::{EncodeTarget, ItemDesc, Plan, SceneDesc, TransitionDesc};
+use crate::{EncodeTarget, ItemDesc, MAX_THUMBNAILS, Plan, SceneDesc, ThumbnailRequest, TransitionDesc};
 
 /// One device for every test in this binary; tests run in parallel and opening many devices at
 /// once crashes some drivers.
@@ -758,4 +758,263 @@ fn a_lost_device_answers_captures_with_an_error_and_takes_no_new_targets() {
     assert!(c.capture(View::Program).is_err());
     assert_eq!(c.size(), (32, 16), "no canvas is made on a lost device");
     assert!(shared.captures.is_empty());
+}
+
+/// A compositor on wgpu's noop adapter, which draws nothing but keeps the bookkeeping, so the
+/// thumbnail scheduling tests run on a machine without a graphics adapter too.
+fn noop_compositor(w: u32, h: u32) -> Compositor {
+    let mut desc = wgpu::InstanceDescriptor::new_without_display_handle();
+    desc.backends = wgpu::Backends::NOOP;
+    desc.backend_options.noop = wgpu::NoopBackendOptions { enable: true, ..Default::default() };
+    let (gpu, _) = Gpu::open_on(wgpu::Instance::new(desc), &crate::device::Preference::Software).unwrap();
+    Compositor::new(gpu, w, h).unwrap()
+}
+
+fn thumbnails(scenes: Vec<SceneDesc>, fps: f32) -> Option<Arc<ThumbnailRequest>> {
+    Some(Arc::new(ThumbnailRequest { scenes, fps, ..ThumbnailRequest::default() }))
+}
+
+fn one_item_scene(id: u64, video: &Arc<VideoOut>) -> SceneDesc {
+    SceneDesc { items: vec![item(id, video, Transform::default())] }
+}
+
+/// The newest picture index of each thumbnail slot.
+fn drawn(c: &Compositor) -> Vec<Option<usize>> {
+    c.thumbnail_views().map(|v| v.slots.iter().map(Ring::latest).collect()).unwrap_or_default()
+}
+
+fn ms(n: u64) -> Tick {
+    studiocraft_media::clock::tick_of(std::time::Duration::from_millis(n))
+}
+
+#[test]
+fn thumbnails_draw_each_scene_at_the_canvas_aspect() {
+    let Some(mut c) = compositor(64, 32) else { return };
+    let (red, green) = (solid([255, 0, 0, 255], 64, 32), solid([0, 255, 0, 255], 32, 32));
+    let blue = solid([0, 0, 255, 255], 64, 32);
+    c.set_plan(Arc::new(Plan { program: one_item_scene(3, &blue), ..Plan::default() }));
+    let request = ThumbnailRequest { scenes: vec![one_item_scene(1, &red), one_item_scene(2, &green)], fps: 2.0, size: (16, 16) };
+    c.set_thumbnails(Some(Arc::new(request)));
+    c.frame(Tick(0), &AtomicU64::new(0));
+    let views = c.thumbnail_views().unwrap();
+    assert_eq!((views.width, views.height, views.slots.len()), (16, 8, 2));
+    assert_eq!(views.slots[0].views().len(), RING_LEN);
+    let first = c.read_thumbnail(0).unwrap().unwrap();
+    assert_eq!(first.len(), 16 * 8 * 4);
+    assert!(close(pixel(&first, 16, 8, 4), [255, 0, 0, 255]), "{:?}", pixel(&first, 16, 8, 4));
+    // The green item covers the left half of the canvas, so of the picture too.
+    let second = c.read_thumbnail(1).unwrap().unwrap();
+    assert!(close(pixel(&second, 16, 3, 4), [0, 255, 0, 255]), "{:?}", pixel(&second, 16, 3, 4));
+    assert!(close(pixel(&second, 16, 12, 4), [0, 0, 0, 255]), "{:?}", pixel(&second, 16, 12, 4));
+    assert_eq!(c.read_thumbnail(2).unwrap(), None);
+    // The program is drawn as without thumbnails.
+    let program = c.read_program().unwrap();
+    assert!(close(pixel(&program, 64, 32, 16), [0, 0, 255, 255]));
+}
+
+#[test]
+fn thumbnail_filters_run_and_keep_their_pictures_when_the_plan_changes() {
+    let Some(mut c) = compositor(16, 16) else { return };
+    let v = solid([0, 255, 0, 255], 16, 16);
+    let mut params = [0.0; VIDEO_EFFECT_PARAMS];
+    params[0] = 1.0;
+    let mut inverted = item(1, &v, Transform::default());
+    inverted.effects = vec![VideoEffect::new("test.invert", INVERT, params)];
+    let mut pictured = item(2, &solid([0, 255, 0, 255], 16, 16), Transform::default());
+    pictured.effects = vec![VideoEffect { image: Some(red_and_blue()), ..VideoEffect::new("test.picture", PICTURE, [0.0; VIDEO_EFFECT_PARAMS]) }];
+    let request =
+        ThumbnailRequest { scenes: vec![SceneDesc { items: vec![inverted] }, SceneDesc { items: vec![pictured] }], fps: 2.0, size: (16, 16) };
+    c.set_thumbnails(Some(Arc::new(request)));
+    // A new plan without these filters keeps the picture the thumbnails read.
+    c.set_plan(Arc::new(Plan::default()));
+    assert_eq!(c.images.len(), 1);
+    c.frame(Tick(0), &AtomicU64::new(0));
+    let px = c.read_thumbnail(0).unwrap().unwrap();
+    assert!(close(pixel(&px, 16, 8, 8), [255, 0, 255, 255]), "{:?}", pixel(&px, 16, 8, 8));
+    let px = c.read_thumbnail(1).unwrap().unwrap();
+    assert!(close(pixel(&px, 16, 2, 8), [255, 0, 0, 255]), "{:?}", pixel(&px, 16, 2, 8));
+    assert!(close(pixel(&px, 16, 13, 8), [0, 0, 255, 255]), "{:?}", pixel(&px, 16, 13, 8));
+    assert!(c.take_errors().is_empty());
+    // Without the thumbnails the picture is released.
+    c.set_thumbnails(None);
+    assert!(c.images.is_empty());
+}
+
+#[test]
+fn thumbnails_are_redrawn_at_most_at_their_rate() {
+    let mut c = noop_compositor(32, 18);
+    let v = solid([255, 0, 0, 255], 32, 18);
+    c.set_thumbnails(thumbnails(vec![one_item_scene(1, &v)], 2.0));
+    let lost = AtomicU64::new(0);
+    assert_eq!(drawn(&c), [None], "the request makes the textures, and frames draw into them");
+    c.frame(ms(1000), &lost);
+    assert_eq!(drawn(&c), [Some(0)], "the first frame draws");
+    c.frame(ms(1017), &lost);
+    c.frame(ms(1499), &lost);
+    assert_eq!(drawn(&c), [Some(0)], "not again within half a second");
+    c.frame(ms(1500), &lost);
+    assert_eq!(drawn(&c), [Some(1)]);
+    // A new request does not draw sooner than the rate allows.
+    c.set_thumbnails(thumbnails(vec![one_item_scene(1, &v)], 2.0));
+    c.frame(ms(1600), &lost);
+    assert_eq!(drawn(&c), [Some(1)]);
+    c.frame(ms(2000), &lost);
+    assert_eq!(drawn(&c), [Some(2)]);
+    // A rate above the cap is held to it.
+    c.set_thumbnails(thumbnails(vec![one_item_scene(1, &v)], 60.0));
+    c.frame(ms(2100), &lost);
+    assert_eq!(drawn(&c), [Some(2)]);
+    c.frame(ms(2250), &lost);
+    assert_eq!(drawn(&c), [Some(0)]);
+    // A clock that went back draws instead of waiting for the old time.
+    c.frame(ms(10), &lost);
+    assert_eq!(drawn(&c), [Some(1)]);
+}
+
+#[test]
+fn thumbnails_are_spread_over_frames_oldest_first() {
+    let mut c = noop_compositor(32, 18);
+    let scenes = (0..3).map(|i| one_item_scene(i, &solid([255, 0, 0, 255], 32, 18))).collect();
+    c.set_thumbnails(thumbnails(scenes, 4.0));
+    let lost = AtomicU64::new(0);
+    c.frame(ms(0), &lost);
+    assert_eq!(drawn(&c), [Some(0), Some(0), None], "two pictures a frame");
+    c.frame(ms(1), &lost);
+    assert_eq!(drawn(&c), [Some(0), Some(0), Some(0)]);
+    c.frame(ms(2), &lost);
+    assert_eq!(drawn(&c), [Some(0), Some(0), Some(0)], "nothing is due");
+    c.frame(ms(251), &lost);
+    assert_eq!(drawn(&c), [Some(1), Some(1), Some(0)], "all three are due; the slot drawn last waits");
+    // Slot 2 waited, so it is now the oldest and goes first, then the lower of the two others.
+    c.frame(ms(600), &lost);
+    assert_eq!(drawn(&c), [Some(2), Some(1), Some(1)]);
+}
+
+#[test]
+fn a_slot_whose_scene_changed_is_drawn_without_waiting_for_the_rate() {
+    let mut c = noop_compositor(32, 18);
+    let (a, b) = (solid([255, 0, 0, 255], 32, 18), solid([0, 255, 0, 255], 32, 18));
+    let lost = AtomicU64::new(0);
+    c.set_thumbnails(thumbnails(vec![one_item_scene(1, &a), one_item_scene(2, &b)], 2.0));
+    c.frame(ms(0), &lost);
+    assert_eq!(drawn(&c), [Some(0), Some(0)]);
+    // A moved item keeps its slot's rate.
+    let moved = SceneDesc { items: vec![item(1, &a, at(4.0, 4.0))] };
+    c.set_thumbnails(thumbnails(vec![moved, one_item_scene(2, &b)], 2.0));
+    c.frame(ms(100), &lost);
+    assert_eq!(drawn(&c), [Some(0), Some(0)]);
+    // Swapped scenes are drawn in their new slots at once.
+    c.set_thumbnails(thumbnails(vec![one_item_scene(2, &b), one_item_scene(1, &a)], 2.0));
+    c.frame(ms(200), &lost);
+    assert_eq!(drawn(&c), [Some(1), Some(1)]);
+    // An item added to a scene changes its slot too.
+    let two = SceneDesc { items: vec![item(2, &b, Transform::default()), item(1, &a, Transform::default())] };
+    c.set_thumbnails(thumbnails(vec![two, one_item_scene(1, &a)], 2.0));
+    c.frame(ms(300), &lost);
+    assert_eq!(drawn(&c), [Some(2), Some(1)]);
+}
+
+#[test]
+fn a_request_without_a_rate_draws_once() {
+    let mut c = noop_compositor(32, 18);
+    let v = solid([255, 0, 0, 255], 32, 18);
+    let lost = AtomicU64::new(0);
+    for fps in [0.0, -3.0, f32::NAN] {
+        c.set_thumbnails(thumbnails(vec![one_item_scene(1, &v)], fps));
+        let before = drawn(&c).first().copied().flatten();
+        c.frame(ms(5000), &lost);
+        let after = drawn(&c)[0];
+        assert_ne!(after, before, "fps {fps} draws with the next frame");
+        for t in [6000, 60_000] {
+            c.frame(ms(t), &lost);
+        }
+        assert_eq!(drawn(&c)[0], after, "fps {fps} draws only once");
+    }
+}
+
+#[test]
+fn a_removed_or_empty_request_stops_drawing() {
+    let mut c = noop_compositor(32, 18);
+    let v = solid([255, 0, 0, 255], 32, 18);
+    let lost = AtomicU64::new(0);
+    c.set_thumbnails(thumbnails(vec![], 2.0));
+    c.frame(ms(0), &lost);
+    assert!(c.thumbnail_views().is_none(), "an empty request makes no textures");
+    c.set_thumbnails(thumbnails(vec![one_item_scene(1, &v)], 4.0));
+    c.frame(ms(0), &lost);
+    assert_eq!(drawn(&c), [Some(0)]);
+    c.set_thumbnails(None);
+    for t in 1..10 {
+        c.frame(ms(t * 1000), &lost);
+    }
+    assert_eq!(drawn(&c), [Some(0)], "the textures are kept with their last picture");
+    c.set_thumbnails(thumbnails(vec![], 4.0));
+    c.frame(ms(20_000), &lost);
+    assert_eq!(drawn(&c), [Some(0)]);
+}
+
+#[test]
+fn the_thumbnail_textures_are_kept_until_the_size_or_count_outgrows_them() {
+    let mut c = noop_compositor(1920, 1080);
+    let v = solid([255, 0, 0, 255], 32, 18);
+    let lost = AtomicU64::new(0);
+    let scenes = |n: u64| (0..n).map(|i| one_item_scene(i, &v)).collect::<Vec<_>>();
+    c.set_thumbnails(thumbnails(scenes(3), 4.0));
+    c.frame(ms(0), &lost);
+    c.frame(ms(16), &lost);
+    let first = c.thumbnail_views().unwrap();
+    assert_eq!((first.width, first.height, first.slots.len()), (256, 144, 3));
+    // Fewer scenes keep the textures, and only their slots are drawn.
+    c.set_thumbnails(thumbnails(scenes(2), 4.0));
+    for t in [266, 282, 298] {
+        c.frame(ms(t), &lost);
+    }
+    assert_eq!(c.thumbnail_views().unwrap().generation, first.generation);
+    assert_eq!(drawn(&c), [Some(1), Some(1), Some(0)]);
+    // More scenes make a larger set.
+    c.set_thumbnails(thumbnails(scenes(5), 4.0));
+    c.frame(ms(500), &lost);
+    let more = c.thumbnail_views().unwrap();
+    assert_eq!((more.slots.len(), more.generation), (5, first.generation + 1));
+    // The new textures are filled over the next frames.
+    assert_eq!(drawn(&c), [Some(0), Some(0), None, None, None]);
+    c.frame(ms(516), &lost);
+    c.frame(ms(532), &lost);
+    assert_eq!(drawn(&c), [Some(0); 5]);
+    // A canvas of another shape makes pictures of its shape at once, while no slot is due, and
+    // every slot of the new textures is drawn without waiting for its rate: slots 2 and 3 were
+    // drawn 244 ms before the frame at 760 ms.
+    c.set_canvas(1080, 1920);
+    let tall = c.thumbnail_views().unwrap();
+    assert_eq!((tall.width, tall.height, tall.slots.len(), tall.generation), (81, 144, 5, more.generation + 1));
+    assert_eq!(drawn(&c), [None; 5]);
+    c.frame(ms(750), &lost);
+    assert_eq!(drawn(&c), [Some(0), Some(0), None, None, None]);
+    c.frame(ms(760), &lost);
+    assert_eq!(drawn(&c), [Some(0), Some(0), Some(0), Some(0), None]);
+}
+
+#[test]
+fn a_request_draws_sixteen_scenes_and_the_app_sees_the_rest_counted() {
+    let mut c = noop_compositor(64, 36);
+    let shared = RenderShared::default();
+    let v = solid([255, 0, 0, 255], 32, 18);
+    let scenes: Vec<_> = (0..MAX_THUMBNAILS as u64 + 2).map(|i| one_item_scene(i, &v)).collect();
+    shared.thumbnails.publish(thumbnails(scenes, 2.0));
+    c.run(&shared, ms(0));
+    assert_eq!(shared.thumbnails_skipped.load(Ordering::Relaxed), 2);
+    assert_eq!(c.thumbnails_skipped(), 2);
+    let views = shared.thumbnail_views.take().expect("new textures are published");
+    assert_eq!(views.slots.len(), MAX_THUMBNAILS);
+    // Two pictures a frame: eight frames draw all sixteen, and the kept textures are not
+    // published again.
+    for t in 1..8 {
+        assert_eq!(views.slots.iter().filter(|r| r.latest().is_some()).count(), 2 * t as usize);
+        c.run(&shared, ms(t));
+    }
+    assert!(views.slots.iter().all(|r| r.latest() == Some(0)));
+    assert!(shared.thumbnail_views.take().is_none());
+    shared.thumbnails.publish(None);
+    c.run(&shared, ms(1000));
+    assert_eq!(shared.thumbnails_skipped.load(Ordering::Relaxed), 0);
 }
