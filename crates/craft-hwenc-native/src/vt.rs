@@ -23,7 +23,7 @@ use craft_media::bitstream::length_prefixed_nals;
 use crate::mf::set_types;
 use crate::vt_ffi::{OpenError, Output, Params, Session};
 use crate::{Codec, avc, hevc};
-pub use crate::{Config, Error, Input, Packet, Rate};
+pub use crate::{Color, Config, Error, Input, Packet, Rate};
 
 impl From<OpenError> for Error {
     fn from(e: OpenError) -> Error {
@@ -44,7 +44,7 @@ pub fn driver() -> Result<(), Error> {
 /// frames per second. It opens the session and closes it again.
 pub fn available(codec: Codec) -> Result<(), Error> {
     driver()?;
-    let cfg = Config { codec, input: Input::Nv12, width: 256, height: 144, fps: (30, 1), rate: Rate::Quality(23), keyint: 60 };
+    let cfg = Config { codec, input: Input::Nv12, width: 256, height: 144, fps: (30, 1), rate: Rate::Quality(23), keyint: 60, color: Color::Bt709 };
     Session::open(&params(&cfg)).map(drop).map_err(Error::from)
 }
 
@@ -73,6 +73,9 @@ fn check(cfg: &Config) -> Result<(), Error> {
     }
     if cfg.input != Input::Nv12 {
         return bad("the VideoToolbox encoders take NV12 frames only".into());
+    }
+    if cfg.color != Color::Bt709 {
+        return bad("the VideoToolbox encoders write BT.709 only".into());
     }
     match cfg.rate {
         Rate::Quality(q) if !(1..=51).contains(&q) => bad(format!("the quality level {q} is outside 1 to 51")),
@@ -285,7 +288,7 @@ mod tests {
     use crate::vt_ffi;
 
     fn cfg(codec: Codec) -> Config {
-        Config { codec, input: Input::Nv12, width: 256, height: 144, fps: (30, 1), rate: Rate::Quality(23), keyint: 60 }
+        Config { codec, input: Input::Nv12, width: 256, height: 144, fps: (30, 1), rate: Rate::Quality(23), keyint: 60, color: Color::Bt709 }
     }
 
     /// A length-prefixed sample of the NAL units `nals`.
@@ -322,6 +325,8 @@ mod tests {
             Config { fps: (0, 1), ..ok },
             Config { fps: (i32::MAX as u32 + 1, 1), ..ok },
             Config { input: Input::P010, ..ok },
+            Config { color: Color::Hlg, ..ok },
+            Config { color: Color::Pq { mastering: None, light: None }, ..ok },
             Config { rate: Rate::Quality(0), ..ok },
             Config { rate: Rate::Quality(52), ..ok },
             Config { rate: Rate::Cbr(0), ..ok },

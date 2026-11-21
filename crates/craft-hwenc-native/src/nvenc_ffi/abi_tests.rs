@@ -189,6 +189,49 @@ fn field_offsets_match_the_header() {
 }
 
 #[test]
+fn the_hevc_picture_parameters_and_sei_payloads_match_the_header() {
+    assert_eq!((size_of::<NV_ENC_SEI_PAYLOAD>(), align_of::<NV_ENC_SEI_PAYLOAD>()), (16, 8), "NV_ENC_SEI_PAYLOAD");
+    assert_eq!((size_of::<NV_ENC_CLOCK_TIMESTAMP_SET>(), align_of::<NV_ENC_CLOCK_TIMESTAMP_SET>()), (8, 4), "NV_ENC_CLOCK_TIMESTAMP_SET");
+    assert_eq!((size_of::<NV_ENC_TIME_CODE>(), align_of::<NV_ENC_TIME_CODE>()), (28, 4), "NV_ENC_TIME_CODE");
+    assert_eq!((size_of::<NV_ENC_PIC_PARAMS_HEVC>(), align_of::<NV_ENC_PIC_PARAMS_HEVC>()), (1536, 8), "NV_ENC_PIC_PARAMS_HEVC");
+    for (offset, expected, name) in [
+        (offset_of!(NV_ENC_SEI_PAYLOAD, payloadSize), 0, "NV_ENC_SEI_PAYLOAD.payloadSize"),
+        (offset_of!(NV_ENC_SEI_PAYLOAD, payloadType), 4, "NV_ENC_SEI_PAYLOAD.payloadType"),
+        (offset_of!(NV_ENC_SEI_PAYLOAD, payload), 8, "NV_ENC_SEI_PAYLOAD.payload"),
+        (offset_of!(NV_ENC_CLOCK_TIMESTAMP_SET, bits), 0, "NV_ENC_CLOCK_TIMESTAMP_SET.bits"),
+        (offset_of!(NV_ENC_CLOCK_TIMESTAMP_SET, timeOffset), 4, "NV_ENC_CLOCK_TIMESTAMP_SET.timeOffset"),
+        (offset_of!(NV_ENC_TIME_CODE, displayPicStruct), 0, "NV_ENC_TIME_CODE.displayPicStruct"),
+        (offset_of!(NV_ENC_TIME_CODE, clockTimestamp), 4, "NV_ENC_TIME_CODE.clockTimestamp"),
+        (offset_of!(NV_ENC_PIC_PARAMS_HEVC, displayPOCSyntax), 0, "NV_ENC_PIC_PARAMS_HEVC.displayPOCSyntax"),
+        (offset_of!(NV_ENC_PIC_PARAMS_HEVC, refPicFlag), 4, "NV_ENC_PIC_PARAMS_HEVC.refPicFlag"),
+        (offset_of!(NV_ENC_PIC_PARAMS_HEVC, temporalId), 8, "NV_ENC_PIC_PARAMS_HEVC.temporalId"),
+        (offset_of!(NV_ENC_PIC_PARAMS_HEVC, forceIntraRefreshWithFrameCnt), 12, "NV_ENC_PIC_PARAMS_HEVC.forceIntraRefreshWithFrameCnt"),
+        (offset_of!(NV_ENC_PIC_PARAMS_HEVC, flags), 16, "NV_ENC_PIC_PARAMS_HEVC.flags"),
+        (offset_of!(NV_ENC_PIC_PARAMS_HEVC, sliceTypeData), 24, "NV_ENC_PIC_PARAMS_HEVC.sliceTypeData"),
+        (offset_of!(NV_ENC_PIC_PARAMS_HEVC, sliceTypeArrayCnt), 32, "NV_ENC_PIC_PARAMS_HEVC.sliceTypeArrayCnt"),
+        (offset_of!(NV_ENC_PIC_PARAMS_HEVC, sliceMode), 36, "NV_ENC_PIC_PARAMS_HEVC.sliceMode"),
+        (offset_of!(NV_ENC_PIC_PARAMS_HEVC, sliceModeData), 40, "NV_ENC_PIC_PARAMS_HEVC.sliceModeData"),
+        (offset_of!(NV_ENC_PIC_PARAMS_HEVC, ltrMarkFrameIdx), 44, "NV_ENC_PIC_PARAMS_HEVC.ltrMarkFrameIdx"),
+        (offset_of!(NV_ENC_PIC_PARAMS_HEVC, ltrUseFrameBitmap), 48, "NV_ENC_PIC_PARAMS_HEVC.ltrUseFrameBitmap"),
+        (offset_of!(NV_ENC_PIC_PARAMS_HEVC, ltrUsageMode), 52, "NV_ENC_PIC_PARAMS_HEVC.ltrUsageMode"),
+        (offset_of!(NV_ENC_PIC_PARAMS_HEVC, seiPayloadArrayCnt), 56, "NV_ENC_PIC_PARAMS_HEVC.seiPayloadArrayCnt"),
+        (offset_of!(NV_ENC_PIC_PARAMS_HEVC, reserved), 60, "NV_ENC_PIC_PARAMS_HEVC.reserved"),
+        (offset_of!(NV_ENC_PIC_PARAMS_HEVC, seiPayloadArray), 64, "NV_ENC_PIC_PARAMS_HEVC.seiPayloadArray"),
+        (offset_of!(NV_ENC_PIC_PARAMS_HEVC, timeCode), 72, "NV_ENC_PIC_PARAMS_HEVC.timeCode"),
+        (offset_of!(NV_ENC_PIC_PARAMS_HEVC, reserved2), 100, "NV_ENC_PIC_PARAMS_HEVC.reserved2"),
+        (offset_of!(NV_ENC_PIC_PARAMS_HEVC, reserved3), 1048, "NV_ENC_PIC_PARAMS_HEVC.reserved3"),
+        (offset_of!(NV_ENC_CODEC_PIC_PARAMS, hevcPicParams), 0, "NV_ENC_CODEC_PIC_PARAMS.hevcPicParams"),
+        (
+            offset_of!(NV_ENC_PIC_PARAMS, codecPicParams) + offset_of!(NV_ENC_PIC_PARAMS_HEVC, seiPayloadArray),
+            144,
+            "seiPayloadArray in NV_ENC_PIC_PARAMS",
+        ),
+    ] {
+        assert_eq!(offset, expected, "{name}");
+    }
+}
+
+#[test]
 fn constants_match_the_header() {
     for (value, expected, name) in [
         (i64::from(NVENCAPI_VERSION), 16777228, "NVENCAPI_VERSION"),
@@ -283,6 +326,29 @@ fn an_hevc_session_clears_the_preset_flags_for_parameter_sets_delimiters_and_int
         assert_eq!(flags & 1, 1, "useConstrainedIntraPred keeps the preset's value");
         assert_eq!(hevc_flags(0, ten_bit) & 1, 0, "useConstrainedIntraPred keeps the preset's value");
     }
+}
+
+#[test]
+fn the_sei_messages_go_on_every_idr_picture_and_their_descriptors_point_at_the_payloads() {
+    use super::session::{carries_sei, sei_descriptors};
+    use crate::hdr::Sei;
+    let idr: Vec<u64> = (0..10).filter(|&n| carries_sei(2, n, 4)).collect();
+    assert_eq!(idr, [0, 4, 8]);
+    assert!((0..10).all(|n| !carries_sei(0, n, 4)), "no messages, nothing to attach");
+    assert!((0..3).all(|n| carries_sei(1, n, 0)), "a zero interval is every picture, not a division by zero");
+    assert!(carries_sei(1, u64::MAX - 1, 2));
+
+    let messages = [Sei { payload_type: 137, payload: vec![1; 24] }, Sei { payload_type: 144, payload: vec![2, 3, 4, 5] }];
+    let (payloads, array) = sei_descriptors(&messages).unwrap();
+    let moved = (payloads, array);
+    assert_eq!(moved.1.len(), 2);
+    for ((d, bytes), m) in moved.1.iter().zip(moved.0.iter()).zip(&messages) {
+        assert_eq!((d.payloadType, d.payloadSize as usize), (m.payload_type, m.payload.len()));
+        assert_eq!(d.payload.cast_const(), bytes.as_ptr(), "the descriptor points at the block the session keeps");
+        assert_eq!(&**bytes, m.payload.as_slice());
+    }
+    let (p, a) = sei_descriptors(&[]).unwrap();
+    assert!(p.is_empty() && a.is_empty());
 }
 
 #[test]

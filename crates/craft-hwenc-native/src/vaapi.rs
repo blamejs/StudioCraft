@@ -26,7 +26,7 @@
 use crate::mf::set_types;
 use crate::vaapi_ffi::{self, OpenError, Params, Picture, Session};
 use crate::{Codec, annexb, avc, hevc};
-pub use crate::{Config, Error, Input, Packet, Rate};
+pub use crate::{Color, Config, Error, Input, Packet, Rate};
 
 impl From<OpenError> for Error {
     fn from(e: OpenError) -> Error {
@@ -49,7 +49,7 @@ pub fn driver() -> Result<(), Error> {
 pub fn available(codec: Codec) -> Result<(), Error> {
     driver()?;
     // Both sides are multiples of 64, the largest smallest coding block an HEVC driver reports.
-    let cfg = Config { codec, input: Input::Nv12, width: 256, height: 192, fps: (30, 1), rate: Rate::Quality(23), keyint: 60 };
+    let cfg = Config { codec, input: Input::Nv12, width: 256, height: 192, fps: (30, 1), rate: Rate::Quality(23), keyint: 60, color: Color::Bt709 };
     Session::open(&params(&cfg)).map(drop).map_err(Error::from)
 }
 
@@ -95,6 +95,9 @@ fn check(cfg: &Config) -> Result<(), Error> {
     }
     if cfg.input != Input::Nv12 {
         return bad("the VA-API encoders take NV12 frames only".into());
+    }
+    if cfg.color != Color::Bt709 {
+        return bad("the VA-API encoders write BT.709 only".into());
     }
     match cfg.rate {
         Rate::Quality(q) if !(1..=51).contains(&q) => bad(format!("the quality level {q} is outside 1 to 51")),
@@ -274,7 +277,7 @@ mod tests {
     };
 
     fn cfg(codec: Codec) -> Config {
-        Config { codec, input: Input::Nv12, width: 256, height: 144, fps: (30, 1), rate: Rate::Quality(23), keyint: 60 }
+        Config { codec, input: Input::Nv12, width: 256, height: 144, fps: (30, 1), rate: Rate::Quality(23), keyint: 60, color: Color::Bt709 }
     }
 
     fn p(codec: Codec, width: u32, height: u32, fps: (u32, u32)) -> Params {
@@ -310,6 +313,8 @@ mod tests {
             Config { fps: (30, 0), ..ok },
             Config { fps: (0, 1), ..ok },
             Config { input: Input::P010, ..ok },
+            Config { color: Color::Hlg, ..ok },
+            Config { color: Color::Pq { mastering: None, light: None }, ..ok },
             Config { rate: Rate::Quality(0), ..ok },
             Config { rate: Rate::Quality(52), ..ok },
             Config { rate: Rate::Cbr(0), ..ok },
