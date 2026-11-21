@@ -368,10 +368,16 @@ or failed with the error, so one destination's error does not hide another's sta
 Stop send to one destination or stop sending to it while the others go on. A destination added
 after the stream started is sent to from the next start, and so are changes to a server or a key.
 
-Add Destination adds one, up to 16. The first destination uses the profile's stream key; the
-others have no key of their own until one is chosen, so the profile's key is not sent to another
-service. Edit opens a destination's name, server and key source. The server field hides its text
-until Show is pressed. Save closes the details once the change is made; a change that is refused
+Add Destination adds one, up to 16, for one of seven streaming services or for a custom server.
+The first destination uses the profile's stream key; the others have no key of their own until one
+is chosen, so the profile's key is not sent to another service. A service that documents one ingest
+server for every account fills in that server. For the other services the details link to the
+service's page that shows the account's server and key. Edit opens a destination's service, name,
+server and key source. Choosing another service replaces a server that is empty or that is one of
+the services' documented servers, and keeps any other server. A service without a shared server leaves the server
+empty, and a destination saved for it without a server is turned off. The server field hides its text until Show is pressed. A row
+shows the service it streams to, and the row and the details show a service's logo only where the
+service publishes one for this use, at no less than the size its guidelines allow (`ASSETS.md`). Save closes the details once the change is made; a change that is refused
 leaves them open with what was typed. A destination whose key is held for the session has a field for that key:
 Hold keeps the typed key in memory for this session and Forget drops it. Remove deletes a
 destination; one that is sending must be stopped first. Each change is saved in the profile; a change

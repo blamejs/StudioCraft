@@ -115,8 +115,17 @@ fn collection_v4_to_v5(data: &mut Value) -> Result<(), String> {
 /// Profiles.
 pub const PROFILE: FileFormat = FileFormat {
     name: "studiocraft.profile",
-    version: 8,
-    migrations: &[profile_v1_to_v2, profile_v2_to_v3, profile_v3_to_v4, profile_v4_to_v5, profile_v5_to_v6, profile_v6_to_v7, profile_v7_to_v8],
+    version: 9,
+    migrations: &[
+        profile_v1_to_v2,
+        profile_v2_to_v3,
+        profile_v3_to_v4,
+        profile_v4_to_v5,
+        profile_v5_to_v6,
+        profile_v6_to_v7,
+        profile_v7_to_v8,
+        profile_v8_to_v9,
+    ],
 };
 
 /// Profile version 1 to 2: the recording and the stream each keep the settings of their video
@@ -220,6 +229,20 @@ fn profile_v7_to_v8(data: &mut Value) -> Result<(), String> {
     if let Value::Object(t) = tracks {
         t.entry("after_stop").or_insert_with(|| json!("nothing"));
         t.entry("editor_path").or_insert_with(|| json!(""));
+    }
+    Ok(())
+}
+
+/// Profile version 8 to 9: each stream destination names the streaming service it was set up for
+/// (`service`); an older file's destinations are servers of the user's own choosing (empty).
+fn profile_v8_to_v9(data: &mut Value) -> Result<(), String> {
+    let data = data.as_object_mut().ok_or("the profile is not an object")?;
+    if let Some(Value::Object(s)) = data.get_mut("stream")
+        && let Some(Value::Array(destinations)) = s.get_mut("destinations")
+    {
+        for d in destinations.iter_mut().filter_map(Value::as_object_mut) {
+            d.entry("service").or_insert_with(|| json!(""));
+        }
     }
     Ok(())
 }
@@ -333,6 +356,7 @@ mod tests {
         (6, include_str!("../fixtures/profile-v6.json")),
         (7, include_str!("../fixtures/profile-v7.json")),
         (8, include_str!("../fixtures/profile-v8.json")),
+        (9, include_str!("../fixtures/profile-v9.json")),
     ];
 
     fn covers_every_version(format: &FileFormat, fixtures: &[(u32, &str)]) {
@@ -568,6 +592,7 @@ mod tests {
                 enabled: true,
                 server: "rtmp://localhost/live".into(),
                 key: KeyRef::Profile,
+                service: String::new(),
             };
             assert_eq!(p.stream.destinations, vec![want], "version {v}");
             assert_eq!(p.stream.key, "test", "version {v} keeps its key");
@@ -637,6 +662,27 @@ mod tests {
         let mut twice = p.clone();
         twice.stream.destinations[1].id = "main".into();
         assert!(matches!(write_profile(&twice), Err(FormatError::Data(m)) if m.contains("used twice")));
+    }
+
+    #[test]
+    fn profiles_keep_the_service_each_destination_was_set_up_for() {
+        for (v, text) in &PROFILE_FIXTURES[..8] {
+            let p = read_profile(text).unwrap();
+            assert!(p.stream.destinations.iter().all(|d| d.service.is_empty()), "version {v}: every destination is a custom server");
+        }
+        let (_, v9) = PROFILE_FIXTURES[8];
+        let p = read_profile(v9).unwrap();
+        let services: Vec<(&str, &str)> = p.stream.destinations.iter().map(|d| (d.id.as_str(), d.service.as_str())).collect();
+        assert_eq!(services, [("main", "twitch"), ("backup", ""), ("open", "retired-service")]);
+        assert_eq!(crate::services::service(&p.stream.destinations[0].service).map(|s| s.id), Some("twitch"));
+        assert_eq!(crate::services::service(&p.stream.destinations[2].service), None, "an unknown service is kept and has no preset");
+        assert_eq!(read_profile(&write_profile(&p).unwrap()).unwrap(), p);
+        let wrong = v9.replace("\"service\": \"twitch\"", "\"service\": 3");
+        assert!(matches!(read_profile(&wrong), Err(FormatError::Data(_))), "a service that is not text refuses the file");
+        // A destination of an older file that already names a service keeps it.
+        let (_, v8) = PROFILE_FIXTURES[7];
+        let named = v8.replace("\"key\": \"profile\" }", "\"key\": \"profile\", \"service\": \"youtube\" }");
+        assert_eq!(read_profile(&named).unwrap().stream.destinations[0].service, "youtube");
     }
 
     #[test]
