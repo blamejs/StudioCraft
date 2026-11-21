@@ -593,6 +593,7 @@ menu	Transform	Transform
 	TRACKS stopped	TRACKS stopped
 	Audio tracks stopped early; the status message gives the reason	Audio tracks stopped early; the status message gives the reason
 	Record as Its Own Track	Record as Its Own Track
+	Program Loudness	Program Loudness
 	Audio Tracks Status	Audio Tracks Status
 	Repair Audio Tracks	Repair Audio Tracks
 	Test Hardware Encoders Again	Test Hardware Encoders Again

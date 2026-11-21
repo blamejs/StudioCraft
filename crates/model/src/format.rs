@@ -115,7 +115,7 @@ fn collection_v4_to_v5(data: &mut Value) -> Result<(), String> {
 /// Profiles.
 pub const PROFILE: FileFormat = FileFormat {
     name: "studiocraft.profile",
-    version: 10,
+    version: 11,
     migrations: &[
         profile_v1_to_v2,
         profile_v2_to_v3,
@@ -126,6 +126,7 @@ pub const PROFILE: FileFormat = FileFormat {
         profile_v7_to_v8,
         profile_v8_to_v9,
         profile_v9_to_v10,
+        profile_v10_to_v11,
     ],
 };
 
@@ -258,6 +259,18 @@ fn profile_v9_to_v10(data: &mut Value) -> Result<(), String> {
     Ok(())
 }
 
+/// Profile version 10 to 11: the program's loudness target (`audio.loudness_target`), −18 to
+/// −14 LUFS.
+fn profile_v10_to_v11(data: &mut Value) -> Result<(), String> {
+    let data = data.as_object_mut().ok_or("the profile is not an object")?;
+    let defaults = serde_json::to_value(crate::LoudnessTarget::default()).map_err(|e| e.to_string())?;
+    let audio = data.entry("audio").or_insert_with(|| json!({}));
+    if let Value::Object(a) = audio {
+        a.entry("loudness_target").or_insert(defaults);
+    }
+    Ok(())
+}
+
 /// Largest file accepted, in bytes.
 pub const MAX_FILE_BYTES: usize = 64 << 20;
 
@@ -328,18 +341,22 @@ pub fn read_collection(text: &str, default_scene_name: &str) -> Result<SceneColl
 }
 
 /// A profile file's text. A profile whose stream destinations break a rule of
-/// [`crate::StreamSettings::check`] is refused, as [`read_profile`] refuses its file.
+/// [`crate::StreamSettings::check`], or whose loudness target breaks a rule of
+/// [`crate::LoudnessTarget::check`], is refused, as [`read_profile`] refuses its file.
 pub fn write_profile(p: &Profile) -> Result<String, FormatError> {
     p.stream.check().map_err(FormatError::Data)?;
+    p.audio.loudness_target.check().map_err(FormatError::Data)?;
     PROFILE.write(p)
 }
 
 /// A profile from a file's text, migrated, with video, replay buffer, audio tracks and pause
 /// screen settings brought into range. A file whose stream destinations break a rule of
-/// [`crate::StreamSettings::check`] is refused.
+/// [`crate::StreamSettings::check`], or whose loudness target breaks a rule of
+/// [`crate::LoudnessTarget::check`], is refused.
 pub fn read_profile(text: &str) -> Result<Profile, FormatError> {
     let mut p: Profile = PROFILE.read(text)?;
     p.stream.check().map_err(FormatError::Data)?;
+    p.audio.loudness_target.check().map_err(FormatError::Data)?;
     p.video = p.video.sanitized();
     p.replay = p.replay.sanitized();
     p.audio_tracks = p.audio_tracks.sanitized();
@@ -370,6 +387,7 @@ mod tests {
         (8, include_str!("../fixtures/profile-v8.json")),
         (9, include_str!("../fixtures/profile-v9.json")),
         (10, include_str!("../fixtures/profile-v10.json")),
+        (11, include_str!("../fixtures/profile-v11.json")),
     ];
 
     fn covers_every_version(format: &FileFormat, fixtures: &[(u32, &str)]) {
@@ -589,6 +607,47 @@ mod tests {
         let no_time = v10.replace("Starting again in {time}", "Starting again");
         assert_eq!(read_profile(&no_time).unwrap().pause.text, "Back in {time}", "a text without {{time}} reads as the default");
         assert!(matches!(read_profile(&v10.replace("\"resume\"", "\"restart\"")), Err(FormatError::Data(_))), "an unknown value refuses the file");
+    }
+
+    #[test]
+    fn profiles_keep_the_loudness_target() {
+        use crate::LoudnessTarget;
+        for (v, text) in &PROFILE_FIXTURES[..10] {
+            assert_eq!(read_profile(text).unwrap().audio.loudness_target, LoudnessTarget::default(), "version {v} gets the default");
+        }
+        assert_eq!(LoudnessTarget::default(), LoudnessTarget { low_lufs: -18.0, high_lufs: -14.0 });
+        let (_, v11) = PROFILE_FIXTURES[10];
+        let p = read_profile(v11).unwrap();
+        assert_eq!(p.audio.loudness_target, LoudnessTarget { low_lufs: -24.5, high_lufs: -22.0 });
+        assert_eq!(p.audio.monitoring_device, "Headphones (USB)", "the rest of the audio settings is kept");
+        assert_eq!(read_profile(&write_profile(&p).unwrap()).unwrap(), p);
+        let omitted = v11.replace(", \"loudness_target\": { \"low_lufs\": -24.5, \"high_lufs\": -22 }", "");
+        assert_eq!(read_profile(&omitted).unwrap().audio.loudness_target, LoudnessTarget::default(), "an omitted target is the default");
+        let edges = v11.replace("-24.5", "-60").replace("\"high_lufs\": -22", "\"high_lufs\": 0");
+        assert_eq!(read_profile(&edges).unwrap().audio.loudness_target, LoudnessTarget { low_lufs: -60.0, high_lufs: 0.0 }, "the range's ends");
+        let bad = [
+            ("-24.5", "-60.5"),
+            ("\"high_lufs\": -22", "\"high_lufs\": 0.5"),
+            ("-24.5", "-22"),
+            ("-24.5", "-20"),
+            ("-24.5", "\"loud\""),
+            ("-24.5", "null"),
+            ("-24.5", "1e999"),
+        ];
+        for (from, to) in bad {
+            assert!(read_profile(&v11.replace(from, to)).is_err(), "{to} refuses the file");
+        }
+        for target in [
+            LoudnessTarget { low_lufs: -14.0, high_lufs: -18.0 },
+            LoudnessTarget { low_lufs: -16.0, high_lufs: -16.0 },
+            LoudnessTarget { low_lufs: f64::NAN, high_lufs: -14.0 },
+            LoudnessTarget { low_lufs: -18.0, high_lufs: f64::INFINITY },
+            LoudnessTarget { low_lufs: -61.0, high_lufs: -14.0 },
+        ] {
+            let mut wrong = p.clone();
+            wrong.audio.loudness_target = target;
+            assert!(matches!(write_profile(&wrong), Err(FormatError::Data(m)) if m.contains("loudness target")), "{target:?} is not written");
+        }
     }
 
     #[test]

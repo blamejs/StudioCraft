@@ -1198,6 +1198,71 @@ mod monitoring {
 }
 
 #[test]
+fn loudness_readings_are_numbers_or_null_with_the_target() {
+    use studiocraft_engine::mixer::LoudnessReading;
+    use studiocraft_model::LoudnessTarget;
+    let target = LoudnessTarget::default();
+    let silent = LoudnessReading {
+        momentary_lufs: f64::NEG_INFINITY,
+        short_term_lufs: f64::NEG_INFINITY,
+        integrated_lufs: f64::NEG_INFINITY,
+        range_lu: 0.0,
+        true_peak_dbtp: f64::NEG_INFINITY,
+        generation: 0,
+    };
+    assert_eq!(
+        loudness_json(&silent, &target),
+        json!({
+            "momentary_lufs": null, "short_term_lufs": null, "integrated_lufs": null, "range_lu": 0.0, "true_peak_dbtp": null,
+            "generation": 0, "target": {"low_lufs": -18.0, "high_lufs": -14.0},
+        })
+    );
+    let playing = LoudnessReading {
+        momentary_lufs: -15.5,
+        short_term_lufs: -16.25,
+        integrated_lufs: -17.0,
+        range_lu: 4.5,
+        true_peak_dbtp: -1.5,
+        generation: 940,
+    };
+    let v = loudness_json(&playing, &LoudnessTarget { low_lufs: -24.0, high_lufs: -22.0 });
+    assert_eq!(
+        v,
+        json!({
+            "momentary_lufs": -15.5, "short_term_lufs": -16.25, "integrated_lufs": -17.0, "range_lu": 4.5, "true_peak_dbtp": -1.5,
+            "generation": 940, "target": {"low_lufs": -24.0, "high_lufs": -22.0},
+        })
+    );
+    let nan = LoudnessReading { momentary_lufs: f64::NAN, true_peak_dbtp: f64::INFINITY, ..playing };
+    let v = loudness_json(&nan, &target);
+    assert_eq!((v["momentary_lufs"].clone(), v["true_peak_dbtp"].clone()), (json!(null), json!(null)), "only numbers JSON can hold");
+}
+
+#[test]
+fn audio_loudness_reports_the_mix_and_the_profile_target() {
+    let mut s = headless();
+    let (v, ui) = s.run("audio.loudness", &json!({})).unwrap();
+    assert!(ui.is_none());
+    assert_eq!(v["target"], json!({"low_lufs": -18.0, "high_lufs": -14.0}), "the default band: {v}");
+    for key in ["momentary_lufs", "short_term_lufs", "integrated_lufs", "range_lu", "true_peak_dbtp", "generation"] {
+        assert!(v.get(key).is_some(), "{key} in {v}");
+    }
+    let mut p = s.profile().clone();
+    p.audio.loudness_target = studiocraft_model::LoudnessTarget { low_lufs: -24.0, high_lufs: -22.0 };
+    s.set_profile(p.clone()).unwrap();
+    let (v, _) = s.run("audio.loudness", &json!({})).unwrap();
+    assert_eq!(v["target"], json!({"low_lufs": -24.0, "high_lufs": -22.0}), "the profile in use");
+    for (low_lufs, high_lufs) in [(-14.0, -18.0), (-70.0, -14.0), (f64::NAN, -14.0)] {
+        let mut wrong = p.clone();
+        wrong.audio.loudness_target = studiocraft_model::LoudnessTarget { low_lufs, high_lufs };
+        let e = s.set_profile(wrong).unwrap_err().to_string();
+        assert!(e.contains("loudness target"), "{e}");
+    }
+    assert_eq!(s.profile().audio.loudness_target, p.audio.loudness_target, "a refused band leaves the profile as it was");
+    assert!(s.run("audio.loudness", &json!({"reset": true})).is_err(), "an unknown parameter is an error");
+}
+
+#[test]
 fn collections_are_saved_to_and_opened_from_a_path() {
     let dir = std::env::temp_dir().join(format!("studiocraft-collection-file-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);

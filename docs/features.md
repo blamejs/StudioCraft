@@ -169,7 +169,9 @@ sound on Windows and Linux only.
 
 The Audio Mixer dock shows peak and RMS meters with peak hold, a volume fader in dB, and a mute
 button for every audible source. The mixer also measures the final mix's loudness (momentary,
-short-term, integrated, loudness range and true peak). The window does not show these readings
+short-term, integrated, loudness range and true peak). Each profile keeps a loudness target band,
+−18 to −14 LUFS by default (StudioCraft's own value). The `audio.loudness` command and the MCP
+tool `audio_loudness` report the readings with the band. The window does not show these readings
 yet.
 
 A source's Properties window sets two more audio options:
