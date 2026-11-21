@@ -4,7 +4,7 @@
 
 use std::collections::BTreeMap;
 
-use craft_keymap::{Binding, CommandRef, Keymap, Overrides};
+use craft_keymap::{Binding, CommandRef, Keymap, MAX_BINDING_TEXT, Overrides};
 use egui::{RichText, Ui};
 use studiocraft_audio_tracks::space::TRACK_BYTES_PER_SECOND;
 use studiocraft_model::profile::DEFAULT_AUDIO_DEVICE;
@@ -115,6 +115,64 @@ const AUDIO_KBPS: [u32; 7] = [64, 96, 128, 160, 192, 256, 320];
 fn bindings_text(keymap: &Keymap, cmd: &CommandRef) -> String {
     let home = craft_keymap::Scope::app();
     keymap.bindings(cmd).iter().map(|b| b.text(&home)).collect::<Vec<_>>().join(", ")
+}
+
+/// The shortcuts in a Hotkeys field, trimmed, without empty entries. Commas separate shortcuts,
+/// and a comma can also be the key of one (`Ctrl+,`, `, ,`). Of the ways to split the text at
+/// commas, the one with the fewest entries that do not read as a shortcut wins, then the one with
+/// the fewest empty entries, then the one with the least text in entries that do not read as a
+/// shortcut, then the one that keeps the fewest commas inside entries (`F2, A: Ctrl+K` is `F2` and
+/// `A: Ctrl+K`, so a scope name with a comma cannot be typed here). An entry longer than
+/// [`MAX_BINDING_TEXT`] bytes does not read as a shortcut, so the work grows with the length of
+/// the text.
+pub(crate) fn split_bindings(text: &str) -> Vec<&str> {
+    // Cut points: the start, after each comma, and the end. Piece `a..b` runs from just after cut
+    // `a` to just before cut `b`.
+    let commas: Vec<usize> = text.match_indices(',').map(|(i, _)| i).collect();
+    let from = |a: usize| if a == 0 { 0 } else { commas.get(a - 1).map_or(text.len(), |&i| i + 1) };
+    let to = |b: usize| commas.get(b - 1).copied().unwrap_or(text.len());
+    let cuts = commas.len() + 2;
+    // For each cut, the best (entries that do not parse, empty entries, bytes in entries that do
+    // not parse, commas inside entries) up to it, and the cut before.
+    type Cost = (usize, usize, usize, usize);
+    let mut best: Vec<(Cost, usize)> = vec![((0, 0, 0, 0), 0); cuts];
+    for b in 1..cuts {
+        let mut pick: Option<(Cost, usize)> = None;
+        for a in (0..b).rev() {
+            // Moving `a` back only adds text in front, so the trimmed piece never gets shorter.
+            let trimmed = text.get(from(a)..to(b)).unwrap_or_default().trim();
+            if a + 1 < b && trimmed.len() > MAX_BINDING_TEXT {
+                break;
+            }
+            let (bad, empty, bad_bytes, kept) = best.get(a).map_or((0, 0, 0, 0), |c| c.0);
+            let kept = kept + (b - a - 1);
+            let cost = if trimmed.is_empty() {
+                (bad, empty + 1, bad_bytes, kept)
+            } else if Binding::parse(trimmed).is_ok() {
+                (bad, empty, bad_bytes, kept)
+            } else {
+                (bad + 1, empty, bad_bytes.saturating_add(trimmed.len()), kept)
+            };
+            if pick.is_none_or(|(c, _)| cost < c) {
+                pick = Some((cost, a));
+            }
+        }
+        if let (Some(p), Some(slot)) = (pick, best.get_mut(b)) {
+            *slot = p;
+        }
+    }
+    let mut out = Vec::new();
+    let mut b = cuts - 1;
+    while b > 0 {
+        let a = best.get(b).map_or(0, |c| c.1);
+        let trimmed = text.get(from(a)..to(b)).unwrap_or_default().trim();
+        if !trimmed.is_empty() {
+            out.push(trimmed);
+        }
+        b = a;
+    }
+    out.reverse();
+    out
 }
 
 fn probe(path: &str) -> (Vec<String>, Result<String, String>) {
@@ -257,7 +315,7 @@ impl SettingsWindow {
         let mut ok = true;
         for h in &mut self.hotkeys {
             h.error = None;
-            let texts: Vec<String> = h.text.split(',').map(str::trim).filter(|t| !t.is_empty()).map(String::from).collect();
+            let texts: Vec<String> = split_bindings(&h.text).into_iter().map(String::from).collect();
             for t in &texts {
                 if let Err(e) = Binding::parse(t) {
                     h.error = Some(craft_i18n::fmt(tl!("`{shortcut}`: {error}"), &[("shortcut", t), ("error", &e.to_string())]));
@@ -928,5 +986,53 @@ mod tests {
         undo.text = "not a key+".into();
         assert!(w.overrides(&km).is_none());
         assert!(w.hotkeys.iter().any(|h| h.error.is_some()));
+    }
+
+    #[test]
+    fn a_shortcut_with_the_comma_key_saves_and_opens_again() {
+        let km = crate::commands::keymap(Overrides::new());
+        let mut w = SettingsWindow::new(&Profile::default(), &km, Tab::Hotkeys, i18n::AUTO, true);
+        let settings = w.hotkeys.iter_mut().find(|h| h.command.id == "app.settings").unwrap();
+        settings.text = "Cmd+,, F2".into();
+        let o = w.overrides(&km).unwrap();
+        assert_eq!(o.get(&CommandRef::new("app.settings").key()), Some(&["Cmd+,".to_string(), "F2".to_string()][..]));
+        assert!(w.hotkeys.iter().all(|h| h.error.is_none()));
+
+        let km2 = crate::commands::keymap(o);
+        assert_eq!(km2.bindings(&CommandRef::new("app.settings")).len(), 2);
+        let mut again = SettingsWindow::new(&Profile::default(), &km2, Tab::Hotkeys, i18n::AUTO, true);
+        let saved = again.overrides(&km2).expect("the saved text reads back and does not block a save");
+        assert_eq!(saved.get(&CommandRef::new("app.settings").key()), Some(&["Cmd+,".to_string(), "F2".to_string()][..]));
+        assert!(again.hotkeys.iter().all(|h| h.error.is_none()));
+    }
+
+    #[test]
+    fn hotkey_fields_split_at_commas_that_are_not_keys() {
+        assert_eq!(split_bindings("Ctrl+1, Shift+F5"), ["Ctrl+1", "Shift+F5"]);
+        assert_eq!(split_bindings("Ctrl+1 , Shift+F5,"), ["Ctrl+1", "Shift+F5"]);
+        assert_eq!(split_bindings("Ctrl+,"), ["Ctrl+,"]);
+        assert_eq!(split_bindings("Ctrl+,, Ctrl+K"), ["Ctrl+,", "Ctrl+K"]);
+        assert_eq!(split_bindings("Ctrl+K, Ctrl+Shift+,"), ["Ctrl+K", "Ctrl+Shift+,"]);
+        assert_eq!(split_bindings("⌘,, ⇧⌘,"), ["⌘,", "⇧⌘,"]);
+        assert_eq!(split_bindings(","), [","]);
+        assert_eq!(split_bindings(", ,, A"), [", ,", "A"]);
+        assert_eq!(split_bindings("Ctrl+, Ctrl+,"), ["Ctrl+, Ctrl+,"]);
+        assert_eq!(split_bindings("Cmd++, F2"), ["Cmd++", "F2"]);
+        assert_eq!(split_bindings("Ctrl+, , F2"), ["Ctrl+,", "F2"]);
+        assert_eq!(split_bindings("Ctrl+1,, F2"), ["Ctrl+1", "F2"]);
+        assert_eq!(split_bindings("Ctrl+1, not a key+"), ["Ctrl+1", "not a key+"]);
+        assert_eq!(split_bindings("F2, A: Ctrl+K"), ["F2", "A: Ctrl+K"]);
+        assert_eq!(split_bindings("A, B"), ["A", "B"]);
+        let spaced = format!("Ctrl+,{}, F2", " ".repeat(200));
+        assert_eq!(split_bindings(&spaced), ["Ctrl+,", "F2"]);
+        assert!(split_bindings("").is_empty());
+        assert!(split_bindings("  ").is_empty());
+        for t in ["Ctrl+,", ",", ", ,", "Ctrl+, Ctrl+,", "⇧⌘,", "Cmd++", "F2, A: Ctrl+K"] {
+            assert!(Binding::parse(t).is_ok(), "{t}");
+        }
+        assert_eq!(split_bindings(&"+,".repeat(2_000)).len(), 2_000);
+        assert!(split_bindings(&",".repeat(4_000)).iter().all(|t| *t == ","));
+        let long = "x".repeat(1_000_000);
+        assert_eq!(split_bindings(&long), [long.as_str()]);
     }
 }
