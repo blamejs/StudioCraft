@@ -84,6 +84,8 @@ pub struct SettingsWindow {
     pub gpu_notices: Vec<Msg>,
     /// The sources set to record their own track, for the audio tracks size estimate.
     pub track_sources: usize,
+    /// The Pause screen section's first field takes the keyboard focus on the next frame.
+    focus_pause: bool,
 }
 
 /// The settings OK or Apply puts in force.
@@ -378,7 +380,27 @@ impl SettingsWindow {
             drawing_with: None,
             gpu_notices: Vec::new(),
             track_sources: 0,
+            focus_pause: false,
         }
+    }
+
+    /// The tab shown.
+    #[cfg(test)]
+    pub fn tab(&self) -> Tab {
+        self.tab
+    }
+
+    /// Show the Stream tab and move the keyboard focus to the Pause screen section's first field
+    /// on the next frame.
+    pub fn show_pause_screen(&mut self) {
+        self.tab = Tab::Stream;
+        self.focus_pause = true;
+    }
+
+    /// Whether the Pause screen section still waits for the focus.
+    #[cfg(test)]
+    pub fn pause_focus_pending(&self) -> bool {
+        self.focus_pause
     }
 
     /// Set a path chosen in a dialog.
@@ -525,10 +547,15 @@ impl SettingsWindow {
         ui.label(RichText::new(tl!("Pause screen")).strong());
         ui.add_space(4.0);
         let p = &mut self.draft.pause;
+        let focus = &mut self.focus_pause;
         egui::Grid::new("pause-grid").num_columns(2).spacing([12.0, 8.0]).show(ui, |ui| {
             ui.label(tl!("Picture or video"));
             ui.horizontal(|ui| {
-                ui.add(egui::TextEdit::singleline(&mut p.media).hint_text(tl!("None")).desired_width(240.0));
+                let r = ui.add(egui::TextEdit::singleline(&mut p.media).hint_text(tl!("None")).desired_width(240.0));
+                if std::mem::take(focus) {
+                    r.request_focus();
+                    r.scroll_to_me(Some(egui::Align::Center));
+                }
                 if ui.button(tl!("Browse…")).clicked() {
                     out.pick = Some(Pick::PauseMedia);
                 }
@@ -909,9 +936,14 @@ impl SettingsWindow {
             match self.tab {
                 Tab::General => self.general(ui),
                 Tab::Stream => {
-                    self.stream(ui, registry);
-                    ui.add_space(12.0);
-                    self.pause_screen(ui, &mut out);
+                    // The tab scrolls when the window is shorter than its fields, and Pause Screen
+                    // Settings… scrolls it to the Pause screen section.
+                    let height = (ctx.content_rect().height() - 160.0).max(200.0);
+                    egui::ScrollArea::vertical().id_salt("stream-tab").max_height(height).show(ui, |ui| {
+                        self.stream(ui, registry);
+                        ui.add_space(12.0);
+                        self.pause_screen(ui, &mut out);
+                    });
                 }
                 Tab::Output => self.output(ui, registry, &mut out),
                 Tab::Audio => self.audio(ui),

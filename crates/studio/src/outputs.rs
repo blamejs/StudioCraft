@@ -24,8 +24,8 @@ use studiocraft_outputs::encoders::HARDWARE;
 use studiocraft_outputs::replay::MAX_SAVES;
 use studiocraft_platform::ffmpeg;
 use studiocraft_plugin::{
-    Availability, DestinationState, Encoder, EncoderEnv, EncoderKind, OutputInstance, OutputJob, OutputStatus, PluginError, RateControl, VideoFormat,
-    VideoParams,
+    Availability, DestinationState, DestinationStatus, Encoder, EncoderEnv, EncoderKind, OutputInstance, OutputJob, OutputStatus, PluginError,
+    RateControl, VideoFormat, VideoParams,
 };
 
 use crate::{Notice, Studio, StudioError};
@@ -259,11 +259,21 @@ pub(crate) struct Outputs {
     held_keys: HashMap<String, String>,
     /// Where the key of each destination of the last stream started comes from, by id.
     stream_keys: HashMap<String, KeyRef>,
+    /// The fingerprint of each destination's server and key when the last stream started, by id,
+    /// for the go-live check.
+    stream_prints: HashMap<String, u64>,
+    /// Each destination's server when the last stream started, by id.
+    stream_servers: HashMap<String, String>,
     /// The name of the profile the last stream started with; `None` once that profile is removed.
     stream_profile: Option<String>,
     /// The last [`MAX_UNFINISHED`] outputs, by kind and target, that stopped without finishing
     /// their file or stream cleanly, oldest first.
     unfinished: Vec<(OutputKind, String)>,
+    /// The running stream's destinations' reconnect counts as last seen.
+    reconnects: crate::events::ReconnectWatch,
+    /// Reconnect events seen, each with its stream's start on the studio clock, for
+    /// [`Outputs::reconnects_now`]; filled as a stream stops too.
+    lost_connections: Vec<(crate::events::Kind, Tick)>,
 }
 
 /// Unfinished outputs [`Outputs`] keeps for [`Outputs::take_unfinished`].
@@ -334,6 +344,48 @@ impl Outputs {
         self.active.values().map(|a| Arc::clone(&a.stats)).collect()
     }
 
+    /// The stream keys held for this session, by name.
+    pub(crate) fn held_keys(&self) -> &HashMap<String, String> {
+        &self.held_keys
+    }
+
+    /// The fingerprint of each destination of the running or last stream, by id.
+    pub(crate) fn stream_prints(&self) -> &HashMap<String, u64> {
+        &self.stream_prints
+    }
+
+    /// The running stream's status; `None` while no stream runs.
+    pub(crate) fn stream_status(&self) -> Option<OutputStatus> {
+        self.active.get(&OutputKind::Streaming).map(|a| a.instance.status())
+    }
+
+    /// The destinations of the running stream when it was started with the profile `profile`.
+    pub(crate) fn stream_destinations_of(&self, profile: &str) -> Option<Vec<DestinationState>> {
+        let a = self.active.get(&OutputKind::Streaming)?;
+        (self.stream_profile.as_deref() == Some(profile)).then(|| a.instance.destinations())
+    }
+
+    /// A reconnect event for each destination of the running stream, or of a stream stopped since
+    /// the last call, that lost its connection since the last call, with that stream's start on
+    /// the studio clock. Reads one counter per destination, and their states only when the
+    /// counters moved.
+    pub(crate) fn reconnects_now(&mut self) -> Vec<(crate::events::Kind, Tick)> {
+        self.watch_reconnects();
+        std::mem::take(&mut self.lost_connections)
+    }
+
+    /// Add the running stream's destinations that lost their connection since the last look to
+    /// [`Outputs::lost_connections`].
+    fn watch_reconnects(&mut self) {
+        let Some(stream) = self.active.get(&OutputKind::Streaming) else {
+            // Forgets the counts of a stream that ended.
+            self.reconnects.observe(None, 0, Vec::new);
+            return;
+        };
+        let seen = self.reconnects.observe(Some(stream.id), stream.instance.reconnects(), || stream.instance.destinations());
+        self.lost_connections.extend(seen.into_iter().map(|kind| (kind, stream.start)));
+    }
+
     /// The studio clock's time of the first frame and sample of `kind`, while it runs.
     pub(crate) fn start_of(&self, kind: OutputKind) -> Option<Tick> {
         self.active.get(&kind).map(|a| a.start)
@@ -381,6 +433,10 @@ impl Outputs {
     /// Stop `kind` on a thread of its own (finishing a file can take seconds); the id of its
     /// audio queue.
     fn stop(&mut self, kind: OutputKind, failed: bool) -> Option<u64> {
+        if kind == OutputKind::Streaming {
+            // The last lost connections of a stream are seen before it goes.
+            self.watch_reconnects();
+        }
         let a = self.active.remove(&kind)?;
         let target = if kind == OutputKind::Streaming { a.instance.target() } else { a.target.clone() };
         // The instance stays reachable here, so it can be stopped on this thread when no thread
@@ -769,6 +825,21 @@ fn check_encoder(encoder: &dyn Encoder, offered: &[String], kind: OutputKind) ->
     }
 }
 
+/// The stream's video encoder in profile `p`: its name and whether it can run, or why the stream
+/// cannot start with it. A stream runs no ffmpeg, so the check needs no encoder list.
+pub(crate) fn stream_encoder(registry: &studiocraft_plugin::Registry, p: &Profile) -> Result<(String, Availability), StudioError> {
+    let encoder = registry.encoder(&p.stream.video_encoder)?;
+    // The stream output's own check (`studiocraft_outputs::stream`): RTMP carries H.264 only.
+    if encoder.kind() == EncoderKind::Video && !encoder.streams() {
+        return Err(StudioError::Output(format!(
+            "streams need an H.264 encoder, and {} is not one; choose another encoder in Settings › Stream",
+            encoder.name()
+        )));
+    }
+    check_encoder(encoder.as_ref(), &[], OutputKind::Streaming)?;
+    Ok((encoder.name().to_string(), encoder.availability(&encoder_env(&[]))))
+}
+
 /// Whether an output's failure `error` came from the hardware encoder `candidate`: ffmpeg names the
 /// encoder in its messages, or the error is one a missing device gives. A full session is not the
 /// encoder's fault: it can have a free session at the next start.
@@ -1082,7 +1153,6 @@ impl Studio {
     pub fn stream_destinations(&self) -> Vec<DestinationState> {
         self.outputs.active.get(&OutputKind::Streaming).map(|a| a.instance.destinations()).unwrap_or_default()
     }
-
     /// Start (`on`) or stop sending to the destination `id` of the running stream; the other
     /// destinations go on.
     pub fn set_stream_destination(&mut self, id: &str, on: bool) -> Result<(), StudioError> {
@@ -1101,7 +1171,20 @@ impl Studio {
             },
             _ => None,
         };
-        Ok(a.instance.start_destination(id, key)?)
+        // A destination that is sending or trying to keeps the key it has.
+        let idle =
+            a.instance.destinations().iter().any(|d| d.id == id && matches!(d.status, DestinationStatus::Stopped | DestinationStatus::Failed(_)));
+        a.instance.start_destination(id, key)?;
+        // A destination started again with a held key gets the fingerprint of that key, with the
+        // server it had when the stream started.
+        if idle
+            && let Some(key) = key
+            && let Some(server) = self.outputs.stream_servers.get(id)
+        {
+            let print = crate::golive::print(server, key);
+            self.outputs.stream_prints.insert(id.to_string(), print);
+        }
+        Ok(())
     }
 
     pub(crate) fn toggle_output(&mut self, kind: OutputKind) -> Result<(), StudioError> {
@@ -1247,9 +1330,17 @@ impl Studio {
             t.cancel.cancel();
             self.outputs.canceled.push(t.handle);
         }
+        if kind == OutputKind::Streaming {
+            // The go-live check keeps how each destination did on this stream.
+            self.record_destinations();
+        }
         if let Some(id) = self.outputs.stop(kind, false) {
             self.mixer.send(MixerCmd::RemoveOutput { id });
             self.update_encode_target();
+        }
+        if kind == OutputKind::Streaming {
+            // Lists the connections the stream lost since the last frame.
+            self.note_reconnects();
         }
     }
 
@@ -1267,6 +1358,8 @@ impl Studio {
         if kind == OutputKind::Streaming {
             planned.settings = stream_settings(&self.profile, &self.outputs.held_keys)?;
             self.outputs.stream_keys = self.profile.stream.destinations.iter().map(|d| (d.id.clone(), d.key.clone())).collect();
+            self.outputs.stream_prints = crate::golive::prints(&self.profile, &self.outputs.held_keys);
+            self.outputs.stream_servers = self.profile.stream.destinations.iter().map(|d| (d.id.clone(), d.server.clone())).collect();
             self.outputs.stream_profile = Some(self.profile.name.clone());
         }
         let registry = Arc::clone(self.engine.registry());
@@ -1912,6 +2005,81 @@ mod tests {
         assert_eq!(prober.program(), program);
         assert!(matches!(o.probes.get(&prober, mf, Input::Nv12), Some(craft_hwenc::Outcome::Failed(_))));
         assert!(o.active.is_empty());
+    }
+
+    /// A stream with one destination whose lost connections and failure the test sets.
+    struct LosingStream {
+        reconnects: Arc<std::sync::atomic::AtomicU32>,
+        failed: Arc<AtomicBool>,
+    }
+
+    impl OutputInstance for LosingStream {
+        fn video(&self) -> Arc<Fifo<Arc<PooledFrame>>> {
+            Arc::new(Fifo::new(1))
+        }
+        fn audio(&self) -> Arc<Fifo<PooledBlock>> {
+            Arc::new(Fifo::new(1))
+        }
+        fn status(&self) -> OutputStatus {
+            if self.failed.load(Ordering::SeqCst) { OutputStatus::Failed("every destination failed".into()) } else { OutputStatus::Running }
+        }
+        fn target(&self) -> String {
+            String::new()
+        }
+        fn stop(&mut self) -> Result<(), PluginError> {
+            Ok(())
+        }
+        fn destinations(&self) -> Vec<studiocraft_plugin::DestinationState> {
+            vec![studiocraft_plugin::DestinationState {
+                id: "main".into(),
+                target: String::new(),
+                status: studiocraft_plugin::DestinationStatus::Live,
+                bytes: 0,
+                dropped: 0,
+                reconnects: self.reconnects.load(Ordering::SeqCst),
+            }]
+        }
+        fn reconnects(&self) -> u64 {
+            u64::from(self.reconnects.load(Ordering::SeqCst))
+        }
+    }
+
+    #[test]
+    fn lost_connections_are_seen_while_a_stream_runs_and_as_it_stops_or_fails() {
+        let mut o = Outputs::default();
+        let start = |o: &mut Outputs, id: u64| {
+            let (reconnects, failed) = (Arc::new(std::sync::atomic::AtomicU32::new(0)), Arc::new(AtomicBool::new(false)));
+            let instance = Box::new(LosingStream { reconnects: Arc::clone(&reconnects), failed: Arc::clone(&failed) });
+            let active = Active {
+                id,
+                instance,
+                stats: Arc::new(EncoderStats::default()),
+                started: Instant::now(),
+                start: Tick(i64::try_from(id).unwrap_or(0) * 100),
+                target: String::new(),
+                hardware: None,
+            };
+            o.active.insert(OutputKind::Streaming, active);
+            (reconnects, failed)
+        };
+        let r = |count, lost, start| (crate::events::Kind::Reconnect { destination: "main".into(), count, lost }, Tick(start));
+        let (lost, _) = start(&mut o, 1);
+        assert!(o.reconnects_now().is_empty());
+        lost.store(1, Ordering::SeqCst);
+        assert_eq!(o.reconnects_now(), [r(1, 1, 100)]);
+        assert!(o.reconnects_now().is_empty(), "each lost connection is seen once");
+        // Lost after the last look and before the stop; the event keeps the stream's start.
+        lost.store(2, Ordering::SeqCst);
+        assert!(o.stop(OutputKind::Streaming, false).is_some());
+        assert_eq!(o.reconnects_now(), [r(2, 1, 100)]);
+        // A new stream counts from 0; it loses its connection and fails before the next look.
+        let (lost, failed) = start(&mut o, 2);
+        lost.store(1, Ordering::SeqCst);
+        failed.store(true, Ordering::SeqCst);
+        let _ = o.poll();
+        assert!(o.active.is_empty(), "the failed stream was stopped");
+        assert_eq!(o.reconnects_now(), [r(1, 1, 200)]);
+        assert!(o.reconnects_now().is_empty());
     }
 
     #[test]

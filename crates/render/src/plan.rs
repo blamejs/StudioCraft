@@ -98,11 +98,14 @@ pub struct ThumbnailRequest {
     pub fps: f32,
     /// The box each picture fits in, in pixels. The picture keeps the canvas's aspect ratio.
     pub size: (u32, u32),
+    /// What each scene is, in slot order, such as its scene id: a slot whose key changes is
+    /// drawn again soon, as one that shows other sources is. Slots past the end have no key.
+    pub keys: Vec<u64>,
 }
 
 impl Default for ThumbnailRequest {
     fn default() -> Self {
-        Self { scenes: Vec::new(), fps: 2.0, size: (256, 144) }
+        Self { scenes: Vec::new(), fps: 2.0, size: (256, 144), keys: Vec::new() }
     }
 }
 

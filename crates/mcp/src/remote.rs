@@ -59,6 +59,7 @@ fn is_read_only(method: &str, params: &Value) -> bool {
                         | "app_audio.status"
                         | "app_audio.lanes"
                         | "video.displays"
+                        | "recordings.list"
                 )
             )
         }
@@ -240,6 +241,7 @@ mod tests {
         assert!(!is_read_only("run", &json!({"command": "app_audio.route"})), "routing changes the collection");
         assert!(is_read_only("engine.execute", &json!({"command": "video.displays"})));
         assert!(!is_read_only("engine.execute", &json!({"command": "video.canvas_from_display"})));
+        assert!(is_read_only("run", &json!({"command": "recordings.list"})));
         assert!(!is_read_only("engine.execute", &json!({"command": "scene.add"})));
         assert!(!is_read_only("ui.click", &json!({})));
     }

@@ -76,6 +76,178 @@ fn a_cut_switches_at_once() {
     assert!(s.transition_progress().is_none());
 }
 
+mod scene_thumbnails {
+    use super::*;
+
+    /// The source ids each requested scene picture draws, bottom to top, in slot order.
+    fn drawn(s: &Studio) -> Vec<Vec<u64>> {
+        s.thumbnail_request().map(|r| r.scenes.iter().map(|d| d.items.iter().map(|i| i.source.0).collect()).collect()).unwrap_or_default()
+    }
+
+    #[test]
+    fn the_named_scenes_are_drawn_in_order_until_none_is_named() {
+        let mut s = headless();
+        let (out, _) = s.run("source.add", &json!({"kind": "color", "name": "Card"})).unwrap();
+        let card = out["source"].as_u64().unwrap_or_else(|| panic!("{out}"));
+        s.run("scene.add", &json!({"name": "Break"})).unwrap();
+        s.tick();
+        let first = s.collection().scene_by_name("Scene").map(|c| c.id).unwrap();
+        let brk = s.collection().scene_by_name("Break").map(|c| c.id).unwrap();
+        assert!(s.thumbnail_request().is_none(), "no picture is drawn before one is asked for");
+        assert!(s.thumbnail_scenes().is_empty());
+
+        let (out, _) = s.run("scene.thumbnails", &json!({"scenes": ["Break", "Scene"]})).unwrap();
+        assert_eq!(out, json!({"scenes": [brk, first], "fps": 2.0}));
+        assert_eq!(s.thumbnail_scenes(), [brk, first]);
+        assert_eq!(drawn(&s), [vec![], vec![card]]);
+        let request = s.thumbnail_request().unwrap();
+        assert_eq!((request.fps, request.size), (2.0, (256, 144)));
+        assert_eq!(request.keys, [1, 2], "each slot has a key of its own");
+        // A reordered list keeps each scene's key, so only the slots matter to the compositor.
+        s.run("scene.thumbnails", &json!({"scenes": ["Scene", "Break"]})).unwrap();
+        assert_eq!(s.thumbnail_request().map(|r| r.keys), Some(vec![2, 1]));
+        s.run("scene.thumbnails", &json!({"scenes": ["Break", "Scene"]})).unwrap();
+        assert!(s.thumbnail_views().is_none(), "nothing is drawn without a graphics device");
+
+        // A refused call keeps the last list.
+        assert!(s.run("scene.thumbnails", &json!({"scenes": ["Nope"]})).is_err());
+        assert!(s.run("scene.thumbnails", &json!({"scenes": [first], "fps": 5})).is_err());
+        assert_eq!(s.thumbnail_scenes(), [brk, first]);
+
+        // A scene's change reaches its picture, and the rate is the one asked for.
+        s.run("source.add", &json!({"kind": "color", "name": "Logo", "scene": "Break"})).unwrap();
+        s.run("scene.thumbnails", &json!({"scenes": ["Break", "Scene"], "fps": 4})).unwrap();
+        assert_eq!(drawn(&s)[0].len(), 1);
+        assert_eq!(s.thumbnail_request().map(|r| r.fps), Some(4.0));
+
+        // A removed scene leaves the list, and the pictures stop when none is left.
+        let undo = s.engine.undo_label();
+        s.run("scene.remove", &json!({"scene": "Break"})).unwrap();
+        s.tick();
+        assert_eq!(s.thumbnail_scenes(), [first]);
+        assert_eq!(drawn(&s), [vec![card]]);
+        assert_ne!(s.engine.undo_label(), undo);
+        let undo = s.engine.undo_label();
+        let (out, _) = s.run("scene.thumbnails", &json!({"scenes": []})).unwrap();
+        assert_eq!(out, json!({"scenes": [], "fps": null}));
+        assert!(s.thumbnail_request().is_none());
+        assert_eq!(s.engine.undo_label(), undo, "no undo step");
+        s.run("scene.add", &json!({"name": "Only"})).unwrap();
+        s.run("scene.thumbnails", &json!({"scenes": ["Only"]})).unwrap();
+        s.run("scene.remove", &json!({"scene": "Only"})).unwrap();
+        s.tick();
+        assert!(s.thumbnail_scenes().is_empty());
+        assert!(s.thumbnail_request().is_none());
+
+        // Another collection's scene ids can match these, so its scenes are not drawn.
+        s.run("scene.thumbnails", &json!({"scenes": [first]})).unwrap();
+        let old_key = s.thumbnail_request().map(|r| r.keys);
+        s.load_collection(SceneCollection::new("Other", "Scene"));
+        assert!(s.collection().scene(first).is_some(), "the new collection has a scene with the same id");
+        assert!(s.thumbnail_scenes().is_empty());
+        assert!(s.thumbnail_request().is_none());
+        // Asked for again, its slot gets a new key, so the compositor draws it at once.
+        s.run("scene.thumbnails", &json!({"scenes": [first]})).unwrap();
+        let new_key = s.thumbnail_request().map(|r| r.keys);
+        assert!(new_key.is_some() && new_key != old_key, "{old_key:?} {new_key:?}");
+    }
+
+    #[test]
+    fn the_compositor_hears_of_scene_pictures_only_while_some_are_shown() {
+        let mut s = studio_with(Some(noop_gpu()), SceneCollection::new("Test", "Scene"), small_profile());
+        let sent = |s: &Studio| s.video.as_ref().map(|v| v.thumbnails_sent.clone());
+        let sends = |s: &Studio| s.video.as_ref().map_or(0, |v| v.thumbnail_sends);
+        assert!(matches!(sent(&s), Some(None)), "the compositor runs and draws no scene picture");
+        // A list view asks for no pictures, so collection changes send the compositor nothing.
+        s.run("source.add", &json!({"kind": "color", "name": "Card"})).unwrap();
+        s.tick();
+        assert!(matches!(sent(&s), Some(None)));
+        assert_eq!(sends(&s), 0);
+
+        s.run("scene.thumbnails", &json!({"scenes": ["Scene"]})).unwrap();
+        let first = sent(&s).flatten().expect("the pictures are asked for");
+        assert_eq!((first.scenes.len(), first.scenes[0].items.len(), first.fps), (1, 1, 2.0));
+        assert_eq!(sends(&s), 1);
+        // The same list again sends nothing new.
+        s.run("scene.thumbnails", &json!({"scenes": ["Scene"]})).unwrap();
+        assert!(sent(&s).flatten().is_some_and(|r| Arc::ptr_eq(&r, &first)));
+        assert_eq!(sends(&s), 1);
+        // A change to a drawn scene sends the scene as it is now.
+        s.run("source.add", &json!({"kind": "color", "name": "Logo"})).unwrap();
+        s.tick();
+        assert!(sent(&s).flatten().is_some_and(|r| r.scenes[0].items.len() == 2));
+        let before = sends(&s);
+        s.run("scene.thumbnails", &json!({"scenes": []})).unwrap();
+        assert!(matches!(sent(&s), Some(None)), "an empty list stops the pictures");
+        assert_eq!(sends(&s), before + 1, "the stop is sent once");
+        assert!(s.thumbnail_views().is_none());
+        // After the stop, changes send nothing again.
+        s.run("source.add", &json!({"kind": "color", "name": "Third"})).unwrap();
+        s.tick();
+        assert_eq!(sends(&s), before + 1);
+
+        // Textures with fewer slots than the list has scenes are withheld until new ones arrive.
+        let mut comp = Compositor::new(noop_gpu(), 32, 18).unwrap();
+        let one_slot = ThumbnailRequest { scenes: vec![studiocraft_render::SceneDesc::default()], ..ThumbnailRequest::default() };
+        comp.set_thumbnails(Some(Arc::new(one_slot)));
+        let one = comp.thumbnail_views().expect("the request makes one slot");
+        assert_eq!(one.slots.len(), 1);
+        s.run("scene.thumbnails", &json!({"scenes": ["Scene"]})).unwrap();
+        if let Some(v) = &mut s.video {
+            v.thumbnail_views = Some(Arc::clone(&one));
+        }
+        assert!(s.thumbnail_views().is_some_and(|v| Arc::ptr_eq(&v, &one)));
+        s.run("scene.add", &json!({"name": "Two"})).unwrap();
+        s.run("scene.thumbnails", &json!({"scenes": ["Scene", "Two"]})).unwrap();
+        assert!(s.thumbnail_views().is_none(), "one slot for two scenes");
+        s.run("scene.thumbnails", &json!({"scenes": ["Two"]})).unwrap();
+        assert!(s.thumbnail_views().is_some());
+    }
+}
+
+#[test]
+fn session_events_list_scene_switches_pauses_and_resumes_in_order() {
+    let mut s = headless();
+    let first = s.collection().program_scene.0;
+    assert_eq!(s.run("session.events", &json!({})).unwrap().0, json!({"events": [], "last": 0, "dropped": 0}));
+    s.run("scene.add", &json!({"name": "Second"})).unwrap();
+    let second = s.collection().program_scene.0;
+    assert_ne!(first, second, "a new scene goes on the program");
+    s.run("scene.select", &json!({"scene": "Second"})).unwrap();
+    s.run("pause.start", &json!({"countdown_s": 0})).unwrap();
+    s.run("scene.select", &json!({"scene": "Scene"})).unwrap();
+    s.run("pause.extend", &json!({"seconds": 5})).unwrap();
+    s.run("pause.stop", &json!({})).unwrap();
+    s.run("studio.toggle", &json!({})).unwrap();
+    s.run("scene.select", &json!({"scene": "Second"})).unwrap();
+    s.run("studio.toggle", &json!({})).unwrap();
+    let rev = s.engine().revision();
+    let (v, _) = s.run("session.events", &json!({})).unwrap();
+    assert_eq!(s.engine().revision(), rev, "reading the events changes nothing");
+    let kinds: Vec<&str> = v["events"].as_array().map(|a| a.iter().filter_map(|e| e["kind"].as_str()).collect()).unwrap_or_default();
+    // Selecting the scene the program already shows, adding time and choosing a preview scene in
+    // studio mode are not switches.
+    assert_eq!(kinds, ["scene", "pause", "scene", "resume"], "{v}");
+    let e = &v["events"];
+    assert_eq!(e[0]["from"], json!({"id": first, "name": "Scene"}));
+    assert_eq!(e[0]["to"], json!({"id": second, "name": "Second"}));
+    assert_eq!(e[2]["to"], json!({"id": first, "name": "Scene"}), "a switch under the pause screen is listed");
+    assert_eq!(e[0]["recording_s"], Value::Null, "nothing was recorded");
+    let seqs: Vec<u64> = e.as_array().map(|a| a.iter().filter_map(|e| e["seq"].as_u64()).collect()).unwrap_or_default();
+    assert_eq!(seqs, [1, 2, 3, 4]);
+    let times: Vec<u64> = e.as_array().map(|a| a.iter().filter_map(|e| e["time_ms"].as_u64()).collect()).unwrap_or_default();
+    assert!(times.windows(2).all(|w| w[0] <= w[1]), "{times:?}");
+    let (tail, _) = s.run("session.events", &json!({"since": 2})).unwrap();
+    assert_eq!(tail["events"].as_array().map(Vec::len), Some(2));
+    assert_eq!((tail["last"].clone(), tail["dropped"].clone()), (json!(4), json!(0)));
+    // Removing the program scene switches to another one; the removed scene has no name left.
+    s.run("scene.remove", &json!({"scene": "Scene"})).unwrap();
+    let (v, _) = s.run("session.events", &json!({"since": 4})).unwrap();
+    assert_eq!(v["events"][0]["from"], json!({"id": first, "name": null}), "{v}");
+    assert_eq!(v["events"][0]["to"]["id"], json!(second));
+    assert!(s.run("session.events", &json!({"since": -1})).is_err());
+}
+
 #[test]
 fn studio_mode_quick_transitions_apply_to_one_switch() {
     let mut s = headless();
@@ -216,6 +388,75 @@ fn streaming_needs_a_server() {
     let mut s = studio_with(Some(gpu), SceneCollection::new("Test", "Scene"), Profile::default());
     let e = s.run("stream.start", &json!({})).unwrap_err();
     assert!(e.to_string().contains("server"), "{e}");
+}
+
+/// The go-live check's item `id` in the result `r`.
+fn golive_item<'a>(r: &'a serde_json::Value, id: &str) -> &'a serde_json::Value {
+    r["items"].as_array().and_then(|a| a.iter().find(|i| i["id"] == id)).unwrap_or_else(|| panic!("no item {id} in {r}"))
+}
+
+#[test]
+fn the_golive_check_lists_each_item_and_changes_nothing() {
+    use studiocraft_model::{AudioState, Destination, KeyRef, SourceConfig};
+    let mut c = SceneCollection::new("Test", "Scene");
+    let mut ids = Vec::new();
+    for (kind, name) in [("no_such_plugin", "Old plug-in"), ("captions", "Captions")] {
+        let id = SourceId(c.alloc_id());
+        ids.push(id);
+        c.sources.push(SourceConfig {
+            id,
+            kind: kind.into(),
+            kind_version: 1,
+            name: name.into(),
+            settings: Settings::new(),
+            filters: vec![],
+            audio: AudioState::default(),
+        });
+    }
+    let mut p = Profile::default();
+    p.output.folder = std::env::temp_dir().display().to_string();
+    let mut s = studio_with(Some(noop_gpu()), c, p);
+    // A wait with no time limit, so the check takes the reader's answer.
+    s.golive.set_space_reader(Arc::new(|_p: &Path| Ok(golive::MIN_FREE_BYTES * 2)), Duration::MAX);
+    let (rev, dirty) = (s.engine().revision(), s.engine().is_dirty());
+
+    let r = s.run("golive.check", &json!({})).unwrap().0;
+    assert_eq!(r["ready"], json!(false));
+    let d = golive_item(&r, "destinations");
+    assert_eq!((&d["state"], &d["fix"], &d["text"]), (&json!("problem"), &json!("view.streaming"), &json!("No stream destination is turned on")));
+    assert_eq!(golive_item(&r, "encoder")["state"], json!("pass"), "{r}");
+    let space = golive_item(&r, "recording_space");
+    assert_eq!((&space["state"], &space["free_bytes"]), (&json!("pass"), &json!(golive::MIN_FREE_BYTES * 2)));
+    let old = golive_item(&r, &format!("source:{}", ids[0].0));
+    assert_eq!((&old["state"], &old["fix"], &old["source"]), (&json!("problem"), &json!(null), &json!(ids[0].0)));
+    assert_eq!(old["args"]["kind"], json!("no_such_plugin"));
+    let captions = golive_item(&r, "captions");
+    assert_eq!((&captions["state"], &captions["fix"]), (&json!("problem"), &json!("captions.toggle")), "a Live Captions source and captions off");
+    let problems = r["items"].as_array().map_or(0, |a| a.iter().filter(|i| i["state"] == "problem").count());
+    assert!(problems >= 3, "{r}");
+    assert_eq!((r["problems"].as_u64(), r["more_sources"].as_u64()), (Some(problems as u64), Some(0)), "{r}");
+
+    // A destination whose session key is not held is a problem until the key is held, and then
+    // unknown: it has not connected yet.
+    let mut p = s.profile().clone();
+    p.stream.destinations = vec![Destination {
+        id: "main".into(),
+        server: "rtmp://example.invalid/live".into(),
+        key: KeyRef::Held("k".into()),
+        ..Destination::default()
+    }];
+    s.set_profile(p).unwrap();
+    let r = s.run("golive.check", &json!({})).unwrap().0;
+    assert_eq!(golive_item(&r, "destination:main")["state"], json!("problem"));
+    s.hold_stream_key("k", "secret");
+    let r = s.run("golive.check", &json!({})).unwrap().0;
+    let d = golive_item(&r, "destination:main");
+    assert_eq!((&d["state"], &d["fix"], &d["destination"]), (&json!("unknown"), &json!(null), &json!("main")));
+    assert!(!r.to_string().contains("secret"), "the key is never in the result");
+
+    assert_eq!((s.engine().revision(), s.engine().is_dirty()), (rev, dirty), "the check changes no collection");
+    assert!(s.engine().undo_label().is_none(), "and adds no undo step");
+    assert!(s.run("golive.check", &json!({"fix": true})).is_err());
 }
 
 /// A thread that hands over each connection `listener` takes.

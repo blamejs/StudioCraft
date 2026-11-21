@@ -85,8 +85,8 @@ when the language's catalog has the message.
 [Commands with their own parameters](#commands-with-their-own-parameters) describes `app.info`,
 `app.links`, `app.check_updates`, `plugin.list`, `source.schema`, `source.sync_offset`,
 `source.monitor`, `source.set_record_track`, the `present.*` commands, `audio_tracks.status`, `audio_tracks.repair`,
-`audio_tracks.open_last`, `audio_tracks.marker`, `record.marker`, the `captions.*` commands, the
-`dock.layout_*` commands, `video.displays`, `video.canvas_from_display` and `canvas.relayout`.
+`audio_tracks.open_last`, `audio_tracks.marker`, `record.marker`, `recordings.list`, the `captions.*` commands, the
+`dock.layout_*` commands, `golive.check`, `video.displays`, `video.canvas_from_display` and `canvas.relayout`.
 
 Each entry of `engine.commands` has these fields:
 
@@ -300,6 +300,29 @@ studiocraft-cli send 9876 engine.execute '{"command": "app_audio.list"}'
 studiocraft-cli send 9876 engine.execute '{"command": "app_audio.route", "params": {"app": "player.exe|c:\\apps\\player.exe", "routed": true}}'
 ```
 
+### `scene.thumbnails`
+
+`scene.thumbnails` takes `{"scenes", "fps"?}` and has the compositor draw a small picture of each
+scene in `scenes`, for a scene list. `scenes` is a list of scene ids or names, at most 16, and the
+picture of the scene at position `i` goes into slot `i` of the thumbnail textures. `fps` is how many
+times a second each picture is redrawn: from 0.1 (once every 10 seconds) to 4, and 2 when it is
+left out. These
+limits and the default are StudioCraft's own. Each call replaces the last call's list, and
+`{"scenes": []}` stops drawing the pictures. A scene that is removed from the collection leaves the
+list, and the pictures stop when no scene is left. When the list changes, a slot whose scene
+changed keeps its last picture until the compositor draws the new scene into it. The compositor
+draws two such slots a frame, before any other slot, so 16 changed slots take 8 frames.
+
+It returns `{"scenes", "fps"}` with the list and rate now drawn, or `{"scenes": [], "fps": null}`
+when none is drawn. More than 16 scenes, a scene that does not exist, a scene given twice, and an
+`fps` outside that range are errors, and the last list stays drawn. The command changes nothing in
+the scene collection and adds no undo step. Without a graphics device the list is kept and nothing
+is drawn.
+
+```sh
+studiocraft-cli send 9876 engine.execute '{"command": "scene.thumbnails", "params": {"scenes": ["Talk", "Break"]}}'
+```
+
 ### `source.sync_offset` and `source.monitor`
 
 `source.sync_offset` takes `{"source", "ms"}` and delays the source's audio by `ms` milliseconds, a
@@ -392,6 +415,48 @@ and leaves out the time the recording has skipped so far while the computer was 
 recording stops, `<recording name>.otio` is written beside it with each marker at its frame
 ([Recording markers](features.md#recording-markers)).
 
+### `recordings.list`
+
+`recordings.list` takes no params and lists what the recording folder holds, newest first: each
+`.mkv`, `.mp4` and `.mov` file with its marker timeline and its take of audio tracks, each saved
+replay (`Replay <date and time>.mkv`), and each take of audio tracks that has no recording file,
+such as a stream's take. The folder is scanned on a background thread. The command returns at once
+with the last finished scan and starts a new scan when none runs, so the first call returns an
+empty list with `scanning` true, and a later call returns that scan. It returns
+`{"folder", "scanning", "scanned_unix_ms", "recordings", "unreadable", "more", "timed_out"}`:
+
+| Field | Value |
+| --- | --- |
+| `folder` | The recording folder. A scan of another folder, made before the recording folder changed, is not returned. |
+| `scanning` | `true` while a newer scan of the recording folder runs. A scan of the folder before it changed runs to its end first, and the new folder's scan starts at the next call after that. |
+| `scanned_unix_ms` | When the returned scan ended, in milliseconds since 1970, or `null` before the first scan of the folder ends. |
+| `recordings` | The entries, described below. |
+| `unreadable` | `[{"path", "error"}]`: the folder, files and takes that could not be read. |
+| `more` | `true` when the folder holds more than 500 entries; the scan reads the first 500 the system lists. |
+| `timed_out` | `true` when the scan stopped looking at files after 5 seconds; the takes are not listed then. |
+
+Each entry of `recordings` has `name` (the file's name without its extension, or the take's name),
+`kind` (`recording`, `replay` or `audio_tracks` for a take without a recording file),
+`started_unix_ms`, `file`, `format` (`mkv`, `mp4` or `mov`), `bytes`, `modified_unix_ms`,
+`timeline` and `audio_tracks`; fields that do not apply are `null`. `started_unix_ms` is the date
+and time in the file's name read as local time, else the take's start. The list is sorted by it, or
+by `modified_unix_ms` when it is `null`. A recording's `timeline` is `<name>.otio` beside it, and
+its `audio_tracks` is the take in `<name> Audio`. When that name was taken, the timeline or take
+named `<name> (N)` can belong to it instead, unless a recording has that name. Of these, a
+recording takes the take that started nearest its start, and the timeline last changed nearest its
+file's last change, when one is within 10 seconds; otherwise it takes the one of its own name, and
+then the first numbered one. Of two recordings of one name, such as `<name>.mkv` and
+`<name>.mp4`, the one last changed first is matched first. A timeline or take made more than 10 seconds before the recording
+started does not belong to it, so one left from an older recording of the same name is listed on its
+own (a take) or not at all (a timeline). `audio_tracks` holds the take's `folder` (its `Audio Files` folder, which
+`audio_tracks.repair` takes), `session`, `state` (`finished`, `needs_repair` or `recording`),
+`started_unix_ms`, `seconds`, `tracks`, `bytes`, `missing_files`, `dropouts`, `lost_seconds`,
+`markers`, `repaired` and `stopped` (why the take stopped early, or `null`).
+
+The scan follows no link inside the folder and looks into no folder other than the takes'. The
+500 entries, 5 seconds and 10 seconds are StudioCraft's own limits. One scan runs at a time. Over MCP with
+roots, the recording folder must be inside a read root.
+
 ### `captions.*`
 
 `captions.start` takes `{"model"?, "language"?}` and starts live captions of the program audio. A
@@ -453,6 +518,27 @@ showing, or `null`).
 
 None of these commands changes the scene collection or adds an undo step.
 
+### `session.events`
+
+`session.events` takes `{"since"?}` and returns `{"events", "last", "dropped"}`: the scene
+switches, stream reconnects, pauses and resumes since the app started, oldest first. The app keeps
+the last 1,000 events, a limit StudioCraft sets. Each event has `seq` (counting up from 1),
+`kind`, `time_ms` (milliseconds since the app started), and `recording_s` and `stream_s` (how far
+into the running recording and stream it happened, in seconds, or `null` when none runs). A
+`scene` event has `from` and `to`, each `{"id", "name"}`; a scene that was removed by then has a
+`null` name. A `reconnect` event has `destination` (the destination's id), `count` (its lost
+connections in this stream so far) and `lost` (how many of them it lost since the app last looked,
+which is once per interface frame and when the stream stops). Connections lost after the stream
+was asked to stop are not listed. A `pause` or `resume` event has nothing more. Scene and
+destination names longer than 256 characters are cut to 256.
+
+With `since`, only the events with a larger `seq` are returned. `last` is the `seq` of the newest
+event (0 before the first), which a caller passes as `since` next time. `dropped` counts the events
+after `since` that the app no longer keeps. A `since` that is not a whole number of 0 or more is an
+error. A switch of the program scene while paused is listed when it happens; a scene chosen for the
+preview in studio mode is not a switch until it goes to the program. Opening another scene
+collection is not listed. The command does not change the scene collection or add an undo step.
+
 ### `dock.layout_save`, `dock.layout_apply` and `dock.layout_remove`
 
 `dock.layout_save` takes `{"name"}` and saves every dock setting under that name, replacing a
@@ -462,6 +548,34 @@ error.
 
 `dock.layout_apply` and `dock.layout_remove` take `{"name"}`, compared without regard to case, and
 return `{"applied"}` or `{"removed"}`; a name no layout has is an error.
+
+### `golive.check`
+
+`golive.check` takes no params and lists what would stop the stream from starting or spoil it. It
+returns `{"ready", "problems", "unknown", "more_sources", "items"}`. `ready` is `true` only when
+every item is `pass`; `problems` and `unknown` count the items in those states. Each item is
+`{"id", "state", "text", "template", "args", "fix"}`. `state` is `pass`, `problem` or `unknown`.
+`text` is an English sentence; `template` is the same sentence with `{name}` placeholders and
+`args` holds their values, so the window can show it in the interface language. `fix` is the id
+of the command that fixes a problem, and `null` for an item that passes or is unknown and for a
+problem no command fixes.
+
+The items come in this order:
+
+| `id` | What it checks | `fix` |
+| --- | --- | --- |
+| `destination:<id>` | One item for each destination that is on, with `destination`, its id. A destination with no server, with no key (the profile's key is empty and the server's address does not end with the stream's name, or its session key is not held), or whose server and key give an address a start refuses, is a problem. While a stream of this profile runs, a `live` destination passes, a `connecting` one, one added after the stream started, and one whose server or key changed after the stream started are unknown, and a `retrying`, `failed` or `stopped` one is a problem. While no stream runs, a destination passes only when it was live on an earlier stream of this session with the same server and key, and is a problem when it was retrying or had failed when last seen; one that has not connected yet is unknown, never `pass`. | `view.streaming` |
+| `destinations` | In place of the destination items: no destination is on, or the list cannot be used (too many, an empty id, an id used twice). Always a problem. | `view.streaming` |
+| `encoder` | The stream's video encoder. An encoder that is not installed, does not write H.264 or cannot run in a stream is a problem; the `hardware` choice is unknown; its tests run when the stream starts. Without the graphics device this item is a problem with no `fix`. | `app.settings` |
+| `recording_space` | The free space in the recording folder, or in the nearest folder above it that exists, with `free_bytes`. Less than 10 GB, a limit StudioCraft chose, is a problem, and so is a folder whose free space cannot be read or a file in its place. A folder that has not answered within 250 ms is unknown until a later check reads it; at most four folders are read at once. | `app.settings` |
+| `source:<id>` | Each source that is not working, with `source`, its id, and the error it reports, for example for a window that was closed or a camera that was unplugged. A source that did not start is a problem too. A source whose plug-in is not installed is a problem with no `fix`. At most 32 sources are listed; `more_sources` counts the others. | `selection.properties` |
+| `sources` | In place of the source items when every source is working. Always `pass`. | |
+| `captions` | Live captions. Running passes and starting is unknown. Off, stopping or failed is a problem when the scene collection has a Live Captions source, and passes when it has none. A Live Captions source in a build without speech recognition is a problem with no `fix`. | `captions.toggle` |
+
+`view.streaming`, `app.settings` and `selection.properties` are window commands; run
+`selection.properties` after selecting an item that shows the source. Error texts in a sentence are cut to 300
+characters. The check changes nothing: it does not save the profile, change the scene collection
+or add an undo step. A parameter is an error.
 
 ### `view.streaming` and the `stream.destination` commands
 

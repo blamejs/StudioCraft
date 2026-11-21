@@ -602,13 +602,13 @@ fn the_output_bar_fits_the_menu_row_at_each_window_size() {
         }
         let parts = bar_parts(&a, &ctx);
         let names: Vec<&str> = parts.iter().map(|(n, _)| n.as_str()).collect();
-        for want in ["menus", "mode", "record", "stream"] {
+        for want in ["menus", "mode", "record", "stream", "pause", "pause_menu"] {
             assert!(names.contains(&want), "{w}: {want} missing from {names:?}");
         }
         assert!(names.contains(&"transition") || names.contains(&"transition_overflow"), "{w}: {names:?}");
         for (name, [l, t, r, b]) in &parts {
             assert!(*l >= 0.0 && *r <= w + 0.5 && *t >= 0.0 && *b <= 32.5, "{w}: {name} at {l},{t},{r},{b} is cut off");
-            if name == "record" || name == "stream" {
+            if ["record", "stream", "pause", "pause_menu"].contains(&name.as_str()) {
                 assert_eq!(b - t, 28.0, "{w}: {name} is 28 points tall");
                 assert!((t - 2.0).abs() <= 0.5, "{w}: {name} starts 2 points below the top, at {t}");
             }
@@ -621,8 +621,11 @@ fn the_output_bar_fits_the_menu_row_at_each_window_size() {
             let ((a_name, a), (b_name, b)) = (&pair[0], &pair[1]);
             assert!(a[2] <= b[0] + 0.5, "{w}: {a_name} ends at {} after {b_name} starts at {}", a[2], b[0]);
         }
-        let stream = parts.iter().find(|(n, _)| n == "stream").map(|(_, r)| r[2]).unwrap_or(0.0);
-        assert!((w - stream - 8.0).abs() <= 1.0, "{w}: Go Live ends 8 points from the right edge, at {stream}");
+        let end = |part: &str| parts.iter().find(|(n, _)| n == part).map(|(_, r)| (r[0], r[2])).unwrap_or_default();
+        let (stream, (face_start, face_end), (arrow_start, arrow_end)) = (end("stream").1, end("pause"), end("pause_menu"));
+        assert!((face_start - stream - 8.0).abs() <= 1.0, "{w}: Pause starts 8 points after Go Live, at {face_start}");
+        assert!((arrow_start - face_end).abs() <= 0.5, "{w}: the arrow is joined to the Pause face");
+        assert!((w - arrow_end - 8.0).abs() <= 1.0, "{w}: the Pause arrow ends 8 points from the right edge, at {arrow_end}");
     }
 }
 
@@ -635,7 +638,7 @@ fn the_docks_menu_shows_and_hides_the_output_bar_groups() {
     assert_eq!(run(&mut a, &ctx, "dock.transitions", json!({})).unwrap(), json!({"on": false}));
     frame(&mut a, &ctx, vec![]);
     assert_eq!(a.ui_inspect(&ctx)["output_bar"]["transitions"], json!("hidden"));
-    assert_eq!(names(&a), ["menus", "mode", "record", "stream"]);
+    assert_eq!(names(&a), ["menus", "mode", "record", "stream", "pause", "pause_menu"]);
     assert_eq!(run(&mut a, &ctx, "dock.controls", json!({})).unwrap(), json!({"on": false}));
     frame(&mut a, &ctx, vec![]);
     assert_eq!(names(&a), ["menus"]);
@@ -2105,7 +2108,7 @@ fn window_command_errors_are_shown_translated_and_returned_in_english() {
 }
 
 #[test]
-fn the_tools_menu_pauses_the_program_and_the_status_bar_shows_the_countdown() {
+fn pause_or_resume_pauses_the_program_and_the_status_bar_shows_the_countdown() {
     let mut a = app();
     let ctx = egui::Context::default();
     assert_eq!(a.item_state("pause.toggle").checked, Some(false));
@@ -2153,4 +2156,94 @@ fn the_pause_status_item_shows_the_time_left_and_the_time_paused() {
     assert_eq!(pause_item(None, None), None, "nothing while not paused");
     assert_eq!(pause_item(Some(Some(247_000)), Some(61_500)), Some(("PAUSED 4:07".into(), "Paused for 1:01".into())));
     assert_eq!(pause_item(Some(None), Some(3_600_000)), Some(("PAUSED".into(), "Paused for 1:00:00".into())));
+}
+
+/// The File menu's items in English, with the command each runs.
+fn file_items(a: &StudioApp) -> Vec<(String, CommandRef)> {
+    let bar = a.laid_menu();
+    let Some(file) = bar.menus.iter().find(|m| m.title == "File") else { panic!("no File menu") };
+    file.children
+        .iter()
+        .filter_map(|n| match n {
+            craft_menu::Node::Item(it) => Some((it.label.clone(), it.command.clone())),
+            _ => None,
+        })
+        .collect()
+}
+
+fn click_at(at: egui::Pos2) -> Vec<Event> {
+    let b = |pressed| Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: Modifiers::NONE };
+    vec![Event::PointerMoved(at), b(true), b(false)]
+}
+
+#[test]
+fn the_file_menu_pauses_and_resumes_the_program() {
+    let mut a = app();
+    let ctx = egui::Context::default();
+    let items = file_items(&a);
+    let pause = ("Pause Program".to_string(), CommandRef::new("pause.start"));
+    let resume = ("Resume Program".to_string(), CommandRef::new("pause.stop"));
+    let at = |item: &(String, CommandRef)| items.iter().position(|i| i == item);
+    let (Some(p), Some(r)) = (at(&pause), at(&resume)) else { panic!("File lacks Pause Program or Resume Program: {items:?}") };
+    assert_eq!(r, p + 1, "Resume Program follows Pause Program");
+    let extend = CommandRef::with_params("pause.extend", json!({"seconds": 60}));
+    assert_eq!(items.get(r + 1), Some(&("Add a Minute to the Pause".to_string(), extend)));
+    assert!(a.item_state("pause.start").enabled && !a.item_state("pause.stop").enabled);
+    run(&mut a, &ctx, "pause.start", json!({})).unwrap();
+    assert!(a.studio().paused().is_some());
+    assert!(!a.item_state("pause.start").enabled && a.item_state("pause.stop").enabled);
+    run(&mut a, &ctx, "pause.stop", json!({})).unwrap();
+    assert!(a.studio().paused().is_none());
+    assert!(a.item_state("pause.start").enabled && !a.item_state("pause.stop").enabled);
+}
+
+#[test]
+fn the_pause_button_pauses_and_the_banner_adds_a_minute_and_resumes() {
+    let mut a = app();
+    let ctx = egui::Context::default();
+    for _ in 0..2 {
+        frame(&mut a, &ctx, vec![]);
+    }
+    assert!(a.pause_banner.buttons.is_empty(), "no banner while not paused");
+    let rect = |a: &StudioApp, part: &str| bar_parts(a, &ctx).into_iter().find(|(n, _)| n == part).map(|(_, r)| r);
+    let Some([l, t, r, b]) = rect(&a, "pause") else { panic!("no Pause button") };
+    frame(&mut a, &ctx, click_at(egui::pos2((l + r) / 2.0, (t + b) / 2.0)));
+    assert!(a.studio().paused().is_some(), "a click on the face pauses with the profile's settings");
+    frame(&mut a, &ctx, vec![]);
+    let buttons = a.pause_banner.buttons.clone();
+    assert_eq!(buttons.len(), 2, "+1 min and Resume");
+    assert!(rect(&a, "pause_menu").is_some(), "the Pause arrow stays while paused");
+    assert!(buttons[0].top() >= 32.0, "the banner is under the menu row: {:?}", buttons[0]);
+    let left = a.studio().paused().flatten().unwrap_or(0);
+    frame(&mut a, &ctx, click_at(buttons[0].center()));
+    assert!(a.studio().paused().flatten().unwrap_or(0) > left + 50_000, "+1 min added a minute");
+    frame(&mut a, &ctx, vec![]);
+    let resume = a.pause_banner.buttons[1].center();
+    frame(&mut a, &ctx, click_at(resume));
+    assert!(a.studio().paused().is_none(), "Resume ended the pause");
+    frame(&mut a, &ctx, vec![]);
+    assert!(a.pause_banner.buttons.is_empty(), "the banner is gone");
+}
+
+#[test]
+fn the_pause_menu_starts_a_countdown_and_opens_the_pause_screen_settings() {
+    let mut a = app();
+    let ctx = egui::Context::default();
+    for (_, cmd) in crate::output_bar::pause_menu().into_iter().filter(|(_, c)| c.id == "pause.start") {
+        a.perform(&ctx, &cmd).unwrap();
+        let want = cmd.params["countdown_s"].as_u64().unwrap_or(u64::MAX) * 1000;
+        match a.studio().paused() {
+            Some(Some(left)) => assert!(left <= want && left + 2_000 >= want, "{cmd:?}: {left}"),
+            Some(None) => assert_eq!(want, 0, "{cmd:?}"),
+            None => panic!("{cmd:?} did not pause"),
+        }
+    }
+    run(&mut a, &ctx, "pause.stop", json!({})).unwrap();
+    run(&mut a, &ctx, "pause.settings", json!({})).unwrap();
+    let Some(w) = &a.settings else { panic!("Settings did not open") };
+    assert_eq!(w.tab(), Tab::Stream);
+    assert!(w.pause_focus_pending());
+    frame_at(&mut a, &ctx, egui::vec2(760.0, 480.0));
+    assert!(a.settings.as_ref().is_some_and(|w| !w.pause_focus_pending()), "the Pause screen section took the focus");
+    assert!(ctx.memory(|m| m.focused()).is_some(), "a field has the keyboard focus");
 }

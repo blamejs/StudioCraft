@@ -147,6 +147,7 @@
 	Gamma	Gamma
 	General	General
 	Go Live	Go Live
+	Go-Live Check	Go-Live Check
 	H.264	H.264
 	H.264 (built in)	H.264 (built in)
 	Height	Height
@@ -611,6 +612,7 @@ menu	Transform	Transform
 	Open Last Audio Tracks in Editor	Open Last Audio Tracks in Editor
 	Add Audio Tracks Marker	Add Audio Tracks Marker
 	Add Recording Marker	Add Recording Marker
+	List Recordings	List Recordings
 @msg	Markers saved to {path}	Markers saved to {path}
 @msg	The markers could not be saved: {error}	The markers could not be saved: {error}
 	After a take	After a take
@@ -733,6 +735,7 @@ menu	Transform	Transform
 	Pause or Resume Program	Pause or Resume Program
 	Add Time to the Pause	Add Time to the Pause
 	Pause Status	Pause Status
+	Session Events	Session Events
 	Add a Minute to the Pause	Add a Minute to the Pause
 	Pause screen	Pause screen
 	Picture or video	Picture or video
@@ -764,6 +767,24 @@ menu	Transform	Transform
 	Mute the program audio while paused	Mute the program audio while paused
 	PAUSED	PAUSED
 	Paused for {time}	Paused for {time}
+	Pause	Pause
+	Resume	Resume
+	Resume, {time} left	Resume, {time} left
+	Resume, paused for {time}	Resume, paused for {time}
+	Pause options	Pause options
+	Pause for 1 Minute	Pause for 1 Minute
+	Pause for 2 Minutes	Pause for 2 Minutes
+	Pause for 5 Minutes	Pause for 5 Minutes
+	Pause for 10 Minutes	Pause for 10 Minutes
+	Pause for 15 Minutes	Pause for 15 Minutes
+	Pause Without a Countdown	Pause Without a Countdown
+	Pause Screen Settings…	Pause Screen Settings…
+	+1 min	+1 min
+	Paused. Viewers see the pause screen.	Paused. Viewers see the pause screen.
+	Paused. Viewers see the pause screen. Back in {time}.	Paused. Viewers see the pause screen. Back in {time}.
+	Paused. Viewers see the pause screen. The countdown ended.	Paused. Viewers see the pause screen. The countdown ended.
+	Paused for {time}. Viewers see the pause screen.	Paused for {time}. Viewers see the pause screen.
+	The program resumed	The program resumed
 @msg	The program is paused	The program is paused
 @msg	The program resumed	The program resumed
 @msg	The countdown ended	The countdown ended

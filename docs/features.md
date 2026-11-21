@@ -419,14 +419,36 @@ that cannot be saved is undone. When Settings is open, the changed destination i
 its Stream tab, and edits not yet applied there to other destinations stay. A new destination
 never takes the id of one the running stream still holds.
 
+The `golive.check` command lists what would stop the stream from starting or spoil it. It has an
+item for each destination that is on, the stream's video encoder, the free space in the recording
+folder, each source that is not working, and live captions. Each item passes, is a problem, or is
+unknown, and a problem names the command that fixes it. A destination passes only while it is live,
+or when it was live on an earlier stream of this session with the same server and key; one that has
+not connected yet is unknown. Less than 10 GB free in the recording folder, a limit StudioCraft
+chose, is a problem. Live captions that are off are a problem only when a Live Captions source is
+in the scene collection. The window does not show the check yet
+([Control protocol](control-protocol.md#golivecheck)).
+
 ### Pause screen
 
-Tools › Pause Program shows the pause screen in the program in place of the program scene, with
-the scene collection's transition. Every recording, stream and replay buffer shows it too. Tools ›
-Pause Program again, or Resume Program over the control channel, shows the program scene again with
-the same transition. The status bar shows PAUSED with the time left, and the time paused on hover.
-Tools › Add a Minute to the Pause adds 60 s to the countdown. Pause or Resume Program and Add a
-Minute to the Pause can be given shortcuts in Settings › Hotkeys.
+File › Pause Program shows the pause screen in the program in place of the program scene, with
+the scene collection's transition. Every recording, stream and replay buffer shows it too. File ›
+Resume Program shows the program scene again with the same transition. File › Add a Minute to the
+Pause adds 60 s to the countdown. Pause or Resume Program and Add a Minute to the Pause can be given
+shortcuts in Settings › Hotkeys.
+
+The Pause button sits after Go Live on the menu row. A click on it pauses with the profile's settings.
+While paused, it is filled amber and reads Resume with the time left, or with the time paused when
+there is no countdown, and a click resumes. Its arrow opens a menu: Pause for 1, 2, 5, 10 or 15
+Minutes and Pause Without a Countdown pause with that countdown (while paused, they start the
+countdown again from now), and Pause Screen Settings… opens Settings at the Stream tab with the
+keyboard focus in the Pause screen section. The `pause.settings` window command does the same.
+
+While paused, an amber banner above the program reads "Paused. Viewers see the pause screen." with
+the time left ("Back in 4:32."), the time paused ("Paused for 2:10.") or "The countdown ended.", and
+has +1 min and Resume buttons. Screen readers announce the banner when the pause starts and when the
+countdown reaches zero, and announce "The program resumed" after Resume; they do not announce each
+second. The status bar shows PAUSED with the time left, and the time paused on hover.
 
 The pause screen draws, from the bottom up, a background color, one picture or one video, and the
 countdown text. A video loops and plays without its sound, and a video file that holds only sound
@@ -505,6 +527,11 @@ picture fits a 256 × 144 box by default, keeps the canvas's aspect ratio, and i
 times a second. The pictures stay on the GPU. Scenes past the sixteenth are not drawn and are
 counted.
 
+The [`scene.thumbnails`](control-protocol.md#scenethumbnails) command names the scenes to draw and
+how often: 2 times a second by default. While no command has named any, or after one names none,
+the compositor draws no scene pictures, so a scene list that shows only names adds no work to a
+frame.
+
 ## Interface
 
 ### Theme
@@ -518,10 +545,11 @@ and the focus ring have at least 3:1.
 ### Menu row and output controls
 
 The menu row is 32 points tall. It holds the menu titles at the start of the row, and at the end
-an Edit and Studio switch, the transition picker with its duration, and Record and Go Live with
-their timers. When the row is too narrow, the transition picker moves behind an icon button
-first, then Record and Go Live leave out their labels, and last the menu titles move into the menu
-bar's overflow menu. Docks › Output Controls and Docks › Transition Controls show and hide the two groups.
+an Edit and Studio switch, the transition picker with its duration, Record and Go Live with
+their timers, and the Pause button with its menu arrow ([Pause screen](#pause-screen)). When the
+row is too narrow, the transition picker moves behind an icon button first, then Record, Go Live and
+Pause leave out their labels and keep the glyph and timer, and last the menu titles move into the
+menu bar's overflow menu. In a right-to-left interface the row is mirrored. Docks › Output Controls and Docks › Transition Controls show and hide the two groups.
 
 ### Docks
 
