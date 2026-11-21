@@ -54,7 +54,7 @@ const RECORDS: Hints = Hints { read_only: false, destructive: false, idempotent:
 const PUBLISHES: Hints = Hints { read_only: false, destructive: false, idempotent: true, open_world: true };
 /// Opening a file in another program: each call starts the program again.
 const LAUNCHES: Hints = Hints { read_only: false, destructive: false, idempotent: false, open_world: false };
-/// Adding a marker to the running take: each call adds another.
+/// Adding a marker to the running take or recording: each call adds another.
 const MARKS: Hints = Hints { read_only: false, destructive: false, idempotent: false, open_world: false };
 
 fn tool(name: &str, title: &str, description: &str, properties: Value, required: &[&str], hints: Hints) -> Value {
@@ -216,11 +216,13 @@ fn studio_tool_definitions() -> Vec<Value> {
         tool(
             "item_transform",
             "Transform a scene item",
-            "Set a scene item's position, scale, rotation and crop.",
+            "Set a scene item's position, scale, rotation and crop. `fit` records that the transform fits, fills or stretches \
+             the item to the canvas, so a new canvas size places it the same way; without it the item is kept in proportion.",
             json!({
                 "item": {"type": ["integer", "string"], "description": "The item's id, or the name of the source it shows."},
                 "scene": scene_ref("item's (default: the scene being edited)"),
                 "transform": transform_schema(),
+                "fit": {"type": "string", "enum": ["fit", "fill", "stretch"], "description": "How the transform sizes the item to the canvas."},
             }),
             &["item", "transform"],
             SETS,
@@ -350,6 +352,17 @@ fn studio_tool_definitions() -> Vec<Value> {
             json!({}),
             &[],
             RECORDS,
+        ),
+        tool(
+            "record_marker",
+            "Mark the running recording",
+            "Add a marker to the running recording at this moment, as Add Recording Marker does. When a recording with markers stops, \
+             `<recording name>.otio` is written beside it with each marker at its frame. `name` is 1 to 256 characters with no control \
+             characters (default \"Marker N\", the recording's Nth marker). Returns the marker's `name` and `seconds` from the \
+             recording's start. An error when no recording runs and when the recording already holds 10,000 markers.",
+            json!({"name": {"type": "string", "description": "The marker's name (default: \"Marker N\")."}}),
+            &[],
+            MARKS,
         ),
         tool(
             "stream_start",
@@ -933,7 +946,7 @@ fn dispatch(b: &mut dyn Backend, name: &str, args: &Args) -> Result<Value, McpEr
             req_str(args, "kind")?;
             Ok(text(&run(b, "source.add", pick(args, &["kind", "scene", "name", "settings", "transform"]))?))
         }
-        "item_transform" => Ok(text(&run(b, "item.transform", pick(args, &["item", "scene", "transform"]))?)),
+        "item_transform" => Ok(text(&run(b, "item.transform", pick(args, &["item", "scene", "transform", "fit"]))?)),
         "source_audio" => source_audio(b, args),
         "transition_set" => transition_set(b, args),
         "studio_transition" => Ok(text(&run(b, "studio.transition", pick(args, &["kind", "ms"]))?)),
@@ -957,6 +970,11 @@ fn dispatch(b: &mut dyn Backend, name: &str, args: &Args) -> Result<Value, McpEr
         }
         "record_start" => output_command(b, "record.start", "recording"),
         "record_stop" => output_command(b, "record.stop", "recording"),
+        // `name: null` goes on to the command, which refuses it, instead of naming the marker.
+        "record_marker" => {
+            let params = Value::Object(args.get("name").map(|v| ("name".to_owned(), v.clone())).into_iter().collect());
+            Ok(text(&run(b, "record.marker", params)?))
+        }
         "stream_start" => output_command(b, "stream.start", "streaming"),
         "stream_stop" => output_command(b, "stream.stop", "streaming"),
         "replay_start" => output_command(b, "replay.start", "replay"),

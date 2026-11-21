@@ -6,7 +6,7 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use studiocraft_model::{ItemId, SceneId, Settings, SourceId, Transform};
+use studiocraft_model::{FitMode, ItemId, SceneId, Settings, SourceId, Transform};
 
 /// A scene by id or by name.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -32,6 +32,24 @@ pub enum ItemRef {
     Source(String),
 }
 
+/// A canvas size in pixels.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CanvasSize {
+    pub width: u32,
+    pub height: u32,
+}
+
+/// Longest side of a [`SourceSize`], in pixels.
+pub const MAX_SOURCE_SIDE: u32 = 65_536;
+
+/// The size a source shows at, in pixels.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SourceSize {
+    pub source: SourceId,
+    pub width: u32,
+    pub height: u32,
+}
+
 /// Where a reordered entry goes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -51,6 +69,10 @@ pub enum RuntimeAction {
     StartRecording,
     StopRecording,
     ToggleRecording,
+    /// Mark the running recording now, named `name` or numbered when it is `None`.
+    RecordingMarker {
+        name: Option<String>,
+    },
     StartStreaming,
     StopStreaming,
     ToggleStreaming,
@@ -186,6 +208,9 @@ pub enum Command {
         scene: Option<SceneRef>,
         item: ItemRef,
         transform: Transform,
+        /// How `transform` sized the item to the canvas; omitted for any other change.
+        #[serde(default)]
+        fit: Option<FitMode>,
     },
     #[serde(rename = "item.visible")]
     ItemVisible {
@@ -200,6 +225,18 @@ pub enum Command {
         scene: Option<SceneRef>,
         item: ItemRef,
         locked: bool,
+    },
+    /// Place every item of every scene for a canvas that changed from `from` to `to`
+    /// ([`Transform::relayout`]), or only the items in `items` when given; `sizes` gives the
+    /// sizes of the sources that show a picture.
+    #[serde(rename = "canvas.relayout")]
+    CanvasRelayout {
+        from: CanvasSize,
+        to: CanvasSize,
+        #[serde(default)]
+        sizes: Vec<SourceSize>,
+        #[serde(default)]
+        items: Option<Vec<ItemId>>,
     },
 
     #[serde(rename = "filter.add")]
@@ -246,6 +283,14 @@ pub enum Command {
     RecordStop {},
     #[serde(rename = "record.toggle")]
     RecordToggle {},
+    /// Mark the running recording at this moment, named `name` or numbered; the timeline file
+    /// written beside the recording lists the marker.
+    #[serde(rename = "record.marker")]
+    RecordMarker {
+        /// Absent gives a numbered marker; `null` or any value that is not a string is an error.
+        #[serde(default, deserialize_with = "given_string")]
+        name: Option<String>,
+    },
     #[serde(rename = "stream.start")]
     StreamStart {},
     #[serde(rename = "stream.stop")]
@@ -392,6 +437,7 @@ impl Command {
             Command::ItemTransform { .. } => "item.transform",
             Command::ItemVisible { .. } => "item.visible",
             Command::ItemLock { .. } => "item.lock",
+            Command::CanvasRelayout { .. } => "canvas.relayout",
             Command::FilterAdd { .. } => "filter.add",
             Command::FilterRemove { .. } => "filter.remove",
             Command::FilterSettings { .. } => "filter.settings",
@@ -406,6 +452,7 @@ impl Command {
             Command::RecordStart {} => "record.start",
             Command::RecordStop {} => "record.stop",
             Command::RecordToggle {} => "record.toggle",
+            Command::RecordMarker { .. } => "record.marker",
             Command::StreamStart {} => "stream.start",
             Command::StreamStop {} => "stream.stop",
             Command::StreamToggle {} => "stream.toggle",
@@ -490,9 +537,15 @@ const SPECS: &[CommandSpec] = &[
     spec("item.remove", "Remove Source from Scene", "item: id or source name, scene?", Undo::Undoable),
     spec("item.duplicate", "Duplicate Source", "item: id or source name, scene?", Undo::Undoable),
     spec("item.move", "Move Source", "item, scene?, to: up|down|top|bottom|{to: index}", Undo::Undoable),
-    spec("item.transform", "Transform Source", "item, scene?, transform: {position, size, rotation, crop}", Undo::Undoable),
+    spec("item.transform", "Transform Source", "item, scene?, transform: {position, size, rotation, crop}, fit?: fit|fill|stretch", Undo::Undoable),
     spec("item.visible", "Show or Hide Source", "item, scene?, visible: bool", Undo::Undoable),
     spec("item.lock", "Lock Source", "item, scene?, locked: bool", Undo::Undoable),
+    spec(
+        "canvas.relayout",
+        "Lay Out for Canvas Size",
+        "from: {width, height}, to: {width, height}, sizes?: [{source: id, width, height}], items?: [item id]",
+        Undo::Undoable,
+    ),
     spec("filter.add", "Add Filter", "source, kind: plug-in id, name?", Undo::Undoable),
     spec("filter.remove", "Remove Filter", "source, filter: id", Undo::Undoable),
     spec("filter.settings", "Filter Properties", "source, filter: id, settings: object", Undo::Undoable),
@@ -507,6 +560,7 @@ const SPECS: &[CommandSpec] = &[
     spec("record.start", "Start Recording", "", Undo::NotUndoable),
     spec("record.stop", "Stop Recording", "", Undo::NotUndoable),
     spec("record.toggle", "Start or Stop Recording", "", Undo::NotUndoable),
+    spec("record.marker", "Add Recording Marker", "name?: the marker's name, 1 to 256 characters", Undo::NotUndoable),
     spec("stream.start", "Start Streaming", "", Undo::NotUndoable),
     spec("stream.stop", "Stop Streaming", "", Undo::NotUndoable),
     spec("stream.toggle", "Start or Stop Streaming", "", Undo::NotUndoable),

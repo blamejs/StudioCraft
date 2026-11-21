@@ -530,6 +530,20 @@ fn a_key_at_the_end_of_the_address_is_split_off() {
     assert_eq!(target("a", "rtmp://host/live/name?token=secret", "").shown(), "rtmp://host/live?<redacted>");
 }
 
+/// Every server a streaming service preset fills in connects over TLS with the key as given.
+#[test]
+fn every_preset_server_is_an_rtmps_address_the_client_takes() {
+    let servers: Vec<(&str, &str)> = studiocraft_model::SERVICES.iter().filter_map(|s| s.server.map(|server| (s.id, server))).collect();
+    assert!(!servers.is_empty());
+    for (id, server) in servers {
+        let c = target(id, server, "live_key").config().unwrap_or_else(|e| panic!("{id}: {server}: {e}"));
+        assert!(c.endpoint.tls(), "{id}");
+        assert_eq!((c.endpoint.port(), c.key.expose()), (443, "live_key"), "{id}");
+        assert!(!c.endpoint.app().is_empty() && !c.endpoint.app().ends_with('/'), "{id}: {}", c.endpoint.app());
+        assert_eq!(target(id, server, "live_key").shown(), server, "{id}: the server is shown as the preset gives it");
+    }
+}
+
 #[test]
 fn after_a_video_packet_is_left_out_video_waits_for_a_keyframe() {
     let fanout = Fanout::new();

@@ -495,6 +495,9 @@ menu	Transform	变换
 @msg	Audio tracks could not be repaired: {takes} and {more} more. Takes repaired: {count}	无法修复音频轨道：{takes} 及另外 {more} 个。已修复的录制：{count}
 	Open Last Audio Tracks in Editor	在编辑器中打开最近的音频轨道
 	Add Audio Tracks Marker	为音频轨道添加标记
+	Add Recording Marker	为录制添加标记
+@msg	Markers saved to {path}	标记已保存到 {path}
+@msg	The markers could not be saved: {error}	无法保存标记：{error}
 	After a take	录制结束后
 	Nothing	无操作
 	Show the folder	显示文件夹
@@ -538,3 +541,7 @@ menu	Transform	变换
 @msg	there is no display `{id}`: the system lists no displays	没有显示器 `{id}`：系统未列出任何显示器
 @msg	there is no display `{id}` (the displays are {ids})	没有显示器 `{id}`（显示器有 {ids}）
 @msg	a {width} × {height} display can't be the canvas: each side must be from {min} to {max} pixels	{width} × {height} 的显示器不能作为画布：每条边必须为 {min} 到 {max} 像素
+	Output scale	输出缩放
+	Custom	自定义
+	Fill Screen	填满屏幕
+@msg	The scenes could not be laid out for the new canvas: {error}	无法为新画布排列场景：{error}

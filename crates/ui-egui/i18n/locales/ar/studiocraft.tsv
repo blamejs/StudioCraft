@@ -483,6 +483,9 @@ menu	Transform	التحويل
 @msg	Audio tracks could not be repaired: {takes} and {more} more. Takes repaired: {count}	تعذّر إصلاح المسارات الصوتية: {takes} و{more} غيرها. اللقطات التي أُصلحت: {count}
 	Open Last Audio Tracks in Editor	فتح آخر المسارات الصوتية في المحرر
 	Add Audio Tracks Marker	إضافة علامة إلى المسارات الصوتية
+	Add Recording Marker	إضافة علامة إلى التسجيل
+@msg	Markers saved to {path}	حُفظت العلامات في {path}
+@msg	The markers could not be saved: {error}	تعذّر حفظ العلامات: {error}
 	After a take	بعد اللقطة
 	Nothing	لا شيء
 	Show the folder	إظهار المجلد
@@ -526,3 +529,7 @@ menu	Transform	التحويل
 @msg	there is no display `{id}`: the system lists no displays	لا توجد شاشة `{id}`: لا يعرض النظام أي شاشات
 @msg	there is no display `{id}` (the displays are {ids})	لا توجد شاشة `{id}` (الشاشات هي {ids})
 @msg	a {width} × {height} display can't be the canvas: each side must be from {min} to {max} pixels	لا يمكن أن تكون شاشة بحجم {width} × {height} هي اللوحة: يجب أن يكون كل ضلع من {min} إلى {max} بكسل
+	Output scale	مقياس الإخراج
+	Custom	مخصص
+	Fill Screen	ملء الشاشة
+@msg	The scenes could not be laid out for the new canvas: {error}	تعذّر ترتيب المشاهد للوحة الجديدة: {error}

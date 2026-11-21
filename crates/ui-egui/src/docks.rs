@@ -339,6 +339,7 @@ pub fn item_menu(ui: &mut Ui, item: ItemId, source: SourceId, name: &str, renami
             ("selection.rotate_cw", "Rotate 90° Clockwise"),
             ("selection.rotate_ccw", "Rotate 90° Counterclockwise"),
             ("selection.fit", "Fit to Screen"),
+            ("selection.fill", "Fill Screen"),
             ("selection.stretch", "Stretch to Screen"),
             ("selection.center", "Center to Screen"),
         ] {

@@ -261,7 +261,13 @@ pub(crate) struct Outputs {
     stream_keys: HashMap<String, KeyRef>,
     /// The name of the profile the last stream started with; `None` once that profile is removed.
     stream_profile: Option<String>,
+    /// The last [`MAX_UNFINISHED`] outputs, by kind and target, that stopped without finishing
+    /// their file or stream cleanly, oldest first.
+    unfinished: Vec<(OutputKind, String)>,
 }
+
+/// Unfinished outputs [`Outputs`] keeps for [`Outputs::take_unfinished`].
+const MAX_UNFINISHED: usize = 16;
 
 /// What [`resolve_hardware`] gives: the encoder id, the hardware encoder when it is one, and a
 /// notice.
@@ -333,6 +339,12 @@ impl Outputs {
         self.active.get(&kind).map(|a| a.start)
     }
 
+    /// The encoder counters of `kind`, while it runs. They keep counting until its file is
+    /// finished.
+    pub(crate) fn stats_of(&self, kind: OutputKind) -> Option<Arc<EncoderStats>> {
+        self.active.get(&kind).map(|a| Arc::clone(&a.stats))
+    }
+
     pub(crate) fn state(&self, kind: OutputKind) -> Option<OutputState> {
         if let Some(a) = self.active.get(&kind) {
             return Some(OutputState {
@@ -387,6 +399,7 @@ impl Outputs {
                     Ok(mut i) => i.take().map_or(Ok(()), |mut i| i.stop()),
                     Err(_) => Err(PluginError::Unavailable("the output was lost".into())),
                 };
+                self.note_finish(kind, &target, !failed && r.is_ok());
                 self.finished.push(finish_notice(kind, &target, failed, r));
             }
         }
@@ -429,8 +442,12 @@ impl Outputs {
         ev.notices.extend(self.finished.drain(..).flatten());
         for s in done {
             match s.handle.join() {
-                Ok(r) => ev.notices.extend(finish_notice(s.kind, &s.target, s.failed, r)),
+                Ok(r) => {
+                    self.note_finish(s.kind, &s.target, !s.failed && r.is_ok());
+                    ev.notices.extend(finish_notice(s.kind, &s.target, s.failed, r));
+                }
                 Err(_) => {
+                    self.note_finish(s.kind, &s.target, false);
                     let template = match s.kind {
                         OutputKind::Recording => "The recording could not be finished",
                         OutputKind::Streaming => "The stream could not be finished",
@@ -451,6 +468,58 @@ impl Outputs {
     /// Replays still being written.
     pub(crate) fn saving(&self) -> usize {
         self.saving.len()
+    }
+
+    /// Whether a stopped `kind` writing to `target` is still finishing its file.
+    pub(crate) fn finishing(&self, kind: OutputKind, target: &str) -> bool {
+        self.stopping.iter().any(|s| s.kind == kind && s.target == target)
+    }
+
+    /// Note how a stopped `kind` writing to `target` ended: `clean` when it finished its file or
+    /// stream without an error.
+    fn note_finish(&mut self, kind: OutputKind, target: &str, clean: bool) {
+        if clean {
+            return;
+        }
+        if self.unfinished.len() >= MAX_UNFINISHED {
+            self.unfinished.remove(0);
+        }
+        self.unfinished.push((kind, target.to_string()));
+    }
+
+    /// Whether a stopped `kind` writing to `target` ended without finishing its file or stream
+    /// cleanly. The answer is given once: the output is forgotten.
+    pub(crate) fn take_unfinished(&mut self, kind: OutputKind, target: &str) -> bool {
+        let Some(i) = self.unfinished.iter().rposition(|(k, t)| *k == kind && t == target) else {
+            return false;
+        };
+        self.unfinished.remove(i);
+        true
+    }
+
+    /// A stopped `kind` writing to `target` that finishes its file when the returned sender is
+    /// dropped, with an error when `fails`, for tests.
+    #[cfg(test)]
+    pub(crate) fn hold_finishing(&mut self, kind: OutputKind, target: &str, fails: bool) -> std::sync::mpsc::Sender<()> {
+        let (tx, rx) = std::sync::mpsc::channel::<()>();
+        let handle = std::thread::spawn(move || {
+            let _ = rx.recv();
+            if fails { Err(PluginError::Failed("the disk is full".into())) } else { Ok(()) }
+        });
+        self.stopping.push(Stopping { kind, target: target.to_string(), failed: false, handle });
+        tx
+    }
+
+    /// Wait for every held `kind` from [`Self::hold_finishing`] to finish and forget it, noting how
+    /// it ended as [`Self::poll`] does, for tests.
+    #[cfg(test)]
+    pub(crate) fn finish_held(&mut self, kind: OutputKind) {
+        let (held, rest): (Vec<_>, Vec<_>) = self.stopping.drain(..).partition(|s| s.kind == kind);
+        self.stopping = rest;
+        for s in held {
+            let clean = matches!(s.handle.join(), Ok(Ok(()))) && !s.failed;
+            self.note_finish(s.kind, &s.target, clean);
+        }
     }
 
     /// An error while [`MAX_SAVES`] replays are being written: each one holds its packets in
@@ -508,11 +577,17 @@ impl Outputs {
         for h in self.canceled.drain(..) {
             let _ = h.join();
         }
-        for (_, mut a) in self.active.drain() {
-            let _ = a.instance.stop();
+        let mut ended = Vec::new();
+        for (kind, mut a) in self.active.drain() {
+            let target = if kind == OutputKind::Streaming { a.instance.target() } else { a.target.clone() };
+            ended.push((kind, target, a.instance.stop().is_ok()));
         }
         for s in self.stopping.drain(..) {
-            let _ = s.handle.join();
+            let clean = matches!(s.handle.join(), Ok(Ok(()))) && !s.failed;
+            ended.push((s.kind, s.target, clean));
+        }
+        for (kind, target, clean) in ended {
+            self.note_finish(kind, &target, clean);
         }
         for s in self.saving.drain(..) {
             let _ = s.handle.join();

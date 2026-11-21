@@ -48,11 +48,14 @@ jobs:
     permissions:
       contents: write
       packages: write
-    # Pinned to craft-common-actions main at 2026-11-20T17:16Z, the commit ci.yml's gate uses; move
-    # the pin to take later changes. The pin covers the workflow file only: the shared workflow calls
+    # Pinned to craft-common-actions e7567444 (2026-11-20T04:09Z). Later commits make the Linux jobs
+    # call actions/rust-channel, whose channel.py imports tomllib (Python 3.11 or later), and those
+    # jobs run on Ubuntu 22.04, which has Python 3.10. The repository has no rust-toolchain.toml, so
+    # both versions install the stable toolchain. Move the pin to take later changes once the Linux
+    # jobs can run rust-channel. The pin covers the workflow file only: the shared workflow calls
     # its own actions (import-signing-key, sign-rpms, draft-release and others) at @main. Its linux
     # and flatpak jobs import LINUX_SIGNING_KEY in the job that builds and packages the app.
-    uses: storytold/craft-common-actions/.github/workflows/release.yml@0bef64f155fcea81edbd9542381777358bfbdcf4
+    uses: storytold/craft-common-actions/.github/workflows/release.yml@e756744483bc76ef21be2fcabe65e0af3106eab8
     with:
       dry-run: ${{ github.event_name == 'schedule' || inputs.dry-run == true }}
       app-name: studiocraft

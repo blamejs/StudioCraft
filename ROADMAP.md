@@ -114,8 +114,10 @@ description in [docs/features.md](docs/features.md).
    stop all of them, a group or one with a single click, after checking the settings first. Each
    kind of service adds what its public interface offers, such as a list of ingest servers, the
    title and category, stream health, the viewer count and chat.
-9. **Markers for editing.** A hotkey will drop a marker while a recording or the stream runs, and
-   the recording will open in FilmCraft with the markers on its timeline.
+9. **Markers for editing (partly done).** File › Add Recording Marker, or its hotkey, marks the
+   running recording, and a timeline file written beside the recording opens in FilmCraft with
+   the markers on it ([Recording markers](docs/features.md#recording-markers)). Markers on the
+   stream are still to be built.
 10. **Raw and on-demand recordings.** A recording will be written twice: a raw copy for editing,
     with its tracks kept apart, and a copy that matches the stream for posting as a video on
     demand.
@@ -123,8 +125,9 @@ description in [docs/features.md](docs/features.md).
     computer while a recording or the stream runs. A Live Captions source shows the text on the
     program, or on the preview only, the stream carries it as closed captions, and `.srt` and
     `.vtt` files are written beside the recording.
-12. **Canvas size from the display (partly done).** Moves and resizes snap to the canvas and to
-    other items, and Settings › Video sets the canvas to a chosen display's size
+12. **Canvas size from the display (partly done).** Moves and resizes snap to the canvas, its safe
+    areas and other items, Settings › Video sets the canvas to a chosen display's size and the
+    output to a share of the canvas, and scenes are laid out again when the canvas size changes
     ([Sources](docs/features.md#sources)). The canvas will follow the display when its resolution
     or scaling changes.
 13. **AMD and Intel encoders in StudioCraft's own process, and hardware decoding.** The AMD AMF and

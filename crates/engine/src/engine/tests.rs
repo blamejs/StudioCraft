@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use serde_json::json;
-use studiocraft_model::{Field, FieldKind, Settings, SettingsSchema, Transform, Vec2};
+use studiocraft_model::{Field, FieldKind, FitMode, Settings, SettingsSchema, Transform, Vec2};
 use studiocraft_plugin::{Filter, FilterInstance, FilterTarget, Plugin, PluginError, Source, SourceCaps, SourceInstance, SourceIo, Transition};
 
 use super::*;
@@ -243,6 +243,75 @@ fn transform_visibility_and_lock() {
 }
 
 #[test]
+fn canvas_relayout_places_every_scene_in_one_undo_step() {
+    let mut e = engine();
+    let (fit_src, fit) = add_color(&mut e, "Fit");
+    let fit_t = Transform::fit((640, 480), (1920, 1080));
+    run(&mut e, "item.transform", json!({"item": fit, "transform": fit_t, "fit": "fit"})).unwrap();
+    run(&mut e, "scene.add", json!({"name": "Other"})).unwrap();
+    let (_, corner) = add_color(&mut e, "Corner");
+    let corner_t = Transform { position: Vec2::new(960.0, 540.0), ..Transform::default() };
+    run(&mut e, "item.transform", json!({"item": corner, "transform": corner_t})).unwrap();
+    run(&mut e, "item.lock", json!({"item": corner, "locked": true})).unwrap();
+    e.seal_history();
+    let before = e.collection().clone();
+    let size = |w: u32, h: u32| json!({"width": w, "height": h});
+    // Bad parameters are refused and change nothing.
+    for bad in [
+        json!({"from": size(8, 1080), "to": size(1280, 720)}),
+        json!({"from": size(1920, 1080), "to": size(1280, 9000)}),
+        json!({"from": size(1920, 1080), "to": size(1280, 720), "sizes": [{"source": 999, "width": 640, "height": 480}]}),
+        json!({"from": size(1920, 1080), "to": size(1280, 720), "sizes": [{"source": fit_src, "width": 0, "height": 480}]}),
+        json!({"from": size(1920, 1080), "to": size(1280, 720), "sizes": [{"source": fit_src, "width": 640, "height": 480}, {"source": fit_src, "width": 640, "height": 480}]}),
+        json!({"from": size(1920, 1080), "to": "1280x720"}),
+        json!({"from": size(1920, 1080), "to": size(1280, 720), "items": [999]}),
+        json!({"from": size(1920, 1080), "to": size(1280, 720), "items": [fit, fit]}),
+    ] {
+        assert!(run(&mut e, "canvas.relayout", bad.clone()).is_err(), "{bad}");
+    }
+    assert_eq!(e.collection(), &before);
+    let sizes = json!([{"source": fit_src, "width": 640, "height": 480}]);
+    run(&mut e, "canvas.relayout", json!({"from": size(1920, 1080), "to": size(1080, 1920), "sizes": sizes})).unwrap();
+    let c = e.collection();
+    let t = |item: ItemId| c.scenes.iter().find_map(|s| s.item(item)).unwrap().transform;
+    assert_eq!(t(fit), Transform::fit((640, 480), (1080, 1920)), "a fit item is fit again");
+    // Without a size, the top-left corner keeps its place in proportion; locked items move too.
+    let p = t(corner).position;
+    assert!((p.x - 540.0).abs() < 0.01 && (p.y - 960.0).abs() < 0.01, "{p:?}");
+    run(&mut e, "edit.undo", json!({})).unwrap();
+    assert_eq!(e.collection().scenes, before.scenes, "one undo step takes the whole layout back");
+    // The same size again changes nothing and records no step.
+    let same = run(&mut e, "canvas.relayout", json!({"from": size(1920, 1080), "to": size(1920, 1080), "sizes": sizes})).unwrap();
+    assert!(!same.changed);
+    assert_eq!(e.redo_label(), Some("Lay Out for Canvas Size"), "a recorded step would have dropped the redo");
+    // With `items`, only those items are placed.
+    run(&mut e, "canvas.relayout", json!({"from": size(1920, 1080), "to": size(1080, 1920), "sizes": sizes, "items": [corner]})).unwrap();
+    let c = e.collection();
+    let t = |item: ItemId| c.scenes.iter().find_map(|s| s.item(item)).unwrap().transform;
+    let was = |item: ItemId| before.scenes.iter().find_map(|s| s.item(item)).unwrap().transform;
+    assert_eq!(t(fit), was(fit), "an item not listed stays");
+    assert_ne!(t(corner), was(corner));
+}
+
+#[test]
+fn a_fit_mode_stays_until_the_transform_changes_another_way() {
+    let mut e = engine();
+    let (_, item) = add_color(&mut e, "Back");
+    let fit_of = |e: &Engine| e.collection().scenes[0].item(item).unwrap().fit;
+    let t = Transform::fit((640, 480), (1920, 1080));
+    run(&mut e, "item.transform", json!({"item": item, "transform": t, "fit": "fill"})).unwrap();
+    assert_eq!(fit_of(&e), Some(FitMode::Fill));
+    assert!(run(&mut e, "item.transform", json!({"item": item, "transform": t, "fit": "cover"})).is_err());
+    assert_eq!(fit_of(&e), Some(FitMode::Fill), "a bad mode changes nothing");
+    // A duplicate keeps the mode; a move without one clears it.
+    let dup = run(&mut e, "item.duplicate", json!({"item": item})).unwrap().result["item"].as_u64().unwrap();
+    assert_eq!(e.collection().scenes[0].item(ItemId(dup)).unwrap().fit, Some(FitMode::Fill));
+    let moved = Transform { position: Vec2::new(10.0, 0.0), ..t };
+    run(&mut e, "item.transform", json!({"item": item, "transform": moved})).unwrap();
+    assert_eq!(fit_of(&e), None);
+}
+
+#[test]
 fn volume_and_mute() {
     let mut e = engine();
     let o = run(&mut e, "source.add", json!({"kind": "mic", "name": "Mic"})).unwrap();
@@ -413,6 +482,23 @@ fn runtime_commands_are_handed_to_the_app() {
         [json!({"name": ""}), json!({"name": "   "}), json!({"name": too_long}), json!({"name": "a\nb"}), json!({"name": 3}), json!({"name": null})]
     {
         assert!(run(&mut e, "audio_tracks.marker", bad.clone()).is_err(), "{bad}");
+    }
+}
+
+#[test]
+fn a_recording_marker_is_handed_to_the_app_with_a_checked_name() {
+    let mut e = engine();
+    let o = run(&mut e, "record.marker", json!({})).unwrap();
+    assert_eq!(o.runtime, Some(RuntimeAction::RecordingMarker { name: None }));
+    let longest = "é".repeat(crate::engine::MAX_MARKER_NAME_CHARS);
+    let o = run(&mut e, "record.marker", json!({"name": longest})).unwrap();
+    assert_eq!(o.runtime, Some(RuntimeAction::RecordingMarker { name: Some(longest) }));
+    assert!(!o.changed);
+    let too_long = "x".repeat(crate::engine::MAX_MARKER_NAME_CHARS + 1);
+    for bad in
+        [json!({"name": ""}), json!({"name": "   "}), json!({"name": too_long}), json!({"name": "a\tb"}), json!({"name": 3}), json!({"name": null})]
+    {
+        assert!(run(&mut e, "record.marker", bad.clone()).is_err(), "{bad}");
     }
 }
 
@@ -1258,6 +1344,7 @@ fn every_spec_is_reachable() {
             "item.remove" | "item.duplicate" => json!({"item": 1}),
             "item.move" => json!({"item": 1, "to": "up"}),
             "item.transform" => json!({"item": 1, "transform": {}}),
+            "canvas.relayout" => json!({"from": {"width": 1920, "height": 1080}, "to": {"width": 1280, "height": 720}}),
             "item.visible" => json!({"item": 1, "visible": true}),
             "item.lock" => json!({"item": 1, "locked": true}),
             "filter.add" => json!({"source": 1, "kind": "gain"}),

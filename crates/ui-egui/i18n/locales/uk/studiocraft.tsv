@@ -504,6 +504,9 @@ menu	Transform	Перетворення
 @msg	Audio tracks could not be repaired: {takes} and {more} more. Takes repaired: {count}	Не вдалося відновити звукові доріжки: {takes} і ще {more}. Відновлено дублів: {count}
 	Open Last Audio Tracks in Editor	Відкрити останні звукові доріжки в редакторі
 	Add Audio Tracks Marker	Додати маркер до звукових доріжок
+	Add Recording Marker	Додати маркер до запису
+@msg	Markers saved to {path}	Маркери збережено до {path}
+@msg	The markers could not be saved: {error}	Не вдалося зберегти маркери: {error}
 	After a take	Після дубля
 	Nothing	Нічого
 	Show the folder	Показати теку
@@ -547,3 +550,8 @@ menu	Transform	Перетворення
 @msg	there is no display `{id}`: the system lists no displays	немає екрана `{id}`: система не повідомляє про жоден екран
 @msg	there is no display `{id}` (the displays are {ids})	немає екрана `{id}` (є екрани {ids})
 @msg	a {width} × {height} display can't be the canvas: each side must be from {min} to {max} pixels	екран {width} × {height} не може бути полотном: кожна сторона має бути від {min} до {max} пікселів
+	Output scale	Масштаб виводу
+	Custom	Інший
+	{percent}% ({width} × {height})	{percent} % ({width} × {height})
+	Fill Screen	Заповнити екран
+@msg	The scenes could not be laid out for the new canvas: {error}	Не вдалося розташувати сцени для нового полотна: {error}

@@ -9,12 +9,23 @@ use studiocraft_model::{FilterConfig, FilterId, ItemId, Scene, SceneCollection, 
 use studiocraft_plugin::{PluginError, Registry, Settings, SettingsSchema};
 use thiserror::Error;
 
-use crate::command::{Command, ItemRef, Move, RuntimeAction, SceneRef, SourceRef, Undo};
+use crate::command::{CanvasSize, Command, ItemRef, MAX_SOURCE_SIDE, Move, RuntimeAction, SceneRef, SourceRef, Undo};
 use crate::history::History;
 use crate::links;
 
-/// Characters a marker's name holds at most (`audio_tracks.marker`).
+/// Characters a marker's name holds at most (`audio_tracks.marker` and `record.marker`).
 pub const MAX_MARKER_NAME_CHARS: usize = 256;
+
+/// An error unless `name` is absent or 1 to [`MAX_MARKER_NAME_CHARS`] characters, not only
+/// spaces, with no control characters.
+fn check_marker_name(name: Option<&str>) -> Result<(), EngineError> {
+    match name {
+        Some(n) if n.trim().is_empty() || n.chars().count() > MAX_MARKER_NAME_CHARS || n.chars().any(char::is_control) => Err(EngineError::Invalid(
+            format!("a marker's name is 1 to {MAX_MARKER_NAME_CHARS} characters, not only spaces, with no control characters"),
+        )),
+        _ => Ok(()),
+    }
+}
 
 /// Why a command did not run. Shown to the user as is.
 #[derive(Debug, Error, Clone, PartialEq)]
@@ -215,6 +226,27 @@ impl Engine {
         self.history.redo_label()
     }
 
+    /// The id of the newest undo step, which undo and redo keep.
+    pub fn last_step(&self) -> Option<u64> {
+        self.history.last_step()
+    }
+
+    /// Whether the undo step `step` is in effect and can still be undone.
+    pub fn step_holds(&self, step: u64) -> bool {
+        self.history.holds(step)
+    }
+
+    /// The undo steps newer than `step`, oldest first; `None` when `step` is not in effect.
+    pub fn steps_after(&self, step: u64) -> Option<Vec<u64>> {
+        self.history.steps_after(step)
+    }
+
+    /// Take back the newest undo step and drop it, so redo does not offer it. Returns whether
+    /// there was one.
+    pub fn discard_last_step(&mut self) -> bool {
+        self.restore(|h, _| h.discard()).changed
+    }
+
     /// End the current drag or slider gesture: the next change is its own undo step.
     pub fn seal_history(&mut self) {
         self.history.seal();
@@ -273,6 +305,10 @@ impl Engine {
             Command::RecordStart {} => Ok(Outcome::runtime(RuntimeAction::StartRecording)),
             Command::RecordStop {} => Ok(Outcome::runtime(RuntimeAction::StopRecording)),
             Command::RecordToggle {} => Ok(Outcome::runtime(RuntimeAction::ToggleRecording)),
+            Command::RecordMarker { name } => {
+                check_marker_name(name.as_deref())?;
+                Ok(Outcome::runtime(RuntimeAction::RecordingMarker { name }))
+            }
             Command::StreamStart {} => Ok(Outcome::runtime(RuntimeAction::StartStreaming)),
             Command::StreamStop {} => Ok(Outcome::runtime(RuntimeAction::StopStreaming)),
             Command::StreamToggle {} => Ok(Outcome::runtime(RuntimeAction::ToggleStreaming)),
@@ -305,13 +341,7 @@ impl Engine {
             Command::CaptionsDownloadCancel {} => Ok(Outcome::runtime(RuntimeAction::CaptionsDownloadCancel)),
             Command::AudioTracksOpenLast {} => Ok(Outcome::runtime(RuntimeAction::AudioTracksOpenLast)),
             Command::AudioTracksMarker { name } => {
-                if let Some(n) = &name
-                    && (n.trim().is_empty() || n.chars().count() > MAX_MARKER_NAME_CHARS || n.chars().any(char::is_control))
-                {
-                    return Err(EngineError::Invalid(format!(
-                        "a marker's name is 1 to {MAX_MARKER_NAME_CHARS} characters, not only spaces, with no control characters"
-                    )));
-                }
+                check_marker_name(name.as_deref())?;
                 Ok(Outcome::runtime(RuntimeAction::AudioTracksMarker { name }))
             }
             Command::RetestHardwareEncoders {} => Ok(Outcome::runtime(RuntimeAction::RetestHardwareEncoders)),
@@ -529,7 +559,14 @@ impl Engine {
                 });
                 let item = ItemId(c.alloc_id());
                 let s = c.scene_mut(scene).ok_or_else(|| EngineError::NoScene(scene.to_string()))?;
-                s.items.push(SceneItem { id: item, source, transform: transform.unwrap_or_default().sanitized(), visible: true, locked: false });
+                s.items.push(SceneItem {
+                    id: item,
+                    source,
+                    transform: transform.unwrap_or_default().sanitized(),
+                    visible: true,
+                    locked: false,
+                    fit: None,
+                });
                 Ok((json!({"source": source, "item": item, "scene": scene}), None))
             }
             Command::SourceAddExisting { scene, source } => {
@@ -537,7 +574,7 @@ impl Engine {
                 let source = self.source_id(&source)?;
                 let item = ItemId(c.alloc_id());
                 let s = c.scene_mut(scene).ok_or_else(|| EngineError::NoScene(scene.to_string()))?;
-                s.items.push(SceneItem { id: item, source, transform: Default::default(), visible: true, locked: false });
+                s.items.push(SceneItem { id: item, source, transform: Default::default(), visible: true, locked: false, fit: None });
                 Ok((json!({"item": item}), None))
             }
             Command::SourceRename { source, name } => {
@@ -669,7 +706,7 @@ impl Engine {
                 s.items.insert(dest, it);
                 Ok((Value::Null, None))
             }
-            Command::ItemTransform { scene, item, transform } => {
+            Command::ItemTransform { scene, item, transform, fit } => {
                 transform.check().map_err(EngineError::Invalid)?;
                 let scene = self.scene_or_edit(&scene)?;
                 let item = self.item_id(scene, &item)?;
@@ -679,6 +716,7 @@ impl Engine {
                     return Err(EngineError::Locked(name));
                 }
                 it.transform = transform.sanitized();
+                it.fit = fit;
                 Ok((Value::Null, Some(format!("item.transform:{item}"))))
             }
             Command::ItemVisible { scene, item, visible } => {
@@ -694,6 +732,47 @@ impl Engine {
                 let item = self.item_id(scene, &item)?;
                 if let Some(it) = c.scene_mut(scene).and_then(|s| s.item_mut(item)) {
                     it.locked = locked;
+                }
+                Ok((Value::Null, None))
+            }
+            Command::CanvasRelayout { from, to, sizes, items } => {
+                use studiocraft_model::profile::{MAX_SIDE, MIN_SIDE};
+                let side = |s: CanvasSize| (MIN_SIDE..=MAX_SIDE).contains(&s.width) && (MIN_SIDE..=MAX_SIDE).contains(&s.height);
+                if !side(from) || !side(to) {
+                    return Err(EngineError::Invalid(format!("`from` and `to` are canvas sizes with sides of {MIN_SIDE} to {MAX_SIDE} pixels")));
+                }
+                let mut known = std::collections::BTreeMap::new();
+                for s in &sizes {
+                    if c.source(s.source).is_none() {
+                        return Err(EngineError::NoSource(s.source.to_string()));
+                    }
+                    if !(1..=MAX_SOURCE_SIDE).contains(&s.width) || !(1..=MAX_SOURCE_SIDE).contains(&s.height) {
+                        return Err(EngineError::Invalid(format!("a source's size has sides of 1 to {MAX_SOURCE_SIDE} pixels")));
+                    }
+                    if known.insert(s.source, (s.width, s.height)).is_some() {
+                        return Err(EngineError::Invalid(format!("`sizes` lists source {} twice", s.source)));
+                    }
+                }
+                let only = match items {
+                    Some(ids) => {
+                        let mut only = std::collections::BTreeSet::new();
+                        for id in ids {
+                            if !c.scenes.iter().flat_map(|s| &s.items).any(|i| i.id == id) {
+                                return Err(EngineError::NoItem(id.to_string()));
+                            }
+                            if !only.insert(id) {
+                                return Err(EngineError::Invalid(format!("`items` lists item {id} twice")));
+                            }
+                        }
+                        Some(only)
+                    }
+                    None => None,
+                };
+                let (from, to) = ((from.width, from.height), (to.width, to.height));
+                for it in c.scenes.iter_mut().flat_map(|s| s.items.iter_mut()) {
+                    if only.as_ref().is_none_or(|o| o.contains(&it.id)) {
+                        it.transform = it.transform.relayout(it.fit, known.get(&it.source).copied(), from, to);
+                    }
                 }
                 Ok((Value::Null, None))
             }

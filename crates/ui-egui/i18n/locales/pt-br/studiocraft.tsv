@@ -494,6 +494,9 @@ menu	Transform	Transformar
 @msg	Audio tracks could not be repaired: {takes} and {more} more. Takes repaired: {count}	Não foi possível reparar as faixas de áudio: {takes} e mais {more}. Tomadas reparadas: {count}
 	Open Last Audio Tracks in Editor	Abrir as últimas faixas de áudio no editor
 	Add Audio Tracks Marker	Adicionar marcador às faixas de áudio
+	Add Recording Marker	Adicionar marcador à gravação
+@msg	Markers saved to {path}	Marcadores salvos em {path}
+@msg	The markers could not be saved: {error}	Não foi possível salvar os marcadores: {error}
 	After a take	Depois de uma tomada
 	Nothing	Nada
 	Show the folder	Mostrar a pasta
@@ -537,3 +540,7 @@ menu	Transform	Transformar
 @msg	there is no display `{id}`: the system lists no displays	não há tela `{id}`: o sistema não lista nenhuma tela
 @msg	there is no display `{id}` (the displays are {ids})	não há tela `{id}` (as telas são {ids})
 @msg	a {width} × {height} display can't be the canvas: each side must be from {min} to {max} pixels	uma tela de {width} × {height} não pode ser a tela de pintura: cada lado deve ter de {min} a {max} pixels
+	Output scale	Escala de saída
+	Custom	Personalizado
+	Fill Screen	Preencher a tela
+@msg	The scenes could not be laid out for the new canvas: {error}	Não foi possível reorganizar as cenas para a nova tela de pintura: {error}

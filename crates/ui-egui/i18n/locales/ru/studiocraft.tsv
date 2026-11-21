@@ -504,6 +504,9 @@ menu	Transform	Преобразование
 @msg	Audio tracks could not be repaired: {takes} and {more} more. Takes repaired: {count}	Не удалось восстановить звуковые дорожки: {takes} и ещё {more}. Восстановлено дублей: {count}
 	Open Last Audio Tracks in Editor	Открыть последние звуковые дорожки в редакторе
 	Add Audio Tracks Marker	Добавить маркер в звуковые дорожки
+	Add Recording Marker	Добавить маркер в запись
+@msg	Markers saved to {path}	Маркеры сохранены в {path}
+@msg	The markers could not be saved: {error}	Не удалось сохранить маркеры: {error}
 	After a take	После дубля
 	Nothing	Ничего
 	Show the folder	Показать папку
@@ -547,3 +550,8 @@ menu	Transform	Преобразование
 @msg	there is no display `{id}`: the system lists no displays	нет экрана `{id}`: система не сообщает ни об одном экране
 @msg	there is no display `{id}` (the displays are {ids})	нет экрана `{id}` (есть экраны {ids})
 @msg	a {width} × {height} display can't be the canvas: each side must be from {min} to {max} pixels	экран {width} × {height} не может быть холстом: каждая сторона должна быть от {min} до {max} пикселей
+	Output scale	Масштаб вывода
+	Custom	Другой
+	{percent}% ({width} × {height})	{percent} % ({width} × {height})
+	Fill Screen	Заполнить экран
+@msg	The scenes could not be laid out for the new canvas: {error}	Не удалось расположить сцены для нового холста: {error}

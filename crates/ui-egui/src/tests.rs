@@ -6,6 +6,13 @@ fn app() -> StudioApp {
     StudioApp::boot(Store::memory(), None, Vec::new())
 }
 
+/// Waits until `source` has published its first content, so its size is known.
+fn wait_shown(a: &StudioApp, source: SourceId) {
+    let (tx, rx) = std::sync::mpsc::sync_channel(1);
+    assert!(a.studio().notify_source_shown(source, tx), "the source is running");
+    rx.recv().unwrap();
+}
+
 fn frame(app: &mut StudioApp, ctx: &egui::Context, events: Vec<Event>) {
     let raw = RawInput { events, screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1280.0, 800.0))), ..RawInput::default() };
     let mut out = ctx.run_ui(raw, |ui| app.frame(ui));
@@ -1277,10 +1284,7 @@ fn selection_commands_need_a_selection() {
     let item = ItemId(r["item"].as_u64().unwrap());
     assert_eq!(a.hud()["ui"]["selected_item"], json!(item));
     let source = a.studio().collection().scenes[0].items[0].source;
-    let until = Instant::now() + Duration::from_secs(5);
-    while a.studio().source_size(source).is_none() && Instant::now() < until {
-        std::thread::sleep(Duration::from_millis(10));
-    }
+    wait_shown(&a, source);
     run(&mut a, &ctx, "selection.rotate_cw", json!({})).unwrap_or_else(|e| panic!("{e}"));
     let rot = |a: &StudioApp| a.studio().collection().scenes[0].items[0].transform.rotation;
     assert_eq!(rot(&a), 90.0);
@@ -1485,19 +1489,26 @@ fn the_canvas_takes_the_size_of_the_display_the_window_is_on() {
     frame_on_display(&mut a, &ctx, egui::vec2(1512.0, 982.0), 2.0);
     a.open_settings(crate::settings::Tab::Video);
     let r = run(&mut a, &ctx, "video.canvas_from_display", json!({})).unwrap();
-    assert_eq!(r, json!({"width": 3024, "height": 1964, "changed": true}));
+    assert_eq!(r, json!({"width": 3024, "height": 1964, "output": {"width": 3024, "height": 1964}, "changed": true}));
     assert_eq!(a.studio().canvas(), (3024, 1964));
-    assert_eq!(a.studio().profile().video.output_width, 1920, "the output size stays");
+    let v = a.studio().profile().video;
+    assert_eq!((v.output_width, v.output_height), (3024, 1964), "an output at 100% of the canvas follows it");
     let saved = a.store().load_profile(DEFAULT_NAME).unwrap();
     assert_eq!((saved.video.base_width, saved.video.base_height), (3024, 1964), "the profile is saved");
     let draft = &a.settings.as_ref().unwrap().draft.video;
     assert_eq!((draft.base_width, draft.base_height), (3024, 1964), "the open Settings window follows");
+    assert_eq!((draft.output_width, draft.output_height), (3024, 1964));
 
     // The same size again changes nothing, but an edited Settings draft follows it.
     a.settings.as_mut().unwrap().draft.video.base_width = 1280;
     let r = run(&mut a, &ctx, "video.canvas_from_display", json!({})).unwrap();
     assert_eq!(r["changed"], json!(false));
     assert_eq!(a.settings.as_ref().unwrap().draft.video.base_width, 3024);
+    // An output size typed into the draft and not yet applied stays.
+    a.settings.as_mut().unwrap().draft.video.output_width = 1000;
+    run(&mut a, &ctx, "video.canvas_from_display", json!({})).unwrap();
+    let draft = &a.settings.as_ref().unwrap().draft.video;
+    assert_eq!((draft.output_width, draft.output_height), (1000, 1964), "the unsaved output size stays");
     let listed = run(&mut a, &ctx, "video.displays", json!({})).unwrap();
     assert_eq!(listed["window"], json!({"width": 3024, "height": 1964}));
     assert!(listed["displays"].is_array());
@@ -1515,6 +1526,39 @@ fn the_canvas_takes_the_size_of_the_display_the_window_is_on() {
 }
 
 #[test]
+fn a_filled_source_and_a_scaled_output_follow_a_new_canvas() {
+    let mut a = app();
+    let ctx = egui::Context::default();
+    run(&mut a, &ctx, "source.add", json!({"kind": "color", "name": "Back", "settings": {"width": 400, "height": 300}})).unwrap();
+    let source = a.studio().collection().scenes[0].items[0].source;
+    wait_shown(&a, source);
+    let native = a.studio().source_size(source).unwrap();
+    assert_eq!(native, (400, 300));
+    let at = |a: &StudioApp| a.studio().collection().scenes[0].items[0].transform;
+    run(&mut a, &ctx, "selection.fill", json!({})).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(at(&a), Transform::fill(native, (1920, 1080)));
+    assert_eq!(a.studio().collection().scenes[0].items[0].fit, Some(studiocraft_model::FitMode::Fill), "the item keeps its mode");
+    let mut p = a.studio().profile().clone();
+    (p.video.output_width, p.video.output_height) = (960, 540);
+    a.studio.set_profile(p).unwrap();
+
+    frame_on_display(&mut a, &ctx, egui::vec2(1080.0, 1920.0), 1.0);
+    let r = run(&mut a, &ctx, "video.canvas_from_display", json!({})).unwrap();
+    assert_eq!(r["output"], json!({"width": 540, "height": 960}), "an output at 50% stays at 50%");
+    assert_eq!(at(&a), Transform::fill(native, (1080, 1920)), "a filled source fills the new canvas");
+    run(&mut a, &ctx, "edit.undo", json!({})).unwrap();
+    assert_eq!(at(&a), Transform::fill(native, (1920, 1080)), "one undo step takes the layout back");
+
+    // A typed output size that is no share of the canvas stays.
+    let mut p = a.studio().profile().clone();
+    (p.video.output_width, p.video.output_height) = (1000, 500);
+    a.studio.set_profile(p).unwrap();
+    frame_on_display(&mut a, &ctx, egui::vec2(1280.0, 720.0), 1.0);
+    let r = run(&mut a, &ctx, "video.canvas_from_display", json!({})).unwrap();
+    assert_eq!(r["output"], json!({"width": 1000, "height": 500}));
+}
+
+#[test]
 fn a_canvas_size_that_cant_be_saved_is_an_error() {
     let dir = temp_dir("canvas-save-fails");
     std::fs::create_dir_all(&dir).unwrap();
@@ -1525,17 +1569,56 @@ fn a_canvas_size_that_cant_be_saved_is_an_error() {
     let _ = std::fs::remove_dir_all(&profiles);
     std::fs::write(&profiles, b"").unwrap();
     let ctx = egui::Context::default();
+    run(&mut a, &ctx, "source.add", json!({"kind": "image", "name": "Logo", "transform": {"position": {"x": 960.0, "y": 540.0}}})).unwrap();
+    a.studio.mark_saved();
+    let old = a.studio().canvas();
     frame_on_display(&mut a, &ctx, egui::vec2(1280.0, 720.0), 1.0);
     let r = run(&mut a, &ctx, "video.canvas_from_display", json!({}));
-    // Once the profiles folder can be written, the same size again is saved.
+    // The old canvas and layout come back, and the scene collection has nothing new to save.
+    let back = (a.studio().canvas(), a.studio().collection().scenes[0].items[0].transform.position, a.studio().engine().is_dirty());
+    // Once the profiles folder can be written, the size is set and saved.
     std::fs::remove_file(&profiles).unwrap();
     let again = run(&mut a, &ctx, "video.canvas_from_display", json!({}));
     let saved = a.store().load_profile(DEFAULT_NAME).map(|p| (p.video.base_width, p.video.base_height));
     let _ = std::fs::remove_dir_all(&dir);
     let e = r.unwrap_err();
     assert!(e.contains("could not be saved"), "{e}");
-    assert_eq!(again.unwrap()["changed"], json!(false));
+    assert_eq!(back, (old, Vec2::new(960.0, 540.0), false));
+    assert_eq!(again.unwrap()["changed"], json!(true));
     assert_eq!(saved, Ok((1280, 720)));
+}
+
+#[test]
+fn a_canvas_size_from_settings_that_cant_be_saved_is_taken_back() {
+    let dir = temp_dir("settings-canvas-save-fails");
+    std::fs::create_dir_all(&dir).unwrap();
+    let (store, _) = Store::open(craft_settings::Location::Dir(dir.clone()));
+    let mut a = StudioApp::boot(store, None, Vec::new());
+    let profiles = dir.join("profiles");
+    let _ = std::fs::remove_dir_all(&profiles);
+    std::fs::write(&profiles, b"").unwrap();
+    let ctx = egui::Context::default();
+    run(&mut a, &ctx, "source.add", json!({"kind": "image", "name": "Logo", "transform": {"position": {"x": 960.0, "y": 540.0}}})).unwrap();
+    a.studio.mark_saved();
+    a.open_settings(crate::settings::Tab::Video);
+    let w = a.settings.as_ref().unwrap();
+    let mut profile = w.draft.clone();
+    (profile.video.base_width, profile.video.base_height) = (1280, 720);
+    let apply = crate::settings::Apply {
+        profile,
+        overrides: a.keymap.overrides().clone(),
+        language: w.language.clone(),
+        check_updates: w.check_updates,
+        system_title_bar: w.system_title_bar,
+        graphics_adapter: w.graphics_adapter.clone(),
+    };
+    let took = a.apply_settings(apply);
+    let _ = std::fs::remove_file(&profiles);
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(!took, "the Settings window stays open with the edits");
+    assert_eq!(a.studio().canvas(), (1920, 1080));
+    assert_eq!(a.studio().collection().scenes[0].items[0].transform.position, Vec2::new(960.0, 540.0));
+    assert!(!a.studio().engine().is_dirty(), "the scene collection has nothing new to save");
 }
 
 #[test]

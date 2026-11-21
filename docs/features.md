@@ -8,13 +8,23 @@ sizes and bitrates, are listed in [MECHANICS.md](../MECHANICS.md).
 
 A scene is a stack of sources. You add, rename, duplicate, reorder and remove scenes and sources.
 In the preview you drag, resize and rotate sources. A source that is not rotated snaps when an
-edge or its center line comes within 8 points of a canvas edge, a canvas center line, or an edge or
+edge or its center line comes within 8 points of a canvas edge, a canvas center line, an edge of
+the action safe area (3.5% in from each canvas edge) or the title safe area (5% in), or an edge or
 center line of another visible source, and a line shows what it snapped to. A move snaps on each
 axis. A corner drag snaps the edges it moves and keeps the aspect ratio: the edge closer to its
 line snaps and the other edge follows the ratio. With Shift held the corner drag changes the ratio
 and each edge snaps on its own. Holding Alt (Option on macOS) turns snapping off. One drag is one
 undo step. You can lock a source so it can't be moved, or lock the whole preview. Each scene item can be
 shown or hidden, and every change can be undone.
+
+The Transform menu (in Edit and in a source's context menu) has Fit to Screen, which shows the
+whole source in the canvas at its aspect ratio; Fill Screen, which covers the canvas at the
+source's aspect ratio and leaves the parts past the canvas edges out of the picture; and Stretch to
+Screen, which makes the source the canvas's size. When the canvas size changes, every scene is laid
+out for the new size in one undo step: a source that was fit, filled or stretched with these
+commands is fit, filled or stretched again, and any other source keeps its place in proportion to
+the canvas ([`canvas.relayout`](control-protocol.md#canvasrelayout)). Moving, resizing, rotating
+or cropping a source ends its fit, fill or stretch.
 
 ### Built-in sources
 
@@ -37,7 +47,9 @@ shown or hidden, and every change can be undone.
 On Linux, display and window capture go through the desktop's screen-cast portal
 (`xdg-desktop-portal` with a backend for your desktop) and PipeWire. The desktop's own picker
 asks for the display or window when the source starts. After the picker is canceled or sharing is
-stopped, changing any of the source's properties opens the picker again.
+stopped, changing any of the source's properties opens the picker again. The list of displays
+for the canvas size (Settings › Video › Match display and `video.displays`) does not use the
+picker: it comes from the Wayland compositor's outputs, or from RandR under X11.
 
 ### Audio capture on Linux
 
@@ -220,6 +232,25 @@ runtime has no `ffmpeg`, and the Flatpak sandbox cannot run an `ffmpeg` installe
 Tools › Available Encoders lists the built-in encoders and the encoders the installed `ffmpeg`
 offers, and says when `ffmpeg` was not found.
 
+### Recording markers
+
+File › Add Recording Marker (`record.marker`, which can be given a shortcut in Settings › Hotkeys)
+marks the running recording at that moment. A marker is named "Marker N" for the recording's Nth
+marker, and a recording holds at most 10,000 markers. When a recording with at least one marker
+stops, or the app closes during it, StudioCraft finishes the recording file and then writes
+`<recording name>.otio` beside it: an
+[OpenTimelineIO](https://opentimelineio.readthedocs.io) timeline with the recording as one clip on
+a video track and on an audio track, and each marker on the timeline at the frame that holds its
+time. A marker's time leaves out the time the recording skipped while the computer was suspended.
+The clip is as long as the frames written to the recording file, so a recording whose encoder fell
+behind before the stop gets a shorter clip, and a marker past the clip's end goes on its last
+frame. The timeline names the recording by its file name, so the two files can be moved together.
+File › Import in FilmCraft opens the timeline as a sequence with the markers on it. A file of that
+name that already exists is not replaced: the timeline goes to `<recording name> (2).otio`, or the
+next free number up to 999, and the status bar names the file. A recording without markers gets no
+timeline file, and neither does a recording whose file could not be finished; the status bar says
+the markers could not be saved.
+
 ### Replay buffer
 
 File › Replay Buffer keeps the last seconds of the program in memory with the built-in H.264 and
@@ -343,10 +374,16 @@ or failed with the error, so one destination's error does not hide another's sta
 Stop send to one destination or stop sending to it while the others go on. A destination added
 after the stream started is sent to from the next start, and so are changes to a server or a key.
 
-Add Destination adds one, up to 16. The first destination uses the profile's stream key; the
-others have no key of their own until one is chosen, so the profile's key is not sent to another
-service. Edit opens a destination's name, server and key source. The server field hides its text
-until Show is pressed. Save closes the details once the change is made; a change that is refused
+Add Destination adds one, up to 16, for one of seven streaming services or for a custom server.
+The first destination uses the profile's stream key; the others have no key of their own until one
+is chosen, so the profile's key is not sent to another service. A service that documents one ingest
+server for every account fills in that server. For the other services the details link to the
+service's page that shows the account's server and key. Edit opens a destination's service, name,
+server and key source. Choosing another service replaces a server that is empty or that is one of
+the services' documented servers, and keeps any other server. A service without a shared server leaves the server
+empty, and a destination saved for it without a server is turned off. The server field hides its text until Show is pressed. A row
+shows the service it streams to, and the row and the details show a service's logo only where the
+service publishes one for this use, at no less than the size its guidelines allow (`ASSETS.md`). Save closes the details once the change is made; a change that is refused
 leaves them open with what was typed. A destination whose key is held for the session has a field for that key:
 Hold keeps the typed key in memory for this session and Forget drops it. Remove deletes a
 destination; one that is sending must be stopped first. Each change is saved in the profile; a change
@@ -524,7 +561,7 @@ discards them.
 | Stream | Server, Stream key, Video bitrate, Audio bitrate, Video encoder and Keyframe interval. |
 | Output | Recording folder, Format, Quality, Video encoder and its settings, the `ffmpeg` program, Replay buffer length and Replay buffer memory limit. |
 | Audio | Monitoring device, the device monitored sources play on. |
-| Video | Canvas size, Match display (sets the canvas size to the display the window is on or to a listed display; on Linux only the window's display is offered), Output size and Frames per second, and the Hardware acceleration section with Graphics adapter and Hardware encoder. Video settings can't change while recording, streaming or running the replay buffer. |
+| Video | Canvas size (the presets include 1080 × 1920 for vertical video), Match display (sets the canvas size to the display the window is on or to a listed display), Output size, Output scale (100%, 75%, 66% or 50% of the canvas; an output size at one of these shares stays at that share when the canvas size changes) and Frames per second, and the Hardware acceleration section with Graphics adapter and Hardware encoder. Video settings can't change while recording, streaming or running the replay buffer. |
 | Hotkeys | A shortcut for each command. |
 
 ## Control and automation
