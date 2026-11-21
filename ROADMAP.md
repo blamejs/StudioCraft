@@ -47,6 +47,7 @@ description in [docs/features.md](docs/features.md).
 
 - Settings › Video › Hardware acceleration chooses the graphics adapter, and the app recovers from a device loss ([Hardware acceleration](docs/features.md#hardware-acceleration)).
 - The compositor converts the program to NV12 on the GPU for the encoders (`craft-gpu-yuv`) ([Hardware acceleration](docs/features.md#hardware-acceleration)).
+- The compositor draws small pictures of up to 16 scenes on request, at most 4 times a second, on the GPU without reading them back ([Hardware acceleration](docs/features.md#hardware-acceleration)).
 - The Hardware video encoder runs the hardware encoder set in Settings › Video › Hardware acceleration. Automatic tests each candidate with one frame, in an order set by the adapter's vendor, and falls back to x264 (`craft-hwenc`) ([Hardware acceleration](docs/features.md#hardware-acceleration)).
 - NVIDIA NVENC, Windows Media Foundation, Apple VideoToolbox and VA-API H.264 and HEVC (built in) record MKV files in StudioCraft's own process (`craft-hwenc-native`) ([Hardware acceleration](docs/features.md#hardware-acceleration)).
 
