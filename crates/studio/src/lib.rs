@@ -38,7 +38,7 @@ use studiocraft_media::{FrameRate, Tick};
 use studiocraft_model::{FitMode, ItemId, PauseAtZero, Profile, SceneCollection, SceneId, Settings, SourceId, Transform, VideoSettings};
 use studiocraft_plugin::{PluginError, Registry};
 use studiocraft_render::device::{Recovery, RecoveryPolicy};
-use studiocraft_render::{CanvasViews, CaptureRequest, Compositor, Gpu, RenderShared};
+use studiocraft_render::{CanvasViews, CaptureRequest, Compositor, Gpu, RenderShared, ThumbnailRequest, ThumbnailViews};
 use studiocraft_sources::FfmpegSetting;
 
 pub use audio_tracks::{PROGRAM_NAME, clock_text};
@@ -186,7 +186,24 @@ pub fn default_collection(name: &str) -> SceneCollection {
 struct Video {
     shared: Arc<RenderShared>,
     views: Arc<CanvasViews>,
+    /// The textures the scene pictures are drawn into, once a request with scenes made them.
+    thumbnail_views: Option<Arc<ThumbnailViews>>,
+    /// The last scene pictures the compositor was asked for; `None` when it draws none.
+    thumbnails_sent: Option<Arc<ThumbnailRequest>>,
+    /// How many times the compositor was sent a thumbnail request or `None`, in tests.
+    #[cfg(test)]
+    thumbnail_sends: u32,
     _scheduler: Scheduler,
+}
+
+/// The scenes `scene.thumbnails` asked for, in slot order, and the pictures a second of each.
+#[derive(Clone, Debug, PartialEq)]
+struct Thumbnails {
+    scenes: Vec<SceneId>,
+    /// The compositor's key for each scene's slot: kept while the scene stays in the list, and
+    /// never given out again, so a scene of another collection with the same id gets a new one.
+    keys: Vec<u64>,
+    fps: f32,
 }
 
 /// How often [`Studio::tick`] looks for a lost graphics device while nothing else polls it.
@@ -304,6 +321,10 @@ pub struct Studio {
     started: Instant,
     video: Option<Video>,
     render_stats: Arc<RenderStats>,
+    /// The scenes drawn as small pictures for a scene list; `None` while none is shown.
+    thumbnails: Option<Thumbnails>,
+    /// The last key given to a scene picture's slot.
+    thumbnail_key: u64,
     profile: Profile,
     ffmpeg: FfmpegSetting,
     wiring: wiring::Wiring,
@@ -417,6 +438,8 @@ impl Studio {
             started: now,
             video: None,
             render_stats: Arc::new(RenderStats::default()),
+            thumbnails: None,
+            thumbnail_key: 0,
             profile,
             ffmpeg,
             wiring: wiring::Wiring::default(),
@@ -495,6 +518,7 @@ impl Studio {
         let mut result = outcome.result;
         if let Some(action) = outcome.runtime {
             match action {
+                RuntimeAction::SceneThumbnails { scenes, fps } => result = self.set_thumbnails(scenes, fps),
                 RuntimeAction::AudioTracksStatus => result = self.audio_tracks_json(),
                 RuntimeAction::AudioTracksRepair { folder } => result = self.repair_audio_tracks(&folder)?,
                 RuntimeAction::AudioTracksOpenLast => result = self.open_last_audio_tracks()?,
@@ -570,6 +594,9 @@ impl Studio {
         self.relaid_at = None;
         self.fit_placed.clear();
         self.transition = None;
+        // The new collection's scene ids can match the old one's, so pictures asked for the old
+        // scenes are not carried over.
+        self.thumbnails = None;
         self.shown_program = self.engine.collection().program_scene;
         self.refresh();
         self.sync_audio_tracks();
@@ -612,6 +639,9 @@ impl Studio {
         if let Some(v) = &mut self.video {
             if let Some(views) = v.shared.views.take() {
                 v.views = views;
+            }
+            if let Some(views) = v.shared.thumbnail_views.take() {
+                v.thumbnail_views = Some(views);
             }
             while let Some(e) = v.shared.errors.pop() {
                 self.notices.push(Notice::plain(e.to_string(), true));
@@ -778,13 +808,94 @@ impl Studio {
 
     /// Send the compositor what to draw now.
     fn publish(&mut self) {
+        self.prune_thumbnails();
         if self.video.is_none() {
             return;
         }
         let plan = self.plan();
-        if let Some(v) = &self.video {
+        let thumbnails = self.thumbnail_request().map(Arc::new);
+        if let Some(v) = &mut self.video {
             v.shared.plan.publish(Arc::new(plan));
+            // With no scene pictures asked for, the compositor hears nothing more after the first
+            // `None`, so a list view costs nothing.
+            if thumbnails.is_some() || v.thumbnails_sent.is_some() {
+                v.shared.thumbnails.publish(thumbnails.clone());
+                v.thumbnails_sent = thumbnails;
+                #[cfg(test)]
+                {
+                    v.thumbnail_sends += 1;
+                }
+            }
         }
+    }
+
+    /// Draw small pictures of `scenes` (known and distinct, at most
+    /// [`studiocraft_engine::command::MAX_THUMBNAIL_SCENES`]), in this order, `fps` times a
+    /// second; none when the list is empty. Returns the list and rate now drawn.
+    fn set_thumbnails(&mut self, scenes: Vec<SceneId>, fps: f32) -> Value {
+        let unchanged = match &self.thumbnails {
+            Some(t) => t.scenes == scenes && t.fps == fps,
+            None => scenes.is_empty(),
+        };
+        if !unchanged {
+            let old = self.thumbnails.take();
+            let mut keys = Vec::with_capacity(scenes.len());
+            for id in &scenes {
+                let kept = old.as_ref().and_then(|t| t.scenes.iter().zip(&t.keys).find(|(s, _)| *s == id).map(|(_, &k)| k));
+                keys.push(kept.unwrap_or_else(|| {
+                    self.thumbnail_key = self.thumbnail_key.wrapping_add(1);
+                    self.thumbnail_key
+                }));
+            }
+            self.thumbnails = (!scenes.is_empty()).then_some(Thumbnails { scenes, keys, fps });
+            self.publish();
+        }
+        self.thumbnails_json()
+    }
+
+    /// The scenes drawn as small pictures, in slot order, and the pictures a second of each.
+    fn thumbnails_json(&self) -> Value {
+        match &self.thumbnails {
+            Some(t) => json!({"scenes": t.scenes, "fps": t.fps}),
+            None => json!({"scenes": [], "fps": null}),
+        }
+    }
+
+    /// Drop the scene pictures of scenes that left the collection, and stop drawing pictures once
+    /// no scene is left.
+    fn prune_thumbnails(&mut self) {
+        let collection = self.engine.collection();
+        if let Some(t) = &mut self.thumbnails {
+            let (scenes, keys) = t.scenes.iter().zip(&t.keys).filter(|(id, _)| collection.scene(**id).is_some()).map(|(&id, &k)| (id, k)).unzip();
+            (t.scenes, t.keys) = (scenes, keys);
+            if t.scenes.is_empty() {
+                self.thumbnails = None;
+            }
+        }
+    }
+
+    /// The scene pictures to ask the compositor for; `None` while none is shown.
+    fn thumbnail_request(&self) -> Option<ThumbnailRequest> {
+        let t = self.thumbnails.as_ref()?;
+        Some(self.wiring.thumbnails(self.engine.collection(), &self.sources, &t.scenes, &t.keys, t.fps))
+    }
+
+    /// The scenes drawn as small pictures for a scene list, in slot order: the picture of
+    /// `thumbnail_scenes()[i]` is slot `i` of [`Studio::thumbnail_views`]. Empty while none is
+    /// shown.
+    pub fn thumbnail_scenes(&self) -> &[SceneId] {
+        self.thumbnails.as_ref().map_or(&[], |t| &t.scenes)
+    }
+
+    /// The textures the scene pictures are drawn into, once the compositor has made them with a
+    /// slot for each of [`Studio::thumbnail_scenes`]; `None` while no scene picture is shown, and
+    /// while a longer list waits for its new textures. The compositor keeps the textures between
+    /// requests, so the views stay valid when the pictures are asked for again. After the list
+    /// changes, a slot whose scene changed shows its last picture until the compositor draws it
+    /// again: it draws two such slots a frame, before any other, so 16 changed slots take 8 frames.
+    pub fn thumbnail_views(&self) -> Option<Arc<ThumbnailViews>> {
+        let wanted = self.thumbnails.as_ref()?.scenes.len();
+        self.video.as_ref().and_then(|v| v.thumbnail_views.clone()).filter(|views| views.slots.len() >= wanted)
     }
 
     /// What the compositor draws now: the program scene, or the pause screen while paused, and
@@ -1037,7 +1148,15 @@ impl Studio {
         let (sh, mut comp) = (Arc::clone(&shared), compositor);
         match Scheduler::spawn("compositor", self.clock, rate, Arc::clone(&self.render_stats), move |t| comp.run(&sh, t.pts)) {
             Ok(scheduler) => {
-                self.video = Some(Video { shared, views, _scheduler: scheduler });
+                self.video = Some(Video {
+                    shared,
+                    views,
+                    thumbnail_views: None,
+                    thumbnails_sent: None,
+                    #[cfg(test)]
+                    thumbnail_sends: 0,
+                    _scheduler: scheduler,
+                });
                 self.publish();
                 self.update_encode_target();
                 self.update_scope_target();

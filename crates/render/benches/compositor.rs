@@ -72,6 +72,17 @@ fn bench(c: &mut Criterion) {
     });
     comp.set_thumbnails(None);
 
+    // The same frame after the scene list stopped asking for thumbnails (the list view): the
+    // textures are kept, and nothing is drawn into them.
+    c.bench_function("compositor/1080p 9 items + 1080p upload, thumbnails stopped", |b| {
+        b.iter(|| {
+            publish_capture(&capture);
+            frames += 1;
+            comp.frame(tick_of(Duration::from_micros(frames * 16_667)), &lost);
+            comp.finish(&lost);
+        })
+    });
+
     let sink = Arc::new(Fifo::new(8));
     comp.set_encode(Some(EncodeTarget { width: 1920, height: 1080, sinks: vec![Arc::clone(&sink)] }));
     c.bench_function("compositor/1080p 9 items + upload + NV12 read-back", |b| {

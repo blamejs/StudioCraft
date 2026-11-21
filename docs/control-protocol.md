@@ -300,6 +300,29 @@ studiocraft-cli send 9876 engine.execute '{"command": "app_audio.list"}'
 studiocraft-cli send 9876 engine.execute '{"command": "app_audio.route", "params": {"app": "player.exe|c:\\apps\\player.exe", "routed": true}}'
 ```
 
+### `scene.thumbnails`
+
+`scene.thumbnails` takes `{"scenes", "fps"?}` and has the compositor draw a small picture of each
+scene in `scenes`, for a scene list. `scenes` is a list of scene ids or names, at most 16, and the
+picture of the scene at position `i` goes into slot `i` of the thumbnail textures. `fps` is how many
+times a second each picture is redrawn: from 0.1 (once every 10 seconds) to 4, and 2 when it is
+left out. These
+limits and the default are StudioCraft's own. Each call replaces the last call's list, and
+`{"scenes": []}` stops drawing the pictures. A scene that is removed from the collection leaves the
+list, and the pictures stop when no scene is left. When the list changes, a slot whose scene
+changed keeps its last picture until the compositor draws the new scene into it. The compositor
+draws two such slots a frame, before any other slot, so 16 changed slots take 8 frames.
+
+It returns `{"scenes", "fps"}` with the list and rate now drawn, or `{"scenes": [], "fps": null}`
+when none is drawn. More than 16 scenes, a scene that does not exist, a scene given twice, and an
+`fps` outside that range are errors, and the last list stays drawn. The command changes nothing in
+the scene collection and adds no undo step. Without a graphics device the list is kept and nothing
+is drawn.
+
+```sh
+studiocraft-cli send 9876 engine.execute '{"command": "scene.thumbnails", "params": {"scenes": ["Talk", "Break"]}}'
+```
+
 ### `source.sync_offset` and `source.monitor`
 
 `source.sync_offset` takes `{"source", "ms"}` and delays the source's audio by `ms` milliseconds, a

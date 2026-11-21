@@ -477,15 +477,18 @@ impl Compositor {
     /// Start, change or stop drawing small pictures of scenes, compiling the shaders and uploading
     /// the filter pictures they need first. Each frame draws at most two pictures, oldest first.
     /// A picture is redrawn at most at the request's rate, counted from the last time its slot was
-    /// drawn, so a new request does not draw sooner, unless the slot now shows other sources (a
-    /// reordered or replaced scene). A request that draws once draws each slot once, over the
-    /// next frames.
+    /// drawn, so a new request does not draw sooner, unless the slot now shows other sources or
+    /// another key (a reordered or replaced scene). A request that draws once draws each slot
+    /// once, over the next frames.
     pub fn set_thumbnails(&mut self, request: Option<Arc<ThumbnailRequest>>) {
-        // A slot that now shows other sources is drawn again soon, not after the rate's interval.
+        // A slot that now shows other sources or another key is drawn again soon, not after the
+        // rate's interval.
         if let Some(new) = &request {
             for (s, scene) in new.drawn().iter().enumerate() {
-                let old = self.thumbs.as_ref().and_then(|t| t.drawn().get(s));
-                if !old.is_some_and(|old| same_sources(old, scene)) {
+                let old_req = self.thumbs.as_ref();
+                let old = old_req.and_then(|t| t.drawn().get(s));
+                let same_key = old_req.is_some_and(|t| t.keys.get(s) == new.keys.get(s));
+                if !(same_key && old.is_some_and(|old| same_sources(old, scene))) {
                     self.thumb_last[s] = None;
                 }
             }
