@@ -448,6 +448,7 @@ fn runtime_commands_are_handed_to_the_app() {
         ("record.start", RuntimeAction::StartRecording),
         ("record.stop", RuntimeAction::StopRecording),
         ("record.toggle", RuntimeAction::ToggleRecording),
+        ("recordings.list", RuntimeAction::RecordingsList),
         ("stream.start", RuntimeAction::StartStreaming),
         ("stream.stop", RuntimeAction::StopStreaming),
         ("stream.toggle", RuntimeAction::ToggleStreaming),

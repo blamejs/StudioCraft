@@ -85,7 +85,7 @@ when the language's catalog has the message.
 [Commands with their own parameters](#commands-with-their-own-parameters) describes `app.info`,
 `app.links`, `app.check_updates`, `plugin.list`, `source.schema`, `source.sync_offset`,
 `source.monitor`, `source.set_record_track`, the `present.*` commands, `audio_tracks.status`, `audio_tracks.repair`,
-`audio_tracks.open_last`, `audio_tracks.marker`, `record.marker`, the `captions.*` commands, the
+`audio_tracks.open_last`, `audio_tracks.marker`, `record.marker`, `recordings.list`, the `captions.*` commands, the
 `dock.layout_*` commands, `video.displays`, `video.canvas_from_display` and `canvas.relayout`.
 
 Each entry of `engine.commands` has these fields:
@@ -378,6 +378,48 @@ marker. It returns `{"name", "seconds"}`, where `seconds` counts from the record
 and leaves out the time the recording has skipped so far while the computer was suspended. No running recording and a recording that already holds 10,000 markers are errors. When the
 recording stops, `<recording name>.otio` is written beside it with each marker at its frame
 ([Recording markers](features.md#recording-markers)).
+
+### `recordings.list`
+
+`recordings.list` takes no params and lists what the recording folder holds, newest first: each
+`.mkv`, `.mp4` and `.mov` file with its marker timeline and its take of audio tracks, each saved
+replay (`Replay <date and time>.mkv`), and each take of audio tracks that has no recording file,
+such as a stream's take. The folder is scanned on a background thread. The command returns at once
+with the last finished scan and starts a new scan when none runs, so the first call returns an
+empty list with `scanning` true, and a later call returns that scan. It returns
+`{"folder", "scanning", "scanned_unix_ms", "recordings", "unreadable", "more", "timed_out"}`:
+
+| Field | Value |
+| --- | --- |
+| `folder` | The recording folder. A scan of another folder, made before the recording folder changed, is not returned. |
+| `scanning` | `true` while a newer scan of the recording folder runs. A scan of the folder before it changed runs to its end first, and the new folder's scan starts at the next call after that. |
+| `scanned_unix_ms` | When the returned scan ended, in milliseconds since 1970, or `null` before the first scan of the folder ends. |
+| `recordings` | The entries, described below. |
+| `unreadable` | `[{"path", "error"}]`: the folder, files and takes that could not be read. |
+| `more` | `true` when the folder holds more than 500 entries; the scan reads the first 500 the system lists. |
+| `timed_out` | `true` when the scan stopped looking at files after 5 seconds; the takes are not listed then. |
+
+Each entry of `recordings` has `name` (the file's name without its extension, or the take's name),
+`kind` (`recording`, `replay` or `audio_tracks` for a take without a recording file),
+`started_unix_ms`, `file`, `format` (`mkv`, `mp4` or `mov`), `bytes`, `modified_unix_ms`,
+`timeline` and `audio_tracks`; fields that do not apply are `null`. `started_unix_ms` is the date
+and time in the file's name read as local time, else the take's start. The list is sorted by it, or
+by `modified_unix_ms` when it is `null`. A recording's `timeline` is `<name>.otio` beside it, and
+its `audio_tracks` is the take in `<name> Audio`. When that name was taken, the timeline or take
+named `<name> (N)` can belong to it instead, unless a recording has that name. Of these, a
+recording takes the take that started nearest its start, and the timeline last changed nearest its
+file's last change, when one is within 10 seconds; otherwise it takes the one of its own name, and
+then the first numbered one. Of two recordings of one name, such as `<name>.mkv` and
+`<name>.mp4`, the one last changed first is matched first. A timeline or take made more than 10 seconds before the recording
+started does not belong to it, so one left from an older recording of the same name is listed on its
+own (a take) or not at all (a timeline). `audio_tracks` holds the take's `folder` (its `Audio Files` folder, which
+`audio_tracks.repair` takes), `session`, `state` (`finished`, `needs_repair` or `recording`),
+`started_unix_ms`, `seconds`, `tracks`, `bytes`, `missing_files`, `dropouts`, `lost_seconds`,
+`markers`, `repaired` and `stopped` (why the take stopped early, or `null`).
+
+The scan follows no link inside the folder and looks into no folder other than the takes'. The
+500 entries, 5 seconds and 10 seconds are StudioCraft's own limits. One scan runs at a time. Over MCP with
+roots, the recording folder must be inside a read root.
 
 ### `captions.*`
 
