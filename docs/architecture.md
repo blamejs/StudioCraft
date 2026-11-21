@@ -382,7 +382,8 @@ The `captions-recognizer` thread loads the model, then gives the audio to
 `craft_speech::live::LiveCaptioner`. Partial phrases are checked every second at first, and less often
 when a check takes longer than half of that. Each partial and finished phrase goes to the
 `CaptionBoard` that Live Captions sources draw, and each finished phrase is kept as a cue for caption
-files. `Studio::tick` starts a `captions-files` thread that writes `.srt`, `.vtt` and `.txt` files
+files. Each studio has its own board, which `builtin_registry` gives to the Live Captions sources it
+registers. `Studio::tick` starts a `captions-files` thread that writes `.srt`, `.vtt` and `.txt` files
 beside a recording that ran while captions ran: once every phrase before the recording's end is
 final, when captions stop, or 30 s after the recording stopped. A stop removes the queue; the recognizer finishes the audio it was given and ends
 the open phrase. When the app closes, the recognizer gets up to 10 s to finish the audio it holds.

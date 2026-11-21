@@ -8,7 +8,7 @@
 //! empty.
 
 use std::collections::VecDeque;
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use ab_glyph::FontRef;
@@ -77,12 +77,6 @@ fn clip(text: &str) -> String {
 impl CaptionBoard {
     pub fn new() -> CaptionBoard {
         CaptionBoard::default()
-    }
-
-    /// The process's one board, which the studio writes and the registered sources read.
-    pub fn system() -> Arc<CaptionBoard> {
-        static BOARD: OnceLock<Arc<CaptionBoard>> = OnceLock::new();
-        Arc::clone(BOARD.get_or_init(|| Arc::new(CaptionBoard::new())))
     }
 
     fn change(&self, f: impl FnOnce(&mut BoardSnapshot)) {
@@ -373,7 +367,7 @@ mod tests {
 
     #[test]
     fn the_schema_offers_every_catalog_model() {
-        let schema = CaptionsSource::new(CaptionBoard::system()).schema();
+        let schema = CaptionsSource::new(Arc::new(CaptionBoard::new())).schema();
         let defaults = schema.defaults();
         assert_eq!(defaults.str("model"), Some(craft_speech::models::DEFAULT_MODEL));
         assert_eq!(defaults.str("language"), Some("auto"));

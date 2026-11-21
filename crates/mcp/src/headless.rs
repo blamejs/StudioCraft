@@ -12,7 +12,7 @@ use studiocraft_model::{FieldKind, PathMode, Profile, SceneCollection, Settings,
 use studiocraft_render::Gpu;
 use studiocraft_studio::capture::{MAX_PNG_SIDE, png, scaled_size};
 use studiocraft_studio::files::read_collection_file;
-use studiocraft_studio::{CaptionState, OutputKind, Studio, StudioError, View, builtin_registry, default_collection, recording_folder};
+use studiocraft_studio::{CaptionBoard, CaptionState, OutputKind, Studio, StudioError, View, builtin_registry, default_collection, recording_folder};
 
 use crate::backend::{Backend, McpError};
 use crate::roots::{Access, Roots, shown};
@@ -129,8 +129,9 @@ impl Headless {
     /// A studio on `gpu` held to `options`.
     pub fn with_options(gpu: Option<Gpu>, options: ServerOptions) -> Result<Headless, McpError> {
         let ffmpeg = Arc::new(RwLock::new(String::new()));
-        let registry = builtin_registry(&ffmpeg).map_err(|e| McpError::Studio(e.into()))?;
-        let mut studio = Studio::new(gpu, default_collection("Untitled"), Profile::default(), Arc::new(registry), ffmpeg);
+        let captions = Arc::new(CaptionBoard::new());
+        let registry = builtin_registry(&ffmpeg, &captions).map_err(|e| McpError::Studio(e.into()))?;
+        let mut studio = Studio::new(gpu, default_collection("Untitled"), Profile::default(), Arc::new(registry), ffmpeg, captions);
         // The status looks at speech model files only inside the read roots.
         if let Some(roots) = options.roots.clone() {
             studio.set_model_file_filter(Some(Arc::new(move |p: &Path| roots.check(p, Access::Read).is_ok())));

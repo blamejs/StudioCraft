@@ -506,10 +506,11 @@ pub(crate) struct Captions {
     model_filter: Option<ModelFileFilter>,
 }
 
-impl Default for Captions {
-    fn default() -> Self {
+impl Captions {
+    /// Live captions that write what they hear to `board`.
+    pub(crate) fn new(board: Arc<CaptionBoard>) -> Self {
         Captions {
-            board: CaptionBoard::system(),
+            board,
             models_dir: default_models_dir(),
             loader: speech_loader(),
             own_loader: false,
@@ -576,14 +577,6 @@ impl Studio {
     /// The board the Live Captions sources draw from.
     pub fn caption_board(&self) -> Arc<CaptionBoard> {
         Arc::clone(&self.captions.board)
-    }
-
-    /// Write recognized text to `board` instead of the process's one, so tests that run several
-    /// studios at once read their own text from it. The registered Live Captions sources still
-    /// read the process's board.
-    #[cfg(test)]
-    pub(crate) fn set_caption_board(&mut self, board: Arc<CaptionBoard>) {
-        self.captions.board = board;
     }
 
     /// The model and language of the first Live Captions source in the collection.

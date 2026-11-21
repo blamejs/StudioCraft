@@ -9,8 +9,9 @@ use super::*;
 
 fn studio_with(gpu: Option<Gpu>, collection: SceneCollection, profile: Profile) -> Studio {
     let ffmpeg: FfmpegSetting = Arc::new(RwLock::new(String::new()));
-    let registry = Arc::new(builtin_registry(&ffmpeg).unwrap());
-    Studio::new(gpu, collection, profile, registry, ffmpeg)
+    let captions = Arc::new(CaptionBoard::new());
+    let registry = Arc::new(builtin_registry(&ffmpeg, &captions).unwrap());
+    Studio::new(gpu, collection, profile, registry, ffmpeg, captions)
 }
 
 /// One device for every test in this binary; opening many devices at once crashes some drivers.
@@ -36,7 +37,7 @@ fn the_default_collection_hears_desktop_audio_and_the_microphone() {
 #[test]
 fn every_builtin_plugin_registers() {
     let ffmpeg: FfmpegSetting = Arc::new(RwLock::new(String::new()));
-    let reg = builtin_registry(&ffmpeg).unwrap();
+    let reg = builtin_registry(&ffmpeg, &Arc::new(CaptionBoard::new())).unwrap();
     for t in ["fade", "cut", "fade_color", "swipe"] {
         assert!(reg.transition(t).is_ok(), "{t}");
     }
@@ -1529,7 +1530,7 @@ mod audio_tracks {
 mod captions {
     use super::*;
     use craft_speech::{Options, ProgressFn, SpeechError, Transcriber, Transcript};
-    use studiocraft_sources::CaptionBoard;
+    use studiocraft_plugin::{SourceIo, VideoContent};
 
     struct Quiet;
     impl Transcriber for Quiet {
@@ -1542,9 +1543,19 @@ mod captions {
     }
 
     fn captioned() -> Studio {
-        let mut s = headless();
-        s.set_caption_board(Arc::new(CaptionBoard::new()));
-        s
+        headless()
+    }
+
+    #[test]
+    fn each_studio_shows_only_the_captions_it_heard() {
+        let (a, b) = (headless(), headless());
+        assert!(!Arc::ptr_eq(&a.caption_board(), &b.caption_board()));
+        a.caption_board().push_final("only for the first studio", Tick::from_units(0, 1000));
+        let source = b.registry().source("captions").unwrap();
+        let io = SourceIo::new(MasterClock::new());
+        let mut i = source.create(&source.schema().defaults().with("clear_after", 0), &io).unwrap();
+        i.produce(&io).unwrap();
+        assert!(matches!(io.video.take(), Some(VideoContent::Empty)), "the second studio's source shows nothing");
     }
 
     #[test]

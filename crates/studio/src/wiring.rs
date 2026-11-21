@@ -240,11 +240,11 @@ mod tests {
     use studiocraft_media::clock::MasterClock;
 
     use super::*;
-    use crate::{builtin_registry, default_collection};
+    use crate::{CaptionBoard, builtin_registry, default_collection};
 
     #[test]
     fn a_source_started_again_under_the_same_id_is_mixed_from_its_new_queue() {
-        let registry = builtin_registry(&Arc::new(RwLock::new(String::new()))).unwrap();
+        let registry = builtin_registry(&Arc::new(RwLock::new(String::new())), &Arc::new(CaptionBoard::new())).unwrap();
         let mut sources = SourceSet::new(MasterClock::new());
         let (mut wiring, mut levels, mut notices) = (Wiring::default(), HashMap::new(), Vec::new());
         let mut c = default_collection("Test");
@@ -267,7 +267,7 @@ mod tests {
 
     #[test]
     fn a_changed_sync_offset_reaches_the_mixer_without_a_new_input_list() {
-        let registry = builtin_registry(&Arc::new(RwLock::new(String::new()))).unwrap();
+        let registry = builtin_registry(&Arc::new(RwLock::new(String::new())), &Arc::new(CaptionBoard::new())).unwrap();
         let mut sources = SourceSet::new(MasterClock::new());
         let (mut wiring, mut levels, mut notices) = (Wiring::default(), HashMap::new(), Vec::new());
         let mut c = default_collection("Test");
@@ -285,7 +285,7 @@ mod tests {
 
     #[test]
     fn a_changed_monitoring_mode_reaches_the_mixer_without_a_new_input_list() {
-        let registry = builtin_registry(&Arc::new(RwLock::new(String::new()))).unwrap();
+        let registry = builtin_registry(&Arc::new(RwLock::new(String::new())), &Arc::new(CaptionBoard::new())).unwrap();
         let mut sources = SourceSet::new(MasterClock::new());
         let (mut wiring, mut levels, mut notices) = (Wiring::default(), HashMap::new(), Vec::new());
         let mut c = default_collection("Test");
@@ -310,7 +310,7 @@ mod tests {
     #[test]
     fn the_filtered_size_follows_the_enabled_crop_and_pad_filters() {
         use studiocraft_model::FilterConfig;
-        let registry = builtin_registry(&Arc::new(RwLock::new(String::new()))).unwrap();
+        let registry = builtin_registry(&Arc::new(RwLock::new(String::new())), &Arc::new(CaptionBoard::new())).unwrap();
         let mut c = default_collection("Test");
         let id = c.sources[0].id;
         let filter = |n: u64, settings: Settings| FilterConfig {

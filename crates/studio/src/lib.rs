@@ -46,6 +46,7 @@ pub use studiocraft_audio_tracks::{State as AudioTracksState, Status as AudioTra
 pub use studiocraft_platform::PlatformError;
 pub use studiocraft_platform::audio::{AudioSink, Fill, Format, OnError, Playing, SystemSink};
 pub use studiocraft_render::{Capture, View};
+pub use studiocraft_sources::CaptionBoard;
 
 /// Why something the user asked for did not happen. Shown to the user as is.
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
@@ -141,11 +142,12 @@ pub fn gpu_notice(n: &studiocraft_render::device::Notice) -> Notice {
     }
 }
 
-/// Every plug-in StudioCraft ships with.
-pub fn builtin_registry(ffmpeg: &FfmpegSetting) -> Result<Registry, PluginError> {
+/// Every plug-in StudioCraft ships with. The Live Captions sources draw the text on `captions`;
+/// give the studio that uses the registry the same board.
+pub fn builtin_registry(ffmpeg: &FfmpegSetting, captions: &Arc<CaptionBoard>) -> Result<Registry, PluginError> {
     use studiocraft_render::transitions::{Cut, Fade, FadeThroughColor, Swipe};
     let mut reg = Registry::new();
-    studiocraft_sources::register_all(&mut reg, ffmpeg)?;
+    studiocraft_sources::register_all(&mut reg, ffmpeg, captions)?;
     reg.register_transition(Arc::new(Fade))?;
     reg.register_transition(Arc::new(Cut))?;
     reg.register_transition(Arc::new(FadeThroughColor))?;
@@ -271,8 +273,16 @@ pub fn scope_size(canvas: (u32, u32), max_w: u32, max_h: u32) -> (u32, u32) {
 
 impl Studio {
     /// A studio for `collection` with `profile`. Without `gpu` nothing is composited (the
-    /// command-line tool and tests); with one, the compositor starts at once.
-    pub fn new(gpu: Option<Gpu>, collection: SceneCollection, profile: Profile, registry: Arc<Registry>, ffmpeg: FfmpegSetting) -> Studio {
+    /// command-line tool and tests); with one, the compositor starts at once. Live captions write
+    /// what they hear to `captions`, the board `registry`'s Live Captions sources draw.
+    pub fn new(
+        gpu: Option<Gpu>,
+        collection: SceneCollection,
+        profile: Profile,
+        registry: Arc<Registry>,
+        ffmpeg: FfmpegSetting,
+        captions: Arc<CaptionBoard>,
+    ) -> Studio {
         let clock = MasterClock::new();
         if let Ok(mut f) = ffmpeg.write() {
             f.clone_from(&profile.output.ffmpeg_path);
@@ -315,7 +325,7 @@ impl Studio {
             scope_feed: None,
             monitor: monitor::Monitor::new(Arc::new(studiocraft_platform::audio::SystemSink)),
             audio_tracks: audio_tracks::AudioTracks::default(),
-            captions: captions::Captions::default(),
+            captions: captions::Captions::new(captions),
             #[cfg(test)]
             test_faults: studiocraft_audio_tracks::Faults::default(),
             #[cfg(test)]
