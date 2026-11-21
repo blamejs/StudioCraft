@@ -368,6 +368,24 @@
 	Width	Breedte
 	Window	Venster
 	Window capture	Vensteropname
+	Staged windows	Klaargezette vensters
+	Window 1	Venster 1
+	Window 2	Venster 2
+	Window 3	Venster 3
+	Window 4	Venster 4
+	Window 5	Venster 5
+	Window 6	Venster 6
+	Presented window	Getoond venster
+	While the presented window cannot be shown	Als het getoonde venster niet getoond kan worden
+	Show a color	Een kleur tonen
+	Keep the last picture	Het laatste beeld houden
+	Placeholder color	Plaatsvervangende kleur
+	no window is staged in the presented slot	er staat geen venster klaar op de getoonde plaats
+	waiting for the window	wachten op het venster
+	Present Staged Window	Klaargezet venster tonen
+	Present Next Staged Window	Volgend klaargezet venster tonen
+	Present Previous Staged Window	Vorig klaargezet venster tonen
+	Present Staged Window {n}	Klaargezet venster {n} tonen
 	Your Videos folder	Je map Video's
 	YUV vectorscope	YUV-vectorscoop
 	{device} (not connected)	{device} (niet aangesloten)

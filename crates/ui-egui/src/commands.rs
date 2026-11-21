@@ -169,6 +169,12 @@ pub fn catalog() -> Vec<Bindable> {
         let cmd = CommandRef::with_params("scene.select_index", json!({"index": i}));
         list.push(bindable(cmd, &format!("Show Scene {i}"), &[&format!("Cmd+{i}")]));
     }
+    list.push(bindable(c("present.next"), "Present Next Staged Window", &[]));
+    list.push(bindable(c("present.previous"), "Present Previous Staged Window", &[]));
+    for i in 1..=studiocraft_model::staged::SLOTS {
+        let cmd = CommandRef::with_params("present.window", json!({"index": i}));
+        list.push(bindable(cmd, &format!("Present Staged Window {i}"), &[]));
+    }
     list
 }
 
@@ -361,6 +367,18 @@ mod tests {
         let scene3 = km.bindings(&CommandRef::with_params("scene.select_index", json!({"index": 3})));
         assert_eq!(scene3.len(), 1);
         assert!(km.problems().is_empty(), "{:?}", km.problems());
+    }
+
+    #[test]
+    fn staged_windows_can_be_given_shortcuts() {
+        let list = catalog();
+        let listed = |cmd: &CommandRef| list.iter().any(|b| &b.command == cmd);
+        assert!(listed(&CommandRef::new("present.next")) && listed(&CommandRef::new("present.previous")));
+        for i in 1..=studiocraft_model::staged::SLOTS {
+            assert!(listed(&CommandRef::with_params("present.window", json!({"index": i}))), "slot {i}");
+        }
+        let km = keymap(Overrides::new());
+        assert!(km.bindings(&CommandRef::new("present.next")).is_empty(), "no shortcut until one is set");
     }
 
     #[test]

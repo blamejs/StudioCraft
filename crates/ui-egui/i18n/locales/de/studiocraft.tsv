@@ -360,6 +360,24 @@
 	Width	Breite
 	Window	Fenster
 	Window capture	Fensteraufnahme
+	Staged windows	Bereitgestellte Fenster
+	Window 1	Fenster 1
+	Window 2	Fenster 2
+	Window 3	Fenster 3
+	Window 4	Fenster 4
+	Window 5	Fenster 5
+	Window 6	Fenster 6
+	Presented window	Gezeigtes Fenster
+	While the presented window cannot be shown	Wenn das gezeigte Fenster nicht gezeigt werden kann
+	Show a color	Eine Farbe zeigen
+	Keep the last picture	Das letzte Bild behalten
+	Placeholder color	Platzhalterfarbe
+	no window is staged in the presented slot	im gezeigten Platz ist kein Fenster bereitgestellt
+	waiting for the window	warte auf das Fenster
+	Present Staged Window	Bereitgestelltes Fenster zeigen
+	Present Next Staged Window	Nächstes bereitgestelltes Fenster zeigen
+	Present Previous Staged Window	Vorheriges bereitgestelltes Fenster zeigen
+	Present Staged Window {n}	Bereitgestelltes Fenster {n} zeigen
 	X	X
 	Y	Y
 	Your Videos folder	Ihr Videos-Ordner

@@ -377,6 +377,24 @@
 	Width	Largura
 	Window	Janela
 	Window capture	Captura de janela
+	Staged windows	Janelas preparadas
+	Window 1	Janela 1
+	Window 2	Janela 2
+	Window 3	Janela 3
+	Window 4	Janela 4
+	Window 5	Janela 5
+	Window 6	Janela 6
+	Presented window	Janela apresentada
+	While the presented window cannot be shown	Enquanto a janela apresentada não puder ser mostrada
+	Show a color	Mostrar uma cor
+	Keep the last picture	Manter a última imagem
+	Placeholder color	Cor de substituição
+	no window is staged in the presented slot	nenhuma janela está preparada na posição apresentada
+	waiting for the window	aguardando a janela
+	Present Staged Window	Apresentar janela preparada
+	Present Next Staged Window	Apresentar a próxima janela preparada
+	Present Previous Staged Window	Apresentar a janela preparada anterior
+	Present Staged Window {n}	Apresentar a janela preparada {n}
 	Your Videos folder	Sua pasta Vídeos
 	YUV vectorscope	Vectorscópio YUV
 	{device} (not connected)	{device} (não conectado)

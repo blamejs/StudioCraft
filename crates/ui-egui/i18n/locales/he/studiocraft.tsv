@@ -396,6 +396,24 @@
 	Width	רוחב
 	Window	חלון
 	Window capture	לכידת חלון
+	Staged windows	חלונות מוכנים
+	Window 1	חלון 1
+	Window 2	חלון 2
+	Window 3	חלון 3
+	Window 4	חלון 4
+	Window 5	חלון 5
+	Window 6	חלון 6
+	Presented window	החלון המוצג
+	While the presented window cannot be shown	כאשר אי אפשר להציג את החלון המוצג
+	Show a color	הצגת צבע
+	Keep the last picture	שמירת התמונה האחרונה
+	Placeholder color	צבע ממלא מקום
+	no window is staged in the presented slot	אין חלון מוכן במקום המוצג
+	waiting for the window	ממתין לחלון
+	Present Staged Window	הצגת חלון מוכן
+	Present Next Staged Window	הצגת החלון המוכן הבא
+	Present Previous Staged Window	הצגת החלון המוכן הקודם
+	Present Staged Window {n}	הצגת חלון מוכן {n}
 	Your Videos folder	תיקיית הסרטונים שלכם
 	YUV vectorscope	וקטורסקופ YUV
 	{device} (not connected)	{device} (לא מחובר)

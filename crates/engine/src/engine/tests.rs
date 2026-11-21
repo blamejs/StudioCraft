@@ -1321,6 +1321,98 @@ fn unknown_references_are_errors() {
     assert!(e.state_json()["collection"]["scenes"].is_array());
 }
 
+fn staging_engine() -> Engine {
+    let mut r = Registry::new();
+    r.register_source(Arc::new(TestSource("color", SourceCaps { video: true, audio: false }))).unwrap();
+    r.register_source(Arc::new(TestSource(staged::KIND, SourceCaps { video: true, audio: false }))).unwrap();
+    Engine::new(SceneCollection::new("Test", "Scene"), Arc::new(r))
+}
+
+fn presented(e: &Engine, name: &str) -> Option<i64> {
+    e.collection().source_by_name(name).and_then(|s| s.settings.i64(staged::PRESENTED))
+}
+
+#[test]
+fn present_commands_step_through_the_staged_windows() {
+    let mut e = staging_engine();
+    let slots = json!({"window1": "a.exe\u{1f}A", "window3": "b.exe\u{1f}B", "window6": "c.exe\u{1f}C", "presented": 1});
+    run(&mut e, "source.add", json!({"kind": staged::KIND, "name": "Stage", "settings": slots})).unwrap();
+    run(&mut e, "source.add", json!({"kind": staged::KIND, "name": "Other", "settings": {"window2": "d.exe\u{1f}D", "presented": 2}})).unwrap();
+    add_color(&mut e, "Plain");
+    let history = e.undo_label();
+
+    let o = run(&mut e, "present.next", json!({"source": "Stage"})).unwrap();
+    assert!(o.changed);
+    assert_eq!(o.result["presented"][0]["slot"], 3, "{}", o.result);
+    assert_eq!(presented(&e, "Stage"), Some(3), "the empty slot 2 is skipped");
+    run(&mut e, "present.next", json!({"source": "Stage"})).unwrap();
+    run(&mut e, "present.next", json!({"source": "Stage"})).unwrap();
+    assert_eq!(presented(&e, "Stage"), Some(1), "it wraps around");
+    run(&mut e, "present.previous", json!({"source": "Stage"})).unwrap();
+    assert_eq!(presented(&e, "Stage"), Some(6));
+    run(&mut e, "present.window", json!({"source": "Stage", "index": 3})).unwrap();
+    assert_eq!(presented(&e, "Stage"), Some(3));
+    assert_eq!(presented(&e, "Other"), Some(2), "a named source changes alone");
+    assert_eq!(e.undo_label(), history, "presenting a window is not an undo step");
+    assert!(e.is_dirty(), "the presented window is saved with the collection");
+
+    // Without a source, every Staged windows source that has a window in the slot changes.
+    let o = run(&mut e, "present.window", json!({"index": 1})).unwrap();
+    assert_eq!(o.result["presented"].as_array().map(Vec::len), Some(1), "{}", o.result);
+    assert_eq!((presented(&e, "Stage"), presented(&e, "Other")), (Some(1), Some(2)));
+    run(&mut e, "present.next", json!({})).unwrap();
+    assert_eq!((presented(&e, "Stage"), presented(&e, "Other")), (Some(3), Some(2)));
+    let same = run(&mut e, "present.window", json!({"source": "Other", "index": 2})).unwrap();
+    assert!(!same.changed, "presenting the presented window changes nothing");
+    assert_eq!(same.result["presented"], json!([]), "and reports no source");
+}
+
+#[test]
+fn present_commands_refuse_empty_slots_and_other_sources() {
+    let mut e = staging_engine();
+    assert_eq!(run(&mut e, "present.next", json!({})), Err(EngineError::Invalid("there is no Staged windows source".into())));
+    run(&mut e, "source.add", json!({"kind": staged::KIND, "name": "Stage", "settings": {"window2": "a.exe\u{1f}A"}})).unwrap();
+    add_color(&mut e, "Plain");
+    assert_eq!(
+        run(&mut e, "present.window", json!({"source": "Stage", "index": 4})),
+        Err(EngineError::Invalid("no window is staged in slot 4".into()))
+    );
+    assert_eq!(run(&mut e, "present.window", json!({"index": 4})), Err(EngineError::Invalid("no window is staged in slot 4".into())));
+    for bad in [0, 7] {
+        let r = run(&mut e, "present.window", json!({"source": "Stage", "index": bad}));
+        assert_eq!(r, Err(EngineError::Invalid("the slot must be a number from 1 to 6".into())), "{bad}");
+    }
+    assert!(run(&mut e, "present.window", json!({"source": "Stage", "index": -1})).is_err());
+    assert!(run(&mut e, "present.window", json!({"source": "Stage", "index": "2"})).is_err());
+    assert_eq!(run(&mut e, "present.next", json!({"source": "Plain"})), Err(EngineError::Invalid("`Plain` is not a Staged windows source".into())));
+    assert!(matches!(run(&mut e, "present.next", json!({"source": "ghost"})), Err(EngineError::NoSource(_))));
+    run(&mut e, "source.settings", json!({"source": "Stage", "settings": {"window2": ""}})).unwrap();
+    assert_eq!(run(&mut e, "present.previous", json!({"source": "Stage"})), Err(EngineError::Invalid("no window is staged".into())));
+}
+
+#[test]
+fn undo_keeps_the_presented_window() {
+    let mut e = staging_engine();
+    run(&mut e, "source.add", json!({"kind": staged::KIND, "name": "Stage", "settings": {"window1": "a.exe\u{1f}A", "window2": "b.exe\u{1f}B"}}))
+        .unwrap();
+    add_color(&mut e, "Plain");
+    run(&mut e, "present.window", json!({"source": "Stage", "index": 2})).unwrap();
+    run(&mut e, "edit.undo", json!({})).unwrap();
+    assert!(e.collection().source_by_name("Plain").is_none(), "the undo took the last edit back");
+    assert_eq!(presented(&e, "Stage"), Some(2), "and left the presented window alone");
+
+    // Presented window in Properties is no undo step either; a change to another setting is.
+    let history = e.undo_label();
+    let mut settings = e.collection().source_by_name("Stage").map(|s| s.settings.to_json()).unwrap_or_default();
+    settings["presented"] = json!(1);
+    run(&mut e, "source.settings", json!({"source": "Stage", "settings": settings})).unwrap();
+    assert_eq!(presented(&e, "Stage"), Some(1));
+    assert_eq!(e.undo_label(), history, "a change to the presented window alone");
+    settings["window3"] = json!("c.exe\u{1f}C");
+    run(&mut e, "source.settings", json!({"source": "Stage", "settings": settings})).unwrap();
+    assert_ne!(e.undo_label(), history, "a change to a slot");
+}
+
 #[test]
 fn every_spec_is_reachable() {
     // Each listed id parses with suitable parameters, so menus and scripts can reach all of them.
@@ -1340,6 +1432,7 @@ fn every_spec_is_reachable() {
             "source.sync_offset" => json!({"source": 1, "ms": 100}),
             "source.monitor" => json!({"source": 1, "mode": "monitor_only"}),
             "source.set_record_track" => json!({"source": 1, "on": true}),
+            "present.window" => json!({"index": 1}),
             "audio_tracks.repair" => json!({"folder": "x"}),
             "item.remove" | "item.duplicate" => json!({"item": 1}),
             "item.move" => json!({"item": 1, "to": "up"}),

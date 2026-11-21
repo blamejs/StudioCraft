@@ -378,6 +378,24 @@
 	Width	寬度
 	Window	視窗
 	Window capture	視窗擷取
+	Staged windows	待播視窗
+	Window 1	視窗 1
+	Window 2	視窗 2
+	Window 3	視窗 3
+	Window 4	視窗 4
+	Window 5	視窗 5
+	Window 6	視窗 6
+	Presented window	目前顯示的視窗
+	While the presented window cannot be shown	目前顯示的視窗無法顯示時
+	Show a color	顯示顏色
+	Keep the last picture	保留最後的畫面
+	Placeholder color	預留位置顏色
+	no window is staged in the presented slot	目前顯示的位置沒有待播視窗
+	waiting for the window	正在等待視窗
+	Present Staged Window	顯示待播視窗
+	Present Next Staged Window	顯示下一個待播視窗
+	Present Previous Staged Window	顯示上一個待播視窗
+	Present Staged Window {n}	顯示待播視窗 {n}
 	Your Videos folder	您的「影片」資料夾
 	YUV vectorscope	YUV 向量示波器
 	{device} (not connected)	{device}（未連接）

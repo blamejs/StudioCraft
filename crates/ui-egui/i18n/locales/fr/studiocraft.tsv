@@ -382,6 +382,24 @@
 	Width	Largeur
 	Window	Fenêtre
 	Window capture	Capture de fenêtre
+	Staged windows	Fenêtres préparées
+	Window 1	Fenêtre 1
+	Window 2	Fenêtre 2
+	Window 3	Fenêtre 3
+	Window 4	Fenêtre 4
+	Window 5	Fenêtre 5
+	Window 6	Fenêtre 6
+	Presented window	Fenêtre présentée
+	While the presented window cannot be shown	Lorsque la fenêtre présentée ne peut pas être affichée
+	Show a color	Afficher une couleur
+	Keep the last picture	Garder la dernière image
+	Placeholder color	Couleur de remplacement
+	no window is staged in the presented slot	aucune fenêtre n’est préparée dans l’emplacement présenté
+	waiting for the window	en attente de la fenêtre
+	Present Staged Window	Présenter une fenêtre préparée
+	Present Next Staged Window	Présenter la fenêtre préparée suivante
+	Present Previous Staged Window	Présenter la fenêtre préparée précédente
+	Present Staged Window {n}	Présenter la fenêtre préparée {n}
 	X	X
 	Y	Y
 	Your Videos folder	Votre dossier Vidéos

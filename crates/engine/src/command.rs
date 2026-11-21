@@ -181,6 +181,26 @@ pub enum Command {
     /// Whether audio tracks record the source to a file of its own.
     #[serde(rename = "source.set_record_track")]
     SourceSetRecordTrack { source: SourceRef, on: bool },
+    /// Present the window staged in slot `index` (1 is the first) of a Staged windows source, or
+    /// of every one that has a window in that slot when `source` is absent.
+    #[serde(rename = "present.window")]
+    PresentWindow {
+        #[serde(default)]
+        source: Option<SourceRef>,
+        index: usize,
+    },
+    /// Present the next staged window, wrapping around, on one Staged windows source or on all.
+    #[serde(rename = "present.next")]
+    PresentNext {
+        #[serde(default)]
+        source: Option<SourceRef>,
+    },
+    /// Present the staged window before the presented one, wrapping around.
+    #[serde(rename = "present.previous")]
+    PresentPrevious {
+        #[serde(default)]
+        source: Option<SourceRef>,
+    },
 
     #[serde(rename = "item.remove")]
     ItemRemove {
@@ -431,6 +451,9 @@ impl Command {
             Command::SourceSyncOffset { .. } => "source.sync_offset",
             Command::SourceMonitor { .. } => "source.monitor",
             Command::SourceSetRecordTrack { .. } => "source.set_record_track",
+            Command::PresentWindow { .. } => "present.window",
+            Command::PresentNext { .. } => "present.next",
+            Command::PresentPrevious { .. } => "present.previous",
             Command::ItemRemove { .. } => "item.remove",
             Command::ItemDuplicate { .. } => "item.duplicate",
             Command::ItemMove { .. } => "item.move",
@@ -534,6 +557,14 @@ const SPECS: &[CommandSpec] = &[
     spec("source.sync_offset", "Set Sync Offset", "source: id or name, ms: 0..5000 milliseconds the audio is delayed", Undo::Undoable),
     spec("source.monitor", "Audio Monitoring", "source: id or name, mode: off|monitor_only|monitor_and_output", Undo::Undoable),
     spec("source.set_record_track", "Record as Its Own Track", "source: id or name, on: bool", Undo::Undoable),
+    spec(
+        "present.window",
+        "Present Staged Window",
+        "index: slot 1 to 6, source?: id or name of a Staged windows source (all when absent)",
+        Undo::NotUndoable,
+    ),
+    spec("present.next", "Present Next Staged Window", "source?: id or name of a Staged windows source (all when absent)", Undo::NotUndoable),
+    spec("present.previous", "Present Previous Staged Window", "source?: id or name of a Staged windows source (all when absent)", Undo::NotUndoable),
     spec("item.remove", "Remove Source from Scene", "item: id or source name, scene?", Undo::Undoable),
     spec("item.duplicate", "Duplicate Source", "item: id or source name, scene?", Undo::Undoable),
     spec("item.move", "Move Source", "item, scene?, to: up|down|top|bottom|{to: index}", Undo::Undoable),
