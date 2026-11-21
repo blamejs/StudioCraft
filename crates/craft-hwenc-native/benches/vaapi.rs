@@ -6,7 +6,7 @@
 use std::hint::black_box;
 
 use craft_hwenc_native::Codec;
-use craft_hwenc_native::vaapi::{self, Config, Encoder, Input, Rate};
+use craft_hwenc_native::vaapi::{self, Color, Config, Encoder, Input, Rate};
 use criterion::{Criterion, criterion_group, criterion_main};
 
 fn bench(c: &mut Criterion) {
@@ -29,7 +29,16 @@ fn bench(c: &mut Criterion) {
     }
     c.bench_function("packet 1080p p picture", |b| b.iter(|| vaapi::packet(Codec::H264, &sets, black_box(&coded), 1, false)));
 
-    let cfg = Config { codec: Codec::H264, input: Input::Nv12, width: 1920, height: 1080, fps: (60, 1), rate: Rate::Quality(23), keyint: 120 };
+    let cfg = Config {
+        codec: Codec::H264,
+        input: Input::Nv12,
+        width: 1920,
+        height: 1080,
+        fps: (60, 1),
+        rate: Rate::Quality(23),
+        keyint: 120,
+        color: Color::Bt709,
+    };
     let Ok(mut encoder) = Encoder::new(&cfg) else {
         eprintln!("no VA-API H.264 encoder: the encode case is left out");
         return;

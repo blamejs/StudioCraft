@@ -85,8 +85,8 @@ when the language's catalog has the message.
 [Commands with their own parameters](#commands-with-their-own-parameters) describes `app.info`,
 `app.links`, `app.check_updates`, `plugin.list`, `source.schema`, `source.sync_offset`,
 `source.monitor`, `source.set_record_track`, `audio_tracks.status`, `audio_tracks.repair`,
-`audio_tracks.open_last`, `audio_tracks.marker`, the `captions.*` commands, the `dock.layout_*`
-commands, `video.displays` and `video.canvas_from_display`.
+`audio_tracks.open_last`, `audio_tracks.marker`, `record.marker`, the `captions.*` commands, the
+`dock.layout_*` commands, `video.displays`, `video.canvas_from_display` and `canvas.relayout`.
 
 Each entry of `engine.commands` has these fields:
 
@@ -250,9 +250,10 @@ empty or missing `app` chooses no application. An update with any other value th
 form is refused with an error, and the source keeps its current choice. A saved collection with such
 a value still loads: the source stays silent and reports the error until another application is
 chosen. `app_audio.status` returns `support` (`supported`, `reason` and `permission`),
-`discovery_stalled`, `captures`, `max_captures`, the summed `dropped_blocks` and `pool_exhausted`
-counters, and `running` with each capture's `app`, `pid`, `state`, `packets`, `dropped_blocks` and
-`pool_exhausted`. `state` is `starting` while the system activates the capture, `started` once the
+`discovery_stalled`, `captures`, `max_captures`, the summed `dropped_blocks`, `pool_exhausted` and
+`discontinuities` counters, and `running` with each capture's `app`, `pid`, `state`, `packets`,
+`discontinuities`, `dropped_blocks` and `pool_exhausted`. `discontinuities` counts the packets the
+system marked as following lost audio. `state` is `starting` while the system activates the capture, `started` once the
 stream runs and before audio arrives, then `running`, `failed` or `ended`. A capture whose owner let
 go of it while it was stuck in a system call is not listed and does not count against
 `max_captures`; while 8 such captures are still stuck, no new capture starts. When the system
@@ -354,6 +355,15 @@ control characters; without it the marker is "Marker N", the take's Nth marker. 
 `{"name", "seconds"}`, where `seconds` counts from the take's first sample. No running take, a take
 that is ending, and 1,024 markers waiting to be written are errors.
 
+### `record.marker`
+
+`record.marker` takes `{"name"}` and marks the running recording at this moment. `name` follows
+the rules of `audio_tracks.marker`; without it the marker is "Marker N", the recording's Nth
+marker. It returns `{"name", "seconds"}`, where `seconds` counts from the recording's first frame
+and leaves out the time the recording has skipped so far while the computer was suspended. No running recording and a recording that already holds 10,000 markers are errors. When the
+recording stops, `<recording name>.otio` is written beside it with each marker at its frame
+([Recording markers](features.md#recording-markers)).
+
 ### `captions.*`
 
 `captions.start` takes `{"model"?, "language"?}` and starts live captions of the program audio. A
@@ -404,7 +414,8 @@ return `{"applied"}` or `{"removed"}`; a name no layout has is an error.
 `view.streaming` opens the Streaming window, or closes it when it is open, and returns `{"on"}`.
 
 `stream.destinations` takes no parameters and returns `{"destinations", "running", "max"}`.
-`max` is 16. Each destination is `{"id", "name", "enabled", "server", "key", "status"}`, where
+`max` is 16. Each destination is `{"id", "name", "enabled", "service", "server", "key", "status"}`,
+where `service` is the id of the streaming service it is set up for or empty for a custom server,
 `key` is `profile`, `held` or `none` and `server` shows a user name and password before the host, a
 key at the end of the address, and any query, as dots. A destination whose key is held adds `held_name` and `held`, whether a key is held
 under that name now. `status` is `idle` while no stream runs, `not_in_stream` for a destination
@@ -412,15 +423,23 @@ added after the stream started, and otherwise `connecting`, `live`, `retrying`, 
 `failed`. While the stream runs a destination also has `bytes`, `dropped` and `reconnects`; a
 `retrying` one has `attempt` and `error`, and a `failed` one has `error`.
 
-`stream.destination_add` takes `{"name"?, "server"?, "enabled"?, "key"?, "held_name"?}` and returns
-`{"id"}`. The first destination of a profile gets the id `main` and the profile's key; later ones
-get `destination-2`, `destination-3` and so on, and no key of their own unless `key` says
-otherwise. `enabled` is `true` when it is left out.
+`stream.destination_add` takes `{"service"?, "name"?, "server"?, "enabled"?, "key"?, "held_name"?}`
+and returns `{"id"}`. `service` is the id of one of the seven streaming services, or empty for a
+custom server; the error for an unknown `service` lists the ids. A service that documents one ingest
+server for every account fills in that server when `server` is left out. The first destination of a
+profile gets the id `main` and the profile's key; later ones get `destination-2`, `destination-3`
+and so on, and no key of their own unless `key` says otherwise. `enabled` is `true` when it is left
+out.
 
-`stream.destination_set` takes `{"id", "name"?, "server"?, "enabled"?, "key"?, "held_name"?}` and
-changes only the fields given; it returns `{"id", "changed"}`, and a call that changes nothing does
-not save the profile. With `key` set to `held`, `held_name` names the session key; without it the
-destination keeps its held name, or uses its id.
+`stream.destination_set` takes `{"id", "service"?, "name"?, "server"?, "enabled"?, "key"?,
+"held_name"?}` and changes only the fields given; it returns `{"id", "changed"}`, and a call that
+changes nothing does not save the profile. A new `service` replaces a server that is empty or that
+is one of the services' documented servers: with that service's server, or, for a service that
+shows each account its own server, with no server, and the destination is turned off. Any other
+server is kept, also on a change to a custom server. A `server` or `enabled` given in the same call is used instead, and a destination
+given a server that is not empty keeps its on or off setting. A destination keeps a
+`service` this version does not know until a call changes it. With `key` set to `held`,
+`held_name` names the session key; without it the destination keeps its held name, or uses its id.
 
 A command does not send the profile's stream key, or a key held for the session, to a server the
 user did not send it to. Only the destination `main` takes `key` `profile` from a command. A
@@ -439,7 +458,8 @@ that destination of the running stream; the others go on. They return `{"id", "o
 These are errors: a missing or unknown `id`, a 17th destination, a `name` over 128 characters, a
 `server` over 4096 bytes, a `name` or `server` with a control character, a `server` with a user
 name or password before the host (`rtmp://user:pass@host/app`), a `key` other than
-`profile`, `held` or `none`, `held_name` without `key` `held` or outside 1 to 64 bytes, a parameter
+`profile`, `held` or `none`, `held_name` without `key` `held` or outside 1 to 64 bytes, a `service`
+that is not empty and is not a streaming service id, a parameter
 of the wrong type, a start or stop while no stream runs or while the running stream was started with
 another profile, and a start of a destination whose held key is not set. While a stream of another
 profile runs, each destination's `status` is `not_in_stream`. Each change is saved in the profile, and an open Settings window shows the new
@@ -450,19 +470,24 @@ parameters.
 
 `video.displays` takes no parameters and returns `{"displays", "window"}`. `displays` lists each
 display the system reports as `{"id", "name", "width", "height", "primary"}`, with sizes in pixels;
-on Linux the list is empty because the desktop's picker chooses the display. `window` is
-`{"width", "height"}` of the display the window is on, or `null` when the windowing system does
-not report it.
+on Linux the list holds Wayland's outputs, where no display is `primary`, or RandR's monitors
+under X11. The app reads the Linux list in the background when it starts and again after each
+call, and a call returns the list read before it, so a display added or removed shows from the
+second call after the change. `window` is `{"width", "height"}` of the display the window is on,
+or `null` when the windowing system does not report it.
 
 `video.canvas_from_display` takes `{"display"?}` and sets the canvas size to that display's size
 in pixels. Without `display` it uses the display the window is on. Each side is rounded down to an
-even number, and the output size is not changed. The profile is saved, also when the canvas
-already had that size. An open Settings window shows the new canvas size. It returns
-`{"width", "height", "changed", "follows"}`. These are errors: a `display` that is not a string (`null`
-included), an id that `video.displays` does not list, a display with a side under 16 or over 8192
-pixels, an unknown size for the window's display, a change while the recording, the stream or the
-replay buffer runs, and a profile that can't be saved. After a failed save the new canvas size stays
-in use until the app quits.
+even number. An output size of 100%, 75%, 66% (two thirds) or 50% of the old canvas becomes the
+same share of the new canvas, rounded down to even sides; any other output size is not changed. The
+scenes are laid out for the new size as `canvas.relayout` describes. The profile is saved, also
+when the canvas already had that size. An open Settings window shows the new canvas and output
+sizes. It returns `{"width", "height", "output": {"width", "height"}, "changed", "follows"}`. These
+are errors: a `display` that is not a string (`null` included), an id that `video.displays` does not
+list, a display with a side under 16 or over 8192 pixels, an unknown size for the window's display,
+a change while the recording, the stream or the replay buffer runs, and a profile that can't be
+saved. After a failed save the old canvas size, output size and layout come back, and the undo
+history holds no step for the layout change.
 
 Afterward the canvas follows the display: while the same profile is in use and its canvas size has
 not been set another way, the canvas takes the display's new size when its resolution or scaling
@@ -470,10 +495,39 @@ changes. The window lists the displays every 2 seconds, and at once when the dis
 on reports a new size. A display that is not connected is followed again when it is; when its id
 has changed, it is found by its name if no other listed display has that name. A new size that is
 outside the canvas's range is not taken. While the recording, the stream or the replay buffer runs
-the canvas keeps its size, and it takes the display's size after they stop. `follows` is the id of
-the followed display, or `null` when the canvas follows none: without `display`, the display the
-window is on is followed only when it is the only listed display of its size, so on Linux, where
-the list is empty, nothing is followed.
+the canvas keeps its size, and it takes the display's size after they stop. When the profile can't
+be saved, the new size is taken back, its error is shown once, and each look tries the size again.
+`follows` is the id of the followed display, or `null` when the canvas follows none: without
+`display`, the display the window is on is followed only when it is the only listed display of its
+size.
+
+### `canvas.relayout`
+
+`canvas.relayout` takes `{"from": {"width", "height"}, "to": {"width", "height"}, "sizes"?,
+"items"?}` and places every item of every scene, locked and hidden items included, for a canvas
+that changed from `from` to `to`. `sizes` is a list of `{"source", "width", "height"}` with the
+size each source shows at. `items` is a list of item ids; when it is given, only those items are
+placed. The app runs it, as one undo step, whenever the canvas size changes: from Settings ›
+Video, from `video.canvas_from_display`, or by switching to a profile with another canvas size.
+
+- An item with a fit mode is placed by that mode on the new canvas: `fit` shows the whole source
+  inside the canvas, `fill` covers the canvas, and `stretch` makes the source the canvas's size.
+  The crop is kept and the rotation becomes 0. Fit to Screen, Fill Screen and Stretch to Screen
+  set the mode, and so does `item.transform` with `fit`. An `item.transform` without `fit` clears
+  it.
+- Any other item keeps its center at the same place in proportion to the canvas. Its size is
+  multiplied by the square root of the product of the width and height factors, so changing the
+  canvas back gives the old layout.
+- An item whose source is not in `sizes` keeps its top-left corner at the same place in proportion
+  instead, with the same size factor. When the app runs the command, the sources that show
+  nothing at that moment are left out of `sizes`. An item of such a source that has a fit mode is
+  placed by its mode once the source shows a picture, as its own undo step, while it still has
+  its mode and the place the canvas change gave it.
+- With `from` equal to `to`, only items with a fit mode whose source is in `sizes` can move.
+
+These are errors: a side of `from` or `to` under 16 or over 8192 pixels, a `sizes` entry for a
+source the collection does not have, a source listed twice, a source side under 1 or over 65536
+pixels, an `items` entry for an item the collection does not have, and an item listed twice.
 
 ## Command line
 

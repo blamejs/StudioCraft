@@ -493,6 +493,9 @@ menu	Transform	변형
 @msg	Audio tracks could not be repaired: {takes} and {more} more. Takes repaired: {count}	오디오 트랙을 복구할 수 없습니다: {takes} 외 {more}개. 복구된 테이크: {count}
 	Open Last Audio Tracks in Editor	마지막 오디오 트랙을 편집기에서 열기
 	Add Audio Tracks Marker	오디오 트랙에 마커 추가
+	Add Recording Marker	녹화에 마커 추가
+@msg	Markers saved to {path}	마커를 {path}에 저장했습니다
+@msg	The markers could not be saved: {error}	마커를 저장할 수 없습니다: {error}
 	After a take	테이크 후
 	Nothing	아무것도 하지 않음
 	Show the folder	폴더 보기
@@ -536,3 +539,7 @@ menu	Transform	변형
 @msg	there is no display `{id}`: the system lists no displays	디스플레이 `{id}`이(가) 없습니다: 시스템에 표시되는 디스플레이가 없습니다
 @msg	there is no display `{id}` (the displays are {ids})	디스플레이 `{id}`이(가) 없습니다 (디스플레이: {ids})
 @msg	a {width} × {height} display can't be the canvas: each side must be from {min} to {max} pixels	{width} × {height} 디스플레이는 캔버스가 될 수 없습니다: 각 변은 {min}~{max}픽셀이어야 합니다
+	Output scale	출력 배율
+	Custom	사용자 지정
+	Fill Screen	화면 채우기
+@msg	The scenes could not be laid out for the new canvas: {error}	새 캔버스에 맞게 장면을 배치할 수 없습니다: {error}

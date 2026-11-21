@@ -72,6 +72,7 @@ pub const UI_COMMANDS: &[(&str, &str)] = &[
     ("selection.filters", "Filters…"),
     ("selection.remove", "Remove Selected Source"),
     ("selection.fit", "Fit to Screen"),
+    ("selection.fill", "Fill Screen"),
     ("selection.stretch", "Stretch to Screen"),
     ("selection.center", "Center to Screen"),
     ("selection.reset", "Reset Transform"),
@@ -98,10 +99,10 @@ pub fn ui_params(id: &str) -> &'static str {
         "collection.import" | "collection.export" => "path?: string",
         "scopes.kind" => "kind: string (waveform, parade, histogram, vectorscopeYuv or vectorscopeHls)",
         "stream.destination_add" => {
-            "name?: string, server?: string, enabled?: boolean, key?: string (profile, held or none), held_name?: string (with key held)"
+            "service?: string (a streaming service id, or empty for a custom server), name?: string, server?: string, enabled?: boolean, key?: string (profile, held or none), held_name?: string (with key held)"
         }
         "stream.destination_set" => {
-            "id: string, name?: string, server?: string, enabled?: boolean, key?: string (profile, held or none), held_name?: string (with key held)"
+            "id: string, service?: string (a streaming service id, or empty for a custom server), name?: string, server?: string, enabled?: boolean, key?: string (profile, held or none), held_name?: string (with key held)"
         }
         "stream.destination_remove" | "stream.destination_start" | "stream.destination_stop" => "id: string",
         "dock.move" => "dock: string (scenes, sources, mixer or app_audio), to: string (left or right)",
@@ -121,6 +122,7 @@ pub fn ui_undoable(id: &str) -> bool {
         id,
         "selection.remove"
             | "selection.fit"
+            | "selection.fill"
             | "selection.stretch"
             | "selection.center"
             | "selection.reset"
@@ -140,6 +142,7 @@ pub fn catalog() -> Vec<Bindable> {
         bindable(c("edit.undo"), "Undo", &["Cmd+Z"]),
         bindable(c("edit.redo"), "Redo", &["Cmd+Y", "Cmd+Shift+Z"]),
         bindable(c("record.toggle"), "Start or Stop Recording", &[]),
+        bindable(c("record.marker"), "Add Recording Marker", &[]),
         bindable(c("stream.toggle"), "Start or Stop Streaming", &[]),
         bindable(c("replay.toggle"), "Start or Stop Replay Buffer", &[]),
         bindable(c("replay.save"), "Save Replay", &[]),
@@ -212,6 +215,7 @@ pub fn menu_bar(s: &MenuState) -> MenuBar {
             Node::Separator,
             Node::Item(Item::new(CommandRef::new("replay.toggle"), crate::i18n::command_label("replay.toggle", "Replay Buffer")).check(false)),
             item("replay.save", "Save Replay"),
+            item("record.marker", "Add Recording Marker"),
             item("audio_tracks.marker", "Add Audio Tracks Marker"),
             item("audio_tracks.open_last", "Open Last Audio Tracks in Editor"),
             Node::Separator,
@@ -231,6 +235,7 @@ pub fn menu_bar(s: &MenuState) -> MenuBar {
             item("selection.rotate_ccw", "Rotate 90° Counterclockwise"),
             Node::Separator,
             item("selection.fit", "Fit to Screen"),
+            item("selection.fill", "Fill Screen"),
             item("selection.stretch", "Stretch to Screen"),
             item("selection.center", "Center to Screen"),
         ],

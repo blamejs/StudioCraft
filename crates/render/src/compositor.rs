@@ -707,10 +707,16 @@ impl Compositor {
         read_rgba(&self.gpu, &target.texture, self.width, self.height).map(Some)
     }
 
-    /// Wait until the GPU has finished every frame submitted so far, and hand finished
-    /// read-backs to the encoders.
+    /// Wait until the GPU has finished every frame submitted so far and every read-back's
+    /// callback has run, and hand finished read-backs to the encoders. Another thread polling the
+    /// same device (the window) may run a callback after the GPU wait returns; this waits for it
+    /// for at most `MAP_WAIT`.
     pub fn finish(&mut self, readback_lost: &AtomicU64) {
-        let _ = self.gpu.wait();
+        if self.gpu.wait().is_ok() {
+            for n in [&self.nv12, &self.scope_nv12].into_iter().flatten() {
+                n.wait_mapped(MAP_WAIT);
+            }
+        }
         if let Some(n) = &mut self.nv12 {
             n.collect(readback_lost);
         }

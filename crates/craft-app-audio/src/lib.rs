@@ -28,7 +28,7 @@ mod win;
 use std::sync::Arc;
 
 pub use backoff::Backoff;
-pub use capture::{AppCapture, CaptureShared, CaptureState, CaptureStatus, OnData, Target, now_ms};
+pub use capture::{AppCapture, CaptureShared, CaptureState, CaptureStatus, OnData, PacketInfo, Target, now_ms};
 pub use discovery::{DISCOVERY_WEDGE_MS, Discovery, DiscoveryUse, RESCAN_MS};
 pub use key::AppKey;
 pub use list::{AppInfo, AppList};
@@ -138,7 +138,7 @@ pub trait Backend: Send + Sync + 'static {
     fn watch(&self, wake: Wake) -> Result<Box<dyn Watcher>, AppAudioError>;
 
     /// Capture `target` until `shared` asks to stop, giving each packet of 48 kHz stereo samples
-    /// to `on_data`. Runs on a capture thread of its own. It must call [`CaptureShared::beat`] at
+    /// and its [`PacketInfo`] to `on_data` and to [`CaptureShared::packet`]. Runs on a capture thread of its own. It must call [`CaptureShared::beat`] at
     /// least every [`CAPTURE_WAIT_MS`] while it waits, call [`CaptureShared::started`] once the
     /// system has started the stream, call [`CaptureShared::running`] when the first packet
     /// arrives, and return when [`CaptureShared::stopping`] is true. A target that has exited is

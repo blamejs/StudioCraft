@@ -483,6 +483,9 @@ menu	Transform	Transformeren
 @msg	Audio tracks could not be repaired: {takes} and {more} more. Takes repaired: {count}	Audiosporen konden niet worden hersteld: {takes} en {more} meer. Herstelde opnamen: {count}
 	Open Last Audio Tracks in Editor	Laatste audiosporen openen in editor
 	Add Audio Tracks Marker	Markering toevoegen aan audiosporen
+	Add Recording Marker	Markering toevoegen aan opname
+@msg	Markers saved to {path}	Markeringen opgeslagen in {path}
+@msg	The markers could not be saved: {error}	De markeringen konden niet worden opgeslagen: {error}
 	After a take	Na een opname
 	Nothing	Niets
 	Show the folder	Map tonen
@@ -526,3 +529,7 @@ menu	Transform	Transformeren
 @msg	there is no display `{id}`: the system lists no displays	er is geen beeldscherm `{id}`: het systeem toont geen beeldschermen
 @msg	there is no display `{id}` (the displays are {ids})	er is geen beeldscherm `{id}` (de beeldschermen zijn {ids})
 @msg	a {width} × {height} display can't be the canvas: each side must be from {min} to {max} pixels	een beeldscherm van {width} × {height} kan niet het canvas zijn: elke zijde moet {min} tot {max} pixels zijn
+	Output scale	Uitvoerschaal
+	Custom	Aangepast
+	Fill Screen	Scherm vullen
+@msg	The scenes could not be laid out for the new canvas: {error}	De scènes konden niet voor het nieuwe canvas worden ingedeeld: {error}

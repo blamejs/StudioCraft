@@ -502,6 +502,9 @@ menu	Transform	Transformer
 @msg	Audio tracks could not be repaired: {takes} and {more} more. Takes repaired: {count}	Les pistes audio n'ont pas pu être réparées : {takes} et {more} de plus. Prises réparées : {count}
 	Open Last Audio Tracks in Editor	Ouvrir les dernières pistes audio dans l'éditeur
 	Add Audio Tracks Marker	Ajouter un marqueur aux pistes audio
+	Add Recording Marker	Ajouter un marqueur à l'enregistrement
+@msg	Markers saved to {path}	Marqueurs sauvegardés dans {path}
+@msg	The markers could not be saved: {error}	Les marqueurs n'ont pas pu être sauvegardés : {error}
 	After a take	Après une prise
 	Nothing	Rien
 	Show the folder	Afficher le dossier
@@ -545,3 +548,8 @@ menu	Transform	Transformer
 @msg	there is no display `{id}`: the system lists no displays	aucun écran `{id}` : le système ne liste aucun écran
 @msg	there is no display `{id}` (the displays are {ids})	aucun écran `{id}` (les écrans sont {ids})
 @msg	a {width} × {height} display can't be the canvas: each side must be from {min} to {max} pixels	un écran de {width} × {height} ne peut pas servir de canevas : chaque côté doit faire de {min} à {max} pixels
+	Output scale	Échelle de sortie
+	Custom	Personnalisé
+	{percent}% ({width} × {height})	{percent} % ({width} × {height})
+	Fill Screen	Remplir l'écran
+@msg	The scenes could not be laid out for the new canvas: {error}	Les scènes n'ont pas pu être disposées pour le nouveau canevas : {error}

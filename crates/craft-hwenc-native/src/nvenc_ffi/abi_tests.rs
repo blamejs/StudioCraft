@@ -47,6 +47,8 @@ fn sizes_and_alignments_match_the_header() {
         (size_of::<NV_ENC_LOCK_BITSTREAM>(), align_of::<NV_ENC_LOCK_BITSTREAM>(), (1552, 8), "NV_ENC_LOCK_BITSTREAM"),
         (size_of::<NV_ENC_LOCK_INPUT_BUFFER>(), align_of::<NV_ENC_LOCK_INPUT_BUFFER>(), (1544, 8), "NV_ENC_LOCK_INPUT_BUFFER"),
         (size_of::<NV_ENC_SEQUENCE_PARAM_PAYLOAD>(), align_of::<NV_ENC_SEQUENCE_PARAM_PAYLOAD>(), (1544, 8), "NV_ENC_SEQUENCE_PARAM_PAYLOAD"),
+        (size_of::<NV_ENC_REGISTER_RESOURCE>(), align_of::<NV_ENC_REGISTER_RESOURCE>(), (1536, 8), "NV_ENC_REGISTER_RESOURCE"),
+        (size_of::<NV_ENC_MAP_INPUT_RESOURCE>(), align_of::<NV_ENC_MAP_INPUT_RESOURCE>(), (1544, 8), "NV_ENC_MAP_INPUT_RESOURCE"),
         (size_of::<NV_ENCODE_API_FUNCTION_LIST>(), align_of::<NV_ENCODE_API_FUNCTION_LIST>(), (2552, 8), "NV_ENCODE_API_FUNCTION_LIST"),
     ] {
         assert_eq!((size, align), expected, "{name}");
@@ -166,6 +168,22 @@ fn field_offsets_match_the_header() {
         (offset_of!(NV_ENC_SEQUENCE_PARAM_PAYLOAD, spsppsBuffer), 16, "NV_ENC_SEQUENCE_PARAM_PAYLOAD.spsppsBuffer"),
         (offset_of!(NV_ENC_SEQUENCE_PARAM_PAYLOAD, outSPSPPSPayloadSize), 24, "NV_ENC_SEQUENCE_PARAM_PAYLOAD.outSPSPPSPayloadSize"),
         (offset_of!(NV_ENC_SEQUENCE_PARAM_PAYLOAD, reserved2), 1032, "NV_ENC_SEQUENCE_PARAM_PAYLOAD.reserved2"),
+        (offset_of!(NV_ENC_REGISTER_RESOURCE, resourceType), 4, "NV_ENC_REGISTER_RESOURCE.resourceType"),
+        (offset_of!(NV_ENC_REGISTER_RESOURCE, width), 8, "NV_ENC_REGISTER_RESOURCE.width"),
+        (offset_of!(NV_ENC_REGISTER_RESOURCE, height), 12, "NV_ENC_REGISTER_RESOURCE.height"),
+        (offset_of!(NV_ENC_REGISTER_RESOURCE, pitch), 16, "NV_ENC_REGISTER_RESOURCE.pitch"),
+        (offset_of!(NV_ENC_REGISTER_RESOURCE, subResourceIndex), 20, "NV_ENC_REGISTER_RESOURCE.subResourceIndex"),
+        (offset_of!(NV_ENC_REGISTER_RESOURCE, resourceToRegister), 24, "NV_ENC_REGISTER_RESOURCE.resourceToRegister"),
+        (offset_of!(NV_ENC_REGISTER_RESOURCE, registeredResource), 32, "NV_ENC_REGISTER_RESOURCE.registeredResource"),
+        (offset_of!(NV_ENC_REGISTER_RESOURCE, bufferFormat), 40, "NV_ENC_REGISTER_RESOURCE.bufferFormat"),
+        (offset_of!(NV_ENC_REGISTER_RESOURCE, bufferUsage), 44, "NV_ENC_REGISTER_RESOURCE.bufferUsage"),
+        (offset_of!(NV_ENC_REGISTER_RESOURCE, pInputFencePoint), 48, "NV_ENC_REGISTER_RESOURCE.pInputFencePoint"),
+        (offset_of!(NV_ENC_REGISTER_RESOURCE, chromaOffset), 56, "NV_ENC_REGISTER_RESOURCE.chromaOffset"),
+        (offset_of!(NV_ENC_REGISTER_RESOURCE, reserved2), 1048, "NV_ENC_REGISTER_RESOURCE.reserved2"),
+        (offset_of!(NV_ENC_MAP_INPUT_RESOURCE, registeredResource), 16, "NV_ENC_MAP_INPUT_RESOURCE.registeredResource"),
+        (offset_of!(NV_ENC_MAP_INPUT_RESOURCE, mappedResource), 24, "NV_ENC_MAP_INPUT_RESOURCE.mappedResource"),
+        (offset_of!(NV_ENC_MAP_INPUT_RESOURCE, mappedBufferFmt), 32, "NV_ENC_MAP_INPUT_RESOURCE.mappedBufferFmt"),
+        (offset_of!(NV_ENC_MAP_INPUT_RESOURCE, reserved2), 1040, "NV_ENC_MAP_INPUT_RESOURCE.reserved2"),
         (offset_of!(NV_ENCODE_API_FUNCTION_LIST, nvEncGetEncodeCaps), 64, "nvEncGetEncodeCaps"),
         (offset_of!(NV_ENCODE_API_FUNCTION_LIST, nvEncInitializeEncoder), 96, "nvEncInitializeEncoder"),
         (offset_of!(NV_ENCODE_API_FUNCTION_LIST, nvEncCreateInputBuffer), 104, "nvEncCreateInputBuffer"),
@@ -178,11 +196,58 @@ fn field_offsets_match_the_header() {
         (offset_of!(NV_ENCODE_API_FUNCTION_LIST, nvEncLockInputBuffer), 160, "nvEncLockInputBuffer"),
         (offset_of!(NV_ENCODE_API_FUNCTION_LIST, nvEncUnlockInputBuffer), 168, "nvEncUnlockInputBuffer"),
         (offset_of!(NV_ENCODE_API_FUNCTION_LIST, nvEncGetSequenceParams), 184, "nvEncGetSequenceParams"),
+        (offset_of!(NV_ENCODE_API_FUNCTION_LIST, nvEncMapInputResource), 208, "nvEncMapInputResource"),
+        (offset_of!(NV_ENCODE_API_FUNCTION_LIST, nvEncUnmapInputResource), 216, "nvEncUnmapInputResource"),
         (offset_of!(NV_ENCODE_API_FUNCTION_LIST, nvEncDestroyEncoder), 224, "nvEncDestroyEncoder"),
         (offset_of!(NV_ENCODE_API_FUNCTION_LIST, nvEncOpenEncodeSessionEx), 240, "nvEncOpenEncodeSessionEx"),
+        (offset_of!(NV_ENCODE_API_FUNCTION_LIST, nvEncRegisterResource), 248, "nvEncRegisterResource"),
+        (offset_of!(NV_ENCODE_API_FUNCTION_LIST, nvEncUnregisterResource), 256, "nvEncUnregisterResource"),
         (offset_of!(NV_ENCODE_API_FUNCTION_LIST, nvEncGetLastErrorString), 304, "nvEncGetLastErrorString"),
         (offset_of!(NV_ENCODE_API_FUNCTION_LIST, nvEncGetEncodePresetConfigEx), 320, "nvEncGetEncodePresetConfigEx"),
         (offset_of!(NV_ENCODE_API_FUNCTION_LIST, reserved2), 352, "NV_ENCODE_API_FUNCTION_LIST.reserved2"),
+    ] {
+        assert_eq!(offset, expected, "{name}");
+    }
+}
+
+#[test]
+fn the_hevc_picture_parameters_and_sei_payloads_match_the_header() {
+    assert_eq!((size_of::<NV_ENC_SEI_PAYLOAD>(), align_of::<NV_ENC_SEI_PAYLOAD>()), (16, 8), "NV_ENC_SEI_PAYLOAD");
+    assert_eq!((size_of::<NV_ENC_CLOCK_TIMESTAMP_SET>(), align_of::<NV_ENC_CLOCK_TIMESTAMP_SET>()), (8, 4), "NV_ENC_CLOCK_TIMESTAMP_SET");
+    assert_eq!((size_of::<NV_ENC_TIME_CODE>(), align_of::<NV_ENC_TIME_CODE>()), (28, 4), "NV_ENC_TIME_CODE");
+    assert_eq!((size_of::<NV_ENC_PIC_PARAMS_HEVC>(), align_of::<NV_ENC_PIC_PARAMS_HEVC>()), (1536, 8), "NV_ENC_PIC_PARAMS_HEVC");
+    for (offset, expected, name) in [
+        (offset_of!(NV_ENC_SEI_PAYLOAD, payloadSize), 0, "NV_ENC_SEI_PAYLOAD.payloadSize"),
+        (offset_of!(NV_ENC_SEI_PAYLOAD, payloadType), 4, "NV_ENC_SEI_PAYLOAD.payloadType"),
+        (offset_of!(NV_ENC_SEI_PAYLOAD, payload), 8, "NV_ENC_SEI_PAYLOAD.payload"),
+        (offset_of!(NV_ENC_CLOCK_TIMESTAMP_SET, bits), 0, "NV_ENC_CLOCK_TIMESTAMP_SET.bits"),
+        (offset_of!(NV_ENC_CLOCK_TIMESTAMP_SET, timeOffset), 4, "NV_ENC_CLOCK_TIMESTAMP_SET.timeOffset"),
+        (offset_of!(NV_ENC_TIME_CODE, displayPicStruct), 0, "NV_ENC_TIME_CODE.displayPicStruct"),
+        (offset_of!(NV_ENC_TIME_CODE, clockTimestamp), 4, "NV_ENC_TIME_CODE.clockTimestamp"),
+        (offset_of!(NV_ENC_PIC_PARAMS_HEVC, displayPOCSyntax), 0, "NV_ENC_PIC_PARAMS_HEVC.displayPOCSyntax"),
+        (offset_of!(NV_ENC_PIC_PARAMS_HEVC, refPicFlag), 4, "NV_ENC_PIC_PARAMS_HEVC.refPicFlag"),
+        (offset_of!(NV_ENC_PIC_PARAMS_HEVC, temporalId), 8, "NV_ENC_PIC_PARAMS_HEVC.temporalId"),
+        (offset_of!(NV_ENC_PIC_PARAMS_HEVC, forceIntraRefreshWithFrameCnt), 12, "NV_ENC_PIC_PARAMS_HEVC.forceIntraRefreshWithFrameCnt"),
+        (offset_of!(NV_ENC_PIC_PARAMS_HEVC, flags), 16, "NV_ENC_PIC_PARAMS_HEVC.flags"),
+        (offset_of!(NV_ENC_PIC_PARAMS_HEVC, sliceTypeData), 24, "NV_ENC_PIC_PARAMS_HEVC.sliceTypeData"),
+        (offset_of!(NV_ENC_PIC_PARAMS_HEVC, sliceTypeArrayCnt), 32, "NV_ENC_PIC_PARAMS_HEVC.sliceTypeArrayCnt"),
+        (offset_of!(NV_ENC_PIC_PARAMS_HEVC, sliceMode), 36, "NV_ENC_PIC_PARAMS_HEVC.sliceMode"),
+        (offset_of!(NV_ENC_PIC_PARAMS_HEVC, sliceModeData), 40, "NV_ENC_PIC_PARAMS_HEVC.sliceModeData"),
+        (offset_of!(NV_ENC_PIC_PARAMS_HEVC, ltrMarkFrameIdx), 44, "NV_ENC_PIC_PARAMS_HEVC.ltrMarkFrameIdx"),
+        (offset_of!(NV_ENC_PIC_PARAMS_HEVC, ltrUseFrameBitmap), 48, "NV_ENC_PIC_PARAMS_HEVC.ltrUseFrameBitmap"),
+        (offset_of!(NV_ENC_PIC_PARAMS_HEVC, ltrUsageMode), 52, "NV_ENC_PIC_PARAMS_HEVC.ltrUsageMode"),
+        (offset_of!(NV_ENC_PIC_PARAMS_HEVC, seiPayloadArrayCnt), 56, "NV_ENC_PIC_PARAMS_HEVC.seiPayloadArrayCnt"),
+        (offset_of!(NV_ENC_PIC_PARAMS_HEVC, reserved), 60, "NV_ENC_PIC_PARAMS_HEVC.reserved"),
+        (offset_of!(NV_ENC_PIC_PARAMS_HEVC, seiPayloadArray), 64, "NV_ENC_PIC_PARAMS_HEVC.seiPayloadArray"),
+        (offset_of!(NV_ENC_PIC_PARAMS_HEVC, timeCode), 72, "NV_ENC_PIC_PARAMS_HEVC.timeCode"),
+        (offset_of!(NV_ENC_PIC_PARAMS_HEVC, reserved2), 100, "NV_ENC_PIC_PARAMS_HEVC.reserved2"),
+        (offset_of!(NV_ENC_PIC_PARAMS_HEVC, reserved3), 1048, "NV_ENC_PIC_PARAMS_HEVC.reserved3"),
+        (offset_of!(NV_ENC_CODEC_PIC_PARAMS, hevcPicParams), 0, "NV_ENC_CODEC_PIC_PARAMS.hevcPicParams"),
+        (
+            offset_of!(NV_ENC_PIC_PARAMS, codecPicParams) + offset_of!(NV_ENC_PIC_PARAMS_HEVC, seiPayloadArray),
+            144,
+            "seiPayloadArray in NV_ENC_PIC_PARAMS",
+        ),
     ] {
         assert_eq!(offset, expected, "{name}");
     }
@@ -237,6 +302,10 @@ fn constants_match_the_header() {
         (i64::from(NV_ENC_LOCK_BITSTREAM_VER), 4043374604, "NV_ENC_LOCK_BITSTREAM_VER"),
         (i64::from(NV_ENC_LOCK_INPUT_BUFFER_VER), 1895890956, "NV_ENC_LOCK_INPUT_BUFFER_VER"),
         (i64::from(NV_ENC_SEQUENCE_PARAM_PAYLOAD_VER), 1895890956, "NV_ENC_SEQUENCE_PARAM_PAYLOAD_VER"),
+        (i64::from(NV_ENC_REGISTER_RESOURCE_VER), 1896087564, "NV_ENC_REGISTER_RESOURCE_VER"),
+        (i64::from(NV_ENC_MAP_INPUT_RESOURCE_VER), 1896087564, "NV_ENC_MAP_INPUT_RESOURCE_VER"),
+        (i64::from(NV_ENC_INPUT_RESOURCE_TYPE_DIRECTX), 0, "NV_ENC_INPUT_RESOURCE_TYPE_DIRECTX"),
+        (i64::from(NV_ENC_INPUT_IMAGE), 0, "NV_ENC_INPUT_IMAGE"),
     ] {
         assert_eq!(value, expected, "{name}");
     }
@@ -283,6 +352,29 @@ fn an_hevc_session_clears_the_preset_flags_for_parameter_sets_delimiters_and_int
         assert_eq!(flags & 1, 1, "useConstrainedIntraPred keeps the preset's value");
         assert_eq!(hevc_flags(0, ten_bit) & 1, 0, "useConstrainedIntraPred keeps the preset's value");
     }
+}
+
+#[test]
+fn the_sei_messages_go_on_every_idr_picture_and_their_descriptors_point_at_the_payloads() {
+    use super::session::{carries_sei, sei_descriptors};
+    use crate::hdr::Sei;
+    let idr: Vec<u64> = (0..10).filter(|&n| carries_sei(2, n, 4)).collect();
+    assert_eq!(idr, [0, 4, 8]);
+    assert!((0..10).all(|n| !carries_sei(0, n, 4)), "no messages, nothing to attach");
+    assert!((0..3).all(|n| carries_sei(1, n, 0)), "a zero interval is every picture, not a division by zero");
+    assert!(carries_sei(1, u64::MAX - 1, 2));
+
+    let messages = [Sei { payload_type: 137, payload: vec![1; 24] }, Sei { payload_type: 144, payload: vec![2, 3, 4, 5] }];
+    let (payloads, array) = sei_descriptors(&messages).unwrap();
+    let moved = (payloads, array);
+    assert_eq!(moved.1.len(), 2);
+    for ((d, bytes), m) in moved.1.iter().zip(moved.0.iter()).zip(&messages) {
+        assert_eq!((d.payloadType, d.payloadSize as usize), (m.payload_type, m.payload.len()));
+        assert_eq!(d.payload.cast_const(), bytes.as_ptr(), "the descriptor points at the block the session keeps");
+        assert_eq!(&**bytes, m.payload.as_slice());
+    }
+    let (p, a) = sei_descriptors(&[]).unwrap();
+    assert!(p.is_empty() && a.is_empty());
 }
 
 #[test]

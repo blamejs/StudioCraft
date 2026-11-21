@@ -126,6 +126,9 @@ ashpd = { version = "=0.14.0", default-features = false, features = ["async-io",
 # Ending a pending portal request when its capture is dropped.
 futures-channel = { version = "0.3", default-features = false, features = ["alloc"] }
 futures-util = { version = "0.3", default-features = false }
+# Listing the displays on Linux: Wayland's outputs, or RandR's monitors under X11. The versions winit uses.
+wayland-client = "0.31"
+x11rb = { version = "0.13", default-features = false, features = ["randr"] }
 
 # ui
 egui = "0.37"

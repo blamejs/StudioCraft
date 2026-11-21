@@ -493,6 +493,9 @@ menu	Transform	變形
 @msg	Audio tracks could not be repaired: {takes} and {more} more. Takes repaired: {count}	無法修復音訊軌道：{takes} 及另外 {more} 個。已修復的錄製：{count}
 	Open Last Audio Tracks in Editor	在編輯器中開啟最近的音訊軌道
 	Add Audio Tracks Marker	為音訊軌道新增標記
+	Add Recording Marker	為錄影新增標記
+@msg	Markers saved to {path}	標記已儲存到 {path}
+@msg	The markers could not be saved: {error}	無法儲存標記：{error}
 	After a take	錄製結束後
 	Nothing	不執行任何動作
 	Show the folder	顯示資料夾
@@ -536,3 +539,7 @@ menu	Transform	變形
 @msg	there is no display `{id}`: the system lists no displays	沒有顯示器 `{id}`：系統未列出任何顯示器
 @msg	there is no display `{id}` (the displays are {ids})	沒有顯示器 `{id}`（顯示器有 {ids}）
 @msg	a {width} × {height} display can't be the canvas: each side must be from {min} to {max} pixels	{width} × {height} 的顯示器不能作為畫布：每條邊必須為 {min} 到 {max} 像素
+	Output scale	輸出縮放
+	Custom	自訂
+	Fill Screen	填滿畫面
+@msg	The scenes could not be laid out for the new canvas: {error}	無法為新畫布排列場景：{error}

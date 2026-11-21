@@ -1,6 +1,6 @@
 [package]
 name = "craft-hwenc-native"
-description = "Hardware video encoders called through the drivers' own APIs: NVENC H.264 and HEVC from NV12 or P010 frames, and the Windows Media Foundation, macOS VideoToolbox and Linux VA-API hardware H.264 and HEVC encoders from NV12 frames, with the avcC and hvcC records built from the parameter sets the encoder writes"
+description = "Hardware video encoders called through the drivers' own APIs: NVENC H.264 and HEVC from NV12 or P010 frames with BT.709, HLG or PQ signaling, and the Windows Media Foundation, macOS VideoToolbox and Linux VA-API hardware H.264 and HEVC encoders from NV12 frames, with the avcC and hvcC records built from the parameter sets the encoder writes"
 version = "0.1.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"

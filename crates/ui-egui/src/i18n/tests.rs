@@ -74,6 +74,8 @@ fn data(app: &StudioApp) -> BTreeSet<String> {
     if let Some(list) = &app.encoders {
         out.extend(list.iter().map(|(_, codec, _)| codec.clone()));
     }
+    // The streaming services' names are their own.
+    out.extend(studiocraft_model::SERVICES.iter().map(|s| s.name.to_string()));
     out
 }
 

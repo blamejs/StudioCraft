@@ -9,4 +9,6 @@ mod abi_tests;
 mod device;
 mod session;
 
+#[cfg(all(test, target_os = "windows"))]
+pub(crate) use device::{test_device, test_texture};
 pub(crate) use session::{Codec, Locked, OpenError, Params, Rate, Session, Submitted, driver};

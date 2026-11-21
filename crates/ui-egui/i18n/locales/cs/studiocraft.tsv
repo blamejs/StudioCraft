@@ -493,6 +493,9 @@ menu	Transform	Transformace
 @msg	Audio tracks could not be repaired: {takes} and {more} more. Takes repaired: {count}	Zvukové stopy nelze opravit: {takes} a {more} dalších. Opravené záznamy: {count}
 	Open Last Audio Tracks in Editor	Otevřít poslední zvukové stopy v editoru
 	Add Audio Tracks Marker	Přidat značku do zvukových stop
+	Add Recording Marker	Přidat značku do nahrávky
+@msg	Markers saved to {path}	Značky byly uloženy do {path}
+@msg	The markers could not be saved: {error}	Značky nelze uložit: {error}
 	After a take	Po záznamu
 	Nothing	Nic
 	Show the folder	Zobrazit složku
@@ -536,3 +539,8 @@ menu	Transform	Transformace
 @msg	there is no display `{id}`: the system lists no displays	obrazovka `{id}` neexistuje: systém neuvádí žádné obrazovky
 @msg	there is no display `{id}` (the displays are {ids})	obrazovka `{id}` neexistuje (obrazovky jsou {ids})
 @msg	a {width} × {height} display can't be the canvas: each side must be from {min} to {max} pixels	obrazovka {width} × {height} nemůže být plátnem: každá strana musí mít {min} až {max} pixelů
+	Output scale	Měřítko výstupu
+	Custom	Vlastní
+	{percent}% ({width} × {height})	{percent} % ({width} × {height})
+	Fill Screen	Vyplnit obrazovku
+@msg	The scenes could not be laid out for the new canvas: {error}	Scény nešlo rozmístit pro nové plátno: {error}

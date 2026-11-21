@@ -51,6 +51,10 @@
 	Choose a display	Choose a display
 	The display this window is on	The display this window is on
 	{name}: {width} × {height}	{name}: {width} × {height}
+	Output scale	Output scale
+	Custom	Custom
+	{percent}% ({width} × {height})	{percent}% ({width} × {height})
+	Fill Screen	Fill Screen
 	Capture rate (frames per second)	Capture rate (frames per second)
 	Ceiling (dB)	Ceiling (dB)
 	Center	Center
@@ -379,6 +383,13 @@
 	Stopping…	Stopping…
 	Stream	Stream
 	Stream key	Stream key
+	Stream to {service}	Stream to {service}
+	Custom server	Custom server
+	Service	Service
+	Where {service} shows your server and key	Where {service} shows your server and key
+	Copy it from your account	Copy it from your account
+	{service} shows the server and key for your account.	{service} shows the server and key for your account.
+	Where to find them	Where to find them
 	Streaming	Streaming
 	Stretch image	Stretch image
 	Stretch to Screen	Stretch to Screen
@@ -579,6 +590,9 @@ menu	Transform	Transform
 @msg	Audio tracks could not be repaired: {takes} and {more} more. Takes repaired: {count}	Audio tracks could not be repaired: {takes} and {more} more. Takes repaired: {count}
 	Open Last Audio Tracks in Editor	Open Last Audio Tracks in Editor
 	Add Audio Tracks Marker	Add Audio Tracks Marker
+	Add Recording Marker	Add Recording Marker
+@msg	Markers saved to {path}	Markers saved to {path}
+@msg	The markers could not be saved: {error}	The markers could not be saved: {error}
 	After a take	After a take
 	Nothing	Nothing
 	Show the folder	Show the folder
@@ -631,6 +645,7 @@ menu	Transform	Transform
 @msg	`{command}`: `key` is `profile`, `held` or `none`, not `{key}`	`{command}`: `key` is `profile`, `held` or `none`, not `{key}`
 @msg	`{command}`: `held_name` goes with `key`: `held`	`{command}`: `held_name` goes with `key`: `held`
 @msg	`{command}`: `held_name` is 1 to {max} bytes	`{command}`: `held_name` is 1 to {max} bytes
+@msg	`{command}`: `service` is empty or one of {ids}, not `{service}`	`{command}`: `service` is empty or one of {ids}, not `{service}`
 @msg	a profile holds at most {max} stream destinations	a profile holds at most {max} stream destinations
 @msg	there is no stream destination `{id}`	there is no stream destination `{id}`
 @msg	stop the stream destination `{id}` before removing it	stop the stream destination `{id}` before removing it
@@ -691,3 +706,4 @@ menu	Transform	Transform
 @msg	Speech model {model} could not be downloaded: {error}	Speech model {model} could not be downloaded: {error}
 @msg	Captions saved to {path}	Captions saved to {path}
 @msg	The captions could not be saved: {error}	The captions could not be saved: {error}
+@msg	The scenes could not be laid out for the new canvas: {error}	The scenes could not be laid out for the new canvas: {error}

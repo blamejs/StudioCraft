@@ -23,7 +23,8 @@ pixels, x to the right and y down, with the origin at the top-left; the default 
 gain is 0 to 1 and durations are in milliseconds. Every action is a command: command_list shows ids and parameters, command_run runs \
 one and command_batch runs several. A typical flow is scene_add, then source_add {kind, settings}, then item_transform, then \
 render_preview to look at the result and doc_inspect to read ids back. Studio mode keeps a preview scene and a program scene; \
-studio_transition moves the preview to the program. record_start and record_stop control the recording, stream_start and \
+studio_transition moves the preview to the program. record_start and record_stop control the recording, record_marker marks it \
+for the video editor, stream_start and \
 stream_stop the stream to the configured RTMP server, replay_start, replay_stop and replay_save the replay buffer, and \
 output_status reports all three. source_audio sets a source's audio sync offset, monitoring and whether it records its own track; \
 audio_tracks_status reports the audio tracks, audio_tracks_marker marks the running take, audio_tracks_repair repairs takes cut \

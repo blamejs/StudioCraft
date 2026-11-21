@@ -73,6 +73,8 @@ pub const NV_ENC_PIC_PARAMS_VER: u32 = struct_version(6) | (1 << 31);
 pub const NV_ENC_LOCK_BITSTREAM_VER: u32 = struct_version(1) | (1 << 31);
 pub const NV_ENC_LOCK_INPUT_BUFFER_VER: u32 = struct_version(1);
 pub const NV_ENC_SEQUENCE_PARAM_PAYLOAD_VER: u32 = struct_version(1);
+pub const NV_ENC_REGISTER_RESOURCE_VER: u32 = struct_version(4);
+pub const NV_ENC_MAP_INPUT_RESOURCE_VER: u32 = struct_version(4);
 
 pub type NvStatus = c_int;
 pub const NV_ENC_SUCCESS: NvStatus = 0;
@@ -87,6 +89,8 @@ pub const NV_ENC_ERR_INCOMPATIBLE_CLIENT_KEY: NvStatus = 21;
 pub const NV_ENC_DEVICE_TYPE_DIRECTX: u32 = 0;
 pub const NV_ENC_DEVICE_TYPE_CUDA: u32 = 1;
 pub const NV_ENC_MEMORY_HEAP_SYSMEM_CACHED: u32 = 2;
+pub const NV_ENC_INPUT_RESOURCE_TYPE_DIRECTX: u32 = 0;
+pub const NV_ENC_INPUT_IMAGE: u32 = 0;
 pub const NV_ENC_BUFFER_FORMAT_NV12: u32 = 0x1;
 /// P010: 10-bit 4:2:0, 16-bit little-endian samples with the value in the high 10 bits.
 pub const NV_ENC_BUFFER_FORMAT_YUV420_10BIT: u32 = 0x10000;
@@ -396,10 +400,63 @@ pub struct NV_ENC_CREATE_BITSTREAM_BUFFER {
     pub reserved2: [*mut c_void; 64],
 }
 
-/// `NV_ENC_CODEC_PIC_PARAMS`: a union of codec structures, all zero here.
+/// `NV_ENC_SEI_PAYLOAD`: a user SEI message (payload type and bytes) for a picture.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct NV_ENC_SEI_PAYLOAD {
+    pub payloadSize: u32,
+    pub payloadType: u32,
+    pub payload: *mut u8,
+}
+
+/// `NV_ENC_CLOCK_TIMESTAMP_SET`: countingType:1, discontinuityFlag:1, cntDroppedFrames:1, nFrames:8,
+/// secondsValue:6, minutesValue:6, hoursValue:5, reserved2:4 in `bits`, then the time offset.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct NV_ENC_CLOCK_TIMESTAMP_SET {
+    pub bits: u32,
+    pub timeOffset: u32,
+}
+
+/// `NV_ENC_TIME_CODE` (`MAX_NUM_CLOCK_TS` is 3).
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct NV_ENC_TIME_CODE {
+    pub displayPicStruct: u32,
+    pub clockTimestamp: [NV_ENC_CLOCK_TIMESTAMP_SET; 3],
+}
+
+/// `NV_ENC_PIC_PARAMS_HEVC`: the per-picture HEVC parameters; all zero but the SEI payload array here.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct NV_ENC_PIC_PARAMS_HEVC {
+    pub displayPOCSyntax: u32,
+    pub refPicFlag: u32,
+    pub temporalId: u32,
+    pub forceIntraRefreshWithFrameCnt: u32,
+    /// constrainedFrame:1, sliceModeDataUpdate:1, ltrMarkFrame:1, ltrUseFrames:1, reservedBitFields:28.
+    pub flags: u32,
+    pub sliceTypeData: *mut u8,
+    pub sliceTypeArrayCnt: u32,
+    pub sliceMode: u32,
+    pub sliceModeData: u32,
+    pub ltrMarkFrameIdx: u32,
+    pub ltrUseFrameBitmap: u32,
+    pub ltrUsageMode: u32,
+    pub seiPayloadArrayCnt: u32,
+    pub reserved: u32,
+    pub seiPayloadArray: *mut NV_ENC_SEI_PAYLOAD,
+    pub timeCode: NV_ENC_TIME_CODE,
+    pub reserved2: [u32; 237],
+    pub reserved3: [*mut c_void; 61],
+}
+
+/// `NV_ENC_CODEC_PIC_PARAMS`: a union of codec structures (H.264 and AV1 stay opaque inside
+/// `reserved`).
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub union NV_ENC_CODEC_PIC_PARAMS {
+    pub hevcPicParams: NV_ENC_PIC_PARAMS_HEVC,
     pub reserved: [u32; 388],
     align: [*mut c_void; 0],
 }
@@ -500,6 +557,38 @@ pub struct NV_ENC_SEQUENCE_PARAM_PAYLOAD {
     pub reserved2: [*mut c_void; 64],
 }
 
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct NV_ENC_REGISTER_RESOURCE {
+    pub version: u32,
+    pub resourceType: u32,
+    pub width: u32,
+    pub height: u32,
+    pub pitch: u32,
+    pub subResourceIndex: u32,
+    pub resourceToRegister: *mut c_void,
+    pub registeredResource: *mut c_void,
+    pub bufferFormat: u32,
+    pub bufferUsage: u32,
+    pub pInputFencePoint: *mut c_void,
+    pub chromaOffset: [u32; 2],
+    pub reserved1: [u32; 245],
+    pub reserved2: [*mut c_void; 61],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct NV_ENC_MAP_INPUT_RESOURCE {
+    pub version: u32,
+    pub subResourceIndex: u32,
+    pub inputResource: *mut c_void,
+    pub registeredResource: *mut c_void,
+    pub mappedResource: *mut c_void,
+    pub mappedBufferFmt: u32,
+    pub reserved1: [u32; 251],
+    pub reserved2: [*mut c_void; 63],
+}
+
 type Unused = *const c_void;
 
 /// The driver's function table (`NV_ENCODE_API_FUNCTION_LIST`); the entries the session does not
@@ -533,13 +622,13 @@ pub struct NV_ENCODE_API_FUNCTION_LIST {
     pub nvEncGetSequenceParams: Option<unsafe extern "system" fn(Handle, *mut NV_ENC_SEQUENCE_PARAM_PAYLOAD) -> NvStatus>,
     pub nvEncRegisterAsyncEvent: Unused,
     pub nvEncUnregisterAsyncEvent: Unused,
-    pub nvEncMapInputResource: Unused,
-    pub nvEncUnmapInputResource: Unused,
+    pub nvEncMapInputResource: Option<unsafe extern "system" fn(Handle, *mut NV_ENC_MAP_INPUT_RESOURCE) -> NvStatus>,
+    pub nvEncUnmapInputResource: Option<unsafe extern "system" fn(Handle, *mut c_void) -> NvStatus>,
     pub nvEncDestroyEncoder: Option<unsafe extern "system" fn(Handle) -> NvStatus>,
     pub nvEncInvalidateRefFrames: Unused,
     pub nvEncOpenEncodeSessionEx: Option<unsafe extern "system" fn(*mut NV_ENC_OPEN_ENCODE_SESSION_EX_PARAMS, *mut Handle) -> NvStatus>,
-    pub nvEncRegisterResource: Unused,
-    pub nvEncUnregisterResource: Unused,
+    pub nvEncRegisterResource: Option<unsafe extern "system" fn(Handle, *mut NV_ENC_REGISTER_RESOURCE) -> NvStatus>,
+    pub nvEncUnregisterResource: Option<unsafe extern "system" fn(Handle, *mut c_void) -> NvStatus>,
     pub nvEncReconfigureEncoder: Unused,
     pub reserved1: Unused,
     pub nvEncCreateMVBuffer: Unused,
