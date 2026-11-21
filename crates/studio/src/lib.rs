@@ -245,9 +245,10 @@ pub struct Studio {
     /// The program scene the compositor shows (or is transitioning to).
     shown_program: SceneId,
     seen_revision: u64,
-    /// The undo step of the last layout change for a new canvas, and whether the collection had
-    /// unsaved changes before it ([`Studio::restore_profile`]).
-    relaid_at: Option<(u64, bool)>,
+    /// The undo step of the last layout change for a new canvas, whether the collection had
+    /// unsaved changes before it, and the collection after that change or after the last
+    /// placement that followed it ([`Studio::restore_profile`]).
+    relaid_at: Option<(u64, bool, Box<SceneCollection>)>,
     /// The undo steps of the placements [`Studio::place_fit_later`] made after that change.
     fit_placed: Vec<u64>,
     /// Sources with an item placed by a fit mode that showed nothing at the last canvas change
@@ -871,7 +872,8 @@ impl Studio {
         if from == to {
             return Ok(());
         }
-        if let Some((step, was_dirty)) = relaid_at
+        if let Some((step, was_dirty, after)) = relaid_at
+            && *after == *self.engine.collection()
             && self.engine.steps_after(step).is_some_and(|after| after.iter().all(|s| placed.contains(s)))
             && self.discard_down_to(step)
         {
@@ -951,7 +953,7 @@ impl Studio {
         self.fit_placed.clear();
         match self.execute(Command::CanvasRelayout { from: size(from), to: size(to), sizes: sizes.clone(), items: None }) {
             Ok(_) if self.engine.revision() != before => {
-                self.relaid_at = self.engine.last_step().map(|step| (step, was_dirty));
+                self.relaid_at = self.engine.last_step().map(|step| (step, was_dirty, Box::new(self.engine.collection().clone())));
                 self.fit_layout = self.engine.last_step();
             }
             Ok(_) => {}
@@ -1026,8 +1028,15 @@ impl Studio {
         let canvas = CanvasSize { width, height };
         self.engine.seal_history();
         let before = self.engine.revision();
+        let untouched = self.relaid_at.as_ref().is_some_and(|(_, _, after)| **after == *self.engine.collection());
         match self.execute(Command::CanvasRelayout { from: canvas, to: canvas, sizes: ready, items: Some(items) }) {
-            Ok(_) if self.engine.revision() != before => self.fit_placed.extend(self.engine.last_step()),
+            Ok(_) if self.engine.revision() != before => {
+                self.fit_placed.extend(self.engine.last_step());
+                // A placement right after the layout change keeps it reversible.
+                if untouched && let Some((_, _, after)) = &mut self.relaid_at {
+                    **after = self.engine.collection().clone();
+                }
+            }
             Ok(_) => {}
             Err(e) => {
                 self.notices.push(Notice::new("The scenes could not be laid out for the new canvas: {error}", vec![("error", e.to_string())], true));

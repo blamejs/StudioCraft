@@ -421,6 +421,41 @@ fn restoring_a_profile_also_takes_back_placements_of_items_that_waited() {
 }
 
 #[test]
+fn restoring_a_profile_keeps_a_change_made_after_its_layout() {
+    let mut s = headless();
+    s.run("source.add", &json!({"kind": "image", "name": "Logo", "transform": {"position": {"x": 960.0, "y": 540.0}}})).unwrap();
+    s.run("scene.add", &json!({"name": "Other"})).unwrap();
+    s.seal_history();
+    s.mark_saved();
+    let previous = s.profile().clone();
+    let mut p = previous.clone();
+    (p.video.base_width, p.video.base_height) = (1080, 1920);
+    s.set_profile(p).unwrap();
+    let other = s.collection().scenes.iter().map(|sc| sc.id).find(|id| *id != s.collection().program_scene).unwrap();
+    s.run("scene.select", &json!({"scene": other.0})).unwrap();
+    let shown = s.collection().program_scene;
+    assert_eq!(shown, other);
+    s.restore_profile(previous).unwrap();
+    assert_eq!(s.collection().program_scene, shown, "the scene shown since stays");
+    assert!(s.engine().is_dirty(), "the change is still unsaved");
+
+    // A layout undone and redone before the restore is still taken back.
+    s.mark_saved();
+    let previous = s.profile().clone();
+    let before = s.collection().clone();
+    let newest = s.engine().last_step();
+    let mut p = previous.clone();
+    (p.video.base_width, p.video.base_height) = (1280, 720);
+    s.set_profile(p).unwrap();
+    s.run("edit.undo", &json!({})).unwrap();
+    s.run("edit.redo", &json!({})).unwrap();
+    s.restore_profile(previous).unwrap();
+    assert_eq!(s.collection().scenes, before.scenes);
+    assert!(!s.engine().is_dirty());
+    assert_eq!(s.engine().last_step(), newest, "no step is left for the layout");
+}
+
+#[test]
 fn an_undone_layout_places_no_waiting_item_that_it_left_in_place() {
     let mut s = headless();
     let mut added = Vec::new();
