@@ -81,8 +81,8 @@ sha2 = "0.10"
 # Speech models: the spectrogram's frames on every core.
 rayon = "1"
 # Speech models: Whisper inference on the CPU, pure Rust.
-candle-core = { version = "0.9", default-features = false }
-candle-nn = { version = "0.9", default-features = false }
+candle-core = { version = "0.11.1", default-features = false }
+candle-nn = { version = "0.11.1", default-features = false }
 # Speech models: downloads over HTTPS with rustls and the system's certificate checks.
 ureq = { version = "3", default-features = false, features = ["rustls-no-provider", "_ring", "platform-verifier"] }
 # Tests only: temporary folders.
