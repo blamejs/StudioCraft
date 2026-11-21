@@ -17,6 +17,7 @@ through the `objc2-video-toolbox`, `objc2-core-media`, `objc2-core-video` and
 | `nvenc::Encoder` | This is NVIDIA's NVENC encoder: H.264 High and HEVC Main from NV12 frames, and HEVC Main 10 from P010 frames. It uses Direct3D 11 on Windows (`nvEncodeAPI64.dll`) and the CUDA driver on 64-bit Linux (`libnvidia-encode.so.1`). |
 | `nvenc::Config` | It sets the codec, input layout, size (even, within the GPU's limits), frame rate, `Rate::Quality(1..=51)` or `Rate::Cbr(kbps)`, keyframe interval and `Color`. |
 | `nvenc::Encoder::encode`, `flush` | Packed frames go in, and 4-byte length-prefixed packets come out in input order, each with its timestamp and keyframe flag. The encoder uses preset P5, high-quality tuning, no B-frames and limited range. The VUI declares the `Color` of the `Config`. |
+| `nvenc::Encoder::on_d3d11`, `encode_texture` | On Windows, `on_d3d11` opens an encoder on the caller's Direct3D 11 device (an NVIDIA adapter's), and `encode_texture` encodes an NV12 or P010 `ID3D11Texture2D` of the encoder's size made on that device. The encoder reads the texture's first subresource on the GPU, so the frame is not copied to system memory. |
 | `Color` | This is the color signal of a stream: `Color::Bt709`, `Color::Hlg` (BT.2020 with the HLG transfer) or `Color::Pq { mastering, light }` (BT.2020 with the PQ transfer). NVENC writes `Hlg` and `Pq` as HEVC Main 10 from P010 frames. For `Pq`, a `MasteringDisplay` and a `ContentLight` that are set go in front of every IDR picture as the mastering display colour volume (payload type 137) and content light level (payload type 144) SEI messages. The other encoders return `Error::Unsupported` for any color but `Bt709`. |
 | `MasteringDisplay`, `ContentLight` | These hold the PQ static metadata: the mastering display's primaries and white point in units of 0.00002 and its peak and black luminance in units of 0.0001 cd/m², and MaxCLL and MaxFALL in cd/m². A chromaticity above 50,000, a black level at or above the peak, and a MaxFALL above a nonzero MaxCLL return `Error::Unsupported`. `MasteringDisplay::bt2020_d65` fills in the BT.2020 primaries and the D65 white point. |
 | `nvenc::Encoder::codec_private` | It returns the `avcC` or `hvcC` record for the container. |
@@ -64,6 +65,24 @@ let color = Color::Pq {
 };
 let cfg = Config { input: Input::P010, color, ..cfg };
 ```
+
+On Windows, frames that are already on the GPU go in as textures:
+
+```rust
+let mut enc = Encoder::on_d3d11(&cfg, &device)?;
+for (pts, texture) in textures.enumerate() {
+    for packet in enc.encode_texture(&texture, pts as i64)? {
+        write(packet);
+    }
+}
+```
+
+The encoder registers each texture with the driver the first time it sees it and keeps the last 64
+registered, so a pool of textures that the caller reuses is registered once. A texture whose
+picture is still inside the encoder is refused with an error; keep a texture unchanged until the
+packet with its timestamp has come out. A texture of another size, format or device is an error,
+and so is a call to `encode` on a texture encoder or to `encode_texture` on one opened with
+`Encoder::new`. The encoder opened with `on_d3d11` creates no input buffers in system memory.
 
 `vaapi::Encoder` keeps up to four frames in flight, each in its own surface and coded buffer.
 `encode` copies the frame into a free surface and submits it, and waits for the GPU only when all

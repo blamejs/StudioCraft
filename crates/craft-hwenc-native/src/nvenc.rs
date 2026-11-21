@@ -6,6 +6,9 @@
 //! - Frames go in through input buffers in system memory and come out as Annex B, which
 //!   [`Encoder`] turns into 4-byte length-prefixed samples with the parameter sets in the `avcC`
 //!   or `hvcC` record ([`Encoder::codec_private`]).
+//! - On Windows, an encoder opened with `Encoder::on_d3d11` on the caller's Direct3D 11 device
+//!   reads NV12 or P010 textures on the GPU (`Encoder::encode_texture`), so a frame the GPU made
+//!   is not copied to system memory and back. A 3840x2160 NV12 frame is 12,441,600 bytes.
 //! - The encoder uses preset P5 with high-quality tuning and no B-frames, so packets come out in
 //!   the order the frames went in and each packet's decoding time is its presentation time.
 //! - The stream's VUI declares the [`Config::color`] signal at limited range: BT.709, or for HEVC
@@ -17,6 +20,9 @@ use std::collections::VecDeque;
 use crate::nvenc_ffi::{self, Locked, Session, Submitted};
 use crate::{Codec, annexb, avc, hevc};
 pub use crate::{Color, Config, ContentLight, Error, Input, MasteringDisplay, Packet, Rate};
+/// The Direct3D 11 types texture input takes, from the `windows` crate this crate builds with.
+#[cfg(target_os = "windows")]
+pub use windows::Win32::Graphics::Direct3D11::{ID3D11Device, ID3D11Texture2D};
 
 impl From<nvenc_ffi::OpenError> for Error {
     fn from(e: nvenc_ffi::OpenError) -> Error {
@@ -86,13 +92,31 @@ pub struct Encoder {
     /// Slots submitted and not read yet, in submission order, and how many of them are ready.
     pending: VecDeque<usize>,
     ready: usize,
+    /// Frames arrive as Direct3D 11 textures instead of bytes.
+    textures: bool,
+    /// Slots whose packets were read and whose textures the driver did not unmap.
+    unmapping: Vec<usize>,
+    /// Packets read during a call that then failed, returned by the next call.
+    carry: Vec<Packet>,
 }
 
 impl Encoder {
     /// Open an encoder for `cfg`, or say why this system cannot run it.
     pub fn new(cfg: &Config) -> Result<Encoder, Error> {
         check(cfg)?;
-        let mut session = Session::open()?;
+        Encoder::start(cfg, Session::open()?, false)
+    }
+
+    /// Open an encoder for `cfg` on `device`, a Direct3D 11 device of an NVIDIA adapter, that
+    /// takes its frames as textures made on that device ([`Encoder::encode_texture`]) instead of
+    /// bytes.
+    #[cfg(target_os = "windows")]
+    pub fn on_d3d11(cfg: &Config, device: &ID3D11Device) -> Result<Encoder, Error> {
+        check(cfg)?;
+        Encoder::start(cfg, Session::open_d3d11(device.clone())?, true)
+    }
+
+    fn start(cfg: &Config, mut session: Session, textures: bool) -> Result<Encoder, Error> {
         let codec = ffi_codec(cfg.codec);
         let caps = session.caps(codec).map_err(Error::Unsupported)?;
         let ten_bit = cfg.input == Input::P010;
@@ -108,7 +132,8 @@ impl Encoder {
             Rate::Quality(q) => nvenc_ffi::Rate::Quality(q),
             Rate::Cbr(kbps) => nvenc_ffi::Rate::Cbr(kbps),
         };
-        let params = nvenc_ffi::Params { codec, width: w, height: h, fps: cfg.fps, rate, gop: cfg.keyint.max(1), ten_bit, color: cfg.color };
+        let params =
+            nvenc_ffi::Params { codec, width: w, height: h, fps: cfg.fps, rate, gop: cfg.keyint.max(1), ten_bit, color: cfg.color, textures };
         session.initialize(&params, RING).map_err(Error::Unsupported)?;
         let sets = session.sequence_params().map_err(Error::Failed)?;
         let record = match cfg.codec {
@@ -125,7 +150,17 @@ impl Encoder {
         }
         .map_err(Error::Failed)?;
         let slots = session.slots();
-        Ok(Encoder { session, cfg: *cfg, record, free: (0..slots).rev().collect(), pending: VecDeque::new(), ready: 0 })
+        Ok(Encoder {
+            session,
+            cfg: *cfg,
+            record,
+            free: (0..slots).rev().collect(),
+            pending: VecDeque::new(),
+            ready: 0,
+            textures,
+            unmapping: Vec::new(),
+            carry: Vec::new(),
+        })
     }
 
     /// The `avcC` (H.264) or `hvcC` (HEVC) record a container stores with the track.
@@ -141,6 +176,9 @@ impl Encoder {
     /// Encode `frame` (the encoder's [`Input`] layout and size) with the timestamp `pts`, which
     /// must not be negative. Returns the packets that came out, oldest first.
     pub fn encode(&mut self, frame: &[u8], pts: i64) -> Result<Vec<Packet>, Error> {
+        if self.textures {
+            return Err(Error::Failed("this encoder takes Direct3D 11 textures, not frames in memory".into()));
+        }
         let expected = self.cfg.input.frame_bytes(self.cfg.width, self.cfg.height);
         if frame.len() != expected {
             return Err(Error::Failed(format!(
@@ -152,8 +190,53 @@ impl Encoder {
             )));
         }
         let pts = u64::try_from(pts).map_err(|_| Error::Failed(format!("the timestamp {pts} is negative")))?;
-        let mut out = Vec::new();
-        let slot = match self.free.pop() {
+        let mut out = std::mem::take(&mut self.carry);
+        let slot = self.free_slot(&mut out)?;
+        let (row, h) = ((self.cfg.width as usize).saturating_mul(self.cfg.input.bytes_per_sample()), self.cfg.height as usize);
+        let submitted = self.session.submit(slot, pts, |l| fill(l, frame, row, h));
+        self.submitted(slot, submitted, out)
+    }
+
+    /// Encode `texture`, an NV12 texture (P010 for [`Input::P010`]) of the encoder's size made on
+    /// the device the encoder was opened on, with the timestamp `pts`, which must not be negative.
+    /// The encoder reads the texture's first subresource on the GPU. Returns the packets that came
+    /// out, oldest first.
+    ///
+    /// Leave the texture unchanged until the packet with its timestamp has come out; a texture
+    /// whose picture is still inside the encoder is refused. The encoder keeps a reference to each
+    /// of the last 64 textures it read, so a pool of textures is set up for the encoder once.
+    #[cfg(target_os = "windows")]
+    pub fn encode_texture(&mut self, texture: &ID3D11Texture2D, pts: i64) -> Result<Vec<Packet>, Error> {
+        if !self.textures {
+            return Err(Error::Failed("this encoder takes frames in memory, not textures".into()));
+        }
+        let pts = u64::try_from(pts).map_err(|_| Error::Failed(format!("the timestamp {pts} is negative")))?;
+        while let Some(&slot) = self.unmapping.last() {
+            self.session.retry_unmap(slot).map_err(Error::Failed)?;
+            self.unmapping.pop();
+            self.free.push(slot);
+        }
+        // checked before a slot is taken, which can read a finished packet out of the encoder
+        self.session.check_input(texture).map_err(Error::Failed)?;
+        let mut out = std::mem::take(&mut self.carry);
+        let slot = self.free_slot(&mut out)?;
+        let submitted = self.session.submit_texture(slot, pts, texture);
+        self.submitted(slot, submitted, out)
+    }
+
+    /// A slot to submit the next picture into: a free one, a new one while the driver holds every
+    /// slot back, or the oldest finished one after its packet is read into `out`.
+    /// On an error the packets in `out` are kept for the next call.
+    fn free_slot(&mut self, out: &mut Vec<Packet>) -> Result<usize, Error> {
+        let slot = self.take_slot(out);
+        if slot.is_err() {
+            self.carry.append(out);
+        }
+        slot
+    }
+
+    fn take_slot(&mut self, out: &mut Vec<Packet>) -> Result<usize, Error> {
+        Ok(match self.free.pop() {
             Some(s) => s,
             // The driver holds every buffer back until more pictures arrive: add one.
             None if self.ready == 0 => {
@@ -165,15 +248,40 @@ impl Encoder {
             }
             None => {
                 out.push(self.read_oldest()?);
-                self.free.pop().ok_or_else(|| Error::Failed("no free encoder buffer".into()))?
+                match self.free.pop() {
+                    Some(s) => s,
+                    // the slot just read still holds its texture (the unmap failed): add one
+                    None if self.session.slots() < MAX_RING => {
+                        self.session.add_slot().map_err(Error::Failed)?;
+                        self.session.slots().saturating_sub(1)
+                    }
+                    None => return Err(Error::Failed("no free encoder buffer".into())),
+                }
             }
-        };
-        let (row, h) = ((self.cfg.width as usize).saturating_mul(self.cfg.input.bytes_per_sample()), self.cfg.height as usize);
-        let submitted = match self.session.submit(slot, pts, |l| fill(l, frame, row, h)) {
+        })
+    }
+
+    /// Keep the packets already read for a call that fails with `e`; the next call returns them
+    /// first.
+    fn keep(&mut self, out: &mut Vec<Packet>, e: String) -> Error {
+        self.carry.append(out);
+        Error::Failed(e)
+    }
+
+    /// Record the result of submitting a picture into `slot` and read every packet that is ready
+    /// into `out`.
+    fn submitted(&mut self, slot: usize, submitted: Result<Submitted, String>, mut out: Vec<Packet>) -> Result<Vec<Packet>, Error> {
+        let submitted = match submitted {
             Ok(s) => s,
             Err(e) => {
-                self.free.push(slot);
-                return Err(Error::Failed(e));
+                // a picture the encoder refused whose texture the driver did not unmap: the unmap
+                // is tried again before the next texture
+                if self.session.holds_texture(slot) {
+                    self.unmapping.push(slot);
+                } else {
+                    self.free.push(slot);
+                }
+                return Err(self.keep(&mut out, e));
             }
         };
         self.pending.push_back(slot);
@@ -183,8 +291,19 @@ impl Encoder {
         if submitted == Submitted::Ready {
             self.ready = self.pending.len();
         }
+        self.read_ready(out)
+    }
+
+    /// Read every packet that is ready into `out`.
+    fn read_ready(&mut self, mut out: Vec<Packet>) -> Result<Vec<Packet>, Error> {
         while self.ready > 0 {
-            out.push(self.read_oldest()?);
+            match self.read_oldest() {
+                Ok(p) => out.push(p),
+                Err(e) => {
+                    self.carry.append(&mut out);
+                    return Err(e);
+                }
+            }
         }
         Ok(out)
     }
@@ -195,18 +314,23 @@ impl Encoder {
             self.session.end_of_stream().map_err(Error::Failed)?;
             self.ready = self.pending.len();
         }
-        let mut out = Vec::new();
-        while self.ready > 0 {
-            out.push(self.read_oldest()?);
-        }
-        Ok(out)
+        let out = std::mem::take(&mut self.carry);
+        self.read_ready(out)
     }
 
     fn read_oldest(&mut self) -> Result<Packet, Error> {
         let slot = self.pending.pop_front().ok_or_else(|| Error::Failed("no frame in flight".into()))?;
         self.ready = self.ready.saturating_sub(1);
         let read = self.session.read(slot);
-        self.free.push(slot);
+        if !self.session.holds_texture(slot) {
+            self.free.push(slot);
+        } else if read.is_ok() {
+            // the packet was read and the unmap failed: the unmap is tried again before the next
+            // texture
+            self.unmapping.push(slot);
+        }
+        // Otherwise the read failed with the texture still mapped, and the slot is not used again:
+        // the driver may still read the texture. The session unmaps it when it ends.
         let o = read.map_err(Error::Failed)?;
         let data = annexb::to_length_prefixed(self.cfg.codec, &o.data).map_err(Error::Failed)?;
         Ok(Packet { data, pts: i64::try_from(o.pts).unwrap_or(i64::MAX), keyframe: o.key })
@@ -349,6 +473,73 @@ mod tests {
         assert!(packets[0].keyframe);
         assert!(e.encode(&frame[1..], 10).is_err(), "a short frame");
         assert!(e.encode(&frame, -1).is_err(), "a negative timestamp");
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn an_encoder_reads_textures_on_the_gpu_when_an_nvidia_adapter_is_present() {
+        // Every CI runner lacks an NVIDIA adapter, and the test returns at the first step there.
+        let Ok(device) = nvenc_ffi::test_device() else { return };
+        for (codec, input) in [(Codec::H264, Input::Nv12), (Codec::Hevc, Input::Nv12), (Codec::Hevc, Input::P010)] {
+            let c = cfg(codec, input);
+            let mut e = match Encoder::on_d3d11(&c, &device) {
+                Ok(e) => e,
+                Err(Error::Busy(_)) => return,
+                Err(Error::Unsupported(why)) if input == Input::P010 => {
+                    assert!(!why.is_empty());
+                    continue;
+                }
+                Err(other) => panic!("{codec:?} {input:?}: {other}"),
+            };
+            assert!(!e.codec_private().is_empty());
+            let ten_bit = input == Input::P010;
+            // a pool of three textures, used in turn as a capture pipeline does
+            let pool: Vec<_> = (0..3).map(|_| nvenc_ffi::test_texture(&device, 256, 144, ten_bit).unwrap()).collect();
+            let mut packets = Vec::new();
+            for pts in 0..10 {
+                packets.extend(e.encode_texture(&pool[pts as usize % pool.len()], pts).unwrap());
+            }
+            // the same texture twice in a row, once its packet is out
+            packets.extend(e.encode_texture(&pool[0], 10).unwrap());
+            let wrong_size = nvenc_ffi::test_texture(&device, 128, 144, ten_bit).unwrap();
+            assert!(e.encode_texture(&wrong_size, 11).is_err(), "a texture of another size");
+            let wrong_format = nvenc_ffi::test_texture(&device, 256, 144, !ten_bit).unwrap();
+            assert!(e.encode_texture(&wrong_format, 11).is_err(), "a texture of another format");
+            let other_device = nvenc_ffi::test_device().unwrap();
+            let foreign = nvenc_ffi::test_texture(&other_device, 256, 144, ten_bit).unwrap();
+            assert!(e.encode_texture(&foreign, 11).is_err(), "a texture of another device");
+            assert!(e.encode_texture(&pool[1], -1).is_err(), "a negative timestamp");
+            assert!(e.encode(&vec![128u8; input.frame_bytes(256, 144)], 11).is_err(), "bytes into a texture encoder");
+            // the encoder still runs after the refusals
+            packets.extend(e.encode_texture(&pool[0], 11).unwrap());
+            packets.extend(e.flush().unwrap());
+            assert_eq!(packets.iter().map(|p| p.pts).collect::<Vec<_>>(), (0..12).collect::<Vec<_>>(), "{codec:?} {input:?}");
+            assert!(packets[0].keyframe);
+            assert!(packets.iter().all(|p| !p.data.is_empty()));
+        }
+        // more textures than the encoder keeps registered
+        let mut e = Encoder::on_d3d11(&cfg(Codec::H264, Input::Nv12), &device).unwrap();
+        let mut count = 0;
+        for pts in 0..70 {
+            let t = nvenc_ffi::test_texture(&device, 256, 144, false).unwrap();
+            count += e.encode_texture(&t, pts).unwrap().len();
+        }
+        count += e.flush().unwrap().len();
+        assert_eq!(count, 70);
+        // an encoder dropped with no flush
+        let mut e = Encoder::on_d3d11(&cfg(Codec::Hevc, Input::Nv12), &device).unwrap();
+        let t = nvenc_ffi::test_texture(&device, 256, 144, false).unwrap();
+        e.encode_texture(&t, 0).unwrap();
+        drop(e);
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn a_memory_encoder_refuses_textures() {
+        let Ok(device) = nvenc_ffi::test_device() else { return };
+        let Ok(mut e) = Encoder::new(&cfg(Codec::H264, Input::Nv12)) else { return };
+        let t = nvenc_ffi::test_texture(&device, 256, 144, false).unwrap();
+        assert!(e.encode_texture(&t, 0).is_err());
     }
 
     #[test]

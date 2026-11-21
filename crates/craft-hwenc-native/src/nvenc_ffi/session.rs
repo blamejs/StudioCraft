@@ -1,6 +1,7 @@
 //! An NVENC encode session: the driver library, the device it is opened on, the encoder
-//! configuration and the input and output buffers. Every call into the driver is in this file; the
-//! items it exports are safe and return `Result<_, String>`, and no driver pointer leaves it.
+//! configuration, the input and output buffers, and on Windows the Direct3D 11 textures registered
+//! as input. Every call into the driver is in this file; the items it exports are safe and return
+//! `Result<_, String>`, and no driver pointer leaves it.
 
 use std::ffi::{CStr, c_void};
 use std::sync::OnceLock;
@@ -150,6 +151,57 @@ pub struct Params {
     pub ten_bit: bool,
     /// HEVC: the VUI color description and the SEI messages of every IDR picture. H.264 is BT.709.
     pub color: Color,
+    /// Pictures arrive as Direct3D 11 textures, so the session creates no input buffers in
+    /// system memory.
+    pub textures: bool,
+}
+
+// The texture checks below are used on Windows only; the tests run them on every system.
+
+/// The DXGI formats of the textures a session takes (`DXGI_FORMAT_NV12`, `DXGI_FORMAT_P010`).
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+pub(crate) const DXGI_FORMAT_NV12: i32 = 103;
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+pub(crate) const DXGI_FORMAT_P010: i32 = 104;
+
+/// The most textures a session keeps registered with the driver. A capture pipeline cycles through
+/// a small pool; past this count the oldest texture that is not being encoded is unregistered.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+pub(crate) const MAX_REGISTERED: usize = 64;
+
+/// What the session checks about an input texture.
+#[derive(Clone, Copy, Debug)]
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+pub(crate) struct TextureDesc {
+    pub width: u32,
+    pub height: u32,
+    /// `DXGI_FORMAT` value.
+    pub format: i32,
+    pub samples: u32,
+}
+
+/// Whether a texture described by `d` holds pictures for a session of `size` that encodes 10-bit
+/// (P010) or 8-bit (NV12) video. The encoder reads the texture's first subresource.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+pub(crate) fn check_texture(d: TextureDesc, size: (u32, u32), ten_bit: bool) -> Result<(), String> {
+    let (want, name) = if ten_bit { (DXGI_FORMAT_P010, "P010") } else { (DXGI_FORMAT_NV12, "NV12") };
+    if d.format != want {
+        return Err(format!("the texture's DXGI format is {}, and the encoder takes {name} ({want})", d.format));
+    }
+    if (d.width, d.height) != size {
+        return Err(format!("a {}x{} texture is not a {}x{} picture", d.width, d.height, size.0, size.1));
+    }
+    if d.samples != 1 {
+        return Err(format!("the texture has {} samples per pixel; the encoder takes 1", d.samples));
+    }
+    Ok(())
+}
+
+/// The registration to drop to make room for another: the oldest one that no picture in flight
+/// uses. `in_flight` gives each registration's count of pictures, oldest first.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+pub(crate) fn oldest_idle(in_flight: impl IntoIterator<Item = usize>) -> Option<usize> {
+    in_flight.into_iter().position(|n| n == 0)
 }
 
 /// An input buffer locked for writing: luma rows at `pitch` bytes per row, then the interleaved
@@ -178,8 +230,26 @@ pub enum Submitted {
 }
 
 struct Slot {
+    /// The input buffer in system memory; null in a session that takes textures.
     input: *mut c_void,
     output: *mut c_void,
+    /// The mapped texture the slot's picture was read from, and its registration, until the
+    /// slot's bitstream is read; null otherwise.
+    mapped: *mut c_void,
+    mapped_from: *mut c_void,
+    /// No picture of the mapped texture is inside the encoder: its bitstream has been read, or the
+    /// encoder refused the picture.
+    read: bool,
+}
+
+/// A texture registered with the driver. The session holds a reference to it, so the texture
+/// stays alive (and its address is not reused) while it is registered.
+#[cfg(target_os = "windows")]
+struct Registered {
+    texture: windows::Win32::Graphics::Direct3D11::ID3D11Texture2D,
+    handle: *mut c_void,
+    /// Pictures in flight that were read from it.
+    in_flight: usize,
 }
 
 /// An encode session with its buffers.
@@ -187,13 +257,19 @@ pub struct Session {
     api: &'static Api,
     enc: Handle,
     // Keeps the Direct3D device or the retained CUDA context alive until the session is destroyed.
-    _device: Device,
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+    device: Device,
     slots: Vec<Slot>,
     size: (u32, u32),
     out_size: u32,
     /// `NV_ENC_BUFFER_FORMAT_*` of the input buffers, and its bytes per sample.
     fmt: u32,
     bytes_per_sample: usize,
+    /// Pictures arrive as textures, and the slots have no input buffers.
+    textures: bool,
+    /// Registered textures, least recently used first.
+    #[cfg(target_os = "windows")]
+    registered: Vec<Registered>,
     /// The SEI messages of every IDR picture. The payload bytes and the array of descriptors are
     /// heap blocks the session owns for its whole life, so the pointers handed to the driver stay
     /// valid however the `Session` value moves and however long the driver keeps a picture queued.
@@ -287,6 +363,18 @@ impl Session {
     pub fn open() -> Result<Session, OpenError> {
         let api = api().map_err(OpenError::NoDevice)?;
         let device = Device::new().map_err(OpenError::NoDevice)?;
+        Session::open_with(api, device)
+    }
+
+    /// Open a session on the caller's Direct3D 11 device, which must belong to an NVIDIA adapter,
+    /// so the session can encode textures made on that device.
+    #[cfg(target_os = "windows")]
+    pub fn open_d3d11(device: windows::Win32::Graphics::Direct3D11::ID3D11Device) -> Result<Session, OpenError> {
+        let api = api().map_err(OpenError::NoDevice)?;
+        Session::open_with(api, Device::shared(device))
+    }
+
+    fn open_with(api: &'static Api, device: Device) -> Result<Session, OpenError> {
         let open = api.list.nvEncOpenEncodeSessionEx.ok_or_else(|| OpenError::NoDevice("the driver has no nvEncOpenEncodeSessionEx".into()))?;
         // SAFETY: a zeroed parameter block with its version and the device's pointer; the device
         // stays in the session while the encoder lives. After a failed open, a non-null handle is
@@ -313,12 +401,15 @@ impl Session {
         Ok(Session {
             api,
             enc,
-            _device: device,
+            device,
             slots: Vec::new(),
             size: (0, 0),
             out_size: 0,
             fmt: NV_ENC_BUFFER_FORMAT_NV12,
             bytes_per_sample: 1,
+            textures: false,
+            #[cfg(target_os = "windows")]
+            registered: Vec::with_capacity(MAX_REGISTERED),
             sei_payloads: Vec::new(),
             sei_array: Box::new([]),
             submitted: 0,
@@ -361,6 +452,7 @@ impl Session {
             return Err("H.264 is written as BT.709 only".into());
         }
         (self.fmt, self.bytes_per_sample) = if p.ten_bit { (NV_ENC_BUFFER_FORMAT_YUV420_10BIT, 2) } else { (NV_ENC_BUFFER_FORMAT_NV12, 1) };
+        self.textures = p.textures;
         self.gop = u64::from(p.gop.max(1));
         self.submitted = 0;
         let (sei_payloads, sei_array) = sei_descriptors(&p.color.sei())?;
@@ -479,22 +571,27 @@ impl Session {
         Ok(())
     }
 
-    /// Add a pair of input and output buffers; its slot number is `slots() - 1`.
+    /// Add a pair of input and output buffers (an output buffer only, in a session that takes
+    /// textures); its slot number is `slots() - 1`.
     pub fn add_slot(&mut self) -> Result<(), String> {
         let create_in = self.api.list.nvEncCreateInputBuffer.ok_or("the driver has no nvEncCreateInputBuffer")?;
         let create_out = self.api.list.nvEncCreateBitstreamBuffer.ok_or("the driver has no nvEncCreateBitstreamBuffer")?;
         // SAFETY: zeroed parameter blocks with their versions; the driver fills in the buffer
         // handles, which `Drop` destroys. An input buffer whose output buffer fails is destroyed here.
         unsafe {
-            let mut i: NV_ENC_CREATE_INPUT_BUFFER = std::mem::zeroed();
-            i.version = NV_ENC_CREATE_INPUT_BUFFER_VER;
-            i.width = self.size.0;
-            i.height = self.size.1;
-            i.memoryHeap = NV_ENC_MEMORY_HEAP_SYSMEM_CACHED;
-            i.bufferFmt = self.fmt;
-            let s = create_in(self.enc, &mut i);
-            if s != NV_ENC_SUCCESS {
-                return Err(status("creating an input buffer", s, self.enc, self.api));
+            let mut input = std::ptr::null_mut();
+            if !self.textures {
+                let mut i: NV_ENC_CREATE_INPUT_BUFFER = std::mem::zeroed();
+                i.version = NV_ENC_CREATE_INPUT_BUFFER_VER;
+                i.width = self.size.0;
+                i.height = self.size.1;
+                i.memoryHeap = NV_ENC_MEMORY_HEAP_SYSMEM_CACHED;
+                i.bufferFmt = self.fmt;
+                let s = create_in(self.enc, &mut i);
+                if s != NV_ENC_SUCCESS {
+                    return Err(status("creating an input buffer", s, self.enc, self.api));
+                }
+                input = i.inputBuffer;
             }
             let mut o: NV_ENC_CREATE_BITSTREAM_BUFFER = std::mem::zeroed();
             o.version = NV_ENC_CREATE_BITSTREAM_BUFFER_VER;
@@ -502,12 +599,14 @@ impl Session {
             o.memoryHeap = NV_ENC_MEMORY_HEAP_SYSMEM_CACHED;
             let s = create_out(self.enc, &mut o);
             if s != NV_ENC_SUCCESS {
-                if let Some(d) = self.api.list.nvEncDestroyInputBuffer {
-                    d(self.enc, i.inputBuffer);
+                if !input.is_null()
+                    && let Some(d) = self.api.list.nvEncDestroyInputBuffer
+                {
+                    d(self.enc, input);
                 }
                 return Err(status("creating an output buffer", s, self.enc, self.api));
             }
-            self.slots.push(Slot { input: i.inputBuffer, output: o.bitstreamBuffer });
+            self.slots.push(Slot { input, output: o.bitstreamBuffer, mapped: std::ptr::null_mut(), mapped_from: std::ptr::null_mut(), read: false });
         }
         Ok(())
     }
@@ -544,6 +643,9 @@ impl Session {
     pub fn submit(&mut self, slot: usize, pts: u64, fill: impl FnOnce(Locked<'_>)) -> Result<Submitted, String> {
         let s = self.slots.get(slot).ok_or("no such buffer slot")?;
         let (input, output) = (s.input, s.output);
+        if input.is_null() {
+            return Err("this encoder takes Direct3D 11 textures, not frames in memory".into());
+        }
         let lock = self.api.list.nvEncLockInputBuffer.ok_or("the driver has no nvEncLockInputBuffer")?;
         let unlock = self.api.list.nvEncUnlockInputBuffer.ok_or("the driver has no nvEncUnlockInputBuffer")?;
         let encode = self.api.list.nvEncEncodePicture.ok_or("the driver has no nvEncEncodePicture")?;
@@ -609,6 +711,214 @@ impl Session {
         Ok(submitted)
     }
 
+    /// Submit the first subresource of `texture`, a texture on the session's device in the
+    /// session's format and size, with the timestamp `pts`; slot `slot`'s output buffer receives
+    /// the bitstream. The texture stays mapped to the encoder until the slot is read.
+    #[cfg(target_os = "windows")]
+    pub fn submit_texture(
+        &mut self,
+        slot: usize,
+        pts: u64,
+        texture: &windows::Win32::Graphics::Direct3D11::ID3D11Texture2D,
+    ) -> Result<Submitted, String> {
+        if self.holds_texture(slot) {
+            return Err("the buffer slot still holds a picture".into());
+        }
+        self.check_input(texture)?;
+        let output = self.slots.get(slot).ok_or("no such buffer slot")?.output;
+        let reg = self.registration(texture)?;
+        self.submit_mapped(slot, pts, output, reg)
+    }
+
+    /// Whether this session can encode `texture`: a texture session, and a texture of the session's
+    /// size and format made on its device, with no picture of it inside the encoder.
+    #[cfg(target_os = "windows")]
+    pub fn check_input(&self, texture: &windows::Win32::Graphics::Direct3D11::ID3D11Texture2D) -> Result<(), String> {
+        use windows::Win32::Graphics::Direct3D11::D3D11_TEXTURE2D_DESC;
+        use windows::core::{IUnknown, Interface};
+        if !self.textures {
+            return Err("this encoder takes frames in memory, not textures".into());
+        }
+        let mut desc = D3D11_TEXTURE2D_DESC::default();
+        // SAFETY: `texture` is a live texture (the caller holds a reference) and `desc` is a valid
+        // out-pointer for the description.
+        unsafe { texture.GetDesc(&mut desc) };
+        check_texture(
+            TextureDesc { width: desc.Width, height: desc.Height, format: desc.Format.0, samples: desc.SampleDesc.Count },
+            self.size,
+            self.fmt == NV_ENC_BUFFER_FORMAT_YUV420_10BIT,
+        )?;
+        // SAFETY: `texture` is a live texture; `GetDevice` returns a new reference to its device.
+        let owner = unsafe { texture.GetDevice() }.map_err(|e| format!("cannot read the texture's device: {e}"))?;
+        let same = |d: &windows::Win32::Graphics::Direct3D11::ID3D11Device| d.cast::<IUnknown>().map(|u| u.as_raw()).ok();
+        if same(&owner).is_none() || same(&owner) != same(self.device.d3d11()) {
+            return Err("the texture was made on another Direct3D 11 device than the encoder's".into());
+        }
+        let key = texture.as_raw();
+        if self.registered.iter().any(|r| r.texture.as_raw() == key && r.in_flight > 0) {
+            return Err("the texture is still being encoded; pass another texture until its packet comes out".into());
+        }
+        Ok(())
+    }
+
+    /// Map registration `reg` and submit it into slot `slot`, whose output buffer is `output`.
+    #[cfg(target_os = "windows")]
+    fn submit_mapped(&mut self, slot: usize, pts: u64, output: *mut c_void, reg: usize) -> Result<Submitted, String> {
+        let handle = self.registered.get(reg).map(|r| r.handle).ok_or("no such registration")?;
+        let map = self.api.list.nvEncMapInputResource.ok_or("the driver has no nvEncMapInputResource")?;
+        let encode = self.api.list.nvEncEncodePicture.ok_or("the driver has no nvEncEncodePicture")?;
+        // SAFETY: a zeroed parameter block with its version and a resource this session
+        // registered; the driver writes the mapped input handle and its buffer format.
+        let (mapped, fmt) = unsafe {
+            let mut m: NV_ENC_MAP_INPUT_RESOURCE = std::mem::zeroed();
+            m.version = NV_ENC_MAP_INPUT_RESOURCE_VER;
+            m.registeredResource = handle;
+            let st = map(self.enc, &mut m);
+            if st != NV_ENC_SUCCESS || m.mappedResource.is_null() {
+                return Err(status("mapping a texture", st, self.enc, self.api));
+            }
+            (m.mappedResource, m.mappedBufferFmt)
+        };
+        if let Some(s) = self.slots.get_mut(slot) {
+            s.mapped = mapped;
+            s.mapped_from = handle;
+        }
+        if let Some(r) = self.registered.get_mut(reg) {
+            r.in_flight = r.in_flight.saturating_add(1);
+        }
+        let (w, h) = self.size;
+        let idr = carries_sei(self.sei_array.len(), self.submitted, self.gop);
+        // SAFETY: a zeroed parameter block with its version; the mapped input and the output
+        // buffer are this session's, and the input stays mapped until the slot is read. The SEI
+        // descriptor array and the payload bytes it points to are heap blocks owned by `self` that
+        // stay allocated and unmoved until the session is dropped. Only an HEVC session has SEI
+        // messages (`initialize`), so the HEVC member of the union is the codec's own.
+        let st = unsafe {
+            let mut e: NV_ENC_PIC_PARAMS = std::mem::zeroed();
+            if idr {
+                let hevc = &mut e.codecPicParams.hevcPicParams;
+                hevc.seiPayloadArrayCnt = u32::try_from(self.sei_array.len()).unwrap_or(0);
+                hevc.seiPayloadArray = self.sei_array.as_mut_ptr();
+            }
+            e.version = NV_ENC_PIC_PARAMS_VER;
+            e.inputWidth = w;
+            e.inputHeight = h;
+            e.inputBuffer = mapped;
+            e.outputBitstream = output;
+            e.bufferFmt = fmt;
+            e.pictureStruct = NV_ENC_PIC_STRUCT_FRAME;
+            e.inputTimeStamp = pts;
+            e.inputDuration = 1;
+            encode(self.enc, &mut e)
+        };
+        match st {
+            NV_ENC_SUCCESS | NV_ENC_ERR_NEED_MORE_INPUT => {
+                // A refused picture is not counted, so the IDR count stays in step with the driver's.
+                self.submitted = self.submitted.saturating_add(1);
+                Ok(if st == NV_ENC_SUCCESS { Submitted::Ready } else { Submitted::NeedMoreInput })
+            }
+            s => {
+                let e = status("encoding a texture", s, self.enc, self.api);
+                // no picture of the texture is inside the encoder, so nothing is drained for it
+                if let Some(s) = self.slots.get_mut(slot) {
+                    s.read = true;
+                }
+                let _ = self.release_input(slot);
+                Err(e)
+            }
+        }
+    }
+
+    /// The index in `registered` of `texture`'s registration, registering it first when it has
+    /// none. A texture with a picture in flight is refused, since the encoder may still read it.
+    #[cfg(target_os = "windows")]
+    fn registration(&mut self, texture: &windows::Win32::Graphics::Direct3D11::ID3D11Texture2D) -> Result<usize, String> {
+        use windows::core::Interface;
+        let key = texture.as_raw();
+        if let Some(i) = self.registered.iter().position(|r| r.texture.as_raw() == key) {
+            if self.registered.get(i).is_some_and(|r| r.in_flight > 0) {
+                return Err("the texture is still being encoded; pass another texture until its packet comes out".into());
+            }
+            // most recently used last
+            let r = self.registered.remove(i);
+            self.registered.push(r);
+            return Ok(self.registered.len() - 1);
+        }
+        if self.registered.len() >= MAX_REGISTERED {
+            let idle = oldest_idle(self.registered.iter().map(|r| r.in_flight))
+                .ok_or_else(|| format!("all {MAX_REGISTERED} registered textures are being encoded"))?;
+            // a registration the driver did not drop stays, with its texture reference
+            let handle = self.registered.get(idle).map(|r| r.handle).ok_or("no such registration")?;
+            self.unregister(handle)?;
+            self.registered.remove(idle);
+        }
+        let register = self.api.list.nvEncRegisterResource.ok_or("the driver has no nvEncRegisterResource")?;
+        let (w, h) = self.size;
+        // SAFETY: a zeroed parameter block with its version and a live texture; the session keeps a
+        // reference to the texture until the registration is dropped, so the registered address
+        // stays valid. The driver writes the registration handle.
+        let handle = unsafe {
+            let mut r: NV_ENC_REGISTER_RESOURCE = std::mem::zeroed();
+            r.version = NV_ENC_REGISTER_RESOURCE_VER;
+            r.resourceType = NV_ENC_INPUT_RESOURCE_TYPE_DIRECTX;
+            r.width = w;
+            r.height = h;
+            r.pitch = 0;
+            r.subResourceIndex = 0;
+            r.resourceToRegister = key;
+            r.bufferFormat = self.fmt;
+            r.bufferUsage = NV_ENC_INPUT_IMAGE;
+            let st = register(self.enc, &mut r);
+            if st != NV_ENC_SUCCESS || r.registeredResource.is_null() {
+                return Err(status("registering a texture", st, self.enc, self.api));
+            }
+            r.registeredResource
+        };
+        self.registered.push(Registered { texture: texture.clone(), handle, in_flight: 0 });
+        Ok(self.registered.len() - 1)
+    }
+
+    /// Drop a texture registration.
+    #[cfg(target_os = "windows")]
+    fn unregister(&self, handle: *mut c_void) -> Result<(), String> {
+        let f = self.api.list.nvEncUnregisterResource.ok_or("the driver has no nvEncUnregisterResource")?;
+        // SAFETY: a registration of this session that no mapped picture uses; the caller forgets
+        // it only after a successful call, so it is dropped once.
+        let st = unsafe { f(self.enc, handle) };
+        if st != NV_ENC_SUCCESS {
+            return Err(status("unregistering a texture", st, self.enc, self.api));
+        }
+        Ok(())
+    }
+
+    /// Unmap the texture slot `slot`'s picture was read from, if any.
+    fn release_input(&mut self, slot: usize) -> Result<(), String> {
+        let Some(s) = self.slots.get(slot) else { return Ok(()) };
+        if s.mapped.is_null() {
+            return Ok(());
+        }
+        let (mapped, from) = (s.mapped, s.mapped_from);
+        let unmap = self.api.list.nvEncUnmapInputResource.ok_or("the driver has no nvEncUnmapInputResource")?;
+        // SAFETY: an input this session mapped and has not unmapped; after a successful unmap the
+        // slot forgets it, so it is unmapped once. A failed unmap leaves it recorded for a retry.
+        let st = unsafe { unmap(self.enc, mapped) };
+        if st != NV_ENC_SUCCESS {
+            return Err(status("unmapping a texture", st, self.enc, self.api));
+        }
+        if let Some(s) = self.slots.get_mut(slot) {
+            s.mapped = std::ptr::null_mut();
+            s.mapped_from = std::ptr::null_mut();
+            s.read = false;
+        }
+        #[cfg(target_os = "windows")]
+        if let Some(r) = self.registered.iter_mut().find(|r| r.handle == from) {
+            r.in_flight = r.in_flight.saturating_sub(1);
+        }
+        #[cfg(not(target_os = "windows"))]
+        let _ = from;
+        Ok(())
+    }
+
     /// Tell the encoder the stream ends: every picture it still holds becomes ready.
     pub fn end_of_stream(&mut self) -> Result<(), String> {
         let encode = self.api.list.nvEncEncodePicture.ok_or("the driver has no nvEncEncodePicture")?;
@@ -626,8 +936,34 @@ impl Session {
         Ok(())
     }
 
-    /// Read the finished bitstream of slot `slot`, waiting until the encoder has it.
+    /// Read the finished bitstream of slot `slot`, waiting until the encoder has it, then unmap the
+    /// texture its picture was read from. When the read fails the texture stays mapped (the
+    /// encoder may still be reading it) until the slot is used again or the session ends.
+    /// A failed unmap does not lose the packet: the slot keeps the texture mapped
+    /// ([`Session::holds_texture`]) until [`Session::retry_unmap`] succeeds.
     pub fn read(&mut self, slot: usize) -> Result<Output, String> {
+        let out = self.read_bitstream(slot)?;
+        if let Some(s) = self.slots.get_mut(slot)
+            && !s.mapped.is_null()
+        {
+            s.read = true;
+        }
+        let _ = self.release_input(slot);
+        Ok(out)
+    }
+
+    /// Unmap the texture of slot `slot`, whose packet was read but whose unmap failed.
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+    pub fn retry_unmap(&mut self, slot: usize) -> Result<(), String> {
+        self.release_input(slot)
+    }
+
+    /// Whether slot `slot` still has a texture mapped: its packet was not read, or its unmap failed.
+    pub fn holds_texture(&self, slot: usize) -> bool {
+        self.slots.get(slot).is_some_and(|s| !s.mapped.is_null())
+    }
+
+    fn read_bitstream(&mut self, slot: usize) -> Result<Output, String> {
         let output = self.slots.get(slot).ok_or("no such buffer slot")?.output;
         let lock = self.api.list.nvEncLockBitstream.ok_or("the driver has no nvEncLockBitstream")?;
         let unlock = self.api.list.nvEncUnlockBitstream.ok_or("the driver has no nvEncUnlockBitstream")?;
@@ -665,10 +1001,40 @@ impl Session {
 
 impl Drop for Session {
     fn drop(&mut self) {
+        // Pictures still inside the encoder are finished first: end the stream and wait for each
+        // mapped slot's bitstream. Only a slot whose bitstream came out is unmapped; the others
+        // stay mapped until the encoder is destroyed below, which releases them.
+        // A slot whose bitstream was already read (its unmap failed) is not read again.
+        if self.slots.iter().any(|s| !s.mapped.is_null() && !s.read) {
+            let drained = self.end_of_stream().is_ok();
+            for slot in 0..self.slots.len() {
+                if drained
+                    && self.slots.get(slot).is_some_and(|s| !s.mapped.is_null() && !s.read)
+                    && self.read_bitstream(slot).is_ok()
+                    && let Some(s) = self.slots.get_mut(slot)
+                {
+                    s.read = true;
+                }
+            }
+        }
+        for slot in 0..self.slots.len() {
+            if self.slots.get(slot).is_some_and(|s| s.read) {
+                let _ = self.release_input(slot);
+            }
+        }
+        // The texture references are released after the encoder is destroyed below.
+        #[cfg(target_os = "windows")]
+        let registered = std::mem::take(&mut self.registered);
+        #[cfg(target_os = "windows")]
+        for r in &registered {
+            let _ = self.unregister(r.handle);
+        }
         // SAFETY: every handle was created by this session and is destroyed once, buffers first.
         unsafe {
             for s in self.slots.drain(..) {
-                if let Some(d) = self.api.list.nvEncDestroyInputBuffer {
+                if !s.input.is_null()
+                    && let Some(d) = self.api.list.nvEncDestroyInputBuffer
+                {
                     d(self.enc, s.input);
                 }
                 if let Some(d) = self.api.list.nvEncDestroyBitstreamBuffer {
@@ -679,5 +1045,50 @@ impl Drop for Session {
                 d(self.enc);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn desc(width: u32, height: u32, format: i32) -> TextureDesc {
+        TextureDesc { width, height, format, samples: 1 }
+    }
+
+    #[test]
+    fn a_texture_must_match_the_encoder_format_size_and_sample_count() {
+        assert_eq!(check_texture(desc(1920, 1080, DXGI_FORMAT_NV12), (1920, 1080), false), Ok(()));
+        assert_eq!(check_texture(desc(3840, 2160, DXGI_FORMAT_P010), (3840, 2160), true), Ok(()));
+        for (d, size, ten_bit) in [
+            (desc(1920, 1080, DXGI_FORMAT_P010), (1920, 1080), false),
+            (desc(1920, 1080, DXGI_FORMAT_NV12), (1920, 1080), true),
+            // DXGI_FORMAT_B8G8R8A8_UNORM, what a desktop capture gives before conversion
+            (desc(1920, 1080, 87), (1920, 1080), false),
+            (desc(0, 0, 0), (1920, 1080), false),
+            (desc(1920, 1088, DXGI_FORMAT_NV12), (1920, 1080), false),
+            (desc(1280, 1080, DXGI_FORMAT_NV12), (1920, 1080), false),
+            (TextureDesc { samples: 4, ..desc(1920, 1080, DXGI_FORMAT_NV12) }, (1920, 1080), false),
+            (TextureDesc { samples: 0, ..desc(1920, 1080, DXGI_FORMAT_NV12) }, (1920, 1080), false),
+        ] {
+            let Err(e) = check_texture(d, size, ten_bit) else { panic!("{d:?} for {size:?}, 10-bit {ten_bit}") };
+            assert!(!e.is_empty());
+        }
+    }
+
+    #[test]
+    fn the_registration_dropped_for_room_is_the_oldest_idle_one() {
+        assert_eq!(oldest_idle([0, 0, 0]), Some(0));
+        assert_eq!(oldest_idle([1, 2, 0, 0]), Some(2));
+        assert_eq!(oldest_idle([1, 1, 1]), None, "every texture has a picture in flight");
+        assert_eq!(oldest_idle(std::iter::empty()), None);
+        assert_eq!(oldest_idle(std::iter::repeat_n(1, MAX_REGISTERED - 1).chain([0])), Some(MAX_REGISTERED - 1));
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn the_texture_formats_are_the_dxgi_values() {
+        use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT_NV12 as NV12, DXGI_FORMAT_P010 as P010};
+        assert_eq!((DXGI_FORMAT_NV12, DXGI_FORMAT_P010), (NV12.0, P010.0));
     }
 }
