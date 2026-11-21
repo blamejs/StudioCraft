@@ -494,6 +494,19 @@ menu	Transform	Transformar
 @msg	Audio tracks could not be repaired: {takes} and {more} more	No se pudieron reparar las pistas de audio: {takes} y {more} más
 @msg	Audio tracks could not be repaired: {takes}. Takes repaired: {count}	No se pudieron reparar las pistas de audio: {takes}. Tomas reparadas: {count}
 @msg	Audio tracks could not be repaired: {takes} and {more} more. Takes repaired: {count}	No se pudieron reparar las pistas de audio: {takes} y {more} más. Tomas reparadas: {count}
+	Open Last Audio Tracks in Editor	Abrir las últimas pistas de audio en el editor
+	Add Audio Tracks Marker	Añadir un marcador a las pistas de audio
+	After a take	Después de una toma
+	Nothing	Nada
+	Show the folder	Mostrar la carpeta
+	Open in the audio editor	Abrir en el editor de audio
+	Audio editor	Editor de audio
+	The audio editor on the PATH	El editor de audio del PATH
+	Programs	Programas
+@msg	Audio tracks opened in the audio editor: {session}	Pistas de audio abiertas en el editor de audio: {session}
+@msg	The audio editor did not start ({error}); the folder {folder} is shown instead	El editor de audio no se inició ({error}); se muestra la carpeta {folder} en su lugar
+@msg	Audio tracks saved in {folder}	Pistas de audio guardadas en {folder}
+@msg	The audio tracks could not be opened: {error}	No se pudieron abrir las pistas de audio: {error}
 @msg	`{command}` needs `{key}`	`{command}` necesita `{key}`
 @msg	`{command}`: unknown dock `{name}` (one of {docks})	`{command}`: panel desconocido `{name}` (uno de {docks})
 @msg	`{command}`: `path` must be a file path	`{command}`: `path` debe ser una ruta de archivo

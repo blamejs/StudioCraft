@@ -8,7 +8,7 @@ use craft_keymap::{Binding, CommandRef, Keymap, Overrides};
 use egui::{RichText, Ui};
 use studiocraft_audio_tracks::space::TRACK_BYTES_PER_SECOND;
 use studiocraft_model::profile::DEFAULT_AUDIO_DEVICE;
-use studiocraft_model::{AudioTracksSettings, AudioTracksWhen, KeyRef, Profile, RecordingFormat, RecordingQuality, ReplaySettings};
+use studiocraft_model::{AfterStop, AudioTracksSettings, AudioTracksWhen, KeyRef, Profile, RecordingFormat, RecordingQuality, ReplaySettings};
 use studiocraft_platform::audio::{DeviceInfo, DeviceKind};
 use studiocraft_plugin::{Availability, EncoderEnv, EncoderKind, Registry, Settings};
 
@@ -32,6 +32,7 @@ pub enum Tab {
 pub enum Pick {
     RecordingFolder,
     Ffmpeg,
+    AudioEditor,
 }
 
 struct Hotkey {
@@ -171,6 +172,15 @@ pub(crate) fn when_label(w: AudioTracksWhen) -> &'static str {
     }
 }
 
+/// What happens after a take of audio tracks, as the Output tab shows it.
+pub(crate) fn after_stop_label(a: AfterStop) -> &'static str {
+    match a {
+        AfterStop::Nothing => "Nothing",
+        AfterStop::ShowFolder => "Show the folder",
+        AfterStop::OpenEditor => "Open in the audio editor",
+    }
+}
+
 /// The audio tracks' disk use in GiB an hour, and how many seconds the write buffer holds, both
 /// as text, for `sources` recorded sources and the program when it is included. `None` when
 /// there is no track to write.
@@ -236,6 +246,7 @@ impl SettingsWindow {
                 self.draft.output.ffmpeg_path = text;
                 (self.offered, self.ffmpeg_version) = probe(&self.draft.output.ffmpeg_path);
             }
+            Pick::AudioEditor => self.draft.audio_tracks.editor_path = text,
         }
     }
 
@@ -420,11 +431,11 @@ impl SettingsWindow {
             ui.end_row();
         });
         ui.add_space(12.0);
-        self.audio_tracks(ui);
+        self.audio_tracks(ui, out);
     }
 
     /// The Audio tracks section of the Output tab.
-    fn audio_tracks(&mut self, ui: &mut Ui) {
+    fn audio_tracks(&mut self, ui: &mut Ui, out: &mut Outcome) {
         ui.label(RichText::new(tl!("Audio tracks")).strong());
         ui.add_space(4.0);
         let t = &mut self.draft.audio_tracks;
@@ -447,6 +458,22 @@ impl SettingsWindow {
                 ui.end_row();
                 ui.label(tl!("File size"));
                 ui.add(egui::DragValue::new(&mut t.segment_gib).range(AudioTracksSettings::SEGMENT_GIB).suffix(format!(" {}", tl!("GiB"))));
+                ui.end_row();
+                ui.label(tl!("After a take"));
+                let label = |a: AfterStop| tl!(after_stop_label(a));
+                craft_ui::ComboBox::from_id_salt("audio-tracks-after-stop").selected_text(label(t.after_stop)).width(260.0).show_ui(ui, |ui| {
+                    for a in AfterStop::ALL {
+                        ui.selectable_value(&mut t.after_stop, a, label(a));
+                    }
+                });
+                ui.end_row();
+                ui.label(tl!("Audio editor"));
+                ui.horizontal(|ui| {
+                    ui.add(egui::TextEdit::singleline(&mut t.editor_path).hint_text(tl!("The audio editor on the PATH")).desired_width(240.0));
+                    if ui.button(tl!("Browse…")).clicked() {
+                        out.pick = Some(Pick::AudioEditor);
+                    }
+                });
                 ui.end_row();
             });
             // With no track to write there is no disk use to estimate.
@@ -822,7 +849,9 @@ mod tests {
         p.audio_tracks.enabled = true;
         let mut w = SettingsWindow::new(&p, &crate::commands::keymap(Overrides::new()), Tab::Output, i18n::AUTO, true);
         w.track_sources = 2;
-        let mut out = ctx.run_ui(egui::RawInput::default(), |ui| w.audio_tracks(ui));
+        let mut outcome = Outcome::default();
+        let mut out = ctx.run_ui(egui::RawInput::default(), |ui| w.audio_tracks(ui, &mut outcome));
+        assert!(outcome.pick.is_none(), "drawing the section asks for no dialog");
         let texts: Vec<String> = out
             .shapes
             .iter()
@@ -833,7 +862,12 @@ mod tests {
             .collect();
         out.textures_delta.clear();
         assert!(texts.iter().any(|t| t.starts_with("Audio tracks: 3, about 3.9 GiB an hour")), "{texts:?}");
+        assert!(texts.iter().any(|t| t == "After a take") && texts.iter().any(|t| t == "Nothing"), "{texts:?}");
         assert_eq!(w.draft.audio_tracks, p.audio_tracks, "drawing the section changes nothing");
+        // A program chosen in the dialog becomes the editor path.
+        let editor = std::path::Path::new("Tools").join("editor.exe");
+        w.picked(Pick::AudioEditor, &editor);
+        assert_eq!(w.draft.audio_tracks.editor_path, editor.to_string_lossy());
     }
 
     #[test]

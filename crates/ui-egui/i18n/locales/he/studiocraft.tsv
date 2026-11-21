@@ -472,6 +472,19 @@ menu	Transform	שינוי צורה
 @msg	Audio tracks could not be repaired: {takes} and {more} more	לא ניתן היה לתקן את רצועות השמע: {takes} ועוד {more}
 @msg	Audio tracks could not be repaired: {takes}. Takes repaired: {count}	לא ניתן היה לתקן את רצועות השמע: {takes}. טייקים שתוקנו: {count}
 @msg	Audio tracks could not be repaired: {takes} and {more} more. Takes repaired: {count}	לא ניתן היה לתקן את רצועות השמע: {takes} ועוד {more}. טייקים שתוקנו: {count}
+	Open Last Audio Tracks in Editor	פתיחת רצועות השמע האחרונות בעורך
+	Add Audio Tracks Marker	הוספת סמן לרצועות השמע
+	After a take	אחרי טייק
+	Nothing	כלום
+	Show the folder	הצגת התיקייה
+	Open in the audio editor	פתיחה בעורך השמע
+	Audio editor	עורך שמע
+	The audio editor on the PATH	עורך השמע ב־PATH
+	Programs	תוכניות
+@msg	Audio tracks opened in the audio editor: {session}	רצועות השמע נפתחו בעורך השמע: {session}
+@msg	The audio editor did not start ({error}); the folder {folder} is shown instead	עורך השמע לא הופעל ({error}); במקומו מוצגת התיקייה {folder}
+@msg	Audio tracks saved in {folder}	רצועות השמע נשמרו ב־{folder}
+@msg	The audio tracks could not be opened: {error}	לא ניתן היה לפתוח את רצועות השמע: {error}
 @msg	`{command}` needs `{key}`	`{command}` דורש `{key}`
 @msg	`{command}`: unknown dock `{name}` (one of {docks})	`{command}`: חלונית לא ידועה `{name}` (אחת מתוך {docks})
 @msg	`{command}`: `path` must be a file path	`{command}`: `path` חייב להיות נתיב לקובץ

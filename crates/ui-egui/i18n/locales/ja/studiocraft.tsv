@@ -491,6 +491,19 @@ menu	Transform	変形
 @msg	Audio tracks could not be repaired: {takes} and {more} more	オーディオトラックを修復できませんでした: {takes} ほか {more} 件
 @msg	Audio tracks could not be repaired: {takes}. Takes repaired: {count}	オーディオトラックを修復できませんでした: {takes}。修復したテイク: {count}
 @msg	Audio tracks could not be repaired: {takes} and {more} more. Takes repaired: {count}	オーディオトラックを修復できませんでした: {takes} ほか {more} 件。修復したテイク: {count}
+	Open Last Audio Tracks in Editor	最後のオーディオトラックをエディターで開く
+	Add Audio Tracks Marker	オーディオトラックにマーカーを追加
+	After a take	テイクの後
+	Nothing	何もしない
+	Show the folder	フォルダーを表示
+	Open in the audio editor	オーディオエディターで開く
+	Audio editor	オーディオエディター
+	The audio editor on the PATH	PATH 上のオーディオエディター
+	Programs	プログラム
+@msg	Audio tracks opened in the audio editor: {session}	オーディオトラックをオーディオエディターで開きました: {session}
+@msg	The audio editor did not start ({error}); the folder {folder} is shown instead	オーディオエディターを起動できませんでした ({error})。代わりにフォルダー {folder} を表示します
+@msg	Audio tracks saved in {folder}	オーディオトラックを {folder} に保存しました
+@msg	The audio tracks could not be opened: {error}	オーディオトラックを開けませんでした: {error}
 @msg	`{command}` needs `{key}`	`{command}` には `{key}` が必要です
 @msg	`{command}`: unknown dock `{name}` (one of {docks})	`{command}`: 不明なドック `{name}` ({docks} のいずれか)
 @msg	`{command}`: `path` must be a file path	`{command}`: `path` はファイルパスでなければなりません

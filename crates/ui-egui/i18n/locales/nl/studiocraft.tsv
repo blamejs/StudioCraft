@@ -481,6 +481,19 @@ menu	Transform	Transformeren
 @msg	Audio tracks could not be repaired: {takes} and {more} more	Audiosporen konden niet worden hersteld: {takes} en {more} meer
 @msg	Audio tracks could not be repaired: {takes}. Takes repaired: {count}	Audiosporen konden niet worden hersteld: {takes}. Herstelde opnamen: {count}
 @msg	Audio tracks could not be repaired: {takes} and {more} more. Takes repaired: {count}	Audiosporen konden niet worden hersteld: {takes} en {more} meer. Herstelde opnamen: {count}
+	Open Last Audio Tracks in Editor	Laatste audiosporen openen in editor
+	Add Audio Tracks Marker	Markering toevoegen aan audiosporen
+	After a take	Na een opname
+	Nothing	Niets
+	Show the folder	Map tonen
+	Open in the audio editor	Openen in de audio-editor
+	Audio editor	Audio-editor
+	The audio editor on the PATH	De audio-editor uit PATH
+	Programs	Programma's
+@msg	Audio tracks opened in the audio editor: {session}	Audiosporen geopend in de audio-editor: {session}
+@msg	The audio editor did not start ({error}); the folder {folder} is shown instead	De audio-editor is niet gestart ({error}); de map {folder} wordt in plaats daarvan getoond
+@msg	Audio tracks saved in {folder}	Audiosporen opgeslagen in {folder}
+@msg	The audio tracks could not be opened: {error}	De audiosporen konden niet worden geopend: {error}
 @msg	`{command}` needs `{key}`	`{command}` heeft `{key}` nodig
 @msg	`{command}`: unknown dock `{name}` (one of {docks})	`{command}`: onbekend dock `{name}` (een van {docks})
 @msg	`{command}`: `path` must be a file path	`{command}`: `path` moet een bestandspad zijn

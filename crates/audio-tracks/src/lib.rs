@@ -22,14 +22,23 @@
 //!
 //! A take writes `take.journal` beside its files; [`recover`] repairs the files of a take that
 //! ended without its journal's last line.
+//!
+//! A take that makes its own folder also writes a session file for the audio editor there
+//! ([`session`]): one with no tracks when the take starts, and the full one, built from the
+//! journal and the files' lengths, on the disk thread once the files are complete or the take
+//! stopped early. Repair writes it again for the takes it repairs. Markers set during the take
+//! ([`TakeMarkers`]) go into a bounded queue that the disk thread empties into the journal with
+//! each sync, and the session lists them.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 pub mod collect;
 pub mod disk;
 pub mod journal;
+pub mod markers;
 pub mod names;
 mod open;
 pub mod recover;
+pub mod session;
 pub mod space;
 pub mod wav;
 
@@ -45,6 +54,7 @@ use studiocraft_media::Tick;
 
 pub use collect::{Collector, Dropout, TrackSpec, pool_chunks};
 pub use disk::{DiskConfig, Faults, Gate, StopReason, Timing};
+pub use markers::{Marker, TakeMarkers};
 
 /// A list of tracks for the collect thread, with the clock time it was sent at (none for the
 /// first list, sent before any block), and whether it comes from a collection that replaced the
@@ -105,12 +115,21 @@ pub struct Status {
     ready: AtomicBool,
     /// The take's `Audio Files` folder, once the disk thread has made it.
     dir: OnceLock<PathBuf>,
+    /// The take's session file, once the disk thread has written the full one.
+    session: OnceLock<PathBuf>,
 }
 
 impl Status {
     /// The take's `Audio Files` folder, once the disk thread has made it.
     pub fn dir(&self) -> Option<&Path> {
         self.dir.get().map(PathBuf::as_path)
+    }
+
+    /// The take's session file, once the disk thread has written the full one: after the files
+    /// are complete, or after an early stop with what was saved. `None` for a take that makes no
+    /// folder of its own, one thrown away, and one whose session could not be written.
+    pub fn session(&self) -> Option<&Path> {
+        self.session.get().map(PathBuf::as_path)
     }
 
     /// Whether the collect thread has made its chunk pool and reads the taps: before that, a tap
@@ -197,6 +216,7 @@ pub struct Take {
     /// The take's end time on the mixer's clock, for the collect thread at the stop.
     end: Arc<ArrayQueue<Tick>>,
     discard: Arc<AtomicBool>,
+    markers: TakeMarkers,
     collect: Option<JoinHandle<()>>,
     disk: Option<JoinHandle<()>>,
     collect_thread: Thread,
@@ -230,6 +250,8 @@ impl Take {
         let after: Arc<ArrayQueue<StopAfter>> = Arc::new(ArrayQueue::new(1));
         let end: Arc<ArrayQueue<Tick>> = Arc::new(ArrayQueue::new(1));
         let discard = Arc::new(AtomicBool::new(false));
+        let marker_queue: markers::MarkerQueue = Arc::new(markers::MarkerLog::new(markers::QUEUED));
+        let markers = TakeMarkers::new(Arc::clone(&marker_queue), at, Arc::clone(&status));
         let chunks = cfg.buffer_mib.max(1) as usize;
         type ToDiskThread = (Arc<ArrayQueue<collect::ToDisk>>, Arc<ArrayQueue<Vec<u8>>>, Arc<ArrayQueue<Dropout>>, Thread);
         let (disk_tx, disk_rx) = std::sync::mpsc::sync_channel::<ToDiskThread>(1);
@@ -268,7 +290,7 @@ impl Take {
         let disk_cfg = cfg.disk;
         let disk = std::thread::Builder::new().name("audio-tracks-disk".into()).spawn(move || {
             let Ok((queue, free, dropq, collect_thread)) = disk_rx.recv() else { return };
-            guarded("disk", &d_status, &d_stop, || disk_loop(disk_cfg, queue, free, dropq, &d_status, &d_stop));
+            guarded("disk", &d_status, &d_stop, || disk_loop(disk_cfg, queue, free, dropq, marker_queue, &d_status, &d_stop));
             collect_thread.unpark();
         });
         let disk = match disk {
@@ -280,11 +302,17 @@ impl Take {
                 return Err(e);
             }
         };
-        Ok(Take { status, stop, tracks, after, end, discard, collect: Some(collect), disk: Some(disk), collect_thread })
+        Ok(Take { status, stop, tracks, after, end, discard, markers, collect: Some(collect), disk: Some(disk), collect_thread })
     }
 
     pub fn status(&self) -> &Arc<Status> {
         &self.status
+    }
+
+    /// The take's marker log: any thread adds a marker to it without waiting, and the take's
+    /// session lists the markers.
+    pub fn markers(&self) -> &TakeMarkers {
+        &self.markers
     }
 
     /// The take's `Audio Files` folder, once the disk thread has made it.
@@ -487,11 +515,12 @@ fn disk_loop(
     queue: Arc<ArrayQueue<collect::ToDisk>>,
     free: Arc<ArrayQueue<Vec<u8>>>,
     dropq: Arc<ArrayQueue<Dropout>>,
+    markers: markers::MarkerQueue,
     status: &Status,
     stop: &AtomicBool,
 ) {
     let mut w = match disk::Writer::create(cfg, free, dropq) {
-        Ok(w) => w,
+        Ok(w) => w.with_markers(markers),
         Err(f) => {
             log::warn!("audio tracks: {}", f.error);
             status.stop(f.reason);
@@ -540,12 +569,19 @@ fn disk_loop(
         if let Err(f) = result {
             log::warn!("audio tracks stopped: {}: {}", f.reason.text(), f.error);
             status.stop(f.reason);
-            w.abandon(f.reason);
+            // The session lists what was saved; a take left for repair gets it from repair.
+            if w.abandon(f.reason)
+                && let Some(path) = w.session()
+            {
+                let _ = status.session.set(path.to_path_buf());
+            }
             return;
         }
         if ended {
             if w.discarded() {
                 w.discard_files();
+            } else if let Some(path) = w.session() {
+                let _ = status.session.set(path.to_path_buf());
             }
             status.state.store(State::Done as u8, Ordering::Release);
             return;

@@ -13,7 +13,7 @@ use crate::{Backend, Headless, MAX_BATCH_STEPS, McpError, Remote, Roots, Server,
 
 const TOKEN: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
-const TOOLS: [&str; 30] = [
+const TOOLS: [&str; 32] = [
     "command_list",
     "command_run",
     "command_batch",
@@ -43,6 +43,8 @@ const TOOLS: [&str; 30] = [
     "replay_save",
     "audio_tracks_status",
     "audio_tracks_repair",
+    "audio_tracks_open_last",
+    "audio_tracks_marker",
     "output_status",
 ];
 
@@ -354,6 +356,14 @@ fn source_audio_sets_whether_the_source_records_its_own_track() {
     let status = ok_json(&call(&mut s, "audio_tracks_status", json!({})));
     assert_eq!((status["enabled"].clone(), status["active"].clone()), (json!(false), json!(false)), "{status}");
     error_text(&call(&mut s, "audio_tracks_repair", json!({})));
+    let none = error_text(&call(&mut s, "audio_tracks_open_last", json!({})));
+    assert!(none.contains("no take of audio tracks has ended"), "{none}");
+    let idle = error_text(&call(&mut s, "audio_tracks_marker", json!({"name": "Goal"})));
+    assert!(idle.contains("no take of audio tracks is running"), "{idle}");
+    let bad = error_text(&call(&mut s, "audio_tracks_marker", json!({"name": ""})));
+    assert!(bad.contains("a marker's name is 1 to 256 characters"), "{bad}");
+    let null = error_text(&call(&mut s, "audio_tracks_marker", json!({"name": null})));
+    assert!(null.contains("audio_tracks.marker"), "a null name is refused, not numbered: {null}");
 }
 
 #[test]
@@ -387,6 +397,38 @@ fn audio_tracks_writes_are_held_to_the_write_roots() {
     let mut s = Server::new(Box::new(h)).unwrap();
     let inside = ok_json(&call(&mut s, "audio_tracks_repair", json!({"folder": text_of(&dir.join("out"))})));
     assert_eq!(inside["started"], json!(true), "{inside}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn audio_tracks_open_last_is_held_to_the_read_roots() {
+    let dir = root_folders("tracks-open-roots");
+    // A take that made its own folder, cut short before its first file: its repair writes a
+    // session with no tracks.
+    let take = dir.join("out").join("Show Audio").join("Audio Files");
+    std::fs::create_dir_all(&take).unwrap();
+    let start = json!({"start": {"version": 1, "sample_rate": 48000, "channels": 2, "anchor": "recording", "origin_tick": 0, "offset_frames": 0, "started_unix_ms": null, "session": true}});
+    std::fs::write(take.join("take.journal"), format!("{start}\n")).unwrap();
+    let roots = Roots::new(&[dir.join("in")], &[dir.join("out")]).unwrap();
+    let mut h = Headless::with_options(None, ServerOptions { allow_streaming: false, roots: Some(roots) }).unwrap();
+    // Repair works only inside the recording folder.
+    let mut profile = h.studio().profile().clone();
+    profile.output.folder = text_of(&dir.join("out"));
+    h.studio_mut().set_profile(profile).unwrap();
+    h.studio_mut().run("audio_tracks.repair", &json!({"folder": text_of(&take)})).unwrap();
+    let mut spins = 0u64;
+    while h.studio().audio_tracks_last_session().is_none() {
+        spins += 1;
+        assert!(spins < 10_000_000, "the repair never ended");
+        h.studio_mut().tick();
+        std::thread::yield_now();
+    }
+    assert_eq!(h.studio().audio_tracks_last_session(), Some(dir.join("out").join("Show Audio").join("Show.scraft").as_path()));
+    let mut s = Server::new(Box::new(h)).unwrap();
+    for (tool, args) in [("audio_tracks_open_last", json!({})), ("command_run", json!({"id": "audio_tracks.open_last"}))] {
+        let text = error_text(&call(&mut s, tool, args.clone()));
+        assert!(text.contains("outside the read roots"), "{tool} {args}: {text}");
+    }
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -1015,6 +1057,9 @@ fn output_tools_carry_their_hints() {
     }
     assert_eq!(hints("output_status")["readOnlyHint"], true);
     assert_eq!(hints("command_run")["openWorldHint"], false);
+    // Each call starts the audio editor or a file manager.
+    let h = hints("audio_tracks_open_last");
+    assert_eq!((h["readOnlyHint"].as_bool(), h["idempotentHint"].as_bool()), (Some(false), Some(false)));
 }
 
 #[test]

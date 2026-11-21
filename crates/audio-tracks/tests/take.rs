@@ -519,7 +519,21 @@ fn a_take_whose_write_buffer_cannot_be_made_stops_with_that_reason_and_writes_no
 
 /// An unfinished take in `dir` whose `Mic.wav` ends mid-frame.
 fn crashed_take(dir: &Path) {
-    let mut rig = Rig::new(config(dir), 4);
+    crashed_take_from(config(dir), dir);
+}
+
+/// An unfinished take that made its own folder, `Take Audio`, in the recording folder `scratch`
+/// gives for `name`, with `Mic.wav` ending mid-frame. Its `Audio Files` folder.
+fn crashed_own_take(name: &str) -> PathBuf {
+    let files = scratch(name);
+    let recording = files.parent().and_then(Path::parent).unwrap().to_path_buf();
+    crashed_take_from(DiskConfig { folder_stem: Some("Take".into()), ..config(&recording) }, &files);
+    files
+}
+
+/// The take `cfg` starts, left unfinished; `dir` is its `Audio Files` folder.
+fn crashed_take_from(cfg: DiskConfig, dir: &Path) {
+    let mut rig = Rig::new(cfg, 4);
     let a = spec(1, "Mic");
     rig.c.set_tracks(vec![a.clone()]);
     feed(&a.slot, 1, 0);
@@ -595,7 +609,7 @@ fn a_journal_that_names_a_path_leaves_the_take_unfinished_and_its_files_untouche
     crashed_take(&dir);
     let mic_len = std::fs::metadata(dir.join("Mic.wav")).unwrap().len();
     let mut j = std::fs::OpenOptions::new().append(true).open(dir.join(journal::FILE_NAME)).unwrap();
-    let line = Line::File { track: 1, name: "Desk".into(), file: "../Desk.wav".into(), segment: 1, first_frame: 0 };
+    let line = Line::File { track: 1, name: "Desk".into(), file: "../Desk.wav".into(), segment: 1, first_frame: 0, program: false };
     std::io::Write::write_all(&mut j, format!("{}\n", serde_json::to_string(&line).unwrap()).as_bytes()).unwrap();
     drop(j);
     let err = recover::repair(&dir).unwrap_err();
@@ -774,6 +788,7 @@ fn every_file_and_part_carries_its_place_on_the_output_timeline() {
         origin_tick: Some(500),
         offset_frames: 96_000,
         started_unix_ms: Some(1_800_000_000_000),
+        session: false,
     };
     assert_eq!(lines.first(), Some(&want));
     for (file, first_frame) in [("Mic.wav", 0), ("Mic part 2.wav", 3_000), ("Late.wav", 0), ("Late part 2.wav", 3_000)] {
@@ -984,7 +999,10 @@ fn a_cut_part_that_is_not_a_track_file_leaves_the_take_unfinished_and_the_file_i
     let mic_len = std::fs::metadata(dir.join("Mic.wav")).unwrap().len();
     append_lines(
         &dir,
-        &[Line::File { track: 0, name: "Mic".into(), file: "notes.txt".into(), segment: 2, first_frame: 4_096 }, Line::Cut { track: 0, frames: 10 }],
+        &[
+            Line::File { track: 0, name: "Mic".into(), file: "notes.txt".into(), segment: 2, first_frame: 4_096, program: false },
+            Line::Cut { track: 0, frames: 10 },
+        ],
     );
     let err = recover::repair(&dir).unwrap_err();
     assert!(err.to_string().contains("notes.txt"), "{err}");
@@ -1003,7 +1021,10 @@ fn a_cut_never_removes_the_first_file_of_a_track() {
     std::fs::copy(dir.join("Mic.wav"), dir.join("Desk.wav")).unwrap();
     append_lines(
         &dir,
-        &[Line::File { track: 1, name: "Desk".into(), file: "Desk.wav".into(), segment: 1, first_frame: 4_096 }, Line::Cut { track: 1, frames: 10 }],
+        &[
+            Line::File { track: 1, name: "Desk".into(), file: "Desk.wav".into(), segment: 1, first_frame: 4_096, program: false },
+            Line::Cut { track: 1, frames: 10 },
+        ],
     );
     let r = recover::repair(&dir).unwrap().unwrap();
     assert!(dir.join("Desk.wav").exists(), "the track's first file was removed");
@@ -1028,8 +1049,10 @@ fn a_cut_part_named_like_a_kept_file_in_other_letter_case_is_refused() {
     for (tag, part) in [("upper", "MIC.WAV"), ("upper-stem", "MIC.wav")] {
         let dir = scratch(&format!("cut-case-{tag}"));
         crashed_take(&dir);
-        let lines =
-            [Line::File { track: 0, name: "Mic".into(), file: part.into(), segment: 2, first_frame: 4_096 }, Line::Cut { track: 0, frames: 10 }];
+        let lines = [
+            Line::File { track: 0, name: "Mic".into(), file: part.into(), segment: 2, first_frame: 4_096, program: false },
+            Line::Cut { track: 0, frames: 10 },
+        ];
         repair_refused(&dir, &lines, part);
         assert!(dir.join("Mic.wav").exists(), "{part}: Mic.wav was removed");
         let _ = std::fs::remove_dir_all(dir.parent().and_then(Path::parent).unwrap());
@@ -1042,7 +1065,7 @@ fn a_cut_part_that_is_a_hard_link_to_a_kept_file_is_refused() {
     crashed_take(&dir);
     std::fs::hard_link(dir.join("Mic.wav"), dir.join("Mic part 2.wav")).unwrap();
     let lines = [
-        Line::File { track: 0, name: "Mic".into(), file: "Mic part 2.wav".into(), segment: 2, first_frame: 4_096 },
+        Line::File { track: 0, name: "Mic".into(), file: "Mic part 2.wav".into(), segment: 2, first_frame: 4_096, program: false },
         Line::Cut { track: 0, frames: 10 },
     ];
     repair_refused(&dir, &lines, "Mic part 2.wav");
@@ -1064,7 +1087,7 @@ fn a_track_file_named_with_a_tilde_by_an_earlier_writer_is_repaired() {
     let dir = scratch("tilde-name");
     crashed_take(&dir);
     std::fs::copy(dir.join("Mic.wav"), dir.join("Desk~1.wav")).unwrap();
-    append_lines(&dir, &[Line::File { track: 1, name: "Desk~1".into(), file: "Desk~1.wav".into(), segment: 1, first_frame: 0 }]);
+    append_lines(&dir, &[Line::File { track: 1, name: "Desk~1".into(), file: "Desk~1.wav".into(), segment: 1, first_frame: 0, program: false }]);
     let done = recover::repair(&dir).unwrap().unwrap_or_else(|| panic!("the take was skipped"));
     let names: Vec<&str> = done.files.iter().map(|(f, _)| f.as_str()).collect();
     assert_eq!(names, ["Mic.wav", "Desk~1.wav"]);
@@ -1176,4 +1199,155 @@ fn a_sync_journals_the_tracks_that_grew_and_the_dropouts_that_ended() {
     let f = BLOCK_FRAMES as u64;
     let lines: Vec<Line> = journal::read(&dir).unwrap().into_iter().filter(|l| matches!(l, Line::Sync { .. } | Line::Dropout { .. })).collect();
     assert_eq!(lines, [Line::Dropout { track: 0, at: f, frames: 2 * f }, Line::Sync { tracks: vec![(0, 4 * f)] }], "the dropout is journaled once");
+}
+
+/// The session file at `path`, read as the audio editor reads it.
+fn session_at(path: &Path) -> craft_scraft_format::Session {
+    craft_scraft_format::Session::from_json(&std::fs::read_to_string(path).unwrap()).unwrap()
+}
+
+/// Each clip of `s`: its track's name, start and length, and the frames its file holds.
+fn clips(s: &craft_scraft_format::Session, take: &Path) -> Vec<(String, i64, i64, u64)> {
+    let mut out = Vec::new();
+    for t in &s.tracks {
+        for c in t.clips() {
+            let craft_scraft_format::ClipContent::Audio { source, .. } = &c.content else { continue };
+            let src = s.sources.iter().find(|x| x.id == *source).unwrap();
+            let held = std::fs::metadata(take.join(&src.path)).unwrap().len().saturating_sub(wav::header_len().unwrap()) / 8;
+            out.push((t.name.clone(), c.start, c.length, held));
+        }
+    }
+    out
+}
+
+#[test]
+fn a_take_with_its_own_folder_starts_with_an_empty_session_and_ends_with_its_tracks() {
+    let recording = scratch("session-first").parent().and_then(Path::parent).unwrap().to_path_buf();
+    let cfg = DiskConfig { folder_stem: Some("Show".into()), ..config(&recording) };
+    let rig = Rig::new(cfg, 4);
+    let path = recording.join("Show Audio").join("Show.scraft");
+    let first = session_at(&path);
+    assert!(first.tracks.is_empty() && first.sources.is_empty(), "the first session has no track yet");
+    assert_eq!(first.name, "Show");
+    drop(rig);
+    let _ = std::fs::remove_dir_all(&recording);
+}
+
+#[test]
+fn a_finished_take_writes_its_session_with_its_markers_at_their_samples() {
+    let recording = scratch("session-end").parent().and_then(Path::parent).unwrap().to_path_buf();
+    let timing = Timing { anchor: "recording".into(), offset_frames: 1_000, ..Timing::default() };
+    let cfg = DiskConfig { folder_stem: Some("Show".into()), timing, ..config(&recording) };
+    let (p, a) = (TrackSpec { source: None, name: "00 Program".into(), slot: Arc::new(TapSlot::new()) }, spec(1, "Mic"));
+    let take = Take::start_from(TakeConfig { disk: cfg, buffer_mib: 4 }, vec![a.clone(), p.clone()], Some(Tick(500))).unwrap();
+    for n in 0..6 {
+        feed(&p.slot, 0, n);
+        feed(&a.slot, 1, n);
+    }
+    let markers = take.markers().clone();
+    assert!(markers.add(Tick(500 + 2 * BLOCK_TICKS), "Goal"));
+    assert!(markers.add_frame(7, "Start"));
+    let status = take.join();
+    assert_eq!(status.state(), Some(State::Done));
+    assert!(!markers.add_frame(9, "After"), "a take that ended keeps no marker");
+    let path = recording.join("Show Audio").join("Show.scraft");
+    assert_eq!(status.session(), Some(path.as_path()));
+    let s = session_at(&path);
+    let f = 6 * BLOCK_FRAMES as i64;
+    let take_dir = recording.join("Show Audio");
+    assert_eq!(
+        clips(&s, &take_dir),
+        [("00 Program".to_string(), 1_000, f, f as u64), ("Mic".to_string(), 1_000, f, f as u64)],
+        "the program mix first; each clip at the take's place on the recording and as long as its file"
+    );
+    let marks: Vec<(&str, i64)> = s.markers.iter().map(|m| (m.name.as_str(), m.start)).collect();
+    assert_eq!(marks, [("Start", 1_007), ("Goal", 1_000 + 2 * BLOCK_FRAMES as i64)]);
+    let _ = std::fs::remove_dir_all(&recording);
+}
+
+#[test]
+fn a_take_stopped_by_a_full_disk_writes_its_session_with_what_was_saved() {
+    let recording = scratch("session-full").parent().and_then(Path::parent).unwrap().to_path_buf();
+    let faults = Faults { full_after_bytes: Some(3 * 8192), ..Faults::default() };
+    let cfg = DiskConfig { folder_stem: Some("Full".into()), faults, ..config(&recording) };
+    let a = spec(1, "Mic");
+    let take = Take::start(TakeConfig { disk: cfg, buffer_mib: 4 }, vec![a.clone()]).unwrap();
+    for n in 0..10 {
+        feed(&a.slot, 1, n);
+    }
+    let status = take.join();
+    assert_eq!(status.reason(), Some(StopReason::DiskFull));
+    let path = status.session().expect("the stopped take has a session").to_path_buf();
+    let s = session_at(&path);
+    let f = 3 * BLOCK_FRAMES as i64;
+    assert_eq!(clips(&s, &recording.join("Full Audio")), [("Mic".to_string(), 0, f, f as u64)]);
+    assert!(s.comments.contains("stopped early: the disk is full"), "{}", s.comments);
+    let _ = std::fs::remove_dir_all(&recording);
+}
+
+/// Put a folder where the session file goes, so writing the session fails.
+fn block_session(path: &Path) {
+    let _ = std::fs::remove_file(path);
+    std::fs::create_dir_all(path.join("blocked")).unwrap();
+}
+
+#[test]
+fn a_take_whose_session_cannot_be_written_stops_unfinished_and_repair_writes_the_session() {
+    let recording = scratch("session-blocked").parent().and_then(Path::parent).unwrap().to_path_buf();
+    let cfg = DiskConfig { folder_stem: Some("Show".into()), ..config(&recording) };
+    let mut rig = Rig::new(cfg, 4);
+    let path = recording.join("Show Audio").join("Show.scraft");
+    block_session(&path);
+    let a = spec(1, "Mic");
+    rig.c.set_tracks(vec![a.clone()]);
+    feed(&a.slot, 1, 0);
+    rig.pump().unwrap();
+    let Err(failure) = rig.end() else { panic!("the take ended without its session") };
+    assert!(!rig.w.abandon(failure.reason), "the take is left for repair");
+    assert!(rig.w.session().is_none());
+    let files = recording.join("Show Audio").join("Audio Files");
+    assert!(!journal::read(&files).unwrap().iter().any(|l| matches!(l, Line::End { .. })), "the journal has no end");
+    drop(rig);
+    std::fs::remove_dir_all(&path).unwrap();
+    let r = recover::repair(&files).unwrap().expect("the take is repaired");
+    assert_eq!(r.session.as_deref(), Some(path.as_path()));
+    let f = BLOCK_FRAMES as i64;
+    assert_eq!(clips(&session_at(&path), &recording.join("Show Audio")), [("Mic".to_string(), 0, f, f as u64)]);
+    let _ = std::fs::remove_dir_all(&recording);
+}
+
+#[test]
+fn a_repair_that_cannot_write_the_session_fails_and_leaves_the_take_to_repair_again() {
+    let dir = crashed_own_take("session-repair-blocked");
+    let session = dir.parent().unwrap().join("Take.scraft");
+    block_session(&session);
+    let e = recover::repair(&dir).unwrap_err();
+    assert!(e.to_string().contains("the session file could not be written"), "{e}");
+    assert!(!journal::read(&dir).unwrap().iter().any(|l| matches!(l, Line::End { .. })), "the journal has no end");
+    std::fs::remove_dir_all(&session).unwrap();
+    let r = recover::repair(&dir).unwrap().expect("the take is repaired the second time");
+    assert_eq!(r.session.as_deref(), Some(session.as_path()));
+}
+
+#[test]
+fn a_repaired_take_gets_its_session_from_the_repaired_files() {
+    let dir = crashed_own_take("session-repair");
+    let session = dir.parent().unwrap().join("Take.scraft");
+    assert!(session_at(&session).tracks.is_empty(), "before the repair, the take has its first, empty session");
+    let r = recover::repair(&dir).unwrap().unwrap();
+    assert_eq!(r.session.as_deref(), Some(session.as_path()));
+    let f = BLOCK_FRAMES as i64;
+    assert_eq!(clips(&session_at(&session), dir.parent().unwrap()), [("Mic".to_string(), 0, f, f as u64)]);
+}
+
+#[test]
+fn repairing_a_take_recorded_into_a_folder_it_did_not_make_writes_no_session() {
+    let dir = scratch("session-direct");
+    crashed_take(&dir);
+    let other = dir.parent().unwrap().join("Take.scraft");
+    std::fs::write(&other, b"someone else's session").unwrap();
+    let r = recover::repair(&dir).unwrap().expect("the take is repaired");
+    assert_eq!(r.session, None);
+    assert_eq!(std::fs::read(&other).unwrap(), b"someone else's session", "the file beside the folder is untouched");
+    let _ = std::fs::remove_dir_all(dir.parent().unwrap());
 }

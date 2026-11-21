@@ -1621,6 +1621,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-midi"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=a49329e71e32ad93794ab595c41f33209a7d2220#a49329e71e32ad93794ab595c41f33209a7d2220"
+dependencies = [
+ "serde",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "craft-packet"
 version = "0.1.0-alpha.1"
 dependencies = [
@@ -1665,6 +1674,20 @@ dependencies = [
  "craft-color",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "craft-scraft-format"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=a49329e71e32ad93794ab595c41f33209a7d2220#a49329e71e32ad93794ab595c41f33209a7d2220"
+dependencies = [
+ "craft-audio",
+ "craft-midi",
+ "craft-time",
+ "craft-zip",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -1783,6 +1806,16 @@ dependencies = [
  "quick-xml 0.41.0",
  "serde",
  "thiserror 2.0.21",
+]
+
+[[package]]
+name = "craft-zip"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=a49329e71e32ad93794ab595c41f33209a7d2220#a49329e71e32ad93794ab595c41f33209a7d2220"
+dependencies = [
+ "flate2",
+ "thiserror 2.0.21",
+ "zip",
 ]
 
 [[package]]
@@ -5839,7 +5872,9 @@ dependencies = [
 name = "studiocraft-audio-tracks"
 version = "0.1.0-alpha.1"
 dependencies = [
+ "craft-atomic",
  "craft-audio",
+ "craft-scraft-format",
  "craft-time",
  "criterion",
  "crossbeam-queue",

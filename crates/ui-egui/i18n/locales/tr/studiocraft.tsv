@@ -492,6 +492,19 @@ menu	Transform	Dönüştür
 @msg	Audio tracks could not be repaired: {takes} and {more} more	Ses parçaları onarılamadı: {takes} ve {more} tane daha
 @msg	Audio tracks could not be repaired: {takes}. Takes repaired: {count}	Ses parçaları onarılamadı: {takes}. Onarılan çekimler: {count}
 @msg	Audio tracks could not be repaired: {takes} and {more} more. Takes repaired: {count}	Ses parçaları onarılamadı: {takes} ve {more} tane daha. Onarılan çekimler: {count}
+	Open Last Audio Tracks in Editor	Son Ses Parçalarını Düzenleyicide Aç
+	Add Audio Tracks Marker	Ses Parçalarına İşaretçi Ekle
+	After a take	Bir çekimden sonra
+	Nothing	Hiçbir şey
+	Show the folder	Klasörü göster
+	Open in the audio editor	Ses düzenleyicide aç
+	Audio editor	Ses düzenleyici
+	The audio editor on the PATH	PATH üzerindeki ses düzenleyici
+	Programs	Programlar
+@msg	Audio tracks opened in the audio editor: {session}	Ses parçaları ses düzenleyicide açıldı: {session}
+@msg	The audio editor did not start ({error}); the folder {folder} is shown instead	Ses düzenleyici başlatılamadı ({error}); bunun yerine {folder} klasörü gösteriliyor
+@msg	Audio tracks saved in {folder}	Ses parçaları {folder} konumuna kaydedildi
+@msg	The audio tracks could not be opened: {error}	Ses parçaları açılamadı: {error}
 @msg	`{command}` needs `{key}`	`{command}` için `{key}` gerekir
 @msg	`{command}`: unknown dock `{name}` (one of {docks})	`{command}`: bilinmeyen panel `{name}` (şunlardan biri olmalı: {docks})
 @msg	`{command}`: `path` must be a file path	`{command}`: `path` bir dosya yolu olmalıdır

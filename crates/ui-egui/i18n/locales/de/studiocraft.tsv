@@ -474,6 +474,19 @@ menu	Transform	Transformieren
 @msg	Audio tracks could not be repaired: {takes} and {more} more	Audiospuren konnten nicht repariert werden: {takes} und {more} weitere
 @msg	Audio tracks could not be repaired: {takes}. Takes repaired: {count}	Audiospuren konnten nicht repariert werden: {takes}. Reparierte Aufnahmen: {count}
 @msg	Audio tracks could not be repaired: {takes} and {more} more. Takes repaired: {count}	Audiospuren konnten nicht repariert werden: {takes} und {more} weitere. Reparierte Aufnahmen: {count}
+	Open Last Audio Tracks in Editor	Letzte Audiospuren im Editor öffnen
+	Add Audio Tracks Marker	Marke in den Audiospuren setzen
+	After a take	Nach einer Aufnahme
+	Nothing	Nichts
+	Show the folder	Ordner anzeigen
+	Open in the audio editor	Im Audioeditor öffnen
+	Audio editor	Audioeditor
+	The audio editor on the PATH	Audioeditor aus dem PATH
+	Programs	Programme
+@msg	Audio tracks opened in the audio editor: {session}	Audiospuren im Audioeditor geöffnet: {session}
+@msg	The audio editor did not start ({error}); the folder {folder} is shown instead	Der Audioeditor wurde nicht gestartet ({error}); stattdessen wird der Ordner {folder} angezeigt
+@msg	Audio tracks saved in {folder}	Audiospuren gespeichert in {folder}
+@msg	The audio tracks could not be opened: {error}	Die Audiospuren konnten nicht geöffnet werden: {error}
 @msg	`{command}` needs `{key}`	`{command}` benötigt `{key}`
 @msg	`{command}`: unknown dock `{name}` (one of {docks})	`{command}`: unbekanntes Dock `{name}` (eines von {docks})
 @msg	`{command}`: `path` must be a file path	`{command}`: `path` muss ein Dateipfad sein
