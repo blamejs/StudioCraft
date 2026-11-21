@@ -57,10 +57,12 @@ const PACKET_SAMPLES: usize = SAMPLE_RATE as usize / 100 * CHANNELS;
 const MAX_STAT_BYTES: u64 = 4096;
 /// Runs of silent and sounding samples kept between two passes of the capture loop.
 const MAX_RUNS: usize = 1024;
-/// Bytes read from one `/proc/<pid>/comm` file; the kernel writes at most 16.
-const MAX_COMM_BYTES: u64 = 64;
-/// Bytes read from `/proc/net/unix`, which lists every Unix socket on the system.
-const MAX_UNIX_TABLE_BYTES: u64 = 16 << 20;
+/// Bytes of socket diagnostics read for one listing of the system's listening Unix sockets.
+const MAX_DIAG_BYTES: usize = 16 << 20;
+/// Bytes received from the socket diagnostics at a time.
+const DIAG_BUFFER: usize = 32 << 10;
+/// How long the socket diagnostics may take to send each part of a listing.
+const DIAG_WAIT: Duration = Duration::from_secs(1);
 /// Open files of one process looked through for the PulseAudio socket.
 const MAX_FDS: usize = 65_536;
 /// Local servers read from `PULSE_SERVER`.
@@ -128,16 +130,9 @@ impl Procs for ProcFs {
         Some(path.strip_suffix(" (deleted)").unwrap_or(&path).to_owned())
     }
 
-    fn comm(&self, pid: u32) -> Option<String> {
-        let mut text = String::new();
-        std::fs::File::open(format!("/proc/{pid}/comm")).ok()?.take(MAX_COMM_BYTES).read_to_string(&mut text).ok()?;
-        let comm = text.trim_end_matches('\n');
-        (!comm.is_empty() && !comm.contains(['/', '\0'])).then(|| comm.to_owned())
-    }
-
     fn sound_server(&self, pid: u32) -> bool {
         use std::os::unix::fs::MetadataExt;
-        if pulse_sockets(|k| std::env::var(k).ok(), &machine_names()).iter().any(|socket| holds_listener(pid, socket)) {
+        if holds_any(pid, &self.server_sockets()) {
             return true;
         }
         // A sound server that runs for the whole system belongs to root, so a user cannot read
@@ -147,18 +142,45 @@ impl Procs for ProcFs {
     }
 
     fn server_sockets(&self) -> Vec<u64> {
-        let Some(table) = unix_table() else { return Vec::new() };
-        let sockets = pulse_sockets(|k| std::env::var(k).ok(), &machine_names());
-        sockets.iter().filter_map(|s| graph::listening_inode(&table, &s.to_string_lossy())).collect()
+        bound_listeners(&pulse_sockets(|k| std::env::var(k).ok(), &machine_names()))
     }
 }
 
-/// The text of `/proc/net/unix`, the system's table of Unix sockets, up to
-/// [`MAX_UNIX_TABLE_BYTES`].
-fn unix_table() -> Option<String> {
-    let mut table = String::new();
-    std::fs::File::open("/proc/net/unix").and_then(|f| f.take(MAX_UNIX_TABLE_BYTES).read_to_string(&mut table)).ok()?;
-    Some(table)
+/// Every listening Unix socket bound to a file, as `(socket inode, file device, file inode)`, from
+/// the kernel's socket diagnostics (https://man7.org/linux/man-pages/man7/sock_diag.7.html). Each
+/// reply is read up to [`MAX_DIAG_BYTES`] in all.
+fn listeners() -> Option<Vec<graph::Listener>> {
+    use rustix::net::{AddressFamily, RecvFlags, SendFlags, SocketType, netlink, sockopt};
+    let fd = rustix::net::socket(AddressFamily::NETLINK, SocketType::DGRAM, Some(netlink::SOCK_DIAG)).ok()?;
+    sockopt::set_socket_timeout(&fd, sockopt::Timeout::Recv, Some(DIAG_WAIT)).ok()?;
+    rustix::net::sendto(&fd, &graph::diag_request(), SendFlags::empty(), &netlink::SocketAddrNetlink::new(0, 0)).ok()?;
+    let mut found = Vec::new();
+    let mut buf = vec![0u8; DIAG_BUFFER];
+    let mut read = 0usize;
+    while read < MAX_DIAG_BYTES {
+        let (len, _) = rustix::net::recv(&fd, &mut buf[..], RecvFlags::empty()).ok()?;
+        read += len.max(1);
+        match graph::parse_diag(buf.get(..len)?, &mut found) {
+            graph::Diag::More => {}
+            graph::Diag::Done => return Some(found),
+            graph::Diag::Failed => return None,
+        }
+    }
+    None
+}
+
+/// The inodes of the listening sockets that the files at `paths` lead to now. A socket whose file
+/// was removed, and a socket bound to a file that was removed and made again by another socket, is
+/// not among them.
+fn bound_listeners(paths: &[PathBuf]) -> Vec<u64> {
+    use std::os::unix::fs::{FileTypeExt, MetadataExt};
+    let files: Vec<(u64, u64)> =
+        paths.iter().filter_map(|p| std::fs::metadata(p).ok()).filter(|m| m.file_type().is_socket()).map(|m| (m.dev(), m.ino())).collect();
+    if files.is_empty() {
+        return Vec::new();
+    }
+    let Some(listeners) = listeners() else { return Vec::new() };
+    files.iter().filter_map(|(dev, ino)| graph::bound_to(&listeners, *dev, *ino)).collect()
 }
 
 /// A process table for the streams of the client object `client`: it asks the one it wraps
@@ -177,10 +199,6 @@ impl Procs for Remembered<'_> {
 
     fn exe(&self, pid: u32) -> Option<String> {
         self.procs.exe(pid)
-    }
-
-    fn comm(&self, pid: u32) -> Option<String> {
-        self.procs.comm(pid)
     }
 
     fn sound_server(&self, pid: u32) -> bool {
@@ -244,13 +262,14 @@ fn pulse_sockets(var: impl Fn(&str) -> Option<String>, local: &[String]) -> Vec<
     sockets
 }
 
-/// Whether `pid` holds the socket that listens at `socket`.
-fn holds_listener(pid: u32, socket: &std::path::Path) -> bool {
-    let Some(table) = unix_table() else { return false };
-    let Some(inode) = graph::listening_inode(&table, &socket.to_string_lossy()) else { return false };
-    let wanted = format!("socket:[{inode}]");
+/// Whether `pid` holds one of the sockets whose inodes are in `inodes`.
+fn holds_any(pid: u32, inodes: &[u64]) -> bool {
+    if inodes.is_empty() {
+        return false;
+    }
+    let wanted: Vec<String> = inodes.iter().map(|inode| format!("socket:[{inode}]")).collect();
     let Ok(fds) = std::fs::read_dir(format!("/proc/{pid}/fd")) else { return false };
-    fds.take(MAX_FDS).flatten().any(|fd| std::fs::read_link(fd.path()).is_ok_and(|l| l.as_os_str() == wanted.as_str()))
+    fds.take(MAX_FDS).flatten().any(|fd| std::fs::read_link(fd.path()).is_ok_and(|l| wanted.iter().any(|w| l.as_os_str() == w.as_str())))
 }
 
 /// The start time of `pid`, which tells the process apart from a later one given the same id.
@@ -1438,9 +1457,6 @@ mod tests {
         fn exe(&self, _: u32) -> Option<String> {
             None
         }
-        fn comm(&self, _: u32) -> Option<String> {
-            None
-        }
         fn sound_server(&self, _: u32) -> bool {
             self.0.set(self.0.get() + 1);
             true
@@ -1484,26 +1500,49 @@ mod tests {
         assert_eq!(asked.0.get(), 6, "a socket that starts listening clears the answers");
     }
 
+    /// The inode of the socket `fd` refers to.
+    fn socket_inode(fd: &impl std::os::fd::AsRawFd) -> u64 {
+        use std::os::unix::fs::MetadataExt;
+        std::fs::metadata(format!("/proc/self/fd/{}", fd.as_raw_fd())).unwrap().ino()
+    }
+
     #[test]
     fn the_process_that_listens_at_a_socket_holds_it() {
         let me = std::process::id();
         let path = std::env::temp_dir().join(format!("studiocraft-app-audio-{me}-listen"));
         let _ = std::fs::remove_file(&path);
         let listener = std::os::unix::net::UnixListener::bind(&path).unwrap();
-        assert!(holds_listener(me, &path));
-        assert!(!holds_listener(me, &path.with_extension("other")));
-        assert!(!holds_listener(u32::MAX, &path));
+        let inodes = bound_listeners(std::slice::from_ref(&path));
+        assert_eq!(inodes, [socket_inode(&listener)]);
+        assert!(holds_any(me, &inodes));
+        assert!(bound_listeners(&[path.with_extension("other")]).is_empty());
+        assert!(!holds_any(u32::MAX, &inodes));
+        assert!(!holds_any(me, &[]));
         drop(listener);
         let _ = std::fs::remove_file(&path);
     }
 
     #[test]
-    fn this_process_is_not_the_sound_server_and_has_a_command_name() {
+    fn only_the_socket_the_path_leads_to_now_is_the_servers() {
+        let me = std::process::id();
+        let path = std::env::temp_dir().join(format!("studiocraft-app-audio-{me}-rebound"));
+        let _ = std::fs::remove_file(&path);
+        let first = std::os::unix::net::UnixListener::bind(&path).unwrap();
+        // The file is removed and another socket is bound at the same path; the first socket still
+        // listens and the system's socket table names it by the same path.
+        std::fs::remove_file(&path).unwrap();
+        assert!(bound_listeners(std::slice::from_ref(&path)).is_empty(), "a socket whose file is gone");
+        let second = std::os::unix::net::UnixListener::bind(&path).unwrap();
+        assert_eq!(bound_listeners(std::slice::from_ref(&path)), [socket_inode(&second)]);
+        drop((first, second));
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn this_process_is_not_the_sound_server() {
         let me = std::process::id();
         assert!(!ProcFs.sound_server(me));
         assert!(!ProcFs.sound_server(u32::MAX));
-        assert!(ProcFs.comm(me).is_some_and(|c| !c.is_empty() && !c.ends_with('\n')));
-        assert_eq!(ProcFs.comm(u32::MAX), None);
         assert!(machine_names().iter().all(|n| !n.is_empty() && n.trim() == n), "names are trimmed and not empty");
     }
 

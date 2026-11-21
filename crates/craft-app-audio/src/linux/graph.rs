@@ -109,14 +109,12 @@ pub(super) trait Procs {
     fn parent(&self, pid: u32) -> Option<u32>;
     /// The full path of the program file `pid` runs, when the system shows it.
     fn exe(&self, pid: u32) -> Option<String>;
-    /// The command name the system keeps for `pid`, used when its program file is not shown.
-    fn comm(&self, pid: u32) -> Option<String>;
     /// Whether `pid` is the sound server that forwards PulseAudio clients' streams: the process
-    /// that holds the socket listening at the user's PulseAudio address, or a process that root
-    /// runs whose program file is named `pipewire` or `pipewire-pulse`.
+    /// that holds the listening socket the user's PulseAudio address leads to now, or a process
+    /// that root runs whose program file is named `pipewire` or `pipewire-pulse`.
     fn sound_server(&self, pid: u32) -> bool;
-    /// The inodes of the sockets listening at the user's PulseAudio addresses. When they change,
-    /// [`Procs::sound_server`] may answer differently.
+    /// The inodes of the listening sockets the user's PulseAudio addresses lead to now. When they
+    /// change, [`Procs::sound_server`] may answer differently.
     fn server_sockets(&self) -> Vec<u64> {
         Vec::new()
     }
@@ -134,18 +132,120 @@ pub(super) fn parse_stat(text: &str) -> Option<(u32, u64)> {
     Some((parent, start))
 }
 
-/// The `__SO_ACCEPTCON` flag of `/proc/net/unix`: the socket listens for connections.
-const LISTENING: u32 = 0x0001_0000;
+/// A listening Unix socket bound to a file: the socket's inode, and the device and inode of the
+/// file, as the kernel's socket diagnostics report them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct Listener {
+    pub socket: u64,
+    pub dev: u32,
+    pub ino: u32,
+}
 
-/// The inode of the socket that listens at `path`, from the text of `/proc/net/unix`
-/// (columns `Num RefCount Protocol Flags Type St Inode Path`, flags in hexadecimal).
-pub(super) fn listening_inode(table: &str, path: &str) -> Option<u64> {
-    table.lines().skip(1).find_map(|line| {
-        let fields: Vec<&str> = line.split_whitespace().collect();
-        let flags = u32::from_str_radix(fields.get(3)?, 16).ok()?;
-        let at = fields.get(7..)?.join(" ");
-        (flags & LISTENING != 0 && at == path).then(|| fields.get(6)?.parse().ok()).flatten()
-    })
+/// `SOCK_DIAG_BY_FAMILY`, the message type of a socket diagnostics request and its replies.
+const SOCK_DIAG_BY_FAMILY: u16 = 20;
+/// `NLMSG_ERROR` and `NLMSG_DONE`: a failed request, and the end of a listing.
+const NLMSG_ERROR: u16 = 2;
+const NLMSG_DONE: u16 = 3;
+/// `NLM_F_REQUEST | NLM_F_DUMP`.
+const DUMP_REQUEST: u16 = 0x0001 | 0x0300;
+/// `AF_UNIX`.
+const AF_UNIX: u8 = 1;
+/// `1 << TCP_LISTEN`: listening sockets only.
+const LISTEN_STATES: u32 = 1 << 10;
+/// `UDIAG_SHOW_VFS`: the device and inode of the file a socket is bound to.
+const SHOW_VFS: u32 = 0x2;
+/// `UNIX_DIAG_VFS`, the attribute that holds them.
+const UNIX_DIAG_VFS: u16 = 1;
+/// The sizes of `struct nlmsghdr`, `struct unix_diag_msg` and `struct rtattr`.
+const NLMSG_HEADER: usize = 16;
+const DIAG_MSG: usize = 16;
+const RTA_HEADER: usize = 4;
+
+/// The request for every listening Unix socket with the file it is bound to: a `struct nlmsghdr`
+/// followed by a `struct unix_diag_req` (`linux/sock_diag.h`, `linux/unix_diag.h`).
+pub(super) fn diag_request() -> [u8; 40] {
+    let mut req = [0u8; 40];
+    req[0..4].copy_from_slice(&40u32.to_ne_bytes());
+    req[4..6].copy_from_slice(&SOCK_DIAG_BY_FAMILY.to_ne_bytes());
+    req[6..8].copy_from_slice(&DUMP_REQUEST.to_ne_bytes());
+    req[8..12].copy_from_slice(&1u32.to_ne_bytes());
+    req[16] = AF_UNIX;
+    req[20..24].copy_from_slice(&LISTEN_STATES.to_ne_bytes());
+    req[28..32].copy_from_slice(&SHOW_VFS.to_ne_bytes());
+    req
+}
+
+/// What one received part of a socket diagnostics listing says.
+#[derive(Debug, PartialEq, Eq)]
+pub(super) enum Diag {
+    /// More parts follow.
+    More,
+    /// The listing is complete.
+    Done,
+    /// The kernel refused the request, or the part could not be read.
+    Failed,
+}
+
+fn u16_at(buf: &[u8], at: usize) -> Option<u16> {
+    Some(u16::from_ne_bytes(buf.get(at..at + 2)?.try_into().ok()?))
+}
+
+fn u32_at(buf: &[u8], at: usize) -> Option<u32> {
+    Some(u32::from_ne_bytes(buf.get(at..at + 4)?.try_into().ok()?))
+}
+
+/// Adds the bound listening sockets in one received part of a socket diagnostics listing to
+/// `found`. A socket that is not bound to a file is skipped.
+pub(super) fn parse_diag(buf: &[u8], found: &mut Vec<Listener>) -> Diag {
+    let mut at = 0;
+    while at < buf.len() {
+        let (Some(len), Some(kind)) = (u32_at(buf, at), u16_at(buf, at + 4)) else { return Diag::Failed };
+        let Ok(len) = usize::try_from(len) else { return Diag::Failed };
+        if len < NLMSG_HEADER || at + len > buf.len() {
+            return Diag::Failed;
+        }
+        match kind {
+            NLMSG_DONE => return Diag::Done,
+            NLMSG_ERROR => return Diag::Failed,
+            SOCK_DIAG_BY_FAMILY => {
+                let msg = &buf[at + NLMSG_HEADER..at + len];
+                let Some(socket) = u32_at(msg, 4) else { return Diag::Failed };
+                let mut a = DIAG_MSG;
+                while a + RTA_HEADER <= msg.len() {
+                    let (Some(rta_len), Some(rta_kind)) = (u16_at(msg, a), u16_at(msg, a + 2)) else { break };
+                    let rta_len = usize::from(rta_len);
+                    if rta_len < RTA_HEADER || a + rta_len > msg.len() {
+                        break;
+                    }
+                    if rta_kind == UNIX_DIAG_VFS
+                        && let (Some(ino), Some(dev)) = (u32_at(msg, a + RTA_HEADER), u32_at(msg, a + RTA_HEADER + 4))
+                    {
+                        found.push(Listener { socket: u64::from(socket), dev, ino });
+                    }
+                    a += rta_len.next_multiple_of(4);
+                }
+            }
+            _ => {}
+        }
+        at += len.next_multiple_of(4);
+    }
+    Diag::More
+}
+
+/// The device number in the kernel's own encoding (major in the top 12 bits, minor in the low
+/// 20), which the socket diagnostics report, from the encoding `stat` reports.
+pub(super) fn kernel_dev(st_dev: u64) -> u64 {
+    let major = ((st_dev & 0x0000_0000_000f_ff00) >> 8) | ((st_dev & 0xffff_f000_0000_0000) >> 32);
+    let minor = (st_dev & 0xff) | ((st_dev & 0x0000_0fff_fff0_0000) >> 12);
+    (major << 20) | minor
+}
+
+/// The listening socket bound to the file with device `st_dev` and inode `st_ino`, as `stat`
+/// reports them. The diagnostics hold the low 32 bits of the inode.
+pub(super) fn bound_to(listeners: &[Listener], st_dev: u64, st_ino: u64) -> Option<u64> {
+    let dev = kernel_dev(st_dev);
+    let ino = st_ino & u64::from(u32::MAX);
+    listeners.iter().find(|l| u64::from(l.dev) == dev && u64::from(l.ino) == ino).map(|l| l.socket)
 }
 
 /// The file name of a program path, or of a program name.
@@ -254,15 +354,15 @@ fn inside(procs: &dyn Procs, pid: u32, targets: &BTreeMap<u32, String>) -> Optio
 }
 
 /// The applications the playback streams belong to, and the tree each one's capture takes. An
-/// application is named by its process's program file, or else by the command name the system
-/// keeps for it, never by a name the stream reports; a stream with neither is left out.
-/// `previous` holds the trees the last list chose.
+/// application is named by its process's program file, never by a name the stream reports or by
+/// the command name a process sets for itself; a stream whose program file the system does not
+/// show is left out. `previous` holds the trees the last list chose.
 pub(super) fn apps(nodes: &BTreeMap<u32, StreamNode>, procs: &dyn Procs, previous: &BTreeMap<Group, u32>) -> (Vec<AppInfo>, BTreeMap<Group, u32>) {
     // Each stream's application, path and capture target.
     let mut rows: Vec<(Group, AppKey, String, String, u32, &StreamNode)> = Vec::new();
     for n in nodes.values() {
-        let path = procs.exe(n.pid).unwrap_or_default();
-        let Some(name) = (!path.is_empty()).then(|| file_name(&path).to_owned()).or_else(|| procs.comm(n.pid)) else { continue };
+        let Some(path) = procs.exe(n.pid).filter(|p| !p.is_empty()) else { continue };
+        let name = file_name(&path).to_owned();
         // `AppKey` reads a `\` as a folder separator, so a Linux file name with one gets no key.
         if file_name(&name).contains('\\') {
             continue;
@@ -313,23 +413,17 @@ pub(super) fn apps(nodes: &BTreeMap<u32, StreamNode>, procs: &dyn Procs, previou
 mod tests {
     use super::*;
 
-    /// A process table: each process's parent and program path, command names, and the processes
-    /// that run the sound server.
+    /// A process table: each process's parent and program path, and the processes that run the
+    /// sound server.
     #[derive(Default)]
     struct Table {
         procs: BTreeMap<u32, (Option<u32>, &'static str)>,
-        comms: BTreeMap<u32, &'static str>,
         servers: BTreeSet<u32>,
     }
 
     impl Table {
         fn with(mut self, pid: u32, parent: Option<u32>, exe: &'static str) -> Table {
             self.procs.insert(pid, (parent, exe));
-            self
-        }
-
-        fn comm(mut self, pid: u32, comm: &'static str) -> Table {
-            self.comms.insert(pid, comm);
             self
         }
 
@@ -346,10 +440,6 @@ mod tests {
 
         fn exe(&self, pid: u32) -> Option<String> {
             self.procs.get(&pid).map(|(_, e)| (*e).to_owned()).filter(|e| !e.is_empty())
-        }
-
-        fn comm(&self, pid: u32) -> Option<String> {
-            self.comms.get(&pid).map(|c| (*c).to_owned())
         }
 
         fn sound_server(&self, pid: u32) -> bool {
@@ -394,13 +484,14 @@ mod tests {
     }
 
     #[test]
-    fn an_application_is_named_by_its_program_file_or_command() {
-        let t = Table::default().with(10, Some(1), "/usr/bin/player").with(11, Some(1), "").comm(11, "worker").with(12, Some(1), "");
+    fn an_application_is_named_by_its_program_file_only() {
+        let t = Table::default().with(10, Some(1), "/usr/bin/player").with(11, Some(1), "").with(12, Some(1), "");
         let t = t.with(13, Some(1), "/opt/foo\\bar");
         let nodes = BTreeMap::from([(100, node(10, true)), (101, node(11, true)), (102, node(12, true)), (103, node(13, true))]);
         let (list, _) = apps(&nodes, &t, &BTreeMap::new());
         let names: Vec<&str> = list.iter().map(|a| a.name.as_str()).collect();
-        assert_eq!(names, ["player", "worker"], "a process with neither, or with a backslash in its name, is left out");
+        assert_eq!(names, ["player"], "a process whose program file cannot be read, or with a backslash in its name, is left out");
+        assert_eq!(list[0].pids, [10], "a process that names itself after a listed program is not added to it");
     }
 
     #[test]
@@ -425,19 +516,79 @@ mod tests {
         assert_eq!(port(None, Some("12"), None, None), None);
     }
 
+    /// One reply message for a listening socket with inode `socket`, and the file it is bound to
+    /// when `vfs` holds its inode and device.
+    fn diag_msg(socket: u32, vfs: Option<(u32, u32)>) -> Vec<u8> {
+        let mut body = vec![AF_UNIX, 1, 10, 0];
+        body.extend_from_slice(&socket.to_ne_bytes());
+        body.extend_from_slice(&[0; 8]);
+        // An attribute the reader skips: UNIX_DIAG_NAME with a 3-byte name, padded to 4.
+        body.extend_from_slice(&7u16.to_ne_bytes());
+        body.extend_from_slice(&0u16.to_ne_bytes());
+        body.extend_from_slice(b"abc\0");
+        if let Some((ino, dev)) = vfs {
+            body.extend_from_slice(&12u16.to_ne_bytes());
+            body.extend_from_slice(&UNIX_DIAG_VFS.to_ne_bytes());
+            body.extend_from_slice(&ino.to_ne_bytes());
+            body.extend_from_slice(&dev.to_ne_bytes());
+        }
+        header(SOCK_DIAG_BY_FAMILY, body)
+    }
+
+    fn header(kind: u16, body: Vec<u8>) -> Vec<u8> {
+        let len = u32::try_from(NLMSG_HEADER + body.len()).unwrap();
+        let mut msg = len.to_ne_bytes().to_vec();
+        msg.extend_from_slice(&kind.to_ne_bytes());
+        msg.extend_from_slice(&[0; 10]);
+        msg.extend(body);
+        msg
+    }
+
     #[test]
-    fn the_listening_socket_is_found_by_its_path() {
-        let table = "Num       RefCount Protocol Flags    Type St Inode Path\n\
-                     0000000000000000: 00000003 00000000 00000000 0001 03 51234 /run/user/1000/pulse/native\n\
-                     0000000000000000: 00000002 00000000 00010000 0001 01 41000 /run/user/1000/pulse/native\n\
-                     0000000000000000: 00000002 00000000 00010000 0001 01 41001 /run/user/1000/pipewire-0\n\
-                     0000000000000000: 00000002 00000000 00010000 0001 01 41002 /tmp/a socket\n\
-                     0000000000000000: 00000002 00000000 00000000 0001 03 41003\n";
-        assert_eq!(listening_inode(table, "/run/user/1000/pulse/native"), Some(41000), "the connected end is skipped");
-        assert_eq!(listening_inode(table, "/tmp/a socket"), Some(41002));
-        assert_eq!(listening_inode(table, "/run/user/1000/other"), None);
-        assert_eq!(listening_inode("", "/x"), None);
-        assert_eq!(listening_inode("header\nnot a table line\n", "/x"), None);
+    fn the_request_asks_for_listening_unix_sockets_with_their_files() {
+        let req = diag_request();
+        assert_eq!(u32_at(&req, 0), Some(40));
+        assert_eq!(u16_at(&req, 4), Some(SOCK_DIAG_BY_FAMILY));
+        assert_eq!(u16_at(&req, 6), Some(0x0301));
+        assert_eq!(req[16], AF_UNIX);
+        assert_eq!(u32_at(&req, 20), Some(1 << 10));
+        assert_eq!(u32_at(&req, 28), Some(SHOW_VFS));
+    }
+
+    #[test]
+    fn the_reply_lists_sockets_bound_to_files() {
+        let mut buf = diag_msg(41000, Some((900, 45)));
+        buf.extend(diag_msg(41001, None));
+        buf.extend(diag_msg(41002, Some((901, 46))));
+        let mut found = Vec::new();
+        assert_eq!(parse_diag(&buf, &mut found), Diag::More);
+        assert_eq!(
+            found,
+            [Listener { socket: 41000, dev: 45, ino: 900 }, Listener { socket: 41002, dev: 46, ino: 901 }],
+            "a socket with no file is skipped"
+        );
+        assert_eq!(parse_diag(&header(NLMSG_DONE, vec![0; 4]), &mut found), Diag::Done);
+        assert_eq!(parse_diag(&header(NLMSG_ERROR, vec![0; 20]), &mut found), Diag::Failed);
+        assert_eq!(parse_diag(&buf[..buf.len() - 1], &mut Vec::new()), Diag::Failed, "a cut message");
+        assert_eq!(parse_diag(&[0; 3], &mut Vec::new()), Diag::Failed);
+        assert_eq!(parse_diag(&[], &mut Vec::new()), Diag::More);
+        let mut short = header(SOCK_DIAG_BY_FAMILY, vec![0; 4]);
+        short[0] = 8;
+        assert_eq!(parse_diag(&short, &mut Vec::new()), Diag::Failed, "a length shorter than the header");
+    }
+
+    #[test]
+    fn a_socket_is_matched_to_its_file_by_device_and_inode() {
+        // Device 8:1 reads as 0x801 from `stat` and as 8 << 20 | 1 in the kernel's encoding;
+        // 259:65537 has a major above 255 and a minor above 255.
+        assert_eq!(kernel_dev(0x801), (8 << 20) | 1);
+        assert_eq!(kernel_dev(0x1001_0301), (259 << 20) | 65537);
+        assert_eq!(kernel_dev(45), 45);
+        let listeners = [Listener { socket: 7, dev: 45, ino: 900 }, Listener { socket: 8, dev: 46, ino: 900 }];
+        assert_eq!(bound_to(&listeners, 46, 900), Some(8));
+        assert_eq!(bound_to(&listeners, 45, (1 << 32) | 900), Some(7), "the diagnostics hold the low 32 bits");
+        assert_eq!(bound_to(&listeners, 45, 901), None);
+        assert_eq!(bound_to(&listeners, 47, 900), None);
     }
 
     #[test]

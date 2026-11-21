@@ -47,14 +47,18 @@ On Linux each playback stream is attributed to the process the server read from 
 client that owns it (`pipewire.sec.pid` on the client object), which the client cannot set. A
 stream's own `application.process.id` is used only when its client is the sound server that
 forwards the streams of applications that use the PulseAudio interface: the process that holds
-the socket listening at a local address in `PULSE_SERVER` or at `native` in `PULSE_RUNTIME_PATH`
-or `$XDG_RUNTIME_DIR/pulse` (found
-through `/proc/net/unix` and `/proc/<pid>/fd`), or a process that root runs (the owner of
-`/proc/<pid>`) whose program file is named `pipewire` or `pipewire-pulse`. The sound server does not check those claims, so such a
+the listening socket that the socket file at a local address in `PULSE_SERVER`, or at `native` in
+`PULSE_RUNTIME_PATH` or `$XDG_RUNTIME_DIR/pulse`, leads to now (the socket whose bound file has
+that file's device and inode in the kernel's socket diagnostics, held in `/proc/<pid>/fd`), or a
+process that root runs (the owner of
+`/proc/<pid>`) whose program file is named `pipewire` or `pipewire-pulse`. A socket that still
+listens after its file was removed, or after another socket was bound at the same path, is not the
+sound server's. The sound server does not check those claims, so such a
 stream can name another process. A stream whose client has no
-`pipewire.sec.pid` is not listed. The key is the file name of `/proc/<pid>/exe`, or else the
-command name in `/proc/<pid>/comm`, and the path is the program file's path. Names the stream
-reports are not used. A process that shows neither name, or whose name holds a `|` (the
+`pipewire.sec.pid` is not listed. The key is the file name of `/proc/<pid>/exe`, and the path is
+the program file's path. Names the stream reports, and the command name a process sets for itself
+in `/proc/<pid>/comm`, are not used. A process whose program file is not shown (normally another
+user's process), or whose name holds a `|` (the
 separator in a saved choice) or a `\` (read as a folder separator in a saved choice), is not listed. The capture target and `within` follow the parent chain in `/proc/<pid>/stat`, as on
 Windows; the target is the topmost process in the chain that runs the same program file, path
 included. Without meters, separate instances are chosen by their streams: the tree taken last time

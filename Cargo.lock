@@ -1431,6 +1431,7 @@ version = "0.1.0-alpha.1"
 dependencies = [
  "arc-swap",
  "pipewire",
+ "rustix 1.1.6",
  "serde",
  "serde_json",
  "sysinfo",

@@ -20,9 +20,11 @@ thiserror = { workspace = true }
 wasapi = { workspace = true }
 sysinfo = { workspace = true }
 
-# Playback streams, capture streams and links through the PipeWire server.
+# Playback streams, capture streams and links through the PipeWire server; which process holds the
+# PulseAudio socket, through the kernel's socket diagnostics.
 [target.'cfg(target_os = "linux")'.dependencies]
 pipewire = { workspace = true }
+rustix = { workspace = true }
 
 [dev-dependencies]
 serde_json = { workspace = true }
