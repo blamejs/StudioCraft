@@ -167,7 +167,10 @@ impl Plugin for DisplayCapture {
     }
     fn schema(&self) -> SettingsSchema {
         let mut options = vec![ChoiceOption::new("", if PICKER { CHOOSE_IN_PICKER } else { "Primary display" })];
-        options.extend(display::displays().into_iter().map(|d| ChoiceOption::new(d.id, format!("{}: {} x {}", d.name, d.width, d.height))));
+        // Where the picker chooses the display, the listed displays are not offered.
+        if !PICKER {
+            options.extend(display::displays().into_iter().map(|d| ChoiceOption::new(d.id, format!("{}: {} x {}", d.name, d.width, d.height))));
+        }
         SettingsSchema::new(vec![Field::new("display", "Display", FieldKind::Choice { options }, ""), rate_field()])
     }
 }
