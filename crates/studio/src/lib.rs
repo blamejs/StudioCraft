@@ -12,6 +12,7 @@ mod captions;
 pub mod capture;
 mod events;
 pub mod files;
+mod golive;
 mod monitor;
 mod outputs;
 mod pause;
@@ -330,6 +331,9 @@ pub struct Studio {
     /// showed a picture with those pictures' sizes, when [`Studio::place_fit_later`] last looked.
     fit_seen: Option<(u64, usize, u64)>,
     outputs: outputs::Outputs,
+    /// What the go-live check keeps between calls: how each destination did on earlier streams,
+    /// and the free space query.
+    golive: golive::GoLive,
     notices: Vec<Notice>,
     /// Where the scopes' copy of the program goes, and the largest size it is drawn at.
     scope_feed: Option<ScopeFeed>,
@@ -437,6 +441,7 @@ impl Studio {
             fit_layout: None,
             fit_seen: None,
             outputs: outputs::Outputs::default(),
+            golive: golive::GoLive::default(),
             notices: Vec::new(),
             scope_feed: None,
             monitor: monitor::Monitor::new(Arc::new(studiocraft_platform::audio::SystemSink)),
@@ -516,6 +521,7 @@ impl Studio {
                 RuntimeAction::StartStreaming => self.start_output(OutputKind::Streaming)?,
                 RuntimeAction::StopStreaming => self.stop_output(OutputKind::Streaming),
                 RuntimeAction::ToggleStreaming => self.toggle_output(OutputKind::Streaming)?,
+                RuntimeAction::GoLiveCheck => result = self.golive_json(),
                 RuntimeAction::StartReplay => self.start_output(OutputKind::Replay)?,
                 RuntimeAction::StopReplay => self.stop_output(OutputKind::Replay),
                 RuntimeAction::ToggleReplay => self.toggle_output(OutputKind::Replay)?,
@@ -630,6 +636,8 @@ impl Studio {
         }
         self.monitor.poll(&self.mixer, &mut self.notices);
         self.finish_hardware_tests();
+        // Before the poll, which drops a stream that failed.
+        self.note_destinations();
         let events = self.outputs.poll();
         // After the poll, which sees the last lost connections of a stream that failed.
         self.note_reconnects();

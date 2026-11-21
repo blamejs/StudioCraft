@@ -78,6 +78,8 @@ pub enum RuntimeAction {
     StartStreaming,
     StopStreaming,
     ToggleStreaming,
+    /// List what would stop the stream from starting or spoil it.
+    GoLiveCheck,
     StartReplay,
     StopReplay,
     ToggleReplay,
@@ -345,6 +347,10 @@ pub enum Command {
     StreamStop {},
     #[serde(rename = "stream.toggle")]
     StreamToggle {},
+    /// What would stop the stream from starting or spoil it: each item with its state and the
+    /// command that fixes a problem.
+    #[serde(rename = "golive.check")]
+    GoLiveCheck {},
     #[serde(rename = "replay.start")]
     ReplayStart {},
     #[serde(rename = "replay.stop")]
@@ -549,6 +555,7 @@ impl Command {
             Command::StreamStart {} => "stream.start",
             Command::StreamStop {} => "stream.stop",
             Command::StreamToggle {} => "stream.toggle",
+            Command::GoLiveCheck {} => "golive.check",
             Command::ReplayStart {} => "replay.start",
             Command::ReplayStop {} => "replay.stop",
             Command::ReplayToggle {} => "replay.toggle",
@@ -672,6 +679,7 @@ const SPECS: &[CommandSpec] = &[
     spec("stream.start", "Start Streaming", "", Undo::NotUndoable),
     spec("stream.stop", "Stop Streaming", "", Undo::NotUndoable),
     spec("stream.toggle", "Start or Stop Streaming", "", Undo::NotUndoable),
+    spec("golive.check", "Go-Live Check", "", Undo::NotUndoable),
     spec("replay.start", "Start Replay Buffer", "", Undo::NotUndoable),
     spec("replay.stop", "Stop Replay Buffer", "", Undo::NotUndoable),
     spec("replay.toggle", "Start or Stop Replay Buffer", "", Undo::NotUndoable),
@@ -727,6 +735,7 @@ mod tests {
             Command::ItemMove { scene: None, item: ItemRef::Id(ItemId(3)), to: Move::To(2) },
             Command::StudioToggle {},
             Command::RecordToggle {},
+            Command::GoLiveCheck {},
             Command::RecordingsList {},
             Command::Exit {},
             Command::AppLinks { link: Some("github".into()) },

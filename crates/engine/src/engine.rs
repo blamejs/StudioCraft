@@ -324,6 +324,7 @@ impl Engine {
             Command::StreamStart {} => Ok(Outcome::runtime(RuntimeAction::StartStreaming)),
             Command::StreamStop {} => Ok(Outcome::runtime(RuntimeAction::StopStreaming)),
             Command::StreamToggle {} => Ok(Outcome::runtime(RuntimeAction::ToggleStreaming)),
+            Command::GoLiveCheck {} => Ok(Outcome::runtime(RuntimeAction::GoLiveCheck)),
             Command::ReplayStart {} => Ok(Outcome::runtime(RuntimeAction::StartReplay)),
             Command::ReplayStop {} => Ok(Outcome::runtime(RuntimeAction::StopReplay)),
             Command::ReplayToggle {} => Ok(Outcome::runtime(RuntimeAction::ToggleReplay)),
