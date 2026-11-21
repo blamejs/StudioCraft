@@ -89,6 +89,12 @@ impl Target {
         if query { format!("{base}?<redacted>") } else { base.to_string() }
     }
 
+    /// Whether the server and the key give an address the stream can publish to, as a start
+    /// checks it.
+    pub fn check(&self) -> Result<(), String> {
+        self.config().map(|_| ()).map_err(|e| e.to_string())
+    }
+
     /// What to publish to: the server and the key, or without a key, the server's address up to
     /// its last part and that part as the key, as when the key is written at the end of the
     /// address.

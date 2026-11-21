@@ -189,6 +189,75 @@ fn streaming_needs_a_server() {
     assert!(e.to_string().contains("server"), "{e}");
 }
 
+/// The go-live check's item `id` in the result `r`.
+fn golive_item<'a>(r: &'a serde_json::Value, id: &str) -> &'a serde_json::Value {
+    r["items"].as_array().and_then(|a| a.iter().find(|i| i["id"] == id)).unwrap_or_else(|| panic!("no item {id} in {r}"))
+}
+
+#[test]
+fn the_golive_check_lists_each_item_and_changes_nothing() {
+    use studiocraft_model::{AudioState, Destination, KeyRef, SourceConfig};
+    let mut c = SceneCollection::new("Test", "Scene");
+    let mut ids = Vec::new();
+    for (kind, name) in [("no_such_plugin", "Old plug-in"), ("captions", "Captions")] {
+        let id = SourceId(c.alloc_id());
+        ids.push(id);
+        c.sources.push(SourceConfig {
+            id,
+            kind: kind.into(),
+            kind_version: 1,
+            name: name.into(),
+            settings: Settings::new(),
+            filters: vec![],
+            audio: AudioState::default(),
+        });
+    }
+    let mut p = Profile::default();
+    p.output.folder = std::env::temp_dir().display().to_string();
+    let mut s = studio_with(Some(noop_gpu()), c, p);
+    // A wait with no time limit, so the check takes the reader's answer.
+    s.golive.set_space_reader(Arc::new(|_p: &Path| Ok(golive::MIN_FREE_BYTES * 2)), Duration::MAX);
+    let (rev, dirty) = (s.engine().revision(), s.engine().is_dirty());
+
+    let r = s.run("golive.check", &json!({})).unwrap().0;
+    assert_eq!(r["ready"], json!(false));
+    let d = golive_item(&r, "destinations");
+    assert_eq!((&d["state"], &d["fix"], &d["text"]), (&json!("problem"), &json!("view.streaming"), &json!("No stream destination is turned on")));
+    assert_eq!(golive_item(&r, "encoder")["state"], json!("pass"), "{r}");
+    let space = golive_item(&r, "recording_space");
+    assert_eq!((&space["state"], &space["free_bytes"]), (&json!("pass"), &json!(golive::MIN_FREE_BYTES * 2)));
+    let old = golive_item(&r, &format!("source:{}", ids[0].0));
+    assert_eq!((&old["state"], &old["fix"], &old["source"]), (&json!("problem"), &json!(null), &json!(ids[0].0)));
+    assert_eq!(old["args"]["kind"], json!("no_such_plugin"));
+    let captions = golive_item(&r, "captions");
+    assert_eq!((&captions["state"], &captions["fix"]), (&json!("problem"), &json!("captions.toggle")), "a Live Captions source and captions off");
+    let problems = r["items"].as_array().map_or(0, |a| a.iter().filter(|i| i["state"] == "problem").count());
+    assert!(problems >= 3, "{r}");
+    assert_eq!((r["problems"].as_u64(), r["more_sources"].as_u64()), (Some(problems as u64), Some(0)), "{r}");
+
+    // A destination whose session key is not held is a problem until the key is held, and then
+    // unknown: it has not connected yet.
+    let mut p = s.profile().clone();
+    p.stream.destinations = vec![Destination {
+        id: "main".into(),
+        server: "rtmp://example.invalid/live".into(),
+        key: KeyRef::Held("k".into()),
+        ..Destination::default()
+    }];
+    s.set_profile(p).unwrap();
+    let r = s.run("golive.check", &json!({})).unwrap().0;
+    assert_eq!(golive_item(&r, "destination:main")["state"], json!("problem"));
+    s.hold_stream_key("k", "secret");
+    let r = s.run("golive.check", &json!({})).unwrap().0;
+    let d = golive_item(&r, "destination:main");
+    assert_eq!((&d["state"], &d["fix"], &d["destination"]), (&json!("unknown"), &json!(null), &json!("main")));
+    assert!(!r.to_string().contains("secret"), "the key is never in the result");
+
+    assert_eq!((s.engine().revision(), s.engine().is_dirty()), (rev, dirty), "the check changes no collection");
+    assert!(s.engine().undo_label().is_none(), "and adds no undo step");
+    assert!(s.run("golive.check", &json!({"fix": true})).is_err());
+}
+
 /// A thread that hands over each connection `listener` takes.
 fn connections(listener: std::net::TcpListener) -> std::sync::mpsc::Receiver<std::net::TcpStream> {
     let (tx, rx) = std::sync::mpsc::channel();

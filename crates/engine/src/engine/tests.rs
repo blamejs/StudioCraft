@@ -451,6 +451,7 @@ fn runtime_commands_are_handed_to_the_app() {
         ("stream.start", RuntimeAction::StartStreaming),
         ("stream.stop", RuntimeAction::StopStreaming),
         ("stream.toggle", RuntimeAction::ToggleStreaming),
+        ("golive.check", RuntimeAction::GoLiveCheck),
         ("replay.start", RuntimeAction::StartReplay),
         ("replay.stop", RuntimeAction::StopReplay),
         ("replay.toggle", RuntimeAction::ToggleReplay),
@@ -465,6 +466,7 @@ fn runtime_commands_are_handed_to_the_app() {
         assert_eq!(o.runtime, Some(action), "{id}");
         assert!(!o.changed);
     }
+    assert!(run(&mut e, "golive.check", json!({"items": ["encoder"]})).is_err(), "the check takes no parameters");
     let o = run(&mut e, "audio_tracks.repair", json!({"folder": "D:/Videos"})).unwrap();
     assert_eq!(o.runtime, Some(RuntimeAction::AudioTracksRepair { folder: "D:/Videos".into() }));
     assert!(!o.changed);
