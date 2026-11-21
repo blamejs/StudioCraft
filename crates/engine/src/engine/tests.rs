@@ -503,6 +503,27 @@ fn a_recording_marker_is_handed_to_the_app_with_a_checked_name() {
 }
 
 #[test]
+fn a_session_marker_is_handed_to_the_app_with_a_checked_name() {
+    let mut e = engine();
+    let o = run(&mut e, "marker.add", json!({})).unwrap();
+    assert_eq!(o.runtime, Some(RuntimeAction::MarkerAdd { name: None }));
+    let longest = "é".repeat(crate::engine::MAX_MARKER_NAME_CHARS);
+    let o = run(&mut e, "marker.add", json!({"name": longest})).unwrap();
+    assert_eq!(o.runtime, Some(RuntimeAction::MarkerAdd { name: Some(longest) }));
+    assert!(!o.changed);
+    let too_long = "x".repeat(crate::engine::MAX_MARKER_NAME_CHARS + 1);
+    for bad in
+        [json!({"name": ""}), json!({"name": "   "}), json!({"name": too_long}), json!({"name": "a\rb"}), json!({"name": 3}), json!({"name": null})]
+    {
+        assert!(run(&mut e, "marker.add", bad.clone()).is_err(), "{bad}");
+    }
+    let o = run(&mut e, "marker.list", json!({})).unwrap();
+    assert_eq!(o.runtime, Some(RuntimeAction::MarkerList));
+    assert!(!o.changed);
+    assert!(run(&mut e, "marker.list", json!({"index": 1})).is_err(), "marker.list takes no params");
+}
+
+#[test]
 fn pause_commands_are_handed_to_the_app_with_checked_values() {
     let mut e = engine();
     let rev = e.revision();
