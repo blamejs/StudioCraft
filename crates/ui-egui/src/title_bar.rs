@@ -22,7 +22,7 @@ pub fn command(button: Button, maximized: bool) -> ViewportCommand {
     match button {
         Button::Minimize => ViewportCommand::Minimized(true),
         Button::Maximize => ViewportCommand::Maximized(!maximized),
-        Button::Close => ViewportCommand::Close,
+        _ => ViewportCommand::Close,
     }
 }
 
@@ -32,7 +32,7 @@ fn face(button: Button, maximized: bool) -> (Icon, String) {
         Button::Minimize => (Icon::Minimize, tl!("Minimize").to_string()),
         Button::Maximize if maximized => (Icon::Restore, tl!("Restore").to_string()),
         Button::Maximize => (Icon::Maximize, tl!("Maximize").to_string()),
-        Button::Close => (Icon::Close, tl!("Close").to_string()),
+        _ => (Icon::Close, tl!("Close").to_string()),
     }
 }
 
@@ -57,7 +57,7 @@ fn width(count: usize, spacing: f32) -> f32 {
 /// (`menus` gets the width they may take), then the buttons on the right. The empty part of the
 /// strip moves and maximizes the window. Everything is centered in the strip's height.
 pub fn strip<R>(ui: &mut Ui, layout: &Layout, menus: impl FnOnce(&mut Ui, f32) -> R) -> R {
-    craft_window::title_bar::empty_area(ui, ui.max_rect());
+    empty_area(ui, ui.max_rect());
     ui.allocate_ui_with_layout(ui.available_size(), egui::Layout::left_to_right(egui::Align::Center), |ui| {
         buttons(ui, &layout.left);
         let spacing = ui.spacing().item_spacing.x;
@@ -70,6 +70,34 @@ pub fn strip<R>(ui: &mut Ui, layout: &Layout, menus: impl FnOnce(&mut Ui, f32) -
         r
     })
     .inner
+}
+
+// port: P5 (title bar and window chrome) replaces this with the framework's title bar, which
+// moves the window from the strip's empty area.
+
+/// Makes the empty part of `rect` move the window on a drag and maximize or restore it on a
+/// double-click. Call it before drawing the strip's controls: they sit on top and take their own
+/// clicks. The area senses clicks only, so a drag is a press on the empty area that has stopped
+/// being a click.
+fn empty_area(ui: &mut Ui, rect: Rect) {
+    let resp = ui.interact(rect, ui.scope_id().with("title_bar_empty"), Sense::CLICK);
+    let armed = resp.id.with("drag_press");
+    if ui.input(|i| i.viewport().fullscreen).unwrap_or(false) {
+        ui.data_mut(|d| d.remove::<Option<f64>>(armed));
+        return;
+    }
+    if resp.double_clicked() {
+        let maximized = ui.input(|i| i.viewport().maximized).unwrap_or(false);
+        ui.ctx().send_viewport_cmd(ViewportCommand::Maximized(!maximized));
+    }
+    let press = ui.input(|i| i.pointer.press_start_time());
+    if resp.is_pointer_button_down_on() {
+        ui.data_mut(|d| d.insert_temp(armed, press));
+    }
+    if press.is_some() && ui.input(|i| i.pointer.is_decidedly_dragging()) && ui.data(|d| d.get_temp::<Option<f64>>(armed)) == Some(press) {
+        ui.data_mut(|d| d.remove::<Option<f64>>(armed));
+        ui.ctx().send_viewport_cmd(ViewportCommand::StartDrag);
+    }
 }
 
 /// The window's edges and corners that resize it: each area, the direction it resizes in and its

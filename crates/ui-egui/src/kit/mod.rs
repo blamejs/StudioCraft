@@ -3,5 +3,6 @@
 
 pub mod onair;
 pub mod panel_header;
+pub mod resize_handle;
 pub mod segmented;
 pub mod tokens;

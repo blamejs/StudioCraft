@@ -1,10 +1,13 @@
 //! Forms built from a plug-in's [`SettingsSchema`], and the Properties and Filters windows.
 
+// port: P14 (Properties and Filters windows) replaces these egui combo boxes with `Select`.
+#![expect(clippy::disallowed_types, reason = "craft-ui no longer has its combo box; the forms move to `Select`")]
+
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
-use egui::{Color32, Ui};
+use egui::{Color32, ComboBox, Ui};
 use serde_json::{Value, json};
 use studiocraft_media::queue::Latest;
 use studiocraft_model::collection::MAX_SYNC_OFFSET_MS;
@@ -131,7 +134,7 @@ fn form_locked(ui: &mut Ui, id: egui::Id, schema: &SettingsSchema, settings: &mu
                 FieldKind::Choice { options } => {
                     let selected = choice_text(key, &current, options);
                     let mut picked: Option<Value> = None;
-                    craft_ui::ComboBox::from_id_salt((id, key)).selected_text(selected).width(280.0).show_ui(ui, |ui| {
+                    ComboBox::from_id_salt((id, key)).selected_text(selected).width(280.0).show_ui(ui, |ui| {
                         for o in options {
                             if ui.selectable_label(o.value == current, tl!(&o.label)).clicked() {
                                 picked = Some(o.value.clone());
@@ -557,7 +560,7 @@ fn audio_form(ui: &mut Ui, source: SourceId, state: &AudioState) -> Vec<Action> 
         ui.end_row();
         ui.label(tl!("Monitoring")).on_hover_text(tl!("Plays this source on the monitoring device chosen in Settings › Audio"));
         let mut mode = state.monitor;
-        craft_ui::ComboBox::from_id_salt(("props-monitor", source.0)).selected_text(monitor_label(mode)).width(200.0).show_ui(ui, |ui| {
+        ComboBox::from_id_salt(("props-monitor", source.0)).selected_text(monitor_label(mode)).width(200.0).show_ui(ui, |ui| {
             for m in MonitorMode::ALL {
                 ui.selectable_value(&mut mode, m, monitor_label(m));
             }

@@ -8,12 +8,16 @@ fn app() -> StudioApp {
 
 fn frame(app: &mut StudioApp, ctx: &egui::Context, events: Vec<Event>) {
     let raw = RawInput { events, screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1280.0, 800.0))), ..RawInput::default() };
+    app.before_input(ctx);
     let mut out = ctx.run_ui(raw, |ui| app.frame(ui));
     out.textures_delta.clear();
+    // Run what the pass fired (shortcuts, menu rows), as the next frame's input hook does.
+    app.before_input(ctx);
 }
 
 fn frame_at(app: &mut StudioApp, ctx: &egui::Context, size: egui::Vec2) {
     let raw = RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)), ..RawInput::default() };
+    app.before_input(ctx);
     let mut out = ctx.run_ui(raw, |ui| app.frame(ui));
     out.textures_delta.clear();
 }
@@ -61,7 +65,7 @@ fn boots_with_a_default_collection_and_profile() {
 #[test]
 fn frames_draw_in_both_modes() {
     let mut a = app();
-    let ctx = egui::Context::default();
+    let ctx = crate::test_context();
     for _ in 0..3 {
         frame(&mut a, &ctx, vec![]);
     }
@@ -81,7 +85,7 @@ fn frames_draw_in_both_modes() {
 #[test]
 fn view_scopes_opens_the_window_and_its_scope_is_a_command() {
     let mut a = app();
-    let ctx = egui::Context::default();
+    let ctx = crate::test_context();
     assert_eq!(a.hud()["ui"]["scopes"], json!({"open": false, "kind": "waveform", "computed": 0, "dropped": 0, "skipped": 0}));
     assert_eq!(run(&mut a, &ctx, "view.scopes", json!({})), Ok(json!({"on": true})));
     assert!(a.scopes.is_some(), "the scopes thread runs while the window is open");
@@ -108,7 +112,7 @@ fn the_scopes_window_shows_the_picture_the_thread_computed() {
     use studiocraft_media::pool::Pool;
     use studiocraft_media::video::{FramePool, PixelFormat, VideoFrame};
     let mut a = app();
-    let ctx = egui::Context::default();
+    let ctx = crate::test_context();
     run(&mut a, &ctx, "view.scopes", json!({})).unwrap();
     let pool: Arc<FramePool> = Pool::new(2, VideoFrame::default);
     let mut f = pool.take();
@@ -132,7 +136,7 @@ fn the_menu_strip_is_the_title_bar_when_the_app_draws_the_frame() {
     assert!(!a.draws_title_bar(), "the desktop draws the frame by default");
     a.set_title_bar(Some(craft_window::Layout { left: vec![craft_window::Button::Close], right: vec![craft_window::Button::Minimize] }));
     assert!(a.draws_title_bar());
-    let ctx = egui::Context::default();
+    let ctx = crate::test_context();
     for _ in 0..3 {
         frame(&mut a, &ctx, vec![]);
     }
@@ -145,7 +149,7 @@ fn the_menu_strip_is_the_title_bar_when_the_app_draws_the_frame() {
 #[test]
 fn answer_dialog_presses_the_exit_confirmation_buttons() {
     let mut a = app();
-    let ctx = egui::Context::default();
+    let ctx = crate::test_context();
     a.confirm_exit = true;
     assert!(a.answer_dialog(&ctx, true, Some("x")).is_err_and(|e| e.contains("no `text`")));
     assert!(a.confirming_exit(), "a refused answer leaves the confirmation open");
@@ -209,7 +213,7 @@ fn a_lost_window_device_does_not_start_the_app_again_when_saving_fails() {
     std::fs::write(&blocked, b"not a folder").unwrap();
     let (store, _) = Store::open(Location::Dir(blocked.clone()));
     let mut a = StudioApp::boot(store, None, Vec::new());
-    let ctx = egui::Context::default();
+    let ctx = crate::test_context();
     let gpu = window_gpu(wgpu::DeviceType::DiscreteGpu);
     a.studio.set_gpu(Some(gpu.clone()));
     a.set_window_gpu(Preference::Auto, Vec::new(), true);
@@ -226,7 +230,7 @@ fn a_lost_window_device_does_not_start_the_app_again_when_saving_fails() {
 fn a_device_loss_is_seen_while_the_window_is_hidden() {
     use studiocraft_render::device::Preference;
     let mut a = app();
-    let ctx = egui::Context::default();
+    let ctx = crate::test_context();
     let gpu = window_gpu(wgpu::DeviceType::DiscreteGpu);
     a.studio.set_gpu(Some(gpu.clone()));
     a.set_window_gpu(Preference::Auto, Vec::new(), true);
@@ -257,7 +261,7 @@ fn window_gpu(device_type: wgpu::DeviceType) -> Gpu {
 fn a_lost_window_device_starts_the_app_again_unless_that_would_end_the_same_way() {
     use studiocraft_render::device::Preference;
     use wgpu::DeviceType::{Cpu, DiscreteGpu};
-    let ctx = egui::Context::default();
+    let ctx = crate::test_context();
     let now = crate::hardware::now_secs();
     // (adapter drawn on, preference opened with, earlier losses, may start itself) -> starts again
     for (kind, opened_with, earlier, may, again) in [
@@ -293,7 +297,7 @@ fn a_lost_window_device_starts_the_app_again_unless_that_would_end_the_same_way(
 #[test]
 fn scene_shortcuts_switch_scenes() {
     let mut a = app();
-    let ctx = egui::Context::default();
+    let ctx = crate::test_context();
     run(&mut a, &ctx, "scene.add", json!({"name": "Second"})).unwrap();
     run(&mut a, &ctx, "scene.select", json!({"scene": "Scene"})).unwrap();
     frame(&mut a, &ctx, vec![]);
@@ -308,7 +312,7 @@ fn scene_shortcuts_switch_scenes() {
 #[test]
 fn undo_shortcut_undoes_the_last_change() {
     let mut a = app();
-    let ctx = egui::Context::default();
+    let ctx = crate::test_context();
     run(&mut a, &ctx, "scene.add", json!({"name": "Extra"})).unwrap();
     a.studio.seal_history();
     frame(&mut a, &ctx, vec![]);
@@ -319,7 +323,7 @@ fn undo_shortcut_undoes_the_last_change() {
 #[test]
 fn collections_are_made_switched_renamed_and_removed() {
     let mut a = app();
-    let ctx = egui::Context::default();
+    let ctx = crate::test_context();
     run(&mut a, &ctx, "scene.add", json!({"name": "Only in the first"})).unwrap();
     a.named(Named::NewCollection, "Second").unwrap();
     assert_eq!(a.studio().collection().name, "Second");
@@ -341,7 +345,7 @@ fn a_failed_save_keeps_the_current_collection_open() {
     let dir = temp_dir("save-fails");
     let (store, _) = Store::open(craft_settings::Location::Dir(dir.clone()));
     let mut a = StudioApp::boot(store, None, Vec::new());
-    let ctx = egui::Context::default();
+    let ctx = crate::test_context();
     a.named(Named::NewCollection, "Second").unwrap();
     run(&mut a, &ctx, "collection.switch", json!({"name": DEFAULT_NAME})).unwrap();
     run(&mut a, &ctx, "scene.add", json!({"name": "Unsaved"})).unwrap();
@@ -373,7 +377,7 @@ fn a_failed_profile_save_keeps_the_current_profile_open() {
     let dir = temp_dir("profile-save-fails");
     let (store, _) = Store::open(craft_settings::Location::Dir(dir.clone()));
     let mut a = StudioApp::boot(store, None, Vec::new());
-    let ctx = egui::Context::default();
+    let ctx = crate::test_context();
     a.named(Named::NewProfile, "Second").unwrap();
     run(&mut a, &ctx, "profile.switch", json!({"name": DEFAULT_NAME})).unwrap();
     // A folder where the profile's file goes makes every save of it fail.
@@ -478,7 +482,7 @@ fn importing_a_collection_adds_and_selects_it() {
     studiocraft_studio::files::write_collection_file(&path, &c).unwrap();
 
     let mut a = app();
-    let ctx = egui::Context::default();
+    let ctx = crate::test_context();
     let r = run(&mut a, &ctx, "collection.import", json!({"path": path.to_string_lossy()})).unwrap();
     assert_eq!(r, json!({"name": "Show"}));
     assert_eq!(a.studio().collection().name, "Show");
@@ -503,7 +507,7 @@ fn exporting_writes_a_file_that_reads_back() {
     let dir = temp_dir("export");
     let path = dir.join("out.json");
     let mut a = app();
-    let ctx = egui::Context::default();
+    let ctx = crate::test_context();
     run(&mut a, &ctx, "scene.add", json!({"name": "Exported scene"})).unwrap();
     let r = run(&mut a, &ctx, "collection.export", json!({"path": path.to_string_lossy()})).unwrap();
     assert_eq!(r["path"], json!(path.to_string_lossy()));
@@ -517,7 +521,7 @@ fn exporting_writes_a_file_that_reads_back() {
 #[test]
 fn collection_files_without_a_path_or_dialog_are_errors() {
     let mut a = app();
-    let ctx = egui::Context::default();
+    let ctx = crate::test_context();
     for id in ["collection.import", "collection.export"] {
         let e = run(&mut a, &ctx, id, json!({})).unwrap_err();
         assert!(e.contains("needs `path`"), "{id}: {e}");
@@ -530,7 +534,7 @@ fn collection_files_without_a_path_or_dialog_are_errors() {
 #[test]
 fn profiles_keep_their_own_settings() {
     let mut a = app();
-    let ctx = egui::Context::default();
+    let ctx = crate::test_context();
     a.named(Named::DuplicateProfile, "Stream").unwrap();
     let mut p = a.studio().profile().clone();
     p.stream.primary_mut().server = "rtmp://example.invalid/live".into();
@@ -545,7 +549,7 @@ fn profiles_keep_their_own_settings() {
 #[test]
 fn available_encoders_lists_the_built_in_ones_without_ffmpeg() {
     let mut a = app();
-    let ctx = egui::Context::default();
+    let ctx = crate::test_context();
     let dir = temp_dir("no-ffmpeg");
     let mut p = a.studio().profile().clone();
     p.output.ffmpeg_path = dir.join("ffmpeg-missing").to_string_lossy().into_owned();
@@ -569,7 +573,7 @@ fn available_encoders_lists_the_built_in_ones_without_ffmpeg() {
 #[test]
 fn dock_and_view_toggles_flip_the_preferences() {
     let mut a = app();
-    let ctx = egui::Context::default();
+    let ctx = crate::test_context();
     assert_eq!(run(&mut a, &ctx, "dock.mixer", json!({})).unwrap(), json!({"on": false}));
     assert!(!a.store().prefs().docks.mixer);
     run(&mut a, &ctx, "dock.reset", json!({})).unwrap();
@@ -582,7 +586,7 @@ fn dock_and_view_toggles_flip_the_preferences() {
 fn the_output_bar_fits_the_menu_row_at_each_window_size() {
     for (w, h, transitions) in [(1280.0, 800.0, Some("inline")), (1024.0, 640.0, None), (760.0, 480.0, Some("overflow"))] {
         let mut a = app();
-        let ctx = egui::Context::default();
+        let ctx = crate::test_context();
         for _ in 0..3 {
             frame_at(&mut a, &ctx, egui::vec2(w, h));
         }
@@ -621,7 +625,7 @@ fn the_output_bar_fits_the_menu_row_at_each_window_size() {
 #[test]
 fn the_docks_menu_shows_and_hides_the_output_bar_groups() {
     let mut a = app();
-    let ctx = egui::Context::default();
+    let ctx = crate::test_context();
     let names = |a: &StudioApp| bar_parts(a, &ctx).into_iter().map(|(n, _)| n).collect::<Vec<_>>();
     frame(&mut a, &ctx, vec![]);
     assert_eq!(run(&mut a, &ctx, "dock.transitions", json!({})).unwrap(), json!({"on": false}));
@@ -646,7 +650,7 @@ fn the_docks_menu_shows_and_hides_the_output_bar_groups() {
 #[test]
 fn the_application_audio_dock_reads_its_lanes_again_when_the_collection_changes() {
     let mut a = app();
-    let ctx = egui::Context::default();
+    let ctx = crate::test_context();
     let names = |a: &StudioApp| -> Vec<String> { a.lanes.lanes().map(|l| l.lanes.iter().map(|l| l.name.clone()).collect()).unwrap_or_default() };
     let now = std::time::Instant::now();
     a.lanes.refresh(&a.studio, now);
@@ -660,7 +664,7 @@ fn the_application_audio_dock_reads_its_lanes_again_when_the_collection_changes(
 #[test]
 fn the_application_audio_dock_is_hidden_until_the_docks_menu_shows_it() {
     let mut a = app();
-    let ctx = egui::Context::default();
+    let ctx = crate::test_context();
     let docks = |a: &mut StudioApp| -> Vec<Value> {
         a.ui_inspect(&ctx)["docks"].as_array().cloned().unwrap_or_default().into_iter().map(|d| d["dock"].clone()).collect()
     };
@@ -693,14 +697,16 @@ fn drag(from: egui::Pos2, to: egui::Pos2) -> [Vec<Event>; 4] {
 
 fn frame_with(app: &mut StudioApp, ctx: &egui::Context, size: egui::Vec2, events: Vec<Event>) {
     let raw = RawInput { events, screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)), ..RawInput::default() };
+    app.before_input(ctx);
     let mut out = ctx.run_ui(raw, |ui| app.frame(ui));
     out.textures_delta.clear();
+    app.before_input(ctx);
 }
 
 #[test]
 fn the_dock_strip_is_200_tall_at_1280_and_the_canvas_takes_the_rest() {
     let mut a = app();
-    let ctx = egui::Context::default();
+    let ctx = crate::test_context();
     for _ in 0..3 {
         frame_at(&mut a, &ctx, egui::vec2(1280.0, 800.0));
     }
@@ -723,7 +729,7 @@ fn the_dock_strip_is_200_tall_at_1280_and_the_canvas_takes_the_rest() {
 #[test]
 fn every_header_action_is_visible_at_760_by_480() {
     let mut a = app();
-    let ctx = egui::Context::default();
+    let ctx = crate::test_context();
     run(&mut a, &ctx, "source.add", json!({"kind": "color", "name": "Back"})).unwrap();
     for _ in 0..3 {
         frame_at(&mut a, &ctx, egui::vec2(760.0, 480.0));
@@ -755,7 +761,7 @@ fn every_header_action_is_visible_at_760_by_480() {
 #[test]
 fn dragging_the_strip_edge_and_a_divider_saves_the_sizes_and_reset_clears_them() {
     let mut a = app();
-    let ctx = egui::Context::default();
+    let ctx = crate::test_context();
     let size = egui::vec2(1280.0, 800.0);
     for _ in 0..2 {
         frame_at(&mut a, &ctx, size);
@@ -795,7 +801,7 @@ fn dock_order(a: &StudioApp, ctx: &egui::Context) -> Vec<String> {
 #[test]
 fn dock_move_rearranges_the_strip_and_reset_puts_it_back() {
     let mut a = app();
-    let ctx = egui::Context::default();
+    let ctx = crate::test_context();
     let size = egui::vec2(1280.0, 800.0);
     frame_at(&mut a, &ctx, size);
     let r = run(&mut a, &ctx, "dock.move", json!({"dock": "mixer", "to": "left"})).unwrap();
@@ -832,7 +838,7 @@ fn right_click(at: egui::Pos2) -> [Vec<Event>; 3] {
 #[test]
 fn a_right_click_on_a_dock_title_opens_the_dock_menu() {
     let mut a = app();
-    let ctx = egui::Context::default();
+    let ctx = crate::test_context();
     let size = egui::vec2(1280.0, 800.0);
     for _ in 0..2 {
         frame_at(&mut a, &ctx, size);
@@ -859,7 +865,7 @@ fn names(v: &Value) -> Vec<String> {
 #[test]
 fn a_saved_dock_layout_puts_every_dock_back_as_it_was() {
     let mut a = app();
-    let ctx = egui::Context::default();
+    let ctx = crate::test_context();
     let size = egui::vec2(1280.0, 800.0);
     run(&mut a, &ctx, "dock.mixer", json!({})).unwrap();
     run(&mut a, &ctx, "dock.move", json!({"dock": "scenes", "to": "right"})).unwrap();
@@ -937,7 +943,7 @@ fn a_saved_dock_layout_puts_every_dock_back_as_it_was() {
 #[test]
 fn dock_float_moves_a_dock_into_a_window_and_back() {
     let mut a = app();
-    let ctx = egui::Context::default();
+    let ctx = crate::test_context();
     let size = egui::vec2(1280.0, 800.0);
     frame_at(&mut a, &ctx, size);
     let r = run(&mut a, &ctx, "dock.float", json!({"dock": "scenes", "floating": true})).unwrap();
@@ -982,7 +988,7 @@ fn dock_float_moves_a_dock_into_a_window_and_back() {
 #[test]
 fn every_dock_can_float_and_reset_puts_them_back() {
     let mut a = app();
-    let ctx = egui::Context::default();
+    let ctx = crate::test_context();
     let size = egui::vec2(1280.0, 800.0);
     for dock in ["scenes", "sources", "mixer"] {
         run(&mut a, &ctx, "dock.float", json!({"dock": dock, "floating": true})).unwrap();
@@ -1004,7 +1010,7 @@ fn every_dock_can_float_and_reset_puts_them_back() {
 #[test]
 fn dragging_a_floating_dock_by_its_header_moves_its_window_and_saves_the_place() {
     let mut a = app();
-    let ctx = egui::Context::default();
+    let ctx = crate::test_context();
     let size = egui::vec2(1280.0, 800.0);
     run(&mut a, &ctx, "dock.float", json!({"dock": "mixer", "floating": true})).unwrap();
     for _ in 0..2 {
@@ -1043,7 +1049,7 @@ fn dragging_a_floating_dock_by_its_header_moves_its_window_and_saves_the_place()
     let mut b = app();
     let docks = a.store().prefs().docks;
     b.store.update(|p| p.docks = docks);
-    let ctx = egui::Context::default();
+    let ctx = crate::test_context();
     for _ in 0..2 {
         frame_at(&mut b, &ctx, size);
     }
@@ -1053,7 +1059,7 @@ fn dragging_a_floating_dock_by_its_header_moves_its_window_and_saves_the_place()
 #[test]
 fn a_smaller_main_window_does_not_change_a_floating_dock_s_saved_place() {
     let mut a = app();
-    let ctx = egui::Context::default();
+    let ctx = crate::test_context();
     a.store.update(|p| {
         p.docks.floating[2] = true;
         p.docks.place_window(2, [900.0, 500.0], [300.0, 200.0]);
@@ -1079,7 +1085,7 @@ fn a_smaller_main_window_does_not_change_a_floating_dock_s_saved_place() {
     let mut b = app();
     let docks = a.store().prefs().docks;
     b.store.update(|p| p.docks = docks);
-    let ctx_b = egui::Context::default();
+    let ctx_b = crate::test_context();
     for _ in 0..3 {
         frame_at(&mut b, &ctx_b, small);
     }
@@ -1119,7 +1125,7 @@ fn a_smaller_main_window_does_not_change_a_floating_dock_s_saved_place() {
 #[test]
 fn dragging_a_floating_dock_s_corner_resizes_it_and_saves_the_size() {
     let mut a = app();
-    let ctx = egui::Context::default();
+    let ctx = crate::test_context();
     let size = egui::vec2(1280.0, 800.0);
     a.store.update(|p| {
         p.docks.floating[0] = true;
@@ -1167,7 +1173,7 @@ fn dragging_a_floating_dock_s_corner_resizes_it_and_saves_the_size() {
 #[test]
 fn a_floating_dock_opens_at_its_saved_size_and_keeps_it() {
     let mut a = app();
-    let ctx = egui::Context::default();
+    let ctx = crate::test_context();
     let size = egui::vec2(1280.0, 800.0);
     a.store.update(|p| {
         p.docks.floating[1] = true;
@@ -1197,7 +1203,7 @@ fn a_floating_dock_opens_at_its_saved_size_and_keeps_it() {
 #[test]
 fn a_press_on_a_header_action_under_the_strip_edge_runs_the_action() {
     let mut a = app();
-    let ctx = egui::Context::default();
+    let ctx = crate::test_context();
     let size = egui::vec2(1280.0, 800.0);
     for _ in 0..2 {
         frame_at(&mut a, &ctx, size);
@@ -1229,7 +1235,7 @@ fn a_press_on_a_header_action_under_the_strip_edge_runs_the_action() {
 #[test]
 fn a_hidden_dock_gives_its_width_to_the_others() {
     let mut a = app();
-    let ctx = egui::Context::default();
+    let ctx = crate::test_context();
     run(&mut a, &ctx, "dock.sources", json!({})).unwrap();
     for _ in 0..2 {
         frame_at(&mut a, &ctx, egui::vec2(1280.0, 800.0));
@@ -1250,7 +1256,7 @@ fn a_hidden_dock_gives_its_width_to_the_others() {
 #[test]
 fn the_output_bar_runs_the_output_commands() {
     let mut a = app();
-    let ctx = egui::Context::default();
+    let ctx = crate::test_context();
     frame(&mut a, &ctx, vec![]);
     let mode = |a: &StudioApp| bar_parts(a, &ctx).into_iter().find(|(n, _)| n == "mode").map(|(_, r)| r).unwrap_or([0.0; 4]);
     let click = |at: egui::Pos2| {
@@ -1271,7 +1277,7 @@ fn the_output_bar_runs_the_output_commands() {
 #[test]
 fn selection_commands_need_a_selection() {
     let mut a = app();
-    let ctx = egui::Context::default();
+    let ctx = crate::test_context();
     assert!(run(&mut a, &ctx, "selection.fit", json!({})).is_err());
     let r = run(&mut a, &ctx, "source.add", json!({"kind": "color", "name": "Back"})).unwrap();
     let item = ItemId(r["item"].as_u64().unwrap());
@@ -1294,7 +1300,7 @@ fn selection_commands_need_a_selection() {
 #[test]
 fn adding_a_source_opens_its_properties() {
     let mut a = app();
-    let ctx = egui::Context::default();
+    let ctx = crate::test_context();
     a.act(&ctx, Act::AddSource { kind: "text".into() });
     let hud = a.hud();
     assert_eq!(hud["ui"]["properties_open"].as_array().map(Vec::len), Some(1));
@@ -1306,7 +1312,7 @@ fn adding_a_source_opens_its_properties() {
 #[test]
 fn unknown_commands_and_links_are_errors() {
     let mut a = app();
-    let ctx = egui::Context::default();
+    let ctx = crate::test_context();
     assert!(run(&mut a, &ctx, "nope.nothing", json!({})).is_err());
     assert!(run(&mut a, &ctx, "app.links", json!({"link": "elsewhere"})).is_err());
     assert!(run(&mut a, &ctx, "help.unknown", json!({})).unwrap_err().contains("unknown command"));
@@ -1316,7 +1322,7 @@ fn unknown_commands_and_links_are_errors() {
 #[test]
 fn about_draws_credits_and_opens_the_licenses() {
     let mut a = app();
-    let ctx = egui::Context::default();
+    let ctx = crate::test_context();
     assert_eq!(a.hud()["ui"]["about_open"], json!(false));
     run(&mut a, &ctx, "app.about", json!({})).unwrap();
     for mode in credits::NameMode::ALL {
@@ -1341,7 +1347,7 @@ fn about_draws_credits_and_opens_the_licenses() {
 #[test]
 fn link_queries_run_in_the_engine() {
     let mut a = app();
-    let ctx = egui::Context::default();
+    let ctx = crate::test_context();
     let all = run(&mut a, &ctx, "app.links", json!({})).unwrap();
     assert_eq!(all, studiocraft_engine::links::all());
     let one = run(&mut a, &ctx, "app.links", json!({"link": "issues"})).unwrap();
@@ -1382,8 +1388,10 @@ fn texts(out: &egui::FullOutput) -> Vec<(String, egui::Rect)> {
 /// One frame with `events`; the texts it draws.
 fn frame_texts(app: &mut StudioApp, ctx: &egui::Context, events: Vec<Event>) -> Vec<(String, egui::Rect)> {
     let raw = RawInput { events, screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1280.0, 800.0))), ..RawInput::default() };
+    app.before_input(ctx);
     let mut out = ctx.run_ui(raw, |ui| app.frame(ui));
     out.textures_delta.clear();
+    app.before_input(ctx);
     texts(&out)
 }
 
@@ -1402,7 +1410,7 @@ fn click_text(app: &mut StudioApp, ctx: &egui::Context, shown: &[(String, egui::
 fn the_output_tab_sets_the_recording_encoder_s_preset() {
     let mut a = app();
     a.set_language("en");
-    let ctx = egui::Context::default();
+    let ctx = crate::test_context();
     a.open_settings(crate::settings::Tab::Output);
     frame_texts(&mut a, &ctx, vec![]);
     let shown = frame_texts(&mut a, &ctx, vec![]);
@@ -1421,7 +1429,7 @@ fn the_output_tab_sets_the_recording_encoder_s_preset() {
 fn the_fonts_are_installed_again_after_the_language_changes() {
     let mut a = app();
     a.set_language("en");
-    let ctx = egui::Context::default();
+    let ctx = crate::test_context();
     frame(&mut a, &ctx, vec![]);
     assert_eq!(a.fonts_for, None, "a frame installs no fonts before install_fonts");
     a.install_fonts(&ctx);
@@ -1436,10 +1444,10 @@ fn the_fonts_are_installed_again_after_the_language_changes() {
 
 #[test]
 fn arabic_and_hebrew_run_the_window_right_to_left() {
-    use craft_ui::direction::is_rtl;
+    let is_rtl = |ctx: &egui::Context| ctx.global_style().right_to_left;
     let mut a = app();
     a.set_language("en");
-    let ctx = egui::Context::default();
+    let ctx = crate::test_context();
     frame(&mut a, &ctx, vec![]);
     assert!(!is_rtl(&ctx));
     let menus = |a: &StudioApp| bar_parts(a, &ctx).into_iter().find(|(n, _)| n == "menus").map(|(_, r)| r);
@@ -1469,6 +1477,7 @@ fn frame_on_display(app: &mut StudioApp, ctx: &egui::Context, points: egui::Vec2
         viewports: std::iter::once((egui::ViewportId::ROOT, info)).collect(),
         ..RawInput::default()
     };
+    app.before_input(ctx);
     let mut out = ctx.run_ui(raw, |ui| app.frame(ui));
     out.textures_delta.clear();
 }
@@ -1476,7 +1485,7 @@ fn frame_on_display(app: &mut StudioApp, ctx: &egui::Context, points: egui::Vec2
 #[test]
 fn the_canvas_takes_the_size_of_the_display_the_window_is_on() {
     let mut a = app();
-    let ctx = egui::Context::default();
+    let ctx = crate::test_context();
     frame(&mut a, &ctx, vec![]);
     let e = run(&mut a, &ctx, "video.canvas_from_display", json!({})).unwrap_err();
     assert!(e.contains("not known"), "{e}");
@@ -1524,7 +1533,7 @@ fn a_canvas_size_that_cant_be_saved_is_an_error() {
     let profiles = dir.join("profiles");
     let _ = std::fs::remove_dir_all(&profiles);
     std::fs::write(&profiles, b"").unwrap();
-    let ctx = egui::Context::default();
+    let ctx = crate::test_context();
     frame_on_display(&mut a, &ctx, egui::vec2(1280.0, 720.0), 1.0);
     let r = run(&mut a, &ctx, "video.canvas_from_display", json!({}));
     // Once the profiles folder can be written, the same size again is saved.
@@ -1541,7 +1550,7 @@ fn a_canvas_size_that_cant_be_saved_is_an_error() {
 #[test]
 fn the_canvas_from_a_display_refuses_bad_parameters() {
     let mut a = app();
-    let ctx = egui::Context::default();
+    let ctx = crate::test_context();
     frame(&mut a, &ctx, vec![]);
     let e = run(&mut a, &ctx, "video.canvas_from_display", json!({"display": 3})).unwrap_err();
     assert!(e.contains("display id"), "{e}");
@@ -1582,7 +1591,7 @@ fn display_sizes_are_checked() {
 fn window_command_errors_are_shown_translated_and_returned_in_english() {
     let mut a = app();
     a.set_language("de");
-    let ctx = egui::Context::default();
+    let ctx = crate::test_context();
     let e = run(&mut a, &ctx, "dock.layout_apply", json!({"name": "Talk"})).unwrap_err();
     assert_eq!(e, "there is no dock layout named `Talk`");
     let Some((note, _)) = a.notices.back() else { panic!("no notice") };

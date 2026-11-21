@@ -6,7 +6,8 @@
 //! that is left and is shortened with an ellipsis when it does not fit, with the whole title in its
 //! tooltip. A dock has no footer: every action it offers is in its header.
 
-use craft_ui::direction;
+// port: P3 (language, direction and framework words) reads the direction from the env here.
+use crate::i18n as direction;
 use egui::{Color32, FontId, Rect, RichText, Sense, Ui, UiBuilder, pos2, vec2};
 
 use super::tokens::{Palette, Sizes};
@@ -109,12 +110,12 @@ mod tests {
 
     /// One header `width` wide with `n` 24 x 24 actions; the header and the action rectangles.
     fn run(width: f32, title: &str, n: usize) -> (PanelHeaderResponse<Vec<Rect>>, Vec<egui::epaint::ClippedShape>) {
-        run_in(direction::Direction::Ltr, width, title, n)
+        run_in(false, width, title, n)
     }
 
-    fn run_in(dir: direction::Direction, width: f32, title: &str, n: usize) -> (PanelHeaderResponse<Vec<Rect>>, Vec<egui::epaint::ClippedShape>) {
+    fn run_in(rtl: bool, width: f32, title: &str, n: usize) -> (PanelHeaderResponse<Vec<Rect>>, Vec<egui::epaint::ClippedShape>) {
         let ctx = egui::Context::default();
-        direction::apply(&ctx, dir);
+        ctx.all_styles_mut(|s| s.right_to_left = rtl);
         let raw = RawInput { screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(width, 200.0))), ..RawInput::default() };
         let st = style();
         let mut out = None;
@@ -149,7 +150,7 @@ mod tests {
 
     #[test]
     fn a_right_to_left_header_mirrors_the_title_and_the_actions() {
-        let (r, _) = run_in(direction::Direction::Rtl, 300.0, "Scenes", 4);
+        let (r, _) = run_in(true, 300.0, "Scenes", 4);
         let a = &r.inner;
         assert!((a[0].left() - r.rect.left() - 4.0).abs() < 0.01, "the first action is 4 points from the left edge: {a:?}");
         for pair in a.windows(2) {
@@ -157,7 +158,7 @@ mod tests {
         }
         assert_eq!(r.title.right(), r.rect.right() - 8.0, "the title starts 8 points from the right");
         assert!(r.title.left() >= a[3].right(), "the title ends before the actions");
-        let (r, _) = run_in(direction::Direction::Rtl, 200.0, "Audio Mixer", 0);
+        let (r, _) = run_in(true, 200.0, "Audio Mixer", 0);
         assert_eq!(r.actions.width(), 0.0);
         assert_eq!(r.title.left(), r.rect.left() + 4.0);
     }

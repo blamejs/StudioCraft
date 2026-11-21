@@ -80,8 +80,92 @@ pub fn set_lang(lang: Lang) {
 }
 
 /// The interface direction of this thread's language: right to left for Arabic and Hebrew.
-pub fn direction() -> craft_ui::direction::Direction {
-    if I18N.rtl(lang()) { craft_ui::direction::Direction::Rtl } else { craft_ui::direction::Direction::Ltr }
+pub fn direction() -> craft_ui::runtime::env::Direction {
+    use craft_ui::runtime::env::Direction;
+    if I18N.rtl(lang()) { Direction::Rtl } else { Direction::Ltr }
+}
+
+// port: P3 (language, direction and framework words) replaces these words with the language on
+// the runtime's host.
+
+/// The framework's built-in words (dialog buttons, the update dialogs) in this thread's language,
+/// looked up in the embedded catalogs. Built once per language. The pseudo locale keeps them in
+/// English: its audit checks StudioCraft's own strings against `i18n/locales/en/studiocraft.tsv`.
+pub(crate) fn framework_words() -> std::sync::Arc<craft_i18n::Words> {
+    use std::cell::RefCell;
+    use std::sync::Arc;
+
+    use craft_i18n::{Word, Words};
+
+    thread_local! {
+        static BUILT: RefCell<Option<(Lang, Arc<Words>)>> = const { RefCell::new(None) };
+    }
+    let lang = lang();
+    BUILT.with_borrow_mut(|built| match built {
+        Some((l, words)) if *l == lang => Arc::clone(words),
+        _ if lang == Lang::PSEUDO => {
+            let words = Arc::new(Words::english());
+            *built = Some((lang, Arc::clone(&words)));
+            words
+        }
+        _ => {
+            let i18n: &'static I18n = &I18N;
+            let lookup = move |word: Word| -> Option<String> {
+                let text = if !word.id.is_empty() {
+                    i18n.tid(lang, word.id, word.english)
+                } else if !word.context.is_empty() {
+                    i18n.get(lang, word.context, word.english)?
+                } else {
+                    i18n.t(lang, word.english)
+                };
+                (text != word.english).then(|| text.to_owned())
+            };
+            let words = Arc::new(Words::new(lookup).with_plural(move |_, n, one, other| Some(i18n.trn(lang, n, one, other))));
+            *built = Some((lang, Arc::clone(&words)));
+            words
+        }
+    })
+}
+
+// port: P3 (language, direction and framework words) replaces these with the root direction
+// read from the env. They take the place of the removed `craft_ui::direction` helpers and read
+// the direction the runtime writes into egui's style from the frame's root values.
+
+/// Whether `ui` lays out right to left.
+pub(crate) fn is_rtl(ui: &egui::Ui) -> bool {
+    ui.style().right_to_left
+}
+
+/// A row that starts at the reading start.
+pub(crate) fn row(ui: &egui::Ui) -> egui::Layout {
+    if is_rtl(ui) { egui::Layout::right_to_left(egui::Align::Center) } else { egui::Layout::left_to_right(egui::Align::Center) }
+}
+
+/// A row that starts at the reading end.
+pub(crate) fn trailing(ui: &egui::Ui) -> egui::Layout {
+    if is_rtl(ui) { egui::Layout::left_to_right(egui::Align::Center) } else { egui::Layout::right_to_left(egui::Align::Center) }
+}
+
+/// A column aligned to the reading start.
+pub(crate) fn column(ui: &egui::Ui) -> egui::Layout {
+    egui::Layout::top_down(if is_rtl(ui) { egui::Align::Max } else { egui::Align::Min })
+}
+
+/// A row one control tall that starts at the reading start.
+pub(crate) fn horizontal<R>(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui) -> R) -> egui::InnerResponse<R> {
+    let size = egui::vec2(ui.available_size_before_wrap().x, ui.spacing().interact_size.y);
+    let layout = row(ui);
+    ui.allocate_ui_with_layout(size, layout, add)
+}
+
+/// The x of `rect`'s reading start.
+pub(crate) fn start_x(ui: &egui::Ui, rect: egui::Rect) -> f32 {
+    if is_rtl(ui) { rect.right() } else { rect.left() }
+}
+
+/// The x of `rect`'s reading end.
+pub(crate) fn end_x(ui: &egui::Ui, rect: egui::Rect) -> f32 {
+    if is_rtl(ui) { rect.left() } else { rect.right() }
 }
 
 /// The language a Language setting stands for: `auto`, or a code that is not offered, follows the

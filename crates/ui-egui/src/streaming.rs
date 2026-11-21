@@ -2,7 +2,10 @@
 //! off setting, its server with the key hidden, where its key comes from and, while the stream
 //! runs, what it is doing. Each change runs one of the window's `stream.destination*` commands.
 
-use egui::{RichText, Ui};
+// port: P13 (Streaming window) replaces this egui combo box with `Select`.
+#![expect(clippy::disallowed_types, reason = "craft-ui no longer has its combo box; the Streaming window moves to `Select`")]
+
+use egui::{ComboBox, RichText, Ui};
 use serde_json::{Value, json};
 use studiocraft_model::profile::{MAX_DESTINATION_ID, MAX_DESTINATIONS, PRIMARY_DESTINATION};
 use studiocraft_model::{Destination, KeyRef, StreamSettings};
@@ -238,7 +241,7 @@ fn row(
         if ui.checkbox(&mut on, RichText::new(title).strong()).on_hover_text(tl!("Send to this destination when the stream starts")).changed() {
             acts.push(Act::run("stream.destination_set", json!({"id": d.id, "enabled": on})));
         }
-        ui.with_layout(craft_ui::direction::trailing(ui), |ui| {
+        ui.with_layout(crate::i18n::trailing(ui), |ui| {
             let editing = panel.editing.as_ref().is_some_and(|e| e.id == d.id);
             let can_remove = !(view.running && live.is_some_and(sending));
             let remove = ui.add_enabled(can_remove, egui::Button::new(tl!("Remove")));
@@ -304,7 +307,7 @@ fn details(ui: &mut Ui, e: &mut Edit, view: &View, acts: &mut Vec<Act>) -> bool 
             });
             ui.end_row();
             ui.label(tl!("Stream key"));
-            craft_ui::ComboBox::from_id_salt("key-choice").selected_text(tl!(e.key.label())).show_ui(ui, |ui| {
+            ComboBox::from_id_salt("key-choice").selected_text(tl!(e.key.label())).show_ui(ui, |ui| {
                 for c in KeyChoice::ALL {
                     ui.selectable_value(&mut e.key, c, tl!(c.label()));
                 }

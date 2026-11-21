@@ -33,10 +33,16 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 
-use craft_keymap::egui::Dispatcher;
-use craft_keymap::{Active, CommandRef, Keymap};
-use craft_menu::Gate;
-use craft_ui::layout::{ResizeHandle, ResizeHandleStyle, SplitAxis};
+use craft_host::target::ShellInfo;
+use craft_keymap::{CommandRef, Keymap, Overrides};
+use craft_menu::MenuBar;
+use craft_ui::contract::Tracked;
+use craft_ui::runtime::commands::{AppCatalog, CommandInput};
+use craft_ui::runtime::env::RootEnv;
+use craft_ui::runtime::frame::{FrameInput, FrameOutput};
+use craft_ui::shell::embed::{self, CloseDecision};
+use craft_ui::{InstallError, InstallSpec};
+use craft_window::system::{NoWindows, SystemWindows};
 use egui::{Color32, RichText, Ui};
 use serde_json::{Value, json};
 use studiocraft_media::mix::MeterBallistics;
@@ -49,6 +55,7 @@ use studiocraft_studio::{CaptionBoard, OutputKind, Studio, UiAction, builtin_reg
 
 use crate::forms::{Browse, Filters, Properties};
 use crate::i18n::Msg;
+use crate::kit::resize_handle::{ResizeHandle, ResizeHandleStyle, SplitAxis};
 use crate::preview::{EditItem, Editor, Textures, View};
 use crate::settings::{Pick, SettingsWindow, Tab};
 use crate::store::{DEFAULT_NAME, Store, check_name};
@@ -174,7 +181,12 @@ pub struct StudioApp {
     studio: Studio,
     store: Store,
     keymap: Keymap,
-    dispatcher: Dispatcher,
+    /// The command catalog the runtime fires shortcuts from, built once.
+    command_catalog: Option<AppCatalog>,
+    /// The shortcut overrides handed to the runtime; replaced only when the keymap's change.
+    key_overrides: Arc<Overrides>,
+    /// The laid-out menu bar the top row draws.
+    menu_bar: Tracked<MenuBar>,
     dialogs: Option<craft_dialogs::Dialogs<Then>>,
     render: Option<egui_wgpu::RenderState>,
     textures: Textures,
@@ -307,7 +319,9 @@ impl StudioApp {
             studio,
             store,
             keymap,
-            dispatcher: Dispatcher::new(),
+            command_catalog: None,
+            key_overrides: Arc::new(Overrides::new()),
+            menu_bar: Tracked::new(MenuBar::new(Vec::new())),
             dialogs: None,
             render,
             textures: Textures::default(),
@@ -801,7 +815,9 @@ impl StudioApp {
         }
         let mut open = true;
         egui::Window::new(tid!("view.scopes", "Scopes")).id(egui::Id::unique("scopes")).open(&mut open).default_width(520.0).show(ctx, |ui| {
-            craft_ui::ComboBox::from_id_salt("scope-kind").selected_text(tl!(kind.label())).show_ui(ui, |ui| {
+            // port: P12a (Scopes window) replaces this egui combo box with `Select`.
+            #[expect(clippy::disallowed_types, reason = "craft-ui no longer has its combo box; the Scopes window moves to `Select`")]
+            egui::ComboBox::from_id_salt("scope-kind").selected_text(tl!(kind.label())).show_ui(ui, |ui| {
                 for k in scopes::MENU_ORDER {
                     if ui.selectable_label(k == kind, tl!(k.label())).clicked() && k != kind {
                         acts.push(Act::run("scopes.kind", json!({"kind": k.name()})));
@@ -1320,10 +1336,6 @@ impl StudioApp {
         if self.fonts_for.is_some_and(|l| l != i18n::lang()) {
             self.install_fonts(ctx);
         }
-        let dir = i18n::direction();
-        if craft_ui::direction::HasDirection::direction(ctx) != dir {
-            craft_ui::direction::apply(ctx, dir);
-        }
         // eframe calls `logic` before each drawn frame, and also while the window is hidden.
         if !std::mem::take(&mut self.ticked_in_logic) {
             self.tick_studio(ctx);
@@ -1354,37 +1366,67 @@ impl StudioApp {
         self.notices.retain(|(n, at)| {
             n.error && now.duration_since(*at) < Duration::from_secs(NOTICE_S * 3) || now.duration_since(*at) < Duration::from_secs(NOTICE_S)
         });
+    }
+
+    /// Before each frame's passes, from `embed::before_input`: runs the commands the runtime
+    /// fired (shortcuts and menu rows) unless a prompt, the exit question or Settings is open, and
+    /// returns the frame's input: the root direction and the command catalog with the user's
+    /// shortcuts.
+    pub fn frame_input(&mut self, ctx: &egui::Context, out: FrameOutput) -> FrameInput {
         let modal = self.prompt.is_some() || self.confirm_exit || self.settings.is_some();
         if !modal {
-            let typing = ctx.egui_wants_keyboard_input();
-            let active = Active { panel: None, contexts: &[], typing };
-            let keymap = &self.keymap;
-            let dispatcher = &mut self.dispatcher;
-            let hits = ctx.input_mut(|i| dispatcher.dispatch(i, keymap, &active));
-            for h in hits {
-                let _ = self.perform(ctx, &h.command);
+            for fired in &out.fired {
+                let _ = self.perform(ctx, &commands::fired_command(&fired.command));
             }
         }
+        if *self.key_overrides != *self.keymap.overrides() {
+            self.key_overrides = Arc::new(self.keymap.overrides().clone());
+        }
+        let mut input = CommandInput::new().overrides(self.key_overrides.clone());
+        if let Some(catalog) = self.catalog() {
+            input = input.catalog(catalog);
+        }
+        // port: P3 (language, direction and framework words) moves the language onto the host.
+        FrameInput::new(RootEnv::new().direction(i18n::direction())).commands(input)
+    }
+
+    /// The runtime's command catalog: every command a shortcut can be given. A command a linked
+    /// framework set also defines (`edit.undo`, `edit.redo`) keeps the set's entry and takes this
+    /// app's default shortcuts.
+    fn catalog(&mut self) -> Option<AppCatalog> {
+        if self.command_catalog.is_none() {
+            let defs = commands::runtime_catalog();
+            let replaced: Vec<(String, Vec<craft_keymap::Binding>)> = defs.iter().map(|d| (d.command.id.clone(), d.defaults.clone())).collect();
+            match AppCatalog::new(defs, 1) {
+                Ok(catalog) => {
+                    self.command_catalog = Some(replaced.into_iter().fold(catalog, |c, (id, bindings)| c.replace_defaults(id, bindings)));
+                }
+                Err(e) => log::warn!("command catalog: {e:?}"),
+            }
+        }
+        self.command_catalog.clone()
     }
 
     /// The top row: the menu titles and the output bar, and the window buttons when the app draws
     /// the window frame.
     fn menu(&mut self, ui: &mut Ui, acts: &mut Vec<Act>) {
         let laid = self.laid_menu();
-        let gate =
-            Gate { modal: self.prompt.is_some() || self.confirm_exit, recording_shortcut: false, text_editing: ui.ctx().egui_wants_keyboard_input() };
-        let style = theme::bar_style(ui.style(), &theme::sizes(ui.ctx()));
-        let clicked = match self.title_bar.clone() {
-            Some(layout) => title_bar::strip(ui, &layout, |ui, room| self.top_row(ui, room, &laid, gate, style, acts)),
+        if *self.menu_bar != laid {
+            self.menu_bar.edit(|bar| *bar = laid);
+        }
+        let bar = std::mem::replace(&mut self.menu_bar, Tracked::new(MenuBar::new(Vec::new())));
+        // The menu rows' commands come back through the frame output (`frame_input`). F10 and Alt
+        // leave the menu bar alone while a prompt, the exit confirmation or Settings is open, as
+        // `frame_input` drops the commands then.
+        let keyboard = !(self.prompt.is_some() || self.confirm_exit || self.settings.is_some());
+        match self.title_bar.clone() {
+            Some(layout) => title_bar::strip(ui, &layout, |ui, room| self.top_row(ui, room, &bar, keyboard, acts)),
             None => {
                 let room = ui.available_width();
-                self.top_row(ui, room, &laid, gate, style, acts)
+                self.top_row(ui, room, &bar, keyboard, acts)
             }
-        };
-        let ctx = ui.ctx().clone();
-        for c in clicked {
-            let _ = self.perform(&ctx, &c);
         }
+        self.menu_bar = bar;
     }
 
     fn edit_items(&self) -> Vec<EditItem> {
@@ -1773,13 +1815,13 @@ impl StudioApp {
         let line = theme::palette(ui.ctx()).line;
         let frame = egui::Frame::side_top_panel(ui.style()).inner_margin(egui::Margin::symmetric(8, 0));
         let panel = egui::Panel::bottom("status").exact_size(height).show_separator_line(false).frame(frame).show(ui, |ui| {
-            ui.with_layout(craft_ui::direction::row(ui), |ui| {
+            ui.with_layout(i18n::row(ui), |ui| {
                 if let Some((text, error)) = notice {
                     let color = if error { ui.visuals().warn_fg_color } else { ui.visuals().text_color() };
                     // A message longer than the bar is cut off, so the whole text is on hover.
                     ui.colored_label(color, text.clone()).on_hover_text(text);
                 }
-                ui.with_layout(craft_ui::direction::trailing(ui), |ui| {
+                ui.with_layout(i18n::trailing(ui), |ui| {
                     let fps = format!("{fps:.2}");
                     let ms = format!("{:.1}", stats.render_avg_ms);
                     ui.monospace(craft_i18n::fmt(tl!("{fps} fps  {ms} ms"), &[("fps", &fps), ("ms", &ms)]));
@@ -1965,10 +2007,12 @@ impl StudioApp {
                     }
                 });
                 ui.separator();
-                craft_ui::direction::horizontal(ui, |ui| {
+                i18n::horizontal(ui, |ui| {
                     ui.strong(tl!("Credits"));
-                    ui.with_layout(craft_ui::direction::trailing(ui), |ui| {
-                        craft_ui::ComboBox::from_id_salt("credit-names").selected_text(tl!(mode.label())).show_ui(ui, |ui| {
+                    ui.with_layout(i18n::trailing(ui), |ui| {
+                        // port: P18 (About, credits and licenses) replaces this egui combo box.
+                        #[expect(clippy::disallowed_types, reason = "craft-ui no longer has its combo box; the credits list moves to `Select`")]
+                        egui::ComboBox::from_id_salt("credit-names").selected_text(tl!(mode.label())).show_ui(ui, |ui| {
                             for m in credits::NameMode::ALL {
                                 ui.selectable_value(mode, m, tl!(m.label()));
                             }
@@ -2010,18 +2054,6 @@ impl StudioApp {
             if !open {
                 self.licenses = None;
             }
-        }
-
-        // An update never starts while a recording, stream or replay buffer runs.
-        let idle = !self.outputs_running();
-        match updates_ui::show(&mut self.updates, ctx, idle) {
-            updates_ui::Asked::Nothing => {}
-            updates_ui::Asked::OpenUrl(url) => {
-                if let Err(e) = studiocraft_platform::shell::open_url(&url) {
-                    self.notify(e.to_string(), true);
-                }
-            }
-            updates_ui::Asked::Close => self.request_exit(ctx),
         }
 
         if let Some(p) = &mut self.prompt {
@@ -2091,6 +2123,11 @@ impl StudioApp {
 
     /// Draw one frame of the whole window.
     pub fn frame(&mut self, ui: &mut Ui) {
+        let words = craft_ui::runtime::env::WordsOverride::Replace(i18n::framework_words());
+        craft_ui::runtime::env::with_env(ui, |o| o.words = Some(words), |ui| self.frame_in_language(ui));
+    }
+
+    fn frame_in_language(&mut self, ui: &mut Ui) {
         let ctx = ui.ctx().clone();
         self.frames += 1;
         self.before(&ctx);
@@ -2098,7 +2135,7 @@ impl StudioApp {
         let mut acts = Vec::new();
         let bar = theme::sizes(&ctx).bar_menu;
         let fill = theme::palette(&ctx).raised;
-        let (left, right) = if craft_ui::direction::is_rtl(&ctx) { (0, 4) } else { (4, 0) };
+        let (left, right) = if i18n::is_rtl(ui) { (0, 4) } else { (4, 0) };
         let top = egui::Panel::top("menu")
             .exact_size(bar)
             .show_separator_line(false)
@@ -2113,6 +2150,17 @@ impl StudioApp {
         let background = theme::palette(&ctx).background;
         egui::CentralPanel::default().frame(egui::Frame::NONE.fill(background)).show(ui, |ui| self.central(ui, &mut acts));
         self.windows(&ctx, &mut acts);
+        // An update never starts while a recording, stream or replay buffer runs.
+        let idle = !self.outputs_running();
+        match updates_ui::show(&mut self.updates, ui, idle) {
+            updates_ui::Asked::Nothing => {}
+            updates_ui::Asked::OpenUrl(url) => {
+                if let Err(e) = studiocraft_platform::shell::open_url(&url) {
+                    self.notify(e.to_string(), true);
+                }
+            }
+            updates_ui::Asked::Close => self.request_exit(&ctx),
+        }
         theme::paint_focus_ring(&ctx);
         if self.title_bar.is_some() {
             title_bar::resize_zones(ui);
@@ -2138,18 +2186,23 @@ impl StudioApp {
     pub fn logic(&mut self, ctx: &egui::Context) {
         self.tick_studio(ctx);
         self.ticked_in_logic = true;
-        if ctx.input(|i| i.viewport().close_requested()) {
-            let busy = self.outputs_running();
-            if busy && !self.exit_confirmed {
-                ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-                self.confirm_exit = true;
-            } else if !self.save_all() && !self.close_despite_failed_save {
-                // The window stays open with the save error shown; closing again closes it.
-                ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-                self.close_despite_failed_save = true;
-            }
+        embed::logic(ctx, || self.close_decision());
+    }
+
+    /// Whether the window may close now that it was asked to: it is held while an output runs and
+    /// the user has not confirmed, and once when the scene collection could not be saved.
+    fn close_decision(&mut self) -> CloseDecision {
+        let busy = self.outputs_running();
+        if busy && !self.exit_confirmed {
+            self.confirm_exit = true;
+            CloseDecision::Hold
+        } else if !self.save_all() && !self.close_despite_failed_save {
+            // The window stays open with the save error shown; closing again closes it.
+            self.close_despite_failed_save = true;
+            CloseDecision::Hold
+        } else {
+            CloseDecision::Close
         }
-        craft_quit::on_close_request(ctx);
     }
 
     /// Install the interface fonts for the current interface language on `ctx`. After the first
@@ -2163,7 +2216,7 @@ impl StudioApp {
     /// Give the app the native file dialogs (a window exists).
     pub fn attach_dialogs(&mut self, ctx: &egui::Context) {
         let c = ctx.clone();
-        self.dialogs = Some(craft_dialogs::Dialogs::new(Arc::new(move || c.request_repaint())));
+        self.dialogs = Some(craft_dialogs::Dialogs::new(craft_dialogs::Wake::new(move || c.request_repaint())));
     }
 
     /// Show the queued file dialog, at the end of a frame.
@@ -2172,14 +2225,49 @@ impl StudioApp {
             d.show_pending(Some(frame));
         }
     }
+
+    /// Before each frame's passes: hand the runtime this frame's input and run what it fired last
+    /// frame. The desktop calls it from eframe's `raw_input_hook`; a test calls it before each
+    /// pass it runs.
+    pub fn before_input(&mut self, ctx: &egui::Context) {
+        embed::before_input(ctx, |out| self.frame_input(ctx, out));
+    }
+}
+
+/// Install the UI runtime and the interface fonts on `ctx`, once, before the first frame. On the
+/// desktop the runtime reads the running platform's shell and window services; otherwise (tests)
+/// it gets the current shell and no window services.
+pub fn install_runtime(ctx: &egui::Context, desktop: bool) -> Result<(), InstallError> {
+    let spec = if desktop {
+        InstallSpec::new(ShellInfo::current(), Arc::new(SystemWindows)).app_id(BUNDLE_ID)
+    } else {
+        InstallSpec::new(ShellInfo::default(), Arc::new(NoWindows))
+    };
+    let lang = i18n::lang();
+    embed::install(ctx, spec, &fonts::ui_fonts(i18n::I18N.code(lang), fonts::CRAFT_FONTS)).map(|_| ())
+}
+
+/// A context with the UI runtime installed, as tests drive the window.
+#[cfg(test)]
+pub(crate) fn test_context() -> egui::Context {
+    let ctx = egui::Context::default();
+    if let Err(e) = install_runtime(&ctx, false) {
+        panic!("the UI runtime did not install: {e:?}");
+    }
+    ctx
 }
 
 impl eframe::App for StudioApp {
+    fn raw_input_hook(&mut self, ctx: &egui::Context, _raw: &mut egui::RawInput) {
+        self.before_input(ctx);
+    }
+
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         StudioApp::logic(self, ctx);
     }
 
     fn ui(&mut self, ui: &mut Ui, frame: &mut eframe::Frame) {
+        embed::before_ui(ui.ctx(), frame);
         if self.dialogs.is_none() {
             self.attach_dialogs(ui.ctx());
         }

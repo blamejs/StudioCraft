@@ -7,9 +7,9 @@
 //! Live leave their labels out and keep the glyph and, while running, the timer, and last the
 //! menu titles move into the menu bar's overflow menu.
 
-use craft_keymap::CommandRef;
-use craft_menu::{BarStyle, Gate, MenuBar, MenuBarUi};
-use craft_ui::direction;
+use craft_behavior::fit::{FitItem, FitKeep, fit_items};
+use craft_menu::{MenuBar, MenuBarUi};
+use craft_ui::contract::Tracked;
 use egui::{Rect, TextStyle, Ui, pos2, vec2};
 use serde_json::{Value, json};
 use studiocraft_model::SettingsSchema;
@@ -108,27 +108,34 @@ pub fn fit(room: f32, menus: f32, w: &Widths) -> Fit {
     if at == Place::Inline {
         // The transitions are the one group that can move into an overflow button; the rest of
         // the bar is one group that stays.
-        let fixed = w.outputs(Place::Hidden, false);
-        let toolbar = craft_ui::layout::fit_toolbar(&[fixed.max(1.0), w.transitions], (room - menus).max(0.0), GROUP_GAP, w.overflow.max(1.0));
-        match toolbar {
-            Some(t) if t.overflow.is_empty() => return done(Place::Inline, false),
-            Some(t) if t.overflow == [1] => return done(Place::Overflow, false),
-            _ => at = Place::Overflow,
+        let fixed = w.outputs(Place::Hidden, false).max(1.0);
+        let overflow = w.overflow.max(1.0);
+        let available = (room - menus).max(0.0);
+        let items = [FitItem::new(fixed, 0, FitKeep::Pinned), FitItem::new(w.transitions, 0, FitKeep::Free)];
+        let toolbar = fit_items(&items, available, GROUP_GAP, GROUP_GAP, overflow);
+        if toolbar.overflow.is_empty() {
+            return done(Place::Inline, false);
         }
+        // The rest of the bar stays even when it does not fit beside the overflow button; then
+        // Record and Go Live also leave their labels out.
+        if f64::from(fixed) + f64::from(GROUP_GAP) <= f64::from(available) - f64::from(overflow) {
+            return done(Place::Overflow, false);
+        }
+        at = Place::Overflow;
     } else if menus + w.outputs(at, false) <= room {
         return done(at, false);
     }
     done(at, true)
 }
 
-/// The width the menu titles of `bar` take with `style`.
-pub fn menu_width(ui: &Ui, bar: &MenuBar, style: &BarStyle) -> f32 {
+// port: P9 (output bar) measures the menu titles with the framework's menu bar instead.
+
+/// The width the menu titles of `bar` take, each with the button padding on both sides.
+pub fn menu_width(ui: &Ui, bar: &MenuBar) -> f32 {
     let font = TextStyle::Button.resolve(ui.style());
-    let titles: f32 = bar
-        .menus
-        .iter()
-        .map(|m| ui.painter().layout_no_wrap(m.title.clone(), font.clone(), style.title_color).size().x + 2.0 * style.title_padding.x)
-        .sum();
+    let padding = ui.spacing().button_padding.x;
+    let color = ui.visuals().text_color();
+    let titles: f32 = bar.menus.iter().map(|m| ui.painter().layout_no_wrap(m.title.clone(), font.clone(), color).size().x + 2.0 * padding).sum();
     titles + 0.5
 }
 
@@ -294,9 +301,10 @@ fn transition_panel(ui: &mut Ui, studio: &Studio, schema: &SettingsSchema, field
 }
 
 impl StudioApp {
-    /// The top row, `room` points wide: the menu titles and the output bar. Returns the menu
-    /// commands chosen this frame.
-    pub(crate) fn top_row(&mut self, ui: &mut Ui, room: f32, laid: &MenuBar, gate: Gate, style: BarStyle, acts: &mut Vec<Act>) -> Vec<CommandRef> {
+    /// The top row, `room` points wide: the menu titles and the output bar. The menu commands
+    /// chosen reach the app through the frame output. `keyboard` false keeps F10 and Alt from the
+    /// menu bar.
+    pub(crate) fn top_row(&mut self, ui: &mut Ui, room: f32, laid: &Tracked<MenuBar>, keyboard: bool, acts: &mut Vec<Act>) {
         let ctx = ui.ctx().clone();
         let sizes = theme::sizes(&ctx);
         let palette = theme::palette(&ctx);
@@ -331,93 +339,97 @@ impl StudioApp {
                 _ => estimate,
             };
         }
-        let fit = fit(room, menu_width(ui, laid, &style), &widths);
+        let fit = fit(room, menu_width(ui, laid), &widths);
 
         let mut parts = Vec::new();
         let mut transitions_drawn = None;
         let height = ui.available_height();
-        let clicked = ui
-            .allocate_ui_with_layout(vec2(room, height), direction::row(ui), |ui| {
-                ui.spacing_mut().item_spacing.x = 0.0;
-                let top = ui.max_rect().top();
-                let start = direction::start_x(ui, ui.cursor());
-                let clicked = MenuBarUi::new(laid).gate(gate).style(style).label(&i18n::menu_text).shrink_to_fit(fit.menus).show(ui);
-                let end = direction::start_x(ui, ui.cursor());
-                parts.push(("menus", Rect::from_min_max(pos2(start.min(end), top), pos2(start.max(end), top + height))));
-                ui.add_space((room - (end - start).abs() - fit.outputs).max(0.0));
-                let mut first = true;
-                let mut gap = |ui: &mut Ui, w: f32| {
-                    if !first {
-                        ui.add_space(w);
-                    }
-                    first = false;
-                };
-                if docks.controls {
-                    gap(ui, GROUP_GAP);
-                    let r = segmented.show(ui);
-                    parts.push(("mode", r.rect));
-                    if r.changed.is_some() {
-                        acts.push(Act::run("studio.toggle", json!({})));
-                    }
+        ui.allocate_ui_with_layout(vec2(room, height), i18n::row(ui), |ui| {
+            ui.spacing_mut().item_spacing.x = 0.0;
+            let top = ui.max_rect().top();
+            let start = i18n::start_x(ui, ui.cursor());
+            // port: P9 (output bar) lets the framework's menu bar share the row; this child
+            // keeps the titles to the width the fit gives them, past which they overflow.
+            ui.allocate_ui_with_layout(vec2(fit.menus, height), i18n::row(ui), |ui| {
+                // The bar's own default applies unless the keys are taken (on macOS it takes none).
+                let menus = MenuBarUi::new(laid);
+                if keyboard { menus } else { menus.keyboard(false) }.show(ui)
+            });
+            let end = i18n::start_x(ui, ui.cursor());
+            parts.push(("menus", Rect::from_min_max(pos2(start.min(end), top), pos2(start.max(end), top + height))));
+            ui.add_space((room - (end - start).abs() - fit.outputs).max(0.0));
+            let mut first = true;
+            let mut gap = |ui: &mut Ui, w: f32| {
+                if !first {
+                    ui.add_space(w);
                 }
-                match fit.transitions {
-                    Place::Inline => {
-                        gap(ui, GROUP_GAP);
-                        // A scope keeps the spacing inside the group and none after it.
-                        let group = ui.scope(|ui| {
-                            ui.spacing_mut().item_spacing.x = spacing;
-                            let t = &studio.collection().transition;
-                            let current = studio.registry().transition(&t.kind).ok();
-                            let name = current.as_ref().map_or(t.kind.as_str(), |p| tl!(p.name()));
-                            let r = craft_ui::ComboBox::from_id_salt("transition-kind").selected_text(name).width(combo).show_ui(ui, |ui| {
-                                for p in studio.registry().transitions() {
-                                    if ui.selectable_label(p.id() == t.kind, tl!(p.name())).clicked() && p.id() != t.kind {
-                                        acts.push(Act::run("transition.set", json!({"kind": p.id()})));
-                                    }
+                first = false;
+            };
+            if docks.controls {
+                gap(ui, GROUP_GAP);
+                let r = segmented.show(ui);
+                parts.push(("mode", r.rect));
+                if r.changed.is_some() {
+                    acts.push(Act::run("studio.toggle", json!({})));
+                }
+            }
+            match fit.transitions {
+                Place::Inline => {
+                    gap(ui, GROUP_GAP);
+                    // A scope keeps the spacing inside the group and none after it.
+                    let group = ui.scope(|ui| {
+                        ui.spacing_mut().item_spacing.x = spacing;
+                        let t = &studio.collection().transition;
+                        let current = studio.registry().transition(&t.kind).ok();
+                        let name = current.as_ref().map_or(t.kind.as_str(), |p| tl!(p.name()));
+                        // port: P9 (output bar) replaces this egui combo box with `Select`.
+                        #[expect(clippy::disallowed_types, reason = "craft-ui no longer has its combo box; the output bar moves to `Select`")]
+                        let r = egui::ComboBox::from_id_salt("transition-kind").selected_text(name).width(combo).show_ui(ui, |ui| {
+                            for p in studio.registry().transitions() {
+                                if ui.selectable_label(p.id() == t.kind, tl!(p.name())).clicked() && p.id() != t.kind {
+                                    acts.push(Act::run("transition.set", json!({"kind": p.id()})));
                                 }
-                            });
-                            parts.push(("transition", r.response.on_hover_text(tl!("Transition")).rect));
-                            parts.push(("duration", duration_field(ui, studio, sizes.field_number, sizes.control_md, acts).rect));
-                            if !schema.fields.is_empty() {
-                                let r = icons::panel(ui, Icon::Gear, tl!("Transition settings"), sizes.control_sm, |ui| {
-                                    ui.set_min_width(200.0);
-                                    settings_form(ui, studio, &schema, acts);
-                                });
-                                parts.push(("transition_settings", r.rect));
                             }
                         });
-                        transitions_drawn = Some(group.response.rect.width());
-                    }
-                    Place::Overflow => {
-                        gap(ui, GROUP_GAP);
-                        let r = icons::panel(ui, Icon::Transition, tl!("Transition"), sizes.control_sm, |ui| {
-                            transition_panel(ui, studio, &schema, sizes.field_number, sizes.control_md, acts);
-                        });
-                        parts.push(("transition_overflow", r.rect));
-                    }
-                    Place::Hidden => {}
-                }
-                if docks.controls {
-                    for (f, glyph, id, part, gap_before) in
-                        [(&record, Glyph::Record, "record.toggle", "record", OUTPUT_GAP), (&live, Glyph::Live, "stream.toggle", "stream", GROUP_GAP)]
-                    {
-                        gap(ui, gap_before);
-                        let r = button(f, glyph, &air_style).compact(fit.compact).show(ui).on_hover_text(&f.tip);
-                        parts.push((part, r.rect));
-                        if r.clicked() {
-                            acts.push(Act::run(id, json!({})));
+                        parts.push(("transition", r.response.on_hover_text(tl!("Transition")).rect));
+                        parts.push(("duration", duration_field(ui, studio, sizes.field_number, sizes.control_md, acts).rect));
+                        if !schema.fields.is_empty() {
+                            let r = icons::panel(ui, Icon::Gear, tl!("Transition settings"), sizes.control_sm, |ui| {
+                                ui.set_min_width(200.0);
+                                settings_form(ui, studio, &schema, acts);
+                            });
+                            parts.push(("transition_settings", r.rect));
                         }
+                    });
+                    transitions_drawn = Some(group.response.rect.width());
+                }
+                Place::Overflow => {
+                    gap(ui, GROUP_GAP);
+                    let r = icons::panel(ui, Icon::Transition, tl!("Transition"), sizes.control_sm, |ui| {
+                        transition_panel(ui, studio, &schema, sizes.field_number, sizes.control_md, acts);
+                    });
+                    parts.push(("transition_overflow", r.rect));
+                }
+                Place::Hidden => {}
+            }
+            if docks.controls {
+                for (f, glyph, id, part, gap_before) in
+                    [(&record, Glyph::Record, "record.toggle", "record", OUTPUT_GAP), (&live, Glyph::Live, "stream.toggle", "stream", GROUP_GAP)]
+                {
+                    gap(ui, gap_before);
+                    let r = button(f, glyph, &air_style).compact(fit.compact).show(ui).on_hover_text(&f.tip);
+                    parts.push((part, r.rect));
+                    if r.clicked() {
+                        acts.push(Act::run(id, json!({})));
                     }
                 }
-                clicked
-            })
-            .inner;
+            }
+        });
         self.output_bar.fit = Some(fit);
         self.output_bar.parts = parts;
         if let Some(w) = transitions_drawn {
             self.output_bar.transitions_drawn = Some((estimate, w));
         }
-        clicked
     }
 }
 

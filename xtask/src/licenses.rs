@@ -36,6 +36,10 @@ pub const EXCEPTIONS: &[(&str, &str, &str)] = &[
     // `rav1e` is an optional dependency of `craft-video` that no StudioCraft crate enables;
     // `cargo metadata` lists both because `Cargo.lock` does.
     ("libfuzzer-sys", "(MIT OR Apache-2.0) AND NCSA", "rav1e"),
+    // MIT-Modern-Variant is HarfBuzz's MIT-style license. `craft-font-subset` (through
+    // `craft-fonts-build`, a build dependency of `studiocraft-ui-egui`) links it to subset the
+    // embedded fonts at build time.
+    ("harfbuzz-subset-sys", "MIT AND MIT-Modern-Variant", "craft-font-subset"),
 ];
 
 fn excepted(name: &str, license: &str) -> bool {

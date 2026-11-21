@@ -1,9 +1,8 @@
-//! Small icons drawn with shapes, on craft-ui's icon buttons.
+//! Small icons drawn with shapes, on icon buttons.
 
 use std::f32::consts::{PI, TAU};
 
-use craft_ui::buttons::{ButtonVisuals, IconButton, IconButtonStyle};
-use egui::{Color32, CornerRadius, Pos2, Rect, Shape, Stroke, Ui, pos2, vec2};
+use egui::{Color32, CornerRadius, Pos2, Rect, Sense, Shape, Stroke, StrokeKind, Ui, pos2, vec2};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Icon {
@@ -27,38 +26,61 @@ pub enum Icon {
     Close,
 }
 
-/// Button colors from the current egui theme.
-pub fn style(ui: &Ui) -> IconButtonStyle {
-    let w = &ui.visuals().widgets;
-    let v = |s: &egui::style::WidgetVisuals| ButtonVisuals { fill: s.weak_bg_fill, stroke: s.bg_stroke, icon: s.fg_stroke.color };
-    IconButtonStyle {
-        normal: v(&w.inactive),
-        hovered: v(&w.hovered),
-        pressed: Some(v(&w.active)),
-        selected: ButtonVisuals { fill: ui.visuals().selection.bg_fill, stroke: Stroke::NONE, icon: ui.visuals().selection.stroke.color },
-        corner_radius: CornerRadius::same(3),
-        focus_stroke: Stroke::new(1.0, ui.visuals().selection.stroke.color),
-    }
-}
-
 /// An icon button with its own size and, unless transparent, its own icon color.
 pub fn sized(ui: &mut Ui, icon: Icon, tip: &str, enabled: bool, size: egui::Vec2, tint: Color32) -> bool {
     response(ui, icon, tip, enabled, size, tint).clicked()
 }
 
-/// An icon button's response, for callers that need its rectangle as well as the click.
+// port: P8 (icons, segmented control and on-air buttons) replaces this button, the copy of the
+// icon button craft-ui dropped, with the framework's `Icon` buttons.
+
+/// An icon button's response, for callers that need its rectangle as well as the click. It takes
+/// its colors from the current egui theme, with an inset outline while it has keyboard focus.
 pub(crate) fn response(ui: &mut Ui, icon: Icon, tip: &str, enabled: bool, size: egui::Vec2, tint: Color32) -> egui::Response {
-    let st = style(ui);
     ui.add_enabled_ui(enabled, |ui| {
-        IconButton::new(tip, size, &st)
-            .show(ui, |ui, rect, color| {
-                let color = if tint == Color32::TRANSPARENT { color } else { tint };
-                let color = if ui.is_enabled() { color } else { color.gamma_multiply(0.4) };
-                paint(ui, icon, rect, color);
-            })
-            .on_hover_text(tip)
+        let valid = size.is_finite() && size.x > 0.0 && size.y > 0.0 && size.x <= 4096.0 && size.y <= 4096.0;
+        let (rect, response) =
+            ui.allocate_exact_size(if valid { size } else { egui::Vec2::ZERO }, if valid { Sense::click() } else { Sense::hover() });
+        response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, valid && ui.is_enabled(), false, tip));
+        if valid {
+            let w = &ui.visuals().widgets;
+            let state = if response.is_pointer_button_down_on() {
+                &w.active
+            } else if response.hovered() {
+                &w.hovered
+            } else {
+                &w.inactive
+            };
+            let radius = CornerRadius::same(3);
+            if state.weak_bg_fill != Color32::TRANSPARENT {
+                ui.painter().rect_filled(rect, radius, state.weak_bg_fill);
+            }
+            let stroke = bounded_stroke(state.bg_stroke, rect);
+            if !stroke.is_empty() {
+                ui.painter().rect_stroke(rect, radius, stroke, StrokeKind::Inside);
+            }
+            let color = if tint == Color32::TRANSPARENT { state.fg_stroke.color } else { tint };
+            let color = if ui.is_enabled() { color } else { color.gamma_multiply(0.4) };
+            paint(ui, icon, rect, color);
+            if response.has_focus() && rect.width() > 4.0 && rect.height() > 4.0 {
+                let focus = rect.shrink(2.0);
+                let stroke = bounded_stroke(Stroke::new(1.0, ui.visuals().selection.stroke.color), focus);
+                if !stroke.is_empty() {
+                    ui.painter().rect_stroke(focus, radius, stroke, StrokeKind::Inside);
+                }
+            }
+        }
+        response.on_hover_text(tip)
     })
     .inner
+}
+
+fn bounded_stroke(stroke: Stroke, rect: Rect) -> Stroke {
+    if stroke.width.is_finite() && stroke.width > 0.0 {
+        Stroke::new(stroke.width.min(rect.width().min(rect.height()) * 0.5), stroke.color)
+    } else {
+        Stroke::NONE
+    }
 }
 
 /// An icon button that opens a menu below it.

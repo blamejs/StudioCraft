@@ -6,9 +6,12 @@
 
 use std::sync::Arc;
 
+use craft_ui::dialog::{DialogHost, DialogResult};
+use craft_update::Release;
 use craft_update::http::{Fetched, Http};
+use craft_update::stack_dialogs::{CheckChoice, UpdateCheckDialog};
 use craft_update::updater::{Action, CheckSource, Status, Updater};
-use craft_update::{CheckResultDialog, CheckResultResponse, Release};
+use egui::Ui;
 use serde_json::{Value, json};
 
 use crate::i18n::Msg;
@@ -60,6 +63,9 @@ pub(crate) struct Runtime {
     pub(crate) window_open: bool,
     /// The failed check the status bar has reported, so that it is reported once.
     reported: Option<String>,
+    // port: P15 (update dialogs) moves the update dialogs onto the window's own dialog host.
+    /// The host the update prompt and the result of Help › Check for Updates show on.
+    dialogs: DialogHost,
 }
 
 impl Default for Runtime {
@@ -70,7 +76,7 @@ impl Default for Runtime {
 
 impl Runtime {
     pub(crate) fn new(updater: Updater) -> Self {
-        Self { updater: updater.with_translator(translate), online: false, window_open: false, reported: None }
+        Self { updater: updater.with_translator(translate), online: false, window_open: false, reported: None, dialogs: DialogHost::new() }
     }
 }
 
@@ -90,7 +96,8 @@ pub(crate) fn check(app: &mut StudioApp, ctx: &egui::Context) -> Result<Value, M
         return Err(tmsg!("update checks are off in this session (--no-prefs, a scripted run or a test)"));
     }
     rt.window_open = true;
-    rt.updater.check_now(ctx);
+    rt.updater.check_now();
+    ctx.request_repaint();
     Ok(json!({"checking": true}))
 }
 
@@ -101,7 +108,7 @@ pub(crate) fn tick(rt: &mut Runtime, ctx: &egui::Context, at_start: bool) -> Opt
         return None;
     }
     if at_start {
-        rt.updater.check_at_start(ctx);
+        rt.updater.check_at_start();
     }
     rt.updater.tick(ctx);
     match rt.updater.status() {
@@ -127,28 +134,46 @@ pub(crate) enum Asked {
 
 /// Draw the update prompt and the result of Help › Check for Updates. `can_start` is false while
 /// an update must not start (a recording or stream is running).
-pub(crate) fn show(rt: &mut Runtime, ctx: &egui::Context, can_start: bool) -> Asked {
-    let asked = match rt.updater.show_if(ctx, can_start) {
+pub(crate) fn show(rt: &mut Runtime, ui: &mut Ui, can_start: bool) -> Asked {
+    let ctx = ui.ctx().clone();
+    let asked = match rt.updater.run(&mut rt.dialogs, can_start) {
         Action::OpenUrl(url) => Asked::OpenUrl(url),
         Action::Close => Asked::Close,
-        Action::None => Asked::Nothing,
+        _ => Asked::Nothing,
     };
     // An available update goes to the prompt, which replaces the result dialog.
     if rt.window_open && rt.updater.prompt_open() {
         rt.window_open = false;
     }
-    if rt.window_open {
-        match CheckResultDialog::new(&UPDATE_APP, VERSION).with_translator(translate).show(ctx, rt.updater.status()) {
-            CheckResultResponse::None => {}
-            CheckResultResponse::Close => rt.window_open = false,
-            CheckResultResponse::CheckAgain => rt.updater.check_now(ctx),
-            CheckResultResponse::RestartToUpdate => rt.updater.restart_to_update(),
+    if let Some(answer) = rt.dialogs.take::<UpdateCheckDialog>() {
+        match answer {
+            DialogResult::Ok(CheckChoice::CheckNow | CheckChoice::CheckAgain) => rt.updater.check_now(),
+            DialogResult::Ok(CheckChoice::RestartToUpdate) => rt.updater.restart_to_update(),
+            DialogResult::Ok(CheckChoice::Update) => {
+                rt.updater.request_install(can_start);
+            }
+            _ => rt.window_open = false,
         }
         // Closing the dialog dismisses the outcome it showed.
         if !rt.window_open {
             rt.updater.dismiss_status();
         }
     }
+    if rt.window_open {
+        if !rt.dialogs.is_open::<UpdateCheckDialog>() {
+            rt.dialogs.open(UpdateCheckDialog::new(VERSION));
+        }
+        let status = rt.updater.status().clone();
+        let (installing, message) = (rt.updater.is_installing(), rt.updater.status_message());
+        if let Some(dialog) = rt.dialogs.get_mut::<UpdateCheckDialog>() {
+            dialog.set_status(status);
+            dialog.set_installing(installing);
+            dialog.set_message(message);
+        }
+    } else if rt.dialogs.is_open::<UpdateCheckDialog>() {
+        rt.dialogs.cancel::<UpdateCheckDialog>(&ctx);
+    }
+    rt.dialogs.run(ui);
     asked
 }
 
@@ -180,6 +205,7 @@ mod tests {
     }
 
     fn frame(a: &mut StudioApp, ctx: &egui::Context) {
+        a.before_input(ctx);
         let mut out = ctx.run_ui(egui::RawInput::default(), |ui| a.frame(ui));
         out.textures_delta.clear();
     }
@@ -220,7 +246,7 @@ mod tests {
         let release = offered(body(list(&["v99.0.0"])), VERSION).unwrap().expect("99.0.0 is offered");
         assert_eq!(release.tag, "v99.0.0");
         let mut a = app(Ok(Some(release)));
-        let ctx = egui::Context::default();
+        let ctx = crate::test_context();
         a.perform(&ctx, &craft_keymap::CommandRef::new("app.check_updates")).unwrap();
         assert!(a.updates.window_open);
         settle(&mut a, &ctx);
@@ -237,7 +263,7 @@ mod tests {
         assert_eq!(offered(body(list(&["v0.0.1"])), VERSION), Ok(None));
         assert_eq!(offered(Ok(Fetched::NotModified), VERSION), Ok(None));
         let mut a = app(Ok(None));
-        let ctx = egui::Context::default();
+        let ctx = crate::test_context();
         a.perform(&ctx, &craft_keymap::CommandRef::new("app.check_updates")).unwrap();
         settle(&mut a, &ctx);
         assert_eq!(a.updates.updater.status(), &Status::UpToDate);
@@ -261,7 +287,7 @@ mod tests {
 
         let error = offered(Ok(Fetched::NotFound), VERSION).unwrap_err();
         let mut a = app(Err(error.clone()));
-        let ctx = egui::Context::default();
+        let ctx = crate::test_context();
         a.perform(&ctx, &craft_keymap::CommandRef::new("app.check_updates")).unwrap();
         settle(&mut a, &ctx);
         assert_eq!(a.updates.updater.status(), &Status::Failed(error.clone()));
@@ -279,7 +305,7 @@ mod tests {
         // the menu command nor the check at start reaches the network.
         let mut a = StudioApp::boot(crate::store::Store::memory(), None, Vec::new());
         assert!(a.store().prefs().check_updates, "the check at start is on by default");
-        let ctx = egui::Context::default();
+        let ctx = crate::test_context();
         let e = a.perform(&ctx, &craft_keymap::CommandRef::new("app.check_updates")).unwrap_err();
         assert_eq!(e, "update checks are off in this session (--no-prefs, a scripted run or a test)");
         for _ in 0..3 {

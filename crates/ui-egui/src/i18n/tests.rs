@@ -14,6 +14,7 @@ use crate::store::Store;
 /// One frame of the window; every text it painted.
 fn painted(app: &mut StudioApp, ctx: &egui::Context) -> Vec<String> {
     let raw = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1600.0, 1000.0))), ..Default::default() };
+    app.before_input(ctx);
     let mut out = ctx.run_ui(raw, |ui| app.frame(ui));
     out.textures_delta.clear();
     fn walk(shape: &egui::Shape, texts: &mut Vec<String>) {
@@ -106,7 +107,7 @@ fn the_embedded_catalogs_have_no_problems() {
 fn every_label_drawn_in_the_pseudo_locale_went_through_translation() {
     let mut a = StudioApp::boot(Store::memory(), None, Vec::new());
     set_lang(Lang::PSEUDO);
-    let ctx = egui::Context::default();
+    let ctx = crate::test_context();
     a.perform(&ctx, &CommandRef::with_params("source.add", json!({"kind": "color", "name": "Backdrop"}))).unwrap();
     a.perform(&ctx, &CommandRef::with_params("source.add", json!({"kind": "text", "name": "Caption"}))).unwrap();
     let mut seen = Vec::new();
@@ -165,7 +166,7 @@ fn every_label_drawn_in_the_pseudo_locale_went_through_translation() {
                     out.push(label.clone());
                     labels(children, out);
                 }
-                Node::Separator | Node::Standard { .. } => {}
+                _ => {}
             }
         }
     }
@@ -219,13 +220,27 @@ fn studio_notices_are_translated_with_their_values() {
 fn notices_keep_english_and_the_status_bar_translates_them() {
     let mut a = StudioApp::boot(Store::memory(), None, Vec::new());
     set_lang(Lang::PSEUDO);
-    let ctx = egui::Context::default();
+    let ctx = crate::test_context();
     a.notify(tmsg!("Imported the scene collection `{name}`", name = "Late Show"), false);
     let texts = shown(&mut a, &ctx);
     assert!(texts.iter().any(|t| t == "\u{27e6}Imported the scene collection `Late Show`\u{27e7}"), "{texts:?}");
     let hud = a.hud();
     let last = hud["ui"]["notices"].as_array().and_then(|n| n.last()).cloned().unwrap_or_default();
     assert_eq!(last["text"], json!("Imported the scene collection `Late Show`"));
+}
+
+#[test]
+fn the_framework_words_follow_the_interface_language() {
+    let cancel = craft_i18n::Word::keyed("dialog.cancel", "Cancel");
+    let de = I18N.from_code("de").unwrap();
+    set_lang(Lang::EN);
+    assert_eq!(framework_words().get(cancel), "Cancel");
+    set_lang(de);
+    assert_eq!(framework_words().get(cancel), "Abbrechen");
+    set_lang(Lang::PSEUDO);
+    assert_eq!(framework_words().get(cancel), "Cancel");
+    set_lang(Lang::EN);
+    assert_eq!(framework_words().get(cancel), "Cancel");
 }
 
 #[test]

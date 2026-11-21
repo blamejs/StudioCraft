@@ -2,10 +2,13 @@
 //! the profile, the Language setting, the update check at start and the graphics adapter (in the
 //! Video tab's Hardware acceleration section), applied with OK or Apply.
 
+// port: P16 (Settings on PreferencesWindow) replaces these egui combo boxes with `Select`.
+#![expect(clippy::disallowed_types, reason = "craft-ui no longer has its combo box; Settings moves to `Select`")]
+
 use std::collections::BTreeMap;
 
 use craft_keymap::{Binding, CommandRef, Keymap, MAX_BINDING_TEXT, Overrides};
-use egui::{RichText, Ui};
+use egui::{ComboBox, RichText, Ui};
 use studiocraft_audio_tracks::space::TRACK_BYTES_PER_SECOND;
 use studiocraft_model::profile::DEFAULT_AUDIO_DEVICE;
 use studiocraft_model::{AfterStop, AudioTracksSettings, AudioTracksWhen, KeyRef, Profile, RecordingFormat, RecordingQuality, ReplaySettings};
@@ -339,7 +342,7 @@ impl SettingsWindow {
     /// are shown disabled.
     fn encoder_combo(ui: &mut Ui, id: &str, registry: &Registry, offered: &[String], value: &mut String, streaming: bool) {
         let name = registry.encoder(value).map_or_else(|_| value.clone(), |e| tl!(e.name()).to_string());
-        craft_ui::ComboBox::from_id_salt(id).selected_text(name).width(260.0).show_ui(ui, |ui| {
+        ComboBox::from_id_salt(id).selected_text(name).width(260.0).show_ui(ui, |ui| {
             for (e, available) in listed_encoders(registry, offered, streaming) {
                 let name = tl!(e.name());
                 let text = if available { name.to_string() } else { craft_i18n::fmt(tl!("{encoder} (not in this ffmpeg)"), &[("encoder", name)]) };
@@ -367,7 +370,7 @@ impl SettingsWindow {
     fn general(&mut self, ui: &mut Ui) {
         egui::Grid::new("general-grid").num_columns(2).spacing([12.0, 8.0]).show(ui, |ui| {
             ui.label(tl!("Language"));
-            craft_ui::ComboBox::from_id_salt("language").selected_text(language_name(&self.language)).width(260.0).show_ui(ui, |ui| {
+            ComboBox::from_id_salt("language").selected_text(language_name(&self.language)).width(260.0).show_ui(ui, |ui| {
                 for code in std::iter::once(i18n::AUTO).chain(i18n::languages()) {
                     ui.selectable_value(&mut self.language, code.to_string(), language_name(code));
                 }
@@ -417,7 +420,7 @@ impl SettingsWindow {
             ui.add(egui::DragValue::new(&mut s.video_bitrate_kbps).range(100..=200_000).speed(50.0).suffix(format!(" {}", tl!("kbps"))));
             ui.end_row();
             ui.label(tl!("Audio bitrate"));
-            craft_ui::ComboBox::from_id_salt("audio-kbps").selected_text(kbps(s.audio_bitrate_kbps)).show_ui(ui, |ui| {
+            ComboBox::from_id_salt("audio-kbps").selected_text(kbps(s.audio_bitrate_kbps)).show_ui(ui, |ui| {
                 for k in AUDIO_KBPS {
                     ui.selectable_value(&mut s.audio_bitrate_kbps, k, kbps(k));
                 }
@@ -445,7 +448,7 @@ impl SettingsWindow {
             });
             ui.end_row();
             ui.label(tl!("Format"));
-            craft_ui::ComboBox::from_id_salt("format").selected_text(o.format.extension().to_uppercase()).show_ui(ui, |ui| {
+            ComboBox::from_id_salt("format").selected_text(o.format.extension().to_uppercase()).show_ui(ui, |ui| {
                 for f in RecordingFormat::ALL {
                     ui.selectable_value(&mut o.format, f, f.extension().to_uppercase());
                 }
@@ -453,7 +456,7 @@ impl SettingsWindow {
             ui.end_row();
             ui.label(tl!("Quality"));
             let label = |q: RecordingQuality| tl!(quality_label(q));
-            craft_ui::ComboBox::from_id_salt("quality").selected_text(label(o.quality)).width(260.0).show_ui(ui, |ui| {
+            ComboBox::from_id_salt("quality").selected_text(label(o.quality)).width(260.0).show_ui(ui, |ui| {
                 for q in RecordingQuality::ALL {
                     ui.selectable_value(&mut o.quality, q, label(q));
                 }
@@ -502,7 +505,7 @@ impl SettingsWindow {
             egui::Grid::new("audio-tracks-grid").num_columns(2).spacing([12.0, 8.0]).show(ui, |ui| {
                 ui.label(tl!("Write them while"));
                 let label = |w: AudioTracksWhen| tl!(when_label(w));
-                craft_ui::ComboBox::from_id_salt("audio-tracks-when").selected_text(label(t.when)).width(260.0).show_ui(ui, |ui| {
+                ComboBox::from_id_salt("audio-tracks-when").selected_text(label(t.when)).width(260.0).show_ui(ui, |ui| {
                     for w in AudioTracksWhen::ALL {
                         ui.selectable_value(&mut t.when, w, label(w));
                     }
@@ -519,7 +522,7 @@ impl SettingsWindow {
                 ui.end_row();
                 ui.label(tl!("After a take"));
                 let label = |a: AfterStop| tl!(after_stop_label(a));
-                craft_ui::ComboBox::from_id_salt("audio-tracks-after-stop").selected_text(label(t.after_stop)).width(260.0).show_ui(ui, |ui| {
+                ComboBox::from_id_salt("audio-tracks-after-stop").selected_text(label(t.after_stop)).width(260.0).show_ui(ui, |ui| {
                     for a in AfterStop::ALL {
                         ui.selectable_value(&mut t.after_stop, a, label(a));
                     }
@@ -550,7 +553,7 @@ impl SettingsWindow {
         let listed = &self.output_devices;
         egui::Grid::new("audio-grid").num_columns(2).spacing([12.0, 8.0]).show(ui, |ui| {
             ui.label(tl!("Monitoring device"));
-            craft_ui::ComboBox::from_id_salt("monitoring-device").selected_text(device_name(device, listed)).width(320.0).show_ui(ui, |ui| {
+            ComboBox::from_id_salt("monitoring-device").selected_text(device_name(device, listed)).width(320.0).show_ui(ui, |ui| {
                 ui.selectable_value(device, DEFAULT_AUDIO_DEVICE.to_string(), tl!("Default"));
                 for d in listed {
                     ui.selectable_value(device, d.id.clone(), &d.name);
@@ -569,7 +572,7 @@ impl SettingsWindow {
                 ui.add(egui::DragValue::new(w).range(16..=8192));
                 ui.label("×");
                 ui.add(egui::DragValue::new(h).range(16..=8192));
-                craft_ui::ComboBox::from_id_salt(id).selected_text(tl!("Presets")).show_ui(ui, |ui| {
+                ComboBox::from_id_salt(id).selected_text(tl!("Presets")).show_ui(ui, |ui| {
                     for (pw, ph) in SIZES {
                         if ui.selectable_label(*w == pw && *h == ph, format!("{pw} × {ph}")).clicked() {
                             (*w, *h) = (pw, ph);
@@ -593,7 +596,7 @@ impl SettingsWindow {
             choices.extend(self.displays.iter().map(|d| (d.name.clone(), (d.width, d.height))));
             if !choices.is_empty() {
                 ui.label(tl!("Match display"));
-                craft_ui::ComboBox::from_id_salt("match-display").selected_text(tl!("Choose a display")).show_ui(ui, |ui| {
+                ComboBox::from_id_salt("match-display").selected_text(tl!("Choose a display")).show_ui(ui, |ui| {
                     for (name, (w, h)) in &choices {
                         let fits = crate::canvas_for((*w, *h)).is_ok();
                         let on = v.base_width == *w && v.base_height == *h;
@@ -614,7 +617,7 @@ impl SettingsWindow {
                 .iter()
                 .find(|(_, n, d)| *n == v.fps_num && *d == v.fps_den)
                 .map_or_else(|| format!("{:.2}", v.fps()), |(l, _, _)| (*l).to_string());
-            craft_ui::ComboBox::from_id_salt("fps").selected_text(current).show_ui(ui, |ui| {
+            ComboBox::from_id_salt("fps").selected_text(current).show_ui(ui, |ui| {
                 for (label, n, d) in FPS {
                     if ui.selectable_label(v.fps_num == n && v.fps_den == d, label).clicked() {
                         (v.fps_num, v.fps_den) = (n, d);
@@ -640,7 +643,7 @@ impl SettingsWindow {
         egui::Grid::new("hardware-grid").num_columns(2).spacing([12.0, 8.0]).show(ui, |ui| {
             ui.label(tl!("Graphics adapter"));
             ui.vertical(|ui| {
-                craft_ui::ComboBox::from_id_salt("graphics-adapter").selected_text(hardware::label(chosen, listed)).width(320.0).show_ui(ui, |ui| {
+                ComboBox::from_id_salt("graphics-adapter").selected_text(hardware::label(chosen, listed)).width(320.0).show_ui(ui, |ui| {
                     let mut choices = hardware::choices(listed);
                     if !choices.contains(chosen) {
                         choices.push(chosen.clone());
@@ -660,7 +663,7 @@ impl SettingsWindow {
             }
             ui.label(tl!("Hardware encoder"));
             ui.vertical(|ui| {
-                craft_ui::ComboBox::from_id_salt("hardware-encoder").selected_text(hardware_encoder_label(encoder)).width(320.0).show_ui(ui, |ui| {
+                ComboBox::from_id_salt("hardware-encoder").selected_text(hardware_encoder_label(encoder)).width(320.0).show_ui(ui, |ui| {
                     for id in hardware_encoder_choices(offered, encoder) {
                         let text = hardware_encoder_label(&id);
                         ui.selectable_value(encoder, id, text);
