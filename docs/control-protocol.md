@@ -359,8 +359,8 @@ that is ending, and 1,024 markers waiting to be written are errors.
 
 `record.marker` takes `{"name"}` and marks the running recording at this moment. `name` follows
 the rules of `audio_tracks.marker`; without it the marker is "Marker N", the recording's Nth
-marker. It returns `{"name", "seconds"}`, where `seconds` counts from the recording's first frame.
-No running recording and a recording that already holds 10,000 markers are errors. When the
+marker. It returns `{"name", "seconds"}`, where `seconds` counts from the recording's first frame
+and leaves out the time the recording has skipped so far while the computer was suspended. No running recording and a recording that already holds 10,000 markers are errors. When the
 recording stops, `<recording name>.otio` is written beside it with each marker at its frame
 ([Recording markers](features.md#recording-markers)).
 

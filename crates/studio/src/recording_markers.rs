@@ -11,8 +11,10 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::thread::JoinHandle;
+use std::time::Duration;
 
 use serde_json::{Value, json};
+use studiocraft_media::clock::{duration_of, tick_of};
 use studiocraft_media::stats::EncoderStats;
 use studiocraft_media::{FrameRate, Tick};
 
@@ -22,7 +24,7 @@ use crate::{Notice, Studio, StudioError};
 /// Markers one recording holds at most.
 pub(crate) const MAX_MARKERS: usize = 10_000;
 
-/// A marker: its time from the recording's first frame, and its name.
+/// A marker: its time on the studio clock from the recording's first frame, and its name.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct Marker {
     pub at: Tick,
@@ -44,6 +46,20 @@ impl Written {
     fn frames(&self) -> i64 {
         i64::try_from(self.0.frames.load(Ordering::Relaxed)).unwrap_or(i64::MAX)
     }
+
+    /// Where `at`, a time on the studio clock from the recording's first frame, lies in the
+    /// recording: the gaps the recording left out before it (the computer was suspended) are not
+    /// counted.
+    fn in_recording(&self, at: Tick) -> Tick {
+        let at_ns = u64::try_from(duration_of(at).as_nanos()).unwrap_or(u64::MAX);
+        let skipped = tick_of(Duration::from_nanos(self.0.skipped_before(at_ns)));
+        Tick(at.0.saturating_sub(skipped.0).max(0))
+    }
+}
+
+/// [`Written::in_recording`], or `at` for a recording without encoder counters.
+fn in_recording(written: Option<&Written>, at: Tick) -> Tick {
+    written.map_or(at, |w| w.in_recording(at))
 }
 
 /// What [`MarkerWatch::observe`] looks up for a new recording: its file, its frame rate and its
@@ -104,8 +120,8 @@ impl MarkerWatch {
     }
 
     /// Mark the watched recording at `now`: named `name`, or "Marker N" for its Nth marker.
-    /// Returns the marker.
-    pub(crate) fn add(&mut self, now: Tick, name: Option<String>) -> Result<Marker, String> {
+    /// Returns the marker, and where it lies in the recording as far as the encoder has written.
+    pub(crate) fn add(&mut self, now: Tick, name: Option<String>) -> Result<(Marker, Tick), String> {
         let Some(w) = &mut self.recording else {
             return Err("no recording is running".into());
         };
@@ -115,7 +131,8 @@ impl MarkerWatch {
         let name = name.unwrap_or_else(|| format!("Marker {}", w.markers.len() + 1));
         let marker = Marker { at: Tick(now.0.saturating_sub(w.start.0).max(0)), name };
         w.markers.push(marker.clone());
-        Ok(marker)
+        let placed = in_recording(w.written.as_ref(), marker.at);
+        Ok((marker, placed))
     }
 }
 
@@ -143,8 +160,9 @@ fn time_range(start: i64, duration: i64, rate: FrameRate) -> Value {
 
 /// The OpenTimelineIO timeline for `ended`: the recording, named by its file name relative to the
 /// timeline file, as one clip on a video track and an audio track, and each marker at the frame
-/// that holds its time. The clip holds the frames that start before the stop, and no more frames
-/// than the encoder was handed. A marker after the last frame is put on the last frame.
+/// that holds its time in the recording, without the gaps the recording left out before it. The
+/// clip holds the frames that start before the stop, and no more frames than the encoder was
+/// handed. A marker after the last frame is put on the last frame.
 pub(crate) fn timeline(ended: &Ended) -> Value {
     let rate = ended.rate.sane();
     let file = ended.recording.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
@@ -194,7 +212,7 @@ pub(crate) fn timeline(ended: &Ended) -> Value {
                 "name": m.name,
                 "comment": "",
                 "color": "GREEN",
-                "marked_range": time_range(rate.frame_at(m.at).min(frames - 1), 0, rate),
+                "marked_range": time_range(rate.frame_at(in_recording(ended.written.as_ref(), m.at)).min(frames - 1), 0, rate),
                 "metadata": {},
             })
         })
@@ -299,8 +317,13 @@ impl Studio {
     }
 
     /// Start writing the timeline of `ended` on a thread of its own, so a slow disk does not hold
-    /// up a frame.
+    /// up a frame. A recording that did not finish its file cleanly gets no timeline.
     fn write_marker_file(&mut self, ended: Ended) {
+        if self.outputs.take_unfinished(OutputKind::Recording, &ended.recording.to_string_lossy()) {
+            let error = format!("{}: the recording was not finished", ended.recording.display());
+            self.notices.push(Notice::new("The markers could not be saved: {error}", vec![("error", error)], true));
+            return;
+        }
         match std::thread::Builder::new().name("recording-markers".into()).spawn(move || write_timeline(&ended)) {
             Ok(h) => self.recording_markers.writes.push(h),
             Err(e) => self.notices.push(Notice::new("The markers could not be saved: {error}", vec![("error", e.to_string())], true)),
@@ -312,8 +335,8 @@ impl Studio {
     pub(crate) fn add_recording_marker(&mut self, name: Option<String>) -> Result<Value, StudioError> {
         self.sync_recording_markers();
         let now = self.clock.now();
-        let marker = self.recording_markers.watch.add(now, name).map_err(StudioError::Output)?;
-        Ok(json!({"name": marker.name, "seconds": marker.at.seconds()}))
+        let (marker, placed) = self.recording_markers.watch.add(now, name).map_err(StudioError::Output)?;
+        Ok(json!({"name": marker.name, "seconds": placed.seconds()}))
     }
 
     /// End the running recording's markers at `closed`, the time the app closed, write the
@@ -370,8 +393,8 @@ mod tests {
         assert_eq!(w.add(t(0), None).unwrap_err(), "no recording is running");
         assert_eq!(w.observe(Some(t(1000)), || rec("a.mkv"), t(1000)), None);
         let m = w.add(t(3500), Some("Goal".into())).unwrap();
-        assert_eq!(m, Marker { at: t(2500), name: "Goal".into() });
-        assert_eq!(w.add(t(4000), None).unwrap().name, "Marker 2");
+        assert_eq!(m, (Marker { at: t(2500), name: "Goal".into() }, t(2500)));
+        assert_eq!(w.add(t(4000), None).unwrap().0.name, "Marker 2");
         // The same recording seen again is not looked up again.
         assert_eq!(w.observe(Some(t(1000)), || panic!("looked up again"), t(5000)), None);
         let ended = w.observe(None, || panic!("no recording runs"), t(6000)).unwrap();
@@ -387,10 +410,10 @@ mod tests {
         w.observe(Some(t(0)), || rec("a.mkv"), t(0));
         // Stopped and started again between two looks: the first ends, the second is watched.
         assert_eq!(w.observe(Some(t(9000)), || rec("b.mkv"), t(9000)), None);
-        assert_eq!(w.add(t(9500), None).unwrap().name, "Marker 1");
+        assert_eq!(w.add(t(9500), None).unwrap().0.name, "Marker 1");
         let ended = w.observe(Some(t(20_000)), || rec("c.mkv"), t(20_000)).unwrap();
         assert_eq!(ended.recording, PathBuf::from("b.mkv"));
-        assert_eq!(w.add(t(20_000), None).unwrap().name, "Marker 1");
+        assert_eq!(w.add(t(20_000), None).unwrap().0.name, "Marker 1");
     }
 
     #[test]
@@ -516,7 +539,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let recording = dir.path().join("take.mkv");
         let mut studio = crate::tests::headless();
-        let hold = studio.outputs.hold_finishing(OutputKind::Recording, &recording.to_string_lossy());
+        let hold = studio.outputs.hold_finishing(OutputKind::Recording, &recording.to_string_lossy(), false);
         studio.recording_markers.finishing.push(Ended {
             recording: recording.clone(),
             rate: FrameRate::new(30, 1),
@@ -533,5 +556,48 @@ mod tests {
         studio.report_marker_files(true);
         assert!(dir.path().join("take.otio").exists());
         assert!(studio.take_notices().iter().any(|n| n.text().starts_with("Markers saved to")));
+    }
+
+    #[test]
+    fn a_recording_that_was_not_finished_gets_no_timeline() {
+        let dir = tempfile::tempdir().unwrap();
+        let recording = dir.path().join("take.mkv");
+        let mut studio = crate::tests::headless();
+        drop(studio.outputs.hold_finishing(OutputKind::Recording, &recording.to_string_lossy(), true));
+        studio.outputs.finish_held(OutputKind::Recording);
+        studio.recording_markers.finishing.push(Ended {
+            recording: recording.clone(),
+            rate: FrameRate::new(30, 1),
+            length: t(1000),
+            written: None,
+            markers: vec![Marker { at: t(500), name: "Half".into() }],
+        });
+        studio.sync_recording_markers();
+        studio.report_marker_files(true);
+        assert!(!dir.path().join("take.otio").exists());
+        let notices = studio.take_notices();
+        let texts: Vec<String> = notices.iter().map(|n| n.text()).collect();
+        assert!(texts.iter().any(|t| t.ends_with("the recording was not finished")), "{texts:?}");
+        assert!(!notices.iter().any(|n| n.text().starts_with("Markers saved to")));
+    }
+
+    #[test]
+    fn a_marker_does_not_count_the_time_the_recording_left_out() {
+        let mut w = MarkerWatch::default();
+        let counters = written(400);
+        w.observe(Some(t(0)), || Some((PathBuf::from("a.mkv"), FrameRate::new(30, 1), Some(counters.clone()))), t(0));
+        assert_eq!(w.add(t(2000), None).unwrap().1, t(2000));
+        // The computer was suspended, and the recording left out 3 s to 63 s. The markers come
+        // before the encoder has reached the gap, so their replies still count the gap.
+        assert_eq!(w.add(t(50_000), None).unwrap().1, t(50_000));
+        assert_eq!(w.add(t(65_000), None).unwrap().1, t(65_000));
+        counters.0.note_skipped(63_000_000_000, 60_000_000_000);
+        let ended = w.observe(None, || None, t(70_000)).unwrap();
+        // The timeline places them once the gap is known: a marker in the gap where the recording
+        // goes on (3 s), and the one after it 5 s into the recording.
+        let v = timeline(&ended);
+        let markers = v["tracks"]["markers"].as_array().unwrap();
+        let at: Vec<f64> = markers.iter().map(|m| m["marked_range"]["start_time"]["value"].as_f64().unwrap()).collect();
+        assert_eq!(at, [60.0, 90.0, 150.0]);
     }
 }

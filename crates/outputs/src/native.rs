@@ -388,7 +388,7 @@ impl Native {
         let fps = f64::from(v.fps_num) / f64::from(v.fps_den.max(1));
         let video = Arc::new(Fifo::new((fps.ceil() as usize).clamp(8, 240)));
         let audio = Arc::new(Fifo::new(256));
-        let shared = Arc::new(Shared::new(packets, disk_wait));
+        let shared = Arc::new(Shared { timeline: Timeline::noting(Arc::clone(&job.stats)), ..Shared::new(packets, disk_wait) });
         let frame_bytes = PixelFormat::Nv12.frame_bytes(v.width, v.height).unwrap_or(0);
         let spawn = |name: &str, f: Box<dyn FnOnce() + Send>| std::thread::Builder::new().name(name.into()).spawn(f).map_err(PluginError::failed);
         let mut threads = Vec::new();

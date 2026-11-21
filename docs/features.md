@@ -241,13 +241,15 @@ stops, or the app closes during it, StudioCraft finishes the recording file and 
 `<recording name>.otio` beside it: an
 [OpenTimelineIO](https://opentimelineio.readthedocs.io) timeline with the recording as one clip on
 a video track and on an audio track, and each marker on the timeline at the frame that holds its
-time. The clip is as long as the frames written to the recording file, so a recording whose
-encoder fell behind before the stop gets a shorter clip, and a marker past the clip's end goes on
-its last frame. The timeline names the recording by its file name, so the two files can be moved
-together. File › Import in FilmCraft opens the timeline as a sequence with the markers on it. A file of that
+time. A marker's time leaves out the time the recording skipped while the computer was suspended.
+The clip is as long as the frames written to the recording file, so a recording whose encoder fell
+behind before the stop gets a shorter clip, and a marker past the clip's end goes on its last
+frame. The timeline names the recording by its file name, so the two files can be moved together.
+File › Import in FilmCraft opens the timeline as a sequence with the markers on it. A file of that
 name that already exists is not replaced: the timeline goes to `<recording name> (2).otio`, or the
 next free number up to 999, and the status bar names the file. A recording without markers gets no
-timeline file.
+timeline file, and neither does a recording whose file could not be finished; the status bar says
+the markers could not be saved.
 
 ### Replay buffer
 
