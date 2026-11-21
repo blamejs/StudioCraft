@@ -173,6 +173,7 @@ impl Engine {
             "max_captures": craft_app_audio::MAX_CAPTURES,
             "dropped_blocks": captures.iter().map(|c| c.dropped_blocks).sum::<u64>(),
             "pool_exhausted": captures.iter().map(|c| c.pool_exhausted).sum::<u64>(),
+            "discontinuities": captures.iter().map(|c| c.discontinuities).sum::<u64>(),
             "running": captures,
         })
     }

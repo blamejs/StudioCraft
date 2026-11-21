@@ -359,7 +359,7 @@ fn a_system_without_support_starts_nothing_and_says_why() {
     assert!(!d.running());
     assert_eq!(d.support().reason.as_deref(), Some("needs a newer system"));
     let key = AppKey::from_exe("player.exe").unwrap();
-    let r = d.open_capture(key, Target { pid: 4 }, Box::new(|_| {}));
+    let r = d.open_capture(key, Target { pid: 4 }, Box::new(|_, _| {}));
     assert!(matches!(r, Err(AppAudioError::Unsupported(_))));
     assert!(fake.opened().is_empty());
 }
@@ -450,7 +450,7 @@ fn a_capture_delivers_and_stops_when_dropped() {
         .open_capture(
             key,
             Target { pid: 9 },
-            Box::new(move |s: &[f32]| {
+            Box::new(move |s: &[f32], _| {
                 let _ = tx.try_send((s.len(), s[0]));
             }),
         )
@@ -467,11 +467,78 @@ fn a_capture_delivers_and_stops_when_dropped() {
 }
 
 #[test]
+fn the_system_packet_times_reach_the_callback_and_an_uncertain_time_is_left_out() {
+    let info = PacketInfo::from_system(96_000, 123_456_789, true, false, true);
+    assert_eq!(info, PacketInfo { position: 96_000, qpc_100ns: Some(123_456_789), discontinuity: true, silent: true });
+    let uncertain = PacketInfo::from_system(480, 55, false, true, false);
+    assert_eq!(uncertain, PacketInfo { position: 480, qpc_100ns: None, discontinuity: false, silent: false });
+}
+
+#[test]
+fn each_packet_carries_its_position_and_time_and_a_gap_is_marked_and_counted() {
+    let fake = FakeBackend::new();
+    fake.set_behavior(9, Behavior::Gap { frames: 480, after: 2, lost: 960 });
+    let d = discovery(&fake);
+    // The callback only queues what it got; it never waits for the test.
+    let (tx, rx) = sync_channel(8);
+    let cap = d
+        .open_capture(
+            AppKey::from_exe("player.exe").unwrap(),
+            Target { pid: 9 },
+            Box::new(move |s: &[f32], info| {
+                let _ = tx.try_send((s.len(), info));
+            }),
+        )
+        .unwrap();
+    let got: Vec<(usize, PacketInfo)> = (0..4).map(|_| rx.recv_timeout(WAIT).unwrap()).collect();
+    let at = |position: u64, discontinuity: bool| {
+        (960, PacketInfo { position, qpc_100ns: Some(crate::fake::qpc_at(position)), discontinuity, silent: false })
+    };
+    assert_eq!(got, [at(0, false), at(480, false), at(1_920, true), at(2_400, false)]);
+    assert_eq!(crate::fake::qpc_at(1_920) - crate::fake::qpc_at(480), 300_000, "the time moves on by one packet and the 20 ms lost");
+    assert_eq!(cap.discontinuities(), 1);
+    let status = d.captures();
+    assert_eq!(status[0].discontinuities, 1);
+    assert_eq!(serde_json::to_value(&status[0]).unwrap()["discontinuities"], 1);
+    drop(cap);
+    while rx.recv_timeout(WAIT).is_ok() {}
+}
+
+#[test]
+fn a_capture_keeps_delivering_while_its_callback_queue_is_full() {
+    let fake = FakeBackend::new();
+    fake.set_behavior(9, Behavior::Deliver { frames: 480, value: 0.0 });
+    let d = discovery(&fake);
+    // Nobody reads the queue: the callback finds it full after the first packet and drops the
+    // rest, as a callback must do instead of waiting.
+    let (tx, rx) = sync_channel(1);
+    // The fifth packet signals the test, so the test waits on the capture, not on a clock.
+    let (fifth_tx, fifth_rx) = sync_channel(1);
+    let mut calls = 0u32;
+    let cap = d
+        .open_capture(
+            AppKey::from_exe("player.exe").unwrap(),
+            Target { pid: 9 },
+            Box::new(move |_: &[f32], info: PacketInfo| {
+                let _ = tx.try_send(info);
+                calls += 1;
+                if calls == 5 {
+                    let _ = fifth_tx.try_send(info.position);
+                }
+            }),
+        )
+        .unwrap();
+    assert_eq!(fifth_rx.recv_timeout(WAIT).unwrap(), 4 * 480, "the capture kept delivering past the full queue");
+    assert_eq!(rx.recv_timeout(WAIT).unwrap().position, 0, "the first packet is the one queued");
+    assert_eq!(cap.discontinuities(), 0);
+}
+
+#[test]
 fn a_failed_capture_reports_its_error_once() {
     let fake = FakeBackend::new();
     fake.set_behavior(9, Behavior::Fail("the process has no audio".into()));
     let d = discovery(&fake);
-    let cap = d.open_capture(AppKey::from_exe("a.exe").unwrap(), Target { pid: 9 }, Box::new(|_| {})).unwrap();
+    let cap = d.open_capture(AppKey::from_exe("a.exe").unwrap(), Target { pid: 9 }, Box::new(|_, _| {})).unwrap();
     assert_eq!(cap.wait(WAIT), CaptureState::Failed);
     assert_eq!(cap.take_error(), Some(AppAudioError::Failed("the process has no audio".into())));
     assert_eq!(cap.take_error(), None);
@@ -484,7 +551,7 @@ fn a_capture_that_stops_reporting_counts_as_stalled() {
     let fake = FakeBackend::new();
     fake.set_behavior(9, Behavior::Stall);
     let d = discovery(&fake);
-    let cap = d.open_capture(AppKey::from_exe("a.exe").unwrap(), Target { pid: 9 }, Box::new(|_| {})).unwrap();
+    let cap = d.open_capture(AppKey::from_exe("a.exe").unwrap(), Target { pid: 9 }, Box::new(|_, _| {})).unwrap();
     assert_eq!(cap.wait(WAIT), CaptureState::Running);
     let now = now_ms();
     assert!(!cap.stalled(now));
@@ -500,10 +567,10 @@ fn a_refusal_and_an_exited_target_are_told_apart_from_other_failures() {
     fake.set_behavior(10, Behavior::Exit);
     let d = discovery(&fake);
     let key = AppKey::from_exe("a.exe").unwrap();
-    let denied = d.open_capture(key.clone(), Target { pid: 9 }, Box::new(|_| {})).unwrap();
+    let denied = d.open_capture(key.clone(), Target { pid: 9 }, Box::new(|_, _| {})).unwrap();
     assert_eq!(denied.wait(WAIT), CaptureState::Failed);
     assert_eq!(denied.take_error(), Some(AppAudioError::Denied("access denied".into())));
-    let exited = d.open_capture(key, Target { pid: 10 }, Box::new(|_| {})).unwrap();
+    let exited = d.open_capture(key, Target { pid: 10 }, Box::new(|_, _| {})).unwrap();
     assert_eq!(exited.wait(WAIT), CaptureState::Failed);
     assert!(matches!(exited.take_error(), Some(AppAudioError::NotRunning(_))));
 }
@@ -513,7 +580,7 @@ fn a_started_capture_with_no_audio_yet_is_not_running() {
     let fake = FakeBackend::new();
     fake.set_behavior(9, Behavior::Quiet);
     let d = discovery(&fake);
-    let cap = d.open_capture(AppKey::from_exe("a.exe").unwrap(), Target { pid: 9 }, Box::new(|_| {})).unwrap();
+    let cap = d.open_capture(AppKey::from_exe("a.exe").unwrap(), Target { pid: 9 }, Box::new(|_, _| {})).unwrap();
     let deadline = Instant::now() + WAIT;
     while cap.state() == CaptureState::Starting {
         assert!(Instant::now() < deadline, "the stream started");
@@ -529,7 +596,7 @@ fn a_capture_whose_device_goes_away_fails_after_it_ran() {
     let fake = FakeBackend::new();
     fake.set_behavior(9, Behavior::FailAfter { packets: 3, error: "the device was removed".into() });
     let d = discovery(&fake);
-    let cap = d.open_capture(AppKey::from_exe("a.exe").unwrap(), Target { pid: 9 }, Box::new(|_| {})).unwrap();
+    let cap = d.open_capture(AppKey::from_exe("a.exe").unwrap(), Target { pid: 9 }, Box::new(|_, _| {})).unwrap();
     assert_eq!(cap.wait_ended(WAIT), CaptureState::Failed);
     assert_eq!(cap.packets(), 3);
     assert_eq!(cap.take_error(), Some(AppAudioError::Failed("the device was removed".into())));
@@ -540,7 +607,7 @@ fn an_activation_gets_longer_than_a_started_capture_before_it_counts_as_stalled(
     let fake = FakeBackend::new();
     fake.set_behavior(9, Behavior::Hang);
     let d = discovery(&fake);
-    let cap = d.open_capture(AppKey::from_exe("a.exe").unwrap(), Target { pid: 9 }, Box::new(|_| {})).unwrap();
+    let cap = d.open_capture(AppKey::from_exe("a.exe").unwrap(), Target { pid: 9 }, Box::new(|_, _| {})).unwrap();
     assert!(fake.wait_hanging(1, WAIT));
     let now = now_ms();
     assert_eq!(cap.state(), CaptureState::Starting);
@@ -559,7 +626,7 @@ fn stuck_capture_threads_of_different_applications_are_bounded() {
         let pid = 100 + u32::try_from(i).unwrap();
         fake.set_behavior(pid, Behavior::Hang);
         let key = AppKey::from_exe(&format!("app{i}.exe")).unwrap();
-        let cap = d.open_capture(key, Target { pid }, Box::new(|_| {})).unwrap();
+        let cap = d.open_capture(key, Target { pid }, Box::new(|_, _| {})).unwrap();
         assert!(fake.wait_hanging(i + 1, WAIT));
         while !cap.stalled(now_ms()) {
             std::thread::yield_now();
@@ -568,7 +635,7 @@ fn stuck_capture_threads_of_different_applications_are_bounded() {
     }
     assert_eq!(d.capture_count(), 0, "stuck captures no longer count against the limit");
     // Another application would add one more stuck thread: no capture starts until one ends.
-    let next = d.open_capture(AppKey::from_exe("other.exe").unwrap(), Target { pid: 20 }, Box::new(|_| {}));
+    let next = d.open_capture(AppKey::from_exe("other.exe").unwrap(), Target { pid: 20 }, Box::new(|_, _| {}));
     assert!(matches!(next, Err(AppAudioError::Limit)), "{:?}", next.err());
     assert_eq!(fake.hanging(), MAX_STUCK_CAPTURES, "no further thread was started");
     fake.release_hangs();
@@ -582,7 +649,7 @@ fn a_stuck_capture_gives_back_its_place_and_is_not_started_again_beside_itself()
     // Activations count as stuck after 0 ms here.
     d.set_stall_limits(0, WEDGE_MS, DISCOVERY_WEDGE_MS);
     let key = AppKey::from_exe("a.exe").unwrap();
-    let cap = d.open_capture(key.clone(), Target { pid: 9 }, Box::new(|_| {})).unwrap();
+    let cap = d.open_capture(key.clone(), Target { pid: 9 }, Box::new(|_, _| {})).unwrap();
     assert!(fake.wait_hanging(1, WAIT));
     let deadline = Instant::now() + WAIT;
     while !cap.stalled(now_ms()) {
@@ -594,18 +661,18 @@ fn a_stuck_capture_gives_back_its_place_and_is_not_started_again_beside_itself()
     assert_eq!(d.capture_count(), 0, "the owner let go of a stuck capture: it no longer counts against the limit");
     assert!(d.captures().is_empty(), "nor is it reported as a running capture");
     // The same application is not captured again while its earlier thread is stuck.
-    let again = d.open_capture(key.clone(), Target { pid: 9 }, Box::new(|_| {}));
+    let again = d.open_capture(key.clone(), Target { pid: 9 }, Box::new(|_, _| {}));
     assert!(matches!(again, Err(AppAudioError::Busy(_))), "{:?}", again.err());
     assert_eq!(fake.hanging(), 1, "no second thread was started");
     // Other applications still capture.
-    let other = d.open_capture(AppKey::from_exe("b.exe").unwrap(), Target { pid: 20 }, Box::new(|_| {})).unwrap();
+    let other = d.open_capture(AppKey::from_exe("b.exe").unwrap(), Target { pid: 20 }, Box::new(|_, _| {})).unwrap();
     assert_eq!(other.wait(WAIT), CaptureState::Running);
     assert_eq!(d.capture_count(), 1);
     // Once the stuck call returns, its thread ends without counting itself off a second time.
     fake.release_hangs();
     let deadline = Instant::now() + WAIT;
     let next = loop {
-        match d.open_capture(key.clone(), Target { pid: 9 }, Box::new(|_| {})) {
+        match d.open_capture(key.clone(), Target { pid: 9 }, Box::new(|_, _| {})) {
             Err(AppAudioError::Busy(_)) => {
                 assert!(Instant::now() < deadline, "the stuck thread ended");
                 std::thread::yield_now();
@@ -633,8 +700,9 @@ fn at_most_32_captures_run_and_an_ended_one_frees_its_place() {
     for pid in 0..MAX_CAPTURES as u32 {
         fake.set_behavior(pid, Behavior::Stall);
     }
-    let caps: Vec<AppCapture> = (0..MAX_CAPTURES as u32).map(|pid| d.open_capture(key.clone(), Target { pid }, Box::new(|_| {})).unwrap()).collect();
-    let r = d.open_capture(key.clone(), Target { pid: 99 }, Box::new(|_| {}));
+    let caps: Vec<AppCapture> =
+        (0..MAX_CAPTURES as u32).map(|pid| d.open_capture(key.clone(), Target { pid }, Box::new(|_, _| {})).unwrap()).collect();
+    let r = d.open_capture(key.clone(), Target { pid: 99 }, Box::new(|_, _| {}));
     assert!(matches!(r, Err(AppAudioError::Limit)));
     // A stopped capture's thread ends, and its place is free once it has.
     caps[0].stop();
@@ -642,7 +710,7 @@ fn at_most_32_captures_run_and_an_ended_one_frees_its_place() {
     assert_eq!(d.capture_count(), MAX_CAPTURES - 1);
     assert_eq!(d.captures().len(), MAX_CAPTURES - 1, "an ended capture is not listed while its handle lives");
     fake.set_behavior(100, Behavior::End);
-    let c = d.open_capture(key.clone(), Target { pid: 100 }, Box::new(|_| {})).unwrap();
+    let c = d.open_capture(key.clone(), Target { pid: 100 }, Box::new(|_, _| {})).unwrap();
     assert_eq!(c.wait_ended(WAIT), CaptureState::Ended);
     drop(caps);
 }

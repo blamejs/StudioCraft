@@ -5,14 +5,19 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
 
-use crate::{AppAudioError, AppInfo, AppKey, Backend, CaptureShared, OnData, Permission, Support, Target, Wake, Watcher};
+use crate::{AppAudioError, AppInfo, AppKey, Backend, CaptureShared, OnData, PacketInfo, Permission, Support, Target, Wake, Watcher};
 
 /// What a capture of one process does.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Behavior {
     /// Delivers a packet of `frames` stereo frames of `value`, then reports running and delivers
-    /// another each time it has waited 5 ms for a stop request.
+    /// another each time it has waited 5 ms for a stop request. The first packet is at position 0
+    /// and time [`QPC_START`], and each one follows the one before without a gap.
     Deliver { frames: usize, value: f32 },
+    /// Delivers `after` packets of `frames` frames of zeros as `Deliver` does, then loses `lost`
+    /// frames: the next packet's position and time move on by them, and it is marked as a
+    /// discontinuity. Later packets follow without a gap.
+    Gap { frames: usize, after: u64, lost: u64 },
     /// Delivers `packets` packets as `Deliver` does, then fails with this text, as a capture
     /// whose device goes away does.
     FailAfter { packets: u64, error: String },
@@ -324,9 +329,10 @@ impl Backend for FakeBackend {
                 }
                 Ok(())
             }
-            Behavior::Deliver { frames, value } => deliver(shared, on_data, frames, value, u64::MAX).map(|_| ()),
+            Behavior::Deliver { frames, value } => deliver(shared, on_data, frames, value, u64::MAX, None).map(|_| ()),
+            Behavior::Gap { frames, after, lost } => deliver(shared, on_data, frames, 0.0, u64::MAX, Some((after, lost))).map(|_| ()),
             Behavior::FailAfter { packets, error } => {
-                deliver(shared, on_data, 480, 0.0, packets)?;
+                deliver(shared, on_data, 480, 0.0, packets, None)?;
                 if shared.stopping() { Ok(()) } else { Err(AppAudioError::Failed(error)) }
             }
         }
@@ -336,20 +342,50 @@ impl Backend for FakeBackend {
 /// How long a delivering capture waits for a stop request between packets.
 const PACE: Duration = Duration::from_millis(5);
 
-/// Deliver up to `limit` packets, each after waiting [`PACE`] for a stop request.
-fn deliver(shared: &CaptureShared, on_data: &mut OnData, frames: usize, value: f32, limit: u64) -> Result<u64, AppAudioError> {
+/// The performance counter time of a scripted capture's first packet, in 100 ns units.
+pub const QPC_START: u64 = 1_000_000_000;
+
+/// The performance counter time, in 100 ns units, of the frame at `position` of a scripted
+/// capture.
+pub fn qpc_at(position: u64) -> u64 {
+    QPC_START.saturating_add(position.saturating_mul(10_000_000) / u64::from(crate::SAMPLE_RATE))
+}
+
+/// Deliver up to `limit` packets, each after waiting [`PACE`] for a stop request. With `gap`
+/// `(after, lost)`, `lost` frames go missing after `after` packets.
+fn deliver(
+    shared: &CaptureShared,
+    on_data: &mut OnData,
+    frames: usize,
+    value: f32,
+    limit: u64,
+    gap: Option<(u64, u64)>,
+) -> Result<u64, AppAudioError> {
     let packet = vec![value; frames.saturating_mul(2)];
+    let step = u64::try_from(frames).unwrap_or(u64::MAX);
+    let mut position = 0u64;
+    let mut send = |sent: u64, position: &mut u64| {
+        let mut discontinuity = false;
+        if let Some((after, lost)) = gap
+            && sent == after
+        {
+            *position = position.saturating_add(lost);
+            discontinuity = true;
+        }
+        let info = PacketInfo { position: *position, qpc_100ns: Some(qpc_at(*position)), discontinuity, silent: false };
+        on_data(&packet, info);
+        shared.packet(&info);
+        *position = position.saturating_add(step);
+    };
     shared.started();
     // The first packet arrives before the capture reports running, so a test that waits for the
     // running state finds it delivered.
-    on_data(&packet);
-    shared.packet();
+    send(0, &mut position);
     shared.running();
     let mut sent = 1;
     while sent < limit && !shared.wait_stop(PACE) {
         shared.beat();
-        on_data(&packet);
-        shared.packet();
+        send(sent, &mut position);
         sent += 1;
     }
     Ok(sent)

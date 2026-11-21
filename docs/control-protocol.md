@@ -250,9 +250,10 @@ empty or missing `app` chooses no application. An update with any other value th
 form is refused with an error, and the source keeps its current choice. A saved collection with such
 a value still loads: the source stays silent and reports the error until another application is
 chosen. `app_audio.status` returns `support` (`supported`, `reason` and `permission`),
-`discovery_stalled`, `captures`, `max_captures`, the summed `dropped_blocks` and `pool_exhausted`
-counters, and `running` with each capture's `app`, `pid`, `state`, `packets`, `dropped_blocks` and
-`pool_exhausted`. `state` is `starting` while the system activates the capture, `started` once the
+`discovery_stalled`, `captures`, `max_captures`, the summed `dropped_blocks`, `pool_exhausted` and
+`discontinuities` counters, and `running` with each capture's `app`, `pid`, `state`, `packets`,
+`discontinuities`, `dropped_blocks` and `pool_exhausted`. `discontinuities` counts the packets the
+system marked as following lost audio. `state` is `starting` while the system activates the capture, `started` once the
 stream runs and before audio arrives, then `running`, `failed` or `ended`. A capture whose owner let
 go of it while it was stuck in a system call is not listed and does not count against
 `max_captures`; while 8 such captures are still stuck, no new capture starts. When the system

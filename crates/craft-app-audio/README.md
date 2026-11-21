@@ -11,10 +11,11 @@ reports capture as unsupported, with a reason, where the system has no way to do
 | `AppList`, `AppInfo` | one scan's applications, sorted by name: key, name, program path, process ids, the process a capture targets, whether it plays sound, the listed application whose capture already records it, its peak row |
 | `AppKey` | an application named so the name survives a restart with a new process id: the program file's name in lower case, with its path in a list only to tell apart two applications whose files have the same name; `AppInfo::choice` saves the name with the path, and `AppList::find` takes the application at that path, or else the only one with that file name, and never guesses between two |
 | `PeakTable` | 64 rows of atomics with each listed application's key id, peak level and reading time, read without a lock; a reading older than 250 ms reads as none |
-| `AppCapture` | one capture: its state (starting, started, running, failed, ended), its error, a stall check, and its counters; dropping it stops the thread without waiting for it |
+| `AppCapture` | one capture: its state (starting, started, running, failed, ended), its error, a stall check, and its counters, including the packets that followed lost audio; dropping it stops the thread without waiting for it |
+| `PacketInfo` | what the callback gets with each packet: the position of its first frame in frames, the performance counter time of that frame in 100 ns units (`None` when the system marks the time uncertain), and whether the system lost audio before the packet or marked it silent |
 | `Backoff` | the waits before opening a failed capture again: 250 ms, 500 ms, 1 s, 2 s, then 5 s |
 | `Backend`, `Watcher` | the system's side: support, listing and meters, and the capture loop |
-| `fake::FakeBackend` | a scripted backend for tests: applications start and quit, captures deliver, fail, stall or end |
+| `fake::FakeBackend` | a scripted backend for tests: applications start and quit, captures deliver, lose audio, fail, stall or end |
 
 ## Systems
 
@@ -56,7 +57,10 @@ activation whose target process has exited as `NotRunning`.
   full queue drops the command. `fresh_list` with a zero timeout never waits.
 - **Capture.** One thread per `AppCapture`. It waits for the system's packets at most 200 ms at a
   time and reports a heartbeat each time, converts each packet into a buffer it reuses, and hands
-  the samples to the caller's callback. After the first packets it does not allocate unless a
+  the samples to the caller's callback with the packet's `PacketInfo`. On Windows the position,
+  time and flags are the ones
+  [`IAudioCaptureClient::GetBuffer`](https://learn.microsoft.com/en-us/windows/win32/api/audioclient/nf-audioclient-iaudiocaptureclient-getbuffer)
+  returns. After the first packets it does not allocate unless a
   packet is larger than any before. `stalled(now)` is true when an activation has not returned for
   10 s (`ACTIVATE_MS`), or a started capture has not reported for 2 s (`WEDGE_MS`). At most 32
   captures run at once. A capture counts until its thread ends, or until its owner drops it while
@@ -72,6 +76,7 @@ activation whose target process has exited as `NotRunning`.
 `src/tests.rs` drives the discovery thread and captures with `FakeBackend`: applications that
 start, quit and restart with a new process id, peak reads only while the list is visible, an
 unchanged list that is not published again, a burst of wakes, a stuck discovery thread, a system
-without support, a failed watch, captures that deliver, fail later, are refused, find their target
+without support, a failed watch, captures that deliver with each packet's position and time,
+lose audio, keep delivering while the callback's queue is full, fail later, are refused, find their target
 gone, start without audio, hang in activation, stall and end, and the limit of 32 captures. The
 tests wait on the discovery's and the capture's own signals.

@@ -565,6 +565,25 @@ fn application_audio_queries_list_apps_and_captures_without_changing_anything() 
     assert_eq!(status.result["discovery_stalled"], false);
     assert_eq!(status.result["captures"], 0);
     assert_eq!(status.result["max_captures"], 32);
+    assert_eq!(status.result["discontinuities"], 0);
+    // A capture whose system stream loses audio once: the status counts the gap.
+    fake.set_behavior(41, craft_app_audio::fake::Behavior::Gap { frames: 480, after: 1, lost: 480 });
+    let browser = craft_app_audio::AppKey::decode(r"browser.exe|c:\apps\browser.exe").unwrap();
+    // The packet after the gap signals the test: the capture counted the gap before delivering it.
+    let (after_gap, gap_counted) = std::sync::mpsc::sync_channel(1);
+    let mut gap = false;
+    let on_data = Box::new(move |_: &[f32], info: craft_app_audio::PacketInfo| {
+        if gap {
+            let _ = after_gap.try_send(());
+        }
+        gap |= info.discontinuity;
+    });
+    let cap = discovery.open_capture(browser, craft_app_audio::Target { pid: 41 }, on_data).unwrap();
+    assert!(gap_counted.recv_timeout(wait).is_ok(), "the gap arrived");
+    let status = run(&mut e, "app_audio.status", json!({})).unwrap();
+    assert_eq!(status.result["discontinuities"], 1, "{}", status.result);
+    assert_eq!(status.result["running"][0]["discontinuities"], 1, "{}", status.result);
+    drop(cap);
     assert!(run(&mut e, "app_audio.list", json!({"app": "x"})).is_err(), "the list takes no parameters");
     fake.set_support(craft_app_audio::Support::no("needs a newer system"));
     let none = run(&mut e, "app_audio.list", json!({})).unwrap();
