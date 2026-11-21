@@ -17,6 +17,7 @@ mod forms;
 pub mod hardware;
 mod icons;
 pub mod kit;
+mod logos;
 mod output_bar;
 mod preview;
 mod scopes;
@@ -84,6 +85,8 @@ pub(crate) enum Act {
         name: String,
         key: String,
     },
+    /// Open a public web page in the browser.
+    OpenUrl(String),
 }
 
 impl Act {
@@ -1288,6 +1291,11 @@ impl StudioApp {
             }
             Act::Seal => self.studio.seal_history(),
             Act::HoldStreamKey { name, key } => self.studio.hold_stream_key(&name, &key),
+            Act::OpenUrl(url) => {
+                if let Err(e) = studiocraft_platform::shell::open_url(&url) {
+                    self.notify(e.to_string(), true);
+                }
+            }
         }
     }
 

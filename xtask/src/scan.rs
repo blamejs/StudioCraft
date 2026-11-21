@@ -73,12 +73,40 @@ pub fn assets(root: &Path) -> Result<(), String> {
     if missing.is_empty() { Ok(()) } else { Err(format!("files missing from ASSETS.md:\n  {}", missing.join("\n  "))) }
 }
 
-/// Product names the app's text and docs must not use, matched as whole words.
-pub const BRANDS: &[&str] = &["OBS", "obs-studio", "obsproject", "Open Broadcaster", "Streamlabs", "XSplit", "vMix", "Wirecast"];
+/// Product names the app's text and docs must not use, matched as whole words: other streaming and
+/// recording software, then the streaming services of the preset list.
+pub const BRANDS: &[&str] = &[
+    "OBS",
+    "obs-studio",
+    "obsproject",
+    "Open Broadcaster",
+    "Streamlabs",
+    "XSplit",
+    "vMix",
+    "Wirecast",
+    "Twitch",
+    "YouTube",
+    "Facebook",
+    "Kick",
+    "LinkedIn",
+    "TikTok",
+];
 
 /// Files allowed to name other products: the mechanics tables that cite where a value came from,
 /// and this check's own list.
 const BRAND_EXEMPT: &[&str] = &["MECHANICS.md", "mechanics.json", "xtask/src/scan.rs"];
+
+/// The service names each file may use (AGENTS.md 1.3): the preset list of the streaming services
+/// and the `ASSETS.md` rows of their logos. Every other name in these files is still refused.
+const BRAND_ALLOWED: &[(&str, &[&str])] = &[("crates/model/src/services.rs", SERVICE_NAMES), ("ASSETS.md", SERVICE_NAMES)];
+
+/// The streaming services of the preset list, as [`BRANDS`] writes them.
+const SERVICE_NAMES: &[&str] = &["Twitch", "YouTube", "Facebook", "Kick", "LinkedIn", "TikTok"];
+
+/// Whether `file` may name `brand`.
+fn brand_allowed(file: &str, brand: &str) -> bool {
+    BRAND_ALLOWED.iter().any(|(f, names)| *f == file && names.contains(&brand))
+}
 
 const TEXT_EXT: &[&str] = &["rs", "md", "toml", "json", "yml", "yaml", "txt", "wgsl", "tsv"];
 
@@ -121,11 +149,14 @@ fn brand_problems(root: &Path) -> Vec<String> {
             continue;
         }
         let Ok(text) = std::fs::read_to_string(root.join(&f)) else { continue };
-        for (line, name) in brand_hits(&text) {
-            problems.push(format!("{f}:{line}: {name}"));
-        }
+        problems.extend(file_brand_problems(&f, &text));
     }
     problems
+}
+
+/// The product names in the text of `file` that it may not use, as `file:line: name`.
+fn file_brand_problems(file: &str, text: &str) -> Vec<String> {
+    brand_hits(text).into_iter().filter(|(_, name)| !brand_allowed(file, name)).map(|(line, name)| format!("{file}:{line}: {name}")).collect()
 }
 
 #[cfg(test)]
@@ -137,6 +168,32 @@ mod tests {
         assert_eq!(brand_hits("Works like OBS does").len(), 1);
         assert!(brand_hits("observe the jobs, OBSERVER").is_empty());
         assert_eq!(brand_hits("a\nsee obs-studio here").first().map(|h| h.0), Some(2));
+    }
+
+    #[test]
+    fn service_names_pass_only_in_the_files_allowed_to_use_them() {
+        let text = "Stream to Twitch\nGo live on YouTube";
+        assert_eq!(file_brand_problems("crates/model/src/services.rs", text), Vec::<String>::new());
+        assert_eq!(file_brand_problems("ASSETS.md", text), Vec::<String>::new());
+        assert_eq!(
+            file_brand_problems("crates/ui-egui/src/logos.rs", text),
+            ["crates/ui-egui/src/logos.rs:1: Twitch", "crates/ui-egui/src/logos.rs:2: YouTube"]
+        );
+        assert_eq!(file_brand_problems("README.md", "Works with TikTok"), ["README.md:1: TikTok"]);
+        // The allowed files still name no other product.
+        assert_eq!(file_brand_problems("crates/model/src/services.rs", "a\nlike OBS"), ["crates/model/src/services.rs:2: OBS"]);
+        assert_eq!(file_brand_problems("ASSETS.md", "From Streamlabs"), ["ASSETS.md:1: Streamlabs"]);
+        // Lowercase ids and the words inside other words are not names.
+        assert!(file_brand_problems("crates/ui-egui/src/logos.rs", "\"twitch\" kicked Kickstart").is_empty());
+        assert_eq!(file_brand_problems("crates/ui-egui/src/logos.rs", "a Kick drum").len(), 1, "Kick as written is a name");
+    }
+
+    #[test]
+    fn the_preset_list_names_every_allowed_service() {
+        let presets = std::fs::read_to_string(crate::root().join("crates/model/src/services.rs")).unwrap();
+        for name in SERVICE_NAMES {
+            assert!(brand_hits(&presets).iter().any(|(_, n)| n == name), "the preset list names {name}");
+        }
     }
 
     /// The MCP server's instructions, prompt texts and tool descriptions are string literals in
