@@ -320,6 +320,7 @@ impl Engine {
                 check_marker_name(name.as_deref())?;
                 Ok(Outcome::runtime(RuntimeAction::RecordingMarker { name }))
             }
+            Command::RecordingsList {} => Ok(Outcome::runtime(RuntimeAction::RecordingsList)),
             Command::StreamStart {} => Ok(Outcome::runtime(RuntimeAction::StartStreaming)),
             Command::StreamStop {} => Ok(Outcome::runtime(RuntimeAction::StopStreaming)),
             Command::StreamToggle {} => Ok(Outcome::runtime(RuntimeAction::ToggleStreaming)),

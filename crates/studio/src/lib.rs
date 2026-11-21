@@ -15,6 +15,7 @@ mod monitor;
 mod outputs;
 mod pause;
 mod recording_markers;
+mod recordings;
 mod wiring;
 
 use std::collections::HashMap;
@@ -339,6 +340,8 @@ pub struct Studio {
     captions: captions::Captions,
     /// Markers set during the recording, and the timeline files of recordings that stopped.
     recording_markers: recording_markers::RecordingMarkers,
+    /// The scan of the recording folder for `recordings.list`, and its last result.
+    recordings: recordings::Recordings,
     /// The running pause, while the program is paused.
     pause: Option<pause::PauseState>,
     /// The threads that draw the pause screen: while paused, and until the transition back to
@@ -436,6 +439,7 @@ impl Studio {
             audio_tracks: audio_tracks::AudioTracks::default(),
             captions: captions::Captions::new(captions),
             recording_markers: recording_markers::RecordingMarkers::default(),
+            recordings: recordings::Recordings::default(),
             pause: None,
             pause_layers: None,
             pause_seen: None,
@@ -500,6 +504,7 @@ impl Studio {
                 RuntimeAction::AudioTracksOpenLast => result = self.open_last_audio_tracks()?,
                 RuntimeAction::AudioTracksMarker { name } => result = self.add_audio_tracks_marker(name)?,
                 RuntimeAction::RecordingMarker { name } => result = self.add_recording_marker(name)?,
+                RuntimeAction::RecordingsList => result = self.list_recordings()?,
                 RuntimeAction::StartRecording => self.start_output(OutputKind::Recording)?,
                 RuntimeAction::StopRecording => self.stop_output(OutputKind::Recording),
                 RuntimeAction::ToggleRecording => self.toggle_output(OutputKind::Recording)?,

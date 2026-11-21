@@ -611,6 +611,7 @@ menu	Transform	Transform
 	Open Last Audio Tracks in Editor	Open Last Audio Tracks in Editor
 	Add Audio Tracks Marker	Add Audio Tracks Marker
 	Add Recording Marker	Add Recording Marker
+	List Recordings	List Recordings
 @msg	Markers saved to {path}	Markers saved to {path}
 @msg	The markers could not be saved: {error}	The markers could not be saved: {error}
 	After a take	After a take

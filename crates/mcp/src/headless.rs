@@ -305,6 +305,10 @@ impl Headless {
                     self.allowed(session, Access::Read)?;
                 }
             }
+            // The list names the files in the recording folder.
+            Command::RecordingsList {} => {
+                self.allowed(&recording_folder(&self.studio.profile().output.folder), Access::Read)?;
+            }
             Command::SourceAdd { kind, settings: Some(settings), .. } => {
                 if let Ok(plugin) = registry.source(kind) {
                     *settings = self.check_paths(&plugin.schema(), settings)?;
