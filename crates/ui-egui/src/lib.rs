@@ -257,6 +257,7 @@ impl StudioApp {
     /// Open the collection and profile used last (or new ones), and start the studio on the
     /// window's graphics device.
     pub fn boot(mut store: Store, render: Option<egui_wgpu::RenderState>, problems: Vec<String>) -> StudioApp {
+        studiocraft_platform::display::prefetch();
         let ffmpeg = Arc::new(RwLock::new(String::new()));
         let captions = Arc::new(CaptionBoard::new());
         let mut notices: Vec<Msg> = Vec::new();

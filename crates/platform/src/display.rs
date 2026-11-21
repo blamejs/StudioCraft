@@ -15,11 +15,19 @@ pub struct DisplayInfo {
     pub primary: bool,
 }
 
-/// Displays, the primary first.
+/// Displays, the primary first. On Linux this does not wait for the system: it returns the list the
+/// last query answered and starts a new query, so a change reaches the next call.
 pub fn displays() -> Vec<DisplayInfo> {
     let mut list = imp::displays();
     list.sort_by_key(|d| !d.primary);
     list
+}
+
+/// Start reading the display list in the background on Linux, so the first [`displays`] call has
+/// an answer. Elsewhere this does nothing.
+pub fn prefetch() {
+    #[cfg(target_os = "linux")]
+    crate::display_list::displays();
 }
 
 /// A display being captured.
@@ -117,8 +125,8 @@ mod imp {
     }
 }
 
-/// On Linux the desktop's picker chooses the display, so the list is empty and every id opens the
-/// picker.
+/// On Linux the list comes from Wayland or X11, and the desktop's picker chooses the display to
+/// capture, so every id opens the picker.
 #[cfg(target_os = "linux")]
 mod imp {
     use studiocraft_media::video::VideoFrame;
@@ -128,7 +136,7 @@ mod imp {
     use crate::portal::{Kind, PortalCapture};
 
     pub fn displays() -> Vec<DisplayInfo> {
-        Vec::new()
+        crate::display_list::displays()
     }
 
     pub struct Capture(PortalCapture);
