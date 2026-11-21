@@ -615,6 +615,43 @@ fn encoders_receive_nv12_frames_in_order() {
 }
 
 #[test]
+fn finish_hands_over_every_read_back_while_another_thread_polls_the_device() {
+    let Some(gpu) = gpu() else { return };
+    let mut c = Compositor::new(gpu.clone(), 32, 16).unwrap();
+    let white = solid([255, 255, 255, 255], 16, 16);
+    c.set_plan(Arc::new(Plan { program: SceneDesc { items: vec![item(1, &white, at(0.0, 0.0))] }, ..Plan::default() }));
+    let sink = Arc::new(Fifo::new(4));
+    c.set_encode(Some(EncodeTarget { width: 16, height: 8, sinks: vec![Arc::clone(&sink)] }));
+    // A second thread polls the same device, as the window does, and can run a read-back's
+    // callback in place of the wait in `finish`.
+    let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let poller = std::thread::spawn({
+        let (gpu, stop) = (gpu.clone(), Arc::clone(&stop));
+        move || {
+            while !stop.load(Ordering::Acquire) {
+                gpu.poll();
+            }
+        }
+    });
+    let lost = AtomicU64::new(0);
+    let mut delivered = 0;
+    let mut short = None;
+    for i in 0..200 {
+        c.frame(Tick(i * 100), &lost);
+        c.finish(&lost);
+        delivered += std::iter::from_fn(|| sink.pop()).count();
+        let accounted = delivered + lost.load(Ordering::Relaxed) as usize;
+        if accounted != i as usize + 1 {
+            short = Some((i, accounted));
+            break;
+        }
+    }
+    stop.store(true, Ordering::Release);
+    poller.join().unwrap();
+    assert_eq!(short, None, "(frame, frames delivered or counted lost) after finish");
+}
+
+#[test]
 fn an_output_larger_than_the_device_allows_is_an_error_not_a_converter() {
     let Some(mut c) = compositor(32, 16) else { return };
     let sink = Arc::new(Fifo::new(4));
