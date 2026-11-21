@@ -65,10 +65,11 @@ struct VideoFile {
 }
 
 impl Entry {
-    /// When the recording or take started: the take's start, else the date and time in the file's
-    /// name, read as local time.
+    /// When the recording or take started: the date and time in the file's name, read as local
+    /// time, else the take's start. A take being written, or one whose journal gives no start,
+    /// has its journal's last change as its start.
     fn started_unix_ms(&self) -> Option<i64> {
-        self.take.as_ref().and_then(|t| t.started_unix_ms).or_else(|| self.file.as_ref().and_then(|_| stamp_unix_ms(&self.name)))
+        self.file.as_ref().and_then(|_| stamp_unix_ms(&self.name)).or_else(|| self.take.as_ref().and_then(|t| t.started_unix_ms))
     }
 
     /// The time the list is sorted by: the start, else the file's last change.
@@ -468,9 +469,10 @@ mod tests {
         std::fs::write(f.join(format!("{older}.mkv")), b"recording").unwrap();
         std::fs::write(f.join(format!("{older}.otio")), b"{}").unwrap();
         take(f, older, &[start(stamp_unix_ms(older)), Line::Marker { at: 5, name: "Goal".into() }, Line::End { frames: 96_000 }]);
-        // The take folder got a numbered name because `<newer> Audio` was taken.
+        // The take folder got a numbered name because `<newer> Audio` was taken. Its journal gives
+        // no start, so the take's time is the journal's last change, not the recording's start.
         std::fs::write(f.join(format!("{newer}.MP4")), b"rec").unwrap();
-        take(f, &format!("{newer} (2)"), &[start(stamp_unix_ms(newer))]);
+        take(f, &format!("{newer} (2)"), &[start(None)]);
         std::fs::write(f.join("Replay 2025-11-21 11-00-00.mkv"), b"clip").unwrap();
         // A stream's take has no recording file.
         take(f, "Stream 2025-11-19 08-00-00", &[start(stamp_unix_ms("2025-11-19 08-00-00")), Line::End { frames: 48_000 }]);
@@ -488,6 +490,7 @@ mod tests {
         assert_eq!((list[0]["timeline"].clone(), list[0]["audio_tracks"].clone()), (Value::Null, Value::Null));
         assert_eq!((list[1]["kind"].clone(), list[1]["format"].clone()), (json!("recording"), json!("mp4")));
         assert_eq!(list[1]["audio_tracks"]["state"], json!("needs_repair"));
+        assert_eq!(list[1]["started_unix_ms"], json!(stamp_unix_ms(newer)), "the recording's start comes from its name");
         assert_eq!(list[2]["timeline"], json!(f.join(format!("{older}.otio")).display().to_string()));
         assert_eq!(list[2]["bytes"], json!(9));
         assert_eq!(list[2]["started_unix_ms"], json!(stamp_unix_ms(older)));

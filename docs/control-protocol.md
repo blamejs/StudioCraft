@@ -402,8 +402,8 @@ empty list with `scanning` true, and a later call returns that scan. It returns
 Each entry of `recordings` has `name` (the file's name without its extension, or the take's name),
 `kind` (`recording`, `replay` or `audio_tracks` for a take without a recording file),
 `started_unix_ms`, `file`, `format` (`mkv`, `mp4` or `mov`), `bytes`, `modified_unix_ms`,
-`timeline` and `audio_tracks`; fields that do not apply are `null`. `started_unix_ms` is the take's
-start, else the date and time in the file's name read as local time. The list is sorted by it, or
+`timeline` and `audio_tracks`; fields that do not apply are `null`. `started_unix_ms` is the date
+and time in the file's name read as local time, else the take's start. The list is sorted by it, or
 by `modified_unix_ms` when it is `null`. A recording's `timeline` is `<name>.otio` beside it, and
 its `audio_tracks` is the take in `<name> Audio`. When that name was taken, the timeline or take
 named `<name> (N)` can belong to it instead, unless a recording has that name. Of these, a
