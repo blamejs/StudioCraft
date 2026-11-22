@@ -565,7 +565,15 @@ mod tests {
     }
 
     fn state(active: bool, stopping: bool, status: OutputStatus, secs: u64) -> OutputState {
-        OutputState { active, stopping, status, target: "x.mkv".into(), elapsed: Duration::from_secs(secs), bytes: 0 }
+        OutputState {
+            active,
+            stopping,
+            status,
+            target: "x.mkv".into(),
+            elapsed: Duration::from_secs(secs),
+            bytes: 0,
+            destinations: Default::default(),
+        }
     }
 
     #[test]

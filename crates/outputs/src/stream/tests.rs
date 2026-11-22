@@ -319,9 +319,34 @@ fn a_lost_connection_is_made_again() {
     let d = until(&out, "a", |d| d.status == DestinationStatus::Live && d.reconnects == 1);
     assert!(d.bytes > 0, "{d:?}");
     assert_eq!(out.reconnects(), 1, "the sum over the destinations");
+    assert_eq!(out.recoveries(), 1, "it went live again once after the loss");
+    assert_eq!(out.destination_counts(), DestinationCounts { live: 1, retrying: 0 });
     drop(feed);
     out.stop().unwrap();
     until_closed(&seen);
+}
+
+#[test]
+fn the_counts_follow_the_destinations() {
+    let (a, seen) = server(vec![Plan::Accept]);
+    let job = job(RateControl::Bitrate { kbps: 400, keyframe_s: 1 });
+    // The wait before the next try outlasts the test, and the stop ends it.
+    let waits = Timing { first: GUARD, longest: GUARD, ..quick() };
+    let mut out = Streaming::start_timed(&job, vec![target("a", &a, "k"), target("b", &closed_url(), "k")], waits).unwrap();
+    let feed = Feed::new(&out);
+    media(&seen, 3);
+    until(&out, "a", |d| d.status == DestinationStatus::Live);
+    until(&out, "b", |d| matches!(d.status, DestinationStatus::Retrying { .. }));
+    assert_eq!(out.destination_counts(), DestinationCounts { live: 1, retrying: 1 });
+    assert_eq!(out.recoveries(), 0, "a destination that never went live has not recovered");
+    out.stop_destination("b").unwrap();
+    until(&out, "b", |d| d.status == DestinationStatus::Stopped);
+    assert_eq!(out.destination_counts(), DestinationCounts { live: 1, retrying: 0 });
+    drop(feed);
+    out.stop().unwrap();
+    until_closed(&seen);
+    until(&out, "a", |d| d.status == DestinationStatus::Stopped);
+    assert_eq!(out.destination_counts(), DestinationCounts::default());
 }
 
 #[test]

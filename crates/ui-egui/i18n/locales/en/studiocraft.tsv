@@ -292,6 +292,7 @@
 	Read the displays, windows and devices again	Read the displays, windows and devices again
 	Reading the lists…	Reading the lists…
 	REC	REC
+	RECONNECTING	RECONNECTING
 	Record	Record
 	Record and stream scenes built from your screen, windows, cameras, pictures, text and sound.	Record and stream scenes built from your screen, windows, cameras, pictures, text and sound.
 	Recording	Recording
@@ -543,6 +544,8 @@
 @msg	No hardware encoder passed its test; using {encoder}	No hardware encoder passed its test; using {encoder}
 @msg	The hardware encoder tests could not run: {error}	The hardware encoder tests could not run: {error}
 @msg	{encoder} stopped working; the next start tries another encoder	{encoder} stopped working; the next start tries another encoder
+	{count} reconnecting	{count} reconnecting
+	Destinations waiting to connect again; the Streaming window shows each one and why	Destinations waiting to connect again; the Streaming window shows each one and why
 	{fps} fps  {ms} ms	{fps} fps  {ms} ms
 	{ms} ms	{ms} ms
 	rtmp://live.example.com/app	rtmp://live.example.com/app
@@ -581,6 +584,8 @@
 @msg	No file dialog could be shown: {error}	No file dialog could be shown: {error}
 @msg	Recording saved to {path}	Recording saved to {path}
 @msg	Replay saved to {path}	Replay saved to {path}
+@msg	Lost the connection to {name}; reconnecting	Lost the connection to {name}; reconnecting
+@msg	Reconnected to {name}	Reconnected to {name}
 @msg	The compositor thread could not start: {error}	The compositor thread could not start: {error}
 @msg	The preferences could not be saved: {error}	The preferences could not be saved: {error}
 @msg	The profile could not be saved: {error}	The profile could not be saved: {error}

@@ -995,10 +995,22 @@ impl Studio {
     }
 
     /// Keep a reconnect event for each stream destination that lost its connection since the
-    /// last look.
+    /// last look, and show a notice for a lost connection and for a reconnect
+    /// ([`events::ReconnectNotices`] decides which).
     fn note_reconnects(&mut self) {
+        let now = self.clock.now();
         for (kind, stream) in self.outputs.reconnects_now() {
+            if let events::Kind::Reconnect { destination, .. } = &kind
+                && self.outputs.loss_notice(destination, now)
+            {
+                let name = vec![("name", self.outputs.stream_destination_name(destination))];
+                self.notices.push(Notice::new("Lost the connection to {name}; reconnecting", name, true));
+            }
             self.note_event_in(kind, Some(stream));
+        }
+        for id in self.outputs.recovered_now() {
+            let name = vec![("name", self.outputs.stream_destination_name(&id))];
+            self.notices.push(Notice::new("Reconnected to {name}", name, false));
         }
     }
 
