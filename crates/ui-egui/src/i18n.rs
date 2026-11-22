@@ -159,7 +159,7 @@ pub fn menu_text(english: &'static str) -> String {
 }
 
 /// A status or error message: an English template with `{name}` placeholders and their values.
-/// It is kept in English (logs, the control channel) and translated when the status bar shows it.
+/// It is kept in English (logs, the control channel) and translated when the window shows it.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Msg {
     template: Cow<'static, str>,

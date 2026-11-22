@@ -61,7 +61,7 @@ pub(crate) struct Runtime {
     online: bool,
     /// Whether the result of Help › Check for Updates is in view.
     pub(crate) window_open: bool,
-    /// The failed check the status bar has reported, so that it is reported once.
+    /// The failed check a notice has reported, so that it is reported once.
     reported: Option<String>,
     // port: P15 (update dialogs) moves the update dialogs onto the window's own dialog host.
     /// The host the update prompt and the result of Help › Check for Updates show on.
@@ -102,7 +102,7 @@ pub(crate) fn check(app: &mut StudioApp, ctx: &egui::Context) -> Result<Value, M
 }
 
 /// Start the check at start once (when `at_start` allows it) and pick up finished work. Returns
-/// the error of a requested check that has just failed, for the status bar.
+/// the error of a requested check that has just failed, for a notice.
 pub(crate) fn tick(rt: &mut Runtime, ctx: &egui::Context, at_start: bool) -> Option<String> {
     if !rt.online {
         return None;
@@ -291,7 +291,7 @@ mod tests {
         a.perform(&ctx, &craft_keymap::CommandRef::new("app.check_updates")).unwrap();
         settle(&mut a, &ctx);
         assert_eq!(a.updates.updater.status(), &Status::Failed(error.clone()));
-        // The next frame puts it in the status bar once, and draws the result dialog.
+        // The next frame reports it in a notice once, and draws the result dialog.
         frame(&mut a, &ctx);
         frame(&mut a, &ctx);
         let notices: Vec<_> = a.notices.iter().filter(|(n, _)| n.error && n.msg.english().contains("could not reach the release list")).collect();

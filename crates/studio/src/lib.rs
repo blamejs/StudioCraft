@@ -78,7 +78,7 @@ pub enum UiAction {
     Exit,
 }
 
-/// A message for the status bar or a notification: an English template with `{name}`
+/// A message for a notice in the window or a notification: an English template with `{name}`
 /// placeholders and their values. The interface translates the template when it shows it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Notice {

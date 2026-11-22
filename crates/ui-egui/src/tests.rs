@@ -1813,12 +1813,19 @@ fn window_command_errors_are_shown_translated_and_returned_in_english() {
     let ctx = crate::test_context();
     let e = run(&mut a, &ctx, "dock.layout_apply", json!({"name": "Talk"})).unwrap_err();
     assert_eq!(e, "there is no dock layout named `Talk`");
-    let Some((note, _)) = a.notices.back() else { panic!("no notice") };
-    assert!(note.error);
-    assert_eq!(note.msg.english(), e);
-    assert_eq!(note.msg.shown(), "es gibt kein Dock-Layout namens `Talk`");
-    let notices = a.hud()["ui"]["notices"].clone();
-    assert_eq!(notices.as_array().and_then(|n| n.last()).map(|n| n["text"].clone()), Some(json!(e)));
+    let last_notice = |a: &StudioApp| a.hud()["ui"]["notices"].as_array().and_then(|n| n.last()).cloned();
+    assert_eq!(last_notice(&a), Some(json!({"text": e, "error": true})));
+    // The next frame posts the notice's card in German, in the error tone, and the control
+    // channel still reads it in English.
+    frame(&mut a, &ctx, vec![]);
+    assert_eq!(notice_cards(&ctx).last(), Some(&("es gibt kein Dock-Layout namens `Talk`".to_owned(), Tone::Bad)));
+    assert_eq!(last_notice(&a), Some(json!({"text": e, "error": true})));
+    // A language change shows the card on screen in the new language, once.
+    a.set_language("en");
+    frame(&mut a, &ctx, vec![]);
+    let talk = |cards: Vec<(String, Tone)>| cards.into_iter().filter(|(text, _)| text.contains("Talk")).collect::<Vec<_>>();
+    assert_eq!(talk(notice_cards(&ctx)), vec![(e.clone(), Tone::Bad)]);
+    a.set_language("de");
 
     // A name the prompt refuses stays in the prompt, translated, and the control channel gets it
     // in English.
@@ -1831,4 +1838,57 @@ fn window_command_errors_are_shown_translated_and_returned_in_english() {
     assert_eq!(e.english(), "a 8 × 4 display can't be the canvas: each side must be from 16 to 8192 pixels");
     assert_eq!(e.shown(), "ein Bildschirm mit 8 × 4 kann nicht die Leinwand sein: jede Seite muss 16 bis 8192 Pixel haben");
     a.set_language("en");
+}
+
+/// The text and tone of each notice card in the window's toast queue, oldest first.
+fn notice_cards(ctx: &egui::Context) -> Vec<(String, Tone)> {
+    toast::cards(ctx, &WindowKey::main())
+        .into_iter()
+        .map(|c| (c.toast.title.map(|t| t.as_str().to_owned()).unwrap_or_default(), c.toast.tone))
+        .collect()
+}
+
+/// Runs one frame at `seconds` on the frames' clock.
+fn frame_at_time(app: &mut StudioApp, ctx: &egui::Context, seconds: f64) {
+    let screen_rect = Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1280.0, 800.0)));
+    let raw = RawInput { screen_rect, time: Some(seconds), ..RawInput::default() };
+    app.before_input(ctx);
+    let mut out = ctx.run_ui(raw, |ui| app.frame(ui));
+    out.textures_delta.clear();
+}
+
+#[test]
+fn an_error_notice_stays_24_seconds_and_any_other_8() {
+    let mut a = app();
+    let ctx = crate::test_context();
+    a.notify(Msg::plain("Recording saved"), false);
+    a.notify(Msg::plain("The recording could not start"), true);
+    let texts = |a: &StudioApp, ctx: &egui::Context| {
+        let hud: Vec<String> =
+            a.hud()["ui"]["notices"].as_array().into_iter().flatten().filter_map(|n| n["text"].as_str().map(str::to_owned)).collect();
+        let cards: Vec<String> = notice_cards(ctx).into_iter().map(|(text, _)| text).collect();
+        (hud, cards)
+    };
+    let both = vec!["Recording saved".to_owned(), "The recording could not start".to_owned()];
+    let error = vec!["The recording could not start".to_owned()];
+    let none = Vec::new();
+    // The control channel lists a notice until the frame after its card left (`listed` false).
+    let steps = [(0.0, &both, true), (0.0, &both, true), (7.9, &both, true), (8.1, &error, false), (8.2, &error, true)];
+    let steps = steps.into_iter().chain([(23.9, &error, true), (24.1, &none, false), (24.2, &none, true)]);
+    for (seconds, shown, listed) in steps {
+        frame_at_time(&mut a, &ctx, seconds);
+        let (hud, cards) = texts(&a, &ctx);
+        assert_eq!(&cards, shown, "the cards at {seconds} s");
+        if listed {
+            assert_eq!(&hud, shown, "the notices at {seconds} s");
+        }
+    }
+    assert!(a.notices.is_empty());
+    // Five notices posted at once: the newest three show, and the control channel lists those.
+    for n in 1..=5 {
+        a.notify(Msg::plain(format!("Notice {n}")), false);
+    }
+    a.post_notices(&ctx);
+    let newest: Vec<String> = (3..=5).map(|n| format!("Notice {n}")).collect();
+    assert_eq!(texts(&a, &ctx), (newest.clone(), newest));
 }
