@@ -376,13 +376,34 @@ fn support_for(socket: Option<&Path>) -> Support {
     if socket.is_some() { Support::yes() } else { Support::no(crate::NOT_AVAILABLE) }
 }
 
+/// Whether a connection to the server at `socket` can be tried: a socket file is there. Clients
+/// reach the server through a Unix socket (https://docs.pipewire.org/page_module_protocol_native.html).
+/// Without a socket, the list and the capture fail with [`NOT_CONNECTED`] before they make a
+/// PipeWire context, which logs each configuration file it cannot read; the list tries again
+/// every [`RECONNECT`].
+fn can_connect(socket: Option<&Path>) -> bool {
+    use std::os::unix::fs::FileTypeExt;
+    socket.and_then(|s| std::fs::metadata(s).ok()).is_some_and(|m| m.file_type().is_socket())
+}
+
+impl LinuxBackend {
+    /// The server's socket: the test server's, or the user's own from the environment.
+    fn socket(&self) -> Option<PathBuf> {
+        server_socket(self.remote.as_deref())
+    }
+}
+
+/// The socket of the server at `remote`, or of the user's own server when it is `None`.
+fn server_socket(remote: Option<&str>) -> Option<PathBuf> {
+    match remote {
+        Some(r) => Some(PathBuf::from(r)),
+        None => socket_path(|k| std::env::var(k).ok()),
+    }
+}
+
 impl Backend for LinuxBackend {
     fn support(&self) -> Support {
-        let socket = match &self.remote {
-            Some(r) => Some(PathBuf::from(r)),
-            None => socket_path(|k| std::env::var(k).ok()),
-        };
-        support_for(socket.as_deref())
+        support_for(self.socket().as_deref())
     }
 
     fn watch(&self, wake: Wake) -> Result<Box<dyn Watcher>, AppAudioError> {
@@ -397,6 +418,9 @@ impl Backend for LinuxBackend {
         let Some(start) = started_at(target.pid) else {
             return Err(AppAudioError::NotRunning(format!("process {}", target.pid)));
         };
+        if !can_connect(self.socket().as_deref()) {
+            return Err(failed(NOT_CONNECTED));
+        }
         init();
         let mainloop = pw::main_loop::MainLoopRc::new(None).map_err(|_| failed(NOT_CONNECTED))?;
         let context = pw::context::ContextRc::new(&mainloop, None).map_err(|_| failed(NOT_CONNECTED))?;
@@ -664,6 +688,9 @@ fn follow(
 /// Keep `listed` current with the server's playback streams until `stop` closes or the server
 /// goes away.
 fn list_loop(remote: Option<&str>, listed: &Arc<Mutex<Listed>>, wake: &Wake, stop: PipeReader) -> Result<(), &'static str> {
+    if !can_connect(server_socket(remote).as_deref()) {
+        return Err(NOT_CONNECTED);
+    }
     init();
     let mainloop = pw::main_loop::MainLoopRc::new(None).map_err(|_| NOT_CONNECTED)?;
     let context = pw::context::ContextRc::new(&mainloop, None).map_err(|_| NOT_CONNECTED)?;
@@ -1275,6 +1302,24 @@ mod tests {
         // A server, or the folder of its socket, that is not there yet may start later; the list
         // reports it and connects again.
         assert!(LinuxBackend::with_remote(NO_SERVER).support().supported);
+    }
+
+    #[test]
+    fn only_a_socket_file_is_connected_to() {
+        let dir = std::env::temp_dir().join(format!("studiocraft-app-audio-{}-runtime", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        assert!(!can_connect(None), "no folder to look in");
+        assert!(!can_connect(Some(&dir.join("pipewire-0"))), "an empty runtime folder");
+        assert!(!can_connect(Some(Path::new(NO_SERVER))), "a missing folder");
+        let file = silent_server("plain-file");
+        assert!(!can_connect(Some(Path::new(&file))), "a plain file");
+        let socket = dir.join("pipewire-0");
+        let listener = std::os::unix::net::UnixListener::bind(&socket).unwrap();
+        assert!(can_connect(Some(&socket)));
+        drop(listener);
+        let _ = std::fs::remove_file(socket);
+        let _ = std::fs::remove_file(file);
+        let _ = std::fs::remove_dir(dir);
     }
 
     #[test]
