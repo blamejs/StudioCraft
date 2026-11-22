@@ -791,9 +791,10 @@ impl StudioApp {
         self.words = host_words(&self.host);
     }
 
-    /// The `app.language` command: `lang` is `auto` or the code of a built-in language.
+    /// The `app.language` command: `lang` is `auto` or the code of a built-in language. Any other
+    /// code, an empty one or a missing `lang` is an error that lists the codes.
     fn language_command(&mut self, cmd: &CommandRef) -> Result<Value, Msg> {
-        let code = Self::param_str(cmd, "lang")?;
+        let code = cmd.params.get("lang").and_then(Value::as_str).unwrap_or_default();
         let offered = i18n::languages();
         let setting = match LanguageChoice::from_command(cmd) {
             Some(LanguageChoice::Automatic) => i18n::AUTO,

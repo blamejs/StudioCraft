@@ -330,10 +330,17 @@ fn the_language_menu_lists_the_catalogs() {
     let chosen: Vec<String> = rows.into_iter().filter(|r| r.2).map(|r| r.1).collect();
     assert_eq!(chosen, ["de"]);
 
-    // A code that is not built in, or no code, is refused and changes nothing.
-    assert!(a.perform(&ctx, &CommandRef::with_params("app.language", json!({"lang": "tlh"}))).is_err());
-    assert!(a.perform(&ctx, &CommandRef::with_params("app.language", json!({"lang": ""}))).is_err());
-    assert!(a.perform(&ctx, &CommandRef::new("app.language")).is_err());
+    // A code that is not built in, an empty code or no code is refused with an error that lists
+    // every code, and changes nothing.
+    let codes = std::iter::once(AUTO).chain(languages()).collect::<Vec<_>>().join(", ");
+    for cmd in [
+        CommandRef::with_params("app.language", json!({"lang": "tlh"})),
+        CommandRef::with_params("app.language", json!({"lang": ""})),
+        CommandRef::new("app.language"),
+    ] {
+        let e = a.perform(&ctx, &cmd).unwrap_err();
+        assert!(e.contains(&format!("(one of {codes})")), "{e}");
+    }
     assert_eq!(a.store.prefs().language(), "de");
     let r = a.perform(&ctx, &CommandRef::with_params("app.language", json!({"lang": "auto"}))).unwrap();
     assert_eq!(r, json!({"language": AUTO}));
