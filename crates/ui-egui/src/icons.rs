@@ -2,20 +2,51 @@
 
 use std::f32::consts::TAU;
 
-use egui::{Color32, CornerRadius, Pos2, Rect, Sense, Shape, Stroke, StrokeKind, Ui, pos2, vec2};
+use craft_ui::primitives::Glyph;
+use craft_ui::style::UiTokens;
+use egui::{Color32, CornerRadius, Painter, Pos2, Rect, Sense, Shape, Stroke, StrokeKind, Ui, pos2, vec2};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Icon {
     Gear,
-    Speaker,
-    Muted,
     /// Two arrows pointing apart: the transition picker when the output bar is narrow.
     Transition,
 }
 
-/// An icon button with its own size and, unless transparent, its own icon color.
-pub fn sized(ui: &mut Ui, icon: Icon, tip: &str, enabled: bool, size: egui::Vec2, tint: Color32) -> bool {
-    response(ui, icon, tip, enabled, size, tint).clicked()
+// port: P8 (icons, segmented control and on-air buttons) replaces this glyph with the framework's
+// `volume` icon once the icon set has that meaning.
+
+/// The speaker of an audio channel's mute button while the channel is heard: a speaker with two
+/// sound waves.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, craft_ui::contract::MemoProps)]
+pub struct Speaker;
+
+impl Glyph for Speaker {
+    fn paint(&self, painter: &Painter, _: &UiTokens, rect: Rect, color: Color32, _: bool) {
+        speaker(painter, rect, color);
+    }
+}
+
+/// Draw the speaker with its two sound waves centered in `rect`.
+fn speaker(p: &Painter, rect: Rect, color: Color32) {
+    let c = rect.center();
+    let s = rect.height().min(rect.width()) * 0.32;
+    if !rect.is_finite() || s <= 0.0 {
+        return;
+    }
+    let x0 = c.x - s;
+    let pts = vec![
+        pos2(x0, c.y - s * 0.35),
+        pos2(x0 + s * 0.45, c.y - s * 0.35),
+        pos2(x0 + s, c.y - s),
+        pos2(x0 + s, c.y + s),
+        pos2(x0 + s * 0.45, c.y + s * 0.35),
+        pos2(x0, c.y + s * 0.35),
+    ];
+    p.add(Shape::convex_polygon(pts, color, Stroke::NONE));
+    let w = pos2(x0 + s * 1.1, c.y);
+    p.add(Shape::line(arc(w, s * 0.5, -0.9, 0.9, 8), Stroke::new(1.3, color)));
+    p.add(Shape::line(arc(w, s * 0.95, -0.9, 0.9, 10), Stroke::new(1.3, color)));
 }
 
 // port: P8 (icons, segmented control and on-air buttons) replaces this button, the copy of the
@@ -70,18 +101,6 @@ fn bounded_stroke(stroke: Stroke, rect: Rect) -> Stroke {
     }
 }
 
-/// An icon button that opens a menu below it.
-pub fn menu(ui: &mut Ui, icon: Icon, tip: &str, add: impl FnOnce(&mut Ui)) {
-    menu_sized(ui, icon, tip, vec2(26.0, 22.0), true, add);
-}
-
-/// A `size` icon button that opens a menu below it; its response.
-pub fn menu_sized(ui: &mut Ui, icon: Icon, tip: &str, size: egui::Vec2, enabled: bool, add: impl FnOnce(&mut Ui)) -> egui::Response {
-    let r = response(ui, icon, tip, enabled, size, Color32::TRANSPARENT);
-    egui::Popup::menu(&r).show(add);
-    r
-}
-
 /// A `size` icon button that opens a panel below it. Only a click outside the panel closes it, so
 /// it can hold fields and sliders.
 pub fn panel(ui: &mut Ui, icon: Icon, tip: &str, size: egui::Vec2, add: impl FnOnce(&mut Ui)) -> egui::Response {
@@ -110,28 +129,6 @@ pub fn paint(ui: &Ui, icon: Icon, rect: Rect, color: Color32) {
             p.circle_stroke(c, s * 0.7, Stroke::new(1.8, color));
             p.circle_filled(c, s * 0.25, color);
         }
-        Icon::Speaker | Icon::Muted => {
-            let x0 = c.x - s;
-            let pts = vec![
-                pos2(x0, c.y - s * 0.35),
-                pos2(x0 + s * 0.45, c.y - s * 0.35),
-                pos2(x0 + s, c.y - s),
-                pos2(x0 + s, c.y + s),
-                pos2(x0 + s * 0.45, c.y + s * 0.35),
-                pos2(x0, c.y + s * 0.35),
-            ];
-            p.add(Shape::convex_polygon(pts, color, Stroke::NONE));
-            if icon == Icon::Speaker {
-                let w = pos2(x0 + s * 1.1, c.y);
-                p.add(Shape::line(arc(w, s * 0.5, -0.9, 0.9, 8), Stroke::new(1.3, color)));
-                p.add(Shape::line(arc(w, s * 0.95, -0.9, 0.9, 10), Stroke::new(1.3, color)));
-            } else {
-                let a = pos2(c.x + s * 0.35, c.y - s * 0.45);
-                let b = pos2(c.x + s * 1.15, c.y + s * 0.45);
-                p.line_segment([a, b], line);
-                p.line_segment([pos2(a.x, b.y), pos2(b.x, a.y)], line);
-            }
-        }
         Icon::Transition => {
             // An arrow to the right on top and one to the left below it.
             for (y, d) in [(-s * 0.45, 1.0), (s * 0.45, -1.0)] {
@@ -152,12 +149,31 @@ mod tests {
     fn every_icon_paints() {
         let ctx = egui::Context::default();
         let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
-            for icon in [Icon::Gear, Icon::Speaker, Icon::Muted, Icon::Transition] {
-                assert!(!sized(ui, icon, "icon", true, vec2(24.0, 24.0), Color32::TRANSPARENT));
-                assert!(!sized(ui, icon, "icon", false, vec2(24.0, 24.0), Color32::TRANSPARENT));
+            for icon in [Icon::Gear, Icon::Transition] {
+                assert!(!response(ui, icon, "icon", true, vec2(24.0, 24.0), Color32::TRANSPARENT).clicked());
+                assert!(!response(ui, icon, "icon", false, vec2(24.0, 24.0), Color32::TRANSPARENT).clicked());
             }
         });
         out.textures_delta.clear();
         assert!(!out.shapes.is_empty());
+    }
+
+    #[test]
+    fn the_speaker_glyph_paints_inside_its_square_and_not_in_an_empty_one() {
+        let ctx = crate::test_context();
+        let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
+            let tokens = craft_ui::style::StyleCx::with_root(ui.ctx(), |cx| cx.tokens.clone());
+            let square = Rect::from_min_size(pos2(10.0, 10.0), vec2(16.0, 16.0));
+            Speaker.paint(ui.painter(), &tokens, square, Color32::WHITE, false);
+            Speaker.paint(ui.painter(), &tokens, Rect::from_min_size(pos2(40.0, 40.0), egui::Vec2::ZERO), Color32::WHITE, false);
+            Speaker.paint(ui.painter(), &tokens, Rect::from_min_size(pos2(40.0, 40.0), vec2(f32::NAN, 16.0)), Color32::WHITE, false);
+        });
+        out.textures_delta.clear();
+        assert_eq!(out.shapes.len(), 3, "the speaker and its two waves, and nothing for the empty squares");
+        let square = Rect::from_min_size(pos2(10.0, 10.0), vec2(16.0, 16.0));
+        for c in &out.shapes {
+            let bounds = c.shape.visual_bounding_rect();
+            assert!(square.expand(1.0).contains_rect(bounds), "{bounds:?} is inside {square:?}");
+        }
     }
 }

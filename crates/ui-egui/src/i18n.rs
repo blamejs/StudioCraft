@@ -121,11 +121,6 @@ pub(crate) fn start_x(ui: &egui::Ui, rect: egui::Rect) -> f32 {
     if is_rtl(ui) { rect.right() } else { rect.left() }
 }
 
-/// The x of `rect`'s reading end.
-pub(crate) fn end_x(ui: &egui::Ui, rect: egui::Rect) -> f32 {
-    if is_rtl(ui) { rect.left() } else { rect.right() }
-}
-
 /// The language a Language setting stands for: `auto`, or a code that is not offered, follows the
 /// system.
 pub fn resolve(setting: &str) -> Lang {

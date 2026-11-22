@@ -1857,6 +1857,84 @@ fn a_click_on_a_header_button_runs_its_command_and_add_source_opens_and_closes_i
 }
 
 #[test]
+fn the_audio_docks_headers_are_title_rows_named_by_their_titles() {
+    let mut a = app();
+    let ctx = crate::test_context();
+    let size = egui::vec2(1280.0, 800.0);
+    run(&mut a, &ctx, "dock.app_audio", json!({})).unwrap();
+    for _ in 0..2 {
+        frame_at(&mut a, &ctx, size);
+    }
+    let tree = frame_tree(&mut a, &ctx, size, vec![]);
+    let v = a.ui_inspect(&ctx);
+    for (k, title) in [(2, "Audio Mixer"), (3, "Application Audio")] {
+        let d = &v["docks"][k];
+        assert_eq!(d["actions"], json!([]), "{title} has no header actions");
+        let Some((heading, _)) = named(&tree, title) else { panic!("no heading named `{title}`") };
+        // With no actions, the title row is the whole room inside the header's padding.
+        assert_eq!(rect_of(&d["title"]), heading, "{title}");
+        let header = rect_of(&d["header"]);
+        assert!(header.contains_rect(heading) && header.height() == 28.0, "{title}: {heading:?} in {header:?}");
+    }
+}
+
+/// The sources that are muted.
+fn muted(a: &StudioApp) -> Vec<SourceId> {
+    a.studio().collection().sources.iter().filter(|s| s.audio.muted).map(|s| s.id).collect()
+}
+
+#[test]
+fn the_audio_mixer_mute_button_is_named_by_what_a_click_does() {
+    let mut a = app();
+    let ctx = crate::test_context();
+    let size = egui::vec2(1280.0, 800.0);
+    frame_at(&mut a, &ctx, size);
+    let tree = frame_tree(&mut a, &ctx, size, vec![]);
+    assert!(muted(&a).is_empty() && named(&tree, "Unmute").is_none());
+    let Some((mute, false)) = named(&tree, "Mute") else { panic!("no enabled Mute button in the Audio Mixer") };
+    click_at(&mut a, &ctx, size, mute.center());
+    let now = muted(&a);
+    assert_eq!(now.len(), 1, "the click muted one channel");
+    assert!(a.studio().collection().global_audio.contains(&now[0]), "a global audio source");
+    let tree = frame_tree(&mut a, &ctx, size, vec![]);
+    let Some((unmute, false)) = named(&tree, "Unmute") else { panic!("the muted channel's button is not named Unmute") };
+    assert_eq!(unmute, mute, "the button stays in its place");
+    click_at(&mut a, &ctx, size, unmute.center());
+    assert!(muted(&a).is_empty(), "a second click unmuted it");
+}
+
+#[test]
+fn rename_in_an_audio_mixer_channel_menu_renames_a_global_audio_source_in_the_name_prompt() {
+    let mut a = app();
+    let ctx = crate::test_context();
+    let size = egui::vec2(1280.0, 800.0);
+    frame_at(&mut a, &ctx, size);
+    let global = a.studio().collection().global_audio.clone();
+    assert!(global.len() >= 2, "a new collection has two global audio sources: {global:?}");
+    let tree = frame_tree(&mut a, &ctx, size, vec![]);
+    let Some((gear, false)) = named(&tree, "Audio source actions") else { panic!("no settings button in the Audio Mixer") };
+    click_at(&mut a, &ctx, size, gear.center());
+    let tree = frame_tree(&mut a, &ctx, size, vec![]);
+    for row in ["Properties…", "Filters…"] {
+        assert!(named(&tree, row).is_some(), "the channel's menu has {row}");
+    }
+    let Some((rename, false)) = named(&tree, "Rename") else { panic!("the channel's menu has no Rename row") };
+    click_at(&mut a, &ctx, size, rename.center());
+    let what = a.naming.as_ref().map(|n| n.what);
+    let Some(Named::RenameSource(source)) = what else { panic!("Rename opened no name prompt: {what:?}") };
+    assert!(global.contains(&source), "the channel is a global audio source, which the Sources dock does not list");
+    assert_eq!(a.ui_inspect(&ctx)["dialogs"]["prompt"]["title"], json!("Rename Source"));
+    let name_of = |a: &StudioApp, id: SourceId| a.studio().collection().source(id).map(|s| s.name.clone());
+    let other = global.iter().copied().find(|id| *id != source).and_then(|id| name_of(&a, id)).unwrap_or_default();
+    assert!(a.answer_dialog(&ctx, true, Some(&other)).is_err(), "the name of another source is refused");
+    assert!(a.naming.is_some(), "the prompt stays open after a refusal");
+    assert_eq!(a.answer_dialog(&ctx, true, Some("Speakers")), Ok(json!({"dialog": "prompt", "closed": true, "name": "Speakers"})));
+    assert_eq!(name_of(&a, source).as_deref(), Some("Speakers"));
+    run(&mut a, &ctx, "edit.undo", json!({})).unwrap();
+    assert_ne!(name_of(&a, source).as_deref(), Some("Speakers"), "Edit › Undo puts the old name back");
+}
+
+#[test]
 fn the_sources_dock_lists_the_top_item_first_and_its_eye_and_lock_change_the_item() {
     let mut a = app();
     let ctx = crate::test_context();

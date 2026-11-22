@@ -463,9 +463,9 @@ fonts and title bar. The following table lists the code for each part.
 | --- | --- |
 | The audio meters' colors in dark and light mode, as data colors | `ui-egui/src/kit/tokens.rs` |
 | The app's theme defaults (the suite theme, dark mode, the Compact size set), the root values each frame starts from, and egui's theme following the resolved mode | `ui-egui/src/theme.rs`, with `craft-theme`'s `AppDefaults` and the tokens `craft-ui` resolves |
-| Segmented control, Record and Go Live buttons with their timers, dock header | `segmented.rs`, `onair.rs` and `panel_header.rs` under `ui-egui/src/kit/`, which depend only on egui, `craft-ui`, `craft-theme` and `craft-menu` and take their colors and sizes from the tokens |
+| Segmented control, Record and Go Live buttons with their timers | `segmented.rs` and `onair.rs` under `ui-egui/src/kit/`, which depend only on egui, `craft-ui`, `craft-theme` and `craft-menu` and take their colors and sizes from the tokens |
 | Menu row and output controls | `ui-egui/src/output_bar.rs`, with `craft-ui`'s `fit_toolbar` choosing what moves when the row is narrow |
-| Docks | `ui-egui/src/docks.rs`, with `kit/panel_header.rs` for each dock's header |
+| Docks | `ui-egui/src/docks.rs`: each dock's header is a `craft-ui` `TitleRow`; the Scenes and Sources docks are `craft-ui` lists, and the Audio Mixer and Application Audio docks show `craft-ui` text, buttons, check boxes and menus around the app's own meters and volume sliders |
 | Dock strip size | `ui-egui/src/strip.rs`; `strip::Handles` shows the strip's top edge and the dividers as `craft-ui` `Splitter`s, placed by `craft-behavior`'s divider rules |
 | Undocked dock windows | `StudioApp::dock_windows` in `ui-egui/src/lib.rs`, each a `craft-ui` `FloatingGroup` |
 | Dock commands | `dock.move` (Move Left and Move Right), `dock.float` (Undock), `dock.layout_save`, `dock.layout_apply` and `dock.layout_remove` |

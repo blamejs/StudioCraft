@@ -1,26 +1,33 @@
 //! The docks under the preview: Scenes, Sources, Audio Mixer and Application Audio. The transition
 //! and output controls are in the output bar ([`crate::output_bar`]). Each dock has a header with
-//! its title and its actions and no footer. The Scenes and Sources docks show a framework title
-//! row and list; the Audio Mixer and Application Audio docks use [`crate::kit::panel_header`].
+//! its title and its actions and no footer. Every dock's header is a framework title row; the
+//! Scenes and Sources docks show a framework list under it, and the Audio Mixer and Application
+//! Audio docks a column of channels with framework text, buttons and menus around app meters.
 
 use std::borrow::Cow;
 use std::collections::HashMap;
+use std::fmt::Debug;
+use std::hash::Hash;
 
 use craft_behavior::{ColumnKey, ColumnWidth, EditEvent, IconId, Selection, SelectionChange, keyed};
 use craft_keymap::CommandRef;
-use craft_theme::variant::Tone;
+use craft_theme::Variant;
+use craft_theme::variant::{Emphasis, Tone};
+use craft_ui::buttons::IconButton;
+use craft_ui::choice::Checkbox;
 use craft_ui::contract::overlay::Anchor;
 use craft_ui::contract::{
-    Bind, CollectionEvent, ColumnSpec, Props as _, SelectMode, Show as _, ShowCollection as _, ShowContainer as _, ToggleColumn, Trigger,
+    Bind, CollectionEvent, ColumnSpec, PopupKind, Props as _, SelectMode, Show as _, ShowCollection as _, ShowContainer as _, ToggleColumn, Trigger,
     request_rename,
 };
-use craft_ui::display::Divider;
+use craft_ui::display::{Divider, Elide, Shade, Text};
 use craft_ui::list::{List, ListRow, ToggleCell};
 use craft_ui::menu::{Menu, MenuItem};
 use craft_ui::primitives::IconSpec;
 use craft_ui::runtime::env::Label;
 use craft_ui::sections::{HeaderCommand, HeaderStrength, TitleRow};
-use egui::{Color32, Rect, RichText, Sense, Ui, pos2, vec2};
+use craft_ui::style::TypeRole;
+use egui::{Color32, Rect, Sense, Ui, pos2, vec2};
 use serde_json::json;
 use studiocraft_engine::lanes::{AppKey, Lane, LaneKind, Lanes};
 use studiocraft_media::mix::{BlockLevels, METER_FLOOR_DB, MeterBallistics, from_db, to_db};
@@ -28,8 +35,7 @@ use studiocraft_model::{ItemId, SceneId, SceneItem, SourceConfig, SourceId};
 use studiocraft_studio::Studio;
 
 use crate::commands::{SCENE_HEADER, SCENE_HOTKEYS, SOURCE_HEADER};
-use crate::icons::{self, Icon};
-use crate::kit::panel_header::{PanelHeaderStyle, panel_header};
+use crate::icons::Speaker;
 use crate::kit::tokens::{MeterColors, paint};
 use crate::theme;
 use crate::{Act, Rename};
@@ -68,18 +74,6 @@ pub struct Drawn {
     pub title: Rect,
     pub actions: Vec<(&'static str, Rect)>,
     pub truncated: bool,
-}
-
-/// A dock's header; `title` is English and shown translated. `add` adds the actions from right to
-/// left and records each one.
-fn header(ui: &mut Ui, title: &str, add: impl FnOnce(&mut Ui, &mut Vec<(&'static str, Rect)>)) -> Drawn {
-    let style = theme::with_root(ui.ctx(), |cx| PanelHeaderStyle::new(cx, theme::title_font(cx)));
-    let r = panel_header(ui, tl!(title), &style, |ui| {
-        let mut actions = Vec::new();
-        add(ui, &mut actions);
-        actions
-    });
-    Drawn { header: r.rect, title: r.title, actions: r.inner, truncated: r.truncated }
 }
 
 /// The menu a right-click on a dock's title opens, for `dock` (its name in
@@ -502,8 +496,57 @@ fn gain_text(gain: f32) -> String {
     craft_i18n::fmt(tl!("{db} dB"), &[("db", &value)])
 }
 
+/// A line of a dock's body, wrapped at the dock's width: muted, or in `tone`'s color.
+fn note(ui: &mut Ui, text: &str, tone: Option<Tone>) {
+    let line = Text::new(text.to_string());
+    match tone {
+        Some(tone) => line.tone(tone).show(ui),
+        None => line.shade(Shade::Muted).show(ui),
+    };
+}
+
+/// A channel's or a lane's name, cut with an ellipsis when it does not fit, muted when `faint`.
+fn channel_name(ui: &mut Ui, name: &str, faint: bool) -> egui::Response {
+    let text = Text::new(name.to_string()).role(TypeRole::BodyStrong).elide(Elide::End);
+    if faint { text.shade(Shade::Muted).show(ui) } else { text.show(ui) }
+}
+
+/// A channel's gain readout in the monospace role.
+fn gain_readout(ui: &mut Ui, gain: f32) {
+    Text::new(gain_text(gain)).role(TypeRole::Mono).show(ui);
+}
+
+/// The settings button named `label` of the channel or lane `key`, and the menu of `rows` it
+/// opens under it. A row that runs closes the menu.
+fn settings_menu<K: Hash + Debug + Clone>(ui: &mut Ui, key: K, label: &str, mut rows: impl FnMut(&mut Ui)) {
+    let button = IconButton::new(IconSpec::svg(IconId::new("settings")))
+        .label(label.to_string())
+        .tooltip(label.to_string())
+        .popup(PopupKind::Menu)
+        .id_salt(("settings", key.clone()))
+        .show(ui);
+    Menu::new(label.to_string()).opened_by(&button.response, Trigger::Click).id_salt(("settings-menu", key)).show(ui, |ui, _| rows(ui));
+}
+
+/// The mute button of the channel or lane `key`: a speaker while it is heard, and the muted
+/// speaker in the warning tone while it is `muted`. Its name and tooltip say what a click does.
+/// Whether it was clicked.
+fn mute_button(ui: &mut Ui, key: impl Hash + Debug, muted: bool) -> bool {
+    let (icon, label) = if muted { (IconSpec::svg(IconId::new("track_mute")), "Unmute") } else { (IconSpec::glyph(&Speaker), "Mute") };
+    let mut button = IconButton::new(icon).label(tl!(label).to_string()).tooltip(tl!(label).to_string()).id_salt(("mute", key));
+    if muted {
+        button = button.variant(Variant::look(Emphasis::Ghost, Tone::Warn));
+    }
+    button.show(ui).clicked()
+}
+
+/// The space between two channels or lanes.
+fn stack_gap(ui: &Ui) -> f32 {
+    theme::with_root(ui.ctx(), |cx| cx.tokens.space.gap.stack)
+}
+
 pub fn mixer(ui: &mut Ui, studio: &Studio, st: &mut DockState, acts: &mut Vec<Act>) -> Drawn {
-    let drawn = header(ui, "Audio Mixer", |_, _| ());
+    let (drawn, _) = title_header(ui, "Audio Mixer", &[]);
     dock_menu(ui, &drawn, "mixer", st.place, acts);
     let c = studio.collection();
     let program: Vec<SourceId> = c.scene(c.program_scene).map(|s| s.items.iter().map(|i| i.source).collect()).unwrap_or_default();
@@ -514,46 +557,42 @@ pub fn mixer(ui: &mut Ui, studio: &Studio, st: &mut DockState, acts: &mut Vec<Ac
         .filter(|s| c.global_audio.contains(&s.id) || program.contains(&s.id))
         .collect();
     st.meters.retain(|id, _| audio.iter().any(|s| s.id == *id));
+    let gap = stack_gap(ui);
     let area = egui::ScrollArea::vertical().id_salt("mixer").auto_shrink([false, false]);
     area.show(&mut body(ui), |ui| {
         if audio.is_empty() {
-            ui.weak(tl!("No audio sources are heard in this scene."));
+            note(ui, tl!("No audio sources are heard in this scene."), None);
         }
-        for s in audio {
+        for (k, s) in audio.into_iter().enumerate() {
+            if k > 0 {
+                ui.add_space(gap);
+            }
             let m = st.meters.entry(s.id).or_default();
             if let Some(l) = studio.levels(s.id) {
                 m.update(l, st.dt);
             }
             crate::i18n::horizontal(ui, |ui| {
-                ui.label(RichText::new(&s.name).strong());
+                channel_name(ui, &s.name, false);
                 ui.with_layout(crate::i18n::trailing(ui), |ui| {
-                    icons::menu(ui, Icon::Gear, tl!("Audio source actions"), |ui| {
-                        if ui.button(tid!("selection.properties", "Properties…")).clicked() {
+                    settings_menu(ui, ("mixer", s.id), tl!("Audio source actions"), |ui| {
+                        if row(ui, tid!("selection.properties", "Properties…"), true) {
                             acts.push(Act::Properties(s.id));
-                            ui.close();
                         }
-                        if ui.button(tid!("selection.filters", "Filters…")).clicked() {
+                        if row(ui, tid!("selection.filters", "Filters…"), true) {
                             acts.push(Act::Filters(s.id));
-                            ui.close();
                         }
-                        if ui.button(tl!("Rename")).clicked() {
-                            *st.renaming = Some((Rename::Source(s.id), s.name.clone()));
-                            ui.close();
+                        if row(ui, tl!("Rename"), true) {
+                            acts.push(Act::Rename(s.id));
                         }
                     });
-                    let (icon, tip, tint) = if s.audio.muted {
-                        (Icon::Muted, "Unmute", Color32::from_rgb(230, 60, 50))
-                    } else {
-                        (Icon::Speaker, "Mute", Color32::TRANSPARENT)
-                    };
-                    if icons::sized(ui, icon, tl!(tip), true, vec2(26.0, 22.0), tint) {
+                    if mute_button(ui, ("mixer", s.id), s.audio.muted) {
                         acts.push(Act::run("source.mute", json!({"source": s.id, "muted": !s.audio.muted})));
                     }
-                    ui.monospace(gain_text(s.audio.gain));
+                    gain_readout(ui, s.audio.gain);
                 });
             });
             if let Some(e) = studio.source_error(s.id) {
-                ui.colored_label(ui.visuals().warn_fg_color, crate::i18n::Msg::plain(e).shown());
+                note(ui, &crate::i18n::Msg::plain(e).shown(), Some(Tone::Bad));
             }
             meter(ui, m, s.audio.muted);
             let mut db = to_db(s.audio.gain).max(METER_FLOOR_DB);
@@ -565,7 +604,6 @@ pub fn mixer(ui: &mut Ui, studio: &Studio, st: &mut DockState, acts: &mut Vec<Ac
             if r.drag_stopped() {
                 acts.push(Act::Seal);
             }
-            ui.add_space(6.0);
         }
     });
     drawn
@@ -674,27 +712,24 @@ pub(crate) const ROUTE_TIPS: [&str; 2] =
 /// The lane's settings menu: routing for an application, and the properties and filters of the
 /// lane's source.
 fn lane_menu(ui: &mut Ui, lane: &Lane, acts: &mut Vec<Act>) {
-    icons::menu(ui, Icon::Gear, tl!("Lane settings"), |ui| {
+    settings_menu(ui, ("lane", lane_id(lane)), tl!("Lane settings"), |ui| {
         if lane.kind == LaneKind::Application
             && let Some(app) = &lane.app
         {
             let label = ROUTE_ITEMS[usize::from(lane_checked(lane))];
-            if ui.button(tl!(label)).clicked() {
+            if row(ui, tl!(label), true) {
                 acts.push(Act::run("app_audio.route", json!({"app": app, "routed": !lane_checked(lane)})));
-                ui.close();
             }
         }
         if let Some(s) = lane.source {
             if lane.kind == LaneKind::Application {
-                ui.separator();
+                Divider::horizontal().show(ui);
             }
-            if ui.button(tid!("selection.properties", "Properties…")).clicked() {
+            if row(ui, tid!("selection.properties", "Properties…"), true) {
                 acts.push(Act::Properties(s));
-                ui.close();
             }
-            if ui.button(tid!("selection.filters", "Filters…")).clicked() {
+            if row(ui, tid!("selection.filters", "Filters…"), true) {
                 acts.push(Act::Filters(s));
-                ui.close();
             }
         }
     });
@@ -706,75 +741,64 @@ fn lane_menu(ui: &mut Ui, lane: &Lane, acts: &mut Vec<Act>) {
 /// microphone (`app_audio.route`). A lane with a source has its volume and mute, and its settings
 /// menu opens the source's properties and filters.
 pub fn app_audio(ui: &mut Ui, studio: &Studio, st: &mut DockState, acts: &mut Vec<Act>) -> Drawn {
-    let drawn = header(ui, "Application Audio", |_, _| ());
+    let (drawn, _) = title_header(ui, "Application Audio", &[]);
     dock_menu(ui, &drawn, "app_audio", st.place, acts);
     st.lanes.refresh(studio, std::time::Instant::now());
     let LaneCache { lanes: Some(lanes), meters, .. } = &mut *st.lanes else {
         return drawn;
     };
     let dt = st.dt;
+    let gap = stack_gap(ui);
     let area = egui::ScrollArea::vertical().id_salt("app_audio").auto_shrink([false, false]);
     area.show(&mut body(ui), |ui| {
-        let warn = ui.visuals().warn_fg_color;
         match (&lanes.reason, &lanes.error) {
-            (Some(reason), _) if !lanes.supported => {
-                ui.weak(crate::i18n::Msg::plain(reason.clone()).shown());
-            }
-            (_, Some(e)) => {
-                ui.colored_label(warn, crate::i18n::Msg::plain(e.clone()).shown());
-            }
-            _ if lanes.listing => {
-                ui.weak(tl!("Looking for applications with audio…"));
-            }
+            (Some(reason), _) if !lanes.supported => note(ui, &crate::i18n::Msg::plain(reason.clone()).shown(), None),
+            (_, Some(e)) => note(ui, &crate::i18n::Msg::plain(e.clone()).shown(), Some(Tone::Bad)),
+            _ if lanes.listing => note(ui, tl!("Looking for applications with audio…"), None),
             _ => {}
         }
         if lanes.lanes.is_empty() {
-            ui.weak(tl!("No microphones or applications with audio."));
+            note(ui, tl!("No microphones or applications with audio."), None);
         }
         if desktop_doubles(lanes) {
-            ui.colored_label(
-                warn,
-                tl!("Desktop audio also records a routed application that plays on the same device, so the program can hear it twice."),
-            );
+            let warning = tl!("Desktop audio also records a routed application that plays on the same device, so the program can hear it twice.");
+            note(ui, warning, Some(Tone::Warn));
         }
-        for (lane, m) in lanes.lanes.iter().zip(meters.iter_mut()) {
+        for (k, (lane, m)) in lanes.lanes.iter().zip(meters.iter_mut()).enumerate() {
+            if k > 0 {
+                ui.add_space(gap);
+            }
             m.update(lane_levels(lane, lane.source.and_then(|s| studio.levels(s))), dt);
             let gray = !lane.heard;
+            let key = lane_id(lane);
             crate::i18n::horizontal(ui, |ui| {
+                // An application lane's check box carries the lane's name; its tooltip says what a
+                // click does, or that the application is not running.
                 if lane.kind == LaneKind::Application
                     && let Some(app) = &lane.app
                 {
-                    let mut on = lane_checked(lane);
-                    let tip = ROUTE_TIPS[usize::from(on)];
-                    if ui.checkbox(&mut on, "").on_hover_text(tl!(tip)).changed() {
+                    let was = lane_checked(lane);
+                    let mut on = was;
+                    let tip = if lane.running { tl!(ROUTE_TIPS[usize::from(was)]) } else { tl!("This application is not running.") };
+                    Checkbox::new(Bind::bound(&mut on)).label(lane.name.clone()).tooltip(tip.to_string()).id_salt(("route", key.clone())).show(ui);
+                    if on != was {
                         acts.push(Act::run("app_audio.route", json!({"app": app, "routed": on})));
                     }
-                }
-                let mut name = RichText::new(&lane.name).strong();
-                if gray {
-                    name = name.color(ui.visuals().weak_text_color());
-                }
-                let r = ui.label(name);
-                if lane.kind == LaneKind::Application && !lane.running {
-                    let _ = r.on_hover_text(tl!("This application is not running."));
+                } else {
+                    channel_name(ui, &lane.name, gray);
                 }
                 ui.with_layout(crate::i18n::trailing(ui), |ui| {
                     lane_menu(ui, lane, acts);
                     if let Some(s) = lane.source {
-                        let (icon, tip, tint) = if lane.muted {
-                            (Icon::Muted, "Unmute", Color32::from_rgb(230, 60, 50))
-                        } else {
-                            (Icon::Speaker, "Mute", Color32::TRANSPARENT)
-                        };
-                        if icons::sized(ui, icon, tl!(tip), true, vec2(26.0, 22.0), tint) {
+                        if mute_button(ui, ("lane", key.clone()), lane.muted) {
                             acts.push(Act::run("source.mute", json!({"source": s, "muted": !lane.muted})));
                         }
-                        ui.monospace(gain_text(lane.gain));
+                        gain_readout(ui, lane.gain);
                     }
                 });
             });
             if let Some(e) = lane.source.and_then(|s| studio.source_error(s)) {
-                ui.colored_label(warn, crate::i18n::Msg::plain(e).shown());
+                note(ui, &crate::i18n::Msg::plain(e).shown(), Some(Tone::Bad));
             }
             meter(ui, m, gray || lane.muted);
             let mut db = to_db(lane.gain).max(METER_FLOOR_DB);
@@ -789,7 +813,6 @@ pub fn app_audio(ui: &mut Ui, studio: &Studio, st: &mut DockState, acts: &mut Ve
                     acts.push(Act::Seal);
                 }
             }
-            ui.add_space(6.0);
         }
     });
     drawn

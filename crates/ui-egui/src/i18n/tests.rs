@@ -631,6 +631,7 @@ fn every_label_chosen_at_run_time_has_an_english_row() {
             Named::DuplicateCollection,
             Named::RenameCollection,
             Named::SaveDockLayout,
+            Named::RenameSource(studiocraft_model::SourceId(0)),
         ]
         .map(Named::title),
     );
