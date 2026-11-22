@@ -421,7 +421,13 @@ A profile holds up to 16 stream destinations, each with its own server, key and 
 Settings › Stream edits the first one. A stream sends to every destination that is on, and each
 destination connects, reconnects and stops on its own: one that fails does not stop the others.
 A lost connection is tried again after 2, 4, 8 and 16 s and then every 30 s, and a destination gives
-up after 10 failed tries in a row. The stream fails when no destination is sending or trying to.
+up after 10 failed tries in a row. A server that refuses the stream key is not tried again, except
+after a lost connection: a destination whose server took the stream, lost the connection and then
+refuses the key is tried again up to 3 times, waiting at least 5 s each time, and each of those
+tries counts toward the 10. A refusal on the first connect, a refusal of the connection request, and
+a refusal after the destination was stopped and started again are final. A destination stopped and
+started again while it waits to try again tries at once. The stream fails when no destination is
+sending or trying to.
 A key written at the end of the server address, as in `rtmp://host/app/key`, is used as the stream
 key when the key field is empty, and the stream's status leaves it out of the address it shows.
 

@@ -13,7 +13,11 @@
 //! - A destination whose connection cannot be made, or is lost, is tried again after 2, 4, 8 and
 //!   16 seconds and then every 30 seconds. It gives up after [`MAX_TRIES`] tries in a row fail; a
 //!   connection lost within [`STABLE_AFTER`] of being made counts as a failed try. A server that
-//!   refuses the stream, and an address or key that is not valid, are not tried again.
+//!   refuses the stream, and an address or key that is not valid, are not tried again, with one
+//!   exception: a destination whose connection was lost after the server took the stream, and
+//!   that is then refused `publish` on a try again, is tried up to [`REFUSED_RETRIES`] more times,
+//!   waiting at least [`REFUSED_WAIT`]. A destination stopped and started again does not count as
+//!   one whose connection was lost.
 //! - A failure of one destination stops neither the other destinations nor the encoders. The
 //!   stream fails when every destination has failed.
 //! - A destination can be stopped and started again while the stream runs.
@@ -53,6 +57,11 @@ pub const RETRY_DELAYS: [Duration; 5] =
     [Duration::from_secs(2), Duration::from_secs(4), Duration::from_secs(8), Duration::from_secs(16), Duration::from_secs(30)];
 /// How long a connection must last before its loss starts a new count of failed tries.
 pub const STABLE_AFTER: Duration = Duration::from_secs(30);
+/// Tries again after a refused `publish` that follows a lost connection. Each one counts toward
+/// [`MAX_TRIES`].
+pub const REFUSED_RETRIES: u32 = 3;
+/// The shortest wait before a try again after such a refusal.
+pub const REFUSED_WAIT: Duration = Duration::from_secs(5);
 /// How long a destination's thread waits for a packet before it reads what the server sent.
 const RECV_WAIT: Duration = Duration::from_millis(100);
 /// How long a stop waits for the destinations to send what their rings hold and close.
@@ -130,6 +139,7 @@ fn split_name(url: &str) -> Option<(&str, &str)> {
 pub(crate) struct Timing {
     pub(crate) retry: Vec<Duration>,
     pub(crate) max_tries: u32,
+    pub(crate) refused: Duration,
     pub(crate) connect: Duration,
     pub(crate) setup: Duration,
     pub(crate) stall: Duration,
@@ -142,6 +152,7 @@ impl Default for Timing {
         Timing {
             retry: RETRY_DELAYS.to_vec(),
             max_tries: MAX_TRIES,
+            refused: REFUSED_WAIT,
             connect: craft_rtmp::DEFAULT_CONNECT_TIMEOUT,
             setup: craft_rtmp::DEFAULT_SETUP_TIMEOUT,
             stall: craft_rtmp::DEFAULT_STALL_TIMEOUT,
@@ -207,6 +218,8 @@ struct Dest {
     /// Packets lost over every connection so far.
     dropped: AtomicU64,
     reconnects: AtomicU32,
+    /// It was started again while its thread still ran; the thread's next try is a first one.
+    restarted: AtomicBool,
     /// Asks the thread to close the connection and end.
     stop: AtomicBool,
     /// The thread runs and has not decided to end. It is changed with `thread` locked, so a start
@@ -226,6 +239,7 @@ impl Dest {
             bytes: AtomicU64::new(0),
             dropped: AtomicU64::new(0),
             reconnects: AtomicU32::new(0),
+            restarted: AtomicBool::new(false),
             stop: AtomicBool::new(false),
             alive: AtomicBool::new(false),
             thread: Mutex::new(None),
@@ -346,8 +360,14 @@ impl Hub {
 fn spawn(hub: &Arc<Hub>, d: &Arc<Dest>, key: Option<&str>) -> Result<(), PluginError> {
     let mut slot = lock(&d.thread);
     if d.running() {
-        // Asked to stop and started again before the thread decided to end: it goes on.
-        d.stop.store(false, Ordering::SeqCst);
+        // Asked to stop and started again before the thread decided to end: it goes on, and
+        // tries at once. A start of one that was not asked to stop changes nothing.
+        if d.stop.swap(false, Ordering::SeqCst) {
+            d.restarted.store(true, Ordering::SeqCst);
+            if let Some(t) = slot.as_ref() {
+                t.thread().unpark();
+            }
+        }
         return Ok(());
     }
     if let Some(t) = slot.take() {
@@ -380,6 +400,11 @@ fn spawn(hub: &Arc<Hub>, d: &Arc<Dest>, key: Option<&str>) -> Result<(), PluginE
 fn is_final(e: &craft_rtmp::Error) -> bool {
     use craft_rtmp::Error as E;
     matches!(e, E::BadUrl(_) | E::BadKey(_) | E::BadConfig(_) | E::BadInput(_) | E::Rejected { .. })
+}
+
+/// Whether the server refused the `publish` command.
+fn is_publish_refusal(e: &craft_rtmp::Error) -> bool {
+    matches!(e, craft_rtmp::Error::Rejected { command: "publish", .. })
 }
 
 /// The failure `e` describes. `live` is whether the connection had been made and the stream's
@@ -453,12 +478,12 @@ fn gave_up(f: Failure, tries: u32) -> Failure {
     Failure { detail: format!("{}; gave up after {tries} tries", f.detail), ..f }
 }
 
-/// Waits `delay`, or less when the destination is stopped or the stream ends.
+/// Waits `delay`, or less when the destination is stopped or started again or the stream ends.
 fn wait(hub: &Hub, d: &Dest, delay: Duration) {
     let deadline = Instant::now() + delay;
     loop {
         let now = Instant::now();
-        if d.stopping() || hub.control.is_ended() || now >= deadline {
+        if d.stopping() || d.restarted.load(Ordering::SeqCst) || hub.control.is_ended() || now >= deadline {
             return;
         }
         std::thread::park_timeout(deadline - now);
@@ -493,10 +518,16 @@ fn run(hub: &Hub, d: &Dest) {
     let _watch = Watch(d);
     let mut failures = 0u32;
     let mut last_error: Option<Failure> = None;
+    // Whether the tries follow a connection the server took and that was then lost, the refused
+    // `publish` answers since, and whether the last try was one.
+    let mut after_loss = false;
+    let mut refusals = 0u32;
+    let mut refused = false;
     loop {
         if let Some(failure) = last_error.take() {
             d.set(DestinationStatus::Retrying { attempt: failures.saturating_add(1), failure });
-            wait(hub, d, hub.timing.delay(failures.max(1)));
+            let delay = hub.timing.delay(failures.max(1));
+            wait(hub, d, if std::mem::take(&mut refused) { delay.max(hub.timing.refused) } else { delay });
         }
         if d.ends(hub) {
             return;
@@ -504,12 +535,23 @@ fn run(hub: &Hub, d: &Dest) {
         if !matches!(d.status(), DestinationStatus::Retrying { .. }) {
             d.set(DestinationStatus::Connecting);
         }
-        let mut publisher = match connect(hub, d) {
+        let connected = connect(hub, d);
+        // Started again while it waited or connected: this try's answer is that of a first try.
+        if d.restarted.swap(false, Ordering::SeqCst) {
+            (after_loss, refusals) = (false, 0);
+        }
+        let mut publisher = match connected {
             Ok(p) => p,
             // Stopped while it connected: the next turn ends the thread.
             Err(_) if d.stopping() || hub.control.is_ended() => continue,
-            Err(e) if is_final(&e) => return d.fail(failure(&e, false)),
+            Err(e) if is_final(&e) && !(is_publish_refusal(&e) && after_loss && refusals < REFUSED_RETRIES) => {
+                return d.fail(failure(&e, false));
+            }
             Err(e) => {
+                if is_publish_refusal(&e) {
+                    refusals = refusals.saturating_add(1);
+                    refused = true;
+                }
                 failures = failures.saturating_add(1);
                 if failures >= hub.timing.max_tries {
                     return d.fail(gave_up(failure(&e, false), failures));
@@ -518,6 +560,8 @@ fn run(hub: &Hub, d: &Dest) {
                 continue;
             }
         };
+        // The server took `publish`.
+        (after_loss, refusals) = (false, 0);
         // Stopped while it connected: the next turn ends the thread without sending.
         if d.stopping() || hub.control.is_ended() {
             let _ = publisher.close();
@@ -535,6 +579,9 @@ fn run(hub: &Hub, d: &Dest) {
             End::Done => {}
             End::Failed(e) => return d.fail(e),
             End::Lost(e) => {
+                // A start while it sent changed nothing, and this loss waits as any other.
+                d.restarted.store(false, Ordering::SeqCst);
+                after_loss = true;
                 d.reconnects.fetch_add(1, Ordering::Relaxed);
                 // A connection lost soon after it was made counts as another failed try.
                 failures = if started.elapsed() >= hub.timing.stable { 1 } else { failures.saturating_add(1) };

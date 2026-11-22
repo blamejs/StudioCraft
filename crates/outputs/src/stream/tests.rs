@@ -23,6 +23,8 @@ enum Plan {
     Accept,
     /// Refuse the publish command.
     Refuse,
+    /// Refuse the connect command.
+    RefuseConnect,
     /// Take the stream and drop the connection after this many audio and video messages.
     DropAfter(usize),
 }
@@ -121,9 +123,28 @@ impl Conn {
         }
     }
 
+    /// Answers the connect command with `_error`, then reads until the publisher closes the
+    /// connection.
+    fn refuse_connect(&mut self) -> Result<(), craft_rtmp::Error> {
+        loop {
+            let m = self.recv()?;
+            if m.header.type_id != msg_type::COMMAND {
+                continue;
+            }
+            let values = amf0::read_all(&m.payload).unwrap();
+            if values[0].as_str() == Some("connect") {
+                let txn = values[1].clone();
+                self.command(0, &[s("_error"), txn, Value::Null, info("error", "NetConnection.Connect.Rejected")]).map_err(craft_rtmp::Error::Io)?;
+            }
+        }
+    }
+
     /// Runs `plan`, telling `seen` what arrives.
     fn run(&mut self, plan: Plan, seen: &mpsc::Sender<Seen>) -> Result<(), craft_rtmp::Error> {
         self.handshake().map_err(craft_rtmp::Error::Io)?;
+        if let Plan::RefuseConnect = plan {
+            return self.refuse_connect();
+        }
         let name = self.serve_until_publish()?;
         let _ = seen.send(Seen::Publish(name));
         if let Plan::Refuse = plan {
@@ -185,7 +206,7 @@ fn target(id: &str, server: &str, key: &str) -> Target {
 
 /// Short waits before a try again, for the tests.
 fn quick() -> Timing {
-    Timing { retry: vec![Duration::from_millis(1)], max_tries: 3, ..Timing::default() }
+    Timing { retry: vec![Duration::from_millis(1)], max_tries: 3, refused: Duration::from_millis(1), ..Timing::default() }
 }
 
 /// Feeds the stream on a thread of its own until it is dropped.
@@ -320,6 +341,100 @@ fn a_lost_connection_is_made_again() {
     drop(feed);
     out.stop().unwrap();
     until_closed(&seen);
+}
+
+#[test]
+fn a_refusal_after_a_reconnect_is_tried_again() {
+    let (a, seen) = server(vec![Plan::DropAfter(12), Plan::Refuse, Plan::Refuse, Plan::Accept]);
+    let job = job(RateControl::Bitrate { kbps: 400, keyframe_s: 1 });
+    let mut out = Streaming::start_timed(&job, vec![target("a", &a, "k")], Timing { max_tries: 10, ..quick() }).unwrap();
+    let feed = Feed::new(&out);
+    media(&seen, 12);
+    until_closed(&seen);
+    // Two refusals of the same key after the lost connection, then the server takes the stream.
+    for _ in 0..2 {
+        assert_eq!(next(&seen), Seen::Publish("k".into()));
+        until_closed(&seen);
+    }
+    assert_eq!(next(&seen), Seen::Publish("k".into()));
+    starts_with_headers_and_a_keyframe(&media(&seen, 5));
+    let d = until(&out, "a", |d| d.status == DestinationStatus::Live);
+    assert_eq!(d.reconnects, 1, "{d:?}");
+    drop(feed);
+    out.stop().unwrap();
+    until_closed(&seen);
+}
+
+#[test]
+fn a_fourth_refusal_after_a_reconnect_ends_the_destination() {
+    let (a, seen) = server(vec![Plan::DropAfter(12), Plan::Refuse, Plan::Refuse, Plan::Refuse, Plan::Refuse]);
+    let job = job(RateControl::Bitrate { kbps: 400, keyframe_s: 1 });
+    let mut out = Streaming::start_timed(&job, vec![target("a", &a, "k")], Timing { max_tries: 10, ..quick() }).unwrap();
+    let feed = Feed::new(&out);
+    media(&seen, 12);
+    until_closed(&seen);
+    for _ in 0..4 {
+        assert_eq!(next(&seen), Seen::Publish("k".into()));
+        until_closed(&seen);
+    }
+    let d = until(&out, "a", |d| matches!(d.status, DestinationStatus::Failed(_)));
+    let DestinationStatus::Failed(f) = &d.status else { panic!("{d:?}") };
+    assert_eq!(f.cause, Cause::RejectedPublish, "{f:?}");
+    drop(feed);
+    assert!(out.stop().is_err());
+}
+
+#[test]
+fn only_a_publish_refusal_after_a_lost_connection_is_tried_again() {
+    let job = job(RateControl::Bitrate { kbps: 400, keyframe_s: 1 });
+    let timing = || Timing { max_tries: 10, ..quick() };
+    // A refused connect command after a reconnect stays final.
+    let (a, seen) = server(vec![Plan::DropAfter(12), Plan::RefuseConnect]);
+    let mut out = Streaming::start_timed(&job, vec![target("a", &a, "k")], timing()).unwrap();
+    let feed = Feed::new(&out);
+    media(&seen, 12);
+    until_closed(&seen);
+    until_closed(&seen);
+    let d = until(&out, "a", |d| matches!(d.status, DestinationStatus::Failed(_)));
+    assert!(matches!(&d.status, DestinationStatus::Failed(f) if f.cause == Cause::RejectedConnect), "{d:?}");
+    drop(feed);
+    assert!(out.stop().is_err());
+    // A destination stopped and started again lost no connection, with the same key or another.
+    for key in [None, Some("k2")] {
+        let (b, seen) = server(vec![Plan::Accept, Plan::Refuse]);
+        let mut out = Streaming::start_timed(&job, vec![target("b", &b, "k")], timing()).unwrap();
+        let feed = Feed::new(&out);
+        media(&seen, 5);
+        out.stop_destination("b").unwrap();
+        until_closed(&seen);
+        until(&out, "b", |d| d.status == DestinationStatus::Stopped);
+        out.start_destination("b", key).unwrap();
+        assert_eq!(next(&seen), Seen::Publish(key.unwrap_or("k").into()));
+        let d = until(&out, "b", |d| matches!(d.status, DestinationStatus::Failed(_)));
+        assert!(matches!(&d.status, DestinationStatus::Failed(f) if f.cause == Cause::RejectedPublish), "{key:?}: {d:?}");
+        drop(feed);
+        let _ = out.stop();
+    }
+    // Stopped and started again while it waits after a refusal, it tries at once, and the next
+    // refusal is final.
+    let (c, seen) = server(vec![Plan::DropAfter(12), Plan::Refuse, Plan::Refuse]);
+    let mut out = Streaming::start_timed(&job, vec![target("c", &c, "k")], Timing { refused: GUARD, ..timing() }).unwrap();
+    let feed = Feed::new(&out);
+    media(&seen, 12);
+    until_closed(&seen);
+    assert_eq!(next(&seen), Seen::Publish("k".into()));
+    until(&out, "c", |d| matches!(&d.status, DestinationStatus::Retrying { failure, .. } if failure.cause == Cause::RejectedPublish));
+    // A start of a destination that was not stopped changes nothing.
+    out.start_destination("c", None).unwrap();
+    assert!(!out.hub.find("c").unwrap().restarted.load(Ordering::SeqCst));
+    out.stop_destination("c").unwrap();
+    out.start_destination("c", None).unwrap();
+    until_closed(&seen);
+    assert_eq!(next(&seen), Seen::Publish("k".into()));
+    let d = until(&out, "c", |d| matches!(d.status, DestinationStatus::Failed(_)));
+    assert!(matches!(&d.status, DestinationStatus::Failed(f) if f.cause == Cause::RejectedPublish), "{d:?}");
+    drop(feed);
+    let _ = out.stop();
 }
 
 #[test]

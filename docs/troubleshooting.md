@@ -61,7 +61,8 @@ this.
 
 **"the server refused the stream; check the stream key".** The server took the connection and
 refused to publish. Check the stream key, and that the stream is not already running from another
-program with the same key.
+program with the same key. When the refusal follows a lost connection, StudioCraft tries again up
+to 3 times, at least 5 s apart, before it shows this message.
 
 **"the server refused the connection request; check the server address".** The server refused the
 application named in the server address, the part after the host. Copy the server address from the
