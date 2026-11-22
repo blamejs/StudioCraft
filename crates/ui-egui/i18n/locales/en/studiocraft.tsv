@@ -2,6 +2,7 @@
 # Columns: context, source text, translation (here the source text again).
 # This catalog is not embedded. The other locales translate these rows.
 	`{shortcut}`: {error}	`{shortcut}`: {error}
+	{address}: {cause} ({error})	{address}: {cause} ({error})
 	a camera was not found	a camera was not found
 	A recording, stream or replay buffer is running. Exiting stops it; a recording is finished and saved first, and the replay buffer's unsaved video is lost.	A recording, stream or replay buffer is running. Exiting stops it; a recording is finished and saved first, and the replay buffer's unsaved video is lost.
 	A key for this session only	A key for this session only
@@ -422,7 +423,10 @@
 	the camera stopped sending pictures	the camera stopped sending pictures
 	the camera stopped unexpectedly	the camera stopped unexpectedly
 	the choice in the system picker was canceled	the choice in the system picker was canceled
+	the connection failed	the connection failed
+	the connection was lost	the connection was lost
 	the desktop has no screen-cast portal	the desktop has no screen-cast portal
+	the DNS server did not answer for the server's name	the DNS server did not answer for the server's name
 	The interface fonts Inter and JetBrains Mono are under the SIL Open Font License 1.1.	The interface fonts Inter and JetBrains Mono are under the SIL Open Font License 1.1.
 	The licenses of the third-party crates StudioCraft uses are checked by `cargo xtask licenses`.	The licenses of the third-party crates StudioCraft uses are checked by `cargo xtask licenses`.
 	The profile's stream key	The profile's stream key
@@ -430,7 +434,23 @@
 	The scopes need a graphics device to read the program.	The scopes need a graphics device to read the program.
 	the screen capture could not start	the screen capture could not start
 	the screen capture failed	the screen capture failed
+	the secure connection failed	the secure connection failed
+	the server address is not valid	the server address is not valid
+	the server closed the connection before the stream started	the server closed the connection before the stream started
+	the server did not answer in time	the server did not answer in time
+	the server did not finish setting up the stream in time	the server did not finish setting up the stream in time
+	the server refused the connection	the server refused the connection
+	the server refused the connection request; check the server address	the server refused the connection request; check the server address
+	the server refused the stream; check the stream key	the server refused the stream; check the stream key
+	the server's certificate has expired	the server's certificate has expired
+	the server's certificate is for another name	the server's certificate is for another name
+	the server's certificate is not from a trusted authority	the server's certificate is not from a trusted authority
+	the server's certificate was not accepted	the server's certificate was not accepted
+	the server's name could not be looked up	the server's name could not be looked up
+	the server's name does not exist; check the server address	the server's name does not exist; check the server address
+	the stream key is not valid	the stream key is not valid
 	This filter has no settings.	This filter has no settings.
+	this computer has no network route to the server	this computer has no network route to the server
 	this is not supported on this system yet	this is not supported on this system yet
 	Threshold (dB)	Threshold (dB)
 	Tint	Tint

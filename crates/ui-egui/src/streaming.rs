@@ -8,7 +8,7 @@ use serde_json::{Value, json};
 use studiocraft_model::profile::{MAX_DESTINATION_ID, MAX_DESTINATIONS, PRIMARY_DESTINATION};
 use studiocraft_model::services::{self, SERVICES};
 use studiocraft_model::{Destination, KeyRef, StreamSettings};
-use studiocraft_plugin::{DestinationState, DestinationStatus};
+use studiocraft_plugin::{Cause, DestinationState, DestinationStatus, Failure};
 use studiocraft_studio::OutputKind;
 
 use crate::i18n::Msg;
@@ -190,22 +190,65 @@ pub(crate) enum Tone {
 /// What destination `d` is doing, in the interface language: from `live` while the stream runs,
 /// otherwise whether starting the stream sends to it.
 pub(crate) fn status_text(d: &Destination, running: bool, live: Option<&DestinationState>) -> (String, Tone) {
-    let error = |e: &str| Msg::plain(e).shown();
     match (running, live) {
         (true, Some(s)) => match &s.status {
             DestinationStatus::Connecting => (tl!("Connecting").to_string(), Tone::Plain),
             DestinationStatus::Live => (tl!("Live").to_string(), Tone::Good),
-            DestinationStatus::Retrying { attempt, error: e } => (
-                craft_i18n::fmt(tl!("Trying again (try {attempt}): {error}"), &[("attempt", &attempt.to_string()), ("error", &error(e))]),
+            DestinationStatus::Retrying { attempt, failure } => (
+                craft_i18n::fmt(
+                    tl!("Trying again (try {attempt}): {error}"),
+                    &[("attempt", &attempt.to_string()), ("error", cause_text(failure.cause))],
+                ),
                 Tone::Warn,
             ),
             DestinationStatus::Stopped => (tl!("Stopped").to_string(), Tone::Plain),
-            DestinationStatus::Failed(e) => (craft_i18n::fmt(tl!("Failed: {error}"), &[("error", &error(e))]), Tone::Warn),
+            DestinationStatus::Failed(failure) => (craft_i18n::fmt(tl!("Failed: {error}"), &[("error", cause_text(failure.cause))]), Tone::Warn),
         },
         (true, None) => (tl!("Not in this stream; it is sent to from the next start").to_string(), Tone::Plain),
         (false, _) if d.enabled => (tl!("Sent to when the stream starts").to_string(), Tone::Plain),
         (false, _) => (tl!("Off").to_string(), Tone::Plain),
     }
+}
+
+/// What kind of failure `cause` is, in the interface language.
+pub(crate) fn cause_text(cause: Cause) -> &'static str {
+    match cause {
+        Cause::NoRoute => tl!("this computer has no network route to the server"),
+        Cause::LookupFailed => tl!("the server's name could not be looked up"),
+        Cause::LookupNotFound => tl!("the server's name does not exist; check the server address"),
+        Cause::LookupNoAnswer => tl!("the DNS server did not answer for the server's name"),
+        Cause::Refused => tl!("the server refused the connection"),
+        Cause::TimedOut => tl!("the server did not answer in time"),
+        Cause::CertificateUntrusted => tl!("the server's certificate is not from a trusted authority"),
+        Cause::CertificateNameMismatch => tl!("the server's certificate is for another name"),
+        Cause::CertificateExpired => tl!("the server's certificate has expired"),
+        Cause::CertificateNotAccepted => tl!("the server's certificate was not accepted"),
+        Cause::TlsFailed => tl!("the secure connection failed"),
+        Cause::ClosedDuringSetup => tl!("the server closed the connection before the stream started"),
+        Cause::SetupTimedOut => tl!("the server did not finish setting up the stream in time"),
+        Cause::RejectedConnect => tl!("the server refused the connection request; check the server address"),
+        Cause::RejectedPublish => tl!("the server refused the stream; check the stream key"),
+        Cause::Lost => tl!("the connection was lost"),
+        Cause::BadAddress => tl!("the server address is not valid"),
+        Cause::BadKey => tl!("the stream key is not valid"),
+        Cause::Other => tl!("the connection failed"),
+    }
+}
+
+/// The error behind the status of `live` while the stream runs, as the connection reported it,
+/// with each address tried and its error on a line of its own.
+pub(crate) fn status_detail(running: bool, live: Option<&DestinationState>) -> Option<String> {
+    let failure = match live.filter(|_| running).map(|s| &s.status) {
+        Some(DestinationStatus::Retrying { failure, .. } | DestinationStatus::Failed(failure)) => failure,
+        _ => return None,
+    };
+    let mut text = Msg::plain(failure.detail.as_str()).shown();
+    for a in &failure.addresses {
+        text.push('\n');
+        let args = [("address", a.address.as_str()), ("cause", cause_text(a.cause)), ("error", a.detail.as_str())];
+        text.push_str(&craft_i18n::fmt(tl!("{address}: {cause} ({error})"), &args));
+    }
+    Some(text)
 }
 
 /// Whether a destination in this state is sending or trying to.
@@ -334,7 +377,10 @@ fn row(
         Tone::Good => palette.good,
         Tone::Warn => palette.warn,
     };
-    ui.colored_label(color, text);
+    let status = ui.colored_label(color, text);
+    if let Some(detail) = status_detail(view.running, live) {
+        status.on_hover_text(detail);
+    }
     let StreamingPanel { editing, logos, .. } = panel;
     if let Some(e) = editing.as_mut().filter(|e| e.id == d.id) {
         let close = details(ui, e, view, logos, acts);
@@ -625,18 +671,23 @@ fn listed(d: &Destination, running: bool, live: Option<&DestinationState>, held:
         v["held_name"] = json!(n);
         v["held"] = json!(held);
     }
-    let (status, error) = match (running, live.map(|s| &s.status)) {
+    let (status, failure): (_, Option<&Failure>) = match (running, live.map(|s| &s.status)) {
         (true, Some(DestinationStatus::Connecting)) => ("connecting", None),
         (true, Some(DestinationStatus::Live)) => ("live", None),
-        (true, Some(DestinationStatus::Retrying { error, .. })) => ("retrying", Some(error.as_str())),
+        (true, Some(DestinationStatus::Retrying { failure, .. })) => ("retrying", Some(failure)),
         (true, Some(DestinationStatus::Stopped)) => ("stopped", None),
-        (true, Some(DestinationStatus::Failed(e))) => ("failed", Some(e.as_str())),
+        (true, Some(DestinationStatus::Failed(f))) => ("failed", Some(f)),
         (true, None) => ("not_in_stream", None),
         (false, _) => ("idle", None),
     };
     v["status"] = json!(status);
-    if let Some(e) = error {
-        v["error"] = json!(e);
+    if let Some(f) = failure {
+        v["error"] = json!(f.detail);
+        v["cause"] = json!(f.cause.id());
+        if !f.addresses.is_empty() {
+            let each: Vec<Value> = f.addresses.iter().map(|a| json!({"address": a.address, "cause": a.cause.id(), "error": a.detail})).collect();
+            v["addresses"] = json!(each);
+        }
     }
     if let Some(s) = live.filter(|_| running) {
         v["bytes"] = json!(s.bytes);
