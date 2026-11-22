@@ -2312,7 +2312,11 @@ impl StudioApp {
     /// Draw one frame of the whole window.
     pub fn frame(&mut self, ui: &mut Ui) {
         let ctx = ui.ctx().clone();
-        self.frames += 1;
+        // egui runs this again in the same frame when a pass asks for a discard; the frame
+        // counts once.
+        if ctx.current_pass_index() == 0 {
+            self.frames += 1;
+        }
         self.before(&ctx);
         self.dialog_answers(&ctx);
         let mut acts = Vec::new();

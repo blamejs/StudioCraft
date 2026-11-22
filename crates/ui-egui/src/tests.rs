@@ -86,6 +86,28 @@ fn frames_draw_in_both_modes() {
 }
 
 #[test]
+fn a_frame_drawn_in_two_passes_counts_once() {
+    let mut a = app();
+    let ctx = egui::Context::default();
+    frame(&mut a, &ctx, vec![]);
+    let before = a.frames();
+    let mut passes = 0;
+    let raw = RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1280.0, 800.0))), ..RawInput::default() };
+    let mut out = ctx.run_ui(raw, |ui| {
+        passes += 1;
+        if ui.ctx().current_pass_index() == 0 {
+            ui.ctx().request_discard("a second pass");
+        }
+        a.frame(ui);
+    });
+    out.textures_delta.clear();
+    assert_eq!(passes, 2, "egui drew the frame twice");
+    assert_eq!(a.frames(), before + 1);
+    assert_eq!(a.ui_inspect(&ctx)["frames"], json!(before + 1), "ui.inspect reports the same count");
+    assert_eq!(a.hud()["ui"]["frames"], json!(before + 1));
+}
+
+#[test]
 fn view_scopes_opens_the_window_and_its_scope_is_a_command() {
     let mut a = app();
     let ctx = egui::Context::default();
