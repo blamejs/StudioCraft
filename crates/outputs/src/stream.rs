@@ -861,14 +861,26 @@ fn run(hub: &Hub, d: &Arc<Dest>) {
                 after_loss = true;
                 d.lost.store(true, Ordering::Relaxed);
                 d.reconnects.fetch_add(1, Ordering::Relaxed);
-                // A connection lost soon after it was made counts as another failed try.
-                failures = if started.elapsed() >= hub.timing.stable { 1 } else { failures.saturating_add(1) };
+                failures = failures_after_loss(&hub.timing, failures, started.elapsed(), d.restarted.load(Ordering::SeqCst));
                 if hub.timing.gives_up(failures) {
                     return d.fail(gave_up(&hub.timing, e, failures));
                 }
                 last_error = Some(e);
             }
         }
+    }
+}
+
+/// The failed tries in a row after a connection that lasted `lasted` was lost: none when the
+/// destination was started again meanwhile, one when the connection lasted [`Timing::stable`], and
+/// one more than `failures` when it was lost sooner.
+fn failures_after_loss(timing: &Timing, failures: u32, lasted: Duration, restarted: bool) -> u32 {
+    if restarted {
+        0
+    } else if lasted >= timing.stable {
+        1
+    } else {
+        failures.saturating_add(1)
     }
 }
 

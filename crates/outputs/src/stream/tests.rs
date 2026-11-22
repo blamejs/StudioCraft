@@ -471,6 +471,18 @@ fn a_restart_while_it_waits_gets_every_try_again() {
 }
 
 #[test]
+fn a_restart_as_the_connection_is_lost_does_not_end_the_destination() {
+    let timing = quick();
+    let soon = Duration::ZERO;
+    // Two failed tries of three: a third loss soon after connecting ends the destination, unless it
+    // was started again meanwhile.
+    assert!(timing.gives_up(failures_after_loss(&timing, 2, soon, false)));
+    assert_eq!(failures_after_loss(&timing, 2, soon, true), 0);
+    assert!(!timing.gives_up(failures_after_loss(&timing, 2, soon, true)));
+    assert_eq!(failures_after_loss(&timing, 2, timing.stable, false), 1);
+}
+
+#[test]
 fn a_restart_the_connection_outlived_does_not_change_the_next_try() {
     let (a, seen) = server(vec![Plan::DropAfter(12), Plan::Refuse, Plan::Accept]);
     let job = job(RateControl::Bitrate { kbps: 400, keyframe_s: 1 });
