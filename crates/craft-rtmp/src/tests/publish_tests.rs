@@ -750,3 +750,45 @@ fn an_untrusted_certificate_keeps_its_kind() {
     assert!(matches!(failure.kind, TlsKind::UntrustedCertificate | TlsKind::CertificateNotAccepted), "{failure:?}");
     assert!(server.join().unwrap());
 }
+
+#[test]
+fn reach_reports_a_closed_port_and_sends_nothing_to_an_open_one() {
+    let closed = closed_port();
+    let e = crate::reach(&crate::Reach::new("127.0.0.1", false), closed).unwrap_err();
+    let Error::Connect(tried) = &e else { panic!("{e:?}") };
+    assert_eq!(tried.len(), 1, "{e:?}");
+    assert_eq!((tried[0].0, tried[0].1.kind()), (closed, io::ErrorKind::ConnectionRefused), "{e:?}");
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let open = listener.local_addr().unwrap();
+    let server = std::thread::spawn(move || {
+        let (mut s, _) = listener.accept().unwrap();
+        let mut got = Vec::new();
+        s.read_to_end(&mut got).unwrap();
+        got
+    });
+    crate::reach(&crate::Reach::new("127.0.0.1", false), open).unwrap();
+    assert!(server.join().unwrap().is_empty(), "the connection closes without a byte sent");
+    let mut zero = crate::Reach::new("127.0.0.1", false);
+    zero.connect_timeout = Duration::ZERO;
+    assert!(matches!(crate::reach(&zero, open), Err(Error::BadConfig(_))));
+}
+
+#[cfg(feature = "rtmps")]
+#[test]
+fn reach_completes_the_tls_handshake_without_rtmp_bytes() {
+    // The server reads for the RTMP handshake after the TLS one, and gets nothing.
+    let (url, root, server) = spawn_tls(|mut c| c.handshake().map(drop).map_err(|e| e.kind()));
+    let addr: SocketAddr = url.trim_start_matches("rtmps://").trim_end_matches("/live").parse().unwrap();
+    let mut r = crate::Reach::new("127.0.0.1", true);
+    r.tls_roots = TlsRoots::Only(vec![root]);
+    crate::reach(&r, addr).unwrap();
+    assert_eq!(server.join().unwrap(), Err(io::ErrorKind::UnexpectedEof));
+    // A certificate the client does not trust keeps its kind.
+    let (url, _root, server) = spawn_tls(|mut c| c.handshake().is_err());
+    let addr: SocketAddr = url.trim_start_matches("rtmps://").trim_end_matches("/live").parse().unwrap();
+    r.tls_roots = TlsRoots::Only(vec![super::certs::Pki::new().root]);
+    let e = crate::reach(&r, addr).unwrap_err();
+    let Error::Tls(failure) = &e else { panic!("{e:?}") };
+    assert!(matches!(failure.kind, TlsKind::UntrustedCertificate | TlsKind::CertificateNotAccepted), "{failure:?}");
+    assert!(server.join().unwrap());
+}

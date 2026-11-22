@@ -6552,6 +6552,7 @@ dependencies = [
  "studiocraft-model",
  "studiocraft-platform",
  "studiocraft-plugin",
+ "ureq",
 ]
 
 [[package]]

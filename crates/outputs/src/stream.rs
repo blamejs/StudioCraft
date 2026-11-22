@@ -29,6 +29,8 @@
 //!   checks the route of every waiting destination each [`NET_POLL`], exists only while a
 //!   destination waits, and wakes each one whose route returns, which then tries at once. Each
 //!   longest wait spent without a route counts as a failed try.
+//! - When [`CHECK_AFTER_FAILURES`] tries of a destination fail in a row, or it gives up, its
+//!   connection is checked once ([`diagnose`]) until it goes live again or is started again.
 //! - A failure of one destination stops neither the other destinations nor the encoders. The
 //!   stream fails when every destination has failed.
 //! - A destination can be stopped and started again while the stream runs.
@@ -53,6 +55,7 @@ use studiocraft_media::queue::Fifo;
 use studiocraft_media::stats::EncoderStats;
 use studiocraft_media::video::PooledFrame;
 use studiocraft_model::ReconnectSettings;
+use studiocraft_model::services::Service;
 use studiocraft_platform::net::Route;
 use studiocraft_plugin::{
     AddressOutcome, Cause, DestinationCounts, DestinationState, DestinationStatus, EncoderKind, Failure, OutputInstance, OutputJob, OutputStatus,
@@ -60,6 +63,8 @@ use studiocraft_plugin::{
 };
 
 use crate::native::{DISK_WAIT, Item, Native, PacketQueue, QUEUE_BYTES, QUEUE_SPAN_NS, Sink, Track};
+
+pub mod diagnose;
 
 /// Seconds of the stream each destination's ring holds.
 pub const RING_SECONDS: u32 = 4;
@@ -247,6 +252,24 @@ impl Default for Seams {
     }
 }
 
+/// How many tries in a row fail before a destination's connection is checked
+/// ([`diagnose`]), once until it goes live again or is started again. A destination that gives up
+/// sooner is checked when it gives up.
+pub const CHECK_AFTER_FAILURES: u32 = 3;
+
+/// What a stream's automatic connection checks need: the service of each destination set up for
+/// one, and whether the checks also contact the service's other hosts.
+#[derive(Clone, Debug, Default)]
+pub struct AutoCheck {
+    /// The key the stream's checks are kept under ([`diagnose::Subject::profile`]).
+    pub profile: String,
+    /// Destination ids and their services.
+    pub services: Vec<(String, &'static Service)>,
+    /// Whether the checks also read the service's list of ingest servers and status summary and
+    /// connect to its other ingest servers.
+    pub service_hosts: bool,
+}
+
 impl Timing {
     /// The wait before the try that follows `failures` failed tries in a row (at least 1): the
     /// first wait doubled for each failure after the first, at most the longest wait.
@@ -375,6 +398,8 @@ struct Dest {
     lost: AtomicBool,
     /// Times it went live again after a lost connection.
     recovered: AtomicU32,
+    /// Its connection was checked after failures since it last went live or was started.
+    checked: AtomicBool,
     /// Asks the thread to close the connection and end.
     stop: AtomicBool,
     /// The thread runs and has not decided to end. It is changed with `thread` locked, so a start
@@ -401,6 +426,7 @@ impl Dest {
             net_up: AtomicBool::new(false),
             lost: AtomicBool::new(false),
             recovered: AtomicU32::new(0),
+            checked: AtomicBool::new(false),
             stop: AtomicBool::new(false),
             alive: AtomicBool::new(false),
             thread: Mutex::new(None),
@@ -436,6 +462,9 @@ impl Dest {
         // status sees it live.
         if *status == DestinationStatus::Live && self.lost.swap(false, Ordering::Relaxed) {
             self.recovered.fetch_add(1, Ordering::SeqCst);
+        }
+        if *status == DestinationStatus::Live {
+            self.checked.store(false, Ordering::SeqCst);
         }
         drop(status);
         self.touch();
@@ -530,6 +559,8 @@ struct Hub {
     dests: Vec<Arc<Dest>>,
     counts: Arc<Counts>,
     net: NetWatch,
+    /// Where the automatic connection checks run, and what they need; `None` turns them off.
+    auto: Option<(Arc<diagnose::Checks>, AutoCheck)>,
 }
 
 /// The destinations of a stream that wait for the network, and its route thread.
@@ -564,6 +595,7 @@ fn spawn(hub: &Arc<Hub>, d: &Arc<Dest>, key: Option<&str>) -> Result<(), PluginE
         *lock(&d.key) = key.to_string();
     }
     d.stop.store(false, Ordering::SeqCst);
+    d.checked.store(false, Ordering::SeqCst);
     d.alive.store(true, Ordering::SeqCst);
     d.set(DestinationStatus::Connecting);
     let (h, dd) = (Arc::clone(hub), Arc::clone(d));
@@ -660,6 +692,39 @@ fn gave_up(timing: &Timing, f: Failure, tries: u32) -> Failure {
         return Failure { detail: format!("{}; automatic reconnect is off", f.detail), ..f };
     }
     Failure { detail: format!("{}; gave up after {tries} tries", f.detail), ..f }
+}
+
+/// Starts the automatic connection check of `d` after `f`, unless one ran since it last went live
+/// or was started, or `f` is an address or key that is not valid.
+fn check_after(hub: &Hub, d: &Dest, f: &Failure) {
+    let Some((checks, auto)) = &hub.auto else { return };
+    if matches!(f.cause, Cause::BadAddress | Cause::BadKey) || d.checked.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    let id = &d.target.id;
+    let service = auto.services.iter().find(|(i, _)| i == id).map(|(_, s)| *s);
+    let subject = diagnose::Subject {
+        profile: auto.profile.clone(),
+        id: id.clone(),
+        server: d.target.server.clone(),
+        service,
+        last: Some(f.clone()),
+        service_hosts: auto.service_hosts,
+        automatic: true,
+    };
+    if let Err(e) = checks.start(subject) {
+        log::info!("stream destination `{id}`: the connection was not checked: {e}");
+        // A later failure tries again when another check of it ran, or no place or thread was free.
+        if !matches!(e, diagnose::CheckError::BadAddress(_)) {
+            d.checked.store(false, Ordering::SeqCst);
+        }
+    }
+}
+
+/// The thread gives up with `f`, and the connection is checked.
+fn fail(hub: &Hub, d: &Dest, f: Failure) {
+    check_after(hub, d, &f);
+    d.fail(f);
 }
 
 /// Waits `delay`, or less when the destination is stopped or the stream ends.
@@ -929,6 +994,9 @@ fn run(hub: &Arc<Hub>, d: &Arc<Dest>) {
     let mut random = seed(&d.target.id);
     loop {
         if let Some(failure) = last_error.take() {
+            if failures >= CHECK_AFTER_FAILURES {
+                check_after(hub, d, &failure);
+            }
             let delay = hub.timing.delay(failures.max(1));
             let delay = if hub.timing.jitter { jittered(delay, next_random(&mut random)) } else { delay };
             // With no route, the wait for the network takes the place of the wait before the try.
@@ -947,7 +1015,7 @@ fn run(hub: &Arc<Hub>, d: &Arc<Dest>) {
                 match wait_for_network(hub, d, &mut failures, &failure, until) {
                     NetWait::Up => d.set(DestinationStatus::Retrying { attempt: failures.saturating_add(1), failure }),
                     NetWait::Stopped => {}
-                    NetWait::GaveUp(f) => return d.fail(f),
+                    NetWait::GaveUp(f) => return fail(hub, d, f),
                 }
             }
         }
@@ -962,7 +1030,7 @@ fn run(hub: &Arc<Hub>, d: &Arc<Dest>) {
             // Stopped while it connected: the next turn ends the thread.
             Err(_) if d.stopping() || hub.control.is_ended() => continue,
             Err(Missed::Stopped) => continue,
-            Err(Missed::Rtmp(e)) if is_final(&e) => return d.fail(failure(&e, false)),
+            Err(Missed::Rtmp(e)) if is_final(&e) => return fail(hub, d, failure(&e, false)),
             Err(Missed::Rtmp(e)) => Err(failure(&e, false)),
             Err(Missed::Lookup(f)) => Err(f),
         };
@@ -971,7 +1039,7 @@ fn run(hub: &Arc<Hub>, d: &Arc<Dest>) {
             Err(f) => {
                 failures = failures.saturating_add(1);
                 if hub.timing.gives_up(failures) {
-                    return d.fail(gave_up(&hub.timing, f, failures));
+                    return fail(hub, d, gave_up(&hub.timing, f, failures));
                 }
                 last_error = Some(f);
                 continue;
@@ -992,14 +1060,14 @@ fn run(hub: &Arc<Hub>, d: &Arc<Dest>) {
         match end {
             // Unless it was started again meanwhile, the next turn ends the thread.
             End::Done => {}
-            End::Failed(e) => return d.fail(e),
+            End::Failed(e) => return fail(hub, d, e),
             End::Lost(e) => {
                 d.lost.store(true, Ordering::Relaxed);
                 d.reconnects.fetch_add(1, Ordering::Relaxed);
                 // A connection lost soon after it was made counts as another failed try.
                 failures = if started.elapsed() >= hub.timing.stable { 1 } else { failures.saturating_add(1) };
                 if hub.timing.gives_up(failures) {
-                    return d.fail(gave_up(&hub.timing, e, failures));
+                    return fail(hub, d, gave_up(&hub.timing, e, failures));
                 }
                 last_error = Some(e);
             }
@@ -1125,17 +1193,30 @@ pub struct Streaming {
 
 impl Streaming {
     /// Open the encoders for `job` and start sending to each enabled destination of `targets`.
-    /// Starts the stream to `targets`, each trying again as `reconnect` says.
-    pub fn start(job: &OutputJob, targets: Vec<Target>, reconnect: ReconnectSettings) -> Result<Streaming, PluginError> {
+    /// Starts the stream to `targets`, each trying again as `reconnect` says, with the automatic
+    /// connection checks of `checks` in the process's [`diagnose::checks`].
+    pub fn start(job: &OutputJob, targets: Vec<Target>, reconnect: ReconnectSettings, checks: AutoCheck) -> Result<Streaming, PluginError> {
         reconnect.check().map_err(PluginError::Failed)?;
-        Self::start_timed(job, targets, Timing::from(reconnect))
+        Self::start_full(job, targets, Timing::from(reconnect), Seams::default(), Some((diagnose::checks(), checks)))
     }
 
+    #[cfg(test)]
     pub(crate) fn start_timed(job: &OutputJob, targets: Vec<Target>, timing: Timing) -> Result<Streaming, PluginError> {
         Self::start_with(job, targets, timing, Seams::default())
     }
 
+    #[cfg(test)]
     pub(crate) fn start_with(job: &OutputJob, targets: Vec<Target>, timing: Timing, seams: Seams) -> Result<Streaming, PluginError> {
+        Self::start_full(job, targets, timing, seams, None)
+    }
+
+    pub(crate) fn start_full(
+        job: &OutputJob,
+        targets: Vec<Target>,
+        timing: Timing,
+        seams: Seams,
+        auto: Option<(Arc<diagnose::Checks>, AutoCheck)>,
+    ) -> Result<Streaming, PluginError> {
         let RateControl::Bitrate { kbps, .. } = job.rate else {
             return Err(PluginError::Failed("streams need a bitrate".into()));
         };
@@ -1178,7 +1259,7 @@ impl Streaming {
         };
         let counts = Arc::new(Counts::default());
         let dests = targets.into_iter().map(|t| Arc::new(Dest::new(t, Arc::clone(&counts)))).collect();
-        let hub = Arc::new(Hub { control, headers, ring, timing, seams, dests, counts, net: NetWatch::default() });
+        let hub = Arc::new(Hub { control, headers, ring, timing, seams, dests, counts, net: NetWatch::default(), auto });
         let mut s = Streaming { native, hub, stats: Arc::clone(&job.stats), refused, stopped: false };
         for d in s.hub.dests.iter().filter(|d| d.target.enabled) {
             if let Err(e) = spawn(&s.hub, d, None) {
@@ -1306,6 +1387,12 @@ impl OutputInstance for Streaming {
             _ => None,
         };
         self.stopped = true;
+        // The check of a destination that failed for good outlives the stream; the others end.
+        if let Some((checks, auto)) = &self.hub.auto {
+            for d in self.hub.dests.iter().filter(|d| !matches!(d.status(), DestinationStatus::Failed(_))) {
+                checks.cancel(&auto.profile, &d.target.id);
+            }
+        }
         // The encoders finish, and the last packets go to the rings; then the fan-out ends.
         let r = self.native.stop();
         self.close_destinations();
@@ -1345,6 +1432,9 @@ impl OutputInstance for Streaming {
 
     fn stop_destination(&self, id: &str) -> Result<(), PluginError> {
         self.hub.find(id)?.ask_stop();
+        if let Some((checks, auto)) = &self.hub.auto {
+            checks.cancel(&auto.profile, id);
+        }
         Ok(())
     }
 }

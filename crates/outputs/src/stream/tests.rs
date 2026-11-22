@@ -1267,3 +1267,177 @@ fn flapping_routes_do_not_reset_the_count() {
     until(&out, "a", |d| waiting(d) == Some(3));
     out.stop().unwrap();
 }
+
+/// Checks on probes that find the server and every route, and record each call.
+fn auto_checks(service_hosts: bool) -> (Arc<diagnose::Checks>, Arc<diagnose::tests::Fake>, AutoCheck) {
+    auto_checks_on(diagnose::tests::Fake::new(), service_hosts)
+}
+
+/// Checks on `fake`, for destination `a` of the profile `Show`, set up for a service.
+fn auto_checks_on(fake: diagnose::tests::Fake, service_hosts: bool) -> (Arc<diagnose::Checks>, Arc<diagnose::tests::Fake>, AutoCheck) {
+    let (checks, fake) = diagnose::tests::checks_with(fake, diagnose::tests::TestClock::new());
+    let Some(twitch) = studiocraft_model::services::service("twitch") else { panic!("no twitch preset") };
+    (checks, fake, AutoCheck { profile: "Show".into(), services: vec![("a".into(), twitch)], service_hosts })
+}
+
+/// How many checks ran on `fake`: each asks for the route to any address once.
+fn checks_run(fake: &diagnose::tests::Fake) -> usize {
+    fake.calls().iter().filter(|c| *c == "route any").count()
+}
+
+/// Seams whose lookups answer with a closed port on this computer, and the server's address. The
+/// `nth` lookup (from 1) sends on the returned receiver's channel and waits until the returned
+/// sender is dropped, so the test looks while `nth - 1` tries have failed.
+fn held_lookup(nth: u32) -> (Seams, String, mpsc::Receiver<()>, mpsc::Sender<()>) {
+    let closed = closed_url();
+    let port: u16 = closed.rsplit(':').next().and_then(|p| p.split('/').next()).and_then(|p| p.parse().ok()).unwrap();
+    let (reached, at_nth) = mpsc::channel::<()>();
+    let (go_on, hold) = mpsc::channel::<()>();
+    let (reached, hold) = (Mutex::new(reached), Mutex::new(hold));
+    let lookups = AtomicU32::new(0);
+    let resolve = move |_: &str, _: u16| {
+        if lookups.fetch_add(1, Ordering::SeqCst) + 1 == nth {
+            let _ = lock(&reached).send(());
+            let _ = lock(&hold).recv();
+        }
+        Ok(vec![SocketAddr::from(([127, 0, 0, 1], port))])
+    };
+    (Seams { resolve: Arc::new(resolve), ..Seams::default() }, format!("rtmp://held.example:{port}/live"), at_nth, go_on)
+}
+
+#[test]
+fn a_destination_is_checked_once_after_its_third_failed_try() {
+    let job = job(RateControl::Bitrate { kbps: 400, keyframe_s: 1 });
+    let (checks, fake, auto) = auto_checks(false);
+    let timing = Timing { max_tries: 6, ..quick() };
+    // Two failed tries start no check.
+    let (seams, server, at_third, go_on) = held_lookup(3);
+    let mut out = Streaming::start_full(&job, vec![target("a", &server, "k")], timing, seams, Some((Arc::clone(&checks), auto))).unwrap();
+    at_third.recv_timeout(GUARD).unwrap();
+    assert_eq!(checks.state("Show", "a"), None, "{:?}", fake.calls());
+    drop(go_on);
+    let d = until(&out, "a", |d| matches!(d.status, DestinationStatus::Failed(_)));
+    let report = diagnose::tests::done_in(&checks, "Show", "a");
+    assert!(report.automatic, "{report:?}");
+    assert_eq!(report.verdict, diagnose::Verdict::Reachable, "the probes reach the server, and the refusal came before a connection");
+    let DestinationStatus::Failed(f) = &d.status else { panic!("{d:?}") };
+    assert_eq!(f.cause, Cause::Refused, "{f:?}");
+    diagnose::tests::until_checks(&checks, |c| (c.running() == 0).then_some(()));
+    assert_eq!(checks_run(&fake), 1, "three more failures and giving up start no other check");
+    // The service's other hosts are off by default.
+    assert!(fake.calls().iter().all(|c| !c.starts_with("fetch")), "{:?}", fake.calls());
+    assert!(out.stop().is_err());
+}
+
+#[test]
+fn a_destination_that_gives_up_is_checked_and_its_check_outlives_the_stream() {
+    let job = job(RateControl::Bitrate { kbps: 400, keyframe_s: 1 });
+    // The check's connections wait until the stream has stopped.
+    let (release, hold) = mpsc::channel::<()>();
+    let hold = Mutex::new(hold);
+    let mut fake = diagnose::tests::Fake::new();
+    fake.reach = Box::new(move |_, _, _| {
+        let _ = lock(&hold).recv();
+        Ok(())
+    });
+    let (checks, fake, auto) = auto_checks_on(fake, true);
+    let timing = Timing { reconnect: false, ..quick() };
+    let mut out =
+        Streaming::start_full(&job, vec![target("a", &closed_url(), "k")], timing, Seams::default(), Some((Arc::clone(&checks), auto))).unwrap();
+    until(&out, "a", |d| matches!(d.status, DestinationStatus::Failed(_)));
+    assert_eq!(checks.state("Show", "a"), Some(diagnose::CheckState::Running { automatic: true }));
+    assert!(out.stop().is_err());
+    drop(release);
+    let report = diagnose::tests::done_in(&checks, "Show", "a");
+    let name = studiocraft_model::services::service("twitch").map(|s| s.name);
+    assert_eq!((report.automatic, report.service.as_deref()), (true, name), "{report:?}");
+    assert!(fake.calls().iter().any(|c| c.starts_with("fetch")), "the profile turned the service's hosts on");
+    diagnose::tests::until_checks(&checks, |c| (c.running() == 0).then_some(()));
+    assert_eq!(checks_run(&fake), 1);
+}
+
+#[test]
+fn a_check_that_finds_every_place_taken_is_started_at_a_later_failure() {
+    // Four checks of another server hold every place until released.
+    checked_after_held(&["w", "x", "y", "z"]);
+}
+
+#[test]
+fn a_check_that_finds_its_destination_being_checked_is_started_at_a_later_failure() {
+    // Check Connection of the destination itself runs until released.
+    checked_after_held(&["a"]);
+}
+
+/// Holds checks of `held` (destinations of the profile `Show`) until the destination `a` has
+/// failed three times, and shows that `a` is then checked by itself at a later failure.
+fn checked_after_held(held: &[&str]) {
+    let job = job(RateControl::Bitrate { kbps: 400, keyframe_s: 1 });
+    let (release, hold) = mpsc::channel::<()>();
+    let hold = Mutex::new(hold);
+    let mut fake = diagnose::tests::Fake::new();
+    fake.reach = Box::new(move |host, _, _| {
+        if host == "203.0.113.9" || host == "held.example" {
+            let _ = lock(&hold).recv();
+        }
+        Ok(())
+    });
+    let (checks, fake, auto) = auto_checks_on(fake, false);
+    // The third failure starts no check of its own.
+    let (seams, server, at_fourth, go_on) = held_lookup(4);
+    for id in held {
+        // A check of `a` at its own server and service; the others are of another server.
+        let own = *id == "a";
+        let s = diagnose::Subject {
+            profile: "Show".into(),
+            id: (*id).into(),
+            server: if own { server.clone() } else { "rtmps://203.0.113.9/app".into() },
+            service: if own { studiocraft_model::services::service("twitch") } else { None },
+            last: None,
+            service_hosts: false,
+            automatic: false,
+        };
+        checks.start(s).unwrap();
+    }
+    let timing = Timing { max_tries: 20, ..quick() };
+    let mut out = Streaming::start_full(&job, vec![target("a", &server, "k")], timing, seams, Some((Arc::clone(&checks), auto))).unwrap();
+    at_fourth.recv_timeout(GUARD).unwrap();
+    let state = checks.state("Show", "a");
+    assert!(matches!(state, None | Some(diagnose::CheckState::Running { automatic: false })), "{state:?}");
+    drop(release);
+    drop(go_on);
+    diagnose::tests::until_checks(&checks, |c| match c.state("Show", "a") {
+        Some(diagnose::CheckState::Done(d)) if d.automatic => Some(()),
+        _ => None,
+    });
+    diagnose::tests::until_checks(&checks, |c| (c.running() == 0).then_some(()));
+    assert_eq!(checks_run(&fake), held.len() + 1, "the held checks and the destination's");
+    let _ = out.stop();
+}
+
+#[test]
+fn a_stream_without_failures_checks_nothing_and_a_refused_stream_is_checked_at_once() {
+    let job = job(RateControl::Bitrate { kbps: 400, keyframe_s: 1 });
+    let (checks, fake, auto) = auto_checks(false);
+    let (url, seen) = server(vec![Plan::Accept]);
+    let mut out =
+        Streaming::start_full(&job, vec![target("a", &url, "k")], quick(), Seams::default(), Some((Arc::clone(&checks), auto.clone()))).unwrap();
+    let feed = Feed::new(&out);
+    until(&out, "a", |d| d.status == DestinationStatus::Live);
+    drop(feed);
+    out.stop().unwrap();
+    until_closed(&seen);
+    assert_eq!((checks.state("Show", "a"), checks_run(&fake)), (None, 0));
+    // A refusal of the stream is final: the destination fails on its first try and is checked.
+    let (url, _seen) = server(vec![Plan::Refuse]);
+    let mut out = Streaming::start_full(&job, vec![target("a", &url, "k")], quick(), Seams::default(), Some((Arc::clone(&checks), auto))).unwrap();
+    let feed = Feed::new(&out);
+    let d = until(&out, "a", |d| matches!(d.status, DestinationStatus::Failed(_)));
+    drop(feed);
+    let DestinationStatus::Failed(f) = &d.status else { panic!("{d:?}") };
+    assert_eq!(f.cause, Cause::RejectedPublish, "{f:?}");
+    let report = diagnose::tests::done_in(&checks, "Show", "a");
+    assert_eq!(report.verdict, diagnose::Verdict::Rejected, "{report:?}");
+    assert!(out.stop().is_err());
+    diagnose::tests::until_checks(&checks, |c| (c.running() == 0).then_some(()));
+    assert_eq!(checks_run(&fake), 1);
+}

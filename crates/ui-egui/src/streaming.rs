@@ -1,7 +1,10 @@
 //! The Streaming window (View › Streaming): every stream destination of the profile with its on or
 //! off setting, the streaming service it is set up for with the service's logo where the service
 //! allows it, its server with the key hidden, where its key comes from and, while the stream runs,
-//! what it is doing. Each change runs one of the window's `stream.destination*` commands.
+//! what it is doing. Each change runs one of the window's `stream.destination*` commands. Check
+//! Connection runs `stream.diagnose` and shows what the check found under the destination.
+
+use std::time::{Duration, UNIX_EPOCH};
 
 use egui::{RichText, Role, Sense, Ui, WidgetInfo, vec2};
 use serde_json::{Value, json};
@@ -10,6 +13,7 @@ use studiocraft_model::services::{self, SERVICES};
 use studiocraft_model::{Destination, KeyRef, ReconnectSettings, StreamSettings};
 use studiocraft_plugin::{Cause, DestinationState, DestinationStatus, Failure};
 use studiocraft_studio::OutputKind;
+use studiocraft_studio::diagnose::{Check, CheckState, Diagnosis, Evidence, Outcome, Verdict};
 
 use crate::i18n::Msg;
 use crate::kit::tokens::Palette;
@@ -22,6 +26,8 @@ use crate::{Act, StudioApp};
 pub const MAX_NAME: usize = 128;
 /// Longest server address, in bytes.
 pub const MAX_SERVER: usize = 4096;
+/// How often the window is drawn again while a connection check runs.
+const CHECK_REPAINT: Duration = Duration::from_millis(250);
 
 /// What the Streaming window keeps between frames: the destination whose details are open, with
 /// the text typed into them.
@@ -279,6 +285,88 @@ pub(crate) struct View<'a> {
     pub(crate) live: &'a [DestinationState],
     /// Whether a key is held for this session under a name.
     pub(crate) held: &'a dyn Fn(&str) -> bool,
+    /// The connection check of each destination that has had one in this session, by id.
+    pub(crate) checks: &'a [(String, CheckState)],
+}
+
+/// What a check of a destination found, in the interface language.
+pub(crate) fn verdict_msg(d: &Diagnosis) -> Msg {
+    let (template, mut args) = d.message();
+    if let Some(c) = d.reason {
+        for (k, v) in &mut args {
+            if *k == "reason" {
+                *v = cause_text(c).to_string();
+            }
+        }
+    }
+    Msg::new(template, args)
+}
+
+/// What one evidence line checked, in the interface language.
+pub(crate) fn check_text(c: Check) -> &'static str {
+    match c {
+        Check::DefaultRoute => tl!("Route to any address"),
+        Check::Route => tl!("Route to"),
+        Check::Proxy => tl!("Proxy variable"),
+        Check::Lookup => tl!("Name lookup of"),
+        Check::Connect => tl!("Connection to"),
+        Check::SecureConnect => tl!("Secure connection to"),
+        Check::Connect443 => tl!("Secure connection on port 443 to"),
+        Check::IngestList => tl!("The service's list of ingest servers"),
+        Check::OtherIngest => tl!("Secure connection to the service's ingest server"),
+        Check::StatusPage => tl!("The service's status summary"),
+    }
+}
+
+/// How one evidence line came out, in the interface language.
+pub(crate) fn outcome_text(o: Outcome) -> &'static str {
+    match o {
+        Outcome::Ok => tl!("works"),
+        Outcome::Failed(c) => cause_text(c),
+        Outcome::Set => tl!("set"),
+        Outcome::Problem => tl!("reports a problem"),
+        Outcome::Unknown => tl!("this computer could not say"),
+        Outcome::Unfinished => tl!("not finished in time"),
+    }
+}
+
+/// One evidence line of a check, in the interface language.
+pub(crate) fn evidence_text(e: &Evidence) -> String {
+    let args = [("check", check_text(e.check)), ("target", e.target.as_str()), ("outcome", outcome_text(e.outcome)), ("detail", e.detail.as_str())];
+    let template = match (e.target.is_empty(), e.detail.is_empty()) {
+        (true, true) => tl!("{check}: {outcome}"),
+        (true, false) => tl!("{check}: {outcome} ({detail})"),
+        (false, true) => tl!("{check} {target}: {outcome}"),
+        (false, false) => tl!("{check} {target}: {outcome} ({detail})"),
+    };
+    craft_i18n::fmt(template, &args)
+}
+
+/// A check as `stream.destinations` lists it.
+fn listed_check(state: &CheckState) -> Value {
+    match state {
+        CheckState::Running { automatic } => json!({"state": "running", "automatic": automatic}),
+        CheckState::Done(d) => {
+            let (template, args) = d.message();
+            let args: serde_json::Map<String, Value> = args.into_iter().map(|(k, v)| (k.to_string(), json!(v))).collect();
+            let evidence: Vec<Value> = d
+                .evidence
+                .iter()
+                .map(|e| json!({"check": e.check.id(), "target": e.target, "outcome": e.outcome.id(), "detail": e.detail}))
+                .collect();
+            let at_ms = d.at.duration_since(UNIX_EPOCH).map_or(0, |t| u64::try_from(t.as_millis()).unwrap_or(u64::MAX));
+            json!({
+                "state": "done",
+                "automatic": d.automatic,
+                "verdict": d.verdict.id(),
+                "message": d.english(),
+                "template": template,
+                "args": args,
+                "evidence": evidence,
+                "at_ms": at_ms,
+            })
+        }
+    }
 }
 
 /// The Streaming window's contents.
@@ -395,6 +483,7 @@ fn row(
     if let Some(detail) = status_detail(view.running, live) {
         status.on_hover_text(detail);
     }
+    check_row(ui, view, d, acts, palette);
     let StreamingPanel { editing, logos, .. } = panel;
     if let Some(e) = editing.as_mut().filter(|e| e.id == d.id) {
         let close = details(ui, e, view, logos, acts);
@@ -402,6 +491,43 @@ fn row(
             *editing = None;
         }
     }
+}
+
+/// Check Connection for destination `d`, and what its last check found, with the evidence in a
+/// list that opens.
+fn check_row(ui: &mut Ui, view: &View, d: &Destination, acts: &mut Vec<Act>, palette: &Palette) {
+    let check = view.checks.iter().find(|(id, _)| *id == d.id).map(|(_, c)| c);
+    let running = matches!(check, Some(CheckState::Running { .. }));
+    ui.horizontal(|ui| {
+        let has_server = !d.server.trim().is_empty();
+        let button = ui.add_enabled(has_server && !running, egui::Button::new(tl!("Check Connection")).small());
+        let button = button.on_hover_text(tl!(
+            "Asks this computer whether it has a route to the server, looks the server's name up, and connects to the server on its \
+             port and on port 443, with a secure connection where the address uses one. For a service that publishes them, it also \
+             reads the service's list of ingest servers and status summary and connects to two of its other ingest servers. It sends \
+             no stream key and nothing of the address after the server's name. Each server it contacts sees this computer's address, \
+             and a secure connection sends the server's name unencrypted."
+        ));
+        let button = if has_server { button } else { button.on_disabled_hover_text(tl!("Set a server for this destination first")) };
+        if button.clicked() {
+            acts.push(Act::run("stream.diagnose", json!({"id": d.id})));
+        }
+        if running {
+            ui.spinner();
+            ui.weak(tl!("Checking the connection…"));
+        }
+    });
+    let Some(CheckState::Done(diag)) = check else { return };
+    let color = if diag.verdict == Verdict::Reachable { palette.good } else { palette.warn };
+    ui.colored_label(color, verdict_msg(diag).shown());
+    if diag.automatic {
+        ui.label(RichText::new(tl!("Checked by itself after the destination failed")).small().weak());
+    }
+    egui::CollapsingHeader::new(RichText::new(tl!("What the check found")).small()).id_salt(("check-evidence", &d.id)).show(ui, |ui| {
+        for e in &diag.evidence {
+            ui.label(RichText::new(evidence_text(e)).small());
+        }
+    });
 }
 
 /// The logo of the service `e` is set up for, on a row of its own at its full size, linked to the
@@ -801,6 +927,33 @@ impl StudioApp {
         Ok(true)
     }
 
+    /// Turns the profile's `check_service` setting on or off and saves the profile; whether it
+    /// changed. A call that changes nothing does not save the profile. An open Settings window
+    /// takes the same change in its draft. A running stream keeps the setting it started with.
+    fn change_check_service(&mut self, on: bool) -> Result<bool, Msg> {
+        let previous = self.studio.profile().clone();
+        if previous.stream.check_service == on {
+            return Ok(false);
+        }
+        let mut p = previous.clone();
+        p.stream.check_service = on;
+        self.studio.set_profile(p).map_err(|e| e.to_string())?;
+        if let Err(e) = self.store.save_profile(self.studio.profile()) {
+            let _ = self.studio.restore_profile(previous);
+            return Err(tmsg!("The profile could not be saved: {error}", error = e));
+        }
+        if let Some(w) = &mut self.settings {
+            w.draft.stream.check_service = on;
+        }
+        Ok(true)
+    }
+
+    /// The connection checks of the profile's destinations that have had one in this session.
+    fn destination_checks(&self) -> Vec<(String, CheckState)> {
+        let s = &self.studio.profile().stream;
+        s.destinations.iter().filter_map(|d| self.studio.stream_destination_check(&d.id).map(|c| (d.id.clone(), c))).collect()
+    }
+
     /// Close the window's open details when another profile is in use, so they are not saved
     /// into it.
     fn sync_streaming_profile(&mut self) {
@@ -834,10 +987,20 @@ impl StudioApp {
                     .iter()
                     .map(|d| {
                         let held = matches!(&d.key, KeyRef::Held(n) if self.studio.stream_key_held(n));
-                        listed(d, running, live.iter().find(|l| l.id == d.id), held)
+                        let mut v = listed(d, running, live.iter().find(|l| l.id == d.id), held);
+                        if let Some(c) = self.studio.stream_destination_check(&d.id) {
+                            v["diagnosis"] = listed_check(&c);
+                        }
+                        v
                     })
                     .collect();
-                let mut out = json!({"destinations": list, "running": running, "max": MAX_DESTINATIONS, "reconnect": listed_reconnect(&s.reconnect)});
+                let mut out = json!({
+                    "destinations": list,
+                    "running": running,
+                    "max": MAX_DESTINATIONS,
+                    "reconnect": listed_reconnect(&s.reconnect),
+                    "check_service": s.check_service,
+                });
                 // Only a stream of this profile runs with this profile's settings.
                 let own = self.studio.stream_profile() == Some(self.studio.profile().name.as_str());
                 if let Some(r) = self.studio.stream_reconnect().filter(|_| running && own) {
@@ -857,6 +1020,22 @@ impl StudioApp {
                     r.max_tries = tries.unwrap_or(r.max_tries);
                 })?;
                 Ok(json!({"changed": changed, "reconnect": listed_reconnect(&self.studio.profile().stream.reconnect)}))
+            }
+            "stream.check_service_set" => {
+                let on = opt_bool(cmd, "enabled")?.ok_or_else(|| tmsg!("`{command}` needs `{key}`", command = cmd.id, key = "enabled"))?;
+                let changed = self.change_check_service(on)?;
+                Ok(json!({"changed": changed, "check_service": self.studio.profile().stream.check_service}))
+            }
+            "stream.diagnose" => {
+                let id = param_id(cmd)?.to_string();
+                let Some(d) = self.studio.profile().stream.destination(&id) else {
+                    return Err(tmsg!("there is no stream destination `{id}`", id = id));
+                };
+                if d.server.trim().is_empty() {
+                    return Err(tmsg!("the stream destination `{id}` has no server to check", id = id));
+                }
+                self.studio.check_stream_destination(&id).map_err(|e| e.to_string())?;
+                Ok(json!({"id": id, "started": true}))
             }
             "stream.destination_add" => {
                 let name = name_param(cmd)?;
@@ -989,9 +1168,14 @@ impl StudioApp {
         self.sync_streaming_profile();
         let running = self.stream_running();
         let live = self.live_destinations();
+        let checks = self.destination_checks();
+        // A check reports from its own thread, so the window looks again while one runs.
+        if checks.iter().any(|(_, c)| matches!(c, CheckState::Running { .. })) {
+            ctx.request_repaint_after(CHECK_REPAINT);
+        }
         let studio = &self.studio;
         let held = |name: &str| studio.stream_key_held(name);
-        let view = View { stream: &studio.profile().stream, running, live: &live, held: &held };
+        let view = View { stream: &studio.profile().stream, running, live: &live, held: &held, checks: &checks };
         let mut open = true;
         if let Some(panel) = &mut self.streaming {
             egui::Window::new(tid!("view.streaming", "Streaming"))

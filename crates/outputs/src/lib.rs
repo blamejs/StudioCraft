@@ -31,7 +31,7 @@ use studiocraft_model::{Field, FieldKind, PathMode, ReconnectSettings, Settings,
 use studiocraft_plugin::{EncoderKind, Output, OutputInstance, OutputJob, OutputStatus, Plugin, PluginError, RateControl, Registry};
 
 use crate::native::Native;
-pub use crate::stream::{Streaming, Target};
+pub use crate::stream::{AutoCheck, Streaming, Target};
 use crate::writer::{Writer, audio_args};
 
 /// Register the recording, the stream, the replay buffer and every video encoder: the ffmpeg
@@ -275,11 +275,41 @@ pub fn stream_reconnect(settings: &Settings) -> Result<ReconnectSettings, Plugin
     Ok(r)
 }
 
+/// What the automatic connection checks of a stream need from its settings: the `profile` key its
+/// checks are kept under (empty when absent), each destination's `service` (an unknown or empty one is no service), and
+/// the top-level `check_service` flag, off when absent. A value of the wrong type is an error.
+pub fn stream_checks(settings: &Settings) -> Result<AutoCheck, PluginError> {
+    let service_hosts = match settings.get("check_service") {
+        None => false,
+        Some(v) => v.as_bool().ok_or_else(|| PluginError::Failed("the stream's check_service setting is not true or false".into()))?,
+    };
+    let profile = match settings.get("profile") {
+        None => String::new(),
+        Some(v) => v.as_str().map(str::to_string).ok_or_else(|| PluginError::Failed("the stream's profile setting is not text".into()))?,
+    };
+    let mut services = Vec::new();
+    if let Some(list) = settings.get("destinations").and_then(|v| v.as_array()) {
+        for (i, d) in list.iter().enumerate() {
+            let service = match d.get("service") {
+                None => continue,
+                Some(serde_json::Value::String(s)) => s,
+                Some(_) => return Err(PluginError::Failed(format!("destination {} has a service that is not text", i + 1))),
+            };
+            let id = d.get("id").and_then(|v| v.as_str()).unwrap_or_default();
+            if let Some(s) = studiocraft_model::services::service(service) {
+                services.push((id.to_string(), s));
+            }
+        }
+    }
+    Ok(AutoCheck { profile, services, service_hosts })
+}
+
 impl Output for Stream {
     fn start(&self, settings: &Settings, job: OutputJob) -> Result<Box<dyn OutputInstance>, PluginError> {
         let targets = stream_targets(settings)?;
         let reconnect = stream_reconnect(settings)?;
-        Ok(Box::new(Streaming::start(&job, targets, reconnect)?))
+        let checks = stream_checks(settings)?;
+        Ok(Box::new(Streaming::start(&job, targets, reconnect, checks)?))
     }
 }
 

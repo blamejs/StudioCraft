@@ -2,7 +2,9 @@
 //! the service documents one ingest server for every account, that server. A service that gives
 //! each account or event its own server has none here, and the user copies it from the service.
 //!
-//! Each server comes from the page in [`Service::source`]. The names are the services' own
+//! Each server comes from the page in [`Service::source`]. A service that publishes a list of its
+//! ingest servers or a status summary in a machine-readable form has their addresses here too,
+//! for the connection check. The names are the services' own
 //! (AGENTS.md 1.3), and the window shows a service's logo only where the service allows it
 //! (AGENTS.md 1.2, `ASSETS.md`).
 
@@ -21,6 +23,14 @@ pub struct Service {
     /// The service's public page that gives the server, or says where the account's server and
     /// key are shown.
     pub source: &'static str,
+    /// The service's machine-readable list of its ingest servers, which a connection check reads
+    /// to try another of them; `None` when the service publishes none.
+    pub ingests: Option<&'static str>,
+    /// The service's machine-readable status summary, which a connection check reads; `None` when
+    /// the service publishes none.
+    pub status: Option<&'static str>,
+    /// The component of [`Service::status`] that covers sending a stream to the service.
+    pub status_component: Option<&'static str>,
 }
 
 /// Every service with a preset, in the order the window lists them.
@@ -32,22 +42,64 @@ pub const SERVICES: &[Service] = &[
         // broadcast docs point to.
         server: Some("rtmps://ingest.global-contribute.live-video.net/app"),
         source: "https://ingest.twitch.tv/ingests",
+        ingests: Some("https://ingest.twitch.tv/ingests"),
+        // The status page's summary, documented at https://status.twitch.com/api.
+        status: Some("https://status.twitch.com/api/v2/summary.json"),
+        status_component: Some("Video (Broadcasting)"),
     },
-    Service { id: "youtube", name: "YouTube", server: None, source: "https://support.google.com/youtube/answer/10364924" },
+    Service {
+        id: "youtube",
+        name: "YouTube",
+        server: None,
+        source: "https://support.google.com/youtube/answer/10364924",
+        ingests: None,
+        status: None,
+        status_component: None,
+    },
     Service {
         id: "facebook",
         name: "Facebook Live",
         server: Some("rtmps://rtmp-api.facebook.com/rtmp/"),
         source: "https://developers.facebook.com/docs/live-video-api/getting-started",
+        ingests: None,
+        status: None,
+        status_component: None,
     },
-    Service { id: "kick", name: "Kick", server: None, source: "https://help.kick.com/en/articles/7066931-how-to-stream-on-kick-com" },
-    Service { id: "x", name: "X", server: None, source: "https://help.x.com/en/using-x/live-studio" },
-    Service { id: "linkedin", name: "LinkedIn Live", server: None, source: "https://www.linkedin.com/help/linkedin/answer/128901" },
+    Service {
+        id: "kick",
+        name: "Kick",
+        server: None,
+        source: "https://help.kick.com/en/articles/7066931-how-to-stream-on-kick-com",
+        ingests: None,
+        status: None,
+        status_component: None,
+    },
+    Service {
+        id: "x",
+        name: "X",
+        server: None,
+        source: "https://help.x.com/en/using-x/live-studio",
+        ingests: None,
+        status: None,
+        status_component: None,
+    },
+    Service {
+        id: "linkedin",
+        name: "LinkedIn Live",
+        server: None,
+        source: "https://www.linkedin.com/help/linkedin/answer/128901",
+        ingests: None,
+        status: None,
+        status_component: None,
+    },
     Service {
         id: "tiktok",
         name: "TikTok LIVE",
         server: None,
         source: "https://www.tiktok.com/live/creator-networks/en/blog/how-to-go-live-on-tiktok",
+        ingests: None,
+        status: None,
+        status_component: None,
     },
 ];
 
@@ -87,6 +139,10 @@ mod tests {
             assert!(!s.id.is_empty() && s.id.bytes().all(|b| b.is_ascii_lowercase()), "{s:?}");
             assert!(!s.name.trim().is_empty(), "{s:?}");
             assert!(s.source.starts_with("https://"), "{s:?}");
+            for url in [s.ingests, s.status].into_iter().flatten() {
+                assert!(url.starts_with("https://") && !url.contains('?'), "{s:?}");
+            }
+            assert_eq!(s.status.is_some(), s.status_component.is_some(), "{s:?}: a status summary names its component");
             assert!(SERVICES[..i].iter().all(|o| o.id != s.id && o.name != s.name), "{s:?} is listed twice");
             assert_eq!(service(s.id), Some(s));
         }
