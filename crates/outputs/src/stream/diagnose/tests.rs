@@ -544,6 +544,14 @@ fn each_verdict_follows_from_its_evidence() {
     let mut r = results(Some(failed(Cause::TimedOut)));
     r.others = vec![("b.example".into(), Step::Done(failed(Cause::LookupFailed)))];
     assert_eq!(decide("h.example", 1935, true, Some("Svc"), None, &r).verdict, Verdict::ServerNotAnswering);
+    // A server that took the connection and then failed the secure handshake was reached, so
+    // another ingest server that answers does not make it one this network cannot reach.
+    let mut r = results(Some(failed(Cause::TlsFailed)));
+    r.others = vec![("c.example".into(), Step::Done(Ok(())))];
+    assert_eq!(decide("h.example", 1935, true, Some("Svc"), None, &r).verdict, Verdict::Unknown);
+    // Nor do other ingest servers that do not answer make the service one that does not answer.
+    r.others = vec![("c.example".into(), Step::Done(failed(Cause::TimedOut)))];
+    assert_eq!(decide("h.example", 1935, true, Some("Svc"), None, &r).verdict, Verdict::Unknown);
     // A secure connection to one address outweighs a certificate another address refused.
     let mut r = results(Some(Ok(())));
     r.port.push((at(2, 1935), Step::Done(failed(Cause::CertificateExpired))));
