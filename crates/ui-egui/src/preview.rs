@@ -1,7 +1,7 @@
 //! The preview and program views: the compositor's canvas textures drawn in the window, and the
-//! handles that move and resize the selected item. Moves and resizes snap to the canvas's edges
-//! and center lines and to other items' edges and center lines, which the drag holds as
-//! [`SnapTargets`]; a move follows the pointer through a [`MoveGesture`]. Alt (Option on macOS)
+//! handles that move and resize the selected item. Moves and resizes snap to the canvas's edges,
+//! center lines and safe areas and to other items' edges and center lines, which the drag holds
+//! as [`SnapTargets`]; a move follows the pointer through a [`MoveGesture`]. Alt (Option on macOS)
 //! turns snapping off while it is held ([`SnapSuspend::Alt`]).
 
 use craft_behavior::Axis;
@@ -113,9 +113,10 @@ struct Drag {
     last: Option<Transform>,
 }
 
-/// What a dragged item's edges and center snap to: the canvas's edges and center lines, and the
+/// What a dragged item's edges and center snap to: the canvas's edges and center lines, the
 /// edges and center lines of every other visible item that has shown something and is turned by
-/// a multiple of 90 degrees. Each line runs the full length of the canvas. Only the lines `keep`
+/// a multiple of 90 degrees, and the edges of the canvas's safe areas ([`SAFE_MARGINS`], as
+/// [`SnapKind::Guide`]). Each line runs the full length of the canvas. Only the lines `keep`
 /// accepts are targets; it is given the axis a line runs along (`Axis::Y` for a vertical line)
 /// and its position across it, in canvas pixels.
 pub fn snap_targets(canvas: (u32, u32), items: &[EditItem], dragged: ItemId, keep: impl Fn(Axis, f32) -> bool) -> SnapTargets {
@@ -147,8 +148,20 @@ pub fn snap_targets(canvas: (u32, u32), items: &[EditItem], dragged: ItemId, kee
         }
         add(min, max, SnapKind::LayerEdge, SnapKind::LayerCenter);
     }
+    let (w, h) = (canvas.0 as f32, canvas.1 as f32);
+    for m in SAFE_MARGINS {
+        for (along, at) in [(Axis::Y, w * m), (Axis::Y, w * (1.0 - m)), (Axis::X, h * m), (Axis::X, h * (1.0 - m))] {
+            if keep(along, at) {
+                targets.add(SnapTarget::new(along, f64::from(at), SnapKind::Guide));
+            }
+        }
+    }
     targets
 }
+
+/// The edges of the canvas's safe areas, as a share of each side measured from its edges: the
+/// action safe area and the title safe area.
+pub const SAFE_MARGINS: [f32; 2] = [0.035, 0.05];
 
 /// The lines a drag of corner `corner` of `from` may snap its moving edges to: a line on the far
 /// side of the fixed corner, or less than a pixel from it, would turn the item over. For
@@ -651,5 +664,24 @@ mod tests {
         f.hold(egui::Modifiers::ALT).drag_at(center, by);
         let (_, t) = last(&seen).unwrap_or_else(|| panic!("the drag moves the item"));
         assert!(close(t.position, Vec2::new(10.0, 100.0)), "Alt turns snapping off: {t:?}");
+    }
+
+    #[test]
+    fn moves_and_resizes_snap_to_the_safe_areas() {
+        let targets = canvas(|_, _| true);
+        // Action safe is 3.5% in from each edge, title safe 5%: 67.2 and 96 across, 37.8 and 54 down.
+        for (x, y) in [(67.2, 37.8), (96.0, 54.0), (1852.8, 1042.2), (1824.0, 1026.0)] {
+            let guide = SnapKinds::only(SnapKind::Guide);
+            assert!(targets.nearest_of(Axis::Y, x, 0.01, guide).is_some(), "a vertical line at {x}");
+            assert!(targets.nearest_of(Axis::X, y, 0.01, guide).is_some(), "a horizontal line at {y}");
+        }
+        let (m, g) = moved(Transform::default(), (100, 100), Vec2::new(92.0, 300.0), &targets, 8.0);
+        assert!(close(m.position, Vec2::new(96.0, 300.0)), "{m:?}");
+        assert_eq!(g, vec![v(96.0)]);
+        // The bottom right corner of a 100 x 50 item snaps to the title safe area's right edge.
+        let keep = ahead_of_fixed(Transform::default(), (100, 50), 2);
+        let (r, g) = resized(Transform::default(), (100, 50), 2, Vec2::new(1820.0, 600.0), false, &canvas(keep), 8.0);
+        assert!(close(r.size((100, 50)), Vec2::new(1824.0, 912.0)), "{r:?}");
+        assert_eq!(g, vec![v(1824.0)]);
     }
 }

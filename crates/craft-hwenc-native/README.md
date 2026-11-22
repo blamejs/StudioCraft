@@ -14,15 +14,15 @@ through the `objc2-video-toolbox`, `objc2-core-media`, `objc2-core-video` and
 
 | Item | Description |
 |---|---|
-| `nvenc::Encoder` | This is NVIDIA's NVENC encoder: H.264 High and HEVC Main from NV12 frames, and HEVC Main 10 from P010 frames. It uses Direct3D 11 on Windows (`nvEncodeAPI64.dll`) and the CUDA driver on 64-bit Linux (`libnvidia-encode.so.1`). |
+| `nvenc::Encoder` | This is NVIDIA's NVENC encoder: H.264 High, HEVC Main and 8-bit AV1 Main from NV12 frames, and HEVC Main 10 and 10-bit AV1 Main from P010 frames. It uses Direct3D 11 on Windows (`nvEncodeAPI64.dll`) and the CUDA driver on 64-bit Linux (`libnvidia-encode.so.1`). AV1 needs a GPU whose encoder writes AV1; on others `Encoder::new` returns `Error::Unsupported`. |
 | `nvenc::Config` | It sets the codec, input layout, size (even, within the GPU's limits), frame rate, `Rate::Quality(1..=51)` or `Rate::Cbr(kbps)`, keyframe interval and `Color`. |
-| `nvenc::Encoder::encode`, `flush` | Packed frames go in, and 4-byte length-prefixed packets come out in input order, each with its timestamp and keyframe flag. The encoder uses preset P5, high-quality tuning, no B-frames and limited range. The VUI declares the `Color` of the `Config`. |
+| `nvenc::Encoder::encode`, `flush` | Packed frames go in, and packets come out in input order, each with its timestamp and keyframe flag: 4-byte length-prefixed NAL units for H.264 and HEVC, OBUs with their sizes and without temporal delimiters for AV1. The encoder uses preset P5, high-quality tuning, no B-frames and limited range. The VUI declares the `Color` of the `Config`; AV1 is BT.709, in the sequence header's color description. |
 | `nvenc::Encoder::on_d3d11`, `encode_texture` | On Windows, `on_d3d11` opens an encoder on the caller's Direct3D 11 device (an NVIDIA adapter's), and `encode_texture` encodes an NV12 or P010 `ID3D11Texture2D` of the encoder's size made on that device. The encoder reads the texture's first subresource on the GPU, so the frame is not copied to system memory. |
 | `Color` | This is the color signal of a stream: `Color::Bt709`, `Color::Hlg` (BT.2020 with the HLG transfer) or `Color::Pq { mastering, light }` (BT.2020 with the PQ transfer). NVENC writes `Hlg` and `Pq` as HEVC Main 10 from P010 frames. For `Pq`, a `MasteringDisplay` and a `ContentLight` that are set go in front of every IDR picture as the mastering display colour volume (payload type 137) and content light level (payload type 144) SEI messages. The other encoders return `Error::Unsupported` for any color but `Bt709`. |
 | `MasteringDisplay`, `ContentLight` | These hold the PQ static metadata: the mastering display's primaries and white point in units of 0.00002 and its peak and black luminance in units of 0.0001 cd/m², and MaxCLL and MaxFALL in cd/m². A chromaticity above 50,000, a black level at or above the peak, and a MaxFALL above a nonzero MaxCLL return `Error::Unsupported`. `MasteringDisplay::bt2020_d65` fills in the BT.2020 primaries and the D65 white point. |
-| `nvenc::Encoder::codec_private` | It returns the `avcC` or `hvcC` record for the container. |
+| `nvenc::Encoder::codec_private` | It returns the `avcC`, `hvcC` or `av1C` record for the container. |
 | `nvenc::available(codec)` | It reports whether this system can open an NVENC session that writes `codec`. |
-| `mf::Encoder` | This runs the hardware H.264 and HEVC encoder MFTs (Media Foundation transforms) that Windows Media Foundation lists (`mfplat.dll`), from NV12 frames. It has the same `Config`, `encode`, `flush` and `codec_private` as NVENC. Quality is `100 - 2 × level`, constant bitrate uses a one-second buffer, and it uses no B-frames and BT.709 limited range. |
+| `mf::Encoder` | This runs the hardware H.264, HEVC and AV1 (Main, 8-bit) encoder MFTs (Media Foundation transforms) that Windows Media Foundation lists (`mfplat.dll`), from NV12 frames. It has the same `Config`, `encode`, `flush` and `codec_private` as NVENC. Quality is `100 - 2 × level`, constant bitrate uses a one-second buffer, and it uses no B-frames and BT.709 limited range. |
 | `mf::available(codec)` | It reports whether Media Foundation lists a hardware encoder that writes `codec` and opens. |
 | `vt::Encoder` | This runs the hardware H.264 High and HEVC Main encoders of macOS VideoToolbox, from NV12 frames. It has the same `Config`, `encode`, `flush` and `codec_private` as NVENC. A session that VideoToolbox reports as software is not used. Quality is `(100 - 2 × level) / 100`. Bitrate is constant on macOS 13 and later, and otherwise an average bitrate with a one-second ceiling. It uses no B-frames and BT.709 limited range. |
 | `vt::available(codec)` | It reports whether VideoToolbox opens a hardware encoder that writes `codec`. |
@@ -31,6 +31,7 @@ through the `objc2-video-toolbox`, `objc2-core-media`, `objc2-core-video` and
 | `vaapi::copy_nv12`, `vaapi::packet` | These are the two passes the VA-API encoder makes over each frame on the CPU: `copy_nv12` copies the frame into a surface's pitched planes, and `packet` turns the coded picture into a packet. |
 | `annexb::nals`, `to_length_prefixed`, `parameter_sets` | `nals` splits an Annex B stream into network abstraction layer (NAL) units. `to_length_prefixed` writes a sample without parameter sets or delimiters, and `parameter_sets` returns the parameter sets. |
 | `avc::avcc`, `hevc::hvcc` | These build the decoder configuration records of ISO/IEC 14496-15 and check them against the stream that was asked for. |
+| `av1::obus`, `SequenceHeader`, `Stream` | `obus` splits an AV1 temporal unit into OBUs. `SequenceHeader::parse` reads a sequence header. `Stream` builds the `av1C` record from the encoder's sequence header, checks that it is Main 4:2:0 at the bit depth that was asked for, and turns each temporal unit into a sample without temporal delimiters, padding or tile lists, with the keyframe flag read from its frame header. |
 
 ## Usage
 
@@ -105,6 +106,10 @@ encoder is present; the copy bench writes into heap memory, not a mapped surface
   `Error::NoDevice`.
 - Off 64-bit Linux, without libva, and without a driver that encodes the codec,
   `vaapi::Encoder::new` returns `Error::NoDevice`.
+- `vt::Encoder::new` and `vaapi::Encoder::new` return `Error::Unsupported` for `Codec::Av1`, and
+  `nvenc::Encoder::new` returns it for AV1 with `Color::Hlg` or `Color::Pq`.
+- An AV1 stream whose sequence header changes, or is not Main 4:2:0 at the requested bit depth, is
+  an `Error::Failed`.
 
 ## Tests
 
@@ -117,6 +122,10 @@ C header's sizes and offsets, and they run on every platform.
 - NVIDIA's `nvEncodeAPI.h` (Video Codec SDK, API 12.1) for the NVENC structures.
 - ITU-T H.273 for the color code points, and ITU-T H.265 Annex D (D.2.28 and D.2.35) for the
   mastering display colour volume and content light level SEI payloads.
+- The AV1 Bitstream and Decoding Process Specification (https://aomediacodec.github.io/av1-spec/)
+  for OBUs, sequence headers and frame headers.
+- AV1 Codec ISO Media File Format Binding (https://aomediacodec.github.io/av1-isobmff/) for the
+  `av1C` record and the sample format.
 
 ## License
 

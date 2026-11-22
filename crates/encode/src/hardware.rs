@@ -41,6 +41,7 @@ pub trait Hardware: Encoder {
 
 static NVENC_H264: Nvenc = Nvenc::H264;
 static NVENC_HEVC: Nvenc = Nvenc::HEVC;
+static NVENC_AV1: Nvenc = Nvenc::AV1;
 static MF_H264: MediaFoundation = MediaFoundation::H264;
 static MF_HEVC: MediaFoundation = MediaFoundation::HEVC;
 static VT_H264: VideoToolbox = VideoToolbox::H264;
@@ -54,6 +55,7 @@ pub fn for_candidate(candidate: &str) -> Option<&'static dyn Hardware> {
     match candidate {
         "nvenc_h264" => Some(&NVENC_H264),
         "nvenc_hevc" => Some(&NVENC_HEVC),
+        "nvenc_av1" => Some(&NVENC_AV1),
         "mf_h264" => Some(&MF_H264),
         "mf_hevc" => Some(&MF_HEVC),
         "vt_h264" => Some(&VT_H264),
@@ -79,17 +81,21 @@ pub(crate) enum Tested {
 
 /// The last answer of a session test for each codec, or of a session that opened, and when it was
 /// found.
-pub(crate) struct Tests([Mutex<Option<(Tested, Instant)>>; 2]);
+pub(crate) struct Tests([Mutex<Option<(Tested, Instant)>>; 3]);
+
+/// Every codec [`Tests`] keeps an answer for, in slot order.
+const CODECS: [NativeCodec; 3] = [NativeCodec::H264, NativeCodec::Hevc, NativeCodec::Av1];
 
 impl Tests {
     pub(crate) const fn new() -> Tests {
-        Tests([Mutex::new(None), Mutex::new(None)])
+        Tests([Mutex::new(None), Mutex::new(None), Mutex::new(None)])
     }
 
     fn slot(&self, codec: NativeCodec) -> MutexGuard<'_, Option<(Tested, Instant)>> {
         let i = match codec {
             NativeCodec::H264 => 0,
             NativeCodec::Hevc => 1,
+            NativeCodec::Av1 => 2,
         };
         self.0[i].lock().unwrap_or_else(PoisonError::into_inner)
     }
@@ -115,14 +121,15 @@ impl Tests {
         found == Tested::Works
     }
 
-    /// A session that writes `codec` opened: the codec works, and the other one is tested again if
-    /// it failed only because every session was taken.
+    /// A session that writes `codec` opened: the codec works, and each other one is tested again
+    /// if it failed only because every session was taken.
     pub(crate) fn opened(&self, codec: NativeCodec) {
         *self.slot(codec) = Some((Tested::Works, Instant::now()));
-        let other = if codec == NativeCodec::H264 { NativeCodec::Hevc } else { NativeCodec::H264 };
-        let mut o = self.slot(other);
-        if matches!(*o, Some((Tested::Busy, _))) {
-            *o = None;
+        for other in CODECS.into_iter().filter(|&c| c != codec) {
+            let mut o = self.slot(other);
+            if matches!(*o, Some((Tested::Busy, _))) {
+                *o = None;
+            }
         }
     }
 }
@@ -192,7 +199,8 @@ mod tests {
         assert_eq!(ids("vt_hevc"), Some(("vt_native_hevc", studiocraft_plugin::Codec::Hevc)));
         assert_eq!(ids("vaapi_h264"), Some(("vaapi_native_h264", studiocraft_plugin::Codec::H264)));
         assert_eq!(ids("vaapi_hevc"), Some(("vaapi_native_hevc", studiocraft_plugin::Codec::Hevc)));
-        for none in ["nvenc_av1", "amf_h264", "qsv_hevc", "vaapi_av1", "x264"] {
+        assert_eq!(ids("nvenc_av1"), Some(("nvenc_native_av1", studiocraft_plugin::Codec::Av1)));
+        for none in ["amf_h264", "qsv_hevc", "qsv_av1", "vaapi_av1", "x264"] {
             assert!(for_candidate(none).is_none(), "{none}");
         }
     }
@@ -217,6 +225,22 @@ mod tests {
         assert!(!failed.usable(NativeCodec::Hevc, || Tested::Failed));
         failed.opened(NativeCodec::H264);
         assert!(!failed.usable(NativeCodec::Hevc, || Tested::Works), "a failure that was not a full GPU stands");
+    }
+
+    #[test]
+    fn av1_keeps_its_own_answer_and_any_session_that_opens_clears_its_busy_one() {
+        let tests = Tests::new();
+        assert!(!tests.usable(NativeCodec::Av1, || Tested::Busy));
+        assert!(!tests.usable(NativeCodec::Hevc, || Tested::Busy));
+        assert!(tests.usable(NativeCodec::H264, || Tested::Works), "H.264 has its own answer");
+        tests.opened(NativeCodec::H264);
+        assert!(tests.usable(NativeCodec::Av1, || Tested::Works), "the AV1 busy answer was cleared");
+        assert!(tests.usable(NativeCodec::Hevc, || Tested::Works), "the HEVC busy answer was cleared");
+        let failed = Tests::new();
+        assert!(!failed.usable(NativeCodec::Av1, || Tested::Failed));
+        failed.opened(NativeCodec::Av1);
+        assert!(failed.usable(NativeCodec::Av1, || Tested::Failed), "a session that opened replaces the failure");
+        assert!(failed.0[0].try_lock().is_ok_and(|g| g.is_none()), "H.264's slot is untouched");
     }
 
     #[test]

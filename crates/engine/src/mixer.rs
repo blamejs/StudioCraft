@@ -26,7 +26,8 @@
 //! each. A tapped input stores what it adds to the mix (after its delay, filters, gain, mute and
 //! fade) into a block from its slot in the same pass that adds it, so the stems of the program's
 //! inputs add up to the program mix before clipping; a muted or faded-out input stores silence.
-//! The program's tap gets the clipped mix the outputs get. Tap sets are built on the sending
+//! While the program is held ([`MixerCmd::Hold`]), a tapped input still stores its own audio, so
+//! the stems then add up to more than the held mix. The program's tap gets the clipped mix the outputs get. Tap sets are built on the sending
 //! thread and handed back to it when replaced, and without one each input costs one check.
 
 use std::sync::Arc;
@@ -142,6 +143,10 @@ pub enum MixerCmd {
     MonitorOutput(Option<Arc<Fifo<PooledBlock>>>),
     /// How long inputs take to fade in or out when the program scene changes, in milliseconds.
     FadeMs(u32),
+    /// Hold the program mix: what every input adds to the program fades out, global audio
+    /// included, and fades back in when the hold ends. The monitoring device, the meters and each
+    /// input's own audio track still get the input's audio. A new input list keeps the hold.
+    Hold(bool),
     AddOutput {
         id: u64,
         queue: Arc<Fifo<PooledBlock>>,
@@ -454,6 +459,11 @@ pub struct MixState {
     monitor_mix: Vec<f32>,
     monitor_out: Option<Arc<Fifo<PooledBlock>>>,
     fade_step: f32,
+    /// Set while the program mix is held ([`MixerCmd::Hold`]).
+    held: bool,
+    /// The share of each input that reaches the program mix: it fades from 1 to 0 while held,
+    /// and back.
+    hold: f32,
     /// The number of the input list in use: a fader move sent before it is older than the
     /// gains the list carries.
     inputs_sent: u64,
@@ -481,6 +491,8 @@ impl MixState {
             monitor_mix: vec![0.0; BLOCK_SAMPLES],
             monitor_out: None,
             fade_step: 1.0,
+            held: false,
+            hold: 1.0,
             inputs_sent: 0,
         };
         s.set_fade_ms(300);
@@ -548,6 +560,7 @@ impl MixState {
             }
             MixerCmd::MonitorOutput(queue) => self.monitor_out = queue,
             MixerCmd::FadeMs(ms) => self.set_fade_ms(ms),
+            MixerCmd::Hold(on) => self.held = on,
             MixerCmd::AddOutput { id, queue } => {
                 self.outputs.retain(|(o, _)| *o != id);
                 self.outputs.push((id, queue));
@@ -574,6 +587,10 @@ impl MixState {
         if monitoring {
             self.monitor_mix.iter_mut().for_each(|s| *s = 0.0);
         }
+        let hold_target = if self.held { 0.0 } else { 1.0 };
+        self.hold =
+            if self.hold < hold_target { (self.hold + self.fade_step).min(hold_target) } else { (self.hold - self.fade_step).max(hold_target) };
+        let hold = self.hold;
         for input in &mut self.inputs {
             while input.cfg.audio.queued() > MAX_QUEUED_BLOCKS {
                 drop(input.cfg.audio.pop());
@@ -628,8 +645,19 @@ impl MixState {
             let mut stem = input.tap.as_ref().and_then(|t| t.claim());
             let levels = match (heard, input.cfg.monitor.in_program(), &mut stem) {
                 // The stem is what the input adds to the program, stored in the same pass.
-                (true, true, Some(b)) => mix_into_tap(&mut self.mix, samples, gain, &mut b.samples),
-                (true, true, None) => mix_into(&mut self.mix, samples, gain),
+                (true, true, Some(b)) if hold >= 1.0 => mix_into_tap(&mut self.mix, samples, gain, &mut b.samples),
+                (true, true, None) if hold >= 1.0 => mix_into(&mut self.mix, samples, gain),
+                // While the program is held, the stem and the meter keep the input's audio, and
+                // the program gets the held share of it.
+                (true, true, stem) => {
+                    if let Some(b) = stem {
+                        scale_into(&mut b.samples, samples, gain);
+                    }
+                    if hold > 0.0 {
+                        mix_into(&mut self.mix, samples, gain * hold);
+                    }
+                    measure(samples, gain)
+                }
                 // A source left out of the program still meters what it plays on the monitor, and
                 // its stem, when it has one, is what it plays.
                 (true, false, stem) => {
@@ -785,6 +813,31 @@ mod tests {
     }
 
     #[test]
+    fn a_boosted_input_is_louder_than_unity_and_the_mix_still_clips() {
+        let mut m = MixState::new(Arc::new(Levels::default()));
+        let a = Arc::new(AudioOut::default());
+        let (ia, la) = input(1, &a, 1.0, true);
+        m.apply(MixerCmd::Inputs(vec![ia]));
+        let out = Arc::new(Fifo::new(8));
+        m.apply(MixerCmd::AddOutput { id: 1, queue: Arc::clone(&out) });
+        feed(&a, 0.05);
+        m.tick(Tick(1));
+        let unity = out.pop().unwrap().samples[0];
+        assert!((unity - 0.05).abs() < 1e-6);
+
+        m.apply(MixerCmd::Gain { source: SourceId(1), gain: studiocraft_model::collection::MAX_GAIN, muted: false });
+        feed(&a, 0.05);
+        m.tick(Tick(2));
+        let boosted = out.pop().unwrap().samples[0];
+        assert!((boosted - 0.5).abs() < 1e-6, "+20 dB is ten times the level: {boosted}");
+        assert!((la.load().peak[0] - 0.5).abs() < 1e-6, "the meter reads the boosted level");
+
+        feed(&a, 0.5);
+        m.tick(Tick(3));
+        assert_eq!(out.pop().unwrap().samples[0], 1.0, "the final mix is clipped as before");
+    }
+
+    #[test]
     fn an_output_that_stops_reading_does_not_make_the_mixer_allocate() {
         let mut m = MixState::new(Arc::new(Levels::default()));
         let out = Arc::new(Fifo::new(256));
@@ -838,6 +891,53 @@ mod tests {
         assert!(levels[0] > 0.5 && levels[0] < 1.0, "{levels:?}");
         assert_eq!(*levels.last().unwrap(), 0.0, "{levels:?}");
         assert!(levels.windows(2).all(|w| w[1] <= w[0]));
+    }
+
+    #[test]
+    fn a_held_program_fades_out_keeps_the_hold_through_new_inputs_and_fades_back() {
+        let mut m = MixState::new(Arc::new(Levels::default()));
+        m.apply(MixerCmd::FadeMs(100));
+        let (a, b) = (Arc::new(AudioOut::default()), Arc::new(AudioOut::default()));
+        let (ia, _) = input(1, &a, 1.0, true);
+        let (mut ib, _) = input(2, &b, 1.0, true);
+        ib.monitor = MonitorMode::MonitorAndOutput;
+        m.apply(MixerCmd::Inputs(vec![ia, ib]));
+        let (set, stems, _) = tapped(&[1]);
+        m.apply(MixerCmd::Taps { set: Some(set), generation: 1 });
+        let (out, monitor) = (Arc::new(Fifo::new(64)), Arc::new(Fifo::new(64)));
+        m.apply(MixerCmd::AddOutput { id: 1, queue: Arc::clone(&out) });
+        m.apply(MixerCmd::MonitorOutput(Some(Arc::clone(&monitor))));
+        // Each step gives the program's sample, the monitor's and input 1's stem.
+        let step = |m: &mut MixState, i: i64| {
+            feed(&a, 0.5);
+            feed(&b, 0.25);
+            m.tick(Tick(i));
+            let first = |q: &Fifo<PooledBlock>| q.pop().map_or(-1.0, |x| x.samples[0]);
+            (first(&out), first(&monitor), stems[0].pop().map_or(-1.0, |x| x.samples[0]))
+        };
+        assert_eq!(step(&mut m, 0), (0.75, 0.25, 0.5));
+        m.apply(MixerCmd::Hold(true));
+        let held: Vec<_> = (1..9).map(|i| step(&mut m, i)).collect();
+        assert!(held[0].0 > 0.0 && held[0].0 < 0.75, "it fades: {held:?}");
+        assert_eq!(held.last().map(|h| h.0), Some(0.0), "{held:?}");
+        assert!(held.iter().all(|h| h.1 == 0.25), "a monitored input still plays on the monitor: {held:?}");
+        assert!(held.iter().all(|h| h.2 == 0.5), "an input's own track keeps its audio: {held:?}");
+        // A rebuilt input list, as a scene switch sends, keeps the hold; a new input stays out.
+        let c = Arc::new(AudioOut::default());
+        let (ia, _) = input(1, &a, 1.0, true);
+        let (ic, _) = input(3, &c, 1.0, true);
+        m.apply(MixerCmd::Inputs(vec![ia, ic]));
+        feed(&c, 0.5);
+        assert_eq!(step(&mut m, 9).0, 0.0, "the hold survives a new input list");
+        m.apply(MixerCmd::Hold(false));
+        let back: Vec<_> = (10..18)
+            .map(|i| {
+                feed(&c, 0.5);
+                step(&mut m, i).0
+            })
+            .collect();
+        assert!(back[0] > 0.0 && back[0] < 1.0, "it fades back: {back:?}");
+        assert_eq!(back.last().copied(), Some(1.0), "inputs 1 and 3 are heard again: {back:?}");
     }
 
     #[test]

@@ -25,7 +25,7 @@ crate in the same layer. `cargo xtask layers` checks this against the table in
 | L0 | `craft-gpu-yuv` | RGBA to NV12, P010 and I420 on the GPU with scaling, in BT.601, BT.709 and BT.2020 at limited or full range, and the same conversion on the CPU. It depends on no StudioCraft crate. |
 | L0 | `craft-hwenc` | The hardware encoders ffmpeg runs, a one-frame test encode of each with results kept for the session or in a file tied to the `ffmpeg` program, its version and the driver, and an automatic choice ordered by the graphics adapter's vendor with a software fallback. It depends on no StudioCraft crate. |
 | L0 | `craft-hwenc-native` | Hardware encoders called through their drivers: NVENC H.264 and HEVC from NV12 or P010 frames on Windows (Direct3D 11) and 64-bit Linux (CUDA), the Windows Media Foundation, macOS VideoToolbox and Linux VA-API hardware H.264 and HEVC encoders from NV12 frames, the Annex B helpers, and the `avcC` and `hvcC` records. Its private `nvenc_ffi`, `mf_ffi`, `vt_ffi` and `vaapi_ffi` modules are the only code that calls the drivers. It depends on no StudioCraft crate. |
-| L0 | `craft-app-audio` | Per-application audio: the running applications that have audio, kept current by one discovery thread, a lock-free peak meter for each, and the capture of one application's audio as 48 kHz stereo `f32` with backoff, stall detection and a limit of 32 captures. Windows build 20348 and later capture through WASAPI process loopback; other systems report it as unsupported. It depends on no StudioCraft crate. |
+| L0 | `craft-app-audio` | Per-application audio: the running applications that have audio, kept current by one discovery thread, a lock-free peak meter for each, and the capture of one application's audio as 48 kHz stereo `f32` with backoff, stall detection and a limit of 32 captures. Windows build 20348 and later capture through WASAPI process loopback, and Linux through PipeWire links from the application's playback streams to a capture stream; other systems report it as unsupported. It depends on no StudioCraft crate. |
 | L0 | `craft-speech` | Speech to text: the catalog of Whisper models with their pinned URLs, sizes and SHA-256 sums, their download and check, Whisper on the CPU with word times (feature `whisper`), voice detection, conversion to mono 16 kHz, and live captioning that turns a stream of audio into partial and finished phrases. It depends on no StudioCraft crate. |
 | L1 | `studiocraft-plugin` | The `Source`, `Filter`, `Transition`, `Encoder` and `Output` traits and the `Registry` they are registered in. |
 | L1 | `craft-rtmp` | A blocking RTMP and RTMPS publish client on `std::net`: the handshake, chunking, the `connect`, `createStream`, `publish` and `deleteStream` commands, acknowledgements, and a timeout on every step, with the stream key kept out of errors and `Debug` output. It sends `craft-flv` bodies, starts no threads, and is built for native targets only. It depends on no StudioCraft crate. |
@@ -36,7 +36,7 @@ crate in the same layer. `cargo xtask layers` checks this against the table in
 | L2 | `studiocraft-platform` | Display, window, camera and audio capture, locating ffmpeg, and opening folders and links. |
 | L2 | `studiocraft-encode` | The built-in encoders: H.264 video from NV12 frames and AAC audio from the mixer's blocks. |
 | L3 | `studiocraft-sources` | The built-in sources and filters. |
-| L3 | `studiocraft-audio-tracks` | Audio tracks: the collect and disk threads that write each recorded source and the program mix to WAV files, the take journal, and the repair of takes cut short. |
+| L3 | `studiocraft-audio-tracks` | Audio tracks: the collect and disk threads that write each recorded source and the program mix to WAV files, the take journal, the repair of takes cut short, and the listing of the takes in a folder. |
 | L3 | `studiocraft-outputs` | Recording through an ffmpeg process, Matroska recording through the built-in encoders, streaming through the built-in encoders to several RTMP and RTMPS destinations, and the video encoders. |
 | L4 | `studiocraft-studio` | The running studio: sources, mixer, compositor, transitions, outputs and live captions behind one command interface. |
 | L5 | `studiocraft-ui-egui` | The window: menus, preview, docks, properties, filters and settings. |
@@ -81,8 +81,10 @@ gives no value for that column.
 | Replay buffer | The encode threads' packets | A ring bounded by length and bytes | | |
 | Audio tracks collect | Each recorded track's tap of mixer blocks | 32 blocks per tap with its own pool of 34, and a write buffer of 16 to 1024 1 MiB chunks, at least 2 for each recorded track | A full tap reuses its own oldest block; an empty write buffer drops blocks, logs them and writes silence in their place | One 8 KiB copy per track per block |
 | Audio tracks disk | The collect thread's chunks | The chunk count of the write buffer | A full or failing disk stops only the audio tracks | Sequential 1 MiB writes |
+| Recordings scan | A `recordings.list` call when no scan runs | One scan at a time; 500 folder entries for files and 500 for takes | The scan stops looking at files after 5 s (`recordings::SCAN_LIMIT`), and `recordings.list` returns the last finished scan while one runs | None; it runs only when called |
 | Captions reader | The mixer's program blocks | 64 blocks, and 60 s of mono 16 kHz audio | A full queue drops its oldest block; audio pushed out of the 60 s buffer, and blocks that never arrived, are passed on as gaps | One small copy per block |
 | Captions recognizer | The reader's buffer | | A recognizer slower than speech falls behind, and the reader's buffer then drops its oldest audio | One Whisper run per partial or finished phrase |
+| Stream check | A `stream.diagnose` call, Check Connection, or a destination's third failed try in a row or its giving up | At most 4 checks at once, counting the step threads of earlier checks that have not ended (`outputs::stream::diagnose::MAX_CHECKS`); one check per destination | A check asked for while 4 run, or while the destination's check runs, is refused; a check reports after 20 s (`CHECK_TIME`) with the steps that finished | One thread per step, each connection, handshake and fetch within 5 s (`PROBE_TIMEOUT`); none while no check runs |
 | Window | `Studio` state | | | |
 
 ### Source threads
@@ -270,6 +272,14 @@ most 480 × 270 and sends it to the window's scopes queue. Each texel of either 
 part of the program it covers (up to 4 × 4 bilinear taps), and chroma is at half width and half
 height. A hard edge in the program therefore shows on the scopes as intermediate levels.
 
+A `ThumbnailRequest` (`RenderShared::thumbnails`) asks the compositor to draw up to 16 scenes into
+small textures of their own, at most 4 times a second each (2 by default). A frame draws at most
+two of them, oldest first, so the cost of a set of pictures is spread over several frames. A source
+that appears only in thumbnails is uploaded only on the frames that draw it. The textures are kept
+while requests come in. When a request has more scenes, or a request or canvas change alters the
+picture size, they are made again before the next frame and published on
+`RenderShared::thumbnail_views`. Nothing is read back.
+
 **Graphics devices.** The window opens its device on the adapter Settings › Video › Hardware
 acceleration names (`graphics_adapter` in `config.toml`), through `craft-gpu-device`'s `pick`.
 `hardware::wgpu_setup` applies `craft_gpu::configure` before the instance is created. On Windows
@@ -309,6 +319,16 @@ once through `craft-packet` and offers it to every destination without waiting f
 destination that sends has its own thread, which publishes with `craft-rtmp` from a ring that holds
 4 s of the stream (`outputs/src/stream.rs`). A destination that falls behind loses packets up to
 the next keyframe, and a destination that fails, stops or reconnects does not affect the others.
+Each try looks the server's name up on a lookup thread of its own, which hands its answer back
+through a channel that holds one answer. The destination's thread waits at most 10 s for it
+(`stream::LOOKUP_WAIT`) and wakes at once for a stop. A lookup thread lives until the system's
+resolver returns, which StudioCraft cannot cut short, so each destination keeps at most two
+(`stream::MAX_LOOKUPS`) and the process at most 32 (`stream::MAX_ALL_LOOKUPS`), counted across
+streams that were stopped and started again. While at least one destination waits for the network,
+the stream runs one route thread, which checks each waiting destination's route every 1 s
+(`stream::NET_POLL`) with a UDP connect that sends nothing (`platform::net::route_to`) and wakes
+the destinations whose route returned. The thread ends when no destination waits or the stream
+ends.
 
 A recording with H.264 (built in) runs a video encode thread, an audio encode thread and a file
 thread that writes the Matroska file (`outputs/src/native.rs`). The encode threads hand packets to
@@ -401,6 +421,11 @@ is told to stop and is not waited for. While captions are stopped no queue or th
 ### Window thread
 
 The window reads `Studio` state, runs commands, and shows statistics.
+`Studio` keeps the session's scene switches, stream reconnects, pauses and resumes for
+`session.events` (`studio/src/events.rs`) on this thread, in a ring of the last 1,000 events whose
+room is reserved with the first event, so adding one takes no lock and does not grow the ring. While
+a stream runs, `Studio::tick` and a stream stop read the sum of the destinations' reconnect counters
+(`OutputInstance::reconnects`), and read the destinations' states only when that sum changed.
 
 ## Extension points
 

@@ -67,7 +67,11 @@ struct Shared {
 /// On aarch64, and on x86_64 processors with `cmpxchg16b`, the 128-bit compare-and-swap is
 /// lock-free, so neither writer waits for the other.
 #[derive(Default)]
-pub(crate) struct Timeline(AtomicU128);
+pub(crate) struct Timeline {
+    word: AtomicU128,
+    /// The output's counters, where each skip is noted.
+    stats: Option<Arc<EncoderStats>>,
+}
 
 /// The nanoseconds of long gaps skipped so far (the high 64 bits of a [`Timeline`]) and the
 /// nanoseconds of output the audio writer has written past the video writer (the low 64 bits,
@@ -113,15 +117,29 @@ fn whole(count: f64) -> f64 {
 }
 
 impl Timeline {
-    /// The word, to pass to [`Timeline::commit`].
-    fn read(&self) -> u128 {
-        self.0.load(Ordering::Acquire)
+    /// A timeline that notes each gap it skips on `stats`
+    /// ([`EncoderStats::note_skipped`]).
+    pub(crate) fn noting(stats: Arc<EncoderStats>) -> Timeline {
+        Timeline { word: AtomicU128::new(0), stats: Some(stats) }
     }
 
-    /// Stores `next` if the word still holds `seen`. `false` when the other writer has committed
-    /// since `seen` was read; nothing is changed then.
-    fn commit(&self, seen: u128, next: Place) -> bool {
-        self.0.compare_exchange(seen, next.pack(), Ordering::AcqRel, Ordering::Acquire).is_ok()
+    /// The word, to pass to [`Timeline::commit`].
+    fn read(&self) -> u128 {
+        self.word.load(Ordering::Acquire)
+    }
+
+    /// Stores `next`, for an input placed `secs` after the start, if the word still holds `seen`.
+    /// `false` when the other writer has committed since `seen` was read; nothing is changed
+    /// then. A commit that skips more is noted on the timeline's counters.
+    fn commit(&self, seen: u128, next: Place, secs: f64) -> bool {
+        let committed = self.word.compare_exchange(seen, next.pack(), Ordering::AcqRel, Ordering::Acquire).is_ok();
+        if committed
+            && let Some(stats) = &self.stats
+            && next.skipped_ns > Place::unpack(seen).skipped_ns
+        {
+            stats.note_skipped(u64::try_from(ns(secs)).unwrap_or(0), next.skipped_ns);
+        }
+        committed
     }
 
     /// Seconds skipped so far.
@@ -266,7 +284,8 @@ impl Writer {
         let fps = f64::from(job.video.fps_num) / f64::from(job.video.fps_den.max(1));
         let video = Arc::new(Fifo::new((fps.ceil() as usize).clamp(8, 240)));
         let audio = Arc::new(Fifo::new(256));
-        let shared = Arc::new(Shared { secret: secret.to_string(), ..Shared::default() });
+        let timeline = Timeline::noting(Arc::clone(&job.stats));
+        let shared = Arc::new(Shared { secret: secret.to_string(), timeline, ..Shared::default() });
         let mut threads = Vec::new();
         let spawn = |name: &str, f: Box<dyn FnOnce() + Send>| std::thread::Builder::new().name(name.into()).spawn(f).map_err(PluginError::failed);
 
@@ -458,7 +477,7 @@ pub(crate) fn video_step(secs: f64, next: u64, fps: f64, timeline: &Timeline) ->
                 let excess = index - next - n;
                 let after = index - excess + 1;
                 let moved = ns(after as f64 / fps).saturating_sub(own_ns);
-                if timeline.commit(seen, place.moved(excess as f64 / fps, -moved)) {
+                if timeline.commit(seen, place.moved(excess as f64 / fps, -moved), secs) {
                     return Some((n, after));
                 }
             }
@@ -484,7 +503,7 @@ pub(crate) fn audio_step(secs: f64, written: i64, frames: i64, rate: f64, timeli
         let limit = whole((video_out + MAX_FILL_S) * rate) as i64;
         let (gap, skipped) = audio_gap(ahead, (limit - written).max(0));
         let moved = ns((written + gap + frames) as f64 / rate).saturating_sub(own_ns);
-        if timeline.commit(seen, place.moved(skipped as f64 / rate, moved)) {
+        if timeline.commit(seen, place.moved(skipped as f64 / rate, moved), secs) {
             return Some(gap);
         }
     }
@@ -702,7 +721,8 @@ mod tests {
     #[test]
     fn a_step_placed_before_the_other_writer_skipped_is_placed_again() {
         let (fps, rate, block) = (30.0, f64::from(SAMPLE_RATE), BLOCK_FRAMES as i64);
-        let timeline = Timeline::default();
+        let stats = Arc::new(EncoderStats::default());
+        let timeline = Timeline::noting(Arc::clone(&stats));
         // The sound has 4 seconds written and no picture has come yet.
         let mut written = 0i64;
         while written < 4 * i64::from(SAMPLE_RATE) {
@@ -715,12 +735,16 @@ mod tests {
         assert_eq!(video_step(13.0, 0, fps, &timeline), Some((fill, fill + 1)));
         assert!((timeline.skipped() - 4.0).abs() < 1e-3, "{}", timeline.skipped());
         let late = Place::unpack(seen).moved(4.0, 1_000_000_000);
-        assert!(!timeline.commit(seen, late), "a commit from the earlier read is refused");
+        assert!(!timeline.commit(seen, late, 12.5), "a commit from the earlier read is refused");
         assert!((timeline.skipped() - 4.0).abs() < 1e-3, "a refused commit changes nothing: {}", timeline.skipped());
         // Placed again, the block sees the skip and where the pictures are now, so the gap up to
         // the block (about 5 seconds) is filled and nothing more is skipped.
         assert_eq!(audio_step(13.0, written, block, rate, &timeline), Some(9 * i64::from(SAMPLE_RATE) - written));
         assert!((timeline.skipped() - 4.0).abs() < 1e-3, "the gap is skipped once: {}", timeline.skipped());
+        // The gap is noted once, by the step that committed it.
+        let skips = stats.skips.lock().unwrap().clone();
+        assert_eq!(skips.len(), 1, "{skips:?}");
+        assert_eq!(skips[0].0, 13_000_000_000);
     }
 
     #[test]
@@ -810,6 +834,49 @@ mod tests {
         assert_eq!(sink.len(), BLOCK_FRAMES * CHANNELS * 4);
         assert_eq!(sink[4..8], 1.0f32.to_le_bytes());
         assert!(shared.started.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn the_time_the_sound_writer_skips_is_counted_for_the_studio() {
+        let stats = Arc::new(EncoderStats::default());
+        let shared = Shared { timeline: Timeline::noting(Arc::clone(&stats)), ..Shared::default() };
+        let q = Fifo::new(4);
+        let blocks = studiocraft_media::audio::block_pool();
+        for ms in [0u64, 20_000] {
+            let mut block = blocks.take();
+            block.samples.clear();
+            block.samples.resize(BLOCK_FRAMES * CHANNELS, 0.0);
+            block.pts = studiocraft_media::clock::tick_of(Duration::from_millis(ms));
+            q.push(block);
+        }
+        shared.stop.store(true, Ordering::Relaxed);
+        write_audio(std::io::sink(), &q, &shared, Tick(0));
+        // With no picture written, 5 s of the 20 s gap are filled and the other 15 s skipped.
+        let skipped = stats.skipped_ns.load(Ordering::Relaxed);
+        assert!((shared.skipped() - skipped as f64 / 1e9).abs() < 1e-9);
+        assert!(skipped.abs_diff(15_000_000_000) < 1_000_000, "{skipped}");
+        assert_eq!(stats.skips.lock().unwrap().as_slice(), [(20_000_000_000, skipped)], "the gap ends at the block after it");
+    }
+
+    #[test]
+    fn the_skipped_time_is_counted_for_the_studio() {
+        let stats = Arc::new(EncoderStats::default());
+        let shared = Shared { timeline: Timeline::noting(Arc::clone(&stats)), ..Shared::default() };
+        let q = Fifo::new(4);
+        let frames = studiocraft_media::pool::Pool::new(4, studiocraft_media::video::VideoFrame::default);
+        for ms in [0u64, 20_000] {
+            let mut f = frames.take();
+            assert!(f.reshape(64, 48, PixelFormat::Nv12));
+            f.pts = studiocraft_media::clock::tick_of(Duration::from_millis(ms));
+            q.push(Arc::new(f));
+        }
+        shared.stop.store(true, Ordering::Relaxed);
+        let frame_bytes = PixelFormat::Nv12.frame_bytes(64, 48).unwrap();
+        write_video(std::io::sink(), &q, &shared, &stats, Tick(0), 10.0, frame_bytes);
+        // With no sound written, 5 s of the 20 s gap are filled and the other 15 s skipped.
+        assert_eq!(stats.skipped_ns.load(Ordering::Relaxed), 15_000_000_000);
+        assert!((shared.skipped() - 15.0).abs() < 1e-9);
+        assert_eq!(stats.skips.lock().unwrap().as_slice(), [(20_000_000_000, 15_000_000_000)], "the gap ends at the frame after it");
     }
 
     #[test]

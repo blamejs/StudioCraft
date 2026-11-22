@@ -131,8 +131,10 @@
 	H.264 (built in)	H.264 (integrato)
 	NVIDIA NVENC H.264 (built in)	NVIDIA NVENC H.264 (integrato)
 	NVIDIA NVENC HEVC (built in)	NVIDIA NVENC HEVC (integrato)
+	NVIDIA NVENC AV1 (built in)	NVIDIA NVENC AV1 (integrato)
 	Windows Media Foundation H.264 (built in)	Windows Media Foundation H.264 (integrato)
 	Windows Media Foundation HEVC (built in)	Windows Media Foundation HEVC (integrato)
+	Windows Media Foundation AV1 (built in)	Windows Media Foundation AV1 (integrato)
 	Apple VideoToolbox H.264 (built in)	Apple VideoToolbox H.264 (integrato)
 	Apple VideoToolbox HEVC (built in)	Apple VideoToolbox HEVC (integrato)
 	VA-API H.264 (built in)	VA-API H.264 (integrato)
@@ -373,6 +375,24 @@
 	Width	Larghezza
 	Window	Finestra
 	Window capture	Cattura finestra
+	Staged windows	Finestre preparate
+	Window 1	Finestra 1
+	Window 2	Finestra 2
+	Window 3	Finestra 3
+	Window 4	Finestra 4
+	Window 5	Finestra 5
+	Window 6	Finestra 6
+	Presented window	Finestra presentata
+	While the presented window cannot be shown	Quando la finestra presentata non può essere mostrata
+	Show a color	Mostra un colore
+	Keep the last picture	Mantieni l’ultima immagine
+	Placeholder color	Colore segnaposto
+	nothing is staged in the presented slot	non c'è nulla di preparato nella posizione presentata
+	waiting for the window	in attesa della finestra
+	Present Staged Window	Presenta finestra preparata
+	Present Next Staged Window	Presenta la finestra preparata successiva
+	Present Previous Staged Window	Presenta la finestra preparata precedente
+	Present Staged Window {n}	Presenta la finestra preparata {n}
 	Your Videos folder	La tua cartella Video
 	YUV vectorscope	Vettorscopio YUV
 	{device} (not connected)	{device} (non collegato)
@@ -490,6 +510,9 @@ menu	Transform	Trasforma
 @msg	Audio tracks could not be repaired: {takes} and {more} more. Takes repaired: {count}	Impossibile riparare le tracce audio: {takes} e altre {more}. Riprese riparate: {count}
 	Open Last Audio Tracks in Editor	Apri le ultime tracce audio nell'editor
 	Add Audio Tracks Marker	Aggiungi un marcatore alle tracce audio
+	Add Recording Marker	Aggiungi un marcatore alla registrazione
+@msg	Markers saved to {path}	Marcatori salvati in {path}
+@msg	The markers could not be saved: {error}	Impossibile salvare i marcatori: {error}
 	After a take	Dopo una ripresa
 	Nothing	Niente
 	Show the folder	Mostra la cartella
@@ -533,3 +556,7 @@ menu	Transform	Trasforma
 @msg	there is no display `{id}`: the system lists no displays	non esiste uno schermo `{id}`: il sistema non elenca alcuno schermo
 @msg	there is no display `{id}` (the displays are {ids})	non esiste uno schermo `{id}` (gli schermi sono {ids})
 @msg	a {width} × {height} display can't be the canvas: each side must be from {min} to {max} pixels	uno schermo di {width} × {height} non può essere l'area di lavoro: ogni lato deve avere da {min} a {max} pixel
+	Output scale	Scala di uscita
+	Custom	Personalizzata
+	Fill Screen	Riempi lo schermo
+@msg	The scenes could not be laid out for the new canvas: {error}	Impossibile disporre le scene per la nuova area di lavoro: {error}

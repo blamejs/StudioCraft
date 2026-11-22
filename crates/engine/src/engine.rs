@@ -5,16 +5,41 @@ use std::sync::Arc;
 use craft_app_audio::Discovery;
 use serde_json::{Value, json};
 use studiocraft_model::collection::MAX_TRANSITION_MS;
-use studiocraft_model::{FilterConfig, FilterId, ItemId, Scene, SceneCollection, SceneId, SceneItem, SourceConfig, SourceId};
+use studiocraft_model::staged;
+use studiocraft_model::{
+    FilterConfig, FilterId, ItemId, PauseAtZero, PauseSettings, Scene, SceneCollection, SceneId, SceneItem, SourceConfig, SourceId,
+};
 use studiocraft_plugin::{PluginError, Registry, Settings, SettingsSchema};
 use thiserror::Error;
 
-use crate::command::{Command, ItemRef, Move, RuntimeAction, SceneRef, SourceRef, Undo};
+use crate::command::{
+    CanvasSize, Command, DEFAULT_THUMBNAIL_FPS, ItemRef, MAX_SOURCE_SIDE, MAX_THUMBNAIL_FPS, MAX_THUMBNAIL_SCENES, MIN_THUMBNAIL_FPS, Move,
+    RuntimeAction, SceneRef, SourceRef, Undo,
+};
 use crate::history::History;
 use crate::links;
 
-/// Characters a marker's name holds at most (`audio_tracks.marker`).
+/// Characters a marker's name holds at most (`audio_tracks.marker` and `record.marker`).
 pub const MAX_MARKER_NAME_CHARS: usize = 256;
+
+/// An error unless `name` is absent or 1 to [`MAX_MARKER_NAME_CHARS`] characters, not only
+/// spaces, with no control characters.
+fn check_marker_name(name: Option<&str>) -> Result<(), EngineError> {
+    match name {
+        Some(n) if n.trim().is_empty() || n.chars().count() > MAX_MARKER_NAME_CHARS || n.chars().any(char::is_control) => Err(EngineError::Invalid(
+            format!("a marker's name is 1 to {MAX_MARKER_NAME_CHARS} characters, not only spaces, with no control characters"),
+        )),
+        _ => Ok(()),
+    }
+}
+
+/// Which slot a `present.*` command presents.
+#[derive(Clone, Copy)]
+enum Present {
+    Slot(usize),
+    Next,
+    Previous,
+}
 
 /// Why a command did not run. Shown to the user as is.
 #[derive(Debug, Error, Clone, PartialEq)]
@@ -215,6 +240,27 @@ impl Engine {
         self.history.redo_label()
     }
 
+    /// The id of the newest undo step, which undo and redo keep.
+    pub fn last_step(&self) -> Option<u64> {
+        self.history.last_step()
+    }
+
+    /// Whether the undo step `step` is in effect and can still be undone.
+    pub fn step_holds(&self, step: u64) -> bool {
+        self.history.holds(step)
+    }
+
+    /// The undo steps newer than `step`, oldest first; `None` when `step` is not in effect.
+    pub fn steps_after(&self, step: u64) -> Option<Vec<u64>> {
+        self.history.steps_after(step)
+    }
+
+    /// Take back the newest undo step and drop it, so redo does not offer it. Returns whether
+    /// there was one.
+    pub fn discard_last_step(&mut self) -> bool {
+        self.restore(|h, _| h.discard()).changed
+    }
+
     /// End the current drag or slider gesture: the next change is its own undo step.
     pub fn seal_history(&mut self) {
         self.history.seal();
@@ -270,16 +316,41 @@ impl Engine {
                     .ok_or_else(|| EngineError::NoScene(format!("at position {index}")))?;
                 Ok(self.select(id))
             }
+            Command::SceneThumbnails { scenes, fps } => {
+                if scenes.len() > MAX_THUMBNAIL_SCENES {
+                    return Err(EngineError::Invalid(format!("{} scenes are given; at most {MAX_THUMBNAIL_SCENES} are drawn at once", scenes.len())));
+                }
+                let fps = fps.unwrap_or(DEFAULT_THUMBNAIL_FPS);
+                if !(MIN_THUMBNAIL_FPS..=MAX_THUMBNAIL_FPS).contains(&fps) {
+                    return Err(EngineError::Invalid(format!("fps is {fps}; it must be from {MIN_THUMBNAIL_FPS} to {MAX_THUMBNAIL_FPS}")));
+                }
+                let mut ids = Vec::with_capacity(scenes.len());
+                for r in &scenes {
+                    let id = self.scene_id(r)?;
+                    if ids.contains(&id) {
+                        return Err(EngineError::Invalid(format!("scene {id} is given more than once")));
+                    }
+                    ids.push(id);
+                }
+                Ok(Outcome::runtime(RuntimeAction::SceneThumbnails { scenes: ids, fps }))
+            }
             Command::RecordStart {} => Ok(Outcome::runtime(RuntimeAction::StartRecording)),
             Command::RecordStop {} => Ok(Outcome::runtime(RuntimeAction::StopRecording)),
             Command::RecordToggle {} => Ok(Outcome::runtime(RuntimeAction::ToggleRecording)),
+            Command::RecordMarker { name } => {
+                check_marker_name(name.as_deref())?;
+                Ok(Outcome::runtime(RuntimeAction::RecordingMarker { name }))
+            }
+            Command::RecordingsList {} => Ok(Outcome::runtime(RuntimeAction::RecordingsList)),
             Command::StreamStart {} => Ok(Outcome::runtime(RuntimeAction::StartStreaming)),
             Command::StreamStop {} => Ok(Outcome::runtime(RuntimeAction::StopStreaming)),
             Command::StreamToggle {} => Ok(Outcome::runtime(RuntimeAction::ToggleStreaming)),
+            Command::GoLiveCheck {} => Ok(Outcome::runtime(RuntimeAction::GoLiveCheck)),
             Command::ReplayStart {} => Ok(Outcome::runtime(RuntimeAction::StartReplay)),
             Command::ReplayStop {} => Ok(Outcome::runtime(RuntimeAction::StopReplay)),
             Command::ReplayToggle {} => Ok(Outcome::runtime(RuntimeAction::ToggleReplay)),
             Command::ReplaySave {} => Ok(Outcome::runtime(RuntimeAction::SaveReplay)),
+            Command::AudioLoudness {} => Ok(Outcome::runtime(RuntimeAction::AudioLoudness)),
             Command::AudioTracksStatus {} => Ok(Outcome::runtime(RuntimeAction::AudioTracksStatus)),
             Command::AudioTracksRepair { folder } => {
                 if folder.trim().is_empty() {
@@ -305,16 +376,48 @@ impl Engine {
             Command::CaptionsDownloadCancel {} => Ok(Outcome::runtime(RuntimeAction::CaptionsDownloadCancel)),
             Command::AudioTracksOpenLast {} => Ok(Outcome::runtime(RuntimeAction::AudioTracksOpenLast)),
             Command::AudioTracksMarker { name } => {
-                if let Some(n) = &name
-                    && (n.trim().is_empty() || n.chars().count() > MAX_MARKER_NAME_CHARS || n.chars().any(char::is_control))
-                {
-                    return Err(EngineError::Invalid(format!(
-                        "a marker's name is 1 to {MAX_MARKER_NAME_CHARS} characters, not only spaces, with no control characters"
-                    )));
-                }
+                check_marker_name(name.as_deref())?;
                 Ok(Outcome::runtime(RuntimeAction::AudioTracksMarker { name }))
             }
+            Command::MarkerAdd { name } => {
+                check_marker_name(name.as_deref())?;
+                Ok(Outcome::runtime(RuntimeAction::MarkerAdd { name }))
+            }
+            Command::MarkerList {} => Ok(Outcome::runtime(RuntimeAction::MarkerList)),
             Command::RetestHardwareEncoders {} => Ok(Outcome::runtime(RuntimeAction::RetestHardwareEncoders)),
+            Command::FilterMeter { source, filter } => {
+                let id = self.source_id(&source)?;
+                let s = self.collection.source(id).ok_or_else(|| EngineError::NoSource(id.to_string()))?;
+                let f = s.filters.iter().find(|f| f.id.0 == filter).ok_or(EngineError::NoFilter(filter))?;
+                Ok(Outcome::runtime(RuntimeAction::FilterMeter { source: id, filter: f.id }))
+            }
+            Command::PauseStart { media, countdown_s, at_zero } => {
+                if let Some(m) = &media {
+                    PauseSettings::check_media(m).map_err(EngineError::Invalid)?;
+                }
+                if let Some(s) = countdown_s
+                    && !PauseSettings::COUNTDOWN_S.contains(&s)
+                {
+                    return Err(EngineError::Invalid(format!("countdown_s is {s}; it must be from 0 to {}", PauseSettings::COUNTDOWN_S.end())));
+                }
+                let at_zero = match at_zero.as_deref() {
+                    None => None,
+                    Some(id) => Some(
+                        PauseAtZero::from_id(id).ok_or_else(|| EngineError::Invalid(format!("at_zero is `{id}`; it must be `keep` or `resume`")))?,
+                    ),
+                };
+                Ok(Outcome::runtime(RuntimeAction::PauseStart { media, countdown_s, at_zero }))
+            }
+            Command::PauseStop {} => Ok(Outcome::runtime(RuntimeAction::PauseStop)),
+            Command::PauseToggle {} => Ok(Outcome::runtime(RuntimeAction::PauseToggle)),
+            Command::PauseExtend { seconds } => {
+                if seconds == 0 || seconds > *PauseSettings::COUNTDOWN_S.end() {
+                    return Err(EngineError::Invalid(format!("seconds is {seconds}; it must be from 1 to {}", PauseSettings::COUNTDOWN_S.end())));
+                }
+                Ok(Outcome::runtime(RuntimeAction::PauseExtend { seconds }))
+            }
+            Command::PauseStatus {} => Ok(Outcome::runtime(RuntimeAction::PauseStatus)),
+            Command::SessionEvents { since } => Ok(Outcome::runtime(RuntimeAction::SessionEvents { since })),
             Command::OpenSettings {} => Ok(Outcome::runtime(RuntimeAction::OpenSettings)),
             Command::Exit {} => Ok(Outcome::runtime(RuntimeAction::Exit)),
             // Queries: no history step, no revision bump, no change to the dirty flag.
@@ -358,6 +461,14 @@ impl Engine {
                 // What is on the program and in the preview is not part of undo.
                 c.program_scene = if c.scene(self.collection.program_scene).is_some() { self.collection.program_scene } else { c.program_scene };
                 c.preview_scene = self.collection.preview_scene.filter(|p| c.scene(*p).is_some()).or(c.preview_scene);
+                // Neither is the slot each Staged windows source presents.
+                for s in c.sources.iter_mut().filter(|s| s.kind == staged::KIND) {
+                    if let Some(n) =
+                        self.collection.source(s.id).filter(|now| now.kind == staged::KIND).and_then(|now| now.settings.get(staged::PRESENTED))
+                    {
+                        s.settings.set(staged::PRESENTED, n.clone());
+                    }
+                }
                 c.repair("Scene");
                 self.collection = c;
                 self.bump();
@@ -385,12 +496,14 @@ impl Engine {
     /// An undoable change: applied to a copy, recorded, then swapped in.
     fn edit(&mut self, cmd: Command) -> Result<Outcome, EngineError> {
         let label = cmd.spec().map_or("Edit", |s| s.label);
-        let undoable = cmd.spec().is_none_or(|s| s.undo == Undo::Undoable);
+        let mut undoable = cmd.spec().is_none_or(|s| s.undo == Undo::Undoable);
         let mut c = self.collection.clone();
         let (result, key) = self.apply(&mut c, cmd)?;
         if c == self.collection {
             return Ok(Outcome { changed: false, runtime: None, result });
         }
+        // Undo leaves the presented windows alone, so a change to them alone is no undo step.
+        undoable &= !only_presented_differs(&self.collection, &c);
         let before = std::mem::replace(&mut self.collection, c);
         if undoable {
             self.history.record(label, before, key);
@@ -428,6 +541,49 @@ impl Engine {
                 s.items.iter().rev().find(|i| i.source == src.id).map(|i| i.id).ok_or_else(|| EngineError::NoItem(format!("showing `{name}`")))
             }
         }
+    }
+
+    /// Change the presented slot of the Staged windows source `source`, or of every one when it is
+    /// `None`. A source whose slot is empty is left as it is; it is an error when none changes.
+    fn present(&self, c: &mut SceneCollection, source: Option<&SourceRef>, how: Present) -> Result<(Value, Option<String>), EngineError> {
+        let targets: Vec<SourceId> = match source {
+            Some(r) => {
+                let id = self.source_id(r)?;
+                match c.source(id) {
+                    Some(s) if s.kind == staged::KIND => vec![id],
+                    Some(s) => return Err(EngineError::Invalid(format!("`{}` is not a Staged windows source", s.name))),
+                    None => return Err(EngineError::NoSource(id.to_string())),
+                }
+            }
+            None => c.sources.iter().filter(|s| s.kind == staged::KIND).map(|s| s.id).collect(),
+        };
+        if targets.is_empty() {
+            return Err(EngineError::Invalid("there is no Staged windows source".into()));
+        }
+        let mut presented = Vec::new();
+        let mut found = false;
+        for id in targets {
+            let Some(s) = c.source_mut(id) else { continue };
+            let slot = match how {
+                Present::Slot(n) => staged::staged(&s.settings, n).map(|_| n),
+                Present::Next => staged::step(&s.settings, true),
+                Present::Previous => staged::step(&s.settings, false),
+            };
+            if let Some(n) = slot {
+                found = true;
+                if staged::presented(&s.settings) != n {
+                    s.settings.set(staged::PRESENTED, n);
+                    presented.push(json!({"source": id, "slot": n}));
+                }
+            }
+        }
+        if !found {
+            return Err(EngineError::Invalid(match how {
+                Present::Slot(n) => format!("nothing is staged in slot {n}"),
+                Present::Next | Present::Previous => "nothing is staged".into(),
+            }));
+        }
+        Ok((json!({"presented": presented}), None))
     }
 
     /// Apply an undoable command to `c`; returns the result and the coalescing key.
@@ -529,7 +685,14 @@ impl Engine {
                 });
                 let item = ItemId(c.alloc_id());
                 let s = c.scene_mut(scene).ok_or_else(|| EngineError::NoScene(scene.to_string()))?;
-                s.items.push(SceneItem { id: item, source, transform: transform.unwrap_or_default().sanitized(), visible: true, locked: false });
+                s.items.push(SceneItem {
+                    id: item,
+                    source,
+                    transform: transform.unwrap_or_default().sanitized(),
+                    visible: true,
+                    locked: false,
+                    fit: None,
+                });
                 Ok((json!({"source": source, "item": item, "scene": scene}), None))
             }
             Command::SourceAddExisting { scene, source } => {
@@ -537,7 +700,7 @@ impl Engine {
                 let source = self.source_id(&source)?;
                 let item = ItemId(c.alloc_id());
                 let s = c.scene_mut(scene).ok_or_else(|| EngineError::NoScene(scene.to_string()))?;
-                s.items.push(SceneItem { id: item, source, transform: Default::default(), visible: true, locked: false });
+                s.items.push(SceneItem { id: item, source, transform: Default::default(), visible: true, locked: false, fit: None });
                 Ok((json!({"item": item}), None))
             }
             Command::SourceRename { source, name } => {
@@ -565,13 +728,22 @@ impl Engine {
                 };
                 Ok((Value::Null, Some(format!("source.settings:{id}"))))
             }
+            Command::PresentWindow { source, index } => {
+                if !(1..=staged::SLOTS).contains(&index) {
+                    return Err(EngineError::Invalid(format!("the slot must be a number from 1 to {}", staged::SLOTS)));
+                }
+                self.present(c, source.as_ref(), Present::Slot(index))
+            }
+            Command::PresentNext { source } => self.present(c, source.as_ref(), Present::Next),
+            Command::PresentPrevious { source } => self.present(c, source.as_ref(), Present::Previous),
             Command::SourceVolume { source, gain } => {
                 let id = self.source_id(&source)?;
                 let s = c.source_mut(id).ok_or_else(|| EngineError::NoSource(id.to_string()))?;
-                s.audio.gain = if gain.is_finite() && (0.0..=1.0).contains(&gain) {
+                use studiocraft_model::collection::{MAX_GAIN, MAX_GAIN_DB};
+                s.audio.gain = if gain.is_finite() && (0.0..=MAX_GAIN).contains(&gain) {
                     gain
                 } else {
-                    return Err(EngineError::Invalid("the volume must be a number from 0 to 1".into()));
+                    return Err(EngineError::Invalid(format!("the volume must be a number from 0 to {MAX_GAIN} (+{MAX_GAIN_DB} dB)")));
                 };
                 Ok((Value::Null, Some(format!("source.volume:{id}"))))
             }
@@ -669,7 +841,7 @@ impl Engine {
                 s.items.insert(dest, it);
                 Ok((Value::Null, None))
             }
-            Command::ItemTransform { scene, item, transform } => {
+            Command::ItemTransform { scene, item, transform, fit } => {
                 transform.check().map_err(EngineError::Invalid)?;
                 let scene = self.scene_or_edit(&scene)?;
                 let item = self.item_id(scene, &item)?;
@@ -679,6 +851,7 @@ impl Engine {
                     return Err(EngineError::Locked(name));
                 }
                 it.transform = transform.sanitized();
+                it.fit = fit;
                 Ok((Value::Null, Some(format!("item.transform:{item}"))))
             }
             Command::ItemVisible { scene, item, visible } => {
@@ -694,6 +867,47 @@ impl Engine {
                 let item = self.item_id(scene, &item)?;
                 if let Some(it) = c.scene_mut(scene).and_then(|s| s.item_mut(item)) {
                     it.locked = locked;
+                }
+                Ok((Value::Null, None))
+            }
+            Command::CanvasRelayout { from, to, sizes, items } => {
+                use studiocraft_model::profile::{MAX_SIDE, MIN_SIDE};
+                let side = |s: CanvasSize| (MIN_SIDE..=MAX_SIDE).contains(&s.width) && (MIN_SIDE..=MAX_SIDE).contains(&s.height);
+                if !side(from) || !side(to) {
+                    return Err(EngineError::Invalid(format!("`from` and `to` are canvas sizes with sides of {MIN_SIDE} to {MAX_SIDE} pixels")));
+                }
+                let mut known = std::collections::BTreeMap::new();
+                for s in &sizes {
+                    if c.source(s.source).is_none() {
+                        return Err(EngineError::NoSource(s.source.to_string()));
+                    }
+                    if !(1..=MAX_SOURCE_SIDE).contains(&s.width) || !(1..=MAX_SOURCE_SIDE).contains(&s.height) {
+                        return Err(EngineError::Invalid(format!("a source's size has sides of 1 to {MAX_SOURCE_SIDE} pixels")));
+                    }
+                    if known.insert(s.source, (s.width, s.height)).is_some() {
+                        return Err(EngineError::Invalid(format!("`sizes` lists source {} twice", s.source)));
+                    }
+                }
+                let only = match items {
+                    Some(ids) => {
+                        let mut only = std::collections::BTreeSet::new();
+                        for id in ids {
+                            if !c.scenes.iter().flat_map(|s| &s.items).any(|i| i.id == id) {
+                                return Err(EngineError::NoItem(id.to_string()));
+                            }
+                            if !only.insert(id) {
+                                return Err(EngineError::Invalid(format!("`items` lists item {id} twice")));
+                            }
+                        }
+                        Some(only)
+                    }
+                    None => None,
+                };
+                let (from, to) = ((from.width, from.height), (to.width, to.height));
+                for it in c.scenes.iter_mut().flat_map(|s| s.items.iter_mut()) {
+                    if only.as_ref().is_none_or(|o| o.contains(&it.id)) {
+                        it.transform = it.transform.relayout(it.fit, known.get(&it.source).copied(), from, to);
+                    }
                 }
                 Ok((Value::Null, None))
             }
@@ -928,6 +1142,21 @@ impl Engine {
 
 fn item_name(c: &SceneCollection, scene: SceneId, item: ItemId) -> String {
     c.scene(scene).and_then(|s| s.item(item)).and_then(|i| c.source(i.source)).map_or_else(|| item.to_string(), |s| s.name.clone())
+}
+
+/// Whether `a` and `b` differ only in the slot their Staged windows sources present.
+fn only_presented_differs(a: &SceneCollection, b: &SceneCollection) -> bool {
+    if !b.sources.iter().any(|s| s.kind == staged::KIND) {
+        return false;
+    }
+    let unpresented = |c: &SceneCollection| {
+        let mut c = c.clone();
+        for s in c.sources.iter_mut().filter(|s| s.kind == staged::KIND) {
+            s.settings.set(staged::PRESENTED, Value::Null);
+        }
+        c
+    };
+    unpresented(a) == unpresented(b)
 }
 
 /// Remove sources no scene places and that are not global audio sources.

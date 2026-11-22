@@ -306,12 +306,13 @@ fn samples_ns(n: i64) -> i64 {
     (i128::from(n) * NS / i128::from(SAMPLE_RATE)) as i64
 }
 
-/// The file's tracks: H.264 or HEVC video (`record` is its `avcC` or `hvcC` record, as the
-/// encoder's codec is) and AAC audio.
+/// The file's tracks: H.264, HEVC or AV1 video (`record` is its `avcC`, `hvcC` or `av1C` record,
+/// as the encoder's codec is) and AAC audio.
 pub(crate) fn tracks(job: &OutputJob, record: Vec<u8>, aac: &AacSession) -> Vec<TrackSpec> {
     let v = job.video;
     let codec_id = match job.video_encoder.codec() {
         Codec::Hevc => "V_MPEGH/ISO/HEVC",
+        Codec::Av1 => "V_AV1",
         _ => "V_MPEG4/ISO/AVC",
     };
     let mut video = TrackSpec::new(TrackKind::Video, codec_id);
@@ -388,7 +389,7 @@ impl Native {
         let fps = f64::from(v.fps_num) / f64::from(v.fps_den.max(1));
         let video = Arc::new(Fifo::new((fps.ceil() as usize).clamp(8, 240)));
         let audio = Arc::new(Fifo::new(256));
-        let shared = Arc::new(Shared::new(packets, disk_wait));
+        let shared = Arc::new(Shared { timeline: Timeline::noting(Arc::clone(&job.stats)), ..Shared::new(packets, disk_wait) });
         let frame_bytes = PixelFormat::Nv12.frame_bytes(v.width, v.height).unwrap_or(0);
         let spawn = |name: &str, f: Box<dyn FnOnce() + Send>| std::thread::Builder::new().name(name.into()).spawn(f).map_err(PluginError::failed);
         let mut threads = Vec::new();

@@ -10,8 +10,9 @@ License: MIT OR Apache-2.0.
 
 ## What it sends
 
-- `Publisher::connect` takes a `Config` (`Config::new(url, key)`), connects to each address the
-  host name resolves to in turn, runs the TLS handshake for `rtmps://`, and runs the RTMP
+- `Publisher::connect` takes a `Config` (`Config::new(url, key)`), connects to the first four
+  addresses the host name resolves to in turn (`MAX_ADDRESSES`), runs the TLS handshake for
+  `rtmps://`, and runs the RTMP
   handshake: C0 with version 3, C1 with the time and 1528 random bytes, and C2 echoing S1. It then
   sends Set Chunk Size 4096 and the commands in order:
 
@@ -24,7 +25,8 @@ License: MIT OR Apache-2.0.
   | `publish` with the key and `live`, on the new stream | 0 | `onStatus` `NetStream.Publish.Start`; other statuses at level `status` are skipped |
 
   `_error`, or an `onStatus` with level `error`, is `Error::Rejected` with the command, the code
-  and the server's description.
+  and the server's description. `Publisher::connect_to` does the same with addresses the caller
+  resolved, and TLS still checks the certificate against the URL's host name.
 - `Publisher::send_flv` sends a `craft_flv::Checked` body as an audio, video or data message, with
   the FLV prefix bytes and the data as two slices. `Publisher::set_data_frame` sends `@setDataFrame`
   followed by `onMetaData` script data. `Publisher::send` sends raw message parts.
@@ -53,8 +55,10 @@ License: MIT OR Apache-2.0.
 
 ## Timeouts and errors
 
-- `Config::connect_timeout` (10 s) bounds each TCP connection attempt. The system resolver is not
-  bounded.
+- `Config::connect_timeout` (10 s) bounds each TCP connection attempt, so the TCP part of a
+  connect takes at most 40 s: at most 4 addresses (`MAX_ADDRESSES`) are tried, alternating
+  between IPv6 and IPv4 when the name resolved to both. The system resolver is not bounded. When no address accepts the
+  connection, `Error::Connect` lists each address tried with the error it gave.
 - Every timeout must be longer than 0 and at most 24 hours (`MAX_TIMEOUT`).
 - `Config::setup_timeout` (15 s) starts once the TCP connection is open and bounds the reads and
   writes of the TLS handshake, the RTMP handshake and the commands up
@@ -62,7 +66,11 @@ License: MIT OR Apache-2.0.
 - A write that makes no progress for `Config::stall_timeout` (5 s) is `Error::Stalled`. After it,
   and after any write error, every send is `Error::Broken`, since the connection may hold part of
   a message.
-- A server that closes the connection is `Error::Closed`. An unknown TLS root is `Error::Tls`.
+- A server that closes the connection is `Error::Closed`. A TLS failure is `Error::Tls`, whose
+  `TlsKind` says whether the certificate's root is not trusted, its name does not match, it has
+  expired, the certificate check refused it for another reason, or the server sent a fatal alert.
+  The system's certificate check on Windows and macOS reports some refusals without a reason, and
+  those are `TlsKind::CertificateNotAccepted`.
 - `Endpoint::parse` refuses schemes other than `rtmp` and `rtmps`, a user name or password, an
   empty host, an IPv6 address without brackets, a port of 0 or past 65 535, an empty application
   name, and spaces or control characters. `StreamKey::new` refuses an empty key, one over 65 535
@@ -117,8 +125,9 @@ type, extended timestamps and basic header form, and round-trips random messages
 sizes read back in random pieces. Against a loopback RTMP server in the crate, it publishes a stream
 and checks every command and message the server receives, the acknowledgements, ping answers and
 window changes, refusals with the key hidden, a server that never answers, one that closes, one
-with another version, a stalled write, and RTMPS with a certificate authority made when the test
-runs, trusted and untrusted.
+with another version, a stalled write, refused addresses with each one reported and at most four
+tried, and RTMPS with a certificate authority made when the test runs, trusted and untrusted, with
+the kind of an untrusted certificate kept.
 
 ## Specifications
 

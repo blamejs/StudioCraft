@@ -4,30 +4,35 @@ use std::time::{Duration, Instant};
 
 use studiocraft_model::{ChoiceOption, Field, FieldKind, Settings, SettingsSchema};
 use studiocraft_platform::PlatformError;
-use studiocraft_platform::display::{self, DisplayCapture as Display};
+use studiocraft_platform::display::{self, DisplayCapture as Display, DisplayInfo};
 use studiocraft_platform::window::{self, WindowCapture as Window};
 use studiocraft_plugin::{Pace, Plugin, PluginError, Source, SourceCaps, SourceInstance, SourceIo, VideoContent};
 
 use crate::uint;
 
 /// How long a lost display or window waits before it is looked for again.
-const REOPEN: Duration = Duration::from_secs(2);
+pub(crate) const REOPEN: Duration = Duration::from_secs(2);
 
 /// Whether the desktop's own picker chooses the display or window (Linux).
 const PICKER: bool = cfg!(target_os = "linux");
 
 const CHOOSE_IN_PICKER: &str = "Choose in the system picker";
 
-fn rate_field() -> Field {
+pub(crate) fn rate_field() -> Field {
     Field::new("fps", "Capture rate (frames per second)", FieldKind::Int { min: 1, max: 60 }, 30)
 }
 
-fn period(s: &Settings) -> Duration {
+/// A display's label in lists: `name: width x height`.
+pub(crate) fn display_label(d: &DisplayInfo) -> String {
+    format!("{}: {} x {}", d.name, d.width, d.height)
+}
+
+pub(crate) fn period(s: &Settings) -> Duration {
     Duration::from_secs_f64(1.0 / f64::from(uint(s, "fps", 30, 1, 60)))
 }
 
 /// What a grab gave.
-enum Grabbed {
+pub(crate) enum Grabbed {
     Picture,
     /// The capture runs and the picture has not changed; the last one stays on screen.
     Unchanged,
@@ -51,8 +56,8 @@ impl From<Result<(), PlatformError>> for Grabbed {
     }
 }
 
-/// What both captures do with their OS capture object.
-trait Grab {
+/// What the captures do with their OS capture object.
+pub(crate) trait Grab {
     fn open(target: &str) -> Result<Self, PluginError>
     where
         Self: Sized;
@@ -167,7 +172,10 @@ impl Plugin for DisplayCapture {
     }
     fn schema(&self) -> SettingsSchema {
         let mut options = vec![ChoiceOption::new("", if PICKER { CHOOSE_IN_PICKER } else { "Primary display" })];
-        options.extend(display::displays().into_iter().map(|d| ChoiceOption::new(d.id, format!("{}: {} x {}", d.name, d.width, d.height))));
+        // Where the picker chooses the display, the listed displays are not offered.
+        if !PICKER {
+            options.extend(display::displays().iter().map(|d| ChoiceOption::new(d.id.clone(), display_label(d))));
+        }
         SettingsSchema::new(vec![Field::new("display", "Display", FieldKind::Choice { options }, ""), rate_field()])
     }
 }

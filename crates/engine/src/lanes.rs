@@ -44,7 +44,8 @@ pub struct Lane {
     /// Whether the program hears the lane: its source is routed or shown in the program scene,
     /// and its monitoring does not leave it out of the program.
     pub heard: bool,
-    /// The source's volume, 0 to 1; 1 for a lane without a source.
+    /// The source's volume as a linear gain, 0 to 10 (1 is 0 dB, 10 is +20 dB); 1 for a lane
+    /// without a source.
     pub gain: f32,
     pub muted: bool,
     /// An application's level as the system reports it, 0 to 1, read without capturing it.

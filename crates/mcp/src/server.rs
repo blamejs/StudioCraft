@@ -1,6 +1,8 @@
 //! The MCP server loop: JSON-RPC messages, one per line, answered through a [`Backend`].
 
 use std::io::{BufRead, Write};
+use std::sync::mpsc::{self, RecvTimeoutError};
+use std::time::{Duration, Instant};
 
 use craft_jsonrpc::{Limits, RpcError};
 use craft_mcp::{Policy, Session, tool_call, tool_list};
@@ -20,13 +22,15 @@ const VERSIONS: [&str; 2] = [craft_mcp::PROTOCOL_VERSION, "2024-11-05"];
 pub const INSTRUCTIONS: &str = "StudioCraft is a recording and live-streaming studio. A scene collection holds scenes, sources \
 (cameras, screens, pictures, text, media, audio devices) and scene items, which place a source in a scene. Coordinates are canvas \
 pixels, x to the right and y down, with the origin at the top-left; the default canvas is 1920x1080. Rotation is in degrees, volume \
-gain is 0 to 1 and durations are in milliseconds. Every action is a command: command_list shows ids and parameters, command_run runs \
+gain is 0 to 10 (1 is 0 dB and 10 is +20 dB) and durations are in milliseconds. Every action is a command: command_list shows ids and parameters, command_run runs \
 one and command_batch runs several. A typical flow is scene_add, then source_add {kind, settings}, then item_transform, then \
 render_preview to look at the result and doc_inspect to read ids back. Studio mode keeps a preview scene and a program scene; \
-studio_transition moves the preview to the program. record_start and record_stop control the recording, stream_start and \
+studio_transition moves the preview to the program. record_start and record_stop control the recording, record_marker marks it \
+for the video editor, stream_start and \
 stream_stop the stream to the configured RTMP server, replay_start, replay_stop and replay_save the replay buffer, and \
-output_status reports all three. source_audio sets a source's audio sync offset, monitoring and whether it records its own track; \
-audio_tracks_status reports the audio tracks, audio_tracks_marker marks the running take, audio_tracks_repair repairs takes cut \
+output_status reports all three. pause_start shows the pause screen and its countdown in the program, and pause_stop resumes the \
+program. source_audio sets a source's audio sync offset, monitoring and whether it records its own track; audio_loudness \
+reports the program's loudness and the profile's loudness target; audio_tracks_status reports the audio tracks, audio_tracks_marker marks the running take, audio_tracks_repair repairs takes cut \
 short by a crash and audio_tracks_open_last opens the last take's session in the audio editor. prompts/list has ready-made workflows \
 (build_scene, lower_third, check_collection), completion/complete finishes a command id, a scene or source name or a plug-in kind, \
 and studiocraft://scene/{id}, studiocraft://source/{id}, studiocraft://command/{id} and studiocraft://plugin/{kind} read one thing \
@@ -129,6 +133,44 @@ impl Server {
                 Ok(Some(l)) => l,
                 Ok(None) => return Ok(()),
                 Err(e) => return Err(McpError::Io(format!("reading the MCP client: {e:?}"))),
+            };
+            if let Some(reply) = self.handle_line(&line) {
+                writeln!(output, "{reply}").and_then(|()| output.flush()).map_err(|e| McpError::Io(e.to_string()))?;
+            }
+        }
+    }
+
+    /// Serve `input` until it ends, as [`Server::serve`] does, and run the backend's
+    /// [`Backend::idle`] once every `every`, whether or not messages arrive. A thread reads
+    /// `input`.
+    pub fn serve_idle(&mut self, input: impl BufRead + Send + 'static, output: &mut impl Write, every: Duration) -> Result<(), McpError> {
+        let (tx, rx) = mpsc::sync_channel(1);
+        std::thread::Builder::new()
+            .name("mcp-input".into())
+            .spawn(move || {
+                let mut input = input;
+                loop {
+                    let line = craft_jsonrpc::read_line(&mut input, MAX_MESSAGE).map_err(|e| format!("{e:?}"));
+                    let end = !matches!(line, Ok(Some(_)));
+                    if tx.send(line).is_err() || end {
+                        return;
+                    }
+                }
+            })
+            .map_err(|e| McpError::Io(format!("no thread to read the MCP client: {e}")))?;
+        let mut due = Instant::now() + every;
+        loop {
+            // The idle work runs every `every` however often messages arrive.
+            let now = Instant::now();
+            if now >= due {
+                self.backend.idle();
+                due = now + every;
+            }
+            let line = match rx.recv_timeout(due.saturating_duration_since(now)) {
+                Ok(Ok(Some(l))) => l,
+                Ok(Ok(None)) | Err(RecvTimeoutError::Disconnected) => return Ok(()),
+                Ok(Err(e)) => return Err(McpError::Io(format!("reading the MCP client: {e}"))),
+                Err(RecvTimeoutError::Timeout) => continue,
             };
             if let Some(reply) = self.handle_line(&line) {
                 writeln!(output, "{reply}").and_then(|()| output.flush()).map_err(|e| McpError::Io(e.to_string()))?;

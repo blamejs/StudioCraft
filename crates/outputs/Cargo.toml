@@ -21,6 +21,8 @@ crossbeam-queue.workspace = true
 log.workspace = true
 portable-atomic.workspace = true
 serde_json.workspace = true
+# A connection check reads a streaming service's list of ingest servers and status summary.
+ureq.workspace = true
 
 [dev-dependencies]
 # Independent decoders read back what a built-in recording writes.

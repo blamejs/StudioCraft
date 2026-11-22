@@ -417,6 +417,57 @@ pub struct Prefs {
     /// value this build cannot read is empty.
     #[serde(deserialize_with = "bounded_losses")]
     pub graphics_losses: Vec<u64>,
+    /// For each profile whose canvas follows a display, that display. Read it with
+    /// [`Prefs::canvas_display`].
+    #[serde(deserialize_with = "bounded_canvas_displays")]
+    pub canvas_displays: Vec<CanvasDisplay>,
+}
+
+/// The most profiles whose canvas follows a display; the earliest are forgotten first.
+pub const MAX_CANVAS_DISPLAYS: usize = 64;
+
+/// The display a profile's canvas size came from (Canvas Size from Display, or Settings › Video ›
+/// Match display). While that profile is in use and its canvas is still `width` × `height`, the
+/// canvas takes the display's new size when the display's resolution or scaling changes. Setting
+/// the canvas size another way ends this.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct CanvasDisplay {
+    pub profile: String,
+    /// The display's id in `video.displays`. An id can change when the app starts again or the
+    /// display is connected again; the display is then found by `name`, when exactly one listed
+    /// display has that name.
+    pub id: String,
+    pub name: String,
+    pub width: u32,
+    pub height: u32,
+}
+
+/// Reads at most [`MAX_CANVAS_DISPLAYS`] links and skips the rest.
+fn bounded_canvas_displays<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<CanvasDisplay>, D::Error> {
+    use serde::de::{IgnoredAny, SeqAccess, Visitor};
+
+    struct Links;
+
+    impl<'de> Visitor<'de> for Links {
+        type Value = Vec<CanvasDisplay>;
+        fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+            f.write_str("a list of displays canvases follow")
+        }
+        fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Self::Value, A::Error> {
+            let mut out = Vec::new();
+            while out.len() < MAX_CANVAS_DISPLAYS {
+                match seq.next_element::<CanvasDisplay>()? {
+                    Some(l) => out.push(l),
+                    None => return Ok(out),
+                }
+            }
+            while seq.next_element::<IgnoredAny>()?.is_some() {}
+            Ok(out)
+        }
+    }
+
+    d.deserialize_seq(Links)
 }
 
 /// The last [`crate::hardware::KEPT_LOSSES`] entries of a list of loss times, without holding the
@@ -464,6 +515,7 @@ impl Default for Prefs {
             system_title_bar: false,
             graphics_adapter: Preference::Auto,
             graphics_losses: Vec::new(),
+            canvas_displays: Vec::new(),
         }
     }
 }
@@ -473,6 +525,25 @@ impl Prefs {
     /// build does not offer reads as `auto`.
     pub fn language(&self) -> &str {
         crate::i18n::normalize(&self.language)
+    }
+
+    /// The display the canvas of the profile `profile` follows.
+    pub fn canvas_display(&self, profile: &str) -> Option<&CanvasDisplay> {
+        self.canvas_displays.iter().find(|l| l.profile == profile)
+    }
+
+    /// Make the canvas of `link.profile` follow `link`, in place of the display it followed.
+    pub fn set_canvas_display(&mut self, link: CanvasDisplay) {
+        self.forget_canvas_display(&link.profile);
+        if self.canvas_displays.len() >= MAX_CANVAS_DISPLAYS {
+            self.canvas_displays.remove(0);
+        }
+        self.canvas_displays.push(link);
+    }
+
+    /// The canvas of the profile `profile` follows no display.
+    pub fn forget_canvas_display(&mut self, profile: &str) {
+        self.canvas_displays.retain(|l| l.profile != profile);
     }
 
     /// The names of the saved dock layouts.
@@ -573,6 +644,8 @@ enum Files {
 pub struct Store {
     prefs: SettingsStore<Prefs>,
     files: Files,
+    /// How many profiles were saved since the store was opened.
+    profile_saves: u64,
 }
 
 /// Why a collection or profile name can't be used as a file name.
@@ -630,7 +703,7 @@ impl Store {
             Some(dir) => Files::Dir(dir.to_path_buf()),
             None => Files::Memory(BTreeMap::new()),
         };
-        (Store { prefs, files }, problems)
+        (Store { prefs, files, profile_saves: 0 }, problems)
     }
 
     /// A store that reads and writes nothing.
@@ -795,7 +868,14 @@ impl Store {
 
     pub fn save_profile(&mut self, p: &Profile) -> Result<(), String> {
         let text = write_profile(p).map_err(|e| e.to_string())?;
-        self.write(PROFILES, &p.name, text)
+        self.write(PROFILES, &p.name, text)?;
+        self.profile_saves = self.profile_saves.wrapping_add(1);
+        Ok(())
+    }
+
+    /// How many profiles were saved since the store was opened.
+    pub fn profile_saves(&self) -> u64 {
+        self.profile_saves
     }
 
     pub fn remove_profile(&mut self, name: &str) -> Result<(), String> {

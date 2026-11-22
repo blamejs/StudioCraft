@@ -6,7 +6,8 @@ author, source and license tables give each file's full path from the repository
 The notes and the "Where each file is used" table use short names.
 
 The asset files are the app icon in `assets/app-icon`, the three interface faces in
-`assets/fonts` and the screenshots in `docs/images`. The interface icons are drawn from shapes in
+`assets/fonts`, the streaming service logos in `assets/platform-logos` and the screenshots in
+`docs/images`. The interface icons are drawn from shapes in
 `crates/ui-egui/src/icons.rs` and are not files.
 
 ## App icon
@@ -73,11 +74,37 @@ The font files and their license texts have these authors, sources and licenses:
 | `docs/images/settings.png` | StudioCraft contributors | Screenshot of StudioCraft | MIT OR Apache-2.0 |
 | `docs/images/scopes.png` | StudioCraft contributors | Screenshot of StudioCraft | MIT OR Apache-2.0 |
 
+## Streaming service logos
+
+The Streaming window (View › Streaming) shows a service's logo beside a destination set up for that
+service (AGENTS.md 1.2). Each file is the service's own download, byte for byte, downloaded on
+2026-11-20. The services own the logos and their trademarks. StudioCraft does not license them, and
+they are not covered by the project's license. The window draws each logo whole, at no less than the
+minimum size its guidelines give, with their clear space, beside the words "Stream to" or, where
+the guidelines allow no words beside it, on a row of its own.
+
+| File | Owner | Source | Terms |
+| --- | --- | --- | --- |
+| `assets/platform-logos/twitch-glitch-purple.png` | Twitch Interactive, Inc. | `Twitch Brand/Twitch Logos/02. Glitch/01. Twitch Purple/glitch_flat_purple.png` in https://brand.twitch.com/uploads/Twitch-Brand.zip, from https://brand.twitch.com/ | https://legal.twitch.com/legal/trademark/ and the logo usage guidelines in the same download |
+| `assets/platform-logos/youtube-icon-red.png` | Google LLC | `YouTube_Icon/Digital/01 Red/yt_icon_red_digital.png` in the YouTube icon download on https://brand.youtube/youtube-icon | https://brand.youtube/youtube-icon and https://developers.google.com/youtube/terms/branding-guidelines |
+| `assets/platform-logos/facebook-logo-primary.png` | Meta Platforms, Inc. | `Facebook Brand Asset Pack/Logo/Primary Logo/Facebook_Logo_Primary.png` in the logo pack on https://www.meta.com/brand/resources/facebook/logo/ | https://www.meta.com/brand/resources/facebook/logo/ |
+
+The logo files have these SHA-256 hashes:
+
+| File | SHA-256 |
+| --- | --- |
+| `assets/platform-logos/twitch-glitch-purple.png` | `0a7bc78f69becd1d6a082b4740d8cc6c096db99a6f3fa586951a2126007434b4` |
+| `assets/platform-logos/youtube-icon-red.png` | `1027b1b0517727adb9697155a270744381c3ce9b047b1c8bd8a9389dc7d07a83` |
+| `assets/platform-logos/facebook-logo-primary.png` | `2adfd474d91fd20c51084309ed000c1ae6cc7f5f70af14d375930f5a71301308` |
+
+The other services in the preset list do not publish a logo for this use, and the window shows their
+names on a plain tile.
+
 ## Test fixtures
 
 StudioCraft contributors wrote the JSON files in `crates/model/fixtures` for the save-format tests,
 and they are licensed MIT OR Apache-2.0. The files are `collection-v1.json` to
-`collection-v3.json` and `profile-v1.json` to `profile-v5.json`.
+`collection-v5.json` and `profile-v1.json` to `profile-v11.json`.
 
 ## Where each file is used
 
@@ -88,5 +115,6 @@ and they are licensed MIT OR Apache-2.0. The files are `collection-v1.json` to
 | `studiocraft-macos-512.png` | The window icon on macOS (Dock). |
 | `studiocraft.icns` | The macOS app bundle's icon (`StudioCraft.icns`). |
 | `studiocraft.ico` | The Windows installer's icon. |
+| `assets/platform-logos` | The destination rows and details in the Streaming window (`crates/ui-egui/src/logos.rs`). |
 | `hicolor/<size>` | The Linux icon theme sizes for packages that install `share/icons/hicolor/<size>/apps/ai.storyteller.studiocraft.png`. |
 | `docs/images` | The screenshots in `README.md`. |

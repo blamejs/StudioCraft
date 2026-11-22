@@ -24,5 +24,5 @@ pub mod links;
 pub mod mixer;
 pub mod scheduler;
 
-pub use command::{Command, CommandSpec, ItemRef, Move, RuntimeAction, SceneRef, SourceRef, specs};
+pub use command::{CanvasSize, Command, CommandSpec, ItemRef, Move, RuntimeAction, SceneRef, SourceRef, SourceSize, specs};
 pub use engine::{Engine, EngineError, Outcome};

@@ -8,6 +8,7 @@
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
+use std::time::{Duration, Instant};
 
 use craft_gpu_yuv::{Converter, Planes};
 use studiocraft_media::Tick;
@@ -148,6 +149,17 @@ impl Nv12 {
         let state = Arc::clone(&slot.state);
         slot.buffer.map_async(wgpu::MapMode::Read, .., move |r| state.store(if r.is_ok() { MAPPED } else { FAILED }, Ordering::Release));
         self.next = (self.next + 1) % RING;
+    }
+
+    /// Wait until every mapping started so far has reported back, for at most `timeout`. Call it
+    /// after waiting for the GPU: another thread polling the same device can run a mapping's
+    /// callback after that wait has returned. Not for the frame loop, as it yields the thread
+    /// until the callbacks have run.
+    pub(crate) fn wait_mapped(&self, timeout: Duration) {
+        let deadline = Instant::now() + timeout;
+        while self.slots.iter().any(|s| s.state.load(Ordering::Acquire) == PENDING) && Instant::now() < deadline {
+            std::thread::yield_now();
+        }
     }
 
     /// Hand every mapped buffer, oldest first, to the sinks.

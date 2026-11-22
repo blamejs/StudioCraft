@@ -32,6 +32,9 @@ use crate::{Codec, Rate};
 /// The pixel format of the input buffers: NV12 at video range (`'420v'`).
 const NV12_VIDEO: u32 = u32::from_be_bytes(*b"420v");
 
+/// Why an AV1 session does not open.
+const NO_AV1: &str = "VideoToolbox has no AV1 encoder";
+
 /// What the output callback shares with the session's owner.
 struct Shared {
     codec: Codec,
@@ -98,6 +101,7 @@ fn parameter_sets(sample: &CMSampleBuffer, codec: Codec) -> Result<Vec<Vec<u8>>,
             match codec {
                 Codec::H264 => CMVideoFormatDescriptionGetH264ParameterSetAtIndex(&format, index, &mut ptr, &mut size, &mut total, &mut nal_len),
                 Codec::Hevc => CMVideoFormatDescriptionGetHEVCParameterSetAtIndex(&format, index, &mut ptr, &mut size, &mut total, &mut nal_len),
+                Codec::Av1 => return Err(NO_AV1.into()),
             }
         };
         if status != 0 {
@@ -229,6 +233,7 @@ fn configure(session: &VTCompressionSession, p: &Params) -> Result<(), OpenError
             match p.codec {
                 Codec::H264 => kVTProfileLevel_H264_High_AutoLevel,
                 Codec::Hevc => kVTProfileLevel_HEVC_Main_AutoLevel,
+                Codec::Av1 => return Err(OpenError::Unsupported(NO_AV1.into())),
             },
         )
     };
@@ -329,6 +334,11 @@ fn fill(pb: &CVImageBuffer, w: usize, h: usize, nv12: &[u8]) -> Result<(), Strin
 impl Session {
     /// Create a session for `p` with a hardware encoder required, or say why none opens.
     pub(crate) fn open(p: &Params) -> Result<Session, OpenError> {
+        let codec = match p.codec {
+            Codec::H264 => kCMVideoCodecType_H264,
+            Codec::Hevc => kCMVideoCodecType_HEVC,
+            Codec::Av1 => return Err(OpenError::Unsupported(NO_AV1.into())),
+        };
         let (w, h) = (i32::try_from(p.width).unwrap_or(i32::MAX), i32::try_from(p.height).unwrap_or(i32::MAX));
         let timescale = i32::try_from(p.fps.0).map_err(|_| OpenError::Unsupported(format!("the frame rate {}/{}", p.fps.0, p.fps.1)))?;
         let shared = Box::new(Shared { codec: p.codec, timescale, out: Handoff::new(MAX_WAITING) });
@@ -342,10 +352,6 @@ impl Session {
             unsafe { (kCVPixelBufferPixelFormatTypeKey, kCVPixelBufferWidthKey, kCVPixelBufferHeightKey, kCVPixelBufferIOSurfacePropertiesKey) };
         let attrs =
             CFDictionary::<CFString, CFType>::from_slices(&[pf_key, w_key, h_key, io_key], &[pf.as_ref(), cw.as_ref(), ch.as_ref(), io.as_ref()]);
-        let codec = match p.codec {
-            Codec::H264 => kCMVideoCodecType_H264,
-            Codec::Hevc => kCMVideoCodecType_HEVC,
-        };
         let mut out: *mut VTCompressionSession = std::ptr::null_mut();
         // SAFETY: every pointer is valid for the call, and VideoToolbox copies what it keeps. The
         // callback's refcon points into `shared`, which the returned `Session` keeps alive until the

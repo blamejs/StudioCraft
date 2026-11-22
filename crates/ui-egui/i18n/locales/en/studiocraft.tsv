@@ -2,6 +2,7 @@
 # Columns: context, source text, translation (here the source text again).
 # This catalog is not embedded. The other locales translate these rows.
 	`{shortcut}`: {error}	`{shortcut}`: {error}
+	{address}: {cause} ({error})	{address}: {cause} ({error})
 	a camera was not found	a camera was not found
 	A recording, stream or replay buffer is running. Exiting stops it; a recording is finished and saved first, and the replay buffer's unsaved video is lost.	A recording, stream or replay buffer is running. Exiting stops it; a recording is finished and saved first, and the replay buffer's unsaved video is lost.
 	A key for this session only	A key for this session only
@@ -30,6 +31,7 @@
 	Audio Mixer	Audio Mixer
 	Audio output capture	Audio output capture
 	Audio source actions	Audio source actions
+	Automatic reconnect	Automatic reconnect
 	AV1	AV1
 	available	available
 	Automatic	Automatic
@@ -52,10 +54,15 @@
 	Choose a display	Choose a display
 	The display this window is on	The display this window is on
 	{name}: {width} × {height}	{name}: {width} × {height}
+	Output scale	Output scale
+	Custom	Custom
+	{percent}% ({width} × {height})	{percent}% ({width} × {height})
+	Fill Screen	Fill Screen
 	Capture rate (frames per second)	Capture rate (frames per second)
 	Ceiling (dB)	Ceiling (dB)
 	Center	Center
 	Center to Screen	Center to Screen
+	Change Automatic Reconnect	Change Automatic Reconnect
 	Change Stream Destination	Change Stream Destination
 	Check for updates at start	Check for updates at start
 	Check for Updates…	Check for Updates…
@@ -100,6 +107,7 @@
 	Ease in and out	Ease in and out
 	Ease out	Ease out
 	Easing	Easing
+	Each wait doubles up to the longest wait.	Each wait doubles up to the longest wait.
 	Edit	Edit
 	Enabled	Enabled
 	Encoder queue	Encoder queue
@@ -122,6 +130,7 @@
 	Filters for '{name}'	Filters for '{name}'
 	Filters…	Filters…
 	Finishing Recording…	Finishing Recording…
+	First wait	First wait
 	Fit to Screen	Fit to Screen
 	Font	Font
 	Font family	Font family
@@ -145,6 +154,7 @@
 	Gamma	Gamma
 	General	General
 	Go Live	Go Live
+	Go-Live Check	Go-Live Check
 	H.264	H.264
 	H.264 (built in)	H.264 (built in)
 	Height	Height
@@ -184,6 +194,7 @@
 	Live, {time}	Live, {time}
 	Lock (it can't be moved in the preview)	Lock (it can't be moved in the preview)
 	Lock Preview	Lock Preview
+	Longest wait	Longest wait
 	Loop	Loop
 	Lossless (very large files)	Lossless (very large files)
 	Low (dB)	Low (dB)
@@ -237,8 +248,10 @@
 	NVIDIA NVENC H.264 (built in)	NVIDIA NVENC H.264 (built in)
 	NVIDIA NVENC HEVC	NVIDIA NVENC HEVC
 	NVIDIA NVENC HEVC (built in)	NVIDIA NVENC HEVC (built in)
+	NVIDIA NVENC AV1 (built in)	NVIDIA NVENC AV1 (built in)
 	Windows Media Foundation H.264 (built in)	Windows Media Foundation H.264 (built in)
 	Windows Media Foundation HEVC (built in)	Windows Media Foundation HEVC (built in)
+	Windows Media Foundation AV1 (built in)	Windows Media Foundation AV1 (built in)
 	Apple VideoToolbox H.264 (built in)	Apple VideoToolbox H.264 (built in)
 	Apple VideoToolbox HEVC (built in)	Apple VideoToolbox HEVC (built in)
 	VA-API H.264 (built in)	VA-API H.264 (built in)
@@ -283,12 +296,14 @@
 	Reading the lists…	Reading the lists…
 	Real name	Real name
 	REC	REC
+	RECONNECTING	RECONNECTING
 	Record	Record
 	Record and stream scenes built from your screen, windows, cameras, pictures, text and sound.	Record and stream scenes built from your screen, windows, cameras, pictures, text and sound.
 	Recording	Recording
 	Recording folder	Recording folder
 	Recording, {time}	Recording, {time}
 	Recordings	Recordings
+	Reconnect when a destination's connection fails or is lost	Reconnect when a destination's connection fails or is lost
 	Redo	Redo
 	Refresh Lists	Refresh Lists
 	Release (ms)	Release (ms)
@@ -384,6 +399,13 @@
 	Stopping…	Stopping…
 	Stream	Stream
 	Stream key	Stream key
+	Stream to {service}	Stream to {service}
+	Custom server	Custom server
+	Service	Service
+	Where {service} shows your server and key	Where {service} shows your server and key
+	Copy it from your account	Copy it from your account
+	{service} shows the server and key for your account.	{service} shows the server and key for your account.
+	Where to find them	Where to find them
 	Streaming	Streaming
 	Stretch image	Stretch image
 	Stretch to Screen	Stretch to Screen
@@ -413,7 +435,11 @@
 	the camera stopped sending pictures	the camera stopped sending pictures
 	the camera stopped unexpectedly	the camera stopped unexpectedly
 	the choice in the system picker was canceled	the choice in the system picker was canceled
+	the connection failed	the connection failed
+	the connection was lost	the connection was lost
 	the desktop has no screen-cast portal	the desktop has no screen-cast portal
+	the DNS server did not answer for the server's name	the DNS server did not answer for the server's name
+	earlier lookups of server names have not finished	earlier lookups of server names have not finished
 	The interface fonts Inter and JetBrains Mono are under the SIL Open Font License 1.1.	The interface fonts Inter and JetBrains Mono are under the SIL Open Font License 1.1.
 	The licenses of the third-party crates StudioCraft uses are checked by `cargo xtask licenses`.	The licenses of the third-party crates StudioCraft uses are checked by `cargo xtask licenses`.
 	The profile's stream key	The profile's stream key
@@ -421,7 +447,24 @@
 	The scopes need a graphics device to read the program.	The scopes need a graphics device to read the program.
 	the screen capture could not start	the screen capture could not start
 	the screen capture failed	the screen capture failed
+	the secure connection failed	the secure connection failed
+	the server address is not valid	the server address is not valid
+	the server closed the connection before the stream started	the server closed the connection before the stream started
+	the server did not answer in time	the server did not answer in time
+	the server did not finish setting up the stream in time	the server did not finish setting up the stream in time
+	the server refused the connection	the server refused the connection
+	the server refused the connection request; check the server address	the server refused the connection request; check the server address
+	the server refused the stream; check the stream key	the server refused the stream; check the stream key
+	the server's certificate has expired	the server's certificate has expired
+	the server's certificate is for another name	the server's certificate is for another name
+	the server's certificate is not from a trusted authority	the server's certificate is not from a trusted authority
+	the server's certificate was not accepted	the server's certificate was not accepted
+	the server's name could not be looked up	the server's name could not be looked up
+	the server's name does not exist; check the server address	the server's name does not exist; check the server address
+	the stream key is not valid	the stream key is not valid
 	This filter has no settings.	This filter has no settings.
+	this computer has no network route to the server addresses tried	this computer has no network route to the server addresses tried
+	this computer has no network route to this address	this computer has no network route to this address
 	this is not supported on this system yet	this is not supported on this system yet
 	Threshold (dB)	Threshold (dB)
 	Tint	Tint
@@ -429,9 +472,41 @@
 	Top	Top
 	Transition	Transition
 	Transition Controls	Transition Controls
+	Tries before giving up	Tries before giving up
 	Transition settings	Transition settings
 	Transition to Program	Transition to Program
 	Trying again (try {attempt}): {error}	Trying again (try {attempt}): {error}
+	Waiting for the network (try {attempt}): {error}	Waiting for the network (try {attempt}): {error}
+	Check Connection	Check Connection
+	Asks this computer whether it has a route to the server, looks the server's name up, and connects to the server on its port and on port 443, with a secure connection where the address uses one. For a service that publishes them, it also reads the service's list of ingest servers and status summary and connects to two of its other ingest servers. It sends no stream key and nothing of the address after the server's name. Each server it contacts sees this computer's address, and a secure connection sends the server's name unencrypted.	Asks this computer whether it has a route to the server, looks the server's name up, and connects to the server on its port and on port 443, with a secure connection where the address uses one. For a service that publishes them, it also reads the service's list of ingest servers and status summary and connects to two of its other ingest servers. It sends no stream key and nothing of the address after the server's name. Each server it contacts sees this computer's address, and a secure connection sends the server's name unencrypted.
+	Set a server for this destination first	Set a server for this destination first
+	Checking the connection…	Checking the connection…
+	Checked by itself after the destination failed	Checked by itself after the destination failed
+	What the check found	What the check found
+	Route to any address	Route to any address
+	Route to	Route to
+	Proxy variable	Proxy variable
+	Name lookup of	Name lookup of
+	Connection to	Connection to
+	Secure connection to	Secure connection to
+	Secure connection on port 443 to	Secure connection on port 443 to
+	The service's list of ingest servers	The service's list of ingest servers
+	Secure connection to the service's ingest server	Secure connection to the service's ingest server
+	The service's status summary	The service's status summary
+	works	works
+	set	set
+	reports a problem	reports a problem
+	this computer could not say	this computer could not say
+	not finished in time	not finished in time
+	{check}: {outcome}	{check}: {outcome}
+	{check}: {outcome} ({detail})	{check}: {outcome} ({detail})
+	{check} {target}: {outcome}	{check} {target}: {outcome}
+	{check} {target}: {outcome} ({detail})	{check} {target}: {outcome} ({detail})
+	Connection check	Connection check
+	Also check the service's server list and status page after a failure	Also check the service's server list and status page after a failure
+	When a destination fails three tries in a row or gives up, StudioCraft checks its server's name, route and port once. With this on, that check also reads the service's list of ingest servers and status summary and connects to two of its other ingest servers, so those hosts see this computer's address. Check Connection in the Streaming window always contacts them.	When a destination fails three tries in a row or gives up, StudioCraft checks its server's name, route and port once. With this on, that check also reads the service's list of ingest servers and status summary and connects to two of its other ingest servers, so those hosts see this computer's address. Check Connection in the Streaming window always contacts them.
+	Check Stream Destination Connection	Check Stream Destination Connection
+	Change Connection Checks After a Failure	Change Connection Checks After a Failure
 	Type	Type
 	Type shortcuts such as Ctrl+1 or Shift+F5; separate several with commas.	Type shortcuts such as Ctrl+1 or Shift+F5; separate several with commas.
 	ultrafast	ultrafast
@@ -459,6 +534,25 @@
 	Width	Width
 	Window	Window
 	Window capture	Window capture
+	Staged windows	Staged windows
+	Window 1	Window 1
+	Window 2	Window 2
+	Window 3	Window 3
+	Window 4	Window 4
+	Window 5	Window 5
+	Window 6	Window 6
+	Presented window	Presented window
+	While the presented window cannot be shown	While the presented window cannot be shown
+	Show a color	Show a color
+	Keep the last picture	Keep the last picture
+	Placeholder color	Placeholder color
+	nothing is staged in the presented slot	nothing is staged in the presented slot
+	waiting for the window	waiting for the window
+	the display is not connected	the display is not connected
+	Present Staged Window	Present Staged Window
+	Present Next Staged Window	Present Next Staged Window
+	Present Previous Staged Window	Present Previous Staged Window
+	Present Staged Window {n}	Present Staged Window {n}
 	Windows Media Foundation H.264	Windows Media Foundation H.264
 	X	X
 	Y	Y
@@ -486,6 +580,8 @@
 @msg	No hardware encoder passed its test; using {encoder}	No hardware encoder passed its test; using {encoder}
 @msg	The hardware encoder tests could not run: {error}	The hardware encoder tests could not run: {error}
 @msg	{encoder} stopped working; the next start tries another encoder	{encoder} stopped working; the next start tries another encoder
+	{count} reconnecting	{count} reconnecting
+	Destinations waiting to connect again; the Streaming window shows each one and why	Destinations waiting to connect again; the Streaming window shows each one and why
 	{fps} fps  {ms} ms	{fps} fps  {ms} ms
 	{ms} ms	{ms} ms
 	rtmp://live.example.com/app	rtmp://live.example.com/app
@@ -524,6 +620,26 @@
 @msg	No file dialog could be shown: {error}	No file dialog could be shown: {error}
 @msg	Recording saved to {path}	Recording saved to {path}
 @msg	Replay saved to {path}	Replay saved to {path}
+@msg	Lost the connection to {name}; reconnecting	Lost the connection to {name}; reconnecting
+@msg	Reconnected to {name}	Reconnected to {name}
+@msg	This computer has no network route	This computer has no network route
+@msg	The server name {host} does not exist; check the server address	The server name {host} does not exist; check the server address
+@msg	The DNS server did not answer for {host}	The DNS server did not answer for {host}
+@msg	The server name {host} could not be looked up: {detail}	The server name {host} could not be looked up: {detail}
+@msg	The server refused the stream; check the stream key and the server address	The server refused the stream; check the stream key and the server address
+@msg	The secure connection to {host} was not accepted ({reason}). The server address may be wrong, the server's certificate may be faulty, this computer's clock may be wrong, or something on this network may be intercepting secure connections	The secure connection to {host} was not accepted ({reason}). The server address may be wrong, the server's certificate may be faulty, this computer's clock may be wrong, or something on this network may be intercepting secure connections
+@msg	{service} reports a problem with {component}: {status}. This server may also be affected	{service} reports a problem with {component}: {status}. This server may also be affected
+@msg	{host} cannot be reached from this network, but {other} can	{host} cannot be reached from this network, but {other} can
+@msg	{host} answers on port 443 but not on port {port}. This network or the server may be blocking port {port}	{host} answers on port 443 but not on port {port}. This network or the server may be blocking port {port}
+@msg	{host} refused the connection on port {port}; nothing on that server accepts connections on that port	{host} refused the connection on port {port}; nothing on that server accepts connections on that port
+@msg	None of the servers of {service} that were tried answer from this network. The service may be down, or something between this network and the service may be blocking it	None of the servers of {service} that were tried answer from this network. The service may be down, or something between this network and the service may be blocking it
+@msg	{host} does not answer on port {port}. The server may be down, or this network may be blocking it	{host} does not answer on port {port}. The server may be down, or this network may be blocking it
+@msg	A secure connection to {host} on port {port} succeeds; the failure came after that, while the stream was set up or sent: {detail}	A secure connection to {host} on port {port} succeeds; the failure came after that, while the stream was set up or sent: {detail}
+@msg	A connection to {host} on port {port} succeeds; the failure came after that, while the stream was set up or sent: {detail}	A connection to {host} on port {port} succeeds; the failure came after that, while the stream was set up or sent: {detail}
+@msg	A secure connection to {host} on port {port} succeeds	A secure connection to {host} on port {port} succeeds
+@msg	A connection to {host} on port {port} succeeds	A connection to {host} on port {port} succeeds
+@msg	The cause could not be determined	The cause could not be determined
+@msg	the stream destination `{id}` has no server to check	the stream destination `{id}` has no server to check
 @msg	The compositor thread could not start: {error}	The compositor thread could not start: {error}
 @msg	The preferences could not be saved: {error}	The preferences could not be saved: {error}
 @msg	The profile could not be saved: {error}	The profile could not be saved: {error}
@@ -566,6 +682,7 @@ menu	Transform	Transform
 	TRACKS stopped	TRACKS stopped
 	Audio tracks stopped early; the status message gives the reason	Audio tracks stopped early; the status message gives the reason
 	Record as Its Own Track	Record as Its Own Track
+	Program Loudness	Program Loudness
 	Audio Tracks Status	Audio Tracks Status
 	Repair Audio Tracks	Repair Audio Tracks
 	Test Hardware Encoders Again	Test Hardware Encoders Again
@@ -584,6 +701,10 @@ menu	Transform	Transform
 @msg	Audio tracks could not be repaired: {takes} and {more} more. Takes repaired: {count}	Audio tracks could not be repaired: {takes} and {more} more. Takes repaired: {count}
 	Open Last Audio Tracks in Editor	Open Last Audio Tracks in Editor
 	Add Audio Tracks Marker	Add Audio Tracks Marker
+	Add Recording Marker	Add Recording Marker
+	List Recordings	List Recordings
+@msg	Markers saved to {path}	Markers saved to {path}
+@msg	The markers could not be saved: {error}	The markers could not be saved: {error}
 	After a take	After a take
 	Nothing	Nothing
 	Show the folder	Show the folder
@@ -617,6 +738,7 @@ menu	Transform	Transform
 @msg	there is no free name for the scene collection `{name}`	there is no free name for the scene collection `{name}`
 @msg	select a source first	select a source first
 @msg	the source has not shown a picture yet	the source has not shown a picture yet
+@msg	the volume must be a number from 0 to 10 (+20 dB)	the volume must be a number from 0 to 10 (+20 dB)
 @msg	settings are kept in memory only (--no-prefs)	settings are kept in memory only (--no-prefs)
 @msg	`scopes.kind`: unknown scope `{name}` (one of {scopes})	`scopes.kind`: unknown scope `{name}` (one of {scopes})
 @msg	`{command}`: unknown language `{code}` (one of {languages})	`{command}`: unknown language `{code}` (one of {languages})
@@ -627,6 +749,7 @@ menu	Transform	Transform
 @msg	`{command}` needs `id`: a destination id	`{command}` needs `id`: a destination id
 @msg	`{command}`: `{key}` is a string	`{command}`: `{key}` is a string
 @msg	`{command}`: `{key}` is true or false	`{command}`: `{key}` is true or false
+@msg	`{command}`: `{key}` is a whole number	`{command}`: `{key}` is a whole number
 @msg	`{command}`: `{key}` has a control character	`{command}`: `{key}` has a control character
 @msg	`{command}`: `name` is longer than {max} characters	`{command}`: `name` is longer than {max} characters
 @msg	`{command}`: `server` is longer than {max} bytes	`{command}`: `server` is longer than {max} bytes
@@ -638,6 +761,7 @@ menu	Transform	Transform
 @msg	`{command}`: `key` is `profile`, `held` or `none`, not `{key}`	`{command}`: `key` is `profile`, `held` or `none`, not `{key}`
 @msg	`{command}`: `held_name` goes with `key`: `held`	`{command}`: `held_name` goes with `key`: `held`
 @msg	`{command}`: `held_name` is 1 to {max} bytes	`{command}`: `held_name` is 1 to {max} bytes
+@msg	`{command}`: `service` is empty or one of {ids}, not `{service}`	`{command}`: `service` is empty or one of {ids}, not `{service}`
 @msg	a profile holds at most {max} stream destinations	a profile holds at most {max} stream destinations
 @msg	there is no stream destination `{id}`	there is no stream destination `{id}`
 @msg	stop the stream destination `{id}` before removing it	stop the stream destination `{id}` before removing it
@@ -649,6 +773,7 @@ menu	Transform	Transform
 @msg	there is already a scene collection named `{name}`	there is already a scene collection named `{name}`
 @msg	the last scene collection can't be removed	the last scene collection can't be removed
 @msg	the last profile can't be removed	the last profile can't be removed
+@msg	Resume before switching the profile	Resume before switching the profile
 @msg	update checks are off in this session (--no-prefs, a scripted run or a test)	update checks are off in this session (--no-prefs, a scripted run or a test)
 @msg	there are already {count} dock layouts; remove one first	there are already {count} dock layouts; remove one first
 @msg	a name needs 1 to 100 characters	a name needs 1 to 100 characters
@@ -699,3 +824,67 @@ menu	Transform	Transform
 @msg	Speech model {model} could not be downloaded: {error}	Speech model {model} could not be downloaded: {error}
 @msg	Captions saved to {path}	Captions saved to {path}
 @msg	The captions could not be saved: {error}	The captions could not be saved: {error}
+@msg	The scenes could not be laid out for the new canvas: {error}	The scenes could not be laid out for the new canvas: {error}
+	Pause Program	Pause Program
+	Resume Program	Resume Program
+	Pause or Resume Program	Pause or Resume Program
+	Add Time to the Pause	Add Time to the Pause
+	Pause Status	Pause Status
+	Session Events	Session Events
+	Add a Minute to the Pause	Add a Minute to the Pause
+	Pause screen	Pause screen
+	Picture or video	Picture or video
+	Pictures and videos	Pictures and videos
+	Picture size	Picture size
+	Fit inside the canvas	Fit inside the canvas
+	Fill the canvas	Fill the canvas
+	Stretch to the canvas	Stretch to the canvas
+	Countdown	Countdown
+	0 shows no countdown	0 shows no countdown
+	Countdown text	Countdown text
+	{time} shows the time left	{time} shows the time left
+	At zero	At zero
+	Keep the pause screen	Keep the pause screen
+	Resume the program	Resume the program
+	Text at zero	Text at zero
+	Text position	Text position
+	Top left	Top left
+	Top center	Top center
+	Top right	Top right
+	Middle left	Middle left
+	Middle right	Middle right
+	Bottom left	Bottom left
+	Bottom center	Bottom center
+	Bottom right	Bottom right
+	Text size	Text size
+	% of the canvas height	% of the canvas height
+	Text color	Text color
+	Mute the program audio while paused	Mute the program audio while paused
+	PAUSED	PAUSED
+	Paused for {time}	Paused for {time}
+	Pause	Pause
+	Resume	Resume
+	Resume, {time} left	Resume, {time} left
+	Resume, paused for {time}	Resume, paused for {time}
+	Pause options	Pause options
+	Pause for 1 Minute	Pause for 1 Minute
+	Pause for 2 Minutes	Pause for 2 Minutes
+	Pause for 5 Minutes	Pause for 5 Minutes
+	Pause for 10 Minutes	Pause for 10 Minutes
+	Pause for 15 Minutes	Pause for 15 Minutes
+	Pause Without a Countdown	Pause Without a Countdown
+	Pause Screen Settings…	Pause Screen Settings…
+	+1 min	+1 min
+	Paused. Viewers see the pause screen.	Paused. Viewers see the pause screen.
+	Paused. Viewers see the pause screen. Back in {time}.	Paused. Viewers see the pause screen. Back in {time}.
+	Paused. Viewers see the pause screen. The countdown ended.	Paused. Viewers see the pause screen. The countdown ended.
+	Paused for {time}. Viewers see the pause screen.	Paused for {time}. Viewers see the pause screen.
+	The program resumed	The program resumed
+@msg	The program is paused	The program is paused
+@msg	The program resumed	The program resumed
+@msg	The countdown ended	The countdown ended
+@msg	The pause screen's media could not be shown: {error}	The pause screen's media could not be shown: {error}
+@msg	The pause screen's countdown could not be shown: {error}	The pause screen's countdown could not be shown: {error}
+@msg	the countdown text needs {time} where the remaining time goes	the countdown text needs {time} where the remaining time goes
+@msg	the countdown text holds {time} more than once	the countdown text holds {time} more than once
+@msg	the countdown text is longer than 200 characters	the countdown text is longer than 200 characters

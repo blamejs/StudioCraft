@@ -37,6 +37,32 @@ fn a_stream_reads_its_destinations_or_one_server() {
 }
 
 #[test]
+fn out_of_range_settings_are_refused() {
+    assert_eq!(stream_reconnect(&Settings::new()), Ok(ReconnectSettings::default()), "no settings are the defaults");
+    let some = Settings::new().with("reconnect", serde_json::json!({ "max_tries": 4 }));
+    assert_eq!(stream_reconnect(&some), Ok(ReconnectSettings { max_tries: 4, ..ReconnectSettings::default() }));
+    let all = serde_json::json!({ "enabled": false, "first_delay_s": 60, "max_delay_s": 600, "max_tries": 100 });
+    let want = ReconnectSettings { enabled: false, first_delay_s: 60, max_delay_s: 600, max_tries: 100 };
+    assert_eq!(stream_reconnect(&Settings::new().with("reconnect", all)), Ok(want));
+    for (bad, says) in [
+        (serde_json::json!([]), "not an object"),
+        (serde_json::json!({ "enabled": "yes" }), "enabled"),
+        (serde_json::json!({ "first_delay_s": 0 }), "first reconnect wait"),
+        (serde_json::json!({ "first_delay_s": 61, "max_delay_s": 100 }), "first reconnect wait"),
+        (serde_json::json!({ "first_delay_s": 1.5 }), "first_delay_s"),
+        (serde_json::json!({ "max_delay_s": 1 }), "longest reconnect wait"),
+        (serde_json::json!({ "max_delay_s": 601 }), "longest reconnect wait"),
+        (serde_json::json!({ "max_tries": -1 }), "max_tries"),
+        (serde_json::json!({ "max_tries": 4_294_967_296_u64 }), "max_tries"),
+        (serde_json::json!({ "max_tries": 101 }), "reconnect tries"),
+        (serde_json::json!({ "max_tries": null }), "max_tries"),
+    ] {
+        let Err(e) = stream_reconnect(&Settings::new().with("reconnect", bad.clone())) else { panic!("{bad} was taken") };
+        assert!(e.to_string().contains(says), "{bad}: {e}");
+    }
+}
+
+#[test]
 fn a_stream_needs_an_h264_encoder() {
     use studiocraft_plugin::Encoder;
     let streamable: Vec<&str> = encoders::all().iter().filter(|e| e.streams()).map(|e| e.id()).collect();
@@ -231,14 +257,16 @@ fn the_built_in_encoders_are_listed_after_the_ffmpeg_ones() {
         "h264",
         "nvenc_native_h264",
         "nvenc_native_hevc",
+        "nvenc_native_av1",
         "mf_native_h264",
         "mf_native_hevc",
+        "mf_native_av1",
         "vt_native_h264",
         "vt_native_hevc",
         "vaapi_native_h264",
         "vaapi_native_hevc",
     ];
-    assert_eq!(ids[ids.len().saturating_sub(10)..], [&["hardware"][..], &built_in[..]].concat(), "{ids:?}");
+    assert_eq!(ids[ids.len().saturating_sub(12)..], [&["hardware"][..], &built_in[..]].concat(), "{ids:?}");
     for id in built_in {
         assert!(reg.encoder(id).unwrap().ffmpeg().is_none(), "{id}");
     }

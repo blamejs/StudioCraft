@@ -6,6 +6,13 @@ fn app() -> StudioApp {
     StudioApp::boot(Store::memory(), None, Vec::new())
 }
 
+/// Waits until `source` has published its first content, so its size is known.
+fn wait_shown(a: &StudioApp, source: SourceId) {
+    let (tx, rx) = std::sync::mpsc::sync_channel(1);
+    assert!(a.studio().notify_source_shown(source, tx), "the source is running");
+    rx.recv().unwrap();
+}
+
 fn frame(app: &mut StudioApp, ctx: &egui::Context, events: Vec<Event>) {
     let raw = RawInput { events, screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1280.0, 800.0))), ..RawInput::default() };
     app.before_input(ctx);
@@ -490,6 +497,7 @@ fn a_new_graphics_adapter_choice_is_saved_and_forgets_the_old_losses() {
             check_updates: w.check_updates,
             system_title_bar: w.system_title_bar,
             graphics_adapter: choice,
+            canvas_display: None,
         })
     };
     // the same choice keeps the losses
@@ -1100,13 +1108,13 @@ fn the_output_bar_fits_the_menu_row_at_each_window_size() {
         }
         let parts = bar_parts(&a, &ctx);
         let names: Vec<&str> = parts.iter().map(|(n, _)| n.as_str()).collect();
-        for want in ["menus", "mode", "record", "stream"] {
+        for want in ["menus", "mode", "record", "stream", "pause", "pause_menu"] {
             assert!(names.contains(&want), "{w}: {want} missing from {names:?}");
         }
         assert!(names.contains(&"transition") || names.contains(&"transition_overflow"), "{w}: {names:?}");
         for (name, [l, t, r, b]) in &parts {
             assert!(*l >= 0.0 && *r <= w + 0.5 && *t >= 0.0 && *b <= 32.5, "{w}: {name} at {l},{t},{r},{b} is cut off");
-            if name == "record" || name == "stream" {
+            if ["record", "stream", "pause", "pause_menu"].contains(&name.as_str()) {
                 assert_eq!(b - t, 24.0, "{w}: {name} is the standard 24 point control height");
                 assert!((t - 4.0).abs() <= 0.5, "{w}: {name} is centered on the row, 4 points below the top, at {t}");
             }
@@ -1119,12 +1127,18 @@ fn the_output_bar_fits_the_menu_row_at_each_window_size() {
             let ((a_name, a), (b_name, b)) = (&pair[0], &pair[1]);
             assert!(a[2] <= b[0] + 0.5, "{w}: {a_name} ends at {} after {b_name} starts at {}", a[2], b[0]);
         }
-        // The title bar keeps its content as far from the end edge as from the start edge, and Go
-        // Live keeps the output bar's 8 point margin inside that.
-        let stream = parts.iter().find(|(n, _)| n == "stream").map(|(_, r)| r[2]).unwrap_or(0.0);
+        // The title bar keeps its content as far from the end edge as from the start edge, and the
+        // Pause arrow keeps the output bar's 8 point margin inside that.
+        let end = |part: &str| parts.iter().find(|(n, _)| n == part).map(|(_, r)| (r[0], r[2])).unwrap_or_default();
+        let (stream, (face_start, face_end), (arrow_start, arrow_end)) = (end("stream").1, end("pause"), end("pause_menu"));
         let inset = parts.iter().find(|(n, _)| n == "menus").map(|(_, r)| r[0]).unwrap_or(f32::NAN);
         assert!(inset > 0.0, "{w}: the menus start inside the bar, at {inset}");
-        assert!((w - stream - output_bar::MARGIN - inset).abs() <= 1.0, "{w}: Go Live ends {inset} + 8 points from the right edge, at {stream}");
+        assert!((face_start - stream - 8.0).abs() <= 1.0, "{w}: Pause starts 8 points after Go Live, at {face_start}");
+        assert!((arrow_start - face_end).abs() <= 0.5, "{w}: the arrow is joined to the Pause face");
+        assert!(
+            (w - arrow_end - output_bar::MARGIN - inset).abs() <= 1.0,
+            "{w}: the Pause arrow ends {inset} + 8 points from the right edge, at {arrow_end}"
+        );
     }
 }
 
@@ -1137,7 +1151,7 @@ fn the_docks_menu_shows_and_hides_the_output_bar_groups() {
     assert_eq!(run(&mut a, &ctx, "dock.transitions", json!({})).unwrap(), json!({"on": false}));
     frame(&mut a, &ctx, vec![]);
     assert_eq!(a.ui_inspect(&ctx)["output_bar"]["transitions"], json!("hidden"));
-    assert_eq!(names(&a), ["menus", "mode", "record", "stream"]);
+    assert_eq!(names(&a), ["menus", "mode", "record", "stream", "pause", "pause_menu"]);
     assert_eq!(run(&mut a, &ctx, "dock.controls", json!({})).unwrap(), json!({"on": false}));
     frame(&mut a, &ctx, vec![]);
     assert_eq!(names(&a), ["menus"]);
@@ -1958,10 +1972,7 @@ fn selection_commands_need_a_selection() {
     let item = ItemId(r["item"].as_u64().unwrap());
     assert_eq!(a.hud()["ui"]["selected_item"], json!(item));
     let source = a.studio().collection().scenes[0].items[0].source;
-    let until = Instant::now() + Duration::from_secs(5);
-    while a.studio().source_size(source).is_none() && Instant::now() < until {
-        std::thread::sleep(Duration::from_millis(10));
-    }
+    wait_shown(&a, source);
     run(&mut a, &ctx, "selection.rotate_cw", json!({})).unwrap_or_else(|e| panic!("{e}"));
     let rot = |a: &StudioApp| a.studio().collection().scenes[0].items[0].transform.rotation;
     assert_eq!(rot(&a), 90.0);
@@ -2447,6 +2458,7 @@ fn frame_on_display(app: &mut StudioApp, ctx: &egui::Context, points: egui::Vec2
 #[test]
 fn the_canvas_takes_the_size_of_the_display_the_window_is_on() {
     let mut a = app();
+    a.displays = follow::Watch::new(Arc::new(Vec::new));
     let ctx = crate::test_context();
     frame(&mut a, &ctx, vec![]);
     let e = run(&mut a, &ctx, "video.canvas_from_display", json!({})).unwrap_err();
@@ -2456,19 +2468,30 @@ fn the_canvas_takes_the_size_of_the_display_the_window_is_on() {
     frame_on_display(&mut a, &ctx, egui::vec2(1512.0, 982.0), 2.0);
     a.open_settings(crate::settings::Tab::Video);
     let r = run(&mut a, &ctx, "video.canvas_from_display", json!({})).unwrap();
-    assert_eq!(r, json!({"width": 3024, "height": 1964, "changed": true}));
+    assert_eq!(
+        r,
+        json!({"width": 3024, "height": 1964, "output": {"width": 3024, "height": 1964}, "changed": true, "follows": null}),
+        "no listed display has its size"
+    );
     assert_eq!(a.studio().canvas(), (3024, 1964));
-    assert_eq!(a.studio().profile().video.output_width, 1920, "the output size stays");
+    let v = a.studio().profile().video;
+    assert_eq!((v.output_width, v.output_height), (3024, 1964), "an output at 100% of the canvas follows it");
     let saved = a.store().load_profile(DEFAULT_NAME).unwrap();
     assert_eq!((saved.video.base_width, saved.video.base_height), (3024, 1964), "the profile is saved");
     let draft = &a.settings.as_ref().unwrap().draft.video;
     assert_eq!((draft.base_width, draft.base_height), (3024, 1964), "the open Settings window follows");
+    assert_eq!((draft.output_width, draft.output_height), (3024, 1964));
 
     // The same size again changes nothing, but an edited Settings draft follows it.
     a.settings.as_mut().unwrap().draft.video.base_width = 1280;
     let r = run(&mut a, &ctx, "video.canvas_from_display", json!({})).unwrap();
     assert_eq!(r["changed"], json!(false));
     assert_eq!(a.settings.as_ref().unwrap().draft.video.base_width, 3024);
+    // An output size typed into the draft and not yet applied stays.
+    a.settings.as_mut().unwrap().draft.video.output_width = 1000;
+    run(&mut a, &ctx, "video.canvas_from_display", json!({})).unwrap();
+    let draft = &a.settings.as_ref().unwrap().draft.video;
+    assert_eq!((draft.output_width, draft.output_height), (1000, 1964), "the unsaved output size stays");
     let listed = run(&mut a, &ctx, "video.displays", json!({})).unwrap();
     assert_eq!(listed["window"], json!({"width": 3024, "height": 1964}));
     assert!(listed["displays"].is_array());
@@ -2486,6 +2509,39 @@ fn the_canvas_takes_the_size_of_the_display_the_window_is_on() {
 }
 
 #[test]
+fn a_filled_source_and_a_scaled_output_follow_a_new_canvas() {
+    let mut a = app();
+    let ctx = crate::test_context();
+    run(&mut a, &ctx, "source.add", json!({"kind": "color", "name": "Back", "settings": {"width": 400, "height": 300}})).unwrap();
+    let source = a.studio().collection().scenes[0].items[0].source;
+    wait_shown(&a, source);
+    let native = a.studio().source_size(source).unwrap();
+    assert_eq!(native, (400, 300));
+    let at = |a: &StudioApp| a.studio().collection().scenes[0].items[0].transform;
+    run(&mut a, &ctx, "selection.fill", json!({})).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(at(&a), Transform::fill(native, (1920, 1080)));
+    assert_eq!(a.studio().collection().scenes[0].items[0].fit, Some(studiocraft_model::FitMode::Fill), "the item keeps its mode");
+    let mut p = a.studio().profile().clone();
+    (p.video.output_width, p.video.output_height) = (960, 540);
+    a.studio.set_profile(p).unwrap();
+
+    frame_on_display(&mut a, &ctx, egui::vec2(1080.0, 1920.0), 1.0);
+    let r = run(&mut a, &ctx, "video.canvas_from_display", json!({})).unwrap();
+    assert_eq!(r["output"], json!({"width": 540, "height": 960}), "an output at 50% stays at 50%");
+    assert_eq!(at(&a), Transform::fill(native, (1080, 1920)), "a filled source fills the new canvas");
+    run(&mut a, &ctx, "edit.undo", json!({})).unwrap();
+    assert_eq!(at(&a), Transform::fill(native, (1920, 1080)), "one undo step takes the layout back");
+
+    // A typed output size that is no share of the canvas stays.
+    let mut p = a.studio().profile().clone();
+    (p.video.output_width, p.video.output_height) = (1000, 500);
+    a.studio.set_profile(p).unwrap();
+    frame_on_display(&mut a, &ctx, egui::vec2(1280.0, 720.0), 1.0);
+    let r = run(&mut a, &ctx, "video.canvas_from_display", json!({})).unwrap();
+    assert_eq!(r["output"], json!({"width": 1000, "height": 500}));
+}
+
+#[test]
 fn a_canvas_size_that_cant_be_saved_is_an_error() {
     let dir = temp_dir("canvas-save-fails");
     std::fs::create_dir_all(&dir).unwrap();
@@ -2496,17 +2552,108 @@ fn a_canvas_size_that_cant_be_saved_is_an_error() {
     let _ = std::fs::remove_dir_all(&profiles);
     std::fs::write(&profiles, b"").unwrap();
     let ctx = crate::test_context();
+    run(&mut a, &ctx, "source.add", json!({"kind": "image", "name": "Logo", "transform": {"position": {"x": 960.0, "y": 540.0}}})).unwrap();
+    a.studio.mark_saved();
+    let old = a.studio().canvas();
     frame_on_display(&mut a, &ctx, egui::vec2(1280.0, 720.0), 1.0);
     let r = run(&mut a, &ctx, "video.canvas_from_display", json!({}));
-    // Once the profiles folder can be written, the same size again is saved.
+    // The old canvas and layout come back, and the scene collection has nothing new to save.
+    let back = (a.studio().canvas(), a.studio().collection().scenes[0].items[0].transform.position, a.studio().engine().is_dirty());
+    // Once the profiles folder can be written, the size is set and saved.
     std::fs::remove_file(&profiles).unwrap();
     let again = run(&mut a, &ctx, "video.canvas_from_display", json!({}));
     let saved = a.store().load_profile(DEFAULT_NAME).map(|p| (p.video.base_width, p.video.base_height));
     let _ = std::fs::remove_dir_all(&dir);
     let e = r.unwrap_err();
     assert!(e.contains("could not be saved"), "{e}");
-    assert_eq!(again.unwrap()["changed"], json!(false));
+    assert_eq!(back, (old, Vec2::new(960.0, 540.0), false));
+    assert_eq!(again.unwrap()["changed"], json!(true));
     assert_eq!(saved, Ok((1280, 720)));
+}
+
+#[test]
+fn a_display_size_the_canvas_had_follows_the_display_only_once_saved() {
+    let dir = temp_dir("follow-same-size-save-fails");
+    std::fs::create_dir_all(&dir).unwrap();
+    let (store, _) = Store::open(craft_settings::Location::Dir(dir.clone()));
+    let mut a = StudioApp::boot(store, None, Vec::new());
+    let old = a.studio().canvas();
+    listed(&mut a, vec![screen("2", "Side", old.0, old.1)]);
+    let profiles = dir.join("profiles");
+    let _ = std::fs::remove_dir_all(&profiles);
+    std::fs::write(&profiles, b"").unwrap();
+    let ctx = crate::test_context();
+    let r = run(&mut a, &ctx, "video.canvas_from_display", json!({"display": "2"}));
+    let followed = a.followed_display().is_some();
+    std::fs::remove_file(&profiles).unwrap();
+    let again = run(&mut a, &ctx, "video.canvas_from_display", json!({"display": "2"}));
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(r.unwrap_err().contains("could not be saved"));
+    assert!(!followed, "a failed save follows no display");
+    assert_eq!(again.unwrap()["follows"], json!("2"));
+}
+
+#[test]
+fn a_display_picked_in_settings_is_not_followed_when_the_profile_cant_be_saved() {
+    let dir = temp_dir("settings-follow-save-fails");
+    std::fs::create_dir_all(&dir).unwrap();
+    let (store, _) = Store::open(craft_settings::Location::Dir(dir.clone()));
+    let mut a = StudioApp::boot(store, None, Vec::new());
+    let old = a.studio().canvas();
+    let profiles = dir.join("profiles");
+    let _ = std::fs::remove_dir_all(&profiles);
+    std::fs::write(&profiles, b"").unwrap();
+    a.open_settings(crate::settings::Tab::Video);
+    let w = a.settings.as_ref().unwrap();
+    let apply = crate::settings::Apply {
+        profile: w.draft.clone(),
+        overrides: a.keymap.overrides().clone(),
+        language: w.language.clone(),
+        check_updates: w.check_updates,
+        system_title_bar: w.system_title_bar,
+        graphics_adapter: w.graphics_adapter.clone(),
+        canvas_display: Some(Some(screen("2", "Side", old.0, old.1))),
+    };
+    a.apply_settings(apply);
+    let followed = a.followed_display().is_some();
+    let _ = std::fs::remove_file(&profiles);
+    let _ = std::fs::remove_dir_all(&dir);
+    assert_eq!(a.studio().canvas(), old);
+    assert!(!followed, "a failed save follows no display");
+}
+
+#[test]
+fn a_canvas_size_from_settings_that_cant_be_saved_is_taken_back() {
+    let dir = temp_dir("settings-canvas-save-fails");
+    std::fs::create_dir_all(&dir).unwrap();
+    let (store, _) = Store::open(craft_settings::Location::Dir(dir.clone()));
+    let mut a = StudioApp::boot(store, None, Vec::new());
+    let profiles = dir.join("profiles");
+    let _ = std::fs::remove_dir_all(&profiles);
+    std::fs::write(&profiles, b"").unwrap();
+    let ctx = crate::test_context();
+    run(&mut a, &ctx, "source.add", json!({"kind": "image", "name": "Logo", "transform": {"position": {"x": 960.0, "y": 540.0}}})).unwrap();
+    a.studio.mark_saved();
+    a.open_settings(crate::settings::Tab::Video);
+    let w = a.settings.as_ref().unwrap();
+    let mut profile = w.draft.clone();
+    (profile.video.base_width, profile.video.base_height) = (1280, 720);
+    let apply = crate::settings::Apply {
+        profile,
+        overrides: a.keymap.overrides().clone(),
+        language: w.language.clone(),
+        check_updates: w.check_updates,
+        system_title_bar: w.system_title_bar,
+        graphics_adapter: w.graphics_adapter.clone(),
+        canvas_display: None,
+    };
+    let took = a.apply_settings(apply);
+    let _ = std::fs::remove_file(&profiles);
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(!took, "the Settings window stays open with the edits");
+    assert_eq!(a.studio().canvas(), (1920, 1080));
+    assert_eq!(a.studio().collection().scenes[0].items[0].transform.position, Vec2::new(960.0, 540.0));
+    assert!(!a.studio().engine().is_dirty(), "the scene collection has nothing new to save");
 }
 
 #[test]
@@ -2521,6 +2668,364 @@ fn the_canvas_from_a_display_refuses_bad_parameters() {
     let e = run(&mut a, &ctx, "video.canvas_from_display", json!({"display": "no such display \u{1}/.."})).unwrap_err();
     assert!(e.contains("there is no display"), "{e}");
     assert_eq!(a.studio().canvas(), (1920, 1080));
+}
+
+fn screen(id: &str, name: &str, width: u32, height: u32) -> DisplayInfo {
+    DisplayInfo { id: id.into(), name: name.into(), width, height, primary: false }
+}
+
+/// The app lists `list`, which the test can change.
+fn listed(a: &mut StudioApp, list: Vec<DisplayInfo>) -> Arc<std::sync::Mutex<Vec<DisplayInfo>>> {
+    let shared = Arc::new(std::sync::Mutex::new(list));
+    let theirs = shared.clone();
+    a.displays = follow::Watch::new(Arc::new(move || theirs.lock().unwrap().clone()));
+    shared
+}
+
+/// Let the displays be looked at, at `now`, and wait until that look has ended.
+fn look(a: &mut StudioApp, ctx: &egui::Context, now: Instant) {
+    a.follow_displays(ctx, now);
+    while a.displays.looking() {
+        std::thread::yield_now();
+        a.follow_displays(ctx, now);
+    }
+}
+
+/// The display the canvas of the profile in use follows.
+fn canvas_link(a: &StudioApp) -> (String, String, u32, u32) {
+    a.followed_display().map_or_else(Default::default, |l| (l.profile.clone(), l.id.clone(), l.width, l.height))
+}
+
+#[test]
+fn the_canvas_follows_the_display_it_came_from() {
+    let mut a = app();
+    let shown = listed(&mut a, vec![screen("1", "Main", 1920, 1080), screen("2", "Side", 2560, 1440)]);
+    let ctx = crate::test_context();
+    let r = run(&mut a, &ctx, "video.canvas_from_display", json!({"display": "2"})).unwrap();
+    assert_eq!(r["follows"], json!("2"));
+    assert_eq!(canvas_link(&a), (DEFAULT_NAME.to_string(), "2".to_string(), 2560, 1440));
+    let mut t = Instant::now();
+
+    // The display's resolution changes.
+    shown.lock().unwrap()[1] = screen("2", "Side", 3840, 2160);
+    look(&mut a, &ctx, t);
+    assert_eq!(a.studio().canvas(), (3840, 2160));
+    let saved = a.store().load_profile(DEFAULT_NAME).unwrap();
+    assert_eq!((saved.video.base_width, saved.video.base_height), (3840, 2160), "the profile is saved");
+    assert_eq!(canvas_link(&a).2, 3840, "and still follows the display");
+
+    // Another display changing does nothing.
+    shown.lock().unwrap()[0] = screen("1", "Main", 1280, 720);
+    t += follow::LOOK;
+    look(&mut a, &ctx, t);
+    assert_eq!(a.studio().canvas(), (3840, 2160));
+
+    // A display that is not connected is followed again when it is, under a new id.
+    shown.lock().unwrap().pop();
+    t += follow::LOOK;
+    look(&mut a, &ctx, t);
+    assert_eq!(a.studio().canvas(), (3840, 2160));
+    assert_eq!(canvas_link(&a).1, "2");
+    shown.lock().unwrap().push(screen("9", "Side", 1920, 1200));
+    t += follow::LOOK;
+    look(&mut a, &ctx, t);
+    assert_eq!(a.studio().canvas(), (1920, 1200));
+    assert_eq!(canvas_link(&a), (DEFAULT_NAME.to_string(), "9".to_string(), 1920, 1200));
+
+    // An odd side is rounded down to an even one, and a display too large for a canvas is not
+    // followed until it fits again.
+    shown.lock().unwrap()[1] = screen("9", "Side", 1281, 721);
+    t += follow::LOOK;
+    look(&mut a, &ctx, t);
+    assert_eq!(a.studio().canvas(), (1280, 720));
+    shown.lock().unwrap()[1] = screen("9", "Side", 10_000, 5000);
+    t += follow::LOOK;
+    look(&mut a, &ctx, t);
+    assert_eq!(a.studio().canvas(), (1280, 720));
+    shown.lock().unwrap()[1] = screen("9", "Side", 2560, 1600);
+    t += follow::LOOK;
+    look(&mut a, &ctx, t);
+    assert_eq!(a.studio().canvas(), (2560, 1600));
+
+    // The displays are not looked at before it is time.
+    shown.lock().unwrap()[1] = screen("9", "Side", 1920, 1080);
+    a.follow_displays(&ctx, t + follow::LOOK - Duration::from_millis(1));
+    assert!(!a.displays.looking());
+}
+
+#[test]
+fn an_open_settings_window_shows_the_followed_size_unless_another_was_typed() {
+    let mut a = app();
+    let shown = listed(&mut a, vec![screen("2", "Side", 2560, 1440)]);
+    let ctx = crate::test_context();
+    run(&mut a, &ctx, "video.canvas_from_display", json!({"display": "2"})).unwrap();
+    a.open_settings(crate::settings::Tab::Video);
+    let draft = |a: &StudioApp| {
+        let v = &a.settings.as_ref().unwrap().draft.video;
+        (v.base_width, v.base_height)
+    };
+    shown.lock().unwrap()[0] = screen("2", "Side", 3840, 2160);
+    let t = Instant::now();
+    look(&mut a, &ctx, t);
+    assert_eq!(a.studio().canvas(), (3840, 2160));
+    assert_eq!(draft(&a), (3840, 2160));
+    // A size typed and not yet applied stays.
+    let v = &mut a.settings.as_mut().unwrap().draft.video;
+    (v.base_width, v.base_height) = (1280, 720);
+    shown.lock().unwrap()[0] = screen("2", "Side", 1920, 1080);
+    look(&mut a, &ctx, t + follow::LOOK);
+    assert_eq!(a.studio().canvas(), (1920, 1080));
+    assert_eq!(draft(&a), (1280, 720));
+}
+
+#[test]
+fn a_followed_size_that_cant_be_saved_is_saved_at_a_later_look() {
+    let dir = temp_dir("follow-save-fails");
+    std::fs::create_dir_all(&dir).unwrap();
+    let (store, _) = Store::open(craft_settings::Location::Dir(dir.clone()));
+    let mut a = StudioApp::boot(store, None, Vec::new());
+    let shown = listed(&mut a, vec![screen("2", "Side", 2560, 1440)]);
+    let ctx = crate::test_context();
+    run(&mut a, &ctx, "video.canvas_from_display", json!({"display": "2"})).unwrap();
+    // A file where the profiles folder goes makes the save fail.
+    let profiles = dir.join("profiles");
+    let _ = std::fs::remove_dir_all(&profiles);
+    std::fs::write(&profiles, b"").unwrap();
+    shown.lock().unwrap()[0] = screen("2", "Side", 3840, 2160);
+    let mut t = Instant::now();
+    let before = a.notices.len();
+    look(&mut a, &ctx, t);
+    // The new size is taken back.
+    let canvas = a.studio().canvas();
+    let told = a.notices.len() - before;
+    // The failure is shown once, not at every look.
+    t += follow::LOOK;
+    look(&mut a, &ctx, t);
+    let told_again = a.notices.len() - before;
+    // Once the profiles folder can be written, the next look takes and saves the size.
+    std::fs::remove_file(&profiles).unwrap();
+    t += follow::LOOK;
+    look(&mut a, &ctx, t);
+    let saved = a.store().load_profile(DEFAULT_NAME).map(|p| (p.video.base_width, p.video.base_height));
+    let _ = std::fs::remove_dir_all(&dir);
+    assert_eq!(canvas, (2560, 1440));
+    assert_eq!(told, 1);
+    assert_eq!(told_again, 1);
+    assert_eq!(a.studio().canvas(), (3840, 2160));
+    assert_eq!(saved, Ok((3840, 2160)));
+    assert_eq!(canvas_link(&a).2, 3840);
+}
+
+#[test]
+fn a_followed_size_that_cant_be_saved_is_shown_again_after_a_save_worked() {
+    let dir = temp_dir("follow-save-fails-twice");
+    std::fs::create_dir_all(&dir).unwrap();
+    let (store, _) = Store::open(craft_settings::Location::Dir(dir.clone()));
+    let mut a = StudioApp::boot(store, None, Vec::new());
+    let shown = listed(&mut a, vec![screen("2", "Side", 2560, 1440)]);
+    let ctx = crate::test_context();
+    run(&mut a, &ctx, "video.canvas_from_display", json!({"display": "2"})).unwrap();
+    let profiles = dir.join("profiles");
+    let _ = std::fs::remove_dir_all(&profiles);
+    std::fs::write(&profiles, b"").unwrap();
+    shown.lock().unwrap()[0] = screen("2", "Side", 3840, 2160);
+    let mut t = Instant::now();
+    let before = a.notices.len();
+    look(&mut a, &ctx, t);
+    // The profile is saved another way, and then the size still can't be saved.
+    std::fs::remove_file(&profiles).unwrap();
+    let saved_all = a.save_all();
+    std::fs::remove_dir_all(&profiles).unwrap();
+    std::fs::write(&profiles, b"").unwrap();
+    t += follow::LOOK;
+    look(&mut a, &ctx, t);
+    let canvas = a.studio().canvas();
+    let told = a.notices.len() - before;
+    let _ = std::fs::remove_file(&profiles);
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(saved_all);
+    assert_eq!(canvas, (2560, 1440));
+    assert_eq!(told, 2);
+}
+
+#[test]
+fn each_followed_size_that_cant_be_saved_is_shown() {
+    let dir = temp_dir("follow-save-fails-new-size");
+    std::fs::create_dir_all(&dir).unwrap();
+    let (store, _) = Store::open(craft_settings::Location::Dir(dir.clone()));
+    let mut a = StudioApp::boot(store, None, Vec::new());
+    let shown = listed(&mut a, vec![screen("2", "Side", 2560, 1440)]);
+    let ctx = crate::test_context();
+    run(&mut a, &ctx, "video.canvas_from_display", json!({"display": "2"})).unwrap();
+    let profiles = dir.join("profiles");
+    let _ = std::fs::remove_dir_all(&profiles);
+    std::fs::write(&profiles, b"").unwrap();
+    shown.lock().unwrap()[0] = screen("2", "Side", 3840, 2160);
+    let mut t = Instant::now();
+    let before = a.notices.len();
+    look(&mut a, &ctx, t);
+    // The display changes again while the profile still can't be saved.
+    shown.lock().unwrap()[0] = screen("2", "Side", 1920, 1080);
+    t += follow::LOOK;
+    look(&mut a, &ctx, t);
+    let canvas = a.studio().canvas();
+    let told = a.notices.len() - before;
+    let _ = std::fs::remove_file(&profiles);
+    let _ = std::fs::remove_dir_all(&dir);
+    assert_eq!(canvas, (2560, 1440));
+    assert_eq!(told, 2);
+}
+
+#[test]
+fn a_canvas_set_another_way_follows_no_display() {
+    let mut a = app();
+    let shown = listed(&mut a, vec![screen("2", "Side", 2560, 1440)]);
+    let ctx = crate::test_context();
+    run(&mut a, &ctx, "video.canvas_from_display", json!({"display": "2"})).unwrap();
+    let mut p = a.studio().profile().clone();
+    (p.video.base_width, p.video.base_height) = (1280, 720);
+    a.studio.set_profile(p).unwrap();
+    let t = Instant::now();
+    look(&mut a, &ctx, t);
+    assert_eq!(canvas_link(&a), (String::new(), String::new(), 0, 0));
+    shown.lock().unwrap()[0] = screen("2", "Side", 3840, 2160);
+    look(&mut a, &ctx, t + follow::LOOK);
+    assert_eq!(a.studio().canvas(), (1280, 720));
+}
+
+#[test]
+fn the_display_the_window_is_on_is_followed_when_its_size_tells_it_apart() {
+    let mut a = app();
+    let shown = listed(&mut a, vec![screen("1", "Main", 1920, 1080), screen("2", "Side", 2560, 1440)]);
+    let ctx = crate::test_context();
+    frame_on_display(&mut a, &ctx, egui::vec2(1280.0, 720.0), 2.0);
+    let r = run(&mut a, &ctx, "video.canvas_from_display", json!({})).unwrap();
+    assert_eq!(r["follows"], json!("2"));
+    // Two displays of that size can't be told apart.
+    shown.lock().unwrap()[0] = screen("1", "Main", 2560, 1440);
+    let r = run(&mut a, &ctx, "video.canvas_from_display", json!({})).unwrap();
+    assert_eq!(r["follows"], json!(null));
+    assert_eq!(canvas_link(&a).0, "");
+}
+
+#[test]
+fn only_the_profile_whose_canvas_came_from_a_display_follows_it() {
+    let mut a = app();
+    let shown = listed(&mut a, vec![screen("1", "Main", 1280, 720), screen("2", "Side", 2560, 1440)]);
+    let ctx = crate::test_context();
+    run(&mut a, &ctx, "video.canvas_from_display", json!({"display": "2"})).unwrap();
+    a.named(Named::RenameProfile, "Show").unwrap();
+    assert_eq!(canvas_link(&a).0, "Show", "a renamed profile still follows");
+    a.named(Named::DuplicateProfile, "Show 2").unwrap();
+    assert_eq!(canvas_link(&a), ("Show 2".to_string(), "2".to_string(), 2560, 1440), "and so does a copy");
+    a.switch_profile("Show").unwrap();
+    a.named(Named::NewProfile, "Other").unwrap();
+    assert_eq!(canvas_link(&a).0, "", "the new profile's canvas came from no display");
+    shown.lock().unwrap()[1] = screen("2", "Side", 3840, 2160);
+    let mut t = Instant::now();
+    look(&mut a, &ctx, t);
+    assert_eq!(a.studio().canvas(), (1920, 1080));
+    // Each profile keeps the display its canvas follows.
+    run(&mut a, &ctx, "video.canvas_from_display", json!({"display": "1"})).unwrap();
+    a.switch_profile("Show").unwrap();
+    t += follow::LOOK;
+    look(&mut a, &ctx, t);
+    assert_eq!(a.studio().canvas(), (3840, 2160));
+    shown.lock().unwrap()[0] = screen("1", "Main", 1920, 1200);
+    a.switch_profile("Other").unwrap();
+    t += follow::LOOK;
+    look(&mut a, &ctx, t);
+    assert_eq!(a.studio().canvas(), (1920, 1200));
+    // A removed profile's display is forgotten.
+    a.remove_profile().unwrap();
+    assert!(a.store.prefs().canvas_display("Other").is_none());
+    assert_eq!(canvas_link(&a).0, a.studio().profile().name, "the next profile still follows");
+}
+
+#[test]
+fn the_displays_canvases_follow_are_kept_within_bounds() {
+    let mut p = store::Prefs::default();
+    for n in 0..store::MAX_CANVAS_DISPLAYS + 3 {
+        p.set_canvas_display(store::CanvasDisplay { profile: format!("P{n}"), ..Default::default() });
+    }
+    assert_eq!(p.canvas_displays.len(), store::MAX_CANVAS_DISPLAYS);
+    assert!(p.canvas_display("P0").is_none(), "the earliest is forgotten first");
+    p.set_canvas_display(store::CanvasDisplay { profile: "P10".into(), id: "4".into(), ..Default::default() });
+    assert_eq!(p.canvas_displays.len(), store::MAX_CANVAS_DISPLAYS, "a profile has one");
+    assert_eq!(p.canvas_display("P10").map(|l| l.id.as_str()), Some("4"));
+    let back: store::Prefs = serde_json::from_value(serde_json::to_value(&p).unwrap()).unwrap();
+    assert_eq!(back.canvas_displays, p.canvas_displays);
+    let many: Vec<Value> = (0..store::MAX_CANVAS_DISPLAYS + 5).map(|n| json!({"profile": format!("Q{n}")})).collect();
+    let read: store::Prefs = serde_json::from_value(json!({"canvas_displays": many})).unwrap();
+    assert_eq!(read.canvas_displays.len(), store::MAX_CANVAS_DISPLAYS, "a longer list is cut");
+}
+
+#[test]
+fn a_display_picked_in_settings_is_followed_once_applied() {
+    let mut a = app();
+    listed(&mut a, vec![screen("2", "Side", 2560, 1440)]);
+    let apply = |a: &mut StudioApp, size: (u32, u32), display: Option<Option<DisplayInfo>>| {
+        let w = a.settings.as_ref().unwrap();
+        let mut profile = w.draft.clone();
+        (profile.video.base_width, profile.video.base_height) = size;
+        a.apply_settings(crate::settings::Apply {
+            profile,
+            overrides: a.keymap.overrides().clone(),
+            language: w.language.clone(),
+            check_updates: w.check_updates,
+            system_title_bar: w.system_title_bar,
+            graphics_adapter: w.graphics_adapter.clone(),
+            canvas_display: display,
+        })
+    };
+    a.open_settings(crate::settings::Tab::Video);
+    // The size was edited after the pick.
+    assert!(apply(&mut a, (2000, 1440), Some(Some(screen("2", "Side", 2560, 1440)))));
+    assert_eq!(canvas_link(&a).0, "");
+    a.settings.as_mut().unwrap().canvas_display = Some(Some(screen("2", "Side", 2560, 1440)));
+    assert!(apply(&mut a, (2560, 1440), Some(Some(screen("2", "Side", 2560, 1440)))));
+    assert_eq!(canvas_link(&a), (DEFAULT_NAME.to_string(), "2".to_string(), 2560, 1440));
+    assert_eq!(a.settings.as_ref().unwrap().canvas_display, None, "the pick is used once");
+    // Applying other settings with nothing picked keeps it.
+    assert!(apply(&mut a, (2560, 1440), None));
+    assert_eq!(canvas_link(&a).1, "2");
+    // A pick that names no display (two displays of the window's size) ends it.
+    assert!(apply(&mut a, (2560, 1440), Some(None)));
+    assert_eq!(canvas_link(&a).0, "");
+}
+
+#[test]
+fn a_slow_display_listing_does_not_hold_up_the_window() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let mut a = app();
+    let shown = Arc::new(std::sync::Mutex::new(vec![screen("2", "Side", 2560, 1440)]));
+    let slow = Arc::new(AtomicBool::new(false));
+    let (go, wait) = std::sync::mpsc::channel::<()>();
+    let wait = std::sync::Mutex::new(wait);
+    let (theirs, slow_there) = (shown.clone(), slow.clone());
+    a.displays = follow::Watch::new(Arc::new(move || {
+        if slow_there.load(Ordering::Acquire) {
+            let _ = wait.lock().unwrap().recv();
+        }
+        theirs.lock().unwrap().clone()
+    }));
+    let ctx = crate::test_context();
+    run(&mut a, &ctx, "video.canvas_from_display", json!({"display": "2"})).unwrap();
+    slow.store(true, Ordering::Release);
+    shown.lock().unwrap()[0] = screen("2", "Side", 3840, 2160);
+    a.follow_displays(&ctx, Instant::now());
+    assert!(a.displays.looking());
+    let before = a.frames();
+    for _ in 0..20 {
+        frame(&mut a, &ctx, vec![]);
+    }
+    assert_eq!(a.frames(), before + 20, "the window keeps drawing");
+    assert!(a.displays.looking(), "while the look waits");
+    assert_eq!(a.studio().canvas(), (2560, 1440));
+    go.send(()).unwrap();
+    let t = Instant::now();
+    look(&mut a, &ctx, t);
+    assert_eq!(a.studio().canvas(), (3840, 2160));
 }
 
 #[test]
@@ -2637,4 +3142,152 @@ fn an_error_notice_stays_24_seconds_and_any_other_8() {
     a.post_notices(&ctx);
     let newest: Vec<String> = (3..=5).map(|n| format!("Notice {n}")).collect();
     assert_eq!(texts(&a, &ctx), (newest.clone(), newest));
+}
+
+#[test]
+fn pause_or_resume_pauses_the_program_and_the_status_bar_shows_the_countdown() {
+    let mut a = app();
+    let ctx = crate::test_context();
+    assert_eq!(a.item_state("pause.toggle").checked, Some(false));
+    assert!(!a.item_state("pause.extend").enabled, "there is nothing to add time to");
+    assert!(a.keymap.catalog().iter().any(|b| b.command == CommandRef::new("pause.toggle")), "Pause or Resume Program takes a shortcut");
+    run(&mut a, &ctx, "pause.toggle", json!({})).unwrap();
+    assert_eq!(a.item_state("pause.toggle").checked, Some(true));
+    assert!(a.item_state("pause.extend").enabled);
+    let left = a.studio().paused().flatten().unwrap_or(0);
+    run(&mut a, &ctx, "pause.extend", json!({"seconds": 60})).unwrap();
+    assert!(a.studio().paused().flatten().unwrap_or(0) > left, "a minute was added");
+    frame(&mut a, &ctx, vec![]);
+    run(&mut a, &ctx, "pause.toggle", json!({})).unwrap();
+    assert_eq!(a.item_state("pause.toggle").checked, Some(false));
+    frame(&mut a, &ctx, vec![]);
+}
+
+#[test]
+fn the_profile_is_not_switched_or_removed_while_the_program_is_paused() {
+    let mut a = app();
+    let ctx = crate::test_context();
+    a.named(Named::NewProfile, "Second").unwrap();
+    run(&mut a, &ctx, "pause.toggle", json!({})).unwrap();
+    let e = run(&mut a, &ctx, "profile.switch", json!({"name": DEFAULT_NAME})).unwrap_err();
+    assert_eq!(e, "Resume before switching the profile");
+    assert!(a.remove_profile().is_err(), "removing the profile switches to another");
+    for what in [Named::NewProfile, Named::DuplicateProfile] {
+        let e = a.named(what, "Third").unwrap_err();
+        assert_eq!(e.english(), "Resume before switching the profile", "{what:?}");
+    }
+    a.named(Named::RenameProfile, "Renamed").unwrap();
+    assert_eq!(a.studio().profile().name, "Renamed", "a rename keeps the open profile");
+    assert!(!a.store().profiles().contains(&"Third".to_string()), "no profile was added");
+    a.named(Named::RenameProfile, "Second").unwrap();
+    assert_eq!(a.studio().profile().name, "Second");
+    assert!(a.store().profiles().contains(&"Second".to_string()), "the profile was not removed");
+    assert!(a.studio().paused().is_some(), "the pause continues");
+    run(&mut a, &ctx, "pause.toggle", json!({})).unwrap();
+    run(&mut a, &ctx, "profile.switch", json!({"name": DEFAULT_NAME})).unwrap();
+    assert_eq!(a.studio().profile().name, DEFAULT_NAME);
+}
+
+#[test]
+fn the_pause_status_item_shows_the_time_left_and_the_time_paused() {
+    assert_eq!(pause_item(None, None), None, "nothing while not paused");
+    assert_eq!(pause_item(Some(Some(247_000)), Some(61_500)), Some(("PAUSED 4:07".into(), "Paused for 1:01".into())));
+    assert_eq!(pause_item(Some(None), Some(3_600_000)), Some(("PAUSED".into(), "Paused for 1:00:00".into())));
+}
+
+#[test]
+fn the_stream_tag_says_reconnecting_when_none_is_live() {
+    use studiocraft_plugin::DestinationCounts as C;
+    assert_eq!(stream_tag(C { live: 0, retrying: 2 }), ("RECONNECTING", None, true));
+    assert_eq!(stream_tag(C { live: 1, retrying: 0 }), ("LIVE", None, false));
+    // Some live: the tag stays LIVE and the count of those waiting follows it.
+    assert_eq!(stream_tag(C { live: 2, retrying: 1 }), ("LIVE", Some("1 reconnecting".into()), false));
+    // Connecting for the first time, with none waiting, is LIVE as before.
+    assert_eq!(stream_tag(C::default()), ("LIVE", None, false));
+}
+
+/// The File menu's items in English, with the command each runs.
+fn file_items(a: &StudioApp) -> Vec<(String, CommandRef)> {
+    let bar = a.laid_menu();
+    let Some(file) = bar.menus.iter().find(|m| m.title == "File") else { panic!("no File menu") };
+    file.children
+        .iter()
+        .filter_map(|n| match n {
+            craft_menu::Node::Item(it) => Some((it.label.clone(), it.command.clone())),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn the_file_menu_pauses_and_resumes_the_program() {
+    let mut a = app();
+    let ctx = crate::test_context();
+    let items = file_items(&a);
+    let pause = ("Pause Program".to_string(), CommandRef::new("pause.start"));
+    let resume = ("Resume Program".to_string(), CommandRef::new("pause.stop"));
+    let at = |item: &(String, CommandRef)| items.iter().position(|i| i == item);
+    let (Some(p), Some(r)) = (at(&pause), at(&resume)) else { panic!("File lacks Pause Program or Resume Program: {items:?}") };
+    assert_eq!(r, p + 1, "Resume Program follows Pause Program");
+    let extend = CommandRef::with_params("pause.extend", json!({"seconds": 60}));
+    assert_eq!(items.get(r + 1), Some(&("Add a Minute to the Pause".to_string(), extend)));
+    assert!(a.item_state("pause.start").enabled && !a.item_state("pause.stop").enabled);
+    run(&mut a, &ctx, "pause.start", json!({})).unwrap();
+    assert!(a.studio().paused().is_some());
+    assert!(!a.item_state("pause.start").enabled && a.item_state("pause.stop").enabled);
+    run(&mut a, &ctx, "pause.stop", json!({})).unwrap();
+    assert!(a.studio().paused().is_none());
+    assert!(a.item_state("pause.start").enabled && !a.item_state("pause.stop").enabled);
+}
+
+#[test]
+fn the_pause_button_pauses_and_the_banner_adds_a_minute_and_resumes() {
+    let mut a = app();
+    let ctx = crate::test_context();
+    for _ in 0..2 {
+        frame(&mut a, &ctx, vec![]);
+    }
+    assert!(a.pause_banner.buttons.is_empty(), "no banner while not paused");
+    let rect = |a: &StudioApp, part: &str| bar_parts(a, &ctx).into_iter().find(|(n, _)| n == part).map(|(_, r)| r);
+    let Some([l, t, r, b]) = rect(&a, "pause") else { panic!("no Pause button") };
+    let size = egui::vec2(1280.0, 800.0);
+    click_at(&mut a, &ctx, size, egui::pos2((l + r) / 2.0, (t + b) / 2.0));
+    assert!(a.studio().paused().is_some(), "a click on the face pauses with the profile's settings");
+    frame(&mut a, &ctx, vec![]);
+    let buttons = a.pause_banner.buttons.clone();
+    assert_eq!(buttons.len(), 2, "+1 min and Resume");
+    assert!(rect(&a, "pause_menu").is_some(), "the Pause arrow stays while paused");
+    assert!(buttons[0].top() >= 32.0, "the banner is under the menu row: {:?}", buttons[0]);
+    let left = a.studio().paused().flatten().unwrap_or(0);
+    click_at(&mut a, &ctx, size, buttons[0].center());
+    assert!(a.studio().paused().flatten().unwrap_or(0) > left + 50_000, "+1 min added a minute");
+    frame(&mut a, &ctx, vec![]);
+    let resume = a.pause_banner.buttons[1].center();
+    click_at(&mut a, &ctx, size, resume);
+    assert!(a.studio().paused().is_none(), "Resume ended the pause");
+    frame(&mut a, &ctx, vec![]);
+    assert!(a.pause_banner.buttons.is_empty(), "the banner is gone");
+}
+
+#[test]
+fn the_pause_menu_starts_a_countdown_and_opens_the_pause_screen_settings() {
+    let mut a = app();
+    let ctx = crate::test_context();
+    for (_, cmd) in crate::output_bar::pause_menu().into_iter().filter(|(_, c)| c.id == "pause.start") {
+        a.perform(&ctx, &cmd).unwrap();
+        let want = cmd.params["countdown_s"].as_u64().unwrap_or(u64::MAX) * 1000;
+        match a.studio().paused() {
+            Some(Some(left)) => assert!(left <= want && left + 2_000 >= want, "{cmd:?}: {left}"),
+            Some(None) => assert_eq!(want, 0, "{cmd:?}"),
+            None => panic!("{cmd:?} did not pause"),
+        }
+    }
+    run(&mut a, &ctx, "pause.stop", json!({})).unwrap();
+    run(&mut a, &ctx, "pause.settings", json!({})).unwrap();
+    let Some(w) = &a.settings else { panic!("Settings did not open") };
+    assert_eq!(w.tab(), Tab::Stream);
+    assert!(w.pause_focus_pending());
+    frame_at(&mut a, &ctx, egui::vec2(760.0, 480.0));
+    assert!(a.settings.as_ref().is_some_and(|w| !w.pause_focus_pending()), "the Pause screen section took the focus");
+    assert!(ctx.memory(|m| m.focused()).is_some(), "a field has the keyboard focus");
 }

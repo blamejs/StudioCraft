@@ -12,7 +12,9 @@ use studiocraft_model::{FieldKind, PathMode, Profile, SceneCollection, Settings,
 use studiocraft_render::Gpu;
 use studiocraft_studio::capture::{MAX_PNG_SIDE, png, scaled_size};
 use studiocraft_studio::files::read_collection_file;
-use studiocraft_studio::{CaptionBoard, CaptionState, OutputKind, Studio, StudioError, View, builtin_registry, default_collection, recording_folder};
+use studiocraft_studio::{
+    CaptionBoard, CaptionState, OutputKind, Studio, StudioError, View, builtin_registry, default_collection, pause_media_extensions, recording_folder,
+};
 
 use crate::backend::{Backend, McpError};
 use crate::roots::{Access, Roots, shown};
@@ -107,6 +109,16 @@ pub struct ServerOptions {
 /// What `stream.start` answers when streaming was not allowed.
 pub(crate) const STREAMING_REFUSED: &str = "streaming is off in this server: a stream publishes to the RTMP server in Settings › Stream, so the \
                                      in-process server starts one only when it was started with `studiocraft-cli mcp --allow-streaming`";
+
+/// The texts the roots resolved for the profile's path settings a command reaches, each as the
+/// setting is to hold it before the command runs.
+#[derive(Default)]
+struct Held {
+    /// The recording folder, when the command writes there.
+    recording: Option<String>,
+    /// The pause media, when the command starts a pause that shows it.
+    pause_media: Option<String>,
+}
 
 /// A studio with the built-in plug-ins, a new scene collection and default settings.
 pub struct Headless {
@@ -236,9 +248,8 @@ impl Headless {
     /// Refuse a command that would stream without permission or reach a file outside the roots,
     /// before anything runs. The command to run: with roots, each path it names is replaced by the
     /// path the roots resolved, so it acts on the file or folder that was checked. With it, the
-    /// recording folder the roots resolved, as the text the setting is to hold, when the command
-    /// writes there.
-    fn guard(&self, mut cmd: Command) -> Result<(Command, Option<String>), McpError> {
+    /// texts the profile's path settings are to hold, for those the command reaches.
+    fn guard(&self, mut cmd: Command) -> Result<(Command, Held), McpError> {
         let starts_stream = match &cmd {
             Command::StreamStart {} => true,
             Command::StreamToggle {} => !self.running(OutputKind::Streaming),
@@ -247,18 +258,18 @@ impl Headless {
         if starts_stream && !self.options.allow_streaming {
             return Err(McpError::NotAllowed(STREAMING_REFUSED.into()));
         }
-        let Some(roots) = &self.options.roots else { return Ok((cmd, None)) };
+        let Some(roots) = &self.options.roots else { return Ok((cmd, Held::default())) };
         let registry = self.studio.registry();
-        let mut recording = None;
+        let mut held = Held::default();
         match &mut cmd {
             Command::RecordStart {} | Command::RecordToggle {} if !self.running(OutputKind::Recording) => {
-                recording = Some(self.checked_recording_folder(roots)?);
+                held.recording = Some(self.checked_recording_folder(roots)?);
             }
             // A saved replay goes to the recording folder too.
-            Command::ReplaySave {} => recording = Some(self.checked_recording_folder(roots)?),
+            Command::ReplaySave {} => held.recording = Some(self.checked_recording_folder(roots)?),
             // Audio tracks of a stream go to the recording folder.
             Command::StreamStart {} | Command::StreamToggle {} if starts_stream && self.tracks_follow_stream() => {
-                recording = Some(self.checked_recording_folder(roots)?);
+                held.recording = Some(self.checked_recording_folder(roots)?);
             }
             // A speech model is downloaded into the models folder.
             Command::CaptionsDownload { model } => {
@@ -271,6 +282,18 @@ impl Headless {
             Command::CaptionsToggle {} if !matches!(self.studio.captions_state(), CaptionState::Loading | CaptionState::Running) => {
                 self.speech_model_allowed(None, Access::Read)?;
             }
+            // The pause screen reads its picture or video.
+            Command::PauseStart { media: Some(media), .. } if !media.trim().is_empty() => {
+                *media = self.checked_pause_media(roots, media)?;
+            }
+            // A pause that starts without its own media shows the profile's, set to the path the
+            // roots resolved.
+            Command::PauseStart { media: None, .. } | Command::PauseToggle {} if self.studio.paused().is_none() => {
+                let media = &self.studio.profile().pause.media;
+                if !media.trim().is_empty() {
+                    held.pause_media = Some(self.checked_pause_media(roots, media)?);
+                }
+            }
             // Repair rewrites the files it finds.
             Command::AudioTracksRepair { folder } => {
                 let resolved = self.allowed(Path::new(folder.as_str()), Access::Write)?;
@@ -281,6 +304,10 @@ impl Headless {
                 if let Some(session) = self.studio.audio_tracks_last_session() {
                     self.allowed(session, Access::Read)?;
                 }
+            }
+            // The list names the files in the recording folder.
+            Command::RecordingsList {} => {
+                self.allowed(&recording_folder(&self.studio.profile().output.folder), Access::Read)?;
             }
             Command::SourceAdd { kind, settings: Some(settings), .. } => {
                 if let Ok(plugin) = registry.source(kind) {
@@ -305,7 +332,21 @@ impl Headless {
             }
             _ => {}
         }
-        Ok((cmd, recording))
+        Ok((cmd, held))
+    }
+
+    /// The pause media `given`, held to the read roots, as the text the setting or command is to
+    /// hold: the path the roots resolved. The pause screen picks how to show a file by its name,
+    /// so a name it shows that leads to a name it does not show, through a link, is an error.
+    fn checked_pause_media(&self, roots: &Roots, given: &str) -> Result<String, McpError> {
+        let resolved = self.allowed(Path::new(given), Access::Read)?;
+        let text = setting_text(roots, &resolved, Access::Read)?;
+        let shown = pause_media_extensions(self.studio.registry());
+        let shows = |p: &str| Path::new(p).extension().and_then(|e| e.to_str()).is_some_and(|e| shown.contains(&e.to_ascii_lowercase()));
+        if shows(given) && !shows(&text) {
+            return Err(McpError::Invalid(format!("{given} leads to {text}, which is not a picture or video file the pause screen can show")));
+        }
+        Ok(text)
     }
 
     /// The recording folder held to the write roots, as the text the setting is to hold: the path
@@ -323,6 +364,18 @@ impl Headless {
         }
         let mut profile = self.studio.profile().clone();
         profile.output.folder = text;
+        self.studio.set_profile(profile)?;
+        Ok(())
+    }
+
+    /// Set the pause media to `text` when the setting holds another text, so a pause opens the
+    /// file the roots checked.
+    fn hold_pause_media(&mut self, text: String) -> Result<(), McpError> {
+        if self.studio.profile().pause.media == text {
+            return Ok(());
+        }
+        let mut profile = self.studio.profile().clone();
+        profile.pause.media = text;
         self.studio.set_profile(profile)?;
         Ok(())
     }
@@ -363,12 +416,25 @@ impl Headless {
             )));
         }
         let cmd = Command::from_parts(id, &params).map_err(|e| McpError::Studio(StudioError::Engine(EngineError::Invalid(e))))?;
-        let (cmd, recording) = self.guard(cmd)?;
-        if let Some(text) = recording {
+        let (cmd, held) = self.guard(cmd)?;
+        if let Some(text) = held.recording {
             self.hold_recording_folder(text)?;
         }
-        let (result, _) = self.studio.execute(cmd)?;
-        Ok(result)
+        // A pause that is refused leaves the pause media setting as it was.
+        let mut pause_media_before = None;
+        if let Some(text) = held.pause_media {
+            pause_media_before = Some(self.studio.profile().pause.media.clone());
+            self.hold_pause_media(text)?;
+        }
+        match self.studio.execute(cmd) {
+            Ok((result, _)) => Ok(result),
+            Err(e) => {
+                if let Some(text) = pause_media_before {
+                    self.hold_pause_media(text)?;
+                }
+                Err(e.into())
+            }
+        }
     }
 
     fn commands(&self, p: &Params) -> Result<Value, McpError> {
@@ -475,6 +541,9 @@ impl Headless {
 impl Backend for Headless {
     fn call(&mut self, method: &str, params: Value) -> Result<Value, McpError> {
         let p = object(params)?;
+        // Without a window, the studio's housekeeping (a transition's end, the pause screen's
+        // countdown and its end at zero) runs before each call and in `idle`.
+        self.studio.tick();
         let result = self.answer(method, &p);
         // Without a window nobody reads the status messages; keep them out of memory.
         for n in self.studio.take_notices() {
@@ -485,6 +554,13 @@ impl Backend for Headless {
 
     fn has_ui(&self) -> bool {
         false
+    }
+
+    fn idle(&mut self) {
+        self.studio.tick();
+        for n in self.studio.take_notices() {
+            log::debug!("{}", n.text());
+        }
     }
 
     fn describe(&self) -> String {

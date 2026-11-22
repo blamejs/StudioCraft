@@ -31,6 +31,125 @@ stream tests the encoders again.
 **"{encoder} stopped working; the next start tries another encoder".** A hardware encoder failed
 while it ran. The next recording or stream tries another encoder.
 
+The Streaming window shows why a destination is trying again or failed. Hold the pointer over the
+status to see the error and each address that was tried.
+
+**"this computer has no network route to the server addresses tried".** No network interface can
+reach any of the server's addresses that were tried (at most 4). Check that the computer is connected to a network. On a network that
+offers only IPv4 or only IPv6, check that the server has an address of that kind.
+
+**"Waiting for the network".** This computer has no network route to the server: the network is
+down, unplugged or not yet connected. It tries as soon as a route returns. A server given as an IP
+address is not tried while the destination waits, and each longest wait of Settings › Stream spent
+waiting counts as a failed try. A server given by name is still tried at the usual time. If the
+computer is connected and the destination still waits, check the network adapter and any VPN that
+changes the routes.
+
+**"the server's name could not be looked up", "the server's name does not exist; check the server
+address" or "the DNS server did not answer for the server's name".** The name in the server
+address did not resolve. Check the spelling of the server address. When other sites open in a web
+browser, the name may be wrong or the network's DNS server may block it. "the server's name does
+not exist" appears only on Windows. "the DNS server did not answer" appears on every system when a
+lookup gives no answer within 10 s, and on Windows also when the DNS server reports that it did not
+answer.
+
+**"earlier lookups of server names have not finished".** Earlier lookups are still waiting on the
+system's resolver, so StudioCraft started no new one. Each destination keeps at most two lookups
+outstanding and StudioCraft at most 32. The system's DNS settings or the network's DNS server are
+not answering; the destination tries again as usual.
+
+**"the server refused the connection".** The server answered, but nothing on it accepts streams on
+that port. Check the port in the server address; `rtmp://` uses 1935 and `rtmps://` uses 443 when
+the address names no port.
+
+**"the server did not answer in time".** An address of the server that was tried did not answer
+within 10 s, and none refused the connection. The server
+may be down, or a firewall on this network may block the port. Try the service's `rtmps://` server
+on port 443 if it has one.
+
+**"the server's certificate is not from a trusted authority", "the server's certificate is for
+another name", "the server's certificate has expired" or "the server's certificate was not
+accepted".** The secure connection of an `rtmps://` server failed its certificate check. Check the
+server address and the computer's clock. A network that inspects secure connections can also cause
+this.
+
+**"the server refused the stream; check the stream key".** The server took the connection and
+refused to publish. Check the stream key, and that the stream is not already running from another
+program with the same key. When the refusal follows a lost connection, StudioCraft tries again up
+to 3 times, at least 5 s apart, before it shows this message.
+
+**"Lost the connection to {name}; reconnecting".** A destination that was sending lost its
+connection, and StudioCraft tries again on its own. "Reconnected to {name}" follows when it is live
+again. While no destination is live, the status bar shows `RECONNECTING`. A destination that loses
+its connection again within a minute gets no second notice; the Streaming window shows its status,
+and `session.events` lists every lost connection.
+
+**"the server refused the connection request; check the server address".** The server refused the
+application named in the server address, the part after the host. Copy the server address from the
+service again.
+
+**"the server closed the connection before the stream started" or "the server did not finish
+setting up the stream in time".** The server took the connection and ended it, or stopped answering,
+before the stream started. The server may be busy or the address may point at a server that does
+not take RTMP.
+
+**"the connection was lost".** The connection ended after the stream started. StudioCraft tries
+again on its own.
+
+Check Connection in the Streaming window, and the check that runs after a destination fails, show
+one of these verdicts. What the check found lists each step and its outcome.
+
+**"This computer has no network route".** The system has no default route, and no route to any of
+the server's addresses that were checked. A failed lookup checks none. Connect the computer to a
+network, and check the network adapter and any VPN.
+
+**"The server name {host} does not exist; check the server address", "The DNS server did not
+answer for {host}" or "The server name {host} could not be looked up: {detail}".** The lookup of the
+server's name failed. Check the spelling of the server address, and the network's DNS settings.
+
+**"The server refused the stream; check the stream key and the server address".** The server takes
+connections, and the destination's last failure was a refusal of the stream. Check the stream key
+and the part of the server address after the host.
+
+**"The secure connection to {host} was not accepted ({reason}). ..."** The certificate check of the
+`rtmps://` server failed. Check the server address and the computer's clock. A network that
+inspects secure connections can also cause this.
+
+**"{service} reports a problem with {component}: {status}. This server may also be affected".** The
+service's status summary reports a problem. Wait for the service to resolve it.
+
+**"{host} cannot be reached from this network, but {other} can".** No address of the server
+connected or refused the connection, and another ingest server of the same service connected.
+Choose that server, or another one near you, in the destination's server address. A server that
+refused the connection gets the "refused the connection" message below instead.
+
+**"{host} answers on port 443 but not on port {port}. This network or the server may be blocking
+port {port}".** The port in the server address timed out and port 443 of the same server connected.
+Use the service's `rtmps://` server on port 443 if it has one.
+
+**"{host} refused the connection on port {port}; nothing on that server accepts connections on
+that port".** Check the port in the server address.
+
+**"None of the servers of {service} that were tried answer from this network. ..."** Neither the
+server nor the service's other ingest servers that were tried answered: each connection timed out
+or had no route. The service may be down, or a firewall, a proxy or the network's provider may
+block it.
+
+**"{host} does not answer on port {port}. The server may be down, or this network may be blocking
+it".** The connections timed out. Try again later, or try from another network.
+
+**"A connection to {host} on port {port} succeeds; the failure came after that, while the stream
+was set up or sent: {detail}".** The secure form says "A secure connection". The network reaches the
+server, so the cause is in the stream's setup or in what the server did with it. Check the stream
+key and the server address after the host, and the error in {detail}.
+
+**"A connection to {host} on port {port} succeeds".** The check found nothing wrong. The
+destination had no failure to explain, or its last failure happened before a connection (a refused
+or timed-out connection, for example) and the server now accepts one. Start the stream again.
+
+**"The cause could not be determined".** No other verdict fits. The list of steps shows what each
+one found.
+
 ## Capture
 
 **On macOS, a Display capture or Window capture source shows no picture.** A program can capture

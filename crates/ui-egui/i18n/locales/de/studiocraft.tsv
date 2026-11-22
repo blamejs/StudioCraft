@@ -127,8 +127,10 @@
 	H.264 (built in)	H.264 (integriert)
 	NVIDIA NVENC H.264 (built in)	NVIDIA NVENC H.264 (integriert)
 	NVIDIA NVENC HEVC (built in)	NVIDIA NVENC HEVC (integriert)
+	NVIDIA NVENC AV1 (built in)	NVIDIA NVENC AV1 (integriert)
 	Windows Media Foundation H.264 (built in)	Windows Media Foundation H.264 (integriert)
 	Windows Media Foundation HEVC (built in)	Windows Media Foundation HEVC (integriert)
+	Windows Media Foundation AV1 (built in)	Windows Media Foundation AV1 (integriert)
 	Apple VideoToolbox H.264 (built in)	Apple VideoToolbox H.264 (integriert)
 	Apple VideoToolbox HEVC (built in)	Apple VideoToolbox HEVC (integriert)
 	VA-API H.264 (built in)	VA-API H.264 (integriert)
@@ -359,6 +361,24 @@
 	Width	Breite
 	Window	Fenster
 	Window capture	Fensteraufnahme
+	Staged windows	Bereitgestellte Fenster
+	Window 1	Fenster 1
+	Window 2	Fenster 2
+	Window 3	Fenster 3
+	Window 4	Fenster 4
+	Window 5	Fenster 5
+	Window 6	Fenster 6
+	Presented window	Gezeigtes Fenster
+	While the presented window cannot be shown	Wenn das gezeigte Fenster nicht gezeigt werden kann
+	Show a color	Eine Farbe zeigen
+	Keep the last picture	Das letzte Bild behalten
+	Placeholder color	Platzhalterfarbe
+	nothing is staged in the presented slot	im gezeigten Platz ist nichts bereitgestellt
+	waiting for the window	warte auf das Fenster
+	Present Staged Window	Bereitgestelltes Fenster zeigen
+	Present Next Staged Window	Nächstes bereitgestelltes Fenster zeigen
+	Present Previous Staged Window	Vorheriges bereitgestelltes Fenster zeigen
+	Present Staged Window {n}	Bereitgestelltes Fenster {n} zeigen
 	X	X
 	Y	Y
 	Your Videos folder	Ihr Videos-Ordner
@@ -477,6 +497,9 @@ menu	Transform	Transformieren
 @msg	Audio tracks could not be repaired: {takes} and {more} more. Takes repaired: {count}	Audiospuren konnten nicht repariert werden: {takes} und {more} weitere. Reparierte Aufnahmen: {count}
 	Open Last Audio Tracks in Editor	Letzte Audiospuren im Editor öffnen
 	Add Audio Tracks Marker	Marke in den Audiospuren setzen
+	Add Recording Marker	Marke in der Aufnahme setzen
+@msg	Markers saved to {path}	Marken gespeichert unter {path}
+@msg	The markers could not be saved: {error}	Die Marken konnten nicht gespeichert werden: {error}
 	After a take	Nach einer Aufnahme
 	Nothing	Nichts
 	Show the folder	Ordner anzeigen
@@ -520,3 +543,8 @@ menu	Transform	Transformieren
 @msg	there is no display `{id}`: the system lists no displays	es gibt keinen Bildschirm `{id}`: das System listet keine Bildschirme auf
 @msg	there is no display `{id}` (the displays are {ids})	es gibt keinen Bildschirm `{id}` (die Bildschirme sind {ids})
 @msg	a {width} × {height} display can't be the canvas: each side must be from {min} to {max} pixels	ein Bildschirm mit {width} × {height} kann nicht die Leinwand sein: jede Seite muss {min} bis {max} Pixel haben
+	Output scale	Ausgabeskalierung
+	Custom	Benutzerdefiniert
+	{percent}% ({width} × {height})	{percent} % ({width} × {height})
+	Fill Screen	Bildschirm füllen
+@msg	The scenes could not be laid out for the new canvas: {error}	Die Szenen konnten nicht für die neue Leinwand angeordnet werden: {error}
