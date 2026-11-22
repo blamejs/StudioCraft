@@ -202,6 +202,14 @@ The window's `app.language` command (View › Language) sets the interface langu
 the built-in languages, an empty code or a missing `lang` is an error that lists the codes, and the
 setting stays as it was.
 
+### `window.next_pane`, `window.previous_pane` and `window.focus_menu_bar`
+
+These window commands move the keyboard focus as F6, Shift+F6 and F10 do: to the next pane, to the
+previous pane, or to the menu bar. Each takes no parameters, and a request with any is an error.
+Each replies `{"fired": true}` once the window has queued the move, and the focus moves in the
+window's next frame. In `engine.commands` their `shortcut` is the key, or `null` while one of the
+window's own commands is bound to that key.
+
 ### `plugin.list`
 
 The engine command `plugin.list` only reads. It returns every registered plug-in, grouped as

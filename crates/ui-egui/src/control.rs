@@ -99,6 +99,12 @@ impl StudioApp {
     /// The menu bar as the window shows it: laid out for this platform, with shortcuts and the
     /// current enabled and checked states.
     pub(crate) fn laid_menu(&self) -> MenuBar {
+        self.laid_menu_for(Target::current())
+    }
+
+    /// The menu bar laid out for `target`, with shortcuts and the current enabled and checked
+    /// states.
+    pub(crate) fn laid_menu_for(&self, target: Target) -> MenuBar {
         let layouts = self.store.prefs().dock_layout_names();
         let s = commands::MenuState {
             collections: &self.collections,
@@ -115,7 +121,7 @@ impl StudioApp {
         craft_menu::apply_keymap(&mut bar, &self.keymap);
         craft_menu::apply_state(&mut bar, |c| self.item_state(&c.id));
         let options = LayoutOptions::new(APP_NAME).label(&crate::i18n::menu_text);
-        craft_menu::layout(&bar, Target::current(), &options).bar
+        craft_menu::layout(&bar, target, &options).bar
     }
 
     /// View › Language (in the app menu on macOS): Automatic, then every built-in language by
@@ -129,9 +135,16 @@ impl StudioApp {
         LanguageMenu::from_i18n(catalogs, current).submenu(&self.words.set::<LanguageLabels>())
     }
 
-    /// The first shortcut of a command without parameters, as `Cmd+Z` text.
+    /// The first shortcut of a command without parameters, as `Cmd+Z` text. A window key (F6, F10)
+    /// is listed only while none of the window's commands binds the same key, since such a binding
+    /// takes the key.
     fn shortcut(&self, id: &str) -> Option<String> {
-        self.keymap.bindings(&CommandRef::new(id)).first().map(ToString::to_string)
+        let cmd = CommandRef::new(id);
+        if let Some(binding) = self.keymap.bindings(&cmd).first() {
+            return Some(binding.to_string());
+        }
+        let key = commands::window_key(&cmd)?;
+        self.keymap.holders(&key.trigger.chord).is_empty().then(|| key.to_string())
     }
 
     /// Every command: the engine's (`scope: engine`) and the window's (`scope: window`), each with

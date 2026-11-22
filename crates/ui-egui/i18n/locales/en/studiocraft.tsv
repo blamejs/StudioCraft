@@ -641,6 +641,7 @@ menu	Transform	Transform
 @msg	the running stream was started with another profile	the running stream was started with another profile
 @msg	there is no link for `{command}`	there is no link for `{command}`
 @msg	unknown command `{command}`	unknown command `{command}`
+@msg	`{command}` takes no parameters	`{command}` takes no parameters
 @msg	there is already a profile named `{name}`	there is already a profile named `{name}`
 @msg	there is already a scene collection named `{name}`	there is already a scene collection named `{name}`
 @msg	the last scene collection can't be removed	the last scene collection can't be removed

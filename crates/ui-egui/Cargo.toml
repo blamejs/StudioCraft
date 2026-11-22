@@ -59,3 +59,5 @@ egui = { workspace = true, features = ["default_fonts"] }
 # The noop backend lists an adapter without a GPU in the adapter selection tests.
 wgpu = { workspace = true, features = ["noop"] }
 pollster = { workspace = true }
+# `craft_ui::testing::Fixture` drives the menu bar with the pointer and keys in the menu tests.
+craft-ui = { workspace = true, features = ["testing"] }

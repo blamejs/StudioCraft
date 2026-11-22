@@ -349,6 +349,17 @@ fn the_language_menu_lists_the_catalogs() {
 }
 
 #[test]
+fn the_language_submenu_title_has_an_english_label_for_its_mnemonic() {
+    let mut a = StudioApp::boot(Store::memory(), None, Vec::new());
+    for code in ["en", "ja", "zh-hans", "ko"] {
+        a.set_language(code);
+        let Some((label, _)) = language_submenu(&a.laid_menu_for(craft_menu::Target::Windows)) else { panic!("no Language submenu in {code}") };
+        assert_eq!(crate::commands::english_label(craft_menu::Labeled::Title(&label)), Some("Language".to_string()), "{code}: `{label}`");
+    }
+    a.set_language("en");
+}
+
+#[test]
 fn a_language_chosen_from_the_menu_installs_its_fonts() {
     let mut a = StudioApp::boot(Store::memory(), None, Vec::new());
     a.set_language("en");

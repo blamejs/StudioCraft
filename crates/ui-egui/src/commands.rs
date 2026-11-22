@@ -4,8 +4,12 @@
 //! window's (`view.stats`, `profile.switch`, …). Menus, shortcuts and the control channel all name
 //! a command by id with JSON parameters.
 
+use std::collections::HashMap;
+use std::sync::LazyLock;
+
 use craft_keymap::{Binding, CommandDef, CommandRef, Keymap, Overrides, Platform, Scope, Scopes};
-use craft_menu::{Item, ItemRole, Menu, MenuBar, MenuRole, Node};
+use craft_menu::{Item, ItemRole, Labeled, Menu, MenuBar, MenuRole, Node};
+use craft_ui::runtime::commands::{ChromeCommand, CommandSet as _, EditCommands, NavCommand};
 use serde_json::json;
 
 /// Help › Community: (command id, link key in `studiocraft_engine::links`, label).
@@ -85,7 +89,38 @@ pub const UI_COMMANDS: &[(&str, &str)] = &[
     ("help.website", "Website"),
     ("help.github", "Source Code"),
     ("help.issues", "Report an Issue"),
+    ("window.next_pane", "Next Pane"),
+    ("window.previous_pane", "Previous Pane"),
+    ("window.focus_menu_bar", "Focus Menu Bar"),
 ];
+
+/// Whether the UI runtime carries out `cmd` itself: the window keys F6, Shift+F6 and F10, and the
+/// panel toggles a bare Tab fires where a window lets Tab hide its panels. A key runs them before
+/// the window sees it, and a menu or control channel run reaches the runtime through
+/// `craft_ui::runtime::commands::fire`. StudioCraft lets Tab move the keyboard focus, so it lists
+/// no panel toggle among its commands.
+pub fn runtime_runs(cmd: &CommandRef) -> bool {
+    ChromeCommand::from_ref(cmd).is_some() || NavCommand::from_ref(cmd).is_some()
+}
+
+/// The first default key of a window key command ([`runtime_runs`]), such as F6. The key runs the
+/// command only while none of the window's own commands binds it.
+pub fn window_key(cmd: &CommandRef) -> Option<Binding> {
+    let mut defs = [NavCommand::defs(), ChromeCommand::defs()].into_iter().flatten().flatten();
+    defs.find(|def| def.command == *cmd)?.defaults.first().cloned()
+}
+
+/// Whether `cmd` is a command of the framework's edit set that the window does nothing with:
+/// Cut, Copy, Paste, Select All and Delete. A focused text field takes their keys itself; with
+/// nothing focused, the window drops them. Undo and Redo are engine commands.
+pub fn unused_edit(cmd: &CommandRef) -> bool {
+    EditCommands::from_ref(cmd).is_some() && !studiocraft_engine::specs().iter().any(|s| s.id == cmd.id)
+}
+
+/// Whether a command of the framework's linked command sets has the id of `cmd`.
+fn linked(cmd: &CommandRef) -> bool {
+    EditCommands::from_ref(cmd).is_some() || runtime_runs(cmd)
+}
 
 /// Whether `id` is one of the window's commands.
 pub fn is_ui_command(id: &str) -> bool {
@@ -173,15 +208,14 @@ pub fn keymap(overrides: Overrides) -> Keymap {
     Keymap::new(catalog(), Scopes::new(), Platform::current()).with_overrides(overrides)
 }
 
-// port: P4 (commands, shortcuts and menus) decides how commands with parameters reach the
-// runtime's catalog, which takes one entry per id.
-
-/// [`catalog`] as the runtime's command catalog takes it: one entry per id. An entry with
+/// [`catalog`] as the runtime's command catalog takes it: one entry per id, without the commands
+/// a linked framework set defines ([`linked_defaults`] gives those their shortcuts). An entry with
 /// parameters goes under its binding key (`scene.select_index {"index":1}`), which is also the key
 /// its saved shortcuts are stored under; [`fired_command`] turns it back.
 pub fn runtime_catalog() -> Vec<CommandDef> {
     catalog()
         .into_iter()
+        .filter(|def| !linked(&def.command))
         .map(|mut def| {
             if def.command.params.is_null() {
                 def
@@ -191,6 +225,16 @@ pub fn runtime_catalog() -> Vec<CommandDef> {
             }
         })
         .collect()
+}
+
+/// The default shortcuts the window gives commands of the framework's linked sets, in place of
+/// the sets' own: Undo is Cmd+Z, Redo is Cmd+Y and Cmd+Shift+Z, and Delete keeps only Backspace,
+/// so a bare Delete removes the selected source (`selection.remove`).
+pub fn linked_defaults() -> Vec<(String, Vec<Binding>)> {
+    let mut list: Vec<(String, Vec<Binding>)> =
+        catalog().into_iter().filter(|def| linked(&def.command)).map(|def| (def.command.id, def.defaults)).collect();
+    list.push(("edit.delete".to_string(), Binding::parse("Backspace").into_iter().collect()));
+    list
 }
 
 /// The command a fired catalog entry stands for: the entry of [`runtime_catalog`] with its
@@ -217,6 +261,58 @@ fn item(id: &str, label: &str) -> Node {
 /// A menu or submenu title in the interface language.
 fn title(text: &str) -> &str {
     tlc!("menu", text)
+}
+
+/// The mnemonic letters the menus prefer, by command id, as desktop menus write them: E&xit,
+/// &Undo, &Redo and &About. A row whose label in the interface language lacks its letter takes
+/// the first free letter of the label, as every other row does.
+pub const MNEMONICS: &[(&str, char)] = &[("app.exit", 'x'), ("edit.undo", 'U'), ("edit.redo", 'R'), ("app.about", 'A')];
+
+/// The menu bar's English labels: every menu and submenu title, and each item's label by its
+/// command's key.
+struct EnglishLabels {
+    titles: Vec<String>,
+    items: HashMap<String, String>,
+}
+
+static ENGLISH: LazyLock<EnglishLabels> = LazyLock::new(|| {
+    fn walk(nodes: &[Node], english: &mut EnglishLabels) {
+        for node in nodes {
+            match node {
+                Node::Item(it) => {
+                    english.items.entry(it.command.key()).or_insert_with(|| it.label.clone());
+                }
+                Node::Submenu { label, children, .. } => {
+                    english.titles.push(label.clone());
+                    walk(children, english);
+                }
+                _ => {}
+            }
+        }
+    }
+    let lang = crate::i18n::lang();
+    crate::i18n::set_lang(craft_i18n::Lang::EN);
+    let bar = menu_bar(&MenuState { collections: &[], collection: "", profiles: &[], profile: "", layouts: &[] });
+    crate::i18n::set_lang(lang);
+    // The window adds View › Language after the menus are built; its title is the catalog's.
+    let mut english = EnglishLabels { titles: vec!["Language".to_string()], items: HashMap::new() };
+    for menu in &bar.menus {
+        english.titles.push(menu.title.clone());
+        walk(&menu.children, &mut english);
+    }
+    english
+});
+
+/// The English label of a menu title or row, which the menu bar takes its mnemonic from when the
+/// label in the interface language has no letter a keyboard types (Japanese, Chinese, Korean):
+/// `File` for `ファイル`, shown as `ファイル(F)`. Rows the menus make from names (profiles, scene
+/// collections, dock layouts, languages) have none.
+pub fn english_label(labeled: Labeled<'_>) -> Option<String> {
+    match labeled {
+        Labeled::Command(cmd) => ENGLISH.items.get(&cmd.key()).cloned(),
+        Labeled::Title(shown) => ENGLISH.titles.iter().find(|t| t.as_str() == shown || title(t) == shown).cloned(),
+        _ => None,
+    }
 }
 
 /// One item per saved dock layout running `id` with its name, or a disabled None when there is
@@ -388,6 +484,14 @@ mod tests {
         let scene3 = km.bindings(&CommandRef::with_params("scene.select_index", json!({"index": 3})));
         assert_eq!(scene3.len(), 1);
         assert!(km.problems().is_empty(), "{:?}", km.problems());
+        // The linked sets' commands leave the runtime catalog and take these shortcuts instead.
+        assert!(runtime_catalog().iter().all(|d| !linked(&d.command)));
+        let text = |id: &str| -> Vec<String> {
+            linked_defaults().into_iter().find(|(c, _)| c == id).map(|(_, b)| b.iter().map(ToString::to_string).collect()).unwrap_or_default()
+        };
+        assert_eq!(text("edit.undo"), ["Cmd+Z"]);
+        assert_eq!(text("edit.redo"), ["Cmd+Y", "Cmd+Shift+Z"]);
+        assert_eq!(text("edit.delete"), ["Backspace"]);
     }
 
     #[test]
@@ -402,71 +506,77 @@ mod tests {
         }
     }
 
-    #[test]
-    fn the_docks_menu_names_the_output_bar_groups() {
-        let bar = menu_bar(&MenuState { collections: &[], collection: "", profiles: &[], profile: "", layouts: &[] });
-        let docks = bar.menus.iter().find(|m| m.title == "Docks").unwrap();
-        let items: Vec<(&str, &str, Option<bool>)> = docks
-            .children
-            .iter()
-            .filter_map(|n| if let Node::Item(i) = n { Some((i.command.id.as_str(), i.label.as_str(), i.kind.checked())) } else { None })
-            .collect();
-        assert_eq!(
-            items,
-            [
-                ("dock.scenes", "Scenes", Some(false)),
-                ("dock.sources", "Sources", Some(false)),
-                ("dock.mixer", "Audio Mixer", Some(false)),
-                ("dock.app_audio", "Application Audio", Some(false)),
-                ("dock.controls", "Output Controls", Some(false)),
-                ("dock.transitions", "Transition Controls", Some(false)),
-                ("dock.layout_save", "Save Dock Layout…", None),
-                ("dock.reset", "Reset Docks", None),
-            ]
-        );
-        for (id, label, _) in &items {
-            assert_eq!(UI_COMMANDS.iter().find(|(c, _)| c == id).map(|(_, l)| *l), Some(*label), "{id}");
-        }
-    }
+    /// A menu row as the tests compare it: command id, label, parameters, enabled and checked.
+    type Row = (String, String, serde_json::Value, bool, Option<bool>);
 
-    #[test]
-    fn the_layout_submenus_list_the_saved_layouts() {
-        let submenu = |layouts: &[String], name: &str| -> Vec<(String, serde_json::Value, bool)> {
-            let bar = menu_bar(&MenuState { collections: &[], collection: "", profiles: &[], profile: "", layouts });
-            let docks = bar.menus.into_iter().find(|m| m.title == "Docks").unwrap();
-            let Some(Node::Submenu { children, .. }) = docks.children.into_iter().find(|n| matches!(n, Node::Submenu { label, .. } if label == name))
-            else {
-                panic!("no {name} submenu");
-            };
-            children.into_iter().filter_map(|n| if let Node::Item(i) = n { Some((i.label, i.command.params, i.enabled)) } else { None }).collect()
+    /// The item rows of `menu`, or of its submenu `submenu`, without separators and submenus.
+    fn rows(bar: &MenuBar, menu: &str, submenu: Option<&str>) -> Vec<Row> {
+        let Some(m) = bar.menus.iter().find(|m| m.title == menu) else {
+            panic!("no {menu} menu");
         };
-        assert_eq!(submenu(&[], "Layouts"), [("None".to_string(), serde_json::Value::Null, false)]);
-        assert_eq!(submenu(&[], "Remove Layout"), [("None".to_string(), serde_json::Value::Null, false)]);
-        let names = ["Talk".to_string(), "Game".to_string()];
-        assert_eq!(
-            submenu(&names, "Layouts"),
-            [("Talk".to_string(), json!({"name": "Talk"}), true), ("Game".to_string(), json!({"name": "Game"}), true)]
-        );
-        assert_eq!(submenu(&names, "Remove Layout").len(), 2);
+        let nodes = match submenu {
+            None => &m.children,
+            Some(name) => match m.children.iter().find(|n| matches!(n, Node::Submenu { label, .. } if label == name)) {
+                Some(Node::Submenu { children, .. }) => children,
+                _ => panic!("no {name} submenu in {menu}"),
+            },
+        };
+        nodes
+            .iter()
+            .filter_map(|n| match n {
+                Node::Item(i) => Some((i.command.id.clone(), i.label.clone(), i.command.params.clone(), i.enabled, i.kind.checked())),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn row(id: &str, label: &str, params: serde_json::Value, enabled: bool, checked: Option<bool>) -> Row {
+        (id.to_string(), label.to_string(), params, enabled, checked)
     }
 
     #[test]
-    fn help_community_holds_the_link_openers() {
-        let bar = menu_bar(&MenuState { collections: &[], collection: "", profiles: &[], profile: "", layouts: &[] });
-        let help = bar.menus.iter().find(|m| m.title == "Help").unwrap();
-        let mut ids = Vec::new();
-        for n in &help.children {
-            if let Node::Submenu { label, children, .. } = n
-                && label == "Community"
-            {
-                for c in children {
-                    if let Node::Item(i) = c {
-                        ids.push(i.command.id.clone());
-                    }
-                }
+    fn menus_hold_the_rows_the_control_channel_lists() {
+        let null = serde_json::Value::Null;
+        let plain = |id: &str, label: &str| row(id, label, serde_json::Value::Null, true, None);
+        let check = |id: &str, label: &str| row(id, label, serde_json::Value::Null, true, Some(false));
+        let none = |id: &str| row(id, "None", serde_json::Value::Null, false, None);
+        let layout = |id: &str, name: &str| row(id, name, json!({"name": name}), true, None);
+        let saved = ["Talk".to_string(), "Game".to_string()];
+        // (saved dock layouts, menu, submenu, rows)
+        let cases: [(&[String], &str, Option<&str>, Vec<Row>); 6] = [
+            (
+                &[],
+                "Docks",
+                None,
+                vec![
+                    check("dock.scenes", "Scenes"),
+                    check("dock.sources", "Sources"),
+                    check("dock.mixer", "Audio Mixer"),
+                    check("dock.app_audio", "Application Audio"),
+                    check("dock.controls", "Output Controls"),
+                    check("dock.transitions", "Transition Controls"),
+                    plain("dock.layout_save", "Save Dock Layout…"),
+                    plain("dock.reset", "Reset Docks"),
+                ],
+            ),
+            (&[], "Docks", Some("Layouts"), vec![none("dock.layout_apply")]),
+            (&[], "Docks", Some("Remove Layout"), vec![none("dock.layout_remove")]),
+            (&saved, "Docks", Some("Layouts"), vec![layout("dock.layout_apply", "Talk"), layout("dock.layout_apply", "Game")]),
+            (&[], "Help", Some("Community"), COMMUNITY.iter().map(|(id, _, label)| row(id, label, null.clone(), true, None)).collect()),
+            (&[], "Help", None, vec![plain("app.check_updates", "Check for Updates…"), plain("app.about", "About StudioCraft")]),
+        ];
+        for (layouts, menu, submenu, expected) in cases {
+            let bar = menu_bar(&MenuState { collections: &[], collection: "", profiles: &[], profile: "", layouts });
+            let got = rows(&bar, menu, submenu);
+            assert_eq!(got, expected, "{menu} › {submenu:?} with {} saved layouts", layouts.len());
+            // A row that names a window command shows the command's own label when it has no
+            // parameters and is not a placeholder.
+            for (id, label, ..) in got.iter().filter(|r| r.2.is_null() && r.3 && is_ui_command(&r.0)) {
+                assert_eq!(UI_COMMANDS.iter().find(|(c, _)| c == id).map(|(_, l)| *l), Some(label.as_str()), "{id}");
             }
         }
-        assert_eq!(ids, ["help.discord", "help.website", "help.github", "help.issues"]);
+        let with_layouts = menu_bar(&MenuState { collections: &[], collection: "", profiles: &[], profile: "", layouts: &saved });
+        assert_eq!(rows(&with_layouts, "Docks", Some("Remove Layout")).len(), 2);
         for (id, _, _) in COMMUNITY {
             assert!(is_ui_command(id), "{id}");
             assert!(community_link(id).is_some_and(|u| u.starts_with("https://")), "{id}");
@@ -474,16 +584,63 @@ mod tests {
         assert_eq!(community_link("help.github"), Some(studiocraft_engine::links::GITHUB));
         assert_eq!(community_link("help.unknown"), None);
         assert!(!is_ui_command("app.links"), "app.links runs in the engine");
-    }
-
-    #[test]
-    fn help_menu_checks_for_updates() {
         assert!(is_ui_command("app.check_updates"));
         assert_eq!(ui_params("app.check_updates"), "");
         assert!(!ui_undoable("app.check_updates"));
-        let bar = menu_bar(&MenuState { collections: &[], collection: "", profiles: &[], profile: "", layouts: &[] });
-        let help = bar.menus.iter().find(|m| m.title == "Help").unwrap();
-        let ids: Vec<_> = help.children.iter().filter_map(|n| if let Node::Item(i) = n { Some(i.command.id.as_str()) } else { None }).collect();
-        assert_eq!(ids, ["app.check_updates", "app.about"]);
+    }
+
+    #[test]
+    fn the_window_keys_are_the_frameworks_commands() {
+        let keys: Vec<(&str, Option<String>)> = UI_COMMANDS
+            .iter()
+            .filter(|(id, _)| id.starts_with("window."))
+            .map(|(id, _)| (*id, window_key(&CommandRef::new(*id)).map(|b| b.to_string())))
+            .collect();
+        assert_eq!(
+            keys,
+            [
+                ("window.next_pane", Some("F6".to_string())),
+                ("window.previous_pane", Some("Shift+F6".to_string())),
+                ("window.focus_menu_bar", Some("F10".to_string())),
+            ]
+        );
+        for (id, _) in keys {
+            assert!(runtime_runs(&CommandRef::new(id)), "{id}");
+            assert!(!unused_edit(&CommandRef::new(id)), "{id}");
+        }
+        assert!(!runtime_runs(&CommandRef::new("view.stats")));
+        assert_eq!(window_key(&CommandRef::new("view.stats")), None);
+        for id in ["edit.cut", "edit.copy", "edit.paste", "edit.select_all", "edit.delete"] {
+            assert!(unused_edit(&CommandRef::new(id)), "{id}");
+        }
+        for id in ["edit.undo", "edit.redo", "selection.remove"] {
+            assert!(!unused_edit(&CommandRef::new(id)), "{id}");
+        }
+    }
+
+    #[test]
+    fn menu_labels_have_english_letters_for_the_bar() {
+        assert_eq!(english_label(Labeled::Title("File")), Some("File".to_string()));
+        assert_eq!(english_label(Labeled::Title("Community")), Some("Community".to_string()));
+        assert_eq!(english_label(Labeled::Title("Nothing")), None);
+        assert_eq!(english_label(Labeled::Command(&CommandRef::new("app.exit"))), Some("Exit".to_string()));
+        assert_eq!(english_label(Labeled::Command(&CommandRef::new("profile.new"))), Some("New…".to_string()));
+        assert_eq!(english_label(Labeled::Command(&CommandRef::with_params("profile.switch", json!({"name": "Main"})))), None);
+        let ja = crate::i18n::I18N.from_code("ja").unwrap();
+        crate::i18n::set_lang(ja);
+        let shown = title("File").to_string();
+        let exit = english_label(Labeled::Command(&CommandRef::new("app.exit")));
+        crate::i18n::set_lang(craft_i18n::Lang::EN);
+        assert_ne!(shown, "File", "the Japanese catalog translates File");
+        assert_eq!(english_label(Labeled::Title(&shown)), None, "the title is looked up in the language it is shown in");
+        crate::i18n::set_lang(ja);
+        let found = english_label(Labeled::Title(&shown));
+        crate::i18n::set_lang(craft_i18n::Lang::EN);
+        assert_eq!(found, Some("File".to_string()));
+        assert_eq!(exit, Some("Exit".to_string()), "the English labels stay English in every language");
+        for (id, letter) in MNEMONICS {
+            let label = english_label(Labeled::Command(&CommandRef::new(*id))).unwrap_or_default();
+            assert!(label.to_lowercase().contains(letter.to_ascii_lowercase()), "{id}: `{label}` has no {letter}");
+        }
     }
 }
