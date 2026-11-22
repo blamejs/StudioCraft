@@ -519,8 +519,20 @@ fn holds_at(proc_root: &Path, pid: u32, inodes: &BTreeSet<u64>) -> Option<bool> 
     if inodes.is_empty() {
         return Some(false);
     }
-    let wanted: Vec<String> = inodes.iter().map(|inode| format!("socket:[{inode}]")).collect();
-    Some(fds.take(MAX_FDS).flatten().any(|fd| std::fs::read_link(fd.path()).is_ok_and(|l| wanted.iter().any(|w| l.as_os_str() == w.as_str()))))
+    Some(
+        fds.take(MAX_FDS).flatten().any(|fd| {
+            std::fs::read_link(fd.path()).is_ok_and(|l| l.to_str().and_then(linked_socket_inode).is_some_and(|inode| inodes.contains(&inode)))
+        }),
+    )
+}
+
+/// The inode in an open-file link that reads `socket:[<inode>]`; `None` for any other link.
+fn linked_socket_inode(link: &str) -> Option<u64> {
+    let digits = link.strip_prefix("socket:[")?.strip_suffix(']')?;
+    if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    digits.parse().ok()
 }
 
 /// The start time of `pid`, which tells the process apart from a later one given the same id.
@@ -2044,7 +2056,20 @@ mod tests {
         assert_eq!(holds_at(&root, 42, &BTreeSet::new()), Some(false));
         assert_eq!(holds_at(&root, 43, &BTreeSet::from([777])), None, "a process whose open files cannot be read");
         assert_eq!(holds_at(&root.join("missing"), 42, &BTreeSet::from([777])), None, "an unreadable process table");
+        let many: BTreeSet<u64> = (1_000_000..1_100_000).chain([777]).collect();
+        assert_eq!(holds_at(&root, 42, &many), Some(true), "a large set of connections");
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn only_a_socket_link_names_a_socket_inode() {
+        assert_eq!(linked_socket_inode("socket:[777]"), Some(777));
+        assert_eq!(linked_socket_inode("socket:[]"), None);
+        assert_eq!(linked_socket_inode("socket:[+7]"), None);
+        assert_eq!(linked_socket_inode("socket:[7"), None);
+        assert_eq!(linked_socket_inode("socket:[7]x"), None);
+        assert_eq!(linked_socket_inode("pipe:[777]"), None);
+        assert_eq!(linked_socket_inode("socket:[99999999999999999999999]"), None);
     }
 
     #[test]
