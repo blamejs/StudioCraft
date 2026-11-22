@@ -427,10 +427,17 @@ wait from the first wait to 600 s, and the number of tries 1 to 100; each wait d
 before it up to the longest wait. StudioCraft cuts each wait by a random 0 to 20 %, never to below
 1 s, so destinations that lost their connections together do not all try again at once. With
 Automatic reconnect off, a destination stops at its first failure. A destination gives up at most
-the sum of its waits (at most the number of tries times the longest wait) after its first failure,
-plus up to 10 s per try for the name lookup and up to 55 s per try for the connection (4 addresses
-for 10 s each) and the stream's setup (15 s). A running stream keeps the settings it started with.
-The stream fails when no destination is sending or trying to.
+the sum of its waits (at most the number of tries times the longest wait, or 5 s for a wait after a
+refused stream key when that is longer) after its first failure, plus up to 10 s per try for the
+name lookup and up to 55 s per try for the connection (4 addresses for 10 s each) and the stream's
+setup (15 s). A running stream keeps the settings it started with.
+A server that refuses the stream key is not tried again, except after a lost connection: a
+destination whose server took the stream, lost the connection and then refuses the key is tried
+again up to 3 times, waiting at least 5 s each time, and each of those tries counts toward the
+number of tries. A refusal on the first connect, a refusal of the connection request, and a refusal
+after the destination was stopped and started again are final. A destination stopped and started
+again while it waits to try again or waits for the network tries at once and counts its failed
+tries from none. The stream fails when no destination is sending or trying to.
 While the stream runs, the status bar shows `RECONNECTING` with the stream's time, in the warning
 color, when no destination is live and at least one waits to try again or waits for the network;
 when some are live, it shows

@@ -24,6 +24,8 @@ enum Plan {
     Accept,
     /// Refuse the publish command.
     Refuse,
+    /// Refuse the connect command.
+    RefuseConnect,
     /// Take the stream and drop the connection after this many audio and video messages.
     DropAfter(usize),
 }
@@ -122,9 +124,28 @@ impl Conn {
         }
     }
 
+    /// Answers the connect command with `_error`, then reads until the publisher closes the
+    /// connection.
+    fn refuse_connect(&mut self) -> Result<(), craft_rtmp::Error> {
+        loop {
+            let m = self.recv()?;
+            if m.header.type_id != msg_type::COMMAND {
+                continue;
+            }
+            let values = amf0::read_all(&m.payload).unwrap();
+            if values[0].as_str() == Some("connect") {
+                let txn = values[1].clone();
+                self.command(0, &[s("_error"), txn, Value::Null, info("error", "NetConnection.Connect.Rejected")]).map_err(craft_rtmp::Error::Io)?;
+            }
+        }
+    }
+
     /// Runs `plan`, telling `seen` what arrives.
     fn run(&mut self, plan: Plan, seen: &mpsc::Sender<Seen>) -> Result<(), craft_rtmp::Error> {
         self.handshake().map_err(craft_rtmp::Error::Io)?;
+        if let Plan::RefuseConnect = plan {
+            return self.refuse_connect();
+        }
         let name = self.serve_until_publish()?;
         let _ = seen.send(Seen::Publish(name));
         if let Plan::Refuse = plan {
@@ -187,7 +208,7 @@ fn target(id: &str, server: &str, key: &str) -> Target {
 /// Short waits before a try again, for the tests.
 fn quick() -> Timing {
     let one = Duration::from_millis(1);
-    Timing { first: one, longest: one, max_tries: 3, jitter: false, ..Timing::default() }
+    Timing { first: one, longest: one, max_tries: 3, refused: one, jitter: false, ..Timing::default() }
 }
 
 /// Feeds the stream on a thread of its own until it is dropped.
@@ -321,6 +342,164 @@ fn a_lost_connection_is_made_again() {
     assert_eq!(out.reconnects(), 1, "the sum over the destinations");
     assert_eq!(out.recoveries(), 1, "it went live again once after the loss");
     assert_eq!(out.destination_counts(), DestinationCounts { live: 1, retrying: 0 });
+    drop(feed);
+    out.stop().unwrap();
+    until_closed(&seen);
+}
+
+#[test]
+fn a_refusal_after_a_reconnect_is_tried_again() {
+    let (a, seen) = server(vec![Plan::DropAfter(12), Plan::Refuse, Plan::Refuse, Plan::Accept]);
+    let job = job(RateControl::Bitrate { kbps: 400, keyframe_s: 1 });
+    let mut out = Streaming::start_timed(&job, vec![target("a", &a, "k")], Timing { max_tries: 10, ..quick() }).unwrap();
+    let feed = Feed::new(&out);
+    media(&seen, 12);
+    until_closed(&seen);
+    // Two refusals of the same key after the lost connection, then the server takes the stream.
+    for _ in 0..2 {
+        assert_eq!(next(&seen), Seen::Publish("k".into()));
+        until_closed(&seen);
+    }
+    assert_eq!(next(&seen), Seen::Publish("k".into()));
+    starts_with_headers_and_a_keyframe(&media(&seen, 5));
+    let d = until(&out, "a", |d| d.status == DestinationStatus::Live);
+    assert_eq!(d.reconnects, 1, "{d:?}");
+    drop(feed);
+    out.stop().unwrap();
+    until_closed(&seen);
+}
+
+#[test]
+fn a_fourth_refusal_after_a_reconnect_ends_the_destination() {
+    let (a, seen) = server(vec![Plan::DropAfter(12), Plan::Refuse, Plan::Refuse, Plan::Refuse, Plan::Refuse]);
+    let job = job(RateControl::Bitrate { kbps: 400, keyframe_s: 1 });
+    let mut out = Streaming::start_timed(&job, vec![target("a", &a, "k")], Timing { max_tries: 10, ..quick() }).unwrap();
+    let feed = Feed::new(&out);
+    media(&seen, 12);
+    until_closed(&seen);
+    for _ in 0..4 {
+        assert_eq!(next(&seen), Seen::Publish("k".into()));
+        until_closed(&seen);
+    }
+    let d = until(&out, "a", |d| matches!(d.status, DestinationStatus::Failed(_)));
+    let DestinationStatus::Failed(f) = &d.status else { panic!("{d:?}") };
+    assert_eq!(f.cause, Cause::RejectedPublish, "{f:?}");
+    drop(feed);
+    assert!(out.stop().is_err());
+}
+
+#[test]
+fn only_a_publish_refusal_after_a_lost_connection_is_tried_again() {
+    let job = job(RateControl::Bitrate { kbps: 400, keyframe_s: 1 });
+    let timing = || Timing { max_tries: 10, ..quick() };
+    // A refused connect command after a reconnect stays final.
+    let (a, seen) = server(vec![Plan::DropAfter(12), Plan::RefuseConnect]);
+    let mut out = Streaming::start_timed(&job, vec![target("a", &a, "k")], timing()).unwrap();
+    let feed = Feed::new(&out);
+    media(&seen, 12);
+    until_closed(&seen);
+    until_closed(&seen);
+    let d = until(&out, "a", |d| matches!(d.status, DestinationStatus::Failed(_)));
+    assert!(matches!(&d.status, DestinationStatus::Failed(f) if f.cause == Cause::RejectedConnect), "{d:?}");
+    drop(feed);
+    assert!(out.stop().is_err());
+    // A destination stopped and started again lost no connection, with the same key or another.
+    for key in [None, Some("k2")] {
+        let (b, seen) = server(vec![Plan::Accept, Plan::Refuse]);
+        let mut out = Streaming::start_timed(&job, vec![target("b", &b, "k")], timing()).unwrap();
+        let feed = Feed::new(&out);
+        media(&seen, 5);
+        out.stop_destination("b").unwrap();
+        until_closed(&seen);
+        until(&out, "b", |d| d.status == DestinationStatus::Stopped);
+        out.start_destination("b", key).unwrap();
+        assert_eq!(next(&seen), Seen::Publish(key.unwrap_or("k").into()));
+        let d = until(&out, "b", |d| matches!(d.status, DestinationStatus::Failed(_)));
+        assert!(matches!(&d.status, DestinationStatus::Failed(f) if f.cause == Cause::RejectedPublish), "{key:?}: {d:?}");
+        drop(feed);
+        let _ = out.stop();
+    }
+    // Stopped and started again while it waits after a refusal, it tries at once, and the next
+    // refusal is final.
+    let (c, seen) = server(vec![Plan::DropAfter(12), Plan::Refuse, Plan::Refuse]);
+    let mut out = Streaming::start_timed(&job, vec![target("c", &c, "k")], Timing { refused: GUARD, ..timing() }).unwrap();
+    let feed = Feed::new(&out);
+    media(&seen, 12);
+    until_closed(&seen);
+    assert_eq!(next(&seen), Seen::Publish("k".into()));
+    until(&out, "c", |d| matches!(&d.status, DestinationStatus::Retrying { failure, .. } if failure.cause == Cause::RejectedPublish));
+    // A start of a destination that was not stopped changes nothing.
+    out.start_destination("c", None).unwrap();
+    assert!(!out.hub.find("c").unwrap().restarted.load(Ordering::SeqCst));
+    out.stop_destination("c").unwrap();
+    out.start_destination("c", None).unwrap();
+    until_closed(&seen);
+    assert_eq!(next(&seen), Seen::Publish("k".into()));
+    let d = until(&out, "c", |d| matches!(d.status, DestinationStatus::Failed(_)));
+    assert!(matches!(&d.status, DestinationStatus::Failed(f) if f.cause == Cause::RejectedPublish), "{d:?}");
+    drop(feed);
+    let _ = out.stop();
+}
+
+#[test]
+fn a_restart_while_it_waits_gets_every_try_again() {
+    // A lost connection and a refusal are two failed tries of three.
+    let (a, seen) = server(vec![Plan::DropAfter(12), Plan::Refuse, Plan::DropAfter(1), Plan::Accept]);
+    let job = job(RateControl::Bitrate { kbps: 400, keyframe_s: 1 });
+    let mut out = Streaming::start_timed(&job, vec![target("a", &a, "k")], Timing { refused: GUARD, ..quick() }).unwrap();
+    let feed = Feed::new(&out);
+    media(&seen, 12);
+    until_closed(&seen);
+    assert_eq!(next(&seen), Seen::Publish("k".into()));
+    until(&out, "a", |d| matches!(&d.status, DestinationStatus::Retrying { failure, .. } if failure.cause == Cause::RejectedPublish));
+    // A stop and start that reaches the waiting thread, as `spawn` makes it.
+    let dest = out.hub.find("a").unwrap();
+    dest.restarted.store(true, Ordering::SeqCst);
+    if let Some(t) = lock(&dest.thread).as_ref() {
+        t.thread().unpark();
+    }
+    until_closed(&seen);
+    // The connection lost after the start is its first failed try, so it tries again.
+    assert_eq!(next(&seen), Seen::Publish("k".into()));
+    until_closed(&seen);
+    assert_eq!(next(&seen), Seen::Publish("k".into()));
+    let d = until(&out, "a", |d| d.status == DestinationStatus::Live);
+    assert_eq!(d.reconnects, 2, "{d:?}");
+    drop(feed);
+    out.stop().unwrap();
+    until_closed(&seen);
+}
+
+#[test]
+fn a_restart_as_the_connection_is_lost_does_not_end_the_destination() {
+    let timing = quick();
+    let soon = Duration::ZERO;
+    // Two failed tries of three: a third loss soon after connecting ends the destination, unless it
+    // was started again meanwhile.
+    assert!(timing.gives_up(failures_after_loss(&timing, 2, soon, false)));
+    assert_eq!(failures_after_loss(&timing, 2, soon, true), 0);
+    assert!(!timing.gives_up(failures_after_loss(&timing, 2, soon, true)));
+    assert_eq!(failures_after_loss(&timing, 2, timing.stable, false), 1);
+}
+
+#[test]
+fn a_restart_the_connection_outlived_does_not_change_the_next_try() {
+    let (a, seen) = server(vec![Plan::DropAfter(12), Plan::Refuse, Plan::Accept]);
+    let job = job(RateControl::Bitrate { kbps: 400, keyframe_s: 1 });
+    let mut out = Streaming::start_timed(&job, vec![target("a", &a, "k")], Timing { max_tries: 10, ..quick() }).unwrap();
+    assert_eq!(next(&seen), Seen::Publish("k".into()));
+    until(&out, "a", |d| d.status == DestinationStatus::Live);
+    // A stop and start that the sending loop did not see; every packet is sent after it.
+    out.hub.find("a").unwrap().restarted.store(true, Ordering::SeqCst);
+    let feed = Feed::new(&out);
+    media(&seen, 12);
+    until_closed(&seen);
+    // The refusal follows the lost connection, so it is tried again, and the server takes the stream.
+    assert_eq!(next(&seen), Seen::Publish("k".into()));
+    until_closed(&seen);
+    assert_eq!(next(&seen), Seen::Publish("k".into()));
+    let d = until(&out, "a", |d| d.status == DestinationStatus::Live && d.reconnects == 1);
+    assert_eq!(d.reconnects, 1);
     drop(feed);
     out.stop().unwrap();
     until_closed(&seen);
@@ -1213,6 +1392,65 @@ fn a_stop_while_waiting_for_the_network_returns() {
     drop(slot);
     assert!(lock(&out.hub.net.state).0.is_empty(), "it no longer waits for the network");
     out.stop().unwrap();
+}
+
+/// A stop and start that reaches the waiting thread of `id`, as `spawn` makes it.
+fn restart_waiting(out: &Streaming, id: &str) {
+    let dest = out.hub.find(id).unwrap();
+    dest.restarted.store(true, Ordering::SeqCst);
+    if let Some(t) = lock(&dest.thread).as_ref() {
+        t.thread().unpark();
+    }
+}
+
+#[test]
+fn a_restart_while_it_waits_shows_a_first_try() {
+    let (url, seen) = server(vec![Plan::Accept]);
+    let (release, hold) = mpsc::channel::<()>();
+    let (resolve, asked) = scripted(vec![Answer::Now(Err(io::Error::other("no answer"))), Answer::After(hold, vec![addr(&url)])]);
+    let job = job(RateControl::Bitrate { kbps: 400, keyframe_s: 1 });
+    let seams = Seams { clock: TestClock::new(), resolve, route: routed() };
+    let mut out = Streaming::start_with(&job, vec![named("a")], network_timing(), seams).unwrap();
+    let feed = Feed::new(&out);
+    assert_eq!([heard(&asked), heard(&asked)], ["asked", "answered"]);
+    until(&out, "a", |d| matches!(d.status, DestinationStatus::Retrying { attempt: 2, .. }));
+    restart_waiting(&out, "a");
+    // While the try looks the name up, it is shown as a first try.
+    assert_eq!(heard(&asked), "asked");
+    until(&out, "a", |d| d.status == DestinationStatus::Connecting);
+    drop(release);
+    assert_eq!(next(&seen), Seen::Publish("k".into()));
+    until(&out, "a", |d| d.status == DestinationStatus::Live);
+    drop(feed);
+    out.stop().unwrap();
+    until_closed(&seen);
+}
+
+#[test]
+fn a_restart_while_waiting_for_the_network_tries_at_once() {
+    let (url, seen) = server(vec![Plan::Accept]);
+    let (release, hold) = mpsc::channel::<()>();
+    let (resolve, asked) = scripted(vec![Answer::Now(Err(io::Error::other("no network"))), Answer::After(hold, vec![addr(&url)])]);
+    let (route, _set) = switch(Route::None);
+    let job = job(RateControl::Bitrate { kbps: 400, keyframe_s: 1 });
+    let seams = Seams { clock: TestClock::new(), resolve, route };
+    let mut out = Streaming::start_with(&job, vec![named("a")], network_timing(), seams).unwrap();
+    let feed = Feed::new(&out);
+    assert_eq!([heard(&asked), heard(&asked)], ["asked", "answered"]);
+    until(&out, "a", |d| waiting(d).is_some());
+    restart_waiting(&out, "a");
+    // It tries at once though the route has not returned, shown as a first try, and the server
+    // takes the stream.
+    assert_eq!(heard(&asked), "asked");
+    until(&out, "a", |d| d.status == DestinationStatus::Connecting);
+    drop(release);
+    assert_eq!(next(&seen), Seen::Publish("k".into()));
+    let d = until(&out, "a", |d| d.status == DestinationStatus::Live);
+    assert_eq!(d.reconnects, 0);
+    assert!(lock(&out.hub.net.state).0.is_empty(), "it no longer waits for the network");
+    drop(feed);
+    out.stop().unwrap();
+    until_closed(&seen);
 }
 
 #[test]
