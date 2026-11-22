@@ -766,6 +766,12 @@ fn wait(hub: &Hub, d: &Dest, delay: Duration) {
     }
 }
 
+/// What is left at `now` of the wait after a `publish` refused at `at`; nothing when the last try
+/// was not refused.
+fn refusal_left(timing: &Timing, at: Option<Instant>, now: Instant) -> Duration {
+    at.map_or(Duration::ZERO, |at| timing.refused.saturating_sub(now.saturating_duration_since(at)))
+}
+
 /// Whether a failure of `cause` may come from this computer having no network: a missing route,
 /// a lookup that failed or had no answer, or a connection that timed out.
 fn network_cause(cause: Cause) -> bool {
@@ -1037,7 +1043,8 @@ fn run(hub: &Arc<Hub>, d: &Arc<Dest>) {
             }
             let delay = hub.timing.delay(failures.max(1));
             let delay = if hub.timing.jitter { jittered(delay, next_random(&mut random)) } else { delay };
-            let delay = if std::mem::take(&mut refused) { delay.max(hub.timing.refused) } else { delay };
+            let refused_at = std::mem::take(&mut refused).then(Instant::now);
+            let delay = if refused_at.is_some() { delay.max(hub.timing.refused) } else { delay };
             // With no route, the wait for the network takes the place of the wait before the try.
             let mut route = gate(hub, d, &failure);
             if route == Gate::Open {
@@ -1052,7 +1059,11 @@ fn run(hub: &Arc<Hub>, d: &Arc<Dest>) {
             if route != Gate::Open && !d.stopping() && !d.restarted.load(Ordering::SeqCst) && !hub.control.is_ended() {
                 let until = (route == Gate::NoDefault).then_some(delay);
                 match wait_for_network(hub, d, &mut failures, &failure, until) {
-                    NetWait::Up => d.set(DestinationStatus::Retrying { attempt: failures.saturating_add(1), failure }),
+                    NetWait::Up => {
+                        d.set(DestinationStatus::Retrying { attempt: failures.saturating_add(1), failure });
+                        // A route that returns soon after a refused `publish` does not cut its wait.
+                        wait(hub, d, refusal_left(&hub.timing, refused_at, Instant::now()));
+                    }
                     NetWait::Restarted | NetWait::Stopped => {}
                     NetWait::GaveUp(f) => return fail(hub, d, f),
                 }
@@ -1067,9 +1078,10 @@ fn run(hub: &Arc<Hub>, d: &Arc<Dest>) {
         }
         let connected = connect(hub, d);
         // Started again while it waited or connected: this try's answer is that of a first try, and
-        // the tries after it are counted from none.
+        // the tries after it are counted from none, and a later failure may be checked again.
         if d.restarted.swap(false, Ordering::SeqCst) {
             (after_loss, refusals, failures) = (false, 0, 0);
+            d.checked.store(false, Ordering::SeqCst);
         }
         let tried = match connected {
             Ok(p) => Ok(p),

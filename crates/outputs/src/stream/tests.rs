@@ -1454,6 +1454,17 @@ fn a_restart_while_waiting_for_the_network_tries_at_once() {
 }
 
 #[test]
+fn a_route_that_returns_soon_after_a_refusal_keeps_the_refusal_wait() {
+    let timing = Timing { refused: Duration::from_secs(5), ..quick() };
+    let at = Instant::now();
+    // A route back 2 s after the refusal leaves 3 s of its wait; one back after 6 s leaves none.
+    assert_eq!(refusal_left(&timing, Some(at), at + Duration::from_secs(2)), Duration::from_secs(3));
+    assert_eq!(refusal_left(&timing, Some(at), at + Duration::from_secs(6)), Duration::ZERO);
+    // A wait for the network after any other failure ends at once when the route returns.
+    assert_eq!(refusal_left(&timing, None, at + Duration::from_secs(2)), Duration::ZERO);
+}
+
+#[test]
 fn sixteen_destinations_share_one_route_thread() {
     let (resolve, _asked) = scripted(Vec::new());
     let (route, _set) = switch(Route::None);
@@ -1592,6 +1603,25 @@ fn a_destination_that_gives_up_is_checked_and_its_check_outlives_the_stream() {
     assert!(fake.calls().iter().any(|c| c.starts_with("fetch")), "the profile turned the service's hosts on");
     diagnose::tests::until_checks(&checks, |c| (c.running() == 0).then_some(()));
     assert_eq!(checks_run(&fake), 1);
+}
+
+#[test]
+fn a_restart_after_a_check_is_checked_again_after_its_third_failed_try() {
+    let job = job(RateControl::Bitrate { kbps: 400, keyframe_s: 1 });
+    let (checks, fake, auto) = auto_checks(false);
+    let timing = Timing { max_tries: 6, ..quick() };
+    // Three failed tries start a check, and the fourth try waits in its lookup.
+    let (seams, server, at_fourth, go_on) = held_lookup(4);
+    let mut out = Streaming::start_full(&job, vec![target("a", &server, "k")], timing, seams, Some((Arc::clone(&checks), auto))).unwrap();
+    at_fourth.recv_timeout(GUARD).unwrap();
+    assert!(diagnose::tests::done_in(&checks, "Show", "a").automatic);
+    // Started again while it tries: the fourth try is its first, and the sixth its third.
+    restart_waiting(&out, "a");
+    drop(go_on);
+    until(&out, "a", |d| matches!(d.status, DestinationStatus::Failed(_)));
+    diagnose::tests::until_checks(&checks, |c| (c.running() == 0).then_some(()));
+    assert_eq!(checks_run(&fake), 2, "{:?}", fake.calls());
+    assert!(out.stop().is_err());
 }
 
 #[test]
