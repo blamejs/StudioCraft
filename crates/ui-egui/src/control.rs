@@ -358,18 +358,26 @@ impl StudioApp {
     /// and the notices.
     pub fn ui_inspect(&self, ctx: &egui::Context) -> Value {
         let window = ctx.viewport_rect();
-        let dock = |(i, r, d): &(usize, egui::Rect, crate::docks::Drawn)| {
+        let dock = |i: usize, r: egui::Rect, d: &crate::docks::Drawn| {
             json!({
-                "dock": DOCK_NAMES.get(*i).copied().unwrap_or("unknown"),
-                "rect": rect(*r),
+                "dock": DOCK_NAMES.get(i).copied().unwrap_or("unknown"),
+                "rect": rect(r),
                 "header": rect(d.header),
                 "title": rect(d.title),
                 "title_truncated": d.truncated,
                 "actions": d.actions.iter().rev().map(|(name, r)| json!({"name": name, "rect": rect(*r)})).collect::<Vec<_>>(),
             })
         };
-        let docks: Vec<Value> = self.dock_rects.iter().map(dock).collect();
-        let floating: Vec<Value> = self.floating_rects.iter().map(dock).collect();
+        let docks: Vec<Value> = self.dock_rects.iter().map(|(i, r, d)| dock(*i, *r, d)).collect();
+        let floating: Vec<Value> = self
+            .floating_rects
+            .iter()
+            .map(|(i, r, d, bar)| {
+                let mut v = dock(*i, *r, d);
+                v["bar"] = rect(*bar);
+                v
+            })
+            .collect();
         let d = self.store.prefs().docks;
         let strip = self.dock_strip.map(|r| {
             json!({

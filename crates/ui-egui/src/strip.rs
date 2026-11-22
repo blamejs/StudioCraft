@@ -1,4 +1,5 @@
-//! The sizes of the dock strip under the preview: its height and the widths of its columns.
+//! The sizes of the dock strip under the preview, its height and the widths of its columns, and the
+//! handles that change them.
 //!
 //! The strip is 200 points tall, or 30% of the window's height when that is less, and never less
 //! than 120 points. A height set by dragging the strip's top edge replaces the default and is kept
@@ -6,6 +7,17 @@
 //! width of its own (Scenes 300, Sources 340, Audio Mixer 400 and Application Audio 360 points by
 //! default); the last shown dock takes the rest. No column is narrower than 200 points while the strip has room for that,
 //! and a 1 point divider separates two columns.
+//!
+//! [`Handles`] shows the strip's top edge and its dividers as the framework's splitters.
+
+use craft_behavior::divider::{Give, Segment, resize, travel};
+use craft_behavior::{Axis, Metrics, PartKey, PressPhase, Sense};
+use craft_ui::contract::{Access, Common, Component, Cx, NoValue, Outcome, PaintUi, PartsCx, Pointer as _, Props as _, Role};
+use craft_ui::docking::divider::{self, Divider};
+use craft_ui::docking::{DockSizes, Splitter};
+use craft_ui::runtime::focus::KeyUse;
+use craft_ui::style::{ComponentStyle, StyleCx};
+use egui::{Rect, Response};
 
 /// The default strip height and the share of the window it may take by default.
 pub const DEFAULT_HEIGHT: f32 = 200.0;
@@ -81,19 +93,61 @@ pub fn widths<const N: usize>(total: f32, shown: &[u8], saved: [f32; N]) -> Vec<
     out
 }
 
+/// The columns as a row of the framework's divider segments: each gives way down to [`MIN_WIDTH`],
+/// or not at all when it is already narrower.
+fn segments(widths: &[f32]) -> Vec<Segment> {
+    widths.iter().map(|w| Segment::unbounded(*w, MIN_WIDTH.min(*w))).collect()
+}
+
 /// The widths after the divider right of column `k` moved `delta` points: column `k` changes by
 /// `delta` and the column right of it by the opposite, each staying at least [`MIN_WIDTH`] wide
-/// (or as wide as it is, when that is already less).
+/// (or as wide as it is, when that is already less). The framework's divider rule for the two
+/// columns beside a divider clamps the move.
 pub fn drag(widths: &[f32], k: usize, delta: f32) -> Vec<f32> {
-    let mut out = widths.to_vec();
-    if k + 1 >= out.len() || !delta.is_finite() {
-        return out;
+    if k + 1 >= widths.len() || !delta.is_finite() {
+        return widths.to_vec();
     }
-    let (a, b) = (out[k], out[k + 1]);
-    let delta = delta.clamp(-(a - MIN_WIDTH).max(0.0), (b - MIN_WIDTH).max(0.0));
-    out[k] = a + delta;
-    out[k + 1] = b - delta;
+    let end: f32 = widths.iter().take(k + 1).sum();
+    resize(&segments(widths), k, end + delta, Give::Pair)
+}
+
+/// The dividers between the columns `widths` wide that the strip lays out in `area` from its left
+/// edge, in order: each centered on its 1 point line, `reach` points thick, and moving as far as
+/// [`drag`] lets it.
+pub fn dividers(area: Rect, widths: &[f32], reach: f32) -> Vec<Divider> {
+    let row = segments(widths);
+    let mut x = area.left();
+    let mut out = Vec::with_capacity(widths.len().saturating_sub(1));
+    for (k, w) in widths.iter().enumerate().take(widths.len().saturating_sub(1)) {
+        x += w;
+        let at = x + DIVIDER / 2.0;
+        let (lo, hi) = travel(&row, k, Give::Pair);
+        out.push(Divider::new(Axis::X, at, area, (at + lo, at + hi), reach));
+        x += DIVIDER;
+    }
     out
+}
+
+/// The strip's top edge for the strip in `area`, centered on the 1 point line at the top of the
+/// strip and `reach` points thick. It moves up until the strip is `most` points tall and down
+/// until it is [`MIN_HEIGHT`] tall; a strip already outside that range does not move further out.
+pub fn edge(area: Rect, most: f32, reach: f32) -> Divider {
+    let at = area.top() + DIVIDER / 2.0;
+    let h = area.height();
+    let (least, most) = (MIN_HEIGHT.min(h), most.max(h));
+    Divider::new(Axis::Y, at, area, (at - (most - h), at + (h - least)), reach)
+}
+
+/// How far down and to the right each dock's window opens from the one before it.
+pub const CASCADE: f32 = 24.0;
+
+/// Where the window of dock `k` opens in the main window `bounds` when no place was saved for it:
+/// centered, moved [`CASCADE`] points down and to the right per dock index, and inside the main
+/// window where it fits.
+pub fn window_place(bounds: Rect, size: egui::Vec2, k: usize) -> egui::Pos2 {
+    let step = CASCADE * k.min(crate::store::DOCK_COUNT) as f32;
+    let at = bounds.center() - size / 2.0 + egui::vec2(step, step);
+    at.clamp(bounds.min, (bounds.max - size).max(bounds.min))
 }
 
 /// The saved widths by dock index after the divider right of shown column `k` moved, with `moved`
@@ -112,6 +166,125 @@ pub fn save<const N: usize>(saved: [f32; N], shown: &[u8], moved: &[f32], k: usi
         }
     }
     out
+}
+
+/// The parts of [`Handles`].
+const HANDLE: PartKey = PartKey::new("handle");
+
+/// The style of [`Handles`]: how far an arrow key moves a handle, and with Shift.
+#[derive(Clone, Debug, PartialEq, ComponentStyle)]
+#[non_exhaustive]
+pub struct HandlesStyle {
+    #[style(metrics)]
+    metrics: Metrics,
+    step: f32,
+    jump: f32,
+}
+
+/// What [`Handles`] reports in a pass.
+#[derive(Debug)]
+pub struct HandlesOutput {
+    pub response: Response,
+    /// The handle that was dragged or moved by the keys, by its index, and the coordinate it was
+    /// moved to, within its range. `None` when no handle moved.
+    pub moved: Option<(usize, f32)>,
+}
+
+impl Outcome for HandlesOutput {
+    type Value = NoValue;
+
+    fn response(&self) -> &Response {
+        &self.response
+    }
+}
+
+/// Handles on the strip's top edge or its dividers: each is a framework splitter that the pointer
+/// drags and that is a Tab stop the arrow keys move, named `name` for assistive technology. The
+/// handles report where they were moved to; the strip applies the move.
+#[derive(craft_ui::contract::Component, craft_ui::contract::Props)]
+pub struct Handles {
+    #[common]
+    common: Common,
+    dividers: Vec<Divider>,
+    name: String,
+    moved: Option<(usize, f32)>,
+}
+
+impl Handles {
+    /// Handles named `name` over `dividers`, which are in the strip's physical coordinates.
+    pub fn new(name: impl Into<String>, dividers: Vec<Divider>) -> Self {
+        let name = name.into();
+        Handles { common: Common::new(), dividers, name: name.clone(), moved: None }.label(name).ltr_axis()
+    }
+
+    fn keyed(&self) -> Vec<(u64, Divider)> {
+        self.dividers.iter().enumerate().map(|(k, d)| (k as u64, *d)).collect()
+    }
+}
+
+impl Component for Handles {
+    const ROLE: Role = Role::GROUP;
+    const KEYS: KeyUse = KeyUse::SPLITTER;
+    const OVERLAYS: bool = false;
+    type Style = HandlesStyle;
+    type Output = HandlesOutput;
+
+    fn style(cx: &StyleCx<'_>, _: HandlesStyleKey) -> HandlesStyle {
+        let sizes = DockSizes::style(cx);
+        HandlesStyle { metrics: Metrics::new(), step: sizes.step, jump: sizes.jump }
+    }
+
+    fn sense(&self) -> Sense {
+        Sense::empty()
+    }
+
+    fn parts(&mut self, rect: Rect, cx: &mut PartsCx<'_, Self>) {
+        for (k, d) in self.dividers.iter().enumerate() {
+            divider::declare(cx, rect, HANDLE, k as u64, d);
+        }
+    }
+
+    fn update(&mut self, cx: &mut Cx<'_, Self>) {
+        for (k, d) in self.dividers.iter().enumerate() {
+            // The line moves by as much as the pointer did, from the press on the first move past the drag
+            // threshold and from the last pass after that, so a press beside the line does not make it jump.
+            let moved = match cx.part(HANDLE.at(k as u64)).press.phase {
+                PressPhase::DragStart { start, pos, .. } => pos - start.origin,
+                PressPhase::Drag { delta, .. } => delta,
+                _ => continue,
+            };
+            let at = d.at + if d.axis == Axis::X { moved.x } else { moved.y };
+            if at.is_finite() {
+                let at = at.clamp(d.lo.min(d.at), d.hi.max(d.at));
+                if at != d.at {
+                    self.moved = Some((k, at));
+                }
+            }
+        }
+        let (step, jump) = (cx.style.step, cx.style.jump);
+        if let Some((k, at)) = divider::keys(cx, HANDLE, &self.keyed(), step, jump)
+            && at.is_finite()
+            && self.dividers.get(k as usize).is_some_and(|d| at != d.at)
+        {
+            self.moved = Some((k as usize, at));
+        }
+    }
+
+    fn paint_over(&mut self, ui: &mut PaintUi<'_>, _: &Cx<'_, Self>) {
+        for (k, d) in self.dividers.iter().enumerate() {
+            ui.face(HANDLE.at(k as u64), Splitter::new(d.axis));
+        }
+    }
+
+    fn access(&self, access: &mut Access, cx: &Cx<'_, Self>) {
+        for (k, d) in self.dividers.iter().enumerate() {
+            divider::describe(access, HANDLE, k as u64, d, &self.name, cx.style.step);
+        }
+    }
+
+    fn finish(self, cx: Cx<'_, Self>) -> HandlesOutput {
+        HandlesOutput { response: cx.response.clone(), moved: self.moved }
+    }
 }
 
 #[cfg(test)]
@@ -181,17 +354,6 @@ mod tests {
     }
 
     #[test]
-    fn a_dragged_divider_moves_width_between_its_two_columns() {
-        let w = [300.0, 340.0, 638.0];
-        assert_eq!(drag(&w, 0, 40.0), [340.0, 300.0, 638.0]);
-        assert_eq!(drag(&w, 1, -40.0), [300.0, 300.0, 678.0]);
-        assert_eq!(drag(&w, 0, 500.0), [440.0, 200.0, 638.0], "the right column stops at 200");
-        assert_eq!(drag(&w, 0, -500.0), [200.0, 440.0, 638.0], "the left column stops at 200");
-        assert_eq!(drag(&w, 2, 10.0), w, "the last column has no divider on its right");
-        assert_eq!(drag(&w, 0, f32::NAN), w);
-    }
-
-    #[test]
     fn a_drag_saves_only_the_columns_beside_its_divider() {
         let shown = [0, 1, 2];
         let w = widths(760.0, &shown, [0.0, 0.0, 0.0]);
@@ -202,6 +364,12 @@ mod tests {
         assert_eq!(out[1], moved[1]);
         let moved = drag(&w, 0, 10.0);
         assert_eq!(save([0.0, 0.0, 0.0], &shown, &moved, 0), [moved[0], moved[1], 0.0], "both columns beside divider 0");
+        // A drag past the end of the divider's range saves Sources at its least width and gives
+        // Scenes the rest of the two columns' room.
+        let moved = drag(&w, 0, 500.0);
+        let out = save([0.0, 0.0, 0.0], &shown, &moved, 0);
+        assert!((out[1] - MIN_WIDTH).abs() < 0.01 && (out[0] + out[1] - w[0] - w[1]).abs() < 0.01, "{w:?} -> {out:?}");
+        assert_eq!(out[2], 0.0);
         let out = save([250.0, 0.0, 0.0], &[0, 2], &drag(&[300.0, 979.0], 0, 15.0), 0);
         assert_eq!(out, [315.0, 0.0, 0.0], "the last column keeps no width");
         assert_eq!(save([250.0, 400.0, 0.0], &[], &[], 0), [250.0, 400.0, 0.0]);
@@ -229,5 +397,47 @@ mod tests {
         let w = widths(1280.0, &shown, none);
         assert_eq!(save(none, &shown, &drag(&w, 0, 15.0), 0), [285.0, 0.0, 0.0, 375.0]);
         assert_eq!(save([0.0; 3], &[9, 0], &[300.0, 900.0], 0), [0.0; 3], "an index past the saved widths is not saved");
+    }
+
+    #[test]
+    fn each_divider_sits_on_its_line_and_moves_as_far_as_a_drag_can() {
+        let area = Rect::from_min_size(egui::pos2(10.0, 600.0), egui::vec2(1280.0, 200.0));
+        let w = widths(1280.0, &[0, 1, 2], [0.0, 0.0, 0.0]);
+        let d = dividers(area, &w, 8.0);
+        assert_eq!(d.len(), 2);
+        assert_eq!((d[0].at, d[0].lo, d[0].hi), (310.5, 210.5, 450.5), "Scenes 300 and Sources 340 each give way down to 200");
+        assert_eq!((d[1].at, d[1].lo, d[1].hi), (651.5, 511.5, 1089.5));
+        assert_eq!(d[0].bar, Rect::from_min_max(egui::pos2(306.5, 600.0), egui::pos2(314.5, 800.0)), "8 points across the line");
+        assert_eq!(drag(&w, 0, d[0].hi - d[0].at), [440.0, 200.0, 638.0], "the far end of the range leaves Sources 200 wide");
+        assert_eq!(drag(&w, 0, d[0].lo - d[0].at), [200.0, 440.0, 638.0]);
+        let narrow = dividers(area, &[150.0, 150.0], 8.0);
+        assert_eq!((narrow[0].lo, narrow[0].hi), (narrow[0].at, narrow[0].at), "columns under 200 do not give way");
+        assert!(dividers(area, &[1280.0], 8.0).is_empty());
+        assert!(dividers(area, &[], 8.0).is_empty());
+    }
+
+    #[test]
+    fn the_top_edge_moves_between_the_least_and_the_most_height() {
+        let area = Rect::from_min_size(egui::pos2(0.0, 576.0), egui::vec2(1280.0, 200.0));
+        let e = edge(area, 360.0, 8.0);
+        assert_eq!(e.axis, Axis::Y);
+        assert_eq!((e.at, e.lo, e.hi), (576.5, 416.5, 656.5), "up to 360 and down to 120 points tall");
+        assert_eq!(e.bar, Rect::from_min_max(egui::pos2(0.0, 572.5), egui::pos2(1280.0, 580.5)));
+        let short = edge(Rect::from_min_size(egui::pos2(0.0, 100.0), egui::vec2(400.0, 90.0)), 360.0, 8.0);
+        assert_eq!(short.hi, short.at, "a strip under 120 points does not get shorter");
+        let tall = edge(area, 150.0, 8.0);
+        assert_eq!(tall.lo, tall.at, "a strip over its most height does not get taller");
+    }
+
+    #[test]
+    fn a_dock_window_without_a_saved_place_opens_centered_and_cascaded() {
+        let bounds = Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1280.0, 800.0));
+        let size = egui::vec2(300.0, 200.0);
+        assert_eq!(window_place(bounds, size, 0), egui::pos2(490.0, 300.0));
+        assert_eq!(window_place(bounds, size, 2), egui::pos2(538.0, 348.0));
+        assert_eq!(window_place(bounds, size, usize::MAX), egui::pos2(586.0, 396.0), "an index past the last dock steps no further");
+        let small = Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(400.0, 300.0));
+        assert_eq!(window_place(small, egui::vec2(380.0, 290.0), 3), egui::pos2(20.0, 10.0), "kept inside the main window");
+        assert_eq!(window_place(small, egui::vec2(800.0, 500.0), 1), egui::Pos2::ZERO, "a larger window starts at the top left");
     }
 }

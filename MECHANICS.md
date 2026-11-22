@@ -153,5 +153,6 @@ field to `false` in `mechanics.json`.
 | Autosave after a change | 800 ms | `ui-egui::AUTOSAVE` | estimated |
 | Dock widths when none is set (the last shown dock takes the rest) | Scenes 300, Sources 340, Audio Mixer 400, Application Audio 360 points | `ui-egui::strip::DEFAULT_WIDTHS` | estimated |
 | Undocked dock window | The dock's default width by 200 points to start, at least 200 by 120 points | `ui-egui::StudioApp::dock_windows` | estimated |
+| Undocked dock window's first place | Centered, then 24 points down and right per dock index | `ui-egui::strip::CASCADE` | estimated |
 | Saved dock layouts | 32 | `ui-egui::store::MAX_DOCK_LAYOUTS` | estimated |
 | Status notices shown | 8 s (errors 24 s) | `ui-egui::NOTICE_S` | estimated |

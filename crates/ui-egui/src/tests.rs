@@ -1198,6 +1198,15 @@ fn dragging_the_strip_edge_and_a_divider_saves_the_sizes_and_reset_clears_them()
     assert_eq!(a.store().prefs().docks.height, 260.0, "dragging the edge up 60 points makes the strip 260 tall");
     assert_eq!(rect_of(&a.ui_inspect(&ctx)["dock_strip"]["rect"]).height(), 260.0);
 
+    // A drag that starts 2.5 points below the line, still in its hit band, moves the edge by the
+    // distance dragged.
+    let top = rect_of(&a.ui_inspect(&ctx)["dock_strip"]["rect"]).top();
+    for events in drag(egui::pos2(900.0, top + 3.0), egui::pos2(900.0, top + 3.0 - 20.0)) {
+        frame_with(&mut a, &ctx, size, events);
+    }
+    frame_at(&mut a, &ctx, size);
+    assert_eq!(a.store().prefs().docks.height, 280.0, "a drag beside the line does not make the edge jump");
+
     let scenes = rect_of(&a.ui_inspect(&ctx)["docks"][0]["rect"]);
     let y = scenes.center().y;
     for events in drag(egui::pos2(scenes.right() + 0.5, y), egui::pos2(scenes.right() + 40.5, y)) {
@@ -1208,6 +1217,15 @@ fn dragging_the_strip_edge_and_a_divider_saves_the_sizes_and_reset_clears_them()
     assert_eq!((d.scenes_width, d.sources_width), (340.0, 300.0), "the divider moves width from Sources to Scenes");
     let widths: Vec<f32> = a.ui_inspect(&ctx)["docks"].as_array().unwrap_or(&Vec::new()).iter().map(|d| rect_of(&d["rect"]).width()).collect();
     assert_eq!(widths, [340.0, 300.0, 638.0]);
+
+    // The same for a divider, with a drag that starts 2.5 points right of its line.
+    let scenes = rect_of(&a.ui_inspect(&ctx)["docks"][0]["rect"]);
+    for events in drag(egui::pos2(scenes.right() + 3.0, y), egui::pos2(scenes.right() + 23.0, y)) {
+        frame_with(&mut a, &ctx, size, events);
+    }
+    frame_at(&mut a, &ctx, size);
+    let d = a.store().prefs().docks;
+    assert_eq!((d.scenes_width, d.sources_width), (360.0, 280.0), "a drag beside the divider does not make it jump");
 
     run(&mut a, &ctx, "dock.reset", json!({})).unwrap();
     let d = a.store().prefs().docks;
@@ -1441,8 +1459,9 @@ fn dragging_a_floating_dock_by_its_header_moves_its_window_and_saves_the_place()
     }
     let v = a.ui_inspect(&ctx);
     let before = rect_of(&v["floating_docks"][0]["rect"]);
-    let header = rect_of(&v["floating_docks"][0]["title"]);
-    let from = header.center();
+    let bar = rect_of(&v["floating_docks"][0]["bar"]);
+    assert!(bar.height() > 0.0 && before.contains_rect(bar), "{bar:?} in {before:?}");
+    let from = bar.center();
     for events in drag(from, from + egui::vec2(200.0, 150.0)) {
         frame_with(&mut a, &ctx, size, events);
     }
@@ -1459,7 +1478,7 @@ fn dragging_a_floating_dock_by_its_header_moves_its_window_and_saves_the_place()
     frame_at(&mut a, &ctx, size);
     assert_eq!(rect_of(&a.ui_inspect(&ctx)["floating_docks"][0]["rect"]).min, after.min);
 
-    // The title that moves the window still opens the dock's menu.
+    // The dock's own title still opens the dock's menu.
     let title = rect_of(&a.ui_inspect(&ctx)["floating_docks"][0]["title"]);
     assert!(!egui::Popup::is_any_open(&ctx));
     for events in right_click(title.center()) {
@@ -1521,6 +1540,22 @@ fn a_smaller_main_window_does_not_change_a_floating_dock_s_saved_place() {
         frame_at(&mut b, &ctx_b, small);
     }
     assert_eq!(b.store().prefs().docks.window_pos(2), Some([900.0, 500.0]), "a resize keeps the saved place");
+    // A resize from the left edge saves the new left edge and keeps the saved top.
+    let pushed = rect_of(&b.ui_inspect(&ctx_b)["floating_docks"][0]["rect"]);
+    let edge = egui::pos2(pushed.left() + 1.0, pushed.center().y);
+    for events in drag(edge, edge - egui::vec2(20.0, 0.0)) {
+        frame_with(&mut b, &ctx_b, small, events);
+    }
+    for _ in 0..2 {
+        frame_at(&mut b, &ctx_b, small);
+    }
+    let wider = rect_of(&b.ui_inspect(&ctx_b)["floating_docks"][0]["rect"]);
+    assert_eq!(wider.left(), pushed.left() - 20.0, "{pushed:?} -> {wider:?}");
+    assert_eq!(b.store().prefs().docks.window_pos(2), Some([wider.left(), 500.0]), "a left-edge resize keeps the saved top");
+    b.store.update(|p| {
+        let outer = p.docks.window_size[2];
+        p.docks.place_window(2, [900.0, 500.0], outer);
+    });
     for _ in 0..3 {
         frame_at(&mut b, &ctx_b, big);
     }
@@ -1581,7 +1616,7 @@ fn dragging_a_floating_dock_s_corner_resizes_it_and_saves_the_size() {
     assert_eq!(a.store().prefs().docks.window_size[0], [smaller.width(), smaller.height()]);
     let after = smaller;
 
-    // A drag on the left edge does not move the window's corner.
+    // A drag on the left edge moves that edge, keeps the right one, and saves the new place.
     let edge = egui::pos2(after.left() + 1.0, after.center().y);
     for events in drag(edge, edge - egui::vec2(50.0, 0.0)) {
         frame_with(&mut a, &ctx, size, events);
@@ -1589,8 +1624,10 @@ fn dragging_a_floating_dock_s_corner_resizes_it_and_saves_the_size() {
     for _ in 0..2 {
         frame_at(&mut a, &ctx, size);
     }
-    assert_eq!(rect_of(&a.ui_inspect(&ctx)["floating_docks"][0]["rect"]).min, after.min);
-    assert_eq!(a.store().prefs().docks.window_pos(0), Some([200.0, 150.0]));
+    let wider = rect_of(&a.ui_inspect(&ctx)["floating_docks"][0]["rect"]);
+    assert_eq!((wider.left(), wider.right(), wider.min.y), (after.left() - 50.0, after.right(), after.min.y), "{after:?} -> {wider:?}");
+    assert_eq!(a.store().prefs().docks.window_pos(0), Some([wider.min.x, wider.min.y]));
+    assert_eq!(a.store().prefs().docks.window_size[0], [wider.width(), wider.height()]);
 }
 
 #[test]
@@ -1638,7 +1675,8 @@ fn a_press_on_a_header_action_under_the_strip_edge_runs_the_action() {
     // The button is as tall as the header at the top of the strip, so its top is in the strip
     // edge's hit band.
     assert_eq!(add.top(), strip.top(), "the Add button starts at the top of the strip");
-    assert!(add.top() + 1.0 <= strip.top() + 1.0 + crate::EDGE_HIT_MARGIN, "the press below goes to the edge's hit band");
+    let band = crate::theme::with_root(&ctx, |cx| cx.tokens.size.hit.target) / 2.0;
+    assert!(add.top() + 1.0 <= strip.top() + crate::strip::DIVIDER / 2.0 + band, "the press below is in the edge's hit band");
     let at = egui::pos2(add.center().x, add.top() + 1.0);
     let b = |pressed| Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: Modifiers::NONE };
     for events in [vec![Event::PointerMoved(at)], vec![b(true)], vec![b(false)], vec![]] {

@@ -68,9 +68,6 @@ pub struct Drawn {
     pub title: Rect,
     pub actions: Vec<(&'static str, Rect)>,
     pub truncated: bool,
-    /// How far the title of a dock in a window of its own was dragged this frame; zero in the
-    /// strip.
-    pub grab: egui::Vec2,
 }
 
 /// A dock's header; `title` is English and shown translated. `add` adds the actions from right to
@@ -82,19 +79,16 @@ fn header(ui: &mut Ui, title: &str, add: impl FnOnce(&mut Ui, &mut Vec<(&'static
         add(ui, &mut actions);
         actions
     });
-    Drawn { header: r.rect, title: r.title, actions: r.inner, truncated: r.truncated, grab: egui::Vec2::ZERO }
+    Drawn { header: r.rect, title: r.title, actions: r.inner, truncated: r.truncated }
 }
 
 /// The menu a right-click on a dock's title opens, for `dock` (its name in
 /// `control::DOCK_NAMES`). A dock in the strip offers Move Left and Move Right (`dock.move`; the
 /// first dock cannot move left and the last cannot move right) and Undock; a dock in a window of
-/// its own offers Dock in the Strip (both `dock.float`). The title of a dock in a window of its
-/// own is also the window's drag handle, and `drawn.grab` gets how far it was dragged.
-fn dock_menu(ui: &mut Ui, drawn: &mut Drawn, dock: &'static str, place: Option<(usize, usize)>, acts: &mut Vec<Act>) {
-    // In the strip the title takes clicks only, so a drag there still reaches the strip's top edge.
-    let sense = if place.is_some() { Sense::click() } else { Sense::click_and_drag() };
-    let r = ui.interact(drawn.title, ui.scope_id().with(("dock-title", dock)), sense);
-    drawn.grab = r.drag_delta();
+/// its own offers Dock in the Strip (both `dock.float`).
+fn dock_menu(ui: &mut Ui, drawn: &Drawn, dock: &'static str, place: Option<(usize, usize)>, acts: &mut Vec<Act>) {
+    // The title takes clicks only, so a drag there still reaches the strip's top edge.
+    let r = ui.interact(drawn.title, ui.scope_id().with(("dock-title", dock)), Sense::click());
     r.context_menu(|ui| {
         let Some((k, n)) = place else {
             if ui.button(tl!("Dock in the Strip")).clicked() {
@@ -159,7 +153,7 @@ fn title_header(ui: &mut Ui, title: &str, buttons: &[(&'static str, &'static str
         Rect::from_min_max(row.left_top(), pos2((row.right() - band).max(row.left()), row.bottom()))
     };
     let wanted = ui.painter().layout_no_wrap(tl!(title).to_string(), font, Color32::WHITE).size().x;
-    let drawn = Drawn { header: rect, title: title_rect, actions, truncated: wanted > title_rect.width() + 0.5, grab: egui::Vec2::ZERO };
+    let drawn = Drawn { header: rect, title: title_rect, actions, truncated: wanted > title_rect.width() + 0.5 };
     (drawn, out.edit.response)
 }
 
@@ -187,8 +181,8 @@ pub fn scenes(ui: &mut Ui, studio: &Studio, st: &mut DockState, acts: &mut Vec<A
     let edit = studio.engine().edit_scene();
     let program = c.program_scene;
     let studio_mode = studio.engine().studio_mode();
-    let (mut drawn, _) = title_header(ui, "Scenes", &SCENE_HEADER);
-    dock_menu(ui, &mut drawn, "scenes", st.place, acts);
+    let (drawn, _) = title_header(ui, "Scenes", &SCENE_HEADER);
+    dock_menu(ui, &drawn, "scenes", st.place, acts);
     let mut body = list_body(ui);
     let source = keyed(&c.scenes, |s| s.id).with_text(|s| Cow::Borrowed(s.name.as_str()));
     let mut selection = Selection::single(edit);
@@ -312,7 +306,7 @@ pub fn sources(ui: &mut Ui, studio: &Studio, st: &mut DockState, acts: &mut Vec<
     let c = studio.collection();
     let edit = studio.engine().edit_scene();
     let scene = c.scene(edit);
-    let (mut drawn, header) = title_header(ui, "Sources", &SOURCE_HEADER);
+    let (drawn, header) = title_header(ui, "Sources", &SOURCE_HEADER);
     // The Add menu hangs under its button. The header row is its opener, so a press on the button
     // while the menu is open reaches the button, which closes it.
     if scene.is_none() {
@@ -323,7 +317,7 @@ pub fn sources(ui: &mut Ui, studio: &Studio, st: &mut DockState, acts: &mut Vec<
         menu = menu.anchor(Anchor::Rect(*at));
     }
     menu.show(ui, |ui, _| add_source_menu(ui, studio, edit, acts));
-    dock_menu(ui, &mut drawn, "sources", st.place, acts);
+    dock_menu(ui, &drawn, "sources", st.place, acts);
     let Some(scene) = scene else { return drawn };
     // The top item is drawn first.
     let rows: Vec<(&SceneItem, &SourceConfig)> = scene.items.iter().rev().filter_map(|it| Some((it, c.source(it.source)?))).collect();
@@ -509,8 +503,8 @@ fn gain_text(gain: f32) -> String {
 }
 
 pub fn mixer(ui: &mut Ui, studio: &Studio, st: &mut DockState, acts: &mut Vec<Act>) -> Drawn {
-    let mut drawn = header(ui, "Audio Mixer", |_, _| ());
-    dock_menu(ui, &mut drawn, "mixer", st.place, acts);
+    let drawn = header(ui, "Audio Mixer", |_, _| ());
+    dock_menu(ui, &drawn, "mixer", st.place, acts);
     let c = studio.collection();
     let program: Vec<SourceId> = c.scene(c.program_scene).map(|s| s.items.iter().map(|i| i.source).collect()).unwrap_or_default();
     let audio: Vec<_> = c
@@ -712,8 +706,8 @@ fn lane_menu(ui: &mut Ui, lane: &Lane, acts: &mut Vec<Act>) {
 /// microphone (`app_audio.route`). A lane with a source has its volume and mute, and its settings
 /// menu opens the source's properties and filters.
 pub fn app_audio(ui: &mut Ui, studio: &Studio, st: &mut DockState, acts: &mut Vec<Act>) -> Drawn {
-    let mut drawn = header(ui, "Application Audio", |_, _| ());
-    dock_menu(ui, &mut drawn, "app_audio", st.place, acts);
+    let drawn = header(ui, "Application Audio", |_, _| ());
+    dock_menu(ui, &drawn, "app_audio", st.place, acts);
     st.lanes.refresh(studio, std::time::Instant::now());
     let LaneCache { lanes: Some(lanes), meters, .. } = &mut *st.lanes else {
         return drawn;
