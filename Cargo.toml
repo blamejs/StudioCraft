@@ -6,7 +6,7 @@ members = [".", "crates/*", "apps/*", "xtask"]
 default-members = [".", "crates/*"]
 
 [workspace.package]
-version = "0.1.0-alpha.1"
+version = "0.1.0-alpha.2"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 
@@ -110,6 +110,9 @@ sysinfo = { version = "0.38", default-features = false, features = ["system"] }
 xcap = "0.9"
 # Audio devices on Linux, through the PipeWire sound server.
 pipewire = "=0.10.1"
+# The kernel's socket diagnostics on Linux, which tell which listening socket a socket file leads
+# to, without unsafe code here.
+rustix = { version = "1.1", default-features = false, features = ["std", "net"] }
 # Cameras: Media Foundation on Windows, AVFoundation on macOS and V4L2 on Linux. Each system's
 # backend is a feature, set in crates/platform.
 nokhwa = { version = "=0.10.11", default-features = false }

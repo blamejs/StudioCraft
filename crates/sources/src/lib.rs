@@ -12,7 +12,7 @@
 //! | `camera` | a video capture device, such as a webcam or a capture card |
 //! | `audio_input` | a microphone or line input |
 //! | `audio_output` | what a speaker or headphone device plays (Windows) |
-//! | `app_audio` | what one application plays (Windows 11 and Windows Server 2022) |
+//! | `app_audio` | what one application plays (Windows 11, Windows Server 2022 and Linux with PipeWire) |
 //! | `captions` | the live captions of the program audio, from the studio's [`CaptionBoard`] |
 //!
 //! Filters: `gain`, `noise_gate`, `compressor`, `limiter`, `equalizer` (audio), `color_correction`,
