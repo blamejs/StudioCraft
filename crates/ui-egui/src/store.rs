@@ -397,7 +397,9 @@ pub struct Prefs {
     pub status_bar: bool,
     /// Items in the preview can't be moved or resized with the mouse.
     pub lock_preview: bool,
-    /// Shortcuts changed from their defaults.
+    /// Shortcuts changed from their defaults, saved as a list of `{ command, keys }` entries. A
+    /// table with one entry per command, as version 5 and earlier saved it, still reads.
+    #[serde(with = "craft_keymap::keymap::overrides_list")]
     pub hotkeys: Overrides,
     /// The interface language: `auto` (the system's) or a language code. Read it with
     /// [`Prefs::language`].
@@ -511,19 +513,50 @@ impl craft_settings::Settings for Prefs {
     const APP_ID: &'static str = "studiocraft";
     /// Version 2 adds `docks.mixer_width` and `docks.order`, version 3 adds `docks.floating`,
     /// `docks.window_pos`, `docks.window_placed` and `docks.window_size`, version 4 adds
-    /// `dock_layouts`, and version 5 adds `docks.app_audio` and `docks.app_audio_width` and a
-    /// fourth entry, for Application Audio, in each list kept by dock index.
-    const SCHEMA_VERSION: u32 = 5;
+    /// `dock_layouts`, version 5 adds `docks.app_audio` and `docks.app_audio_width` and a fourth
+    /// entry, for Application Audio, in each list kept by dock index, and version 6 saves `hotkeys`
+    /// as a list of `{ command, keys }` entries instead of a table.
+    const SCHEMA_VERSION: u32 = 6;
 
     /// Each version up to 5: an older file lacks the keys its next version adds, so the docks keep
     /// their saved settings and read the new keys as their defaults (every dock but Application
     /// Audio in the strip, no saved window places or sizes, no saved layouts). Lists kept by dock
     /// index that are one entry short read the missing entry as its default. The file is left as
-    /// it is.
+    /// it is. Version 5 to 6: a `hotkeys` table is rewritten as the list, with the same entries.
     fn migrate(from: u32, doc: &mut craft_settings::DocumentMut) -> Result<(), craft_settings::MigrateError> {
-        let _ = (from, doc);
+        if from == 5 && doc.get("hotkeys").is_some_and(|h| h.is_table_like()) {
+            let (shortcuts, _) = craft_settings::document::deserialize_sections::<Shortcuts>(doc);
+            doc.remove("hotkeys");
+            craft_settings::document::merge_into(doc, &shortcuts).map_err(|e| craft_settings::MigrateError::new(from, e.to_string()))?;
+        }
         Ok(())
     }
+
+    /// When another instance saved the file meanwhile, the shortcut list merges entry by entry,
+    /// by command: a shortcut either instance reset stays reset, and a shortcut only the other
+    /// instance changed keeps its change. Everything else merges key by key.
+    fn merge_rule(path: &[&str]) -> craft_settings::MergeRule {
+        match path {
+            ["hotkeys"] => craft_settings::MergeRule::Entries {
+                key: |entry| entry.as_inline_table().and_then(|t| t.get("command")).and_then(|c| c.as_str()).map(str::to_owned),
+            },
+            _ => craft_settings::MergeRule::ByKey,
+        }
+    }
+}
+
+/// The `hotkeys` key alone, for the version 5 to 6 migration: it reads the table and writes the
+/// list without touching the rest of the file.
+#[derive(Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+struct Shortcuts {
+    #[serde(with = "craft_keymap::keymap::overrides_list")]
+    hotkeys: Overrides,
+}
+
+impl craft_settings::Settings for Shortcuts {
+    const APP_ID: &'static str = <Prefs as craft_settings::Settings>::APP_ID;
+    const SCHEMA_VERSION: u32 = <Prefs as craft_settings::Settings>::SCHEMA_VERSION;
 }
 
 /// The name of the first collection and profile.
@@ -940,7 +973,7 @@ mod tests {
         s.update(|p| p.docks.height = 250.0);
         s.flush().unwrap();
         let text = std::fs::read_to_string(dir.join("config.toml")).unwrap();
-        assert!(text.contains("schema_version = 5"), "{text}");
+        assert!(text.contains("schema_version = 6"), "{text}");
         let (again, _) = Store::open(Location::Dir(dir.clone()));
         assert_eq!(again.prefs().docks, Docks { height: 250.0, ..want });
         let _ = std::fs::remove_dir_all(&dir);
@@ -961,7 +994,7 @@ mod tests {
         s.update(|p| p.docks.floating[1] = true);
         s.flush().unwrap();
         let text = std::fs::read_to_string(dir.join("config.toml")).unwrap();
-        assert!(text.contains("schema_version = 5"), "{text}");
+        assert!(text.contains("schema_version = 6"), "{text}");
         let (again, _) = Store::open(Location::Dir(dir.clone()));
         assert_eq!(again.prefs().docks.floating, [false, true, false, false]);
         let _ = std::fs::remove_dir_all(&dir);
@@ -1016,9 +1049,112 @@ mod tests {
         });
         s.flush().unwrap();
         let text = std::fs::read_to_string(dir.join("config.toml")).unwrap();
-        assert!(text.contains("schema_version = 5"), "{text}");
+        assert!(text.contains("schema_version = 6"), "{text}");
         let (again, _) = Store::open(Location::Dir(dir.clone()));
         assert_eq!(again.prefs().docks.floating_shown(), [2, 3]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_version_5_config_keeps_its_shortcuts_and_saves_them_as_a_list() {
+        let dir = std::env::temp_dir().join(format!("studiocraft-store-prefs-v5-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let v5 = "schema_version = 5\nlanguage = \"fr\"\n\n[hotkeys]\n\"record.toggle\" = \"Ctrl+R\"\n\"edit.undo\" = \"Ctrl+Z\"\n";
+        std::fs::write(dir.join("config.toml"), v5).unwrap();
+        let open = || Store::open(Location::Dir(dir.clone()));
+        let texts = |s: &Store, key: &str| s.prefs().hotkeys.get(key).map(<[String]>::to_vec);
+        let (mut s, problems) = open();
+        assert!(problems.is_empty(), "{problems:?}");
+        assert_eq!(texts(&s, "record.toggle"), Some(vec!["Ctrl+R".to_string()]));
+        assert_eq!(texts(&s, "edit.undo"), Some(vec!["Ctrl+Z".to_string()]));
+        s.flush().unwrap();
+        let text = std::fs::read_to_string(dir.join("config.toml")).unwrap();
+        assert!(text.contains("schema_version = 6"), "{text}");
+        assert!(!text.contains("[hotkeys]"), "the table is replaced: {text}");
+        assert!(text.contains("command = \"record.toggle\""), "{text}");
+        let (again, problems) = open();
+        assert!(problems.is_empty(), "{problems:?}");
+        assert_eq!(again.prefs(), s.prefs());
+        assert_eq!(again.prefs().language, "fr", "the other settings are kept");
+
+        // Two instances open the version 5 file; one saves, then the other resets a shortcut.
+        std::fs::write(dir.join("config.toml"), v5).unwrap();
+        let (mut first, _) = open();
+        let (mut second, _) = open();
+        first.update(|p| p.language = "de".into());
+        first.flush().unwrap();
+        second.update(|p| {
+            p.hotkeys.remove("record.toggle");
+        });
+        second.flush().unwrap();
+        let (merged, problems) = open();
+        assert!(problems.is_empty(), "{problems:?}");
+        assert_eq!(texts(&merged, "record.toggle"), None, "the reset shortcut does not come back");
+        assert_eq!(texts(&merged, "edit.undo"), Some(vec!["Ctrl+Z".to_string()]));
+        assert_eq!(merged.prefs().language, "de", "the first instance's change is kept");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_reset_shortcut_stays_reset_after_a_save_and_a_load() {
+        let dir = std::env::temp_dir().join(format!("studiocraft-store-hotkeys-reset-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let open = || Store::open(Location::Dir(dir.clone()));
+        let (mut s, _) = open();
+        s.update(|p| {
+            p.hotkeys.insert("record.toggle", vec!["Ctrl+R".into()]);
+            p.hotkeys.insert("edit.undo", vec!["Ctrl+Z".into()]);
+        });
+        s.flush().unwrap();
+        // Another instance saves the file in between.
+        let (mut other, _) = open();
+        other.update(|p| p.language = "de".into());
+        other.flush().unwrap();
+        s.update(|p| {
+            p.hotkeys.remove("record.toggle");
+        });
+        s.flush().unwrap();
+        let (mut again, problems) = open();
+        assert!(problems.is_empty(), "{problems:?}");
+        assert_eq!(again.prefs().hotkeys.get("record.toggle"), None, "the reset shortcut does not come back");
+        assert_eq!(again.prefs().hotkeys.get("edit.undo").map(<[String]>::to_vec), Some(vec!["Ctrl+Z".to_string()]));
+        assert_eq!(again.prefs().language, "de", "the other instance's change is kept");
+        again.update(|p| p.hotkeys.clear());
+        again.flush().unwrap();
+        let (third, _) = open();
+        assert!(third.prefs().hotkeys.is_empty(), "resetting every shortcut is kept too");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn another_instance_s_shortcut_changes_are_kept_when_this_one_resets_a_shortcut() {
+        let dir = std::env::temp_dir().join(format!("studiocraft-store-hotkeys-merge-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let open = || Store::open(Location::Dir(dir.clone()));
+        let (mut s, _) = open();
+        s.update(|p| {
+            p.hotkeys.insert("record.toggle", vec!["Ctrl+R".into()]);
+            // two shortcuts for one command
+            p.hotkeys.insert("edit.undo", vec!["Ctrl+Z".into(), "Ctrl+Alt+Z".into()]);
+        });
+        s.flush().unwrap();
+        let (mut other, _) = open();
+        other.update(|p| {
+            p.hotkeys.insert("edit.undo", vec!["Ctrl+Y".into()]);
+            p.hotkeys.insert("app.settings", vec!["F5".into()]);
+        });
+        other.flush().unwrap();
+        s.update(|p| {
+            p.hotkeys.remove("record.toggle");
+        });
+        s.flush().unwrap();
+        let (again, problems) = open();
+        assert!(problems.is_empty(), "{problems:?}");
+        let texts = |key: &str| again.prefs().hotkeys.get(key).map(<[String]>::to_vec);
+        assert_eq!(texts("record.toggle"), None, "reset here");
+        assert_eq!(texts("edit.undo"), Some(vec!["Ctrl+Y".to_string()]), "changed only by the other instance");
+        assert_eq!(texts("app.settings"), Some(vec!["F5".to_string()]), "added by the other instance");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
