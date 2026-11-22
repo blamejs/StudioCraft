@@ -4,12 +4,14 @@
 use craft_keymap::CommandRef;
 use craft_menu::{ItemState, LanguageChoice, LanguageLabels, LanguageMenu, LayoutOptions, MenuBar, MenuRole, Node, Target};
 use craft_ui::contract::Tracked;
+use craft_ui::dialog::{HeldOk, StandardPrompt};
+use craft_ui::patterns::form_dialogs::HostedParamDialog;
 use serde_json::{Value, json};
 use studiocraft_engine::command::Undo;
 use studiocraft_studio::{CaptionState, OutputKind};
 
 use crate::i18n::Msg;
-use crate::{APP_NAME, StudioApp, commands};
+use crate::{APP_NAME, NAME_FIELD, Naming, StudioApp, commands};
 
 /// The docks in the order they are laid out, by the names `ui.inspect` reports.
 pub(crate) const DOCK_NAMES: [&str; crate::store::DOCK_COUNT] = ["scenes", "sources", "mixer", "app_audio"];
@@ -242,46 +244,105 @@ impl StudioApp {
         self.confirm_exit
     }
 
-    /// Answer the open name prompt or exit confirmation as its buttons do. `ok` presses OK in the
-    /// name prompt and Stop and Exit in the exit confirmation; otherwise Cancel is pressed. `text`
-    /// replaces the name in the prompt first; the exit confirmation takes no text. A name the
-    /// prompt refuses leaves the prompt open with the error.
+    /// Answer the open name prompt or exit confirmation on the window's dialog host, as its buttons
+    /// do. `ok` presses OK in the name prompt and Stop and Exit in the exit confirmation; otherwise
+    /// Cancel is pressed. `text` replaces the name in the prompt first; the exit confirmation takes
+    /// no text. A name the prompt refuses leaves the prompt open with the error under its field,
+    /// and the reply carries the error in English.
     pub fn answer_dialog(&mut self, ctx: &egui::Context, ok: bool, text: Option<&str>) -> Result<Value, String> {
-        if let Some(p) = &mut self.prompt {
-            if let Some(t) = text {
-                p.text = t.to_string();
+        let host = self.window_dialogs.clone();
+        if let Some(n) = &mut self.naming {
+            let (what, id) = (n.what, n.dialog);
+            let (Some(host), Some(id)) = (host, id) else {
+                // Before the window's first frame the prompt waits for the dialog host: it is
+                // answered here, and a refusal shows under its field once it opens.
+                if let Some(t) = text {
+                    n.text = t.to_string();
+                }
+                let name = n.text.trim().to_string();
+                if !ok {
+                    self.naming = None;
+                    return Ok(json!({"dialog": "prompt", "closed": true}));
+                }
+                return match self.named(what, &name) {
+                    Ok(()) => {
+                        self.naming = None;
+                        Ok(json!({"dialog": "prompt", "closed": true, "name": name}))
+                    }
+                    Err(e) => {
+                        let english = e.english();
+                        if let Some(n) = &mut self.naming {
+                            n.refused = Some(e);
+                        }
+                        Err(english)
+                    }
+                };
+            };
+            // An OK pressed in the window is answered by the window first; until then the prompt
+            // takes no other answer.
+            if matches!(host.with(|h| h.held_state(id)), Some(HeldOk::Waiting | HeldOk::Accepted)) {
+                return Err("the name prompt's last OK is still being answered; ui.inspect lists the open dialogs".into());
             }
-            let (what, name) = (p.what, p.text.trim().to_string());
+            if let Some(t) = text {
+                host.with(|h| h.set_json_field(ctx, id, NAME_FIELD, json!(t)))?;
+            }
             if !ok {
-                self.prompt = None;
+                host.with(|h| {
+                    h.cancel_by_id(ctx, id);
+                    h.take_by_id::<HostedParamDialog>(id);
+                });
+                self.naming = None;
                 return Ok(json!({"dialog": "prompt", "closed": true}));
             }
-            return match self.named(what, &name) {
-                Ok(()) => {
-                    self.prompt = None;
-                    Ok(json!({"dialog": "prompt", "closed": true, "name": name}))
-                }
-                Err(e) => {
-                    let english = e.english();
-                    if let Some(p) = &mut self.prompt {
-                        p.error = Some(e);
-                    }
-                    Err(english)
-                }
+            // OK files the name for the window to check, as the button does.
+            let filed = host.with(|h| {
+                h.confirm_by_id(ctx, id);
+                h.get_mut_by_id::<HostedParamDialog>(id).and_then(HostedParamDialog::take_ok)
+            });
+            let Some(filed) = filed else {
+                return Err("the name prompt's last OK is still being answered; ui.inspect lists the open dialogs".into());
             };
+            let name = filed.fields.text(NAME_FIELD).unwrap_or_default().trim().to_string();
+            self.answer_name(&host, what, id, &name).map_err(|e| e.english())?;
+            host.with(|h| {
+                h.confirm_by_id(ctx, id);
+                h.take_by_id::<HostedParamDialog>(id);
+            });
+            self.naming = None;
+            return Ok(json!({"dialog": "prompt", "closed": true, "name": name}));
         }
         if self.confirm_exit {
             if text.is_some() {
                 return Err("the exit confirmation takes no `text`".into());
             }
-            self.confirm_exit = false;
-            if ok {
-                self.exit_confirmed = true;
-                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            if let (Some(host), Some(id)) = (host, self.exit_prompt) {
+                host.with(|h| {
+                    h.cancel_by_id(ctx, id);
+                    h.take_by_id::<StandardPrompt>(id);
+                });
             }
+            self.exit_answered(ctx, ok);
             return Ok(json!({"dialog": "confirm_exit", "closed": true, "exiting": ok}));
         }
         Err("no dialog is waiting for an answer; ui.inspect lists the open dialogs".into())
+    }
+
+    /// The name prompt as `ui.inspect` reports it: its title, the name in its field, and the
+    /// refusal shown under the field, in English.
+    fn name_prompt_json(&self, n: &Naming) -> Value {
+        let (mut text, mut refused) = (n.text.clone(), n.refused.as_ref().map(Msg::english));
+        if let (Some(host), Some(id)) = (&self.window_dialogs, n.dialog) {
+            refused = None;
+            host.with(|h| {
+                if let Some(t) = h.get_by_id::<HostedParamDialog>(id).and_then(|d| d.fields().text(NAME_FIELD)) {
+                    text = t.to_string();
+                }
+                if matches!(h.held_state(id), Some(HeldOk::Refused(_))) {
+                    refused = n.refused.as_ref().map(Msg::english);
+                }
+            });
+        }
+        json!({"title": n.what.title(), "text": text, "error": refused})
     }
 
     /// What the window shows: its size in points, the open dialogs and windows, where the docks,
@@ -327,7 +388,7 @@ impl StudioApp {
                 "about": self.about,
                 "stats": self.store.prefs().stats,
                 "encoders": self.encoders.is_some(),
-                "prompt": self.prompt.as_ref().map(|p| json!({"title": p.what.title(), "text": p.text, "error": p.error.as_ref().map(Msg::english)})),
+                "prompt": self.naming.as_ref().map(|n| self.name_prompt_json(n)),
                 "confirm_exit": self.confirm_exit,
                 "updates": self.updates.window_open || self.updates.updater.prompt_open(),
             },
