@@ -178,6 +178,70 @@ fn the_scopes_window_is_a_framework_window_with_its_lines_in_their_tones() {
     assert!(!a.store().prefs().scopes && a.scopes.is_none());
 }
 
+/// One 1280 by 800 frame, and every text it drew with its color.
+fn texts_drawn(app: &mut StudioApp, ctx: &egui::Context) -> Vec<(String, Color32)> {
+    let raw = RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1280.0, 800.0))), ..RawInput::default() };
+    app.before_input(ctx);
+    let mut out = ctx.run_ui(raw, |ui| app.frame(ui));
+    out.textures_delta.clear();
+    text_colors(&out)
+}
+
+#[test]
+fn the_stats_window_is_a_framework_window_and_closing_it_turns_view_stats_off() {
+    use craft_ui::runtime::overlay::{self, CloseReason, OpenFilter};
+    let mut a = app();
+    let ctx = crate::test_context();
+    texts_drawn(&mut a, &ctx);
+    assert!(!overlay::any_open(&ctx, OpenFilter::Any), "no layer is open before View › Stats");
+    run(&mut a, &ctx, "view.stats", json!({})).unwrap();
+    texts_drawn(&mut a, &ctx);
+    let drawn = texts_drawn(&mut a, &ctx);
+    assert!(overlay::any_open(&ctx, OpenFilter::Any), "the Stats window is a framework layer");
+    for row in ["Frames drawn", "Frames drawn late", "Frame time (average)", "Encoder queue"] {
+        assert!(drawn.iter().any(|(t, _)| t == row), "{row}: {drawn:?}");
+    }
+    let top = overlay::top(&ctx).expect("the Stats window takes keys");
+    overlay::request_close(&ctx, top, CloseReason::Requested);
+    texts_drawn(&mut a, &ctx);
+    assert!(!a.store().prefs().stats, "closing the window turns View › Stats off");
+    texts_drawn(&mut a, &ctx);
+    assert!(!overlay::any_open(&ctx, OpenFilter::Any), "the window stays closed");
+    // View › Stats opens it again.
+    run(&mut a, &ctx, "view.stats", json!({})).unwrap();
+    texts_drawn(&mut a, &ctx);
+    assert!(overlay::any_open(&ctx, OpenFilter::Any));
+}
+
+#[test]
+fn the_encoders_window_is_a_framework_window_with_its_lines_in_their_tones() {
+    use craft_ui::runtime::overlay::{self, CloseReason, OpenFilter};
+    let mut a = app();
+    let ctx = crate::test_context();
+    let dir = temp_dir("encoders-window");
+    let mut p = a.studio().profile().clone();
+    p.output.ffmpeg_path = dir.join("ffmpeg-missing").to_string_lossy().into_owned();
+    a.studio.set_profile(p).unwrap();
+    texts_drawn(&mut a, &ctx);
+    run(&mut a, &ctx, "tools.encoders", json!({})).unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
+    texts_drawn(&mut a, &ctx);
+    let drawn = texts_drawn(&mut a, &ctx);
+    assert!(overlay::any_open(&ctx, OpenFilter::Any), "the Available Encoders window is a framework layer");
+    let good = theme::with_root(&ctx, |cx| cx.tone(Tone::Good).egui());
+    let color = |text: &str| drawn.iter().find(|(t, _)| t == text).map(|(_, c)| *c);
+    assert!(color("H.264 (built in)").is_some(), "{drawn:?}");
+    assert_eq!(color("available"), Some(good), "{drawn:?}");
+    let missing = a.encoders_ffmpeg.as_ref().map(Msg::shown).unwrap_or_default();
+    assert!(drawn.iter().any(|(t, _)| *t == missing), "{missing:?}: {drawn:?}");
+    let top = overlay::top(&ctx).expect("the Available Encoders window takes keys");
+    overlay::request_close(&ctx, top, CloseReason::Requested);
+    texts_drawn(&mut a, &ctx);
+    assert!(a.encoders.is_none(), "closing the window drops the list");
+    texts_drawn(&mut a, &ctx);
+    assert!(!overlay::any_open(&ctx, OpenFilter::Any));
+}
+
 #[test]
 fn the_desktop_shell_keeps_the_menu_bar_in_the_window_on_macos() {
     use craft_host::target::{MenuPlacement, Os};
@@ -1166,6 +1230,38 @@ fn the_dock_strip_is_200_tall_at_1280_and_the_canvas_takes_the_rest() {
         assert_eq!(h.height(), 28.0, "{d}: the Compact panel header");
         assert_eq!(h.top(), strip.top(), "{d}: the header is at the top of the strip");
     }
+}
+
+#[test]
+fn the_status_bar_is_the_shells_status_bar_along_the_bottom() {
+    use craft_ui::contract::Role;
+    let mut a = app();
+    let ctx = crate::test_context();
+    let size = egui::vec2(1280.0, 800.0);
+    for _ in 0..2 {
+        frame_at(&mut a, &ctx, size);
+    }
+    let tree = frame_tree(&mut a, &ctx, size, vec![]);
+    let bars: Vec<egui::Rect> = tree.with_role(Role::STATUS).into_iter().filter_map(|k| tree.bounds_of(k)).collect();
+    // The window's other status node has no bounds.
+    assert_eq!(bars.len(), 1, "one status bar: {bars:?}");
+    let bar = bars[0];
+    assert_eq!((bar.left(), bar.right(), bar.bottom(), bar.height()), (0.0, 1280.0, 800.0, 24.0), "{bar:?}");
+    // The frame rate stands at the end edge and the drop counts before it, both in the bar.
+    let member = |part: &str| {
+        let key = tree.keys().into_iter().find(|k| tree.name_of(*k).is_some_and(|n| n.contains(part)));
+        key.and_then(|k| tree.bounds_of(k)).unwrap_or(egui::Rect::NOTHING)
+    };
+    let (fps, dropped) = (member(" fps  "), member("dropped "));
+    assert!(bar.contains_rect(fps) && bar.contains_rect(dropped), "{fps:?} {dropped:?} in {bar:?}");
+    assert!(dropped.right() < fps.left(), "{dropped:?} before {fps:?}");
+    // View › Status Bar hides it, and the dock strip reaches the bottom of the window.
+    run(&mut a, &ctx, "view.status_bar", json!({})).unwrap();
+    frame_at(&mut a, &ctx, size);
+    let tree = frame_tree(&mut a, &ctx, size, vec![]);
+    let shown: Vec<egui::Rect> = tree.with_role(Role::STATUS).into_iter().filter_map(|k| tree.bounds_of(k)).collect();
+    assert!(shown.is_empty(), "no status bar: {shown:?}");
+    assert_eq!(rect_of(&a.ui_inspect(&ctx)["dock_strip"]["rect"]).bottom(), 800.0);
 }
 
 /// One frame at `size` with `events`, and the accessibility tree it produced.
