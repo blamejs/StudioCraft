@@ -42,6 +42,7 @@ use craft_theme::variant::Tone;
 use craft_ui::contract::overlay::PlacementKind;
 use craft_ui::contract::{Bind, Entry, Props as _, Show as _, ShowContainer as _, SizeLimits, Sizing, Tracked};
 use craft_ui::dialog::{DialogId, DialogResult, PromptChoice, StandardPrompt};
+use craft_ui::display::{Shade, Text};
 use craft_ui::docking::{DockSizes, FloatingGroup};
 use craft_ui::notices::{NoticeCenter, PostedNotice};
 use craft_ui::patterns::form_dialogs::{DialogFields, FieldValue, HostedParamDialog, Param, ParamDialog, ParamKind};
@@ -52,7 +53,7 @@ use craft_ui::runtime::frame::{FrameInput, FrameOutput};
 use craft_ui::runtime::toast::{self, ToastId};
 use craft_ui::runtime::windows::ResizeEdge;
 use craft_ui::shell::embed::{self, CloseDecision};
-use craft_ui::shell::{AppShell, ShellDialogsCx as _, TitleBar, WindowDialogs};
+use craft_ui::shell::{AppShell, ShellDialogsCx as _, TitleBar, ViewportWindow, WindowDialogs};
 use craft_ui::{InstallError, InstallSpec};
 use craft_window::policy::Decision;
 use craft_window::system::{NoWindows, SystemWindows};
@@ -999,7 +1000,9 @@ impl StudioApp {
     }
 
     /// The Scopes window: the chosen scope of the program output, computed on the scopes thread.
-    fn scopes_window(&mut self, ctx: &egui::Context, acts: &mut Vec<Act>) {
+    /// It opens in its own OS window where the system has them, else over the main window.
+    fn scopes_window(&mut self, ui: &mut Ui, acts: &mut Vec<Act>) {
+        let ctx = ui.ctx().clone();
         self.sync_scopes();
         let kind = scopes::kind_of(&self.store.prefs().scope_kind);
         let has_gpu = self.render.is_some();
@@ -1017,8 +1020,8 @@ impl StudioApp {
                 }
             }
         }
-        let mut open = true;
-        egui::Window::new(tid!("view.scopes", "Scopes")).id(egui::Id::unique("scopes")).open(&mut open).default_width(520.0).show(ctx, |ui| {
+        let window = ViewportWindow::new(tid!("view.scopes", "Scopes")).overlay(|o| o.size(egui::vec2(520.0, 520.0)));
+        let shown = window.show(ui, |ui, _| {
             let kinds: Vec<_> = scopes::MENU_ORDER.iter().map(|&k| Entry::new(k, tl!(k.label()))).collect();
             let picked = Select::new(tid!("view.scopes", "Scopes"), Bind::given(kind), &kinds).id_salt("scope-kind").show(ui);
             if let Some(&k) = picked.events.committed()
@@ -1029,10 +1032,10 @@ impl StudioApp {
             let latest = s.latest.as_ref().filter(|p| p.kind == kind);
             match latest {
                 None if !has_gpu => {
-                    ui.weak(tl!("The scopes need a graphics device to read the program."));
+                    let _ = Text::new(tl!("The scopes need a graphics device to read the program.")).shade(Shade::Muted).show(ui);
                 }
                 None => {
-                    ui.weak(tl!("Waiting for the program picture…"));
+                    let _ = Text::new(tl!("Waiting for the program picture…")).shade(Shade::Muted).show(ui);
                 }
                 Some(p) => match &p.histogram {
                     Some(h) => scopes::draw_histogram(ui, h),
@@ -1048,11 +1051,10 @@ impl StudioApp {
                 },
             }
             if let Some(e) = &s.error {
-                let bad = theme::with_root(ui.ctx(), |cx| theme::color(cx, cx.tokens.color.status.bad.fg));
-                ui.colored_label(bad, craft_i18n::fmt(tl!("The scope could not be computed: {error}"), &[("error", e)]));
+                let _ = Text::new(craft_i18n::fmt(tl!("The scope could not be computed: {error}"), &[("error", e)])).tone(Tone::Bad).show(ui);
             }
         });
-        if !open {
+        if shown.close_requested.is_some() {
             self.store.update(|p| p.scopes = false);
             self.sync_scopes();
         }
@@ -2193,7 +2195,6 @@ impl StudioApp {
             }
         }
 
-        self.scopes_window(ctx, acts);
         self.streaming_window(ctx, acts);
 
         if let Some(list) = &self.encoders {
@@ -2318,6 +2319,7 @@ impl StudioApp {
         let mut acts = pass.acts;
         self.prompt_answers(&ctx);
         self.windows(&ctx, &mut acts);
+        self.scopes_window(ui, &mut acts);
         // An update never starts while a recording, stream or replay buffer runs.
         let idle = !self.outputs_running();
         match updates_ui::show(&mut self.updates, ui, idle) {

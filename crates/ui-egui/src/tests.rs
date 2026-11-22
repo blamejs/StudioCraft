@@ -130,6 +130,54 @@ fn the_scopes_window_shows_the_picture_the_thread_computed() {
     assert_eq!(a.hud()["ui"]["scopes"]["computed"], json!(1));
 }
 
+/// Every text a frame draws, with the color it is drawn in.
+fn text_colors(out: &egui::FullOutput) -> Vec<(String, Color32)> {
+    fn walk(shape: &egui::Shape, found: &mut Vec<(String, Color32)>) {
+        match shape {
+            egui::Shape::Text(t) => {
+                let section = t.galley.job.sections.first().map(|s| s.format.color).filter(|c| *c != Color32::PLACEHOLDER);
+                found.push((t.galley.text().to_string(), t.override_text_color.or(section).unwrap_or(t.fallback_color)));
+            }
+            egui::Shape::Vec(v) => v.iter().for_each(|s| walk(s, found)),
+            _ => {}
+        }
+    }
+    let mut found = Vec::new();
+    out.shapes.iter().for_each(|c| walk(&c.shape, &mut found));
+    found
+}
+
+#[test]
+fn the_scopes_window_is_a_framework_window_with_its_lines_in_their_tones() {
+    use craft_ui::runtime::overlay::{self, CloseReason, OpenFilter};
+    let mut a = app();
+    let ctx = crate::test_context();
+    let shot = |a: &mut StudioApp| {
+        let raw = RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1280.0, 800.0))), ..RawInput::default() };
+        a.before_input(&ctx);
+        let mut out = ctx.run_ui(raw, |ui| a.frame(ui));
+        out.textures_delta.clear();
+        text_colors(&out)
+    };
+    shot(&mut a);
+    assert!(!overlay::any_open(&ctx, OpenFilter::Any), "no layer is open before View › Scopes");
+    run(&mut a, &ctx, "view.scopes", json!({})).unwrap();
+    a.scopes.as_mut().unwrap().error = Some("bad frame".into());
+    shot(&mut a);
+    let drawn = shot(&mut a);
+    assert!(overlay::any_open(&ctx, OpenFilter::Any), "without OS windows the Scopes window is a framework layer");
+    let (bad, muted) = theme::with_root(&ctx, |cx| (cx.tone(Tone::Bad).egui(), theme::color(cx, cx.tokens.color.text.muted)));
+    let color = |text: &str| drawn.iter().find(|(t, _)| t == text).map(|(_, c)| *c);
+    // The test window has no graphics device.
+    assert_eq!(color("The scopes need a graphics device to read the program."), Some(muted), "{drawn:?}");
+    assert_eq!(color("The scope could not be computed: bad frame"), Some(bad), "{drawn:?}");
+    // Closing the window turns View › Scopes off and stops the thread.
+    let top = overlay::top(&ctx).expect("the Scopes window takes keys");
+    overlay::request_close(&ctx, top, CloseReason::Requested);
+    shot(&mut a);
+    assert!(!a.store().prefs().scopes && a.scopes.is_none());
+}
+
 #[test]
 fn the_desktop_shell_keeps_the_menu_bar_in_the_window_on_macos() {
     use craft_host::target::{MenuPlacement, Os};
