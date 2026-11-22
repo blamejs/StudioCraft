@@ -272,6 +272,12 @@ height. A hard edge in the program therefore shows on the scopes as intermediate
 
 **Graphics devices.** The window opens its device on the adapter Settings › Video › Hardware
 acceleration names (`graphics_adapter` in `config.toml`), through `craft-gpu-device`'s `pick`.
+`hardware::wgpu_setup` applies `craft_gpu::configure` before the instance is created. On Windows
+it selects the FXC shader compiler for DirectX 12 (`WGPU_DX12_COMPILER` overrides it) and starts
+only the backends its DirectX 12 probe found usable: DirectX 12 when a hardware GPU supports it,
+otherwise OpenGL. On Intel Macs it leaves out wgpu's indirect-call validation. On other platforms
+the window uses `craft-gpu-device`'s backends. `WGPU_BACKEND` overrides the backends everywhere.
+The adapter choice stays StudioCraft's own.
 
 | Event | What happens |
 | --- | --- |
@@ -484,6 +490,16 @@ Scene collections and profiles are JSON files with a `format` name and a `versio
 newer version is refused with an error. The window keeps scene collections in `scenes/` and
 profiles in `profiles/` under the settings folder, and writes them with `craft-atomic`.
 
+The main window's size, position and maximized state are in `window.json` in the same folder,
+kept by `craft-window`'s `restore::Store`. The UI runtime records them as the window moves and
+writes the file at most once a second, and the app writes the last change when it exits.
+`ui-egui::placement` repairs a damaged record before the window opens. Once the window is open and
+the monitors are listed, it moves a window that is on none of them onto one, and shrinks a window
+larger than its monitor to the monitor's usable area. A first window on a monitor smaller than
+1280 by 800 points is shrunk to it and maximized. A file larger than 1 MiB is not read, and
+the window then opens at 1280 by 800 points. `--no-prefs`, `--screenshot` and `--self-test` keep
+nothing and always open at that size.
+
 ## Shared crates
 
 | Need | Crate |
@@ -505,7 +521,8 @@ profiles in `profiles/` under the settings folder, and writes them with `craft-a
 | JSON-RPC framing for the MCP server | `craft-jsonrpc` |
 | MCP sessions and tool results | `craft-mcp` |
 | Update checks, the update prompt and finishing an installed update | `craft-update` |
-| Who draws the window frame | `craft-window` |
+| Who draws the window frame, and the saved size and place of the window | `craft-window` |
+| The platform's GPU start-up choices for the window | `craft-gpu` (feature `startup`) |
 
 Release file names and package ids are in [docs/releasing.md](releasing.md#file-names).
 

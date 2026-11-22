@@ -65,26 +65,35 @@ pub fn record_loss(losses: &mut Vec<u64>, now: u64) {
 }
 
 /// The window's wgpu setup: the instance over the backends `craft-gpu-device` uses (with
-/// `WGPU_BACKEND` still honored), the adapter `preference` asks for, and a device with that
-/// adapter's own limits, so an adapter below wgpu's default limits (an older or software one)
-/// opens. What the user should be told about the choice is put in `notices` when the window
-/// opens.
+/// `WGPU_BACKEND` still honored), then the platform's start-up choices from `craft_gpu::configure`,
+/// then the adapter `preference` asks for, and a device with that adapter's own limits, so an
+/// adapter below wgpu's default limits (an older or software one) opens. What the user should be
+/// told about the choice is put in `notices` when the window opens.
+///
+/// On Windows `configure` sets the DirectX 12 shader compiler and replaces the backends with the
+/// ones its DirectX 12 probe found usable (DirectX 12, or OpenGL where DirectX 12 has no usable
+/// GPU), so a driver that crashes while a backend starts is never loaded; `WGPU_BACKEND` still
+/// wins there. On Intel Macs it leaves out wgpu's indirect-call validation. The adapter choice
+/// stays the app's on every platform: it is set after `configure`, and the saved Graphics adapter
+/// setting names the adapter.
 pub fn wgpu_setup(preference: Preference, notices: Arc<OnceLock<Vec<Notice>>>) -> egui_wgpu::WgpuSetup {
     let mut setup = egui_wgpu::WgpuSetupCreateNew::without_display_handle();
-    let desc = device::native_descriptor();
-    setup.instance_descriptor.backends = wgpu::Backends::from_env().unwrap_or(desc.backends);
-    setup.instance_descriptor.flags = desc.flags;
-    setup.instance_descriptor.backend_options = desc.backend_options;
-    setup.native_adapter_selector = Some(Arc::new(move |adapters: &[wgpu::Adapter], surface: Option<&wgpu::Surface<'_>>| {
-        let (adapter, selection) = device::pick(adapters, surface, &preference)?;
-        let _ = notices.set(selection.notices);
-        Ok(adapter)
-    }));
+    // Before `configure`, whose DirectX 12 probe checks each adapter against these limits.
     setup.device_descriptor = Arc::new(|adapter: &wgpu::Adapter| wgpu::DeviceDescriptor {
         label: Some("studiocraft window"),
         required_limits: adapter.limits(),
         ..Default::default()
     });
+    let desc = device::native_descriptor();
+    setup.instance_descriptor.backends = wgpu::Backends::from_env().unwrap_or(desc.backends);
+    setup.instance_descriptor.flags = desc.flags;
+    setup.instance_descriptor.backend_options = desc.backend_options;
+    craft_gpu::configure(&mut setup);
+    setup.native_adapter_selector = Some(Arc::new(move |adapters: &[wgpu::Adapter], surface: Option<&wgpu::Surface<'_>>| {
+        let (adapter, selection) = device::pick(adapters, surface, &preference)?;
+        let _ = notices.set(selection.notices);
+        Ok(adapter)
+    }));
     setup.into()
 }
 

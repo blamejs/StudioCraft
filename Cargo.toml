@@ -166,6 +166,9 @@ craft-media ={ git = "https://github.com/storytold/craft-libs", rev = "405252624
 craft-update = { git = "https://github.com/storytold/craft-libs", rev = "40525262403fbdeb3c0a27e22eafbda8799247bb", features = ["ui"] }
 # Who draws the window frame (the desktop or the app), and the menu strip as the title bar.
 craft-window = { git = "https://github.com/storytold/craft-libs", rev = "40525262403fbdeb3c0a27e22eafbda8799247bb", features = ["ui"] }
+# The platform's GPU start-up choices for the window: the DirectX 12 shader compiler and wgpu's indirect-call
+# validation on Intel Macs.
+craft-gpu = { git = "https://github.com/storytold/craft-libs", rev = "40525262403fbdeb3c0a27e22eafbda8799247bb", features = ["startup"] }
 # The built-in H.264 encoder (and its decoder, for tests), the AAC encoder and the Vorbis decoder.
 craft-video = { git = "https://github.com/storytold/craft-libs", rev = "40525262403fbdeb3c0a27e22eafbda8799247bb", default-features = false, features = ["h264-encode", "threads"] }
 craft-audio = { git = "https://github.com/storytold/craft-libs", rev = "40525262403fbdeb3c0a27e22eafbda8799247bb", default-features = false, features = ["aac-encode"] }

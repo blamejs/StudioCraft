@@ -1326,6 +1326,74 @@ fn every_header_action_is_visible_at_760_by_480() {
 }
 
 #[test]
+fn the_first_and_the_smallest_window_show_every_dock_header_bar_part_and_status_item() {
+    use craft_ui::contract::Role;
+    for [w, h] in [placement::FIRST_SIZE, placement::MIN_SIZE] {
+        let mut a = app();
+        let ctx = crate::test_context();
+        run(&mut a, &ctx, "source.add", json!({"kind": "color", "name": "Back"})).unwrap();
+        assert_eq!(run(&mut a, &ctx, "dock.app_audio", json!({})).unwrap(), json!({"on": true}));
+        let size = egui::vec2(w, h);
+        let window = egui::Rect::from_min_size(egui::Pos2::ZERO, size);
+        for _ in 0..3 {
+            frame_at(&mut a, &ctx, size);
+        }
+        let tree = frame_tree(&mut a, &ctx, size, vec![]);
+        let v = a.ui_inspect(&ctx);
+        // The output bar's row along the top, every part of it inside the window.
+        let bar = rect_of(&v["output_bar"]["rect"]);
+        assert_eq!((bar.top(), bar.height()), (0.0, 32.0), "{w}: {bar:?}");
+        let parts = bar_parts(&a, &ctx);
+        for want in ["menus", "mode", "record", "stream"] {
+            assert!(parts.iter().any(|(n, _)| n == want), "{w}: {want} missing from {parts:?}");
+        }
+        for (name, [l, t, r, b]) in &parts {
+            let part = egui::Rect::from_min_max(egui::pos2(*l, *t), egui::pos2(*r, *b));
+            assert!(part.width() > 0.0 && window.expand(0.5).contains_rect(part) && part.bottom() <= bar.bottom() + 0.5, "{w}: {name} at {part:?}");
+        }
+        // The 24 point status bar along the bottom, its items inside it.
+        let status: Vec<egui::Rect> = tree.with_role(Role::STATUS).into_iter().filter_map(|k| tree.bounds_of(k)).collect();
+        assert_eq!(status.len(), 1, "{w}: {status:?}");
+        let status = status[0];
+        assert_eq!((status.left(), status.right(), status.bottom(), status.height()), (0.0, w, h, 24.0), "{w}: {status:?}");
+        let item = |part: &str| {
+            let key = tree.keys().into_iter().find(|k| tree.name_of(*k).is_some_and(|n| n.contains(part)));
+            key.and_then(|k| tree.bounds_of(k)).unwrap_or(egui::Rect::NOTHING)
+        };
+        let (fps, dropped) = (item(" fps  "), item("dropped "));
+        for (name, r) in [("frame rate", fps), ("drop counts", dropped)] {
+            assert!(r.width() > 0.0 && status.contains_rect(r), "{w}: the {name} at {r:?} is outside the status bar {status:?}");
+        }
+        assert!(dropped.right() <= fps.left(), "{w}: {dropped:?} overlaps {fps:?}");
+        // The four docks between the canvas and the status bar, each with its 28 point header,
+        // title and header buttons inside the window.
+        let strip = rect_of(&v["dock_strip"]["rect"]);
+        assert!(strip.top() > bar.bottom() && (strip.bottom() - status.top()).abs() <= 0.5, "{w}: {strip:?}");
+        let preview = rect_of(&v["preview"]["rect"]);
+        assert!(preview.width() > 0.0 && preview.top() >= bar.bottom() && preview.bottom() <= strip.top() + 0.5, "{w}: the canvas is {preview:?}");
+        let docks = v["docks"].as_array().cloned().unwrap_or_default();
+        let names: Vec<&str> = docks.iter().filter_map(|d| d["dock"].as_str()).collect();
+        assert_eq!(names, ["scenes", "sources", "mixer", "app_audio"], "{w}");
+        for d in &docks {
+            let name = d["dock"].as_str().unwrap_or("");
+            let header = rect_of(&d["header"]);
+            let title = rect_of(&d["title"]);
+            assert_eq!(header.height(), 28.0, "{w}: {name} has the Compact panel header");
+            assert!(window.contains_rect(header) && header.bottom() <= status.top(), "{w}: {name}'s header {header:?}");
+            assert!(title.width() > 0.0 && header.expand(0.5).contains_rect(title), "{w}: {name}'s title {title:?} in {header:?}");
+            for x in d["actions"].as_array().cloned().unwrap_or_default() {
+                let r = rect_of(&x["rect"]);
+                assert!(r.width() > 0.0 && header.contains_rect(r), "{w}: {name}/{} at {r:?} in {header:?}", x["name"]);
+            }
+        }
+        for pair in docks.windows(2) {
+            let (l, r) = (rect_of(&pair[0]["rect"]), rect_of(&pair[1]["rect"]));
+            assert!(l.right() <= r.left() + 0.5, "{w}: {l:?} overlaps {r:?}");
+        }
+    }
+}
+
+#[test]
 fn dragging_the_strip_edge_and_a_divider_saves_the_sizes_and_reset_clears_them() {
     let mut a = app();
     let ctx = crate::test_context();
