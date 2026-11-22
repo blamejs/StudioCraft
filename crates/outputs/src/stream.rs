@@ -687,8 +687,8 @@ fn run(hub: &Hub, d: &Dest) {
             End::Done => {}
             End::Failed(e) => return d.fail(e),
             End::Lost(e) => {
-                // A start while it sent changed nothing, and this loss waits as any other.
-                d.restarted.store(false, Ordering::SeqCst);
+                // A stop and start that came while it sent or as the connection closed stays set,
+                // so the next try is at once and is that of a first try.
                 after_loss = true;
                 d.lost.store(true, Ordering::Relaxed);
                 d.reconnects.fetch_add(1, Ordering::Relaxed);
@@ -740,6 +740,9 @@ fn send_all(hub: &Hub, d: &Dest, p: &mut Publisher, rx: &mut Receiver) -> End {
         if let Err(e) = sent {
             return end_for(e);
         }
+        // A stop and start this loop did not see left the connection sending, so it is not a
+        // restart for the next try; one that comes as the connection closes is kept.
+        d.restarted.store(false, Ordering::SeqCst);
     }
 }
 

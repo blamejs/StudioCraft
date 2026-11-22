@@ -441,6 +441,29 @@ fn only_a_publish_refusal_after_a_lost_connection_is_tried_again() {
 }
 
 #[test]
+fn a_restart_the_connection_outlived_does_not_change_the_next_try() {
+    let (a, seen) = server(vec![Plan::DropAfter(12), Plan::Refuse, Plan::Accept]);
+    let job = job(RateControl::Bitrate { kbps: 400, keyframe_s: 1 });
+    let mut out = Streaming::start_timed(&job, vec![target("a", &a, "k")], Timing { max_tries: 10, ..quick() }).unwrap();
+    assert_eq!(next(&seen), Seen::Publish("k".into()));
+    until(&out, "a", |d| d.status == DestinationStatus::Live);
+    // A stop and start that the sending loop did not see; every packet is sent after it.
+    out.hub.find("a").unwrap().restarted.store(true, Ordering::SeqCst);
+    let feed = Feed::new(&out);
+    media(&seen, 12);
+    until_closed(&seen);
+    // The refusal follows the lost connection, so it is tried again, and the server takes the stream.
+    assert_eq!(next(&seen), Seen::Publish("k".into()));
+    until_closed(&seen);
+    assert_eq!(next(&seen), Seen::Publish("k".into()));
+    let d = until(&out, "a", |d| d.status == DestinationStatus::Live && d.reconnects == 1);
+    assert_eq!(d.reconnects, 1);
+    drop(feed);
+    out.stop().unwrap();
+    until_closed(&seen);
+}
+
+#[test]
 fn the_counts_follow_the_destinations() {
     let (a, seen) = server(vec![Plan::Accept]);
     let job = job(RateControl::Bitrate { kbps: 400, keyframe_s: 1 });
