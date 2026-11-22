@@ -910,14 +910,22 @@ mod tests {
         std::fs::create_dir_all(&slow).unwrap();
         let (release_tx, release_rx) = channel::<()>();
         let release_rx = std::sync::Mutex::new(release_rx);
+        let (entered_tx, entered_rx) = channel::<()>();
         let held = slow.clone();
         let read: ReadSpace = Arc::new(move |p: &Path| {
             if p == held {
-                let _ = release_rx.lock().map(|r| r.recv());
+                // A missing folder below `slow` is measured on `slow`, so its query waits here too.
+                let _ = release_rx.lock().map(|r| {
+                    let _ = entered_tx.send(());
+                    r.recv()
+                });
             }
             Ok(7)
         });
         let mut probe = SpaceProbe::new(read, Duration::ZERO);
+        // A query for a missing folder below `slow` is the first to wait for the release.
+        assert_eq!(probe.query(&slow.join("missing-first")), Space::Reading);
+        entered_rx.recv().unwrap();
         assert_eq!(probe.query(&slow), Space::Reading);
         probe.wait = ANSWER;
         assert_eq!(probe.query(&std::env::temp_dir()), Space::Free(7), "another folder is read at once");
@@ -926,9 +934,10 @@ mod tests {
         let others: Vec<PathBuf> = (0..MAX_QUERIES + 2).map(|n| slow.join(format!("missing-{n}"))).collect();
         let _ = others.iter().map(|o| probe.query(o)).count();
         assert!(probe.running.len() <= MAX_QUERIES, "{}", probe.running.len());
-        release_tx.send(()).unwrap();
+        // Dropping the sender releases every query that waits, the missing folders' included.
+        drop(release_tx);
         probe.wait = ANSWER;
-        assert_eq!(probe.query(&slow), Space::Free(7));
+        assert_eq!(probe.query(&slow), Space::Free(7), "every waiting query is released");
         std::fs::remove_dir(&slow).unwrap();
     }
 
