@@ -316,6 +316,14 @@ to be written to the take, the reply names the cause and the other output keeps 
 lists the session's markers, and after the session ends it lists that session's markers until the
 next session starts ([`marker.add` and `marker.list`](control-protocol.md#markeradd-and-markerlist)).
 
+The `marker.rename` command renames one of the session's markers in the recording and the take of
+audio tracks, while they run and after they have ended. While an output runs, the new name goes
+into the file it writes at its end: the recording's timeline, and the take's session file, which
+repair after a crash writes with the new name too. After an output has ended, its timeline or
+session file is written again with the new name, through a temporary file and a rename. When one output cannot take the new name, for example because its file
+was changed in another app, the reply names the cause and the other output keeps the new name
+([`marker.rename`](control-protocol.md#markerrename)).
+
 ### Replay buffer
 
 File › Replay Buffer keeps the last seconds of the program in memory with the built-in H.264 and
