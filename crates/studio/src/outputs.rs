@@ -24,8 +24,8 @@ use studiocraft_outputs::encoders::HARDWARE;
 use studiocraft_outputs::replay::MAX_SAVES;
 use studiocraft_platform::ffmpeg;
 use studiocraft_plugin::{
-    Availability, DestinationState, DestinationStatus, Encoder, EncoderEnv, EncoderKind, OutputInstance, OutputJob, OutputStatus, PluginError,
-    RateControl, VideoFormat, VideoParams,
+    Availability, DestinationCounts, DestinationState, DestinationStatus, Encoder, EncoderEnv, EncoderKind, OutputInstance, OutputJob, OutputStatus,
+    PluginError, RateControl, VideoFormat, VideoParams,
 };
 
 use crate::{Notice, Studio, StudioError};
@@ -62,6 +62,9 @@ pub struct OutputState {
     pub elapsed: Duration,
     /// Bytes written so far.
     pub bytes: u64,
+    /// For a running stream, how many of its destinations are live and how many wait to try
+    /// again; zero otherwise.
+    pub destinations: DestinationCounts,
 }
 
 impl OutputState {
@@ -264,6 +267,8 @@ pub(crate) struct Outputs {
     stream_prints: HashMap<String, u64>,
     /// Each destination's server when the last stream started, by id.
     stream_servers: HashMap<String, String>,
+    /// Each destination's name when the last stream started, by id, for its notices.
+    stream_names: HashMap<String, String>,
     /// The name of the profile the last stream started with; `None` once that profile is removed.
     stream_profile: Option<String>,
     /// The last [`MAX_UNFINISHED`] outputs, by kind and target, that stopped without finishing
@@ -274,6 +279,8 @@ pub(crate) struct Outputs {
     /// Reconnect events seen, each with its stream's start on the studio clock, for
     /// [`Outputs::reconnects_now`]; filled as a stream stops too.
     lost_connections: Vec<(crate::events::Kind, Tick)>,
+    /// Which lost connections and reconnects of the running stream got a notice.
+    reconnect_notices: crate::events::ReconnectNotices,
 }
 
 /// Unfinished outputs [`Outputs`] keeps for [`Outputs::take_unfinished`].
@@ -386,6 +393,33 @@ impl Outputs {
         self.lost_connections.extend(seen.into_iter().map(|kind| (kind, stream.start)));
     }
 
+    /// Whether the loss of the running stream's destination `id`'s connection at `now` gets a
+    /// notice. None does once the stream has stopped, or when the destination is not trying to
+    /// connect again (it gave up, or was stopped).
+    pub(crate) fn loss_notice(&mut self, id: &str, now: Tick) -> bool {
+        let Some(stream) = self.active.get(&OutputKind::Streaming) else { return false };
+        self.reconnect_notices.follow(Some(stream.id));
+        let on = |s: &DestinationStatus| matches!(s, DestinationStatus::Retrying { .. } | DestinationStatus::Connecting | DestinationStatus::Live);
+        let trying = stream.instance.destinations().iter().any(|d| d.id == id && on(&d.status));
+        trying && self.reconnect_notices.lost(id, now)
+    }
+
+    /// The name destination `id` had when the last stream started, or the id when it had none.
+    pub(crate) fn stream_destination_name(&self, id: &str) -> String {
+        self.stream_names.get(id).filter(|n| !n.is_empty()).map_or_else(|| id.to_string(), String::clone)
+    }
+
+    /// The running stream's destinations whose reconnect gets a notice now. Reads one counter
+    /// per destination, and their states only when the counters moved after a loss notice.
+    pub(crate) fn recovered_now(&mut self) -> Vec<String> {
+        let Some(stream) = self.active.get(&OutputKind::Streaming) else {
+            self.reconnect_notices.follow(None);
+            return Vec::new();
+        };
+        self.reconnect_notices.follow(Some(stream.id));
+        self.reconnect_notices.recovered(stream.instance.recoveries(), || stream.instance.destinations())
+    }
+
     /// The studio clock's time of the first frame and sample of `kind`, while it runs.
     pub(crate) fn start_of(&self, kind: OutputKind) -> Option<Tick> {
         self.active.get(&kind).map(|a| a.start)
@@ -407,6 +441,7 @@ impl Outputs {
                 target: if kind == OutputKind::Streaming { a.instance.target() } else { a.target.clone() },
                 elapsed: a.started.elapsed(),
                 bytes: a.stats.bytes.load(std::sync::atomic::Ordering::Relaxed),
+                destinations: a.instance.destination_counts(),
             });
         }
         if let Some(t) = self.testing.get(&kind) {
@@ -418,6 +453,7 @@ impl Outputs {
                 target: String::new(),
                 elapsed: t.started.elapsed(),
                 bytes: 0,
+                destinations: DestinationCounts::default(),
             });
         }
         self.stopping.iter().find(|s| s.kind == kind).map(|s| OutputState {
@@ -427,6 +463,7 @@ impl Outputs {
             target: s.target.clone(),
             elapsed: Duration::ZERO,
             bytes: 0,
+            destinations: DestinationCounts::default(),
         })
     }
 
@@ -1360,6 +1397,7 @@ impl Studio {
             self.outputs.stream_keys = self.profile.stream.destinations.iter().map(|d| (d.id.clone(), d.key.clone())).collect();
             self.outputs.stream_prints = crate::golive::prints(&self.profile, &self.outputs.held_keys);
             self.outputs.stream_servers = self.profile.stream.destinations.iter().map(|d| (d.id.clone(), d.server.clone())).collect();
+            self.outputs.stream_names = self.profile.stream.destinations.iter().map(|d| (d.id.clone(), d.name.trim().to_string())).collect();
             self.outputs.stream_profile = Some(self.profile.name.clone());
         }
         let registry = Arc::clone(self.engine.registry());
@@ -2007,10 +2045,14 @@ mod tests {
         assert!(o.active.is_empty());
     }
 
-    /// A stream with one destination whose lost connections and failure the test sets.
+    /// A stream with one destination whose lost connections, recoveries and failure the test
+    /// sets.
     struct LosingStream {
         reconnects: Arc<std::sync::atomic::AtomicU32>,
         failed: Arc<AtomicBool>,
+        recovered: Arc<std::sync::atomic::AtomicU32>,
+        /// The destination gave up while the stream runs on.
+        gave_up: Arc<AtomicBool>,
     }
 
     impl OutputInstance for LosingStream {
@@ -2033,7 +2075,11 @@ mod tests {
             vec![studiocraft_plugin::DestinationState {
                 id: "main".into(),
                 target: String::new(),
-                status: studiocraft_plugin::DestinationStatus::Live,
+                status: if self.gave_up.load(Ordering::SeqCst) {
+                    DestinationStatus::Failed(studiocraft_plugin::Failure::new(studiocraft_plugin::Cause::Lost, "gave up"))
+                } else {
+                    DestinationStatus::Live
+                },
                 bytes: 0,
                 dropped: 0,
                 reconnects: self.reconnects.load(Ordering::SeqCst),
@@ -2042,6 +2088,62 @@ mod tests {
         fn reconnects(&self) -> u64 {
             u64::from(self.reconnects.load(Ordering::SeqCst))
         }
+        fn destination_counts(&self) -> DestinationCounts {
+            DestinationCounts { live: 1, retrying: 0 }
+        }
+        fn recoveries(&self) -> u64 {
+            u64::from(self.recovered.load(Ordering::SeqCst))
+        }
+    }
+
+    /// Runs a [`LosingStream`] as stream `id` of `o`; its lost connections, failure and
+    /// recoveries.
+    fn losing_stream(o: &mut Outputs, id: u64) -> ([Arc<std::sync::atomic::AtomicU32>; 2], Arc<AtomicBool>) {
+        let (reconnects, recovered) = (Arc::new(std::sync::atomic::AtomicU32::new(0)), Arc::new(std::sync::atomic::AtomicU32::new(0)));
+        let gave_up = Arc::new(AtomicBool::new(false));
+        let instance = Box::new(LosingStream {
+            reconnects: Arc::clone(&reconnects),
+            failed: Arc::new(AtomicBool::new(false)),
+            recovered: Arc::clone(&recovered),
+            gave_up: Arc::clone(&gave_up),
+        });
+        let active = Active {
+            id,
+            instance,
+            stats: Arc::new(EncoderStats::default()),
+            started: Instant::now(),
+            start: Tick(0),
+            target: String::new(),
+            hardware: None,
+        };
+        o.active.insert(OutputKind::Streaming, active);
+        ([reconnects, recovered], gave_up)
+    }
+
+    #[test]
+    fn a_running_stream_shows_its_counts_and_gets_reconnect_notices() {
+        let mut o = Outputs { stream_names: HashMap::from([("main".to_string(), "Main".to_string())]), ..Outputs::default() };
+        assert_eq!(o.stream_destination_name("main"), "Main");
+        assert_eq!(o.stream_destination_name("other"), "other", "a destination with no name is named by its id");
+        let ([_, recovered], gave_up) = losing_stream(&mut o, 1);
+        let state = o.state(OutputKind::Streaming).unwrap();
+        assert_eq!(state.destinations, DestinationCounts { live: 1, retrying: 0 });
+        assert!(o.recovered_now().is_empty(), "nothing recovered");
+        assert!(o.loss_notice("main", Tick(0)));
+        assert!(!o.loss_notice("main", Tick(1)), "a second loss within the minute");
+        recovered.store(1, Ordering::SeqCst);
+        assert_eq!(o.recovered_now(), ["main"]);
+        assert!(o.recovered_now().is_empty(), "each reconnect gets one notice");
+        // A destination that gave up does not try again, so its loss gets no notice.
+        gave_up.store(true, Ordering::SeqCst);
+        assert!(!o.loss_notice("main", Tick(i64::MAX)), "a destination that gave up");
+        gave_up.store(false, Ordering::SeqCst);
+        assert!(o.stop(OutputKind::Streaming, false).is_some());
+        assert!(!o.loss_notice("main", Tick(0)), "no loss notice once the stream has stopped");
+        assert_eq!(o.state(OutputKind::Streaming).map(|s| s.destinations), Some(DestinationCounts::default()), "a stopping stream");
+        // A new stream starts with no notices shown.
+        let _ = losing_stream(&mut o, 2);
+        assert!(o.loss_notice("main", Tick(1)));
     }
 
     #[test]
@@ -2049,7 +2151,8 @@ mod tests {
         let mut o = Outputs::default();
         let start = |o: &mut Outputs, id: u64| {
             let (reconnects, failed) = (Arc::new(std::sync::atomic::AtomicU32::new(0)), Arc::new(AtomicBool::new(false)));
-            let instance = Box::new(LosingStream { reconnects: Arc::clone(&reconnects), failed: Arc::clone(&failed) });
+            let (recovered, gave_up) = (Arc::new(std::sync::atomic::AtomicU32::new(0)), Arc::new(AtomicBool::new(false)));
+            let instance = Box::new(LosingStream { reconnects: Arc::clone(&reconnects), failed: Arc::clone(&failed), recovered, gave_up });
             let active = Active {
                 id,
                 instance,

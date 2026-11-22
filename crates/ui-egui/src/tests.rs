@@ -2158,6 +2158,17 @@ fn the_pause_status_item_shows_the_time_left_and_the_time_paused() {
     assert_eq!(pause_item(Some(None), Some(3_600_000)), Some(("PAUSED".into(), "Paused for 1:00:00".into())));
 }
 
+#[test]
+fn the_stream_tag_says_reconnecting_when_none_is_live() {
+    use studiocraft_plugin::DestinationCounts as C;
+    assert_eq!(stream_tag(C { live: 0, retrying: 2 }), ("RECONNECTING", None, true));
+    assert_eq!(stream_tag(C { live: 1, retrying: 0 }), ("LIVE", None, false));
+    // Some live: the tag stays LIVE and the count of those waiting follows it.
+    assert_eq!(stream_tag(C { live: 2, retrying: 1 }), ("LIVE", Some("1 reconnecting".into()), false));
+    // Connecting for the first time, with none waiting, is LIVE as before.
+    assert_eq!(stream_tag(C::default()), ("LIVE", None, false));
+}
+
 /// The File menu's items in English, with the command each runs.
 fn file_items(a: &StudioApp) -> Vec<(String, CommandRef)> {
     let bar = a.laid_menu();

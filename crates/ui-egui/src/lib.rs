@@ -1978,11 +1978,25 @@ impl StudioApp {
                     ui.separator();
                     let (dropped, lagged) = (stats.encoder_dropped.to_string(), stats.lagged.to_string());
                     ui.monospace(craft_i18n::fmt(tl!("dropped {dropped}  lagged {lagged}"), &[("dropped", &dropped), ("lagged", &lagged)]));
-                    for (s, tag) in [(live, tl!("LIVE")), (rec, tl!("REC")), (replay, tl!("REPLAY"))] {
+                    let on_air = Color32::from_rgb(230, 70, 60);
+                    let clock = |s: &studiocraft_studio::OutputState| {
+                        let t = s.elapsed.as_secs();
+                        format!("{:02}:{:02}:{:02}", t / 3600, (t / 60) % 60, t % 60)
+                    };
+                    if let Some(s) = live.filter(|s| s.active) {
+                        ui.separator();
+                        let (tag, waiting, warn) = stream_tag(s.destinations);
+                        let color = if warn { ui.visuals().warn_fg_color } else { on_air };
+                        ui.colored_label(color, format!("{tag} {}", clock(&s)));
+                        if let Some(waiting) = waiting {
+                            ui.colored_label(ui.visuals().warn_fg_color, waiting)
+                                .on_hover_text(tl!("Destinations waiting to connect again; the Streaming window shows each one and why"));
+                        }
+                    }
+                    for (s, tag) in [(rec, tl!("REC")), (replay, tl!("REPLAY"))] {
                         if let Some(s) = s.filter(|s| s.active) {
                             ui.separator();
-                            let t = s.elapsed.as_secs();
-                            ui.colored_label(Color32::from_rgb(230, 70, 60), format!("{tag} {:02}:{:02}:{:02}", t / 3600, (t / 60) % 60, t % 60));
+                            ui.colored_label(on_air, format!("{tag} {}", clock(&s)));
                         }
                     }
                     if let Some((text, warn, hover)) = tracks {
@@ -2404,6 +2418,17 @@ fn output_status(o: &studiocraft_studio::OutputState) -> String {
         (OutputStatus::Stopped, _) => tl!("Stopped").to_string(),
         (OutputStatus::Failed(e), _) => craft_i18n::fmt(tl!("Failed: {error}"), &[("error", e)]),
     }
+}
+
+/// The status bar's tag for a running stream with destinations `c`, the count of those waiting to
+/// connect again when some are live, and whether the tag takes the warning color: `RECONNECTING`
+/// when none is live and at least one waits, otherwise `LIVE`.
+fn stream_tag(c: studiocraft_plugin::DestinationCounts) -> (&'static str, Option<String>, bool) {
+    if c.live == 0 && c.retrying > 0 {
+        return (tl!("RECONNECTING"), None, true);
+    }
+    let waiting = (c.retrying > 0).then(|| craft_i18n::fmt(tl!("{count} reconnecting"), &[("count", &c.retrying.to_string())]));
+    (tl!("LIVE"), waiting, false)
 }
 
 /// The pause item of the status bar while the program is paused: `PAUSED` with the countdown's
