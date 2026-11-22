@@ -70,6 +70,17 @@ fn names_that_differ_in_spaces_are_different_keys() {
 }
 
 #[test]
+fn a_moved_linux_program_is_found_only_by_the_same_file_name() {
+    let mut lower = app("player", 21, true);
+    lower.path = "/usr/bin/player".into();
+    let list = AppList { generation: 1, apps: vec![lower], error: None };
+    let upper = AppKey::from_exe("/opt/Player").unwrap().with_path("/opt/Player");
+    assert_eq!(list.find(&upper), None, "a choice of /opt/Player does not pick /usr/bin/player");
+    let moved = AppKey::from_exe("/opt/player").unwrap().with_path("/opt/player");
+    assert_eq!(list.find(&moved).map(|a| a.pids[0]), Some(21), "a program of the same file name in another folder");
+}
+
+#[test]
 fn a_key_with_a_path_matches_only_that_path() {
     let listed = AppKey::from_exe("game.exe").unwrap();
     let any = AppKey::from_exe("game.exe").unwrap();

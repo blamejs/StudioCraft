@@ -58,8 +58,9 @@ impl AppList {
     /// none is there, and for a key without a path, it finds the one application with that file
     /// name, so a program that moved after an update is still found. When several applications
     /// have the file name and none has the key's path, it finds none rather than guess. A program
-    /// whose path differs from a `/` path in the key only in letter case or trailing spaces is
-    /// another program, and is not found that way.
+    /// whose path differs from a `/` path in the key only in letter case or trailing spaces, or
+    /// whose file name differs from that path's in letter case, is another program, and is not
+    /// found that way.
     pub fn find(&self, key: &AppKey) -> Option<&AppInfo> {
         if key.path.is_some()
             && let Some(a) = self.apps.iter().find(|a| key.matches(&a.key, &a.path))
@@ -67,7 +68,11 @@ impl AppList {
             return Some(a);
         }
         let near = |a: &AppInfo| {
-            key.path.as_ref().is_some_and(|p| p.starts_with('/') && *p != a.path && p.trim_end().to_lowercase() == a.path.trim_end().to_lowercase())
+            key.path.as_ref().is_some_and(|p| {
+                p.starts_with('/')
+                    && ((*p != a.path && p.trim_end().to_lowercase() == a.path.trim_end().to_lowercase())
+                        || p.rsplit('/').next() != a.path.rsplit(['/', '\\']).next())
+            })
         };
         let mut named = self.apps.iter().filter(|a| a.key.name == key.name);
         match (named.next(), named.next()) {
