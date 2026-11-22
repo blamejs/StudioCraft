@@ -7,7 +7,7 @@ use egui::{RichText, Role, Sense, Ui, WidgetInfo, vec2};
 use serde_json::{Value, json};
 use studiocraft_model::profile::{MAX_DESTINATION_ID, MAX_DESTINATIONS, PRIMARY_DESTINATION};
 use studiocraft_model::services::{self, SERVICES};
-use studiocraft_model::{Destination, KeyRef, StreamSettings};
+use studiocraft_model::{Destination, KeyRef, ReconnectSettings, StreamSettings};
 use studiocraft_plugin::{Cause, DestinationState, DestinationStatus, Failure};
 use studiocraft_studio::OutputKind;
 
@@ -646,6 +646,23 @@ fn opt_bool(cmd: &craft_keymap::CommandRef, key: &str) -> Result<Option<bool>, M
     }
 }
 
+/// An optional whole-number parameter.
+fn opt_u32(cmd: &craft_keymap::CommandRef, key: &str) -> Result<Option<u32>, Msg> {
+    match cmd.params.get(key) {
+        None => Ok(None),
+        Some(v) => v
+            .as_u64()
+            .and_then(|n| u32::try_from(n).ok())
+            .map(Some)
+            .ok_or_else(|| tmsg!("`{command}`: `{key}` is a whole number", command = cmd.id, key = key)),
+    }
+}
+
+/// Reconnect settings as `stream.destinations` lists them.
+fn listed_reconnect(r: &ReconnectSettings) -> Value {
+    json!({"enabled": r.enabled, "first_delay_s": r.first_delay_s, "max_delay_s": r.max_delay_s, "max_tries": r.max_tries})
+}
+
 /// An id no destination uses, and that the running stream (`live`) does not use either, so a new
 /// destination is never started as one that was removed: `main` for the first one, otherwise
 /// the first free `destination-N`.
@@ -743,6 +760,32 @@ impl StudioApp {
         Ok(true)
     }
 
+    /// Changes the profile's reconnect settings with `f` and saves the profile. Settings outside
+    /// their ranges are an error and change nothing; settings that end as they were are not saved.
+    /// Returns whether they changed. A running stream keeps the settings it started with. An open
+    /// Settings window takes the same change in its draft, keeping its other unsaved edits, unless
+    /// the draft would then be out of range, when it takes the saved settings.
+    pub(crate) fn change_reconnect(&mut self, f: impl Fn(&mut ReconnectSettings)) -> Result<bool, Msg> {
+        let previous = self.studio.profile().clone();
+        let mut p = previous.clone();
+        f(&mut p.stream.reconnect);
+        p.stream.reconnect.check().map_err(Msg::plain)?;
+        if p.stream.reconnect == previous.stream.reconnect {
+            return Ok(false);
+        }
+        self.studio.set_profile(p).map_err(|e| e.to_string())?;
+        if let Err(e) = self.store.save_profile(self.studio.profile()) {
+            let _ = self.studio.restore_profile(previous);
+            return Err(tmsg!("The profile could not be saved: {error}", error = e));
+        }
+        if let Some(w) = &mut self.settings {
+            let mut draft = w.draft.stream.reconnect;
+            f(&mut draft);
+            w.draft.stream.reconnect = if draft.check().is_ok() { draft } else { self.studio.profile().stream.reconnect };
+        }
+        Ok(true)
+    }
+
     /// Close the window's open details when another profile is in use, so they are not saved
     /// into it.
     fn sync_streaming_profile(&mut self) {
@@ -779,7 +822,26 @@ impl StudioApp {
                         listed(d, running, live.iter().find(|l| l.id == d.id), held)
                     })
                     .collect();
-                Ok(json!({"destinations": list, "running": running, "max": MAX_DESTINATIONS}))
+                let mut out = json!({"destinations": list, "running": running, "max": MAX_DESTINATIONS, "reconnect": listed_reconnect(&s.reconnect)});
+                // Only a stream of this profile runs with this profile's settings.
+                let own = self.studio.stream_profile() == Some(self.studio.profile().name.as_str());
+                if let Some(r) = self.studio.stream_reconnect().filter(|_| running && own) {
+                    out["running_reconnect"] = listed_reconnect(&r);
+                }
+                Ok(out)
+            }
+            "stream.reconnect_set" => {
+                let enabled = opt_bool(cmd, "enabled")?;
+                let first = opt_u32(cmd, "first_delay_s")?;
+                let longest = opt_u32(cmd, "max_delay_s")?;
+                let tries = opt_u32(cmd, "max_tries")?;
+                let changed = self.change_reconnect(|r| {
+                    r.enabled = enabled.unwrap_or(r.enabled);
+                    r.first_delay_s = first.unwrap_or(r.first_delay_s);
+                    r.max_delay_s = longest.unwrap_or(r.max_delay_s);
+                    r.max_tries = tries.unwrap_or(r.max_tries);
+                })?;
+                Ok(json!({"changed": changed, "reconnect": listed_reconnect(&self.studio.profile().stream.reconnect)}))
             }
             "stream.destination_add" => {
                 let name = name_param(cmd)?;

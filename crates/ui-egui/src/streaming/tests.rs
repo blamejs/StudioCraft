@@ -150,6 +150,83 @@ fn a_destination_is_changed_and_an_unchanged_one_is_not_saved_again() {
 }
 
 #[test]
+fn reconnect_settings_are_changed_listed_and_checked() {
+    let mut a = app();
+    let ctx = egui::Context::default();
+    let defaults = json!({"enabled": true, "first_delay_s": 2, "max_delay_s": 30, "max_tries": 10});
+    let listed = run(&mut a, &ctx, "stream.destinations", json!({})).unwrap();
+    assert_eq!(listed["reconnect"], defaults);
+    assert!(listed.get("running_reconnect").is_none(), "no stream runs");
+    run(&mut a, &ctx, "app.settings", json!({})).unwrap();
+    let r = run(&mut a, &ctx, "stream.reconnect_set", json!({"first_delay_s": 5, "max_delay_s": 20, "max_tries": 4})).unwrap();
+    let want = json!({"enabled": true, "first_delay_s": 5, "max_delay_s": 20, "max_tries": 4});
+    assert_eq!(r, json!({"changed": true, "reconnect": want}));
+    assert_eq!(run(&mut a, &ctx, "stream.destinations", json!({})).unwrap()["reconnect"], want);
+    assert_eq!(a.settings.as_ref().map(|w| w.draft.stream.reconnect), Some(a.studio.profile().stream.reconnect), "an open Settings window follows");
+    // An unsaved edit in Settings stays when the command changes another value.
+    if let Some(w) = &mut a.settings {
+        w.draft.stream.reconnect.first_delay_s = 7;
+    }
+    run(&mut a, &ctx, "stream.reconnect_set", json!({"max_tries": 6})).unwrap();
+    let draft = a.settings.as_ref().map(|w| (w.draft.stream.reconnect.first_delay_s, w.draft.stream.reconnect.max_tries));
+    assert_eq!(draft, Some((7, 6)));
+    assert_eq!(a.studio.profile().stream.reconnect.first_delay_s, 5, "the unsaved edit is not saved");
+    // A draft the change would put out of range takes the saved settings.
+    if let Some(w) = &mut a.settings {
+        w.draft.stream.reconnect.first_delay_s = 40;
+    }
+    run(&mut a, &ctx, "stream.reconnect_set", json!({"max_delay_s": 25})).unwrap();
+    assert_eq!(a.settings.as_ref().map(|w| w.draft.stream.reconnect), Some(a.studio.profile().stream.reconnect));
+    run(&mut a, &ctx, "stream.reconnect_set", json!({"enabled": false})).unwrap();
+    assert!(!a.studio.profile().stream.reconnect.enabled);
+    assert_eq!(a.studio.profile().stream.reconnect.max_tries, 6, "values left out are kept");
+    for bad in [
+        json!({"first_delay_s": 0}),
+        json!({"first_delay_s": 61}),
+        json!({"max_delay_s": 4}),
+        json!({"max_delay_s": 601}),
+        json!({"max_tries": 0}),
+        json!({"max_tries": 101}),
+        json!({"max_tries": -1}),
+        json!({"max_tries": 2.5}),
+        json!({"max_tries": "4"}),
+        json!({"enabled": "no"}),
+        json!({"first_delay_s": 30, "max_tries": 0}),
+    ] {
+        let before = a.studio.profile().stream.reconnect;
+        assert!(run(&mut a, &ctx, "stream.reconnect_set", bad.clone()).is_err(), "{bad}");
+        assert_eq!(a.studio.profile().stream.reconnect, before, "{bad} changed nothing");
+    }
+    let e = run(&mut a, &ctx, "stream.reconnect_set", json!({"max_tries": 101})).unwrap_err();
+    assert!(e.contains("1 to 100"), "{e}");
+    assert!(crate::commands::ui_params("stream.reconnect_set").contains("max_tries?"));
+}
+
+#[test]
+fn an_unchanged_set_does_not_save() {
+    let dir = std::env::temp_dir().join(format!("studiocraft-ui-reconnect-save-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let (store, _) = Store::open(craft_settings::Location::Dir(dir.clone()));
+    let mut a = StudioApp::boot(store, None, Vec::new());
+    let ctx = egui::Context::default();
+    // A file where the profiles folder goes makes any save fail.
+    let profiles = dir.join("profiles");
+    let _ = std::fs::remove_dir_all(&profiles);
+    std::fs::write(&profiles, b"").unwrap();
+    let same = run(&mut a, &ctx, "stream.reconnect_set", json!({"enabled": true, "max_tries": 10}));
+    let empty = run(&mut a, &ctx, "stream.reconnect_set", json!({}));
+    let changed = run(&mut a, &ctx, "stream.reconnect_set", json!({"max_tries": 3}));
+    let kept = a.studio.profile().stream.reconnect.max_tries;
+    let _ = std::fs::remove_file(&profiles);
+    let _ = std::fs::remove_dir_all(&dir);
+    assert_eq!(same.map(|v| v["changed"].clone()), Ok(json!(false)), "nothing to save, so the failing save is not tried");
+    assert_eq!(empty.map(|v| v["changed"].clone()), Ok(json!(false)));
+    assert!(changed.unwrap_err().contains("could not be saved"));
+    assert_eq!(kept, 10, "a change that could not be saved is put back");
+}
+
+#[test]
 fn changes_reach_an_open_settings_window() {
     let mut a = app();
     let ctx = egui::Context::default();
