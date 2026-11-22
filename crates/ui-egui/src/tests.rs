@@ -1120,15 +1120,44 @@ fn the_dock_strip_is_200_tall_at_1280_and_the_canvas_takes_the_rest() {
     }
 }
 
+/// One frame at `size` with `events`, and the accessibility tree it produced.
+fn frame_tree(app: &mut StudioApp, ctx: &egui::Context, size: egui::Vec2, events: Vec<Event>) -> craft_ui::testing::access::AccessTree {
+    ctx.enable_accesskit();
+    let raw = RawInput { events, screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)), ..RawInput::default() };
+    app.before_input(ctx);
+    let mut out = ctx.run_ui(raw, |ui| app.frame(ui));
+    out.textures_delta.clear();
+    app.before_input(ctx);
+    craft_ui::testing::access::tree_of(&mut out)
+}
+
+/// The bounds of the node named `name` in `tree`, and whether it is disabled.
+fn named(tree: &craft_ui::testing::access::AccessTree, name: &str) -> Option<(egui::Rect, bool)> {
+    let key = tree.keys().into_iter().find(|k| tree.name_of(*k) == Some(name))?;
+    Some((tree.bounds_of(key)?, tree.is_disabled_key(key)))
+}
+
 #[test]
 fn every_header_action_is_visible_at_760_by_480() {
     let mut a = app();
     let ctx = crate::test_context();
     run(&mut a, &ctx, "source.add", json!({"kind": "color", "name": "Back"})).unwrap();
-    for _ in 0..3 {
-        frame_at(&mut a, &ctx, egui::vec2(760.0, 480.0));
+    let size = egui::vec2(760.0, 480.0);
+    for _ in 0..2 {
+        frame_at(&mut a, &ctx, size);
     }
+    let tree = frame_tree(&mut a, &ctx, size, vec![]);
     let v = a.ui_inspect(&ctx);
+    // The Scenes and Sources header buttons, found by their names in the accessibility tree, are
+    // where `ui.inspect` says they are.
+    for (dock, buttons) in [(0, &commands::SCENE_HEADER[..]), (1, &commands::SOURCE_HEADER[..])] {
+        let actions = v["docks"][dock]["actions"].as_array().cloned().unwrap_or_default();
+        for (name, _, _, tip) in buttons {
+            let Some((bounds, _)) = named(&tree, tip) else { panic!("no button named `{tip}`") };
+            let reported = actions.iter().find(|x| x["name"] == json!(name)).map(|x| rect_of(&x["rect"]));
+            assert_eq!(reported, Some(bounds), "{tip}");
+        }
+    }
     let strip = rect_of(&v["dock_strip"]["rect"]);
     assert!((strip.height() - 144.0).abs() < 0.01, "30% of 480: {strip:?}");
     let want = [("scenes", vec!["add", "remove", "up", "down"]), ("sources", vec!["add", "remove", "up", "down", "properties"]), ("mixer", vec![])];
@@ -1603,12 +1632,12 @@ fn a_press_on_a_header_action_under_the_strip_edge_runs_the_action() {
         frame_at(&mut a, &ctx, size);
     }
     let before = a.studio().collection().scenes.len();
-    let v = a.ui_inspect(&ctx);
-    let strip = rect_of(&v["dock_strip"]["rect"]);
-    let add = v["docks"][0]["actions"].as_array().and_then(|x| x.iter().find(|x| x["name"] == json!("add"))).map(|x| rect_of(&x["rect"]));
-    let Some(add) = add else { panic!("no Scenes Add action: {}", v["docks"][0]) };
-    // The 24 point action is centered in the 28 point header, so its top is in the strip edge's hit band.
-    assert_eq!(add.top(), strip.top() + 2.0, "the Add button starts 2 points below the top of the strip");
+    let tree = frame_tree(&mut a, &ctx, size, vec![]);
+    let strip = rect_of(&a.ui_inspect(&ctx)["dock_strip"]["rect"]);
+    let Some((add, false)) = named(&tree, "Add a scene") else { panic!("no enabled Scenes Add button") };
+    // The button is as tall as the header at the top of the strip, so its top is in the strip
+    // edge's hit band.
+    assert_eq!(add.top(), strip.top(), "the Add button starts at the top of the strip");
     assert!(add.top() + 1.0 <= strip.top() + 1.0 + crate::EDGE_HIT_MARGIN, "the press below goes to the edge's hit band");
     let at = egui::pos2(add.center().x, add.top() + 1.0);
     let b = |pressed| Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: Modifiers::NONE };
@@ -1703,6 +1732,177 @@ fn adding_a_source_opens_its_properties() {
     frame(&mut a, &ctx, vec![]);
     let name = &a.studio().collection().sources.last().unwrap().name;
     assert_eq!(name, "Text");
+}
+
+/// A click at `at`, one step per frame, at `size`.
+fn click_at(app: &mut StudioApp, ctx: &egui::Context, size: egui::Vec2, at: egui::Pos2) {
+    let b = |pressed| Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: Modifiers::NONE };
+    for events in [vec![Event::PointerMoved(at)], vec![b(true)], vec![b(false)]] {
+        frame_with(app, ctx, size, events);
+    }
+}
+
+/// Whether the node named `name` in `tree` is shown and enabled; `None` when there is no such node.
+fn enabled(tree: &craft_ui::testing::access::AccessTree, name: &str) -> Option<bool> {
+    named(tree, name).map(|(_, disabled)| !disabled)
+}
+
+#[test]
+fn the_scenes_and_sources_header_buttons_are_enabled_when_their_command_can_run() {
+    let mut a = app();
+    let ctx = crate::test_context();
+    let size = egui::vec2(1280.0, 800.0);
+    frame_at(&mut a, &ctx, size);
+    let tree = frame_tree(&mut a, &ctx, size, vec![]);
+    assert_eq!(a.studio().collection().scenes.len(), 1);
+    assert_eq!(enabled(&tree, "Add a scene"), Some(true));
+    for name in ["Remove the selected scene", "Move the scene up", "Move the scene down"] {
+        assert_eq!(enabled(&tree, name), Some(false), "{name} with one scene");
+    }
+    assert_eq!(enabled(&tree, "Add a source"), Some(true));
+    for name in ["Remove the selected source from the scene", "Move the source up", "Move the source down", "Properties"] {
+        assert_eq!(enabled(&tree, name), Some(false), "{name} with nothing selected");
+    }
+    run(&mut a, &ctx, "scene.add", json!({})).unwrap();
+    run(&mut a, &ctx, "source.add", json!({"kind": "color", "name": "Back"})).unwrap();
+    run(&mut a, &ctx, "source.add", json!({"kind": "color", "name": "Front"})).unwrap();
+    let scene = a.studio().engine().edit_scene();
+    let items = a.studio().collection().scene(scene).map(|s| s.items.iter().map(|i| i.id).collect::<Vec<_>>()).unwrap_or_default();
+    assert_eq!(items.len(), 2);
+    // The bottom item: it is drawn last in the dock, so it can move up and not down.
+    a.act(&ctx, Act::Select(Some(items[0])));
+    frame_at(&mut a, &ctx, size);
+    let tree = frame_tree(&mut a, &ctx, size, vec![]);
+    for name in ["Remove the selected scene", "Move the scene up", "Remove the selected source from the scene", "Move the source up", "Properties"] {
+        assert_eq!(enabled(&tree, name), Some(true), "{name}");
+    }
+    for name in ["Move the scene down", "Move the source down"] {
+        assert_eq!(enabled(&tree, name), Some(false), "{name}");
+    }
+}
+
+#[test]
+fn a_header_command_takes_no_parameters_and_fails_while_its_button_is_disabled() {
+    let mut a = app();
+    let ctx = crate::test_context();
+    let err = run(&mut a, &ctx, "scenes.add", json!({"name": "Intro"})).unwrap_err();
+    assert!(err.contains("takes no parameters"), "{err}");
+    assert_eq!(a.studio().collection().scenes.len(), 1, "the refused command added nothing");
+    let err = run(&mut a, &ctx, "scenes.remove", json!({})).unwrap_err();
+    assert!(err.contains("cannot run now"), "{err}");
+    assert_eq!(a.studio().collection().scenes.len(), 1);
+    assert_eq!(run(&mut a, &ctx, "sources.add", json!({})).unwrap(), json!({"open": true}));
+    assert_eq!(run(&mut a, &ctx, "sources.add", Value::Null).unwrap(), json!({"open": false}));
+    assert!(run(&mut a, &ctx, "scenes.add", json!({})).is_ok());
+    assert_eq!(a.studio().collection().scenes.len(), 2);
+}
+
+#[test]
+fn a_click_on_a_header_button_runs_its_command_and_add_source_opens_and_closes_its_menu() {
+    let mut a = app();
+    let ctx = crate::test_context();
+    let size = egui::vec2(1280.0, 800.0);
+    frame_at(&mut a, &ctx, size);
+    let tree = frame_tree(&mut a, &ctx, size, vec![]);
+    let Some((add_scene, false)) = named(&tree, "Add a scene") else { panic!("no enabled Add a scene button") };
+    click_at(&mut a, &ctx, size, add_scene.center());
+    assert_eq!(a.studio().collection().scenes.len(), 2, "the click added a scene");
+    let tree = frame_tree(&mut a, &ctx, size, vec![]);
+    let Some((add_source, false)) = named(&tree, "Add a source") else { panic!("no enabled Add a source button") };
+    click_at(&mut a, &ctx, size, add_source.center());
+    assert!(a.lists.add_open, "the click opened the Add menu");
+    let tree = frame_tree(&mut a, &ctx, size, vec![]);
+    let kinds: Vec<String> = a.studio().registry().sources().iter().map(|p| tl!(p.name()).to_string()).collect();
+    assert!(!kinds.is_empty() && kinds.iter().all(|k| named(&tree, k).is_some()), "the menu lists the source types: {kinds:?}");
+    click_at(&mut a, &ctx, size, add_source.center());
+    assert!(!a.lists.add_open, "a second click closed it");
+}
+
+#[test]
+fn the_sources_dock_lists_the_top_item_first_and_its_eye_and_lock_change_the_item() {
+    let mut a = app();
+    let ctx = crate::test_context();
+    let size = egui::vec2(1280.0, 800.0);
+    run(&mut a, &ctx, "source.add", json!({"kind": "color", "name": "Back"})).unwrap();
+    run(&mut a, &ctx, "source.add", json!({"kind": "color", "name": "Front"})).unwrap();
+    frame_at(&mut a, &ctx, size);
+    let tree = frame_tree(&mut a, &ctx, size, vec![]);
+    let (Some((front, _)), Some((back, _))) = (named(&tree, "Front"), named(&tree, "Back")) else { panic!("no Front and Back rows") };
+    assert!(front.top() < back.top(), "the top item, added last, is listed first: {front:?} {back:?}");
+    let scene = a.studio().engine().edit_scene();
+    let item = |a: &StudioApp, name: &str| {
+        let c = a.studio().collection();
+        let source = c.sources.iter().find(|s| s.name == name).map(|s| s.id);
+        c.scene(scene).and_then(|s| s.items.iter().find(|i| Some(i.source) == source)).map(|i| (i.visible, i.locked))
+    };
+    assert_eq!(item(&a, "Back"), Some((true, false)));
+    let Some((eye, _)) = named(&tree, "Visibility Back") else { panic!("no eye on the Back row") };
+    click_at(&mut a, &ctx, size, eye.center());
+    assert_eq!(item(&a, "Back"), Some((false, false)), "the eye hid the item");
+    let tree = frame_tree(&mut a, &ctx, size, vec![]);
+    let Some((lock, _)) = named(&tree, "Lock Back") else { panic!("no lock on the Back row") };
+    click_at(&mut a, &ctx, size, lock.center());
+    assert_eq!(item(&a, "Back"), Some((false, true)), "the lock locked the item");
+    assert_eq!(item(&a, "Front"), Some((true, false)), "the other item is unchanged");
+}
+
+#[test]
+fn a_double_click_on_a_scene_renames_it_in_place() {
+    let mut a = app();
+    let ctx = crate::test_context();
+    let size = egui::vec2(1280.0, 800.0);
+    frame_at(&mut a, &ctx, size);
+    let tree = frame_tree(&mut a, &ctx, size, vec![]);
+    let name = a.studio().collection().scenes[0].name.clone();
+    let Some((row, _)) = named(&tree, &name) else { panic!("no row named `{name}`") };
+    let at = row.center();
+    let b = |pressed| Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: Modifiers::NONE };
+    for events in [vec![Event::PointerMoved(at)], vec![b(true)], vec![b(false)], vec![b(true)], vec![b(false)], vec![]] {
+        frame_with(&mut a, &ctx, size, events);
+    }
+    let select_all = press(Key::A, Modifiers::COMMAND);
+    frame_with(&mut a, &ctx, size, select_all);
+    frame_with(&mut a, &ctx, size, vec![Event::Text("Intro".into())]);
+    frame_with(&mut a, &ctx, size, press(Key::Enter, Modifiers::NONE));
+    frame_at(&mut a, &ctx, size);
+    assert_eq!(a.studio().collection().scenes[0].name, "Intro");
+}
+
+#[test]
+fn enter_on_a_scene_in_studio_mode_sends_that_scene_to_the_program() {
+    let mut a = app();
+    let ctx = crate::test_context();
+    let size = egui::vec2(1280.0, 800.0);
+    run(&mut a, &ctx, "scene.add", json!({})).unwrap();
+    run(&mut a, &ctx, "studio.toggle", json!({})).unwrap();
+    let scenes: Vec<_> = a.studio().collection().scenes.iter().map(|s| (s.id, s.name.clone())).collect();
+    run(&mut a, &ctx, "scene.select", json!({"scene": scenes[0].0})).unwrap();
+    frame_at(&mut a, &ctx, size);
+    let tree = frame_tree(&mut a, &ctx, size, vec![]);
+    let Some((first, _)) = named(&tree, &scenes[0].1) else { panic!("no row named `{}`", scenes[0].1) };
+    click_at(&mut a, &ctx, size, first.center());
+    assert_eq!(a.studio().engine().edit_scene(), scenes[0].0);
+    // The keyboard moves to the second scene without picking it, and Enter sends it.
+    frame_with(&mut a, &ctx, size, press(Key::ArrowDown, Modifiers::COMMAND));
+    frame_with(&mut a, &ctx, size, press(Key::Enter, Modifiers::NONE));
+    frame_at(&mut a, &ctx, size);
+    assert_eq!(a.studio().collection().program_scene, scenes[1].0);
+}
+
+#[test]
+fn the_program_scene_carries_a_program_mark_in_studio_mode() {
+    let mut a = app();
+    let ctx = crate::test_context();
+    let size = egui::vec2(1280.0, 800.0);
+    frame_at(&mut a, &ctx, size);
+    let tree = frame_tree(&mut a, &ctx, size, vec![]);
+    assert!(named(&tree, "Program").is_none(), "no mark outside studio mode");
+    run(&mut a, &ctx, "studio.toggle", json!({})).unwrap();
+    frame_at(&mut a, &ctx, size);
+    let tree = frame_tree(&mut a, &ctx, size, vec![]);
+    let scene = a.studio().collection().scenes[0].name.clone();
+    let (Some((mark, _)), Some((row, _))) = (named(&tree, "Program"), named(&tree, &scene)) else { panic!("no mark on the program scene") };
+    assert!(row.intersects(mark), "the mark is on the program scene's row: {mark:?} {row:?}");
 }
 
 #[test]

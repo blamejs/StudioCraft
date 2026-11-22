@@ -638,6 +638,8 @@ fn every_label_chosen_at_run_time_has_an_english_row() {
     labels.extend(crate::docks::ROUTE_ITEMS);
     labels.extend(crate::docks::ROUTE_TIPS);
     labels.extend(crate::control::DOCK_TITLES);
+    // The tooltips of the Scenes and Sources docks' header buttons.
+    labels.extend(crate::commands::SCENE_HEADER.iter().chain(&crate::commands::SOURCE_HEADER).map(|(_, _, _, tip)| *tip));
     let en = english();
     let missing: Vec<String> = labels.iter().filter(|l| !en.contains(&(String::new(), l.to_string()))).map(|l| format!("\t{l}\t{l}")).collect();
     assert!(missing.is_empty(), "labels with no row in i18n/locales/en/studiocraft.tsv:\n{}", missing.join("\n"));

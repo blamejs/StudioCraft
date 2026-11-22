@@ -86,7 +86,7 @@ when the language's catalog has the message.
 `app.links`, `app.check_updates`, `app.language`, `plugin.list`, `source.schema`,
 `source.sync_offset`, `source.monitor`, `source.set_record_track`, `audio_tracks.status`,
 `audio_tracks.repair`, `audio_tracks.open_last`, `audio_tracks.marker`, the `captions.*` commands,
-the `dock.layout_*` commands, `video.displays` and `video.canvas_from_display`.
+the `scenes.*` and `sources.*` commands, the `dock.layout_*` commands, `video.displays` and `video.canvas_from_display`.
 
 Each entry of `engine.commands` has these fields:
 
@@ -405,6 +405,23 @@ files. A file of that name that already exists is not replaced. The
 files are written once the phrases up to the recording's end are finished, when captions stop, or
 30 s after the recording ends. The app checks this on every frame; the headless MCP server checks
 it on each request and when it exits.
+
+### `scenes.*` and `sources.*`
+
+These commands are the buttons in the Scenes and Sources dock headers. They take no parameters.
+A command that its button shows disabled is an error.
+
+| Command | What it does |
+| --- | --- |
+| `scenes.add` | Adds a scene, as `scene.add` does, and returns its reply. |
+| `scenes.remove` | Removes the scene being edited. It is disabled when the collection has one scene. |
+| `scenes.move_up`, `scenes.move_down` | Moves the scene being edited one place up or down in the Scenes dock. |
+| `sources.add` | Opens the Add menu under the Sources dock's `+` button, or closes it when it is open, and returns `{"open"}`. It is disabled when no scene is being edited. |
+| `sources.remove` | Removes the selected item from its scene. |
+| `sources.move_up`, `sources.move_down` | Moves the selected item one place up or down in the Sources dock. The Sources dock lists the top item first. |
+| `sources.properties` | Opens the selected source's properties. |
+
+The `sources.*` commands other than `sources.add` are disabled when no item is selected.
 
 ### `dock.layout_save`, `dock.layout_apply` and `dock.layout_remove`
 

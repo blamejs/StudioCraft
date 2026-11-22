@@ -43,7 +43,7 @@ use craft_ui::dialog::{DialogId, DialogResult, PromptChoice, StandardPrompt};
 use craft_ui::notices::{NoticeCenter, PostedNotice};
 use craft_ui::patterns::form_dialogs::{DialogFields, FieldValue, HostedParamDialog, Param, ParamDialog, ParamKind};
 use craft_ui::pickers::Select;
-use craft_ui::runtime::commands::{AppCatalog, CommandInput};
+use craft_ui::runtime::commands::{AppCatalog, CommandInput, CommandState, CommandStates};
 use craft_ui::runtime::env::{Label, WindowKey};
 use craft_ui::runtime::frame::{FrameInput, FrameOutput};
 use craft_ui::runtime::toast::{self, ToastId};
@@ -55,7 +55,7 @@ use craft_window::system::{NoWindows, SystemWindows};
 use egui::{Color32, RichText, Ui};
 use serde_json::{Value, json};
 use studiocraft_media::mix::MeterBallistics;
-use studiocraft_model::{ItemId, Profile, SceneCollection, SceneId, SettingsSchema, SourceId, Transform, Vec2};
+use studiocraft_model::{ItemId, Profile, SceneCollection, SettingsSchema, SourceId, Transform, Vec2};
 use studiocraft_platform::display::DisplayInfo;
 use studiocraft_render::Gpu;
 use studiocraft_render::device::{Candidate, Preference};
@@ -108,10 +108,9 @@ impl Act {
     }
 }
 
-/// What is being renamed in place.
+/// What is being renamed in place: a source, whose name field the Sources dock opens.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Rename {
-    Scene(SceneId),
     Source(SourceId),
 }
 
@@ -212,6 +211,10 @@ pub struct StudioApp {
     editor: Editor,
     selected: Option<ItemId>,
     renaming: Option<(Rename, String)>,
+    /// The Scenes and Sources docks' open menus.
+    lists: docks::DockLists,
+    /// The enabled state and tooltip of each header button of the Scenes and Sources docks.
+    header_states: Tracked<CommandStates>,
     meters: HashMap<SourceId, MeterBallistics>,
     /// The Application Audio dock's lanes and meters, apart from the Audio Mixer's meters so that
     /// a source shown in both docks is advanced once per frame in each.
@@ -275,6 +278,8 @@ pub struct StudioApp {
     dock_window_touched: [bool; store::DOCK_COUNT],
     /// Where each floating dock's window was drawn last frame, and the main window's size then.
     dock_window_drawn: [Option<egui::Rect>; store::DOCK_COUNT],
+    /// Where the pointer press now held, or released this frame, started.
+    dock_press_origin: Option<egui::Pos2>,
     dock_viewport: Option<egui::Vec2>,
     /// Counts the dock windows' resets this session. It is part of their ids, so a window opened
     /// after a reset starts at its default size instead of the size egui kept for the old one.
@@ -362,6 +367,8 @@ impl StudioApp {
             editor: Editor::default(),
             selected: None,
             renaming: None,
+            lists: docks::DockLists::default(),
+            header_states: Tracked::new(CommandStates::new()),
             meters: HashMap::new(),
             lanes: docks::LaneCache::default(),
             last_frame: None,
@@ -397,6 +404,7 @@ impl StudioApp {
             dock_window_at: [None; store::DOCK_COUNT],
             dock_window_touched: [false; store::DOCK_COUNT],
             dock_window_drawn: [None; store::DOCK_COUNT],
+            dock_press_origin: None,
             dock_viewport: None,
             dock_window_gen: 0,
             dock_strip: None,
@@ -618,6 +626,19 @@ impl StudioApp {
         let c = self.studio.collection();
         let it = c.scene(self.studio.engine().edit_scene())?.item(self.selected?)?;
         Some((it.id, it.source, it.transform))
+    }
+
+    /// The place of the scene being edited among the scenes, and the number of scenes.
+    fn edit_scene_place(&self) -> Option<(usize, usize)> {
+        let c = self.studio.collection();
+        Some((c.scene_index(self.studio.engine().edit_scene())?, c.scenes.len()))
+    }
+
+    /// The place of the selected item in the scene being edited, counted from the bottom item, and
+    /// the number of items in that scene.
+    fn selected_place(&self) -> Option<(usize, usize)> {
+        let scene = self.studio.collection().scene(self.studio.engine().edit_scene())?;
+        Some((scene.item_index(self.selected?)?, scene.items.len()))
     }
 
     /// The state scripts and the self-test read: the studio's, and what the window shows.
@@ -1251,6 +1272,12 @@ impl StudioApp {
                     .collect();
                 self.encoders = Some(list);
             }
+            id if commands::SCENE_HEADER.iter().chain(&commands::SOURCE_HEADER).any(|(_, _, c, _)| *c == id) => {
+                if !(cmd.params.is_null() || cmd.params.as_object().is_some_and(serde_json::Map::is_empty)) {
+                    return Err(tmsg!("`{command}` takes no parameters", command = id));
+                }
+                return self.header_command(id);
+            }
             "selection.properties" => {
                 let (_, source, _) = self.selection().ok_or_else(|| tmsg!("select a source first"))?;
                 self.open_properties(source);
@@ -1295,6 +1322,41 @@ impl StudioApp {
             other => return Err(tmsg!("unknown command `{command}`", command = other)),
         }
         Ok(Value::Null)
+    }
+
+    /// A header button of the Scenes or Sources dock (`commands::SCENE_HEADER`,
+    /// `commands::SOURCE_HEADER`). A command that its button shows disabled is an error.
+    /// `sources.add` opens the Add menu, or closes it when it is open, and replies whether it is
+    /// open.
+    fn header_command(&mut self, id: &str) -> Result<Value, Msg> {
+        if !self.item_state(id).enabled {
+            return Err(tmsg!("`{command}` cannot run now", command = id));
+        }
+        let edit = self.studio.engine().edit_scene();
+        let item = self.selection().map(|(item, source, _)| (item, source));
+        let run = |app: &mut StudioApp, id: &str, params: Value| app.studio.run(id, &params).map(|(v, _)| v).map_err(|e| Msg::plain(e.to_string()));
+        match (id, item) {
+            ("scenes.add", _) => run(self, "scene.add", json!({})),
+            ("scenes.remove", _) => run(self, "scene.remove", json!({"scene": edit})),
+            ("scenes.move_up", _) => run(self, "scene.move", json!({"scene": edit, "to": "up"})),
+            ("scenes.move_down", _) => run(self, "scene.move", json!({"scene": edit, "to": "down"})),
+            ("sources.add", _) => {
+                self.lists.add_open = !self.lists.add_open;
+                Ok(json!({"open": self.lists.add_open}))
+            }
+            ("sources.remove", Some((item, _))) => {
+                let r = run(self, "item.remove", json!({"item": item}))?;
+                self.selected = None;
+                Ok(r)
+            }
+            ("sources.move_up", Some((item, _))) => run(self, "item.move", json!({"item": item, "to": "up"})),
+            ("sources.move_down", Some((item, _))) => run(self, "item.move", json!({"item": item, "to": "down"})),
+            ("sources.properties", Some((_, source))) => {
+                self.open_properties(source);
+                Ok(Value::Null)
+            }
+            _ => Err(tmsg!("select a source first")),
+        }
     }
 
     /// Put every dock setting to `docks`. Floating dock windows open again at the places and sizes
@@ -1597,6 +1659,15 @@ impl StudioApp {
             input = input.catalog(catalog);
         }
         self.follow_language();
+        // The header buttons' tooltips are in the interface language the line above settled.
+        let mut states = CommandStates::new();
+        for (_, _, id, tip) in commands::SCENE_HEADER.iter().chain(&commands::SOURCE_HEADER) {
+            states.set(CommandRef::new(*id), CommandState::new().enabled(self.item_state(id).enabled).title(tl!(*tip)));
+        }
+        if *self.header_states != states {
+            self.header_states.edit(|s| *s = states);
+        }
+        input = input.states(&self.header_states);
         let root = theme::root_env().direction(host_direction(&self.host));
         let shown = theme::egui_theme(root.resolved(ctx).mode);
         if ctx.theme() != shown {
@@ -1800,7 +1871,11 @@ impl StudioApp {
         let dt = self.last_frame.map_or(0.0, |t| now.duration_since(t).as_secs_f32());
         self.last_frame = Some(now);
         let ctx = ui.ctx().clone();
-        self.dock_windows(&ctx, acts, dt);
+        // A floating dock's window is a root of its own, outside the shell's measuring run, so it
+        // is shown in the real run only.
+        if !craft_ui::runtime::measure::active(&ctx) {
+            self.dock_windows(&ctx, acts, dt);
+        }
         if shown.is_empty() {
             return;
         }
@@ -1818,6 +1893,7 @@ impl StudioApp {
         let mut st = docks::DockState {
             selected: self.selected,
             renaming: &mut self.renaming,
+            lists: &mut self.lists,
             meters: &mut self.meters,
             lanes: &mut self.lanes,
             dt,
@@ -1934,6 +2010,7 @@ impl StudioApp {
         let mut st = docks::DockState {
             selected: self.selected,
             renaming: &mut self.renaming,
+            lists: &mut self.lists,
             meters: &mut self.meters,
             lanes: &mut self.lanes,
             dt,
@@ -1942,6 +2019,14 @@ impl StudioApp {
         let studio = &self.studio;
         let pointer_down = ctx.input(|i| i.pointer.any_down());
         let interacting = pointer_down || ctx.input(|i| i.pointer.any_released());
+        // egui forgets where a press started once it is released, and a window takes its new size
+        // a frame after the pointer moves, so the origin is kept until the frame of the release.
+        let origin = match ctx.input(|i| i.pointer.press_origin()) {
+            Some(p) => Some(p),
+            None if interacting => self.dock_press_origin,
+            None => None,
+        };
+        self.dock_press_origin = origin.filter(|_| pointer_down);
         let mut changed: Vec<(usize, [f32; 2], [f32; 2])> = Vec::new();
         let grab = {
             let s = ctx.global_style();
@@ -1987,10 +2072,7 @@ impl StudioApp {
             // size.
             // The press is tested against the window as it was before the resize.
             let resized = self.dock_window_drawn[k].is_some_and(|was| {
-                interacting
-                    && same_viewport
-                    && was.size() != rect.size()
-                    && ctx.input(|i| i.pointer.press_origin()).is_some_and(|p| was.union(rect).expand(grab).contains(p))
+                interacting && same_viewport && was.size() != rect.size() && origin.is_some_and(|p| was.union(rect).expand(grab).contains(p))
             });
             self.dock_window_drawn[k] = Some(rect);
             // `dock_window_at` is where the user put the window. egui may draw it further in when

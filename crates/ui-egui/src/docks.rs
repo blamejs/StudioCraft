@@ -1,29 +1,55 @@
 //! The docks under the preview: Scenes, Sources, Audio Mixer and Application Audio. The transition
 //! and output controls are in the output bar ([`crate::output_bar`]). Each dock has a header with
-//! its title and its actions ([`crate::kit::panel_header`]) and no footer.
+//! its title and its actions and no footer. The Scenes and Sources docks show a framework title
+//! row and list; the Audio Mixer and Application Audio docks use [`crate::kit::panel_header`].
 
+use std::borrow::Cow;
 use std::collections::HashMap;
 
-use craft_ui::contract::{Show as _, ShowContainer as _};
+use craft_behavior::{ColumnKey, ColumnWidth, EditEvent, IconId, Selection, SelectionChange, keyed};
+use craft_keymap::CommandRef;
+use craft_theme::variant::Tone;
+use craft_ui::contract::overlay::Anchor;
+use craft_ui::contract::{
+    Bind, CollectionEvent, ColumnSpec, Props as _, SelectMode, Show as _, ShowCollection as _, ShowContainer as _, ToggleColumn, Trigger,
+    request_rename,
+};
 use craft_ui::display::Divider;
+use craft_ui::list::{List, ListRow, ToggleCell};
 use craft_ui::menu::{Menu, MenuItem};
+use craft_ui::primitives::IconSpec;
+use craft_ui::runtime::env::Label;
+use craft_ui::sections::{HeaderCommand, HeaderStrength, TitleRow};
 use egui::{Color32, Rect, RichText, Sense, Ui, pos2, vec2};
 use serde_json::json;
 use studiocraft_engine::lanes::{AppKey, Lane, LaneKind, Lanes};
 use studiocraft_media::mix::{BlockLevels, METER_FLOOR_DB, MeterBallistics, from_db, to_db};
-use studiocraft_model::{ItemId, SceneId, SourceId};
+use studiocraft_model::{ItemId, SceneId, SceneItem, SourceConfig, SourceId};
 use studiocraft_studio::Studio;
 
+use crate::commands::{SCENE_HEADER, SCENE_HOTKEYS, SOURCE_HEADER};
 use crate::icons::{self, Icon};
 use crate::kit::panel_header::{PanelHeaderStyle, panel_header};
 use crate::kit::tokens::{MeterColors, paint};
 use crate::theme;
 use crate::{Act, Rename};
 
+/// The menus of the Scenes and Sources docks, kept from frame to frame.
+#[derive(Debug, Default)]
+pub struct DockLists {
+    /// Whether the Sources dock's Add menu is open (`sources.add`).
+    pub add_open: bool,
+    /// The scene whose row a right-click asked a menu for.
+    scene_menu: Option<SceneId>,
+    /// The scene item whose row a right-click asked a menu for.
+    item_menu: Option<ItemId>,
+}
+
 /// The interface state the docks read and change.
 pub struct DockState<'a> {
     pub selected: Option<ItemId>,
     pub renaming: &'a mut Option<(Rename, String)>,
+    pub lists: &'a mut DockLists,
     pub meters: &'a mut HashMap<SourceId, MeterBallistics>,
     /// The Application Audio dock's meters.
     pub lanes: &'a mut LaneCache,
@@ -93,17 +119,48 @@ fn dock_menu(ui: &mut Ui, drawn: &mut Drawn, dock: &'static str, place: Option<(
     });
 }
 
-/// A header action named `name` for `ui.inspect`; `tip` is English and shown translated.
-fn action(ui: &mut Ui, actions: &mut Vec<(&'static str, Rect)>, name: &'static str, icon: Icon, tip: &str, enabled: bool) -> bool {
-    let size = control_size(ui);
-    let r = icons::response(ui, icon, tl!(tip), enabled, size, Color32::TRANSPARENT);
-    actions.push((name, r.rect));
-    r.clicked()
-}
-
-/// The size of a header action: the standard control height, square.
-fn control_size(ui: &Ui) -> egui::Vec2 {
-    egui::Vec2::splat(theme::with_root(ui.ctx(), |cx| cx.tokens.size.control.md))
+/// A dock's header as a framework title row: `title` (English, shown translated) and, at the end
+/// edge, one button per entry of `buttons` (name in `ui.inspect`, icon, command, tooltip), in
+/// reading order. A button runs its command, and the window's command states give its tooltip and
+/// whether it is enabled. Also returns the title row's response.
+fn title_header(ui: &mut Ui, title: &str, buttons: &[(&'static str, &'static str, &str, &str)]) -> (Drawn, egui::Response) {
+    let (height, pad, side, fill, font) = theme::with_root(ui.ctx(), |cx| {
+        let t = &cx.tokens;
+        (t.size.panel_header, t.space.pad.regular, t.size.control.md, theme::color(cx, t.color.surface.raised), theme::title_font(cx))
+    });
+    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width().max(0.0), height), Sense::hover());
+    if ui.is_rect_visible(rect) {
+        ui.painter().rect_filled(rect, 0.0, fill);
+    }
+    let left = (rect.left() + pad).min(rect.right());
+    let room = Rect::from_min_max(pos2(left, rect.top()), pos2((rect.right() - pad).max(left), rect.bottom()));
+    let mut row_ui = ui.new_child(egui::UiBuilder::new().id_salt(("dock-header", title)).max_rect(room));
+    let commands = buttons.iter().map(|(_, icon, id, _)| HeaderCommand::new(IconId::new(icon), CommandRef::new(*id)));
+    let out = TitleRow::new(tl!(title).to_string()).strength(HeaderStrength::Strong).commands(commands).show(&mut row_ui);
+    let row = out.edit.response.rect;
+    // The title row lays its buttons out from the end edge, each as wide as a standard control
+    // and as tall as the row, with no gap between them.
+    let side = side.min(row.height());
+    let rtl = crate::i18n::is_rtl(ui);
+    let actions: Vec<(&'static str, Rect)> = buttons
+        .iter()
+        .rev()
+        .enumerate()
+        .map(|(k, (name, ..))| {
+            let off = side * k as f32;
+            let x = if rtl { row.left() + off } else { row.right() - off - side };
+            (*name, Rect::from_min_size(pos2(x, row.top()), vec2(side, row.height())))
+        })
+        .collect();
+    let band = side * buttons.len() as f32;
+    let title_rect = if rtl {
+        Rect::from_min_max(pos2((row.left() + band).min(row.right()), row.top()), row.right_bottom())
+    } else {
+        Rect::from_min_max(row.left_top(), pos2((row.right() - band).max(row.left()), row.bottom()))
+    };
+    let wanted = ui.painter().layout_no_wrap(tl!(title).to_string(), font, Color32::WHITE).size().x;
+    let drawn = Drawn { header: rect, title: title_rect, actions, truncated: wanted > title_rect.width() + 0.5, grab: egui::Vec2::ZERO };
+    (drawn, out.edit.response)
 }
 
 /// The area for the dock's content under its header, inside the dock padding.
@@ -114,20 +171,12 @@ fn body(ui: &mut Ui) -> Ui {
     ui.new_child(egui::UiBuilder::new().max_rect(rect).layout(crate::i18n::column(ui)))
 }
 
-/// A text field for renaming; the new name once Enter is pressed or the field loses focus, and
-/// `true` in the second place when the edit ended either way.
-fn rename_field(ui: &mut Ui, text: &mut String) -> (Option<String>, bool) {
-    let r = ui.add(egui::TextEdit::singleline(text).desired_width(f32::INFINITY));
-    if !r.has_focus() && !r.lost_focus() {
-        r.request_focus();
-    }
-    if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
-        return (None, true);
-    }
-    if r.lost_focus() {
-        return (Some(text.trim().to_string()), true);
-    }
-    (None, false)
+/// The body of a dock that shows a list, clipped to its own room so that the list takes no
+/// press outside it (a floating dock's window edges).
+fn list_body(ui: &mut Ui) -> Ui {
+    let mut body = body(ui);
+    body.set_clip_rect(body.max_rect().intersect(ui.clip_rect()));
+    body
 }
 
 /// The labels of the four move commands, by their `to` parameter.
@@ -138,190 +187,232 @@ pub fn scenes(ui: &mut Ui, studio: &Studio, st: &mut DockState, acts: &mut Vec<A
     let edit = studio.engine().edit_scene();
     let program = c.program_scene;
     let studio_mode = studio.engine().studio_mode();
-    let mut drawn = header(ui, "Scenes", |ui, a| {
-        let index = c.scene_index(edit).unwrap_or(0);
-        if action(ui, a, "down", Icon::Down, "Move the scene down", index + 1 < c.scenes.len()) {
-            acts.push(Act::run("scene.move", json!({"scene": edit, "to": "down"})));
-        }
-        if action(ui, a, "up", Icon::Up, "Move the scene up", index > 0) {
-            acts.push(Act::run("scene.move", json!({"scene": edit, "to": "up"})));
-        }
-        if action(ui, a, "remove", Icon::Minus, "Remove the selected scene", c.scenes.len() > 1) {
-            acts.push(Act::run("scene.remove", json!({"scene": edit})));
-        }
-        if action(ui, a, "add", Icon::Plus, "Add a scene", true) {
-            acts.push(Act::run("scene.add", json!({})));
-        }
-    });
+    let (mut drawn, _) = title_header(ui, "Scenes", &SCENE_HEADER);
     dock_menu(ui, &mut drawn, "scenes", st.place, acts);
-    let area = egui::ScrollArea::vertical().id_salt("scenes").auto_shrink([false, false]);
-    area.show(&mut body(ui), |ui| {
-        for (i, scene) in c.scenes.iter().enumerate() {
-            if let Some((Rename::Scene(id), text)) = st.renaming.as_mut()
-                && *id == scene.id
-            {
-                let (name, done) = rename_field(ui, text);
-                if let Some(name) = name.filter(|n| !n.is_empty() && *n != scene.name) {
-                    acts.push(Act::run("scene.rename", json!({"scene": scene.id, "name": name})));
-                }
-                if done {
-                    *st.renaming = None;
-                }
-                continue;
-            }
-            let mut label = RichText::new(&scene.name);
+    let mut body = list_body(ui);
+    let source = keyed(&c.scenes, |s| s.id).with_text(|s| Cow::Borrowed(s.name.as_str()));
+    let mut selection = Selection::single(edit);
+    let shown = List::<SceneId>::new(tl!("Scenes").to_string())
+        .select(SelectMode::Single)
+        .selection(Bind::bound(&mut selection))
+        .allow_empty(false)
+        .rename(true)
+        .show_items(&mut body, &source, &mut |_, icx| {
+            let scene = &c.scenes[icx.at];
+            let mut row = ListRow::new(scene.name.clone()).state(icx.row.clone());
             if studio_mode && scene.id == program {
-                label = label.color(Color32::from_rgb(220, 80, 80));
+                row = row.trailing_icon(IconSpec::svg(IconId::new("circle")), tl!("Program").to_string()).trailing_tone(Tone::Bad);
             }
-            let r = ui.add_sized([ui.available_width(), 20.0], egui::Button::selectable(scene.id == edit, label));
-            let r = if i < crate::commands::SCENE_HOTKEYS {
-                r.on_hover_text(craft_i18n::fmt(tl!("Scene {n}"), &[("n", &(i + 1).to_string())]))
-            } else {
-                r
-            };
-            if r.clicked() {
-                acts.push(Act::run("scene.select", json!({"scene": scene.id})));
+            if icx.at < SCENE_HOTKEYS {
+                row = row.tooltip(craft_i18n::fmt(tl!("Scene {n}"), &[("n", &(icx.at + 1).to_string())]));
             }
-            if r.double_clicked() {
+            row
+        });
+    let list = shown.response.id;
+    // The scene being edited once the acts so far have run.
+    let mut picked = edit;
+    for event in shown.events {
+        match event {
+            CollectionEvent::Selection(SelectionChange::Set(keys)) => {
+                if let Some(id) = keys.last().copied().filter(|id| *id != picked) {
+                    acts.push(Act::run("scene.select", json!({"scene": id})));
+                    picked = id;
+                }
+            }
+            // A double click or Enter: in studio mode it sends the scene to the program, and
+            // otherwise it renames the scene.
+            CollectionEvent::Activate(id) => {
                 if studio_mode {
+                    if id != picked {
+                        acts.push(Act::run("scene.select", json!({"scene": id})));
+                        picked = id;
+                    }
                     acts.push(Act::run("studio.transition", json!({})));
                 } else {
-                    *st.renaming = Some((Rename::Scene(scene.id), scene.name.clone()));
+                    request_rename(body.ctx(), list, &id);
                 }
             }
-            r.context_menu(|ui| {
-                if ui.button(tl!("Rename")).clicked() {
-                    *st.renaming = Some((Rename::Scene(scene.id), scene.name.clone()));
-                    ui.close();
+            CollectionEvent::Rename(edit) => {
+                if let Some((id, name)) = renamed(&edit)
+                    && let Some(scene) = c.scene(id)
+                    && name != scene.name
+                {
+                    acts.push(Act::run("scene.rename", json!({"scene": id, "name": name})));
                 }
-                if ui.button(tl!("Duplicate")).clicked() {
-                    acts.push(Act::run("scene.duplicate", json!({"scene": scene.id})));
-                    ui.close();
-                }
-                if ui.add_enabled(c.scenes.len() > 1, egui::Button::new(tl!("Remove"))).clicked() {
-                    acts.push(Act::run("scene.remove", json!({"scene": scene.id})));
-                    ui.close();
-                }
-                ui.separator();
-                for (to, label) in MOVES {
-                    if ui.button(tl!(label)).clicked() {
-                        acts.push(Act::run("scene.move", json!({"scene": scene.id, "to": to})));
-                        ui.close();
-                    }
-                }
-            });
+            }
+            CollectionEvent::ContextMenu(request) => st.lists.scene_menu = Some(request.key),
+            CollectionEvent::EmptyContextMenu { .. } => st.lists.scene_menu = None,
+            _ => {}
         }
-    });
+    }
+    if let Some(scene) = st.lists.scene_menu.and_then(|id| c.scene(id)) {
+        Menu::context(scene.name.clone(), &shown.response).show(&mut body, |ui, _| {
+            if row(ui, tl!("Rename"), true) {
+                request_rename(ui.ctx(), list, &scene.id);
+            }
+            if row(ui, tl!("Duplicate"), true) {
+                acts.push(Act::run("scene.duplicate", json!({"scene": scene.id})));
+            }
+            if row(ui, tl!("Remove"), c.scenes.len() > 1) {
+                acts.push(Act::run("scene.remove", json!({"scene": scene.id})));
+            }
+            Divider::horizontal().show(ui);
+            for (to, label) in MOVES {
+                if row(ui, tl!(label), true) {
+                    acts.push(Act::run("scene.move", json!({"scene": scene.id, "to": to})));
+                }
+            }
+        });
+    }
     drawn
 }
 
-/// The `+` menu: every source type, and the sources already made.
+/// A menu row labeled `label` (shown as is) that can be `enabled`; whether it ran. A row that
+/// runs closes the menu.
+fn row(ui: &mut Ui, label: &str, enabled: bool) -> bool {
+    MenuItem::new(label.to_string()).enabled(enabled).show(ui).ran
+}
+
+/// The item and new name of a finished rename, the name trimmed and not empty.
+fn renamed<K: Clone>(edit: &EditEvent<craft_ui::contract::Rename<K>>) -> Option<(K, String)> {
+    let (EditEvent::Commit { after, .. } | EditEvent::Set { after, .. }) = edit else { return None };
+    let name = after.name.trim();
+    (!name.is_empty()).then(|| (after.key.clone(), name.to_string()))
+}
+
+/// The rows of the Add menu: every source type, and the sources already made that the scene does
+/// not hold, in a submenu.
 fn add_source_menu(ui: &mut Ui, studio: &Studio, scene: SceneId, acts: &mut Vec<Act>) {
     for p in studio.registry().sources() {
-        if ui.button(tl!(p.name())).clicked() {
+        if row(ui, tl!(p.name()), true) {
             acts.push(Act::AddSource { kind: p.id().to_string() });
-            ui.close();
         }
     }
     let c = studio.collection();
     let in_scene: Vec<SourceId> = c.scene(scene).map(|s| s.items.iter().map(|i| i.source).collect()).unwrap_or_default();
     let existing: Vec<_> = c.sources.iter().filter(|s| !in_scene.contains(&s.id) && !c.global_audio.contains(&s.id)).collect();
     if !existing.is_empty() {
-        ui.separator();
-        ui.menu_button(tl!("Existing Source"), |ui| {
-            for s in existing {
-                if ui.button(&s.name).clicked() {
+        Divider::horizontal().show(ui);
+        Menu::submenu_row(ui, tl!("Existing Source").to_string(), |ui, _| {
+            for s in &existing {
+                if row(ui, &s.name, true) {
                     acts.push(Act::run("source.add_existing", json!({"source": s.id})));
-                    ui.close();
                 }
             }
         });
     }
 }
 
+/// The eye, lock and name columns of the Sources dock.
+const EYE: ColumnKey = ColumnKey::new("visible");
+const LOCK: ColumnKey = ColumnKey::new("locked");
+const NAME: ColumnKey = ColumnKey::new("name");
+
 pub fn sources(ui: &mut Ui, studio: &Studio, st: &mut DockState, acts: &mut Vec<Act>) -> Drawn {
     let c = studio.collection();
     let edit = studio.engine().edit_scene();
     let scene = c.scene(edit);
-    let sel = st.selected.and_then(|id| scene.and_then(|s| s.item(id)));
-    let mut drawn = header(ui, "Sources", |ui, a| {
-        if action(ui, a, "properties", Icon::Gear, "Properties", sel.is_some())
-            && let Some(it) = sel
-        {
-            acts.push(Act::Properties(it.source));
-        }
-        let index = sel.and_then(|it| scene.and_then(|s| s.item_index(it.id)));
-        let top = scene.map_or(0, |s| s.items.len().saturating_sub(1));
-        if action(ui, a, "down", Icon::Down, "Move the source down", index.is_some_and(|i| i > 0))
-            && let Some(it) = sel
-        {
-            acts.push(Act::run("item.move", json!({"item": it.id, "to": "down"})));
-        }
-        if action(ui, a, "up", Icon::Up, "Move the source up", index.is_some_and(|i| i < top))
-            && let Some(it) = sel
-        {
-            acts.push(Act::run("item.move", json!({"item": it.id, "to": "up"})));
-        }
-        if action(ui, a, "remove", Icon::Minus, "Remove the selected source from the scene", sel.is_some()) {
-            acts.push(Act::run("selection.remove", json!({})));
-        }
-        let size = control_size(ui);
-        let r = icons::menu_sized(ui, Icon::Plus, tl!("Add a source"), size, scene.is_some(), |ui| add_source_menu(ui, studio, edit, acts));
-        a.push(("add", r.rect));
-    });
+    let (mut drawn, header) = title_header(ui, "Sources", &SOURCE_HEADER);
+    // The Add menu hangs under its button. The header row is its opener, so a press on the button
+    // while the menu is open reaches the button, which closes it.
+    if scene.is_none() {
+        st.lists.add_open = false;
+    }
+    let mut menu = Menu::new(tl!("Add a source").to_string()).opened_by(&header, Trigger::Manual).open(Bind::bound(&mut st.lists.add_open));
+    if let Some((_, at)) = drawn.actions.iter().find(|(name, _)| *name == "add") {
+        menu = menu.anchor(Anchor::Rect(*at));
+    }
+    menu.show(ui, |ui, _| add_source_menu(ui, studio, edit, acts));
     dock_menu(ui, &mut drawn, "sources", st.place, acts);
     let Some(scene) = scene else { return drawn };
-    let area = egui::ScrollArea::vertical().id_salt("sources").auto_shrink([false, false]);
-    area.show(&mut body(ui), |ui| {
-        if scene.items.is_empty() {
-            ui.weak(tl!("No sources in this scene. Add one with +."));
-        }
-        for it in scene.items.iter().rev() {
-            let Some(src) = c.source(it.source) else { continue };
-            crate::i18n::horizontal(ui, |ui| {
-                let size = vec2(20.0, 20.0);
-                let (eye, tip) = if it.visible { (Icon::Eye, "Hide") } else { (Icon::EyeOff, "Show") };
-                if icons::sized(ui, eye, tl!(tip), true, size, Color32::TRANSPARENT) {
-                    acts.push(Act::run("item.visible", json!({"item": it.id, "visible": !it.visible})));
-                }
-                let (lock, tip) = if it.locked { (Icon::Lock, "Unlock") } else { (Icon::Unlock, "Lock (it can't be moved in the preview)") };
-                if icons::sized(ui, lock, tl!(tip), true, size, Color32::TRANSPARENT) {
-                    acts.push(Act::run("item.lock", json!({"item": it.id, "locked": !it.locked})));
-                }
-                if let Some((Rename::Source(id), text)) = st.renaming.as_mut()
-                    && *id == src.id
-                {
-                    let (name, done) = rename_field(ui, text);
-                    if let Some(name) = name.filter(|n| !n.is_empty() && *n != src.name) {
-                        acts.push(Act::run("source.rename", json!({"source": src.id, "name": name})));
-                    }
-                    if done {
-                        *st.renaming = None;
-                    }
-                    return;
-                }
-                let mut label = RichText::new(&src.name);
-                if studio.source_error(src.id).is_some() {
-                    label = label.color(ui.visuals().warn_fg_color);
-                }
-                let r = ui.add_sized([ui.available_width(), 20.0], egui::Button::selectable(st.selected == Some(it.id), label));
-                let r = match studio.source_error(src.id) {
-                    Some(e) => r.on_hover_text(crate::i18n::Msg::plain(e).shown()),
-                    None => r,
-                };
-                if r.clicked() {
-                    acts.push(Act::Select(Some(it.id)));
-                }
-                if r.double_clicked() {
+    // The top item is drawn first.
+    let rows: Vec<(&SceneItem, &SourceConfig)> = scene.items.iter().rev().filter_map(|it| Some((it, c.source(it.source)?))).collect();
+    let source = keyed(&rows, |(it, _)| it.id)
+        .with_text(|(_, src)| Cow::Borrowed(src.name.as_str()))
+        .with_toggled(|(it, _), column| (*column == EYE && it.visible) || (*column == LOCK && it.locked));
+    let columns = vec![
+        ColumnSpec::toggle(EYE, Label::Empty, ToggleColumn::sweepable()),
+        ColumnSpec::toggle(LOCK, Label::Empty, ToggleColumn::sweepable()),
+        ColumnSpec::new(NAME, Label::Empty, ColumnWidth::fill(1.0)),
+    ];
+    let mut selection = Selection::new(st.selected.into_iter().collect(), st.selected, st.selected);
+    let mut body = list_body(ui);
+    let shown = List::<ItemId>::new(tl!("Sources").to_string())
+        .select(SelectMode::Single)
+        .selection(Bind::bound(&mut selection))
+        .header(false)
+        .columns(columns)
+        .rename(true)
+        .empty(tl!("No sources in this scene. Add one with +.").to_string())
+        .show_items(&mut body, &source, &mut |_, icx| {
+            let (it, src) = rows[icx.at];
+            let eye = if it.visible { "Hide" } else { "Show" };
+            let lock = if it.locked { "Unlock" } else { "Lock (it can't be moved in the preview)" };
+            let mut row = ListRow::new(src.name.clone())
+                .cells(icx.cells())
+                .state(icx.row.clone())
+                .toggle(ToggleCell::eye(EYE, it.visible).tooltip(tl!(eye).to_string()))
+                .toggle(ToggleCell::lock(LOCK, it.locked).tooltip(tl!(lock).to_string()));
+            if let Some(e) = studio.source_error(src.id) {
+                let error = crate::i18n::Msg::plain(e).shown();
+                row = row.trailing_icon(IconSpec::svg(IconId::new("warning")), error.clone()).trailing_tone(Tone::Warn).tooltip(error);
+            }
+            row
+        });
+    let list = shown.response.id;
+    let item = |id: ItemId| rows.iter().find(|(it, _)| it.id == id).copied();
+    // A sweep and its commit can report the same cell in one frame: each cell changes once.
+    let mut flipped: Vec<(ItemId, ColumnKey)> = Vec::new();
+    for event in shown.events {
+        match event {
+            CollectionEvent::Selection(SelectionChange::Set(keys)) => acts.push(Act::Select(keys.last().copied())),
+            CollectionEvent::Selection(SelectionChange::Clear) => acts.push(Act::Select(None)),
+            CollectionEvent::Activate(id) => {
+                if let Some((_, src)) = item(id) {
                     acts.push(Act::Properties(src.id));
                 }
-                Menu::context(src.name.clone(), &r).show(ui, |ui, _| {
-                    acts.push(Act::Select(Some(it.id)));
-                    item_menu(ui, it.id, src.id, &src.name, st.renaming, acts);
-                });
-            });
+            }
+            CollectionEvent::Toggle(edit) => {
+                let Some(cell) = edit.landed() else { continue };
+                let Some((it, _)) = item(cell.key) else { continue };
+                if flipped.contains(&(cell.key, cell.column.clone())) {
+                    continue;
+                }
+                if cell.column == EYE && cell.on != it.visible {
+                    acts.push(Act::run("item.visible", json!({"item": it.id, "visible": cell.on})));
+                } else if cell.column == LOCK && cell.on != it.locked {
+                    acts.push(Act::run("item.lock", json!({"item": it.id, "locked": cell.on})));
+                } else {
+                    continue;
+                }
+                flipped.push((cell.key, cell.column.clone()));
+            }
+            CollectionEvent::Rename(edit) => {
+                if let Some((id, name)) = renamed(&edit)
+                    && let Some((_, src)) = item(id)
+                    && name != src.name
+                {
+                    acts.push(Act::run("source.rename", json!({"source": src.id, "name": name})));
+                }
+            }
+            CollectionEvent::ContextMenu(request) => {
+                acts.push(Act::Select(Some(request.key)));
+                st.lists.item_menu = Some(request.key);
+            }
+            CollectionEvent::EmptyContextMenu { .. } => st.lists.item_menu = None,
+            _ => {}
         }
-    });
+    }
+    if let Some((it, src)) = st.lists.item_menu.and_then(item) {
+        Menu::context(src.name.clone(), &shown.response).show(&mut body, |ui, _| item_menu(ui, it.id, src.id, &src.name, st.renaming, acts));
+    }
+    // A rename asked for by the item's menu, here or in the preview, opens the item's field.
+    if let Some((Rename::Source(source), _)) = st.renaming
+        && let Some((it, _)) = rows.iter().find(|(_, src)| src.id == *source)
+    {
+        request_rename(body.ctx(), list, &it.id);
+        *st.renaming = None;
+    }
     drawn
 }
 

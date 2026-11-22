@@ -1,22 +1,14 @@
 //! Small icons drawn with shapes, on icon buttons.
 
-use std::f32::consts::{PI, TAU};
+use std::f32::consts::TAU;
 
 use egui::{Color32, CornerRadius, Pos2, Rect, Sense, Shape, Stroke, StrokeKind, Ui, pos2, vec2};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Icon {
-    Plus,
-    Minus,
-    Up,
-    Down,
     Gear,
-    Lock,
-    Unlock,
     Speaker,
     Muted,
-    Eye,
-    EyeOff,
     /// Two arrows pointing apart: the transition picker when the output bar is narrow.
     Transition,
 }
@@ -109,18 +101,6 @@ pub fn paint(ui: &Ui, icon: Icon, rect: Rect, color: Color32) {
     let s = rect.height().min(rect.width()) * 0.32;
     let line = Stroke::new(1.6, color);
     match icon {
-        Icon::Plus => {
-            p.line_segment([c - vec2(s, 0.0), c + vec2(s, 0.0)], line);
-            p.line_segment([c - vec2(0.0, s), c + vec2(0.0, s)], line);
-        }
-        Icon::Minus => {
-            p.line_segment([c - vec2(s, 0.0), c + vec2(s, 0.0)], line);
-        }
-        Icon::Up | Icon::Down => {
-            let d = if icon == Icon::Up { -1.0 } else { 1.0 };
-            let pts = vec![c + vec2(0.0, d * s * 0.8), c + vec2(s, -d * s * 0.6), c + vec2(-s, -d * s * 0.6)];
-            p.add(Shape::convex_polygon(pts, color, Stroke::NONE));
-        }
         Icon::Gear => {
             for k in 0..8 {
                 let a = k as f32 * TAU / 8.0;
@@ -129,17 +109,6 @@ pub fn paint(ui: &Ui, icon: Icon, rect: Rect, color: Color32) {
             }
             p.circle_stroke(c, s * 0.7, Stroke::new(1.8, color));
             p.circle_filled(c, s * 0.25, color);
-        }
-        Icon::Lock | Icon::Unlock => {
-            let body = Rect::from_center_size(c + vec2(0.0, s * 0.35), vec2(s * 1.6, s * 1.1));
-            p.rect_filled(body, 1.5, color);
-            let shift = if icon == Icon::Unlock { s * 0.55 } else { 0.0 };
-            let top = pos2(c.x + shift, body.top());
-            let r = s * 0.5;
-            let mut pts = vec![pos2(top.x - r, top.y)];
-            pts.extend(arc(pos2(top.x, top.y - s * 0.25), r, PI, TAU, 10));
-            pts.push(pos2(top.x + r, top.y - if icon == Icon::Unlock { s * 0.25 } else { 0.0 }));
-            p.add(Shape::line(pts, line));
         }
         Icon::Speaker | Icon::Muted => {
             let x0 = c.x - s;
@@ -163,16 +132,6 @@ pub fn paint(ui: &Ui, icon: Icon, rect: Rect, color: Color32) {
                 p.line_segment([pos2(a.x, b.y), pos2(b.x, a.y)], line);
             }
         }
-        Icon::Eye | Icon::EyeOff => {
-            let r = s * 1.6;
-            let mut pts = arc(pos2(c.x, c.y + r * 0.55), r, -PI * 0.78, -PI * 0.22, 12);
-            pts.extend(arc(pos2(c.x, c.y - r * 0.55), r, PI * 0.22, PI * 0.78, 12));
-            p.add(Shape::closed_line(pts, Stroke::new(1.3, color)));
-            p.circle_filled(c, s * 0.38, color);
-            if icon == Icon::EyeOff {
-                p.line_segment([c + vec2(-s * 1.1, s * 0.9), c + vec2(s * 1.1, -s * 0.9)], Stroke::new(1.8, color));
-            }
-        }
         Icon::Transition => {
             // An arrow to the right on top and one to the left below it.
             for (y, d) in [(-s * 0.45, 1.0), (s * 0.45, -1.0)] {
@@ -193,20 +152,7 @@ mod tests {
     fn every_icon_paints() {
         let ctx = egui::Context::default();
         let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
-            for icon in [
-                Icon::Plus,
-                Icon::Minus,
-                Icon::Up,
-                Icon::Down,
-                Icon::Gear,
-                Icon::Lock,
-                Icon::Unlock,
-                Icon::Speaker,
-                Icon::Muted,
-                Icon::Eye,
-                Icon::EyeOff,
-                Icon::Transition,
-            ] {
+            for icon in [Icon::Gear, Icon::Speaker, Icon::Muted, Icon::Transition] {
                 assert!(!sized(ui, icon, "icon", true, vec2(24.0, 24.0), Color32::TRANSPARENT));
                 assert!(!sized(ui, icon, "icon", false, vec2(24.0, 24.0), Color32::TRANSPARENT));
             }
