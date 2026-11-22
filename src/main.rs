@@ -20,13 +20,14 @@ mod input;
 mod titlebar;
 
 use std::process::ExitCode;
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use craft_settings::Location;
+use craft_window::restore;
 use studiocraft_render::device::{Notice, Preference};
-use studiocraft_ui_egui::hardware;
 use studiocraft_ui_egui::store::Store;
 use studiocraft_ui_egui::{APP_NAME, BUNDLE_ID, DesktopWindow, StudioApp};
+use studiocraft_ui_egui::{hardware, placement};
 
 use crate::args::{Action, Args};
 
@@ -36,6 +37,96 @@ struct Shell {
     control: Option<control::Control>,
     /// The command line, to start the app again with after its graphics device was lost.
     relaunch_args: Vec<std::ffi::OsString>,
+    /// Where the window's size and place are kept. The UI runtime records them as the window
+    /// moves and writes the file once a second; the exit writes the last change.
+    placement: Arc<Mutex<restore::Store>>,
+    /// The geometry the window opened with and whether it came from a saved record, until it has
+    /// been checked against the monitors.
+    unchecked: Option<(placement::Placement, bool)>,
+    /// How many more frames the check waits for the system to list a monitor.
+    monitor_waits: u32,
+    /// The smallest size the window may be made now: `placement::MIN_SIZE`, or less while the
+    /// window is on a monitor smaller than that.
+    least: [f32; 2],
+    /// The position, size and scale of the monitor the smallest size was last set for.
+    monitor_seen: Option<([i32; 2], [u32; 2], u64)>,
+}
+
+/// The frames the monitor check waits for the system to list a monitor before it gives up.
+const MONITOR_WAITS: u32 = 120;
+
+impl Shell {
+    /// Once the monitors are listed: moves a window that opened off every monitor onto one, and
+    /// shrinks one larger than its monitor to it. A first window on a monitor smaller than it is
+    /// shrunk and maximized. A maximized window gets the corrected normal geometry and is
+    /// maximized again, so it restores to a size that fits.
+    fn fit_to_monitors(&mut self, ctx: &egui::Context, frame: &eframe::Frame) {
+        let Some(window) = frame.winit_window() else { return };
+        let Some((opened, saved)) = self.unchecked.take() else { return };
+        let handles: Vec<_> = window.available_monitors().collect();
+        let monitors: Vec<placement::Monitor> = handles
+            .iter()
+            .map(|m| {
+                let (pos, size) = (m.position(), m.size());
+                placement::monitor(m.name(), [pos.x, pos.y], [size.width, size.height], m.scale_factor())
+            })
+            .collect();
+        if monitors.is_empty() {
+            if self.monitor_waits > 0 {
+                self.monitor_waits -= 1;
+                self.unchecked = Some((opened, saved));
+            }
+            return;
+        }
+        let current = window.current_monitor();
+        // `keep_least_size` waits until the window is on another monitor than the one it opened
+        // on, so the smallest size set here holds while the window moves to its place.
+        self.monitor_seen = current.as_ref().map(|m| {
+            let (pos, size) = (m.position(), m.size());
+            ([pos.x, pos.y], [size.width, size.height], m.scale_factor().to_bits())
+        });
+        let home = current.and_then(|c| handles.iter().position(|m| *m == c));
+        let outer_px = window.outer_position().ok().map(|p| [p.x, p.y]);
+        let defaults = placement::defaults();
+        let Some(next) = placement::on_monitors(&opened, saved, &monitors, home, outer_px, &defaults) else { return };
+        if opened.maximized {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(false));
+        }
+        let least = placement::least_size(&next, &defaults);
+        if least != self.least {
+            self.least = least;
+            ctx.send_viewport_cmd(egui::ViewportCommand::MinInnerSize(least.into()));
+        }
+        ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(next.normal.size.into()));
+        if let Some([x, y]) = next.position_px {
+            let ppp = ctx.pixels_per_point().max(f32::EPSILON);
+            ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(egui::pos2(x as f32 / ppp, y as f32 / ppp)));
+        }
+        if next.maximized {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(true));
+        }
+    }
+
+    /// When the window is on another monitor than before: sets the smallest size for that monitor,
+    /// `placement::MIN_SIZE` or less on a monitor smaller than that.
+    fn keep_least_size(&mut self, ctx: &egui::Context, frame: &eframe::Frame) {
+        if self.harness.is_some() {
+            return;
+        }
+        let Some(m) = frame.winit_window().and_then(|w| w.current_monitor()) else { return };
+        let (pos, size) = (m.position(), m.size());
+        let seen = ([pos.x, pos.y], [size.width, size.height], m.scale_factor().to_bits());
+        if self.monitor_seen == Some(seen) {
+            return;
+        }
+        self.monitor_seen = Some(seen);
+        let monitor = placement::monitor(m.name(), [pos.x, pos.y], [size.width, size.height], m.scale_factor());
+        let least = placement::least_size_on(&monitor, &placement::defaults());
+        if least != self.least {
+            self.least = least;
+            ctx.send_viewport_cmd(egui::ViewportCommand::MinInnerSize(least.into()));
+        }
+    }
 }
 
 impl eframe::App for Shell {
@@ -60,11 +151,22 @@ impl eframe::App for Shell {
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
+        self.fit_to_monitors(ui.ctx(), frame);
+        self.keep_least_size(ui.ctx(), frame);
         eframe::App::ui(&mut self.app, ui, frame);
     }
 
     fn on_exit(&mut self) {
         eframe::App::on_exit(&mut self.app);
+        let mut placement = self.placement.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if placement.is_dirty()
+            && let Err(e) = placement.save()
+        {
+            // The window has closed, so the error goes to the terminal, as below.
+            let path = placement.path().map(|p| p.display().to_string()).unwrap_or_default();
+            eprintln!("studiocraft: the window's size and place could not be saved in {path}: {e}");
+        }
+        drop(placement);
         if self.app.relaunch_requested() {
             match std::env::current_exe().and_then(|exe| std::process::Command::new(exe).args(&self.relaunch_args).spawn()) {
                 Ok(_) => log::warn!("the graphics device was lost; StudioCraft starts again"),
@@ -110,11 +212,14 @@ fn run(args: Args, raw: Vec<std::ffi::OsString>) -> Result<(), String> {
     };
     let (store, problems) = Store::open(location.clone());
     let frame = titlebar::decide(store.prefs().system_title_bar);
-    let mut viewport = egui::ViewportBuilder::default()
-        .with_title(APP_NAME)
-        .with_app_id(BUNDLE_ID)
-        .with_inner_size([1280.0, 800.0])
-        .with_min_inner_size([760.0, 480.0]);
+    // The window opens where it was, else at the first window's size. A scripted run keeps
+    // nothing, so it always opens at the first size, and is not moved after it opens.
+    let window = placement::store(store.dir());
+    let defaults = placement::defaults();
+    let saved = placement::saved(&window);
+    let opened = placement::opening(saved.as_ref(), &defaults);
+    let unchecked = harness.is_none().then(|| (opened.clone(), saved.is_some()));
+    let mut viewport = placement::apply(egui::ViewportBuilder::default().with_title(APP_NAME).with_app_id(BUNDLE_ID), &opened, &defaults);
     if let Some(icon) = studiocraft_ui_egui::app_icon::window_icon() {
         viewport = viewport.with_icon(icon);
     }
@@ -149,7 +254,7 @@ fn run(args: Args, raw: Vec<std::ffi::OsString>) -> Result<(), String> {
         Box::new(move |cc| {
             let mut app = StudioApp::boot(store, cc.wgpu_render_state.clone(), problems);
             // After boot, which sets the interface language from the saved settings.
-            let desktop = DesktopWindow { frame, double_click: titlebar::system_double_click() };
+            let desktop = DesktopWindow { frame, double_click: titlebar::system_double_click(), placement: Arc::clone(&window) };
             studiocraft_ui_egui::install_runtime(&cc.egui_ctx, Some(desktop)).map_err(|e| format!("the interface could not start: {e:?}"))?;
             app.install_fonts(&cc.egui_ctx);
             app.set_update_checks(update_checks);
@@ -159,7 +264,17 @@ fn run(args: Args, raw: Vec<std::ffi::OsString>) -> Result<(), String> {
             let fell_back = (software_once && !picked.contains(&Notice::NoSoftwareAdapter)).then_some(Notice::SoftwareOnly);
             let notices = after_losses.iter().chain(&fell_back).chain(picked).map(hardware::notice_msg).collect();
             app.set_window_gpu(adapter, notices, may_relaunch);
-            Ok(Box::new(Shell { app, harness, control, relaunch_args: raw }))
+            Ok(Box::new(Shell {
+                app,
+                harness,
+                control,
+                relaunch_args: raw,
+                placement: window,
+                unchecked,
+                monitor_waits: MONITOR_WAITS,
+                least: placement::MIN_SIZE,
+                monitor_seen: None,
+            }))
         }),
     );
     // A process has one window event loop, so another adapter is tried by starting again: a

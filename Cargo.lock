@@ -1680,6 +1680,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-gpu"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=40525262403fbdeb3c0a27e22eafbda8799247bb#40525262403fbdeb3c0a27e22eafbda8799247bb"
+dependencies = [
+ "egui-wgpu",
+ "log",
+ "pollster 1.0.1",
+ "serde",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "craft-gpu-device"
 version = "0.1.0"
 dependencies = [
@@ -7315,6 +7327,7 @@ dependencies = [
  "craft-behavior",
  "craft-dialogs",
  "craft-fonts-build",
+ "craft-gpu",
  "craft-host",
  "craft-hwenc",
  "craft-i18n",

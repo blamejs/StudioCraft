@@ -154,6 +154,8 @@
     {"name": "undocked dock window height to start", "group": "interface", "value": 200, "unit": "pt", "code": "ui-egui::StudioApp::dock_windows", "estimated": true},
     {"name": "undocked dock window least size", "group": "interface", "value": [200, 120], "unit": "pt", "code": "ui-egui::StudioApp::dock_windows", "estimated": true},
     {"name": "saved dock layouts", "group": "interface", "value": 32, "code": "ui-egui::store::MAX_DOCK_LAYOUTS", "estimated": true},
+    {"name": "main window size to start", "group": "interface", "value": [1280, 800], "unit": "pt", "code": "ui-egui::placement::FIRST_SIZE", "estimated": true},
+    {"name": "main window least size", "group": "interface", "value": [760, 480], "unit": "pt", "code": "ui-egui::placement::MIN_SIZE", "estimated": true},
     {"name": "status notice time", "group": "interface", "value": 8, "unit": "s", "code": "ui-egui::NOTICE_S", "estimated": true},
     {"name": "status error notice time", "group": "interface", "value": 24, "unit": "s", "code": "ui-egui::NOTICE_S", "estimated": true}
   ]

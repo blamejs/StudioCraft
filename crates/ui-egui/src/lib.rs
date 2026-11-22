@@ -18,6 +18,7 @@ pub mod hardware;
 mod icons;
 pub mod kit;
 mod output_bar;
+pub mod placement;
 mod preview;
 mod scopes;
 mod settings;
@@ -2445,24 +2446,27 @@ fn host_direction(host: &Host) -> craft_ui::runtime::env::Direction {
     if host.i18n().is_some_and(|catalogs| catalogs.rtl(host.lang())) { Direction::Rtl } else { Direction::Ltr }
 }
 
-/// The desktop window the UI runtime serves: who draws its frame and the system's title bar
-/// double-click setting.
+/// The desktop window the UI runtime serves: who draws its frame, the system's title bar
+/// double-click setting and where the window's placement is kept.
 pub struct DesktopWindow {
     /// The frame decision the window opened with (`craft_window::policy::decide_for`).
     pub frame: Decision,
     /// What a double-click on the title bar does.
     pub double_click: DoubleClick,
+    /// The store the runtime records the window's size and place in ([`placement::store`]).
+    pub placement: Arc<std::sync::Mutex<craft_window::restore::Store>>,
 }
 
 /// Install the UI runtime and the interface fonts on `ctx`, once, before the first frame. On the
 /// desktop the runtime reads the running platform's shell ([`desktop_shell`]), the window's frame
-/// and the window services; otherwise (tests) it gets the default shell, the system's frame and no
-/// window services.
+/// and the window services, and keeps the window's placement; otherwise (tests) it gets the
+/// default shell, the system's frame and no window services.
 pub fn install_runtime(ctx: &egui::Context, desktop: Option<DesktopWindow>) -> Result<(), InstallError> {
     let spec = match desktop {
         Some(desktop) => InstallSpec::new(desktop_shell(ShellInfo::current(), desktop.double_click), Arc::new(SystemWindows))
             .app_id(BUNDLE_ID)
-            .frame(desktop.frame),
+            .frame(desktop.frame)
+            .placement(desktop.placement),
         None => InstallSpec::new(ShellInfo::default(), Arc::new(NoWindows)),
     };
     install_spec(ctx, spec)

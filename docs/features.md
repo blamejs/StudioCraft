@@ -480,6 +480,17 @@ keeps the system's title bar everywhere, from the next start. `STUDIOCRAFT_TITLE
 `=system` overrides the choice, and `STUDIOCRAFT_CAPTION_STYLE` (`windows`, `adwaita`, `breeze` or
 `generic`) and `STUDIOCRAFT_CAPTION_LAYOUT` pick the look and order of the window buttons.
 
+### Window size and place
+
+The first time StudioCraft starts, its window is 1280 by 800 points. On a screen too small for
+that, the window shrinks to fit the screen and opens maximized. The window can't be made smaller
+than 760 by 480 points, unless the screen itself is smaller; at that size every dock header, the output bar and the status bar still
+show in full. StudioCraft remembers the window's
+size, position and whether it was maximized, and opens it the same way at the next start. A
+window saved on a monitor that is no longer connected opens on a connected one, and a window
+larger than its monitor shrinks to fit it. On Wayland the desktop places the window. Starts with
+`--no-prefs` always open at the first size.
+
 ### Languages
 
 View › Language and Settings › General › Language pick the interface language, or follow the

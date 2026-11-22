@@ -36,6 +36,8 @@ craft-settings = { workspace = true }
 craft-dialogs = { workspace = true }
 craft-atomic = { workspace = true }
 craft-quit = { workspace = true }
+# The platform's GPU start-up choices the window's wgpu setup starts from.
+craft-gpu = { workspace = true }
 # Help › Check for Updates, the check at start and the update prompt.
 craft-update = { workspace = true }
 # The menu strip as the title bar when the app draws the window frame.
