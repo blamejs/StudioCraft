@@ -903,6 +903,50 @@ fn an_ip_address_is_not_looked_up() {
     until_closed(&seen);
 }
 
+/// A clock that the test can hold still for every thread but the lookup threads, which always read
+/// it at once.
+struct HeldClock {
+    clock: Arc<TestClock>,
+    held: Mutex<()>,
+}
+
+impl Clock for HeldClock {
+    fn now(&self) -> Instant {
+        if std::thread::current().name() != Some("stream lookup") {
+            drop(lock(&self.held));
+        }
+        self.clock.now()
+    }
+}
+
+#[test]
+fn an_answer_in_time_is_used_when_the_try_wakes_late() {
+    let (live, seen) = server(vec![Plan::Accept]);
+    let (release, hold) = mpsc::channel::<()>();
+    let (resolve, asked) = scripted(vec![Answer::After(hold, vec![addr(&live)])]);
+    let clock = TestClock::new();
+    let held = Arc::new(HeldClock { clock: Arc::clone(&clock), held: Mutex::new(()) });
+    let job = job(RateControl::Bitrate { kbps: 400, keyframe_s: 1 });
+    let seams = Seams { clock: Arc::clone(&held) as Arc<dyn Clock>, resolve };
+    let mut out = Streaming::start_with(&job, vec![named("a")], quick(), seams).unwrap();
+    let feed = Feed::new(&out);
+    assert_eq!(heard(&asked), "asked");
+    // The destination's thread stops at its next clock read while the answer comes in time.
+    let still = lock(&held.held);
+    drop(release);
+    assert_eq!(heard(&asked), "answered");
+    until_no_lookups(&out, "a");
+    // It reads the clock past the deadline, and still uses the answer.
+    clock.advance(LOOKUP_WAIT);
+    drop(still);
+    assert_eq!(next(&seen), Seen::Publish("k".into()));
+    let d = until(&out, "a", |d| d.status == DestinationStatus::Live);
+    assert_eq!(d.reconnects, 0);
+    drop(feed);
+    out.stop().unwrap();
+    until_closed(&seen);
+}
+
 #[test]
 fn a_lookup_past_its_deadline_is_a_failed_try() {
     let (release, hold) = mpsc::channel::<()>();

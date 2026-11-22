@@ -694,11 +694,13 @@ fn lookup(hub: &Hub, d: &Arc<Dest>, host: &str, port: u16) -> Result<Vec<std::ne
     let (tx, rx) = sync_channel(1);
     let waiter = std::thread::current();
     let (resolve, owner, name) = (Arc::clone(&hub.seams.resolve), Arc::clone(d), host.to_string());
+    let clock = Arc::clone(&hub.seams.clock);
     d.lookups.fetch_add(1, Ordering::SeqCst);
     let spawned = std::thread::Builder::new().name("stream lookup".into()).spawn(move || {
         let answer = resolve(&name, port);
+        // The answer carries when it came, so a try that wakes late still uses an answer in time.
         // Fails when the try stopped waiting, which drops the answer.
-        let _ = tx.send(answer);
+        let _ = tx.send((answer, clock.now()));
         ALL_LOOKUPS.fetch_sub(1, Ordering::SeqCst);
         owner.lookups.fetch_sub(1, Ordering::SeqCst);
         owner.touch();
@@ -709,25 +711,30 @@ fn lookup(hub: &Hub, d: &Arc<Dest>, host: &str, port: u16) -> Result<Vec<std::ne
         d.lookups.fetch_sub(1, Ordering::SeqCst);
         return Err(Missed::Lookup(Failure::new(Cause::Other, format!("no thread for the lookup: {e}"))));
     }
+    let late = || Missed::Lookup(Failure::new(Cause::LookupNoAnswer, format!("the server's name was not looked up within {} s", wait.as_secs())));
+    // An answer counts when it came before the deadline, however late the try wakes to take it.
+    let take = |(answer, at): (std::io::Result<Vec<std::net::SocketAddr>>, Instant)| {
+        if at.saturating_duration_since(start) >= wait {
+            return Err(late());
+        }
+        answer.map_err(|e| Missed::Rtmp(craft_rtmp::Error::Resolve(e)))
+    };
     loop {
         let received = rx.try_recv();
         if d.stopping() || hub.control.is_ended() {
             return Err(Missed::Stopped);
         }
-        // The clock is read after the answer is taken, so an answer that came after the deadline
-        // is not used.
-        let waited = hub.seams.clock.now().saturating_duration_since(start);
-        if waited >= wait {
-            let detail = format!("the server's name was not looked up within {} s", wait.as_secs());
-            return Err(Missed::Lookup(Failure::new(Cause::LookupNoAnswer, detail)));
-        }
         match received {
-            Ok(Ok(addrs)) => return Ok(addrs),
-            Ok(Err(e)) => return Err(Missed::Rtmp(craft_rtmp::Error::Resolve(e))),
+            Ok(answer) => return take(answer),
             Err(TryRecvError::Disconnected) => {
                 return Err(Missed::Lookup(Failure::new(Cause::LookupFailed, "the lookup of the server's name ended without an answer")));
             }
             Err(TryRecvError::Empty) => {}
+        }
+        let waited = hub.seams.clock.now().saturating_duration_since(start);
+        if waited >= wait {
+            // An answer that came while the clock was read may still be in time.
+            return rx.try_recv().map_or_else(|_| Err(late()), take);
         }
         std::thread::park_timeout((wait - waited).min(LOOKUP_POLL));
     }
