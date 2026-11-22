@@ -14,7 +14,9 @@ use crate::kit::corner;
 use crate::theme;
 
 /// The colors and corners of a logo tile: the outline of a logo's tile, the fill and mark of a
-/// plain tile, and the corner radius of a tile on a destination's row and in its details.
+/// plain tile, and the corner radius of a tile on a destination's row and in its details. The
+/// service tiles that add a destination also take the hover and pressed fills, the name's colors
+/// and size, the focus ring and the padding from it.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct TileStyle {
     pub(crate) line: Color32,
@@ -22,20 +24,38 @@ pub(crate) struct TileStyle {
     pub(crate) mark: Color32,
     pub(crate) row_radius: u8,
     pub(crate) details_radius: u8,
+    pub(crate) hover: Color32,
+    pub(crate) pressed: Color32,
+    pub(crate) text: Color32,
+    pub(crate) text_disabled: Color32,
+    /// The size of a service tile's name, in points.
+    pub(crate) caption: f32,
+    pub(crate) focus: Stroke,
+    /// The space around a service tile's logo and name, in points.
+    pub(crate) pad: f32,
 }
 
 impl TileStyle {
     /// The style from the tokens of the window's root scope: the border line, the secondary
-    /// control fill, the muted text color, and the control and surface radii.
+    /// control fills and text colors, the muted text color, the control and surface radii, the
+    /// caption size, the focus ring and the regular padding.
     pub(crate) fn of(ctx: &egui::Context) -> TileStyle {
         theme::with_root(ctx, |cx| {
             let t = &cx.tokens;
+            let look = cx.variant_look();
             TileStyle {
                 line: theme::color(cx, t.color.line.border),
-                fill: cx.variant_look().fill.off.rest.egui(),
+                fill: look.fill.off.rest.egui(),
                 mark: theme::color(cx, t.color.text.muted),
                 row_radius: corner(t.shape.radius.control),
                 details_radius: corner(t.shape.radius.surface),
+                hover: look.fill.off.hover.egui(),
+                pressed: look.fill.off.pressed.egui(),
+                text: look.text.off.rest.egui(),
+                text_disabled: look.text.off.disabled.egui(),
+                caption: t.typography.caption.size,
+                focus: cx.focus_look().stroke,
+                pad: t.space.pad.regular,
             }
         })
     }

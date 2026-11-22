@@ -562,5 +562,8 @@ menu	Transform	変形
 @msg	a {width} × {height} display can't be the canvas: each side must be from {min} to {max} pixels	{width} × {height} のディスプレイはキャンバスにできません: 各辺は {min} から {max} ピクセルにしてください
 	Output scale	出力スケール
 	Custom	カスタム
+	Add a destination to stream to {service}	{service} に配信する配信先を追加
+	Add a destination for a custom server	カスタムサーバーの配信先を追加
+	A profile holds at most {max} destinations	1 つのプロファイルに登録できる配信先は最大 {max} 件です
 	Fill Screen	画面を埋める
 @msg	The scenes could not be laid out for the new canvas: {error}	新しいキャンバスにシーンを配置できませんでした: {error}

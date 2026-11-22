@@ -550,5 +550,8 @@ menu	Transform	التحويل
 @msg	a {width} × {height} display can't be the canvas: each side must be from {min} to {max} pixels	لا يمكن أن تكون شاشة بحجم {width} × {height} هي اللوحة: يجب أن يكون كل ضلع من {min} إلى {max} بكسل
 	Output scale	مقياس الإخراج
 	Custom	مخصص
+	Add a destination to stream to {service}	إضافة وجهة للبث إلى {service}
+	Add a destination for a custom server	إضافة وجهة لخادم مخصص
+	A profile holds at most {max} destinations	يتسع الملف الشخصي لـ {max} وجهة على الأكثر
 	Fill Screen	ملء الشاشة
 @msg	The scenes could not be laid out for the new canvas: {error}	تعذّر ترتيب المشاهد للوحة الجديدة: {error}

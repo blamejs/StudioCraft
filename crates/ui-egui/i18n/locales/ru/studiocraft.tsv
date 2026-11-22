@@ -572,5 +572,8 @@ menu	Transform	Преобразование
 	Output scale	Масштаб вывода
 	Custom	Другой
 	{percent}% ({width} × {height})	{percent} % ({width} × {height})
+	Add a destination to stream to {service}	Добавить назначение для трансляции на {service}
+	Add a destination for a custom server	Добавить назначение для своего сервера
+	A profile holds at most {max} destinations	В профиле может быть не больше {max} назначений
 	Fill Screen	Заполнить экран
 @msg	The scenes could not be laid out for the new canvas: {error}	Не удалось расположить сцены для нового холста: {error}

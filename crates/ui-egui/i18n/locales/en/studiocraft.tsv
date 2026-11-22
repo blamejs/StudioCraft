@@ -401,6 +401,9 @@
 	Stream key	Stream key
 	Stream to {service}	Stream to {service}
 	Custom server	Custom server
+	Add a destination to stream to {service}	Add a destination to stream to {service}
+	Add a destination for a custom server	Add a destination for a custom server
+	A profile holds at most {max} destinations	A profile holds at most {max} destinations
 	Service	Service
 	Where {service} shows your server and key	Where {service} shows your server and key
 	Copy it from your account	Copy it from your account

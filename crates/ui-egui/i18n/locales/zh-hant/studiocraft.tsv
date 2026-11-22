@@ -562,5 +562,8 @@ menu	Transform	變形
 @msg	a {width} × {height} display can't be the canvas: each side must be from {min} to {max} pixels	{width} × {height} 的顯示器不能作為畫布：每條邊必須為 {min} 到 {max} 像素
 	Output scale	輸出縮放
 	Custom	自訂
+	Add a destination to stream to {service}	新增串流到 {service} 的目標
+	Add a destination for a custom server	新增自訂伺服器目標
+	A profile holds at most {max} destinations	一個設定檔最多可有 {max} 個目標
 	Fill Screen	填滿畫面
 @msg	The scenes could not be laid out for the new canvas: {error}	無法為新畫布排列場景：{error}

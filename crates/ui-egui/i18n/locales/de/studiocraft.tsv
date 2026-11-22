@@ -546,5 +546,8 @@ menu	Transform	Transformieren
 	Output scale	Ausgabeskalierung
 	Custom	Benutzerdefiniert
 	{percent}% ({width} × {height})	{percent} % ({width} × {height})
+	Add a destination to stream to {service}	Ziel zum Streamen an {service} hinzufügen
+	Add a destination for a custom server	Ziel für einen eigenen Server hinzufügen
+	A profile holds at most {max} destinations	Ein Profil enthält höchstens {max} Ziele
 	Fill Screen	Bildschirm füllen
 @msg	The scenes could not be laid out for the new canvas: {error}	Die Szenen konnten nicht für die neue Leinwand angeordnet werden: {error}

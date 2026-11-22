@@ -1,8 +1,9 @@
 //! The Streaming window (View › Streaming): every stream destination of the profile with its on or
 //! off setting, the streaming service it is set up for with the service's logo where the service
 //! allows it, its server with the key hidden, where its key comes from and, while the stream runs,
-//! what it is doing. Each change runs one of the window's `stream.destination*` commands. Check
-//! Connection runs `stream.diagnose` and shows what the check found under the destination.
+//! what it is doing. A row of service tiles adds a destination. Each change runs one of the
+//! window's `stream.destination*` commands. Check Connection runs `stream.diagnose` and shows
+//! what the check found under the destination.
 
 use std::time::{Duration, UNIX_EPOCH};
 
@@ -10,13 +11,11 @@ use craft_theme::ControlSize;
 use craft_theme::variant::Tone;
 use craft_ui::buttons::{Button, Link, ToggleButton};
 use craft_ui::choice::Checkbox;
-use craft_ui::contract::{Bind, Entry, Props as _, Show as _, ShowContainer as _, Sizing, TooltipSpec, Trigger};
-use craft_ui::controls::disclosure::DisclosureGlyph;
+use craft_ui::contract::{Bind, Entry, Props as _, Show as _, ShowContainer as _, Sizing, TooltipSpec};
 use craft_ui::dialog::Dialog;
 use craft_ui::display::{Divider, Elide, Shade, Spinner, Text};
 use craft_ui::form::{Field, FieldGroup};
 use craft_ui::layout_components::{Row, Stack};
-use craft_ui::menu::{Menu, MenuItem};
 use craft_ui::pickers::Select;
 use craft_ui::sections::{GroupBox, Section};
 use craft_ui::style::TypeRole;
@@ -374,10 +373,11 @@ fn listed_check(state: &CheckState) -> Value {
 pub(crate) fn show(ui: &mut Ui, view: &View, panel: &mut StreamingPanel, acts: &mut Vec<Act>) {
     let count = view.stream.destinations.len();
     let _ = Row::new().show(ui, |ui, _| {
-        add_menu(ui, count >= MAX_DESTINATIONS, acts);
+        let _ = Text::new(tl!("Add Destination")).role(TypeRole::BodyStrong).show(ui);
         let shown = craft_i18n::fmt(tl!("{n} of {max} destinations"), &[("n", &count.to_string()), ("max", &MAX_DESTINATIONS.to_string())]);
         let _ = Text::new(shown).shade(Shade::Muted).show(ui);
     });
+    add_row(ui, count >= MAX_DESTINATIONS, &mut panel.logos, acts);
     if count == 0 {
         let _ = Text::new(tl!("No destinations yet. Add one to stream to it.")).shade(Shade::Muted).show(ui);
     }
@@ -392,22 +392,95 @@ pub(crate) fn show(ui: &mut Ui, view: &View, panel: &mut StreamingPanel, acts: &
     }
 }
 
-/// Add Destination and its menu: a destination for a streaming service, or for a server of the
-/// user's own choosing. The button is off while the profile holds `full` destinations.
-fn add_menu(ui: &mut Ui, full: bool, acts: &mut Vec<Act>) {
-    let label = tl!("Add Destination");
-    let button = Button::new(label).trailing_icon(DisclosureGlyph::menu_button()).enabled(!full).id_salt("add-destination").show(ui);
-    Menu::new(label).opened_by(&button.response, Trigger::Click).id_salt("add-destination-menu").show(ui, |ui, _| {
-        for svc in SERVICES {
-            if MenuItem::new(svc.name).show(ui).ran {
-                acts.push(Act::run("stream.destination_add", json!({"service": svc.id})));
+/// One tile of the row that adds a destination.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct AddTile {
+    /// The id of the streaming service the new destination is set up for; empty for a custom server.
+    pub(crate) service: &'static str,
+    /// The name under the tile.
+    pub(crate) label: String,
+    /// What a screen reader reads as the tile's name, and its tooltip.
+    pub(crate) name: String,
+}
+
+impl AddTile {
+    /// The `stream.destination_add` parameters the tile runs.
+    pub(crate) fn params(&self) -> Value {
+        if self.service.is_empty() { json!({}) } else { json!({"service": self.service}) }
+    }
+}
+
+/// The tiles that add a destination: one per streaming service of [`SERVICES`], in its order,
+/// then one for a server of the user's own choosing.
+pub(crate) fn add_tiles() -> Vec<AddTile> {
+    let mut tiles: Vec<AddTile> = SERVICES
+        .iter()
+        .map(|svc| AddTile {
+            service: svc.id,
+            label: svc.name.to_string(),
+            name: craft_i18n::fmt(tl!("Add a destination to stream to {service}"), &[("service", svc.name)]),
+        })
+        .collect();
+    tiles.push(AddTile { service: "", label: tl!("Custom server").to_string(), name: tl!("Add a destination for a custom server").to_string() });
+    tiles
+}
+
+/// Add Destination: a row of tiles, one per streaming service with its logo where the service
+/// allows it at this size and a plain tile otherwise, and one for a custom server. A click on a
+/// tile adds a destination for it. Every tile is off while the profile holds `full` destinations.
+fn add_row(ui: &mut Ui, full: bool, logos: &mut Logos, acts: &mut Vec<Act>) {
+    let style = TileStyle::of(ui.ctx());
+    let tiles = add_tiles();
+    let font = egui::FontId::proportional(style.caption);
+    // Every tile is as wide as the widest name, so the row reads as one set.
+    let widest =
+        tiles.iter().map(|t| ui.painter().layout_no_wrap(t.label.clone(), font.clone(), style.text).size()).fold(vec2(0.0, 0.0), |a, b| a.max(b));
+    let size = vec2(widest.x.ceil().max(ROW_TILE) + 2.0 * style.pad, ROW_TILE + widest.y.ceil() + 2.5 * style.pad);
+    let full_tip = craft_i18n::fmt(tl!("A profile holds at most {max} destinations"), &[("max", &MAX_DESTINATIONS.to_string())]);
+    ui.horizontal_wrapped(|ui| {
+        if full {
+            ui.disable();
+        }
+        for tile in &tiles {
+            if add_tile(ui, tile, size, &style, &font, logos).on_disabled_hover_text(&full_tip).clicked() {
+                acts.push(Act::run("stream.destination_add", tile.params()));
             }
         }
-        Divider::horizontal().show(ui);
-        if MenuItem::new(tl!("Custom server")).show(ui).ran {
-            acts.push(Act::run("stream.destination_add", json!({})));
-        }
     });
+}
+
+/// One tile of [`add_row`], `size` points large: its logo or plain tile over its name. A tile in a
+/// disabled `ui` is drawn faded and does nothing.
+fn add_tile(ui: &mut Ui, tile: &AddTile, size: egui::Vec2, style: &TileStyle, font: &egui::FontId, logos: &mut Logos) -> egui::Response {
+    let enabled = ui.is_enabled();
+    let (rect, r) = ui.allocate_exact_size(size, Sense::click());
+    r.widget_info(|| WidgetInfo::labeled(Role::Button, enabled, &tile.name));
+    if ui.is_rect_visible(rect) {
+        let painter = ui.painter_at(rect.expand(style.focus.width.max(0.0)));
+        let radius = egui::CornerRadius::same(style.row_radius);
+        let fill = match (enabled, r.is_pointer_button_down_on(), r.hovered()) {
+            (true, true, _) => Some(style.pressed),
+            (true, false, true) => Some(style.hover),
+            _ => None,
+        };
+        if let Some(fill) = fill {
+            painter.rect_filled(rect, radius, fill);
+        }
+        let logo = egui::Rect::from_center_size(egui::pos2(rect.center().x, rect.top() + style.pad + ROW_TILE / 2.0), vec2(ROW_TILE, ROW_TILE));
+        let tile_radius = style.row_radius;
+        match logos::logo(tile.service).filter(|l| l.fits_row(ROW_TILE, ui.ctx().pixels_per_point())) {
+            Some(l) => logos.paint(ui, logo, l, style, tile_radius),
+            None => Logos::paint_plain(ui, logo, style, tile_radius),
+        }
+        let color = if enabled { style.text } else { style.text_disabled };
+        let name = painter.layout_no_wrap(tile.label.clone(), font.clone(), color);
+        let at = egui::pos2(rect.center().x - name.size().x / 2.0, logo.bottom() + style.pad / 2.0);
+        painter.galley(at, name, color);
+        if r.has_focus() {
+            painter.rect_stroke(rect, radius, style.focus, egui::StrokeKind::Outside);
+        }
+    }
+    if enabled { r.on_hover_text(&tile.name) } else { r }
 }
 
 /// `text` in `tone`, or in the plain text color for `Neutral`.

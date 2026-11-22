@@ -528,8 +528,12 @@ again first. Each destination keeps its latest check for the session. A check is
 once the scheme, host or port of the destination's server changes, or its service changes; a
 change to the rest of the address keeps it.
 
-Add Destination adds one, up to 16, for one of seven streaming services or for a custom server.
-The first destination uses the profile's stream key; the others have no key of their own until one
+Add Destination is a row of tiles under the count of destinations: one for each of seven streaming
+services, in the order of the services list, and one for a custom server. A click on a tile adds a
+destination for it, up to 16, and no menu opens over the destinations. Each tile shows the service's
+logo under the same rules as a row, and a plain tile otherwise, over the service's name. A screen
+reader reads each tile as the destination it adds. While the profile holds 16 destinations every
+tile is turned off, and its tooltip gives the limit. The first destination uses the profile's stream key; the others have no key of their own until one
 is chosen, so the profile's key is not sent to another service. A service that documents one ingest
 server for every account fills in that server. For the other services the details link to the
 service's page that shows the account's server and key. Edit opens a destination's service, name,

@@ -552,5 +552,8 @@ menu	Transform	Transformeren
 @msg	a {width} × {height} display can't be the canvas: each side must be from {min} to {max} pixels	een beeldscherm van {width} × {height} kan niet het canvas zijn: elke zijde moet {min} tot {max} pixels zijn
 	Output scale	Uitvoerschaal
 	Custom	Aangepast
+	Add a destination to stream to {service}	Bestemming toevoegen om naar {service} te streamen
+	Add a destination for a custom server	Bestemming voor een eigen server toevoegen
+	A profile holds at most {max} destinations	Een profiel bevat maximaal {max} bestemmingen
 	Fill Screen	Scherm vullen
 @msg	The scenes could not be laid out for the new canvas: {error}	De scènes konden niet voor het nieuwe canvas worden ingedeeld: {error}

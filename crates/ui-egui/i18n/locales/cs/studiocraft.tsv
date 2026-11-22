@@ -563,5 +563,8 @@ menu	Transform	Transformace
 	Output scale	Měřítko výstupu
 	Custom	Vlastní
 	{percent}% ({width} × {height})	{percent} % ({width} × {height})
+	Add a destination to stream to {service}	Přidat cíl pro vysílání na {service}
+	Add a destination for a custom server	Přidat cíl pro vlastní server
+	A profile holds at most {max} destinations	Profil pojme nejvýše {max} cílů
 	Fill Screen	Vyplnit obrazovku
 @msg	The scenes could not be laid out for the new canvas: {error}	Scény nešlo rozmístit pro nové plátno: {error}

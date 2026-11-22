@@ -572,5 +572,8 @@ menu	Transform	Transformer
 	Output scale	Échelle de sortie
 	Custom	Personnalisé
 	{percent}% ({width} × {height})	{percent} % ({width} × {height})
+	Add a destination to stream to {service}	Ajouter une destination pour diffuser sur {service}
+	Add a destination for a custom server	Ajouter une destination pour un serveur personnalisé
+	A profile holds at most {max} destinations	Un profil contient au plus {max} destinations
 	Fill Screen	Remplir l'écran
 @msg	The scenes could not be laid out for the new canvas: {error}	Les scènes n'ont pas pu être disposées pour le nouveau canevas : {error}

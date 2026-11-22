@@ -943,6 +943,75 @@ fn the_details_change_the_server_with_the_service_and_link_to_its_page() {
     assert_eq!(service_choices("").len(), SERVICES.len() + 1);
 }
 
+#[test]
+fn the_add_row_has_a_tile_per_service_in_order_then_a_custom_server() {
+    let tiles = add_tiles();
+    let services: Vec<&str> = tiles.iter().map(|t| t.service).collect();
+    let mut want: Vec<&str> = SERVICES.iter().map(|s| s.id).collect();
+    want.push("");
+    assert_eq!(services, want);
+    let w = Window::new(Shown::of(StreamSettings::default()), StreamingPanel::default());
+    let texts = w.texts();
+    let mut at = Vec::new();
+    for t in &tiles {
+        assert!(texts.contains(&t.label), "{} in {texts:?}", t.label);
+        let Some(target) = w.f.by_label(&t.name) else { panic!("no tile named {}: {texts:?}", t.name) };
+        assert!(!w.disabled(&t.name), "{} is on", t.name);
+        at.push(target.rect.min);
+    }
+    // The tiles read in the order of the list: along a line, then onto the next.
+    for pair in at.windows(2) {
+        assert!(pair[0].y < pair[1].y || (pair[0].y == pair[1].y && pair[0].x < pair[1].x), "{at:?}");
+    }
+    let twitch = preset("twitch");
+    assert_eq!(tiles[0].name, craft_i18n::fmt(tl!("Add a destination to stream to {service}"), &[("service", twitch.name)]));
+    assert_eq!(tiles.last().map(|t| t.name.as_str()), Some("Add a destination for a custom server"));
+    assert!(w.acts.borrow().is_empty(), "drawing does nothing");
+}
+
+#[test]
+fn a_click_on_a_tile_adds_a_destination_for_its_service() {
+    for t in add_tiles() {
+        let mut w = Window::new(Shown::of(StreamSettings::default()), StreamingPanel::default());
+        let Some(target) = w.f.by_label(&t.name) else { panic!("no tile named {}", t.name) };
+        w.f.click(&target).frame(Vec::new());
+        let acts = w.acts.borrow();
+        let want = if t.service.is_empty() { json!({}) } else { json!({"service": t.service}) };
+        assert_eq!(acts.len(), 1, "{}", t.name);
+        assert!(matches!(&acts[0], Act::Run(c) if c.id == "stream.destination_add" && c.params == want), "{}", t.name);
+    }
+    // The command a tile runs adds a destination set up for its service.
+    let mut a = app();
+    let ctx = egui::Context::default();
+    for t in add_tiles() {
+        let mut params = t.params();
+        params["key"] = json!("none");
+        run(&mut a, &ctx, "stream.destination_add", params).unwrap();
+    }
+    let added: Vec<String> = a.studio.profile().stream.destinations.iter().map(|d| d.service.clone()).collect();
+    let want: Vec<String> = add_tiles().iter().map(|t| t.service.to_string()).collect();
+    assert_eq!(added, want);
+}
+
+#[test]
+fn every_tile_is_off_when_the_profile_holds_its_most_destinations() {
+    let full: Vec<Destination> = (0..MAX_DESTINATIONS).map(|i| Destination { id: format!("destination-{i}"), ..Destination::default() }).collect();
+    let mut w = Window::new(Shown::of(StreamSettings { destinations: full, ..StreamSettings::default() }), StreamingPanel::default());
+    for t in add_tiles() {
+        assert!(w.disabled(&t.name), "{} is off", t.name);
+        let Some(target) = w.f.by_label(&t.name) else { panic!("no tile named {}", t.name) };
+        w.f.click(&target).frame(Vec::new());
+    }
+    assert!(w.acts.borrow().is_empty(), "a full profile adds nothing");
+    // One fewer leaves every tile on.
+    let one_fewer: Vec<Destination> =
+        (1..MAX_DESTINATIONS).map(|i| Destination { id: format!("destination-{i}"), ..Destination::default() }).collect();
+    let w = Window::new(Shown::of(StreamSettings { destinations: one_fewer, ..StreamSettings::default() }), StreamingPanel::default());
+    for t in add_tiles() {
+        assert!(!w.disabled(&t.name), "{} is on", t.name);
+    }
+}
+
 /// A finished check of `host` with `verdict`, which ran by itself when `automatic`.
 fn diagnosis(verdict: Verdict, automatic: bool) -> Diagnosis {
     Diagnosis {
