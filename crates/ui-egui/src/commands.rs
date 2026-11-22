@@ -9,7 +9,8 @@ use std::sync::LazyLock;
 
 use craft_keymap::{Binding, CommandDef, CommandRef, Keymap, Overrides, Platform, Scope, Scopes};
 use craft_menu::{Item, ItemRole, Labeled, Menu, MenuBar, MenuRole, Node};
-use craft_ui::runtime::commands::{ChromeCommand, CommandSet as _, EditCommands, NavCommand};
+use craft_ui::runtime::commands::{ChromeCommand, CommandGate, CommandSet as _, EditCommands, NavCommand};
+use craft_ui::shell::ScreenModeCommands;
 use serde_json::json;
 
 /// Help › Community: (command id, link key in `studiocraft_engine::links`, label).
@@ -101,6 +102,12 @@ pub const UI_COMMANDS: &[(&str, &str)] = &[
 /// no panel toggle among its commands.
 pub fn runtime_runs(cmd: &CommandRef) -> bool {
     ChromeCommand::from_ref(cmd).is_some() || NavCommand::from_ref(cmd).is_some()
+}
+
+/// The gate over the window's commands: the window has one screen mode, so the shell's
+/// `screenMode.*` commands, and with them F and Shift+F, do not fire.
+pub fn gate() -> CommandGate {
+    CommandGate::new((), |_: &(), cmd| ScreenModeCommands::from_ref(cmd).is_none())
 }
 
 /// The first default key of a window key command ([`runtime_runs`]), such as F6. The key runs the

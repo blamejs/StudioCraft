@@ -142,20 +142,115 @@ fn the_desktop_shell_keeps_the_menu_bar_in_the_window_on_macos() {
     assert_eq!(shell.caps, Caps::native(Os::Mac).difference(Caps::NATIVE_MENU_BAR));
 }
 
+/// A context with the UI runtime installed for a window whose frame the app draws, with the
+/// Windows window buttons Minimize, Maximize and Close at the end of the bar.
+fn integrated_context() -> egui::Context {
+    use craft_ui::shell::{CaptionFamily, Captions, Frame};
+    use craft_window::policy::{Desktop, DesktopKind};
+
+    let layout = craft_window::Layout {
+        left: Vec::new(),
+        right: vec![craft_window::Button::Minimize, craft_window::Button::Maximize, craft_window::Button::Close],
+    };
+    let frame = Frame::Integrated(Captions { family: CaptionFamily::Windows, layout });
+    let desktop = Desktop { kind: DesktopKind::Other, ssd: None, gtk_theme: None, icon_theme: None };
+    let spec = InstallSpec::new(ShellInfo::default(), Arc::new(NoWindows)).frame(Decision { frame, overridden: None, desktop });
+    let ctx = egui::Context::default();
+    if let Err(e) = crate::install_spec(&ctx, spec) {
+        panic!("the UI runtime did not install: {e:?}");
+    }
+    ctx
+}
+
+/// Runs one 1280 x 800 frame with `events` at `seconds` and returns the window commands it sent.
+fn window_commands(app: &mut StudioApp, ctx: &egui::Context, events: Vec<Event>, seconds: f64) -> Vec<egui::ViewportCommand> {
+    let raw = RawInput {
+        events,
+        time: Some(seconds),
+        screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1280.0, 800.0))),
+        ..RawInput::default()
+    };
+    app.before_input(ctx);
+    let mut out = ctx.run_ui(raw, |ui| app.frame(ui));
+    out.textures_delta.clear();
+    app.before_input(ctx);
+    out.viewport_output.remove(&egui::ViewportId::ROOT).map(|v| v.commands).unwrap_or_default()
+}
+
+/// A press (`down`) or release of the primary button at `at`.
+fn button(at: egui::Pos2, down: bool) -> Event {
+    Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: down, modifiers: Modifiers::NONE }
+}
+
 #[test]
 fn the_menu_strip_is_the_title_bar_when_the_app_draws_the_frame() {
     let mut a = app();
-    assert!(!a.draws_title_bar(), "the desktop draws the frame by default");
-    a.set_title_bar(Some(craft_window::Layout { left: vec![craft_window::Button::Close], right: vec![craft_window::Button::Minimize] }));
-    assert!(a.draws_title_bar());
-    let ctx = crate::test_context();
-    for _ in 0..3 {
-        frame(&mut a, &ctx, vec![]);
+    let ctx = integrated_context();
+    for n in 0..3 {
+        window_commands(&mut a, &ctx, vec![], f64::from(n) * 0.05);
+    }
+    // The menu titles sit at the start of the bar, clear of the window buttons at its end.
+    let parts = bar_parts(&a, &ctx);
+    let menus = parts.iter().find(|(name, _)| name == "menus").map(|(_, r)| *r).unwrap_or_else(|| panic!("no menus in {parts:?}"));
+    assert!(menus[1] >= 0.0 && menus[0] < 100.0 && menus[2] < 1280.0 - 3.0 * 46.0, "{menus:?}");
+    // Tab and F with nothing focused leave the bar in place.
+    for (n, key) in [Key::Tab, Key::F].into_iter().enumerate() {
+        let mut sent = window_commands(&mut a, &ctx, press(key, Modifiers::NONE), 0.1 + n as f64 * 0.01);
+        a.output_bar.rect = None;
+        sent.extend(window_commands(&mut a, &ctx, vec![], 0.105 + n as f64 * 0.01));
+        assert!(a.output_bar.rect.is_some(), "{key:?} hid the title bar");
+        assert!(!sent.iter().any(|c| matches!(c, egui::ViewportCommand::Fullscreen(_))), "{key:?} changed full screen: {sent:?}");
     }
     // The menus still run their commands from the strip.
     run(&mut a, &ctx, "app.settings", json!({})).unwrap();
-    frame(&mut a, &ctx, vec![]);
+    window_commands(&mut a, &ctx, vec![], 0.2);
     assert_eq!(a.hud()["ui"]["settings_open"], json!(true));
+    // Close is the button at the window's end edge, 46 points wide; it closes the window through
+    // the close confirmation.
+    let close = egui::pos2(1280.0 - 23.0, (menus[1] + menus[3]) / 2.0);
+    let mut sent = Vec::new();
+    for (n, events) in [vec![Event::PointerMoved(close)], vec![button(close, true)], vec![button(close, false)], vec![]].into_iter().enumerate() {
+        sent.extend(window_commands(&mut a, &ctx, events, 1.0 + n as f64 * 0.05));
+    }
+    assert!(sent.contains(&egui::ViewportCommand::Close), "{sent:?}");
+}
+
+#[test]
+fn the_strips_empty_area_moves_the_window_and_a_double_click_maximizes_it() {
+    let mut a = app();
+    let ctx = integrated_context();
+    for n in 0..3 {
+        window_commands(&mut a, &ctx, vec![], f64::from(n) * 0.05);
+    }
+    // The empty area lies between the menu titles and the first output control.
+    let parts = bar_parts(&a, &ctx);
+    let menus = parts.iter().find(|(name, _)| name == "menus").map(|(_, r)| *r).unwrap_or_else(|| panic!("no menus in {parts:?}"));
+    let outputs = parts.iter().filter(|(name, _)| name != "menus").map(|(_, r)| r[0]).fold(1280.0 - 3.0 * 46.0, f32::min);
+    assert!(outputs - menus[2] > 20.0, "the bar has an empty area: {parts:?}");
+    let empty = egui::pos2((menus[2] + outputs) / 2.0, (menus[1] + menus[3]) / 2.0);
+    let to = empty + egui::vec2(40.0, 0.0);
+
+    let drag = [vec![Event::PointerMoved(empty)], vec![button(empty, true)], vec![Event::PointerMoved(to)], vec![button(to, false)], vec![]];
+    let mut sent = Vec::new();
+    for (n, events) in drag.into_iter().enumerate() {
+        sent.extend(window_commands(&mut a, &ctx, events, 1.0 + n as f64 * 0.05));
+    }
+    assert!(sent.contains(&egui::ViewportCommand::StartDrag), "a drag of the empty area moves the window: {sent:?}");
+
+    let double = [
+        vec![Event::PointerMoved(empty)],
+        vec![button(empty, true)],
+        vec![button(empty, false)],
+        vec![button(empty, true)],
+        vec![button(empty, false)],
+        vec![],
+    ];
+    let mut sent = Vec::new();
+    for (n, events) in double.into_iter().enumerate() {
+        sent.extend(window_commands(&mut a, &ctx, events, 3.0 + n as f64 * 0.05));
+    }
+    assert!(sent.contains(&egui::ViewportCommand::Maximized(true)), "a double-click maximizes the window: {sent:?}");
+    assert!(!sent.contains(&egui::ViewportCommand::StartDrag), "a double-click does not move the window: {sent:?}");
 }
 
 #[test]
@@ -834,8 +929,12 @@ fn the_output_bar_fits_the_menu_row_at_each_window_size() {
             let ((a_name, a), (b_name, b)) = (&pair[0], &pair[1]);
             assert!(a[2] <= b[0] + 0.5, "{w}: {a_name} ends at {} after {b_name} starts at {}", a[2], b[0]);
         }
+        // The title bar keeps its content as far from the end edge as from the start edge, and Go
+        // Live keeps the output bar's 8 point margin inside that.
         let stream = parts.iter().find(|(n, _)| n == "stream").map(|(_, r)| r[2]).unwrap_or(0.0);
-        assert!((w - stream - 8.0).abs() <= 1.0, "{w}: Go Live ends 8 points from the right edge, at {stream}");
+        let inset = parts.iter().find(|(n, _)| n == "menus").map(|(_, r)| r[0]).unwrap_or(f32::NAN);
+        assert!(inset > 0.0, "{w}: the menus start inside the bar, at {inset}");
+        assert!((w - stream - output_bar::MARGIN - inset).abs() <= 1.0, "{w}: Go Live ends {inset} + 8 points from the right edge, at {stream}");
     }
 }
 

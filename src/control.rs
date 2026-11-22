@@ -425,7 +425,7 @@ mod tests {
             let (reply, answers) = sync_channel(8);
             let app = StudioApp::boot(Store::memory(), None, Vec::new());
             let ctx = egui::Context::default();
-            if let Err(e) = studiocraft_ui_egui::install_runtime(&ctx, false) {
+            if let Err(e) = studiocraft_ui_egui::install_runtime(&ctx, None) {
                 panic!("the UI runtime did not install: {e:?}");
             }
             let mut r = Rig { ctx, app, bridge: Bridge::default(), reply, answers };

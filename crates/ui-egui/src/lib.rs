@@ -25,7 +25,6 @@ pub mod store;
 mod streaming;
 pub mod strip;
 pub mod theme;
-mod title_bar;
 mod updates_ui;
 
 use std::collections::{HashMap, VecDeque};
@@ -40,14 +39,16 @@ use craft_keymap::{CommandRef, Keymap, Overrides};
 use craft_menu::{LanguageChoice, MenuBar};
 use craft_theme::variant::Tone;
 use craft_ui::contract::{Bind, Entry, Props as _, Show as _, ShowContainer as _, Tracked};
-use craft_ui::notices::{NoticeCenter, PostedNotice, ToastStack};
+use craft_ui::notices::{NoticeCenter, PostedNotice};
 use craft_ui::pickers::Select;
 use craft_ui::runtime::commands::{AppCatalog, CommandInput};
 use craft_ui::runtime::env::WindowKey;
 use craft_ui::runtime::frame::{FrameInput, FrameOutput};
 use craft_ui::runtime::toast::{self, ToastId};
 use craft_ui::shell::embed::{self, CloseDecision};
+use craft_ui::shell::{AppShell, TitleBar};
 use craft_ui::{InstallError, InstallSpec};
+use craft_window::policy::Decision;
 use craft_window::system::{NoWindows, SystemWindows};
 use egui::{Color32, RichText, Ui};
 use serde_json::{Value, json};
@@ -269,8 +270,6 @@ pub struct StudioApp {
     output_bar: output_bar::Drawn,
     /// Help › Check for Updates, the check at start and the update prompt.
     updates: updates_ui::Runtime,
-    /// The window buttons when the app draws the window frame; `None` when the desktop draws it.
-    title_bar: Option<craft_window::Layout>,
     /// The interface language [`Self::install_fonts`] last built the fonts for; `None` until it
     /// runs. The fonts are built again when the language changes.
     fonts_for: Option<craft_i18n::Lang>,
@@ -386,7 +385,6 @@ impl StudioApp {
             dock_strip: None,
             output_bar: output_bar::Drawn::default(),
             updates: updates_ui::Runtime::default(),
-            title_bar: None,
             fonts_for: None,
             host: Arc::clone(&host),
             words: host_words(&host),
@@ -412,18 +410,6 @@ impl StudioApp {
 
     pub fn store(&self) -> &Store {
         &self.store
-    }
-
-    /// Draw the window frame with these window buttons (the menu strip becomes the title bar), or
-    /// leave it to the desktop (`None`, the default). Set once, before the first frame: the
-    /// window's decorations are chosen when it opens.
-    pub fn set_title_bar(&mut self, buttons: Option<craft_window::Layout>) {
-        self.title_bar = buttons;
-    }
-
-    /// Whether the app draws the window frame.
-    pub fn draws_title_bar(&self) -> bool {
-        self.title_bar.is_some()
     }
 
     /// The window opened its graphics device for `opened_with` ([`hardware::startup`]), and the
@@ -1488,7 +1474,7 @@ impl StudioApp {
         if *self.key_overrides != *self.keymap.overrides() {
             self.key_overrides = Arc::new(self.keymap.overrides().clone());
         }
-        let mut input = CommandInput::new().overrides(self.key_overrides.clone());
+        let mut input = CommandInput::new().overrides(self.key_overrides.clone()).gate(commands::gate());
         if let Some(catalog) = self.catalog() {
             input = input.catalog(catalog);
         }
@@ -1517,9 +1503,11 @@ impl StudioApp {
         self.command_catalog.clone()
     }
 
-    /// The top row: the menu titles and the output bar, and the window buttons when the app draws
-    /// the window frame.
-    fn menu(&mut self, ui: &mut Ui, acts: &mut Vec<Act>) {
+    /// The title bar: the menu titles and the output bar, with the window buttons at the ends where
+    /// the app draws the window frame. The bar's empty area moves the window, and a double-click
+    /// on it maximizes or restores the window. The Close button closes the window as the system's
+    /// does, through the close confirmation.
+    fn title_bar(&mut self, ui: &mut Ui, acts: &mut Vec<Act>) {
         let laid = self.laid_menu();
         if *self.menu_bar != laid {
             self.menu_bar.edit(|bar| *bar = laid);
@@ -1529,14 +1517,15 @@ impl StudioApp {
         // leave the menu bar alone while a prompt, the exit confirmation or Settings is open, as
         // `frame_input` drops the commands then.
         let keyboard = !(self.prompt.is_some() || self.confirm_exit || self.settings.is_some());
-        match self.title_bar.clone() {
-            Some(layout) => title_bar::strip(ui, &layout, |ui, room| self.top_row(ui, room, &bar, keyboard, acts)),
-            None => {
-                let room = ui.available_width();
-                self.top_row(ui, room, &bar, keyboard, acts)
-            }
-        }
+        let shown = TitleBar::new().show(ui, |ui, _| {
+            let room = ui.available_width();
+            self.top_row(ui, room, &bar, keyboard, acts);
+        });
         self.menu_bar = bar;
+        self.output_bar.rect = Some(shown.output.response.rect);
+        if shown.output.close_requested {
+            ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
+        }
     }
 
     fn edit_items(&self) -> Vec<EditItem> {
@@ -2238,24 +2227,19 @@ impl StudioApp {
         self.frames += 1;
         self.before(&ctx);
         self.dialog_answers(&ctx);
-        let mut acts = Vec::new();
-        let (bar, fill, line, background) = theme::with_root(&ctx, |cx| {
-            let c = &cx.tokens.color;
-            (cx.tokens.size.bar.title, theme::color(cx, c.surface.raised), theme::color(cx, c.line.divider), theme::color(cx, c.surface.background))
-        });
-        let (left, right) = if i18n::is_rtl(ui) { (0, 4) } else { (4, 0) };
-        let top = egui::Panel::top("menu")
-            .exact_size(bar)
-            .show_separator_line(false)
-            .frame(egui::Frame::NONE.fill(fill).inner_margin(egui::Margin { left, right, top: 0, bottom: 0 }))
-            .show(ui, |ui| self.menu(ui, &mut acts));
-        // The divider is drawn inside the row's last point, so the content area keeps the full height.
-        let row = top.response.rect;
-        ui.painter().hline(row.x_range(), row.bottom() - 0.5, egui::Stroke::new(1.0, line));
-        self.output_bar.rect = Some(row);
-        self.status_bar(ui);
-        self.docks(ui, &mut acts);
-        let central = egui::CentralPanel::default().frame(egui::Frame::NONE.fill(background)).show(ui, |ui| self.central(ui, &mut acts));
+        let background = theme::with_root(&ctx, |cx| theme::color(cx, cx.tokens.color.surface.background));
+        // The title bar is the shell's title slot, and its edges resize the window where the app
+        // draws the frame. The status bar, the docks and the canvas fill the shell's body.
+        let mut pass = Pass { app: self, acts: Vec::new() };
+        AppShell::new(WindowKey::main())
+            .title_bar(|ui, _, pass: &mut Pass<'_>| pass.app.title_bar(ui, &mut pass.acts))
+            .body(move |ui, _, pass: &mut Pass<'_>| {
+                pass.app.status_bar(ui);
+                pass.app.docks(ui, &mut pass.acts);
+                egui::CentralPanel::default().frame(egui::Frame::NONE.fill(background)).show(ui, |ui| pass.app.central(ui, &mut pass.acts));
+            })
+            .show(ui, &mut pass);
+        let mut acts = pass.acts;
         self.windows(&ctx, &mut acts);
         // An update never starts while a recording, stream or replay buffer runs.
         let idle = !self.outputs_running();
@@ -2268,15 +2252,12 @@ impl StudioApp {
             }
             updates_ui::Asked::Close => self.request_exit(&ctx),
         }
-        if self.title_bar.is_some() {
-            title_bar::resize_zones(ui);
-        }
         for a in acts {
             self.act(&ctx, a);
         }
-        // The notices of this frame show as cards at the end-bottom corner of the canvas area.
+        // The notices of this frame go to the window's toast queue. The shell shows them as cards
+        // at the end-bottom corner of its body from the next frame on.
         self.post_notices(&ctx);
-        ToastStack::show(ui, &WindowKey::main(), central.response.rect);
         // Live video: draw continuously, also while the window is in the background.
         ctx.request_repaint();
     }
@@ -2362,16 +2343,34 @@ fn host_direction(host: &Host) -> craft_ui::runtime::env::Direction {
     if host.i18n().is_some_and(|catalogs| catalogs.rtl(host.lang())) { Direction::Rtl } else { Direction::Ltr }
 }
 
+/// The desktop window the UI runtime serves: who draws its frame and the system's title bar
+/// double-click setting.
+pub struct DesktopWindow {
+    /// The frame decision the window opened with (`craft_window::policy::decide_for`).
+    pub frame: Decision,
+    /// What a double-click on the title bar does.
+    pub double_click: DoubleClick,
+}
+
 /// Install the UI runtime and the interface fonts on `ctx`, once, before the first frame. On the
-/// desktop the runtime reads the running platform's shell ([`desktop_shell`]) and window services;
-/// otherwise (tests) it gets the current shell and no window services.
-pub fn install_runtime(ctx: &egui::Context, desktop: bool) -> Result<(), InstallError> {
-    let spec = if desktop {
-        InstallSpec::new(desktop_shell(ShellInfo::current(), title_bar::system_double_click()), Arc::new(SystemWindows)).app_id(BUNDLE_ID)
-    } else {
-        InstallSpec::new(ShellInfo::default(), Arc::new(NoWindows))
+/// desktop the runtime reads the running platform's shell ([`desktop_shell`]), the window's frame
+/// and the window services; otherwise (tests) it gets the default shell, the system's frame and no
+/// window services.
+pub fn install_runtime(ctx: &egui::Context, desktop: Option<DesktopWindow>) -> Result<(), InstallError> {
+    let spec = match desktop {
+        Some(desktop) => InstallSpec::new(desktop_shell(ShellInfo::current(), desktop.double_click), Arc::new(SystemWindows))
+            .app_id(BUNDLE_ID)
+            .frame(desktop.frame),
+        None => InstallSpec::new(ShellInfo::default(), Arc::new(NoWindows)),
     };
     install_spec(ctx, spec)
+}
+
+/// What the shell hands its title bar and its body each frame: the app and the actions they ask
+/// for.
+struct Pass<'a> {
+    app: &'a mut StudioApp,
+    acts: Vec<Act>,
 }
 
 /// The desktop window's shell: `shell` with the system's title bar double-click setting
@@ -2392,7 +2391,7 @@ pub(crate) fn install_spec(ctx: &egui::Context, spec: InstallSpec) -> Result<(),
 #[cfg(test)]
 pub(crate) fn test_context() -> egui::Context {
     let ctx = egui::Context::default();
-    if let Err(e) = install_runtime(&ctx, false) {
+    if let Err(e) = install_runtime(&ctx, None) {
         panic!("the UI runtime did not install: {e:?}");
     }
     ctx

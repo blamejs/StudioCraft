@@ -19,11 +19,6 @@ pub enum Icon {
     EyeOff,
     /// Two arrows pointing apart: the transition picker when the output bar is narrow.
     Transition,
-    /// The window buttons of the title bar the app draws.
-    Minimize,
-    Maximize,
-    Restore,
-    Close,
 }
 
 /// An icon button with its own size and, unless transparent, its own icon color.
@@ -187,25 +182,6 @@ pub fn paint(ui: &Ui, icon: Icon, rect: Rect, color: Color32) {
                 p.line_segment([tip, tip + vec2(-d * s * 0.5, s * 0.4)], line);
             }
         }
-        Icon::Minimize => {
-            p.line_segment([c + vec2(-s, s * 0.6), c + vec2(s, s * 0.6)], Stroke::new(1.2, color));
-        }
-        Icon::Maximize => {
-            p.rect_stroke(Rect::from_center_size(c, vec2(s * 2.0, s * 2.0)), 0.0, Stroke::new(1.2, color), egui::StrokeKind::Middle);
-        }
-        Icon::Restore => {
-            let back = Rect::from_center_size(c + vec2(s * 0.3, -s * 0.3), vec2(s * 1.5, s * 1.5));
-            let front = Rect::from_center_size(c + vec2(-s * 0.3, s * 0.3), vec2(s * 1.5, s * 1.5));
-            let thin = Stroke::new(1.2, color);
-            p.line_segment([pos2(back.left(), back.top()), pos2(back.right(), back.top())], thin);
-            p.line_segment([pos2(back.right(), back.top()), pos2(back.right(), back.bottom())], thin);
-            p.rect_stroke(front, 0.0, thin, egui::StrokeKind::Middle);
-        }
-        Icon::Close => {
-            let thin = Stroke::new(1.2, color);
-            p.line_segment([c + vec2(-s, -s), c + vec2(s, s)], thin);
-            p.line_segment([c + vec2(-s, s), c + vec2(s, -s)], thin);
-        }
     }
 }
 
@@ -230,10 +206,6 @@ mod tests {
                 Icon::Eye,
                 Icon::EyeOff,
                 Icon::Transition,
-                Icon::Minimize,
-                Icon::Maximize,
-                Icon::Restore,
-                Icon::Close,
             ] {
                 assert!(!sized(ui, icon, "icon", true, vec2(24.0, 24.0), Color32::TRANSPARENT));
                 assert!(!sized(ui, icon, "icon", false, vec2(24.0, 24.0), Color32::TRANSPARENT));

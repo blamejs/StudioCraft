@@ -227,6 +227,8 @@ craft-control-protocol = { workspace = true }
 craft-update = { workspace = true }
 # Decides at start whether the app draws its own title bar.
 craft-window = { workspace = true }
+# The system's title bar double-click setting.
+craft-host = { workspace = true }
 serde_json = { workspace = true }
 log = { workspace = true }
 # The --screenshot picture.

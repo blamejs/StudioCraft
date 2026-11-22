@@ -471,7 +471,7 @@ fonts and title bar. The following table lists the code for each part.
 | Streaming window and its `stream.destination*` commands | `ui-egui/src/streaming.rs` |
 | Saved dock sizes, order, visibility, undocked windows and layouts | `config.toml`, with layouts under `dock_layouts` |
 | Font stack | `ui-egui/src/fonts.rs`, built with `craft-ui`'s `UiFonts`: Inter Regular for the proportional family, Inter SemiBold for the `semibold` family (dock, section and dialog titles) and JetBrains Mono for the monospace family, all embedded from `assets/fonts`. `StudioApp::install_fonts` installs the stack at start, and the window installs it again on the first frame after the interface language changes. |
-| Title bar | `src/titlebar.rs` decides whether the app draws it, from `craft-window`, and `crates/ui-egui/src/title_bar.rs` draws the menu strip as the title bar |
+| Title bar | `src/titlebar.rs` decides who draws the window frame with `craft-window`'s `policy::decide_for` and sets the window's decorations with `policy::apply`. `StudioApp::frame` in `crates/ui-egui/src/lib.rs` shows the window as a `craft-ui` `AppShell`: the menu row is the `TitleBar` in its title slot, with the framework's caption buttons at the ends where the app draws the frame, and the shell's root resizes the window from its edges |
 
 A unit test draws a frame in each suite mode and checks that the meters use that mode's colors and
 that each zone color and the hold mark have a contrast of at least 3:1 against the track.
@@ -504,7 +504,7 @@ profiles in `profiles/` under the settings folder, and writes them with `craft-a
 | JSON-RPC framing for the MCP server | `craft-jsonrpc` |
 | MCP sessions and tool results | `craft-mcp` |
 | Update checks, the update prompt and finishing an installed update | `craft-update` |
-| Who draws the window frame, and the menu strip as the title bar | `craft-window` |
+| Who draws the window frame | `craft-window` |
 
 Release file names and package ids are in [docs/releasing.md](releasing.md#file-names).
 

@@ -463,10 +463,15 @@ marks with or without `CRAFT_FONTS_DIR`.
 
 ### Title bar
 
-StudioCraft draws its own title bar only where the desktop does not draw a window frame (GNOME on
-Wayland, or `STUDIOCRAFT_TITLEBAR=app`) and Settings › General › "Use system title bar" is off.
-The menu strip is then the title bar. You move the window by its empty part, a double-click
-maximizes it, and the window buttons sit where the desktop puts them.
+The menu strip is the window's title bar on Windows, on macOS (with the window buttons over its
+start) and on Linux desktops that float their windows. You move the window by the strip's empty
+part, a double-click on it maximizes or restores the window (on macOS it does what the system's
+title bar setting says), and the window's edges resize it. On Windows and Linux the window buttons
+sit at the ends of the strip in the desktop's order, sized and drawn as the desktop draws its own.
+Tiling window managers keep the system's title bar. Settings › General › "Use system title bar"
+keeps the system's title bar everywhere, from the next start. `STUDIOCRAFT_TITLEBAR=app` or
+`=system` overrides the choice, and `STUDIOCRAFT_CAPTION_STYLE` (`windows`, `adwaita`, `breeze` or
+`generic`) and `STUDIOCRAFT_CAPTION_LAYOUT` pick the look and order of the window buttons.
 
 ### Languages
 
