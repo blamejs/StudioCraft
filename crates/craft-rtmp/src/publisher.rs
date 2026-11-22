@@ -29,8 +29,10 @@ pub const MAX_SERVER_MESSAGE: usize = 1 << 20;
 pub const POLL_READ_LIMIT: usize = 256 * 1024;
 /// The longest timeout a [`Config`] accepts.
 pub const MAX_TIMEOUT: Duration = Duration::from_secs(24 * 60 * 60);
-/// The most addresses one connect tries, in the order the name resolved to them, so a connect
-/// waits at most this many times [`Config::connect_timeout`] for TCP.
+/// The most addresses one connect tries, so a connect waits at most this many times
+/// [`Config::connect_timeout`] for TCP. When the name resolved to IPv6 and IPv4 addresses, the
+/// addresses tried alternate between the two, starting with the first address's family (RFC 8305
+/// section 4), so a host with more addresses of one family than this still gets one of the other.
 pub const MAX_ADDRESSES: usize = 4;
 
 /// The `flashVer` value [`Config::new`] sets.
@@ -221,8 +223,8 @@ impl Publisher {
     }
 
     /// Connects as [`Publisher::connect`] does, to `addrs` instead of the addresses the host name
-    /// resolves to: the first [`MAX_ADDRESSES`] of them, in order, until one accepts the TCP
-    /// connection. TLS still checks the server's certificate against the host name of
+    /// resolves to: at most [`MAX_ADDRESSES`] of them, in order within each address family, until
+    /// one accepts the TCP connection. TLS still checks the server's certificate against the host name of
     /// [`Config::endpoint`].
     pub fn connect_to(config: &Config, addrs: &[SocketAddr]) -> Result<Publisher, Error> {
         config.check()?;
@@ -681,9 +683,28 @@ fn status(values: &[Value]) -> Option<Status<'_>> {
     })
 }
 
+/// The addresses a connect tries, at most [`MAX_ADDRESSES`]: `addrs` with the IPv6 and IPv4 ones
+/// taken in turn, starting with the family of the first, each family in its own order.
+pub(crate) fn candidates(addrs: &[SocketAddr]) -> Vec<SocketAddr> {
+    let first_v6 = addrs.first().is_some_and(SocketAddr::is_ipv6);
+    let mut same = addrs.iter().filter(|a| a.is_ipv6() == first_v6);
+    let mut other = addrs.iter().filter(|a| a.is_ipv6() != first_v6);
+    let mut out = Vec::with_capacity(MAX_ADDRESSES.min(addrs.len()));
+    while out.len() < MAX_ADDRESSES {
+        let a = same.next();
+        let b = other.next();
+        if a.is_none() && b.is_none() {
+            break;
+        }
+        out.extend(a.into_iter().chain(b).copied());
+    }
+    out.truncate(MAX_ADDRESSES);
+    out
+}
+
 fn connect_any(addrs: &[SocketAddr], timeout: Duration) -> Result<TcpStream, Error> {
     let mut tried = Vec::new();
-    for a in addrs.iter().take(MAX_ADDRESSES) {
+    for a in &candidates(addrs) {
         match TcpStream::connect_timeout(a, timeout) {
             Ok(s) => return Ok(s),
             Err(e) => tried.push((*a, e)),
