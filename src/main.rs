@@ -26,7 +26,7 @@ use craft_settings::Location;
 use studiocraft_render::device::{Notice, Preference};
 use studiocraft_ui_egui::hardware;
 use studiocraft_ui_egui::store::Store;
-use studiocraft_ui_egui::{APP_NAME, BUNDLE_ID, StudioApp};
+use studiocraft_ui_egui::{APP_NAME, BUNDLE_ID, DesktopWindow, StudioApp};
 
 use crate::args::{Action, Args};
 
@@ -109,7 +109,7 @@ fn run(args: Args, raw: Vec<std::ffi::OsString>) -> Result<(), String> {
         None => None,
     };
     let (store, problems) = Store::open(location.clone());
-    let buttons = titlebar::decide(store.prefs().system_title_bar);
+    let frame = titlebar::decide(store.prefs().system_title_bar);
     let mut viewport = egui::ViewportBuilder::default()
         .with_title(APP_NAME)
         .with_app_id(BUNDLE_ID)
@@ -118,7 +118,7 @@ fn run(args: Args, raw: Vec<std::ffi::OsString>) -> Result<(), String> {
     if let Some(icon) = studiocraft_ui_egui::app_icon::window_icon() {
         viewport = viewport.with_icon(icon);
     }
-    viewport = titlebar::viewport(viewport, buttons.as_ref());
+    viewport = titlebar::viewport(viewport, &frame.frame);
     if harness.is_some() {
         viewport = viewport.with_active(false);
         if cfg!(windows) {
@@ -149,10 +149,10 @@ fn run(args: Args, raw: Vec<std::ffi::OsString>) -> Result<(), String> {
         Box::new(move |cc| {
             let mut app = StudioApp::boot(store, cc.wgpu_render_state.clone(), problems);
             // After boot, which sets the interface language from the saved settings.
-            studiocraft_ui_egui::install_runtime(&cc.egui_ctx, true).map_err(|e| format!("the interface could not start: {e:?}"))?;
+            let desktop = DesktopWindow { frame, double_click: titlebar::system_double_click() };
+            studiocraft_ui_egui::install_runtime(&cc.egui_ctx, Some(desktop)).map_err(|e| format!("the interface could not start: {e:?}"))?;
             app.install_fonts(&cc.egui_ctx);
             app.set_update_checks(update_checks);
-            app.set_title_bar(buttons);
             let picked = picked.get().map_or(&[][..], Vec::as_slice);
             // A run in software after Automatic could not open the window says so, unless no
             // software adapter was found and the window draws on hardware after all.
