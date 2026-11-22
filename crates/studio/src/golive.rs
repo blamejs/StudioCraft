@@ -254,7 +254,7 @@ impl GoLive {
             let Some(&print) = prints.get(&d.id) else { continue };
             let reach = match &d.status {
                 DestinationStatus::Live => Reach::Live,
-                DestinationStatus::Retrying { error, .. } | DestinationStatus::Failed(error) => Reach::Failed(error.clone()),
+                DestinationStatus::Retrying { failure, .. } | DestinationStatus::Failed(failure) => Reach::Failed(failure.detail.clone()),
                 DestinationStatus::Connecting | DestinationStatus::Stopped => continue,
             };
             if self.reached.len() >= MAX_REACHED && !self.reached.contains_key(&d.id) {
@@ -403,10 +403,12 @@ fn destinations(i: &Input, out: &mut Vec<Item>) {
             out.push(match sending.map(|r| &r.status) {
                 Some(DestinationStatus::Live) => item(Check::Pass, "Destination {name} is live", vec![]),
                 Some(DestinationStatus::Connecting) => item(Check::Unknown, "Destination {name} is connecting", vec![]),
-                Some(DestinationStatus::Retrying { error, .. }) => {
-                    item(Check::Problem, "Destination {name} is reconnecting: {error}", vec![("error", clip(error))])
+                Some(DestinationStatus::Retrying { failure, .. }) => {
+                    item(Check::Problem, "Destination {name} is reconnecting: {error}", vec![("error", clip(&failure.detail))])
                 }
-                Some(DestinationStatus::Failed(error)) => item(Check::Problem, "Destination {name} failed: {error}", vec![("error", clip(error))]),
+                Some(DestinationStatus::Failed(failure)) => {
+                    item(Check::Problem, "Destination {name} failed: {error}", vec![("error", clip(&failure.detail))])
+                }
                 Some(DestinationStatus::Stopped) => item(Check::Problem, "Destination {name} is turned on but not sending", vec![]),
                 None => item(Check::Unknown, "Destination {name} is not part of the running stream", vec![]),
             });
@@ -589,6 +591,7 @@ impl Studio {
 mod tests {
     use super::*;
     use std::sync::mpsc::channel;
+    use studiocraft_plugin::{Cause, Failure};
 
     fn dest(id: &str, server: &str, key: KeyRef, enabled: bool) -> Destination {
         Destination { id: id.into(), name: String::new(), enabled, server: server.into(), key, service: String::new() }
@@ -704,8 +707,8 @@ mod tests {
             dest("d", "rtmp://d/live/name", KeyRef::None, true),
         ]);
         let running = [
-            state("a", DestinationStatus::Retrying { attempt: 2, error: "refused".into() }),
-            state("b", DestinationStatus::Failed("bad key".into())),
+            state("a", DestinationStatus::Retrying { attempt: 2, failure: Failure::new(Cause::Refused, "refused") }),
+            state("b", DestinationStatus::Failed(Failure::new(Cause::RejectedPublish, "bad key"))),
             state("c", DestinationStatus::Stopped),
         ];
         let (list, _) = items(&f.input(Some(&running)));

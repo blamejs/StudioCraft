@@ -31,6 +31,50 @@ stream tests the encoders again.
 **"{encoder} stopped working; the next start tries another encoder".** A hardware encoder failed
 while it ran. The next recording or stream tries another encoder.
 
+The Streaming window shows why a destination is trying again or failed. Hold the pointer over the
+status to see the error and each address that was tried.
+
+**"this computer has no network route to the server".** No network interface can reach any
+address of the server. Check that the computer is connected to a network. On a network that
+offers only IPv4 or only IPv6, check that the server has an address of that kind.
+
+**"the server's name could not be looked up", "the server's name does not exist; check the server
+address" or "the DNS server did not answer for the server's name".** The name in the server
+address did not resolve. Check the spelling of the server address. When other sites open in a web
+browser, the name may be wrong or the network's DNS server may block it. The last two messages
+appear only on Windows.
+
+**"the server refused the connection".** The server answered, but nothing on it accepts streams on
+that port. Check the port in the server address; `rtmp://` uses 1935 and `rtmps://` uses 443 when
+the address names no port.
+
+**"the server did not answer in time".** An address of the server that was tried did not answer
+within 10 s, and none refused the connection. The server
+may be down, or a firewall on this network may block the port. Try the service's `rtmps://` server
+on port 443 if it has one.
+
+**"the server's certificate is not from a trusted authority", "the server's certificate is for
+another name", "the server's certificate has expired" or "the server's certificate was not
+accepted".** The secure connection of an `rtmps://` server failed its certificate check. Check the
+server address and the computer's clock. A network that inspects secure connections can also cause
+this.
+
+**"the server refused the stream; check the stream key".** The server took the connection and
+refused to publish. Check the stream key, and that the stream is not already running from another
+program with the same key.
+
+**"the server refused the connection request; check the server address".** The server refused the
+application named in the server address, the part after the host. Copy the server address from the
+service again.
+
+**"the server closed the connection before the stream started" or "the server did not finish
+setting up the stream in time".** The server took the connection and ended it, or stopped answering,
+before the stream started. The server may be busy or the address may point at a server that does
+not take RTMP.
+
+**"the connection was lost".** The connection ended after the stream started. StudioCraft tries
+again on its own.
+
 ## Capture
 
 **On macOS, a Display capture or Window capture source shows no picture.** A program can capture

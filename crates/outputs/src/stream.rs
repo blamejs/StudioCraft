@@ -37,7 +37,10 @@ use studiocraft_media::audio::{PooledBlock, SAMPLE_RATE};
 use studiocraft_media::queue::Fifo;
 use studiocraft_media::stats::EncoderStats;
 use studiocraft_media::video::PooledFrame;
-use studiocraft_plugin::{DestinationState, DestinationStatus, EncoderKind, OutputInstance, OutputJob, OutputStatus, PluginError, RateControl};
+use studiocraft_plugin::{
+    AddressOutcome, Cause, DestinationState, DestinationStatus, EncoderKind, Failure, OutputInstance, OutputJob, OutputStatus, PluginError,
+    RateControl,
+};
 
 use crate::native::{DISK_WAIT, Item, Native, PacketQueue, QUEUE_BYTES, QUEUE_SPAN_NS, Sink, Track};
 
@@ -293,9 +296,9 @@ impl Dest {
     }
 
     /// The thread gives up.
-    fn fail(&self, error: String) {
+    fn fail(&self, failure: Failure) {
         let _slot = lock(&self.thread);
-        self.set(DestinationStatus::Failed(error));
+        self.set(DestinationStatus::Failed(failure));
         self.alive.store(false, Ordering::SeqCst);
     }
 
@@ -317,7 +320,7 @@ struct Watch<'a>(&'a Dest);
 impl Drop for Watch<'_> {
     fn drop(&mut self) {
         if std::thread::panicking() {
-            self.0.set(DestinationStatus::Failed("the destination stopped unexpectedly".into()));
+            self.0.set(DestinationStatus::Failed(Failure::new(Cause::Other, "the destination stopped unexpectedly")));
             self.0.alive.store(false, Ordering::SeqCst);
         }
     }
@@ -366,7 +369,7 @@ fn spawn(hub: &Arc<Hub>, d: &Arc<Dest>, key: Option<&str>) -> Result<(), PluginE
         Err(e) => {
             let message = format!("no thread for the destination: {e}");
             d.alive.store(false, Ordering::SeqCst);
-            d.set(DestinationStatus::Failed(message.clone()));
+            d.set(DestinationStatus::Failed(Failure::new(Cause::Other, message.clone())));
             Err(PluginError::Failed(message))
         }
     }
@@ -377,6 +380,77 @@ fn spawn(hub: &Arc<Hub>, d: &Arc<Dest>, key: Option<&str>) -> Result<(), PluginE
 fn is_final(e: &craft_rtmp::Error) -> bool {
     use craft_rtmp::Error as E;
     matches!(e, E::BadUrl(_) | E::BadKey(_) | E::BadConfig(_) | E::BadInput(_) | E::Rejected { .. })
+}
+
+/// The failure `e` describes. `live` is whether the connection had been made and the stream's
+/// headers had started to go out, which makes a closed, reset or stalled connection a lost one.
+pub(crate) fn failure(e: &craft_rtmp::Error, live: bool) -> Failure {
+    use craft_rtmp::{Error as E, TlsKind};
+    let detail = e.to_string();
+    let cause = match e {
+        E::BadUrl(_) => Cause::BadAddress,
+        E::BadKey(_) => Cause::BadKey,
+        E::Resolve(io) => lookup_cause(io),
+        E::Connect(tried) => {
+            let addresses: Vec<AddressOutcome> =
+                tried.iter().map(|(a, io)| AddressOutcome { address: a.to_string(), cause: connect_cause(io), detail: io.to_string() }).collect();
+            let has = |c: Cause| addresses.iter().any(|a| a.cause == c);
+            let cause = if addresses.is_empty() {
+                // The name resolved to no address.
+                Cause::LookupFailed
+            } else if has(Cause::Refused) {
+                Cause::Refused
+            } else if has(Cause::TimedOut) {
+                Cause::TimedOut
+            } else if addresses.iter().all(|a| a.cause == Cause::NoRoute) {
+                Cause::NoRoute
+            } else {
+                Cause::Other
+            };
+            return Failure { cause, detail, addresses };
+        }
+        E::Tls(t) => match t.kind {
+            TlsKind::UntrustedCertificate => Cause::CertificateUntrusted,
+            TlsKind::NameMismatch => Cause::CertificateNameMismatch,
+            TlsKind::Expired => Cause::CertificateExpired,
+            TlsKind::CertificateNotAccepted => Cause::CertificateNotAccepted,
+            TlsKind::HandshakeAlert | TlsKind::Other => Cause::TlsFailed,
+        },
+        E::Rejected { command: "connect", .. } => Cause::RejectedConnect,
+        E::Rejected { command: "publish", .. } => Cause::RejectedPublish,
+        E::Closed | E::Io(_) | E::Stalled(_) | E::Broken if live => Cause::Lost,
+        E::Closed | E::Io(_) => Cause::ClosedDuringSetup,
+        E::Timeout(_) => Cause::SetupTimedOut,
+        _ => Cause::Other,
+    };
+    Failure::new(cause, detail)
+}
+
+/// The cause a failed name lookup gives. Only Windows reports the resolver's answer as an error
+/// code (`WSAHOST_NOT_FOUND` 11001, `WSATRY_AGAIN` 11002); other systems report text, which is
+/// kept as the detail and not read.
+fn lookup_cause(e: &std::io::Error) -> Cause {
+    match e.raw_os_error() {
+        Some(11001) if cfg!(windows) => Cause::LookupNotFound,
+        Some(11002) if cfg!(windows) => Cause::LookupNoAnswer,
+        _ => Cause::LookupFailed,
+    }
+}
+
+/// The cause a failed TCP connection to one address gives.
+fn connect_cause(e: &std::io::Error) -> Cause {
+    use std::io::ErrorKind as K;
+    match e.kind() {
+        K::ConnectionRefused => Cause::Refused,
+        K::TimedOut | K::WouldBlock => Cause::TimedOut,
+        K::NetworkUnreachable | K::HostUnreachable | K::NetworkDown => Cause::NoRoute,
+        _ => Cause::Other,
+    }
+}
+
+/// `f` with "gave up after `tries` tries" added to its detail.
+fn gave_up(f: Failure, tries: u32) -> Failure {
+    Failure { detail: format!("{}; gave up after {tries} tries", f.detail), ..f }
 }
 
 /// Waits `delay`, or less when the destination is stopped or the stream ends.
@@ -396,13 +470,14 @@ enum End {
     /// The destination was stopped, or the stream ended and every packet was sent.
     Done,
     /// The connection was lost: try again.
-    Lost(String),
+    Lost(Failure),
     /// Give up.
-    Failed(String),
+    Failed(Failure),
 }
 
 fn end_for(e: craft_rtmp::Error) -> End {
-    if is_final(&e) { End::Failed(e.to_string()) } else { End::Lost(e.to_string()) }
+    let f = failure(&e, true);
+    if is_final(&e) { End::Failed(f) } else { End::Lost(f) }
 }
 
 fn connect(hub: &Hub, d: &Dest) -> Result<Publisher, craft_rtmp::Error> {
@@ -417,10 +492,10 @@ fn connect(hub: &Hub, d: &Dest) -> Result<Publisher, craft_rtmp::Error> {
 fn run(hub: &Hub, d: &Dest) {
     let _watch = Watch(d);
     let mut failures = 0u32;
-    let mut last_error: Option<String> = None;
+    let mut last_error: Option<Failure> = None;
     loop {
-        if let Some(error) = last_error.take() {
-            d.set(DestinationStatus::Retrying { attempt: failures.saturating_add(1), error });
+        if let Some(failure) = last_error.take() {
+            d.set(DestinationStatus::Retrying { attempt: failures.saturating_add(1), failure });
             wait(hub, d, hub.timing.delay(failures.max(1)));
         }
         if d.ends(hub) {
@@ -433,13 +508,13 @@ fn run(hub: &Hub, d: &Dest) {
             Ok(p) => p,
             // Stopped while it connected: the next turn ends the thread.
             Err(_) if d.stopping() || hub.control.is_ended() => continue,
-            Err(e) if is_final(&e) => return d.fail(e.to_string()),
+            Err(e) if is_final(&e) => return d.fail(failure(&e, false)),
             Err(e) => {
                 failures = failures.saturating_add(1);
                 if failures >= hub.timing.max_tries {
-                    return d.fail(format!("{e}; gave up after {failures} tries"));
+                    return d.fail(gave_up(failure(&e, false), failures));
                 }
-                last_error = Some(e.to_string());
+                last_error = Some(failure(&e, false));
                 continue;
             }
         };
@@ -451,7 +526,7 @@ fn run(hub: &Hub, d: &Dest) {
         let started = Instant::now();
         let end = match hub.control.subscribe(hub.ring) {
             Ok(mut rx) => send_all(hub, d, &mut publisher, &mut rx),
-            Err(e) => End::Failed(format!("no room for the destination's packets: {e}")),
+            Err(e) => End::Failed(Failure::new(Cause::Other, format!("no room for the destination's packets: {e}"))),
         };
         // The connection ends whichever way sending ended; a lost one may not take the close.
         let _ = publisher.close();
@@ -464,7 +539,7 @@ fn run(hub: &Hub, d: &Dest) {
                 // A connection lost soon after it was made counts as another failed try.
                 failures = if started.elapsed() >= hub.timing.stable { 1 } else { failures.saturating_add(1) };
                 if failures >= hub.timing.max_tries {
-                    return d.fail(format!("{e}; gave up after {failures} tries"));
+                    return d.fail(gave_up(e, failures));
                 }
                 last_error = Some(e);
             }
@@ -732,7 +807,7 @@ impl OutputInstance for Streaming {
             .iter()
             .zip(&states)
             .filter_map(|(d, st)| match st {
-                DestinationStatus::Failed(e) => Some((d.target.id.as_str(), e.as_str())),
+                DestinationStatus::Failed(f) => Some((d.target.id.as_str(), f.detail.as_str())),
                 _ => None,
             })
             .collect();

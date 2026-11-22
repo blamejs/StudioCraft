@@ -1,5 +1,6 @@
 use craft_keymap::CommandRef;
 use serde_json::json;
+use studiocraft_plugin::AddressOutcome;
 
 use super::*;
 use crate::store::Store;
@@ -458,9 +459,9 @@ fn each_destination_shows_its_own_status() {
         ..StreamSettings::default()
     };
     let live = [
-        state("a", DestinationStatus::Failed("the server refused the stream".into())),
+        state("a", DestinationStatus::Failed(Failure::new(Cause::RejectedPublish, "the server refused publish: NetStream.Publish.BadName"))),
         state("b", DestinationStatus::Live),
-        state("c", DestinationStatus::Retrying { attempt: 3, error: "the connection was lost".into() }),
+        state("c", DestinationStatus::Retrying { attempt: 3, failure: Failure::new(Cause::Lost, "the server closed the connection") }),
     ];
     let held = |_: &str| false;
     let view = View { stream: &stream, running: true, live: &live, held: &held };
@@ -471,7 +472,7 @@ fn each_destination_shows_its_own_status() {
         "First",
         "Second",
         "c",
-        "Failed: the server refused the stream",
+        "Failed: the server refused the stream; check the stream key",
         "Live",
         "Trying again (try 3): the connection was lost",
         "Not in this stream; it is sent to from the next start",
@@ -492,6 +493,52 @@ fn each_destination_shows_its_own_status() {
     assert_eq!(texts.iter().filter(|t| *t == "Sent to when the stream starts").count(), 3, "{texts:?}");
     assert_eq!(texts.iter().filter(|t| *t == "Off").count(), 1, "{texts:?}");
     assert!(!texts.iter().any(|t| t == "Start" || t == "Stop"), "{texts:?}");
+}
+
+#[test]
+fn a_failure_is_listed_with_its_cause_and_addresses() {
+    let d = Destination { id: "a".into(), server: "rtmp://a.example/live".into(), ..Destination::default() };
+    let failure = Failure {
+        cause: Cause::TimedOut,
+        detail: "could not connect to the server: timed out; 1 other address also failed".into(),
+        addresses: vec![
+            AddressOutcome { address: "[2001:db8::1]:1935".into(), cause: Cause::NoRoute, detail: "network unreachable".into() },
+            AddressOutcome { address: "192.0.2.1:1935".into(), cause: Cause::TimedOut, detail: "timed out".into() },
+        ],
+    };
+    let retrying = state("a", DestinationStatus::Retrying { attempt: 2, failure: failure.clone() });
+    let v = listed(&d, true, Some(&retrying), false);
+    assert_eq!(v["status"], json!("retrying"));
+    assert_eq!(v["error"], json!(failure.detail), "the error keeps the connection's own text");
+    assert_eq!(v["cause"], json!("timed_out"));
+    assert_eq!(
+        v["addresses"],
+        json!([
+            {"address": "[2001:db8::1]:1935", "cause": "no_route", "error": "network unreachable"},
+            {"address": "192.0.2.1:1935", "cause": "timed_out", "error": "timed out"},
+        ])
+    );
+    // The row names the cause, and its hover holds the error and each address.
+    assert_eq!(status_text(&d, true, Some(&retrying)).0, "Trying again (try 2): the server did not answer in time");
+    let detail = status_detail(true, Some(&retrying)).unwrap();
+    assert_eq!(
+        detail,
+        "could not connect to the server: timed out; 1 other address also failed\n\
+         [2001:db8::1]:1935: this computer has no network route to the server (network unreachable)\n\
+         192.0.2.1:1935: the server did not answer in time (timed out)"
+    );
+    // A failure without addresses lists none, and a live destination has no cause.
+    let failed = state("a", DestinationStatus::Failed(Failure::new(Cause::BadKey, "the stream key is not valid: empty")));
+    let v = listed(&d, true, Some(&failed), false);
+    assert_eq!((v["status"].clone(), v["cause"].clone()), (json!("failed"), json!("bad_key")));
+    assert!(v.get("addresses").is_none(), "{v}");
+    let live = state("a", DestinationStatus::Live);
+    let v = listed(&d, true, Some(&live), false);
+    assert!(v.get("cause").is_none() && v.get("error").is_none(), "{v}");
+    assert!(status_detail(true, Some(&live)).is_none());
+    // Every cause has its own text.
+    let texts: std::collections::HashSet<&str> = Cause::ALL.iter().map(|c| cause_text(*c)).collect();
+    assert_eq!(texts.len(), Cause::ALL.len());
 }
 
 #[test]

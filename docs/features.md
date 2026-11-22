@@ -434,8 +434,15 @@ key in the field saves it in the profile.
 View › Streaming opens the Streaming window, which lists every destination of the profile. Each
 row shows the destination's on or off setting, its server, where its key comes from and what it is
 doing. A key at the end of a server address, and any query, are shown as dots. While the stream
-runs, each destination shows its own status: connecting, live, trying again with the error, stopped
-or failed with the error, so one destination's error does not hide another's status. Start and
+runs, each destination shows its own status: connecting, live, trying again with the cause, stopped
+or failed with the cause, so one destination's error does not hide another's status. The cause
+names the kind of failure: no network route, a name that could not be looked up, a refused or
+unanswered connection, a certificate that was not accepted, a server that refused the stream, or a
+connection lost after the stream started. Holding the pointer over the status shows the error as
+the connection reported it and, when no address of the server accepted the connection, each address
+tried (at most four) with its own outcome. On Windows a lookup failure also says whether the DNS
+server answered that the name does not exist or did not answer; macOS and Linux report only that
+the lookup failed. Start and
 Stop send to one destination or stop sending to it while the others go on. A destination added
 after the stream started is sent to from the next start, and so are changes to a server or a key.
 

@@ -282,7 +282,10 @@ fn a_refused_destination_does_not_stop_the_other() {
     starts_with_headers_and_a_keyframe(&media(&seen_a, 3));
     assert_eq!(next(&seen_b), Seen::Publish("key-b".into()));
     let b = until(&out, "b", |d| matches!(d.status, DestinationStatus::Failed(_)));
-    assert!(matches!(&b.status, DestinationStatus::Failed(e) if e.contains("NetStream.Publish.BadName")), "{b:?}");
+    assert!(
+        matches!(&b.status, DestinationStatus::Failed(f) if f.cause == Cause::RejectedPublish && f.detail.contains("NetStream.Publish.BadName")),
+        "{b:?}"
+    );
     until_closed(&seen_b);
     // The other destination goes on after the refusal, and the stream runs.
     media(&seen_a, 30);
@@ -327,8 +330,9 @@ fn connections_lost_soon_after_they_are_made_count_as_failed_tries() {
     let mut out = Streaming::start_timed(&job, vec![target("a", &a, "k")], quick()).unwrap();
     let feed = Feed::new(&out);
     let d = until(&out, "a", |d| matches!(d.status, DestinationStatus::Failed(_)));
-    let DestinationStatus::Failed(e) = &d.status else { panic!("{d:?}") };
-    assert!(e.contains("gave up after 3 tries") && !e.contains("could not connect"), "{e}");
+    let DestinationStatus::Failed(f) = &d.status else { panic!("{d:?}") };
+    assert!(f.detail.contains("gave up after 3 tries") && !f.detail.contains("could not connect"), "{f:?}");
+    assert_eq!(f.cause, Cause::Lost, "{f:?}");
     assert_eq!(d.reconnects, 3);
     drop(feed);
     assert!(out.stop().is_err());
@@ -432,6 +436,88 @@ fn a_stop_that_lands_while_a_destination_connects_is_honored() {
         drop(feed);
         out.stop().unwrap();
     }
+}
+
+#[test]
+fn a_refused_destination_reports_refused() {
+    let job = job(RateControl::Bitrate { kbps: 400, keyframe_s: 1 });
+    // The wait before the next try outlasts the test, and the stop ends it.
+    let waits = Timing { retry: vec![GUARD], ..quick() };
+    let mut out = Streaming::start_timed(&job, vec![target("a", &closed_url(), "k")], waits).unwrap();
+    // A try again names the cause and the address that refused.
+    let d = until(&out, "a", |d| matches!(d.status, DestinationStatus::Retrying { .. }));
+    let DestinationStatus::Retrying { failure, .. } = &d.status else { panic!("{d:?}") };
+    assert_eq!(failure.cause, Cause::Refused, "{failure:?}");
+    assert_eq!(failure.addresses.len(), 1, "{failure:?}");
+    assert!(failure.addresses[0].address.starts_with("127.0.0.1:"), "{failure:?}");
+    assert_eq!(failure.addresses[0].cause, Cause::Refused, "{failure:?}");
+    out.stop().unwrap();
+    // Giving up keeps the cause.
+    let mut out = Streaming::start_timed(&job, vec![target("a", &closed_url(), "k")], quick()).unwrap();
+    let d = until(&out, "a", |d| matches!(d.status, DestinationStatus::Failed(_)));
+    let DestinationStatus::Failed(f) = &d.status else { panic!("{d:?}") };
+    assert_eq!(f.cause, Cause::Refused, "{f:?}");
+    assert!(f.detail.contains("gave up after 3 tries"), "{f:?}");
+    assert!(out.stop().is_err());
+}
+
+#[test]
+fn causes_follow_the_error_kinds() {
+    use craft_rtmp::{Error as E, TlsFailure, TlsKind};
+    use std::io::{Error as IoError, ErrorKind as K};
+    let tls = |kind| E::Tls(TlsFailure { kind, message: "m".into() });
+    let at = |port: u16| std::net::SocketAddr::from(([192, 0, 2, 1], port));
+    let connect = |kinds: &[K]| E::Connect(kinds.iter().enumerate().map(|(i, k)| (at(i as u16 + 1), IoError::from(*k))).collect());
+    let cases: Vec<(E, bool, Cause)> = vec![
+        (E::BadUrl("x"), false, Cause::BadAddress),
+        (E::BadKey("x"), false, Cause::BadKey),
+        (E::Resolve(IoError::other("no such host")), false, Cause::LookupFailed),
+        (connect(&[]), false, Cause::LookupFailed),
+        (connect(&[K::ConnectionRefused]), false, Cause::Refused),
+        (connect(&[K::TimedOut, K::ConnectionRefused]), false, Cause::Refused),
+        (connect(&[K::NetworkUnreachable, K::TimedOut]), false, Cause::TimedOut),
+        (connect(&[K::NetworkUnreachable, K::HostUnreachable, K::NetworkDown]), false, Cause::NoRoute),
+        (connect(&[K::NetworkUnreachable, K::PermissionDenied]), false, Cause::Other),
+        (tls(TlsKind::UntrustedCertificate), false, Cause::CertificateUntrusted),
+        (tls(TlsKind::NameMismatch), false, Cause::CertificateNameMismatch),
+        (tls(TlsKind::Expired), false, Cause::CertificateExpired),
+        (tls(TlsKind::CertificateNotAccepted), false, Cause::CertificateNotAccepted),
+        (tls(TlsKind::HandshakeAlert), false, Cause::TlsFailed),
+        (tls(TlsKind::Other), false, Cause::TlsFailed),
+        (E::Rejected { command: "connect", code: String::new(), description: String::new() }, false, Cause::RejectedConnect),
+        (E::Rejected { command: "publish", code: String::new(), description: String::new() }, false, Cause::RejectedPublish),
+        // A refusal of another command, or of the stream after it started, names no setting to check.
+        (E::Rejected { command: "createStream", code: String::new(), description: String::new() }, false, Cause::Other),
+        (E::Rejected { command: "the stream", code: String::new(), description: String::new() }, true, Cause::Other),
+        (E::Closed, false, Cause::ClosedDuringSetup),
+        (E::Io(IoError::from(K::ConnectionReset)), false, Cause::ClosedDuringSetup),
+        (E::Timeout("the handshake"), false, Cause::SetupTimedOut),
+        (E::Closed, true, Cause::Lost),
+        (E::Io(IoError::from(K::ConnectionReset)), true, Cause::Lost),
+        (E::Stalled(Duration::from_secs(5)), true, Cause::Lost),
+        (E::Broken, true, Cause::Lost),
+        (E::Protocol("x"), false, Cause::Other),
+    ];
+    for (e, live, want) in cases {
+        let f = failure(&e, live);
+        assert_eq!(f.cause, want, "{e:?} (live {live})");
+        assert_eq!(f.detail, e.to_string());
+    }
+    // Every address tried keeps its own outcome, in order.
+    let f = failure(&connect(&[K::NetworkUnreachable, K::ConnectionRefused]), false);
+    let each: Vec<(String, Cause)> = f.addresses.iter().map(|a| (a.address.clone(), a.cause)).collect();
+    assert_eq!(each, [("192.0.2.1:1".to_string(), Cause::NoRoute), ("192.0.2.1:2".to_string(), Cause::Refused)]);
+    // Windows reports the resolver's answer as a code; it is read only there.
+    let not_found = failure(&E::Resolve(IoError::from_raw_os_error(11001)), false).cause;
+    let no_answer = failure(&E::Resolve(IoError::from_raw_os_error(11002)), false).cause;
+    if cfg!(windows) {
+        assert_eq!((not_found, no_answer), (Cause::LookupNotFound, Cause::LookupNoAnswer));
+    } else {
+        assert_eq!((not_found, no_answer), (Cause::LookupFailed, Cause::LookupFailed));
+    }
+    // The ids are distinct.
+    let ids: std::collections::HashSet<&str> = Cause::ALL.iter().map(|c| c.id()).collect();
+    assert_eq!(ids.len(), Cause::ALL.len());
 }
 
 #[test]

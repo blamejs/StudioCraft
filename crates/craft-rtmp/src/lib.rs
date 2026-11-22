@@ -14,8 +14,8 @@
 //!
 //! # Timeouts
 //!
-//! Each address the host name resolves to gets [`Config::connect_timeout`] to accept the TCP
-//! connection. The TLS handshake, the RTMP handshake and the commands up to the server's answer to
+//! Each of the first [`MAX_ADDRESSES`] addresses the host name resolves to gets
+//! [`Config::connect_timeout`] to accept the TCP connection. The TLS handshake, the RTMP handshake and the commands up to the server's answer to
 //! `publish` share [`Config::setup_timeout`]. A write that makes no progress for
 //! [`Config::stall_timeout`] (5 s by default) is reported as [`Error::Stalled`], and the publisher
 //! refuses every later send with [`Error::Broken`]. Name resolution uses the system resolver,
@@ -64,13 +64,13 @@ pub use chunk::{
     user_control,
 };
 #[cfg(not(target_arch = "wasm32"))]
-pub use error::Error;
+pub use error::{Error, TlsFailure, TlsKind};
 #[cfg(all(feature = "rtmps", not(target_arch = "wasm32")))]
 pub use publisher::TlsRoots;
 #[cfg(not(target_arch = "wasm32"))]
 pub use publisher::{
-    Config, DEFAULT_CONNECT_TIMEOUT, DEFAULT_FLASH_VER, DEFAULT_SETUP_TIMEOUT, DEFAULT_STALL_TIMEOUT, Kind, MAX_SERVER_MESSAGE, MAX_TIMEOUT,
-    POLL_INTERVAL, POLL_READ_LIMIT, Publisher, Stats,
+    Config, DEFAULT_CONNECT_TIMEOUT, DEFAULT_FLASH_VER, DEFAULT_SETUP_TIMEOUT, DEFAULT_STALL_TIMEOUT, Kind, MAX_ADDRESSES, MAX_SERVER_MESSAGE,
+    MAX_TIMEOUT, POLL_INTERVAL, POLL_READ_LIMIT, Publisher, Stats,
 };
 #[cfg(all(feature = "rtmps", not(target_arch = "wasm32")))]
 pub use rustls::pki_types::CertificateDer;

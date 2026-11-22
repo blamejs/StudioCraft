@@ -623,7 +623,36 @@ key at the end of the address, and any query, as dots. A destination whose key i
 under that name now. `status` is `idle` while no stream runs, `not_in_stream` for a destination
 added after the stream started, and otherwise `connecting`, `live`, `retrying`, `stopped` or
 `failed`. While the stream runs a destination also has `bytes`, `dropped` and `reconnects`; a
-`retrying` one has `attempt` and `error`, and a `failed` one has `error`.
+`retrying` one has `attempt`, `error` and `cause`, and a `failed` one has `error` and `cause`.
+`error` is the connection's own English text. `cause` is one of these ids:
+
+| `cause` | Meaning |
+|---|---|
+| `no_route` | This computer has no network route to any address of the server. |
+| `lookup_failed` | The server's name could not be looked up, or it has no address. On macOS and Linux every failed lookup is `lookup_failed`, with the system's text in `error`. |
+| `lookup_not_found` | Windows only: the DNS server answered that the name does not exist. |
+| `lookup_no_answer` | Windows only: the DNS server did not answer. |
+| `refused` | An address of the server refused the TCP connection. |
+| `timed_out` | An address of the server did not answer the TCP connection within 10 s, and none refused it. |
+| `certificate_untrusted` | The server's certificate does not chain to a trusted root. |
+| `certificate_name_mismatch` | The server's certificate is for another name. |
+| `certificate_expired` | The server's certificate has expired. |
+| `certificate_not_accepted` | The certificate check refused the certificate for another reason, or without giving one. |
+| `tls_failed` | The secure connection failed for another reason. |
+| `closed_during_setup` | The server closed or reset the connection before the stream started. |
+| `setup_timed_out` | The server did not finish setting up the stream within 15 s. |
+| `rejected_connect` | The server refused the `connect` command, which names the application in the server address. |
+| `rejected_publish` | The server refused the `publish` command, usually because of the stream key. |
+| `lost` | The connection was lost after the stream started. |
+| `bad_address` | The server address is not valid. |
+| `bad_key` | The stream key is not valid. |
+| `other` | Anything else, including a refusal of `createStream` or of the stream after it started; `error` holds the server's code and description. |
+
+When no address of the server accepted the TCP connection, the destination also has `addresses`:
+each address tried, at most four, in the order tried, as `{"address", "cause", "error"}`, where
+`cause` is `refused`, `timed_out`, `no_route` or `other`. With more than one address, `cause` is
+`refused` when any address refused, otherwise `timed_out` when any timed out, and `no_route` only
+when every address had no route.
 
 `stream.destination_add` takes `{"service"?, "name"?, "server"?, "enabled"?, "key"?, "held_name"?}`
 and returns `{"id"}`. `service` is the id of one of the seven streaming services, or empty for a

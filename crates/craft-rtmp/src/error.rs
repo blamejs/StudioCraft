@@ -2,6 +2,7 @@
 
 use std::fmt;
 use std::io;
+use std::net::SocketAddr;
 use std::time::Duration;
 
 /// An error from connecting or publishing.
@@ -17,10 +18,12 @@ pub enum Error {
     BadInput(&'static str),
     /// The host name did not resolve.
     Resolve(io::Error),
-    /// No address of the host accepted the TCP connection; the error is from the last one tried.
-    Connect(io::Error),
+    /// No address of the host accepted the TCP connection: each address tried, in order, with the
+    /// error it gave. At most [`crate::MAX_ADDRESSES`] addresses are tried; the list is empty when
+    /// the name resolved to no address.
+    Connect(Vec<(SocketAddr, io::Error)>),
     /// TLS failed: the handshake, the certificate check or the encryption.
-    Tls(String),
+    Tls(TlsFailure),
     /// Reading from or writing to the connection failed.
     Io(io::Error),
     /// A write made no progress for this long, so the connection is treated as broken.
@@ -55,8 +58,18 @@ impl fmt::Display for Error {
             Error::BadConfig(s) => write!(f, "{s}"),
             Error::BadInput(s) => write!(f, "{s}"),
             Error::Resolve(e) => write!(f, "the server's name did not resolve: {e}"),
-            Error::Connect(e) => write!(f, "could not connect to the server: {e}"),
-            Error::Tls(e) => write!(f, "TLS: {e}"),
+            Error::Connect(tried) => {
+                match tried.last() {
+                    Some((_, e)) => write!(f, "could not connect to the server: {e}")?,
+                    None => write!(f, "could not connect to the server: the name resolved to no address")?,
+                }
+                match tried.len() {
+                    0 | 1 => Ok(()),
+                    2 => write!(f, "; 1 other address also failed"),
+                    n => write!(f, "; {} other addresses also failed", n - 1),
+                }
+            }
+            Error::Tls(e) => write!(f, "TLS: {}", e.message),
             Error::Io(e) => write!(f, "the connection failed: {e}"),
             Error::Stalled(d) => write!(f, "the server accepted no data for {:.1} s", d.as_secs_f64()),
             Error::Timeout(step) => write!(f, "the server did not finish {step} in time"),
@@ -80,8 +93,64 @@ impl fmt::Display for Error {
 impl std::error::Error for Error {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            Error::Resolve(e) | Error::Connect(e) | Error::Io(e) => Some(e),
+            Error::Resolve(e) | Error::Io(e) => Some(e),
+            Error::Connect(tried) => tried.last().map(|(_, e)| e as &(dyn std::error::Error + 'static)),
             _ => None,
+        }
+    }
+}
+
+/// What kind of TLS failure an [`Error::Tls`] is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TlsKind {
+    /// The server's certificate does not chain to a trusted root.
+    UntrustedCertificate,
+    /// The server's certificate is not valid for the host name.
+    NameMismatch,
+    /// The server's certificate has expired.
+    Expired,
+    /// The certificate check refused the server's certificate for another reason, or for a reason
+    /// the system's certificate check does not report.
+    CertificateNotAccepted,
+    /// The server ended the handshake with a fatal alert.
+    HandshakeAlert,
+    /// Any other TLS failure.
+    Other,
+}
+
+/// A TLS failure: its kind and the TLS library's description.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TlsFailure {
+    /// What kind of failure it is.
+    pub kind: TlsKind,
+    /// The TLS library's description.
+    pub message: String,
+}
+
+#[cfg(feature = "rtmps")]
+impl TlsFailure {
+    /// The failure a rustls error describes.
+    pub(crate) fn of(e: &rustls::Error) -> TlsFailure {
+        use rustls::CertificateError as C;
+        let kind = match e {
+            rustls::Error::InvalidCertificate(c) => match c {
+                C::UnknownIssuer => TlsKind::UntrustedCertificate,
+                C::NotValidForName | C::NotValidForNameContext { .. } => TlsKind::NameMismatch,
+                C::Expired | C::ExpiredContext { .. } => TlsKind::Expired,
+                _ => TlsKind::CertificateNotAccepted,
+            },
+            rustls::Error::AlertReceived(_) => TlsKind::HandshakeAlert,
+            _ => TlsKind::Other,
+        };
+        TlsFailure { kind, message: e.to_string() }
+    }
+
+    /// The failure an I/O error from the TLS handshake carries: rustls wraps its own error in the
+    /// I/O error, and anything else is [`TlsKind::Other`].
+    pub(crate) fn of_io(e: &io::Error) -> TlsFailure {
+        match e.get_ref().and_then(|inner| inner.downcast_ref::<rustls::Error>()) {
+            Some(tls) => TlsFailure::of(tls),
+            None => TlsFailure { kind: TlsKind::Other, message: e.to_string() },
         }
     }
 }

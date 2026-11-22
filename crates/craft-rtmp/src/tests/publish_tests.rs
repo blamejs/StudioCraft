@@ -1,5 +1,5 @@
 use std::io::{self, Read, Write};
-use std::net::{TcpListener, TcpStream};
+use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
@@ -9,13 +9,13 @@ use craft_flv::{Body, Metadata};
 #[cfg(feature = "rtmps")]
 use super::server::spawn_tls;
 use super::server::{Conn, STREAM_ID, WINDOW, info, s, spawn};
-#[cfg(feature = "rtmps")]
-use crate::TlsRoots;
 use crate::chunk::{csid, msg_type, user_control};
 use crate::error::redact;
 use crate::publisher::{Acks, acked_total};
 use crate::transport::{Socket, set_test_clock};
 use crate::{Config, Error, Kind, Message, Publisher};
+#[cfg(feature = "rtmps")]
+use crate::{TlsKind, TlsRoots};
 
 const KEY: &str = "live_s3cret_key";
 const AVCC: [u8; 7] = [1, 0x64, 0, 0x1F, 0xFF, 0xE0, 0];
@@ -598,7 +598,54 @@ fn a_refused_connection_is_reported() {
         l.local_addr().unwrap().port()
     };
     let e = Publisher::connect(&config(&format!("rtmp://127.0.0.1:{port}/live"))).unwrap_err();
-    assert!(matches!(e, Error::Connect(_)), "{e:?}");
+    let Error::Connect(tried) = &e else { panic!("{e:?}") };
+    assert_eq!(tried.len(), 1, "{e:?}");
+    assert_eq!(tried[0].1.kind(), io::ErrorKind::ConnectionRefused, "{e:?}");
+}
+
+/// A loopback port that nothing listens on.
+fn closed_port() -> SocketAddr {
+    let l = TcpListener::bind("127.0.0.1:0").unwrap();
+    l.local_addr().unwrap()
+}
+
+#[test]
+fn every_address_tried_is_reported() {
+    let (a, b) = (closed_port(), closed_port());
+    let e = Publisher::connect_to(&config(&format!("rtmp://127.0.0.1:{}/live", a.port())), &[a, b]).unwrap_err();
+    let Error::Connect(tried) = &e else { panic!("{e:?}") };
+    let addresses: Vec<SocketAddr> = tried.iter().map(|(addr, _)| *addr).collect();
+    assert_eq!(addresses, [a, b], "both addresses, in the order they were tried");
+    assert!(tried.iter().all(|(_, e)| e.kind() == io::ErrorKind::ConnectionRefused), "{e:?}");
+    assert!(e.to_string().ends_with("; 1 other address also failed"), "{e}");
+}
+
+#[test]
+fn the_first_open_address_is_used_after_a_refused_one() {
+    let (url, server) = spawn(|stream| {
+        let mut c = Conn::new(stream);
+        c.handshake().unwrap();
+        c.accept().unwrap();
+        while c.recv().is_ok() {}
+    });
+    let open: SocketAddr = url.trim_start_matches("rtmp://").trim_end_matches("/live").parse().unwrap();
+    let p = Publisher::connect_to(&config(&url), &[closed_port(), open]).unwrap();
+    assert_eq!(p.stream_id(), STREAM_ID);
+    p.close().unwrap();
+    server.join().unwrap();
+}
+
+#[test]
+fn no_more_than_four_addresses_are_tried() {
+    let addrs: Vec<SocketAddr> = (0..5).map(|_| closed_port()).collect();
+    let e = Publisher::connect_to(&config(&format!("rtmp://127.0.0.1:{}/live", addrs[0].port())), &addrs).unwrap_err();
+    let Error::Connect(tried) = &e else { panic!("{e:?}") };
+    let addresses: Vec<SocketAddr> = tried.iter().map(|(addr, _)| *addr).collect();
+    assert_eq!(addresses, addrs[..crate::MAX_ADDRESSES], "the fifth address is not tried");
+    // No address at all is a connect error with an empty list.
+    let e = Publisher::connect_to(&config("rtmp://127.0.0.1:1/live"), &[]).unwrap_err();
+    assert!(matches!(&e, Error::Connect(tried) if tried.is_empty()), "{e:?}");
+    assert!(e.to_string().contains("resolved to no address"), "{e}");
 }
 
 #[test]
@@ -668,5 +715,25 @@ fn rtmps_refuses_a_certificate_the_system_does_not_trust() {
     let (url, _root, server) = spawn_tls(|mut c| c.handshake().is_err());
     let e = Publisher::connect(&config(&url)).unwrap_err();
     assert!(matches!(e, Error::Tls(_)), "{e:?}");
+    assert!(server.join().unwrap());
+}
+
+#[cfg(feature = "rtmps")]
+#[test]
+fn an_untrusted_certificate_keeps_its_kind() {
+    // The server's certificate chains to a different root from the one the client trusts.
+    let (url, _root, server) = spawn_tls(|mut c| c.handshake().is_err());
+    let mut c = config(&url);
+    c.tls_roots = TlsRoots::Only(vec![super::certs::Pki::new().root]);
+    let e = Publisher::connect(&c).unwrap_err();
+    let Error::Tls(failure) = &e else { panic!("{e:?}") };
+    // The rustls error was read from inside the I/O error the handshake gave.
+    assert!(matches!(failure.kind, TlsKind::UntrustedCertificate | TlsKind::CertificateNotAccepted), "{failure:?}");
+    assert!(server.join().unwrap());
+    // The system's check refuses the test root with one of the certificate kinds too.
+    let (url, _root, server) = spawn_tls(|mut c| c.handshake().is_err());
+    let e = Publisher::connect(&config(&url)).unwrap_err();
+    let Error::Tls(failure) = &e else { panic!("{e:?}") };
+    assert!(matches!(failure.kind, TlsKind::UntrustedCertificate | TlsKind::CertificateNotAccepted), "{failure:?}");
     assert!(server.join().unwrap());
 }
