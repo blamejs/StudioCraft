@@ -23,13 +23,14 @@
 //!
 //! Each step that sends anything has [`PROBE_TIMEOUT`], and the check reports after at most
 //! [`CHECK_TIME`] with what finished; the steps still running are reported as unfinished. At most
-//! [`MAX_CHECKS`] checks run at once, counting the threads of earlier checks that have not ended.
+//! [`MAX_CHECKS`] checks run at once, counting the threads of earlier checks that have not ended; a
+//! check that runs by itself after a failure waits for a place.
 
 use std::collections::VecDeque;
 use std::net::{IpAddr, SocketAddr};
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError, Sender};
-use std::sync::{Arc, Condvar, LazyLock, Mutex};
+use std::sync::{Arc, Condvar, LazyLock, Mutex, Weak};
 use std::time::{Duration, Instant, SystemTime};
 
 use craft_rtmp::Endpoint;
@@ -381,6 +382,9 @@ pub struct Subject {
     pub service_hosts: bool,
     /// Whether the check runs by itself after a failure.
     pub automatic: bool,
+    /// The owner's flag of whether the destination was checked. It is set to `false` when the
+    /// check waited for a place and then found no thread, so a later failure checks it again.
+    pub checked: Option<Arc<AtomicBool>>,
 }
 
 /// Whether the server addresses `a` and `b` have the same scheme, host and port, so a failure of
@@ -525,6 +529,9 @@ pub struct Checks {
     running: Arc<AtomicU32>,
     runs: AtomicU64,
     entries: Mutex<VecDeque<Entry>>,
+    /// Checks that run by themselves and found [`MAX_CHECKS`] checks running, oldest first: each
+    /// starts when a place is free. At most [`MAX_KEPT`], one per destination.
+    waiting: Mutex<VecDeque<Subject>>,
     /// Signaled when a check finishes and when the threads of a check have all ended.
     pub(crate) signal: Arc<Signal>,
 }
@@ -551,13 +558,24 @@ impl Signal {
     }
 }
 
-/// Holds one of [`MAX_CHECKS`] places until every thread of a check has ended.
-struct Slot(Arc<AtomicU32>, Arc<Signal>);
+/// Holds one of [`MAX_CHECKS`] places until every thread of a check has ended, then starts the
+/// checks waiting for a place once the check's thread has started.
+struct Slot {
+    running: Arc<AtomicU32>,
+    signal: Arc<Signal>,
+    checks: Weak<Checks>,
+    started: AtomicBool,
+}
 
 impl Drop for Slot {
     fn drop(&mut self) {
-        self.0.fetch_sub(1, Ordering::SeqCst);
-        self.1.touch();
+        self.running.fetch_sub(1, Ordering::SeqCst);
+        self.signal.touch();
+        if self.started.load(Ordering::SeqCst)
+            && let Some(checks) = self.checks.upgrade()
+        {
+            checks.start_waiting();
+        }
     }
 }
 
@@ -570,14 +588,66 @@ impl Checks {
             running: Arc::new(AtomicU32::new(0)),
             runs: AtomicU64::new(0),
             entries: Mutex::new(VecDeque::new()),
+            waiting: Mutex::new(VecDeque::new()),
             signal: Arc::new(Signal::default()),
         })
     }
 
     /// Starts a check of `s`. A running check of the same destination at the same server and
-    /// service, or [`MAX_CHECKS`] running checks, refuse it. A running check of the destination at
-    /// another server or service is canceled.
+    /// service refuses it, and so do [`MAX_CHECKS`] running checks, except that a check that runs
+    /// by itself then waits and starts when a place is free. A running or waiting check of the
+    /// destination at another server or service is canceled.
+    ///
+    /// When [`MAX_KEPT`] checks already wait, a check that runs by itself is refused like any
+    /// other.
     pub fn start(self: &Arc<Self>, s: Subject) -> Result<(), CheckError> {
+        // The waiting checks stay locked from the try to the end, so a place freed meanwhile
+        // finds a check that starts waiting here, and a cancel finds every check it should stop.
+        let mut waiting = lock(&self.waiting);
+        let waits = s.automatic.then(|| s.clone());
+        let out = match (self.try_start(s, &mut waiting), waits) {
+            (Err(CheckError::Busy), Some(w)) if waiting.iter().any(|o| o.profile == w.profile && o.id == w.id) || waiting.len() < MAX_KEPT => {
+                waiting.retain(|o| o.profile != w.profile || o.id != w.id);
+                waiting.push_back(w);
+                Ok(None)
+            }
+            (out, _) => out.map(Some),
+        };
+        drop(waiting);
+        // Letting the place go after the lock may start a waiting check.
+        out.map(drop)
+    }
+
+    /// Starts the checks waiting for a place, oldest first, while places are free. A check that
+    /// finds no place stays first, for the next place that is freed. One that finds no thread is
+    /// dropped with a warning, and its `checked` flag is cleared.
+    fn start_waiting(self: &Arc<Self>) {
+        let mut started = Vec::new();
+        let mut waiting = lock(&self.waiting);
+        while let Some(s) = waiting.front().cloned() {
+            match self.try_start(s.clone(), &mut waiting) {
+                Err(CheckError::Busy) => break,
+                Ok(slot) => started.push(slot),
+                Err(e) => {
+                    waiting.pop_front();
+                    // A running check of the destination at its server reports instead.
+                    if let CheckError::NoThread(_) = e {
+                        log::warn!("stream destination `{}`: the connection was not checked: {e}", s.id);
+                        if let Some(flag) = &s.checked {
+                            flag.store(false, Ordering::SeqCst);
+                        }
+                    }
+                }
+            }
+        }
+        drop(waiting);
+        drop(started);
+    }
+
+    /// Starts a check of `s` unless one of the destination runs at the same server and service
+    /// or no place is free; removes the destination's waiting checks once it starts. Returns its
+    /// place, which the caller lets go after the waiting checks' lock.
+    fn try_start(self: &Arc<Self>, s: Subject, waiting: &mut VecDeque<Subject>) -> Result<Arc<Slot>, CheckError> {
         let endpoint = Endpoint::parse(s.server.trim()).map_err(|e| CheckError::BadAddress(e.to_string()))?;
         let (profile, id, server) = (s.profile.clone(), s.id.clone(), s.server.trim().to_string());
         let service = s.service.map_or("", |svc| svc.id);
@@ -590,13 +660,18 @@ impl Checks {
         if !reserve(&self.running, MAX_CHECKS) {
             return Err(CheckError::Busy);
         }
-        let slot = Arc::new(Slot(Arc::clone(&self.running), Arc::clone(&self.signal)));
+        let slot = Arc::new(Slot {
+            running: Arc::clone(&self.running),
+            signal: Arc::clone(&self.signal),
+            checks: Arc::downgrade(self),
+            started: AtomicBool::new(false),
+        });
         let run = self.runs.fetch_add(1, Ordering::SeqCst);
         let cancel = Arc::new(AtomicBool::new(false));
-        let (checks, flag) = (Arc::clone(self), Arc::clone(&cancel));
+        let (checks, flag, held) = (Arc::clone(self), Arc::clone(&cancel), Arc::clone(&slot));
         let automatic = s.automatic;
         let spawned = std::thread::Builder::new().name("stream check".into()).spawn(move || {
-            let d = checks.run(&s, &endpoint, &flag, &slot);
+            let d = checks.run(&s, &endpoint, &flag, &held);
             if let Some(d) = d {
                 checks.finish(run, d);
             }
@@ -604,17 +679,19 @@ impl Checks {
         if let Err(e) = spawned {
             return Err(CheckError::NoThread(e.to_string()));
         }
+        slot.started.store(true, Ordering::SeqCst);
         for e in entries.iter().filter(|e| running(e)) {
             e.cancel.store(true, Ordering::SeqCst);
         }
         entries.retain(|e| !same(e));
+        waiting.retain(|w| w.profile != profile || w.id != id);
         // The oldest finished checks make room; a running one is kept until it reports.
         while entries.len() >= MAX_KEPT {
             let Some(oldest) = entries.iter().position(|e| matches!(e.state, CheckState::Done(_))) else { break };
             entries.remove(oldest);
         }
         entries.push_back(Entry { profile, id, server, service, state: CheckState::Running { automatic }, run, cancel });
-        Ok(())
+        Ok(slot)
     }
 
     /// The check of destination `id` of `profile`, running or finished; `None` when there has been
@@ -636,14 +713,21 @@ impl Checks {
 
     /// Moves the checks of the profile `old` to its new name `new`.
     pub fn rename_profile(&self, old: &str, new: &str) {
+        // The waiting checks are locked first, as in `start`.
+        let mut waiting = lock(&self.waiting);
+        for w in waiting.iter_mut().filter(|w| w.profile == old) {
+            w.profile = new.to_string();
+        }
         for e in lock(&self.entries).iter_mut().filter(|e| e.profile == old) {
             e.profile = new.to_string();
         }
     }
 
     /// Forgets the checks of the profile `name`, which was removed. A running one goes on and
-    /// reports nothing.
+    /// reports nothing, and a waiting one does not start.
     pub fn forget_profile(&self, name: &str) {
+        let mut waiting = lock(&self.waiting);
+        waiting.retain(|w| w.profile != name);
         let mut entries = lock(&self.entries);
         for e in entries.iter().filter(|e| e.profile == name) {
             e.cancel.store(true, Ordering::SeqCst);
@@ -652,14 +736,22 @@ impl Checks {
     }
 
     /// Cancels a running check of destination `id` of `profile`: it stops waiting for its steps
-    /// and reports nothing. A finished check is kept.
+    /// and reports nothing. A waiting one does not start, and a finished check is kept.
     pub fn cancel(&self, profile: &str, id: &str) {
+        let mut waiting = lock(&self.waiting);
+        waiting.retain(|w| w.profile != profile || w.id != id);
         let mut entries = lock(&self.entries);
         let running = |e: &Entry| e.profile == profile && e.id == id && matches!(e.state, CheckState::Running { .. });
         for e in entries.iter().filter(|e| running(e)) {
             e.cancel.store(true, Ordering::SeqCst);
         }
         entries.retain(|e| !running(e));
+    }
+
+    /// How many checks wait for a place.
+    #[cfg(test)]
+    pub(crate) fn waiting(&self) -> usize {
+        lock(&self.waiting).len()
     }
 
     /// How many checks have threads that have not ended.

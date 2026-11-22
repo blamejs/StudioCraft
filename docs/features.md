@@ -517,7 +517,8 @@ that runs by itself contacts only the destination's server unless Settings › S
 check › "Also check the service's server list and status page after a failure" is on; it is off by
 default. Check Connection always includes the service's steps. Stopping the stream cancels the
 checks of destinations that had not failed, and a check of a destination that failed goes on.
-At most four checks run at once. Each destination keeps its latest check for the session, and a
+At most four checks run at once. A check that runs by itself while four are running waits, and
+starts when one of them has finished. Each destination keeps its latest check for the session, and a
 check is no longer shown once the destination's server or service changes.
 
 Add Destination adds one, up to 16, for one of seven streaming services or for a custom server.

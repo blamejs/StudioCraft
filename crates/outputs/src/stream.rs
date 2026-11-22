@@ -413,8 +413,9 @@ struct Dest {
     lost: AtomicBool,
     /// Times it went live again after a lost connection.
     recovered: AtomicU32,
-    /// Its connection was checked after failures since it last went live or was started.
-    checked: AtomicBool,
+    /// Its connection was checked after failures since it last went live or was started. Shared
+    /// with a check that waits for a place, which clears it when it cannot run.
+    checked: Arc<AtomicBool>,
     /// Asks the thread to close the connection and end.
     stop: AtomicBool,
     /// The thread runs and has not decided to end. It is changed with `thread` locked, so a start
@@ -442,7 +443,7 @@ impl Dest {
             net_up: AtomicBool::new(false),
             lost: AtomicBool::new(false),
             recovered: AtomicU32::new(0),
-            checked: AtomicBool::new(false),
+            checked: Arc::new(AtomicBool::new(false)),
             stop: AtomicBool::new(false),
             alive: AtomicBool::new(false),
             thread: Mutex::new(None),
@@ -738,10 +739,12 @@ fn check_after(hub: &Hub, d: &Dest, f: &Failure) {
         last: Some(f.clone()),
         service_hosts: auto.service_hosts,
         automatic: true,
+        checked: Some(Arc::clone(&d.checked)),
     };
     if let Err(e) = checks.start(subject) {
         log::info!("stream destination `{id}`: the connection was not checked: {e}");
-        // A later failure tries again when another check of it ran, or no place or thread was free.
+        // A later failure tries again when another check of it ran, no thread was free, or too
+        // many checks waited for a place. With fewer waiting, the check waits for one instead.
         if !matches!(e, diagnose::CheckError::BadAddress(_)) {
             d.checked.store(false, Ordering::SeqCst);
         }

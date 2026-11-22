@@ -142,7 +142,16 @@ pub(crate) fn done_in(checks: &Checks, profile: &str, id: &str) -> Diagnosis {
 }
 
 fn subject(server: &str) -> Subject {
-    Subject { profile: String::new(), id: "a".into(), server: server.into(), service: None, last: None, service_hosts: false, automatic: false }
+    Subject {
+        profile: String::new(),
+        id: "a".into(),
+        server: server.into(),
+        service: None,
+        last: None,
+        service_hosts: false,
+        automatic: false,
+        checked: None,
+    }
 }
 
 fn twitch() -> &'static Service {
@@ -351,6 +360,50 @@ fn one_check_runs_per_destination_and_at_most_four_in_all() {
     let bad = checks.start(subject("http://ingest.example/app")).err();
     assert!(matches!(bad, Some(CheckError::BadAddress(_))), "{bad:?}");
     until_checks(&checks, |c| (c.running() == 0).then_some(()));
+}
+
+#[test]
+fn a_check_that_runs_by_itself_waits_for_a_place() {
+    let (release, hold) = mpsc::channel::<()>();
+    let (started, wait_start) = mpsc::channel();
+    let hold = Mutex::new(hold);
+    let mut fake = Fake::new();
+    fake.reach = Box::new(move |_, _, _| {
+        let _ = started.send(());
+        let _ = lock(&hold).recv();
+        Ok(())
+    });
+    let (checks, _fake) = checks_with(fake, TestClock::new());
+    for id in ["a", "b", "c", "d"] {
+        checks.start(Subject { id: id.into(), ..subject("rtmps://203.0.113.9/app") }).unwrap();
+        wait_start.recv_timeout(GUARD).unwrap();
+    }
+    let automatic = |id: &str| Subject { id: id.into(), automatic: true, ..subject("rtmps://203.0.113.9/app") };
+    // With four checks running, a check that runs by itself waits instead of being refused.
+    assert!(checks.start(automatic("e")).is_ok());
+    assert!(checks.start(automatic("f")).is_ok());
+    assert_eq!((checks.waiting(), checks.state("", "e")), (2, None));
+    // A destination stopped while its check waits is not checked.
+    checks.cancel("", "f");
+    assert_eq!(checks.waiting(), 1);
+    // A check asked for still finds no place.
+    assert_eq!(checks.start(Subject { id: "g".into(), ..subject("rtmps://203.0.113.9/app") }).err(), Some(CheckError::Busy));
+    // At most MAX_KEPT checks wait. One more is refused, and a destination that waits already
+    // keeps one place.
+    for n in 1..MAX_KEPT {
+        assert!(checks.start(automatic(&format!("w{n}"))).is_ok());
+    }
+    assert_eq!(checks.waiting(), MAX_KEPT);
+    assert_eq!(checks.start(automatic("over")).err(), Some(CheckError::Busy));
+    assert!(checks.start(automatic("e")).is_ok());
+    assert_eq!(checks.waiting(), MAX_KEPT);
+    drop(release);
+    let d = done(&checks, "e");
+    assert_eq!(d.host, "203.0.113.9");
+    assert!(d.automatic, "it ran by itself");
+    until_checks(&checks, |c| (c.running() == 0 && c.waiting() == 0).then_some(()));
+    assert_eq!((checks.state("", "f"), checks.state("", "over")), (None, None));
+    assert!(matches!(checks.state("", &format!("w{}", MAX_KEPT - 1)), Some(CheckState::Done(_))));
 }
 
 #[test]

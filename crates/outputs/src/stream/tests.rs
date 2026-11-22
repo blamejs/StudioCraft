@@ -1625,7 +1625,7 @@ fn a_restart_after_a_check_is_checked_again_after_its_third_failed_try() {
 }
 
 #[test]
-fn a_check_that_finds_every_place_taken_is_started_at_a_later_failure() {
+fn a_check_that_finds_every_place_taken_waits_for_one() {
     // Four checks of another server hold every place until released.
     checked_after_held(&["w", "x", "y", "z"]);
 }
@@ -1637,7 +1637,8 @@ fn a_check_that_finds_its_destination_being_checked_is_started_at_a_later_failur
 }
 
 /// Holds checks of `held` (destinations of the profile `Show`) until the destination `a` has
-/// failed three times, and shows that `a` is then checked by itself at a later failure.
+/// failed three times, and shows that `a` is then checked by itself: when a place is free, or at
+/// a later failure after its own check ends.
 fn checked_after_held(held: &[&str]) {
     let job = job(RateControl::Bitrate { kbps: 400, keyframe_s: 1 });
     let (release, hold) = mpsc::channel::<()>();
@@ -1663,6 +1664,7 @@ fn checked_after_held(held: &[&str]) {
             last: None,
             service_hosts: false,
             automatic: false,
+            checked: None,
         };
         checks.start(s).unwrap();
     }
