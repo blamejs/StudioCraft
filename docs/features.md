@@ -9,8 +9,8 @@ sizes and bitrates, are listed in [MECHANICS.md](../MECHANICS.md).
 A scene is a stack of sources. You add, rename, duplicate, reorder and remove scenes and sources.
 In the preview you drag, resize and rotate sources. A source that is not rotated snaps when an
 edge or its center line comes within 8 points of a canvas edge, a canvas center line, or an edge or
-center line of another visible source, and a line shows what it snapped to. A move snaps on each
-axis. A corner drag snaps the edges it moves and keeps the aspect ratio: the edge closer to its
+center line of another visible source, and lines show what it snapped to. A move snaps on each
+axis, and each edge or center line of the source that then lies on a line shows that line. A corner drag snaps the edges it moves and keeps the aspect ratio: the edge closer to its
 line snaps and the other edge follows the ratio. With Shift held the corner drag changes the ratio
 and each edge snaps on its own. Holding Alt (Option on macOS) turns snapping off. One drag is one
 undo step. You can lock a source so it can't be moved, or lock the whole preview. Each scene item can be
@@ -128,9 +128,12 @@ system's default output device, and Microphone, the default input device. Deskto
 sound on Windows and Linux only.
 
 The Audio Mixer dock shows peak and RMS meters with peak hold, a volume fader in dB, and a mute
-button for every audible source. The mixer also measures the final mix's loudness (momentary,
-short-term, integrated, loudness range and true peak). The window does not show these readings
-yet.
+button for every audible source. A muted source's mute button shows the muted speaker in the
+warning color. The settings button at the end of each channel opens a menu with Properties…,
+Filters… and Rename. Rename asks for the new name in a prompt, so it also renames a global audio
+source that the Sources dock does not list. The mixer also measures the final mix's loudness
+(momentary, short-term, integrated, loudness range and true peak). The window does not show these
+readings yet.
 
 A source's Properties window sets two more audio options:
 
@@ -144,8 +147,10 @@ macOS.
 ### Application Audio dock
 
 Docks › Application Audio shows a dock that lists a lane for each audio input source, then a lane
-for each running application that has audio. Each lane has a live meter. A lane the program does
-not hear is drawn gray. The meter of a lane with a source shows the source's level in the mix,
+for each running application that has audio. Each lane has a live meter. The meter of a lane the
+program does not hear is drawn gray, and so is the name of a lane without a check box. An
+application lane's check box is labeled with the lane's name, and its tooltip says that the
+application is not running when it has quit. The meter of a lane with a source shows the source's level in the mix,
 and is silent while the mix has no level for it. The meter of an application lane without a
 source shows the level the system reports for the application, without capturing it. The program hears a lane when its source is a global
 audio source or is shown in the program scene, unless the source's monitoring is set to monitor
@@ -421,7 +426,7 @@ bar's overflow menu. Docks › Output Controls and Docks › Transition Controls
 ### Docks
 
 Scenes, Sources and Audio Mixer sit in a strip under the preview, and Application Audio joins them
-when Docks › Application Audio shows it. Each dock has a 24-point header
+when Docks › Application Audio shows it. Each dock has a 28-point header
 with the title at its start and the dock's actions at its end, and no footer. When the dock is
 narrow, the header keeps its actions and shortens the title. 1-point dividers separate the docks.
 

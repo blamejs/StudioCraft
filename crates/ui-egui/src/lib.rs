@@ -93,6 +93,8 @@ pub(crate) enum Act {
     Select(Option<ItemId>),
     Properties(SourceId),
     Filters(SourceId),
+    /// Ask for a new name for a source in the name prompt.
+    Rename(SourceId),
     AddSource {
         kind: String,
     },
@@ -135,6 +137,8 @@ enum Named {
     DuplicateCollection,
     RenameCollection,
     SaveDockLayout,
+    /// A source's new name, asked for by Rename in an Audio Mixer channel's menu.
+    RenameSource(SourceId),
 }
 
 impl Named {
@@ -148,6 +152,7 @@ impl Named {
             Named::DuplicateCollection => "Duplicate Scene Collection",
             Named::RenameCollection => "Rename Scene Collection",
             Named::SaveDockLayout => "Save Dock Layout",
+            Named::RenameSource(_) => "Rename Source",
         }
     }
 }
@@ -1381,6 +1386,14 @@ impl StudioApp {
     }
 
     fn named(&mut self, what: Named, name: &str) -> Result<(), Msg> {
+        // A source's name is not a file name: `source.rename` checks it, and an unchanged name
+        // runs no command and leaves no undo step.
+        if let Named::RenameSource(source) = what {
+            if self.studio.collection().source(source).is_none_or(|s| s.name != name) {
+                self.studio.run("source.rename", &json!({"source": source, "name": name})).map_err(|e| e.to_string())?;
+            }
+            return Ok(());
+        }
         check_name(name)?;
         let taken = |list: &[String]| list.iter().any(|n| n.eq_ignore_ascii_case(name));
         match what {
@@ -1443,6 +1456,7 @@ impl StudioApp {
             Named::SaveDockLayout => {
                 self.save_dock_layout(name)?;
             }
+            Named::RenameSource(_) => {}
         }
         self.refresh_lists();
         Ok(())
@@ -1528,6 +1542,11 @@ impl StudioApp {
             Act::Select(id) => self.selected = id,
             Act::Properties(s) => self.open_properties(s),
             Act::Filters(s) => self.open_filters(s),
+            Act::Rename(s) => {
+                if let Some(name) = self.studio.collection().source(s).map(|src| src.name.clone()) {
+                    self.ask_name(ctx, Named::RenameSource(s), &name);
+                }
+            }
             Act::AddSource { kind } => {
                 let name = self.studio.registry().source(&kind).map(|p| p.name().to_string()).unwrap_or_else(|_| kind.clone());
                 let name = self.studio.collection().unique_source_name(&name);

@@ -1,8 +1,13 @@
 //! The preview and program views: the compositor's canvas textures drawn in the window, and the
 //! handles that move and resize the selected item. Moves and resizes snap to the canvas's edges
-//! and center lines and to other items' edges and center lines; Alt (Option on macOS) turns
-//! snapping off while it is held.
+//! and center lines and to other items' edges and center lines, which the drag holds as
+//! [`SnapTargets`]; a move follows the pointer through a [`MoveGesture`]. Alt (Option on macOS)
+//! turns snapping off while it is held ([`SnapSuspend::Alt`]).
 
+use craft_behavior::Axis;
+use craft_behavior::geometry::{ConstrainStyle, Directions, MoveGesture, SNAP_PX, SnapKind, SnapSuspend, SnapTarget, SnapTargets};
+use craft_behavior::kurbo;
+use craft_keymap::Mods;
 use egui::{Color32, Pos2, Rect, Sense, Stroke, StrokeKind, TextureId, Ui, Vec2 as EVec2, pos2, vec2};
 use studiocraft_model::{ItemId, Transform, Vec2};
 use studiocraft_render::{CanvasViews, Ring};
@@ -89,9 +94,9 @@ pub struct EditItem {
     pub visible: bool,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 enum Grip {
-    Move,
+    Move(MoveGesture),
     /// Clockwise from the top left.
     Corner(usize),
 }
@@ -100,70 +105,79 @@ enum Grip {
 struct Drag {
     item: ItemId,
     grip: Grip,
-    start: Vec2,
     from: Transform,
     native: (u32, u32),
     /// What the dragged item's edges snap to, gathered when the drag starts.
-    lines: SnapLines,
+    targets: SnapTargets,
+    /// The transform the drag last reported, so a frame that changes nothing reports nothing.
+    last: Option<Transform>,
 }
 
-/// The lines a dragged item's edges and center snap to, in canvas pixels: the vertical lines'
-/// `x` and the horizontal lines' `y`.
-#[derive(Clone, Debug, Default, PartialEq)]
-pub struct SnapLines {
-    pub x: Vec<f32>,
-    pub y: Vec<f32>,
-}
-
-impl SnapLines {
-    /// The canvas's edges and center lines, and the edges and center lines of every other visible
-    /// item that has shown something and is turned by a multiple of 90 degrees.
-    pub fn new(canvas: (u32, u32), items: &[EditItem], dragged: ItemId) -> SnapLines {
-        let (w, h) = (canvas.0 as f32, canvas.1 as f32);
-        let mut lines = SnapLines { x: vec![0.0, w * 0.5, w], y: vec![0.0, h * 0.5, h] };
-        for it in items.iter().filter(|it| it.visible && it.id != dragged) {
-            let Some(n) = it.native else { continue };
-            let turn = it.transform.rotation.rem_euclid(90.0);
-            if turn > 0.01 && turn < 89.99 {
-                continue;
-            }
-            let c = it.transform.corners(n);
-            let (mut min, mut max) = (c[0], c[0]);
-            for k in &c[1..] {
-                min = Vec2::new(min.x.min(k.x), min.y.min(k.y));
-                max = Vec2::new(max.x.max(k.x), max.y.max(k.y));
-            }
-            if !(min.is_finite() && max.is_finite()) {
-                continue;
-            }
-            lines.x.extend([min.x, (min.x + max.x) * 0.5, max.x]);
-            lines.y.extend([min.y, (min.y + max.y) * 0.5, max.y]);
-        }
-        lines
-    }
-}
-
-/// The lines a drag snapped to this frame, drawn as guides: a vertical line at `x`, a horizontal
-/// line at `y`.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub struct Guides {
-    pub x: Option<f32>,
-    pub y: Option<f32>,
-}
-
-/// The line in `lines` nearest to one of `edges`, when it is at most `snap` away: the distance
-/// to move by and the line.
-fn nearest(edges: &[f32], lines: impl Iterator<Item = f32> + Clone, snap: f32) -> Option<(f32, f32)> {
-    let mut best: Option<(f32, f32)> = None;
-    for e in edges {
-        for l in lines.clone() {
-            let d = l - e;
-            if d.abs() <= snap && best.is_none_or(|(b, _)| d.abs() < b.abs()) {
-                best = Some((d, l));
+/// What a dragged item's edges and center snap to: the canvas's edges and center lines, and the
+/// edges and center lines of every other visible item that has shown something and is turned by
+/// a multiple of 90 degrees. Each line runs the full length of the canvas. Only the lines `keep`
+/// accepts are targets; it is given the axis a line runs along (`Axis::Y` for a vertical line)
+/// and its position across it, in canvas pixels.
+pub fn snap_targets(canvas: (u32, u32), items: &[EditItem], dragged: ItemId, keep: impl Fn(Axis, f32) -> bool) -> SnapTargets {
+    let mut targets = SnapTargets::new();
+    let mut add = |min: Vec2, max: Vec2, edge: SnapKind, center: SnapKind| {
+        for (along, lo, hi) in [(Axis::Y, min.x, max.x), (Axis::X, min.y, max.y)] {
+            for (at, kind) in [(lo, edge), ((lo + hi) * 0.5, center), (hi, edge)] {
+                if keep(along, at) {
+                    targets.add(SnapTarget::new(along, f64::from(at), kind));
+                }
             }
         }
+    };
+    add(Vec2::ZERO, Vec2::new(canvas.0 as f32, canvas.1 as f32), SnapKind::Bounds, SnapKind::Center);
+    for it in items.iter().filter(|it| it.visible && it.id != dragged) {
+        let Some(n) = it.native else { continue };
+        let turn = it.transform.rotation.rem_euclid(90.0);
+        if turn > 0.01 && turn < 89.99 {
+            continue;
+        }
+        let c = it.transform.corners(n);
+        let (mut min, mut max) = (c[0], c[0]);
+        for k in &c[1..] {
+            min = Vec2::new(min.x.min(k.x), min.y.min(k.y));
+            max = Vec2::new(max.x.max(k.x), max.y.max(k.y));
+        }
+        if !(min.is_finite() && max.is_finite()) {
+            continue;
+        }
+        add(min, max, SnapKind::LayerEdge, SnapKind::LayerCenter);
     }
-    best
+    targets
+}
+
+/// The lines a drag of corner `corner` of `from` may snap its moving edges to: a line on the far
+/// side of the fixed corner, or less than a pixel from it, would turn the item over. For
+/// [`snap_targets`]'s `keep`.
+pub fn ahead_of_fixed(from: Transform, native: (u32, u32), corner: usize) -> impl Fn(Axis, f32) -> bool {
+    let (a, dir) = anchor(corner, from.size(native));
+    let fixed = Vec2::new(from.position.x + a.x, from.position.y + a.y);
+    move |along, at| if along == Axis::Y { (at - fixed.x) * dir.0 >= 1.0 } else { (at - fixed.y) * dir.1 >= 1.0 }
+}
+
+/// A line a drag snapped to this frame, drawn as a guide across the canvas: a vertical line
+/// (along `Axis::Y`) at an x, or a horizontal one (along `Axis::X`) at a y, in canvas pixels.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Guide {
+    pub along: Axis,
+    pub at: f32,
+}
+
+/// A canvas point as the framework's geometry takes it.
+fn point(p: Vec2) -> kurbo::Point {
+    kurbo::Point::new(f64::from(p.x), f64::from(p.y))
+}
+
+/// The target nearest to `edge` among the lines running `along`, when it is at most `snap`
+/// away: the distance to move by and the line.
+fn nearest(targets: &SnapTargets, along: Axis, edge: f32, snap: f32) -> Option<(f32, f32)> {
+    let t = targets.nearest(along, f64::from(edge), f64::from(snap))?;
+    let at = t.position as f32;
+    Some((at - edge, at))
 }
 
 /// What happened in the editable view this frame.
@@ -179,8 +193,6 @@ pub struct EditEvent {
     pub context: bool,
 }
 
-/// Screen distance at which a moved or resized item snaps to a line.
-const SNAP_POINTS: f32 = 8.0;
 /// The color of the lines a drag snapped to.
 const GUIDE: Color32 = Color32::from_rgb(255, 64, 160);
 const HANDLE: f32 = 7.0;
@@ -224,74 +236,81 @@ pub fn resize(from: Transform, native: (u32, u32), corner: usize, to: Vec2, free
     Transform { position: Vec2::new(c.x - new.x * 0.5, c.y - new.y * 0.5), ..t }.sanitized()
 }
 
-/// [`resize`], with the moving edges snapped to `lines` when an edge of an unrotated item comes
+/// [`resize`], with the moving edges snapped to `targets` when an edge of an unrotated item comes
 /// within `snap` canvas pixels of one. With the aspect ratio kept, the edge that has the shorter
 /// way to its line snaps and the other edge follows the ratio; with `free`, each edge snaps on
-/// its own. The opposite corner stays in place.
-pub fn resized(from: Transform, native: (u32, u32), corner: usize, to: Vec2, free: bool, lines: &SnapLines, snap: f32) -> (Transform, Guides) {
+/// its own. The opposite corner stays in place. `targets` holds only the lines
+/// [`ahead_of_fixed`] keeps.
+pub fn resized(
+    from: Transform,
+    native: (u32, u32),
+    corner: usize,
+    to: Vec2,
+    free: bool,
+    targets: &SnapTargets,
+    snap: f32,
+) -> (Transform, Vec<Guide>) {
     let r = resize(from, native, corner, to, free);
     let size = from.size(native);
     if snap <= 0.0 || from.rotation != 0.0 || size.x <= 0.0 || size.y <= 0.0 {
-        return (r, Guides::default());
+        return (r, Vec::new());
     }
     let (a, dir) = anchor(corner, size);
     let fixed = Vec2::new(from.position.x + a.x, from.position.y + a.y);
     let now = r.size(native);
     let edge = Vec2::new(fixed.x + dir.0 * now.x, fixed.y + dir.1 * now.y);
-    // A line on the far side of the fixed corner, or less than a pixel from it, would turn the
-    // item over.
-    let ahead = |line: f32, at: f32, d: f32| (line - at) * d >= 1.0;
-    let sx = nearest(&[edge.x], lines.x.iter().copied().filter(|l| ahead(*l, fixed.x, dir.0)), snap);
-    let sy = nearest(&[edge.y], lines.y.iter().copied().filter(|l| ahead(*l, fixed.y, dir.1)), snap);
+    let sx = nearest(targets, Axis::Y, edge.x, snap);
+    let sy = nearest(targets, Axis::X, edge.y, snap);
     let corner_at = |w: f32, h: f32| Vec2::new(fixed.x + dir.0 * w, fixed.y + dir.1 * h);
+    let vertical = |at: f32| Guide { along: Axis::Y, at };
+    let horizontal = |at: f32| Guide { along: Axis::X, at };
     if free {
         if sx.is_none() && sy.is_none() {
-            return (r, Guides::default());
+            return (r, Vec::new());
         }
         let w = sx.map_or(now.x, |(_, l)| (l - fixed.x).abs());
         let h = sy.map_or(now.y, |(_, l)| (l - fixed.y).abs());
-        return (resize(from, native, corner, corner_at(w, h), true), Guides { x: sx.map(|s| s.1), y: sy.map(|s| s.1) });
+        let guides = sx.map(|s| vertical(s.1)).into_iter().chain(sy.map(|s| horizontal(s.1))).collect();
+        return (resize(from, native, corner, corner_at(w, h), true), guides);
     }
-    let (k, guides) = match (sx, sy) {
-        (Some((dx, l)), Some((dy, _))) if dx.abs() <= dy.abs() => ((l - fixed.x).abs() / size.x, Guides { x: Some(l), y: None }),
-        (_, Some((_, l))) => ((l - fixed.y).abs() / size.y, Guides { x: None, y: Some(l) }),
-        (Some((_, l)), None) => ((l - fixed.x).abs() / size.x, Guides { x: Some(l), y: None }),
-        (None, None) => return (r, Guides::default()),
+    let (k, guide) = match (sx, sy) {
+        (Some((dx, l)), Some((dy, _))) if dx.abs() <= dy.abs() => ((l - fixed.x).abs() / size.x, vertical(l)),
+        (_, Some((_, l))) => ((l - fixed.y).abs() / size.y, horizontal(l)),
+        (Some((_, l)), None) => ((l - fixed.x).abs() / size.x, vertical(l)),
+        (None, None) => return (r, Vec::new()),
     };
-    (resize(from, native, corner, corner_at(size.x * k, size.y * k), false), guides)
+    (resize(from, native, corner, corner_at(size.x * k, size.y * k), false), vec![guide])
 }
 
-/// `from` moved by `delta`, snapped to `lines` when an edge or the center line of an unrotated
-/// item comes within `snap` canvas pixels of one. Each axis snaps to its nearest line.
-pub fn moved(from: Transform, native: (u32, u32), delta: Vec2, lines: &SnapLines, snap: f32) -> (Transform, Guides) {
+/// `from` moved by `delta`, snapped to `targets` when an edge or the center line of an unrotated
+/// item comes within `snap` canvas pixels of one. Each axis snaps by the shortest way any of the
+/// item's lines has to a target, and every line of the item that then lies on a target is a guide.
+pub fn moved(from: Transform, native: (u32, u32), delta: Vec2, targets: &SnapTargets, snap: f32) -> (Transform, Vec<Guide>) {
     let mut t = from;
     t.position = Vec2::new(from.position.x + delta.x, from.position.y + delta.y);
-    let mut guides = Guides::default();
+    let mut guides = Vec::new();
     if snap > 0.0 && from.rotation == 0.0 {
         let (p, s) = (t.position, t.size(native));
-        if let Some((d, l)) = nearest(&[p.x, p.x + s.x * 0.5, p.x + s.x], lines.x.iter().copied(), snap) {
-            t.position.x += d;
-            guides.x = Some(l);
-        }
-        if let Some((d, l)) = nearest(&[p.y, p.y + s.y * 0.5, p.y + s.y], lines.y.iter().copied(), snap) {
-            t.position.y += d;
-            guides.y = Some(l);
-        }
+        let rect = kurbo::Rect::new(f64::from(p.x), f64::from(p.y), f64::from(p.x + s.x), f64::from(p.y + s.y));
+        let (d, lines) = targets.snap_rect(rect, f64::from(snap));
+        t.position = Vec2::new(p.x + d.x as f32, p.y + d.y as f32);
+        guides.extend(lines.iter().map(|l| Guide { along: l.along, at: l.position as f32 }));
     }
     (t.sanitized(), guides)
 }
 
 /// Draw the lines a drag snapped to across the canvas.
-fn draw_guides(ui: &Ui, view: View, guides: Guides) {
+fn draw_guides(ui: &Ui, view: View, guides: &[Guide]) {
     let painter = ui.painter_at(view.rect);
     let stroke = Stroke::new(1.0, GUIDE);
-    if let Some(x) = guides.x {
-        let sx = view.to_screen(Vec2::new(x, 0.0)).x;
-        painter.line_segment([pos2(sx, view.rect.top()), pos2(sx, view.rect.bottom())], stroke);
-    }
-    if let Some(y) = guides.y {
-        let sy = view.to_screen(Vec2::new(0.0, y)).y;
-        painter.line_segment([pos2(view.rect.left(), sy), pos2(view.rect.right(), sy)], stroke);
+    for g in guides {
+        if g.along == Axis::Y {
+            let sx = view.to_screen(Vec2::new(g.at, 0.0)).x;
+            painter.line_segment([pos2(sx, view.rect.top()), pos2(sx, view.rect.bottom())], stroke);
+        } else {
+            let sy = view.to_screen(Vec2::new(0.0, g.at)).y;
+            painter.line_segment([pos2(view.rect.left(), sy), pos2(view.rect.right(), sy)], stroke);
+        }
     }
 }
 
@@ -347,8 +366,8 @@ impl Editor {
                 it.transform.corners(n).iter().position(|k| view.to_screen(*k).distance(p) <= HANDLE * 1.5).map(|i| (it, n, i))
             });
             if let Some((it, n, i)) = corner {
-                let lines = SnapLines::new(canvas, items, it.id);
-                self.drag = Some(Drag { item: it.id, grip: Grip::Corner(i), start: c, from: it.transform, native: n, lines });
+                let targets = snap_targets(canvas, items, it.id, ahead_of_fixed(it.transform, n, i));
+                self.drag = Some(Drag { item: it.id, grip: Grip::Corner(i), from: it.transform, native: n, targets, last: None });
             } else if let Some(it) = hit(p) {
                 if Some(it.id) != selected {
                     ev.select = Some(Some(it.id));
@@ -356,25 +375,37 @@ impl Editor {
                 if !it.locked
                     && let Some(n) = it.native
                 {
-                    let lines = SnapLines::new(canvas, items, it.id);
-                    self.drag = Some(Drag { item: it.id, grip: Grip::Move, start: c, from: it.transform, native: n, lines });
+                    let targets = snap_targets(canvas, items, it.id, |_, _| true);
+                    // The gesture is given no keys: Shift and Alt keep this view's meanings (a
+                    // free resize, snapping off), so a move neither locks its direction nor copies.
+                    let gesture = MoveGesture::press(&ConstrainStyle::new(0.0, 0.0), point(c), Mods::NONE, Directions::Four);
+                    self.drag = Some(Drag { item: it.id, grip: Grip::Move(gesture), from: it.transform, native: n, targets, last: None });
                 }
             }
         }
-        if let Some(d) = &self.drag
+        if let Some(d) = &mut self.drag
             && let Some(p) = pointer
             && resp.dragged()
         {
             let c = view.to_canvas(p);
-            let (free, alt) = ui.input(|i| (i.modifiers.shift, i.modifiers.alt));
+            let modifiers = ui.input(|i| i.modifiers);
+            let platform = craft_keymap::egui::platform(ui.ctx());
             // Alt (Option on macOS) turns snapping off for as long as it is held.
-            let snap = if alt { 0.0 } else { SNAP_POINTS / view.scale };
-            let (t, guides) = match d.grip {
-                Grip::Move => moved(d.from, d.native, Vec2::new(c.x - d.start.x, c.y - d.start.y), &d.lines, snap),
-                Grip::Corner(i) => resized(d.from, d.native, i, c, free, &d.lines, snap),
+            let suspended = SnapSuspend::Alt.is_held(Mods::from_egui(&modifiers, platform), platform);
+            let snap = if suspended { 0.0 } else { SNAP_PX as f32 / view.scale };
+            let (t, guides) = match &mut d.grip {
+                Grip::Move(gesture) => {
+                    gesture.follow(point(c), Mods::NONE, f64::from(view.scale));
+                    let delta = gesture.value().delta;
+                    moved(d.from, d.native, Vec2::new(delta.x as f32, delta.y as f32), &d.targets, snap)
+                }
+                Grip::Corner(i) => resized(d.from, d.native, *i, c, modifiers.shift, &d.targets, snap),
             };
-            draw_guides(ui, view, guides);
-            ev.transform = Some((d.item, t));
+            draw_guides(ui, view, &guides);
+            if d.last != Some(t) {
+                d.last = Some(t);
+                ev.transform = Some((d.item, t));
+            }
         }
         if resp.drag_stopped() && self.drag.take().is_some() {
             ev.released = true;
@@ -401,7 +432,8 @@ impl Editor {
         if let Some(it) = sel
             && let Some(n) = it.native
         {
-            let t = ev.transform.filter(|(id, _)| *id == it.id).map_or(it.transform, |(_, t)| t);
+            let dragged = self.drag.as_ref().and_then(|d| Some((d.item, d.last?)));
+            let t = ev.transform.or(dragged).filter(|(id, _)| *id == it.id).map_or(it.transform, |(_, t)| t);
             let corners = t.corners(n);
             let color = if it.locked { Color32::from_rgb(200, 80, 80) } else { accent };
             outline(ui, view, corners, color, 2.0);
@@ -421,155 +453,203 @@ impl Editor {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use craft_behavior::geometry::SnapKinds;
 
     fn close(a: Vec2, b: Vec2) -> bool {
         (a.x - b.x).abs() < 0.01 && (a.y - b.y).abs() < 0.01
-    }
-
-    #[test]
-    fn fitting_keeps_the_canvas_shape() {
-        let v = View::fit(Rect::from_min_size(pos2(0.0, 0.0), vec2(800.0, 800.0)), (1920, 1080));
-        assert!((v.rect.width() / v.rect.height() - 16.0 / 9.0).abs() < 1e-3);
-        assert!(close(v.to_canvas(v.to_screen(Vec2::new(100.0, 50.0))), Vec2::new(100.0, 50.0)));
-    }
-
-    #[test]
-    fn dragging_the_bottom_right_corner_keeps_the_top_left() {
-        let t = Transform { position: Vec2::new(10.0, 20.0), ..Transform::default() };
-        let r = resize(t, (100, 50), 2, Vec2::new(210.0, 70.0), false);
-        assert!(close(r.position, Vec2::new(10.0, 20.0)), "{r:?}");
-        assert!(close(r.size((100, 50)), Vec2::new(200.0, 100.0)), "aspect kept: {r:?}");
-        let free = resize(t, (100, 50), 2, Vec2::new(210.0, 70.0), true);
-        assert!(close(free.size((100, 50)), Vec2::new(200.0, 50.0)), "{free:?}");
-    }
-
-    #[test]
-    fn dragging_the_top_left_corner_keeps_the_bottom_right() {
-        let t = Transform { position: Vec2::new(100.0, 100.0), ..Transform::default() };
-        let r = resize(t, (100, 100), 0, Vec2::new(50.0, 50.0), false);
-        assert!(close(r.position, Vec2::new(50.0, 50.0)), "{r:?}");
-        let c = r.corners((100, 100));
-        assert!(close(c[2], Vec2::new(200.0, 200.0)), "{c:?}");
-    }
-
-    #[test]
-    fn a_rotated_item_keeps_its_opposite_corner() {
-        let t = Transform { position: Vec2::new(100.0, 100.0), rotation: 90.0, ..Transform::default() };
-        let before = t.corners((100, 40));
-        let r = resize(t, (100, 40), 2, before[2], false);
-        let after = r.corners((100, 40));
-        assert!(close(after[0], before[0]), "{before:?} {after:?}");
-        let r = resize(t, (100, 40), 2, Vec2::new(before[2].x - 40.0, before[2].y + 100.0), false);
-        assert!(close(r.corners((100, 40))[0], before[0]), "the anchor stays when it grows");
-        assert!(r.scale.x > 1.5);
-    }
-
-    fn canvas_lines() -> SnapLines {
-        SnapLines::new((1920, 1080), &[], ItemId(0))
     }
 
     fn item(id: u64, transform: Transform, native: (u32, u32)) -> EditItem {
         EditItem { id: ItemId(id), transform, native: Some(native), locked: false, visible: true }
     }
 
-    #[test]
-    fn moving_snaps_to_edges_and_center() {
-        let t = Transform::default();
-        let (m, g) = moved(t, (100, 100), Vec2::new(3.0, 495.0), &canvas_lines(), 8.0);
-        assert!(close(m.position, Vec2::new(0.0, 490.0)), "left edge and vertical center: {m:?}");
-        assert_eq!(g, Guides { x: Some(0.0), y: Some(540.0) });
-        let (free, g) = moved(t, (100, 100), Vec2::new(3.0, 500.0), &canvas_lines(), 0.0);
-        assert!(close(free.position, Vec2::new(3.0, 500.0)));
-        assert_eq!(g, Guides::default());
+    fn at(x: f32, y: f32) -> Transform {
+        Transform { position: Vec2::new(x, y), ..Transform::default() }
+    }
+
+    /// The canvas's lines alone, with `keep`.
+    fn canvas(keep: impl Fn(Axis, f32) -> bool) -> SnapTargets {
+        snap_targets((1920, 1080), &[], ItemId(0), keep)
+    }
+
+    /// Vertical lines at `x` and horizontal lines at `y`, with `keep`.
+    fn lines(x: &[f32], y: &[f32], keep: impl Fn(Axis, f32) -> bool) -> SnapTargets {
+        let mut targets = SnapTargets::new();
+        for (along, all) in [(Axis::Y, x), (Axis::X, y)] {
+            for p in all.iter().copied().filter(|p| keep(along, *p)) {
+                targets.add(SnapTarget::new(along, f64::from(p), SnapKind::Guide));
+            }
+        }
+        targets
+    }
+
+    fn v(at: f32) -> Guide {
+        Guide { along: Axis::Y, at }
+    }
+
+    fn h(at: f32) -> Guide {
+        Guide { along: Axis::X, at }
     }
 
     #[test]
-    fn moving_snaps_to_the_nearest_line_including_other_items() {
-        let other = item(2, Transform { position: Vec2::new(400.0, 300.0), ..Transform::default() }, (200, 100));
-        let lines = SnapLines::new((1920, 1080), &[other], ItemId(1));
-        // The left edge 395 is 5 from the other item's left edge 400.
-        let (m, g) = moved(Transform::default(), (100, 100), Vec2::new(395.0, 20.0), &lines, 8.0);
-        assert!(close(m.position, Vec2::new(400.0, 20.0)), "{m:?}");
-        assert_eq!(g, Guides { x: Some(400.0), y: None });
-        // The top edge 296 is 4 from the other item's top 300.
-        let (m, g) = moved(Transform::default(), (100, 100), Vec2::new(1000.0, 296.0), &lines, 8.0);
-        assert!(close(m.position, Vec2::new(1000.0, 300.0)), "{m:?}");
-        assert_eq!(g, Guides { x: None, y: Some(300.0) });
+    fn a_corner_drag_keeps_the_opposite_corner() {
+        let turned = Transform { position: Vec2::new(100.0, 100.0), rotation: 90.0, ..Transform::default() };
+        let corner = turned.corners((100, 40))[2];
+        // (what, from, native, corner, to, free, size after)
+        let rows = [
+            ("bottom right, ratio kept", at(10.0, 20.0), (100, 50), 2, Vec2::new(210.0, 70.0), false, Vec2::new(200.0, 100.0)),
+            ("bottom right, Shift frees the ratio", at(10.0, 20.0), (100, 50), 2, Vec2::new(210.0, 70.0), true, Vec2::new(200.0, 50.0)),
+            ("top left", at(100.0, 100.0), (100, 100), 0, Vec2::new(50.0, 50.0), false, Vec2::new(150.0, 150.0)),
+            ("a quarter turn, the corner where it was", turned, (100, 40), 2, corner, false, Vec2::new(100.0, 40.0)),
+            ("a quarter turn, grown", turned, (100, 40), 2, Vec2::new(corner.x - 40.0, corner.y + 100.0), false, Vec2::new(200.0, 80.0)),
+            ("past the fixed corner: 1 x 1 at the least", at(0.0, 0.0), (100, 100), 2, Vec2::new(-50.0, -50.0), true, Vec2::new(1.0, 1.0)),
+        ];
+        for (what, from, native, corner, to, free, size) in rows {
+            let r = resize(from, native, corner, to, free);
+            assert!(close(r.size(native), size), "{what}: {r:?}");
+            let opposite = (corner + 2) % 4;
+            assert!(close(r.corners(native)[opposite], from.corners(native)[opposite]), "{what}: {r:?}");
+        }
     }
 
     #[test]
-    fn resizing_snaps_an_edge_and_keeps_the_aspect_ratio() {
-        let t = Transform::default();
-        // Unsnapped this is 1915 x 957.5; the right edge snaps to the canvas edge.
-        let (r, g) = resized(t, (100, 50), 2, Vec2::new(1915.0, 500.0), false, &canvas_lines(), 8.0);
-        assert!(close(r.size((100, 50)), Vec2::new(1920.0, 960.0)), "{r:?}");
-        assert!(close(r.position, Vec2::ZERO), "the opposite corner stays: {r:?}");
-        assert_eq!(g, Guides { x: Some(1920.0), y: None });
-        // Alt turns it off.
-        let (r, g) = resized(t, (100, 50), 2, Vec2::new(1915.0, 500.0), false, &canvas_lines(), 0.0);
-        assert!(close(r.size((100, 50)), Vec2::new(1915.0, 957.5)), "{r:?}");
-        assert_eq!(g, Guides::default());
+    fn a_move_snaps_each_axis_to_the_canvas_and_other_items() {
+        let other = item(2, at(400.0, 300.0), (200, 100));
+        let with_other = snap_targets((1920, 1080), &[other], ItemId(1), |_, _| true);
+        // (what, targets, delta, snap, position after, guides)
+        let rows = [
+            ("to the canvas edge and center line", canvas(|_, _| true), Vec2::new(3.0, 495.0), 8.0, Vec2::new(0.0, 490.0), vec![v(0.0), h(540.0)]),
+            ("Alt: no snapping", canvas(|_, _| true), Vec2::new(3.0, 500.0), 0.0, Vec2::new(3.0, 500.0), vec![]),
+            // The left edge 395 is 5 from the other item's left edge 400; the right edge then lies
+            // on its center line 500.
+            ("left edge to another item's", with_other.clone(), Vec2::new(395.0, 20.0), 8.0, Vec2::new(400.0, 20.0), vec![v(400.0), v(500.0)]),
+            // The top edge 296 is 4 from the other item's top 300; the bottom and the center then
+            // lie on its bottom 400 and center line 350.
+            ("top edge to another item's", with_other, Vec2::new(1000.0, 296.0), 8.0, Vec2::new(1000.0, 300.0), vec![h(300.0), h(400.0), h(350.0)]),
+        ];
+        for (what, targets, delta, snap, position, guides) in rows {
+            let (m, g) = moved(Transform::default(), (100, 100), delta, &targets, snap);
+            assert!(close(m.position, position), "{what}: {m:?}");
+            assert_eq!(g, guides, "{what}");
+        }
     }
 
     #[test]
-    fn resizing_snaps_the_edge_with_the_shorter_way_and_the_other_follows() {
-        let lines = SnapLines { x: vec![205.0], y: vec![203.0] };
-        let (r, g) = resized(Transform::default(), (100, 100), 2, Vec2::new(202.0, 202.0), false, &lines, 8.0);
-        assert!(close(r.size((100, 100)), Vec2::new(203.0, 203.0)), "{r:?}");
-        assert_eq!(g, Guides { x: None, y: Some(203.0) });
-    }
-
-    #[test]
-    fn a_free_resize_snaps_each_edge_on_its_own() {
-        let lines = SnapLines { x: vec![205.0], y: vec![103.0] };
-        let (r, g) = resized(Transform::default(), (100, 100), 2, Vec2::new(202.0, 100.0), true, &lines, 8.0);
-        assert!(close(r.size((100, 100)), Vec2::new(205.0, 103.0)), "{r:?}");
-        assert_eq!(g, Guides { x: Some(205.0), y: Some(103.0) });
-    }
-
-    #[test]
-    fn resizing_from_the_top_left_snaps_the_top_left_edges() {
-        let t = Transform { position: Vec2::new(100.0, 100.0), ..Transform::default() };
-        // Dragging corner 0 to (4, 50) would put the left edge at 4; it snaps to the canvas's 0,
-        // and the bottom right stays at (200, 200).
-        let (r, g) = resized(t, (100, 100), 0, Vec2::new(4.0, 50.0), false, &canvas_lines(), 8.0);
-        assert!(close(r.position, Vec2::ZERO), "{r:?}");
-        assert!(close(r.corners((100, 100))[2], Vec2::new(200.0, 200.0)), "{r:?}");
-        assert_eq!(g, Guides { x: Some(0.0), y: None });
-    }
-
-    #[test]
-    fn resizing_never_snaps_past_or_onto_the_fixed_corner() {
-        let t = Transform { position: Vec2::new(100.0, 100.0), ..Transform::default() };
-        // The smallest item is 1 x 1; a line half a pixel from the fixed corner is ignored.
-        let lines = SnapLines { x: vec![100.5, 99.0], y: vec![] };
-        let (r, g) = resized(t, (100, 100), 2, Vec2::new(100.2, 100.2), false, &lines, 8.0);
-        assert!(close(r.size((100, 100)), Vec2::new(1.0, 1.0)), "{r:?}");
-        assert_eq!(g, Guides::default());
+    fn a_corner_drag_snaps_the_edges_it_moves() {
+        let p = Vec2::new;
+        let (from, tl) = (Transform::default(), at(100.0, 100.0));
+        // (from, native, corner, lines (the canvas's when `None`), to, free, snap, size after, guides)
+        let rows = [
+            // 0: the right edge snaps to the canvas edge and the ratio is kept. Unsnapped this is
+            // 1915 x 957.5.
+            (from, (100, 50), 2, None, p(1915.0, 500.0), false, 8.0, p(1920.0, 960.0), vec![v(1920.0)]),
+            // 1: Alt, no snapping.
+            (from, (100, 50), 2, None, p(1915.0, 500.0), false, 0.0, p(1915.0, 957.5), vec![]),
+            // 2: the edge with the shorter way snaps and the other follows the ratio.
+            (from, (100, 100), 2, Some((vec![205.0], vec![203.0])), p(202.0, 202.0), false, 8.0, p(203.0, 203.0), vec![h(203.0)]),
+            // 3: Shift, each edge snaps on its own.
+            (from, (100, 100), 2, Some((vec![205.0], vec![103.0])), p(202.0, 100.0), true, 8.0, p(205.0, 103.0), vec![v(205.0), h(103.0)]),
+            // 4: corner 0 at (4, 50) would put the left edge at 4; it snaps to the canvas's 0.
+            (tl, (100, 100), 0, None, p(4.0, 50.0), false, 8.0, p(200.0, 200.0), vec![v(0.0)]),
+            // 5: a line half a pixel from the fixed corner, or behind it, is no target.
+            (tl, (100, 100), 2, Some((vec![100.5, 99.0], vec![])), p(100.2, 100.2), false, 8.0, p(1.0, 1.0), vec![]),
+        ];
+        for (row, (from, native, corner, given, to, free, snap, size, guides)) in rows.into_iter().enumerate() {
+            let keep = ahead_of_fixed(from, native, corner);
+            let targets = match given {
+                Some((x, y)) => lines(&x, &y, keep),
+                None => canvas(keep),
+            };
+            let (r, g) = resized(from, native, corner, to, free, &targets, snap);
+            assert!(close(r.size(native), size), "row {row}: {r:?}");
+            let opposite = (corner + 2) % 4;
+            assert!(close(r.corners(native)[opposite], from.corners(native)[opposite]), "row {row}: the opposite corner stays: {r:?}");
+            assert_eq!(g, guides, "row {row}");
+        }
     }
 
     #[test]
     fn a_rotated_item_resizes_without_snapping() {
         let t = Transform { position: Vec2::new(100.0, 100.0), rotation: 30.0, ..Transform::default() };
         let to = t.corners((100, 100))[2];
-        let (r, g) = resized(t, (100, 100), 2, to, false, &canvas_lines(), 1e6);
+        let (r, g) = resized(t, (100, 100), 2, to, false, &canvas(|_, _| true), 1e6);
         assert_eq!(r, resize(t, (100, 100), 2, to, false));
-        assert_eq!(g, Guides::default());
+        assert_eq!(g, vec![]);
     }
 
     #[test]
-    fn snap_lines_hold_the_canvas_and_the_other_shown_items() {
+    fn snap_targets_hold_the_canvas_and_the_other_shown_items() {
         let hidden = EditItem { visible: false, ..item(3, Transform::default(), (10, 10)) };
         let waiting = EditItem { native: None, ..item(4, Transform::default(), (10, 10)) };
         let tilted = item(5, Transform { rotation: 45.0, ..Transform::default() }, (10, 10));
         // Turned a quarter around its center (50, 20): it covers 30..70 by -30..70.
         let turned = item(6, Transform { position: Vec2::ZERO, rotation: 90.0, ..Transform::default() }, (100, 40));
         let dragged = item(1, Transform::default(), (10, 10));
-        let lines = SnapLines::new((1920, 1080), &[hidden, waiting, tilted, turned, dragged], ItemId(1));
-        assert_eq!(lines.x.len(), 6, "{lines:?}");
-        assert!(close(Vec2::new(lines.x[3], lines.y[3]), Vec2::new(30.0, -30.0)), "{lines:?}");
-        assert!(close(Vec2::new(lines.x[5], lines.y[5]), Vec2::new(70.0, 70.0)), "{lines:?}");
-        assert_eq!(&lines.x[..3], &[0.0, 960.0, 1920.0]);
-        assert_eq!(&lines.y[..3], &[0.0, 540.0, 1080.0]);
+        let targets = snap_targets((1920, 1080), &[hidden, waiting, tilted, turned, dragged], ItemId(1), |_, _| true);
+        // The canvas's lines, and the turned item's; the hidden, waiting, tilted and dragged items,
+        // all at 0..10, give no item lines at 5 and 10.
+        let rows = [
+            (Axis::Y, 0.0, SnapKind::Bounds, true),
+            (Axis::Y, 960.0, SnapKind::Center, true),
+            (Axis::Y, 1920.0, SnapKind::Bounds, true),
+            (Axis::X, 0.0, SnapKind::Bounds, true),
+            (Axis::X, 540.0, SnapKind::Center, true),
+            (Axis::X, 1080.0, SnapKind::Bounds, true),
+            (Axis::Y, 30.0, SnapKind::LayerEdge, true),
+            (Axis::Y, 50.0, SnapKind::LayerCenter, true),
+            (Axis::Y, 70.0, SnapKind::LayerEdge, true),
+            (Axis::X, -30.0, SnapKind::LayerEdge, true),
+            (Axis::X, 20.0, SnapKind::LayerCenter, true),
+            (Axis::X, 70.0, SnapKind::LayerEdge, true),
+            (Axis::Y, 5.0, SnapKind::LayerCenter, false),
+            (Axis::Y, 10.0, SnapKind::LayerEdge, false),
+            (Axis::X, 5.0, SnapKind::LayerCenter, false),
+            (Axis::X, 10.0, SnapKind::LayerEdge, false),
+        ];
+        for (along, position, kind, held) in rows {
+            let found = targets.nearest_of(along, position, 0.01, SnapKinds::only(kind));
+            assert_eq!(found.is_some(), held, "{along:?} {position} {kind:?}: {found:?}");
+        }
+        // `keep` drops lines: here every vertical line.
+        let horizontal = snap_targets((1920, 1080), &[turned], ItemId(1), |along, _| along == Axis::X);
+        assert_eq!(horizontal.nearest(Axis::Y, 0.0, 1e6), None);
+        assert!(horizontal.nearest(Axis::X, 21.0, 2.0).is_some_and(|t| t.position == 20.0));
+    }
+
+    #[test]
+    fn a_drag_in_the_view_snaps_and_alt_turns_snapping_off() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+        // A 16:9 canvas fitted in a square area keeps its shape: 400 / 1920 points per pixel.
+        let view = View::fit(Rect::from_min_size(pos2(0.0, 0.0), vec2(400.0, 400.0)), (1920, 1080));
+        assert!((view.rect.width() / view.rect.height() - 16.0 / 9.0).abs() < 1e-3);
+        assert!(close(view.to_canvas(view.to_screen(Vec2::new(100.0, 50.0))), Vec2::new(100.0, 50.0)));
+        let it = item(1, at(100.0, 100.0), (192, 108));
+        let seen: Rc<RefCell<Vec<EditEvent>>> = Rc::default();
+        let mut editor = Editor::default();
+        let mut f = {
+            let seen = Rc::clone(&seen);
+            craft_ui::testing::Fixture::new(move |ui| {
+                let (ev, _) = editor.show(ui, view, (1920, 1080), &[it], Some(ItemId(1)), false);
+                seen.borrow_mut().push(ev);
+            })
+        };
+        f.room(vec2(400.0, 400.0));
+        let center = view.to_screen(Vec2::new(196.0, 154.0));
+        // 90 pixels to the left puts the left edge at 10, inside the 8 points (38.4 pixels) the
+        // canvas edge snaps from.
+        let by = vec2(-90.0 * view.scale, 0.0);
+        let last = |seen: &RefCell<Vec<EditEvent>>| {
+            let events = seen.take();
+            assert!(events.iter().any(|e| e.released), "the drag ends");
+            events.into_iter().rev().find_map(|e| e.transform)
+        };
+        f.drag_at(center, by);
+        let (id, t) = last(&seen).unwrap_or_else(|| panic!("the drag moves the item"));
+        assert_eq!(id, ItemId(1));
+        assert!(close(t.position, Vec2::new(0.0, 100.0)), "it snaps to the canvas edge: {t:?}");
+        f.hold(egui::Modifiers::ALT).drag_at(center, by);
+        let (_, t) = last(&seen).unwrap_or_else(|| panic!("the drag moves the item"));
+        assert!(close(t.position, Vec2::new(10.0, 100.0)), "Alt turns snapping off: {t:?}");
     }
 }
