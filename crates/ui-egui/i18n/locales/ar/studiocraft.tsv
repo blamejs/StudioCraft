@@ -553,5 +553,11 @@ menu	Transform	التحويل
 	Add a destination to stream to {service}	إضافة وجهة للبث إلى {service}
 	Add a destination for a custom server	إضافة وجهة لخادم مخصص
 	A profile holds at most {max} destinations	يتسع الملف الشخصي لـ {max} وجهة على الأكثر
+	The profile's stream key	مفتاح البث في الملف الشخصي
+	A key for this session only	مفتاح لهذه الجلسة فقط
+	No separate key	بلا مفتاح منفصل
+	Typed in Settings › Stream and saved in the profile file as plain text. Anyone who can read that file can read the key.	يُكتب في الإعدادات › البث ويُحفظ في ملف الملف الشخصي كنص عادي. يستطيع أي شخص يمكنه قراءة ذلك الملف أن يقرأ المفتاح.
+	Held in memory until you forget it or quit. It is not written to the profile.	يُحتفظ به في الذاكرة حتى تنساه أو تخرج من التطبيق. لا يُكتب في الملف الشخصي.
+	Any key is the last part of the server address, which is saved in the profile file as plain text.	أي مفتاح هو الجزء الأخير من عنوان الخادم، الذي يُحفظ في ملف الملف الشخصي كنص عادي.
 	Fill Screen	ملء الشاشة
 @msg	The scenes could not be laid out for the new canvas: {error}	تعذّر ترتيب المشاهد للوحة الجديدة: {error}

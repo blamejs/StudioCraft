@@ -3,6 +3,7 @@
 
 pub mod banner;
 pub mod onair;
+pub mod option_card;
 pub mod segmented;
 pub mod tokens;
 

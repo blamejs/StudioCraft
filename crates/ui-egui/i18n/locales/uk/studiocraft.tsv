@@ -575,5 +575,11 @@ menu	Transform	Перетворення
 	Add a destination to stream to {service}	Додати призначення для трансляції на {service}
 	Add a destination for a custom server	Додати призначення для власного сервера
 	A profile holds at most {max} destinations	У профілі може бути не більше {max} призначень
+	The profile's stream key	Ключ трансляції з профілю
+	A key for this session only	Ключ лише на цей сеанс
+	No separate key	Без окремого ключа
+	Typed in Settings › Stream and saved in the profile file as plain text. Anyone who can read that file can read the key.	Вводиться в Налаштування › Трансляція і зберігається у файлі профілю відкритим текстом. Будь-хто, хто може прочитати цей файл, може прочитати ключ.
+	Held in memory until you forget it or quit. It is not written to the profile.	Зберігається в пам’яті, доки ви його не забудете або не вийдете з програми. До профілю не записується.
+	Any key is the last part of the server address, which is saved in the profile file as plain text.	Ключ, якщо він є, є останньою частиною адреси сервера, яка зберігається у файлі профілю відкритим текстом.
 	Fill Screen	Заповнити екран
 @msg	The scenes could not be laid out for the new canvas: {error}	Не вдалося розташувати сцени для нового полотна: {error}

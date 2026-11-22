@@ -6,6 +6,7 @@
 	a camera was not found	a camera was not found
 	A recording, stream or replay buffer is running. Exiting stops it; a recording is finished and saved first, and the replay buffer's unsaved video is lost.	A recording, stream or replay buffer is running. Exiting stops it; a recording is finished and saved first, and the replay buffer's unsaved video is lost.
 	A key for this session only	A key for this session only
+	Any key is the last part of the server address, which is saved in the profile file as plain text.	Any key is the last part of the server address, which is saved in the profile file as plain text.
 	About StudioCraft	About StudioCraft
 	About {app}	About {app}
 	Add	Add
@@ -166,6 +167,7 @@
 	HLS vectorscope	HLS vectorscope
 	Hold	Hold
 	Held for this session as {name} and never saved	Held for this session as {name} and never saved
+	Held in memory until you forget it or quit. It is not written to the profile.	Held in memory until you forget it or quit. It is not written to the profile.
 	Hold (ms)	Hold (ms)
 	Horizontal speed (px/s)	Horizontal speed (px/s)
 	Hotkeys	Hotkeys
@@ -235,12 +237,12 @@
 	No filters yet.	No filters yet.
 	No graphics device: the preview is off	No graphics device: the preview is off
 	No key is held for this session yet	No key is held for this session yet
+	No separate key	No separate key
 	No separate key; a key at the end of the server address is used	No separate key; a key at the end of the server address is used
 	No server set	No server set
 	No sources in this scene. Add one with +.	No sources in this scene. Add one with +.
 	Noise gate	Noise gate
 	None	None
-	None (a key at the end of the server address)	None (a key at the end of the server address)
 	Not in this stream; it is sent to from the next start	Not in this stream; it is sent to from the next start
 	Off	Off
 	not in this ffmpeg	not in this ffmpeg
@@ -512,6 +514,7 @@
 	Change Connection Checks After a Failure	Change Connection Checks After a Failure
 	Type	Type
 	Type shortcuts such as Ctrl+1 or Shift+F5; separate several with commas.	Type shortcuts such as Ctrl+1 or Shift+F5; separate several with commas.
+	Typed in Settings › Stream and saved in the profile file as plain text. Anyone who can read that file can read the key.	Typed in Settings › Stream and saved in the profile file as plain text. Anyone who can read that file can read the key.
 	ultrafast	ultrafast
 	Undo	Undo
 	Undock	Undock

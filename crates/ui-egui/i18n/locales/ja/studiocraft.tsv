@@ -565,5 +565,11 @@ menu	Transform	変形
 	Add a destination to stream to {service}	{service} に配信する配信先を追加
 	Add a destination for a custom server	カスタムサーバーの配信先を追加
 	A profile holds at most {max} destinations	1 つのプロファイルに登録できる配信先は最大 {max} 件です
+	The profile's stream key	プロファイルのストリームキー
+	A key for this session only	このセッション限りのキー
+	No separate key	個別のキーなし
+	Typed in Settings › Stream and saved in the profile file as plain text. Anyone who can read that file can read the key.	設定 › 配信 で入力し、プロファイルファイルにプレーンテキストで保存されます。そのファイルを読める人は誰でもキーを読めます。
+	Held in memory until you forget it or quit. It is not written to the profile.	消去するか終了するまでメモリに保持されます。プロファイルには書き込まれません。
+	Any key is the last part of the server address, which is saved in the profile file as plain text.	キーがある場合はサーバーアドレスの最後の部分です。このアドレスはプロファイルファイルにプレーンテキストで保存されます。
 	Fill Screen	画面を埋める
 @msg	The scenes could not be laid out for the new canvas: {error}	新しいキャンバスにシーンを配置できませんでした: {error}

@@ -566,5 +566,11 @@ menu	Transform	Transformace
 	Add a destination to stream to {service}	Přidat cíl pro vysílání na {service}
 	Add a destination for a custom server	Přidat cíl pro vlastní server
 	A profile holds at most {max} destinations	Profil pojme nejvýše {max} cílů
+	The profile's stream key	Klíč vysílání z profilu
+	A key for this session only	Klíč jen pro tuto relaci
+	No separate key	Bez samostatného klíče
+	Typed in Settings › Stream and saved in the profile file as plain text. Anyone who can read that file can read the key.	Zadává se v Nastavení › Vysílání a ukládá se do souboru profilu jako prostý text. Kdo může číst tento soubor, může přečíst i klíč.
+	Held in memory until you forget it or quit. It is not written to the profile.	Uchovává se v paměti, dokud ho nezapomenete nebo neukončíte aplikaci. Do profilu se nezapisuje.
+	Any key is the last part of the server address, which is saved in the profile file as plain text.	Případný klíč je poslední částí adresy serveru, která se ukládá do souboru profilu jako prostý text.
 	Fill Screen	Vyplnit obrazovku
 @msg	The scenes could not be laid out for the new canvas: {error}	Scény nešlo rozmístit pro nové plátno: {error}

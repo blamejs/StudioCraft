@@ -30,9 +30,10 @@ use studiocraft_studio::OutputKind;
 use studiocraft_studio::diagnose::{Check, CheckState, Diagnosis, Evidence, Outcome, Verdict};
 
 use crate::i18n::Msg;
+use crate::kit::option_card::{OptionCard, OptionCardStyle, OptionCards};
 use crate::logos::{self, Logos, ROW_TILE, TileStyle};
 use crate::settings::key_source;
-use crate::{Act, StudioApp};
+use crate::{Act, StudioApp, theme};
 
 /// Longest destination name, in characters.
 pub const MAX_NAME: usize = 128;
@@ -93,9 +94,20 @@ impl KeyChoice {
     /// The choice's English label.
     pub(crate) fn label(self) -> &'static str {
         match self {
-            KeyChoice::None => "None (a key at the end of the server address)",
+            KeyChoice::None => "No separate key",
             KeyChoice::Profile => "The profile's stream key",
             KeyChoice::Held => "A key for this session only",
+        }
+    }
+
+    /// Where the choice's key is kept, in English, as its card says it.
+    pub(crate) fn description(self) -> &'static str {
+        match self {
+            KeyChoice::None => "Any key is the last part of the server address, which is saved in the profile file as plain text.",
+            KeyChoice::Profile => {
+                "Typed in Settings › Stream and saved in the profile file as plain text. Anyone who can read that file can read the key."
+            }
+            KeyChoice::Held => "Held in memory until you forget it or quit. It is not written to the profile.",
         }
     }
 
@@ -641,6 +653,21 @@ fn service_choices(current: &str) -> Vec<Entry<String>> {
     choices
 }
 
+/// The Stream key choice of the open details `e`: a card for each key source, in
+/// [`KeyChoice::ALL`] order, that says where its key is kept. A click or an arrow key on a card
+/// chooses its source.
+fn key_cards(ui: &mut Ui, e: &mut Edit) {
+    let _ = Text::new(tl!("Stream key")).role(TypeRole::BodyStrong).show(ui);
+    let cards: Vec<OptionCard> = KeyChoice::ALL.iter().map(|c| OptionCard { title: tl!(c.label()), description: tl!(c.description()) }).collect();
+    let style =
+        theme::with_root(ui.ctx(), |cx| OptionCardStyle::new(cx, egui::FontId::new(cx.tokens.typography.body_strong.size, crate::fonts::semibold())));
+    let selected = KeyChoice::ALL.iter().position(|c| *c == e.key).unwrap_or(KeyChoice::ALL.len());
+    let id = ui.make_persistent_id("key-cards");
+    if let Some(&choice) = OptionCards::new(id, &cards, selected, &style).show(ui).changed.and_then(|i| KeyChoice::ALL.get(i)) {
+        e.key = choice;
+    }
+}
+
 /// The open details of the destination named `title`; whether they closed.
 fn details(ui: &mut Ui, e: &mut Edit, title: &str, view: &View, logos: &mut Logos, acts: &mut Vec<Act>) -> bool {
     let mut close = false;
@@ -694,11 +721,10 @@ fn details(ui: &mut Ui, e: &mut Edit, title: &str, view: &View, logos: &mut Logo
                     }
                 })
             });
-            let _ = Field::new(tl!("Stream key")).show(ui, |ui, _| {
-                let choices: Vec<_> = KeyChoice::ALL.iter().map(|&c| Entry::new(c, tl!(c.label()))).collect();
-                Select::new(tl!("Stream key"), Bind::bound(&mut e.key), &choices).id_salt("key-choice").show(ui)
-            });
-            if e.key == KeyChoice::Held {
+        });
+        key_cards(ui, e);
+        if e.key == KeyChoice::Held {
+            let _ = FieldGroup::new(title.to_string()).id_salt("held-fields").show(ui, |ui, _| {
                 let _ = Field::new(tl!("Session key name")).show(ui, |ui, _| {
                     TextField::new(tl!("Session key name"), Bind::bound(&mut e.held_name)).limit(MAX_DESTINATION_ID).id_salt("held-name").show(ui)
                 });
@@ -722,8 +748,8 @@ fn details(ui: &mut Ui, e: &mut Edit, title: &str, view: &View, logos: &mut Logo
                         }
                     })
                 });
-            }
-        });
+            });
+        }
         let _ = Row::new().show(ui, |ui, _| {
             // The details close when the change is made, so a refused one keeps what was typed.
             if Button::new(tl!("Save")).id_salt("save").show(ui).clicked() {

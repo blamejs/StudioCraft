@@ -565,5 +565,11 @@ menu	Transform	변형
 	Add a destination to stream to {service}	{service}에 방송할 대상 추가
 	Add a destination for a custom server	사용자 지정 서버 대상 추가
 	A profile holds at most {max} destinations	프로필에는 대상을 최대 {max}개까지 둘 수 있습니다
+	The profile's stream key	프로필의 스트림 키
+	A key for this session only	이번 세션에만 쓰는 키
+	No separate key	별도 키 없음
+	Typed in Settings › Stream and saved in the profile file as plain text. Anyone who can read that file can read the key.	설정 › 방송에서 입력하며 프로필 파일에 일반 텍스트로 저장됩니다. 그 파일을 읽을 수 있는 사람은 누구나 키를 읽을 수 있습니다.
+	Held in memory until you forget it or quit. It is not written to the profile.	지우거나 앱을 종료할 때까지 메모리에 보관됩니다. 프로필에는 기록되지 않습니다.
+	Any key is the last part of the server address, which is saved in the profile file as plain text.	키가 있다면 서버 주소의 마지막 부분이며, 서버 주소는 프로필 파일에 일반 텍스트로 저장됩니다.
 	Fill Screen	화면 채우기
 @msg	The scenes could not be laid out for the new canvas: {error}	새 캔버스에 맞게 장면을 배치할 수 없습니다: {error}

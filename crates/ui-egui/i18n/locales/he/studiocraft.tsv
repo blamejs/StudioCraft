@@ -546,5 +546,11 @@ menu	Transform	שינוי צורה
 	Add a destination to stream to {service}	הוספת יעד לשידור אל {service}
 	Add a destination for a custom server	הוספת יעד לשרת מותאם אישית
 	A profile holds at most {max} destinations	פרופיל מכיל לכל היותר {max} יעדים
+	The profile's stream key	מפתח השידור של הפרופיל
+	A key for this session only	מפתח להפעלה הזו בלבד
+	No separate key	ללא מפתח נפרד
+	Typed in Settings › Stream and saved in the profile file as plain text. Anyone who can read that file can read the key.	מוקלד בהגדרות › שידור ונשמר בקובץ הפרופיל כטקסט רגיל. כל מי שיכול לקרוא את הקובץ יכול לקרוא את המפתח.
+	Held in memory until you forget it or quit. It is not written to the profile.	נשמר בזיכרון עד שתשכח אותו או תצא מהיישום. הוא לא נכתב לפרופיל.
+	Any key is the last part of the server address, which is saved in the profile file as plain text.	מפתח, אם יש, הוא החלק האחרון של כתובת השרת, שנשמרת בקובץ הפרופיל כטקסט רגיל.
 	Fill Screen	מילוי המסך
 @msg	The scenes could not be laid out for the new canvas: {error}	לא ניתן היה לסדר את הסצנות למשטח החדש: {error}

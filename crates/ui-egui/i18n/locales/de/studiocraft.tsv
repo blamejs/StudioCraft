@@ -549,5 +549,11 @@ menu	Transform	Transformieren
 	Add a destination to stream to {service}	Ziel zum Streamen an {service} hinzufügen
 	Add a destination for a custom server	Ziel für einen eigenen Server hinzufügen
 	A profile holds at most {max} destinations	Ein Profil enthält höchstens {max} Ziele
+	The profile's stream key	Der Stream-Schlüssel des Profils
+	A key for this session only	Ein Schlüssel nur für diese Sitzung
+	No separate key	Kein eigener Schlüssel
+	Typed in Settings › Stream and saved in the profile file as plain text. Anyone who can read that file can read the key.	Wird in Einstellungen › Stream eingegeben und als Klartext in der Profildatei gespeichert. Wer diese Datei lesen kann, kann auch den Schlüssel lesen.
+	Held in memory until you forget it or quit. It is not written to the profile.	Bleibt im Arbeitsspeicher, bis Sie ihn vergessen lassen oder das Programm beenden. Er wird nicht ins Profil geschrieben.
+	Any key is the last part of the server address, which is saved in the profile file as plain text.	Ein Schlüssel ist gegebenenfalls der letzte Teil der Serveradresse, die als Klartext in der Profildatei gespeichert wird.
 	Fill Screen	Bildschirm füllen
 @msg	The scenes could not be laid out for the new canvas: {error}	Die Szenen konnten nicht für die neue Leinwand angeordnet werden: {error}
