@@ -848,7 +848,10 @@ fn a_stop_during_a_hung_lookup_returns_at_once() {
     let d = until(&out, "a", |d| d.status == DestinationStatus::Stopped);
     assert_eq!(d.status, DestinationStatus::Stopped);
     let dest = out.hub.find("a").unwrap();
+    // The thread sets the status and ends with its slot locked.
+    let slot = lock(&dest.thread);
     assert!(!dest.running(), "the destination's thread ended");
+    drop(slot);
     assert_eq!(dest.lookups.load(Ordering::SeqCst), 1, "the lookup is still outstanding");
     // Once the resolver answers, its thread ends and the answer is not used.
     drop(release);
@@ -856,6 +859,23 @@ fn a_stop_during_a_hung_lookup_returns_at_once() {
     until_no_lookups(&out, "a");
     assert_eq!(until(&out, "a", |_| true).status, DestinationStatus::Stopped);
     out.stop().unwrap();
+}
+
+#[test]
+fn an_ip_address_is_not_looked_up() {
+    let (url, seen) = server(vec![Plan::Accept]);
+    let (resolve, asked) = scripted(Vec::new());
+    let job = job(RateControl::Bitrate { kbps: 400, keyframe_s: 1 });
+    let seams = Seams { clock: TestClock::new(), resolve };
+    let mut out = Streaming::start_with(&job, vec![target("a", &url, "k")], quick(), seams).unwrap();
+    let feed = Feed::new(&out);
+    media(&seen, 1);
+    until(&out, "a", |d| d.status == DestinationStatus::Live);
+    assert!(asked.try_recv().is_err(), "the resolver was not asked");
+    assert_eq!(out.hub.find("a").unwrap().lookups.load(Ordering::SeqCst), 0);
+    drop(feed);
+    out.stop().unwrap();
+    until_closed(&seen);
 }
 
 #[test]

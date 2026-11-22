@@ -632,9 +632,13 @@ fn connect(hub: &Hub, d: &Arc<Dest>) -> Result<Publisher, Missed> {
 
 /// Looks `host` up on a thread of its own and waits for the answer until the lookup time runs
 /// out, the destination is stopped or the stream ends. The thread ends when the resolver returns,
-/// whether or not the try still waits; an answer nobody waits for is dropped.
+/// whether or not the try still waits; an answer nobody waits for is dropped. An IP address is
+/// used as it is, with no lookup, so the lookup limits do not apply to it.
 fn lookup(hub: &Hub, d: &Arc<Dest>, host: &str, port: u16) -> Result<Vec<std::net::SocketAddr>, Missed> {
     use std::sync::mpsc::{TryRecvError, sync_channel};
+    if let Ok(ip) = host.parse::<std::net::IpAddr>() {
+        return Ok(vec![std::net::SocketAddr::new(ip, port)]);
+    }
     // Only this destination's thread adds lookups, so the count cannot pass the limit between the
     // check and the add.
     if d.lookups.load(Ordering::SeqCst) >= MAX_LOOKUPS {

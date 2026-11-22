@@ -436,7 +436,8 @@ waits at most 10 s for the lookup and then counts as a failed try, and stopping 
 the stream does not wait for a lookup. The system may keep working on a lookup it never answers;
 each destination has at most two lookups outstanding and StudioCraft at most 32, and a try that
 finds either limit reached starts no lookup and counts as failed. An answer that arrives after its
-try gave up is not used.
+try gave up is not used. A server given as an IP address is not looked up, so these limits do not
+apply to it.
 A key written at the end of the server address, as in `rtmp://host/app/key`, is used as the stream
 key when the key field is empty, and the stream's status leaves it out of the address it shows.
 
