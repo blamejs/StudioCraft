@@ -115,7 +115,7 @@ fn collection_v4_to_v5(data: &mut Value) -> Result<(), String> {
 /// Profiles.
 pub const PROFILE: FileFormat = FileFormat {
     name: "studiocraft.profile",
-    version: 12,
+    version: 13,
     migrations: &[
         profile_v1_to_v2,
         profile_v2_to_v3,
@@ -128,6 +128,7 @@ pub const PROFILE: FileFormat = FileFormat {
         profile_v9_to_v10,
         profile_v10_to_v11,
         profile_v11_to_v12,
+        profile_v12_to_v13,
     ],
 };
 
@@ -284,6 +285,17 @@ fn profile_v11_to_v12(data: &mut Value) -> Result<(), String> {
     Ok(())
 }
 
+/// Profile version 12 to 13: whether the connection check that runs by itself after a failure
+/// also contacts the service's other hosts (`stream.check_service`), off.
+fn profile_v12_to_v13(data: &mut Value) -> Result<(), String> {
+    let data = data.as_object_mut().ok_or("the profile is not an object")?;
+    let stream = data.entry("stream").or_insert_with(|| json!({}));
+    if let Value::Object(s) = stream {
+        s.entry("check_service").or_insert(Value::Bool(false));
+    }
+    Ok(())
+}
+
 /// Largest file accepted, in bytes.
 pub const MAX_FILE_BYTES: usize = 64 << 20;
 
@@ -406,6 +418,7 @@ mod tests {
         (10, include_str!("../fixtures/profile-v10.json")),
         (11, include_str!("../fixtures/profile-v11.json")),
         (12, include_str!("../fixtures/profile-v12.json")),
+        (13, include_str!("../fixtures/profile-v13.json")),
     ];
 
     fn covers_every_version(format: &FileFormat, fixtures: &[(u32, &str)]) {
@@ -744,6 +757,22 @@ mod tests {
             wrong.stream.reconnect = r;
             assert!(matches!(write_profile(&wrong), Err(FormatError::Data(m)) if m.contains("reconnect")), "{r:?} is not written");
         }
+    }
+
+    #[test]
+    fn a_v12_profile_does_not_check_the_services_other_hosts() {
+        for (v, text) in &PROFILE_FIXTURES[..12] {
+            assert!(!read_profile(text).unwrap().stream.check_service, "version {v} leaves the service's other hosts out");
+        }
+        assert!(!crate::StreamSettings::default().check_service);
+        let (_, v13) = PROFILE_FIXTURES[12];
+        let p = read_profile(v13).unwrap();
+        assert!(p.stream.check_service);
+        assert_eq!(p.stream.reconnect.max_tries, 4, "the rest of the stream settings is kept");
+        assert_eq!(read_profile(&write_profile(&p).unwrap()).unwrap(), p);
+        let text = v13.replace("\"check_service\": true", "\"check_service\": 1");
+        assert_ne!(text, v13);
+        assert!(read_profile(&text).is_err(), "a value that is not true or false refuses the file");
     }
 
     #[test]

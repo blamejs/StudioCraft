@@ -9,6 +9,8 @@
 //!   chunk size, ping requests (answered) and status messages. [`Publisher::send`] calls it every
 //!   250 ms. The client acknowledges the server's bytes after every window the server sets.
 //! - [`Publisher::close`] sends `deleteStream` and closes the connection.
+//! - [`reach`] opens a TCP connection to one address, and for a [`Reach`] with TLS completes the
+//!   TLS handshake, then closes it without sending any RTMP bytes, to check that a server answers.
 //! - [`ChunkWriter`] and [`ChunkReader`] write and read the chunk stream on their own, for tests
 //!   and servers.
 //!
@@ -70,7 +72,7 @@ pub use publisher::TlsRoots;
 #[cfg(not(target_arch = "wasm32"))]
 pub use publisher::{
     Config, DEFAULT_CONNECT_TIMEOUT, DEFAULT_FLASH_VER, DEFAULT_SETUP_TIMEOUT, DEFAULT_STALL_TIMEOUT, Kind, MAX_ADDRESSES, MAX_SERVER_MESSAGE,
-    MAX_TIMEOUT, POLL_INTERVAL, POLL_READ_LIMIT, Publisher, Stats,
+    MAX_TIMEOUT, POLL_INTERVAL, POLL_READ_LIMIT, Publisher, Reach, Stats, reach,
 };
 #[cfg(all(feature = "rtmps", not(target_arch = "wasm32")))]
 pub use rustls::pki_types::CertificateDer;

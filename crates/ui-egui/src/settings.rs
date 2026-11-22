@@ -542,6 +542,26 @@ impl SettingsWindow {
         });
         ui.add_space(12.0);
         Self::reconnect(ui, &mut s.reconnect);
+        ui.add_space(12.0);
+        Self::connection_check(ui, &mut s.check_service);
+    }
+
+    /// The Connection check section of the Stream tab: whether the check that runs after a
+    /// destination fails also contacts the service's other hosts.
+    fn connection_check(ui: &mut Ui, check_service: &mut bool) {
+        ui.label(RichText::new(tl!("Connection check")).strong());
+        ui.add_space(4.0);
+        ui.checkbox(check_service, tl!("Also check the service's server list and status page after a failure"));
+        ui.label(
+            RichText::new(tl!(
+                "When a destination fails three tries in a row or gives up, StudioCraft checks its server's name, route and port once. \
+                 With this on, that check also reads the service's list of ingest servers and status summary and connects to two of its \
+                 other ingest servers, so those hosts see this computer's address. Check Connection in the Streaming window always \
+                 contacts them."
+            ))
+            .small()
+            .weak(),
+        );
     }
 
     /// The Automatic reconnect section of the Stream tab. The waits and the tries are disabled

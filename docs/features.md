@@ -489,6 +489,40 @@ reports only that the lookup failed. Start and
 Stop send to one destination or stop sending to it while the others go on. A destination added
 after the stream started is sent to from the next start, and so are changes to a server or a key.
 
+Check Connection, under each destination of the Streaming window, checks what this computer's
+network can reach on the way to the destination's server and shows one verdict, such as "The DNS
+server did not answer for {host}" or "{host} answers on port 443 but not on port {port}". What the
+check found opens the list of every step with its outcome. The check runs its steps at the same
+time and reports after at most 20 s; a step still running then is listed as unfinished. Each
+connection, secure handshake and fetch may take 5 s, and the name lookup 10 s. The steps are:
+
+- The check asks the system whether it has a route to any address and to each of the server's
+  addresses. This sends nothing.
+- It lists which of the variables `HTTPS_PROXY`, `https_proxy`, `ALL_PROXY` and `all_proxy` are set,
+  by name only. The check itself uses no proxy.
+- It looks the server's name up again.
+- It opens a TCP connection to up to four of the server's addresses on the destination's port and,
+  for `rtmps://`, completes the secure handshake, which sends the server's host name. It then closes
+  the connection. It sends no stream key, no RTMP data and no part of the address after the host.
+- When the port is not 443, it does the same with a secure handshake on port 443 of those addresses.
+- For a destination set up for a streaming service that publishes a list of its ingest servers and
+  a status summary, it fetches both over HTTPS, following no redirect, looks two of the service's
+  other ingest servers up and makes a secure connection to each on port 443. It reads at most
+  256 KiB of the list and 64 KiB of the summary.
+
+A destination is also checked by itself when its third try in a row fails and when it gives up,
+once until it is live again or started again; the row then says it was checked by itself after the
+destination failed. A server address or a stream key that is not valid is not checked. A check
+that runs by itself contacts only the destination's server unless Settings › Stream › Connection
+check › "Also check the service's server list and status page after a failure" is on; it is off by
+default. Check Connection always includes the service's steps. Stopping the stream cancels the
+checks of destinations that had not failed, and a check of a destination that failed goes on.
+At most four checks run at once. A check that runs by itself while four are running waits, and
+starts when one of them has finished; it is dropped when its destination goes live or is started
+again first. Each destination keeps its latest check for the session. A check is no longer shown
+once the scheme, host or port of the destination's server changes, or its service changes; a
+change to the rest of the address keeps it.
+
 Add Destination adds one, up to 16, for one of seven streaming services or for a custom server.
 The first destination uses the profile's stream key; the others have no key of their own until one
 is chosen, so the profile's key is not sent to another service. A service that documents one ingest

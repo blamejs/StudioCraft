@@ -616,7 +616,8 @@ or add an undo step. A parameter is an error.
 `view.streaming` opens the Streaming window, or closes it when it is open, and returns `{"on"}`.
 
 `stream.destinations` takes no parameters and returns `{"destinations", "running", "max",
-"reconnect"}`, and `running_reconnect` while a stream of this profile runs. `reconnect` holds the
+"reconnect", "check_service"}`, and `running_reconnect` while a stream of this profile runs.
+`check_service` is the profile's setting of `stream.check_service_set`. `reconnect` holds the
 profile's automatic reconnect settings and `running_reconnect` the ones the running stream started
 with, each `{"enabled", "first_delay_s", "max_delay_s", "max_tries"}` (see `stream.reconnect_set`).
 `max` is 16. Each destination is `{"id", "name", "enabled", "service", "server", "key", "status"}`,
@@ -711,6 +712,66 @@ returns `{"changed", "reconnect"}`, and a call that changes nothing does not sav
 range or of the wrong type is an error and changes nothing. The settings apply to the next stream;
 a running stream keeps the ones it started with. A profile file whose settings are out of range is
 refused when it is read.
+
+`stream.diagnose` takes `{"id"}` and starts a connection check of that destination, as Check
+Connection in the Streaming window does ([Streaming](features.md#streaming) lists what it
+contacts). It returns `{"id", "started"}` at once; the result appears in `stream.destinations`.
+These are errors: a missing or unknown `id`, a destination with no server, a server address that is
+not valid, a check of the destination at the same server and service that is already running, and
+four checks running. A running check of the destination at another server or service is canceled.
+
+`stream.check_service_set` takes `{"enabled"}` and sets whether the check that runs by itself after
+a destination fails also fetches the service's list of ingest servers and status summary and
+connects to two of its other ingest servers. It returns `{"changed", "check_service"}`, and a call
+that changes nothing does not save the profile. It is off by default. A missing `enabled`, or one
+that is not a boolean, is an error.
+
+A destination that has been checked at its current server and service in this session has
+`diagnosis`. While the check runs it is
+`{"state": "running", "automatic"}`, and when it has finished it is `{"state": "done", "automatic",
+"verdict", "message", "template", "args", "evidence", "at_ms"}`. `automatic` is `true` for a check
+that ran by itself after a failure. `message` is the verdict in English, `template` the same text
+with `{name}` placeholders and `args` their values, and `at_ms` the time the check reported, in
+milliseconds since 1970. `evidence` lists every step, at most 22, each `{"check", "target", "outcome",
+"detail"}`, where `target` is the host, address or variable the step looked at and `detail` what the
+system or the server reported, in English.
+
+| `verdict` | Meaning |
+|---|---|
+| `no_network` | The system has no default route, and no route to any of the server's addresses that were checked. A failed lookup checks none. |
+| `name_not_found` | Windows only: the DNS server answered that the server's name does not exist. |
+| `dns_no_answer` | The lookup gave no answer within 10 s. |
+| `lookup_failed` | The server's name could not be looked up for another reason. |
+| `rejected` | The server takes connections, and the last failure was a refusal of `connect` or `publish`. |
+| `certificate_not_accepted` | The secure handshake refused the `rtmps://` server's certificate. |
+| `service_reports_problem` | The service's status summary reports a problem. |
+| `ingest_not_answering_other_does` | No address of the server connected or refused the connection, and another ingest server of the service connected. |
+| `port_not_answering_443_does` | The server's port timed out, and port 443 of the same addresses connected. |
+| `refused` | An address of the server refused the TCP connection. |
+| `service_not_answering` | The server's addresses and the service's other ingest servers that were tried all timed out or had no route. |
+| `server_not_answering` | The server's addresses timed out or had no route. |
+| `connects_then_fails` | A connection succeeds, and the last failure came after it. |
+| `reachable` | A connection succeeds, and the destination had no failure or its last failure came before a connection. |
+| `unknown` | No other verdict fits. |
+
+The first verdict in the table that fits is the one given.
+
+| `check` | Step |
+|---|---|
+| `default_route` | The system's route to any address. |
+| `route` | The system's route to one of the server's addresses. |
+| `proxy` | A proxy variable that is set in the environment. |
+| `lookup` | The lookup of the server's name; `detail` lists up to 8 of the addresses found and how many more there are. |
+| `connect` | A TCP connection to the server's port, for `rtmp://`. |
+| `secure_connect` | A TCP connection and secure handshake to the server's port, for `rtmps://`. |
+| `connect_443` | A TCP connection and secure handshake to port 443 of the server. |
+| `ingest_list` | The service's list of ingest servers; `detail` names the two other servers chosen. |
+| `other_ingest` | A lookup, TCP connection and secure handshake to another ingest server of the service. |
+| `status_page` | The service's status summary; `detail` holds the status it reports. |
+
+`outcome` is `ok`, `set` (a proxy variable is set), `problem` (the status summary reports a
+problem), `unknown` (the system could not say), `unfinished` (the step had not finished when the
+check reported), or the `cause` id of a failure from the table above.
 
 ### `video.displays` and `video.canvas_from_display`
 

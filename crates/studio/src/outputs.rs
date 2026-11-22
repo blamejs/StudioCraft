@@ -22,6 +22,7 @@ use studiocraft_media::video::{PixelFormat, PooledFrame};
 use studiocraft_model::{KeyRef, Profile, RecordingFormat, RecordingQuality, Settings};
 use studiocraft_outputs::encoders::HARDWARE;
 use studiocraft_outputs::replay::MAX_SAVES;
+use studiocraft_outputs::stream::diagnose;
 use studiocraft_platform::ffmpeg;
 use studiocraft_plugin::{
     Availability, DestinationCounts, DestinationState, DestinationStatus, Encoder, EncoderEnv, EncoderKind, OutputInstance, OutputJob, OutputStatus,
@@ -271,6 +272,9 @@ pub(crate) struct Outputs {
     stream_names: HashMap<String, String>,
     /// The name of the profile the last stream started with; `None` once that profile is removed.
     stream_profile: Option<String>,
+    /// By profile name, the keys its streams' automatic connection checks are kept under
+    /// ([`stream_check_key`]), the last [`MAX_CHECK_KEYS`] of each.
+    stream_check_keys: HashMap<String, Vec<String>>,
     /// The reconnect settings the last stream started with.
     stream_reconnect: Option<studiocraft_model::ReconnectSettings>,
     /// The last [`MAX_UNFINISHED`] outputs, by kind and target, that stopped without finishing
@@ -797,6 +801,16 @@ fn plan(p: &Profile, kind: OutputKind) -> Plan {
 /// The video encoder the replay buffer runs.
 const REPLAY_ENCODER: &str = "h264";
 
+/// How many streams of a profile have their automatic connection checks shown.
+pub(crate) const MAX_CHECK_KEYS: usize = 16;
+
+/// A key, unique to each stream started in this process, that its automatic connection checks are
+/// kept under. A profile name can't contain `:`, so no profile's checks share it.
+fn stream_check_key() -> String {
+    static STREAMS: AtomicU64 = AtomicU64::new(0);
+    format!("stream:{}", STREAMS.fetch_add(1, Ordering::Relaxed))
+}
+
 /// The stream output's settings for profile `p`: each destination with its server and its key,
 /// the profile's key or one of `held`, the keys held for this session by name.
 fn stream_settings(p: &Profile, held: &HashMap<String, String>) -> Result<Settings, StudioError> {
@@ -817,13 +831,17 @@ fn stream_settings(p: &Profile, held: &HashMap<String, String>) -> Result<Settin
                 None => return Err(StudioError::Output(format!("the stream key `{name}` for destination `{}` is not set for this session", d.id))),
             },
         };
-        list.push(serde_json::json!({ "id": d.id, "server": d.server.trim(), "key": key, "enabled": d.enabled }));
+        list.push(serde_json::json!({ "id": d.id, "server": d.server.trim(), "key": key, "enabled": d.enabled, "service": d.service }));
     }
     let r = &p.stream.reconnect;
     let reconnect = serde_json::json!({
         "enabled": r.enabled, "first_delay_s": r.first_delay_s, "max_delay_s": r.max_delay_s, "max_tries": r.max_tries
     });
-    Ok(Settings::new().with("destinations", list).with("reconnect", reconnect))
+    Ok(Settings::new()
+        .with("destinations", list)
+        .with("reconnect", reconnect)
+        .with("check_service", p.stream.check_service)
+        .with("profile", p.name.as_str()))
 }
 
 impl Plan {
@@ -1196,6 +1214,10 @@ impl Studio {
         if self.outputs.stream_profile.as_deref() == Some(old) {
             self.outputs.stream_profile = Some(new.to_string());
         }
+        if let Some(keys) = self.outputs.stream_check_keys.remove(old) {
+            self.outputs.stream_check_keys.insert(new.to_string(), keys);
+        }
+        diagnose::checks().rename_profile(old, new);
     }
 
     /// Record that the profile `name` was removed, so a later profile with the same name does not
@@ -1204,12 +1226,64 @@ impl Studio {
         if self.outputs.stream_profile.as_deref() == Some(name) {
             self.outputs.stream_profile = None;
         }
+        for key in self.outputs.stream_check_keys.remove(name).unwrap_or_default() {
+            diagnose::checks().forget_profile(&key);
+        }
+        diagnose::checks().forget_profile(name);
     }
 
     /// Each destination of the running stream, in the profile's order; empty while no stream runs.
     pub fn stream_destinations(&self) -> Vec<DestinationState> {
         self.outputs.active.get(&OutputKind::Streaming).map(|a| a.instance.destinations()).unwrap_or_default()
     }
+
+    /// Starts a connection check of the profile's stream destination `id`
+    /// ([`studiocraft_outputs::stream::diagnose`]), with the service's other hosts, and with the
+    /// last failure of that destination in a running stream of this profile, when it has one and
+    /// sends to the same server.
+    pub fn check_stream_destination(&mut self, id: &str) -> Result<(), StudioError> {
+        let Some(d) = self.profile.stream.destinations.iter().find(|d| d.id == id) else {
+            return Err(StudioError::Output(format!("there is no stream destination `{id}`")));
+        };
+        if d.server.trim().is_empty() {
+            return Err(StudioError::Output(format!("destination `{id}` has no server; set one in Settings › Stream")));
+        }
+        let own = self.stream_profile() == Some(self.profile.name.as_str());
+        let live = if own { self.stream_destinations() } else { Vec::new() };
+        let last = live.into_iter().find(|s| s.id == id && diagnose::same_server(&s.target, &d.server)).and_then(|s| match s.status {
+            DestinationStatus::Failed(f)
+            | DestinationStatus::Retrying { failure: f, .. }
+            | DestinationStatus::WaitingForNetwork { failure: f, .. } => Some(f),
+            _ => None,
+        });
+        let subject = diagnose::Subject {
+            profile: self.profile.name.clone(),
+            id: id.to_string(),
+            server: d.server.trim().to_string(),
+            service: studiocraft_model::services::service(&d.service),
+            last,
+            service_hosts: true,
+            automatic: false,
+            checked: None,
+            wanted: None,
+        };
+        diagnose::checks().start(subject).map_err(|e| StudioError::Output(e.to_string()))
+    }
+
+    /// The connection check of the profile's stream destination `id`, running or finished; `None`
+    /// when there has been none in this session.
+    pub fn stream_destination_check(&self, id: &str) -> Option<diagnose::CheckState> {
+        let d = self.profile.stream.destinations.iter().find(|d| d.id == id)?;
+        let mut names = vec![self.profile.name.as_str()];
+        // The automatic checks of this profile's streams are kept under each stream's key, also
+        // after the stream ended.
+        if let Some(keys) = self.outputs.stream_check_keys.get(&self.profile.name) {
+            names.extend(keys.iter().map(String::as_str));
+        }
+        let service = studiocraft_model::services::service(&d.service).map_or("", |s| s.id);
+        diagnose::checks().latest(&names, id, &d.server, service)
+    }
+
     /// Start (`on`) or stop sending to the destination `id` of the running stream; the other
     /// destinations go on.
     pub fn set_stream_destination(&mut self, id: &str, on: bool) -> Result<(), StudioError> {
@@ -1412,8 +1486,12 @@ impl Studio {
             return Err(StudioError::Output("nothing can be recorded or streamed without the graphics device".into()));
         }
         let mut planned = plan(&self.profile, kind);
+        // The key the stream's automatic checks are kept under, recorded once the stream starts.
+        let mut check_key = None;
         if kind == OutputKind::Streaming {
-            planned.settings = stream_settings(&self.profile, &self.outputs.held_keys)?;
+            let key = stream_check_key();
+            planned.settings = stream_settings(&self.profile, &self.outputs.held_keys)?.with("profile", key.as_str());
+            check_key = Some(key);
             self.outputs.stream_keys = self.profile.stream.destinations.iter().map(|d| (d.id.clone(), d.key.clone())).collect();
             self.outputs.stream_prints = crate::golive::prints(&self.profile, &self.outputs.held_keys);
             self.outputs.stream_servers = self.profile.stream.destinations.iter().map(|d| (d.id.clone(), d.server.clone())).collect();
@@ -1506,6 +1584,10 @@ impl Studio {
                 if let Some(path) = reserved {
                     let _ = std::fs::remove_file(path);
                 }
+                // A destination that started before the failure may have started a check.
+                if let Some(key) = &check_key {
+                    diagnose::checks().forget_profile(key);
+                }
                 return Err(e.into());
             }
         };
@@ -1514,6 +1596,13 @@ impl Studio {
         self.mixer.send(MixerCmd::AddOutput { id, queue: instance.audio() });
         let target = instance.target();
         self.outputs.active.insert(kind, Active { id, instance, stats, started: Instant::now(), start, target, hardware });
+        if let Some(key) = check_key {
+            let keys = self.outputs.stream_check_keys.entry(self.profile.name.clone()).or_default();
+            keys.push(key);
+            if keys.len() > MAX_CHECK_KEYS {
+                diagnose::checks().forget_profile(&keys.remove(0));
+            }
+        }
         self.update_encode_target();
         Ok(())
     }
@@ -1652,19 +1741,27 @@ mod tests {
             d("c", "rtmp://c/live/name", KeyRef::None, true),
             d("d", "rtmp://d/live", KeyRef::Held("d".into()), false),
         ];
+        p.stream.destinations[0].service = "twitch".into();
         let Err(StudioError::Output(e)) = stream_settings(&p, &HashMap::new()) else { panic!("a held key that is not set") };
         assert_eq!(e, "the stream key `b` for destination `b` is not set for this session");
         let held = HashMap::from([("b".to_string(), "held-key".to_string())]);
         let settings = stream_settings(&p, &held).unwrap();
         let want = serde_json::json!([
-            { "id": "main", "server": "rtmp://a/live", "key": "profile-key", "enabled": true },
-            { "id": "b", "server": "rtmp://b/live", "key": "held-key", "enabled": true },
-            { "id": "c", "server": "rtmp://c/live/name", "key": "", "enabled": true },
-            { "id": "d", "server": "rtmp://d/live", "key": "", "enabled": false },
+            { "id": "main", "server": "rtmp://a/live", "key": "profile-key", "enabled": true, "service": "twitch" },
+            { "id": "b", "server": "rtmp://b/live", "key": "held-key", "enabled": true, "service": "" },
+            { "id": "c", "server": "rtmp://c/live/name", "key": "", "enabled": true, "service": "" },
+            { "id": "d", "server": "rtmp://d/live", "key": "", "enabled": false, "service": "" },
         ]);
         assert_eq!(settings.get("destinations"), Some(&want));
         assert_eq!(studiocraft_outputs::stream_targets(&settings).map(|t| t.len()), Ok(4));
         assert_eq!(studiocraft_outputs::stream_reconnect(&settings), Ok(p.stream.reconnect), "the reconnect settings go with them");
+        let Ok(checks) = studiocraft_outputs::stream_checks(&settings) else { panic!("the check settings are read") };
+        let services: Vec<(&str, &str)> = checks.services.iter().map(|(id, s)| (id.as_str(), s.id)).collect();
+        assert_eq!((services, checks.service_hosts), (vec![("main", "twitch")], false), "the service hosts are off by default");
+        p.stream.check_service = true;
+        let on = stream_settings(&p, &held).unwrap();
+        assert_eq!(studiocraft_outputs::stream_checks(&on).map(|c| c.service_hosts), Ok(true));
+        p.stream.check_service = false;
         let mut slow = p.clone();
         slow.stream.reconnect.max_tries = 0;
         let Err(StudioError::Output(e)) = stream_settings(&slow, &held) else { panic!("reconnect settings out of range") };

@@ -472,6 +472,36 @@
 	Transition to Program	Transition to Program
 	Trying again (try {attempt}): {error}	Trying again (try {attempt}): {error}
 	Waiting for the network (try {attempt}): {error}	Waiting for the network (try {attempt}): {error}
+	Check Connection	Check Connection
+	Asks this computer whether it has a route to the server, looks the server's name up, and connects to the server on its port and on port 443, with a secure connection where the address uses one. For a service that publishes them, it also reads the service's list of ingest servers and status summary and connects to two of its other ingest servers. It sends no stream key and nothing of the address after the server's name. Each server it contacts sees this computer's address, and a secure connection sends the server's name unencrypted.	Asks this computer whether it has a route to the server, looks the server's name up, and connects to the server on its port and on port 443, with a secure connection where the address uses one. For a service that publishes them, it also reads the service's list of ingest servers and status summary and connects to two of its other ingest servers. It sends no stream key and nothing of the address after the server's name. Each server it contacts sees this computer's address, and a secure connection sends the server's name unencrypted.
+	Set a server for this destination first	Set a server for this destination first
+	Checking the connection…	Checking the connection…
+	Checked by itself after the destination failed	Checked by itself after the destination failed
+	What the check found	What the check found
+	Route to any address	Route to any address
+	Route to	Route to
+	Proxy variable	Proxy variable
+	Name lookup of	Name lookup of
+	Connection to	Connection to
+	Secure connection to	Secure connection to
+	Secure connection on port 443 to	Secure connection on port 443 to
+	The service's list of ingest servers	The service's list of ingest servers
+	Secure connection to the service's ingest server	Secure connection to the service's ingest server
+	The service's status summary	The service's status summary
+	works	works
+	set	set
+	reports a problem	reports a problem
+	this computer could not say	this computer could not say
+	not finished in time	not finished in time
+	{check}: {outcome}	{check}: {outcome}
+	{check}: {outcome} ({detail})	{check}: {outcome} ({detail})
+	{check} {target}: {outcome}	{check} {target}: {outcome}
+	{check} {target}: {outcome} ({detail})	{check} {target}: {outcome} ({detail})
+	Connection check	Connection check
+	Also check the service's server list and status page after a failure	Also check the service's server list and status page after a failure
+	When a destination fails three tries in a row or gives up, StudioCraft checks its server's name, route and port once. With this on, that check also reads the service's list of ingest servers and status summary and connects to two of its other ingest servers, so those hosts see this computer's address. Check Connection in the Streaming window always contacts them.	When a destination fails three tries in a row or gives up, StudioCraft checks its server's name, route and port once. With this on, that check also reads the service's list of ingest servers and status summary and connects to two of its other ingest servers, so those hosts see this computer's address. Check Connection in the Streaming window always contacts them.
+	Check Stream Destination Connection	Check Stream Destination Connection
+	Change Connection Checks After a Failure	Change Connection Checks After a Failure
 	Type	Type
 	Type shortcuts such as Ctrl+1 or Shift+F5; separate several with commas.	Type shortcuts such as Ctrl+1 or Shift+F5; separate several with commas.
 	ultrafast	ultrafast
@@ -587,6 +617,24 @@
 @msg	Replay saved to {path}	Replay saved to {path}
 @msg	Lost the connection to {name}; reconnecting	Lost the connection to {name}; reconnecting
 @msg	Reconnected to {name}	Reconnected to {name}
+@msg	This computer has no network route	This computer has no network route
+@msg	The server name {host} does not exist; check the server address	The server name {host} does not exist; check the server address
+@msg	The DNS server did not answer for {host}	The DNS server did not answer for {host}
+@msg	The server name {host} could not be looked up: {detail}	The server name {host} could not be looked up: {detail}
+@msg	The server refused the stream; check the stream key and the server address	The server refused the stream; check the stream key and the server address
+@msg	The secure connection to {host} was not accepted ({reason}). The server address may be wrong, the server's certificate may be faulty, this computer's clock may be wrong, or something on this network may be intercepting secure connections	The secure connection to {host} was not accepted ({reason}). The server address may be wrong, the server's certificate may be faulty, this computer's clock may be wrong, or something on this network may be intercepting secure connections
+@msg	{service} reports a problem with {component}: {status}. This server may also be affected	{service} reports a problem with {component}: {status}. This server may also be affected
+@msg	{host} cannot be reached from this network, but {other} can	{host} cannot be reached from this network, but {other} can
+@msg	{host} answers on port 443 but not on port {port}. This network or the server may be blocking port {port}	{host} answers on port 443 but not on port {port}. This network or the server may be blocking port {port}
+@msg	{host} refused the connection on port {port}; nothing on that server accepts connections on that port	{host} refused the connection on port {port}; nothing on that server accepts connections on that port
+@msg	None of the servers of {service} that were tried answer from this network. The service may be down, or something between this network and the service may be blocking it	None of the servers of {service} that were tried answer from this network. The service may be down, or something between this network and the service may be blocking it
+@msg	{host} does not answer on port {port}. The server may be down, or this network may be blocking it	{host} does not answer on port {port}. The server may be down, or this network may be blocking it
+@msg	A secure connection to {host} on port {port} succeeds; the failure came after that, while the stream was set up or sent: {detail}	A secure connection to {host} on port {port} succeeds; the failure came after that, while the stream was set up or sent: {detail}
+@msg	A connection to {host} on port {port} succeeds; the failure came after that, while the stream was set up or sent: {detail}	A connection to {host} on port {port} succeeds; the failure came after that, while the stream was set up or sent: {detail}
+@msg	A secure connection to {host} on port {port} succeeds	A secure connection to {host} on port {port} succeeds
+@msg	A connection to {host} on port {port} succeeds	A connection to {host} on port {port} succeeds
+@msg	The cause could not be determined	The cause could not be determined
+@msg	the stream destination `{id}` has no server to check	the stream destination `{id}` has no server to check
 @msg	The compositor thread could not start: {error}	The compositor thread could not start: {error}
 @msg	The preferences could not be saved: {error}	The preferences could not be saved: {error}
 @msg	The profile could not be saved: {error}	The profile could not be saved: {error}

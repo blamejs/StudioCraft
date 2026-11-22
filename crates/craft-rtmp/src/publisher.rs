@@ -702,6 +702,61 @@ pub(crate) fn candidates(addrs: &[SocketAddr]) -> Vec<SocketAddr> {
     out
 }
 
+/// What [`reach`] connects to, and how long each step may take.
+#[derive(Clone, Debug)]
+pub struct Reach {
+    /// The server's host name. TLS checks the server's certificate against it, and the TLS
+    /// handshake sends it in clear (Server Name Indication).
+    pub host: String,
+    /// Whether a TLS handshake follows the TCP connection.
+    pub tls: bool,
+    /// How long the address gets to accept the TCP connection.
+    pub connect_timeout: Duration,
+    /// How long the TLS handshake may take.
+    pub tls_timeout: Duration,
+    /// Which certificates the server's certificate must chain to.
+    #[cfg(feature = "rtmps")]
+    pub tls_roots: TlsRoots,
+}
+
+impl Reach {
+    /// A check of `host`, with a TLS handshake when `tls` is set, the default connect timeout
+    /// (10 s), the default setup timeout (15 s) for the handshake and the system's trust store.
+    pub fn new(host: &str, tls: bool) -> Reach {
+        Reach {
+            host: host.to_owned(),
+            tls,
+            connect_timeout: DEFAULT_CONNECT_TIMEOUT,
+            tls_timeout: DEFAULT_SETUP_TIMEOUT,
+            #[cfg(feature = "rtmps")]
+            tls_roots: TlsRoots::Platform,
+        }
+    }
+}
+
+/// Opens a TCP connection to `addr` and, with [`Reach::tls`], completes a TLS handshake over it,
+/// then closes the connection. Sends no RTMP bytes and no stream key: only what TCP and the TLS
+/// handshake send. A refused or timed-out connection is [`Error::Connect`] with `addr`, and a
+/// failed handshake is [`Error::Tls`], [`Error::Timeout`] or [`Error::Closed`], as for
+/// [`Publisher::connect`].
+pub fn reach(r: &Reach, addr: SocketAddr) -> Result<(), Error> {
+    if [r.connect_timeout, r.tls_timeout].iter().any(|t| t.is_zero() || *t > MAX_TIMEOUT) {
+        return Err(Error::BadConfig("every timeout must be longer than 0 and at most 24 hours"));
+    }
+    #[cfg(not(feature = "rtmps"))]
+    if r.tls {
+        return Err(Error::BadConfig("rtmps:// needs the rtmps feature"));
+    }
+    let socket = TcpStream::connect_timeout(&addr, r.connect_timeout).map_err(|e| Error::Connect(vec![(addr, e)]))?;
+    #[cfg(feature = "rtmps")]
+    if r.tls {
+        let sock = Socket::new(socket, Some(Instant::now() + r.tls_timeout));
+        return start_tls(sock, &r.host, &r.tls_roots).map(drop);
+    }
+    drop(socket);
+    Ok(())
+}
+
 fn connect_any(addrs: &[SocketAddr], timeout: Duration) -> Result<TcpStream, Error> {
     let mut tried = Vec::new();
     for a in &candidates(addrs) {
@@ -720,18 +775,25 @@ fn open_transport(socket: TcpStream, _config: &Config, deadline: Instant) -> Res
 
 #[cfg(feature = "rtmps")]
 fn open_transport(socket: TcpStream, config: &Config, deadline: Instant) -> Result<Transport, Error> {
+    let sock = Socket::new(socket, Some(deadline));
+    if !config.endpoint.tls() {
+        return Ok(Transport::Tcp(sock));
+    }
+    start_tls(sock, config.endpoint.host(), &config.tls_roots)
+}
+
+/// Runs the TLS handshake over `sock` for the server `host`, checking its certificate against
+/// `tls_roots`. The socket's deadline bounds the handshake.
+#[cfg(feature = "rtmps")]
+fn start_tls(mut sock: Socket, host: &str, tls_roots: &TlsRoots) -> Result<Transport, Error> {
     use std::sync::Arc;
 
     use crate::error::TlsFailure;
 
-    let mut sock = Socket::new(socket, Some(deadline));
-    if !config.endpoint.tls() {
-        return Ok(Transport::Tcp(sock));
-    }
     let tls = |e: rustls::Error| Error::Tls(TlsFailure::of(&e));
     let provider = Arc::new(rustls::crypto::ring::default_provider());
     let builder = rustls::ClientConfig::builder_with_provider(provider.clone()).with_safe_default_protocol_versions().map_err(tls)?;
-    let client = match &config.tls_roots {
+    let client = match tls_roots {
         TlsRoots::Platform => {
             let verifier = rustls_platform_verifier::Verifier::new(provider).map_err(tls)?;
             builder.dangerous().with_custom_certificate_verifier(Arc::new(verifier)).with_no_client_auth()
@@ -744,8 +806,7 @@ fn open_transport(socket: TcpStream, config: &Config, deadline: Instant) -> Resu
             builder.with_root_certificates(roots).with_no_client_auth()
         }
     };
-    let name = rustls::pki_types::ServerName::try_from(config.endpoint.host().to_owned())
-        .map_err(|_| Error::BadUrl("the host is not a valid TLS server name"))?;
+    let name = rustls::pki_types::ServerName::try_from(host.to_owned()).map_err(|_| Error::BadUrl("the host is not a valid TLS server name"))?;
     let mut conn = rustls::ClientConnection::new(Arc::new(client), name).map_err(tls)?;
     conn.set_buffer_limit(None);
     while conn.is_handshaking() {

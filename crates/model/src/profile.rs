@@ -317,6 +317,10 @@ pub struct StreamSettings {
     pub keyframe_interval_s: u32,
     /// How a destination tries again after its connection fails or is lost.
     pub reconnect: ReconnectSettings,
+    /// Whether the connection check that runs by itself after a destination fails also contacts
+    /// the service's other hosts: its list of ingest servers, two other ingest servers and its
+    /// status summary. Off by default; Check Connection always contacts them.
+    pub check_service: bool,
 }
 
 impl Default for StreamSettings {
@@ -330,6 +334,7 @@ impl Default for StreamSettings {
             encoder_settings: BTreeMap::new(),
             keyframe_interval_s: 2,
             reconnect: ReconnectSettings::default(),
+            check_service: false,
         }
     }
 }

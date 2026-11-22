@@ -552,6 +552,86 @@ fn a_running_streams_destinations_start_and_stop_one_at_a_time() {
 }
 
 #[test]
+fn a_streams_automatic_check_follows_its_profile_and_ends_with_it() {
+    use studiocraft_model::{Destination, KeyRef};
+    // Only a broken build waits this long for a connection that should come at once.
+    const GUARD: Duration = Duration::from_secs(60);
+    let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("rtmp://127.0.0.1:{}/live", l.local_addr().unwrap().port());
+    let incoming = connections(l);
+    let mut p = small_profile();
+    p.name = "Checked Show".into();
+    p.stream.key = "profile-key".into();
+    p.stream.reconnect.enabled = false;
+    p.stream.destinations = vec![Destination { id: "a".into(), server: url, key: KeyRef::Profile, ..Destination::default() }];
+    let mut s = studio_with(Some(noop_gpu()), SceneCollection::new("Test", "Scene"), p);
+    s.start_output(OutputKind::Streaming).unwrap();
+    // The stream's connection is closed, so the destination gives up and its connection is
+    // checked: the check connects to the same port.
+    drop(incoming.recv_timeout(GUARD).expect("the stream connects"));
+    let _probe = incoming.recv_timeout(GUARD).expect("the check connects");
+    let automatic = |s: &Studio| match s.stream_destination_check("a") {
+        Some(diagnose::CheckState::Running { automatic }) => Some(automatic),
+        Some(diagnose::CheckState::Done(d)) => Some(d.automatic),
+        None => None,
+    };
+    assert_eq!(automatic(&s), Some(true));
+    // It stays shown after the stream ended, and with the stream's profile after a rename.
+    s.stop_output(OutputKind::Streaming);
+    assert!(s.stream_destinations().is_empty(), "no stream runs");
+    assert_eq!(automatic(&s), Some(true));
+    // Starts that fail do not push the stream's check out of those kept.
+    let first = s.profile().clone();
+    let mut failing = first.clone();
+    failing.stream.video_encoder = "x264".into();
+    s.set_profile(failing).unwrap();
+    let mut spins = 0u64;
+    let mut failed = 0;
+    while failed <= 2 * super::outputs::MAX_CHECK_KEYS {
+        let Err(e) = s.start_output(OutputKind::Streaming) else { panic!("a stream started with an encoder that runs in ffmpeg") };
+        if e.to_string().contains("is still being finished") {
+            spins += 1;
+            assert!(spins < 200_000_000, "the first stream never finished");
+            s.tick();
+            std::thread::yield_now();
+        } else {
+            failed += 1;
+        }
+    }
+    s.set_profile(first.clone()).unwrap();
+    assert_eq!(automatic(&s), Some(true), "the check stays shown after starts that failed");
+    // A stream of another profile keeps its own checks, and this profile's stay.
+    let mut second = first.clone();
+    second.name = "Second Show".into();
+    s.set_profile(second).unwrap();
+    assert_eq!(automatic(&s), None, "another profile's destination `a` is another destination");
+    // The first stream finishes before the next one starts.
+    let mut spins = 0u64;
+    while let Err(e) = s.start_output(OutputKind::Streaming) {
+        assert!(e.to_string().contains("is still being finished"), "{e}");
+        spins += 1;
+        assert!(spins < 200_000_000, "the first stream never finished");
+        s.tick();
+        std::thread::yield_now();
+    }
+    drop(incoming.recv_timeout(GUARD).expect("the second stream connects"));
+    let _second_probe = incoming.recv_timeout(GUARD).expect("its check connects");
+    assert_eq!(automatic(&s), Some(true));
+    s.stop_output(OutputKind::Streaming);
+    s.set_profile(first).unwrap();
+    assert_eq!(automatic(&s), Some(true));
+    let mut renamed = s.profile().clone();
+    renamed.name = "Renamed Show".into();
+    s.set_profile(renamed.clone()).unwrap();
+    s.stream_profile_renamed("Checked Show", "Renamed Show");
+    assert_eq!(automatic(&s), Some(true));
+    // Once its profile is removed, a new profile of the same name does not show it.
+    s.stream_profile_removed("Renamed Show");
+    s.set_profile(renamed).unwrap();
+    assert_eq!(automatic(&s), None);
+}
+
+#[test]
 fn the_profile_changes_the_canvas() {
     let mut s = headless();
     let mut p = s.profile().clone();
@@ -1861,10 +1941,14 @@ mod audio_tracks {
         let (v, _) = s.run("audio_tracks.status", &json!({})).unwrap();
         assert_eq!((v["enabled"].clone(), v["buffer_mib"].clone()), (json!(false), json!(16)));
         std::fs::create_dir_all(&dir).unwrap();
-        // The repair runs on its own thread and the command returns at once.
+        // The repair runs on its own thread and the command returns at once. The gate holds the
+        // repair until the status has been read, so the command's own tick cannot take it first.
+        let (go, wait) = std::sync::mpsc::channel();
+        s.audio_tracks.repair_gate = Some(wait);
         let (v, _) = s.run("audio_tracks.repair", &json!({"folder": dir.to_string_lossy()})).unwrap();
         assert_eq!(v["started"], json!(true));
         assert_eq!(s.state_json()["audio_tracks"]["repairing"], json!(true));
+        let _ = go.send(());
         assert_eq!(s.audio_tracks_repair_result(), Some(json!({"repaired": [], "failed": []})));
         assert_eq!(s.state_json()["audio_tracks"]["repairing"], json!(false));
         assert_eq!(s.state_json()["audio_tracks"]["last_repair"], json!({"repaired": [], "failed": []}));

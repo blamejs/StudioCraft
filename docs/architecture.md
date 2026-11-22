@@ -84,6 +84,7 @@ gives no value for that column.
 | Recordings scan | A `recordings.list` call when no scan runs | One scan at a time; 500 folder entries for files and 500 for takes | The scan stops looking at files after 5 s (`recordings::SCAN_LIMIT`), and `recordings.list` returns the last finished scan while one runs | None; it runs only when called |
 | Captions reader | The mixer's program blocks | 64 blocks, and 60 s of mono 16 kHz audio | A full queue drops its oldest block; audio pushed out of the 60 s buffer, and blocks that never arrived, are passed on as gaps | One small copy per block |
 | Captions recognizer | The reader's buffer | | A recognizer slower than speech falls behind, and the reader's buffer then drops its oldest audio | One Whisper run per partial or finished phrase |
+| Stream check | A `stream.diagnose` call, Check Connection, or a destination's third failed try in a row or its giving up | At most 4 checks at once, counting the step threads of earlier checks that have not ended (`outputs::stream::diagnose::MAX_CHECKS`); one check per destination | A check asked for while 4 run, or while the destination's check runs, is refused; a check reports after 20 s (`CHECK_TIME`) with the steps that finished | One thread per step, each connection, handshake and fetch within 5 s (`PROBE_TIMEOUT`); none while no check runs |
 | Window | `Studio` state | | | |
 
 ### Source threads

@@ -541,7 +541,7 @@ fn each_destination_shows_its_own_status() {
         state("c", DestinationStatus::Retrying { attempt: 3, failure: Failure::new(Cause::Lost, "the server closed the connection") }),
     ];
     let held = |_: &str| false;
-    let view = View { stream: &stream, running: true, live: &live, held: &held };
+    let view = View { stream: &stream, running: true, live: &live, held: &held, checks: &[] };
     let mut panel = StreamingPanel::default();
     let mut acts = Vec::new();
     let texts = drawn(|ui| show(ui, &view, &mut panel, &mut acts));
@@ -565,7 +565,7 @@ fn each_destination_shows_its_own_status() {
     assert_eq!(texts.iter().filter(|t| *t == "Stop").count(), 2, "{texts:?}");
     assert!(acts.is_empty(), "drawing does nothing");
     // Without a stream each destination says whether starting the stream sends to it.
-    let view = View { stream: &stream, running: false, live: &[], held: &held };
+    let view = View { stream: &stream, running: false, live: &[], held: &held, checks: &[] };
     let texts = drawn(|ui| show(ui, &view, &mut panel, &mut acts));
     assert_eq!(texts.iter().filter(|t| *t == "Sent to when the stream starts").count(), 3, "{texts:?}");
     assert_eq!(texts.iter().filter(|t| *t == "Off").count(), 1, "{texts:?}");
@@ -655,7 +655,7 @@ fn open_details_save_what_was_typed() {
     // The details of a destination are drawn with its fields, and the server field hides its text.
     let stream = StreamSettings { destinations: vec![d.clone()], ..StreamSettings::default() };
     let held = |n: &str| n == "night";
-    let view = View { stream: &stream, running: false, live: &[], held: &held };
+    let view = View { stream: &stream, running: false, live: &[], held: &held, checks: &[] };
     let mut panel = StreamingPanel { editing: Some(Edit::of(&d)), ..StreamingPanel::default() };
     let mut acts = Vec::new();
     let texts = drawn(|ui| show(ui, &view, &mut panel, &mut acts));
@@ -669,7 +669,7 @@ fn open_details_save_what_was_typed() {
     // A key at the end of the address is hidden in the list and in the field.
     let d = Destination { id: "c".into(), server: "rtmp://c.example/live/secret-c".into(), ..Destination::default() };
     let stream = StreamSettings { destinations: vec![d.clone()], ..StreamSettings::default() };
-    let view = View { stream: &stream, running: false, live: &[], held: &held };
+    let view = View { stream: &stream, running: false, live: &[], held: &held, checks: &[] };
     let mut panel = StreamingPanel { editing: Some(Edit::of(&d)), ..StreamingPanel::default() };
     let texts = drawn(|ui| show(ui, &view, &mut panel, &mut acts));
     assert!(!texts.iter().any(|t| t.contains("secret-c")), "{texts:?}");
@@ -794,7 +794,7 @@ fn the_details_change_the_server_with_the_service_and_link_to_its_page() {
     let d = Destination { id: "main".into(), service: "kick".into(), ..Destination::default() };
     let stream = StreamSettings { destinations: vec![d.clone()], ..StreamSettings::default() };
     let held = |_: &str| false;
-    let view = View { stream: &stream, running: false, live: &[], held: &held };
+    let view = View { stream: &stream, running: false, live: &[], held: &held, checks: &[] };
     let mut panel = StreamingPanel { editing: Some(Edit::of(&d)), ..StreamingPanel::default() };
     let mut acts = Vec::new();
     let texts = drawn(|ui| show(ui, &view, &mut panel, &mut acts));
@@ -804,4 +804,135 @@ fn the_details_change_the_server_with_the_service_and_link_to_its_page() {
         assert!(texts.iter().any(|t| t == want), "{want} in {texts:?}");
     }
     assert!(acts.is_empty(), "drawing does nothing");
+}
+
+/// A finished check of `host` with `verdict`, which ran by itself when `automatic`.
+fn diagnosis(verdict: Verdict, automatic: bool) -> Diagnosis {
+    Diagnosis {
+        verdict,
+        host: "ingest.example".into(),
+        port: 1935,
+        tls: false,
+        service: None,
+        other: None,
+        component: None,
+        status: None,
+        reason: None,
+        detail: String::new(),
+        evidence: vec![
+            Evidence { check: Check::DefaultRoute, target: String::new(), outcome: Outcome::Ok, detail: String::new() },
+            Evidence {
+                check: Check::Connect,
+                target: "192.0.2.1:1935".into(),
+                outcome: Outcome::Failed(Cause::TimedOut),
+                detail: "timed out".into(),
+            },
+            Evidence { check: Check::Connect443, target: "192.0.2.1:443".into(), outcome: Outcome::Unfinished, detail: String::new() },
+        ],
+        at: UNIX_EPOCH + Duration::from_millis(1_700_000_000_123),
+        automatic,
+    }
+}
+
+#[test]
+fn a_check_is_listed_and_shown_under_its_destination() {
+    let d = diagnosis(Verdict::PortNotAnswering443Does, true);
+    let v = listed_check(&CheckState::Done(Box::new(d.clone())));
+    assert_eq!(
+        (v["state"].clone(), v["automatic"].clone(), v["verdict"].clone()),
+        (json!("done"), json!(true), json!("port_not_answering_443_does"))
+    );
+    assert_eq!(v["message"], json!("ingest.example answers on port 443 but not on port 1935. This network or the server may be blocking port 1935"));
+    assert_eq!(v["template"], json!("{host} answers on port 443 but not on port {port}. This network or the server may be blocking port {port}"));
+    assert_eq!(v["args"], json!({"host": "ingest.example", "port": "1935"}));
+    assert_eq!(v["at_ms"], json!(1_700_000_000_123u64));
+    assert_eq!(v["evidence"][1], json!({"check": "connect", "target": "192.0.2.1:1935", "outcome": "timed_out", "detail": "timed out"}));
+    assert_eq!(v["evidence"][2]["outcome"], json!("unfinished"));
+    assert_eq!(listed_check(&CheckState::Running { automatic: false }), json!({"state": "running", "automatic": false}));
+    let lines: Vec<String> = d.evidence.iter().map(evidence_text).collect();
+    assert_eq!(
+        lines,
+        [
+            "Route to any address: works",
+            "Connection to 192.0.2.1:1935: the server did not answer in time (timed out)",
+            "Secure connection on port 443 to 192.0.2.1:443: not finished in time",
+        ]
+    );
+    // The window shows the verdict, that it ran by itself, and the button that runs another.
+    let dest = Destination { id: "main".into(), server: "rtmp://ingest.example/live".into(), ..Destination::default() };
+    let stream = StreamSettings { destinations: vec![dest.clone()], ..StreamSettings::default() };
+    let held = |_: &str| false;
+    let checks = vec![("main".to_string(), CheckState::Done(Box::new(d.clone())))];
+    let view = View { stream: &stream, running: false, live: &[], held: &held, checks: &checks };
+    let mut acts = Vec::new();
+    let texts = drawn(|ui| show(ui, &view, &mut StreamingPanel::default(), &mut acts));
+    for want in [d.english().as_str(), "Checked by itself after the destination failed", "What the check found", "Check Connection"] {
+        assert!(texts.iter().any(|t| t == want), "{want} in {texts:?}");
+    }
+    // While a check runs, the window says so.
+    let checks = vec![("main".to_string(), CheckState::Running { automatic: false })];
+    let view = View { stream: &stream, running: false, live: &[], held: &held, checks: &checks };
+    let texts = drawn(|ui| show(ui, &view, &mut StreamingPanel::default(), &mut acts));
+    assert!(texts.iter().any(|t| t == "Checking the connection…"), "{texts:?}");
+    assert!(texts.iter().all(|t| *t != d.english()), "{texts:?}");
+    assert!(acts.is_empty(), "drawing does nothing");
+}
+
+#[test]
+fn a_certificate_verdict_names_the_reason_in_the_interface_language() {
+    let d = Diagnosis { reason: Some(Cause::CertificateExpired), tls: true, ..diagnosis(Verdict::CertificateNotAccepted, false) };
+    assert_eq!(verdict_msg(&d).english(), d.english(), "the window's reason is the same English text");
+    assert!(d.english().contains("(the server's certificate has expired)"), "{}", d.english());
+    let texts: std::collections::HashSet<&str> =
+        [Outcome::Ok, Outcome::Set, Outcome::Problem, Outcome::Unknown, Outcome::Unfinished].into_iter().map(outcome_text).collect();
+    assert_eq!(texts.len(), 5, "every outcome has its own text");
+}
+
+#[test]
+fn every_check_message_has_an_english_row() {
+    let en = include_str!("../../i18n/locales/en/studiocraft.tsv");
+    let rows: std::collections::HashSet<(&str, &str)> =
+        en.lines().filter_map(|l| l.split('\t').collect::<Vec<_>>().get(..2).map(|c| (c[0], c[1]))).collect();
+    let templates = studiocraft_studio::diagnose::templates();
+    assert_eq!(templates.len(), 17);
+    let missing: Vec<String> = templates.iter().filter(|t| !rows.contains(&("@msg", **t))).map(|t| format!("@msg\t{t}\t{t}")).collect();
+    assert!(missing.is_empty(), "check messages with no @msg row:\n{}", missing.join("\n"));
+}
+
+#[test]
+fn check_connection_runs_a_check_and_the_service_setting_is_changed() {
+    let mut a = app();
+    let ctx = egui::Context::default();
+    // An address with nothing behind it on this computer: the check stays on this computer.
+    let closed = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = closed.local_addr().unwrap();
+    drop(closed);
+    run(&mut a, &ctx, "stream.destination_add", json!({"server": format!("rtmp://{addr}/live"), "key": "none"})).unwrap();
+    run(&mut a, &ctx, "stream.destination_add", json!({"key": "none"})).unwrap();
+    assert!(run(&mut a, &ctx, "stream.diagnose", json!({"id": "nope"})).unwrap_err().contains("no stream destination `nope`"));
+    assert!(run(&mut a, &ctx, "stream.diagnose", json!({"id": "destination-2"})).unwrap_err().contains("has no server"));
+    assert!(run(&mut a, &ctx, "stream.diagnose", json!({})).is_err());
+    assert_eq!(run(&mut a, &ctx, "stream.diagnose", json!({"id": "main"})).unwrap(), json!({"id": "main", "started": true}));
+    let listed = run(&mut a, &ctx, "stream.destinations", json!({})).unwrap();
+    let state = listed["destinations"][0]["diagnosis"]["state"].clone();
+    assert!(state == json!("running") || state == json!("done"), "{listed}");
+    assert!(listed["destinations"][1].get("diagnosis").is_none(), "{listed}");
+    // Another server drops the check of the one before it, finished or not.
+    run(&mut a, &ctx, "stream.destination_set", json!({"id": "main", "server": "rtmp://127.0.0.1:1/live"})).unwrap();
+    let listed = run(&mut a, &ctx, "stream.destinations", json!({})).unwrap();
+    assert!(listed["destinations"][0].get("diagnosis").is_none(), "{listed}");
+    // Whether the check after a failure contacts the service's other hosts: off by default.
+    assert_eq!(listed["check_service"], json!(false));
+    run(&mut a, &ctx, "app.settings", json!({})).unwrap();
+    let r = run(&mut a, &ctx, "stream.check_service_set", json!({"enabled": true})).unwrap();
+    assert_eq!(r, json!({"changed": true, "check_service": true}));
+    assert!(a.studio.profile().stream.check_service);
+    assert_eq!(a.settings.as_ref().map(|w| w.draft.stream.check_service), Some(true), "an open Settings window follows");
+    assert_eq!(run(&mut a, &ctx, "stream.check_service_set", json!({"enabled": true})).unwrap()["changed"], json!(false));
+    for bad in [json!({}), json!({"enabled": "yes"}), json!({"enabled": 1})] {
+        assert!(run(&mut a, &ctx, "stream.check_service_set", bad.clone()).is_err(), "{bad}");
+        assert!(a.studio.profile().stream.check_service, "{bad} changed nothing");
+    }
+    assert_eq!(crate::commands::ui_params("stream.diagnose"), "id: string");
+    assert!(crate::commands::ui_params("stream.check_service_set").starts_with("enabled: boolean"));
 }
