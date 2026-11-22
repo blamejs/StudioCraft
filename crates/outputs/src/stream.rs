@@ -42,8 +42,8 @@ use studiocraft_media::stats::EncoderStats;
 use studiocraft_media::video::PooledFrame;
 use studiocraft_model::ReconnectSettings;
 use studiocraft_plugin::{
-    AddressOutcome, Cause, DestinationState, DestinationStatus, EncoderKind, Failure, OutputInstance, OutputJob, OutputStatus, PluginError,
-    RateControl,
+    AddressOutcome, Cause, DestinationCounts, DestinationState, DestinationStatus, EncoderKind, Failure, OutputInstance, OutputJob, OutputStatus,
+    PluginError, RateControl,
 };
 
 use crate::native::{DISK_WAIT, Item, Native, PacketQueue, QUEUE_BYTES, QUEUE_SPAN_NS, Sink, Track};
@@ -252,9 +252,30 @@ fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
+/// How many destinations of a stream are live and how many wait to try again, kept as each
+/// destination's status is set.
+#[derive(Default)]
+struct Counts {
+    live: AtomicU32,
+    retrying: AtomicU32,
+}
+
+impl Counts {
+    /// The count a destination with status `s` is in.
+    fn of(&self, s: &DestinationStatus) -> Option<&AtomicU32> {
+        match s {
+            DestinationStatus::Live => Some(&self.live),
+            DestinationStatus::Retrying { .. } => Some(&self.retrying),
+            _ => None,
+        }
+    }
+}
+
 /// A destination and what its thread reports.
 struct Dest {
     target: Target,
+    /// The stream's counts, shared by its destinations.
+    counts: Arc<Counts>,
     /// The stream key it sends with: the target's, or one given when it was started again.
     key: Mutex<String>,
     status: Mutex<DestinationStatus>,
@@ -266,6 +287,10 @@ struct Dest {
     /// Packets lost over every connection so far.
     dropped: AtomicU64,
     reconnects: AtomicU32,
+    /// The last connection was lost, and no connection has gone live since.
+    lost: AtomicBool,
+    /// Times it went live again after a lost connection.
+    recovered: AtomicU32,
     /// Asks the thread to close the connection and end.
     stop: AtomicBool,
     /// The thread runs and has not decided to end. It is changed with `thread` locked, so a start
@@ -275,16 +300,19 @@ struct Dest {
 }
 
 impl Dest {
-    fn new(target: Target) -> Dest {
+    fn new(target: Target, counts: Arc<Counts>) -> Dest {
         Dest {
             key: Mutex::new(target.key.clone()),
             target,
+            counts,
             status: Mutex::new(DestinationStatus::Stopped),
             changes: Mutex::new(0),
             changed: Condvar::new(),
             bytes: AtomicU64::new(0),
             dropped: AtomicU64::new(0),
             reconnects: AtomicU32::new(0),
+            lost: AtomicBool::new(false),
+            recovered: AtomicU32::new(0),
             stop: AtomicBool::new(false),
             alive: AtomicBool::new(false),
             thread: Mutex::new(None),
@@ -307,7 +335,21 @@ impl Dest {
     }
 
     fn set(&self, s: DestinationStatus) {
-        *lock(&self.status) = s;
+        let mut status = lock(&self.status);
+        // The counts change with the status held, so each destination is in at most one count.
+        if let Some(c) = self.counts.of(&status) {
+            c.fetch_sub(1, Ordering::Relaxed);
+        }
+        if let Some(c) = self.counts.of(&s) {
+            c.fetch_add(1, Ordering::Relaxed);
+        }
+        *status = s;
+        // Counted with the status held, so a reader that sees the count and then reads the
+        // status sees it live.
+        if *status == DestinationStatus::Live && self.lost.swap(false, Ordering::Relaxed) {
+            self.recovered.fetch_add(1, Ordering::SeqCst);
+        }
+        drop(status);
         let mut changes = lock(&self.changes);
         *changes = changes.wrapping_add(1);
         self.changed.notify_all();
@@ -392,6 +434,7 @@ struct Hub {
     ring: RingConfig,
     timing: Timing,
     dests: Vec<Arc<Dest>>,
+    counts: Arc<Counts>,
 }
 
 impl Hub {
@@ -599,6 +642,7 @@ fn run(hub: &Hub, d: &Dest) {
             End::Done => {}
             End::Failed(e) => return d.fail(e),
             End::Lost(e) => {
+                d.lost.store(true, Ordering::Relaxed);
                 d.reconnects.fetch_add(1, Ordering::Relaxed);
                 // A connection lost soon after it was made counts as another failed try.
                 failures = if started.elapsed() >= hub.timing.stable { 1 } else { failures.saturating_add(1) };
@@ -776,8 +820,9 @@ impl Streaming {
         let Some(headers) = headers else {
             return Err(PluginError::Failed("the stream's encoders gave no configuration".into()));
         };
-        let dests = targets.into_iter().map(|t| Arc::new(Dest::new(t))).collect();
-        let hub = Arc::new(Hub { control, headers, ring, timing, dests });
+        let counts = Arc::new(Counts::default());
+        let dests = targets.into_iter().map(|t| Arc::new(Dest::new(t, Arc::clone(&counts)))).collect();
+        let hub = Arc::new(Hub { control, headers, ring, timing, dests, counts });
         let mut s = Streaming { native, hub, stats: Arc::clone(&job.stats), refused, stopped: false };
         for d in s.hub.dests.iter().filter(|d| d.target.enabled) {
             if let Err(e) = spawn(&s.hub, d, None) {
@@ -918,6 +963,15 @@ impl OutputInstance for Streaming {
 
     fn reconnects(&self) -> u64 {
         self.hub.dests.iter().map(|d| u64::from(d.reconnects.load(Ordering::Relaxed))).sum()
+    }
+
+    fn destination_counts(&self) -> DestinationCounts {
+        let c = &self.hub.counts;
+        DestinationCounts { live: c.live.load(Ordering::Relaxed), retrying: c.retrying.load(Ordering::Relaxed) }
+    }
+
+    fn recoveries(&self) -> u64 {
+        self.hub.dests.iter().map(|d| u64::from(d.recovered.load(Ordering::SeqCst))).sum()
     }
 
     fn start_destination(&self, id: &str, key: Option<&str>) -> Result<(), PluginError> {

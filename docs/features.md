@@ -431,6 +431,13 @@ the sum of its waits (at most the number of tries times the longest wait) after 
 plus up to 55 s per try for the connection (4 addresses for 10 s each) and the stream's setup
 (15 s), plus the time the system takes to look the server's name up. A running stream keeps the
 settings it started with. The stream fails when no destination is sending or trying to.
+While the stream runs, the status bar shows `RECONNECTING` with the stream's time, in the warning
+color, when no destination is live and at least one waits to try again; when some are live, it shows
+`LIVE` followed by the count of those waiting, such as "1 reconnecting". A notice says "Lost the
+connection to {name}; reconnecting" when a destination that is still trying loses its connection,
+and "Reconnected to {name}" when it is live again. Each destination gets at most one loss notice a
+minute (StudioCraft's own value), and a reconnect notice only after a loss notice; `session.events`
+keeps every lost connection.
 A key written at the end of the server address, as in `rtmp://host/app/key`, is used as the stream
 key when the key field is empty, and the stream's status leaves it out of the address it shows.
 

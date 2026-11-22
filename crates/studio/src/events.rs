@@ -8,9 +8,13 @@
 
 use std::collections::{HashMap, VecDeque};
 
+use std::time::Duration;
+
 use serde_json::{Value, json};
+use studiocraft_media::Tick;
+use studiocraft_media::clock::tick_of;
 use studiocraft_model::SceneId;
-use studiocraft_plugin::DestinationState;
+use studiocraft_plugin::{DestinationState, DestinationStatus};
 
 /// How many events the ring keeps, StudioCraft's own value.
 pub(crate) const CAPACITY: usize = 1_000;
@@ -167,10 +171,71 @@ impl ReconnectWatch {
     }
 }
 
+/// The shortest time between two notices that the same destination lost its connection,
+/// StudioCraft's own value. The session events keep every loss.
+pub(crate) const LOSS_NOTICE_EVERY: Duration = Duration::from_secs(60);
+
+/// Which lost connections and reconnects of the running stream's destinations get a notice: a
+/// loss at most once per [`LOSS_NOTICE_EVERY`] for each destination, and a reconnect only after a
+/// loss that got one.
+#[derive(Default)]
+pub(crate) struct ReconnectNotices {
+    /// The stream they belong to; a new stream starts with no notices shown.
+    stream: Option<u64>,
+    /// The sum of the stream's recoveries as last seen.
+    recoveries: u64,
+    /// Each destination's last loss notice, on the studio clock, and whether its reconnect is
+    /// still to be announced.
+    shown: HashMap<String, (Tick, bool)>,
+}
+
+impl ReconnectNotices {
+    /// Forget what was shown when `stream` is not the stream of the last call.
+    pub(crate) fn follow(&mut self, stream: Option<u64>) {
+        if stream != self.stream {
+            self.stream = stream;
+            self.recoveries = 0;
+            self.shown.clear();
+        }
+    }
+
+    /// Whether the loss of destination `id`'s connection at `now` gets a notice.
+    pub(crate) fn lost(&mut self, id: &str, now: Tick) -> bool {
+        let every = tick_of(LOSS_NOTICE_EVERY).0;
+        if self.shown.get(id).is_some_and(|(at, _)| now.0.saturating_sub(at.0) < every) {
+            return false;
+        }
+        self.shown.insert(id.to_string(), (now, true));
+        true
+    }
+
+    /// The destinations whose reconnect gets a notice, once each: the live ones whose loss got a
+    /// notice that no reconnect notice has followed. `total` is the sum of the stream's
+    /// recoveries now; `destinations` is called only when it differs from the last call's and a
+    /// reconnect is still to be announced.
+    pub(crate) fn recovered(&mut self, total: u64, destinations: impl FnOnce() -> Vec<DestinationState>) -> Vec<String> {
+        if total == self.recoveries {
+            return Vec::new();
+        }
+        self.recoveries = total;
+        if !self.shown.values().any(|(_, pending)| *pending) {
+            return Vec::new();
+        }
+        let mut out = Vec::new();
+        for d in destinations() {
+            if d.status == DestinationStatus::Live
+                && let Some((_, pending)) = self.shown.get_mut(&d.id)
+                && std::mem::take(pending)
+            {
+                out.push(d.id);
+            }
+        }
+        out
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use studiocraft_plugin::DestinationStatus;
-
     use super::*;
 
     fn dest(id: &str, reconnects: u32) -> DestinationState {
@@ -243,5 +308,41 @@ mod tests {
         assert_eq!(look(&mut w, Some(2), &[dest("a", 1), dest("b", 1)]), [r("a", 1, 1)]);
         assert!(look(&mut w, None, &[]).is_empty(), "no stream runs");
         assert_eq!(reads, 4, "the states are read only when the sum moved");
+    }
+
+    #[test]
+    fn a_reconnect_gives_one_loss_and_one_recovery_notice() {
+        let mut n = ReconnectNotices::default();
+        let at = |s: u64| tick_of(Duration::from_secs(s));
+        let with = |id: &str, status| DestinationState { status, ..dest(id, 1) };
+        let retrying = || DestinationStatus::Retrying { attempt: 1, failure: studiocraft_plugin::Failure::new(studiocraft_plugin::Cause::Lost, "x") };
+        n.follow(Some(1));
+        assert!(n.lost("a", at(10)));
+        // Not live yet: no notice, and the next change of the sum looks again.
+        assert!(n.recovered(1, || vec![with("a", retrying())]).is_empty());
+        assert_eq!(n.recovered(2, || vec![with("a", DestinationStatus::Live)]), ["a"]);
+        assert!(n.recovered(3, || vec![with("a", DestinationStatus::Live)]).is_empty(), "one recovery notice per loss notice");
+        // The same sum reads no states.
+        assert!(n.recovered(3, || panic!("read the states")).is_empty());
+    }
+
+    #[test]
+    fn flapping_gives_one_loss_notice_a_minute() {
+        let mut n = ReconnectNotices::default();
+        let at = |s: u64| tick_of(Duration::from_secs(s));
+        let live = |id: &str| DestinationState { status: DestinationStatus::Live, ..dest(id, 1) };
+        n.follow(Some(1));
+        assert!(n.lost("a", at(0)));
+        assert_eq!(n.recovered(1, || vec![live("a")]), ["a"]);
+        // Lost and back again within the minute: neither gets a notice.
+        assert!(!n.lost("a", at(30)));
+        assert!(n.recovered(2, || vec![live("a")]).is_empty());
+        // Another destination has its own minute.
+        assert!(n.lost("b", at(31)));
+        assert!(n.lost("a", at(60)), "a minute after the last loss notice");
+        assert_eq!(n.recovered(3, || vec![live("a"), live("b")]), ["a", "b"]);
+        // A new stream starts with no notices shown.
+        n.follow(Some(2));
+        assert!(n.lost("a", at(61)));
     }
 }
