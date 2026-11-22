@@ -2,7 +2,7 @@
 //! its state and shortcut, the window's layout and open dialogs, and the laid-out menu bar.
 
 use craft_keymap::CommandRef;
-use craft_menu::{ItemState, LayoutOptions, MenuBar, Node, Target};
+use craft_menu::{ItemState, LanguageChoice, LanguageLabels, LanguageMenu, LayoutOptions, MenuBar, MenuRole, Node, Target};
 use craft_ui::contract::Tracked;
 use serde_json::{Value, json};
 use studiocraft_engine::command::Undo;
@@ -107,11 +107,26 @@ impl StudioApp {
             profile: &self.studio.profile().name,
             layouts: &layouts,
         };
-        let mut bar = Tracked::new(commands::menu_bar(&s));
+        let mut menus = commands::menu_bar(&s);
+        if let Some(view) = menus.menus.iter_mut().find(|m| m.role == MenuRole::View) {
+            view.children.extend([Node::Separator, self.language_menu()]);
+        }
+        let mut bar = Tracked::new(menus);
         craft_menu::apply_keymap(&mut bar, &self.keymap);
         craft_menu::apply_state(&mut bar, |c| self.item_state(&c.id));
         let options = LayoutOptions::new(APP_NAME).label(&crate::i18n::menu_text);
         craft_menu::layout(&bar, Target::current(), &options).bar
+    }
+
+    /// View › Language (in the app menu on macOS): Automatic, then every built-in language by
+    /// its own name, with the saved setting chosen. Each row runs `app.language`.
+    pub(crate) fn language_menu(&self) -> Node {
+        let current = match self.store.prefs().language() {
+            crate::i18n::AUTO => LanguageChoice::Automatic,
+            code => LanguageChoice::Code(code.to_string()),
+        };
+        let catalogs = self.host.i18n().unwrap_or(&crate::i18n::I18N);
+        LanguageMenu::from_i18n(catalogs, current).submenu(&self.words.set::<LanguageLabels>())
     }
 
     /// The first shortcut of a command without parameters, as `Cmd+Z` text.

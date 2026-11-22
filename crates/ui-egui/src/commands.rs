@@ -79,6 +79,7 @@ pub const UI_COMMANDS: &[(&str, &str)] = &[
     ("selection.rotate_ccw", "Rotate 90° Counterclockwise"),
     ("app.about", "About StudioCraft"),
     ("app.licenses", "Licenses"),
+    ("app.language", "Language"),
     ("app.check_updates", "Check for Updates…"),
     ("help.discord", "Discord Server"),
     ("help.website", "Website"),
@@ -95,6 +96,7 @@ pub fn is_ui_command(id: &str) -> bool {
 pub fn ui_params(id: &str) -> &'static str {
     match id {
         "profile.switch" | "collection.switch" => "name: string",
+        "app.language" => "lang: string (auto, or the code of a built-in language)",
         "collection.import" | "collection.export" => "path?: string",
         "scopes.kind" => "kind: string (waveform, parade, histogram, vectorscopeYuv or vectorscopeHls)",
         "stream.destination_add" => {

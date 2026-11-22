@@ -34,8 +34,10 @@ use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 
 use craft_host::target::{Caps, DoubleClick, ShellInfo};
+use craft_host::{AppInfo, Host};
+use craft_i18n::{I18n, Words};
 use craft_keymap::{CommandRef, Keymap, Overrides};
-use craft_menu::MenuBar;
+use craft_menu::{LanguageChoice, MenuBar};
 use craft_ui::contract::{Bind, Entry, Props as _, Show as _, Tracked};
 use craft_ui::pickers::Select;
 use craft_ui::runtime::commands::{AppCatalog, CommandInput};
@@ -260,6 +262,11 @@ pub struct StudioApp {
     /// The interface language [`Self::install_fonts`] last built the fonts for; `None` until it
     /// runs. The fonts are built again when the language changes.
     fonts_for: Option<craft_i18n::Lang>,
+    /// The UI runtime's host: the catalogs and the interface language that the framework's own
+    /// words and the layout direction follow. A new one is handed in when the language changes.
+    host: Arc<Host>,
+    /// The framework's words in the host's language, for the Language menu the window lays out.
+    words: Arc<Words>,
     window_gpu: WindowGpu,
     /// Whether [`Self::logic`] ticked the studio since the last frame was drawn.
     ticked_in_logic: bool,
@@ -315,6 +322,7 @@ impl StudioApp {
             p.collection = studio.collection().name.clone();
         });
         let keymap = commands::keymap(store.prefs().hotkeys.clone());
+        let host = Arc::new(app_host(i18n::catalogs()));
         let mut app = StudioApp {
             studio,
             store,
@@ -367,6 +375,8 @@ impl StudioApp {
             updates: updates_ui::Runtime::default(),
             title_bar: None,
             fonts_for: None,
+            host: Arc::clone(&host),
+            words: host_words(&host),
             window_gpu: WindowGpu::default(),
             ticked_in_logic: false,
         };
@@ -761,6 +771,49 @@ impl StudioApp {
         let setting = i18n::normalize(setting).to_string();
         i18n::set_lang(i18n::resolve(&setting));
         self.store.update(|p| p.language = setting);
+        self.follow_language();
+    }
+
+    /// Give the host this thread's interface language when it differs.
+    fn follow_language(&mut self) {
+        let lang = i18n::lang();
+        if self.host.lang() != lang {
+            self.host = Arc::new(self.host.with_lang(lang));
+            self.words = host_words(&self.host);
+        }
+    }
+
+    /// Show the framework's words from `catalogs` instead of the embedded ones, as a test that
+    /// keeps them apart from StudioCraft's own lookups does.
+    #[cfg(test)]
+    pub(crate) fn use_catalogs(&mut self, catalogs: Arc<I18n>) {
+        self.host = Arc::new(app_host(catalogs));
+        self.words = host_words(&self.host);
+    }
+
+    /// The `app.language` command: `lang` is `auto` or the code of a built-in language. Any other
+    /// code, an empty one or a missing `lang` is an error that lists the codes.
+    fn language_command(&mut self, cmd: &CommandRef) -> Result<Value, Msg> {
+        let code = cmd.params.get("lang").and_then(Value::as_str).unwrap_or_default();
+        let offered = i18n::languages();
+        let setting = match LanguageChoice::from_command(cmd) {
+            Some(LanguageChoice::Automatic) => i18n::AUTO,
+            Some(LanguageChoice::Code(c)) => offered.iter().copied().find(|l| l.eq_ignore_ascii_case(&c)).unwrap_or_default(),
+            _ => "",
+        };
+        if setting.is_empty() {
+            let known: Vec<&str> = std::iter::once(i18n::AUTO).chain(offered.iter().copied()).collect();
+            return Err(tmsg!(
+                "`{command}`: unknown language `{code}` (one of {languages})",
+                command = cmd.id,
+                code = code,
+                languages = known.join(", ")
+            ));
+        }
+        if self.store.prefs().language != setting {
+            self.set_language(setting);
+        }
+        Ok(json!({"language": setting}))
     }
 
     fn toggle_pref(&mut self, f: impl FnOnce(&mut store::Prefs) -> &mut bool) -> Value {
@@ -1079,6 +1132,7 @@ impl StudioApp {
             "selection.rotate_cw" => return self.selection_transform(|t, _, _| Transform { rotation: t.rotation + 90.0, ..t }.sanitized()),
             "selection.rotate_ccw" => return self.selection_transform(|t, _, _| Transform { rotation: t.rotation + 270.0, ..t }.sanitized()),
             "app.about" => self.about = true,
+            "app.language" => return self.language_command(cmd),
             "app.check_updates" => return updates_ui::check(self, ctx),
             "app.licenses" => {
                 if self.licenses.is_none() {
@@ -1369,8 +1423,9 @@ impl StudioApp {
     /// Before each frame's passes, from `embed::before_input`: runs the commands the runtime
     /// fired (shortcuts and menu rows) unless a prompt, the exit question or Settings is open, and
     /// returns the frame's input: the root values of [`theme::root_env`] with the interface
-    /// direction, and the command catalog with the user's shortcuts. egui's own theme follows the
-    /// resolved mode, for the egui widgets the window still draws itself.
+    /// direction, the command catalog with the user's shortcuts, and the host in the interface
+    /// language. egui's own theme follows the resolved mode, for the egui widgets the window still
+    /// draws itself.
     pub fn frame_input(&mut self, ctx: &egui::Context, out: FrameOutput) -> FrameInput {
         let modal = self.prompt.is_some() || self.confirm_exit || self.settings.is_some();
         if !modal {
@@ -1385,13 +1440,13 @@ impl StudioApp {
         if let Some(catalog) = self.catalog() {
             input = input.catalog(catalog);
         }
-        // port: P3 (language, direction and framework words) moves the language onto the host.
-        let root = theme::root_env().direction(i18n::direction());
+        self.follow_language();
+        let root = theme::root_env().direction(host_direction(&self.host));
         let shown = theme::egui_theme(root.resolved(ctx).mode);
         if ctx.theme() != shown {
             ctx.set_theme(shown);
         }
-        FrameInput::new(root).commands(input)
+        FrameInput::new(root).commands(input).host(Arc::clone(&self.host))
     }
 
     /// The runtime's command catalog: every command a shortcut can be given. A command a linked
@@ -2136,11 +2191,6 @@ impl StudioApp {
 
     /// Draw one frame of the whole window.
     pub fn frame(&mut self, ui: &mut Ui) {
-        let words = craft_ui::runtime::env::WordsOverride::Replace(i18n::framework_words());
-        craft_ui::runtime::env::with_env(ui, |o| o.words = Some(words), |ui| self.frame_in_language(ui));
-    }
-
-    fn frame_in_language(&mut self, ui: &mut Ui) {
         let ctx = ui.ctx().clone();
         self.frames += 1;
         self.before(&ctx);
@@ -2245,6 +2295,25 @@ impl StudioApp {
     pub fn before_input(&mut self, ctx: &egui::Context) {
         embed::before_input(ctx, |out| self.frame_input(ctx, out));
     }
+}
+
+/// The host the UI runtime reads `catalogs` and the interface language from.
+fn app_host(catalogs: Arc<I18n>) -> Host {
+    Host::builder(AppInfo { id: APP_ID, name: APP_NAME, version: env!("CARGO_PKG_VERSION") }).i18n(catalogs).lang(i18n::lang()).build()
+}
+
+/// The framework's words in `host`'s catalogs and language.
+fn host_words(host: &Host) -> Arc<Words> {
+    Arc::new(match host.i18n_shared() {
+        Some(catalogs) => Words::from_i18n(Arc::clone(catalogs), host.lang()),
+        None => Words::english(),
+    })
+}
+
+/// The layout direction of `host`'s language: right to left for Arabic and Hebrew.
+fn host_direction(host: &Host) -> craft_ui::runtime::env::Direction {
+    use craft_ui::runtime::env::Direction;
+    if host.i18n().is_some_and(|catalogs| catalogs.rtl(host.lang())) { Direction::Rtl } else { Direction::Ltr }
 }
 
 /// Install the UI runtime and the interface fonts on `ctx`, once, before the first frame. On the

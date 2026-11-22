@@ -83,10 +83,10 @@ collections).
 The message is in English. The window's status bar shows it as well, in the interface language
 when the language's catalog has the message.
 [Commands with their own parameters](#commands-with-their-own-parameters) describes `app.info`,
-`app.links`, `app.check_updates`, `plugin.list`, `source.schema`, `source.sync_offset`,
-`source.monitor`, `source.set_record_track`, `audio_tracks.status`, `audio_tracks.repair`,
-`audio_tracks.open_last`, `audio_tracks.marker`, the `captions.*` commands, the `dock.layout_*`
-commands, `video.displays` and `video.canvas_from_display`.
+`app.links`, `app.check_updates`, `app.language`, `plugin.list`, `source.schema`,
+`source.sync_offset`, `source.monitor`, `source.set_record_track`, `audio_tracks.status`,
+`audio_tracks.repair`, `audio_tracks.open_last`, `audio_tracks.marker`, the `captions.*` commands,
+the `dock.layout_*` commands, `video.displays` and `video.canvas_from_display`.
 
 Each entry of `engine.commands` has these fields:
 
@@ -193,6 +193,14 @@ newer version and shows the answer in the window; it replies `{"checking": true}
 that cannot be reached is reported as an error, never as "up to date". Sessions started with
 `--no-prefs`, `--screenshot` or `--self-test` never check, and the command fails there with
 "update checks are off in this session".
+
+### `app.language`
+
+The window's `app.language` command (View › Language) sets the interface language. With
+`{"lang": "de"}` it shows the window in German from the next frame, saves the setting and replies
+`{"language": "de"}`. `{"lang": "auto"}` follows the system language. A code that is not one of
+the built-in languages, an empty code or a missing `lang` is an error that lists the codes, and the
+setting stays as it was.
 
 ### `plugin.list`
 

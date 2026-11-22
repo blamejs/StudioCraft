@@ -32,6 +32,7 @@
 	Audio source actions	Audio source actions
 	AV1	AV1
 	available	available
+	Automatic	Automatic
 	Available Encoders	Available Encoders
 	Background	Background
 	Balanced	Balanced
@@ -615,6 +616,7 @@ menu	Transform	Transform
 @msg	the source has not shown a picture yet	the source has not shown a picture yet
 @msg	settings are kept in memory only (--no-prefs)	settings are kept in memory only (--no-prefs)
 @msg	`scopes.kind`: unknown scope `{name}` (one of {scopes})	`scopes.kind`: unknown scope `{name}` (one of {scopes})
+@msg	`{command}`: unknown language `{code}` (one of {languages})	`{command}`: unknown language `{code}` (one of {languages})
 @msg	`dock.move`: `to` is `left` or `right`, not `{to}`	`dock.move`: `to` is `left` or `right`, not `{to}`
 @msg	`dock.float` needs `floating`: true or false	`dock.float` needs `floating`: true or false
 @msg	`dock.layout_save`: `name` is a string	`dock.layout_save`: `name` is a string

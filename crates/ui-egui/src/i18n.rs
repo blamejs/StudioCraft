@@ -10,10 +10,14 @@
 //! - `tid!(id, label)`: a command's label, by its command id.
 //! - `tmsg!(template, name = value, …)`: a status or error [`Msg`] with `{name}` placeholders. It
 //!   keeps its English and is translated when shown.
+//!
+//! The window hands the same catalogs and the thread's language to the UI runtime's host each
+//! frame, so the words the framework draws itself (dialog buttons, the Language menu) and the
+//! layout direction follow the interface language.
 
 use std::borrow::Cow;
 use std::cell::Cell;
-use std::sync::LazyLock;
+use std::sync::{Arc, LazyLock};
 
 use craft_i18n::{I18n, Lang};
 
@@ -56,14 +60,19 @@ pub fn languages() -> Vec<&'static str> {
 }
 
 /// The embedded catalogs.
-pub static I18N: LazyLock<I18n> = LazyLock::new(|| {
+pub static I18N: LazyLock<Arc<I18n>> = LazyLock::new(|| {
     let offered = languages();
     let (i18n, problems) = I18n::new(CRAFT_I18N, &offered);
     for p in problems {
         log::warn!("translation catalog: {p}");
     }
-    i18n
+    Arc::new(i18n)
 });
+
+/// The embedded catalogs as the shared handle the UI runtime's host keeps.
+pub fn catalogs() -> Arc<I18n> {
+    Arc::clone(&I18N)
+}
 
 thread_local! {
     static CURRENT: Cell<Lang> = const { Cell::new(Lang::EN) };
@@ -77,54 +86,6 @@ pub fn lang() -> Lang {
 /// Show the interface of this thread in `lang` from now on.
 pub fn set_lang(lang: Lang) {
     CURRENT.set(lang);
-}
-
-/// The interface direction of this thread's language: right to left for Arabic and Hebrew.
-pub fn direction() -> craft_ui::runtime::env::Direction {
-    use craft_ui::runtime::env::Direction;
-    if I18N.rtl(lang()) { Direction::Rtl } else { Direction::Ltr }
-}
-
-// port: P3 (language, direction and framework words) replaces these words with the language on
-// the runtime's host.
-
-/// The framework's built-in words (dialog buttons, the update dialogs) in this thread's language,
-/// looked up in the embedded catalogs. Built once per language. The pseudo locale keeps them in
-/// English: its audit checks StudioCraft's own strings against `i18n/locales/en/studiocraft.tsv`.
-pub(crate) fn framework_words() -> std::sync::Arc<craft_i18n::Words> {
-    use std::cell::RefCell;
-    use std::sync::Arc;
-
-    use craft_i18n::{Word, Words};
-
-    thread_local! {
-        static BUILT: RefCell<Option<(Lang, Arc<Words>)>> = const { RefCell::new(None) };
-    }
-    let lang = lang();
-    BUILT.with_borrow_mut(|built| match built {
-        Some((l, words)) if *l == lang => Arc::clone(words),
-        _ if lang == Lang::PSEUDO => {
-            let words = Arc::new(Words::english());
-            *built = Some((lang, Arc::clone(&words)));
-            words
-        }
-        _ => {
-            let i18n: &'static I18n = &I18N;
-            let lookup = move |word: Word| -> Option<String> {
-                let text = if !word.id.is_empty() {
-                    i18n.tid(lang, word.id, word.english)
-                } else if !word.context.is_empty() {
-                    i18n.get(lang, word.context, word.english)?
-                } else {
-                    i18n.t(lang, word.english)
-                };
-                (text != word.english).then(|| text.to_owned())
-            };
-            let words = Arc::new(Words::new(lookup).with_plural(move |_, n, one, other| Some(i18n.trn(lang, n, one, other))));
-            *built = Some((lang, Arc::clone(&words)));
-            words
-        }
-    })
 }
 
 /// Whether `ui` lays out right to left: the direction its env has, which the frame's root values

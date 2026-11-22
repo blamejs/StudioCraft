@@ -106,7 +106,14 @@ fn the_embedded_catalogs_have_no_problems() {
 #[test]
 fn every_label_drawn_in_the_pseudo_locale_went_through_translation() {
     let mut a = StudioApp::boot(Store::memory(), None, Vec::new());
+    // The framework's own words come from a second copy of the catalogs, so they are drawn
+    // marked and their lookups stay apart from StudioCraft's: craft-i18n's catalogs list them,
+    // not `studiocraft.tsv`.
+    let (framework, problems) = craft_i18n::I18n::new(CRAFT_I18N, &languages());
+    assert!(problems.is_empty(), "{problems:?}");
+    let framework = std::sync::Arc::new(framework);
     set_lang(Lang::PSEUDO);
+    a.use_catalogs(std::sync::Arc::clone(&framework));
     let ctx = crate::test_context();
     a.perform(&ctx, &CommandRef::with_params("source.add", json!({"kind": "color", "name": "Backdrop"}))).unwrap();
     a.perform(&ctx, &CommandRef::with_params("source.add", json!({"kind": "text", "name": "Caption"}))).unwrap();
@@ -150,17 +157,27 @@ fn every_label_drawn_in_the_pseudo_locale_went_through_translation() {
     assert!(missed.is_empty(), "drawn without translation: {missed:?}");
     assert!(seen.iter().any(|t| t == "\u{27e6}Exported the scene collection to /tmp/show.json\u{27e7}"), "{seen:?}");
 
+    // The framework's words were drawn in the pseudo locale too: the Language menu's own labels.
+    let words = framework.looked_up();
+    for word in ["Language", "Automatic"] {
+        assert!(words.contains(word), "the framework word `{word}` was not looked up: {words:?}");
+    }
+
     // Every menu item and every entry of the shortcut list was looked up.
     let looked = I18N.looked_up();
-    // Every text looked up has an English source row, in some context.
+    // Every text looked up has an English source row, in some context. A framework word another
+    // test drew in the pseudo locale through the embedded catalogs is not StudioCraft's.
     let sources: BTreeSet<String> = english().into_iter().map(|(_, s)| s).collect();
-    let unlisted: Vec<String> = looked.iter().filter(|t| !sources.contains(*t)).map(|t| format!("\t{}\t{}", escape(t), escape(t))).collect();
+    let unlisted: Vec<String> =
+        looked.iter().filter(|t| !sources.contains(*t) && !words.contains(*t)).map(|t| format!("\t{}\t{}", escape(t), escape(t))).collect();
     assert!(unlisted.is_empty(), "looked up with no row in i18n/locales/en/studiocraft.tsv:\n{}", unlisted.join("\n"));
     set_lang(Lang::EN);
     let english = a.laid_menu();
     fn labels(nodes: &[Node], out: &mut Vec<String>) {
         for n in nodes {
             match n {
+                // The Language menu's labels are the framework's words and the languages' own names.
+                Node::Submenu { role: Some(craft_menu::ItemRole::Language), .. } => {}
                 Node::Item(it) => out.push(it.label.clone()),
                 Node::Submenu { label, children, .. } => {
                     out.push(label.clone());
@@ -232,15 +249,120 @@ fn notices_keep_english_and_the_status_bar_translates_them() {
 #[test]
 fn the_framework_words_follow_the_interface_language() {
     let cancel = craft_i18n::Word::keyed("dialog.cancel", "Cancel");
-    let de = I18N.from_code("de").unwrap();
-    set_lang(Lang::EN);
-    assert_eq!(framework_words().get(cancel), "Cancel");
-    set_lang(de);
-    assert_eq!(framework_words().get(cancel), "Abbrechen");
+    let mut a = StudioApp::boot(Store::memory(), None, Vec::new());
+    let ctx = crate::test_context();
+    a.set_language("en");
+    assert_eq!(a.words.get(cancel), "Cancel");
+    a.set_language("de");
+    assert_eq!(a.words.get(cancel), "Abbrechen");
+    // A language set on the thread alone reaches the host with the next frame.
     set_lang(Lang::PSEUDO);
-    assert_eq!(framework_words().get(cancel), "Cancel");
+    a.frame_input(&ctx, craft_ui::runtime::frame::FrameOutput::default());
+    assert_eq!(a.words.get(cancel), "\u{27e6}Cancel\u{27e7}");
+    a.set_language("en");
+    assert_eq!(a.words.get(cancel), "Cancel");
+}
+
+#[test]
+fn the_root_direction_follows_the_language() {
+    use craft_ui::runtime::env::Direction;
+    use craft_ui::runtime::frame::FrameOutput;
+    let mut a = StudioApp::boot(Store::memory(), None, Vec::new());
+    let ctx = crate::test_context();
+    for (code, direction) in [("en", Direction::Ltr), ("ar", Direction::Rtl), ("de", Direction::Ltr), ("he", Direction::Rtl), ("en", Direction::Ltr)]
+    {
+        a.set_language(code);
+        let input = a.frame_input(&ctx, FrameOutput::default());
+        let Some(host) = input.host else { panic!("{code}: the frame has no host") };
+        assert_eq!(host.i18n().map(|i| i.code(host.lang())), Some(code));
+        assert_eq!(input.root.direction, direction, "{code}");
+    }
+}
+
+/// The Language submenu of the laid-out menu bar, wherever the platform puts it.
+fn language_submenu(bar: &craft_menu::MenuBar) -> Option<(String, Vec<Node>)> {
+    fn find(nodes: &[Node]) -> Option<(String, Vec<Node>)> {
+        nodes.iter().find_map(|n| match n {
+            Node::Submenu { label, children, role: Some(craft_menu::ItemRole::Language), .. } => Some((label.clone(), children.clone())),
+            Node::Submenu { children, .. } => find(children),
+            _ => None,
+        })
+    }
+    bar.menus.iter().find_map(|m| find(&m.children))
+}
+
+/// Each Language row: its label, its `lang` parameter and whether it is chosen.
+fn language_rows(rows: &[Node]) -> Vec<(String, String, bool)> {
+    rows.iter()
+        .filter_map(|n| match n {
+            Node::Item(it) => {
+                assert_eq!(it.command.id, "app.language");
+                let code = it.command.params["lang"].as_str().unwrap_or_default().to_string();
+                Some((it.label.clone(), code, it.kind == craft_menu::ItemKind::Radio(true)))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn the_language_menu_lists_the_catalogs() {
+    let mut a = StudioApp::boot(Store::memory(), None, Vec::new());
+    let ctx = crate::test_context();
+    a.set_language("auto");
+    let Some((label, rows)) = language_submenu(&a.laid_menu()) else { panic!("no Language submenu") };
+    assert_eq!(label, I18N.tc(lang(), "menu", "Language"));
+    // Automatic first and chosen, then English and every built-in language by its own name.
+    let mut expected = vec![(I18N.t(lang(), "Automatic").to_string(), AUTO.to_string(), true)];
+    expected.extend(I18N.languages().into_iter().map(|l| (I18N.name(l).to_string(), I18N.code(l).to_string(), false)));
+    assert_eq!(language_rows(&rows), expected);
+    assert_eq!(expected.len(), languages().len() + 1);
+
+    // Choosing a row saves the setting and shows the menu, chosen row included, in that language.
+    let r = a.perform(&ctx, &CommandRef::with_params("app.language", json!({"lang": "de"}))).unwrap();
+    assert_eq!(r, json!({"language": "de"}));
+    assert_eq!(lang(), I18N.from_code("de").unwrap());
+    assert_eq!(a.store.prefs().language(), "de");
+    let Some((label, rows)) = language_submenu(&a.laid_menu()) else { panic!("no Language submenu") };
+    assert_eq!(label, "Sprache");
+    let rows = language_rows(&rows);
+    assert_eq!(rows.first().map(|r| r.0.as_str()), Some("Automatisch"));
+    let chosen: Vec<String> = rows.into_iter().filter(|r| r.2).map(|r| r.1).collect();
+    assert_eq!(chosen, ["de"]);
+
+    // A code that is not built in, an empty code or no code is refused with an error that lists
+    // every code, and changes nothing.
+    let codes = std::iter::once(AUTO).chain(languages()).collect::<Vec<_>>().join(", ");
+    for cmd in [
+        CommandRef::with_params("app.language", json!({"lang": "tlh"})),
+        CommandRef::with_params("app.language", json!({"lang": ""})),
+        CommandRef::new("app.language"),
+    ] {
+        let e = a.perform(&ctx, &cmd).unwrap_err();
+        assert!(e.contains(&format!("(one of {codes})")), "{e}");
+    }
+    assert_eq!(a.store.prefs().language(), "de");
+    let r = a.perform(&ctx, &CommandRef::with_params("app.language", json!({"lang": "auto"}))).unwrap();
+    assert_eq!(r, json!({"language": AUTO}));
+    assert_eq!(lang(), I18N.system_lang());
+    a.set_language("en");
+}
+
+#[test]
+fn a_language_chosen_from_the_menu_installs_its_fonts() {
+    let mut a = StudioApp::boot(Store::memory(), None, Vec::new());
+    a.set_language("en");
+    let ctx = crate::test_context();
+    a.install_fonts(&ctx);
+    a.perform(&ctx, &CommandRef::with_params("app.language", json!({"lang": "ja"}))).unwrap();
+    shown(&mut a, &ctx);
+    let ja = I18N.from_code("ja").unwrap();
+    assert_eq!(a.fonts_for, Some(ja));
+    assert_eq!(a.host.lang(), ja);
+    a.perform(&ctx, &CommandRef::with_params("app.language", json!({"lang": "en"}))).unwrap();
+    shown(&mut a, &ctx);
+    assert_eq!(a.fonts_for, Some(Lang::EN));
     set_lang(Lang::EN);
-    assert_eq!(framework_words().get(cancel), "Cancel");
 }
 
 #[test]
