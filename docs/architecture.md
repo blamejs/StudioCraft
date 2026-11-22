@@ -312,6 +312,12 @@ once through `craft-packet` and offers it to every destination without waiting f
 destination that sends has its own thread, which publishes with `craft-rtmp` from a ring that holds
 4 s of the stream (`outputs/src/stream.rs`). A destination that falls behind loses packets up to
 the next keyframe, and a destination that fails, stops or reconnects does not affect the others.
+Each try looks the server's name up on a lookup thread of its own, which hands its answer back
+through a channel that holds one answer. The destination's thread waits at most 10 s for it
+(`stream::LOOKUP_WAIT`) and wakes at once for a stop. A lookup thread lives until the system's
+resolver returns, which StudioCraft cannot cut short, so each destination keeps at most two
+(`stream::MAX_LOOKUPS`) and the process at most 32 (`stream::MAX_ALL_LOOKUPS`), counted across
+streams that were stopped and started again.
 
 A recording with H.264 (built in) runs a video encode thread, an audio encode thread and a file
 thread that writes the Matroska file (`outputs/src/native.rs`). The encode threads hand packets to
