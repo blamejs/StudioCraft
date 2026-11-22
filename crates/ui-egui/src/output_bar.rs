@@ -351,9 +351,9 @@ impl StudioApp {
             // port: P9 (output bar) lets the framework's menu bar share the row; this child
             // keeps the titles to the width the fit gives them, past which they overflow.
             ui.allocate_ui_with_layout(vec2(fit.menus, height), i18n::row(ui), |ui| {
-                // The bar's own default applies unless the keys are taken (on macOS it takes none).
-                let menus = MenuBarUi::new(laid);
-                if keyboard { menus } else { menus.keyboard(false) }.show(ui)
+                // The window has no native menu bar on any platform, so the bar takes F10 and Alt
+                // unless a modal has them.
+                MenuBarUi::new(laid).keyboard(keyboard).show(ui)
             });
             let end = i18n::start_x(ui, ui.cursor());
             parts.push(("menus", Rect::from_min_max(pos2(start.min(end), top), pos2(start.max(end), top + height))));
