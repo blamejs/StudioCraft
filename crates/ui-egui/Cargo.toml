@@ -25,6 +25,10 @@ eframe = { workspace = true, features = ["wgpu", "x11", "wayland"] }
 wgpu = { workspace = true }
 craft-ui = { workspace = true }
 craft-menu = { workspace = true }
+# Which output bar groups fit the top row.
+craft-behavior = { workspace = true }
+# The shell description the UI runtime is installed with.
+craft-host = { workspace = true }
 craft-keymap = { workspace = true }
 craft-settings = { workspace = true }
 craft-dialogs = { workspace = true }

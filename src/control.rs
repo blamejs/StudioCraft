@@ -424,7 +424,11 @@ mod tests {
         fn new() -> Rig {
             let (reply, answers) = sync_channel(8);
             let app = StudioApp::boot(Store::memory(), None, Vec::new());
-            let mut r = Rig { ctx: egui::Context::default(), app, bridge: Bridge::default(), reply, answers };
+            let ctx = egui::Context::default();
+            if let Err(e) = studiocraft_ui_egui::install_runtime(&ctx, false) {
+                panic!("the UI runtime did not install: {e:?}");
+            }
+            let mut r = Rig { ctx, app, bridge: Bridge::default(), reply, answers };
             r.frame();
             r
         }
@@ -439,6 +443,7 @@ mod tests {
             let mut input = raw();
             self.bridge.inject(&mut input);
             let app = &mut self.app;
+            app.before_input(&self.ctx);
             let mut out = self.ctx.run_ui(input, |ui| app.frame(ui));
             out.textures_delta.clear();
         }
@@ -582,6 +587,7 @@ mod tests {
         let (ctx, reply) = (r.ctx.clone(), r.reply.clone());
         let mut later = None;
         let (bridge, app) = (&mut r.bridge, &mut r.app);
+        app.before_input(&ctx);
         let out = ctx.run_ui(raw(), |ui| {
             later = Some(bridge.handle(&ctx, app, "ui.screenshot", &json!({"max_side": 2}), &reply));
             app.frame(ui);

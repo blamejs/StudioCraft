@@ -1,10 +1,8 @@
 //! The window's look: the palettes, sizes and type scale of [`crate::kit::tokens`] applied to
-//! egui's dark and light styles, the menu bar's style, and the keyboard focus ring.
+//! egui's dark and light styles, and the keyboard focus ring.
 //!
 //! The window follows the system's light or dark setting; each one gets its own palette.
 
-use craft_menu::BarStyle;
-use craft_ui::theme::WidgetPalette;
 use egui::{Color32, CornerRadius, Event, FontId, Id, Key, Margin, Rect, Shadow, Stroke, StrokeKind, Style, TextStyle, Theme};
 
 use crate::kit::tokens::{Palette, Sizes, TypeScale};
@@ -61,8 +59,21 @@ pub fn sizes(ctx: &egui::Context) -> Sizes {
 pub fn apply(style: &mut Style, p: &Palette, s: &Sizes, t: &TypeScale) {
     let v = &mut style.visuals;
     v.dark_mode = p.dark;
-    WidgetPalette { noninteractive: p.surface, inactive: p.control, hovered: p.control_hover, active: p.control_active, open: p.control_active }
-        .apply_to(&mut v.widgets, CornerRadius::same(s.radius_control), Stroke::new(1.0, p.text));
+    // port: P2 (theme and fonts on the framework) deletes this; each state's fills, radius and text
+    // stroke, as the removed `craft_ui::theme::WidgetPalette::apply_to` set them.
+    let w = &mut v.widgets;
+    for (state, fill) in [
+        (&mut w.noninteractive, p.surface),
+        (&mut w.inactive, p.control),
+        (&mut w.hovered, p.control_hover),
+        (&mut w.active, p.control_active),
+        (&mut w.open, p.control_active),
+    ] {
+        state.bg_fill = fill;
+        state.weak_bg_fill = fill;
+        state.corner_radius = CornerRadius::same(s.radius_control);
+        state.fg_stroke = Stroke::new(1.0, p.text);
+    }
     v.widgets.noninteractive.fg_stroke = Stroke::new(1.0, p.text_muted);
     v.widgets.noninteractive.bg_stroke = Stroke::new(1.0, p.line);
     for w in [&mut v.widgets.inactive, &mut v.widgets.hovered, &mut v.widgets.active, &mut v.widgets.open] {
@@ -107,12 +118,6 @@ pub fn apply(style: &mut Style, p: &Palette, s: &Sizes, t: &TypeScale) {
     ts.insert(TextStyle::Name(TIMER.into()), FontId::monospace(t.timer));
 
     style.animation_time = ANIMATION_TIME;
-}
-
-/// The menu bar's style for `style`: menus at least `sizes.menu_min_width` wide and growing
-/// with their content, and the check and radio marks.
-pub fn bar_style(style: &Style, sizes: &Sizes) -> BarStyle {
-    BarStyle { menu_width: sizes.menu_min_width, check_mark: CHECK_MARK.to_owned(), radio_mark: RADIO_MARK.to_owned(), ..BarStyle::from_style(style) }
 }
 
 /// Whether the focus ring shows after `events`, given whether it showed before: a key that
@@ -207,16 +212,6 @@ mod tests {
         install_with(&ctx, &Sizes::COMFORTABLE);
         assert_eq!(ctx.style_of(Theme::Dark).spacing.interact_size, vec2(28.0, 28.0));
         assert_eq!(sizes(&ctx), Sizes::COMFORTABLE);
-    }
-
-    #[test]
-    fn menus_are_at_least_160_wide_with_the_marks() {
-        let ctx = installed();
-        let bar = bar_style(&ctx.style_of(Theme::Dark), &Sizes::COMPACT);
-        assert_eq!(bar.menu_width, 160.0);
-        assert_eq!(bar.check_mark, CHECK_MARK);
-        assert_eq!(bar.radio_mark, RADIO_MARK);
-        assert_eq!(bar.title_padding, vec2(8.0, 4.0));
     }
 
     fn screen() -> RawInput {

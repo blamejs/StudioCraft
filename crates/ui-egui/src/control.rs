@@ -3,6 +3,7 @@
 
 use craft_keymap::CommandRef;
 use craft_menu::{ItemState, LayoutOptions, MenuBar, Node, Target};
+use craft_ui::contract::Tracked;
 use serde_json::{Value, json};
 use studiocraft_engine::command::Undo;
 use studiocraft_studio::{CaptionState, OutputKind};
@@ -54,7 +55,7 @@ fn menu_nodes(nodes: &[Node], prefix: &str) -> Vec<Value> {
                 let children = menu_nodes(children, &path);
                 Some(json!({"label": label, "path": path, "children": children}))
             }
-            Node::Separator | Node::Standard { .. } => None,
+            _ => None,
         })
         .collect()
 }
@@ -64,11 +65,12 @@ impl StudioApp {
     pub(crate) fn item_state(&self, id: &str) -> ItemState {
         let p = self.store.prefs();
         let engine = self.studio.engine();
-        let on = |b: bool| ItemState { enabled: true, checked: Some(b) };
+        let on = |b: bool| ItemState::default().checked(Some(b));
+        let enabled = |b: bool| ItemState::default().enabled(b);
         match id {
-            "edit.undo" => ItemState { enabled: engine.undo_label().is_some(), checked: None },
-            "edit.redo" => ItemState { enabled: engine.redo_label().is_some(), checked: None },
-            id if id.starts_with("selection.") => ItemState { enabled: self.selection().is_some(), checked: None },
+            "edit.undo" => enabled(engine.undo_label().is_some()),
+            "edit.redo" => enabled(engine.redo_label().is_some()),
+            id if id.starts_with("selection.") => enabled(self.selection().is_some()),
             "view.stats" => on(p.stats),
             "view.scopes" => on(p.scopes),
             "view.streaming" => on(self.streaming.is_some()),
@@ -77,19 +79,19 @@ impl StudioApp {
             "view.fullscreen" => on(self.fullscreen),
             "studio.toggle" => on(engine.studio_mode()),
             "replay.toggle" => on(self.studio.output(OutputKind::Replay).is_some_and(|s| s.active)),
-            "replay.save" => ItemState { enabled: self.studio.output(OutputKind::Replay).is_some_and(|s| s.active), checked: None },
+            "replay.save" => enabled(self.studio.output(OutputKind::Replay).is_some_and(|s| s.active)),
             "captions.toggle" => on(matches!(self.studio.captions_state(), CaptionState::Loading | CaptionState::Running)),
-            "audio_tracks.open_last" => ItemState { enabled: self.studio.audio_tracks_last_session().is_some(), checked: None },
-            "audio_tracks.marker" => ItemState { enabled: self.studio.audio_tracks_running(), checked: None },
+            "audio_tracks.open_last" => enabled(self.studio.audio_tracks_last_session().is_some()),
+            "audio_tracks.marker" => enabled(self.studio.audio_tracks_running()),
             "dock.scenes" => on(p.docks.scenes),
             "dock.sources" => on(p.docks.sources),
             "dock.mixer" => on(p.docks.mixer),
             "dock.app_audio" => on(p.docks.app_audio),
             "dock.transitions" => on(p.docks.transitions),
             "dock.controls" => on(p.docks.controls),
-            "dock.layout_apply" | "dock.layout_remove" => ItemState { enabled: !p.dock_layouts.is_empty(), checked: None },
-            "profile.remove" => ItemState { enabled: self.profiles.len() > 1, checked: None },
-            "collection.remove" => ItemState { enabled: self.collections.len() > 1, checked: None },
+            "dock.layout_apply" | "dock.layout_remove" => enabled(!p.dock_layouts.is_empty()),
+            "profile.remove" => enabled(self.profiles.len() > 1),
+            "collection.remove" => enabled(self.collections.len() > 1),
             _ => ItemState::default(),
         }
     }
@@ -105,10 +107,10 @@ impl StudioApp {
             profile: &self.studio.profile().name,
             layouts: &layouts,
         };
-        let mut bar = commands::menu_bar(&s);
+        let mut bar = Tracked::new(commands::menu_bar(&s));
         craft_menu::apply_keymap(&mut bar, &self.keymap);
         craft_menu::apply_state(&mut bar, |c| self.item_state(&c.id));
-        let options = LayoutOptions { label: &crate::i18n::menu_text, ..LayoutOptions::new(APP_NAME) };
+        let options = LayoutOptions::new(APP_NAME).label(&crate::i18n::menu_text);
         craft_menu::layout(&bar, Target::current(), &options).bar
     }
 
@@ -178,7 +180,7 @@ impl StudioApp {
                     let shown = match n {
                         Node::Item(it) => it.label.as_str(),
                         Node::Submenu { label: l, .. } => l.as_str(),
-                        Node::Separator | Node::Standard { .. } => return false,
+                        _ => return false,
                     };
                     if exact { shown == *label } else { same_label(shown, label) }
                 }

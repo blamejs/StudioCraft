@@ -39,13 +39,14 @@ struct Shell {
 }
 
 impl eframe::App for Shell {
-    fn raw_input_hook(&mut self, _ctx: &egui::Context, raw: &mut egui::RawInput) {
+    fn raw_input_hook(&mut self, ctx: &egui::Context, raw: &mut egui::RawInput) {
         if let Some(h) = &mut self.harness {
             h.inject(raw);
         }
         if let Some(c) = &mut self.control {
             c.inject(raw);
         }
+        self.app.before_input(ctx);
     }
 
     fn logic(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
@@ -146,9 +147,10 @@ fn run(args: Args, raw: Vec<std::ffi::OsString>) -> Result<(), String> {
         APP_NAME,
         options,
         Box::new(move |cc| {
-            studiocraft_ui_egui::theme::install(&cc.egui_ctx);
             let mut app = StudioApp::boot(store, cc.wgpu_render_state.clone(), problems);
             // After boot, which sets the interface language from the saved settings.
+            studiocraft_ui_egui::install_runtime(&cc.egui_ctx, true).map_err(|e| format!("the interface could not start: {e:?}"))?;
+            studiocraft_ui_egui::theme::install(&cc.egui_ctx);
             app.install_fonts(&cc.egui_ctx);
             app.set_update_checks(update_checks);
             app.set_title_bar(buttons);

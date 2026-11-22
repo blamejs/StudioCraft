@@ -4,7 +4,7 @@
 //! window's (`view.stats`, `profile.switch`, …). Menus, shortcuts and the control channel all name
 //! a command by id with JSON parameters.
 
-use craft_keymap::{Bindable, Binding, CommandRef, Keymap, Overrides, Platform, Scope, Scopes};
+use craft_keymap::{Binding, CommandDef, CommandRef, Keymap, Overrides, Platform, Scope, Scopes};
 use craft_menu::{Item, ItemRole, Menu, MenuBar, MenuRole, Node};
 use serde_json::json;
 
@@ -127,12 +127,12 @@ pub fn ui_undoable(id: &str) -> bool {
     )
 }
 
-fn bindable(cmd: CommandRef, label: &str, defaults: &[&str]) -> Bindable {
-    defaults.iter().filter_map(|d| Binding::parse(d).ok()).fold(Bindable::new(cmd, label, Scope::app()), Bindable::with_default)
+fn bindable(cmd: CommandRef, label: &str, defaults: &[&str]) -> CommandDef {
+    defaults.iter().filter_map(|d| Binding::parse(d).ok()).fold(CommandDef::new(cmd, label, Scope::app()), CommandDef::with_default)
 }
 
 /// Every command a shortcut can be given, with the default shortcuts.
-pub fn catalog() -> Vec<Bindable> {
+pub fn catalog() -> Vec<CommandDef> {
     let c = CommandRef::new;
     let mut list = vec![
         bindable(c("edit.undo"), "Undo", &["Cmd+Z"]),
@@ -169,6 +169,32 @@ pub fn catalog() -> Vec<Bindable> {
 
 pub fn keymap(overrides: Overrides) -> Keymap {
     Keymap::new(catalog(), Scopes::new(), Platform::current()).with_overrides(overrides)
+}
+
+// port: P4 (commands, shortcuts and menus) decides how commands with parameters reach the
+// runtime's catalog, which takes one entry per id.
+
+/// [`catalog`] as the runtime's command catalog takes it: one entry per id. An entry with
+/// parameters goes under its binding key (`scene.select_index {"index":1}`), which is also the key
+/// its saved shortcuts are stored under; [`fired_command`] turns it back.
+pub fn runtime_catalog() -> Vec<CommandDef> {
+    catalog()
+        .into_iter()
+        .map(|mut def| {
+            if def.command.params.is_null() {
+                def
+            } else {
+                def.command = CommandRef::new(def.command.key());
+                def
+            }
+        })
+        .collect()
+}
+
+/// The command a fired catalog entry stands for: the entry of [`runtime_catalog`] with its
+/// parameters back.
+pub fn fired_command(fired: &CommandRef) -> CommandRef {
+    if fired.params.is_null() && fired.id.contains(' ') { CommandRef::parse_key(&fired.id).unwrap_or_else(|| fired.clone()) } else { fired.clone() }
 }
 
 /// What the menus show for the current state.
@@ -324,10 +350,16 @@ pub fn menu_bar(s: &MenuState) -> MenuBar {
         ],
     )
     .role(MenuRole::Help);
-    let mut bar = MenuBar {
-        menus: vec![file, edit, view, docks, Menu::new(title("Profile"), profile), Menu::new(title("Scene Collection"), collection), tools, help],
-        ..MenuBar::default()
-    };
+    let mut bar = MenuBar::new(vec![
+        file,
+        edit,
+        view,
+        docks,
+        Menu::new(title("Profile"), profile),
+        Menu::new(title("Scene Collection"), collection),
+        tools,
+        help,
+    ]);
     bar.tag_item(&CommandRef::new("app.about"), ItemRole::About);
     bar.tag_item(&CommandRef::new("app.settings"), ItemRole::Settings);
     bar.tag_item(&CommandRef::new("app.exit"), ItemRole::Quit);

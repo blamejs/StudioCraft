@@ -6,7 +6,7 @@
 //! Without `CRAFT_FONTS_DIR` the stack is the three app faces and egui's faces.
 
 use craft_fonts_build::EmbeddedFace;
-use craft_ui::fonts::{CraftFace, Family, I18nScripts, Stack, UiFonts};
+use craft_ui::fonts::{Family, FontRef, I18nScripts, Stack, UiFonts};
 use egui::{FontData, FontFamily};
 
 /// The faces `build.rs` embedded; empty when the app was built without `CRAFT_FONTS_DIR`.
@@ -34,25 +34,28 @@ pub fn semibold() -> FontFamily {
     FontFamily::Name(SEMIBOLD.into())
 }
 
-/// The font stack for an interface in `language` (a code such as `en` or `pt-br`), with `craft` as
-/// the craft-fonts faces.
-pub fn stack(language: &str, craft: &[EmbeddedFace]) -> Stack {
-    let craft: Vec<CraftFace> = craft.iter().copied().map(CraftFace::from).collect();
+/// The fonts for an interface in `language` (a code such as `en` or `pt-br`), with `craft` as the
+/// craft-fonts faces.
+pub fn ui_fonts(language: &str, craft: &[EmbeddedFace]) -> UiFonts<'static> {
     UiFonts::new(&I18nScripts)
-        .app_face(INTER, FontData::from_static(INTER_REGULAR), &[FontFamily::Proportional])
-        .app_face(INTER_SEMI, FontData::from_static(INTER_SEMIBOLD), &[semibold()])
-        .app_face(MONO, FontData::from_static(JETBRAINS_MONO), &[FontFamily::Monospace])
+        .app_face(INTER, FontData::from_static(INTER_REGULAR), &[FontRef::proportional()])
+        .app_face(INTER_SEMI, FontData::from_static(INTER_SEMIBOLD), &[FontRef::named(SEMIBOLD)])
+        .app_face(MONO, FontData::from_static(JETBRAINS_MONO), &[FontRef::monospace()])
         .family(Family::named(SEMIBOLD).weight(600))
-        .craft_faces(&craft)
+        .craft_faces(craft)
         .languages(&crate::i18n::languages())
         .ui_language(language)
-        .stack()
+}
+
+/// The font stack for an interface in `language`, with `craft` as the craft-fonts faces.
+pub fn stack(language: &str, craft: &[EmbeddedFace]) -> Stack {
+    ui_fonts(language, craft).stack()
 }
 
 /// Install the fonts for an interface in `language` on `ctx`. Call it again when the interface
 /// language changes.
 pub fn install(ctx: &egui::Context, language: &str) {
-    stack(language, CRAFT_FONTS).install(ctx);
+    ui_fonts(language, CRAFT_FONTS).install(ctx);
 }
 
 #[cfg(test)]
@@ -63,19 +66,19 @@ mod tests {
     use crate::theme::{CHECK_MARK, RADIO_MARK};
 
     fn marks() -> [Sample<'static>; 2] {
-        [Sample { language: "en", key: "check mark", text: CHECK_MARK }, Sample { language: "en", key: "radio mark", text: RADIO_MARK }]
+        [Sample::new("en", "check mark", CHECK_MARK), Sample::new("en", "radio mark", RADIO_MARK)]
     }
 
     /// A craft face for `scripts`, made from Inter's file.
     fn craft(family: &'static str, scripts: &'static [&'static str]) -> EmbeddedFace {
-        EmbeddedFace { family, style: "Regular", scripts, index: 0, bytes: INTER_REGULAR }
+        EmbeddedFace { family, style: "Regular", scripts, index: 0, bytes: INTER_REGULAR, role: None }
     }
 
     #[test]
     fn the_menu_marks_draw_with_a_real_glyph() {
         for (built, faces) in [("without CRAFT_FONTS_DIR", &[][..]), ("with this build's craft faces", CRAFT_FONTS)] {
             let stack = stack("en", faces);
-            for family in [FontFamily::Proportional, semibold(), FontFamily::Monospace] {
+            for family in [FontRef::proportional(), FontRef::named(SEMIBOLD), FontRef::monospace()] {
                 let missing = missing_glyphs(&stack, &family, marks(), false);
                 let names: Vec<String> = missing.iter().map(ToString::to_string).collect();
                 assert!(missing.is_empty(), "{built}, {family:?}: {}", names.join("; "));
@@ -86,24 +89,24 @@ mod tests {
     #[test]
     fn the_app_faces_lead_their_families() {
         let stack = stack("en", &[]);
-        assert_eq!(stack.chain(&FontFamily::Proportional).first().map(String::as_str), Some(INTER));
-        assert_eq!(stack.chain(&semibold()).first().map(String::as_str), Some(INTER_SEMI));
-        assert_eq!(stack.chain(&FontFamily::Monospace).first().map(String::as_str), Some(MONO));
-        assert!(stack.weights().contains(&(semibold(), 600)), "{:?}", stack.weights());
+        assert_eq!(stack.chain(&FontRef::proportional()).first().map(String::as_str), Some(INTER));
+        assert_eq!(stack.chain(&FontRef::named(SEMIBOLD)).first().map(String::as_str), Some(INTER_SEMI));
+        assert_eq!(stack.chain(&FontRef::monospace()).first().map(String::as_str), Some(MONO));
+        assert!(stack.weights().contains(&(FontRef::named(SEMIBOLD), 600)), "{:?}", stack.weights());
     }
 
     #[test]
     fn craft_faces_follow_the_app_face_unless_the_language_needs_its_own_script_first() {
         let arabic = [craft("Test Arabic", &["Arab"])];
         let english = stack("en", &arabic);
-        let chain = english.chain(&FontFamily::Proportional);
+        let chain = english.chain(&FontRef::proportional());
         assert_eq!(chain.first().map(String::as_str), Some(INTER), "{chain:?}");
         assert!(chain.iter().any(|n| n == "Test Arabic Regular"), "{chain:?}");
 
         let arabic_ui = stack("ar", &arabic);
-        let chain = arabic_ui.chain(&FontFamily::Proportional);
+        let chain = arabic_ui.chain(&FontRef::proportional());
         assert_eq!(chain.first().map(String::as_str), Some("Test Arabic Regular"), "{chain:?}");
-        let mono = arabic_ui.chain(&FontFamily::Monospace);
+        let mono = arabic_ui.chain(&FontRef::monospace());
         assert_eq!(mono.first().map(String::as_str), Some(MONO), "{mono:?}");
     }
 

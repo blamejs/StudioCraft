@@ -2,6 +2,8 @@
 //! off setting, its server with the key hidden, where its key comes from and, while the stream
 //! runs, what it is doing. Each change runs one of the window's `stream.destination*` commands.
 
+use craft_ui::contract::{Bind, Entry, Props as _, Show as _};
+use craft_ui::pickers::Select;
 use egui::{RichText, Ui};
 use serde_json::{Value, json};
 use studiocraft_model::profile::{MAX_DESTINATION_ID, MAX_DESTINATIONS, PRIMARY_DESTINATION};
@@ -238,7 +240,7 @@ fn row(
         if ui.checkbox(&mut on, RichText::new(title).strong()).on_hover_text(tl!("Send to this destination when the stream starts")).changed() {
             acts.push(Act::run("stream.destination_set", json!({"id": d.id, "enabled": on})));
         }
-        ui.with_layout(craft_ui::direction::trailing(ui), |ui| {
+        ui.with_layout(crate::i18n::trailing(ui), |ui| {
             let editing = panel.editing.as_ref().is_some_and(|e| e.id == d.id);
             let can_remove = !(view.running && live.is_some_and(sending));
             let remove = ui.add_enabled(can_remove, egui::Button::new(tl!("Remove")));
@@ -304,11 +306,8 @@ fn details(ui: &mut Ui, e: &mut Edit, view: &View, acts: &mut Vec<Act>) -> bool 
             });
             ui.end_row();
             ui.label(tl!("Stream key"));
-            craft_ui::ComboBox::from_id_salt("key-choice").selected_text(tl!(e.key.label())).show_ui(ui, |ui| {
-                for c in KeyChoice::ALL {
-                    ui.selectable_value(&mut e.key, c, tl!(c.label()));
-                }
-            });
+            let choices: Vec<_> = KeyChoice::ALL.iter().map(|&c| Entry::new(c, tl!(c.label()))).collect();
+            let _ = Select::new(tl!("Stream key"), Bind::bound(&mut e.key), &choices).id_salt("key-choice").show(ui);
             ui.end_row();
             if e.key == KeyChoice::Held {
                 ui.label(tl!("Session key name"));
