@@ -33,7 +33,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 
-use craft_host::target::ShellInfo;
+use craft_host::target::{Caps, DoubleClick, ShellInfo};
 use craft_keymap::{CommandRef, Keymap, Overrides};
 use craft_menu::MenuBar;
 use craft_ui::contract::{Bind, Entry, Props as _, Show as _, Tracked};
@@ -2229,16 +2229,23 @@ impl StudioApp {
 }
 
 /// Install the UI runtime and the interface fonts on `ctx`, once, before the first frame. On the
-/// desktop the runtime reads the running platform's shell, with the system's title bar
-/// double-click setting, and window services; otherwise (tests) it gets the current shell and no
-/// window services.
+/// desktop the runtime reads the running platform's shell ([`desktop_shell`]) and window services;
+/// otherwise (tests) it gets the current shell and no window services.
 pub fn install_runtime(ctx: &egui::Context, desktop: bool) -> Result<(), InstallError> {
     let spec = if desktop {
-        InstallSpec::new(ShellInfo::current().double_click(title_bar::system_double_click()), Arc::new(SystemWindows)).app_id(BUNDLE_ID)
+        InstallSpec::new(desktop_shell(ShellInfo::current(), title_bar::system_double_click()), Arc::new(SystemWindows)).app_id(BUNDLE_ID)
     } else {
         InstallSpec::new(ShellInfo::default(), Arc::new(NoWindows))
     };
     install_spec(ctx, spec)
+}
+
+/// The desktop window's shell: `shell` with the system's title bar double-click setting
+/// `double_click`, and without the OS menu bar capability, so the menu bar draws in the window on
+/// every platform. StudioCraft installs no OS menu bar.
+pub(crate) fn desktop_shell(shell: ShellInfo, double_click: DoubleClick) -> ShellInfo {
+    let caps = shell.caps.difference(Caps::NATIVE_MENU_BAR);
+    shell.caps(caps).double_click(double_click)
 }
 
 /// Install the UI runtime from `spec` and the interface fonts on `ctx`.

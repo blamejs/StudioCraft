@@ -131,6 +131,18 @@ fn the_scopes_window_shows_the_picture_the_thread_computed() {
 }
 
 #[test]
+fn the_desktop_shell_keeps_the_menu_bar_in_the_window_on_macos() {
+    use craft_host::target::{MenuPlacement, Os};
+
+    let mac = ShellInfo::current().os(Os::Mac).caps(Caps::native(Os::Mac));
+    assert_eq!(mac.menu(), MenuPlacement::ScreenTop);
+    let shell = desktop_shell(mac, DoubleClick::Minimize);
+    assert_eq!(shell.menu(), MenuPlacement::InWindow);
+    assert_eq!(shell.double_click, DoubleClick::Minimize);
+    assert_eq!(shell.caps, Caps::native(Os::Mac).difference(Caps::NATIVE_MENU_BAR));
+}
+
+#[test]
 fn the_menu_strip_is_the_title_bar_when_the_app_draws_the_frame() {
     let mut a = app();
     assert!(!a.draws_title_bar(), "the desktop draws the frame by default");
