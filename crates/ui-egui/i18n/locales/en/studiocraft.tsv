@@ -450,7 +450,8 @@
 	the server's name does not exist; check the server address	the server's name does not exist; check the server address
 	the stream key is not valid	the stream key is not valid
 	This filter has no settings.	This filter has no settings.
-	this computer has no network route to the server	this computer has no network route to the server
+	this computer has no network route to the server addresses tried	this computer has no network route to the server addresses tried
+	this computer has no network route to this address	this computer has no network route to this address
 	this is not supported on this system yet	this is not supported on this system yet
 	Threshold (dB)	Threshold (dB)
 	Tint	Tint

@@ -628,7 +628,7 @@ added after the stream started, and otherwise `connecting`, `live`, `retrying`, 
 
 | `cause` | Meaning |
 |---|---|
-| `no_route` | This computer has no network route to any address of the server. |
+| `no_route` | This computer has no network route to any of the server's addresses that were tried (at most 4). |
 | `lookup_failed` | The server's name could not be looked up, or it has no address. On macOS and Linux every failed lookup is `lookup_failed`, with the system's text in `error`. |
 | `lookup_not_found` | Windows only: the DNS server answered that the name does not exist. |
 | `lookup_no_answer` | Windows only: the DNS server did not answer. |
