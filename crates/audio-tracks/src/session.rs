@@ -249,9 +249,10 @@ pub fn write_take(dir: &Path) -> std::io::Result<PathBuf> {
     write_from(dir, &lines, 0, |f| file_frames(dir, f))
 }
 
-/// Where the session built from `lines` lists the take's marker `number`: its sample, and how many
-/// of the markers listed before it have the same sample. `None` when the session does not list it.
-fn listed_place(lines: &[Line], number: u64) -> Option<(u64, usize)> {
+/// Where the session built from `lines` lists the take's marker `number`: its sample, how many of
+/// the markers listed before it have the same sample, and how many listed markers have that sample.
+/// `None` when the session does not list it.
+fn listed_place(lines: &[Line], number: u64) -> Option<(u64, usize, usize)> {
     let mut offset = 0u64;
     let mut listed: Vec<(u64, Option<u64>)> = Vec::new();
     for line in lines {
@@ -265,7 +266,8 @@ fn listed_place(lines: &[Line], number: u64) -> Option<(u64, usize)> {
     let sample = |at: u64| position(offset.saturating_add(at));
     let at = listed.get(i)?.0;
     let before = listed.iter().take(i).filter(|(a, _)| sample(*a) == sample(at)).count();
-    Some((offset.saturating_add(at), before))
+    let of = listed.iter().filter(|(a, _)| sample(*a) == sample(at)).count();
+    Some((offset.saturating_add(at), before, of))
 }
 
 /// Rename the take's marker `number`, now named `old`, to `name` in the take's session file
@@ -274,20 +276,20 @@ fn listed_place(lines: &[Line], number: u64) -> Option<(u64, usize)> {
 /// among them; it must still be named `old`. See [`rename_marker`].
 pub fn rename_take_marker(dir: &Path, path: &Path, number: u64, old: &str, name: &str) -> std::io::Result<()> {
     let lines = journal::read(dir)?;
-    let Some((at, before)) = listed_place(&lines, number) else {
+    let Some((at, before, of)) = listed_place(&lines, number) else {
         return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, format!("{}: the session does not list the marker", path.display())));
     };
-    rename_marker(path, at, before, old, name)
+    rename_marker(path, at, before, of, old, name)
 }
 
 /// Rename a marker of the session file `path` to `name`, and write the file again in one step:
-/// the marker at sample `at` with `before` markers at that sample ahead of it, which must be
-/// named `old`. The file must be a file, not a link, of at most
-/// [`craft_scraft_format::MAX_SESSION_BYTES`]; its size is checked before it is read. A session
-/// that does not have that marker with that name, as after the marker was moved or renamed in the
-/// audio editor, is an error and the file is left as it is. A marker that is already named `name`
-/// is not written again.
-pub fn rename_marker(path: &Path, at: u64, before: usize, old: &str, name: &str) -> std::io::Result<()> {
+/// the marker at sample `at` with `before` markers at that sample ahead of it, of the `of` markers
+/// the session lists at that sample, which must be named `old`. The file must be a file, not a
+/// link, of at most [`craft_scraft_format::MAX_SESSION_BYTES`]; its size is checked before it is
+/// read. A session that does not have that marker with that name, or lists another number of
+/// markers at that sample, as after a marker was moved or renamed in the audio editor, is an error
+/// and the file is left as it is. A marker that is already named `name` is not written again.
+pub fn rename_marker(path: &Path, at: u64, before: usize, of: usize, old: &str, name: &str) -> std::io::Result<()> {
     use std::io::Read;
     let shown = path.display().to_string();
     let invalid = |e: String| std::io::Error::new(std::io::ErrorKind::InvalidData, format!("{shown}: {e}"));
@@ -308,7 +310,9 @@ pub fn rename_marker(path: &Path, at: u64, before: usize, old: &str, name: &str)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))?;
     let mut session = Session::from_json(&text).map_err(|e| invalid(e.to_string()))?;
     let place = position(at);
-    let marker = session.markers.iter_mut().filter(|m| m.kind == MarkerKind::Marker && m.track.is_none() && m.start == place).nth(before);
+    let here = |m: &&mut MemoryLocation| m.kind == MarkerKind::Marker && m.track.is_none() && m.start == place;
+    let mut at_place: Vec<_> = session.markers.iter_mut().filter(here).collect();
+    let marker = if at_place.len() == of { at_place.get_mut(before) } else { None };
     let Some(marker) = marker.filter(|m| m.name == old) else {
         return Err(invalid(format!("the session no longer lists the marker {old:?} at its place")));
     };
@@ -500,18 +504,30 @@ mod tests {
         assert_eq!(std::fs::read(&path).unwrap(), before);
         let e = rename_take_marker(&files, &path, 9, "Goal", "Again").unwrap_err();
         assert!(e.to_string().contains("does not list the marker"), "{e}");
-        assert!(rename_marker(&path, 999, 0, "Save", "Again").is_err(), "another place");
-        assert!(rename_marker(&path, 1_010, 2, "Dropout: Mic", "Again").is_err(), "a dropout is not a marker");
+        assert!(rename_marker(&path, 999, 0, 1, "Save", "Again").is_err(), "another place");
+        assert!(rename_marker(&path, 1_010, 2, 3, "Dropout: Mic", "Again").is_err(), "a dropout is not a marker");
+        assert_eq!(std::fs::read(&path).unwrap(), before);
+        // The first of two markers with one name at one place was moved in the audio editor: the
+        // other is not taken for it.
+        let mut moved = Session::from_json(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        for m in moved.markers.iter_mut().filter(|m| m.kind == MarkerKind::Marker) {
+            m.name = "Goal".into();
+        }
+        moved.markers.get_mut(0).unwrap().start = position(2_000);
+        write(&path, &moved).unwrap();
+        let before = std::fs::read(&path).unwrap();
+        let e = rename_take_marker(&files, &path, 1, "Goal", "Again").unwrap_err();
+        assert!(e.to_string().contains("no longer lists the marker"), "{e}");
         assert_eq!(std::fs::read(&path).unwrap(), before);
         // A file past the size limit is refused before it is read.
         let big = dir.join("big.scraft");
         std::fs::File::create(&big).unwrap().set_len(craft_scraft_format::MAX_SESSION_BYTES + 1).unwrap();
-        assert!(rename_marker(&big, 0, 0, "a", "b").unwrap_err().to_string().contains("larger than"));
-        assert!(rename_marker(&dir.join("none.scraft"), 0, 0, "a", "b").is_err(), "a missing file");
+        assert!(rename_marker(&big, 0, 0, 1, "a", "b").unwrap_err().to_string().contains("larger than"));
+        assert!(rename_marker(&dir.join("none.scraft"), 0, 0, 1, "a", "b").is_err(), "a missing file");
         let not_session = dir.join("text.scraft");
         std::fs::write(&not_session, b"not a session").unwrap();
-        assert!(rename_marker(&not_session, 0, 0, "a", "b").is_err(), "a file that is not a session");
-        assert!(rename_marker(&dir, 0, 0, "a", "b").is_err(), "a folder");
+        assert!(rename_marker(&not_session, 0, 0, 1, "a", "b").is_err(), "a file that is not a session");
+        assert!(rename_marker(&dir, 0, 0, 1, "a", "b").is_err(), "a folder");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

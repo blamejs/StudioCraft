@@ -391,12 +391,20 @@ fn not_done(what: &str, recording: &Placed, audio_tracks: &Placed) -> Option<Str
     (!causes.is_empty()).then(|| format!("{what} ({})", causes.join("; ")))
 }
 
+/// The `marked_range` of each marker of the timeline written for `ended`, in order.
+pub(crate) fn marker_ranges(ended: &Ended) -> Vec<Value> {
+    let v = timeline(ended);
+    let markers = v.pointer("/tracks/markers").and_then(Value::as_array);
+    markers.map(|ms| ms.iter().map(|m| m["marked_range"].clone()).collect()).unwrap_or_default()
+}
+
 /// Rename the marker at `index` of the timeline file `path`, named `old`, to `name`, and write
-/// the file again through a temporary file and a rename. The file's size is checked before it is
-/// read. A file that has no marker named `old` at that place, as after it was changed in another
-/// app, is an error, and the file is left as it is. A marker that is already named `name` is not
-/// written again.
-pub(crate) fn rename_in_timeline(path: &Path, index: usize, old: &str, name: &str) -> Result<(), String> {
+/// the file again through a temporary file and a rename. `ranges` holds each marker's
+/// `marked_range` as the file was written ([`marker_ranges`]). The file's size is checked before
+/// it is read. A file that has no marker named `old` at that place, or another number of markers,
+/// or the marker at another time, as after it was changed in another app, is an error, and the
+/// file is left as it is. A marker that is already named `name` is not written again.
+pub(crate) fn rename_in_timeline(path: &Path, ranges: &[Value], index: usize, old: &str, name: &str) -> Result<(), String> {
     use std::io::Read;
     let at = |e: &dyn std::fmt::Display| format!("{}: {e}", path.display());
     let meta = std::fs::symlink_metadata(path).map_err(|e| at(&e))?;
@@ -415,7 +423,10 @@ pub(crate) fn rename_in_timeline(path: &Path, index: usize, old: &str, name: &st
         return Err(too_large());
     }
     let mut v: Value = serde_json::from_slice(&bytes).map_err(|e| at(&e))?;
-    let Some(slot) = v.pointer_mut(&format!("/tracks/markers/{index}/name")).filter(|n| n.as_str() == Some(old)) else {
+    let markers = v.pointer("/tracks/markers").and_then(Value::as_array);
+    let same = markers.is_some_and(|ms| ms.len() == ranges.len() && ms.get(index).map(|m| &m["marked_range"]) == ranges.get(index));
+    let slot = v.pointer_mut(&format!("/tracks/markers/{index}/name")).filter(|n| same && n.as_str() == Some(old));
+    let Some(slot) = slot else {
         return Err(at(&format!("the timeline has no marker {old:?} in that place")));
     };
     if old == name {
@@ -570,9 +581,10 @@ pub(crate) struct RecordingMarkers {
     watch: MarkerWatch,
     session: MarkerSession,
     finishing: Vec<Ended>,
-    writes: Vec<(PathBuf, JoinHandle<Result<PathBuf, String>>)>,
-    /// Each recording of the session whose timeline was written, and the timeline file.
-    timelines: Vec<(PathBuf, PathBuf)>,
+    writes: Vec<(PathBuf, JoinHandle<Result<(PathBuf, Vec<Value>), String>>)>,
+    /// Each recording of the session whose timeline was written, the timeline file, and the
+    /// `marked_range` of each marker as it was written.
+    timelines: Vec<(PathBuf, PathBuf, Vec<Value>)>,
 }
 
 impl Studio {
@@ -626,7 +638,7 @@ impl Studio {
             return;
         }
         let recording = ended.recording.clone();
-        match std::thread::Builder::new().name("recording-markers".into()).spawn(move || write_timeline(&ended)) {
+        match std::thread::Builder::new().name("recording-markers".into()).spawn(move || write_timeline(&ended).map(|p| (p, marker_ranges(&ended)))) {
             Ok(h) => self.recording_markers.writes.push((recording, h)),
             Err(e) => self.notices.push(Notice::new("The markers could not be saved: {error}", vec![("error", e.to_string())], true)),
         }
@@ -706,8 +718,8 @@ impl Studio {
             }
             return Err("the timeline file is still being written; rename the marker once it is saved".into());
         }
-        match rm.timelines.iter().find(|(recording, _)| *recording == r.recording) {
-            Some((_, timeline)) => rename_in_timeline(timeline, r.index, &r.name, name),
+        match rm.timelines.iter().find(|(recording, _, _)| *recording == r.recording) {
+            Some((_, timeline, ranges)) => rename_in_timeline(timeline, ranges, r.index, &r.name, name),
             None => Err("the recording has no timeline file".into()),
         }
     }
@@ -743,9 +755,9 @@ impl Studio {
         self.recording_markers.writes = running;
         for (recording, h) in done {
             match h.join().unwrap_or_else(|_| Err("the marker file could not be written".into())) {
-                Ok(path) => {
+                Ok((path, ranges)) => {
                     self.notices.push(Notice::new("Markers saved to {path}", vec![("path", path.display().to_string())], false));
-                    self.recording_markers.timelines.push((recording, path));
+                    self.recording_markers.timelines.push((recording, path, ranges));
                 }
                 Err(e) => self.notices.push(Notice::new("The markers could not be saved: {error}", vec![("error", e)], true)),
             }
@@ -1088,22 +1100,38 @@ mod tests {
             rate: FrameRate::new(30, 1),
             length: t(1000),
             written: None,
-            markers: vec![Marker { at: t(0), name: "Goal".into() }],
+            markers: vec![Marker { at: t(0), name: "Goal".into() }, Marker { at: t(500), name: "Goal".into() }],
         };
         let path = write_timeline(&ended).unwrap();
-        assert!(rename_in_timeline(&path, 1, "Goal", "Kickoff").unwrap_err().contains("no marker"), "an index past the markers");
-        rename_in_timeline(&path, 0, "Goal", "Kickoff").unwrap();
+        let ranges = marker_ranges(&ended);
+        assert_eq!(ranges.len(), 2);
+        assert!(rename_in_timeline(&path, &ranges, 2, "Goal", "Kickoff").unwrap_err().contains("no marker"), "an index past the markers");
+        rename_in_timeline(&path, &ranges, 1, "Goal", "Kickoff").unwrap();
         let files: Vec<String> = dir.path().read_dir().unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
         assert_eq!(files, ["take.otio"], "no temporary file is left");
+        // The first marker was deleted in another app, and the next one, with the same name, moved
+        // into its place: it is not taken for it.
+        let mut v: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        v.pointer_mut("/tracks/markers").and_then(Value::as_array_mut).unwrap().remove(0);
+        v.pointer_mut("/tracks/markers/0/name").map(|n| *n = json!("Goal")).unwrap();
+        let shifted = serde_json::to_vec_pretty(&v).unwrap();
+        std::fs::write(&path, &shifted).unwrap();
+        assert!(rename_in_timeline(&path, &ranges, 0, "Goal", "Kickoff").unwrap_err().contains("no marker"));
+        assert_eq!(std::fs::read(&path).unwrap(), shifted);
+        // The same count of markers, with the marker at another time.
+        let moved = Ended { markers: vec![Marker { at: t(500), name: "Goal".into() }, Marker { at: t(900), name: "Goal".into() }], ..ended };
+        std::fs::write(&path, serde_json::to_vec_pretty(&timeline(&moved)).unwrap()).unwrap();
+        assert!(rename_in_timeline(&path, &ranges, 0, "Goal", "Kickoff").unwrap_err().contains("no marker"));
         let text = dir.path().join("text.otio");
         std::fs::write(&text, b"not a timeline").unwrap();
-        assert!(rename_in_timeline(&text, 0, "Goal", "Kickoff").is_err());
+        assert!(rename_in_timeline(&text, &ranges, 0, "Goal", "Kickoff").is_err());
         assert_eq!(std::fs::read(&text).unwrap(), b"not a timeline");
         let big = dir.path().join("big.otio");
         std::fs::File::create(&big).unwrap().set_len(MAX_TIMELINE_BYTES + 1).unwrap();
-        assert!(rename_in_timeline(&big, 0, "Goal", "Kickoff").unwrap_err().ends_with(&format!("larger than {MAX_TIMELINE_BYTES} bytes")));
-        assert!(rename_in_timeline(dir.path(), 0, "Goal", "Kickoff").unwrap_err().ends_with("not a file"));
-        assert!(rename_in_timeline(&dir.path().join("none.otio"), 0, "Goal", "Kickoff").is_err());
+        let e = rename_in_timeline(&big, &ranges, 0, "Goal", "Kickoff").unwrap_err();
+        assert!(e.ends_with(&format!("larger than {MAX_TIMELINE_BYTES} bytes")), "{e}");
+        assert!(rename_in_timeline(dir.path(), &ranges, 0, "Goal", "Kickoff").unwrap_err().ends_with("not a file"));
+        assert!(rename_in_timeline(&dir.path().join("none.otio"), &ranges, 0, "Goal", "Kickoff").is_err());
     }
 
     #[test]
