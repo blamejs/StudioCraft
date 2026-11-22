@@ -1878,6 +1878,44 @@ fn the_audio_docks_headers_are_title_rows_named_by_their_titles() {
     }
 }
 
+#[test]
+fn a_long_channel_name_is_cut_before_the_audio_mixer_buttons() {
+    let mut a = app();
+    let ctx = crate::test_context();
+    let size = egui::vec2(1280.0, 800.0);
+    let global = a.studio().collection().global_audio.clone();
+    let Some(&source) = global.first() else { panic!("a new collection has global audio sources") };
+    let long = "Desktop audio from the second output device in the studio rack, left and right".repeat(3);
+    run(&mut a, &ctx, "source.rename", json!({"source": source, "name": long})).unwrap();
+    for _ in 0..3 {
+        frame_at(&mut a, &ctx, size);
+    }
+    // A frame after the rows have measured their buttons, and one where no row has a measure (a
+    // channel's first frame), shown without a sizing pass.
+    for frame in ["a measured frame", "a first frame"] {
+        if frame == "a first frame" {
+            ctx.data_mut(|d| d.remove_by_type::<crate::docks::TrailWidth>());
+        }
+        let tree = frame_tree(&mut a, &ctx, size, vec![]);
+        let header = rect_of(&a.ui_inspect(&ctx)["docks"][2]["header"]);
+        let Some((name, _)) = named(&tree, &long) else { panic!("{frame}: no text named after the channel") };
+        let mut buttons = 0;
+        for key in tree.keys() {
+            let button = tree.name_of(key);
+            if !matches!(button, Some("Mute" | "Audio source actions")) {
+                continue;
+            }
+            let Some(r) = tree.bounds_of(key) else { continue };
+            buttons += 1;
+            assert!(r.left() >= header.left() && r.right() <= header.right(), "{frame}: {button:?} at {r:?} is inside the dock {header:?}");
+            if (r.top()..=r.bottom()).contains(&name.center().y) {
+                assert!(name.right() <= r.left(), "{frame}: the cut name {name:?} ends before {button:?} at {r:?}");
+            }
+        }
+        assert_eq!(buttons, 2 * global.len(), "{frame}: a settings and a mute button for each channel");
+    }
+}
+
 /// The sources that are muted.
 fn muted(a: &StudioApp) -> Vec<SourceId> {
     a.studio().collection().sources.iter().filter(|s| s.audio.muted).map(|s| s.id).collect()

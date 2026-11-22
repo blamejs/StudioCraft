@@ -540,6 +540,47 @@ fn mute_button(ui: &mut Ui, key: impl Hash + Debug, muted: bool) -> bool {
     button.show(ui).clicked()
 }
 
+/// The line of the channel or lane `key`: `lead` (its name, or its check box) from the reading
+/// start, in the room the row's trailing controls leave, and `trail` (its settings, mute and gain)
+/// from the reading end. The room comes from the width the trailing controls took in the previous
+/// frame, or from `estimate` in a row's first frame, so a long name is cut or wrapped instead of
+/// running under them.
+fn channel_row<S>(
+    ui: &mut Ui,
+    key: impl Hash + Debug,
+    estimate: f32,
+    state: &mut S,
+    lead: impl FnOnce(&mut Ui, &mut S),
+    trail: impl FnOnce(&mut Ui, &mut S),
+) {
+    let id = ui.scope_id().with(("channel-trail", key));
+    crate::i18n::horizontal(ui, |ui| {
+        let reserve = ui.data(|d| d.get_temp::<TrailWidth>(id)).map_or(estimate, |w| w.0);
+        let room = (ui.available_width() - reserve - ui.spacing().item_spacing.x).max(0.0);
+        let size = egui::vec2(room, ui.available_height());
+        let layout = crate::i18n::row(ui);
+        ui.allocate_ui_with_layout(size, layout, |ui| lead(ui, state));
+        let layout = crate::i18n::trailing(ui);
+        let width = ui.with_layout(layout, |ui| trail(ui, state)).response.rect.width();
+        ui.data_mut(|d| d.insert_temp(id, TrailWidth(width)));
+    });
+}
+
+/// The width a row's trailing controls took in the last frame, kept in egui's memory.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct TrailWidth(f32);
+
+/// The width a row's trailing controls take before a frame has measured them: a square control
+/// for each of its `buttons` and the text of its gain readout `gain`, with the gaps between them.
+fn trail_estimate(ui: &Ui, buttons: usize, gain: Option<f32>) -> f32 {
+    let gap = ui.spacing().item_spacing.x;
+    let readout = gain.map_or(0.0, |g| {
+        let text = egui::WidgetText::from(gain_text(g));
+        text.into_galley(ui, Some(egui::TextWrapMode::Extend), f32::INFINITY, egui::TextStyle::Monospace).size().x + gap
+    });
+    buttons as f32 * (ui.spacing().interact_size.y + gap) + readout
+}
+
 /// The space between two channels or lanes.
 fn stack_gap(ui: &Ui) -> f32 {
     theme::with_root(ui.ctx(), |cx| cx.tokens.space.gap.stack)
@@ -571,25 +612,26 @@ pub fn mixer(ui: &mut Ui, studio: &Studio, st: &mut DockState, acts: &mut Vec<Ac
             if let Some(l) = studio.levels(s.id) {
                 m.update(l, st.dt);
             }
-            crate::i18n::horizontal(ui, |ui| {
+            let lead = |ui: &mut Ui, _: &mut Vec<Act>| {
                 channel_name(ui, &s.name, false);
-                ui.with_layout(crate::i18n::trailing(ui), |ui| {
-                    settings_menu(ui, ("mixer", s.id), tl!("Audio source actions"), |ui| {
-                        if row(ui, tid!("selection.properties", "Properties…"), true) {
-                            acts.push(Act::Properties(s.id));
-                        }
-                        if row(ui, tid!("selection.filters", "Filters…"), true) {
-                            acts.push(Act::Filters(s.id));
-                        }
-                        if row(ui, tl!("Rename"), true) {
-                            acts.push(Act::Rename(s.id));
-                        }
-                    });
-                    if mute_button(ui, ("mixer", s.id), s.audio.muted) {
-                        acts.push(Act::run("source.mute", json!({"source": s.id, "muted": !s.audio.muted})));
+            };
+            let estimate = trail_estimate(ui, 2, Some(s.audio.gain));
+            channel_row(ui, ("mixer", s.id), estimate, acts, lead, |ui, acts| {
+                settings_menu(ui, ("mixer", s.id), tl!("Audio source actions"), |ui| {
+                    if row(ui, tid!("selection.properties", "Properties…"), true) {
+                        acts.push(Act::Properties(s.id));
                     }
-                    gain_readout(ui, s.audio.gain);
+                    if row(ui, tid!("selection.filters", "Filters…"), true) {
+                        acts.push(Act::Filters(s.id));
+                    }
+                    if row(ui, tl!("Rename"), true) {
+                        acts.push(Act::Rename(s.id));
+                    }
                 });
+                if mute_button(ui, ("mixer", s.id), s.audio.muted) {
+                    acts.push(Act::run("source.mute", json!({"source": s.id, "muted": !s.audio.muted})));
+                }
+                gain_readout(ui, s.audio.gain);
             });
             if let Some(e) = studio.source_error(s.id) {
                 note(ui, &crate::i18n::Msg::plain(e).shown(), Some(Tone::Bad));
@@ -771,9 +813,9 @@ pub fn app_audio(ui: &mut Ui, studio: &Studio, st: &mut DockState, acts: &mut Ve
             m.update(lane_levels(lane, lane.source.and_then(|s| studio.levels(s))), dt);
             let gray = !lane.heard;
             let key = lane_id(lane);
-            crate::i18n::horizontal(ui, |ui| {
-                // An application lane's check box carries the lane's name; its tooltip says what a
-                // click does, or that the application is not running.
+            // An application lane's check box carries the lane's name; its tooltip says what a click
+            // does, or that the application is not running.
+            let lead = |ui: &mut Ui, acts: &mut Vec<Act>| {
                 if lane.kind == LaneKind::Application
                     && let Some(app) = &lane.app
                 {
@@ -787,15 +829,16 @@ pub fn app_audio(ui: &mut Ui, studio: &Studio, st: &mut DockState, acts: &mut Ve
                 } else {
                     channel_name(ui, &lane.name, gray);
                 }
-                ui.with_layout(crate::i18n::trailing(ui), |ui| {
-                    lane_menu(ui, lane, acts);
-                    if let Some(s) = lane.source {
-                        if mute_button(ui, ("lane", key.clone()), lane.muted) {
-                            acts.push(Act::run("source.mute", json!({"source": s, "muted": !lane.muted})));
-                        }
-                        gain_readout(ui, lane.gain);
+            };
+            let estimate = if lane.source.is_some() { trail_estimate(ui, 2, Some(lane.gain)) } else { trail_estimate(ui, 1, None) };
+            channel_row(ui, ("lane", key.clone()), estimate, acts, lead, |ui, acts| {
+                lane_menu(ui, lane, acts);
+                if let Some(s) = lane.source {
+                    if mute_button(ui, ("lane", key.clone()), lane.muted) {
+                        acts.push(Act::run("source.mute", json!({"source": s, "muted": !lane.muted})));
                     }
-                });
+                    gain_readout(ui, lane.gain);
+                }
             });
             if let Some(e) = lane.source.and_then(|s| studio.source_error(s)) {
                 note(ui, &crate::i18n::Msg::plain(e).shown(), Some(Tone::Bad));
