@@ -1941,10 +1941,14 @@ mod audio_tracks {
         let (v, _) = s.run("audio_tracks.status", &json!({})).unwrap();
         assert_eq!((v["enabled"].clone(), v["buffer_mib"].clone()), (json!(false), json!(16)));
         std::fs::create_dir_all(&dir).unwrap();
-        // The repair runs on its own thread and the command returns at once.
+        // The repair runs on its own thread and the command returns at once. The gate holds the
+        // repair until the status has been read, so the command's own tick cannot take it first.
+        let (go, wait) = std::sync::mpsc::channel();
+        s.audio_tracks.repair_gate = Some(wait);
         let (v, _) = s.run("audio_tracks.repair", &json!({"folder": dir.to_string_lossy()})).unwrap();
         assert_eq!(v["started"], json!(true));
         assert_eq!(s.state_json()["audio_tracks"]["repairing"], json!(true));
+        let _ = go.send(());
         assert_eq!(s.audio_tracks_repair_result(), Some(json!({"repaired": [], "failed": []})));
         assert_eq!(s.state_json()["audio_tracks"]["repairing"], json!(false));
         assert_eq!(s.state_json()["audio_tracks"]["last_repair"], json!({"repaired": [], "failed": []}));

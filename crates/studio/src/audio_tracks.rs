@@ -92,6 +92,10 @@ pub(crate) struct AudioTracks {
     /// Repairs running on their own threads, at launch or for `audio_tracks.repair`, each with its
     /// place in `stop_order`'s count.
     repairs: Vec<(JoinHandle<Outcome>, u64)>,
+    /// Holds the next repair `audio_tracks.repair` starts until the sender sends or is dropped,
+    /// for tests.
+    #[cfg(test)]
+    pub(crate) repair_gate: Option<std::sync::mpsc::Receiver<()>>,
     /// What the last repair did, for the status.
     last_repair: Option<Value>,
     /// Sources set to record their own track were left out, because more than
@@ -688,7 +692,13 @@ impl Studio {
         }
         let path = repair_folder(folder, &recording_folder(&self.profile.output.folder))?;
         let for_thread = path.clone();
+        #[cfg(test)]
+        let gate = self.audio_tracks.repair_gate.take();
         let spawned = std::thread::Builder::new().name("audio-tracks-repair".into()).spawn(move || {
+            #[cfg(test)]
+            if let Some(gate) = gate {
+                let _ = gate.recv();
+            }
             if for_thread.is_dir() {
                 recover::repair_each(&for_thread)
             } else {
