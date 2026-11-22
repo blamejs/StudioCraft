@@ -435,11 +435,13 @@ dragging a divider. The edge and the dividers have 8-point hit bands, and a drag
 to 45% of the window's height. A right-click on a dock's title offers Move Left and Move Right,
 which pass over hidden docks, and Undock.
 
-An undocked dock is drawn in a window of its own inside the main window. You drag it by the dock's
-title and resize it from its right and bottom edges. Its starting and smallest sizes are in
-[MECHANICS.md](../MECHANICS.md#editing). When the main window is smaller, StudioCraft draws the
-undocked dock further in without changing its saved place or size. Its menu offers Dock in the
-Strip.
+An undocked dock is drawn in a window of its own inside the main window, with a title bar above the
+dock's header. You drag the window by its title bar and resize it from any edge or corner. A resize
+from the left or top edge moves that edge, and the window keeps its new place. A dock without a saved
+place opens centered in the main window; Sources, Audio Mixer and Application Audio open 24, 48 and
+72 points further down and to the right, as far as the main window has room. Its starting and smallest sizes are in [MECHANICS.md](../MECHANICS.md#editing). When
+the main window is smaller, StudioCraft draws the undocked dock further in without changing its saved
+place or size. A right-click on the dock's title offers Dock in the Strip.
 
 StudioCraft keeps the strip's height, the docks' widths, visibility and order, which docks are
 undocked, and their windows' places and sizes until Docks › Reset Docks. Reset Docks puts every

@@ -32,14 +32,17 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 
+use craft_behavior::GesturePhase;
 use craft_host::target::{Caps, DoubleClick, ShellInfo};
 use craft_host::{AppInfo, Host};
 use craft_i18n::{I18n, Words};
 use craft_keymap::{CommandRef, Keymap, Overrides};
 use craft_menu::{LanguageChoice, MenuBar};
 use craft_theme::variant::Tone;
-use craft_ui::contract::{Bind, Entry, Props as _, Show as _, ShowContainer as _, Tracked};
+use craft_ui::contract::overlay::PlacementKind;
+use craft_ui::contract::{Bind, Entry, Props as _, Show as _, ShowContainer as _, SizeLimits, Sizing, Tracked};
 use craft_ui::dialog::{DialogId, DialogResult, PromptChoice, StandardPrompt};
+use craft_ui::docking::{DockSizes, FloatingGroup};
 use craft_ui::notices::{NoticeCenter, PostedNotice};
 use craft_ui::patterns::form_dialogs::{DialogFields, FieldValue, HostedParamDialog, Param, ParamDialog, ParamKind};
 use craft_ui::pickers::Select;
@@ -47,6 +50,7 @@ use craft_ui::runtime::commands::{AppCatalog, CommandInput, CommandState, Comman
 use craft_ui::runtime::env::{Label, WindowKey};
 use craft_ui::runtime::frame::{FrameInput, FrameOutput};
 use craft_ui::runtime::toast::{self, ToastId};
+use craft_ui::runtime::windows::ResizeEdge;
 use craft_ui::shell::embed::{self, CloseDecision};
 use craft_ui::shell::{AppShell, ShellDialogsCx as _, TitleBar, WindowDialogs};
 use craft_ui::{InstallError, InstallSpec};
@@ -64,7 +68,6 @@ use studiocraft_studio::{CaptionBoard, OutputKind, Studio, UiAction, builtin_reg
 
 use crate::forms::{Browse, Filters, Properties};
 use crate::i18n::Msg;
-use crate::kit::resize_handle::{ResizeHandle, ResizeHandleStyle, SplitAxis};
 use crate::preview::{EditItem, Editor, Textures, View};
 use crate::settings::{Pick, SettingsWindow, Tab};
 use crate::store::{DEFAULT_NAME, Store, check_name};
@@ -175,8 +178,6 @@ const ERROR_NOTICE_S: f32 = 24.0;
 const NOTICES_KEPT: usize = 20;
 /// How long after the last change the scene collection is saved.
 const AUTOSAVE: Duration = Duration::from_millis(800);
-/// How far the dock strip's top-edge hit band reaches above and below its 1 point line.
-const EDGE_HIT_MARGIN: f32 = 3.5;
 
 /// The window's graphics device: the adapter preference it opened with, and what happens after
 /// it is lost.
@@ -269,20 +270,14 @@ pub struct StudioApp {
     /// Where each dock in the strip was drawn last: its index in `control::DOCK_NAMES`, its
     /// rectangle and what its header drew.
     dock_rects: Vec<(usize, egui::Rect, docks::Drawn)>,
-    /// The same for each dock in a window of its own, with the window's rectangle.
-    floating_rects: Vec<(usize, egui::Rect, docks::Drawn)>,
-    /// Where each floating dock's window is this session, by dock index, while it differs from the
-    /// place saved when the pointer was last released.
-    dock_window_at: [Option<egui::Pos2>; store::DOCK_COUNT],
-    /// Whether the user moved or resized each floating dock's window since its place was saved.
-    dock_window_touched: [bool; store::DOCK_COUNT],
-    /// Where each floating dock's window was drawn last frame, and the main window's size then.
-    dock_window_drawn: [Option<egui::Rect>; store::DOCK_COUNT],
-    /// Where the pointer press now held, or released this frame, started.
-    dock_press_origin: Option<egui::Pos2>,
-    dock_viewport: Option<egui::Vec2>,
+    /// The same for each dock in a window of its own, with the window's rectangle and the
+    /// rectangle of the title bar that moves it.
+    floating_rects: Vec<(usize, egui::Rect, docks::Drawn, egui::Rect)>,
+    /// Where each floating dock's window is while the user moves or resizes it, by dock index. The
+    /// place and size are saved when the move or resize ends.
+    dock_window_rect: [Option<egui::Rect>; store::DOCK_COUNT],
     /// Counts the dock windows' resets this session. It is part of their ids, so a window opened
-    /// after a reset starts at its default size instead of the size egui kept for the old one.
+    /// after a reset keeps nothing from the old one.
     dock_window_gen: u32,
     /// Where the dock strip was drawn last.
     dock_strip: Option<egui::Rect>,
@@ -401,11 +396,7 @@ impl StudioApp {
             last_view: None,
             dock_rects: Vec::with_capacity(control::DOCK_NAMES.len()),
             floating_rects: Vec::new(),
-            dock_window_at: [None; store::DOCK_COUNT],
-            dock_window_touched: [false; store::DOCK_COUNT],
-            dock_window_drawn: [None; store::DOCK_COUNT],
-            dock_press_origin: None,
-            dock_viewport: None,
+            dock_window_rect: [None; store::DOCK_COUNT],
             dock_window_gen: 0,
             dock_strip: None,
             output_bar: output_bar::Drawn::default(),
@@ -1363,9 +1354,7 @@ impl StudioApp {
     /// `docks` holds.
     fn set_docks(&mut self, docks: store::Docks) {
         self.store.update(|p| p.docks = docks);
-        self.dock_window_at = [None; store::DOCK_COUNT];
-        self.dock_window_touched = [false; store::DOCK_COUNT];
-        self.dock_window_drawn = [None; store::DOCK_COUNT];
+        self.dock_window_rect = [None; store::DOCK_COUNT];
         self.dock_window_gen = self.dock_window_gen.wrapping_add(1);
     }
 
@@ -1863,31 +1852,21 @@ impl StudioApp {
         let d = self.store.prefs().docks;
         // The transition and output controls are in the output bar; Docks shows or hides them there.
         let shown = d.shown();
-        // The header actions where the last frame drew them, for the shields over them below.
-        let shields: Vec<egui::Rect> = self.dock_rects.iter().flat_map(|(_, _, drawn)| drawn.actions.iter().map(|(_, r)| *r)).collect();
         self.dock_rects.clear();
         self.dock_strip = None;
         let now = Instant::now();
         let dt = self.last_frame.map_or(0.0, |t| now.duration_since(t).as_secs_f32());
         self.last_frame = Some(now);
         let ctx = ui.ctx().clone();
-        // A floating dock's window is a root of its own, outside the shell's measuring run, so it
+        // A floating dock's window is a layer of its own, outside the shell's measuring run, so it
         // is shown in the real run only.
         if !craft_ui::runtime::measure::active(&ctx) {
-            self.dock_windows(&ctx, acts, dt);
+            self.dock_windows(ui, acts, dt);
         }
         if shown.is_empty() {
             return;
         }
-        let (panel_fill, divider, handle_style) = theme::with_root(&ctx, |cx| {
-            let c = &cx.tokens.color;
-            let style = ResizeHandleStyle {
-                hovered: theme::color(cx, c.line.control_edge),
-                dragged: theme::color(cx, c.accent.solid),
-                focused: theme::color(cx, c.line.focus),
-            };
-            (theme::color(cx, c.surface.panel), theme::color(cx, c.line.divider), style)
-        });
+        let (panel_fill, reach) = theme::with_root(&ctx, |cx| (theme::color(cx, cx.tokens.color.surface.panel), cx.tokens.size.hit.target));
         let window = ctx.viewport_rect().height();
         let height = strip::height(window, d.height);
         let mut st = docks::DockState {
@@ -1908,28 +1887,8 @@ impl StudioApp {
         let panel =
             egui::Panel::bottom("docks").exact_size(height).show_separator_line(false).frame(egui::Frame::NONE.fill(panel_fill)).show(ui, |ui| {
                 let (area, _) = ui.allocate_exact_size(ui.available_rect_before_wrap().size(), egui::Sense::hover());
-                // The strip's top edge: a 1 point line inside the strip, which is also its resize
-                // handle. The handle comes before the docks, so a header action under its hit band
-                // takes a press there. Each shield sits between the handle and one action and takes
-                // a drag that starts on the action, so the edge resizes only outside the actions.
-                // The edge is painted after the strip, over the headers.
-                let edge = egui::Rect::from_min_size(area.left_top(), egui::vec2(area.width(), 1.0));
-                let band = edge.expand2(egui::vec2(0.0, EDGE_HIT_MARGIN));
-                let mut edge_ui = ui.new_child(egui::UiBuilder::new().id_salt("dock-strip-edge").max_rect(band));
-                edge_ui.set_clip_rect(band);
-                let unpainted = ResizeHandleStyle { hovered: Color32::TRANSPARENT, dragged: Color32::TRANSPARENT, focused: Color32::TRANSPARENT };
-                let edge_r =
-                    ResizeHandle::new(egui::Id::unique("dock-strip-edge"), SplitAxis::Vertical, edge, tl!("Resize the dock strip"), unpainted)
-                        .hit_margin(EDGE_HIT_MARGIN)
-                        .value(height, strip::MIN_HEIGHT.min(height)..=most.max(height))
-                        .reversed(true)
-                        .show(&mut edge_ui);
-                for (k, r) in shields.iter().enumerate() {
-                    ui.interact(*r, egui::Id::unique("dock-action-shield").with(k), egui::Sense::drag());
-                }
                 let widths = strip::widths(area.width(), &shown, saved);
                 let mut x = area.left();
-                let mut lines = Vec::with_capacity(shown.len());
                 for (k, (i, w)) in shown.iter().zip(&widths).enumerate() {
                     let rect = egui::Rect::from_min_size(egui::pos2(x, area.top()), egui::vec2(*w, area.height()));
                     let mut col =
@@ -1943,49 +1902,34 @@ impl StudioApp {
                         _ => docks::mixer(&mut col, studio, &mut st, acts),
                     };
                     rects.push((usize::from(*i), rect, drawn));
-                    x += w;
-                    if k + 1 < shown.len() {
-                        lines.push(egui::Rect::from_min_size(egui::pos2(x, area.top()), egui::vec2(strip::DIVIDER, area.height())));
-                        x += strip::DIVIDER;
-                    }
+                    x += w + strip::DIVIDER;
                 }
-                // The dividers come after the docks so that their 8 point hit bands take the pointer
-                // over the docks' edges.
-                for (k, line) in lines.iter().enumerate() {
-                    ui.painter().rect_filled(*line, 0.0, divider);
-                    let most = (widths[k] + widths[k + 1] - strip::MIN_WIDTH).max(strip::MIN_WIDTH);
-                    let r = ResizeHandle::new(
-                        egui::Id::unique("dock-divider").with(shown[k]),
-                        SplitAxis::Horizontal,
-                        *line,
-                        tl!("Resize the docks"),
-                        handle_style,
-                    )
-                    .hit_margin(3.5)
-                    .value(widths[k], strip::MIN_WIDTH.min(widths[k])..=most.max(widths[k]))
-                    .show(ui);
-                    if r.delta != 0.0 {
-                        let moved = strip::drag(&widths, k, r.delta);
+                // The dividers and the top edge are splitters shown after the docks, so that their
+                // hit bands take the pointer over the docks' edges and their lines are drawn over
+                // the docks. Each one covers only its own band, so a right click on a dock still opens
+                // the dock's menu. The top edge's band reaches above the strip.
+                for (k, line) in strip::dividers(area, &widths, reach).into_iter().enumerate() {
+                    let out = strip::Handles::new(tl!("Resize the docks"), vec![line]).id_salt(("dock-divider", k)).show_at(ui, line.bar);
+                    if let Some((_, at)) = out.moved {
+                        let moved = strip::drag(&widths, k, at - line.at);
                         new_widths = Some(strip::save(saved, &shown, &moved, k));
                     }
                 }
-                edge_r
+                let edge = strip::edge(area, most, reach);
+                let mut edge_ui = ui.new_child(egui::UiBuilder::new().id_salt("dock-strip-edge").max_rect(edge.bar));
+                edge_ui.set_clip_rect(edge.bar);
+                let out = strip::Handles::new(tl!("Resize the dock strip"), vec![edge]).id_salt("dock-strip-edge").show_at(&mut edge_ui, edge.bar);
+                // Each header action under the edge's band gets a shield over the edge that takes a
+                // drag starting on the action, so the edge resizes only outside the actions. A click
+                // still reaches the action, which is the topmost widget there that takes clicks.
+                for (n, (_, r)) in rects.iter().flat_map(|(_, _, drawn)| drawn.actions.iter()).enumerate() {
+                    ui.interact(*r, egui::Id::unique("dock-action-shield").with(n), egui::Sense::drag());
+                }
+                out.moved.map(|(_, at)| at - edge.at)
             });
-        let rect = panel.response.rect;
-        self.dock_strip = Some(rect);
-        let r = panel.inner;
-        let edge = egui::Rect::from_min_size(rect.left_top(), egui::vec2(rect.width(), 1.0));
-        let fill = if r.response.dragged() {
-            handle_style.dragged
-        } else if r.response.has_focus() {
-            handle_style.focused
-        } else if r.response.hovered() {
-            handle_style.hovered
-        } else {
-            divider
-        };
-        ui.painter().rect_filled(edge, 0.0, fill);
-        let new_height = (r.delta != 0.0).then(|| strip::height(window, height - r.delta));
+        self.dock_strip = Some(panel.response.rect);
+        // The top edge moved down by this much makes the strip that much shorter.
+        let new_height = panel.inner.map(|down| strip::height(window, height - down));
         if new_widths.is_some() || new_height.is_some_and(|h| h != height) {
             self.store.update(|p| {
                 if let Some([a, b, c, e]) = new_widths {
@@ -2001,12 +1945,14 @@ impl StudioApp {
         }
     }
 
-    /// The docks shown in windows of their own. A window is dragged by its dock's title, keeps
-    /// inside the main window, and opens where it was last moved to at the size it was last given.
-    /// The place and size are saved once the pointer is released.
-    fn dock_windows(&mut self, ctx: &egui::Context, acts: &mut Vec<Act>, dt: f32) {
+    /// The docks shown in windows of their own, each a framework floating group. A window is moved
+    /// by its title bar and resized by its edges and corners, keeps inside the main window, and
+    /// opens where it was last moved to at the size it was last given. The place and size are saved
+    /// when a move or resize ends, and the first time the window is shown.
+    fn dock_windows(&mut self, ui: &mut Ui, acts: &mut Vec<Act>, dt: f32) {
         self.floating_rects.clear();
         let d = self.store.prefs().docks;
+        let ctx = ui.ctx().clone();
         let mut st = docks::DockState {
             selected: self.selected,
             renaming: &mut self.renaming,
@@ -2017,85 +1963,67 @@ impl StudioApp {
             place: None,
         };
         let studio = &self.studio;
-        let pointer_down = ctx.input(|i| i.pointer.any_down());
-        let interacting = pointer_down || ctx.input(|i| i.pointer.any_released());
-        // egui forgets where a press started once it is released, and a window takes its new size
-        // a frame after the pointer moves, so the origin is kept until the frame of the release.
-        let origin = match ctx.input(|i| i.pointer.press_origin()) {
-            Some(p) => Some(p),
-            None if interacting => self.dock_press_origin,
-            None => None,
-        };
-        self.dock_press_origin = origin.filter(|_| pointer_down);
         let mut changed: Vec<(usize, [f32; 2], [f32; 2])> = Vec::new();
-        let grab = {
-            let s = ctx.global_style();
-            s.interaction.resize_grab_radius_side.max(s.interaction.resize_grab_radius_corner)
-        };
-        let viewport = ctx.viewport_rect().size();
-        let same_viewport = self.dock_viewport.replace(viewport) == Some(viewport);
+        let bounds = ctx.viewport_rect();
+        let sizes = theme::with_root(&ctx, DockSizes::style);
+        // The window's size limits are the body's; the chrome over the body adds its height, so the
+        // whole window is at least `MIN_WIDTH` by `MIN_HEIGHT`.
+        let chrome = sizes.window_chrome(true);
+        let least = egui::vec2(strip::MIN_WIDTH, (strip::MIN_HEIGHT - chrome).max(0.0));
         for i in d.floating_shown() {
             let k = usize::from(i).min(store::DOCK_COUNT - 1);
-            // Window sizes are outer sizes, with the frame's margins and stroke in them.
+            // Window sizes are outer sizes, with the window's chrome in them.
             let size = d.window_size(i).map_or(egui::vec2(strip::default_width(k), strip::DEFAULT_HEIGHT), |[w, h]| egui::vec2(w, h));
-            let mut window = egui::Window::new(tl!(control::DOCK_TITLES[k]))
-                .id(egui::Id::unique("dock-window").with((k, self.dock_window_gen)))
-                .title_bar(false)
-                .movable(false)
-                .resizable(true)
-                .default_size(size)
-                .min_size(egui::vec2(strip::MIN_WIDTH, strip::MIN_HEIGHT));
-            let kept = self.dock_window_at[k].or_else(|| d.window_pos(i).map(|[x, y]| egui::pos2(x, y)));
-            if let Some(at) = kept {
-                window = window.current_pos(at);
-            }
-            let shown = window.show(ctx, |ui| {
-                // The dock lays out its body in the room left under its header, so the window keeps
-                // the size it was given instead of shrinking to the header.
-                ui.set_min_size(ui.available_size());
-                // The title moves the window (`Drawn::grab`); a drag anywhere else in the dock
-                // does not.
-                let drawn = match i {
+            let size = size.min(egui::Vec2::splat(SizeLimits::BOUND));
+            let place = d.window_pos(i).map_or_else(|| strip::window_place(bounds, size, k), |[x, y]| egui::pos2(x, y));
+            let rect = self.dock_window_rect[k].unwrap_or(egui::Rect::from_min_size(place, size));
+            let shown = FloatingGroup::new(tl!(control::DOCK_TITLES[k]).to_string(), rect)
+                .id_salt(("dock-window", k, self.dock_window_gen))
+                .bounds(bounds)
+                .limits(SizeLimits::at_least(least))
+                .sized(Sizing::Fill)
+                .actions([])
+                .show_group(ui, |ui, _| match i {
                     0 => docks::scenes(ui, studio, &mut st, acts),
                     1 => docks::sources(ui, studio, &mut st, acts),
                     3 => docks::app_audio(ui, studio, &mut st, acts),
                     _ => docks::mixer(ui, studio, &mut st, acts),
-                };
-                let grab = drawn.grab;
-                (drawn, grab)
-            });
-            let Some(shown) = shown else { continue };
-            let rect = shown.response.rect;
-            let Some((drawn, delta)) = shown.inner else { continue };
-            // The user resized the window when its size changed during a press that started on it
-            // or its resize edge, or on the frame that press ended, while the main window kept its
-            // size.
-            // The press is tested against the window as it was before the resize.
-            let resized = self.dock_window_drawn[k].is_some_and(|was| {
-                interacting && same_viewport && was.size() != rect.size() && origin.is_some_and(|p| was.union(rect).expand(grab).contains(p))
-            });
-            self.dock_window_drawn[k] = Some(rect);
-            // `dock_window_at` is where the user put the window. egui may draw it further in when
-            // the main window is smaller; that does not change the place that is kept. A window that
-            // cannot be moved resizes only from its right and bottom edges, so a resize keeps it.
-            let at = if delta != egui::Vec2::ZERO { rect.min + delta } else { kept.unwrap_or(rect.min) };
-            self.dock_window_at[k] = Some(at);
-            if delta != egui::Vec2::ZERO || resized {
-                self.dock_window_touched[k] = true;
-                ctx.request_repaint();
-            }
-            let place = [at.x, at.y];
-            let outer = [rect.width(), rect.height()];
-            // The place and size are saved when the user moved or resized the window, and the first
-            // time the window is shown.
-            let save = self.dock_window_touched[k] || d.window_pos(i).is_none();
-            if !pointer_down && save {
-                self.dock_window_touched[k] = false;
-                if place.iter().chain(&outer).all(|v| v.is_finite()) && { d }.place_window(k, place, outer) {
-                    changed.push((k, place, outer));
+                });
+            let window = shown.output.response.rect;
+            // The place and size are saved when a move or resize ends; while it runs, the window
+            // shows at the rect it reported. A canceled one saves nothing. A resize keeps the saved
+            // coordinate on each axis its edge did not move, which can differ from the drawn one
+            // while a smaller main window pushes the window back on screen.
+            let mut save = d.window_pos(i).is_none().then_some(egui::Rect::from_min_size(place, size));
+            if let Some(change) = shown.output.placed {
+                match change.phase {
+                    GesturePhase::Commit => {
+                        self.dock_window_rect[k] = None;
+                        let (moves_x, moves_y) = match change.kind {
+                            PlacementKind::Size(edge) => (
+                                matches!(edge, ResizeEdge::Left | ResizeEdge::TopLeft | ResizeEdge::BottomLeft),
+                                matches!(edge, ResizeEdge::Top | ResizeEdge::TopLeft | ResizeEdge::TopRight),
+                            ),
+                            _ => (true, true),
+                        };
+                        let at = egui::pos2(if moves_x { change.rect.min.x } else { place.x }, if moves_y { change.rect.min.y } else { place.y });
+                        save = Some(egui::Rect::from_min_size(at, change.rect.size()));
+                    }
+                    GesturePhase::Cancel => self.dock_window_rect[k] = None,
+                    _ => self.dock_window_rect[k] = Some(change.rect),
                 }
             }
-            self.floating_rects.push((k, rect, drawn));
+            if let Some(r) = save {
+                let (at, outer) = ([r.min.x, r.min.y], [r.width(), r.height()]);
+                if at.iter().chain(&outer).all(|v| v.is_finite()) && { d }.place_window(k, at, outer) {
+                    changed.push((k, at, outer));
+                }
+            }
+            let Some(drawn) = shown.inner else { continue };
+            let top = window.top() + sizes.top_band;
+            let bar =
+                egui::Rect::from_min_max(egui::pos2(window.left(), top), egui::pos2(window.right(), (top + sizes.title_row).min(window.bottom())));
+            self.floating_rects.push((k, window, drawn, bar));
         }
         if !changed.is_empty() {
             self.store.update(|p| {
