@@ -382,7 +382,10 @@ impl StudioApp {
                         let t = &studio.collection().transition;
                         let current = studio.registry().transition(&t.kind).ok();
                         let name = current.as_ref().map_or(t.kind.as_str(), |p| tl!(p.name()));
-                        // port: P9 (output bar) replaces this egui combo box with `Select`.
+                        // port: P9 (output bar) replaces this egui combo box with `Select`. `Select`
+                        // sizes itself to its widest entry, while the fit gives this box the width
+                        // `combo`, and it shows its placeholder for a transition kind the registry
+                        // does not know, which this box shows by its id.
                         #[expect(clippy::disallowed_types, reason = "craft-ui no longer has its combo box; the output bar moves to `Select`")]
                         let r = egui::ComboBox::from_id_salt("transition-kind").selected_text(name).width(combo).show_ui(ui, |ui| {
                             for p in studio.registry().transitions() {

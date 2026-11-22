@@ -2229,14 +2229,20 @@ impl StudioApp {
 }
 
 /// Install the UI runtime and the interface fonts on `ctx`, once, before the first frame. On the
-/// desktop the runtime reads the running platform's shell and window services; otherwise (tests)
-/// it gets the current shell and no window services.
+/// desktop the runtime reads the running platform's shell, with the system's title bar
+/// double-click setting, and window services; otherwise (tests) it gets the current shell and no
+/// window services.
 pub fn install_runtime(ctx: &egui::Context, desktop: bool) -> Result<(), InstallError> {
     let spec = if desktop {
-        InstallSpec::new(ShellInfo::current(), Arc::new(SystemWindows)).app_id(BUNDLE_ID)
+        InstallSpec::new(ShellInfo::current().double_click(title_bar::system_double_click()), Arc::new(SystemWindows)).app_id(BUNDLE_ID)
     } else {
         InstallSpec::new(ShellInfo::default(), Arc::new(NoWindows))
     };
+    install_spec(ctx, spec)
+}
+
+/// Install the UI runtime from `spec` and the interface fonts on `ctx`.
+pub(crate) fn install_spec(ctx: &egui::Context, spec: InstallSpec) -> Result<(), InstallError> {
     let lang = i18n::lang();
     embed::install(ctx, spec, &fonts::ui_fonts(i18n::I18N.code(lang), fonts::CRAFT_FONTS)).map(|_| ())
 }

@@ -1,10 +1,12 @@
 //! The menu strip as the window's title bar, when StudioCraft draws the window frame.
 //!
 //! `craft-window` decides at start who draws the frame. When the app draws it, the window has no
-//! decorations: the empty part of the menu strip moves the window and a double-click on it
-//! maximizes it, the window buttons sit at the ends of the strip in the order the desktop names,
-//! and the window edges resize the window.
+//! decorations: the empty part of the menu strip moves the window and a double-click on it does
+//! what the system's title bar setting says (maximize where there is no such setting), the window
+//! buttons sit at the ends of the strip in the order the desktop names, and the window edges resize
+//! the window.
 
+use craft_host::target::DoubleClick;
 use craft_window::{Button, Layout};
 use egui::{Color32, CursorIcon, Id, LayerId, Order, PointerButton, Rect, ResizeDirection, Sense, Ui, ViewportCommand, pos2, vec2};
 
@@ -75,10 +77,46 @@ pub fn strip<R>(ui: &mut Ui, layout: &Layout, menus: impl FnOnce(&mut Ui, f32) -
 // port: P5 (title bar and window chrome) replaces this with the framework's title bar, which
 // moves the window from the strip's empty area.
 
-/// Makes the empty part of `rect` move the window on a drag and maximize or restore it on a
-/// double-click. Call it before drawing the strip's controls: they sit on top and take their own
-/// clicks. The area senses clicks only, so a drag is a press on the empty area that has stopped
-/// being a click.
+/// The system's setting for a double-click on a title bar: on macOS the global default
+/// `AppleActionOnDoubleClick` (System Settings > Desktop & Dock), elsewhere, or when the setting is
+/// absent or unreadable, maximize.
+pub fn system_double_click() -> DoubleClick {
+    #[cfg(target_os = "macos")]
+    {
+        match std::process::Command::new("/usr/bin/defaults").args(["read", "-g", "AppleActionOnDoubleClick"]).output() {
+            Ok(out) if out.status.success() => parse_double_click(&String::from_utf8_lossy(&out.stdout)),
+            _ => DoubleClick::Zoom,
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    DoubleClick::Zoom
+}
+
+/// The value of `AppleActionOnDoubleClick` as `defaults read` prints it. "Minimize" minimizes and
+/// "None" does nothing; any other value maximizes, as the default "Maximize" and the "Fill" of
+/// macOS 15 do.
+#[cfg(any(target_os = "macos", test))]
+fn parse_double_click(value: &str) -> DoubleClick {
+    match value.trim() {
+        "Minimize" => DoubleClick::Minimize,
+        "None" => DoubleClick::Nothing,
+        _ => DoubleClick::Zoom,
+    }
+}
+
+/// What a double-click on the empty strip asks of the window under the system setting `setting`.
+fn double_click_command(setting: DoubleClick, maximized: bool) -> Option<ViewportCommand> {
+    match setting {
+        DoubleClick::Minimize => Some(ViewportCommand::Minimized(true)),
+        DoubleClick::Nothing => None,
+        _ => Some(ViewportCommand::Maximized(!maximized)),
+    }
+}
+
+/// Makes the empty part of `rect` move the window on a drag and act on a double-click as the
+/// shell's double-click setting says. Call it before drawing the strip's controls: they sit on top
+/// and take their own clicks. The area senses clicks only, so a drag is a press on the empty area
+/// that has stopped being a click.
 fn empty_area(ui: &mut Ui, rect: Rect) {
     let resp = ui.interact(rect, ui.scope_id().with("title_bar_empty"), Sense::CLICK);
     let armed = resp.id.with("drag_press");
@@ -88,7 +126,10 @@ fn empty_area(ui: &mut Ui, rect: Rect) {
     }
     if resp.double_clicked() {
         let maximized = ui.input(|i| i.viewport().maximized).unwrap_or(false);
-        ui.ctx().send_viewport_cmd(ViewportCommand::Maximized(!maximized));
+        let setting = craft_ui::runtime::env::Env::of(ui).view().shell().double_click;
+        if let Some(cmd) = double_click_command(setting, maximized) {
+            ui.ctx().send_viewport_cmd(cmd);
+        }
     }
     let press = ui.input(|i| i.pointer.press_start_time());
     if resp.is_pointer_button_down_on() {
@@ -190,5 +231,66 @@ mod tests {
         out.textures_delta.clear();
         assert!(room > 0.0 && room < 600.0 - BUTTON.x - width(2, spacing) + 1.0, "{room}");
         assert_eq!(width(0, spacing), 0.0);
+    }
+
+    #[test]
+    fn the_system_setting_reads_as_defaults_prints_it() {
+        assert_eq!(parse_double_click("Minimize\n"), DoubleClick::Minimize);
+        assert_eq!(parse_double_click("None\n"), DoubleClick::Nothing);
+        assert_eq!(parse_double_click("Maximize\n"), DoubleClick::Zoom);
+        assert_eq!(parse_double_click("Fill\n"), DoubleClick::Zoom);
+        assert_eq!(parse_double_click(""), DoubleClick::Zoom);
+    }
+
+    /// The window commands a double-click on the empty strip sends, with the shell's double-click
+    /// setting `setting`.
+    fn double_click_commands(setting: DoubleClick) -> Vec<ViewportCommand> {
+        use craft_host::target::ShellInfo;
+        use craft_ui::InstallSpec;
+        use craft_ui::runtime::env::RootEnv;
+        use craft_ui::runtime::frame::FrameInput;
+        use craft_window::system::NoWindows;
+
+        let ctx = egui::Context::default();
+        if let Err(e) = crate::install_spec(&ctx, InstallSpec::new(ShellInfo::default().double_click(setting), std::sync::Arc::new(NoWindows))) {
+            panic!("the UI runtime did not install: {e:?}");
+        }
+        let layout = Layout { left: Vec::new(), right: Vec::new() };
+        let at = pos2(100.0, 15.0);
+        let press = |pressed| egui::Event::PointerButton { pos: at, button: PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
+        let frames = [vec![egui::Event::PointerMoved(at)], vec![press(true)], vec![press(false)], vec![press(true)], vec![press(false)], Vec::new()];
+        let mut commands = Vec::new();
+        for (n, events) in frames.into_iter().enumerate() {
+            craft_ui::shell::embed::before_input(&ctx, |_| FrameInput::new(RootEnv::new()));
+            let raw = egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(600.0, 30.0))),
+                time: Some(n as f64 * 0.05),
+                events,
+                ..Default::default()
+            };
+            let mut out = ctx.run_ui(raw, |ui| strip(ui, &layout, |_, _| ()));
+            out.textures_delta.clear();
+            if let Some(v) = out.viewport_output.remove(&egui::ViewportId::ROOT) {
+                commands.extend(v.commands);
+            }
+        }
+        commands
+    }
+
+    #[test]
+    fn a_double_click_on_the_empty_strip_follows_the_system_setting() {
+        let maximize = |c: &ViewportCommand| matches!(c, ViewportCommand::Maximized(_));
+        let minimize = |c: &ViewportCommand| matches!(c, ViewportCommand::Minimized(_));
+
+        let zoom = double_click_commands(DoubleClick::Zoom);
+        assert!(zoom.contains(&ViewportCommand::Maximized(true)), "{zoom:?}");
+        assert!(!zoom.iter().any(minimize), "{zoom:?}");
+
+        let min = double_click_commands(DoubleClick::Minimize);
+        assert!(min.contains(&ViewportCommand::Minimized(true)), "{min:?}");
+        assert!(!min.iter().any(maximize), "{min:?}");
+
+        let nothing = double_click_commands(DoubleClick::Nothing);
+        assert!(!nothing.iter().any(|c| maximize(c) || minimize(c)), "{nothing:?}");
     }
 }

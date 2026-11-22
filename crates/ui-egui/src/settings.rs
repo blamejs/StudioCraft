@@ -3,8 +3,11 @@
 //! Video tab's Hardware acceleration section), applied with OK or Apply.
 
 // port: P16 (Settings on PreferencesWindow) replaces the egui combo boxes left here. The Presets
-// and Match display boxes are menus under a fixed caption, which `Select` does not offer; the
-// others can hold a saved value that is not among their options, which `Select` does not show.
+// and Match display boxes are menus under a fixed caption, which `Select` does not offer. The
+// others show a saved value that is not among their options by its own name, and `Select` shows
+// its placeholder for such a value: an encoder id the registry does not know, a language code in
+// other letter case, an audio bitrate or frame rate outside the list, a monitoring device that is
+// not connected or saved empty, and a hardware encoder saved empty.
 #![expect(clippy::disallowed_types, reason = "craft-ui no longer has its combo box; Settings moves to `Select`")]
 
 use std::collections::BTreeMap;
