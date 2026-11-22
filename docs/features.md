@@ -470,10 +470,12 @@ maximizes it, and the window buttons sit where the desktop puts them.
 
 ### Languages
 
-Settings › General › Language picks the interface language, or follows the system language. These
-languages are built in: English, Simplified Chinese, Traditional Chinese, Arabic, Czech, Dutch,
-French, German, Hebrew, Italian, Japanese, Korean, Polish, Brazilian Portuguese, Russian, Spanish,
-Swedish, Turkish and Ukrainian.
+View › Language and Settings › General › Language pick the interface language, or follow the
+system language with Automatic. On macOS the Language submenu is in the app menu. Each language is
+listed by its own name, and the interface switches without a restart. These languages are built
+in: English, Simplified Chinese, Traditional Chinese, Arabic, Czech, Dutch, French, German, Hebrew,
+Italian, Japanese, Korean, Polish, Brazilian Portuguese, Russian, Spanish, Swedish, Turkish and
+Ukrainian.
 
 In Arabic and Hebrew the window runs right to left. The menus, output controls, dock headers and
 status bar start at the right, and egui's submenus, scroll bars and collapsing headers mirror.
