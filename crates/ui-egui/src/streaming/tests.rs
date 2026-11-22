@@ -619,6 +619,22 @@ fn a_failure_is_listed_with_its_cause_and_addresses() {
 }
 
 #[test]
+fn a_destination_waiting_for_the_network_says_so() {
+    let d = Destination { id: "a".into(), server: "rtmp://a.example/live".into(), ..Destination::default() };
+    let failure = Failure::new(Cause::LookupFailed, "the server's name did not resolve: no network");
+    let waiting = state("a", DestinationStatus::WaitingForNetwork { attempt: 3, failure: failure.clone() });
+    let v = listed(&d, true, Some(&waiting), false);
+    assert_eq!(v["status"], json!("waiting_for_network"));
+    assert_eq!((v["attempt"].clone(), v["cause"].clone()), (json!(3), json!("lookup_failed")));
+    assert_eq!(v["error"], json!(failure.detail));
+    assert_eq!(
+        status_text(&d, true, Some(&waiting)),
+        ("Waiting for the network (try 3): the server's name could not be looked up".into(), Tone::Warn)
+    );
+    assert_eq!(status_detail(true, Some(&waiting)).as_deref(), Some("the server's name did not resolve: no network"));
+}
+
+#[test]
 fn open_details_save_what_was_typed() {
     let d = Destination {
         id: "b".into(),

@@ -201,6 +201,13 @@ pub(crate) fn status_text(d: &Destination, running: bool, live: Option<&Destinat
                 ),
                 Tone::Warn,
             ),
+            DestinationStatus::WaitingForNetwork { attempt, failure } => (
+                craft_i18n::fmt(
+                    tl!("Waiting for the network (try {attempt}): {error}"),
+                    &[("attempt", &attempt.to_string()), ("error", cause_text(failure.cause))],
+                ),
+                Tone::Warn,
+            ),
             DestinationStatus::Stopped => (tl!("Stopped").to_string(), Tone::Plain),
             DestinationStatus::Failed(failure) => (craft_i18n::fmt(tl!("Failed: {error}"), &[("error", cause_text(failure.cause))]), Tone::Warn),
         },
@@ -240,7 +247,9 @@ pub(crate) fn cause_text(cause: Cause) -> &'static str {
 /// with each address tried and its error on a line of its own.
 pub(crate) fn status_detail(running: bool, live: Option<&DestinationState>) -> Option<String> {
     let failure = match live.filter(|_| running).map(|s| &s.status) {
-        Some(DestinationStatus::Retrying { failure, .. } | DestinationStatus::Failed(failure)) => failure,
+        Some(
+            DestinationStatus::Retrying { failure, .. } | DestinationStatus::WaitingForNetwork { failure, .. } | DestinationStatus::Failed(failure),
+        ) => failure,
         _ => return None,
     };
     let mut text = Msg::plain(failure.detail.as_str()).shown();
@@ -697,6 +706,7 @@ fn listed(d: &Destination, running: bool, live: Option<&DestinationState>, held:
         (true, Some(DestinationStatus::Connecting)) => ("connecting", None),
         (true, Some(DestinationStatus::Live)) => ("live", None),
         (true, Some(DestinationStatus::Retrying { failure, .. })) => ("retrying", Some(failure)),
+        (true, Some(DestinationStatus::WaitingForNetwork { failure, .. })) => ("waiting_for_network", Some(failure)),
         (true, Some(DestinationStatus::Stopped)) => ("stopped", None),
         (true, Some(DestinationStatus::Failed(f))) => ("failed", Some(f)),
         (true, None) => ("not_in_stream", None),
@@ -715,7 +725,7 @@ fn listed(d: &Destination, running: bool, live: Option<&DestinationState>, held:
         v["bytes"] = json!(s.bytes);
         v["dropped"] = json!(s.dropped);
         v["reconnects"] = json!(s.reconnects);
-        if let DestinationStatus::Retrying { attempt, .. } = s.status {
+        if let DestinationStatus::Retrying { attempt, .. } | DestinationStatus::WaitingForNetwork { attempt, .. } = s.status {
             v["attempt"] = json!(attempt);
         }
     }

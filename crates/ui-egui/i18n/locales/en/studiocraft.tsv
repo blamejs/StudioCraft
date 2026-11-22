@@ -470,6 +470,7 @@
 	Transition settings	Transition settings
 	Transition to Program	Transition to Program
 	Trying again (try {attempt}): {error}	Trying again (try {attempt}): {error}
+	Waiting for the network (try {attempt}): {error}	Waiting for the network (try {attempt}): {error}
 	Type	Type
 	Type shortcuts such as Ctrl+1 or Shift+F5; separate several with commas.	Type shortcuts such as Ctrl+1 or Shift+F5; separate several with commas.
 	ultrafast	ultrafast

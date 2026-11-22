@@ -598,7 +598,7 @@ The items come in this order:
 
 | `id` | What it checks | `fix` |
 | --- | --- | --- |
-| `destination:<id>` | One item for each destination that is on, with `destination`, its id. A destination with no server, with no key (the profile's key is empty and the server's address does not end with the stream's name, or its session key is not held), or whose server and key give an address a start refuses, is a problem. While a stream of this profile runs, a `live` destination passes, a `connecting` one, one added after the stream started, and one whose server or key changed after the stream started are unknown, and a `retrying`, `failed` or `stopped` one is a problem. While no stream runs, a destination passes only when it was live on an earlier stream of this session with the same server and key, and is a problem when it was retrying or had failed when last seen; one that has not connected yet is unknown, never `pass`. | `view.streaming` |
+| `destination:<id>` | One item for each destination that is on, with `destination`, its id. A destination with no server, with no key (the profile's key is empty and the server's address does not end with the stream's name, or its session key is not held), or whose server and key give an address a start refuses, is a problem. While a stream of this profile runs, a `live` destination passes, a `connecting` one, one added after the stream started, and one whose server or key changed after the stream started are unknown, and a `retrying`, `waiting_for_network`, `failed` or `stopped` one is a problem. While no stream runs, a destination passes only when it was live on an earlier stream of this session with the same server and key, and is a problem when it was retrying, waiting for the network or had failed when last seen; one that has not connected yet is unknown, never `pass`. | `view.streaming` |
 | `destinations` | In place of the destination items: no destination is on, or the list cannot be used (too many, an empty id, an id used twice). Always a problem. | `view.streaming` |
 | `encoder` | The stream's video encoder. An encoder that is not installed, does not write H.264 or cannot run in a stream is a problem; the `hardware` choice is unknown; its tests run when the stream starts. Without the graphics device this item is a problem with no `fix`. | `app.settings` |
 | `recording_space` | The free space in the recording folder, or in the nearest folder above it that exists, with `free_bytes`. Less than 10 GB, a limit StudioCraft chose, is a problem, and so is a folder whose free space cannot be read or a file in its place. A folder that has not answered within 250 ms is unknown until a later check reads it; at most four folders are read at once. | `app.settings` |
@@ -624,9 +624,11 @@ where `service` is the id of the streaming service it is set up for or empty for
 `key` is `profile`, `held` or `none` and `server` shows a user name and password before the host, a
 key at the end of the address, and any query, as dots. A destination whose key is held adds `held_name` and `held`, whether a key is held
 under that name now. `status` is `idle` while no stream runs, `not_in_stream` for a destination
-added after the stream started, and otherwise `connecting`, `live`, `retrying`, `stopped` or
-`failed`. While the stream runs a destination also has `bytes`, `dropped` and `reconnects`; a
-`retrying` one has `attempt`, `error` and `cause`, and a `failed` one has `error` and `cause`.
+added after the stream started, and otherwise `connecting`, `live`, `retrying`,
+`waiting_for_network` (this computer has no network route to the server, and the try starts when
+one returns), `stopped` or `failed`. While the stream runs a destination also has `bytes`,
+`dropped` and `reconnects`; a `retrying` or `waiting_for_network` one has `attempt`, `error` and
+`cause` (of the last failure), and a `failed` one has `error` and `cause`.
 `error` is the connection's own English text. `cause` is one of these ids:
 
 | `cause` | Meaning |

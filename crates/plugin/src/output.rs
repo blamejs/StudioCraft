@@ -103,6 +103,9 @@ pub enum DestinationStatus {
     Live,
     /// The connection was lost or could not be made; the next try is `attempt`.
     Retrying { attempt: u32, failure: Failure },
+    /// This computer has no network route to the server; try `attempt` starts when one returns.
+    /// `failure` is the last failure.
+    WaitingForNetwork { attempt: u32, failure: Failure },
     /// Stopped by request, or never started because it is off.
     Stopped,
     /// Given up on: the server refused the stream, or every try failed.

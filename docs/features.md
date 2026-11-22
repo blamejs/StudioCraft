@@ -438,6 +438,17 @@ each destination has at most two lookups outstanding and StudioCraft at most 32,
 finds either limit reached starts no lookup and counts as failed. An answer that arrives after its
 try gave up is not used. A server given as an IP address is not looked up, so these limits do not
 apply to it.
+Before trying again, a destination asks the system whether it has a network route to the server.
+The check sends nothing. For a server given as an IP address with no route, the destination shows
+"Waiting for the network" and does not try; each longest wait spent without a route counts as a
+failed try, so a long outage still ends the destination. For a server given by name, the
+destination shows "Waiting for the network" when its last known addresses have no route and the
+system has no default route, or when no address is known, the last try failed to look the name up
+or to connect in time, and the system has no default route. It still tries at the usual time,
+looking the name up again. When the system has a default route, a named server is tried at the
+usual time. StudioCraft checks the route of the waiting destinations once a second, and a
+destination whose route returns tries at once instead of finishing its wait. A route only means
+that this computer has a path for the connection; the server may still be unreachable beyond it.
 A key written at the end of the server address, as in `rtmp://host/app/key`, is used as the stream
 key when the key field is empty, and the stream's status leaves it out of the address it shows.
 

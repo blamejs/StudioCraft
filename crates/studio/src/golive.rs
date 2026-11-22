@@ -254,7 +254,9 @@ impl GoLive {
             let Some(&print) = prints.get(&d.id) else { continue };
             let reach = match &d.status {
                 DestinationStatus::Live => Reach::Live,
-                DestinationStatus::Retrying { failure, .. } | DestinationStatus::Failed(failure) => Reach::Failed(failure.detail.clone()),
+                DestinationStatus::Retrying { failure, .. }
+                | DestinationStatus::WaitingForNetwork { failure, .. }
+                | DestinationStatus::Failed(failure) => Reach::Failed(failure.detail.clone()),
                 DestinationStatus::Connecting | DestinationStatus::Stopped => continue,
             };
             if self.reached.len() >= MAX_REACHED && !self.reached.contains_key(&d.id) {
@@ -405,6 +407,9 @@ fn destinations(i: &Input, out: &mut Vec<Item>) {
                 Some(DestinationStatus::Connecting) => item(Check::Unknown, "Destination {name} is connecting", vec![]),
                 Some(DestinationStatus::Retrying { failure, .. }) => {
                     item(Check::Problem, "Destination {name} is reconnecting: {error}", vec![("error", clip(&failure.detail))])
+                }
+                Some(DestinationStatus::WaitingForNetwork { failure, .. }) => {
+                    item(Check::Problem, "Destination {name} is waiting for the network: {error}", vec![("error", clip(&failure.detail))])
                 }
                 Some(DestinationStatus::Failed(failure)) => {
                     item(Check::Problem, "Destination {name} failed: {error}", vec![("error", clip(&failure.detail))])
@@ -705,14 +710,17 @@ mod tests {
             dest("b", "rtmp://b/live/name", KeyRef::None, true),
             dest("c", "rtmp://c/live/name", KeyRef::None, true),
             dest("d", "rtmp://d/live/name", KeyRef::None, true),
+            dest("e", "rtmp://e/live/name", KeyRef::None, true),
         ]);
         let running = [
             state("a", DestinationStatus::Retrying { attempt: 2, failure: Failure::new(Cause::Refused, "refused") }),
             state("b", DestinationStatus::Failed(Failure::new(Cause::RejectedPublish, "bad key"))),
             state("c", DestinationStatus::Stopped),
+            state("e", DestinationStatus::WaitingForNetwork { attempt: 2, failure: Failure::new(Cause::NoRoute, "no route") }),
         ];
         let (list, _) = items(&f.input(Some(&running)));
-        for id in ["a", "b", "c"] {
+        assert_eq!(find(&list, "destination:e").template, "Destination {name} is waiting for the network: {error}");
+        for id in ["a", "b", "c", "e"] {
             let d = find(&list, &format!("destination:{id}"));
             assert_eq!((d.state, d.fix), (Check::Problem, Some("view.streaming")), "{d:?}");
         }
@@ -722,6 +730,7 @@ mod tests {
         f.reached = g.reached;
         let after = items_of(&f);
         assert_eq!(find(&after, "destination:a").state, Check::Problem, "it was retrying when last seen");
+        assert_eq!(find(&after, "destination:e").state, Check::Problem, "it was waiting for the network when last seen");
         assert_eq!(find(&after, "destination:b").args, vec![("name", "b".into()), ("error", "bad key".into())]);
         assert_eq!(find(&after, "destination:c").state, Check::Unknown, "a stopped destination says nothing about its connection");
     }
