@@ -745,10 +745,10 @@ system or the server reported, in English.
 | `rejected` | The server takes connections, and the last failure was a refusal of `connect` or `publish`. |
 | `certificate_not_accepted` | The secure handshake refused the `rtmps://` server's certificate. |
 | `service_reports_problem` | The service's status summary reports a problem. |
-| `ingest_not_answering_other_does` | No address of the server connected, and another ingest server of the service did. |
+| `ingest_not_answering_other_does` | No address of the server connected or refused the connection, and another ingest server of the service connected. |
 | `port_not_answering_443_does` | The server's port timed out, and port 443 of the same addresses connected. |
 | `refused` | An address of the server refused the TCP connection. |
-| `service_not_answering` | No address of the server connected, and neither did the service's other ingest servers that were tried. |
+| `service_not_answering` | The server's addresses and the service's other ingest servers that were tried all timed out or had no route. |
 | `server_not_answering` | The server's addresses timed out or had no route. |
 | `connects_then_fails` | A connection succeeds, and the last failure came after it. |
 | `reachable` | A connection succeeds, and the destination had no failure or its last failure came before a connection. |

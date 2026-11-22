@@ -1040,8 +1040,8 @@ pub(crate) fn decide(host: &str, port: u16, tls: bool, service: Option<&str>, la
     let any_ok = r.port.iter().any(|(_, s)| ok(s));
     let all_failed = !r.port.is_empty() && r.port.iter().all(|(_, s)| failed_with(s).is_some());
     let port_causes: Vec<Cause> = r.port.iter().filter_map(|(_, s)| failed_with(s)).map(|f| f.cause).collect();
-    // Every address failed before a connection was made.
-    let unreached = all_failed && port_causes.iter().all(|c| matches!(c, Cause::TimedOut | Cause::Refused | Cause::NoRoute));
+    // Every address failed before a connection was made, and none answered with a refusal.
+    let unreached = all_failed && port_causes.iter().all(|c| matches!(c, Cause::TimedOut | Cause::NoRoute));
     let no_route = r.default_route == Some(Route::None) && r.routes.iter().all(|(_, route)| *route == Route::None);
     let other_ok = r.others.iter().find(|(_, s)| ok(s)).map(|(h, _)| h.clone());
     let status_problem = match &r.status {
@@ -1078,7 +1078,7 @@ pub(crate) fn decide(host: &str, port: u16, tls: bool, service: Option<&str>, la
     } else if unreached
         && service.is_some()
         && !r.others.is_empty()
-        && r.others.iter().all(|(_, s)| failed_with(s).is_some_and(|f| matches!(f.cause, Cause::TimedOut | Cause::Refused | Cause::NoRoute)))
+        && r.others.iter().all(|(_, s)| failed_with(s).is_some_and(|f| matches!(f.cause, Cause::TimedOut | Cause::NoRoute)))
     {
         Verdict::ServiceNotAnswering
     } else if all_failed && port_causes.iter().all(|c| matches!(c, Cause::TimedOut | Cause::NoRoute)) {

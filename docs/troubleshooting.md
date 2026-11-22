@@ -118,8 +118,9 @@ inspects secure connections can also cause this.
 service's status summary reports a problem. Wait for the service to resolve it.
 
 **"{host} cannot be reached from this network, but {other} can".** No address of the server
-connected, and another ingest server of the same service did. Choose that server, or another one
-near you, in the destination's server address.
+connected or refused the connection, and another ingest server of the same service connected.
+Choose that server, or another one near you, in the destination's server address. A server that
+refused the connection gets the "refused the connection" message below instead.
 
 **"{host} answers on port 443 but not on port {port}. This network or the server may be blocking
 port {port}".** The port in the server address timed out and port 443 of the same server connected.
@@ -129,8 +130,9 @@ Use the service's `rtmps://` server on port 443 if it has one.
 that port".** Check the port in the server address.
 
 **"None of the servers of {service} that were tried answer from this network. ..."** Neither the
-server nor the service's other ingest servers that were tried connected. The service may be down,
-or a firewall, a proxy or the network's provider may block it.
+server nor the service's other ingest servers that were tried answered: each connection timed out
+or had no route. The service may be down, or a firewall, a proxy or the network's provider may
+block it.
 
 **"{host} does not answer on port {port}. The server may be down, or this network may be blocking
 it".** The connections timed out. Try again later, or try from another network.

@@ -552,6 +552,18 @@ fn each_verdict_follows_from_its_evidence() {
     // Nor do other ingest servers that do not answer make the service one that does not answer.
     r.others = vec![("c.example".into(), Step::Done(failed(Cause::TimedOut)))];
     assert_eq!(decide("h.example", 1935, true, Some("Svc"), None, &r).verdict, Verdict::Unknown);
+    // A server that refused the connection was reached, on every address or on one of them, so
+    // another ingest server that answers does not make it one this network cannot reach.
+    let mut r = results(Some(failed(Cause::Refused)));
+    r.others = vec![("c.example".into(), Step::Done(Ok(())))];
+    assert_eq!(decide("h.example", 1935, true, Some("Svc"), None, &r).verdict, Verdict::Refused);
+    r.port.push((at(2, 1935), Step::Done(failed(Cause::TimedOut))));
+    assert_eq!(decide("h.example", 1935, true, Some("Svc"), None, &r).verdict, Verdict::Refused);
+    // Other ingest servers that refused the connection answered, so the service is not one whose
+    // servers do not answer.
+    let mut r = results(Some(failed(Cause::TimedOut)));
+    r.others = vec![("b.example".into(), Step::Done(failed(Cause::Refused)))];
+    assert_eq!(decide("h.example", 1935, true, Some("Svc"), None, &r).verdict, Verdict::ServerNotAnswering);
     // A secure connection to one address outweighs a certificate another address refused.
     let mut r = results(Some(Ok(())));
     r.port.push((at(2, 1935), Step::Done(failed(Cause::CertificateExpired))));
