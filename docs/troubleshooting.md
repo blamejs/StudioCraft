@@ -41,8 +41,15 @@ offers only IPv4 or only IPv6, check that the server has an address of that kind
 **"the server's name could not be looked up", "the server's name does not exist; check the server
 address" or "the DNS server did not answer for the server's name".** The name in the server
 address did not resolve. Check the spelling of the server address. When other sites open in a web
-browser, the name may be wrong or the network's DNS server may block it. The last two messages
-appear only on Windows.
+browser, the name may be wrong or the network's DNS server may block it. "the server's name does
+not exist" appears only on Windows. "the DNS server did not answer" appears on every system when a
+lookup gives no answer within 10 s, and on Windows also when the DNS server reports that it did not
+answer.
+
+**"earlier lookups of server names have not finished".** Earlier lookups are still waiting on the
+system's resolver, so StudioCraft started no new one. Each destination keeps at most two lookups
+outstanding and StudioCraft at most 32. The system's DNS settings or the network's DNS server are
+not answering; the destination tries again as usual.
 
 **"the server refused the connection".** The server answered, but nothing on it accepts streams on
 that port. Check the port in the server address; `rtmp://` uses 1935 and `rtmps://` uses 443 when

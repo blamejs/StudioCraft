@@ -1,5 +1,6 @@
+use std::collections::VecDeque;
 use std::io::{self, Read, Write};
-use std::net::{TcpListener, TcpStream};
+use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::sync::mpsc;
 
 use craft_flv::amf0::{self, Value};
@@ -778,4 +779,276 @@ fn timestamps_count_from_the_first_packet_in_milliseconds() {
     assert!(matches!(body(&p, 4_000_000_000), Some((0, Body::AacRaw(_)))), "a packet before the first one is sent at 0");
     assert_eq!(Timing::default().delay(1), Duration::from_secs(2));
     assert_eq!(Timing::default().delay(9), Duration::from_secs(30));
+}
+
+/// A clock that moves only when the test moves it.
+struct TestClock {
+    base: Instant,
+    ahead: Mutex<Duration>,
+}
+
+impl TestClock {
+    fn new() -> Arc<TestClock> {
+        Arc::new(TestClock { base: Instant::now(), ahead: Mutex::new(Duration::ZERO) })
+    }
+
+    fn advance(&self, by: Duration) {
+        *lock(&self.ahead) += by;
+    }
+}
+
+impl Clock for TestClock {
+    fn now(&self) -> Instant {
+        self.base + *lock(&self.ahead)
+    }
+}
+
+/// What the scripted resolver does for one lookup.
+enum Answer {
+    /// Answers at once.
+    Now(io::Result<Vec<SocketAddr>>),
+    /// Answers with these addresses once the test sends on the channel or drops its sender.
+    After(mpsc::Receiver<()>, Vec<SocketAddr>),
+}
+
+/// A resolver that gives `answers` in order, whatever the name, and says on the returned channel
+/// each time it is asked and each time it returns.
+fn scripted(answers: Vec<Answer>) -> (Arc<Resolve>, mpsc::Receiver<&'static str>) {
+    let queue = Mutex::new(VecDeque::from(answers));
+    let (tx, rx) = mpsc::channel();
+    let tx = Mutex::new(tx);
+    let resolve = move |_: &str, _: u16| {
+        let next = lock(&queue).pop_front();
+        let _ = lock(&tx).send("asked");
+        let answer = match next {
+            Some(Answer::Now(r)) => r,
+            Some(Answer::After(release, addrs)) => {
+                let _ = release.recv();
+                Ok(addrs)
+            }
+            None => Err(io::Error::other("no more answers")),
+        };
+        let _ = lock(&tx).send("answered");
+        answer
+    };
+    (Arc::new(resolve), rx)
+}
+
+/// The address of an `rtmp://` URL the tests made.
+fn addr(url: &str) -> SocketAddr {
+    url.trim_start_matches("rtmp://").trim_end_matches("/live").parse().unwrap()
+}
+
+/// A destination whose server's name only the scripted resolver knows.
+fn named(id: &str) -> Target {
+    target(id, "rtmp://ingest.example.test/live", "k")
+}
+
+/// The next note from the scripted resolver.
+fn heard(rx: &mpsc::Receiver<&'static str>) -> &'static str {
+    rx.recv_timeout(GUARD).unwrap_or_else(|e| panic!("the resolver said nothing more: {e}"))
+}
+
+/// Waits until no lookup of `id` is outstanding, checking each time a lookup ends.
+fn until_no_lookups(out: &Streaming, id: &str) {
+    let Ok(dest) = out.hub.find(id) else { panic!("no destination `{id}`") };
+    let mut changes = lock(&dest.changes);
+    while dest.lookups.load(Ordering::SeqCst) > 0 {
+        let (next, waited) = dest.changed.wait_timeout(changes, GUARD).unwrap_or_else(PoisonError::into_inner);
+        changes = next;
+        assert!(!waited.timed_out(), "a lookup is still outstanding");
+    }
+}
+
+#[test]
+fn a_stop_during_a_hung_lookup_returns_at_once() {
+    let (release, hold) = mpsc::channel();
+    let (resolve, asked) = scripted(vec![Answer::After(hold, vec![addr(&closed_url())])]);
+    let job = job(RateControl::Bitrate { kbps: 400, keyframe_s: 1 });
+    let seams = Seams { clock: TestClock::new(), resolve };
+    let mut out = Streaming::start_with(&job, vec![named("a")], quick(), seams).unwrap();
+    assert_eq!(heard(&asked), "asked");
+    // The resolver has not answered, and the stop does not wait for it.
+    out.stop_destination("a").unwrap();
+    let d = until(&out, "a", |d| d.status == DestinationStatus::Stopped);
+    assert_eq!(d.status, DestinationStatus::Stopped);
+    let dest = out.hub.find("a").unwrap();
+    // The thread sets the status and ends with its slot locked.
+    let slot = lock(&dest.thread);
+    assert!(!dest.running(), "the destination's thread ended");
+    drop(slot);
+    assert_eq!(dest.lookups.load(Ordering::SeqCst), 1, "the lookup is still outstanding");
+    // Once the resolver answers, its thread ends and the answer is not used.
+    drop(release);
+    assert_eq!(heard(&asked), "answered");
+    until_no_lookups(&out, "a");
+    assert_eq!(until(&out, "a", |_| true).status, DestinationStatus::Stopped);
+    out.stop().unwrap();
+}
+
+#[test]
+fn an_ip_address_is_not_looked_up() {
+    let (url, seen) = server(vec![Plan::Accept]);
+    let (resolve, asked) = scripted(Vec::new());
+    let job = job(RateControl::Bitrate { kbps: 400, keyframe_s: 1 });
+    let seams = Seams { clock: TestClock::new(), resolve };
+    let mut out = Streaming::start_with(&job, vec![target("a", &url, "k")], quick(), seams).unwrap();
+    let feed = Feed::new(&out);
+    media(&seen, 1);
+    until(&out, "a", |d| d.status == DestinationStatus::Live);
+    assert!(asked.try_recv().is_err(), "the resolver was not asked");
+    assert_eq!(out.hub.find("a").unwrap().lookups.load(Ordering::SeqCst), 0);
+    drop(feed);
+    out.stop().unwrap();
+    until_closed(&seen);
+}
+
+/// A clock that the test can hold still for every thread but the lookup threads, which always read
+/// it at once.
+struct HeldClock {
+    clock: Arc<TestClock>,
+    held: Mutex<()>,
+}
+
+impl Clock for HeldClock {
+    fn now(&self) -> Instant {
+        if std::thread::current().name() != Some("stream lookup") {
+            drop(lock(&self.held));
+        }
+        self.clock.now()
+    }
+}
+
+#[test]
+fn an_answer_in_time_is_used_when_the_try_wakes_late() {
+    let (live, seen) = server(vec![Plan::Accept]);
+    let (release, hold) = mpsc::channel::<()>();
+    let (resolve, asked) = scripted(vec![Answer::After(hold, vec![addr(&live)])]);
+    let clock = TestClock::new();
+    let held = Arc::new(HeldClock { clock: Arc::clone(&clock), held: Mutex::new(()) });
+    let job = job(RateControl::Bitrate { kbps: 400, keyframe_s: 1 });
+    let seams = Seams { clock: Arc::clone(&held) as Arc<dyn Clock>, resolve };
+    let mut out = Streaming::start_with(&job, vec![named("a")], quick(), seams).unwrap();
+    let feed = Feed::new(&out);
+    assert_eq!(heard(&asked), "asked");
+    // The destination's thread stops at its next clock read while the answer comes in time.
+    let still = lock(&held.held);
+    drop(release);
+    assert_eq!(heard(&asked), "answered");
+    until_no_lookups(&out, "a");
+    // It reads the clock past the deadline, and still uses the answer.
+    clock.advance(LOOKUP_WAIT);
+    drop(still);
+    assert_eq!(next(&seen), Seen::Publish("k".into()));
+    let d = until(&out, "a", |d| d.status == DestinationStatus::Live);
+    assert_eq!(d.reconnects, 0);
+    drop(feed);
+    out.stop().unwrap();
+    until_closed(&seen);
+}
+
+#[test]
+fn a_lookup_past_its_deadline_is_a_failed_try() {
+    let (release, hold) = mpsc::channel::<()>();
+    let (resolve, asked) = scripted(vec![Answer::After(hold, vec![addr(&closed_url())])]);
+    let clock = TestClock::new();
+    let job = job(RateControl::Bitrate { kbps: 400, keyframe_s: 1 });
+    // The wait before the next try outlasts the test, and the stop ends it.
+    let timing = Timing { first: GUARD, longest: GUARD, ..quick() };
+    let seams = Seams { clock: Arc::clone(&clock) as Arc<dyn Clock>, resolve };
+    let mut out = Streaming::start_with(&job, vec![named("a")], timing, seams).unwrap();
+    assert_eq!(heard(&asked), "asked");
+    // Just short of the limit the try still waits.
+    clock.advance(LOOKUP_WAIT - Duration::from_millis(1));
+    assert_eq!(out.hub.find("a").unwrap().status(), DestinationStatus::Connecting);
+    clock.advance(Duration::from_millis(1));
+    let d = until(&out, "a", |d| matches!(d.status, DestinationStatus::Retrying { .. }));
+    let DestinationStatus::Retrying { attempt: 2, failure } = &d.status else { panic!("{d:?}") };
+    assert_eq!(failure.cause, Cause::LookupNoAnswer, "{failure:?}");
+    assert!(failure.detail.contains("not looked up within 10 s"), "{failure:?}");
+    out.stop().unwrap();
+    drop(release);
+}
+
+#[test]
+fn no_more_than_two_lookups_are_outstanding() {
+    let (release_one, hold_one) = mpsc::channel::<()>();
+    let (release_two, hold_two) = mpsc::channel::<()>();
+    let closed = addr(&closed_url());
+    let (resolve, asked) = scripted(vec![Answer::After(hold_one, vec![closed]), Answer::After(hold_two, vec![closed])]);
+    let clock = TestClock::new();
+    let job = job(RateControl::Bitrate { kbps: 400, keyframe_s: 1 });
+    let seams = Seams { clock: Arc::clone(&clock) as Arc<dyn Clock>, resolve };
+    let mut out = Streaming::start_with(&job, vec![named("a")], quick(), seams).unwrap();
+    for _ in 0..2 {
+        assert_eq!(heard(&asked), "asked");
+        clock.advance(LOOKUP_WAIT);
+    }
+    // The third try finds two lookups outstanding, starts none, and is the last of three.
+    let d = until(&out, "a", |d| matches!(d.status, DestinationStatus::Failed(_)));
+    let DestinationStatus::Failed(f) = &d.status else { panic!("{d:?}") };
+    assert_eq!(f.cause, Cause::LookupsPending, "{f:?}");
+    assert!(f.detail.contains("an earlier lookup") && f.detail.contains("gave up after 3 tries"), "{f:?}");
+    assert_eq!(out.hub.find("a").unwrap().lookups.load(Ordering::SeqCst), 2);
+    assert!(asked.try_recv().is_err(), "the resolver was asked twice");
+    drop((release_one, release_two));
+    until_no_lookups(&out, "a");
+    assert!(out.stop().is_err());
+}
+
+#[test]
+fn the_lookup_count_stops_at_its_limit() {
+    // The process-wide count outlives every stream; a restarted stream's destinations add to it.
+    let count = AtomicU32::new(MAX_ALL_LOOKUPS - 2);
+    assert!(reserve(&count, MAX_ALL_LOOKUPS));
+    assert!(reserve(&count, MAX_ALL_LOOKUPS));
+    assert!(!reserve(&count, MAX_ALL_LOOKUPS));
+    assert_eq!(count.load(Ordering::SeqCst), MAX_ALL_LOOKUPS);
+    count.fetch_sub(1, Ordering::SeqCst);
+    assert!(reserve(&count, MAX_ALL_LOOKUPS));
+    assert!(!reserve(&AtomicU32::new(0), 0));
+}
+
+#[test]
+fn a_changed_address_is_used_on_the_next_try() {
+    let (live, seen) = server(vec![Plan::Accept]);
+    let (resolve, asked) = scripted(vec![Answer::Now(Ok(vec![addr(&closed_url())])), Answer::Now(Ok(vec![addr(&live)]))]);
+    let job = job(RateControl::Bitrate { kbps: 400, keyframe_s: 1 });
+    let seams = Seams { clock: TestClock::new(), resolve };
+    let mut out = Streaming::start_with(&job, vec![named("a")], quick(), seams).unwrap();
+    let feed = Feed::new(&out);
+    // Each try looks the name up again, and the second answer is the server that takes the stream.
+    assert_eq!(next(&seen), Seen::Publish("k".into()));
+    let d = until(&out, "a", |d| d.status == DestinationStatus::Live);
+    assert_eq!(d.reconnects, 0);
+    assert_eq!([heard(&asked), heard(&asked), heard(&asked), heard(&asked)], ["asked", "answered", "asked", "answered"]);
+    drop(feed);
+    out.stop().unwrap();
+    until_closed(&seen);
+}
+
+#[test]
+fn a_late_answer_from_an_abandoned_lookup_is_discarded() {
+    let (live, seen) = server(vec![Plan::Accept]);
+    let (release, hold) = mpsc::channel::<()>();
+    let (resolve, asked) = scripted(vec![Answer::After(hold, vec![addr(&closed_url())]), Answer::Now(Ok(vec![addr(&live)]))]);
+    let clock = TestClock::new();
+    let job = job(RateControl::Bitrate { kbps: 400, keyframe_s: 1 });
+    let seams = Seams { clock: Arc::clone(&clock) as Arc<dyn Clock>, resolve };
+    let mut out = Streaming::start_with(&job, vec![named("a")], quick(), seams).unwrap();
+    let feed = Feed::new(&out);
+    assert_eq!(heard(&asked), "asked");
+    clock.advance(LOOKUP_WAIT);
+    // The next try's lookup answers at once and the destination goes live.
+    assert_eq!(next(&seen), Seen::Publish("k".into()));
+    until(&out, "a", |d| d.status == DestinationStatus::Live);
+    // The first lookup answers late with an address nothing listens on, and the stream goes on.
+    drop(release);
+    until_no_lookups(&out, "a");
+    media(&seen, 10);
+    let d = until(&out, "a", |_| true);
+    assert_eq!((d.status, d.reconnects), (DestinationStatus::Live, 0));
+    drop(feed);
+    out.stop().unwrap();
+    until_closed(&seen);
 }

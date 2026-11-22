@@ -632,9 +632,10 @@ added after the stream started, and otherwise `connecting`, `live`, `retrying`, 
 | `cause` | Meaning |
 |---|---|
 | `no_route` | This computer has no network route to any of the server's addresses that were tried (at most 4). |
-| `lookup_failed` | The server's name could not be looked up, or it has no address. On macOS and Linux every failed lookup is `lookup_failed`, with the system's text in `error`. |
+| `lookup_failed` | The server's name could not be looked up, or it has no address. On macOS and Linux every lookup the system answers with an error is `lookup_failed`, with the system's text in `error`. |
 | `lookup_not_found` | Windows only: the DNS server answered that the name does not exist. |
-| `lookup_no_answer` | Windows only: the DNS server did not answer. |
+| `lookup_no_answer` | The lookup gave no answer within 10 s, on every system; on Windows also when the DNS server did not answer. |
+| `lookups_pending` | No lookup was started: the destination already has two lookups that have not finished, or StudioCraft has 32. |
 | `refused` | An address of the server refused the TCP connection. |
 | `timed_out` | An address of the server did not answer the TCP connection within 10 s, and none refused it. |
 | `certificate_untrusted` | The server's certificate does not chain to a trusted root. |

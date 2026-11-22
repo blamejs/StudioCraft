@@ -164,8 +164,11 @@ pub enum Cause {
     LookupFailed,
     /// The DNS server answered that the server's name does not exist (Windows only).
     LookupNotFound,
-    /// The DNS server did not answer for the server's name (Windows only).
+    /// The DNS server did not answer for the server's name: no answer within the lookup time on
+    /// every system, or the Windows resolver's answer that the server did not reply.
     LookupNoAnswer,
+    /// No lookup was started because earlier lookups of server names have not finished.
+    LookupsPending,
     /// The server refused the TCP connection.
     Refused,
     /// The TCP connection was not accepted in time.
@@ -200,11 +203,12 @@ pub enum Cause {
 
 impl Cause {
     /// Every cause, in the order of [`Cause::id`]'s list.
-    pub const ALL: [Cause; 19] = [
+    pub const ALL: [Cause; 20] = [
         Cause::NoRoute,
         Cause::LookupFailed,
         Cause::LookupNotFound,
         Cause::LookupNoAnswer,
+        Cause::LookupsPending,
         Cause::Refused,
         Cause::TimedOut,
         Cause::CertificateUntrusted,
@@ -229,6 +233,7 @@ impl Cause {
             Cause::LookupFailed => "lookup_failed",
             Cause::LookupNotFound => "lookup_not_found",
             Cause::LookupNoAnswer => "lookup_no_answer",
+            Cause::LookupsPending => "lookups_pending",
             Cause::Refused => "refused",
             Cause::TimedOut => "timed_out",
             Cause::CertificateUntrusted => "certificate_untrusted",
