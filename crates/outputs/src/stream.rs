@@ -355,7 +355,8 @@ struct Dest {
     /// Packets lost over every connection so far.
     dropped: AtomicU64,
     reconnects: AtomicU32,
-    /// It was started again while its thread still ran; the thread's next try is a first one.
+    /// It was started again while its thread still ran; the thread's next try is a first one, and
+    /// its failed tries are counted from none.
     restarted: AtomicBool,
     /// Lookups of the server's name whose threads have not ended.
     lookups: AtomicU32,
@@ -803,9 +804,10 @@ fn run(hub: &Hub, d: &Arc<Dest>) {
             d.set(DestinationStatus::Connecting);
         }
         let connected = connect(hub, d);
-        // Started again while it waited or connected: this try's answer is that of a first try.
+        // Started again while it waited or connected: this try's answer is that of a first try, and
+        // the tries after it are counted from none.
         if d.restarted.swap(false, Ordering::SeqCst) {
-            (after_loss, refusals) = (false, 0);
+            (after_loss, refusals, failures) = (false, 0, 0);
         }
         let tried = match connected {
             Ok(p) => Ok(p),

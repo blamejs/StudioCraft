@@ -436,8 +436,8 @@ destination whose server took the stream, lost the connection and then refuses t
 again up to 3 times, waiting at least 5 s each time, and each of those tries counts toward the
 number of tries. A refusal on the first connect, a refusal of the connection request, and a refusal
 after the destination was stopped and started again are final. A destination stopped and started
-again while it waits to try again tries at once. The stream fails when no destination is sending or
-trying to.
+again while it waits to try again tries at once and counts its failed tries from none. The stream
+fails when no destination is sending or trying to.
 While the stream runs, the status bar shows `RECONNECTING` with the stream's time, in the warning
 color, when no destination is live and at least one waits to try again; when some are live, it shows
 `LIVE` followed by the count of those waiting, such as "1 reconnecting". A notice says "Lost the
