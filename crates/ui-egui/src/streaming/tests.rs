@@ -1,4 +1,8 @@
+use std::cell::RefCell;
+use std::rc::Rc;
+
 use craft_keymap::CommandRef;
+use craft_ui::testing::Fixture;
 use serde_json::json;
 use studiocraft_plugin::AddressOutcome;
 
@@ -17,18 +21,56 @@ fn ids(a: &StudioApp) -> Vec<String> {
     a.studio.profile().stream.destinations.iter().map(|d| d.id.clone()).collect()
 }
 
-/// The texts `f` draws.
-fn drawn(f: impl FnMut(&mut Ui)) -> Vec<String> {
-    let ctx = egui::Context::default();
-    let mut out = ctx.run_ui(egui::RawInput::default(), f);
-    out.textures_delta.clear();
-    out.shapes
-        .iter()
-        .filter_map(|s| match &s.shape {
-            egui::Shape::Text(t) => Some(t.galley.text().to_string()),
-            _ => None,
-        })
-        .collect()
+/// What the window shows: the settings, whether a stream runs and the state of its destinations,
+/// the session keys held, and the connection checks.
+struct Shown {
+    stream: StreamSettings,
+    running: bool,
+    live: Vec<DestinationState>,
+    held: Vec<String>,
+    checks: Vec<(String, CheckState)>,
+}
+
+impl Shown {
+    fn of(stream: StreamSettings) -> Shown {
+        Shown { stream, running: false, live: Vec::new(), held: Vec::new(), checks: Vec::new() }
+    }
+}
+
+/// The window's contents for `shown` and `panel` in a fixture 600 by 1600 points, after one frame,
+/// with the acts its frames push and the panel it draws with.
+struct Window {
+    f: Fixture,
+    acts: Rc<RefCell<Vec<Act>>>,
+    panel: Rc<RefCell<StreamingPanel>>,
+}
+
+impl Window {
+    fn new(shown: Shown, panel: StreamingPanel) -> Window {
+        let acts: Rc<RefCell<Vec<Act>>> = Rc::default();
+        let panel = Rc::new(RefCell::new(panel));
+        let mut f = {
+            let (acts, panel) = (Rc::clone(&acts), Rc::clone(&panel));
+            Fixture::new(move |ui| {
+                let held = |name: &str| shown.held.iter().any(|h| h == name);
+                let view = View { stream: &shown.stream, running: shown.running, live: &shown.live, held: &held, checks: &shown.checks };
+                show(ui, &view, &mut panel.borrow_mut(), &mut acts.borrow_mut());
+            })
+        };
+        f.room(egui::vec2(600.0, 1600.0)).frame(Vec::new());
+        Window { f, acts, panel }
+    }
+
+    /// The texts the last frame painted.
+    fn texts(&self) -> Vec<String> {
+        self.f.texts().iter().map(|t| t.text.clone()).collect()
+    }
+
+    /// Whether the control named `label` is disabled.
+    fn disabled(&self, label: &str) -> bool {
+        let Some(t) = self.f.by_label(label) else { panic!("no control named {label}: {:?}", self.texts()) };
+        self.f.tree().is_disabled_key(t.node)
+    }
 }
 
 fn state(id: &str, status: DestinationStatus) -> DestinationState {
@@ -37,18 +79,38 @@ fn state(id: &str, status: DestinationStatus) -> DestinationState {
 
 #[test]
 fn the_window_opens_and_closes_from_the_view_menu() {
+    use craft_ui::runtime::overlay::{self, CloseReason, OpenFilter};
     let mut a = app();
-    let ctx = egui::Context::default();
+    let ctx = crate::test_context();
+    let frame = |a: &mut StudioApp| {
+        let raw = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1280.0, 800.0))), ..Default::default() };
+        a.before_input(&ctx);
+        let mut out = ctx.run_ui(raw, |ui| a.frame(ui));
+        out.textures_delta.clear();
+    };
+    frame(&mut a);
+    assert!(!overlay::any_open(&ctx, OpenFilter::Any), "no layer is open before View › Streaming");
     assert_eq!(a.item_state("view.streaming").checked, Some(false));
     assert_eq!(run(&mut a, &ctx, "view.streaming", json!({})).unwrap(), json!({"on": true}));
     assert_eq!(a.hud()["ui"]["streaming_open"], json!(true));
     assert_eq!(a.item_state("view.streaming").checked, Some(true));
     run(&mut a, &ctx, "stream.destination_add", json!({"server": "rtmp://a.example/live/secret", "key": "none"})).unwrap();
-    let raw = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1280.0, 800.0))), ..Default::default() };
-    let mut out = ctx.run_ui(raw, |ui| a.frame(ui));
-    out.textures_delta.clear();
+    frame(&mut a);
+    frame(&mut a);
+    assert!(overlay::any_open(&ctx, OpenFilter::Any), "the Streaming window is a framework layer");
     assert_eq!(run(&mut a, &ctx, "view.streaming", json!({})).unwrap(), json!({"on": false}));
     assert_eq!(a.hud()["ui"]["streaming_open"], json!(false));
+    frame(&mut a);
+    assert!(!overlay::any_open(&ctx, OpenFilter::Any), "View › Streaming closes the window");
+    // Closing the window turns View › Streaming off and drops the open details.
+    run(&mut a, &ctx, "view.streaming", json!({})).unwrap();
+    frame(&mut a);
+    frame(&mut a);
+    let top = overlay::top(&ctx).expect("the Streaming window takes keys");
+    overlay::request_close(&ctx, top, CloseReason::Requested);
+    frame(&mut a);
+    assert!(a.streaming.is_none(), "closing the window closes it");
+    assert_eq!(a.item_state("view.streaming").checked, Some(false));
 }
 
 #[test]
@@ -540,11 +602,8 @@ fn each_destination_shows_its_own_status() {
         state("b", DestinationStatus::Live),
         state("c", DestinationStatus::Retrying { attempt: 3, failure: Failure::new(Cause::Lost, "the server closed the connection") }),
     ];
-    let held = |_: &str| false;
-    let view = View { stream: &stream, running: true, live: &live, held: &held, checks: &[] };
-    let mut panel = StreamingPanel::default();
-    let mut acts = Vec::new();
-    let texts = drawn(|ui| show(ui, &view, &mut panel, &mut acts));
+    let w = Window::new(Shown { running: true, live: live.to_vec(), ..Shown::of(stream.clone()) }, StreamingPanel::default());
+    let texts = w.texts();
     for want in [
         "First",
         "Second",
@@ -563,10 +622,23 @@ fn each_destination_shows_its_own_status() {
     // A failed destination offers Start, and the others that are sending offer Stop.
     assert_eq!(texts.iter().filter(|t| *t == "Start").count(), 1, "{texts:?}");
     assert_eq!(texts.iter().filter(|t| *t == "Stop").count(), 2, "{texts:?}");
-    assert!(acts.is_empty(), "drawing does nothing");
+    // A destination the stream sends to cannot be removed, and its Remove says why.
+    let tree = w.f.tree();
+    let mut removes: Vec<_> = tree.with_role(craft_ui::contract::Role::BUTTON).into_iter().filter(|&k| tree.name_of(k) == Some("Remove")).collect();
+    // Top to bottom, in the order of the destinations.
+    removes.sort_by(|&a, &b| {
+        let top = |k| tree.bounds_of(k).map_or(f32::INFINITY, |r| r.top());
+        top(a).total_cmp(&top(b))
+    });
+    assert_eq!(removes.len(), 4, "{texts:?}");
+    let off: Vec<bool> = removes.iter().map(|&k| w.f.tree().is_disabled_key(k)).collect();
+    assert_eq!(off, [false, true, true, false], "the failed and the unsent destinations can be removed");
+    let reason = "Stop this destination before removing it";
+    assert!(removes.iter().filter(|&&k| w.f.tree().is_disabled_key(k)).all(|&k| w.f.tree().description_of(k) == Some(reason)));
+    assert!(w.acts.borrow().is_empty(), "drawing does nothing");
     // Without a stream each destination says whether starting the stream sends to it.
-    let view = View { stream: &stream, running: false, live: &[], held: &held, checks: &[] };
-    let texts = drawn(|ui| show(ui, &view, &mut panel, &mut acts));
+    let w = Window::new(Shown::of(stream), StreamingPanel::default());
+    let texts = w.texts();
     assert_eq!(texts.iter().filter(|t| *t == "Sent to when the stream starts").count(), 3, "{texts:?}");
     assert_eq!(texts.iter().filter(|t| *t == "Off").count(), 1, "{texts:?}");
     assert!(!texts.iter().any(|t| t == "Start" || t == "Stop"), "{texts:?}");
@@ -652,13 +724,24 @@ fn open_details_save_what_was_typed() {
     assert!(!p.to_string().contains("typed"), "a key typed for the session is not a command parameter");
     e.key = KeyChoice::Profile;
     assert_eq!(e.params(), json!({"id": "b", "service": "", "name": "B", "server": "rtmp://b2.example/live", "key": "profile"}));
+}
+
+#[test]
+fn open_details_show_their_fields_and_mask_the_server() {
+    let d = Destination {
+        id: "b".into(),
+        name: "B".into(),
+        server: "rtmp://b.example/live".into(),
+        key: KeyRef::Held("night".into()),
+        ..Destination::default()
+    };
     // The details of a destination are drawn with its fields, and the server field hides its text.
-    let stream = StreamSettings { destinations: vec![d.clone()], ..StreamSettings::default() };
-    let held = |n: &str| n == "night";
-    let view = View { stream: &stream, running: false, live: &[], held: &held, checks: &[] };
-    let mut panel = StreamingPanel { editing: Some(Edit::of(&d)), ..StreamingPanel::default() };
-    let mut acts = Vec::new();
-    let texts = drawn(|ui| show(ui, &view, &mut panel, &mut acts));
+    let shown = |d: &Destination| Shown {
+        held: vec!["night".into()],
+        ..Shown::of(StreamSettings { destinations: vec![d.clone()], ..StreamSettings::default() })
+    };
+    let w = Window::new(shown(&d), StreamingPanel { editing: Some(Edit::of(&d)), ..StreamingPanel::default() });
+    let texts = w.texts();
     for want in ["Name", "Server", "Stream key", "Session key name", "Key for this session", "Hold", "Forget", "Save", "Cancel"] {
         assert!(texts.iter().any(|t| t == want), "{want} in {texts:?}");
     }
@@ -668,18 +751,68 @@ fn open_details_save_what_was_typed() {
     assert!(!texts.iter().any(|t| t == "No key is held for this session yet"), "{texts:?}");
     // A key at the end of the address is hidden in the list and in the field.
     let d = Destination { id: "c".into(), server: "rtmp://c.example/live/secret-c".into(), ..Destination::default() };
-    let stream = StreamSettings { destinations: vec![d.clone()], ..StreamSettings::default() };
-    let view = View { stream: &stream, running: false, live: &[], held: &held, checks: &[] };
-    let mut panel = StreamingPanel { editing: Some(Edit::of(&d)), ..StreamingPanel::default() };
-    let texts = drawn(|ui| show(ui, &view, &mut panel, &mut acts));
+    let mut w = Window::new(shown(&d), StreamingPanel { editing: Some(Edit::of(&d)), ..StreamingPanel::default() });
+    let texts = w.texts();
     assert!(!texts.iter().any(|t| t.contains("secret-c")), "{texts:?}");
     assert!(texts.iter().any(|t| t == "rtmp://c.example/live/•••"), "{texts:?}");
-    if let Some(e) = &mut panel.editing {
+    if let Some(e) = &mut w.panel.borrow_mut().editing {
         e.show_server = true;
     }
-    let texts = drawn(|ui| show(ui, &view, &mut panel, &mut acts));
+    w.f.frame(Vec::new());
+    let texts = w.texts();
     assert!(texts.iter().any(|t| t == "rtmp://c.example/live/secret-c"), "{texts:?}");
-    assert!(acts.is_empty(), "drawing does nothing");
+    assert!(w.acts.borrow().is_empty(), "drawing does nothing");
+}
+
+#[test]
+fn the_key_choice_offers_its_sources_in_order() {
+    let d = Destination { id: "main".into(), server: "rtmp://a.example/live".into(), ..Destination::default() };
+    let shown = Shown::of(StreamSettings { destinations: vec![d.clone()], ..StreamSettings::default() });
+    let mut w = Window::new(shown, StreamingPanel { editing: Some(Edit::of(&d)), ..StreamingPanel::default() });
+    let Some(select) = w.f.by_label("Stream key") else { panic!("no Stream key choice: {:?}", w.texts()) };
+    w.f.click(&select).frame(Vec::new());
+    // The choice shows its value, and the list under it each choice top to bottom in
+    // `KeyChoice::ALL` order.
+    let mut rows: Vec<(f32, String)> = w.f.texts().iter().map(|t| (t.rect.top(), t.text.clone())).collect();
+    rows.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let labels: Vec<&str> = KeyChoice::ALL.iter().map(|c| c.label()).collect();
+    let listed: Vec<&str> = rows.iter().map(|(_, t)| t.as_str()).filter(|t| labels.contains(t)).collect();
+    assert_eq!(listed, [KeyChoice::None.label(), labels[0], labels[1], labels[2]], "{rows:?}");
+}
+
+#[test]
+fn hold_is_off_until_a_session_key_name_and_a_key_are_typed() {
+    let d = Destination { id: "b".into(), server: "rtmp://b.example/live".into(), key: KeyRef::Held("night".into()), ..Destination::default() };
+    let shown = Shown::of(StreamSettings { destinations: vec![d.clone()], ..StreamSettings::default() });
+    let mut w = Window::new(shown, StreamingPanel { editing: Some(Edit::of(&d)), ..StreamingPanel::default() });
+    assert!(w.disabled("Hold"), "no key is typed");
+    assert!(w.disabled("Forget"), "no key is held under the name");
+    let set = |w: &mut Window, name: &str, key: &str| {
+        if let Some(e) = &mut w.panel.borrow_mut().editing {
+            e.held_name = name.into();
+            e.held_key = key.into();
+        }
+        w.f.frame(Vec::new());
+    };
+    set(&mut w, "night", "k");
+    assert!(!w.disabled("Hold"), "a name and a key are typed");
+    set(&mut w, " ", "k");
+    assert!(w.disabled("Hold"), "a name of spaces is no name");
+    set(&mut w, "night", "");
+    assert!(w.disabled("Hold"), "an empty key");
+    // Hold takes the key out of the field and holds it under the trimmed name.
+    set(&mut w, " night ", "k");
+    let Some(hold) = w.f.by_label("Hold") else { panic!("no Hold") };
+    w.f.click(&hold).frame(Vec::new());
+    let acts = w.acts.borrow();
+    assert!(matches!(acts.as_slice(), [Act::HoldStreamKey { name, key }] if name == "night" && key == "k"), "{}", acts.len());
+    assert!(w.panel.borrow().editing.as_ref().is_some_and(|e| e.held_key.is_empty()));
+    drop(acts);
+    // The key field takes a key of any length.
+    set(&mut w, "night", &"k".repeat(1024));
+    let Some(field) = w.f.by_label("Key for this session") else { panic!("no key field") };
+    w.f.click(&field).type_text("x").frame(Vec::new());
+    assert_eq!(w.panel.borrow().editing.as_ref().map(|e| e.held_key.len()), Some(1025));
 }
 
 /// The preset of the service `id`.
@@ -792,18 +925,20 @@ fn the_details_change_the_server_with_the_service_and_link_to_its_page() {
     // A row names the service, and the details of a service without a shared server say where to
     // find the account's server and key.
     let d = Destination { id: "main".into(), service: "kick".into(), ..Destination::default() };
-    let stream = StreamSettings { destinations: vec![d.clone()], ..StreamSettings::default() };
-    let held = |_: &str| false;
-    let view = View { stream: &stream, running: false, live: &[], held: &held, checks: &[] };
-    let mut panel = StreamingPanel { editing: Some(Edit::of(&d)), ..StreamingPanel::default() };
-    let mut acts = Vec::new();
-    let texts = drawn(|ui| show(ui, &view, &mut panel, &mut acts));
+    let shown = Shown::of(StreamSettings { destinations: vec![d.clone()], ..StreamSettings::default() });
+    let w = Window::new(shown, StreamingPanel { editing: Some(Edit::of(&d)), ..StreamingPanel::default() });
+    let texts = w.texts();
     let stream_to = craft_i18n::fmt(tl!("Stream to {service}"), &[("service", kick.name)]);
     let find = craft_i18n::fmt(tl!("{service} shows the server and key for your account."), &[("service", kick.name)]);
     for want in [kick.name, stream_to.as_str(), "Service", find.as_str(), "Where to find them", "Add Destination"] {
         assert!(texts.iter().any(|t| t == want), "{want} in {texts:?}");
     }
-    assert!(acts.is_empty(), "drawing does nothing");
+    assert!(w.acts.borrow().is_empty(), "drawing does nothing");
+    // A service this version does not know stays the destination's choice.
+    let choices = service_choices("future");
+    assert_eq!(choices.len(), SERVICES.len() + 2);
+    assert_eq!(service_choices("kick").len(), SERVICES.len() + 1);
+    assert_eq!(service_choices("").len(), SERVICES.len() + 1);
 }
 
 /// A finished check of `host` with `verdict`, which ran by itself when `automatic`.
@@ -861,21 +996,24 @@ fn a_check_is_listed_and_shown_under_its_destination() {
     // The window shows the verdict, that it ran by itself, and the button that runs another.
     let dest = Destination { id: "main".into(), server: "rtmp://ingest.example/live".into(), ..Destination::default() };
     let stream = StreamSettings { destinations: vec![dest.clone()], ..StreamSettings::default() };
-    let held = |_: &str| false;
     let checks = vec![("main".to_string(), CheckState::Done(Box::new(d.clone())))];
-    let view = View { stream: &stream, running: false, live: &[], held: &held, checks: &checks };
-    let mut acts = Vec::new();
-    let texts = drawn(|ui| show(ui, &view, &mut StreamingPanel::default(), &mut acts));
+    let w = Window::new(Shown { checks, ..Shown::of(stream.clone()) }, StreamingPanel::default());
+    let texts = w.texts();
     for want in [d.english().as_str(), "Checked by itself after the destination failed", "What the check found", "Check Connection"] {
         assert!(texts.iter().any(|t| t == want), "{want} in {texts:?}");
     }
-    // While a check runs, the window says so.
+    assert!(!w.disabled("Check Connection"));
+    assert!(w.acts.borrow().is_empty(), "drawing does nothing");
+    // While a check runs, the window says so, and another cannot start.
     let checks = vec![("main".to_string(), CheckState::Running { automatic: false })];
-    let view = View { stream: &stream, running: false, live: &[], held: &held, checks: &checks };
-    let texts = drawn(|ui| show(ui, &view, &mut StreamingPanel::default(), &mut acts));
+    let w = Window::new(Shown { checks, ..Shown::of(stream) }, StreamingPanel::default());
+    let texts = w.texts();
     assert!(texts.iter().any(|t| t == "Checking the connection…"), "{texts:?}");
     assert!(texts.iter().all(|t| *t != d.english()), "{texts:?}");
-    assert!(acts.is_empty(), "drawing does nothing");
+    assert!(w.disabled("Check Connection"));
+    // A destination without a server cannot be checked.
+    let empty = StreamSettings { destinations: vec![Destination { id: "main".into(), ..Destination::default() }], ..StreamSettings::default() };
+    assert!(Window::new(Shown::of(empty), StreamingPanel::default()).disabled("Check Connection"));
 }
 
 #[test]

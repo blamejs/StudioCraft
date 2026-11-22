@@ -2462,8 +2462,6 @@ impl StudioApp {
             }
         }
 
-        self.streaming_window(ctx, acts);
-
         if self.about {
             let mut open = true;
             let mode = &mut self.credit_names;
@@ -2564,6 +2562,7 @@ impl StudioApp {
         self.prompt_answers(&ctx);
         self.windows(&ctx, &mut acts);
         self.stats_window(ui);
+        self.streaming_window(ui, &mut acts);
         self.encoders_window(ui);
         self.scopes_window(ui, &mut acts);
         // An update never starts while a recording, stream or replay buffer runs.
