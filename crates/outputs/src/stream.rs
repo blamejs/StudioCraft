@@ -55,8 +55,8 @@ use studiocraft_media::video::PooledFrame;
 use studiocraft_model::ReconnectSettings;
 use studiocraft_platform::net::Route;
 use studiocraft_plugin::{
-    AddressOutcome, Cause, DestinationState, DestinationStatus, EncoderKind, Failure, OutputInstance, OutputJob, OutputStatus, PluginError,
-    RateControl,
+    AddressOutcome, Cause, DestinationCounts, DestinationState, DestinationStatus, EncoderKind, Failure, OutputInstance, OutputJob, OutputStatus,
+    PluginError, RateControl,
 };
 
 use crate::native::{DISK_WAIT, Item, Native, PacketQueue, QUEUE_BYTES, QUEUE_SPAN_NS, Sink, Track};
@@ -328,9 +328,30 @@ fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
+/// How many destinations of a stream are live and how many wait to try again, waiting for the
+/// network included, kept as each destination's status is set.
+#[derive(Default)]
+struct Counts {
+    live: AtomicU32,
+    retrying: AtomicU32,
+}
+
+impl Counts {
+    /// The count a destination with status `s` is in.
+    fn of(&self, s: &DestinationStatus) -> Option<&AtomicU32> {
+        match s {
+            DestinationStatus::Live => Some(&self.live),
+            DestinationStatus::Retrying { .. } | DestinationStatus::WaitingForNetwork { .. } => Some(&self.retrying),
+            _ => None,
+        }
+    }
+}
+
 /// A destination and what its thread reports.
 struct Dest {
     target: Target,
+    /// The stream's counts, shared by its destinations.
+    counts: Arc<Counts>,
     /// The stream key it sends with: the target's, or one given when it was started again.
     key: Mutex<String>,
     status: Mutex<DestinationStatus>,
@@ -350,6 +371,10 @@ struct Dest {
     fixed: AtomicBool,
     /// Set by the route thread when a route to the server returned while the destination waited.
     net_up: AtomicBool,
+    /// The last connection was lost, and no connection has gone live since.
+    lost: AtomicBool,
+    /// Times it went live again after a lost connection.
+    recovered: AtomicU32,
     /// Asks the thread to close the connection and end.
     stop: AtomicBool,
     /// The thread runs and has not decided to end. It is changed with `thread` locked, so a start
@@ -359,10 +384,11 @@ struct Dest {
 }
 
 impl Dest {
-    fn new(target: Target) -> Dest {
+    fn new(target: Target, counts: Arc<Counts>) -> Dest {
         Dest {
             key: Mutex::new(target.key.clone()),
             target,
+            counts,
             status: Mutex::new(DestinationStatus::Stopped),
             changes: Mutex::new(0),
             changed: Condvar::new(),
@@ -373,6 +399,8 @@ impl Dest {
             addrs: Mutex::new(Vec::new()),
             fixed: AtomicBool::new(false),
             net_up: AtomicBool::new(false),
+            lost: AtomicBool::new(false),
+            recovered: AtomicU32::new(0),
             stop: AtomicBool::new(false),
             alive: AtomicBool::new(false),
             thread: Mutex::new(None),
@@ -395,7 +423,21 @@ impl Dest {
     }
 
     fn set(&self, s: DestinationStatus) {
-        *lock(&self.status) = s;
+        let mut status = lock(&self.status);
+        // The counts change with the status held, so each destination is in at most one count.
+        if let Some(c) = self.counts.of(&status) {
+            c.fetch_sub(1, Ordering::Relaxed);
+        }
+        if let Some(c) = self.counts.of(&s) {
+            c.fetch_add(1, Ordering::Relaxed);
+        }
+        *status = s;
+        // Counted with the status held, so a reader that sees the count and then reads the
+        // status sees it live.
+        if *status == DestinationStatus::Live && self.lost.swap(false, Ordering::Relaxed) {
+            self.recovered.fetch_add(1, Ordering::SeqCst);
+        }
+        drop(status);
         self.touch();
     }
 
@@ -486,6 +528,7 @@ struct Hub {
     timing: Timing,
     seams: Seams,
     dests: Vec<Arc<Dest>>,
+    counts: Arc<Counts>,
     net: NetWatch,
 }
 
@@ -820,11 +863,13 @@ fn lookup(hub: &Hub, d: &Arc<Dest>, host: &str, port: u16) -> Result<Vec<std::ne
     let (tx, rx) = sync_channel(1);
     let waiter = std::thread::current();
     let (resolve, owner, name) = (Arc::clone(&hub.seams.resolve), Arc::clone(d), host.to_string());
+    let clock = Arc::clone(&hub.seams.clock);
     d.lookups.fetch_add(1, Ordering::SeqCst);
     let spawned = std::thread::Builder::new().name("stream lookup".into()).spawn(move || {
         let answer = resolve(&name, port);
+        // The answer carries when it came, so a try that wakes late still uses an answer in time.
         // Fails when the try stopped waiting, which drops the answer.
-        let _ = tx.send(answer);
+        let _ = tx.send((answer, clock.now()));
         ALL_LOOKUPS.fetch_sub(1, Ordering::SeqCst);
         owner.lookups.fetch_sub(1, Ordering::SeqCst);
         owner.touch();
@@ -835,25 +880,30 @@ fn lookup(hub: &Hub, d: &Arc<Dest>, host: &str, port: u16) -> Result<Vec<std::ne
         d.lookups.fetch_sub(1, Ordering::SeqCst);
         return Err(Missed::Lookup(Failure::new(Cause::Other, format!("no thread for the lookup: {e}"))));
     }
+    let late = || Missed::Lookup(Failure::new(Cause::LookupNoAnswer, format!("the server's name was not looked up within {} s", wait.as_secs())));
+    // An answer counts when it came before the deadline, however late the try wakes to take it.
+    let take = |(answer, at): (std::io::Result<Vec<std::net::SocketAddr>>, Instant)| {
+        if at.saturating_duration_since(start) >= wait {
+            return Err(late());
+        }
+        answer.map_err(|e| Missed::Rtmp(craft_rtmp::Error::Resolve(e)))
+    };
     loop {
         let received = rx.try_recv();
         if d.stopping() || hub.control.is_ended() {
             return Err(Missed::Stopped);
         }
-        // The clock is read after the answer is taken, so an answer that came after the deadline
-        // is not used.
-        let waited = hub.seams.clock.now().saturating_duration_since(start);
-        if waited >= wait {
-            let detail = format!("the server's name was not looked up within {} s", wait.as_secs());
-            return Err(Missed::Lookup(Failure::new(Cause::LookupNoAnswer, detail)));
-        }
         match received {
-            Ok(Ok(addrs)) => return Ok(addrs),
-            Ok(Err(e)) => return Err(Missed::Rtmp(craft_rtmp::Error::Resolve(e))),
+            Ok(answer) => return take(answer),
             Err(TryRecvError::Disconnected) => {
                 return Err(Missed::Lookup(Failure::new(Cause::LookupFailed, "the lookup of the server's name ended without an answer")));
             }
             Err(TryRecvError::Empty) => {}
+        }
+        let waited = hub.seams.clock.now().saturating_duration_since(start);
+        if waited >= wait {
+            // An answer that came while the clock was read may still be in time.
+            return rx.try_recv().map_or_else(|_| Err(late()), take);
         }
         std::thread::park_timeout((wait - waited).min(LOOKUP_POLL));
     }
@@ -944,6 +994,7 @@ fn run(hub: &Arc<Hub>, d: &Arc<Dest>) {
             End::Done => {}
             End::Failed(e) => return d.fail(e),
             End::Lost(e) => {
+                d.lost.store(true, Ordering::Relaxed);
                 d.reconnects.fetch_add(1, Ordering::Relaxed);
                 // A connection lost soon after it was made counts as another failed try.
                 failures = if started.elapsed() >= hub.timing.stable { 1 } else { failures.saturating_add(1) };
@@ -1125,8 +1176,9 @@ impl Streaming {
         let Some(headers) = headers else {
             return Err(PluginError::Failed("the stream's encoders gave no configuration".into()));
         };
-        let dests = targets.into_iter().map(|t| Arc::new(Dest::new(t))).collect();
-        let hub = Arc::new(Hub { control, headers, ring, timing, seams, dests, net: NetWatch::default() });
+        let counts = Arc::new(Counts::default());
+        let dests = targets.into_iter().map(|t| Arc::new(Dest::new(t, Arc::clone(&counts)))).collect();
+        let hub = Arc::new(Hub { control, headers, ring, timing, seams, dests, counts, net: NetWatch::default() });
         let mut s = Streaming { native, hub, stats: Arc::clone(&job.stats), refused, stopped: false };
         for d in s.hub.dests.iter().filter(|d| d.target.enabled) {
             if let Err(e) = spawn(&s.hub, d, None) {
@@ -1267,6 +1319,15 @@ impl OutputInstance for Streaming {
 
     fn reconnects(&self) -> u64 {
         self.hub.dests.iter().map(|d| u64::from(d.reconnects.load(Ordering::Relaxed))).sum()
+    }
+
+    fn destination_counts(&self) -> DestinationCounts {
+        let c = &self.hub.counts;
+        DestinationCounts { live: c.live.load(Ordering::Relaxed), retrying: c.retrying.load(Ordering::Relaxed) }
+    }
+
+    fn recoveries(&self) -> u64 {
+        self.hub.dests.iter().map(|d| u64::from(d.recovered.load(Ordering::SeqCst))).sum()
     }
 
     fn start_destination(&self, id: &str, key: Option<&str>) -> Result<(), PluginError> {

@@ -319,9 +319,34 @@ fn a_lost_connection_is_made_again() {
     let d = until(&out, "a", |d| d.status == DestinationStatus::Live && d.reconnects == 1);
     assert!(d.bytes > 0, "{d:?}");
     assert_eq!(out.reconnects(), 1, "the sum over the destinations");
+    assert_eq!(out.recoveries(), 1, "it went live again once after the loss");
+    assert_eq!(out.destination_counts(), DestinationCounts { live: 1, retrying: 0 });
     drop(feed);
     out.stop().unwrap();
     until_closed(&seen);
+}
+
+#[test]
+fn the_counts_follow_the_destinations() {
+    let (a, seen) = server(vec![Plan::Accept]);
+    let job = job(RateControl::Bitrate { kbps: 400, keyframe_s: 1 });
+    // The wait before the next try outlasts the test, and the stop ends it.
+    let waits = Timing { first: GUARD, longest: GUARD, ..quick() };
+    let mut out = Streaming::start_timed(&job, vec![target("a", &a, "k"), target("b", &closed_url(), "k")], waits).unwrap();
+    let feed = Feed::new(&out);
+    media(&seen, 3);
+    until(&out, "a", |d| d.status == DestinationStatus::Live);
+    until(&out, "b", |d| matches!(d.status, DestinationStatus::Retrying { .. }));
+    assert_eq!(out.destination_counts(), DestinationCounts { live: 1, retrying: 1 });
+    assert_eq!(out.recoveries(), 0, "a destination that never went live has not recovered");
+    out.stop_destination("b").unwrap();
+    until(&out, "b", |d| d.status == DestinationStatus::Stopped);
+    assert_eq!(out.destination_counts(), DestinationCounts { live: 1, retrying: 0 });
+    drop(feed);
+    out.stop().unwrap();
+    until_closed(&seen);
+    until(&out, "a", |d| d.status == DestinationStatus::Stopped);
+    assert_eq!(out.destination_counts(), DestinationCounts::default());
 }
 
 #[test]
@@ -878,6 +903,50 @@ fn an_ip_address_is_not_looked_up() {
     until_closed(&seen);
 }
 
+/// A clock that the test can hold still for every thread but the lookup threads, which always read
+/// it at once.
+struct HeldClock {
+    clock: Arc<TestClock>,
+    held: Mutex<()>,
+}
+
+impl Clock for HeldClock {
+    fn now(&self) -> Instant {
+        if std::thread::current().name() != Some("stream lookup") {
+            drop(lock(&self.held));
+        }
+        self.clock.now()
+    }
+}
+
+#[test]
+fn an_answer_in_time_is_used_when_the_try_wakes_late() {
+    let (live, seen) = server(vec![Plan::Accept]);
+    let (release, hold) = mpsc::channel::<()>();
+    let (resolve, asked) = scripted(vec![Answer::After(hold, vec![addr(&live)])]);
+    let clock = TestClock::new();
+    let held = Arc::new(HeldClock { clock: Arc::clone(&clock), held: Mutex::new(()) });
+    let job = job(RateControl::Bitrate { kbps: 400, keyframe_s: 1 });
+    let seams = Seams { clock: Arc::clone(&held) as Arc<dyn Clock>, resolve, route: routed() };
+    let mut out = Streaming::start_with(&job, vec![named("a")], quick(), seams).unwrap();
+    let feed = Feed::new(&out);
+    assert_eq!(heard(&asked), "asked");
+    // The destination's thread stops at its next clock read while the answer comes in time.
+    let still = lock(&held.held);
+    drop(release);
+    assert_eq!(heard(&asked), "answered");
+    until_no_lookups(&out, "a");
+    // It reads the clock past the deadline, and still uses the answer.
+    clock.advance(LOOKUP_WAIT);
+    drop(still);
+    assert_eq!(next(&seen), Seen::Publish("k".into()));
+    let d = until(&out, "a", |d| d.status == DestinationStatus::Live);
+    assert_eq!(d.reconnects, 0);
+    drop(feed);
+    out.stop().unwrap();
+    until_closed(&seen);
+}
+
 #[test]
 fn a_lookup_past_its_deadline_is_a_failed_try() {
     let (release, hold) = mpsc::channel::<()>();
@@ -1023,6 +1092,7 @@ fn offline_at_start_with_a_failing_lookup_waits_and_recovers() {
     let d = until(&out, "a", |d| waiting(d).is_some());
     let DestinationStatus::WaitingForNetwork { attempt: 2, failure } = &d.status else { panic!("{d:?}") };
     assert_eq!(failure.cause, Cause::LookupFailed, "{failure:?}");
+    assert_eq!(out.destination_counts(), DestinationCounts { live: 0, retrying: 1 }, "a wait for the network counts as reconnecting");
     assert!(asked.try_recv().is_err(), "no try while there is no route");
     // The route returns: the destination tries at once, without its 60 s wait, and goes live.
     *lock(&set) = Route::Selected;

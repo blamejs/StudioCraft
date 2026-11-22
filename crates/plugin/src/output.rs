@@ -81,6 +81,16 @@ pub trait OutputInstance: Send {
     fn reconnects(&self) -> u64 {
         0
     }
+    /// How many destinations of a stream are live and how many wait to try again, read without
+    /// allocating; both 0 for other outputs.
+    fn destination_counts(&self) -> DestinationCounts {
+        DestinationCounts::default()
+    }
+    /// How many times a destination of a stream went live again after it lost its connection,
+    /// summed over the destinations and read without allocating; 0 for other outputs.
+    fn recoveries(&self) -> u64 {
+        0
+    }
     /// Start sending to the destination `id` of a running stream, which was started with it.
     /// With `key`, a destination that is not sending starts with that stream key. Starting one
     /// that is already sending does nothing, and it keeps its key.
@@ -92,6 +102,15 @@ pub trait OutputInstance: Send {
     fn stop_destination(&self, id: &str) -> Result<(), PluginError> {
         Err(PluginError::Unavailable(format!("this output has no destination `{id}`")))
     }
+}
+
+/// How many destinations of a stream are live and how many wait to try again.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct DestinationCounts {
+    /// [`DestinationStatus::Live`].
+    pub live: u32,
+    /// [`DestinationStatus::Retrying`] and [`DestinationStatus::WaitingForNetwork`].
+    pub retrying: u32,
 }
 
 /// What a stream's destination is doing.
