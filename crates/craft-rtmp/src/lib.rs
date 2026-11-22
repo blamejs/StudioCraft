@@ -14,7 +14,7 @@
 //!
 //! # Timeouts
 //!
-//! Each of the first [`MAX_ADDRESSES`] addresses the host name resolves to gets
+//! Each of up to [`MAX_ADDRESSES`] addresses the host name resolves to gets
 //! [`Config::connect_timeout`] to accept the TCP connection. The TLS handshake, the RTMP handshake and the commands up to the server's answer to
 //! `publish` share [`Config::setup_timeout`]. A write that makes no progress for
 //! [`Config::stall_timeout`] (5 s by default) is reported as [`Error::Stalled`], and the publisher

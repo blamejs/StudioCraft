@@ -42,6 +42,7 @@ pub const UI_COMMANDS: &[(&str, &str)] = &[
     ("stream.destination_set", "Change Stream Destination"),
     ("stream.destination_start", "Start Stream Destination"),
     ("stream.destination_stop", "Stop Stream Destination"),
+    ("stream.reconnect_set", "Change Automatic Reconnect"),
     ("dock.scenes", "Scenes"),
     ("dock.sources", "Sources"),
     ("dock.mixer", "Audio Mixer"),
@@ -106,6 +107,9 @@ pub fn ui_params(id: &str) -> &'static str {
             "id: string, service?: string (a streaming service id, or empty for a custom server), name?: string, server?: string, enabled?: boolean, key?: string (profile, held or none), held_name?: string (with key held)"
         }
         "stream.destination_remove" | "stream.destination_start" | "stream.destination_stop" => "id: string",
+        "stream.reconnect_set" => {
+            "enabled?: boolean, first_delay_s?: integer (1 to 60), max_delay_s?: integer (first_delay_s to 600), max_tries?: integer (1 to 100)"
+        }
         "dock.move" => "dock: string (scenes, sources, mixer or app_audio), to: string (left or right)",
         "dock.float" => "dock: string (scenes, sources, mixer or app_audio), floating: boolean (true for a window of its own, false for the strip)",
         "dock.layout_save" => "name?: string (without it the window asks for one)",

@@ -420,14 +420,24 @@ keyframe interval. The defaults are listed in
 A profile holds up to 16 stream destinations, each with its own server, key and on or off setting.
 Settings › Stream edits the first one. A stream sends to every destination that is on, and each
 destination connects, reconnects and stops on its own: one that fails does not stop the others.
-A lost connection is tried again after 2, 4, 8 and 16 s and then every 30 s, and a destination gives
-up after 10 failed tries in a row. A server that refuses the stream key is not tried again, except
-after a lost connection: a destination whose server took the stream, lost the connection and then
-refuses the key is tried again up to 3 times, waiting at least 5 s each time, and each of those
-tries counts toward the 10. A refusal on the first connect, a refusal of the connection request, and
-a refusal after the destination was stopped and started again are final. A destination stopped and
-started again while it waits to try again tries at once. The stream fails when no destination is
-sending or trying to.
+A lost connection, or one that cannot be made, is tried again as the Automatic reconnect section of
+Settings › Stream says. By default the waits are 2, 4, 8 and 16 s and then 30 s each, and a
+destination gives up after 10 failed tries in a row. The first wait can be 1 to 60 s, the longest
+wait from the first wait to 600 s, and the number of tries 1 to 100; each wait doubles the one
+before it up to the longest wait. StudioCraft cuts each wait by a random 0 to 20 %, never to below
+1 s, so destinations that lost their connections together do not all try again at once. With
+Automatic reconnect off, a destination stops at its first failure. A destination gives up at most
+the sum of its waits (at most the number of tries times the longest wait, or 5 s for a wait after a
+refused stream key when that is longer) after its first failure, plus up to 55 s per try for the
+connection (4 addresses for 10 s each) and the stream's setup (15 s), plus the time the system
+takes to look the server's name up. A running stream keeps the settings it started with.
+A server that refuses the stream key is not tried again, except after a lost connection: a
+destination whose server took the stream, lost the connection and then refuses the key is tried
+again up to 3 times, waiting at least 5 s each time, and each of those tries counts toward the
+number of tries. A refusal on the first connect, a refusal of the connection request, and a refusal
+after the destination was stopped and started again are final. A destination stopped and started
+again while it waits to try again tries at once. The stream fails when no destination is sending or
+trying to.
 A key written at the end of the server address, as in `rtmp://host/app/key`, is used as the stream
 key when the key field is empty, and the stream's status leaves it out of the address it shows.
 

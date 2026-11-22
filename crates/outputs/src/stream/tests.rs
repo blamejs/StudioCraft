@@ -206,7 +206,8 @@ fn target(id: &str, server: &str, key: &str) -> Target {
 
 /// Short waits before a try again, for the tests.
 fn quick() -> Timing {
-    Timing { retry: vec![Duration::from_millis(1)], max_tries: 3, refused: Duration::from_millis(1), ..Timing::default() }
+    let one = Duration::from_millis(1);
+    Timing { first: one, longest: one, max_tries: 3, refused: one, jitter: false, ..Timing::default() }
 }
 
 /// Feeds the stream on a thread of its own until it is dropped.
@@ -438,6 +439,83 @@ fn only_a_publish_refusal_after_a_lost_connection_is_tried_again() {
 }
 
 #[test]
+fn reconnect_off_fails_on_the_first_loss() {
+    let job = job(RateControl::Bitrate { kbps: 400, keyframe_s: 1 });
+    let off = Timing { reconnect: false, ..quick() };
+    // A lost connection is not made again.
+    let (a, seen) = server(vec![Plan::DropAfter(12), Plan::Accept]);
+    let mut out = Streaming::start_timed(&job, vec![target("a", &a, "k")], off.clone()).unwrap();
+    let feed = Feed::new(&out);
+    let d = until(&out, "a", |d| matches!(d.status, DestinationStatus::Failed(_)));
+    let DestinationStatus::Failed(f) = &d.status else { panic!("{d:?}") };
+    assert_eq!(f.cause, Cause::Lost, "{f:?}");
+    assert!(f.detail.contains("automatic reconnect is off") && !f.detail.contains("gave up"), "{f:?}");
+    drop(feed);
+    assert!(out.stop().is_err());
+    assert_eq!(next(&seen), Seen::Publish("k".into()));
+    // A connection that cannot be made is not tried again.
+    let mut out = Streaming::start_timed(&job, vec![target("a", &closed_url(), "k")], off).unwrap();
+    let d = until(&out, "a", |d| matches!(d.status, DestinationStatus::Failed(_)));
+    let DestinationStatus::Failed(f) = &d.status else { panic!("{d:?}") };
+    assert_eq!(f.cause, Cause::Refused, "{f:?}");
+    assert!(f.detail.contains("automatic reconnect is off"), "{f:?}");
+    assert!(out.stop().is_err());
+}
+
+#[test]
+fn max_tries_gives_up_at_the_count() {
+    let job = job(RateControl::Bitrate { kbps: 400, keyframe_s: 1 });
+    for tries in [1, 5] {
+        let timing = Timing { max_tries: tries, ..quick() };
+        let mut out = Streaming::start_timed(&job, vec![target("a", &closed_url(), "k")], timing).unwrap();
+        let d = until(&out, "a", |d| matches!(d.status, DestinationStatus::Failed(_)));
+        let DestinationStatus::Failed(f) = &d.status else { panic!("{d:?}") };
+        assert!(f.detail.ends_with(&format!("gave up after {tries} tries")), "{tries}: {f:?}");
+        assert!(out.stop().is_err());
+    }
+}
+
+#[test]
+fn the_waits_double_up_to_the_longest() {
+    let secs = Duration::from_secs;
+    let waits = |t: &Timing, n: u32| (1..=n).map(|f| t.delay(f)).collect::<Vec<_>>();
+    assert_eq!(waits(&Timing::default(), 7), [secs(2), secs(4), secs(8), secs(16), secs(30), secs(30), secs(30)]);
+    let five = Timing::from(ReconnectSettings { first_delay_s: 5, max_delay_s: 20, ..ReconnectSettings::default() });
+    assert_eq!(waits(&five, 4), [secs(5), secs(10), secs(20), secs(20)]);
+    let flat = Timing::from(ReconnectSettings { first_delay_s: 60, max_delay_s: 60, ..ReconnectSettings::default() });
+    assert_eq!(waits(&flat, 3), [secs(60); 3]);
+    // Large counts neither overflow nor pass the longest wait.
+    let most = Timing::from(ReconnectSettings { first_delay_s: 60, max_delay_s: 600, max_tries: 100, enabled: true });
+    assert_eq!((most.delay(33), most.delay(u32::MAX)), (secs(600), secs(600)));
+    assert_eq!(most.delay(0), secs(60), "no failure yet waits the first wait");
+    let off = Timing::from(ReconnectSettings { enabled: false, ..ReconnectSettings::default() });
+    assert!(off.gives_up(1) && !Timing::default().gives_up(9) && Timing::default().gives_up(10));
+}
+
+#[test]
+fn jitter_stays_within_a_fifth_and_above_a_second() {
+    let mut state = seed("a");
+    assert_ne!(state, 0);
+    let mut seen = std::collections::BTreeSet::new();
+    for wait in [Duration::from_secs(2), Duration::from_secs(30), Duration::from_secs(600), Duration::from_millis(1100)] {
+        for _ in 0..2000 {
+            let j = jittered(wait, next_random(&mut state));
+            assert!(j <= wait, "{wait:?} -> {j:?}");
+            assert!(j >= wait.mul_f64(0.8).max(Duration::from_secs(1)), "{wait:?} -> {j:?}");
+            seen.insert((wait, j));
+        }
+    }
+    // Each wait has 201 possible cuts, and the cut of 1.1 s stops at 1 s.
+    assert!(seen.len() > 500, "the cuts vary: {}", seen.len());
+    assert_eq!(jittered(Duration::from_secs(10), 0), Duration::from_secs(10), "no cut");
+    assert_eq!(jittered(Duration::from_secs(10), 200), Duration::from_secs(8), "the largest cut");
+    assert_eq!(jittered(Duration::from_secs(10), 201), Duration::from_secs(10), "the count wraps");
+    assert_eq!(jittered(Duration::from_millis(5), 200), Duration::from_millis(5), "a wait below a second is kept");
+    assert_eq!(jittered(Duration::from_millis(1100), 200), Duration::from_secs(1), "the cut stops at a second");
+    assert_ne!(seed("a"), seed("b"));
+}
+
+#[test]
 fn connections_lost_soon_after_they_are_made_count_as_failed_tries() {
     let job = job(RateControl::Bitrate { kbps: 400, keyframe_s: 1 });
     // The server would take more connections than the destination tries.
@@ -557,7 +635,7 @@ fn a_stop_that_lands_while_a_destination_connects_is_honored() {
 fn a_refused_destination_reports_refused() {
     let job = job(RateControl::Bitrate { kbps: 400, keyframe_s: 1 });
     // The wait before the next try outlasts the test, and the stop ends it.
-    let waits = Timing { retry: vec![GUARD], ..quick() };
+    let waits = Timing { first: GUARD, longest: GUARD, ..quick() };
     let mut out = Streaming::start_timed(&job, vec![target("a", &closed_url(), "k")], waits).unwrap();
     // A try again names the cause and the address that refused.
     let d = until(&out, "a", |d| matches!(d.status, DestinationStatus::Retrying { .. }));

@@ -315,6 +315,8 @@ pub struct StreamSettings {
     pub encoder_settings: BTreeMap<String, Settings>,
     /// Seconds between keyframes.
     pub keyframe_interval_s: u32,
+    /// How a destination tries again after its connection fails or is lost.
+    pub reconnect: ReconnectSettings,
 }
 
 impl Default for StreamSettings {
@@ -327,7 +329,65 @@ impl Default for StreamSettings {
             video_encoder: "h264".into(),
             encoder_settings: BTreeMap::new(),
             keyframe_interval_s: 2,
+            reconnect: ReconnectSettings::default(),
         }
+    }
+}
+
+/// How a stream destination tries again after its connection fails or is lost. The first wait is
+/// `first_delay_s`, each later wait doubles up to `max_delay_s`, and the destination gives up after
+/// `max_tries` failed tries in a row. With `enabled` off it gives up at the first failure. The
+/// defaults (on, 2 s, 30 s, 10 tries) and the ranges are StudioCraft's own values.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ReconnectSettings {
+    pub enabled: bool,
+    pub first_delay_s: u32,
+    pub max_delay_s: u32,
+    pub max_tries: u32,
+}
+
+impl ReconnectSettings {
+    /// The allowed range of the first wait, in seconds.
+    pub const FIRST_DELAY_S: std::ops::RangeInclusive<u32> = 1..=60;
+    /// The longest wait allowed, in seconds; the longest wait is at least the first wait.
+    pub const MAX_DELAY_S: u32 = 600;
+    /// The allowed range of the number of tries.
+    pub const MAX_TRIES: std::ops::RangeInclusive<u32> = 1..=100;
+
+    /// An error naming the first value outside its range.
+    pub fn check(&self) -> Result<(), String> {
+        if !Self::FIRST_DELAY_S.contains(&self.first_delay_s) {
+            return Err(format!(
+                "the first reconnect wait must be {} to {} s (it is {} s)",
+                Self::FIRST_DELAY_S.start(),
+                Self::FIRST_DELAY_S.end(),
+                self.first_delay_s
+            ));
+        }
+        if self.max_delay_s < self.first_delay_s || self.max_delay_s > Self::MAX_DELAY_S {
+            return Err(format!(
+                "the longest reconnect wait must be {} to {} s (it is {} s)",
+                self.first_delay_s,
+                Self::MAX_DELAY_S,
+                self.max_delay_s
+            ));
+        }
+        if !Self::MAX_TRIES.contains(&self.max_tries) {
+            return Err(format!(
+                "the number of reconnect tries must be {} to {} (it is {})",
+                Self::MAX_TRIES.start(),
+                Self::MAX_TRIES.end(),
+                self.max_tries
+            ));
+        }
+        Ok(())
+    }
+}
+
+impl Default for ReconnectSettings {
+    fn default() -> Self {
+        Self { enabled: true, first_delay_s: 2, max_delay_s: 30, max_tries: 10 }
     }
 }
 

@@ -21,7 +21,7 @@ pub use geom::{Crop, FitMode, Transform, Vec2};
 pub use ids::{FilterId, ItemId, SceneId, SourceId};
 pub use profile::{
     AfterStop, AudioSettings, AudioTracksSettings, AudioTracksWhen, Destination, KeyRef, LoudnessTarget, OUTPUT_SCALES, OutputSettings, PauseAnchor,
-    PauseAtZero, PauseSettings, Profile, RecordingFormat, RecordingQuality, ReplaySettings, StreamSettings, VideoSettings,
+    PauseAtZero, PauseSettings, Profile, ReconnectSettings, RecordingFormat, RecordingQuality, ReplaySettings, StreamSettings, VideoSettings,
 };
 pub use schema::{ChoiceOption, Field, FieldKind, PathMode, SettingsSchema};
 pub use services::{SERVICES, Service};

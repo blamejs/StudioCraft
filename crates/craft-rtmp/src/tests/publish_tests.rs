@@ -11,7 +11,7 @@ use super::server::spawn_tls;
 use super::server::{Conn, STREAM_ID, WINDOW, info, s, spawn};
 use crate::chunk::{csid, msg_type, user_control};
 use crate::error::redact;
-use crate::publisher::{Acks, acked_total};
+use crate::publisher::{Acks, acked_total, candidates};
 use crate::transport::{Socket, set_test_clock};
 use crate::{Config, Error, Kind, Message, Publisher};
 #[cfg(feature = "rtmps")]
@@ -646,6 +646,19 @@ fn no_more_than_four_addresses_are_tried() {
     let e = Publisher::connect_to(&config("rtmp://127.0.0.1:1/live"), &[]).unwrap_err();
     assert!(matches!(&e, Error::Connect(tried) if tried.is_empty()), "{e:?}");
     assert!(e.to_string().contains("resolved to no address"), "{e}");
+}
+
+#[test]
+fn the_addresses_tried_alternate_between_ipv6_and_ipv4() {
+    let v4 = |n: u8| SocketAddr::from(([192, 0, 2, n], 1935));
+    let v6 = |n: u16| SocketAddr::from(([0x2001, 0xdb8, 0, 0, 0, 0, 0, n], 1935));
+    // More addresses of the first family than are tried still leave room for the other family.
+    assert_eq!(candidates(&[v4(1), v4(2), v4(3), v4(4), v6(1)]), [v4(1), v6(1), v4(2), v4(3)]);
+    assert_eq!(candidates(&[v6(1), v6(2), v4(1), v4(2), v6(3)]), [v6(1), v4(1), v6(2), v4(2)]);
+    // One family keeps its order.
+    assert_eq!(candidates(&[v4(1), v4(2), v4(3), v4(4), v4(5)]), [v4(1), v4(2), v4(3), v4(4)]);
+    assert_eq!(candidates(&[v6(1)]), [v6(1)]);
+    assert!(candidates(&[]).is_empty());
 }
 
 #[test]
