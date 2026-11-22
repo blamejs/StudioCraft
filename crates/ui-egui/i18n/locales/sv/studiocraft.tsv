@@ -563,5 +563,8 @@ menu	Transform	Transformera
 	Output scale	Utdataskala
 	Custom	Anpassad
 	{percent}% ({width} × {height})	{percent} % ({width} × {height})
+	Add a destination to stream to {service}	Lägg till ett mål för att strömma till {service}
+	Add a destination for a custom server	Lägg till ett mål för en egen server
+	A profile holds at most {max} destinations	En profil rymmer högst {max} mål
 	Fill Screen	Fyll skärmen
 @msg	The scenes could not be laid out for the new canvas: {error}	Scenerna kunde inte ordnas för den nya arbetsytan: {error}

@@ -561,5 +561,8 @@ menu	Transform	Transformar
 @msg	a {width} × {height} display can't be the canvas: each side must be from {min} to {max} pixels	uma tela de {width} × {height} não pode ser a tela de pintura: cada lado deve ter de {min} a {max} pixels
 	Output scale	Escala de saída
 	Custom	Personalizado
+	Add a destination to stream to {service}	Adicionar um destino para transmitir para {service}
+	Add a destination for a custom server	Adicionar um destino para um servidor personalizado
+	A profile holds at most {max} destinations	Um perfil comporta no máximo {max} destinos
 	Fill Screen	Preencher a tela
 @msg	The scenes could not be laid out for the new canvas: {error}	Não foi possível reorganizar as cenas para a nova tela de pintura: {error}

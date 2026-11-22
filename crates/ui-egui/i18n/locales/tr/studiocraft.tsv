@@ -564,5 +564,8 @@ menu	Transform	Dönüştür
 	Output scale	Çıkış ölçeği
 	Custom	Özel
 	{percent}% ({width} × {height})	%{percent} ({width} × {height})
+	Add a destination to stream to {service}	{service} yayını için hedef ekle
+	Add a destination for a custom server	Özel sunucu için hedef ekle
+	A profile holds at most {max} destinations	Bir profilde en fazla {max} hedef olabilir
 	Fill Screen	Ekranı Doldur
 @msg	The scenes could not be laid out for the new canvas: {error}	Sahneler yeni tuvale göre yerleştirilemedi: {error}

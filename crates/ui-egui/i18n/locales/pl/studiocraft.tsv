@@ -561,5 +561,8 @@ menu	Transform	Przekształć
 @msg	a {width} × {height} display can't be the canvas: each side must be from {min} to {max} pixels	ekran {width} × {height} nie może być płótnem: każdy bok musi mieć od {min} do {max} pikseli
 	Output scale	Skala wyjścia
 	Custom	Niestandardowy
+	Add a destination to stream to {service}	Dodaj miejsce docelowe transmisji w {service}
+	Add a destination for a custom server	Dodaj miejsce docelowe dla własnego serwera
+	A profile holds at most {max} destinations	Profil może mieć najwyżej {max} miejsc docelowych
 	Fill Screen	Wypełnij ekran
 @msg	The scenes could not be laid out for the new canvas: {error}	Nie udało się rozmieścić scen dla nowego płótna: {error}

@@ -543,5 +543,8 @@ menu	Transform	שינוי צורה
 @msg	a {width} × {height} display can't be the canvas: each side must be from {min} to {max} pixels	מסך בגודל {width} × {height} לא יכול לשמש כמשטח: כל צלע צריכה להיות בין {min} ל-{max} פיקסלים
 	Output scale	קנה מידה של פלט
 	Custom	מותאם אישית
+	Add a destination to stream to {service}	הוספת יעד לשידור אל {service}
+	Add a destination for a custom server	הוספת יעד לשרת מותאם אישית
+	A profile holds at most {max} destinations	פרופיל מכיל לכל היותר {max} יעדים
 	Fill Screen	מילוי המסך
 @msg	The scenes could not be laid out for the new canvas: {error}	לא ניתן היה לסדר את הסצנות למשטח החדש: {error}

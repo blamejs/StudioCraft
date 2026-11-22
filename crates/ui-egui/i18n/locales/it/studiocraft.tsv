@@ -558,5 +558,8 @@ menu	Transform	Trasforma
 @msg	a {width} × {height} display can't be the canvas: each side must be from {min} to {max} pixels	uno schermo di {width} × {height} non può essere l'area di lavoro: ogni lato deve avere da {min} a {max} pixel
 	Output scale	Scala di uscita
 	Custom	Personalizzata
+	Add a destination to stream to {service}	Aggiungi una destinazione per trasmettere su {service}
+	Add a destination for a custom server	Aggiungi una destinazione per un server personalizzato
+	A profile holds at most {max} destinations	Un profilo contiene al massimo {max} destinazioni
 	Fill Screen	Riempi lo schermo
 @msg	The scenes could not be laid out for the new canvas: {error}	Impossibile disporre le scene per la nuova area di lavoro: {error}
