@@ -81,7 +81,7 @@ graphics driver.
 app did not start again on its own. This happens in a session started with `--no-prefs` or
 `--control`, in a scripted run, when the window was already drawing in software, when the app asked
 for software drawing on a system with no software adapter and lost the device 3 times in 10
-minutes, or when the app could not save everything first. In the last case the status bar names
+minutes, or when the app could not save everything first. In the last case a notice names
 what was not saved. Fix that problem and save your work before you close the window: closing it
 again discards what was not saved. Then close StudioCraft and start it again.
 

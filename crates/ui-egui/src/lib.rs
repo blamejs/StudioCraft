@@ -38,10 +38,14 @@ use craft_host::{AppInfo, Host};
 use craft_i18n::{I18n, Words};
 use craft_keymap::{CommandRef, Keymap, Overrides};
 use craft_menu::{LanguageChoice, MenuBar};
+use craft_theme::variant::Tone;
 use craft_ui::contract::{Bind, Entry, Props as _, Show as _, ShowContainer as _, Tracked};
+use craft_ui::notices::{NoticeCenter, PostedNotice, ToastStack};
 use craft_ui::pickers::Select;
 use craft_ui::runtime::commands::{AppCatalog, CommandInput};
+use craft_ui::runtime::env::WindowKey;
 use craft_ui::runtime::frame::{FrameInput, FrameOutput};
+use craft_ui::runtime::toast::{self, ToastId};
 use craft_ui::shell::embed::{self, CloseDecision};
 use craft_ui::{InstallError, InstallSpec};
 use craft_window::system::{NoWindows, SystemWindows};
@@ -149,14 +153,18 @@ struct Prompt {
     error: Option<Msg>,
 }
 
-/// A status bar message: kept in English, translated when the status bar shows it.
+/// A notice: kept in English, translated when its card is posted.
 struct Note {
     msg: Msg,
     error: bool,
 }
 
-/// How long a notice stays in the status bar.
-const NOTICE_S: u64 = 8;
+/// How long a notice's card stays, in seconds.
+const NOTICE_S: f32 = 8.0;
+/// How long an error notice's card stays, in seconds.
+const ERROR_NOTICE_S: f32 = 24.0;
+/// Most notices kept at once, posted or waiting for the next frame; the oldest go first.
+const NOTICES_KEPT: usize = 20;
 /// How long after the last change the scene collection is saved.
 const AUTOSAVE: Duration = Duration::from_millis(800);
 /// How far the dock strip's top-edge hit band reaches above and below its 1 point line.
@@ -227,7 +235,11 @@ pub struct StudioApp {
     /// False while the collection made at start has never been written: it is saved at exit
     /// even with no changes.
     collection_on_disk: bool,
-    notices: VecDeque<(Note, Instant)>,
+    /// The notices on screen, oldest first, with their cards in the window's toast queue; a
+    /// notice without a card is posted with the next frame.
+    notices: VecDeque<(Note, Option<ToastId>)>,
+    /// The interface language the notices' cards were posted in; `None` before the first post.
+    notices_lang: Option<craft_i18n::Lang>,
     collections: Vec<String>,
     profiles: Vec<String>,
     changed_at: Option<(u64, Instant)>,
@@ -357,6 +369,7 @@ impl StudioApp {
             close_despite_failed_save: false,
             collection_on_disk: true,
             notices: VecDeque::new(),
+            notices_lang: None,
             collections: Vec::new(),
             profiles: Vec::new(),
             changed_at: None,
@@ -418,8 +431,7 @@ impl StudioApp {
     /// window so that the app starts again ([`StudioApp::relaunch_requested`]). It does not when
     /// the window drew on a software adapter, or opened for software and has now lost its device
     /// [`hardware::KEPT_LOSSES`] times in the recovery window (a machine with no software
-    /// adapter), since starting again would end the same way; the status bar then asks the user to
-    /// restart.
+    /// adapter), since starting again would end the same way; a notice then asks the user to restart.
     pub fn set_window_gpu(&mut self, opened_with: Preference, notices: Vec<Msg>, may_relaunch: bool) {
         for n in &notices {
             self.notify(n.clone(), true);
@@ -447,8 +459,8 @@ impl StudioApp {
         // machine without a software adapter draws on hardware.
         let on_software = self.studio.gpu().and_then(Gpu::adapter).is_some_and(Candidate::is_software);
         let no_way_out = self.window_gpu.opened_with == Preference::Software && hardware::repeated_losses(&self.store.prefs().graphics_losses, now);
-        // The window closes without asking, so only once everything was saved; otherwise the
-        // status bar says what could not be saved and the window stays open.
+        // The window closes without asking, so only once everything was saved; otherwise a
+        // notice says what could not be saved and the window stays open.
         if self.window_gpu.may_relaunch && !on_software && !no_way_out && self.save_all() {
             self.window_gpu.relaunch = true;
             self.exit_confirmed = true;
@@ -479,10 +491,41 @@ impl StudioApp {
         } else {
             log::info!("{}", msg.english());
         }
-        self.notices.push_back((Note { msg, error }, Instant::now()));
-        while self.notices.len() > 20 {
+        self.notices.push_back((Note { msg, error }, None));
+        while self.notices.len() > NOTICES_KEPT {
             self.notices.pop_front();
         }
+    }
+
+    /// Post the notices that have no card yet to the window's toast queue, in the interface
+    /// language, and forget the notices whose cards left it (closed, timed out or dropped for a
+    /// newer one). An error's card stays [`ERROR_NOTICE_S`] seconds, any other [`NOTICE_S`].
+    /// After the interface language changes, the cards on screen are posted again in the new
+    /// language, each with its whole time.
+    fn post_notices(&mut self, ctx: &egui::Context) {
+        let window = WindowKey::main();
+        self.forget_gone_notices(ctx, &window);
+        let lang = i18n::lang();
+        if self.notices_lang != Some(lang) {
+            let center = NoticeCenter::new().window(window.clone());
+            for posted in self.notices.iter_mut().filter_map(|(_, id)| id.take()) {
+                center.remove(ctx, posted);
+            }
+            self.notices_lang = Some(lang);
+        }
+        for (note, id) in self.notices.iter_mut().filter(|(_, id)| id.is_none()) {
+            let (tone, seconds) = if note.error { (Tone::Bad, ERROR_NOTICE_S) } else { (Tone::Neutral, NOTICE_S) };
+            let center = NoticeCenter::new().window(window.clone()).timeout(seconds);
+            *id = center.post(ctx, &PostedNotice::new(note.msg.shown()).tone(tone), &[]);
+        }
+        // A post past the window's card limit drops the oldest card.
+        self.forget_gone_notices(ctx, &window);
+    }
+
+    /// Forget the notices whose cards are no longer in `window`'s toast queue.
+    fn forget_gone_notices(&mut self, ctx: &egui::Context, window: &WindowKey) {
+        let queued: Vec<ToastId> = toast::cards(ctx, window).into_iter().map(|card| card.id).collect();
+        self.notices.retain(|(_, id)| id.is_none_or(|id| queued.contains(&id)));
     }
 
     fn refresh_lists(&mut self) {
@@ -614,8 +657,8 @@ impl StudioApp {
         v
     }
 
-    /// Run a command by id: an engine command or one of the window's. An error is shown in the
-    /// status bar in the interface language and returned in English.
+    /// Run a command by id: an engine command or one of the window's. An error is shown as a
+    /// notice in the interface language and returned in English.
     pub fn perform(&mut self, ctx: &egui::Context, cmd: &CommandRef) -> Result<Value, String> {
         let r = if commands::is_ui_command(&cmd.id) { self.ui_command(ctx, cmd) } else { self.engine_command(ctx, cmd) };
         r.map_err(|e| {
@@ -897,7 +940,8 @@ impl StudioApp {
                 },
             }
             if let Some(e) = &s.error {
-                ui.colored_label(Color32::from_rgb(220, 90, 80), craft_i18n::fmt(tl!("The scope could not be computed: {error}"), &[("error", e)]));
+                let bad = theme::with_root(ui.ctx(), |cx| theme::color(cx, cx.tokens.color.status.bad.fg));
+                ui.colored_label(bad, craft_i18n::fmt(tl!("The scope could not be computed: {error}"), &[("error", e)]));
             }
         });
         if !open {
@@ -1361,8 +1405,7 @@ impl StudioApp {
             let path = match answer {
                 craft_dialogs::Answer::Paths(p) => p.into_iter().next(),
                 craft_dialogs::Answer::Unavailable(e) => {
-                    let msg = tmsg!("No file dialog could be shown: {error}", error = e);
-                    self.notices.push_back((Note { msg, error: true }, Instant::now()));
+                    self.notify(tmsg!("No file dialog could be shown: {error}", error = e), true);
                     None
                 }
                 _ => None,
@@ -1391,7 +1434,7 @@ impl StudioApp {
         }
     }
 
-    /// Housekeeping before drawing: studio ticks, notices, autosave, shortcuts.
+    /// Housekeeping before drawing: studio ticks, autosave, shortcuts.
     fn before(&mut self, ctx: &egui::Context) {
         if self.fonts_for.is_some_and(|l| l != i18n::lang()) {
             self.install_fonts(ctx);
@@ -1423,9 +1466,6 @@ impl StudioApp {
         if self.selection().is_none() {
             self.selected = None;
         }
-        self.notices.retain(|(n, at)| {
-            n.error && now.duration_since(*at) < Duration::from_secs(NOTICE_S * 3) || now.duration_since(*at) < Duration::from_secs(NOTICE_S)
-        });
     }
 
     /// Before each frame's passes, from `embed::before_input`: runs the commands the runtime
@@ -1877,8 +1917,6 @@ impl StudioApp {
         }
         let stats = self.studio.stats();
         let fps = self.studio.video_settings().fps();
-        // Notices are kept in English and translated here, when shown.
-        let notice = self.notices.back().map(|(n, _)| (n.msg.shown(), n.error));
         let rec = self.studio.output(OutputKind::Recording);
         let live = self.studio.output(OutputKind::Streaming);
         let replay = self.studio.output(OutputKind::Replay);
@@ -1900,11 +1938,6 @@ impl StudioApp {
         let frame = egui::Frame::NONE.fill(fill).inner_margin(egui::Margin::symmetric(8, 0));
         let panel = egui::Panel::bottom("status").exact_size(height).show_separator_line(false).frame(frame).show(ui, |ui| {
             ui.with_layout(i18n::row(ui), |ui| {
-                if let Some((text, error)) = notice {
-                    let color = if error { warn } else { plain };
-                    // A message longer than the bar is cut off, so the whole text is on hover.
-                    ui.colored_label(color, text.clone()).on_hover_text(text);
-                }
                 ui.with_layout(i18n::trailing(ui), |ui| {
                     let fps = format!("{fps:.2}");
                     let ms = format!("{:.1}", stats.render_avg_ms);
@@ -2222,7 +2255,7 @@ impl StudioApp {
         self.output_bar.rect = Some(row);
         self.status_bar(ui);
         self.docks(ui, &mut acts);
-        egui::CentralPanel::default().frame(egui::Frame::NONE.fill(background)).show(ui, |ui| self.central(ui, &mut acts));
+        let central = egui::CentralPanel::default().frame(egui::Frame::NONE.fill(background)).show(ui, |ui| self.central(ui, &mut acts));
         self.windows(&ctx, &mut acts);
         // An update never starts while a recording, stream or replay buffer runs.
         let idle = !self.outputs_running();
@@ -2241,6 +2274,9 @@ impl StudioApp {
         for a in acts {
             self.act(&ctx, a);
         }
+        // The notices of this frame show as cards at the end-bottom corner of the canvas area.
+        self.post_notices(&ctx);
+        ToastStack::show(ui, &WindowKey::main(), central.response.rect);
         // Live video: draw continuously, also while the window is in the background.
         ctx.request_repaint();
     }

@@ -279,7 +279,7 @@ acceleration names (`graphics_adapter` in `config.toml`), through `craft-gpu-dev
 | A device the app opened without a window (`Gpu::open`) is lost | The device is opened again in place, with no restart. |
 | The chosen adapter cannot open the window | The setting becomes Automatic and the app starts again. |
 | Automatic cannot open the window | The app starts once more in software for that run (`STUDIOCRAFT_GPU_SOFTWARE` is set for it). |
-| A session started with `--no-prefs` or `--control` needs a restart | It does not start itself again, and the status bar asks the user to restart. |
+| A session started with `--no-prefs` or `--control` needs a restart | It does not start itself again, and a notice asks the user to restart. |
 | An uncaptured wgpu error | It counts as a loss. |
 
 When a device is lost, the recording, the stream and the replay buffer stop, the compositor is

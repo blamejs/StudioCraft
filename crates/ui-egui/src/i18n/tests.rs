@@ -234,7 +234,7 @@ fn studio_notices_are_translated_with_their_values() {
 }
 
 #[test]
-fn notices_keep_english_and_the_status_bar_translates_them() {
+fn notices_keep_english_and_their_cards_translate_them() {
     let mut a = StudioApp::boot(Store::memory(), None, Vec::new());
     set_lang(Lang::PSEUDO);
     let ctx = crate::test_context();

@@ -454,7 +454,7 @@ fn ui_tool_definitions() -> Vec<Value> {
             "ui_inspect",
             "Inspect the window",
             "The window's size, open dialogs, docks with their rectangles, the preview's rectangle and scale, studio mode, menu titles, \
-             the selected item, status bar messages and whether queued input is still waiting.",
+             the selected item, notices and whether queued input is still waiting.",
             json!({}),
             &[],
             READS,

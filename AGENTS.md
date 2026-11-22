@@ -13,8 +13,8 @@ for example "AGENTS.md 0.3".
 A malformed file, a bad command parameter, a missing device or a full disk must give an error the
 user can act on. It must never crash the app or lose a scene collection.
 
-1. Return `Result<T, E>` and propagate with `?`. In the window, show the error in the status bar or
-   a dialog and carry on.
+1. Return `Result<T, E>` and propagate with `?`. In the window, show the error as a notice or in a
+   dialog and carry on.
 2. Outside tests, do not use `unwrap()`, `expect()`, `panic!`, `unreachable!`, `todo!` or
    `unimplemented!`. The workspace lints deny them; `clippy.toml` allows them in tests.
 3. Do not write `unsafe` code. The workspace sets `unsafe_code = "forbid"`. Only crates that call

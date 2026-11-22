@@ -256,7 +256,7 @@ setting was turned on during a recording.
 A file that reaches the file size limit (1 GiB by default, 1 to 3 GiB) continues in
 `<name> part N.wav`, whose time reference is where that part starts. An editor that limits the
 length of an imported file may need the 1 GiB setting for long takes. A full or failing disk stops
-only the audio tracks, and the status bar gives the reason. The take's files keep every whole frame
+only the audio tracks, and a notice gives the reason. The take's files keep every whole frame
 that reached the disk and are finished at once; a failure while the take was finishing its files
 leaves it for repair. A take cut short by a crash is repaired
 at the next start, or with `studiocraft-cli audio-tracks repair <folder>`. Each repaired file keeps
@@ -278,7 +278,7 @@ left unfinished, and a repair of the take writes the session.
 Settings › Output › Audio tracks › After a take sets what happens when a take's files are complete:
 Nothing (the default), Show the folder, or Open in the audio editor. Audio editor sets the editor's
 program; when it is empty, `soundcraft` on the `PATH` is used. When the editor cannot be found or
-started, the take's folder opens instead and the status bar gives the reason. A take that ends
+started, the take's folder opens instead and a notice gives the reason. A take that ends
 because the next one starts (a recording that starts or stops during a stream) opens nothing, and so
 does a take whose files are complete only after a newer take has opened. Takes that the app finds
 complete at the same time open in the order they ended. A take that ends because the app closes

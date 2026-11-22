@@ -80,7 +80,7 @@ collections).
 `engine.execute` runs every engine command (for example `scene.add`, `source.add`,
 `item.transform`, `record.toggle`, `studio.transition`) and every window command (for example
 `view.stats`, `profile.new`, `selection.fit`). A failed command is an error with its message.
-The message is in English. The window's status bar shows it as well, in the interface language
+The message is in English. The window shows it as a notice as well, in the interface language
 when the language's catalog has the message.
 [Commands with their own parameters](#commands-with-their-own-parameters) describes `app.info`,
 `app.links`, `app.check_updates`, `app.language`, `plugin.list`, `source.schema`,
@@ -155,7 +155,7 @@ dialog is open the request is an error.
 | `studio_mode` | Whether studio mode is on. |
 | `menus` | The menu titles. |
 | `selected_item` | The selected item's id, or `null`. |
-| `notices` | The status bar messages, each `{"text", "error"}`. |
+| `notices` | The notices on screen and those posted with the next frame, oldest first, each `{"text", "error"}`. A notice's card stays 8 seconds and an error's card stays 24 seconds. A card stays while the pointer or the focus is on it, and its time starts over when they leave. At most three cards show at once, and a new card replaces the oldest. |
 | `frames` | Frames drawn so far. |
 | `input_waiting` | Whether queued input is still waiting for a frame. |
 

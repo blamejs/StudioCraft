@@ -953,8 +953,7 @@ fn listed(items: Vec<String>, sep: &str) -> (String, usize) {
 }
 
 /// The notices for a repair made at launch: one for the takes repaired, and one error for the
-/// takes that could not be. Each names at most [`LISTED_TAKES`] takes and counts the rest, since
-/// the status bar shows only the latest notice.
+/// takes that could not be. Each names at most [`LISTED_TAKES`] takes and counts the rest.
 fn repair_notices(out: &Outcome) -> Vec<Notice> {
     let mut notices = Vec::new();
     if !out.repaired.is_empty() {
