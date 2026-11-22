@@ -472,7 +472,10 @@ marker, with `recording` and `audio_tracks` each `{"seconds"}` when that output 
 `{"error"}` when it does not, or `null` when the output did not keep the marker. When one output
 does not take the new name, the other keeps it. A file that no longer has a marker with the old name
 at the marker's place, as after it was edited in another app, is not written, and that output
-reports an error. An index the session does not hold, a name outside the rules, and no output taking
+reports an error. In the take's session file, that marker must also be the one the take set there,
+not another marker with the same name that was moved into its place. A file that another app saves
+after the rename has read it is not written either, and that output reports that the file changed
+after it was read. An index the session does not hold, a name outside the rules, and no output taking
 the new name are errors; the marker then keeps its name.
 
 ### `recordings.list`

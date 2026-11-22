@@ -39,6 +39,7 @@ pub mod markers;
 pub mod names;
 mod open;
 pub mod recover;
+pub mod replace;
 pub mod session;
 pub mod space;
 pub mod takes;

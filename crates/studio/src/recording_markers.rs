@@ -403,7 +403,9 @@ pub(crate) fn marker_ranges(ended: &Ended) -> Vec<Value> {
 /// `marked_range` as the file was written ([`marker_ranges`]). The file's size is checked before
 /// it is read. A file that has no marker named `old` at that place, or another number of markers,
 /// or the marker at another time, as after it was changed in another app, is an error, and the
-/// file is left as it is. A marker that is already named `name` is not written again.
+/// file is left as it is. So is a file that changed after it was read, as when another app saved
+/// it meanwhile ([`studiocraft_audio_tracks::replace::replace_unchanged`]). A marker that is
+/// already named `name` is not written again.
 pub(crate) fn rename_in_timeline(path: &Path, ranges: &[Value], index: usize, old: &str, name: &str) -> Result<(), String> {
     use std::io::Read;
     let at = |e: &dyn std::fmt::Display| format!("{}: {e}", path.display());
@@ -434,7 +436,18 @@ pub(crate) fn rename_in_timeline(path: &Path, ranges: &[Value], index: usize, ol
     }
     *slot = Value::String(name.to_string());
     let out = serde_json::to_vec_pretty(&v).map_err(|e| at(&e))?;
-    craft_atomic::atomic_write(path, &out).map_err(|e| at(&e))
+    #[cfg(test)]
+    if let Some(save) = BEFORE_TIMELINE_WRITE.with(std::cell::Cell::get) {
+        save(path);
+    }
+    studiocraft_audio_tracks::replace::replace_unchanged(path, &bytes, &out).map_err(|e| at(&e))
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Run on the timeline file's path after a rename has read and checked it, before the rename
+    /// writes it: a test saves the file there as another app would.
+    static BEFORE_TIMELINE_WRITE: std::cell::Cell<Option<fn(&Path)>> = const { std::cell::Cell::new(None) };
 }
 
 /// `name` as a relative URL: every byte outside the unreserved characters of RFC 3986 section
@@ -1132,6 +1145,39 @@ mod tests {
         assert!(e.ends_with(&format!("larger than {MAX_TIMELINE_BYTES} bytes")), "{e}");
         assert!(rename_in_timeline(dir.path(), &ranges, 0, "Goal", "Kickoff").unwrap_err().ends_with("not a file"));
         assert!(rename_in_timeline(&dir.path().join("none.otio"), &ranges, 0, "Goal", "Kickoff").is_err());
+    }
+
+    #[test]
+    fn a_timeline_file_another_app_saved_while_a_marker_was_renamed_is_kept() {
+        let dir = tempfile::tempdir().unwrap();
+        let ended = Ended {
+            recording: dir.path().join("take.mkv"),
+            rate: FrameRate::new(30, 1),
+            length: t(1000),
+            written: None,
+            markers: vec![Marker { at: t(0), name: "Goal".into() }],
+        };
+        let path = write_timeline(&ended).unwrap();
+        let ranges = marker_ranges(&ended);
+        // Another app saves the file after the rename read and checked it.
+        fn save(path: &Path) {
+            let mut v: Value = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+            v["name"] = json!("Edited");
+            std::fs::write(path, serde_json::to_vec_pretty(&v).unwrap()).unwrap();
+        }
+        BEFORE_TIMELINE_WRITE.with(|b| b.set(Some(save)));
+        let e = rename_in_timeline(&path, &ranges, 0, "Goal", "Kickoff");
+        BEFORE_TIMELINE_WRITE.with(|b| b.set(None));
+        let e = e.unwrap_err();
+        assert!(e.contains("changed after it was read"), "{e}");
+        let v: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!((&v["name"], &v["tracks"]["markers"][0]["name"]), (&json!("Edited"), &json!("Goal")), "the other app's save is kept");
+        let files: Vec<String> = dir.path().read_dir().unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
+        assert_eq!(files, ["take.otio"], "no temporary file is left");
+        // Without a save in between, the rename goes through.
+        rename_in_timeline(&path, &ranges, 0, "Goal", "Kickoff").unwrap();
+        let v: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!((&v["name"], &v["tracks"]["markers"][0]["name"]), (&json!("Edited"), &json!("Kickoff")));
     }
 
     #[test]
