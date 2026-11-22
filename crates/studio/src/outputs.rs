@@ -1265,6 +1265,7 @@ impl Studio {
             service_hosts: true,
             automatic: false,
             checked: None,
+            wanted: None,
         };
         diagnose::checks().start(subject).map_err(|e| StudioError::Output(e.to_string()))
     }

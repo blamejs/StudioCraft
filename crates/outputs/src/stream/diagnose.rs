@@ -382,9 +382,13 @@ pub struct Subject {
     pub service_hosts: bool,
     /// Whether the check runs by itself after a failure.
     pub automatic: bool,
-    /// The owner's flag of whether the destination was checked. It is set to `false` when the
-    /// check waited for a place and then found no thread, so a later failure checks it again.
+    /// The owner's flag of whether the destination was checked. It is cleared here when the check
+    /// waited for a place and then found no thread, so a later failure checks it again.
     pub checked: Option<Arc<AtomicBool>>,
+    /// Whether the owner still wants this check, one flag per check: a check waiting for a place
+    /// is dropped once the owner clears it. The flag stays locked while the check starts, so a
+    /// clear either comes after the start or stops it.
+    pub wanted: Option<Arc<Mutex<bool>>>,
 }
 
 /// Whether the server addresses `a` and `b` have the same scheme, host and port, so a failure of
@@ -604,6 +608,8 @@ impl Checks {
         // The waiting checks stay locked from the try to the end, so a place freed meanwhile
         // finds a check that starts waiting here, and a cancel finds every check it should stop.
         let mut waiting = lock(&self.waiting);
+        // The checks whose owners cleared their flag take no place.
+        waiting.retain(|o| o.wanted.as_ref().is_none_or(|f| *lock(f)));
         let waits = s.automatic.then(|| s.clone());
         let out = match (self.try_start(s, &mut waiting), waits) {
             (Err(CheckError::Busy), Some(w)) if waiting.iter().any(|o| o.profile == w.profile && o.id == w.id) || waiting.len() < MAX_KEPT => {
@@ -611,7 +617,7 @@ impl Checks {
                 waiting.push_back(w);
                 Ok(None)
             }
-            (out, _) => out.map(Some),
+            (out, _) => out,
         };
         drop(waiting);
         // Letting the place go after the lock may start a waiting check.
@@ -620,14 +626,18 @@ impl Checks {
 
     /// Starts the checks waiting for a place, oldest first, while places are free. A check that
     /// finds no place stays first, for the next place that is freed. One that finds no thread is
-    /// dropped with a warning, and its `checked` flag is cleared.
+    /// dropped with a warning, and its `checked` flag is cleared. One whose `wanted` flag its
+    /// owner cleared, because the destination went live or was started again, is dropped.
     fn start_waiting(self: &Arc<Self>) {
         let mut started = Vec::new();
         let mut waiting = lock(&self.waiting);
         while let Some(s) = waiting.front().cloned() {
             match self.try_start(s.clone(), &mut waiting) {
                 Err(CheckError::Busy) => break,
-                Ok(slot) => started.push(slot),
+                Ok(Some(slot)) => started.push(slot),
+                Ok(None) => {
+                    waiting.pop_front();
+                }
                 Err(e) => {
                     waiting.pop_front();
                     // A running check of the destination at its server reports instead.
@@ -646,8 +656,14 @@ impl Checks {
 
     /// Starts a check of `s` unless one of the destination runs at the same server and service
     /// or no place is free; removes the destination's waiting checks once it starts. Returns its
-    /// place, which the caller lets go after the waiting checks' lock.
-    fn try_start(self: &Arc<Self>, s: Subject, waiting: &mut VecDeque<Subject>) -> Result<Arc<Slot>, CheckError> {
+    /// place, which the caller lets go after the waiting checks' lock, or `None` when the owner no
+    /// longer wants the check. The owner's flag stays locked until the check has started.
+    fn try_start(self: &Arc<Self>, s: Subject, waiting: &mut VecDeque<Subject>) -> Result<Option<Arc<Slot>>, CheckError> {
+        let flag = s.wanted.clone();
+        let wanted = flag.as_ref().map(|f| lock(f));
+        if wanted.as_ref().is_some_and(|w| !**w) {
+            return Ok(None);
+        }
         let endpoint = Endpoint::parse(s.server.trim()).map_err(|e| CheckError::BadAddress(e.to_string()))?;
         let (profile, id, server) = (s.profile.clone(), s.id.clone(), s.server.trim().to_string());
         let service = s.service.map_or("", |svc| svc.id);
@@ -691,7 +707,9 @@ impl Checks {
             entries.remove(oldest);
         }
         entries.push_back(Entry { profile, id, server, service, state: CheckState::Running { automatic }, run, cancel });
-        Ok(slot)
+        drop(entries);
+        drop(wanted);
+        Ok(Some(slot))
     }
 
     /// The check of destination `id` of `profile`, running or finished; `None` when there has been

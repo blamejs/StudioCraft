@@ -416,6 +416,9 @@ struct Dest {
     /// Its connection was checked after failures since it last went live or was started. Shared
     /// with a check that waits for a place, which clears it when it cannot run.
     checked: Arc<AtomicBool>,
+    /// Whether its latest check is still wanted, shared with that check while it waits for a
+    /// place; cleared with `checked`.
+    wanted: Mutex<Arc<Mutex<bool>>>,
     /// Asks the thread to close the connection and end.
     stop: AtomicBool,
     /// The thread runs and has not decided to end. It is changed with `thread` locked, so a start
@@ -444,6 +447,7 @@ impl Dest {
             lost: AtomicBool::new(false),
             recovered: AtomicU32::new(0),
             checked: Arc::new(AtomicBool::new(false)),
+            wanted: Mutex::new(Arc::new(Mutex::new(false))),
             stop: AtomicBool::new(false),
             alive: AtomicBool::new(false),
             thread: Mutex::new(None),
@@ -481,10 +485,19 @@ impl Dest {
             self.recovered.fetch_add(1, Ordering::SeqCst);
         }
         if *status == DestinationStatus::Live {
-            self.checked.store(false, Ordering::SeqCst);
+            self.uncheck();
         }
         drop(status);
         self.touch();
+    }
+
+    /// Its connection may be checked again after failures, and a check of it that waits for a
+    /// place is dropped. A check that is starting at that moment finishes starting first.
+    fn uncheck(&self) {
+        // Held while `checked` changes, as in `check_after`.
+        let wanted = lock(&self.wanted);
+        self.checked.store(false, Ordering::SeqCst);
+        *lock(&wanted) = false;
     }
 
     /// Counts a change and signals it.
@@ -604,6 +617,8 @@ fn spawn(hub: &Arc<Hub>, d: &Arc<Dest>, key: Option<&str>) -> Result<(), PluginE
         // tries at once. A start of one that was not asked to stop changes nothing.
         if d.stop.swap(false, Ordering::SeqCst) {
             d.restarted.store(true, Ordering::SeqCst);
+            // A check that waits for a place from before the stop is dropped.
+            d.uncheck();
             if let Some(t) = slot.as_ref() {
                 t.thread().unpark();
             }
@@ -618,7 +633,7 @@ fn spawn(hub: &Arc<Hub>, d: &Arc<Dest>, key: Option<&str>) -> Result<(), PluginE
         *lock(&d.key) = key.to_string();
     }
     d.stop.store(false, Ordering::SeqCst);
-    d.checked.store(false, Ordering::SeqCst);
+    d.uncheck();
     d.alive.store(true, Ordering::SeqCst);
     d.set(DestinationStatus::Connecting);
     let (h, dd) = (Arc::clone(hub), Arc::clone(d));
@@ -726,9 +741,19 @@ fn gave_up(timing: &Timing, f: Failure, tries: u32) -> Failure {
 /// or was started, or `f` is an address or key that is not valid.
 fn check_after(hub: &Hub, d: &Dest, f: &Failure) {
     let Some((checks, auto)) = &hub.auto else { return };
-    if matches!(f.cause, Cause::BadAddress | Cause::BadKey) || d.checked.swap(true, Ordering::SeqCst) {
-        return;
-    }
+    // `checked` and this check's own flag change under the same lock as in `uncheck`, so a
+    // restart or a recovery meanwhile either happens before both are set or clears this check's
+    // flag. A check from before that still waits for a place is dropped.
+    let wanted = {
+        let mut held = lock(&d.wanted);
+        if matches!(f.cause, Cause::BadAddress | Cause::BadKey) || d.checked.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        let wanted = Arc::new(Mutex::new(true));
+        let before: Arc<Mutex<bool>> = std::mem::replace(&mut *held, Arc::clone(&wanted));
+        *lock(&before) = false;
+        wanted
+    };
     let id = &d.target.id;
     let service = auto.services.iter().find(|(i, _)| i == id).map(|(_, s)| *s);
     let subject = diagnose::Subject {
@@ -740,6 +765,7 @@ fn check_after(hub: &Hub, d: &Dest, f: &Failure) {
         service_hosts: auto.service_hosts,
         automatic: true,
         checked: Some(Arc::clone(&d.checked)),
+        wanted: Some(wanted),
     };
     if let Err(e) = checks.start(subject) {
         log::info!("stream destination `{id}`: the connection was not checked: {e}");
@@ -1084,7 +1110,7 @@ fn run(hub: &Arc<Hub>, d: &Arc<Dest>) {
         // the tries after it are counted from none, and a later failure may be checked again.
         if d.restarted.swap(false, Ordering::SeqCst) {
             (after_loss, refusals, failures) = (false, 0, 0);
-            d.checked.store(false, Ordering::SeqCst);
+            d.uncheck();
         }
         let tried = match connected {
             Ok(p) => Ok(p),

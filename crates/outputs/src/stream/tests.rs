@@ -1665,6 +1665,7 @@ fn checked_after_held(held: &[&str]) {
             service_hosts: false,
             automatic: false,
             checked: None,
+            wanted: None,
         };
         checks.start(s).unwrap();
     }

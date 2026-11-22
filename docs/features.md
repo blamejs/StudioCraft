@@ -518,8 +518,10 @@ check › "Also check the service's server list and status page after a failure"
 default. Check Connection always includes the service's steps. Stopping the stream cancels the
 checks of destinations that had not failed, and a check of a destination that failed goes on.
 At most four checks run at once. A check that runs by itself while four are running waits, and
-starts when one of them has finished. Each destination keeps its latest check for the session, and a
-check is no longer shown once the destination's server or service changes.
+starts when one of them has finished; it is dropped when its destination goes live or is started
+again first. Each destination keeps its latest check for the session. A check is no longer shown
+once the scheme, host or port of the destination's server changes, or its service changes; a
+change to the rest of the address keeps it.
 
 Add Destination adds one, up to 16, for one of seven streaming services or for a custom server.
 The first destination uses the profile's stream key; the others have no key of their own until one

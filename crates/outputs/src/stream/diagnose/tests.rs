@@ -151,6 +151,7 @@ fn subject(server: &str) -> Subject {
         service_hosts: false,
         automatic: false,
         checked: None,
+        wanted: None,
     }
 }
 
@@ -373,7 +374,7 @@ fn a_check_that_runs_by_itself_waits_for_a_place() {
         let _ = lock(&hold).recv();
         Ok(())
     });
-    let (checks, _fake) = checks_with(fake, TestClock::new());
+    let (checks, fake) = checks_with(fake, TestClock::new());
     for id in ["a", "b", "c", "d"] {
         checks.start(Subject { id: id.into(), ..subject("rtmps://203.0.113.9/app") }).unwrap();
         wait_start.recv_timeout(GUARD).unwrap();
@@ -386,17 +387,35 @@ fn a_check_that_runs_by_itself_waits_for_a_place() {
     // A destination stopped while its check waits is not checked.
     checks.cancel("", "f");
     assert_eq!(checks.waiting(), 1);
+    // Nor is one whose owner no longer wants it, as when it went live again. It takes no place
+    // from the next start on, and one no longer wanted later is dropped when its turn comes.
+    let (live, later) = (Arc::new(Mutex::new(true)), Arc::new(Mutex::new(true)));
+    let flagged = |id: &str, host: &str, flag: &Arc<Mutex<bool>>| Subject {
+        id: id.into(),
+        automatic: true,
+        wanted: Some(Arc::clone(flag)),
+        ..subject(&format!("rtmps://{host}/app"))
+    };
+    assert!(checks.start(flagged("l", "203.0.113.77", &live)).is_ok());
+    assert_eq!(checks.waiting(), 2);
+    *lock(&live) = false;
     // A check asked for still finds no place.
     assert_eq!(checks.start(Subject { id: "g".into(), ..subject("rtmps://203.0.113.9/app") }).err(), Some(CheckError::Busy));
+    assert_eq!(checks.waiting(), 1);
+    assert!(checks.start(flagged("m", "203.0.113.78", &later)).is_ok());
+    // One no longer wanted when it is started does not wait.
+    assert!(checks.start(flagged("n", "203.0.113.79", &live)).is_ok());
+    assert_eq!(checks.waiting(), 2);
     // At most MAX_KEPT checks wait. One more is refused, and a destination that waits already
     // keeps one place.
-    for n in 1..MAX_KEPT {
+    for n in 2..MAX_KEPT {
         assert!(checks.start(automatic(&format!("w{n}"))).is_ok());
     }
     assert_eq!(checks.waiting(), MAX_KEPT);
     assert_eq!(checks.start(automatic("over")).err(), Some(CheckError::Busy));
     assert!(checks.start(automatic("e")).is_ok());
     assert_eq!(checks.waiting(), MAX_KEPT);
+    *lock(&later) = false;
     drop(release);
     let d = done(&checks, "e");
     assert_eq!(d.host, "203.0.113.9");
@@ -404,6 +423,8 @@ fn a_check_that_runs_by_itself_waits_for_a_place() {
     until_checks(&checks, |c| (c.running() == 0 && c.waiting() == 0).then_some(()));
     assert_eq!((checks.state("", "f"), checks.state("", "over")), (None, None));
     assert!(matches!(checks.state("", &format!("w{}", MAX_KEPT - 1)), Some(CheckState::Done(_))));
+    let calls = fake.calls();
+    assert!(calls.iter().all(|c| !["203.0.113.77", "203.0.113.78", "203.0.113.79"].iter().any(|h| c.contains(h))), "{calls:?}");
 }
 
 #[test]
