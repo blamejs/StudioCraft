@@ -150,7 +150,6 @@ fn run(args: Args, raw: Vec<std::ffi::OsString>) -> Result<(), String> {
             let mut app = StudioApp::boot(store, cc.wgpu_render_state.clone(), problems);
             // After boot, which sets the interface language from the saved settings.
             studiocraft_ui_egui::install_runtime(&cc.egui_ctx, true).map_err(|e| format!("the interface could not start: {e:?}"))?;
-            studiocraft_ui_egui::theme::install(&cc.egui_ctx);
             app.install_fonts(&cc.egui_ctx);
             app.set_update_checks(update_checks);
             app.set_title_bar(buttons);

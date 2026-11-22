@@ -617,8 +617,8 @@ fn the_output_bar_fits_the_menu_row_at_each_window_size() {
         for (name, [l, t, r, b]) in &parts {
             assert!(*l >= 0.0 && *r <= w + 0.5 && *t >= 0.0 && *b <= 32.5, "{w}: {name} at {l},{t},{r},{b} is cut off");
             if name == "record" || name == "stream" {
-                assert_eq!(b - t, 28.0, "{w}: {name} is 28 points tall");
-                assert!((t - 2.0).abs() <= 0.5, "{w}: {name} starts 2 points below the top, at {t}");
+                assert_eq!(b - t, 24.0, "{w}: {name} is the standard 24 point control height");
+                assert!((t - 4.0).abs() <= 0.5, "{w}: {name} is centered on the row, 4 points below the top, at {t}");
             }
             if name == "menus" {
                 assert_eq!(b - t, 32.0, "{w}: the menus fill the 32 point row");
@@ -725,15 +725,15 @@ fn the_dock_strip_is_200_tall_at_1280_and_the_canvas_takes_the_rest() {
     let v = a.ui_inspect(&ctx);
     let strip = rect_of(&v["dock_strip"]["rect"]);
     assert_eq!(strip.height(), 200.0, "{strip:?}");
-    assert_eq!(strip.bottom(), 800.0 - 22.0, "the 22 point status bar is under the strip");
+    assert_eq!(strip.bottom(), 800.0 - 24.0, "the 24 point status bar is under the strip");
     let preview = rect_of(&v["preview"]["rect"]);
-    assert!((preview.width() - 956.0).abs() <= 1.0 && (preview.height() - 538.0).abs() <= 1.0, "the canvas is {preview:?}");
+    assert!((preview.width() - 953.0).abs() <= 1.0 && (preview.height() - 536.0).abs() <= 1.0, "the canvas is {preview:?}");
     let docks = v["docks"].as_array().cloned().unwrap_or_default();
     let widths: Vec<f32> = docks.iter().map(|d| rect_of(&d["rect"]).width()).collect();
     assert_eq!(widths, [300.0, 340.0, 638.0]);
     for d in &docks {
         let h = rect_of(&d["header"]);
-        assert_eq!(h.height(), 24.0, "{d}");
+        assert_eq!(h.height(), 28.0, "{d}: the Compact panel header");
         assert_eq!(h.top(), strip.top(), "{d}: the header is at the top of the strip");
     }
 }
@@ -1225,7 +1225,9 @@ fn a_press_on_a_header_action_under_the_strip_edge_runs_the_action() {
     let strip = rect_of(&v["dock_strip"]["rect"]);
     let add = v["docks"][0]["actions"].as_array().and_then(|x| x.iter().find(|x| x["name"] == json!("add"))).map(|x| rect_of(&x["rect"]));
     let Some(add) = add else { panic!("no Scenes Add action: {}", v["docks"][0]) };
-    assert_eq!(add.top(), strip.top(), "the Add button starts at the top of the strip");
+    // The 24 point action is centered in the 28 point header, so its top is in the strip edge's hit band.
+    assert_eq!(add.top(), strip.top() + 2.0, "the Add button starts 2 points below the top of the strip");
+    assert!(add.top() + 1.0 <= strip.top() + 1.0 + crate::EDGE_HIT_MARGIN, "the press below goes to the edge's hit band");
     let at = egui::pos2(add.center().x, add.top() + 1.0);
     let b = |pressed| Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: Modifiers::NONE };
     for events in [vec![Event::PointerMoved(at)], vec![b(true)], vec![b(false)], vec![]] {

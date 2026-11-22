@@ -461,9 +461,9 @@ fonts and title bar. The following table lists the code for each part.
 
 | Part | Code |
 | --- | --- |
-| Dark and light palettes, compact and comfortable size sets, type scale | `ui-egui/src/kit/tokens.rs` |
-| Applying the palettes to egui's dark and light styles at start, the menu bar's style, the focus ring | `ui-egui/src/theme.rs` |
-| Segmented control, Record and Go Live buttons with their timers, dock header | `segmented.rs`, `onair.rs` and `panel_header.rs` under `ui-egui/src/kit/`, which depend only on egui, `craft-ui` and `craft-menu` |
+| The audio meters' colors in dark and light mode, as data colors | `ui-egui/src/kit/tokens.rs` |
+| The app's theme defaults (the suite theme, dark mode, the Compact size set), the root values each frame starts from, and egui's theme following the resolved mode | `ui-egui/src/theme.rs`, with `craft-theme`'s `AppDefaults` and the tokens `craft-ui` resolves |
+| Segmented control, Record and Go Live buttons with their timers, dock header | `segmented.rs`, `onair.rs` and `panel_header.rs` under `ui-egui/src/kit/`, which depend only on egui, `craft-ui`, `craft-theme` and `craft-menu` and take their colors and sizes from the tokens |
 | Menu row and output controls | `ui-egui/src/output_bar.rs`, with `craft-ui`'s `fit_toolbar` choosing what moves when the row is narrow |
 | Docks | `ui-egui/src/docks.rs`, with `kit/panel_header.rs` for each dock's header |
 | Dock strip size | `ui-egui/src/strip.rs`; the strip's top edge and the dividers are `craft-ui` `ResizeHandle`s |
@@ -473,8 +473,8 @@ fonts and title bar. The following table lists the code for each part.
 | Font stack | `ui-egui/src/fonts.rs`, built with `craft-ui`'s `UiFonts`: Inter Regular for the proportional family, Inter SemiBold for the `semibold` family (dock, section and dialog titles) and JetBrains Mono for the monospace family, all embedded from `assets/fonts`. `StudioApp::install_fonts` installs the stack at start, and the window installs it again on the first frame after the interface language changes. |
 | Title bar | `src/titlebar.rs` decides whether the app draws it, from `craft-window`, and `crates/ui-egui/src/title_bar.rs` draws the menu strip as the title bar |
 
-A unit test checks every text pair of both palettes for 4.5:1 contrast and every state mark and
-the focus ring for 3:1.
+A unit test draws a frame in each suite mode and checks that the meters use that mode's colors and
+that each zone color and the hold mark have a contrast of at least 3:1 against the track.
 
 ## Saved files
 

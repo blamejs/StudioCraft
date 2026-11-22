@@ -7322,6 +7322,7 @@ dependencies = [
  "craft-quit",
  "craft-scopes",
  "craft-settings",
+ "craft-theme",
  "craft-ui",
  "craft-update",
  "craft-window",

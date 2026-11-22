@@ -39,7 +39,6 @@ use craft_menu::MenuBar;
 use craft_ui::contract::{Bind, Entry, Props as _, Show as _, Tracked};
 use craft_ui::pickers::Select;
 use craft_ui::runtime::commands::{AppCatalog, CommandInput};
-use craft_ui::runtime::env::RootEnv;
 use craft_ui::runtime::frame::{FrameInput, FrameOutput};
 use craft_ui::shell::embed::{self, CloseDecision};
 use craft_ui::{InstallError, InstallSpec};
@@ -1369,8 +1368,9 @@ impl StudioApp {
 
     /// Before each frame's passes, from `embed::before_input`: runs the commands the runtime
     /// fired (shortcuts and menu rows) unless a prompt, the exit question or Settings is open, and
-    /// returns the frame's input: the root direction and the command catalog with the user's
-    /// shortcuts.
+    /// returns the frame's input: the root values of [`theme::root_env`] with the interface
+    /// direction, and the command catalog with the user's shortcuts. egui's own theme follows the
+    /// resolved mode, for the egui widgets the window still draws itself.
     pub fn frame_input(&mut self, ctx: &egui::Context, out: FrameOutput) -> FrameInput {
         let modal = self.prompt.is_some() || self.confirm_exit || self.settings.is_some();
         if !modal {
@@ -1386,7 +1386,12 @@ impl StudioApp {
             input = input.catalog(catalog);
         }
         // port: P3 (language, direction and framework words) moves the language onto the host.
-        FrameInput::new(RootEnv::new().direction(i18n::direction())).commands(input)
+        let root = theme::root_env().direction(i18n::direction());
+        let shown = theme::egui_theme(root.resolved(ctx).mode);
+        if ctx.theme() != shown {
+            ctx.set_theme(shown);
+        }
+        FrameInput::new(root).commands(input)
     }
 
     /// The runtime's command catalog: every command a shortcut can be given. A command a linked
@@ -1581,10 +1586,17 @@ impl StudioApp {
         if shown.is_empty() {
             return;
         }
-        let palette = theme::palette(&ctx);
+        let (panel_fill, divider, handle_style) = theme::with_root(&ctx, |cx| {
+            let c = &cx.tokens.color;
+            let style = ResizeHandleStyle {
+                hovered: theme::color(cx, c.line.control_edge),
+                dragged: theme::color(cx, c.accent.solid),
+                focused: theme::color(cx, c.line.focus),
+            };
+            (theme::color(cx, c.surface.panel), theme::color(cx, c.line.divider), style)
+        });
         let window = ctx.viewport_rect().height();
         let height = strip::height(window, d.height);
-        let handle_style = ResizeHandleStyle { hovered: palette.line_strong, dragged: palette.accent, focused: palette.focus };
         let mut st = docks::DockState {
             selected: self.selected,
             renaming: &mut self.renaming,
@@ -1599,9 +1611,8 @@ impl StudioApp {
         // Widths after a divider moved this frame, by dock index.
         let mut new_widths: Option<[f32; store::DOCK_COUNT]> = None;
         let most = strip::max_height(window);
-        let panel = egui::Panel::bottom("docks").exact_size(height).show_separator_line(false).frame(egui::Frame::NONE.fill(palette.surface)).show(
-            ui,
-            |ui| {
+        let panel =
+            egui::Panel::bottom("docks").exact_size(height).show_separator_line(false).frame(egui::Frame::NONE.fill(panel_fill)).show(ui, |ui| {
                 let (area, _) = ui.allocate_exact_size(ui.available_rect_before_wrap().size(), egui::Sense::hover());
                 // The strip's top edge: a 1 point line inside the strip, which is also its resize
                 // handle. The handle comes before the docks, so a header action under its hit band
@@ -1647,7 +1658,7 @@ impl StudioApp {
                 // The dividers come after the docks so that their 8 point hit bands take the pointer
                 // over the docks' edges.
                 for (k, line) in lines.iter().enumerate() {
-                    ui.painter().rect_filled(*line, 0.0, palette.line);
+                    ui.painter().rect_filled(*line, 0.0, divider);
                     let most = (widths[k] + widths[k + 1] - strip::MIN_WIDTH).max(strip::MIN_WIDTH);
                     let r = ResizeHandle::new(
                         egui::Id::unique("dock-divider").with(shown[k]),
@@ -1665,8 +1676,7 @@ impl StudioApp {
                     }
                 }
                 edge_r
-            },
-        );
+            });
         let rect = panel.response.rect;
         self.dock_strip = Some(rect);
         let r = panel.inner;
@@ -1678,7 +1688,7 @@ impl StudioApp {
         } else if r.response.hovered() {
             handle_style.hovered
         } else {
-            palette.line
+            divider
         };
         ui.painter().rect_filled(edge, 0.0, fill);
         let new_height = (r.delta != 0.0).then(|| strip::height(window, height - r.delta));
@@ -1810,13 +1820,23 @@ impl StudioApp {
         let outputs_run = [&rec, &live].into_iter().flatten().any(|s| s.active);
         let source_limit = self.studio.audio_tracks_source_limit();
         let tracks = self.studio.audio_tracks_status().and_then(|s| tracks_item(s, outputs_run, source_limit));
-        let height = theme::sizes(ui.ctx()).bar_status;
-        let line = theme::palette(ui.ctx()).line;
-        let frame = egui::Frame::side_top_panel(ui.style()).inner_margin(egui::Margin::symmetric(8, 0));
+        let (height, fill, line, plain, warn, live_red) = theme::with_root(ui.ctx(), |cx| {
+            let c = &cx.tokens.color;
+            let color = |rgba| theme::color(cx, rgba);
+            (
+                cx.tokens.size.bar.status,
+                color(c.surface.panel),
+                color(c.line.divider),
+                color(c.text.normal),
+                color(c.status.warn.fg),
+                color(c.status.bad.fg),
+            )
+        });
+        let frame = egui::Frame::NONE.fill(fill).inner_margin(egui::Margin::symmetric(8, 0));
         let panel = egui::Panel::bottom("status").exact_size(height).show_separator_line(false).frame(frame).show(ui, |ui| {
             ui.with_layout(i18n::row(ui), |ui| {
                 if let Some((text, error)) = notice {
-                    let color = if error { ui.visuals().warn_fg_color } else { ui.visuals().text_color() };
+                    let color = if error { warn } else { plain };
                     // A message longer than the bar is cut off, so the whole text is on hover.
                     ui.colored_label(color, text.clone()).on_hover_text(text);
                 }
@@ -1831,13 +1851,12 @@ impl StudioApp {
                         if let Some(s) = s.filter(|s| s.active) {
                             ui.separator();
                             let t = s.elapsed.as_secs();
-                            ui.colored_label(Color32::from_rgb(230, 70, 60), format!("{tag} {:02}:{:02}:{:02}", t / 3600, (t / 60) % 60, t % 60));
+                            ui.colored_label(live_red, format!("{tag} {:02}:{:02}:{:02}", t / 3600, (t / 60) % 60, t % 60));
                         }
                     }
-                    if let Some((text, warn, hover)) = tracks {
+                    if let Some((text, warning, hover)) = tracks {
                         ui.separator();
-                        let color = if warn { ui.visuals().warn_fg_color } else { ui.visuals().text_color() };
-                        ui.colored_label(color, text).on_hover_text(hover);
+                        ui.colored_label(if warning { warn } else { plain }, text).on_hover_text(hover);
                     }
                 });
             });
@@ -2127,8 +2146,10 @@ impl StudioApp {
         self.before(&ctx);
         self.dialog_answers(&ctx);
         let mut acts = Vec::new();
-        let bar = theme::sizes(&ctx).bar_menu;
-        let fill = theme::palette(&ctx).raised;
+        let (bar, fill, line, background) = theme::with_root(&ctx, |cx| {
+            let c = &cx.tokens.color;
+            (cx.tokens.size.bar.title, theme::color(cx, c.surface.raised), theme::color(cx, c.line.divider), theme::color(cx, c.surface.background))
+        });
         let (left, right) = if i18n::is_rtl(ui) { (0, 4) } else { (4, 0) };
         let top = egui::Panel::top("menu")
             .exact_size(bar)
@@ -2137,11 +2158,10 @@ impl StudioApp {
             .show(ui, |ui| self.menu(ui, &mut acts));
         // The divider is drawn inside the row's last point, so the content area keeps the full height.
         let row = top.response.rect;
-        ui.painter().hline(row.x_range(), row.bottom() - 0.5, egui::Stroke::new(1.0, theme::palette(&ctx).line));
+        ui.painter().hline(row.x_range(), row.bottom() - 0.5, egui::Stroke::new(1.0, line));
         self.output_bar.rect = Some(row);
         self.status_bar(ui);
         self.docks(ui, &mut acts);
-        let background = theme::palette(&ctx).background;
         egui::CentralPanel::default().frame(egui::Frame::NONE.fill(background)).show(ui, |ui| self.central(ui, &mut acts));
         self.windows(&ctx, &mut acts);
         // An update never starts while a recording, stream or replay buffer runs.
@@ -2155,7 +2175,6 @@ impl StudioApp {
             }
             updates_ui::Asked::Close => self.request_exit(&ctx),
         }
-        theme::paint_focus_ring(&ctx);
         if self.title_bar.is_some() {
             title_bar::resize_zones(ui);
         }

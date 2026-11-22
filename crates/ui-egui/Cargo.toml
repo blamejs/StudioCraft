@@ -29,6 +29,8 @@ craft-menu = { workspace = true }
 craft-behavior = { workspace = true }
 # The shell description the UI runtime is installed with.
 craft-host = { workspace = true }
+# The suite theme the window shows by default, and the token types its own painters read.
+craft-theme = { workspace = true }
 craft-keymap = { workspace = true }
 craft-settings = { workspace = true }
 craft-dialogs = { workspace = true }

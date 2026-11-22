@@ -404,11 +404,11 @@ The compositor converts the program to the encoders' frame format on the GPU.
 
 ### Theme
 
-StudioCraft has a compact dark and light theme and follows the system's light or dark setting.
-Controls and menu rows are 24 points tall, body text is 12 points, and menus are sized to their
-content and at least 160 points wide. A focus ring marks the focused widget after Tab, an arrow
-key or F6. Every text pair in both palettes has a contrast of at least 4.5:1, and every state mark
-and the focus ring have at least 3:1.
+StudioCraft shows the suite theme of the Craft apps in dark mode with the Compact size set. Its
+colors, sizes and type come from the theme's tokens. Controls, including Record and Go Live, are
+24 points tall, dock headers are 28 points tall and the status bar is 24 points tall. The audio
+meters keep their own green, yellow and red on a dark track in both light and dark mode, and each
+has a contrast of at least 3:1 against the track.
 
 ### Menu row and output controls
 
