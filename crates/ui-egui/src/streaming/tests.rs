@@ -937,6 +937,8 @@ fn the_details_change_the_server_with_the_service_and_link_to_its_page() {
     // A service this version does not know stays the destination's choice.
     let choices = service_choices("future");
     assert_eq!(choices.len(), SERVICES.len() + 2);
+    let future = Entry::new("future".to_string(), "future".to_string());
+    assert!(choices.contains(&future), "{future:?} in {choices:?}");
     assert_eq!(service_choices("kick").len(), SERVICES.len() + 1);
     assert_eq!(service_choices("").len(), SERVICES.len() + 1);
 }
