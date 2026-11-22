@@ -301,6 +301,8 @@ pub struct StudioApp {
     /// Whether the columns' docks were drawn in the strip last, because the window was too narrow
     /// for the columns.
     docks_collapsed: bool,
+    /// How wide the area for the canvas and the docks was drawn last, once a frame was drawn.
+    docks_body_width: Option<f32>,
     /// Where the top row and the parts of the output bar were drawn last.
     output_bar: output_bar::Drawn,
     /// The paused banner above the program, and the resume announcement after it.
@@ -429,6 +431,7 @@ impl StudioApp {
             dock_strip: None,
             dock_columns: [None; 2],
             docks_collapsed: false,
+            docks_body_width: None,
             output_bar: output_bar::Drawn::default(),
             pause_banner: pause_banner::State::default(),
             updates: updates_ui::Runtime::default(),
@@ -1358,7 +1361,10 @@ impl StudioApp {
                     to => return Err(tmsg!("`dock.move`: `to` is `left`, `right`, `up` or `down`, not `{to}`", to = to)),
                 };
                 let mut docks = self.store.prefs().docks;
-                let moved = docks.shift(i, left, self.docks_collapsed);
+                // The columns can have changed since the last frame (`dock.region`), so whether they
+                // are drawn in the strip is worked out again from the saved docks.
+                let collapsed = self.docks_body_width.is_some_and(|w| strip::collapsed(w, Self::dock_columns_of(&docks).2));
+                let moved = docks.shift(i, left, collapsed);
                 if moved {
                     self.store.update(|p| p.docks = docks);
                 }
@@ -2157,6 +2163,15 @@ impl StudioApp {
         });
     }
 
+    /// The docks in the left and right columns, the columns' widths, and how wide the columns with
+    /// docks in them are together with their edges.
+    fn dock_columns_of(d: &store::Docks) -> ([Vec<u8>; 2], [f32; 2], f32) {
+        let columns = [d.shown_in(store::Region::Left, false), d.shown_in(store::Region::Right, false)];
+        let column_widths = [strip::column_width(d.left_width, strip::LEFT_WIDTH), strip::column_width(d.right_width, strip::RIGHT_WIDTH)];
+        let span: f32 = columns.iter().zip(column_widths).filter(|(c, _)| !c.is_empty()).map(|(_, w)| w + strip::DIVIDER).sum();
+        (columns, column_widths, span)
+    }
+
     fn docks(&mut self, ui: &mut Ui, acts: &mut Vec<Act>) {
         let d = self.store.prefs().docks;
         self.dock_rects.clear();
@@ -2174,11 +2189,10 @@ impl StudioApp {
         // The columns beside the canvas, unless the window is too narrow for them; then their docks
         // are drawn in the strip.
         let body = ui.available_rect_before_wrap();
-        let columns = [d.shown_in(store::Region::Left, false), d.shown_in(store::Region::Right, false)];
-        let column_widths = [strip::column_width(d.left_width, strip::LEFT_WIDTH), strip::column_width(d.right_width, strip::RIGHT_WIDTH)];
-        let span: f32 = columns.iter().zip(column_widths).filter(|(c, _)| !c.is_empty()).map(|(_, w)| w + strip::DIVIDER).sum();
+        let (columns, column_widths, span) = Self::dock_columns_of(&d);
         let collapsed = strip::collapsed(body.width(), span);
         self.docks_collapsed = collapsed;
+        self.docks_body_width = Some(body.width());
         // The transition and output controls are in the output bar; Docks shows or hides them there.
         let shown = d.shown_in(store::Region::Bottom, collapsed);
         if shown.is_empty() && (collapsed || columns.iter().all(Vec::is_empty)) {

@@ -1810,6 +1810,33 @@ fn dock_region_moves_a_dock_and_a_column_edge_resizes_its_column() {
 }
 
 #[test]
+fn dock_move_after_dock_region_uses_the_columns_as_they_are_now() {
+    let mut a = app();
+    let ctx = crate::test_context();
+    let size = egui::vec2(1280.0, 800.0);
+    // Two 480-point columns leave the canvas less than 480 points, so their docks are drawn in the strip.
+    a.store.update(|p| {
+        p.docks.left_width = 480.0;
+        p.docks.right_width = 480.0;
+    });
+    run(&mut a, &ctx, "dock.region", json!({"dock": "scenes", "region": "left"})).unwrap();
+    run(&mut a, &ctx, "dock.region", json!({"dock": "sources", "region": "right"})).unwrap();
+    frame_at(&mut a, &ctx, size);
+    assert_eq!(a.ui_inspect(&ctx)["dock_columns"]["collapsed"], json!(true));
+    // With the right column empty the left column fits, and Sources is the first dock under the
+    // canvas before the next frame is drawn.
+    run(&mut a, &ctx, "dock.region", json!({"dock": "sources", "region": "bottom"})).unwrap();
+    let before = a.store().prefs().docks.order();
+    let r = run(&mut a, &ctx, "dock.move", json!({"dock": "sources", "to": "left"})).unwrap();
+    assert_eq!(r["moved"], json!(false), "{r}");
+    assert_eq!(a.store().prefs().docks.order(), before);
+    frame_at(&mut a, &ctx, size);
+    let v = a.ui_inspect(&ctx);
+    assert_eq!(v["dock_columns"]["collapsed"], json!(false));
+    assert_eq!((drawn_in(&v, "left"), drawn_in(&v, "bottom")), (vec!["scenes".into()], vec!["sources".into(), "mixer".into()]));
+}
+
+#[test]
 fn dock_float_moves_a_dock_into_a_window_and_back() {
     let mut a = app();
     let ctx = crate::test_context();
