@@ -9,8 +9,8 @@ use egui::{RichText, Ui};
 use studiocraft_audio_tracks::space::TRACK_BYTES_PER_SECOND;
 use studiocraft_model::profile::DEFAULT_AUDIO_DEVICE;
 use studiocraft_model::{
-    AfterStop, AudioTracksSettings, AudioTracksWhen, FitMode, KeyRef, PauseAnchor, PauseAtZero, PauseSettings, Profile, RecordingFormat,
-    RecordingQuality, ReplaySettings, VideoSettings,
+    AfterStop, AudioTracksSettings, AudioTracksWhen, FitMode, KeyRef, PauseAnchor, PauseAtZero, PauseSettings, Profile, ReconnectSettings,
+    RecordingFormat, RecordingQuality, ReplaySettings, VideoSettings,
 };
 use studiocraft_platform::audio::{DeviceInfo, DeviceKind};
 use studiocraft_plugin::{Availability, EncoderEnv, EncoderKind, Registry, Settings};
@@ -539,6 +539,32 @@ impl SettingsWindow {
             ui.label(tl!("Keyframe interval"));
             ui.add(egui::DragValue::new(&mut s.keyframe_interval_s).range(1..=20).suffix(format!(" {}", tl!("s"))));
             ui.end_row();
+        });
+        ui.add_space(12.0);
+        Self::reconnect(ui, &mut s.reconnect);
+    }
+
+    /// The Automatic reconnect section of the Stream tab. The waits and the tries are disabled
+    /// while automatic reconnect is off, and the longest wait is kept at least the first wait.
+    fn reconnect(ui: &mut Ui, r: &mut ReconnectSettings) {
+        ui.label(RichText::new(tl!("Automatic reconnect")).strong());
+        ui.add_space(4.0);
+        ui.checkbox(&mut r.enabled, tl!("Reconnect when a destination's connection fails or is lost"));
+        let secs = format!(" {}", tl!("s"));
+        ui.add_enabled_ui(r.enabled, |ui| {
+            egui::Grid::new("reconnect-grid").num_columns(2).spacing([12.0, 8.0]).show(ui, |ui| {
+                ui.label(tl!("First wait"));
+                ui.add(egui::DragValue::new(&mut r.first_delay_s).range(ReconnectSettings::FIRST_DELAY_S).suffix(secs.clone()));
+                ui.end_row();
+                r.max_delay_s = r.max_delay_s.clamp(r.first_delay_s, ReconnectSettings::MAX_DELAY_S);
+                ui.label(tl!("Longest wait"));
+                ui.add(egui::DragValue::new(&mut r.max_delay_s).range(r.first_delay_s..=ReconnectSettings::MAX_DELAY_S).suffix(secs));
+                ui.end_row();
+                ui.label(tl!("Tries before giving up"));
+                ui.add(egui::DragValue::new(&mut r.max_tries).range(ReconnectSettings::MAX_TRIES));
+                ui.end_row();
+            });
+            ui.label(RichText::new(tl!("Each wait doubles up to the longest wait.")).small().weak());
         });
     }
 

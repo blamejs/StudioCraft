@@ -266,6 +266,8 @@ pub(crate) struct Outputs {
     stream_servers: HashMap<String, String>,
     /// The name of the profile the last stream started with; `None` once that profile is removed.
     stream_profile: Option<String>,
+    /// The reconnect settings the last stream started with.
+    stream_reconnect: Option<studiocraft_model::ReconnectSettings>,
     /// The last [`MAX_UNFINISHED`] outputs, by kind and target, that stopped without finishing
     /// their file or stream cleanly, oldest first.
     unfinished: Vec<(OutputKind, String)>,
@@ -754,6 +756,7 @@ const REPLAY_ENCODER: &str = "h264";
 /// the profile's key or one of `held`, the keys held for this session by name.
 fn stream_settings(p: &Profile, held: &HashMap<String, String>) -> Result<Settings, StudioError> {
     p.stream.check().map_err(StudioError::Output)?;
+    p.stream.reconnect.check().map_err(StudioError::Output)?;
     if !p.stream.destinations.iter().any(|d| d.enabled && !d.server.trim().is_empty()) {
         return Err(StudioError::Output("set a server in Settings › Stream first".into()));
     }
@@ -771,7 +774,11 @@ fn stream_settings(p: &Profile, held: &HashMap<String, String>) -> Result<Settin
         };
         list.push(serde_json::json!({ "id": d.id, "server": d.server.trim(), "key": key, "enabled": d.enabled }));
     }
-    Ok(Settings::new().with("destinations", list))
+    let r = &p.stream.reconnect;
+    let reconnect = serde_json::json!({
+        "enabled": r.enabled, "first_delay_s": r.first_delay_s, "max_delay_s": r.max_delay_s, "max_tries": r.max_tries
+    });
+    Ok(Settings::new().with("destinations", list).with("reconnect", reconnect))
 }
 
 impl Plan {
@@ -1134,6 +1141,11 @@ impl Studio {
         self.outputs.stream_profile.as_deref().filter(|_| self.outputs.active.contains_key(&OutputKind::Streaming))
     }
 
+    /// The reconnect settings the running stream started with; `None` while no stream runs.
+    pub fn stream_reconnect(&self) -> Option<studiocraft_model::ReconnectSettings> {
+        self.outputs.stream_reconnect.filter(|_| self.outputs.active.contains_key(&OutputKind::Streaming))
+    }
+
     /// Record that the profile `old` was renamed `new`, so a stream it started stays its stream.
     pub fn stream_profile_renamed(&mut self, old: &str, new: &str) {
         if self.outputs.stream_profile.as_deref() == Some(old) {
@@ -1361,6 +1373,7 @@ impl Studio {
             self.outputs.stream_prints = crate::golive::prints(&self.profile, &self.outputs.held_keys);
             self.outputs.stream_servers = self.profile.stream.destinations.iter().map(|d| (d.id.clone(), d.server.clone())).collect();
             self.outputs.stream_profile = Some(self.profile.name.clone());
+            self.outputs.stream_reconnect = Some(self.profile.stream.reconnect);
         }
         let registry = Arc::clone(self.engine.registry());
         let mut encoder = registry.encoder(&planned.encoder_id)?;
@@ -1605,6 +1618,11 @@ mod tests {
         ]);
         assert_eq!(settings.get("destinations"), Some(&want));
         assert_eq!(studiocraft_outputs::stream_targets(&settings).map(|t| t.len()), Ok(4));
+        assert_eq!(studiocraft_outputs::stream_reconnect(&settings), Ok(p.stream.reconnect), "the reconnect settings go with them");
+        let mut slow = p.clone();
+        slow.stream.reconnect.max_tries = 0;
+        let Err(StudioError::Output(e)) = stream_settings(&slow, &held) else { panic!("reconnect settings out of range") };
+        assert!(e.contains("reconnect tries"), "{e}");
         p.stream.destinations[1].id = "main".into();
         let Err(StudioError::Output(e)) = stream_settings(&p, &held) else { panic!("an id used twice") };
         assert!(e.contains("used twice"), "{e}");

@@ -139,7 +139,7 @@ pub struct AddressOutcome {
 /// The kind of failure, with a stable id ([`Cause::id`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Cause {
-    /// This computer has no network route to any address of the server.
+    /// This computer has no network route to any of the server's addresses that were tried.
     NoRoute,
     /// The server's name could not be looked up.
     LookupFailed,

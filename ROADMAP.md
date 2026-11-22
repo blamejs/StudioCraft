@@ -14,7 +14,7 @@ description in [docs/features.md](docs/features.md).
 - Cameras are captured on Windows (Media Foundation), macOS (AVFoundation) and Linux (V4L2), with the camera and its format chosen in the source's Properties ([Camera](docs/features.md#camera)).
 - Audio input and output are captured on Linux through the PipeWire sound server, which lists its devices with the default first ([Audio capture on Linux](docs/features.md#audio-capture-on-linux)).
 - Displays and windows are captured on Linux through the desktop's screen-cast portal and PipeWire ([Display and window capture on Linux](docs/features.md#display-and-window-capture-on-linux)).
-- One application's audio is captured on Windows 11 and Windows Server 2022, chosen from the running applications that have audio and followed across restarts ([Application audio capture](docs/features.md#application-audio-capture)).
+- One application's audio is captured on Windows 11, Windows Server 2022 and Linux with PipeWire, chosen from the running applications that have audio and followed across restarts ([Application audio capture](docs/features.md#application-audio-capture)).
 
 ### Filters
 
@@ -43,7 +43,7 @@ description in [docs/features.md](docs/features.md).
 
 ### Streaming
 
-- Streams go to one or more RTMP and RTMPS servers from StudioCraft through the built-in H.264 encoders, each destination connecting, reconnecting and stopping on its own, with the encoder's settings in Settings › Stream; a destination that cannot connect names the cause and each address it tried, and each try looks the server's name up again with a 10 s limit that a stop does not wait for ([Streaming](docs/features.md#streaming)).
+- Streams go to one or more RTMP and RTMPS servers from StudioCraft through the built-in H.264 encoders, each destination connecting, reconnecting and stopping on its own, with the encoder's settings in Settings › Stream; a destination that cannot connect names the cause and each address it tried, automatic reconnect can be turned off or given its own first wait, longest wait and number of tries, and each try looks the server's name up again with a 10 s limit that a stop does not wait for ([Streaming](docs/features.md#streaming)).
 - `golive.check` lists what would stop a stream or spoil it (destinations, the encoder, free space for recordings, sources and live captions), each item passing, a problem or unknown, and the window does not show it yet ([Streaming](docs/features.md#streaming)).
 - Pause Program shows a pause screen in the program, and so in every recording, stream and replay buffer: a background color, a picture or a looping video, and a countdown that keeps the screen or resumes the program at zero. The Pause button after Go Live, with its menu of countdowns, and File › Pause Program start it; the button, a banner above the program with +1 min and Resume, and File › Resume Program end it ([Pause screen](docs/features.md#pause-screen)).
 
@@ -110,9 +110,11 @@ description in [docs/features.md](docs/features.md).
    ([Application Audio dock](docs/features.md#application-audio-dock)). Each lane has volume with up to
    +20 dB of boost, mute, filters, a sync offset and monitoring. Track assignment is still to be
    built.
-6. **Application audio on macOS and Linux.** The application list, meters and capture will use
-   ScreenCaptureKit on macOS and PipeWire's per-application streams on Linux. Both systems report
-   it as unsupported today.
+6. **Application audio on macOS and Linux (partly done).** Linux lists the applications that
+   have PipeWire playback streams and captures one by linking its streams to a capture stream
+   ([Application audio capture](docs/features.md#application-audio-capture)). Linux shows no
+   meter levels for applications that are not captured. macOS still reports it as unsupported;
+   its list, meters and capture will use the system's process audio taps.
 7. **Audio tracks as an editing session.** Each take's WAV files will also be written as a
    `.scraft` session that SoundCraft opens, with the tracks lined up at their times and the
    take's markers and dropouts marked.

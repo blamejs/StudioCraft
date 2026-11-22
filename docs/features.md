@@ -40,7 +40,7 @@ or cropping a source ends its fit, fill or stretch.
 | Camera | A webcam or capture card. | Windows (Media Foundation), macOS (AVFoundation) and Linux (V4L2) |
 | Audio input capture | A microphone or other input device. | Windows, macOS and Linux |
 | Audio output capture | The sound the computer plays (desktop audio). | Windows and Linux |
-| Application audio capture | The sound one application plays. | Windows 11 and Windows Server 2022 |
+| Application audio capture | The sound one application plays. | Windows 11, Windows Server 2022 and Linux (PipeWire) |
 | Live Captions | The words heard in the program audio, while live captions run. | All |
 
 ### Display and window capture on Linux
@@ -111,10 +111,25 @@ program, is already recorded by that application's capture.
 
 Capturing one application uses Windows process loopback capture
 ([`AUDIOCLIENT_PROCESS_LOOPBACK_PARAMS`](https://learn.microsoft.com/en-us/windows/win32/api/audioclientactivationparams/ns-audioclientactivationparams-audioclient_process_loopback_params)),
-which needs Windows build 20348 or later: Windows 11 or Windows Server 2022. On earlier Windows
-builds, macOS and Linux the source lists no applications and says why, and Audio output capture
-still records everything the computer plays. The `app_audio.list` and `app_audio.status` commands
-report the same lists and support ([Control and automation](#control-and-automation)).
+which needs Windows build 20348 or later: Windows 11 or Windows Server 2022.
+
+On Linux the list holds the applications that have a playback stream on the PipeWire sound server,
+named by the program file of the process that owns the stream. A stream that the sound server
+passes on for an application using the PulseAudio interface names its own process, and nothing
+checks that name. StudioCraft counts such a stream for the process it names only while that
+process has an open connection to the PulseAudio socket. When the process has none, or when
+StudioCraft cannot read the process's open files or the system's socket list, the stream is not
+listed or captured. The capture links each of
+the application's playback streams, and those of the processes it starts, to a recording stream of
+StudioCraft's own, and links streams that start later as they appear. The application still plays
+on its own device. Linux lists no meter levels, so when several copies run the source keeps the
+copy captured last time while its stream runs or no other copy's does, otherwise it takes a copy
+whose stream is running, then the one with the lowest process id.
+
+On earlier Windows builds, macOS and Linux without the PipeWire server the source lists no
+applications and says why, and Audio output capture still records everything the computer plays.
+The `app_audio.list` and `app_audio.status` commands report the same lists and support
+([Control and automation](#control-and-automation)).
 
 ### Camera
 
@@ -405,8 +420,17 @@ keyframe interval. The defaults are listed in
 A profile holds up to 16 stream destinations, each with its own server, key and on or off setting.
 Settings › Stream edits the first one. A stream sends to every destination that is on, and each
 destination connects, reconnects and stops on its own: one that fails does not stop the others.
-A lost connection is tried again after 2, 4, 8 and 16 s and then every 30 s, and a destination gives
-up after 10 failed tries in a row. The stream fails when no destination is sending or trying to.
+A lost connection, or one that cannot be made, is tried again as the Automatic reconnect section of
+Settings › Stream says. By default the waits are 2, 4, 8 and 16 s and then 30 s each, and a
+destination gives up after 10 failed tries in a row. The first wait can be 1 to 60 s, the longest
+wait from the first wait to 600 s, and the number of tries 1 to 100; each wait doubles the one
+before it up to the longest wait. StudioCraft cuts each wait by a random 0 to 20 %, never to below
+1 s, so destinations that lost their connections together do not all try again at once. With
+Automatic reconnect off, a destination stops at its first failure. A destination gives up at most
+the sum of its waits (at most the number of tries times the longest wait) after its first failure,
+plus up to 10 s per try for the name lookup and up to 55 s per try for the connection (4 addresses
+for 10 s each) and the stream's setup (15 s). A running stream keeps the settings it started with.
+The stream fails when no destination is sending or trying to.
 Each try looks the server's name up again, so a changed DNS record is used on the next try. A try
 waits at most 10 s for the lookup and then counts as a failed try, and stopping a destination or
 the stream does not wait for a lookup. The system may keep working on a lookup it never answers;
