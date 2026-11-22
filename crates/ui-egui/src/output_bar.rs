@@ -130,12 +130,23 @@ pub fn fit(room: f32, menus: f32, w: &Widths) -> Fit {
 
 // port: P9 (output bar) measures the menu titles with the framework's menu bar instead.
 
-/// The width the menu titles of `bar` take, each with the button padding on both sides.
+/// The width the menu titles of `bar` take as the bar shows them, each with the button padding on
+/// both sides.
 pub fn menu_width(ui: &Ui, bar: &MenuBar) -> f32 {
     let font = TextStyle::Button.resolve(ui.style());
     let padding = ui.spacing().button_padding.x;
     let color = ui.visuals().text_color();
-    let titles: f32 = bar.menus.iter().map(|m| ui.painter().layout_no_wrap(m.title.clone(), font.clone(), color).size().x + 2.0 * padding).sum();
+    // A title with no letter a keyboard types shows its English mnemonic after it: `ファイル(F)`.
+    // craft-menu writes that suffix into the title text on every platform, macOS included; macOS
+    // only leaves out the underline. `M` stands in for the letter, which is not known here.
+    let shown = |t: &str| {
+        if t.chars().any(|c| c.is_ascii_alphanumeric()) || crate::commands::english_label(craft_menu::Labeled::Title(t)).is_none() {
+            t.to_string()
+        } else {
+            format!("{t}(M)")
+        }
+    };
+    let titles: f32 = bar.menus.iter().map(|m| ui.painter().layout_no_wrap(shown(&m.title), font.clone(), color).size().x + 2.0 * padding).sum();
     titles + 0.5
 }
 
@@ -351,8 +362,9 @@ impl StudioApp {
             // keeps the titles to the width the fit gives them, past which they overflow.
             ui.allocate_ui_with_layout(vec2(fit.menus, height), i18n::row(ui), |ui| {
                 // The window has no native menu bar on any platform, so the bar takes F10 and Alt
-                // unless a modal has them.
-                MenuBarUi::new(laid).keyboard(keyboard).show(ui)
+                // unless a modal has them. Alt with a letter opens a menu or runs a row; a label
+                // with no letter a keyboard types takes its English label's letter.
+                MenuBarUi::new(laid).keyboard(keyboard).mnemonics(crate::commands::MNEMONICS).english(crate::commands::english_label).show(ui)
             });
             let end = i18n::start_x(ui, ui.cursor());
             parts.push(("menus", Rect::from_min_max(pos2(start.min(end), top), pos2(start.max(end), top + height))));

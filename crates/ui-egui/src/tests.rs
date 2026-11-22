@@ -306,30 +306,235 @@ fn a_lost_window_device_starts_the_app_again_unless_that_would_end_the_same_way(
     }
 }
 
-#[test]
-fn scene_shortcuts_switch_scenes() {
-    let mut a = app();
-    let ctx = crate::test_context();
-    run(&mut a, &ctx, "scene.add", json!({"name": "Second"})).unwrap();
-    run(&mut a, &ctx, "scene.select", json!({"scene": "Scene"})).unwrap();
-    frame(&mut a, &ctx, vec![]);
-    frame(&mut a, &ctx, press(Key::Num2, Modifiers::COMMAND));
-    let c = a.studio().collection();
-    assert_eq!(c.scene(c.program_scene).map(|s| s.name.as_str()), Some("Second"));
-    frame(&mut a, &ctx, press(Key::Num1, Modifiers::COMMAND));
-    let c = a.studio().collection();
-    assert_eq!(c.scene(c.program_scene).map(|s| s.name.as_str()), Some("Scene"));
+/// Runs one frame with `events` and returns what the runtime fired for them, each with the
+/// parameters the catalog entry stands for. Nothing it fired is run.
+fn fired_by(app: &mut StudioApp, ctx: &egui::Context, events: Vec<Event>) -> Vec<(CommandRef, craft_ui::runtime::commands::FireSource)> {
+    let raw = RawInput { events, screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1280.0, 800.0))), ..RawInput::default() };
+    app.before_input(ctx);
+    let mut out = ctx.run_ui(raw, |ui| app.frame(ui));
+    out.textures_delta.clear();
+    let mut fired = Vec::new();
+    embed::before_input(ctx, |mut output| {
+        fired = std::mem::take(&mut output.fired).into_iter().map(|f| (commands::fired_command(&f.command), f.source)).collect();
+        app.frame_input(ctx, output)
+    });
+    fired
+}
+
+/// The name of the scene on the program.
+fn program_name(app: &StudioApp) -> Option<String> {
+    let c = app.studio().collection();
+    c.scene(c.program_scene).map(|s| s.name.clone())
+}
+
+/// The number of items in the scene being edited.
+fn edit_items(app: &StudioApp) -> usize {
+    app.studio().collection().scene(app.studio().engine().edit_scene()).map_or(0, |s| s.items.len())
 }
 
 #[test]
-fn undo_shortcut_undoes_the_last_change() {
+fn every_default_shortcut_fires_its_command() {
+    use craft_ui::runtime::commands::FireSource;
+    let mut a = app();
+    let ctx = crate::test_context();
+    frame(&mut a, &ctx, vec![]);
+    let scene = |i: u32| CommandRef::with_params("scene.select_index", json!({"index": i}));
+    let rows = [
+        (Key::Z, Modifiers::COMMAND, CommandRef::new("edit.undo")),
+        (Key::Y, Modifiers::COMMAND, CommandRef::new("edit.redo")),
+        (Key::Z, Modifiers::COMMAND | Modifiers::SHIFT, CommandRef::new("edit.redo")),
+        (Key::Delete, Modifiers::NONE, CommandRef::new("selection.remove")),
+        (Key::F, Modifiers::COMMAND, CommandRef::new("selection.fit")),
+        (Key::R, Modifiers::COMMAND, CommandRef::new("selection.reset")),
+        (Key::F11, Modifiers::NONE, CommandRef::new("view.fullscreen")),
+        (Key::Num1, Modifiers::COMMAND, scene(1)),
+        (Key::Num5, Modifiers::COMMAND, scene(5)),
+        (Key::Num9, Modifiers::COMMAND, scene(9)),
+    ];
+    for (key, modifiers, command) in rows {
+        assert_eq!(fired_by(&mut a, &ctx, press(key, modifiers)), [(command.clone(), FireSource::Key)], "{key:?} with {modifiers:?}");
+    }
+}
+
+#[test]
+fn shortcuts_run_their_commands_unless_a_dialog_has_the_keys() {
+    type Setup = fn(&mut StudioApp, &egui::Context);
+    // Two scenes with `Scene` on the program, and the addition of `Second` sealed in the history.
+    let two: Setup = |a, ctx| {
+        run(a, ctx, "scene.add", json!({"name": "Second"})).unwrap();
+        run(a, ctx, "scene.select", json!({"scene": "Scene"})).unwrap();
+    };
+    let second: Setup = |a, ctx| {
+        run(a, ctx, "scene.add", json!({"name": "Second"})).unwrap();
+        run(a, ctx, "scene.select", json!({"scene": "Second"})).unwrap();
+    };
+    let added: Setup = |a, ctx| {
+        run(a, ctx, "scene.add", json!({"name": "Second"})).unwrap();
+        a.studio.seal_history();
+    };
+    let prompt: Setup = |a, ctx| {
+        run(a, ctx, "scene.add", json!({"name": "Second"})).unwrap();
+        a.studio.seal_history();
+        a.ask_name(Named::NewProfile, "");
+    };
+    // (case, setup, key, modifiers, scenes after, program scene after when the case checks it)
+    let rows: [(&str, Setup, Key, Modifiers, usize, Option<&str>); 5] = [
+        ("Cmd+2 shows the second scene", two, Key::Num2, Modifiers::COMMAND, 2, Some("Second")),
+        ("Cmd+1 shows the first scene", second, Key::Num1, Modifiers::COMMAND, 2, Some("Scene")),
+        ("Cmd+3 with two scenes changes nothing", two, Key::Num3, Modifiers::COMMAND, 2, Some("Scene")),
+        ("Cmd+Z undoes the last change", added, Key::Z, Modifiers::COMMAND, 1, None),
+        ("Cmd+Z waits while the name prompt is open", prompt, Key::Z, Modifiers::COMMAND, 2, None),
+    ];
+    for (case, setup, key, modifiers, scenes, shown) in rows {
+        let mut a = app();
+        let ctx = crate::test_context();
+        setup(&mut a, &ctx);
+        frame(&mut a, &ctx, vec![]);
+        frame(&mut a, &ctx, press(key, modifiers));
+        assert_eq!(a.studio().collection().scenes.len(), scenes, "{case}");
+        if let Some(shown) = shown {
+            assert_eq!(program_name(&a).as_deref(), Some(shown), "{case}");
+        }
+    }
+}
+
+#[test]
+fn redo_takes_cmd_y_and_cmd_shift_z_and_delete_removes_the_selected_source() {
     let mut a = app();
     let ctx = crate::test_context();
     run(&mut a, &ctx, "scene.add", json!({"name": "Extra"})).unwrap();
     a.studio.seal_history();
     frame(&mut a, &ctx, vec![]);
-    frame(&mut a, &ctx, press(Key::Z, Modifiers::COMMAND));
-    assert_eq!(a.studio().collection().scenes.len(), 1);
+    for (name, redo) in [("Cmd+Y", press(Key::Y, Modifiers::COMMAND)), ("Cmd+Shift+Z", press(Key::Z, Modifiers::COMMAND | Modifiers::SHIFT))] {
+        frame(&mut a, &ctx, press(Key::Z, Modifiers::COMMAND));
+        assert_eq!(a.studio().collection().scenes.len(), 1, "undone before {name}");
+        frame(&mut a, &ctx, redo);
+        assert_eq!(a.studio().collection().scenes.len(), 2, "{name} redoes");
+    }
+    run(&mut a, &ctx, "source.add", json!({"kind": "color", "name": "Backdrop"})).unwrap();
+    assert!(a.selection().is_some());
+    frame(&mut a, &ctx, vec![]);
+    frame(&mut a, &ctx, press(Key::Backspace, Modifiers::NONE));
+    assert_eq!(edit_items(&a), 1, "Backspace leaves the source");
+    assert!(a.notices.is_empty(), "Backspace posts nothing: {:?}", a.notices.iter().map(|(n, _)| n.msg.english()).collect::<Vec<_>>());
+    frame(&mut a, &ctx, press(Key::Delete, Modifiers::NONE));
+    assert_eq!(edit_items(&a), 0, "Delete removes the selected source");
+}
+
+/// A fixture that shows `bar` as the window's menu bar does, on Windows, with the menus'
+/// mnemonics and English labels.
+fn menu_fixture(bar: craft_menu::MenuBar) -> craft_ui::testing::Fixture {
+    let bar = Tracked::new(bar);
+    let mut f = craft_ui::testing::Fixture::new(move |ui| {
+        craft_menu::MenuBarUi::new(&bar).mnemonics(commands::MNEMONICS).english(commands::english_label).show(ui);
+    });
+    // Wide enough for every title, so none overflows into the bar's "…" menu.
+    f.os(craft_host::target::Os::Windows).room(egui::vec2(1600.0, 600.0));
+    f.settle();
+    f
+}
+
+/// The commands the fixture's runtime fired since the last call, with their sources.
+fn fixture_fired(f: &craft_ui::testing::Fixture) -> Vec<(CommandRef, craft_ui::runtime::commands::FireSource)> {
+    craft_ui::runtime::frame::take_output(f.ctx()).fired.into_iter().map(|fired| (fired.command, fired.source)).collect()
+}
+
+#[test]
+fn every_menu_fires_its_rows_as_menu_commands() {
+    use craft_ui::runtime::commands::FireSource;
+    let a = app();
+    // (menu, row, command)
+    let rows = [
+        ("File", "Show Recordings", "file.show_recordings"),
+        ("Edit", "Lock Preview", "view.lock_preview"),
+        ("View", "Stats", "view.stats"),
+        ("Docks", "Reset Docks", "dock.reset"),
+        ("Profile", "New…", "profile.new"),
+        ("Scene Collection", "Import…", "collection.import"),
+        ("Tools", "Available Encoders", "tools.encoders"),
+        ("Help", "Check for Updates…", "app.check_updates"),
+    ];
+    for (menu, label, id) in rows {
+        let mut f = menu_fixture(a.laid_menu_for(craft_menu::Target::Windows));
+        let title = f.by_label(menu).unwrap_or_else(|| panic!("no {menu} title"));
+        f.click(&title).settle();
+        let row = f.by_label(label).unwrap_or_else(|| panic!("no {label} row in {menu}"));
+        let _ = fixture_fired(&f);
+        f.click(&row).settle();
+        assert_eq!(fixture_fired(&f), [(CommandRef::new(id), FireSource::Menu)], "{menu} › {label}");
+    }
+}
+
+#[test]
+fn alt_letters_open_menus_and_run_rows_with_english_letters_where_a_label_has_none() {
+    use craft_ui::runtime::commands::FireSource;
+    let a = app();
+    // Alt+F opens File, and X runs Exit by the letter the menus prefer for it.
+    let mut f = menu_fixture(a.laid_menu_for(craft_menu::Target::Windows));
+    f.key(Key::F, Modifiers::ALT).settle();
+    let _ = fixture_fired(&f);
+    f.key(Key::X, Modifiers::NONE).settle();
+    assert_eq!(fixture_fired(&f), [(CommandRef::new("app.exit"), FireSource::Menu)]);
+    // A Japanese title has no letter a keyboard types: it shows File's letter after it.
+    i18n::set_lang(i18n::I18N.from_code("ja").unwrap());
+    let bar = a.laid_menu_for(craft_menu::Target::Windows);
+    let file = format!("{}(F)", tlc!("menu", "File"));
+    let mut f = menu_fixture(bar);
+    assert!(f.by_label(&file).is_some(), "no `{file}` title");
+    f.key(Key::F, Modifiers::ALT).settle();
+    let _ = fixture_fired(&f);
+    // The first row, Show Recordings, takes S from its English label.
+    f.key(Key::S, Modifiers::NONE).settle();
+    let fired = fixture_fired(&f);
+    i18n::set_lang(craft_i18n::Lang::EN);
+    assert_eq!(fired, [(CommandRef::new("file.show_recordings"), FireSource::Menu)]);
+}
+
+#[test]
+fn keys_the_window_or_a_text_field_owns_post_no_error() {
+    let mut a = app();
+    let ctx = crate::test_context();
+    frame(&mut a, &ctx, vec![]);
+    for (key, modifiers) in [
+        (Key::F6, Modifiers::NONE),
+        (Key::F6, Modifiers::SHIFT),
+        (Key::F10, Modifiers::NONE),
+        (Key::Escape, Modifiers::NONE),
+        (Key::Tab, Modifiers::NONE),
+        (Key::Backspace, Modifiers::NONE),
+        (Key::C, Modifiers::COMMAND),
+        (Key::X, Modifiers::COMMAND),
+        (Key::V, Modifiers::COMMAND),
+        (Key::A, Modifiers::COMMAND),
+    ] {
+        frame(&mut a, &ctx, press(key, modifiers));
+        frame(&mut a, &ctx, vec![]);
+        let notices: Vec<String> = a.notices.iter().map(|(n, _)| n.msg.english()).collect();
+        assert!(notices.is_empty(), "{key:?} with {modifiers:?}: {notices:?}");
+    }
+}
+
+#[test]
+fn window_key_commands_refuse_parameters_and_list_a_key_only_while_it_is_free() {
+    let mut a = app();
+    let ctx = crate::test_context();
+    frame(&mut a, &ctx, vec![]);
+    for (params, ok) in [(Value::Null, true), (json!({}), true), (json!({"direction": "back"}), false), (json!(3), false)] {
+        let got = run(&mut a, &ctx, "window.next_pane", params.clone());
+        assert_eq!(got.is_ok(), ok, "{params}: {got:?}");
+        if !ok {
+            assert_eq!(got, Err("`window.next_pane` takes no parameters".to_string()));
+        }
+    }
+    let shortcut = |a: &StudioApp, id: &str| a.command_list(Some(id)).into_iter().find(|c| c["id"] == id).map(|c| c["shortcut"].clone());
+    assert_eq!(shortcut(&a, "window.next_pane"), Some(json!("F6")));
+    assert_eq!(shortcut(&a, "window.focus_menu_bar"), Some(json!("F10")));
+    // With F6 bound to Stats, F6 runs Stats, so Next Pane lists no key.
+    let f6 = craft_keymap::Binding::parse("F6").unwrap();
+    a.keymap.assign(&CommandRef::new("view.stats"), f6, craft_keymap::Policy::Steal).unwrap();
+    assert_eq!(shortcut(&a, "view.stats"), Some(json!("F6")));
+    assert_eq!(shortcut(&a, "window.next_pane"), Some(Value::Null));
+    assert_eq!(shortcut(&a, "window.focus_menu_bar"), Some(json!("F10")));
 }
 
 #[test]

@@ -38,7 +38,7 @@ use craft_host::{AppInfo, Host};
 use craft_i18n::{I18n, Words};
 use craft_keymap::{CommandRef, Keymap, Overrides};
 use craft_menu::{LanguageChoice, MenuBar};
-use craft_ui::contract::{Bind, Entry, Props as _, Show as _, Tracked};
+use craft_ui::contract::{Bind, Entry, Props as _, Show as _, ShowContainer as _, Tracked};
 use craft_ui::pickers::Select;
 use craft_ui::runtime::commands::{AppCatalog, CommandInput};
 use craft_ui::runtime::frame::{FrameInput, FrameOutput};
@@ -947,6 +947,14 @@ impl StudioApp {
             "view.status_bar" => return Ok(self.toggle_pref(|p| &mut p.status_bar)),
             "view.lock_preview" => return Ok(self.toggle_pref(|p| &mut p.lock_preview)),
             id if id == "view.streaming" || id.starts_with("stream.destination") => return self.streaming_command(cmd),
+            id @ ("window.next_pane" | "window.previous_pane" | "window.focus_menu_bar") => {
+                if !(cmd.params.is_null() || cmd.params.as_object().is_some_and(serde_json::Map::is_empty)) {
+                    return Err(tmsg!("`{command}` takes no parameters", command = id));
+                }
+                // The runtime moves the focus in the next pass, as F6, Shift+F6 and F10 do.
+                let fired = craft_ui::runtime::commands::fire(ctx, CommandRef::new(id), craft_ui::runtime::commands::FireSource::Automation);
+                return Ok(json!({"fired": fired}));
+            }
             "view.fullscreen" => {
                 self.fullscreen = !self.fullscreen;
                 ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(self.fullscreen));
@@ -1425,12 +1433,16 @@ impl StudioApp {
     /// returns the frame's input: the root values of [`theme::root_env`] with the interface
     /// direction, the command catalog with the user's shortcuts, and the host in the interface
     /// language. egui's own theme follows the resolved mode, for the egui widgets the window still
-    /// draws itself.
+    /// draws itself. The window keys the runtime carried out itself (F6, F10) and the edit
+    /// commands the window has no use for (Copy, Paste, Backspace's Delete) are skipped.
     pub fn frame_input(&mut self, ctx: &egui::Context, out: FrameOutput) -> FrameInput {
         let modal = self.prompt.is_some() || self.confirm_exit || self.settings.is_some();
         if !modal {
             for fired in &out.fired {
-                let _ = self.perform(ctx, &commands::fired_command(&fired.command));
+                let cmd = commands::fired_command(&fired.command);
+                if !commands::runtime_runs(&cmd) && !commands::unused_edit(&cmd) {
+                    let _ = self.perform(ctx, &cmd);
+                }
             }
         }
         if *self.key_overrides != *self.keymap.overrides() {
@@ -1449,16 +1461,15 @@ impl StudioApp {
         FrameInput::new(root).commands(input).host(Arc::clone(&self.host))
     }
 
-    /// The runtime's command catalog: every command a shortcut can be given. A command a linked
-    /// framework set also defines (`edit.undo`, `edit.redo`) keeps the set's entry and takes this
-    /// app's default shortcuts.
+    /// The runtime's command catalog: every command a shortcut can be given. The commands a linked
+    /// framework set defines (`edit.undo`, `edit.redo`, `edit.delete`) stay the set's and take
+    /// this app's default shortcuts ([`commands::linked_defaults`]).
     fn catalog(&mut self) -> Option<AppCatalog> {
         if self.command_catalog.is_none() {
-            let defs = commands::runtime_catalog();
-            let replaced: Vec<(String, Vec<craft_keymap::Binding>)> = defs.iter().map(|d| (d.command.id.clone(), d.defaults.clone())).collect();
-            match AppCatalog::new(defs, 1) {
+            match AppCatalog::new(commands::runtime_catalog(), 1) {
                 Ok(catalog) => {
-                    self.command_catalog = Some(replaced.into_iter().fold(catalog, |c, (id, bindings)| c.replace_defaults(id, bindings)));
+                    let linked = commands::linked_defaults();
+                    self.command_catalog = Some(linked.into_iter().fold(catalog, |c, (id, bindings)| c.replace_defaults(id, bindings)));
                 }
                 Err(e) => log::warn!("command catalog: {e:?}"),
             }
@@ -1541,22 +1552,21 @@ impl StudioApp {
         let name = sel.and_then(|(_, s)| self.studio.collection().source(s)).map(|s| s.name.clone()).unwrap_or_default();
         let renaming = &mut self.renaming;
         let studio = &self.studio;
-        resp.context_menu(|ui| {
+        // A right-click opens the menu at the pointer; a row that runs closes it.
+        craft_ui::menu::Menu::context(tl!("Sources").to_string(), &resp).show(ui, |ui, _| {
             if let Some((item, source)) = sel {
                 docks::item_menu(ui, item, source, &name, renaming, acts);
-                ui.separator();
+                craft_ui::display::Divider::horizontal().show(ui);
             }
-            ui.menu_button(tl!("Add"), |ui| {
+            craft_ui::menu::Menu::submenu_row(ui, tl!("Add").to_string(), |ui, _| {
                 for p in studio.registry().sources() {
-                    if ui.button(tl!(p.name())).clicked() {
+                    if craft_ui::menu::MenuItem::new(tl!(p.name()).to_string()).show(ui).ran {
                         acts.push(Act::AddSource { kind: p.id().to_string() });
-                        ui.close();
                     }
                 }
             });
-            if ui.checkbox(&mut locked.clone(), tid!("view.lock_preview", "Lock Preview")).clicked() {
+            if craft_ui::menu::MenuItem::new(tid!("view.lock_preview", "Lock Preview").to_string()).check(locked).show(ui).ran {
                 acts.push(Act::run("view.lock_preview", json!({})));
-                ui.close();
             }
         });
     }

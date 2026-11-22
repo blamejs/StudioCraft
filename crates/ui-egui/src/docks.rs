@@ -4,6 +4,9 @@
 
 use std::collections::HashMap;
 
+use craft_ui::contract::{Show as _, ShowContainer as _};
+use craft_ui::display::Divider;
+use craft_ui::menu::{Menu, MenuItem};
 use egui::{Color32, Rect, RichText, Sense, Ui, pos2, vec2};
 use serde_json::json;
 use studiocraft_engine::lanes::{AppKey, Lane, LaneKind, Lanes};
@@ -312,7 +315,7 @@ pub fn sources(ui: &mut Ui, studio: &Studio, st: &mut DockState, acts: &mut Vec<
                 if r.double_clicked() {
                     acts.push(Act::Properties(src.id));
                 }
-                r.context_menu(|ui| {
+                Menu::context(src.name.clone(), &r).show(ui, |ui, _| {
                     acts.push(Act::Select(Some(it.id)));
                     item_menu(ui, it.id, src.id, &src.name, st.renaming, acts);
                 });
@@ -322,21 +325,20 @@ pub fn sources(ui: &mut Ui, studio: &Studio, st: &mut DockState, acts: &mut Vec<
     drawn
 }
 
-/// The context menu of a scene item (Sources dock and preview).
+/// The rows of a scene item's context menu (Sources dock and preview), inside a menu body. A row
+/// that runs closes the menu.
 pub fn item_menu(ui: &mut Ui, item: ItemId, source: SourceId, name: &str, renaming: &mut Option<(Rename, String)>, acts: &mut Vec<Act>) {
-    if ui.button(tl!("Rename")).clicked() {
+    let row = |ui: &mut Ui, label: &str| MenuItem::new(label.to_string()).show(ui).ran;
+    if row(ui, tl!("Rename")) {
         *renaming = Some((Rename::Source(source), name.to_string()));
-        ui.close();
     }
-    if ui.button(tid!("selection.properties", "Properties…")).clicked() {
+    if row(ui, tid!("selection.properties", "Properties…")) {
         acts.push(Act::Properties(source));
-        ui.close();
     }
-    if ui.button(tid!("selection.filters", "Filters…")).clicked() {
+    if row(ui, tid!("selection.filters", "Filters…")) {
         acts.push(Act::Filters(source));
-        ui.close();
     }
-    ui.menu_button(tlc!("menu", "Transform"), |ui| {
+    Menu::submenu_row(ui, tlc!("menu", "Transform").to_string(), |ui, _| {
         for (id, label) in [
             ("selection.reset", "Reset Transform"),
             ("selection.rotate_cw", "Rotate 90° Clockwise"),
@@ -345,28 +347,24 @@ pub fn item_menu(ui: &mut Ui, item: ItemId, source: SourceId, name: &str, renami
             ("selection.stretch", "Stretch to Screen"),
             ("selection.center", "Center to Screen"),
         ] {
-            if ui.button(tid!(id, label)).clicked() {
+            if row(ui, tid!(id, label)) {
                 acts.push(Act::run(id, json!({})));
-                ui.close();
             }
         }
     });
-    ui.menu_button(tl!("Order"), |ui| {
+    Menu::submenu_row(ui, tl!("Order").to_string(), |ui, _| {
         for (to, label) in MOVES {
-            if ui.button(tl!(label)).clicked() {
+            if row(ui, tl!(label)) {
                 acts.push(Act::run("item.move", json!({"item": item, "to": to})));
-                ui.close();
             }
         }
     });
-    ui.separator();
-    if ui.button(tl!("Duplicate")).clicked() {
+    Divider::horizontal().show(ui);
+    if row(ui, tl!("Duplicate")) {
         acts.push(Act::run("item.duplicate", json!({"item": item})));
-        ui.close();
     }
-    if ui.button(tl!("Remove")).clicked() {
+    if row(ui, tl!("Remove")) {
         acts.push(Act::run("item.remove", json!({"item": item})));
-        ui.close();
     }
 }
 
