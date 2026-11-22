@@ -1020,7 +1020,9 @@ impl StudioApp {
             }
             "view.status_bar" => return Ok(self.toggle_pref(|p| &mut p.status_bar)),
             "view.lock_preview" => return Ok(self.toggle_pref(|p| &mut p.lock_preview)),
-            id if id == "view.streaming" || id.starts_with("stream.destination") => return self.streaming_command(cmd),
+            id if id == "view.streaming" || id == "stream.reconnect_set" || id.starts_with("stream.destination") => {
+                return self.streaming_command(cmd);
+            }
             "view.fullscreen" => {
                 self.fullscreen = !self.fullscreen;
                 ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(self.fullscreen));

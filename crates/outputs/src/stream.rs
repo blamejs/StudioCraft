@@ -10,10 +10,13 @@
 //!   then sends the packets from the next keyframe on, timed from that keyframe. Its ring holds
 //!   [`RING_SECONDS`] seconds of the stream. A destination that falls further behind loses packets
 //!   up to the next keyframe, and the other destinations lose nothing.
-//! - A destination whose connection cannot be made, or is lost, is tried again after 2, 4, 8 and
-//!   16 seconds and then every 30 seconds. It gives up after [`MAX_TRIES`] tries in a row fail; a
-//!   connection lost within [`STABLE_AFTER`] of being made counts as a failed try. A server that
-//!   refuses the stream, and an address or key that is not valid, are not tried again.
+//! - A destination whose connection cannot be made, or is lost, is tried again as the profile's
+//!   [`ReconnectSettings`] say: the first wait, then a wait twice as long each time up to the
+//!   longest wait (2, 4, 8, 16, 30, 30... seconds by default), each wait cut by a random 0 to
+//!   [`JITTER_PERCENT`] % and never below 1 s by that cut. It gives up after the set number of tries
+//!   in a row fail, and at the first failure when automatic reconnect is off; a connection lost
+//!   within [`STABLE_AFTER`] of being made counts as a failed try. A server that refuses the
+//!   stream, and an address or key that is not valid, are not tried again.
 //! - A failure of one destination stops neither the other destinations nor the encoders. The
 //!   stream fails when every destination has failed.
 //! - A destination can be stopped and started again while the stream runs.
@@ -37,6 +40,7 @@ use studiocraft_media::audio::{PooledBlock, SAMPLE_RATE};
 use studiocraft_media::queue::Fifo;
 use studiocraft_media::stats::EncoderStats;
 use studiocraft_media::video::PooledFrame;
+use studiocraft_model::ReconnectSettings;
 use studiocraft_plugin::{
     AddressOutcome, Cause, DestinationCounts, DestinationState, DestinationStatus, EncoderKind, Failure, OutputInstance, OutputJob, OutputStatus,
     PluginError, RateControl,
@@ -46,11 +50,11 @@ use crate::native::{DISK_WAIT, Item, Native, PacketQueue, QUEUE_BYTES, QUEUE_SPA
 
 /// Seconds of the stream each destination's ring holds.
 pub const RING_SECONDS: u32 = 4;
-/// Tries in a row that may fail before a destination gives up.
-pub const MAX_TRIES: u32 = 10;
-/// The wait before each try again: the first, the second, and so on; the last one repeats.
-pub const RETRY_DELAYS: [Duration; 5] =
-    [Duration::from_secs(2), Duration::from_secs(4), Duration::from_secs(8), Duration::from_secs(16), Duration::from_secs(30)];
+/// The most a wait before a try again is cut by, in percent, so destinations that lost their
+/// connections together do not all try again at the same moment.
+pub const JITTER_PERCENT: u64 = 20;
+/// The shortest wait the random cut leaves.
+const MIN_JITTERED_WAIT: Duration = Duration::from_secs(1);
 /// How long a connection must last before its loss starts a new count of failed tries.
 pub const STABLE_AFTER: Duration = Duration::from_secs(30);
 /// How long a destination's thread waits for a packet before it reads what the server sent.
@@ -128,8 +132,15 @@ fn split_name(url: &str) -> Option<(&str, &str)> {
 /// The time limits of the destinations.
 #[derive(Clone, Debug)]
 pub(crate) struct Timing {
-    pub(crate) retry: Vec<Duration>,
+    /// Whether a failed or lost connection is tried again at all.
+    pub(crate) reconnect: bool,
+    /// The wait before the first try again.
+    pub(crate) first: Duration,
+    /// The longest wait before a try again.
+    pub(crate) longest: Duration,
     pub(crate) max_tries: u32,
+    /// Whether each wait is cut by a random amount; tests turn it off.
+    pub(crate) jitter: bool,
     pub(crate) connect: Duration,
     pub(crate) setup: Duration,
     pub(crate) stall: Duration,
@@ -139,9 +150,18 @@ pub(crate) struct Timing {
 
 impl Default for Timing {
     fn default() -> Self {
+        Timing::from(ReconnectSettings::default())
+    }
+}
+
+impl From<ReconnectSettings> for Timing {
+    fn from(r: ReconnectSettings) -> Self {
         Timing {
-            retry: RETRY_DELAYS.to_vec(),
-            max_tries: MAX_TRIES,
+            reconnect: r.enabled,
+            first: Duration::from_secs(r.first_delay_s.into()),
+            longest: Duration::from_secs(r.max_delay_s.into()),
+            max_tries: r.max_tries,
+            jitter: true,
             connect: craft_rtmp::DEFAULT_CONNECT_TIMEOUT,
             setup: craft_rtmp::DEFAULT_SETUP_TIMEOUT,
             stall: craft_rtmp::DEFAULT_STALL_TIMEOUT,
@@ -152,11 +172,50 @@ impl Default for Timing {
 }
 
 impl Timing {
-    /// The wait before the try that follows `failures` failed tries in a row (at least 1).
+    /// The wait before the try that follows `failures` failed tries in a row (at least 1): the
+    /// first wait doubled for each failure after the first, at most the longest wait.
     fn delay(&self, failures: u32) -> Duration {
-        let i = usize::try_from(failures.saturating_sub(1)).unwrap_or(usize::MAX);
-        self.retry.get(i).or(self.retry.last()).copied().unwrap_or(Duration::ZERO)
+        let doublings = failures.saturating_sub(1).min(31);
+        self.first.checked_mul(1 << doublings).map_or(self.longest, |d| d.min(self.longest))
     }
+
+    /// Whether a destination gives up after `failures` failed tries in a row.
+    fn gives_up(&self, failures: u32) -> bool {
+        !self.reconnect || failures >= self.max_tries
+    }
+}
+
+/// `wait` cut by `random` (taken modulo [`JITTER_PERCENT`] + 1) percent, in tenths of a percent so
+/// the cut is not a whole second; a wait the cut would bring below [`MIN_JITTERED_WAIT`] stops
+/// there, and a wait already below it is kept.
+fn jittered(wait: Duration, random: u64) -> Duration {
+    let per_mille = u128::from(random % (JITTER_PERCENT * 10 + 1));
+    let nanos = wait.as_nanos();
+    let cut = nanos.saturating_mul(per_mille) / 1000;
+    let left = Duration::from_nanos(u64::try_from(nanos.saturating_sub(cut)).unwrap_or(u64::MAX));
+    left.max(wait.min(MIN_JITTERED_WAIT))
+}
+
+/// The next number of a destination's xorshift sequence.
+fn next_random(state: &mut u64) -> u64 {
+    let mut x = *state;
+    x ^= x << 13;
+    x ^= x >> 7;
+    x ^= x << 17;
+    *state = x;
+    x
+}
+
+/// A nonzero seed for a destination's sequence, from its id and the time it starts.
+fn seed(id: &str) -> u64 {
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs() ^ u64::from(d.subsec_nanos()) << 32);
+    // FNV-1a over the id, then the time mixed in.
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for b in id.bytes() {
+        h = (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3);
+    }
+    let s = h ^ now;
+    if s == 0 { 0x9e37_79b9_7f4a_7c15 } else { s }
 }
 
 /// What each connection sends before the packets.
@@ -491,8 +550,11 @@ fn connect_cause(e: &std::io::Error) -> Cause {
     }
 }
 
-/// `f` with "gave up after `tries` tries" added to its detail.
-fn gave_up(f: Failure, tries: u32) -> Failure {
+/// `f` with "gave up after `tries` tries", or "automatic reconnect is off", added to its detail.
+fn gave_up(timing: &Timing, f: Failure, tries: u32) -> Failure {
+    if !timing.reconnect {
+        return Failure { detail: format!("{}; automatic reconnect is off", f.detail), ..f };
+    }
     Failure { detail: format!("{}; gave up after {tries} tries", f.detail), ..f }
 }
 
@@ -536,10 +598,12 @@ fn run(hub: &Hub, d: &Dest) {
     let _watch = Watch(d);
     let mut failures = 0u32;
     let mut last_error: Option<Failure> = None;
+    let mut random = seed(&d.target.id);
     loop {
         if let Some(failure) = last_error.take() {
             d.set(DestinationStatus::Retrying { attempt: failures.saturating_add(1), failure });
-            wait(hub, d, hub.timing.delay(failures.max(1)));
+            let delay = hub.timing.delay(failures.max(1));
+            wait(hub, d, if hub.timing.jitter { jittered(delay, next_random(&mut random)) } else { delay });
         }
         if d.ends(hub) {
             return;
@@ -554,8 +618,8 @@ fn run(hub: &Hub, d: &Dest) {
             Err(e) if is_final(&e) => return d.fail(failure(&e, false)),
             Err(e) => {
                 failures = failures.saturating_add(1);
-                if failures >= hub.timing.max_tries {
-                    return d.fail(gave_up(failure(&e, false), failures));
+                if hub.timing.gives_up(failures) {
+                    return d.fail(gave_up(&hub.timing, failure(&e, false), failures));
                 }
                 last_error = Some(failure(&e, false));
                 continue;
@@ -582,8 +646,8 @@ fn run(hub: &Hub, d: &Dest) {
                 d.reconnects.fetch_add(1, Ordering::Relaxed);
                 // A connection lost soon after it was made counts as another failed try.
                 failures = if started.elapsed() >= hub.timing.stable { 1 } else { failures.saturating_add(1) };
-                if failures >= hub.timing.max_tries {
-                    return d.fail(gave_up(e, failures));
+                if hub.timing.gives_up(failures) {
+                    return d.fail(gave_up(&hub.timing, e, failures));
                 }
                 last_error = Some(e);
             }
@@ -709,8 +773,10 @@ pub struct Streaming {
 
 impl Streaming {
     /// Open the encoders for `job` and start sending to each enabled destination of `targets`.
-    pub fn start(job: &OutputJob, targets: Vec<Target>) -> Result<Streaming, PluginError> {
-        Self::start_timed(job, targets, Timing::default())
+    /// Starts the stream to `targets`, each trying again as `reconnect` says.
+    pub fn start(job: &OutputJob, targets: Vec<Target>, reconnect: ReconnectSettings) -> Result<Streaming, PluginError> {
+        reconnect.check().map_err(PluginError::Failed)?;
+        Self::start_timed(job, targets, Timing::from(reconnect))
     }
 
     pub(crate) fn start_timed(job: &OutputJob, targets: Vec<Target>, timing: Timing) -> Result<Streaming, PluginError> {

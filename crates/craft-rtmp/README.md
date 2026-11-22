@@ -56,7 +56,8 @@ License: MIT OR Apache-2.0.
 ## Timeouts and errors
 
 - `Config::connect_timeout` (10 s) bounds each TCP connection attempt, so the TCP part of a
-  connect takes at most 40 s. The system resolver is not bounded. When no address accepts the
+  connect takes at most 40 s: at most 4 addresses (`MAX_ADDRESSES`) are tried, alternating
+  between IPv6 and IPv4 when the name resolved to both. The system resolver is not bounded. When no address accepts the
   connection, `Error::Connect` lists each address tried with the error it gave.
 - Every timeout must be longer than 0 and at most 24 hours (`MAX_TIMEOUT`).
 - `Config::setup_timeout` (15 s) starts once the TCP connection is open and bounds the reads and

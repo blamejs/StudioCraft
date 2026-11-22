@@ -615,7 +615,10 @@ or add an undo step. A parameter is an error.
 
 `view.streaming` opens the Streaming window, or closes it when it is open, and returns `{"on"}`.
 
-`stream.destinations` takes no parameters and returns `{"destinations", "running", "max"}`.
+`stream.destinations` takes no parameters and returns `{"destinations", "running", "max",
+"reconnect"}`, and `running_reconnect` while a stream of this profile runs. `reconnect` holds the
+profile's automatic reconnect settings and `running_reconnect` the ones the running stream started
+with, each `{"enabled", "first_delay_s", "max_delay_s", "max_tries"}` (see `stream.reconnect_set`).
 `max` is 16. Each destination is `{"id", "name", "enabled", "service", "server", "key", "status"}`,
 where `service` is the id of the streaming service it is set up for or empty for a custom server,
 `key` is `profile`, `held` or `none` and `server` shows a user name and password before the host, a
@@ -628,7 +631,7 @@ added after the stream started, and otherwise `connecting`, `live`, `retrying`, 
 
 | `cause` | Meaning |
 |---|---|
-| `no_route` | This computer has no network route to any address of the server. |
+| `no_route` | This computer has no network route to any of the server's addresses that were tried (at most 4). |
 | `lookup_failed` | The server's name could not be looked up, or it has no address. On macOS and Linux every failed lookup is `lookup_failed`, with the system's text in `error`. |
 | `lookup_not_found` | Windows only: the DNS server answered that the name does not exist. |
 | `lookup_no_answer` | Windows only: the DNS server did not answer. |
@@ -696,6 +699,15 @@ another profile, and a start of a destination whose held key is not set. While a
 profile runs, each destination's `status` is `not_in_stream`. Each change is saved in the profile, and an open Settings window shows the new
 destinations. Keys held for the session are set in the Streaming window only and are not command
 parameters.
+
+`stream.reconnect_set` takes `{"enabled"?, "first_delay_s"?, "max_delay_s"?, "max_tries"?}` and
+changes the profile's automatic reconnect settings; a value left out keeps its current value. It
+returns `{"changed", "reconnect"}`, and a call that changes nothing does not save the profile.
+`first_delay_s` is 1 to 60, `max_delay_s` is from `first_delay_s` to 600 and `max_tries` is 1 to
+100; these ranges and the defaults (on, 2, 30 and 10) are StudioCraft's own values. A value out of
+range or of the wrong type is an error and changes nothing. The settings apply to the next stream;
+a running stream keeps the ones it started with. A profile file whose settings are out of range is
+refused when it is read.
 
 ### `video.displays` and `video.canvas_from_display`
 
