@@ -6,9 +6,22 @@
 
 use std::time::{Duration, UNIX_EPOCH};
 
-use craft_ui::contract::{Bind, Entry, Props as _, Show as _};
+use craft_theme::ControlSize;
+use craft_theme::variant::Tone;
+use craft_ui::buttons::{Button, Link, ToggleButton};
+use craft_ui::choice::Checkbox;
+use craft_ui::contract::{Bind, Entry, Props as _, Show as _, ShowContainer as _, Sizing, TooltipSpec, Trigger};
+use craft_ui::controls::disclosure::DisclosureGlyph;
+use craft_ui::dialog::Dialog;
+use craft_ui::display::{Divider, Elide, Shade, Spinner, Text};
+use craft_ui::form::{Field, FieldGroup};
+use craft_ui::layout_components::{Row, Stack};
+use craft_ui::menu::{Menu, MenuItem};
 use craft_ui::pickers::Select;
-use egui::{Color32, ComboBox, RichText, Role, Sense, Ui, WidgetInfo, vec2};
+use craft_ui::sections::{GroupBox, Section};
+use craft_ui::style::TypeRole;
+use craft_ui::text::TextField;
+use egui::{Role, Sense, Ui, WidgetInfo, vec2};
 use serde_json::{Value, json};
 use studiocraft_model::profile::{MAX_DESTINATION_ID, MAX_DESTINATIONS, PRIMARY_DESTINATION};
 use studiocraft_model::services::{self, SERVICES};
@@ -20,7 +33,6 @@ use studiocraft_studio::diagnose::{Check, CheckState, Diagnosis, Evidence, Outco
 use crate::i18n::Msg;
 use crate::logos::{self, Logos, ROW_TILE, TileStyle};
 use crate::settings::key_source;
-use crate::theme;
 use crate::{Act, StudioApp};
 
 /// Longest destination name, in characters.
@@ -130,11 +142,6 @@ impl Edit {
     }
 }
 
-/// The name of the service a destination was set up for, or Custom server.
-fn service_name(id: &str) -> String {
-    services::service(id).map_or_else(|| tl!("Custom server").to_string(), |svc| svc.name.to_string())
-}
-
 /// `server` as the window shows it: a user name and password before the host, a part after the
 /// application, which can be a key, and a query are shown as dots, whichever key source the
 /// destination uses.
@@ -186,20 +193,13 @@ fn panel_key_source(key: &KeyRef) -> String {
     }
 }
 
-/// How a status line is drawn.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Tone {
-    Plain,
-    Good,
-    Warn,
-}
-
-/// What destination `d` is doing, in the interface language: from `live` while the stream runs,
-/// otherwise whether starting the stream sends to it.
+/// What destination `d` is doing, in the interface language, and the tone of its line (`Neutral`
+/// for the plain text color): from `live` while the stream runs, otherwise whether starting the
+/// stream sends to it.
 pub(crate) fn status_text(d: &Destination, running: bool, live: Option<&DestinationState>) -> (String, Tone) {
     match (running, live) {
         (true, Some(s)) => match &s.status {
-            DestinationStatus::Connecting => (tl!("Connecting").to_string(), Tone::Plain),
+            DestinationStatus::Connecting => (tl!("Connecting").to_string(), Tone::Neutral),
             DestinationStatus::Live => (tl!("Live").to_string(), Tone::Good),
             DestinationStatus::Retrying { attempt, failure } => (
                 craft_i18n::fmt(
@@ -215,12 +215,12 @@ pub(crate) fn status_text(d: &Destination, running: bool, live: Option<&Destinat
                 ),
                 Tone::Warn,
             ),
-            DestinationStatus::Stopped => (tl!("Stopped").to_string(), Tone::Plain),
+            DestinationStatus::Stopped => (tl!("Stopped").to_string(), Tone::Neutral),
             DestinationStatus::Failed(failure) => (craft_i18n::fmt(tl!("Failed: {error}"), &[("error", cause_text(failure.cause))]), Tone::Warn),
         },
-        (true, None) => (tl!("Not in this stream; it is sent to from the next start").to_string(), Tone::Plain),
-        (false, _) if d.enabled => (tl!("Sent to when the stream starts").to_string(), Tone::Plain),
-        (false, _) => (tl!("Off").to_string(), Tone::Plain),
+        (true, None) => (tl!("Not in this stream; it is sent to from the next start").to_string(), Tone::Neutral),
+        (false, _) if d.enabled => (tl!("Sent to when the stream starts").to_string(), Tone::Neutral),
+        (false, _) => (tl!("Off").to_string(), Tone::Neutral),
     }
 }
 
@@ -370,64 +370,59 @@ fn listed_check(state: &CheckState) -> Value {
     }
 }
 
-/// The colors of a destination's status line and key warning.
-#[derive(Clone, Copy)]
-struct Tones {
-    good: Color32,
-    warn: Color32,
-}
-
 /// The Streaming window's contents.
 pub(crate) fn show(ui: &mut Ui, view: &View, panel: &mut StreamingPanel, acts: &mut Vec<Act>) {
-    let tones = theme::with_root(ui.ctx(), |cx| {
-        let status = &cx.tokens.color.status;
-        Tones { good: theme::color(cx, status.good.fg), warn: theme::color(cx, status.warn.fg) }
-    });
     let count = view.stream.destinations.len();
-    ui.horizontal(|ui| {
-        let full = count >= MAX_DESTINATIONS;
-        // A destination for a streaming service, or for a server of the user's own choosing.
-        ui.add_enabled_ui(!full, |ui| {
-            ui.menu_button(tl!("Add Destination"), |ui| {
-                for svc in SERVICES {
-                    if ui.button(svc.name).clicked() {
-                        acts.push(Act::run("stream.destination_add", json!({"service": svc.id})));
-                        ui.close();
-                    }
-                }
-                ui.separator();
-                if ui.button(tl!("Custom server")).clicked() {
-                    acts.push(Act::run("stream.destination_add", json!({})));
-                    ui.close();
-                }
-            });
-        });
-        ui.weak(craft_i18n::fmt(tl!("{n} of {max} destinations"), &[("n", &count.to_string()), ("max", &MAX_DESTINATIONS.to_string())]));
+    let _ = Row::new().show(ui, |ui, _| {
+        add_menu(ui, count >= MAX_DESTINATIONS, acts);
+        let shown = craft_i18n::fmt(tl!("{n} of {max} destinations"), &[("n", &count.to_string()), ("max", &MAX_DESTINATIONS.to_string())]);
+        let _ = Text::new(shown).shade(Shade::Muted).show(ui);
     });
     if count == 0 {
-        ui.weak(tl!("No destinations yet. Add one to stream to it."));
+        let _ = Text::new(tl!("No destinations yet. Add one to stream to it.")).shade(Shade::Muted).show(ui);
     }
     if view.running {
-        ui.weak(tl!("Server and key changes are used from the next start of the stream."));
+        let _ = Text::new(tl!("Server and key changes are used from the next start of the stream.")).shade(Shade::Muted).show(ui);
     }
-    ui.separator();
-    egui::ScrollArea::vertical().id_salt("streaming").auto_shrink([false, true]).show(ui, |ui| {
-        for d in &view.stream.destinations {
-            let live = view.live.iter().find(|s| s.id == d.id);
-            ui.push_id(("destination", &d.id), |ui| row(ui, view, d, live, panel, acts, tones));
-            ui.separator();
+    Divider::horizontal().show(ui);
+    for d in &view.stream.destinations {
+        let live = view.live.iter().find(|s| s.id == d.id);
+        let _ = Stack::new().fill_width().id_salt(("destination", &d.id)).show(ui, |ui, _| row(ui, view, d, live, panel, acts));
+        Divider::horizontal().show(ui);
+    }
+}
+
+/// Add Destination and its menu: a destination for a streaming service, or for a server of the
+/// user's own choosing. The button is off while the profile holds `full` destinations.
+fn add_menu(ui: &mut Ui, full: bool, acts: &mut Vec<Act>) {
+    let label = tl!("Add Destination");
+    let button = Button::new(label).trailing_icon(DisclosureGlyph::menu_button()).enabled(!full).id_salt("add-destination").show(ui);
+    Menu::new(label).opened_by(&button.response, Trigger::Click).id_salt("add-destination-menu").show(ui, |ui, _| {
+        for svc in SERVICES {
+            if MenuItem::new(svc.name).show(ui).ran {
+                acts.push(Act::run("stream.destination_add", json!({"service": svc.id})));
+            }
+        }
+        Divider::horizontal().show(ui);
+        if MenuItem::new(tl!("Custom server")).show(ui).ran {
+            acts.push(Act::run("stream.destination_add", json!({})));
         }
     });
 }
 
-fn row(ui: &mut Ui, view: &View, d: &Destination, live: Option<&DestinationState>, panel: &mut StreamingPanel, acts: &mut Vec<Act>, tones: Tones) {
+/// `text` in `tone`, or in the plain text color for `Neutral`.
+fn toned(text: Text, tone: Tone) -> Text {
+    if tone == Tone::Neutral { text } else { text.tone(tone) }
+}
+
+fn row(ui: &mut Ui, view: &View, d: &Destination, live: Option<&DestinationState>, panel: &mut StreamingPanel, acts: &mut Vec<Act>) {
     let preset = services::service(&d.service);
     let title = match preset {
         _ if !d.name.trim().is_empty() => d.name.clone(),
         Some(svc) => svc.name.to_string(),
         None => d.id.clone(),
     };
-    ui.horizontal(|ui| {
+    let _ = Row::new().fill_width().show(ui, |ui, _| {
         // A destination set up for a service shows the service's logo where it may stand beside
         // text at this size, and a plain tile otherwise.
         if preset.is_some() {
@@ -441,56 +436,64 @@ fn row(ui: &mut Ui, view: &View, d: &Destination, live: Option<&DestinationState
                 }
             }
         }
+        // The check box takes the room the buttons leave, so they stand at the row's end edge.
         let mut on = d.enabled;
-        if ui.checkbox(&mut on, RichText::new(title).strong()).on_hover_text(tl!("Send to this destination when the stream starts")).changed() {
+        let _ = Checkbox::new(Bind::bound(&mut on))
+            .label(title.clone())
+            .tooltip(tl!("Send to this destination when the stream starts"))
+            .sizing(Sizing::FillWidth)
+            .id_salt("enabled")
+            .show(ui);
+        if on != d.enabled {
             acts.push(Act::run("stream.destination_set", json!({"id": d.id, "enabled": on})));
         }
-        ui.with_layout(crate::i18n::trailing(ui), |ui| {
-            let editing = panel.editing.as_ref().is_some_and(|e| e.id == d.id);
-            let can_remove = !(view.running && live.is_some_and(sending));
-            let remove = ui.add_enabled(can_remove, egui::Button::new(tl!("Remove")));
-            if remove.on_disabled_hover_text(tl!("Stop this destination before removing it")).clicked() {
-                acts.push(Act::run("stream.destination_remove", json!({"id": d.id})));
-            }
-            if ui.selectable_label(editing, tl!("Edit")).clicked() {
-                panel.editing = if editing { None } else { Some(Edit::of(d)) };
-            }
-            if let Some(s) = live.filter(|_| view.running) {
-                if sending(s) {
-                    if ui.button(tl!("Stop")).clicked() {
-                        acts.push(Act::run("stream.destination_stop", json!({"id": d.id})));
-                    }
-                } else if ui.button(tl!("Start")).clicked() {
-                    acts.push(Act::run("stream.destination_start", json!({"id": d.id})));
+        if let Some(s) = live.filter(|_| view.running) {
+            if sending(s) {
+                if Button::new(tl!("Stop")).id_salt("stop").show(ui).clicked() {
+                    acts.push(Act::run("stream.destination_stop", json!({"id": d.id})));
                 }
+            } else if Button::new(tl!("Start")).id_salt("start").show(ui).clicked() {
+                acts.push(Act::run("stream.destination_start", json!({"id": d.id})));
             }
-        });
+        }
+        let editing = panel.editing.as_ref().is_some_and(|e| e.id == d.id);
+        let mut open = editing;
+        let _ = ToggleButton::new(tl!("Edit"), Bind::bound(&mut open)).id_salt("edit").show(ui);
+        if open != editing {
+            panel.editing = open.then(|| Edit::of(d));
+        }
+        // A destination the running stream sends to says why it cannot be removed.
+        let can_remove = !(view.running && live.is_some_and(sending));
+        let mut remove = Button::new(tl!("Remove")).enabled(can_remove).id_salt("remove");
+        if !can_remove {
+            let reason = tl!("Stop this destination before removing it");
+            remove = remove.tooltip(TooltipSpec::new(reason).disabled_text(reason));
+        }
+        if remove.show(ui).clicked() {
+            acts.push(Act::run("stream.destination_remove", json!({"id": d.id})));
+        }
     });
     if let Some(svc) = preset {
-        ui.label(RichText::new(craft_i18n::fmt(tl!("Stream to {service}"), &[("service", svc.name)])).small());
+        let _ = Text::new(craft_i18n::fmt(tl!("Stream to {service}"), &[("service", svc.name)])).role(TypeRole::Caption).show(ui);
     }
     let server = if d.server.trim().is_empty() { tl!("No server set").to_string() } else { shown_server(&d.server) };
-    ui.monospace(server);
-    ui.label(RichText::new(panel_key_source(&d.key)).small().weak());
+    let _ = Text::new(server).role(TypeRole::Mono).elide(Elide::Middle).show(ui);
+    let _ = Text::new(panel_key_source(&d.key)).role(TypeRole::Caption).shade(Shade::Muted).show(ui);
     if let KeyRef::Held(name) = &d.key
         && !(view.held)(name)
     {
-        ui.colored_label(tones.warn, RichText::new(tl!("No key is held for this session yet")).small());
+        let _ = Text::new(tl!("No key is held for this session yet")).role(TypeRole::Caption).tone(Tone::Warn).show(ui);
     }
     let (text, tone) = status_text(d, view.running, live);
-    let color = match tone {
-        Tone::Plain => ui.visuals().text_color(),
-        Tone::Good => tones.good,
-        Tone::Warn => tones.warn,
-    };
-    let status = ui.colored_label(color, text);
+    let mut status = toned(Text::new(text), tone);
     if let Some(detail) = status_detail(view.running, live) {
-        status.on_hover_text(detail);
+        status = status.tooltip(TooltipSpec::new(detail));
     }
-    check_row(ui, view, d, acts, tones);
+    let _ = status.show(ui);
+    check_row(ui, view, d, acts);
     let StreamingPanel { editing, logos, .. } = panel;
     if let Some(e) = editing.as_mut().filter(|e| e.id == d.id) {
-        let close = details(ui, e, view, logos, acts);
+        let close = details(ui, e, &title, view, logos, acts);
         if close {
             *editing = None;
         }
@@ -498,38 +501,40 @@ fn row(ui: &mut Ui, view: &View, d: &Destination, live: Option<&DestinationState
 }
 
 /// Check Connection for destination `d`, and what its last check found, with the evidence in a
-/// list that opens.
-fn check_row(ui: &mut Ui, view: &View, d: &Destination, acts: &mut Vec<Act>, tones: Tones) {
+/// section that opens.
+fn check_row(ui: &mut Ui, view: &View, d: &Destination, acts: &mut Vec<Act>) {
     let check = view.checks.iter().find(|(id, _)| *id == d.id).map(|(_, c)| c);
     let running = matches!(check, Some(CheckState::Running { .. }));
-    ui.horizontal(|ui| {
+    let _ = Row::new().show(ui, |ui, _| {
         let has_server = !d.server.trim().is_empty();
-        let button = ui.add_enabled(has_server && !running, egui::Button::new(tl!("Check Connection")).small());
-        let button = button.on_hover_text(tl!(
+        let mut tip = TooltipSpec::new(tl!(
             "Asks this computer whether it has a route to the server, looks the server's name up, and connects to the server on its \
              port and on port 443, with a secure connection where the address uses one. For a service that publishes them, it also \
              reads the service's list of ingest servers and status summary and connects to two of its other ingest servers. It sends \
              no stream key and nothing of the address after the server's name. Each server it contacts sees this computer's address, \
              and a secure connection sends the server's name unencrypted."
         ));
-        let button = if has_server { button } else { button.on_disabled_hover_text(tl!("Set a server for this destination first")) };
-        if button.clicked() {
+        if !has_server {
+            tip = tip.disabled_text(tl!("Set a server for this destination first"));
+        }
+        let button = Button::new(tl!("Check Connection")).size(ControlSize::Sm).enabled(has_server && !running).tooltip(tip).id_salt("check");
+        if button.show(ui).clicked() {
             acts.push(Act::run("stream.diagnose", json!({"id": d.id})));
         }
         if running {
-            ui.spinner();
-            ui.weak(tl!("Checking the connection…"));
+            let _ = Spinner::new().show(ui);
+            let _ = Text::new(tl!("Checking the connection…")).shade(Shade::Muted).show(ui);
         }
     });
     let Some(CheckState::Done(diag)) = check else { return };
-    let color = if diag.verdict == Verdict::Reachable { tones.good } else { tones.warn };
-    ui.colored_label(color, verdict_msg(diag).shown());
+    let tone = if diag.verdict == Verdict::Reachable { Tone::Good } else { Tone::Warn };
+    let _ = Text::new(verdict_msg(diag).shown()).tone(tone).show(ui);
     if diag.automatic {
-        ui.label(RichText::new(tl!("Checked by itself after the destination failed")).small().weak());
+        let _ = Text::new(tl!("Checked by itself after the destination failed")).role(TypeRole::Caption).shade(Shade::Muted).show(ui);
     }
-    egui::CollapsingHeader::new(RichText::new(tl!("What the check found")).small()).id_salt(("check-evidence", &d.id)).show(ui, |ui| {
+    let _ = Section::new(tl!("What the check found")).initially_open(false).id_salt("check-evidence").show(ui, |ui, _| {
         for e in &diag.evidence {
-            ui.label(RichText::new(evidence_text(e)).small());
+            let _ = Text::new(evidence_text(e)).role(TypeRole::Caption).show(ui);
         }
     });
 }
@@ -552,85 +557,106 @@ fn details_logo(ui: &mut Ui, e: &Edit, logos: &mut Logos, acts: &mut Vec<Act>) {
     ui.add_space(l.header_gap(tile));
 }
 
-/// The open details of a destination; whether they closed.
-#[expect(clippy::disallowed_types, reason = "craft-ui no longer has its combo box; the service picker moves to `Select`")]
-fn details(ui: &mut Ui, e: &mut Edit, view: &View, logos: &mut Logos, acts: &mut Vec<Act>) -> bool {
+/// The Service choices: Custom server, each service of [`SERVICES`], and `current` when this
+/// version does not know it, so the choice shows the destination's own service.
+fn service_choices(current: &str) -> Vec<Entry<String>> {
+    let mut choices = vec![Entry::new(String::new(), tl!("Custom server"))];
+    choices.extend(SERVICES.iter().map(|svc| Entry::new(svc.id.to_string(), svc.name)));
+    if !current.is_empty() && services::service(current).is_none() {
+        choices.push(Entry::new(current.to_string(), current.to_string()));
+    }
+    choices
+}
+
+/// The open details of the destination named `title`; whether they closed.
+fn details(ui: &mut Ui, e: &mut Edit, title: &str, view: &View, logos: &mut Logos, acts: &mut Vec<Act>) -> bool {
     let mut close = false;
-    egui::Frame::group(ui.style()).show(ui, |ui| {
+    let _ = GroupBox::new(title.to_string(), None).id_salt("details").show(ui, |ui, _| {
         details_logo(ui, e, logos, acts);
-        egui::Grid::new("destination-details").num_columns(2).spacing([12.0, 6.0]).show(ui, |ui| {
-            ui.label(tl!("Service"));
-            ComboBox::from_id_salt("destination-service").selected_text(service_name(&e.service)).width(260.0).show_ui(ui, |ui| {
-                if ui.selectable_label(e.service.is_empty(), tl!("Custom server")).clicked() && !e.service.is_empty() {
-                    e.set_service("");
-                }
-                for svc in SERVICES {
-                    if ui.selectable_label(e.service == svc.id, svc.name).clicked() && e.service != svc.id {
-                        e.set_service(svc.id);
-                    }
+        let _ = FieldGroup::new(title.to_string()).show(ui, |ui, _| {
+            let _ = Field::new(tl!("Service")).show(ui, |ui, _| {
+                let mut service = e.service.clone();
+                let choices = service_choices(&e.service);
+                let _ = Select::new(tl!("Service"), Bind::bound(&mut service), &choices).id_salt("service").show(ui);
+                if service != e.service {
+                    e.set_service(&service);
                 }
             });
-            ui.end_row();
-            ui.label(tl!("Name"));
             let preset = services::service(&e.service);
-            let name_hint = preset.map_or("", |svc| svc.name);
-            ui.add(egui::TextEdit::singleline(&mut e.name).char_limit(MAX_NAME).hint_text(name_hint).desired_width(260.0));
-            ui.end_row();
-            ui.label(tl!("Server"));
+            let _ = Field::new(tl!("Name")).show(ui, |ui, _| {
+                let mut field = TextField::new(tl!("Name"), Bind::bound(&mut e.name)).limit(MAX_NAME).id_salt("name");
+                if let Some(svc) = preset {
+                    field = field.placeholder(svc.name);
+                }
+                field.show(ui)
+            });
             // A service that shows each account its own server says where to find it.
             let own_server = preset.filter(|svc| svc.server.is_none());
             let server_hint = if own_server.is_some() { tl!("Copy it from your account") } else { tl!("rtmp://live.example.com/app") };
-            // The address can hold a key, so the field hides its text until Show.
-            ui.vertical(|ui| {
-                ui.horizontal(|ui| {
-                    ui.add(
-                        egui::TextEdit::singleline(&mut e.server)
-                            .password(!e.show_server)
-                            .hint_text(server_hint)
-                            .char_limit(MAX_SERVER)
-                            .desired_width(260.0),
-                    );
-                    ui.toggle_value(&mut e.show_server, tl!("Show"));
-                });
-                if let Some(svc) = own_server {
-                    ui.horizontal(|ui| {
-                        let text = craft_i18n::fmt(tl!("{service} shows the server and key for your account."), &[("service", svc.name)]);
-                        ui.label(RichText::new(text).small().weak());
-                        if ui.link(tl!("Where to find them")).clicked() {
-                            acts.push(Act::OpenUrl(svc.source.to_string()));
+            let _ = Field::new(tl!("Server")).show(ui, |ui, _| {
+                Stack::new().fill_width().show(ui, |ui, _| {
+                    let _ = Row::new().fill_width().show(ui, |ui, _| {
+                        // The address can hold a key, so the field hides its text until Show. The
+                        // limit counts characters; `stream.destination_set` refuses an address of
+                        // more than `MAX_SERVER` bytes.
+                        let mut field = TextField::new(tl!("Server"), Bind::bound(&mut e.server))
+                            .placeholder(server_hint)
+                            .limit(MAX_SERVER)
+                            .sizing(Sizing::FillWidth)
+                            .id_salt("server");
+                        if !e.show_server {
+                            field = field.masked();
                         }
+                        let _ = field.show(ui);
+                        let _ = ToggleButton::new(tl!("Show"), Bind::bound(&mut e.show_server)).id_salt("show-server").show(ui);
                     });
-                }
+                    if let Some(svc) = own_server {
+                        let _ = Row::new().show(ui, |ui, _| {
+                            let text = craft_i18n::fmt(tl!("{service} shows the server and key for your account."), &[("service", svc.name)]);
+                            let _ = Text::new(text).role(TypeRole::Caption).shade(Shade::Muted).show(ui);
+                            if Link::new(tl!("Where to find them")).id_salt("find-server").show(ui).clicked() {
+                                acts.push(Act::OpenUrl(svc.source.to_string()));
+                            }
+                        });
+                    }
+                })
             });
-            ui.end_row();
-            ui.label(tl!("Stream key"));
-            let choices: Vec<_> = KeyChoice::ALL.iter().map(|&c| Entry::new(c, tl!(c.label()))).collect();
-            let _ = Select::new(tl!("Stream key"), Bind::bound(&mut e.key), &choices).id_salt("key-choice").show(ui);
-            ui.end_row();
+            let _ = Field::new(tl!("Stream key")).show(ui, |ui, _| {
+                let choices: Vec<_> = KeyChoice::ALL.iter().map(|&c| Entry::new(c, tl!(c.label()))).collect();
+                Select::new(tl!("Stream key"), Bind::bound(&mut e.key), &choices).id_salt("key-choice").show(ui)
+            });
             if e.key == KeyChoice::Held {
-                ui.label(tl!("Session key name"));
-                ui.add(egui::TextEdit::singleline(&mut e.held_name).char_limit(MAX_DESTINATION_ID).desired_width(160.0));
-                ui.end_row();
-                ui.label(tl!("Key for this session"));
-                ui.horizontal(|ui| {
-                    ui.add(egui::TextEdit::singleline(&mut e.held_key).password(true).desired_width(200.0));
-                    let name = e.held_name.trim().to_string();
-                    if ui.add_enabled(!name.is_empty() && !e.held_key.is_empty(), egui::Button::new(tl!("Hold"))).clicked() {
-                        acts.push(Act::HoldStreamKey { name: name.clone(), key: std::mem::take(&mut e.held_key) });
-                    }
-                    if ui.add_enabled(!name.is_empty() && (view.held)(&name), egui::Button::new(tl!("Forget"))).clicked() {
-                        acts.push(Act::HoldStreamKey { name, key: String::new() });
-                    }
+                let _ = Field::new(tl!("Session key name")).show(ui, |ui, _| {
+                    TextField::new(tl!("Session key name"), Bind::bound(&mut e.held_name)).limit(MAX_DESTINATION_ID).id_salt("held-name").show(ui)
                 });
-                ui.end_row();
+                let _ = Field::new(tl!("Key for this session")).show(ui, |ui, _| {
+                    Row::new().fill_width().show(ui, |ui, _| {
+                        // A session key is held as typed, at any length.
+                        let _ = TextField::new(tl!("Key for this session"), Bind::bound(&mut e.held_key))
+                            .masked()
+                            .limit(None)
+                            .sizing(Sizing::FillWidth)
+                            .id_salt("held-key")
+                            .show(ui);
+                        let name = e.held_name.trim().to_string();
+                        let hold = Button::new(tl!("Hold")).enabled(!name.is_empty() && !e.held_key.is_empty()).id_salt("hold");
+                        if hold.show(ui).clicked() {
+                            acts.push(Act::HoldStreamKey { name: name.clone(), key: std::mem::take(&mut e.held_key) });
+                        }
+                        let forget = Button::new(tl!("Forget")).enabled(!name.is_empty() && (view.held)(&name)).id_salt("forget");
+                        if forget.show(ui).clicked() {
+                            acts.push(Act::HoldStreamKey { name, key: String::new() });
+                        }
+                    })
+                });
             }
         });
-        ui.horizontal(|ui| {
+        let _ = Row::new().show(ui, |ui, _| {
             // The details close when the change is made, so a refused one keeps what was typed.
-            if ui.button(tl!("Save")).clicked() {
+            if Button::new(tl!("Save")).id_salt("save").show(ui).clicked() {
                 acts.push(Act::run("stream.destination_set", e.params()));
             }
-            if ui.button(tl!("Cancel")).clicked() {
+            if Button::new(tl!("Cancel")).id_salt("cancel").show(ui).clicked() {
                 close = true;
             }
         });
@@ -1162,8 +1188,9 @@ impl StudioApp {
         }
     }
 
-    /// Draw the Streaming window while it is open.
-    pub(crate) fn streaming_window(&mut self, ctx: &egui::Context, acts: &mut Vec<Act>) {
+    /// The Streaming window, a tool window over the main window while it is open. Closing it
+    /// drops its open details.
+    pub(crate) fn streaming_window(&mut self, ui: &mut Ui, acts: &mut Vec<Act>) {
         if self.streaming.is_none() {
             return;
         }
@@ -1173,18 +1200,15 @@ impl StudioApp {
         let checks = self.destination_checks();
         // A check reports from its own thread, so the window looks again while one runs.
         if checks.iter().any(|(_, c)| matches!(c, CheckState::Running { .. })) {
-            ctx.request_repaint_after(CHECK_REPAINT);
+            ui.ctx().request_repaint_after(CHECK_REPAINT);
         }
         let studio = &self.studio;
         let held = |name: &str| studio.stream_key_held(name);
         let view = View { stream: &studio.profile().stream, running, live: &live, held: &held, checks: &checks };
         let mut open = true;
         if let Some(panel) = &mut self.streaming {
-            egui::Window::new(tid!("view.streaming", "Streaming"))
-                .id(egui::Id::unique("streaming"))
-                .open(&mut open)
-                .default_width(440.0)
-                .show(ctx, |ui| show(ui, &view, panel, acts));
+            let title = tid!("view.streaming", "Streaming");
+            let _ = Dialog::new(title).modeless().opened(Bind::bound(&mut open)).show(ui, |ui, _| show(ui, &view, panel, acts));
         }
         if !open {
             self.streaming = None;
