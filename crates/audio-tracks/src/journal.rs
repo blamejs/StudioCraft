@@ -52,8 +52,17 @@ pub enum Line {
         #[serde(default)]
         program: bool,
     },
-    /// A marker set during the take ([`crate::TakeMarkers`]), at take frame `at`.
-    Marker { at: u64, name: String },
+    /// A marker set during the take ([`crate::TakeMarkers`]), at take frame `at`. `number` is its
+    /// number in the take, from 1, which a `Rename` line names (none in journals written before
+    /// it).
+    Marker {
+        at: u64,
+        name: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        number: Option<u64>,
+    },
+    /// The take's marker `number` was renamed to `name`. A later rename of the same marker wins.
+    Rename { number: u64, name: String },
     /// After a sync: frames each track's current file held on disk, for the tracks whose files
     /// grew since the last sync.
     Sync { tracks: Vec<(usize, u64)> },
@@ -304,6 +313,18 @@ mod tests {
         assert!(err.to_string().contains("2 names"), "{err}");
         assert_eq!(std::fs::read(dir.join("elsewhere")).unwrap(), text, "the other name's file is unchanged");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_marker_line_without_a_number_still_reads() {
+        let old: Line = serde_json::from_str(r#"{"marker":{"at":5,"name":"Goal"}}"#).unwrap();
+        assert_eq!(old, Line::Marker { at: 5, name: "Goal".into(), number: None });
+        assert_eq!(serde_json::to_string(&old).unwrap(), r#"{"marker":{"at":5,"name":"Goal"}}"#, "a marker without a number is written as before");
+        let line = Line::Marker { at: 5, name: "Goal".into(), number: Some(3) };
+        assert_eq!(serde_json::to_string(&line).unwrap(), r#"{"marker":{"at":5,"name":"Goal","number":3}}"#);
+        let rename = Line::Rename { number: 3, name: "Kickoff".into() };
+        assert_eq!(serde_json::to_string(&rename).unwrap(), r#"{"rename":{"number":3,"name":"Kickoff"}}"#);
+        assert_eq!(serde_json::from_str::<Line>(r#"{"rename":{"number":3,"name":"Kickoff"}}"#).unwrap(), rename);
     }
 
     #[test]

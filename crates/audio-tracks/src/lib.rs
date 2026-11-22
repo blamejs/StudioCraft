@@ -28,7 +28,8 @@
 //! journal and the files' lengths, on the disk thread once the files are complete or the take
 //! stopped early. Repair writes it again for the takes it repairs. Markers set during the take
 //! ([`TakeMarkers`]) go into a bounded queue that the disk thread empties into the journal with
-//! each sync, and the session lists them.
+//! each sync, and the session lists them. A marker renamed while the take runs goes through the
+//! same queue; one renamed after the take ended is renamed in the session file.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 pub mod collect;
@@ -55,7 +56,7 @@ use studiocraft_media::Tick;
 
 pub use collect::{Collector, Dropout, TrackSpec, pool_chunks};
 pub use disk::{DiskConfig, Faults, Gate, StopReason, Timing};
-pub use markers::{Marker, TakeMarkers};
+pub use markers::{Marker, RenameError, TakeMarkers};
 
 /// A list of tracks for the collect thread, with the clock time it was sent at (none for the
 /// first list, sent before any block), and whether it comes from a collection that replaced the

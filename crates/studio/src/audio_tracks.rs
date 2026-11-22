@@ -33,6 +33,7 @@ use studiocraft_media::tap::TapSlot;
 use studiocraft_model::{AfterStop, AudioTracksWhen, SourceId};
 
 use crate::audio_editor::{self, Launcher, Opened, SystemLauncher};
+use crate::recording_markers::InTake;
 use crate::{Notice, OutputKind, Studio, recording_folder};
 
 /// The program mix's file name, first in a folder's listing.
@@ -618,25 +619,25 @@ impl Studio {
         };
         let name = name.unwrap_or_else(|| format!("Marker {}", take.markers().kept().saturating_add(1)));
         match self.mark_audio_tracks(self.clock.now(), &name) {
-            Some(Ok(seconds)) => Ok(json!({"name": name, "seconds": seconds})),
+            Some(Ok(kept)) => Ok(json!({"name": name, "seconds": kept.seconds()})),
             Some(Err(e)) => Err(err(e)),
             None => Err(err("no take of audio tracks is running".into())),
         }
     }
 
-    /// Mark the running take at `now` on the studio clock with a marker named `name`. Returns its
-    /// time in the take in seconds, an error naming the cause when the take did not keep it, or
+    /// Mark the running take at `now` on the studio clock with a marker named `name`. Returns
+    /// where the take holds it, an error naming the cause when the take did not keep it, or
     /// `None` when no take runs.
-    pub(crate) fn mark_audio_tracks(&self, now: Tick, name: &str) -> Option<Result<f64, String>> {
+    pub(crate) fn mark_audio_tracks(&self, now: Tick, name: &str) -> Option<Result<InTake, String>> {
         let markers = self.audio_tracks.take.as_ref()?.markers();
-        let frame = markers.frame(now);
-        if !markers.add_frame(frame, name) {
+        let at = markers.frame(now);
+        let Some(number) = markers.add_numbered(at, name) else {
             return Some(Err(format!(
                 "the marker was not kept: the take is ending or {} markers are waiting to be written",
                 studiocraft_audio_tracks::markers::QUEUED
             )));
-        }
-        Some(Ok(frame as f64 / 48_000.0))
+        };
+        Some(Ok(InTake { markers: markers.clone(), number, at, name: name.to_string() }))
     }
 
     /// Wait for the openings started here and take their notices as the next tick would, for

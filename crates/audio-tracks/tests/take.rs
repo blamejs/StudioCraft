@@ -1351,3 +1351,56 @@ fn repairing_a_take_recorded_into_a_folder_it_did_not_make_writes_no_session() {
     assert_eq!(std::fs::read(&other).unwrap(), b"someone else's session", "the file beside the folder is untouched");
     let _ = std::fs::remove_dir_all(dir.parent().unwrap());
 }
+
+#[test]
+fn a_marker_renamed_during_the_take_and_after_it_keeps_its_new_name_in_the_session() {
+    let recording = scratch("session-rename").parent().and_then(Path::parent).unwrap().to_path_buf();
+    let timing = Timing { anchor: "recording".into(), offset_frames: 1_000, ..Timing::default() };
+    let cfg = DiskConfig { folder_stem: Some("Show".into()), timing, ..config(&recording) };
+    let a = spec(1, "Mic");
+    let take = Take::start_from(TakeConfig { disk: cfg, buffer_mib: 4 }, vec![a.clone()], Some(Tick(0))).unwrap();
+    for n in 0..4 {
+        feed(&a.slot, 1, n);
+    }
+    let markers = take.markers().clone();
+    let goal = markers.add_numbered(7, "Goal").unwrap();
+    let save = markers.add_numbered(9, "Save").unwrap();
+    let again = markers.add_numbered(9, "Save").unwrap();
+    markers.rename(goal, "Goal", "Kickoff").unwrap();
+    markers.rename(goal, "Kickoff", "Opening goal").unwrap();
+    let status = take.join();
+    assert_eq!(status.state(), Some(State::Done));
+    let path = recording.join("Show Audio").join("Show.scraft");
+    let names = |p: &Path| session_at(p).markers.iter().map(|m| (m.name.clone(), m.start)).collect::<Vec<_>>();
+    let marked = |a: &str, b: &str, c: &str| [(a.to_string(), 1_007), (b.to_string(), 1_009), (c.to_string(), 1_009)];
+    assert_eq!(names(&path), marked("Opening goal", "Save", "Save"), "the last rename wins");
+    let lines = journal::read(&recording.join("Show Audio").join("Audio Files")).unwrap();
+    assert!(lines.contains(&Line::Rename { number: goal, name: "Opening goal".into() }), "the rename is journaled: {lines:?}");
+    // After the take, the marker is renamed in the session file, the one asked for of two with
+    // the same place and name.
+    markers.rename(again, "Save", "Encore").unwrap();
+    assert_eq!(names(&path), marked("Opening goal", "Save", "Encore"));
+    markers.rename(save, "Save", "Final save").unwrap();
+    assert_eq!(names(&path), marked("Opening goal", "Final save", "Encore"));
+    let e = markers.rename(save, "Save", "Again").unwrap_err();
+    assert!(matches!(e, studiocraft_audio_tracks::RenameError::Session(_)), "the session lists no marker by the old name: {e}");
+    let _ = std::fs::remove_dir_all(&recording);
+}
+
+#[test]
+fn repair_gives_a_renamed_marker_its_new_name() {
+    let dir = crashed_own_take("session-repair-rename");
+    append_lines(
+        &dir,
+        &[
+            Line::Marker { at: 5, name: "Goal".into(), number: Some(1) },
+            Line::Marker { at: 9, name: "Save".into(), number: Some(2) },
+            Line::Rename { number: 1, name: "Kickoff".into() },
+        ],
+    );
+    let r = recover::repair(&dir).unwrap().unwrap();
+    let session = r.session.unwrap();
+    let names: Vec<String> = session_at(&session).markers.iter().map(|m| m.name.clone()).collect();
+    assert_eq!(names, ["Kickoff", "Save"]);
+    let _ = std::fs::remove_dir_all(dir.parent().and_then(Path::parent).unwrap());
+}

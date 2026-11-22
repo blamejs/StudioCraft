@@ -136,6 +136,12 @@ pub enum RuntimeAction {
     },
     /// The markers of the running session, or of the last one.
     MarkerList,
+    /// Rename the session's marker `index` (from 1) to `name` in the recording and the take of
+    /// audio tracks that hold it.
+    MarkerRename {
+        index: usize,
+        name: String,
+    },
     /// Forget the hardware encoders' test results, so the next start tests them again.
     RetestHardwareEncoders,
     /// The gain reduction of `filter`, a filter of `source`, as the mixer last measured it.
@@ -462,6 +468,10 @@ pub enum Command {
     /// The markers `marker.add` set in the running session, or in the last one.
     #[serde(rename = "marker.list")]
     MarkerList {},
+    /// Rename the session's marker `index` (from 1, as `marker.list` numbers it) in the recording
+    /// and the take of audio tracks that hold it, while they run or after they ended.
+    #[serde(rename = "marker.rename")]
+    MarkerRename { index: usize, name: String },
     /// Forget the hardware encoders' test results, in the session and in the file that keeps
     /// them, so the next recording or stream tests them again.
     #[serde(rename = "hardware_encoders.retest")]
@@ -662,6 +672,7 @@ impl Command {
             Command::AudioTracksMarker { .. } => "audio_tracks.marker",
             Command::MarkerAdd { .. } => "marker.add",
             Command::MarkerList {} => "marker.list",
+            Command::MarkerRename { .. } => "marker.rename",
             Command::RetestHardwareEncoders {} => "hardware_encoders.retest",
             Command::PauseStart { .. } => "pause.start",
             Command::PauseStop {} => "pause.stop",
@@ -796,6 +807,7 @@ const SPECS: &[CommandSpec] = &[
     spec("audio_tracks.marker", "Add Audio Tracks Marker", "name?: the marker's name, 1 to 256 characters", Undo::NotUndoable),
     spec("marker.add", "Add Marker", "name?: the marker's name, 1 to 256 characters", Undo::NotUndoable),
     spec("marker.list", "List Markers", "", Undo::NotUndoable),
+    spec("marker.rename", "Rename Marker", "index: the marker's number in the session, from 1; name: its new name, 1 to 256 characters", Undo::NotUndoable),
     spec("hardware_encoders.retest", "Test Hardware Encoders Again", "", Undo::NotUndoable),
     spec(
         "pause.start",
@@ -870,6 +882,7 @@ mod tests {
             Command::MarkerAdd { name: None },
             Command::MarkerAdd { name: Some("Goal".into()) },
             Command::MarkerList {},
+            Command::MarkerRename { index: 2, name: "Kickoff".into() },
             Command::SessionEvents { since: None },
             Command::SessionEvents { since: Some(42) },
         ];

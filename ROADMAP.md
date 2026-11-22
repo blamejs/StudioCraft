@@ -40,6 +40,7 @@ description in [docs/features.md](docs/features.md).
 - Each audio source and the program mix are written to their own WAV files while a recording or the stream runs, and takes cut short by a crash are repaired ([Audio tracks](docs/features.md#audio-tracks)).
 - Each take of audio tracks writes a session file for the audio editor, with markers set during the take and dropouts marked, and can open it in the editor when it ends ([Audio tracks](docs/features.md#audio-tracks)).
 - One marker command marks the recording and the audio tracks at the same moment, and lists the session's markers ([Recording markers](docs/features.md#recording-markers)).
+- A session's marker is renamed in the recording's timeline and the take's session file, while they run and after they have ended ([Recording markers](docs/features.md#recording-markers)).
 
 ### Streaming
 

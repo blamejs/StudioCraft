@@ -232,7 +232,7 @@ impl Totals {
             Line::Stop { reason } => self.stopped = Some(reason),
             Line::Repaired { .. } => self.repaired = true,
             Line::End { frames } => self.end = Some(frames),
-            Line::Sync { .. } => {}
+            Line::Sync { .. } | Line::Rename { .. } => {}
         }
         Ok(())
     }
@@ -463,8 +463,9 @@ mod tests {
                 file(1, "Mic", 0),
                 Line::Dropout { track: 1, at: 10, frames: 480 },
                 Line::Unlisted { frames: 20 },
-                Line::Marker { at: 5, name: "Intro".into() },
-                Line::Marker { at: 50, name: "Goal".into() },
+                Line::Marker { at: 5, name: "Intro".into(), number: Some(1) },
+                Line::Marker { at: 50, name: "Goal".into(), number: Some(2) },
+                Line::Rename { number: 2, name: "Kickoff".into() },
                 Line::End { frames: 96_000 },
             ],
             &[("00 Program.wav", 96_000), ("Mic.wav", 96_000)],

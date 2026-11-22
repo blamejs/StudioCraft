@@ -8,8 +8,9 @@
 //! the timeline of the output the take followed: session sample 0 is that output's first sample.
 //! A track's later parts (a file closed at the size limit) follow their earlier part sample for
 //! sample. Each dropout is a selection on its track's marker lane, and each marker set during the
-//! take is a marker. A session lists at most [`MAX_LOCATIONS`] of them; its comments count the
-//! rest, which stay in the journal.
+//! take is a marker, with the name of the journal's last rename of it. A session lists at most
+//! [`MAX_LOCATIONS`] of them; its comments count the rest, which stay in the journal.
+//! [`rename_marker`] renames a marker in a take's written session file.
 //!
 //! The session sits in the take's folder, `<name> Audio/<name>.scraft`, beside its `Audio Files`
 //! folder, which the session's paths point into.
@@ -83,6 +84,8 @@ pub fn build_with(name: &str, lines: &[Line], left_out: u64, frames: impl Fn(&st
     let mut tracks: Vec<Built> = Vec::new();
     let mut dropouts: Vec<(usize, u64, u64)> = Vec::new();
     let mut markers: Vec<(u64, &str)> = Vec::new();
+    // Where each numbered marker is in `markers`, for the rename lines.
+    let mut numbered: std::collections::HashMap<u64, usize> = std::collections::HashMap::new();
     let mut unlisted = 0u64;
     let mut beyond = 0u64;
     let mut stopped: Option<&str> = None;
@@ -108,8 +111,19 @@ pub fn build_with(name: &str, lines: &[Line], left_out: u64, frames: impl Fn(&st
             }
             // Each list keeps at most the locations a session can list; the rest are counted.
             Line::Dropout { track, at, frames } if dropouts.len() < MAX_LOCATIONS => dropouts.push((*track, *at, *frames)),
-            Line::Marker { at, name } if markers.len() < MAX_LOCATIONS => markers.push((*at, name.as_str())),
+            Line::Marker { at, name, number } if markers.len() < MAX_LOCATIONS => {
+                if let Some(n) = number {
+                    numbered.insert(*n, markers.len());
+                }
+                markers.push((*at, name.as_str()));
+            }
             Line::Dropout { .. } | Line::Marker { .. } => beyond = beyond.saturating_add(1),
+            // A marker past the limit is not listed, so its rename changes nothing.
+            Line::Rename { number, name } => {
+                if let Some(m) = numbered.get(number).and_then(|&i| markers.get_mut(i)) {
+                    m.1 = name.as_str();
+                }
+            }
             Line::Unlisted { frames } => unlisted = unlisted.saturating_add(*frames),
             Line::Stop { reason } => stopped = Some(reason.as_str()),
             _ => {}
@@ -235,6 +249,72 @@ pub fn write_take(dir: &Path) -> std::io::Result<PathBuf> {
     write_from(dir, &lines, 0, |f| file_frames(dir, f))
 }
 
+/// Where the session built from `lines` lists the take's marker `number`: its sample, and how many
+/// of the markers listed before it have the same sample. `None` when the session does not list it.
+fn listed_place(lines: &[Line], number: u64) -> Option<(u64, usize)> {
+    let mut offset = 0u64;
+    let mut listed: Vec<(u64, Option<u64>)> = Vec::new();
+    for line in lines {
+        match line {
+            Line::Start { offset_frames, .. } => offset = *offset_frames,
+            Line::Marker { at, number, .. } if listed.len() < MAX_LOCATIONS => listed.push((*at, *number)),
+            _ => {}
+        }
+    }
+    let i = listed.iter().position(|(_, n)| *n == Some(number))?;
+    let sample = |at: u64| position(offset.saturating_add(at));
+    let at = listed.get(i)?.0;
+    let before = listed.iter().take(i).filter(|(a, _)| sample(*a) == sample(at)).count();
+    Some((offset.saturating_add(at), before))
+}
+
+/// Rename the take's marker `number`, now named `old`, to `name` in the take's session file
+/// `path`, from the take's journal in its `Audio Files` folder `dir`. The session lists markers at
+/// the same sample in the order the journal holds them, so the marker is the one in that place
+/// among them; it must still be named `old`. See [`rename_marker`].
+pub fn rename_take_marker(dir: &Path, path: &Path, number: u64, old: &str, name: &str) -> std::io::Result<()> {
+    let lines = journal::read(dir)?;
+    let Some((at, before)) = listed_place(&lines, number) else {
+        return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, format!("{}: the session does not list the marker", path.display())));
+    };
+    rename_marker(path, at, before, old, name)
+}
+
+/// Rename a marker of the session file `path` to `name`, and write the file again in one step:
+/// the marker at sample `at` with `before` markers at that sample ahead of it, which must be
+/// named `old`. The file must be a file, not a link, of at most
+/// [`craft_scraft_format::MAX_SESSION_BYTES`]; its size is checked before it is read. A session
+/// that does not have that marker with that name, as after the marker was moved or renamed in the
+/// audio editor, is an error and the file is left as it is.
+pub fn rename_marker(path: &Path, at: u64, before: usize, old: &str, name: &str) -> std::io::Result<()> {
+    use std::io::Read;
+    let shown = path.display().to_string();
+    let invalid = |e: String| std::io::Error::new(std::io::ErrorKind::InvalidData, format!("{shown}: {e}"));
+    let limit = craft_scraft_format::MAX_SESSION_BYTES;
+    let file = crate::open::no_follow(std::fs::OpenOptions::new().read(true), path)?;
+    let meta = file.metadata()?;
+    if !meta.is_file() {
+        return Err(invalid("not a file".into()));
+    }
+    if meta.len() > limit {
+        return Err(invalid(format!("larger than {limit} bytes")));
+    }
+    let mut bytes = Vec::with_capacity(usize::try_from(meta.len()).unwrap_or(0));
+    // The file can grow between the size check and the read; the read stops one byte past it.
+    file.take(limit.saturating_add(1)).read_to_end(&mut bytes)?;
+    // The error names the file.
+    let text = craft_scraft_format::read_session_data(&shown, bytes, limit).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))?;
+    let mut session = Session::from_json(&text).map_err(|e| invalid(e.to_string()))?;
+    let place = position(at);
+    let marker = session.markers.iter_mut().filter(|m| m.kind == MarkerKind::Marker && m.track.is_none() && m.start == place).nth(before);
+    let Some(marker) = marker.filter(|m| m.name == old) else {
+        return Err(invalid(format!("the session no longer lists the marker {old:?} at its place")));
+    };
+    marker.name = name.to_string();
+    session.sanitize();
+    write(path, &session)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -309,8 +389,8 @@ mod tests {
             file(0, "00 Program", "00 Program.wav", 1, 0, true),
             file(1, "Desk", "Desk.wav", 1, 0, false),
             Line::Dropout { track: 1, at: 12_345, frames: 1_024 },
-            Line::Marker { at: 96_000, name: "Goal".into() },
-            Line::Marker { at: 5, name: "Start".into() },
+            Line::Marker { at: 96_000, name: "Goal".into(), number: None },
+            Line::Marker { at: 5, name: "Start".into(), number: None },
             Line::Unlisted { frames: 24_000 },
         ];
         let s = build("Show", &lines, |_| Some(200_000));
@@ -331,7 +411,7 @@ mod tests {
     #[test]
     fn a_session_lists_markers_first_and_counts_what_it_leaves_out() {
         let mut lines = vec![start(0), file(0, "Mic", "Mic.wav", 1, 0, false)];
-        lines.extend((0..MAX_LOCATIONS as u64 - 2).map(|n| Line::Marker { at: n, name: format!("M{n}") }));
+        lines.extend((0..MAX_LOCATIONS as u64 - 2).map(|n| Line::Marker { at: n, name: format!("M{n}"), number: None }));
         lines.extend((0..5).map(|n| Line::Dropout { track: 0, at: n * 10, frames: 1 }));
         let s = build_with("Show", &lines, 7, |_| Some(1_000));
         assert_eq!(s.markers.len(), MAX_LOCATIONS);
@@ -348,13 +428,81 @@ mod tests {
     fn locations_past_the_limit_in_a_long_journal_are_counted() {
         let mut lines = vec![start(0), file(0, "Mic", "Mic.wav", 1, 0, false)];
         lines.extend((0..5).map(|n| Line::Dropout { track: 0, at: n, frames: 1 }));
-        lines.extend((0..MAX_LOCATIONS as u64 + 3).map(|n| Line::Marker { at: n, name: format!("M{n}") }));
+        lines.extend((0..MAX_LOCATIONS as u64 + 3).map(|n| Line::Marker { at: n, name: format!("M{n}"), number: None }));
         lines.extend((0..MAX_LOCATIONS as u64 + 2).map(|n| Line::Dropout { track: 0, at: n, frames: 1 }));
         let s = build("Show", &lines, |_| Some(1_000));
         assert_eq!(s.markers.len(), MAX_LOCATIONS);
         assert!(s.markers.iter().all(|m| m.kind == MarkerKind::Marker), "markers take the room first");
         let more = MAX_LOCATIONS + 10;
         assert!(s.comments.contains(&format!("{more} more markers and dropouts")), "3 markers and every dropout: {}", s.comments);
+    }
+
+    #[test]
+    fn a_marker_takes_the_name_of_its_last_rename() {
+        let lines = [
+            start(1_000),
+            file(0, "Mic", "Mic.wav", 1, 0, false),
+            Line::Marker { at: 10, name: "Goal".into(), number: Some(1) },
+            Line::Rename { number: 1, name: "Kickoff".into() },
+            Line::Marker { at: 20, name: "Save".into(), number: Some(2) },
+            Line::Rename { number: 1, name: "Opening goal".into() },
+            // A rename of a marker the journal does not hold changes nothing.
+            Line::Rename { number: 9, name: "Nothing".into() },
+        ];
+        let s = build("Show", &lines, |_| Some(1_000));
+        let got: Vec<(&str, Samples)> = s.markers.iter().map(|m| (m.name.as_str(), m.start)).collect();
+        assert_eq!(got, [("Opening goal", 1_010), ("Save", 1_020)]);
+    }
+
+    #[test]
+    fn a_written_session_has_its_marker_renamed_in_one_step() {
+        let dir = std::env::temp_dir().join(format!("studiocraft-session-rename-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let files = dir.join("Show Audio").join(FILES_FOLDER);
+        std::fs::create_dir_all(&files).unwrap();
+        let lines = [
+            start(1_000),
+            file(0, "Mic", "Mic.wav", 1, 0, false),
+            Line::Dropout { track: 0, at: 10, frames: 5 },
+            Line::Marker { at: 10, name: "Goal".into(), number: Some(1) },
+            Line::Marker { at: 10, name: "Goal".into(), number: Some(2) },
+        ];
+        let path = write_from(&files, &lines, 0, |_| Some(1_000)).unwrap();
+        let mut j = journal::Journal::create(&files).unwrap();
+        for line in &lines {
+            j.write(line).unwrap();
+        }
+        j.sync().unwrap();
+        drop(j);
+        let names = || {
+            let back = Session::from_json(&std::fs::read_to_string(&path).unwrap()).unwrap();
+            back.markers.iter().map(|m| m.name.clone()).collect::<Vec<_>>()
+        };
+        // Two markers with the same place and name: the one asked for is renamed.
+        rename_take_marker(&files, &path, 2, "Goal", "Kickoff").unwrap();
+        assert_eq!(names(), ["Goal", "Kickoff", "Dropout: Mic"]);
+        rename_take_marker(&files, &path, 1, "Goal", "Save").unwrap();
+        assert_eq!(names(), ["Save", "Kickoff", "Dropout: Mic"]);
+        // The marker no longer has the old name, and the file stays as it is.
+        let before = std::fs::read(&path).unwrap();
+        let e = rename_take_marker(&files, &path, 1, "Goal", "Again").unwrap_err();
+        assert!(e.to_string().contains("no longer lists the marker"), "{e}");
+        assert_eq!(std::fs::read(&path).unwrap(), before);
+        let e = rename_take_marker(&files, &path, 9, "Goal", "Again").unwrap_err();
+        assert!(e.to_string().contains("does not list the marker"), "{e}");
+        assert!(rename_marker(&path, 999, 0, "Save", "Again").is_err(), "another place");
+        assert!(rename_marker(&path, 1_010, 2, "Dropout: Mic", "Again").is_err(), "a dropout is not a marker");
+        assert_eq!(std::fs::read(&path).unwrap(), before);
+        // A file past the size limit is refused before it is read.
+        let big = dir.join("big.scraft");
+        std::fs::File::create(&big).unwrap().set_len(craft_scraft_format::MAX_SESSION_BYTES + 1).unwrap();
+        assert!(rename_marker(&big, 0, 0, "a", "b").unwrap_err().to_string().contains("larger than"));
+        assert!(rename_marker(&dir.join("none.scraft"), 0, 0, "a", "b").is_err(), "a missing file");
+        let not_session = dir.join("text.scraft");
+        std::fs::write(&not_session, b"not a session").unwrap();
+        assert!(rename_marker(&not_session, 0, 0, "a", "b").is_err(), "a file that is not a session");
+        assert!(rename_marker(&dir, 0, 0, "a", "b").is_err(), "a folder");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

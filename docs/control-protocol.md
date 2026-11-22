@@ -85,7 +85,7 @@ when the language's catalog has the message.
 [Commands with their own parameters](#commands-with-their-own-parameters) describes `app.info`,
 `app.links`, `app.check_updates`, `plugin.list`, `source.schema`, `source.sync_offset`,
 `source.monitor`, `audio.loudness`, `source.set_record_track`, the `present.*` commands, `audio_tracks.status`, `audio_tracks.repair`,
-`audio_tracks.open_last`, `audio_tracks.marker`, `record.marker`, `marker.add`, `marker.list`, `recordings.list`, the `captions.*` commands, the
+`audio_tracks.open_last`, `audio_tracks.marker`, `record.marker`, `marker.add`, `marker.list`, `marker.rename`, `recordings.list`, the `captions.*` commands, the
 `dock.layout_*` commands, `golive.check`, `video.displays`, `video.canvas_from_display` and `canvas.relayout`.
 
 Each entry of `engine.commands` has these fields:
@@ -448,6 +448,30 @@ markers oldest first, each `{"index", "name", "seconds", "recording", "audio_tra
 `recording` and `audio_tracks` each `{"seconds"}` or `null` for an output that did not keep it.
 `running` is `false` after the session has ended; the list then holds that session's markers until
 the next session starts.
+
+### `marker.rename`
+
+`marker.rename` takes `{"index", "name"}` and renames the session's marker `index`, its number in
+`marker.list`, in each output that kept it. `name` follows the rules of `audio_tracks.marker` and
+is required. The outputs are renamed this way:
+
+- The recording: while the recording runs or its file is being finished, the marker gets the new
+  name in the timeline that is written when the file is finished. Once `<recording name>.otio` is
+  written, that file is written again with the new name through a temporary file and a rename.
+  While the timeline file is still being written, the rename is an error for the recording.
+- The take of audio tracks: while the take runs, the rename goes to the take's journal, so the
+  session file the take writes at its end, and the one repair writes after a crash, have the new
+  name. Once the take has ended, its session file is written again with the new name through a
+  temporary file and a rename. While the take is finishing its files, the rename is an error for
+  the take.
+
+It returns `{"index", "name", "seconds", "recording", "audio_tracks"}` as `marker.list` lists the
+marker, with `recording` and `audio_tracks` each `{"seconds"}` when that output has the new name,
+`{"error"}` when it does not, or `null` when the output did not keep the marker. When one output
+does not take the new name, the other keeps it. A file that no longer has a marker with the old name
+at the marker's place, as after it was edited in another app, is not written, and that output
+reports an error. An index the session does not hold, a name outside the rules, and no output taking
+the new name are errors; the marker then keeps its name.
 
 ### `recordings.list`
 

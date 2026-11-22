@@ -468,7 +468,7 @@ mod tests {
         let newer = "2025-11-21 09-00-00";
         std::fs::write(f.join(format!("{older}.mkv")), b"recording").unwrap();
         std::fs::write(f.join(format!("{older}.otio")), b"{}").unwrap();
-        take(f, older, &[start(stamp_unix_ms(older)), Line::Marker { at: 5, name: "Goal".into() }, Line::End { frames: 96_000 }]);
+        take(f, older, &[start(stamp_unix_ms(older)), Line::Marker { at: 5, name: "Goal".into(), number: None }, Line::End { frames: 96_000 }]);
         // The take folder got a numbered name because `<newer> Audio` was taken. Its journal gives
         // no start, so the take's time is the journal's last change, not the recording's start.
         std::fs::write(f.join(format!("{newer}.MP4")), b"rec").unwrap();
