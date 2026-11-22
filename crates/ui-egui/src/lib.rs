@@ -32,19 +32,21 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 
-use craft_behavior::GesturePhase;
+use craft_behavior::{ColumnWidth, GesturePhase};
 use craft_host::target::{Caps, DoubleClick, ShellInfo};
 use craft_host::{AppInfo, Host};
 use craft_i18n::{I18n, Words};
 use craft_keymap::{CommandRef, Keymap, Overrides};
 use craft_menu::{LanguageChoice, MenuBar};
 use craft_theme::variant::Tone;
+use craft_ui::bars::{Bar, BarKind};
 use craft_ui::contract::overlay::PlacementKind;
-use craft_ui::contract::{Bind, Entry, Props as _, Show as _, ShowContainer as _, SizeLimits, Sizing, Tracked};
-use craft_ui::dialog::{DialogId, DialogResult, PromptChoice, StandardPrompt};
-use craft_ui::display::{Shade, Text};
+use craft_ui::contract::{Bind, Entry, Props as _, Show as _, ShowContainer as _, SizeLimits, Sizing, TooltipSpec, Tracked};
+use craft_ui::dialog::{Dialog, DialogId, DialogResult, PromptChoice, StandardPrompt};
+use craft_ui::display::{Divider, Shade, Text};
 use craft_ui::docking::{DockSizes, FloatingGroup};
-use craft_ui::notices::{NoticeCenter, PostedNotice};
+use craft_ui::layout_components::Grid;
+use craft_ui::notices::{Notice, NoticeCenter, PostedNotice};
 use craft_ui::patterns::form_dialogs::{DialogFields, FieldValue, HostedParamDialog, Param, ParamDialog, ParamKind};
 use craft_ui::pickers::Select;
 use craft_ui::runtime::commands::{AppCatalog, CommandInput, CommandState, CommandStates};
@@ -54,6 +56,7 @@ use craft_ui::runtime::toast::{self, ToastId};
 use craft_ui::runtime::windows::ResizeEdge;
 use craft_ui::shell::embed::{self, CloseDecision};
 use craft_ui::shell::{AppShell, ShellDialogsCx as _, TitleBar, ViewportWindow, WindowDialogs};
+use craft_ui::style::TypeRole;
 use craft_ui::{InstallError, InstallSpec};
 use craft_window::policy::Decision;
 use craft_window::system::{NoWindows, SystemWindows};
@@ -1065,6 +1068,75 @@ impl StudioApp {
         }
     }
 
+    /// The Stats window, a tool window over the main window while View › Stats is on: the frame
+    /// and encoder counts, and the state of each output. Closing it turns View › Stats off.
+    fn stats_window(&mut self, ui: &mut Ui) {
+        const COLUMNS: [ColumnWidth; 2] = [ColumnWidth::Content; 2];
+        if !self.store.prefs().stats {
+            return;
+        }
+        let s = self.studio.stats();
+        let ms = |v: f64| craft_i18n::fmt(tl!("{ms} ms"), &[("ms", &format!("{v:.2}"))]);
+        let mut rows: Vec<(String, String)> = [
+            ("Frames drawn", s.frames.to_string()),
+            ("Frames drawn late", s.lagged.to_string()),
+            ("Frame time (last)", ms(s.render_ms)),
+            ("Frame time (average)", ms(s.render_avg_ms)),
+            ("Frames encoded", s.encoder_frames.to_string()),
+            ("Frames skipped by encoders", s.encoder_dropped.to_string()),
+            ("Encoder queue", s.encoder_queued.to_string()),
+        ]
+        .into_iter()
+        .map(|(k, v)| (tl!(k).to_string(), v))
+        .collect();
+        for (kind, label) in [(OutputKind::Recording, "Recording"), (OutputKind::Streaming, "Stream"), (OutputKind::Replay, "Replay buffer")] {
+            if let Some(o) = self.studio.output(kind) {
+                let mb = format!("{:.1}", o.bytes as f64 / 1e6);
+                rows.push((tl!(label).to_string(), craft_i18n::fmt(tl!("{status} · {mb} MB"), &[("status", &output_status(&o)), ("mb", &mb)])));
+            }
+        }
+        let title = tid!("view.stats", "Stats");
+        let mut open = true;
+        let _ = Dialog::new(title).modeless().opened(Bind::bound(&mut open)).show(ui, |ui, _| {
+            let _ = Grid::new(&COLUMNS).label(title).show(ui, |ui, _| {
+                for (k, v) in &rows {
+                    let _ = Text::new(k.clone()).show(ui);
+                    let _ = Text::new(v.clone()).role(TypeRole::Mono).show(ui);
+                }
+            });
+        });
+        if !open {
+            self.store.update(|p| p.stats = false);
+        }
+    }
+
+    /// The Available Encoders window, a tool window over the main window after Tools › Available
+    /// Encoders: each encoder with its codec and whether it can run, under a warning when the
+    /// ffmpeg program was not found. Closing it drops the list.
+    fn encoders_window(&mut self, ui: &mut Ui) {
+        const COLUMNS: [ColumnWidth; 3] = [ColumnWidth::Content; 3];
+        let Some(list) = &self.encoders else { return };
+        let missing = self.encoders_ffmpeg.as_ref().map(Msg::shown);
+        let title = tid!("tools.encoders", "Available Encoders");
+        let mut open = true;
+        let _ = Dialog::new(title).modeless().opened(Bind::bound(&mut open)).show(ui, |ui, _| {
+            if let Some(missing) = &missing {
+                let _ = Notice::new(Tone::Warn, missing.clone()).show(ui);
+            }
+            let _ = Grid::new(&COLUMNS).label(title).show(ui, |ui, _| {
+                for (name, codec, ok) in list {
+                    let _ = Text::new(tl!(name).to_string()).show(ui);
+                    let _ = Text::new(codec.clone()).role(TypeRole::Mono).show(ui);
+                    let _ = if *ok { Text::new(tl!("available")).tone(Tone::Good) } else { Text::new(tl!("not in this ffmpeg")).shade(Shade::Faint) }
+                        .show(ui);
+                }
+            });
+        });
+        if !open {
+            self.encoders = None;
+        }
+    }
+
     fn selection_transform(&mut self, f: impl FnOnce(Transform, (u32, u32), (u32, u32)) -> Transform) -> Result<Value, Msg> {
         let (item, source, t) = self.selection().ok_or_else(|| tmsg!("select a source first"))?;
         let native = self.studio.source_size(source).ok_or_else(|| tmsg!("the source has not shown a picture yet"))?;
@@ -2055,10 +2127,10 @@ impl StudioApp {
         }
     }
 
+    /// The status bar in the shell's status slot. Its members stand at the end edge: the audio
+    /// tracks state, the running replay buffer, recording and stream with their times, the drop
+    /// counts and, last, the frame rate and frame time.
     fn status_bar(&mut self, ui: &mut Ui) {
-        if !self.store.prefs().status_bar {
-            return;
-        }
         let stats = self.studio.stats();
         let fps = self.studio.video_settings().fps();
         let rec = self.studio.output(OutputKind::Recording);
@@ -2067,45 +2139,33 @@ impl StudioApp {
         let outputs_run = [&rec, &live].into_iter().flatten().any(|s| s.active);
         let source_limit = self.studio.audio_tracks_source_limit();
         let tracks = self.studio.audio_tracks_status().and_then(|s| tracks_item(s, outputs_run, source_limit));
-        let (height, fill, line, plain, warn, live_red) = theme::with_root(ui.ctx(), |cx| {
-            let c = &cx.tokens.color;
-            let color = |rgba| theme::color(cx, rgba);
-            (
-                cx.tokens.size.bar.status,
-                color(c.surface.panel),
-                color(c.line.divider),
-                color(c.text.normal),
-                color(c.status.warn.fg),
-                color(c.status.bad.fg),
-            )
-        });
-        let frame = egui::Frame::NONE.fill(fill).inner_margin(egui::Margin::symmetric(8, 0));
-        let panel = egui::Panel::bottom("status").exact_size(height).show_separator_line(false).frame(frame).show(ui, |ui| {
-            ui.with_layout(i18n::row(ui), |ui| {
-                ui.with_layout(i18n::trailing(ui), |ui| {
-                    let fps = format!("{fps:.2}");
-                    let ms = format!("{:.1}", stats.render_avg_ms);
-                    ui.monospace(craft_i18n::fmt(tl!("{fps} fps  {ms} ms"), &[("fps", &fps), ("ms", &ms)]));
-                    ui.separator();
-                    let (dropped, lagged) = (stats.encoder_dropped.to_string(), stats.lagged.to_string());
-                    ui.monospace(craft_i18n::fmt(tl!("dropped {dropped}  lagged {lagged}"), &[("dropped", &dropped), ("lagged", &lagged)]));
-                    for (s, tag) in [(live, tl!("LIVE")), (rec, tl!("REC")), (replay, tl!("REPLAY"))] {
-                        if let Some(s) = s.filter(|s| s.active) {
-                            ui.separator();
-                            let t = s.elapsed.as_secs();
-                            ui.colored_label(live_red, format!("{tag} {:02}:{:02}:{:02}", t / 3600, (t / 60) % 60, t % 60));
-                        }
-                    }
-                    if let Some((text, warning, hover)) = tracks {
-                        ui.separator();
-                        ui.colored_label(if warning { warn } else { plain }, text).on_hover_text(hover);
-                    }
-                });
-            });
-        });
-        // The divider is drawn inside the bar's first point, so the bar keeps its height.
-        let row = panel.response.rect;
-        ui.painter().hline(row.x_range(), row.top() + 0.5, egui::Stroke::new(1.0, line));
+        let mut timers = Vec::new();
+        for (s, tag) in [(replay, tl!("REPLAY")), (rec, tl!("REC")), (live, tl!("LIVE"))] {
+            if let Some(s) = s.filter(|s| s.active) {
+                let t = s.elapsed.as_secs();
+                timers.push(format!("{tag} {:02}:{:02}:{:02}", t / 3600, (t / 60) % 60, t % 60));
+            }
+        }
+        let rate = craft_i18n::fmt(tl!("{fps} fps  {ms} ms"), &[("fps", &format!("{fps:.2}")), ("ms", &format!("{:.1}", stats.render_avg_ms))]);
+        let (dropped, lagged) = (stats.encoder_dropped.to_string(), stats.lagged.to_string());
+        let drops = craft_i18n::fmt(tl!("dropped {dropped}  lagged {lagged}"), &[("dropped", &dropped), ("lagged", &lagged)]);
+        // An empty label names the bar with the framework's words for a status bar.
+        let _ = Bar::new("", BarKind::Status)
+            .trailing(|ui, _| {
+                if let Some((text, warning, hover)) = &tracks {
+                    let text = Text::new(text.clone()).tooltip(TooltipSpec::new(hover.clone()));
+                    let _ = if *warning { text.tone(Tone::Warn) } else { text }.show(ui);
+                    Divider::vertical().show(ui);
+                }
+                for timer in &timers {
+                    let _ = Text::new(timer.clone()).tone(Tone::Bad).show(ui);
+                    Divider::vertical().show(ui);
+                }
+                let _ = Text::new(drops.clone()).role(TypeRole::Mono).show(ui);
+                Divider::vertical().show(ui);
+                let _ = Text::new(rate.clone()).role(TypeRole::Mono).show(ui);
+            })
+            .show(ui, |_, _| {});
     }
 
     fn windows(&mut self, ctx: &egui::Context, acts: &mut Vec<Act>) {
@@ -2177,69 +2237,7 @@ impl StudioApp {
             }
         }
 
-        if self.store.prefs().stats {
-            let s = self.studio.stats();
-            let mut open = true;
-            egui::Window::new(tid!("view.stats", "Stats")).id(egui::Id::unique("stats")).open(&mut open).default_width(300.0).show(ctx, |ui| {
-                egui::Grid::new("stats-grid").num_columns(2).striped(true).show(ui, |ui| {
-                    let ms = |v: f64| craft_i18n::fmt(tl!("{ms} ms"), &[("ms", &format!("{v:.2}"))]);
-                    let rows = [
-                        ("Frames drawn", s.frames.to_string()),
-                        ("Frames drawn late", s.lagged.to_string()),
-                        ("Frame time (last)", ms(s.render_ms)),
-                        ("Frame time (average)", ms(s.render_avg_ms)),
-                        ("Frames encoded", s.encoder_frames.to_string()),
-                        ("Frames skipped by encoders", s.encoder_dropped.to_string()),
-                        ("Encoder queue", s.encoder_queued.to_string()),
-                    ];
-                    for (k, v) in rows {
-                        ui.label(tl!(k));
-                        ui.monospace(v);
-                        ui.end_row();
-                    }
-                    for (kind, label) in
-                        [(OutputKind::Recording, "Recording"), (OutputKind::Streaming, "Stream"), (OutputKind::Replay, "Replay buffer")]
-                    {
-                        if let Some(o) = self.studio.output(kind) {
-                            ui.label(tl!(label));
-                            let mb = format!("{:.1}", o.bytes as f64 / 1e6);
-                            ui.monospace(craft_i18n::fmt(tl!("{status} · {mb} MB"), &[("status", &output_status(&o)), ("mb", &mb)]));
-                            ui.end_row();
-                        }
-                    }
-                });
-            });
-            if !open {
-                self.store.update(|p| p.stats = false);
-            }
-        }
-
         self.streaming_window(ctx, acts);
-
-        if let Some(list) = &self.encoders {
-            let mut open = true;
-            let missing = self.encoders_ffmpeg.as_ref().map(Msg::shown);
-            egui::Window::new(tid!("tools.encoders", "Available Encoders")).id(egui::Id::unique("encoders")).open(&mut open).show(ctx, |ui| {
-                if let Some(missing) = missing {
-                    ui.colored_label(ui.visuals().warn_fg_color, missing);
-                }
-                egui::Grid::new("enc-grid").num_columns(3).striped(true).show(ui, |ui| {
-                    for (name, codec, ok) in list {
-                        ui.label(tl!(name));
-                        ui.monospace(codec);
-                        if *ok {
-                            ui.colored_label(Color32::from_rgb(80, 190, 90), tl!("available"));
-                        } else {
-                            ui.weak(tl!("not in this ffmpeg"));
-                        }
-                        ui.end_row();
-                    }
-                });
-            });
-            if !open {
-                self.encoders = None;
-            }
-        }
 
         if self.about {
             let mut open = true;
@@ -2319,18 +2317,20 @@ impl StudioApp {
         self.dialog_answers(&ctx);
         let background = theme::with_root(&ctx, |cx| theme::color(cx, cx.tokens.color.surface.background));
         // The title bar is the shell's title slot, and its edges resize the window where the app
-        // draws the frame. The status bar, the docks and the canvas fill the shell's body. The
+        // draws the frame. The status bar is the shell's status slot, shown while View › Status Bar
+        // is on, and the docks and the canvas fill the shell's body. The
         // shell runs the window's dialog host after the body, so a prompt opened in the body shows
         // in the same pass.
+        let status_bar = self.store.prefs().status_bar;
         let mut pass = Pass { app: self, acts: Vec::new() };
         AppShell::new(WindowKey::main())
             .title_bar(|ui, _, pass: &mut Pass<'_>| pass.app.title_bar(ui, &mut pass.acts))
+            .status(status_bar, |ui, _, pass: &mut Pass<'_>| pass.app.status_bar(ui))
             .body(move |ui, bcx, pass: &mut Pass<'_>| {
                 if let Some(host) = bcx.dialogs() {
                     pass.app.window_dialogs = Some(host);
                     pass.app.open_waiting_dialogs(ui.ctx());
                 }
-                pass.app.status_bar(ui);
                 pass.app.docks(ui, &mut pass.acts);
                 egui::CentralPanel::default().frame(egui::Frame::NONE.fill(background)).show(ui, |ui| pass.app.central(ui, &mut pass.acts));
             })
@@ -2338,6 +2338,8 @@ impl StudioApp {
         let mut acts = pass.acts;
         self.prompt_answers(&ctx);
         self.windows(&ctx, &mut acts);
+        self.stats_window(ui);
+        self.encoders_window(ui);
         self.scopes_window(ui, &mut acts);
         // An update never starts while a recording, stream or replay buffer runs.
         let idle = !self.outputs_running();
