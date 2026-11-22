@@ -271,6 +271,7 @@
 	Primary display	Primary display
 	Pristine (large files)	Pristine (large files)
 	Profile	Profile
+	Program	Program
 	Program: {name}	Program: {name}
 	Properties	Properties
 	Properties for '{name}'	Properties for '{name}'
@@ -609,6 +610,7 @@ menu	Transform	Transform
 @msg	`{command}`: unknown dock `{name}` (one of {docks})	`{command}`: unknown dock `{name}` (one of {docks})
 @msg	`{command}`: `path` must be a file path	`{command}`: `path` must be a file path
 @msg	`{command}` needs `path` when no file dialog can be shown	`{command}` needs `path` when no file dialog can be shown
+@msg	`{command}` cannot run now	`{command}` cannot run now
 @msg	The scene collection could not be imported: {error}	The scene collection could not be imported: {error}
 @msg	The scene collection could not be exported: {error}	The scene collection could not be exported: {error}
 @msg	there is no free name for the scene collection `{name}`	there is no free name for the scene collection `{name}`

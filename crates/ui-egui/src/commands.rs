@@ -93,6 +93,35 @@ pub const UI_COMMANDS: &[(&str, &str)] = &[
     ("window.next_pane", "Next Pane"),
     ("window.previous_pane", "Previous Pane"),
     ("window.focus_menu_bar", "Focus Menu Bar"),
+    ("scenes.add", "Add Scene"),
+    ("scenes.remove", "Remove Scene"),
+    ("scenes.move_up", "Move Scene Up"),
+    ("scenes.move_down", "Move Scene Down"),
+    ("sources.add", "Add Source"),
+    ("sources.remove", "Remove Source"),
+    ("sources.move_up", "Move Source Up"),
+    ("sources.move_down", "Move Source Down"),
+    ("sources.properties", "Source Properties"),
+];
+
+/// The header buttons of the Scenes dock: (name in `ui.inspect`, icon, command, English tooltip),
+/// in reading order. The `scenes.*` commands act on the scene being edited.
+pub const SCENE_HEADER: [(&str, &str, &str, &str); 4] = [
+    ("add", "plus", "scenes.add", "Add a scene"),
+    ("remove", "minus", "scenes.remove", "Remove the selected scene"),
+    ("up", "chevron_up", "scenes.move_up", "Move the scene up"),
+    ("down", "chevron_down", "scenes.move_down", "Move the scene down"),
+];
+
+/// The header buttons of the Sources dock, as [`SCENE_HEADER`] lists those of the Scenes dock. The
+/// `sources.*` commands act on the selected source of the scene being edited, and `sources.add`
+/// opens the Add menu under its button.
+pub const SOURCE_HEADER: [(&str, &str, &str, &str); 5] = [
+    ("add", "plus", "sources.add", "Add a source"),
+    ("remove", "minus", "sources.remove", "Remove the selected source from the scene"),
+    ("up", "chevron_up", "sources.move_up", "Move the source up"),
+    ("down", "chevron_down", "sources.move_down", "Move the source down"),
+    ("properties", "settings", "sources.properties", "Properties"),
 ];
 
 /// Whether the UI runtime carries out `cmd` itself: the window keys F6, Shift+F6 and F10, and the
@@ -162,6 +191,13 @@ pub fn ui_undoable(id: &str) -> bool {
     matches!(
         id,
         "selection.remove"
+            | "scenes.add"
+            | "scenes.remove"
+            | "scenes.move_up"
+            | "scenes.move_down"
+            | "sources.remove"
+            | "sources.move_up"
+            | "sources.move_down"
             | "selection.fit"
             | "selection.stretch"
             | "selection.center"
@@ -218,8 +254,13 @@ pub fn keymap(overrides: Overrides) -> Keymap {
 /// [`catalog`] as the runtime's command catalog takes it: one entry per id, without the commands
 /// a linked framework set defines ([`linked_defaults`] gives those their shortcuts). An entry with
 /// parameters goes under its binding key (`scene.select_index {"index":1}`), which is also the key
-/// its saved shortcuts are stored under; [`fired_command`] turns it back.
+/// its saved shortcuts are stored under; [`fired_command`] turns it back. The docks' header
+/// buttons ([`SCENE_HEADER`], [`SOURCE_HEADER`]) are in it too, with no shortcut.
 pub fn runtime_catalog() -> Vec<CommandDef> {
+    let header = SCENE_HEADER.iter().chain(&SOURCE_HEADER).map(|(_, _, id, _)| {
+        let label = UI_COMMANDS.iter().find(|(c, _)| c == id).map_or(*id, |(_, l)| *l);
+        CommandDef::new(CommandRef::new(*id), label, Scope::app())
+    });
     catalog()
         .into_iter()
         .filter(|def| !linked(&def.command))
@@ -231,6 +272,7 @@ pub fn runtime_catalog() -> Vec<CommandDef> {
                 def
             }
         })
+        .chain(header)
         .collect()
 }
 
@@ -594,6 +636,11 @@ mod tests {
         assert!(is_ui_command("app.check_updates"));
         assert_eq!(ui_params("app.check_updates"), "");
         assert!(!ui_undoable("app.check_updates"));
+        // The header buttons that change the scene collection are undone like the engine
+        // commands they run.
+        for (_, _, id, _) in SCENE_HEADER.iter().chain(&SOURCE_HEADER) {
+            assert_eq!(ui_undoable(id), !matches!(*id, "sources.add" | "sources.properties"), "{id}");
+        }
     }
 
     #[test]
