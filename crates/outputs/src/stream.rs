@@ -10,10 +10,31 @@
 //!   then sends the packets from the next keyframe on, timed from that keyframe. Its ring holds
 //!   [`RING_SECONDS`] seconds of the stream. A destination that falls further behind loses packets
 //!   up to the next keyframe, and the other destinations lose nothing.
-//! - A destination whose connection cannot be made, or is lost, is tried again after 2, 4, 8 and
-//!   16 seconds and then every 30 seconds. It gives up after [`MAX_TRIES`] tries in a row fail; a
-//!   connection lost within [`STABLE_AFTER`] of being made counts as a failed try. A server that
-//!   refuses the stream, and an address or key that is not valid, are not tried again.
+//! - A destination whose connection cannot be made, or is lost, is tried again as the profile's
+//!   [`ReconnectSettings`] say: the first wait, then a wait twice as long each time up to the
+//!   longest wait (2, 4, 8, 16, 30, 30... seconds by default), each wait cut by a random 0 to
+//!   [`JITTER_PERCENT`] % and never below 1 s by that cut. It gives up after the set number of tries
+//!   in a row fail, and at the first failure when automatic reconnect is off; a connection lost
+//!   within [`STABLE_AFTER`] of being made counts as a failed try. A server that refuses the
+//!   stream, and an address or key that is not valid, are not tried again, with one exception: a
+//!   destination whose connection was lost after the server took the stream, and that is then
+//!   refused `publish` on a try again, is tried up to [`REFUSED_RETRIES`] more times, waiting at
+//!   least [`REFUSED_WAIT`]. A destination stopped and started again does not count as one whose
+//!   connection was lost.
+//! - Each try looks the server's name up again, on a thread of its own, and waits at most
+//!   [`LOOKUP_WAIT`] for the answer; a stop does not wait for it. A lookup the system never answers
+//!   keeps its thread until the system returns, so each destination keeps at most [`MAX_LOOKUPS`]
+//!   lookups outstanding and the process at most [`MAX_ALL_LOOKUPS`], and an answer that comes
+//!   after its try gave up is not used.
+//! - Before a try, a destination asks the system whether it has a network route to the server's
+//!   last known addresses ([`studiocraft_platform::net::route_to`], which sends nothing), or, when
+//!   none is known and the last try failed for a network cause, to any address. With no route it
+//!   waits without connecting ([`DestinationStatus::WaitingForNetwork`]). One thread per stream
+//!   checks the route of every waiting destination each [`NET_POLL`], exists only while a
+//!   destination waits, and wakes each one whose route returns, which then tries at once. Each
+//!   longest wait spent without a route counts as a failed try.
+//! - When [`CHECK_AFTER_FAILURES`] tries of a destination fail in a row, or it gives up, its
+//!   connection is checked once ([`diagnose`]) until it goes live again or is started again.
 //! - A failure of one destination stops neither the other destinations nor the encoders. The
 //!   stream fails when every destination has failed.
 //! - A destination can be stopped and started again while the stream runs.
@@ -37,19 +58,47 @@ use studiocraft_media::audio::{PooledBlock, SAMPLE_RATE};
 use studiocraft_media::queue::Fifo;
 use studiocraft_media::stats::EncoderStats;
 use studiocraft_media::video::PooledFrame;
-use studiocraft_plugin::{DestinationState, DestinationStatus, EncoderKind, OutputInstance, OutputJob, OutputStatus, PluginError, RateControl};
+use studiocraft_model::ReconnectSettings;
+use studiocraft_model::services::Service;
+use studiocraft_platform::net::Route;
+use studiocraft_plugin::{
+    AddressOutcome, Cause, DestinationCounts, DestinationState, DestinationStatus, EncoderKind, Failure, OutputInstance, OutputJob, OutputStatus,
+    PluginError, RateControl,
+};
 
 use crate::native::{DISK_WAIT, Item, Native, PacketQueue, QUEUE_BYTES, QUEUE_SPAN_NS, Sink, Track};
 
+pub mod diagnose;
+
 /// Seconds of the stream each destination's ring holds.
 pub const RING_SECONDS: u32 = 4;
-/// Tries in a row that may fail before a destination gives up.
-pub const MAX_TRIES: u32 = 10;
-/// The wait before each try again: the first, the second, and so on; the last one repeats.
-pub const RETRY_DELAYS: [Duration; 5] =
-    [Duration::from_secs(2), Duration::from_secs(4), Duration::from_secs(8), Duration::from_secs(16), Duration::from_secs(30)];
+/// The most a wait before a try again is cut by, in percent, so destinations that lost their
+/// connections together do not all try again at the same moment.
+pub const JITTER_PERCENT: u64 = 20;
+/// The shortest wait the random cut leaves.
+const MIN_JITTERED_WAIT: Duration = Duration::from_secs(1);
 /// How long a connection must last before its loss starts a new count of failed tries.
 pub const STABLE_AFTER: Duration = Duration::from_secs(30);
+/// Tries again after a refused `publish` that follows a lost connection. Each one counts toward
+/// the failed tries in a row that [`ReconnectSettings::max_tries`] allows.
+pub const REFUSED_RETRIES: u32 = 3;
+/// The shortest wait before a try again after such a refusal.
+pub const REFUSED_WAIT: Duration = Duration::from_secs(5);
+/// How long a try waits for the server's name to be looked up.
+pub const LOOKUP_WAIT: Duration = Duration::from_secs(10);
+/// The most lookups of one destination that may be outstanding: the one of the current try, and
+/// one an earlier try gave up on that the system has not answered yet.
+pub const MAX_LOOKUPS: u32 = 2;
+/// The most lookups that may be outstanding in the process, across every stream started and
+/// stopped: a lookup the system never answers outlives its stream.
+pub const MAX_ALL_LOOKUPS: u32 = 32;
+/// Lookups outstanding in the process.
+static ALL_LOOKUPS: AtomicU32 = AtomicU32::new(0);
+/// How often a wait for a lookup looks at the clock again when nothing wakes it.
+const LOOKUP_POLL: Duration = Duration::from_millis(50);
+/// How often a stream's route thread checks the route of the destinations waiting for the
+/// network, StudioCraft's own value.
+pub const NET_POLL: Duration = Duration::from_secs(1);
 /// How long a destination's thread waits for a packet before it reads what the server sent.
 const RECV_WAIT: Duration = Duration::from_millis(100);
 /// How long a stop waits for the destinations to send what their rings hold and close.
@@ -89,6 +138,12 @@ impl Target {
         if query { format!("{base}?<redacted>") } else { base.to_string() }
     }
 
+    /// Whether the server and the key give an address the stream can publish to, as a start
+    /// checks it.
+    pub fn check(&self) -> Result<(), String> {
+        self.config().map(|_| ()).map_err(|e| e.to_string())
+    }
+
     /// What to publish to: the server and the key, or without a key, the server's address up to
     /// its last part and that part as the key, as when the key is written at the end of the
     /// address.
@@ -119,35 +174,159 @@ fn split_name(url: &str) -> Option<(&str, &str)> {
 /// The time limits of the destinations.
 #[derive(Clone, Debug)]
 pub(crate) struct Timing {
-    pub(crate) retry: Vec<Duration>,
+    /// Whether a failed or lost connection is tried again at all.
+    pub(crate) reconnect: bool,
+    /// The wait before the first try again.
+    pub(crate) first: Duration,
+    /// The longest wait before a try again.
+    pub(crate) longest: Duration,
     pub(crate) max_tries: u32,
+    /// The shortest wait before a try again after a refused `publish`.
+    pub(crate) refused: Duration,
+    /// Whether each wait is cut by a random amount; tests turn it off.
+    pub(crate) jitter: bool,
     pub(crate) connect: Duration,
     pub(crate) setup: Duration,
     pub(crate) stall: Duration,
     pub(crate) close: Duration,
     pub(crate) stable: Duration,
+    /// How long a try waits for the server's name to be looked up.
+    pub(crate) lookup: Duration,
+    /// How often the route of the destinations waiting for the network is checked.
+    pub(crate) net_poll: Duration,
 }
 
 impl Default for Timing {
     fn default() -> Self {
+        Timing::from(ReconnectSettings::default())
+    }
+}
+
+impl From<ReconnectSettings> for Timing {
+    fn from(r: ReconnectSettings) -> Self {
         Timing {
-            retry: RETRY_DELAYS.to_vec(),
-            max_tries: MAX_TRIES,
+            reconnect: r.enabled,
+            first: Duration::from_secs(r.first_delay_s.into()),
+            longest: Duration::from_secs(r.max_delay_s.into()),
+            max_tries: r.max_tries,
+            refused: REFUSED_WAIT,
+            jitter: true,
             connect: craft_rtmp::DEFAULT_CONNECT_TIMEOUT,
             setup: craft_rtmp::DEFAULT_SETUP_TIMEOUT,
             stall: craft_rtmp::DEFAULT_STALL_TIMEOUT,
             close: CLOSE_WAIT,
             stable: STABLE_AFTER,
+            lookup: LOOKUP_WAIT,
+            net_poll: NET_POLL,
         }
     }
 }
 
-impl Timing {
-    /// The wait before the try that follows `failures` failed tries in a row (at least 1).
-    fn delay(&self, failures: u32) -> Duration {
-        let i = usize::try_from(failures.saturating_sub(1)).unwrap_or(usize::MAX);
-        self.retry.get(i).or(self.retry.last()).copied().unwrap_or(Duration::ZERO)
+/// Where the destinations read the time for the lookup wait and the wait for the network. Tests
+/// pass a clock they move on.
+pub(crate) trait Clock: Send + Sync {
+    fn now(&self) -> Instant;
+}
+
+/// The system's clock.
+struct SystemClock;
+
+impl Clock for SystemClock {
+    fn now(&self) -> Instant {
+        Instant::now()
     }
+}
+
+/// Looks a host name and port up. Tests pass one that answers as they choose.
+pub(crate) type Resolve = dyn Fn(&str, u16) -> std::io::Result<Vec<std::net::SocketAddr>> + Send + Sync;
+
+/// The system resolver.
+fn system_resolve(host: &str, port: u16) -> std::io::Result<Vec<std::net::SocketAddr>> {
+    use std::net::ToSocketAddrs;
+    Ok((host, port).to_socket_addrs()?.collect())
+}
+
+/// Whether the system has a route to any of the addresses, or to any address when there are
+/// none. Tests pass one whose answer they set.
+pub(crate) type RouteCheck = dyn Fn(&[std::net::SocketAddr]) -> Route + Send + Sync;
+
+/// What a destination's thread uses from outside: the clock, the resolver and the route check.
+#[derive(Clone)]
+pub(crate) struct Seams {
+    pub(crate) clock: Arc<dyn Clock>,
+    pub(crate) resolve: Arc<Resolve>,
+    pub(crate) route: Arc<RouteCheck>,
+}
+
+impl Default for Seams {
+    fn default() -> Self {
+        Seams { clock: Arc::new(SystemClock), resolve: Arc::new(system_resolve), route: Arc::new(studiocraft_platform::net::route_to) }
+    }
+}
+
+/// How many tries in a row fail before a destination's connection is checked
+/// ([`diagnose`]), once until it goes live again or is started again. A destination that gives up
+/// sooner is checked when it gives up.
+pub const CHECK_AFTER_FAILURES: u32 = 3;
+
+/// What a stream's automatic connection checks need: the service of each destination set up for
+/// one, and whether the checks also contact the service's other hosts.
+#[derive(Clone, Debug, Default)]
+pub struct AutoCheck {
+    /// The key the stream's checks are kept under ([`diagnose::Subject::profile`]).
+    pub profile: String,
+    /// Destination ids and their services.
+    pub services: Vec<(String, &'static Service)>,
+    /// Whether the checks also read the service's list of ingest servers and status summary and
+    /// connect to its other ingest servers.
+    pub service_hosts: bool,
+}
+
+impl Timing {
+    /// The wait before the try that follows `failures` failed tries in a row (at least 1): the
+    /// first wait doubled for each failure after the first, at most the longest wait.
+    fn delay(&self, failures: u32) -> Duration {
+        let doublings = failures.saturating_sub(1).min(31);
+        self.first.checked_mul(1 << doublings).map_or(self.longest, |d| d.min(self.longest))
+    }
+
+    /// Whether a destination gives up after `failures` failed tries in a row.
+    fn gives_up(&self, failures: u32) -> bool {
+        !self.reconnect || failures >= self.max_tries
+    }
+}
+
+/// `wait` cut by `random` (taken modulo [`JITTER_PERCENT`] + 1) percent, in tenths of a percent so
+/// the cut is not a whole second; a wait the cut would bring below [`MIN_JITTERED_WAIT`] stops
+/// there, and a wait already below it is kept.
+fn jittered(wait: Duration, random: u64) -> Duration {
+    let per_mille = u128::from(random % (JITTER_PERCENT * 10 + 1));
+    let nanos = wait.as_nanos();
+    let cut = nanos.saturating_mul(per_mille) / 1000;
+    let left = Duration::from_nanos(u64::try_from(nanos.saturating_sub(cut)).unwrap_or(u64::MAX));
+    left.max(wait.min(MIN_JITTERED_WAIT))
+}
+
+/// The next number of a destination's xorshift sequence.
+fn next_random(state: &mut u64) -> u64 {
+    let mut x = *state;
+    x ^= x << 13;
+    x ^= x >> 7;
+    x ^= x << 17;
+    *state = x;
+    x
+}
+
+/// A nonzero seed for a destination's sequence, from its id and the time it starts.
+fn seed(id: &str) -> u64 {
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs() ^ u64::from(d.subsec_nanos()) << 32);
+    // FNV-1a over the id, then the time mixed in.
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for b in id.bytes() {
+        h = (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3);
+    }
+    let s = h ^ now;
+    if s == 0 { 0x9e37_79b9_7f4a_7c15 } else { s }
 }
 
 /// What each connection sends before the packets.
@@ -184,9 +363,30 @@ fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
+/// How many destinations of a stream are live and how many wait to try again, waiting for the
+/// network included, kept as each destination's status is set.
+#[derive(Default)]
+struct Counts {
+    live: AtomicU32,
+    retrying: AtomicU32,
+}
+
+impl Counts {
+    /// The count a destination with status `s` is in.
+    fn of(&self, s: &DestinationStatus) -> Option<&AtomicU32> {
+        match s {
+            DestinationStatus::Live => Some(&self.live),
+            DestinationStatus::Retrying { .. } | DestinationStatus::WaitingForNetwork { .. } => Some(&self.retrying),
+            _ => None,
+        }
+    }
+}
+
 /// A destination and what its thread reports.
 struct Dest {
     target: Target,
+    /// The stream's counts, shared by its destinations.
+    counts: Arc<Counts>,
     /// The stream key it sends with: the target's, or one given when it was started again.
     key: Mutex<String>,
     status: Mutex<DestinationStatus>,
@@ -198,6 +398,27 @@ struct Dest {
     /// Packets lost over every connection so far.
     dropped: AtomicU64,
     reconnects: AtomicU32,
+    /// It was started again while its thread still ran; the thread's next try is a first one, and
+    /// its failed tries are counted from none.
+    restarted: AtomicBool,
+    /// Lookups of the server's name whose threads have not ended.
+    lookups: AtomicU32,
+    /// The server's addresses from the last lookup that answered; empty before one.
+    addrs: Mutex<Vec<std::net::SocketAddr>>,
+    /// The server is given as an IP address, so a lookup cannot give it another address.
+    fixed: AtomicBool,
+    /// Set by the route thread when a route to the server returned while the destination waited.
+    net_up: AtomicBool,
+    /// The last connection was lost, and no connection has gone live since.
+    lost: AtomicBool,
+    /// Times it went live again after a lost connection.
+    recovered: AtomicU32,
+    /// Its connection was checked after failures since it last went live or was started. Shared
+    /// with a check that waits for a place, which clears it when it cannot run.
+    checked: Arc<AtomicBool>,
+    /// Whether its latest check is still wanted, shared with that check while it waits for a
+    /// place; cleared with `checked`.
+    wanted: Mutex<Arc<Mutex<bool>>>,
     /// Asks the thread to close the connection and end.
     stop: AtomicBool,
     /// The thread runs and has not decided to end. It is changed with `thread` locked, so a start
@@ -207,16 +428,26 @@ struct Dest {
 }
 
 impl Dest {
-    fn new(target: Target) -> Dest {
+    fn new(target: Target, counts: Arc<Counts>) -> Dest {
         Dest {
             key: Mutex::new(target.key.clone()),
             target,
+            counts,
             status: Mutex::new(DestinationStatus::Stopped),
             changes: Mutex::new(0),
             changed: Condvar::new(),
             bytes: AtomicU64::new(0),
             dropped: AtomicU64::new(0),
             reconnects: AtomicU32::new(0),
+            restarted: AtomicBool::new(false),
+            lookups: AtomicU32::new(0),
+            addrs: Mutex::new(Vec::new()),
+            fixed: AtomicBool::new(false),
+            net_up: AtomicBool::new(false),
+            lost: AtomicBool::new(false),
+            recovered: AtomicU32::new(0),
+            checked: Arc::new(AtomicBool::new(false)),
+            wanted: Mutex::new(Arc::new(Mutex::new(false))),
             stop: AtomicBool::new(false),
             alive: AtomicBool::new(false),
             thread: Mutex::new(None),
@@ -239,7 +470,38 @@ impl Dest {
     }
 
     fn set(&self, s: DestinationStatus) {
-        *lock(&self.status) = s;
+        let mut status = lock(&self.status);
+        // The counts change with the status held, so each destination is in at most one count.
+        if let Some(c) = self.counts.of(&status) {
+            c.fetch_sub(1, Ordering::Relaxed);
+        }
+        if let Some(c) = self.counts.of(&s) {
+            c.fetch_add(1, Ordering::Relaxed);
+        }
+        *status = s;
+        // Counted with the status held, so a reader that sees the count and then reads the
+        // status sees it live.
+        if *status == DestinationStatus::Live && self.lost.swap(false, Ordering::Relaxed) {
+            self.recovered.fetch_add(1, Ordering::SeqCst);
+        }
+        if *status == DestinationStatus::Live {
+            self.uncheck();
+        }
+        drop(status);
+        self.touch();
+    }
+
+    /// Its connection may be checked again after failures, and a check of it that waits for a
+    /// place is dropped. A check that is starting at that moment finishes starting first.
+    fn uncheck(&self) {
+        // Held while `checked` changes, as in `check_after`.
+        let wanted = lock(&self.wanted);
+        self.checked.store(false, Ordering::SeqCst);
+        *lock(&wanted) = false;
+    }
+
+    /// Counts a change and signals it.
+    fn touch(&self) {
         let mut changes = lock(&self.changes);
         *changes = changes.wrapping_add(1);
         self.changed.notify_all();
@@ -287,9 +549,9 @@ impl Dest {
     }
 
     /// The thread gives up.
-    fn fail(&self, error: String) {
+    fn fail(&self, failure: Failure) {
         let _slot = lock(&self.thread);
-        self.set(DestinationStatus::Failed(error));
+        self.set(DestinationStatus::Failed(failure));
         self.alive.store(false, Ordering::SeqCst);
     }
 
@@ -311,7 +573,7 @@ struct Watch<'a>(&'a Dest);
 impl Drop for Watch<'_> {
     fn drop(&mut self) {
         if std::thread::panicking() {
-            self.0.set(DestinationStatus::Failed("the destination stopped unexpectedly".into()));
+            self.0.set(DestinationStatus::Failed(Failure::new(Cause::Other, "the destination stopped unexpectedly")));
             self.0.alive.store(false, Ordering::SeqCst);
         }
     }
@@ -323,7 +585,21 @@ struct Hub {
     headers: Headers,
     ring: RingConfig,
     timing: Timing,
+    seams: Seams,
     dests: Vec<Arc<Dest>>,
+    counts: Arc<Counts>,
+    net: NetWatch,
+    /// Where the automatic connection checks run, and what they need; `None` turns them off.
+    auto: Option<(Arc<diagnose::Checks>, AutoCheck)>,
+}
+
+/// The destinations of a stream that wait for the network, and its route thread.
+#[derive(Default)]
+struct NetWatch {
+    /// The waiting destinations, and whether the route thread runs.
+    state: Mutex<(Vec<Arc<Dest>>, bool)>,
+    /// Route threads started, for the tests.
+    threads: AtomicU32,
 }
 
 impl Hub {
@@ -337,8 +613,16 @@ impl Hub {
 fn spawn(hub: &Arc<Hub>, d: &Arc<Dest>, key: Option<&str>) -> Result<(), PluginError> {
     let mut slot = lock(&d.thread);
     if d.running() {
-        // Asked to stop and started again before the thread decided to end: it goes on.
-        d.stop.store(false, Ordering::SeqCst);
+        // Asked to stop and started again before the thread decided to end: it goes on, and
+        // tries at once. A start of one that was not asked to stop changes nothing.
+        if d.stop.swap(false, Ordering::SeqCst) {
+            d.restarted.store(true, Ordering::SeqCst);
+            // A check that waits for a place from before the stop is dropped.
+            d.uncheck();
+            if let Some(t) = slot.as_ref() {
+                t.thread().unpark();
+            }
+        }
         return Ok(());
     }
     if let Some(t) = slot.take() {
@@ -349,6 +633,7 @@ fn spawn(hub: &Arc<Hub>, d: &Arc<Dest>, key: Option<&str>) -> Result<(), PluginE
         *lock(&d.key) = key.to_string();
     }
     d.stop.store(false, Ordering::SeqCst);
+    d.uncheck();
     d.alive.store(true, Ordering::SeqCst);
     d.set(DestinationStatus::Connecting);
     let (h, dd) = (Arc::clone(hub), Arc::clone(d));
@@ -360,7 +645,7 @@ fn spawn(hub: &Arc<Hub>, d: &Arc<Dest>, key: Option<&str>) -> Result<(), PluginE
         Err(e) => {
             let message = format!("no thread for the destination: {e}");
             d.alive.store(false, Ordering::SeqCst);
-            d.set(DestinationStatus::Failed(message.clone()));
+            d.set(DestinationStatus::Failed(Failure::new(Cause::Other, message.clone())));
             Err(PluginError::Failed(message))
         }
     }
@@ -373,15 +658,280 @@ fn is_final(e: &craft_rtmp::Error) -> bool {
     matches!(e, E::BadUrl(_) | E::BadKey(_) | E::BadConfig(_) | E::BadInput(_) | E::Rejected { .. })
 }
 
-/// Waits `delay`, or less when the destination is stopped or the stream ends.
+/// Whether the server refused the `publish` command.
+fn is_publish_refusal(e: &craft_rtmp::Error) -> bool {
+    matches!(e, craft_rtmp::Error::Rejected { command: "publish", .. })
+}
+
+/// The failure `e` describes. `live` is whether the connection had been made and the stream's
+/// headers had started to go out, which makes a closed, reset or stalled connection a lost one.
+pub(crate) fn failure(e: &craft_rtmp::Error, live: bool) -> Failure {
+    use craft_rtmp::{Error as E, TlsKind};
+    let detail = e.to_string();
+    let cause = match e {
+        E::BadUrl(_) => Cause::BadAddress,
+        E::BadKey(_) => Cause::BadKey,
+        E::Resolve(io) => lookup_cause(io),
+        E::Connect(tried) => {
+            let addresses: Vec<AddressOutcome> =
+                tried.iter().map(|(a, io)| AddressOutcome { address: a.to_string(), cause: connect_cause(io), detail: io.to_string() }).collect();
+            let has = |c: Cause| addresses.iter().any(|a| a.cause == c);
+            let cause = if addresses.is_empty() {
+                // The name resolved to no address.
+                Cause::LookupFailed
+            } else if has(Cause::Refused) {
+                Cause::Refused
+            } else if has(Cause::TimedOut) {
+                Cause::TimedOut
+            } else if addresses.iter().all(|a| a.cause == Cause::NoRoute) {
+                Cause::NoRoute
+            } else {
+                Cause::Other
+            };
+            return Failure { cause, detail, addresses };
+        }
+        E::Tls(t) => match t.kind {
+            TlsKind::UntrustedCertificate => Cause::CertificateUntrusted,
+            TlsKind::NameMismatch => Cause::CertificateNameMismatch,
+            TlsKind::Expired => Cause::CertificateExpired,
+            TlsKind::CertificateNotAccepted => Cause::CertificateNotAccepted,
+            TlsKind::HandshakeAlert | TlsKind::Other => Cause::TlsFailed,
+        },
+        E::Rejected { command: "connect", .. } => Cause::RejectedConnect,
+        E::Rejected { command: "publish", .. } => Cause::RejectedPublish,
+        E::Closed | E::Io(_) | E::Stalled(_) | E::Broken if live => Cause::Lost,
+        E::Closed | E::Io(_) => Cause::ClosedDuringSetup,
+        E::Timeout(_) => Cause::SetupTimedOut,
+        _ => Cause::Other,
+    };
+    Failure::new(cause, detail)
+}
+
+/// The cause a failed name lookup gives. Only Windows reports the resolver's answer as an error
+/// code (`WSAHOST_NOT_FOUND` 11001, `WSATRY_AGAIN` 11002); other systems report text, which is
+/// kept as the detail and not read.
+fn lookup_cause(e: &std::io::Error) -> Cause {
+    match e.raw_os_error() {
+        Some(11001) if cfg!(windows) => Cause::LookupNotFound,
+        Some(11002) if cfg!(windows) => Cause::LookupNoAnswer,
+        _ => Cause::LookupFailed,
+    }
+}
+
+/// The cause a failed TCP connection to one address gives.
+fn connect_cause(e: &std::io::Error) -> Cause {
+    use std::io::ErrorKind as K;
+    match e.kind() {
+        K::ConnectionRefused => Cause::Refused,
+        K::TimedOut | K::WouldBlock => Cause::TimedOut,
+        K::NetworkUnreachable | K::HostUnreachable | K::NetworkDown => Cause::NoRoute,
+        _ => Cause::Other,
+    }
+}
+
+/// `f` with "gave up after `tries` tries", or "automatic reconnect is off", added to its detail.
+fn gave_up(timing: &Timing, f: Failure, tries: u32) -> Failure {
+    if !timing.reconnect {
+        return Failure { detail: format!("{}; automatic reconnect is off", f.detail), ..f };
+    }
+    Failure { detail: format!("{}; gave up after {tries} tries", f.detail), ..f }
+}
+
+/// Starts the automatic connection check of `d` after `f`, unless one ran since it last went live
+/// or was started, or `f` is an address or key that is not valid.
+fn check_after(hub: &Hub, d: &Dest, f: &Failure) {
+    let Some((checks, auto)) = &hub.auto else { return };
+    // `checked` and this check's own flag change under the same lock as in `uncheck`, so a
+    // restart or a recovery meanwhile either happens before both are set or clears this check's
+    // flag. A check from before that still waits for a place is dropped.
+    let wanted = {
+        let mut held = lock(&d.wanted);
+        if matches!(f.cause, Cause::BadAddress | Cause::BadKey) || d.checked.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        let wanted = Arc::new(Mutex::new(true));
+        let before: Arc<Mutex<bool>> = std::mem::replace(&mut *held, Arc::clone(&wanted));
+        *lock(&before) = false;
+        wanted
+    };
+    let id = &d.target.id;
+    let service = auto.services.iter().find(|(i, _)| i == id).map(|(_, s)| *s);
+    let subject = diagnose::Subject {
+        profile: auto.profile.clone(),
+        id: id.clone(),
+        server: d.target.server.clone(),
+        service,
+        last: Some(f.clone()),
+        service_hosts: auto.service_hosts,
+        automatic: true,
+        checked: Some(Arc::clone(&d.checked)),
+        wanted: Some(wanted),
+    };
+    if let Err(e) = checks.start(subject) {
+        log::info!("stream destination `{id}`: the connection was not checked: {e}");
+        // A later failure tries again when another check of it ran, no thread was free, or too
+        // many checks waited for a place. With fewer waiting, the check waits for one instead.
+        if !matches!(e, diagnose::CheckError::BadAddress(_)) {
+            d.checked.store(false, Ordering::SeqCst);
+        }
+    }
+}
+
+/// The thread gives up with `f`, and the connection is checked.
+fn fail(hub: &Hub, d: &Dest, f: Failure) {
+    check_after(hub, d, &f);
+    d.fail(f);
+}
+
+/// Waits `delay`, or less when the destination is stopped or started again or the stream ends.
 fn wait(hub: &Hub, d: &Dest, delay: Duration) {
     let deadline = Instant::now() + delay;
     loop {
         let now = Instant::now();
-        if d.stopping() || hub.control.is_ended() || now >= deadline {
+        if d.stopping() || d.restarted.load(Ordering::SeqCst) || hub.control.is_ended() || now >= deadline {
             return;
         }
         std::thread::park_timeout(deadline - now);
+    }
+}
+
+/// What is left at `now` of the wait after a `publish` refused at `at`; nothing when the last try
+/// was not refused.
+fn refusal_left(timing: &Timing, at: Option<Instant>, now: Instant) -> Duration {
+    at.map_or(Duration::ZERO, |at| timing.refused.saturating_sub(now.saturating_duration_since(at)))
+}
+
+/// Whether a failure of `cause` may come from this computer having no network: a missing route,
+/// a lookup that failed or had no answer, or a connection that timed out.
+fn network_cause(cause: Cause) -> bool {
+    matches!(cause, Cause::NoRoute | Cause::LookupFailed | Cause::LookupNoAnswer | Cause::TimedOut)
+}
+
+/// Whether the system has a route to `d`'s server, checked before a try after `last`: to its last
+/// known addresses, and, when they have none or none is known after a failure of a
+/// [`network_cause`], to any address.
+fn gate(hub: &Hub, d: &Dest, last: &Failure) -> Gate {
+    let addrs = lock(&d.addrs).clone();
+    if !addrs.is_empty() && (hub.seams.route)(&addrs) != Route::None {
+        return Gate::Open;
+    }
+    if !addrs.is_empty() && d.fixed.load(Ordering::SeqCst) {
+        return Gate::Closed;
+    }
+    // A lookup may give a named server an address that has a route, and a network may reach the
+    // server without a default route, so the probes never stop the try of a named server.
+    if (!addrs.is_empty() || network_cause(last.cause)) && (hub.seams.route)(&[]) == Route::None {
+        return Gate::NoDefault;
+    }
+    Gate::Open
+}
+
+/// What the route check says about the next try.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Gate {
+    /// Try at the usual time.
+    Open,
+    /// The server is given as an IP address with no route: wait until one returns.
+    Closed,
+    /// The server is named, its known addresses (if any) have no route, and the system has no
+    /// default route: show the wait, and try at the usual time or as soon as a route returns.
+    NoDefault,
+}
+
+/// How a wait for the network ended.
+enum NetWait {
+    /// A route returned: try at once.
+    Up,
+    /// The destination was started again: try at once, as a first try.
+    Restarted,
+    /// The destination was stopped or the stream ended.
+    Stopped,
+    /// The longest waits spent without a route used up the tries.
+    GaveUp(Failure),
+}
+
+/// Waits until the system has a route to `d`'s server again or `d` is started again, or, with
+/// `until`, at most that long, showing [`DestinationStatus::WaitingForNetwork`] with `last`. Each
+/// longest wait spent without a route counts as a failed try in `failures`.
+fn wait_for_network(hub: &Arc<Hub>, d: &Arc<Dest>, failures: &mut u32, last: &Failure, until: Option<Duration>) -> NetWait {
+    // The wait starts before the status shows it, so a reader of the status never sees a later start.
+    let start = hub.seams.clock.now();
+    let mut since = start;
+    d.net_up.store(false, Ordering::SeqCst);
+    let watched = watch_network(hub, d);
+    d.set(DestinationStatus::WaitingForNetwork { attempt: failures.saturating_add(1), failure: last.clone() });
+    let ended = loop {
+        if d.stopping() || hub.control.is_ended() {
+            break NetWait::Stopped;
+        }
+        // Started again while it waits: it tries at once, as after the wait before a try.
+        if d.restarted.load(Ordering::SeqCst) {
+            break NetWait::Restarted;
+        }
+        // Without a route thread, the destination checks for itself.
+        if d.net_up.load(Ordering::SeqCst) || (!watched && gate(hub, d, last) == Gate::Open) {
+            break NetWait::Up;
+        }
+        let now = hub.seams.clock.now();
+        if until.is_some_and(|u| now.saturating_duration_since(start) >= u) {
+            break NetWait::Up;
+        }
+        if now.saturating_duration_since(since) >= hub.timing.longest {
+            *failures = failures.saturating_add(1);
+            if hub.timing.gives_up(*failures) {
+                break NetWait::GaveUp(gave_up(&hub.timing, last.clone(), *failures));
+            }
+            since = now;
+            d.set(DestinationStatus::WaitingForNetwork { attempt: failures.saturating_add(1), failure: last.clone() });
+        }
+        std::thread::park_timeout(hub.timing.net_poll);
+    };
+    let mut state = lock(&hub.net.state);
+    state.0.retain(|w| !Arc::ptr_eq(w, d));
+    ended
+}
+
+/// Adds `d` to the destinations waiting for the network, and starts the route thread when none
+/// runs. Whether a route thread watches.
+fn watch_network(hub: &Arc<Hub>, d: &Arc<Dest>) -> bool {
+    let mut state = lock(&hub.net.state);
+    if !state.0.iter().any(|w| Arc::ptr_eq(w, d)) {
+        state.0.push(Arc::clone(d));
+    }
+    if state.1 {
+        return true;
+    }
+    let h = Arc::clone(hub);
+    let started = std::thread::Builder::new().name("stream route".into()).spawn(move || route_thread(&h)).is_ok();
+    if started {
+        hub.net.threads.fetch_add(1, Ordering::SeqCst);
+    }
+    state.1 = started;
+    started
+}
+
+/// Each [`Timing::net_poll`], checks the route of every destination waiting for the network and
+/// wakes each one that has a route again. Ends when none waits or the stream ends.
+fn route_thread(hub: &Hub) {
+    loop {
+        std::thread::park_timeout(hub.timing.net_poll);
+        let waiting = {
+            let mut state = lock(&hub.net.state);
+            if state.0.is_empty() || hub.control.is_ended() {
+                state.1 = false;
+                return;
+            }
+            state.0.clone()
+        };
+        for d in waiting {
+            let addrs = lock(&d.addrs).clone();
+            // A named server is tried again once the system has any route, as `gate` decides.
+            let named = !d.fixed.load(Ordering::SeqCst) && !addrs.is_empty();
+            if (hub.seams.route)(&addrs) != Route::None || (named && (hub.seams.route)(&[]) != Route::None) {
+                d.net_up.store(true, Ordering::SeqCst);
+                d.wake();
+            }
+        }
     }
 }
 
@@ -390,53 +940,208 @@ enum End {
     /// The destination was stopped, or the stream ended and every packet was sent.
     Done,
     /// The connection was lost: try again.
-    Lost(String),
+    Lost(Failure),
     /// Give up.
-    Failed(String),
+    Failed(Failure),
 }
 
 fn end_for(e: craft_rtmp::Error) -> End {
-    if is_final(&e) { End::Failed(e.to_string()) } else { End::Lost(e.to_string()) }
+    let f = failure(&e, true);
+    if is_final(&e) { End::Failed(f) } else { End::Lost(f) }
 }
 
-fn connect(hub: &Hub, d: &Dest) -> Result<Publisher, craft_rtmp::Error> {
-    let mut c = d.config()?;
+/// Why a try did not connect.
+enum Missed {
+    /// The address, the key, the lookup or the connection failed.
+    Rtmp(craft_rtmp::Error),
+    /// The lookup gave no answer in time, or an earlier one has not finished.
+    Lookup(Failure),
+    /// The destination was stopped, or the stream ended, while the lookup ran.
+    Stopped,
+}
+
+fn connect(hub: &Hub, d: &Arc<Dest>) -> Result<Publisher, Missed> {
+    let mut c = d.config().map_err(Missed::Rtmp)?;
     c.connect_timeout = hub.timing.connect;
     c.setup_timeout = hub.timing.setup;
     c.stall_timeout = hub.timing.stall;
-    Publisher::connect(&c)
+    let addrs = lookup(hub, d, c.endpoint.host(), c.endpoint.port())?;
+    lock(&d.addrs).clone_from(&addrs);
+    d.fixed.store(c.endpoint.host().parse::<std::net::IpAddr>().is_ok(), Ordering::SeqCst);
+    // A stop that came as the lookup answered does not wait for a TCP connect.
+    if d.stopping() || hub.control.is_ended() {
+        return Err(Missed::Stopped);
+    }
+    Publisher::connect_to(&c, &addrs).map_err(Missed::Rtmp)
+}
+
+/// Looks `host` up on a thread of its own and waits for the answer until the lookup time runs
+/// out, the destination is stopped or the stream ends. The thread ends when the resolver returns,
+/// whether or not the try still waits; an answer nobody waits for is dropped. An IP address is
+/// used as it is, with no lookup, so the lookup limits do not apply to it.
+fn lookup(hub: &Hub, d: &Arc<Dest>, host: &str, port: u16) -> Result<Vec<std::net::SocketAddr>, Missed> {
+    use std::sync::mpsc::{TryRecvError, sync_channel};
+    if let Ok(ip) = host.parse::<std::net::IpAddr>() {
+        return Ok(vec![std::net::SocketAddr::new(ip, port)]);
+    }
+    // Only this destination's thread adds lookups, so the count cannot pass the limit between the
+    // check and the add.
+    if d.lookups.load(Ordering::SeqCst) >= MAX_LOOKUPS {
+        return Err(Missed::Lookup(Failure::new(Cause::LookupsPending, "an earlier lookup of the server's name has not finished")));
+    }
+    if !reserve(&ALL_LOOKUPS, MAX_ALL_LOOKUPS) {
+        return Err(Missed::Lookup(Failure::new(Cause::LookupsPending, "too many lookups of server names have not finished")));
+    }
+    let (wait, start) = (hub.timing.lookup, hub.seams.clock.now());
+    let (tx, rx) = sync_channel(1);
+    let waiter = std::thread::current();
+    let (resolve, owner, name) = (Arc::clone(&hub.seams.resolve), Arc::clone(d), host.to_string());
+    let clock = Arc::clone(&hub.seams.clock);
+    d.lookups.fetch_add(1, Ordering::SeqCst);
+    let spawned = std::thread::Builder::new().name("stream lookup".into()).spawn(move || {
+        let answer = resolve(&name, port);
+        // The answer carries when it came, so a try that wakes late still uses an answer in time.
+        // Fails when the try stopped waiting, which drops the answer.
+        let _ = tx.send((answer, clock.now()));
+        ALL_LOOKUPS.fetch_sub(1, Ordering::SeqCst);
+        owner.lookups.fetch_sub(1, Ordering::SeqCst);
+        owner.touch();
+        waiter.unpark();
+    });
+    if let Err(e) = spawned {
+        ALL_LOOKUPS.fetch_sub(1, Ordering::SeqCst);
+        d.lookups.fetch_sub(1, Ordering::SeqCst);
+        return Err(Missed::Lookup(Failure::new(Cause::Other, format!("no thread for the lookup: {e}"))));
+    }
+    let late = || Missed::Lookup(Failure::new(Cause::LookupNoAnswer, format!("the server's name was not looked up within {} s", wait.as_secs())));
+    // An answer counts when it came before the deadline, however late the try wakes to take it.
+    let take = |(answer, at): (std::io::Result<Vec<std::net::SocketAddr>>, Instant)| {
+        if at.saturating_duration_since(start) >= wait {
+            return Err(late());
+        }
+        answer.map_err(|e| Missed::Rtmp(craft_rtmp::Error::Resolve(e)))
+    };
+    loop {
+        let received = rx.try_recv();
+        if d.stopping() || hub.control.is_ended() {
+            return Err(Missed::Stopped);
+        }
+        match received {
+            Ok(answer) => return take(answer),
+            Err(TryRecvError::Disconnected) => {
+                return Err(Missed::Lookup(Failure::new(Cause::LookupFailed, "the lookup of the server's name ended without an answer")));
+            }
+            Err(TryRecvError::Empty) => {}
+        }
+        let waited = hub.seams.clock.now().saturating_duration_since(start);
+        if waited >= wait {
+            // An answer that came while the clock was read may still be in time.
+            return rx.try_recv().map_or_else(|_| Err(late()), take);
+        }
+        std::thread::park_timeout((wait - waited).min(LOOKUP_POLL));
+    }
+}
+
+/// Adds one to `count` unless it already holds `max`, and says whether it added.
+fn reserve(count: &AtomicU32, max: u32) -> bool {
+    let mut n = count.load(Ordering::SeqCst);
+    while n < max {
+        match count.compare_exchange_weak(n, n + 1, Ordering::SeqCst, Ordering::SeqCst) {
+            Ok(_) => return true,
+            Err(now) => n = now,
+        }
+    }
+    false
 }
 
 /// The thread of one destination: connect, send, and try again when the connection is lost.
-fn run(hub: &Hub, d: &Dest) {
+fn run(hub: &Arc<Hub>, d: &Arc<Dest>) {
     let _watch = Watch(d);
     let mut failures = 0u32;
-    let mut last_error: Option<String> = None;
+    let mut last_error: Option<Failure> = None;
+    // Whether the tries follow a connection the server took and that was then lost, the refused
+    // `publish` answers since, and whether the last try was one.
+    let mut after_loss = false;
+    let mut refusals = 0u32;
+    let mut refused = false;
+    let mut random = seed(&d.target.id);
     loop {
-        if let Some(error) = last_error.take() {
-            d.set(DestinationStatus::Retrying { attempt: failures.saturating_add(1), error });
-            wait(hub, d, hub.timing.delay(failures.max(1)));
+        if let Some(failure) = last_error.take() {
+            if failures >= CHECK_AFTER_FAILURES {
+                check_after(hub, d, &failure);
+            }
+            let delay = hub.timing.delay(failures.max(1));
+            let delay = if hub.timing.jitter { jittered(delay, next_random(&mut random)) } else { delay };
+            let refused_at = std::mem::take(&mut refused).then(Instant::now);
+            let delay = if refused_at.is_some() { delay.max(hub.timing.refused) } else { delay };
+            // With no route, the wait for the network takes the place of the wait before the try.
+            let mut route = gate(hub, d, &failure);
+            if route == Gate::Open {
+                d.set(DestinationStatus::Retrying { attempt: failures.saturating_add(1), failure: failure.clone() });
+                wait(hub, d, delay);
+                // Checked again right before the try: the route may have gone during the wait.
+                route = match gate(hub, d, &failure) {
+                    Gate::Closed => Gate::Closed,
+                    Gate::Open | Gate::NoDefault => Gate::Open,
+                };
+            }
+            if route != Gate::Open && !d.stopping() && !d.restarted.load(Ordering::SeqCst) && !hub.control.is_ended() {
+                let until = (route == Gate::NoDefault).then_some(delay);
+                match wait_for_network(hub, d, &mut failures, &failure, until) {
+                    NetWait::Up => {
+                        d.set(DestinationStatus::Retrying { attempt: failures.saturating_add(1), failure });
+                        // A route that returns soon after a refused `publish` does not cut its wait.
+                        wait(hub, d, refusal_left(&hub.timing, refused_at, Instant::now()));
+                    }
+                    NetWait::Restarted | NetWait::Stopped => {}
+                    NetWait::GaveUp(f) => return fail(hub, d, f),
+                }
+            }
         }
         if d.ends(hub) {
             return;
         }
-        if !matches!(d.status(), DestinationStatus::Retrying { .. }) {
+        // Started again while it waited: the try is shown as a first one.
+        if d.restarted.load(Ordering::SeqCst) || !matches!(d.status(), DestinationStatus::Retrying { .. }) {
             d.set(DestinationStatus::Connecting);
         }
-        let mut publisher = match connect(hub, d) {
-            Ok(p) => p,
+        let connected = connect(hub, d);
+        // Started again while it waited or connected: this try's answer is that of a first try, and
+        // the tries after it are counted from none, and a later failure may be checked again.
+        if d.restarted.swap(false, Ordering::SeqCst) {
+            (after_loss, refusals, failures) = (false, 0, 0);
+            d.uncheck();
+        }
+        let tried = match connected {
+            Ok(p) => Ok(p),
             // Stopped while it connected: the next turn ends the thread.
             Err(_) if d.stopping() || hub.control.is_ended() => continue,
-            Err(e) if is_final(&e) => return d.fail(e.to_string()),
-            Err(e) => {
-                failures = failures.saturating_add(1);
-                if failures >= hub.timing.max_tries {
-                    return d.fail(format!("{e}; gave up after {failures} tries"));
+            Err(Missed::Stopped) => continue,
+            Err(Missed::Rtmp(e)) if is_final(&e) && !(is_publish_refusal(&e) && after_loss && refusals < REFUSED_RETRIES) => {
+                return fail(hub, d, failure(&e, false));
+            }
+            Err(Missed::Rtmp(e)) => {
+                if is_publish_refusal(&e) {
+                    refusals = refusals.saturating_add(1);
+                    refused = true;
                 }
-                last_error = Some(e.to_string());
+                Err(failure(&e, false))
+            }
+            Err(Missed::Lookup(f)) => Err(f),
+        };
+        let mut publisher = match tried {
+            Ok(p) => p,
+            Err(f) => {
+                failures = failures.saturating_add(1);
+                if hub.timing.gives_up(failures) {
+                    return fail(hub, d, gave_up(&hub.timing, f, failures));
+                }
+                last_error = Some(f);
                 continue;
             }
         };
+        // The server took `publish`.
+        (after_loss, refusals) = (false, 0);
         // Stopped while it connected: the next turn ends the thread without sending.
         if d.stopping() || hub.control.is_ended() {
             let _ = publisher.close();
@@ -445,24 +1150,40 @@ fn run(hub: &Hub, d: &Dest) {
         let started = Instant::now();
         let end = match hub.control.subscribe(hub.ring) {
             Ok(mut rx) => send_all(hub, d, &mut publisher, &mut rx),
-            Err(e) => End::Failed(format!("no room for the destination's packets: {e}")),
+            Err(e) => End::Failed(Failure::new(Cause::Other, format!("no room for the destination's packets: {e}"))),
         };
         // The connection ends whichever way sending ended; a lost one may not take the close.
         let _ = publisher.close();
         match end {
             // Unless it was started again meanwhile, the next turn ends the thread.
             End::Done => {}
-            End::Failed(e) => return d.fail(e),
+            End::Failed(e) => return fail(hub, d, e),
             End::Lost(e) => {
+                // A stop and start that came while it sent or as the connection closed stays set,
+                // so the next try is at once and is that of a first try.
+                after_loss = true;
+                d.lost.store(true, Ordering::Relaxed);
                 d.reconnects.fetch_add(1, Ordering::Relaxed);
-                // A connection lost soon after it was made counts as another failed try.
-                failures = if started.elapsed() >= hub.timing.stable { 1 } else { failures.saturating_add(1) };
-                if failures >= hub.timing.max_tries {
-                    return d.fail(format!("{e}; gave up after {failures} tries"));
+                failures = failures_after_loss(&hub.timing, failures, started.elapsed(), d.restarted.load(Ordering::SeqCst));
+                if hub.timing.gives_up(failures) {
+                    return fail(hub, d, gave_up(&hub.timing, e, failures));
                 }
                 last_error = Some(e);
             }
         }
+    }
+}
+
+/// The failed tries in a row after a connection that lasted `lasted` was lost: none when the
+/// destination was started again meanwhile, one when the connection lasted [`Timing::stable`], and
+/// one more than `failures` when it was lost sooner.
+fn failures_after_loss(timing: &Timing, failures: u32, lasted: Duration, restarted: bool) -> u32 {
+    if restarted {
+        0
+    } else if lasted >= timing.stable {
+        1
+    } else {
+        failures.saturating_add(1)
     }
 }
 
@@ -503,6 +1224,9 @@ fn send_all(hub: &Hub, d: &Dest, p: &mut Publisher, rx: &mut Receiver) -> End {
         if let Err(e) = sent {
             return end_for(e);
         }
+        // A stop and start this loop did not see left the connection sending, so it is not a
+        // restart for the next try; one that comes as the connection closes is kept.
+        d.restarted.store(false, Ordering::SeqCst);
     }
 }
 
@@ -584,11 +1308,30 @@ pub struct Streaming {
 
 impl Streaming {
     /// Open the encoders for `job` and start sending to each enabled destination of `targets`.
-    pub fn start(job: &OutputJob, targets: Vec<Target>) -> Result<Streaming, PluginError> {
-        Self::start_timed(job, targets, Timing::default())
+    /// Starts the stream to `targets`, each trying again as `reconnect` says, with the automatic
+    /// connection checks of `checks` in the process's [`diagnose::checks`].
+    pub fn start(job: &OutputJob, targets: Vec<Target>, reconnect: ReconnectSettings, checks: AutoCheck) -> Result<Streaming, PluginError> {
+        reconnect.check().map_err(PluginError::Failed)?;
+        Self::start_full(job, targets, Timing::from(reconnect), Seams::default(), Some((diagnose::checks(), checks)))
     }
 
+    #[cfg(test)]
     pub(crate) fn start_timed(job: &OutputJob, targets: Vec<Target>, timing: Timing) -> Result<Streaming, PluginError> {
+        Self::start_with(job, targets, timing, Seams::default())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn start_with(job: &OutputJob, targets: Vec<Target>, timing: Timing, seams: Seams) -> Result<Streaming, PluginError> {
+        Self::start_full(job, targets, timing, seams, None)
+    }
+
+    pub(crate) fn start_full(
+        job: &OutputJob,
+        targets: Vec<Target>,
+        timing: Timing,
+        seams: Seams,
+        auto: Option<(Arc<diagnose::Checks>, AutoCheck)>,
+    ) -> Result<Streaming, PluginError> {
         let RateControl::Bitrate { kbps, .. } = job.rate else {
             return Err(PluginError::Failed("streams need a bitrate".into()));
         };
@@ -629,8 +1372,9 @@ impl Streaming {
         let Some(headers) = headers else {
             return Err(PluginError::Failed("the stream's encoders gave no configuration".into()));
         };
-        let dests = targets.into_iter().map(|t| Arc::new(Dest::new(t))).collect();
-        let hub = Arc::new(Hub { control, headers, ring, timing, dests });
+        let counts = Arc::new(Counts::default());
+        let dests = targets.into_iter().map(|t| Arc::new(Dest::new(t, Arc::clone(&counts)))).collect();
+        let hub = Arc::new(Hub { control, headers, ring, timing, seams, dests, counts, net: NetWatch::default(), auto });
         let mut s = Streaming { native, hub, stats: Arc::clone(&job.stats), refused, stopped: false };
         for d in s.hub.dests.iter().filter(|d| d.target.enabled) {
             if let Err(e) = spawn(&s.hub, d, None) {
@@ -726,7 +1470,7 @@ impl OutputInstance for Streaming {
             .iter()
             .zip(&states)
             .filter_map(|(d, st)| match st {
-                DestinationStatus::Failed(e) => Some((d.target.id.as_str(), e.as_str())),
+                DestinationStatus::Failed(f) => Some((d.target.id.as_str(), f.detail.as_str())),
                 _ => None,
             })
             .collect();
@@ -761,12 +1505,33 @@ impl OutputInstance for Streaming {
         // The encoders finish, and the last packets go to the rings; then the fan-out ends.
         let r = self.native.stop();
         self.close_destinations();
+        // The check of a destination that failed for good outlives the stream; the others end.
+        // A thread asked to stop starts no check, so one started while the stream stopped is
+        // canceled here too.
+        if let Some((checks, auto)) = &self.hub.auto {
+            for d in self.hub.dests.iter().filter(|d| !matches!(d.status(), DestinationStatus::Failed(_))) {
+                checks.cancel(&auto.profile, &d.target.id);
+            }
+        }
         r?;
         failed.map_or(Ok(()), |e| Err(PluginError::Failed(e)))
     }
 
     fn destinations(&self) -> Vec<DestinationState> {
         self.hub.dests.iter().map(|d| d.state()).collect()
+    }
+
+    fn reconnects(&self) -> u64 {
+        self.hub.dests.iter().map(|d| u64::from(d.reconnects.load(Ordering::Relaxed))).sum()
+    }
+
+    fn destination_counts(&self) -> DestinationCounts {
+        let c = &self.hub.counts;
+        DestinationCounts { live: c.live.load(Ordering::Relaxed), retrying: c.retrying.load(Ordering::Relaxed) }
+    }
+
+    fn recoveries(&self) -> u64 {
+        self.hub.dests.iter().map(|d| u64::from(d.recovered.load(Ordering::SeqCst))).sum()
     }
 
     fn start_destination(&self, id: &str, key: Option<&str>) -> Result<(), PluginError> {
@@ -784,6 +1549,9 @@ impl OutputInstance for Streaming {
 
     fn stop_destination(&self, id: &str) -> Result<(), PluginError> {
         self.hub.find(id)?.ask_stop();
+        if let Some((checks, auto)) = &self.hub.auto {
+            checks.cancel(&auto.profile, id);
+        }
         Ok(())
     }
 }

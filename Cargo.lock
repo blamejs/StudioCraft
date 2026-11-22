@@ -1481,9 +1481,11 @@ dependencies = [
 
 [[package]]
 name = "craft-app-audio"
-version = "0.1.0-alpha.1"
+version = "0.1.0-alpha.2"
 dependencies = [
  "arc-swap",
+ "pipewire",
+ "rustix 1.1.6",
  "serde",
  "serde_json",
  "sysinfo",
@@ -1512,7 +1514,7 @@ dependencies = [
 
 [[package]]
 name = "craft-audio-dsp"
-version = "0.1.0-alpha.1"
+version = "0.1.0-alpha.2"
 
 [[package]]
 name = "craft-behavior"
@@ -1637,7 +1639,7 @@ dependencies = [
 
 [[package]]
 name = "craft-flv"
-version = "0.1.0-alpha.1"
+version = "0.1.0-alpha.2"
 dependencies = [
  "criterion",
  "proptest",
@@ -1888,7 +1890,7 @@ dependencies = [
 
 [[package]]
 name = "craft-packet"
-version = "0.1.0-alpha.1"
+version = "0.1.0-alpha.2"
 dependencies = [
  "arc-swap",
  "craft-hwenc-native",
@@ -1951,7 +1953,7 @@ dependencies = [
 
 [[package]]
 name = "craft-rtmp"
-version = "0.1.0-alpha.1"
+version = "0.1.0-alpha.2"
 dependencies = [
  "craft-flv",
  "criterion",
@@ -1964,7 +1966,7 @@ dependencies = [
 
 [[package]]
 name = "craft-scopes"
-version = "0.1.0-alpha.1"
+version = "0.1.0-alpha.2"
 dependencies = [
  "craft-color",
  "serde",
@@ -2004,7 +2006,7 @@ dependencies = [
 
 [[package]]
 name = "craft-speech"
-version = "0.1.0-alpha.1"
+version = "0.1.0-alpha.2"
 dependencies = [
  "candle-core",
  "candle-nn",
@@ -2084,7 +2086,7 @@ source = "git+https://github.com/storytold/craft-libs?rev=40525262403fbdeb3c0a27
 
 [[package]]
 name = "craft-transitions"
-version = "0.1.0-alpha.1"
+version = "0.1.0-alpha.2"
 dependencies = [
  "craft-ease",
  "serde",
@@ -7070,7 +7072,7 @@ checksum = "7da8b5736845d9f2fcb837ea5d9e2628564b3b043a70948a3f0b778838c5fb4f"
 
 [[package]]
 name = "studiocraft"
-version = "0.1.0-alpha.1"
+version = "0.1.0-alpha.2"
 dependencies = [
  "base64 0.22.1",
  "craft-control-protocol",
@@ -7092,7 +7094,7 @@ dependencies = [
 
 [[package]]
 name = "studiocraft-audio-tracks"
-version = "0.1.0-alpha.1"
+version = "0.1.0-alpha.2"
 dependencies = [
  "craft-atomic",
  "craft-audio",
@@ -7112,7 +7114,7 @@ dependencies = [
 
 [[package]]
 name = "studiocraft-cli"
-version = "0.1.0-alpha.1"
+version = "0.1.0-alpha.2"
 dependencies = [
  "serde_json",
  "studiocraft-audio-tracks",
@@ -7126,7 +7128,7 @@ dependencies = [
 
 [[package]]
 name = "studiocraft-encode"
-version = "0.1.0-alpha.1"
+version = "0.1.0-alpha.2"
 dependencies = [
  "craft-audio",
  "craft-hwenc-native",
@@ -7138,7 +7140,7 @@ dependencies = [
 
 [[package]]
 name = "studiocraft-engine"
-version = "0.1.0-alpha.1"
+version = "0.1.0-alpha.2"
 dependencies = [
  "craft-app-audio",
  "craft-audio-dsp",
@@ -7155,7 +7157,7 @@ dependencies = [
 
 [[package]]
 name = "studiocraft-mcp"
-version = "0.1.0-alpha.1"
+version = "0.1.0-alpha.2"
 dependencies = [
  "base64 0.22.1",
  "craft-control-protocol",
@@ -7173,7 +7175,7 @@ dependencies = [
 
 [[package]]
 name = "studiocraft-media"
-version = "0.1.0-alpha.1"
+version = "0.1.0-alpha.2"
 dependencies = [
  "craft-time",
  "criterion",
@@ -7182,7 +7184,7 @@ dependencies = [
 
 [[package]]
 name = "studiocraft-model"
-version = "0.1.0-alpha.1"
+version = "0.1.0-alpha.2"
 dependencies = [
  "serde",
  "serde_json",
@@ -7191,7 +7193,7 @@ dependencies = [
 
 [[package]]
 name = "studiocraft-outputs"
-version = "0.1.0-alpha.1"
+version = "0.1.0-alpha.2"
 dependencies = [
  "craft-audio",
  "craft-flv",
@@ -7209,11 +7211,12 @@ dependencies = [
  "studiocraft-model",
  "studiocraft-platform",
  "studiocraft-plugin",
+ "ureq",
 ]
 
 [[package]]
 name = "studiocraft-platform"
-version = "0.1.0-alpha.1"
+version = "0.1.0-alpha.2"
 dependencies = [
  "ashpd",
  "comedy",
@@ -7230,13 +7233,15 @@ dependencies = [
  "studiocraft-media",
  "thiserror 2.0.21",
  "v4l",
+ "wayland-client",
+ "x11rb",
  "xcap",
  "zune-jpeg",
 ]
 
 [[package]]
 name = "studiocraft-plugin"
-version = "0.1.0-alpha.1"
+version = "0.1.0-alpha.2"
 dependencies = [
  "craft-ease",
  "serde_json",
@@ -7247,7 +7252,7 @@ dependencies = [
 
 [[package]]
 name = "studiocraft-render"
-version = "0.1.0-alpha.1"
+version = "0.1.0-alpha.2"
 dependencies = [
  "bytemuck",
  "craft-gpu-device",
@@ -7266,7 +7271,7 @@ dependencies = [
 
 [[package]]
 name = "studiocraft-sources"
-version = "0.1.0-alpha.1"
+version = "0.1.0-alpha.2"
 dependencies = [
  "ab_glyph",
  "craft-app-audio",
@@ -7293,7 +7298,7 @@ dependencies = [
 
 [[package]]
 name = "studiocraft-studio"
-version = "0.1.0-alpha.1"
+version = "0.1.0-alpha.2"
 dependencies = [
  "chrono",
  "craft-atomic",
@@ -7321,7 +7326,7 @@ dependencies = [
 
 [[package]]
 name = "studiocraft-ui-egui"
-version = "0.1.0-alpha.1"
+version = "0.1.0-alpha.2"
 dependencies = [
  "craft-atomic",
  "craft-behavior",
@@ -9158,7 +9163,7 @@ checksum = "e450f9b2ed1dff33c94c12589a87338689467b9c4f5d8a5710bd09a847d2c8a7"
 
 [[package]]
 name = "xtask"
-version = "0.1.0-alpha.1"
+version = "0.1.0-alpha.2"
 dependencies = [
  "serde_json",
 ]

@@ -108,6 +108,7 @@ fn load() -> Result<Api, String> {
 pub enum Codec {
     H264,
     Hevc,
+    Av1,
 }
 
 impl Codec {
@@ -115,6 +116,7 @@ impl Codec {
         match self {
             Codec::H264 => NV_ENC_CODEC_H264_GUID,
             Codec::Hevc => NV_ENC_CODEC_HEVC_GUID,
+            Codec::Av1 => NV_ENC_CODEC_AV1_GUID,
         }
     }
 }
@@ -147,9 +149,10 @@ pub struct Params {
     pub rate: Rate,
     /// Pictures from one IDR picture to the next.
     pub gop: u32,
-    /// HEVC Main 10 from P010 pictures; otherwise 8-bit (H.264 High or HEVC Main) from NV12.
+    /// HEVC Main 10 or 10-bit AV1 Main from P010 pictures; otherwise 8-bit (H.264 High, HEVC Main
+    /// or AV1 Main) from NV12.
     pub ten_bit: bool,
-    /// HEVC: the VUI color description and the SEI messages of every IDR picture. H.264 is BT.709.
+    /// HEVC: the VUI color description and the SEI messages of every IDR picture. H.264 and AV1 are BT.709.
     pub color: Color,
     /// Pictures arrive as Direct3D 11 textures, so the session creates no input buffers in
     /// system memory.
@@ -213,10 +216,10 @@ pub struct Locked<'a> {
 
 /// A finished picture.
 pub struct Output {
-    /// Annex B bytes.
+    /// Annex B bytes, or AV1 OBUs with their sizes.
     pub data: Vec<u8>,
     pub pts: u64,
-    /// Whether it is an IDR picture.
+    /// Whether it is an IDR picture. AV1 keyframes are read from the frame header instead.
     pub key: bool,
 }
 
@@ -358,6 +361,26 @@ pub(crate) fn sei_descriptors(messages: &[Sei]) -> Result<(Vec<Box<[u8]>>, Box<[
     Ok((payloads, array.into_boxed_slice()))
 }
 
+/// The AV1 `flags` word for a session, from the one the preset gave: OBUs with their sizes rather
+/// than Annex B, a sequence header that is neither left out nor repeated, no intra refresh, no film
+/// grain, and 4:2:0 at 8 or 10 bits for both the input and the stream. The other flags keep the
+/// preset's values.
+pub(crate) fn av1_flags(preset: u32, ten_bit: bool) -> u32 {
+    let clear = AV1_OUTPUT_ANNEXB
+        | AV1_DISABLE_SEQ_HDR
+        | AV1_REPEAT_SEQ_HDR
+        | AV1_ENABLE_INTRA_REFRESH
+        | AV1_FILM_GRAIN
+        | AV1_CHROMA_FORMAT_MASK
+        | AV1_INPUT_BIT_DEPTH_MASK
+        | AV1_PIXEL_BIT_DEPTH_MASK;
+    let mut flags = (preset & !clear) | (1 << AV1_CHROMA_FORMAT_SHIFT);
+    if ten_bit {
+        flags |= (2 << AV1_INPUT_BIT_DEPTH_SHIFT) | (2 << AV1_PIXEL_BIT_DEPTH_SHIFT);
+    }
+    flags
+}
+
 impl Session {
     /// Open a session on the system's NVIDIA GPU, or say why not.
     pub fn open() -> Result<Session, OpenError> {
@@ -445,11 +468,11 @@ impl Session {
     /// Configure the encoder (preset P5, high-quality tuning, no B-frames) and create `ring` pairs
     /// of input and output buffers.
     pub fn initialize(&mut self, p: &Params, ring: usize) -> Result<(), String> {
-        if p.ten_bit && p.codec != Codec::Hevc {
-            return Err("10-bit encoding is HEVC Main 10 only".into());
+        if p.ten_bit && p.codec == Codec::H264 {
+            return Err("10-bit encoding is HEVC Main 10 or AV1 Main only".into());
         }
         if p.color != Color::Bt709 && p.codec != Codec::Hevc {
-            return Err("H.264 is written as BT.709 only".into());
+            return Err("H.264 and AV1 are written as BT.709 only".into());
         }
         (self.fmt, self.bytes_per_sample) = if p.ten_bit { (NV_ENC_BUFFER_FORMAT_YUV420_10BIT, 2) } else { (NV_ENC_BUFFER_FORMAT_NV12, 1) };
         self.textures = p.textures;
@@ -477,6 +500,7 @@ impl Session {
                 Codec::Hevc if p.ten_bit => NV_ENC_HEVC_PROFILE_MAIN10_GUID,
                 Codec::Hevc => NV_ENC_HEVC_PROFILE_MAIN_GUID,
                 Codec::H264 => NV_ENC_H264_PROFILE_HIGH_GUID,
+                Codec::Av1 => NV_ENC_AV1_PROFILE_MAIN_GUID,
             };
             cfg.gopLength = p.gop.max(1);
             cfg.frameIntervalP = 1;
@@ -541,6 +565,22 @@ impl Session {
                     vui.timingInfoPresentFlag = 0;
                     vui.numUnitInTicks = 0;
                     vui.timeScale = 0;
+                }
+                Codec::Av1 => {
+                    let a = &mut cfg.encodeCodecConfig.av1Config;
+                    a.level = NV_ENC_LEVEL_AV1_AUTOSELECT;
+                    a.tier = NV_ENC_TIER_AV1_0;
+                    a.minPartSize = NV_ENC_AV1_PART_SIZE_AUTOSELECT;
+                    a.maxPartSize = NV_ENC_AV1_PART_SIZE_AUTOSELECT;
+                    a.idrPeriod = p.gop.max(1);
+                    a.flags = av1_flags(a.flags, p.ten_bit);
+                    a.maxNumRefFramesInDPB = 0;
+                    a.filmGrainParams = std::ptr::null_mut();
+                    // BT.709 at limited range (AV1 6.4.2: color_range 0 is studio swing)
+                    a.colorPrimaries = NV_ENC_VUI_COLOR_PRIMARIES_BT709;
+                    a.transferCharacteristics = NV_ENC_VUI_TRANSFER_CHARACTERISTIC_BT709;
+                    a.matrixCoefficients = NV_ENC_VUI_MATRIX_COEFFS_BT709;
+                    a.colorRange = 0;
                 }
             }
             let mut init: Box<NV_ENC_INITIALIZE_PARAMS> = Box::new(std::mem::zeroed());
@@ -616,7 +656,8 @@ impl Session {
         self.slots.len()
     }
 
-    /// The parameter sets as one Annex B byte string (SPS and PPS; VPS, SPS and PPS for HEVC).
+    /// The parameter sets as one Annex B byte string (SPS and PPS; VPS, SPS and PPS for HEVC), or
+    /// the sequence header OBU for AV1.
     pub fn sequence_params(&self) -> Result<Vec<u8>, String> {
         let f = self.api.list.nvEncGetSequenceParams.ok_or("the driver has no nvEncGetSequenceParams")?;
         let mut buf = vec![0u8; 1024];

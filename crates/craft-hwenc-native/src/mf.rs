@@ -1,7 +1,10 @@
-//! The hardware H.264 and HEVC encoders that Windows Media Foundation lists (the GPU vendors'
+//! The hardware H.264, HEVC and AV1 encoders that Windows Media Foundation lists (the GPU vendors'
 //! encoder MFTs), through `mfplat.dll`, which is loaded at run time. Frames go in as NV12 in system
-//! memory and come out as Annex B, which [`Encoder`] turns into 4-byte length-prefixed samples with
-//! the parameter sets in the `avcC` or `hvcC` record ([`Encoder::codec_private`]).
+//! memory. H.264 and HEVC come out as Annex B, which [`Encoder`] turns into 4-byte length-prefixed
+//! samples with the parameter sets in the `avcC` or `hvcC` record ([`Encoder::codec_private`]).
+//! AV1 comes out as OBUs, which [`crate::av1::Stream`] turns into samples, with the sequence
+//! header in the `av1C` record; the output type may carry the sequence header as OBUs or as an
+//! `av1C` record.
 //!
 //! - Quality mode sets the encoder's quality to `100 - 2 × level`, 0 to 98. Bitrate mode is
 //!   constant bitrate with a one-second buffer.
@@ -15,7 +18,7 @@
 use std::collections::VecDeque;
 
 use crate::mf_ffi::{self, OpenError, Output, Params, Transform};
-use crate::{Codec, annexb, avc, hevc};
+use crate::{Codec, annexb, av1, avc, hevc};
 pub use crate::{Color, Config, Error, Input, Packet, Rate};
 
 impl From<OpenError> for Error {
@@ -79,16 +82,25 @@ fn check(cfg: &Config) -> Result<(), Error> {
     }
 }
 
-/// The NAL unit types of `codec`'s parameter sets, in the order the record takes them.
+/// The NAL unit types of `codec`'s parameter sets, in the order the record takes them. AV1 has
+/// none: its sequence header is an OBU.
 pub(crate) fn set_types(codec: Codec) -> &'static [(u8, &'static str)] {
     match codec {
         Codec::H264 => &[(7, "SPS"), (8, "PPS")],
         Codec::Hevc => &[(32, "VPS"), (33, "SPS"), (34, "PPS")],
+        Codec::Av1 => &[],
     }
 }
 
-/// The parameter sets in the Annex B `header` and the `avcC` or `hvcC` record made of them.
-fn record_of(cfg: &Config, header: &[u8]) -> Result<(Vec<Vec<u8>>, Vec<u8>), Error> {
+/// The track of the encoder's `header` and the record a container stores: the parameter sets of
+/// an Annex B header with the `avcC` or `hvcC` record made of them, or an AV1 sequence header with
+/// its `av1C` record.
+fn track_of(cfg: &Config, header: &[u8]) -> Result<(Track, Vec<u8>), Error> {
+    if cfg.codec == Codec::Av1 {
+        let stream = av1_stream(header)?;
+        let record = stream.record().to_vec();
+        return Ok((Track::av1(cfg.fps, stream), record));
+    }
     let sets = annexb::parameter_sets(cfg.codec, header, set_types(cfg.codec)).map_err(Error::Failed)?;
     let record = match (cfg.codec, sets.as_slice()) {
         (Codec::H264, [sps, pps]) => avc::avcc(sps, pps),
@@ -96,7 +108,18 @@ fn record_of(cfg: &Config, header: &[u8]) -> Result<(Vec<Vec<u8>>, Vec<u8>), Err
         _ => Err("the encoder returned no parameter sets".into()),
     }
     .map_err(Error::Failed)?;
-    Ok((sets, record))
+    Ok((Track::new(cfg.codec, cfg.fps, sets), record))
+}
+
+/// The 8-bit AV1 stream of the sequence header in `header`: OBUs, or an `av1C` record whose
+/// configuration OBUs hold it. A record starts with its marker bit set, which the first byte of an
+/// OBU never has.
+fn av1_stream(header: &[u8]) -> Result<av1::Stream, Error> {
+    let obus = match header {
+        [marker, _, _, _, obus @ ..] if marker & 0x80 != 0 => obus,
+        _ => header,
+    };
+    av1::Stream::new(obus, 8).map_err(Error::Failed)
 }
 
 /// Whether the Annex B `data` holds a picture a decoder can start at: IDR for H.264, an IRAP
@@ -105,16 +128,18 @@ fn is_keyframe(codec: Codec, data: &[u8]) -> bool {
     annexb::nals(data).iter().any(|n| match (codec, annexb::nal_type(codec, n)) {
         (Codec::H264, Some(t)) => t == 5,
         (Codec::Hevc, Some(t)) => (16..=21).contains(&t),
-        (_, None) => false,
+        (_, None) | (Codec::Av1, _) => false,
     })
 }
 
 /// The frames of one stream between the encoder and its packets: the Media Foundation time each
-/// frame goes in at, and the timestamp and parameter sets each packet must come out with.
+/// frame goes in at, and the timestamp and parameter sets (AV1: sequence header) each packet must
+/// come out with.
 struct Track {
     codec: Codec,
     fps: (u32, u32),
     sets: Vec<Vec<u8>>,
+    av1: Option<av1::Stream>,
     frames: u64,
     /// Frames sent and not returned, oldest first: their Media Foundation time and timestamp.
     pending: VecDeque<(i64, i64)>,
@@ -122,7 +147,11 @@ struct Track {
 
 impl Track {
     fn new(codec: Codec, fps: (u32, u32), sets: Vec<Vec<u8>>) -> Track {
-        Track { codec, fps, sets, frames: 0, pending: VecDeque::new() }
+        Track { codec, fps, sets, av1: None, frames: 0, pending: VecDeque::new() }
+    }
+
+    fn av1(fps: (u32, u32), stream: av1::Stream) -> Track {
+        Track { av1: Some(stream), ..Track::new(Codec::Av1, fps, Vec::new()) }
     }
 
     /// The Media Foundation time of frame `n`, from the frame rate.
@@ -153,6 +182,10 @@ impl Track {
                 Some(_) => return Err(Error::Failed("the encoder returned a frame out of order".into())),
             }
         };
+        if let Some(stream) = &self.av1 {
+            let (data, keyframe) = stream.sample(&o.data).map_err(Error::Failed)?;
+            return Ok(Packet { data, pts, keyframe });
+        }
         let keyframe = is_keyframe(self.codec, &o.data);
         self.sets_in(&o.data)?;
         let data = annexb::to_length_prefixed(self.codec, &o.data).map_err(Error::Failed)?;
@@ -173,9 +206,15 @@ impl Track {
         Ok(())
     }
 
-    /// Check that the Annex B `header` of a new output type holds the parameter sets the
-    /// container record was made of.
+    /// Check that the `header` of a new output type holds the parameter sets (AV1: the sequence
+    /// header) the container record was made of.
     fn same_sets(&self, header: &[u8]) -> Result<(), Error> {
+        if let Some(stream) = &self.av1 {
+            return match av1_stream(header) {
+                Ok(s) if s.same_sequence_header(stream) => Ok(()),
+                _ => Err(Error::Failed("the encoder changed its sequence header".into())),
+            };
+        }
         match annexb::parameter_sets(self.codec, header, set_types(self.codec)) {
             Ok(sets) if sets == self.sets => Ok(()),
             _ => Err(Error::Failed("the encoder changed its parameter sets".into())),
@@ -211,8 +250,7 @@ impl Encoder {
                 h
             }
         };
-        let (sets, record) = record_of(cfg, &header)?;
-        let track = Track::new(cfg.codec, cfg.fps, sets);
+        let (track, record) = track_of(cfg, &header)?;
         let header = transform.sequence_header().map(<[u8]>::to_vec);
         let mut encoder = Encoder { transform, cfg: *cfg, record, track, header: None };
         if let Some(h) = &header {
@@ -234,7 +272,7 @@ impl Encoder {
         Ok(())
     }
 
-    /// The `avcC` (H.264) or `hvcC` (HEVC) record a container stores with the track.
+    /// The `avcC` (H.264), `hvcC` (HEVC) or `av1C` (AV1) record a container stores with the track.
     pub fn codec_private(&self) -> &[u8] {
         &self.record
     }
@@ -452,12 +490,58 @@ mod tests {
         assert!(!is_keyframe(Codec::Hevc, &[]));
     }
 
+    /// The sequence header OBU of `av1.rs`'s tests (8-bit 4:2:0 Main at level 4, 256 × 144), and
+    /// OBUs with a one-byte size: a temporal delimiter and a frame whose header starts with a shown
+    /// key frame or an inter frame.
+    const SEQ_OBU: [u8; 12] = [0x0a, 0x0a, 0x00, 0x00, 0x00, 0x23, 0xbf, 0xfc, 0x78, 0x00, 0x00, 0x10];
+    const TD: [u8; 2] = [0x12, 0x00];
+    const KEY_FRAME: [u8; 4] = [0x32, 0x02, 0x10, 0x01];
+    const INTER_FRAME: [u8; 4] = [0x32, 0x02, 0x30, 0x01];
+
+    #[test]
+    fn av1_output_types_carry_the_sequence_header_as_obus_or_as_a_record() {
+        let from_obus = av1_stream(&[&TD[..], &SEQ_OBU].concat()).unwrap();
+        let record = from_obus.record().to_vec();
+        assert_eq!(&record[..4], &[0x81, 0x04, 0x0c, 0x00]);
+        let from_record = av1_stream(&record).unwrap();
+        assert!(from_record.same_sequence_header(&from_obus));
+        assert!(av1_stream(&[0x81, 0x04, 0x0c]).is_err(), "a cut record");
+        assert!(av1_stream(&[]).is_err());
+        let cfg = Config { codec: Codec::Av1, ..cfg(Codec::H264) };
+        let (track, r) = track_of(&cfg, &SEQ_OBU).unwrap();
+        assert_eq!(r, record);
+        assert!(track.same_sets(&record).is_ok());
+        assert!(track.same_sets(&SEQ_OBU).is_ok());
+        let mut other = SEQ_OBU;
+        other[5] = 0x2b;
+        assert!(matches!(track.same_sets(&other), Err(Error::Failed(why)) if why.contains("sequence header")));
+    }
+
+    #[test]
+    fn av1_packets_are_samples_without_temporal_delimiters_with_keyframes_from_the_frame_header() {
+        let mut t = Track::av1((30, 1), av1_stream(&SEQ_OBU).unwrap());
+        let times: Vec<_> = (0..3).map(|pts| t.send(pts).0).collect();
+        let key = t.packet(Output { data: [&TD[..], &SEQ_OBU, &KEY_FRAME].concat(), time: Some(times[0]) }).unwrap();
+        assert_eq!((key.pts, key.keyframe), (0, true));
+        assert_eq!(key.data, [&SEQ_OBU[..], &KEY_FRAME].concat());
+        let inter = t.packet(Output { data: [&TD[..], &INTER_FRAME].concat(), time: None }).unwrap();
+        assert_eq!((inter.pts, inter.keyframe, inter.data), (1, false, INTER_FRAME.to_vec()));
+        let mut other = SEQ_OBU;
+        other[5] = 0x2b;
+        let changed = t.packet(Output { data: [&other[..], &KEY_FRAME].concat(), time: Some(times[2]) });
+        assert!(matches!(changed, Err(Error::Failed(why)) if why.contains("changed its sequence header")));
+        t.send(3);
+        assert!(t.packet(Output { data: TD.to_vec(), time: None }).is_err(), "no frame");
+        assert!(set_types(Codec::Av1).is_empty());
+        assert!(!is_keyframe(Codec::Av1, &KEY_FRAME));
+    }
+
     #[test]
     fn a_system_without_a_media_foundation_encoder_says_so() {
         // Off Windows (and on every CI runner without a GPU) opening is a `NoDevice` error, never
         // a panic; with a hardware encoder, it opens and writes its record, or says that the
         // encoder does not take the stream.
-        for codec in [Codec::H264, Codec::Hevc] {
+        for codec in [Codec::H264, Codec::Hevc, Codec::Av1] {
             match Encoder::new(&cfg(codec)) {
                 Ok(e) => assert!(!e.codec_private().is_empty()),
                 Err(Error::NoDevice(why) | Error::Unsupported(why)) => assert!(!why.is_empty()),

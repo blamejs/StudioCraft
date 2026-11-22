@@ -55,10 +55,18 @@ user can act on. It must never crash the app or lose a scene collection.
    may be reused under their licenses. The crate that holds reused code names each source in its
    `NOTICE` file: the repository, the path, the commit, the license and the copyright line. Write
    every interface string in your own words. Draw icons from shapes in code
-   (`crates/ui-egui/src/icons.rs`).
+   (`crates/ui-egui/src/icons.rs`). One exception: a streaming service StudioCraft can send a
+   stream to may be shown with its official logo, when the service publishes the file on its own
+   site and its brand guidelines allow this use. The file is used as downloaded, at no less than
+   the guidelines' minimum size, with their clear space, and with wording such as "Stream to"
+   that implies no endorsement. Its `ASSETS.md` row names the page it came from, the date it was
+   downloaded and the guidelines it is used under.
 3. Do not name other products in the app or its documentation. `cargo xtask brands` checks this.
    `MECHANICS.md` and `mechanics.json` may name the product a value was compared with, and a
-   crate's `NOTICE` file names the ArtCraft code it reuses.
+   crate's `NOTICE` file names the ArtCraft code it reuses. The streaming services StudioCraft
+   can send a stream to are named in their preset list (`crates/model/src/services.rs`) and in
+   the `ASSETS.md` rows of their logos, and nowhere else; `BRAND_ALLOWED` in `xtask/src/scan.rs`
+   lists those files and names.
 
 ## 2. Dependencies and assets
 
@@ -71,7 +79,8 @@ user can act on. It must never crash the app or lose a scene collection.
    [craft-fonts](https://github.com/storytold/craft-fonts) through `CRAFT_FONTS_DIR`. Do not add
    other font files to this repository.
 3. Every picture, sound, font or video file in the repository is listed in `ASSETS.md` with its
-   author, source and license. `cargo xtask assets` checks this.
+   author, source and license, or for a service logo (rule 1.2), the terms it is used under.
+   `cargo xtask assets` checks this.
 
 ## 3. Structure
 

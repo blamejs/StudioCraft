@@ -29,6 +29,11 @@ pub const MAX_SERVER_MESSAGE: usize = 1 << 20;
 pub const POLL_READ_LIMIT: usize = 256 * 1024;
 /// The longest timeout a [`Config`] accepts.
 pub const MAX_TIMEOUT: Duration = Duration::from_secs(24 * 60 * 60);
+/// The most addresses one connect tries, so a connect waits at most this many times
+/// [`Config::connect_timeout`] for TCP. When the name resolved to IPv6 and IPv4 addresses, the
+/// addresses tried alternate between the two, starting with the first address's family (RFC 8305
+/// section 4), so a host with more addresses of one family than this still gets one of the other.
+pub const MAX_ADDRESSES: usize = 4;
 
 /// The `flashVer` value [`Config::new`] sets.
 pub const DEFAULT_FLASH_VER: &str = concat!("craft-rtmp/", env!("CARGO_PKG_VERSION"));
@@ -214,7 +219,16 @@ impl Publisher {
         config.check()?;
         let host = config.endpoint.host();
         let addrs: Vec<SocketAddr> = (host, config.endpoint.port()).to_socket_addrs().map_err(Error::Resolve)?.collect();
-        let socket = connect_any(&addrs, config.connect_timeout)?;
+        Publisher::connect_to(config, &addrs)
+    }
+
+    /// Connects as [`Publisher::connect`] does, to `addrs` instead of the addresses the host name
+    /// resolves to: at most [`MAX_ADDRESSES`] of them, in order within each address family, until
+    /// one accepts the TCP connection. TLS still checks the server's certificate against the host name of
+    /// [`Config::endpoint`].
+    pub fn connect_to(config: &Config, addrs: &[SocketAddr]) -> Result<Publisher, Error> {
+        config.check()?;
+        let socket = connect_any(addrs, config.connect_timeout)?;
         let started = Instant::now();
         let deadline = started + config.setup_timeout;
         socket.set_nodelay(true).map_err(Error::Io)?;
@@ -669,15 +683,89 @@ fn status(values: &[Value]) -> Option<Status<'_>> {
     })
 }
 
-fn connect_any(addrs: &[SocketAddr], timeout: Duration) -> Result<TcpStream, Error> {
-    let mut last = io::Error::new(io::ErrorKind::NotFound, "the name resolved to no address");
-    for a in addrs {
-        match TcpStream::connect_timeout(a, timeout) {
-            Ok(s) => return Ok(s),
-            Err(e) => last = e,
+/// The addresses a connect tries, at most [`MAX_ADDRESSES`]: `addrs` with the IPv6 and IPv4 ones
+/// taken in turn, starting with the family of the first, each family in its own order.
+pub(crate) fn candidates(addrs: &[SocketAddr]) -> Vec<SocketAddr> {
+    let first_v6 = addrs.first().is_some_and(SocketAddr::is_ipv6);
+    let mut same = addrs.iter().filter(|a| a.is_ipv6() == first_v6);
+    let mut other = addrs.iter().filter(|a| a.is_ipv6() != first_v6);
+    let mut out = Vec::with_capacity(MAX_ADDRESSES.min(addrs.len()));
+    while out.len() < MAX_ADDRESSES {
+        let a = same.next();
+        let b = other.next();
+        if a.is_none() && b.is_none() {
+            break;
+        }
+        out.extend(a.into_iter().chain(b).copied());
+    }
+    out.truncate(MAX_ADDRESSES);
+    out
+}
+
+/// What [`reach`] connects to, and how long each step may take.
+#[derive(Clone, Debug)]
+pub struct Reach {
+    /// The server's host name. TLS checks the server's certificate against it, and the TLS
+    /// handshake sends it in clear (Server Name Indication).
+    pub host: String,
+    /// Whether a TLS handshake follows the TCP connection.
+    pub tls: bool,
+    /// How long the address gets to accept the TCP connection.
+    pub connect_timeout: Duration,
+    /// How long the TLS handshake may take.
+    pub tls_timeout: Duration,
+    /// Which certificates the server's certificate must chain to.
+    #[cfg(feature = "rtmps")]
+    pub tls_roots: TlsRoots,
+}
+
+impl Reach {
+    /// A check of `host`, with a TLS handshake when `tls` is set, the default connect timeout
+    /// (10 s), the default setup timeout (15 s) for the handshake and the system's trust store.
+    pub fn new(host: &str, tls: bool) -> Reach {
+        Reach {
+            host: host.to_owned(),
+            tls,
+            connect_timeout: DEFAULT_CONNECT_TIMEOUT,
+            tls_timeout: DEFAULT_SETUP_TIMEOUT,
+            #[cfg(feature = "rtmps")]
+            tls_roots: TlsRoots::Platform,
         }
     }
-    Err(Error::Connect(last))
+}
+
+/// Opens a TCP connection to `addr` and, with [`Reach::tls`], completes a TLS handshake over it,
+/// then closes the connection. Sends no RTMP bytes and no stream key: only what TCP and the TLS
+/// handshake send. A refused or timed-out connection is [`Error::Connect`] with `addr`, and a
+/// failed handshake is [`Error::Tls`], [`Error::Timeout`] or [`Error::Closed`], as for
+/// [`Publisher::connect`].
+pub fn reach(r: &Reach, addr: SocketAddr) -> Result<(), Error> {
+    if [r.connect_timeout, r.tls_timeout].iter().any(|t| t.is_zero() || *t > MAX_TIMEOUT) {
+        return Err(Error::BadConfig("every timeout must be longer than 0 and at most 24 hours"));
+    }
+    #[cfg(not(feature = "rtmps"))]
+    if r.tls {
+        return Err(Error::BadConfig("rtmps:// needs the rtmps feature"));
+    }
+    let socket = TcpStream::connect_timeout(&addr, r.connect_timeout).map_err(|e| Error::Connect(vec![(addr, e)]))?;
+    #[cfg(feature = "rtmps")]
+    if r.tls {
+        let sock = Socket::new(socket, Some(Instant::now() + r.tls_timeout));
+        return start_tls(sock, &r.host, &r.tls_roots).map(drop);
+    }
+    drop(socket);
+    Ok(())
+}
+
+fn connect_any(addrs: &[SocketAddr], timeout: Duration) -> Result<TcpStream, Error> {
+    let mut tried = Vec::new();
+    for a in &candidates(addrs) {
+        match TcpStream::connect_timeout(a, timeout) {
+            Ok(s) => return Ok(s),
+            Err(e) => tried.push((*a, e)),
+        }
+    }
+    Err(Error::Connect(tried))
 }
 
 #[cfg(not(feature = "rtmps"))]
@@ -687,16 +775,25 @@ fn open_transport(socket: TcpStream, _config: &Config, deadline: Instant) -> Res
 
 #[cfg(feature = "rtmps")]
 fn open_transport(socket: TcpStream, config: &Config, deadline: Instant) -> Result<Transport, Error> {
-    use std::sync::Arc;
-
-    let mut sock = Socket::new(socket, Some(deadline));
+    let sock = Socket::new(socket, Some(deadline));
     if !config.endpoint.tls() {
         return Ok(Transport::Tcp(sock));
     }
-    let tls = |e: rustls::Error| Error::Tls(e.to_string());
+    start_tls(sock, config.endpoint.host(), &config.tls_roots)
+}
+
+/// Runs the TLS handshake over `sock` for the server `host`, checking its certificate against
+/// `tls_roots`. The socket's deadline bounds the handshake.
+#[cfg(feature = "rtmps")]
+fn start_tls(mut sock: Socket, host: &str, tls_roots: &TlsRoots) -> Result<Transport, Error> {
+    use std::sync::Arc;
+
+    use crate::error::TlsFailure;
+
+    let tls = |e: rustls::Error| Error::Tls(TlsFailure::of(&e));
     let provider = Arc::new(rustls::crypto::ring::default_provider());
     let builder = rustls::ClientConfig::builder_with_provider(provider.clone()).with_safe_default_protocol_versions().map_err(tls)?;
-    let client = match &config.tls_roots {
+    let client = match tls_roots {
         TlsRoots::Platform => {
             let verifier = rustls_platform_verifier::Verifier::new(provider).map_err(tls)?;
             builder.dangerous().with_custom_certificate_verifier(Arc::new(verifier)).with_no_client_auth()
@@ -709,14 +806,13 @@ fn open_transport(socket: TcpStream, config: &Config, deadline: Instant) -> Resu
             builder.with_root_certificates(roots).with_no_client_auth()
         }
     };
-    let name = rustls::pki_types::ServerName::try_from(config.endpoint.host().to_owned())
-        .map_err(|_| Error::BadUrl("the host is not a valid TLS server name"))?;
+    let name = rustls::pki_types::ServerName::try_from(host.to_owned()).map_err(|_| Error::BadUrl("the host is not a valid TLS server name"))?;
     let mut conn = rustls::ClientConnection::new(Arc::new(client), name).map_err(tls)?;
     conn.set_buffer_limit(None);
     while conn.is_handshaking() {
         match conn.complete_io(&mut sock) {
             Ok(_) => {}
-            Err(e) if e.kind() == io::ErrorKind::InvalidData => return Err(Error::Tls(e.to_string())),
+            Err(e) if e.kind() == io::ErrorKind::InvalidData => return Err(Error::Tls(TlsFailure::of_io(&e))),
             Err(e) => return Err(read_error(e, "the TLS handshake")),
         }
     }

@@ -1,11 +1,15 @@
-//! The Go Live and Record buttons: a glyph, a label and, while the output runs, its timer.
+//! The Go Live, Record and Pause buttons: a glyph, a label and, while the output runs, its timer.
 //!
 //! An idle button has the theme's secondary control fill and a 1-point outline. A running one is
 //! filled with the theme's error red and draws its glyph, label and timer in the color for text on
-//! a status fill. While the output starts or stops, the button has the pressed fill and a turning
-//! arc in place of the glyph; a stopping output cannot be clicked. A compact button leaves the
-//! label out and keeps the glyph and, while running, the timer. A focused button has the theme's
-//! focus ring.
+//! a status fill; a running Pause or Resume button is filled with the theme's warning solid and
+//! draws them in the same color. While the output starts or stops, the button has the pressed fill
+//! and a turning arc in place of the glyph; a stopping output cannot be clicked. A compact button
+//! leaves the label out and keeps the glyph and, while running, the timer. A focused button has the
+//! theme's focus ring.
+//!
+//! A split button is a face joined to a [`MenuArrow`] at its end side: the face's end corners are
+//! square, and the arrow opens a menu.
 
 use craft_ui::style::StyleCx;
 use egui::{Color32, CornerRadius, FontId, Pos2, Rect, Response, Role, Sense, Shape, Stroke, StrokeKind, Ui, WidgetInfo, pos2, vec2};
@@ -19,6 +23,10 @@ pub enum Glyph {
     Record,
     /// A dot with two waves on each side.
     Live,
+    /// Two upright bars.
+    Pause,
+    /// A triangle pointing right, in every writing direction.
+    Resume,
 }
 
 /// What the output is doing.
@@ -46,6 +54,10 @@ pub struct OnAirStyle {
     pub live: Color32,
     /// The running fill of a [`Glyph::Record`] button.
     pub recording: Color32,
+    /// The running fill of a [`Glyph::Pause`] or [`Glyph::Resume`] button.
+    pub warn: Color32,
+    /// The glyph, label and timer on the [`warn`](Self::warn) fill.
+    pub on_warn: Color32,
     pub height: f32,
     /// The space between the edge and the content on each side.
     pub padding: f32,
@@ -69,6 +81,7 @@ impl OnAirStyle {
         let t = &cx.tokens;
         let look = cx.variant_look();
         let red = cx.color(t.color.status.bad.solid).egui();
+        let on_status = cx.color(t.color.text.on_status).egui();
         OnAirStyle {
             fill: look.fill.off.rest.egui(),
             hover: look.fill.off.hover.egui(),
@@ -76,9 +89,11 @@ impl OnAirStyle {
             outline: look.edge.map_or_else(|| cx.color(t.color.line.control_edge).egui(), |edge| edge.off.rest.egui()),
             text: look.text.off.rest.egui(),
             text_disabled: look.text.off.disabled.egui(),
-            on_fill: cx.color(t.color.text.on_status).egui(),
+            on_fill: on_status,
             live: red,
             recording: red,
+            warn: cx.color(t.color.status.warn.solid).egui(),
+            on_warn: on_status,
             height: t.size.control.md,
             padding: 12.0,
             glyph: 12.0,
@@ -98,15 +113,57 @@ pub struct OnAirButton<'a> {
     label: &'a str,
     timer: Option<&'a str>,
     compact: bool,
+    joined: bool,
     name: &'a str,
     style: &'a OnAirStyle,
+}
+
+/// The fill and the glyph and text color of a running button with `glyph`.
+fn running_colors(s: &OnAirStyle, glyph: Glyph) -> (Color32, Color32) {
+    match glyph {
+        Glyph::Live => (s.live, s.on_fill),
+        Glyph::Record => (s.recording, s.on_fill),
+        Glyph::Pause | Glyph::Resume => (s.warn, s.on_warn),
+    }
+}
+
+/// The button's fill, its glyph and text color, and its outline.
+fn colors(s: &OnAirStyle, glyph: Glyph, state: OnAirState, pressed: bool, hovered: bool) -> (Color32, Color32, Option<Color32>) {
+    let (running_fill, on_running) = running_colors(s, glyph);
+    match state {
+        OnAirState::Running if pressed => (running_fill.gamma_multiply(0.85), on_running, None),
+        OnAirState::Running => (running_fill, on_running, None),
+        OnAirState::Starting | OnAirState::Stopping => (s.pressed, s.text, Some(s.outline)),
+        OnAirState::Disabled => (s.fill, s.text_disabled, Some(s.outline)),
+        OnAirState::Idle if pressed => (s.pressed, s.text, Some(s.outline)),
+        OnAirState::Idle if hovered => (s.hover, s.text, Some(s.outline)),
+        OnAirState::Idle => (s.fill, s.text, Some(s.outline)),
+    }
+}
+
+/// Whether `ui` lays out right to left, as the direction of its env says.
+fn is_rtl(ui: &Ui) -> bool {
+    craft_ui::runtime::env::Env::of(ui).view().direction().is_rtl()
+}
+
+/// Corners of `radius`, square on the end side when `end` and on the start side when `start`.
+fn corners(ui: &Ui, radius: u8, start: bool, end: bool) -> CornerRadius {
+    let (left, right) = if is_rtl(ui) { (end, start) } else { (start, end) };
+    let side = |square: bool| if square { 0 } else { radius };
+    CornerRadius { nw: side(left), sw: side(left), ne: side(right), se: side(right) }
 }
 
 impl<'a> OnAirButton<'a> {
     /// A button showing `label`; `name` is what a screen reader announces, such as
     /// "Recording, 00:12:34".
     pub fn new(glyph: Glyph, state: OnAirState, label: &'a str, name: &'a str, style: &'a OnAirStyle) -> OnAirButton<'a> {
-        OnAirButton { glyph, state, label, timer: None, compact: false, name, style }
+        OnAirButton { glyph, state, label, timer: None, compact: false, joined: false, name, style }
+    }
+
+    /// Square the end corners, for the face of a split button whose [`MenuArrow`] follows.
+    pub fn joined(mut self, joined: bool) -> OnAirButton<'a> {
+        self.joined = joined;
+        self
     }
 
     /// The timer, shown after the label while the output runs.
@@ -144,21 +201,9 @@ impl<'a> OnAirButton<'a> {
         let clickable = !matches!(self.state, OnAirState::Stopping | OnAirState::Disabled);
         let (rect, r) = ui.allocate_exact_size(vec2(width, s.height), if clickable { Sense::click() } else { Sense::hover() });
         r.widget_info(|| WidgetInfo::labeled(Role::Button, clickable, self.name));
-        let running_fill = match self.glyph {
-            Glyph::Live => s.live,
-            Glyph::Record => s.recording,
-        };
         let pressed = clickable && r.is_pointer_button_down_on();
-        let (fill, fg, outline) = match self.state {
-            OnAirState::Running if pressed => (running_fill.gamma_multiply(0.85), s.on_fill, None),
-            OnAirState::Running => (running_fill, s.on_fill, None),
-            OnAirState::Starting | OnAirState::Stopping => (s.pressed, s.text, Some(s.outline)),
-            OnAirState::Disabled => (s.fill, s.text_disabled, Some(s.outline)),
-            OnAirState::Idle if pressed => (s.pressed, s.text, Some(s.outline)),
-            OnAirState::Idle if r.hovered() => (s.hover, s.text, Some(s.outline)),
-            OnAirState::Idle => (s.fill, s.text, Some(s.outline)),
-        };
-        let radius = CornerRadius::same(s.radius);
+        let (fill, fg, outline) = colors(s, self.glyph, self.state, pressed, r.hovered());
+        let radius = corners(ui, s.radius, false, self.joined);
         let painter = ui.painter_at(rect);
         painter.rect_filled(rect, radius, fill);
         if let Some(line) = outline {
@@ -194,6 +239,49 @@ impl<'a> OnAirButton<'a> {
     }
 }
 
+/// The arrow of a split button: a downward chevron in the face's fill, with square start corners
+/// and a divider on its start side. A click opens its menu; texts are shown as given.
+pub struct MenuArrow<'a> {
+    glyph: Glyph,
+    state: OnAirState,
+    name: &'a str,
+    style: &'a OnAirStyle,
+}
+
+impl<'a> MenuArrow<'a> {
+    /// The arrow after a face with `glyph` in `state`; `name` is what a screen reader announces.
+    pub fn new(glyph: Glyph, state: OnAirState, name: &'a str, style: &'a OnAirStyle) -> MenuArrow<'a> {
+        MenuArrow { glyph, state, name, style }
+    }
+
+    /// The width the arrow takes: the glyph and the padding on its end side.
+    pub fn width(&self) -> f32 {
+        self.style.glyph + self.style.padding
+    }
+
+    pub fn show(self, ui: &mut Ui) -> Response {
+        let s = self.style;
+        let clickable = !matches!(self.state, OnAirState::Stopping | OnAirState::Disabled);
+        let (rect, r) = ui.allocate_exact_size(vec2(self.width(), s.height), if clickable { Sense::click() } else { Sense::hover() });
+        r.widget_info(|| WidgetInfo::labeled(Role::Button, clickable, self.name));
+        let pressed = clickable && r.is_pointer_button_down_on();
+        let (fill, fg, outline) = colors(s, self.glyph, self.state, pressed, r.hovered());
+        let painter = ui.painter_at(rect);
+        let radius = corners(ui, s.radius, true, false);
+        painter.rect_filled(rect, radius, fill);
+        if let Some(line) = outline {
+            painter.rect_stroke(rect, radius, Stroke::new(1.0, line), StrokeKind::Inside);
+        }
+        let start = if is_rtl(ui) { rect.right() - 0.5 } else { rect.left() + 0.5 };
+        let divider = outline.unwrap_or_else(|| fg.gamma_multiply(0.4));
+        painter.line_segment([pos2(start, rect.top() + 5.0), pos2(start, rect.bottom() - 5.0)], Stroke::new(1.0, divider));
+        let c = rect.center();
+        let w = s.glyph * 0.3;
+        painter.add(Shape::line(vec![pos2(c.x - w, c.y - w * 0.5), pos2(c.x, c.y + w * 0.5), pos2(c.x + w, c.y - w * 0.5)], Stroke::new(1.5, fg)));
+        r
+    }
+}
+
 fn arc(c: Pos2, r: f32, from: f32, to: f32, n: usize) -> Vec<Pos2> {
     (0..=n).map(|i| from + (to - from) * i as f32 / n as f32).map(|a| pos2(c.x + r * a.cos(), c.y + r * a.sin())).collect()
 }
@@ -216,6 +304,17 @@ pub fn paint_glyph(painter: &egui::Painter, glyph: Glyph, rect: Rect, color: Col
                 painter.add(Shape::line(arc(c, radius, -spread, spread, 8), stroke));
                 painter.add(Shape::line(arc(c, radius, std::f32::consts::PI - spread, std::f32::consts::PI + spread, 8), stroke));
             }
+        }
+        Glyph::Pause => {
+            let (w, h) = (r * 0.5, r * 1.6);
+            for x in [c.x - r * 0.55, c.x + r * 0.05] {
+                painter.rect_filled(Rect::from_min_size(pos2(x, c.y - h / 2.0), vec2(w, h)), 1.0, color);
+            }
+        }
+        Glyph::Resume => {
+            let h = r * 0.8;
+            let tip = pos2(c.x + h, c.y);
+            painter.add(Shape::convex_polygon(vec![pos2(c.x - h * 0.7, c.y - h), tip, pos2(c.x - h * 0.7, c.y + h)], color, Stroke::NONE));
         }
     }
 }
@@ -278,6 +377,71 @@ mod tests {
         let (r, shapes) = draw(&ctx, vec![], |s| OnAirButton::new(Glyph::Record, OnAirState::Idle, "Record", "Record", s));
         assert!(filled(&shapes, p.fill, r.rect));
         assert!(!filled(&shapes, p.recording, r.rect));
+    }
+
+    #[test]
+    fn a_paused_button_has_the_warning_fill_and_an_idle_one_is_a_control() {
+        let ctx = egui::Context::default();
+        let p = style();
+        assert_ne!(p.warn, p.live, "the warning solid differs from the error red");
+        let (r, shapes) =
+            draw(&ctx, vec![], |s| OnAirButton::new(Glyph::Resume, OnAirState::Running, "Resume", "Resume, 4:32 left", s).timer(Some("4:32")));
+        assert!(filled(&shapes, p.warn, r.rect));
+        assert!(!filled(&shapes, p.live, r.rect), "a pause does not read as on air");
+        assert_eq!(colors(&p, Glyph::Resume, OnAirState::Running, false, false).1, p.on_warn);
+        let (r, shapes) = draw(&ctx, vec![], |s| OnAirButton::new(Glyph::Pause, OnAirState::Idle, "Pause", "Pause", s));
+        assert!(filled(&shapes, p.fill, r.rect));
+    }
+
+    #[test]
+    fn a_split_face_squares_its_end_corners_and_its_arrow_its_start_corners() {
+        let ctx = egui::Context::default();
+        let mut shapes = Vec::new();
+        let st = style();
+        let mut out = ctx.run_ui(raw(vec![]), |ui| {
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 0.0;
+                OnAirButton::new(Glyph::Pause, OnAirState::Idle, "Pause", "Pause", &st).joined(true).show(ui);
+                MenuArrow::new(Glyph::Pause, OnAirState::Idle, "Pause options", &st).show(ui);
+            });
+        });
+        out.textures_delta.clear();
+        shapes.extend(out.shapes);
+        let radii: Vec<CornerRadius> = shapes
+            .iter()
+            .filter_map(|c| match &c.shape {
+                // The outline is a rect too, and its empty fill can equal the idle fill, so rects
+                // with a stroke do not count.
+                egui::Shape::Rect(s) if s.fill == st.fill && s.stroke.is_empty() => Some(s.corner_radius),
+                _ => None,
+            })
+            .collect();
+        let k = st.radius;
+        assert!(k > 0, "the control radius rounds the outer corners");
+        assert_eq!(radii, [CornerRadius { nw: k, sw: k, ne: 0, se: 0 }, CornerRadius { nw: 0, sw: 0, ne: k, se: k }]);
+    }
+
+    #[test]
+    fn the_menu_arrow_is_a_named_button_that_clicks() {
+        let ctx = egui::Context::default();
+        let st = style();
+        let mut resp = None;
+        let mut out = ctx.run_ui(raw(vec![]), |ui| resp = Some(MenuArrow::new(Glyph::Pause, OnAirState::Idle, "Pause options", &st).show(ui)));
+        out.textures_delta.clear();
+        let Some(r) = resp else { panic!("the arrow was not drawn") };
+        assert_eq!(r.rect.size(), vec2(24.0, 24.0), "the glyph and the end padding, the standard control height");
+        let mut resp = None;
+        let mut out = ctx.run_ui(raw(click(r.rect.center())), |ui| {
+            resp = Some(MenuArrow::new(Glyph::Pause, OnAirState::Idle, "Pause options", &st).show(ui));
+        });
+        out.textures_delta.clear();
+        assert!(resp.is_some_and(|r| r.clicked()));
+        let mut resp = None;
+        let mut out = ctx.run_ui(raw(click(r.rect.center())), |ui| {
+            resp = Some(MenuArrow::new(Glyph::Pause, OnAirState::Disabled, "Pause options", &st).show(ui));
+        });
+        out.textures_delta.clear();
+        assert!(resp.is_some_and(|r| !r.clicked()), "a disabled arrow does not open its menu");
     }
 
     fn click(at: Pos2) -> Vec<Event> {

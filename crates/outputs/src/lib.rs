@@ -27,11 +27,11 @@ use std::sync::Arc;
 use studiocraft_media::audio::PooledBlock;
 use studiocraft_media::queue::Fifo;
 use studiocraft_media::video::PooledFrame;
-use studiocraft_model::{Field, FieldKind, PathMode, Settings, SettingsSchema};
+use studiocraft_model::{Field, FieldKind, PathMode, ReconnectSettings, Settings, SettingsSchema};
 use studiocraft_plugin::{EncoderKind, Output, OutputInstance, OutputJob, OutputStatus, Plugin, PluginError, RateControl, Registry};
 
 use crate::native::Native;
-pub use crate::stream::{Streaming, Target};
+pub use crate::stream::{AutoCheck, Streaming, Target};
 use crate::writer::{Writer, audio_args};
 
 /// Register the recording, the stream, the replay buffer and every video encoder: the ffmpeg
@@ -47,8 +47,10 @@ pub fn register_all(reg: &mut Registry) -> Result<(), PluginError> {
     reg.register_encoder(Arc::new(studiocraft_encode::H264))?;
     reg.register_encoder(Arc::new(studiocraft_encode::Nvenc::H264))?;
     reg.register_encoder(Arc::new(studiocraft_encode::Nvenc::HEVC))?;
+    reg.register_encoder(Arc::new(studiocraft_encode::Nvenc::AV1))?;
     reg.register_encoder(Arc::new(studiocraft_encode::MediaFoundation::H264))?;
     reg.register_encoder(Arc::new(studiocraft_encode::MediaFoundation::HEVC))?;
+    reg.register_encoder(Arc::new(studiocraft_encode::MediaFoundation::AV1))?;
     reg.register_encoder(Arc::new(studiocraft_encode::VideoToolbox::H264))?;
     reg.register_encoder(Arc::new(studiocraft_encode::VideoToolbox::HEVC))?;
     reg.register_encoder(Arc::new(studiocraft_encode::VaApi::H264))?;
@@ -249,10 +251,65 @@ pub fn stream_targets(settings: &Settings) -> Result<Vec<Target>, PluginError> {
         .collect()
 }
 
+/// The reconnect settings in a stream's settings: the `reconnect` object, each value optional and
+/// defaulting to [`ReconnectSettings::default`]'s. A value of the wrong type, or outside its range
+/// ([`ReconnectSettings::check`]), is an error.
+pub fn stream_reconnect(settings: &Settings) -> Result<ReconnectSettings, PluginError> {
+    let mut r = ReconnectSettings::default();
+    let Some(v) = settings.get("reconnect") else { return Ok(r) };
+    let Some(obj) = v.as_object() else {
+        return Err(PluginError::Failed("the stream's reconnect settings are not an object".into()));
+    };
+    if let Some(v) = obj.get("enabled") {
+        r.enabled = v.as_bool().ok_or_else(|| PluginError::Failed("the reconnect setting enabled is not true or false".into()))?;
+    }
+    for (key, field) in [("first_delay_s", &mut r.first_delay_s), ("max_delay_s", &mut r.max_delay_s), ("max_tries", &mut r.max_tries)] {
+        if let Some(v) = obj.get(key) {
+            *field = v
+                .as_u64()
+                .and_then(|n| u32::try_from(n).ok())
+                .ok_or_else(|| PluginError::Failed(format!("the reconnect setting {key} is not a whole number from 0 to {}", u32::MAX)))?;
+        }
+    }
+    r.check().map_err(PluginError::Failed)?;
+    Ok(r)
+}
+
+/// What the automatic connection checks of a stream need from its settings: the `profile` key its
+/// checks are kept under (empty when absent), each destination's `service` (an unknown or empty one is no service), and
+/// the top-level `check_service` flag, off when absent. A value of the wrong type is an error.
+pub fn stream_checks(settings: &Settings) -> Result<AutoCheck, PluginError> {
+    let service_hosts = match settings.get("check_service") {
+        None => false,
+        Some(v) => v.as_bool().ok_or_else(|| PluginError::Failed("the stream's check_service setting is not true or false".into()))?,
+    };
+    let profile = match settings.get("profile") {
+        None => String::new(),
+        Some(v) => v.as_str().map(str::to_string).ok_or_else(|| PluginError::Failed("the stream's profile setting is not text".into()))?,
+    };
+    let mut services = Vec::new();
+    if let Some(list) = settings.get("destinations").and_then(|v| v.as_array()) {
+        for (i, d) in list.iter().enumerate() {
+            let service = match d.get("service") {
+                None => continue,
+                Some(serde_json::Value::String(s)) => s,
+                Some(_) => return Err(PluginError::Failed(format!("destination {} has a service that is not text", i + 1))),
+            };
+            let id = d.get("id").and_then(|v| v.as_str()).unwrap_or_default();
+            if let Some(s) = studiocraft_model::services::service(service) {
+                services.push((id.to_string(), s));
+            }
+        }
+    }
+    Ok(AutoCheck { profile, services, service_hosts })
+}
+
 impl Output for Stream {
     fn start(&self, settings: &Settings, job: OutputJob) -> Result<Box<dyn OutputInstance>, PluginError> {
         let targets = stream_targets(settings)?;
-        Ok(Box::new(Streaming::start(&job, targets)?))
+        let reconnect = stream_reconnect(settings)?;
+        let checks = stream_checks(settings)?;
+        Ok(Box::new(Streaming::start(&job, targets, reconnect, checks)?))
     }
 }
 

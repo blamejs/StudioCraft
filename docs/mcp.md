@@ -110,7 +110,11 @@ flags. The two flags keep the headless backend's file access inside the folders 
 - Every file a call reads must lie inside a read root: `collection_open`, the files a scene
   collection's sources, filters and transition name when it is opened, and the path settings of
   `source.add`, `source.settings`, `filter.settings` and `transition.settings` (for example the
-  `file` of an `image` or `media` source), whichever tool runs them.
+  `file` of an `image` or `media` source), whichever tool runs them. The pause screen reads the
+  `media` given to `pause_start` or `pause.start`, and the profile's pause picture or video for a
+  pause started without `media` or with `pause.toggle`, so that file must lie inside a read root.
+  The pause screen picks how to show a file by its name, so a picture or video name that leads
+  through a link to a file whose name is not a picture or video is refused.
 - Every file a call writes must lie inside a write root: `collection_save`, and the recording
   folder (Settings › Output, or the Videos folder when it is empty) for `record_start`,
   `record.start` and a `record.toggle` that would start a recording, and for `replay_save` and
@@ -122,7 +126,8 @@ flags. The two flags keep the headless backend's file access inside the folders 
   caption status reports `downloaded` as null for a model outside the read roots. `audio_tracks_repair` and `audio_tracks.repair` rewrite files, so their `folder` must lie inside
   a write root. With or without roots, the studio repairs only the recording folder and the
   folders inside it. `audio_tracks_open_last` and `audio_tracks.open_last` need the last session
-  file inside a read root.
+  file inside a read root. `recordings.list` names the files in the recording folder, so that
+  folder must lie inside a read root.
 - `--collection <file>` is opened through the same checks, so the file and the files it names
   must lie inside a read root.
 
@@ -140,7 +145,9 @@ flags. The two flags keep the headless backend's file access inside the folders 
 - A call runs with the path that was checked: the path settings a command stores or a collection
   opens with, and the `folder` a repair reads, are the absolute paths with their links followed.
   Before a command that writes to the recording folder runs, the recording folder setting is set
-  to that folder's checked path, and the setting keeps it afterwards. A
+  to that folder's checked path, and the setting keeps it afterwards. Before a pause that shows the
+  profile's picture or video starts, the pause media setting is set to that file's checked path;
+  when the pause is refused, the setting keeps the text it held. A
   path that resolves to a name that is not valid Unicode is refused, and so is one whose stored
   text, checked again, resolves to a different path.
 - A refused call fails before anything runs. Without either flag nothing is checked.
@@ -159,7 +166,8 @@ Units are the same in every tool, resource and prompt:
 - Canvas coordinates are pixels, x to the right and y down, with the origin at the top-left. The
   default canvas is 1920 × 1080.
 - Rotation is in degrees.
-- Volume gain is 0 to 1.
+- Volume gain is linear, 0 to 10. A gain of 1 is 0 dB and 10 is +20 dB of boost, StudioCraft's own
+  limit.
 - Durations and audio sync offsets are in milliseconds.
 - The window tools take window points, with (0, 0) at the window's top left.
 
@@ -180,7 +188,7 @@ error -32602. A command that fails is a tool result with `isError: true` and the
 | `scene_add` | `name?` | Runs `scene.add`. The name defaults to the next free "Scene N". The tool returns `scene`, the new scene's id. |
 | `scene_select` | `scene` | Runs `scene.select`, by id or name. In studio mode it sets the preview scene. |
 | `source_add` | `kind`, `scene?`, `name?`, `settings?`, `transform?` | Runs `source.add`, in the scene being edited unless `scene` names one. The tool returns `source`, `item` and `scene`. |
-| `item_transform` | `item`, `scene?`, `transform` | Runs `item.transform`. `item` is the item's id or the name of the source it shows. |
+| `item_transform` | `item`, `scene?`, `transform`, `fit?` | Runs `item.transform`. `item` is the item's id or the name of the source it shows. `fit` (`fit`, `fill` or `stretch`) keeps the item fit, filled or stretched when the canvas size changes. |
 | `source_audio` | `source`, `sync_offset_ms?`, `monitor?`, `record_track?` | Runs `source.sync_offset` when `sync_offset_ms` is given (0 to 5000), `source.monitor` when `monitor` is given (`off`, `monitor_only` or `monitor_and_output`) and `source.set_record_track` when `record_track` is given (`true` or `false`), then returns the source's `audio` settings. A value out of range is an error and changes nothing. With no value it only reads the settings. `record_track` is `null` until set; a source whose `monitor` sends it to the program mix (`off` or `monitor_and_output`) is then written to its own track and a monitor-only source is not. |
 | `transition_set` | `kind`, `ms?` | Runs `transition.set`, then `transition.duration` when `ms` is given. |
 | `studio_transition` | `kind?`, `ms?` | Runs `studio.transition`: in studio mode, it moves the preview scene to the program. `kind` and `ms` apply to this switch only. |
@@ -192,11 +200,15 @@ error -32602. A command that fails is a tool result with `isError: true` and the
 | `app_audio_route` | `app`, `routed` | Runs `app_audio.route`: with `routed: true` the program hears the application in every scene, together with the microphone, through a global audio source, and the tool returns that source's id; with `routed: false` that source leaves the global audio sources. Only an application in the current list, or one that already has a source, can be routed. Routing is refused while the program hears another application, routed or shown in the program scene, whose capture records this one's processes, or whose processes this one's capture would record. One undo step. |
 | `record_start` | none | Runs `record.start`, then returns the recording's state from `document.inspect`. Nothing happens when a recording already runs. |
 | `record_stop` | none | Runs `record.stop`, then returns the recording's state. |
+| `record_marker` | `name?` | Runs `record.marker`, which marks the running recording at this moment. When the recording stops, `<recording name>.otio` is written beside it with each marker at its frame. `name` is 1 to 256 characters with no control characters (default "Marker N", the recording's Nth marker). Returns the marker's `name` and `seconds` from the recording's first frame. It is an error when no recording runs and when the recording already holds 10,000 markers. |
 | `stream_start` | none | Runs `stream.start`, then returns the stream's state. The tool is marked `openWorldHint: true`. The headless backend refuses it without `--allow-streaming`. |
 | `stream_stop` | none | Runs `stream.stop`, then returns the stream's state. The tool is marked `openWorldHint: true`. |
+| `pause_start` | `media?`, `countdown_s?`, `at_zero?` | Runs [`pause.start`](control-protocol.md#pause), which shows the pause screen in the program, so every recording, stream and replay buffer shows it too, and returns the pause's state as `pause.status` gives it. Each value given replaces its profile setting for this pause only: `media` is a picture or video file (`""` for none), `countdown_s` is 0 to 43,200 seconds (0 for none) and `at_zero` is `keep` or `resume`. A `null` value counts as not given. With read roots, `media` and, for a pause started without `media`, the profile's picture or video must be inside them. In the headless backend the countdown and its end at zero are updated at the start of each tool call. |
+| `pause_stop` | none | Runs `pause.stop`, which shows the program scene again with the scene collection's transition, then returns `{"paused": false}`. It is an error when the program is not paused. |
 | `replay_start` | none | Runs `replay.start`, then returns the replay buffer's state. Nothing happens when it already runs. |
 | `replay_stop` | none | Runs `replay.stop`, then returns the replay buffer's state. Replays being saved are still written. |
 | `replay_save` | none | Runs `replay.save`, which writes what the replay buffer holds to a new MKV file in the recording folder in the background, then returns the replay buffer's state. It is an error when the replay buffer is not running or holds nothing yet. |
+| `audio_loudness` | none | Runs [`audio.loudness`](control-protocol.md#audioloudness) and returns the final mix's `momentary_lufs`, `short_term_lufs`, `integrated_lufs` and `true_peak_dbtp` (each `null` while there is nothing to measure yet), `range_lu` (0 with too little signal), `generation` (the same until the mixer publishes new readings) and `target`, the profile's loudness band `{"low_lufs", "high_lufs"}`, −18 to −14 LUFS by default. |
 | `audio_tracks_status` | none | Runs `audio_tracks.status` and returns the settings (`enabled`, `when`, `include_program`, `buffer_mib`, `segment_gib`, `after_stop` and `editor_path`), `last_session` (the session file `audio_tracks_open_last` opens, or `null`), `active` and `finishing` (takes still writing), `repairing` (true while a repair runs) and `last_repair` (what the last repair did, as below), while a take runs the `anchor` it follows (`recording` or `stream`) and the `take_buffer_mib` and `take_segment_gib` it started with (a changed write buffer or file size applies from the next take), and for the last take its `state` (`recording`, `finishing`, `done` or `stopped`), `folder` (once the take's thread has made it), `tracks`, `seconds`, `bytes`, `dropped_seconds`, `low_space`, `track_limit` (true once a source was left without a file because the take made its 256 tracks) and `source_limit` (true while a take runs and more sources are set to record their own track than the 64 tracks recorded at once, the program included; the later sources are not recorded), with `stopped_at` and `reason` when it stopped early. |
 | `audio_tracks_repair` | `folder` | Runs `audio_tracks.repair`, which repairs the takes in `folder` (a take's `Audio Files` folder, its `<name> Audio` folder, or a folder holding such folders) that ended without finishing their files, on a background thread, and returns `started` and `folder` at once. When it ends, `audio_tracks_status` shows `last_repair` with `repaired`, each take's `folder` with its `files` and their `seconds`, and `failed`, each take that could not be repaired with its `folder` and `error`. `folder` must be the recording folder or a folder inside it, with links followed; a folder outside it, or one that does not exist, is an error. At most 4 repairs run at once. Each repaired take also has its `session` file, or `null`. |
 | `audio_tracks_open_last` | none | Runs `audio_tracks.open_last`, which opens the last take's session file (`<name> Audio/<name>.scraft`) in the audio editor (the editor path setting, or `soundcraft` on the `PATH`), or the take's folder when the editor cannot be found or started, on a background thread, and returns `started` and `session` at once. It is an error when no take has ended with a session since the app started, when 4 openings already run, and when the opening's thread cannot start. Each call starts the editor or file manager again. |

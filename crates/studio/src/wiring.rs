@@ -8,8 +8,8 @@ use studiocraft_engine::mixer::{MixInput, MixerCmd};
 use studiocraft_media::Tick;
 use studiocraft_media::mix::Levels;
 use studiocraft_model::{FilterId, MonitorMode, SceneCollection, SceneId, Settings, SourceId};
-use studiocraft_plugin::{AudioOut, FilterInstance, FilterTarget, Reframe, Registry};
-use studiocraft_render::{ItemDesc, Plan, SceneDesc, TransitionDesc};
+use studiocraft_plugin::{AudioOut, FilterInstance, FilterMeter, FilterTarget, Reframe, Registry};
+use studiocraft_render::{ItemDesc, Plan, SceneDesc, ThumbnailRequest, TransitionDesc};
 
 use crate::Notice;
 
@@ -52,34 +52,48 @@ fn problem(name: &str, e: &impl std::fmt::Display) -> Notice {
     Notice::new("{name}: {problem}", vec![("name", name.to_string()), ("problem", e.to_string())], true)
 }
 
+/// What a transition starts from: a scene of the collection, or the pause screen as drawn.
+pub(crate) enum Shown {
+    Scene(SceneId),
+    Pause(SceneDesc),
+}
+
 #[derive(Default)]
 pub(crate) struct Wiring {
     video_filters: HashMap<FilterId, VideoFilter>,
     mix: Option<Vec<MixKey>>,
+    /// The gain-reduction handles of the audio filters in the mixer's inputs, by source and
+    /// filter; replaced with the inputs.
+    meters: HashMap<(SourceId, FilterId), FilterMeter>,
     gains: HashMap<SourceId, (f32, bool)>,
     offsets: HashMap<SourceId, u32>,
     modes: HashMap<SourceId, MonitorMode>,
 }
 
 impl Wiring {
-    /// The compositor's plan: the program scene, the preview scene in studio mode, and the
-    /// transition from `transition.0` when one runs.
+    /// The compositor's plan: the program scene, or `pause` while the program is paused, the
+    /// preview scene in studio mode, and the transition from `transition.0` when one runs.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn plan(
         &mut self,
         c: &SceneCollection,
         studio_mode: bool,
         registry: &Registry,
         sources: &SourceSet,
-        transition: Option<(SceneId, Tick, Tick, &str, &Settings)>,
+        pause: Option<SceneDesc>,
+        transition: Option<(Shown, Tick, Tick, &str, &Settings)>,
         notices: &mut Vec<Notice>,
     ) -> Plan {
         self.sync_video_filters(c, registry, notices);
-        let program = self.scene(c, c.program_scene, sources);
+        let program = pause.unwrap_or_else(|| self.scene(c, c.program_scene, sources));
         let preview = studio_mode.then(|| self.scene(c, c.preview_scene.unwrap_or(c.program_scene), sources));
         let transition = transition.and_then(|(from, start, duration, kind, settings)| {
             let t = registry.transition(kind).ok()?;
             Some(TransitionDesc {
-                from: self.scene(c, from, sources),
+                from: match from {
+                    Shown::Scene(id) => self.scene(c, id, sources),
+                    Shown::Pause(desc) => desc,
+                },
                 key: t.id().to_string(),
                 wgsl: t.shader(),
                 params: t.params(settings),
@@ -89,6 +103,18 @@ impl Wiring {
             })
         });
         Plan { program, transition, preview }
+    }
+
+    /// Small pictures of `scenes`, in this order, `fps` times a second, for a scene list, with the
+    /// slot keys `keys`, so a slot that shows another scene is drawn again soon. Call after
+    /// [`Wiring::plan`], which brings the video filters in line with the collection.
+    pub(crate) fn thumbnails(&self, c: &SceneCollection, sources: &SourceSet, scenes: &[SceneId], keys: &[u64], fps: f32) -> ThumbnailRequest {
+        ThumbnailRequest {
+            scenes: scenes.iter().map(|&id| self.scene(c, id, sources)).collect(),
+            fps,
+            keys: keys.to_vec(),
+            ..ThumbnailRequest::default()
+        }
     }
 
     fn scene(&self, c: &SceneCollection, id: SceneId, sources: &SourceSet) -> SceneDesc {
@@ -204,11 +230,17 @@ impl Wiring {
         }
 
         let mut inputs = Vec::new();
+        let mut meters = HashMap::new();
         for (k, (s, audio)) in key.iter().zip(&audio_sources) {
             let mut filters = Vec::new();
-            for (_, kind, settings) in &k.filters {
+            for (id, kind, settings) in &k.filters {
                 match registry.filter(kind).and_then(|p| p.create(settings)) {
-                    Ok(f) => filters.push(f),
+                    Ok(f) => {
+                        if let Some(m) = f.meter() {
+                            meters.insert((s.id, *id), m);
+                        }
+                        filters.push(f);
+                    }
                     Err(e) => notices.push(problem(&s.name, &e)),
                 }
             }
@@ -226,10 +258,18 @@ impl Wiring {
             });
         }
         self.mix = Some(key);
+        self.meters = meters;
         self.gains = gains;
         self.offsets = offsets;
         self.modes = modes;
         Some(vec![MixerCmd::Inputs(inputs)])
+    }
+
+    /// The gain reduction in dB that `filter` of `source` measured in its last processed block,
+    /// or `None` when the mixer does not run that filter (disabled, not an audio filter, a source
+    /// that is not running, settings it refused) or the filter has no meter.
+    pub(crate) fn filter_meter(&self, source: SourceId, filter: FilterId) -> Option<f32> {
+        self.meters.get(&(source, filter)).map(FilterMeter::get)
     }
 }
 
@@ -303,6 +343,75 @@ mod tests {
             cmds.len()
         );
         assert!(wiring.mixer_inputs(&c, &registry, &sources, &mut levels, &mut notices).is_none(), "nothing changed");
+    }
+
+    /// The mixer's compressor and gate readings are found by source and filter while the mixer
+    /// runs them; a filter without a meter, a disabled one and a removed one have none, and new
+    /// inputs drop the old instances' readings.
+    #[test]
+    fn the_filter_meters_follow_the_mixer_inputs() {
+        use studiocraft_media::audio::{BLOCK_FRAMES, BLOCK_SAMPLES, SAMPLE_RATE};
+        use studiocraft_model::FilterConfig;
+        let registry = builtin_registry(&Arc::new(RwLock::new(String::new())), &Arc::new(CaptionBoard::new())).unwrap();
+        let mut sources = SourceSet::new(MasterClock::new());
+        let (mut wiring, mut levels, mut notices) = (Wiring::default(), HashMap::new(), Vec::new());
+        let mut c = default_collection("Test");
+        let mic = c.global_audio.first().copied().unwrap_or_else(|| panic!("the default collection has global audio"));
+        let filter = |n: u64, kind: &str, enabled: bool| FilterConfig {
+            id: FilterId(900 + n),
+            kind: kind.into(),
+            kind_version: 1,
+            name: format!("{kind} {n}"),
+            enabled,
+            settings: Settings::new(),
+        };
+        c.source_mut(mic).unwrap().filters = vec![
+            filter(1, "compressor", true),
+            filter(2, "gain", true),
+            filter(3, "limiter", false),
+            filter(4, "noise_gate", true),
+            filter(5, "crop_pad", true),
+        ];
+        sources.sync(&c, &registry);
+        assert_eq!(wiring.filter_meter(mic, FilterId(901)), None, "no inputs yet");
+        let Some(cmds) = wiring.mixer_inputs(&c, &registry, &sources, &mut levels, &mut notices) else { panic!("no inputs") };
+        let Some(MixerCmd::Inputs(mut inputs)) = cmds.into_iter().next() else { panic!("no input list") };
+        let Some(input) = inputs.iter_mut().find(|i| i.source == mic) else { panic!("the microphone is not mixed") };
+        assert_eq!(input.filters.len(), 3, "compressor, gain and gate run");
+        assert_eq!(wiring.filter_meter(mic, FilterId(901)), Some(0.0));
+        assert_eq!(wiring.filter_meter(mic, FilterId(904)), Some(0.0));
+        for (id, why) in [(902, "gain has no meter"), (903, "disabled"), (905, "a video filter"), (999, "unknown")] {
+            assert_eq!(wiring.filter_meter(mic, FilterId(id)), None, "{why}");
+        }
+        assert_eq!(wiring.filter_meter(SourceId(123_456), FilterId(901)), None, "another source");
+        // A loud tone through the mixer's compressor instance shows in the wiring's reading.
+        let mut tone: Vec<f32> = (0..8 * BLOCK_FRAMES)
+            .flat_map(|i| {
+                let v = 0.5 * (std::f32::consts::TAU * 997.0 * i as f32 / SAMPLE_RATE as f32).sin();
+                [v, v]
+            })
+            .collect();
+        tone.chunks_mut(BLOCK_SAMPLES).for_each(|b| input.filters[0].process_audio(b));
+        let reading = wiring.filter_meter(mic, FilterId(901)).unwrap_or_default();
+        assert!(reading > 1.0, "{reading} dB");
+        // Silence through the closed gate: it turns the source down.
+        input.filters[2].process_audio(&mut vec![0.0; BLOCK_SAMPLES]);
+        assert!(wiring.filter_meter(mic, FilterId(904)).is_some_and(|db| db > 1.0));
+        assert!(wiring.mixer_inputs(&c, &registry, &sources, &mut levels, &mut notices).is_none(), "nothing changed");
+        assert_eq!(wiring.filter_meter(mic, FilterId(901)), Some(reading), "unchanged inputs keep their meters");
+        // New settings make new instances: the old one's reading is dropped.
+        c.source_mut(mic).unwrap().filters[0].settings = Settings::new().with("ratio", 4.0);
+        assert!(wiring.mixer_inputs(&c, &registry, &sources, &mut levels, &mut notices).is_some());
+        assert_eq!(wiring.filter_meter(mic, FilterId(901)), Some(0.0));
+        input.filters[0].process_audio(&mut tone);
+        assert_eq!(wiring.filter_meter(mic, FilterId(901)), Some(0.0), "the replaced instance no longer reports");
+        // Disabled and removed filters have no reading.
+        c.source_mut(mic).unwrap().filters[0].enabled = false;
+        c.source_mut(mic).unwrap().filters.retain(|f| f.id != FilterId(904));
+        assert!(wiring.mixer_inputs(&c, &registry, &sources, &mut levels, &mut notices).is_some());
+        assert_eq!(wiring.filter_meter(mic, FilterId(901)), None);
+        assert_eq!(wiring.filter_meter(mic, FilterId(904)), None);
+        assert!(notices.is_empty(), "{} notices", notices.len());
     }
 
     /// A source's size follows its enabled crop and pad filters in order, and a disabled one or

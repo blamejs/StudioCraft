@@ -6,7 +6,7 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use studiocraft_model::{ItemId, SceneId, Settings, SourceId, Transform};
+use studiocraft_model::{FilterId, FitMode, ItemId, PauseAtZero, SceneId, Settings, SourceId, Transform};
 
 /// A scene by id or by name.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -32,6 +32,24 @@ pub enum ItemRef {
     Source(String),
 }
 
+/// A canvas size in pixels.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CanvasSize {
+    pub width: u32,
+    pub height: u32,
+}
+
+/// Longest side of a [`SourceSize`], in pixels.
+pub const MAX_SOURCE_SIDE: u32 = 65_536;
+
+/// The size a source shows at, in pixels.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SourceSize {
+    pub source: SourceId,
+    pub width: u32,
+    pub height: u32,
+}
+
 /// Where a reordered entry goes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -44,20 +62,46 @@ pub enum Move {
     To(usize),
 }
 
+/// Most scenes `scene.thumbnails` draws at once, StudioCraft's own limit.
+pub const MAX_THUMBNAIL_SCENES: usize = 16;
+/// Fewest pictures a second `scene.thumbnails` draws of each scene (one every 10 seconds),
+/// StudioCraft's own limit.
+pub const MIN_THUMBNAIL_FPS: f32 = 0.1;
+/// Most pictures a second `scene.thumbnails` draws of each scene, StudioCraft's own limit.
+pub const MAX_THUMBNAIL_FPS: f32 = 4.0;
+/// Pictures a second `scene.thumbnails` draws of each scene when `fps` is left out.
+pub const DEFAULT_THUMBNAIL_FPS: f32 = 2.0;
+
 /// Something the engine cannot do itself: the app performs it.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RuntimeAction {
+    /// Draw small pictures of `scenes`, in this order, `fps` times a second each; none when the
+    /// list is empty.
+    SceneThumbnails {
+        scenes: Vec<SceneId>,
+        fps: f32,
+    },
     StartRecording,
     StopRecording,
     ToggleRecording,
+    /// Mark the running recording now, named `name` or numbered when it is `None`.
+    RecordingMarker {
+        name: Option<String>,
+    },
+    /// The recordings, saved replays and takes of audio tracks in the recording folder.
+    RecordingsList,
     StartStreaming,
     StopStreaming,
     ToggleStreaming,
+    /// List what would stop the stream from starting or spoil it.
+    GoLiveCheck,
     StartReplay,
     StopReplay,
     ToggleReplay,
     SaveReplay,
+    /// The program's loudness readings and the profile's loudness target.
+    AudioLoudness,
     /// The state of the audio tracks.
     AudioTracksStatus,
     /// Repair the audio tracks of takes in `folder` that ended without finishing their files.
@@ -85,8 +129,42 @@ pub enum RuntimeAction {
     AudioTracksMarker {
         name: Option<String>,
     },
+    /// Mark the running recording and the running take of audio tracks now with one marker,
+    /// named `name` or numbered when it is `None`.
+    MarkerAdd {
+        name: Option<String>,
+    },
+    /// The markers of the running session, or of the last one.
+    MarkerList,
     /// Forget the hardware encoders' test results, so the next start tests them again.
     RetestHardwareEncoders,
+    /// The gain reduction of `filter`, a filter of `source`, as the mixer last measured it.
+    FilterMeter {
+        source: SourceId,
+        filter: FilterId,
+    },
+    /// Show the pause screen on the program, with the profile's settings and, for this pause only,
+    /// each given value in place of its setting. While paused, apply the given values.
+    PauseStart {
+        media: Option<String>,
+        countdown_s: Option<u32>,
+        at_zero: Option<PauseAtZero>,
+    },
+    /// Show the program scene again.
+    PauseStop,
+    /// Pause with the profile's settings when not paused, else resume.
+    PauseToggle,
+    /// Add `seconds` to the countdown.
+    PauseExtend {
+        seconds: u32,
+    },
+    /// Whether the program is paused, and the countdown.
+    PauseStatus,
+    /// The session's scene switches, stream reconnects, pauses and resumes after the event
+    /// numbered `since` (all of them when it is `None`).
+    SessionEvents {
+        since: Option<u64>,
+    },
     OpenSettings,
     Exit,
 }
@@ -118,6 +196,17 @@ pub enum Command {
     /// Show the scene at a position in the Scenes list (1 is the first), as `scene.select`.
     #[serde(rename = "scene.select_index")]
     SceneSelectIndex { index: usize },
+    /// Draw a small picture of each of `scenes`, in this order, `fps` times a second, for a scene
+    /// list; an empty list stops drawing them. Each call replaces the last one's list.
+    #[serde(rename = "scene.thumbnails")]
+    SceneThumbnails {
+        /// More than [`MAX_THUMBNAIL_SCENES`] is an error while reading, before a longer list is
+        /// held.
+        #[serde(deserialize_with = "thumbnail_scenes")]
+        scenes: Vec<SceneRef>,
+        #[serde(default, deserialize_with = "given_f32", skip_serializing_if = "Option::is_none")]
+        fps: Option<f32>,
+    },
 
     #[serde(rename = "source.add")]
     SourceAdd {
@@ -159,6 +248,27 @@ pub enum Command {
     /// Whether audio tracks record the source to a file of its own.
     #[serde(rename = "source.set_record_track")]
     SourceSetRecordTrack { source: SourceRef, on: bool },
+    /// Present the window or display staged in slot `index` (1 is the first) of a Staged windows
+    /// source, or of every one whose slot is not empty when `source` is absent.
+    #[serde(rename = "present.window")]
+    PresentWindow {
+        #[serde(default)]
+        source: Option<SourceRef>,
+        index: usize,
+    },
+    /// Present the next staged window or display, wrapping around, on one Staged windows source or
+    /// on all.
+    #[serde(rename = "present.next")]
+    PresentNext {
+        #[serde(default)]
+        source: Option<SourceRef>,
+    },
+    /// Present the staged window or display before the presented one, wrapping around.
+    #[serde(rename = "present.previous")]
+    PresentPrevious {
+        #[serde(default)]
+        source: Option<SourceRef>,
+    },
 
     #[serde(rename = "item.remove")]
     ItemRemove {
@@ -186,6 +296,9 @@ pub enum Command {
         scene: Option<SceneRef>,
         item: ItemRef,
         transform: Transform,
+        /// How `transform` sized the item to the canvas; omitted for any other change.
+        #[serde(default)]
+        fit: Option<FitMode>,
     },
     #[serde(rename = "item.visible")]
     ItemVisible {
@@ -201,6 +314,18 @@ pub enum Command {
         item: ItemRef,
         locked: bool,
     },
+    /// Place every item of every scene for a canvas that changed from `from` to `to`
+    /// ([`Transform::relayout`]), or only the items in `items` when given; `sizes` gives the
+    /// sizes of the sources that show a picture.
+    #[serde(rename = "canvas.relayout")]
+    CanvasRelayout {
+        from: CanvasSize,
+        to: CanvasSize,
+        #[serde(default)]
+        sizes: Vec<SourceSize>,
+        #[serde(default)]
+        items: Option<Vec<ItemId>>,
+    },
 
     #[serde(rename = "filter.add")]
     FilterAdd {
@@ -215,6 +340,9 @@ pub enum Command {
     FilterSettings { source: SourceRef, filter: u64, settings: Settings },
     #[serde(rename = "filter.enable")]
     FilterEnable { source: SourceRef, filter: u64, enabled: bool },
+    /// The gain reduction of a running compressor, limiter or noise gate.
+    #[serde(rename = "filter.meter")]
+    FilterMeter { source: SourceRef, filter: u64 },
 
     #[serde(rename = "transition.set")]
     TransitionSet { kind: String },
@@ -246,12 +374,28 @@ pub enum Command {
     RecordStop {},
     #[serde(rename = "record.toggle")]
     RecordToggle {},
+    /// Mark the running recording at this moment, named `name` or numbered; the timeline file
+    /// written beside the recording lists the marker.
+    #[serde(rename = "record.marker")]
+    RecordMarker {
+        /// Absent gives a numbered marker; `null` or any value that is not a string is an error.
+        #[serde(default, deserialize_with = "given_string")]
+        name: Option<String>,
+    },
+    /// List the recordings, saved replays and takes of audio tracks in the recording folder, with
+    /// each recording's marker timeline and take, newest first.
+    #[serde(rename = "recordings.list")]
+    RecordingsList {},
     #[serde(rename = "stream.start")]
     StreamStart {},
     #[serde(rename = "stream.stop")]
     StreamStop {},
     #[serde(rename = "stream.toggle")]
     StreamToggle {},
+    /// What would stop the stream from starting or spoil it: each item with its state and the
+    /// command that fixes a problem.
+    #[serde(rename = "golive.check")]
+    GoLiveCheck {},
     #[serde(rename = "replay.start")]
     ReplayStart {},
     #[serde(rename = "replay.stop")]
@@ -260,6 +404,10 @@ pub enum Command {
     ReplayToggle {},
     #[serde(rename = "replay.save")]
     ReplaySave {},
+    /// The final mix's loudness (momentary, short-term, integrated, range and true peak) and the
+    /// profile's loudness target.
+    #[serde(rename = "audio.loudness")]
+    AudioLoudness {},
     #[serde(rename = "audio_tracks.status")]
     AudioTracksStatus {},
     /// Repair the audio tracks of takes that ended without finishing their files: `folder` is a
@@ -303,10 +451,52 @@ pub enum Command {
         #[serde(default, deserialize_with = "given_string")]
         name: Option<String>,
     },
+    /// Mark the running recording and the running take of audio tracks at this moment with one
+    /// marker, named `name` or numbered in the session.
+    #[serde(rename = "marker.add")]
+    MarkerAdd {
+        /// Absent gives a numbered marker; `null` or any value that is not a string is an error.
+        #[serde(default, deserialize_with = "given_string", skip_serializing_if = "Option::is_none")]
+        name: Option<String>,
+    },
+    /// The markers `marker.add` set in the running session, or in the last one.
+    #[serde(rename = "marker.list")]
+    MarkerList {},
     /// Forget the hardware encoders' test results, in the session and in the file that keeps
     /// them, so the next recording or stream tests them again.
     #[serde(rename = "hardware_encoders.retest")]
     RetestHardwareEncoders {},
+    /// Show the pause screen on the program, and on every recording, stream and replay buffer.
+    /// Each value given replaces its profile setting for this pause only: `media` a picture or
+    /// video file (`""` for none), `countdown_s` the countdown in seconds (0 for none), `at_zero`
+    /// `keep` or `resume`. While paused, the given values apply without a new transition.
+    #[serde(rename = "pause.start")]
+    PauseStart {
+        #[serde(default, deserialize_with = "given_string", skip_serializing_if = "Option::is_none")]
+        media: Option<String>,
+        #[serde(default, deserialize_with = "given_u32", skip_serializing_if = "Option::is_none")]
+        countdown_s: Option<u32>,
+        #[serde(default, deserialize_with = "given_string", skip_serializing_if = "Option::is_none")]
+        at_zero: Option<String>,
+    },
+    /// Show the program scene again, with the collection's transition.
+    #[serde(rename = "pause.stop")]
+    PauseStop {},
+    #[serde(rename = "pause.toggle")]
+    PauseToggle {},
+    /// Add `seconds` to the countdown of the running pause.
+    #[serde(rename = "pause.extend")]
+    PauseExtend { seconds: u32 },
+    /// Whether the program is paused, since when, and the countdown.
+    #[serde(rename = "pause.status")]
+    PauseStatus {},
+    /// The scene switches, stream reconnects, pauses and resumes of the session, after the event
+    /// numbered `since` or all the kept ones.
+    #[serde(rename = "session.events")]
+    SessionEvents {
+        #[serde(default, deserialize_with = "given_u64", skip_serializing_if = "Option::is_none")]
+        since: Option<u64>,
+    },
     #[serde(rename = "app.settings")]
     OpenSettings {},
     #[serde(rename = "app.exit")]
@@ -349,6 +539,43 @@ fn given_string<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<String>
     String::deserialize(d).map(Some)
 }
 
+/// A parameter that may be left out but, when given, is a whole number: `null` is refused.
+fn given_u32<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<u32>, D::Error> {
+    u32::deserialize(d).map(Some)
+}
+
+/// A parameter that may be left out but, when given, is a number: `null` is refused.
+fn given_f32<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<f32>, D::Error> {
+    f32::deserialize(d).map(Some)
+}
+
+/// `scene.thumbnails`' list of scenes, refused once it passes [`MAX_THUMBNAIL_SCENES`] entries.
+fn thumbnail_scenes<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<SceneRef>, D::Error> {
+    struct Scenes;
+    impl<'de> serde::de::Visitor<'de> for Scenes {
+        type Value = Vec<SceneRef>;
+        fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+            write!(f, "a list of at most {MAX_THUMBNAIL_SCENES} scene ids or names")
+        }
+        fn visit_seq<A: serde::de::SeqAccess<'de>>(self, mut seq: A) -> Result<Self::Value, A::Error> {
+            let mut scenes = Vec::with_capacity(seq.size_hint().unwrap_or(0).min(MAX_THUMBNAIL_SCENES));
+            while let Some(scene) = seq.next_element()? {
+                if scenes.len() == MAX_THUMBNAIL_SCENES {
+                    return Err(serde::de::Error::custom(format_args!("more than {MAX_THUMBNAIL_SCENES} scenes are given")));
+                }
+                scenes.push(scene);
+            }
+            Ok(scenes)
+        }
+    }
+    d.deserialize_seq(Scenes)
+}
+
+/// A parameter that may be left out but, when given, is a whole number: `null` is refused.
+fn given_u64<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<u64>, D::Error> {
+    u64::deserialize(d).map(Some)
+}
+
 impl Command {
     /// A command from its id and parameters (`null` or absent parameters mean none).
     pub fn from_parts(id: &str, params: &Value) -> Result<Command, String> {
@@ -377,6 +604,7 @@ impl Command {
             Command::SceneMove { .. } => "scene.move",
             Command::SceneSelect { .. } => "scene.select",
             Command::SceneSelectIndex { .. } => "scene.select_index",
+            Command::SceneThumbnails { .. } => "scene.thumbnails",
             Command::SourceAdd { .. } => "source.add",
             Command::SourceAddExisting { .. } => "source.add_existing",
             Command::SourceRename { .. } => "source.rename",
@@ -386,16 +614,21 @@ impl Command {
             Command::SourceSyncOffset { .. } => "source.sync_offset",
             Command::SourceMonitor { .. } => "source.monitor",
             Command::SourceSetRecordTrack { .. } => "source.set_record_track",
+            Command::PresentWindow { .. } => "present.window",
+            Command::PresentNext { .. } => "present.next",
+            Command::PresentPrevious { .. } => "present.previous",
             Command::ItemRemove { .. } => "item.remove",
             Command::ItemDuplicate { .. } => "item.duplicate",
             Command::ItemMove { .. } => "item.move",
             Command::ItemTransform { .. } => "item.transform",
             Command::ItemVisible { .. } => "item.visible",
             Command::ItemLock { .. } => "item.lock",
+            Command::CanvasRelayout { .. } => "canvas.relayout",
             Command::FilterAdd { .. } => "filter.add",
             Command::FilterRemove { .. } => "filter.remove",
             Command::FilterSettings { .. } => "filter.settings",
             Command::FilterEnable { .. } => "filter.enable",
+            Command::FilterMeter { .. } => "filter.meter",
             Command::TransitionSet { .. } => "transition.set",
             Command::TransitionDuration { .. } => "transition.duration",
             Command::TransitionSettings { .. } => "transition.settings",
@@ -406,13 +639,17 @@ impl Command {
             Command::RecordStart {} => "record.start",
             Command::RecordStop {} => "record.stop",
             Command::RecordToggle {} => "record.toggle",
+            Command::RecordMarker { .. } => "record.marker",
+            Command::RecordingsList {} => "recordings.list",
             Command::StreamStart {} => "stream.start",
             Command::StreamStop {} => "stream.stop",
             Command::StreamToggle {} => "stream.toggle",
+            Command::GoLiveCheck {} => "golive.check",
             Command::ReplayStart {} => "replay.start",
             Command::ReplayStop {} => "replay.stop",
             Command::ReplayToggle {} => "replay.toggle",
             Command::ReplaySave {} => "replay.save",
+            Command::AudioLoudness {} => "audio.loudness",
             Command::AudioTracksStatus {} => "audio_tracks.status",
             Command::AudioTracksRepair { .. } => "audio_tracks.repair",
             Command::CaptionsStart { .. } => "captions.start",
@@ -423,7 +660,15 @@ impl Command {
             Command::CaptionsDownloadCancel {} => "captions.download_cancel",
             Command::AudioTracksOpenLast {} => "audio_tracks.open_last",
             Command::AudioTracksMarker { .. } => "audio_tracks.marker",
+            Command::MarkerAdd { .. } => "marker.add",
+            Command::MarkerList {} => "marker.list",
             Command::RetestHardwareEncoders {} => "hardware_encoders.retest",
+            Command::PauseStart { .. } => "pause.start",
+            Command::PauseStop {} => "pause.stop",
+            Command::PauseToggle {} => "pause.toggle",
+            Command::PauseExtend { .. } => "pause.extend",
+            Command::PauseStatus {} => "pause.status",
+            Command::SessionEvents { .. } => "session.events",
             Command::OpenSettings {} => "app.settings",
             Command::Exit {} => "app.exit",
             Command::AppLinks { .. } => "app.links",
@@ -478,25 +723,46 @@ const SPECS: &[CommandSpec] = &[
     spec("scene.move", "Move Scene", "scene: id or name, to: up|down|top|bottom|{to: index}", Undo::Undoable),
     spec("scene.select", "Show Scene", "scene: id or name", Undo::NotUndoable),
     spec("scene.select_index", "Show Scene by Position", "index: 1-based position in the Scenes list", Undo::NotUndoable),
+    spec(
+        "scene.thumbnails",
+        "Draw Scene Pictures",
+        "scenes: up to 16 scene ids or names, [] to stop, fps?: 0.1 to 4 pictures a second (2 by default)",
+        Undo::NotUndoable,
+    ),
     spec("source.add", "Add Source", "kind: plug-in id, scene?, name?, settings?, transform?", Undo::Undoable),
     spec("source.add_existing", "Add Existing Source", "source: id or name, scene?", Undo::Undoable),
     spec("source.rename", "Rename Source", "source: id or name, name: string", Undo::Undoable),
     spec("source.settings", "Source Properties", "source: id or name, settings: object", Undo::Undoable),
-    spec("source.volume", "Set Volume", "source: id or name, gain: 0..1", Undo::Undoable),
+    spec("source.volume", "Set Volume", "source: id or name, gain: 0..10 linear (1 is 0 dB, 10 is +20 dB)", Undo::Undoable),
     spec("source.mute", "Mute", "source: id or name, muted: bool", Undo::Undoable),
     spec("source.sync_offset", "Set Sync Offset", "source: id or name, ms: 0..5000 milliseconds the audio is delayed", Undo::Undoable),
     spec("source.monitor", "Audio Monitoring", "source: id or name, mode: off|monitor_only|monitor_and_output", Undo::Undoable),
     spec("source.set_record_track", "Record as Its Own Track", "source: id or name, on: bool", Undo::Undoable),
+    spec(
+        "present.window",
+        "Present Staged Window",
+        "index: slot 1 to 6, source?: id or name of a Staged windows source (all when absent)",
+        Undo::NotUndoable,
+    ),
+    spec("present.next", "Present Next Staged Window", "source?: id or name of a Staged windows source (all when absent)", Undo::NotUndoable),
+    spec("present.previous", "Present Previous Staged Window", "source?: id or name of a Staged windows source (all when absent)", Undo::NotUndoable),
     spec("item.remove", "Remove Source from Scene", "item: id or source name, scene?", Undo::Undoable),
     spec("item.duplicate", "Duplicate Source", "item: id or source name, scene?", Undo::Undoable),
     spec("item.move", "Move Source", "item, scene?, to: up|down|top|bottom|{to: index}", Undo::Undoable),
-    spec("item.transform", "Transform Source", "item, scene?, transform: {position, size, rotation, crop}", Undo::Undoable),
+    spec("item.transform", "Transform Source", "item, scene?, transform: {position, size, rotation, crop}, fit?: fit|fill|stretch", Undo::Undoable),
     spec("item.visible", "Show or Hide Source", "item, scene?, visible: bool", Undo::Undoable),
     spec("item.lock", "Lock Source", "item, scene?, locked: bool", Undo::Undoable),
+    spec(
+        "canvas.relayout",
+        "Lay Out for Canvas Size",
+        "from: {width, height}, to: {width, height}, sizes?: [{source: id, width, height}], items?: [item id]",
+        Undo::Undoable,
+    ),
     spec("filter.add", "Add Filter", "source, kind: plug-in id, name?", Undo::Undoable),
     spec("filter.remove", "Remove Filter", "source, filter: id", Undo::Undoable),
     spec("filter.settings", "Filter Properties", "source, filter: id, settings: object", Undo::Undoable),
     spec("filter.enable", "Enable Filter", "source, filter: id, enabled: bool", Undo::Undoable),
+    spec("filter.meter", "Filter Gain Reduction", "source, filter: id", Undo::NotUndoable),
     spec("transition.set", "Set Transition", "kind: plug-in id", Undo::Undoable),
     spec("transition.duration", "Set Transition Duration", "ms: milliseconds", Undo::Undoable),
     spec("transition.settings", "Transition Properties", "settings: object", Undo::Undoable),
@@ -507,13 +773,17 @@ const SPECS: &[CommandSpec] = &[
     spec("record.start", "Start Recording", "", Undo::NotUndoable),
     spec("record.stop", "Stop Recording", "", Undo::NotUndoable),
     spec("record.toggle", "Start or Stop Recording", "", Undo::NotUndoable),
+    spec("record.marker", "Add Recording Marker", "name?: the marker's name, 1 to 256 characters", Undo::NotUndoable),
+    spec("recordings.list", "List Recordings", "", Undo::NotUndoable),
     spec("stream.start", "Start Streaming", "", Undo::NotUndoable),
     spec("stream.stop", "Stop Streaming", "", Undo::NotUndoable),
     spec("stream.toggle", "Start or Stop Streaming", "", Undo::NotUndoable),
+    spec("golive.check", "Go-Live Check", "", Undo::NotUndoable),
     spec("replay.start", "Start Replay Buffer", "", Undo::NotUndoable),
     spec("replay.stop", "Stop Replay Buffer", "", Undo::NotUndoable),
     spec("replay.toggle", "Start or Stop Replay Buffer", "", Undo::NotUndoable),
     spec("replay.save", "Save Replay", "", Undo::NotUndoable),
+    spec("audio.loudness", "Program Loudness", "", Undo::NotUndoable),
     spec("audio_tracks.status", "Audio Tracks Status", "", Undo::NotUndoable),
     spec("audio_tracks.repair", "Repair Audio Tracks", "folder: path to a take's folder or the recording folder", Undo::NotUndoable),
     spec("captions.start", "Start Live Captions", "model?: speech model id, language?: ISO 639-1 code or auto", Undo::NotUndoable),
@@ -524,7 +794,20 @@ const SPECS: &[CommandSpec] = &[
     spec("captions.download_cancel", "Cancel Speech Model Download", "", Undo::NotUndoable),
     spec("audio_tracks.open_last", "Open Last Audio Tracks in Editor", "", Undo::NotUndoable),
     spec("audio_tracks.marker", "Add Audio Tracks Marker", "name?: the marker's name, 1 to 256 characters", Undo::NotUndoable),
+    spec("marker.add", "Add Marker", "name?: the marker's name, 1 to 256 characters", Undo::NotUndoable),
+    spec("marker.list", "List Markers", "", Undo::NotUndoable),
     spec("hardware_encoders.retest", "Test Hardware Encoders Again", "", Undo::NotUndoable),
+    spec(
+        "pause.start",
+        "Pause Program",
+        "media?: picture or video path, \"\" for none, countdown_s?: 0..43200, at_zero?: keep|resume",
+        Undo::NotUndoable,
+    ),
+    spec("pause.stop", "Resume Program", "", Undo::NotUndoable),
+    spec("pause.toggle", "Pause or Resume Program", "", Undo::NotUndoable),
+    spec("pause.extend", "Add Time to the Pause", "seconds: 1..43200", Undo::NotUndoable),
+    spec("pause.status", "Pause Status", "", Undo::NotUndoable),
+    spec("session.events", "Session Events", "since?: number of the last event already read", Undo::NotUndoable),
     spec("app.settings", "Settings", "", Undo::NotUndoable),
     spec("app.exit", "Exit", "", Undo::NotUndoable),
     spec("app.links", "Community Links", "link?: discord|website|github|issues", Undo::NotUndoable),
@@ -551,9 +834,14 @@ mod tests {
         let samples = vec![
             Command::SceneAdd { name: None },
             Command::SceneSelect { scene: SceneRef::Name("Main".into()) },
+            Command::SceneThumbnails { scenes: vec![SceneRef::Id(SceneId(2)), SceneRef::Name("Main".into())], fps: None },
+            Command::SceneThumbnails { scenes: vec![], fps: Some(4.0) },
             Command::ItemMove { scene: None, item: ItemRef::Id(ItemId(3)), to: Move::To(2) },
+            Command::FilterMeter { source: SourceRef::Name("Mic".into()), filter: 7 },
             Command::StudioToggle {},
             Command::RecordToggle {},
+            Command::GoLiveCheck {},
+            Command::RecordingsList {},
             Command::Exit {},
             Command::AppLinks { link: Some("github".into()) },
             Command::AppLinks { link: None },
@@ -568,10 +856,22 @@ mod tests {
             Command::CaptionsStop {},
             Command::CaptionsToggle {},
             Command::CaptionsStatus {},
+            Command::AudioLoudness {},
             Command::CaptionsDownload { model: Some("whisper-base".into()) },
             Command::CaptionsDownloadCancel {},
             Command::AppAudioLanes {},
             Command::AppAudioRoute { app: "player.exe".into(), routed: true },
+            Command::PauseStart { media: None, countdown_s: None, at_zero: None },
+            Command::PauseStart { media: Some("break.png".into()), countdown_s: Some(600), at_zero: Some("resume".into()) },
+            Command::PauseStop {},
+            Command::PauseToggle {},
+            Command::PauseExtend { seconds: 60 },
+            Command::PauseStatus {},
+            Command::MarkerAdd { name: None },
+            Command::MarkerAdd { name: Some("Goal".into()) },
+            Command::MarkerList {},
+            Command::SessionEvents { since: None },
+            Command::SessionEvents { since: Some(42) },
         ];
         for c in samples {
             let v = serde_json::to_value(&c).unwrap();
@@ -609,5 +909,16 @@ mod tests {
         assert!(Command::from_parts("no.such", &json!({})).unwrap_err().contains("unknown command"));
         assert!(Command::from_parts("scene.rename", &json!({"scene": 1})).unwrap_err().contains("scene.rename"));
         assert!(Command::from_parts("scene.add", &json!([1, 2])).is_err());
+    }
+
+    #[test]
+    fn a_long_scene_list_is_refused_while_it_is_read() {
+        let sixteen: Vec<u64> = (1..=16).collect();
+        let c = Command::from_parts("scene.thumbnails", &json!({"scenes": sixteen})).unwrap();
+        assert!(matches!(c, Command::SceneThumbnails { ref scenes, .. } if scenes.len() == 16));
+        let huge: Vec<u64> = (1..=100_000).collect();
+        let e = Command::from_parts("scene.thumbnails", &json!({"scenes": huge})).unwrap_err();
+        assert!(e.contains("more than 16 scenes are given"), "{e}");
+        assert!(Command::from_parts("scene.thumbnails", &json!({"scenes": "Main"})).is_err());
     }
 }

@@ -8,13 +8,23 @@ sizes and bitrates, are listed in [MECHANICS.md](../MECHANICS.md).
 
 A scene is a stack of sources. You add, rename, duplicate, reorder and remove scenes and sources.
 In the preview you drag, resize and rotate sources. A source that is not rotated snaps when an
-edge or its center line comes within 8 points of a canvas edge, a canvas center line, or an edge or
+edge or its center line comes within 8 points of a canvas edge, a canvas center line, an edge of
+the action safe area (3.5% in from each canvas edge) or the title safe area (5% in), or an edge or
 center line of another visible source, and lines show what it snapped to. A move snaps on each
 axis, and each edge or center line of the source that then lies on a line shows that line. A corner drag snaps the edges it moves and keeps the aspect ratio: the edge closer to its
 line snaps and the other edge follows the ratio. With Shift held the corner drag changes the ratio
 and each edge snaps on its own. Holding Alt (Option on macOS) turns snapping off. One drag is one
 undo step. You can lock a source so it can't be moved, or lock the whole preview. Each scene item can be
 shown or hidden, and every change can be undone.
+
+The Transform menu (in Edit and in a source's context menu) has Fit to Screen, which shows the
+whole source in the canvas at its aspect ratio; Fill Screen, which covers the canvas at the
+source's aspect ratio and leaves the parts past the canvas edges out of the picture; and Stretch to
+Screen, which makes the source the canvas's size. When the canvas size changes, every scene is laid
+out for the new size in one undo step: a source that was fit, filled or stretched with these
+commands is fit, filled or stretched again, and any other source keeps its place in proportion to
+the canvas ([`canvas.relayout`](control-protocol.md#canvasrelayout)). Moving, resizing, rotating
+or cropping a source ends its fit, fill or stretch.
 
 ### Built-in sources
 
@@ -26,10 +36,11 @@ shown or hidden, and every change can be undone.
 | Media file | A media file. | All |
 | Display capture | A whole display. | Windows, macOS and Linux |
 | Window capture | One window. | Windows, macOS and Linux |
+| Staged windows | One of up to six windows or displays picked ahead of time, swapped from its Properties, a hotkey or a command ([Staged windows](#staged-windows)). | Windows and macOS |
 | Camera | A webcam or capture card. | Windows (Media Foundation), macOS (AVFoundation) and Linux (V4L2) |
 | Audio input capture | A microphone or other input device. | Windows, macOS and Linux |
 | Audio output capture | The sound the computer plays (desktop audio). | Windows and Linux |
-| Application audio capture | The sound one application plays. | Windows 11 and Windows Server 2022 |
+| Application audio capture | The sound one application plays. | Windows 11, Windows Server 2022 and Linux (PipeWire) |
 | Live Captions | The words heard in the program audio, while live captions run. | All |
 
 ### Display and window capture on Linux
@@ -37,7 +48,42 @@ shown or hidden, and every change can be undone.
 On Linux, display and window capture go through the desktop's screen-cast portal
 (`xdg-desktop-portal` with a backend for your desktop) and PipeWire. The desktop's own picker
 asks for the display or window when the source starts. After the picker is canceled or sharing is
-stopped, changing any of the source's properties opens the picker again.
+stopped, changing any of the source's properties opens the picker again. The list of displays
+for the canvas size (Settings › Video › Match display and `video.displays`) does not use the
+picker: it comes from the Wayland compositor's outputs, or from RandR under X11.
+
+### Staged windows
+
+A Staged windows source holds up to six windows or displays, chosen in its Properties as Window 1
+to Window 6, and shows one of them: the window or display in the slot that Presented window
+names. Each slot's list offers the open windows and then the connected displays. Every staged
+window or display keeps its capture open. The presented one is captured at the capture rate and
+each of the others once a second, so a swap shows the new window or display on the next frame
+without opening its capture again. A slot keeps its window after the window closes. Every 2
+seconds the source looks for it again: first a window with the same program and title, then one
+with the same title, then another window of the same program. A slot also keeps its display while
+the display is disconnected, and every 2 seconds the source looks for a display with the same id;
+until one is connected, the source reports that the display is not connected. A slot that holds a
+display saves the character U+001E followed by the display's id, the id a Display capture source
+saves for that display. Any other value is a window, so collections saved before displays could
+be staged open with the same windows.
+
+To swap the presented window or display, change Presented window in the Properties, or run
+`present.window` (a slot), `present.next` or `present.previous`
+([`present.*`](control-protocol.md#presentwindow-presentnext-and-presentprevious)). Next and
+previous skip empty slots and wrap around. Settings › Hotkeys lists Present Next Staged Window,
+Present Previous Staged Window and Present Staged Window 1 to 6, with no shortcut until you set
+one. Without a source named, these commands change every Staged windows source in the scene
+collection that has a window or display in the slot they move to. The presented slot is saved
+with the collection. Swapping the presented slot, from the Properties or otherwise, is not an undo
+step, and Edit › Undo does not change it.
+
+While the presented window or display cannot be captured (the window closed or is minimized, the
+display is disconnected, or the slot is empty), the source shows the placeholder that "While the
+presented window cannot be shown" selects: a color, black by default, at the size of the last
+picture (1920 x 1080 before the first one), or the last picture of that window or display. After
+a swap, the source never shows the picture of the window or display presented before. The source
+is not offered on Linux, where the desktop's picker chooses each captured window and display.
 
 ### Audio capture on Linux
 
@@ -65,10 +111,25 @@ program, is already recorded by that application's capture.
 
 Capturing one application uses Windows process loopback capture
 ([`AUDIOCLIENT_PROCESS_LOOPBACK_PARAMS`](https://learn.microsoft.com/en-us/windows/win32/api/audioclientactivationparams/ns-audioclientactivationparams-audioclient_process_loopback_params)),
-which needs Windows build 20348 or later: Windows 11 or Windows Server 2022. On earlier Windows
-builds, macOS and Linux the source lists no applications and says why, and Audio output capture
-still records everything the computer plays. The `app_audio.list` and `app_audio.status` commands
-report the same lists and support ([Control and automation](#control-and-automation)).
+which needs Windows build 20348 or later: Windows 11 or Windows Server 2022.
+
+On Linux the list holds the applications that have a playback stream on the PipeWire sound server,
+named by the program file of the process that owns the stream. A stream that the sound server
+passes on for an application using the PulseAudio interface names its own process, and nothing
+checks that name. StudioCraft counts such a stream for the process it names only while that
+process has an open connection to the PulseAudio socket. When the process has none, or when
+StudioCraft cannot read the process's open files or the system's socket list, the stream is not
+listed or captured. The capture links each of
+the application's playback streams, and those of the processes it starts, to a recording stream of
+StudioCraft's own, and links streams that start later as they appear. The application still plays
+on its own device. Linux lists no meter levels, so when several copies run the source keeps the
+copy captured last time while its stream runs or no other copy's does, otherwise it takes a copy
+whose stream is running, then the one with the lowest process id.
+
+On earlier Windows builds, macOS and Linux without the PipeWire server the source lists no
+applications and says why, and Audio output capture still records everything the computer plays.
+The `app_audio.list` and `app_audio.status` commands report the same lists and support
+([Control and automation](#control-and-automation)).
 
 ### Camera
 
@@ -106,7 +167,7 @@ compressor, limiter and a three-band equalizer.
 | Image mask | Uses a picture file as an alpha mask (from its brightness or its alpha) or blends it with the source (multiply, add or subtract). The picture is stretched over the source or centered at its own size, and the filter then applies a color and an opacity. |
 | Scroll | Moves a source's picture at a horizontal and a vertical speed in pixels per second. The picture repeats (Loop) or moves out once, in an area whose width and height can be limited. |
 | Sharpen | Makes edges crisper by a Sharpness from 0 to 1. |
-| Gain, noise gate, compressor, limiter and equalizer | Change the level and tone of a source's audio. |
+| Gain, noise gate, compressor, limiter and equalizer | Change the level and tone of a source's audio. The noise gate, compressor and limiter report how far they turn the audio down through [`filter.meter`](control-protocol.md#filtermeter). |
 
 [MECHANICS.md](../MECHANICS.md#video) lists each filter's default values and limits.
 
@@ -131,9 +192,15 @@ The Audio Mixer dock shows peak and RMS meters with peak hold, a volume fader in
 button for every audible source. A muted source's mute button shows the muted speaker in the
 warning color. The settings button at the end of each channel opens a menu with Properties…,
 Filters… and Rename. Rename asks for the new name in a prompt, so it also renames a global audio
-source that the Sources dock does not list. The mixer also measures the final mix's loudness
-(momentary, short-term, integrated, loudness range and true peak). The window does not show these
-readings yet.
+source that the Sources dock does not list. The fader runs from silence to +20 dB of boost (StudioCraft's own
+limit), with a mark at 0 dB. A boosted source is louder than its input, and the final mix is still
+clipped at full scale. The `source.volume` command takes a linear `gain` from 0 to 10, where 1 is
+0 dB and 10 is +20 dB; a value outside that range, or one that is not a number, is an error and
+changes nothing. The mixer also measures the final mix's loudness (momentary,
+short-term, integrated, loudness range and true peak). Each profile keeps a loudness target band,
+−18 to −14 LUFS by default (StudioCraft's own value). The `audio.loudness` command and the MCP
+tool `audio_loudness` report the readings with the band. The window does not show these readings
+yet.
 
 A source's Properties window sets two more audio options:
 
@@ -174,7 +241,8 @@ same file name, their lanes show the folder as well. When the program hears two 
 application, the second source gets a lane of its own, named after the source, with its own volume
 slider and mute button and no check box.
 
-A lane with a source has a volume slider in dB and a mute button, and its settings menu opens the
+A lane with a source has a volume slider in dB, from silence to +20 dB with a mark at 0 dB, the same
+as the Audio Mixer's fader, and a mute button. Its settings menu opens the
 source's Properties… (sync offset and monitoring) and Filters…. The dock is hidden in a new
 layout. On a system that cannot capture one application's audio, the dock lists the microphones
 and says why no applications are listed.
@@ -224,6 +292,34 @@ runtime has no `ffmpeg`, and the Flatpak sandbox cannot run an `ffmpeg` installe
 
 Tools › Available Encoders lists the built-in encoders and the encoders the installed `ffmpeg`
 offers, and says when `ffmpeg` was not found.
+
+### Recording markers
+
+File › Add Recording Marker (`record.marker`, which can be given a shortcut in Settings › Hotkeys)
+marks the running recording at that moment. A marker is named "Marker N" for the recording's Nth
+marker, and a recording holds at most 10,000 markers. When a recording with at least one marker
+stops, or the app closes during it, StudioCraft finishes the recording file and then writes
+`<recording name>.otio` beside it: an
+[OpenTimelineIO](https://opentimelineio.readthedocs.io) timeline with the recording as one clip on
+a video track and on an audio track, and each marker on the timeline at the frame that holds its
+time. A marker's time leaves out the time the recording skipped while the computer was suspended.
+The clip is as long as the frames written to the recording file, so a recording whose encoder fell
+behind before the stop gets a shorter clip, and a marker past the clip's end goes on its last
+frame. The timeline names the recording by its file name, so the two files can be moved together.
+File › Import in FilmCraft opens the timeline as a sequence with the markers on it. A file of that
+name that already exists is not replaced: the timeline goes to `<recording name> (2).otio`, or the
+next free number up to 999, and the status bar names the file. A recording without markers gets no
+timeline file, and neither does a recording whose file could not be finished; the status bar says
+the markers could not be saved.
+
+The `marker.add` command marks the running recording and the running take of
+[audio tracks](#audio-tracks) at the same moment with one marker. Both outputs get the same name,
+"Marker N" for the session's Nth marker when none is given. A session lasts from the start of the
+first of the two outputs until both have stopped, and holds at most 10,000 markers (StudioCraft's
+own limit). When one output does not keep a marker, for example because 1,024 markers are waiting
+to be written to the take, the reply names the cause and the other output keeps it. `marker.list`
+lists the session's markers, and after the session ends it lists that session's markers until the
+next session starts ([`marker.add` and `marker.list`](control-protocol.md#markeradd-and-markerlist)).
 
 ### Replay buffer
 
@@ -329,8 +425,50 @@ keyframe interval. The defaults are listed in
 A profile holds up to 16 stream destinations, each with its own server, key and on or off setting.
 Settings › Stream edits the first one. A stream sends to every destination that is on, and each
 destination connects, reconnects and stops on its own: one that fails does not stop the others.
-A lost connection is tried again after 2, 4, 8 and 16 s and then every 30 s, and a destination gives
-up after 10 failed tries in a row. The stream fails when no destination is sending or trying to.
+A lost connection, or one that cannot be made, is tried again as the Automatic reconnect section of
+Settings › Stream says. By default the waits are 2, 4, 8 and 16 s and then 30 s each, and a
+destination gives up after 10 failed tries in a row. The first wait can be 1 to 60 s, the longest
+wait from the first wait to 600 s, and the number of tries 1 to 100; each wait doubles the one
+before it up to the longest wait. StudioCraft cuts each wait by a random 0 to 20 %, never to below
+1 s, so destinations that lost their connections together do not all try again at once. With
+Automatic reconnect off, a destination stops at its first failure. A destination gives up at most
+the sum of its waits (at most the number of tries times the longest wait, or 5 s for a wait after a
+refused stream key when that is longer) after its first failure, plus up to 10 s per try for the
+name lookup and up to 55 s per try for the connection (4 addresses for 10 s each) and the stream's
+setup (15 s). A running stream keeps the settings it started with.
+A server that refuses the stream key is not tried again, except after a lost connection: a
+destination whose server took the stream, lost the connection and then refuses the key is tried
+again up to 3 times, waiting at least 5 s each time, and each of those tries counts toward the
+number of tries. A refusal on the first connect, a refusal of the connection request, and a refusal
+after the destination was stopped and started again are final. A destination stopped and started
+again while it waits to try again or waits for the network tries at once and counts its failed
+tries from none. The stream fails when no destination is sending or trying to.
+While the stream runs, the status bar shows `RECONNECTING` with the stream's time, in the warning
+color, when no destination is live and at least one waits to try again or waits for the network;
+when some are live, it shows
+`LIVE` followed by the count of those waiting, such as "1 reconnecting". A notice says "Lost the
+connection to {name}; reconnecting" when a destination that is still trying loses its connection,
+and "Reconnected to {name}" when it is live again. Each destination gets at most one loss notice a
+minute (StudioCraft's own value), and a reconnect notice only after a loss notice; `session.events`
+keeps every lost connection.
+Each try looks the server's name up again, so a changed DNS record is used on the next try. A try
+waits at most 10 s for the lookup and then counts as a failed try, and stopping a destination or
+the stream does not wait for a lookup. The system may keep working on a lookup it never answers;
+each destination has at most two lookups outstanding and StudioCraft at most 32, and a try that
+finds either limit reached starts no lookup and counts as failed. An answer that arrives after its
+try gave up is not used. A server given as an IP address is not looked up, so these limits do not
+apply to it.
+Before trying again, a destination asks the system whether it has a network route to the server.
+The check sends nothing. For a server given as an IP address with no route, the destination shows
+"Waiting for the network" and does not try; each longest wait spent without a route counts as a
+failed try, so a long outage still ends the destination. For a server given by name, the
+destination shows "Waiting for the network" when its last known addresses have no route and the
+system has no default route, or when no address is known, the last try failed to look the name up
+or to connect in time, and the system has no default route. It still tries at the usual time,
+looking the name up again. When the system has a default route, a named server is tried at the
+usual time. StudioCraft checks the route of the waiting destinations once a second, and a
+destination whose route returns tries at once instead of finishing its wait. A route only means
+that this computer has a path for the connection; the server may still be unreachable beyond it.
 A key written at the end of the server address, as in `rtmp://host/app/key`, is used as the stream
 key when the key field is empty, and the stream's status leaves it out of the address it shows.
 
@@ -343,21 +481,126 @@ key in the field saves it in the profile.
 View › Streaming opens the Streaming window, which lists every destination of the profile. Each
 row shows the destination's on or off setting, its server, where its key comes from and what it is
 doing. A key at the end of a server address, and any query, are shown as dots. While the stream
-runs, each destination shows its own status: connecting, live, trying again with the error, stopped
-or failed with the error, so one destination's error does not hide another's status. Start and
+runs, each destination shows its own status: connecting, live, trying again with the cause, stopped
+or failed with the cause, so one destination's error does not hide another's status. The cause
+names the kind of failure: no network route, a name that could not be looked up, a refused or
+unanswered connection, a certificate that was not accepted, a server that refused the stream, or a
+connection lost after the stream started. Holding the pointer over the status shows the error as
+the connection reported it and, when no address of the server accepted the connection, each address
+tried (at most four) with its own outcome. A lookup with no answer within 10 s says the DNS server
+did not answer. On Windows a lookup failure also says whether the DNS server answered that the name
+does not exist or did not answer; on macOS and Linux a lookup the system answers with an error
+reports only that the lookup failed. Start and
 Stop send to one destination or stop sending to it while the others go on. A destination added
 after the stream started is sent to from the next start, and so are changes to a server or a key.
 
-Add Destination adds one, up to 16. The first destination uses the profile's stream key; the
-others have no key of their own until one is chosen, so the profile's key is not sent to another
-service. Edit opens a destination's name, server and key source. The server field hides its text
-until Show is pressed. Save closes the details once the change is made; a change that is refused
+Check Connection, under each destination of the Streaming window, checks what this computer's
+network can reach on the way to the destination's server and shows one verdict, such as "The DNS
+server did not answer for {host}" or "{host} answers on port 443 but not on port {port}". What the
+check found opens the list of every step with its outcome. The check runs its steps at the same
+time and reports after at most 20 s; a step still running then is listed as unfinished. Each
+connection, secure handshake and fetch may take 5 s, and the name lookup 10 s. The steps are:
+
+- The check asks the system whether it has a route to any address and to each of the server's
+  addresses. This sends nothing.
+- It lists which of the variables `HTTPS_PROXY`, `https_proxy`, `ALL_PROXY` and `all_proxy` are set,
+  by name only. The check itself uses no proxy.
+- It looks the server's name up again.
+- It opens a TCP connection to up to four of the server's addresses on the destination's port and,
+  for `rtmps://`, completes the secure handshake, which sends the server's host name. It then closes
+  the connection. It sends no stream key, no RTMP data and no part of the address after the host.
+- When the port is not 443, it does the same with a secure handshake on port 443 of those addresses.
+- For a destination set up for a streaming service that publishes a list of its ingest servers and
+  a status summary, it fetches both over HTTPS, following no redirect, looks two of the service's
+  other ingest servers up and makes a secure connection to each on port 443. It reads at most
+  256 KiB of the list and 64 KiB of the summary.
+
+A destination is also checked by itself when its third try in a row fails and when it gives up,
+once until it is live again or started again; the row then says it was checked by itself after the
+destination failed. A server address or a stream key that is not valid is not checked. A check
+that runs by itself contacts only the destination's server unless Settings › Stream › Connection
+check › "Also check the service's server list and status page after a failure" is on; it is off by
+default. Check Connection always includes the service's steps. Stopping the stream cancels the
+checks of destinations that had not failed, and a check of a destination that failed goes on.
+At most four checks run at once. A check that runs by itself while four are running waits, and
+starts when one of them has finished; it is dropped when its destination goes live or is started
+again first. Each destination keeps its latest check for the session. A check is no longer shown
+once the scheme, host or port of the destination's server changes, or its service changes; a
+change to the rest of the address keeps it.
+
+Add Destination adds one, up to 16, for one of seven streaming services or for a custom server.
+The first destination uses the profile's stream key; the others have no key of their own until one
+is chosen, so the profile's key is not sent to another service. A service that documents one ingest
+server for every account fills in that server. For the other services the details link to the
+service's page that shows the account's server and key. Edit opens a destination's service, name,
+server and key source. Choosing another service replaces a server that is empty or that is one of
+the services' documented servers, and keeps any other server. A service without a shared server leaves the server
+empty, and a destination saved for it without a server is turned off. The server field hides its text until Show is pressed. A row
+shows the service it streams to, and the row and the details show a service's logo only where the
+service publishes one for this use, at no less than the size its guidelines allow (`ASSETS.md`). Save closes the details once the change is made; a change that is refused
 leaves them open with what was typed. A destination whose key is held for the session has a field for that key:
 Hold keeps the typed key in memory for this session and Forget drops it. Remove deletes a
 destination; one that is sending must be stopped first. Each change is saved in the profile; a change
 that cannot be saved is undone. When Settings is open, the changed destination is also changed in
 its Stream tab, and edits not yet applied there to other destinations stay. A new destination
 never takes the id of one the running stream still holds.
+
+The `golive.check` command lists what would stop the stream from starting or spoil it. It has an
+item for each destination that is on, the stream's video encoder, the free space in the recording
+folder, each source that is not working, and live captions. Each item passes, is a problem, or is
+unknown, and a problem names the command that fixes it. A destination passes only while it is live,
+or when it was live on an earlier stream of this session with the same server and key; one that has
+not connected yet is unknown. Less than 10 GB free in the recording folder, a limit StudioCraft
+chose, is a problem. Live captions that are off are a problem only when a Live Captions source is
+in the scene collection. The window does not show the check yet
+([Control protocol](control-protocol.md#golivecheck)).
+
+### Pause screen
+
+File › Pause Program shows the pause screen in the program in place of the program scene, with
+the scene collection's transition. Every recording, stream and replay buffer shows it too. File ›
+Resume Program shows the program scene again with the same transition. File › Add a Minute to the
+Pause adds 60 s to the countdown. Pause or Resume Program and Add a Minute to the Pause can be given
+shortcuts in Settings › Hotkeys.
+
+The Pause button sits after Go Live on the menu row. A click on it pauses with the profile's settings.
+While paused, it is filled amber and reads Resume with the time left, or with the time paused when
+there is no countdown, and a click resumes. Its arrow opens a menu: Pause for 1, 2, 5, 10 or 15
+Minutes and Pause Without a Countdown pause with that countdown (while paused, they start the
+countdown again from now), and Pause Screen Settings… opens Settings at the Stream tab with the
+keyboard focus in the Pause screen section. The `pause.settings` window command does the same.
+
+While paused, an amber banner above the program reads "Paused. Viewers see the pause screen." with
+the time left ("Back in 4:32."), the time paused ("Paused for 2:10.") or "The countdown ended.", and
+has +1 min and Resume buttons. Screen readers announce the banner when the pause starts and when the
+countdown reaches zero, and announce "The program resumed" after Resume; they do not announce each
+second. The status bar shows PAUSED with the time left, and the time paused on hover.
+
+The pause screen draws, from the bottom up, a background color, one picture or one video, and the
+countdown text. A video loops and plays without its sound, and a video file that holds only sound
+shows nothing over the background. A GIF plays as a video, so an animated GIF loops; like other
+videos it needs ffmpeg. The countdown text holds `{time}` once,
+where the time left goes, as `4:07` or, from one hour, `1:02:07`. When the countdown reaches zero,
+the pause screen either stays and shows the text at zero, or the program resumes. A countdown of 0
+shows no text and does not end the pause.
+
+Settings › Stream › Pause screen sets the picture or video, how it is sized to the canvas, the
+background, the countdown and its text, what happens at zero, the text at zero, where the text
+sits, its size as a share of the canvas height, its font, color and outline, and whether the
+program audio is muted. The defaults are listed in
+[MECHANICS.md](../MECHANICS.md#recording-and-streaming). Changes apply from the next pause.
+`pause.start` can give a pause its own picture or video, countdown and choice at zero.
+
+While the program audio is muted, every source the program hears fades out with the transition and
+fades back in when the program resumes. Monitoring and each source's own audio track keep the
+source's audio. A pause is not saved in the scene collection or the profile, and it is not an undo
+step. A program scene switched to while paused shows when the program resumes. Pausing during the
+fade back, or resuming during the fade in, turns a Fade or Fade through color around from the
+picture it shows; other transitions start from the beginning. A picture or video
+that can't be read is reported in the status bar, and the pause screen keeps its background and
+text. A countdown text that can't be drawn is reported the same way. Settings whose countdown text
+does not hold `{time}` exactly once are refused. While paused, switching to, creating, duplicating or
+removing a profile is refused with "Resume before switching the profile".
 
 ## Hardware acceleration
 
@@ -405,6 +648,16 @@ A stream tests only the H.264 candidates in this list, and skips every other can
 
 The compositor converts the program to the encoders' frame format on the GPU.
 
+The compositor can also draw a small picture of each of up to 16 scenes, for scene lists. Each
+picture fits a 256 × 144 box by default, keeps the canvas's aspect ratio, and is redrawn at most 4
+times a second. The pictures stay on the GPU. Scenes past the sixteenth are not drawn and are
+counted.
+
+The [`scene.thumbnails`](control-protocol.md#scenethumbnails) command names the scenes to draw and
+how often: 2 times a second by default. While no command has named any, or after one names none,
+the compositor draws no scene pictures, so a scene list that shows only names adds no work to a
+frame.
+
 ## Interface
 
 ### Theme
@@ -418,10 +671,11 @@ has a contrast of at least 3:1 against the track.
 ### Menu row and output controls
 
 The menu row is 32 points tall. It holds the menu titles at the start of the row, and at the end
-an Edit and Studio switch, the transition picker with its duration, and Record and Go Live with
-their timers. When the row is too narrow, the transition picker moves behind an icon button
-first, then Record and Go Live leave out their labels, and last the menu titles move into the menu
-bar's overflow menu. Docks › Output Controls and Docks › Transition Controls show and hide the two groups.
+an Edit and Studio switch, the transition picker with its duration, Record and Go Live with
+their timers, and the Pause button with its menu arrow ([Pause screen](#pause-screen)). When the
+row is too narrow, the transition picker moves behind an icon button first, then Record, Go Live and
+Pause leave out their labels and keep the glyph and timer, and last the menu titles move into the
+menu bar's overflow menu. In a right-to-left interface the row is mirrored. Docks › Output Controls and Docks › Transition Controls show and hide the two groups.
 
 ### Docks
 
@@ -535,7 +789,8 @@ Settings › Hotkeys lists every command that can take a shortcut and changes it
 shortcuts such as Ctrl+1 or Shift+F5, and separate several with commas. Ctrl+1 to Ctrl+9 on
 Windows and Linux, and ⌘1 to ⌘9 on macOS, show the first nine scenes. The list includes Start or
 Stop Recording, Start or Stop Streaming, Start or Stop Replay Buffer, Save Replay, Transition to
-Program, Cut to Program and Studio Mode.
+Program, Cut to Program, Studio Mode and the commands that swap a
+[staged window or display](#staged-windows).
 
 ## Settings
 
@@ -546,10 +801,10 @@ discards them.
 | Tab | Settings |
 | --- | --- |
 | General | Language, Check for updates at start, and Use system title bar (from the next start). |
-| Stream | Server, Stream key, Video bitrate, Audio bitrate, Video encoder and Keyframe interval. |
+| Stream | Server, Stream key, Video bitrate, Audio bitrate, Video encoder and Keyframe interval, and the Pause screen section ([Pause screen](#pause-screen)). |
 | Output | Recording folder, Format, Quality, Video encoder and its settings, the `ffmpeg` program, Replay buffer length and Replay buffer memory limit. |
 | Audio | Monitoring device, the device monitored sources play on. |
-| Video | Canvas size, Match display (sets the canvas size to the display the window is on or to a listed display; on Linux only the window's display is offered), Output size and Frames per second, and the Hardware acceleration section with Graphics adapter and Hardware encoder. Video settings can't change while recording, streaming or running the replay buffer. |
+| Video | Canvas size (the presets include 1080 × 1920 for vertical video), Match display (sets the canvas size to the display the window is on or to a listed display. Once applied, the canvas follows that display when its resolution or scaling changes, until the canvas size is set another way. The display the window is on is followed only when no other listed display has its size), Output size, Output scale (100%, 75%, 66% or 50% of the canvas; an output size at one of these shares stays at that share when the canvas size changes) and Frames per second, and the Hardware acceleration section with Graphics adapter and Hardware encoder. Video settings can't change while recording, streaming or running the replay buffer. |
 | Hotkeys | A shortcut for each command. |
 
 ## Control and automation

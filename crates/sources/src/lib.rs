@@ -8,10 +8,11 @@
 //! | `media` | a video or audio file, played through ffmpeg |
 //! | `display_capture` | a display |
 //! | `window_capture` | one program window |
+//! | `staged_windows` | one of up to six windows or displays captured at once, swapped by `present.*` commands (Windows and macOS) |
 //! | `camera` | a video capture device, such as a webcam or a capture card |
 //! | `audio_input` | a microphone or line input |
 //! | `audio_output` | what a speaker or headphone device plays (Windows) |
-//! | `app_audio` | what one application plays (Windows 11 and Windows Server 2022) |
+//! | `app_audio` | what one application plays (Windows 11, Windows Server 2022 and Linux with PipeWire) |
 //! | `captions` | the live captions of the program audio, from the studio's [`CaptionBoard`] |
 //!
 //! Filters: `gain`, `noise_gate`, `compressor`, `limiter`, `equalizer` (audio), `color_correction`,
@@ -26,6 +27,7 @@ mod color;
 pub mod filters;
 mod image;
 mod media;
+mod staged;
 mod text;
 
 use std::collections::VecDeque;
@@ -46,6 +48,7 @@ pub use capture::{DisplayCapture, WindowCapture};
 pub use color::ColorSource;
 pub use image::ImageSource;
 pub use media::MediaSource;
+pub use staged::StagedWindows;
 pub use text::TextSource;
 
 /// The ffmpeg location from Settings › Output (empty: search for it), shared with the sources
@@ -60,6 +63,10 @@ pub fn register_all(reg: &mut Registry, ffmpeg: &FfmpegSetting, captions: &Arc<C
     reg.register_source(Arc::new(MediaSource::new(Arc::clone(ffmpeg))))?;
     reg.register_source(Arc::new(DisplayCapture))?;
     reg.register_source(Arc::new(WindowCapture))?;
+    // Elsewhere the system picker chooses each captured window, so there is no window list to stage from.
+    if cfg!(any(windows, target_os = "macos")) {
+        reg.register_source(Arc::new(StagedWindows))?;
+    }
     reg.register_source(Arc::new(CameraSource))?;
     reg.register_source(Arc::new(AudioInput))?;
     reg.register_source(Arc::new(AudioOutput))?;
@@ -164,6 +171,7 @@ mod tests {
         {
             assert!(reg.source(id).is_ok(), "{id}");
         }
+        assert_eq!(reg.source("staged_windows").is_ok(), cfg!(any(windows, target_os = "macos")), "Staged windows where windows are listed");
     }
 
     #[test]

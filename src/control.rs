@@ -588,10 +588,12 @@ mod tests {
         let mut later = None;
         let (bridge, app) = (&mut r.bridge, &mut r.app);
         app.before_input(&ctx);
-        let out = ctx.run_ui(raw(), |ui| {
+        let mut out = ctx.run_ui(raw(), |ui| {
             later = Some(bridge.handle(&ctx, app, "ui.screenshot", &json!({"max_side": 2}), &reply));
             app.frame(ui);
         });
+        // The frame can upload textures (glyphs it draws for the first time); drop them as `Rig::frame` does.
+        out.textures_delta.clear();
         assert_eq!(later, Some(None), "the answer waits for the picture");
         r.bridge.collect_screenshots(Instant::now());
         assert!(r.answers.try_recv().is_err(), "no picture yet");

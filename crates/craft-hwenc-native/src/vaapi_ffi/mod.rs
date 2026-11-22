@@ -248,7 +248,8 @@ pub(crate) fn nominal_bitrate(p: &Params) -> u32 {
     let bps = pixels.saturating_mul(u64::from(p.fps.0)) / u64::from(p.fps.1.max(1)) / 10;
     let most: u64 = match p.codec {
         Codec::H264 => 800_000_000,
-        Codec::Hevc => 240_000_000,
+        // AV1 never opens here (`vaapi::check` refuses it).
+        Codec::Hevc | Codec::Av1 => 240_000_000,
     };
     u32::try_from(bps.min(most)).unwrap_or(u32::MAX).max(1)
 }
@@ -364,6 +365,7 @@ pub(crate) fn fits_a_level(codec: Codec, width: u32, height: u32, fps: (u32, u32
             let samples = u64::from(width) * u64::from(height);
             samples <= 35_651_584 && per_second(samples) <= 4_278_190_080
         }
+        Codec::Av1 => false,
     }
 }
 
@@ -422,7 +424,7 @@ pub(crate) fn segment_error(status: u32) -> Option<&'static str> {
 pub(crate) fn coded_size(codec: Codec, width: u32, height: u32) -> (u32, u32) {
     match codec {
         Codec::H264 => (width.div_ceil(16) * 16, height.div_ceil(16) * 16),
-        Codec::Hevc => (width, height),
+        Codec::Hevc | Codec::Av1 => (width, height),
     }
 }
 

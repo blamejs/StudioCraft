@@ -6,7 +6,8 @@ pub use craft_media::bitstream::annexb_nals as nals;
 
 use crate::Codec;
 
-/// The NAL unit type of `nal`, or `None` when it is too short for its header.
+/// The NAL unit type of `nal`, or `None` when it is too short for its header. AV1 has no NAL
+/// units, so it is always `None` for AV1.
 pub fn nal_type(codec: Codec, nal: &[u8]) -> Option<u8> {
     match codec {
         Codec::H264 => nal.first().map(|b| b & 0x1f),
@@ -14,18 +15,23 @@ pub fn nal_type(codec: Codec, nal: &[u8]) -> Option<u8> {
             [b, _, ..] => Some((b >> 1) & 0x3f),
             _ => None,
         },
+        Codec::Av1 => None,
     }
 }
 
 /// Annex B to 4-byte length-prefixed NAL units. The parameter sets go in the `avcC` or `hvcC`
 /// record, so H.264 drops SPS, PPS and access unit delimiters (types 7 to 9), and HEVC drops VPS,
 /// SPS, PPS, access unit delimiters and end-of-sequence and end-of-bitstream units (32 to 37). A
-/// stream with nothing left is an error.
+/// stream with nothing left is an error, and so is an AV1 stream, whose samples [`crate::av1`]
+/// writes.
 pub fn to_length_prefixed(codec: Codec, data: &[u8]) -> Result<Vec<u8>, String> {
+    if codec == Codec::Av1 {
+        return Err("an AV1 stream is made of OBUs, not Annex B NAL units".into());
+    }
     let mut out = Vec::with_capacity(data.len());
     for n in nals(data) {
         let dropped = match (codec, nal_type(codec, n)) {
-            (_, None) => true,
+            (_, None) | (Codec::Av1, _) => true,
             (Codec::H264, Some(t)) => matches!(t, 7..=9),
             (Codec::Hevc, Some(t)) => matches!(t, 32..=37),
         };
@@ -87,6 +93,9 @@ mod tests {
         assert_eq!(nal_type(Codec::H264, &[0x28, 0x01]), Some(8), "the H.264 reading of the same byte");
         assert_eq!(nal_type(Codec::Hevc, &[0x40]), None);
         assert_eq!(nal_type(Codec::H264, &[]), None);
+        assert_eq!(nal_type(Codec::Av1, &[0x40, 0x01]), None, "AV1 has no NAL units");
+        let s = [0, 0, 0, 1, 0x65, 9];
+        assert!(to_length_prefixed(Codec::Av1, &s).unwrap_err().contains("OBUs"));
     }
 
     #[test]

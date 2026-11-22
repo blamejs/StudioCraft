@@ -92,6 +92,10 @@ pub(crate) struct AudioTracks {
     /// Repairs running on their own threads, at launch or for `audio_tracks.repair`, each with its
     /// place in `stop_order`'s count.
     repairs: Vec<(JoinHandle<Outcome>, u64)>,
+    /// Holds the next repair `audio_tracks.repair` starts until the sender sends or is dropped,
+    /// for tests.
+    #[cfg(test)]
+    pub(crate) repair_gate: Option<std::sync::mpsc::Receiver<()>>,
     /// What the last repair did, for the status.
     last_repair: Option<Value>,
     /// Sources set to record their own track were left out, because more than
@@ -612,16 +616,27 @@ impl Studio {
         let Some(take) = &self.audio_tracks.take else {
             return Err(err("no take of audio tracks is running".into()));
         };
-        let markers = take.markers();
-        let name = name.unwrap_or_else(|| format!("Marker {}", markers.kept().saturating_add(1)));
-        let frame = markers.frame(self.clock.now());
-        if !markers.add_frame(frame, &name) {
-            return Err(err(format!(
+        let name = name.unwrap_or_else(|| format!("Marker {}", take.markers().kept().saturating_add(1)));
+        match self.mark_audio_tracks(self.clock.now(), &name) {
+            Some(Ok(seconds)) => Ok(json!({"name": name, "seconds": seconds})),
+            Some(Err(e)) => Err(err(e)),
+            None => Err(err("no take of audio tracks is running".into())),
+        }
+    }
+
+    /// Mark the running take at `now` on the studio clock with a marker named `name`. Returns its
+    /// time in the take in seconds, an error naming the cause when the take did not keep it, or
+    /// `None` when no take runs.
+    pub(crate) fn mark_audio_tracks(&self, now: Tick, name: &str) -> Option<Result<f64, String>> {
+        let markers = self.audio_tracks.take.as_ref()?.markers();
+        let frame = markers.frame(now);
+        if !markers.add_frame(frame, name) {
+            return Some(Err(format!(
                 "the marker was not kept: the take is ending or {} markers are waiting to be written",
                 studiocraft_audio_tracks::markers::QUEUED
             )));
         }
-        Ok(json!({"name": name, "seconds": frame as f64 / 48_000.0}))
+        Some(Ok(frame as f64 / 48_000.0))
     }
 
     /// Wait for the openings started here and take their notices as the next tick would, for
@@ -677,7 +692,13 @@ impl Studio {
         }
         let path = repair_folder(folder, &recording_folder(&self.profile.output.folder))?;
         let for_thread = path.clone();
+        #[cfg(test)]
+        let gate = self.audio_tracks.repair_gate.take();
         let spawned = std::thread::Builder::new().name("audio-tracks-repair".into()).spawn(move || {
+            #[cfg(test)]
+            if let Some(gate) = gate {
+                let _ = gate.recv();
+            }
             if for_thread.is_dir() {
                 recover::repair_each(&for_thread)
             } else {
@@ -765,7 +786,6 @@ impl Studio {
     pub fn audio_tracks_running(&self) -> bool {
         self.audio_tracks.take.is_some()
     }
-
     /// Bytes a second the running outputs write to disk or send: what each has written so far,
     /// or the stream settings' bitrate when that is more.
     fn output_bytes_per_second(&self) -> u64 {

@@ -7,10 +7,12 @@
 //!   plays.
 //! - [`ffmpeg`]: find the ffmpeg program recordings, streams and media sources run.
 //! - [`shell`]: open a folder in the file manager or a web page in the browser.
+//! - [`net`]: whether this computer has a network route, without sending anything.
 //!
 //! Capture is implemented on Windows, macOS and Linux. On Linux, displays and windows are chosen in
 //! the desktop's own picker through the screen-cast portal, audio goes through PipeWire and
-//! cameras through V4L2. Elsewhere the lists are empty and opening a capture returns
+//! cameras through V4L2. The Linux display list comes from Wayland's outputs, or from RandR under
+//! X11. Elsewhere the lists are empty and opening a capture returns
 //! [`PlatformError::Unsupported`].
 
 pub mod audio;
@@ -19,7 +21,10 @@ mod camera_frames;
 #[cfg(target_os = "linux")]
 mod camera_gray;
 pub mod display;
+#[cfg(target_os = "linux")]
+mod display_list;
 pub mod ffmpeg;
+pub mod net;
 #[cfg(target_os = "linux")]
 mod portal;
 #[cfg(target_os = "linux")]

@@ -132,8 +132,10 @@
 	H.264 (built in)	H.264 (vestavěný)
 	NVIDIA NVENC H.264 (built in)	NVIDIA NVENC H.264 (vestavěný)
 	NVIDIA NVENC HEVC (built in)	NVIDIA NVENC HEVC (vestavěný)
+	NVIDIA NVENC AV1 (built in)	NVIDIA NVENC AV1 (vestavěný)
 	Windows Media Foundation H.264 (built in)	Windows Media Foundation H.264 (vestavěný)
 	Windows Media Foundation HEVC (built in)	Windows Media Foundation HEVC (vestavěný)
+	Windows Media Foundation AV1 (built in)	Windows Media Foundation AV1 (vestavěný)
 	Apple VideoToolbox H.264 (built in)	Apple VideoToolbox H.264 (vestavěný)
 	Apple VideoToolbox HEVC (built in)	Apple VideoToolbox HEVC (vestavěný)
 	VA-API H.264 (built in)	VA-API H.264 (vestavěný)
@@ -377,6 +379,24 @@
 	Width	Šířka
 	Window	Okno
 	Window capture	Zachytávání okna
+	Staged windows	Připravená okna
+	Window 1	Okno 1
+	Window 2	Okno 2
+	Window 3	Okno 3
+	Window 4	Okno 4
+	Window 5	Okno 5
+	Window 6	Okno 6
+	Presented window	Zobrazené okno
+	While the presented window cannot be shown	Když zobrazené okno nelze ukázat
+	Show a color	Zobrazit barvu
+	Keep the last picture	Ponechat poslední obraz
+	Placeholder color	Barva zástupného obrazu
+	nothing is staged in the presented slot	ve zobrazené pozici není nic připravené
+	waiting for the window	čeká se na okno
+	Present Staged Window	Zobrazit připravené okno
+	Present Next Staged Window	Zobrazit další připravené okno
+	Present Previous Staged Window	Zobrazit předchozí připravené okno
+	Present Staged Window {n}	Zobrazit připravené okno {n}
 	Your Videos folder	Vaše složka Videa
 	YUV vectorscope	Vektorskop YUV
 	{device} (not connected)	{device} (nepřipojeno)
@@ -494,6 +514,9 @@ menu	Transform	Transformace
 @msg	Audio tracks could not be repaired: {takes} and {more} more. Takes repaired: {count}	Zvukové stopy nelze opravit: {takes} a {more} dalších. Opravené záznamy: {count}
 	Open Last Audio Tracks in Editor	Otevřít poslední zvukové stopy v editoru
 	Add Audio Tracks Marker	Přidat značku do zvukových stop
+	Add Recording Marker	Přidat značku do nahrávky
+@msg	Markers saved to {path}	Značky byly uloženy do {path}
+@msg	The markers could not be saved: {error}	Značky nelze uložit: {error}
 	After a take	Po záznamu
 	Nothing	Nic
 	Show the folder	Zobrazit složku
@@ -537,3 +560,8 @@ menu	Transform	Transformace
 @msg	there is no display `{id}`: the system lists no displays	obrazovka `{id}` neexistuje: systém neuvádí žádné obrazovky
 @msg	there is no display `{id}` (the displays are {ids})	obrazovka `{id}` neexistuje (obrazovky jsou {ids})
 @msg	a {width} × {height} display can't be the canvas: each side must be from {min} to {max} pixels	obrazovka {width} × {height} nemůže být plátnem: každá strana musí mít {min} až {max} pixelů
+	Output scale	Měřítko výstupu
+	Custom	Vlastní
+	{percent}% ({width} × {height})	{percent} % ({width} × {height})
+	Fill Screen	Vyplnit obrazovku
+@msg	The scenes could not be laid out for the new canvas: {error}	Scény nešlo rozmístit pro nové plátno: {error}

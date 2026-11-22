@@ -135,8 +135,10 @@
 	H.264 (built in)	H.264 (מובנה)
 	NVIDIA NVENC H.264 (built in)	NVIDIA NVENC H.264 (מובנה)
 	NVIDIA NVENC HEVC (built in)	NVIDIA NVENC HEVC (מובנה)
+	NVIDIA NVENC AV1 (built in)	NVIDIA NVENC AV1 (מובנה)
 	Windows Media Foundation H.264 (built in)	Windows Media Foundation H.264 (מובנה)
 	Windows Media Foundation HEVC (built in)	Windows Media Foundation HEVC (מובנה)
+	Windows Media Foundation AV1 (built in)	Windows Media Foundation AV1 (מובנה)
 	Apple VideoToolbox H.264 (built in)	Apple VideoToolbox H.264 (מובנה)
 	Apple VideoToolbox HEVC (built in)	Apple VideoToolbox HEVC (מובנה)
 	VA-API H.264 (built in)	VA-API H.264 (מובנה)
@@ -395,6 +397,24 @@
 	Width	רוחב
 	Window	חלון
 	Window capture	לכידת חלון
+	Staged windows	חלונות מוכנים
+	Window 1	חלון 1
+	Window 2	חלון 2
+	Window 3	חלון 3
+	Window 4	חלון 4
+	Window 5	חלון 5
+	Window 6	חלון 6
+	Presented window	החלון המוצג
+	While the presented window cannot be shown	כאשר אי אפשר להציג את החלון המוצג
+	Show a color	הצגת צבע
+	Keep the last picture	שמירת התמונה האחרונה
+	Placeholder color	צבע ממלא מקום
+	nothing is staged in the presented slot	אין דבר מוכן במקום המוצג
+	waiting for the window	ממתין לחלון
+	Present Staged Window	הצגת חלון מוכן
+	Present Next Staged Window	הצגת החלון המוכן הבא
+	Present Previous Staged Window	הצגת החלון המוכן הקודם
+	Present Staged Window {n}	הצגת חלון מוכן {n}
 	Your Videos folder	תיקיית הסרטונים שלכם
 	YUV vectorscope	וקטורסקופ YUV
 	{device} (not connected)	{device} (לא מחובר)
@@ -475,6 +495,9 @@ menu	Transform	שינוי צורה
 @msg	Audio tracks could not be repaired: {takes} and {more} more. Takes repaired: {count}	לא ניתן היה לתקן את רצועות השמע: {takes} ועוד {more}. טייקים שתוקנו: {count}
 	Open Last Audio Tracks in Editor	פתיחת רצועות השמע האחרונות בעורך
 	Add Audio Tracks Marker	הוספת סמן לרצועות השמע
+	Add Recording Marker	הוספת סמן להקלטה
+@msg	Markers saved to {path}	הסמנים נשמרו ב־{path}
+@msg	The markers could not be saved: {error}	לא ניתן לשמור את הסמנים: {error}
 	After a take	אחרי טייק
 	Nothing	כלום
 	Show the folder	הצגת התיקייה
@@ -518,3 +541,7 @@ menu	Transform	שינוי צורה
 @msg	there is no display `{id}`: the system lists no displays	אין מסך `{id}`: המערכת לא מציגה אף מסך
 @msg	there is no display `{id}` (the displays are {ids})	אין מסך `{id}` (המסכים הם {ids})
 @msg	a {width} × {height} display can't be the canvas: each side must be from {min} to {max} pixels	מסך בגודל {width} × {height} לא יכול לשמש כמשטח: כל צלע צריכה להיות בין {min} ל-{max} פיקסלים
+	Output scale	קנה מידה של פלט
+	Custom	מותאם אישית
+	Fill Screen	מילוי המסך
+@msg	The scenes could not be laid out for the new canvas: {error}	לא ניתן היה לסדר את הסצנות למשטח החדש: {error}

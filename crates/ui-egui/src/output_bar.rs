@@ -1,13 +1,14 @@
 //! The top row of the window: the menu titles on the left and the output bar on the right, with
-//! the Edit and Studio switch, the transition picker and its duration, and the Record and Go Live
-//! buttons with their timers.
+//! the Edit and Studio switch, the transition picker and its duration, the Record and Go Live
+//! buttons with their timers, and the Pause button with its menu arrow.
 //!
 //! When the row is too narrow, the controls give up room in this order: the transition picker
-//! and its duration move behind one icon button that opens them in a panel, then Record and Go
-//! Live leave their labels out and keep the glyph and, while running, the timer, and last the
+//! and its duration move behind one icon button that opens them in a panel, then Record, Go Live
+//! and Pause leave their labels out and keep the glyph and, while running, the timer, and last the
 //! menu titles move into the menu bar's overflow menu.
 
 use craft_behavior::fit::{FitItem, FitKeep, fit_items};
+use craft_keymap::CommandRef;
 use craft_menu::{MenuBar, MenuBarUi};
 use craft_ui::contract::Tracked;
 use egui::{Rect, TextStyle, Ui, pos2, vec2};
@@ -16,7 +17,7 @@ use studiocraft_model::SettingsSchema;
 use studiocraft_studio::{OutputKind, OutputState, Studio};
 
 use crate::icons::{self, Icon};
-use crate::kit::onair::{Glyph, OnAirButton, OnAirState, OnAirStyle};
+use crate::kit::onair::{Glyph, MenuArrow, OnAirButton, OnAirState, OnAirStyle};
 use crate::kit::segmented::{Segmented, SegmentedStyle};
 use crate::{Act, StudioApp, forms, i18n, theme};
 
@@ -59,16 +60,20 @@ pub struct Widths {
     pub overflow: f32,
     pub record: f32,
     pub live: f32,
-    /// Record and Go Live without their labels.
+    /// The Pause button with its arrow.
+    pub pause: f32,
+    /// Record, Go Live and Pause without their labels.
     pub record_compact: f32,
     pub live_compact: f32,
+    pub pause_compact: f32,
 }
 
 impl Widths {
     /// The width of everything right of the menu titles, with the transitions `at` that place and
-    /// Record and Go Live without labels when `compact`.
+    /// Record, Go Live and Pause without labels when `compact`.
     pub fn outputs(&self, at: Place, compact: bool) -> f32 {
-        let (record, live) = if compact { (self.record_compact, self.live_compact) } else { (self.record, self.live) };
+        let (record, live, pause) =
+            if compact { (self.record_compact, self.live_compact, self.pause_compact) } else { (self.record, self.live, self.pause) };
         let transitions = match at {
             Place::Inline => self.transitions,
             Place::Overflow => self.overflow,
@@ -76,7 +81,7 @@ impl Widths {
         };
         let mut total = 0.0;
         let mut any = false;
-        for (w, gap) in [(self.mode, GROUP_GAP), (transitions, GROUP_GAP), (record, OUTPUT_GAP), (live, GROUP_GAP)] {
+        for (w, gap) in [(self.mode, GROUP_GAP), (transitions, GROUP_GAP), (record, OUTPUT_GAP), (live, GROUP_GAP), (pause, GROUP_GAP)] {
             if w > 0.0 {
                 total += if any { gap + w } else { w };
                 any = true;
@@ -210,6 +215,46 @@ pub fn face(kind: OutputKind, state: Option<&OutputState>) -> Face {
     }
 }
 
+/// What the Pause button shows. `paused` holds the countdown's time left in milliseconds while
+/// paused (`None` without a countdown), and `for_ms` how long the program has been paused.
+pub fn pause_face(paused: Option<Option<u64>>, for_ms: Option<u64>) -> Face {
+    let Some(left) = paused else {
+        return Face {
+            state: OnAirState::Idle,
+            label: tl!("Pause").into(),
+            timer: None,
+            tip: tid!("pause.start", "Pause Program").into(),
+            name: tl!("Pause").into(),
+        };
+    };
+    let (time, named) = match left {
+        Some(ms) => (studiocraft_studio::countdown_text(ms), tl!("Resume, {time} left")),
+        None => (studiocraft_studio::paused_text(for_ms.unwrap_or(0)), tl!("Resume, paused for {time}")),
+    };
+    let name = craft_i18n::fmt(named, &[("time", &time)]);
+    Face { state: OnAirState::Running, label: tl!("Resume").into(), timer: Some(time), tip: tid!("pause.stop", "Resume Program").into(), name }
+}
+
+/// The glyph of the Pause button's face: Pause, or Resume while paused.
+pub fn pause_glyph(f: &Face) -> Glyph {
+    if f.state == OnAirState::Running { Glyph::Resume } else { Glyph::Pause }
+}
+
+/// The countdowns the Pause button's menu offers, in minutes.
+pub const PAUSE_MINUTES: [u32; 5] = [1, 2, 5, 10, 15];
+
+/// The entries of the Pause button's menu, in English, with the command each runs: a pause for each
+/// of [`PAUSE_MINUTES`], a pause without a countdown, and Pause Screen Settings…. While paused, the
+/// first six start the countdown again from now.
+pub fn pause_menu() -> Vec<(&'static str, CommandRef)> {
+    let labels = ["Pause for 1 Minute", "Pause for 2 Minutes", "Pause for 5 Minutes", "Pause for 10 Minutes", "Pause for 15 Minutes"];
+    let mut menu: Vec<(&'static str, CommandRef)> =
+        labels.into_iter().zip(PAUSE_MINUTES).map(|(l, m)| (l, CommandRef::with_params("pause.start", json!({"countdown_s": m * 60})))).collect();
+    menu.push(("Pause Without a Countdown", CommandRef::with_params("pause.start", json!({"countdown_s": 0}))));
+    menu.push(("Pause Screen Settings…", CommandRef::new("pause.settings")));
+    menu
+}
+
 /// The button for `f`.
 fn button<'a>(f: &'a Face, glyph: Glyph, style: &'a OnAirStyle) -> OnAirButton<'a> {
     OnAirButton::new(glyph, f.state, &f.label, &f.name, style).timer(f.timer.as_deref())
@@ -331,6 +376,10 @@ impl StudioApp {
         let segmented = Segmented::new(egui::Id::unique("output-bar-mode"), &modes, studio_mode, &seg_style);
         let record = face(OutputKind::Recording, studio.output(OutputKind::Recording).as_ref());
         let live = face(OutputKind::Streaming, studio.output(OutputKind::Streaming).as_ref());
+        let pause = pause_face(studio.paused(), studio.paused_for_ms());
+        let pause_glyph = pause_glyph(&pause);
+        let arrow_name = tl!("Pause options");
+        let arrow = MenuArrow::new(pause_glyph, pause.state, arrow_name, &air_style);
         let spacing = ui.spacing().item_spacing.x;
         let combo = combo_width(ui, studio);
         let mut widths = Widths { overflow: square.x, ..Widths::default() };
@@ -338,8 +387,10 @@ impl StudioApp {
             widths.mode = segmented.width(ui);
             widths.record = button(&record, Glyph::Record, &air_style).width(ui);
             widths.live = button(&live, Glyph::Live, &air_style).width(ui);
+            widths.pause = button(&pause, pause_glyph, &air_style).width(ui) + arrow.width();
             widths.record_compact = button(&record, Glyph::Record, &air_style).compact(true).width(ui);
             widths.live_compact = button(&live, Glyph::Live, &air_style).compact(true).width(ui);
+            widths.pause_compact = button(&pause, pause_glyph, &air_style).compact(true).width(ui) + arrow.width();
         }
         let gear = if schema.fields.is_empty() { 0.0 } else { spacing + square.x };
         let estimate = combo + spacing + number + gear;
@@ -437,6 +488,23 @@ impl StudioApp {
                         acts.push(Act::run(id, json!({})));
                     }
                 }
+                gap(ui, GROUP_GAP);
+                let r = button(&pause, pause_glyph, &air_style).joined(true).compact(fit.compact).show(ui).on_hover_text(&pause.tip);
+                parts.push(("pause", r.rect));
+                if r.clicked() {
+                    acts.push(Act::run("pause.toggle", json!({})));
+                }
+                let r = arrow.show(ui).on_hover_text(arrow_name);
+                parts.push(("pause_menu", r.rect));
+                // The menu opens under the arrow's reading-start edge.
+                let below = if i18n::is_rtl(ui) { egui::RectAlign::BOTTOM_START.flipped_x() } else { egui::RectAlign::BOTTOM_START };
+                egui::Popup::menu(&r).align(below).show(|ui| {
+                    for (label, cmd) in pause_menu() {
+                        if ui.button(i18n::command_label(&cmd.id, label)).clicked() {
+                            acts.push(Act::Run(cmd));
+                        }
+                    }
+                });
             }
         });
         self.output_bar.fit = Some(fit);
@@ -456,16 +524,26 @@ mod tests {
     use super::*;
 
     fn widths() -> Widths {
-        Widths { mode: 100.0, transitions: 200.0, overflow: 24.0, record: 90.0, live: 100.0, record_compact: 36.0, live_compact: 36.0 }
+        Widths {
+            mode: 100.0,
+            transitions: 200.0,
+            overflow: 24.0,
+            record: 90.0,
+            live: 100.0,
+            pause: 110.0,
+            record_compact: 36.0,
+            live_compact: 36.0,
+            pause_compact: 60.0,
+        }
     }
 
     #[test]
     fn the_output_bar_adds_its_gaps_and_margin() {
         let w = widths();
-        assert_eq!(w.outputs(Place::Inline, false), 100.0 + 8.0 + 200.0 + 12.0 + 90.0 + 8.0 + 100.0 + 8.0);
-        assert_eq!(w.outputs(Place::Overflow, false), 100.0 + 8.0 + 24.0 + 12.0 + 90.0 + 8.0 + 100.0 + 8.0);
-        assert_eq!(w.outputs(Place::Overflow, true), 100.0 + 8.0 + 24.0 + 12.0 + 36.0 + 8.0 + 36.0 + 8.0);
-        assert_eq!(w.outputs(Place::Hidden, false), 100.0 + 12.0 + 90.0 + 8.0 + 100.0 + 8.0);
+        assert_eq!(w.outputs(Place::Inline, false), 100.0 + 8.0 + 200.0 + 12.0 + 90.0 + 8.0 + 100.0 + 8.0 + 110.0 + 8.0);
+        assert_eq!(w.outputs(Place::Overflow, false), 100.0 + 8.0 + 24.0 + 12.0 + 90.0 + 8.0 + 100.0 + 8.0 + 110.0 + 8.0);
+        assert_eq!(w.outputs(Place::Overflow, true), 100.0 + 8.0 + 24.0 + 12.0 + 36.0 + 8.0 + 36.0 + 8.0 + 60.0 + 8.0);
+        assert_eq!(w.outputs(Place::Hidden, false), 100.0 + 12.0 + 90.0 + 8.0 + 100.0 + 8.0 + 110.0 + 8.0);
         let only_transitions = Widths { transitions: 200.0, overflow: 24.0, ..Widths::default() };
         assert_eq!(only_transitions.outputs(Place::Inline, false), 208.0);
         assert_eq!(Widths::default().outputs(Place::Hidden, true), 0.0, "nothing shown takes no room");
@@ -516,7 +594,15 @@ mod tests {
     }
 
     fn state(active: bool, stopping: bool, status: OutputStatus, secs: u64) -> OutputState {
-        OutputState { active, stopping, status, target: "x.mkv".into(), elapsed: Duration::from_secs(secs), bytes: 0 }
+        OutputState {
+            active,
+            stopping,
+            status,
+            target: "x.mkv".into(),
+            elapsed: Duration::from_secs(secs),
+            bytes: 0,
+            destinations: Default::default(),
+        }
     }
 
     #[test]
@@ -538,6 +624,42 @@ mod tests {
         let replay = face(OutputKind::Replay, Some(&state(true, false, OutputStatus::Running, 61)));
         assert_eq!((replay.label.as_str(), replay.tip.as_str(), replay.name.as_str()), ("REPLAY", "Stop Replay Buffer", "Replay buffer, 00:01:01"));
         assert_eq!(face(OutputKind::Replay, None).tip, "Start Replay Buffer");
+    }
+
+    #[test]
+    fn the_pause_button_reads_resume_with_the_time_left_while_paused() {
+        let idle = pause_face(None, None);
+        assert_eq!((idle.state, idle.label.as_str(), idle.tip.as_str(), idle.timer.as_deref()), (OnAirState::Idle, "Pause", "Pause Program", None));
+        assert_eq!(pause_glyph(&idle), Glyph::Pause);
+        let counting = pause_face(Some(Some(272_000)), Some(28_000));
+        assert_eq!(counting.state, OnAirState::Running, "filled with the warning amber");
+        assert_eq!((counting.label.as_str(), counting.timer.as_deref(), counting.tip.as_str()), ("Resume", Some("4:32"), "Resume Program"));
+        assert_eq!(counting.name, "Resume, 4:32 left");
+        assert_eq!(pause_glyph(&counting), Glyph::Resume);
+        let open = pause_face(Some(None), Some(130_400));
+        assert_eq!((open.label.as_str(), open.timer.as_deref()), ("Resume", Some("2:10")), "the time paused without a countdown");
+        assert_eq!(open.name, "Resume, paused for 2:10");
+    }
+
+    #[test]
+    fn the_pause_menu_offers_five_countdowns_none_and_the_settings() {
+        let menu = pause_menu();
+        let seconds: Vec<Option<u64>> = menu.iter().filter(|(_, c)| c.id == "pause.start").map(|(_, c)| c.params["countdown_s"].as_u64()).collect();
+        assert_eq!(seconds, [Some(60), Some(120), Some(300), Some(600), Some(900), Some(0)]);
+        let labels: Vec<&str> = menu.iter().map(|(l, _)| *l).collect();
+        assert_eq!(
+            labels,
+            [
+                "Pause for 1 Minute",
+                "Pause for 2 Minutes",
+                "Pause for 5 Minutes",
+                "Pause for 10 Minutes",
+                "Pause for 15 Minutes",
+                "Pause Without a Countdown",
+                "Pause Screen Settings…"
+            ]
+        );
+        assert_eq!(menu.last().map(|(_, c)| c.clone()), Some(CommandRef::new("pause.settings")));
     }
 
     #[test]

@@ -1,6 +1,7 @@
 //! The hardware H.264 and HEVC encoders of Apple's VideoToolbox on macOS. Frames go in as NV12 in
 //! system memory and come out as 4-byte length-prefixed samples, with the parameter sets in the
-//! `avcC` or `hvcC` record ([`Encoder::codec_private`]).
+//! `avcC` or `hvcC` record ([`Encoder::codec_private`]). VideoToolbox has no AV1 encoder, so AV1 is
+//! [`Error::Unsupported`].
 //!
 //! - The session requires a hardware encoder, and one that VideoToolbox reports as software is
 //!   not used.
@@ -45,6 +46,7 @@ pub fn driver() -> Result<(), Error> {
 pub fn available(codec: Codec) -> Result<(), Error> {
     driver()?;
     let cfg = Config { codec, input: Input::Nv12, width: 256, height: 144, fps: (30, 1), rate: Rate::Quality(23), keyint: 60, color: Color::Bt709 };
+    check(&cfg)?;
     Session::open(&params(&cfg)).map(drop).map_err(Error::from)
 }
 
@@ -58,6 +60,9 @@ const MAX_SIDE: u32 = 8192;
 /// Check `cfg` without VideoToolbox: sizes, frame rate, rate and input.
 fn check(cfg: &Config) -> Result<(), Error> {
     let bad = |e: String| Err(Error::Unsupported(e));
+    if cfg.codec == Codec::Av1 {
+        return bad("VideoToolbox has no AV1 encoder".into());
+    }
     let (w, h) = (cfg.width, cfg.height);
     if w == 0 || h == 0 || w % 2 != 0 || h % 2 != 0 {
         return bad(format!("{w}x{h}: the encoder needs even, nonzero dimensions"));
@@ -177,14 +182,14 @@ impl Track {
                 return Err(Error::Failed(format!("the encoder changed its {name}")));
             }
             let dropped = match (self.codec, t) {
-                (_, None) => true,
+                (_, None) | (Codec::Av1, _) => true,
                 (Codec::H264, Some(t)) => matches!(t, 7..=9),
                 (Codec::Hevc, Some(t)) => matches!(t, 32..=37),
             };
             keyframe |= match (self.codec, t) {
                 (Codec::H264, Some(t)) => t == 5,
                 (Codec::Hevc, Some(t)) => (16..=21).contains(&t),
-                (_, None) => false,
+                (_, None) | (Codec::Av1, _) => false,
             };
             if !dropped {
                 data.extend_from_slice(&(n.len() as u32).to_be_bytes());
@@ -331,6 +336,7 @@ mod tests {
             Config { rate: Rate::Quality(52), ..ok },
             Config { rate: Rate::Cbr(0), ..ok },
             Config { rate: Rate::Cbr(i32::MAX as u32 / 1000 + 1), ..ok },
+            Config { codec: Codec::Av1, ..ok },
         ] {
             assert!(matches!(check(&bad), Err(Error::Unsupported(_))), "{bad:?}");
             assert!(matches!(Encoder::new(&bad), Err(Error::Unsupported(_))), "{bad:?} reached VideoToolbox");
@@ -474,6 +480,7 @@ mod tests {
                 Err(other) => panic!("{codec:?}: {other}"),
             }
         }
+        assert!(matches!(available(Codec::Av1), Err(Error::NoDevice(_) | Error::Unsupported(_))));
         #[cfg(not(target_os = "macos"))]
         assert_eq!(driver(), Err(Error::NoDevice("VideoToolbox runs on macOS only".into())));
     }

@@ -37,6 +37,9 @@ use crate::Codec;
 /// from 1 to 14.
 const MAX_ENTRYPOINTS: usize = 256;
 
+/// Why an AV1 session does not open.
+const NO_AV1: &str = "this crate's VA-API encoder writes H.264 and HEVC only";
+
 /// The libva entry points (the libraries stay loaded for the life of the process).
 struct Api {
     _va: Library,
@@ -272,6 +275,7 @@ impl Display {
         let profiles: &[abi::VAProfile] = match p.codec {
             Codec::H264 => &[abi::VAProfileH264High, abi::VAProfileH264Main, abi::VAProfileH264ConstrainedBaseline],
             Codec::Hevc => &[abi::VAProfileHEVCMain],
+            Codec::Av1 => return Err(OpenError::Unsupported(NO_AV1.into())),
         };
         let mut why = None;
         let mut unlisted = None;
@@ -394,6 +398,9 @@ impl Session {
     /// node's driver lists no encoder for the codec, later calls return that answer without
     /// initializing the drivers again.
     pub(crate) fn open(p: &Params) -> Result<Session, OpenError> {
+        if p.codec == Codec::Av1 {
+            return Err(OpenError::Unsupported(NO_AV1.into()));
+        }
         let api = api().map_err(OpenError::NoDevice)?;
         let none = &NO_ENCODER[usize::from(p.codec == Codec::Hevc)];
         if let Some(why) = none.get() {
@@ -429,7 +436,7 @@ impl Session {
         let (cw, ch) = coded_size(p.codec, p.width, p.height);
         let units = match p.codec {
             Codec::H264 => (cw / 16) * (ch / 16),
-            Codec::Hevc => p.width.div_ceil(1 << choice.blocks.ctb) * p.height.div_ceil(1 << choice.blocks.ctb),
+            Codec::Hevc | Codec::Av1 => p.width.div_ceil(1 << choice.blocks.ctb) * p.height.div_ceil(1 << choice.blocks.ctb),
         };
         // From here on `Drop` releases what was made.
         let mut s = Session {
@@ -525,6 +532,9 @@ impl Session {
         made: &mut usize,
         begun: &mut bool,
     ) -> Result<(), String> {
+        if self.p.codec == Codec::Av1 {
+            return Err(NO_AV1.into());
+        }
         let ctl = self.choice.ctl;
         let mut push = |id: Result<VABufferID, String>| -> Result<(), String> {
             ids[*made] = id?;
@@ -534,7 +544,9 @@ impl Session {
         if pic.idr {
             match self.p.codec {
                 Codec::H264 => push(self.value(abi::VAEncSequenceParameterBufferType, &h264_sequence(&self.p, self.choice.profile, ctl)))?,
-                Codec::Hevc => push(self.value(abi::VAEncSequenceParameterBufferType, &hevc_sequence(&self.p, self.choice.blocks, ctl)))?,
+                Codec::Hevc | Codec::Av1 => {
+                    push(self.value(abi::VAEncSequenceParameterBufferType, &hevc_sequence(&self.p, self.choice.blocks, ctl)))?
+                }
             }
             if let Some((rc, hrd)) = rate_buffers(ctl) {
                 push(self.value(abi::VAEncMiscParameterBufferType, &rc))?;
@@ -548,7 +560,7 @@ impl Session {
                 push(self.value(abi::VAEncPictureParameterBufferType, &h264_picture(pic, profile, ctl, recon, reference, coded)))?;
                 push(self.value(abi::VAEncSliceParameterBufferType, &h264_slice(pic, self.units, reference)))?;
             }
-            Codec::Hevc => {
+            Codec::Hevc | Codec::Av1 => {
                 push(self.value(abi::VAEncPictureParameterBufferType, &hevc_picture(pic, ctl, recon, reference, coded)))?;
                 push(self.value(abi::VAEncSliceParameterBufferType, &hevc_slice(pic, self.units, reference)))?;
             }

@@ -31,6 +31,7 @@ nokhwa-bindings-macos.workspace = true
 # PipeWire's registry, metadata and streams; serde_json reads the default-device metadata. Displays
 # and windows come from the screen-cast portal (ashpd, run by pollster on the capture thread) as
 # PipeWire streams, handed to the source thread through crossbeam queues. Cameras go through V4L2.
+# The display list comes from Wayland's outputs (wayland-client) or RandR under X11 (x11rb).
 [target.'cfg(target_os = "linux")'.dependencies]
 pipewire.workspace = true
 serde_json.workspace = true
@@ -40,6 +41,8 @@ futures-util.workspace = true
 pollster.workspace = true
 nokhwa = { workspace = true, features = ["input-v4l"] }
 v4l.workspace = true
+wayland-client.workspace = true
+x11rb.workspace = true
 
 [dev-dependencies]
 serde_json.workspace = true

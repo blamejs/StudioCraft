@@ -1,5 +1,6 @@
 use craft_keymap::CommandRef;
 use serde_json::json;
+use studiocraft_plugin::AddressOutcome;
 
 use super::*;
 use crate::store::Store;
@@ -64,7 +65,14 @@ fn destinations_are_added_up_to_the_limit() {
     let d = a.studio.profile().stream.destination("destination-2").cloned().unwrap();
     assert_eq!(
         d,
-        Destination { id: "destination-2".into(), name: "Backup".into(), enabled: false, server: "rtmp://b.example/app".into(), key: KeyRef::None }
+        Destination {
+            id: "destination-2".into(),
+            name: "Backup".into(),
+            enabled: false,
+            server: "rtmp://b.example/app".into(),
+            key: KeyRef::None,
+            service: String::new()
+        }
     );
     a.act(&ctx, Act::run("stream.destination_add", json!({"key": "held", "held_name": "night"})));
     assert_eq!(a.studio.profile().stream.destination("destination-3").map(|d| d.key.clone()), Some(KeyRef::Held("night".into())));
@@ -142,6 +150,83 @@ fn a_destination_is_changed_and_an_unchanged_one_is_not_saved_again() {
 }
 
 #[test]
+fn reconnect_settings_are_changed_listed_and_checked() {
+    let mut a = app();
+    let ctx = egui::Context::default();
+    let defaults = json!({"enabled": true, "first_delay_s": 2, "max_delay_s": 30, "max_tries": 10});
+    let listed = run(&mut a, &ctx, "stream.destinations", json!({})).unwrap();
+    assert_eq!(listed["reconnect"], defaults);
+    assert!(listed.get("running_reconnect").is_none(), "no stream runs");
+    run(&mut a, &ctx, "app.settings", json!({})).unwrap();
+    let r = run(&mut a, &ctx, "stream.reconnect_set", json!({"first_delay_s": 5, "max_delay_s": 20, "max_tries": 4})).unwrap();
+    let want = json!({"enabled": true, "first_delay_s": 5, "max_delay_s": 20, "max_tries": 4});
+    assert_eq!(r, json!({"changed": true, "reconnect": want}));
+    assert_eq!(run(&mut a, &ctx, "stream.destinations", json!({})).unwrap()["reconnect"], want);
+    assert_eq!(a.settings.as_ref().map(|w| w.draft.stream.reconnect), Some(a.studio.profile().stream.reconnect), "an open Settings window follows");
+    // An unsaved edit in Settings stays when the command changes another value.
+    if let Some(w) = &mut a.settings {
+        w.draft.stream.reconnect.first_delay_s = 7;
+    }
+    run(&mut a, &ctx, "stream.reconnect_set", json!({"max_tries": 6})).unwrap();
+    let draft = a.settings.as_ref().map(|w| (w.draft.stream.reconnect.first_delay_s, w.draft.stream.reconnect.max_tries));
+    assert_eq!(draft, Some((7, 6)));
+    assert_eq!(a.studio.profile().stream.reconnect.first_delay_s, 5, "the unsaved edit is not saved");
+    // A draft the change would put out of range takes the saved settings.
+    if let Some(w) = &mut a.settings {
+        w.draft.stream.reconnect.first_delay_s = 40;
+    }
+    run(&mut a, &ctx, "stream.reconnect_set", json!({"max_delay_s": 25})).unwrap();
+    assert_eq!(a.settings.as_ref().map(|w| w.draft.stream.reconnect), Some(a.studio.profile().stream.reconnect));
+    run(&mut a, &ctx, "stream.reconnect_set", json!({"enabled": false})).unwrap();
+    assert!(!a.studio.profile().stream.reconnect.enabled);
+    assert_eq!(a.studio.profile().stream.reconnect.max_tries, 6, "values left out are kept");
+    for bad in [
+        json!({"first_delay_s": 0}),
+        json!({"first_delay_s": 61}),
+        json!({"max_delay_s": 4}),
+        json!({"max_delay_s": 601}),
+        json!({"max_tries": 0}),
+        json!({"max_tries": 101}),
+        json!({"max_tries": -1}),
+        json!({"max_tries": 2.5}),
+        json!({"max_tries": "4"}),
+        json!({"enabled": "no"}),
+        json!({"first_delay_s": 30, "max_tries": 0}),
+    ] {
+        let before = a.studio.profile().stream.reconnect;
+        assert!(run(&mut a, &ctx, "stream.reconnect_set", bad.clone()).is_err(), "{bad}");
+        assert_eq!(a.studio.profile().stream.reconnect, before, "{bad} changed nothing");
+    }
+    let e = run(&mut a, &ctx, "stream.reconnect_set", json!({"max_tries": 101})).unwrap_err();
+    assert!(e.contains("1 to 100"), "{e}");
+    assert!(crate::commands::ui_params("stream.reconnect_set").contains("max_tries?"));
+}
+
+#[test]
+fn an_unchanged_set_does_not_save() {
+    let dir = std::env::temp_dir().join(format!("studiocraft-ui-reconnect-save-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let (store, _) = Store::open(craft_settings::Location::Dir(dir.clone()));
+    let mut a = StudioApp::boot(store, None, Vec::new());
+    let ctx = egui::Context::default();
+    // A file where the profiles folder goes makes any save fail.
+    let profiles = dir.join("profiles");
+    let _ = std::fs::remove_dir_all(&profiles);
+    std::fs::write(&profiles, b"").unwrap();
+    let same = run(&mut a, &ctx, "stream.reconnect_set", json!({"enabled": true, "max_tries": 10}));
+    let empty = run(&mut a, &ctx, "stream.reconnect_set", json!({}));
+    let changed = run(&mut a, &ctx, "stream.reconnect_set", json!({"max_tries": 3}));
+    let kept = a.studio.profile().stream.reconnect.max_tries;
+    let _ = std::fs::remove_file(&profiles);
+    let _ = std::fs::remove_dir_all(&dir);
+    assert_eq!(same.map(|v| v["changed"].clone()), Ok(json!(false)), "nothing to save, so the failing save is not tried");
+    assert_eq!(empty.map(|v| v["changed"].clone()), Ok(json!(false)));
+    assert!(changed.unwrap_err().contains("could not be saved"));
+    assert_eq!(kept, 10, "a change that could not be saved is put back");
+}
+
+#[test]
 fn changes_reach_an_open_settings_window() {
     let mut a = app();
     let ctx = egui::Context::default();
@@ -190,8 +275,11 @@ fn a_destination_is_removed_and_its_open_details_close() {
     run(&mut a, &ctx, "stream.destination_add", json!({})).unwrap();
     run(&mut a, &ctx, "stream.destination_remove", json!({"id": "destination-2"})).unwrap();
     assert_eq!(ids(&a), ["main"]);
-    a.streaming =
-        Some(StreamingPanel { editing: a.studio.profile().stream.destination("main").map(Edit::of), profile: a.studio.profile().name.clone() });
+    a.streaming = Some(StreamingPanel {
+        editing: a.studio.profile().stream.destination("main").map(Edit::of),
+        profile: a.studio.profile().name.clone(),
+        ..StreamingPanel::default()
+    });
     assert_eq!(run(&mut a, &ctx, "stream.destination_remove", json!({"id": "main"})).unwrap(), json!({"removed": "main"}));
     assert!(ids(&a).is_empty());
     assert!(a.streaming.as_ref().is_some_and(|p| p.editing.is_none()));
@@ -448,12 +536,12 @@ fn each_destination_shows_its_own_status() {
         ..StreamSettings::default()
     };
     let live = [
-        state("a", DestinationStatus::Failed("the server refused the stream".into())),
+        state("a", DestinationStatus::Failed(Failure::new(Cause::RejectedPublish, "the server refused publish: NetStream.Publish.BadName"))),
         state("b", DestinationStatus::Live),
-        state("c", DestinationStatus::Retrying { attempt: 3, error: "the connection was lost".into() }),
+        state("c", DestinationStatus::Retrying { attempt: 3, failure: Failure::new(Cause::Lost, "the server closed the connection") }),
     ];
     let held = |_: &str| false;
-    let view = View { stream: &stream, running: true, live: &live, held: &held };
+    let view = View { stream: &stream, running: true, live: &live, held: &held, checks: &[] };
     let mut panel = StreamingPanel::default();
     let mut acts = Vec::new();
     let texts = drawn(|ui| show(ui, &view, &mut panel, &mut acts));
@@ -461,7 +549,7 @@ fn each_destination_shows_its_own_status() {
         "First",
         "Second",
         "c",
-        "Failed: the server refused the stream",
+        "Failed: the server refused the stream; check the stream key",
         "Live",
         "Trying again (try 3): the connection was lost",
         "Not in this stream; it is sent to from the next start",
@@ -477,11 +565,73 @@ fn each_destination_shows_its_own_status() {
     assert_eq!(texts.iter().filter(|t| *t == "Stop").count(), 2, "{texts:?}");
     assert!(acts.is_empty(), "drawing does nothing");
     // Without a stream each destination says whether starting the stream sends to it.
-    let view = View { stream: &stream, running: false, live: &[], held: &held };
+    let view = View { stream: &stream, running: false, live: &[], held: &held, checks: &[] };
     let texts = drawn(|ui| show(ui, &view, &mut panel, &mut acts));
     assert_eq!(texts.iter().filter(|t| *t == "Sent to when the stream starts").count(), 3, "{texts:?}");
     assert_eq!(texts.iter().filter(|t| *t == "Off").count(), 1, "{texts:?}");
     assert!(!texts.iter().any(|t| t == "Start" || t == "Stop"), "{texts:?}");
+}
+
+#[test]
+fn a_failure_is_listed_with_its_cause_and_addresses() {
+    let d = Destination { id: "a".into(), server: "rtmp://a.example/live".into(), ..Destination::default() };
+    let failure = Failure {
+        cause: Cause::TimedOut,
+        detail: "could not connect to the server: timed out; 1 other address also failed".into(),
+        addresses: vec![
+            AddressOutcome { address: "[2001:db8::1]:1935".into(), cause: Cause::NoRoute, detail: "network unreachable".into() },
+            AddressOutcome { address: "192.0.2.1:1935".into(), cause: Cause::TimedOut, detail: "timed out".into() },
+        ],
+    };
+    let retrying = state("a", DestinationStatus::Retrying { attempt: 2, failure: failure.clone() });
+    let v = listed(&d, true, Some(&retrying), false);
+    assert_eq!(v["status"], json!("retrying"));
+    assert_eq!(v["error"], json!(failure.detail), "the error keeps the connection's own text");
+    assert_eq!(v["cause"], json!("timed_out"));
+    assert_eq!(
+        v["addresses"],
+        json!([
+            {"address": "[2001:db8::1]:1935", "cause": "no_route", "error": "network unreachable"},
+            {"address": "192.0.2.1:1935", "cause": "timed_out", "error": "timed out"},
+        ])
+    );
+    // The row names the cause, and its hover holds the error and each address.
+    assert_eq!(status_text(&d, true, Some(&retrying)).0, "Trying again (try 2): the server did not answer in time");
+    let detail = status_detail(true, Some(&retrying)).unwrap();
+    assert_eq!(
+        detail,
+        "could not connect to the server: timed out; 1 other address also failed\n\
+         [2001:db8::1]:1935: this computer has no network route to this address (network unreachable)\n\
+         192.0.2.1:1935: the server did not answer in time (timed out)"
+    );
+    // A failure without addresses lists none, and a live destination has no cause.
+    let failed = state("a", DestinationStatus::Failed(Failure::new(Cause::BadKey, "the stream key is not valid: empty")));
+    let v = listed(&d, true, Some(&failed), false);
+    assert_eq!((v["status"].clone(), v["cause"].clone()), (json!("failed"), json!("bad_key")));
+    assert!(v.get("addresses").is_none(), "{v}");
+    let live = state("a", DestinationStatus::Live);
+    let v = listed(&d, true, Some(&live), false);
+    assert!(v.get("cause").is_none() && v.get("error").is_none(), "{v}");
+    assert!(status_detail(true, Some(&live)).is_none());
+    // Every cause has its own text.
+    let texts: std::collections::HashSet<&str> = Cause::ALL.iter().map(|c| cause_text(*c)).collect();
+    assert_eq!(texts.len(), Cause::ALL.len());
+}
+
+#[test]
+fn a_destination_waiting_for_the_network_says_so() {
+    let d = Destination { id: "a".into(), server: "rtmp://a.example/live".into(), ..Destination::default() };
+    let failure = Failure::new(Cause::LookupFailed, "the server's name did not resolve: no network");
+    let waiting = state("a", DestinationStatus::WaitingForNetwork { attempt: 3, failure: failure.clone() });
+    let v = listed(&d, true, Some(&waiting), false);
+    assert_eq!(v["status"], json!("waiting_for_network"));
+    assert_eq!((v["attempt"].clone(), v["cause"].clone()), (json!(3), json!("lookup_failed")));
+    assert_eq!(v["error"], json!(failure.detail));
+    assert_eq!(
+        status_text(&d, true, Some(&waiting)),
+        ("Waiting for the network (try 3): the server's name could not be looked up".into(), Tone::Warn)
+    );
+    assert_eq!(status_detail(true, Some(&waiting)).as_deref(), Some("the server's name did not resolve: no network"));
 }
 
 #[test]
@@ -498,14 +648,14 @@ fn open_details_save_what_was_typed() {
     e.server = "rtmp://b2.example/live".into();
     e.held_key = "typed".into();
     let p = e.params();
-    assert_eq!(p, json!({"id": "b", "name": "B", "server": "rtmp://b2.example/live", "key": "held", "held_name": "night"}));
+    assert_eq!(p, json!({"id": "b", "service": "", "name": "B", "server": "rtmp://b2.example/live", "key": "held", "held_name": "night"}));
     assert!(!p.to_string().contains("typed"), "a key typed for the session is not a command parameter");
     e.key = KeyChoice::Profile;
-    assert_eq!(e.params(), json!({"id": "b", "name": "B", "server": "rtmp://b2.example/live", "key": "profile"}));
+    assert_eq!(e.params(), json!({"id": "b", "service": "", "name": "B", "server": "rtmp://b2.example/live", "key": "profile"}));
     // The details of a destination are drawn with its fields, and the server field hides its text.
     let stream = StreamSettings { destinations: vec![d.clone()], ..StreamSettings::default() };
     let held = |n: &str| n == "night";
-    let view = View { stream: &stream, running: false, live: &[], held: &held };
+    let view = View { stream: &stream, running: false, live: &[], held: &held, checks: &[] };
     let mut panel = StreamingPanel { editing: Some(Edit::of(&d)), ..StreamingPanel::default() };
     let mut acts = Vec::new();
     let texts = drawn(|ui| show(ui, &view, &mut panel, &mut acts));
@@ -519,7 +669,7 @@ fn open_details_save_what_was_typed() {
     // A key at the end of the address is hidden in the list and in the field.
     let d = Destination { id: "c".into(), server: "rtmp://c.example/live/secret-c".into(), ..Destination::default() };
     let stream = StreamSettings { destinations: vec![d.clone()], ..StreamSettings::default() };
-    let view = View { stream: &stream, running: false, live: &[], held: &held };
+    let view = View { stream: &stream, running: false, live: &[], held: &held, checks: &[] };
     let mut panel = StreamingPanel { editing: Some(Edit::of(&d)), ..StreamingPanel::default() };
     let texts = drawn(|ui| show(ui, &view, &mut panel, &mut acts));
     assert!(!texts.iter().any(|t| t.contains("secret-c")), "{texts:?}");
@@ -530,4 +680,259 @@ fn open_details_save_what_was_typed() {
     let texts = drawn(|ui| show(ui, &view, &mut panel, &mut acts));
     assert!(texts.iter().any(|t| t == "rtmp://c.example/live/secret-c"), "{texts:?}");
     assert!(acts.is_empty(), "drawing does nothing");
+}
+
+/// The preset of the service `id`.
+fn preset(id: &str) -> &'static services::Service {
+    services::service(id).unwrap_or_else(|| panic!("no {id} preset"))
+}
+
+#[test]
+fn a_destination_added_for_a_service_takes_its_documented_server() {
+    let mut a = app();
+    let ctx = egui::Context::default();
+    let twitch = preset("twitch");
+    // The preset's server counts as a new server for the profile's key.
+    let e = run(&mut a, &ctx, "stream.destination_add", json!({"service": "twitch"})).unwrap_err();
+    assert!(e.contains("would send the profile's stream key to a new server"), "{e}");
+    assert!(ids(&a).is_empty());
+    run(&mut a, &ctx, "stream.destination_add", json!({"service": "twitch", "key": "none"})).unwrap();
+    let d = a.studio.profile().stream.destinations[0].clone();
+    assert_eq!((d.service.as_str(), Some(d.server.as_str()), d.name.as_str()), ("twitch", twitch.server, ""));
+    // A service that shows each account its own server leaves the server empty.
+    run(&mut a, &ctx, "stream.destination_add", json!({"service": "youtube"})).unwrap();
+    let d = a.studio.profile().stream.destination("destination-2").cloned().unwrap();
+    assert_eq!((d.service.as_str(), d.server.as_str()), ("youtube", ""));
+    // A server given with the service is used.
+    run(&mut a, &ctx, "stream.destination_add", json!({"service": "facebook", "server": "rtmp://mine.example/live"})).unwrap();
+    let d = a.studio.profile().stream.destination("destination-3").cloned().unwrap();
+    assert_eq!((d.service.as_str(), d.server.as_str()), ("facebook", "rtmp://mine.example/live"));
+    let e = run(&mut a, &ctx, "stream.destination_add", json!({"service": "unknown"})).unwrap_err();
+    assert!(e.contains("`service` is empty or one of") && e.contains("twitch"), "{e}");
+    let e = run(&mut a, &ctx, "stream.destination_add", json!({"service": 3})).unwrap_err();
+    assert!(e.contains("`service` is a string"), "{e}");
+    assert_eq!(ids(&a).len(), 3);
+    let list = run(&mut a, &ctx, "stream.destinations", json!({})).unwrap();
+    let services: Vec<&str> = list["destinations"].as_array().unwrap().iter().filter_map(|d| d["service"].as_str()).collect();
+    assert_eq!(services, ["twitch", "youtube", "facebook"]);
+}
+
+#[test]
+fn changing_the_service_replaces_a_preset_server_and_keeps_a_typed_one() {
+    let mut a = app();
+    let ctx = egui::Context::default();
+    let (twitch, facebook) = (preset("twitch"), preset("facebook"));
+    run(&mut a, &ctx, "stream.destination_add", json!({"service": "twitch", "key": "none"})).unwrap();
+    let main = |a: &StudioApp| a.studio.profile().stream.destinations[0].clone();
+    run(&mut a, &ctx, "stream.destination_set", json!({"id": "main", "service": "facebook"})).unwrap();
+    assert_eq!((main(&a).service.as_str(), Some(main(&a).server.as_str())), ("facebook", facebook.server));
+    // A service without a shared server clears the preset's and turns the destination off.
+    run(&mut a, &ctx, "stream.destination_set", json!({"id": "main", "service": "youtube"})).unwrap();
+    assert_eq!((main(&a).server.as_str(), main(&a).enabled), ("", false));
+    // A server and `enabled` given with the service win.
+    run(&mut a, &ctx, "stream.destination_set", json!({"id": "main", "service": "kick", "server": "rtmp://k.example/app", "enabled": true})).unwrap();
+    assert_eq!((main(&a).service.as_str(), main(&a).server.as_str(), main(&a).enabled), ("kick", "rtmp://k.example/app", true));
+    // A server the user typed is kept through every change of service.
+    for id in ["twitch", "youtube", ""] {
+        run(&mut a, &ctx, "stream.destination_set", json!({"id": "main", "service": id})).unwrap();
+        assert_eq!((main(&a).server.as_str(), main(&a).enabled), ("rtmp://k.example/app", true), "{id}");
+    }
+    assert_eq!(main(&a).service, "");
+    run(&mut a, &ctx, "stream.destination_set", json!({"id": "main", "server": ""})).unwrap();
+    run(&mut a, &ctx, "stream.destination_set", json!({"id": "main", "service": "twitch"})).unwrap();
+    assert_eq!(Some(main(&a).server.as_str()), twitch.server, "an empty server takes the preset's");
+    let e = run(&mut a, &ctx, "stream.destination_set", json!({"id": "main", "service": "unknown"})).unwrap_err();
+    assert!(e.contains("`service` is empty or one of"), "{e}");
+    // A key going with a preset's server counts as a new server.
+    let e = run(&mut a, &ctx, "stream.destination_set", json!({"id": "main", "service": "facebook", "key": "held"})).unwrap_err();
+    assert!(e.contains("would send its session key to a new server"), "{e}");
+    assert_eq!(Some(main(&a).server.as_str()), twitch.server, "a refused change changes nothing");
+    // A service without a shared server, saved with the account's server, stays on.
+    assert!(main(&a).enabled);
+    let mut e = Edit::of(&main(&a));
+    e.set_service("youtube");
+    assert_eq!(e.server, "");
+    e.server = "rtmp://y.example/live".into();
+    a.act(&ctx, Act::run("stream.destination_set", e.params()));
+    assert_eq!((main(&a).service.as_str(), main(&a).server.as_str(), main(&a).enabled), ("youtube", "rtmp://y.example/live", true));
+}
+
+#[test]
+fn saving_the_details_of_a_service_destination_keeps_it_on() {
+    let mut a = app();
+    let ctx = egui::Context::default();
+    run(&mut a, &ctx, "stream.destination_add", json!({"service": "youtube"})).unwrap();
+    let d = a.studio.profile().stream.destinations[0].clone();
+    assert!(d.enabled && d.server.is_empty());
+    let mut e = Edit::of(&d);
+    e.name = "Channel".into();
+    a.act(&ctx, Act::run("stream.destination_set", e.params()));
+    let d = a.studio.profile().stream.destinations[0].clone();
+    assert_eq!(
+        (d.name.as_str(), d.service.as_str(), d.server.as_str(), d.enabled),
+        ("Channel", "youtube", "", true),
+        "the same service changes nothing"
+    );
+    // A service this version does not know is kept as it is.
+    let cmd = CommandRef::with_params("stream.destination_set", json!({"service": "future"}));
+    assert_eq!(service_param(&cmd, Some("future")).ok(), Some(Some("future".to_string())));
+    assert!(service_param(&cmd, Some("")).is_err());
+}
+
+#[test]
+fn the_details_change_the_server_with_the_service_and_link_to_its_page() {
+    let (twitch, kick) = (preset("twitch"), preset("kick"));
+    let d = Destination { id: "main".into(), service: "twitch".into(), server: twitch.server.unwrap_or_default().into(), ..Destination::default() };
+    let mut e = Edit::of(&d);
+    e.set_service("kick");
+    assert_eq!((e.service.as_str(), e.server.as_str()), ("kick", ""));
+    e.server = "rtmp://typed.example/app".into();
+    e.set_service("twitch");
+    assert_eq!(e.server, "rtmp://typed.example/app", "a typed server is kept");
+    // A row names the service, and the details of a service without a shared server say where to
+    // find the account's server and key.
+    let d = Destination { id: "main".into(), service: "kick".into(), ..Destination::default() };
+    let stream = StreamSettings { destinations: vec![d.clone()], ..StreamSettings::default() };
+    let held = |_: &str| false;
+    let view = View { stream: &stream, running: false, live: &[], held: &held, checks: &[] };
+    let mut panel = StreamingPanel { editing: Some(Edit::of(&d)), ..StreamingPanel::default() };
+    let mut acts = Vec::new();
+    let texts = drawn(|ui| show(ui, &view, &mut panel, &mut acts));
+    let stream_to = craft_i18n::fmt(tl!("Stream to {service}"), &[("service", kick.name)]);
+    let find = craft_i18n::fmt(tl!("{service} shows the server and key for your account."), &[("service", kick.name)]);
+    for want in [kick.name, stream_to.as_str(), "Service", find.as_str(), "Where to find them", "Add Destination"] {
+        assert!(texts.iter().any(|t| t == want), "{want} in {texts:?}");
+    }
+    assert!(acts.is_empty(), "drawing does nothing");
+}
+
+/// A finished check of `host` with `verdict`, which ran by itself when `automatic`.
+fn diagnosis(verdict: Verdict, automatic: bool) -> Diagnosis {
+    Diagnosis {
+        verdict,
+        host: "ingest.example".into(),
+        port: 1935,
+        tls: false,
+        service: None,
+        other: None,
+        component: None,
+        status: None,
+        reason: None,
+        detail: String::new(),
+        evidence: vec![
+            Evidence { check: Check::DefaultRoute, target: String::new(), outcome: Outcome::Ok, detail: String::new() },
+            Evidence {
+                check: Check::Connect,
+                target: "192.0.2.1:1935".into(),
+                outcome: Outcome::Failed(Cause::TimedOut),
+                detail: "timed out".into(),
+            },
+            Evidence { check: Check::Connect443, target: "192.0.2.1:443".into(), outcome: Outcome::Unfinished, detail: String::new() },
+        ],
+        at: UNIX_EPOCH + Duration::from_millis(1_700_000_000_123),
+        automatic,
+    }
+}
+
+#[test]
+fn a_check_is_listed_and_shown_under_its_destination() {
+    let d = diagnosis(Verdict::PortNotAnswering443Does, true);
+    let v = listed_check(&CheckState::Done(Box::new(d.clone())));
+    assert_eq!(
+        (v["state"].clone(), v["automatic"].clone(), v["verdict"].clone()),
+        (json!("done"), json!(true), json!("port_not_answering_443_does"))
+    );
+    assert_eq!(v["message"], json!("ingest.example answers on port 443 but not on port 1935. This network or the server may be blocking port 1935"));
+    assert_eq!(v["template"], json!("{host} answers on port 443 but not on port {port}. This network or the server may be blocking port {port}"));
+    assert_eq!(v["args"], json!({"host": "ingest.example", "port": "1935"}));
+    assert_eq!(v["at_ms"], json!(1_700_000_000_123u64));
+    assert_eq!(v["evidence"][1], json!({"check": "connect", "target": "192.0.2.1:1935", "outcome": "timed_out", "detail": "timed out"}));
+    assert_eq!(v["evidence"][2]["outcome"], json!("unfinished"));
+    assert_eq!(listed_check(&CheckState::Running { automatic: false }), json!({"state": "running", "automatic": false}));
+    let lines: Vec<String> = d.evidence.iter().map(evidence_text).collect();
+    assert_eq!(
+        lines,
+        [
+            "Route to any address: works",
+            "Connection to 192.0.2.1:1935: the server did not answer in time (timed out)",
+            "Secure connection on port 443 to 192.0.2.1:443: not finished in time",
+        ]
+    );
+    // The window shows the verdict, that it ran by itself, and the button that runs another.
+    let dest = Destination { id: "main".into(), server: "rtmp://ingest.example/live".into(), ..Destination::default() };
+    let stream = StreamSettings { destinations: vec![dest.clone()], ..StreamSettings::default() };
+    let held = |_: &str| false;
+    let checks = vec![("main".to_string(), CheckState::Done(Box::new(d.clone())))];
+    let view = View { stream: &stream, running: false, live: &[], held: &held, checks: &checks };
+    let mut acts = Vec::new();
+    let texts = drawn(|ui| show(ui, &view, &mut StreamingPanel::default(), &mut acts));
+    for want in [d.english().as_str(), "Checked by itself after the destination failed", "What the check found", "Check Connection"] {
+        assert!(texts.iter().any(|t| t == want), "{want} in {texts:?}");
+    }
+    // While a check runs, the window says so.
+    let checks = vec![("main".to_string(), CheckState::Running { automatic: false })];
+    let view = View { stream: &stream, running: false, live: &[], held: &held, checks: &checks };
+    let texts = drawn(|ui| show(ui, &view, &mut StreamingPanel::default(), &mut acts));
+    assert!(texts.iter().any(|t| t == "Checking the connection…"), "{texts:?}");
+    assert!(texts.iter().all(|t| *t != d.english()), "{texts:?}");
+    assert!(acts.is_empty(), "drawing does nothing");
+}
+
+#[test]
+fn a_certificate_verdict_names_the_reason_in_the_interface_language() {
+    let d = Diagnosis { reason: Some(Cause::CertificateExpired), tls: true, ..diagnosis(Verdict::CertificateNotAccepted, false) };
+    assert_eq!(verdict_msg(&d).english(), d.english(), "the window's reason is the same English text");
+    assert!(d.english().contains("(the server's certificate has expired)"), "{}", d.english());
+    let texts: std::collections::HashSet<&str> =
+        [Outcome::Ok, Outcome::Set, Outcome::Problem, Outcome::Unknown, Outcome::Unfinished].into_iter().map(outcome_text).collect();
+    assert_eq!(texts.len(), 5, "every outcome has its own text");
+}
+
+#[test]
+fn every_check_message_has_an_english_row() {
+    let en = include_str!("../../i18n/locales/en/studiocraft.tsv");
+    let rows: std::collections::HashSet<(&str, &str)> =
+        en.lines().filter_map(|l| l.split('\t').collect::<Vec<_>>().get(..2).map(|c| (c[0], c[1]))).collect();
+    let templates = studiocraft_studio::diagnose::templates();
+    assert_eq!(templates.len(), 17);
+    let missing: Vec<String> = templates.iter().filter(|t| !rows.contains(&("@msg", **t))).map(|t| format!("@msg\t{t}\t{t}")).collect();
+    assert!(missing.is_empty(), "check messages with no @msg row:\n{}", missing.join("\n"));
+}
+
+#[test]
+fn check_connection_runs_a_check_and_the_service_setting_is_changed() {
+    let mut a = app();
+    let ctx = egui::Context::default();
+    // An address with nothing behind it on this computer: the check stays on this computer.
+    let closed = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = closed.local_addr().unwrap();
+    drop(closed);
+    run(&mut a, &ctx, "stream.destination_add", json!({"server": format!("rtmp://{addr}/live"), "key": "none"})).unwrap();
+    run(&mut a, &ctx, "stream.destination_add", json!({"key": "none"})).unwrap();
+    assert!(run(&mut a, &ctx, "stream.diagnose", json!({"id": "nope"})).unwrap_err().contains("no stream destination `nope`"));
+    assert!(run(&mut a, &ctx, "stream.diagnose", json!({"id": "destination-2"})).unwrap_err().contains("has no server"));
+    assert!(run(&mut a, &ctx, "stream.diagnose", json!({})).is_err());
+    assert_eq!(run(&mut a, &ctx, "stream.diagnose", json!({"id": "main"})).unwrap(), json!({"id": "main", "started": true}));
+    let listed = run(&mut a, &ctx, "stream.destinations", json!({})).unwrap();
+    let state = listed["destinations"][0]["diagnosis"]["state"].clone();
+    assert!(state == json!("running") || state == json!("done"), "{listed}");
+    assert!(listed["destinations"][1].get("diagnosis").is_none(), "{listed}");
+    // Another server drops the check of the one before it, finished or not.
+    run(&mut a, &ctx, "stream.destination_set", json!({"id": "main", "server": "rtmp://127.0.0.1:1/live"})).unwrap();
+    let listed = run(&mut a, &ctx, "stream.destinations", json!({})).unwrap();
+    assert!(listed["destinations"][0].get("diagnosis").is_none(), "{listed}");
+    // Whether the check after a failure contacts the service's other hosts: off by default.
+    assert_eq!(listed["check_service"], json!(false));
+    run(&mut a, &ctx, "app.settings", json!({})).unwrap();
+    let r = run(&mut a, &ctx, "stream.check_service_set", json!({"enabled": true})).unwrap();
+    assert_eq!(r, json!({"changed": true, "check_service": true}));
+    assert!(a.studio.profile().stream.check_service);
+    assert_eq!(a.settings.as_ref().map(|w| w.draft.stream.check_service), Some(true), "an open Settings window follows");
+    assert_eq!(run(&mut a, &ctx, "stream.check_service_set", json!({"enabled": true})).unwrap()["changed"], json!(false));
+    for bad in [json!({}), json!({"enabled": "yes"}), json!({"enabled": 1})] {
+        assert!(run(&mut a, &ctx, "stream.check_service_set", bad.clone()).is_err(), "{bad}");
+        assert!(a.studio.profile().stream.check_service, "{bad} changed nothing");
+    }
+    assert_eq!(crate::commands::ui_params("stream.diagnose"), "id: string");
+    assert!(crate::commands::ui_params("stream.check_service_set").starts_with("enabled: boolean"));
 }
