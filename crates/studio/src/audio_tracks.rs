@@ -631,13 +631,12 @@ impl Studio {
     pub(crate) fn mark_audio_tracks(&self, now: Tick, name: &str) -> Option<Result<InTake, String>> {
         let markers = self.audio_tracks.take.as_ref()?.markers();
         let at = markers.frame(now);
-        let Some(number) = markers.add_numbered(at, name) else {
-            return Some(Err(format!(
-                "the marker was not kept: the take is ending or {} markers are waiting to be written",
-                studiocraft_audio_tracks::markers::QUEUED
-            )));
-        };
-        Some(Ok(InTake { markers: markers.clone(), number, at, name: name.to_string() }))
+        Some(
+            markers
+                .add_numbered(at, name)
+                .map(|number| InTake { markers: markers.clone(), number, at, name: name.to_string() })
+                .map_err(|e| format!("the marker was not kept: {e}")),
+        )
     }
 
     /// Wait for the openings started here and take their notices as the next tick would, for

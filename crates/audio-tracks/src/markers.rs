@@ -85,11 +85,33 @@ impl MarkerLog {
     }
 }
 
+/// Why [`TakeMarkers::add_numbered`] did not keep a marker.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AddError {
+    /// The take is ending, or the queue is full.
+    NotKept,
+    /// Another add or rename was going into the queue at the same moment.
+    Busy,
+}
+
+impl std::fmt::Display for AddError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            AddError::NotKept => write!(f, "the take is ending or {QUEUED} markers are waiting to be written"),
+            AddError::Busy => write!(f, "another marker is being added or renamed in the take"),
+        }
+    }
+}
+
 /// Why [`TakeMarkers::rename`] did not rename a marker.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RenameError {
+    /// The take gave no marker that number.
+    Unknown,
     /// The take runs and the queue is full.
     Full,
+    /// Another add or rename was going into the queue at the same moment.
+    Busy,
     /// The take is finishing its files; the marker can be renamed once it has ended.
     Finishing,
     /// The take ended without a session file.
@@ -101,7 +123,9 @@ pub enum RenameError {
 impl std::fmt::Display for RenameError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            RenameError::Unknown => write!(f, "the take has no marker with that number"),
             RenameError::Full => write!(f, "{QUEUED} markers and renames are waiting to be written"),
+            RenameError::Busy => write!(f, "{}", AddError::Busy),
             RenameError::Finishing => write!(f, "the take is finishing its files; rename the marker once it has ended"),
             RenameError::NoSession => write!(f, "the take ended without a session file"),
             RenameError::Session(e) => write!(f, "the session file could not be written again: {e}"),
@@ -118,8 +142,19 @@ pub struct TakeMarkers {
     status: Arc<Status>,
     kept: Arc<AtomicU64>,
     dropped: Arc<AtomicU64>,
-    /// Numbers given to markers so far, kept or not.
+    /// The number of the last marker kept. Markers kept are numbered 1 to this value.
     numbered: Arc<AtomicU64>,
+    /// Set while an add or a rename goes into the queue. A second caller does not wait for it.
+    busy: Arc<AtomicBool>,
+}
+
+/// Holds [`TakeMarkers`]'s busy flag and clears it when dropped.
+struct Busy<'a>(&'a AtomicBool);
+
+impl Drop for Busy<'_> {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::Release);
+    }
 }
 
 impl TakeMarkers {
@@ -131,7 +166,13 @@ impl TakeMarkers {
             kept: Arc::new(AtomicU64::new(0)),
             dropped: Arc::new(AtomicU64::new(0)),
             numbered: Arc::new(AtomicU64::new(0)),
+            busy: Arc::new(AtomicBool::new(false)),
         }
+    }
+
+    /// The busy flag, or `None` while another add or rename holds it.
+    fn busy(&self) -> Option<Busy<'_>> {
+        self.busy.compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed).ok().map(|_| Busy(&self.busy))
     }
 
     /// Whether the take was asked to stop: the disk thread may have journaled its last markers.
@@ -148,47 +189,61 @@ impl TakeMarkers {
         }
     }
 
-    /// Add a marker named `name` at `at` on the studio's clock. False when the queue is full or
-    /// the take was asked to stop; the marker is then not kept.
+    /// Add a marker named `name` at `at` on the studio's clock. False when the queue is full,
+    /// the take was asked to stop, or another add or rename of the take was going into the
+    /// queue at the same moment; the marker is then not kept.
     pub fn add(&self, at: Tick, name: &str) -> bool {
         self.add_frame(self.frame(at), name)
     }
 
     /// Add a marker named `name` at take frame `at`. False as for [`TakeMarkers::add`].
     pub fn add_frame(&self, at: u64, name: &str) -> bool {
-        self.add_numbered(at, name).is_some()
+        self.add_numbered(at, name).is_ok()
     }
 
     /// Add a marker named `name` at take frame `at`, as [`TakeMarkers::add_frame`] does. Returns
-    /// its number in the take, which [`TakeMarkers::rename`] takes, or `None` when it was not
-    /// kept.
-    pub fn add_numbered(&self, at: u64, name: &str) -> Option<u64> {
+    /// its number in the take, which [`TakeMarkers::rename`] takes, or why it was not kept.
+    pub fn add_numbered(&self, at: u64, name: &str) -> Result<u64, AddError> {
         let name: String = name.chars().take(MAX_NAME_CHARS).collect();
-        let number = self.numbered.fetch_add(1, Ordering::Relaxed).saturating_add(1);
+        // A marker that is not kept takes no number.
+        let Some(busy) = self.busy() else {
+            self.dropped.fetch_add(1, Ordering::Relaxed);
+            return Err(AddError::Busy);
+        };
+        let number = self.numbered.load(Ordering::Relaxed).saturating_add(1);
         if self.ended() || !self.queue.push(Entry::Add(Marker { number, at, name })) {
             self.dropped.fetch_add(1, Ordering::Relaxed);
-            return None;
+            return Err(AddError::NotKept);
         }
+        self.numbered.store(number, Ordering::Relaxed);
+        drop(busy);
         self.kept.fetch_add(1, Ordering::Relaxed);
-        Some(number)
+        Ok(number)
     }
 
     /// Rename the take's marker `number`, now named `old`, to `name` (its first
     /// [`MAX_NAME_CHARS`] characters). While the take runs, the rename goes to the journal with
     /// the next sync, and the take's session gets the new name; `old` is not checked, and the
-    /// last rename of the marker wins. Once the take has ended with a
-    /// session file, the marker is renamed in that file, which is written again in one step
-    /// ([`crate::session::rename_take_marker`]). A file that no longer has the marker named `old`
-    /// is an error.
+    /// last rename of the marker wins. A number the take has not given to a marker it kept is
+    /// an error. Once the take has ended with a session file, the marker is renamed in that
+    /// file, which is written again in one step ([`crate::session::rename_take_marker`]). A file
+    /// that no longer has the marker named `old` is an error.
     pub fn rename(&self, number: u64, old: &str, name: &str) -> Result<(), RenameError> {
         let name: String = name.chars().take(MAX_NAME_CHARS).collect();
-        if !self.ended() {
-            if self.queue.push(Entry::Rename { number, name: name.clone() }) {
-                return Ok(());
+        {
+            // Held until the rename is in the queue, so the marker's add is in it first.
+            let _busy = self.busy().ok_or(RenameError::Busy)?;
+            if number == 0 || number > self.numbered.load(Ordering::Relaxed) {
+                return Err(RenameError::Unknown);
             }
-            // A closed log means the take is ending even when its state does not show it yet.
-            if !self.queue.is_closed() && !self.ended() {
-                return Err(RenameError::Full);
+            if !self.ended() {
+                if self.queue.push(Entry::Rename { number, name: name.clone() }) {
+                    return Ok(());
+                }
+                // A closed log means the take is ending even when its state does not show it yet.
+                if !self.queue.is_closed() && !self.ended() {
+                    return Err(RenameError::Full);
+                }
             }
         }
         if !matches!(self.status.state(), Some(State::Done | State::Stopped)) {
@@ -251,23 +306,37 @@ mod tests {
         let m = TakeMarkers::new(Arc::clone(&queue), Some(Tick(0)), Arc::clone(&status));
         assert!(m.add_frame(1, "x"));
         let number = m.add_numbered(10, "Goal").unwrap();
-        assert_eq!(number, 2, "numbers count every marker of the take");
-        m.rename(number, "Goal",&"y".repeat(MAX_NAME_CHARS + 1)).unwrap();
-        assert_eq!(m.rename(number, "Goal","Late"), Err(RenameError::Full), "the queue holds three");
+        assert_eq!(number, 2, "numbers count the markers the take keeps");
+        assert_eq!(m.rename(0, "Goal", "Late"), Err(RenameError::Unknown));
+        assert_eq!(m.rename(3, "Goal", "Late"), Err(RenameError::Unknown), "a number the take has not given");
+        m.rename(number, "Goal", &"y".repeat(MAX_NAME_CHARS + 1)).unwrap();
+        assert_eq!(m.rename(number, "Goal", "Late"), Err(RenameError::Full), "the queue holds three");
+        assert_eq!(m.add_numbered(20, "Dropped"), Err(AddError::NotKept));
         assert!(matches!(queue.pop(), Some(Entry::Add(_))));
         assert!(matches!(queue.pop(), Some(Entry::Add(_))));
         assert_eq!(queue.pop(), Some(Entry::Rename { number: 2, name: "y".repeat(MAX_NAME_CHARS) }));
+        assert_eq!(m.rename(3, "Dropped", "Late"), Err(RenameError::Unknown), "a dropped marker's number names no marker");
+        // The dropped marker took no number, so the next marker kept is number 3.
+        assert_eq!(m.add_numbered(30, "Next"), Ok(3));
+        assert!(matches!(queue.pop(), Some(Entry::Add(Marker { number: 3, .. }))));
+        // While another add or rename is going into the queue, neither waits for it.
+        let held = m.busy();
+        assert!(held.is_some());
+        assert_eq!(m.add_numbered(40, "Busy"), Err(AddError::Busy));
+        assert_eq!(m.rename(3, "Next", "Late"), Err(RenameError::Busy));
+        drop(held);
+        assert_eq!(queue.pop(), None);
         // Asked to stop, the take takes no rename until it has ended.
         status.state.store(State::Finishing as u8, Ordering::Release);
-        assert_eq!(m.rename(number, "Goal","Late"), Err(RenameError::Finishing));
+        assert_eq!(m.rename(number, "Goal", "Late"), Err(RenameError::Finishing));
         assert_eq!(queue.pop(), None);
         // Ended without a session file of its own.
         status.state.store(State::Done as u8, Ordering::Release);
-        assert_eq!(m.rename(number, "Goal","Late"), Err(RenameError::NoSession));
+        assert_eq!(m.rename(number, "Goal", "Late"), Err(RenameError::NoSession));
         // The log closed while the take still shows as running: the take is ending.
         status.state.store(State::Recording as u8, Ordering::Release);
         queue.close();
-        assert_eq!(m.rename(number, "Goal","Late"), Err(RenameError::Finishing));
+        assert_eq!(m.rename(number, "Goal", "Late"), Err(RenameError::Finishing));
         assert_eq!(queue.pop(), None);
     }
 

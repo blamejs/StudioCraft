@@ -807,7 +807,12 @@ const SPECS: &[CommandSpec] = &[
     spec("audio_tracks.marker", "Add Audio Tracks Marker", "name?: the marker's name, 1 to 256 characters", Undo::NotUndoable),
     spec("marker.add", "Add Marker", "name?: the marker's name, 1 to 256 characters", Undo::NotUndoable),
     spec("marker.list", "List Markers", "", Undo::NotUndoable),
-    spec("marker.rename", "Rename Marker", "index: the marker's number in the session, from 1; name: its new name, 1 to 256 characters", Undo::NotUndoable),
+    spec(
+        "marker.rename",
+        "Rename Marker",
+        "index: the marker's number in the session, from 1; name: its new name, 1 to 256 characters",
+        Undo::NotUndoable,
+    ),
     spec("hardware_encoders.retest", "Test Hardware Encoders Again", "", Undo::NotUndoable),
     spec(
         "pause.start",

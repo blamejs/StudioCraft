@@ -56,7 +56,7 @@ use studiocraft_media::Tick;
 
 pub use collect::{Collector, Dropout, TrackSpec, pool_chunks};
 pub use disk::{DiskConfig, Faults, Gate, StopReason, Timing};
-pub use markers::{Marker, RenameError, TakeMarkers};
+pub use markers::{AddError, Marker, RenameError, TakeMarkers};
 
 /// A list of tracks for the collect thread, with the clock time it was sent at (none for the
 /// first list, sent before any block), and whether it comes from a collection that replaced the

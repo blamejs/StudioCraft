@@ -303,7 +303,8 @@ pub fn rename_marker(path: &Path, at: u64, before: usize, old: &str, name: &str)
     // The file can grow between the size check and the read; the read stops one byte past it.
     file.take(limit.saturating_add(1)).read_to_end(&mut bytes)?;
     // The error names the file.
-    let text = craft_scraft_format::read_session_data(&shown, bytes, limit).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))?;
+    let text = craft_scraft_format::read_session_data(&shown, bytes, limit)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))?;
     let mut session = Session::from_json(&text).map_err(|e| invalid(e.to_string()))?;
     let place = position(at);
     let marker = session.markers.iter_mut().filter(|m| m.kind == MarkerKind::Marker && m.track.is_none() && m.start == place).nth(before);

@@ -417,7 +417,8 @@ it as `last_session`. No session yet and a fifth opening while four run are erro
 session lists the marker at that sample. `name` is 1 to 256 characters, not only spaces, with no
 control characters; without it the marker is "Marker N", the take's Nth marker. It returns
 `{"name", "seconds"}`, where `seconds` counts from the take's first sample. No running take, a take
-that is ending, and 1,024 markers waiting to be written are errors.
+that is ending, 1,024 markers waiting to be written, and another marker being added to or renamed
+in the take at the same moment are errors.
 
 ### `record.marker`
 
@@ -462,8 +463,9 @@ is required. The outputs are renamed this way:
 - The take of audio tracks: while the take runs, the rename goes to the take's journal, so the
   session file the take writes at its end, and the one repair writes after a crash, have the new
   name. Once the take has ended, its session file is written again with the new name through a
-  temporary file and a rename. While the take is finishing its files, the rename is an error for
-  the take.
+  temporary file and a rename. While the take is finishing its files, while 1,024 markers and
+  renames are waiting to be written, and while another marker is being added to or renamed in the
+  take at the same moment, the rename is an error for the take.
 
 It returns `{"index", "name", "seconds", "recording", "audio_tracks"}` as `marker.list` lists the
 marker, with `recording` and `audio_tracks` each `{"seconds"}` when that output has the new name,

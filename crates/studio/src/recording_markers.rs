@@ -646,7 +646,8 @@ impl Studio {
         let next = self.recording_markers.session.next(name).map_err(StudioError::Output)?;
         let mut in_recording = None;
         let recording = if self.outputs.start_of(OutputKind::Recording).is_some() {
-            let held = self.recording_markers.watch.holds().map(|(path, index)| InRecording { recording: path.to_path_buf(), index, name: next.1.clone() });
+            let held =
+                self.recording_markers.watch.holds().map(|(path, index)| InRecording { recording: path.to_path_buf(), index, name: next.1.clone() });
             let added = self.recording_markers.watch.add(now, Some(next.1.clone())).map(|(_, placed)| placed.seconds());
             in_recording = held.filter(|_| added.is_ok());
             Placed::of(Some(added))
@@ -732,7 +733,8 @@ impl Studio {
         if !self.recording_markers.writes.iter().any(|(_, h)| wait || h.is_finished()) {
             return;
         }
-        let (done, running): (Vec<_>, Vec<_>) = std::mem::take(&mut self.recording_markers.writes).into_iter().partition(|(_, h)| wait || h.is_finished());
+        let (done, running): (Vec<_>, Vec<_>) =
+            std::mem::take(&mut self.recording_markers.writes).into_iter().partition(|(_, h)| wait || h.is_finished());
         self.recording_markers.writes = running;
         for (recording, h) in done {
             match h.join().unwrap_or_else(|_| Err("the marker file could not be written".into())) {
@@ -977,7 +979,10 @@ mod tests {
         assert_eq!(s.get(0).err(), Some("there is no marker 0: the session holds markers 1 to 1".into()));
         assert_eq!(s.get(2).err(), Some("there is no marker 2: the session holds markers 1 to 1".into()));
         let v = s.renamed(1, "Kickoff".into(), Placed::Kept(1.0), Placed::Failed("full".into())).unwrap();
-        assert_eq!((v["name"].clone(), v["recording"].clone(), v["audio_tracks"].clone()), (json!("Kickoff"), json!({"seconds": 1.0}), json!({"error": "full"})));
+        assert_eq!(
+            (v["name"].clone(), v["recording"].clone(), v["audio_tracks"].clone()),
+            (json!("Kickoff"), json!({"seconds": 1.0}), json!({"error": "full"}))
+        );
         let e = s.renamed(1, "Late".into(), Placed::Failed("r".into()), Placed::Failed("a".into())).unwrap_err();
         assert_eq!(e, "the marker was not renamed (the recording: r; the audio tracks: a)");
         let e = s.renamed(1, "Late".into(), Placed::Off, Placed::Off).unwrap_err();
