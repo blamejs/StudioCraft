@@ -9,8 +9,8 @@ sizes and bitrates, are listed in [MECHANICS.md](../MECHANICS.md).
 A scene is a stack of sources. You add, rename, duplicate, reorder and remove scenes and sources.
 In the preview you drag, resize and rotate sources. A source that is not rotated snaps when an
 edge or its center line comes within 8 points of a canvas edge, a canvas center line, or an edge or
-center line of another visible source, and a line shows what it snapped to. A move snaps on each
-axis. A corner drag snaps the edges it moves and keeps the aspect ratio: the edge closer to its
+center line of another visible source, and lines show what it snapped to. A move snaps on each
+axis, and each edge or center line of the source that then lies on a line shows that line. A corner drag snaps the edges it moves and keeps the aspect ratio: the edge closer to its
 line snaps and the other edge follows the ratio. With Shift held the corner drag changes the ratio
 and each edge snaps on its own. Holding Alt (Option on macOS) turns snapping off. One drag is one
 undo step. You can lock a source so it can't be moved, or lock the whole preview. Each scene item can be
