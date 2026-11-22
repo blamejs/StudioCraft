@@ -136,16 +136,16 @@ the window asks for confirmation first, and the reply's `confirming` is `true`.
 `ui.dialog` answers the open name prompt (New Profile, Rename Scene Collection and the others) or
 the exit confirmation as its buttons do. `ok` presses OK in the name prompt and Stop and Exit in
 the exit confirmation; `cancel` presses Cancel. In a name prompt, `text` replaces the name before
-the button is pressed. A name the prompt refuses, such as one already taken, is an error and the
-prompt stays open with the error shown. The exit confirmation takes no `text`. When neither
-dialog is open the request is an error.
+the button is pressed. A name the prompt refuses, such as one already taken, is an error in
+English, and the prompt stays open with the error shown under its field until the name changes.
+The exit confirmation takes no `text`. When neither dialog is open the request is an error.
 
 ### `ui.inspect`
 
 | Field | Value |
 | --- | --- |
 | `window` | `{"width", "height"}` in points. |
-| `dialogs` | `settings`, `about`, `stats`, `encoders`, `confirm_exit` and `updates` (the update prompt or the result of Help › Check for Updates; each `true` or `false`), `properties` and `filters` (the ids of the sources whose windows are open) and `prompt` (`{"title", "text", "error"}` of the name prompt, or `null`). |
+| `dialogs` | `settings`, `about`, `stats`, `encoders`, `confirm_exit` and `updates` (the update prompt or the result of Help › Check for Updates; each `true` or `false`), `properties` and `filters` (the ids of the sources whose windows are open) and `prompt` (`{"title", "text", "error"}` of the name prompt, or `null`; `error` is the refusal shown under the field, in English, or `null`). |
 | `docks` | Each shown dock in the strip (`scenes`, `sources`, `mixer`, `app_audio`) from left to right, with its `rect`: `{"x", "y", "width", "height"}`; its `header` rect; its `title` rect, where a right-click opens the dock's menu; `title_truncated`, whether the title was shortened to fit; and `actions`, each header action with its `name` (`add`, `remove`, `up`, `down`, `properties`) and `rect`, from left to right. |
 | `floating_docks` | Each shown dock in a window of its own, with the same fields as `docks`; its `rect` is the window's. |
 | `dock_layouts` | The names of the saved dock layouts, in the order they were first saved. |

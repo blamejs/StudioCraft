@@ -253,19 +253,97 @@ fn the_strips_empty_area_moves_the_window_and_a_double_click_maximizes_it() {
     assert!(!sent.contains(&egui::ViewportCommand::StartDrag), "a double-click does not move the window: {sent:?}");
 }
 
+/// Whether the exit question's prompt is open on the window's dialog host.
+fn exit_prompt_shown(a: &StudioApp) -> bool {
+    let (Some(host), Some(id)) = (&a.window_dialogs, a.exit_prompt) else { return false };
+    host.with(|h| h.get_by_id::<StandardPrompt>(id).is_some())
+}
+
 #[test]
-fn answer_dialog_presses_the_exit_confirmation_buttons() {
+fn the_exit_question_is_a_prompt_on_the_dialog_host_that_escape_and_the_control_channel_answer() {
     let mut a = app();
     let ctx = crate::test_context();
-    a.confirm_exit = true;
-    assert!(a.answer_dialog(&ctx, true, Some("x")).is_err_and(|e| e.contains("no `text`")));
-    assert!(a.confirming_exit(), "a refused answer leaves the confirmation open");
-    assert_eq!(a.answer_dialog(&ctx, false, None), Ok(json!({"dialog": "confirm_exit", "closed": true, "exiting": false})));
-    assert!(!a.confirming_exit() && !a.exit_confirmed);
-    a.confirm_exit = true;
-    assert_eq!(a.answer_dialog(&ctx, true, None), Ok(json!({"dialog": "confirm_exit", "closed": true, "exiting": true})));
-    assert!(!a.confirming_exit() && a.exit_confirmed);
-    assert!(a.answer_dialog(&ctx, true, None).is_err(), "nothing is left to answer");
+    frame(&mut a, &ctx, vec![]);
+    // (case, answer: None presses Escape in the window, Some(ok) answers through `ui.dialog`) -> closes the window
+    for (case, answer, exits) in [("Escape cancels", None, false), ("Cancel keeps running", Some(false), false), ("Stop and Exit", Some(true), true)]
+    {
+        a.confirm_exit = true;
+        frame(&mut a, &ctx, vec![]);
+        assert!(exit_prompt_shown(&a), "{case}: the question shows on the dialog host");
+        assert!(a.answer_dialog(&ctx, true, Some("x")).is_err_and(|e| e.contains("no `text`")), "{case}");
+        assert!(a.confirming_exit() && exit_prompt_shown(&a), "{case}: a refused answer leaves the question open");
+        let shown = a.exit_prompt;
+        match answer {
+            None => frame(&mut a, &ctx, press(Key::Escape, Modifiers::NONE)),
+            Some(ok) => {
+                assert_eq!(a.answer_dialog(&ctx, ok, None), Ok(json!({"dialog": "confirm_exit", "closed": true, "exiting": ok})), "{case}");
+            }
+        }
+        assert!(!a.confirming_exit() && a.exit_prompt.is_none(), "{case}");
+        assert_eq!(a.exit_confirmed, exits, "{case}");
+        let gone = a.window_dialogs.as_ref().zip(shown).is_some_and(|(h, id)| h.with(|h| h.get_by_id::<StandardPrompt>(id).is_none()));
+        assert!(gone, "{case}: the prompt left the dialog host");
+        assert!(a.answer_dialog(&ctx, true, None).is_err(), "{case}: nothing is left to answer");
+    }
+}
+
+#[test]
+fn a_name_prompt_is_answered_before_the_first_frame_and_shows_its_refusal_once_open() {
+    let mut a = app();
+    let ctx = crate::test_context();
+    run(&mut a, &ctx, "collection.new", json!({})).unwrap();
+    let taken = DEFAULT_NAME.to_lowercase();
+    assert!(a.answer_dialog(&ctx, true, Some(&taken)).is_err_and(|e| e.contains("already")));
+    assert!(a.ui_inspect(&ctx)["dialogs"]["prompt"]["error"].as_str().is_some_and(|e| e.contains("already")));
+    frame(&mut a, &ctx, vec![]);
+    let id = a.naming.as_ref().and_then(|n| n.dialog).expect("the prompt opens with the first frame");
+    let host = a.window_dialogs.clone().unwrap();
+    assert!(matches!(host.with(|h| h.held_state(id)), Some(craft_ui::dialog::HeldOk::Refused(_))), "the refusal shows under the field");
+    let fields = host.with(|h| h.get_by_id::<HostedParamDialog>(id).map(|d| d.fields().text(NAME_FIELD).map(str::to_string)));
+    assert_eq!(fields, Some(Some(taken)));
+    assert_eq!(a.answer_dialog(&ctx, true, Some("Second")), Ok(json!({"dialog": "prompt", "closed": true, "name": "Second"})));
+    assert_eq!(a.studio().collection().name, "Second");
+}
+
+#[test]
+fn a_refused_name_keeps_the_name_prompt_open_with_its_error() {
+    let mut a = app();
+    let ctx = crate::test_context();
+    frame(&mut a, &ctx, vec![]);
+    run(&mut a, &ctx, "collection.new", json!({})).unwrap();
+    frame(&mut a, &ctx, vec![]);
+    let id = a.naming.as_ref().and_then(|n| n.dialog).expect("the name prompt shows on the dialog host");
+    let host = a.window_dialogs.clone().unwrap();
+    // OK with a name that is taken (names are compared without case), as the button does.
+    host.with(|h| h.set_json_field(&ctx, id, NAME_FIELD, json!(DEFAULT_NAME.to_lowercase()))).unwrap();
+    host.with(|h| h.confirm_by_id(&ctx, id));
+    // Until the window has answered that OK, the control channel's answer is refused.
+    assert!(a.answer_dialog(&ctx, true, Some("Other")).is_err_and(|e| e.contains("still being answered")));
+    for _ in 0..2 {
+        frame(&mut a, &ctx, vec![]);
+    }
+    assert!(host.with(|h| h.get_by_id::<HostedParamDialog>(id).is_some()), "the prompt stays open");
+    assert!(matches!(host.with(|h| h.held_state(id)), Some(craft_ui::dialog::HeldOk::Refused(_))), "its error shows under the field");
+    let prompt = &a.ui_inspect(&ctx)["dialogs"]["prompt"];
+    assert!(prompt["error"].as_str().is_some_and(|e| e.contains("already")), "{prompt}");
+    assert_eq!(a.collections, [DEFAULT_NAME]);
+    // A name it takes closes it and makes the collection.
+    host.with(|h| h.set_json_field(&ctx, id, NAME_FIELD, json!("Second"))).unwrap();
+    frame(&mut a, &ctx, vec![]);
+    assert_eq!(a.ui_inspect(&ctx)["dialogs"]["prompt"]["error"], Value::Null, "a changed name ends the error");
+    host.with(|h| h.confirm_by_id(&ctx, id));
+    for _ in 0..2 {
+        frame(&mut a, &ctx, vec![]);
+    }
+    assert!(a.naming.is_none() && host.with(|h| h.get_by_id::<HostedParamDialog>(id).is_none()));
+    assert_eq!(a.studio().collection().name, "Second");
+    // Escape closes the prompt without a name.
+    run(&mut a, &ctx, "profile.new", json!({})).unwrap();
+    frame(&mut a, &ctx, vec![]);
+    frame(&mut a, &ctx, press(Key::Escape, Modifiers::NONE));
+    frame(&mut a, &ctx, vec![]);
+    assert!(a.naming.is_none(), "Escape cancels the name prompt");
+    assert_eq!(a.profiles, [DEFAULT_NAME]);
 }
 
 #[test]
@@ -470,7 +548,7 @@ fn shortcuts_run_their_commands_unless_a_dialog_has_the_keys() {
     let prompt: Setup = |a, ctx| {
         run(a, ctx, "scene.add", json!({"name": "Second"})).unwrap();
         a.studio.seal_history();
-        a.ask_name(Named::NewProfile, "");
+        a.ask_name(ctx, Named::NewProfile, "");
     };
     // (case, setup, key, modifiers, scenes after, program scene after when the case checks it)
     let rows: [(&str, Setup, Key, Modifiers, usize, Option<&str>); 5] = [
@@ -1932,7 +2010,10 @@ fn window_command_errors_are_shown_translated_and_returned_in_english() {
     let e = a.answer_dialog(&ctx, true, Some("a/b")).unwrap_err();
     assert_eq!(e, "a name can't contain '/'");
     assert_eq!(a.ui_inspect(&ctx)["dialogs"]["prompt"]["error"], json!(e));
-    assert_eq!(a.prompt.as_ref().and_then(|p| p.error.as_ref()).map(Msg::shown).as_deref(), Some("ein Name darf '/' nicht enthalten"));
+    let id = a.naming.as_ref().and_then(|n| n.dialog).unwrap();
+    let held = a.window_dialogs.as_ref().and_then(|h| h.with(|h| h.held_state(id)));
+    let Some(craft_ui::dialog::HeldOk::Refused(shown)) = held else { panic!("the prompt shows no refusal: {held:?}") };
+    assert_eq!(shown.as_str(), "ein Name darf '/' nicht enthalten");
     let e = canvas_for((8, 4)).unwrap_err();
     assert_eq!(e.english(), "a 8 × 4 display can't be the canvas: each side must be from 16 to 8192 pixels");
     assert_eq!(e.shown(), "ein Bildschirm mit 8 × 4 kann nicht die Leinwand sein: jede Seite muss 16 bis 8192 Pixel haben");

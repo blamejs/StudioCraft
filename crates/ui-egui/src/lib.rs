@@ -39,14 +39,16 @@ use craft_keymap::{CommandRef, Keymap, Overrides};
 use craft_menu::{LanguageChoice, MenuBar};
 use craft_theme::variant::Tone;
 use craft_ui::contract::{Bind, Entry, Props as _, Show as _, ShowContainer as _, Tracked};
+use craft_ui::dialog::{DialogId, DialogResult, PromptChoice, StandardPrompt};
 use craft_ui::notices::{NoticeCenter, PostedNotice};
+use craft_ui::patterns::form_dialogs::{DialogFields, FieldValue, HostedParamDialog, Param, ParamDialog, ParamKind};
 use craft_ui::pickers::Select;
 use craft_ui::runtime::commands::{AppCatalog, CommandInput};
-use craft_ui::runtime::env::WindowKey;
+use craft_ui::runtime::env::{Label, WindowKey};
 use craft_ui::runtime::frame::{FrameInput, FrameOutput};
 use craft_ui::runtime::toast::{self, ToastId};
 use craft_ui::shell::embed::{self, CloseDecision};
-use craft_ui::shell::{AppShell, TitleBar};
+use craft_ui::shell::{AppShell, ShellDialogsCx as _, TitleBar, WindowDialogs};
 use craft_ui::{InstallError, InstallSpec};
 use craft_window::policy::Decision;
 use craft_window::system::{NoWindows, SystemWindows};
@@ -147,11 +149,17 @@ impl Named {
     }
 }
 
-/// A small window asking for a name.
-struct Prompt {
+/// The key of the name prompt on the window's dialog host, and of its one field.
+const NAME_DIALOG: &str = "name-prompt";
+const NAME_FIELD: &str = "name";
+
+/// A name being asked for: what it is for, the text the prompt opens with, the prompt's id once
+/// the window's dialog host shows it, and the last name it refused, in English.
+struct Naming {
     what: Named,
     text: String,
-    error: Option<Msg>,
+    dialog: Option<DialogId>,
+    refused: Option<Msg>,
 }
 
 /// A notice: kept in English, translated when its card is posted.
@@ -218,7 +226,11 @@ pub struct StudioApp {
     /// button, a menu item or a field), not from the control channel.
     from_user: bool,
     transition_schema: Option<SettingsSchema>,
-    prompt: Option<Prompt>,
+    /// The name prompt while it is open or waiting for the dialog host.
+    naming: Option<Naming>,
+    /// The window's dialog host, known from the first frame on: the name prompt and the exit
+    /// question show on it.
+    window_dialogs: Option<WindowDialogs>,
     about: bool,
     /// How the About window's Credits list names people.
     credit_names: credits::NameMode,
@@ -229,7 +241,10 @@ pub struct StudioApp {
     encoders_ffmpeg: Option<Msg>,
     /// The Scopes window's feed and thread while it is open.
     scopes: Option<scopes::Scopes>,
+    /// The exit question is asked: a close came while an output runs.
     confirm_exit: bool,
+    /// The exit question's prompt on the window's dialog host, once it shows there.
+    exit_prompt: Option<DialogId>,
     exit_confirmed: bool,
     /// A close was canceled because the scene collection could not be saved; the next one goes ahead.
     close_despite_failed_save: bool,
@@ -356,7 +371,8 @@ impl StudioApp {
             streaming: None,
             from_user: false,
             transition_schema: None,
-            prompt: None,
+            naming: None,
+            window_dialogs: None,
             about: false,
             credit_names: credits::NameMode::default(),
             licenses: None,
@@ -364,6 +380,7 @@ impl StudioApp {
             encoders_ffmpeg: None,
             scopes: None,
             confirm_exit: false,
+            exit_prompt: None,
             exit_confirmed: false,
             close_despite_failed_save: false,
             collection_on_disk: true,
@@ -719,7 +736,100 @@ impl StudioApp {
         let busy = self.outputs_running();
         if busy && !self.exit_confirmed {
             self.confirm_exit = true;
+            self.open_waiting_dialogs(ctx);
         } else {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+        }
+    }
+
+    /// Show the name prompt and the exit question that wait for the window's dialog host, once the
+    /// host is known. The exit question's buttons stand in the platform's order; Escape cancels it.
+    fn open_waiting_dialogs(&mut self, ctx: &egui::Context) {
+        let Some(host) = self.window_dialogs.clone() else { return };
+        if let Some(n) = self.naming.as_mut().filter(|n| n.dialog.is_none()) {
+            let title = tl!(n.what.title()).to_string();
+            let label = tl!("Name").to_string();
+            let fields = DialogFields::from_pairs([(NAME_FIELD, FieldValue::Text(n.text.clone()))]);
+            let dialog = HostedParamDialog::new(ctx, NAME_DIALOG, fields, move |fields| {
+                ParamDialog::new(NAME_DIALOG, title.clone(), vec![Param::new(NAME_FIELD, label.clone(), ParamKind::text(""))])
+                    .values(Bind::bound(fields))
+            })
+            .held_ok();
+            let refused = n.refused.as_ref().map(|e| Label::from(e.shown()));
+            n.dialog = Some(host.with(|h| {
+                let id = h.open(dialog);
+                // A name refused before the prompt could show: OK files it, and the refusal shows
+                // under the field as it would have.
+                if let Some(refused) = refused {
+                    h.confirm_by_id(ctx, id);
+                    if let Some(d) = h.get_mut_by_id::<HostedParamDialog>(id) {
+                        let _ = d.take_ok();
+                        d.answer_ok(Err(refused));
+                    }
+                }
+                id
+            }));
+        }
+        if self.confirm_exit && self.exit_prompt.is_none() {
+            let prompt = StandardPrompt::custom(tl!(
+                "A recording, stream or replay buffer is running. Exiting stops it; a recording is finished and saved first, and the replay buffer's unsaved video is lost."
+            )
+            .to_string())
+            .title(tl!("Exit StudioCraft?").to_string())
+            .button(PromptChoice::Proceed, tl!("Stop and Exit").to_string())
+            .button(PromptChoice::Cancel, tl!("Cancel").to_string())
+            .instance("exit");
+            self.exit_prompt = Some(host.with(|h| h.open(prompt)));
+        }
+    }
+
+    /// The answers of the name prompt and the exit question: a name OK filed is checked and taken
+    /// or refused, and a closed prompt ends its question.
+    fn prompt_answers(&mut self, ctx: &egui::Context) {
+        let Some(host) = self.window_dialogs.clone() else { return };
+        if let Some((what, id)) = self.naming.as_ref().and_then(|n| Some((n.what, n.dialog?))) {
+            let filed = host.with(|h| h.get_mut_by_id::<HostedParamDialog>(id).and_then(HostedParamDialog::take_ok));
+            if let Some(filed) = filed {
+                let name = filed.fields.text(NAME_FIELD).unwrap_or_default().trim().to_string();
+                let _ = self.answer_name(&host, what, id, &name);
+            }
+            if host.with(|h| h.take_by_id::<HostedParamDialog>(id)).is_some() {
+                self.naming = None;
+            }
+        }
+        if let Some(id) = self.exit_prompt {
+            match host.with(|h| h.take_by_id::<StandardPrompt>(id)) {
+                Some(DialogResult::Ok(answer)) => self.exit_answered(ctx, answer.choice == PromptChoice::Proceed),
+                // Cancel, Escape or the close action.
+                Some(_) => self.exit_answered(ctx, false),
+                None => {}
+            }
+        }
+    }
+
+    /// Check the name the prompt `id` filed for `what` and answer the prompt: it closes with a name
+    /// that was taken, and shows the refusal under its field otherwise. The refusal is returned.
+    fn answer_name(&mut self, host: &WindowDialogs, what: Named, id: DialogId, name: &str) -> Result<(), Msg> {
+        let result = self.named(what, name);
+        let answer = result.as_ref().map(|_| ()).map_err(|e| Label::from(e.shown()));
+        host.with(|h| {
+            if let Some(d) = h.get_mut_by_id::<HostedParamDialog>(id) {
+                d.answer_ok(answer);
+            }
+        });
+        if let Some(n) = &mut self.naming {
+            n.refused = result.as_ref().err().cloned();
+        }
+        result
+    }
+
+    /// The exit question was answered: Stop and Exit (`stop`) closes the window, which stops the
+    /// outputs; Cancel keeps them running.
+    fn exit_answered(&mut self, ctx: &egui::Context, stop: bool) {
+        self.confirm_exit = false;
+        self.exit_prompt = None;
+        if stop {
+            self.exit_confirmed = true;
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         }
     }
@@ -1028,7 +1138,7 @@ impl StudioApp {
             "dock.reset" => self.set_docks(store::Docks::default()),
             "dock.layout_save" => {
                 let Some(name) = cmd.params.get("name") else {
-                    self.ask_name(Named::SaveDockLayout, "");
+                    self.ask_name(ctx, Named::SaveDockLayout, "");
                     return Ok(json!({"asking": true}));
                 };
                 let name = name.as_str().ok_or_else(|| tmsg!("`dock.layout_save`: `name` is a string"))?;
@@ -1051,28 +1161,28 @@ impl StudioApp {
                 }
                 return Ok(json!({"removed": name}));
             }
-            "profile.new" => self.ask_name(Named::NewProfile, ""),
+            "profile.new" => self.ask_name(ctx, Named::NewProfile, ""),
             "profile.duplicate" => {
                 let n = format!("{} copy", self.studio.profile().name);
-                self.ask_name(Named::DuplicateProfile, &n);
+                self.ask_name(ctx, Named::DuplicateProfile, &n);
             }
             "profile.rename" => {
                 let n = self.studio.profile().name.clone();
-                self.ask_name(Named::RenameProfile, &n);
+                self.ask_name(ctx, Named::RenameProfile, &n);
             }
             "profile.remove" => self.remove_profile()?,
             "profile.switch" => {
                 let name = Self::param_str(cmd, "name")?.to_string();
                 self.switch_profile(&name)?;
             }
-            "collection.new" => self.ask_name(Named::NewCollection, ""),
+            "collection.new" => self.ask_name(ctx, Named::NewCollection, ""),
             "collection.duplicate" => {
                 let n = format!("{} copy", self.studio.collection().name);
-                self.ask_name(Named::DuplicateCollection, &n);
+                self.ask_name(ctx, Named::DuplicateCollection, &n);
             }
             "collection.rename" => {
                 let n = self.studio.collection().name.clone();
-                self.ask_name(Named::RenameCollection, &n);
+                self.ask_name(ctx, Named::RenameCollection, &n);
             }
             "collection.remove" => self.remove_collection()?,
             "collection.switch" => {
@@ -1204,8 +1314,17 @@ impl StudioApp {
         result
     }
 
-    fn ask_name(&mut self, what: Named, text: &str) {
-        self.prompt = Some(Prompt { what, text: text.to_string(), error: None });
+    /// Ask for a name for `what` in the name prompt, opening with `text`. A prompt already open is
+    /// closed first.
+    fn ask_name(&mut self, ctx: &egui::Context, what: Named, text: &str) {
+        if let Some((host, id)) = self.window_dialogs.clone().zip(self.naming.as_ref().and_then(|n| n.dialog)) {
+            host.with(|h| {
+                h.cancel_by_id(ctx, id);
+                h.take_by_id::<HostedParamDialog>(id);
+            });
+        }
+        self.naming = Some(Naming { what, text: text.to_string(), dialog: None, refused: None });
+        self.open_waiting_dialogs(ctx);
     }
 
     fn named(&mut self, what: Named, name: &str) -> Result<(), Msg> {
@@ -1462,8 +1581,7 @@ impl StudioApp {
     /// draws itself. The window keys the runtime carried out itself (F6, F10) and the edit
     /// commands the window has no use for (Copy, Paste, Backspace's Delete) are skipped.
     pub fn frame_input(&mut self, ctx: &egui::Context, out: FrameOutput) -> FrameInput {
-        let modal = self.prompt.is_some() || self.confirm_exit || self.settings.is_some();
-        if !modal {
+        if !self.modal_open() {
             for fired in &out.fired {
                 let cmd = commands::fired_command(&fired.command);
                 if !commands::runtime_runs(&cmd) && !commands::unused_edit(&cmd) {
@@ -1485,6 +1603,12 @@ impl StudioApp {
             ctx.set_theme(shown);
         }
         FrameInput::new(root).commands(input).host(Arc::clone(&self.host))
+    }
+
+    /// Whether the name prompt, the exit question or Settings is open: the window's shortcuts and
+    /// menu keys wait until it closes.
+    fn modal_open(&self) -> bool {
+        self.naming.is_some() || self.confirm_exit || self.settings.is_some()
     }
 
     /// The runtime's command catalog: every command a shortcut can be given. The commands a linked
@@ -1516,7 +1640,7 @@ impl StudioApp {
         // The menu rows' commands come back through the frame output (`frame_input`). F10 and Alt
         // leave the menu bar alone while a prompt, the exit confirmation or Settings is open, as
         // `frame_input` drops the commands then.
-        let keyboard = !(self.prompt.is_some() || self.confirm_exit || self.settings.is_some());
+        let keyboard = !self.modal_open();
         let shown = TitleBar::new().show(ui, |ui, _| {
             let room = ui.available_width();
             self.top_row(ui, room, &bar, keyboard, acts);
@@ -2155,70 +2279,6 @@ impl StudioApp {
                 self.licenses = None;
             }
         }
-
-        if let Some(p) = &mut self.prompt {
-            let title = tl!(p.what.title());
-            let mut done: Option<bool> = None;
-            egui::Modal::new(egui::Id::unique("name-prompt")).show(ctx, |ui| {
-                ui.heading(title);
-                ui.label(tl!("Name"));
-                let r = ui.add(egui::TextEdit::singleline(&mut p.text).desired_width(280.0));
-                r.request_focus();
-                if let Some(e) = &p.error {
-                    ui.colored_label(ui.visuals().error_fg_color, e.shown());
-                }
-                ui.horizontal(|ui| {
-                    if ui.button(tl!("OK")).clicked() || ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-                        done = Some(true);
-                    }
-                    if ui.button(tl!("Cancel")).clicked() || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
-                        done = Some(false);
-                    }
-                });
-            });
-            match done {
-                Some(true) => {
-                    let (what, text) = (p.what, p.text.trim().to_string());
-                    match self.named(what, &text) {
-                        Ok(()) => self.prompt = None,
-                        Err(e) => {
-                            if let Some(p) = &mut self.prompt {
-                                p.error = Some(e);
-                            }
-                        }
-                    }
-                }
-                Some(false) => self.prompt = None,
-                None => {}
-            }
-        }
-
-        if self.confirm_exit {
-            let mut choice = None;
-            egui::Modal::new(egui::Id::unique("confirm-exit")).show(ctx, |ui| {
-                ui.heading(tl!("Exit StudioCraft?"));
-                ui.label(tl!(
-                    "A recording, stream or replay buffer is running. Exiting stops it; a recording is finished and saved first, and the replay buffer's unsaved video is lost."
-                ));
-                ui.horizontal(|ui| {
-                    if ui.button(tl!("Stop and Exit")).clicked() {
-                        choice = Some(true);
-                    }
-                    if ui.button(tl!("Cancel")).clicked() || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
-                        choice = Some(false);
-                    }
-                });
-            });
-            match choice {
-                Some(true) => {
-                    self.confirm_exit = false;
-                    self.exit_confirmed = true;
-                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-                }
-                Some(false) => self.confirm_exit = false,
-                None => {}
-            }
-        }
     }
 
     /// Draw one frame of the whole window.
@@ -2229,17 +2289,24 @@ impl StudioApp {
         self.dialog_answers(&ctx);
         let background = theme::with_root(&ctx, |cx| theme::color(cx, cx.tokens.color.surface.background));
         // The title bar is the shell's title slot, and its edges resize the window where the app
-        // draws the frame. The status bar, the docks and the canvas fill the shell's body.
+        // draws the frame. The status bar, the docks and the canvas fill the shell's body. The
+        // shell runs the window's dialog host after the body, so a prompt opened in the body shows
+        // in the same pass.
         let mut pass = Pass { app: self, acts: Vec::new() };
         AppShell::new(WindowKey::main())
             .title_bar(|ui, _, pass: &mut Pass<'_>| pass.app.title_bar(ui, &mut pass.acts))
-            .body(move |ui, _, pass: &mut Pass<'_>| {
+            .body(move |ui, bcx, pass: &mut Pass<'_>| {
+                if let Some(host) = bcx.dialogs() {
+                    pass.app.window_dialogs = Some(host);
+                    pass.app.open_waiting_dialogs(ui.ctx());
+                }
                 pass.app.status_bar(ui);
                 pass.app.docks(ui, &mut pass.acts);
                 egui::CentralPanel::default().frame(egui::Frame::NONE.fill(background)).show(ui, |ui| pass.app.central(ui, &mut pass.acts));
             })
             .show(ui, &mut pass);
         let mut acts = pass.acts;
+        self.prompt_answers(&ctx);
         self.windows(&ctx, &mut acts);
         // An update never starts while a recording, stream or replay buffer runs.
         let idle = !self.outputs_running();
@@ -2276,15 +2343,17 @@ impl StudioApp {
     pub fn logic(&mut self, ctx: &egui::Context) {
         self.tick_studio(ctx);
         self.ticked_in_logic = true;
-        embed::logic(ctx, || self.close_decision());
+        embed::logic(ctx, || self.close_decision(ctx));
     }
 
-    /// Whether the window may close now that it was asked to: it is held while an output runs and
-    /// the user has not confirmed, and once when the scene collection could not be saved.
-    fn close_decision(&mut self) -> CloseDecision {
+    /// Whether the window may close now that it was asked to: it is held with the exit question
+    /// open while an output runs and the user has not confirmed, and once when the scene
+    /// collection could not be saved.
+    fn close_decision(&mut self, ctx: &egui::Context) -> CloseDecision {
         let busy = self.outputs_running();
         if busy && !self.exit_confirmed {
             self.confirm_exit = true;
+            self.open_waiting_dialogs(ctx);
             CloseDecision::Hold
         } else if !self.save_all() && !self.close_despite_failed_save {
             // The window stays open with the save error shown; closing again closes it.

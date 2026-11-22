@@ -144,9 +144,9 @@ fn every_label_drawn_in_the_pseudo_locale_went_through_translation() {
     seen.extend(shown(&mut a, &ctx));
     a.properties.clear();
     a.filters.clear();
-    a.ask_name(crate::Named::NewProfile, "");
+    a.ask_name(&ctx, crate::Named::NewProfile, "");
     seen.extend(shown(&mut a, &ctx));
-    a.prompt = None;
+    a.answer_dialog(&ctx, false, None).unwrap();
     a.confirm_exit = true;
     a.notify(tmsg!("Exported the scene collection to {path}", path = "/tmp/show.json"), false);
     seen.extend(shown(&mut a, &ctx));
