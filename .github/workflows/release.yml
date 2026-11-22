@@ -40,7 +40,7 @@ jobs:
     permissions:
       contents: read
       pull-requests: read
-    uses: storytold/craft-common-actions/.github/workflows/refresh-contributors.yml@0bef64f155fcea81edbd9542381777358bfbdcf4
+    uses: storytold/craft-common-actions/.github/workflows/refresh-contributors.yml@102f310c1ae7eec6e2013bfecab0b3d20c9f9218
 
   release:
     needs: credits
@@ -48,14 +48,13 @@ jobs:
     permissions:
       contents: write
       packages: write
-    # Pinned to craft-common-actions e7567444 (2026-11-20T04:09Z). Later commits make the Linux jobs
-    # call actions/rust-channel, whose channel.py imports tomllib (Python 3.11 or later), and those
-    # jobs run on Ubuntu 22.04, which has Python 3.10. The repository has no rust-toolchain.toml, so
-    # both versions install the stable toolchain. Move the pin to take later changes once the Linux
-    # jobs can run rust-channel. The pin covers the workflow file only: the shared workflow calls
-    # its own actions (import-signing-key, sign-rpms, draft-release and others) at @main. Its linux
-    # and flatpak jobs import LINUX_SIGNING_KEY in the job that builds and packages the app.
-    uses: storytold/craft-common-actions/.github/workflows/release.yml@e756744483bc76ef21be2fcabe65e0af3106eab8
+    # Pinned to craft-common-actions main at 2026-11-22T15:57Z; move the pin to take later changes.
+    # Each build job runs actions/rust-channel, which installs the toolchain a rust-toolchain.toml
+    # names. The repository has none, so the jobs install the stable toolchain. The pin covers the
+    # workflow file only: the shared workflow calls its own actions (rust-channel,
+    # import-signing-key, sign-rpms, draft-release and others) at @main. Its linux and flatpak jobs
+    # import LINUX_SIGNING_KEY in the job that builds and packages the app.
+    uses: storytold/craft-common-actions/.github/workflows/release.yml@102f310c1ae7eec6e2013bfecab0b3d20c9f9218
     with:
       dry-run: ${{ github.event_name == 'schedule' || inputs.dry-run == true }}
       app-name: studiocraft
@@ -145,7 +144,7 @@ jobs:
           cat SHA3-512SUMS.txt
       - name: Import the Linux signing key
         id: key
-        uses: storytold/craft-common-actions/actions/import-signing-key@0bef64f155fcea81edbd9542381777358bfbdcf4
+        uses: storytold/craft-common-actions/actions/import-signing-key@102f310c1ae7eec6e2013bfecab0b3d20c9f9218
         with:
           key: ${{ github.ref == 'refs/heads/release' && secrets.LINUX_SIGNING_KEY || '' }}
       - name: Sign SHA3-512SUMS.txt
