@@ -78,10 +78,10 @@ pub const APP_ID: &str = "studiocraft";
 /// The macOS bundle id, the Flatpak id, the Linux desktop-file id and the window's app id.
 pub const BUNDLE_ID: &str = "ai.storyteller.studiocraft";
 
-/// StudioCraft as the updater knows it: where its releases are listed, the accent color of the
-/// update prompt, and the icon the prompt shows and the menu entry beside an AppImage uses.
+/// StudioCraft as the updater knows it: where its releases are listed, and the icon the update
+/// prompt shows and the menu entry beside an AppImage uses. It sets no accent color, so the update
+/// prompt takes the theme's accent.
 pub const UPDATE_APP: craft_update::app::App = craft_update::app::App {
-    accent: Some([0xd9, 0x48, 0x3b]),
     icon_png: Some(app_icon::ICON_128_PNG),
     ..craft_update::app::App::new(APP_ID, APP_NAME, "Recording and live streaming", "blamejs/StudioCraft")
 };
@@ -237,8 +237,8 @@ pub struct StudioApp {
     transition_schema: Option<SettingsSchema>,
     /// The name prompt while it is open or waiting for the dialog host.
     naming: Option<Naming>,
-    /// The window's dialog host, known from the first frame on: the name prompt and the exit
-    /// question show on it.
+    /// The window's dialog host, known from the first frame on: the name prompt, the exit
+    /// question, the update prompt and the result of Help › Check for Updates show on it.
     window_dialogs: Option<WindowDialogs>,
     about: bool,
     /// How the About window's Credits list names people.
@@ -2339,7 +2339,7 @@ impl StudioApp {
         self.windows(&ctx, &mut acts);
         // An update never starts while a recording, stream or replay buffer runs.
         let idle = !self.outputs_running();
-        match updates_ui::show(&mut self.updates, ui, idle) {
+        match updates_ui::show(&mut self.updates, self.window_dialogs.as_ref(), &ctx, idle) {
             updates_ui::Asked::Nothing => {}
             updates_ui::Asked::OpenUrl(url) => {
                 if let Err(e) = studiocraft_platform::shell::open_url(&url) {
