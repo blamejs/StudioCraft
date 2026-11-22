@@ -317,7 +317,11 @@ through a channel that holds one answer. The destination's thread waits at most 
 (`stream::LOOKUP_WAIT`) and wakes at once for a stop. A lookup thread lives until the system's
 resolver returns, which StudioCraft cannot cut short, so each destination keeps at most two
 (`stream::MAX_LOOKUPS`) and the process at most 32 (`stream::MAX_ALL_LOOKUPS`), counted across
-streams that were stopped and started again.
+streams that were stopped and started again. While at least one destination waits for the network,
+the stream runs one route thread, which checks each waiting destination's route every 1 s
+(`stream::NET_POLL`) with a UDP connect that sends nothing (`platform::net::route_to`) and wakes
+the destinations whose route returned. The thread ends when no destination waits or the stream
+ends.
 
 A recording with H.264 (built in) runs a video encode thread, an audio encode thread and a file
 thread that writes the Matroska file (`outputs/src/native.rs`). The encode threads hand packets to

@@ -38,6 +38,13 @@ status to see the error and each address that was tried.
 reach any of the server's addresses that were tried (at most 4). Check that the computer is connected to a network. On a network that
 offers only IPv4 or only IPv6, check that the server has an address of that kind.
 
+**"Waiting for the network".** This computer has no network route to the server: the network is
+down, unplugged or not yet connected. It tries as soon as a route returns. A server given as an IP
+address is not tried while the destination waits, and each longest wait of Settings › Stream spent
+waiting counts as a failed try. A server given by name is still tried at the usual time. If the
+computer is connected and the destination still waits, check the network adapter and any VPN that
+changes the routes.
+
 **"the server's name could not be looked up", "the server's name does not exist; check the server
 address" or "the DNS server did not answer for the server's name".** The name in the server
 address did not resolve. Check the spelling of the server address. When other sites open in a web

@@ -26,6 +26,13 @@
 //!   keeps its thread until the system returns, so each destination keeps at most [`MAX_LOOKUPS`]
 //!   lookups outstanding and the process at most [`MAX_ALL_LOOKUPS`], and an answer that comes
 //!   after its try gave up is not used.
+//! - Before a try, a destination asks the system whether it has a network route to the server's
+//!   last known addresses ([`studiocraft_platform::net::route_to`], which sends nothing), or, when
+//!   none is known and the last try failed for a network cause, to any address. With no route it
+//!   waits without connecting ([`DestinationStatus::WaitingForNetwork`]). One thread per stream
+//!   checks the route of every waiting destination each [`NET_POLL`], exists only while a
+//!   destination waits, and wakes each one whose route returns, which then tries at once. Each
+//!   longest wait spent without a route counts as a failed try.
 //! - A failure of one destination stops neither the other destinations nor the encoders. The
 //!   stream fails when every destination has failed.
 //! - A destination can be stopped and started again while the stream runs.
@@ -50,6 +57,7 @@ use studiocraft_media::queue::Fifo;
 use studiocraft_media::stats::EncoderStats;
 use studiocraft_media::video::PooledFrame;
 use studiocraft_model::ReconnectSettings;
+use studiocraft_platform::net::Route;
 use studiocraft_plugin::{
     AddressOutcome, Cause, DestinationCounts, DestinationState, DestinationStatus, EncoderKind, Failure, OutputInstance, OutputJob, OutputStatus,
     PluginError, RateControl,
@@ -83,6 +91,9 @@ pub const MAX_ALL_LOOKUPS: u32 = 32;
 static ALL_LOOKUPS: AtomicU32 = AtomicU32::new(0);
 /// How often a wait for a lookup looks at the clock again when nothing wakes it.
 const LOOKUP_POLL: Duration = Duration::from_millis(50);
+/// How often a stream's route thread checks the route of the destinations waiting for the
+/// network, StudioCraft's own value.
+pub const NET_POLL: Duration = Duration::from_secs(1);
 /// How long a destination's thread waits for a packet before it reads what the server sent.
 const RECV_WAIT: Duration = Duration::from_millis(100);
 /// How long a stop waits for the destinations to send what their rings hold and close.
@@ -176,6 +187,8 @@ pub(crate) struct Timing {
     pub(crate) stable: Duration,
     /// How long a try waits for the server's name to be looked up.
     pub(crate) lookup: Duration,
+    /// How often the route of the destinations waiting for the network is checked.
+    pub(crate) net_poll: Duration,
 }
 
 impl Default for Timing {
@@ -199,11 +212,13 @@ impl From<ReconnectSettings> for Timing {
             close: CLOSE_WAIT,
             stable: STABLE_AFTER,
             lookup: LOOKUP_WAIT,
+            net_poll: NET_POLL,
         }
     }
 }
 
-/// Where the destinations read the time for the lookup wait. Tests pass a clock they move on.
+/// Where the destinations read the time for the lookup wait and the wait for the network. Tests
+/// pass a clock they move on.
 pub(crate) trait Clock: Send + Sync {
     fn now(&self) -> Instant;
 }
@@ -226,16 +241,21 @@ fn system_resolve(host: &str, port: u16) -> std::io::Result<Vec<std::net::Socket
     Ok((host, port).to_socket_addrs()?.collect())
 }
 
-/// What a destination's thread uses from outside: the clock and the resolver.
+/// Whether the system has a route to any of the addresses, or to any address when there are
+/// none. Tests pass one whose answer they set.
+pub(crate) type RouteCheck = dyn Fn(&[std::net::SocketAddr]) -> Route + Send + Sync;
+
+/// What a destination's thread uses from outside: the clock, the resolver and the route check.
 #[derive(Clone)]
 pub(crate) struct Seams {
     pub(crate) clock: Arc<dyn Clock>,
     pub(crate) resolve: Arc<Resolve>,
+    pub(crate) route: Arc<RouteCheck>,
 }
 
 impl Default for Seams {
     fn default() -> Self {
-        Seams { clock: Arc::new(SystemClock), resolve: Arc::new(system_resolve) }
+        Seams { clock: Arc::new(SystemClock), resolve: Arc::new(system_resolve), route: Arc::new(studiocraft_platform::net::route_to) }
     }
 }
 
@@ -320,8 +340,8 @@ fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
-/// How many destinations of a stream are live and how many wait to try again, kept as each
-/// destination's status is set.
+/// How many destinations of a stream are live and how many wait to try again, waiting for the
+/// network included, kept as each destination's status is set.
 #[derive(Default)]
 struct Counts {
     live: AtomicU32,
@@ -333,7 +353,7 @@ impl Counts {
     fn of(&self, s: &DestinationStatus) -> Option<&AtomicU32> {
         match s {
             DestinationStatus::Live => Some(&self.live),
-            DestinationStatus::Retrying { .. } => Some(&self.retrying),
+            DestinationStatus::Retrying { .. } | DestinationStatus::WaitingForNetwork { .. } => Some(&self.retrying),
             _ => None,
         }
     }
@@ -360,6 +380,12 @@ struct Dest {
     restarted: AtomicBool,
     /// Lookups of the server's name whose threads have not ended.
     lookups: AtomicU32,
+    /// The server's addresses from the last lookup that answered; empty before one.
+    addrs: Mutex<Vec<std::net::SocketAddr>>,
+    /// The server is given as an IP address, so a lookup cannot give it another address.
+    fixed: AtomicBool,
+    /// Set by the route thread when a route to the server returned while the destination waited.
+    net_up: AtomicBool,
     /// The last connection was lost, and no connection has gone live since.
     lost: AtomicBool,
     /// Times it went live again after a lost connection.
@@ -386,6 +412,9 @@ impl Dest {
             reconnects: AtomicU32::new(0),
             restarted: AtomicBool::new(false),
             lookups: AtomicU32::new(0),
+            addrs: Mutex::new(Vec::new()),
+            fixed: AtomicBool::new(false),
+            net_up: AtomicBool::new(false),
             lost: AtomicBool::new(false),
             recovered: AtomicU32::new(0),
             stop: AtomicBool::new(false),
@@ -516,6 +545,16 @@ struct Hub {
     seams: Seams,
     dests: Vec<Arc<Dest>>,
     counts: Arc<Counts>,
+    net: NetWatch,
+}
+
+/// The destinations of a stream that wait for the network, and its route thread.
+#[derive(Default)]
+struct NetWatch {
+    /// The waiting destinations, and whether the route thread runs.
+    state: Mutex<(Vec<Arc<Dest>>, bool)>,
+    /// Route threads started, for the tests.
+    threads: AtomicU32,
 }
 
 impl Hub {
@@ -662,6 +701,140 @@ fn wait(hub: &Hub, d: &Dest, delay: Duration) {
     }
 }
 
+/// Whether a failure of `cause` may come from this computer having no network: a missing route,
+/// a lookup that failed or had no answer, or a connection that timed out.
+fn network_cause(cause: Cause) -> bool {
+    matches!(cause, Cause::NoRoute | Cause::LookupFailed | Cause::LookupNoAnswer | Cause::TimedOut)
+}
+
+/// Whether the system has a route to `d`'s server, checked before a try after `last`: to its last
+/// known addresses, and, when they have none or none is known after a failure of a
+/// [`network_cause`], to any address.
+fn gate(hub: &Hub, d: &Dest, last: &Failure) -> Gate {
+    let addrs = lock(&d.addrs).clone();
+    if !addrs.is_empty() && (hub.seams.route)(&addrs) != Route::None {
+        return Gate::Open;
+    }
+    if !addrs.is_empty() && d.fixed.load(Ordering::SeqCst) {
+        return Gate::Closed;
+    }
+    // A lookup may give a named server an address that has a route, and a network may reach the
+    // server without a default route, so the probes never stop the try of a named server.
+    if (!addrs.is_empty() || network_cause(last.cause)) && (hub.seams.route)(&[]) == Route::None {
+        return Gate::NoDefault;
+    }
+    Gate::Open
+}
+
+/// What the route check says about the next try.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Gate {
+    /// Try at the usual time.
+    Open,
+    /// The server is given as an IP address with no route: wait until one returns.
+    Closed,
+    /// The server is named, its known addresses (if any) have no route, and the system has no
+    /// default route: show the wait, and try at the usual time or as soon as a route returns.
+    NoDefault,
+}
+
+/// How a wait for the network ended.
+enum NetWait {
+    /// A route returned: try at once.
+    Up,
+    /// The destination was started again: try at once, as a first try.
+    Restarted,
+    /// The destination was stopped or the stream ended.
+    Stopped,
+    /// The longest waits spent without a route used up the tries.
+    GaveUp(Failure),
+}
+
+/// Waits until the system has a route to `d`'s server again or `d` is started again, or, with
+/// `until`, at most that long, showing [`DestinationStatus::WaitingForNetwork`] with `last`. Each
+/// longest wait spent without a route counts as a failed try in `failures`.
+fn wait_for_network(hub: &Arc<Hub>, d: &Arc<Dest>, failures: &mut u32, last: &Failure, until: Option<Duration>) -> NetWait {
+    // The wait starts before the status shows it, so a reader of the status never sees a later start.
+    let start = hub.seams.clock.now();
+    let mut since = start;
+    d.net_up.store(false, Ordering::SeqCst);
+    let watched = watch_network(hub, d);
+    d.set(DestinationStatus::WaitingForNetwork { attempt: failures.saturating_add(1), failure: last.clone() });
+    let ended = loop {
+        if d.stopping() || hub.control.is_ended() {
+            break NetWait::Stopped;
+        }
+        // Started again while it waits: it tries at once, as after the wait before a try.
+        if d.restarted.load(Ordering::SeqCst) {
+            break NetWait::Restarted;
+        }
+        // Without a route thread, the destination checks for itself.
+        if d.net_up.load(Ordering::SeqCst) || (!watched && gate(hub, d, last) == Gate::Open) {
+            break NetWait::Up;
+        }
+        let now = hub.seams.clock.now();
+        if until.is_some_and(|u| now.saturating_duration_since(start) >= u) {
+            break NetWait::Up;
+        }
+        if now.saturating_duration_since(since) >= hub.timing.longest {
+            *failures = failures.saturating_add(1);
+            if hub.timing.gives_up(*failures) {
+                break NetWait::GaveUp(gave_up(&hub.timing, last.clone(), *failures));
+            }
+            since = now;
+            d.set(DestinationStatus::WaitingForNetwork { attempt: failures.saturating_add(1), failure: last.clone() });
+        }
+        std::thread::park_timeout(hub.timing.net_poll);
+    };
+    let mut state = lock(&hub.net.state);
+    state.0.retain(|w| !Arc::ptr_eq(w, d));
+    ended
+}
+
+/// Adds `d` to the destinations waiting for the network, and starts the route thread when none
+/// runs. Whether a route thread watches.
+fn watch_network(hub: &Arc<Hub>, d: &Arc<Dest>) -> bool {
+    let mut state = lock(&hub.net.state);
+    if !state.0.iter().any(|w| Arc::ptr_eq(w, d)) {
+        state.0.push(Arc::clone(d));
+    }
+    if state.1 {
+        return true;
+    }
+    let h = Arc::clone(hub);
+    let started = std::thread::Builder::new().name("stream route".into()).spawn(move || route_thread(&h)).is_ok();
+    if started {
+        hub.net.threads.fetch_add(1, Ordering::SeqCst);
+    }
+    state.1 = started;
+    started
+}
+
+/// Each [`Timing::net_poll`], checks the route of every destination waiting for the network and
+/// wakes each one that has a route again. Ends when none waits or the stream ends.
+fn route_thread(hub: &Hub) {
+    loop {
+        std::thread::park_timeout(hub.timing.net_poll);
+        let waiting = {
+            let mut state = lock(&hub.net.state);
+            if state.0.is_empty() || hub.control.is_ended() {
+                state.1 = false;
+                return;
+            }
+            state.0.clone()
+        };
+        for d in waiting {
+            let addrs = lock(&d.addrs).clone();
+            // A named server is tried again once the system has any route, as `gate` decides.
+            let named = !d.fixed.load(Ordering::SeqCst) && !addrs.is_empty();
+            if (hub.seams.route)(&addrs) != Route::None || (named && (hub.seams.route)(&[]) != Route::None) {
+                d.net_up.store(true, Ordering::SeqCst);
+                d.wake();
+            }
+        }
+    }
+}
+
 /// How sending over one connection ended.
 enum End {
     /// The destination was stopped, or the stream ended and every packet was sent.
@@ -693,6 +866,8 @@ fn connect(hub: &Hub, d: &Arc<Dest>) -> Result<Publisher, Missed> {
     c.setup_timeout = hub.timing.setup;
     c.stall_timeout = hub.timing.stall;
     let addrs = lookup(hub, d, c.endpoint.host(), c.endpoint.port())?;
+    lock(&d.addrs).clone_from(&addrs);
+    d.fixed.store(c.endpoint.host().parse::<std::net::IpAddr>().is_ok(), Ordering::SeqCst);
     // A stop that came as the lookup answered does not wait for a TCP connect.
     if d.stopping() || hub.control.is_ended() {
         return Err(Missed::Stopped);
@@ -780,7 +955,7 @@ fn reserve(count: &AtomicU32, max: u32) -> bool {
 }
 
 /// The thread of one destination: connect, send, and try again when the connection is lost.
-fn run(hub: &Hub, d: &Arc<Dest>) {
+fn run(hub: &Arc<Hub>, d: &Arc<Dest>) {
     let _watch = Watch(d);
     let mut failures = 0u32;
     let mut last_error: Option<Failure> = None;
@@ -792,15 +967,34 @@ fn run(hub: &Hub, d: &Arc<Dest>) {
     let mut random = seed(&d.target.id);
     loop {
         if let Some(failure) = last_error.take() {
-            d.set(DestinationStatus::Retrying { attempt: failures.saturating_add(1), failure });
             let delay = hub.timing.delay(failures.max(1));
             let delay = if hub.timing.jitter { jittered(delay, next_random(&mut random)) } else { delay };
-            wait(hub, d, if std::mem::take(&mut refused) { delay.max(hub.timing.refused) } else { delay });
+            let delay = if std::mem::take(&mut refused) { delay.max(hub.timing.refused) } else { delay };
+            // With no route, the wait for the network takes the place of the wait before the try.
+            let mut route = gate(hub, d, &failure);
+            if route == Gate::Open {
+                d.set(DestinationStatus::Retrying { attempt: failures.saturating_add(1), failure: failure.clone() });
+                wait(hub, d, delay);
+                // Checked again right before the try: the route may have gone during the wait.
+                route = match gate(hub, d, &failure) {
+                    Gate::Closed => Gate::Closed,
+                    Gate::Open | Gate::NoDefault => Gate::Open,
+                };
+            }
+            if route != Gate::Open && !d.stopping() && !d.restarted.load(Ordering::SeqCst) && !hub.control.is_ended() {
+                let until = (route == Gate::NoDefault).then_some(delay);
+                match wait_for_network(hub, d, &mut failures, &failure, until) {
+                    NetWait::Up => d.set(DestinationStatus::Retrying { attempt: failures.saturating_add(1), failure }),
+                    NetWait::Restarted | NetWait::Stopped => {}
+                    NetWait::GaveUp(f) => return d.fail(f),
+                }
+            }
         }
         if d.ends(hub) {
             return;
         }
-        if !matches!(d.status(), DestinationStatus::Retrying { .. }) {
+        // Started again while it waited: the try is shown as a first one.
+        if d.restarted.load(Ordering::SeqCst) || !matches!(d.status(), DestinationStatus::Retrying { .. }) {
             d.set(DestinationStatus::Connecting);
         }
         let connected = connect(hub, d);
@@ -1058,7 +1252,7 @@ impl Streaming {
         };
         let counts = Arc::new(Counts::default());
         let dests = targets.into_iter().map(|t| Arc::new(Dest::new(t, Arc::clone(&counts)))).collect();
-        let hub = Arc::new(Hub { control, headers, ring, timing, seams, dests, counts });
+        let hub = Arc::new(Hub { control, headers, ring, timing, seams, dests, counts, net: NetWatch::default() });
         let mut s = Streaming { native, hub, stats: Arc::clone(&job.stats), refused, stopped: false };
         for d in s.hub.dests.iter().filter(|d| d.target.enabled) {
             if let Err(e) = spawn(&s.hub, d, None) {

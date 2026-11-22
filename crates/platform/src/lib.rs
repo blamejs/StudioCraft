@@ -7,6 +7,7 @@
 //!   plays.
 //! - [`ffmpeg`]: find the ffmpeg program recordings, streams and media sources run.
 //! - [`shell`]: open a folder in the file manager or a web page in the browser.
+//! - [`net`]: whether this computer has a network route, without sending anything.
 //!
 //! Capture is implemented on Windows, macOS and Linux. On Linux, displays and windows are chosen in
 //! the desktop's own picker through the screen-cast portal, audio goes through PipeWire and
@@ -23,6 +24,7 @@ pub mod display;
 #[cfg(target_os = "linux")]
 mod display_list;
 pub mod ffmpeg;
+pub mod net;
 #[cfg(target_os = "linux")]
 mod portal;
 #[cfg(target_os = "linux")]

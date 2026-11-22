@@ -436,10 +436,11 @@ destination whose server took the stream, lost the connection and then refuses t
 again up to 3 times, waiting at least 5 s each time, and each of those tries counts toward the
 number of tries. A refusal on the first connect, a refusal of the connection request, and a refusal
 after the destination was stopped and started again are final. A destination stopped and started
-again while it waits to try again tries at once and counts its failed tries from none. The stream
-fails when no destination is sending or trying to.
+again while it waits to try again or waits for the network tries at once and counts its failed
+tries from none. The stream fails when no destination is sending or trying to.
 While the stream runs, the status bar shows `RECONNECTING` with the stream's time, in the warning
-color, when no destination is live and at least one waits to try again; when some are live, it shows
+color, when no destination is live and at least one waits to try again or waits for the network;
+when some are live, it shows
 `LIVE` followed by the count of those waiting, such as "1 reconnecting". A notice says "Lost the
 connection to {name}; reconnecting" when a destination that is still trying loses its connection,
 and "Reconnected to {name}" when it is live again. Each destination gets at most one loss notice a
@@ -452,6 +453,17 @@ each destination has at most two lookups outstanding and StudioCraft at most 32,
 finds either limit reached starts no lookup and counts as failed. An answer that arrives after its
 try gave up is not used. A server given as an IP address is not looked up, so these limits do not
 apply to it.
+Before trying again, a destination asks the system whether it has a network route to the server.
+The check sends nothing. For a server given as an IP address with no route, the destination shows
+"Waiting for the network" and does not try; each longest wait spent without a route counts as a
+failed try, so a long outage still ends the destination. For a server given by name, the
+destination shows "Waiting for the network" when its last known addresses have no route and the
+system has no default route, or when no address is known, the last try failed to look the name up
+or to connect in time, and the system has no default route. It still tries at the usual time,
+looking the name up again. When the system has a default route, a named server is tried at the
+usual time. StudioCraft checks the route of the waiting destinations once a second, and a
+destination whose route returns tries at once instead of finishing its wait. A route only means
+that this computer has a path for the connection; the server may still be unreachable beyond it.
 A key written at the end of the server address, as in `rtmp://host/app/key`, is used as the stream
 key when the key field is empty, and the stream's status leaves it out of the address it shows.
 

@@ -305,6 +305,15 @@ struct Testing {
     beside_encoder: bool,
 }
 
+/// Whether a destination with status `s` still tries to connect: it connects, is live, waits to
+/// try again or waits for the network.
+fn still_trying(s: &DestinationStatus) -> bool {
+    matches!(
+        s,
+        DestinationStatus::Retrying { .. } | DestinationStatus::WaitingForNetwork { .. } | DestinationStatus::Connecting | DestinationStatus::Live
+    )
+}
+
 /// The notice for an output whose stop returned `r`; none for a failure already shown while it
 /// ran.
 fn finish_notice(kind: OutputKind, target: &str, failed: bool, r: Result<(), PluginError>) -> Option<Notice> {
@@ -401,8 +410,7 @@ impl Outputs {
     pub(crate) fn loss_notice(&mut self, id: &str, now: Tick) -> bool {
         let Some(stream) = self.active.get(&OutputKind::Streaming) else { return false };
         self.reconnect_notices.follow(Some(stream.id));
-        let on = |s: &DestinationStatus| matches!(s, DestinationStatus::Retrying { .. } | DestinationStatus::Connecting | DestinationStatus::Live);
-        let trying = stream.instance.destinations().iter().any(|d| d.id == id && on(&d.status));
+        let trying = stream.instance.destinations().iter().any(|d| d.id == id && still_trying(&d.status));
         trying && self.reconnect_notices.lost(id, now)
     }
 
@@ -2162,6 +2170,22 @@ mod tests {
         // A new stream starts with no notices shown.
         let _ = losing_stream(&mut o, 2);
         assert!(o.loss_notice("main", Tick(1)));
+    }
+
+    #[test]
+    fn a_destination_waiting_for_the_network_still_tries() {
+        use studiocraft_plugin::{Cause, Failure};
+        let failure = || Failure::new(Cause::NoRoute, "no route");
+        for s in [
+            DestinationStatus::Connecting,
+            DestinationStatus::Live,
+            DestinationStatus::Retrying { attempt: 2, failure: failure() },
+            DestinationStatus::WaitingForNetwork { attempt: 2, failure: failure() },
+        ] {
+            assert!(still_trying(&s), "{s:?}");
+        }
+        assert!(!still_trying(&DestinationStatus::Stopped));
+        assert!(!still_trying(&DestinationStatus::Failed(failure())));
     }
 
     #[test]
