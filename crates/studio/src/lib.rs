@@ -331,6 +331,8 @@ pub struct Studio {
     thumbnails: Option<Thumbnails>,
     /// The last key given to a scene picture's slot.
     thumbnail_key: u64,
+    /// How many `scene.thumbnails` requests have run.
+    thumbnail_requests: u64,
     profile: Profile,
     ffmpeg: FfmpegSetting,
     wiring: wiring::Wiring,
@@ -469,6 +471,7 @@ impl Studio {
             render_stats: Arc::new(RenderStats::default()),
             thumbnails: None,
             thumbnail_key: 0,
+            thumbnail_requests: 0,
             profile,
             ffmpeg,
             wiring: wiring::Wiring::default(),
@@ -883,6 +886,7 @@ impl Studio {
     /// [`studiocraft_engine::command::MAX_THUMBNAIL_SCENES`]), in this order, `fps` times a
     /// second; none when the list is empty. Returns the list and rate now drawn.
     fn set_thumbnails(&mut self, scenes: Vec<SceneId>, fps: f32) -> Value {
+        self.thumbnail_requests = self.thumbnail_requests.wrapping_add(1);
         let unchanged = match &self.thumbnails {
             Some(t) => t.scenes == scenes && t.fps == fps,
             None => scenes.is_empty(),
@@ -935,6 +939,23 @@ impl Studio {
     /// shown.
     pub fn thumbnail_scenes(&self) -> &[SceneId] {
         self.thumbnails.as_ref().map_or(&[], |t| &t.scenes)
+    }
+
+    /// The compositor's key for each of [`Studio::thumbnail_scenes`], in slot order: a slot's
+    /// picture shows its scene once `Ring::latest_for` finds the slot's key on it.
+    pub fn thumbnail_keys(&self) -> &[u64] {
+        self.thumbnails.as_ref().map_or(&[], |t| &t.keys)
+    }
+
+    /// The scene pictures drawn a second; `None` while none is shown.
+    pub fn thumbnail_fps(&self) -> Option<f32> {
+        self.thumbnails.as_ref().map(|t| t.fps)
+    }
+
+    /// How many `scene.thumbnails` requests have run, those that changed nothing included, so a
+    /// caller can tell whether the pictures drawn now are still the ones it asked for.
+    pub fn thumbnail_requests(&self) -> u64 {
+        self.thumbnail_requests
     }
 
     /// The textures the scene pictures are drawn into, once the compositor has made them with a

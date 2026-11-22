@@ -66,8 +66,9 @@ use craft_window::policy::Decision;
 use craft_window::system::{NoWindows, SystemWindows};
 use egui::{Color32, RichText, Ui};
 use serde_json::{Value, json};
+use studiocraft_engine::command::DEFAULT_THUMBNAIL_FPS;
 use studiocraft_media::mix::MeterBallistics;
-use studiocraft_model::{FitMode, ItemId, Profile, SceneCollection, SettingsSchema, SourceId, Transform, Vec2};
+use studiocraft_model::{FitMode, ItemId, Profile, SceneCollection, SceneId, SettingsSchema, SourceId, Transform, Vec2};
 use studiocraft_platform::display::DisplayInfo;
 use studiocraft_render::Gpu;
 use studiocraft_render::device::{Candidate, Preference};
@@ -76,7 +77,7 @@ use studiocraft_studio::{CaptionBoard, OutputKind, Studio, UiAction, builtin_reg
 
 use crate::forms::{Browse, Filters, Properties};
 use crate::i18n::Msg;
-use crate::preview::{EditItem, Editor, Textures, View};
+use crate::preview::{EditItem, Editor, SceneTextures, Textures, View};
 use crate::settings::{Pick, SettingsWindow, Tab};
 use crate::store::{DEFAULT_NAME, Store, check_name};
 
@@ -102,6 +103,8 @@ pub(crate) enum Act {
     Filters(SourceId),
     /// Ask for a new name for a source in the name prompt.
     Rename(SourceId),
+    /// Ask for a new name for a scene in the name prompt.
+    RenameScene(SceneId),
     AddSource {
         kind: String,
     },
@@ -148,6 +151,8 @@ enum Named {
     SaveDockLayout,
     /// A source's new name, asked for by Rename in an Audio Mixer channel's menu.
     RenameSource(SourceId),
+    /// A scene's new name, asked for by Rename on a tile of the Scenes dock's grid.
+    RenameScene(SceneId),
 }
 
 impl Named {
@@ -162,6 +167,7 @@ impl Named {
             Named::RenameCollection => "Rename Scene Collection",
             Named::SaveDockLayout => "Save Dock Layout",
             Named::RenameSource(_) => "Rename Source",
+            Named::RenameScene(_) => "Rename Scene",
         }
     }
 }
@@ -224,6 +230,12 @@ pub struct StudioApp {
     dialogs: Option<craft_dialogs::Dialogs<Then>>,
     render: Option<egui_wgpu::RenderState>,
     textures: Textures,
+    /// The scene picture textures, and the newest picture of each scene that has one.
+    scene_textures: SceneTextures,
+    scene_pictures: Vec<(SceneId, egui::TextureId)>,
+    /// The scenes whose pictures the Scenes dock's grid last asked for (`scene.thumbnails`), and
+    /// the studio's request count just after; `None` before it asks and after it asks for none.
+    asked_pictures: Option<(Vec<SceneId>, u64)>,
     editor: Editor,
     selected: Option<ItemId>,
     renaming: Option<(Rename, String)>,
@@ -389,6 +401,9 @@ impl StudioApp {
             dialogs: None,
             render,
             textures: Textures::default(),
+            scene_textures: SceneTextures::default(),
+            scene_pictures: Vec::new(),
+            asked_pictures: None,
             editor: Editor::default(),
             selected: None,
             renaming: None,
@@ -793,6 +808,7 @@ impl StudioApp {
                     },
                     "status_bar": p.status_bar,
                     "lock_preview": p.lock_preview,
+                    "scene_grid": p.scene_grid,
                     "profile": self.studio.profile().name,
                     "profiles": self.profiles,
                     "collections": self.collections,
@@ -1585,7 +1601,8 @@ impl StudioApp {
     /// A header button of the Scenes or Sources dock (`commands::SCENE_HEADER`,
     /// `commands::SOURCE_HEADER`). A command that its button shows disabled is an error.
     /// `sources.add` opens the Add menu, or closes it when it is open, and replies whether it is
-    /// open.
+    /// open. `scenes.view` switches the Scenes dock between its list and its grid, and replies
+    /// whether the grid is shown.
     fn header_command(&mut self, id: &str) -> Result<Value, Msg> {
         if !self.item_state(id).enabled {
             return Err(tmsg!("`{command}` cannot run now", command = id));
@@ -1594,6 +1611,7 @@ impl StudioApp {
         let item = self.selection().map(|(item, source, _)| (item, source));
         let run = |app: &mut StudioApp, id: &str, params: Value| app.studio.run(id, &params).map(|(v, _)| v).map_err(|e| Msg::plain(e.to_string()));
         match (id, item) {
+            ("scenes.view", _) => Ok(self.toggle_pref(|p| &mut p.scene_grid)),
             ("scenes.add", _) => run(self, "scene.add", json!({})),
             ("scenes.remove", _) => run(self, "scene.remove", json!({"scene": edit})),
             ("scenes.move_up", _) => run(self, "scene.move", json!({"scene": edit, "to": "up"})),
@@ -1651,6 +1669,13 @@ impl StudioApp {
         if let Named::RenameSource(source) = what {
             if self.studio.collection().source(source).is_none_or(|s| s.name != name) {
                 self.studio.run("source.rename", &json!({"source": source, "name": name})).map_err(|e| e.to_string())?;
+            }
+            return Ok(());
+        }
+        // A scene's name is checked by `scene.rename` in the same way.
+        if let Named::RenameScene(scene) = what {
+            if self.studio.collection().scene(scene).is_none_or(|s| s.name != name) {
+                self.studio.run("scene.rename", &json!({"scene": scene, "name": name})).map_err(|e| e.to_string())?;
             }
             return Ok(());
         }
@@ -1736,7 +1761,7 @@ impl StudioApp {
             Named::SaveDockLayout => {
                 self.save_dock_layout(name)?;
             }
-            Named::RenameSource(_) => {}
+            Named::RenameSource(_) | Named::RenameScene(_) => {}
         }
         self.refresh_lists();
         Ok(())
@@ -1830,6 +1855,11 @@ impl StudioApp {
             Act::Rename(s) => {
                 if let Some(name) = self.studio.collection().source(s).map(|src| src.name.clone()) {
                     self.ask_name(ctx, Named::RenameSource(s), &name);
+                }
+            }
+            Act::RenameScene(s) => {
+                if let Some(name) = self.studio.collection().scene(s).map(|scene| scene.name.clone()) {
+                    self.ask_name(ctx, Named::RenameScene(s), &name);
                 }
             }
             Act::AddSource { kind } => {
@@ -1962,8 +1992,13 @@ impl StudioApp {
         self.follow_language();
         // The header buttons' tooltips are in the interface language the line above settled.
         let mut states = CommandStates::new();
+        let grid = self.store.prefs().scene_grid;
         for (_, _, id, tip) in commands::SCENE_HEADER.iter().chain(&commands::SOURCE_HEADER) {
-            states.set(CommandRef::new(*id), CommandState::new().enabled(self.item_state(id).enabled).title(tl!(*tip)));
+            let (state, tip) = match *id {
+                "scenes.view" => (CommandState::new().checked(grid), if grid { commands::SCENE_LIST_VIEW.1 } else { *tip }),
+                _ => (CommandState::new(), *tip),
+            };
+            states.set(CommandRef::new(*id), state.enabled(self.item_state(id).enabled).title(tl!(tip)));
         }
         if *self.header_states != states {
             self.header_states.edit(|s| *s = states);
@@ -2096,6 +2131,52 @@ impl StudioApp {
         });
     }
 
+    /// Register the scene picture textures the compositor made, and note the newest picture of
+    /// each scene it draws, for the Scenes dock's grid. A slot whose newest picture was drawn for
+    /// another scene gives no picture.
+    fn sync_scene_pictures(&mut self) {
+        self.scene_pictures.clear();
+        let Some(views) = self.studio.thumbnail_views() else { return };
+        if let Some(rs) = &self.render {
+            self.scene_textures.sync(rs, &views);
+        }
+        for (slot, (scene, key)) in self.studio.thumbnail_scenes().iter().zip(self.studio.thumbnail_keys()).enumerate() {
+            if let Some(t) = self.scene_textures.picture(&views, slot, *key) {
+                self.scene_pictures.push((*scene, t));
+            }
+        }
+    }
+
+    /// Ask for the pictures of the scenes the Scenes dock's grid showed this frame, at
+    /// [`DEFAULT_THUMBNAIL_FPS`] pictures a second, when they differ from the scenes the grid last
+    /// asked for or no scene pictures are drawn (a scene collection was opened), and for none once
+    /// the grid is no longer shown. A request that another caller of `scene.thumbnails` made
+    /// after the grid's is left alone until the grid's scenes change, and is not stopped when the
+    /// grid is hidden. The request runs right after the docks are drawn, before the frame's acts,
+    /// while every scene it names still exists.
+    fn ask_scene_pictures(&mut self) {
+        match self.lists.shown_pictures() {
+            Some(wanted) => {
+                let none_drawn = self.studio.thumbnail_scenes().is_empty() && !wanted.is_empty();
+                if self.asked_pictures.as_ref().is_none_or(|(asked, _)| asked != wanted) || none_drawn {
+                    let wanted = wanted.to_vec();
+                    let params = json!({"scenes": wanted, "fps": DEFAULT_THUMBNAIL_FPS});
+                    // A failed request is asked again on the next frame.
+                    if self.studio.run("scene.thumbnails", &params).is_ok() {
+                        self.asked_pictures = Some((wanted, self.studio.thumbnail_requests()));
+                    }
+                }
+            }
+            None => {
+                let Some((_, request)) = self.asked_pictures.take() else { return };
+                // No other request ran since the grid's, so the pictures drawn now are the grid's.
+                if request == self.studio.thumbnail_requests() && !self.studio.thumbnail_scenes().is_empty() {
+                    let _ = self.studio.run("scene.thumbnails", &json!({"scenes": []}));
+                }
+            }
+        }
+    }
+
     fn program_view(&mut self, ui: &mut Ui, area: egui::Rect) {
         let view = View::fit(area, self.studio.canvas());
         let tex = self.studio.views().and_then(|v| self.textures.program(&v));
@@ -2181,6 +2262,8 @@ impl StudioApp {
         let dt = self.last_frame.map_or(0.0, |t| now.duration_since(t).as_secs_f32());
         self.last_frame = Some(now);
         let ctx = ui.ctx().clone();
+        self.lists.begin_frame();
+        self.sync_scene_pictures();
         // A floating dock's window is a layer of its own, outside the shell's measuring run, so it
         // is shown in the real run only.
         if !craft_ui::runtime::measure::active(&ctx) {
@@ -2207,6 +2290,9 @@ impl StudioApp {
             lanes: &mut self.lanes,
             dt,
             place: None,
+            keymap: &self.keymap,
+            pictures: &self.scene_pictures,
+            grid: self.store.prefs().scene_grid,
         };
         let studio = &self.studio;
         let rects = &mut self.dock_rects;
@@ -2357,6 +2443,9 @@ impl StudioApp {
             lanes: &mut self.lanes,
             dt,
             place: None,
+            keymap: &self.keymap,
+            pictures: &self.scene_pictures,
+            grid: self.store.prefs().scene_grid,
         };
         let studio = &self.studio;
         let mut changed: Vec<(usize, [f32; 2], [f32; 2])> = Vec::new();
@@ -2670,6 +2759,7 @@ impl StudioApp {
             })
             .show(ui, &mut pass);
         let mut acts = pass.acts;
+        self.ask_scene_pictures();
         self.prompt_answers(&ctx);
         self.windows(&ctx, &mut acts);
         self.stats_window(ui);

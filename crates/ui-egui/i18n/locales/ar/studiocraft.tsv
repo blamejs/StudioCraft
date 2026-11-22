@@ -300,6 +300,16 @@
 	Show an area	إظهار منطقة
 	Show Recordings	إظهار التسجيلات
 	Show Scene {n}	إظهار المشهد {n}
+	Show the scenes as a grid	عرض المشاهد كشبكة
+	Show the scenes as a list	عرض المشاهد كقائمة
+	Rename Scene	إعادة تسمية المشهد
+	PGM	PGM
+	PVW	PVW
+	Scene, {name}, {n}	مشهد، {name}، {n}
+	Scene, {name}, {n}, selected	مشهد، {name}، {n}، محدد
+	Scene, {name}, {n}, in program	مشهد، {name}، {n}، في الإخراج النهائي
+	Scene, {name}, {n}, in preview	مشهد، {name}، {n}، في المعاينة
+	Scene, {name}, {n}, in program and preview	مشهد، {name}، {n}، في الإخراج النهائي والمعاينة
 	Show Settings Folder	إظهار مجلد الإعدادات
 	Similarity	التشابه
 	Size	الحجم

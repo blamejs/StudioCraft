@@ -300,6 +300,16 @@
 	Show an area	הצגת אזור
 	Show Recordings	הצגת ההקלטות
 	Show Scene {n}	הצגת סצנה {n}
+	Show the scenes as a grid	הצגת הסצנות כרשת
+	Show the scenes as a list	הצגת הסצנות כרשימה
+	Rename Scene	שינוי שם הסצנה
+	PGM	PGM
+	PVW	PVW
+	Scene, {name}, {n}	סצנה, {name}, {n}
+	Scene, {name}, {n}, selected	סצנה, {name}, {n}, נבחרה
+	Scene, {name}, {n}, in program	סצנה, {name}, {n}, בפלט הסופי
+	Scene, {name}, {n}, in preview	סצנה, {name}, {n}, בתצוגה המקדימה
+	Scene, {name}, {n}, in program and preview	סצנה, {name}, {n}, בפלט הסופי ובתצוגה המקדימה
 	Show Settings Folder	הצגת תיקיית ההגדרות
 	Similarity	דמיון
 	Size	גודל

@@ -277,6 +277,16 @@
 	Show an area	Een gebied tonen
 	Show Recordings	Opnames tonen
 	Show Scene {n}	Scène {n} tonen
+	Show the scenes as a grid	Scènes als raster tonen
+	Show the scenes as a list	Scènes als lijst tonen
+	Rename Scene	Scène hernoemen
+	PGM	PGM
+	PVW	PVW
+	Scene, {name}, {n}	Scène, {name}, {n}
+	Scene, {name}, {n}, selected	Scène, {name}, {n}, geselecteerd
+	Scene, {name}, {n}, in program	Scène, {name}, {n}, in programma
+	Scene, {name}, {n}, in preview	Scène, {name}, {n}, in voorbeeld
+	Scene, {name}, {n}, in program and preview	Scène, {name}, {n}, in programma en voorbeeld
 	Show Settings Folder	Map met instellingen tonen
 	Similarity	Gelijkenis
 	Size	Grootte

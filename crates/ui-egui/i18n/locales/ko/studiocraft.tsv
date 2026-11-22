@@ -284,6 +284,16 @@
 	Show an area	영역을 지정해 표시
 	Show Recordings	녹화 파일 보기
 	Show Scene {n}	장면 {n} 표시
+	Show the scenes as a grid	장면을 격자로 표시
+	Show the scenes as a list	장면을 목록으로 표시
+	Rename Scene	장면 이름 바꾸기
+	PGM	PGM
+	PVW	PVW
+	Scene, {name}, {n}	장면, {name}, {n}
+	Scene, {name}, {n}, selected	장면, {name}, {n}, 선택됨
+	Scene, {name}, {n}, in program	장면, {name}, {n}, 프로그램에 있음
+	Scene, {name}, {n}, in preview	장면, {name}, {n}, 미리 보기에 있음
+	Scene, {name}, {n}, in program and preview	장면, {name}, {n}, 프로그램과 미리 보기에 있음
 	Show Settings Folder	설정 폴더 보기
 	Similarity	유사도
 	Size	크기

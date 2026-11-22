@@ -284,6 +284,16 @@
 	Show an area	Pokaż obszar
 	Show Recordings	Pokaż nagrania
 	Show Scene {n}	Pokaż scenę {n}
+	Show the scenes as a grid	Pokaż sceny jako siatkę
+	Show the scenes as a list	Pokaż sceny jako listę
+	Rename Scene	Zmień nazwę sceny
+	PGM	PGM
+	PVW	PVW
+	Scene, {name}, {n}	Scena, {name}, {n}
+	Scene, {name}, {n}, selected	Scena, {name}, {n}, zaznaczona
+	Scene, {name}, {n}, in program	Scena, {name}, {n}, w programie
+	Scene, {name}, {n}, in preview	Scena, {name}, {n}, w podglądzie
+	Scene, {name}, {n}, in program and preview	Scena, {name}, {n}, w programie i w podglądzie
 	Show Settings Folder	Pokaż folder ustawień
 	Similarity	Podobieństwo
 	Size	Rozmiar

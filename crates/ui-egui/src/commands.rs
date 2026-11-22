@@ -99,6 +99,7 @@ pub const UI_COMMANDS: &[(&str, &str)] = &[
     ("window.next_pane", "Next Pane"),
     ("window.previous_pane", "Previous Pane"),
     ("window.focus_menu_bar", "Focus Menu Bar"),
+    ("scenes.view", "Scene Grid"),
     ("scenes.add", "Add Scene"),
     ("scenes.remove", "Remove Scene"),
     ("scenes.move_up", "Move Scene Up"),
@@ -111,13 +112,19 @@ pub const UI_COMMANDS: &[(&str, &str)] = &[
 ];
 
 /// The header buttons of the Scenes dock: (name in `ui.inspect`, icon, command, English tooltip),
-/// in reading order. The `scenes.*` commands act on the scene being edited.
-pub const SCENE_HEADER: [(&str, &str, &str, &str); 4] = [
+/// in reading order. `scenes.view` switches the dock between its list and its grid; while the
+/// grid is shown, its button has the icon and tooltip of [`SCENE_LIST_VIEW`]. The other `scenes.*`
+/// commands act on the scene being edited.
+pub const SCENE_HEADER: [(&str, &str, &str, &str); 5] = [
+    ("view", "grid", "scenes.view", "Show the scenes as a grid"),
     ("add", "plus", "scenes.add", "Add a scene"),
     ("remove", "minus", "scenes.remove", "Remove the selected scene"),
     ("up", "chevron_up", "scenes.move_up", "Move the scene up"),
     ("down", "chevron_down", "scenes.move_down", "Move the scene down"),
 ];
+
+/// The icon and English tooltip of the `scenes.view` button while the Scenes dock shows its grid.
+pub const SCENE_LIST_VIEW: (&str, &str) = ("list", "Show the scenes as a list");
 
 /// The header buttons of the Sources dock, as [`SCENE_HEADER`] lists those of the Scenes dock. The
 /// `sources.*` commands act on the selected source of the scene being edited, and `sources.add`
@@ -289,7 +296,8 @@ pub fn keymap(overrides: Overrides) -> Keymap {
 pub fn runtime_catalog() -> Vec<CommandDef> {
     let header = SCENE_HEADER.iter().chain(&SOURCE_HEADER).map(|(_, _, id, _)| {
         let label = UI_COMMANDS.iter().find(|(c, _)| c == id).map_or(*id, |(_, l)| *l);
-        CommandDef::new(CommandRef::new(*id), label, Scope::app())
+        let def = CommandDef::new(CommandRef::new(*id), label, Scope::app());
+        if *id == "scenes.view" { def.toggle() } else { def }
     });
     catalog()
         .into_iter()
@@ -714,7 +722,7 @@ mod tests {
         // The header buttons that change the scene collection are undone like the engine
         // commands they run.
         for (_, _, id, _) in SCENE_HEADER.iter().chain(&SOURCE_HEADER) {
-            assert_eq!(ui_undoable(id), !matches!(*id, "sources.add" | "sources.properties"), "{id}");
+            assert_eq!(ui_undoable(id), !matches!(*id, "scenes.view" | "sources.add" | "sources.properties"), "{id}");
         }
     }
 

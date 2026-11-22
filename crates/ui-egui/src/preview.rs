@@ -4,13 +4,15 @@
 //! as [`SnapTargets`]; a move follows the pointer through a [`MoveGesture`]. Alt (Option on macOS)
 //! turns snapping off while it is held ([`SnapSuspend::Alt`]).
 
+use std::sync::{Arc, Weak};
+
 use craft_behavior::Axis;
 use craft_behavior::geometry::{ConstrainStyle, Directions, MoveGesture, SNAP_PX, SnapKind, SnapSuspend, SnapTarget, SnapTargets};
 use craft_behavior::kurbo;
 use craft_keymap::Mods;
 use egui::{Color32, Pos2, Rect, Sense, Stroke, StrokeKind, TextureId, Ui, Vec2 as EVec2, pos2, vec2};
 use studiocraft_model::{ItemId, Transform, Vec2};
-use studiocraft_render::{CanvasViews, Ring};
+use studiocraft_render::{CanvasViews, Ring, ThumbnailViews};
 
 use crate::kit::tokens::{MarkColors, paint};
 use crate::theme;
@@ -18,15 +20,18 @@ use crate::theme;
 /// The canvas textures registered with egui's renderer.
 #[derive(Default)]
 pub struct Textures {
-    generation: Option<u64>,
+    /// The views registered. A restarted compositor numbers its generations from the start
+    /// again, so the views are told apart by their allocation, which the weak pointer keeps
+    /// from being reused.
+    views: Weak<CanvasViews>,
     program: Vec<TextureId>,
     preview: Vec<TextureId>,
 }
 
 impl Textures {
-    /// Register the views of a new canvas size, and free the old ones.
-    pub fn sync(&mut self, rs: &egui_wgpu::RenderState, views: &CanvasViews) {
-        if self.generation == Some(views.generation) {
+    /// Register the views of a new canvas size or a new compositor, and free the old ones.
+    pub fn sync(&mut self, rs: &egui_wgpu::RenderState, views: &Arc<CanvasViews>) {
+        if Weak::ptr_eq(&self.views, &Arc::downgrade(views)) {
             return;
         }
         let mut r = rs.renderer.write();
@@ -38,7 +43,7 @@ impl Textures {
         };
         self.program = reg(&views.program);
         self.preview = reg(&views.preview);
-        self.generation = Some(views.generation);
+        self.views = Arc::downgrade(views);
     }
 
     pub fn program(&self, views: &CanvasViews) -> Option<TextureId> {
@@ -47,6 +52,42 @@ impl Textures {
 
     pub fn preview(&self, views: &CanvasViews) -> Option<TextureId> {
         views.preview.latest().and_then(|i| self.preview.get(i).copied())
+    }
+}
+
+/// The scene picture textures ([`ThumbnailViews`]) registered with egui's renderer, one ring per
+/// slot.
+#[derive(Default)]
+pub struct SceneTextures {
+    /// The views registered, told apart as [`Textures`] tells its views apart.
+    views: Weak<ThumbnailViews>,
+    slots: Vec<Vec<TextureId>>,
+}
+
+impl SceneTextures {
+    /// Register the views of new scene picture textures, and free the old ones.
+    pub fn sync(&mut self, rs: &egui_wgpu::RenderState, views: &Arc<ThumbnailViews>) {
+        if Weak::ptr_eq(&self.views, &Arc::downgrade(views)) {
+            return;
+        }
+        let mut r = rs.renderer.write();
+        for id in self.slots.drain(..).flatten() {
+            r.free_texture(&id);
+        }
+        self.slots = views
+            .slots
+            .iter()
+            .map(|ring| ring.views().iter().map(|v| r.register_native_texture(&rs.device, v, egui_wgpu::wgpu::FilterMode::Linear)).collect())
+            .collect();
+        self.views = Arc::downgrade(views);
+    }
+
+    /// The newest picture of slot `slot`, once one is drawn for the scene with compositor key
+    /// `key` and registered. A slot given to another scene gives no picture until that scene's
+    /// first picture is drawn.
+    pub fn picture(&self, views: &ThumbnailViews, slot: usize, key: u64) -> Option<TextureId> {
+        let ring = views.slots.get(slot)?;
+        self.slots.get(slot)?.get(ring.latest_for(key)?).copied()
     }
 }
 

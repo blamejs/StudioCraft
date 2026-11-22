@@ -284,6 +284,16 @@
 	Show an area	Bir alan göster
 	Show Recordings	Kayıtları Göster
 	Show Scene {n}	Sahne {n} Göster
+	Show the scenes as a grid	Sahneleri ızgara olarak göster
+	Show the scenes as a list	Sahneleri liste olarak göster
+	Rename Scene	Sahneyi Yeniden Adlandır
+	PGM	PGM
+	PVW	PVW
+	Scene, {name}, {n}	Sahne, {name}, {n}
+	Scene, {name}, {n}, selected	Sahne, {name}, {n}, seçili
+	Scene, {name}, {n}, in program	Sahne, {name}, {n}, programda
+	Scene, {name}, {n}, in preview	Sahne, {name}, {n}, önizlemede
+	Scene, {name}, {n}, in program and preview	Sahne, {name}, {n}, programda ve önizlemede
 	Show Settings Folder	Ayarlar Klasörünü Göster
 	Similarity	Benzerlik
 	Size	Boyut

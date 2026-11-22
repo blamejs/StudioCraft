@@ -733,6 +733,29 @@ StudioCraft keeps the strip's height, the columns' widths, the docks' widths, vi
 places, which docks are undocked, and their windows' places and sizes until Docks › Reset Docks.
 Reset Docks puts every dock back in the strip in its first order.
 
+### Scene grid
+
+The first button in the Scenes dock's header switches the dock between its list and a grid of
+scene tiles, and StudioCraft keeps the choice. The list is shown until you switch. The grid has two
+tiles to a row, in the list's order, and an Add Scene tile last. Each tile shows the scene's
+picture over its name. The first nine tiles also show the shortcut that shows their scene, as
+Settings › Hotkeys sets it; a scene whose shortcut was cleared shows none. In studio mode the
+program scene's tile has a red border and a PGM chip, and the preview scene's tile has an accent
+border and a PVW chip. Outside studio mode the selected scene's tile has the accent border. A
+tile shows an empty picture until its scene's first picture is drawn. On a narrow tile, a chip or
+shortcut that does not fit is not drawn.
+
+A click on a tile selects its scene, as in the list. A double-click sends the scene to the program
+in studio mode and asks for a new name otherwise, and a right-click opens the scene's menu. A
+screen reader reads each tile as the scene's name, its place in the list and its marks, for
+example "Scene, Talk, 2, in program". The highlight under the pointer fades in over the theme's
+hover time, and appears at once when the suite's reduced motion setting is on.
+
+While the grid is shown, it asks for the pictures of the scenes whose tiles are on screen, at most
+16, with [`scene.thumbnails`](control-protocol.md#scenethumbnails) at 2 pictures a second. When
+the dock switches back to the list or is hidden, the pictures the grid asked for stop, unless a
+control client asked for pictures after the grid did. The list draws no scene pictures.
+
 ### Dock layouts
 
 Docks › Save Dock Layout… asks for a name and keeps every dock setting under it. Docks › Layouts

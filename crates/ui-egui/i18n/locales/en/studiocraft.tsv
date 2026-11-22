@@ -368,6 +368,16 @@
 	Show an area	Show an area
 	Show Recordings	Show Recordings
 	Show Scene {n}	Show Scene {n}
+	Show the scenes as a grid	Show the scenes as a grid
+	Show the scenes as a list	Show the scenes as a list
+	Rename Scene	Rename Scene
+	PGM	PGM
+	PVW	PVW
+	Scene, {name}, {n}	Scene, {name}, {n}
+	Scene, {name}, {n}, selected	Scene, {name}, {n}, selected
+	Scene, {name}, {n}, in program	Scene, {name}, {n}, in program
+	Scene, {name}, {n}, in preview	Scene, {name}, {n}, in preview
+	Scene, {name}, {n}, in program and preview	Scene, {name}, {n}, in program and preview
 	Show Settings Folder	Show Settings Folder
 	Similarity	Similarity
 	Size	Size

@@ -2,7 +2,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::SyncSender;
 
 use craft_gpu_yuv::{Conversion, Converter, Format, Matrix, Range};
@@ -129,11 +129,20 @@ pub fn unpremultiply(rgba: &mut [u8]) {
 /// Canvas textures the interface shows, sampled through sRGB views.
 pub struct Ring {
     views: Vec<wgpu::TextureView>,
-    latest: AtomicUsize,
-    drawn: AtomicBool,
+    /// The newest finished picture: 0 before one is drawn, else its index plus one in the low
+    /// [`RING_BITS`] bits and the key it was drawn for above them, in one word so that a reader
+    /// never pairs a picture with another picture's key.
+    latest: AtomicU64,
 }
 
+/// The bits of [`Ring::latest`] that hold the picture's index plus one.
+const RING_BITS: u32 = 8;
+
 impl Ring {
+    fn new(views: Vec<wgpu::TextureView>) -> Ring {
+        Ring { views, latest: AtomicU64::new(0) }
+    }
+
     /// All views of the ring, to register with the interface's renderer once.
     pub fn views(&self) -> &[wgpu::TextureView] {
         &self.views
@@ -141,12 +150,26 @@ impl Ring {
 
     /// The index of the newest finished picture, if one was drawn.
     pub fn latest(&self) -> Option<usize> {
-        self.drawn.load(Ordering::Acquire).then(|| self.latest.load(Ordering::Acquire))
+        let word = self.latest.load(Ordering::Acquire);
+        usize::try_from(word & ((1 << RING_BITS) - 1)).ok()?.checked_sub(1)
+    }
+
+    /// The index of the newest finished picture when it was drawn for `key`, such as the scene
+    /// picture of a thumbnail slot whose scene is `key`; `None` before then. Only the low 56 bits
+    /// of the key are compared.
+    pub fn latest_for(&self, key: u64) -> Option<usize> {
+        let word = self.latest.load(Ordering::Acquire);
+        let index = usize::try_from(word & ((1 << RING_BITS) - 1)).ok()?.checked_sub(1)?;
+        (word >> RING_BITS == key & (u64::MAX >> RING_BITS)).then_some(index)
     }
 
     fn publish(&self, index: usize) {
-        self.latest.store(index, Ordering::Release);
-        self.drawn.store(true, Ordering::Release);
+        self.publish_for(index, 0);
+    }
+
+    fn publish_for(&self, index: usize, key: u64) {
+        let index = (index as u64 + 1) & ((1 << RING_BITS) - 1);
+        self.latest.store((key << RING_BITS) | index, Ordering::Release);
     }
 }
 
@@ -169,7 +192,8 @@ pub struct ThumbnailViews {
     /// Changes whenever the textures are recreated.
     pub generation: u64,
     /// One ring per slot: slot `i` shows scene `i` of the request. There can be more slots than
-    /// the newest request has scenes; those keep their last picture.
+    /// the newest request has scenes; those keep their last picture. Each picture carries the
+    /// request's key for its slot, which [`Ring::latest_for`] compares.
     pub slots: Vec<Ring>,
 }
 
@@ -766,10 +790,10 @@ impl Compositor {
         if let Some(i) = qi {
             self.views.preview.publish(i);
         }
-        if let (Some(_), Some(pool)) = (&thumbs, &self.thumb_pool) {
+        if let (Some(req), Some(pool)) = (&thumbs, &self.thumb_pool) {
             for &s in picks {
                 if let Some(ring) = pool.views.slots.get(s) {
-                    ring.publish(ring.latest().map_or(0, |i| (i + 1) % RING_LEN));
+                    ring.publish_for(ring.latest().map_or(0, |i| (i + 1) % RING_LEN), req.keys.get(s).copied().unwrap_or(0));
                     self.thumb_last[s] = Some(now);
                     self.thumb_fresh[s] = false;
                 }
@@ -1286,7 +1310,7 @@ fn make_canvas(
 ) -> (Vec<Target>, Vec<Target>, Vec<Target>, wgpu::BindGroup, Arc<CanvasViews>) {
     let ring = |label: &str| -> (Vec<Target>, Ring) {
         let (targets, views): (Vec<_>, Vec<_>) = (0..RING_LEN).map(|_| make_target(gpu, pipes, label, w, h)).unzip();
-        (targets, Ring { views, latest: AtomicUsize::new(0), drawn: AtomicBool::new(false) })
+        (targets, Ring::new(views))
     };
     let (program, program_ring) = ring("program");
     let (preview, preview_ring) = ring("preview");
@@ -1317,7 +1341,7 @@ fn make_thumb_pool(gpu: &Gpu, w: u32, h: u32, count: usize, generation: u64) -> 
                     (Plain { texture, view }, srgb)
                 })
                 .unzip();
-            (targets, Ring { views, latest: AtomicUsize::new(0), drawn: AtomicBool::new(false) })
+            (targets, Ring::new(views))
         })
         .unzip();
     ThumbPool { targets, views: Arc::new(ThumbnailViews { width: w, height: h, generation, slots }) }
