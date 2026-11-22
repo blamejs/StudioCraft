@@ -738,7 +738,7 @@ system or the server reported, in English.
 
 | `verdict` | Meaning |
 |---|---|
-| `no_network` | The system has no route to any address. |
+| `no_network` | The system has no default route, and no route to any of the server's addresses that were checked. A failed lookup checks none. |
 | `name_not_found` | Windows only: the DNS server answered that the server's name does not exist. |
 | `dns_no_answer` | The lookup gave no answer within 10 s. |
 | `lookup_failed` | The server's name could not be looked up for another reason. |

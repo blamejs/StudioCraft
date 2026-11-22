@@ -564,6 +564,10 @@ fn each_verdict_follows_from_its_evidence() {
     let mut r = results(Some(failed(Cause::TimedOut)));
     r.others = vec![("b.example".into(), Step::Done(failed(Cause::Refused)))];
     assert_eq!(decide("h.example", 1935, true, Some("Svc"), None, &r).verdict, Verdict::ServerNotAnswering);
+    // With no default route, a lookup that failed checked no address and says no network.
+    let mut r = results(None);
+    (r.default_route, r.lookup, r.routes) = (Some(Route::None), Step::Done(Err(Failure::new(Cause::LookupFailed, "x"))), Vec::new());
+    assert_eq!(decide("h.example", 1935, true, None, None, &r).verdict, Verdict::NoNetwork);
     // A secure connection to one address outweighs a certificate another address refused.
     let mut r = results(Some(Ok(())));
     r.port.push((at(2, 1935), Step::Done(failed(Cause::CertificateExpired))));

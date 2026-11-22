@@ -69,7 +69,8 @@ const POLL: Duration = Duration::from_millis(50);
 /// What a check found, in one verdict. The first that fits wins, in this order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Verdict {
-    /// The system has no route to any address.
+    /// The system has no default route, and no route to any of the server's addresses that were
+    /// checked; a failed lookup checks none.
     NoNetwork,
     /// The DNS server answered that the server's name does not exist (Windows only).
     NameNotFound,
@@ -1042,6 +1043,9 @@ pub(crate) fn decide(host: &str, port: u16, tls: bool, service: Option<&str>, la
     let port_causes: Vec<Cause> = r.port.iter().filter_map(|(_, s)| failed_with(s)).map(|f| f.cause).collect();
     // Every address failed before a connection was made, and none answered with a refusal.
     let unreached = all_failed && port_causes.iter().all(|c| matches!(c, Cause::TimedOut | Cause::NoRoute));
+    // A failed lookup checks no address, so with no default route it gives this verdict too. The
+    // lookup's error does not say whether a DNS server was reached: only Windows reports a code,
+    // and other systems report text that is not read.
     let no_route = r.default_route == Some(Route::None) && r.routes.iter().all(|(_, route)| *route == Route::None);
     let other_ok = r.others.iter().find(|(_, s)| ok(s)).map(|(h, _)| h.clone());
     let status_problem = match &r.status {

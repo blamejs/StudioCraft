@@ -99,8 +99,9 @@ again on its own.
 Check Connection in the Streaming window, and the check that runs after a destination fails, show
 one of these verdicts. What the check found lists each step and its outcome.
 
-**"This computer has no network route".** The system has no route to any address. Connect the
-computer to a network, and check the network adapter and any VPN.
+**"This computer has no network route".** The system has no default route, and no route to any of
+the server's addresses that were checked. A failed lookup checks none. Connect the computer to a
+network, and check the network adapter and any VPN.
 
 **"The server name {host} does not exist; check the server address", "The DNS server did not
 answer for {host}" or "The server name {host} could not be looked up: {detail}".** The lookup of the
