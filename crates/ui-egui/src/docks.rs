@@ -11,9 +11,10 @@ use std::hash::Hash;
 
 use craft_behavior::{ColumnKey, ColumnWidth, EditEvent, IconId, Selection, SelectionChange, keyed};
 use craft_keymap::CommandRef;
-use craft_theme::Variant;
 use craft_theme::variant::{Emphasis, Tone};
+use craft_theme::{CustomVariant, Tokens, Variant, VariantLook};
 use craft_ui::buttons::IconButton;
+use craft_ui::buttons::icon_button::IconButtonStyleKey;
 use craft_ui::choice::Checkbox;
 use craft_ui::contract::overlay::Anchor;
 use craft_ui::contract::{
@@ -475,7 +476,7 @@ fn meter(ui: &mut Ui, m: &MeterBallistics, muted: bool) {
         let y = rect.top() + c as f32 * (h + 2.0);
         let bar = Rect::from_min_max(pos2(rect.left(), y), pos2(rect.right(), y + h));
         for (lo, hi, color) in zones {
-            let color = if muted { Color32::from_gray(110) } else { color };
+            let color = if muted { paint(colors.muted) } else { color };
             let zone = Rect::from_min_max(pos2(meter_x(lo, bar), bar.top()), pos2(meter_x(hi, bar), bar.bottom()));
             painter.rect_filled(zone, 0.0, color.gamma_multiply(0.22));
             let lit = Rect::from_min_max(zone.min, pos2(meter_x(m.level_db[c], bar).min(zone.right()), zone.bottom()));
@@ -484,7 +485,7 @@ fn meter(ui: &mut Ui, m: &MeterBallistics, muted: bool) {
             }
         }
         let rms = meter_x(m.rms_db[c], bar);
-        painter.line_segment([pos2(rms, bar.top()), pos2(rms, bar.bottom())], (1.0, Color32::from_black_alpha(140)));
+        painter.line_segment([pos2(rms, bar.top()), pos2(rms, bar.bottom())], (1.0, paint(colors.rms)));
         if m.hold_db[c] > METER_FLOOR_DB {
             let x = meter_x(m.hold_db[c], bar);
             painter.line_segment([pos2(x, bar.top()), pos2(x, bar.bottom())], (2.0, paint(colors.hold)));
@@ -536,14 +537,23 @@ fn settings_menu<K: Hash + Debug + Clone>(ui: &mut Ui, key: K, label: &str, mut 
     Menu::new(label.to_string()).opened_by(&button.response, Trigger::Click).id_salt(("settings-menu", key)).show(ui, |ui, _| rows(ui));
 }
 
+/// The look of a muted channel's mute button: the warning tone's solid fill, with the glyph in the
+/// text color the theme sets on it.
+fn muted_look(tokens: &Tokens) -> VariantLook {
+    VariantLook::of(Emphasis::Solid, Tone::Warn, tokens)
+}
+
+/// The icon button variant of a muted channel's or lane's mute button, in [`muted_look`].
+const MUTED: CustomVariant = CustomVariant::new::<IconButtonStyleKey>("studiocraft.muted", muted_look);
+
 /// The mute button of the channel or lane `key`: a speaker while it is heard, and the muted
-/// speaker in the warning tone while it is `muted`. Its name and tooltip say what a click does.
+/// speaker on a warning fill while it is `muted`. Its name and tooltip say what a click does.
 /// Whether it was clicked.
 fn mute_button(ui: &mut Ui, key: impl Hash + Debug, muted: bool) -> bool {
     let (icon, label) = if muted { (IconSpec::svg(IconId::new("track_mute")), "Unmute") } else { (IconSpec::glyph(&Speaker), "Mute") };
     let mut button = IconButton::new(icon).label(tl!(label).to_string()).tooltip(tl!(label).to_string()).id_salt(("mute", key));
     if muted {
-        button = button.variant(Variant::look(Emphasis::Ghost, Tone::Warn));
+        button = button.variant(Variant::Custom(MUTED));
     }
     button.show(ui).clicked()
 }
@@ -893,6 +903,51 @@ pub fn app_audio(ui: &mut Ui, studio: &Studio, st: &mut DockState, acts: &mut Ve
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every filled rectangle a frame draws, with its fill.
+    fn fills(out: &egui::FullOutput) -> Vec<Color32> {
+        fn walk(shape: &egui::Shape, found: &mut Vec<Color32>) {
+            match shape {
+                egui::Shape::Rect(r) => found.push(r.fill),
+                egui::Shape::Vec(v) => v.iter().for_each(|s| walk(s, found)),
+                _ => {}
+            }
+        }
+        let mut found = Vec::new();
+        out.shapes.iter().for_each(|c| walk(&c.shape, &mut found));
+        found
+    }
+
+    #[test]
+    fn a_muted_channel_shows_its_mute_button_on_the_warning_fill() {
+        for muted in [false, true] {
+            let ctx = crate::test_context();
+            let mut warn = None;
+            let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
+                warn = Some(theme::with_root(ui.ctx(), |cx| theme::color(cx, cx.tokens.color.status.warn.solid)));
+                mute_button(ui, "mic", muted);
+            });
+            out.textures_delta.clear();
+            let Some(warn) = warn else { panic!("the frame did not run") };
+            let filled = fills(&out).contains(&warn);
+            assert_eq!(filled, muted, "muted {muted}: the button sits on the warning fill only while the channel is muted");
+        }
+    }
+
+    #[test]
+    fn the_muted_look_puts_the_status_text_color_on_the_warning_fill() {
+        let ctx = crate::test_context();
+        let mut seen = None;
+        let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
+            seen = Some(theme::with_root(ui.ctx(), |cx| (muted_look(cx.tokens), cx.tokens.color.status.warn.solid, cx.tokens.color.text.on_status)));
+        });
+        out.textures_delta.clear();
+        let Some((look, warn, on_status)) = seen else { panic!("the frame did not run") };
+        assert_eq!(look.fill.rest, warn);
+        assert_eq!(look.text.rest, on_status);
+        let ratio = craft_theme::contrast_ratio(look.text.rest, look.fill.rest);
+        assert!(ratio >= 3.0, "the muted glyph is {ratio:.2}:1 on the warning fill");
+    }
 
     #[test]
     fn meter_positions_cover_the_bar() {
