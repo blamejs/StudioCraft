@@ -20,13 +20,15 @@ pub struct AppKey {
 }
 
 impl AppKey {
-    /// The key of a program file, from its full path or its file name. The name keeps any spaces
-    /// at its start or end, since a Linux file name may have them, so ` player`, `player ` and
-    /// `player` are three keys. `None` for a name that is empty or only spaces, and for a name
-    /// with a `|`, which [`AppKey::encode`] puts between the name and the path (Windows file names
-    /// cannot hold one; Linux ones can).
+    /// The key of a program file, from its full path or its file name. Outside Windows the name
+    /// keeps any spaces at its start or end, since a Linux file name may have them, so ` player`,
+    /// `player ` and `player` are three keys; on Windows the spaces are trimmed, as keys saved by
+    /// earlier versions are. `None` for a name that is empty or only spaces, and for a name with a
+    /// `|`, which [`AppKey::encode`] puts between the name and the path (Windows file names cannot
+    /// hold one; Linux ones can).
     pub fn from_exe(exe: &str) -> Option<AppKey> {
-        let name = exe.rsplit(['\\', '/']).next().unwrap_or(exe).to_lowercase();
+        let file = exe.rsplit(['\\', '/']).next().unwrap_or(exe);
+        let name = if cfg!(windows) { file.trim() } else { file }.to_lowercase();
         (!name.trim().is_empty() && name.len() <= MAX_KEY_BYTES && !name.contains('|')).then_some(AppKey { name, path: None })
     }
 

@@ -42,6 +42,13 @@ fn a_key_is_the_lower_case_file_name_and_round_trips() {
 }
 
 #[test]
+#[cfg(windows)]
+fn a_windows_name_is_trimmed_as_earlier_keys_were() {
+    assert_eq!(AppKey::from_exe(r"C:\Apps\ Player.exe ").unwrap(), AppKey::from_exe("player.exe").unwrap());
+}
+
+#[test]
+#[cfg(not(windows))]
 fn names_that_differ_in_spaces_are_different_keys() {
     let plain = AppKey::from_exe("/usr/bin/player").unwrap();
     let leading = AppKey::from_exe("/usr/bin/ player").unwrap();

@@ -30,7 +30,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::io::{PipeReader, PipeWriter, Read};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, Once};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
@@ -53,8 +53,10 @@ const NOT_CONNECTED: &str = "could not connect to the PipeWire sound server";
 /// How long a lost list thread waits before it connects again.
 const RECONNECT: Duration = Duration::from_secs(2);
 /// How often a capture checks that its target process still runs, and how often the PulseAudio
-/// sockets are read while a stream claims another process (see [`SocketScan`]).
+/// sockets are read while the streams need a reading (see [`Streams::needs_reading`]).
 const ALIVE_CHECK: Duration = Duration::from_secs(1);
+/// How often the PulseAudio sockets are read while streams are listed and none needs a reading.
+const SLOW_READINGS: Duration = Duration::from_secs(10);
 /// How often the list looks for a new reading of the PulseAudio sockets.
 const READING_POLL: Duration = Duration::from_millis(200);
 /// Samples waiting between the stream's callback and the capture loop: 2 s of audio. Audio past
@@ -182,13 +184,14 @@ struct Sockets {
     connections: Option<BTreeSet<u64>>,
 }
 
-/// The PulseAudio sockets, read from the socket diagnostics on a thread of their own while a
-/// stream claims another process: at once when [`SocketScan::want`] turns the readings on, then
-/// every [`ALIVE_CHECK`] while they stay on. The thread ends after this is dropped.
+/// The PulseAudio sockets, read from the socket diagnostics on a thread of their own while the
+/// streams are listed (see [`Streams::reading_interval`]): at once when [`SocketScan::want`] turns
+/// the readings on, then at the interval it sets. The thread ends after this is dropped.
 struct SocketScan {
     /// The last reading.
     latest: Arc<ArcSwap<Reading>>,
-    wanted: Arc<AtomicBool>,
+    /// Milliseconds between readings; 0 while they are off.
+    every_ms: Arc<AtomicU64>,
     /// Counts the times the readings were turned on; a reading started before the last time is
     /// not used.
     turned_on: Arc<AtomicU64>,
@@ -211,41 +214,58 @@ impl SocketScan {
     /// Start the thread; `None` when the system has no thread for it.
     fn start() -> Option<SocketScan> {
         let latest = Arc::new(ArcSwap::from_pointee(Reading::default()));
-        let wanted = Arc::new(AtomicBool::new(false));
+        let every_ms = Arc::new(AtomicU64::new(0));
         let turned_on = Arc::new(AtomicU64::new(0));
         let (wake, woken) = std::sync::mpsc::sync_channel::<()>(1);
-        let (shared, on, times) = (Arc::clone(&latest), Arc::clone(&wanted), Arc::clone(&turned_on));
+        let (shared, every, times) = (Arc::clone(&latest), Arc::clone(&every_ms), Arc::clone(&turned_on));
         let thread = std::thread::Builder::new()
             .name("app audio sockets".into())
             .spawn(move || {
+                let mut next = Instant::now();
                 loop {
-                    if on.load(Ordering::Acquire) {
+                    let ms = every.load(Ordering::Acquire);
+                    if ms > 0 && Instant::now() >= next {
                         let started = times.load(Ordering::Acquire);
                         let sockets = Sockets { servers: ProcFs.server_sockets(), connections: ProcFs.pulse_connections() };
                         let count = shared.load().count.wrapping_add(1);
                         shared.store(Arc::new(Reading { count, turned_on: started, sockets }));
+                        next = Instant::now() + Duration::from_millis(ms);
                     }
-                    if matches!(woken.recv_timeout(ALIVE_CHECK), Err(std::sync::mpsc::RecvTimeoutError::Disconnected)) {
-                        break;
+                    let wait = if ms > 0 { next.saturating_duration_since(Instant::now()) } else { SLOW_READINGS };
+                    match woken.recv_timeout(wait) {
+                        // A wake asks for a reading at once.
+                        Ok(()) => next = Instant::now(),
+                        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+                        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
                     }
                 }
             })
             .ok()?;
-        Some(SocketScan { latest, wanted, turned_on, wake: Some(wake), thread: Some(thread) })
+        Some(SocketScan { latest, every_ms, turned_on, wake: Some(wake), thread: Some(thread) })
     }
 
-    /// Turn the readings on or off. Turning them on starts a reading at once.
-    fn want(&self, on: bool) {
-        if on && !self.wanted.load(Ordering::Acquire) {
+    /// Set the time between readings, or turn them off with `None`. Turning them on, or making
+    /// them more frequent, starts a reading at once.
+    fn want(&self, every: Option<Duration>) {
+        let ms = every.map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX).max(1));
+        let was = self.every_ms.load(Ordering::Acquire);
+        if ms == was {
+            return;
+        }
+        if was == 0 {
             self.turned_on.fetch_add(1, Ordering::AcqRel);
         }
-        let was = self.wanted.swap(on, Ordering::AcqRel);
-        if on
-            && !was
+        self.every_ms.store(ms, Ordering::Release);
+        if ms > 0
+            && (was == 0 || ms < was)
             && let Some(w) = &self.wake
         {
             let _ = w.try_send(());
         }
+    }
+
+    fn wanted(&self) -> bool {
+        self.every_ms.load(Ordering::Acquire) > 0
     }
 
     /// How many readings have ended.
@@ -254,20 +274,24 @@ impl SocketScan {
     }
 
     /// Whether the readings are on and none that started since they were turned on has ended.
-    /// The streams are not attributed meanwhile, so the caller does not read the socket
-    /// diagnostics itself.
+    /// The streams are not attributed meanwhile.
     fn waiting(&self) -> bool {
-        self.wanted.load(Ordering::Acquire) && self.sockets().is_none()
+        self.wanted() && self.sockets().is_none()
     }
 
     /// The last reading, while the readings are on and it started since they were turned on.
     fn sockets(&self) -> Option<Sockets> {
-        if !self.wanted.load(Ordering::Acquire) {
+        if !self.wanted() {
             return None;
         }
         let since = self.turned_on.load(Ordering::Acquire);
         let l = self.latest.load();
         (l.count > 0 && l.turned_on == since).then(|| l.sockets.clone())
+    }
+
+    /// The last reading, however old; no sockets before the first.
+    fn last(&self) -> Sockets {
+        self.latest.load().sockets.clone()
     }
 }
 
@@ -280,8 +304,8 @@ impl Drop for SocketScan {
     }
 }
 
-/// [`ProcFs`], with the PulseAudio sockets from a [`SocketScan`] while it has a reading. Without
-/// one, the sockets are read on the calling thread.
+/// [`ProcFs`], with the PulseAudio sockets from a [`SocketScan`]'s last reading. The socket
+/// diagnostics are read on the scan's thread only.
 struct Scanned<'a>(&'a SocketScan);
 
 impl Procs for Scanned<'_> {
@@ -298,7 +322,7 @@ impl Procs for Scanned<'_> {
     }
 
     fn server_sockets(&self) -> Vec<u64> {
-        self.0.sockets().map_or_else(|| ProcFs.server_sockets(), |s| s.servers)
+        self.0.last().servers
     }
 
     fn started(&self, pid: u32) -> Option<u64> {
@@ -306,7 +330,7 @@ impl Procs for Scanned<'_> {
     }
 
     fn pulse_connections(&self) -> Option<BTreeSet<u64>> {
-        self.0.sockets().map_or_else(|| ProcFs.pulse_connections(), |s| s.connections)
+        self.0.last().connections
     }
 
     fn holds(&self, pid: u32, inodes: &BTreeSet<u64>) -> Option<bool> {
@@ -767,6 +791,30 @@ impl Streams {
         })
     }
 
+    /// Whether attributing the streams needs a reading of the PulseAudio sockets: a stream claims
+    /// another process, or the listed client of a stream is not yet known to be, or not to be,
+    /// the sound server.
+    fn needs_reading(&self) -> bool {
+        self.claims_another()
+            || self
+                .servers
+                .try_borrow()
+                .is_ok_and(|known| self.nodes.values().filter_map(|f| f.client).any(|c| self.clients.contains_key(&c) && !known.contains_key(&c)))
+    }
+
+    /// The time between readings of the PulseAudio sockets: [`ALIVE_CHECK`] while the streams
+    /// need a reading, [`SLOW_READINGS`] while other streams are followed, and none without
+    /// streams.
+    fn reading_interval(&self) -> Option<Duration> {
+        if self.needs_reading() {
+            Some(ALIVE_CHECK)
+        } else if self.nodes.is_empty() {
+            None
+        } else {
+            Some(SLOW_READINGS)
+        }
+    }
+
     /// Forget the object `id`; returns whether it was a followed stream or a client one owns.
     fn remove(&mut self, id: u32) -> bool {
         self.proxies.remove(&id);
@@ -865,7 +913,7 @@ fn list_loop(remote: Option<&str>, listed: &Arc<Mutex<Listed>>, wake: &Wake, sto
         let (streams, scan, listed, wake) = (Rc::clone(&streams), Rc::clone(&scan), Arc::clone(listed), wake.clone());
         Rc::new(move || {
             let Ok(s) = streams.try_borrow() else { return };
-            scan.want(s.claims_another());
+            scan.want(s.reading_interval());
             if scan.waiting() {
                 return;
             }
@@ -910,15 +958,15 @@ fn list_loop(remote: Option<&str>, listed: &Arc<Mutex<Listed>>, wake: &Wake, sto
         })
         .register();
     // A process can close its PulseAudio connection with no change in the registry, so each new
-    // reading of the sockets attributes the streams that claim another process again.
+    // reading of the sockets attributes the streams again.
     let seen = Cell::new(0);
     let recheck = mainloop.loop_().add_timer({
         let (streams, scan, listed, wake) = (Rc::clone(&streams), Rc::clone(&scan), Arc::clone(listed), wake.clone());
         move |_| {
-            let need = streams.try_borrow().is_ok_and(|s| s.claims_another());
-            scan.want(need);
+            let Ok(interval) = streams.try_borrow().map(|s| s.reading_interval()) else { return };
+            scan.want(interval);
             let readings = scan.readings();
-            if need && !scan.waiting() && readings != seen.replace(readings) && republish(&streams, &Scanned(&scan), &listed) {
+            if interval.is_some() && !scan.waiting() && readings != seen.replace(readings) && republish(&streams, &Scanned(&scan), &listed) {
                 wake.wake();
             }
         }
@@ -1301,12 +1349,13 @@ fn run_capture(
         if gave_up {
             break Err(failed(LINK_FAILED));
         }
-        // The links follow the streams' attribution; a stream that claims another process is
-        // attributed again after each new reading of the PulseAudio sockets.
-        let need = graph.try_borrow().is_ok_and(|g| g.streams.try_borrow().is_ok_and(|s| s.claims_another()));
-        scan.want(need);
+        // The links follow the streams' attribution, which is made again after each new reading
+        // of the PulseAudio sockets.
+        if let Some(interval) = graph.try_borrow().ok().and_then(|g| g.streams.try_borrow().ok().map(|s| s.reading_interval())) {
+            scan.want(interval);
+        }
         let readings = scan.readings();
-        dirty |= need && readings != std::mem::replace(&mut seen_reading, readings);
+        dirty |= readings != std::mem::replace(&mut seen_reading, readings);
         let ours = stream.node_id();
         if dirty
             && connected
@@ -1877,6 +1926,7 @@ mod tests {
         f.connections.replace(Some(BTreeSet::from([500])));
         let listed = Mutex::new(Listed::default());
         assert!(streams.borrow().claims_another(), "the stream claims 20, its client is 7");
+        assert!(streams.borrow().needs_reading());
         assert!(republish(&streams, &f, &listed));
         assert_eq!(listed.lock().unwrap().nodes, BTreeMap::from([(100, StreamNode { pid: 20, running: true })]));
         assert!(!republish(&streams, &f, &listed), "an unchanged list is not published again");
@@ -1888,20 +1938,31 @@ mod tests {
         streams.borrow_mut().nodes.insert(100, Followed { client: Some(30), claimed: Some(7), running: true });
         streams.borrow_mut().nodes.insert(101, Followed { client: Some(30), claimed: None, running: true });
         assert!(!streams.borrow().claims_another());
+        assert!(!streams.borrow().needs_reading(), "client 30 is known to be the sound server");
+        // A stream of a new client needs a reading until the client is known.
+        streams.borrow_mut().clients.insert(31, 40);
+        streams.borrow_mut().nodes.insert(102, Followed { client: Some(31), claimed: None, running: true });
+        assert!(streams.borrow().needs_reading());
+        f.starts.borrow_mut().insert(40, 5);
+        republish(&streams, &f, &listed);
+        assert!(!streams.borrow().needs_reading());
+        assert_eq!(streams.borrow().reading_interval(), Some(SLOW_READINGS), "known clients are read again now and then");
+        streams.borrow_mut().nodes.clear();
+        assert_eq!(streams.borrow().reading_interval(), None);
     }
 
     #[test]
-    fn the_pulseaudio_sockets_come_from_the_last_reading_while_readings_are_on() {
+    fn the_pulseaudio_sockets_come_from_the_scans_last_reading() {
         let scan = SocketScan {
             latest: Arc::new(ArcSwap::from_pointee(Reading::default())),
-            wanted: Arc::new(AtomicBool::new(false)),
+            every_ms: Arc::new(AtomicU64::new(0)),
             turned_on: Arc::new(AtomicU64::new(0)),
             wake: None,
             thread: None,
         };
         let procs = Scanned(&scan);
         let reading = Sockets { servers: vec![u64::MAX], connections: Some(BTreeSet::from([u64::MAX - 1])) };
-        scan.want(true);
+        scan.want(Some(SLOW_READINGS));
         assert!(scan.sockets().is_none(), "nothing before the first reading");
         assert!(scan.waiting());
         scan.latest.store(Arc::new(Reading { count: 1, turned_on: 1, sockets: reading.clone() }));
@@ -1910,13 +1971,15 @@ mod tests {
         assert_eq!(procs.pulse_connections(), reading.connections);
         assert_eq!(procs.server_sockets(), reading.servers);
         assert!(!procs.sound_server(std::process::id()), "this process holds neither socket");
-        // With the readings off, the sockets are read on the calling thread.
-        scan.want(false);
+        scan.want(Some(ALIVE_CHECK));
+        assert!(!scan.waiting(), "a new interval keeps the reading");
+        // With the readings off, the last reading is still used.
+        scan.want(None);
         assert!(scan.sockets().is_none());
         assert!(!scan.waiting());
-        assert_ne!(procs.pulse_connections(), reading.connections);
+        assert_eq!(procs.pulse_connections(), reading.connections);
         // Turned on again, the readings wait for one that starts afterwards.
-        scan.want(true);
+        scan.want(Some(ALIVE_CHECK));
         assert!(scan.waiting(), "the reading from before is not used");
         scan.latest.store(Arc::new(Reading { count: 2, turned_on: 2, sockets: reading.clone() }));
         assert_eq!(scan.sockets().map(|s| s.servers), Some(reading.servers.clone()));
