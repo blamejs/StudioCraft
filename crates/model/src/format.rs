@@ -115,7 +115,7 @@ fn collection_v4_to_v5(data: &mut Value) -> Result<(), String> {
 /// Profiles.
 pub const PROFILE: FileFormat = FileFormat {
     name: "studiocraft.profile",
-    version: 11,
+    version: 12,
     migrations: &[
         profile_v1_to_v2,
         profile_v2_to_v3,
@@ -127,6 +127,7 @@ pub const PROFILE: FileFormat = FileFormat {
         profile_v8_to_v9,
         profile_v9_to_v10,
         profile_v10_to_v11,
+        profile_v11_to_v12,
     ],
 };
 
@@ -271,6 +272,18 @@ fn profile_v10_to_v11(data: &mut Value) -> Result<(), String> {
     Ok(())
 }
 
+/// Profile version 11 to 12: the stream's automatic reconnect settings (`stream.reconnect`), on,
+/// with a first wait of 2 s, a longest wait of 30 s and 10 tries.
+fn profile_v11_to_v12(data: &mut Value) -> Result<(), String> {
+    let data = data.as_object_mut().ok_or("the profile is not an object")?;
+    let defaults = serde_json::to_value(crate::ReconnectSettings::default()).map_err(|e| e.to_string())?;
+    let stream = data.entry("stream").or_insert_with(|| json!({}));
+    if let Value::Object(s) = stream {
+        s.entry("reconnect").or_insert(defaults);
+    }
+    Ok(())
+}
+
 /// Largest file accepted, in bytes.
 pub const MAX_FILE_BYTES: usize = 64 << 20;
 
@@ -341,21 +354,25 @@ pub fn read_collection(text: &str, default_scene_name: &str) -> Result<SceneColl
 }
 
 /// A profile file's text. A profile whose stream destinations break a rule of
-/// [`crate::StreamSettings::check`], or whose loudness target breaks a rule of
+/// [`crate::StreamSettings::check`], whose reconnect settings break a rule of
+/// [`crate::ReconnectSettings::check`], or whose loudness target breaks a rule of
 /// [`crate::LoudnessTarget::check`], is refused, as [`read_profile`] refuses its file.
 pub fn write_profile(p: &Profile) -> Result<String, FormatError> {
     p.stream.check().map_err(FormatError::Data)?;
+    p.stream.reconnect.check().map_err(FormatError::Data)?;
     p.audio.loudness_target.check().map_err(FormatError::Data)?;
     PROFILE.write(p)
 }
 
 /// A profile from a file's text, migrated, with video, replay buffer, audio tracks and pause
 /// screen settings brought into range. A file whose stream destinations break a rule of
-/// [`crate::StreamSettings::check`], or whose loudness target breaks a rule of
+/// [`crate::StreamSettings::check`], whose reconnect settings break a rule of
+/// [`crate::ReconnectSettings::check`], or whose loudness target breaks a rule of
 /// [`crate::LoudnessTarget::check`], is refused.
 pub fn read_profile(text: &str) -> Result<Profile, FormatError> {
     let mut p: Profile = PROFILE.read(text)?;
     p.stream.check().map_err(FormatError::Data)?;
+    p.stream.reconnect.check().map_err(FormatError::Data)?;
     p.audio.loudness_target.check().map_err(FormatError::Data)?;
     p.video = p.video.sanitized();
     p.replay = p.replay.sanitized();
@@ -388,6 +405,7 @@ mod tests {
         (9, include_str!("../fixtures/profile-v9.json")),
         (10, include_str!("../fixtures/profile-v10.json")),
         (11, include_str!("../fixtures/profile-v11.json")),
+        (12, include_str!("../fixtures/profile-v12.json")),
     ];
 
     fn covers_every_version(format: &FileFormat, fixtures: &[(u32, &str)]) {
@@ -666,6 +684,65 @@ mod tests {
             let mut wrong = p.clone();
             wrong.audio.loudness_target = target;
             assert!(matches!(write_profile(&wrong), Err(FormatError::Data(m)) if m.contains("loudness target")), "{target:?} is not written");
+        }
+    }
+
+    #[test]
+    fn a_v11_profile_gets_the_default_reconnect_settings() {
+        use crate::ReconnectSettings;
+        for (v, text) in &PROFILE_FIXTURES[..11] {
+            assert_eq!(read_profile(text).unwrap().stream.reconnect, ReconnectSettings::default(), "version {v} gets the defaults");
+        }
+        assert_eq!(ReconnectSettings::default(), ReconnectSettings { enabled: true, first_delay_s: 2, max_delay_s: 30, max_tries: 10 });
+        let (_, v12) = PROFILE_FIXTURES[11];
+        let p = read_profile(v12).unwrap();
+        assert_eq!(p.stream.reconnect, ReconnectSettings { enabled: true, first_delay_s: 5, max_delay_s: 20, max_tries: 4 });
+        assert_eq!(p.stream.destinations.len(), 3, "the rest of the stream settings is kept");
+        assert_eq!(read_profile(&write_profile(&p).unwrap()).unwrap(), p);
+        let omitted = v12.replace(",\n      \"reconnect\": { \"enabled\": true, \"first_delay_s\": 5, \"max_delay_s\": 20, \"max_tries\": 4 }", "");
+        let omitted =
+            omitted.replace(",\r\n      \"reconnect\": { \"enabled\": true, \"first_delay_s\": 5, \"max_delay_s\": 20, \"max_tries\": 4 }", "");
+        assert!(!omitted.contains("reconnect"));
+        assert_eq!(read_profile(&omitted).unwrap().stream.reconnect, ReconnectSettings::default(), "omitted settings are the defaults");
+        let edges = v12.replace("\"first_delay_s\": 5", "\"first_delay_s\": 60").replace("\"max_delay_s\": 20", "\"max_delay_s\": 600");
+        let edges = edges.replace("\"max_tries\": 4", "\"max_tries\": 100");
+        assert_eq!(
+            read_profile(&edges).unwrap().stream.reconnect,
+            ReconnectSettings { enabled: true, first_delay_s: 60, max_delay_s: 600, max_tries: 100 }
+        );
+        assert_eq!(read_profile(&v12.replace("\"first_delay_s\": 5", "\"first_delay_s\": 1")).unwrap().stream.reconnect.first_delay_s, 1);
+        assert_eq!(read_profile(&v12.replace("\"max_tries\": 4", "\"max_tries\": 1")).unwrap().stream.reconnect.max_tries, 1);
+    }
+
+    #[test]
+    fn out_of_range_reconnect_settings_are_refused() {
+        use crate::ReconnectSettings;
+        let (_, v12) = PROFILE_FIXTURES[11];
+        let bad = [
+            ("\"first_delay_s\": 5", "\"first_delay_s\": 0"),
+            ("\"first_delay_s\": 5", "\"first_delay_s\": 61"),
+            ("\"max_delay_s\": 20", "\"max_delay_s\": 4"),
+            ("\"max_delay_s\": 20", "\"max_delay_s\": 601"),
+            ("\"max_tries\": 4", "\"max_tries\": 0"),
+            ("\"max_tries\": 4", "\"max_tries\": 101"),
+            ("\"max_tries\": 4", "\"max_tries\": -1"),
+            ("\"max_tries\": 4", "\"max_tries\": \"many\""),
+            ("\"enabled\": true, \"first", "\"enabled\": 1, \"first"),
+        ];
+        for (from, to) in bad {
+            let text = v12.replace(from, to);
+            assert_ne!(text, v12, "{to}");
+            assert!(matches!(read_profile(&text), Err(FormatError::Data(_))), "{to} refuses the file");
+        }
+        let p = read_profile(v12).unwrap();
+        for r in [
+            ReconnectSettings { first_delay_s: 0, ..p.stream.reconnect },
+            ReconnectSettings { max_delay_s: 4, ..p.stream.reconnect },
+            ReconnectSettings { max_tries: u32::MAX, ..p.stream.reconnect },
+        ] {
+            let mut wrong = p.clone();
+            wrong.stream.reconnect = r;
+            assert!(matches!(write_profile(&wrong), Err(FormatError::Data(m)) if m.contains("reconnect")), "{r:?} is not written");
         }
     }
 

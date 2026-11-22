@@ -27,7 +27,7 @@ use std::sync::Arc;
 use studiocraft_media::audio::PooledBlock;
 use studiocraft_media::queue::Fifo;
 use studiocraft_media::video::PooledFrame;
-use studiocraft_model::{Field, FieldKind, PathMode, Settings, SettingsSchema};
+use studiocraft_model::{Field, FieldKind, PathMode, ReconnectSettings, Settings, SettingsSchema};
 use studiocraft_plugin::{EncoderKind, Output, OutputInstance, OutputJob, OutputStatus, Plugin, PluginError, RateControl, Registry};
 
 use crate::native::Native;
@@ -251,10 +251,35 @@ pub fn stream_targets(settings: &Settings) -> Result<Vec<Target>, PluginError> {
         .collect()
 }
 
+/// The reconnect settings in a stream's settings: the `reconnect` object, each value optional and
+/// defaulting to [`ReconnectSettings::default`]'s. A value of the wrong type, or outside its range
+/// ([`ReconnectSettings::check`]), is an error.
+pub fn stream_reconnect(settings: &Settings) -> Result<ReconnectSettings, PluginError> {
+    let mut r = ReconnectSettings::default();
+    let Some(v) = settings.get("reconnect") else { return Ok(r) };
+    let Some(obj) = v.as_object() else {
+        return Err(PluginError::Failed("the stream's reconnect settings are not an object".into()));
+    };
+    if let Some(v) = obj.get("enabled") {
+        r.enabled = v.as_bool().ok_or_else(|| PluginError::Failed("the reconnect setting enabled is not true or false".into()))?;
+    }
+    for (key, field) in [("first_delay_s", &mut r.first_delay_s), ("max_delay_s", &mut r.max_delay_s), ("max_tries", &mut r.max_tries)] {
+        if let Some(v) = obj.get(key) {
+            *field = v
+                .as_u64()
+                .and_then(|n| u32::try_from(n).ok())
+                .ok_or_else(|| PluginError::Failed(format!("the reconnect setting {key} is not a whole number from 0 to {}", u32::MAX)))?;
+        }
+    }
+    r.check().map_err(PluginError::Failed)?;
+    Ok(r)
+}
+
 impl Output for Stream {
     fn start(&self, settings: &Settings, job: OutputJob) -> Result<Box<dyn OutputInstance>, PluginError> {
         let targets = stream_targets(settings)?;
-        Ok(Box::new(Streaming::start(&job, targets)?))
+        let reconnect = stream_reconnect(settings)?;
+        Ok(Box::new(Streaming::start(&job, targets, reconnect)?))
     }
 }
 
