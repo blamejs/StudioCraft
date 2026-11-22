@@ -12,6 +12,9 @@ use egui::{Color32, Pos2, Rect, Sense, Stroke, StrokeKind, TextureId, Ui, Vec2 a
 use studiocraft_model::{ItemId, Transform, Vec2};
 use studiocraft_render::{CanvasViews, Ring};
 
+use crate::kit::tokens::{MarkColors, paint};
+use crate::theme;
+
 /// The canvas textures registered with egui's renderer.
 #[derive(Default)]
 pub struct Textures {
@@ -206,9 +209,16 @@ pub struct EditEvent {
     pub context: bool,
 }
 
-/// The color of the lines a drag snapped to.
-const GUIDE: Color32 = Color32::from_rgb(255, 64, 160);
 const HANDLE: f32 = 7.0;
+
+/// The most dashes the outline of a locked item is drawn with. A longer outline gets longer
+/// dashes and gaps.
+const MAX_DASHES: f32 = 2048.0;
+
+/// The colors of the marks the view draws, in the window's light or dark mode.
+fn marks(ui: &Ui) -> &'static MarkColors {
+    MarkColors::of(craft_ui::runtime::env::Env::of(ui).view().mode())
+}
 
 #[derive(Default)]
 pub struct Editor {
@@ -315,7 +325,7 @@ pub fn moved(from: Transform, native: (u32, u32), delta: Vec2, targets: &SnapTar
 /// Draw the lines a drag snapped to across the canvas.
 fn draw_guides(ui: &Ui, view: View, guides: &[Guide]) {
     let painter = ui.painter_at(view.rect);
-    let stroke = Stroke::new(1.0, GUIDE);
+    let stroke = Stroke::new(1.0, paint(marks(ui).guide));
     for g in guides {
         if g.along == Axis::Y {
             let sx = view.to_screen(Vec2::new(g.at, 0.0)).x;
@@ -330,6 +340,28 @@ fn draw_guides(ui: &Ui, view: View, guides: &[Guide]) {
 fn outline(ui: &Ui, view: View, corners: [Vec2; 4], color: Color32, width: f32) {
     let pts: Vec<Pos2> = corners.iter().map(|c| view.to_screen(*c)).collect();
     ui.painter_at(view.rect.expand(HANDLE)).add(egui::Shape::closed_line(pts, Stroke::new(width, color)));
+}
+
+/// The outline of [`outline`], dashed with the theme's dash and gap lengths.
+fn dashed_outline(ui: &Ui, view: View, corners: [Vec2; 4], color: Color32, width: f32) {
+    let (dash, gap) = theme::with_root(ui.ctx(), |cx| (cx.tokens.stroke.dash, cx.tokens.stroke.dash_gap));
+    let pts = corners.map(|c| view.to_screen(c));
+    ui.painter_at(view.rect.expand(HANDLE)).extend(dashed_closed(pts, Stroke::new(width, color), dash, gap));
+}
+
+/// A closed dashed line through `pts`, with dashes `dash` and gaps `gap` long (at least a point
+/// each). An outline longer than [`MAX_DASHES`] dashes and gaps gets longer ones, and an outline
+/// whose length is not a number is not drawn.
+fn dashed_closed(pts: [Pos2; 4], stroke: Stroke, dash: f32, gap: f32) -> Vec<egui::Shape> {
+    let at_least_one = |x: f32| if x.is_finite() { x.max(1.0) } else { 1.0 };
+    let (dash, gap) = (at_least_one(dash), at_least_one(gap));
+    let length: f32 = (0..4).map(|i| pts[i].distance(pts[(i + 1) % 4])).sum();
+    if !length.is_finite() {
+        return Vec::new();
+    }
+    let stretch = (length / (MAX_DASHES * (dash + gap))).max(1.0);
+    let path = [pts[0], pts[1], pts[2], pts[3], pts[0]];
+    egui::Shape::dashed_line(&path, stroke, dash * stretch, gap * stretch)
 }
 
 impl Editor {
@@ -448,13 +480,16 @@ impl Editor {
             let dragged = self.drag.as_ref().and_then(|d| Some((d.item, d.last?)));
             let t = ev.transform.or(dragged).filter(|(id, _)| *id == it.id).map_or(it.transform, |(_, t)| t);
             let corners = t.corners(n);
-            let color = if it.locked { Color32::from_rgb(200, 80, 80) } else { accent };
-            outline(ui, view, corners, color, 2.0);
+            if it.locked {
+                dashed_outline(ui, view, corners, paint(marks(ui).locked), 2.0);
+            } else {
+                outline(ui, view, corners, accent, 2.0);
+            }
             if !it.locked && !locked {
                 let painter = ui.painter_at(view.rect.expand(HANDLE));
                 for k in corners {
                     let r = Rect::from_center_size(view.to_screen(k), EVec2::splat(HANDLE));
-                    painter.rect_filled(r, 1.0, color);
+                    painter.rect_filled(r, 1.0, accent);
                     painter.rect_stroke(r, 1.0, Stroke::new(1.0, Color32::BLACK), StrokeKind::Outside);
                 }
             }
@@ -664,6 +699,82 @@ mod tests {
         f.hold(egui::Modifiers::ALT).drag_at(center, by);
         let (_, t) = last(&seen).unwrap_or_else(|| panic!("the drag moves the item"));
         assert!(close(t.position, Vec2::new(10.0, 100.0)), "Alt turns snapping off: {t:?}");
+    }
+
+    /// The colors of the line segments and paths a frame in suite mode `mode` draws when `draw`
+    /// runs, with the mark colors of that mode.
+    fn lines_in(mode: craft_theme::Mode, mut draw: impl FnMut(&mut Ui)) -> (Vec<Color32>, MarkColors) {
+        use craft_ui::runtime::frame::FrameInput;
+        fn walk(shape: &egui::Shape, found: &mut Vec<Color32>) {
+            match shape {
+                egui::Shape::LineSegment { stroke, .. } => found.push(stroke.color),
+                egui::Shape::Path(p) => {
+                    if let egui::epaint::ColorMode::Solid(c) = p.stroke.color {
+                        found.push(c);
+                    }
+                }
+                egui::Shape::Vec(v) => v.iter().for_each(|s| walk(s, found)),
+                _ => {}
+            }
+        }
+        let ctx = crate::test_context();
+        craft_ui::shell::embed::before_input(&ctx, |_| FrameInput::new(crate::theme::root_env().mode(mode)));
+        let mut marks_seen = None;
+        let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
+            marks_seen = Some(*marks(ui));
+            draw(ui);
+        });
+        out.textures_delta.clear();
+        let Some(marks_seen) = marks_seen else { panic!("the frame did not run") };
+        let mut found = Vec::new();
+        out.shapes.iter().for_each(|c| walk(&c.shape, &mut found));
+        (found, marks_seen)
+    }
+
+    #[test]
+    fn snap_guides_take_the_guide_color_of_the_window_mode() {
+        let view = View::fit(Rect::from_min_size(pos2(0.0, 0.0), vec2(400.0, 400.0)), (1920, 1080));
+        for mode in [craft_theme::Mode::Light, craft_theme::Mode::Dark] {
+            let (lines, k) = lines_in(mode, |ui| draw_guides(ui, view, &[v(96.0), h(54.0)]));
+            assert_eq!(k, *MarkColors::of(mode));
+            assert_eq!(lines, vec![paint(k.guide); 2], "{mode:?}: both guides are drawn in the guide color");
+        }
+    }
+
+    #[test]
+    fn a_locked_item_shows_a_dashed_outline_in_the_locked_color_and_no_handles() {
+        let view = View::fit(Rect::from_min_size(pos2(0.0, 0.0), vec2(400.0, 400.0)), (1920, 1080));
+        let locked = EditItem { locked: true, ..item(1, at(100.0, 100.0), (960, 540)) };
+        for mode in [craft_theme::Mode::Light, craft_theme::Mode::Dark] {
+            let mut editor = Editor::default();
+            let (lines, k) = lines_in(mode, |ui| {
+                editor.show(ui, view, (1920, 1080), &[locked], Some(ItemId(1)), false);
+            });
+            let dashes = lines.iter().filter(|c| **c == paint(k.locked)).count();
+            assert!(dashes > 4, "{mode:?}: the outline is dashed, {dashes} pieces");
+            assert_eq!(dashes, lines.len(), "{mode:?}: every line is part of the locked outline: {lines:?}");
+        }
+        let mut editor = Editor::default();
+        let free = item(1, at(100.0, 100.0), (960, 540));
+        let (lines, k) = lines_in(craft_theme::Mode::Dark, |ui| {
+            editor.show(ui, view, (1920, 1080), &[free], Some(ItemId(1)), false);
+        });
+        assert!(!lines.contains(&paint(k.locked)), "an item that is not locked keeps the solid accent outline");
+    }
+
+    #[test]
+    fn a_dashed_outline_stays_bounded_for_huge_and_broken_boxes() {
+        let stroke = Stroke::new(2.0, Color32::WHITE);
+        let square = [pos2(0.0, 0.0), pos2(100.0, 0.0), pos2(100.0, 100.0), pos2(0.0, 100.0)];
+        let normal = dashed_closed(square, stroke, 4.0, 3.0);
+        assert!(normal.len() > 50, "400 points of outline in 7-point steps: {}", normal.len());
+        let huge = [pos2(0.0, 0.0), pos2(1e9, 0.0), pos2(1e9, 1e9), pos2(0.0, 1e9)];
+        let capped = dashed_closed(huge, stroke, 4.0, 3.0);
+        assert!(!capped.is_empty() && capped.len() as f32 <= MAX_DASHES + 8.0, "{} dashes", capped.len());
+        let broken = [pos2(f32::NAN, 0.0), pos2(1.0, 0.0), pos2(1.0, 1.0), pos2(0.0, 1.0)];
+        assert!(dashed_closed(broken, stroke, 4.0, 3.0).is_empty());
+        let zero = dashed_closed(square, stroke, 0.0, f32::NAN);
+        assert!(!zero.is_empty() && zero.len() <= 210, "a zero or broken dash is a point long: {}", zero.len());
     }
 
     #[test]

@@ -14,7 +14,9 @@ center line of another visible source, and lines show what it snapped to. A move
 axis, and each edge or center line of the source that then lies on a line shows that line. A corner drag snaps the edges it moves and keeps the aspect ratio: the edge closer to its
 line snaps and the other edge follows the ratio. With Shift held the corner drag changes the ratio
 and each edge snaps on its own. Holding Alt (Option on macOS) turns snapping off. One drag is one
-undo step. You can lock a source so it can't be moved, or lock the whole preview. Each scene item can be
+undo step. You can lock a source so it can't be moved, or lock the whole preview. A selected locked
+source shows a dashed outline and no handles. The snap lines and the locked outline take their
+colors from the window's light or dark mode. Each scene item can be
 shown or hidden, and every change can be undone.
 
 The Transform menu (in Edit and in a source's context menu) has Fit to Screen, which shows the
@@ -189,8 +191,8 @@ system's default output device, and Microphone, the default input device. Deskto
 sound on Windows and Linux only.
 
 The Audio Mixer dock shows peak and RMS meters with peak hold, a volume fader in dB, and a mute
-button for every audible source. A muted source's mute button shows the muted speaker in the
-warning color. The settings button at the end of each channel opens a menu with Properties…,
+button for every audible source. A muted source's mute button shows the muted speaker on a
+warning-colored fill. The settings button at the end of each channel opens a menu with Properties…,
 Filters… and Rename. Rename asks for the new name in a prompt, so it also renames a global audio
 source that the Sources dock does not list. The fader runs from silence to +20 dB of boost (StudioCraft's own
 limit), with a mark at 0 dB. A boosted source is louder than its input, and the final mix is still
