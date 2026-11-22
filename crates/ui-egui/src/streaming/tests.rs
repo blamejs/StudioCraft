@@ -765,19 +765,56 @@ fn open_details_show_their_fields_and_mask_the_server() {
 }
 
 #[test]
-fn the_key_choice_offers_its_sources_in_order() {
+fn the_key_cards_offer_each_source_with_where_its_key_is_kept() {
     let d = Destination { id: "main".into(), server: "rtmp://a.example/live".into(), ..Destination::default() };
     let shown = Shown::of(StreamSettings { destinations: vec![d.clone()], ..StreamSettings::default() });
+    let w = Window::new(shown, StreamingPanel { editing: Some(Edit::of(&d)), ..StreamingPanel::default() });
+    let texts = w.texts();
+    // Each source has a card named by its label, with the text that says where its key is kept,
+    // in `KeyChoice::ALL` order: side by side from the start, or one under the other.
+    let mut cards = Vec::new();
+    for c in KeyChoice::ALL {
+        let Some(card) = w.f.by_label(c.label()) else { panic!("no card for {}: {texts:?}", c.label()) };
+        assert!(texts.iter().any(|t| t == c.description()), "{} in {texts:?}", c.description());
+        cards.push(card.rect);
+    }
+    for pair in cards.windows(2) {
+        assert!(pair[1].left() > pair[0].right() || pair[1].top() > pair[0].bottom(), "{cards:?}");
+    }
+    assert!(KeyChoice::Profile.description().contains("plain text"), "the profile's key is said to be kept as plain text");
+    assert!(!texts.iter().any(|t| t.contains("Recommended")), "no card is recommended: {texts:?}");
+    // The key choice is the cards; no list opens over the details.
+    assert!(!texts.iter().any(|t| t == "None (a key at the end of the server address)"), "{texts:?}");
+    assert!(w.acts.borrow().is_empty(), "drawing does nothing");
+}
+
+#[test]
+fn a_key_card_chooses_its_source_and_save_sends_it() {
+    let d = Destination { id: "b".into(), server: "rtmp://b.example/live".into(), ..Destination::default() };
+    let shown = Shown::of(StreamSettings { destinations: vec![d.clone()], ..StreamSettings::default() });
     let mut w = Window::new(shown, StreamingPanel { editing: Some(Edit::of(&d)), ..StreamingPanel::default() });
-    let Some(select) = w.f.by_label("Stream key") else { panic!("no Stream key choice: {:?}", w.texts()) };
-    w.f.click(&select).frame(Vec::new());
-    // The choice shows its value, and the list under it each choice top to bottom in
-    // `KeyChoice::ALL` order.
-    let mut rows: Vec<(f32, String)> = w.f.texts().iter().map(|t| (t.rect.top(), t.text.clone())).collect();
-    rows.sort_by(|a, b| a.0.total_cmp(&b.0));
-    let labels: Vec<&str> = KeyChoice::ALL.iter().map(|c| c.label()).collect();
-    let listed: Vec<&str> = rows.iter().map(|(_, t)| t.as_str()).filter(|t| labels.contains(t)).collect();
-    assert_eq!(listed, [KeyChoice::None.label(), labels[0], labels[1], labels[2]], "{rows:?}");
+    let key = |w: &Window| w.panel.borrow().editing.as_ref().map(|e| e.key);
+    assert_eq!(key(&w), Some(KeyChoice::None));
+    assert!(!w.texts().iter().any(|t| t == "Session key name"), "no session key fields for another source");
+    // A click on the session card chooses it and shows its fields; nothing is saved yet.
+    let Some(held) = w.f.by_label(KeyChoice::Held.label()) else { panic!("no session key card: {:?}", w.texts()) };
+    w.f.click(&held).frame(Vec::new());
+    assert_eq!(key(&w), Some(KeyChoice::Held));
+    assert!(w.texts().iter().any(|t| t == "Session key name"), "{:?}", w.texts());
+    assert!(w.acts.borrow().is_empty(), "choosing a card saves nothing");
+    // A click on the profile card chooses it, and Save sends it.
+    let Some(profile) = w.f.by_label(KeyChoice::Profile.label()) else { panic!("no profile key card: {:?}", w.texts()) };
+    w.f.click(&profile).frame(Vec::new());
+    assert_eq!(key(&w), Some(KeyChoice::Profile));
+    assert!(!w.texts().iter().any(|t| t == "Session key name"), "{:?}", w.texts());
+    let Some(save) = w.f.by_label("Save") else { panic!("no Save") };
+    w.f.click(&save);
+    let acts = w.acts.borrow();
+    assert!(
+        matches!(acts.as_slice(), [Act::Run(cmd)] if cmd.id == "stream.destination_set" && cmd.params["key"] == json!("profile")),
+        "{}",
+        acts.len()
+    );
 }
 
 #[test]

@@ -565,6 +565,12 @@ menu	Transform	变换
 	Add a destination to stream to {service}	添加推流到 {service} 的目标
 	Add a destination for a custom server	添加自定义服务器目标
 	A profile holds at most {max} destinations	一个配置文件最多可有 {max} 个目标
+	The profile's stream key	配置文件的推流密钥
+	A key for this session only	仅限本次会话的密钥
+	No separate key	无单独密钥
+	Typed in Settings › Stream and saved in the profile file as plain text. Anyone who can read that file can read the key.	在“设置 › 直播”中输入，并以明文保存在配置文件中。任何能读取该文件的人都能读取此密钥。
+	Held in memory until you forget it or quit. It is not written to the profile.	保存在内存中，直到你清除它或退出程序。不会写入配置文件。
+	Any key is the last part of the server address, which is saved in the profile file as plain text.	密钥（如有）是服务器地址的最后一部分，该地址以明文保存在配置文件中。
 	Fill Screen	填满屏幕
 @msg	The scenes could not be laid out for the new canvas: {error}	无法为新画布排列场景：{error}
 	Set up	准备

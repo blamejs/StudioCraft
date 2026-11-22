@@ -565,6 +565,12 @@ menu	Transform	變形
 	Add a destination to stream to {service}	新增串流到 {service} 的目標
 	Add a destination for a custom server	新增自訂伺服器目標
 	A profile holds at most {max} destinations	一個設定檔最多可有 {max} 個目標
+	The profile's stream key	設定檔的串流金鑰
+	A key for this session only	僅限本次工作階段的金鑰
+	No separate key	無單獨金鑰
+	Typed in Settings › Stream and saved in the profile file as plain text. Anyone who can read that file can read the key.	在「設定 › 直播」中輸入，並以純文字儲存在設定檔中。任何能讀取該檔案的人都能讀取此金鑰。
+	Held in memory until you forget it or quit. It is not written to the profile.	保存在記憶體中，直到你清除它或結束程式。不會寫入設定檔。
+	Any key is the last part of the server address, which is saved in the profile file as plain text.	金鑰（如有）是伺服器位址的最後一部分，該位址以純文字儲存在設定檔中。
 	Fill Screen	填滿畫面
 @msg	The scenes could not be laid out for the new canvas: {error}	無法為新畫布排列場景：{error}
 	Set up	準備

@@ -630,8 +630,9 @@ fn every_label_chosen_at_run_time_has_an_english_row() {
     );
     // The entries of the Pause button's menu.
     labels.extend(crate::output_bar::pause_menu().into_iter().map(|(l, _)| l));
-    // The Stream key choices of the Streaming window.
+    // The Stream key cards of the Streaming window.
     labels.extend(crate::streaming::KeyChoice::ALL.map(crate::streaming::KeyChoice::label));
+    labels.extend(crate::streaming::KeyChoice::ALL.map(crate::streaming::KeyChoice::description));
     labels.extend(
         [
             Named::NewProfile,

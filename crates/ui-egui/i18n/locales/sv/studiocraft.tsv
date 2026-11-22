@@ -566,6 +566,12 @@ menu	Transform	Transformera
 	Add a destination to stream to {service}	Lägg till ett mål för att strömma till {service}
 	Add a destination for a custom server	Lägg till ett mål för en egen server
 	A profile holds at most {max} destinations	En profil rymmer högst {max} mål
+	The profile's stream key	Profilens sändningsnyckel
+	A key for this session only	En nyckel bara för den här sessionen
+	No separate key	Ingen separat nyckel
+	Typed in Settings › Stream and saved in the profile file as plain text. Anyone who can read that file can read the key.	Anges i Inställningar › Sändning och sparas i profilfilen som klartext. Den som kan läsa filen kan läsa nyckeln.
+	Held in memory until you forget it or quit. It is not written to the profile.	Hålls i minnet tills du glömmer den eller avslutar. Den skrivs inte till profilen.
+	Any key is the last part of the server address, which is saved in the profile file as plain text.	En eventuell nyckel är den sista delen av serveradressen, som sparas i profilfilen som klartext.
 	Fill Screen	Fyll skärmen
 @msg	The scenes could not be laid out for the new canvas: {error}	Scenerna kunde inte ordnas för den nya arbetsytan: {error}
 	Set up	Förbered

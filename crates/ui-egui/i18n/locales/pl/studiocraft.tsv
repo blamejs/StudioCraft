@@ -564,6 +564,12 @@ menu	Transform	Przekształć
 	Add a destination to stream to {service}	Dodaj miejsce docelowe transmisji w {service}
 	Add a destination for a custom server	Dodaj miejsce docelowe dla własnego serwera
 	A profile holds at most {max} destinations	Profil może mieć najwyżej {max} miejsc docelowych
+	The profile's stream key	Klucz transmisji z profilu
+	A key for this session only	Klucz tylko na tę sesję
+	No separate key	Bez osobnego klucza
+	Typed in Settings › Stream and saved in the profile file as plain text. Anyone who can read that file can read the key.	Wpisywany w Ustawienia › Transmisja i zapisywany w pliku profilu jako zwykły tekst. Każdy, kto może odczytać ten plik, może odczytać klucz.
+	Held in memory until you forget it or quit. It is not written to the profile.	Przechowywany w pamięci, dopóki go nie zapomnisz lub nie zamkniesz aplikacji. Nie jest zapisywany w profilu.
+	Any key is the last part of the server address, which is saved in the profile file as plain text.	Ewentualny klucz to ostatnia część adresu serwera, który jest zapisywany w pliku profilu jako zwykły tekst.
 	Fill Screen	Wypełnij ekran
 @msg	The scenes could not be laid out for the new canvas: {error}	Nie udało się rozmieścić scen dla nowego płótna: {error}
 	Set up	Przygotowanie

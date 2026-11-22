@@ -564,6 +564,12 @@ menu	Transform	Transformar
 	Add a destination to stream to {service}	Adicionar um destino para transmitir para {service}
 	Add a destination for a custom server	Adicionar um destino para um servidor personalizado
 	A profile holds at most {max} destinations	Um perfil comporta no máximo {max} destinos
+	The profile's stream key	A chave de transmissão do perfil
+	A key for this session only	Uma chave só para esta sessão
+	No separate key	Sem chave separada
+	Typed in Settings › Stream and saved in the profile file as plain text. Anyone who can read that file can read the key.	Digitada em Configurações › Transmissão e salva no arquivo do perfil como texto simples. Quem puder ler esse arquivo pode ler a chave.
+	Held in memory until you forget it or quit. It is not written to the profile.	Mantida na memória até você esquecê-la ou sair. Não é gravada no perfil.
+	Any key is the last part of the server address, which is saved in the profile file as plain text.	A chave, se houver, é a última parte do endereço do servidor, que é salvo no arquivo do perfil como texto simples.
 	Fill Screen	Preencher a tela
 @msg	The scenes could not be laid out for the new canvas: {error}	Não foi possível reorganizar as cenas para a nova tela de pintura: {error}
 	Set up	Preparar

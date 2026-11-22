@@ -567,6 +567,12 @@ menu	Transform	Dönüştür
 	Add a destination to stream to {service}	{service} yayını için hedef ekle
 	Add a destination for a custom server	Özel sunucu için hedef ekle
 	A profile holds at most {max} destinations	Bir profilde en fazla {max} hedef olabilir
+	The profile's stream key	Profilin yayın anahtarı
+	A key for this session only	Yalnızca bu oturum için bir anahtar
+	No separate key	Ayrı anahtar yok
+	Typed in Settings › Stream and saved in the profile file as plain text. Anyone who can read that file can read the key.	Ayarlar › Yayın bölümünde yazılır ve profil dosyasına düz metin olarak kaydedilir. O dosyayı okuyabilen herkes anahtarı okuyabilir.
+	Held in memory until you forget it or quit. It is not written to the profile.	Siz unutturana veya çıkana kadar bellekte tutulur. Profile yazılmaz.
+	Any key is the last part of the server address, which is saved in the profile file as plain text.	Varsa anahtar, sunucu adresinin son parçasıdır; adres profil dosyasına düz metin olarak kaydedilir.
 	Fill Screen	Ekranı Doldur
 @msg	The scenes could not be laid out for the new canvas: {error}	Sahneler yeni tuvale göre yerleştirilemedi: {error}
 	Set up	Hazırlık

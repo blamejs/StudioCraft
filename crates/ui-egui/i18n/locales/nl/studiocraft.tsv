@@ -555,6 +555,12 @@ menu	Transform	Transformeren
 	Add a destination to stream to {service}	Bestemming toevoegen om naar {service} te streamen
 	Add a destination for a custom server	Bestemming voor een eigen server toevoegen
 	A profile holds at most {max} destinations	Een profiel bevat maximaal {max} bestemmingen
+	The profile's stream key	De streamsleutel van het profiel
+	A key for this session only	Een sleutel alleen voor deze sessie
+	No separate key	Geen aparte sleutel
+	Typed in Settings › Stream and saved in the profile file as plain text. Anyone who can read that file can read the key.	Ingevoerd in Instellingen › Stream en als platte tekst opgeslagen in het profielbestand. Iedereen die dat bestand kan lezen, kan de sleutel lezen.
+	Held in memory until you forget it or quit. It is not written to the profile.	Blijft in het geheugen tot je hem vergeet of afsluit. Hij wordt niet in het profiel geschreven.
+	Any key is the last part of the server address, which is saved in the profile file as plain text.	Een eventuele sleutel is het laatste deel van het serveradres, dat als platte tekst in het profielbestand wordt opgeslagen.
 	Fill Screen	Scherm vullen
 @msg	The scenes could not be laid out for the new canvas: {error}	De scènes konden niet voor het nieuwe canvas worden ingedeeld: {error}
 	Set up	Voorbereiden

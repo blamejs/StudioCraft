@@ -541,7 +541,14 @@ server for every account fills in that server. For the other services the detail
 service's page that shows the account's server and key. Edit opens a destination's service, name,
 server and key source. Choosing another service replaces a server that is empty or that is one of
 the services' documented servers, and keeps any other server. A service without a shared server leaves the server
-empty, and a destination saved for it without a server is turned off. The server field hides its text until Show is pressed. A row
+empty, and a destination saved for it without a server is turned off. The server field hides its text until Show is pressed.
+The key source is chosen from three cards, and each card says where its key is kept. The profile's stream key is typed
+in Settings › Stream and saved in the profile file as plain text. A key for this session only is held in memory until
+it is forgotten or StudioCraft quits, and is not written to the profile. With no separate key, any key is the last
+part of the server address, which is also saved in the profile file as plain text. A click, Space or Enter chooses a
+card, and the arrow keys choose the card before or after the focused one. Screen readers read each card as a radio
+button with its text as the description. The cards stand side by side when the details are wide enough, and one
+above the other otherwise. A row
 shows the service it streams to, and the row and the details show a service's logo only where the
 service publishes one for this use, at no less than the size its guidelines allow (`ASSETS.md`). Save closes the details once the change is made; a change that is refused
 leaves them open with what was typed. A destination whose key is held for the session has a field for that key:
