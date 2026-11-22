@@ -790,19 +790,38 @@ impl Checks {
         if let Some(url) = service.and_then(|svc| svc.status) {
             r.status = job.fetch(url, STATUS_LIMIT, Msg::Status);
         }
+        // Set when the lookup was given up at its limit, so an answer timed within the limit that
+        // is read later still counts.
+        let mut lookup_given_up = false;
         loop {
             if cancel.load(Ordering::SeqCst) {
                 return None;
             }
             let waited = self.clock.now().saturating_duration_since(start);
-            if r.lookup.unfinished() && waited >= self.limits.lookup {
-                r.lookup = Step::Done(Err(no_answer(self.limits.lookup)));
-            }
-            if !r.pending() || waited >= self.limits.total {
+            let lookup_late = r.lookup.unfinished() && waited >= self.limits.lookup;
+            if waited >= self.limits.total {
+                if lookup_late {
+                    r.lookup = Step::Done(Err(no_answer(self.limits.lookup)));
+                }
                 break;
             }
-            match rx.recv_timeout(self.limits.poll) {
-                Ok(Msg::Lookup(answer, at)) if r.lookup.unfinished() => {
+            // The replies already queued are read before the lookup is given up at its limit.
+            let msg = match rx.try_recv() {
+                Ok(msg) => Ok(msg),
+                Err(_) => {
+                    if lookup_late {
+                        r.lookup = Step::Done(Err(no_answer(self.limits.lookup)));
+                        lookup_given_up = true;
+                    }
+                    if !r.pending() {
+                        break;
+                    }
+                    rx.recv_timeout(self.limits.poll)
+                }
+            };
+            match msg {
+                Ok(Msg::Lookup(answer, at)) if r.lookup.unfinished() || lookup_given_up => {
+                    lookup_given_up = false;
                     if at.saturating_duration_since(start) >= self.limits.lookup {
                         r.lookup = Step::Done(Err(no_answer(self.limits.lookup)));
                         continue;
