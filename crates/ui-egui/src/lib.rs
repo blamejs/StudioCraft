@@ -282,9 +282,9 @@ pub struct StudioApp {
     frames: u64,
     /// Where the editable view was drawn last: its rectangle and screen points per canvas pixel.
     last_view: Option<(egui::Rect, f32)>,
-    /// Where each dock in the strip was drawn last: its index in `control::DOCK_NAMES`, its
-    /// rectangle and what its header drew.
-    dock_rects: Vec<(usize, egui::Rect, docks::Drawn)>,
+    /// Where each docked dock was drawn last: its index in `control::DOCK_NAMES`, its rectangle,
+    /// what its header drew and the region it was drawn in.
+    dock_rects: Vec<(usize, egui::Rect, docks::Drawn, store::Region)>,
     /// The same for each dock in a window of its own, with the window's rectangle and the
     /// rectangle of the title bar that moves it.
     floating_rects: Vec<(usize, egui::Rect, docks::Drawn, egui::Rect)>,
@@ -296,6 +296,13 @@ pub struct StudioApp {
     dock_window_gen: u32,
     /// Where the dock strip was drawn last.
     dock_strip: Option<egui::Rect>,
+    /// Where the left and right columns were drawn last.
+    dock_columns: [Option<egui::Rect>; 2],
+    /// Whether the columns' docks were drawn in the strip last, because the window was too narrow
+    /// for the columns.
+    docks_collapsed: bool,
+    /// How wide the area for the canvas and the docks was drawn last, once a frame was drawn.
+    docks_body_width: Option<f32>,
     /// Where the top row and the parts of the output bar were drawn last.
     output_bar: output_bar::Drawn,
     /// The paused banner above the program, and the resume announcement after it.
@@ -422,6 +429,9 @@ impl StudioApp {
             dock_window_rect: [None; store::DOCK_COUNT],
             dock_window_gen: 0,
             dock_strip: None,
+            dock_columns: [None; 2],
+            docks_collapsed: false,
+            docks_body_width: None,
             output_bar: output_bar::Drawn::default(),
             pause_banner: pause_banner::State::default(),
             updates: updates_ui::Runtime::default(),
@@ -1346,12 +1356,15 @@ impl StudioApp {
             "dock.move" => {
                 let i = Self::param_dock(cmd)?;
                 let left = match Self::param_str(cmd, "to")? {
-                    "left" => true,
-                    "right" => false,
-                    to => return Err(tmsg!("`dock.move`: `to` is `left` or `right`, not `{to}`", to = to)),
+                    "left" | "up" => true,
+                    "right" | "down" => false,
+                    to => return Err(tmsg!("`dock.move`: `to` is `left`, `right`, `up` or `down`, not `{to}`", to = to)),
                 };
                 let mut docks = self.store.prefs().docks;
-                let moved = docks.shift(i, left);
+                // The columns can have changed since the last frame (`dock.region`), so whether they
+                // are drawn in the strip is worked out again from the saved docks.
+                let collapsed = self.docks_body_width.is_some_and(|w| strip::collapsed(w, Self::dock_columns_of(&docks).2));
+                let moved = docks.shift(i, left, collapsed);
                 if moved {
                     self.store.update(|p| p.docks = docks);
                 }
@@ -1362,15 +1375,31 @@ impl StudioApp {
                 let i = Self::param_dock(cmd)?;
                 let floating =
                     cmd.params.get("floating").and_then(Value::as_bool).ok_or_else(|| tmsg!("`dock.float` needs `floating`: true or false"))?;
-                let changed = self.store.prefs().docks.is_floating(i) != floating;
+                let mut docks = self.store.prefs().docks;
+                let mut changed = docks.floating.get_mut(usize::from(i)).is_some_and(|f| std::mem::replace(f, floating) != floating);
+                // `false` puts the dock in the strip, from a window of its own or from a column.
+                if !floating {
+                    changed |= docks.set_region(i, store::Region::Bottom);
+                }
                 if changed {
-                    self.store.update(|p| {
-                        if let Some(f) = p.docks.floating.get_mut(usize::from(i)) {
-                            *f = floating;
-                        }
-                    });
+                    self.store.update(|p| p.docks = docks);
                 }
                 return Ok(json!({"floating": floating, "changed": changed}));
+            }
+            "dock.region" => {
+                let i = Self::param_dock(cmd)?;
+                let name = Self::param_str(cmd, "region")?;
+                let region = store::Region::parse(name)
+                    .ok_or_else(|| tmsg!("`dock.region`: `region` is `left`, `right` or `bottom`, not `{region}`", region = name))?;
+                let mut docks = self.store.prefs().docks;
+                let moved = docks.set_region(i, region);
+                // A dock in a window of its own is docked in the region.
+                let docked = docks.floating.get_mut(usize::from(i)).is_some_and(|f| std::mem::replace(f, false));
+                let changed = moved || docked;
+                if changed {
+                    self.store.update(|p| p.docks = docks);
+                }
+                return Ok(json!({"region": region.name(), "changed": changed}));
             }
             "dock.reset" => self.set_docks(store::Docks::default()),
             "dock.layout_save" => {
@@ -1384,18 +1413,15 @@ impl StudioApp {
             }
             "dock.layout_apply" => {
                 let name = Self::param_str(cmd, "name")?;
-                let layout =
-                    self.store.prefs().dock_layout(name).cloned().ok_or_else(|| tmsg!("there is no dock layout named `{name}`", name = name))?;
+                let layout = self.store.prefs().dock_layout(name).ok_or_else(|| tmsg!("there is no dock layout named `{name}`", name = name))?;
                 self.set_docks(layout.docks);
-                return Ok(json!({"applied": layout.name}));
+                return Ok(json!({"applied": layout.name, "built_in": store::is_built_in_layout(&layout.name)}));
             }
             "dock.layout_remove" => {
                 let name = Self::param_str(cmd, "name")?.to_string();
-                let mut removed = false;
+                let mut removed = Ok(());
                 self.store.update(|p| removed = p.remove_dock_layout(&name));
-                if !removed {
-                    return Err(tmsg!("there is no dock layout named `{name}`", name = name));
-                }
+                removed?;
                 return Ok(json!({"removed": name}));
             }
             "profile.new" => self.ask_name(ctx, Named::NewProfile, ""),
@@ -2137,12 +2163,20 @@ impl StudioApp {
         });
     }
 
+    /// The docks in the left and right columns, the columns' widths, and how wide the columns with
+    /// docks in them are together with their edges.
+    fn dock_columns_of(d: &store::Docks) -> ([Vec<u8>; 2], [f32; 2], f32) {
+        let columns = [d.shown_in(store::Region::Left, false), d.shown_in(store::Region::Right, false)];
+        let column_widths = [strip::column_width(d.left_width, strip::LEFT_WIDTH), strip::column_width(d.right_width, strip::RIGHT_WIDTH)];
+        let span: f32 = columns.iter().zip(column_widths).filter(|(c, _)| !c.is_empty()).map(|(_, w)| w + strip::DIVIDER).sum();
+        (columns, column_widths, span)
+    }
+
     fn docks(&mut self, ui: &mut Ui, acts: &mut Vec<Act>) {
         let d = self.store.prefs().docks;
-        // The transition and output controls are in the output bar; Docks shows or hides them there.
-        let shown = d.shown();
         self.dock_rects.clear();
         self.dock_strip = None;
+        self.dock_columns = [None; 2];
         let now = Instant::now();
         let dt = self.last_frame.map_or(0.0, |t| now.duration_since(t).as_secs_f32());
         self.last_frame = Some(now);
@@ -2152,12 +2186,19 @@ impl StudioApp {
         if !craft_ui::runtime::measure::active(&ctx) {
             self.dock_windows(ui, acts, dt);
         }
-        if shown.is_empty() {
+        // The columns beside the canvas, unless the window is too narrow for them; then their docks
+        // are drawn in the strip.
+        let body = ui.available_rect_before_wrap();
+        let (columns, column_widths, span) = Self::dock_columns_of(&d);
+        let collapsed = strip::collapsed(body.width(), span);
+        self.docks_collapsed = collapsed;
+        self.docks_body_width = Some(body.width());
+        // The transition and output controls are in the output bar; Docks shows or hides them there.
+        let shown = d.shown_in(store::Region::Bottom, collapsed);
+        if shown.is_empty() && (collapsed || columns.iter().all(Vec::is_empty)) {
             return;
         }
         let (panel_fill, reach) = theme::with_root(&ctx, |cx| (theme::color(cx, cx.tokens.color.surface.panel), cx.tokens.size.hit.target));
-        let window = ctx.viewport_rect().height();
-        let height = strip::height(window, d.height);
         let mut st = docks::DockState {
             selected: self.selected,
             renaming: &mut self.renaming,
@@ -2165,32 +2206,81 @@ impl StudioApp {
             meters: &mut self.meters,
             lanes: &mut self.lanes,
             dt,
-            place: Some((0, shown.len())),
+            place: None,
         };
         let studio = &self.studio;
         let rects = &mut self.dock_rects;
+        // The columns' rectangles, and their widths after an edge moved this frame.
+        let mut column_rects: [Option<egui::Rect>; 2] = [None; 2];
+        let mut new_columns: [Option<f32>; 2] = [None; 2];
+        for (c, (stacked, w)) in columns.iter().zip(column_widths).enumerate() {
+            if collapsed || stacked.is_empty() {
+                continue;
+            }
+            let left = c == 0;
+            let (region, id) = if left { (store::Region::Left, "dock-left") } else { (store::Region::Right, "dock-right") };
+            let panel = if left { egui::Panel::left(id) } else { egui::Panel::right(id) };
+            let shown_column = panel
+                .exact_size(w + strip::DIVIDER)
+                .resizable(false)
+                .show_separator_line(false)
+                .frame(egui::Frame::NONE.fill(panel_fill))
+                .show(ui, |ui| {
+                    let (full, _) = ui.allocate_exact_size(ui.available_rect_before_wrap().size(), egui::Sense::hover());
+                    // The 1 point line between the column and the canvas is on the column's inner side.
+                    let area = if left {
+                        egui::Rect::from_min_size(full.min, egui::vec2(w, full.height()))
+                    } else {
+                        egui::Rect::from_min_max(egui::pos2(full.right() - w, full.top()), full.max)
+                    };
+                    let heights = strip::stack(area.height(), stacked.len());
+                    let first = rects.len();
+                    let mut y = area.top();
+                    for (k, (i, h)) in stacked.iter().zip(&heights).enumerate() {
+                        let rect = egui::Rect::from_min_size(egui::pos2(area.left(), y), egui::vec2(area.width(), *h));
+                        let mut col = ui
+                            .new_child(egui::UiBuilder::new().id_salt(("dock", *i)).max_rect(rect).layout(egui::Layout::top_down(egui::Align::Min)));
+                        col.set_clip_rect(rect.intersect(ui.clip_rect()));
+                        st.place = Some(docks::Place { k, n: stacked.len(), column: true, region });
+                        let drawn = Self::draw_dock(*i, &mut col, studio, &mut st, acts);
+                        rects.push((usize::from(*i), rect, drawn, region));
+                        y += h + strip::DIVIDER;
+                    }
+                    let most = strip::column_most(body.width(), span, w + strip::DIVIDER);
+                    let edge = strip::column_edge(area, left, reach, most);
+                    let out = strip::Handles::new(tl!("Resize the column"), vec![edge]).id_salt((id, "edge")).show_at(ui, edge.bar);
+                    // As under the strip's top edge, a drag that starts on a header action under the
+                    // edge's band is the action's.
+                    for (n, (_, r)) in rects.iter().skip(first).flat_map(|(_, _, drawn, _)| drawn.actions.iter()).enumerate() {
+                        if r.intersects(edge.bar) {
+                            ui.interact(*r, egui::Id::unique(id).with(n), egui::Sense::drag());
+                        }
+                    }
+                    out.moved.map(|(_, at)| strip::column_drag(&edge, area.width(), left, at, most))
+                });
+            column_rects[c] = Some(shown_column.response.rect);
+            new_columns[c] = shown_column.inner;
+        }
+        let window = ctx.viewport_rect().height();
+        let height = strip::height(window, body.height(), d.height);
         let saved = d.widths();
         // Widths after a divider moved this frame, by dock index.
         let mut new_widths: Option<[f32; store::DOCK_COUNT]> = None;
-        let most = strip::max_height(window);
-        let panel =
+        let most = strip::max_height(body.height());
+        let panel = (!shown.is_empty()).then(|| {
             egui::Panel::bottom("docks").exact_size(height).show_separator_line(false).frame(egui::Frame::NONE.fill(panel_fill)).show(ui, |ui| {
                 let (area, _) = ui.allocate_exact_size(ui.available_rect_before_wrap().size(), egui::Sense::hover());
                 let widths = strip::widths(area.width(), &shown, saved);
+                let first = rects.len();
                 let mut x = area.left();
                 for (k, (i, w)) in shown.iter().zip(&widths).enumerate() {
                     let rect = egui::Rect::from_min_size(egui::pos2(x, area.top()), egui::vec2(*w, area.height()));
                     let mut col =
                         ui.new_child(egui::UiBuilder::new().id_salt(("dock", *i)).max_rect(rect).layout(egui::Layout::top_down(egui::Align::Min)));
                     col.set_clip_rect(rect.intersect(ui.clip_rect()));
-                    st.place = Some((k, shown.len()));
-                    let drawn = match i {
-                        0 => docks::scenes(&mut col, studio, &mut st, acts),
-                        1 => docks::sources(&mut col, studio, &mut st, acts),
-                        3 => docks::app_audio(&mut col, studio, &mut st, acts),
-                        _ => docks::mixer(&mut col, studio, &mut st, acts),
-                    };
-                    rects.push((usize::from(*i), rect, drawn));
+                    st.place = Some(docks::Place { k, n: shown.len(), column: false, region: d.region(*i) });
+                    let drawn = Self::draw_dock(*i, &mut col, studio, &mut st, acts);
+                    rects.push((usize::from(*i), rect, drawn, store::Region::Bottom));
                     x += w + strip::DIVIDER;
                 }
                 // The dividers and the top edge are splitters shown after the docks, so that their
@@ -2211,15 +2301,19 @@ impl StudioApp {
                 // Each header action under the edge's band gets a shield over the edge that takes a
                 // drag starting on the action, so the edge resizes only outside the actions. A click
                 // still reaches the action, which is the topmost widget there that takes clicks.
-                for (n, (_, r)) in rects.iter().flat_map(|(_, _, drawn)| drawn.actions.iter()).enumerate() {
+                for (n, (_, r)) in rects.iter().skip(first).flat_map(|(_, _, drawn, _)| drawn.actions.iter()).enumerate() {
                     ui.interact(*r, egui::Id::unique("dock-action-shield").with(n), egui::Sense::drag());
                 }
                 out.moved.map(|(_, at)| at - edge.at)
-            });
-        self.dock_strip = Some(panel.response.rect);
+            })
+        });
+        self.dock_strip = panel.as_ref().map(|p| p.response.rect);
+        self.dock_columns = column_rects;
         // The top edge moved down by this much makes the strip that much shorter.
-        let new_height = panel.inner.map(|down| strip::height(window, height - down));
-        if new_widths.is_some() || new_height.is_some_and(|h| h != height) {
+        let new_height = panel.and_then(|p| p.inner).map(|down| strip::height(window, body.height(), height - down));
+        let [new_left, new_right] = new_columns;
+        let new_columns = [new_left.filter(|w| *w != column_widths[0]), new_right.filter(|w| *w != column_widths[1])];
+        if new_widths.is_some() || new_height.is_some_and(|h| h != height) || new_columns.iter().any(Option::is_some) {
             self.store.update(|p| {
                 if let Some([a, b, c, e]) = new_widths {
                     p.docks.scenes_width = a;
@@ -2230,7 +2324,20 @@ impl StudioApp {
                 if let Some(h) = new_height {
                     p.docks.height = h;
                 }
+                let [l, r] = new_columns;
+                p.docks.left_width = l.unwrap_or(p.docks.left_width);
+                p.docks.right_width = r.unwrap_or(p.docks.right_width);
             });
+        }
+    }
+
+    /// Draw dock `i` (an index in `control::DOCK_NAMES`) in `ui`.
+    fn draw_dock(i: u8, ui: &mut Ui, studio: &Studio, st: &mut docks::DockState, acts: &mut Vec<Act>) -> docks::Drawn {
+        match i {
+            0 => docks::scenes(ui, studio, st, acts),
+            1 => docks::sources(ui, studio, st, acts),
+            3 => docks::app_audio(ui, studio, st, acts),
+            _ => docks::mixer(ui, studio, st, acts),
         }
     }
 

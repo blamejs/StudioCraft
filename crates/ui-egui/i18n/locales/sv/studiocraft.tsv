@@ -539,7 +539,7 @@ menu	Transform	Transformera
 @msg	the source has not shown a picture yet	källan har inte visat någon bild än
 @msg	settings are kept in memory only (--no-prefs)	inställningarna sparas bara i minnet (--no-prefs)
 @msg	`scopes.kind`: unknown scope `{name}` (one of {scopes})	`scopes.kind`: okänd videomätare `{name}` (en av {scopes})
-@msg	`dock.move`: `to` is `left` or `right`, not `{to}`	`dock.move`: `to` är `left` eller `right`, inte `{to}`
+@msg	`dock.move`: `to` is `left`, `right`, `up` or `down`, not `{to}`	`dock.move`: `to` är `left`, `right`, `up` eller `down`, inte `{to}`
 @msg	`dock.float` needs `floating`: true or false	`dock.float` behöver `floating`: true eller false
 @msg	`dock.layout_save`: `name` is a string	`dock.layout_save`: `name` är en sträng
 @msg	there is no dock layout named `{name}`	det finns ingen panellayout som heter `{name}`
@@ -568,3 +568,11 @@ menu	Transform	Transformera
 	A profile holds at most {max} destinations	En profil rymmer högst {max} mål
 	Fill Screen	Fyll skärmen
 @msg	The scenes could not be laid out for the new canvas: {error}	Scenerna kunde inte ordnas för den nya arbetsytan: {error}
+	Set up	Förbered
+	Review	Granska
+	Classic	Klassisk
+	Move to the Left Column	Flytta till vänstra kolumnen
+	Move to the Right Column	Flytta till högra kolumnen
+	Move Under the Canvas	Flytta under arbetsytan
+	Resize the column	Ändra kolumnens bredd
+	Place Dock	Placera panel

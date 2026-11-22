@@ -696,9 +696,22 @@ points. Scenes, Sources, Audio Mixer and Application Audio start 300, 340, 400 a
 narrower than 200 points while the window has room.
 
 You resize the strip by dragging its top edge outside the header actions, and resize the docks by
-dragging a divider. The edge and the dividers have 8-point hit bands, and a dragged strip can be up
-to 45% of the window's height. A right-click on a dock's title offers Move Left and Move Right,
-which pass over hidden docks, and Undock.
+dragging a divider. The edge and the dividers have 8-point hit bands. The strip grows only while the
+preview above it keeps at least 270 points of height, and it is never under 120 points.
+
+A dock can also sit in a column on the left or the right of the preview. A right-click on a dock's
+title offers Move to the Left Column, Move to the Right Column and Move Under the Canvas. The docks
+in a column share its height, and a 1-point line separates them. The left column starts 256 points
+wide and the right column 296 points. You resize a column by dragging its inner edge, between 200
+and 480 points, and a drag stops where a wider column would leave the preview less than 480 points
+of width. When the window is narrower than 900 points, or the columns would leave the preview
+less than 480 points of width, the columns' docks are drawn in the strip with its own docks, all in
+one order that Move Left, Move Right, Move Up and Move Down change, and they go back to their
+columns when the window is wider again.
+
+In the strip the right-click menu offers Move Left and Move Right, and in a column it offers Move Up
+and Move Down. Each one passes over hidden docks and moves a dock only among the docks drawn with
+it. The menu also offers Undock.
 
 An undocked dock is drawn in a window of its own inside the main window, with a title bar above the
 dock's header. You drag the window by its title bar and resize it from any edge or corner. A resize
@@ -706,11 +719,12 @@ from the left or top edge moves that edge, and the window keeps its new place. A
 place opens centered in the main window; Sources, Audio Mixer and Application Audio open 24, 48 and
 72 points further down and to the right, as far as the main window has room. Its starting and smallest sizes are in [MECHANICS.md](../MECHANICS.md#editing). When
 the main window is smaller, StudioCraft draws the undocked dock further in without changing its saved
-place or size. A right-click on the dock's title offers Dock in the Strip.
+place or size. A right-click on the dock's title offers Dock in the Strip, which puts the dock under
+the canvas, also when it was undocked from a column.
 
-StudioCraft keeps the strip's height, the docks' widths, visibility and order, which docks are
-undocked, and their windows' places and sizes until Docks › Reset Docks. Reset Docks puts every
-dock back in the strip in its first order.
+StudioCraft keeps the strip's height, the columns' widths, the docks' widths, visibility, order and
+places, which docks are undocked, and their windows' places and sizes until Docks › Reset Docks.
+Reset Docks puts every dock back in the strip in its first order.
 
 ### Dock layouts
 
@@ -719,6 +733,18 @@ puts a layout back, and Docks › Remove Layout deletes one. Layout names follow
 profile names and are compared without regard to case, so saving under a name that is taken
 replaces that layout. At most 32 layouts are kept, and a settings file with more keeps the first
 32.
+
+Docks › Layouts also lists four built-in layouts, above the saved ones:
+
+- **Set up**: Scenes and Sources in a 256-point left column, and Audio Mixer under the preview.
+- **Live**: Sources and Audio Mixer in a 268-point left column, and Scenes under the preview.
+- **Review**: Scenes in a 256-point left column, and Audio Mixer and Application Audio under the
+  preview, with Sources hidden.
+- **Classic**: every dock in the strip, as Reset Docks leaves them.
+
+The built-in layouts cannot be changed or removed, and saving under one of their names is refused.
+A saved layout from an earlier version whose name is now a built-in layout's is kept as
+"<name> (saved)".
 
 ### Fonts
 

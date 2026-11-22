@@ -612,8 +612,8 @@ fn every_literal_the_macros_look_up_has_an_english_row() {
 
 /// Labels that reach `tl!` through a variable: the move items of the Scenes and Sources menus, the
 /// recording qualities, the titles of the name prompts, and the other states of the buttons in
-/// the Sources and Audio Mixer docks, the routing labels of the Application Audio dock, and the
-/// titles of the docks' own windows.
+/// the Sources and Audio Mixer docks, the routing labels of the Application Audio dock, the titles
+/// of the docks' own windows, and the built-in dock layouts' names.
 #[test]
 fn every_label_chosen_at_run_time_has_an_english_row() {
     use crate::Named;
@@ -649,6 +649,8 @@ fn every_label_chosen_at_run_time_has_an_english_row() {
     labels.extend(crate::docks::ROUTE_ITEMS);
     labels.extend(crate::docks::ROUTE_TIPS);
     labels.extend(crate::control::DOCK_TITLES);
+    // The built-in dock layouts' names in Docks › Layouts.
+    labels.extend(crate::store::BUILT_IN_LAYOUTS);
     // The tooltips of the Scenes and Sources docks' header buttons.
     labels.extend(crate::commands::SCENE_HEADER.iter().chain(&crate::commands::SOURCE_HEADER).map(|(_, _, _, tip)| *tip));
     let en = english();

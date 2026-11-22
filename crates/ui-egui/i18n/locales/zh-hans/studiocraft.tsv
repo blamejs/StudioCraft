@@ -539,7 +539,7 @@ menu	Transform	变换
 @msg	the source has not shown a picture yet	该来源尚未显示画面
 @msg	settings are kept in memory only (--no-prefs)	设置仅保存在内存中（--no-prefs）
 @msg	`scopes.kind`: unknown scope `{name}` (one of {scopes})	`scopes.kind`：未知的示波器 `{name}`（可选 {scopes}）
-@msg	`dock.move`: `to` is `left` or `right`, not `{to}`	`dock.move`：`to` 应为 `left` 或 `right`，而不是 `{to}`
+@msg	`dock.move`: `to` is `left`, `right`, `up` or `down`, not `{to}`	`dock.move`：`to` 应为 `left`、`right`、`up` 或 `down`，而不是 `{to}`
 @msg	`dock.float` needs `floating`: true or false	`dock.float` 需要 `floating`：true 或 false
 @msg	`dock.layout_save`: `name` is a string	`dock.layout_save`：`name` 应为字符串
 @msg	there is no dock layout named `{name}`	没有名为 `{name}` 的停靠布局
@@ -567,3 +567,11 @@ menu	Transform	变换
 	A profile holds at most {max} destinations	一个配置文件最多可有 {max} 个目标
 	Fill Screen	填满屏幕
 @msg	The scenes could not be laid out for the new canvas: {error}	无法为新画布排列场景：{error}
+	Set up	准备
+	Review	回顾
+	Classic	经典
+	Move to the Left Column	移到左栏
+	Move to the Right Column	移到右栏
+	Move Under the Canvas	移到画布下方
+	Resize the column	调整栏宽
+	Place Dock	放置停靠面板

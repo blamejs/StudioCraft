@@ -1511,7 +1511,7 @@ fn dock_move_rearranges_the_strip_and_reset_puts_it_back() {
     run(&mut a, &ctx, "dock.mixer", json!({})).unwrap();
     frame_at(&mut a, &ctx, size);
     assert_eq!(dock_order(&a, &ctx), ["mixer", "sources", "scenes"]);
-    for bad in [json!({"dock": "stats", "to": "left"}), json!({"dock": "mixer", "to": "up"}), json!({"dock": "mixer"}), json!({"to": "left"})] {
+    for bad in [json!({"dock": "stats", "to": "left"}), json!({"dock": "mixer", "to": "sideways"}), json!({"dock": "mixer"}), json!({"to": "left"})] {
         assert!(run(&mut a, &ctx, "dock.move", bad.clone()).is_err(), "{bad}");
     }
     run(&mut a, &ctx, "dock.reset", json!({})).unwrap();
@@ -1577,7 +1577,7 @@ fn a_saved_dock_layout_puts_every_dock_back_as_it_was() {
     assert_eq!(names(&a.ui_inspect(&ctx)["docks"]), ["scenes", "sources", "mixer"]);
 
     let r = run(&mut a, &ctx, "dock.layout_apply", json!({"name": "talk"})).unwrap();
-    assert_eq!(r, json!({"applied": "Talk"}));
+    assert_eq!(r, json!({"applied": "Talk", "built_in": false}));
     for _ in 0..2 {
         frame_at(&mut a, &ctx, size);
     }
@@ -1627,7 +1627,213 @@ fn a_saved_dock_layout_puts_every_dock_back_as_it_was() {
     assert_eq!(r, json!({"removed": "TALK"}));
     run(&mut a, &ctx, "dock.layout_remove", json!({"name": "Game"})).unwrap();
     assert_eq!(a.ui_inspect(&ctx)["dock_layouts"], json!([]));
-    assert!(!state(&a, "dock.layout_apply") && !state(&a, "dock.layout_remove"));
+    assert!(state(&a, "dock.layout_apply"), "the built-in layouts can still be applied");
+    assert!(!state(&a, "dock.layout_remove"));
+}
+
+/// The docks drawn in `region` (`left`, `right` or `bottom`), in order.
+fn drawn_in(v: &Value, region: &str) -> Vec<String> {
+    v["docks"]
+        .as_array()
+        .unwrap_or(&Vec::new())
+        .iter()
+        .filter(|d| d["drawn_in"] == json!(region))
+        .filter_map(|d| d["dock"].as_str().map(str::to_string))
+        .collect()
+}
+
+#[test]
+fn the_built_in_layouts_put_docks_beside_the_canvas_and_classic_is_the_reset_strip() {
+    let mut a = app();
+    let ctx = crate::test_context();
+    let size = egui::vec2(1280.0, 800.0);
+    frame_at(&mut a, &ctx, size);
+    let v = a.ui_inspect(&ctx);
+    assert_eq!(v["built_in_dock_layouts"], json!(["Set up", "Live", "Review", "Classic"]));
+    let cmd = a.menu_command("Docks > Layouts > Set up").unwrap();
+    assert_eq!((cmd.id.as_str(), cmd.params.clone()), ("dock.layout_apply", json!({"name": "Set up"})));
+    assert!(a.item_state("dock.layout_apply").enabled && !a.item_state("dock.layout_remove").enabled, "built-in layouts and no saved ones");
+
+    let r = run(&mut a, &ctx, "dock.layout_apply", json!({"name": "set up"})).unwrap();
+    assert_eq!(r, json!({"applied": "Set up", "built_in": true}));
+    for _ in 0..2 {
+        frame_at(&mut a, &ctx, size);
+    }
+    let v = a.ui_inspect(&ctx);
+    assert_eq!(
+        (drawn_in(&v, "left"), drawn_in(&v, "bottom"), drawn_in(&v, "right")),
+        (vec!["scenes".into(), "sources".into()], vec!["mixer".into()], vec![])
+    );
+    let column = rect_of(&v["dock_columns"]["left"]["rect"]);
+    assert_eq!((column.left(), column.width()), (0.0, 257.0), "256 points and the 1 point line");
+    assert_eq!(v["dock_columns"]["right"], Value::Null);
+    let (scenes, sources) = (rect_of(&v["docks"][0]["rect"]), rect_of(&v["docks"][1]["rect"]));
+    assert_eq!((scenes.left(), scenes.width(), sources.width()), (0.0, 256.0, 256.0));
+    assert!((scenes.height() - sources.height()).abs() < 0.01 && (sources.top() - scenes.bottom() - 1.0).abs() < 0.01, "{scenes:?} {sources:?}");
+    assert_eq!((scenes.top(), sources.bottom()), (column.top(), column.bottom()), "the column runs from the output bar to the status bar");
+    let strip = rect_of(&v["dock_strip"]["rect"]);
+    assert_eq!((strip.left(), strip.right(), strip.height()), (257.0, 1280.0, 200.0), "the strip is under the canvas, beside the column");
+    let preview = rect_of(&v["preview"]["rect"]);
+    assert!(preview.left() >= column.right() && preview.bottom() <= strip.top() + 0.5, "the canvas {preview:?}");
+
+    run(&mut a, &ctx, "dock.layout_apply", json!({"name": "Live"})).unwrap();
+    frame_at(&mut a, &ctx, size);
+    let v = a.ui_inspect(&ctx);
+    assert_eq!((drawn_in(&v, "left"), drawn_in(&v, "bottom")), (vec!["sources".into(), "mixer".into()], vec!["scenes".into()]));
+    assert_eq!(rect_of(&v["dock_columns"]["left"]["rect"]).width(), 269.0);
+
+    run(&mut a, &ctx, "dock.layout_apply", json!({"name": "Review"})).unwrap();
+    frame_at(&mut a, &ctx, size);
+    let v = a.ui_inspect(&ctx);
+    assert_eq!((drawn_in(&v, "left"), drawn_in(&v, "bottom")), (vec!["scenes".into()], vec!["mixer".into(), "app_audio".into()]));
+
+    run(&mut a, &ctx, "dock.layout_apply", json!({"name": "CLASSIC"})).unwrap();
+    frame_at(&mut a, &ctx, size);
+    assert_eq!(a.store().prefs().docks, store::Docks::default(), "Classic is the strip Reset Docks gives");
+    let v = a.ui_inspect(&ctx);
+    assert_eq!((drawn_in(&v, "bottom"), v["dock_columns"]["left"].clone()), (vec!["scenes".into(), "sources".into(), "mixer".into()], Value::Null));
+    assert_eq!(rect_of(&v["dock_strip"]["rect"]).width(), 1280.0);
+
+    // The built-in names can't be saved over or removed, in any letters.
+    for (id, name) in
+        [("dock.layout_save", "Live"), ("dock.layout_save", "REVIEW"), ("dock.layout_remove", "Classic"), ("dock.layout_remove", "set up")]
+    {
+        let e = run(&mut a, &ctx, id, json!({ "name": name })).unwrap_err();
+        assert!(e.contains("built-in layout"), "{id} {name}: {e}");
+    }
+    assert_eq!(a.store().prefs().dock_layout_names(), Vec::<String>::new());
+}
+
+#[test]
+fn at_760_by_480_the_columns_are_drawn_in_the_strip() {
+    let mut a = app();
+    let ctx = crate::test_context();
+    run(&mut a, &ctx, "dock.layout_apply", json!({"name": "Set up"})).unwrap();
+    let small = egui::vec2(760.0, 480.0);
+    for _ in 0..2 {
+        frame_at(&mut a, &ctx, small);
+    }
+    let v = a.ui_inspect(&ctx);
+    assert_eq!(v["dock_columns"]["collapsed"], json!(true));
+    assert_eq!(v["dock_columns"]["left"], Value::Null);
+    assert_eq!(drawn_in(&v, "bottom"), ["scenes", "sources", "mixer"], "every dock in the strip, in the docks' order");
+    let strip = rect_of(&v["dock_strip"]["rect"]);
+    assert!((strip.height() - 144.0).abs() < 0.01 && strip.width() == 760.0, "{strip:?}");
+    for d in v["docks"].as_array().cloned().unwrap_or_default() {
+        assert!(rect_of(&d["rect"]).width() >= crate::strip::MIN_WIDTH - 0.5, "{d}");
+        assert_eq!(d["region"], json!(if d["dock"] == json!("mixer") { "bottom" } else { "left" }), "each dock keeps its own region");
+    }
+    // A move in the collapsed strip passes the docks drawn there, and the regions stay as saved.
+    let r = run(&mut a, &ctx, "dock.move", json!({"dock": "mixer", "to": "left"})).unwrap();
+    assert_eq!(r["moved"], json!(true));
+    frame_at(&mut a, &ctx, small);
+    assert_eq!(drawn_in(&a.ui_inspect(&ctx), "bottom"), ["scenes", "mixer", "sources"]);
+    // A wider window shows the column again.
+    let wide = egui::vec2(1280.0, 800.0);
+    frame_at(&mut a, &ctx, wide);
+    let v = a.ui_inspect(&ctx);
+    assert_eq!(v["dock_columns"]["collapsed"], json!(false));
+    assert_eq!((drawn_in(&v, "left"), drawn_in(&v, "bottom")), (vec!["scenes".into(), "sources".into()], vec!["mixer".into()]));
+}
+
+#[test]
+fn the_strip_stops_growing_while_the_canvas_has_270_points_of_height() {
+    let mut a = app();
+    let ctx = crate::test_context();
+    let size = egui::vec2(1280.0, 800.0);
+    for _ in 0..2 {
+        frame_at(&mut a, &ctx, size);
+    }
+    let v = a.ui_inspect(&ctx);
+    let (bar, top) = (rect_of(&v["output_bar"]["rect"]), rect_of(&v["dock_strip"]["rect"]).top());
+    for events in drag(egui::pos2(900.0, top + 0.5), egui::pos2(900.0, 40.0)) {
+        frame_with(&mut a, &ctx, size, events);
+    }
+    frame_at(&mut a, &ctx, size);
+    let strip = rect_of(&a.ui_inspect(&ctx)["dock_strip"]["rect"]);
+    assert_eq!(a.store().prefs().docks.height, 474.0, "744 points between the output bar and the status bar, less 270");
+    assert!((strip.top() - bar.bottom() - crate::strip::CANVAS_MIN_HEIGHT).abs() < 0.5, "{strip:?} under {bar:?}");
+    // A saved height past the limit, from a taller window, is drawn at the limit and kept as saved.
+    a.store.update(|p| p.docks.height = 700.0);
+    frame_at(&mut a, &ctx, size);
+    assert_eq!(rect_of(&a.ui_inspect(&ctx)["dock_strip"]["rect"]).height(), 474.0);
+    assert_eq!(a.store().prefs().docks.height, 700.0);
+}
+
+#[test]
+fn dock_region_moves_a_dock_and_a_column_edge_resizes_its_column() {
+    let mut a = app();
+    let ctx = crate::test_context();
+    let size = egui::vec2(1280.0, 800.0);
+    frame_at(&mut a, &ctx, size);
+    assert_eq!(run(&mut a, &ctx, "dock.region", json!({"dock": "mixer", "region": "right"})).unwrap(), json!({"region": "right", "changed": true}));
+    assert_eq!(run(&mut a, &ctx, "dock.region", json!({"dock": "mixer", "region": "right"})).unwrap(), json!({"region": "right", "changed": false}));
+    for bad in [
+        json!({"dock": "mixer", "region": "top"}),
+        json!({"dock": "stats", "region": "left"}),
+        json!({"dock": "mixer"}),
+        json!({"dock": "mixer", "region": 1}),
+    ] {
+        assert!(run(&mut a, &ctx, "dock.region", bad.clone()).is_err(), "{bad}");
+    }
+    for _ in 0..2 {
+        frame_at(&mut a, &ctx, size);
+    }
+    let v = a.ui_inspect(&ctx);
+    assert_eq!((drawn_in(&v, "right"), drawn_in(&v, "bottom")), (vec!["mixer".into()], vec!["scenes".into(), "sources".into()]));
+    let column = rect_of(&v["dock_columns"]["right"]["rect"]);
+    assert_eq!((column.right(), column.width()), (1280.0, 297.0));
+    let mixer = v["docks"].as_array().and_then(|d| d.iter().find(|d| d["dock"] == json!("mixer"))).map(|d| rect_of(&d["rect"])).unwrap();
+    assert_eq!((mixer.left(), mixer.width()), (984.0, 296.0));
+    // Dragging the column's inner edge 40 points left widens it to 336 points, and the strip under
+    // the canvas gets narrower.
+    let y = mixer.center().y;
+    for events in drag(egui::pos2(mixer.left() - 0.5, y), egui::pos2(mixer.left() - 40.5, y)) {
+        frame_with(&mut a, &ctx, size, events);
+    }
+    frame_at(&mut a, &ctx, size);
+    assert_eq!(a.store().prefs().docks.right_width, 336.0);
+    let v = a.ui_inspect(&ctx);
+    assert_eq!(rect_of(&v["dock_columns"]["right"]["rect"]).width(), 337.0);
+    assert_eq!(v["dock_columns"]["right"]["saved_width"], json!(336.0));
+    assert_eq!(rect_of(&v["dock_strip"]["rect"]).right(), 943.0);
+    // A dock moved into a column moves up and down there, and Reset Docks puts everything back.
+    run(&mut a, &ctx, "dock.region", json!({"dock": "scenes", "region": "right"})).unwrap();
+    assert_eq!(run(&mut a, &ctx, "dock.move", json!({"dock": "mixer", "to": "up"})).unwrap()["moved"], json!(true));
+    frame_at(&mut a, &ctx, size);
+    assert_eq!(drawn_in(&a.ui_inspect(&ctx), "right"), ["mixer", "scenes"]);
+    run(&mut a, &ctx, "dock.reset", json!({})).unwrap();
+    frame_at(&mut a, &ctx, size);
+    let v = a.ui_inspect(&ctx);
+    assert_eq!((drawn_in(&v, "bottom"), v["dock_columns"]["right"].clone()), (vec!["scenes".into(), "sources".into(), "mixer".into()], Value::Null));
+    assert_eq!(a.store().prefs().docks.right_width, 0.0);
+}
+
+#[test]
+fn dock_move_after_dock_region_uses_the_columns_as_they_are_now() {
+    let mut a = app();
+    let ctx = crate::test_context();
+    let size = egui::vec2(1280.0, 800.0);
+    // Two 480-point columns leave the canvas less than 480 points, so their docks are drawn in the strip.
+    a.store.update(|p| {
+        p.docks.left_width = 480.0;
+        p.docks.right_width = 480.0;
+    });
+    run(&mut a, &ctx, "dock.region", json!({"dock": "scenes", "region": "left"})).unwrap();
+    run(&mut a, &ctx, "dock.region", json!({"dock": "sources", "region": "right"})).unwrap();
+    frame_at(&mut a, &ctx, size);
+    assert_eq!(a.ui_inspect(&ctx)["dock_columns"]["collapsed"], json!(true));
+    // With the right column empty the left column fits, and Sources is the first dock under the
+    // canvas before the next frame is drawn.
+    run(&mut a, &ctx, "dock.region", json!({"dock": "sources", "region": "bottom"})).unwrap();
+    let before = a.store().prefs().docks.order();
+    let r = run(&mut a, &ctx, "dock.move", json!({"dock": "sources", "to": "left"})).unwrap();
+    assert_eq!(r["moved"], json!(false), "{r}");
+    assert_eq!(a.store().prefs().docks.order(), before);
+    frame_at(&mut a, &ctx, size);
+    let v = a.ui_inspect(&ctx);
+    assert_eq!(v["dock_columns"]["collapsed"], json!(false));
+    assert_eq!((drawn_in(&v, "left"), drawn_in(&v, "bottom")), (vec!["scenes".into()], vec!["sources".into(), "mixer".into()]));
 }
 
 #[test]
@@ -2400,6 +2606,70 @@ fn click_text(app: &mut StudioApp, ctx: &egui::Context, shown: &[(String, egui::
         frame_texts(app, ctx, events);
     }
     frame_texts(app, ctx, vec![])
+}
+
+/// Right-click `at`, one step per frame; the texts of the frame after.
+fn right_click_texts(app: &mut StudioApp, ctx: &egui::Context, at: egui::Pos2) -> Vec<(String, egui::Rect)> {
+    for events in right_click(at) {
+        frame_texts(app, ctx, events);
+    }
+    frame_texts(app, ctx, vec![])
+}
+
+#[test]
+fn the_dock_menu_moves_a_dock_between_regions() {
+    let mut a = app();
+    a.set_language("en");
+    let ctx = crate::test_context();
+    run(&mut a, &ctx, "dock.region", json!({"dock": "mixer", "region": "left"})).unwrap();
+    frame_texts(&mut a, &ctx, vec![]);
+    frame_texts(&mut a, &ctx, vec![]);
+    let v = a.ui_inspect(&ctx);
+    let mixer =
+        |v: &Value, list: &str| v[list].as_array().and_then(|d| d.iter().find(|d| d["dock"] == json!("mixer")).cloned()).unwrap_or(Value::Null);
+    assert_eq!(mixer(&v, "docks")["drawn_in"], json!("left"));
+    // In a column the menu offers Move Up and Move Down, and a move to the other regions.
+    let shown = right_click_texts(&mut a, &ctx, rect_of(&mixer(&v, "docks")["title"]).center());
+    for text in ["Move Up", "Move Down", "Move to the Left Column", "Move to the Right Column", "Move Under the Canvas", "Undock"] {
+        assert!(shown.iter().any(|(t, _)| t == text), "`{text}` in {shown:?}");
+    }
+    assert!(!shown.iter().any(|(t, _)| t == "Move Left"), "{shown:?}");
+    click_text(&mut a, &ctx, &shown, "Move to the Right Column");
+    assert_eq!(a.store().prefs().docks.region(2), store::Region::Right);
+    frame_texts(&mut a, &ctx, vec![]);
+    let v = a.ui_inspect(&ctx);
+    assert_eq!(mixer(&v, "docks")["drawn_in"], json!("right"));
+    // A dock undocked from a column keeps its column, and its window's menu offers Dock in the Strip.
+    run(&mut a, &ctx, "dock.float", json!({"dock": "mixer", "floating": true})).unwrap();
+    frame_texts(&mut a, &ctx, vec![]);
+    frame_texts(&mut a, &ctx, vec![]);
+    let v = a.ui_inspect(&ctx);
+    assert_eq!(mixer(&v, "floating_docks")["region"], json!("right"));
+    assert_eq!(v["dock_columns"]["right"], Value::Null, "no column is drawn without a docked dock in it");
+    let shown = right_click_texts(&mut a, &ctx, rect_of(&mixer(&v, "floating_docks")["title"]).center());
+    assert!(shown.iter().any(|(t, _)| t == "Dock in the Strip"), "{shown:?}");
+    assert!(!shown.iter().any(|(t, _)| t.starts_with("Move")), "{shown:?}");
+    // Docking it again, as Dock in the Strip does, puts it under the canvas.
+    assert_eq!(run(&mut a, &ctx, "dock.float", json!({"dock": "mixer", "floating": false})).unwrap(), json!({"floating": false, "changed": true}));
+    let d = a.store().prefs().docks;
+    assert!(!d.is_floating(2) && d.region(2) == store::Region::Bottom, "{d:?}");
+    frame_texts(&mut a, &ctx, vec![]);
+    let v = a.ui_inspect(&ctx);
+    assert_eq!((drawn_in(&v, "bottom"), v["dock_columns"]["right"].clone()), (vec!["scenes".into(), "sources".into(), "mixer".into()], Value::Null));
+    // `dock.float` with `false` also moves a dock from a column into the strip.
+    run(&mut a, &ctx, "dock.region", json!({"dock": "sources", "region": "right"})).unwrap();
+    assert_eq!(run(&mut a, &ctx, "dock.float", json!({"dock": "sources", "floating": false})).unwrap(), json!({"floating": false, "changed": true}));
+    assert_eq!(a.store().prefs().docks.region(1), store::Region::Bottom);
+    assert_eq!(run(&mut a, &ctx, "dock.float", json!({"dock": "sources", "floating": false})).unwrap(), json!({"floating": false, "changed": false}));
+    // `dock.region` docks a dock in a window of its own in the region it names.
+    run(&mut a, &ctx, "dock.float", json!({"dock": "mixer", "floating": true})).unwrap();
+    assert_eq!(run(&mut a, &ctx, "dock.region", json!({"dock": "mixer", "region": "bottom"})).unwrap(), json!({"region": "bottom", "changed": true}));
+    assert!(!a.store().prefs().docks.is_floating(2));
+    run(&mut a, &ctx, "dock.float", json!({"dock": "mixer", "floating": true})).unwrap();
+    assert_eq!(run(&mut a, &ctx, "dock.region", json!({"dock": "mixer", "region": "left"})).unwrap(), json!({"region": "left", "changed": true}));
+    frame_texts(&mut a, &ctx, vec![]);
+    let v = a.ui_inspect(&ctx);
+    assert_eq!((drawn_in(&v, "left"), mixer(&v, "floating_docks")), (vec!["mixer".to_string()], Value::Null));
 }
 
 #[test]

@@ -548,7 +548,7 @@ menu	Transform	Transformer
 @msg	the source has not shown a picture yet	la source n'a pas encore affiché d'image
 @msg	settings are kept in memory only (--no-prefs)	les paramètres sont conservés en mémoire uniquement (--no-prefs)
 @msg	`scopes.kind`: unknown scope `{name}` (one of {scopes})	`scopes.kind` : scope vidéo inconnu `{name}` (parmi {scopes})
-@msg	`dock.move`: `to` is `left` or `right`, not `{to}`	`dock.move` : `to` vaut `left` ou `right`, pas `{to}`
+@msg	`dock.move`: `to` is `left`, `right`, `up` or `down`, not `{to}`	`dock.move` : `to` vaut `left`, `right`, `up` ou `down`, pas `{to}`
 @msg	`dock.float` needs `floating`: true or false	`dock.float` nécessite `floating` : true ou false
 @msg	`dock.layout_save`: `name` is a string	`dock.layout_save` : `name` est une chaîne
 @msg	there is no dock layout named `{name}`	aucune disposition des docks ne s'appelle `{name}`
@@ -577,3 +577,11 @@ menu	Transform	Transformer
 	A profile holds at most {max} destinations	Un profil contient au plus {max} destinations
 	Fill Screen	Remplir l'écran
 @msg	The scenes could not be laid out for the new canvas: {error}	Les scènes n'ont pas pu être disposées pour le nouveau canevas : {error}
+	Set up	Préparation
+	Review	Révision
+	Classic	Classique
+	Move to the Left Column	Déplacer dans la colonne de gauche
+	Move to the Right Column	Déplacer dans la colonne de droite
+	Move Under the Canvas	Déplacer sous le canevas
+	Resize the column	Redimensionner la colonne
+	Place Dock	Placer le dock

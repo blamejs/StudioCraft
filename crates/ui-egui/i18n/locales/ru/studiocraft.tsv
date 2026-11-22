@@ -548,7 +548,7 @@ menu	Transform	Преобразование
 @msg	the source has not shown a picture yet	источник ещё не показал изображение
 @msg	settings are kept in memory only (--no-prefs)	настройки хранятся только в памяти (--no-prefs)
 @msg	`scopes.kind`: unknown scope `{name}` (one of {scopes})	`scopes.kind`: неизвестный график сигнала `{name}` (один из {scopes})
-@msg	`dock.move`: `to` is `left` or `right`, not `{to}`	`dock.move`: `to` может быть `left` или `right`, но не `{to}`
+@msg	`dock.move`: `to` is `left`, `right`, `up` or `down`, not `{to}`	`dock.move`: `to` может быть `left`, `right`, `up` или `down`, но не `{to}`
 @msg	`dock.float` needs `floating`: true or false	`dock.float` требует `floating`: true или false
 @msg	`dock.layout_save`: `name` is a string	`dock.layout_save`: `name` должен быть строкой
 @msg	there is no dock layout named `{name}`	нет раскладки панелей с именем `{name}`
@@ -577,3 +577,11 @@ menu	Transform	Преобразование
 	A profile holds at most {max} destinations	В профиле может быть не больше {max} назначений
 	Fill Screen	Заполнить экран
 @msg	The scenes could not be laid out for the new canvas: {error}	Не удалось расположить сцены для нового холста: {error}
+	Set up	Подготовка
+	Review	Просмотр
+	Classic	Классический
+	Move to the Left Column	Переместить в левую колонку
+	Move to the Right Column	Переместить в правую колонку
+	Move Under the Canvas	Переместить под холст
+	Resize the column	Изменить ширину колонки
+	Place Dock	Разместить панель

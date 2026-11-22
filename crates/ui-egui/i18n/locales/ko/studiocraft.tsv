@@ -539,7 +539,7 @@ menu	Transform	변형
 @msg	the source has not shown a picture yet	소스가 아직 화면을 표시하지 않았습니다
 @msg	settings are kept in memory only (--no-prefs)	설정이 메모리에만 보관됩니다 (--no-prefs)
 @msg	`scopes.kind`: unknown scope `{name}` (one of {scopes})	`scopes.kind`: 알 수 없는 스코프 `{name}` ({scopes} 중 하나)
-@msg	`dock.move`: `to` is `left` or `right`, not `{to}`	`dock.move`: `to`는 `{to}`이(가) 아니라 `left` 또는 `right`입니다
+@msg	`dock.move`: `to` is `left`, `right`, `up` or `down`, not `{to}`	`dock.move`: `to`는 `{to}`이(가) 아니라 `left`, `right`, `up` 또는 `down`입니다
 @msg	`dock.float` needs `floating`: true or false	`dock.float`에는 `floating`(true 또는 false)이 필요합니다
 @msg	`dock.layout_save`: `name` is a string	`dock.layout_save`: `name`은 문자열입니다
 @msg	there is no dock layout named `{name}`	이름이 `{name}`인 도크 레이아웃이 없습니다
@@ -567,3 +567,11 @@ menu	Transform	변형
 	A profile holds at most {max} destinations	프로필에는 대상을 최대 {max}개까지 둘 수 있습니다
 	Fill Screen	화면 채우기
 @msg	The scenes could not be laid out for the new canvas: {error}	새 캔버스에 맞게 장면을 배치할 수 없습니다: {error}
+	Set up	준비
+	Review	검토
+	Classic	클래식
+	Move to the Left Column	왼쪽 열로 이동
+	Move to the Right Column	오른쪽 열로 이동
+	Move Under the Canvas	캔버스 아래로 이동
+	Resize the column	열 너비 조절
+	Place Dock	도크 배치

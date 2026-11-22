@@ -522,7 +522,7 @@ menu	Transform	Transformieren
 @msg	the source has not shown a picture yet	die Quelle hat noch kein Bild gezeigt
 @msg	settings are kept in memory only (--no-prefs)	die Einstellungen werden nur im Speicher gehalten (--no-prefs)
 @msg	`scopes.kind`: unknown scope `{name}` (one of {scopes})	`scopes.kind`: unbekannter Scope `{name}` (einer von {scopes})
-@msg	`dock.move`: `to` is `left` or `right`, not `{to}`	`dock.move`: `to` ist `left` oder `right`, nicht `{to}`
+@msg	`dock.move`: `to` is `left`, `right`, `up` or `down`, not `{to}`	`dock.move`: `to` ist `left`, `right`, `up` oder `down`, nicht `{to}`
 @msg	`dock.float` needs `floating`: true or false	`dock.float` benötigt `floating`: true oder false
 @msg	`dock.layout_save`: `name` is a string	`dock.layout_save`: `name` ist eine Zeichenkette
 @msg	there is no dock layout named `{name}`	es gibt kein Dock-Layout namens `{name}`
@@ -551,3 +551,11 @@ menu	Transform	Transformieren
 	A profile holds at most {max} destinations	Ein Profil enthält höchstens {max} Ziele
 	Fill Screen	Bildschirm füllen
 @msg	The scenes could not be laid out for the new canvas: {error}	Die Szenen konnten nicht für die neue Leinwand angeordnet werden: {error}
+	Set up	Einrichten
+	Review	Durchsicht
+	Classic	Klassisch
+	Move to the Left Column	In die linke Spalte verschieben
+	Move to the Right Column	In die rechte Spalte verschieben
+	Move Under the Canvas	Unter die Leinwand verschieben
+	Resize the column	Breite der Spalte ändern
+	Place Dock	Dock platzieren

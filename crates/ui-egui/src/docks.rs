@@ -63,9 +63,21 @@ pub struct DockState<'a> {
     pub lanes: &'a mut LaneCache,
     /// Seconds since the meters were last advanced.
     pub dt: f32,
-    /// The place of the dock being drawn among the docks in the strip, and how many are in the
-    /// strip; `None` for a dock in a window of its own.
-    pub place: Option<(usize, usize)>,
+    /// Where the dock being drawn is docked; `None` for a dock in a window of its own.
+    pub place: Option<Place>,
+}
+
+/// Where a docked dock is drawn.
+#[derive(Clone, Copy, Debug)]
+pub struct Place {
+    /// The dock's place among the docks drawn in its region, and how many are drawn there.
+    pub k: usize,
+    pub n: usize,
+    /// Whether the region is a column, where the docks are stacked from top to bottom.
+    pub column: bool,
+    /// The region the dock sits in, which is not the strip it is drawn in while the columns are
+    /// collapsed into the strip.
+    pub region: crate::store::Region,
 }
 
 /// What a dock's header drew, for `ui.inspect`: its rectangle, the room its title had, the name
@@ -79,27 +91,42 @@ pub struct Drawn {
 }
 
 /// The menu a right-click on a dock's title opens, for `dock` (its name in
-/// `control::DOCK_NAMES`). A dock in the strip offers Move Left and Move Right (`dock.move`; the
-/// first dock cannot move left and the last cannot move right) and Undock; a dock in a window of
-/// its own offers Dock in the Strip (both `dock.float`).
-fn dock_menu(ui: &mut Ui, drawn: &Drawn, dock: &'static str, place: Option<(usize, usize)>, acts: &mut Vec<Act>) {
+/// `control::DOCK_NAMES`). A docked dock offers Move Left and Move Right in the strip, or Move Up
+/// and Move Down in a column (`dock.move`; the first dock in its region cannot move back and the
+/// last cannot move on), a move to each other region (`dock.region`) and Undock; a dock in a window
+/// of its own offers Dock in the Strip (both `dock.float`).
+fn dock_menu(ui: &mut Ui, drawn: &Drawn, dock: &'static str, place: Option<Place>, acts: &mut Vec<Act>) {
+    use crate::store::Region;
     // The title takes clicks only, so a drag there still reaches the strip's top edge.
     let r = ui.interact(drawn.title, ui.scope_id().with(("dock-title", dock)), Sense::click());
     r.context_menu(|ui| {
-        let Some((k, n)) = place else {
+        let Some(Place { k, n, column, region }) = place else {
             if ui.button(tl!("Dock in the Strip")).clicked() {
                 acts.push(Act::run("dock.float", json!({"dock": dock, "floating": false})));
                 ui.close();
             }
             return;
         };
-        if ui.add_enabled(k > 0, egui::Button::new(tl!("Move Left"))).clicked() {
-            acts.push(Act::run("dock.move", json!({"dock": dock, "to": "left"})));
+        let (back, on) = if column { (tl!("Move Up"), tl!("Move Down")) } else { (tl!("Move Left"), tl!("Move Right")) };
+        let (back_to, on_to) = if column { ("up", "down") } else { ("left", "right") };
+        if ui.add_enabled(k > 0, egui::Button::new(back)).clicked() {
+            acts.push(Act::run("dock.move", json!({"dock": dock, "to": back_to})));
             ui.close();
         }
-        if ui.add_enabled(k + 1 < n, egui::Button::new(tl!("Move Right"))).clicked() {
-            acts.push(Act::run("dock.move", json!({"dock": dock, "to": "right"})));
+        if ui.add_enabled(k + 1 < n, egui::Button::new(on)).clicked() {
+            acts.push(Act::run("dock.move", json!({"dock": dock, "to": on_to})));
             ui.close();
+        }
+        ui.separator();
+        for (to, label) in [
+            (Region::Left, tl!("Move to the Left Column")),
+            (Region::Right, tl!("Move to the Right Column")),
+            (Region::Bottom, tl!("Move Under the Canvas")),
+        ] {
+            if ui.add_enabled(region != to, egui::Button::new(label)).clicked() {
+                acts.push(Act::run("dock.region", json!({"dock": dock, "region": to.name()})));
+                ui.close();
+            }
         }
         ui.separator();
         if ui.button(tl!("Undock")).clicked() {

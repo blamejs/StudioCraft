@@ -497,11 +497,12 @@ fonts and title bar. The following table lists the code for each part.
 | Segmented control, Record and Go Live buttons with their timers | `segmented.rs` and `onair.rs` under `ui-egui/src/kit/`, which depend only on egui, `craft-ui`, `craft-theme` and `craft-menu` and take their colors and sizes from the tokens |
 | Menu row and output controls | `ui-egui/src/output_bar.rs`, with `craft-ui`'s `fit_toolbar` choosing what moves when the row is narrow |
 | Docks | `ui-egui/src/docks.rs`: each dock's header is a `craft-ui` `TitleRow`; the Scenes and Sources docks are `craft-ui` lists, and the Audio Mixer and Application Audio docks show `craft-ui` text, buttons, check boxes and menus around the app's own meters and volume sliders |
-| Dock strip size | `ui-egui/src/strip.rs`; `strip::Handles` shows the strip's top edge and the dividers as `craft-ui` `Splitter`s, placed by `craft-behavior`'s divider rules |
+| Dock strip and column sizes | `ui-egui/src/strip.rs`; `strip::Handles` shows the strip's top edge, the dividers and the columns' inner edges as `craft-ui` `Splitter`s, placed by `craft-behavior`'s divider rules |
+| Dock places and built-in layouts | `ui-egui/src/store.rs`: `Docks::region` and `store::Region` (left column, right column or under the canvas), and `store::built_in_layout` for Set up, Live, Review and Classic |
 | Undocked dock windows | `StudioApp::dock_windows` in `ui-egui/src/lib.rs`, each a `craft-ui` `FloatingGroup` |
-| Dock commands | `dock.move` (Move Left and Move Right), `dock.float` (Undock), `dock.layout_save`, `dock.layout_apply` and `dock.layout_remove` |
+| Dock commands | `dock.move` (Move Left, Move Right, Move Up and Move Down), `dock.region` (Move to the Left Column, Move to the Right Column and Move Under the Canvas), `dock.float` (Undock), `dock.layout_save`, `dock.layout_apply` and `dock.layout_remove` |
 | Streaming window and its `stream.destination*` commands | `ui-egui/src/streaming.rs` |
-| Saved dock sizes, order, visibility, undocked windows and layouts | `config.toml`, with layouts under `dock_layouts` |
+| Saved dock sizes, order, places, visibility, undocked windows and layouts | `config.toml`, with layouts under `dock_layouts` |
 | Font stack | `ui-egui/src/fonts.rs`, built with `craft-ui`'s `UiFonts`: Inter Regular for the proportional family, Inter SemiBold for the `semibold` family (dock, section and dialog titles) and JetBrains Mono for the monospace family, all embedded from `assets/fonts`. `StudioApp::install_fonts` installs the stack at start, and the window installs it again on the first frame after the interface language changes. |
 | Title bar | `src/titlebar.rs` decides who draws the window frame with `craft-window`'s `policy::decide_for` and sets the window's decorations with `policy::apply`. `StudioApp::frame` in `crates/ui-egui/src/lib.rs` shows the window as a `craft-ui` `AppShell`: the menu row is the `TitleBar` in its title slot, with the framework's caption buttons at the ends where the app draws the frame, and the shell's root resizes the window from its edges |
 

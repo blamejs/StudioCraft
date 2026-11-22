@@ -16,10 +16,10 @@ use studiocraft_render::device::Preference;
 
 use crate::i18n::Msg;
 
-/// Which docks are shown, their order in the dock strip, and the sizes set by dragging the dock
-/// strip's edges. A size of 0 is not set and uses the default in [`crate::strip`]; Docks › Reset
-/// Docks sets them all back to 0 and the order back to Scenes, Sources, Audio Mixer, Application
-/// Audio.
+/// Which docks are shown, where each docked one sits (under the canvas or in a column beside it),
+/// their order, and the sizes set by dragging the docks' edges. A size of 0 is not set and uses the
+/// default in [`crate::strip`]; Docks › Reset Docks sets them all back to 0, the order back to
+/// Scenes, Sources, Audio Mixer, Application Audio, and every dock back under the canvas.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Docks {
@@ -58,6 +58,15 @@ pub struct Docks {
     /// not set and gives the window its default size.
     #[serde(deserialize_with = "lenient_len")]
     pub window_size: [[f32; 2]; DOCK_COUNT],
+    /// Where each docked dock sits, by index, as a [`Region`] code: 0 under the canvas, 1 the left
+    /// column, 2 the right column. Read it with [`Docks::region`]; an unknown code reads as under
+    /// the canvas.
+    #[serde(deserialize_with = "lenient_len")]
+    pub region: [u8; DOCK_COUNT],
+    /// The widths of the left and right columns in points; 0 is not set and uses the default in
+    /// [`crate::strip`].
+    pub left_width: f32,
+    pub right_width: f32,
 }
 
 /// How many docks there are: Scenes, Sources, Audio Mixer and Application Audio.
@@ -65,6 +74,51 @@ pub const DOCK_COUNT: usize = 4;
 
 /// The docks' order by default.
 pub const DOCK_ORDER: [u8; DOCK_COUNT] = [0, 1, 2, 3];
+
+/// Where a docked dock sits in the main window: under the canvas (the dock strip), or in the
+/// column left or right of the canvas.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Region {
+    Bottom,
+    Left,
+    Right,
+}
+
+impl Region {
+    pub const ALL: [Region; 3] = [Region::Bottom, Region::Left, Region::Right];
+
+    /// The code saved in [`Docks::region`].
+    pub fn code(self) -> u8 {
+        match self {
+            Region::Bottom => 0,
+            Region::Left => 1,
+            Region::Right => 2,
+        }
+    }
+
+    /// The region a saved code names; an unknown code is under the canvas.
+    pub fn from_code(code: u8) -> Region {
+        match code {
+            1 => Region::Left,
+            2 => Region::Right,
+            _ => Region::Bottom,
+        }
+    }
+
+    /// The region's name in `dock.region` and `ui.inspect`.
+    pub fn name(self) -> &'static str {
+        match self {
+            Region::Bottom => "bottom",
+            Region::Left => "left",
+            Region::Right => "right",
+        }
+    }
+
+    /// The region named `name` in `dock.region`.
+    pub fn parse(name: &str) -> Option<Region> {
+        Region::ALL.into_iter().find(|r| r.name() == name)
+    }
+}
 
 impl Default for Docks {
     fn default() -> Self {
@@ -85,6 +139,9 @@ impl Default for Docks {
             window_pos: [[0.0; 2]; DOCK_COUNT],
             window_placed: [false; DOCK_COUNT],
             window_size: [[0.0; 2]; DOCK_COUNT],
+            region: [0; DOCK_COUNT],
+            left_width: 0.0,
+            right_width: 0.0,
         }
     }
 }
@@ -272,14 +329,34 @@ impl Docks {
         self.floating.get(usize::from(i)).copied().unwrap_or(false)
     }
 
-    /// Whether dock `i` is shown in the strip.
-    pub fn in_strip(&self, i: u8) -> bool {
+    /// Whether dock `i` is shown in the main window rather than in a window of its own.
+    pub fn is_docked(&self, i: u8) -> bool {
         self.is_shown(i) && !self.is_floating(i)
     }
 
-    /// The docks shown in the strip, from left to right.
-    pub fn shown(&self) -> Vec<u8> {
-        self.order().into_iter().filter(|i| self.in_strip(*i)).collect()
+    /// The region dock `i` sits in while it is docked.
+    pub fn region(&self, i: u8) -> Region {
+        self.region.get(usize::from(i)).copied().map_or(Region::Bottom, Region::from_code)
+    }
+
+    /// Put dock `i` in `region`; false when `i` is not a dock or it is there already.
+    pub fn set_region(&mut self, i: u8, region: Region) -> bool {
+        let Some(r) = self.region.get_mut(usize::from(i)) else { return false };
+        let was = Region::from_code(*r);
+        *r = region.code();
+        was != region
+    }
+
+    /// The region dock `i` is drawn in: its own, or under the canvas while the columns are
+    /// `collapsed` into the strip.
+    pub fn drawn_region(&self, i: u8, collapsed: bool) -> Region {
+        if collapsed { Region::Bottom } else { self.region(i) }
+    }
+
+    /// The docked docks drawn in `region`, in order (left to right under the canvas, top to bottom
+    /// in a column). While the columns are `collapsed`, every docked dock is drawn under the canvas.
+    pub fn shown_in(&self, region: Region, collapsed: bool) -> Vec<u8> {
+        self.order().into_iter().filter(|i| self.is_docked(*i) && self.drawn_region(*i, collapsed) == region).collect()
     }
 
     /// The docks shown in windows of their own, in the strip's order.
@@ -319,15 +396,23 @@ impl Docks {
         [self.scenes_width, self.sources_width, self.mixer_width, self.app_audio_width]
     }
 
-    /// Move dock `i` past the nearest dock in the strip on its left (`left`) or its right. False
-    /// when `i` is not in the strip or no dock in the strip is on that side.
-    pub fn shift(&mut self, i: u8, left: bool) -> bool {
-        if !self.in_strip(i) {
+    /// The widths of the left and right columns as saved.
+    pub fn column_widths(&self) -> [f32; 2] {
+        [self.left_width, self.right_width]
+    }
+
+    /// Move dock `i` past the nearest dock drawn in the same region before it (`left`: left under
+    /// the canvas, above in a column) or after it, with the columns `collapsed` into the strip or
+    /// not. False when `i` is not docked or no dock in its region is on that side.
+    pub fn shift(&mut self, i: u8, left: bool, collapsed: bool) -> bool {
+        if !self.is_docked(i) {
             return false;
         }
+        let region = self.drawn_region(i, collapsed);
+        let near = |d: u8| self.is_docked(d) && self.drawn_region(d, collapsed) == region;
         let mut order = self.order();
         let Some(at) = order.iter().position(|d| *d == i) else { return false };
-        let to = if left { (0..at).rev().find(|k| self.in_strip(order[*k])) } else { (at + 1..order.len()).find(|k| self.in_strip(order[*k])) };
+        let to = if left { (0..at).rev().find(|k| near(order[*k])) } else { (at + 1..order.len()).find(|k| near(order[*k])) };
         let Some(to) = to else { return false };
         if left {
             order[to..=at].rotate_right(1);
@@ -349,8 +434,68 @@ pub struct DockLayout {
     pub docks: Docks,
 }
 
-/// Reads at most [`MAX_DOCK_LAYOUTS`] layouts and skips the rest.
+/// The built-in dock layouts, by their English names. They are listed in Docks › Layouts and
+/// applied with `dock.layout_apply` like saved ones, but can't be saved over or removed.
+pub const BUILT_IN_LAYOUTS: [&str; 4] = ["Set up", "Live", "Review", "Classic"];
+
+/// The default widths of the left column in the Set up and Live layouts.
+const SET_UP_COLUMN: f32 = 256.0;
+const LIVE_COLUMN: f32 = 268.0;
+
+/// The built-in layout named `name`, ignoring case:
+///
+/// - Set up: Scenes and Sources in a 256 point left column, the Audio Mixer under the canvas.
+/// - Live: Sources and the Audio Mixer in a 268 point left column, Scenes under the canvas.
+/// - Review: Scenes in the left column, the Audio Mixer and Application Audio under the canvas,
+///   Sources hidden.
+/// - Classic: the docks as they are after Reset Docks, every one under the canvas.
+///
+/// Every built-in layout keeps the transition and output controls shown and no dock floating.
+pub fn built_in_layout(name: &str) -> Option<DockLayout> {
+    let k = BUILT_IN_LAYOUTS.iter().position(|n| n.eq_ignore_ascii_case(name))?;
+    let (bottom, left) = (Region::Bottom.code(), Region::Left.code());
+    let classic = Docks::default();
+    let docks = match k {
+        0 => Docks { region: [left, left, bottom, bottom], left_width: SET_UP_COLUMN, ..classic },
+        1 => Docks { region: [bottom, left, left, bottom], left_width: LIVE_COLUMN, ..classic },
+        2 => Docks { sources: false, app_audio: true, region: [left, left, bottom, bottom], left_width: SET_UP_COLUMN, ..classic },
+        _ => classic,
+    };
+    Some(DockLayout { name: BUILT_IN_LAYOUTS.get(k).copied().unwrap_or_default().to_string(), docks })
+}
+
+/// Whether `name` is a built-in layout's name, ignoring case.
+pub fn is_built_in_layout(name: &str) -> bool {
+    BUILT_IN_LAYOUTS.iter().any(|n| n.eq_ignore_ascii_case(name))
+}
+
+/// Saved layouts named like a built-in one, saved before the built-in layouts existed, are kept
+/// under the name with " (saved)" added, or " (saved 2)" and on when that is taken too.
+fn rename_built_in_names(layouts: &mut [DockLayout]) {
+    for k in 0..layouts.len() {
+        if !layouts.get(k).is_some_and(|l| is_built_in_layout(&l.name)) {
+            continue;
+        }
+        let base = layouts.get(k).map(|l| l.name.clone()).unwrap_or_default();
+        let taken = |n: &str, layouts: &[DockLayout]| is_built_in_layout(n) || layouts.iter().any(|l| l.name.eq_ignore_ascii_case(n));
+        let free = (1..=MAX_DOCK_LAYOUTS + 1)
+            .map(|n| if n == 1 { format!("{base} (saved)") } else { format!("{base} (saved {n})") })
+            .find(|n| !taken(n, layouts));
+        if let (Some(free), Some(l)) = (free, layouts.get_mut(k)) {
+            l.name = free;
+        }
+    }
+}
+
+/// Reads at most [`MAX_DOCK_LAYOUTS`] layouts and skips the rest. A layout named like a built-in
+/// one is renamed (see [`rename_built_in_names`]).
 fn bounded_layouts<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<DockLayout>, D::Error> {
+    let mut out = bounded_layout_list(d)?;
+    rename_built_in_names(&mut out);
+    Ok(out)
+}
+
+fn bounded_layout_list<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<DockLayout>, D::Error> {
     use serde::de::{IgnoredAny, SeqAccess, Visitor};
 
     struct Layouts;
@@ -551,15 +696,18 @@ impl Prefs {
         self.dock_layouts.iter().map(|l| l.name.clone()).collect()
     }
 
-    /// The saved dock layout named `name`, ignoring case.
-    pub fn dock_layout(&self, name: &str) -> Option<&DockLayout> {
-        self.dock_layouts.iter().find(|l| l.name.eq_ignore_ascii_case(name))
+    /// The built-in or saved dock layout named `name`, ignoring case.
+    pub fn dock_layout(&self, name: &str) -> Option<DockLayout> {
+        built_in_layout(name).or_else(|| self.dock_layouts.iter().find(|l| l.name.eq_ignore_ascii_case(name)).cloned())
     }
 
     /// Save the current docks as the layout `name`, replacing a layout with that name (ignoring
-    /// case). Returns whether one was replaced.
+    /// case). Returns whether one was replaced. A built-in layout's name is refused.
     pub fn save_dock_layout(&mut self, name: &str) -> Result<bool, Msg> {
         check_name(name)?;
+        if is_built_in_layout(name) {
+            return Err(tmsg!("`{name}` is a built-in layout; choose another name", name = name));
+        }
         let docks = self.docks;
         if let Some(l) = self.dock_layouts.iter_mut().find(|l| l.name.eq_ignore_ascii_case(name)) {
             *l = DockLayout { name: name.to_string(), docks };
@@ -572,11 +720,18 @@ impl Prefs {
         Ok(false)
     }
 
-    /// Remove the layout `name`, ignoring case; false when there is none.
-    pub fn remove_dock_layout(&mut self, name: &str) -> bool {
+    /// Remove the saved layout `name`, ignoring case. A built-in layout's name and a name no saved
+    /// layout has are errors.
+    pub fn remove_dock_layout(&mut self, name: &str) -> Result<(), Msg> {
+        if is_built_in_layout(name) {
+            return Err(tmsg!("`{name}` is a built-in layout and can't be removed", name = name));
+        }
         let before = self.dock_layouts.len();
         self.dock_layouts.retain(|l| !l.name.eq_ignore_ascii_case(name));
-        self.dock_layouts.len() != before
+        if self.dock_layouts.len() == before {
+            return Err(tmsg!("there is no dock layout named `{name}`", name = name));
+        }
+        Ok(())
     }
 }
 
@@ -585,15 +740,18 @@ impl craft_settings::Settings for Prefs {
     /// Version 2 adds `docks.mixer_width` and `docks.order`, version 3 adds `docks.floating`,
     /// `docks.window_pos`, `docks.window_placed` and `docks.window_size`, version 4 adds
     /// `dock_layouts`, version 5 adds `docks.app_audio` and `docks.app_audio_width` and a fourth
-    /// entry, for Application Audio, in each list kept by dock index, and version 6 saves `hotkeys`
-    /// as a list of `{ command, keys }` entries instead of a table.
-    const SCHEMA_VERSION: u32 = 6;
+    /// entry, for Application Audio, in each list kept by dock index, version 6 saves `hotkeys`
+    /// as a list of `{ command, keys }` entries instead of a table, and version 7 adds
+    /// `docks.region`, `docks.left_width` and `docks.right_width`, in the docks and in each saved
+    /// layout.
+    const SCHEMA_VERSION: u32 = 7;
 
-    /// Each version up to 5: an older file lacks the keys its next version adds, so the docks keep
-    /// their saved settings and read the new keys as their defaults (every dock but Application
-    /// Audio in the strip, no saved window places or sizes, no saved layouts). Lists kept by dock
-    /// index that are one entry short read the missing entry as its default. The file is left as
-    /// it is. Version 5 to 6: a `hotkeys` table is rewritten as the list, with the same entries.
+    /// Each version up to 5, and 6 to 7: an older file lacks the keys its next version adds, so the
+    /// docks keep their saved settings and read the new keys as their defaults (every dock but
+    /// Application Audio under the canvas, no saved window places or sizes, no saved layouts, no
+    /// column widths). Lists kept by dock index that are one entry short read the missing entry as
+    /// its default. The file is left as it is. Version 5 to 6: a `hotkeys` table is rewritten as
+    /// the list, with the same entries.
     fn migrate(from: u32, doc: &mut craft_settings::DocumentMut) -> Result<(), craft_settings::MigrateError> {
         if from == 5 && doc.get("hotkeys").is_some_and(|h| h.is_table_like()) {
             let (shortcuts, _) = craft_settings::document::deserialize_sections::<Shortcuts>(doc);
@@ -1053,7 +1211,7 @@ mod tests {
         s.update(|p| p.docks.height = 250.0);
         s.flush().unwrap();
         let text = std::fs::read_to_string(dir.join("config.toml")).unwrap();
-        assert!(text.contains("schema_version = 6"), "{text}");
+        assert!(text.contains("schema_version = 7"), "{text}");
         let (again, _) = Store::open(Location::Dir(dir.clone()));
         assert_eq!(again.prefs().docks, Docks { height: 250.0, ..want });
         let _ = std::fs::remove_dir_all(&dir);
@@ -1074,7 +1232,7 @@ mod tests {
         s.update(|p| p.docks.floating[1] = true);
         s.flush().unwrap();
         let text = std::fs::read_to_string(dir.join("config.toml")).unwrap();
-        assert!(text.contains("schema_version = 6"), "{text}");
+        assert!(text.contains("schema_version = 7"), "{text}");
         let (again, _) = Store::open(Location::Dir(dir.clone()));
         assert_eq!(again.prefs().docks.floating, [false, true, false, false]);
         let _ = std::fs::remove_dir_all(&dir);
@@ -1121,7 +1279,7 @@ mod tests {
         assert_eq!(d.order(), [2, 0, 1, 3], "Application Audio goes after the saved order");
         assert_eq!(d.floating, [false, false, true, false]);
         assert_eq!((d.window_pos(2), d.window_size(2), d.window_pos(3)), (Some([40.0, 60.0]), Some([420.0, 300.0]), None));
-        assert_eq!(d.shown(), [0, 1]);
+        assert_eq!(d.shown_in(Region::Bottom, false), [0, 1]);
         assert_eq!(s.prefs().dock_layout("Talk").map(|l| l.docks.floating), Some([true, false, false, false]));
         s.update(|p| {
             p.docks.app_audio = true;
@@ -1129,7 +1287,7 @@ mod tests {
         });
         s.flush().unwrap();
         let text = std::fs::read_to_string(dir.join("config.toml")).unwrap();
-        assert!(text.contains("schema_version = 6"), "{text}");
+        assert!(text.contains("schema_version = 7"), "{text}");
         let (again, _) = Store::open(Location::Dir(dir.clone()));
         assert_eq!(again.prefs().docks.floating_shown(), [2, 3]);
         let _ = std::fs::remove_dir_all(&dir);
@@ -1150,7 +1308,7 @@ mod tests {
         assert_eq!(texts(&s, "edit.undo"), Some(vec!["Ctrl+Z".to_string()]));
         s.flush().unwrap();
         let text = std::fs::read_to_string(dir.join("config.toml")).unwrap();
-        assert!(text.contains("schema_version = 6"), "{text}");
+        assert!(text.contains("schema_version = 7"), "{text}");
         assert!(!text.contains("[hotkeys]"), "the table is replaced: {text}");
         assert!(text.contains("command = \"record.toggle\""), "{text}");
         let (again, problems) = open();
@@ -1173,6 +1331,38 @@ mod tests {
         assert_eq!(texts(&merged, "record.toggle"), None, "the reset shortcut does not come back");
         assert_eq!(texts(&merged, "edit.undo"), Some(vec!["Ctrl+Z".to_string()]));
         assert_eq!(merged.prefs().language, "de", "the first instance's change is kept");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_version_6_config_keeps_its_docks_and_layouts_under_the_canvas() {
+        let dir = std::env::temp_dir().join(format!("studiocraft-store-prefs-v6-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let v6 = "schema_version = 6\n\n[docks]\norder = [2, 0, 1, 3]\nfloating = [false, true, false, false]\nheight = 230.0\n\n\
+                  [[dock_layouts]]\nname = \"Live\"\n\n[dock_layouts.docks]\nmixer = false\n\n\
+                  [[dock_layouts]]\nname = \"Talk\"\n\n[dock_layouts.docks]\norder = [1, 0, 2, 3]\n";
+        std::fs::write(dir.join("config.toml"), v6).unwrap();
+        let (mut s, problems) = Store::open(Location::Dir(dir.clone()));
+        assert!(problems.is_empty(), "{problems:?}");
+        let d = s.prefs().docks;
+        assert_eq!((d.order(), d.floating[1], d.height), ([2, 0, 1, 3], true, 230.0));
+        assert_eq!((d.region, d.column_widths()), ([0; DOCK_COUNT], [0.0, 0.0]), "every dock under the canvas, no column widths");
+        assert_eq!(d.shown_in(Region::Bottom, false), [2, 0]);
+        assert_eq!(s.prefs().dock_layout_names(), ["Live (saved)", "Talk"]);
+        let talk = s.prefs().dock_layout("Talk").map(|l| l.docks).unwrap_or_default();
+        assert_eq!((talk.order(), talk.shown_in(Region::Bottom, false)), ([1, 0, 2, 3], vec![1, 0, 2]), "a saved layout is Classic-shaped");
+        s.update(|p| {
+            p.docks.set_region(2, Region::Right);
+            p.docks.right_width = 320.0;
+        });
+        s.flush().unwrap();
+        let text = std::fs::read_to_string(dir.join("config.toml")).unwrap();
+        assert!(text.contains("schema_version = 7") && text.contains("Live (saved)"), "{text}");
+        let (again, problems) = Store::open(Location::Dir(dir.clone()));
+        assert!(problems.is_empty(), "{problems:?}");
+        assert_eq!((again.prefs().docks.region(2), again.prefs().docks.right_width), (Region::Right, 320.0));
+        assert_eq!(again.prefs().dock_layout_names(), ["Live (saved)", "Talk"]);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -1265,8 +1455,8 @@ mod tests {
         assert_eq!(p.dock_layouts.len(), MAX_DOCK_LAYOUTS);
         assert!(p.save_dock_layout("One more").is_err(), "the list is full");
         assert_eq!(p.save_dock_layout("L5"), Ok(true), "a full list still takes a replacement");
-        assert!(p.remove_dock_layout("one"));
-        assert!(!p.remove_dock_layout("one"), "already removed");
+        assert_eq!(p.remove_dock_layout("one"), Ok(()));
+        assert!(p.remove_dock_layout("one").is_err(), "already removed");
         assert_eq!(p.dock_layouts.len(), MAX_DOCK_LAYOUTS - 1);
 
         // A file with more layouts than the limit keeps the first ones.
@@ -1293,7 +1483,7 @@ mod tests {
         assert!(!d.place_window(9, [1.0, 1.0], [300.0, 200.0]));
         d.floating = [true, false, true, false];
         d.mixer = false;
-        assert_eq!((d.shown(), d.floating_shown()), (vec![1], vec![0]), "a hidden dock is in neither list");
+        assert_eq!((d.shown_in(Region::Bottom, false), d.floating_shown()), (vec![1], vec![0]), "a hidden dock is in neither list");
     }
 
     #[test]
@@ -1309,7 +1499,7 @@ mod tests {
         s.flush().unwrap();
         let (again, _) = Store::open(Location::Dir(dir.clone()));
         let d = again.prefs().docks;
-        assert_eq!(crate::strip::height(800.0, d.height), 200.0);
+        assert_eq!(crate::strip::height(800.0, 744.0, d.height), 200.0);
         assert_eq!(crate::strip::widths(1280.0, &[0, 1, 2], d.widths()), [300.0, 340.0, 638.0]);
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -1338,19 +1528,93 @@ mod tests {
     #[test]
     fn shift_passes_over_hidden_docks_and_stops_at_the_ends() {
         let mut d = Docks::default();
-        assert!(d.shift(2, true));
+        assert!(d.shift(2, true, false));
         assert_eq!(d.order(), [0, 2, 1, 3]);
-        assert!(!d.shift(0, true), "the first dock cannot move left");
+        assert!(!d.shift(0, true, false), "the first dock cannot move left");
         assert_eq!(d.order(), [0, 2, 1, 3]);
         d.mixer = false;
-        assert!(d.shift(0, false), "Scenes passes the hidden mixer and lands right of Sources");
+        assert!(d.shift(0, false, false), "Scenes passes the hidden mixer and lands right of Sources");
         assert_eq!(d.order(), [2, 1, 0, 3]);
-        assert_eq!(d.shown(), [1, 0]);
-        assert!(!d.shift(0, false), "nothing shown on its right: Application Audio is hidden");
-        assert!(!d.shift(1, true), "only the hidden mixer is on its left");
+        assert_eq!(d.shown_in(Region::Bottom, false), [1, 0]);
+        assert!(!d.shift(0, false, false), "nothing shown on its right: Application Audio is hidden");
+        assert!(!d.shift(1, true, false), "only the hidden mixer is on its left");
         assert_eq!(d.order(), [2, 1, 0, 3]);
         d.app_audio = true;
-        assert!(d.shift(3, true), "Application Audio moves left once it is shown");
+        assert!(d.shift(3, true, false), "Application Audio moves left once it is shown");
         assert_eq!(d.order(), [2, 1, 3, 0]);
+    }
+
+    #[test]
+    fn each_dock_sits_in_its_region_and_moves_among_the_docks_there() {
+        let mut d = Docks::default();
+        assert_eq!(Region::ALL.map(|r| d.shown_in(r, false)), [vec![0, 1, 2], vec![], vec![]], "every dock starts under the canvas");
+        assert!(d.set_region(0, Region::Left));
+        assert!(!d.set_region(0, Region::Left), "already there");
+        assert!(d.set_region(2, Region::Left));
+        assert!(d.set_region(1, Region::Right));
+        assert!(!d.set_region(9, Region::Left), "an unknown dock");
+        assert_eq!(Region::ALL.map(|r| d.shown_in(r, false)), [vec![], vec![0, 2], vec![1]]);
+        assert_eq!(d.shown_in(Region::Bottom, true), [0, 1, 2], "collapsed columns are drawn in the strip, in order");
+        assert!(d.shown_in(Region::Left, true).is_empty());
+        // A move passes over the docks of other regions.
+        assert!(d.shift(2, true, false), "the mixer moves above Scenes in the left column");
+        assert_eq!(d.order(), [2, 0, 1, 3]);
+        assert!(!d.shift(1, true, false), "Sources is alone in the right column");
+        assert!(d.shift(1, true, true), "while collapsed, Sources moves past Scenes in the strip");
+        assert_eq!(d.order(), [2, 1, 0, 3]);
+        // A floating or hidden dock is in no region's list but keeps its region.
+        d.floating[2] = true;
+        d.scenes = false;
+        assert_eq!(d.shown_in(Region::Left, false), Vec::<u8>::new());
+        assert_eq!((d.region(2), d.region(0)), (Region::Left, Region::Left));
+        // An unknown saved code reads as under the canvas, and setting it to that is no change.
+        d.region[3] = 7;
+        assert_eq!(d.region(3), Region::Bottom);
+        assert!(!d.set_region(3, Region::Bottom));
+        assert_eq!(d.region[3], 0);
+        let read = |text: &str| serde_json::from_str::<Docks>(text).map(|d| d.region);
+        assert_eq!(read(r#"{"region": [1]}"#).ok(), Some([1, 0, 0, 0]), "a short list");
+        assert_eq!(read("{}").ok(), Some([0; DOCK_COUNT]));
+        assert!(read(r#"{"region": ["left"]}"#).is_err(), "a value of the wrong type is an error, as in the other lists");
+    }
+
+    #[test]
+    fn the_built_in_layouts_are_read_only_and_classic_is_the_reset_strip() {
+        let mut p = Prefs::default();
+        assert_eq!(BUILT_IN_LAYOUTS, ["Set up", "Live", "Review", "Classic"]);
+        assert_eq!(p.dock_layout("classic").map(|l| (l.name, l.docks)), Some(("Classic".to_string(), Docks::default())));
+        let set_up = p.dock_layout("SET UP").map(|l| l.docks).unwrap_or_default();
+        assert_eq!((set_up.shown_in(Region::Left, false), set_up.shown_in(Region::Bottom, false)), (vec![0, 1], vec![2]));
+        assert_eq!(set_up.left_width, 256.0);
+        let live = p.dock_layout("Live").map(|l| l.docks).unwrap_or_default();
+        assert_eq!((live.shown_in(Region::Left, false), live.shown_in(Region::Bottom, false)), (vec![1, 2], vec![0]));
+        assert_eq!(live.left_width, 268.0);
+        let review = p.dock_layout("review").map(|l| l.docks).unwrap_or_default();
+        assert_eq!((review.shown_in(Region::Left, false), review.shown_in(Region::Bottom, false)), (vec![0], vec![2, 3]));
+        for name in BUILT_IN_LAYOUTS {
+            let l = built_in_layout(name).map(|l| l.docks).unwrap_or_default();
+            assert!(l.transitions && l.controls && l.floating == [false; DOCK_COUNT], "{name}");
+            assert!(p.save_dock_layout(name).is_err(), "{name} can't be saved over");
+            assert!(p.save_dock_layout(&name.to_uppercase()).is_err(), "nor in other letters");
+            assert!(p.remove_dock_layout(name).is_err(), "{name} can't be removed");
+        }
+        assert!(p.dock_layouts.is_empty());
+        assert_eq!(p.dock_layout("Setup"), None);
+        assert!(p.remove_dock_layout("Talk").is_err(), "no such layout");
+    }
+
+    #[test]
+    fn a_saved_layout_named_like_a_built_in_one_is_kept_under_another_name() {
+        let layouts = serde_json::json!([
+            {"name": "Live", "docks": {"mixer": false}},
+            {"name": "live (saved)", "docks": {}},
+            {"name": "Talk", "docks": {"order": [2, 0, 1]}},
+            {"name": "CLASSIC", "docks": {"sources": false}},
+        ]);
+        let read: Prefs = serde_json::from_value(serde_json::json!({ "dock_layouts": layouts })).unwrap();
+        assert_eq!(read.dock_layout_names(), ["Live (saved 2)", "live (saved)", "Talk", "CLASSIC (saved)"]);
+        assert_eq!(read.dock_layout("live (saved 2)").map(|l| l.docks.mixer), Some(false), "the layout keeps its docks");
+        assert_eq!(read.dock_layout("Live").map(|l| l.docks), built_in_layout("Live").map(|l| l.docks), "the name is the built-in one's");
+        assert_eq!(read.dock_layout("Talk").map(|l| (l.docks.order(), l.docks.region)), Some(([2, 0, 1, 3], [0; DOCK_COUNT])));
     }
 }

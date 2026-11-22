@@ -540,7 +540,7 @@ menu	Transform	Dönüştür
 @msg	the source has not shown a picture yet	kaynak henüz bir görüntü göstermedi
 @msg	settings are kept in memory only (--no-prefs)	ayarlar yalnızca bellekte tutuluyor (--no-prefs)
 @msg	`scopes.kind`: unknown scope `{name}` (one of {scopes})	`scopes.kind`: bilinmeyen video ölçümü `{name}` (şunlardan biri olmalı: {scopes})
-@msg	`dock.move`: `to` is `left` or `right`, not `{to}`	`dock.move`: `to` değeri `{to}` değil, `left` ya da `right` olmalıdır
+@msg	`dock.move`: `to` is `left`, `right`, `up` or `down`, not `{to}`	`dock.move`: `to` değeri `{to}` değil, `left`, `right`, `up` ya da `down` olmalıdır
 @msg	`dock.float` needs `floating`: true or false	`dock.float` için `floating` gerekir: true ya da false
 @msg	`dock.layout_save`: `name` is a string	`dock.layout_save`: `name` bir metin olmalıdır
 @msg	there is no dock layout named `{name}`	`{name}` adlı bir panel düzeni yok
@@ -569,3 +569,11 @@ menu	Transform	Dönüştür
 	A profile holds at most {max} destinations	Bir profilde en fazla {max} hedef olabilir
 	Fill Screen	Ekranı Doldur
 @msg	The scenes could not be laid out for the new canvas: {error}	Sahneler yeni tuvale göre yerleştirilemedi: {error}
+	Set up	Hazırlık
+	Review	İnceleme
+	Classic	Klasik
+	Move to the Left Column	Sol Sütuna Taşı
+	Move to the Right Column	Sağ Sütuna Taşı
+	Move Under the Canvas	Tuvalin Altına Taşı
+	Resize the column	Sütun genişliğini değiştir
+	Place Dock	Paneli Yerleştir
