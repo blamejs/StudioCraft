@@ -646,7 +646,7 @@ added after the stream started, and otherwise `connecting`, `live`, `retrying`, 
 | `closed_during_setup` | The server closed or reset the connection before the stream started. |
 | `setup_timed_out` | The server did not finish setting up the stream within 15 s. |
 | `rejected_connect` | The server refused the `connect` command, which names the application in the server address. |
-| `rejected_publish` | The server refused the `publish` command, usually because of the stream key. |
+| `rejected_publish` | The server refused the `publish` command, usually because of the stream key. After a lost connection, the first 3 such refusals are tried again (`retrying`). |
 | `lost` | The connection was lost after the stream started. |
 | `bad_address` | The server address is not valid. |
 | `bad_key` | The stream key is not valid. |
