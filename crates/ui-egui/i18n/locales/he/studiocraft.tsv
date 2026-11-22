@@ -520,7 +520,7 @@ menu	Transform	שינוי צורה
 @msg	the source has not shown a picture yet	המקור עדיין לא הציג תמונה
 @msg	settings are kept in memory only (--no-prefs)	ההגדרות נשמרות בזיכרון בלבד (--no-prefs)
 @msg	`scopes.kind`: unknown scope `{name}` (one of {scopes})	`scopes.kind`: מכשיר מדידה לא ידוע `{name}` (אחד מתוך {scopes})
-@msg	`dock.move`: `to` is `left` or `right`, not `{to}`	`dock.move`: הערך של `to` הוא `left` או `right`, לא `{to}`
+@msg	`dock.move`: `to` is `left`, `right`, `up` or `down`, not `{to}`	`dock.move`: הערך של `to` הוא `left`, `right`, `up` או `down`, לא `{to}`
 @msg	`dock.float` needs `floating`: true or false	`dock.float` דורש `floating`: true או false
 @msg	`dock.layout_save`: `name` is a string	`dock.layout_save`: `name` חייב להיות מחרוזת
 @msg	there is no dock layout named `{name}`	אין פריסת חלוניות בשם `{name}`
@@ -548,3 +548,11 @@ menu	Transform	שינוי צורה
 	A profile holds at most {max} destinations	פרופיל מכיל לכל היותר {max} יעדים
 	Fill Screen	מילוי המסך
 @msg	The scenes could not be laid out for the new canvas: {error}	לא ניתן היה לסדר את הסצנות למשטח החדש: {error}
+	Set up	הכנה
+	Review	סקירה
+	Classic	קלאסי
+	Move to the Left Column	העברה לעמודה השמאלית
+	Move to the Right Column	העברה לעמודה הימנית
+	Move Under the Canvas	העברה אל מתחת למשטח
+	Resize the column	שינוי רוחב העמודה
+	Place Dock	מיקום חלונית

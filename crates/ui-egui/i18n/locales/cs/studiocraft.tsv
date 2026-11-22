@@ -539,7 +539,7 @@ menu	Transform	Transformace
 @msg	the source has not shown a picture yet	zdroj zatím nezobrazil žádný obraz
 @msg	settings are kept in memory only (--no-prefs)	nastavení se uchovává jen v paměti (--no-prefs)
 @msg	`scopes.kind`: unknown scope `{name}` (one of {scopes})	`scopes.kind`: neznámý měřič obrazu `{name}` (jeden z {scopes})
-@msg	`dock.move`: `to` is `left` or `right`, not `{to}`	`dock.move`: `to` je `left` nebo `right`, ne `{to}`
+@msg	`dock.move`: `to` is `left`, `right`, `up` or `down`, not `{to}`	`dock.move`: `to` je `left`, `right`, `up` nebo `down`, ne `{to}`
 @msg	`dock.float` needs `floating`: true or false	`dock.float` potřebuje `floating`: true nebo false
 @msg	`dock.layout_save`: `name` is a string	`dock.layout_save`: `name` je řetězec
 @msg	there is no dock layout named `{name}`	rozvržení panelů s názvem `{name}` neexistuje
@@ -568,3 +568,11 @@ menu	Transform	Transformace
 	A profile holds at most {max} destinations	Profil pojme nejvýše {max} cílů
 	Fill Screen	Vyplnit obrazovku
 @msg	The scenes could not be laid out for the new canvas: {error}	Scény nešlo rozmístit pro nové plátno: {error}
+	Set up	Příprava
+	Review	Kontrola
+	Classic	Klasické
+	Move to the Left Column	Přesunout do levého sloupce
+	Move to the Right Column	Přesunout do pravého sloupce
+	Move Under the Canvas	Přesunout pod plátno
+	Resize the column	Změnit šířku sloupce
+	Place Dock	Umístit panel

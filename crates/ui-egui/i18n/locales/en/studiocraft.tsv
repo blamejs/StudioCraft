@@ -745,10 +745,21 @@ menu	Transform	Transform
 @msg	settings are kept in memory only (--no-prefs)	settings are kept in memory only (--no-prefs)
 @msg	`scopes.kind`: unknown scope `{name}` (one of {scopes})	`scopes.kind`: unknown scope `{name}` (one of {scopes})
 @msg	`{command}`: unknown language `{code}` (one of {languages})	`{command}`: unknown language `{code}` (one of {languages})
-@msg	`dock.move`: `to` is `left` or `right`, not `{to}`	`dock.move`: `to` is `left` or `right`, not `{to}`
+@msg	`dock.move`: `to` is `left`, `right`, `up` or `down`, not `{to}`	`dock.move`: `to` is `left`, `right`, `up` or `down`, not `{to}`
 @msg	`dock.float` needs `floating`: true or false	`dock.float` needs `floating`: true or false
 @msg	`dock.layout_save`: `name` is a string	`dock.layout_save`: `name` is a string
 @msg	there is no dock layout named `{name}`	there is no dock layout named `{name}`
+@msg	`dock.region`: `region` is `left`, `right` or `bottom`, not `{region}`	`dock.region`: `region` is `left`, `right` or `bottom`, not `{region}`
+@msg	`{name}` is a built-in layout; choose another name	`{name}` is a built-in layout; choose another name
+@msg	`{name}` is a built-in layout and can't be removed	`{name}` is a built-in layout and can't be removed
+	Set up	Set up
+	Review	Review
+	Classic	Classic
+	Move to the Left Column	Move to the Left Column
+	Move to the Right Column	Move to the Right Column
+	Move Under the Canvas	Move Under the Canvas
+	Resize the column	Resize the column
+	Place Dock	Place Dock
 @msg	`{command}` needs `id`: a destination id	`{command}` needs `id`: a destination id
 @msg	`{command}`: `{key}` is a string	`{command}`: `{key}` is a string
 @msg	`{command}`: `{key}` is true or false	`{command}`: `{key}` is true or false

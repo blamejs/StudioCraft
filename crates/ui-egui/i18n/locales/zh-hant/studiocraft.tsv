@@ -539,7 +539,7 @@ menu	Transform	變形
 @msg	the source has not shown a picture yet	該來源尚未顯示畫面
 @msg	settings are kept in memory only (--no-prefs)	設定只保存在記憶體中（--no-prefs）
 @msg	`scopes.kind`: unknown scope `{name}` (one of {scopes})	`scopes.kind`：未知的示波器 `{name}`（可選 {scopes}）
-@msg	`dock.move`: `to` is `left` or `right`, not `{to}`	`dock.move`：`to` 應為 `left` 或 `right`，而不是 `{to}`
+@msg	`dock.move`: `to` is `left`, `right`, `up` or `down`, not `{to}`	`dock.move`：`to` 應為 `left`、`right`、`up` 或 `down`，而不是 `{to}`
 @msg	`dock.float` needs `floating`: true or false	`dock.float` 需要 `floating`：true 或 false
 @msg	`dock.layout_save`: `name` is a string	`dock.layout_save`：`name` 應為字串
 @msg	there is no dock layout named `{name}`	沒有名為 `{name}` 的停駐版面
@@ -567,3 +567,11 @@ menu	Transform	變形
 	A profile holds at most {max} destinations	一個設定檔最多可有 {max} 個目標
 	Fill Screen	填滿畫面
 @msg	The scenes could not be laid out for the new canvas: {error}	無法為新畫布排列場景：{error}
+	Set up	準備
+	Review	回顧
+	Classic	經典
+	Move to the Left Column	移到左欄
+	Move to the Right Column	移到右欄
+	Move Under the Canvas	移到畫布下方
+	Resize the column	調整欄寬
+	Place Dock	放置停駐面板

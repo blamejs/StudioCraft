@@ -539,7 +539,7 @@ menu	Transform	変形
 @msg	the source has not shown a picture yet	ソースはまだ映像を表示していません
 @msg	settings are kept in memory only (--no-prefs)	設定はメモリ内にのみ保持されています (--no-prefs)
 @msg	`scopes.kind`: unknown scope `{name}` (one of {scopes})	`scopes.kind`: 不明なスコープ `{name}` ({scopes} のいずれか)
-@msg	`dock.move`: `to` is `left` or `right`, not `{to}`	`dock.move`: `to` は `{to}` ではなく `left` または `right` です
+@msg	`dock.move`: `to` is `left`, `right`, `up` or `down`, not `{to}`	`dock.move`: `to` は `{to}` ではなく `left`、`right`、`up` または `down` です
 @msg	`dock.float` needs `floating`: true or false	`dock.float` には `floating` (true または false) が必要です
 @msg	`dock.layout_save`: `name` is a string	`dock.layout_save`: `name` は文字列です
 @msg	there is no dock layout named `{name}`	`{name}` という名前のドックレイアウトはありません
@@ -567,3 +567,11 @@ menu	Transform	変形
 	A profile holds at most {max} destinations	1 つのプロファイルに登録できる配信先は最大 {max} 件です
 	Fill Screen	画面を埋める
 @msg	The scenes could not be laid out for the new canvas: {error}	新しいキャンバスにシーンを配置できませんでした: {error}
+	Set up	準備
+	Review	レビュー
+	Classic	クラシック
+	Move to the Left Column	左の列へ移動
+	Move to the Right Column	右の列へ移動
+	Move Under the Canvas	キャンバスの下へ移動
+	Resize the column	列の幅を変更
+	Place Dock	ドックを配置

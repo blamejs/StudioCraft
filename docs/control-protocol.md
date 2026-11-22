@@ -147,9 +147,11 @@ The exit confirmation takes no `text`. When neither dialog is open the request i
 | --- | --- |
 | `window` | `{"width", "height"}` in points. |
 | `dialogs` | `settings`, `about`, `stats`, `encoders`, `confirm_exit` and `updates` (the update prompt or the result of Help › Check for Updates; each `true` or `false`), `properties` and `filters` (the ids of the sources whose windows are open) and `prompt` (`{"title", "text", "error"}` of the name prompt, or `null`; `error` is the refusal shown under the field, in English, or `null`). |
-| `docks` | Each shown dock in the strip (`scenes`, `sources`, `mixer`, `app_audio`) from left to right, with its `rect`: `{"x", "y", "width", "height"}`; its `header` rect; its `title` rect, where a right-click opens the dock's menu; `title_truncated`, whether the title was shortened to fit; and `actions`, each header action with its `name` (`add`, `remove`, `up`, `down`, `properties`) and `rect`, from left to right. |
-| `floating_docks` | Each shown dock in a window of its own, with the same fields as `docks`; its `rect` is the window's, and its `bar` rect is the window's title bar, where a drag moves the window. |
+| `docks` | Each shown dock in a column or the strip (`scenes`, `sources`, `mixer`, `app_audio`): the left column's from top to bottom, then the right column's, then the strip's from left to right. Each has its `rect`: `{"x", "y", "width", "height"}`; its `header` rect; its `title` rect, where a right-click opens the dock's menu; `title_truncated`, whether the title was shortened to fit; `actions`, each header action with its `name` (`add`, `remove`, `up`, `down`, `properties`) and `rect`, from left to right; `region`, where the dock is placed (`left`, `right` or `bottom`); and `drawn_in`, where it is drawn this frame, which is `bottom` for a column's dock while the columns are drawn in the strip. |
+| `floating_docks` | Each shown dock in a window of its own, with the same fields as `docks` except `drawn_in`; its `rect` is the window's, and its `bar` rect is the window's title bar, where a drag moves the window. |
+| `dock_columns` | `left` and `right`, each the column's `{"rect", "saved_width"}` (`saved_width` is the width set by dragging its inner edge, or `null`), or `null` when the column is not drawn; and `collapsed`, whether the window is too narrow for the columns so that their docks are drawn in the strip. |
 | `dock_layouts` | The names of the saved dock layouts, in the order they were first saved. |
+| `built_in_dock_layouts` | The names of the built-in dock layouts: `Set up`, `Live`, `Review` and `Classic`. |
 | `dock_strip` | The strip that holds the docks, or `null` when every dock is hidden: its `rect` and `height`, `saved_height` (the height set by dragging its top edge, or `null`) and `saved_widths` (`scenes`, `sources`, `mixer` and `app_audio`, each a width set by dragging a divider, or `null`) and `order`, every dock's name from left to right, hidden ones included. |
 | `output_bar` | The menu row: its `rect`; `transitions`, where the transition picker is (`inline`, `overflow` behind an icon button, or `hidden` by Docks › Transition Controls); `compact`, whether Record and Go Live leave out their labels; and `parts`, each drawn part with its `name` (`menus`, `mode`, `transition`, `duration`, `transition_settings`, `transition_overflow`, `record`, `stream`) and `rect`, from left to right. |
 | `preview` | The editable view's `rect` and `scale` (points per canvas pixel), or `null` before it is drawn. In studio mode this is the preview; otherwise it is the program. |
@@ -615,7 +617,9 @@ opens the Save Dock Layout prompt and returns `{"asking": true}`. Saving a 33rd 
 error.
 
 `dock.layout_apply` and `dock.layout_remove` take `{"name"}`, compared without regard to case, and
-return `{"applied"}` or `{"removed"}`; a name no layout has is an error.
+return `{"applied", "built_in"}` or `{"removed"}`; a name no layout has is an error.
+`dock.layout_apply` also applies the built-in layouts `Set up`, `Live`, `Review` and `Classic`.
+Saving or removing a layout under a built-in layout's name is an error.
 
 ### `golive.check`
 

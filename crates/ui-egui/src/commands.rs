@@ -58,6 +58,7 @@ pub const UI_COMMANDS: &[(&str, &str)] = &[
     ("dock.transitions", "Transition Controls"),
     ("dock.move", "Move Dock"),
     ("dock.float", "Undock"),
+    ("dock.region", "Place Dock"),
     ("dock.layout_save", "Save Dock Layout…"),
     ("dock.layout_apply", "Apply Dock Layout"),
     ("dock.layout_remove", "Remove Dock Layout"),
@@ -188,10 +189,16 @@ pub fn ui_params(id: &str) -> &'static str {
         "stream.reconnect_set" => {
             "enabled?: boolean, first_delay_s?: integer (1 to 60), max_delay_s?: integer (first_delay_s to 600), max_tries?: integer (1 to 100)"
         }
-        "dock.move" => "dock: string (scenes, sources, mixer or app_audio), to: string (left or right)",
+        "dock.move" => {
+            "dock: string (scenes, sources, mixer or app_audio), to: string (left or up for the dock before it in its region, right or down for the one after it)"
+        }
         "dock.float" => "dock: string (scenes, sources, mixer or app_audio), floating: boolean (true for a window of its own, false for the strip)",
-        "dock.layout_save" => "name?: string (without it the window asks for one)",
-        "dock.layout_apply" | "dock.layout_remove" => "name: string",
+        "dock.region" => {
+            "dock: string (scenes, sources, mixer or app_audio), region: string (left or right for the column beside the canvas, bottom for the strip under it; a dock in a window of its own is docked there)"
+        }
+        "dock.layout_save" => "name?: string (without it the window asks for one; the built-in layouts' names are refused)",
+        "dock.layout_apply" => "name: string (a saved layout, or a built-in one: Set up, Live, Review or Classic)",
+        "dock.layout_remove" => "name: string (a saved layout)",
         "video.canvas_from_display" => {
             "display?: string (an id from video.displays; without it, the display the window is on). The canvas then follows the display's resolution and scaling"
         }
@@ -396,6 +403,20 @@ fn layout_items(id: &str, names: &[String]) -> Vec<Node> {
     names.iter().map(|n| Node::Item(Item::new(CommandRef::with_params(id, json!({"name": n})), n.clone()))).collect()
 }
 
+/// Docks › Layouts: the built-in layouts, shown in the interface language and applied by their
+/// English names, then the saved layouts after a separator.
+fn apply_layout_items(names: &[String]) -> Vec<Node> {
+    let mut out: Vec<Node> = crate::store::BUILT_IN_LAYOUTS
+        .iter()
+        .map(|n| Node::Item(Item::new(CommandRef::with_params("dock.layout_apply", json!({"name": n})), tl!(*n).to_string())))
+        .collect();
+    if !names.is_empty() {
+        out.push(Node::Separator);
+        out.extend(layout_items("dock.layout_apply", names));
+    }
+    out
+}
+
 /// The menu bar before platform layout, in the interface language: File, Edit, View, Docks,
 /// Profile, Scene Collection, Tools and Help.
 pub fn menu_bar(s: &MenuState) -> MenuBar {
@@ -480,7 +501,7 @@ pub fn menu_bar(s: &MenuState) -> MenuBar {
             check("dock.transitions", "Transition Controls"),
             Node::Separator,
             item("dock.layout_save", "Save Dock Layout…"),
-            Node::submenu(title("Layouts"), layout_items("dock.layout_apply", s.layouts)),
+            Node::submenu(title("Layouts"), apply_layout_items(s.layouts)),
             Node::submenu(title("Remove Layout"), layout_items("dock.layout_remove", s.layouts)),
             Node::Separator,
             item("dock.reset", "Reset Docks"),
@@ -636,7 +657,7 @@ mod tests {
         let layout = |id: &str, name: &str| row(id, name, json!({"name": name}), true, None);
         let saved = ["Talk".to_string(), "Game".to_string()];
         // (saved dock layouts, menu, submenu, rows)
-        let cases: [(&[String], &str, Option<&str>, Vec<Row>); 6] = [
+        let cases: [(&[String], &str, Option<&str>, Vec<Row>); 7] = [
             (
                 &[],
                 "Docks",
@@ -652,9 +673,19 @@ mod tests {
                     plain("dock.reset", "Reset Docks"),
                 ],
             ),
-            (&[], "Docks", Some("Layouts"), vec![none("dock.layout_apply")]),
+            (&[], "Docks", Some("Layouts"), crate::store::BUILT_IN_LAYOUTS.iter().map(|n| layout("dock.layout_apply", n)).collect()),
             (&[], "Docks", Some("Remove Layout"), vec![none("dock.layout_remove")]),
-            (&saved, "Docks", Some("Layouts"), vec![layout("dock.layout_apply", "Talk"), layout("dock.layout_apply", "Game")]),
+            (
+                &saved,
+                "Docks",
+                Some("Layouts"),
+                crate::store::BUILT_IN_LAYOUTS
+                    .iter()
+                    .map(|n| layout("dock.layout_apply", n))
+                    .chain([layout("dock.layout_apply", "Talk"), layout("dock.layout_apply", "Game")])
+                    .collect(),
+            ),
+            (&saved, "Docks", Some("Remove Layout"), vec![layout("dock.layout_remove", "Talk"), layout("dock.layout_remove", "Game")]),
             (&[], "Help", Some("Community"), COMMUNITY.iter().map(|(id, _, label)| row(id, label, null.clone(), true, None)).collect()),
             (&[], "Help", None, vec![plain("app.check_updates", "Check for Updates…"), plain("app.about", "About StudioCraft")]),
         ];

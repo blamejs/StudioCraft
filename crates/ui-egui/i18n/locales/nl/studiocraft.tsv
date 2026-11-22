@@ -529,7 +529,7 @@ menu	Transform	Transformeren
 @msg	the source has not shown a picture yet	de bron heeft nog geen beeld getoond
 @msg	settings are kept in memory only (--no-prefs)	instellingen worden alleen in het geheugen bewaard (--no-prefs)
 @msg	`scopes.kind`: unknown scope `{name}` (one of {scopes})	`scopes.kind`: onbekende videometer `{name}` (een van {scopes})
-@msg	`dock.move`: `to` is `left` or `right`, not `{to}`	`dock.move`: `to` is `left` of `right`, niet `{to}`
+@msg	`dock.move`: `to` is `left`, `right`, `up` or `down`, not `{to}`	`dock.move`: `to` is `left`, `right`, `up` of `down`, niet `{to}`
 @msg	`dock.float` needs `floating`: true or false	`dock.float` heeft `floating` nodig: true of false
 @msg	`dock.layout_save`: `name` is a string	`dock.layout_save`: `name` is een tekenreeks
 @msg	there is no dock layout named `{name}`	er is geen dockindeling met de naam `{name}`
@@ -557,3 +557,11 @@ menu	Transform	Transformeren
 	A profile holds at most {max} destinations	Een profiel bevat maximaal {max} bestemmingen
 	Fill Screen	Scherm vullen
 @msg	The scenes could not be laid out for the new canvas: {error}	De scènes konden niet voor het nieuwe canvas worden ingedeeld: {error}
+	Set up	Voorbereiden
+	Review	Nakijken
+	Classic	Klassiek
+	Move to the Left Column	Naar de linkerkolom
+	Move to the Right Column	Naar de rechterkolom
+	Move Under the Canvas	Onder het canvas
+	Resize the column	Breedte van de kolom wijzigen
+	Place Dock	Dock plaatsen

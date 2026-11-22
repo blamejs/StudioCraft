@@ -104,7 +104,8 @@ impl StudioApp {
             "dock.app_audio" => on(p.docks.app_audio),
             "dock.transitions" => on(p.docks.transitions),
             "dock.controls" => on(p.docks.controls),
-            "dock.layout_apply" | "dock.layout_remove" => enabled(!p.dock_layouts.is_empty()),
+            // The built-in layouts can always be applied; only saved ones can be removed.
+            "dock.layout_remove" => enabled(!p.dock_layouts.is_empty()),
             "profile.remove" => enabled(self.profiles.len() > 1),
             "collection.remove" => enabled(self.collections.len() > 1),
             _ => ItemState::default(),
@@ -366,6 +367,7 @@ impl StudioApp {
         let dock = |i: usize, r: egui::Rect, d: &crate::docks::Drawn| {
             json!({
                 "dock": DOCK_NAMES.get(i).copied().unwrap_or("unknown"),
+                "region": u8::try_from(i).map_or("bottom", |i| self.store.prefs().docks.region(i).name()),
                 "rect": rect(r),
                 "header": rect(d.header),
                 "title": rect(d.title),
@@ -373,7 +375,15 @@ impl StudioApp {
                 "actions": d.actions.iter().rev().map(|(name, r)| json!({"name": name, "rect": rect(*r)})).collect::<Vec<_>>(),
             })
         };
-        let docks: Vec<Value> = self.dock_rects.iter().map(|(i, r, d)| dock(*i, *r, d)).collect();
+        let docks: Vec<Value> = self
+            .dock_rects
+            .iter()
+            .map(|(i, r, d, drawn)| {
+                let mut v = dock(*i, *r, d);
+                v["drawn_in"] = json!(drawn.name());
+                v
+            })
+            .collect();
         let floating: Vec<Value> = self
             .floating_rects
             .iter()
@@ -398,6 +408,14 @@ impl StudioApp {
                 "order": d.order().iter().filter_map(|i| DOCK_NAMES.get(usize::from(*i)).copied()).collect::<Vec<_>>(),
             })
         });
+        let column = |c: usize, saved: f32| {
+            self.dock_columns.get(c).copied().flatten().map(|r| json!({"rect": rect(r), "saved_width": crate::strip::usable(saved)}))
+        };
+        let columns = json!({
+            "left": column(0, d.left_width),
+            "right": column(1, d.right_width),
+            "collapsed": self.docks_collapsed,
+        });
         let preview = self.last_view.map(|(r, scale)| json!({"rect": rect(r), "scale": scale}));
         let menus: Vec<String> = self.laid_menu().menus.into_iter().map(|m| m.title).collect();
         json!({
@@ -416,7 +434,9 @@ impl StudioApp {
             "docks": docks,
             "floating_docks": floating,
             "dock_strip": strip,
+            "dock_columns": columns,
             "dock_layouts": self.store.prefs().dock_layout_names(),
+            "built_in_dock_layouts": crate::store::BUILT_IN_LAYOUTS,
             "output_bar": self.output_bar.json(),
             "preview": preview,
             "studio_mode": self.studio.engine().studio_mode(),

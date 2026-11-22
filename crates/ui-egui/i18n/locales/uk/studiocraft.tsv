@@ -548,7 +548,7 @@ menu	Transform	Перетворення
 @msg	the source has not shown a picture yet	джерело ще не показало зображення
 @msg	settings are kept in memory only (--no-prefs)	налаштування зберігаються лише в пам'яті (--no-prefs)
 @msg	`scopes.kind`: unknown scope `{name}` (one of {scopes})	`scopes.kind`: невідомий графік сигналу `{name}` (один з {scopes})
-@msg	`dock.move`: `to` is `left` or `right`, not `{to}`	`dock.move`: `to` може бути `left` або `right`, але не `{to}`
+@msg	`dock.move`: `to` is `left`, `right`, `up` or `down`, not `{to}`	`dock.move`: `to` може бути `left`, `right`, `up` або `down`, але не `{to}`
 @msg	`dock.float` needs `floating`: true or false	`dock.float` потребує `floating`: true або false
 @msg	`dock.layout_save`: `name` is a string	`dock.layout_save`: `name` має бути рядком
 @msg	there is no dock layout named `{name}`	немає розкладки панелей з назвою `{name}`
@@ -577,3 +577,11 @@ menu	Transform	Перетворення
 	A profile holds at most {max} destinations	У профілі може бути не більше {max} призначень
 	Fill Screen	Заповнити екран
 @msg	The scenes could not be laid out for the new canvas: {error}	Не вдалося розташувати сцени для нового полотна: {error}
+	Set up	Підготовка
+	Review	Перегляд
+	Classic	Класичний
+	Move to the Left Column	Перемістити в ліву колонку
+	Move to the Right Column	Перемістити в праву колонку
+	Move Under the Canvas	Перемістити під полотно
+	Resize the column	Змінити ширину колонки
+	Place Dock	Розмістити панель

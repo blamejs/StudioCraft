@@ -538,7 +538,7 @@ menu	Transform	Transformar
 @msg	the source has not shown a picture yet	a fonte ainda não mostrou nenhuma imagem
 @msg	settings are kept in memory only (--no-prefs)	as configurações ficam apenas na memória (--no-prefs)
 @msg	`scopes.kind`: unknown scope `{name}` (one of {scopes})	`scopes.kind`: monitor de sinal desconhecido `{name}` (um de {scopes})
-@msg	`dock.move`: `to` is `left` or `right`, not `{to}`	`dock.move`: `to` é `left` ou `right`, não `{to}`
+@msg	`dock.move`: `to` is `left`, `right`, `up` or `down`, not `{to}`	`dock.move`: `to` é `left`, `right`, `up` ou `down`, não `{to}`
 @msg	`dock.float` needs `floating`: true or false	`dock.float` precisa de `floating`: true ou false
 @msg	`dock.layout_save`: `name` is a string	`dock.layout_save`: `name` é um texto
 @msg	there is no dock layout named `{name}`	não há layout dos painéis chamado `{name}`
@@ -566,3 +566,11 @@ menu	Transform	Transformar
 	A profile holds at most {max} destinations	Um perfil comporta no máximo {max} destinos
 	Fill Screen	Preencher a tela
 @msg	The scenes could not be laid out for the new canvas: {error}	Não foi possível reorganizar as cenas para a nova tela de pintura: {error}
+	Set up	Preparar
+	Review	Revisão
+	Classic	Clássico
+	Move to the Left Column	Mover para a coluna esquerda
+	Move to the Right Column	Mover para a coluna direita
+	Move Under the Canvas	Mover para baixo da tela de pintura
+	Resize the column	Redimensionar a coluna
+	Place Dock	Posicionar painel

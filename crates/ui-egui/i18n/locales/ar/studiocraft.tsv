@@ -527,7 +527,7 @@ menu	Transform	التحويل
 @msg	the source has not shown a picture yet	لم يعرض المصدر صورة بعد
 @msg	settings are kept in memory only (--no-prefs)	تُحفظ الإعدادات في الذاكرة فقط (--no-prefs)
 @msg	`scopes.kind`: unknown scope `{name}` (one of {scopes})	`scopes.kind`: أداة قياس غير معروفة `{name}` (إحدى {scopes})
-@msg	`dock.move`: `to` is `left` or `right`, not `{to}`	`dock.move`: قيمة `to` هي `left` أو `right`، وليست `{to}`
+@msg	`dock.move`: `to` is `left`, `right`, `up` or `down`, not `{to}`	`dock.move`: قيمة `to` هي `left` أو `right` أو `up` أو `down`، وليست `{to}`
 @msg	`dock.float` needs `floating`: true or false	يحتاج `dock.float` إلى `floating`: true أو false
 @msg	`dock.layout_save`: `name` is a string	`dock.layout_save`: يجب أن يكون `name` نصًا
 @msg	there is no dock layout named `{name}`	لا يوجد تخطيط لوحات باسم `{name}`
@@ -555,3 +555,11 @@ menu	Transform	التحويل
 	A profile holds at most {max} destinations	يتسع الملف الشخصي لـ {max} وجهة على الأكثر
 	Fill Screen	ملء الشاشة
 @msg	The scenes could not be laid out for the new canvas: {error}	تعذّر ترتيب المشاهد للوحة الجديدة: {error}
+	Set up	الإعداد
+	Review	مراجعة
+	Classic	كلاسيكي
+	Move to the Left Column	نقل إلى العمود الأيسر
+	Move to the Right Column	نقل إلى العمود الأيمن
+	Move Under the Canvas	نقل أسفل لوحة الرسم
+	Resize the column	تغيير عرض العمود
+	Place Dock	وضع اللوحة
