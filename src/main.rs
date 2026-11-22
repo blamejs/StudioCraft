@@ -45,6 +45,11 @@ struct Shell {
     unchecked: Option<(placement::Placement, bool)>,
     /// How many more frames the check waits for the system to list a monitor.
     monitor_waits: u32,
+    /// The smallest size the window may be made now: `placement::MIN_SIZE`, or less while the
+    /// window is on a monitor smaller than that.
+    least: [f32; 2],
+    /// The position, size and scale of the monitor the smallest size was last set for.
+    monitor_seen: Option<([i32; 2], [u32; 2], u64)>,
 }
 
 /// The frames the monitor check waits for the system to list a monitor before it gives up.
@@ -74,6 +79,12 @@ impl Shell {
             return;
         }
         let current = window.current_monitor();
+        // `keep_least_size` waits until the window is on another monitor than the one it opened
+        // on, so the smallest size set here holds while the window moves to its place.
+        self.monitor_seen = current.as_ref().map(|m| {
+            let (pos, size) = (m.position(), m.size());
+            ([pos.x, pos.y], [size.width, size.height], m.scale_factor().to_bits())
+        });
         let home = current.and_then(|c| handles.iter().position(|m| *m == c));
         let outer_px = window.outer_position().ok().map(|p| [p.x, p.y]);
         let defaults = placement::defaults();
@@ -82,7 +93,8 @@ impl Shell {
             ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(false));
         }
         let least = placement::least_size(&next, &defaults);
-        if least != defaults.min {
+        if least != self.least {
+            self.least = least;
             ctx.send_viewport_cmd(egui::ViewportCommand::MinInnerSize(least.into()));
         }
         ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(next.normal.size.into()));
@@ -92,6 +104,27 @@ impl Shell {
         }
         if next.maximized {
             ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(true));
+        }
+    }
+
+    /// When the window is on another monitor than before: sets the smallest size for that monitor,
+    /// `placement::MIN_SIZE` or less on a monitor smaller than that.
+    fn keep_least_size(&mut self, ctx: &egui::Context, frame: &eframe::Frame) {
+        if self.harness.is_some() {
+            return;
+        }
+        let Some(m) = frame.winit_window().and_then(|w| w.current_monitor()) else { return };
+        let (pos, size) = (m.position(), m.size());
+        let seen = ([pos.x, pos.y], [size.width, size.height], m.scale_factor().to_bits());
+        if self.monitor_seen == Some(seen) {
+            return;
+        }
+        self.monitor_seen = Some(seen);
+        let monitor = placement::monitor(m.name(), [pos.x, pos.y], [size.width, size.height], m.scale_factor());
+        let least = placement::least_size_on(&monitor, &placement::defaults());
+        if least != self.least {
+            self.least = least;
+            ctx.send_viewport_cmd(egui::ViewportCommand::MinInnerSize(least.into()));
         }
     }
 }
@@ -119,6 +152,7 @@ impl eframe::App for Shell {
 
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         self.fit_to_monitors(ui.ctx(), frame);
+        self.keep_least_size(ui.ctx(), frame);
         eframe::App::ui(&mut self.app, ui, frame);
     }
 
@@ -230,7 +264,17 @@ fn run(args: Args, raw: Vec<std::ffi::OsString>) -> Result<(), String> {
             let fell_back = (software_once && !picked.contains(&Notice::NoSoftwareAdapter)).then_some(Notice::SoftwareOnly);
             let notices = after_losses.iter().chain(&fell_back).chain(picked).map(hardware::notice_msg).collect();
             app.set_window_gpu(adapter, notices, may_relaunch);
-            Ok(Box::new(Shell { app, harness, control, relaunch_args: raw, placement: window, unchecked, monitor_waits: MONITOR_WAITS }))
+            Ok(Box::new(Shell {
+                app,
+                harness,
+                control,
+                relaunch_args: raw,
+                placement: window,
+                unchecked,
+                monitor_waits: MONITOR_WAITS,
+                least: placement::MIN_SIZE,
+                monitor_seen: None,
+            }))
         }),
     );
     // A process has one window event loop, so another adapter is tried by starting again: a

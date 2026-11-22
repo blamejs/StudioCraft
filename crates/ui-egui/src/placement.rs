@@ -104,6 +104,12 @@ pub fn least_size(placed: &Placement, defaults: &Defaults) -> [f32; 2] {
     [0, 1].map(|i| defaults.min[i].min(placed.normal.size[i]).max(1.0))
 }
 
+/// The smallest size the window may be made on `monitor`: [`MIN_SIZE`], lowered on an axis where
+/// the monitor's usable area is smaller than that.
+pub fn least_size_on(monitor: &Monitor, defaults: &Defaults) -> [f32; 2] {
+    least_size(&place(None, std::slice::from_ref(monitor), None, defaults), defaults)
+}
+
 /// A monitor the system lists: `name` (empty when it has none), its top-left corner and size in
 /// pixels, and its scale.
 pub fn monitor(name: Option<String>, pos_px: [i32; 2], size_px: [u32; 2], scale: f64) -> Monitor {
@@ -208,6 +214,9 @@ mod tests {
         assert!(w <= 640.0 && h <= 400.0, "{fitted:?}");
         assert_eq!(least_size(&fitted, &d), [MIN_SIZE[0].min(w), MIN_SIZE[1].min(h)]);
         assert!(least_size(&fitted, &d).iter().zip(MIN_SIZE).any(|(l, m)| *l < m), "{fitted:?}");
+        // Moved on to a monitor with room for the smallest window, the window gets that limit back.
+        assert_eq!(least_size_on(&tiny[0], &d), least_size(&fitted, &d));
+        assert_eq!(least_size_on(&full_hd()[0], &d), MIN_SIZE);
     }
 
     #[test]
