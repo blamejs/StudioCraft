@@ -259,7 +259,9 @@ impl<'a> OptionCards<'a> {
                     None
                 };
                 if let Some(to) = to {
-                    ui.memory_mut(|m| m.request_focus(self.id.with(to)));
+                    // The next card takes the arrow filter with the focus, so an arrow in the next
+                    // frame does not also move the focus by egui's own navigation.
+                    ui.memory_mut(|m| m.request_focus_with_filter(self.id.with(to), arrows));
                     if to != self.selected {
                         changed = Some(to);
                     }
@@ -390,6 +392,31 @@ mod tests {
         assert_eq!(press(Key::ArrowLeft, 1), Some(0));
         assert_eq!(press(Key::ArrowLeft, 0), None, "the first card has no card before it");
         assert_eq!(focused(), Some(Id::unique("cards").with(0usize)));
+    }
+
+    #[test]
+    fn arrows_in_consecutive_frames_move_the_focus_one_card_each() {
+        let ctx = egui::Context::default();
+        let st = style();
+        let below = Id::unique("below");
+        // At 300 points the cards stack, with another focusable widget under the third one.
+        let draw = |events: Vec<Event>, selected: usize| {
+            let mut out = None;
+            let mut full = ctx.run_ui(raw(300.0, events), |ui| {
+                out = Some(OptionCards::new(Id::unique("held"), &CARDS, selected, &st).show(ui));
+                let r = ui.interact(Rect::from_min_size(ui.cursor().min, vec2(100.0, 20.0)), below, Sense::click());
+                ui.advance_cursor_after_rect(r.rect);
+            });
+            full.textures_delta.clear();
+            out.unwrap_or_else(|| panic!("the cards were not drawn")).changed
+        };
+        draw(vec![], 0);
+        ctx.memory_mut(|m| m.request_focus(Id::unique("held").with(0usize)));
+        draw(vec![], 0);
+        draw(vec![], 0);
+        assert_eq!(draw(key(Key::ArrowDown), 0), Some(1));
+        assert_eq!(draw(key(Key::ArrowDown), 1), Some(2));
+        assert_eq!(ctx.memory(|m| m.focused()), Some(Id::unique("held").with(2usize)), "the focus stays on the third card");
     }
 
     #[test]
