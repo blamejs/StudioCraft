@@ -1502,15 +1502,17 @@ impl OutputInstance for Streaming {
             _ => None,
         };
         self.stopped = true;
+        // The encoders finish, and the last packets go to the rings; then the fan-out ends.
+        let r = self.native.stop();
+        self.close_destinations();
         // The check of a destination that failed for good outlives the stream; the others end.
+        // A thread asked to stop starts no check, so one started while the stream stopped is
+        // canceled here too.
         if let Some((checks, auto)) = &self.hub.auto {
             for d in self.hub.dests.iter().filter(|d| !matches!(d.status(), DestinationStatus::Failed(_))) {
                 checks.cancel(&auto.profile, &d.target.id);
             }
         }
-        // The encoders finish, and the last packets go to the rings; then the fan-out ends.
-        let r = self.native.stop();
-        self.close_destinations();
         r?;
         failed.map_or(Ok(()), |e| Err(PluginError::Failed(e)))
     }
