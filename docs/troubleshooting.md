@@ -34,8 +34,8 @@ while it ran. The next recording or stream tries another encoder.
 The Streaming window shows why a destination is trying again or failed. Hold the pointer over the
 status to see the error and each address that was tried.
 
-**"this computer has no network route to the server".** No network interface can reach any
-address of the server. Check that the computer is connected to a network. On a network that
+**"this computer has no network route to the server addresses tried".** No network interface can
+reach any of the server's addresses that were tried (at most 4). Check that the computer is connected to a network. On a network that
 offers only IPv4 or only IPv6, check that the server has an address of that kind.
 
 **"the server's name could not be looked up", "the server's name does not exist; check the server

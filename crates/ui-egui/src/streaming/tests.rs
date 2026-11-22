@@ -601,7 +601,7 @@ fn a_failure_is_listed_with_its_cause_and_addresses() {
     assert_eq!(
         detail,
         "could not connect to the server: timed out; 1 other address also failed\n\
-         [2001:db8::1]:1935: this computer has no network route to the server (network unreachable)\n\
+         [2001:db8::1]:1935: this computer has no network route to this address (network unreachable)\n\
          192.0.2.1:1935: the server did not answer in time (timed out)"
     );
     // A failure without addresses lists none, and a live destination has no cause.
