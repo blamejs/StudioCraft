@@ -742,15 +742,17 @@ enum Gate {
 enum NetWait {
     /// A route returned: try at once.
     Up,
+    /// The destination was started again: try at once, as a first try.
+    Restarted,
     /// The destination was stopped or the stream ended.
     Stopped,
     /// The longest waits spent without a route used up the tries.
     GaveUp(Failure),
 }
 
-/// Waits until the system has a route to `d`'s server again, or, with `until`, at most that long,
-/// showing [`DestinationStatus::WaitingForNetwork`] with `last`. Each longest wait spent without a
-/// route counts as a failed try in `failures`.
+/// Waits until the system has a route to `d`'s server again or `d` is started again, or, with
+/// `until`, at most that long, showing [`DestinationStatus::WaitingForNetwork`] with `last`. Each
+/// longest wait spent without a route counts as a failed try in `failures`.
 fn wait_for_network(hub: &Arc<Hub>, d: &Arc<Dest>, failures: &mut u32, last: &Failure, until: Option<Duration>) -> NetWait {
     // The wait starts before the status shows it, so a reader of the status never sees a later start.
     let start = hub.seams.clock.now();
@@ -761,6 +763,10 @@ fn wait_for_network(hub: &Arc<Hub>, d: &Arc<Dest>, failures: &mut u32, last: &Fa
     let ended = loop {
         if d.stopping() || hub.control.is_ended() {
             break NetWait::Stopped;
+        }
+        // Started again while it waits: it tries at once, as after the wait before a try.
+        if d.restarted.load(Ordering::SeqCst) {
+            break NetWait::Restarted;
         }
         // Without a route thread, the destination checks for itself.
         if d.net_up.load(Ordering::SeqCst) || (!watched && gate(hub, d, last) == Gate::Open) {
@@ -975,11 +981,11 @@ fn run(hub: &Arc<Hub>, d: &Arc<Dest>) {
                     Gate::Open | Gate::NoDefault => Gate::Open,
                 };
             }
-            if route != Gate::Open && !d.stopping() && !hub.control.is_ended() {
+            if route != Gate::Open && !d.stopping() && !d.restarted.load(Ordering::SeqCst) && !hub.control.is_ended() {
                 let until = (route == Gate::NoDefault).then_some(delay);
                 match wait_for_network(hub, d, &mut failures, &failure, until) {
                     NetWait::Up => d.set(DestinationStatus::Retrying { attempt: failures.saturating_add(1), failure }),
-                    NetWait::Stopped => {}
+                    NetWait::Restarted | NetWait::Stopped => {}
                     NetWait::GaveUp(f) => return d.fail(f),
                 }
             }
@@ -987,7 +993,8 @@ fn run(hub: &Arc<Hub>, d: &Arc<Dest>) {
         if d.ends(hub) {
             return;
         }
-        if !matches!(d.status(), DestinationStatus::Retrying { .. }) {
+        // Started again while it waited: the try is shown as a first one.
+        if d.restarted.load(Ordering::SeqCst) || !matches!(d.status(), DestinationStatus::Retrying { .. }) {
             d.set(DestinationStatus::Connecting);
         }
         let connected = connect(hub, d);

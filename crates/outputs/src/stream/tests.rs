@@ -1394,6 +1394,65 @@ fn a_stop_while_waiting_for_the_network_returns() {
     out.stop().unwrap();
 }
 
+/// A stop and start that reaches the waiting thread of `id`, as `spawn` makes it.
+fn restart_waiting(out: &Streaming, id: &str) {
+    let dest = out.hub.find(id).unwrap();
+    dest.restarted.store(true, Ordering::SeqCst);
+    if let Some(t) = lock(&dest.thread).as_ref() {
+        t.thread().unpark();
+    }
+}
+
+#[test]
+fn a_restart_while_it_waits_shows_a_first_try() {
+    let (url, seen) = server(vec![Plan::Accept]);
+    let (release, hold) = mpsc::channel::<()>();
+    let (resolve, asked) = scripted(vec![Answer::Now(Err(io::Error::other("no answer"))), Answer::After(hold, vec![addr(&url)])]);
+    let job = job(RateControl::Bitrate { kbps: 400, keyframe_s: 1 });
+    let seams = Seams { clock: TestClock::new(), resolve, route: routed() };
+    let mut out = Streaming::start_with(&job, vec![named("a")], network_timing(), seams).unwrap();
+    let feed = Feed::new(&out);
+    assert_eq!([heard(&asked), heard(&asked)], ["asked", "answered"]);
+    until(&out, "a", |d| matches!(d.status, DestinationStatus::Retrying { attempt: 2, .. }));
+    restart_waiting(&out, "a");
+    // While the try looks the name up, it is shown as a first try.
+    assert_eq!(heard(&asked), "asked");
+    until(&out, "a", |d| d.status == DestinationStatus::Connecting);
+    drop(release);
+    assert_eq!(next(&seen), Seen::Publish("k".into()));
+    until(&out, "a", |d| d.status == DestinationStatus::Live);
+    drop(feed);
+    out.stop().unwrap();
+    until_closed(&seen);
+}
+
+#[test]
+fn a_restart_while_waiting_for_the_network_tries_at_once() {
+    let (url, seen) = server(vec![Plan::Accept]);
+    let (release, hold) = mpsc::channel::<()>();
+    let (resolve, asked) = scripted(vec![Answer::Now(Err(io::Error::other("no network"))), Answer::After(hold, vec![addr(&url)])]);
+    let (route, _set) = switch(Route::None);
+    let job = job(RateControl::Bitrate { kbps: 400, keyframe_s: 1 });
+    let seams = Seams { clock: TestClock::new(), resolve, route };
+    let mut out = Streaming::start_with(&job, vec![named("a")], network_timing(), seams).unwrap();
+    let feed = Feed::new(&out);
+    assert_eq!([heard(&asked), heard(&asked)], ["asked", "answered"]);
+    until(&out, "a", |d| waiting(d).is_some());
+    restart_waiting(&out, "a");
+    // It tries at once though the route has not returned, shown as a first try, and the server
+    // takes the stream.
+    assert_eq!(heard(&asked), "asked");
+    until(&out, "a", |d| d.status == DestinationStatus::Connecting);
+    drop(release);
+    assert_eq!(next(&seen), Seen::Publish("k".into()));
+    let d = until(&out, "a", |d| d.status == DestinationStatus::Live);
+    assert_eq!(d.reconnects, 0);
+    assert!(lock(&out.hub.net.state).0.is_empty(), "it no longer waits for the network");
+    drop(feed);
+    out.stop().unwrap();
+    until_closed(&seen);
+}
+
 #[test]
 fn sixteen_destinations_share_one_route_thread() {
     let (resolve, _asked) = scripted(Vec::new());
