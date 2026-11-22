@@ -213,7 +213,7 @@ pub(crate) fn status_text(d: &Destination, running: bool, live: Option<&Destinat
 /// What kind of failure `cause` is, in the interface language.
 pub(crate) fn cause_text(cause: Cause) -> &'static str {
     match cause {
-        Cause::NoRoute => tl!("this computer has no network route to the server"),
+        Cause::NoRoute => tl!("this computer has no network route to the server addresses tried"),
         Cause::LookupFailed => tl!("the server's name could not be looked up"),
         Cause::LookupNotFound => tl!("the server's name does not exist; check the server address"),
         Cause::LookupNoAnswer => tl!("the DNS server did not answer for the server's name"),
@@ -245,7 +245,11 @@ pub(crate) fn status_detail(running: bool, live: Option<&DestinationState>) -> O
     let mut text = Msg::plain(failure.detail.as_str()).shown();
     for a in &failure.addresses {
         text.push('\n');
-        let args = [("address", a.address.as_str()), ("cause", cause_text(a.cause)), ("error", a.detail.as_str())];
+        let cause = match a.cause {
+            Cause::NoRoute => tl!("this computer has no network route to this address"),
+            c => cause_text(c),
+        };
+        let args = [("address", a.address.as_str()), ("cause", cause), ("error", a.detail.as_str())];
         text.push_str(&craft_i18n::fmt(tl!("{address}: {cause} ({error})"), &args));
     }
     Some(text)
