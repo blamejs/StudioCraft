@@ -135,10 +135,7 @@ impl Procs for ProcFs {
     }
 
     fn exe(&self, pid: u32) -> Option<String> {
-        let path = std::fs::read_link(format!("/proc/{pid}/exe")).ok()?;
-        let path = path.to_string_lossy();
-        // A program file replaced while it runs reads as "<path> (deleted)".
-        Some(path.strip_suffix(" (deleted)").unwrap_or(&path).to_owned())
+        exe_at(Path::new(&format!("/proc/{pid}/exe")))
     }
 
     fn sound_server(&self, pid: u32) -> bool {
@@ -159,6 +156,23 @@ impl Procs for ProcFs {
 
     fn holds(&self, pid: u32, inodes: &BTreeSet<u64>) -> Option<bool> {
         holds_at(Path::new("/proc"), pid, inodes)
+    }
+}
+
+/// The program file the `exe` link of a process leads to. A program file removed or replaced
+/// while it runs reads as `<path> (deleted)`; the suffix is kept when the file at the path that
+/// ends with it is the program file itself.
+fn exe_at(link: &Path) -> Option<String> {
+    use std::os::unix::fs::MetadataExt;
+    let target = std::fs::read_link(link).ok()?;
+    let text = target.to_string_lossy();
+    let at_path = || match (std::fs::metadata(link), std::fs::metadata(&target)) {
+        (Ok(running), Ok(file)) => running.dev() == file.dev() && running.ino() == file.ino(),
+        _ => false,
+    };
+    match text.strip_suffix(" (deleted)") {
+        Some(removed) if !at_path() => Some(removed.to_owned()),
+        _ => Some(text.into_owned()),
     }
 }
 
@@ -1788,6 +1802,24 @@ mod tests {
         assert!(stat(parent).is_some_and(|(_, start)| stat(me).is_some_and(|(_, mine)| start <= mine)));
         assert!(graph::in_tree(&ProcFs, me, parent));
         assert_eq!(ProcFs.parent(u32::MAX), None);
+    }
+
+    #[test]
+    fn only_a_removed_program_file_loses_the_deleted_suffix() {
+        let dir = std::env::temp_dir().join(format!("studiocraft-app-audio-{}-exe", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        // A program whose own file name ends in " (deleted)", still at its path.
+        let named = dir.join("player (deleted)");
+        std::fs::write(&named, b"").unwrap();
+        std::os::unix::fs::symlink(&named, dir.join("named-exe")).unwrap();
+        assert_eq!(exe_at(&dir.join("named-exe")), Some(named.display().to_string()));
+        // A program file that was removed while it runs.
+        let removed = dir.join("recorder");
+        std::os::unix::fs::symlink(format!("{} (deleted)", removed.display()), dir.join("removed-exe")).unwrap();
+        assert_eq!(exe_at(&dir.join("removed-exe")), Some(removed.display().to_string()));
+        assert_eq!(exe_at(&dir.join("missing-exe")), None);
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
