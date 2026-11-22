@@ -4,7 +4,7 @@
 
 use std::collections::HashMap;
 
-use egui::{Color32, Rect, RichText, Sense, TextStyle, Ui, pos2, vec2};
+use egui::{Color32, Rect, RichText, Sense, Ui, pos2, vec2};
 use serde_json::json;
 use studiocraft_engine::lanes::{AppKey, Lane, LaneKind, Lanes};
 use studiocraft_media::mix::{BlockLevels, METER_FLOOR_DB, MeterBallistics, from_db, to_db};
@@ -13,6 +13,7 @@ use studiocraft_studio::Studio;
 
 use crate::icons::{self, Icon};
 use crate::kit::panel_header::{PanelHeaderStyle, panel_header};
+use crate::kit::tokens::{MeterColors, paint};
 use crate::theme;
 use crate::{Act, Rename};
 
@@ -46,10 +47,7 @@ pub struct Drawn {
 /// A dock's header; `title` is English and shown translated. `add` adds the actions from right to
 /// left and records each one.
 fn header(ui: &mut Ui, title: &str, add: impl FnOnce(&mut Ui, &mut Vec<(&'static str, Rect)>)) -> Drawn {
-    let ctx = ui.ctx().clone();
-    // The Title style is installed with the theme; before that the button text style stands in.
-    let font = ui.style().text_styles.get(&TextStyle::Name(theme::TITLE.into())).cloned().unwrap_or_else(|| TextStyle::Button.resolve(ui.style()));
-    let style = PanelHeaderStyle::new(theme::palette(&ctx), &theme::sizes(&ctx), font);
+    let style = theme::with_root(ui.ctx(), |cx| PanelHeaderStyle::new(cx, theme::title_font(cx)));
     let r = panel_header(ui, tl!(title), &style, |ui| {
         let mut actions = Vec::new();
         add(ui, &mut actions);
@@ -94,15 +92,20 @@ fn dock_menu(ui: &mut Ui, drawn: &mut Drawn, dock: &'static str, place: Option<(
 
 /// A header action named `name` for `ui.inspect`; `tip` is English and shown translated.
 fn action(ui: &mut Ui, actions: &mut Vec<(&'static str, Rect)>, name: &'static str, icon: Icon, tip: &str, enabled: bool) -> bool {
-    let size = theme::sizes(ui.ctx()).control_sm;
+    let size = control_size(ui);
     let r = icons::response(ui, icon, tl!(tip), enabled, size, Color32::TRANSPARENT);
     actions.push((name, r.rect));
     r.clicked()
 }
 
+/// The size of a header action: the standard control height, square.
+fn control_size(ui: &Ui) -> egui::Vec2 {
+    egui::Vec2::splat(theme::with_root(ui.ctx(), |cx| cx.tokens.size.control.md))
+}
+
 /// The area for the dock's content under its header, inside the dock padding.
 fn body(ui: &mut Ui) -> Ui {
-    let pad = theme::sizes(ui.ctx()).pad_panel;
+    let pad = egui::Vec2::splat(theme::with_root(ui.ctx(), |cx| cx.tokens.space.pad.regular));
     let r = ui.available_rect_before_wrap();
     let rect = Rect::from_min_max(r.min + pad, (r.max - pad).max(r.min + pad));
     ui.new_child(egui::UiBuilder::new().max_rect(rect).layout(crate::i18n::column(ui)))
@@ -259,7 +262,7 @@ pub fn sources(ui: &mut Ui, studio: &Studio, st: &mut DockState, acts: &mut Vec<
         if action(ui, a, "remove", Icon::Minus, "Remove the selected source from the scene", sel.is_some()) {
             acts.push(Act::run("selection.remove", json!({})));
         }
-        let size = theme::sizes(ui.ctx()).control_sm;
+        let size = control_size(ui);
         let r = icons::menu_sized(ui, Icon::Plus, tl!("Add a source"), size, scene.is_some(), |ui| add_source_menu(ui, studio, edit, acts));
         a.push(("add", r.rect));
     });
@@ -376,14 +379,17 @@ fn meter_x(db: f32, r: Rect) -> f32 {
     r.left() + t * r.width()
 }
 
-/// Two channel bars with their peak marks.
+/// Two channel bars on the meter's track, with their peak marks, in the colors of the window's
+/// light or dark mode.
 fn meter(ui: &mut Ui, m: &MeterBallistics, muted: bool) {
     let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 14.0), Sense::hover());
     let painter = ui.painter_at(rect);
+    let colors = MeterColors::of(craft_ui::runtime::env::Env::of(ui).view().mode());
+    painter.rect_filled(rect, 0.0, paint(colors.track));
     let zones = [
-        (METER_FLOOR_DB, METER_YELLOW_DB, Color32::from_rgb(60, 200, 80)),
-        (METER_YELLOW_DB, METER_RED_DB, Color32::from_rgb(230, 200, 40)),
-        (METER_RED_DB, 0.0, Color32::from_rgb(230, 60, 50)),
+        (METER_FLOOR_DB, METER_YELLOW_DB, paint(colors.green)),
+        (METER_YELLOW_DB, METER_RED_DB, paint(colors.yellow)),
+        (METER_RED_DB, 0.0, paint(colors.red)),
     ];
     for c in 0..2 {
         let h = (rect.height() - 2.0) / 2.0;
@@ -402,7 +408,7 @@ fn meter(ui: &mut Ui, m: &MeterBallistics, muted: bool) {
         painter.line_segment([pos2(rms, bar.top()), pos2(rms, bar.bottom())], (1.0, Color32::from_black_alpha(140)));
         if m.hold_db[c] > METER_FLOOR_DB {
             let x = meter_x(m.hold_db[c], bar);
-            painter.line_segment([pos2(x, bar.top()), pos2(x, bar.bottom())], (2.0, Color32::WHITE));
+            painter.line_segment([pos2(x, bar.top()), pos2(x, bar.bottom())], (2.0, paint(colors.hold)));
         }
     }
 }

@@ -52,7 +52,7 @@ description in [docs/features.md](docs/features.md).
 
 ### Interface
 
-- A compact dark and light theme has a focus ring for keyboard navigation ([Theme](docs/features.md#theme)).
+- The window shows the Craft apps' suite theme in dark mode with the Compact size set ([Theme](docs/features.md#theme)).
 - The output controls sit on the menu row and adapt to a narrow window ([Menu row and output controls](docs/features.md#menu-row-and-output-controls)).
 - The Scenes, Sources and Audio Mixer docks can be resized, reordered, undocked and saved as named layouts ([Docks](docs/features.md#docks)).
 - The interface fonts come from `craft-ui`'s font stack ([Fonts](docs/features.md#fonts)).

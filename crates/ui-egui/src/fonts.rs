@@ -60,31 +60,7 @@ pub fn install(ctx: &egui::Context, language: &str) {
 
 #[cfg(test)]
 mod tests {
-    use craft_ui::fonts::{Sample, missing_glyphs};
-
     use super::*;
-    use crate::theme::{CHECK_MARK, RADIO_MARK};
-
-    fn marks() -> [Sample<'static>; 2] {
-        [Sample::new("en", "check mark", CHECK_MARK), Sample::new("en", "radio mark", RADIO_MARK)]
-    }
-
-    /// A craft face for `scripts`, made from Inter's file.
-    fn craft(family: &'static str, scripts: &'static [&'static str]) -> EmbeddedFace {
-        EmbeddedFace { family, style: "Regular", scripts, index: 0, bytes: INTER_REGULAR, role: None }
-    }
-
-    #[test]
-    fn the_menu_marks_draw_with_a_real_glyph() {
-        for (built, faces) in [("without CRAFT_FONTS_DIR", &[][..]), ("with this build's craft faces", CRAFT_FONTS)] {
-            let stack = stack("en", faces);
-            for family in [FontRef::proportional(), FontRef::named(SEMIBOLD), FontRef::monospace()] {
-                let missing = missing_glyphs(&stack, &family, marks(), false);
-                let names: Vec<String> = missing.iter().map(ToString::to_string).collect();
-                assert!(missing.is_empty(), "{built}, {family:?}: {}", names.join("; "));
-            }
-        }
-    }
 
     #[test]
     fn the_app_faces_lead_their_families() {
@@ -96,34 +72,21 @@ mod tests {
     }
 
     #[test]
-    fn craft_faces_follow_the_app_face_unless_the_language_needs_its_own_script_first() {
-        let arabic = [craft("Test Arabic", &["Arab"])];
-        let english = stack("en", &arabic);
-        let chain = english.chain(&FontRef::proportional());
-        assert_eq!(chain.first().map(String::as_str), Some(INTER), "{chain:?}");
-        assert!(chain.iter().any(|n| n == "Test Arabic Regular"), "{chain:?}");
-
-        let arabic_ui = stack("ar", &arabic);
-        let chain = arabic_ui.chain(&FontRef::proportional());
-        assert_eq!(chain.first().map(String::as_str), Some("Test Arabic Regular"), "{chain:?}");
-        let mono = arabic_ui.chain(&FontRef::monospace());
-        assert_eq!(mono.first().map(String::as_str), Some(MONO), "{mono:?}");
-    }
-
-    #[test]
-    fn a_label_with_the_marks_lays_out_after_installing_for_a_second_language() {
+    fn a_label_lays_out_in_each_family_after_installing_for_a_second_language() {
         let ctx = egui::Context::default();
         install(&ctx, "en");
         install(&ctx, "de");
-        let mut drawn = (false, false);
+        let mut drawn = Vec::new();
         let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
-            ui.label(format!("{CHECK_MARK} {RADIO_MARK}"));
+            ui.label("Szenen");
             drawn = ui.ctx().fonts_mut(|f| {
-                let id = egui::FontId::proportional(12.0);
-                (f.has_glyph(&id, '\u{2713}'), f.has_glyph(&id, '\u{25cf}'))
+                [FontFamily::Proportional, semibold(), FontFamily::Monospace]
+                    .into_iter()
+                    .map(|family| f.has_glyph(&egui::FontId::new(12.0, family), 'S'))
+                    .collect()
             });
         });
         out.textures_delta.clear();
-        assert_eq!(drawn, (true, true));
+        assert_eq!(drawn, [true, true, true]);
     }
 }

@@ -2,14 +2,14 @@
 //!
 //! The track has a 1-point outline; the selected segment has the selection fill, a 1-point
 //! border and the full text color, and the others use the muted text color. Each segment is its
-//! own focusable widget that screen readers announce as a radio button. A click, Space or Enter
-//! selects a segment, and the left and right arrow keys select the neighbor of the focused one.
+//! own focusable widget that screen readers announce as a radio button, and the focused one has
+//! the theme's focus ring. A click, Space or Enter selects a segment, and the left and right arrow
+//! keys select the neighbor of the focused one.
 
-use egui::{
-    Color32, CornerRadius, FontId, Id, Key, Modifiers, Rect, Response, Role, Sense, Stroke, StrokeKind, TextStyle, Ui, WidgetInfo, pos2, vec2,
-};
+use craft_ui::style::StyleCx;
+use egui::{Color32, CornerRadius, FontId, Id, Key, Modifiers, Rect, Response, Role, Sense, Stroke, StrokeKind, Ui, WidgetInfo, pos2, vec2};
 
-use super::tokens::Palette;
+use super::corner;
 
 /// The colors and sizes of a [`Segmented`] control.
 #[derive(Clone, Debug, PartialEq)]
@@ -27,23 +27,34 @@ pub struct SegmentedStyle {
     /// The space on each side of a segment's label.
     pub padding: f32,
     pub radius: u8,
+    /// The labels' font.
+    pub font: FontId,
+    /// The ring on the focused segment.
+    pub focus: Stroke,
 }
 
 impl SegmentedStyle {
-    /// The style from a palette, with the control `height` tall and corners of `radius`.
-    pub fn new(p: &Palette, height: f32, radius: u8) -> SegmentedStyle {
+    /// The style from the tokens of `cx`: the secondary control look for the track, the selected
+    /// fill with the accent text color as its border, the standard control height and the label
+    /// role.
+    pub fn new(cx: &StyleCx<'_>) -> SegmentedStyle {
+        let t = &cx.tokens;
+        let look = cx.variant_look();
+        let c = |rgba| cx.color(rgba).egui();
         SegmentedStyle {
-            track: p.control,
-            hover: p.control_hover,
-            outline: p.line_strong,
-            selected_fill: p.selection,
-            selected_border: p.accent_text,
-            text: p.text,
-            text_muted: p.text_muted,
-            text_disabled: p.text_disabled,
-            height,
+            track: look.fill.off.rest.egui(),
+            hover: look.fill.off.hover.egui(),
+            outline: look.edge.map_or_else(|| c(t.color.line.control_edge), |edge| edge.off.rest.egui()),
+            selected_fill: c(t.color.state.selected),
+            selected_border: c(t.color.accent.text),
+            text: c(t.color.text.on_selected),
+            text_muted: c(t.color.text.muted),
+            text_disabled: c(t.color.text.disabled),
+            height: t.size.control.md,
             padding: 8.0,
-            radius,
+            radius: corner(t.shape.radius.control),
+            font: FontId::proportional(t.typography.label.size),
+            focus: cx.focus_look().stroke,
         }
     }
 }
@@ -78,13 +89,9 @@ impl<'a> Segmented<'a> {
         self
     }
 
-    fn font(ui: &Ui) -> FontId {
-        TextStyle::Button.resolve(ui.style())
-    }
-
     /// Each segment's width: its label and the padding on both sides.
     pub fn segment_widths(&self, ui: &Ui) -> Vec<f32> {
-        let font = Self::font(ui);
+        let font = self.style.font.clone();
         self.labels
             .iter()
             .map(|l| ui.painter().layout_no_wrap((*l).to_owned(), font.clone(), Color32::WHITE).size().x.ceil() + 2.0 * self.style.padding)
@@ -104,9 +111,10 @@ impl<'a> Segmented<'a> {
         let radius = CornerRadius::same(s.radius);
         let painter = ui.painter_at(rect.expand(1.0));
         painter.rect_filled(rect, radius, s.track);
-        let font = Self::font(ui);
+        let font = s.font.clone();
         let mut segments = Vec::with_capacity(widths.len());
         let mut changed = None;
+        let mut shapes = Vec::with_capacity(widths.len());
         let mut x = rect.left();
         let last = widths.len().saturating_sub(1);
         for (i, (label, w)) in self.labels.iter().zip(&widths).enumerate() {
@@ -138,6 +146,7 @@ impl<'a> Segmented<'a> {
             if self.enabled && r.clicked() && !selected {
                 changed = Some(i);
             }
+            shapes.push((seg, corners));
             if self.enabled && r.has_focus() {
                 let left = i > 0 && ui.input_mut(|inp| inp.consume_key(Modifiers::NONE, Key::ArrowLeft));
                 let right = i < last && ui.input_mut(|inp| inp.consume_key(Modifiers::NONE, Key::ArrowRight));
@@ -158,6 +167,13 @@ impl<'a> Segmented<'a> {
             segments.push(r);
         }
         painter.rect_stroke(rect, radius, Stroke::new(1.0, s.outline), StrokeKind::Inside);
+        // The focus ring goes on the edge of the segment that holds the focus after this frame's
+        // arrow keys, over the track's outline.
+        let focused = ui.memory(|m| m.focused());
+        let ring = (0..shapes.len()).find(|i| self.enabled && focused == Some(self.id.with(*i))).and_then(|i| shapes.get(i).copied());
+        if let Some((seg, corners)) = ring {
+            painter.rect_stroke(seg, corners, s.focus, StrokeKind::Inside);
+        }
         SegmentedResponse { rect, changed, segments }
     }
 }
@@ -169,7 +185,7 @@ mod tests {
     use super::*;
 
     fn style() -> SegmentedStyle {
-        SegmentedStyle::new(&Palette::DARK, 24.0, 4)
+        StyleCx::with_root(&crate::test_context(), SegmentedStyle::new)
     }
 
     fn run(ctx: &egui::Context, events: Vec<Event>, selected: usize) -> (SegmentedResponse, Vec<egui::epaint::ClippedShape>) {
@@ -208,14 +224,14 @@ mod tests {
     fn the_selected_segment_carries_the_selection_fill_and_border() {
         let ctx = egui::Context::default();
         let (r, shapes) = run(&ctx, vec![], 1);
-        let p = Palette::DARK;
-        let filled = shapes.iter().any(|c| matches!(&c.shape, egui::Shape::Rect(s) if s.fill == p.selection && s.rect == r.segments[1].rect));
+        let p = style();
+        let filled = shapes.iter().any(|c| matches!(&c.shape, egui::Shape::Rect(s) if s.fill == p.selected_fill && s.rect == r.segments[1].rect));
         assert!(filled, "no selection fill on the selected segment");
         let border = shapes
             .iter()
-            .any(|c| matches!(&c.shape, egui::Shape::Rect(s) if s.stroke == Stroke::new(1.0, p.accent_text) && s.rect == r.segments[1].rect));
+            .any(|c| matches!(&c.shape, egui::Shape::Rect(s) if s.stroke == Stroke::new(1.0, p.selected_border) && s.rect == r.segments[1].rect));
         assert!(border, "no border on the selected segment");
-        let other = shapes.iter().any(|c| matches!(&c.shape, egui::Shape::Rect(s) if s.fill == p.selection && s.rect == r.segments[0].rect));
+        let other = shapes.iter().any(|c| matches!(&c.shape, egui::Shape::Rect(s) if s.fill == p.selected_fill && s.rect == r.segments[0].rect));
         assert!(!other, "the other segment is not filled");
     }
 
@@ -240,6 +256,28 @@ mod tests {
         assert_eq!(ctx.memory(|m| m.focused()), Some(Id::unique("mode").with(1usize)), "focus follows the choice");
         assert_eq!(run(&ctx, key(Key::ArrowRight), 1).0.changed, None, "the last segment has no right neighbor");
         assert_eq!(run(&ctx, key(Key::ArrowLeft), 1).0.changed, Some(0));
+    }
+
+    #[test]
+    fn the_focused_segment_has_the_focus_ring() {
+        let ctx = egui::Context::default();
+        let p = style();
+        let ringed = |shapes: &[egui::epaint::ClippedShape], rect: Rect| {
+            shapes.iter().any(|c| matches!(&c.shape, egui::Shape::Rect(s) if s.stroke == p.focus && s.rect == rect))
+        };
+        let (r, shapes) = run(&ctx, vec![], 0);
+        assert!(!r.segments.iter().any(|s| ringed(&shapes, s.rect)), "no ring without focus");
+        ctx.memory_mut(|m| m.request_focus(Id::unique("mode").with(1usize)));
+        let (r, shapes) = run(&ctx, vec![], 0);
+        assert!(ringed(&shapes, r.segments[1].rect), "the focused segment has the ring");
+        assert!(!ringed(&shapes, r.segments[0].rect));
+        // ArrowLeft moves the focus to the first segment, and the ring moves with it in the same frame.
+        let left =
+            vec![Event::Key { key: Key::ArrowLeft, physical_key: Some(Key::ArrowLeft), pressed: true, repeat: false, modifiers: Modifiers::NONE }];
+        let (r, shapes) = run(&ctx, left, 1);
+        assert_eq!(r.changed, Some(0));
+        assert!(ringed(&shapes, r.segments[0].rect), "the ring follows the focus");
+        assert!(!ringed(&shapes, r.segments[1].rect));
     }
 
     #[test]

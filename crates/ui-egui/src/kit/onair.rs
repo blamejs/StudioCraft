@@ -1,14 +1,16 @@
 //! The Go Live and Record buttons: a glyph, a label and, while the output runs, its timer.
 //!
-//! An idle button has the control fill and a 1-point outline. A running one is filled with the
-//! live or recording red and draws its glyph, label and timer in the on-accent color. While the
-//! output starts or stops, the button has the pressed fill and a turning arc in place of the
-//! glyph; a stopping output cannot be clicked. A compact button leaves the label out and keeps the
-//! glyph and, while running, the timer.
+//! An idle button has the theme's secondary control fill and a 1-point outline. A running one is
+//! filled with the theme's error red and draws its glyph, label and timer in the color for text on
+//! a status fill. While the output starts or stops, the button has the pressed fill and a turning
+//! arc in place of the glyph; a stopping output cannot be clicked. A compact button leaves the
+//! label out and keeps the glyph and, while running, the timer. A focused button has the theme's
+//! focus ring.
 
-use egui::{Color32, CornerRadius, FontId, Pos2, Rect, Response, Role, Sense, Shape, Stroke, StrokeKind, TextStyle, Ui, WidgetInfo, pos2, vec2};
+use craft_ui::style::StyleCx;
+use egui::{Color32, CornerRadius, FontId, Pos2, Rect, Response, Role, Sense, Shape, Stroke, StrokeKind, Ui, WidgetInfo, pos2, vec2};
 
-use super::tokens::Palette;
+use super::corner;
 
 /// Which output a button is for; it picks the glyph and the running fill.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -52,29 +54,39 @@ pub struct OnAirStyle {
     /// The space between the glyph, the label and the timer.
     pub gap: f32,
     pub radius: u8,
-    /// The timer's font; the label uses the button text style.
+    /// The label's font.
+    pub label_font: FontId,
+    /// The timer's font.
     pub timer_font: FontId,
+    /// The ring on a focused button.
+    pub focus: Stroke,
 }
 
 impl OnAirStyle {
-    /// The style from a palette, with the button `height` tall and corners of `radius`.
-    pub fn new(p: &Palette, height: f32, radius: u8, timer_font: FontId) -> OnAirStyle {
+    /// The style from the tokens of `cx`: the secondary control look, the standard control height
+    /// and the label role, with the timer in `timer_font`.
+    pub fn new(cx: &StyleCx<'_>, timer_font: FontId) -> OnAirStyle {
+        let t = &cx.tokens;
+        let look = cx.variant_look();
+        let red = cx.color(t.color.status.bad.solid).egui();
         OnAirStyle {
-            fill: p.control,
-            hover: p.control_hover,
-            pressed: p.control_active,
-            outline: p.line_strong,
-            text: p.text,
-            text_disabled: p.text_disabled,
-            on_fill: p.on_accent,
-            live: p.on_air,
-            recording: p.recording,
-            height,
+            fill: look.fill.off.rest.egui(),
+            hover: look.fill.off.hover.egui(),
+            pressed: look.fill.off.pressed.egui(),
+            outline: look.edge.map_or_else(|| cx.color(t.color.line.control_edge).egui(), |edge| edge.off.rest.egui()),
+            text: look.text.off.rest.egui(),
+            text_disabled: look.text.off.disabled.egui(),
+            on_fill: cx.color(t.color.text.on_status).egui(),
+            live: red,
+            recording: red,
+            height: t.size.control.md,
             padding: 12.0,
             glyph: 12.0,
             gap: 6.0,
-            radius,
+            radius: corner(t.shape.radius.control),
+            label_font: FontId::proportional(t.typography.label.size),
             timer_font,
+            focus: cx.focus_look().stroke,
         }
     }
 }
@@ -118,7 +130,7 @@ impl<'a> OnAirButton<'a> {
         let s = self.style;
         let mut w = 2.0 * s.padding + s.glyph;
         if !self.compact && !self.label.is_empty() {
-            w += s.gap + Self::text_width(ui, self.label, TextStyle::Button.resolve(ui.style()));
+            w += s.gap + Self::text_width(ui, self.label, s.label_font.clone());
         }
         if let Some(t) = self.timer {
             w += s.gap + Self::text_width(ui, t, s.timer_font.clone());
@@ -165,7 +177,7 @@ impl<'a> OnAirButton<'a> {
         x = glyph.right();
         if !self.compact && !self.label.is_empty() {
             x += s.gap;
-            let g = painter.layout_no_wrap(self.label.to_owned(), TextStyle::Button.resolve(ui.style()), fg);
+            let g = painter.layout_no_wrap(self.label.to_owned(), s.label_font.clone(), fg);
             let w = g.size().x;
             painter.galley(pos2(x, rect.center().y - g.size().y / 2.0), g, fg);
             x += w.ceil();
@@ -174,6 +186,9 @@ impl<'a> OnAirButton<'a> {
             x += s.gap;
             let g = painter.layout_no_wrap(t.to_owned(), s.timer_font.clone(), fg);
             painter.galley(pos2(x, rect.center().y - g.size().y / 2.0), g, fg);
+        }
+        if r.has_focus() {
+            painter.rect_stroke(rect, radius, s.focus, StrokeKind::Inside);
         }
         r
     }
@@ -212,7 +227,7 @@ mod tests {
     use super::*;
 
     fn style() -> OnAirStyle {
-        OnAirStyle::new(&Palette::DARK, 28.0, 4, FontId::monospace(12.0))
+        StyleCx::with_root(&crate::test_context(), |cx| OnAirStyle::new(cx, FontId::monospace(12.0)))
     }
 
     fn raw(events: Vec<Event>) -> RawInput {
@@ -234,10 +249,10 @@ mod tests {
     }
 
     #[test]
-    fn buttons_are_28_tall_and_as_wide_as_their_content() {
+    fn buttons_take_the_standard_control_height_and_are_as_wide_as_their_content() {
         let ctx = egui::Context::default();
         let (idle, _) = draw(&ctx, vec![], |s| OnAirButton::new(Glyph::Record, OnAirState::Idle, "Record", "Record", s));
-        assert_eq!(idle.rect.height(), 28.0);
+        assert_eq!(idle.rect.height(), 24.0);
         let (long, _) = draw(&ctx, vec![], |s| OnAirButton::new(Glyph::Live, OnAirState::Idle, "Go Live now please", "Go Live", s));
         assert!(long.rect.width() > idle.rect.width() + 40.0, "{:?} {:?}", long.rect, idle.rect);
         let (compact, _) = draw(&ctx, vec![], |s| OnAirButton::new(Glyph::Record, OnAirState::Idle, "Record", "Record", s).compact(true));
@@ -254,14 +269,14 @@ mod tests {
     #[test]
     fn a_running_output_fills_the_button_with_its_red() {
         let ctx = egui::Context::default();
-        let p = Palette::DARK;
+        let p = style();
         let (r, shapes) =
             draw(&ctx, vec![], |s| OnAirButton::new(Glyph::Live, OnAirState::Running, "LIVE", "Live, 00:01:00", s).timer(Some("00:01:00")));
-        assert!(filled(&shapes, p.on_air, r.rect));
+        assert!(filled(&shapes, p.live, r.rect));
         let (r, shapes) = draw(&ctx, vec![], |s| OnAirButton::new(Glyph::Record, OnAirState::Running, "REC", "Recording", s));
         assert!(filled(&shapes, p.recording, r.rect));
         let (r, shapes) = draw(&ctx, vec![], |s| OnAirButton::new(Glyph::Record, OnAirState::Idle, "Record", "Record", s));
-        assert!(filled(&shapes, p.control, r.rect));
+        assert!(filled(&shapes, p.fill, r.rect));
         assert!(!filled(&shapes, p.recording, r.rect));
     }
 
@@ -311,5 +326,20 @@ mod tests {
             })
             .collect();
         assert_eq!(names, [Some("Recording, 00:12:34".to_owned())]);
+    }
+
+    #[test]
+    fn a_focused_button_has_the_focus_ring_and_an_unfocused_one_does_not() {
+        let ctx = egui::Context::default();
+        let st = style();
+        let ringed = |shapes: &[egui::epaint::ClippedShape], rect: Rect| {
+            shapes.iter().any(|c| matches!(&c.shape, egui::Shape::Rect(s) if s.stroke == st.focus && s.rect == rect))
+        };
+        let (r, shapes) = draw(&ctx, vec![], |s| OnAirButton::new(Glyph::Live, OnAirState::Idle, "Go Live", "Go Live", s));
+        assert!(!ringed(&shapes, r.rect), "no ring without focus");
+        ctx.memory_mut(|m| m.request_focus(r.id));
+        let (r, shapes) = draw(&ctx, vec![], |s| OnAirButton::new(Glyph::Live, OnAirState::Idle, "Go Live", "Go Live", s));
+        assert!(r.has_focus());
+        assert!(ringed(&shapes, r.rect), "the focused button has the ring");
     }
 }

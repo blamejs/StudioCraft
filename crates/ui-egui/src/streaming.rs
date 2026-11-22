@@ -4,7 +4,7 @@
 
 use craft_ui::contract::{Bind, Entry, Props as _, Show as _};
 use craft_ui::pickers::Select;
-use egui::{RichText, Ui};
+use egui::{Color32, RichText, Ui};
 use serde_json::{Value, json};
 use studiocraft_model::profile::{MAX_DESTINATION_ID, MAX_DESTINATIONS, PRIMARY_DESTINATION};
 use studiocraft_model::{Destination, KeyRef, StreamSettings};
@@ -12,7 +12,6 @@ use studiocraft_plugin::{DestinationState, DestinationStatus};
 use studiocraft_studio::OutputKind;
 
 use crate::i18n::Msg;
-use crate::kit::tokens::Palette;
 use crate::settings::key_source;
 use crate::theme;
 use crate::{Act, StudioApp};
@@ -197,9 +196,19 @@ pub(crate) struct View<'a> {
     pub(crate) held: &'a dyn Fn(&str) -> bool,
 }
 
+/// The colors of a destination's status line and key warning.
+#[derive(Clone, Copy)]
+struct Tones {
+    good: Color32,
+    warn: Color32,
+}
+
 /// The Streaming window's contents.
 pub(crate) fn show(ui: &mut Ui, view: &View, panel: &mut StreamingPanel, acts: &mut Vec<Act>) {
-    let palette = theme::palette(ui.ctx());
+    let tones = theme::with_root(ui.ctx(), |cx| {
+        let status = &cx.tokens.color.status;
+        Tones { good: theme::color(cx, status.good.fg), warn: theme::color(cx, status.warn.fg) }
+    });
     let count = view.stream.destinations.len();
     ui.horizontal(|ui| {
         let full = count >= MAX_DESTINATIONS;
@@ -219,21 +228,13 @@ pub(crate) fn show(ui: &mut Ui, view: &View, panel: &mut StreamingPanel, acts: &
     egui::ScrollArea::vertical().id_salt("streaming").auto_shrink([false, true]).show(ui, |ui| {
         for d in &view.stream.destinations {
             let live = view.live.iter().find(|s| s.id == d.id);
-            ui.push_id(("destination", &d.id), |ui| row(ui, view, d, live, panel, acts, palette));
+            ui.push_id(("destination", &d.id), |ui| row(ui, view, d, live, panel, acts, tones));
             ui.separator();
         }
     });
 }
 
-fn row(
-    ui: &mut Ui,
-    view: &View,
-    d: &Destination,
-    live: Option<&DestinationState>,
-    panel: &mut StreamingPanel,
-    acts: &mut Vec<Act>,
-    palette: &Palette,
-) {
+fn row(ui: &mut Ui, view: &View, d: &Destination, live: Option<&DestinationState>, panel: &mut StreamingPanel, acts: &mut Vec<Act>, tones: Tones) {
     let title = if d.name.trim().is_empty() { d.id.clone() } else { d.name.clone() };
     ui.horizontal(|ui| {
         let mut on = d.enabled;
@@ -267,13 +268,13 @@ fn row(
     if let KeyRef::Held(name) = &d.key
         && !(view.held)(name)
     {
-        ui.colored_label(palette.warn, RichText::new(tl!("No key is held for this session yet")).small());
+        ui.colored_label(tones.warn, RichText::new(tl!("No key is held for this session yet")).small());
     }
     let (text, tone) = status_text(d, view.running, live);
     let color = match tone {
         Tone::Plain => ui.visuals().text_color(),
-        Tone::Good => palette.good,
-        Tone::Warn => palette.warn,
+        Tone::Good => tones.good,
+        Tone::Warn => tones.warn,
     };
     ui.colored_label(color, text);
     if let Some(e) = panel.editing.as_mut().filter(|e| e.id == d.id) {

@@ -7,9 +7,8 @@
 //! tooltip. A dock has no footer: every action it offers is in its header.
 
 use crate::i18n as direction;
+use craft_ui::style::StyleCx;
 use egui::{Color32, FontId, Rect, RichText, Sense, Ui, UiBuilder, pos2, vec2};
-
-use super::tokens::{Palette, Sizes};
 
 /// The colors and sizes of a [`panel_header`].
 #[derive(Clone, Debug, PartialEq)]
@@ -29,12 +28,13 @@ pub struct PanelHeaderStyle {
 }
 
 impl PanelHeaderStyle {
-    /// The style from a palette and a size set, with the title in `title_font`.
-    pub fn new(p: &Palette, s: &Sizes, title_font: FontId) -> PanelHeaderStyle {
+    /// The style from the tokens of `cx`, with the title in `title_font`.
+    pub fn new(cx: &StyleCx<'_>, title_font: FontId) -> PanelHeaderStyle {
+        let t = &cx.tokens;
         PanelHeaderStyle {
-            height: s.panel_header,
-            fill: p.raised,
-            title_color: p.text_muted,
+            height: t.size.panel_header,
+            fill: cx.color(t.color.surface.raised).egui(),
+            title_color: cx.color(t.color.text.muted).egui(),
             title_font,
             title_inset: 8.0,
             action_inset: 4.0,
@@ -103,8 +103,8 @@ mod tests {
 
     use super::*;
 
-    fn style() -> PanelHeaderStyle {
-        PanelHeaderStyle::new(&Palette::DARK, &Sizes::COMPACT, FontId::proportional(12.0))
+    fn style(ctx: &egui::Context) -> PanelHeaderStyle {
+        StyleCx::with_root(ctx, |cx| PanelHeaderStyle::new(cx, FontId::proportional(12.0)))
     }
 
     /// One header `width` wide with `n` 24 x 24 actions; the header and the action rectangles.
@@ -121,7 +121,7 @@ mod tests {
         let direction = if rtl { Direction::Rtl } else { Direction::Ltr };
         craft_ui::shell::embed::before_input(&ctx, |_| FrameInput::new(RootEnv::new().direction(direction)));
         let raw = RawInput { screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(width, 200.0))), ..RawInput::default() };
-        let st = style();
+        let st = style(&ctx);
         let mut out = None;
         let mut full = ctx.run_ui(raw, |ui| {
             out = Some(panel_header(ui, title, &st, |ui| {
@@ -134,9 +134,10 @@ mod tests {
     }
 
     #[test]
-    fn the_header_is_24_tall_with_actions_right_aligned_two_points_apart() {
+    fn the_header_takes_the_panel_header_height_with_actions_right_aligned_two_points_apart() {
         let (r, _) = run(300.0, "Scenes", 4);
-        assert_eq!(r.rect.height(), 24.0);
+        assert_eq!(r.rect.height(), style(&crate::test_context()).height);
+        assert_eq!(r.rect.height(), 28.0, "the Compact panel header");
         let a = &r.inner;
         assert_eq!(a.len(), 4);
         assert!((r.rect.right() - a[0].right() - 4.0).abs() < 0.01, "the first action is 4 points from the right edge: {a:?}");
@@ -170,8 +171,8 @@ mod tests {
     #[test]
     fn the_header_has_its_fill_and_no_separator() {
         let (r, shapes) = run(300.0, "Sources", 2);
-        let p = Palette::DARK;
-        assert!(shapes.iter().any(|c| matches!(&c.shape, egui::Shape::Rect(s) if s.fill == p.raised && s.rect == r.rect)), "no header fill");
+        let fill = style(&crate::test_context()).fill;
+        assert!(shapes.iter().any(|c| matches!(&c.shape, egui::Shape::Rect(s) if s.fill == fill && s.rect == r.rect)), "no header fill");
         let line = shapes.iter().any(|c| match &c.shape {
             egui::Shape::LineSegment { points, .. } => (points[0].y - r.rect.bottom()).abs() < 1.0,
             _ => false,
@@ -203,7 +204,7 @@ mod tests {
             let (r, _) = run(w, "Scenes", 3);
             assert!(r.title.width() >= 0.0 && r.actions.width() >= 0.0);
         }
-        let mut st = style();
+        let mut st = style(&crate::test_context());
         st.height = f32::NAN;
         let ctx = egui::Context::default();
         let mut h = None;

@@ -139,6 +139,8 @@ craft-menu = { git = "https://github.com/storytold/craft-libs", rev = "405252624
 craft-behavior = { git = "https://github.com/storytold/craft-libs", rev = "40525262403fbdeb3c0a27e22eafbda8799247bb" }
 # The shell description the UI runtime is installed with.
 craft-host = { git = "https://github.com/storytold/craft-libs", rev = "40525262403fbdeb3c0a27e22eafbda8799247bb" }
+# The suite theme's ids, the app's theme defaults and the token types.
+craft-theme = { git = "https://github.com/storytold/craft-libs", rev = "40525262403fbdeb3c0a27e22eafbda8799247bb" }
 craft-keymap = { git = "https://github.com/storytold/craft-libs", rev = "40525262403fbdeb3c0a27e22eafbda8799247bb", features = ["egui"] }
 craft-settings = { git = "https://github.com/storytold/craft-libs", rev = "40525262403fbdeb3c0a27e22eafbda8799247bb" }
 craft-dialogs = { git = "https://github.com/storytold/craft-libs", rev = "40525262403fbdeb3c0a27e22eafbda8799247bb" }

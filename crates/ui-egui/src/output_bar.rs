@@ -305,17 +305,16 @@ impl StudioApp {
     /// chosen reach the app through the frame output. `keyboard` false keeps F10 and Alt from the
     /// menu bar.
     pub(crate) fn top_row(&mut self, ui: &mut Ui, room: f32, laid: &Tracked<MenuBar>, keyboard: bool, acts: &mut Vec<Act>) {
-        let ctx = ui.ctx().clone();
-        let sizes = theme::sizes(&ctx);
-        let palette = theme::palette(&ctx);
         let docks = self.store.prefs().docks;
         let studio = &self.studio;
         let schema = transition_schema(studio, &mut self.transition_schema).clone();
 
-        let seg_style = SegmentedStyle::new(palette, sizes.control_md, sizes.radius_control);
-        let timer_font =
-            ui.style().text_styles.get(&TextStyle::Name(theme::TIMER.into())).cloned().unwrap_or_else(|| TextStyle::Monospace.resolve(ui.style()));
-        let air_style = OnAirStyle::new(palette, sizes.control_lg, sizes.radius_control, timer_font);
+        // Every control on the row is the standard control height.
+        let (control, number, seg_style, air_style) = theme::with_root(ui.ctx(), |cx| {
+            let t = &cx.tokens;
+            (t.size.control.md, t.size.length.number.md, SegmentedStyle::new(cx), OnAirStyle::new(cx, theme::timer_font(cx)))
+        });
+        let square = vec2(control, control);
         let modes = [tl!("Edit"), tl!("Studio")];
         let studio_mode = usize::from(studio.engine().studio_mode());
         let segmented = Segmented::new(egui::Id::unique("output-bar-mode"), &modes, studio_mode, &seg_style);
@@ -323,7 +322,7 @@ impl StudioApp {
         let live = face(OutputKind::Streaming, studio.output(OutputKind::Streaming).as_ref());
         let spacing = ui.spacing().item_spacing.x;
         let combo = combo_width(ui, studio);
-        let mut widths = Widths { overflow: sizes.control_sm.x, ..Widths::default() };
+        let mut widths = Widths { overflow: square.x, ..Widths::default() };
         if docks.controls {
             widths.mode = segmented.width(ui);
             widths.record = button(&record, Glyph::Record, &air_style).width(ui);
@@ -331,8 +330,8 @@ impl StudioApp {
             widths.record_compact = button(&record, Glyph::Record, &air_style).compact(true).width(ui);
             widths.live_compact = button(&live, Glyph::Live, &air_style).compact(true).width(ui);
         }
-        let gear = if schema.fields.is_empty() { 0.0 } else { spacing + sizes.control_sm.x };
-        let estimate = combo + spacing + sizes.field_number + gear;
+        let gear = if schema.fields.is_empty() { 0.0 } else { spacing + square.x };
+        let estimate = combo + spacing + number + gear;
         if docks.transitions {
             widths.transitions = match self.output_bar.transitions_drawn {
                 Some((e, drawn)) if e == estimate => drawn,
@@ -395,9 +394,9 @@ impl StudioApp {
                             }
                         });
                         parts.push(("transition", r.response.on_hover_text(tl!("Transition")).rect));
-                        parts.push(("duration", duration_field(ui, studio, sizes.field_number, sizes.control_md, acts).rect));
+                        parts.push(("duration", duration_field(ui, studio, number, control, acts).rect));
                         if !schema.fields.is_empty() {
-                            let r = icons::panel(ui, Icon::Gear, tl!("Transition settings"), sizes.control_sm, |ui| {
+                            let r = icons::panel(ui, Icon::Gear, tl!("Transition settings"), square, |ui| {
                                 ui.set_min_width(200.0);
                                 settings_form(ui, studio, &schema, acts);
                             });
@@ -408,8 +407,8 @@ impl StudioApp {
                 }
                 Place::Overflow => {
                     gap(ui, GROUP_GAP);
-                    let r = icons::panel(ui, Icon::Transition, tl!("Transition"), sizes.control_sm, |ui| {
-                        transition_panel(ui, studio, &schema, sizes.field_number, sizes.control_md, acts);
+                    let r = icons::panel(ui, Icon::Transition, tl!("Transition"), square, |ui| {
+                        transition_panel(ui, studio, &schema, number, control, acts);
                     });
                     parts.push(("transition_overflow", r.rect));
                 }
