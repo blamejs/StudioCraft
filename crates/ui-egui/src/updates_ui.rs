@@ -2,16 +2,17 @@
 //!
 //! [`Runtime`] holds the updater. It reaches the network only after the desktop app turns update
 //! checks on ([`StudioApp::set_update_checks`]); tests, `--no-prefs` and scripted runs leave them
-//! off, and `app.check_updates` then fails with a message.
+//! off, and `app.check_updates` then fails with a message. The update prompt and the result of
+//! the check show on the window's dialog host.
 
 use std::sync::Arc;
 
 use craft_ui::dialog::{DialogHost, DialogResult};
+use craft_ui::shell::WindowDialogs;
 use craft_update::Release;
 use craft_update::http::{Fetched, Http};
 use craft_update::stack_dialogs::{CheckChoice, UpdateCheckDialog};
 use craft_update::updater::{Action, CheckSource, Status, Updater};
-use egui::Ui;
 use serde_json::{Value, json};
 
 use crate::i18n::Msg;
@@ -63,9 +64,6 @@ pub(crate) struct Runtime {
     pub(crate) window_open: bool,
     /// The failed check a notice has reported, so that it is reported once.
     reported: Option<String>,
-    // port: P15 (update dialogs) moves the update dialogs onto the window's own dialog host.
-    /// The host the update prompt and the result of Help › Check for Updates show on.
-    dialogs: DialogHost,
 }
 
 impl Default for Runtime {
@@ -76,7 +74,7 @@ impl Default for Runtime {
 
 impl Runtime {
     pub(crate) fn new(updater: Updater) -> Self {
-        Self { updater: updater.with_translator(translate), online: false, window_open: false, reported: None, dialogs: DialogHost::new() }
+        Self { updater: updater.with_translator(translate), online: false, window_open: false, reported: None }
     }
 }
 
@@ -132,11 +130,17 @@ pub(crate) enum Asked {
     Close,
 }
 
-/// Draw the update prompt and the result of Help › Check for Updates. `can_start` is false while
-/// an update must not start (a recording or stream is running).
-pub(crate) fn show(rt: &mut Runtime, ui: &mut Ui, can_start: bool) -> Asked {
-    let ctx = ui.ctx().clone();
-    let asked = match rt.updater.run(&mut rt.dialogs, can_start) {
+/// Put the update prompt and the result of Help › Check for Updates on the window's dialog host,
+/// feed them the updater's state and act on their answers. The window's shell draws them. Nothing
+/// happens before the host is known (`host` is `None`). `can_start` is false while an update must
+/// not start (a recording or stream is running).
+pub(crate) fn show(rt: &mut Runtime, host: Option<&WindowDialogs>, ctx: &egui::Context, can_start: bool) -> Asked {
+    let Some(host) = host else { return Asked::Nothing };
+    host.with(|dialogs| run(rt, dialogs, ctx, can_start))
+}
+
+fn run(rt: &mut Runtime, dialogs: &mut DialogHost, ctx: &egui::Context, can_start: bool) -> Asked {
+    let asked = match rt.updater.run(dialogs, can_start) {
         Action::OpenUrl(url) => Asked::OpenUrl(url),
         Action::Close => Asked::Close,
         _ => Asked::Nothing,
@@ -145,7 +149,7 @@ pub(crate) fn show(rt: &mut Runtime, ui: &mut Ui, can_start: bool) -> Asked {
     if rt.window_open && rt.updater.prompt_open() {
         rt.window_open = false;
     }
-    if let Some(answer) = rt.dialogs.take::<UpdateCheckDialog>() {
+    if let Some(answer) = dialogs.take::<UpdateCheckDialog>() {
         match answer {
             DialogResult::Ok(CheckChoice::CheckNow | CheckChoice::CheckAgain) => rt.updater.check_now(),
             DialogResult::Ok(CheckChoice::RestartToUpdate) => rt.updater.restart_to_update(),
@@ -160,20 +164,19 @@ pub(crate) fn show(rt: &mut Runtime, ui: &mut Ui, can_start: bool) -> Asked {
         }
     }
     if rt.window_open {
-        if !rt.dialogs.is_open::<UpdateCheckDialog>() {
-            rt.dialogs.open(UpdateCheckDialog::new(VERSION));
+        if !dialogs.is_open::<UpdateCheckDialog>() {
+            dialogs.open(UpdateCheckDialog::new(VERSION));
         }
         let status = rt.updater.status().clone();
         let (installing, message) = (rt.updater.is_installing(), rt.updater.status_message());
-        if let Some(dialog) = rt.dialogs.get_mut::<UpdateCheckDialog>() {
+        if let Some(dialog) = dialogs.get_mut::<UpdateCheckDialog>() {
             dialog.set_status(status);
             dialog.set_installing(installing);
             dialog.set_message(message);
         }
-    } else if rt.dialogs.is_open::<UpdateCheckDialog>() {
-        rt.dialogs.cancel::<UpdateCheckDialog>(&ctx);
+    } else if dialogs.is_open::<UpdateCheckDialog>() {
+        dialogs.cancel::<UpdateCheckDialog>(ctx);
     }
-    rt.dialogs.run(ui);
     asked
 }
 
@@ -208,6 +211,11 @@ mod tests {
         a.before_input(ctx);
         let mut out = ctx.run_ui(egui::RawInput::default(), |ui| a.frame(ui));
         out.textures_delta.clear();
+    }
+
+    /// Whether the window's own dialog host holds an open `D`.
+    fn on_window_host<D: craft_ui::dialog::StackDialog>(a: &StudioApp) -> bool {
+        a.window_dialogs.as_ref().is_some_and(|host| host.with(|h| h.is_open::<D>()))
     }
 
     fn list(tags: &[&str]) -> String {
@@ -254,6 +262,10 @@ mod tests {
         frame(&mut a, &ctx);
         assert!(a.updates.updater.prompt_open());
         assert!(!a.updates.window_open, "the prompt replaces the result dialog");
+        // The prompt waits in the window's startup queue and opens there on the next pass.
+        frame(&mut a, &ctx);
+        assert!(on_window_host::<craft_update::stack_dialogs::UpdatePromptDialog>(&a), "the prompt shows on the window's dialog host");
+        assert!(!on_window_host::<UpdateCheckDialog>(&a));
     }
 
     #[test]
@@ -270,6 +282,14 @@ mod tests {
         frame(&mut a, &ctx);
         assert!(a.updates.window_open, "the result dialog says so");
         assert!(!a.updates.updater.prompt_open());
+        assert!(on_window_host::<UpdateCheckDialog>(&a), "the result dialog shows on the window's dialog host");
+        // Escape on the result dialog closes it and dismisses the outcome it showed.
+        let host = a.window_dialogs.clone().expect("the first frame gives the window's dialog host");
+        assert!(host.with(|h| h.cancel::<UpdateCheckDialog>(&ctx)));
+        frame(&mut a, &ctx);
+        assert!(!a.updates.window_open);
+        assert!(!on_window_host::<UpdateCheckDialog>(&a));
+        assert_eq!(a.updates.updater.status(), &Status::Idle);
     }
 
     #[test]
@@ -297,6 +317,7 @@ mod tests {
         let notices: Vec<_> = a.notices.iter().filter(|(n, _)| n.error && n.msg.english().contains("could not reach the release list")).collect();
         assert_eq!(notices.len(), 1, "{:?}", a.hud()["ui"]["notices"]);
         assert!(a.updates.window_open);
+        assert!(on_window_host::<UpdateCheckDialog>(&a), "the result dialog shows on the window's dialog host");
     }
 
     #[test]
@@ -320,7 +341,7 @@ mod tests {
     fn the_app_is_described_for_the_update_prompt() {
         assert_eq!(UPDATE_APP.id, crate::APP_ID);
         assert_eq!(UPDATE_APP.name, crate::APP_NAME);
-        assert!(UPDATE_APP.accent.is_some());
+        assert_eq!(UPDATE_APP.accent, None, "the update prompt takes the theme's accent");
         assert!(UPDATE_APP.releases_url().starts_with("https://github.com/"));
         assert_eq!(UPDATE_APP.bundle_id(), crate::BUNDLE_ID, "the launcher and the updater find the app by this id");
     }
