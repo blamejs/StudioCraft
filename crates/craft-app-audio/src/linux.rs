@@ -1697,21 +1697,29 @@ mod tests {
     #[test]
     fn the_list_reports_a_missing_server_without_waiting_on_it() {
         let server = silent_server("list");
-        let backend = LinuxBackend::with_remote(&server);
-        assert!(backend.support().supported, "the server's socket exists");
+        assert!(LinuxBackend::with_remote(&server).support().supported, "the server's socket exists");
         let (tx, rx) = std::sync::mpsc::sync_channel(4);
-        let mut w = backend.watch(Wake(tx)).unwrap();
-        assert_eq!(w.scan(), Ok(Vec::new()), "a scan never waits on the server");
-        // The list thread wakes the discovery when it fails, and the scan after a failure that
-        // lists nothing wakes it once more; the next scan reports why.
-        let error = loop {
-            rx.recv().expect("the watcher asks for another scan");
-            match w.scan() {
-                Ok(apps) => assert!(apps.is_empty()),
-                Err(e) => break e,
-            }
+        let mut w = LinuxWatcher {
+            remote: Some(server.clone()),
+            wake: Wake(tx),
+            list: None,
+            next_start: Instant::now(),
+            chosen: BTreeMap::new(),
+            cleared: false,
         };
-        assert_eq!(error, AppAudioError::List(NOT_CONNECTED.to_owned()));
+        w.start();
+        // No new list thread starts during the test.
+        w.next_start = Instant::now() + Duration::from_secs(3600);
+        // Each wake is sent before it is looked for, so a missing one fails the test instead of
+        // blocking it.
+        let thread = w.list.as_mut().and_then(|l| l.thread.take()).expect("a list thread");
+        thread.join().expect("the list thread ends");
+        assert!(rx.try_recv().is_ok(), "the list thread wakes the discovery when it fails");
+        assert!(rx.try_recv().is_err(), "once");
+        // The scan after a failure lists nothing and asks for another scan at once, which reports why.
+        assert_eq!(w.scan(), Ok(Vec::new()), "a scan never waits on the server");
+        assert!(rx.try_recv().is_ok(), "the first scan asks for the next one");
+        assert_eq!(w.scan(), Err(AppAudioError::List(NOT_CONNECTED.to_owned())));
         let _ = std::fs::remove_file(server);
     }
 
