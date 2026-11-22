@@ -64,6 +64,12 @@ refused to publish. Check the stream key, and that the stream is not already run
 program with the same key. When the refusal follows a lost connection, StudioCraft tries again up
 to 3 times, at least 5 s apart, before it shows this message.
 
+**"Lost the connection to {name}; reconnecting".** A destination that was sending lost its
+connection, and StudioCraft tries again on its own. "Reconnected to {name}" follows when it is live
+again. While no destination is live, the status bar shows `RECONNECTING`. A destination that loses
+its connection again within a minute gets no second notice; the Streaming window shows its status,
+and `session.events` lists every lost connection.
+
 **"the server refused the connection request; check the server address".** The server refused the
 application named in the server address, the part after the host. Copy the server address from the
 service again.
