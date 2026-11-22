@@ -9,8 +9,10 @@
 //!   answering is torn down off the caller's thread, and stops counting against
 //!   [`MAX_CAPTURES`].
 //! - [`Backend`] is the operating system's side. Windows 11 and Windows Server 2022 (build 20348)
-//!   and later capture through WASAPI process loopback. Other systems report capture as
-//!   unsupported with a reason. [`fake::FakeBackend`] is a scripted backend for tests.
+//!   and later capture through WASAPI process loopback. Linux captures through the PipeWire
+//!   server, by linking the application's playback streams to a capture stream. Other systems
+//!   report capture as unsupported with a reason. [`fake::FakeBackend`] is a scripted backend for
+//!   tests.
 //!
 //! The crate depends on no app crate, and the callers decide how samples reach their mixer.
 
@@ -19,6 +21,8 @@ mod capture;
 mod discovery;
 pub mod fake;
 mod key;
+#[cfg(target_os = "linux")]
+mod linux;
 mod list;
 mod peaks;
 mod reaper;
@@ -162,14 +166,18 @@ pub fn system_backend() -> Arc<dyn Backend> {
     {
         Arc::new(win::WinBackend)
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "linux")]
+    {
+        Arc::new(linux::LinuxBackend::new())
+    }
+    #[cfg(not(any(windows, target_os = "linux")))]
     {
         Arc::new(Unsupported)
     }
 }
 
-/// Why a system other than Windows does not capture one application. Interfaces show it through a
-/// translation row with this text.
+/// Why a system does not capture one application: it has no way to, or on Linux the PipeWire
+/// server's socket is missing. Interfaces show it through a translation row with this text.
 pub const NOT_AVAILABLE: &str = "Capturing one application's audio is not available on this system yet.";
 /// Why a Windows build before 20348 does not capture one application. Interfaces show it through a
 /// translation row with this text.
@@ -179,10 +187,10 @@ pub const NEEDS_NEWER_WINDOWS: &str =
 pub const LIST_STALLED: &str = "the system stopped answering while the applications were listed";
 
 /// The backend for systems without application capture yet.
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "linux")))]
 struct Unsupported;
 
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "linux")))]
 impl Backend for Unsupported {
     fn support(&self) -> Support {
         Support::no(NOT_AVAILABLE)
