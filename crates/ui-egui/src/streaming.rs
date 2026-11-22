@@ -217,6 +217,7 @@ pub(crate) fn cause_text(cause: Cause) -> &'static str {
         Cause::LookupFailed => tl!("the server's name could not be looked up"),
         Cause::LookupNotFound => tl!("the server's name does not exist; check the server address"),
         Cause::LookupNoAnswer => tl!("the DNS server did not answer for the server's name"),
+        Cause::LookupsPending => tl!("earlier lookups of server names have not finished"),
         Cause::Refused => tl!("the server refused the connection"),
         Cause::TimedOut => tl!("the server did not answer in time"),
         Cause::CertificateUntrusted => tl!("the server's certificate is not from a trusted authority"),

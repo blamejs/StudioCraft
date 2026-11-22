@@ -427,6 +427,7 @@
 	the connection was lost	the connection was lost
 	the desktop has no screen-cast portal	the desktop has no screen-cast portal
 	the DNS server did not answer for the server's name	the DNS server did not answer for the server's name
+	earlier lookups of server names have not finished	earlier lookups of server names have not finished
 	The interface fonts Inter and JetBrains Mono are under the SIL Open Font License 1.1.	The interface fonts Inter and JetBrains Mono are under the SIL Open Font License 1.1.
 	The licenses of the third-party crates StudioCraft uses are checked by `cargo xtask licenses`.	The licenses of the third-party crates StudioCraft uses are checked by `cargo xtask licenses`.
 	The profile's stream key	The profile's stream key

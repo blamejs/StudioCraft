@@ -14,6 +14,11 @@
 //!   16 seconds and then every 30 seconds. It gives up after [`MAX_TRIES`] tries in a row fail; a
 //!   connection lost within [`STABLE_AFTER`] of being made counts as a failed try. A server that
 //!   refuses the stream, and an address or key that is not valid, are not tried again.
+//! - Each try looks the server's name up again, on a thread of its own, and waits at most
+//!   [`LOOKUP_WAIT`] for the answer; a stop does not wait for it. A lookup the system never answers
+//!   keeps its thread until the system returns, so each destination keeps at most [`MAX_LOOKUPS`]
+//!   lookups outstanding and the process at most [`MAX_ALL_LOOKUPS`], and an answer that comes
+//!   after its try gave up is not used.
 //! - A failure of one destination stops neither the other destinations nor the encoders. The
 //!   stream fails when every destination has failed.
 //! - A destination can be stopped and started again while the stream runs.
@@ -53,6 +58,18 @@ pub const RETRY_DELAYS: [Duration; 5] =
     [Duration::from_secs(2), Duration::from_secs(4), Duration::from_secs(8), Duration::from_secs(16), Duration::from_secs(30)];
 /// How long a connection must last before its loss starts a new count of failed tries.
 pub const STABLE_AFTER: Duration = Duration::from_secs(30);
+/// How long a try waits for the server's name to be looked up.
+pub const LOOKUP_WAIT: Duration = Duration::from_secs(10);
+/// The most lookups of one destination that may be outstanding: the one of the current try, and
+/// one an earlier try gave up on that the system has not answered yet.
+pub const MAX_LOOKUPS: u32 = 2;
+/// The most lookups that may be outstanding in the process, across every stream started and
+/// stopped: a lookup the system never answers outlives its stream.
+pub const MAX_ALL_LOOKUPS: u32 = 32;
+/// Lookups outstanding in the process.
+static ALL_LOOKUPS: AtomicU32 = AtomicU32::new(0);
+/// How often a wait for a lookup looks at the clock again when nothing wakes it.
+const LOOKUP_POLL: Duration = Duration::from_millis(50);
 /// How long a destination's thread waits for a packet before it reads what the server sent.
 const RECV_WAIT: Duration = Duration::from_millis(100);
 /// How long a stop waits for the destinations to send what their rings hold and close.
@@ -135,6 +152,8 @@ pub(crate) struct Timing {
     pub(crate) stall: Duration,
     pub(crate) close: Duration,
     pub(crate) stable: Duration,
+    /// How long a try waits for the server's name to be looked up.
+    pub(crate) lookup: Duration,
 }
 
 impl Default for Timing {
@@ -147,7 +166,44 @@ impl Default for Timing {
             stall: craft_rtmp::DEFAULT_STALL_TIMEOUT,
             close: CLOSE_WAIT,
             stable: STABLE_AFTER,
+            lookup: LOOKUP_WAIT,
         }
+    }
+}
+
+/// Where the destinations read the time for the lookup wait. Tests pass a clock they move on.
+pub(crate) trait Clock: Send + Sync {
+    fn now(&self) -> Instant;
+}
+
+/// The system's clock.
+struct SystemClock;
+
+impl Clock for SystemClock {
+    fn now(&self) -> Instant {
+        Instant::now()
+    }
+}
+
+/// Looks a host name and port up. Tests pass one that answers as they choose.
+pub(crate) type Resolve = dyn Fn(&str, u16) -> std::io::Result<Vec<std::net::SocketAddr>> + Send + Sync;
+
+/// The system resolver.
+fn system_resolve(host: &str, port: u16) -> std::io::Result<Vec<std::net::SocketAddr>> {
+    use std::net::ToSocketAddrs;
+    Ok((host, port).to_socket_addrs()?.collect())
+}
+
+/// What a destination's thread uses from outside: the clock and the resolver.
+#[derive(Clone)]
+pub(crate) struct Seams {
+    pub(crate) clock: Arc<dyn Clock>,
+    pub(crate) resolve: Arc<Resolve>,
+}
+
+impl Default for Seams {
+    fn default() -> Self {
+        Seams { clock: Arc::new(SystemClock), resolve: Arc::new(system_resolve) }
     }
 }
 
@@ -207,6 +263,8 @@ struct Dest {
     /// Packets lost over every connection so far.
     dropped: AtomicU64,
     reconnects: AtomicU32,
+    /// Lookups of the server's name whose threads have not ended.
+    lookups: AtomicU32,
     /// Asks the thread to close the connection and end.
     stop: AtomicBool,
     /// The thread runs and has not decided to end. It is changed with `thread` locked, so a start
@@ -226,6 +284,7 @@ impl Dest {
             bytes: AtomicU64::new(0),
             dropped: AtomicU64::new(0),
             reconnects: AtomicU32::new(0),
+            lookups: AtomicU32::new(0),
             stop: AtomicBool::new(false),
             alive: AtomicBool::new(false),
             thread: Mutex::new(None),
@@ -249,6 +308,11 @@ impl Dest {
 
     fn set(&self, s: DestinationStatus) {
         *lock(&self.status) = s;
+        self.touch();
+    }
+
+    /// Counts a change and signals it.
+    fn touch(&self) {
         let mut changes = lock(&self.changes);
         *changes = changes.wrapping_add(1);
         self.changed.notify_all();
@@ -332,6 +396,7 @@ struct Hub {
     headers: Headers,
     ring: RingConfig,
     timing: Timing,
+    seams: Seams,
     dests: Vec<Arc<Dest>>,
 }
 
@@ -480,16 +545,99 @@ fn end_for(e: craft_rtmp::Error) -> End {
     if is_final(&e) { End::Failed(f) } else { End::Lost(f) }
 }
 
-fn connect(hub: &Hub, d: &Dest) -> Result<Publisher, craft_rtmp::Error> {
-    let mut c = d.config()?;
+/// Why a try did not connect.
+enum Missed {
+    /// The address, the key, the lookup or the connection failed.
+    Rtmp(craft_rtmp::Error),
+    /// The lookup gave no answer in time, or an earlier one has not finished.
+    Lookup(Failure),
+    /// The destination was stopped, or the stream ended, while the lookup ran.
+    Stopped,
+}
+
+fn connect(hub: &Hub, d: &Arc<Dest>) -> Result<Publisher, Missed> {
+    let mut c = d.config().map_err(Missed::Rtmp)?;
     c.connect_timeout = hub.timing.connect;
     c.setup_timeout = hub.timing.setup;
     c.stall_timeout = hub.timing.stall;
-    Publisher::connect(&c)
+    let addrs = lookup(hub, d, c.endpoint.host(), c.endpoint.port())?;
+    // A stop that came as the lookup answered does not wait for a TCP connect.
+    if d.stopping() || hub.control.is_ended() {
+        return Err(Missed::Stopped);
+    }
+    Publisher::connect_to(&c, &addrs).map_err(Missed::Rtmp)
+}
+
+/// Looks `host` up on a thread of its own and waits for the answer until the lookup time runs
+/// out, the destination is stopped or the stream ends. The thread ends when the resolver returns,
+/// whether or not the try still waits; an answer nobody waits for is dropped.
+fn lookup(hub: &Hub, d: &Arc<Dest>, host: &str, port: u16) -> Result<Vec<std::net::SocketAddr>, Missed> {
+    use std::sync::mpsc::{TryRecvError, sync_channel};
+    // Only this destination's thread adds lookups, so the count cannot pass the limit between the
+    // check and the add.
+    if d.lookups.load(Ordering::SeqCst) >= MAX_LOOKUPS {
+        return Err(Missed::Lookup(Failure::new(Cause::LookupsPending, "an earlier lookup of the server's name has not finished")));
+    }
+    if !reserve(&ALL_LOOKUPS, MAX_ALL_LOOKUPS) {
+        return Err(Missed::Lookup(Failure::new(Cause::LookupsPending, "too many lookups of server names have not finished")));
+    }
+    let (wait, start) = (hub.timing.lookup, hub.seams.clock.now());
+    let (tx, rx) = sync_channel(1);
+    let waiter = std::thread::current();
+    let (resolve, owner, name) = (Arc::clone(&hub.seams.resolve), Arc::clone(d), host.to_string());
+    d.lookups.fetch_add(1, Ordering::SeqCst);
+    let spawned = std::thread::Builder::new().name("stream lookup".into()).spawn(move || {
+        let answer = resolve(&name, port);
+        // Fails when the try stopped waiting, which drops the answer.
+        let _ = tx.send(answer);
+        ALL_LOOKUPS.fetch_sub(1, Ordering::SeqCst);
+        owner.lookups.fetch_sub(1, Ordering::SeqCst);
+        owner.touch();
+        waiter.unpark();
+    });
+    if let Err(e) = spawned {
+        ALL_LOOKUPS.fetch_sub(1, Ordering::SeqCst);
+        d.lookups.fetch_sub(1, Ordering::SeqCst);
+        return Err(Missed::Lookup(Failure::new(Cause::Other, format!("no thread for the lookup: {e}"))));
+    }
+    loop {
+        let received = rx.try_recv();
+        if d.stopping() || hub.control.is_ended() {
+            return Err(Missed::Stopped);
+        }
+        // The clock is read after the answer is taken, so an answer that came after the deadline
+        // is not used.
+        let waited = hub.seams.clock.now().saturating_duration_since(start);
+        if waited >= wait {
+            let detail = format!("the server's name was not looked up within {} s", wait.as_secs());
+            return Err(Missed::Lookup(Failure::new(Cause::LookupNoAnswer, detail)));
+        }
+        match received {
+            Ok(Ok(addrs)) => return Ok(addrs),
+            Ok(Err(e)) => return Err(Missed::Rtmp(craft_rtmp::Error::Resolve(e))),
+            Err(TryRecvError::Disconnected) => {
+                return Err(Missed::Lookup(Failure::new(Cause::LookupFailed, "the lookup of the server's name ended without an answer")));
+            }
+            Err(TryRecvError::Empty) => {}
+        }
+        std::thread::park_timeout((wait - waited).min(LOOKUP_POLL));
+    }
+}
+
+/// Adds one to `count` unless it already holds `max`, and says whether it added.
+fn reserve(count: &AtomicU32, max: u32) -> bool {
+    let mut n = count.load(Ordering::SeqCst);
+    while n < max {
+        match count.compare_exchange_weak(n, n + 1, Ordering::SeqCst, Ordering::SeqCst) {
+            Ok(_) => return true,
+            Err(now) => n = now,
+        }
+    }
+    false
 }
 
 /// The thread of one destination: connect, send, and try again when the connection is lost.
-fn run(hub: &Hub, d: &Dest) {
+fn run(hub: &Hub, d: &Arc<Dest>) {
     let _watch = Watch(d);
     let mut failures = 0u32;
     let mut last_error: Option<Failure> = None;
@@ -504,17 +652,23 @@ fn run(hub: &Hub, d: &Dest) {
         if !matches!(d.status(), DestinationStatus::Retrying { .. }) {
             d.set(DestinationStatus::Connecting);
         }
-        let mut publisher = match connect(hub, d) {
-            Ok(p) => p,
+        let tried = match connect(hub, d) {
+            Ok(p) => Ok(p),
             // Stopped while it connected: the next turn ends the thread.
             Err(_) if d.stopping() || hub.control.is_ended() => continue,
-            Err(e) if is_final(&e) => return d.fail(failure(&e, false)),
-            Err(e) => {
+            Err(Missed::Stopped) => continue,
+            Err(Missed::Rtmp(e)) if is_final(&e) => return d.fail(failure(&e, false)),
+            Err(Missed::Rtmp(e)) => Err(failure(&e, false)),
+            Err(Missed::Lookup(f)) => Err(f),
+        };
+        let mut publisher = match tried {
+            Ok(p) => p,
+            Err(f) => {
                 failures = failures.saturating_add(1);
                 if failures >= hub.timing.max_tries {
-                    return d.fail(gave_up(failure(&e, false), failures));
+                    return d.fail(gave_up(f, failures));
                 }
-                last_error = Some(failure(&e, false));
+                last_error = Some(f);
                 continue;
             }
         };
@@ -670,6 +824,10 @@ impl Streaming {
     }
 
     pub(crate) fn start_timed(job: &OutputJob, targets: Vec<Target>, timing: Timing) -> Result<Streaming, PluginError> {
+        Self::start_with(job, targets, timing, Seams::default())
+    }
+
+    pub(crate) fn start_with(job: &OutputJob, targets: Vec<Target>, timing: Timing, seams: Seams) -> Result<Streaming, PluginError> {
         let RateControl::Bitrate { kbps, .. } = job.rate else {
             return Err(PluginError::Failed("streams need a bitrate".into()));
         };
@@ -711,7 +869,7 @@ impl Streaming {
             return Err(PluginError::Failed("the stream's encoders gave no configuration".into()));
         };
         let dests = targets.into_iter().map(|t| Arc::new(Dest::new(t))).collect();
-        let hub = Arc::new(Hub { control, headers, ring, timing, dests });
+        let hub = Arc::new(Hub { control, headers, ring, timing, seams, dests });
         let mut s = Streaming { native, hub, stats: Arc::clone(&job.stats), refused, stopped: false };
         for d in s.hub.dests.iter().filter(|d| d.target.enabled) {
             if let Err(e) = spawn(&s.hub, d, None) {

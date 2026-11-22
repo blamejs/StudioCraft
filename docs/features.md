@@ -407,6 +407,12 @@ Settings › Stream edits the first one. A stream sends to every destination tha
 destination connects, reconnects and stops on its own: one that fails does not stop the others.
 A lost connection is tried again after 2, 4, 8 and 16 s and then every 30 s, and a destination gives
 up after 10 failed tries in a row. The stream fails when no destination is sending or trying to.
+Each try looks the server's name up again, so a changed DNS record is used on the next try. A try
+waits at most 10 s for the lookup and then counts as a failed try, and stopping a destination or
+the stream does not wait for a lookup. The system may keep working on a lookup it never answers;
+each destination has at most two lookups outstanding and StudioCraft at most 32, and a try that
+finds either limit reached starts no lookup and counts as failed. An answer that arrives after its
+try gave up is not used.
 A key written at the end of the server address, as in `rtmp://host/app/key`, is used as the stream
 key when the key field is empty, and the stream's status leaves it out of the address it shows.
 
@@ -425,9 +431,10 @@ names the kind of failure: no network route, a name that could not be looked up,
 unanswered connection, a certificate that was not accepted, a server that refused the stream, or a
 connection lost after the stream started. Holding the pointer over the status shows the error as
 the connection reported it and, when no address of the server accepted the connection, each address
-tried (at most four) with its own outcome. On Windows a lookup failure also says whether the DNS
-server answered that the name does not exist or did not answer; macOS and Linux report only that
-the lookup failed. Start and
+tried (at most four) with its own outcome. A lookup with no answer within 10 s says the DNS server
+did not answer. On Windows a lookup failure also says whether the DNS server answered that the name
+does not exist or did not answer; on macOS and Linux a lookup the system answers with an error
+reports only that the lookup failed. Start and
 Stop send to one destination or stop sending to it while the others go on. A destination added
 after the stream started is sent to from the next start, and so are changes to a server or a key.
 
