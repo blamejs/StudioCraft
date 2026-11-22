@@ -394,7 +394,8 @@ fn not_done(what: &str, recording: &Placed, audio_tracks: &Placed) -> Option<Str
 /// Rename the marker at `index` of the timeline file `path`, named `old`, to `name`, and write
 /// the file again through a temporary file and a rename. The file's size is checked before it is
 /// read. A file that has no marker named `old` at that place, as after it was changed in another
-/// app, is an error, and the file is left as it is.
+/// app, is an error, and the file is left as it is. A marker that is already named `name` is not
+/// written again.
 pub(crate) fn rename_in_timeline(path: &Path, index: usize, old: &str, name: &str) -> Result<(), String> {
     use std::io::Read;
     let at = |e: &dyn std::fmt::Display| format!("{}: {e}", path.display());
@@ -417,6 +418,9 @@ pub(crate) fn rename_in_timeline(path: &Path, index: usize, old: &str, name: &st
     let Some(slot) = v.pointer_mut(&format!("/tracks/markers/{index}/name")).filter(|n| n.as_str() == Some(old)) else {
         return Err(at(&format!("the timeline has no marker {old:?} in that place")));
     };
+    if old == name {
+        return Ok(());
+    }
     *slot = Value::String(name.to_string());
     let out = serde_json::to_vec_pretty(&v).map_err(|e| at(&e))?;
     craft_atomic::atomic_write(path, &out).map_err(|e| at(&e))
@@ -674,7 +678,8 @@ impl Studio {
             _ => Placed::Off,
         };
         let audio_tracks = match (&m.in_take, m.audio_tracks) {
-            (Some(t), Some(seconds)) if t.name == name => Placed::Kept(seconds),
+            // A running take holds the name it was given; an ended take's file is checked.
+            (Some(t), Some(seconds)) if t.name == name && !t.markers.ended() => Placed::Kept(seconds),
             (Some(t), Some(seconds)) => match t.markers.rename(t.number, &t.name, &name) {
                 Ok(()) => Placed::Kept(seconds),
                 Err(e) => Placed::Failed(e.to_string()),
@@ -686,11 +691,8 @@ impl Studio {
 
     /// Rename the recording's marker `r` to `name`: in the running recording's list or in the
     /// list of a recording whose file is being finished, or in its timeline file once that is
-    /// written.
+    /// written. A written timeline file is checked even for a rename to the name the marker has.
     fn rename_recording_marker(&mut self, r: &InRecording, name: &str) -> Result<(), String> {
-        if r.name == name {
-            return Ok(());
-        }
         let rm = &mut self.recording_markers;
         if let Some(renamed) = rm.watch.rename(&r.recording, r.index, &r.name, name) {
             return renamed;
@@ -699,6 +701,9 @@ impl Studio {
             return rename_listed(&mut e.markers, r.index, &r.name, name);
         }
         if rm.writes.iter().any(|(recording, _)| *recording == r.recording) {
+            if r.name == name {
+                return Ok(());
+            }
             return Err("the timeline file is still being written; rename the marker once it is saved".into());
         }
         match rm.timelines.iter().find(|(recording, _)| *recording == r.recording) {
@@ -1041,10 +1046,17 @@ mod tests {
         let e = studio.rename_recording_marker(&save, "Again").unwrap_err();
         assert!(e.ends_with("the timeline has no marker \"Final save\" in that place"), "{e}");
         assert_eq!(std::fs::read(&timeline).unwrap(), before, "the file is left as it is");
-        // The same name writes nothing.
+        // The same name is checked against the file and writes nothing.
         let last = InRecording { name: "Last save".into(), ..save };
-        std::fs::remove_file(&timeline).unwrap();
         studio.rename_recording_marker(&last, "Last save").unwrap();
+        assert_eq!(std::fs::read(&timeline).unwrap(), before, "the file is not written again");
+        let edited = String::from_utf8(before.clone()).unwrap().replace("\"Last save\"", "\"Edited\"");
+        std::fs::write(&timeline, &edited).unwrap();
+        let e = studio.rename_recording_marker(&last, "Last save").unwrap_err();
+        assert!(e.ends_with("the timeline has no marker \"Last save\" in that place"), "{e}");
+        assert_eq!(std::fs::read_to_string(&timeline).unwrap(), edited, "the edited file is left as it is");
+        std::fs::remove_file(&timeline).unwrap();
+        assert!(studio.rename_recording_marker(&last, "Last save").is_err(), "a timeline that is gone");
         assert!(!timeline.exists());
         let other = InRecording { recording: dir.path().join("other.mkv"), index: 0, name: "Goal".into() };
         assert_eq!(studio.rename_recording_marker(&other, "Kickoff").unwrap_err(), "the recording has no timeline file");
@@ -1063,6 +1075,7 @@ mod tests {
         let goal = InRecording { recording, index: 0, name: "Goal".into() };
         let e = studio.rename_recording_marker(&goal, "Kickoff").unwrap_err();
         assert_eq!(e, "the timeline file is still being written; rename the marker once it is saved");
+        assert_eq!(studio.rename_recording_marker(&goal, "Goal"), Ok(()), "the timeline being written has the name");
         go.send(()).unwrap();
         studio.report_marker_files(true);
     }

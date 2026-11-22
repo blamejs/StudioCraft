@@ -144,7 +144,8 @@ pub struct TakeMarkers {
     dropped: Arc<AtomicU64>,
     /// The number of the last marker kept. Markers kept are numbered 1 to this value.
     numbered: Arc<AtomicU64>,
-    /// Set while an add or a rename goes into the queue. A second caller does not wait for it.
+    /// Set while an add or a rename goes into the queue, or a rename into the ended take's
+    /// session file. A second caller does not wait for it.
     busy: Arc<AtomicBool>,
 }
 
@@ -176,7 +177,7 @@ impl TakeMarkers {
     }
 
     /// Whether the take was asked to stop: the disk thread may have journaled its last markers.
-    fn ended(&self) -> bool {
+    pub fn ended(&self) -> bool {
         matches!(self.status.state(), Some(State::Finishing | State::Done | State::Stopped))
     }
 
@@ -227,23 +228,35 @@ impl TakeMarkers {
     /// last rename of the marker wins. A number the take has not given to a marker it kept is
     /// an error. Once the take has ended with a session file, the marker is renamed in that
     /// file, which is written again in one step ([`crate::session::rename_take_marker`]). A file
-    /// that no longer has the marker named `old` is an error.
+    /// that no longer has the marker named `old` is an error, even when `name` is `old`. `old` is
+    /// cut to [`MAX_NAME_CHARS`] characters as the take cut the name it kept.
     pub fn rename(&self, number: u64, old: &str, name: &str) -> Result<(), RenameError> {
+        self.rename_with(number, old, name, crate::session::rename_take_marker)
+    }
+
+    /// [`TakeMarkers::rename`], with `write` renaming the marker in an ended take's session file.
+    fn rename_with(
+        &self,
+        number: u64,
+        old: &str,
+        name: &str,
+        write: impl FnOnce(&std::path::Path, &std::path::Path, u64, &str, &str) -> std::io::Result<()>,
+    ) -> Result<(), RenameError> {
         let name: String = name.chars().take(MAX_NAME_CHARS).collect();
-        {
-            // Held until the rename is in the queue, so the marker's add is in it first.
-            let _busy = self.busy().ok_or(RenameError::Busy)?;
-            if number == 0 || number > self.numbered.load(Ordering::Relaxed) {
-                return Err(RenameError::Unknown);
+        let old: String = old.chars().take(MAX_NAME_CHARS).collect();
+        // Held until the rename is in the queue, so the marker's add is in it first, or until the
+        // session file is written, so two renames do not both write the file from one read.
+        let _busy = self.busy().ok_or(RenameError::Busy)?;
+        if number == 0 || number > self.numbered.load(Ordering::Relaxed) {
+            return Err(RenameError::Unknown);
+        }
+        if !self.ended() {
+            if self.queue.push(Entry::Rename { number, name: name.clone() }) {
+                return Ok(());
             }
-            if !self.ended() {
-                if self.queue.push(Entry::Rename { number, name: name.clone() }) {
-                    return Ok(());
-                }
-                // A closed log means the take is ending even when its state does not show it yet.
-                if !self.queue.is_closed() && !self.ended() {
-                    return Err(RenameError::Full);
-                }
+            // A closed log means the take is ending even when its state does not show it yet.
+            if !self.queue.is_closed() && !self.ended() {
+                return Err(RenameError::Full);
             }
         }
         if !matches!(self.status.state(), Some(State::Done | State::Stopped)) {
@@ -251,7 +264,7 @@ impl TakeMarkers {
         }
         let session = self.status.session().ok_or(RenameError::NoSession)?;
         let dir = session.parent().map(|p| p.join(crate::session::FILES_FOLDER)).ok_or(RenameError::NoSession)?;
-        crate::session::rename_take_marker(&dir, session, number, old, &name).map_err(|e| RenameError::Session(e.to_string()))
+        write(&dir, session, number, &old, &name).map_err(|e| RenameError::Session(e.to_string()))
     }
 
     /// Markers the take kept.
@@ -338,6 +351,54 @@ mod tests {
         queue.close();
         assert_eq!(m.rename(number, "Goal", "Late"), Err(RenameError::Finishing));
         assert_eq!(queue.pop(), None);
+    }
+
+    #[test]
+    fn an_ended_take_holds_the_busy_flag_until_its_session_file_is_written() {
+        let status = Arc::new(Status::default());
+        status.state.store(State::Recording as u8, Ordering::Release);
+        let queue: MarkerQueue = Arc::new(MarkerLog::new(4));
+        let m = TakeMarkers::new(Arc::clone(&queue), Some(Tick(0)), Arc::clone(&status));
+        assert_eq!(m.add_numbered(1, "Goal"), Ok(1));
+        assert_eq!(m.add_numbered(2, "Save"), Ok(2));
+        // While the take runs, `old` is not checked, so a rename to it still goes to the queue.
+        assert_eq!(m.rename(1, "Kickoff", "Goal"), Ok(()));
+        assert!(matches!(queue.pop(), Some(Entry::Add(_))));
+        assert!(matches!(queue.pop(), Some(Entry::Add(_))));
+        assert_eq!(queue.pop(), Some(Entry::Rename { number: 1, name: "Goal".into() }));
+        status.state.store(State::Done as u8, Ordering::Release);
+        assert!(status.session.set(std::path::PathBuf::from("take").join("take.scraft")).is_ok());
+        let mut during = None;
+        let written = m.rename_with(1, "Goal", "Kickoff", |_, _, number, old, name| {
+            assert_eq!((number, old, name), (1, "Goal", "Kickoff"));
+            during = Some(m.rename_with(2, "Save", "Final", |_, _, _, _, _| Ok(())));
+            Ok(())
+        });
+        assert_eq!(written, Ok(()));
+        assert_eq!(during, Some(Err(RenameError::Busy)), "a second rename does not write the file from the same read");
+        assert_eq!(m.rename_with(2, "Save", "Final", |_, _, _, _, _| Ok(())), Ok(()), "the next rename writes it");
+        // An ended take's file is checked even for a rename to the name the marker has.
+        let mut checked = false;
+        assert_eq!(
+            m.rename_with(2, "Final", "Final", |_, _, _, _, _| {
+                checked = true;
+                Ok(())
+            }),
+            Ok(())
+        );
+        assert!(checked);
+        // A long old name is cut as the take cut the name it kept.
+        let long = "z".repeat(MAX_NAME_CHARS + 5);
+        let mut cut = String::new();
+        assert_eq!(
+            m.rename_with(2, &long, &long, |_, _, _, old, name| {
+                assert_eq!(old, name);
+                cut = old.to_string();
+                Ok(())
+            }),
+            Ok(())
+        );
+        assert_eq!(cut.chars().count(), MAX_NAME_CHARS);
     }
 
     #[test]

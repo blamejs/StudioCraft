@@ -285,7 +285,8 @@ pub fn rename_take_marker(dir: &Path, path: &Path, number: u64, old: &str, name:
 /// named `old`. The file must be a file, not a link, of at most
 /// [`craft_scraft_format::MAX_SESSION_BYTES`]; its size is checked before it is read. A session
 /// that does not have that marker with that name, as after the marker was moved or renamed in the
-/// audio editor, is an error and the file is left as it is.
+/// audio editor, is an error and the file is left as it is. A marker that is already named `name`
+/// is not written again.
 pub fn rename_marker(path: &Path, at: u64, before: usize, old: &str, name: &str) -> std::io::Result<()> {
     use std::io::Read;
     let shown = path.display().to_string();
@@ -311,6 +312,9 @@ pub fn rename_marker(path: &Path, at: u64, before: usize, old: &str, name: &str)
     let Some(marker) = marker.filter(|m| m.name == old) else {
         return Err(invalid(format!("the session no longer lists the marker {old:?} at its place")));
     };
+    if marker.name == name {
+        return Ok(());
+    }
     marker.name = name.to_string();
     session.sanitize();
     write(path, &session)
@@ -488,6 +492,11 @@ mod tests {
         let before = std::fs::read(&path).unwrap();
         let e = rename_take_marker(&files, &path, 1, "Goal", "Again").unwrap_err();
         assert!(e.to_string().contains("no longer lists the marker"), "{e}");
+        assert_eq!(std::fs::read(&path).unwrap(), before);
+        // A rename to the name the marker has is checked, and the file is not written again.
+        let e = rename_take_marker(&files, &path, 1, "Goal", "Goal").unwrap_err();
+        assert!(e.to_string().contains("no longer lists the marker"), "{e}");
+        rename_take_marker(&files, &path, 1, "Save", "Save").unwrap();
         assert_eq!(std::fs::read(&path).unwrap(), before);
         let e = rename_take_marker(&files, &path, 9, "Goal", "Again").unwrap_err();
         assert!(e.to_string().contains("does not list the marker"), "{e}");

@@ -2094,6 +2094,8 @@ mod audio_tracks {
         assert!(v["audio_tracks"]["seconds"].as_f64().is_some(), "{v}");
         let e = s.run("marker.rename", &json!({"index": 3, "name": "Late"})).unwrap_err().to_string();
         assert_eq!(e, "there is no marker 3: the session holds markers 1 to 2");
+        let (v, _) = s.run("marker.rename", &json!({"index": 2, "name": "Save"})).unwrap();
+        assert!(v["audio_tracks"]["seconds"].as_f64().is_some(), "a running take keeps the name it has: {v}");
         s.test_streaming = false;
         s.tick();
         let mut spins = 0u64;
@@ -2124,6 +2126,11 @@ mod audio_tracks {
         assert!(e.starts_with("the marker was not renamed (the audio tracks: the session file could not be written again"), "{e}");
         let (list, _) = s.run("marker.list", &json!({})).unwrap();
         assert_eq!(list["markers"][1]["name"], json!("Final save"), "a rename no output made keeps the old name");
+        // A rename to the name the marker has is checked against the file too.
+        let edited = std::fs::read(&session).unwrap();
+        let e = s.run("marker.rename", &json!({"index": 2, "name": "Final save"})).unwrap_err().to_string();
+        assert!(e.starts_with("the marker was not renamed (the audio tracks: the session file could not be written again"), "{e}");
+        assert_eq!(std::fs::read(&session).unwrap(), edited, "the edited file is left as it is");
         drop(s);
         let _ = std::fs::remove_dir_all(&dir);
     }
