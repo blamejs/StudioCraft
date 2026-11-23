@@ -1491,3 +1491,42 @@ fn go_live_does_not_wait_for_the_free_space_and_drops_a_check_the_window_no_long
     let Some(check) = a.streaming.as_ref().and_then(|p| p.golive.clone()) else { panic!("no check") };
     assert!(!check.unknown.iter().chain(&check.problems).any(|l| l.id == "recording_space"), "{check:?}");
 }
+
+#[test]
+fn a_profile_switch_drops_a_running_go_live_check_even_when_the_profile_comes_back() {
+    let mut a = app();
+    let ctx = crate::test_context();
+    // The free space answers only when the test lets it, so the check stays running.
+    let (go, gate) = std::sync::mpsc::channel::<()>();
+    let gate = std::sync::Mutex::new(gate);
+    a.studio.set_golive_space_reader(std::sync::Arc::new(move |_p: &std::path::Path| {
+        let _ = gate.lock().unwrap().recv();
+        Ok(u64::MAX)
+    }));
+    let first = a.studio.profile().name.clone();
+    a.named(crate::Named::DuplicateProfile, "Other").unwrap();
+    run(&mut a, &ctx, "profile.switch", json!({"name": first})).unwrap();
+    run(&mut a, &ctx, "view.streaming", json!({})).unwrap();
+    let t = Instant::now();
+    a.go_live(&ctx, t);
+    assert_eq!(checking(&a), Some(t));
+    // A switch to another profile and back, before the window's next frame.
+    run(&mut a, &ctx, "profile.switch", json!({"name": "Other"})).unwrap();
+    run(&mut a, &ctx, "profile.switch", json!({"name": first})).unwrap();
+    assert_eq!(checking(&a), None, "the switch dropped the check");
+    a.poll_go_live(&ctx, t + studiocraft_studio::GOLIVE_SPACE_WAIT);
+    assert!(a.streaming.as_ref().is_some_and(|p| p.golive.is_none()), "the dropped check gives no result");
+    // A new or duplicated profile is a switch too.
+    a.go_live(&ctx, t);
+    a.named(crate::Named::NewProfile, "Third").unwrap();
+    assert_eq!(checking(&a), None, "a new profile dropped the check");
+    a.go_live(&ctx, t);
+    a.named(crate::Named::DuplicateProfile, "Fourth").unwrap();
+    assert_eq!(checking(&a), None, "a duplicated profile dropped the check");
+    // Renaming the profile keeps the check.
+    a.go_live(&ctx, t);
+    a.named(crate::Named::RenameProfile, "Renamed").unwrap();
+    assert_eq!(checking(&a), Some(t), "a rename is not a switch");
+    go.send(()).unwrap();
+    drop(go);
+}

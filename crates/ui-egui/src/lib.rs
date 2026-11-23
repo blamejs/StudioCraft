@@ -1691,6 +1691,8 @@ impl StudioApp {
                     if let Some(panel) = self.streaming.as_mut().filter(|p| p.profile == old) {
                         panel.profile = name.to_string();
                     }
+                } else {
+                    self.streaming_profile_switched();
                 }
                 self.store.update(|pr| {
                     pr.profile = name.to_string();
@@ -1777,6 +1779,7 @@ impl StudioApp {
         // A profile whose settings cannot be saved stays open, so they are not lost.
         self.store.save_profile(self.studio.profile()).map_err(|e| tmsg!("The profile could not be saved: {error}", error = e))?;
         self.studio.set_profile(p).map_err(|e| e.to_string())?;
+        self.streaming_profile_switched();
         self.store.update(|pr| pr.profile = name.to_string());
         self.settings = None;
         Ok(())

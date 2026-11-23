@@ -1307,10 +1307,17 @@ impl StudioApp {
     /// Close the window's open details and drop what Go Live to N found when another profile is in
     /// use, so the details are not saved into it.
     fn sync_streaming_profile(&mut self) {
+        if self.streaming.as_ref().is_some_and(|p| p.profile != self.studio.profile().name) {
+            self.streaming_profile_switched();
+        }
+    }
+
+    /// Close the window's open details and drop what Go Live to N found, or is still checking,
+    /// after another profile was put in use. A switch away and back to the same profile drops
+    /// them too.
+    pub(crate) fn streaming_profile_switched(&mut self) {
         let name = &self.studio.profile().name;
-        if let Some(panel) = &mut self.streaming
-            && panel.profile != *name
-        {
+        if let Some(panel) = &mut self.streaming {
             panel.editing = None;
             panel.golive = None;
             panel.checking = None;
