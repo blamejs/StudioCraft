@@ -1460,7 +1460,8 @@ dependencies = [
 
 [[package]]
 name = "craft-audio-dsp"
-version = "0.1.0-alpha.2"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=1c137fea600666d77eceabbfa3bdd0aef67d5fbd#1c137fea600666d77eceabbfa3bdd0aef67d5fbd"
 
 [[package]]
 name = "craft-captions"

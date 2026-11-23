@@ -19,7 +19,6 @@ crate in the same layer. `cargo xtask layers` checks this against the table in
 | L0 | `studiocraft-media` | The master clock, frame pacing, video frame and audio block types, buffer pools, bounded lock-free queues, mixing and level meters. |
 | L0 | `craft-flv` | FLV tags for H.264 and AAC: the file header, `onMetaData`, the AVC and AAC sequence headers, video and audio tags with composition time, the AMF0 values of script data and RTMP commands, and a tag reader. Its tag bodies are also RTMP message bodies. It depends on no StudioCraft crate. |
 | L0 | `craft-scopes` | Video scope math: the waveform, parade, histogram and vectorscopes of a borrowed RGBA8 or NV12 frame, their numeric summaries and trace images. It depends on no StudioCraft crate. |
-| L0 | `craft-audio-dsp` | Audio DSP shared with the other Craft apps: the `AudioEffect` trait and its effects, the BS.1770 / EBU R128 loudness meter, panning, test signals and resampling. It depends on no StudioCraft crate. |
 | L0 | `craft-ease` | Easing curves, keyed tracks, constant-speed Bezier motion paths and damped springs. It depends on no StudioCraft crate. |
 | L0 | `craft-gpu-device` | Choosing and opening a wgpu device: the user's adapter choice, corrections for drivers that crash, a software fallback, a capability report, and device health with recovery after a device loss. It depends on no StudioCraft crate. |
 | L0 | `craft-gpu-yuv` | RGBA to NV12, P010 and I420 on the GPU with scaling, in BT.601, BT.709 and BT.2020 at limited or full range, and the same conversion on the CPU. It depends on no StudioCraft crate. |
@@ -52,7 +51,6 @@ build for `wasm32-unknown-unknown`:
 - `studiocraft-plugin`
 - `craft-flv`
 - `craft-scopes`
-- `craft-audio-dsp`
 - `craft-ease`
 - `craft-transitions`
 
@@ -524,6 +522,7 @@ profiles in `profiles/` under the settings folder, and writes them with `craft-a
 | Font lookup for text sources | `craft-font-catalog` |
 | Picture decoding for image sources | `craft-image-codecs` |
 | White balance by temperature and tint for the color correction filter | `craft-color-transform` |
+| Audio filter effects and the program loudness meter | `craft-audio-dsp` |
 | Frame-rate and tick arithmetic | `craft-time` |
 | Control channel framing and session tokens | `craft-control-protocol` |
 | JSON-RPC framing for the MCP server | `craft-jsonrpc` |

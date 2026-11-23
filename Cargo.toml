@@ -28,7 +28,6 @@ studiocraft-ui-egui = { path = "crates/ui-egui" }
 studiocraft-mcp = { path = "crates/mcp" }
 # Shared crates built here before they move to craft-libs.
 craft-scopes = { path = "crates/craft-scopes" }
-craft-audio-dsp = { path = "crates/craft-audio-dsp" }
 craft-gpu-device = { path = "crates/craft-gpu-device" }
 craft-gpu-yuv = { path = "crates/craft-gpu-yuv" }
 craft-hwenc = { path = "crates/craft-hwenc" }
@@ -154,6 +153,8 @@ craft-image-codecs = { git = "https://github.com/storytold/craft-libs", rev = "1
 craft-color = { git = "https://github.com/storytold/craft-libs", rev = "1c137fea600666d77eceabbfa3bdd0aef67d5fbd" }
 # White balance by temperature and tint for the color correction filter.
 craft-color-transform = { git = "https://github.com/storytold/craft-libs", rev = "1c137fea600666d77eceabbfa3bdd0aef67d5fbd" }
+# Audio filter effects and the program loudness meter.
+craft-audio-dsp = { git = "https://github.com/storytold/craft-libs", rev = "1c137fea600666d77eceabbfa3bdd0aef67d5fbd" }
 craft-atomic = { git = "https://github.com/storytold/craft-libs", rev = "1c137fea600666d77eceabbfa3bdd0aef67d5fbd" }
 craft-fonts-build = { git = "https://github.com/storytold/craft-libs", rev = "1c137fea600666d77eceabbfa3bdd0aef67d5fbd" }
 craft-i18n = { git = "https://github.com/storytold/craft-libs", rev = "1c137fea600666d77eceabbfa3bdd0aef67d5fbd" }
