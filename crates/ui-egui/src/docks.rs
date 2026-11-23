@@ -57,6 +57,9 @@ pub struct DockLists {
     /// The scenes whose tiles the grid showed this frame, at most
     /// [`MAX_THUMBNAIL_SCENES`], in the order they were drawn; `None` when no grid was drawn.
     pictures: Option<Vec<SceneId>>,
+    /// Counts the scene collections opened this session. It is part of the grid tiles' ids, so a
+    /// tile's open menu closes when another collection opens.
+    collections_opened: u32,
 }
 
 impl DockLists {
@@ -69,6 +72,14 @@ impl DockLists {
     /// not drawn.
     pub fn shown_pictures(&self) -> Option<&[SceneId]> {
         self.pictures.as_deref()
+    }
+
+    /// Another scene collection was opened: close the Scenes and Sources docks' scene and item
+    /// menus, the grid tiles' menus included.
+    pub fn collection_opened(&mut self) {
+        self.scene_menu = None;
+        self.item_menu = None;
+        self.collections_opened = self.collections_opened.wrapping_add(1);
     }
 }
 
@@ -358,6 +369,7 @@ fn scene_grid(ui: &mut Ui, studio: &Studio, st: &mut DockState, acts: &mut Vec<A
     let rtl = crate::i18n::is_rtl(&body);
     let mut shown = Vec::new();
     let mut picked = edit;
+    let opened = st.lists.collections_opened;
     egui::ScrollArea::vertical().id_salt("scene-grid").auto_shrink([false, false]).show(&mut body, |ui| {
         ui.spacing_mut().item_spacing.y = TILE_GAP;
         let width = ui.available_width().max(0.0);
@@ -391,7 +403,7 @@ fn scene_grid(ui: &mut Ui, studio: &Studio, st: &mut DockState, acts: &mut Vec<A
                     .picture(picture)
                     .shortcut(shortcut.as_deref())
                     .marks(marks, tl!("PGM"), tl!("PVW"))
-                    .show_at(ui, rect, ui.scope_id().with(("scene-tile", scene.id)));
+                    .show_at(ui, rect, ui.scope_id().with(("scene-tile", opened, scene.id)));
                 if ui.is_rect_visible(rect) && shown.len() < MAX_THUMBNAIL_SCENES {
                     shown.push(scene.id);
                 }
@@ -409,7 +421,7 @@ fn scene_grid(ui: &mut Ui, studio: &Studio, st: &mut DockState, acts: &mut Vec<A
                     acts.push(Act::run("scene.select", json!({"scene": scene.id})));
                     picked = scene.id;
                 }
-                Menu::context(scene.name.clone(), &r).show(ui, |ui, _| {
+                Menu::context(scene.name.clone(), &r).id(r.id.with("menu")).show(ui, |ui, _| {
                     if scene_menu(ui, c.scenes.len(), scene.id, acts) {
                         acts.push(Act::RenameScene(scene.id));
                     }

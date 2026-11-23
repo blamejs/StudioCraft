@@ -1778,6 +1778,15 @@ impl StudioApp {
         self.properties.clear();
         self.filters.clear();
         self.renaming = None;
+        // Scene and source ids are numbered per collection, so a prompt to rename one, and a
+        // scene or item menu, would act on a different scene or source of the new collection.
+        if self.naming.as_ref().is_some_and(|n| matches!(n.what, Named::RenameScene(_) | Named::RenameSource(_))) {
+            if let Some((host, id)) = self.window_dialogs.clone().zip(self.naming.as_ref().and_then(|n| n.dialog)) {
+                host.with(|h| h.close_by_id(id));
+            }
+            self.naming = None;
+        }
+        self.lists.collection_opened();
         self.store.update(|p| p.collection = name);
     }
 

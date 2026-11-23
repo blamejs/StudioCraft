@@ -2650,6 +2650,69 @@ fn a_click_on_a_tile_selects_its_scene_and_a_double_click_asks_for_a_new_name() 
 }
 
 #[test]
+fn opening_another_collection_closes_a_prompt_to_rename_a_scene_or_a_source() {
+    let mut a = app();
+    let ctx = crate::test_context();
+    a.named(Named::NewCollection, "Second").unwrap();
+    frame(&mut a, &ctx, vec![]);
+    let host = a.window_dialogs.clone().unwrap();
+    for scene in [true, false] {
+        let c = a.studio().collection();
+        let what = if scene { Named::RenameScene(c.scenes[0].id) } else { Named::RenameSource(c.global_audio[0]) };
+        let other = if c.name == DEFAULT_NAME { "Second" } else { DEFAULT_NAME };
+        a.ask_name(&ctx, what, "Old");
+        frame(&mut a, &ctx, vec![]);
+        let id = a.naming.as_ref().and_then(|n| n.dialog).expect("the rename prompt shows on the dialog host");
+        run(&mut a, &ctx, "collection.switch", json!({"name": other})).unwrap();
+        assert!(a.naming.is_none(), "opening {other} closes the prompt for {what:?}");
+        frame(&mut a, &ctx, vec![]);
+        assert!(host.with(|h| h.get_by_id::<HostedParamDialog>(id).is_none()), "the prompt's dialog is closed");
+        assert!(a.answer_dialog(&ctx, true, Some("Renamed")).is_err(), "no prompt is left to answer");
+        let c = a.studio().collection();
+        assert!(c.scene_by_name("Renamed").is_none() && c.sources.iter().all(|s| s.name != "Renamed"), "nothing in {other} was renamed");
+    }
+    // A prompt for a collection's name stays open.
+    run(&mut a, &ctx, "collection.new", json!({})).unwrap();
+    frame(&mut a, &ctx, vec![]);
+    run(&mut a, &ctx, "collection.switch", json!({"name": DEFAULT_NAME})).unwrap();
+    assert_eq!(a.naming.as_ref().map(|n| n.what), Some(Named::NewCollection));
+}
+
+#[test]
+fn opening_another_collection_closes_a_scene_menu() {
+    let mut a = app();
+    let ctx = crate::test_context();
+    let size = egui::vec2(1280.0, 800.0);
+    a.named(Named::NewCollection, "Second").unwrap();
+    let first = a.studio().collection().scenes[0].id;
+    run(&mut a, &ctx, "scene.rename", json!({"scene": first, "name": "Elsewhere"})).unwrap();
+    run(&mut a, &ctx, "collection.switch", json!({"name": DEFAULT_NAME})).unwrap();
+    let first = a.studio().collection().scenes[0].id;
+    run(&mut a, &ctx, "scene.rename", json!({"scene": first, "name": "Opening"})).unwrap();
+    let menu_shown = |shown: &[(String, egui::Rect)]| shown.iter().any(|(t, _)| t == "Move to Top");
+    // The list's row menu, then the grid's tile menu.
+    for grid in [false, true] {
+        if grid {
+            run(&mut a, &ctx, "collection.switch", json!({"name": DEFAULT_NAME})).unwrap();
+            run(&mut a, &ctx, "scenes.view", json!({})).unwrap();
+        }
+        frame_at(&mut a, &ctx, size);
+        let tree = frame_tree(&mut a, &ctx, size, vec![]);
+        let target = if grid { tile_names(&a)[0].clone() } else { "Opening".to_string() };
+        let Some((at, _)) = named(&tree, &target) else { panic!("no {target} in the Scenes dock") };
+        for events in right_click(at.center()) {
+            frame_with(&mut a, &ctx, size, events);
+        }
+        assert!(menu_shown(&frame_texts(&mut a, &ctx, vec![])), "the menu of {target} is open");
+        run(&mut a, &ctx, "collection.switch", json!({"name": "Second"})).unwrap();
+        frame_texts(&mut a, &ctx, vec![]);
+        let shown = frame_texts(&mut a, &ctx, vec![]);
+        assert!(shown.iter().any(|(t, _)| t == "Elsewhere"), "the Scenes dock shows the new collection's scene");
+        assert!(!menu_shown(&shown), "opening another collection closes the menu of {target}");
+    }
+}
+
+#[test]
 fn unknown_commands_and_links_are_errors() {
     let mut a = app();
     let ctx = crate::test_context();
