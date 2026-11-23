@@ -1321,6 +1321,11 @@ impl Studio {
         self.sources.error(id)
     }
 
+    /// A note a working source shows beside its picture, in English. It is not an error.
+    pub fn source_notice(&self, id: SourceId) -> Option<&'static str> {
+        self.sources.notice(id)
+    }
+
     /// Meter levels of an audio source.
     pub fn levels(&self, id: SourceId) -> Option<BlockLevels> {
         self.levels.get(&id).map(|l| l.load())

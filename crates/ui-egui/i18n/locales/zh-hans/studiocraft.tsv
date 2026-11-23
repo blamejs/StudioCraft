@@ -329,7 +329,7 @@
 	the audio stream ended	音频流已结束
 	the audio stream failed	音频流出错
 	the camera capture could not start	无法开始摄像头采集
-	the camera is in use by another camera source	摄像头正被另一个摄像头来源使用
+	the camera is already open in another format	摄像头已以另一种格式打开
 	the camera is still closing	摄像头仍在关闭中
 	the camera offers no format StudioCraft reads	此摄像头没有 StudioCraft 支持的视频格式
 	the camera sends frames that cannot be read	摄像头发送的帧无法读取

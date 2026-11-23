@@ -26,6 +26,8 @@ fn format_of(s: &Settings) -> Option<CameraFormat> {
 trait Camera: Sized {
     fn open(device: &str, format: Option<CameraFormat>) -> Result<Self, PlatformError>;
     fn grab(&mut self, frame: &mut VideoFrame) -> Result<(), PlatformError>;
+    /// The format the camera is open in, when it differs from the one asked for.
+    fn other_format(&self) -> Option<CameraFormat>;
 }
 
 impl Camera for CameraCapture {
@@ -35,7 +37,14 @@ impl Camera for CameraCapture {
     fn grab(&mut self, frame: &mut VideoFrame) -> Result<(), PlatformError> {
         CameraCapture::grab(self, frame)
     }
+    fn other_format(&self) -> Option<CameraFormat> {
+        CameraCapture::other_format(self)
+    }
 }
+
+/// The note the source shows while its camera is open in another format than its own: another
+/// source opened the camera first, and both show it in that format. The source keeps working.
+const SHARED_FORMAT: &str = "the camera is already open in another format";
 
 /// A camera that is opened again while it fails.
 struct Instance<C: Camera> {
@@ -121,8 +130,14 @@ impl<C: Camera> Instance<C> {
 
 impl<C: Camera> SourceInstance for Instance<C> {
     fn pace(&self) -> Pace {
-        let fps = self.format.map_or(DEFAULT_FPS, |f| f.fps.clamp(1, 240));
+        // A camera shared in another format sends at that format's rate.
+        let format = self.cap.as_ref().and_then(C::other_format).or(self.format);
+        let fps = format.map_or(DEFAULT_FPS, |f| f.fps.clamp(1, 240));
         Pace::Every(Duration::from_secs_f64(1.0 / f64::from(fps)))
+    }
+    /// The camera shows the picture in the format another source opened it in.
+    fn notice(&self) -> Option<&'static str> {
+        self.cap.as_ref().and_then(C::other_format).map(|_| SHARED_FORMAT)
     }
     fn produce(&mut self, io: &SourceIo) -> Result<(), PluginError> {
         self.produce_at(io, Instant::now())
@@ -210,6 +225,8 @@ mod tests {
         static SCRIPT: RefCell<Vec<Result<(), PlatformError>>> = const { RefCell::new(Vec::new()) };
         static OPENED: RefCell<Vec<(String, Option<CameraFormat>)>> = const { RefCell::new(Vec::new()) };
         static OPEN_FAILS: RefCell<bool> = const { RefCell::new(false) };
+        /// The format another source opened the camera in.
+        static OTHER: RefCell<Option<CameraFormat>> = const { RefCell::new(None) };
     }
 
     fn script(steps: Vec<Result<(), PlatformError>>) {
@@ -234,6 +251,9 @@ mod tests {
                 frame.reshape(4, 2, PixelFormat::Rgba8);
             }
             step
+        }
+        fn other_format(&self) -> Option<CameraFormat> {
+            OTHER.with(|o| *o.borrow())
         }
     }
 
@@ -312,6 +332,28 @@ mod tests {
         script(vec![Ok(())]);
         c.produce_at(&io, t + REOPEN + REOPEN).unwrap();
         assert!(matches!(io.video.take(), Some(VideoContent::Frame(_))));
+    }
+
+    #[test]
+    fn a_camera_shared_in_another_format_shows_its_pictures_and_says_so() {
+        let io = SourceIo::new(MasterClock::new());
+        let t = Instant::now();
+        let sd = CameraFormat { width: 640, height: 480, fps: 15, pixel: CameraPixel::Yuyv };
+        OTHER.with(|o| *o.borrow_mut() = Some(sd));
+        script(vec![Ok(()), Err(PlatformError::Unchanged)]);
+        let mut c = Instance::<Scripted>::new(&settings(), t);
+        let note = Some("the camera is already open in another format");
+        assert_eq!(c.produce_at(&io, t), Ok(()), "the source is working, not failing");
+        assert_eq!(c.notice(), note);
+        assert!(matches!(io.video.take(), Some(VideoContent::Frame(_))), "the picture is shown");
+        assert_eq!(c.produce_at(&io, t + Duration::from_secs(1)), Ok(()));
+        assert_eq!(c.notice(), note, "and the note stays while the picture does");
+        assert!(io.video.take().is_none());
+        assert_eq!(c.pace(), Pace::Every(Duration::from_secs_f64(1.0 / 15.0)), "polled at the rate the camera sends");
+        OTHER.with(|o| *o.borrow_mut() = None);
+        assert_eq!(c.produce_at(&io, t + Duration::from_secs(2)), Ok(()));
+        assert_eq!(c.notice(), None);
+        assert_eq!(c.pace(), Pace::Every(Duration::from_secs_f64(1.0 / 30.0)));
     }
 
     #[test]

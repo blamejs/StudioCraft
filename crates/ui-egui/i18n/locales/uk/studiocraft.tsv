@@ -329,7 +329,7 @@
 	the audio stream ended	аудіопотік завершився
 	the audio stream failed	збій аудіопотоку
 	the camera capture could not start	не вдалося почати захоплення з камери
-	the camera is in use by another camera source	камеру використовує інше джерело камери
+	the camera is already open in another format	камеру вже відкрито в іншому форматі
 	the camera is still closing	камера ще закривається
 	the camera offers no format StudioCraft reads	камера не пропонує жодного формату, який читає StudioCraft
 	the camera sends frames that cannot be read	камера надсилає кадри, які не вдається прочитати

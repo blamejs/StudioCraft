@@ -345,7 +345,7 @@
 	the audio stream ended	זרם השמע הסתיים
 	the audio stream failed	זרם השמע נכשל
 	the camera capture could not start	לא ניתן להתחיל את לכידת המצלמה
-	the camera is in use by another camera source	המצלמה בשימוש של מקור מצלמה אחר
+	the camera is already open in another format	המצלמה כבר פתוחה בתבנית אחרת
 	the camera is still closing	המצלמה עדיין נסגרת
 	the camera offers no format StudioCraft reads	המצלמה אינה מציעה פורמט ש־StudioCraft יכול לקרוא
 	the camera sends frames that cannot be read	המצלמה שולחת פריימים שלא ניתן לקרוא

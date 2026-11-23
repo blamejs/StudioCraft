@@ -302,7 +302,10 @@ pub fn sources(ui: &mut Ui, studio: &Studio, st: &mut DockState, acts: &mut Vec<
                 let r = ui.add_sized([ui.available_width(), 20.0], egui::Button::selectable(st.selected == Some(it.id), label));
                 let r = match studio.source_error(src.id) {
                     Some(e) => r.on_hover_text(crate::i18n::Msg::plain(e).shown()),
-                    None => r,
+                    None => match studio.source_notice(src.id) {
+                        Some(n) => r.on_hover_text(crate::i18n::Msg::plain(n).shown()),
+                        None => r,
+                    },
                 };
                 if r.clicked() {
                     acts.push(Act::Select(Some(it.id)));
