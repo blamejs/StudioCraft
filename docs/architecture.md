@@ -88,7 +88,9 @@ gives no value for that column.
 ### Source threads
 
 Each source runs on its own thread (`engine::host`). It publishes video frames into a `VideoOut`
-slot and audio blocks into a bounded lock-free queue.
+slot and audio blocks into a bounded lock-free queue. After each call into the source, the thread
+stores its error, and the note a working source gives (`SourceInstance::notice`). The Properties
+window shows the note, and the go-live check counts only errors.
 
 ### Audio capture threads
 
@@ -212,8 +214,8 @@ still opening waits for it and joins once it streams. When that open fails, or t
 was opening it is dropped first, the waiting capture opens the camera itself. A capture dropped
 before its camera opens does not open it. The camera stays in the format the first capture opened
 it in. A capture that asked for another format reads the format the camera is open in, and the
-camera source polls at that format's frame rate and
-reports "the camera is already open in another format" while it shows the picture. A failed stream
+camera source polls at that format's frame rate and gives the note "the camera is already open in
+another format" while it shows the picture. A failed stream
 fails every reader, and each source opens the camera again after 2 s: the first to do so opens it,
 and the others join.
 

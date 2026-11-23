@@ -499,6 +499,7 @@ impl Properties {
         }
         let title = craft_i18n::fmt(tl!("Properties for '{name}'"), &[("name", &src.name)]);
         let error = studio.source_error(self.source);
+        let notice = studio.source_notice(self.source);
         let mut refresh = false;
         let locked_after = match &self.reading {
             Some(Reading { after: Some(at), .. }) => *at,
@@ -508,6 +509,9 @@ impl Properties {
         window.show(ctx, |ui| {
             if let Some(e) = &error {
                 ui.colored_label(ui.visuals().error_fg_color, crate::i18n::Msg::plain(e.to_string()).shown());
+                ui.separator();
+            } else if let Some(n) = notice {
+                ui.colored_label(ui.visuals().warn_fg_color, crate::i18n::Msg::plain(n).shown());
                 ui.separator();
             }
             if self.reading.is_some() {

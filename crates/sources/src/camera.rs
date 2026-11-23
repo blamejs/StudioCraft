@@ -42,8 +42,8 @@ impl Camera for CameraCapture {
     }
 }
 
-/// What the source reports while its camera is open in another format than its own: another
-/// source opened the camera first, and both show it in that format.
+/// The note the source shows while its camera is open in another format than its own: another
+/// source opened the camera first, and both show it in that format. The source keeps working.
 const SHARED_FORMAT: &str = "the camera is already open in another format";
 
 /// A camera that is opened again while it fails.
@@ -109,22 +109,19 @@ impl<C: Camera> Instance<C> {
         }
         let Some(cap) = self.cap.as_mut() else { return Ok(()) };
         let mut frame = io.video.frame();
-        let grabbed = cap.grab(&mut frame);
-        // The picture is shown either way; the other format is reported beside it.
-        let shown = if cap.other_format().is_some() { Err(PluginError::Unavailable(SHARED_FORMAT.into())) } else { Ok(()) };
-        match grabbed {
+        match cap.grab(&mut frame) {
             Ok(()) => {
                 self.last_frame = now;
                 frame.pts = io.clock.now();
                 io.video.publish(VideoContent::Frame(frame));
-                shown
+                Ok(())
             }
             // The camera is opening, or has not sent its first picture yet.
             Err(PlatformError::Waiting) if now.saturating_duration_since(self.last_frame) < STALL => {
                 Err(PluginError::Unavailable("waiting for the camera".into()))
             }
             Err(PlatformError::Waiting) => self.lost(io, now, PluginError::Failed("the camera sent no picture".into())),
-            Err(PlatformError::Unchanged) if now.saturating_duration_since(self.last_frame) < STALL => shown,
+            Err(PlatformError::Unchanged) if now.saturating_duration_since(self.last_frame) < STALL => Ok(()),
             Err(PlatformError::Unchanged) => self.lost(io, now, PluginError::Failed("the camera stopped sending pictures".into())),
             Err(e) => self.lost(io, now, PluginError::Failed(e.to_string())),
         }
@@ -137,6 +134,10 @@ impl<C: Camera> SourceInstance for Instance<C> {
         let format = self.cap.as_ref().and_then(C::other_format).or(self.format);
         let fps = format.map_or(DEFAULT_FPS, |f| f.fps.clamp(1, 240));
         Pace::Every(Duration::from_secs_f64(1.0 / f64::from(fps)))
+    }
+    /// The camera shows the picture in the format another source opened it in.
+    fn notice(&self) -> Option<&'static str> {
+        self.cap.as_ref().and_then(C::other_format).map(|_| SHARED_FORMAT)
     }
     fn produce(&mut self, io: &SourceIo) -> Result<(), PluginError> {
         self.produce_at(io, Instant::now())
@@ -341,14 +342,17 @@ mod tests {
         OTHER.with(|o| *o.borrow_mut() = Some(sd));
         script(vec![Ok(()), Err(PlatformError::Unchanged)]);
         let mut c = Instance::<Scripted>::new(&settings(), t);
-        let note = Err(PluginError::Unavailable("the camera is already open in another format".into()));
-        assert_eq!(c.produce_at(&io, t), note);
+        let note = Some("the camera is already open in another format");
+        assert_eq!(c.produce_at(&io, t), Ok(()), "the source is working, not failing");
+        assert_eq!(c.notice(), note);
         assert!(matches!(io.video.take(), Some(VideoContent::Frame(_))), "the picture is shown");
-        assert_eq!(c.produce_at(&io, t + Duration::from_secs(1)), note, "and the note stays while the picture does");
+        assert_eq!(c.produce_at(&io, t + Duration::from_secs(1)), Ok(()));
+        assert_eq!(c.notice(), note, "and the note stays while the picture does");
         assert!(io.video.take().is_none());
         assert_eq!(c.pace(), Pace::Every(Duration::from_secs_f64(1.0 / 15.0)), "polled at the rate the camera sends");
         OTHER.with(|o| *o.borrow_mut() = None);
         assert_eq!(c.produce_at(&io, t + Duration::from_secs(2)), Ok(()));
+        assert_eq!(c.notice(), None);
         assert_eq!(c.pace(), Pace::Every(Duration::from_secs_f64(1.0 / 30.0)));
     }
 
