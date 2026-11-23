@@ -169,7 +169,8 @@ thread of its own. The camera handle stays on the thread that opened the camera.
 **Opening.** The thread lists the cameras and picks the saved one: the same name and system id,
 then the same id unless it is a Linux device node, then the same name. It reads the camera's
 formats and opens it through the `nokhwa` crate: Media Foundation on Windows, AVFoundation on macOS
-and V4L2 on Linux. On Linux only the V4L2 nodes that can capture video are listed. On Windows every
+and V4L2 on Linux. On Linux only the V4L2 nodes that can capture video are listed, and a camera
+that a capture of the app streams stays listed without being asked again. On Windows every
 thread that uses Media Foundation sets up COM (`comedy`). Each capture thread sets up COM for its
 stream's life, and each camera list or format read runs on a short-lived thread that sets it up.
 
@@ -207,17 +208,19 @@ camera is a reader of it with a `FrameSlot` of its own. The thread converts each
 spare frame of the first reader, copies the picture into a spare frame of each other reader, and
 publishes them. A capture opened for a camera that another capture streams finds it in the app's
 list of open cameras, joins it, and its own thread ends. A capture that arrives while the camera is
-still opening waits for it and joins once it streams. When that open fails, the waiting capture
-opens the camera itself. The camera stays in the format the first capture opened it in. A capture
-that asked for another format reads that one, and the camera source polls at its frame rate and
+still opening waits for it and joins once it streams. When that open fails, or the capture that
+was opening it is dropped first, the waiting capture opens the camera itself. A capture dropped
+before its camera opens does not open it. The camera stays in the format the first capture opened
+it in. A capture that asked for another format reads the format the camera is open in, and the
+camera source polls at that format's frame rate and
 reports "the camera is already open in another format" while it shows the picture. A failed stream
 fails every reader, and each source opens the camera again after 2 s: the first to do so opens it,
 and the others join.
 
 **Stopping.** Dropping a capture removes its reader. When the last reader of a camera is dropped,
 the thread sees a stop flag after its current frame, stops the stream and ends. A thread can wait
-on a camera that sends nothing. Until it ends, a new capture of that camera fails with "the camera
-is still closing" and the source tries again.
+on a camera that sends nothing. Until it ends, a new capture of a camera that streamed fails with
+"the camera is still closing" and the source tries again.
 
 **Format lists.** The source's settings schema depends on its settings (`Plugin::schema_for`), and
 the Format list holds the formats of the chosen camera. On macOS the formats are read from the
