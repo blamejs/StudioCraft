@@ -1025,6 +1025,25 @@ fn the_thumbnail_textures_are_kept_until_the_size_or_count_outgrows_them() {
 }
 
 #[test]
+fn a_thumbnail_picture_carries_the_key_of_the_scene_it_was_drawn_for() {
+    let mut c = noop_compositor(64, 36);
+    let shared = RenderShared::default();
+    let v = solid([255, 0, 0, 255], 32, 18);
+    let request =
+        |keys: Vec<u64>| Some(Arc::new(ThumbnailRequest { scenes: vec![one_item_scene(1, &v)], fps: 2.0, keys, ..ThumbnailRequest::default() }));
+    shared.thumbnails.publish(request(vec![7]));
+    c.run(&shared, ms(0));
+    let views = shared.thumbnail_views.take().expect("new textures are published");
+    let ring = &views.slots[0];
+    assert_eq!((ring.latest(), ring.latest_for(7), ring.latest_for(8)), (Some(0), Some(0), None));
+    // Another scene in the slot: its last picture is still the old scene's until it is drawn.
+    shared.thumbnails.publish(request(vec![8]));
+    assert_eq!(ring.latest_for(8), None);
+    c.run(&shared, ms(1));
+    assert_eq!((ring.latest_for(7), ring.latest_for(8)), (None, Some(1)));
+}
+
+#[test]
 fn a_request_draws_sixteen_scenes_and_the_app_sees_the_rest_counted() {
     let mut c = noop_compositor(64, 36);
     let shared = RenderShared::default();

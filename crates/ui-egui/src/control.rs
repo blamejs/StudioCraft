@@ -86,6 +86,7 @@ impl StudioApp {
             "view.streaming" => on(self.streaming.is_some()),
             "view.status_bar" => on(p.status_bar),
             "view.lock_preview" => on(p.lock_preview),
+            "scenes.view" => on(p.scene_grid),
             "view.fullscreen" => on(self.fullscreen),
             "studio.toggle" => on(engine.studio_mode()),
             "replay.toggle" => on(self.studio.output(OutputKind::Replay).is_some_and(|s| s.active)),

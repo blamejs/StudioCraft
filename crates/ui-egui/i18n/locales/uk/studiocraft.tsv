@@ -284,6 +284,16 @@
 	Show an area	Показати область
 	Show Recordings	Показати записи
 	Show Scene {n}	Показати сцену {n}
+	Show the scenes as a grid	Показати сцени сіткою
+	Show the scenes as a list	Показати сцени списком
+	Rename Scene	Перейменувати сцену
+	PGM	PGM
+	PVW	PVW
+	Scene, {name}, {n}	Сцена, {name}, {n}
+	Scene, {name}, {n}, selected	Сцена, {name}, {n}, вибрана
+	Scene, {name}, {n}, in program	Сцена, {name}, {n}, у програмі
+	Scene, {name}, {n}, in preview	Сцена, {name}, {n}, у попередньому перегляді
+	Scene, {name}, {n}, in program and preview	Сцена, {name}, {n}, у програмі та в попередньому перегляді
 	Show Settings Folder	Показати теку налаштувань
 	Similarity	Подібність
 	Size	Розмір

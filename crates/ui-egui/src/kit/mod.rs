@@ -2,8 +2,11 @@
 //! types, so that other Craft apps can use them as they are.
 
 pub mod banner;
+pub mod chip;
+pub mod keycap;
 pub mod onair;
 pub mod option_card;
+pub mod scene_tile;
 pub mod segmented;
 pub mod tokens;
 

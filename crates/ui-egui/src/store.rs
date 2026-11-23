@@ -542,6 +542,8 @@ pub struct Prefs {
     pub status_bar: bool,
     /// Items in the preview can't be moved or resized with the mouse.
     pub lock_preview: bool,
+    /// The Scenes dock shows its scenes as a grid of tiles with their pictures, and not as a list.
+    pub scene_grid: bool,
     /// Shortcuts changed from their defaults, saved as a list of `{ command, keys }` entries. A
     /// table with one entry per command, as version 5 and earlier saved it, still reads.
     #[serde(with = "craft_keymap::keymap::overrides_list")]
@@ -654,6 +656,7 @@ impl Default for Prefs {
             scope_kind: "waveform".into(),
             status_bar: true,
             lock_preview: false,
+            scene_grid: false,
             hotkeys: Overrides::new(),
             language: crate::i18n::AUTO.into(),
             check_updates: true,

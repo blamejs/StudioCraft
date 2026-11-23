@@ -332,6 +332,11 @@ list, and the pictures stop when no scene is left. When the list changes, a slot
 changed keeps its last picture until the compositor draws the new scene into it. The compositor
 draws two such slots a frame, before any other slot, so 16 changed slots take 8 frames.
 
+While the Scenes dock shows its grid, the window sends this command for the tiles on screen, at 2
+pictures a second. A request sent after the window's, `{"scenes": []}` included, stays in effect
+until the tiles on screen change or another scene collection is opened, and the window does not
+stop it when the grid is hidden.
+
 It returns `{"scenes", "fps"}` with the list and rate now drawn, or `{"scenes": [], "fps": null}`
 when none is drawn. More than 16 scenes, a scene that does not exist, a scene given twice, and an
 `fps` outside that range are errors, and the last list stays drawn. The command changes nothing in
@@ -552,6 +557,7 @@ A command that its button shows disabled is an error.
 
 | Command | What it does |
 | --- | --- |
+| `scenes.view` | Switches the Scenes dock between its list and its grid of scene tiles, and returns `{"on"}`, which is `true` while the grid is shown. |
 | `scenes.add` | Adds a scene, as `scene.add` does, and returns its reply. |
 | `scenes.remove` | Removes the scene being edited. It is disabled when the collection has one scene. |
 | `scenes.move_up`, `scenes.move_down` | Moves the scene being edited one place up or down in the Scenes dock. |

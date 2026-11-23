@@ -284,6 +284,16 @@
 	Show an area	顯示指定區域
 	Show Recordings	顯示錄影檔案
 	Show Scene {n}	顯示場景 {n}
+	Show the scenes as a grid	以格狀顯示場景
+	Show the scenes as a list	以清單顯示場景
+	Rename Scene	重新命名場景
+	PGM	PGM
+	PVW	PVW
+	Scene, {name}, {n}	場景，{name}，{n}
+	Scene, {name}, {n}, selected	場景，{name}，{n}，已選取
+	Scene, {name}, {n}, in program	場景，{name}，{n}，在節目畫面中
+	Scene, {name}, {n}, in preview	場景，{name}，{n}，在預覽中
+	Scene, {name}, {n}, in program and preview	場景，{name}，{n}，在節目畫面和預覽中
 	Show Settings Folder	顯示設定資料夾
 	Similarity	相似度
 	Size	大小

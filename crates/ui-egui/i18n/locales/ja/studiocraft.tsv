@@ -284,6 +284,16 @@
 	Show an area	範囲を指定して表示
 	Show Recordings	録画ファイルを表示
 	Show Scene {n}	シーン {n} を表示
+	Show the scenes as a grid	シーンをグリッドで表示
+	Show the scenes as a list	シーンをリストで表示
+	Rename Scene	シーン名を変更
+	PGM	PGM
+	PVW	PVW
+	Scene, {name}, {n}	シーン、{name}、{n}
+	Scene, {name}, {n}, selected	シーン、{name}、{n}、選択中
+	Scene, {name}, {n}, in program	シーン、{name}、{n}、プログラム中
+	Scene, {name}, {n}, in preview	シーン、{name}、{n}、プレビュー中
+	Scene, {name}, {n}, in program and preview	シーン、{name}、{n}、プログラムとプレビュー中
 	Show Settings Folder	設定フォルダーを表示
 	Similarity	類似度
 	Size	サイズ

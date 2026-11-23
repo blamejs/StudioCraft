@@ -2,7 +2,8 @@
 //! and output controls are in the output bar ([`crate::output_bar`]). Each dock has a header with
 //! its title and its actions and no footer. Every dock's header is a framework title row; the
 //! Scenes and Sources docks show a framework list under it, and the Audio Mixer and Application
-//! Audio docks a column of channels with framework text, buttons and menus around app meters.
+//! Audio docks a column of channels with framework text, buttons and menus around app meters. The
+//! Scenes dock can show a grid of scene tiles in place of its list.
 
 use std::borrow::Cow;
 use std::collections::HashMap;
@@ -10,7 +11,7 @@ use std::fmt::Debug;
 use std::hash::Hash;
 
 use craft_behavior::{ColumnKey, ColumnWidth, EditEvent, IconId, Selection, SelectionChange, keyed};
-use craft_keymap::CommandRef;
+use craft_keymap::{CommandRef, Keymap};
 use craft_theme::variant::{Emphasis, Tone};
 use craft_theme::{CustomVariant, Tokens, Variant, VariantLook};
 use craft_ui::buttons::IconButton;
@@ -28,16 +29,18 @@ use craft_ui::primitives::IconSpec;
 use craft_ui::runtime::env::Label;
 use craft_ui::sections::{HeaderCommand, HeaderStrength, TitleRow};
 use craft_ui::style::TypeRole;
-use egui::{Color32, Rect, Sense, Ui, pos2, vec2};
+use egui::{Color32, Rect, Sense, TextureId, Ui, pos2, vec2};
 use serde_json::json;
+use studiocraft_engine::command::MAX_THUMBNAIL_SCENES;
 use studiocraft_engine::lanes::{AppKey, Lane, LaneKind, Lanes};
 use studiocraft_media::mix::{BlockLevels, METER_FLOOR_DB, MeterBallistics, from_db, to_db};
 use studiocraft_model::collection::{MAX_GAIN, MAX_GAIN_DB};
 use studiocraft_model::{ItemId, SceneId, SceneItem, SourceConfig, SourceId};
 use studiocraft_studio::Studio;
 
-use crate::commands::{SCENE_HEADER, SCENE_HOTKEYS, SOURCE_HEADER};
+use crate::commands::{SCENE_HEADER, SCENE_HOTKEYS, SCENE_LIST_VIEW, SOURCE_HEADER};
 use crate::icons::Speaker;
+use crate::kit::scene_tile::{AddTile, SceneTile, TileMarks, TileStyle};
 use crate::kit::tokens::{MeterColors, paint};
 use crate::theme;
 use crate::{Act, Rename};
@@ -51,6 +54,33 @@ pub struct DockLists {
     scene_menu: Option<SceneId>,
     /// The scene item whose row a right-click asked a menu for.
     item_menu: Option<ItemId>,
+    /// The scenes whose tiles the grid showed this frame, at most
+    /// [`MAX_THUMBNAIL_SCENES`], in the order they were drawn; `None` when no grid was drawn.
+    pictures: Option<Vec<SceneId>>,
+    /// Counts the scene collections opened this session. It is part of the grid tiles' ids, so a
+    /// tile's open menu closes when another collection opens.
+    collections_opened: u32,
+}
+
+impl DockLists {
+    /// Start a frame: no grid has been drawn yet.
+    pub fn begin_frame(&mut self) {
+        self.pictures = None;
+    }
+
+    /// The scenes whose tiles the Scenes dock's grid showed this frame; `None` when the grid was
+    /// not drawn.
+    pub fn shown_pictures(&self) -> Option<&[SceneId]> {
+        self.pictures.as_deref()
+    }
+
+    /// Another scene collection was opened: close the Scenes and Sources docks' scene and item
+    /// menus, the grid tiles' menus included.
+    pub fn collection_opened(&mut self) {
+        self.scene_menu = None;
+        self.item_menu = None;
+        self.collections_opened = self.collections_opened.wrapping_add(1);
+    }
 }
 
 /// The interface state the docks read and change.
@@ -65,6 +95,12 @@ pub struct DockState<'a> {
     pub dt: f32,
     /// Where the dock being drawn is docked; `None` for a dock in a window of its own.
     pub place: Option<Place>,
+    /// The shortcuts, for the keys on the scene tiles.
+    pub keymap: &'a Keymap,
+    /// The newest picture of each scene that has one.
+    pub pictures: &'a [(SceneId, TextureId)],
+    /// The Scenes dock shows its grid.
+    pub grid: bool,
 }
 
 /// Where a docked dock is drawn.
@@ -204,8 +240,16 @@ pub fn scenes(ui: &mut Ui, studio: &Studio, st: &mut DockState, acts: &mut Vec<A
     let edit = studio.engine().edit_scene();
     let program = c.program_scene;
     let studio_mode = studio.engine().studio_mode();
-    let (drawn, _) = title_header(ui, "Scenes", &SCENE_HEADER);
+    let mut header = SCENE_HEADER;
+    if st.grid {
+        (header[0].1, header[0].3) = SCENE_LIST_VIEW;
+    }
+    let (drawn, _) = title_header(ui, "Scenes", &header);
     dock_menu(ui, &drawn, "scenes", st.place, acts);
+    if st.grid {
+        scene_grid(ui, studio, st, acts);
+        return drawn;
+    }
     let mut body = list_body(ui);
     let source = keyed(&c.scenes, |s| s.id).with_text(|s| Cow::Borrowed(s.name.as_str()));
     let mut selection = Selection::single(edit);
@@ -264,24 +308,129 @@ pub fn scenes(ui: &mut Ui, studio: &Studio, st: &mut DockState, acts: &mut Vec<A
     }
     if let Some(scene) = st.lists.scene_menu.and_then(|id| c.scene(id)) {
         Menu::context(scene.name.clone(), &shown.response).show(&mut body, |ui, _| {
-            if row(ui, tl!("Rename"), true) {
+            if scene_menu(ui, c.scenes.len(), scene.id, acts) {
                 request_rename(ui.ctx(), list, &scene.id);
-            }
-            if row(ui, tl!("Duplicate"), true) {
-                acts.push(Act::run("scene.duplicate", json!({"scene": scene.id})));
-            }
-            if row(ui, tl!("Remove"), c.scenes.len() > 1) {
-                acts.push(Act::run("scene.remove", json!({"scene": scene.id})));
-            }
-            Divider::horizontal().show(ui);
-            for (to, label) in MOVES {
-                if row(ui, tl!(label), true) {
-                    acts.push(Act::run("scene.move", json!({"scene": scene.id, "to": to})));
-                }
             }
         });
     }
     drawn
+}
+
+/// The rows of a scene's context menu, inside a menu body, for a collection of `scenes` scenes;
+/// whether Rename ran. A row that runs closes the menu.
+fn scene_menu(ui: &mut Ui, scenes: usize, scene: SceneId, acts: &mut Vec<Act>) -> bool {
+    let rename = row(ui, tl!("Rename"), true);
+    if row(ui, tl!("Duplicate"), true) {
+        acts.push(Act::run("scene.duplicate", json!({"scene": scene})));
+    }
+    if row(ui, tl!("Remove"), scenes > 1) {
+        acts.push(Act::run("scene.remove", json!({"scene": scene})));
+    }
+    Divider::horizontal().show(ui);
+    for (to, label) in MOVES {
+        if row(ui, tl!(label), true) {
+            acts.push(Act::run("scene.move", json!({"scene": scene, "to": to})));
+        }
+    }
+    rename
+}
+
+/// The space between the grid's tiles, in points.
+const TILE_GAP: f32 = 6.0;
+
+/// The screen reader's name of the tile of the scene `name`, `n`-th in the list.
+pub(crate) fn tile_name(name: &str, n: usize, marks: TileMarks) -> String {
+    let template = match (marks.program, marks.preview) {
+        (true, true) => tl!("Scene, {name}, {n}, in program and preview"),
+        (true, false) => tl!("Scene, {name}, {n}, in program"),
+        (false, true) => tl!("Scene, {name}, {n}, in preview"),
+        (false, false) if marks.selected => tl!("Scene, {name}, {n}, selected"),
+        (false, false) => tl!("Scene, {name}, {n}"),
+    };
+    craft_i18n::fmt(template, &[("name", name), ("n", &n.to_string())])
+}
+
+/// The Scenes dock's grid: a tile for each scene, two to a row in list order, and an Add Scene
+/// tile last. A tile shows the scene's newest picture, the shortcut that shows it (Show Scene 1 to
+/// 9, as the keymap binds it now), and in studio mode the PGM chip on the program's tile and the
+/// PVW chip on the preview's tile. A click on a tile, or Enter or Space on a focused tile, selects
+/// its scene. A double click sends the scene to the program in studio mode and asks for a new
+/// name otherwise. A right-click opens the scene's menu. The grid notes the scenes whose tiles
+/// were shown, at most [`MAX_THUMBNAIL_SCENES`], for their pictures.
+fn scene_grid(ui: &mut Ui, studio: &Studio, st: &mut DockState, acts: &mut Vec<Act>) {
+    let c = studio.collection();
+    let edit = studio.engine().edit_scene();
+    let studio_mode = studio.engine().studio_mode();
+    let (w, h) = studio.canvas();
+    let aspect = h as f32 / w.max(1) as f32;
+    let style = theme::with_root(ui.ctx(), |cx| TileStyle::new(cx, crate::fonts::semibold()));
+    let platform = st.keymap.platform();
+    let mut body = list_body(ui);
+    let rtl = crate::i18n::is_rtl(&body);
+    let mut shown = Vec::new();
+    let mut picked = edit;
+    let opened = st.lists.collections_opened;
+    egui::ScrollArea::vertical().id_salt("scene-grid").auto_shrink([false, false]).show(&mut body, |ui| {
+        ui.spacing_mut().item_spacing.y = TILE_GAP;
+        let width = ui.available_width().max(0.0);
+        let tile_w = ((width - TILE_GAP) / 2.0).max(0.0);
+        let tile_h = style.height(tile_w, aspect);
+        let count = c.scenes.len() + 1;
+        for first in (0..count).step_by(2) {
+            let (row, _) = ui.allocate_exact_size(vec2(width, tile_h), Sense::hover());
+            for k in first..(first + 2).min(count) {
+                let col = (k - first) as f32;
+                let x = if rtl { row.right() - tile_w - col * (tile_w + TILE_GAP) } else { row.left() + col * (tile_w + TILE_GAP) };
+                let rect = Rect::from_min_size(pos2(x, row.top()), vec2(tile_w, tile_h));
+                let Some(scene) = c.scenes.get(k) else {
+                    if AddTile::new(tl!("Add Scene"), &style).show_at(ui, rect, ui.scope_id().with("scene-tile-add")).clicked() {
+                        acts.push(Act::run("scene.add", json!({})));
+                    }
+                    continue;
+                };
+                let marks = TileMarks {
+                    selected: !studio_mode && scene.id == edit,
+                    program: studio_mode && scene.id == c.program_scene,
+                    preview: studio_mode && scene.id == edit,
+                };
+                let shortcut = (k < SCENE_HOTKEYS)
+                    .then(|| st.keymap.shown_chord(&CommandRef::with_params("scene.select_index", json!({"index": k + 1}))))
+                    .flatten()
+                    .map(|chord| chord.display(platform));
+                let picture = st.pictures.iter().find(|(s, _)| *s == scene.id).map(|(_, t)| *t);
+                let access = tile_name(&scene.name, k + 1, marks);
+                let r = SceneTile::new(&scene.name, &access, &style)
+                    .picture(picture)
+                    .shortcut(shortcut.as_deref())
+                    .marks(marks, tl!("PGM"), tl!("PVW"))
+                    .show_at(ui, rect, ui.scope_id().with(("scene-tile", opened, scene.id)));
+                if ui.is_rect_visible(rect) && shown.len() < MAX_THUMBNAIL_SCENES {
+                    shown.push(scene.id);
+                }
+                if r.double_clicked() {
+                    if studio_mode {
+                        if scene.id != picked {
+                            acts.push(Act::run("scene.select", json!({"scene": scene.id})));
+                            picked = scene.id;
+                        }
+                        acts.push(Act::run("studio.transition", json!({})));
+                    } else {
+                        acts.push(Act::RenameScene(scene.id));
+                    }
+                } else if r.clicked() && scene.id != picked {
+                    acts.push(Act::run("scene.select", json!({"scene": scene.id})));
+                    picked = scene.id;
+                }
+                Menu::context(scene.name.clone(), &r).id(r.id.with("menu")).show(ui, |ui, _| {
+                    if scene_menu(ui, c.scenes.len(), scene.id, acts) {
+                        acts.push(Act::RenameScene(scene.id));
+                    }
+                });
+                r.on_hover_text(scene.name.as_str());
+            }
+        }
+    });
+    st.lists.pictures = Some(shown);
 }
 
 /// A menu row labeled `label` (shown as is) that can be `enabled`; whether it ran. A row that

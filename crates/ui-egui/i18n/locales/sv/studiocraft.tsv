@@ -284,6 +284,16 @@
 	Show an area	Visa ett område
 	Show Recordings	Visa inspelningar
 	Show Scene {n}	Visa scen {n}
+	Show the scenes as a grid	Visa scenerna som rutnät
+	Show the scenes as a list	Visa scenerna som lista
+	Rename Scene	Byt namn på scen
+	PGM	PGM
+	PVW	PVW
+	Scene, {name}, {n}	Scen, {name}, {n}
+	Scene, {name}, {n}, selected	Scen, {name}, {n}, markerad
+	Scene, {name}, {n}, in program	Scen, {name}, {n}, i programmet
+	Scene, {name}, {n}, in preview	Scen, {name}, {n}, i förhandsvisningen
+	Scene, {name}, {n}, in program and preview	Scen, {name}, {n}, i programmet och i förhandsvisningen
 	Show Settings Folder	Visa inställningsmappen
 	Similarity	Likhet
 	Size	Storlek

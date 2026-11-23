@@ -1341,7 +1341,8 @@ fn every_header_action_is_visible_at_760_by_480() {
     }
     let strip = rect_of(&v["dock_strip"]["rect"]);
     assert!((strip.height() - 144.0).abs() < 0.01, "30% of 480: {strip:?}");
-    let want = [("scenes", vec!["add", "remove", "up", "down"]), ("sources", vec!["add", "remove", "up", "down", "properties"]), ("mixer", vec![])];
+    let want =
+        [("scenes", vec!["view", "add", "remove", "up", "down"]), ("sources", vec!["add", "remove", "up", "down", "properties"]), ("mixer", vec![])];
     let docks = v["docks"].as_array().cloned().unwrap_or_default();
     assert_eq!(docks.len(), 3);
     for (d, (name, actions)) in docks.iter().zip(want) {
@@ -2509,6 +2510,206 @@ fn the_program_scene_carries_a_program_mark_in_studio_mode() {
     let scene = a.studio().collection().scenes[0].name.clone();
     let (Some((mark, _)), Some((row, _))) = (named(&tree, "Program"), named(&tree, &scene)) else { panic!("no mark on the program scene") };
     assert!(row.intersects(mark), "the mark is on the program scene's row: {mark:?} {row:?}");
+}
+
+/// The screen reader names of the scene grid's tiles, in list order, for the marks the window
+/// gives them now.
+fn tile_names(a: &StudioApp) -> Vec<String> {
+    let c = a.studio().collection();
+    let (edit, studio_mode) = (a.studio().engine().edit_scene(), a.studio().engine().studio_mode());
+    let marks = |id| crate::kit::scene_tile::TileMarks {
+        selected: !studio_mode && id == edit,
+        program: studio_mode && id == c.program_scene,
+        preview: studio_mode && id == edit,
+    };
+    c.scenes.iter().enumerate().map(|(k, s)| crate::docks::tile_name(&s.name, k + 1, marks(s.id))).collect()
+}
+
+#[test]
+fn the_scene_grid_shows_a_tile_for_each_scene_with_its_marks_and_asks_for_their_pictures() {
+    let mut a = app();
+    let ctx = crate::test_context();
+    let size = egui::vec2(1280.0, 800.0);
+    run(&mut a, &ctx, "scene.add", json!({"name": "Talk"})).unwrap();
+    frame_at(&mut a, &ctx, size);
+    assert!(a.studio().thumbnail_scenes().is_empty(), "the list asks for no pictures");
+    assert_eq!(run(&mut a, &ctx, "scenes.view", json!({})).unwrap(), json!({"on": true}));
+    assert_eq!(a.ui_inspect(&ctx)["docks"][0]["actions"][0]["name"], json!("view"));
+    frame_at(&mut a, &ctx, size);
+    let tree = frame_tree(&mut a, &ctx, size, vec![]);
+    for name in tile_names(&a) {
+        assert!(named(&tree, &name).is_some(), "no tile named `{name}`");
+    }
+    assert!(tile_names(&a).iter().any(|n| n.ends_with(", selected")), "outside studio mode the edited scene's tile is selected");
+    assert!(named(&tree, "Add Scene").is_some(), "no Add Scene tile");
+    assert!(named(&tree, "Show the scenes as a list").is_some() && named(&tree, "Show the scenes as a grid").is_none());
+    let ids: Vec<SceneId> = a.studio().collection().scenes.iter().map(|s| s.id).collect();
+    assert_eq!(a.studio().thumbnail_scenes(), ids.as_slice(), "the grid asks for the pictures of the tiles it shows");
+    run(&mut a, &ctx, "studio.toggle", json!({})).unwrap();
+    frame_at(&mut a, &ctx, size);
+    let tree = frame_tree(&mut a, &ctx, size, vec![]);
+    let names = tile_names(&a);
+    assert!(names.iter().any(|n| n.contains("in program")), "{names:?}");
+    for name in names {
+        assert!(named(&tree, &name).is_some(), "no tile named `{name}` in studio mode");
+    }
+    assert_eq!(run(&mut a, &ctx, "scenes.view", json!({})).unwrap(), json!({"on": false}));
+    frame_at(&mut a, &ctx, size);
+    assert!(a.studio().thumbnail_scenes().is_empty(), "back in the list, the grid's pictures stop");
+    let tree = frame_tree(&mut a, &ctx, size, vec![]);
+    assert!(named(&tree, "Add Scene").is_none() && named(&tree, "Show the scenes as a grid").is_some());
+}
+
+#[test]
+fn the_scene_grid_asks_at_its_own_rate_and_leaves_another_callers_pictures_alone() {
+    let mut a = app();
+    let ctx = crate::test_context();
+    let size = egui::vec2(1280.0, 800.0);
+    let ids: Vec<SceneId> = a.studio().collection().scenes.iter().map(|s| s.id).collect();
+    run(&mut a, &ctx, "scene.thumbnails", json!({"scenes": ids, "fps": 4.0})).unwrap();
+    run(&mut a, &ctx, "scenes.view", json!({})).unwrap();
+    frame_at(&mut a, &ctx, size);
+    assert_eq!(a.studio().thumbnail_fps(), Some(DEFAULT_THUMBNAIL_FPS), "the grid asks at its own rate");
+    run(&mut a, &ctx, "scene.thumbnails", json!({"scenes": ids, "fps": 1.0})).unwrap();
+    frame_at(&mut a, &ctx, size);
+    assert_eq!(a.studio().thumbnail_fps(), Some(1.0), "a later request for the same scenes is left alone");
+    run(&mut a, &ctx, "scenes.view", json!({})).unwrap();
+    frame_at(&mut a, &ctx, size);
+    assert_eq!(a.studio().thumbnail_scenes(), ids.as_slice(), "hiding the grid does not stop another caller's pictures");
+    // A request the same as the grid's, made after it, is still another caller's.
+    run(&mut a, &ctx, "scenes.view", json!({})).unwrap();
+    frame_at(&mut a, &ctx, size);
+    assert_eq!(a.studio().thumbnail_fps(), Some(DEFAULT_THUMBNAIL_FPS));
+    run(&mut a, &ctx, "scene.thumbnails", json!({"scenes": ids, "fps": DEFAULT_THUMBNAIL_FPS})).unwrap();
+    run(&mut a, &ctx, "scenes.view", json!({})).unwrap();
+    frame_at(&mut a, &ctx, size);
+    assert_eq!(a.studio().thumbnail_scenes(), ids.as_slice(), "an identical later request is not stopped");
+    // With no other request since, hiding the grid stops its pictures.
+    run(&mut a, &ctx, "scenes.view", json!({})).unwrap();
+    frame_at(&mut a, &ctx, size);
+    run(&mut a, &ctx, "scenes.view", json!({})).unwrap();
+    frame_at(&mut a, &ctx, size);
+    assert!(a.studio().thumbnail_scenes().is_empty());
+}
+
+#[test]
+fn the_scene_grid_leaves_a_later_stop_alone_and_asks_again_for_a_new_collection() {
+    let mut a = app();
+    let ctx = crate::test_context();
+    let size = egui::vec2(1280.0, 800.0);
+    run(&mut a, &ctx, "scenes.view", json!({})).unwrap();
+    frame_at(&mut a, &ctx, size);
+    assert!(!a.studio().thumbnail_scenes().is_empty(), "the grid asks for its pictures");
+    run(&mut a, &ctx, "scene.thumbnails", json!({"scenes": []})).unwrap();
+    frame_at(&mut a, &ctx, size);
+    frame_at(&mut a, &ctx, size);
+    assert!(a.studio().thumbnail_scenes().is_empty(), "a later request to stop the pictures is left alone");
+    run(&mut a, &ctx, "collection.new", json!({})).unwrap();
+    a.answer_dialog(&ctx, true, Some("Second")).unwrap();
+    frame_at(&mut a, &ctx, size);
+    let ids: Vec<SceneId> = a.studio().collection().scenes.iter().map(|s| s.id).collect();
+    assert_eq!(a.studio().thumbnail_scenes(), ids.as_slice(), "the new collection's tiles are asked for");
+}
+
+#[test]
+fn a_scene_tile_shows_the_shortcut_the_keymap_binds_now() {
+    let mut a = app();
+    let ctx = crate::test_context();
+    run(&mut a, &ctx, "scenes.view", json!({})).unwrap();
+    let first = CommandRef::with_params("scene.select_index", json!({"index": 1}));
+    let Some(text) = a.keymap.shown_chord(&first).map(|c| c.display(a.keymap.platform())) else { panic!("Show Scene 1 has no default shortcut") };
+    texts_drawn(&mut a, &ctx);
+    assert!(texts_drawn(&mut a, &ctx).iter().any(|(t, _)| *t == text), "the first tile shows {text}");
+    a.keymap.clear(&first);
+    assert!(!texts_drawn(&mut a, &ctx).iter().any(|(t, _)| *t == text), "a cleared shortcut is not shown");
+}
+
+#[test]
+fn a_click_on_a_tile_selects_its_scene_and_a_double_click_asks_for_a_new_name() {
+    let mut a = app();
+    let ctx = crate::test_context();
+    let size = egui::vec2(1280.0, 800.0);
+    run(&mut a, &ctx, "scene.add", json!({"name": "Talk"})).unwrap();
+    run(&mut a, &ctx, "scenes.view", json!({})).unwrap();
+    let first = a.studio().collection().scenes[0].id;
+    run(&mut a, &ctx, "scene.select", json!({"scene": first})).unwrap();
+    frame_at(&mut a, &ctx, size);
+    let tree = frame_tree(&mut a, &ctx, size, vec![]);
+    let talk = a.studio().collection().scenes.iter().position(|s| s.name == "Talk").unwrap_or(1);
+    let Some((tile, _)) = named(&tree, &tile_names(&a)[talk]) else { panic!("no Talk tile") };
+    click_at(&mut a, &ctx, size, tile.center());
+    let id = a.studio().collection().scenes[talk].id;
+    assert_eq!(a.studio().engine().edit_scene(), id, "the click selected Talk");
+    assert!(a.naming.is_none());
+    click_at(&mut a, &ctx, size, tile.center());
+    let what = a.naming.as_ref().map(|n| n.what);
+    assert_eq!(what, Some(Named::RenameScene(id)), "the double click asked for a new name");
+    assert_eq!(a.ui_inspect(&ctx)["dialogs"]["prompt"]["title"], json!("Rename Scene"));
+    assert_eq!(a.answer_dialog(&ctx, true, Some("Interview")), Ok(json!({"dialog": "prompt", "closed": true, "name": "Interview"})));
+    assert_eq!(a.studio().collection().scene(id).map(|s| s.name.as_str()), Some("Interview"));
+}
+
+#[test]
+fn opening_another_collection_closes_a_prompt_to_rename_a_scene_or_a_source() {
+    let mut a = app();
+    let ctx = crate::test_context();
+    a.named(Named::NewCollection, "Second").unwrap();
+    frame(&mut a, &ctx, vec![]);
+    let host = a.window_dialogs.clone().unwrap();
+    for scene in [true, false] {
+        let c = a.studio().collection();
+        let what = if scene { Named::RenameScene(c.scenes[0].id) } else { Named::RenameSource(c.global_audio[0]) };
+        let other = if c.name == DEFAULT_NAME { "Second" } else { DEFAULT_NAME };
+        a.ask_name(&ctx, what, "Old");
+        frame(&mut a, &ctx, vec![]);
+        let id = a.naming.as_ref().and_then(|n| n.dialog).expect("the rename prompt shows on the dialog host");
+        run(&mut a, &ctx, "collection.switch", json!({"name": other})).unwrap();
+        assert!(a.naming.is_none(), "opening {other} closes the prompt for {what:?}");
+        frame(&mut a, &ctx, vec![]);
+        assert!(host.with(|h| h.get_by_id::<HostedParamDialog>(id).is_none()), "the prompt's dialog is closed");
+        assert!(a.answer_dialog(&ctx, true, Some("Renamed")).is_err(), "no prompt is left to answer");
+        let c = a.studio().collection();
+        assert!(c.scene_by_name("Renamed").is_none() && c.sources.iter().all(|s| s.name != "Renamed"), "nothing in {other} was renamed");
+    }
+    // A prompt for a collection's name stays open.
+    run(&mut a, &ctx, "collection.new", json!({})).unwrap();
+    frame(&mut a, &ctx, vec![]);
+    run(&mut a, &ctx, "collection.switch", json!({"name": DEFAULT_NAME})).unwrap();
+    assert_eq!(a.naming.as_ref().map(|n| n.what), Some(Named::NewCollection));
+}
+
+#[test]
+fn opening_another_collection_closes_a_scene_menu() {
+    let mut a = app();
+    let ctx = crate::test_context();
+    let size = egui::vec2(1280.0, 800.0);
+    a.named(Named::NewCollection, "Second").unwrap();
+    let first = a.studio().collection().scenes[0].id;
+    run(&mut a, &ctx, "scene.rename", json!({"scene": first, "name": "Elsewhere"})).unwrap();
+    run(&mut a, &ctx, "collection.switch", json!({"name": DEFAULT_NAME})).unwrap();
+    let first = a.studio().collection().scenes[0].id;
+    run(&mut a, &ctx, "scene.rename", json!({"scene": first, "name": "Opening"})).unwrap();
+    let menu_shown = |shown: &[(String, egui::Rect)]| shown.iter().any(|(t, _)| t == "Move to Top");
+    // The list's row menu, then the grid's tile menu.
+    for grid in [false, true] {
+        if grid {
+            run(&mut a, &ctx, "collection.switch", json!({"name": DEFAULT_NAME})).unwrap();
+            run(&mut a, &ctx, "scenes.view", json!({})).unwrap();
+        }
+        frame_at(&mut a, &ctx, size);
+        let tree = frame_tree(&mut a, &ctx, size, vec![]);
+        let target = if grid { tile_names(&a)[0].clone() } else { "Opening".to_string() };
+        let Some((at, _)) = named(&tree, &target) else { panic!("no {target} in the Scenes dock") };
+        for events in right_click(at.center()) {
+            frame_with(&mut a, &ctx, size, events);
+        }
+        assert!(menu_shown(&frame_texts(&mut a, &ctx, vec![])), "the menu of {target} is open");
+        run(&mut a, &ctx, "collection.switch", json!({"name": "Second"})).unwrap();
+        frame_texts(&mut a, &ctx, vec![]);
+        let shown = frame_texts(&mut a, &ctx, vec![]);
+        assert!(shown.iter().any(|(t, _)| t == "Elsewhere"), "the Scenes dock shows the new collection's scene");
+        assert!(!menu_shown(&shown), "opening another collection closes the menu of {target}");
+    }
 }
 
 #[test]

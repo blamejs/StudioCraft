@@ -284,6 +284,16 @@
 	Show an area	Zobrazit oblast
 	Show Recordings	Zobrazit nahrávky
 	Show Scene {n}	Zobrazit scénu {n}
+	Show the scenes as a grid	Zobrazit scény jako mřížku
+	Show the scenes as a list	Zobrazit scény jako seznam
+	Rename Scene	Přejmenovat scénu
+	PGM	PGM
+	PVW	PVW
+	Scene, {name}, {n}	Scéna, {name}, {n}
+	Scene, {name}, {n}, selected	Scéna, {name}, {n}, vybraná
+	Scene, {name}, {n}, in program	Scéna, {name}, {n}, v programu
+	Scene, {name}, {n}, in preview	Scéna, {name}, {n}, v náhledu
+	Scene, {name}, {n}, in program and preview	Scéna, {name}, {n}, v programu a v náhledu
 	Show Settings Folder	Zobrazit složku nastavení
 	Similarity	Podobnost
 	Size	Velikost
