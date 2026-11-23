@@ -565,8 +565,20 @@ unknown, and a problem names the command that fixes it. A destination passes onl
 or when it was live on an earlier stream of this session with the same server and key; one that has
 not connected yet is unknown. Less than 10 GB free in the recording folder, a limit StudioCraft
 chose, is a problem. Live captions that are off are a problem only when a Live Captions source is
-in the scene collection. The window does not show the check yet
-([Control protocol](control-protocol.md#golivecheck)).
+in the scene collection ([Control protocol](control-protocol.md#golivecheck)).
+
+Go Live to N, at the top of the Streaming window, where N is the number of destinations that are on,
+runs the check and starts the stream (`stream.start`) when the check finds no problem. Items that
+are unknown do not stop the stream, and the window lists them under "Not confirmed yet", so a
+destination that has not connected is never shown as passing. When the check finds a problem, the
+stream is not started and the window lists each problem. A problem fixed in Settings has an Open
+Settings button, which opens the Output tab for the recording folder and the Stream tab for the
+encoder. A source that is not working has Open Properties, and live captions that are off have
+Turn On Live Captions, which runs `captions.start`. A problem with a destination is fixed in the
+rows below. The button is off while the stream runs and while no destination is on. A result the
+window cannot read, and a stream that fails to start, are shown as the reason the stream was not
+started. After a start, the window shows "The stream is starting" until the stream runs, fails or
+stops.
 
 ### Pause screen
 

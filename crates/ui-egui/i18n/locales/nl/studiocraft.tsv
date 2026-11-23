@@ -561,6 +561,47 @@ menu	Transform	Transformeren
 	Typed in Settings › Stream and saved in the profile file as plain text. Anyone who can read that file can read the key.	Ingevoerd in Instellingen › Stream en als platte tekst opgeslagen in het profielbestand. Iedereen die dat bestand kan lezen, kan de sleutel lezen.
 	Held in memory until you forget it or quit. It is not written to the profile.	Blijft in het geheugen tot je hem vergeet of afsluit. Hij wordt niet in het profiel geschreven.
 	Any key is the last part of the server address, which is saved in the profile file as plain text.	Een eventuele sleutel is het laatste deel van het serveradres, dat als platte tekst in het profielbestand wordt opgeslagen.
+	Go Live to {n}	Live gaan ({n})
+	Runs the Go-live check, then starts the stream to every destination that is on when the check finds no problem	Voert de controle vóór het live gaan uit en start daarna de stream naar elke ingeschakelde bestemming als de controle geen probleem vindt
+	The stream is running	De stream loopt
+	Turn on a destination first	Schakel eerst een bestemming in
+	The stream was not started: {error}	De stream is niet gestart: {error}
+	The stream is starting	De stream wordt gestart
+	The stream was not started. Fix these first:	De stream is niet gestart. Los eerst dit op:
+	Sources not listed that are not working: {n}	Niet vermelde bronnen die niet werken: {n}
+	Not confirmed yet	Nog niet bevestigd
+	Open Settings	Instellingen openen
+	Turn On Live Captions	Live-ondertiteling inschakelen
+	Open Properties	Eigenschappen openen
+@msg	the Go-live check gave no items	de controle vóór het live gaan gaf geen items
+@msg	the Go-live check's result could not be read	het resultaat van de controle vóór het live gaan kon niet worden gelezen
+@msg	The stream destinations cannot be used: {error}	De streambestemmingen kunnen niet worden gebruikt: {error}
+@msg	No stream destination is turned on	Er is geen streambestemming ingeschakeld
+@msg	Destination {name} was changed after the stream started, and sends the change from its next start	Bestemming {name} is gewijzigd nadat de stream startte en verstuurt de wijziging vanaf de volgende start
+@msg	Destination {name} has no server	Bestemming {name} heeft geen server
+@msg	The stream key of destination {name} is not entered for this session	De streamsleutel van bestemming {name} is niet ingevoerd voor deze sessie
+@msg	Destination {name} has no stream key	Bestemming {name} heeft geen streamsleutel
+@msg	Destination {name} cannot be used: {error}	Bestemming {name} kan niet worden gebruikt: {error}
+@msg	Destination {name} is connecting	Bestemming {name} maakt verbinding
+@msg	Destination {name} is reconnecting: {error}	Bestemming {name} maakt opnieuw verbinding: {error}
+@msg	Destination {name} is waiting for the network: {error}	Bestemming {name} wacht op het netwerk: {error}
+@msg	Destination {name} failed: {error}	Bestemming {name} is mislukt: {error}
+@msg	Destination {name} is turned on but not sending	Bestemming {name} is ingeschakeld maar verstuurt niets
+@msg	Destination {name} is not part of the running stream	Bestemming {name} hoort niet bij de lopende stream
+@msg	Destination {name} failed on the last stream: {error}	Bestemming {name} is bij de vorige stream mislukt: {error}
+@msg	Destination {name} has not connected yet	Bestemming {name} heeft nog geen verbinding gemaakt
+@msg	Nothing can be streamed without the graphics device	Zonder het grafische apparaat kan niets worden gestreamd
+@msg	The encoder {encoder} is tested when the stream starts	De encoder {encoder} wordt getest wanneer de stream start
+@msg	The stream cannot start: {error}	De stream kan niet starten: {error}
+@msg	Only {free} is free for recordings in {folder}	Er is maar {free} vrij voor opnamen in {folder}
+@msg	The free space in the recording folder {folder} could not be read: {error}	De vrije ruimte in de opnamemap {folder} kon niet worden gelezen: {error}
+@msg	The free space in {folder} is still being read	De vrije ruimte in {folder} wordt nog gelezen
+@msg	The source {name} needs a plug-in that is not installed: {kind}	De bron {name} heeft een plug-in nodig die niet is geïnstalleerd: {kind}
+@msg	The source {name} is not working: {error}	De bron {name} werkt niet: {error}
+@msg	Live captions are starting	Live-ondertiteling wordt gestart
+@msg	A Live Captions source is in the scenes, and this build has no speech recognition	Er staat een bron voor live-ondertiteling in de scènes, en deze versie heeft geen spraakherkenning
+@msg	Live captions are off, and a Live Captions source is in the scenes	Live-ondertiteling staat uit, en er staat een bron voor live-ondertiteling in de scènes
+@msg	Live captions stopped: {error}	Live-ondertiteling is gestopt: {error}
 	Fill Screen	Scherm vullen
 @msg	The scenes could not be laid out for the new canvas: {error}	De scènes konden niet voor het nieuwe canvas worden ingedeeld: {error}
 	Set up	Voorbereiden

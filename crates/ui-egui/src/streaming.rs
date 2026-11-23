@@ -3,12 +3,13 @@
 //! allows it, its server with the key hidden, where its key comes from and, while the stream runs,
 //! what it is doing. A row of service tiles adds a destination. Each change runs one of the
 //! window's `stream.destination*` commands. Check Connection runs `stream.diagnose` and shows
-//! what the check found under the destination.
+//! what the check found under the destination. Go Live to N, at the top, runs `golive.check`,
+//! lists each problem with a button for its fix, and runs `stream.start` when there is none.
 
 use std::time::{Duration, UNIX_EPOCH};
 
-use craft_theme::ControlSize;
 use craft_theme::variant::Tone;
+use craft_theme::{ControlSize, Variant};
 use craft_ui::buttons::{Button, Link, ToggleButton};
 use craft_ui::choice::Checkbox;
 use craft_ui::contract::{Bind, Entry, Props as _, Show as _, ShowContainer as _, Sizing, TooltipSpec};
@@ -25,14 +26,14 @@ use serde_json::{Value, json};
 use studiocraft_model::profile::{MAX_DESTINATION_ID, MAX_DESTINATIONS, PRIMARY_DESTINATION};
 use studiocraft_model::services::{self, SERVICES};
 use studiocraft_model::{Destination, KeyRef, ReconnectSettings, StreamSettings};
-use studiocraft_plugin::{Cause, DestinationState, DestinationStatus, Failure};
+use studiocraft_plugin::{Cause, DestinationState, DestinationStatus, Failure, OutputStatus};
 use studiocraft_studio::OutputKind;
 use studiocraft_studio::diagnose::{Check, CheckState, Diagnosis, Evidence, Outcome, Verdict};
 
 use crate::i18n::Msg;
 use crate::kit::option_card::{OptionCard, OptionCardStyle, OptionCards};
 use crate::logos::{self, Logos, ROW_TILE, TileStyle};
-use crate::settings::key_source;
+use crate::settings::{Tab, key_source};
 use crate::{Act, StudioApp, theme};
 
 /// Longest destination name, in characters.
@@ -51,6 +52,115 @@ pub(crate) struct StreamingPanel {
     pub(crate) profile: String,
     /// The decoded service logos.
     pub(crate) logos: Logos,
+    /// Whether Go Live to N was pressed in the last frame.
+    pub(crate) go_live: bool,
+    /// What the last Go Live to N found.
+    pub(crate) golive: Option<GoLiveCheck>,
+    /// The Settings tab a problem's Open Settings asked for in the last frame.
+    pub(crate) open_settings: Option<Tab>,
+}
+
+/// Most items of the Go-live check the window lists.
+const MAX_CHECK_LINES: usize = 64;
+
+/// One item of the Go-live check as the window lists it: its English sentence with `{name}`
+/// placeholders and their values, and for a problem the command that fixes it.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct CheckLine {
+    /// The item's id, such as `encoder` or `recording_space`.
+    pub(crate) id: String,
+    pub(crate) template: String,
+    pub(crate) args: Vec<(String, String)>,
+    pub(crate) fix: Option<String>,
+    /// The source the item is about.
+    pub(crate) source: Option<u64>,
+}
+
+impl CheckLine {
+    fn of(item: &Value) -> CheckLine {
+        let template = item.get("template").or_else(|| item.get("text")).and_then(Value::as_str).unwrap_or_default().to_string();
+        let args = item
+            .get("args")
+            .and_then(Value::as_object)
+            .map(|a| a.iter().filter_map(|(k, v)| v.as_str().map(|v| (k.clone(), v.to_string()))).collect())
+            .unwrap_or_default();
+        let fix = item.get("fix").and_then(Value::as_str).map(str::to_string);
+        let id = item.get("id").and_then(Value::as_str).unwrap_or_default().to_string();
+        CheckLine { id, template, args, fix, source: item.get("source").and_then(Value::as_u64) }
+    }
+
+    /// The sentence in the interface language: its template's `@msg` row, with the values filled in.
+    pub(crate) fn text(&self) -> String {
+        let template = crate::i18n::I18N.tc(crate::i18n::lang(), "@msg", &self.template);
+        let args: Vec<(&str, &str)> = self.args.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+        craft_i18n::fmt(template, &args)
+    }
+}
+
+/// What Go Live to N found: the check's problems and the items it could not confirm, and whether
+/// the stream was started.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct GoLiveCheck {
+    pub(crate) problems: Vec<CheckLine>,
+    /// The items that read unknown, such as a destination that has not connected yet.
+    pub(crate) unknown: Vec<CheckLine>,
+    /// How many sources that are not working the check left out of its list.
+    pub(crate) more_sources: u64,
+    /// Why the check could not be read or the stream did not start.
+    pub(crate) error: Option<Msg>,
+    pub(crate) started: bool,
+}
+
+impl GoLiveCheck {
+    /// The result of `golive.check`. An item whose state is not `pass` or `unknown` is a problem,
+    /// and a result whose problem count does not match its items is an error, so nothing the
+    /// window cannot read is taken as a pass.
+    pub(crate) fn of(v: &Value) -> GoLiveCheck {
+        let mut check = GoLiveCheck { more_sources: v.get("more_sources").and_then(Value::as_u64).unwrap_or(0), ..GoLiveCheck::default() };
+        let Some(items) = v.get("items").and_then(Value::as_array) else {
+            check.error = Some(tmsg!("the Go-live check gave no items"));
+            return check;
+        };
+        let mut problems = 0usize;
+        for item in items {
+            match item.get("state").and_then(Value::as_str) {
+                Some("pass") => continue,
+                Some("unknown") => {
+                    if check.unknown.len() < MAX_CHECK_LINES {
+                        check.unknown.push(CheckLine::of(item));
+                    }
+                }
+                _ => {
+                    problems = problems.saturating_add(1);
+                    if check.problems.len() < MAX_CHECK_LINES {
+                        check.problems.push(CheckLine::of(item));
+                    }
+                }
+            }
+        }
+        let counted = v.get("problems").and_then(Value::as_u64).and_then(|n| usize::try_from(n).ok());
+        if counted != Some(problems) {
+            check.error = Some(tmsg!("the Go-live check's result could not be read"));
+        }
+        check
+    }
+
+    /// Whether nothing stops the stream: no problem and no error. Items that read unknown do not
+    /// stop it.
+    pub(crate) fn ready(&self) -> bool {
+        self.error.is_none() && self.problems.is_empty()
+    }
+}
+
+/// The label of the button for the command `fix` of a problem; `None` for `view.streaming`, whose
+/// window is this one, and for a command the window has no button for.
+pub(crate) fn fix_label(fix: &str) -> Option<&'static str> {
+    match fix {
+        "app.settings" => Some(tl!("Open Settings")),
+        "captions.toggle" => Some(tl!("Turn On Live Captions")),
+        "selection.properties" => Some(tl!("Open Properties")),
+        _ => None,
+    }
 }
 
 /// The open details of one destination. Nothing changes until Save.
@@ -383,6 +493,11 @@ fn listed_check(state: &CheckState) -> Value {
 
 /// The Streaming window's contents.
 pub(crate) fn show(ui: &mut Ui, view: &View, panel: &mut StreamingPanel, acts: &mut Vec<Act>) {
+    go_live_row(ui, view, panel);
+    if let Some(tab) = panel.golive.as_ref().and_then(|check| go_live_result(ui, check, acts)) {
+        panel.open_settings = Some(tab);
+    }
+    Divider::horizontal().show(ui);
     let count = view.stream.destinations.len();
     let _ = Row::new().show(ui, |ui, _| {
         let _ = Text::new(tl!("Add Destination")).role(TypeRole::BodyStrong).show(ui);
@@ -402,6 +517,83 @@ pub(crate) fn show(ui: &mut Ui, view: &View, panel: &mut StreamingPanel, acts: &
         let _ = Stack::new().fill_width().id_salt(("destination", &d.id)).show(ui, |ui, _| row(ui, view, d, live, panel, acts));
         Divider::horizontal().show(ui);
     }
+}
+
+/// Go Live to N, where N is the number of destinations that are on. A click asks the window to run
+/// the Go-live check and start the stream when nothing stops it; the button is off while the
+/// stream runs and while no destination is on.
+fn go_live_row(ui: &mut Ui, view: &View, panel: &mut StreamingPanel) {
+    let on = view.stream.destinations.iter().filter(|d| d.enabled).count();
+    let _ = Row::new().show(ui, |ui, _| {
+        let label = craft_i18n::fmt(tl!("Go Live to {n}"), &[("n", &on.to_string())]);
+        let mut tip =
+            TooltipSpec::new(tl!("Runs the Go-live check, then starts the stream to every destination that is on when the check finds no problem"));
+        if view.running {
+            tip = tip.disabled_text(tl!("The stream is running"));
+        } else if on == 0 {
+            tip = tip.disabled_text(tl!("Turn on a destination first"));
+        }
+        let button = Button::new(label).variant(Variant::PRIMARY).enabled(!view.running && on > 0).tooltip(tip).id_salt("go-live");
+        if button.show(ui).clicked() {
+            panel.go_live = true;
+        }
+    });
+}
+
+/// What a click on the fix button of `line` does: Open Settings opens the Output tab for the
+/// recording folder and the Stream tab otherwise, Open Properties opens the source's properties,
+/// and Turn On Live Captions runs `captions.start`, which leaves running captions on.
+pub(crate) enum FixAct {
+    Settings(Tab),
+    Act(Act),
+}
+
+pub(crate) fn fix_act(line: &CheckLine) -> Option<FixAct> {
+    match (line.fix.as_deref()?, line.source) {
+        ("app.settings", _) => Some(FixAct::Settings(if line.id == "recording_space" { Tab::Output } else { Tab::Stream })),
+        ("selection.properties", Some(s)) => Some(FixAct::Act(Act::Properties(studiocraft_model::SourceId(s)))),
+        ("captions.toggle", _) => Some(FixAct::Act(Act::run("captions.start", json!({})))),
+        _ => None,
+    }
+}
+
+/// What the last Go Live to N found: whether the stream started, each problem with the button for
+/// its fix, and the items the check could not confirm. Returns the Settings tab a click asked for.
+fn go_live_result(ui: &mut Ui, check: &GoLiveCheck, acts: &mut Vec<Act>) -> Option<Tab> {
+    let mut settings = None;
+    if let Some(e) = &check.error {
+        let text = craft_i18n::fmt(tl!("The stream was not started: {error}"), &[("error", &e.shown())]);
+        let _ = Text::new(text).tone(Tone::Warn).show(ui);
+    } else if check.started {
+        let _ = Text::new(tl!("The stream is starting")).tone(Tone::Good).show(ui);
+    } else if !check.problems.is_empty() {
+        let _ = Text::new(tl!("The stream was not started. Fix these first:")).role(TypeRole::BodyStrong).tone(Tone::Warn).show(ui);
+    }
+    for (i, line) in check.problems.iter().enumerate() {
+        ui.push_id(("problem", i), |ui| {
+            let _ = Row::new().show(ui, |ui, _| {
+                let _ = Text::new(line.text()).tone(Tone::Warn).show(ui);
+                let (Some(label), Some(act)) = (line.fix.as_deref().and_then(fix_label), fix_act(line)) else { return };
+                if Button::new(label).size(ControlSize::Sm).id_salt("fix").show(ui).clicked() {
+                    match act {
+                        FixAct::Settings(tab) => settings = Some(tab),
+                        FixAct::Act(a) => acts.push(a),
+                    }
+                }
+            });
+        });
+    }
+    if check.more_sources > 0 {
+        let text = craft_i18n::fmt(tl!("Sources not listed that are not working: {n}"), &[("n", &check.more_sources.to_string())]);
+        let _ = Text::new(text).tone(Tone::Warn).show(ui);
+    }
+    if !check.unknown.is_empty() {
+        let _ = Text::new(tl!("Not confirmed yet")).role(TypeRole::BodyStrong).show(ui);
+        for line in &check.unknown {
+            let _ = Text::new(line.text()).role(TypeRole::Caption).shade(Shade::Muted).show(ui);
+        }
+    }
+    settings
 }
 
 /// One tile of the row that adds a destination.
@@ -1081,15 +1273,40 @@ impl StudioApp {
         s.destinations.iter().filter_map(|d| self.studio.stream_destination_check(&d.id).map(|c| (d.id.clone(), c))).collect()
     }
 
-    /// Close the window's open details when another profile is in use, so they are not saved
-    /// into it.
+    /// Close the window's open details and drop what Go Live to N found when another profile is in
+    /// use, so the details are not saved into it.
     fn sync_streaming_profile(&mut self) {
         let name = &self.studio.profile().name;
         if let Some(panel) = &mut self.streaming
             && panel.profile != *name
         {
             panel.editing = None;
+            panel.golive = None;
             panel.profile.clone_from(name);
+        }
+    }
+
+    /// Go Live to N: runs `golive.check` and, when it finds no problem, `stream.start`. Items that
+    /// read unknown do not stop the stream, and the window lists them as not confirmed. What the
+    /// check found goes in the window.
+    pub(crate) fn go_live(&mut self, ctx: &egui::Context) {
+        let mut check = match self.engine_command(ctx, &craft_keymap::CommandRef::with_params("golive.check", json!({}))) {
+            Ok(v) => GoLiveCheck::of(&v),
+            Err(e) => GoLiveCheck { error: Some(e), ..GoLiveCheck::default() },
+        };
+        // `stream.start` leaves a running stream as it is, so a stream started since the button
+        // was drawn is not reported as started here.
+        if check.ready() && !self.stream_running() {
+            self.from_user = true;
+            let started = self.engine_command(ctx, &craft_keymap::CommandRef::with_params("stream.start", json!({})));
+            self.from_user = false;
+            match started {
+                Ok(_) => check.started = true,
+                Err(e) => check.error = Some(e),
+            }
+        }
+        if let Some(panel) = &mut self.streaming {
+            panel.golive = Some(check);
         }
     }
 
@@ -1294,6 +1511,15 @@ impl StudioApp {
             return;
         }
         self.sync_streaming_profile();
+        // "The stream is starting" is shown while the stream starts, and goes once it runs, fails
+        // or stops.
+        let starting = self.studio.output(OutputKind::Streaming).is_some_and(|o| !o.stopping && o.status == OutputStatus::Starting);
+        if let Some(panel) = &mut self.streaming
+            && panel.golive.as_ref().is_some_and(|c| c.started)
+            && !starting
+        {
+            panel.golive = None;
+        }
         let running = self.stream_running();
         let live = self.live_destinations();
         let checks = self.destination_checks();
@@ -1311,6 +1537,17 @@ impl StudioApp {
         }
         if !open {
             self.streaming = None;
+        }
+        // Open Settings shows the tab that fixes the problem, in a Settings window already open too.
+        if let Some(tab) = self.streaming.as_mut().and_then(|p| p.open_settings.take()) {
+            match &mut self.settings {
+                Some(w) => w.tab = tab,
+                None => self.open_settings(tab),
+            }
+        }
+        if self.streaming.as_mut().is_some_and(|p| std::mem::take(&mut p.go_live)) {
+            let ctx = ui.ctx().clone();
+            self.go_live(&ctx);
         }
     }
 }

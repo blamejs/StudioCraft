@@ -572,6 +572,47 @@ menu	Transform	Transformera
 	Typed in Settings › Stream and saved in the profile file as plain text. Anyone who can read that file can read the key.	Anges i Inställningar › Sändning och sparas i profilfilen som klartext. Den som kan läsa filen kan läsa nyckeln.
 	Held in memory until you forget it or quit. It is not written to the profile.	Hålls i minnet tills du glömmer den eller avslutar. Den skrivs inte till profilen.
 	Any key is the last part of the server address, which is saved in the profile file as plain text.	En eventuell nyckel är den sista delen av serveradressen, som sparas i profilfilen som klartext.
+	Go Live to {n}	Sänd live ({n})
+	Runs the Go-live check, then starts the stream to every destination that is on when the check finds no problem	Kör kontrollen före sändning och startar sedan sändningen till varje påslaget mål om kontrollen inte hittar något problem
+	The stream is running	Sändningen pågår
+	Turn on a destination first	Slå på ett mål först
+	The stream was not started: {error}	Sändningen startades inte: {error}
+	The stream is starting	Sändningen startar
+	The stream was not started. Fix these first:	Sändningen startades inte. Åtgärda detta först:
+	Sources not listed that are not working: {n}	Källor som inte visas i listan och inte fungerar: {n}
+	Not confirmed yet	Inte bekräftat än
+	Open Settings	Öppna inställningar
+	Turn On Live Captions	Slå på livetextning
+	Open Properties	Öppna egenskaper
+@msg	the Go-live check gave no items	kontrollen före sändning gav inga poster
+@msg	the Go-live check's result could not be read	resultatet av kontrollen före sändning kunde inte läsas
+@msg	The stream destinations cannot be used: {error}	Sändningsmålen kan inte användas: {error}
+@msg	No stream destination is turned on	Inget sändningsmål är påslaget
+@msg	Destination {name} was changed after the stream started, and sends the change from its next start	Målet {name} ändrades efter att sändningen startade och skickar ändringen från sin nästa start
+@msg	Destination {name} has no server	Målet {name} har ingen server
+@msg	The stream key of destination {name} is not entered for this session	Sändningsnyckeln för målet {name} har inte angetts för den här sessionen
+@msg	Destination {name} has no stream key	Målet {name} har ingen sändningsnyckel
+@msg	Destination {name} cannot be used: {error}	Målet {name} kan inte användas: {error}
+@msg	Destination {name} is connecting	Målet {name} ansluter
+@msg	Destination {name} is reconnecting: {error}	Målet {name} ansluter igen: {error}
+@msg	Destination {name} is waiting for the network: {error}	Målet {name} väntar på nätverket: {error}
+@msg	Destination {name} failed: {error}	Målet {name} misslyckades: {error}
+@msg	Destination {name} is turned on but not sending	Målet {name} är påslaget men skickar inget
+@msg	Destination {name} is not part of the running stream	Målet {name} ingår inte i den pågående sändningen
+@msg	Destination {name} failed on the last stream: {error}	Målet {name} misslyckades vid förra sändningen: {error}
+@msg	Destination {name} has not connected yet	Målet {name} har inte anslutit än
+@msg	Nothing can be streamed without the graphics device	Inget kan sändas utan grafikenheten
+@msg	The encoder {encoder} is tested when the stream starts	Kodaren {encoder} testas när sändningen startar
+@msg	The stream cannot start: {error}	Sändningen kan inte starta: {error}
+@msg	Only {free} is free for recordings in {folder}	Bara {free} är ledigt för inspelningar i {folder}
+@msg	The free space in the recording folder {folder} could not be read: {error}	Det lediga utrymmet i inspelningsmappen {folder} kunde inte läsas: {error}
+@msg	The free space in {folder} is still being read	Det lediga utrymmet i {folder} läses fortfarande
+@msg	The source {name} needs a plug-in that is not installed: {kind}	Källan {name} behöver ett tillägg som inte är installerat: {kind}
+@msg	The source {name} is not working: {error}	Källan {name} fungerar inte: {error}
+@msg	Live captions are starting	Livetextningen startar
+@msg	A Live Captions source is in the scenes, and this build has no speech recognition	En källa för livetextning finns i scenerna, och den här versionen har ingen taligenkänning
+@msg	Live captions are off, and a Live Captions source is in the scenes	Livetextningen är avstängd, och en källa för livetextning finns i scenerna
+@msg	Live captions stopped: {error}	Livetextningen stoppades: {error}
 	Fill Screen	Fyll skärmen
 @msg	The scenes could not be laid out for the new canvas: {error}	Scenerna kunde inte ordnas för den nya arbetsytan: {error}
 	Set up	Förbered

@@ -570,6 +570,47 @@ menu	Transform	Transformar
 	Typed in Settings › Stream and saved in the profile file as plain text. Anyone who can read that file can read the key.	Digitada em Configurações › Transmissão e salva no arquivo do perfil como texto simples. Quem puder ler esse arquivo pode ler a chave.
 	Held in memory until you forget it or quit. It is not written to the profile.	Mantida na memória até você esquecê-la ou sair. Não é gravada no perfil.
 	Any key is the last part of the server address, which is saved in the profile file as plain text.	A chave, se houver, é a última parte do endereço do servidor, que é salvo no arquivo do perfil como texto simples.
+	Go Live to {n}	Entrar ao vivo ({n})
+	Runs the Go-live check, then starts the stream to every destination that is on when the check finds no problem	Executa a verificação antes da transmissão e, depois, inicia a transmissão para cada destino ativado se a verificação não encontrar problemas
+	The stream is running	A transmissão está em andamento
+	Turn on a destination first	Ative um destino primeiro
+	The stream was not started: {error}	A transmissão não foi iniciada: {error}
+	The stream is starting	A transmissão está sendo iniciada
+	The stream was not started. Fix these first:	A transmissão não foi iniciada. Corrija isto primeiro:
+	Sources not listed that are not working: {n}	Fontes não listadas que não estão funcionando: {n}
+	Not confirmed yet	Ainda não confirmado
+	Open Settings	Abrir configurações
+	Turn On Live Captions	Ativar legendas ao vivo
+	Open Properties	Abrir propriedades
+@msg	the Go-live check gave no items	a verificação antes da transmissão não retornou itens
+@msg	the Go-live check's result could not be read	não foi possível ler o resultado da verificação antes da transmissão
+@msg	The stream destinations cannot be used: {error}	Os destinos da transmissão não podem ser usados: {error}
+@msg	No stream destination is turned on	Nenhum destino de transmissão está ativado
+@msg	Destination {name} was changed after the stream started, and sends the change from its next start	O destino {name} foi alterado depois que a transmissão começou e envia a alteração a partir do próximo início
+@msg	Destination {name} has no server	O destino {name} não tem servidor
+@msg	The stream key of destination {name} is not entered for this session	A chave de transmissão do destino {name} não foi digitada para esta sessão
+@msg	Destination {name} has no stream key	O destino {name} não tem chave de transmissão
+@msg	Destination {name} cannot be used: {error}	O destino {name} não pode ser usado: {error}
+@msg	Destination {name} is connecting	O destino {name} está se conectando
+@msg	Destination {name} is reconnecting: {error}	O destino {name} está se reconectando: {error}
+@msg	Destination {name} is waiting for the network: {error}	O destino {name} está aguardando a rede: {error}
+@msg	Destination {name} failed: {error}	O destino {name} falhou: {error}
+@msg	Destination {name} is turned on but not sending	O destino {name} está ativado, mas não está enviando
+@msg	Destination {name} is not part of the running stream	O destino {name} não faz parte da transmissão em andamento
+@msg	Destination {name} failed on the last stream: {error}	O destino {name} falhou na última transmissão: {error}
+@msg	Destination {name} has not connected yet	O destino {name} ainda não se conectou
+@msg	Nothing can be streamed without the graphics device	Nada pode ser transmitido sem o dispositivo gráfico
+@msg	The encoder {encoder} is tested when the stream starts	O codificador {encoder} é testado quando a transmissão começa
+@msg	The stream cannot start: {error}	A transmissão não pode começar: {error}
+@msg	Only {free} is free for recordings in {folder}	Só há {free} livres para gravações em {folder}
+@msg	The free space in the recording folder {folder} could not be read: {error}	Não foi possível ler o espaço livre na pasta de gravação {folder}: {error}
+@msg	The free space in {folder} is still being read	O espaço livre em {folder} ainda está sendo lido
+@msg	The source {name} needs a plug-in that is not installed: {kind}	A fonte {name} precisa de um plug-in que não está instalado: {kind}
+@msg	The source {name} is not working: {error}	A fonte {name} não está funcionando: {error}
+@msg	Live captions are starting	As legendas ao vivo estão começando
+@msg	A Live Captions source is in the scenes, and this build has no speech recognition	Há uma fonte de legendas ao vivo nas cenas, e esta versão não tem reconhecimento de fala
+@msg	Live captions are off, and a Live Captions source is in the scenes	As legendas ao vivo estão desativadas, e há uma fonte de legendas ao vivo nas cenas
+@msg	Live captions stopped: {error}	As legendas ao vivo pararam: {error}
 	Fill Screen	Preencher a tela
 @msg	The scenes could not be laid out for the new canvas: {error}	Não foi possível reorganizar as cenas para a nova tela de pintura: {error}
 	Set up	Preparar
