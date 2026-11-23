@@ -562,6 +562,7 @@ menu	Transform	التحويل
 	Go Live to {n}	بدء البث المباشر ({n})
 	Runs the Go-live check, then starts the stream to every destination that is on when the check finds no problem	يُجري فحص ما قبل البث، ثم يبدأ البث إلى كل وجهة مفعّلة إذا لم يجد الفحص أي مشكلة
 	The stream is running	البث قيد التشغيل
+	Running the Go-live check…	جارٍ إجراء فحص ما قبل البث…
 	Turn on a destination first	فعّل وجهة أولاً
 	The stream was not started: {error}	لم يبدأ البث: {error}
 	The stream is starting	يجري بدء البث

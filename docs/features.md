@@ -575,7 +575,11 @@ stream is not started and the window lists each problem. A problem fixed in Sett
 Settings button, which opens the Output tab for the recording folder and the Stream tab for the
 encoder. A source that is not working has Open Properties, and live captions that are off have
 Turn On Live Captions, which runs `captions.start`. A problem with a destination is fixed in the
-rows below. The button is off while the stream runs and while no destination is on. A result the
+rows below. The button is off while the stream runs, while no destination is on and while the check
+runs. The window keeps drawing while the free space in the recording folder is read, and shows
+"Running the Go-live check…"; after 250 ms without an answer the free space is listed as not
+confirmed, as `golive.check` lists it. Switching the profile or closing the window drops a check
+that is still running. A result the
 window cannot read, and a stream that fails to start, are shown as the reason the stream was not
 started. After a start, the window shows "The stream is starting" until the stream runs, fails or
 stops.

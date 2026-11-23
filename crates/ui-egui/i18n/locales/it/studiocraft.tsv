@@ -570,6 +570,7 @@ menu	Transform	Trasforma
 	Go Live to {n}	Vai in diretta ({n})
 	Runs the Go-live check, then starts the stream to every destination that is on when the check finds no problem	Esegue il controllo prima della diretta, poi avvia la diretta verso ogni destinazione attiva se il controllo non trova problemi
 	The stream is running	La diretta è in corso
+	Running the Go-live check…	Controllo prima della diretta in corso…
 	Turn on a destination first	Attiva prima una destinazione
 	The stream was not started: {error}	La diretta non è stata avviata: {error}
 	The stream is starting	La diretta si sta avviando

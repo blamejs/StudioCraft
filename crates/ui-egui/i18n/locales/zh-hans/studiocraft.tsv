@@ -574,6 +574,7 @@ menu	Transform	变换
 	Go Live to {n}	开始直播（{n} 个目标）
 	Runs the Go-live check, then starts the stream to every destination that is on when the check finds no problem	运行开播检查，检查未发现问题时，向每个已开启的目标开始直播
 	The stream is running	直播正在进行
+	Running the Go-live check…	正在运行开播检查…
 	Turn on a destination first	请先开启一个目标
 	The stream was not started: {error}	直播未开始：{error}
 	The stream is starting	直播正在开始

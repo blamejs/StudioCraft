@@ -584,6 +584,7 @@ menu	Transform	Transformer
 	Go Live to {n}	Passer en direct ({n})
 	Runs the Go-live check, then starts the stream to every destination that is on when the check finds no problem	Lance la vérification avant le direct, puis démarre le stream vers chaque destination activée si la vérification ne trouve aucun problème
 	The stream is running	Le stream est en cours
+	Running the Go-live check…	Vérification avant le direct en cours…
 	Turn on a destination first	Activez d'abord une destination
 	The stream was not started: {error}	Le stream n'a pas été démarré : {error}
 	The stream is starting	Le stream démarre

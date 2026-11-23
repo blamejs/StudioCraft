@@ -6,7 +6,7 @@
 //! what the check found under the destination. Go Live to N, at the top, runs `golive.check`,
 //! lists each problem with a button for its fix, and runs `stream.start` when there is none.
 
-use std::time::{Duration, UNIX_EPOCH};
+use std::time::{Duration, Instant, UNIX_EPOCH};
 
 use craft_theme::variant::Tone;
 use craft_theme::{ControlSize, Variant};
@@ -42,6 +42,8 @@ pub const MAX_NAME: usize = 128;
 pub const MAX_SERVER: usize = 4096;
 /// How often the window is drawn again while a connection check runs.
 const CHECK_REPAINT: Duration = Duration::from_millis(250);
+/// How often the window looks again at a Go-live check that waits for the free space.
+const GO_LIVE_REPAINT: Duration = Duration::from_millis(15);
 
 /// What the Streaming window keeps between frames: the destination whose details are open, with
 /// the text typed into them.
@@ -54,6 +56,8 @@ pub(crate) struct StreamingPanel {
     pub(crate) logos: Logos,
     /// Whether Go Live to N was pressed in the last frame.
     pub(crate) go_live: bool,
+    /// When the Go-live check that is still waiting for the free space was started.
+    pub(crate) checking: Option<Instant>,
     /// What the last Go Live to N found.
     pub(crate) golive: Option<GoLiveCheck>,
     /// The Settings tab a problem's Open Settings asked for in the last frame.
@@ -529,9 +533,10 @@ pub(crate) fn show(ui: &mut Ui, view: &View, panel: &mut StreamingPanel, acts: &
 
 /// Go Live to N, where N is the number of destinations that are on. A click asks the window to run
 /// the Go-live check and start the stream when nothing stops it; the button is off while the
-/// stream runs and while no destination is on.
+/// stream runs, while no destination is on and while the check runs.
 fn go_live_row(ui: &mut Ui, view: &View, panel: &mut StreamingPanel) {
     let on = view.stream.destinations.iter().filter(|d| d.enabled).count();
+    let checking = panel.checking.is_some();
     let _ = Row::new().show(ui, |ui, _| {
         let label = craft_i18n::fmt(tl!("Go Live to {n}"), &[("n", &on.to_string())]);
         let mut tip =
@@ -540,10 +545,17 @@ fn go_live_row(ui: &mut Ui, view: &View, panel: &mut StreamingPanel) {
             tip = tip.disabled_text(tl!("The stream is running"));
         } else if on == 0 {
             tip = tip.disabled_text(tl!("Turn on a destination first"));
+        } else if checking {
+            tip = tip.disabled_text(tl!("Running the Go-live check…"));
         }
-        let button = Button::new(label).variant(Variant::PRIMARY).enabled(!view.running && on > 0).tooltip(tip).id_salt("go-live");
+        let enabled = !view.running && on > 0 && !checking;
+        let button = Button::new(label).variant(Variant::PRIMARY).enabled(enabled).tooltip(tip).id_salt("go-live");
         if button.show(ui).clicked() {
             panel.go_live = true;
+        }
+        if checking {
+            let _ = Spinner::new().show(ui);
+            let _ = Text::new(tl!("Running the Go-live check…")).shade(Shade::Muted).show(ui);
         }
     });
 }
@@ -1301,18 +1313,37 @@ impl StudioApp {
         {
             panel.editing = None;
             panel.golive = None;
+            panel.checking = None;
             panel.profile.clone_from(name);
         }
     }
 
-    /// Go Live to N: runs `golive.check` and, when it finds no problem, `stream.start`. Items that
-    /// read unknown do not stop the stream, and the window lists them as not confirmed. What the
-    /// check found goes in the window.
-    pub(crate) fn go_live(&mut self, ctx: &egui::Context) {
-        let mut check = match self.engine_command(ctx, &craft_keymap::CommandRef::with_params("golive.check", json!({}))) {
-            Ok(v) => GoLiveCheck::of(&v),
-            Err(e) => GoLiveCheck { error: Some(e), ..GoLiveCheck::default() },
-        };
+    /// Go Live to N: starts the check of `golive.check` and looks at it once. See
+    /// [`StudioApp::poll_go_live`].
+    pub(crate) fn go_live(&mut self, ctx: &egui::Context, now: Instant) {
+        let Some(panel) = &mut self.streaming else { return };
+        panel.golive = None;
+        panel.checking = Some(now);
+        self.poll_go_live(ctx, now);
+    }
+
+    /// Look at the running Go-live check. The check does not wait for the free space in the
+    /// recording folder: while that is still being read and less than `golive.check`'s wait has
+    /// passed since the click, the window looks again in a later frame. Otherwise the check ends
+    /// and, when it finds no problem, `stream.start` runs. Items that read unknown do not stop the
+    /// stream, and the window lists them as not confirmed. What the check found goes in the
+    /// window. A check whose window closed or whose profile changed is dropped.
+    pub(crate) fn poll_go_live(&mut self, ctx: &egui::Context, now: Instant) {
+        let Some(since) = self.streaming.as_ref().and_then(|p| p.checking) else { return };
+        let (v, reading) = self.studio.golive_now();
+        if reading && now.saturating_duration_since(since) < studiocraft_studio::GOLIVE_SPACE_WAIT {
+            ctx.request_repaint_after(GO_LIVE_REPAINT);
+            return;
+        }
+        if let Some(panel) = &mut self.streaming {
+            panel.checking = None;
+        }
+        let mut check = GoLiveCheck::of(&v);
         // `stream.start` leaves a running stream as it is, so a stream started since the button
         // was drawn is not reported as started here.
         if check.ready() && !self.stream_running() {
@@ -1564,9 +1595,11 @@ impl StudioApp {
                 None => self.open_settings(tab),
             }
         }
+        let ctx = ui.ctx().clone();
         if self.streaming.as_mut().is_some_and(|p| std::mem::take(&mut p.go_live)) {
-            let ctx = ui.ctx().clone();
-            self.go_live(&ctx);
+            self.go_live(&ctx, Instant::now());
+        } else {
+            self.poll_go_live(&ctx, Instant::now());
         }
     }
 }

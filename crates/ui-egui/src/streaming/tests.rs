@@ -1208,6 +1208,15 @@ fn go_live_to_n_counts_the_destinations_that_are_on_and_asks_for_the_check() {
     assert!(!w.panel.borrow().go_live, "a button that is off asks for nothing");
     let empty = Window::new(Shown::of(StreamSettings::default()), StreamingPanel::default());
     assert!(empty.disabled("Go Live to 0"), "no destinations");
+    // While the check runs, the button is off and the row says so.
+    let on = StreamSettings { destinations: vec![turned("a", true)], ..StreamSettings::default() };
+    let checking = StreamingPanel { checking: Some(Instant::now()), ..StreamingPanel::default() };
+    let mut w = Window::new(Shown::of(on), checking);
+    assert!(w.disabled("Go Live to 1"));
+    assert!(w.texts().iter().any(|t| t == "Running the Go-live check…"), "{:?}", w.texts());
+    let Some(button) = w.f.by_label("Go Live to 1") else { panic!("no Go Live to 1: {:?}", w.texts()) };
+    w.f.click(&button).frame(Vec::new());
+    assert!(!w.panel.borrow().go_live, "a running check is not started again");
 }
 
 /// An item of `golive.check` in `state`.
@@ -1350,6 +1359,7 @@ fn go_live_runs_the_check_and_starts_nothing_while_it_finds_a_problem() {
         let mut out = ctx.run_ui(raw, |ui| a.frame(ui));
         out.textures_delta.clear();
     };
+    a.studio.set_golive_space_reader(std::sync::Arc::new(|_p: &std::path::Path| Ok(u64::MAX)));
     run(&mut a, &ctx, "view.streaming", json!({})).unwrap();
     frame(&mut a);
     // With no destination on, the check finds a problem and the stream is not started.
@@ -1357,8 +1367,9 @@ fn go_live_runs_the_check_and_starts_nothing_while_it_finds_a_problem() {
         p.go_live = true;
     }
     frame(&mut a);
-    let Some(check) = a.streaming.as_ref().and_then(|p| p.golive.clone()) else { panic!("the window ran no check") };
     assert!(!a.streaming.as_ref().is_some_and(|p| p.go_live), "the request is taken");
+    finish_check(&mut a, &ctx);
+    let Some(check) = a.streaming.as_ref().and_then(|p| p.golive.clone()) else { panic!("the window ran no check") };
     assert!(check.problems.iter().any(|p| p.template == "No stream destination is turned on"), "{check:?}");
     assert!(!check.started, "{check:?}");
     assert!(check.error.is_none(), "{check:?}");
@@ -1367,7 +1378,8 @@ fn go_live_runs_the_check_and_starts_nothing_while_it_finds_a_problem() {
     // finds on this computer, such as a missing graphics device, keeps the stream from starting.
     // The server is a closed port on this computer, so a stream that starts contacts nothing else.
     run(&mut a, &ctx, "stream.destination_add", json!({"server": "rtmp://127.0.0.1:1/live/secret", "key": "none"})).unwrap();
-    a.go_live(&ctx);
+    a.go_live(&ctx, Instant::now());
+    finish_check(&mut a, &ctx);
     let Some(check) = a.streaming.as_ref().and_then(|p| p.golive.clone()) else { panic!("no check") };
     assert!(check.unknown.iter().any(|u| u.template == "Destination {name} has not connected yet"), "{check:?}");
     if !check.problems.is_empty() {
@@ -1414,4 +1426,68 @@ fn go_live_runs_the_check_and_starts_nothing_while_it_finds_a_problem() {
     }
     a.sync_streaming_profile();
     assert!(a.streaming.as_ref().is_some_and(|p| p.golive.is_none()));
+}
+
+/// Look at the running Go-live check until it ends, each time at the moment it started, so the
+/// check waits for the free space however long the test takes.
+fn finish_check(a: &mut StudioApp, ctx: &egui::Context) {
+    while let Some(since) = a.streaming.as_ref().and_then(|p| p.checking) {
+        std::thread::yield_now();
+        a.poll_go_live(ctx, since);
+    }
+}
+
+fn checking(a: &StudioApp) -> Option<Instant> {
+    a.streaming.as_ref().and_then(|p| p.checking)
+}
+
+#[test]
+fn go_live_does_not_wait_for_the_free_space_and_drops_a_check_the_window_no_longer_shows() {
+    let mut a = app();
+    let ctx = crate::test_context();
+    // The free space answers only when the test lets it.
+    let (go, gate) = std::sync::mpsc::channel::<()>();
+    let gate = std::sync::Mutex::new(gate);
+    a.studio.set_golive_space_reader(std::sync::Arc::new(move |_p: &std::path::Path| {
+        let _ = gate.lock().unwrap().recv();
+        Ok(u64::MAX)
+    }));
+    run(&mut a, &ctx, "view.streaming", json!({})).unwrap();
+    let t = Instant::now();
+    a.go_live(&ctx, t);
+    assert_eq!(checking(&a), Some(t), "the click returns while the free space is read");
+    assert!(a.streaming.as_ref().is_some_and(|p| p.golive.is_none()));
+    for _ in 0..100 {
+        a.poll_go_live(&ctx, t);
+        assert_eq!(checking(&a), Some(t), "nothing waits for the free space");
+    }
+    // Once `golive.check`'s wait has passed, the check ends with the free space not confirmed.
+    a.poll_go_live(&ctx, t + studiocraft_studio::GOLIVE_SPACE_WAIT);
+    assert_eq!(checking(&a), None);
+    let Some(check) = a.streaming.as_ref().and_then(|p| p.golive.clone()) else { panic!("no check") };
+    assert!(check.unknown.iter().any(|u| u.id == "recording_space"), "{check:?}");
+    assert!(check.problems.iter().any(|p| p.template == "No stream destination is turned on"), "{check:?}");
+    assert!(!check.started && !a.stream_running(), "{check:?}");
+    // A check whose profile changed, or whose window closed, is dropped.
+    a.go_live(&ctx, t);
+    if let Some(p) = &mut a.streaming {
+        p.profile = "another".into();
+    }
+    a.sync_streaming_profile();
+    assert_eq!(checking(&a), None);
+    a.poll_go_live(&ctx, t);
+    assert!(a.streaming.as_ref().is_some_and(|p| p.golive.is_none()), "the dropped check gives no result");
+    a.go_live(&ctx, t);
+    run(&mut a, &ctx, "view.streaming", json!({})).unwrap();
+    assert!(a.streaming.is_none());
+    a.poll_go_live(&ctx, t);
+    run(&mut a, &ctx, "view.streaming", json!({})).unwrap();
+    assert_eq!(checking(&a), None, "a new window has no check running");
+    // The free space answers, and the next check reads it.
+    go.send(()).unwrap();
+    drop(go);
+    a.go_live(&ctx, t);
+    finish_check(&mut a, &ctx);
+    let Some(check) = a.streaming.as_ref().and_then(|p| p.golive.clone()) else { panic!("no check") };
+    assert!(!check.unknown.iter().chain(&check.problems).any(|l| l.id == "recording_space"), "{check:?}");
 }

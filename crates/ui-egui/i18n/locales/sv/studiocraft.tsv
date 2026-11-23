@@ -575,6 +575,7 @@ menu	Transform	Transformera
 	Go Live to {n}	Sänd live ({n})
 	Runs the Go-live check, then starts the stream to every destination that is on when the check finds no problem	Kör kontrollen före sändning och startar sedan sändningen till varje påslaget mål om kontrollen inte hittar något problem
 	The stream is running	Sändningen pågår
+	Running the Go-live check…	Kontrollen före sändning körs…
 	Turn on a destination first	Slå på ett mål först
 	The stream was not started: {error}	Sändningen startades inte: {error}
 	The stream is starting	Sändningen startar

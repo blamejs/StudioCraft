@@ -564,6 +564,7 @@ menu	Transform	Transformeren
 	Go Live to {n}	Live gaan ({n})
 	Runs the Go-live check, then starts the stream to every destination that is on when the check finds no problem	Voert de controle vóór het live gaan uit en start daarna de stream naar elke ingeschakelde bestemming als de controle geen probleem vindt
 	The stream is running	De stream loopt
+	Running the Go-live check…	De controle vóór het live gaan wordt uitgevoerd…
 	Turn on a destination first	Schakel eerst een bestemming in
 	The stream was not started: {error}	De stream is niet gestart: {error}
 	The stream is starting	De stream wordt gestart

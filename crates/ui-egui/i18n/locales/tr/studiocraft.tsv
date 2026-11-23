@@ -576,6 +576,7 @@ menu	Transform	Dönüştür
 	Go Live to {n}	Yayına Geç ({n})
 	Runs the Go-live check, then starts the stream to every destination that is on when the check finds no problem	Yayın öncesi denetimi çalıştırır, ardından denetim sorun bulmazsa açık olan her hedefe yayını başlatır
 	The stream is running	Yayın sürüyor
+	Running the Go-live check…	Yayın öncesi denetim çalışıyor…
 	Turn on a destination first	Önce bir hedefi açın
 	The stream was not started: {error}	Yayın başlatılmadı: {error}
 	The stream is starting	Yayın başlatılıyor

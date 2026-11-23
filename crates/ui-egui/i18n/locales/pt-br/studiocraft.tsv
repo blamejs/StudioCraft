@@ -573,6 +573,7 @@ menu	Transform	Transformar
 	Go Live to {n}	Entrar ao vivo ({n})
 	Runs the Go-live check, then starts the stream to every destination that is on when the check finds no problem	Executa a verificação antes da transmissão e, depois, inicia a transmissão para cada destino ativado se a verificação não encontrar problemas
 	The stream is running	A transmissão está em andamento
+	Running the Go-live check…	Executando a verificação antes da transmissão…
 	Turn on a destination first	Ative um destino primeiro
 	The stream was not started: {error}	A transmissão não foi iniciada: {error}
 	The stream is starting	A transmissão está sendo iniciada

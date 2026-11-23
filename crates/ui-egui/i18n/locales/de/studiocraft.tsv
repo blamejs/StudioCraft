@@ -558,6 +558,7 @@ menu	Transform	Transformieren
 	Go Live to {n}	Live gehen ({n})
 	Runs the Go-live check, then starts the stream to every destination that is on when the check finds no problem	Führt die Go-Live-Prüfung aus und startet dann den Stream an jedes eingeschaltete Ziel, wenn die Prüfung kein Problem findet
 	The stream is running	Der Stream läuft
+	Running the Go-live check…	Die Go-Live-Prüfung läuft…
 	Turn on a destination first	Schalten Sie zuerst ein Ziel ein
 	The stream was not started: {error}	Der Stream wurde nicht gestartet: {error}
 	The stream is starting	Der Stream startet

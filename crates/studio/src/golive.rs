@@ -33,7 +33,7 @@ pub const MAX_SOURCE_ITEMS: usize = 32;
 const MAX_ERROR_CHARS: usize = 300;
 
 /// How long a check waits for the free space before it reports it as still being read.
-const SPACE_WAIT: Duration = Duration::from_millis(250);
+pub const SPACE_WAIT: Duration = Duration::from_millis(250);
 
 /// How often [`Studio::tick`] notes the running stream's destinations.
 const DEST_POLL: Duration = Duration::from_secs(1);
@@ -151,6 +151,11 @@ impl SpaceProbe {
 
     /// The free space on the disk holding `folder`, or on the nearest folder above it that exists.
     pub(crate) fn query(&mut self, folder: &Path) -> Space {
+        self.query_within(folder, self.wait)
+    }
+
+    /// [`SpaceProbe::query`], waiting at most `wait` for a query that has not answered.
+    pub(crate) fn query_within(&mut self, folder: &Path, wait: Duration) -> Space {
         // Queries for other folders keep their answers until their folder is asked for again.
         for (_, q) in &mut self.running {
             if let Query::Running(rx) = q {
@@ -167,7 +172,7 @@ impl SpaceProbe {
                 Query::Done(r) => return space_of(r),
                 Query::Running(rx) => rx,
             };
-            return match rx.recv_timeout(self.wait) {
+            return match rx.recv_timeout(wait) {
                 Ok(r) => space_of(r),
                 Err(RecvTimeoutError::Timeout) => {
                     self.running.push((asked, Query::Running(rx)));
@@ -191,7 +196,7 @@ impl SpaceProbe {
         if let Err(e) = spawned {
             return Space::Failed(format!("no thread to read the free space: {e}"));
         }
-        match rx.recv_timeout(self.wait) {
+        match rx.recv_timeout(wait) {
             Ok(r) => space_of(r),
             Err(RecvTimeoutError::Timeout) => {
                 self.running.push((folder.to_path_buf(), Query::Running(rx)));
@@ -269,7 +274,6 @@ impl GoLive {
         }
     }
 
-    #[cfg(test)]
     pub(crate) fn set_space_reader(&mut self, read: ReadSpace, wait: Duration) {
         self.space = SpaceProbe::new(read, wait);
     }
@@ -530,11 +534,35 @@ fn captions(i: &Input, out: &mut Vec<Item>) {
 impl Studio {
     /// The go-live check: each item with its state and the command that fixes a problem.
     pub fn golive_json(&mut self) -> Value {
+        self.golive_check(None).0
+    }
+
+    /// The go-live check of `golive.check`, without waiting for the free space in the recording
+    /// folder, and whether the free space is still being read. Asked again, the check gives the
+    /// free space once its query has answered.
+    pub fn golive_now(&mut self) -> (Value, bool) {
+        // `golive.check` reads finished caption work first, as every command does.
+        self.sync_captions();
+        self.golive_check(Some(Duration::ZERO))
+    }
+
+    /// Read the free space for the go-live check with `read`, which gets the folder and returns its
+    /// free bytes. Each check waits at most [`SPACE_WAIT`] for it.
+    pub fn set_golive_space_reader(&mut self, read: Arc<dyn Fn(&Path) -> std::io::Result<u64> + Send + Sync>) {
+        self.golive.set_space_reader(read, SPACE_WAIT);
+    }
+
+    /// The check, waiting `wait` for the free space, or [`SPACE_WAIT`] for `None`.
+    fn golive_check(&mut self, wait: Option<Duration>) -> (Value, bool) {
         let profile = &self.profile;
         let running = self.outputs.stream_destinations_of(profile.name.as_str());
         let encoder = crate::outputs::stream_encoder(self.engine.registry(), profile).map_err(|e| e.to_string());
         let folder = recording_folder(&profile.output.folder);
-        let space = self.golive.space.query(&folder);
+        let space = match wait {
+            Some(wait) => self.golive.space.query_within(&folder, wait),
+            None => self.golive.space.query(&folder),
+        };
+        let reading = space == Space::Reading;
         let registry = self.engine.registry();
         let mut broken = Vec::new();
         let mut missing = Vec::new();
@@ -565,13 +593,14 @@ impl Studio {
         };
         let (items, more) = items(&input);
         let count = |c: Check| items.iter().filter(|it| it.state == c).count();
-        json!({
+        let v = json!({
             "ready": items.iter().all(|it| it.state == Check::Pass),
             "problems": count(Check::Problem),
             "unknown": count(Check::Unknown),
             "more_sources": more,
             "items": items.iter().map(Item::json).collect::<Vec<_>>(),
-        })
+        });
+        (v, reading)
     }
 
     /// Note how the running stream's destinations are doing, at most once a [`DEST_POLL`], and at

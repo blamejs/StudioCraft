@@ -515,6 +515,7 @@
 	Go Live to {n}	Go Live to {n}
 	Runs the Go-live check, then starts the stream to every destination that is on when the check finds no problem	Runs the Go-live check, then starts the stream to every destination that is on when the check finds no problem
 	The stream is running	The stream is running
+	Running the Go-live check…	Running the Go-live check…
 	Turn on a destination first	Turn on a destination first
 	The stream was not started: {error}	The stream was not started: {error}
 	The stream is starting	The stream is starting

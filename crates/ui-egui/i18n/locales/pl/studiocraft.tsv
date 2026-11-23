@@ -573,6 +573,7 @@ menu	Transform	Przekształć
 	Go Live to {n}	Rozpocznij na żywo ({n})
 	Runs the Go-live check, then starts the stream to every destination that is on when the check finds no problem	Uruchamia kontrolę przed transmisją, a potem rozpoczyna transmisję do każdego włączonego miejsca docelowego, jeśli kontrola nie znajdzie problemu
 	The stream is running	Transmisja trwa
+	Running the Go-live check…	Trwa kontrola przed transmisją…
 	Turn on a destination first	Najpierw włącz miejsce docelowe
 	The stream was not started: {error}	Transmisja nie została rozpoczęta: {error}
 	The stream is starting	Transmisja się rozpoczyna

@@ -555,6 +555,7 @@ menu	Transform	שינוי צורה
 	Go Live to {n}	התחלת שידור חי ({n})
 	Runs the Go-live check, then starts the stream to every destination that is on when the check finds no problem	מריץ את הבדיקה שלפני השידור, ואז מתחיל את השידור לכל יעד מופעל אם הבדיקה לא מוצאת בעיה
 	The stream is running	השידור פועל
+	Running the Go-live check…	הבדיקה שלפני השידור פועלת…
 	Turn on a destination first	יש להפעיל יעד קודם
 	The stream was not started: {error}	השידור לא התחיל: {error}
 	The stream is starting	השידור מתחיל

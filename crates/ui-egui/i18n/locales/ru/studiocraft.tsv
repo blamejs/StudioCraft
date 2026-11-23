@@ -584,6 +584,7 @@ menu	Transform	Преобразование
 	Go Live to {n}	В эфир ({n})
 	Runs the Go-live check, then starts the stream to every destination that is on when the check finds no problem	Запускает проверку перед эфиром, а затем начинает трансляцию на все включённые назначения, если проверка не нашла проблем
 	The stream is running	Трансляция идёт
+	Running the Go-live check…	Выполняется проверка перед эфиром…
 	Turn on a destination first	Сначала включите назначение
 	The stream was not started: {error}	Трансляция не начата: {error}
 	The stream is starting	Трансляция запускается

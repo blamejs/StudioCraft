@@ -575,6 +575,7 @@ menu	Transform	Transformace
 	Go Live to {n}	Zahájit vysílání ({n})
 	Runs the Go-live check, then starts the stream to every destination that is on when the check finds no problem	Spustí kontrolu před vysíláním a pak zahájí vysílání do každého zapnutého cíle, pokud kontrola nenajde žádný problém
 	The stream is running	Vysílání běží
+	Running the Go-live check…	Probíhá kontrola před vysíláním…
 	Turn on a destination first	Nejprve zapněte cíl
 	The stream was not started: {error}	Vysílání nebylo zahájeno: {error}
 	The stream is starting	Vysílání se spouští
