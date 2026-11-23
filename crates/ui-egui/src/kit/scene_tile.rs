@@ -318,9 +318,16 @@ mod tests {
             draw_in(&ctx, &st, wide, vec![], |st| SceneTile::new("Talk", "Scene, Talk, 2", st).shortcut(Some("Ctrl+2")).marks(marks, "PGM", "PVW"));
         let f = fills(&out);
         assert!(f.contains(&st.on_air.fill) && f.contains(&st.accent.fill) && f.contains(&st.key.fill), "{f:?}");
-        let (_, out) = draw(&ctx, &st, vec![], |st| SceneTile::new("Talk", "Scene, Talk, 2", st));
+        let (_, out) = draw_in(&ctx, &st, wide, vec![], |st| SceneTile::new("Talk", "Scene, Talk, 2", st).marks(TileMarks::default(), "PGM", "PVW"));
         let f = fills(&out);
         assert!(!f.contains(&st.on_air.fill) && !f.contains(&st.accent.fill) && !f.contains(&st.key.fill), "{f:?}");
+        let program = TileMarks { program: true, ..TileMarks::default() };
+        let (_, out) = draw_in(&ctx, &st, wide, vec![], |st| SceneTile::new("Talk", "Scene, Talk, 2", st).marks(program, "PGM", "PVW"));
+        let f = fills(&out);
+        assert!(f.contains(&st.on_air.fill) && !f.contains(&st.accent.fill), "only the program chip: {f:?}");
+        let (_, out) = draw_in(&ctx, &st, wide, vec![], |st| SceneTile::new("Talk", "Scene, Talk, 2", st).marks(marks, "", ""));
+        let f = fills(&out);
+        assert!(!f.contains(&st.on_air.fill) && !f.contains(&st.accent.fill), "a chip without text is left out: {f:?}");
     }
 
     #[test]
