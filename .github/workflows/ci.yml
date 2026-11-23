@@ -22,8 +22,6 @@ jobs:
     uses: storytold/craft-common-actions/.github/workflows/gate.yml@f89e5837566e579e522d418912b8998e58e820b1
     with:
       timeout-minutes: 90
-      # The unreached-rs script stops with an error on the "." entry in the workspace members.
-      unreached-rs-mode: "off"
       packages: >-
         pkg-config libxkbcommon-dev libwayland-dev libx11-dev libxcb1-dev libxcursor-dev
         libxrandr-dev libxi-dev libfontconfig1-dev libfreetype-dev mesa-vulkan-drivers
