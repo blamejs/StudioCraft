@@ -104,6 +104,10 @@ pub(crate) struct GoLiveCheck {
     pub(crate) problems: Vec<CheckLine>,
     /// The items that read unknown, such as a destination that has not connected yet.
     pub(crate) unknown: Vec<CheckLine>,
+    /// How many problems past [`MAX_CHECK_LINES`] the window does not list.
+    pub(crate) more_problems: usize,
+    /// How many unknown items past [`MAX_CHECK_LINES`] the window does not list.
+    pub(crate) more_unknown: usize,
     /// How many sources that are not working the check left out of its list.
     pub(crate) more_sources: u64,
     /// Why the check could not be read or the stream did not start.
@@ -128,12 +132,16 @@ impl GoLiveCheck {
                 Some("unknown") => {
                     if check.unknown.len() < MAX_CHECK_LINES {
                         check.unknown.push(CheckLine::of(item));
+                    } else {
+                        check.more_unknown = check.more_unknown.saturating_add(1);
                     }
                 }
                 _ => {
                     problems = problems.saturating_add(1);
                     if check.problems.len() < MAX_CHECK_LINES {
                         check.problems.push(CheckLine::of(item));
+                    } else {
+                        check.more_problems = check.more_problems.saturating_add(1);
                     }
                 }
             }
@@ -583,6 +591,9 @@ fn go_live_result(ui: &mut Ui, check: &GoLiveCheck, acts: &mut Vec<Act>) -> Opti
             });
         });
     }
+    if check.more_problems > 0 {
+        let _ = Text::new(more_lines(check.more_problems)).tone(Tone::Warn).show(ui);
+    }
     if check.more_sources > 0 {
         let text = craft_i18n::fmt(tl!("Sources not listed that are not working: {n}"), &[("n", &check.more_sources.to_string())]);
         let _ = Text::new(text).tone(Tone::Warn).show(ui);
@@ -592,8 +603,16 @@ fn go_live_result(ui: &mut Ui, check: &GoLiveCheck, acts: &mut Vec<Act>) -> Opti
         for line in &check.unknown {
             let _ = Text::new(line.text()).role(TypeRole::Caption).shade(Shade::Muted).show(ui);
         }
+        if check.more_unknown > 0 {
+            let _ = Text::new(more_lines(check.more_unknown)).role(TypeRole::Caption).shade(Shade::Muted).show(ui);
+        }
     }
     settings
+}
+
+/// The line under a list that the window cut at [`MAX_CHECK_LINES`]: how many items it left out.
+fn more_lines(n: usize) -> String {
+    craft_i18n::fmt(tl!("And {n} more"), &[("n", &n.to_string())])
 }
 
 /// One tile of the row that adds a destination.

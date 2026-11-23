@@ -580,6 +580,7 @@ menu	Transform	Transformera
 	The stream is starting	Sändningen startar
 	The stream was not started. Fix these first:	Sändningen startades inte. Åtgärda detta först:
 	Sources not listed that are not working: {n}	Källor som inte visas i listan och inte fungerar: {n}
+	And {n} more	Och {n} till
 	Not confirmed yet	Inte bekräftat än
 	Open Settings	Öppna inställningar
 	Turn On Live Captions	Slå på livetextning

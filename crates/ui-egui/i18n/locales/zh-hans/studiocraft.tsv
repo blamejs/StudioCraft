@@ -579,6 +579,7 @@ menu	Transform	变换
 	The stream is starting	直播正在开始
 	The stream was not started. Fix these first:	直播未开始。请先修复以下问题：
 	Sources not listed that are not working: {n}	未列出的异常来源：{n}
+	And {n} more	还有 {n} 项
 	Not confirmed yet	尚未确认
 	Open Settings	打开设置
 	Turn On Live Captions	开启实时字幕

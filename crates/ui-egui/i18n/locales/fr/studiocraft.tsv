@@ -589,6 +589,7 @@ menu	Transform	Transformer
 	The stream is starting	Le stream démarre
 	The stream was not started. Fix these first:	Le stream n'a pas été démarré. Corrigez d'abord ces points :
 	Sources not listed that are not working: {n}	Sources non listées qui ne fonctionnent pas : {n}
+	And {n} more	Et {n} de plus
 	Not confirmed yet	Pas encore confirmé
 	Open Settings	Ouvrir les paramètres
 	Turn On Live Captions	Activer les sous-titres en direct

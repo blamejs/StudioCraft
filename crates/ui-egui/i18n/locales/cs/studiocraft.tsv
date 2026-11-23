@@ -580,6 +580,7 @@ menu	Transform	Transformace
 	The stream is starting	Vysílání se spouští
 	The stream was not started. Fix these first:	Vysílání nebylo zahájeno. Nejprve opravte toto:
 	Sources not listed that are not working: {n}	Nefunkční zdroje, které nejsou v seznamu: {n}
+	And {n} more	A dalších {n}
 	Not confirmed yet	Zatím nepotvrzeno
 	Open Settings	Otevřít nastavení
 	Turn On Live Captions	Zapnout živé titulky

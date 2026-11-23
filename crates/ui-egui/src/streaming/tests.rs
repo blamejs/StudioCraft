@@ -1256,8 +1256,27 @@ fn the_go_live_check_is_read_without_taking_anything_unknown_as_a_pass() {
     let many: Vec<Value> = (0..200).map(|_| item("problem", "x", None)).collect();
     let c = GoLiveCheck::of(&json!({"problems": 200, "items": many}));
     assert_eq!(c.problems.len(), MAX_CHECK_LINES);
+    assert_eq!(c.more_problems, 200 - MAX_CHECK_LINES);
     assert!(!c.ready());
     assert!(c.error.is_none());
+    let many: Vec<Value> = (0..70).map(|_| item("unknown", "x", None)).collect();
+    let c = GoLiveCheck::of(&json!({"problems": 0, "items": many}));
+    assert_eq!(c.unknown.len(), MAX_CHECK_LINES);
+    assert_eq!(c.more_unknown, 70 - MAX_CHECK_LINES);
+    assert!(c.ready());
+}
+
+#[test]
+fn the_window_counts_the_items_it_does_not_list() {
+    let many: Vec<Value> = (0..200).map(|_| item("problem", "x", None)).chain((0..70).map(|_| item("unknown", "y", None))).collect();
+    let check = GoLiveCheck::of(&json!({"problems": 200, "items": many}));
+    let stream = StreamSettings { destinations: vec![turned("a", true)], ..StreamSettings::default() };
+    let w = Window::new(Shown::of(stream), StreamingPanel { golive: Some(check), ..StreamingPanel::default() });
+    let texts = w.texts();
+    let more = |n: usize| craft_i18n::fmt("And {n} more", &[("n", &n.to_string())]);
+    assert!(texts.contains(&more(200 - MAX_CHECK_LINES)), "{texts:?}");
+    assert!(texts.contains(&more(70 - MAX_CHECK_LINES)), "{texts:?}");
+    assert!(!texts.iter().any(|t| t.contains("Sources not listed")), "{texts:?}");
 }
 
 #[test]

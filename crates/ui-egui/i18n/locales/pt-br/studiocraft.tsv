@@ -578,6 +578,7 @@ menu	Transform	Transformar
 	The stream is starting	A transmissão está sendo iniciada
 	The stream was not started. Fix these first:	A transmissão não foi iniciada. Corrija isto primeiro:
 	Sources not listed that are not working: {n}	Fontes não listadas que não estão funcionando: {n}
+	And {n} more	E mais {n}
 	Not confirmed yet	Ainda não confirmado
 	Open Settings	Abrir configurações
 	Turn On Live Captions	Ativar legendas ao vivo

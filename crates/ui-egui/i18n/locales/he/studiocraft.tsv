@@ -560,6 +560,7 @@ menu	Transform	שינוי צורה
 	The stream is starting	השידור מתחיל
 	The stream was not started. Fix these first:	השידור לא התחיל. יש לתקן קודם את אלה:
 	Sources not listed that are not working: {n}	מקורות שלא ברשימה ואינם פועלים: {n}
+	And {n} more	ועוד {n}
 	Not confirmed yet	טרם אושר
 	Open Settings	פתיחת ההגדרות
 	Turn On Live Captions	הפעלת כתוביות חיות

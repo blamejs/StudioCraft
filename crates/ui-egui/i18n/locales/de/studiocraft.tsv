@@ -563,6 +563,7 @@ menu	Transform	Transformieren
 	The stream is starting	Der Stream startet
 	The stream was not started. Fix these first:	Der Stream wurde nicht gestartet. Beheben Sie zuerst Folgendes:
 	Sources not listed that are not working: {n}	Nicht aufgeführte Quellen, die nicht funktionieren: {n}
+	And {n} more	Und {n} weitere
 	Not confirmed yet	Noch nicht bestätigt
 	Open Settings	Einstellungen öffnen
 	Turn On Live Captions	Live-Untertitel einschalten

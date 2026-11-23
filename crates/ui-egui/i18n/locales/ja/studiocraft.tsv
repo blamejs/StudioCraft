@@ -579,6 +579,7 @@ menu	Transform	変形
 	The stream is starting	配信を開始しています
 	The stream was not started. Fix these first:	配信は開始されませんでした。先に次の点を修正してください:
 	Sources not listed that are not working: {n}	一覧にない、動作していないソース: {n}
+	And {n} more	ほか {n} 件
 	Not confirmed yet	まだ確認されていません
 	Open Settings	設定を開く
 	Turn On Live Captions	ライブ字幕をオンにする

@@ -569,6 +569,7 @@ menu	Transform	Transformeren
 	The stream is starting	De stream wordt gestart
 	The stream was not started. Fix these first:	De stream is niet gestart. Los eerst dit op:
 	Sources not listed that are not working: {n}	Niet vermelde bronnen die niet werken: {n}
+	And {n} more	En nog {n}
 	Not confirmed yet	Nog niet bevestigd
 	Open Settings	Instellingen openen
 	Turn On Live Captions	Live-ondertiteling inschakelen

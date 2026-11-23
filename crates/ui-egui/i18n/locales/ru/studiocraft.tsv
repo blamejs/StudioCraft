@@ -589,6 +589,7 @@ menu	Transform	Преобразование
 	The stream is starting	Трансляция запускается
 	The stream was not started. Fix these first:	Трансляция не начата. Сначала исправьте следующее:
 	Sources not listed that are not working: {n}	Неработающие источники, не попавшие в список: {n}
+	And {n} more	И ещё {n}
 	Not confirmed yet	Пока не подтверждено
 	Open Settings	Открыть настройки
 	Turn On Live Captions	Включить живые субтитры

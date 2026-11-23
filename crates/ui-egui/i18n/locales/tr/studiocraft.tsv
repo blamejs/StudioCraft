@@ -581,6 +581,7 @@ menu	Transform	Dönüştür
 	The stream is starting	Yayın başlatılıyor
 	The stream was not started. Fix these first:	Yayın başlatılmadı. Önce bunları düzeltin:
 	Sources not listed that are not working: {n}	Listede olmayan, çalışmayan kaynaklar: {n}
+	And {n} more	Ve {n} tane daha
 	Not confirmed yet	Henüz doğrulanmadı
 	Open Settings	Ayarları Aç
 	Turn On Live Captions	Canlı Altyazıları Aç

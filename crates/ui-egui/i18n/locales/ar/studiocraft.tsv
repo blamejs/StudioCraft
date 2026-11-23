@@ -567,6 +567,7 @@ menu	Transform	التحويل
 	The stream is starting	يجري بدء البث
 	The stream was not started. Fix these first:	لم يبدأ البث. أصلح هذه أولاً:
 	Sources not listed that are not working: {n}	مصادر غير مدرجة لا تعمل: {n}
+	And {n} more	و{n} أخرى
 	Not confirmed yet	لم يتأكد بعد
 	Open Settings	فتح الإعدادات
 	Turn On Live Captions	تشغيل التسميات التوضيحية المباشرة

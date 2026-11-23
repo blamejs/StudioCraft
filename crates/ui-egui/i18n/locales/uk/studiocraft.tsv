@@ -589,6 +589,7 @@ menu	Transform	Перетворення
 	The stream is starting	Трансляція запускається
 	The stream was not started. Fix these first:	Трансляцію не розпочато. Спочатку виправте таке:
 	Sources not listed that are not working: {n}	Непрацюючі джерела, яких немає в списку: {n}
+	And {n} more	І ще {n}
 	Not confirmed yet	Ще не підтверджено
 	Open Settings	Відкрити налаштування
 	Turn On Live Captions	Увімкнути живі субтитри

@@ -575,6 +575,7 @@ menu	Transform	Trasforma
 	The stream is starting	La diretta si sta avviando
 	The stream was not started. Fix these first:	La diretta non è stata avviata. Correggi prima questi punti:
 	Sources not listed that are not working: {n}	Sorgenti non elencate che non funzionano: {n}
+	And {n} more	E altri {n}
 	Not confirmed yet	Non ancora confermato
 	Open Settings	Apri impostazioni
 	Turn On Live Captions	Attiva i sottotitoli in diretta
