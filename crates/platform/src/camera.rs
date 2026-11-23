@@ -346,6 +346,9 @@ fn guarded<T>(f: impl FnOnce() -> Result<T, PlatformError>) -> Result<T, Platfor
 /// Frames in a row the capture could not read before it gives up on the camera.
 const BAD_FRAMES: u32 = 30;
 
+/// Room for readers that join a camera while its capture waits for a frame.
+const SPARE_READERS: usize = 8;
+
 /// What one [`CameraCapture`] shares with the capture thread it reads.
 struct Reader {
     slot: FrameSlot,
@@ -544,16 +547,29 @@ fn stream(backend: &dyn CameraBackend, camera: &CameraInfo, format: Option<Camer
         done.notify_all();
     }
     let (mut bad, mut converter) = (0u32, Converter::default());
-    let (mut readers, mut seen): (Vec<Arc<Reader>>, Option<u64>) = (Vec::new(), None);
+    let (mut readers, mut seen): (Vec<Arc<Reader>>, Option<u64>) = (Vec::with_capacity(SPARE_READERS), None);
+    let mut sized = None;
     while !shared.stop.load(Ordering::Acquire) {
+        // The reader list grows here, between frames, so the frame callback does not allocate.
+        // A busy list is sized at the next frame.
+        let changed = shared.changed.load(Ordering::Acquire);
+        if sized != Some(changed)
+            && let Ok(list) = shared.readers.try_lock()
+        {
+            readers.reserve((list.len() + SPARE_READERS).saturating_sub(readers.len()));
+            sized = Some(changed);
+        }
         stream.next(&mut |bytes, format| {
-            // Read when the frame arrives, so a reader that joined during the wait gets it.
+            // Read when the frame arrives, so a reader that joined during the wait gets it. The
+            // list is read without waiting and only when it fits: otherwise this frame goes to
+            // the readers read before, and the next frame takes the new list.
             let changed = shared.changed.load(Ordering::Acquire);
-            if seen != Some(changed) {
+            if seen != Some(changed)
+                && let Ok(list) = shared.readers.try_lock()
+                && list.len() <= readers.capacity()
+            {
                 readers.clear();
-                if let Ok(list) = shared.readers.lock() {
-                    readers.extend(list.iter().cloned());
-                }
+                readers.extend(list.iter().cloned());
                 seen = Some(changed);
             }
             let Some((first, rest)) = readers.split_first() else { return };
@@ -1283,7 +1299,8 @@ mod tests {
         let backend = Arc::new(Fake { list: vec![camera.clone()], ..Fake::new(rx) });
         let c = CameraCapture::open_with(backend.clone(), &camera.key(), format).unwrap();
         while c.reader.capture.get().is_none() {
-            assert!(c.reader.error.lock().unwrap().is_none(), "{:?}", c.reader.error.lock().unwrap());
+            let error = c.reader.error.lock().unwrap().clone();
+            assert!(error.is_none(), "{error:?}");
             std::thread::yield_now();
         }
         (c, backend)
