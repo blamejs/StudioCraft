@@ -463,6 +463,34 @@ fn the_golive_check_lists_each_item_and_changes_nothing() {
     assert!(s.run("golive.check", &json!({"fix": true})).is_err());
 }
 
+#[test]
+fn golive_now_gives_the_check_without_waiting_for_the_free_space() {
+    let mut p = Profile::default();
+    p.output.folder = std::env::temp_dir().display().to_string();
+    let mut s = studio_with(Some(noop_gpu()), SceneCollection::new("Test", "Scene"), p);
+    // The free space answers only when the test lets it.
+    let (go, gate) = std::sync::mpsc::channel::<()>();
+    let gate = std::sync::Mutex::new(gate);
+    s.set_golive_space_reader(Arc::new(move |_p: &Path| {
+        let _ = gate.lock().unwrap().recv();
+        Ok(golive::MIN_FREE_BYTES * 2)
+    }));
+    let (r, reading) = s.golive_now();
+    assert!(reading, "{r}");
+    assert_eq!(golive_item(&r, "recording_space")["state"], json!("unknown"), "{r}");
+    go.send(()).unwrap();
+    let (r, reading) = loop {
+        let (r, reading) = s.golive_now();
+        if !reading {
+            break (r, reading);
+        }
+        std::thread::yield_now();
+    };
+    assert!(!reading);
+    let space = golive_item(&r, "recording_space");
+    assert_eq!((&space["state"], &space["free_bytes"]), (&json!("pass"), &json!(golive::MIN_FREE_BYTES * 2)), "{r}");
+}
+
 /// A thread that hands over each connection `listener` takes.
 fn connections(listener: std::net::TcpListener) -> std::sync::mpsc::Receiver<std::net::TcpStream> {
     let (tx, rx) = std::sync::mpsc::channel();

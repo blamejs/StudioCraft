@@ -583,6 +583,49 @@ menu	Transform	Dönüştür
 	Typed in Settings › Stream and saved in the profile file as plain text. Anyone who can read that file can read the key.	Ayarlar › Yayın bölümünde yazılır ve profil dosyasına düz metin olarak kaydedilir. O dosyayı okuyabilen herkes anahtarı okuyabilir.
 	Held in memory until you forget it or quit. It is not written to the profile.	Siz unutturana veya çıkana kadar bellekte tutulur. Profile yazılmaz.
 	Any key is the last part of the server address, which is saved in the profile file as plain text.	Varsa anahtar, sunucu adresinin son parçasıdır; adres profil dosyasına düz metin olarak kaydedilir.
+	Go Live to {n}	Yayına Geç ({n})
+	Runs the Go-live check, then starts the stream to every destination that is on when the check finds no problem	Yayın öncesi denetimi çalıştırır, ardından denetim sorun bulmazsa açık olan her hedefe yayını başlatır
+	The stream is running	Yayın sürüyor
+	Running the Go-live check…	Yayın öncesi denetim çalışıyor…
+	Turn on a destination first	Önce bir hedefi açın
+	The stream was not started: {error}	Yayın başlatılmadı: {error}
+	The stream is starting	Yayın başlatılıyor
+	The stream was not started. Fix these first:	Yayın başlatılmadı. Önce bunları düzeltin:
+	Sources not listed that are not working: {n}	Listede olmayan, çalışmayan kaynaklar: {n}
+	And {n} more	Ve {n} tane daha
+	Not confirmed yet	Henüz doğrulanmadı
+	Open Settings	Ayarları Aç
+	Turn On Live Captions	Canlı Altyazıları Aç
+	Open Properties	Özellikleri Aç
+@msg	the Go-live check gave no items	yayın öncesi denetim hiçbir öğe döndürmedi
+@msg	the Go-live check's result could not be read	yayın öncesi denetimin sonucu okunamadı
+@msg	The stream destinations cannot be used: {error}	Yayın hedefleri kullanılamıyor: {error}
+@msg	No stream destination is turned on	Hiçbir yayın hedefi açık değil
+@msg	Destination {name} was changed after the stream started, and sends the change from its next start	{name} hedefi yayın başladıktan sonra değiştirildi ve değişikliği bir sonraki başlangıcından itibaren gönderir
+@msg	Destination {name} has no server	{name} hedefinin sunucusu yok
+@msg	The stream key of destination {name} is not entered for this session	{name} hedefinin yayın anahtarı bu oturum için girilmedi
+@msg	Destination {name} has no stream key	{name} hedefinin yayın anahtarı yok
+@msg	Destination {name} cannot be used: {error}	{name} hedefi kullanılamıyor: {error}
+@msg	Destination {name} is connecting	{name} hedefi bağlanıyor
+@msg	Destination {name} is reconnecting: {error}	{name} hedefi yeniden bağlanıyor: {error}
+@msg	Destination {name} is waiting for the network: {error}	{name} hedefi ağı bekliyor: {error}
+@msg	Destination {name} failed: {error}	{name} hedefi başarısız oldu: {error}
+@msg	Destination {name} is turned on but not sending	{name} hedefi açık ama gönderim yapmıyor
+@msg	Destination {name} is not part of the running stream	{name} hedefi çalışan yayının parçası değil
+@msg	Destination {name} failed on the last stream: {error}	{name} hedefi son yayında başarısız oldu: {error}
+@msg	Destination {name} has not connected yet	{name} hedefi henüz bağlanmadı
+@msg	Nothing can be streamed without the graphics device	Grafik aygıtı olmadan hiçbir şey yayınlanamaz
+@msg	The encoder {encoder} is tested when the stream starts	{encoder} kodlayıcısı yayın başladığında sınanır
+@msg	The stream cannot start: {error}	Yayın başlatılamıyor: {error}
+@msg	Only {free} is free for recordings in {folder}	{folder} içinde kayıtlar için yalnızca {free} boş
+@msg	The free space in the recording folder {folder} could not be read: {error}	{folder} kayıt klasöründeki boş alan okunamadı: {error}
+@msg	The free space in {folder} is still being read	{folder} içindeki boş alan hâlâ okunuyor
+@msg	The source {name} needs a plug-in that is not installed: {kind}	{name} kaynağı yüklü olmayan bir eklentiye ihtiyaç duyuyor: {kind}
+@msg	The source {name} is not working: {error}	{name} kaynağı çalışmıyor: {error}
+@msg	Live captions are starting	Canlı altyazılar başlatılıyor
+@msg	A Live Captions source is in the scenes, and this build has no speech recognition	Sahnelerde bir Canlı Altyazı kaynağı var ve bu sürümde konuşma tanıma yok
+@msg	Live captions are off, and a Live Captions source is in the scenes	Canlı altyazılar kapalı ve sahnelerde bir Canlı Altyazı kaynağı var
+@msg	Live captions stopped: {error}	Canlı altyazılar durdu: {error}
 	Fill Screen	Ekranı Doldur
 @msg	The scenes could not be laid out for the new canvas: {error}	Sahneler yeni tuvale göre yerleştirilemedi: {error}
 	Set up	Hazırlık

@@ -1182,3 +1182,351 @@ fn check_connection_runs_a_check_and_the_service_setting_is_changed() {
     assert_eq!(crate::commands::ui_params("stream.diagnose"), "id: string");
     assert!(crate::commands::ui_params("stream.check_service_set").starts_with("enabled: boolean"));
 }
+
+/// A destination `id` that is on when `enabled`.
+fn turned(id: &str, enabled: bool) -> Destination {
+    Destination { id: id.into(), server: format!("rtmp://{id}.example/live"), enabled, ..Destination::default() }
+}
+
+#[test]
+fn go_live_to_n_counts_the_destinations_that_are_on_and_asks_for_the_check() {
+    let stream = StreamSettings { destinations: vec![turned("a", true), turned("b", false), turned("c", true)], ..StreamSettings::default() };
+    let mut w = Window::new(Shown::of(stream.clone()), StreamingPanel::default());
+    assert!(!w.disabled("Go Live to 2"), "{:?}", w.texts());
+    let Some(button) = w.f.by_label("Go Live to 2") else { panic!("no Go Live to 2: {:?}", w.texts()) };
+    w.f.click(&button).frame(Vec::new());
+    assert!(w.panel.borrow().go_live, "the click asks the window to run the check");
+    assert!(w.acts.borrow().is_empty(), "the button runs no command from the drawing");
+    // The button is off while the stream runs and while no destination is on.
+    let running = Window::new(Shown { running: true, ..Shown::of(stream) }, StreamingPanel::default());
+    assert!(running.disabled("Go Live to 2"));
+    let off = StreamSettings { destinations: vec![turned("a", false)], ..StreamSettings::default() };
+    let mut w = Window::new(Shown::of(off), StreamingPanel::default());
+    assert!(w.disabled("Go Live to 0"));
+    let Some(button) = w.f.by_label("Go Live to 0") else { panic!("no Go Live to 0: {:?}", w.texts()) };
+    w.f.click(&button).frame(Vec::new());
+    assert!(!w.panel.borrow().go_live, "a button that is off asks for nothing");
+    let empty = Window::new(Shown::of(StreamSettings::default()), StreamingPanel::default());
+    assert!(empty.disabled("Go Live to 0"), "no destinations");
+    // While the check runs, the button is off and the row says so.
+    let on = StreamSettings { destinations: vec![turned("a", true)], ..StreamSettings::default() };
+    let checking = StreamingPanel { checking: Some(Instant::now()), ..StreamingPanel::default() };
+    let mut w = Window::new(Shown::of(on), checking);
+    assert!(w.disabled("Go Live to 1"));
+    assert!(w.texts().iter().any(|t| t == "Running the Go-live check…"), "{:?}", w.texts());
+    let Some(button) = w.f.by_label("Go Live to 1") else { panic!("no Go Live to 1: {:?}", w.texts()) };
+    w.f.click(&button).frame(Vec::new());
+    assert!(!w.panel.borrow().go_live, "a running check is not started again");
+}
+
+/// An item of `golive.check` in `state`.
+fn item(state: &str, template: &str, fix: Option<&str>) -> Value {
+    json!({"id": "x", "state": state, "text": template, "template": template, "args": {"name": "Main"}, "fix": fix})
+}
+
+#[test]
+fn the_go_live_check_is_read_without_taking_anything_unknown_as_a_pass() {
+    let unknown = item("unknown", "Destination {name} has not connected yet", None);
+    let pass = item("pass", "Every source is working", None);
+    // Unknown items do not stop the stream and are listed as not confirmed.
+    let c = GoLiveCheck::of(&json!({"ready": false, "problems": 0, "unknown": 1, "more_sources": 0, "items": [pass, unknown]}));
+    assert!(c.ready(), "{c:?}");
+    assert_eq!(c.unknown.len(), 1);
+    assert!(c.problems.is_empty());
+    assert_eq!(c.unknown[0].args, [("name".to_string(), "Main".to_string())]);
+    assert_eq!(c.unknown[0].text(), craft_i18n::fmt("Destination {name} has not connected yet", &[("name", "Main")]));
+    // A problem stops it, with the command that fixes it.
+    let problem = item("problem", "Destination {name} has no server", Some("view.streaming"));
+    let c = GoLiveCheck::of(&json!({"problems": 1, "items": [problem]}));
+    assert!(!c.ready());
+    assert_eq!(c.problems[0].fix.as_deref(), Some("view.streaming"));
+    assert!(c.error.is_none());
+    // A state the window does not know is a problem, never a pass.
+    let c = GoLiveCheck::of(&json!({"problems": 1, "items": [item("maybe", "x", None)]}));
+    assert!(!c.ready());
+    assert_eq!(c.problems.len(), 1);
+    let c = GoLiveCheck::of(&json!({"problems": 1, "items": [{"id": "x"}]}));
+    assert!(!c.ready(), "an item without a state is a problem");
+    // A result the window cannot read stops it too.
+    for bad in [
+        json!({}),
+        json!({"problems": 0}),
+        json!({"problems": 0, "items": "none"}),
+        json!({"items": []}),
+        json!({"problems": 1, "items": []}),
+        json!({"problems": -1, "items": []}),
+        json!({"problems": 0, "items": [item("problem", "x", None)]}),
+    ] {
+        let c = GoLiveCheck::of(&bad);
+        assert!(!c.ready(), "{bad}");
+        assert!(c.error.is_some(), "{bad}");
+    }
+    // A long list is cut, and the count still stops the stream.
+    let many: Vec<Value> = (0..200).map(|_| item("problem", "x", None)).collect();
+    let c = GoLiveCheck::of(&json!({"problems": 200, "items": many}));
+    assert_eq!(c.problems.len(), MAX_CHECK_LINES);
+    assert_eq!(c.more_problems, 200 - MAX_CHECK_LINES);
+    assert!(!c.ready());
+    assert!(c.error.is_none());
+    let many: Vec<Value> = (0..70).map(|_| item("unknown", "x", None)).collect();
+    let c = GoLiveCheck::of(&json!({"problems": 0, "items": many}));
+    assert_eq!(c.unknown.len(), MAX_CHECK_LINES);
+    assert_eq!(c.more_unknown, 70 - MAX_CHECK_LINES);
+    assert!(c.ready());
+}
+
+#[test]
+fn the_window_counts_the_items_it_does_not_list() {
+    let many: Vec<Value> = (0..200).map(|_| item("problem", "x", None)).chain((0..70).map(|_| item("unknown", "y", None))).collect();
+    let check = GoLiveCheck::of(&json!({"problems": 200, "items": many}));
+    let stream = StreamSettings { destinations: vec![turned("a", true)], ..StreamSettings::default() };
+    let w = Window::new(Shown::of(stream), StreamingPanel { golive: Some(check), ..StreamingPanel::default() });
+    let texts = w.texts();
+    let more = |n: usize| craft_i18n::fmt("And {n} more", &[("n", &n.to_string())]);
+    assert!(texts.contains(&more(200 - MAX_CHECK_LINES)), "{texts:?}");
+    assert!(texts.contains(&more(70 - MAX_CHECK_LINES)), "{texts:?}");
+    assert!(!texts.iter().any(|t| t.contains("Sources not listed")), "{texts:?}");
+}
+
+#[test]
+fn the_window_lists_each_problem_with_a_button_for_its_fix() {
+    let line = |id: &str, template: &str, fix: Option<&str>, source: Option<u64>| CheckLine {
+        id: id.into(),
+        template: template.into(),
+        args: vec![("name".into(), "Cam".into())],
+        fix: fix.map(str::to_string),
+        source,
+    };
+    let check = GoLiveCheck {
+        problems: vec![
+            line("destination:a", "Destination {name} has no server", Some("view.streaming"), None),
+            line("encoder", "The stream cannot start: {error}", Some("app.settings"), None),
+            line("source:7", "The source {name} is not working: {error}", Some("selection.properties"), Some(7)),
+            line("captions", "Live captions are off, and a Live Captions source is in the scenes", Some("captions.toggle"), None),
+        ],
+        unknown: vec![line("destination:b", "Destination {name} has not connected yet", None, None)],
+        more_sources: 3,
+        ..GoLiveCheck::default()
+    };
+    let stream = StreamSettings { destinations: vec![turned("a", true)], ..StreamSettings::default() };
+    let panel = || StreamingPanel { golive: Some(check.clone()), ..StreamingPanel::default() };
+    let w = Window::new(Shown::of(stream.clone()), panel());
+    let texts = w.texts();
+    for want in ["The stream was not started. Fix these first:", "Not confirmed yet", "Open Settings", "Open Properties", "Turn On Live Captions"] {
+        assert!(texts.iter().any(|t| t == want), "{want} in {texts:?}");
+    }
+    for l in check.problems.iter().chain(&check.unknown) {
+        assert!(texts.contains(&l.text()), "{} in {texts:?}", l.text());
+    }
+    assert!(texts.iter().any(|t| t.contains("Sources not listed that are not working")), "{texts:?}");
+    assert!(w.acts.borrow().is_empty(), "drawing does nothing");
+    // Each button runs its fix. Turn On Live Captions starts captions, so a second click does not
+    // stop them; Open Properties opens that source's properties.
+    let mut w = Window::new(Shown::of(stream.clone()), panel());
+    let Some(b) = w.f.by_label("Turn On Live Captions") else { panic!("no Turn On Live Captions") };
+    w.f.click(&b);
+    assert!(matches!(w.acts.borrow().as_slice(), [Act::Run(c)] if c.id == "captions.start"));
+    let mut w = Window::new(Shown::of(stream.clone()), panel());
+    let Some(b) = w.f.by_label("Open Properties") else { panic!("no Open Properties") };
+    w.f.click(&b);
+    assert!(matches!(w.acts.borrow().as_slice(), [Act::Properties(studiocraft_model::SourceId(7))]));
+    // Open Settings opens the Stream tab for the encoder and the Output tab for the recording folder.
+    let mut w = Window::new(Shown::of(stream.clone()), panel());
+    let Some(b) = w.f.by_label("Open Settings") else { panic!("no Open Settings") };
+    w.f.click(&b);
+    assert!(w.acts.borrow().is_empty());
+    assert_eq!(w.panel.borrow().open_settings, Some(Tab::Stream));
+    let space = line("recording_space", "Only {free} is free for recordings in {folder}", Some("app.settings"), None);
+    assert!(matches!(fix_act(&space), Some(FixAct::Settings(Tab::Output))));
+    assert!(fix_act(&line("source:8", "x", Some("selection.properties"), None)).is_none(), "no source to open");
+    assert!(fix_act(&line("x", "x", Some("view.streaming"), None)).is_none(), "this window");
+    // A started stream and an error say so.
+    let started = StreamingPanel { golive: Some(GoLiveCheck { started: true, ..GoLiveCheck::default() }), ..StreamingPanel::default() };
+    assert!(Window::new(Shown::of(stream.clone()), started).texts().iter().any(|t| t == "The stream is starting"));
+    let failed = GoLiveCheck { error: Some(Msg::plain("no encoder")), ..GoLiveCheck::default() };
+    let w = Window::new(Shown::of(stream), StreamingPanel { golive: Some(failed), ..StreamingPanel::default() });
+    let want = craft_i18n::fmt("The stream was not started: {error}", &[("error", "no encoder")]);
+    assert!(w.texts().contains(&want), "{:?}", w.texts());
+}
+
+#[test]
+fn go_live_runs_the_check_and_starts_nothing_while_it_finds_a_problem() {
+    let mut a = app();
+    let ctx = crate::test_context();
+    let frame = |a: &mut StudioApp| {
+        let raw = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1280.0, 800.0))), ..Default::default() };
+        a.before_input(&ctx);
+        let mut out = ctx.run_ui(raw, |ui| a.frame(ui));
+        out.textures_delta.clear();
+    };
+    a.studio.set_golive_space_reader(std::sync::Arc::new(|_p: &std::path::Path| Ok(u64::MAX)));
+    run(&mut a, &ctx, "view.streaming", json!({})).unwrap();
+    frame(&mut a);
+    // With no destination on, the check finds a problem and the stream is not started.
+    if let Some(p) = &mut a.streaming {
+        p.go_live = true;
+    }
+    frame(&mut a);
+    assert!(!a.streaming.as_ref().is_some_and(|p| p.go_live), "the request is taken");
+    finish_check(&mut a, &ctx);
+    let Some(check) = a.streaming.as_ref().and_then(|p| p.golive.clone()) else { panic!("the window ran no check") };
+    assert!(check.problems.iter().any(|p| p.template == "No stream destination is turned on"), "{check:?}");
+    assert!(!check.started, "{check:?}");
+    assert!(check.error.is_none(), "{check:?}");
+    assert!(!a.stream_running());
+    // A destination that has not connected is listed as not confirmed. Any problem the check
+    // finds on this computer, such as a missing graphics device, keeps the stream from starting.
+    // The server is a closed port on this computer, so a stream that starts contacts nothing else.
+    run(&mut a, &ctx, "stream.destination_add", json!({"server": "rtmp://127.0.0.1:1/live/secret", "key": "none"})).unwrap();
+    a.go_live(&ctx, Instant::now());
+    finish_check(&mut a, &ctx);
+    let Some(check) = a.streaming.as_ref().and_then(|p| p.golive.clone()) else { panic!("no check") };
+    assert!(check.unknown.iter().any(|u| u.template == "Destination {name} has not connected yet"), "{check:?}");
+    if !check.problems.is_empty() {
+        assert!(!check.started, "{check:?}");
+        assert!(!a.stream_running(), "{check:?}");
+    }
+    if a.stream_running() {
+        run(&mut a, &ctx, "stream.stop", json!({})).unwrap();
+    }
+    // Every sentence the check gave has an English row for its translations.
+    let en = include_str!("../../i18n/locales/en/studiocraft.tsv");
+    for l in check.problems.iter().chain(&check.unknown) {
+        assert!(en.contains(&format!("@msg\t{}\t", l.template)), "no @msg row for {}", l.template);
+    }
+    // A problem's Open Settings opens Settings at the tab it asked for.
+    assert!(a.settings.is_none());
+    if let Some(p) = &mut a.streaming {
+        p.open_settings = Some(Tab::Output);
+    }
+    frame(&mut a);
+    assert_eq!(a.settings.as_ref().map(|w| w.tab), Some(Tab::Output), "Settings opened at the Output tab");
+    assert!(a.streaming.as_ref().is_some_and(|p| p.open_settings.is_none()), "the request is taken");
+    // An open Settings window switches to the tab asked for.
+    if let Some(p) = &mut a.streaming {
+        p.open_settings = Some(Tab::Stream);
+    }
+    frame(&mut a);
+    assert_eq!(a.settings.as_ref().map(|w| w.tab), Some(Tab::Stream));
+    // A list of problems stays while the stream is not running, and "The stream is starting" goes
+    // once the stream is not starting.
+    assert!(!a.stream_running());
+    assert!(a.streaming.as_ref().is_some_and(|p| p.golive.is_some()), "the problems stay");
+    if let Some(p) = &mut a.streaming {
+        p.golive = Some(GoLiveCheck { started: true, ..GoLiveCheck::default() });
+    }
+    frame(&mut a);
+    assert!(a.streaming.as_ref().is_some_and(|p| p.golive.is_none()), "a stream that is not starting is not reported as starting");
+    if let Some(p) = &mut a.streaming {
+        p.golive = Some(GoLiveCheck::default());
+    }
+    // Another profile drops what the check found.
+    if let Some(p) = &mut a.streaming {
+        p.profile = "another".into();
+    }
+    a.sync_streaming_profile();
+    assert!(a.streaming.as_ref().is_some_and(|p| p.golive.is_none()));
+}
+
+/// Look at the running Go-live check until it ends, each time at the moment it started, so the
+/// check waits for the free space however long the test takes.
+fn finish_check(a: &mut StudioApp, ctx: &egui::Context) {
+    while let Some(since) = a.streaming.as_ref().and_then(|p| p.checking) {
+        std::thread::yield_now();
+        a.poll_go_live(ctx, since);
+    }
+}
+
+fn checking(a: &StudioApp) -> Option<Instant> {
+    a.streaming.as_ref().and_then(|p| p.checking)
+}
+
+#[test]
+fn go_live_does_not_wait_for_the_free_space_and_drops_a_check_the_window_no_longer_shows() {
+    let mut a = app();
+    let ctx = crate::test_context();
+    // The free space answers only when the test lets it.
+    let (go, gate) = std::sync::mpsc::channel::<()>();
+    let gate = std::sync::Mutex::new(gate);
+    a.studio.set_golive_space_reader(std::sync::Arc::new(move |_p: &std::path::Path| {
+        let _ = gate.lock().unwrap().recv();
+        Ok(u64::MAX)
+    }));
+    run(&mut a, &ctx, "view.streaming", json!({})).unwrap();
+    let t = Instant::now();
+    a.go_live(&ctx, t);
+    assert_eq!(checking(&a), Some(t), "the click returns while the free space is read");
+    assert!(a.streaming.as_ref().is_some_and(|p| p.golive.is_none()));
+    for _ in 0..100 {
+        a.poll_go_live(&ctx, t);
+        assert_eq!(checking(&a), Some(t), "nothing waits for the free space");
+    }
+    // Once `golive.check`'s wait has passed, the check ends with the free space not confirmed.
+    a.poll_go_live(&ctx, t + studiocraft_studio::GOLIVE_SPACE_WAIT);
+    assert_eq!(checking(&a), None);
+    let Some(check) = a.streaming.as_ref().and_then(|p| p.golive.clone()) else { panic!("no check") };
+    assert!(check.unknown.iter().any(|u| u.id == "recording_space"), "{check:?}");
+    assert!(check.problems.iter().any(|p| p.template == "No stream destination is turned on"), "{check:?}");
+    assert!(!check.started && !a.stream_running(), "{check:?}");
+    // A check whose profile changed, or whose window closed, is dropped.
+    a.go_live(&ctx, t);
+    if let Some(p) = &mut a.streaming {
+        p.profile = "another".into();
+    }
+    a.sync_streaming_profile();
+    assert_eq!(checking(&a), None);
+    a.poll_go_live(&ctx, t);
+    assert!(a.streaming.as_ref().is_some_and(|p| p.golive.is_none()), "the dropped check gives no result");
+    a.go_live(&ctx, t);
+    run(&mut a, &ctx, "view.streaming", json!({})).unwrap();
+    assert!(a.streaming.is_none());
+    a.poll_go_live(&ctx, t);
+    run(&mut a, &ctx, "view.streaming", json!({})).unwrap();
+    assert_eq!(checking(&a), None, "a new window has no check running");
+    // The free space answers, and the next check reads it.
+    go.send(()).unwrap();
+    drop(go);
+    a.go_live(&ctx, t);
+    finish_check(&mut a, &ctx);
+    let Some(check) = a.streaming.as_ref().and_then(|p| p.golive.clone()) else { panic!("no check") };
+    assert!(!check.unknown.iter().chain(&check.problems).any(|l| l.id == "recording_space"), "{check:?}");
+}
+
+#[test]
+fn a_profile_switch_drops_a_running_go_live_check_even_when_the_profile_comes_back() {
+    let mut a = app();
+    let ctx = crate::test_context();
+    // The free space answers only when the test lets it, so the check stays running.
+    let (go, gate) = std::sync::mpsc::channel::<()>();
+    let gate = std::sync::Mutex::new(gate);
+    a.studio.set_golive_space_reader(std::sync::Arc::new(move |_p: &std::path::Path| {
+        let _ = gate.lock().unwrap().recv();
+        Ok(u64::MAX)
+    }));
+    let first = a.studio.profile().name.clone();
+    a.named(crate::Named::DuplicateProfile, "Other").unwrap();
+    run(&mut a, &ctx, "profile.switch", json!({"name": first})).unwrap();
+    run(&mut a, &ctx, "view.streaming", json!({})).unwrap();
+    let t = Instant::now();
+    a.go_live(&ctx, t);
+    assert_eq!(checking(&a), Some(t));
+    // A switch to another profile and back, before the window's next frame.
+    run(&mut a, &ctx, "profile.switch", json!({"name": "Other"})).unwrap();
+    run(&mut a, &ctx, "profile.switch", json!({"name": first})).unwrap();
+    assert_eq!(checking(&a), None, "the switch dropped the check");
+    a.poll_go_live(&ctx, t + studiocraft_studio::GOLIVE_SPACE_WAIT);
+    assert!(a.streaming.as_ref().is_some_and(|p| p.golive.is_none()), "the dropped check gives no result");
+    // A new or duplicated profile is a switch too.
+    a.go_live(&ctx, t);
+    a.named(crate::Named::NewProfile, "Third").unwrap();
+    assert_eq!(checking(&a), None, "a new profile dropped the check");
+    a.go_live(&ctx, t);
+    a.named(crate::Named::DuplicateProfile, "Fourth").unwrap();
+    assert_eq!(checking(&a), None, "a duplicated profile dropped the check");
+    // Renaming the profile keeps the check.
+    a.go_live(&ctx, t);
+    a.named(crate::Named::RenameProfile, "Renamed").unwrap();
+    assert_eq!(checking(&a), Some(t), "a rename is not a switch");
+    go.send(()).unwrap();
+    drop(go);
+}

@@ -562,6 +562,49 @@ menu	Transform	שינוי צורה
 	Typed in Settings › Stream and saved in the profile file as plain text. Anyone who can read that file can read the key.	מוקלד בהגדרות › שידור ונשמר בקובץ הפרופיל כטקסט רגיל. כל מי שיכול לקרוא את הקובץ יכול לקרוא את המפתח.
 	Held in memory until you forget it or quit. It is not written to the profile.	נשמר בזיכרון עד שתשכח אותו או תצא מהיישום. הוא לא נכתב לפרופיל.
 	Any key is the last part of the server address, which is saved in the profile file as plain text.	מפתח, אם יש, הוא החלק האחרון של כתובת השרת, שנשמרת בקובץ הפרופיל כטקסט רגיל.
+	Go Live to {n}	התחלת שידור חי ({n})
+	Runs the Go-live check, then starts the stream to every destination that is on when the check finds no problem	מריץ את הבדיקה שלפני השידור, ואז מתחיל את השידור לכל יעד מופעל אם הבדיקה לא מוצאת בעיה
+	The stream is running	השידור פועל
+	Running the Go-live check…	הבדיקה שלפני השידור פועלת…
+	Turn on a destination first	יש להפעיל יעד קודם
+	The stream was not started: {error}	השידור לא התחיל: {error}
+	The stream is starting	השידור מתחיל
+	The stream was not started. Fix these first:	השידור לא התחיל. יש לתקן קודם את אלה:
+	Sources not listed that are not working: {n}	מקורות שלא ברשימה ואינם פועלים: {n}
+	And {n} more	ועוד {n}
+	Not confirmed yet	טרם אושר
+	Open Settings	פתיחת ההגדרות
+	Turn On Live Captions	הפעלת כתוביות חיות
+	Open Properties	פתיחת המאפיינים
+@msg	the Go-live check gave no items	הבדיקה שלפני השידור לא החזירה פריטים
+@msg	the Go-live check's result could not be read	לא ניתן היה לקרוא את תוצאת הבדיקה שלפני השידור
+@msg	The stream destinations cannot be used: {error}	לא ניתן להשתמש ביעדי השידור: {error}
+@msg	No stream destination is turned on	אף יעד שידור לא מופעל
+@msg	Destination {name} was changed after the stream started, and sends the change from its next start	היעד {name} שונה אחרי שהשידור התחיל, והוא ישלח את השינוי מההפעלה הבאה שלו
+@msg	Destination {name} has no server	ליעד {name} אין שרת
+@msg	The stream key of destination {name} is not entered for this session	מפתח השידור של היעד {name} לא הוזן להפעלה הזו
+@msg	Destination {name} has no stream key	ליעד {name} אין מפתח שידור
+@msg	Destination {name} cannot be used: {error}	לא ניתן להשתמש ביעד {name}: {error}
+@msg	Destination {name} is connecting	היעד {name} מתחבר
+@msg	Destination {name} is reconnecting: {error}	היעד {name} מתחבר מחדש: {error}
+@msg	Destination {name} is waiting for the network: {error}	היעד {name} ממתין לרשת: {error}
+@msg	Destination {name} failed: {error}	היעד {name} נכשל: {error}
+@msg	Destination {name} is turned on but not sending	היעד {name} מופעל אבל לא שולח
+@msg	Destination {name} is not part of the running stream	היעד {name} אינו חלק מהשידור הפעיל
+@msg	Destination {name} failed on the last stream: {error}	היעד {name} נכשל בשידור האחרון: {error}
+@msg	Destination {name} has not connected yet	היעד {name} עדיין לא התחבר
+@msg	Nothing can be streamed without the graphics device	אי אפשר לשדר דבר בלי התקן הגרפיקה
+@msg	The encoder {encoder} is tested when the stream starts	המקודד {encoder} נבדק כשהשידור מתחיל
+@msg	The stream cannot start: {error}	השידור לא יכול להתחיל: {error}
+@msg	Only {free} is free for recordings in {folder}	נותרו רק {free} פנויים להקלטות ב-{folder}
+@msg	The free space in the recording folder {folder} could not be read: {error}	לא ניתן היה לקרוא את השטח הפנוי בתיקיית ההקלטות {folder}: {error}
+@msg	The free space in {folder} is still being read	השטח הפנוי ב-{folder} עדיין נקרא
+@msg	The source {name} needs a plug-in that is not installed: {kind}	המקור {name} צריך תוסף שאינו מותקן: {kind}
+@msg	The source {name} is not working: {error}	המקור {name} לא פועל: {error}
+@msg	Live captions are starting	הכתוביות החיות מתחילות
+@msg	A Live Captions source is in the scenes, and this build has no speech recognition	יש בסצנות מקור של כתוביות חיות, ובגרסה הזו אין זיהוי דיבור
+@msg	Live captions are off, and a Live Captions source is in the scenes	הכתוביות החיות כבויות, ויש בסצנות מקור של כתוביות חיות
+@msg	Live captions stopped: {error}	הכתוביות החיות נעצרו: {error}
 	Fill Screen	מילוי המסך
 @msg	The scenes could not be laid out for the new canvas: {error}	לא ניתן היה לסדר את הסצנות למשטח החדש: {error}
 	Set up	הכנה

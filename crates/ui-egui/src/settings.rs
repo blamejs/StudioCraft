@@ -64,7 +64,8 @@ pub struct SettingsWindow {
     pub check_updates: bool,
     /// The "Use system title bar" setting.
     pub system_title_bar: bool,
-    tab: Tab,
+    /// The tab that is shown.
+    pub(crate) tab: Tab,
     show_key: bool,
     hotkeys: Vec<Hotkey>,
     /// Video encoders the configured ffmpeg offers (empty when it was not found).
