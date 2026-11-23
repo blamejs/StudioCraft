@@ -333,8 +333,9 @@ changed keeps its last picture until the compositor draws the new scene into it.
 draws two such slots a frame, before any other slot, so 16 changed slots take 8 frames.
 
 While the Scenes dock shows its grid, the window sends this command for the tiles on screen, at 2
-pictures a second. A request sent after the window's stays in effect until the tiles on screen
-change, and the window does not stop it when the grid is hidden.
+pictures a second. A request sent after the window's, `{"scenes": []}` included, stays in effect
+until the tiles on screen change or another scene collection is opened, and the window does not
+stop it when the grid is hidden.
 
 It returns `{"scenes", "fps"}` with the list and rate now drawn, or `{"scenes": [], "fps": null}`
 when none is drawn. More than 16 scenes, a scene that does not exist, a scene given twice, and an

@@ -1770,6 +1770,8 @@ impl StudioApp {
     fn load_collection(&mut self, c: SceneCollection) {
         let name = c.name.clone();
         self.studio.load_collection(c);
+        // The new collection draws no scene pictures, so the grid asks for its tiles again.
+        self.asked_pictures = None;
         self.studio.mark_saved();
         self.collection_on_disk = true;
         self.selected = None;
@@ -2149,16 +2151,15 @@ impl StudioApp {
 
     /// Ask for the pictures of the scenes the Scenes dock's grid showed this frame, at
     /// [`DEFAULT_THUMBNAIL_FPS`] pictures a second, when they differ from the scenes the grid last
-    /// asked for or no scene pictures are drawn (a scene collection was opened), and for none once
-    /// the grid is no longer shown. A request that another caller of `scene.thumbnails` made
+    /// asked for or a scene collection was opened since, and for none once the grid is no
+    /// longer shown. A request that another caller of `scene.thumbnails` made
     /// after the grid's is left alone until the grid's scenes change, and is not stopped when the
     /// grid is hidden. The request runs right after the docks are drawn, before the frame's acts,
     /// while every scene it names still exists.
     fn ask_scene_pictures(&mut self) {
         match self.lists.shown_pictures() {
             Some(wanted) => {
-                let none_drawn = self.studio.thumbnail_scenes().is_empty() && !wanted.is_empty();
-                if self.asked_pictures.as_ref().is_none_or(|(asked, _)| asked != wanted) || none_drawn {
+                if self.asked_pictures.as_ref().is_none_or(|(asked, _)| asked != wanted) {
                     let wanted = wanted.to_vec();
                     let params = json!({"scenes": wanted, "fps": DEFAULT_THUMBNAIL_FPS});
                     // A failed request is asked again on the next frame.

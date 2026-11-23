@@ -2593,6 +2593,25 @@ fn the_scene_grid_asks_at_its_own_rate_and_leaves_another_callers_pictures_alone
 }
 
 #[test]
+fn the_scene_grid_leaves_a_later_stop_alone_and_asks_again_for_a_new_collection() {
+    let mut a = app();
+    let ctx = crate::test_context();
+    let size = egui::vec2(1280.0, 800.0);
+    run(&mut a, &ctx, "scenes.view", json!({})).unwrap();
+    frame_at(&mut a, &ctx, size);
+    assert!(!a.studio().thumbnail_scenes().is_empty(), "the grid asks for its pictures");
+    run(&mut a, &ctx, "scene.thumbnails", json!({"scenes": []})).unwrap();
+    frame_at(&mut a, &ctx, size);
+    frame_at(&mut a, &ctx, size);
+    assert!(a.studio().thumbnail_scenes().is_empty(), "a later request to stop the pictures is left alone");
+    run(&mut a, &ctx, "collection.new", json!({})).unwrap();
+    a.answer_dialog(&ctx, true, Some("Second")).unwrap();
+    frame_at(&mut a, &ctx, size);
+    let ids: Vec<SceneId> = a.studio().collection().scenes.iter().map(|s| s.id).collect();
+    assert_eq!(a.studio().thumbnail_scenes(), ids.as_slice(), "the new collection's tiles are asked for");
+}
+
+#[test]
 fn a_scene_tile_shows_the_shortcut_the_keymap_binds_now() {
     let mut a = app();
     let ctx = crate::test_context();
