@@ -1,15 +1,16 @@
 //! Cameras: listing them and their formats, and capture.
 //!
 //! The system's cameras come from Media Foundation on Windows, AVFoundation on macOS and V4L2 on
-//! Linux, all behind one [`CameraBackend`]. A [`CameraCapture`] runs on a thread of its own: it
-//! opens the camera, converts each frame into a spare frame of a [`FrameSlot`] and publishes it,
-//! so the source thread takes the newest picture without waiting and frames are reused.
+//! Linux, all behind one [`CameraBackend`]. A camera is streamed by one thread of its own, which
+//! opens it, converts each frame once and publishes it into a [`FrameSlot`] for each
+//! [`CameraCapture`] reading that camera, so every source thread takes the newest picture without
+//! waiting and frames are reused. The camera closes when its last reader is dropped.
 //!
 //! A camera is stored in settings as its name and the system's id for it ([`CameraInfo::key`]).
 //! When that exact camera is gone, capture opens the first camera with the same name.
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
 
 use studiocraft_media::video::VideoFrame;
@@ -180,13 +181,14 @@ const KNOWN_CAMERAS: usize = 32;
 #[derive(Default)]
 struct Cameras {
     /// The cameras whose capture thread is running, with what that thread shares with its
-    /// source. A camera is listed at most once.
+    /// readers. A camera is listed at most once.
     open: Vec<(String, Arc<Shared>)>,
     /// The cameras whose formats are being read outside a capture.
     reading: Vec<String>,
 }
 
-/// [`Cameras`], with the condition signaled when a format read ends.
+/// [`Cameras`], with the condition signaled when a format read ends, a capture opens its camera
+/// or ends, and when a reader is dropped.
 fn capturing() -> &'static (Mutex<Cameras>, Condvar) {
     static CAMERAS: OnceLock<(Mutex<Cameras>, Condvar)> = OnceLock::new();
     CAMERAS.get_or_init(|| (Mutex::new(Cameras::default()), Condvar::new()))
@@ -205,41 +207,73 @@ impl Drop for Reading {
     }
 }
 
-/// Reserves a camera for one capture while it lives.
+/// Reserves a camera for one capture thread while it lives.
 struct Capturing(Arc<Shared>);
 
+/// What [`Capturing::reserve`] found for a reader.
+enum Reserved {
+    /// The reader joined the capture thread that streams the camera.
+    Joined,
+    /// No capture streams the camera: the calling thread captures it for this reader.
+    Owner(Capturing),
+    /// The reader was dropped before it joined a capture.
+    Dropped,
+}
+
 impl Capturing {
-    /// Reserve `key` for the capture sharing `shared`. A camera that another capture holds is an
-    /// error: "the camera is still closing" when that capture was stopped and its thread still
-    /// waits on the camera, otherwise "the camera is in use by another camera source". Waits
-    /// while the camera's formats are being read.
-    fn reserve(key: String, shared: &Arc<Shared>) -> Result<Capturing, PlatformError> {
+    /// Join `reader` to the capture of `key`, or reserve `key` for a new capture with `reader` as
+    /// its first reader. A capture that is still opening its camera is waited for, and the reader
+    /// joins it once it streams; when it fails instead, this thread captures the camera. A camera
+    /// whose capture was stopped while its thread still waits on the camera is an error: "the
+    /// camera is still closing". Waits while the camera's formats are being read.
+    fn reserve(key: String, reader: &Arc<Reader>) -> Result<Reserved, PlatformError> {
         let cannot = || PlatformError::Failed("the camera capture could not start".into());
         let (lock, done) = capturing();
         let mut cameras = lock.lock().map_err(|_| cannot())?;
-        while cameras.reading.contains(&key) {
-            cameras = done.wait(cameras).map_err(|_| cannot())?;
+        loop {
+            if reader.stop.load(Ordering::Acquire) {
+                return Ok(Reserved::Dropped);
+            }
+            if cameras.reading.contains(&key) {
+                cameras = done.wait(cameras).map_err(|_| cannot())?;
+                continue;
+            }
+            let Some((_, shared)) = cameras.open.iter().find(|(k, _)| *k == key) else { break };
+            if shared.stop.load(Ordering::Acquire) {
+                return Err(PlatformError::Failed("the camera is still closing".into()));
+            }
+            if shared.format.get().is_none() {
+                #[cfg(test)]
+                reader.waited.store(true, Ordering::Release);
+                cameras = done.wait(cameras).map_err(|_| cannot())?;
+                continue;
+            }
+            let shared = Arc::clone(shared);
+            shared.join(reader).map_err(|()| cannot())?;
+            let _ = reader.capture.set(shared);
+            return Ok(Reserved::Joined);
         }
-        let open = &mut cameras.open;
-        if let Some((_, other)) = open.iter().find(|(k, _)| *k == key) {
-            return Err(PlatformError::Failed(if other.stop.load(Ordering::Acquire) {
-                "the camera is still closing".into()
-            } else {
-                "the camera is in use by another camera source".into()
-            }));
-        }
-        open.push((key, Arc::clone(shared)));
-        Ok(Capturing(Arc::clone(shared)))
+        let shared = Arc::new(Shared {
+            readers: Mutex::new(vec![Arc::clone(reader)]),
+            changed: AtomicU64::new(0),
+            stop: AtomicBool::new(false),
+            format: OnceLock::new(),
+        });
+        cameras.open.push((key, Arc::clone(&shared)));
+        let _ = reader.capture.set(Arc::clone(&shared));
+        Ok(Reserved::Owner(Capturing(shared)))
     }
 }
 
 impl Drop for Capturing {
     fn drop(&mut self) {
-        if let Ok(mut cameras) = capturing().0.lock()
+        let (lock, done) = capturing();
+        if let Ok(mut cameras) = lock.lock()
             && let Some(i) = cameras.open.iter().position(|(_, s)| Arc::ptr_eq(s, &self.0))
         {
             cameras.open.swap_remove(i);
         }
+        done.notify_all();
     }
 }
 
@@ -301,15 +335,23 @@ fn guarded<T>(f: impl FnOnce() -> Result<T, PlatformError>) -> Result<T, Platfor
 /// Frames in a row the capture could not read before it gives up on the camera.
 const BAD_FRAMES: u32 = 30;
 
-/// What the capture thread and the source share.
-struct Shared {
+/// What one [`CameraCapture`] shares with the capture thread it reads.
+struct Reader {
     slot: FrameSlot,
+    /// Set when the [`CameraCapture`] is dropped.
     stop: AtomicBool,
     /// Why the capture failed, once it has.
     error: Mutex<Option<PlatformError>>,
+    /// The format this reader asked for; `None` for the camera's default.
+    wanted: Option<CameraFormat>,
+    /// The capture the reader joined, set once it has.
+    capture: OnceLock<Arc<Shared>>,
+    /// Whether the reader waited for a camera that was opening.
+    #[cfg(test)]
+    waited: AtomicBool,
 }
 
-impl Shared {
+impl Reader {
     fn fail(&self, e: PlatformError) {
         if let Ok(mut error) = self.error.lock() {
             error.get_or_insert(e);
@@ -318,66 +360,154 @@ impl Shared {
     }
 }
 
-/// A camera being captured. Dropping it stops the capture thread after its current frame.
+/// What a capture thread shares with its readers.
+struct Shared {
+    /// The readers the thread publishes each frame to.
+    readers: Mutex<Vec<Arc<Reader>>>,
+    /// Counts the changes to `readers`, so the thread copies the list only when it changed.
+    changed: AtomicU64,
+    /// Set when the last reader leaves.
+    stop: AtomicBool,
+    /// The format the camera was opened in, once it streams.
+    format: OnceLock<CameraFormat>,
+}
+
+impl Shared {
+    /// Add `reader`; `Err` when the list cannot be locked.
+    fn join(&self, reader: &Arc<Reader>) -> Result<(), ()> {
+        self.readers.lock().map_err(|_| ())?.push(Arc::clone(reader));
+        self.changed.fetch_add(1, Ordering::AcqRel);
+        Ok(())
+    }
+
+    /// Remove `reader`; the thread stops after its current frame once no reader is left.
+    fn leave(&self, reader: &Arc<Reader>) {
+        if let Ok(mut readers) = self.readers.lock() {
+            readers.retain(|r| !Arc::ptr_eq(r, reader));
+            if readers.is_empty() {
+                self.stop.store(true, Ordering::Release);
+            }
+        } else {
+            self.stop.store(true, Ordering::Release);
+        }
+        self.changed.fetch_add(1, Ordering::AcqRel);
+    }
+
+    /// Fail every reader with `e`.
+    fn fail(&self, e: &PlatformError) {
+        if let Ok(readers) = self.readers.lock() {
+            for r in readers.iter() {
+                r.fail(e.clone());
+            }
+        }
+    }
+}
+
+/// A camera being read. Several captures of one camera share its capture thread: each gets every
+/// frame, converted once. Dropping the last capture of a camera stops its thread after the
+/// current frame.
 pub struct CameraCapture {
-    shared: Arc<Shared>,
+    reader: Arc<Reader>,
 }
 
 impl CameraCapture {
     /// Capture the system camera `key` ([`CameraInfo::key`]; empty for the first camera) in
     /// `format`, or in [`default_format`] when it is `None`. Returns at once; the camera opens on
-    /// the capture thread.
+    /// the capture thread. A camera that another capture of this app already reads is shared in
+    /// the format it was opened in ([`CameraCapture::other_format`]).
     pub fn open(key: &str, format: Option<CameraFormat>) -> Result<CameraCapture, PlatformError> {
         CameraCapture::open_with(system(), key, format)
     }
 
     /// [`CameraCapture::open`] with the cameras of `backend`.
     pub fn open_with(backend: Arc<dyn CameraBackend>, key: &str, format: Option<CameraFormat>) -> Result<CameraCapture, PlatformError> {
-        let shared = Arc::new(Shared { slot: FrameSlot::default(), stop: AtomicBool::new(false), error: Mutex::new(None) });
-        let (theirs, want) = (Arc::clone(&shared), CameraInfo::parse_key(key));
+        let reader = Arc::new(Reader {
+            slot: FrameSlot::default(),
+            stop: AtomicBool::new(false),
+            error: Mutex::new(None),
+            wanted: format,
+            capture: OnceLock::new(),
+            #[cfg(test)]
+            waited: AtomicBool::new(false),
+        });
+        let (theirs, want) = (Arc::clone(&reader), CameraInfo::parse_key(key));
         // The thread is not joined: a camera can keep it waiting for a frame, and it ends on its
         // own once it sees the stop flag or its camera fails. Until then the camera stays
-        // reserved for it (`Capturing`).
+        // reserved for it (`Capturing`). A thread whose reader joins another capture ends at
+        // once.
         std::thread::Builder::new()
             .name("camera capture".into())
             .spawn(move || {
-                if let Err(e) = guarded(|| run(backend.as_ref(), &want, format, &theirs)) {
+                if let Err(e) = guarded(|| run(backend.as_ref(), &want, &theirs)) {
                     theirs.fail(e);
                 }
             })
             .map_err(|_| PlatformError::Failed("the camera capture could not start".into()))?;
-        Ok(CameraCapture { shared })
+        Ok(CameraCapture { reader })
     }
 
     /// The newest picture into `frame` (RGBA, or BGRA for BGR cameras). [`PlatformError::Waiting`]
     /// until the camera sends its first frame, [`PlatformError::Unchanged`] while no newer frame
     /// has arrived, and the reason once the capture failed.
     pub fn grab(&mut self, frame: &mut VideoFrame) -> Result<(), PlatformError> {
-        if self.shared.slot.take(frame) {
+        if self.reader.slot.take(frame) {
             return Ok(());
         }
-        match self.shared.slot.state() {
+        match self.reader.slot.state() {
             State::Waiting => Err(PlatformError::Waiting),
             State::Streaming => Err(PlatformError::Unchanged),
-            _ => Err(self.shared.error.lock().ok().and_then(|e| e.clone()).unwrap_or_else(|| PlatformError::Failed("the camera stopped".into()))),
+            _ => Err(self.reader.error.lock().ok().and_then(|e| e.clone()).unwrap_or_else(|| PlatformError::Failed("the camera stopped".into()))),
         }
+    }
+
+    /// The format the camera streams in, when this capture asked for another one: the camera was
+    /// already open in that format for another capture, and this one shares it.
+    pub fn other_format(&self) -> Option<CameraFormat> {
+        let open = *self.reader.capture.get()?.format.get()?;
+        self.reader.wanted.filter(|w| *w != open).map(|_| open)
     }
 }
 
 impl Drop for CameraCapture {
     fn drop(&mut self) {
-        self.shared.stop.store(true, Ordering::Release);
+        self.reader.stop.store(true, Ordering::Release);
+        let (lock, done) = capturing();
+        // Under the lock, so a reader cannot join a capture whose last reader is leaving.
+        let cameras = lock.lock();
+        if let Some(shared) = self.reader.capture.get() {
+            shared.leave(&self.reader);
+        }
+        drop(cameras);
+        done.notify_all();
     }
 }
 
-/// The capture thread: find and open the camera, then convert frames until stopped. Returns `Ok`
-/// when stopped.
-fn run(backend: &dyn CameraBackend, want: &CameraInfo, format: Option<CameraFormat>, shared: &Arc<Shared>) -> Result<(), PlatformError> {
+/// The capture thread: find the camera and join the capture that streams it, or open it and
+/// convert frames until its last reader is dropped. Returns `Ok` once the reader joined another
+/// capture, or when stopped; a failure of the stream fails every reader.
+fn run(backend: &dyn CameraBackend, want: &CameraInfo, reader: &Arc<Reader>) -> Result<(), PlatformError> {
     let list = backend.cameras()?;
     let camera = best_match(&list, want).and_then(|i| list.get(i)).ok_or_else(|| {
         PlatformError::NotFound(if want.name.is_empty() { "a camera".into() } else { format!("the camera \u{201c}{}\u{201d}", want.name) })
     })?;
-    let _capturing = Capturing::reserve(camera.key(), shared)?;
+    let capturing = match Capturing::reserve(camera.key(), reader)? {
+        Reserved::Joined | Reserved::Dropped => return Ok(()),
+        Reserved::Owner(c) => c,
+    };
+    let shared = Arc::clone(&capturing.0);
+    let streamed = guarded(|| stream(backend, camera, reader.wanted, &shared));
+    // The camera is free for a new capture before the readers learn of the failure, so a
+    // reader that opens it again does not join this one.
+    drop(capturing);
+    if let Err(e) = streamed {
+        shared.fail(&e);
+    }
+    Ok(())
+}
+
+/// Open `camera` in `format` (the default one when `None`) and publish its frames to the readers
+/// of `shared` until it is stopped.
+fn stream(backend: &dyn CameraBackend, camera: &CameraInfo, format: Option<CameraFormat>, shared: &Shared) -> Result<(), PlatformError> {
     let offered = read_formats(backend, camera);
     let format = match format {
         Some(f) if offered.is_empty() || offered.contains(&f) => f,
@@ -385,16 +515,40 @@ fn run(backend: &dyn CameraBackend, want: &CameraInfo, format: Option<CameraForm
         None => default_format(&offered).ok_or_else(|| PlatformError::Failed("the camera offers no format StudioCraft reads".into()))?,
     };
     let mut stream = backend.open(camera, format)?;
+    {
+        // Readers waiting for the camera to open join now.
+        let (lock, done) = capturing();
+        let cameras = lock.lock();
+        let _ = shared.format.set(format);
+        drop(cameras);
+        done.notify_all();
+    }
     let (mut bad, mut converter) = (0u32, Converter::default());
+    let (mut readers, mut seen): (Vec<Arc<Reader>>, Option<u64>) = (Vec::new(), None);
     while !shared.stop.load(Ordering::Acquire) {
         stream.next(&mut |bytes, format| {
-            let mut frame = shared.slot.spare();
+            // Read when the frame arrives, so a reader that joined during the wait gets it.
+            let changed = shared.changed.load(Ordering::Acquire);
+            if seen != Some(changed) {
+                readers.clear();
+                if let Ok(list) = shared.readers.lock() {
+                    readers.extend(list.iter().cloned());
+                }
+                seen = Some(changed);
+            }
+            let Some((first, rest)) = readers.split_first() else { return };
+            let mut frame = first.slot.spare();
             if converter.convert(bytes, format, &mut frame) {
                 bad = 0;
-                shared.slot.publish(frame);
+                for r in rest {
+                    let mut copy = r.slot.spare();
+                    copy_picture(&frame, &mut copy);
+                    r.slot.publish(copy);
+                }
+                first.slot.publish(frame);
             } else {
                 bad = bad.saturating_add(1);
-                shared.slot.recycle(frame);
+                first.slot.recycle(frame);
             }
         })?;
         if bad >= BAD_FRAMES {
@@ -402,6 +556,16 @@ fn run(backend: &dyn CameraBackend, want: &CameraInfo, format: Option<CameraForm
         }
     }
     Ok(())
+}
+
+/// Copy the picture of `from` into `to`, reusing `to`'s buffer.
+fn copy_picture(from: &VideoFrame, to: &mut VideoFrame) {
+    to.width = from.width;
+    to.height = from.height;
+    to.format = from.format;
+    to.pts = from.pts;
+    to.data.clear();
+    to.data.extend_from_slice(&from.data);
 }
 
 /// Media Foundation, AVFoundation and V4L2 cameras.
@@ -827,6 +991,8 @@ mod tests {
         reads: std::sync::atomic::AtomicUsize,
         /// How many times the stream started waiting for a step.
         waits: Arc<std::sync::atomic::AtomicUsize>,
+        /// When set, the first format read waits for a message on it.
+        formats_gate: Mutex<Option<mpsc::Receiver<()>>>,
     }
 
     impl Fake {
@@ -844,6 +1010,7 @@ mod tests {
                 dropped: Arc::new(AtomicBool::new(false)),
                 reads: std::sync::atomic::AtomicUsize::new(0),
                 waits: Arc::default(),
+                formats_gate: Mutex::new(None),
             }
         }
 
@@ -886,7 +1053,11 @@ mod tests {
             Ok(self.list.clone())
         }
         fn formats(&self, _camera: &CameraInfo) -> Result<Vec<CameraFormat>, PlatformError> {
+            let gate = self.formats_gate.lock().unwrap().take();
             self.reads.fetch_add(1, Ordering::AcqRel);
+            if let Some(gate) = gate {
+                gate.recv().unwrap();
+            }
             self.formats.clone()
         }
         fn open(&self, camera: &CameraInfo, format: CameraFormat) -> Result<Box<dyn CameraStream>, PlatformError> {
@@ -1074,19 +1245,160 @@ mod tests {
         grab_after(&mut c, &tx3, Step::Frame(vec![1, 2], GRAY), &mut f).unwrap();
     }
 
+    /// Grab until the capture gives something other than `Waiting` or `Unchanged`.
+    fn grab_next(c: &mut CameraCapture, f: &mut VideoFrame) -> Result<(), PlatformError> {
+        loop {
+            match c.grab(f) {
+                Err(PlatformError::Waiting) | Err(PlatformError::Unchanged) => std::thread::yield_now(),
+                other => return other,
+            }
+        }
+    }
+
+    /// A camera `c` streams, and a second capture of it opened through a backend of its own,
+    /// once that capture has joined the first. Returns the second backend too, to show it was
+    /// never opened.
+    fn second_capture(camera: &CameraInfo, format: Option<CameraFormat>) -> (CameraCapture, Arc<Fake>) {
+        let (_, rx) = mpsc::channel::<Step>();
+        let backend = Arc::new(Fake { list: vec![camera.clone()], ..Fake::new(rx) });
+        let c = CameraCapture::open_with(backend.clone(), &camera.key(), format).unwrap();
+        while c.reader.capture.get().is_none() {
+            assert!(c.reader.error.lock().unwrap().is_none(), "{:?}", c.reader.error.lock().unwrap());
+            std::thread::yield_now();
+        }
+        (c, backend)
+    }
+
     #[test]
-    fn a_camera_is_captured_by_one_source_at_a_time() {
-        let shared = cam("Shared camera", "one-capture");
+    fn two_captures_of_one_camera_get_the_same_frames() {
+        let camera = cam("Shared camera", "two-readers");
         let (tx, rx) = mpsc::channel();
-        let first = Arc::new(Fake { list: vec![shared.clone()], ..Fake::new(rx) });
-        let mut c = CameraCapture::open_with(first, &shared.key(), Some(GRAY)).unwrap();
+        let first = Arc::new(Fake { list: vec![camera.clone()], ..Fake::new(rx) });
+        let mut a = CameraCapture::open_with(first.clone(), &camera.key(), Some(GRAY)).unwrap();
+        let (mut fa, mut fb) = (VideoFrame::default(), VideoFrame::default());
+        grab_after(&mut a, &tx, Step::Frame(vec![1, 2], GRAY), &mut fa).unwrap();
+        let (mut b, second) = second_capture(&camera, Some(GRAY));
+        assert_eq!(b.grab(&mut fb), Err(PlatformError::Waiting), "nothing before the next frame");
+        for frame in [vec![3, 4], vec![5, 6]] {
+            grab_after(&mut a, &tx, Step::Frame(frame.clone(), GRAY), &mut fa).unwrap();
+            grab_next(&mut b, &mut fb).unwrap();
+            let gray = [frame[0], frame[0], frame[0], 255, frame[1], frame[1], frame[1], 255];
+            assert_eq!((fa.data.as_slice(), fb.data.as_slice()), (gray.as_slice(), gray.as_slice()), "both get the frame");
+            assert_eq!((fb.width, fb.height, fb.format), (2, 1, PixelFormat::Rgba8));
+        }
+        assert_eq!(first.opened.lock().unwrap().len(), 1, "the camera was opened once");
+        assert!(second.opened.lock().unwrap().is_empty(), "the second capture opened nothing");
+        assert_eq!((a.other_format(), b.other_format()), (None, None));
+    }
+
+    #[test]
+    fn the_last_capture_of_a_camera_closes_it() {
+        let camera = cam("Shared camera", "last-reader");
+        let (tx, rx) = mpsc::channel();
+        let first = Arc::new(Fake { list: vec![camera.clone()], ..Fake::new(rx) });
+        let dropped = Arc::clone(&first.dropped);
+        let mut a = CameraCapture::open_with(first.clone(), &camera.key(), Some(GRAY)).unwrap();
         let mut f = VideoFrame::default();
-        grab_after(&mut c, &tx, Step::Frame(vec![1, 2], GRAY), &mut f).unwrap();
-        let (_, rx2) = mpsc::channel::<Step>();
-        let second = Fake { list: vec![shared.clone()], ..Fake::new(rx2) };
-        assert_eq!(failure(second, &shared.key(), Some(GRAY)), PlatformError::Failed("the camera is in use by another camera source".into()));
-        grab_after(&mut c, &tx, Step::Frame(vec![3, 4], GRAY), &mut f).unwrap();
-        assert_eq!(f.data[0], 3, "the first capture keeps running");
+        grab_after(&mut a, &tx, Step::Frame(vec![1, 2], GRAY), &mut f).unwrap();
+        let (b, _second) = second_capture(&camera, Some(GRAY));
+        drop(b);
+        grab_after(&mut a, &tx, Step::Frame(vec![3, 4], GRAY), &mut f).unwrap();
+        assert!(!dropped.load(Ordering::Acquire), "one capture still reads the camera");
+        first.until_waiting(3);
+        drop(a);
+        tx.send(Step::Frame(vec![5, 6], GRAY)).unwrap();
+        while !dropped.load(Ordering::Acquire) || capturing().0.lock().unwrap().open.iter().any(|(k, _)| *k == camera.key()) {
+            std::thread::yield_now();
+        }
+    }
+
+    #[test]
+    fn a_capture_dropped_while_its_camera_waits_for_a_frame_leaves_the_others_reading() {
+        let camera = cam("Shared camera", "dropped-mid-frame");
+        let (tx, rx) = mpsc::channel();
+        let first = Arc::new(Fake { list: vec![camera.clone()], ..Fake::new(rx) });
+        let mut a = CameraCapture::open_with(first.clone(), &camera.key(), Some(GRAY)).unwrap();
+        let (mut fa, mut fb) = (VideoFrame::default(), VideoFrame::default());
+        grab_after(&mut a, &tx, Step::Frame(vec![1, 2], GRAY), &mut fa).unwrap();
+        let (mut b, _second) = second_capture(&camera, Some(GRAY));
+        // The thread that opened the camera waits for a frame with both readers listed; the
+        // capture it opened for is dropped meanwhile.
+        first.until_waiting(2);
+        drop(a);
+        for frame in [vec![7, 8], vec![9, 10]] {
+            tx.send(Step::Frame(frame.clone(), GRAY)).unwrap();
+            grab_next(&mut b, &mut fb).unwrap();
+            assert_eq!(fb.data[0], frame[0]);
+        }
+        assert!(!first.dropped.load(Ordering::Acquire), "the camera stays open for the other capture");
+    }
+
+    #[test]
+    fn a_capture_that_asks_for_another_format_shares_the_one_the_camera_is_open_in() {
+        let camera = cam("Shared camera", "format-conflict");
+        let (tx, rx) = mpsc::channel();
+        let first = Arc::new(Fake { list: vec![camera.clone()], ..Fake::new(rx) });
+        let mut a = CameraCapture::open_with(first.clone(), &camera.key(), Some(GRAY)).unwrap();
+        let (mut fa, mut fb) = (VideoFrame::default(), VideoFrame::default());
+        grab_after(&mut a, &tx, Step::Frame(vec![1, 2], GRAY), &mut fa).unwrap();
+        let (mut b, _second) = second_capture(&camera, Some(HD));
+        let (c, _third) = second_capture(&camera, None);
+        assert_eq!(b.other_format(), Some(GRAY), "the camera is open in another format");
+        assert_eq!((a.other_format(), c.other_format()), (None, None), "the format it asked for, and no choice");
+        grab_after(&mut a, &tx, Step::Frame(vec![3, 4], GRAY), &mut fa).unwrap();
+        grab_next(&mut b, &mut fb).unwrap();
+        assert_eq!((fb.width, fb.height), (2, 1), "frames come in the open format");
+        assert_eq!(first.opened.lock().unwrap().as_slice(), &[(camera, GRAY)]);
+    }
+
+    #[test]
+    fn a_failed_camera_fails_every_capture_and_opens_again_for_both() {
+        let camera = cam("Shared camera", "fails-both");
+        let (tx, rx) = mpsc::channel();
+        let first = Arc::new(Fake { list: vec![camera.clone()], ..Fake::new(rx) });
+        let mut a = CameraCapture::open_with(first, &camera.key(), Some(GRAY)).unwrap();
+        let (mut fa, mut fb) = (VideoFrame::default(), VideoFrame::default());
+        grab_after(&mut a, &tx, Step::Frame(vec![1, 2], GRAY), &mut fa).unwrap();
+        let (mut b, _second) = second_capture(&camera, Some(GRAY));
+        let unplugged = Err(PlatformError::Failed("the camera stopped (unplugged)".into()));
+        assert_eq!(grab_after(&mut a, &tx, Step::Fail("the camera stopped (unplugged)"), &mut fa), unplugged);
+        assert_eq!(grab_next(&mut b, &mut fb), unplugged, "the other capture is told too");
+        drop((a, b));
+        // Each source opens its camera again: the first to do so captures it, and the other joins.
+        let (tx2, rx2) = mpsc::channel();
+        let again = Arc::new(Fake { list: vec![camera.clone()], ..Fake::new(rx2) });
+        let mut a = CameraCapture::open_with(again.clone(), &camera.key(), Some(GRAY)).unwrap();
+        grab_after(&mut a, &tx2, Step::Frame(vec![1, 2], GRAY), &mut fa).unwrap();
+        let (mut b, _) = second_capture(&camera, Some(GRAY));
+        grab_after(&mut a, &tx2, Step::Frame(vec![3, 4], GRAY), &mut fa).unwrap();
+        grab_next(&mut b, &mut fb).unwrap();
+        assert_eq!((fa.data[0], fb.data[0]), (3, 3));
+        assert_eq!(again.opened.lock().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn a_capture_opened_while_the_camera_opens_waits_and_takes_over_when_that_open_fails() {
+        let camera = cam("Shared camera", "open-fails-for-the-first");
+        let (_tx, rx) = mpsc::channel::<Step>();
+        let (release, held) = mpsc::channel();
+        let first = Arc::new(Fake { list: vec![camera.clone()], formats_gate: Mutex::new(Some(held)), ..Fake::new(rx) });
+        let odd = CameraFormat { width: 999, height: 9, fps: 7, pixel: CameraPixel::Rgb };
+        // The first capture asks for a format the camera does not offer, and its format read waits.
+        let mut a = CameraCapture::open_with(first.clone(), &camera.key(), Some(odd)).unwrap();
+        while first.reads.load(Ordering::Acquire) == 0 {
+            std::thread::yield_now();
+        }
+        let (tx2, rx2) = mpsc::channel();
+        let second = Arc::new(Fake { list: vec![camera.clone()], ..Fake::new(rx2) });
+        let mut b = CameraCapture::open_with(second.clone(), &camera.key(), None).unwrap();
+        while !b.reader.waited.load(Ordering::Acquire) {
+            std::thread::yield_now();
+        }
+        release.send(()).unwrap();
+        let mut f = VideoFrame::default();
+        assert_eq!(grab_next(&mut a, &mut f), Err(PlatformError::Failed("the camera does not offer 999 x 9, 7 fps, RGB".into())));
+        grab_after(&mut b, &tx2, Step::Frame(vec![1, 2], GRAY), &mut f).unwrap();
+        assert_eq!(second.opened.lock().unwrap().as_slice(), &[(camera, HD)], "the second capture opened it at the default format");
     }
 
     /// A camera, `slow`, whose format read waits until the test lets it finish; other cameras

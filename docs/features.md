@@ -146,7 +146,7 @@ The camera source behaves as follows:
 | A camera is plugged in or out while the Properties window is open | The lists update within about 3 seconds. |
 | A saved camera is not plugged in | The camera shows as "(not connected)". |
 | The camera is missing, in use by another program, unplugged, or sends nothing for 5 seconds | The Properties window reports it, and the source opens the camera again every 2 seconds. |
-| A second camera source shows the same camera | One camera shows in one camera source at a time. The second source reports that the camera is in use by another camera source. |
+| Several camera sources show the same camera | Every source shows the camera's pictures, and the camera is opened once. It stays in the format of the source that opened it first. A source that chose another format shows the camera in that format and reports that the camera is already open in another format. The camera closes when the last of these sources is removed. |
 | A camera is listed for the first time on macOS | The system asks for camera access. |
 
 [docs/architecture.md](architecture.md#camera-capture) describes how the capture thread opens,

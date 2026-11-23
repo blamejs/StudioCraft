@@ -345,7 +345,7 @@
 	the audio stream ended	انتهى دفق الصوت
 	the audio stream failed	حدث خطأ في دفق الصوت
 	the camera capture could not start	تعذّر بدء التقاط الكاميرا
-	the camera is in use by another camera source	الكاميرا مستخدمة من مصدر كاميرا آخر
+	the camera is already open in another format	الكاميرا مفتوحة بالفعل بتنسيق آخر
 	the camera is still closing	لا تزال الكاميرا قيد الإغلاق
 	the camera offers no format StudioCraft reads	لا تقدم الكاميرا أي تنسيق يقرؤه StudioCraft
 	the camera sends frames that cannot be read	ترسل الكاميرا إطارات لا يمكن قراءتها
