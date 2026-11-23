@@ -170,8 +170,10 @@ and the rest of the app keeps running.
 
 ## Cameras
 
-**"the camera is in use by another camera source".** One camera shows in one camera source at a
-time. Remove the other camera source, or pick another camera.
+**"the camera is already open in another format".** Another camera source opened the same camera
+first, in a different format. The camera stays in that format while any source shows it, and this
+source shows the picture in that format. Set this source to the format the camera is open in, or
+remove every source of that camera and add them again with the format you want.
 
 **"the camera is still closing".** A capture of the same camera is still ending. The source tries
 again on its own.

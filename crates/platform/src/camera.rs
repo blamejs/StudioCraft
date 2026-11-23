@@ -996,8 +996,8 @@ mod tests {
     }
 
     impl Fake {
-        /// Two cameras, Desk and Room, with ids of their own: tests run at once, and a camera
-        /// is reserved for one capture in the whole process.
+        /// Two cameras, Desk and Room, with ids of their own: tests run at once, and every
+        /// capture of one camera id in the process shares that camera's capture thread.
         fn new(steps: mpsc::Receiver<Step>) -> Fake {
             static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
             let n = NEXT.fetch_add(1, Ordering::Relaxed);
