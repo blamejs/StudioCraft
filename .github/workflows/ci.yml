@@ -18,10 +18,12 @@ concurrency:
 
 jobs:
   gate:
-    # Pinned to craft-common-actions main at 2026-11-22T16:44Z; move the pin to take later changes.
-    uses: storytold/craft-common-actions/.github/workflows/gate.yml@8de74722ef8928135c7b6754124476bbec5a1c91
+    # Pinned to craft-common-actions main at 2026-11-23T00:57Z; move the pin to take later changes.
+    uses: storytold/craft-common-actions/.github/workflows/gate.yml@f89e5837566e579e522d418912b8998e58e820b1
     with:
       timeout-minutes: 90
+      # The unreached-rs script stops with an error on the "." entry in the workspace members.
+      unreached-rs-mode: "off"
       packages: >-
         pkg-config libxkbcommon-dev libwayland-dev libx11-dev libxcb1-dev libxcursor-dev
         libxrandr-dev libxi-dev libfontconfig1-dev libfreetype-dev mesa-vulkan-drivers
@@ -30,7 +32,7 @@ jobs:
   # Checks that the app compiles on the hosts the release builds on (Windows and Ubuntu 22.04),
   # with the locked dependencies.
   release-hosts:
-    uses: storytold/craft-common-actions/.github/workflows/gate.yml@8de74722ef8928135c7b6754124476bbec5a1c91
+    uses: storytold/craft-common-actions/.github/workflows/gate.yml@f89e5837566e579e522d418912b8998e58e820b1
     with:
       timeout-minutes: 60
       os: '["windows-latest"]'
