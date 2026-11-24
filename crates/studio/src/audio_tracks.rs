@@ -178,7 +178,8 @@ impl Studio {
     }
 
     /// `kind` is about to start at `start` on the studio clock: start the take that follows it
-    /// now, before its first sample, so the take's first sample is the output's.
+    /// now, before its first sample, so the take's first sample is the output's. The take is
+    /// named after `recording`: the recording's file, or the stream's copy.
     pub(crate) fn audio_tracks_output_starting(&mut self, kind: OutputKind, start: Tick, recording: Option<&Path>) {
         let (enabled, when) = (self.profile.audio_tracks.enabled, self.profile.audio_tracks.when);
         if !enabled || self.audio_tracks.reported {

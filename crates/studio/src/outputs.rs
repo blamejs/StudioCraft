@@ -525,7 +525,12 @@ impl Outputs {
         }
         let a = self.active.remove(&kind)?;
         let target = if kind == OutputKind::Streaming { a.instance.target() } else { a.target.clone() };
-        let copy = a.instance.stream_copy().map(|_| (CopySlot::default(), std::mem::take(&mut self.copy_noticed)));
+        let before = a.instance.stream_copy();
+        let copy = before.is_some().then(|| (CopySlot::default(), std::mem::take(&mut self.copy_noticed)));
+        if before.is_some() {
+            // Shown while the copy finishes, until the stop's state replaces it.
+            self.last_copy = before;
+        }
         let slot = copy.as_ref().map(|(s, _)| Arc::clone(s));
         // The instance stays reachable here, so it can be stopped on this thread when no thread
         // can be started for it.
@@ -1664,8 +1669,9 @@ impl Studio {
         } else {
             None
         };
-        // Audio tracks start with the output, so their first sample is the output's.
-        self.audio_tracks_output_starting(kind, start, reserved.as_deref());
+        // Audio tracks start with the output, so their first sample is the output's. A stream's
+        // take is named after its copy, when it has one.
+        self.audio_tracks_output_starting(kind, start, reserved.as_deref().or(copy.as_deref()));
         let instance = match output.start(&settings, job) {
             Ok(instance) => instance,
             Err(e) => {
@@ -2448,6 +2454,8 @@ mod tests {
         failure: Arc<Mutex<Option<String>>>,
         ended: StreamCopyState,
         stopped: bool,
+        /// When set, the stop waits until this gate's sender is dropped.
+        gate: Option<std::sync::mpsc::Receiver<()>>,
     }
 
     impl OutputInstance for CopyingStream {
@@ -2464,6 +2472,9 @@ mod tests {
             String::new()
         }
         fn stop(&mut self) -> Result<(), PluginError> {
+            if let Some(gate) = self.gate.take() {
+                let _ = gate.recv();
+            }
             self.stopped = true;
             Ok(())
         }
@@ -2487,8 +2498,13 @@ mod tests {
     }
 
     fn copying(o: &mut Outputs, ended: StreamCopyState) -> Arc<Mutex<Option<String>>> {
+        copying_gated(o, ended, None)
+    }
+
+    /// [`copying`], with a stop that waits on `gate` when one is given.
+    fn copying_gated(o: &mut Outputs, ended: StreamCopyState, gate: Option<std::sync::mpsc::Receiver<()>>) -> Arc<Mutex<Option<String>>> {
         let failure = Arc::new(Mutex::new(None));
-        let instance = Box::new(CopyingStream { failure: Arc::clone(&failure), ended, stopped: false });
+        let instance = Box::new(CopyingStream { failure: Arc::clone(&failure), ended, stopped: false, gate });
         let active = Active {
             id: 1,
             instance,
@@ -2535,6 +2551,23 @@ mod tests {
         assert!(o.stop(OutputKind::Streaming, false).is_some());
         let texts = notices_until_idle(&mut o);
         assert_eq!(texts[1], ("The stream's copy could not be finished: not finished".to_string(), true));
+    }
+
+    #[test]
+    fn a_streams_copy_stays_shown_while_the_stream_stops() {
+        let path = PathBuf::from("/videos/Stream 2026-11-23 10-00-00.mkv");
+        let mut o = Outputs::default();
+        let saved = StreamCopyState { path: path.clone(), bytes: 9, finished: true, ..StreamCopyState::default() };
+        let (release, gate) = std::sync::mpsc::channel::<()>();
+        let _ = copying_gated(&mut o, saved.clone(), Some(gate));
+        assert!(o.stop(OutputKind::Streaming, false).is_some());
+        // The stop waits on the gate, so the copy is still finishing.
+        let _ = o.poll();
+        let finishing = o.stream_copy();
+        assert!(finishing.as_ref().is_some_and(|c| c.path == path && !c.finished), "{finishing:?}");
+        drop(release);
+        let _ = notices_until_idle(&mut o);
+        assert_eq!(o.stream_copy(), Some(saved), "the stop's state replaces it");
     }
 
     #[test]

@@ -1903,6 +1903,52 @@ mod audio_tracks {
     }
 
     #[test]
+    fn a_streams_take_is_named_after_its_copy() {
+        use studiocraft_model::{Destination, KeyRef};
+        // Only a broken build waits this long for a connection that should come at once.
+        const GUARD: Duration = Duration::from_secs(60);
+        let dir = std::env::temp_dir().join(format!("studiocraft-tracks-copy-name-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        // The names of the next two minutes are taken, so the copy's name has a number.
+        let now = chrono::Local::now();
+        for s in 0..120 {
+            let stamp = (now + chrono::TimeDelta::seconds(s)).format("%Y-%m-%d %H-%M-%S");
+            std::fs::write(dir.join(format!("Stream {stamp}.mkv")), b"older").unwrap();
+        }
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("rtmp://127.0.0.1:{}/live", l.local_addr().unwrap().port());
+        let incoming = connections(l);
+        let mut p = small_profile();
+        p.output.folder = dir.to_string_lossy().into_owned();
+        p.audio_tracks.enabled = true;
+        p.audio_tracks.when = AudioTracksWhen::Streaming;
+        p.audio_tracks.buffer_mib = 16;
+        p.stream.key = "profile-key".into();
+        p.stream.save_copy = true;
+        p.stream.destinations = vec![Destination { id: "a".into(), server: url, key: KeyRef::Profile, ..Destination::default() }];
+        let mut s = studio_with(Some(noop_gpu()), SceneCollection::new("Test", "Scene"), p);
+        s.run("source.add", &json!({"kind": "audio_input", "name": "Mic"})).unwrap();
+        s.run("source.add", &json!({"kind": "audio_output", "name": "Desk"})).unwrap();
+        s.start_output(OutputKind::Streaming).unwrap();
+        let conn = incoming.recv_timeout(GUARD).expect("the stream connects");
+        let copy = s.outputs.stream_copy().expect("the stream has a copy").path;
+        let stem = copy.file_stem().unwrap().to_string_lossy().into_owned();
+        assert!(stem.starts_with("Stream ") && stem.ends_with(" (2)"), "{stem}");
+        armed(&mut s);
+        assert!(dir.join(format!("{stem} Audio")).is_dir(), "the take has the copy's name");
+        drop(conn);
+        s.stop_output(OutputKind::Streaming);
+        while s.output(OutputKind::Streaming).is_some() {
+            s.tick();
+            std::thread::yield_now();
+        }
+        s.finish_audio_tracks_blocking();
+        drop(s);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn a_take_handed_to_an_output_that_fails_opens_when_nothing_follows_it() {
         let (mut s, dir) = studio("handoff-fails", true);
         let fake = Arc::new(crate::audio_editor::tests::Fake::default());

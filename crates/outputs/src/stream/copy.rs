@@ -20,17 +20,17 @@
 use std::fs::File;
 use std::io::{BufWriter, Seek, Write};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use craft_media::matroska::{MkvWriter, MuxOptions, TrackSpec};
-use craft_packet::{Kind, Receiver, RecvError};
+use craft_packet::{Kind, Monitor, Receiver, RecvError, Stats};
 use studiocraft_media::stats::EncoderStats;
 use studiocraft_plugin::StreamCopyState;
 
-use super::{RECV_WAIT, lock, lost};
+use super::{RECV_WAIT, lock};
 use crate::native::{Counted, Track, writing_app};
 
 /// A file the copy can be written to.
@@ -43,6 +43,12 @@ pub(crate) type Open = Box<dyn FnOnce() -> std::io::Result<Box<dyn CopyFile>> + 
 
 /// How often a stop looks again whether the copy is finished.
 const FINISH_POLL: Duration = Duration::from_millis(10);
+
+/// The packets a subscription with the counters `s` lost: those dropped when its ring was full,
+/// skipped as stale, or released without being written.
+fn lost(s: &Stats) -> u64 {
+    s.dropped_packets.saturating_add(s.skipped_packets).saturating_add(s.discarded_packets)
+}
 
 /// A new file at `path`, written through a 1 MiB buffer.
 pub(crate) fn create(path: &Path) -> Open {
@@ -58,7 +64,6 @@ pub(crate) fn create(path: &Path) -> Open {
 struct Shared {
     /// Bytes in the file.
     stats: Arc<EncoderStats>,
-    lost: AtomicU64,
     finished: AtomicBool,
     /// Leave the file as it is: the thread ends without finishing it.
     abandon: AtomicBool,
@@ -79,6 +84,9 @@ impl Shared {
 pub(crate) struct StreamCopy {
     path: PathBuf,
     shared: Arc<Shared>,
+    /// The copy's subscription, whose counters the ring keeps while a write waits or after it
+    /// fails. `None` for a copy that could not start.
+    monitor: Option<Monitor>,
     thread: Option<JoinHandle<()>>,
 }
 
@@ -90,6 +98,7 @@ impl StreamCopy {
             audio.codec_delay_ns = 0;
         }
         let shared = Arc::new(Shared::default());
+        let monitor = Some(rx.monitor());
         let (sh, shown) = (Arc::clone(&shared), path.display().to_string());
         let thread = std::thread::Builder::new().name("stream copy".into()).spawn(move || write(open, tracks, rx, &sh, &shown));
         let thread = match thread {
@@ -99,21 +108,21 @@ impl StreamCopy {
                 None
             }
         };
-        StreamCopy { path, shared, thread }
+        StreamCopy { path, shared, monitor, thread }
     }
 
     /// A copy to `path` that could not start, for `message`.
     pub(crate) fn failed(path: PathBuf, message: String) -> StreamCopy {
         let shared = Arc::new(Shared::default());
         shared.fail(message);
-        StreamCopy { path, shared, thread: None }
+        StreamCopy { path, shared, monitor: None, thread: None }
     }
 
     pub(crate) fn state(&self) -> StreamCopyState {
         StreamCopyState {
             path: self.path.clone(),
             bytes: self.shared.stats.bytes.load(Ordering::Relaxed),
-            lost_packets: self.shared.lost.load(Ordering::Relaxed),
+            lost_packets: self.monitor.as_ref().map_or(0, |m| lost(&m.stats())),
             finished: self.shared.finished.load(Ordering::SeqCst),
             failure: lock(&self.shared.failure).clone(),
         }
@@ -177,9 +186,7 @@ fn write(open: Open, tracks: Vec<TrackSpec>, mut rx: Receiver, shared: &Shared, 
         if let Err(e) = mux.write_frame(track as usize, pts, keyframe, packet.data(), None) {
             return shared.fail(could_not(&e));
         }
-        shared.lost.store(lost(&rx), Ordering::Relaxed);
     }
-    shared.lost.store(lost(&rx), Ordering::Relaxed);
     let not_finished = |e: &dyn std::fmt::Display| format!("the copy of the stream at {shown} could not be finished: {e}");
     let mut w = match mux.finish() {
         Ok(w) => w,

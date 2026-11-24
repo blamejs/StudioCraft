@@ -1807,6 +1807,17 @@ fn a_copy_whose_disk_stalls_holds_back_neither_the_stream_nor_the_destination() 
     let stalled = out.stream_copy().unwrap();
     assert_eq!((stalled.bytes, stalled.finished, stalled.failure.as_deref()), (0, false, None), "{stalled:?}");
     assert!(matches!(out.status(), OutputStatus::Running), "{:?}", out.status());
+    // The packets the copy loses while its first write waits are counted before that write
+    // returns. GUARD only ends a test that would otherwise hang.
+    let waited = Instant::now();
+    loop {
+        let s = out.stream_copy().unwrap();
+        if s.lost_packets > 0 {
+            break;
+        }
+        assert!(waited.elapsed() < GUARD, "the stalled copy counted no lost packets: {s:?}");
+        std::thread::yield_now();
+    }
     drop(release);
     drop(feed);
     out.stop().unwrap();
