@@ -33,7 +33,7 @@ use studiocraft_studio::diagnose::{Check, CheckState, Diagnosis, Evidence, Outco
 
 use crate::i18n::Msg;
 use crate::kit::option_card::{OptionCard, OptionCardStyle, OptionCards};
-use crate::logos::{self, Logos, ROW_TILE, TileStyle};
+use crate::logos::{self, HEADER_TILE, Logos, ROW_TILE, TileStyle};
 use crate::settings::{Tab, key_source};
 use crate::{Act, StudioApp, theme};
 
@@ -715,7 +715,7 @@ pub(crate) fn add_tiles() -> Vec<AddTile> {
 }
 
 /// Add Destination: a row of tiles, one per streaming service with its logo where the service
-/// allows it at this size and a plain tile otherwise, and one for a custom server. A click on a
+/// allows it at this size and its badge otherwise, and one for a custom server. A click on a
 /// tile adds a destination for it. Every tile is off while the profile holds `full` destinations.
 fn add_row(ui: &mut Ui, full: bool, logos: &mut Logos, acts: &mut Vec<Act>) {
     let style = TileStyle::of(ui.ctx());
@@ -738,7 +738,7 @@ fn add_row(ui: &mut Ui, full: bool, logos: &mut Logos, acts: &mut Vec<Act>) {
     });
 }
 
-/// One tile of [`add_row`], `size` points large: its logo or plain tile over its name. A tile in a
+/// One tile of [`add_row`], `size` points large: its logo, badge or plain tile over its name. A tile in a
 /// disabled `ui` is drawn faded and does nothing.
 fn add_tile(ui: &mut Ui, tile: &AddTile, size: egui::Vec2, style: &TileStyle, font: &egui::FontId, logos: &mut Logos) -> egui::Response {
     let enabled = ui.is_enabled();
@@ -759,7 +759,7 @@ fn add_tile(ui: &mut Ui, tile: &AddTile, size: egui::Vec2, style: &TileStyle, fo
         let tile_radius = style.row_radius;
         match logos::logo(tile.service).filter(|l| l.fits_row(ROW_TILE, ui.ctx().pixels_per_point())) {
             Some(l) => logos.paint(ui, logo, l, style, tile_radius),
-            None => Logos::paint_plain(ui, logo, style, tile_radius),
+            None => Logos::paint_plain(ui, logo, tile.service, style, tile_radius),
         }
         let color = if enabled { style.text } else { style.text_disabled };
         let name = painter.layout_no_wrap(tile.label.clone(), font.clone(), color);
@@ -786,7 +786,7 @@ fn row(ui: &mut Ui, view: &View, d: &Destination, live: Option<&DestinationState
     };
     let _ = Row::new().fill_width().show(ui, |ui, _| {
         // A destination set up for a service shows the service's logo where it may stand beside
-        // text at this size, and a plain tile otherwise.
+        // text at this size, and the service's badge otherwise.
         if preset.is_some() {
             let (tile, _) = ui.allocate_exact_size(vec2(ROW_TILE, ROW_TILE), Sense::hover());
             if ui.is_rect_visible(tile) {
@@ -794,7 +794,7 @@ fn row(ui: &mut Ui, view: &View, d: &Destination, live: Option<&DestinationState
                 let radius = style.row_radius;
                 match logos::logo(&d.service).filter(|l| l.fits_row(ROW_TILE, ui.ctx().pixels_per_point())) {
                     Some(l) => panel.logos.paint(ui, tile, l, &style, radius),
-                    None => Logos::paint_plain(ui, tile, &style, radius),
+                    None => Logos::paint_plain(ui, tile, &d.service, &style, radius),
                 }
             }
         }
@@ -901,22 +901,32 @@ fn check_row(ui: &mut Ui, view: &View, d: &Destination, acts: &mut Vec<Act>) {
     });
 }
 
-/// The logo of the service `e` is set up for, on a row of its own at its full size, linked to the
-/// service's page about streaming.
+/// The logo of the service `e` is set up for, on a row of its own at its full size, or the
+/// service's badge when it has no logo, linked to the service's page about streaming.
 fn details_logo(ui: &mut Ui, e: &Edit, logos: &mut Logos, acts: &mut Vec<Act>) {
-    let (Some(svc), Some(l)) = (services::service(&e.service), logos::logo(&e.service)) else { return };
-    let tile = l.header_tile(ui.ctx().pixels_per_point());
-    let (rect, r) = ui.allocate_exact_size(vec2(l.header_width(tile), tile), Sense::click());
+    let Some(svc) = services::service(&e.service) else { return };
+    let logo = logos::logo(&e.service);
+    let (size, gap) = match logo {
+        Some(l) => {
+            let tile = l.header_tile(ui.ctx().pixels_per_point());
+            (vec2(l.header_width(tile), tile), l.header_gap(tile))
+        }
+        None => (vec2(HEADER_TILE, HEADER_TILE), HEADER_TILE / 4.0),
+    };
+    let (rect, r) = ui.allocate_exact_size(size, Sense::click());
     let hint = craft_i18n::fmt(tl!("Where {service} shows your server and key"), &[("service", svc.name)]);
     r.widget_info(|| WidgetInfo::labeled(Role::Link, true, &hint));
     if ui.is_rect_visible(rect) {
         let style = TileStyle::of(ui.ctx());
-        logos.paint(ui, rect, l, &style, style.details_radius);
+        match logo {
+            Some(l) => logos.paint(ui, rect, l, &style, style.details_radius),
+            None => Logos::paint_badge(ui, rect, svc, &style, style.details_radius),
+        }
     }
     if r.on_hover_text(&hint).clicked() {
         acts.push(Act::OpenUrl(svc.source.to_string()));
     }
-    ui.add_space(l.header_gap(tile));
+    ui.add_space(gap);
 }
 
 /// The Service choices: Custom server, each service of [`SERVICES`], and `current` when this

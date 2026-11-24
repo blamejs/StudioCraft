@@ -563,6 +563,7 @@ impl Studio {
                 RuntimeAction::RecordingMarker { name } => result = self.add_recording_marker(name)?,
                 RuntimeAction::MarkerAdd { name } => result = self.add_marker(name)?,
                 RuntimeAction::MarkerList => result = self.marker_list(),
+                RuntimeAction::MarkerRename { index, name } => result = self.rename_marker(index, name)?,
                 RuntimeAction::RecordingsList => result = self.list_recordings()?,
                 RuntimeAction::StartRecording => self.start_output(OutputKind::Recording)?,
                 RuntimeAction::StopRecording => self.stop_output(OutputKind::Recording),
@@ -1340,6 +1341,11 @@ impl Studio {
     /// Why a source is not working, if it is not.
     pub fn source_error(&self, id: SourceId) -> Option<String> {
         self.sources.error(id)
+    }
+
+    /// A note a working source shows beside its picture, in English. It is not an error.
+    pub fn source_notice(&self, id: SourceId) -> Option<&'static str> {
+        self.sources.notice(id)
     }
 
     /// Meter levels of an audio source.

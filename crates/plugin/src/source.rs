@@ -47,6 +47,11 @@ pub trait SourceInstance {
     fn produce(&mut self, io: &SourceIo) -> Result<(), PluginError>;
     /// New settings (already normalized against the schema).
     fn update(&mut self, settings: &Settings, io: &SourceIo) -> Result<(), PluginError>;
+    /// A note shown beside a source that works, such as a setting it cannot follow right now. It
+    /// is read after each [`SourceInstance::produce`] and is not an error. `None` by default.
+    fn notice(&self) -> Option<&'static str> {
+        None
+    }
 }
 
 /// What a video source shows.

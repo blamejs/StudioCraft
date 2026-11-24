@@ -26,6 +26,7 @@ pub struct SourceHandle {
     pub io: SourceIo,
     ctl: Sender<Msg>,
     error: Arc<Mutex<Option<String>>>,
+    notice: Arc<Mutex<Option<&'static str>>>,
 }
 
 impl SourceHandle {
@@ -33,12 +34,13 @@ impl SourceHandle {
     pub fn spawn(id: SourceId, plugin: Arc<dyn Source>, settings: Settings, clock: MasterClock) -> std::io::Result<SourceHandle> {
         let io = SourceIo::new(clock);
         let (ctl, rx) = channel();
-        let error = Arc::new(Mutex::new(None));
-        let (thread_io, thread_error) = (io.clone(), Arc::clone(&error));
+        let (error, notice) = (Arc::new(Mutex::new(None)), Arc::new(Mutex::new(None)));
+        let status = Status { error: Arc::clone(&error), notice: Arc::clone(&notice) };
+        let thread_io = io.clone();
         std::thread::Builder::new()
             .name(format!("source {id} ({})", plugin.id()))
-            .spawn(move || run(plugin.as_ref(), settings, &thread_io, &rx, &thread_error))?;
-        Ok(SourceHandle { io, ctl, error })
+            .spawn(move || run(plugin.as_ref(), settings, &thread_io, &rx, &status))?;
+        Ok(SourceHandle { io, ctl, error, notice })
     }
 
     /// New settings for the running instance.
@@ -51,6 +53,12 @@ impl SourceHandle {
     pub fn error(&self) -> Option<String> {
         self.error.try_lock().ok().and_then(|e| e.clone())
     }
+
+    /// The note a working source shows ([`SourceInstance::notice`]). Never waits: a busy lock
+    /// reads as no news.
+    pub fn notice(&self) -> Option<&'static str> {
+        self.notice.try_lock().ok().and_then(|n| *n)
+    }
 }
 
 impl Drop for SourceHandle {
@@ -60,9 +68,25 @@ impl Drop for SourceHandle {
     }
 }
 
-fn set_error(slot: &Mutex<Option<String>>, e: Option<String>) {
-    if let Ok(mut s) = slot.lock() {
-        *s = e;
+/// What a source thread reports to its [`SourceHandle`].
+struct Status {
+    error: Arc<Mutex<Option<String>>>,
+    notice: Arc<Mutex<Option<&'static str>>>,
+}
+
+impl Status {
+    /// The outcome of a call into the instance: its note when it works, or the error.
+    fn set(&self, r: Result<Option<&'static str>, String>) {
+        let (notice, error) = match r {
+            Ok(n) => (n, None),
+            Err(e) => (None, Some(e)),
+        };
+        if let Ok(mut s) = self.error.lock() {
+            *s = error;
+        }
+        if let Ok(mut n) = self.notice.lock() {
+            *n = notice;
+        }
     }
 }
 
@@ -75,7 +99,7 @@ fn guarded<T>(what: &str, f: impl FnOnce() -> Result<T, studiocraft_plugin::Plug
     }
 }
 
-fn run(plugin: &dyn Source, mut settings: Settings, io: &SourceIo, rx: &Receiver<Msg>, error: &Mutex<Option<String>>) {
+fn run(plugin: &dyn Source, mut settings: Settings, io: &SourceIo, rx: &Receiver<Msg>, status: &Status) {
     let mut instance: Option<Box<dyn SourceInstance>> = None;
     let mut retry_at = Instant::now();
     let mut next = Instant::now();
@@ -85,15 +109,16 @@ fn run(plugin: &dyn Source, mut settings: Settings, io: &SourceIo, rx: &Receiver
         if instance.is_none() && Instant::now() >= retry_at {
             match guarded("source start", || plugin.create(&settings, io)) {
                 Ok(mut i) => {
-                    let r = guarded("source", || i.produce(io));
+                    // The note is read inside the guard too: a plug-in can panic in it.
+                    let r = guarded("source", || i.produce(io).map(|()| i.notice()));
                     failed = r.is_err();
                     retry_at = Instant::now() + RETRY;
-                    set_error(error, r.err());
+                    status.set(r);
                     instance = Some(i);
                     next = Instant::now();
                 }
                 Err(e) => {
-                    set_error(error, Some(e));
+                    status.set(Err(e));
                     retry_at = Instant::now() + RETRY;
                 }
             }
@@ -103,11 +128,11 @@ fn run(plugin: &dyn Source, mut settings: Settings, io: &SourceIo, rx: &Receiver
                 let now = Instant::now();
                 if now >= next {
                     if let Some(i) = instance.as_mut() {
-                        let r = guarded("source", || i.produce(io));
+                        let r = guarded("source", || i.produce(io).map(|()| i.notice()));
                         if let Err(e) = &r {
                             log::debug!("source produce failed: {e}");
                         }
-                        set_error(error, r.err());
+                        status.set(r);
                     }
                     // Late by more than a period: start counting again from now.
                     next = if now.duration_since(next) > period { now + period } else { next + period };
@@ -118,10 +143,10 @@ fn run(plugin: &dyn Source, mut settings: Settings, io: &SourceIo, rx: &Receiver
                 if Instant::now() >= retry_at
                     && let Some(i) = instance.as_mut()
                 {
-                    let r = guarded("source", || i.produce(io));
+                    let r = guarded("source", || i.produce(io).map(|()| i.notice()));
                     failed = r.is_err();
                     retry_at = Instant::now() + RETRY;
-                    set_error(error, r.err());
+                    status.set(r);
                 }
                 if failed { retry_at.saturating_duration_since(Instant::now()) } else { Duration::from_millis(500) }
             }
@@ -132,10 +157,10 @@ fn run(plugin: &dyn Source, mut settings: Settings, io: &SourceIo, rx: &Receiver
             Ok(Msg::Update(s)) => {
                 settings = s;
                 if let Some(i) = instance.as_mut() {
-                    let r = guarded("source settings", || i.update(&settings, io).and_then(|()| i.produce(io)));
+                    let r = guarded("source settings", || i.update(&settings, io).and_then(|()| i.produce(io)).map(|()| i.notice()));
                     failed = r.is_err();
                     retry_at = Instant::now() + RETRY;
-                    set_error(error, r.err());
+                    status.set(r);
                 } else {
                     retry_at = Instant::now();
                 }
@@ -205,6 +230,11 @@ impl SourceSet {
 
     pub fn error(&self, id: SourceId) -> Option<String> {
         self.running.get(&id).and_then(|e| e.handle.error())
+    }
+
+    /// The note a working source shows ([`SourceHandle::notice`]).
+    pub fn notice(&self, id: SourceId) -> Option<&'static str> {
+        self.running.get(&id).and_then(|e| e.handle.notice())
     }
 
     /// The size of what a source shows, once it has shown something.
@@ -296,6 +326,65 @@ mod tests {
         fn create(&self, _: &Settings, _: &SourceIo) -> Result<Box<dyn SourceInstance>, PluginError> {
             panic!("plug-in bug")
         }
+    }
+
+    /// A source that works and has a note to show, or panics when asked for it.
+    struct Noting(bool);
+    impl Plugin for Noting {
+        fn id(&self) -> &'static str {
+            "noting"
+        }
+        fn name(&self) -> &'static str {
+            "Noting"
+        }
+        fn schema(&self) -> SettingsSchema {
+            SettingsSchema::default()
+        }
+    }
+    struct NotingInstance(bool);
+    impl SourceInstance for NotingInstance {
+        fn pace(&self) -> Pace {
+            Pace::Static
+        }
+        fn produce(&mut self, _: &SourceIo) -> Result<(), PluginError> {
+            Ok(())
+        }
+        fn update(&mut self, _: &Settings, _: &SourceIo) -> Result<(), PluginError> {
+            Ok(())
+        }
+        fn notice(&self) -> Option<&'static str> {
+            if self.0 {
+                panic!("plug-in bug");
+            }
+            Some("the setting is not followed")
+        }
+    }
+    impl Source for Noting {
+        fn caps(&self) -> SourceCaps {
+            SourceCaps { video: true, audio: false }
+        }
+        fn create(&self, _: &Settings, _: &SourceIo) -> Result<Box<dyn SourceInstance>, PluginError> {
+            Ok(Box::new(NotingInstance(self.0)))
+        }
+    }
+
+    /// Run `plugin`'s thread until it has started the source and produced once.
+    fn started(plugin: &Noting) -> Status {
+        let (ctl, rx) = channel();
+        ctl.send(Msg::Stop).unwrap();
+        let status = Status { error: Arc::default(), notice: Arc::default() };
+        run(plugin, Settings::new(), &SourceIo::new(MasterClock::new()), &rx, &status);
+        status
+    }
+
+    #[test]
+    fn a_working_sources_note_is_reported_apart_from_its_error() {
+        let status = started(&Noting(false));
+        assert_eq!(*status.notice.lock().unwrap(), Some("the setting is not followed"));
+        assert_eq!(*status.error.lock().unwrap(), None, "the source is working");
+        let status = started(&Noting(true));
+        assert_eq!(*status.error.lock().unwrap(), Some("internal error in source".into()), "a panic in the note becomes an error");
+        assert_eq!(*status.notice.lock().unwrap(), None);
     }
 
     fn wait_for(mut f: impl FnMut() -> bool) -> bool {

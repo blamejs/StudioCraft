@@ -735,10 +735,11 @@ impl Reach {
 }
 
 /// Opens a TCP connection to `addr` and, with [`Reach::tls`], completes a TLS handshake over it,
-/// then closes the connection. Sends no RTMP bytes and no stream key: only what TCP and the TLS
-/// handshake send. A refused or timed-out connection is [`Error::Connect`] with `addr`, and a
-/// failed handshake is [`Error::Tls`], [`Error::Timeout`] or [`Error::Closed`], as for
-/// [`Publisher::connect`].
+/// then closes the connection. After a handshake it sends close_notify, shuts its sending side
+/// and reads until the server closes its side, for at most 1 s and never past the handshake's
+/// timeout, then closes the socket. Sends no RTMP bytes and no stream key: only what TCP and the TLS handshake send. A
+/// refused or timed-out connection is [`Error::Connect`] with `addr`, and a failed handshake is
+/// [`Error::Tls`], [`Error::Timeout`] or [`Error::Closed`], as for [`Publisher::connect`].
 pub fn reach(r: &Reach, addr: SocketAddr) -> Result<(), Error> {
     if [r.connect_timeout, r.tls_timeout].iter().any(|t| t.is_zero() || *t > MAX_TIMEOUT) {
         return Err(Error::BadConfig("every timeout must be longer than 0 and at most 24 hours"));
@@ -750,11 +751,38 @@ pub fn reach(r: &Reach, addr: SocketAddr) -> Result<(), Error> {
     let socket = TcpStream::connect_timeout(&addr, r.connect_timeout).map_err(|e| Error::Connect(vec![(addr, e)]))?;
     #[cfg(feature = "rtmps")]
     if r.tls {
-        let sock = Socket::new(socket, Some(Instant::now() + r.tls_timeout));
-        return start_tls(sock, &r.host, &r.tls_roots).map(drop);
+        let deadline = Instant::now() + r.tls_timeout;
+        let sock = Socket::new(socket, Some(deadline));
+        return start_tls(sock, &r.host, &r.tls_roots).map(|t| end_tls(t, deadline));
     }
     drop(socket);
     Ok(())
+}
+
+/// How long [`reach`] waits, after its close_notify, for the server to close its side.
+#[cfg(feature = "rtmps")]
+const TLS_END_WAIT: Duration = Duration::from_secs(1);
+
+/// Ends a TLS session that [`reach`] opened: sends close_notify, shuts the sending side, and reads
+/// until the server closes its side, for at most [`TLS_END_WAIT`] and never past `deadline`. A
+/// TLS 1.3 server sends session tickets after the handshake; a socket closed with those bytes
+/// unread sends the server a reset instead of a clean end. Errors here do not change the result of
+/// the check.
+#[cfg(feature = "rtmps")]
+fn end_tls(mut t: Transport, deadline: Instant) {
+    t.set_deadline(Some(deadline.min(Instant::now() + TLS_END_WAIT)));
+    if t.shutdown().is_err() {
+        return;
+    }
+    let mut buf = [0u8; 4096];
+    loop {
+        match t.read_blocking(&mut buf) {
+            Ok(0) => return,
+            Ok(_) => {}
+            Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
+            Err(_) => return,
+        }
+    }
 }
 
 fn connect_any(addrs: &[SocketAddr], timeout: Duration) -> Result<TcpStream, Error> {

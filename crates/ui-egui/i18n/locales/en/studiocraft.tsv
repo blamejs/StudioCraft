@@ -441,7 +441,7 @@
 	the audio stream ended	the audio stream ended
 	the audio stream failed	the audio stream failed
 	the camera capture could not start	the camera capture could not start
-	the camera is in use by another camera source	the camera is in use by another camera source
+	the camera is already open in another format	the camera is already open in another format
 	the camera is still closing	the camera is still closing
 	the camera offers no format StudioCraft reads	the camera offers no format StudioCraft reads
 	the camera sends frames that cannot be read	the camera sends frames that cannot be read
