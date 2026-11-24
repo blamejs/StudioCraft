@@ -28,5 +28,6 @@ Codec SDK, API 12.1), Copyright (c) 2010-2023 NVIDIA Corporation, under the MIT 
 text is at the top of that file.
 
 The declarations in src/vaapi_ffi/abi.rs are transcribed from libva's `va.h`, `va_enc_h264.h`,
-`va_enc_hevc.h` and `va_drm.h` (libva 2.22.0), Copyright (c) 2007-2009 Intel Corporation, under
-the MIT license whose text is at the top of that file.
+`va_enc_hevc.h` and `va_drm.h` (libva 2.22.0), Copyright (c) 2007-2009 Intel Corporation, and
+`va_enc_av1.h` (libva 2.22.0), Copyright (c) 2021 Intel Corporation, under the MIT license whose
+text is at the top of that file.

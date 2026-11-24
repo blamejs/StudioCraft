@@ -84,6 +84,8 @@ pub const UI_COMMANDS: &[(&str, &str)] = &[
     ("selection.reset", "Reset Transform"),
     ("selection.rotate_cw", "Rotate 90° Clockwise"),
     ("selection.rotate_ccw", "Rotate 90° Counterclockwise"),
+    ("selection.flip_horizontal", "Flip Horizontal"),
+    ("selection.flip_vertical", "Flip Vertical"),
     ("app.about", "About StudioCraft"),
     ("app.licenses", "Licenses"),
     ("app.check_updates", "Check for Updates…"),
@@ -144,6 +146,8 @@ pub fn ui_undoable(id: &str) -> bool {
             | "selection.reset"
             | "selection.rotate_cw"
             | "selection.rotate_ccw"
+            | "selection.flip_horizontal"
+            | "selection.flip_vertical"
     )
 }
 
@@ -176,6 +180,8 @@ pub fn catalog() -> Vec<Bindable> {
         bindable(c("selection.properties"), "Source Properties", &[]),
         bindable(c("selection.fit"), "Fit to Screen", &["Cmd+F"]),
         bindable(c("selection.reset"), "Reset Transform", &["Cmd+R"]),
+        bindable(c("selection.flip_horizontal"), "Flip Horizontal", &[]),
+        bindable(c("selection.flip_vertical"), "Flip Vertical", &[]),
         bindable(c("view.stats"), "Stats", &[]).toggle(),
         bindable(c("view.scopes"), "Scopes", &[]).toggle(),
         bindable(c("view.fullscreen"), "Full-Screen Interface", &["F11"]).toggle(),
@@ -264,6 +270,8 @@ pub fn menu_bar(s: &MenuState) -> MenuBar {
             Node::Separator,
             item("selection.rotate_cw", "Rotate 90° Clockwise"),
             item("selection.rotate_ccw", "Rotate 90° Counterclockwise"),
+            item("selection.flip_horizontal", "Flip Horizontal"),
+            item("selection.flip_vertical", "Flip Vertical"),
             Node::Separator,
             item("selection.fit", "Fit to Screen"),
             item("selection.fill", "Fill Screen"),

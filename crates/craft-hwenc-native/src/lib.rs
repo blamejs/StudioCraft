@@ -5,7 +5,7 @@
 //! - [`mf`] encodes H.264, HEVC and AV1 with the hardware encoders that Windows Media Foundation
 //!   lists.
 //! - [`vt`] encodes H.264 and HEVC with the hardware encoders of macOS VideoToolbox.
-//! - [`vaapi`] encodes H.264 and HEVC with the VA-API hardware encoders on 64-bit Linux.
+//! - [`vaapi`] encodes H.264, HEVC and AV1 with the VA-API hardware encoders on 64-bit Linux.
 //! - [`annexb`] splits Annex B byte streams into NAL units and writes the 4-byte length-prefixed
 //!   samples a container stores.
 //! - [`avc`] and [`hevc`] build the `avcC` and `hvcC` records from the parameter sets an encoder
@@ -45,7 +45,7 @@ pub use hdr::{Color, ContentLight, MasteringDisplay};
 pub enum Codec {
     H264,
     Hevc,
-    /// AV1 Main profile. NVENC and Media Foundation encode it; VideoToolbox and VA-API return
+    /// AV1 Main profile. NVENC, Media Foundation and VA-API encode it; VideoToolbox returns
     /// [`Error::Unsupported`].
     Av1,
 }

@@ -68,6 +68,38 @@ fn switching_scenes_runs_the_transition() {
 }
 
 #[test]
+fn safe_mode_starts_no_source_until_it_is_left() {
+    let mut normal = headless();
+    normal.run("source.add", &json!({"kind": "color", "name": "Card"})).unwrap();
+    let collection = normal.collection().clone();
+    let want = collection.sources.len();
+    assert!(want > 0);
+    drop(normal);
+
+    let ffmpeg: FfmpegSetting = Arc::new(RwLock::new(String::new()));
+    let captions = Arc::new(CaptionBoard::new());
+    let registry = Arc::new(builtin_registry(&ffmpeg, &captions).unwrap());
+    let mut s = Studio::new_in_safe_mode(None, collection, Profile::default(), registry, ffmpeg, captions);
+    assert!(s.safe_mode());
+    assert_eq!(s.sources.len(), 0, "no source of the opened collection runs");
+    // The collection can still be edited, and a new source does not start either.
+    s.run("source.add", &json!({"kind": "color", "name": "Second"})).unwrap();
+    s.tick();
+    assert_eq!(s.sources.len(), 0);
+    assert_eq!(s.collection().sources.len(), want + 1);
+    // The pause screen's picture or video is a source too.
+    assert!(s.run("pause.start", &json!({"countdown_s": 0})).is_err());
+
+    s.leave_safe_mode();
+    assert!(!s.safe_mode());
+    assert_eq!(s.sources.len(), want + 1, "every source starts when Safe Mode is left");
+    // Leaving again changes nothing.
+    s.leave_safe_mode();
+    assert_eq!(s.sources.len(), want + 1);
+    s.run("pause.start", &json!({"countdown_s": 0})).unwrap();
+}
+
+#[test]
 fn a_cut_switches_at_once() {
     let mut s = headless();
     s.run("transition.set", &json!({"kind": "cut"})).unwrap();
@@ -768,6 +800,44 @@ fn a_filled_source_that_shows_nothing_at_a_canvas_change_fills_it_once_it_shows_
 }
 
 #[test]
+fn a_filled_source_flipped_while_it_waits_for_a_picture_still_fills_the_new_canvas() {
+    let mut s = headless();
+    let r = s.run("source.add", &json!({"kind": "color", "name": "Back", "settings": {"width": 400, "height": 300}})).unwrap();
+    let item = r.0["item"].clone();
+    let source = s.collection().scenes[0].items[0].source;
+    let (tx, rx) = std::sync::mpsc::sync_channel(1);
+    assert!(s.notify_source_shown(source, tx));
+    rx.recv().unwrap();
+    let native = s.source_size(source).unwrap();
+    s.run("item.transform", &json!({"item": item, "transform": studiocraft_model::Transform::fill(native, (1920, 1080)), "fit": "fill"})).unwrap();
+    let video = Arc::clone(&s.sources.io(source).unwrap().video);
+    video.publish(studiocraft_plugin::VideoContent::Empty);
+    let mut p = s.profile().clone();
+    (p.video.base_width, p.video.base_height) = (1080, 1920);
+    s.set_profile(p).unwrap();
+    s.seal_history();
+    // The flip keeps the fit mode, so the item still waits to fill the new canvas.
+    let at = |s: &Studio| s.collection().scenes[0].items[0].transform;
+    let flipped = studiocraft_model::Transform { flip_horizontal: true, ..at(&s) };
+    s.run("item.transform", &json!({"item": item, "transform": flipped, "fit": "fill"})).unwrap();
+    video.publish(studiocraft_plugin::VideoContent::Solid { rgba: [0; 4], width: 400, height: 300 });
+    s.tick();
+    let want = studiocraft_model::Transform { flip_horizontal: true, ..studiocraft_model::Transform::fill(native, (1080, 1920)) };
+    assert_eq!(at(&s), want);
+    // A move made while it waits still leaves it where it is.
+    video.publish(studiocraft_plugin::VideoContent::Empty);
+    let mut p = s.profile().clone();
+    (p.video.base_width, p.video.base_height) = (1920, 1080);
+    s.set_profile(p).unwrap();
+    s.seal_history();
+    let moved = studiocraft_model::Transform { position: studiocraft_model::Vec2::new(5.0, 5.0), flip_vertical: true, ..at(&s) };
+    s.run("item.transform", &json!({"item": item, "transform": moved, "fit": "fill"})).unwrap();
+    video.publish(studiocraft_plugin::VideoContent::Solid { rgba: [0; 4], width: 400, height: 300 });
+    s.tick();
+    assert_eq!(at(&s), moved);
+}
+
+#[test]
 fn restoring_a_profile_also_takes_back_placements_of_items_that_waited() {
     let mut s = headless();
     let r = s.run("source.add", &json!({"kind": "color", "name": "Back", "settings": {"width": 400, "height": 300}})).unwrap();
@@ -1242,6 +1312,20 @@ mod monitoring {
 
     fn errors(s: &mut Studio) -> Vec<String> {
         s.take_notices().into_iter().filter(|n| n.error && n.template.starts_with("Audio monitoring")).map(|n| n.text()).collect()
+    }
+
+    #[test]
+    fn safe_mode_keeps_the_monitoring_device_closed_until_it_is_left() {
+        let ffmpeg: FfmpegSetting = Arc::new(RwLock::new(String::new()));
+        let captions = Arc::new(CaptionBoard::new());
+        let registry = Arc::new(builtin_registry(&ffmpeg, &captions).unwrap());
+        let mut s = Studio::new_in_safe_mode(None, default_collection("Test"), Profile::default(), registry, ffmpeg, captions);
+        let sink = Arc::new(FakeSink::default());
+        s.set_audio_sink(Arc::clone(&sink) as Arc<dyn AudioSink>);
+        monitor(&mut s, "Microphone", "monitor_only");
+        assert!(sink.opened().is_empty() && s.monitoring().is_none(), "a monitored source opens no device in Safe Mode");
+        s.leave_safe_mode();
+        assert_eq!(sink.opened(), ["default"]);
     }
 
     #[test]
@@ -2718,6 +2802,47 @@ mod pause_screen {
         assert_eq!(status["countdown"]["at_zero"], json!("resume"));
         let (status, _) = s.run("pause.extend", &json!({"seconds": 60})).unwrap();
         assert_eq!(status["countdown"]["total_s"], json!(90));
+    }
+
+    #[test]
+    fn every_pause_screen_setting_can_be_given_for_one_pause() {
+        use studiocraft_model::PauseAnchor;
+        let mut s = headless();
+        s.run("transition.set", &json!({"kind": "cut"})).unwrap();
+        s.transition = None;
+        let before = s.profile().pause.clone();
+        assert!(before.mute_scene, "the default profile holds the scene's audio");
+        let given = json!({
+            "text": "On air in {time}", "zero_text": "Starting now", "anchor": "top_left", "size_pct": 12,
+            "fit": "fill", "background": "#20304080", "mute_scene": false
+        });
+        s.run("pause.start", &given).unwrap();
+        let Some(p) = &s.pause else { panic!("the program is paused") };
+        let set = p.settings.clone();
+        assert_eq!((set.text.as_str(), set.zero_text.as_str()), ("On air in {time}", "Starting now"));
+        assert_eq!((set.anchor, set.size_pct, set.fit, set.background.as_str()), (PauseAnchor::TopLeft, 12, FitMode::Fill, "#20304080"));
+        assert!(!set.mute_scene);
+        assert_eq!(s.pause_layers.as_ref().map(|l| l.look.clone()), Some(set), "the screen is drawn with the given values");
+        assert!(s.hold_fade.is_none(), "the scene's audio is not held");
+        assert_eq!(s.profile().pause, before, "the profile keeps its settings");
+
+        // While paused, a given value applies at once, and the scene's audio fades out over the
+        // collection's transition length.
+        s.run("transition.set", &json!({"kind": "fade"})).unwrap();
+        let ms = s.engine().collection().transition.duration_ms;
+        assert!(ms > 0);
+        s.run("pause.start", &json!({"mute_scene": true, "anchor": "center"})).unwrap();
+        assert!(s.transition.is_none(), "no new transition while paused");
+        let Some(h) = s.hold_fade else { panic!("the scene's audio fades out") };
+        assert!(h.down && h.ms == ms, "{h:?}");
+        assert_eq!(s.pause_layers.as_ref().map(|l| l.look.anchor), Some(PauseAnchor::Center));
+        assert_eq!(s.pause.as_ref().map(|p| p.settings.text.as_str()), Some("On air in {time}"), "the values not given stay");
+        // The value the pause already has starts no new fade.
+        s.run("pause.start", &json!({"mute_scene": true})).unwrap();
+        assert_eq!(s.hold_fade.map(|h| h.start), Some(h.start));
+        s.run("pause.stop", &json!({})).unwrap();
+        assert!(s.hold_fade.is_some_and(|h| !h.down), "resuming brings the scene's audio back");
+        assert_eq!(s.profile().pause, before);
     }
 
     #[test]

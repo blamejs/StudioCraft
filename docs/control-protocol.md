@@ -17,6 +17,12 @@ carry the session token from the `STUDIOCRAFT_CONTROL_TOKEN` environment variabl
 started with (64 hexadecimal characters). The app does not start when `--control` is given without
 a valid token.
 
+In [Safe Mode](features.md#safe-mode), from `--safe-mode` or after a session that ended without
+closing, the app checks the token at start but does not listen on the port. It starts listening
+when the user leaves Safe Mode: Leave Safe Mode in the banner, or Start Normally when the window
+asks after an unclean shutdown. When the port can't be used then, the status
+bar shows the error and the app keeps running without the control channel.
+
 In a POSIX shell, make a token and start the app with it:
 
 ```sh
@@ -565,13 +571,30 @@ it on each request and when it exits.
 
 ### `pause.*`
 
-`pause.start` takes `{"media"?, "countdown_s"?, "at_zero"?}` and shows the pause screen in the
-program with the scene collection's transition. Each value given replaces its profile setting for
-this pause only: `media` is a picture or video file (`""` for none), `countdown_s` is 0 to 43,200
-seconds (0 for no countdown) and `at_zero` is `keep` or `resume`. A `null` value, a file type that
-is not a picture or video, a path longer than 4,096 bytes or holding a NUL character, and a value
-out of range are errors. While paused, the values given apply at once without a new transition,
-and a given `countdown_s` starts the countdown again. It returns what `pause.status` returns.
+`pause.start` takes `{"media"?, "countdown_s"?, "text"?, "zero_text"?, "at_zero"?, "anchor"?,
+"size_pct"?, "fit"?, "background"?, "mute_scene"?}` and shows the pause screen in the program with
+the scene collection's transition. Each value given replaces its profile setting for this pause
+only:
+
+| Param | Value |
+|-------|-------|
+| `media` | A picture or video file, `""` for none. |
+| `countdown_s` | 0 to 43,200 seconds, 0 for no countdown. |
+| `text` | The countdown text, at most 200 characters with exactly one `{time}`. |
+| `zero_text` | The text shown in place of the countdown at zero, at most 200 characters. |
+| `at_zero` | `keep` or `resume`. |
+| `anchor` | Where the text sits: `top_left`, `top_center`, `top_right`, `middle_left`, `center`, `middle_right`, `bottom_left`, `bottom_center` or `bottom_right`. |
+| `size_pct` | The text's height, 2 to 15 percent of the canvas height. |
+| `fit` | How the picture or video is sized to the canvas: `fit`, `fill` or `stretch`. |
+| `background` | The color under the picture or video, `#rrggbb` or `#rrggbbaa`. |
+| `mute_scene` | `true` fades the program mix out while paused, `false` keeps it. |
+
+A `null` value, a value of the wrong type, a file type that is not a picture or video, a path
+longer than 4,096 bytes or holding a NUL character, a name that is not one of the listed ones, and
+a value out of range are errors. While paused, the values given apply at once without a new
+transition, and a given `countdown_s` starts the countdown again. A changed `mute_scene` fades the
+program mix out or back in over the scene collection's transition length. It returns what
+`pause.status` returns.
 
 `pause.stop` takes no params and shows the program scene again with the scene collection's
 transition. It is an error when the program is not paused. `pause.toggle` pauses with the profile's
@@ -793,7 +816,7 @@ A destination that has been checked at its current server and service in this se
 "verdict", "message", "template", "args", "evidence", "at_ms"}`. `automatic` is `true` for a check
 that ran by itself after a failure. `message` is the verdict in English, `template` the same text
 with `{name}` placeholders and `args` their values, and `at_ms` the time the check reported, in
-milliseconds since 1970. `evidence` lists every step, at most 22, each `{"check", "target", "outcome",
+milliseconds since 1970. `evidence` lists every step, at most 26, each `{"check", "target", "outcome",
 "detail"}`, where `target` is the host, address or variable the step looked at and `detail` what the
 system or the server reported, in English.
 
@@ -803,9 +826,10 @@ system or the server reported, in English.
 | `name_not_found` | Windows only: the DNS server answered that the server's name does not exist. |
 | `dns_no_answer` | The lookup gave no answer within 10 s. |
 | `lookup_failed` | The server's name could not be looked up for another reason. |
-| `rejected` | The server takes connections, and the last failure was a refusal of `connect` or `publish`. |
+| `rejected` | The server takes connections and does not fail the RTMP handshake, and the last failure was a refusal of `connect` or `publish`. |
 | `certificate_not_accepted` | The secure handshake refused the `rtmps://` server's certificate. |
 | `service_reports_problem` | The service's status summary reports a problem. |
+| `not_stream_server` | The server's port takes the connection (and the secure handshake for `rtmps://`), and every address that connected finished the RTMP handshake without completing it. `args.detail` says what the port did instead. |
 | `ingest_not_answering_other_does` | No address of the server connected or refused the connection, and another ingest server of the service connected. |
 | `port_not_answering_443_does` | The server's port timed out, and port 443 of the same addresses connected. |
 | `refused` | An address of the server refused the TCP connection. |
@@ -825,14 +849,17 @@ The first verdict in the table that fits is the one given.
 | `lookup` | The lookup of the server's name; `detail` lists up to 8 of the addresses found and how many more there are. |
 | `connect` | A TCP connection to the server's port, for `rtmp://`. |
 | `secure_connect` | A TCP connection and secure handshake to the server's port, for `rtmps://`. |
+| `rtmp_handshake` | The RTMP handshake (C0 and C1 out, S0 and S1 in, C2 out, S2 in) over a connection to the server's port that opened; no command and no stream key follow it. |
 | `connect_443` | A TCP connection and secure handshake to port 443 of the server. |
 | `ingest_list` | The service's list of ingest servers; `detail` names the two other servers chosen. |
 | `other_ingest` | A lookup, TCP connection and secure handshake to another ingest server of the service. |
 | `status_page` | The service's status summary; `detail` holds the status it reports. |
 
 `outcome` is `ok`, `set` (a proxy variable is set), `problem` (the status summary reports a
-problem), `unknown` (the system could not say), `unfinished` (the step had not finished when the
-check reported), or the `cause` id of a failure from the table above.
+problem), `not_rtmp` (the port answered the RTMP handshake with other data), `unknown` (the system
+could not say), `unfinished` (the step had not finished when the check reported), or the `cause` id
+of a failure from the table above. An `rtmp_handshake` step whose server closed the connection is
+`closed_during_setup`, and one that sent nothing in time is `setup_timed_out`.
 
 ### `video.displays` and `video.canvas_from_display`
 
@@ -880,7 +907,7 @@ Video, from `video.canvas_from_display`, or by switching to a profile with anoth
 
 - An item with a fit mode is placed by that mode on the new canvas: `fit` shows the whole source
   inside the canvas, `fill` covers the canvas, and `stretch` makes the source the canvas's size.
-  The crop is kept and the rotation becomes 0. Fit to Screen, Fill Screen and Stretch to Screen
+  The crop and the flips are kept and the rotation becomes 0. Fit to Screen, Fill Screen and Stretch to Screen
   set the mode, and so does `item.transform` with `fit`. An `item.transform` without `fit` clears
   it.
 - Any other item keeps its center at the same place in proportion to the canvas. Its size is

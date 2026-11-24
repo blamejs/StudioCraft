@@ -26,7 +26,8 @@ through the `objc2-video-toolbox`, `objc2-core-media`, `objc2-core-video` and
 | `mf::available(codec)` | It reports whether Media Foundation lists a hardware encoder that writes `codec` and opens. |
 | `vt::Encoder` | This runs the hardware H.264 High and HEVC Main encoders of macOS VideoToolbox, from NV12 frames. It has the same `Config`, `encode`, `flush` and `codec_private` as NVENC. A session that VideoToolbox reports as software is not used. Quality is `(100 - 2 × level) / 100`. Bitrate is constant on macOS 13 and later, and otherwise an average bitrate with a one-second ceiling. It uses no B-frames and BT.709 limited range. |
 | `vt::available(codec)` | It reports whether VideoToolbox opens a hardware encoder that writes `codec`. |
-| `vaapi::Encoder` | This runs the VA-API hardware H.264 (High, Main or Constrained Baseline) and HEVC Main encoders on 64-bit Linux (`libva.so.2`, `libva-drm.so.2`), from NV12 frames. It uses the first `/dev/dri/renderD*` node whose driver encodes the codec. It has the same `Config`, `encode`, `flush` and `codec_private` as NVENC. Quality is a constant QP at the level, or a variable bitrate where the driver has no constant QP. Constant bitrate uses a one-second buffer. It writes IDR and P pictures only, and HEVC sizes are multiples of the driver's smallest coding block. |
+| `vaapi::Encoder` | This runs the VA-API hardware H.264 (High, Main or Constrained Baseline), HEVC Main and AV1 Main (8-bit) encoders on 64-bit Linux (`libva.so.2`, `libva-drm.so.2`), from NV12 frames. It uses the first `/dev/dri/renderD*` node whose driver encodes the codec. It has the same `Config`, `encode`, `flush` and `codec_private` as NVENC. Quality is a constant QP at the level, or a variable bitrate where the driver has no constant QP. Constant bitrate uses a one-second buffer. It writes IDR and P pictures only, and HEVC sizes are multiples of the driver's smallest coding block. |
+| `vaapi::Encoder` for AV1 | The crate writes the sequence header and frame header OBUs and passes them to the driver as packed headers, so the driver must accept packed sequence and picture headers. The stream is BT.709 limited range with 64 × 64 superblocks, 8-bit order hints and uniform tiles, as few as the frame size and frame rate allow. Every frame is shown, a key frame or an inter frame that refers to the frame before it, and each frame starts from the default probabilities. CDEF, loop restoration, superres, compound and warped prediction, palette, intra block copy, segmentation and delta quantizers are off; a driver that requires one of them does not open. The quality level `q` is base quantizer index `5 × q` (at most 255), and the deblocking level is the quantizer index divided by 6, rounded, at most 63. The packets are OBUs with their sizes and without temporal delimiters, as from NVENC. |
 | `vaapi::available(codec)` | It reports whether a VA-API driver opens an encoder that writes `codec`. |
 | `vaapi::copy_nv12`, `vaapi::packet` | These are the two passes the VA-API encoder makes over each frame on the CPU: `copy_nv12` copies the frame into a surface's pitched planes, and `packet` turns the coded picture into a packet. |
 | `annexb::nals`, `to_length_prefixed`, `parameter_sets` | `nals` splits an Annex B stream into network abstraction layer (NAL) units. `to_length_prefixed` writes a sample without parameter sets or delimiters, and `parameter_sets` returns the parameter sets. |
@@ -93,7 +94,8 @@ with an older libva the wait has no limit. The surfaces, coded buffers and the b
 collects coded data are made once in `Encoder::new`. Each frame still allocates on the CPU side:
 the packet it returns, and the `Vec` of packets when one comes out. In the driver, each frame
 creates and destroys its picture and slice parameter buffers (and on an IDR picture the sequence,
-rate and frame rate buffers) and maps its surface with `vaDeriveImage`. Coded data is copied out
+rate and frame rate buffers; for AV1 also the packed header buffers and the tile group) and maps
+its surface with `vaDeriveImage`. Coded data is copied out
 of the mapped coded buffer and then into the length-prefixed packet. `cargo bench -p
 craft-hwenc-native` measures the copy and the packet, and a 1080p encode where a VA-API H.264
 encoder is present; the copy bench writes into heap memory, not a mapped surface.
@@ -106,15 +108,24 @@ encoder is present; the copy bench writes into heap memory, not a mapped surface
   `Error::NoDevice`.
 - Off 64-bit Linux, without libva, and without a driver that encodes the codec,
   `vaapi::Encoder::new` returns `Error::NoDevice`.
-- `vt::Encoder::new` and `vaapi::Encoder::new` return `Error::Unsupported` for `Codec::Av1`, and
-  `nvenc::Encoder::new` returns it for AV1 with `Color::Hlg` or `Color::Pq`.
+- `vt::Encoder::new` returns `Error::Unsupported` for `Codec::Av1`, and `nvenc::Encoder::new`
+  returns it for AV1 with `Color::Hlg` or `Color::Pq`.
+- `vaapi::Encoder::new` returns `Error::Unsupported` for AV1 when the driver does not accept packed
+  sequence and picture headers, requires a coding tool the stream turns off, codes only 4 × 4
+  transforms, or allows fewer tiles than the frame needs. It also returns it for an AV1 stream above
+  level 6.3, above 300 frames a second, below 16 pixels a side, or at a constant bitrate above
+  160,000 kbit/s.
 - An AV1 stream whose sequence header changes, or is not Main 4:2:0 at the requested bit depth, is
-  an `Error::Failed`.
+  an `Error::Failed`. So is a VA-API AV1 packet without coded tiles, and a gray first frame that is
+  not a key frame. A VA-API AV1 key frame packet carries the sequence header OBU even when the
+  driver leaves it out.
 
 ## Tests
 
 The NVENC and VA-API layout tests compare every structure the crate passes to the driver with the
-C header's sizes and offsets, and they run on every platform.
+C header's sizes and offsets, and they run on every platform. The AV1 header tests compare the
+sequence and frame header OBUs with bytes worked out from the AV1 specification, read them back with
+a reader written from the specification, and check the bit offsets the driver rewrites.
 
 ## Sources
 
@@ -123,7 +134,7 @@ C header's sizes and offsets, and they run on every platform.
 - ITU-T H.273 for the color code points, and ITU-T H.265 Annex D (D.2.28 and D.2.35) for the
   mastering display colour volume and content light level SEI payloads.
 - The AV1 Bitstream and Decoding Process Specification (https://aomediacodec.github.io/av1-spec/)
-  for OBUs, sequence headers and frame headers.
+  for OBUs, sequence headers, frame headers and the level limits of Annex A.3.
 - AV1 Codec ISO Media File Format Binding (https://aomediacodec.github.io/av1-isobmff/) for the
   `av1C` record and the sample format.
 

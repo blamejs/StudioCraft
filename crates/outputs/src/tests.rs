@@ -284,8 +284,9 @@ fn the_built_in_encoders_are_listed_after_the_ffmpeg_ones() {
         "vt_native_hevc",
         "vaapi_native_h264",
         "vaapi_native_hevc",
+        "vaapi_native_av1",
     ];
-    assert_eq!(ids[ids.len().saturating_sub(12)..], [&["hardware"][..], &built_in[..]].concat(), "{ids:?}");
+    assert_eq!(ids[ids.len().saturating_sub(13)..], [&["hardware"][..], &built_in[..]].concat(), "{ids:?}");
     for id in built_in {
         assert!(reg.encoder(id).unwrap().ffmpeg().is_none(), "{id}");
     }

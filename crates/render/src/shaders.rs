@@ -22,7 +22,7 @@ struct VOut { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> }
 /// Items: a textured quad placed by four corners in clip space.
 ///
 /// `a` = corners 0 and 1, `b` = corners 2 and 3 (clockwise from the top left), `c` = the texture
-/// rectangle (u0, v0, u1, v1), `d.x` = 1 when the texture holds straight alpha, `d.y` = opacity.
+/// rectangle (u0, v0, u1, v1), which runs backward on a flipped axis, `d.x` = 1 when the texture holds straight alpha, `d.y` = opacity.
 const ITEM: &str = r"
 @group(1) @binding(0) var tex: texture_2d<f32>;
 @group(1) @binding(1) var samp: sampler;
@@ -42,10 +42,11 @@ const ITEM: &str = r"
 }
 
 @fragment fn fs_item(v: VOut) -> @location(0) vec4<f32> {
-    // Keep the linear filter inside the crop: texels cut away never blend into the edge.
+    // Keep the linear filter inside the crop: texels cut away never blend into the edge. A
+    // flipped item's rectangle runs backward, so the bounds come from its smaller and larger ends.
     let half = 0.5 / vec2<f32>(textureDimensions(tex));
-    let lo = u.c.xy + half;
-    let hi = u.c.zw - half;
+    let lo = min(u.c.xy, u.c.zw) + half;
+    let hi = max(u.c.xy, u.c.zw) - half;
     let uv = clamp(v.uv, min(lo, hi), max(lo, hi));
     var c = textureSample(tex, samp, uv);
     if u.d.x > 0.5 { c = vec4<f32>(c.rgb * c.a, c.a); }
