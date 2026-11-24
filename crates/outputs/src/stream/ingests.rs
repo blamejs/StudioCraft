@@ -5,7 +5,7 @@
 //! with no redirect and no proxy, reading at most [`INGEST_LIST_LIMIT`] bytes within
 //! [`PROBE_TIMEOUT`]. The caller does not wait: it reads [`Lists::state`] again, and the function
 //! given to [`Lists::request`] runs once the fetch has ended. A list that was read is kept for the
-//! session; a list that could not be read is fetched again on the next request.
+//! session; a list that could not be read is kept until a request asks to fetch it again.
 
 use std::collections::HashMap;
 use std::sync::{Arc, LazyLock, Mutex};
@@ -66,14 +66,20 @@ impl Lists {
     }
 
     /// Starts fetching the list of `service` unless it is being fetched or has been read, and
-    /// returns its state at once. `done` runs on the fetch's thread when the fetch ends, and at
-    /// once when no fetch starts. A service that publishes no list is an error.
-    pub fn request(self: &Arc<Self>, service: &'static Service, done: impl FnOnce() + Send + 'static) -> Result<ListState, String> {
+    /// returns its state at once. A list that could not be read is returned as it is, and is
+    /// fetched again only when `retry` is set. `done` runs on the fetch's thread when the fetch
+    /// ends, and at once when no fetch starts. A service that publishes no list is an error.
+    pub fn request(self: &Arc<Self>, service: &'static Service, retry: bool, done: impl FnOnce() + Send + 'static) -> Result<ListState, String> {
         let Some(url) = service.ingests else {
             return Err(format!("{} publishes no list of its ingest servers", service.name));
         };
         let mut states = lock(&self.states);
-        if let Some(s @ (ListState::Loading | ListState::Ready(_))) = states.get(service.id) {
+        let kept = match states.get(service.id) {
+            Some(ListState::Failed(_)) => !retry,
+            Some(ListState::Loading | ListState::Ready(_)) => true,
+            None => false,
+        };
+        if let Some(s) = states.get(service.id).filter(|_| kept) {
             let s = s.clone();
             drop(states);
             done();
@@ -108,14 +114,14 @@ impl Lists {
 }
 
 /// The servers of the ingest list `body`: those available, each address once, in the order of
-/// their priority (lowest first) and then of the list, at most [`MAX_SERVERS`]. The entry marked
-/// as the default, or else the one at `default`, comes first.
+/// their priority (lowest first) and then of the list, at most [`MAX_SERVERS`]. An entry marked as
+/// the default comes first, then the one at `default`, then the others.
 pub fn servers(body: &[u8], default: Option<&str>) -> Result<Vec<IngestServer>, String> {
     let json: Value = serde_json::from_slice(body).map_err(|e| format!("the list of ingest servers is not valid JSON: {e}"))?;
     let Some(list) = json.get("ingests").and_then(Value::as_array) else {
         return Err("the list of ingest servers has no `ingests` list".into());
     };
-    let mut found: Vec<(bool, f64, IngestServer)> = Vec::new();
+    let mut found: Vec<(u8, f64, IngestServer)> = Vec::new();
     for entry in list.iter().take(MAX_INGESTS) {
         let available = entry.get("availability").and_then(Value::as_f64).is_none_or(|a| a > 0.0);
         let url = entry.get("url_template_secure").or_else(|| entry.get("url_template")).and_then(Value::as_str);
@@ -123,14 +129,20 @@ pub fn servers(body: &[u8], default: Option<&str>) -> Result<Vec<IngestServer>, 
         if !available || found.iter().any(|(_, _, s)| s.server == server) {
             continue;
         }
-        let marked = entry.get("default").and_then(Value::as_bool).unwrap_or(false) || default == Some(server.as_str());
+        let rank = if entry.get("default").and_then(Value::as_bool).unwrap_or(false) {
+            0
+        } else if default == Some(server.as_str()) {
+            1
+        } else {
+            2
+        };
         let priority = entry.get("priority").and_then(Value::as_f64).filter(|p| p.is_finite()).unwrap_or(f64::MAX);
         let name = entry.get("name").and_then(Value::as_str).map(clean_name).filter(|n| !n.is_empty());
         let name = name.or_else(|| host_of(&server)).unwrap_or_default();
-        found.push((marked, priority, IngestServer { name, server }));
+        found.push((rank, priority, IngestServer { name, server }));
     }
     // A stable sort keeps the list's order among equal priorities.
-    found.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.total_cmp(&b.1)));
+    found.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.total_cmp(&b.1)));
     Ok(found.into_iter().take(MAX_SERVERS).map(|(_, _, s)| s).collect())
 }
 

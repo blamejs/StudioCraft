@@ -59,6 +59,15 @@ fn servers_are_read_default_first_then_by_priority_without_the_key() {
     .to_string();
     let Ok(read) = servers(body.as_bytes(), Some("rtmps://b.example/app")) else { panic!("the list is read") };
     assert_eq!(names(&read), [("B", "rtmps://b.example/app"), ("A", "rtmps://a.example/app")]);
+    // A marked default comes before the documented server, whatever their priorities.
+    let body = serde_json::json!({ "ingests": [
+        { "name": "A", "priority": 1, "url_template_secure": "rtmps://a.example/app/{stream_key}" },
+        { "name": "B", "priority": 2, "url_template_secure": "rtmps://b.example/app/{stream_key}" },
+        { "name": "C", "priority": 9, "default": true, "url_template_secure": "rtmps://c.example/app/{stream_key}" },
+    ] })
+    .to_string();
+    let Ok(read) = servers(body.as_bytes(), Some("rtmps://a.example/app")) else { panic!("the list is read") };
+    assert_eq!(names(&read), [("C", "rtmps://c.example/app"), ("A", "rtmps://a.example/app"), ("B", "rtmps://b.example/app")]);
 }
 
 #[test]
@@ -110,7 +119,7 @@ fn a_request_returns_at_once_while_the_fetch_is_late() {
     let (done, finished) = mpsc::channel::<()>();
     assert_eq!(lists.state("example"), None, "nothing is fetched before it is asked for");
     assert_eq!(
-        lists.request(&SERVICE, move || {
+        lists.request(&SERVICE, false, move || {
             let _ = done.send(());
         }),
         Ok(ListState::Loading)
@@ -119,7 +128,7 @@ fn a_request_returns_at_once_while_the_fetch_is_late() {
     // A second request while the first is late starts no second fetch and does not wait either.
     let (again, at_once) = mpsc::channel::<()>();
     assert_eq!(
-        lists.request(&SERVICE, move || {
+        lists.request(&SERVICE, true, move || {
             let _ = again.send(());
         }),
         Ok(ListState::Loading)
@@ -129,31 +138,37 @@ fn a_request_returns_at_once_while_the_fetch_is_late() {
     finished.recv_timeout(GUARD).unwrap();
     let Some(ListState::Ready(read)) = lists.state("example") else { panic!("the list is read") };
     assert_eq!(read.first().map(|s| s.server.as_str()), Some("rtmps://default.example/app"));
-    // A list that was read is kept and not fetched again.
-    assert!(matches!(lists.request(&SERVICE, || {}), Ok(ListState::Ready(_))));
+    // A list that was read is kept and not fetched again, even on a retry.
+    assert!(matches!(lists.request(&SERVICE, false, || {}), Ok(ListState::Ready(_))));
+    assert!(matches!(lists.request(&SERVICE, true, || {}), Ok(ListState::Ready(_))));
     assert_eq!(calls.load(Ordering::SeqCst), 1);
 }
 
 #[test]
-fn a_list_that_could_not_be_read_is_fetched_again() {
+fn a_list_that_could_not_be_read_is_fetched_again_only_on_a_retry() {
     let calls = Arc::new(AtomicU32::new(0));
     let counted = Arc::clone(&calls);
     let lists = Lists::with(Arc::new(move |_: &str, _: u64| {
         if counted.fetch_add(1, Ordering::SeqCst) == 0 { Err("the server answered HTTP 503".into()) } else { Ok(b"{\"ingests\": 1}".to_vec()) }
     }));
-    let request = |lists: &Arc<Lists>| {
+    let request = |lists: &Arc<Lists>, retry: bool| {
         let (done, finished) = mpsc::channel::<()>();
-        lists
-            .request(&SERVICE, move || {
+        let answer = lists
+            .request(&SERVICE, retry, move || {
                 let _ = done.send(());
             })
             .unwrap();
         finished.recv_timeout(GUARD).unwrap();
-        lists.state("example")
+        (answer, lists.state("example"))
     };
-    assert_eq!(request(&lists), Some(ListState::Failed("the server answered HTTP 503".into())));
-    assert_eq!(request(&lists), Some(ListState::Failed("the list of ingest servers has no `ingests` list".into())));
+    let failed = ListState::Failed("the server answered HTTP 503".into());
+    assert_eq!(request(&lists, false), (ListState::Loading, Some(failed.clone())));
+    // Asking again without a retry answers with the failure and fetches nothing.
+    assert_eq!(request(&lists, false), (failed.clone(), Some(failed)));
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    let no_list = ListState::Failed("the list of ingest servers has no `ingests` list".into());
+    assert_eq!(request(&lists, true), (ListState::Loading, Some(no_list)));
     assert_eq!(calls.load(Ordering::SeqCst), 2);
-    assert!(lists.request(&NO_LIST, || {}).is_err(), "a service without a list is refused");
+    assert!(lists.request(&NO_LIST, true, || {}).is_err(), "a service without a list is refused");
     assert_eq!(lists.state("nolist"), None);
 }

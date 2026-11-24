@@ -113,7 +113,9 @@ pub fn ui_params(id: &str) -> &'static str {
         "stream.check_service_set" => {
             "enabled: boolean (whether the check after a failure also reads the service's list of ingest servers and status summary and connects to two of its other ingest servers)"
         }
-        "stream.ingest_servers" => "service: string (the id of a streaming service that publishes a list of its ingest servers)",
+        "stream.ingest_servers" => {
+            "service: string (the id of a streaming service that publishes a list of its ingest servers), retry?: boolean (fetch a list that could not be read again; default false)"
+        }
         "stream.reconnect_set" => {
             "enabled?: boolean, first_delay_s?: integer (1 to 60), max_delay_s?: integer (first_delay_s to 600), max_tries?: integer (1 to 100)"
         }

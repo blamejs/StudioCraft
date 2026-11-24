@@ -1000,7 +1000,10 @@ fn listing_ingest_servers_takes_only_a_service_that_publishes_a_list() {
         assert!(e.contains("publishes a list of its ingest servers (twitch)"), "{bad}: {e}");
     }
     assert!(run(&mut a, &ctx, "stream.ingest_servers", json!({"service": 1})).unwrap_err().contains("is a string"));
+    let e = run(&mut a, &ctx, "stream.ingest_servers", json!({"service": "twitch", "retry": "yes"})).unwrap_err();
+    assert!(e.contains("`retry` is true or false"), "{e}");
     assert!(crate::commands::ui_params("stream.ingest_servers").starts_with("service: string"));
+    assert!(crate::commands::ui_params("stream.ingest_servers").contains("retry?: boolean"));
     let twitch = preset("twitch");
     assert_eq!(listed_ingests(twitch, &ListState::Loading), json!({"service": "twitch", "state": "loading"}));
     let list: std::sync::Arc<[IngestServer]> = vec![server("West", "rtmps://west.example/app")].into();

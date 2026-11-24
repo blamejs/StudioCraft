@@ -569,7 +569,7 @@ fn ingest_choice(ui: &mut Ui, e: &mut Edit, svc: &'static Service, state: Option
             "Reads the service's list of its ingest servers from the service's site, which sees this computer's address. It sends no stream key."
         ));
         if button.clicked() {
-            acts.push(Act::run("stream.ingest_servers", json!({"service": svc.id})));
+            acts.push(Act::run("stream.ingest_servers", json!({"service": svc.id, "retry": true})));
         }
     };
     match state {
@@ -1126,7 +1126,8 @@ impl StudioApp {
                         service = id
                     ));
                 };
-                let state = ingests::lists().request(svc, || {}).map_err(Msg::plain)?;
+                let retry = opt_bool(cmd, "retry")?.unwrap_or(false);
+                let state = ingests::lists().request(svc, retry, || {}).map_err(Msg::plain)?;
                 Ok(listed_ingests(svc, &state))
             }
             "stream.destination_add" => {
