@@ -1,0 +1,15 @@
+[package]
+name = "craft-rtp"
+description = "RTP and RTCP for receiving media: packet and report parsing and writing, NACK and PLI, a jitter buffer with an injected clock, sender-report time mapping, and depacketizers that rebuild H.264, VP8, Opus and AAC frames"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+
+[dev-dependencies]
+proptest = { workspace = true }
