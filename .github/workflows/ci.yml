@@ -18,8 +18,8 @@ concurrency:
 
 jobs:
   gate:
-    # Pinned to craft-common-actions main at 2026-11-23T04:18Z; move the pin to take later changes.
-    uses: storytold/craft-common-actions/.github/workflows/gate.yml@ddb472330fe7eff2c5a77ffb551bf119a868f3d3
+    # Pinned to craft-common-actions main at 2026-11-23T23:33Z; move the pin to take later changes.
+    uses: storytold/craft-common-actions/.github/workflows/gate.yml@778230c1a2cf245cdde9436d759f1c552f7f1d50
     with:
       timeout-minutes: 90
       packages: >-
@@ -30,7 +30,7 @@ jobs:
   # Checks that the app compiles on the hosts the release builds on (Windows and Ubuntu 22.04),
   # with the locked dependencies.
   release-hosts:
-    uses: storytold/craft-common-actions/.github/workflows/gate.yml@ddb472330fe7eff2c5a77ffb551bf119a868f3d3
+    uses: storytold/craft-common-actions/.github/workflows/gate.yml@778230c1a2cf245cdde9436d759f1c552f7f1d50
     with:
       timeout-minutes: 60
       os: '["windows-latest"]'
