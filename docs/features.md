@@ -169,6 +169,12 @@ compressor, limiter and a three-band equalizer.
 | Sharpen | Makes edges crisper by a Sharpness from 0 to 1. |
 | Gain, noise gate, compressor, limiter and equalizer | Change the level and tone of a source's audio. The noise gate, compressor and limiter report how far they turn the audio down through [`filter.meter`](control-protocol.md#filtermeter). The limiter delays the audio by 248 samples (5.2 ms) at 48 kHz; the other four do not delay it. |
 
+A change to an audio filter's settings replaces that filter alone. For one block (1024 samples,
+21.3 ms at 48 kHz) the old and the new settings both process the audio, and the output crossfades
+from the old settings to the new ones. The source's other audio filters keep running, so the
+audio they still hold (a limiter's look-ahead, for example) plays on. When a running audio filter
+refuses new settings, it keeps its last settings and the error is shown.
+
 [MECHANICS.md](../MECHANICS.md#video) lists each filter's default values and limits.
 
 ## Transitions
@@ -207,7 +213,8 @@ A source's Properties window sets two more audio options:
 
 The window also shows the source's **Filter delay**: how long the audio filters the mixer runs on
 the source delay its audio, in milliseconds, with the number of samples at 48 kHz in its tooltip.
-Disabled filters and filters whose settings were refused are not counted. The MCP tool
+Disabled filters, and filters that do not run because they refused their settings, are not
+counted. The MCP tool
 `source_audio` and `document.inspect` report the same delay.
 
 Monitored sources play on the device chosen in Settings › Audio. Monitoring works on Windows and
