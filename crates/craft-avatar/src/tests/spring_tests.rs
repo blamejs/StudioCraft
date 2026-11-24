@@ -244,6 +244,18 @@ fn chains_that_share_a_skipped_node_are_refused() {
 }
 
 #[test]
+fn a_part_too_long_to_measure_stays_still() {
+    // Each coordinate is finite, but the part's length is past the largest f32.
+    let mut m = chain(1.0, 1.0, 0.4);
+    m.nodes[2].rest = at(3e38, 3e38, 0.0);
+    m.validate(&Limits::default()).unwrap();
+    let (sim, local) = run(&m, 1.0, 60.0);
+    assert_eq!(local[1], m.nodes[1].rest);
+    assert!(local.iter().all(Transform::is_finite));
+    assert!(sim.tails().all(Vec3::is_finite));
+}
+
+#[test]
 fn too_many_spring_chains_are_refused() {
     let mut m = chain(1.0, 1.0, 0.5);
     for i in 0..3 {

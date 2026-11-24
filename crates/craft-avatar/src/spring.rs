@@ -190,7 +190,8 @@ pub struct SpringSim {
 
 impl SpringSim {
     /// The simulation of `model`'s springs, with every tail at rest. The model must be valid.
-    /// Joints whose tail lies on the joint have no direction and do not move.
+    /// Joints whose tail lies on the joint have no direction and do not move, and neither do
+    /// joints whose part is too long for an `f32`.
     pub fn new(model: &Model) -> SpringSim {
         let world = model.rest_world();
         let mut joints = Vec::new();
@@ -206,13 +207,17 @@ impl SpringSim {
                 let Some(rest) = model.nodes.get(a.node).map(|n| n.rest.rotation) else {
                     continue;
                 };
+                // A part whose length or tail does not fit in an f32 is kept still, like a
+                // part of no length.
+                let length = d.length();
+                let length = if length.is_finite() && wb.translation.is_finite() { length } else { 0.0 };
                 let axis = wa.rotation.conjugate().rotate(d).normalized().unwrap_or(Vec3::ZERO);
                 joints.push(JointState {
                     node: a.node,
                     tail_node: b.node,
                     props: a,
                     axis,
-                    length: d.length(),
+                    length,
                     rest,
                     prev: wb.translation,
                     current: wb.translation,
