@@ -1106,6 +1106,12 @@ fn runs_built_in(p: &Profile, kind: OutputKind, rate: RateControl) -> bool {
     }
 }
 
+/// Whether the `craft_hwenc` candidate `candidate` has a built-in encoder that runs it in this
+/// process, so an MKV recording or a stream can use it without `ffmpeg`.
+pub fn has_built_in_twin(candidate: &str) -> bool {
+    hardware::for_candidate(candidate).is_some()
+}
+
 /// `resolved` with a hardware encoder that also runs in this process replaced by that built-in
 /// encoder.
 fn built_in_twin(resolved: Resolved) -> Resolved {

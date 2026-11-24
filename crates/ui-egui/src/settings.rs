@@ -1029,15 +1029,17 @@ impl SettingsWindow {
 }
 
 /// The Hardware encoder setting's choices: Automatic, Software only, then each hardware encoder of
-/// this system that the ffmpeg program lists (every one when the list could not be read), and the
-/// saved choice when it is none of those.
+/// this system that has a built-in encoder or that the ffmpeg program lists (every one when the
+/// list could not be read), and the saved choice when it is none of those.
 fn hardware_encoder_choices(offered: &[String], saved: &str) -> Vec<String> {
     let os = craft_hwenc::Os::current();
     let mut ids: Vec<String> = ["auto", "software"].map(String::from).to_vec();
     ids.extend(
         craft_hwenc::CANDIDATES
             .iter()
-            .filter(|c| c.runs_on(os) && (offered.is_empty() || offered.iter().any(|o| o == c.ffmpeg_codec)))
+            .filter(|c| {
+                c.runs_on(os) && (offered.is_empty() || studiocraft_studio::has_built_in_twin(c.id) || offered.iter().any(|o| o == c.ffmpeg_codec))
+            })
             .map(|c| c.id.to_string()),
     );
     let saved = craft_hwenc::Preference::parse(saved);
@@ -1292,15 +1294,30 @@ mod tests {
     }
 
     #[test]
-    fn the_hardware_encoder_choices_are_this_systems_encoders_that_ffmpeg_lists() {
+    fn the_hardware_encoder_choices_are_this_systems_built_in_encoders_and_those_ffmpeg_lists() {
         let os = craft_hwenc::Os::current();
-        let listed: Vec<String> = craft_hwenc::CANDIDATES.iter().filter(|c| c.runs_on(os)).take(1).map(|c| c.ffmpeg_codec.to_string()).collect();
-        let choices = hardware_encoder_choices(&listed, "auto");
-        assert_eq!(choices[..2], ["auto", "software"]);
-        assert_eq!(choices.len(), 2 + listed.len(), "{choices:?}");
+        let here = || craft_hwenc::CANDIDATES.iter().filter(|c| c.runs_on(os));
+        let built_in: Vec<&str> = here().filter(|c| studiocraft_studio::has_built_in_twin(c.id)).map(|c| c.id).collect();
+        // An ffmpeg that lists no hardware encoder still leaves the built-in ones.
+        let no_hardware = hardware_encoder_choices(&["libx264".to_string()], "auto");
+        assert_eq!(no_hardware[..2], ["auto", "software"]);
+        assert_eq!(no_hardware[2..], built_in[..], "{no_hardware:?}");
+        let expected_av1 = match os {
+            craft_hwenc::Os::Windows => Some("mf_av1"),
+            craft_hwenc::Os::Linux => Some("vaapi_av1"),
+            _ => None,
+        };
+        if let Some(av1) = expected_av1 {
+            assert!(no_hardware.iter().any(|i| i == av1), "{av1} runs without ffmpeg's av1 encoder: {no_hardware:?}");
+        }
+        if let Some(only_ffmpeg) = here().find(|c| !studiocraft_studio::has_built_in_twin(c.id)) {
+            let choices = hardware_encoder_choices(&[only_ffmpeg.ffmpeg_codec.to_string()], "auto");
+            assert_eq!(choices.len(), 3 + built_in.len(), "{choices:?}");
+            assert!(choices.iter().any(|i| i == only_ffmpeg.id), "{choices:?}");
+        }
         let every = hardware_encoder_choices(&[], "");
-        assert_eq!(every.len(), 2 + craft_hwenc::CANDIDATES.iter().filter(|c| c.runs_on(os)).count(), "an unread list shows every one: {every:?}");
-        let saved = hardware_encoder_choices(&listed, "qsv_av1_gone");
+        assert_eq!(every.len(), 2 + here().count(), "an unread list shows every one: {every:?}");
+        let saved = hardware_encoder_choices(&["libx264".to_string()], "qsv_av1_gone");
         assert_eq!(saved.last().map(String::as_str), Some("qsv_av1_gone"), "the saved choice stays selectable");
         assert_eq!(hardware_encoder_label("qsv_av1_gone"), "qsv_av1_gone");
         assert_eq!(hardware_encoder_label("nvenc_h264"), tl!("NVIDIA NVENC H.264"));
