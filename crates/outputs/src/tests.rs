@@ -7,6 +7,7 @@ use studiocraft_media::Tick;
 use studiocraft_media::audio::{BLOCK_FRAMES, BLOCK_SAMPLES, block_pool};
 use studiocraft_media::clock::tick_of;
 use studiocraft_media::pool::Pool;
+use studiocraft_media::queue::Fifo;
 use studiocraft_media::stats::EncoderStats;
 use studiocraft_media::video::{PixelFormat, VideoFrame};
 use studiocraft_platform::ffmpeg;
@@ -193,6 +194,7 @@ fn job(program: PathBuf, rate: RateControl) -> OutputJob {
         ffmpeg: program,
         stats: Arc::new(EncoderStats::default()),
         start: Tick(0),
+        captions: None,
     }
 }
 
@@ -391,8 +393,14 @@ fn streams_over_rtmp_to_a_local_server() {
         .spawn()
         .unwrap();
     std::thread::sleep(Duration::from_millis(700));
-    let mut out = Stream.start(&Settings::new().with("server", url.as_str()).with("key", "secret"), stream_job(1)).unwrap();
+    let mut job = stream_job(1);
+    let phrases = Arc::new(Fifo::new(8));
+    job.captions = Some(Arc::clone(&phrases));
+    let mut out = Stream.start(&Settings::new().with("server", url.as_str()).with("key", "secret"), job).unwrap();
     assert_eq!(out.target(), url, "the key is not shown");
+    // The second phrase wraps to a new line, so the first line is complete.
+    phrases.push("checked by another decoder".to_string());
+    phrases.push("second line".to_string());
     feed(out.as_ref(), 1.5);
     out.stop().unwrap();
     let deadline = Instant::now() + Duration::from_secs(10);
@@ -401,7 +409,17 @@ fn streams_over_rtmp_to_a_local_server() {
     }
     let _ = server.kill();
     let (frames, has_audio) = probe(&program, &received);
+    // ffmpeg reads the closed captions out of the H.264 stream it received.
+    let srt = ffmpeg::command(&program)
+        .current_dir(&dir)
+        .args(["-hide_banner", "-v", "error", "-f", "lavfi", "-i", "movie=received.flv[out0+subcc]", "-map", "0:s", "-f", "srt", "-"])
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .output()
+        .unwrap();
+    let srt = String::from_utf8_lossy(&srt.stdout).to_string();
     let _ = std::fs::remove_dir_all(&dir);
     assert!(frames >= 10, "{frames}");
     assert!(has_audio);
+    assert!(srt.contains("checked by another decoder"), "{srt}");
 }

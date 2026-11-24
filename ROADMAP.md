@@ -31,6 +31,7 @@ description in [docs/features.md](docs/features.md).
 - The Application Audio dock lists the microphones and the running applications that have audio as lanes with live meters, and routes an application into the program in every scene, together with the microphone ([Application Audio dock](docs/features.md#application-audio-dock)).
 - The mixer measures the final mix's loudness, and `audio.loudness` reports it with the profile's loudness target; the window does not show the readings yet ([Audio](docs/features.md#audio)).
 - Audio monitoring works on Windows and macOS, with each source off, monitor only or monitor and output ([Audio](docs/features.md#audio)).
+- Audio input and output capture stay in step with the mix when the device's clock runs a little fast or slow ([Audio](docs/features.md#audio)).
 - Each source is assigned to any of six mix tracks with `source.mix_tracks`, and a recording writes each track in its profile's `output.recording_tracks` as its own audio stream, in the built-in MKV writer and through `ffmpeg`; the window does not set either yet ([Audio](docs/features.md#audio), [Recording](docs/features.md#recording)).
 
 ### Recording
@@ -133,10 +134,11 @@ description in [docs/features.md](docs/features.md).
 10. **Raw and on-demand recordings.** A recording will be written twice: a raw copy for editing,
     with its tracks kept apart, and a copy that matches the stream for posting as a video on
     demand.
-11. **Live captions.** Speech from an audio source or the mix will be turned into text on the
+11. **Live captions (partly done).** Speech in the program audio is turned into text on the
     computer while a recording or the stream runs. A Live Captions source shows the text on the
-    program, or on the preview only, the stream carries it as closed captions, and `.srt` and
-    `.vtt` files are written beside the recording.
+    program, the stream carries it as closed captions, and `.srt`, `.vtt` and `.txt` files are
+    written beside the recording ([Live captions](docs/features.md#live-captions)). Captions of one
+    audio source instead of the mix, and captions on the preview only, are still to be built.
 12. **Canvas size from the display (partly done).** Moves and resizes snap to the canvas, its safe
     areas and other items, Settings › Video sets the canvas to a chosen display's size and the
     output to a share of the canvas, and scenes are laid out again when the canvas size changes.
