@@ -382,12 +382,24 @@ fn studio_tool_definitions() -> Vec<Value> {
             "Pause the program",
             "Show the pause screen in the program, and so in every recording, stream and replay buffer, as Pause Program does: the \
              background color, a picture or a looping video, and a countdown, from Settings › Stream › Pause screen. Each value given \
-             replaces its setting for this pause only. While paused, the values given apply at once and the countdown starts again. \
-             Returns the pause's state. An error for a file that is not a picture or video.",
+             replaces its setting for this pause only. While paused, the values given apply at once, and a given countdown starts \
+             again. Returns the pause's state. An error for a value out of its range, a countdown text without exactly one {time}, or \
+             a file that is not a picture or video.",
             json!({
                 "media": {"type": "string", "description": "A picture or video file to show (\"\" for none)."},
                 "countdown_s": {"type": "integer", "minimum": 0, "maximum": 43200, "description": "The countdown in seconds (0 for none)."},
-                "at_zero": {"type": "string", "enum": ["keep", "resume"], "description": "At zero, keep the pause screen with its text at zero, or resume."}
+                "text": {"type": "string", "maxLength": 200, "description": "The countdown text, with one {time} where the time left goes."},
+                "zero_text": {"type": "string", "maxLength": 200, "description": "The text shown in place of the countdown at zero, when the pause screen stays."},
+                "at_zero": {"type": "string", "enum": ["keep", "resume"], "description": "At zero, keep the pause screen with its text at zero, or resume."},
+                "anchor": {
+                    "type": "string",
+                    "enum": ["top_left", "top_center", "top_right", "middle_left", "center", "middle_right", "bottom_left", "bottom_center", "bottom_right"],
+                    "description": "Where the countdown text sits on the canvas."
+                },
+                "size_pct": {"type": "integer", "minimum": 2, "maximum": 15, "description": "The text's height in percent of the canvas height."},
+                "fit": {"type": "string", "enum": ["fit", "fill", "stretch"], "description": "How the picture or video is sized to the canvas."},
+                "background": {"type": "string", "description": "The color under the picture or video, #rrggbb or #rrggbbaa."},
+                "mute_scene": {"type": "boolean", "description": "Whether the program mix fades out while paused."}
             }),
             &[],
             PAUSES,
@@ -1023,7 +1035,11 @@ fn dispatch(b: &mut dyn Backend, name: &str, args: &Args) -> Result<Value, McpEr
         "stream_start" => output_command(b, "stream.start", "streaming"),
         "stream_stop" => output_command(b, "stream.stop", "streaming"),
         // A `null` value counts as not given, as in the other tools that pick their arguments.
-        "pause_start" => Ok(text(&run(b, "pause.start", pick(args, &["media", "countdown_s", "at_zero"]))?)),
+        "pause_start" => Ok(text(&run(
+            b,
+            "pause.start",
+            pick(args, &["media", "countdown_s", "text", "zero_text", "at_zero", "anchor", "size_pct", "fit", "background", "mute_scene"]),
+        )?)),
         "pause_stop" => {
             run(b, "pause.stop", json!({}))?;
             Ok(text(&run(b, "pause.status", json!({}))?))
