@@ -8,8 +8,8 @@
 //! sound, so it does not read the job's audio, and it sends raw frames without running the job's
 //! video encoder.
 
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+use std::sync::{Arc, OnceLock};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
@@ -80,14 +80,38 @@ impl Output for VirtualCamera {
     }
 }
 
+/// The output's state, as [`Shared::state`] holds it.
+const STARTING: u8 = 0;
+const RUNNING: u8 = 1;
+const STOPPED: u8 = 2;
+const FAILED: u8 = 3;
+
+/// What the thread and the output share, without a lock: the stop request and the state in
+/// atomics, and the failure's text in a [`OnceLock`], whose `get` does not wait.
 struct Shared {
     stop: AtomicBool,
-    status: Mutex<OutputStatus>,
+    state: AtomicU8,
+    failure: OnceLock<String>,
 }
 
 impl Shared {
-    fn set(&self, status: OutputStatus) {
-        *self.status.lock().unwrap_or_else(PoisonError::into_inner) = status;
+    fn set(&self, state: u8) {
+        self.state.store(state, Ordering::Release);
+    }
+
+    /// Record the failure `e`; the text is stored before the state says the output failed.
+    fn fail(&self, e: String) {
+        let _ = self.failure.set(e);
+        self.set(FAILED);
+    }
+
+    fn status(&self) -> OutputStatus {
+        match self.state.load(Ordering::Acquire) {
+            RUNNING => OutputStatus::Running,
+            STOPPED => OutputStatus::Stopped,
+            FAILED => OutputStatus::Failed(self.failure.get().cloned().unwrap_or_default()),
+            _ => OutputStatus::Starting,
+        }
     }
 }
 
@@ -104,7 +128,7 @@ impl Running {
     /// Start the thread that writes frames to `camera`, counting them in `stats`.
     pub(crate) fn spawn(camera: Box<dyn Camera>, stats: Arc<EncoderStats>, target: String) -> Result<Running, PluginError> {
         let video = Arc::new(Fifo::new(QUEUE));
-        let shared = Arc::new(Shared { stop: AtomicBool::new(false), status: Mutex::new(OutputStatus::Starting) });
+        let shared = Arc::new(Shared { stop: AtomicBool::new(false), state: AtomicU8::new(STARTING), failure: OnceLock::new() });
         let (q, s) = (Arc::clone(&video), Arc::clone(&shared));
         let thread = std::thread::Builder::new()
             .name("virtual camera".into())
@@ -114,16 +138,20 @@ impl Running {
     }
 }
 
-/// The thread: write the newest frame until a stop or a failure.
+/// The thread: write the newest frame until a stop or a failure. The dropped count is the frames
+/// the full queue pushed out plus the frames the thread itself dropped.
 fn send(mut camera: Box<dyn Camera>, video: &Fifo<Arc<PooledFrame>>, shared: &Shared, stats: &EncoderStats) {
     let mut started = false;
+    let mut dropped = 0u64;
+    let count = |dropped: u64| stats.dropped.store(video.dropped() + dropped, Ordering::Relaxed);
     while !shared.stop.load(Ordering::Acquire) {
         let mut newest = None;
         while let Some(f) = video.pop() {
             if newest.replace(f).is_some() {
-                stats.dropped.fetch_add(1, Ordering::Relaxed);
+                dropped += 1;
             }
         }
+        count(dropped);
         let Some(frame) = newest else {
             std::thread::sleep(IDLE);
             continue;
@@ -134,19 +162,22 @@ fn send(mut camera: Box<dyn Camera>, video: &Fifo<Arc<PooledFrame>>, shared: &Sh
                 stats.bytes.fetch_add(u64::try_from(sent).unwrap_or(u64::MAX), Ordering::Relaxed);
                 if !started {
                     started = true;
-                    shared.set(OutputStatus::Running);
+                    shared.set(RUNNING);
                 }
             }
             Ok(None) => {
-                stats.dropped.fetch_add(1, Ordering::Relaxed);
+                dropped += 1;
+                count(dropped);
             }
             Err(e) => {
-                shared.set(OutputStatus::Failed(e.to_string()));
+                count(dropped);
+                shared.fail(e.to_string());
                 return;
             }
         }
     }
-    shared.set(OutputStatus::Stopped);
+    count(dropped);
+    shared.set(STOPPED);
 }
 
 impl OutputInstance for Running {
@@ -157,7 +188,7 @@ impl OutputInstance for Running {
         Arc::clone(&self.audio)
     }
     fn status(&self) -> OutputStatus {
-        self.shared.status.lock().unwrap_or_else(PoisonError::into_inner).clone()
+        self.shared.status()
     }
     fn target(&self) -> String {
         self.target.clone()
@@ -259,7 +290,7 @@ mod tests {
 
     #[test]
     fn frames_that_came_while_the_device_was_busy_give_way_to_the_newest() {
-        // The first write says it has begun, then waits until the test has queued two more
+        // The first write says it has begun, then waits until the test has queued three more
         // frames.
         let (entered, begun) = mpsc::channel::<()>();
         let (go, wait) = mpsc::channel::<()>();
@@ -274,16 +305,18 @@ mod tests {
         let mut out = Running::spawn(cam, Arc::clone(&stats), "test".into()).unwrap();
         let pool = Pool::new(8, VideoFrame::default);
         out.video().push(frame(&pool, 1));
-        // Frames 2 and 3 wait while frame 1 is written; frame 2 is dropped.
+        // Frames 2, 3 and 4 come while frame 1 is written. The full queue drops frame 2, and
+        // frame 4 replaces frame 3: both count as dropped.
         begun.recv().unwrap();
         out.video().push(frame(&pool, 2));
         out.video().push(frame(&pool, 3));
+        out.video().push(frame(&pool, 4));
         go.send(()).unwrap();
         assert_eq!(written.recv(), Ok(1));
-        assert_eq!(written.recv(), Ok(3));
+        assert_eq!(written.recv(), Ok(4));
         out.stop().unwrap();
         assert_eq!(stats.frames.load(Ordering::Relaxed), 2);
-        assert_eq!(stats.dropped.load(Ordering::Relaxed), 1);
+        assert_eq!(stats.dropped.load(Ordering::Relaxed), 2);
     }
 
     #[test]
