@@ -109,6 +109,41 @@ fn the_last_frame_stays_until_a_new_one_arrives() {
 }
 
 #[test]
+fn a_shared_capture_the_device_cannot_take_falls_back_and_the_program_goes_on() {
+    let Some(mut c) = compositor(16, 16) else { return };
+    let v = frame(&[[0, 255, 0, 255]; 4], 2, 2);
+    let t = Transform { scale: Vec2::new(8.0, 8.0), ..Transform::default() };
+    let plan = Plan { program: SceneDesc { items: vec![item(1, &v, t)] }, ..Plan::default() };
+    draw(&mut c, plan.clone(), Tick(0));
+    // A shared picture from a ring no device can open: the reason is recorded on the ring, and
+    // the last picture from memory stays on screen.
+    let ring = craft_gpu_interop::SharedRing::detached(2, 2);
+    v.publish(VideoContent::Shared(craft_gpu_interop::SharedFrame::new(Arc::clone(&ring), 0, 1).unwrap()));
+    let px = draw(&mut c, plan.clone(), Tick(1));
+    assert!(ring.fallback().is_some(), "the capture is told to copy through memory");
+    assert!(close(pixel(&px, 16, 8, 8), [0, 255, 0, 255]));
+    // The next picture from memory is drawn as before.
+    let mut f = v.frame();
+    assert!(f.reshape(2, 2, PixelFormat::Rgba8));
+    f.data.as_chunks_mut::<4>().0.iter_mut().for_each(|p| *p = [255, 0, 0, 255]);
+    v.publish(VideoContent::Frame(f));
+    let px = draw(&mut c, plan, Tick(2));
+    assert!(close(pixel(&px, 16, 8, 8), [255, 0, 0, 255]));
+}
+
+#[test]
+fn a_shared_capture_of_no_size_is_refused() {
+    let Some(mut c) = compositor(8, 8) else { return };
+    let v = Arc::new(VideoOut::default());
+    let ring = craft_gpu_interop::SharedRing::detached(0, 0);
+    v.publish(VideoContent::Shared(craft_gpu_interop::SharedFrame::new(Arc::clone(&ring), 0, 1).unwrap()));
+    let plan = Plan { program: SceneDesc { items: vec![item(1, &v, at(0.0, 0.0))] }, ..Plan::default() };
+    let px = draw(&mut c, plan, Tick(0));
+    assert_eq!(ring.fallback(), Some(craft_gpu_interop::Fallback::Format));
+    assert!(close(pixel(&px, 8, 4, 4), [0, 0, 0, 255]));
+}
+
+#[test]
 fn rotation_turns_around_the_center() {
     let Some(mut c) = compositor(40, 40) else { return };
     // A 30 x 4 bar centered on (20, 20), turned upright.
@@ -1046,6 +1081,37 @@ fn a_request_without_a_rate_draws_once() {
         }
         assert_eq!(drawn(&c)[0], after, "fps {fps} draws only once");
     }
+}
+
+#[test]
+fn a_thumbnail_drawn_once_waits_for_a_shared_picture_still_being_copied() {
+    let mut c = noop_compositor(32, 18);
+    let v = solid([255, 0, 0, 255], 32, 18);
+    c.set_thumbnails(thumbnails(vec![one_item_scene(1, &v)], 0.0));
+    c.frame(ms(5000), &AtomicU64::new(0));
+    assert_eq!(c.thumbnails_due(ms(6000)).1, 0, "drawn once");
+    // The source's shared picture was still being copied when the slot was drawn.
+    let ring = craft_gpu_interop::SharedRing::detached(2, 2);
+    let st = c.sources.get_mut(&SourceId(1)).unwrap();
+    st.shared.get_or_insert_with(Default::default).offer(craft_gpu_interop::SharedFrame::new(ring, 0, 1).unwrap());
+    c.thumbnails_drawn(&[0], ms(6000));
+    assert_eq!(c.thumbnails_due(ms(7000)), ([0, 0], 1), "the slot is drawn again");
+    // The picture was drawn: the slot is done.
+    c.sources.get_mut(&SourceId(1)).unwrap().shared.as_mut().unwrap().clear();
+    c.thumbnails_drawn(&[0], ms(7000));
+    assert_eq!(c.thumbnails_due(ms(8000)).1, 0);
+}
+
+#[test]
+fn a_shared_picture_is_drawn_into_the_view_made_with_the_texture() {
+    let c = noop_compositor(8, 8);
+    let format = wgpu::TextureFormat::Bgra8Unorm;
+    let mut slot = None;
+    let first = shared_target(&c.gpu.device, &c.pipes, &mut slot, (4, 4), format);
+    assert_eq!(shared_target(&c.gpu.device, &c.pipes, &mut slot, (4, 4), format), first, "no view per frame");
+    let resized = shared_target(&c.gpu.device, &c.pipes, &mut slot, (8, 4), format);
+    assert_ne!(resized, first, "a new size makes a new texture and view");
+    assert_eq!(slot.map(|t| t.view), Some(resized));
 }
 
 #[test]

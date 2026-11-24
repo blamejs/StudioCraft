@@ -680,6 +680,14 @@ A stream tests only the H.264 candidates in this list, and skips every other can
 
 The compositor converts the program to the encoders' frame format on the GPU.
 
+On Windows, a Display capture source captures with desktop duplication into textures that the
+compositor opens on its Direct3D 12 device, so the picture is not copied through CPU memory. The
+source copies the picture through CPU memory instead when the compositor draws with another
+backend (Vulkan, or the software adapter), when the display belongs to another graphics adapter
+than the compositor's, when the compositor cannot open the textures, for a rotated display, and
+when desktop duplication does not give 8-bit BGRA pictures. Staged windows sources and window
+capture always copy through CPU memory.
+
 The compositor can also draw a small picture of each of up to 16 scenes, for scene lists. Each
 picture fits a 256 × 144 box by default, keeps the canvas's aspect ratio, and is redrawn at most 4
 times a second. The pictures stay on the GPU. Scenes past the sixteenth are not drawn and are
