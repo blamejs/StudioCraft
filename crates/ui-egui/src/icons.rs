@@ -1,4 +1,4 @@
-//! Small icons drawn with shapes, on icon buttons.
+//! Small icons drawn with shapes, on icon buttons and on the Sources dock's rows.
 
 use std::f32::consts::TAU;
 
@@ -47,6 +47,133 @@ fn speaker(p: &Painter, rect: Rect, color: Color32) {
     let w = pos2(x0 + s * 1.1, c.y);
     p.add(Shape::line(arc(w, s * 0.5, -0.9, 0.9, 8), Stroke::new(1.3, color)));
     p.add(Shape::line(arc(w, s * 0.95, -0.9, 0.9, 10), Stroke::new(1.3, color)));
+}
+
+// port: FW-1 (craft-libs icons for the source types) replaces these glyphs with the framework's
+// `camera`, `film`, `mic` and `captions` icons once the icon set has those meanings.
+
+/// The type icons of the Sources dock that the framework's icon set does not have yet.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SourceGlyph {
+    /// A camera body with its lens.
+    Camera,
+    /// A strip of film.
+    Film,
+    /// A microphone on its stand.
+    Microphone,
+    /// The speaker with two sound waves of the mute button.
+    Speaker,
+    /// A caption box with two lines of text.
+    Captions,
+}
+
+impl SourceGlyph {
+    /// The glyph that paints this icon.
+    pub fn glyph(self) -> &'static (dyn Glyph + 'static) {
+        match self {
+            SourceGlyph::Camera => &Camera,
+            SourceGlyph::Film => &Film,
+            SourceGlyph::Microphone => &Microphone,
+            SourceGlyph::Speaker => &Speaker,
+            SourceGlyph::Captions => &Captions,
+        }
+    }
+}
+
+/// The 16 by 16 design grid of a glyph, fitted to the largest square at the center of a rectangle.
+struct Grid {
+    origin: Pos2,
+    k: f32,
+}
+
+impl Grid {
+    /// The grid of `rect`; `None` for an empty or non-finite rectangle.
+    fn of(rect: Rect) -> Option<Grid> {
+        let side = rect.width().min(rect.height());
+        if !rect.is_finite() || side <= 0.0 {
+            return None;
+        }
+        let k = side / 16.0;
+        Some(Grid { origin: rect.center() - vec2(8.0 * k, 8.0 * k), k })
+    }
+
+    fn at(&self, x: f32, y: f32) -> Pos2 {
+        self.origin + vec2(x * self.k, y * self.k)
+    }
+
+    /// The glyph's 1.5 unit stroke.
+    fn line(&self, color: Color32) -> Stroke {
+        Stroke::new(1.5 * self.k, color)
+    }
+
+    /// An outlined rectangle from `(x0, y0)` to `(x1, y1)` with corners of radius 2.
+    fn frame(&self, p: &Painter, [x0, y0, x1, y1]: [f32; 4], color: Color32) {
+        let radius = CornerRadius::same((2.0 * self.k).round().clamp(0.0, 255.0) as u8);
+        p.rect_stroke(Rect::from_min_max(self.at(x0, y0), self.at(x1, y1)), radius, self.line(color), StrokeKind::Middle);
+    }
+
+    fn segment(&self, p: &Painter, [x0, y0, x1, y1]: [f32; 4], color: Color32) {
+        p.line_segment([self.at(x0, y0), self.at(x1, y1)], self.line(color));
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, craft_ui::contract::MemoProps)]
+pub struct Camera;
+
+impl Glyph for Camera {
+    fn paint(&self, p: &Painter, _: &UiTokens, rect: Rect, color: Color32, _: bool) {
+        let Some(g) = Grid::of(rect) else { return };
+        g.frame(p, [1.5, 4.5, 14.5, 13.5], color);
+        let bump = vec![g.at(5.0, 4.5), g.at(6.2, 2.5), g.at(9.8, 2.5), g.at(11.0, 4.5)];
+        p.add(Shape::line(bump, g.line(color)));
+        p.circle_stroke(g.at(8.0, 9.0), 2.5 * g.k, g.line(color));
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, craft_ui::contract::MemoProps)]
+pub struct Film;
+
+impl Glyph for Film {
+    fn paint(&self, p: &Painter, _: &UiTokens, rect: Rect, color: Color32, _: bool) {
+        let Some(g) = Grid::of(rect) else { return };
+        g.frame(p, [2.0, 1.5, 14.0, 14.5], color);
+        for x in [5.0, 11.0] {
+            g.segment(p, [x, 1.5, x, 14.5], color);
+        }
+        g.segment(p, [5.0, 8.0, 11.0, 8.0], color);
+        for (x0, x1) in [(2.0, 5.0), (11.0, 14.0)] {
+            for y in [4.75, 8.0, 11.25] {
+                g.segment(p, [x0, y, x1, y], color);
+            }
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, craft_ui::contract::MemoProps)]
+pub struct Microphone;
+
+impl Glyph for Microphone {
+    fn paint(&self, p: &Painter, _: &UiTokens, rect: Rect, color: Color32, _: bool) {
+        let Some(g) = Grid::of(rect) else { return };
+        let radius = CornerRadius::same((2.0 * g.k).round().clamp(0.0, 255.0) as u8);
+        p.rect_stroke(Rect::from_min_max(g.at(6.0, 1.5), g.at(10.0, 9.5)), radius, g.line(color), StrokeKind::Middle);
+        p.add(Shape::line(arc(g.at(8.0, 7.5), 4.5 * g.k, 0.0, TAU / 2.0, 12), g.line(color)));
+        g.segment(p, [8.0, 12.0, 8.0, 14.5], color);
+        g.segment(p, [5.5, 14.5, 10.5, 14.5], color);
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, craft_ui::contract::MemoProps)]
+pub struct Captions;
+
+impl Glyph for Captions {
+    fn paint(&self, p: &Painter, _: &UiTokens, rect: Rect, color: Color32, _: bool) {
+        let Some(g) = Grid::of(rect) else { return };
+        g.frame(p, [1.5, 3.5, 14.5, 12.5], color);
+        for line in [[4.5, 7.0, 6.0, 7.0], [8.5, 7.0, 11.5, 7.0], [4.5, 9.75, 7.5, 9.75], [10.0, 9.75, 11.5, 9.75]] {
+            g.segment(p, line, color);
+        }
+    }
 }
 
 // port: P8 (icons, segmented control and on-air buttons) replaces this button, the copy of the
@@ -174,6 +301,29 @@ mod tests {
         for c in &out.shapes {
             let bounds = c.shape.visual_bounding_rect();
             assert!(square.expand(1.0).contains_rect(bounds), "{bounds:?} is inside {square:?}");
+        }
+    }
+
+    #[test]
+    fn each_source_glyph_paints_inside_its_square_and_not_in_an_empty_one() {
+        let ctx = crate::test_context();
+        let all = [SourceGlyph::Camera, SourceGlyph::Film, SourceGlyph::Microphone, SourceGlyph::Speaker, SourceGlyph::Captions];
+        for glyph in all {
+            let square = Rect::from_min_size(pos2(10.0, 10.0), vec2(16.0, 16.0));
+            let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
+                let tokens = craft_ui::style::StyleCx::with_root(ui.ctx(), |cx| cx.tokens.clone());
+                glyph.glyph().paint(ui.painter(), &tokens, square, Color32::WHITE, false);
+                let empty = Rect::from_min_size(pos2(40.0, 40.0), egui::Vec2::ZERO);
+                glyph.glyph().paint(ui.painter(), &tokens, empty, Color32::WHITE, false);
+                let bad = Rect::from_min_size(pos2(40.0, 40.0), vec2(f32::NAN, 16.0));
+                glyph.glyph().paint(ui.painter(), &tokens, bad, Color32::WHITE, false);
+            });
+            out.textures_delta.clear();
+            assert!(!out.shapes.is_empty(), "{glyph:?} paints");
+            for c in &out.shapes {
+                let bounds = c.shape.visual_bounding_rect();
+                assert!(square.expand(1.0).contains_rect(bounds), "{glyph:?}: {bounds:?} is inside {square:?}");
+            }
         }
     }
 }

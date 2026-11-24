@@ -241,6 +241,8 @@
 	No separate key; a key at the end of the server address is used	No separate key; a key at the end of the server address is used
 	No server set	No server set
 	No sources in this scene. Add one with +.	No sources in this scene. Add one with +.
+	Heard in every scene	Heard in every scene
+	No window	No window
 	Noise gate	Noise gate
 	None	None
 	Not in this stream; it is sent to from the next start	Not in this stream; it is sent to from the next start
