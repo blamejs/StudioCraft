@@ -30,6 +30,7 @@ pub const TABLE: &[(&str, Class)] = &[
     ("plugin", Class::Layer(1)),
     ("craft-rtmp", Class::Layer(1)),
     ("craft-transitions", Class::Layer(1)),
+    ("craft-avatar", Class::Layer(1)),
     ("engine", Class::Layer(2)),
     ("render", Class::Layer(2)),
     ("platform", Class::Layer(2)),

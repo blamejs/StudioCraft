@@ -1464,6 +1464,17 @@ version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=1c137fea600666d77eceabbfa3bdd0aef67d5fbd#1c137fea600666d77eceabbfa3bdd0aef67d5fbd"
 
 [[package]]
+name = "craft-avatar"
+version = "0.1.0-alpha.2"
+dependencies = [
+ "craft-ease",
+ "serde",
+ "serde_json",
+ "stats_alloc",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "craft-captions"
 version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=1c137fea600666d77eceabbfa3bdd0aef67d5fbd#1c137fea600666d77eceabbfa3bdd0aef67d5fbd"
