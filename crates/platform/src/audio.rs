@@ -176,12 +176,27 @@ impl Devices {
 /// Serve requests until every sender is gone. A stream stays on this thread from its open to its
 /// close. A panic while a stream opens fails only that playback, and a panic while a stream closes
 /// or a request is dropped ends only that step, so the thread and the streams that have started
-/// keep running.
+/// keep running. Before each request, the streams whose handles were dropped are closed, again
+/// until a pass finds none, so a handle dropped while another stream closes is closed too.
 fn serve(requests: &Receiver<Request>) {
     let mut streams: Vec<(Pending, Box<dyn Any>)> = Vec::new();
     while let Ok(request) = requests.recv() {
-        let _ = catch_unwind(AssertUnwindSafe(|| streams.retain(|(slot, _)| !slot.0.dropped.load(Ordering::Acquire))));
-        let _ = catch_unwind(AssertUnwindSafe(|| serve_one(&mut streams, request)));
+        loop {
+            let before = streams.len();
+            discard(catch_unwind(AssertUnwindSafe(|| streams.retain(|(slot, _)| !slot.0.dropped.load(Ordering::Acquire)))));
+            if streams.len() == before {
+                break;
+            }
+        }
+        discard(catch_unwind(AssertUnwindSafe(|| serve_one(&mut streams, request))));
+    }
+}
+
+/// Discard a caught panic without dropping its payload. A payload's destructor can panic again,
+/// and that panic would end the device thread.
+fn discard(caught: std::thread::Result<()>) {
+    if let Err(payload) = caught {
+        std::mem::forget(payload);
     }
 }
 
@@ -200,8 +215,9 @@ fn serve_one(streams: &mut Vec<(Pending, Box<dyn Any>)>, request: Request) {
         Ok(Err(e)) => {
             let _ = slot.0.started.set(Err(e.to_string()));
         }
-        Err(_) => {
+        Err(payload) => {
             let _ = slot.0.started.set(Err(OPEN_FAILED.into()));
+            std::mem::forget(payload);
         }
     }
 }
@@ -782,5 +798,83 @@ mod tests {
         while !second.started() {
             std::thread::yield_now();
         }
+    }
+
+    /// A stand-in for a device stream that marks itself closed when it is dropped.
+    struct MarksClosed(Arc<AtomicBool>);
+
+    impl Drop for MarksClosed {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::SeqCst);
+        }
+    }
+
+    #[test]
+    fn a_playback_dropped_while_another_stream_closes_closes_before_the_waiting_open() {
+        let devices = Devices::spawn().unwrap();
+        let earlier_closed = Arc::new(AtomicBool::new(false));
+        let mark = MarksClosed(Arc::clone(&earlier_closed));
+        let earlier = play(&devices, opening(move || Ok((mark, STEREO_48K)))).unwrap();
+        let (began_tx, began_rx) = sync_channel(1);
+        let (finish_tx, finish_rx) = sync_channel(1);
+        let stream = SlowClose { began: began_tx, finish: finish_rx, closed: Arc::new(AtomicBool::new(false)) };
+        let later = play(&devices, opening(move || Ok((stream, STEREO_48K)))).unwrap();
+        // An open held on the device thread keeps the next open waiting in the queue.
+        let (held, release, held_began, _held_dropped) = held_open(&devices);
+        held_began.recv().unwrap();
+        assert!(earlier.started() && later.started());
+        let (seen_tx, seen_rx) = sync_channel(1);
+        let was_closed = Arc::clone(&earlier_closed);
+        let next = play(
+            &devices,
+            opening(move || {
+                let _ = seen_tx.send(was_closed.load(Ordering::SeqCst));
+                Ok(((), STEREO_48K))
+            }),
+        )
+        .unwrap();
+        drop(later);
+        release.send(Ok(STEREO_48K)).unwrap();
+        // The earlier stream's handle is dropped while the later stream closes, before the waiting
+        // open runs.
+        began_rx.recv().unwrap();
+        drop(earlier);
+        finish_tx.send(()).unwrap();
+        assert!(seen_rx.recv().unwrap(), "the device was opened again before the earlier stream closed");
+        while !next.started() {
+            std::thread::yield_now();
+        }
+        assert!(held.started());
+    }
+
+    /// A panic payload whose destructor panics again with a new one.
+    struct PanicsWhenDiscarded;
+
+    impl Drop for PanicsWhenDiscarded {
+        fn drop(&mut self) {
+            std::panic::panic_any(PanicsWhenDiscarded);
+        }
+    }
+
+    #[test]
+    fn a_panic_payload_that_panics_when_dropped_does_not_stop_the_device_thread() {
+        let devices = Devices::spawn().unwrap();
+        let (kept, release, _began, kept_dropped) = held_open(&devices);
+        release.send(Ok(STEREO_48K)).unwrap();
+        while !kept.started() {
+            std::thread::yield_now();
+        }
+        let crashing = play(&devices, opening(|| -> Result<((), Format), PlatformError> { std::panic::panic_any(PanicsWhenDiscarded) })).unwrap();
+        while crashing.open_error().is_none() {
+            std::thread::yield_now();
+        }
+        let after = play(&devices, opening(|| Ok(((), STEREO_48K)))).unwrap();
+        while !after.started() && after.open_error().is_none() {
+            std::thread::yield_now();
+        }
+        assert_eq!((after.started(), after.open_error()), (true, None), "a later open still starts");
+        assert!(kept_dropped.try_recv().is_err(), "the stream that had started was closed");
+        drop(kept);
+        kept_dropped.recv().unwrap();
     }
 }
