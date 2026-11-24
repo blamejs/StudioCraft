@@ -38,8 +38,8 @@ pub const CANVAS_MIN_HEIGHT: f32 = 270.0;
 pub const MIN_WIDTH: f32 = 200.0;
 /// The width of the line between two columns.
 pub const DIVIDER: f32 = 1.0;
-/// The default widths of Scenes, Sources, Audio Mixer and Application Audio, by dock index.
-pub const DEFAULT_WIDTHS: [f32; crate::store::DOCK_COUNT] = [300.0, 340.0, 400.0, 360.0];
+/// The default widths of Scenes, Sources, Audio Mixer, Application Audio and Health, by dock index.
+pub const DEFAULT_WIDTHS: [f32; crate::store::DOCK_COUNT] = [300.0, 340.0, 400.0, 360.0, 300.0];
 
 /// The default width of dock `i`; an index past the last dock gets the last dock's width.
 pub fn default_width(i: usize) -> f32 {
@@ -529,10 +529,11 @@ mod tests {
         assert_eq!(widths(1280.0, &[0, 1, 2, 3], none), [300.0, 340.0, 400.0, 237.0]);
         assert_eq!(widths(1280.0, &[3, 2], none), [360.0, 919.0], "360 points by default once it is not last");
         assert_eq!(widths(1280.0, &[3, 2], [0.0, 0.0, 0.0, 420.0]), [420.0, 859.0]);
-        assert_eq!(widths(1280.0, &[9, 2], none), [360.0, 919.0], "an index past the last dock reads the last default");
+        assert_eq!(widths(1280.0, &[4, 2], none), [300.0, 979.0], "Health is 300 points by default");
+        assert_eq!(widths(1280.0, &[9, 2], none), [300.0, 979.0], "an index past the last dock reads the last default");
         let shown = [3, 0, 1];
         let w = widths(1280.0, &shown, none);
-        assert_eq!(save(none, &shown, &drag(&w, 0, 15.0), 0), [285.0, 0.0, 0.0, 375.0]);
+        assert_eq!(save(none, &shown, &drag(&w, 0, 15.0), 0), [285.0, 0.0, 0.0, 375.0, 0.0]);
         assert_eq!(save([0.0; 3], &[9, 0], &[300.0, 900.0], 0), [0.0; 3], "an index past the saved widths is not saved");
     }
 
@@ -572,7 +573,7 @@ mod tests {
         let size = egui::vec2(300.0, 200.0);
         assert_eq!(window_place(bounds, size, 0), egui::pos2(490.0, 300.0));
         assert_eq!(window_place(bounds, size, 2), egui::pos2(538.0, 348.0));
-        assert_eq!(window_place(bounds, size, usize::MAX), egui::pos2(586.0, 396.0), "an index past the last dock steps no further");
+        assert_eq!(window_place(bounds, size, usize::MAX), egui::pos2(610.0, 420.0), "an index past the last dock steps no further");
         let small = Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(400.0, 300.0));
         assert_eq!(window_place(small, egui::vec2(380.0, 290.0), 3), egui::pos2(20.0, 10.0), "kept inside the main window");
         assert_eq!(window_place(small, egui::vec2(800.0, 500.0), 1), egui::Pos2::ZERO, "a larger window starts at the top left");

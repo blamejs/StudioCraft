@@ -60,7 +60,7 @@
 	Color correction	תיקון צבע
 	Color key	מפתח צבע
 	Community	קהילה
-	Compact (small files)	דחוס (קבצים קטנים)
+	Compact	דחוס
 	Compressor	מדחס
 	Contrast	ניגודיות
 	could not connect to the PipeWire sound server	לא ניתן להתחבר לשרת הקול PipeWire
@@ -175,7 +175,7 @@ layout	Custom	מותאמת אישית
 	Lock (it can't be moved in the preview)	נעילה (לא ניתן להזיז אותו בתצוגה המקדימה)
 	Lock Preview	נעילת התצוגה המקדימה
 	Loop	לולאה
-	Lossless (very large files)	ללא אובדן (קבצים גדולים מאוד)
+	Lossless	ללא אובדן
 	Low (dB)	תדרים נמוכים (dB)
 	Maximize	הגדלה
 	Media file	קובץ מדיה
@@ -210,6 +210,8 @@ layout	Custom	מותאמת אישית
 	No filters yet.	אין עדיין מסננים.
 	No graphics device: the preview is off	אין התקן גרפי: התצוגה המקדימה כבויה
 	No sources in this scene. Add one with +.	אין מקורות בסצנה זו. הוסיפו מקור עם +.
+	Heard in every scene	נשמע בכל סצנה
+	No window	אין חלון
 	Noise gate	שער רעש
 	None	ללא
 	not in this ffmpeg	לא קיים ב־ffmpeg זה
@@ -232,7 +234,7 @@ layout	Custom	מותאמת אישית
 	Presets	הגדרות מראש
 	Preview: {name}	תצוגה מקדימה: {name}
 	Primary display	המסך הראשי
-	Pristine (large files)	איכות מרבית (קבצים גדולים)
+	Pristine	איכות מרבית
 	Profile	פרופיל
 	Program: {name}	פלט סופי: {name}
 	Properties	מאפיינים
@@ -473,6 +475,12 @@ menu	Transform	שינוי צורה
 	Audio tracks write this source to a WAV file of its own (Settings › Output › Audio tracks)	רצועות השמע כותבות מקור זה לקובץ WAV משלו (הגדרות › פלט › רצועות שמע)
 	Audio tracks	רצועות שמע
 	Write each recorded source and the program mix to its own WAV file	כתיבת כל מקור מוקלט ומיקס התוכנית לקובץ WAV משלו
+	Smaller files for long sessions	קבצים קטנים יותר להפעלות ארוכות
+	A good fit for most recordings	מתאימה לרוב ההקלטות
+	Almost no loss, for editing later	כמעט ללא אובדן, לעריכה בהמשך
+	No loss at all, in very large files	ללא אובדן כלל, בקבצים גדולים מאוד
+	Advanced options	אפשרויות מתקדמות
+	ffmpeg program, write buffer, file size, audio editor	תוכנית ffmpeg, מאגר כתיבה, גודל קובץ, עורך שמע
 	Write them while	מתי לכתוב
 	Include the program mix	כולל מיקס התוכנית
 	Write buffer	מאגר כתיבה
@@ -618,3 +626,33 @@ menu	Transform	שינוי צורה
 	Move Under the Canvas	העברה אל מתחת למשטח
 	Resize the column	שינוי רוחב העמודה
 	Place Dock	מיקום חלונית
+	Health	מצב
+	Destinations	יעדים
+	Streaming…	שידור…
+	{live} of {count} live	{live} מתוך {count} בשידור חי
+	Not streaming	אין שידור
+	Live · sending the pause screen	בשידור חי · שולח את מסך ההשהיה
+	Encoder	מקודד
+	Frames are late or skipped	יש פריימים מאחרים או מדולגים
+	No frames late or skipped	אין פריימים מאחרים או מדולגים
+	Tracks	רצועות
+	Files	קבצים
+	{mb} MB	{mb} MB
+	Disk free	מקום פנוי
+	{gb} GB	{gb} GB
+	Audio lost	שמע שאבד
+	{lost} s	{lost} ש׳
+	Loading…	טוען…
+	Live captions	כתוביות חיות
+	Program loudness	עוצמת התוכנית
+	No program audio yet	עדיין אין שמע בתוכנית
+	Below the target band	מתחת לטווח היעד
+	Above the target band	מעל לטווח היעד
+	In the target band	בטווח היעד
+	Short-term	לטווח קצר
+	Integrated	משולבת
+	True peak	שיא אמיתי
+	Target band	טווח היעד
+	{value} LUFS	{value} LUFS
+	{value} dBTP	{value} dBTP
+	{low} to {high} LUFS	{low} עד {high} LUFS

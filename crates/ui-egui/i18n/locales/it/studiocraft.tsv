@@ -199,6 +199,8 @@ layout	Custom	Personalizzato
 	No filters yet.	Ancora nessun filtro.
 	No graphics device: the preview is off	Nessun dispositivo grafico: l'anteprima è disattivata
 	No sources in this scene. Add one with +.	Questa scena non ha sorgenti. Aggiungine una con +.
+	Heard in every scene	Udibile in ogni scena
+	No window	Nessuna finestra
 	Noise gate	Noise gate
 	None	Nessuno
 	not in this ffmpeg	non presente in questo ffmpeg
@@ -425,16 +427,16 @@ layout	Custom	Personalizzato
 	Hardware acceleration	Accelerazione hardware
 	Power saving	Risparmio energetico
 	Software (slower)	Software (più lento)
-	Compact (small files)	Compatta (file piccoli)
+	Compact	Compatta
 	Duplicate Profile	Duplica profilo
 	Duplicate Scene Collection	Duplica raccolta di scene
-	Lossless (very large files)	Senza perdita (file molto grandi)
+	Lossless	Senza perdita
 	Move Down	Sposta in basso
 	Move to Bottom	Sposta in fondo
 	Move to Top	Sposta in cima
 	Move Up	Sposta in alto
 	New Scene Collection	Nuova raccolta di scene
-	Pristine (large files)	Impeccabile (file grandi)
+	Pristine	Impeccabile
 	Rename Profile	Rinomina profilo
 	Rename Scene Collection	Rinomina raccolta di scene
 	Unlock	Sblocca
@@ -488,6 +490,12 @@ menu	Transform	Trasforma
 	Audio tracks write this source to a WAV file of its own (Settings › Output › Audio tracks)	Le tracce audio scrivono questa sorgente in un file WAV a sé (Impostazioni › Uscita › Tracce audio)
 	Audio tracks	Tracce audio
 	Write each recorded source and the program mix to its own WAV file	Scrivi ogni sorgente registrata e il mix del programma in un file WAV a sé
+	Smaller files for long sessions	File più piccoli per sessioni lunghe
+	A good fit for most recordings	Adatta alla maggior parte delle registrazioni
+	Almost no loss, for editing later	Quasi senza perdita, per modificare in seguito
+	No loss at all, in very large files	Nessuna perdita, in file molto grandi
+	Advanced options	Opzioni avanzate
+	ffmpeg program, write buffer, file size, audio editor	programma ffmpeg, buffer di scrittura, dimensione file, editor audio
 	Write them while	Scrivile quando
 	Include the program mix	Includi il mix del programma
 	Write buffer	Buffer di scrittura
@@ -633,3 +641,33 @@ menu	Transform	Trasforma
 	Move Under the Canvas	Sposta sotto l'area di lavoro
 	Resize the column	Ridimensiona la colonna
 	Place Dock	Posiziona pannello
+	Health	Stato
+	Destinations	Destinazioni
+	Streaming…	Streaming…
+	{live} of {count} live	{live} di {count} in diretta
+	Not streaming	Nessuno streaming
+	Live · sending the pause screen	In diretta · invia la schermata di pausa
+	Encoder	Encoder
+	Frames are late or skipped	Fotogrammi in ritardo o saltati
+	No frames late or skipped	Nessun fotogramma in ritardo o saltato
+	Tracks	Tracce
+	Files	File
+	{mb} MB	{mb} MB
+	Disk free	Spazio libero
+	{gb} GB	{gb} GB
+	Audio lost	Audio perso
+	{lost} s	{lost} s
+	Loading…	Caricamento…
+	Live captions	Sottotitoli in diretta
+	Program loudness	Loudness del programma
+	No program audio yet	Ancora nessun audio del programma
+	Below the target band	Sotto la fascia obiettivo
+	Above the target band	Sopra la fascia obiettivo
+	In the target band	Nella fascia obiettivo
+	Short-term	Breve termine
+	Integrated	Integrata
+	True peak	Picco reale
+	Target band	Fascia obiettivo
+	{value} LUFS	{value} LUFS
+	{value} dBTP	{value} dBTP
+	{low} to {high} LUFS	Da {low} a {high} LUFS

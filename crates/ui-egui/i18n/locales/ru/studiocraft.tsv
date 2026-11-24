@@ -200,6 +200,8 @@ layout	Custom	Своя
 	No filters yet.	Фильтров пока нет.
 	No graphics device: the preview is off	Нет графического устройства: предпросмотр выключен
 	No sources in this scene. Add one with +.	В этой сцене нет источников. Добавьте источник кнопкой +.
+	Heard in every scene	Слышно во всех сценах
+	No window	Нет окна
 	Noise gate	Шумовой гейт
 	None	Нет
 	not in this ffmpeg	нет в этой сборке ffmpeg
@@ -438,16 +440,16 @@ layout	Custom	Своя
 	Hardware acceleration	Аппаратное ускорение
 	Power saving	Энергосбережение
 	Software (slower)	Программно (медленнее)
-	Compact (small files)	Компактное (маленькие файлы)
+	Compact	Компактное
 	Duplicate Profile	Дублировать профиль
 	Duplicate Scene Collection	Дублировать коллекцию сцен
-	Lossless (very large files)	Без потерь (очень большие файлы)
+	Lossless	Без потерь
 	Move Down	Переместить вниз
 	Move to Bottom	Переместить в конец
 	Move to Top	Переместить в начало
 	Move Up	Переместить вверх
 	New Scene Collection	Новая коллекция сцен
-	Pristine (large files)	Безупречное (большие файлы)
+	Pristine	Безупречное
 	Rename Profile	Переименовать профиль
 	Rename Scene Collection	Переименовать коллекцию сцен
 	Unlock	Разблокировать
@@ -501,6 +503,12 @@ menu	Transform	Преобразование
 	Audio tracks write this source to a WAV file of its own (Settings › Output › Audio tracks)	Звуковые дорожки записывают этот источник в отдельный файл WAV («Настройки › Вывод › Звуковые дорожки»)
 	Audio tracks	Звуковые дорожки
 	Write each recorded source and the program mix to its own WAV file	Записывать каждый записываемый источник и микс программы в отдельный файл WAV
+	Smaller files for long sessions	Файлы поменьше для долгих сессий
+	A good fit for most recordings	Подходит для большинства записей
+	Almost no loss, for editing later	Почти без потерь, для последующего монтажа
+	No loss at all, in very large files	Совсем без потерь, в очень больших файлах
+	Advanced options	Дополнительные параметры
+	ffmpeg program, write buffer, file size, audio editor	программа ffmpeg, буфер записи, размер файла, звуковой редактор
 	Write them while	Записывать, когда
 	Include the program mix	Включать микс программы
 	Write buffer	Буфер записи
@@ -647,3 +655,33 @@ menu	Transform	Преобразование
 	Move Under the Canvas	Переместить под холст
 	Resize the column	Изменить ширину колонки
 	Place Dock	Разместить панель
+	Health	Состояние
+	Destinations	Назначения
+	Streaming…	Трансляция…
+	{live} of {count} live	{live} из {count} в эфире
+	Not streaming	Трансляция не идёт
+	Live · sending the pause screen	В эфире · отправляется экран паузы
+	Encoder	Кодировщик
+	Frames are late or skipped	Кадры запаздывают или пропускаются
+	No frames late or skipped	Нет запоздавших или пропущенных кадров
+	Tracks	Дорожки
+	Files	Файлы
+	{mb} MB	{mb} МБ
+	Disk free	Свободно на диске
+	{gb} GB	{gb} ГБ
+	Audio lost	Потерянный звук
+	{lost} s	{lost} с
+	Loading…	Загрузка…
+	Live captions	Живые субтитры
+	Program loudness	Громкость программы
+	No program audio yet	Звука программы пока нет
+	Below the target band	Ниже целевого диапазона
+	Above the target band	Выше целевого диапазона
+	In the target band	В целевом диапазоне
+	Short-term	Кратковременная
+	Integrated	Интегральная
+	True peak	Истинный пик
+	Target band	Целевой диапазон
+	{value} LUFS	{value} LUFS
+	{value} dBTP	{value} dBTP
+	{low} to {high} LUFS	От {low} до {high} LUFS

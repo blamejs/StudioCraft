@@ -200,6 +200,8 @@ layout	Custom	Özel
 	No filters yet.	Henüz filtre yok.
 	No graphics device: the preview is off	Grafik aygıtı yok: önizleme kapalı
 	No sources in this scene. Add one with +.	Bu sahnede kaynak yok. + ile bir tane ekleyin.
+	Heard in every scene	Her sahnede duyulur
+	No window	Pencere yok
 	Noise gate	Gürültü kapısı
 	None	Yok
 	not in this ffmpeg	bu ffmpeg'de yok
@@ -430,16 +432,16 @@ layout	Custom	Özel
 	Hardware acceleration	Donanım hızlandırma
 	Power saving	Güç tasarrufu
 	Software (slower)	Yazılım (daha yavaş)
-	Compact (small files)	Kompakt (küçük dosyalar)
+	Compact	Kompakt
 	Duplicate Profile	Profili Çoğalt
 	Duplicate Scene Collection	Sahne Koleksiyonunu Çoğalt
-	Lossless (very large files)	Kayıpsız (çok büyük dosyalar)
+	Lossless	Kayıpsız
 	Move Down	Aşağı Taşı
 	Move to Bottom	En Alta Taşı
 	Move to Top	En Üste Taşı
 	Move Up	Yukarı Taşı
 	New Scene Collection	Yeni Sahne Koleksiyonu
-	Pristine (large files)	Kusursuz (büyük dosyalar)
+	Pristine	Kusursuz
 	Rename Profile	Profili Yeniden Adlandır
 	Rename Scene Collection	Sahne Koleksiyonunu Yeniden Adlandır
 	Unlock	Kilidi Aç
@@ -493,6 +495,12 @@ menu	Transform	Dönüştür
 	Audio tracks write this source to a WAV file of its own (Settings › Output › Audio tracks)	Ses parçaları bu kaynağı kendi WAV dosyasına yazar (Ayarlar › Çıkış › Ses parçaları)
 	Audio tracks	Ses parçaları
 	Write each recorded source and the program mix to its own WAV file	Kaydedilen her kaynağı ve program miksini kendi WAV dosyasına yaz
+	Smaller files for long sessions	Uzun oturumlar için daha küçük dosyalar
+	A good fit for most recordings	Çoğu kayıt için uygun
+	Almost no loss, for editing later	Neredeyse kayıpsız, sonradan düzenlemek için
+	No loss at all, in very large files	Hiç kayıp yok, çok büyük dosyalarda
+	Advanced options	Gelişmiş seçenekler
+	ffmpeg program, write buffer, file size, audio editor	ffmpeg programı, yazma arabelleği, dosya boyutu, ses düzenleyici
 	Write them while	Şu sırada yaz
 	Include the program mix	Program miksini ekle
 	Write buffer	Yazma arabelleği
@@ -639,3 +647,33 @@ menu	Transform	Dönüştür
 	Move Under the Canvas	Tuvalin Altına Taşı
 	Resize the column	Sütun genişliğini değiştir
 	Place Dock	Paneli Yerleştir
+	Health	Durum
+	Destinations	Hedefler
+	Streaming…	Yayın…
+	{live} of {count} live	{count} hedeften {live} tanesi canlı
+	Not streaming	Yayın yok
+	Live · sending the pause screen	Canlı · duraklatma ekranı gönderiliyor
+	Encoder	Kodlayıcı
+	Frames are late or skipped	Geciken veya atlanan kareler var
+	No frames late or skipped	Geciken veya atlanan kare yok
+	Tracks	Parçalar
+	Files	Dosyalar
+	{mb} MB	{mb} MB
+	Disk free	Boş alan
+	{gb} GB	{gb} GB
+	Audio lost	Kaybolan ses
+	{lost} s	{lost} sn
+	Loading…	Yükleniyor…
+	Live captions	Canlı altyazılar
+	Program loudness	Program ses yüksekliği
+	No program audio yet	Henüz program sesi yok
+	Below the target band	Hedef aralığın altında
+	Above the target band	Hedef aralığın üstünde
+	In the target band	Hedef aralıkta
+	Short-term	Kısa süreli
+	Integrated	Bütünleşik
+	True peak	Gerçek tepe
+	Target band	Hedef aralık
+	{value} LUFS	{value} LUFS
+	{value} dBTP	{value} dBTP
+	{low} to {high} LUFS	{low} ile {high} LUFS arası

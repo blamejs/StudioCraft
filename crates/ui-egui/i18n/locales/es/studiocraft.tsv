@@ -200,6 +200,8 @@ layout	Custom	Personalizado
 	No filters yet.	Todavía no hay filtros.
 	No graphics device: the preview is off	No hay dispositivo gráfico: la vista previa está desactivada
 	No sources in this scene. Add one with +.	Esta escena no tiene fuentes. Agregue una con +.
+	Heard in every scene	Se oye en todas las escenas
+	No window	Sin ventana
 	Noise gate	Puerta de ruido
 	None	Ninguno
 	not in this ffmpeg	no está en este ffmpeg
@@ -432,16 +434,16 @@ layout	Custom	Personalizado
 	Hardware acceleration	Aceleración por hardware
 	Power saving	Ahorro de energía
 	Software (slower)	Software (más lento)
-	Compact (small files)	Compacta (archivos pequeños)
+	Compact	Compacta
 	Duplicate Profile	Duplicar perfil
 	Duplicate Scene Collection	Duplicar colección de escenas
-	Lossless (very large files)	Sin pérdida (archivos muy grandes)
+	Lossless	Sin pérdida
 	Move Down	Bajar
 	Move to Bottom	Mover al final
 	Move to Top	Mover al principio
 	Move Up	Subir
 	New Scene Collection	Nueva colección de escenas
-	Pristine (large files)	Impecable (archivos grandes)
+	Pristine	Impecable
 	Rename Profile	Cambiar nombre del perfil
 	Rename Scene Collection	Cambiar nombre de la colección de escenas
 	Unlock	Desbloquear
@@ -495,6 +497,12 @@ menu	Transform	Transformar
 	Audio tracks write this source to a WAV file of its own (Settings › Output › Audio tracks)	Las pistas de audio escriben esta fuente en su propio archivo WAV (Configuración › Salida › Pistas de audio)
 	Audio tracks	Pistas de audio
 	Write each recorded source and the program mix to its own WAV file	Escribir cada fuente grabada y la mezcla del programa en su propio archivo WAV
+	Smaller files for long sessions	Archivos más pequeños para sesiones largas
+	A good fit for most recordings	Adecuada para la mayoría de las grabaciones
+	Almost no loss, for editing later	Casi sin pérdida, para editar después
+	No loss at all, in very large files	Sin ninguna pérdida, en archivos muy grandes
+	Advanced options	Opciones avanzadas
+	ffmpeg program, write buffer, file size, audio editor	programa ffmpeg, búfer de escritura, tamaño de archivo, editor de audio
 	Write them while	Escribirlas mientras
 	Include the program mix	Incluir la mezcla del programa
 	Write buffer	Búfer de escritura
@@ -640,3 +648,33 @@ menu	Transform	Transformar
 	Move Under the Canvas	Mover debajo del lienzo
 	Resize the column	Cambiar el ancho de la columna
 	Place Dock	Colocar panel
+	Health	Estado
+	Destinations	Destinos
+	Streaming…	Transmisión…
+	{live} of {count} live	{live} de {count} en directo
+	Not streaming	Sin transmitir
+	Live · sending the pause screen	En directo · envía la pantalla de pausa
+	Encoder	Codificador
+	Frames are late or skipped	Hay fotogramas retrasados u omitidos
+	No frames late or skipped	Ningún fotograma retrasado u omitido
+	Tracks	Pistas
+	Files	Archivos
+	{mb} MB	{mb} MB
+	Disk free	Espacio libre
+	{gb} GB	{gb} GB
+	Audio lost	Audio perdido
+	{lost} s	{lost} s
+	Loading…	Cargando…
+	Live captions	Subtítulos en directo
+	Program loudness	Sonoridad del programa
+	No program audio yet	Aún no hay audio del programa
+	Below the target band	Por debajo de la banda objetivo
+	Above the target band	Por encima de la banda objetivo
+	In the target band	Dentro de la banda objetivo
+	Short-term	Corto plazo
+	Integrated	Integrada
+	True peak	Pico real
+	Target band	Banda objetivo
+	{value} LUFS	{value} LUFS
+	{value} dBTP	{value} dBTP
+	{low} to {high} LUFS	{low} a {high} LUFS

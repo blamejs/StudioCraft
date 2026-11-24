@@ -200,6 +200,8 @@ layout	Custom	Niestandardowy
 	No filters yet.	Brak filtrów.
 	No graphics device: the preview is off	Brak urządzenia graficznego: podgląd jest wyłączony
 	No sources in this scene. Add one with +.	Ta scena nie ma źródeł. Dodaj je przyciskiem +.
+	Heard in every scene	Słyszalne w każdej scenie
+	No window	Brak okna
 	Noise gate	Bramka szumów
 	None	Brak
 	not in this ffmpeg	brak w tym ffmpeg
@@ -428,16 +430,16 @@ layout	Custom	Niestandardowy
 	Hardware acceleration	Przyspieszenie sprzętowe
 	Power saving	Oszczędzanie energii
 	Software (slower)	Programowo (wolniej)
-	Compact (small files)	Kompaktowa (małe pliki)
+	Compact	Kompaktowa
 	Duplicate Profile	Duplikuj profil
 	Duplicate Scene Collection	Duplikuj kolekcję scen
-	Lossless (very large files)	Bezstratna (bardzo duże pliki)
+	Lossless	Bezstratna
 	Move Down	Przenieś w dół
 	Move to Bottom	Przenieś na dół
 	Move to Top	Przenieś na górę
 	Move Up	Przenieś w górę
 	New Scene Collection	Nowa kolekcja scen
-	Pristine (large files)	Nieskazitelna (duże pliki)
+	Pristine	Nieskazitelna
 	Rename Profile	Zmień nazwę profilu
 	Rename Scene Collection	Zmień nazwę kolekcji scen
 	Unlock	Odblokuj
@@ -491,6 +493,12 @@ menu	Transform	Przekształć
 	Audio tracks write this source to a WAV file of its own (Settings › Output › Audio tracks)	Ścieżki audio zapisują to źródło w osobnym pliku WAV (Ustawienia › Wyjście › Ścieżki audio)
 	Audio tracks	Ścieżki audio
 	Write each recorded source and the program mix to its own WAV file	Zapisuj każde nagrywane źródło i miks programu w osobnym pliku WAV
+	Smaller files for long sessions	Mniejsze pliki na długie sesje
+	A good fit for most recordings	Dobra dla większości nagrań
+	Almost no loss, for editing later	Prawie bez strat, do późniejszej edycji
+	No loss at all, in very large files	Zupełnie bez strat, w bardzo dużych plikach
+	Advanced options	Opcje zaawansowane
+	ffmpeg program, write buffer, file size, audio editor	program ffmpeg, bufor zapisu, rozmiar pliku, edytor audio
 	Write them while	Zapisuj, gdy
 	Include the program mix	Dołącz miks programu
 	Write buffer	Bufor zapisu
@@ -636,3 +644,33 @@ menu	Transform	Przekształć
 	Move Under the Canvas	Przenieś pod płótno
 	Resize the column	Zmień szerokość kolumny
 	Place Dock	Umieść panel
+	Health	Stan
+	Destinations	Miejsca docelowe
+	Streaming…	Transmisja…
+	{live} of {count} live	{live} z {count} na żywo
+	Not streaming	Brak transmisji
+	Live · sending the pause screen	Na żywo · wysyła ekran pauzy
+	Encoder	Koder
+	Frames are late or skipped	Klatki są opóźnione lub pomijane
+	No frames late or skipped	Brak opóźnionych lub pominiętych klatek
+	Tracks	Ścieżki
+	Files	Pliki
+	{mb} MB	{mb} MB
+	Disk free	Wolne miejsce
+	{gb} GB	{gb} GB
+	Audio lost	Utracony dźwięk
+	{lost} s	{lost} s
+	Loading…	Wczytywanie…
+	Live captions	Napisy na żywo
+	Program loudness	Głośność programu
+	No program audio yet	Jeszcze brak dźwięku programu
+	Below the target band	Poniżej zakresu docelowego
+	Above the target band	Powyżej zakresu docelowego
+	In the target band	W zakresie docelowym
+	Short-term	Krótkoterminowa
+	Integrated	Zintegrowana
+	True peak	Szczyt rzeczywisty
+	Target band	Zakres docelowy
+	{value} LUFS	{value} LUFS
+	{value} dBTP	{value} dBTP
+	{low} to {high} LUFS	Od {low} do {high} LUFS

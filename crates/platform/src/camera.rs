@@ -11,7 +11,7 @@
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Condvar, Mutex, OnceLock};
+use std::sync::{Arc, Condvar, Mutex, OnceLock, Weak};
 
 use studiocraft_media::video::VideoFrame;
 
@@ -547,7 +547,9 @@ fn stream(backend: &dyn CameraBackend, camera: &CameraInfo, format: Option<Camer
         done.notify_all();
     }
     let (mut bad, mut converter) = (0u32, Converter::default());
-    let (mut readers, mut seen): (Vec<Arc<Reader>>, Option<u64>) = (Vec::with_capacity(SPARE_READERS), None);
+    // The list holds the readers weakly: a reader dropped while the camera waits for a frame is
+    // freed at once, with its frames.
+    let (mut readers, mut seen): (Vec<Weak<Reader>>, Option<u64>) = (Vec::with_capacity(SPARE_READERS), None);
     let mut sized = None;
     while !shared.stop.load(Ordering::Acquire) {
         // The reader list grows here, between frames, so the frame callback does not allocate.
@@ -569,14 +571,15 @@ fn stream(backend: &dyn CameraBackend, camera: &CameraInfo, format: Option<Camer
                 && list.len() <= readers.capacity()
             {
                 readers.clear();
-                readers.extend(list.iter().cloned());
+                readers.extend(list.iter().map(Arc::downgrade));
                 seen = Some(changed);
             }
-            let Some((first, rest)) = readers.split_first() else { return };
+            let mut live = readers.iter().filter_map(Weak::upgrade);
+            let Some(first) = live.next() else { return };
             let mut frame = first.slot.spare();
             if converter.convert(bytes, format, &mut frame) {
                 bad = 0;
-                for r in rest {
+                for r in live {
                     let mut copy = r.slot.spare();
                     copy_picture(&frame, &mut copy);
                     r.slot.publish(copy);
@@ -1368,6 +1371,30 @@ mod tests {
             assert_eq!(fb.data[0], frame[0]);
         }
         assert!(!first.dropped.load(Ordering::Acquire), "the camera stays open for the other capture");
+    }
+
+    #[test]
+    fn a_capture_dropped_while_its_camera_waits_for_a_frame_frees_its_frames_at_once() {
+        let camera = cam("Shared camera", "freed-mid-frame");
+        let (tx, rx) = mpsc::channel();
+        let first = Arc::new(Fake { list: vec![camera.clone()], ..Fake::new(rx) });
+        let mut a = CameraCapture::open_with(first.clone(), &camera.key(), Some(GRAY)).unwrap();
+        let (mut fa, mut fb) = (VideoFrame::default(), VideoFrame::default());
+        grab_after(&mut a, &tx, Step::Frame(vec![1, 2], GRAY), &mut fa).unwrap();
+        let (mut b, second) = second_capture(&camera, Some(GRAY));
+        // The thread of the second capture ends once it joined; its backend goes with it.
+        while Arc::strong_count(&second) > 1 {
+            std::thread::yield_now();
+        }
+        grab_after(&mut a, &tx, Step::Frame(vec![3, 4], GRAY), &mut fa).unwrap();
+        grab_next(&mut b, &mut fb).unwrap();
+        // Both readers got the last frame, and the thread now waits for the next one.
+        first.until_waiting(3);
+        let held = Arc::downgrade(&b.reader);
+        drop(b);
+        assert!(held.upgrade().is_none(), "the dropped capture and its frames are freed while the camera waits");
+        grab_after(&mut a, &tx, Step::Frame(vec![5, 6], GRAY), &mut fa).unwrap();
+        assert_eq!(fa.data[0], 5);
     }
 
     #[test]

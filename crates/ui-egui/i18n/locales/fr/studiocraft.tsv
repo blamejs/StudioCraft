@@ -202,6 +202,8 @@ layout	Custom	Personnalisée
 	No filters yet.	Aucun filtre pour l'instant.
 	No graphics device: the preview is off	Aucun périphérique graphique : l'aperçu est désactivé
 	No sources in this scene. Add one with +.	Cette scène n'a aucune source. Ajoutez-en une avec +.
+	Heard in every scene	Entendu dans toutes les scènes
+	No window	Aucune fenêtre
 	Noise gate	Porte de bruit
 	None	Aucune
 	not in this ffmpeg	absent de ce ffmpeg
@@ -438,16 +440,16 @@ layout	Custom	Personnalisée
 	Hardware acceleration	Accélération matérielle
 	Power saving	Économie d'énergie
 	Software (slower)	Logiciel (plus lent)
-	Compact (small files)	Compacte (petits fichiers)
+	Compact	Compacte
 	Duplicate Profile	Dupliquer le profil
 	Duplicate Scene Collection	Dupliquer la collection de scènes
-	Lossless (very large files)	Sans perte (fichiers très volumineux)
+	Lossless	Sans perte
 	Move Down	Descendre
 	Move to Bottom	Placer en bas
 	Move to Top	Placer en haut
 	Move Up	Monter
 	New Scene Collection	Nouvelle collection de scènes
-	Pristine (large files)	Impeccable (fichiers volumineux)
+	Pristine	Impeccable
 	Rename Profile	Renommer le profil
 	Rename Scene Collection	Renommer la collection de scènes
 	Unlock	Déverrouiller
@@ -501,6 +503,12 @@ menu	Transform	Transformer
 	Audio tracks write this source to a WAV file of its own (Settings › Output › Audio tracks)	Les pistes audio écrivent cette source dans son propre fichier WAV (Paramètres › Sortie › Pistes audio)
 	Audio tracks	Pistes audio
 	Write each recorded source and the program mix to its own WAV file	Écrire chaque source enregistrée et le mixage du programme dans son propre fichier WAV
+	Smaller files for long sessions	Fichiers plus petits pour les longues sessions
+	A good fit for most recordings	Convient à la plupart des enregistrements
+	Almost no loss, for editing later	Presque sans perte, pour un montage ultérieur
+	No loss at all, in very large files	Aucune perte, dans des fichiers très volumineux
+	Advanced options	Options avancées
+	ffmpeg program, write buffer, file size, audio editor	programme ffmpeg, tampon d'écriture, taille de fichier, éditeur audio
 	Write them while	Les écrire quand
 	Include the program mix	Inclure le mixage du programme
 	Write buffer	Tampon d'écriture
@@ -647,3 +655,33 @@ menu	Transform	Transformer
 	Move Under the Canvas	Déplacer sous le canevas
 	Resize the column	Redimensionner la colonne
 	Place Dock	Placer le dock
+	Health	État
+	Destinations	Destinations
+	Streaming…	Diffusion…
+	{live} of {count} live	{live} sur {count} en direct
+	Not streaming	Pas de diffusion
+	Live · sending the pause screen	En direct · envoie l'écran de pause
+	Encoder	Encodeur
+	Frames are late or skipped	Des images sont en retard ou sautées
+	No frames late or skipped	Aucune image en retard ou sautée
+	Tracks	Pistes
+	Files	Fichiers
+	{mb} MB	{mb} Mo
+	Disk free	Espace libre
+	{gb} GB	{gb} Go
+	Audio lost	Audio perdu
+	{lost} s	{lost} s
+	Loading…	Chargement…
+	Live captions	Sous-titres en direct
+	Program loudness	Sonie du programme
+	No program audio yet	Pas encore de son du programme
+	Below the target band	Sous la plage cible
+	Above the target band	Au-dessus de la plage cible
+	In the target band	Dans la plage cible
+	Short-term	Court terme
+	Integrated	Intégrée
+	True peak	Crête réelle
+	Target band	Plage cible
+	{value} LUFS	{value} LUFS
+	{value} dBTP	{value} dBTP
+	{low} to {high} LUFS	{low} à {high} LUFS
