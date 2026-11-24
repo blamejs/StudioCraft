@@ -13,8 +13,11 @@
 use std::collections::BTreeMap;
 
 use craft_keymap::{Binding, CommandRef, Keymap, MAX_BINDING_TEXT, Overrides};
-use craft_ui::contract::{Bind, Entry, Props as _, Show as _};
+use craft_ui::contract::{Bind, Entry, Props as _, Show as _, ShowContainer as _};
+use craft_ui::display::{Shade, Text};
 use craft_ui::pickers::Select;
+use craft_ui::sections::Section;
+use craft_ui::style::TypeRole;
 use egui::{ComboBox, RichText, Ui};
 use studiocraft_audio_tracks::space::TRACK_BYTES_PER_SECOND;
 use studiocraft_model::profile::DEFAULT_AUDIO_DEVICE;
@@ -29,6 +32,8 @@ use studiocraft_render::device::{Candidate, Preference};
 
 use crate::hardware;
 use crate::i18n::{self, I18N, Msg};
+use crate::kit::option_card::{OptionCard, OptionCardStyle, OptionCards};
+use crate::theme;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Tab {
@@ -97,7 +102,16 @@ pub struct SettingsWindow {
     pub track_sources: usize,
     /// The Pause screen section's first field takes the keyboard focus on the next frame.
     focus_pause: bool,
+    /// Whether the Output tab's Advanced options are open. Each new window starts with them
+    /// closed.
+    advanced_open: bool,
+    /// This window's number among the windows opened since the app started. The Advanced options
+    /// fold takes it in its id, so a new window does not show the last window's fold closing.
+    opened: u64,
 }
+
+/// The number of the next Settings window.
+static NEXT_WINDOW: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 /// The settings OK or Apply puts in force.
 pub struct Apply {
@@ -266,15 +280,19 @@ fn device_name(id: &str, listed: &[DeviceInfo]) -> String {
 }
 
 /// The name of a Language setting in the picker.
-/// The English name of a recording quality in the Output tab.
-pub(crate) fn quality_label(q: RecordingQuality) -> &'static str {
+/// The English title and description of a recording quality's card in the Output tab.
+pub(crate) fn quality_card(q: RecordingQuality) -> (&'static str, &'static str) {
     match q {
-        RecordingQuality::Compact => "Compact (small files)",
-        RecordingQuality::High => "High",
-        RecordingQuality::Pristine => "Pristine (large files)",
-        RecordingQuality::Lossless => "Lossless (very large files)",
+        RecordingQuality::Compact => ("Compact", "Smaller files for long sessions"),
+        RecordingQuality::High => ("High", "A good fit for most recordings"),
+        RecordingQuality::Pristine => ("Pristine", "Almost no loss, for editing later"),
+        RecordingQuality::Lossless => ("Lossless", "No loss at all, in very large files"),
     }
 }
+
+/// The narrowest a Quality card is drawn beside the others. Four cards then stand in a row in
+/// the Settings window at its default width.
+const QUALITY_CARD_MIN_WIDTH: f32 = 120.0;
 
 /// When audio tracks are written, as the Output tab shows it.
 pub(crate) fn when_label(w: AudioTracksWhen) -> &'static str {
@@ -392,6 +410,8 @@ impl SettingsWindow {
             gpu_notices: Vec::new(),
             track_sources: 0,
             focus_pause: false,
+            advanced_open: false,
+            opened: NEXT_WINDOW.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
         }
     }
 
@@ -698,31 +718,22 @@ impl SettingsWindow {
             let formats: Vec<_> = RecordingFormat::ALL.iter().map(|&f| Entry::new(f, f.extension().to_uppercase())).collect();
             let _ = Select::new(tl!("Format"), Bind::bound(&mut o.format), &formats).id_salt("format").show(ui);
             ui.end_row();
-            ui.label(tl!("Quality"));
-            let qualities: Vec<_> = RecordingQuality::ALL.iter().map(|&q| Entry::new(q, tl!(quality_label(q)))).collect();
-            let _ = Select::new(tl!("Quality"), Bind::bound(&mut o.quality), &qualities).id_salt("quality").show(ui);
-            ui.end_row();
+        });
+        ui.add_space(8.0);
+        Self::quality_cards(ui, &mut o.quality);
+        ui.add_space(8.0);
+        egui::Grid::new("output-encoder-grid").num_columns(2).spacing([12.0, 8.0]).show(ui, |ui| {
             ui.label(tl!("Video encoder"));
             Self::encoder_combo(ui, "record-encoder", registry, &self.offered, &mut o.video_encoder, false);
             ui.end_row();
             Self::encoder_form(ui, "record-encoder-settings", registry, &o.video_encoder, &mut o.encoder_settings);
-            ui.label(tl!("ffmpeg program"));
-            ui.horizontal(|ui| {
-                let r = ui.add(egui::TextEdit::singleline(&mut o.ffmpeg_path).hint_text(tl!("ffmpeg on the PATH")).desired_width(240.0));
-                if ui.button(tl!("Browse…")).clicked() {
-                    out.pick = Some(Pick::Ffmpeg);
-                }
-                if r.lost_focus() {
-                    (self.offered, self.ffmpeg_version) = probe(&o.ffmpeg_path);
-                }
-            });
-            ui.end_row();
-            ui.label("");
-            match &self.ffmpeg_version {
-                Ok(v) => ui.weak(v),
-                Err(e) => ui.colored_label(ui.visuals().error_fg_color, crate::i18n::Msg::plain(e.as_str()).shown()),
-            };
-            ui.end_row();
+            // Why the encoders that need ffmpeg are disabled shows while the ffmpeg program's
+            // field is folded away.
+            if let Err(e) = &self.ffmpeg_version {
+                ui.label("");
+                ui.colored_label(ui.visuals().error_fg_color, crate::i18n::Msg::plain(e.as_str()).shown());
+                ui.end_row();
+            }
             let r = &mut self.draft.replay;
             ui.label(tl!("Replay buffer length"));
             ui.add(egui::DragValue::new(&mut r.seconds).range(ReplaySettings::SECONDS).suffix(format!(" {}", tl!("s"))));
@@ -732,11 +743,36 @@ impl SettingsWindow {
             ui.end_row();
         });
         ui.add_space(12.0);
-        self.audio_tracks(ui, out);
+        self.audio_tracks(ui);
+        ui.add_space(12.0);
+        self.advanced_output(ui, out);
+    }
+
+    /// The Quality cards of the Output tab: one card for each level of [`RecordingQuality::ALL`],
+    /// with a short description. A click or an arrow key on a card chooses its level.
+    fn quality_cards(ui: &mut Ui, quality: &mut RecordingQuality) {
+        ui.label(tl!("Quality"));
+        ui.add_space(4.0);
+        let cards: Vec<OptionCard> = RecordingQuality::ALL
+            .iter()
+            .map(|&q| {
+                let (title, description) = quality_card(q);
+                OptionCard { title: tl!(title), description: tl!(description) }
+            })
+            .collect();
+        let mut style = theme::with_root(ui.ctx(), |cx| {
+            OptionCardStyle::new(cx, egui::FontId::new(cx.tokens.typography.body_strong.size, crate::fonts::semibold()))
+        });
+        style.min_width = QUALITY_CARD_MIN_WIDTH;
+        let selected = RecordingQuality::ALL.iter().position(|q| q == quality).unwrap_or(RecordingQuality::ALL.len());
+        let id = ui.make_persistent_id("quality-cards");
+        if let Some(&q) = OptionCards::new(id, &cards, selected, &style).show(ui).changed.and_then(|i| RecordingQuality::ALL.get(i)) {
+            *quality = q;
+        }
     }
 
     /// The Audio tracks section of the Output tab.
-    fn audio_tracks(&mut self, ui: &mut Ui, out: &mut Outcome) {
+    fn audio_tracks(&mut self, ui: &mut Ui) {
         ui.label(RichText::new(tl!("Audio tracks")).strong());
         ui.add_space(4.0);
         let t = &mut self.draft.audio_tracks;
@@ -750,23 +786,9 @@ impl SettingsWindow {
                 ui.label("");
                 ui.checkbox(&mut t.include_program, tl!("Include the program mix"));
                 ui.end_row();
-                ui.label(tl!("Write buffer"));
-                ui.add(egui::DragValue::new(&mut t.buffer_mib).range(AudioTracksSettings::BUFFER_MIB).speed(4.0).suffix(format!(" {}", tl!("MiB"))));
-                ui.end_row();
-                ui.label(tl!("File size"));
-                ui.add(egui::DragValue::new(&mut t.segment_gib).range(AudioTracksSettings::SEGMENT_GIB).suffix(format!(" {}", tl!("GiB"))));
-                ui.end_row();
                 ui.label(tl!("After a take"));
                 let afters: Vec<_> = AfterStop::ALL.iter().map(|&a| Entry::new(a, tl!(after_stop_label(a)))).collect();
                 let _ = Select::new(tl!("After a take"), Bind::bound(&mut t.after_stop), &afters).id_salt("audio-tracks-after-stop").show(ui);
-                ui.end_row();
-                ui.label(tl!("Audio editor"));
-                ui.horizontal(|ui| {
-                    ui.add(egui::TextEdit::singleline(&mut t.editor_path).hint_text(tl!("The audio editor on the PATH")).desired_width(240.0));
-                    if ui.button(tl!("Browse…")).clicked() {
-                        out.pick = Some(Pick::AudioEditor);
-                    }
-                });
                 ui.end_row();
             });
             // With no track to write there is no disk use to estimate.
@@ -778,6 +800,68 @@ impl SettingsWindow {
                 ));
             }
         });
+    }
+
+    /// The Advanced options fold of the Output tab, closed when the window opens: the ffmpeg
+    /// program with its version, and the audio tracks' write buffer, file size and audio editor.
+    fn advanced_output(&mut self, ui: &mut Ui, out: &mut Outcome) {
+        let _ = Section::new(tl!("Advanced options"))
+            .open(Bind::bound(&mut self.advanced_open))
+            .id_salt(("output-advanced", self.opened))
+            .controls(|ui, _| {
+                let _ = Text::new(tl!("ffmpeg program, write buffer, file size, audio editor")).role(TypeRole::Caption).shade(Shade::Muted).show(ui);
+            })
+            .show(ui, |ui, _| {
+                let o = &mut self.draft.output;
+                egui::Grid::new("output-advanced-grid").num_columns(2).spacing([12.0, 8.0]).show(ui, |ui| {
+                    ui.label(tl!("ffmpeg program"));
+                    ui.horizontal(|ui| {
+                        let r = ui.add(egui::TextEdit::singleline(&mut o.ffmpeg_path).hint_text(tl!("ffmpeg on the PATH")).desired_width(240.0));
+                        if ui.button(tl!("Browse…")).clicked() {
+                            out.pick = Some(Pick::Ffmpeg);
+                        }
+                        if r.lost_focus() {
+                            (self.offered, self.ffmpeg_version) = probe(&o.ffmpeg_path);
+                        }
+                    });
+                    ui.end_row();
+                    // An error shows above, under the video encoder.
+                    if let Ok(v) = &self.ffmpeg_version {
+                        ui.label("");
+                        ui.weak(v);
+                        ui.end_row();
+                    }
+                });
+                ui.add_space(8.0);
+                ui.label(RichText::new(tl!("Audio tracks")).strong());
+                ui.add_space(4.0);
+                let t = &mut self.draft.audio_tracks;
+                ui.add_enabled_ui(t.enabled, |ui| {
+                    egui::Grid::new("audio-tracks-advanced-grid").num_columns(2).spacing([12.0, 8.0]).show(ui, |ui| {
+                        ui.label(tl!("Write buffer"));
+                        ui.add(
+                            egui::DragValue::new(&mut t.buffer_mib)
+                                .range(AudioTracksSettings::BUFFER_MIB)
+                                .speed(4.0)
+                                .suffix(format!(" {}", tl!("MiB"))),
+                        );
+                        ui.end_row();
+                        ui.label(tl!("File size"));
+                        ui.add(egui::DragValue::new(&mut t.segment_gib).range(AudioTracksSettings::SEGMENT_GIB).suffix(format!(" {}", tl!("GiB"))));
+                        ui.end_row();
+                        ui.label(tl!("Audio editor"));
+                        ui.horizontal(|ui| {
+                            ui.add(
+                                egui::TextEdit::singleline(&mut t.editor_path).hint_text(tl!("The audio editor on the PATH")).desired_width(240.0),
+                            );
+                            if ui.button(tl!("Browse…")).clicked() {
+                                out.pick = Some(Pick::AudioEditor);
+                            }
+                        });
+                        ui.end_row();
+                    });
+                });
+            });
     }
 
     fn audio(&mut self, ui: &mut Ui) {
@@ -983,7 +1067,12 @@ impl SettingsWindow {
                         self.pause_screen(ui, &mut out);
                     });
                 }
-                Tab::Output => self.output(ui, registry, &mut out),
+                Tab::Output => {
+                    // The tab scrolls when the window is shorter than its fields, as with the
+                    // cards one above the other or the advanced options open.
+                    let height = (ctx.content_rect().height() - 160.0).max(200.0);
+                    egui::ScrollArea::vertical().id_salt("output-tab").max_height(height).show(ui, |ui| self.output(ui, registry, &mut out));
+                }
                 Tab::Audio => self.audio(ui),
                 Tab::Video => self.video(ui),
                 Tab::Hotkeys => self.hotkeys(ui),
@@ -1195,9 +1284,7 @@ mod tests {
         p.audio_tracks.enabled = true;
         let mut w = SettingsWindow::new(&p, &crate::commands::keymap(Overrides::new()), Tab::Output, i18n::AUTO, true);
         w.track_sources = 2;
-        let mut outcome = Outcome::default();
-        let mut out = ctx.run_ui(egui::RawInput::default(), |ui| w.audio_tracks(ui, &mut outcome));
-        assert!(outcome.pick.is_none(), "drawing the section asks for no dialog");
+        let mut out = ctx.run_ui(egui::RawInput::default(), |ui| w.audio_tracks(ui));
         let texts: Vec<String> = out
             .shapes
             .iter()
@@ -1214,6 +1301,120 @@ mod tests {
         let editor = std::path::Path::new("Tools").join("editor.exe");
         w.picked(Pick::AudioEditor, &editor);
         assert_eq!(w.draft.audio_tracks.editor_path, editor.to_string_lossy());
+    }
+
+    /// The texts the Output tab of `w` draws in one 1280 × 800 frame with `events`, with the
+    /// rectangle of each.
+    fn output_frame(ctx: &egui::Context, w: &mut SettingsWindow, registry: &Registry, events: Vec<egui::Event>) -> Vec<(String, egui::Rect)> {
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1280.0, 800.0));
+        let input = egui::RawInput { events, screen_rect: Some(screen), ..egui::RawInput::default() };
+        let mut outcome = Outcome::default();
+        let mut out = ctx.run_ui(input, |ui| w.output(ui, registry, &mut outcome));
+        out.textures_delta.clear();
+        assert!(outcome.pick.is_none() && outcome.apply.is_none(), "drawing the tab asks for nothing");
+        out.shapes
+            .iter()
+            .filter_map(|s| match &s.shape {
+                egui::Shape::Text(t) => Some((t.galley.text().to_string(), t.galley.rect.translate(t.pos.to_vec2()))),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// A primary click at `at` on the Output tab of `w`: the press in one frame and the release
+    /// in the next.
+    fn click_at(ctx: &egui::Context, w: &mut SettingsWindow, registry: &Registry, at: egui::Pos2) {
+        let button =
+            |pressed| egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
+        output_frame(ctx, w, registry, vec![egui::Event::PointerMoved(at), button(true)]);
+        output_frame(ctx, w, registry, vec![button(false)]);
+    }
+
+    /// Where `text` is drawn in `texts`.
+    fn place(texts: &[(String, egui::Rect)], text: &str) -> egui::Pos2 {
+        let names: Vec<&str> = texts.iter().map(|(t, _)| t.as_str()).collect();
+        texts.iter().find(|(t, _)| t == text).map(|(_, r)| r.center()).unwrap_or_else(|| panic!("no {text} in {names:?}"))
+    }
+
+    #[test]
+    fn the_output_tab_chooses_the_quality_from_four_cards() {
+        let app = crate::StudioApp::boot(crate::store::Store::memory(), None, Vec::new());
+        let registry = app.studio().registry();
+        let ctx = crate::test_context();
+        let p = Profile::default();
+        let mut w = SettingsWindow::new(&p, &crate::commands::keymap(Overrides::new()), Tab::Output, i18n::AUTO, true);
+        let texts = output_frame(&ctx, &mut w, registry, vec![]);
+        let shown: Vec<&str> = texts.iter().map(|(t, _)| t.as_str()).collect();
+        for card in ["Compact", "High", "Pristine", "Lossless"] {
+            assert!(shown.contains(&card), "a card for {card} in {shown:?}");
+        }
+        for description in [
+            "Smaller files for long sessions",
+            "A good fit for most recordings",
+            "Almost no loss, for editing later",
+            "No loss at all, in very large files",
+        ] {
+            assert!(shown.contains(&description), "{description} in {shown:?}");
+        }
+        assert_eq!(w.draft, p, "drawing the tab changes nothing");
+        // A click on a card chooses its level, and the saved value is the same level as before.
+        // The click goes where a frame after the first one drew the card.
+        let pristine = place(&output_frame(&ctx, &mut w, registry, vec![]), "Pristine");
+        click_at(&ctx, &mut w, registry, pristine);
+        assert_eq!(w.draft.output.quality, RecordingQuality::Pristine);
+        let compact = place(&output_frame(&ctx, &mut w, registry, vec![]), "Compact");
+        click_at(&ctx, &mut w, registry, compact);
+        assert_eq!(w.draft.output.quality, RecordingQuality::Compact);
+    }
+
+    #[test]
+    fn rare_output_fields_fold_under_advanced_options() {
+        let app = crate::StudioApp::boot(crate::store::Store::memory(), None, Vec::new());
+        let registry = app.studio().registry();
+        let ctx = crate::test_context();
+        let mut p = Profile::default();
+        p.audio_tracks.enabled = true;
+        let mut w = SettingsWindow::new(&p, &crate::commands::keymap(Overrides::new()), Tab::Output, i18n::AUTO, true);
+        w.ffmpeg_version = Ok("ffmpeg version 9.0".into());
+        let rare = ["ffmpeg program", "ffmpeg version 9.0", "Write buffer", "File size", "Audio editor"];
+        let common = ["Recording folder", "Format", "Quality", "Video encoder", "Replay buffer length", "Write them while", "After a take"];
+        let texts = output_frame(&ctx, &mut w, registry, vec![]);
+        let shown: Vec<&str> = texts.iter().map(|(t, _)| t.as_str()).collect();
+        assert!(shown.contains(&"Advanced options"), "{shown:?}");
+        for field in common {
+            assert!(shown.contains(&field), "{field} shows with the fold closed: {shown:?}");
+        }
+        for field in rare {
+            assert!(!shown.contains(&field), "{field} is folded: {shown:?}");
+        }
+        // A click on the fold's title opens it.
+        let title = place(&texts, "Advanced options");
+        click_at(&ctx, &mut w, registry, title);
+        let mut shown = Vec::new();
+        for _ in 0..30 {
+            shown = output_frame(&ctx, &mut w, registry, vec![]).into_iter().map(|(t, _)| t).collect();
+        }
+        for field in rare.into_iter().chain(common) {
+            assert!(shown.iter().any(|t| t == field), "{field} shows with the fold open: {shown:?}");
+        }
+        assert_eq!(w.draft, p, "opening the fold changes nothing");
+        // Settings opened again in the same session starts with the fold closed.
+        let mut again = SettingsWindow::new(&p, &crate::commands::keymap(Overrides::new()), Tab::Output, i18n::AUTO, true);
+        again.ffmpeg_version = Ok("ffmpeg version 9.0".into());
+        let shown: Vec<String> = output_frame(&ctx, &mut again, registry, vec![]).into_iter().map(|(t, _)| t).collect();
+        assert!(!shown.iter().any(|t| t == "ffmpeg program"), "the fold starts closed again: {shown:?}");
+    }
+
+    #[test]
+    fn an_ffmpeg_program_that_cannot_be_read_says_so_with_the_fold_closed() {
+        let app = crate::StudioApp::boot(crate::store::Store::memory(), None, Vec::new());
+        let registry = app.studio().registry();
+        let ctx = crate::test_context();
+        let mut w = SettingsWindow::new(&Profile::default(), &crate::commands::keymap(Overrides::new()), Tab::Output, i18n::AUTO, true);
+        w.ffmpeg_version = Err("ffmpeg was not found on the PATH".into());
+        let shown: Vec<String> = output_frame(&ctx, &mut w, registry, vec![]).into_iter().map(|(t, _)| t).collect();
+        assert!(shown.iter().any(|t| t == "ffmpeg was not found on the PATH"), "{shown:?}");
+        assert!(shown.iter().any(|t| t == "Advanced options") && !shown.iter().any(|t| t == "ffmpeg program"), "{shown:?}");
     }
 
     #[test]

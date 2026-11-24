@@ -76,7 +76,7 @@
 	Color correction	Color correction
 	Color key	Color key
 	Community	Community
-	Compact (small files)	Compact (small files)
+	Compact	Compact
 	Compressor	Compressor
 	Connecting	Connecting
 	Contrast	Contrast
@@ -198,7 +198,7 @@
 	Lock Preview	Lock Preview
 	Longest wait	Longest wait
 	Loop	Loop
-	Lossless (very large files)	Lossless (very large files)
+	Lossless	Lossless
 	Low (dB)	Low (dB)
 	Maximize	Maximize
 	MB	MB
@@ -241,6 +241,8 @@
 	No separate key; a key at the end of the server address is used	No separate key; a key at the end of the server address is used
 	No server set	No server set
 	No sources in this scene. Add one with +.	No sources in this scene. Add one with +.
+	Heard in every scene	Heard in every scene
+	No window	No window
 	Noise gate	Noise gate
 	None	None
 	Not in this stream; it is sent to from the next start	Not in this stream; it is sent to from the next start
@@ -284,7 +286,7 @@
 	Presets	Presets
 	Preview: {name}	Preview: {name}
 	Primary display	Primary display
-	Pristine (large files)	Pristine (large files)
+	Pristine	Pristine
 	Profile	Profile
 	Program	Program
 	Program: {name}	Program: {name}
@@ -729,6 +731,12 @@ menu	Transform	Transform
 	Audio tracks write this source to a WAV file of its own (Settings › Output › Audio tracks)	Audio tracks write this source to a WAV file of its own (Settings › Output › Audio tracks)
 	Audio tracks	Audio tracks
 	Write each recorded source and the program mix to its own WAV file	Write each recorded source and the program mix to its own WAV file
+	Smaller files for long sessions	Smaller files for long sessions
+	A good fit for most recordings	A good fit for most recordings
+	Almost no loss, for editing later	Almost no loss, for editing later
+	No loss at all, in very large files	No loss at all, in very large files
+	Advanced options	Advanced options
+	ffmpeg program, write buffer, file size, audio editor	ffmpeg program, write buffer, file size, audio editor
 	Write them while	Write them while
 	Include the program mix	Include the program mix
 	Write buffer	Write buffer
@@ -974,6 +982,10 @@ menu	Transform	Transform
 	Paused. Viewers see the pause screen. The countdown ended.	Paused. Viewers see the pause screen. The countdown ended.
 	Paused for {time}. Viewers see the pause screen.	Paused for {time}. Viewers see the pause screen.
 	The program resumed	The program resumed
+	{time} left	{time} left
+	The countdown ended	The countdown ended
+	The program is not paused	The program is not paused
+	Live · sending the pause screen	Live · sending the pause screen
 @msg	The program is paused	The program is paused
 @msg	The program resumed	The program resumed
 @msg	The countdown ended	The countdown ended
@@ -982,3 +994,33 @@ menu	Transform	Transform
 @msg	the countdown text needs {time} where the remaining time goes	the countdown text needs {time} where the remaining time goes
 @msg	the countdown text holds {time} more than once	the countdown text holds {time} more than once
 @msg	the countdown text is longer than 200 characters	the countdown text is longer than 200 characters
+	Health	Health
+	Destinations	Destinations
+	Streaming…	Streaming…
+	{live} of {count} live	{live} of {count} live
+	Not streaming	Not streaming
+	Live · sending the pause screen	Live · sending the pause screen
+	Encoder	Encoder
+	Frames are late or skipped	Frames are late or skipped
+	No frames late or skipped	No frames late or skipped
+	Tracks	Tracks
+	Files	Files
+	{mb} MB	{mb} MB
+	Disk free	Disk free
+	{gb} GB	{gb} GB
+	Audio lost	Audio lost
+	{lost} s	{lost} s
+	Loading…	Loading…
+	Live captions	Live captions
+	Program loudness	Program loudness
+	No program audio yet	No program audio yet
+	Below the target band	Below the target band
+	Above the target band	Above the target band
+	In the target band	In the target band
+	Short-term	Short-term
+	Integrated	Integrated
+	True peak	True peak
+	Target band	Target band
+	{value} LUFS	{value} LUFS
+	{value} dBTP	{value} dBTP
+	{low} to {high} LUFS	{low} to {high} LUFS

@@ -197,6 +197,8 @@
 	No filters yet.	尚無濾鏡。
 	No graphics device: the preview is off	沒有圖形裝置：預覽已關閉
 	No sources in this scene. Add one with +.	此場景中沒有來源。請用 + 新增。
+	Heard in every scene	在每個場景中都能聽到
+	No window	無視窗
 	Noise gate	噪音閘
 	None	無
 	not in this ffmpeg	此 ffmpeg 中沒有
@@ -426,16 +428,16 @@
 	Hardware acceleration	硬體加速
 	Power saving	省電
 	Software (slower)	軟體（較慢）
-	Compact (small files)	精簡（檔案較小）
+	Compact	精簡
 	Duplicate Profile	複製設定檔
 	Duplicate Scene Collection	複製場景集合
-	Lossless (very large files)	無損（檔案非常大）
+	Lossless	無損
 	Move Down	下移
 	Move to Bottom	移到最下面
 	Move to Top	移到最上面
 	Move Up	上移
 	New Scene Collection	新增場景集合
-	Pristine (large files)	極高品質（檔案較大）
+	Pristine	極高品質
 	Rename Profile	重新命名設定檔
 	Rename Scene Collection	重新命名場景集合
 	Unlock	解除鎖定
@@ -489,6 +491,12 @@ menu	Transform	變形
 	Audio tracks write this source to a WAV file of its own (Settings › Output › Audio tracks)	音訊軌道會將此來源寫入獨立的 WAV 檔案（設定 › 輸出 › 音訊軌道）
 	Audio tracks	音訊軌道
 	Write each recorded source and the program mix to its own WAV file	將每個錄製的來源與節目混音分別寫入獨立的 WAV 檔案
+	Smaller files for long sessions	檔案較小，適合長時間錄製
+	A good fit for most recordings	適合大多數錄製
+	Almost no loss, for editing later	幾乎無損，便於後期編輯
+	No loss at all, in very large files	完全無損，檔案非常大
+	Advanced options	進階選項
+	ffmpeg program, write buffer, file size, audio editor	ffmpeg 程式、寫入緩衝區、檔案大小、音訊編輯器
 	Write them while	寫入時機
 	Include the program mix	包含節目混音
 	Write buffer	寫入緩衝區
@@ -634,3 +642,33 @@ menu	Transform	變形
 	Move Under the Canvas	移到畫布下方
 	Resize the column	調整欄寬
 	Place Dock	放置停駐面板
+	Health	運作狀態
+	Destinations	串流目標
+	Streaming…	串流…
+	{live} of {count} live	{count} 個中 {live} 個直播中
+	Not streaming	未串流
+	Live · sending the pause screen	直播中 · 正在傳送暫停畫面
+	Encoder	編碼器
+	Frames are late or skipped	有影格延遲或被略過
+	No frames late or skipped	沒有延遲或略過的影格
+	Tracks	音軌
+	Files	檔案
+	{mb} MB	{mb} MB
+	Disk free	可用空間
+	{gb} GB	{gb} GB
+	Audio lost	遺失的音訊
+	{lost} s	{lost} 秒
+	Loading…	正在載入…
+	Live captions	即時字幕
+	Program loudness	節目響度
+	No program audio yet	尚無節目音訊
+	Below the target band	低於目標範圍
+	Above the target band	高於目標範圍
+	In the target band	在目標範圍內
+	Short-term	短期
+	Integrated	整合
+	True peak	真峰值
+	Target band	目標範圍
+	{value} LUFS	{value} LUFS
+	{value} dBTP	{value} dBTP
+	{low} to {high} LUFS	{low} 至 {high} LUFS

@@ -19,6 +19,16 @@ source shows a dashed outline and no handles. The snap lines and the locked outl
 colors from the window's light or dark mode. Each scene item can be
 shown or hidden, and every change can be undone.
 
+The Sources dock lists the scene's items, the top item first. Each row shows an icon for the
+source's type before its name; a color source's icon shows its color. The eye and lock buttons at
+the end of the row show or hide the item and lock or unlock it, and a hidden item's name is drawn
+muted. A source that cannot draw shows a warning icon, and its tooltip gives the reason. A window
+capture whose window cannot be captured shows the warning icon in place of its type icon and reads
+"No window". Under the scene's items, a "Heard in every scene" group lists the global audio sources
+(see [Audio](#audio)), which include the applications routed from the Application Audio dock. The
+group takes at most half the dock's height. A double-click on one of its rows opens the source's
+Properties, and a right-click opens a menu with Properties…, Filters… and Rename.
+
 The Transform menu (in Edit and in a source's context menu) has Fit to Screen, which shows the
 whole source in the canvas at its aspect ratio; Fill Screen, which covers the canvas at the
 source's aspect ratio and leaves the parts past the canvas edges out of the picture; and Stretch to
@@ -193,16 +203,15 @@ sound on Windows and Linux only.
 The Audio Mixer dock shows peak and RMS meters with peak hold, a volume fader in dB, and a mute
 button for every audible source. A muted source's mute button shows the muted speaker on a
 warning-colored fill. The settings button at the end of each channel opens a menu with Properties…,
-Filters… and Rename. Rename asks for the new name in a prompt, so it also renames a global audio
-source that the Sources dock does not list. The fader runs from silence to +20 dB of boost (StudioCraft's own
+Filters… and Rename. Rename asks for the new name in a prompt. The fader runs from silence to +20 dB of boost (StudioCraft's own
 limit), with a mark at 0 dB. A boosted source is louder than its input, and the final mix is still
 clipped at full scale. The `source.volume` command takes a linear `gain` from 0 to 10, where 1 is
 0 dB and 10 is +20 dB; a value outside that range, or one that is not a number, is an error and
 changes nothing. The mixer also measures the final mix's loudness (momentary,
 short-term, integrated, loudness range and true peak). Each profile keeps a loudness target band,
 −18 to −14 LUFS by default (StudioCraft's own value). The `audio.loudness` command and the MCP
-tool `audio_loudness` report the readings with the band. The window does not show these readings
-yet.
+tool `audio_loudness` report the readings with the band, and the [Health dock](#health-dock)
+shows them.
 
 A source's Properties window sets two more audio options:
 
@@ -249,6 +258,33 @@ source's Properties… (sync offset and monitoring) and Filters…. The dock is 
 layout. On a system that cannot capture one application's audio, the dock lists the microphones
 and says why no applications are listed.
 
+### Health dock
+
+Docks › Health shows a dock with the state of the outputs and the program audio, one section under
+another. The Live layout shows it in the right column, and it is hidden in a new layout.
+
+- **Pause screen**: shown while the program is paused, with the pause banner's text and its +1 min
+  and Resume buttons.
+- **Destinations**: "{live} of {count} live" while the stream runs, and a line for each of the
+  profile's destinations with its state as the Streaming window shows it. While the program is
+  paused, a live destination reads "Live · sending the pause screen". While the stream runs, a
+  destination it sends to has Stop while it sends or tries to and Start otherwise. Streaming… opens
+  the Streaming window.
+- **Encoder**: the frame times and counts of the Stats window, and the state and size of a running
+  recording and stream. The section warns while any frame was drawn late or skipped by an encoder.
+- **Audio tracks**: the status bar's audio tracks item while it shows, and for the newest take its
+  number of tracks, the size of its files, the free space on its disk and the seconds of audio lost
+  while the disk was slow. Open Last Audio Tracks in Editor is enabled once a take has finished.
+- **Replay buffer**: its state and size, Save Replay while it runs, and Start or Stop.
+- **Live captions**: their state, and Start or Stop. There is no button while they finish after a
+  stop.
+- **Program loudness**: the short-term loudness, whether it is below, in or above the profile's
+  loudness target band, the integrated loudness, the highest true peak and the band. A bar from -40 to 0 LUFS shows the band and marks the short-term loudness. Before the
+  program has audio, the section reads "No program audio yet".
+
+The dock reads every value from counters the outputs and the mixer already keep, and draws again
+at least four times a second while it is shown.
+
 ## Recording
 
 Recordings are MKV, MP4 or MOV files at four quality levels: Compact, High, Pristine and Lossless.
@@ -256,6 +292,11 @@ The Lossless level encodes the video frames without compression loss and writes 
 The software encoder runs x264 with `-qp 0`, and NVENC through `ffmpeg` runs with
 `-tune lossless`. A Lossless recording also stores its audio without loss, as FLAC in an MKV file
 and as ALAC in an MP4 or MOV file. The other levels encode the audio as AAC.
+
+Settings › Output shows the four levels as cards, each with a short description. A click or an
+arrow key chooses one. The ffmpeg program, the audio tracks' write buffer and file size, and the
+audio editor are under Advanced options at the end of the page, which is closed when Settings
+opens. When the ffmpeg program cannot be read, the reason shows under the video encoder.
 
 StudioCraft writes recordings to the folder set in Settings › Output. When that setting is empty,
 it uses your Videos folder, then your home folder when the system has no Videos folder, and then
@@ -387,8 +428,8 @@ full session cannot be written, for example on a full disk, the take stops with 
 left unfinished, and a repair of the take writes the session.
 
 Settings › Output › Audio tracks › After a take sets what happens when a take's files are complete:
-Nothing (the default), Show the folder, or Open in the audio editor. Audio editor sets the editor's
-program; when it is empty, `soundcraft` on the `PATH` is used. When the editor cannot be found or
+Nothing (the default), Show the folder, or Open in the audio editor. Audio editor, under Settings ›
+Output › Advanced options, sets the editor's program; when it is empty, `soundcraft` on the `PATH` is used. When the editor cannot be found or
 started, the take's folder opens instead and a notice gives the reason. A take that ends
 because the next one starts (a recording that starts or stops during a stream) opens nothing, and so
 does a take whose files are complete only after a newer take has opened. Takes that the app finds
@@ -541,7 +582,8 @@ change to the rest of the address keeps it.
 Add Destination is a row of tiles under the count of destinations: one for each of seven streaming
 services, in the order of the services list, and one for a custom server. A click on a tile adds a
 destination for it, up to 16, and no menu opens over the destinations. Each tile shows the service's
-logo under the same rules as a row, and a plain tile otherwise, over the service's name. A screen
+logo under the same rules as a row, and the service's badge otherwise, over the service's name. The
+custom server tile shows a plain broadcast mark. A screen
 reader reads each tile as the destination it adds. While the profile holds 16 destinations every
 tile is turned off, and its tooltip gives the limit. The first destination uses the profile's stream key; the others have no key of their own until one
 is chosen, so the profile's key is not sent to another service. A service that documents one ingest
@@ -558,7 +600,12 @@ card, and the arrow keys choose the card before or after the focused one. Screen
 button with its text as the description. The cards stand side by side when the details are wide enough, and one
 above the other otherwise. A row
 shows the service it streams to, and the row and the details show a service's logo only where the
-service publishes one for this use, at no less than the size its guidelines allow (`ASSETS.md`). Save closes the details once the change is made; a change that is refused
+service publishes one for this use, at no less than the size its guidelines allow (`ASSETS.md`).
+Where a service's logo is not shown, the row and the details show its badge instead: the first
+letter of the service's name on a tile tinted from the theme's soft accent, with a hue of its own
+for each service. The letter keeps a contrast of at least 4.5:1 with the tile, in light and dark
+themes. The badge in the details is 72 points square and links to the service's page about
+streaming, as the logo does. Save closes the details once the change is made; a change that is refused
 leaves them open with what was typed. A destination whose key is held for the session has a field for that key:
 Hold keeps the typed key in memory for this session and Forget drops it. Remove deletes a
 destination; one that is sending must be stopped first. Each change is saved in the profile; a change
@@ -591,6 +638,13 @@ that is still running. A result the
 window cannot read, and a stream that fails to start, are shown as the reason the stream was not
 started. After a start, the window shows "The stream is starting" until the stream runs, fails or
 stops.
+
+The Pause screen row, under Go Live to N, has Pause, which runs `pause.start` with the profile's
+settings, and +1 min, which runs `pause.extend` with 60 s and is off while the program is not
+paused. While paused, Pause reads Resume and runs `pause.stop`, and the row shows the time left
+("4:32 left"), "The countdown ended" at zero, or the time paused without a countdown ("Paused for
+2:10"). Each destination that is live reads "Live · sending the pause screen" while paused
+([Pause screen](#pause-screen)).
 
 ### Pause screen
 
@@ -730,13 +784,13 @@ menu bar's overflow menu. In a right-to-left interface the row is mirrored. Dock
 
 ### Docks
 
-Scenes, Sources and Audio Mixer sit in a strip under the preview, and Application Audio joins them
-when Docks › Application Audio shows it. Each dock has a 28-point header
+Scenes, Sources and Audio Mixer sit in a strip under the preview, and Application Audio and Health
+join them when Docks › Application Audio and Docks › Health show them. Each dock has a 28-point header
 with the title at its start and the dock's actions at its end, and no footer. When the dock is
 narrow, the header keeps its actions and shortens the title. 1-point dividers separate the docks.
 
 The strip is 200 points tall, or 30% of the window's height when that is less, and never under 120
-points. Scenes, Sources, Audio Mixer and Application Audio start 300, 340, 400 and 360 points wide
+points. Scenes, Sources, Audio Mixer, Application Audio and Health start 300, 340, 400, 360 and 300 points wide
 ([MECHANICS.md](../MECHANICS.md#editing)), and the last shown dock takes the rest. No dock is
 narrower than 200 points while the window has room.
 
@@ -761,8 +815,8 @@ it. The menu also offers Undock.
 An undocked dock is drawn in a window of its own inside the main window, with a title bar above the
 dock's header. You drag the window by its title bar and resize it from any edge or corner. A resize
 from the left or top edge moves that edge, and the window keeps its new place. A dock without a saved
-place opens centered in the main window; Sources, Audio Mixer and Application Audio open 24, 48 and
-72 points further down and to the right, as far as the main window has room. Its starting and smallest sizes are in [MECHANICS.md](../MECHANICS.md#editing). When
+place opens centered in the main window; Sources, Audio Mixer, Application Audio and Health open 24,
+48, 72 and 96 points further down and to the right, as far as the main window has room. Its starting and smallest sizes are in [MECHANICS.md](../MECHANICS.md#editing). When
 the main window is smaller, StudioCraft draws the undocked dock further in without changing its saved
 place or size. A right-click on the dock's title offers Dock in the Strip, which puts the dock under
 the canvas, also when it was undocked from a column.
@@ -805,7 +859,8 @@ replaces that layout. At most 32 layouts are kept, and a settings file with more
 Docks › Layouts also lists four built-in layouts, above the saved ones:
 
 - **Set up**: Scenes and Sources in a 256-point left column, and Audio Mixer under the preview.
-- **Live**: Sources and Audio Mixer in a 268-point left column, and Scenes under the preview.
+- **Live**: Sources and Audio Mixer in a 268-point left column, Scenes under the preview, and the
+  [Health dock](#health-dock) in a 292-point right column.
 - **Review**: Scenes in a 256-point left column, and Audio Mixer and Application Audio under the
   preview, with Sources hidden.
 - **Classic**: every dock in the strip, as Reset Docks leaves them.

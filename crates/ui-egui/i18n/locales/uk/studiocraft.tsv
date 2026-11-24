@@ -197,6 +197,8 @@
 	No filters yet.	Фільтрів поки немає.
 	No graphics device: the preview is off	Немає графічного пристрою: попередній перегляд вимкнено
 	No sources in this scene. Add one with +.	У цій сцені немає джерел. Додайте джерело кнопкою +.
+	Heard in every scene	Чути в усіх сценах
+	No window	Немає вікна
 	Noise gate	Шумовий гейт
 	None	Немає
 	not in this ffmpeg	немає в цій збірці ffmpeg
@@ -435,16 +437,16 @@
 	Hardware acceleration	Апаратне прискорення
 	Power saving	Енергозбереження
 	Software (slower)	Програмно (повільніше)
-	Compact (small files)	Компактна (малі файли)
+	Compact	Компактна
 	Duplicate Profile	Дублювати профіль
 	Duplicate Scene Collection	Дублювати колекцію сцен
-	Lossless (very large files)	Без втрат (дуже великі файли)
+	Lossless	Без втрат
 	Move Down	Перемістити вниз
 	Move to Bottom	Перемістити в кінець
 	Move to Top	Перемістити на початок
 	Move Up	Перемістити вгору
 	New Scene Collection	Нова колекція сцен
-	Pristine (large files)	Бездоганна (великі файли)
+	Pristine	Бездоганна
 	Rename Profile	Перейменувати профіль
 	Rename Scene Collection	Перейменувати колекцію сцен
 	Unlock	Розблокувати
@@ -498,6 +500,12 @@ menu	Transform	Перетворення
 	Audio tracks write this source to a WAV file of its own (Settings › Output › Audio tracks)	Звукові доріжки записують це джерело в окремий файл WAV («Налаштування › Вивід › Звукові доріжки»)
 	Audio tracks	Звукові доріжки
 	Write each recorded source and the program mix to its own WAV file	Записувати кожне джерело, що записується, і мікс програми в окремий файл WAV
+	Smaller files for long sessions	Менші файли для довгих сеансів
+	A good fit for most recordings	Підходить для більшості записів
+	Almost no loss, for editing later	Майже без втрат, для подальшого монтажу
+	No loss at all, in very large files	Зовсім без втрат, у дуже великих файлах
+	Advanced options	Додаткові параметри
+	ffmpeg program, write buffer, file size, audio editor	програма ffmpeg, буфер запису, розмір файлу, звуковий редактор
 	Write them while	Записувати, коли
 	Include the program mix	Додавати мікс програми
 	Write buffer	Буфер запису
@@ -644,3 +652,33 @@ menu	Transform	Перетворення
 	Move Under the Canvas	Перемістити під полотно
 	Resize the column	Змінити ширину колонки
 	Place Dock	Розмістити панель
+	Health	Стан
+	Destinations	Призначення
+	Streaming…	Трансляція…
+	{live} of {count} live	{live} з {count} в ефірі
+	Not streaming	Трансляція не йде
+	Live · sending the pause screen	В ефірі · надсилає екран паузи
+	Encoder	Кодувальник
+	Frames are late or skipped	Кадри запізнюються або пропускаються
+	No frames late or skipped	Немає запізнілих чи пропущених кадрів
+	Tracks	Доріжки
+	Files	Файли
+	{mb} MB	{mb} МБ
+	Disk free	Вільно на диску
+	{gb} GB	{gb} ГБ
+	Audio lost	Втрачений звук
+	{lost} s	{lost} с
+	Loading…	Завантаження…
+	Live captions	Живі субтитри
+	Program loudness	Гучність програми
+	No program audio yet	Звуку програми ще немає
+	Below the target band	Нижче цільового діапазону
+	Above the target band	Вище цільового діапазону
+	In the target band	У цільовому діапазоні
+	Short-term	Короткочасна
+	Integrated	Інтегральна
+	True peak	Справжній пік
+	Target band	Цільовий діапазон
+	{value} LUFS	{value} LUFS
+	{value} dBTP	{value} dBTP
+	{low} to {high} LUFS	Від {low} до {high} LUFS

@@ -60,7 +60,7 @@
 	Color correction	تصحيح الألوان
 	Color key	مفتاح اللون
 	Community	المجتمع
-	Compact (small files)	مضغوط (ملفات صغيرة)
+	Compact	مضغوط
 	Compressor	الضاغط
 	Contrast	التباين
 	could not connect to the PipeWire sound server	تعذّر الاتصال بخادم الصوت PipeWire
@@ -172,7 +172,7 @@
 	Lock (it can't be moved in the preview)	قفل (لا يمكن تحريكه في المعاينة)
 	Lock Preview	قفل المعاينة
 	Loop	تكرار التشغيل
-	Lossless (very large files)	بلا فقد (ملفات كبيرة جدًا)
+	Lossless	بلا فقد
 	Low (dB)	الترددات المنخفضة (ديسيبل)
 	Maximize	تكبير
 	Media file	ملف وسائط
@@ -207,6 +207,8 @@
 	No filters yet.	لا توجد مرشحات بعد.
 	No graphics device: the preview is off	لا يوجد جهاز رسومات: المعاينة متوقفة
 	No sources in this scene. Add one with +.	لا توجد مصادر في هذا المشهد. أضف مصدرًا بالزر +.
+	Heard in every scene	مسموع في كل مشهد
+	No window	لا توجد نافذة
 	Noise gate	بوابة الضوضاء
 	None	بلا
 	not in this ffmpeg	غير موجود في ffmpeg هذا
@@ -229,7 +231,7 @@
 	Presets	الإعدادات المسبقة
 	Preview: {name}	المعاينة: {name}
 	Primary display	الشاشة الرئيسية
-	Pristine (large files)	نقي (ملفات كبيرة)
+	Pristine	نقي
 	Profile	ملف التعريف
 	Program: {name}	الإخراج النهائي: {name}
 	Properties	الخصائص
@@ -477,6 +479,12 @@ menu	Transform	التحويل
 	Audio tracks write this source to a WAV file of its own (Settings › Output › Audio tracks)	تكتب المسارات الصوتية هذا المصدر في ملف WAV خاص به (الإعدادات › الإخراج › المسارات الصوتية)
 	Audio tracks	المسارات الصوتية
 	Write each recorded source and the program mix to its own WAV file	كتابة كل مصدر مسجَّل ومزيج البرنامج في ملف WAV خاص به
+	Smaller files for long sessions	ملفات أصغر للجلسات الطويلة
+	A good fit for most recordings	مناسبة لمعظم التسجيلات
+	Almost no loss, for editing later	فقد شبه معدوم، للتحرير لاحقًا
+	No loss at all, in very large files	بلا أي فقد، في ملفات كبيرة جدًا
+	Advanced options	خيارات متقدمة
+	ffmpeg program, write buffer, file size, audio editor	برنامج ffmpeg، مخزن الكتابة المؤقت، حجم الملف، محرر الصوت
 	Write them while	كتابتها عند
 	Include the program mix	تضمين مزيج البرنامج
 	Write buffer	مخزن الكتابة المؤقت
@@ -622,3 +630,33 @@ menu	Transform	التحويل
 	Move Under the Canvas	نقل أسفل لوحة الرسم
 	Resize the column	تغيير عرض العمود
 	Place Dock	وضع اللوحة
+	Health	الحالة
+	Destinations	الوجهات
+	Streaming…	البث…
+	{live} of {count} live	{live} من {count} على الهواء
+	Not streaming	لا يوجد بث
+	Live · sending the pause screen	على الهواء · ترسل شاشة الإيقاف المؤقت
+	Encoder	المرمّز
+	Frames are late or skipped	إطارات متأخرة أو متخطاة
+	No frames late or skipped	لا إطارات متأخرة أو متخطاة
+	Tracks	المسارات
+	Files	الملفات
+	{mb} MB	{mb} ميغابايت
+	Disk free	المساحة الحرة
+	{gb} GB	{gb} غيغابايت
+	Audio lost	الصوت المفقود
+	{lost} s	{lost} ث
+	Loading…	جارٍ التحميل…
+	Live captions	الترجمة المباشرة
+	Program loudness	علوّ صوت البرنامج
+	No program audio yet	لا صوت في البرنامج بعد
+	Below the target band	أدنى من النطاق المستهدف
+	Above the target band	أعلى من النطاق المستهدف
+	In the target band	ضمن النطاق المستهدف
+	Short-term	قصير المدى
+	Integrated	المتكامل
+	True peak	الذروة الحقيقية
+	Target band	النطاق المستهدف
+	{value} LUFS	{value} LUFS
+	{value} dBTP	{value} dBTP
+	{low} to {high} LUFS	{low} إلى {high} LUFS

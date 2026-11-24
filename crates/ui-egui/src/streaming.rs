@@ -4,7 +4,8 @@
 //! what it is doing. A row of service tiles adds a destination. Each change runs one of the
 //! window's `stream.destination*` commands. Check Connection runs `stream.diagnose` and shows
 //! what the check found under the destination. Go Live to N, at the top, runs `golive.check`,
-//! lists each problem with a button for its fix, and runs `stream.start` when there is none.
+//! lists each problem with a button for its fix, and runs `stream.start` when there is none. The
+//! Pause screen row under it pauses and resumes the program and shows the time left.
 
 use std::time::{Duration, Instant, UNIX_EPOCH};
 
@@ -32,7 +33,7 @@ use studiocraft_studio::diagnose::{Check, CheckState, Diagnosis, Evidence, Outco
 
 use crate::i18n::Msg;
 use crate::kit::option_card::{OptionCard, OptionCardStyle, OptionCards};
-use crate::logos::{self, Logos, ROW_TILE, TileStyle};
+use crate::logos::{self, HEADER_TILE, Logos, ROW_TILE, TileStyle};
 use crate::settings::{Tab, key_source};
 use crate::{Act, StudioApp, theme};
 
@@ -44,6 +45,8 @@ pub const MAX_SERVER: usize = 4096;
 const CHECK_REPAINT: Duration = Duration::from_millis(250);
 /// How often the window looks again at a Go-live check that waits for the free space.
 const GO_LIVE_REPAINT: Duration = Duration::from_millis(15);
+/// How often the window is drawn again while the program is paused.
+const PAUSE_REPAINT: Duration = Duration::from_millis(250);
 
 /// What the Streaming window keeps between frames: the destination whose details are open, with
 /// the text typed into them.
@@ -328,11 +331,13 @@ fn panel_key_source(key: &KeyRef) -> String {
 
 /// What destination `d` is doing, in the interface language, and the tone of its line (`Neutral`
 /// for the plain text color): from `live` while the stream runs, otherwise whether starting the
-/// stream sends to it.
-pub(crate) fn status_text(d: &Destination, running: bool, live: Option<&DestinationState>) -> (String, Tone) {
+/// stream sends to it. A live destination says it sends the pause screen while the program is
+/// `paused`.
+pub(crate) fn status_text(d: &Destination, running: bool, live: Option<&DestinationState>, paused: bool) -> (String, Tone) {
     match (running, live) {
         (true, Some(s)) => match &s.status {
             DestinationStatus::Connecting => (tl!("Connecting").to_string(), Tone::Neutral),
+            DestinationStatus::Live if paused => (tl!("Live · sending the pause screen").to_string(), Tone::Good),
             DestinationStatus::Live => (tl!("Live").to_string(), Tone::Good),
             DestinationStatus::Retrying { attempt, failure } => (
                 craft_i18n::fmt(
@@ -406,8 +411,17 @@ pub(crate) fn status_detail(running: bool, live: Option<&DestinationState>) -> O
 }
 
 /// Whether a destination in this state is sending or trying to.
-fn sending(s: &DestinationState) -> bool {
+pub(crate) fn sending(s: &DestinationState) -> bool {
     !matches!(s.status, DestinationStatus::Stopped | DestinationStatus::Failed(_))
+}
+
+/// The name a destination's row shows: its own name, else its service's name, else its id.
+pub(crate) fn destination_title(d: &Destination) -> String {
+    match services::service(&d.service) {
+        _ if !d.name.trim().is_empty() => d.name.clone(),
+        Some(svc) => svc.name.to_string(),
+        None => d.id.clone(),
+    }
 }
 
 /// What the Streaming window shows.
@@ -421,6 +435,11 @@ pub(crate) struct View<'a> {
     pub(crate) held: &'a dyn Fn(&str) -> bool,
     /// The connection check of each destination that has had one in this session, by id.
     pub(crate) checks: &'a [(String, CheckState)],
+    /// While the program is paused, the countdown's time left in milliseconds (`None` without a
+    /// countdown); `None` while it is not paused.
+    pub(crate) paused: Option<Option<u64>>,
+    /// How long the program has been paused, in milliseconds.
+    pub(crate) paused_for: Option<u64>,
 }
 
 /// What a check of a destination found, in the interface language.
@@ -506,6 +525,7 @@ fn listed_check(state: &CheckState) -> Value {
 /// The Streaming window's contents.
 pub(crate) fn show(ui: &mut Ui, view: &View, panel: &mut StreamingPanel, acts: &mut Vec<Act>) {
     go_live_row(ui, view, panel);
+    pause_row(ui, view, acts);
     if let Some(tab) = panel.golive.as_ref().and_then(|check| go_live_result(ui, check, acts)) {
         panel.open_settings = Some(tab);
     }
@@ -556,6 +576,49 @@ fn go_live_row(ui: &mut Ui, view: &View, panel: &mut StreamingPanel) {
         if checking {
             let _ = Spinner::new().show(ui);
             let _ = Text::new(tl!("Running the Go-live check…")).shade(Shade::Muted).show(ui);
+        }
+    });
+}
+
+/// The time the Pause screen row shows while the program is paused: the countdown's time left,
+/// "The countdown ended" at zero, or the time paused without a countdown. `paused` and `for_ms`
+/// are as in [`View`]. `None` while the program is not paused.
+pub(crate) fn pause_time(paused: Option<Option<u64>>, for_ms: Option<u64>) -> Option<String> {
+    Some(match paused? {
+        Some(0) => tl!("The countdown ended").to_string(),
+        Some(ms) => craft_i18n::fmt(tl!("{time} left"), &[("time", &studiocraft_studio::countdown_text(ms))]),
+        None => craft_i18n::fmt(tl!("Paused for {time}"), &[("time", &studiocraft_studio::paused_text(for_ms.unwrap_or(0)))]),
+    })
+}
+
+/// The Pause screen row: Pause (`pause.start` with the profile's settings), or Resume
+/// (`pause.stop`) with the time left or the time paused while the program is paused, and +1 min
+/// (`pause.extend`), which is off while the program is not paused.
+fn pause_row(ui: &mut Ui, view: &View, acts: &mut Vec<Act>) {
+    let time = pause_time(view.paused, view.paused_for);
+    let _ = Row::new().show(ui, |ui, _| {
+        let _ = Text::new(tl!("Pause screen")).role(TypeRole::BodyStrong).show(ui);
+        let (label, tip, act) = if time.is_some() {
+            (tl!("Resume"), tid!("pause.stop", "Resume Program"), Act::run("pause.stop", json!({})))
+        } else {
+            (tl!("Pause"), tid!("pause.start", "Pause Program"), Act::run("pause.start", json!({})))
+        };
+        if Button::new(label).tooltip(TooltipSpec::new(tip)).id_salt("pause").show(ui).clicked() {
+            acts.push(act);
+        }
+        if let Some(time) = &time {
+            let _ = Text::new(time.clone()).tone(Tone::Warn).show(ui);
+        }
+        // While the program is not paused, +1 min is off and says why.
+        let tip = if time.is_some() {
+            TooltipSpec::new(tid!("pause.extend", "Add a Minute to the Pause"))
+        } else {
+            let reason = tl!("The program is not paused");
+            TooltipSpec::new(reason).disabled_text(reason)
+        };
+        let more = Button::new(tl!("+1 min")).enabled(time.is_some()).tooltip(tip).id_salt("pause-extend");
+        if more.show(ui).clicked() {
+            acts.push(Act::run("pause.extend", json!({"seconds": 60})));
         }
     });
 }
@@ -661,7 +724,7 @@ pub(crate) fn add_tiles() -> Vec<AddTile> {
 }
 
 /// Add Destination: a row of tiles, one per streaming service with its logo where the service
-/// allows it at this size and a plain tile otherwise, and one for a custom server. A click on a
+/// allows it at this size and its badge otherwise, and one for a custom server. A click on a
 /// tile adds a destination for it. Every tile is off while the profile holds `full` destinations.
 fn add_row(ui: &mut Ui, full: bool, logos: &mut Logos, acts: &mut Vec<Act>) {
     let style = TileStyle::of(ui.ctx());
@@ -684,7 +747,7 @@ fn add_row(ui: &mut Ui, full: bool, logos: &mut Logos, acts: &mut Vec<Act>) {
     });
 }
 
-/// One tile of [`add_row`], `size` points large: its logo or plain tile over its name. A tile in a
+/// One tile of [`add_row`], `size` points large: its logo, badge or plain tile over its name. A tile in a
 /// disabled `ui` is drawn faded and does nothing.
 fn add_tile(ui: &mut Ui, tile: &AddTile, size: egui::Vec2, style: &TileStyle, font: &egui::FontId, logos: &mut Logos) -> egui::Response {
     let enabled = ui.is_enabled();
@@ -705,7 +768,7 @@ fn add_tile(ui: &mut Ui, tile: &AddTile, size: egui::Vec2, style: &TileStyle, fo
         let tile_radius = style.row_radius;
         match logos::logo(tile.service).filter(|l| l.fits_row(ROW_TILE, ui.ctx().pixels_per_point())) {
             Some(l) => logos.paint(ui, logo, l, style, tile_radius),
-            None => Logos::paint_plain(ui, logo, style, tile_radius),
+            None => Logos::paint_plain(ui, logo, tile.service, style, tile_radius),
         }
         let color = if enabled { style.text } else { style.text_disabled };
         let name = painter.layout_no_wrap(tile.label.clone(), font.clone(), color);
@@ -725,14 +788,10 @@ fn toned(text: Text, tone: Tone) -> Text {
 
 fn row(ui: &mut Ui, view: &View, d: &Destination, live: Option<&DestinationState>, panel: &mut StreamingPanel, acts: &mut Vec<Act>) {
     let preset = services::service(&d.service);
-    let title = match preset {
-        _ if !d.name.trim().is_empty() => d.name.clone(),
-        Some(svc) => svc.name.to_string(),
-        None => d.id.clone(),
-    };
+    let title = destination_title(d);
     let _ = Row::new().fill_width().show(ui, |ui, _| {
         // A destination set up for a service shows the service's logo where it may stand beside
-        // text at this size, and a plain tile otherwise.
+        // text at this size, and the service's badge otherwise.
         if preset.is_some() {
             let (tile, _) = ui.allocate_exact_size(vec2(ROW_TILE, ROW_TILE), Sense::hover());
             if ui.is_rect_visible(tile) {
@@ -740,7 +799,7 @@ fn row(ui: &mut Ui, view: &View, d: &Destination, live: Option<&DestinationState
                 let radius = style.row_radius;
                 match logos::logo(&d.service).filter(|l| l.fits_row(ROW_TILE, ui.ctx().pixels_per_point())) {
                     Some(l) => panel.logos.paint(ui, tile, l, &style, radius),
-                    None => Logos::paint_plain(ui, tile, &style, radius),
+                    None => Logos::paint_plain(ui, tile, &d.service, &style, radius),
                 }
             }
         }
@@ -792,7 +851,7 @@ fn row(ui: &mut Ui, view: &View, d: &Destination, live: Option<&DestinationState
     {
         let _ = Text::new(tl!("No key is held for this session yet")).role(TypeRole::Caption).tone(Tone::Warn).show(ui);
     }
-    let (text, tone) = status_text(d, view.running, live);
+    let (text, tone) = status_text(d, view.running, live, view.paused.is_some());
     let mut status = toned(Text::new(text), tone);
     if let Some(detail) = status_detail(view.running, live) {
         status = status.tooltip(TooltipSpec::new(detail));
@@ -847,22 +906,32 @@ fn check_row(ui: &mut Ui, view: &View, d: &Destination, acts: &mut Vec<Act>) {
     });
 }
 
-/// The logo of the service `e` is set up for, on a row of its own at its full size, linked to the
-/// service's page about streaming.
+/// The logo of the service `e` is set up for, on a row of its own at its full size, or the
+/// service's badge when it has no logo, linked to the service's page about streaming.
 fn details_logo(ui: &mut Ui, e: &Edit, logos: &mut Logos, acts: &mut Vec<Act>) {
-    let (Some(svc), Some(l)) = (services::service(&e.service), logos::logo(&e.service)) else { return };
-    let tile = l.header_tile(ui.ctx().pixels_per_point());
-    let (rect, r) = ui.allocate_exact_size(vec2(l.header_width(tile), tile), Sense::click());
+    let Some(svc) = services::service(&e.service) else { return };
+    let logo = logos::logo(&e.service);
+    let (size, gap) = match logo {
+        Some(l) => {
+            let tile = l.header_tile(ui.ctx().pixels_per_point());
+            (vec2(l.header_width(tile), tile), l.header_gap(tile))
+        }
+        None => (vec2(HEADER_TILE, HEADER_TILE), HEADER_TILE / 4.0),
+    };
+    let (rect, r) = ui.allocate_exact_size(size, Sense::click());
     let hint = craft_i18n::fmt(tl!("Where {service} shows your server and key"), &[("service", svc.name)]);
     r.widget_info(|| WidgetInfo::labeled(Role::Link, true, &hint));
     if ui.is_rect_visible(rect) {
         let style = TileStyle::of(ui.ctx());
-        logos.paint(ui, rect, l, &style, style.details_radius);
+        match logo {
+            Some(l) => logos.paint(ui, rect, l, &style, style.details_radius),
+            None => Logos::paint_badge(ui, rect, svc, &style, style.details_radius),
+        }
     }
     if r.on_hover_text(&hint).clicked() {
         acts.push(Act::OpenUrl(svc.source.to_string()));
     }
-    ui.add_space(l.header_gap(tile));
+    ui.add_space(gap);
 }
 
 /// The Service choices: Custom server, each service of [`SERVICES`], and `current` when this
@@ -1585,8 +1654,14 @@ impl StudioApp {
             ui.ctx().request_repaint_after(CHECK_REPAINT);
         }
         let studio = &self.studio;
+        let paused = studio.paused();
+        // The window draws again within a quarter second while paused, so the time it shows stays current.
+        if paused.is_some() {
+            ui.ctx().request_repaint_after(PAUSE_REPAINT);
+        }
         let held = |name: &str| studio.stream_key_held(name);
-        let view = View { stream: &studio.profile().stream, running, live: &live, held: &held, checks: &checks };
+        let view =
+            View { stream: &studio.profile().stream, running, live: &live, held: &held, checks: &checks, paused, paused_for: studio.paused_for_ms() };
         let mut open = true;
         if let Some(panel) = &mut self.streaming {
             let title = tid!("view.streaming", "Streaming");
