@@ -426,16 +426,47 @@ mod tests {
         assert_eq!(never.cameras(), None);
     }
 
+    /// Notices that count the thread's waits and record when the thread dropped them.
+    struct Counted {
+        told: mpsc::Receiver<()>,
+        waits: Arc<AtomicU64>,
+        dropped: Arc<AtomicBool>,
+    }
+
+    impl CameraEvents for Counted {
+        fn wait(&mut self) -> Result<(), PlatformError> {
+            self.waits.fetch_add(1, Ordering::AcqRel);
+            self.told.recv().map_err(|_| PlatformError::Failed("stopped".into()))
+        }
+    }
+
+    impl Drop for Counted {
+        fn drop(&mut self) {
+            self.dropped.store(true, Ordering::Release);
+        }
+    }
+
     #[test]
     fn a_dropped_watch_ends_its_thread_at_the_next_notice() {
         let plugs = Plugs::new(Vec::new());
-        let (w, tell) = watched(&plugs);
-        drop(w);
-        // The thread holds the watch only while it lists, so it ends at the next notice instead
-        // of listing. The receiver is dropped when the thread ends, which makes a send fail.
-        while tell.send(()).is_ok() {
+        let (tell, told) = mpsc::channel();
+        let waits = Arc::new(AtomicU64::new(0));
+        let dropped = Arc::new(AtomicBool::new(false));
+        let events = Counted { told, waits: waits.clone(), dropped: dropped.clone() };
+        let backend: Arc<dyn CameraBackend> = plugs.clone();
+        let w = watch_with(backend, move || Ok(Box::new(events) as Box<dyn CameraEvents>));
+        while waits.load(Ordering::Acquire) == 0 {
             std::thread::yield_now();
         }
+        drop(w);
+        tell.send(()).unwrap();
+        // The thread holds the watch only while it lists, so at the notice it either ends, which
+        // drops its notices, or waits for another notice.
+        while !dropped.load(Ordering::Acquire) && waits.load(Ordering::Acquire) < 2 {
+            std::thread::yield_now();
+        }
+        assert!(dropped.load(Ordering::Acquire), "the thread waits for another notice instead of ending");
+        assert_eq!(waits.load(Ordering::Acquire), 1);
     }
 
     #[cfg(target_os = "linux")]
