@@ -223,6 +223,8 @@ struct SourceTex {
     fx_frame: u64,
     fx_result: usize,
     fx_size: (u32, u32),
+    /// The capture textures shared with this device, for a source whose pictures stay on the GPU.
+    shared: Option<craft_gpu_interop::Importer>,
 }
 
 /// A filter's picture on the GPU, uploaded once.
@@ -802,13 +804,61 @@ impl Compositor {
             fx_frame: 0,
             fx_result: 0,
             fx_size: (0, 0),
+            shared: None,
         };
         let st = self.sources.entry(item.source).or_insert_with(|| fresh(&item.video));
         if !Arc::ptr_eq(&st.video, &item.video) {
             *st = fresh(&item.video);
         }
-        let Some(content) = st.video.take() else { return };
         let (device, queue) = (&self.gpu.device, &self.gpu.queue);
+        let content = st.video.take();
+        if content.is_some()
+            && !matches!(content, Some(VideoContent::Shared(_)))
+            && let Some(importer) = &mut st.shared
+        {
+            // A picture from memory, a color or nothing replaces a shared picture still waiting.
+            importer.clear();
+        }
+        if let Some(VideoContent::Shared(f)) = content {
+            st.shared.get_or_insert_with(Default::default).offer(f);
+        } else if let Some(content) = content {
+            Self::sync_content(device, queue, &self.pipes, st, content);
+        }
+        if st.shared.as_ref().is_some_and(|i| i.pending().is_some()) {
+            Self::draw_shared(device, queue, &self.pipes, st);
+        }
+    }
+
+    /// Draw a source's waiting shared picture into its texture, without waiting for the capture's
+    /// copy. When the device cannot take it, the reason is on the picture's ring and the source
+    /// sends its next pictures from memory; the texture keeps the last picture until then.
+    fn draw_shared(device: &wgpu::Device, queue: &wgpu::Queue, pipes: &Pipes, st: &mut SourceTex) {
+        let Some(importer) = &mut st.shared else { return };
+        let Some(size) = importer.pending().and_then(|f| shared_size(device, f)) else {
+            if let Some(f) = importer.pending() {
+                f.ring().refuse(craft_gpu_interop::Fallback::Format);
+            }
+            importer.clear();
+            return;
+        };
+        let format = wgpu::TextureFormat::Bgra8Unorm;
+        // The texture is made or replaced only for a picture that is ready, so the last picture
+        // stays while the capture's copy runs or when the device cannot take it.
+        let slot = &mut st.tex;
+        let target =
+            |_w, _h| Some(ensure_tex(device, pipes, slot, size.0, size.1, format).texture.create_view(&wgpu::TextureViewDescriptor::default()));
+        match importer.draw(device, queue, format, target) {
+            Ok(craft_gpu_interop::Drawn::Frame { width, height }) => {
+                st.native = (width, height);
+                st.solid = None;
+            }
+            Ok(craft_gpu_interop::Drawn::Waiting | craft_gpu_interop::Drawn::Idle) => {}
+            Err(reason) => log::debug!("a shared capture is copied through memory: {reason}"),
+        }
+    }
+
+    /// Bring a source's texture up to date with content from memory, a color or nothing.
+    fn sync_content(device: &wgpu::Device, queue: &wgpu::Queue, pipes: &Pipes, st: &mut SourceTex, content: VideoContent) {
         match content {
             VideoContent::Frame(f) => {
                 let format = match f.format {
@@ -820,14 +870,14 @@ impl Compositor {
                 if !f.is_consistent() || f.width > limit || f.height > limit {
                     return;
                 }
-                let tex = ensure_tex(device, &self.pipes, &mut st.tex, f.width, f.height, format);
+                let tex = ensure_tex(device, pipes, &mut st.tex, f.width, f.height, format);
                 write(queue, tex, &f.data);
                 st.native = (f.width, f.height);
                 st.solid = None;
             }
             VideoContent::Solid { rgba, width, height } => {
                 let fresh = st.tex.as_ref().is_none_or(|t| (t.width, t.height, t.format) != (1, 1, wgpu::TextureFormat::Rgba8Unorm));
-                let tex = ensure_tex(device, &self.pipes, &mut st.tex, 1, 1, wgpu::TextureFormat::Rgba8Unorm);
+                let tex = ensure_tex(device, pipes, &mut st.tex, 1, 1, wgpu::TextureFormat::Rgba8Unorm);
                 if fresh || st.solid != Some(rgba) {
                     write(queue, tex, &rgba);
                 }
@@ -835,6 +885,8 @@ impl Compositor {
                 st.solid = Some(rgba);
             }
             VideoContent::Empty => st.native = (0, 0),
+            // Taken by `sync_source` before this is called.
+            VideoContent::Shared(_) => {}
         }
     }
 
@@ -1240,10 +1292,19 @@ fn ensure_tex<'t>(device: &wgpu::Device, pipes: &Pipes, slot: &'t mut Option<Tex
         *slot = None;
     }
     slot.get_or_insert_with(|| {
-        let texture = texture(device, "source", w, h, format, wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST, &[]);
+        // Uploads copy into the texture; a shared capture is drawn into it.
+        let usage = wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::RENDER_ATTACHMENT;
+        let texture = texture(device, "source", w, h, format, usage, &[]);
         let bind = tex_bind(device, pipes, &texture.create_view(&wgpu::TextureViewDescriptor::default()));
         Tex { texture, bind, width: w, height: h, format }
     })
+}
+
+/// A shared picture's size, when it is not empty and fits the device's textures.
+fn shared_size(device: &wgpu::Device, f: &craft_gpu_interop::SharedFrame) -> Option<(u32, u32)> {
+    let limit = device.limits().max_texture_dimension_2d;
+    let (w, h) = (f.width(), f.height());
+    (w > 0 && h > 0 && w <= limit && h <= limit).then_some((w, h))
 }
 
 fn write(queue: &wgpu::Queue, tex: &Tex, data: &[u8]) {

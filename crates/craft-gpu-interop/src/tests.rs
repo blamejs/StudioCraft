@@ -1,0 +1,218 @@
+use std::time::{Duration, Instant};
+
+use super::*;
+
+fn frame(ring: &std::sync::Arc<SharedRing>, slot: usize, ready: u64) -> SharedFrame {
+    SharedFrame::new(std::sync::Arc::clone(ring), slot, ready).unwrap()
+}
+
+#[test]
+fn free_textures_are_written_oldest_first() {
+    let t0 = Instant::now();
+    let mut slots = SlotTable::default();
+    let mut order = Vec::new();
+    for _ in 0..SLOTS {
+        let s = slots.pick(0, t0).unwrap();
+        assert!(!order.contains(&s), "a texture handed out is not picked again");
+        order.push(s);
+        slots.fill(s, t0).unwrap();
+    }
+    assert_eq!(slots.last(), 3);
+    assert_eq!(slots.pick(0, t0), None, "every texture is waiting for the compositor");
+    // The compositor read frame 1: its texture is the one written again.
+    assert_eq!(slots.pick(1, t0), Some(order[0]));
+    // Frame 3 read means frames 1 and 2 were passed over; all are free, the oldest first.
+    assert_eq!(slots.pick(3, t0), Some(order[0]));
+}
+
+#[test]
+fn a_texture_the_compositor_never_releases_is_taken_back() {
+    let t0 = Instant::now();
+    let mut slots = SlotTable::default();
+    for _ in 0..SLOTS {
+        let s = slots.pick(0, t0).unwrap();
+        slots.fill(s, t0).unwrap();
+    }
+    assert_eq!(slots.pick(0, t0 + RECLAIM - Duration::from_millis(1)), None);
+    let s = slots.pick(0, t0 + RECLAIM).unwrap();
+    assert_eq!(slots.fill(s, t0 + RECLAIM), Some(4));
+    // A clock that went back does not free a texture.
+    let later = t0 + RECLAIM * 4;
+    let mut slots = SlotTable::default();
+    for _ in 0..SLOTS {
+        let s = slots.pick(0, later).unwrap();
+        slots.fill(s, later).unwrap();
+    }
+    assert_eq!(slots.pick(0, t0), None);
+}
+
+#[test]
+fn a_slot_outside_the_ring_is_refused() {
+    let mut slots = SlotTable::default();
+    assert_eq!(slots.fill(SLOTS, Instant::now()), None);
+    assert_eq!(slots.last(), 0, "a refused fill hands out no value");
+    let ring = SharedRing::detached(4, 2);
+    assert!(SharedFrame::new(ring.clone(), SLOTS, 1).is_none());
+    assert!(SharedFrame::new(ring.clone(), usize::MAX, 1).is_none());
+    let f = frame(&ring, SLOTS - 1, 9);
+    assert_eq!((f.slot(), f.ready(), f.width(), f.height()), (SLOTS - 1, 9, 4, 2));
+}
+
+#[test]
+fn a_late_copy_leaves_the_frame_waiting_and_the_caller_goes_on() {
+    let ring = SharedRing::detached(1, 1);
+    let mut handoff = Handoff::default();
+    assert!(handoff.take_ready(u64::MAX).is_none(), "nothing offered");
+    handoff.offer(frame(&ring, 0, 5));
+    // The capture side's fence is behind: each call returns at once and the frame stays.
+    for completed in [0, 3, 4] {
+        assert!(handoff.take_ready(completed).is_none());
+        assert_eq!(handoff.pending().map(SharedFrame::ready), Some(5));
+    }
+    // A newer frame replaces the one still waiting.
+    handoff.offer(frame(&ring, 1, 6));
+    assert!(handoff.take_ready(5).is_none());
+    let taken = handoff.take_ready(6).unwrap();
+    assert_eq!((taken.slot(), taken.ready()), (1, 6));
+    assert!(handoff.pending().is_none(), "a frame is taken once");
+}
+
+#[test]
+fn the_first_fallback_reason_is_kept() {
+    let ring = SharedRing::detached(1, 1);
+    assert_eq!(ring.fallback(), None);
+    ring.refuse(Fallback::NotDx12);
+    ring.refuse(Fallback::OtherAdapter);
+    assert_eq!(ring.fallback(), Some(Fallback::NotDx12));
+    for f in Fallback::ALL {
+        assert_eq!(Fallback::from_code(f.code()), Some(f));
+        assert!(!f.to_string().is_empty());
+    }
+    assert_eq!(Fallback::from_code(0), None);
+    assert_eq!(Fallback::from_code(200), None);
+    assert_ne!(SharedRing::detached(1, 1).id(), ring.id(), "every ring has its own id");
+}
+
+#[test]
+fn an_import_needs_direct3d_12_on_the_display_adapter() {
+    let a = AdapterId::from_parts(7, 0);
+    let b = AdapterId::from_parts(7, 1);
+    assert_eq!(check_import(Backend::Dx12, a, Some(a)), Ok(()));
+    assert_eq!(check_import(Backend::Other, a, Some(a)), Err(Fallback::NotDx12));
+    assert_eq!(check_import(Backend::Dx12, a, Some(b)), Err(Fallback::OtherAdapter));
+    assert_eq!(check_import(Backend::Dx12, a, None), Err(Fallback::OtherAdapter));
+}
+
+#[test]
+fn an_adapter_id_keeps_both_parts() {
+    assert_eq!(AdapterId::from_parts(1, 2).0, (2 << 32) | 1);
+    assert_eq!(AdapterId::from_parts(u32::MAX, -1).0, u64::MAX);
+    assert_ne!(AdapterId::from_parts(0, -1), AdapterId::from_parts(0, 1));
+}
+
+#[cfg(not(windows))]
+#[test]
+fn elsewhere_than_windows_the_capture_reports_the_fallback() {
+    assert_eq!(Duplication::open("display").err(), Some(CaptureError::Fallback(Fallback::Unsupported)));
+}
+
+#[cfg(feature = "wgpu")]
+mod gpu {
+    use super::*;
+
+    fn device() -> Option<(wgpu::Device, wgpu::Queue)> {
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+        let Ok(adapter) = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())) else {
+            eprintln!("no graphics adapter: this test is skipped");
+            return None;
+        };
+        pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default())).ok()
+    }
+
+    fn texture(device: &wgpu::Device, w: u32, h: u32, usage: wgpu::TextureUsages) -> wgpu::Texture {
+        device.create_texture(&wgpu::TextureDescriptor {
+            label: None,
+            size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Bgra8Unorm,
+            usage,
+            view_formats: &[],
+        })
+    }
+
+    /// Read a 64 x 1 BGRA texture back (64 texels make a 256-byte row).
+    fn read(device: &wgpu::Device, queue: &wgpu::Queue, tex: &wgpu::Texture) -> Vec<u8> {
+        let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: None,
+            size: 256,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+        enc.copy_texture_to_buffer(
+            tex.as_image_copy(),
+            wgpu::TexelCopyBufferInfo {
+                buffer: &buffer,
+                layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(256), rows_per_image: Some(1) },
+            },
+            wgpu::Extent3d { width: 64, height: 1, depth_or_array_layers: 1 },
+        );
+        queue.submit([enc.finish()]);
+        buffer.map_async(wgpu::MapMode::Read, .., |r| r.unwrap());
+        device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+        buffer.get_mapped_range(..).unwrap().to_vec()
+    }
+
+    #[test]
+    fn the_opaque_copy_keeps_the_color_and_sets_alpha() {
+        let Some((device, queue)) = device() else { return };
+        let src = texture(&device, 64, 1, wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST);
+        let dst = texture(&device, 64, 1, wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC);
+        let mut texels = Vec::new();
+        for i in 0..64u8 {
+            texels.extend([i, i.wrapping_mul(3), 255 - i, i % 2 * 255]);
+        }
+        queue.write_texture(
+            src.as_image_copy(),
+            &texels,
+            wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(256), rows_per_image: Some(1) },
+            wgpu::Extent3d { width: 64, height: 1, depth_or_array_layers: 1 },
+        );
+        let mut opaque = Opaque::new(&device);
+        let bind = opaque.bind(&device, &src.create_view(&Default::default()));
+        let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+        opaque.draw(&device, &mut enc, &bind, &dst.create_view(&Default::default()), wgpu::TextureFormat::Bgra8Unorm);
+        queue.submit([enc.finish()]);
+        let out = read(&device, &queue, &dst);
+        for (i, (got, want)) in out.chunks(4).zip(texels.chunks(4)).enumerate() {
+            assert_eq!(&got[..3], &want[..3], "texel {i} keeps its color");
+            assert_eq!(got[3], 255, "texel {i} is opaque");
+        }
+    }
+
+    #[test]
+    fn a_ring_the_device_cannot_open_records_why_and_drops_the_frame() {
+        let Some((device, queue)) = device() else { return };
+        let ring = SharedRing::detached(64, 1);
+        let format = wgpu::TextureFormat::Bgra8Unorm;
+        let asked = std::cell::Cell::new(0);
+        let target = || {
+            asked.set(asked.get() + 1);
+            Some(texture(&device, 64, 1, wgpu::TextureUsages::RENDER_ATTACHMENT).create_view(&Default::default()))
+        };
+        let mut importer = Importer::new();
+        assert_eq!(importer.draw(&device, &queue, format, |_, _| target()), Ok(Drawn::Idle));
+        importer.offer(frame(&ring, 0, 1));
+        let reason = importer.draw(&device, &queue, format, |_, _| target()).unwrap_err();
+        assert_eq!(ring.fallback(), Some(reason));
+        assert!(importer.pending().is_none());
+        // A later frame of the same ring is dropped with the recorded reason, without another
+        // attempt to open it.
+        importer.offer(frame(&ring, 1, 2));
+        assert_eq!(importer.draw(&device, &queue, format, |_, _| target()), Err(reason));
+        assert_eq!(importer.draw(&device, &queue, format, |_, _| target()), Ok(Drawn::Idle));
+        assert_eq!(asked.get(), 0, "no target is made for a frame that is not drawn");
+    }
+}
