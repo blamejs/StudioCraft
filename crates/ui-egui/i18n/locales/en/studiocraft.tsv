@@ -508,6 +508,15 @@
 	Copy of the stream	Copy of the stream
 	Save a copy of the stream for posting as a video	Save a copy of the stream for posting as a video
 	The stream also writes the same pictures and sound it sends to an MKV file in the recording folder, named Stream and the date and time it started. The copy uses no extra encoder. For editing, record audio tracks too: each source's sound is then kept in a file of its own. If the disk falls behind, the copy leaves out a few seconds and the stream goes on.	The stream also writes the same pictures and sound it sends to an MKV file in the recording folder, named Stream and the date and time it started. The copy uses no extra encoder. For editing, record audio tracks too: each source's sound is then kept in a file of its own. If the disk falls behind, the copy leaves out a few seconds and the stream goes on.
+	Destination encoders	Destination encoders
+	A destination can run a video encoder of its own at its own bitrate, with the same picture size, frame rate and keyframe interval. Each encoder of its own uses more CPU or GPU time. Destinations with the same encoder, settings and bitrate share one encoder.	A destination can run a video encoder of its own at its own bitrate, with the same picture size, frame rate and keyframe interval. Each encoder of its own uses more CPU or GPU time. Destinations with the same encoder, settings and bitrate share one encoder.
+	The stream's encoder	The stream's encoder
+	Own bitrate	Own bitrate
+	{encoder} at {n} kbps	{encoder} at {n} kbps
+	The stream's encoder, {encoder}: no destination	The stream's encoder, {encoder}: no destination
+	The stream's encoder, {encoder}: {destinations}	The stream's encoder, {encoder}: {destinations}
+	Own encoder, {encoder}: {destinations}	Own encoder, {encoder}: {destinations}
+	Video encoders	Video encoders
 	Type	Type
 	Type shortcuts such as Ctrl+1 or Shift+F5; separate several with commas.	Type shortcuts such as Ctrl+1 or Shift+F5; separate several with commas.
 	ultrafast	ultrafast
@@ -755,6 +764,8 @@ menu	Transform	Transform
 @msg	`{command}`: `{key}` is true or false	`{command}`: `{key}` is true or false
 @msg	`{command}`: `{key}` is a whole number	`{command}`: `{key}` is a whole number
 @msg	`{command}`: `{key}` has a control character	`{command}`: `{key}` has a control character
+@msg	`{command}`: `{key}` is longer than {max} bytes	`{command}`: `{key}` is longer than {max} bytes
+@msg	`{command}`: `{key}` is 0 for the stream's bitrate or {low} to {high}	`{command}`: `{key}` is 0 for the stream's bitrate or {low} to {high}
 @msg	`{command}`: `name` is longer than {max} characters	`{command}`: `name` is longer than {max} characters
 @msg	`{command}`: `server` is longer than {max} bytes	`{command}`: `server` is longer than {max} bytes
 @msg	`{command}`: `server` has a user name or password before the host, which is not supported	`{command}`: `server` has a user name or password before the host, which is not supported

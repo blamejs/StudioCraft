@@ -8,9 +8,9 @@ use std::time::{Duration, UNIX_EPOCH};
 
 use egui::{RichText, Role, Sense, Ui, WidgetInfo, vec2};
 use serde_json::{Value, json};
-use studiocraft_model::profile::{MAX_DESTINATION_ID, MAX_DESTINATIONS, PRIMARY_DESTINATION};
+use studiocraft_model::profile::{MAX_DESTINATION_ID, MAX_DESTINATIONS, MAX_ENCODER_ID, PRIMARY_DESTINATION};
 use studiocraft_model::services::{self, SERVICES};
-use studiocraft_model::{Destination, KeyRef, ReconnectSettings, StreamSettings};
+use studiocraft_model::{Destination, KeyRef, ReconnectSettings, StreamSettings, VIDEO_BITRATE_KBPS};
 use studiocraft_plugin::{Cause, DestinationState, DestinationStatus, Failure};
 use studiocraft_studio::OutputKind;
 use studiocraft_studio::diagnose::{Check, CheckState, Diagnosis, Evidence, Outcome, Verdict};
@@ -411,7 +411,32 @@ pub(crate) fn show(ui: &mut Ui, view: &View, panel: &mut StreamingPanel, acts: &
             ui.push_id(("destination", &d.id), |ui| row(ui, view, d, live, panel, acts, palette));
             ui.separator();
         }
+        encoders(ui, view.stream);
     });
+}
+
+/// Which destinations share which video encoder, when one runs an encoder of its own.
+fn encoders(ui: &mut Ui, s: &StreamSettings) {
+    let groups = s.encoder_groups();
+    if groups.len() < 2 {
+        return;
+    }
+    ui.label(RichText::new(tl!("Video encoders")).strong());
+    let name = |id: &str| {
+        s.destination(id).map_or_else(|| id.to_string(), |d| if d.name.trim().is_empty() { d.id.clone() } else { d.name.trim().to_string() })
+    };
+    for g in groups {
+        let names: Vec<String> = g.destinations.iter().map(|id| name(id)).collect();
+        let encoder = craft_i18n::fmt(tl!("{encoder} at {n} kbps"), &[("encoder", &g.video_encoder), ("n", &g.video_bitrate_kbps.to_string())]);
+        let line = match (g.shared, names.is_empty()) {
+            (true, true) => craft_i18n::fmt(tl!("The stream's encoder, {encoder}: no destination"), &[("encoder", &encoder)]),
+            (true, false) => {
+                craft_i18n::fmt(tl!("The stream's encoder, {encoder}: {destinations}"), &[("encoder", &encoder), ("destinations", &names.join(", "))])
+            }
+            _ => craft_i18n::fmt(tl!("Own encoder, {encoder}: {destinations}"), &[("encoder", &encoder), ("destinations", &names.join(", "))]),
+        };
+        ui.weak(line);
+    }
 }
 
 fn row(
@@ -810,6 +835,42 @@ fn opt_u32(cmd: &craft_keymap::CommandRef, key: &str) -> Result<Option<u32>, Msg
     }
 }
 
+/// The `video_encoder` and `video_bitrate_kbps` parameters: the encoder id a destination sends
+/// with (empty for the stream's) and its bitrate in kbps (0 for the stream's). An error for an id
+/// that is too long and a bitrate out of range.
+fn encoder_params(cmd: &craft_keymap::CommandRef) -> Result<(Option<String>, Option<u32>), Msg> {
+    let encoder = text_param(cmd, "video_encoder")?;
+    if encoder.as_ref().is_some_and(|e| e.len() > MAX_ENCODER_ID) {
+        return Err(tmsg!("`{command}`: `{key}` is longer than {max} bytes", command = cmd.id, key = "video_encoder", max = MAX_ENCODER_ID));
+    }
+    let kbps = opt_u32(cmd, "video_bitrate_kbps")?;
+    if let Some(k) = kbps
+        && k != 0
+        && !VIDEO_BITRATE_KBPS.contains(&k)
+    {
+        return Err(tmsg!(
+            "`{command}`: `{key}` is 0 for the stream's bitrate or {low} to {high}",
+            command = cmd.id,
+            key = "video_bitrate_kbps",
+            low = VIDEO_BITRATE_KBPS.start(),
+            high = VIDEO_BITRATE_KBPS.end()
+        ));
+    }
+    Ok((encoder, kbps))
+}
+
+/// The stream's encoders as `stream.destinations` lists them.
+fn listed_encoders(s: &StreamSettings) -> Value {
+    let groups: Vec<Value> = s
+        .encoder_groups()
+        .into_iter()
+        .map(|g| {
+            json!({"video_encoder": g.video_encoder, "video_bitrate_kbps": g.video_bitrate_kbps, "shared": g.shared, "destinations": g.destinations})
+        })
+        .collect();
+    json!(groups)
+}
+
 /// Reconnect settings as `stream.destinations` lists them.
 fn listed_reconnect(r: &ReconnectSettings) -> Value {
     json!({"enabled": r.enabled, "first_delay_s": r.first_delay_s, "max_delay_s": r.max_delay_s, "max_tries": r.max_tries})
@@ -835,6 +896,8 @@ fn listed(d: &Destination, running: bool, live: Option<&DestinationState>, held:
         "service": d.service,
         "server": shown_server(&d.server),
         "key": KeyChoice::of(&d.key).name(),
+        "video_encoder": d.video_encoder,
+        "video_bitrate_kbps": d.video_bitrate_kbps,
     });
     if let KeyRef::Held(n) = &d.key {
         v["held_name"] = json!(n);
@@ -1032,6 +1095,7 @@ impl StudioApp {
                     "running": running,
                     "max": MAX_DESTINATIONS,
                     "reconnect": listed_reconnect(&s.reconnect),
+                    "encoders": listed_encoders(s),
                     "check_service": s.check_service,
                     "save_copy": s.save_copy,
                     "copy": self.studio.stream_copy_json(),
@@ -1084,6 +1148,7 @@ impl StudioApp {
                 let preset_server = services::service(&service).and_then(|svc| svc.server).map(str::to_string);
                 let server = server_param(cmd)?.or(preset_server);
                 let enabled = opt_bool(cmd, "enabled")?;
+                let (video_encoder, video_bitrate_kbps) = encoder_params(cmd)?;
                 let live = self.live_destinations();
                 let current = &self.studio.profile().stream;
                 let id = new_id(current, &live);
@@ -1101,6 +1166,8 @@ impl StudioApp {
                     server: server.unwrap_or_default(),
                     key,
                     service,
+                    video_encoder: video_encoder.unwrap_or_default(),
+                    video_bitrate_kbps: video_bitrate_kbps.unwrap_or(0),
                 };
                 self.change_destinations(&id, |s| {
                     if s.destinations.len() >= MAX_DESTINATIONS {
@@ -1139,6 +1206,7 @@ impl StudioApp {
                 let name = name_param(cmd)?;
                 let server = server_param(cmd)?;
                 let enabled = opt_bool(cmd, "enabled")?;
+                let (video_encoder, video_bitrate_kbps) = encoder_params(cmd)?;
                 let from_user = self.from_user;
                 let changed = self.change_destinations(&id, |s| {
                     let d = s.destinations.iter_mut().find(|d| d.id == id).ok_or_else(|| tmsg!("there is no stream destination `{id}`", id = id))?;
@@ -1166,6 +1234,12 @@ impl StudioApp {
                     }
                     if let Some(k) = key.clone() {
                         next.key = k;
+                    }
+                    if let Some(e) = &video_encoder {
+                        next.video_encoder.clone_from(e);
+                    }
+                    if let Some(k) = video_bitrate_kbps {
+                        next.video_bitrate_kbps = k;
                     }
                     if !from_user {
                         guard_stream_key(

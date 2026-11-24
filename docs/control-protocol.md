@@ -666,7 +666,12 @@ disk fell behind, `finished` is whether the file was finished after the stream e
 is why the copy stopped, or `null`. `document.inspect`'s `streaming` entry has the same `copy`. `reconnect` holds the
 profile's automatic reconnect settings and `running_reconnect` the ones the running stream started
 with, each `{"enabled", "first_delay_s", "max_delay_s", "max_tries"}` (see `stream.reconnect_set`).
-`max` is 16. Each destination is `{"id", "name", "enabled", "service", "server", "key", "status"}`,
+`max` is 16. `encoders` lists the video encoders the destinations send with, the stream's first,
+each `{"video_encoder", "video_bitrate_kbps", "shared", "destinations"}`: `shared` is `true` for the
+stream's encoder, and `destinations` holds the ids of the destinations that send what it makes.
+Each destination is `{"id", "name", "enabled", "service", "server", "key", "video_encoder",
+"video_bitrate_kbps", "status"}`, where `video_encoder` is empty and `video_bitrate_kbps` is 0 when
+the destination uses the stream's,
 where `service` is the id of the streaming service it is set up for or empty for a custom server,
 `key` is `profile`, `held` or `none` and `server` shows a user name and password before the host, a
 key at the end of the address, and any query, as dots. A destination whose key is held adds `held_name` and `held`, whether a key is held
@@ -707,8 +712,8 @@ each address tried, at most four, in the order tried, as `{"address", "cause", "
 `refused` when any address refused, otherwise `timed_out` when any timed out, and `no_route` only
 when every address had no route.
 
-`stream.destination_add` takes `{"service"?, "name"?, "server"?, "enabled"?, "key"?, "held_name"?}`
-and returns `{"id"}`. `service` is the id of one of the seven streaming services, or empty for a
+`stream.destination_add` takes `{"service"?, "name"?, "server"?, "enabled"?, "key"?, "held_name"?,
+"video_encoder"?, "video_bitrate_kbps"?}` and returns `{"id"}`. `service` is the id of one of the seven streaming services, or empty for a
 custom server; the error for an unknown `service` lists the ids. A service that documents one ingest
 server for every account fills in that server when `server` is left out. The first destination of a
 profile gets the id `main` and the profile's key; later ones get `destination-2`, `destination-3`
@@ -716,7 +721,7 @@ and so on, and no key of their own unless `key` says otherwise. `enabled` is `tr
 out.
 
 `stream.destination_set` takes `{"id", "service"?, "name"?, "server"?, "enabled"?, "key"?,
-"held_name"?}` and changes only the fields given; it returns `{"id", "changed"}`, and a call that
+"held_name"?, "video_encoder"?, "video_bitrate_kbps"?}` and changes only the fields given; it returns `{"id", "changed"}`, and a call that
 changes nothing does not save the profile. A new `service` replaces a server that is empty or that
 is one of the services' documented servers: with that service's server, or, for a service that
 shows each account its own server, with no server, and the destination is turned off. Any other
@@ -724,6 +729,18 @@ server is kept, also on a change to a custom server. A `server` or `enabled` giv
 given a server that is not empty keeps its on or off setting. A destination keeps a
 `service` this version does not know until a call changes it. With `key` set to `held`,
 `held_name` names the session key; without it the destination keeps its held name, or uses its id.
+
+`video_encoder` is the id of the video encoder a destination sends with, or empty for the stream's,
+and `video_bitrate_kbps` its video bitrate, 100 to 200000, or 0 for the stream's. A destination whose
+encoder, encoder settings and bitrate differ from the stream's runs an encoder of its own, with the
+stream's picture size, frame rate, keyframe interval and sound settings; destinations that name the
+same encoder and bitrate share one. The encoder must be one of the built-in H.264 encoders a stream
+can run. `hardware` is allowed only when the stream's encoder is `hardware`, and then means the
+encoder the stream resolved to. An encoder of a destination's own that cannot start fails that
+destination alone, and one that stops while the stream runs fails its destinations with
+`cause` `other`. A destination with an encoder of its own can join a running stream only when the
+stream started with at least one such destination, on or off; otherwise the start is an error until
+the stream is started again.
 
 A command does not send the profile's stream key, or a key held for the session, to a server the
 user did not send it to. Only the destination `main` takes `key` `profile` from a command. A
@@ -747,7 +764,8 @@ These are errors: a missing or unknown `id`, a 17th destination, a `name` over 1
 `server` over 4096 bytes, a `name` or `server` with a control character, a `server` with a user
 name or password before the host (`rtmp://user:pass@host/app`), a `key` other than
 `profile`, `held` or `none`, `held_name` without `key` `held` or outside 1 to 64 bytes, a `service`
-that is not empty and is not a streaming service id, a parameter
+that is not empty and is not a streaming service id, a `video_encoder` over 64 bytes or with a
+control character, a `video_bitrate_kbps` other than 0 and outside 100 to 200000, a parameter
 of the wrong type, a start or stop while no stream runs or while the running stream was started with
 another profile, and a start of a destination whose held key is not set. While a stream of another
 profile runs, each destination's `status` is `not_in_stream`. Each change is saved in the profile, and an open Settings window shows the new

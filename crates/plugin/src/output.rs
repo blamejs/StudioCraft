@@ -37,6 +37,21 @@ pub struct OutputJob {
     pub stats: Arc<EncoderStats>,
     /// The master-clock time the output starts at: earlier frames and audio are not written.
     pub start: Tick,
+    /// The video encoders a stream's destinations may send with in place of `video_encoder`
+    /// ([`OwnEncoder`]); empty for other outputs.
+    pub other_encoders: Vec<Arc<dyn Encoder>>,
+}
+
+/// A video encoder a stream's destination runs for itself, in place of the stream's encoder. It
+/// encodes the same frames at the same size, rate and keyframe interval as the stream's encoder.
+#[derive(Clone, Debug, PartialEq)]
+pub struct OwnEncoder {
+    /// The encoder plug-in id: the stream's encoder or one of [`OutputJob::other_encoders`].
+    pub encoder: String,
+    /// The encoder's settings.
+    pub settings: Settings,
+    /// The video bitrate, in kbps.
+    pub kbps: u32,
 }
 
 /// An output type.
@@ -124,7 +139,7 @@ pub trait OutputInstance: Send {
 }
 
 /// A destination of a stream as it is set up now, for [`OutputInstance::start_destination_as`].
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq)]
 pub struct DestinationSetup {
     pub id: String,
     /// `rtmp://host/app` or `rtmps://host/app`.
@@ -133,12 +148,19 @@ pub struct DestinationSetup {
     pub key: String,
     /// The id of the streaming service it is set up for; empty for none.
     pub service: String,
+    /// The video encoder it runs for itself; `None` to send what the stream's encoder makes.
+    pub encoder: Option<OwnEncoder>,
 }
 
 impl std::fmt::Debug for DestinationSetup {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let key = if self.key.is_empty() { "" } else { "<redacted>" };
-        f.debug_struct("DestinationSetup").field("id", &self.id).field("key", &key).field("service", &self.service).finish_non_exhaustive()
+        f.debug_struct("DestinationSetup")
+            .field("id", &self.id)
+            .field("key", &key)
+            .field("service", &self.service)
+            .field("encoder", &self.encoder)
+            .finish_non_exhaustive()
     }
 }
 

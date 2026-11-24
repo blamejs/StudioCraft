@@ -23,6 +23,7 @@ pub(crate) fn job(rate: RateControl) -> OutputJob {
         ffmpeg: PathBuf::new(),
         stats: Arc::new(EncoderStats::default()),
         start: Tick(0),
+        other_encoders: Vec::new(),
     }
 }
 

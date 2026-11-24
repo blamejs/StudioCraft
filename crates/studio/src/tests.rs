@@ -598,6 +598,13 @@ fn a_destination_added_or_changed_while_the_stream_runs_starts_without_a_restart
     s.set_profile(p).unwrap();
     s.set_stream_destination("b", true).unwrap();
     assert!(b.try_recv().is_err(), "one that is sending keeps its server");
+    // Nor does it check an encoder choice it cannot run, since it keeps the encoder it started with.
+    let mut p = s.profile().clone();
+    p.stream.destinations[1].key = KeyRef::Held("b".into());
+    p.stream.destinations[1].video_encoder = crate::HARDWARE_ENCODER.into();
+    s.set_profile(p).unwrap();
+    s.set_stream_destination("b", true).unwrap();
+    assert!(b.try_recv().is_err(), "one that is sending keeps its server");
     assert!(!matches!(status(&s, "a"), Some(DestinationStatus::Stopped | DestinationStatus::Failed(_))), "the other destination goes on");
     // Under another profile, only the stream's own destinations start.
     let mut other = s.profile().clone();

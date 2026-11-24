@@ -575,6 +575,31 @@ chose, is a problem. Live captions that are off are a problem only when a Live C
 in the scene collection. The window does not show the check yet
 ([Control protocol](control-protocol.md#golivecheck)).
 
+### Destination encoders
+
+By default every destination sends what the stream's video encoder makes. In the Destination
+encoders section of Settings › Stream, a destination can choose a video encoder of its own and a
+video bitrate of its own (100 to 200000 kbps). The section lists which destinations share which
+encoder, and the Streaming window shows the same list while any destination has an encoder of its
+own. A destination whose encoder and bitrate are the stream's shares the stream's encoder.
+Destinations that choose the same encoder and bitrate share one encoder of their own, which uses
+the encoder's settings from Settings › Stream. Every encoder encodes the same frames at the stream's
+picture size, frame rate and keyframe interval, with its own AAC sound at the stream's audio
+bitrate, so each one adds CPU or GPU time. The encoders are the built-in ones a stream can run; the
+hardware choice is available to a destination only through the stream's own encoder.
+
+The stream's encoder runs for as long as the stream does, and the copy of the stream holds what it
+makes. An encoder of a destination's own starts when the first destination that uses it starts, and
+runs until the stream stops. One that cannot start, or that stops while the stream runs, fails its
+destinations with the encoder's error, and the stream and the other destinations go on. Starting
+such a destination again starts its encoder again. A destination started while the stream runs
+shares the stream's encoder only when it names the encoder and bitrate the stream started with,
+also when Settings › Stream changed the stream's since. A destination with an encoder of its own can be
+added to a running stream only when the stream started with at least one destination that has an
+encoder of its own, on or off; otherwise the stream has to be stopped and started again first. A
+stream runs at most 16 encoders for its destinations, besides its own; an encoder that stopped does
+not count ([Control protocol](control-protocol.md#viewstreaming-and-the-streamdestination-commands)).
+
 ### Copy of the stream
 
 With "Save a copy of the stream for posting as a video" checked in Settings › Stream, a stream also

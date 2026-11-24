@@ -40,9 +40,18 @@
 //! - A destination can be stopped and started again while the stream runs. A destination the
 //!   stream was not started with can be added and started while it runs, and one that is not
 //!   sending can be started with another server, key or service; it sends from the next keyframe.
+//! - A destination can run a video encoder of its own ([`OwnEncoder`]), with its own encoder and
+//!   bitrate, in place of sending what the stream's encoder makes. Destinations that name the same
+//!   encoder, settings and bitrate share one. Each such encoder encodes the same frames at the same
+//!   size and keyframe interval, with its own sound encoder beside it, and has its own fan-out,
+//!   threads and ring size; a thread of the stream (`split.rs`) hands it the stream's input. One that fails, or cannot
+//!   start, fails its destinations and stops neither the others nor the stream. The stream's
+//!   encoder runs for as long as the stream does, and an encoder a destination started runs until
+//!   the stream stops.
 //! - A stream started with a copy also writes the packets the destinations get to a Matroska
-//!   file ([`copy`]). The copy takes one of the [`MAX_SUBSCRIBERS`] subscriptions, and its
-//!   failure stops neither the destinations nor the encoders.
+//!   file ([`copy`]): what the stream's encoder makes. The copy takes one of the
+//!   [`MAX_SUBSCRIBERS`] subscriptions, and its failure stops neither the destinations nor the
+//!   encoders.
 //!
 //! No log line, error or status of this module holds a stream key: the keys go to
 //! [`craft_rtmp::Config`] and nowhere else, and that crate keeps them out of its errors.
@@ -62,24 +71,27 @@ use craft_packet::{
     Control, Fanout, Info, Kind, MAX_RING_BYTES, MAX_SUBSCRIBERS, PacketPool, Receiver, RecvError, RingConfig, SharedPacket, StreamRates,
 };
 use craft_rtmp::{Config, Publisher};
+use studiocraft_media::Tick;
 use studiocraft_media::audio::{PooledBlock, SAMPLE_RATE};
 use studiocraft_media::queue::Fifo;
 use studiocraft_media::stats::EncoderStats;
 use studiocraft_media::video::PooledFrame;
-use studiocraft_model::ReconnectSettings;
 use studiocraft_model::services::Service;
+use studiocraft_model::{ReconnectSettings, VIDEO_BITRATE_KBPS as VIDEO_KBPS};
 use studiocraft_platform::net::Route;
 use studiocraft_plugin::{
     AddressOutcome, Cause, DestinationCounts, DestinationSetup, DestinationState, DestinationStatus, EncoderKind, Failure, OutputInstance, OutputJob,
-    OutputStatus, PluginError, RateControl, StreamCopyState,
+    OutputStatus, OwnEncoder, PluginError, RateControl, StreamCopyState,
 };
 
-use crate::native::{DISK_WAIT, Item, Native, PacketQueue, QUEUE_BYTES, QUEUE_SPAN_NS, Sink, Track};
+use crate::native::{DISK_WAIT, FailureWatch, Item, Native, PacketQueue, QUEUE_BYTES, QUEUE_SPAN_NS, Sink, Track};
 use crate::writer::FINISH_TIMEOUT;
 use copy::StreamCopy;
+use split::{Input, Split};
 
 pub mod copy;
 pub mod diagnose;
+mod split;
 
 /// Seconds of the stream each destination's ring holds.
 pub const RING_SECONDS: u32 = 4;
@@ -121,7 +133,7 @@ const POOL_PACKETS: usize = 256;
 const NS_PER_MS: i64 = 1_000_000;
 
 /// One destination a stream is started with.
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq)]
 pub struct Target {
     pub id: String,
     /// `rtmp://host/app` or `rtmps://host/app`.
@@ -130,12 +142,20 @@ pub struct Target {
     pub key: String,
     /// Whether the stream sends to it from the start.
     pub enabled: bool,
+    /// The video encoder it runs for itself; `None` to send what the stream's encoder makes.
+    pub encoder: Option<OwnEncoder>,
 }
 
 impl fmt::Debug for Target {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let key = if self.key.is_empty() { "" } else { "<redacted>" };
-        f.debug_struct("Target").field("id", &self.id).field("server", &self.shown()).field("key", &key).field("enabled", &self.enabled).finish()
+        f.debug_struct("Target")
+            .field("id", &self.id)
+            .field("server", &self.shown())
+            .field("key", &key)
+            .field("enabled", &self.enabled)
+            .field("encoder", &self.encoder)
+            .finish()
     }
 }
 
@@ -413,6 +433,11 @@ struct Dest {
     /// The server, stream key and service it sends with, read without a lock and replaced
     /// together.
     setup: ArcSwap<Setup>,
+    /// The encoder whose packets it sends: the stream's, or one it runs for itself.
+    feed: Mutex<Arc<EncoderFeed>>,
+    /// The encoder it is set up to run for itself; `None` to send the stream's. A start gives it
+    /// the encoder this names.
+    own: Mutex<Option<OwnEncoder>>,
     status: Mutex<DestinationStatus>,
     /// How many times the status was set, with a signal for each.
     changes: Mutex<u64>,
@@ -455,9 +480,11 @@ struct Dest {
 }
 
 impl Dest {
-    fn new(target: Target, counts: Arc<Counts>, service: Option<&'static Service>) -> Dest {
+    fn new(target: Target, counts: Arc<Counts>, service: Option<&'static Service>, feed: Arc<EncoderFeed>) -> Dest {
         Dest {
             setup: ArcSwap::from_pointee(Setup { server: target.server.clone(), key: target.key.clone(), service }),
+            feed: Mutex::new(feed),
+            own: Mutex::new(target.encoder.clone()),
             target,
             counts,
             status: Mutex::new(DestinationStatus::Stopped),
@@ -487,9 +514,28 @@ impl Dest {
         self.with(&self.setup.load().server, key)
     }
 
-    /// The target with `server` and `key`.
+    /// The target with `server` and `key`, for its address: without its encoder.
     fn with(&self, server: &str, key: &str) -> Target {
-        Target { id: self.target.id.clone(), server: server.to_string(), key: key.to_string(), enabled: self.target.enabled }
+        Target { id: self.target.id.clone(), server: server.to_string(), key: key.to_string(), enabled: self.target.enabled, encoder: None }
+    }
+
+    /// The encoder whose packets it sends.
+    fn feed(&self) -> Arc<EncoderFeed> {
+        Arc::clone(&lock(&self.feed))
+    }
+
+    /// Why it cannot send: the encoder it runs for itself ended while the stream goes on. `None`
+    /// while that encoder runs, and for one that sends what the stream's encoder makes.
+    fn feed_ended(&self, hub: &Hub) -> Option<Failure> {
+        let feed = self.feed();
+        if feed.own.is_none() || !feed.control.is_ended() || hub.ending.load(Ordering::SeqCst) || hub.control.is_ended() {
+            return None;
+        }
+        let detail = match feed.failure.get() {
+            Some(e) => format!("its video encoder stopped: {e}"),
+            None => "its video encoder stopped".to_string(),
+        };
+        Some(Failure::new(Cause::Other, detail))
     }
 
     /// Its setup now: the server, key and service from one change.
@@ -621,11 +667,26 @@ impl Drop for Watch<'_> {
     }
 }
 
-/// What the destinations share.
-struct Hub {
+/// One video encoder of a stream, with the sound encoded beside it, and what a destination needs
+/// to send what it makes.
+struct EncoderFeed {
+    /// The encoder a destination runs for itself; `None` for the stream's encoder.
+    own: Option<OwnEncoder>,
     control: Control,
     headers: Headers,
     ring: RingConfig,
+    /// Why its encoders failed, when they did.
+    failure: FailureWatch,
+}
+
+/// What the destinations share.
+struct Hub {
+    /// The fan-out of the stream's encoder: once it has ended, the stream is ending.
+    control: Control,
+    /// The stream's encoder.
+    main: Arc<EncoderFeed>,
+    /// The stream was asked to stop: an encoder's end is not a failure of its destinations.
+    ending: AtomicBool,
     timing: Timing,
     seams: Seams,
     /// The destinations it was started with, in order, then those added while it runs. At most
@@ -708,7 +769,7 @@ impl Hub {
     /// The destination `id`, added when the stream has none of that id. When the stream already
     /// has [`MAX_SUBSCRIBERS`] destinations, an added one takes the place of one whose thread has
     /// ended, a stopped one before a failed one; with none, it is an error.
-    fn find_or_add(&self, id: &str, service: Option<&'static Service>) -> Result<Arc<Dest>, PluginError> {
+    fn find_or_add(&self, id: &str, service: Option<&'static Service>, feed: &Arc<EncoderFeed>) -> Result<Arc<Dest>, PluginError> {
         let mut dests = lock(&self.dests);
         if let Some(d) = dests.iter().find(|d| d.target.id == id) {
             return Ok(Arc::clone(d));
@@ -722,8 +783,8 @@ impl Hub {
                 None => return Err(PluginError::Failed(format!("a stream can have at most {MAX_SUBSCRIBERS} destinations"))),
             }
         };
-        let target = Target { id: id.to_string(), server: String::new(), key: String::new(), enabled: true };
-        let d = Arc::new(Dest::new(target, Arc::clone(&self.counts), service));
+        let target = Target { id: id.to_string(), server: String::new(), key: String::new(), enabled: true, encoder: feed.own.clone() };
+        let d = Arc::new(Dest::new(target, Arc::clone(&self.counts), service, Arc::clone(feed)));
         // Changed with the list held, so a sum read with it held counts each destination once.
         let mut left = lock(&self.left);
         // One that left under this id goes on from its counts.
@@ -755,11 +816,19 @@ impl Hub {
     }
 }
 
-/// Start the thread of `d`, unless it is running, with `key` as its stream key when given, and
-/// with `server` as its server and service when given. A running thread keeps its server and key,
-/// unless it was asked to stop and has not ended yet. Says whether `d` took `key` and `server`:
-/// not when its thread was sending.
-fn spawn(hub: &Arc<Hub>, d: &Arc<Dest>, key: Option<&str>, server: Option<(&str, Option<&'static Service>)>) -> Result<bool, PluginError> {
+/// The parts of a destination's setup a start may give it: its stream key, its server and service,
+/// and the encoder whose packets it sends. `None` keeps what it has.
+#[derive(Default)]
+struct Given<'a> {
+    key: Option<&'a str>,
+    server: Option<(&'a str, Option<&'static Service>)>,
+    feed: Option<&'a Arc<EncoderFeed>>,
+}
+
+/// Start the thread of `d`, unless it is running, with the parts of `given`. A running thread
+/// keeps its setup, unless it was asked to stop and has not ended yet. Says whether `d` took
+/// `given`: not when its thread was sending.
+fn spawn(hub: &Arc<Hub>, d: &Arc<Dest>, given: Given<'_>) -> Result<bool, PluginError> {
     let mut slot = lock(&d.thread);
     if d.running() {
         // Asked to stop and started again before the thread decided to end: it goes on, and
@@ -772,7 +841,7 @@ fn spawn(hub: &Arc<Hub>, d: &Arc<Dest>, key: Option<&str>, server: Option<(&str,
         // The new setup and `renew` are in place before `stop` is cleared, so the thread does not
         // go on to connect before the setup changes. A connection it made or is making with the
         // old setup closes before it sends.
-        if set_up(d, key, server) {
+        if set_up(d, given) {
             d.renew.store(true, Ordering::SeqCst);
         }
         d.stop.store(false, Ordering::SeqCst);
@@ -788,7 +857,7 @@ fn spawn(hub: &Arc<Hub>, d: &Arc<Dest>, key: Option<&str>, server: Option<(&str,
         // The thread has decided to end, so it ends without waiting for anything.
         let _ = t.join();
     }
-    set_up(d, key, server);
+    set_up(d, given);
     d.renew.store(false, Ordering::SeqCst);
     d.stop.store(false, Ordering::SeqCst);
     d.uncheck();
@@ -809,15 +878,25 @@ fn spawn(hub: &Arc<Hub>, d: &Arc<Dest>, key: Option<&str>, server: Option<(&str,
     }
 }
 
-/// Gives `d` `key` as its stream key when given, and `server` as its server and service when
-/// given. Says whether its server or key changed; the service is used only by its connection
-/// checks, so a connection does not close for it. The key, server and service are published as
-/// one new setup, so no reader sees some of them changed and not the others. Only `spawn` calls
-/// it, with `thread` locked, so no other change comes between the read and the publish.
-fn set_up(d: &Dest, key: Option<&str>, server: Option<(&str, Option<&'static Service>)>) -> bool {
+/// Gives `d` the parts of `given`: `key` as its stream key, `server` as its server and service,
+/// and `feed` as the encoder whose packets it sends. Says whether its server, key or encoder
+/// changed; the service is used only by its connection checks, so a connection does not close
+/// for it. The key, server and service are published as one new setup, so no reader sees some of
+/// them changed and not the others. Only `spawn` calls it, with `thread` locked, so no other
+/// change comes between the read and the publish.
+fn set_up(d: &Dest, given: Given<'_>) -> bool {
+    let Given { key, server, feed } = given;
     let mut now = Setup::clone(&d.setup.load());
     let mut changed = false;
     let mut moved = false;
+    if let Some(feed) = feed {
+        let mut held = lock(&d.feed);
+        if !Arc::ptr_eq(&held, feed) {
+            // Another encoder sends other sequence headers, so the connection starts again.
+            *held = Arc::clone(feed);
+            changed = true;
+        }
+    }
     if let Some(key) = key {
         changed |= now.key != key;
         now.key = key.to_string();
@@ -1038,6 +1117,8 @@ enum NetWait {
     Stopped,
     /// The longest waits spent without a route used up the tries.
     GaveUp(Failure),
+    /// The encoder the destination runs for itself ended while the stream goes on.
+    EncoderEnded(Failure),
 }
 
 /// Waits until the system has a route to `d`'s server again or `d` is started again, or, with
@@ -1057,6 +1138,10 @@ fn wait_for_network(hub: &Arc<Hub>, d: &Arc<Dest>, failures: &mut u32, last: &Fa
         // Started again while it waits: it tries at once, as after the wait before a try.
         if d.restarted.load(Ordering::SeqCst) {
             break NetWait::Restarted;
+        }
+        // No route would let it send anything.
+        if let Some(f) = d.feed_ended(hub) {
+            break NetWait::EncoderEnded(f);
         }
         // Without a route thread, the destination checks for itself.
         if d.net_up.load(Ordering::SeqCst) || (!watched && gate(hub, d, last) == Gate::Open) {
@@ -1295,11 +1380,18 @@ fn run(hub: &Arc<Hub>, d: &Arc<Dest>) {
                     }
                     NetWait::Restarted | NetWait::Stopped => {}
                     NetWait::GaveUp(f) => return fail(hub, d, f),
+                    // The connection is not at fault, so it is not checked.
+                    NetWait::EncoderEnded(f) => return d.fail(f),
                 }
             }
         }
         if d.ends(hub) {
             return;
+        }
+        // The encoder it runs for itself ended: no try can send anything. The connection is not
+        // at fault, so it is not checked.
+        if let Some(f) = d.feed_ended(hub) {
+            return d.fail(f);
         }
         // Started again while it waited: the try is shown as a first one.
         if d.restarted.load(Ordering::SeqCst) || !matches!(d.status(), DestinationStatus::Retrying { .. }) {
@@ -1355,18 +1447,27 @@ fn run(hub: &Arc<Hub>, d: &Arc<Dest>) {
             continue;
         }
         let started = Instant::now();
-        let end = match hub.control.subscribe(hub.ring) {
-            Ok(mut rx) => send_all(hub, d, &mut publisher, &mut rx),
+        let feed = d.feed();
+        let end = match feed.control.subscribe(feed.ring) {
+            Ok(mut rx) => send_all(d, &feed.headers, &mut publisher, &mut rx),
             Err(e) => End::Failed(Failure::new(Cause::Other, format!("no room for the destination's packets: {e}"))),
         };
+        drop(feed);
         // The connection ends whichever way sending ended; a lost one may not take the close.
         let _ = publisher.close();
         match end {
             // Given a new setup while it sent: however the old connection ended, the next turn
             // connects with the new one.
             _ if d.renew.load(Ordering::SeqCst) => {}
-            // Unless it was started again meanwhile, the next turn ends the thread.
-            End::Done => {}
+            // Unless it was started again meanwhile, the next turn ends the thread. When the
+            // encoder it runs for itself ended while the stream goes on, it fails.
+            End::Done => {
+                if !d.stopping()
+                    && let Some(f) = d.feed_ended(hub)
+                {
+                    return d.fail(f);
+                }
+            }
             End::Failed(e) => return fail(hub, d, e),
             End::Lost(e) => {
                 // A stop and start that came while it sent or as the connection closed stays set,
@@ -1405,9 +1506,8 @@ fn lost(rx: &Receiver) -> u64 {
 
 /// Send the headers, then every packet `rx` delivers, until the destination is stopped, the
 /// stream ends or the connection fails.
-fn send_all(hub: &Hub, d: &Dest, p: &mut Publisher, rx: &mut Receiver) -> End {
+fn send_all(d: &Dest, h: &Headers, p: &mut Publisher, rx: &mut Receiver) -> End {
     let (bytes, dropped) = (d.bytes.load(Ordering::Relaxed), d.dropped.load(Ordering::Relaxed));
-    let h = &hub.headers;
     let mut headers = || -> Result<(), craft_rtmp::Error> {
         let bad = |_| craft_rtmp::Error::BadInput("the encoder's configuration cannot be streamed");
         p.set_data_frame(&h.script)?;
@@ -1516,7 +1616,112 @@ pub struct Streaming {
     refused: Arc<AtomicU64>,
     /// The copy written to a file, when the stream was started with one.
     copy: Option<StreamCopy>,
+    /// What hands the input to every encoder; `None` when the stream was started with no
+    /// destination that runs an encoder of its own.
+    split: Option<Split>,
+    /// The encoders destinations run for themselves, in the order they started.
+    own: Mutex<Vec<(Arc<EncoderFeed>, Native)>>,
+    /// The job the stream was started with, for the encoders destinations start while it runs.
+    job: OutputJob,
     stopped: bool,
+}
+
+/// The job of the encoder `own` names, beside the stream's `job`: the same frames, size, rate,
+/// keyframe interval and sound, from `start` on. `None` gives `job` itself.
+fn encoder_job(job: &OutputJob, own: Option<&OwnEncoder>, start: Tick) -> Result<OutputJob, PluginError> {
+    let Some(own) = own else { return Ok(job.clone()) };
+    let RateControl::Bitrate { keyframe_s, .. } = job.rate else {
+        return Err(PluginError::Failed("streams need a bitrate".into()));
+    };
+    if !VIDEO_KBPS.contains(&own.kbps) {
+        return Err(PluginError::Failed(format!(
+            "a destination's video bitrate must be {} to {} kbps, not {}",
+            VIDEO_KBPS.start(),
+            VIDEO_KBPS.end(),
+            own.kbps
+        )));
+    }
+    let encoder = if job.video_encoder.id() == own.encoder {
+        Arc::clone(&job.video_encoder)
+    } else {
+        let found = job.other_encoders.iter().find(|e| e.id() == own.encoder).cloned();
+        found.ok_or_else(|| PluginError::Failed(format!("there is no video encoder `{}` for a destination to run", own.encoder)))?
+    };
+    Ok(OutputJob {
+        video_encoder: encoder,
+        video_encoder_settings: own.settings.clone(),
+        rate: RateControl::Bitrate { kbps: own.kbps, keyframe_s },
+        // Its frame counts are not the stream's.
+        stats: Arc::new(EncoderStats::default()),
+        start,
+        other_encoders: Vec::new(),
+        ..job.clone()
+    })
+}
+
+/// The first reason `job`'s video encoder cannot run a stream.
+fn check_stream_encoder(job: &OutputJob) -> Result<u32, PluginError> {
+    let RateControl::Bitrate { kbps, .. } = job.rate else {
+        return Err(PluginError::Failed("streams need a bitrate".into()));
+    };
+    let encoder = &job.video_encoder;
+    if encoder.kind() != EncoderKind::Video || !encoder.streams() {
+        return Err(PluginError::Failed(format!("streams need an H.264 encoder, and {} is not one", encoder.name())));
+    }
+    if encoder.ffmpeg().is_some() {
+        return Err(PluginError::Failed(format!(
+            "streams run the built-in encoders, and {} runs inside ffmpeg; choose another encoder in Settings › Stream",
+            encoder.name()
+        )));
+    }
+    Ok(kbps)
+}
+
+/// The packets a stream's subscriber copies from as it starts: the tracks and its receiver.
+type CopyFeed = (Vec<TrackSpec>, Result<Receiver, String>);
+
+/// Open the encoders of `job` and the fan-out that shares what they make with the destinations,
+/// as the encoder `own` names (`None` for the stream's encoder). With `copy`, a subscriber for
+/// the copy is made before the encoders start, so it gets the first keyframe.
+fn open_encoder(
+    job: &OutputJob,
+    own: Option<OwnEncoder>,
+    refused: &Arc<AtomicU64>,
+    copy: bool,
+) -> Result<(Native, Arc<EncoderFeed>, Option<CopyFeed>), PluginError> {
+    let kbps = check_stream_encoder(job)?;
+    let v = job.video;
+    let fps = f64::from(v.fps_num) / f64::from(v.fps_den.max(1));
+    let rates = StreamRates {
+        video_packets_per_second: (fps.ceil() as u32).max(1),
+        audio_packets_per_second: AUDIO_PACKETS_PER_SECOND,
+        bits_per_second: (u64::from(kbps) + u64::from(job.audio_bitrate_kbps)) * 1000,
+        ticks_per_second: 1_000_000_000,
+    };
+    let mut ring = RingConfig::for_stream(&rates, RING_SECONDS);
+    // At the highest bitrates the ring holds fewer seconds.
+    ring.bytes = ring.bytes.min(MAX_RING_BYTES);
+    ring.check().map_err(|e| PluginError::Failed(format!("the stream's packets do not fit in memory: {e}")))?;
+    let pool = PacketPool::new(POOL_PACKETS, 0).map_err(|e| PluginError::Failed(format!("no memory for the stream's packets: {e}")))?;
+    let fanout = Fanout::new();
+    let control = fanout.control();
+    let mut headers = None;
+    let mut copy_feed: Option<CopyFeed> = None;
+    let sink_refused = Arc::clone(refused);
+    let open = |tracks: Vec<TrackSpec>| -> Result<Box<dyn Sink>, PluginError> {
+        headers = Some(Headers::new(job, kbps, &tracks)?);
+        if copy {
+            let rx = fanout.subscribe(ring).map_err(|e| format!("the copy of the stream could not be started: {e}"));
+            copy_feed = Some((tracks, rx));
+        }
+        Ok(Box::new(Publish { fanout, pool, refused: sink_refused, video_gap: false }))
+    };
+    let native = Native::start_with(job, open, PacketQueue::new(QUEUE_BYTES, QUEUE_SPAN_NS), DISK_WAIT)?;
+    let Some(headers) = headers else {
+        return Err(PluginError::Failed("the stream's encoders gave no configuration".into()));
+    };
+    let failure = native.failure_watch();
+    Ok((native, Arc::new(EncoderFeed { own, control, headers, ring, failure }), copy_feed))
 }
 
 impl Streaming {
@@ -1580,19 +1785,7 @@ impl Streaming {
         auto: Option<(Arc<diagnose::Checks>, AutoCheck)>,
         copy: Option<(PathBuf, copy::Open)>,
     ) -> Result<Streaming, PluginError> {
-        let RateControl::Bitrate { kbps, .. } = job.rate else {
-            return Err(PluginError::Failed("streams need a bitrate".into()));
-        };
-        let encoder = &job.video_encoder;
-        if encoder.kind() != EncoderKind::Video || !encoder.streams() {
-            return Err(PluginError::Failed(format!("streams need an H.264 encoder, and {} is not one", encoder.name())));
-        }
-        if encoder.ffmpeg().is_some() {
-            return Err(PluginError::Failed(format!(
-                "streams run the built-in encoders, and {} runs inside ffmpeg; choose another encoder in Settings › Stream",
-                encoder.name()
-            )));
-        }
+        check_stream_encoder(job)?;
         check_targets(&targets)?;
         if copy.is_some() && targets.len() >= MAX_SUBSCRIBERS {
             return Err(PluginError::Failed(format!(
@@ -1601,38 +1794,15 @@ impl Streaming {
                 targets.len()
             )));
         }
-        let v = job.video;
-        let fps = f64::from(v.fps_num) / f64::from(v.fps_den.max(1));
-        let rates = StreamRates {
-            video_packets_per_second: (fps.ceil() as u32).max(1),
-            audio_packets_per_second: AUDIO_PACKETS_PER_SECOND,
-            bits_per_second: (u64::from(kbps) + u64::from(job.audio_bitrate_kbps)) * 1000,
-            ticks_per_second: 1_000_000_000,
-        };
-        let mut ring = RingConfig::for_stream(&rates, RING_SECONDS);
-        // At the highest bitrates the ring holds fewer seconds.
-        ring.bytes = ring.bytes.min(MAX_RING_BYTES);
-        ring.check().map_err(|e| PluginError::Failed(format!("the stream's packets do not fit in memory: {e}")))?;
-        let pool = PacketPool::new(POOL_PACKETS, 0).map_err(|e| PluginError::Failed(format!("no memory for the stream's packets: {e}")))?;
-        let fanout = Fanout::new();
-        let control = fanout.control();
         let refused = Arc::new(AtomicU64::new(0));
-        let mut headers = None;
-        // The copy subscribes before the encoders start, so it gets the first keyframe.
-        let mut copy_feed: Option<(Vec<TrackSpec>, Result<Receiver, String>)> = None;
-        let wants_copy = copy.is_some();
-        let sink_refused = Arc::clone(&refused);
-        let open = |tracks: Vec<TrackSpec>| -> Result<Box<dyn Sink>, PluginError> {
-            headers = Some(Headers::new(job, kbps, &tracks)?);
-            if wants_copy {
-                let rx = fanout.subscribe(ring).map_err(|e| format!("the copy of the stream could not be started: {e}"));
-                copy_feed = Some((tracks, rx));
-            }
-            Ok(Box::new(Publish { fanout, pool, refused: sink_refused, video_gap: false }))
-        };
-        let native = Native::start_with(job, open, PacketQueue::new(QUEUE_BYTES, QUEUE_SPAN_NS), DISK_WAIT)?;
-        let Some(headers) = headers else {
-            return Err(PluginError::Failed("the stream's encoders gave no configuration".into()));
+        // The copy holds what the stream's encoder makes.
+        let (native, main, copy_feed) = open_encoder(job, None, &refused, copy.is_some())?;
+        let control = main.control.clone();
+        // Only a stream with a destination that runs an encoder of its own splits its input.
+        let split = if targets.iter().any(|t| t.encoder.is_some()) {
+            Some(Split::start(&Input { video: native.video(), audio: native.audio() })?)
+        } else {
+            None
         };
         let copy = match (copy, copy_feed) {
             (Some((path, open)), Some((tracks, Ok(rx)))) => Some(StreamCopy::start(path, open, tracks, rx)),
@@ -1642,17 +1812,18 @@ impl Streaming {
         };
         let counts = Arc::new(Counts::default());
         let service = |id: &str| auto.as_ref().and_then(|(_, a)| a.services.iter().find(|(i, _)| i == id).map(|(_, s)| *s));
+        // Each destination is given its encoder as it starts.
         let dests: Vec<Arc<Dest>> = targets
             .into_iter()
             .map(|t| {
                 let service = service(&t.id);
-                Arc::new(Dest::new(t, Arc::clone(&counts), service))
+                Arc::new(Dest::new(t, Arc::clone(&counts), service, Arc::clone(&main)))
             })
             .collect();
         let hub = Arc::new(Hub {
             control,
-            headers,
-            ring,
+            main,
+            ending: AtomicBool::new(false),
             timing,
             seams,
             dests: Mutex::new(dests.clone()),
@@ -1661,14 +1832,73 @@ impl Streaming {
             net: NetWatch::default(),
             auto,
         });
-        let mut s = Streaming { native, hub, stats: Arc::clone(&job.stats), refused, copy, stopped: false };
+        let mut s = Streaming {
+            native,
+            hub,
+            stats: Arc::clone(&job.stats),
+            refused,
+            copy,
+            split,
+            own: Mutex::new(Vec::new()),
+            job: job.clone(),
+            stopped: false,
+        };
         for d in dests.iter().filter(|d| d.target.enabled) {
-            if let Err(e) = spawn(&s.hub, d, None, None) {
+            // An encoder of its own that cannot start fails that destination alone.
+            let feed = match s.feed_for(d.target.encoder.as_ref()) {
+                Ok(feed) => feed,
+                Err(e) => {
+                    d.fail(Failure::new(Cause::Other, format!("its video encoder could not start: {e}")));
+                    continue;
+                }
+            };
+            if let Err(e) = spawn(&s.hub, d, Given { feed: Some(&feed), ..Given::default() }) {
                 let _ = s.stop();
                 return Err(e);
             }
         }
         Ok(s)
+    }
+
+    /// The encoder whose packets a destination with `own` sends: the stream's for `None`, or for
+    /// one whose encoder, settings and bitrate are the stream's; else the running encoder another
+    /// destination started with `own`; else a new one, started from the newest frame.
+    fn feed_for(&self, own: Option<&OwnEncoder>) -> Result<Arc<EncoderFeed>, PluginError> {
+        let Some(own) = own else { return Ok(Arc::clone(&self.hub.main)) };
+        let job = &self.job;
+        if own.encoder == job.video_encoder.id()
+            && own.settings == job.video_encoder_settings
+            && matches!(job.rate, RateControl::Bitrate { kbps, .. } if kbps == own.kbps)
+        {
+            return Ok(Arc::clone(&self.hub.main));
+        }
+        // Held while one starts, so two starts of the same encoder start it once.
+        let mut groups = lock(&self.own);
+        // An encoder that ended is not used again. It is dropped, so it no longer counts toward
+        // the encoders the stream can run; a destination still holding its packets keeps them.
+        let ended: Vec<(Arc<EncoderFeed>, Native)> = {
+            let (ended, running) = std::mem::take(&mut *groups).into_iter().partition(|(f, _)| f.control.is_ended());
+            *groups = running;
+            ended
+        };
+        drop(ended);
+        if let Some((feed, _)) = groups.iter().find(|(f, _)| f.own.as_ref() == Some(own)) {
+            return Ok(Arc::clone(feed));
+        }
+        let Some(split) = &self.split else {
+            return Err(PluginError::Failed(
+                "the stream started with no destination that runs a video encoder of its own; stop the stream and start it again for this destination to run one"
+                    .into(),
+            ));
+        };
+        if groups.len() >= MAX_SUBSCRIBERS {
+            return Err(PluginError::Failed(format!("a stream can run at most {MAX_SUBSCRIBERS} encoders for its destinations")));
+        }
+        let start = split.newest().unwrap_or(job.start);
+        let (native, feed, _) = open_encoder(&encoder_job(job, Some(own), start)?, Some(own.clone()), &self.refused, false)?;
+        split.add(&Input { video: native.video(), audio: native.audio() })?;
+        groups.push((Arc::clone(&feed), native));
+        Ok(feed)
     }
 
     /// Whether one more destination can send: each destination that sends or tries to, and the
@@ -1742,11 +1972,11 @@ fn check_targets(targets: &[Target]) -> Result<(), PluginError> {
 
 impl OutputInstance for Streaming {
     fn video(&self) -> Arc<Fifo<Arc<PooledFrame>>> {
-        self.native.video()
+        self.split.as_ref().map_or_else(|| self.native.video(), Split::video)
     }
 
     fn audio(&self) -> Arc<Fifo<PooledBlock>> {
-        self.native.audio()
+        self.split.as_ref().map_or_else(|| self.native.audio(), Split::audio)
     }
 
     fn status(&self) -> OutputStatus {
@@ -1802,8 +2032,17 @@ impl OutputInstance for Streaming {
             _ => None,
         };
         self.stopped = true;
-        // The encoders finish, and the last packets go to the rings; then the fan-out ends.
+        self.hub.ending.store(true, Ordering::SeqCst);
+        // The input queued so far goes to every encoder.
+        if let Some(split) = &mut self.split {
+            split.stop();
+        }
+        // The encoders finish, and the last packets go to the rings; then the fan-outs end. An
+        // encoder a destination runs for itself does not fail the stream.
         let r = self.native.stop();
+        for (_, native) in lock(&self.own).iter_mut() {
+            let _ = native.stop();
+        }
         self.close_destinations();
         // The copy writes what its ring holds and finishes its file; its failure is in its state,
         // not in the stream's result.
@@ -1857,10 +2096,17 @@ impl OutputInstance for Streaming {
             Some(key) => d.with_key(key).config().map_err(bad)?,
             None => d.config().map_err(bad)?,
         };
+        if d.running() && !d.stopping() {
+            // It keeps what it sends with.
+            return spawn(&self.hub, &d, Given { key, ..Given::default() }).map(|_| ());
+        }
         if !d.running() {
             self.room()?;
         }
-        spawn(&self.hub, &d, key, None).map(|_| ())
+        // It sends with the encoder it was set up with, started again when that one ended.
+        let own = lock(&d.own).clone();
+        let feed = self.feed_for(own.as_ref())?;
+        spawn(&self.hub, &d, Given { key, feed: Some(&feed), ..Given::default() }).map(|_| ())
     }
 
     fn start_destination_as(&self, setup: &DestinationSetup) -> Result<bool, PluginError> {
@@ -1875,9 +2121,10 @@ impl OutputInstance for Streaming {
         if let Some(d) = found.as_ref().filter(|d| d.running() && !d.stopping()) {
             // It keeps the server and key it sends with, so `setup` is not used. A stop asked for
             // since is canceled, and it goes on with them too.
-            return spawn(&self.hub, d, None, None).map(|_| false);
+            return spawn(&self.hub, d, Given::default()).map(|_| false);
         }
-        let target = Target { id: id.to_string(), server: setup.server.clone(), key: setup.key.clone(), enabled: true };
+        let target =
+            Target { id: id.to_string(), server: setup.server.clone(), key: setup.key.clone(), enabled: true, encoder: setup.encoder.clone() };
         target.config().map_err(|e| PluginError::Failed(format!("destination `{id}`: {e}")))?;
         let service = studiocraft_model::services::service(&setup.service);
         // One asked to stop whose thread has not ended still holds its subscription, and starts
@@ -1885,11 +2132,16 @@ impl OutputInstance for Streaming {
         if !found.as_ref().is_some_and(|d| d.running()) {
             self.room()?;
         }
+        // The encoder is found or started before the destination is added, so one that cannot
+        // start adds nothing.
+        let feed = self.feed_for(setup.encoder.as_ref())?;
         let d = match found {
             Some(d) => d,
-            None => self.hub.find_or_add(id, service)?,
+            None => self.hub.find_or_add(id, service, &feed)?,
         };
-        spawn(&self.hub, &d, Some(&target.key), Some((&target.server, service)))
+        *lock(&d.own) = setup.encoder.clone();
+        let given = Given { key: Some(&target.key), server: Some((&target.server, service)), feed: Some(&feed) };
+        spawn(&self.hub, &d, given)
     }
 
     fn stop_destination(&self, id: &str) -> Result<(), PluginError> {

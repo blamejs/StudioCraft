@@ -115,7 +115,7 @@ fn collection_v4_to_v5(data: &mut Value) -> Result<(), String> {
 /// Profiles.
 pub const PROFILE: FileFormat = FileFormat {
     name: "studiocraft.profile",
-    version: 14,
+    version: 15,
     migrations: &[
         profile_v1_to_v2,
         profile_v2_to_v3,
@@ -130,6 +130,7 @@ pub const PROFILE: FileFormat = FileFormat {
         profile_v11_to_v12,
         profile_v12_to_v13,
         profile_v13_to_v14,
+        profile_v14_to_v15,
     ],
 };
 
@@ -308,6 +309,22 @@ fn profile_v13_to_v14(data: &mut Value) -> Result<(), String> {
     Ok(())
 }
 
+/// Profile version 14 to 15: each stream destination can send with a video encoder and bitrate of
+/// its own (`video_encoder`, `video_bitrate_kbps`); an older file's destinations send with the
+/// stream's (empty and 0).
+fn profile_v14_to_v15(data: &mut Value) -> Result<(), String> {
+    let data = data.as_object_mut().ok_or("the profile is not an object")?;
+    if let Some(Value::Object(s)) = data.get_mut("stream")
+        && let Some(Value::Array(destinations)) = s.get_mut("destinations")
+    {
+        for d in destinations.iter_mut().filter_map(Value::as_object_mut) {
+            d.entry("video_encoder").or_insert_with(|| json!(""));
+            d.entry("video_bitrate_kbps").or_insert_with(|| json!(0));
+        }
+    }
+    Ok(())
+}
+
 /// Largest file accepted, in bytes.
 pub const MAX_FILE_BYTES: usize = 64 << 20;
 
@@ -432,6 +449,7 @@ mod tests {
         (12, include_str!("../fixtures/profile-v12.json")),
         (13, include_str!("../fixtures/profile-v13.json")),
         (14, include_str!("../fixtures/profile-v14.json")),
+        (15, include_str!("../fixtures/profile-v15.json")),
     ];
 
     fn covers_every_version(format: &FileFormat, fixtures: &[(u32, &str)]) {
@@ -804,6 +822,78 @@ mod tests {
     }
 
     #[test]
+    fn a_v14_profile_sends_every_destination_with_the_streams_encoder() {
+        for (v, text) in &PROFILE_FIXTURES[..14] {
+            let p = read_profile(text).unwrap();
+            assert!(
+                p.stream.destinations.iter().all(|d| d.video_encoder.is_empty() && d.video_bitrate_kbps == 0),
+                "version {v} sends with the stream's encoder"
+            );
+            assert!(p.stream.destinations.iter().all(|d| p.stream.shares_encoder(d)), "version {v}");
+        }
+        let (_, v15) = PROFILE_FIXTURES[14];
+        let p = read_profile(v15).unwrap();
+        let own: Vec<(&str, &str, u32)> =
+            p.stream.destinations.iter().map(|d| (d.id.as_str(), d.video_encoder.as_str(), d.video_bitrate_kbps)).collect();
+        assert_eq!(own, [("main", "", 0), ("backup", "h264", 2500), ("open", "", 2500)]);
+        assert!(p.stream.save_copy, "the rest of the stream settings is kept");
+        assert_eq!(read_profile(&write_profile(&p).unwrap()).unwrap(), p);
+        let groups = p.stream.encoder_groups();
+        let seen: Vec<(&str, u32, bool, Vec<&str>)> = groups
+            .iter()
+            .map(|g| (g.video_encoder.as_str(), g.video_bitrate_kbps, g.shared, g.destinations.iter().map(String::as_str).collect()))
+            .collect();
+        assert_eq!(
+            seen,
+            [
+                ("nvenc_native_h264", 4500, true, vec!["main"]),
+                ("h264", 2500, false, vec!["backup"]),
+                ("nvenc_native_h264", 2500, false, vec!["open"])
+            ]
+        );
+        for (from, to) in
+            [("\"video_bitrate_kbps\": 2500", "\"video_bitrate_kbps\": 99"), ("\"video_bitrate_kbps\": 2500", "\"video_bitrate_kbps\": \"fast\"")]
+        {
+            let text = v15.replacen(from, to, 1);
+            assert_ne!(text, v15);
+            assert!(read_profile(&text).is_err(), "{to} refuses the file");
+        }
+    }
+
+    #[test]
+    fn destinations_that_name_the_streams_encoder_share_it() {
+        let mut s = crate::StreamSettings { video_encoder: "h264".into(), video_bitrate_kbps: 6000, ..crate::StreamSettings::default() };
+        let d = |id: &str, encoder: &str, kbps: u32| crate::Destination {
+            id: id.into(),
+            video_encoder: encoder.into(),
+            video_bitrate_kbps: kbps,
+            ..Default::default()
+        };
+        s.destinations = vec![d("a", "", 0), d("b", "h264", 6000), d("c", "", 3000), d("d", "x", 3000), d("e", "", 3000), d("f", "x", 0)];
+        assert!(s.shares_encoder(&s.destinations[0]) && s.shares_encoder(&s.destinations[1]), "naming the stream's encoder and bitrate shares it");
+        assert!(!s.shares_encoder(&s.destinations[2]));
+        let ids: Vec<Vec<String>> = s.encoder_groups().into_iter().map(|g| g.destinations).collect();
+        assert_eq!(ids, [vec!["a", "b"], vec!["c", "e"], vec!["d"], vec!["f"]]);
+        // The stream's bitrate is taken as a stream starts with it, in range.
+        s.video_bitrate_kbps = 5;
+        assert_eq!(s.encoder_of(&s.destinations[0]), ("h264", 100));
+        assert!(s.shares_encoder(&d("g", "", 100)));
+        // With no destinations, the stream's encoder is still listed.
+        s.destinations.clear();
+        assert_eq!(s.encoder_groups().len(), 1);
+        assert!(s.encoder_groups()[0].shared && s.encoder_groups()[0].destinations.is_empty());
+        // An encoder id that is too long or holds a control character is refused, and so is a bitrate out of range.
+        for bad in [d("h", &"e".repeat(65), 0), d("h", "a\nb", 0), d("h", "", 99), d("h", "", 200_001)] {
+            s.destinations = vec![bad.clone()];
+            assert!(s.check().is_err(), "{bad:?}");
+        }
+        for good in [d("h", &"e".repeat(64), 0), d("h", "", 100), d("h", "", 200_000)] {
+            s.destinations = vec![good.clone()];
+            assert_eq!(s.check(), Ok(()), "{good:?}");
+        }
+    }
+
+    #[test]
     fn profiles_keep_what_happens_after_a_take_and_the_editor_path() {
         let (_, v7) = PROFILE_FIXTURES[6];
         let old = read_profile(v7).unwrap();
@@ -839,6 +929,8 @@ mod tests {
                 server: "rtmp://localhost/live".into(),
                 key: KeyRef::Profile,
                 service: String::new(),
+                video_encoder: String::new(),
+                video_bitrate_kbps: 0,
             };
             assert_eq!(p.stream.destinations, vec![want], "version {v}");
             assert_eq!(p.stream.key, "test", "version {v} keeps its key");

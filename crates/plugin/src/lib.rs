@@ -30,7 +30,7 @@ pub use filter::{
 };
 pub use output::{
     AddressOutcome, Cause, DestinationCounts, DestinationSetup, DestinationState, DestinationStatus, Failure, Output, OutputInstance, OutputJob,
-    OutputStatus, ReplayClip, StreamCopyState, VideoFormat,
+    OutputStatus, OwnEncoder, ReplayClip, StreamCopyState, VideoFormat,
 };
 pub use registry::Registry;
 pub use source::{AUDIO_QUEUE_BLOCKS, AudioOut, Pace, Source, SourceCaps, SourceInstance, SourceIo, VideoContent, VideoOut};

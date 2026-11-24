@@ -389,7 +389,7 @@ fn destinations(i: &Input, out: &mut Vec<Item>) {
             out.push(item(Check::Problem, "The stream key of destination {name} is not entered for this session", vec![]));
             continue;
         };
-        let target = Target { id: d.id.clone(), server: d.server.clone(), key: key.to_string(), enabled: true };
+        let target = Target { id: d.id.clone(), server: d.server.clone(), key: key.to_string(), enabled: true, encoder: None };
         if let Err(e) = target.check() {
             // Without a key, the address must end with the stream's name; the key is named as
             // missing only when the address works with one.
@@ -599,7 +599,7 @@ mod tests {
     use studiocraft_plugin::{Cause, Failure};
 
     fn dest(id: &str, server: &str, key: KeyRef, enabled: bool) -> Destination {
-        Destination { id: id.into(), name: String::new(), enabled, server: server.into(), key, service: String::new() }
+        Destination { id: id.into(), enabled, server: server.into(), key, ..Destination::default() }
     }
 
     fn state(id: &str, status: DestinationStatus) -> DestinationState {

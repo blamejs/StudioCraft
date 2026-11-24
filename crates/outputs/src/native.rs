@@ -336,6 +336,16 @@ pub(crate) fn tracks(job: &OutputJob, record: Vec<u8>, aac: &AacSession) -> Vec<
     vec![video, audio]
 }
 
+/// Why the encoders of a [`Native`] failed, read without holding it.
+pub(crate) struct FailureWatch(Arc<Shared>);
+
+impl FailureWatch {
+    /// The first failure; `None` while they run, or when they ended without one.
+    pub(crate) fn get(&self) -> Option<String> {
+        self.0.failure()
+    }
+}
+
 /// A recording through the built-in encoders.
 pub struct Native {
     video: Arc<Fifo<Arc<PooledFrame>>>,
@@ -425,6 +435,11 @@ impl Native {
 
     pub fn video(&self) -> Arc<Fifo<Arc<PooledFrame>>> {
         Arc::clone(&self.video)
+    }
+
+    /// What reads why the encoders failed, for a holder that does not hold them.
+    pub(crate) fn failure_watch(&self) -> FailureWatch {
+        FailureWatch(Arc::clone(&self.shared))
     }
 
     pub fn audio(&self) -> Arc<Fifo<PooledBlock>> {
