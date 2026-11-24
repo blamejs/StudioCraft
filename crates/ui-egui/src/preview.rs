@@ -283,13 +283,20 @@ pub fn resized(from: Transform, native: (u32, u32), corner: usize, to: Vec2, mod
     // times the smallest and largest scale.
     let (cw, ch) = from.crop.apply(native.0, native.1);
     let range = |n: u32| ((n as f32 * MIN_SCALE).max(1.0), n as f32 * MAX_SCALE);
-    let (rx, ry) = (range(cw), range(ch));
+    let (mut rx, mut ry) = (range(cw), range(ch));
+    if !mode.free {
+        // With the aspect ratio kept, the other side is at least a pixel too, which sets a
+        // smallest width and height of its own, up to the largest the scale allows.
+        rx.0 = rx.0.max((size.x / size.y).min(rx.1));
+        ry.0 = ry.0.max((size.y / size.x).min(ry.1));
+    }
     // A line the item can't reach, or one on the far side of the fixed corner that would turn the
-    // item over, is not snapped to. The limits allow for a thousandth of rounding, so a line on
-    // an edge held at a limit still counts.
+    // item over, is not snapped to. A line may lie outside the limits by the rounding of the
+    // canvas coordinates only, so a line on an edge held at a limit still counts.
     let reachable = |l: f32, at: f32, d: f32, (lo, hi): (f32, f32)| {
         let w = across(l, at);
-        (mode.centered || (l - at) * d > 0.0) && w >= lo * 0.999 && w <= hi * 1.001
+        let outside = (lo - w).max(w - hi).max(0.0) * k;
+        (mode.centered || (l - at) * d > 0.0) && outside <= f32::EPSILON * l.abs().max(at.abs())
     };
     let xs = lines.x.iter().copied().filter(|l| reachable(*l, fixed.x, dir.0, rx));
     let ys = lines.y.iter().copied().filter(|l| reachable(*l, fixed.y, dir.1, ry));
@@ -688,6 +695,41 @@ mod tests {
         let (r, g) = resized(t, (8192, 100), 2, Vec2::new(4106.0, 100.0), FREE, &lines, 8.0);
         assert!(close(r.size((8192, 100)), Vec2::new(8.192, 100.0)), "{r:?}");
         assert_eq!(g, Guides { x: Some(line), y: None });
+    }
+
+    #[test]
+    fn resizing_never_snaps_to_a_line_just_past_the_largest_scale() {
+        // A 4096 pixel wide source at the largest scale is 4,096,000 across; a line 1 or 4 past
+        // its right edge can't be reached.
+        let t = Transform { scale: Vec2::new(MAX_SCALE, 1.0), ..Transform::default() };
+        for line in [4_096_001.0, 4_096_004.0] {
+            let lines = SnapLines { x: vec![line], y: vec![] };
+            let (r, g) = resized(t, (4096, 100), 2, Vec2::new(4_096_003.0, 100.0), FREE, &lines, 8.0);
+            assert!(close(r.size((4096, 100)), Vec2::new(4_096_000.0, 100.0)), "{line}: {r:?}");
+            assert_eq!(g, Guides::default(), "{line}");
+        }
+        // A line on that edge still snaps.
+        let lines = SnapLines { x: vec![4_096_000.0], y: vec![] };
+        let (_, g) = resized(t, (4096, 100), 2, Vec2::new(4_096_003.0, 100.0), FREE, &lines, 8.0);
+        assert_eq!(g, Guides { x: Some(4_096_000.0), y: None });
+    }
+
+    #[test]
+    fn keeping_the_aspect_ratio_never_snaps_to_a_line_the_pixel_floor_keeps_out_of_reach() {
+        // 1024 x 32 around (2048, 64); dragged to 32 x 1, the right edge is at 2064. A line at
+        // 2062 asks for 28 x 0.875, but the height stays a pixel, so the width stays 32.
+        let t = Transform { position: Vec2::new(1536.0, 48.0), scale: Vec2::new(0.25, 0.25), ..Transform::default() };
+        let lines = SnapLines { x: vec![2062.0], y: vec![] };
+        let (r, g) = resized(t, (4096, 128), 2, Vec2::new(2064.0, 64.5), CENTER, &lines, 8.0);
+        assert!(close(r.size((4096, 128)), Vec2::new(32.0, 1.0)), "{r:?}");
+        assert_eq!(g, Guides::default());
+        // When that floor is wider than the largest scale allows, the width stops at the largest
+        // scale, so a line there still snaps: a 1 x 1 source at (1000, 0.001) is 1000 x 0.001.
+        let t = Transform { scale: Vec2::new(MAX_SCALE, MIN_SCALE), ..Transform::default() };
+        let lines = SnapLines { x: vec![1000.0], y: vec![] };
+        let (r, g) = resized(t, (1, 1), 2, Vec2::new(998.0, 0.001), KEEP, &lines, 8.0);
+        assert!(close(r.size((1, 1)), Vec2::new(1000.0, 1.0)), "{r:?}");
+        assert_eq!(g, Guides { x: Some(1000.0), y: None });
     }
 
     #[test]
