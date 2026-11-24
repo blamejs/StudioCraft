@@ -165,6 +165,9 @@
 	Linear	線性
 	LIVE	直播中
 	Layouts	版面
+	Layout	版面
+	Collection	集合
+layout	Custom	自訂
 	Live, {time}	直播中，{time}
 	Lock (it can't be moved in the preview)	鎖定（無法在預覽中移動）
 	Lock Preview	鎖定預覽

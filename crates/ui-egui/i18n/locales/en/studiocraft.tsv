@@ -193,6 +193,9 @@
 	LIVE	LIVE
 	Live	Live
 	Layouts	Layouts
+	Layout	Layout
+	Collection	Collection
+layout	Custom	Custom
 	Live, {time}	Live, {time}
 	Lock (it can't be moved in the preview)	Lock (it can't be moved in the preview)
 	Lock Preview	Lock Preview

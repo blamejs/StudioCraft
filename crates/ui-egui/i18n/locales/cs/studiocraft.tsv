@@ -165,6 +165,9 @@
 	Linear	Lineární
 	LIVE	ŽIVĚ
 	Layouts	Rozvržení
+	Layout	Rozvržení
+	Collection	Kolekce
+layout	Custom	Vlastní
 	Live, {time}	Živě, {time}
 	Lock (it can't be moved in the preview)	Zamknout (v náhledu ho nelze přesunout)
 	Lock Preview	Zamknout náhled

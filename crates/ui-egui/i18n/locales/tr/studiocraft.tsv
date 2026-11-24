@@ -165,6 +165,9 @@
 	Linear	Doğrusal
 	LIVE	CANLI
 	Layouts	Düzenler
+	Layout	Düzen
+	Collection	Koleksiyon
+layout	Custom	Özel
 	Live, {time}	Canlı, {time}
 	Lock (it can't be moved in the preview)	Kilitle (önizlemede taşınamaz)
 	Lock Preview	Önizlemeyi Kilitle

@@ -155,6 +155,9 @@
 	Limit width	Breite begrenzen
 	Linear	Linear
 	Layouts	Layouts
+	Layout	Layout
+	Collection	Sammlung
+layout	Custom	Benutzerdefiniert
 	LIVE	LIVE
 	Live, {time}	Live, {time}
 	Lock (it can't be moved in the preview)	Sperren (in der Vorschau nicht verschiebbar)

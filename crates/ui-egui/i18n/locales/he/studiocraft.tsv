@@ -168,6 +168,9 @@
 	Linear	ליניארי
 	LIVE	חי
 	Layouts	פריסות
+	Layout	פריסה
+	Collection	אוסף
+layout	Custom	מותאמת אישית
 	Live, {time}	חי, {time}
 	Lock (it can't be moved in the preview)	נעילה (לא ניתן להזיז אותו בתצוגה המקדימה)
 	Lock Preview	נעילת התצוגה המקדימה

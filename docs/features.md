@@ -855,6 +855,20 @@ A profile is a set of stream and output settings, and a scene collection is a se
 can keep several of each and switch between them from the menu bar. Scene Collection › Import…
 and Export… read and write a scene collection as a file.
 
+### Status bar
+
+View › Status Bar shows the status bar along the bottom of the window. It starts with three
+switchers: Profile, Collection and Layout. Picking a profile or a scene collection from its list
+switches to it, as the Profile and Scene Collection menus do, and picking a layout applies it, as
+Docks › Layouts does. Layout shows the built-in or saved layout the docks are in, a built-in one
+before a saved one, and Custom when the docks match none of them. The arrow keys and the mouse
+wheel over a closed switcher do not change it. While a recording, stream or replay buffer runs,
+only Layout shows, and the Profile and Scene Collection menus still switch.
+
+The end of the bar shows the frame rate and render time and the dropped and lagged frame counts.
+While they run, it also shows the REC, LIVE and REPLAY times, the audio tracks readout and the
+pause countdown.
+
 ### Stats and scopes
 
 View › Stats shows the frame count, late frames, frame times, encoded and skipped frames, the

@@ -165,6 +165,9 @@
 	Linear	Линейно
 	LIVE	ЭФИР
 	Layouts	Раскладки
+	Layout	Раскладка
+	Collection	Коллекция
+layout	Custom	Своя
 	Live, {time}	В эфире, {time}
 	Lock (it can't be moved in the preview)	Заблокировать (нельзя перемещать в предпросмотре)
 	Lock Preview	Заблокировать предпросмотр

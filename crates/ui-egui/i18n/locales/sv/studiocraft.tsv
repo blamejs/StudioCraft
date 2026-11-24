@@ -165,6 +165,9 @@
 	Linear	Linjär
 	LIVE	LIVE
 	Layouts	Layouter
+	Layout	Layout
+	Collection	Samling
+layout	Custom	Anpassad
 	Live, {time}	Live, {time}
 	Lock (it can't be moved in the preview)	Lås (kan inte flyttas i förhandsvisningen)
 	Lock Preview	Lås förhandsvisning
