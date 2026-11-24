@@ -1865,6 +1865,33 @@ fn a_copy_that_cannot_be_written_stops_alone() {
     until_closed(&seen);
 }
 
+#[test]
+fn a_copy_needs_the_keyframe_interval_of_a_recording() {
+    let (url, seen) = server(vec![Plan::Accept]);
+    let opened = Arc::new(AtomicBool::new(false));
+    let o = Arc::clone(&opened);
+    let open: copy::Open = Box::new(move || {
+        o.store(true, Ordering::SeqCst);
+        Err(io::Error::other("opened"))
+    });
+    let keyframe_s = studiocraft_encode::h264::RECORDING_KEYFRAME_S + 1;
+    let job = job(RateControl::Bitrate { kbps: 400, keyframe_s });
+    let mut out = Streaming::start_copying(&job, vec![target("a", &url, "k")], quick(), "/videos/Stream.mkv".into(), open).unwrap();
+    let feed = Feed::new(&out);
+    // The copy is refused before it starts, so its state says so at once.
+    let state = out.stream_copy().unwrap();
+    let failure = state.failure.unwrap_or_default();
+    assert!(failure.contains("keyframe") && failure.contains(&format!("every {keyframe_s}")), "{failure}");
+    assert!(!state.finished);
+    assert_eq!(next(&seen), Seen::Publish("k".into()));
+    media(&seen, 30);
+    assert_eq!(until(&out, "a", |_| true).status, DestinationStatus::Live);
+    drop(feed);
+    out.stop().unwrap();
+    until_closed(&seen);
+    assert!(!opened.load(Ordering::SeqCst), "the refused copy made no file");
+}
+
 /// What a CEA-608 decoder shows after the caption pairs of `video`, one message per frame.
 fn captions_shown(video: &[Vec<[u8; 2]>]) -> String {
     let pairs = video.iter().enumerate().flat_map(|(f, p)| p.iter().map(move |p| (f as i64, p[0], p[1])));
@@ -1915,6 +1942,12 @@ fn a_stream_with_a_copy_leaves_a_subscription_for_it() {
     let open: copy::Open = Box::new(|| Err(io::Error::other("not opened")));
     let mut out = Streaming::start_copying(&job, targets[1..].to_vec(), quick(), "/videos/Stream.mkv".into(), open).unwrap();
     assert!(out.stream_copy().is_some_and(|c| c.failure.is_none_or(|f| f.contains("not opened"))));
+    let _ = out.stop();
+    // A copy refused for its keyframe interval takes no subscription, so all the destinations start.
+    let long = crate::native::tests::job(RateControl::Bitrate { kbps: 400, keyframe_s: studiocraft_encode::h264::RECORDING_KEYFRAME_S + 1 });
+    let open: copy::Open = Box::new(|| Err(io::Error::other("not opened")));
+    let mut out = Streaming::start_copying(&long, targets, quick(), "/videos/Stream.mkv".into(), open).unwrap();
+    assert!(out.stream_copy().and_then(|c| c.failure).is_some_and(|f| f.contains("keyframe")));
     let _ = out.stop();
 }
 

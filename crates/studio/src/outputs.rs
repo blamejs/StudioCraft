@@ -12,6 +12,7 @@ use craft_hwenc::{
     Prober, SystemClock, Target, Vendor,
 };
 use studiocraft_encode::SessionError;
+use studiocraft_encode::h264::RECORDING_KEYFRAME_S;
 use studiocraft_encode::hardware::{self, Hardware};
 use studiocraft_engine::mixer::MixerCmd;
 use studiocraft_media::Tick;
@@ -1657,18 +1658,33 @@ impl Studio {
             }
             OutputKind::Streaming | OutputKind::Replay => None,
         };
-        // The stream's copy: a file that cannot be made leaves the stream without one.
+        // The stream's copy: a keyframe interval longer than a recording's, or a file that cannot be
+        // made, leaves the stream without one.
+        let copy_keyframe_s = match job.rate {
+            RateControl::Bitrate { keyframe_s, .. } if keyframe_s > RECORDING_KEYFRAME_S => Some(keyframe_s),
+            _ => None,
+        };
         let copy = if kind == OutputKind::Streaming && self.profile.stream.save_copy {
             let folder = recording_folder(&self.profile.output.folder);
-            match stream_copy_path(&folder) {
-                Ok(path) => {
-                    settings = settings.with("copy", path.to_string_lossy().as_ref());
-                    Some(path)
-                }
-                Err(e) => {
-                    let args = vec![("folder", folder.display().to_string()), ("error", e.to_string())];
-                    self.notices.push(Notice::new("The stream starts without a copy: no file could be made in {folder}: {error}", args, true));
-                    None
+            if let Some(keyframe_s) = copy_keyframe_s {
+                let args = vec![("limit", RECORDING_KEYFRAME_S.to_string()), ("interval", keyframe_s.to_string())];
+                self.notices.push(Notice::new(
+                    "The stream starts without a copy: a copy needs a keyframe at least every {limit} seconds, not every {interval}; set the Keyframe interval in Settings › Stream",
+                    args,
+                    true,
+                ));
+                None
+            } else {
+                match stream_copy_path(&folder) {
+                    Ok(path) => {
+                        settings = settings.with("copy", path.to_string_lossy().as_ref());
+                        Some(path)
+                    }
+                    Err(e) => {
+                        let args = vec![("folder", folder.display().to_string()), ("error", e.to_string())];
+                        self.notices.push(Notice::new("The stream starts without a copy: no file could be made in {folder}: {error}", args, true));
+                        None
+                    }
                 }
             }
         } else {
@@ -2445,12 +2461,12 @@ mod tests {
 
     #[test]
     fn a_streams_copy_is_named_for_the_stream_and_its_time() {
-        let dir = std::env::temp_dir().join(format!("studiocraft-copy-names-{}", std::process::id()));
+        let temp = tempfile::tempdir().unwrap();
+        let dir = temp.path().join("Videos");
         let path = stream_copy_path(&dir).unwrap();
         assert!(path.exists(), "the folder is made and the name taken");
         let name = path.file_name().unwrap().to_string_lossy().into_owned();
         assert!(name.starts_with("Stream ") && name.ends_with(".mkv") && name.len() == "Stream 2026-11-23 10-00-00.mkv".len(), "{name}");
-        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     /// A stream with a copy whose state the test sets: `failure` while it runs, `ended` once it

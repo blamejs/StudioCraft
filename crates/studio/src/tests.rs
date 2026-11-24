@@ -1944,15 +1944,53 @@ mod audio_tracks {
         a_streams_take_is_named_after_its_copy_when(false);
     }
 
+    #[test]
+    fn a_stream_whose_keyframes_are_too_far_apart_starts_without_a_copy() {
+        use studiocraft_model::{Destination, KeyRef};
+        // Only a broken build waits this long for a connection that should come at once.
+        const GUARD: Duration = Duration::from_secs(60);
+        let temp = tempfile::tempdir().unwrap();
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("rtmp://127.0.0.1:{}/live", l.local_addr().unwrap().port());
+        let incoming = connections(l);
+        let mut p = small_profile();
+        p.output.folder = temp.path().to_string_lossy().into_owned();
+        p.stream.key = "profile-key".into();
+        p.stream.save_copy = true;
+        p.stream.keyframe_interval_s = studiocraft_encode::h264::RECORDING_KEYFRAME_S + 1;
+        p.stream.destinations = vec![Destination { id: "a".into(), server: url, key: KeyRef::Profile, ..Destination::default() }];
+        let mut s = studio_with(Some(noop_gpu()), SceneCollection::new("Test", "Scene"), p);
+        s.take_notices();
+        s.start_output(OutputKind::Streaming).unwrap();
+        let conn = incoming.recv_timeout(GUARD).expect("the stream connects");
+        assert!(s.outputs.stream_copy().is_none(), "the stream has no copy");
+        let notices = s.take_notices();
+        assert!(
+            notices.iter().any(|n| n.error && n.template.starts_with("The stream starts without a copy: a copy needs a keyframe")),
+            "{:?}",
+            notices.iter().map(|n| n.template).collect::<Vec<_>>()
+        );
+        let files: Vec<_> = std::fs::read_dir(temp.path()).unwrap().map(|e| e.unwrap().file_name()).collect();
+        assert!(files.is_empty(), "no file was reserved for the copy: {files:?}");
+        drop(conn);
+        s.stop_output(OutputKind::Streaming);
+        while s.output(OutputKind::Streaming).is_some() {
+            s.tick();
+            std::thread::yield_now();
+        }
+        drop(s);
+    }
+
     /// A stream with a copy runs, with audio tracks on from its start (`at_start`) or turned on
     /// while it runs: the take is named after the copy.
     fn a_streams_take_is_named_after_its_copy_when(at_start: bool) {
         use studiocraft_model::{Destination, KeyRef};
         // Only a broken build waits this long for a connection that should come at once.
         const GUARD: Duration = Duration::from_secs(60);
-        let dir = std::env::temp_dir().join(format!("studiocraft-tracks-copy-name-{at_start}-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
+        // Declared before the studio, so the folder is removed after the studio stops, and also when
+        // an assertion fails.
+        let temp = tempfile::tempdir().unwrap();
+        let dir = temp.path().to_path_buf();
         // The names of the next two minutes are taken, so the copy's name has a number.
         let now = chrono::Local::now();
         for s in 0..120 {
@@ -1996,7 +2034,6 @@ mod audio_tracks {
         }
         s.finish_audio_tracks_blocking();
         drop(s);
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

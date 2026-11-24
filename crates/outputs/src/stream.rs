@@ -64,6 +64,7 @@ use craft_packet::{
     Control, Fanout, Info, Kind, MAX_RING_BYTES, MAX_SUBSCRIBERS, PacketPool, Receiver, RecvError, RingConfig, SharedPacket, StreamRates,
 };
 use craft_rtmp::{Config, Publisher};
+use studiocraft_encode::h264::RECORDING_KEYFRAME_S;
 use studiocraft_media::audio::{PooledBlock, SAMPLE_RATE};
 use studiocraft_media::queue::Fifo;
 use studiocraft_media::stats::EncoderStats;
@@ -1421,7 +1422,7 @@ impl Streaming {
         auto: Option<(Arc<diagnose::Checks>, AutoCheck)>,
         copy: Option<(PathBuf, copy::Open)>,
     ) -> Result<Streaming, PluginError> {
-        let RateControl::Bitrate { kbps, .. } = job.rate else {
+        let RateControl::Bitrate { kbps, keyframe_s } = job.rate else {
             return Err(PluginError::Failed("streams need a bitrate".into()));
         };
         let encoder = &job.video_encoder;
@@ -1435,7 +1436,15 @@ impl Streaming {
             )));
         }
         check_targets(&targets)?;
-        if copy.is_some() && targets.len() >= MAX_SUBSCRIBERS {
+        // The copy's writer holds each cluster in memory until the next keyframe, so the copy takes
+        // the keyframe interval a recording takes; with a longer one only the copy is refused.
+        let copy_refused = (copy.is_some() && keyframe_s > RECORDING_KEYFRAME_S).then(|| {
+            format!(
+                "the copy of the stream needs a keyframe at least every {RECORDING_KEYFRAME_S} seconds, not every {keyframe_s}; set the keyframe interval in Settings › Stream"
+            )
+        });
+        let wants_copy = copy.is_some() && copy_refused.is_none();
+        if wants_copy && targets.len() >= MAX_SUBSCRIBERS {
             return Err(PluginError::Failed(format!(
                 "a stream that saves a copy can have at most {} destinations, not {}",
                 MAX_SUBSCRIBERS - 1,
@@ -1461,7 +1470,6 @@ impl Streaming {
         let mut headers = None;
         // The copy subscribes before the encoders start, so it gets the first keyframe.
         let mut copy_feed: Option<(Vec<TrackSpec>, Result<Receiver, String>)> = None;
-        let wants_copy = copy.is_some();
         let sink_refused = Arc::clone(&refused);
         let captions = match &job.captions {
             Some(feed) => Some(Captions::new(Arc::clone(feed), v.fps_num, v.fps_den)?),
@@ -1479,11 +1487,12 @@ impl Streaming {
         let Some(headers) = headers else {
             return Err(PluginError::Failed("the stream's encoders gave no configuration".into()));
         };
-        let copy = match (copy, copy_feed) {
-            (Some((path, open)), Some((tracks, Ok(rx)))) => Some(StreamCopy::start(path, open, tracks, rx)),
-            (Some((path, _)), Some((_, Err(e)))) => Some(StreamCopy::failed(path, e)),
-            (Some((path, _)), None) => Some(StreamCopy::failed(path, "the copy of the stream could not be started".into())),
-            (None, _) => None,
+        let copy = match (copy, copy_feed, copy_refused) {
+            (Some((path, _)), _, Some(e)) => Some(StreamCopy::failed(path, e)),
+            (Some((path, open)), Some((tracks, Ok(rx))), None) => Some(StreamCopy::start(path, open, tracks, rx)),
+            (Some((path, _)), Some((_, Err(e))), None) => Some(StreamCopy::failed(path, e)),
+            (Some((path, _)), None, None) => Some(StreamCopy::failed(path, "the copy of the stream could not be started".into())),
+            (None, _, _) => None,
         };
         let counts = Arc::new(Counts::default());
         let dests = targets.into_iter().map(|t| Arc::new(Dest::new(t, Arc::clone(&counts)))).collect();

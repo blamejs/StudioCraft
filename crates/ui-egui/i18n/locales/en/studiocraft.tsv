@@ -670,6 +670,7 @@
 @msg	The stream's copy could not be finished: {error}	The stream's copy could not be finished: {error}
 @msg	The stream's copy stopped; the stream goes on: {error}	The stream's copy stopped; the stream goes on: {error}
 @msg	The stream starts without a copy: no file could be made in {folder}: {error}	The stream starts without a copy: no file could be made in {folder}: {error}
+@msg	The stream starts without a copy: a copy needs a keyframe at least every {limit} seconds, not every {interval}; set the Keyframe interval in Settings › Stream	The stream starts without a copy: a copy needs a keyframe at least every {limit} seconds, not every {interval}; set the Keyframe interval in Settings › Stream
 @msg	ffmpeg at {path} was not found	ffmpeg at {path} was not found
 menu	Transform	Transform
 	Record as its own track	Record as its own track
