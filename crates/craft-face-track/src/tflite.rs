@@ -686,9 +686,15 @@ fn read(bytes: &[u8]) -> Res<Model> {
     };
     let inputs = fb.ints_at_most(g, 1, MAX_GRAPH_IO, "graph inputs")?.into_iter().map(|i| index(i, n)).collect::<Res<Vec<_>>>()?;
     let outputs = fb.ints_at_most(g, 2, MAX_GRAPH_IO, "graph outputs")?.into_iter().map(|i| index(i, n)).collect::<Res<Vec<_>>>()?;
+    // A graph input takes the caller's values at run time, so data stored with it is not a
+    // constant: it is not folded, nor taken as weights, a bias or paddings.
+    for &i in &inputs {
+        floats[i] = None;
+        ints[i] = None;
+    }
     let mut steps = vec![];
-    // The tensors earlier operators read and wrote, in graph order. A folded DEQUANTIZE gives its
-    // output a value at load, so its reads and writes are checked here; `plan` checks the steps.
+    // The tensors earlier operators read and wrote, in graph order. Every operator's output is
+    // checked here, a folded DEQUANTIZE's input too; `plan` checks the other steps' reads.
     let mut read_before = vec![false; n];
     let mut written = vec![false; n];
     for &i in &inputs {
@@ -698,6 +704,14 @@ fn read(bytes: &[u8]) -> Res<Model> {
         let code = *codes.get(fb.int(o, 0, 0)? as u32 as usize).ok_or("bad operator code")?;
         let outs = fb.ints_at_most(o, 2, 1, "outputs of one operator")?;
         let output = index(*outs.first().ok_or("an operator has no output")?, n)?;
+        // Each tensor is written once, after any read of it. This is checked before the operator's
+        // input counts and shapes.
+        if read_before[output] {
+            return Err("an operator reads a tensor before it is computed".into());
+        }
+        if written[output] || floats[output].is_some() || ints[output].is_some() {
+            return Err("an operator writes a tensor that already has a value".into());
+        }
         // Each operator takes a fixed range of inputs, counted before they are read.
         let (lo, hi) = arity(code).ok_or_else(|| format!("operator {code} is not supported"))?;
         let count = fb.vector(o, 1)?.1;
@@ -712,12 +726,6 @@ fn read(bytes: &[u8]) -> Res<Model> {
             && let Some(i) = ins.first().copied().flatten()
             && let Some(len) = floats[i].as_ref().map(Vec::len)
         {
-            if read_before[output] {
-                return Err("an operator reads a tensor before it is computed".into());
-            }
-            if written[output] || floats[output].is_some() || ints[output].is_some() {
-                return Err("an operator writes a tensor that already has a value".into());
-            }
             // The folded constant is what the graph outputs and the workspace count: it must be
             // the declared size.
             if sizes[output] != len {

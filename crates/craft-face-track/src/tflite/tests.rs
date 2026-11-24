@@ -678,6 +678,48 @@ fn folded_dequantizes_keep_graph_order() {
     assert_eq!(Model::read(&ok).unwrap().run(&[]).unwrap(), vec![vec![1.0, 0.0]]);
 }
 
+/// A second write of a tensor is refused before the operator's input count and shapes are
+/// checked, which walk every dimension of the output.
+#[test]
+fn repeated_writes_are_refused_before_other_checks() {
+    let t = |shape: Vec<i32>| (shape, FLOAT32, None);
+    let concat = |parts: Vec<i32>| (op::CONCATENATION, parts, vec![1], vec![(0, V::Int(-1))]);
+    // The second concatenation's parts do not fit the output either.
+    let shapes = model(vec![], vec![t(vec![1, 1]), t(vec![1, 2]), t(vec![1, 3])], vec![concat(vec![0, 0]), concat(vec![2, 2])], vec![0, 2], vec![1]);
+    refused(&shapes, "already has a value");
+    let count = model(
+        vec![],
+        vec![t(vec![1, 2]), t(vec![1, 2])],
+        vec![(op::RELU, vec![0], vec![1], vec![]), (op::RELU, vec![0; 2000], vec![1], vec![])],
+        vec![0],
+        vec![1],
+    );
+    refused(&count, "already has a value");
+}
+
+/// Data stored with a graph input is not a constant: the caller's values are used.
+#[test]
+fn graph_inputs_are_not_folded_or_taken_as_constants() {
+    // 1.0 and -2.0 as half floats.
+    let half = vec![0x00, 0x3c, 0x00, 0xc0];
+    let fold = model(
+        vec![half.clone()],
+        vec![(vec![1, 2], FLOAT16, Some(0)), (vec![1, 2], FLOAT32, None)],
+        vec![(op::DEQUANTIZE, vec![0], vec![1], vec![])],
+        vec![0],
+        vec![1],
+    );
+    assert_eq!(Model::read(&fold).unwrap().run(&[&[3.0, 4.0]]).unwrap(), vec![vec![3.0, 4.0]]);
+    let alpha = model(
+        vec![f32s(&[0.5, 0.5])],
+        vec![(vec![1, 2], FLOAT32, None), (vec![2], FLOAT32, Some(0)), (vec![1, 2], FLOAT32, None)],
+        vec![(op::PRELU, vec![0, 1], vec![2], vec![])],
+        vec![0, 1],
+        vec![2],
+    );
+    refused(&alpha, "is not constant");
+}
+
 /// A tensor's metadata is bounded by the lengths its vectors declare, before its dimensions are
 /// read.
 #[test]
