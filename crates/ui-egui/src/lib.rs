@@ -71,7 +71,8 @@ pub const UPDATE_APP: craft_update::app::App = craft_update::app::App {
 };
 
 /// How a session starts: normally, in Safe Mode (no source runs and remote control is off until
-/// the user leaves it), or asking which, after the last session ended without closing.
+/// the user leaves it), or asking which, after the last session ended without closing or when how
+/// it ended could not be checked.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum SafeStart {
     #[default]
@@ -222,7 +223,8 @@ pub struct StudioApp {
     /// The Scopes window's feed and thread while it is open.
     scopes: Option<scopes::Scopes>,
     confirm_exit: bool,
-    /// The last session ended without closing: the window asks whether to stay in Safe Mode.
+    /// The last session ended without closing, or how it ended could not be checked: the window
+    /// asks whether to stay in Safe Mode.
     crash_prompt: bool,
     exit_confirmed: bool,
     /// A close was canceled because the scene collection could not be saved; the next one goes ahead.
@@ -2358,9 +2360,9 @@ impl StudioApp {
         if self.crash_prompt {
             let mut leave = None;
             egui::Modal::new(egui::Id::unique("crash-prompt")).show(ctx, |ui| {
-                ui.heading(tl!("StudioCraft did not close properly"));
+                ui.heading(tl!("StudioCraft may not have closed properly"));
                 ui.label(tl!(
-                    "The last session ended without closing. Safe Mode opens your scenes without starting any source and keeps remote control off."
+                    "The last session ended without closing, or StudioCraft could not check how it ended. Safe Mode opens your scenes without starting any source and keeps remote control off."
                 ));
                 ui.horizontal(|ui| {
                     if ui.button(tl!("Start in Safe Mode")).clicked() || ui.input(|i| i.key_pressed(egui::Key::Escape)) {

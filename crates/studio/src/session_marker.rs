@@ -32,7 +32,8 @@ const MAX_MARKERS: usize = 256;
 pub enum Previous {
     /// They closed properly, or there were none.
     Clean,
-    /// At least one ended without closing: its marker was still there and nothing held it.
+    /// At least one ended without closing (its marker was still there and nothing held it), or
+    /// how they ended could not be checked.
     Unclean,
 }
 
@@ -69,12 +70,98 @@ fn take_left(path: &Path) -> std::io::Result<Option<bool>> {
     Ok(Some(!head.is_empty()))
 }
 
+/// Whether an entry of the folder, with this type, is a marker to look at: a file is, and a
+/// folder or a link is not. An entry that is gone gives `false`; a type that can't be read is an
+/// error.
+fn look_at(file_type: std::io::Result<std::fs::FileType>) -> std::io::Result<bool> {
+    match file_type {
+        Ok(t) => Ok(t.is_file()),
+        // Another copy that started at the same time removed it.
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(e) => Err(e),
+    }
+}
+
+/// Look at the earlier markers among the entries of the folder `dir`, each a path and its type,
+/// skipping `own`, this session's marker, and looking at no more than `max_markers`. Returns how
+/// the sessions before ended and the problems, each with its path and the reason.
+fn scan(
+    dir: &Path,
+    own: &Path,
+    entries: impl Iterator<Item = std::io::Result<(PathBuf, std::io::Result<std::fs::FileType>)>>,
+    max_markers: usize,
+) -> (Previous, Vec<String>) {
+    let mut previous = Previous::Clean;
+    let mut problems = Vec::new();
+    let mut looked = 0;
+    for entry in entries {
+        let (entry, file_type) = match entry {
+            Ok(entry) => entry,
+            Err(e) => {
+                previous = Previous::Unclean;
+                problems.push(format!("{}: {e}", dir.display()));
+                break;
+            }
+        };
+        let named = entry.file_name().and_then(|n| n.to_str()).is_some_and(|n| n.starts_with(PREFIX));
+        if !named || entry == own {
+            continue;
+        }
+        // An entry whose type can't be read counts toward the limit like a marker.
+        let file_type = match look_at(file_type) {
+            Ok(false) => continue,
+            other => other,
+        };
+        looked += 1;
+        if looked > max_markers {
+            // The markers not looked at may include one left by a crash.
+            previous = Previous::Unclean;
+            problems.push(format!("{}: more than {max_markers} session markers; the rest are looked at next time", dir.display()));
+            break;
+        }
+        // An entry whose type can't be read may be a marker left by a crash: the user decides.
+        if let Err(e) = file_type {
+            previous = Previous::Unclean;
+            problems.push(format!("{}: {e}", entry.display()));
+            continue;
+        }
+        match take_left(&entry) {
+            Ok(Some(true)) => previous = Previous::Unclean,
+            Ok(_) => {}
+            // Another copy that started at the same time removed it.
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            // A marker that can't be looked at may be one left by a crash: the user decides.
+            Err(e) => {
+                previous = Previous::Unclean;
+                problems.push(format!("{}: {e}", entry.display()));
+            }
+        }
+    }
+    (previous, problems)
+}
+
 impl SessionMarker {
     /// Report how the sessions before this one ended, removing the markers they left, and put
     /// this session's marker in `settings/sessions`. The problems are the earlier markers that
     /// could not be read or removed, each with its path and the reason.
     pub fn begin(settings: &Path) -> std::io::Result<(SessionMarker, Previous, Vec<String>)> {
         SessionMarker::begin_looking_at(settings, MAX_MARKERS)
+    }
+
+    /// [`SessionMarker::begin`] at the app's start, with the problems worded for the status bar.
+    /// When this session's marker can't be written there is no marker, and the sessions before
+    /// count as unclean: a marker one of them left may still be in the folder.
+    pub fn start(settings: &Path) -> (Option<SessionMarker>, Previous, Vec<String>) {
+        match SessionMarker::begin(settings) {
+            Ok((marker, previous, unread)) => {
+                let problems = unread.into_iter().map(|p| format!("a session marker could not be read or removed: {p}")).collect();
+                (Some(marker), previous, problems)
+            }
+            Err(e) => {
+                let problem = format!("a crash in this session will not be noticed at the next start: the session marker could not be written: {e}");
+                (None, Previous::Unclean, vec![problem])
+            }
+        }
     }
 
     /// [`SessionMarker::begin`], looking at no more than `max_markers` earlier markers.
@@ -99,49 +186,16 @@ impl SessionMarker {
             let _ = std::fs::remove_file(&pending);
             return Err(e);
         }
-        let mut previous = Previous::Clean;
-        let mut problems = Vec::new();
-        let mut looked = 0;
         // A folder that can't be listed may hold a marker left by a crash: the user decides.
         let entries = match std::fs::read_dir(&dir) {
             Ok(entries) => entries,
             Err(e) => {
-                problems.push(format!("{}: {e}", dir.display()));
+                let problems = vec![format!("{}: {e}", dir.display())];
                 return Ok((SessionMarker { file, path }, Previous::Unclean, problems));
             }
         };
-        for entry in entries {
-            let entry = match entry {
-                Ok(entry) => entry,
-                Err(e) => {
-                    previous = Previous::Unclean;
-                    problems.push(format!("{}: {e}", dir.display()));
-                    break;
-                }
-            };
-            let named = entry.file_name().to_str().is_some_and(|n| n.starts_with(PREFIX));
-            if !named || entry.path() == path || !entry.file_type().is_ok_and(|t| t.is_file()) {
-                continue;
-            }
-            looked += 1;
-            if looked > max_markers {
-                // The markers not looked at may include one left by a crash.
-                previous = Previous::Unclean;
-                problems.push(format!("{}: more than {max_markers} session markers; the rest are looked at next time", dir.display()));
-                break;
-            }
-            match take_left(&entry.path()) {
-                Ok(Some(true)) => previous = Previous::Unclean,
-                Ok(_) => {}
-                // Another copy that started at the same time removed it.
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-                // A marker that can't be looked at may be one left by a crash: the user decides.
-                Err(e) => {
-                    previous = Previous::Unclean;
-                    problems.push(format!("{}: {e}", entry.path().display()));
-                }
-            }
-        }
+        let entries = entries.map(|entry| entry.map(|entry| (entry.path(), entry.file_type())));
+        let (previous, problems) = scan(&dir, &path, entries, max_markers);
         Ok((SessionMarker { file, path }, previous, problems))
     }
 
@@ -276,5 +330,45 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join(DIR_NAME), b"x").unwrap();
         assert!(SessionMarker::begin(dir.path()).is_err());
+    }
+
+    #[test]
+    fn a_marker_that_cannot_be_written_asks_at_start() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join(DIR_NAME), b"x").unwrap();
+        let (marker, previous, problems) = SessionMarker::start(dir.path());
+        assert!(marker.is_none());
+        assert_eq!(previous, Previous::Unclean, "a marker left by a crash may still be there");
+        assert_eq!(problems.len(), 1);
+        assert!(problems[0].contains("could not be written"), "{problems:?}");
+        // A folder that works gives a marker and a clean start.
+        let ok = tempfile::tempdir().unwrap();
+        let (marker, previous, problems) = SessionMarker::start(ok.path());
+        assert_eq!(previous, Previous::Clean);
+        assert!(problems.is_empty(), "{problems:?}");
+        marker.unwrap().finish().unwrap();
+    }
+
+    #[test]
+    fn an_entry_whose_type_cannot_be_read_is_not_skipped() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("file"), b"x").unwrap();
+        std::fs::create_dir(dir.path().join("folder")).unwrap();
+        assert!(look_at(std::fs::symlink_metadata(dir.path().join("file")).map(|m| m.file_type())).unwrap());
+        assert!(!look_at(std::fs::symlink_metadata(dir.path().join("folder")).map(|m| m.file_type())).unwrap());
+        assert!(!look_at(Err(std::io::ErrorKind::NotFound.into())).unwrap());
+        assert!(look_at(Err(std::io::Error::other("denied"))).is_err());
+    }
+
+    #[test]
+    fn entries_whose_type_cannot_be_read_count_toward_the_limit() {
+        let dir = tempfile::tempdir().unwrap();
+        let own = dir.path().join("session-own");
+        let entries = (0..1000).map(|i| Ok((dir.path().join(format!("session-{i}")), Err(std::io::Error::other("denied")))));
+        let (previous, problems) = scan(dir.path(), &own, entries, 3);
+        assert_eq!(previous, Previous::Unclean);
+        // Three entries and the line saying the rest wait for a later start.
+        assert_eq!(problems.len(), 4, "{problems:?}");
+        assert!(problems[3].contains("more than 3 session markers"), "{problems:?}");
     }
 }

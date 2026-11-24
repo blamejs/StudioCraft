@@ -783,7 +783,9 @@ While StudioCraft runs, it keeps a file of its own in the `sessions` folder of i
 and removes it when it closes. When such a file is still there at the next start and no running
 copy of StudioCraft holds it, a session ended without closing (a crash, a forced quit or a power
 loss). The window then asks whether to start in Safe Mode or normally; Esc picks Safe Mode, Start Normally
-leaves it, and until the answer no source runs. `studiocraft --safe-mode` starts in Safe Mode without asking. Sessions
+leaves it, and until the answer no source runs. The window also asks when the `sessions` folder or a file in it
+can't be read, or when this session's file can't be written, and the status bar gives the reason.
+`studiocraft --safe-mode` starts in Safe Mode without asking. Sessions
 started with `--no-prefs`, `--screenshot` or `--self-test` keep no marker.
 
 ## Hotkeys

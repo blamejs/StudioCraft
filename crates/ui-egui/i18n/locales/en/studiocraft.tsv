@@ -413,8 +413,8 @@
 	Stretch to Screen	Stretch to Screen
 	Studio	Studio
 	Studio Mode	Studio Mode
-	StudioCraft did not close properly	StudioCraft did not close properly
 	StudioCraft is available under either license, at your option.	StudioCraft is available under either license, at your option.
+	StudioCraft may not have closed properly	StudioCraft may not have closed properly
 	superfast	superfast
 	Swipe	Swipe
 	Switch at once	Switch at once
@@ -444,7 +444,7 @@
 	the DNS server did not answer for the server's name	the DNS server did not answer for the server's name
 	earlier lookups of server names have not finished	earlier lookups of server names have not finished
 	The interface fonts Inter and JetBrains Mono are under the SIL Open Font License 1.1.	The interface fonts Inter and JetBrains Mono are under the SIL Open Font License 1.1.
-	The last session ended without closing. Safe Mode opens your scenes without starting any source and keeps remote control off.	The last session ended without closing. Safe Mode opens your scenes without starting any source and keeps remote control off.
+	The last session ended without closing, or StudioCraft could not check how it ended. Safe Mode opens your scenes without starting any source and keeps remote control off.	The last session ended without closing, or StudioCraft could not check how it ended. Safe Mode opens your scenes without starting any source and keeps remote control off.
 	The licenses of the third-party crates StudioCraft uses are checked by `cargo xtask licenses`.	The licenses of the third-party crates StudioCraft uses are checked by `cargo xtask licenses`.
 	The profile's stream key	The profile's stream key
 	The scope could not be computed: {error}	The scope could not be computed: {error}

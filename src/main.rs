@@ -11,7 +11,7 @@
 //! `--safe-mode` starts with no source running and the control server not started, until the
 //! user leaves Safe Mode in the window. A start after a session that ended without closing (its
 //! marker in the settings folder's `sessions` folder was left behind) asks whether to start in
-//! Safe Mode.
+//! Safe Mode, and so does a start that cannot read that folder or write its own marker.
 //!
 //! `--screenshot` draws about 120 frames, saves the window's picture and exits; `--self-test`
 //! drives the window through a short script and writes what happened. Both open the window
@@ -151,14 +151,11 @@ fn run(args: Args, raw: Vec<std::ffi::OsString>) -> Result<(), String> {
     let (store, mut problems) = Store::open(location.clone());
     // Settings kept in memory have no folder for a marker, and scripted runs keep their settings
     // in memory.
-    let (marker, previous) = match store.dir().map(SessionMarker::begin) {
-        Some(Ok((m, previous, unread))) => {
-            problems.extend(unread.into_iter().map(|p| format!("a session marker could not be read or removed: {p}")));
-            (Some(m), previous)
-        }
-        Some(Err(e)) => {
-            problems.push(format!("a crash in this session will not be noticed at the next start: the session marker could not be written: {e}"));
-            (None, Previous::Clean)
+    let (marker, previous) = match store.dir() {
+        Some(dir) => {
+            let (m, previous, found) = SessionMarker::start(dir);
+            problems.extend(found);
+            (m, previous)
         }
         None => (None, Previous::Clean),
     };
