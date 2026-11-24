@@ -392,17 +392,25 @@ impl Counts {
     }
 }
 
+/// What a destination sends with. The server and the key are kept under one lock, so a
+/// connection never pairs the key of one setup with the server of another.
+#[derive(Clone)]
+struct Setup {
+    /// The server it sends to: the target's, or one given when it was started again.
+    server: String,
+    /// The stream key it sends with: the target's, or one given when it was started again.
+    key: String,
+    /// The streaming service it is set up for, for its automatic connection checks.
+    service: Option<&'static Service>,
+}
+
 /// A destination and what its thread reports.
 struct Dest {
     target: Target,
     /// The stream's counts, shared by its destinations.
     counts: Arc<Counts>,
-    /// The server it sends to: the target's, or one given when it was started again.
-    server: Mutex<String>,
-    /// The stream key it sends with: the target's, or one given when it was started again.
-    key: Mutex<String>,
-    /// The streaming service it is set up for, for its automatic connection checks.
-    service: Mutex<Option<&'static Service>>,
+    /// The server, stream key and service it sends with, read and changed together.
+    setup: Mutex<Setup>,
     status: Mutex<DestinationStatus>,
     /// How many times the status was set, with a signal for each.
     changes: Mutex<u64>,
@@ -447,9 +455,7 @@ struct Dest {
 impl Dest {
     fn new(target: Target, counts: Arc<Counts>, service: Option<&'static Service>) -> Dest {
         Dest {
-            server: Mutex::new(target.server.clone()),
-            key: Mutex::new(target.key.clone()),
-            service: Mutex::new(service),
+            setup: Mutex::new(Setup { server: target.server.clone(), key: target.key.clone(), service }),
             target,
             counts,
             status: Mutex::new(DestinationStatus::Stopped),
@@ -476,7 +482,7 @@ impl Dest {
 
     /// The target with its server now and `key` as its stream key.
     fn with_key(&self, key: &str) -> Target {
-        self.with(&lock(&self.server), key)
+        self.with(&lock(&self.setup).server, key)
     }
 
     /// The target with `server` and `key`.
@@ -484,14 +490,23 @@ impl Dest {
         Target { id: self.target.id.clone(), server: server.to_string(), key: key.to_string(), enabled: self.target.enabled }
     }
 
+    /// Its setup now: the server, key and service from one change.
+    fn setup(&self) -> Setup {
+        lock(&self.setup).clone()
+    }
+
+    /// The target with its server and key now, both from one setup.
+    fn current(&self) -> Target {
+        let s = self.setup();
+        self.with(&s.server, &s.key)
+    }
+
     fn config(&self) -> Result<Config, craft_rtmp::Error> {
-        let key = lock(&self.key).clone();
-        self.with_key(&key).config()
+        self.current().config()
     }
 
     fn shown(&self) -> String {
-        let key = lock(&self.key).clone();
-        self.with_key(&key).shown()
+        self.current().shown()
     }
 
     fn set(&self, s: DestinationStatus) {
@@ -747,13 +762,18 @@ fn spawn(hub: &Arc<Hub>, d: &Arc<Dest>, key: Option<&str>, server: Option<(&str,
     if d.running() {
         // Asked to stop and started again before the thread decided to end: it goes on, and
         // tries at once, with the new setup when it has one. A start of one that was not asked
-        // to stop changes nothing.
-        if !d.stop.swap(false, Ordering::SeqCst) {
+        // to stop changes nothing. Only `spawn` and `ask_stop` change `stop`, both with `thread`
+        // locked, so it stays set until it is cleared below.
+        if !d.stopping() {
             return Ok(false);
         }
+        // The new setup and `renew` are in place before `stop` is cleared, so the thread does not
+        // go on to connect before the setup changes. A connection it made or is making with the
+        // old setup closes before it sends.
         if set_up(d, key, server) {
             d.renew.store(true, Ordering::SeqCst);
         }
+        d.stop.store(false, Ordering::SeqCst);
         d.restarted.store(true, Ordering::SeqCst);
         // A check that waits for a place from before the stop is dropped.
         d.uncheck();
@@ -789,25 +809,24 @@ fn spawn(hub: &Arc<Hub>, d: &Arc<Dest>, key: Option<&str>, server: Option<(&str,
 
 /// Gives `d` `key` as its stream key when given, and `server` as its server and service when
 /// given. Says whether its server or key changed; the service is used only by its connection
-/// checks, so a connection does not close for it.
+/// checks, so a connection does not close for it. The key, server and service change under one
+/// lock, so no reader sees some of them changed and not the others.
 fn set_up(d: &Dest, key: Option<&str>, server: Option<(&str, Option<&'static Service>)>) -> bool {
     let mut changed = false;
+    let mut now = lock(&d.setup);
     if let Some(key) = key {
-        let mut now = lock(&d.key);
-        changed |= *now != key;
-        *now = key.to_string();
+        changed |= now.key != key;
+        now.key = key.to_string();
     }
     if let Some((server, service)) = server {
-        let mut now = lock(&d.server);
-        if *now != server {
-            *now = server.to_string();
+        if now.server != server {
+            now.server = server.to_string();
             // The addresses of the server it sent to before are not this one's.
             lock(&d.addrs).clear();
             d.fixed.store(false, Ordering::SeqCst);
             changed = true;
         }
-        drop(now);
-        *lock(&d.service) = service;
+        now.service = service;
     }
     changed
 }
@@ -916,11 +935,11 @@ fn check_after(hub: &Hub, d: &Dest, f: &Failure) {
         wanted
     };
     let id = &d.target.id;
-    let service = *lock(&d.service);
+    let Setup { server, service, .. } = d.setup();
     let subject = diagnose::Subject {
         profile: auto.profile.clone(),
         id: id.clone(),
-        server: lock(&d.server).clone(),
+        server,
         service,
         last: Some(f.clone()),
         service_hosts: auto.service_hosts,
@@ -1122,13 +1141,21 @@ enum Missed {
 }
 
 fn connect(hub: &Hub, d: &Arc<Dest>) -> Result<Publisher, Missed> {
-    let mut c = d.config().map_err(Missed::Rtmp)?;
+    let setup = d.setup();
+    let mut c = d.with(&setup.server, &setup.key).config().map_err(Missed::Rtmp)?;
     c.connect_timeout = hub.timing.connect;
     c.setup_timeout = hub.timing.setup;
     c.stall_timeout = hub.timing.stall;
     let addrs = lookup(hub, d, c.endpoint.host(), c.endpoint.port())?;
-    lock(&d.addrs).clone_from(&addrs);
-    d.fixed.store(c.endpoint.host().parse::<std::net::IpAddr>().is_ok(), Ordering::SeqCst);
+    {
+        // Kept only while the server is the one looked up: a server given during the lookup has
+        // its addresses cleared by `set_up`, and they stay clear until its own lookup.
+        let now = lock(&d.setup);
+        if now.server == setup.server {
+            lock(&d.addrs).clone_from(&addrs);
+            d.fixed.store(c.endpoint.host().parse::<std::net::IpAddr>().is_ok(), Ordering::SeqCst);
+        }
+    }
     // A stop that came as the lookup answered does not wait for a TCP connect.
     if d.stopping() || hub.control.is_ended() {
         return Err(Missed::Stopped);

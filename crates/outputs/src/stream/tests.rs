@@ -659,7 +659,7 @@ fn one_destination_stops_and_starts_while_the_other_goes_on() {
     // Starting one that is sending does nothing, and an unknown one is an error.
     out.start_destination("a", None).unwrap();
     out.start_destination("b", Some("k3")).unwrap();
-    assert_eq!(*lock(&out.hub.find("b").unwrap().key), "k2", "a destination that sends keeps its key");
+    assert_eq!(out.hub.find("b").unwrap().setup().key, "k2", "a destination that sends keeps its key");
     assert!(out.start_destination("x", None).is_err() && out.stop_destination("x").is_err());
     drop(feed);
     out.stop().unwrap();
@@ -687,13 +687,14 @@ fn a_destination_is_added_and_moved_to_another_server_while_the_stream_runs() {
     starts_with_headers_and_a_keyframe(&media(&seen_b, 3));
     let ids: Vec<String> = out.destinations().into_iter().map(|d| d.id).collect();
     assert_eq!(ids, ["a", "b"], "an added destination follows those the stream started with");
-    assert_eq!(lock(&out.hub.find("b").unwrap().service).map(|s| s.id), Some("twitch"));
+    assert_eq!(out.hub.find("b").unwrap().setup().service.map(|s| s.id), Some("twitch"));
     assert_eq!(out.target(), format!("{a}, {b}"));
     // One that is sending keeps its server and key, so a setup it does not use is not checked.
     out.start_destination_as(&setup("b", &c, "kc")).unwrap();
     out.start_destination_as(&setup("b", "http://127.0.0.1/live", "")).unwrap();
     let dest = out.hub.find("b").unwrap();
-    assert_eq!((lock(&dest.server).clone(), lock(&dest.key).clone()), (b.clone(), "kb".to_string()));
+    let now = dest.setup();
+    assert_eq!((now.server, now.key), (b.clone(), "kb".to_string()));
     // Stopped, it starts again at its new server with its new key, while the other goes on.
     out.stop_destination("b").unwrap();
     until_closed(&seen_b);
@@ -702,7 +703,7 @@ fn a_destination_is_added_and_moved_to_another_server_while_the_stream_runs() {
     assert_eq!(next(&seen_c), Seen::Publish("kc".into()));
     starts_with_headers_and_a_keyframe(&media(&seen_c, 3));
     assert_eq!(out.target(), format!("{a}, {c}"));
-    assert_eq!(*lock(&dest.service), None, "it takes the service it is set up for now");
+    assert_eq!(dest.setup().service, None, "it takes the service it is set up for now");
     media(&seen_a, 5);
     // A setup that is not valid is refused and adds nothing.
     assert!(out.start_destination_as(&setup("d", "http://127.0.0.1/live", "k")).is_err());
@@ -747,6 +748,44 @@ fn a_destination_started_again_before_its_stop_ended_it_takes_the_new_setup() {
         until_closed(&seen_a);
         until_closed(&seen_c);
     }
+}
+
+#[test]
+fn a_connection_never_pairs_the_key_of_one_setup_with_the_server_of_another() {
+    let setups = [("rtmp://127.0.0.1:1935/live", "key-one"), ("rtmp://127.0.0.2:1935/live", "key-two")];
+    let hosts = ["127.0.0.1", "127.0.0.2"];
+    let d = Arc::new(Dest::new(target("b", setups[0].0, setups[0].1), Arc::new(Counts::default()), None));
+    let done = Arc::new(AtomicBool::new(false));
+    let start = Arc::new(std::sync::Barrier::new(2));
+    let writer = {
+        let (d, done, start) = (Arc::clone(&d), Arc::clone(&done), Arc::clone(&start));
+        std::thread::spawn(move || {
+            start.wait();
+            for i in 0..200_000 {
+                let (server, key) = setups[(i + 1) % 2];
+                assert!(set_up(&d, Some(key), Some((server, None))), "each setup changes both");
+            }
+            done.store(true, Ordering::SeqCst);
+        })
+    };
+    start.wait();
+    let mut reads = 0u64;
+    loop {
+        // Read after the check, so the last turn reads the final setup.
+        let finished = done.load(Ordering::SeqCst);
+        let s = d.setup();
+        assert!(setups.contains(&(s.server.as_str(), s.key.as_str())), "a mixed setup: {} with {}", s.server, s.key);
+        let c = d.config().unwrap();
+        let pair = (c.endpoint.host(), c.key.expose());
+        assert!(pair == (hosts[0], setups[0].1) || pair == (hosts[1], setups[1].1), "a connection to {} with the other key", pair.0);
+        reads += 1;
+        if finished {
+            break;
+        }
+    }
+    writer.join().unwrap();
+    assert!(reads > 0);
+    assert_eq!(d.setup().key, setups[0].1, "the last setup given is the one kept");
 }
 
 #[test]
