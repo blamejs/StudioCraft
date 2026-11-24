@@ -172,13 +172,68 @@ fn the_byte_limit_drops_the_oldest_packets() {
 #[test]
 fn the_byte_limit_holds_for_first_and_restart_packets() {
     let mut jb = JitterBuffer::new(Config { max_bytes: 1000, ..Config::new(90_000) }).unwrap();
-    let big = [0u8; 1400];
+    let big = [0u8; 600];
     assert_eq!(jb.push(&Packet::new(96, 1, 0, 7, false, &big), Duration::ZERO), Push::Stored);
-    assert_eq!((jb.held(), jb.bytes(), jb.stats().dropped), (0, 0, 1));
+    assert_eq!((jb.held(), jb.bytes(), jb.stats().dropped), (1, 600, 0));
     // Two packets in sequence far from the last make the buffer start again.
     assert_eq!(jb.push(&Packet::new(96, 30_000, 0, 7, false, &big), ms(1)), Push::Stray);
     assert_eq!(jb.push(&Packet::new(96, 30_001, 0, 7, false, &big), ms(2)), Push::Restarted);
-    assert_eq!((jb.held(), jb.bytes(), jb.stats().dropped), (0, 0, 2));
+    assert_eq!((jb.held(), jb.bytes(), jb.stats().dropped), (1, 600, 1));
+    assert_eq!(jb.push(&Packet::new(96, 30_002, 0, 7, false, &big), ms(3)), Push::Stored);
+    assert_eq!((jb.held(), jb.bytes(), jb.stats().dropped), (1, 600, 2));
+}
+
+#[test]
+fn a_payload_over_the_byte_limit_is_dropped_before_it_is_copied() {
+    let mut jb = JitterBuffer::new(Config { max_bytes: 1000, ..Config::new(90_000) }).unwrap();
+    let huge = vec![0u8; 64 * 1024 * 1024];
+    assert_eq!(jb.push(&Packet::new(96, 4, 0, 7, false, &huge), Duration::ZERO), Push::Oversized);
+    assert_eq!((jb.held(), jb.bytes()), (1, 0));
+    assert_eq!(jb.push(&pkt(5, 0), ms(1)), Push::Stored);
+    // The packets already held stay.
+    assert_eq!(jb.push(&Packet::new(96, 6, 0, 7, false, &huge), ms(2)), Push::Oversized);
+    assert_eq!((jb.held(), jb.bytes()), (3, PAYLOAD.len()));
+    assert_eq!(jb.push(&pkt(7, 0), ms(3)), Push::Stored);
+    let mut nacks = Vec::new();
+    assert_eq!(jb.nacks(&mut nacks, 10), 0);
+    assert_eq!(drain(&mut jb, ms(100)), [Out::Gap(1), Out::P(5), Out::Gap(1), Out::P(7)]);
+    let stats = jb.stats();
+    assert_eq!((stats.dropped, stats.missing, stats.released), (2, 0, 2));
+    // The oversized packets arrived, so the report counts none lost.
+    let block = jb.report_block(1, None, ms(100)).unwrap();
+    assert_eq!((block.cumulative_lost, block.fraction_lost, block.highest_sequence), (0, 0, 7));
+    assert!(jb.spare_capacity() < 1000, "{}", jb.spare_capacity());
+}
+
+#[test]
+fn an_oversized_packet_in_sequence_cancels_a_pending_restart() {
+    let mut jb = JitterBuffer::new(Config { max_bytes: 1000, ..Config::new(90_000) }).unwrap();
+    let huge = [0u8; 1400];
+    assert_eq!(jb.push(&pkt(1, 0), Duration::ZERO), Push::Stored);
+    assert_eq!(jb.push(&pkt(40_000, 0), ms(1)), Push::Stray);
+    assert_eq!(jb.push(&Packet::new(96, 2, 0, 7, false, &huge), ms(2)), Push::Oversized);
+    assert_eq!(jb.push(&pkt(40_001, 0), ms(3)), Push::Stray);
+    assert_eq!(jb.stats().restarts, 0);
+}
+
+#[test]
+fn spare_buffers_together_hold_no_more_than_the_byte_limit() {
+    let mut jb = JitterBuffer::new(Config { max_bytes: 1000, ..Config::new(90_000) }).unwrap();
+    let small = [0u8; 100];
+    let full = [0u8; 1000];
+    // Ten 100-byte packets leave nine buffers to reuse.
+    for s in 1..=10 {
+        assert_eq!(jb.push(&Packet::new(96, s, 0, 7, false, &small), Duration::ZERO), Push::Stored);
+    }
+    assert_eq!(drain(&mut jb, ms(100)).len(), 10);
+    assert!(jb.spare_capacity() > 0);
+    // Each 1000-byte packet grows a reused buffer to the whole limit; keeping them all would
+    // hold more than the limit.
+    for (s, t) in [(11, 200), (12, 300), (13, 400)] {
+        assert_eq!(jb.push(&Packet::new(96, s, 0, 7, false, &full), ms(t)), Push::Stored);
+        assert_eq!(drain(&mut jb, ms(t + 100)), [Out::P(s)]);
+        assert!(jb.spare_capacity() <= 1000, "{}", jb.spare_capacity());
+    }
 }
 
 #[test]

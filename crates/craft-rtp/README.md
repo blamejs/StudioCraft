@@ -45,7 +45,9 @@ the stream's sender reports. A report that differs from the mapping by more than
 `JitterBuffer` holds the packets of one stream and releases them in sequence order:
 
 - `push(packet, now)` stores a copy of the payload, in a buffer it reuses, and returns `Stored`,
-  `Duplicate`, `Late` (its number was already released or given up on), `Stray` or `Restarted`.
+  `Duplicate`, `Late` (its number was already released or given up on), `Stray`, `Restarted` or
+  `Oversized`. An `Oversized` payload is over the byte limit and is not copied; the packet keeps
+  its place in sequence, counts as received, is not listed for a NACK, and `pop` gives it as a gap.
   A sequence number more than 3000 ahead or 100 behind the newest (`MAX_DROPOUT` and
   `MAX_MISORDER`) is stray. When the next packet follows a stray one in sequence, the sender has
   started again: the buffer drops what it holds and starts from that packet (RFC 3550 A.1).
@@ -63,7 +65,8 @@ the stream's sender reports. A report that differs from the mapping by more than
 The delay is 60 ms at first. Once 16 packets have been measured it is four times the inter-arrival
 jitter estimate (RFC 3550 section 6.4.1, kept as in A.8), between 40 and 150 ms. The buffer holds
 at most 2 s between its oldest and newest packet and 8 MiB of payload, and gives up on the oldest
-packets beyond either limit, so a caller that stops popping does not make it grow. It holds at most
+packets beyond either limit, so a caller that stops popping does not make it grow. The payload
+buffers it keeps for reuse hold at most the byte limit together. It holds at most
 4096 sequence numbers (`SLOTS`) from the oldest it waits for. Every call takes the time as a
 `Duration` since a fixed point the caller picks; a time earlier than one passed before counts as
 the latest.
