@@ -26,6 +26,7 @@ log.workspace = true
 
 [dev-dependencies]
 craft-audio = { workspace = true, features = ["vorbis-encode"] }
+craft-gpu-interop.workspace = true
 craft-color.workspace = true
 image.workspace = true
 jpeg-encoder.workspace = true

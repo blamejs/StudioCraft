@@ -88,6 +88,28 @@ read-back. The bench also times `cpu nv12 1080p`, a reference conversion on the 
 without a graphics adapter only the CPU case runs. This page records no baseline for these
 benches yet.
 
+### Shared display capture
+
+`cargo bench -p craft-gpu-interop --features wgpu` times how a 1080p and a 4K BGRA picture reach
+a compositor's source texture: `write_texture upload`, from CPU memory as a CPU capture is
+uploaded, and `opaque GPU copy`, from a texture already on the GPU as a shared capture is drawn.
+Each iteration waits until the GPU has finished. The bench prints the adapter it ran on, and on a
+machine without a graphics adapter it measures nothing.
+
+Measured on 2026-11-23 on Linux, in a release build, on the llvmpipe software adapter (Vulkan,
+LLVM 21.1.8). That adapter draws on the CPU, so these numbers do not show the GPU copy's cost on
+graphics hardware, and the shared path has not been measured on Windows hardware yet:
+
+| Bench | Median | Range (95%) |
+| --- | --- | --- |
+| `write_texture upload 1080p` | 892 µs | 864 to 928 µs |
+| `opaque GPU copy 1080p` | 1.94 ms | 1.78 to 2.13 ms |
+| `write_texture upload 4k` | 18.26 ms | 18.14 to 18.39 ms |
+| `opaque GPU copy 4k` | 18.31 ms | 17.06 to 19.55 ms |
+
+The `write_texture` rows do not include the capture's own read-back of the desktop into CPU
+memory, which the shared path also does without.
+
 ### Audio tracks
 
 Measured on 2026-11-17 on Linux with `cargo bench -p studiocraft-media --bench mixer`, in one run
