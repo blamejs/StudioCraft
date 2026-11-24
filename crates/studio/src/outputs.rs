@@ -228,6 +228,8 @@ struct Stopping {
     /// Where the stop thread puts the state of a stream's copy, and whether the copy's failure
     /// was already shown while the stream ran.
     copy: Option<(CopySlot, bool)>,
+    /// The file of the stream's copy, for [`Outputs::copy_ended`].
+    copy_path: Option<PathBuf>,
 }
 
 /// A replay being written to its file.
@@ -292,8 +294,16 @@ pub(crate) struct Outputs {
     reconnect_notices: crate::events::ReconnectNotices,
     /// Whether a failure of the running stream's copy got a notice.
     copy_noticed: bool,
+    /// The failure of the running stream's copy once it got its notice, for
+    /// [`Outputs::running_copy_failure`].
+    copy_failure: Option<String>,
+    /// The file of the running stream's copy, for [`Outputs::copy_ended`].
+    copy_path: Option<PathBuf>,
     /// The state of the last stream's copy once that stream has ended, for [`Outputs::stream_copy`].
     last_copy: Option<StreamCopyState>,
+    /// The last [`MAX_UNFINISHED`] copies of streams that ended, each file and whether it was
+    /// finished, oldest first, for [`Outputs::copy_ended`].
+    ended_copies: Vec<(PathBuf, bool)>,
 }
 
 /// Where a stop thread puts the state of the stream's copy once the stream has ended.
@@ -525,7 +535,12 @@ impl Outputs {
         }
         let a = self.active.remove(&kind)?;
         let target = if kind == OutputKind::Streaming { a.instance.target() } else { a.target.clone() };
+        if kind == OutputKind::Streaming {
+            self.copy_failure = None;
+            self.copy_path = None;
+        }
         let before = a.instance.stream_copy();
+        let copy_path = before.as_ref().map(|c| c.path.clone());
         let copy = before.is_some().then(|| (CopySlot::default(), std::mem::take(&mut self.copy_noticed)));
         if before.is_some() {
             // Shown while the copy finishes, until the stop's state replaces it.
@@ -541,7 +556,7 @@ impl Outputs {
             Err(_) => Err(PluginError::Unavailable("the output was lost".into())),
         });
         match handle {
-            Ok(handle) => self.stopping.push(Stopping { kind, target, failed, handle, copy }),
+            Ok(handle) => self.stopping.push(Stopping { kind, target, failed, handle, copy, copy_path }),
             Err(e) => {
                 log::error!("no thread to finish the {}: {e}", kind.noun());
                 let slot = copy.as_ref().map(|(s, _)| s);
@@ -616,6 +631,7 @@ impl Outputs {
             && let Some(e) = self.active.get(&OutputKind::Streaming).and_then(|a| a.instance.stream_copy()).and_then(|c| c.failure)
         {
             self.copy_noticed = true;
+            self.copy_failure = Some(e.clone());
             ev.notices.push(Notice::new("The stream's copy stopped; the stream goes on: {error}", vec![("error", e)], true));
         }
         let (saved, writing): (Vec<_>, Vec<_>) = self.saving.drain(..).partition(|s| s.handle.is_finished());
@@ -632,8 +648,37 @@ impl Outputs {
         let (slot, noticed) = copy?;
         let state = slot.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take()?;
         let notice = copy_notice(&state, noticed);
-        self.last_copy = Some(state);
+        self.note_copy_ended(state);
         notice
+    }
+
+    /// Keep `state`, the copy of a stream that ended, as the last stream's copy and among the
+    /// ended copies.
+    fn note_copy_ended(&mut self, state: StreamCopyState) {
+        if self.ended_copies.len() >= MAX_UNFINISHED {
+            self.ended_copies.remove(0);
+        }
+        self.ended_copies.push((state.path.clone(), state.finished));
+        self.last_copy = Some(state);
+    }
+
+    /// Whether the copy of a stream at `path` was finished: `None` while its stream runs or is
+    /// still stopping, else `Some(true)` when its file was finished and `Some(false)` when it was
+    /// not, or when how it ended is no longer known. A copy that runs or stops is asked about
+    /// before an earlier copy with the same file name that ended.
+    pub(crate) fn copy_ended(&self, path: &Path) -> Option<bool> {
+        let stopping = self.stopping.iter().any(|s| s.copy_path.as_deref() == Some(path));
+        let running = self.active.contains_key(&OutputKind::Streaming) && self.copy_path.as_deref() == Some(path);
+        if stopping || running {
+            return None;
+        }
+        Some(self.ended_copies.iter().rev().find(|(p, _)| p == path).is_some_and(|(_, finished)| *finished))
+    }
+
+    /// Why the running stream's copy stopped while the stream goes on, once [`Outputs::poll`] has
+    /// seen it. It reads no state from the stream, so it can run each frame.
+    pub(crate) fn running_copy_failure(&self) -> Option<&str> {
+        self.copy_failure.as_deref()
     }
 
     /// The copy of the running stream, or else of the last stream that ended, when it had one.
@@ -685,7 +730,7 @@ impl Outputs {
             let _ = rx.recv();
             if fails { Err(PluginError::Failed("the disk is full".into())) } else { Ok(()) }
         });
-        self.stopping.push(Stopping { kind, target: target.to_string(), failed: false, handle, copy: None });
+        self.stopping.push(Stopping { kind, target: target.to_string(), failed: false, handle, copy: None, copy_path: None });
         tx
     }
 
@@ -757,13 +802,20 @@ impl Outputs {
             let _ = h.join();
         }
         let mut ended = Vec::new();
+        let mut copies = Vec::new();
         for (kind, mut a) in self.active.drain() {
             let target = if kind == OutputKind::Streaming { a.instance.target() } else { a.target.clone() };
             ended.push((kind, target, a.instance.stop().is_ok()));
+            copies.extend(a.instance.stream_copy());
         }
-        for s in self.stopping.drain(..) {
+        for s in std::mem::take(&mut self.stopping) {
             let clean = matches!(s.handle.join(), Ok(Ok(()))) && !s.failed;
             ended.push((s.kind, s.target, clean));
+            // The app closes: the copy's notice would not be shown.
+            let _ = self.take_copy(s.copy);
+        }
+        for c in copies {
+            self.note_copy_ended(c);
         }
         for (kind, target, clean) in ended {
             self.note_finish(kind, &target, clean);
@@ -1692,6 +1744,8 @@ impl Studio {
         let target = instance.target();
         if kind == OutputKind::Streaming {
             self.outputs.copy_noticed = false;
+            self.outputs.copy_failure = None;
+            self.outputs.copy_path = instance.stream_copy().map(|c| c.path);
             self.outputs.last_copy = None;
         }
         self.outputs.active.insert(kind, Active { id, instance, stats, started: Instant::now(), start, target, hardware });
@@ -1746,7 +1800,7 @@ impl Studio {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use studiocraft_media::audio::PooledBlock;
     use studiocraft_plugin::Plugin;
 
@@ -2503,18 +2557,29 @@ mod tests {
 
     /// [`copying`], with a stop that waits on `gate` when one is given.
     fn copying_gated(o: &mut Outputs, ended: StreamCopyState, gate: Option<std::sync::mpsc::Receiver<()>>) -> Arc<Mutex<Option<String>>> {
+        stream_with_copy_gated(o, Tick(0), Arc::new(EncoderStats::default()), ended, gate)
+    }
+
+    /// Run a stream that started at `start` with the encoder counters `stats` and a copy, whose
+    /// state is `ended` once it has stopped; the copy's failure while it runs, for the test to set.
+    pub(crate) fn stream_with_copy(o: &mut Outputs, start: Tick, stats: Arc<EncoderStats>, ended: StreamCopyState) -> Arc<Mutex<Option<String>>> {
+        stream_with_copy_gated(o, start, stats, ended, None)
+    }
+
+    /// [`stream_with_copy`], with a stop that waits on `gate` when one is given.
+    fn stream_with_copy_gated(
+        o: &mut Outputs,
+        start: Tick,
+        stats: Arc<EncoderStats>,
+        ended: StreamCopyState,
+        gate: Option<std::sync::mpsc::Receiver<()>>,
+    ) -> Arc<Mutex<Option<String>>> {
         let failure = Arc::new(Mutex::new(None));
         let instance = Box::new(CopyingStream { failure: Arc::clone(&failure), ended, stopped: false, gate });
-        let active = Active {
-            id: 1,
-            instance,
-            stats: Arc::new(EncoderStats::default()),
-            started: Instant::now(),
-            start: Tick(0),
-            target: String::new(),
-            hardware: None,
-        };
+        let active = Active { id: 1, instance, stats, started: Instant::now(), start, target: String::new(), hardware: None };
         o.copy_noticed = false;
+        o.copy_failure = None;
+        o.copy_path = active.instance.stream_copy().map(|c| c.path);
         o.active.insert(OutputKind::Streaming, active);
         failure
     }
@@ -2571,11 +2636,58 @@ mod tests {
     }
 
     #[test]
+    fn a_streams_copy_is_known_as_ended_once_its_stream_has_stopped() {
+        let path = PathBuf::from("/videos/Stream 2026-11-23 10-00-00.mkv");
+        let other = PathBuf::from("/videos/Stream 2026-11-23 11-00-00.mkv");
+        let mut o = Outputs::default();
+        assert_eq!(o.copy_ended(&path), Some(false), "a copy no stream writes is not finished");
+        let _ = copying(&mut o, StreamCopyState { path: path.clone(), finished: true, ..StreamCopyState::default() });
+        assert_eq!(o.copy_ended(&path), None, "the stream runs");
+        assert!(o.stop(OutputKind::Streaming, false).is_some());
+        let _ = notices_until_idle(&mut o);
+        assert_eq!(o.copy_ended(&path), Some(true));
+        // The next stream's copy fails; the first copy keeps how it ended.
+        let _ = copying(&mut o, StreamCopyState { path: other.clone(), failure: Some("the disk is full".into()), ..StreamCopyState::default() });
+        assert_eq!((o.copy_ended(&path), o.copy_ended(&other)), (Some(true), None));
+        assert!(o.stop(OutputKind::Streaming, false).is_some());
+        let _ = notices_until_idle(&mut o);
+        assert_eq!((o.copy_ended(&path), o.copy_ended(&other)), (Some(true), Some(false)));
+        // A copy that runs as the app closes is known as ended too.
+        let third = PathBuf::from("/videos/Stream 2026-11-23 12-00-00.mkv");
+        let _ = copying(&mut o, StreamCopyState { path: third.clone(), finished: true, ..StreamCopyState::default() });
+        o.stop_all_blocking();
+        assert_eq!(o.copy_ended(&third), Some(true));
+        // A new copy with the file name of one that was finished is not taken for it.
+        let _ = copying(&mut o, StreamCopyState { path: path.clone(), ..StreamCopyState::default() });
+        assert_eq!(o.copy_ended(&path), None, "the new copy runs");
+        assert!(o.stop(OutputKind::Streaming, false).is_some());
+        let _ = notices_until_idle(&mut o);
+        assert_eq!(o.copy_ended(&path), Some(false), "the new copy was not finished");
+        // A stream that is still stopping holds back only its own copy.
+        let (release, wait) = std::sync::mpsc::channel::<()>();
+        let handle = std::thread::spawn(move || {
+            let _ = wait.recv();
+            Ok(())
+        });
+        let copy = Some((CopySlot::default(), false));
+        o.stopping.push(Stopping { kind: OutputKind::Streaming, target: String::new(), failed: false, handle, copy, copy_path: Some(other.clone()) });
+        assert_eq!((o.copy_ended(&third), o.copy_ended(&other)), (Some(true), None));
+        release.send(()).unwrap();
+        let _ = notices_until_idle(&mut o);
+        // Only the last ones are kept.
+        for n in 0..MAX_UNFINISHED {
+            o.note_copy_ended(StreamCopyState { path: PathBuf::from(format!("/videos/{n}.mkv")), finished: true, ..StreamCopyState::default() });
+        }
+        assert_eq!(o.copy_ended(&path), Some(false), "forgotten");
+        assert_eq!(o.ended_copies.len(), MAX_UNFINISHED);
+    }
+
+    #[test]
     fn a_stop_that_cannot_finish_the_file_is_reported_once() {
         let mut o = Outputs::default();
         for (kind, failed) in [(OutputKind::Recording, false), (OutputKind::Streaming, true)] {
             let handle = std::thread::spawn(|| Err(PluginError::Unavailable("the muxer stopped".into())));
-            o.stopping.push(Stopping { kind, target: String::new(), failed, handle, copy: None });
+            o.stopping.push(Stopping { kind, target: String::new(), failed, handle, copy: None, copy_path: None });
         }
         let mut notices = Vec::new();
         while o.any_active() {

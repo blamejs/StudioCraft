@@ -41,6 +41,7 @@ description in [docs/features.md](docs/features.md).
 - Each take of audio tracks writes a session file for the audio editor, with markers set during the take and dropouts marked, and can open it in the editor when it ends ([Audio tracks](docs/features.md#audio-tracks)).
 - One marker command marks the recording and the audio tracks at the same moment, and lists the session's markers ([Recording markers](docs/features.md#recording-markers)).
 - A session's marker is renamed in the recording's timeline and the take's session file, while they run and after they have ended ([Recording markers](docs/features.md#recording-markers)).
+- Markers also go to the copy a stream saves, and `<copy name>.otio` is written beside the copy when the stream stops ([Recording markers](docs/features.md#recording-markers)).
 
 ### Streaming
 
@@ -125,9 +126,9 @@ description in [docs/features.md](docs/features.md).
    kind of service adds what its public interface offers, such as a list of ingest servers, the
    title and category, stream health, the viewer count and chat.
 9. **Markers for editing (partly done).** File › Add Recording Marker, or its hotkey, marks the
-   running recording, and a timeline file written beside the recording opens in FilmCraft with
-   the markers on it ([Recording markers](docs/features.md#recording-markers)). Markers on the
-   stream are still to be built.
+   running recording and the stream's copy, and a timeline file written beside each opens in
+   FilmCraft with the markers on it ([Recording markers](docs/features.md#recording-markers)).
+   Markers on a stream that saves no copy are still to be built.
 10. **Raw and on-demand recordings.** A recording will be written twice: a raw copy for editing,
     with its tracks kept apart, and a copy that matches the stream for posting as a video on
     demand.

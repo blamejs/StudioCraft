@@ -422,31 +422,39 @@ in the take at the same moment are errors.
 
 ### `record.marker`
 
-`record.marker` takes `{"name"}` and marks the running recording at this moment. `name` follows
-the rules of `audio_tracks.marker`; without it the marker is "Marker N", the recording's Nth
-marker. It returns `{"name", "seconds"}`, where `seconds` counts from the recording's first frame
-and leaves out the time the recording has skipped so far while the computer was suspended. No running recording and a recording that already holds 10,000 markers are errors. When the
-recording stops, `<recording name>.otio` is written beside it with each marker at its frame
+`record.marker` takes `{"name"}` and marks the running recording and the copy the running stream
+saves at this moment. `name` follows the rules of `audio_tracks.marker`; without it the marker is
+"Marker N", the output's own Nth marker. It returns `{"name", "seconds", "recording", "stream_copy"}`.
+`name` and `seconds` are the marker's in the recording, or in the copy when the recording does not
+keep it; `seconds` counts from the output's first frame and leaves out the time the output has
+skipped so far while the computer was suspended. `recording` and `stream_copy` are each
+`{"name", "seconds"}` when that output kept the marker, `{"error"}` when it runs and did not, or
+`null` when it does not run. Neither output running, and no output keeping the marker, as when each
+already holds 10,000 markers, are errors. When the recording stops, `<recording name>.otio` is
+written beside it with each marker at its frame, and when the stream stops and the copy's file is
+finished, `<copy name>.otio` is written beside the copy
 ([Recording markers](features.md#recording-markers)).
 
 ### `marker.add` and `marker.list`
 
-`marker.add` takes `{"name"}` and marks the running recording and the running take of audio
-tracks at this moment with one marker, as `record.marker` and `audio_tracks.marker` do. A session
-lasts from the start of the first of those two outputs until both have stopped. `name` follows the
-rules of `audio_tracks.marker`; without it both outputs name the marker "Marker N", the session's
-Nth marker. It returns `{"index", "name", "seconds", "recording", "audio_tracks"}`: `index` is the
-marker's number in the session from 1, and `seconds` counts from the session's start (the
-recording's start, or the moment StudioCraft saw a take that started alone). `recording` and
-`audio_tracks` are each `{"seconds"}`, the marker's time in that output as `record.marker` and
-`audio_tracks.marker` return it, `{"error"}` when the output runs and did not keep the marker, or
-`null` when the output does not run. When one output does not keep the marker, the other keeps it.
-No running recording or take, no output keeping the marker, and a session that already holds
+`marker.add` takes `{"name"}` and marks the running recording, the running stream's copy and the
+running take of audio tracks at this moment with one marker, as `record.marker` and
+`audio_tracks.marker` do. A session lasts from the start of the first of those outputs until all
+have stopped. `name` follows the rules of `audio_tracks.marker`; without it every output names the
+marker "Marker N", the session's Nth marker. It returns
+`{"index", "name", "seconds", "recording", "stream_copy", "audio_tracks"}`: `index` is the marker's
+number in the session from 1, and `seconds` counts from the session's start (the start of the
+recording or the stream's copy, whichever started first, or the moment StudioCraft saw a take that
+started alone). `recording`, `stream_copy` and `audio_tracks` are each `{"seconds"}`, the marker's
+time in that output, `{"error"}` when the output runs and did not keep the marker, or `null` when
+the output does not run. When one output does not keep the marker, the others keep it. No running
+recording, stream copy or take, no output keeping the marker, and a session that already holds
 10,000 markers (StudioCraft's own limit) are errors, and an error keeps no marker in the session.
 
 `marker.list` takes no params and returns `{"running", "markers"}`. `markers` lists the session's
-markers oldest first, each `{"index", "name", "seconds", "recording", "audio_tracks"}` with
-`recording` and `audio_tracks` each `{"seconds"}` or `null` for an output that did not keep it.
+markers oldest first, each `{"index", "name", "seconds", "recording", "stream_copy", "audio_tracks"}`
+with `recording`, `stream_copy` and `audio_tracks` each `{"seconds"}` or `null` for an output that
+did not keep it.
 `running` is `false` after the session has ended; the list then holds that session's markers until
 the next session starts.
 
@@ -460,6 +468,8 @@ is required. The outputs are renamed this way:
   name in the timeline that is written when the file is finished. Once `<recording name>.otio` is
   written, that file is written again with the new name through a temporary file and a rename.
   While the timeline file is still being written, the rename is an error for the recording.
+- The stream's copy: the same as the recording, with `<copy name>.otio`, which is written once the
+  stream has stopped and the copy's file is finished.
 - The take of audio tracks: while the take runs, the rename goes to the take's journal, so the
   session file the take writes at its end, and the one repair writes after a crash, have the new
   name. Once the take has ended, its session file is written again with the new name through a
@@ -467,10 +477,10 @@ is required. The outputs are renamed this way:
   renames are waiting to be written, and while another marker is being added to or renamed in the
   take at the same moment, the rename is an error for the take.
 
-It returns `{"index", "name", "seconds", "recording", "audio_tracks"}` as `marker.list` lists the
-marker, with `recording` and `audio_tracks` each `{"seconds"}` when that output has the new name,
-`{"error"}` when it does not, or `null` when the output did not keep the marker. When one output
-does not take the new name, the other keeps it. A file that no longer has a marker with the old name
+It returns `{"index", "name", "seconds", "recording", "stream_copy", "audio_tracks"}` as
+`marker.list` lists the marker, with `recording`, `stream_copy` and `audio_tracks` each
+`{"seconds"}` when that output has the new name, `{"error"}` when it does not, or `null` when the
+output did not keep the marker. When one output does not take the new name, the others keep it. A file that no longer has a marker with the old name
 at the marker's place, as after it was edited in another app, is not written, and that output
 reports an error. In the take's session file, that marker must also be the one the take set there,
 not another marker with the same name that was moved into its place. A file that another app saves
