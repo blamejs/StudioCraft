@@ -16,7 +16,10 @@ line snaps and the other edge follows the ratio. With Shift held the corner drag
 and each edge snaps on its own. With Ctrl (Command on macOS) held the corner drag resizes the
 source around its center: the opposite corner moves by the same amount, either edge on an axis
 can snap, and the edge across from it moves to match. Ctrl and Shift together resize around the
-center and change the ratio. Holding Alt (Option on macOS) turns snapping off. One drag is one
+center and change the ratio. The round handle above the middle of the selected source's top edge
+rotates the source around its center, in steps of 15 degrees. When the source's top edge is at the
+edge of the preview, the handle moves inside the preview, just below the source's center. Holding
+Alt (Option on macOS) turns snapping off, and the rotate handle then turns the source by any angle. One drag is one
 undo step. You can lock a source so it can't be moved, or lock the whole preview. Each scene item can be
 shown or hidden, and every change can be undone.
 

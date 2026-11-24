@@ -2,7 +2,9 @@
 //! handles that move and resize the selected item. Moves and resizes snap to the canvas's edges,
 //! center lines and safe areas and to other items' edges and center lines; Alt (Option on macOS)
 //! turns snapping off while it is held. A corner drag keeps the aspect ratio unless Shift is held,
-//! and resizes around the item's center while Ctrl (Command on macOS) is held.
+//! and resizes around the item's center while Ctrl (Command on macOS) is held. The round handle
+//! past the middle of the top edge turns the item around its center in steps of [`ROTATE_STEP`]
+//! degrees, or by any angle while Alt is held.
 
 use egui::{Color32, Pos2, Rect, Sense, Stroke, StrokeKind, TextureId, Ui, Vec2 as EVec2, pos2, vec2};
 use studiocraft_model::geom::{MAX_SCALE, MIN_SCALE};
@@ -96,6 +98,8 @@ enum Grip {
     Move,
     /// Clockwise from the top left.
     Corner(usize),
+    /// The rotate handle.
+    Rotate,
 }
 
 #[derive(Clone, Debug)]
@@ -195,6 +199,10 @@ const SNAP_POINTS: f32 = 8.0;
 /// The color of the lines a drag snapped to.
 const GUIDE: Color32 = Color32::from_rgb(255, 64, 160);
 const HANDLE: f32 = 7.0;
+/// The step in degrees a rotate drag turns by while snapping is on.
+pub const ROTATE_STEP: f32 = 15.0;
+/// Screen distance from the middle of the selected item's top edge to its rotate handle.
+const ROTATE_REACH: f32 = 22.0;
 
 #[derive(Default)]
 pub struct Editor {
@@ -345,6 +353,66 @@ pub fn moved(from: Transform, native: (u32, u32), delta: Vec2, lines: &SnapLines
     (t.sanitized(), guides)
 }
 
+/// `from` turned around its center by the angle the pointer swept from `start` to `to`, both in
+/// canvas pixels. With `step` above zero the rotation lands on the nearest multiple of `step`
+/// degrees. A pointer on the center gives no angle, so the rotation stays as it was.
+pub fn rotated(from: Transform, native: (u32, u32), start: Vec2, to: Vec2, step: f32) -> Transform {
+    let c = from.center(native);
+    let (a, b) = (Vec2::new(start.x - c.x, start.y - c.y), Vec2::new(to.x - c.x, to.y - c.y));
+    if !(a.is_finite() && b.is_finite()) || a.x.hypot(a.y) < 1e-3 || b.x.hypot(b.y) < 1e-3 {
+        return from;
+    }
+    // The canvas's y axis points down, so a growing angle turns clockwise, as the rotation does.
+    let mut r = from.rotation + (b.y.atan2(b.x) - a.y.atan2(a.x)).to_degrees();
+    if step > 0.0 {
+        r = (r / step).round() * step;
+    }
+    Transform { rotation: r, ..from }.sanitized()
+}
+
+/// Where the rotate handle of an item turned by `rotation` degrees sits on the screen: the item's
+/// own up direction from `top`, the middle of its top edge, [`ROTATE_REACH`] points out. When that
+/// point is outside `bounds`, the handle goes inward instead, [`ROTATE_REACH`] points past `center`,
+/// the item's center on the screen, so it can still be grabbed when the item's top edge is on the
+/// edge of the view. When that is outside too, as for an item whose top edge is well past the view,
+/// the handle is moved to the nearest point inside. The handle stays at least [`ROTATE_REACH`]
+/// points from the center, where a drag has no angle to follow, unless the view is too small for it.
+fn rotate_handle(top: Pos2, center: Pos2, rotation: f32, bounds: Rect) -> Pos2 {
+    let (s, c) = rotation.to_radians().sin_cos();
+    let up = vec2(s, -c) * ROTATE_REACH;
+    // Inside by a handle's size where the view is big enough, so the whole handle shows.
+    let inner = bounds.shrink(HANDLE);
+    let r = if inner.is_positive() { inner } else { bounds };
+    let clamp = |p: Pos2| pos2(p.x.max(r.min.x).min(r.max.x), p.y.max(r.min.y).min(r.max.y));
+    let (outside, past) = (top + up, center - up);
+    let clear = |p: &Pos2| bounds.contains(*p) && p.distance(center) >= ROTATE_REACH - 1e-3;
+    [outside, past, clamp(outside), clamp(past)].into_iter().find(clear).unwrap_or_else(|| clamp(outside))
+}
+
+/// The middle of the top edge of an item with `corners` on the canvas, on the screen.
+fn top_middle(view: View, corners: [Vec2; 4]) -> Pos2 {
+    view.to_screen(Vec2::new((corners[0].x + corners[1].x) * 0.5, (corners[0].y + corners[1].y) * 0.5))
+}
+
+/// The handle under `p` among the corner handles at `corners` and the rotate handle at `rotate`, all
+/// on the screen. Where handles overlap, as on a narrow item, the one nearest `p` is picked.
+fn handle_under(p: Pos2, corners: [Pos2; 4], rotate: Pos2) -> Option<Grip> {
+    let reach = HANDLE * 1.5;
+    let mut best: Option<(f32, Grip)> = (rotate.distance(p) <= reach).then(|| (rotate.distance(p), Grip::Rotate));
+    for (i, k) in corners.iter().enumerate() {
+        let d = k.distance(p);
+        if d <= reach && best.is_none_or(|(b, _)| d < b) {
+            best = Some((d, Grip::Corner(i)));
+        }
+    }
+    best.map(|(_, g)| g)
+}
+
+/// The center of an item with `corners` on the canvas, on the screen.
+fn middle(view: View, corners: [Vec2; 4]) -> Pos2 {
+    view.to_screen(Vec2::new((corners[0].x + corners[2].x) * 0.5, (corners[0].y + corners[2].y) * 0.5))
+}
+
 /// Draw the lines a drag snapped to across the canvas.
 fn draw_guides(ui: &Ui, view: View, guides: Guides) {
     let painter = ui.painter_at(view.rect);
@@ -389,6 +457,14 @@ impl Editor {
             items.iter().rev().find(|it| it.visible && it.native.is_some_and(|n| it.transform.contains(n, c)))
         };
         let sel = selected.and_then(|id| items.iter().find(|it| it.id == id));
+        // The selected item's corner or rotate handle under `p`, when its handles are shown.
+        let grip_at = |p: Pos2| -> Option<(&EditItem, (u32, u32), Grip)> {
+            let it = sel.filter(|it| !it.locked && !locked)?;
+            let n = it.native?;
+            let corners = it.transform.corners(n);
+            let h = rotate_handle(top_middle(view, corners), middle(view, corners), it.transform.rotation, view.rect);
+            handle_under(p, corners.map(|k| view.to_screen(k)), h).map(|g| (it, n, g))
+        };
 
         // Hover outline.
         if self.drag.is_none()
@@ -406,13 +482,10 @@ impl Editor {
             && let Some(p) = ui.input(|i| i.pointer.press_origin()).or_else(|| resp.interact_pointer_pos())
         {
             let c = view.to_canvas(p);
-            let corner = sel.filter(|it| !it.locked).and_then(|it| {
-                let n = it.native?;
-                it.transform.corners(n).iter().position(|k| view.to_screen(*k).distance(p) <= HANDLE * 1.5).map(|i| (it, n, i))
-            });
-            if let Some((it, n, i)) = corner {
-                let lines = SnapLines::new(canvas, items, it.id);
-                self.drag = Some(Drag { item: it.id, grip: Grip::Corner(i), start: c, from: it.transform, native: n, lines });
+            if let Some((it, n, grip)) = grip_at(p) {
+                // A rotation snaps to angles, not to lines.
+                let lines = if grip == Grip::Rotate { SnapLines::default() } else { SnapLines::new(canvas, items, it.id) };
+                self.drag = Some(Drag { item: it.id, grip, start: c, from: it.transform, native: n, lines });
             } else if let Some(it) = hit(p) {
                 if Some(it.id) != selected {
                     ev.select = Some(Some(it.id));
@@ -436,6 +509,7 @@ impl Editor {
             let (t, guides) = match d.grip {
                 Grip::Move => moved(d.from, d.native, Vec2::new(c.x - d.start.x, c.y - d.start.y), &d.lines, snap),
                 Grip::Corner(i) => resized(d.from, d.native, i, c, mode, &d.lines, snap),
+                Grip::Rotate => (rotated(d.from, d.native, d.start, c, if alt { 0.0 } else { ROTATE_STEP }), Guides::default()),
             };
             draw_guides(ui, view, guides);
             ev.transform = Some((d.item, t));
@@ -443,8 +517,11 @@ impl Editor {
         if resp.drag_stopped() && self.drag.take().is_some() {
             ev.released = true;
         }
+        // A click on one of the selected item's handles keeps the selection, even where the
+        // handle is outside the item.
         if resp.clicked()
             && let Some(p) = resp.interact_pointer_pos()
+            && grip_at(p).is_none()
         {
             let id = hit(p).map(|it| it.id);
             if id != selected {
@@ -471,6 +548,10 @@ impl Editor {
             outline(ui, view, corners, color, 2.0);
             if !it.locked && !locked {
                 let painter = ui.painter_at(view.rect.expand(HANDLE));
+                let top = top_middle(view, corners);
+                let h = rotate_handle(top, middle(view, corners), t.rotation, view.rect);
+                painter.line_segment([top, h], Stroke::new(1.0, color));
+                painter.circle(h, HANDLE * 0.6, color, Stroke::new(1.0, Color32::BLACK));
                 for k in corners {
                     let r = Rect::from_center_size(view.to_screen(k), EVec2::splat(HANDLE));
                     painter.rect_filled(r, 1.0, color);
@@ -790,6 +871,104 @@ mod tests {
         assert!(close(Vec2::new(lines.x[5], lines.y[5]), Vec2::new(70.0, 70.0)), "{lines:?}");
         assert_eq!(&lines.x[..3], &[0.0, 960.0, 1920.0]);
         assert_eq!(&lines.y[..3], &[0.0, 540.0, 1080.0]);
+    }
+
+    #[test]
+    fn rotating_turns_around_the_center_in_fifteen_degree_steps() {
+        // A 100 x 100 item at (100, 100) has its center at (150, 150).
+        let t = Transform { position: Vec2::new(100.0, 100.0), ..Transform::default() };
+        let start = Vec2::new(150.0, 50.0);
+        // From straight above to 40 degrees clockwise: the step is 45 degrees.
+        let (s, c) = 40f32.to_radians().sin_cos();
+        let to = Vec2::new(150.0 + 100.0 * s, 150.0 - 100.0 * c);
+        let r = rotated(t, (100, 100), start, to, ROTATE_STEP);
+        assert!((r.rotation - 45.0).abs() < 1e-3, "{r:?}");
+        assert!(close(r.center((100, 100)), Vec2::new(150.0, 150.0)), "{r:?}");
+        assert_eq!(r.position, t.position, "a turn around the center leaves the position");
+        // Alt turns snapping off.
+        let r = rotated(t, (100, 100), start, to, 0.0);
+        assert!((r.rotation - 40.0).abs() < 1e-3, "{r:?}");
+        // Counterclockwise past zero wraps into [0, 360): -50 snaps to -45, which is 315.
+        let to = Vec2::new(150.0 - 100.0 * 50f32.to_radians().sin(), 150.0 - 100.0 * 50f32.to_radians().cos());
+        let r = rotated(t, (100, 100), start, to, ROTATE_STEP);
+        assert!((r.rotation - 315.0).abs() < 1e-3, "{r:?}");
+    }
+
+    #[test]
+    fn rotating_snaps_the_resulting_angle_not_the_swept_one() {
+        // An item already at 10 degrees, turned by 2 degrees, lands on 15.
+        let t = Transform { rotation: 10.0, ..Transform::default() };
+        let c = t.center((100, 100));
+        let start = Vec2::new(c.x + 100.0, c.y);
+        let (s, co) = 2f32.to_radians().sin_cos();
+        let r = rotated(t, (100, 100), start, Vec2::new(c.x + 100.0 * co, c.y + 100.0 * s), ROTATE_STEP);
+        assert!((r.rotation - 15.0).abs() < 1e-3, "{r:?}");
+    }
+
+    #[test]
+    fn rotating_with_the_pointer_on_the_center_keeps_the_rotation() {
+        let t = Transform { rotation: 20.0, ..Transform::default() };
+        let c = t.center((100, 100));
+        assert_eq!(rotated(t, (100, 100), Vec2::new(c.x, c.y - 50.0), c, ROTATE_STEP), t);
+        assert_eq!(rotated(t, (100, 100), c, Vec2::new(c.x + 50.0, c.y), ROTATE_STEP), t);
+        assert_eq!(rotated(t, (100, 100), Vec2::new(f32::NAN, 0.0), Vec2::new(c.x + 50.0, c.y), ROTATE_STEP), t);
+    }
+
+    #[test]
+    fn the_rotate_handle_sits_past_the_top_edge_or_inward_at_the_view_edge() {
+        let bounds = Rect::from_min_size(pos2(0.0, 0.0), vec2(800.0, 450.0));
+        // Unturned, it is above the top edge's middle.
+        let h = rotate_handle(pos2(400.0, 200.0), pos2(400.0, 300.0), 0.0, bounds);
+        assert!(h.distance(pos2(400.0, 200.0 - ROTATE_REACH)) < 1e-3, "{h:?}");
+        // Turned a quarter clockwise, the item's top faces right.
+        let h = rotate_handle(pos2(400.0, 200.0), pos2(300.0, 200.0), 90.0, bounds);
+        assert!(h.distance(pos2(400.0 + ROTATE_REACH, 200.0)) < 1e-3, "{h:?}");
+        // A top edge on the view's top edge puts the handle inside the view, past the center.
+        let h = rotate_handle(pos2(400.0, 0.0), pos2(400.0, 100.0), 0.0, bounds);
+        assert!(h.distance(pos2(400.0, 100.0 + ROTATE_REACH)) < 1e-3, "{h:?}");
+        assert!(bounds.contains(h));
+        // A top edge far above the view still leaves the handle in the view, a handle in from its
+        // edge.
+        let h = rotate_handle(pos2(900.0, -200.0), pos2(900.0, -100.0), 0.0, bounds);
+        assert!(h.distance(pos2(800.0 - HANDLE, HANDLE)) < 1e-3, "{h:?}");
+        // A view smaller than a handle keeps it inside the view itself.
+        let tiny = Rect::from_min_size(pos2(0.0, 0.0), vec2(4.0, 4.0));
+        assert!(tiny.contains(rotate_handle(pos2(2.0, -100.0), pos2(2.0, -50.0), 0.0, tiny)));
+    }
+
+    #[test]
+    fn overlapping_handles_pick_the_one_nearest_the_pointer() {
+        // A 16 x 44 point item on the view's top edge has its inward rotate handle at the middle of
+        // its bottom edge, 8 points from both bottom corners.
+        let corners = [pos2(392.0, 0.0), pos2(408.0, 0.0), pos2(408.0, 44.0), pos2(392.0, 44.0)];
+        let h = pos2(400.0, 44.0);
+        assert_eq!(handle_under(h, corners, h), Some(Grip::Rotate));
+        assert_eq!(handle_under(pos2(392.0, 44.0), corners, h), Some(Grip::Corner(3)));
+        assert_eq!(handle_under(pos2(407.0, 1.0), corners, h), Some(Grip::Corner(1)));
+        assert_eq!(handle_under(pos2(400.0, 100.0), corners, h), None);
+    }
+
+    #[test]
+    fn the_inward_rotate_handle_stays_clear_of_a_short_items_center() {
+        let bounds = Rect::from_min_size(pos2(0.0, 0.0), vec2(800.0, 450.0));
+        // A 44 point tall item on the view's top edge: the reach in from the top edge would be its
+        // center, so the handle goes the reach past the center.
+        let (top, center) = (pos2(400.0, 0.0), pos2(400.0, ROTATE_REACH));
+        let h = rotate_handle(top, center, 0.0, bounds);
+        assert!(h.distance(pos2(400.0, 2.0 * ROTATE_REACH)) < 1e-3, "{h:?}");
+        // As the item grows, the handle moves with its center, without a jump.
+        let mut last = h;
+        for half in [0.0, 5.0, 21.0, 30.0, 43.9, 44.0, 44.1, 100.0] {
+            let h = rotate_handle(top, pos2(400.0, half), 0.0, bounds);
+            assert!(h.distance(pos2(400.0, half)) >= ROTATE_REACH - 1e-3, "{half}: {h:?}");
+            assert!(h.y >= last.y - 1e-3 || half == 0.0, "{half}: {h:?} after {last:?}");
+            last = h;
+        }
+        // In a view too short for the handle past the center, a clamped handle still stays clear of
+        // it: the handle goes to the view's top instead of onto the center.
+        let short = Rect::from_min_size(pos2(0.0, 0.0), vec2(800.0, 37.0));
+        let h = rotate_handle(top, pos2(400.0, 30.0), 0.0, short);
+        assert!(short.contains(h) && h.distance(pos2(400.0, 30.0)) >= ROTATE_REACH - 1e-3, "{h:?}");
     }
 
     #[test]
