@@ -105,8 +105,10 @@ description in [docs/features.md](docs/features.md).
 4. **Frames on the GPU from capture to the encoder (partly done).** On Windows a Display capture
    source hands its pictures to the compositor's Direct3D 12 or Vulkan device in shared textures,
    and copies them through CPU memory when the compositor cannot open them
-   ([Hardware acceleration](docs/features.md#hardware-acceleration)). Window capture, cameras,
-   macOS and Linux, and the path from the compositor to the encoders are still to be built.
+   ([Hardware acceleration](docs/features.md#hardware-acceleration)). The compositor can copy its
+   NV12 program frames into shared textures that NVIDIA NVENC (built in) encodes from, on its own
+   adapter. Window capture, cameras, macOS and Linux, and connecting recordings and streams to the
+   shared textures are still to be built.
 5. **Application Audio panel (partly done).** The Application audio capture source records one
    application's audio on Windows 11 and Windows Server 2022
    ([Application audio capture](docs/features.md#application-audio-capture)). The Application

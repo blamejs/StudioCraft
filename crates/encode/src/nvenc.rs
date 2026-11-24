@@ -5,7 +5,13 @@
 //!   hardware encoder takes ([`crate::hardware`]).
 //! - The encoder writes no B-frames, so each packet's decoding time is its presentation time.
 //! - The stream's VUI says BT.709 at limited range, as StudioCraft's NV12 conversion writes it.
+//! - On Windows, [`Nvenc::session_on`] opens a session on an export ring's Direct3D 11 device.
+//!   It takes the compositor's frames as the ring's textures ([`VideoSession::encode_shared`]),
+//!   encodes each one once its copy has finished, and hands the texture back once its packet is
+//!   out. A session that cannot open there, or that fails on a frame, records
+//!   [`Fallback::NoEncoder`] on the ring, and the compositor sends its frames through memory again.
 
+use craft_gpu_interop::{ExportFrame, ExportRing, Fallback, Feed};
 use craft_hwenc_native::Codec as NativeCodec;
 use craft_hwenc_native::nvenc::{Config, Encoder as Core, Error};
 use studiocraft_model::{Settings, SettingsSchema};
@@ -55,7 +61,49 @@ impl Nvenc {
             e => SessionError::Other(self.error(e)),
         })?;
         LAST_TEST.opened(self.codec);
-        Ok(NvencSession { core, name: self.name() })
+        Ok(NvencSession { core, name: self.name(), shared: None })
+    }
+
+    /// Open a session for `params` that takes its frames from `ring` on the GPU. The ring must
+    /// have the size of `params`. When the session cannot open on the ring's device (no NVIDIA
+    /// encoder on that adapter, every session taken, another size, or a system other than
+    /// Windows), [`Fallback::NoEncoder`] is recorded on the ring and the error returned. The
+    /// session takes only frames on the GPU: when the ring records a fallback, the frames the
+    /// compositor reads back go to a new session from [`Nvenc::session`].
+    pub fn session_on(&self, params: &VideoParams, ring: &std::sync::Arc<ExportRing>) -> Result<NvencSession, PluginError> {
+        let opened = self.open_on(params, ring);
+        if opened.is_err() {
+            ring.refuse(Fallback::NoEncoder);
+        }
+        opened
+    }
+
+    fn open_on(&self, params: &VideoParams, ring: &std::sync::Arc<ExportRing>) -> Result<NvencSession, PluginError> {
+        if (ring.width(), ring.height()) != (params.width, params.height) {
+            return Err(PluginError::Unavailable(format!(
+                "{} was opened for {}x{} frames, and the compositor's are {}x{}",
+                self.name(),
+                params.width,
+                params.height,
+                ring.width(),
+                ring.height()
+            )));
+        }
+        let cfg = config(self.codec, params)?;
+        #[cfg(target_os = "windows")]
+        {
+            let Some(device) = ring.device() else {
+                return Err(PluginError::Unavailable(format!("{} has no graphics device to take frames from", self.name())));
+            };
+            let core = Core::on_d3d11(&cfg, &device).map_err(|e| self.error(e))?;
+            LAST_TEST.opened(self.codec);
+            Ok(NvencSession { core, name: self.name(), shared: Some(Shared { ring: std::sync::Arc::clone(ring), feed: Feed::default() }) })
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            let _ = cfg;
+            Err(PluginError::Unavailable(format!("{} takes frames on the GPU only on Windows", self.name())))
+        }
     }
 
     fn error(&self, e: Error) -> PluginError {
@@ -135,16 +183,59 @@ fn config(codec: NativeCodec, params: &VideoParams) -> Result<Config, PluginErro
     hardware::config(codec, params, "NVENC (built in)")
 }
 
+/// How long a flush of a session on the GPU waits for the copies of its last frames.
+const FLUSH_WAIT: std::time::Duration = std::time::Duration::from_millis(250);
+
 /// A running NVENC encoder.
 pub struct NvencSession {
     core: Core,
     name: &'static str,
+    /// The ring a session on the GPU takes its frames from, and the frames it holds. Declared
+    /// after `core`: it is dropped after the encoder.
+    shared: Option<Shared>,
+}
+
+// Only Windows opens sessions on the GPU.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+struct Shared {
+    ring: std::sync::Arc<ExportRing>,
+    feed: Feed,
 }
 
 impl NvencSession {
     /// The settings the session runs with.
     pub fn config(&self) -> &Config {
         self.core.config()
+    }
+
+    /// Encode the frames whose copies have finished, oldest first, and hand back the textures
+    /// whose packets came out. It returns at the first frame whose copy is still running.
+    #[cfg(target_os = "windows")]
+    fn encode_ready(&mut self, out: &mut Vec<Packet>) -> Result<(), PluginError> {
+        let Some(shared) = &mut self.shared else { return Ok(()) };
+        while let Some((frame, pts)) = shared.feed.take_ready() {
+            let Some(texture) = shared.ring.texture(frame.slot()) else {
+                shared.ring.refuse(Fallback::NoEncoder);
+                return Err(PluginError::Failed(format!("{} was given a frame outside its ring", self.name)));
+            };
+            let ps = match self.core.encode_texture(&texture, pts) {
+                Ok(ps) => ps,
+                Err(e) => {
+                    // The compositor reads its frames back through memory again.
+                    shared.ring.refuse(Fallback::NoEncoder);
+                    return Err(PluginError::Failed(format!("{} stopped: {e}", self.name)));
+                }
+            };
+            // The encoder gives one packet per picture, in the order it took them.
+            shared.feed.out(ps.len());
+            packets(out, ps);
+        }
+        Ok(())
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    fn encode_ready(&mut self, _out: &mut Vec<Packet>) -> Result<(), PluginError> {
+        Ok(())
     }
 }
 
@@ -154,15 +245,66 @@ impl VideoSession for NvencSession {
     }
 
     fn encode(&mut self, nv12: &[u8], pts: i64, out: &mut Vec<Packet>) -> Result<(), PluginError> {
+        if self.shared.is_some() {
+            // Once its ring records a fallback, the output opens a session with
+            // `Nvenc::session` for the frames the compositor reads back.
+            return Err(PluginError::Unavailable(format!("{} takes its frames on the GPU; frames in memory need a new session", self.name)));
+        }
         let ps = self.core.encode(nv12, pts).map_err(|e| PluginError::Failed(format!("{} stopped: {e}", self.name)))?;
         packets(out, ps);
         Ok(())
     }
 
+    fn encode_shared(&mut self, frame: ExportFrame, pts: i64, out: &mut Vec<Packet>) -> Result<(), PluginError> {
+        let Some(shared) = &mut self.shared else {
+            return Err(PluginError::Unavailable(format!("{} takes its frames from memory", self.name)));
+        };
+        if frame.ring().id() != shared.ring.id() {
+            return Err(PluginError::Failed(format!("{} was given a frame of another ring", self.name)));
+        }
+        // A frame beyond the ring's textures replaces the oldest one waiting, which is not encoded.
+        let _ = shared.feed.offer(frame, pts);
+        self.poll_shared(out)
+    }
+
+    fn poll_shared(&mut self, out: &mut Vec<Packet>) -> Result<(), PluginError> {
+        self.encode_ready(out)?;
+        if let Some(shared) = &self.shared
+            && shared.feed.stalled()
+        {
+            // The compositor reads its frames back through memory again.
+            shared.ring.refuse(Fallback::NoEncoder);
+            return Err(PluginError::Unavailable(format!("{} holds more pictures than the graphics ring has", self.name)));
+        }
+        Ok(())
+    }
+
     fn flush(&mut self, out: &mut Vec<Packet>) -> Result<(), PluginError> {
+        self.encode_ready(out)?;
+        // The last frames' copies are usually still running on the compositor's queue when the
+        // output stops: give them up to `FLUSH_WAIT` to finish so they are encoded.
+        let until = std::time::Instant::now() + FLUSH_WAIT;
+        while self.shared.as_ref().is_some_and(|s| s.feed.copy_running()) && std::time::Instant::now() < until {
+            std::thread::sleep(std::time::Duration::from_millis(1));
+            self.encode_ready(out)?;
+        }
         let ps = self.core.flush().map_err(|e| PluginError::Failed(format!("{} lost its last frames: {e}", self.name)))?;
         packets(out, ps);
+        // Frames whose copies did not finish in time are not encoded; the packets in `out` are
+        // still written.
+        let lost = self.shared.as_mut().map_or(0, |s| s.feed.drain());
+        if lost > 0 {
+            return Err(PluginError::Failed(format!("{} lost its last {lost} frames: their copies did not finish", self.name)));
+        }
         Ok(())
+    }
+}
+
+// `NvencSession::shared` is declared after `core`, so the textures go back only once the
+// encoder has been torn down and no longer reads them.
+impl Drop for Shared {
+    fn drop(&mut self) {
+        self.feed.drain();
     }
 }
 
@@ -220,6 +362,33 @@ mod tests {
         let recording = EncoderEnv { ffmpeg_encoders: None, builtin: true };
         let expected = if craft_hwenc_native::nvenc::available(NativeCodec::Hevc).is_ok() { Availability::Ready } else { Availability::NotRunHere };
         assert_eq!(Nvenc::HEVC.availability(&recording), expected);
+    }
+
+    #[test]
+    fn a_session_that_cannot_take_the_rings_frames_records_why_on_the_ring() {
+        let p = params(RateControl::Quality(23));
+        // A ring of another size.
+        let ring = ExportRing::detached(128, 72);
+        assert!(matches!(Nvenc::H264.session_on(&p, &ring), Err(PluginError::Unavailable(_))));
+        assert_eq!(ring.fallback(), Some(Fallback::NoEncoder));
+        // Settings the encoder cannot take.
+        let ring = ExportRing::detached(256, 144);
+        assert!(Nvenc::H264.session_on(&params(RateControl::Lossless), &ring).is_err());
+        assert_eq!(ring.fallback(), Some(Fallback::NoEncoder));
+        // A ring without a device: no session opens on it anywhere.
+        let ring = ExportRing::detached(256, 144);
+        assert!(matches!(Nvenc::HEVC.session_on(&p, &ring), Err(PluginError::Unavailable(_))));
+        assert_eq!(ring.fallback(), Some(Fallback::NoEncoder));
+    }
+
+    #[test]
+    fn a_session_on_frames_in_memory_refuses_frames_on_the_gpu() {
+        let Ok(mut s) = Nvenc::H264.session(&params(RateControl::Quality(23))) else { return };
+        let ring = ExportRing::detached(256, 144);
+        let frame = ExportFrame::new(ring, 0, 1).unwrap();
+        let mut out = Vec::new();
+        assert!(matches!(s.encode_shared(frame, 0, &mut out), Err(PluginError::Unavailable(_))));
+        assert!(s.poll_shared(&mut out).is_ok(), "nothing is kept to encode");
     }
 
     #[test]

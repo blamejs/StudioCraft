@@ -192,6 +192,13 @@ impl SlotTable {
         (0..SLOTS).filter(|&s| free(s)).min_by_key(|&s| self.ready[s])
     }
 
+    /// A texture to write, given the released fence's value: only a free one, the one written
+    /// longest ago, never one still being read however long ago it was handed out. `None` when
+    /// every texture is still being read.
+    pub fn pick_released(&self, released: u64) -> Option<usize> {
+        (0..SLOTS).filter(|&s| self.ready[s] <= released).min_by_key(|&s| self.ready[s])
+    }
+
     /// Record that texture `slot` is written at `now`; returns its new ready value, or `None`
     /// for a slot outside the ring or when the values ran out.
     pub fn fill(&mut self, slot: usize, now: Instant) -> Option<u64> {

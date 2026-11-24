@@ -112,6 +112,13 @@ graphics hardware, and the shared path has not been measured on Windows hardware
 The `write_texture` rows do not include the capture's own read-back of the desktop into CPU
 memory, which the shared path also does without.
 
+The same bench times how a 1080p and a 4K NV12 frame (an R8 and an RG8 plane) reach an encoder:
+`NV12 read-back`, copied into a buffer that is then mapped, and `NV12 export ring copy`, copied
+into an export ring's shared NV12 texture. Each iteration waits until the GPU has finished. The
+export ring case runs only on Windows, on Direct3D 12 or on Vulkan with
+`VK_KHR_external_memory_win32`; elsewhere the bench prints why it was skipped. Neither case has
+been measured on Windows hardware yet.
+
 ### Audio tracks
 
 Measured on 2026-11-17 on Linux with `cargo bench -p studiocraft-media --bench mixer`, in one run

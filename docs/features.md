@@ -651,6 +651,16 @@ A stream tests only the H.264 candidates in this list, and skips every other can
 
 The compositor converts the program to the encoders' frame format on the GPU.
 
+On Windows, the compositor can also copy each converted frame into NV12 textures shared with a
+Direct3D 11 device of its own graphics adapter, and NVIDIA NVENC (built in) can encode from those
+textures, so the frame is not read back into CPU memory. This needs a compositor on Direct3D 12, or
+on Vulkan with `VK_KHR_external_memory_win32` and Vulkan 1.2 timeline semaphores. The compositor
+reads the frames back through CPU memory instead when it draws with another backend, when its
+graphics driver does not report its adapter, when its Vulkan driver lacks either of those, when
+the shared textures cannot be opened or a copy fails, when NVENC cannot open a session on that
+adapter or fails on a frame, and when NVENC holds every shared texture without writing a packet.
+Recordings and streams do not use the shared textures yet; they read the frames back.
+
 On Windows, a Display capture source captures with desktop duplication into textures that the
 compositor opens on its Direct3D 12 or Vulkan device, so the picture is not copied through CPU
 memory. On Vulkan the graphics driver must support `VK_KHR_external_memory_win32` and Vulkan 1.2

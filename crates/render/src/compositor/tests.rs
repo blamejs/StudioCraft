@@ -703,6 +703,27 @@ fn an_output_larger_than_the_device_allows_is_an_error_not_a_converter() {
 }
 
 #[test]
+fn another_output_size_drops_the_gpu_queue_of_the_old_ring() {
+    let Some(mut c) = compositor(32, 16) else { return };
+    let target = |width, height| Some(EncodeTarget { width, height, sinks: Vec::new() });
+    let gpu_sink = Arc::new(Fifo::new(2));
+    c.set_encode(target(16, 8));
+    c.set_encode_gpu(Some(Arc::clone(&gpu_sink)));
+    c.set_encode(target(16, 8));
+    assert!(c.export_sink.is_some(), "the same size keeps the ring and its queue");
+    c.set_encode(target(32, 16));
+    assert!(c.export_sink.is_none(), "the session on the old ring cannot read the new one");
+    assert!(c.nv12.as_ref().is_some_and(|n| !n.exporting()));
+    // Stopping drops it too, and a queue given before the conversion starts is kept for it.
+    c.set_encode_gpu(Some(Arc::clone(&gpu_sink)));
+    c.set_encode(None);
+    assert!(c.export_sink.is_none());
+    c.set_encode_gpu(Some(gpu_sink));
+    c.set_encode(target(16, 8));
+    assert!(c.export_sink.is_some());
+}
+
+#[test]
 fn the_scope_copy_runs_beside_the_encoders_at_its_own_size() {
     let Some(mut c) = compositor(32, 16) else { return };
     let white = solid([255, 255, 255, 255], 16, 16);

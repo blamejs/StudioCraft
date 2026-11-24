@@ -47,6 +47,21 @@ fn a_texture_the_compositor_never_releases_is_taken_back() {
 }
 
 #[test]
+fn an_export_texture_is_written_again_only_once_it_is_released() {
+    let t0 = Instant::now();
+    let mut slots = SlotTable::default();
+    for _ in 0..SLOTS {
+        let s = slots.pick_released(0).unwrap();
+        slots.fill(s, t0).unwrap();
+    }
+    assert_eq!(slots.pick_released(0), None, "every texture is being encoded");
+    // However long the encoder holds them, the capture side's time limit does not apply.
+    assert!(slots.pick(0, t0 + RECLAIM * 10).is_some());
+    assert_eq!(slots.pick_released(0), None);
+    assert_eq!(slots.pick_released(2), slots.pick(2, t0), "frames 1 and 2 were read; the oldest goes first");
+}
+
+#[test]
 fn a_slot_outside_the_ring_is_refused() {
     let mut slots = SlotTable::default();
     assert_eq!(slots.fill(SLOTS, Instant::now()), None);
@@ -148,6 +163,179 @@ fn elsewhere_than_windows_the_capture_reports_the_fallback() {
     assert_eq!(Duplication::open("display").err(), Some(CaptureError::Fallback(Fallback::Unsupported)));
 }
 
+fn exported(ring: &std::sync::Arc<ExportRing>, slot: usize, ready: u64) -> ExportFrame {
+    ExportFrame::new(std::sync::Arc::clone(ring), slot, ready).unwrap()
+}
+
+#[test]
+fn an_export_needs_a_known_compositor_adapter_and_a_backend_that_shares_textures() {
+    let a = AdapterId::from_parts(7, 0);
+    let with = Backend::Vulkan { external_memory: true, timeline: true };
+    assert_eq!(check_export(Backend::Dx12, Some(a)), Ok(a), "the ring is made on the compositor's own adapter");
+    assert_eq!(check_export(with, Some(a)), Ok(a));
+    assert_eq!(check_export(Backend::Other, Some(a)), Err(Fallback::UnsupportedBackend));
+    assert_eq!(check_export(Backend::Other, None), Err(Fallback::UnsupportedBackend));
+    assert_eq!(check_export(Backend::Dx12, None), Err(Fallback::OtherAdapter), "a driver that does not report its adapter");
+    assert_eq!(check_export(with, None), Err(Fallback::OtherAdapter));
+    assert_eq!(check_export(Backend::Vulkan { external_memory: false, timeline: true }, Some(a)), Err(Fallback::MissingExtension));
+    assert_eq!(check_export(Backend::Vulkan { external_memory: true, timeline: false }, Some(a)), Err(Fallback::MissingExtension));
+}
+
+#[test]
+fn an_export_ring_needs_even_sides() {
+    let a = AdapterId::from_parts(7, 0);
+    for (w, h) in [(0, 2), (2, 0), (3, 2), (2, 3), (u32::MAX, 2)] {
+        assert_eq!(ExportRing::open(a, w, h).err(), Some(Fallback::ImportFailed), "{w} x {h}");
+    }
+    #[cfg(not(windows))]
+    assert_eq!(ExportRing::open(a, 64, 2).err(), Some(Fallback::Unsupported));
+}
+
+#[test]
+fn the_encoders_refusal_is_kept_and_frames_name_a_slot_of_the_ring() {
+    let ring = ExportRing::detached(4, 2);
+    assert_eq!(ring.fallback(), None);
+    ring.refuse(Fallback::NoEncoder);
+    ring.refuse(Fallback::ImportFailed);
+    assert_eq!(ring.fallback(), Some(Fallback::NoEncoder));
+    assert_eq!(Fallback::from_code(Fallback::NoEncoder.code()), Some(Fallback::NoEncoder));
+    assert!(ExportFrame::new(ring.clone(), SLOTS, 1).is_none());
+    assert!(ExportFrame::new(ring.clone(), usize::MAX, 1).is_none());
+    let f = exported(&ring, SLOTS - 1, 9);
+    assert_eq!((f.slot(), f.ready(), f.width(), f.height()), (SLOTS - 1, 9, 4, 2));
+    assert_ne!(ExportRing::detached(4, 2).id(), ring.id(), "every ring has its own id");
+}
+
+#[test]
+fn a_late_copy_leaves_the_frame_queued_and_the_encoder_goes_on() {
+    let ring = ExportRing::detached(64, 2);
+    let mut feed = Feed::default();
+    assert!(feed.take_ready().is_none(), "nothing offered");
+    assert!(!feed.copy_running(), "nothing waits for a copy");
+    assert!(feed.offer(exported(&ring, 0, 1), 100).is_none());
+    assert!(feed.offer(exported(&ring, 1, 2), 200).is_none());
+    // The compositor's copy is behind: each call returns at once and both frames stay queued.
+    for _ in 0..3 {
+        assert!(feed.take_ready().is_none());
+        assert_eq!((feed.waiting(), feed.reading()), (2, 0));
+        assert!(feed.copy_running(), "a flush waits for this copy");
+    }
+    // The first copy finished: only that frame is taken, in order.
+    ring.set_ready(1);
+    assert!(!feed.copy_running(), "the oldest frame can be encoded");
+    let (first, pts) = feed.take_ready().unwrap();
+    assert_eq!((first.ready(), pts), (1, 100));
+    assert!(feed.take_ready().is_none(), "the second copy is still running");
+    assert!(feed.copy_running());
+    assert_eq!((feed.waiting(), feed.reading()), (1, 1));
+    // The texture goes back only once the frame's packet is out.
+    assert_eq!(feed.out(0), 0);
+    assert_eq!(ring.released(), 0);
+    assert_eq!(feed.out(1), 1);
+    assert_eq!(ring.released(), 1);
+    ring.set_ready(2);
+    assert_eq!(feed.take_ready().map(|(f, p)| (f.ready(), p)), Some((2, 200)));
+    assert_eq!(feed.out(5), 1, "only frames being read are handed back");
+    assert_eq!(ring.released(), 2);
+    // A lower value does not take the released fence back.
+    ring.release(1);
+    assert_eq!(ring.released(), 2);
+}
+
+#[test]
+fn a_frame_beyond_the_rings_textures_drops_the_oldest_and_a_stopped_encoder_hands_back_finished_copies() {
+    let ring = ExportRing::detached(64, 2);
+    let mut feed = Feed::default();
+    for value in 1..=SLOTS as u64 {
+        assert!(feed.offer(exported(&ring, value as usize - 1, value), value as i64).is_none());
+    }
+    let dropped = feed.offer(exported(&ring, 0, SLOTS as u64 + 1), SLOTS as i64 + 1).unwrap();
+    assert_eq!(dropped.ready(), 1, "the oldest frame, whose texture was written again");
+    assert_eq!(ring.released(), 0, "a dropped frame does not hand back the frames before it");
+    assert_eq!(feed.waiting(), SLOTS);
+    ring.set_ready(2);
+    assert!(feed.take_ready().is_some());
+    // A frame being encoded is not handed back by a later frame that is dropped.
+    assert!(feed.offer(exported(&ring, 1, SLOTS as u64 + 2), SLOTS as i64 + 2).is_none());
+    assert_eq!(feed.offer(exported(&ring, 2, SLOTS as u64 + 3), SLOTS as i64 + 3).map(|f| f.ready()), Some(3));
+    assert_eq!(ring.released(), 0);
+    assert_eq!(feed.reading(), 1);
+    assert!(!feed.stalled());
+    // The copy of the newest frame is still running when the encoder stops.
+    ring.set_ready(SLOTS as u64 + 2);
+    assert_eq!(feed.drain(), SLOTS, "the frames not taken are not encoded");
+    assert_eq!((feed.waiting(), feed.reading()), (0, 0));
+    assert_eq!(ring.released(), SLOTS as u64 + 2, "every texture but the one still being written is handed back");
+    assert_eq!(feed.drain(), 0);
+    assert_eq!(ring.released(), SLOTS as u64 + 2);
+}
+
+#[test]
+fn an_encoder_that_holds_every_texture_with_no_packet_out_is_stalled() {
+    let ring = ExportRing::detached(64, 2);
+    let mut feed = Feed::default();
+    ring.set_ready(u64::MAX);
+    for value in 1..=SLOTS as u64 {
+        assert!(!feed.stalled(), "a texture is still free");
+        assert!(feed.offer(exported(&ring, value as usize - 1, value), value as i64).is_none());
+        assert!(feed.take_ready().is_some());
+    }
+    assert!(feed.stalled(), "the compositor has no texture left to export into");
+    assert_eq!(feed.out(1), 1);
+    assert!(!feed.stalled(), "a packet out frees a texture");
+}
+
+#[test]
+fn frames_the_queue_dropped_still_hold_their_textures_until_a_later_release() {
+    let ring = ExportRing::detached(64, 2);
+    let mut feed = Feed::default();
+    // The queue to the encoder dropped frame 1; frames 2 and 3 arrive and are being read.
+    ring.set_ready(3);
+    for value in 2..=3 {
+        assert!(feed.offer(exported(&ring, value as usize - 1, value), value as i64).is_none());
+        assert!(feed.take_ready().is_some());
+    }
+    assert!(feed.stalled(), "frame 1's texture is not handed back yet either");
+    assert_eq!(feed.out(1), 1);
+    assert!(!feed.stalled(), "frame 2's release covers frame 1");
+    // A frame still to be encoded is not a stall.
+    let mut feed = Feed::default();
+    for value in 4..=6 {
+        assert!(feed.offer(exported(&ring, value as usize - 4, value), value as i64).is_none());
+    }
+    ring.set_ready(5);
+    assert!(feed.take_ready().is_some() && feed.take_ready().is_some());
+    assert!(!feed.stalled(), "frame 6 still waits for its copy");
+}
+
+#[test]
+fn a_session_on_a_ring_read_before_counts_only_its_own_frames() {
+    let ring = ExportRing::detached(64, 2);
+    ring.set_ready(10);
+    ring.release(8);
+    let mut feed = Feed::default();
+    for value in 9..=10 {
+        assert!(feed.offer(exported(&ring, value as usize - 9, value), value as i64).is_none());
+        assert!(feed.take_ready().is_some());
+    }
+    assert!(!feed.stalled(), "one texture is still free");
+}
+
+#[test]
+fn packets_hand_back_frames_by_count_even_when_two_frames_share_a_time() {
+    let ring = ExportRing::detached(64, 2);
+    let mut feed = Feed::default();
+    ring.set_ready(u64::MAX);
+    for value in 1..=2 {
+        assert!(feed.offer(exported(&ring, value as usize - 1, value), 7).is_none());
+        assert!(feed.take_ready().is_some());
+    }
+    assert_eq!(feed.out(1), 1, "the first packet is out; the second frame is still being read");
+    assert_eq!((ring.released(), feed.reading()), (1, 1));
+    assert_eq!(feed.out(1), 1);
+    assert_eq!((ring.released(), feed.reading()), (2, 0));
+}
+
 #[cfg(feature = "wgpu")]
 mod gpu {
     use super::*;
@@ -247,6 +435,87 @@ mod gpu {
         assert_eq!(importer.draw(&device, &queue, format, |_, _| target()), Err(reason));
         assert_eq!(importer.draw(&device, &queue, format, |_, _| target()), Ok(Drawn::Idle));
         assert_eq!(asked.get(), 0, "no target is made for a frame that is not drawn");
+    }
+
+    #[test]
+    fn the_copy_that_readies_the_planes_uses_their_own_formats() {
+        let Some((device, queue)) = device() else { return };
+        let plane = |format, w, h| {
+            device.create_texture(&wgpu::TextureDescriptor {
+                label: None,
+                size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format,
+                usage: wgpu::TextureUsages::COPY_SRC | wgpu::TextureUsages::RENDER_ATTACHMENT,
+                view_formats: &[],
+            })
+        };
+        // The converter's NV12 planes.
+        let planes = [plane(wgpu::TextureFormat::R8Uint, 64, 2), plane(wgpu::TextureFormat::Rg8Uint, 32, 1)];
+        let formats = |s: &[wgpu::Texture]| s.iter().map(wgpu::Texture::format).collect::<Vec<_>>();
+        let scratch = crate::export::scratch_for(&device, &planes, None);
+        assert_eq!(formats(&scratch), formats(&planes));
+        let validation = device.push_error_scope(wgpu::ErrorFilter::Validation);
+        let mut encoder = device.create_command_encoder(&Default::default());
+        for (p, s) in planes.iter().zip(&scratch) {
+            encoder.copy_texture_to_texture(p.as_image_copy(), s.as_image_copy(), wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 });
+        }
+        queue.submit([encoder.finish()]);
+        assert!(pollster::block_on(validation.pop()).is_none(), "each copy is valid");
+        // Planes of other formats get new scratch textures; the same formats keep them.
+        let unorm = [plane(wgpu::TextureFormat::R8Unorm, 64, 2), plane(wgpu::TextureFormat::Rg8Unorm, 32, 1)];
+        let scratch = crate::export::scratch_for(&device, &unorm, Some(scratch));
+        assert_eq!(formats(&scratch), formats(&unorm));
+        assert_eq!(formats(&crate::export::scratch_for(&device, &unorm, Some(scratch))), formats(&unorm));
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn elsewhere_than_windows_an_export_reports_the_fallback() {
+        let Some((device, queue)) = device() else { return };
+        assert_eq!(device_backend(&device), (Backend::Other, None));
+        assert_eq!(Exporter::open(&device, &queue, 64, 2).err(), Some(Fallback::Unsupported));
+        assert_eq!(Exporter::open(&device, &queue, 63, 2).err(), Some(Fallback::ImportFailed));
+    }
+
+    /// On a Windows device that can share textures, the export ring opens and a frame's planes are
+    /// copied into a free texture; anywhere else the reason comes back.
+    #[cfg(windows)]
+    #[test]
+    fn a_windows_compositor_exports_its_frames_or_says_why_not() {
+        let Some((device, queue)) = device() else { return };
+        let (backend, adapter) = device_backend(&device);
+        let mut exporter = match Exporter::open(&device, &queue, 64, 2) {
+            Ok(e) => e,
+            Err(reason) => {
+                assert!(check_export(backend, adapter).is_err() || matches!(reason, Fallback::Unsupported | Fallback::ImportFailed));
+                return;
+            }
+        };
+        let plane = |format, w, h| {
+            device.create_texture(&wgpu::TextureDescriptor {
+                label: None,
+                size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format,
+                usage: wgpu::TextureUsages::COPY_SRC | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            })
+        };
+        let planes = [plane(wgpu::TextureFormat::R8Unorm, 64, 2), plane(wgpu::TextureFormat::Rg8Unorm, 32, 1)];
+        let mut encoder = device.create_command_encoder(&Default::default());
+        exporter.prepare(&device, &mut encoder, &planes);
+        let (commands, ticket) = exporter.copy(&device, &planes, Instant::now()).unwrap().unwrap();
+        queue.submit([encoder.finish(), commands]);
+        let frame = exporter.submitted(ticket).unwrap();
+        assert_eq!((frame.width(), frame.height(), frame.ready()), (64, 2, 1));
+        // The encoder refused the session: later frames come back with its reason.
+        exporter.ring().refuse(Fallback::NoEncoder);
+        assert_eq!(exporter.copy(&device, &planes, Instant::now()).err(), Some(Fallback::NoEncoder));
     }
 
     /// A device on wgpu's Vulkan backend, opened with those of `features` the adapter has.

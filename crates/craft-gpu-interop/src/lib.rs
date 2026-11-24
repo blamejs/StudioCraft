@@ -23,6 +23,17 @@
 //! system without shared fences. Elsewhere than Windows the crate builds,
 //! [`Duplication::open`] returns [`Fallback::Unsupported`], and an import reports the same.
 //!
+//! The other direction carries the compositor's program frames to a hardware encoder. An
+//! [`ExportRing`] holds three NV12 textures and two fences on a Direct3D 11 device of the
+//! compositor's adapter, the device the encoder opens its session on, shared through NT handles.
+//! With the `wgpu` feature, an [`Exporter`] opens them on the compositor's Direct3D 12 or Vulkan
+//! device, copies each frame's luma and chroma planes into a free texture, and sets the ready
+//! fence after the copy. The encoder side keeps its frames in a [`Feed`], takes each one once its
+//! copy has finished, and sets the released fence once the frame's packet is out. Neither side
+//! waits on the other. [`check_export`] gives the reason an export cannot run, and an encoder that
+//! cannot open a session on the adapter records [`Fallback::NoEncoder`] on the ring; the
+//! compositor then reads its frames back through CPU memory.
+//!
 //! The system calls are in private modules with `unsafe` allowed; every item this crate exports
 //! is safe.
 
@@ -30,6 +41,7 @@
 
 #[cfg(windows)]
 mod duplication;
+mod export;
 mod fallback;
 #[cfg(feature = "wgpu")]
 mod import;
@@ -48,7 +60,10 @@ mod vulkan_ffi;
 #[cfg(test)]
 mod tests;
 
-pub use fallback::{Backend, Fallback, check_import};
+pub use export::{ExportFrame, ExportRing, Feed};
+#[cfg(feature = "wgpu")]
+pub use export::{Exporter, Ticket, device_backend};
+pub use fallback::{Backend, Fallback, check_export, check_import};
 #[cfg(feature = "wgpu")]
 pub use import::{Drawn, Importer, Opaque};
 pub use ring::{AdapterId, Handoff, RECLAIM, SLOTS, SharedFrame, SharedRing, SlotTable};

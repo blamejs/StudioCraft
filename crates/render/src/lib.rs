@@ -9,7 +9,9 @@
 //!
 //! Frames stay on the GPU from upload to the canvas. The interface shows the canvas textures
 //! directly; only encoders read pixels back, through a ring of buffers that never makes the
-//! compositor wait for the GPU.
+//! compositor wait for the GPU. A hardware encoder on the compositor's adapter can take the
+//! program frames on the GPU instead ([`RenderShared::encode_gpu`], [`GpuFrame`]); when that
+//! cannot run, [`Compositor::export_fallback`] gives the reason and the read-back carries them.
 //!
 //! [`Gpu::open`] chooses the adapter with `craft-gpu-device` (re-exported as [`device`]): the
 //! user's adapter preference, fixes for drivers that crash and a software fallback. Every device
@@ -28,7 +30,7 @@ use craft_gpu_device::{Candidate, DeviceHealth, Fault};
 use craft_gpu_device::{Notice, OpenError, Preference, Request};
 
 pub use compositor::{CAPTURE_SLOTS, CanvasViews, Capture, CaptureRequest, Compositor, RenderShared, Ring, ThumbnailViews, View, unpremultiply};
-pub use nv12::EncodeTarget;
+pub use nv12::{EncodeTarget, GpuFrame};
 pub use plan::{
     ItemDesc, MAX_THUMBNAIL_FPS, MAX_THUMBNAIL_SIDE, MAX_THUMBNAILS, MIN_THUMBNAIL_SIDE, Plan, SceneDesc, ThumbnailRequest, TransitionDesc,
 };

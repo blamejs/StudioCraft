@@ -21,10 +21,13 @@ pub enum Fallback {
     /// The compositor's Vulkan device was opened without `VK_KHR_external_memory_win32`, which
     /// opens shared Windows textures, or has no timeline semaphores (Vulkan 1.2).
     MissingExtension,
+    /// The hardware encoder cannot open a session on the compositor's graphics adapter, so the
+    /// program frames it encodes go through CPU memory.
+    NoEncoder,
 }
 
 impl Fallback {
-    pub(crate) const ALL: [Fallback; 7] = [
+    pub(crate) const ALL: [Fallback; 8] = [
         Fallback::UnsupportedBackend,
         Fallback::OtherAdapter,
         Fallback::ImportFailed,
@@ -32,6 +35,7 @@ impl Fallback {
         Fallback::Format,
         Fallback::Rotated,
         Fallback::MissingExtension,
+        Fallback::NoEncoder,
     ];
 
     pub(crate) fn code(self) -> u8 {
@@ -43,6 +47,7 @@ impl Fallback {
             Fallback::Format => 5,
             Fallback::Rotated => 6,
             Fallback::MissingExtension => 7,
+            Fallback::NoEncoder => 8,
         }
     }
 
@@ -61,6 +66,7 @@ impl std::fmt::Display for Fallback {
             Fallback::Format => "the desktop is not in 8-bit color",
             Fallback::Rotated => "the display is rotated",
             Fallback::MissingExtension => "the compositor's Vulkan device cannot open shared Windows textures",
+            Fallback::NoEncoder => "the hardware encoder cannot run on the compositor's graphics adapter",
         })
     }
 }
@@ -95,4 +101,14 @@ pub fn check_import(backend: Backend, capture: AdapterId, compositor: Option<Ada
         return Err(Fallback::MissingExtension);
     }
     Ok(())
+}
+
+/// The adapter an [`crate::ExportRing`] for a compositor on `backend` and `compositor` is made
+/// on: the compositor's own. The backend is checked first, then whether the compositor's adapter
+/// is known, then the Vulkan device's extension and semaphores, as for an import.
+pub fn check_export(backend: Backend, compositor: Option<AdapterId>) -> Result<AdapterId, Fallback> {
+    let Some(adapter) = compositor else {
+        return Err(if backend == Backend::Other { Fallback::UnsupportedBackend } else { Fallback::OtherAdapter });
+    };
+    check_import(backend, adapter, Some(adapter)).map(|()| adapter)
 }

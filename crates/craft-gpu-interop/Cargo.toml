@@ -1,6 +1,6 @@
 [package]
 name = "craft-gpu-interop"
-description = "Captured frames shared on the GPU: Windows desktop duplication into a ring of shared Direct3D 11 textures with shared fences, imported into a wgpu Direct3D 12 or Vulkan device, with the reasons a caller falls back to a CPU copy"
+description = "Captured frames shared on the GPU: Windows desktop duplication into a ring of shared Direct3D 11 textures with shared fences, imported into a wgpu Direct3D 12 or Vulkan device, program frames exported from that device to a hardware encoder in shared NV12 textures, with the reasons a caller falls back to a CPU copy"
 version = "0.1.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
@@ -27,6 +27,7 @@ undocumented_unsafe_blocks = "deny"
 
 [features]
 # The importer: shared textures into a wgpu device, and the opaque copy into the caller's texture.
+# The exporter: a wgpu device's program frames copied into an export ring.
 wgpu = ["dep:wgpu", "dep:ash"]
 
 [dependencies]
