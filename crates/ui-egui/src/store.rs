@@ -342,13 +342,14 @@ impl Docks {
 
     /// Whether `other` shows the same docks as these, in the same regions, with the same ones in
     /// windows of their own, and draws the same docks in the same order in every region, with the
-    /// columns collapsed into the strip and without. Hidden docks' places in the order, sizes and
-    /// the two groups of the menu row are not compared.
+    /// columns collapsed into the strip and without. Hidden docks' places in the order, regions and
+    /// window flags, sizes and the two groups of the menu row are not compared.
     pub fn arranged_like(&self, other: &Docks) -> bool {
         Region::ALL.into_iter().all(|r| [false, true].into_iter().all(|c| self.drawn_in(r, c).eq(other.drawn_in(r, c))))
-            && (0..DOCK_COUNT)
-                .filter_map(|i| u8::try_from(i).ok())
-                .all(|i| self.is_shown(i) == other.is_shown(i) && self.is_floating(i) == other.is_floating(i) && self.region(i) == other.region(i))
+            && (0..DOCK_COUNT).filter_map(|i| u8::try_from(i).ok()).all(|i| {
+                self.is_shown(i) == other.is_shown(i)
+                    && (!self.is_shown(i) || (self.is_floating(i) == other.is_floating(i) && self.region(i) == other.region(i)))
+            })
     }
 
     /// The region dock `i` sits in while it is docked.
@@ -1582,6 +1583,22 @@ mod tests {
         assert!(live.arranged_like(&with([0, 1, 3, 2, 4])), "a hidden dock's place in the order is not drawn");
         assert!(!live.arranged_like(&with([0, 2, 1, 3, 4])), "Sources and the Audio Mixer swapped in the left column");
         assert!(!live.arranged_like(&with([1, 0, 2, 3, 4])), "the collapsed strip draws Sources before Scenes");
+    }
+
+    #[test]
+    fn a_hidden_docks_saved_region_and_window_do_not_change_the_arrangement() {
+        let live = built_in_layout("Live").map(|l| l.docks).unwrap_or_default();
+        assert!(!live.app_audio, "Application Audio is hidden in Live");
+        let mut moved = live;
+        assert!(moved.set_region(3, Region::Right));
+        moved.floating[3] = true;
+        assert!(live.arranged_like(&moved), "Application Audio is hidden, so where it would go is not drawn");
+        let mut shown = moved;
+        shown.app_audio = true;
+        assert!(!live.arranged_like(&shown), "a dock that is shown in one and hidden in the other");
+        let mut floating = live;
+        floating.floating[1] = true;
+        assert!(!live.arranged_like(&floating), "Sources in a window of its own");
     }
 
     #[test]
