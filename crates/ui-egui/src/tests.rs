@@ -2267,6 +2267,14 @@ fn set_up_puts_studio_mode_back_as_it_was_before_live() {
     run(&mut a, &ctx, "view.side", json!({"side": "live"})).unwrap();
     run(&mut a, &ctx, "view.side", json!({"side": "set_up"})).unwrap();
     assert!(!on(&a), "Studio Mode was off before the first Live");
+    // Off before Live, Set up put in force by Docks › Layouts with Studio Mode on, and Live chosen
+    // from it: Set up keeps the mode Live was chosen in.
+    run(&mut a, &ctx, "view.side", json!({"side": "live"})).unwrap();
+    run(&mut a, &ctx, "dock.layout_apply", json!({"name": "Set up"})).unwrap();
+    assert!(on(&a));
+    run(&mut a, &ctx, "view.side", json!({"side": "live"})).unwrap();
+    run(&mut a, &ctx, "view.side", json!({"side": "set_up"})).unwrap();
+    assert!(on(&a), "Studio Mode was on when Live was chosen from Set up");
     frame(&mut a, &ctx, vec![]);
 }
 

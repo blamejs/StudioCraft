@@ -1672,7 +1672,8 @@ impl StudioApp {
     fn set_side(&mut self, side: output_bar::Side) -> Result<Value, Msg> {
         let layout = store::built_in_layout(side.layout()).ok_or_else(|| tmsg!("there is no dock layout named `{name}`", name = side.layout()))?;
         let studio_mode = self.studio.engine().studio_mode();
-        if self.shown_side() == Some(side) {
+        let shown = self.shown_side();
+        if shown == Some(side) {
             if side == output_bar::Side::SetUp {
                 self.live_from = None;
             }
@@ -1689,9 +1690,10 @@ impl StudioApp {
         }
         match side {
             // Live chosen again keeps the mode from before the first Live while Studio Mode stayed
-            // on, and takes off when it was turned off since.
+            // on, and takes off when it was turned off since. Live chosen while Set up is in force
+            // takes the mode it is chosen in.
             output_bar::Side::Live => {
-                if !studio_mode || self.live_from.is_none() {
+                if !studio_mode || self.live_from.is_none() || shown == Some(output_bar::Side::SetUp) {
                     self.live_from = Some(studio_mode);
                 }
             }

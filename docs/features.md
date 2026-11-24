@@ -723,7 +723,8 @@ menu bar's overflow menu. In a right-to-left interface the row is mirrored. Dock
 Live applies the built-in Live layout ([Dock layouts](#dock-layouts)) and turns studio mode on.
 Set up applies the built-in Set up layout and, after Live, turns studio mode back on or off as it
 was when Live was chosen. When studio mode was turned off on Live and Live is chosen again, Set up
-leaves it off. Opening another scene collection turns studio mode off, and Set up then leaves it
+leaves it off. When Live is chosen while Set up is selected, Set up later puts studio mode back as
+it was at that choice. Opening another scene collection turns studio mode off, and Set up then leaves it
 off. The switch keeps Docks › Output Controls and Docks › Transition Controls
 as they are. A group that is shown stays on the row on both sides, and a hidden group stays hidden. A side
 shows as selected while the docks are shown, placed and undocked as its layout has them, and for
