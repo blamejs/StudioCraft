@@ -626,7 +626,9 @@ background, the countdown and its text, what happens at zero, the text at zero, 
 sits, its size as a share of the canvas height, its font, color and outline, and whether the
 program audio is muted. The defaults are listed in
 [MECHANICS.md](../MECHANICS.md#recording-and-streaming). Changes apply from the next pause.
-`pause.start` can give a pause its own picture or video, countdown and choice at zero.
+`pause.start` can give a pause its own picture or video and how it is sized, background, countdown
+and its text, choice at zero and text at zero, text position and size, and whether the program
+audio is muted. The profile keeps its settings.
 
 While the program audio is muted, every source the program hears fades out with the transition and
 fades back in when the program resumes. Monitoring and each source's own audio track keep the
