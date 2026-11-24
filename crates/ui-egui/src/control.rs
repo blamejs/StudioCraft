@@ -441,6 +441,7 @@ impl StudioApp {
             "output_bar": self.output_bar.json(),
             "preview": preview,
             "studio_mode": self.studio.engine().studio_mode(),
+            "side": self.shown_side().map(crate::output_bar::Side::name),
             "menus": menus,
             "selected_item": self.selected,
             "notices": self.notices.iter().map(|(n, _)| json!({"text": n.msg.english(), "error": n.error})).collect::<Vec<_>>(),

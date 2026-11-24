@@ -714,11 +714,23 @@ has a contrast of at least 3:1 against the track.
 ### Menu row and output controls
 
 The menu row is 32 points tall. It holds the menu titles at the start of the row, and at the end
-an Edit and Studio switch, the transition picker with its duration, Record and Go Live with
+a Set up and Live switch, the transition picker with its duration, Record and Go Live with
 their timers, and the Pause button with its menu arrow ([Pause screen](#pause-screen)). When the
 row is too narrow, the transition picker moves behind an icon button first, then Record, Go Live and
 Pause leave out their labels and keep the glyph and timer, and last the menu titles move into the
 menu bar's overflow menu. In a right-to-left interface the row is mirrored. Docks › Output Controls and Docks › Transition Controls show and hide the two groups.
+
+Live applies the built-in Live layout ([Dock layouts](#dock-layouts)) and turns studio mode on.
+Set up applies the built-in Set up layout and, after Live, turns studio mode back on or off as it
+was when Live was chosen. When studio mode was turned off on Live and Live is chosen again, Set up
+leaves it off. Opening another scene collection turns studio mode off, and Set up then leaves it
+off. The switch keeps Docks › Output Controls and Docks › Transition Controls
+as they are, so the transition picker and the Pause button stay on the row on both sides. A side
+shows as selected while the docks are shown, placed and undocked as its layout has them, and for
+Live while studio mode is on; dock sizes do not count. Otherwise neither side is selected, as on
+the first start with every dock under the preview, and a click on either one applies it. Starting
+or stopping a stream or a recording does not change the side or the layout. Screen readers
+announce the switch as a group named Layout.
 
 ### Docks
 

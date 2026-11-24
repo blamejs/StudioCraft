@@ -334,6 +334,15 @@ impl Docks {
         self.is_shown(i) && !self.is_floating(i)
     }
 
+    /// Whether `other` shows the same docks as these, in the same order and regions, with the same
+    /// ones in windows of their own. Sizes and the two groups of the menu row are not compared.
+    pub fn arranged_like(&self, other: &Docks) -> bool {
+        self.order() == other.order()
+            && (0..DOCK_COUNT)
+                .filter_map(|i| u8::try_from(i).ok())
+                .all(|i| self.is_shown(i) == other.is_shown(i) && self.is_floating(i) == other.is_floating(i) && self.region(i) == other.region(i))
+    }
+
     /// The region dock `i` sits in while it is docked.
     pub fn region(&self, i: u8) -> Region {
         self.region.get(usize::from(i)).copied().map_or(Region::Bottom, Region::from_code)

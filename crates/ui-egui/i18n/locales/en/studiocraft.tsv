@@ -964,3 +964,6 @@ menu	Transform	Transform
 @msg	the countdown text needs {time} where the remaining time goes	the countdown text needs {time} where the remaining time goes
 @msg	the countdown text holds {time} more than once	the countdown text holds {time} more than once
 @msg	the countdown text is longer than 200 characters	the countdown text is longer than 200 characters
+	Set Up or Live	Set Up or Live
+	Layout	Layout
+@msg	`view.side`: `side` is `set_up` or `live`, not `{side}`	`view.side`: `side` is `set_up` or `live`, not `{side}`

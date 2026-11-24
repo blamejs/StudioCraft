@@ -156,6 +156,7 @@ The exit confirmation takes no `text`. When neither dialog is open the request i
 | `output_bar` | The menu row: its `rect`; `transitions`, where the transition picker is (`inline`, `overflow` behind an icon button, or `hidden` by Docks › Transition Controls); `compact`, whether Record and Go Live leave out their labels; and `parts`, each drawn part with its `name` (`menus`, `mode`, `transition`, `duration`, `transition_settings`, `transition_overflow`, `record`, `stream`) and `rect`, from left to right. |
 | `preview` | The editable view's `rect` and `scale` (points per canvas pixel), or `null` before it is drawn. In studio mode this is the preview; otherwise it is the program. |
 | `studio_mode` | Whether studio mode is on. |
+| `side` | The side of the Set up and Live switch that is in force, `set_up` or `live`, or `null`. A side is in force while the docks are shown, placed and undocked as its built-in layout has them (sizes do not count), and for `live` while studio mode is on. |
 | `menus` | The menu titles. |
 | `selected_item` | The selected item's id, or `null`. |
 | `notices` | The notices on screen and those posted with the next frame, oldest first, each `{"text", "error"}`. A notice's card stays 8 seconds and an error's card stays 24 seconds. A card stays while the pointer or the focus is on it, and its time starts over when they leave. At most three cards show at once, and a new card replaces the oldest. |
@@ -655,6 +656,17 @@ error.
 return `{"applied", "built_in"}` or `{"removed"}`; a name no layout has is an error.
 `dock.layout_apply` also applies the built-in layouts `Set up`, `Live`, `Review` and `Classic`.
 Saving or removing a layout under a built-in layout's name is an error.
+
+### `view.side`
+
+`view.side` takes `{"side"}`, `set_up` or `live`, and runs the Set up and Live switch on the menu
+row. `live` applies the built-in `Live` layout and turns studio mode on; `set_up` applies the
+built-in `Set up` layout and, after `live`, turns studio mode back on or off as it was when `live`
+was chosen, unless another scene collection was opened since, which turns studio mode off. Both
+keep Docks › Output Controls and Docks › Transition Controls as they are, and keep
+the dock sizes when the docks are already placed as the layout places them. It returns
+`{"side", "changed", "studio_mode"}`. Choosing the side that is in force (`side` in `ui.inspect`)
+returns `"changed": false` and changes nothing. Any other `side` is an error.
 
 ### `golive.check`
 

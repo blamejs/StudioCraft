@@ -39,6 +39,7 @@ pub const UI_COMMANDS: &[(&str, &str)] = &[
     ("view.status_bar", "Status Bar"),
     ("view.fullscreen", "Full-Screen Interface"),
     ("view.lock_preview", "Lock Preview"),
+    ("view.side", "Set Up or Live"),
     ("view.streaming", "Streaming"),
     ("pause.settings", "Pause Screen Settings…"),
     ("stream.destinations", "List Stream Destinations"),
@@ -183,6 +184,9 @@ pub fn ui_params(id: &str) -> &'static str {
         "app.language" => "lang: string (auto, or the code of a built-in language)",
         "collection.import" | "collection.export" => "path?: string",
         "scopes.kind" => "kind: string (waveform, parade, histogram, vectorscopeYuv or vectorscopeHls)",
+        "view.side" => {
+            "side: string (live applies the Live layout and turns studio mode on; set_up applies the Set up layout and puts studio mode back as it was before live)"
+        }
         "stream.destination_add" => {
             "service?: string (a streaming service id, or empty for a custom server), name?: string, server?: string, enabled?: boolean, key?: string (profile, held or none), held_name?: string (with key held)"
         }

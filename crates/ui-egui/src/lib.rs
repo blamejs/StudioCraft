@@ -291,6 +291,9 @@ pub struct StudioApp {
     profiles: Vec<String>,
     changed_at: Option<(u64, Instant)>,
     fullscreen: bool,
+    /// Whether Studio Mode was on when Live was chosen with the switch (`view.side`), until Set up
+    /// is chosen and puts it back; `None` when Live has not been chosen since.
+    live_from: Option<bool>,
     frames: u64,
     /// Where the editable view was drawn last: its rectangle and screen points per canvas pixel.
     last_view: Option<(egui::Rect, f32)>,
@@ -437,6 +440,7 @@ impl StudioApp {
             profiles: Vec::new(),
             changed_at: None,
             fullscreen: false,
+            live_from: None,
             frames: 0,
             last_view: None,
             dock_rects: Vec::with_capacity(control::DOCK_NAMES.len()),
@@ -1363,6 +1367,12 @@ impl StudioApp {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(self.fullscreen));
                 return Ok(json!({"on": self.fullscreen}));
             }
+            "view.side" => {
+                let name = Self::param_str(cmd, "side")?;
+                let side =
+                    output_bar::Side::parse(name).ok_or_else(|| tmsg!("`view.side`: `side` is `set_up` or `live`, not `{side}`", side = name))?;
+                return self.set_side(side);
+            }
             "dock.scenes" => return Ok(self.toggle_pref(|p| &mut p.docks.scenes)),
             "dock.sources" => return Ok(self.toggle_pref(|p| &mut p.docks.sources)),
             "dock.mixer" => return Ok(self.toggle_pref(|p| &mut p.docks.mixer)),
@@ -1643,6 +1653,56 @@ impl StudioApp {
         self.dock_window_gen = self.dock_window_gen.wrapping_add(1);
     }
 
+    /// The side of the Set up and Live switch that is in force: the docks are arranged as its
+    /// built-in layout arranges them ([`store::Docks::arranged_like`]), and for Live, Studio Mode
+    /// is on. `None` while the docks are arranged otherwise, or Studio Mode was turned off on Live.
+    pub(crate) fn shown_side(&self) -> Option<output_bar::Side> {
+        let docks = self.store.prefs().docks;
+        let studio_mode = self.studio.engine().studio_mode();
+        output_bar::Side::ALL.into_iter().find(|s| {
+            (*s == output_bar::Side::SetUp || studio_mode) && store::built_in_layout(s.layout()).is_some_and(|l| l.docks.arranged_like(&docks))
+        })
+    }
+
+    /// Switch to `side`. Live applies the Live layout and turns Studio Mode on; Set up applies the
+    /// Set up layout and, after Live, puts Studio Mode back to how it was when Live was chosen.
+    /// Both keep the dock sizes when the docks are already arranged that way, and keep Docks ›
+    /// Output Controls and Docks › Transition Controls as they are. Choosing the side that is in
+    /// force ([`Self::shown_side`]) changes nothing, and Set up then forgets the mode Live kept.
+    fn set_side(&mut self, side: output_bar::Side) -> Result<Value, Msg> {
+        let layout = store::built_in_layout(side.layout()).ok_or_else(|| tmsg!("there is no dock layout named `{name}`", name = side.layout()))?;
+        let studio_mode = self.studio.engine().studio_mode();
+        if self.shown_side() == Some(side) {
+            if side == output_bar::Side::SetUp {
+                self.live_from = None;
+            }
+            return Ok(json!({"side": side.name(), "changed": false, "studio_mode": studio_mode}));
+        }
+        let want = match side {
+            output_bar::Side::Live => true,
+            output_bar::Side::SetUp => self.live_from.unwrap_or(studio_mode),
+        };
+        let now = self.store.prefs().docks;
+        let arranged = layout.docks.arranged_like(&now);
+        if want != studio_mode {
+            self.studio.run("studio.toggle", &json!({})).map_err(|e| e.to_string())?;
+        }
+        match side {
+            // Live chosen again keeps the mode from before the first Live while Studio Mode stayed
+            // on, and takes off when it was turned off since.
+            output_bar::Side::Live => {
+                if !studio_mode || self.live_from.is_none() {
+                    self.live_from = Some(studio_mode);
+                }
+            }
+            output_bar::Side::SetUp => self.live_from = None,
+        }
+        if !arranged {
+            self.set_docks(store::Docks { controls: now.controls, transitions: now.transitions, ..layout.docks });
+        }
+        Ok(json!({"side": side.name(), "changed": true, "studio_mode": want}))
+    }
+
     /// Save the current docks as the layout `name`; whether a layout with that name was replaced.
     fn save_dock_layout(&mut self, name: &str) -> Result<bool, Msg> {
         let mut result = Ok(false);
@@ -1774,6 +1834,8 @@ impl StudioApp {
         self.studio.load_collection(c);
         // The new collection draws no scene pictures, so the grid asks for its tiles again.
         self.asked_pictures = None;
+        // The new collection opens with Studio Mode off, so Set up has no earlier mode to restore.
+        self.live_from = None;
         self.studio.mark_saved();
         self.collection_on_disk = true;
         self.selected = None;
