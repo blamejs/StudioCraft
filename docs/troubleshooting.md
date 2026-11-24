@@ -172,8 +172,11 @@ and the rest of the app keeps running.
 
 **"the camera is already open in another format".** Another camera source opened the same camera
 first, in a different format. The camera stays in that format while any source shows it, and this
-source shows the picture in that format. Set this source to the format the camera is open in, or
-remove every source of that camera and add them again with the format you want.
+source shows the picture in that format. Set this source to the format the camera is open in. To
+change the format for every source of that camera, remove them all, then add one source, set its
+format in Properties and wait for its picture before you add the others. A new source opens with
+the default settings, so two sources added before either is set each keep the other in the old
+format.
 
 **"the camera is still closing".** A capture of the same camera is still ending. The source tries
 again on its own.
