@@ -14,9 +14,9 @@ use crate::i18n::Msg;
 use crate::{APP_NAME, NAME_FIELD, Naming, StudioApp, commands};
 
 /// The docks in the order they are laid out, by the names `ui.inspect` reports.
-pub(crate) const DOCK_NAMES: [&str; crate::store::DOCK_COUNT] = ["scenes", "sources", "mixer", "app_audio"];
+pub(crate) const DOCK_NAMES: [&str; crate::store::DOCK_COUNT] = ["scenes", "sources", "mixer", "app_audio", "health"];
 /// The docks' titles in English, in the same order.
-pub(crate) const DOCK_TITLES: [&str; crate::store::DOCK_COUNT] = ["Scenes", "Sources", "Audio Mixer", "Application Audio"];
+pub(crate) const DOCK_TITLES: [&str; crate::store::DOCK_COUNT] = ["Scenes", "Sources", "Audio Mixer", "Application Audio", "Health"];
 
 /// Longest menu path accepted, in bytes.
 pub const MAX_MENU_PATH: usize = 1024;
@@ -103,6 +103,7 @@ impl StudioApp {
             "dock.sources" => on(p.docks.sources),
             "dock.mixer" => on(p.docks.mixer),
             "dock.app_audio" => on(p.docks.app_audio),
+            "dock.health" => on(p.docks.health),
             "dock.transitions" => on(p.docks.transitions),
             "dock.controls" => on(p.docks.controls),
             // The built-in layouts can always be applied; only saved ones can be removed.
@@ -405,6 +406,7 @@ impl StudioApp {
                     "sources": crate::strip::usable(d.sources_width),
                     "mixer": crate::strip::usable(d.mixer_width),
                     "app_audio": crate::strip::usable(d.app_audio_width),
+                    "health": crate::strip::usable(d.health_width),
                 },
                 "order": d.order().iter().filter_map(|i| DOCK_NAMES.get(usize::from(*i)).copied()).collect::<Vec<_>>(),
             })
@@ -438,6 +440,7 @@ impl StudioApp {
             "dock_columns": columns,
             "dock_layouts": self.store.prefs().dock_layout_names(),
             "built_in_dock_layouts": crate::store::BUILT_IN_LAYOUTS,
+            "health": self.health_seen.json(),
             "output_bar": self.output_bar.json(),
             "preview": preview,
             "studio_mode": self.studio.engine().studio_mode(),

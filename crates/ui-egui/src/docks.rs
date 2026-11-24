@@ -3,7 +3,8 @@
 //! its title and its actions and no footer. Every dock's header is a framework title row; the
 //! Scenes and Sources docks show a framework list under it, and the Audio Mixer and Application
 //! Audio docks a column of channels with framework text, buttons and menus around app meters. The
-//! Scenes dock can show a grid of scene tiles in place of its list.
+//! Scenes dock can show a grid of scene tiles in place of its list. The Health dock is in
+//! [`crate::health`].
 
 use std::borrow::Cow;
 use std::collections::HashMap;
@@ -101,6 +102,8 @@ pub struct DockState<'a> {
     pub pictures: &'a [(SceneId, TextureId)],
     /// The Scenes dock shows its grid.
     pub grid: bool,
+    /// What the Health dock drew, for `ui.inspect`.
+    pub health: &'a mut crate::health::Seen,
 }
 
 /// Where a docked dock is drawn.
@@ -131,7 +134,7 @@ pub struct Drawn {
 /// and Move Down in a column (`dock.move`; the first dock in its region cannot move back and the
 /// last cannot move on), a move to each other region (`dock.region`) and Undock; a dock in a window
 /// of its own offers Dock in the Strip (both `dock.float`).
-fn dock_menu(ui: &mut Ui, drawn: &Drawn, dock: &'static str, place: Option<Place>, acts: &mut Vec<Act>) {
+pub(crate) fn dock_menu(ui: &mut Ui, drawn: &Drawn, dock: &'static str, place: Option<Place>, acts: &mut Vec<Act>) {
     use crate::store::Region;
     // The title takes clicks only, so a drag there still reaches the strip's top edge.
     let r = ui.interact(drawn.title, ui.scope_id().with(("dock-title", dock)), Sense::click());
@@ -176,7 +179,7 @@ fn dock_menu(ui: &mut Ui, drawn: &Drawn, dock: &'static str, place: Option<Place
 /// edge, one button per entry of `buttons` (name in `ui.inspect`, icon, command, tooltip), in
 /// reading order. A button runs its command, and the window's command states give its tooltip and
 /// whether it is enabled. Also returns the title row's response.
-fn title_header(ui: &mut Ui, title: &str, buttons: &[(&'static str, &'static str, &str, &str)]) -> (Drawn, egui::Response) {
+pub(crate) fn title_header(ui: &mut Ui, title: &str, buttons: &[(&'static str, &'static str, &str, &str)]) -> (Drawn, egui::Response) {
     let (height, pad, side, fill, font) = theme::with_root(ui.ctx(), |cx| {
         let t = &cx.tokens;
         (t.size.panel_header, t.space.pad.regular, t.size.control.md, theme::color(cx, t.color.surface.raised), theme::title_font(cx))
@@ -217,7 +220,7 @@ fn title_header(ui: &mut Ui, title: &str, buttons: &[(&'static str, &'static str
 }
 
 /// The area for the dock's content under its header, inside the dock padding.
-fn body(ui: &mut Ui) -> Ui {
+pub(crate) fn body(ui: &mut Ui) -> Ui {
     let pad = egui::Vec2::splat(theme::with_root(ui.ctx(), |cx| cx.tokens.space.pad.regular));
     let r = ui.available_rect_before_wrap();
     let rect = Rect::from_min_max(r.min + pad, (r.max - pad).max(r.min + pad));

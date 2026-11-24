@@ -964,3 +964,33 @@ menu	Transform	Transform
 @msg	the countdown text needs {time} where the remaining time goes	the countdown text needs {time} where the remaining time goes
 @msg	the countdown text holds {time} more than once	the countdown text holds {time} more than once
 @msg	the countdown text is longer than 200 characters	the countdown text is longer than 200 characters
+	Health	Health
+	Destinations	Destinations
+	Streaming…	Streaming…
+	{live} of {count} live	{live} of {count} live
+	Not streaming	Not streaming
+	Live · sending the pause screen	Live · sending the pause screen
+	Encoder	Encoder
+	Frames are late or skipped	Frames are late or skipped
+	No frames late or skipped	No frames late or skipped
+	Tracks	Tracks
+	Files	Files
+	{mb} MB	{mb} MB
+	Disk free	Disk free
+	{gb} GB	{gb} GB
+	Audio lost	Audio lost
+	{lost} s	{lost} s
+	Loading…	Loading…
+	Live captions	Live captions
+	Program loudness	Program loudness
+	No program audio yet	No program audio yet
+	Below the target band	Below the target band
+	Above the target band	Above the target band
+	In the target band	In the target band
+	Short-term	Short-term
+	Integrated	Integrated
+	True peak	True peak
+	Target band	Target band
+	{value} LUFS	{value} LUFS
+	{value} dBTP	{value} dBTP
+	{low} to {high} LUFS	{low} to {high} LUFS

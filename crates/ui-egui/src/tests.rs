@@ -1227,6 +1227,35 @@ fn the_application_audio_dock_is_hidden_until_the_docks_menu_shows_it() {
     assert!(!docks(&mut a).contains(&json!("app_audio")));
 }
 
+#[test]
+fn the_health_dock_is_hidden_until_the_docks_menu_shows_it_and_its_buttons_run_commands() {
+    let mut a = app();
+    let ctx = crate::test_context();
+    let docks = |a: &mut StudioApp| -> Vec<Value> {
+        a.ui_inspect(&ctx)["docks"].as_array().cloned().unwrap_or_default().into_iter().map(|d| d["dock"].clone()).collect()
+    };
+    frame(&mut a, &ctx, vec![]);
+    assert!(!docks(&mut a).contains(&json!("health")));
+    assert_eq!(a.ui_inspect(&ctx)["health"], Value::Null, "nothing is reported while it is hidden");
+    assert_eq!(a.item_state("dock.health").checked, Some(false));
+    assert_eq!(run(&mut a, &ctx, "dock.health", json!({})).unwrap(), json!({"on": true}));
+    for _ in 0..2 {
+        frame(&mut a, &ctx, vec![]);
+    }
+    assert_eq!(a.item_state("dock.health").checked, Some(true));
+    assert_eq!(docks(&mut a), [json!("scenes"), json!("sources"), json!("mixer"), json!("health")]);
+    let health = a.ui_inspect(&ctx)["health"].clone();
+    let section = |key: &str| health["sections"].as_array().and_then(|s| s.iter().find(|s| s["section"] == json!(key)).cloned());
+    assert_eq!(section("captions").map(|s| s["status"].clone()), Some(json!("Off")));
+    assert_eq!(section("loudness").map(|s| s["status"].clone()), Some(json!("No program audio yet")));
+    let buttons = section("replay").map(|s| s["buttons"].clone()).unwrap_or_default();
+    assert_eq!(buttons[1]["command"], json!("replay.toggle"));
+    assert_eq!(buttons[0]["enabled"], json!(false), "Save Replay waits for the replay buffer");
+    assert_eq!(run(&mut a, &ctx, "dock.health", json!({})).unwrap(), json!({"on": false}));
+    frame(&mut a, &ctx, vec![]);
+    assert!(!docks(&mut a).contains(&json!("health")));
+}
+
 fn rect_of(v: &Value) -> egui::Rect {
     let f = |k: &str| v[k].as_f64().unwrap_or(f64::NAN) as f32;
     egui::Rect::from_min_size(egui::pos2(f("x"), f("y")), egui::vec2(f("width"), f("height")))
@@ -1496,8 +1525,8 @@ fn dock_move_rearranges_the_strip_and_reset_puts_it_back() {
     let size = egui::vec2(1280.0, 800.0);
     frame_at(&mut a, &ctx, size);
     let r = run(&mut a, &ctx, "dock.move", json!({"dock": "mixer", "to": "left"})).unwrap();
-    // The order lists every dock, the hidden Application Audio dock included.
-    assert_eq!(r, json!({"moved": true, "order": ["scenes", "mixer", "sources", "app_audio"]}));
+    // The order lists every dock, the hidden Application Audio and Health docks included.
+    assert_eq!(r, json!({"moved": true, "order": ["scenes", "mixer", "sources", "app_audio", "health"]}));
     frame_at(&mut a, &ctx, size);
     assert_eq!(dock_order(&a, &ctx), ["scenes", "mixer", "sources"]);
     let widths: Vec<f32> = a.ui_inspect(&ctx)["docks"].as_array().unwrap_or(&Vec::new()).iter().map(|d| rect_of(&d["rect"]).width()).collect();
@@ -1682,6 +1711,11 @@ fn the_built_in_layouts_put_docks_beside_the_canvas_and_classic_is_the_reset_str
     let v = a.ui_inspect(&ctx);
     assert_eq!((drawn_in(&v, "left"), drawn_in(&v, "bottom")), (vec!["sources".into(), "mixer".into()], vec!["scenes".into()]));
     assert_eq!(rect_of(&v["dock_columns"]["left"]["rect"]).width(), 269.0);
+    assert_eq!(drawn_in(&v, "right"), vec!["health".to_string()], "Live shows Health in the right column");
+    let right = rect_of(&v["dock_columns"]["right"]["rect"]);
+    assert_eq!((right.right(), right.width()), (1280.0, 293.0), "292 points and the 1 point line");
+    let titles: Vec<&str> = v["health"]["sections"].as_array().map(|s| s.iter().filter_map(|s| s["title"].as_str()).collect()).unwrap_or_default();
+    assert_eq!(titles, ["Destinations", "Encoder", "Audio tracks", "Replay buffer", "Live captions", "Program loudness"]);
 
     run(&mut a, &ctx, "dock.layout_apply", json!({"name": "Review"})).unwrap();
     frame_at(&mut a, &ctx, size);

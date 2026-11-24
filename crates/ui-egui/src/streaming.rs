@@ -406,8 +406,17 @@ pub(crate) fn status_detail(running: bool, live: Option<&DestinationState>) -> O
 }
 
 /// Whether a destination in this state is sending or trying to.
-fn sending(s: &DestinationState) -> bool {
+pub(crate) fn sending(s: &DestinationState) -> bool {
     !matches!(s.status, DestinationStatus::Stopped | DestinationStatus::Failed(_))
+}
+
+/// The name a destination's row shows: its own name, else its service's name, else its id.
+pub(crate) fn destination_title(d: &Destination) -> String {
+    match services::service(&d.service) {
+        _ if !d.name.trim().is_empty() => d.name.clone(),
+        Some(svc) => svc.name.to_string(),
+        None => d.id.clone(),
+    }
 }
 
 /// What the Streaming window shows.
@@ -725,11 +734,7 @@ fn toned(text: Text, tone: Tone) -> Text {
 
 fn row(ui: &mut Ui, view: &View, d: &Destination, live: Option<&DestinationState>, panel: &mut StreamingPanel, acts: &mut Vec<Act>) {
     let preset = services::service(&d.service);
-    let title = match preset {
-        _ if !d.name.trim().is_empty() => d.name.clone(),
-        Some(svc) => svc.name.to_string(),
-        None => d.id.clone(),
-    };
+    let title = destination_title(d);
     let _ = Row::new().fill_width().show(ui, |ui, _| {
         // A destination set up for a service shows the service's logo where it may stand beside
         // text at this size, and a plain tile otherwise.

@@ -618,3 +618,33 @@ menu	Transform	Transformieren
 	Move Under the Canvas	Unter die Leinwand verschieben
 	Resize the column	Breite der Spalte ändern
 	Place Dock	Dock platzieren
+	Health	Zustand
+	Destinations	Ziele
+	Streaming…	Streaming…
+	{live} of {count} live	{live} von {count} live
+	Not streaming	Kein Stream
+	Live · sending the pause screen	Live · sendet den Pausenbildschirm
+	Encoder	Encoder
+	Frames are late or skipped	Bilder kommen zu spät oder werden übersprungen
+	No frames late or skipped	Keine Bilder zu spät oder übersprungen
+	Tracks	Spuren
+	Files	Dateien
+	{mb} MB	{mb} MB
+	Disk free	Freier Speicher
+	{gb} GB	{gb} GB
+	Audio lost	Verlorener Ton
+	{lost} s	{lost} s
+	Loading…	Wird geladen…
+	Live captions	Live-Untertitel
+	Program loudness	Programmlautheit
+	No program audio yet	Noch kein Programmton
+	Below the target band	Unter dem Zielbereich
+	Above the target band	Über dem Zielbereich
+	In the target band	Im Zielbereich
+	Short-term	Kurzzeit
+	Integrated	Integriert
+	True peak	True Peak
+	Target band	Zielbereich
+	{value} LUFS	{value} LUFS
+	{value} dBTP	{value} dBTP
+	{low} to {high} LUFS	{low} bis {high} LUFS

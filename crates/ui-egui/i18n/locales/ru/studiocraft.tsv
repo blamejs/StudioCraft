@@ -644,3 +644,33 @@ menu	Transform	Преобразование
 	Move Under the Canvas	Переместить под холст
 	Resize the column	Изменить ширину колонки
 	Place Dock	Разместить панель
+	Health	Состояние
+	Destinations	Назначения
+	Streaming…	Трансляция…
+	{live} of {count} live	{live} из {count} в эфире
+	Not streaming	Трансляция не идёт
+	Live · sending the pause screen	В эфире · отправляется экран паузы
+	Encoder	Кодировщик
+	Frames are late or skipped	Кадры запаздывают или пропускаются
+	No frames late or skipped	Нет запоздавших или пропущенных кадров
+	Tracks	Дорожки
+	Files	Файлы
+	{mb} MB	{mb} МБ
+	Disk free	Свободно на диске
+	{gb} GB	{gb} ГБ
+	Audio lost	Потерянный звук
+	{lost} s	{lost} с
+	Loading…	Загрузка…
+	Live captions	Живые субтитры
+	Program loudness	Громкость программы
+	No program audio yet	Звука программы пока нет
+	Below the target band	Ниже целевого диапазона
+	Above the target band	Выше целевого диапазона
+	In the target band	В целевом диапазоне
+	Short-term	Кратковременная
+	Integrated	Интегральная
+	True peak	Истинный пик
+	Target band	Целевой диапазон
+	{value} LUFS	{value} LUFS
+	{value} dBTP	{value} dBTP
+	{low} to {high} LUFS	От {low} до {high} LUFS

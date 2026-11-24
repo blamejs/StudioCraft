@@ -624,3 +624,33 @@ menu	Transform	Transformeren
 	Move Under the Canvas	Onder het canvas
 	Resize the column	Breedte van de kolom wijzigen
 	Place Dock	Dock plaatsen
+	Health	Status
+	Destinations	Bestemmingen
+	Streaming…	Streamen…
+	{live} of {count} live	{live} van {count} live
+	Not streaming	Geen stream
+	Live · sending the pause screen	Live · stuurt het pauzescherm
+	Encoder	Encoder
+	Frames are late or skipped	Frames zijn te laat of overgeslagen
+	No frames late or skipped	Geen frames te laat of overgeslagen
+	Tracks	Sporen
+	Files	Bestanden
+	{mb} MB	{mb} MB
+	Disk free	Vrije ruimte
+	{gb} GB	{gb} GB
+	Audio lost	Verloren audio
+	{lost} s	{lost} s
+	Loading…	Laden…
+	Live captions	Live ondertiteling
+	Program loudness	Luidheid van het programma
+	No program audio yet	Nog geen programmageluid
+	Below the target band	Onder de doelband
+	Above the target band	Boven de doelband
+	In the target band	In de doelband
+	Short-term	Korte termijn
+	Integrated	Geïntegreerd
+	True peak	True peak
+	Target band	Doelband
+	{value} LUFS	{value} LUFS
+	{value} dBTP	{value} dBTP
+	{low} to {high} LUFS	{low} tot {high} LUFS

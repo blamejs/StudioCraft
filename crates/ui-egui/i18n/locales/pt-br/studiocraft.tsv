@@ -633,3 +633,33 @@ menu	Transform	Transformar
 	Move Under the Canvas	Mover para baixo da tela de pintura
 	Resize the column	Redimensionar a coluna
 	Place Dock	Posicionar painel
+	Health	Estado
+	Destinations	Destinos
+	Streaming…	Transmissão…
+	{live} of {count} live	{live} de {count} ao vivo
+	Not streaming	Sem transmissão
+	Live · sending the pause screen	Ao vivo · enviando a tela de pausa
+	Encoder	Codificador
+	Frames are late or skipped	Há quadros atrasados ou pulados
+	No frames late or skipped	Nenhum quadro atrasado ou pulado
+	Tracks	Faixas
+	Files	Arquivos
+	{mb} MB	{mb} MB
+	Disk free	Espaço livre
+	{gb} GB	{gb} GB
+	Audio lost	Áudio perdido
+	{lost} s	{lost} s
+	Loading…	Carregando…
+	Live captions	Legendas ao vivo
+	Program loudness	Loudness do programa
+	No program audio yet	Ainda sem áudio do programa
+	Below the target band	Abaixo da faixa-alvo
+	Above the target band	Acima da faixa-alvo
+	In the target band	Dentro da faixa-alvo
+	Short-term	Curto prazo
+	Integrated	Integrada
+	True peak	Pico real
+	Target band	Faixa-alvo
+	{value} LUFS	{value} LUFS
+	{value} dBTP	{value} dBTP
+	{low} to {high} LUFS	{low} a {high} LUFS

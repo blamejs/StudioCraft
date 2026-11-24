@@ -644,3 +644,33 @@ menu	Transform	Transformer
 	Move Under the Canvas	Déplacer sous le canevas
 	Resize the column	Redimensionner la colonne
 	Place Dock	Placer le dock
+	Health	État
+	Destinations	Destinations
+	Streaming…	Diffusion…
+	{live} of {count} live	{live} sur {count} en direct
+	Not streaming	Pas de diffusion
+	Live · sending the pause screen	En direct · envoie l'écran de pause
+	Encoder	Encodeur
+	Frames are late or skipped	Des images sont en retard ou sautées
+	No frames late or skipped	Aucune image en retard ou sautée
+	Tracks	Pistes
+	Files	Fichiers
+	{mb} MB	{mb} Mo
+	Disk free	Espace libre
+	{gb} GB	{gb} Go
+	Audio lost	Audio perdu
+	{lost} s	{lost} s
+	Loading…	Chargement…
+	Live captions	Sous-titres en direct
+	Program loudness	Sonie du programme
+	No program audio yet	Pas encore de son du programme
+	Below the target band	Sous la plage cible
+	Above the target band	Au-dessus de la plage cible
+	In the target band	Dans la plage cible
+	Short-term	Court terme
+	Integrated	Intégrée
+	True peak	Crête réelle
+	Target band	Plage cible
+	{value} LUFS	{value} LUFS
+	{value} dBTP	{value} dBTP
+	{low} to {high} LUFS	{low} à {high} LUFS

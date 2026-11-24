@@ -634,3 +634,33 @@ menu	Transform	變形
 	Move Under the Canvas	移到畫布下方
 	Resize the column	調整欄寬
 	Place Dock	放置停駐面板
+	Health	運作狀態
+	Destinations	串流目標
+	Streaming…	串流…
+	{live} of {count} live	{count} 個中 {live} 個直播中
+	Not streaming	未串流
+	Live · sending the pause screen	直播中 · 正在傳送暫停畫面
+	Encoder	編碼器
+	Frames are late or skipped	有影格延遲或被略過
+	No frames late or skipped	沒有延遲或略過的影格
+	Tracks	音軌
+	Files	檔案
+	{mb} MB	{mb} MB
+	Disk free	可用空間
+	{gb} GB	{gb} GB
+	Audio lost	遺失的音訊
+	{lost} s	{lost} 秒
+	Loading…	正在載入…
+	Live captions	即時字幕
+	Program loudness	節目響度
+	No program audio yet	尚無節目音訊
+	Below the target band	低於目標範圍
+	Above the target band	高於目標範圍
+	In the target band	在目標範圍內
+	Short-term	短期
+	Integrated	整合
+	True peak	真峰值
+	Target band	目標範圍
+	{value} LUFS	{value} LUFS
+	{value} dBTP	{value} dBTP
+	{low} to {high} LUFS	{low} 至 {high} LUFS

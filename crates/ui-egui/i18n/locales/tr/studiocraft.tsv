@@ -636,3 +636,33 @@ menu	Transform	Dönüştür
 	Move Under the Canvas	Tuvalin Altına Taşı
 	Resize the column	Sütun genişliğini değiştir
 	Place Dock	Paneli Yerleştir
+	Health	Durum
+	Destinations	Hedefler
+	Streaming…	Yayın…
+	{live} of {count} live	{count} hedeften {live} tanesi canlı
+	Not streaming	Yayın yok
+	Live · sending the pause screen	Canlı · duraklatma ekranı gönderiliyor
+	Encoder	Kodlayıcı
+	Frames are late or skipped	Geciken veya atlanan kareler var
+	No frames late or skipped	Geciken veya atlanan kare yok
+	Tracks	Parçalar
+	Files	Dosyalar
+	{mb} MB	{mb} MB
+	Disk free	Boş alan
+	{gb} GB	{gb} GB
+	Audio lost	Kaybolan ses
+	{lost} s	{lost} sn
+	Loading…	Yükleniyor…
+	Live captions	Canlı altyazılar
+	Program loudness	Program ses yüksekliği
+	No program audio yet	Henüz program sesi yok
+	Below the target band	Hedef aralığın altında
+	Above the target band	Hedef aralığın üstünde
+	In the target band	Hedef aralıkta
+	Short-term	Kısa süreli
+	Integrated	Bütünleşik
+	True peak	Gerçek tepe
+	Target band	Hedef aralık
+	{value} LUFS	{value} LUFS
+	{value} dBTP	{value} dBTP
+	{low} to {high} LUFS	{low} ile {high} LUFS arası
