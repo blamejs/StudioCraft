@@ -775,6 +775,38 @@ A profile is a set of stream and output settings, and a scene collection is a se
 can keep several of each and switch between them from the menu bar. Scene Collection › Import…
 and Export… read and write a scene collection as a file.
 
+### Scene collections in the browser
+
+The browser editor in `apps/studiocraft-web` edits a scene collection file without the app. Open…
+reads a file of any version the app imports, up to 16 MiB (16,777,216 bytes), and refuses a
+larger file before reading it. The page stays usable while the file is read. Picking another file or New before the
+read ends drops the first file.
+
+The Scenes list adds, renames, reorders and removes scenes, and a click on a scene lists its
+sources, the top of the picture first. The Sources list reorders a scene's sources, renames a
+source in every scene that shows it, and removes a source from the scene. Add to Scene places a
+source that another scene shows. A removed scene or source takes with it the sources that no
+other scene shows, as in the app. New sources are added in the app. Each edit runs the app's
+command, with the same names and limits, and Undo and Redo step through the edits. In the browser
+each change is its own undo step.
+
+Save downloads the collection as `<name>.json` in the current format, which Scene Collection ›
+Import… reads. Characters that file systems refuse become `_` in the file name. New, opening a
+file and leaving the page ask first when the collection has unsaved changes.
+
+To build and serve the editor, add the target and `trunk` once, then run `trunk serve` in
+`apps/studiocraft-web`:
+
+```sh
+rustup target add wasm32-unknown-unknown
+cargo install trunk --locked
+cd apps/studiocraft-web
+trunk serve
+```
+
+The editor opens on http://127.0.0.1:8770. `trunk build --release` writes the page to
+`target/web`.
+
 ### Stats and scopes
 
 View › Stats shows the frame count, late frames, frame times, encoded and skipped frames, the
