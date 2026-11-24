@@ -308,6 +308,31 @@ fn source_audio_sets_the_sync_offset() {
     error_text(&call(&mut s, "source_audio", json!({"source": true})));
 }
 
+#[test]
+fn source_audio_reports_how_long_the_source_s_filters_delay_it() {
+    let mut s = server();
+    let latency = |s: &mut Server| {
+        let read = ok_json(&call(s, "source_audio", json!({"source": "Microphone"})));
+        (read["filter_latency_frames"].clone(), read["filter_latency_ms"].clone())
+    };
+    assert_eq!(latency(&mut s), (json!(0), json!(0)), "no filters");
+    let add = |s: &mut Server, kind: &str| {
+        let out = ok_json(&call(s, "command_run", json!({"id": "filter.add", "params": {"source": "Microphone", "kind": kind}})));
+        out["filter"].as_u64().unwrap_or_else(|| panic!("{out}"))
+    };
+    add(&mut s, "compressor");
+    assert_eq!(latency(&mut s), (json!(0), json!(0)), "a compressor does not delay the audio");
+    let limiter = add(&mut s, "limiter");
+    assert_eq!(latency(&mut s), (json!(248), json!(5.2)));
+    add(&mut s, "limiter");
+    assert_eq!(latency(&mut s), (json!(496), json!(10.3)), "two limiters");
+    ok_json(&call(&mut s, "command_run", json!({"id": "filter.remove", "params": {"source": "Microphone", "filter": limiter}})));
+    assert_eq!(latency(&mut s), (json!(248), json!(5.2)));
+    // Another audio source is not delayed by the microphone's filters.
+    let other = ok_json(&call(&mut s, "source_audio", json!({"source": "Desktop audio"})));
+    assert_eq!(other["filter_latency_frames"], json!(0), "{other}");
+}
+
 /// A sink with no devices, so the tests play nothing.
 struct NoDevices;
 

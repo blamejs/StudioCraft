@@ -223,6 +223,12 @@ pub trait FilterInstance: Send {
     fn meter(&self) -> Option<FilterMeter> {
         None
     }
+    /// How many sample frames later an audio filter's output carries its input, at the mixer's
+    /// sample rate: 0 for a filter that does not delay its audio. Read after the filter is
+    /// created or updated; it does not change while the filter processes audio.
+    fn latency_frames(&self) -> usize {
+        0
+    }
 }
 
 /// A filter's gain reduction during its last processed block, in dB (0 or more), shared between
@@ -289,7 +295,7 @@ mod tests {
     }
 
     #[test]
-    fn a_filter_instance_has_no_meter_by_default() {
+    fn a_filter_instance_has_no_meter_and_no_latency_by_default() {
         struct Plain;
         impl FilterInstance for Plain {
             fn update(&mut self, _: &Settings) -> Result<(), PluginError> {
@@ -297,6 +303,7 @@ mod tests {
             }
         }
         assert!(Plain.meter().is_none());
+        assert_eq!(Plain.latency_frames(), 0);
     }
 
     #[test]

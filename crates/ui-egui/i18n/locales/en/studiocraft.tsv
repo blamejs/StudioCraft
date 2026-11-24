@@ -880,3 +880,5 @@ menu	Transform	Transform
 @msg	the countdown text needs {time} where the remaining time goes	the countdown text needs {time} where the remaining time goes
 @msg	the countdown text holds {time} more than once	the countdown text holds {time} more than once
 @msg	the countdown text is longer than 200 characters	the countdown text is longer than 200 characters
+	Filter delay	Filter delay
+	The audio filters on this source delay its sound by {frames} samples at 48 kHz	The audio filters on this source delay its sound by {frames} samples at 48 kHz

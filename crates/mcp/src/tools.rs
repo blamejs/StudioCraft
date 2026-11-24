@@ -234,8 +234,9 @@ fn studio_tool_definitions() -> Vec<Value> {
             "Set a source's audio",
             "Set how a source's audio is mixed: `sync_offset_ms` delays it to line it up with its picture, `monitor` plays it on \
              the monitoring device in Settings › Audio (`monitor_only` also leaves it out of recordings and streams), and \
-             `record_track` sets whether audio tracks write it to a file of its own. Returns the source's audio settings. A value \
-             out of range is an error and changes nothing.",
+             `record_track` sets whether audio tracks write it to a file of its own. Returns the source's audio settings and \
+             `filter_latency_frames` and `filter_latency_ms`: how long the source's running audio filters delay its audio, in \
+             sample frames at 48 kHz and in milliseconds. A value out of range is an error and changes nothing.",
             json!({
                 "source": {"type": ["integer", "string"], "description": "The source's id or name."},
                 "sync_offset_ms": {
@@ -946,10 +947,17 @@ fn source_audio(b: &mut dyn Backend, args: &Args) -> Result<Value, McpError> {
     let state = b.call("document.inspect", json!({"detail": "summary"}))?;
     let sources = state.pointer("/collection/sources").and_then(Value::as_array).cloned().unwrap_or_default();
     let found = sources.iter().find(|s| s.get("id") == Some(&source) || s.get("name") == Some(&source));
-    match found {
-        Some(s) => Ok(text(&json!({"source": s.get("id"), "name": s.get("name"), "audio": s.get("audio")}))),
-        None => Err(McpError::Invalid(format!("there is no source {source}"))),
-    }
+    let Some(s) = found else { return Err(McpError::Invalid(format!("there is no source {source}"))) };
+    // The state's `filter_latency` lists only the sources whose filters add a delay.
+    let latency = s.get("id").and_then(Value::as_u64).and_then(|id| state.pointer(&format!("/filter_latency/{id}")));
+    let read = |key: &str| latency.and_then(|l| l.get(key)).cloned().unwrap_or(json!(0));
+    Ok(text(&json!({
+        "source": s.get("id"),
+        "name": s.get("name"),
+        "audio": s.get("audio"),
+        "filter_latency_frames": read("frames"),
+        "filter_latency_ms": read("ms"),
+    })))
 }
 
 /// The recording's, the stream's and the replay buffer's state from `document.inspect`.
