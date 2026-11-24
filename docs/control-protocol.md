@@ -59,7 +59,7 @@ answer.
 | --- | --- | --- |
 | `engine.execute` | `{"command": "<id>", "params"?: {...}}` | The command's result. |
 | `engine.commands` | `{"filter"?: "<text>"}` | Every command, or those whose id or label contains `filter` (case is ignored). |
-| `document.inspect` | `{"detail"?: "summary" \| "full"}` | The scene collection, studio mode, recording, stream and replay buffer state (`recording`, `streaming`, `replay`), frame statistics and canvas. `summary` (the default) leaves out the `settings` of sources, filters and the transition. |
+| `document.inspect` | `{"detail"?: "summary" \| "full"}` | The scene collection, studio mode, recording, stream, replay buffer and virtual camera state (`recording`, `streaming`, `replay`, `virtual_camera`), frame statistics and canvas. `virtual_camera` is `{"active": false}`, or while it runs `active`, `status`, `target` (the device), `seconds` and `bytes` (the picture bytes sent). `summary` (the default) leaves out the `settings` of sources, filters and the transition. |
 | `render.preview` | `{"view"?: "program" \| "preview", "max_side"?: 0-4096}` | `{"width", "height", "png_base64"}`: a PNG of the program, or of the preview in studio mode. |
 | `ui.inspect` | none | The window's layout and open dialogs ([`ui.inspect`](#uiinspect)). |
 | `ui.menu.list` | none | The menu bar as the window shows it, as a tree ([`ui.menu.list`](#uimenulist)). |

@@ -100,6 +100,9 @@ pub enum RuntimeAction {
     StopReplay,
     ToggleReplay,
     SaveReplay,
+    StartVirtualCamera,
+    StopVirtualCamera,
+    ToggleVirtualCamera,
     /// The program's loudness readings and the profile's loudness target.
     AudioLoudness,
     /// The state of the audio tracks.
@@ -410,6 +413,13 @@ pub enum Command {
     ReplayToggle {},
     #[serde(rename = "replay.save")]
     ReplaySave {},
+    /// Send the program to the virtual camera device, which other apps open as a camera.
+    #[serde(rename = "vcam.start")]
+    VirtualCameraStart {},
+    #[serde(rename = "vcam.stop")]
+    VirtualCameraStop {},
+    #[serde(rename = "vcam.toggle")]
+    VirtualCameraToggle {},
     /// The final mix's loudness (momentary, short-term, integrated, range and true peak) and the
     /// profile's loudness target.
     #[serde(rename = "audio.loudness")]
@@ -659,6 +669,9 @@ impl Command {
             Command::ReplayStop {} => "replay.stop",
             Command::ReplayToggle {} => "replay.toggle",
             Command::ReplaySave {} => "replay.save",
+            Command::VirtualCameraStart {} => "vcam.start",
+            Command::VirtualCameraStop {} => "vcam.stop",
+            Command::VirtualCameraToggle {} => "vcam.toggle",
             Command::AudioLoudness {} => "audio.loudness",
             Command::AudioTracksStatus {} => "audio_tracks.status",
             Command::AudioTracksRepair { .. } => "audio_tracks.repair",
@@ -794,6 +807,9 @@ const SPECS: &[CommandSpec] = &[
     spec("replay.stop", "Stop Replay Buffer", "", Undo::NotUndoable),
     spec("replay.toggle", "Start or Stop Replay Buffer", "", Undo::NotUndoable),
     spec("replay.save", "Save Replay", "", Undo::NotUndoable),
+    spec("vcam.start", "Start Virtual Camera", "", Undo::NotUndoable),
+    spec("vcam.stop", "Stop Virtual Camera", "", Undo::NotUndoable),
+    spec("vcam.toggle", "Start or Stop Virtual Camera", "", Undo::NotUndoable),
     spec("audio.loudness", "Program Loudness", "", Undo::NotUndoable),
     spec("audio_tracks.status", "Audio Tracks Status", "", Undo::NotUndoable),
     spec("audio_tracks.repair", "Repair Audio Tracks", "folder: path to a take's folder or the recording folder", Undo::NotUndoable),

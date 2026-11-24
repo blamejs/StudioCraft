@@ -350,6 +350,9 @@ impl Engine {
             Command::ReplayStop {} => Ok(Outcome::runtime(RuntimeAction::StopReplay)),
             Command::ReplayToggle {} => Ok(Outcome::runtime(RuntimeAction::ToggleReplay)),
             Command::ReplaySave {} => Ok(Outcome::runtime(RuntimeAction::SaveReplay)),
+            Command::VirtualCameraStart {} => Ok(Outcome::runtime(RuntimeAction::StartVirtualCamera)),
+            Command::VirtualCameraStop {} => Ok(Outcome::runtime(RuntimeAction::StopVirtualCamera)),
+            Command::VirtualCameraToggle {} => Ok(Outcome::runtime(RuntimeAction::ToggleVirtualCamera)),
             Command::AudioLoudness {} => Ok(Outcome::runtime(RuntimeAction::AudioLoudness)),
             Command::AudioTracksStatus {} => Ok(Outcome::runtime(RuntimeAction::AudioTracksStatus)),
             Command::AudioTracksRepair { folder } => {
