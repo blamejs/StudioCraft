@@ -60,6 +60,13 @@ pub fn best_match(list: &[CameraInfo], want: &CameraInfo) -> Option<usize> {
         .or_else(|| list.iter().position(|c| !want.name.is_empty() && c.name == want.name))
 }
 
+/// Whether `listed`, the camera [`best_match`] found for `want`, is `want` itself and not only
+/// a camera of the same name.
+#[cfg_attr(not(any(windows, target_os = "macos", target_os = "linux")), allow(dead_code))]
+fn same_camera(listed: &CameraInfo, want: &CameraInfo) -> bool {
+    listed == want || (!want.id.is_empty() && listed.id == want.id)
+}
+
 /// How a camera encodes its pixels.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum CameraPixel {
@@ -995,6 +1002,11 @@ mod imp {
                 #[cfg(windows)]
                 let com = com()?;
                 let (chosen, index) = found(camera)?;
+                // The capture names the listed camera it opens, so another camera that a name
+                // matches is not opened in its place.
+                if !super::same_camera(&chosen, camera) {
+                    return Err(PlatformError::NotFound(format!("the camera \u{201c}{}\u{201d}", camera.name)));
+                }
                 #[cfg(target_os = "linux")]
                 let starting = Starting::new(chosen);
                 #[cfg(not(target_os = "linux"))]
@@ -1122,6 +1134,18 @@ mod tests {
         assert_eq!(CameraFormat::parse(&HD.key()), Some(HD));
         assert_eq!(HD.key(), "1280x720@30:YUYV");
         assert_eq!(HD.label(), "1280 x 720, 30 fps, YUYV");
+    }
+
+    #[test]
+    fn a_capture_opens_only_the_camera_it_chose() {
+        let desk = cam("Desk", "/dev/video0");
+        let list = [cam("Desk", "/dev/video2")];
+        // The chosen camera was unplugged, and another of its name is listed.
+        let found = &list[best_match(&list, &desk).unwrap_or(0)];
+        assert!(!same_camera(found, &desk), "another camera of the same name");
+        assert!(same_camera(&desk, &desk));
+        assert!(same_camera(&cam("Desk (renamed)", "usb#1"), &cam("Desk", "usb#1")), "the same id");
+        assert!(!same_camera(&cam("Desk", "usb#2"), &cam("Desk", "")));
     }
 
     #[cfg(any(windows, target_os = "linux"))]
