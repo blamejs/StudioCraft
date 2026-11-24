@@ -386,7 +386,30 @@ fn rotate_handle(top: Pos2, center: Pos2, rotation: f32, bounds: Rect) -> Pos2 {
     let clamp = |p: Pos2| pos2(p.x.max(r.min.x).min(r.max.x), p.y.max(r.min.y).min(r.max.y));
     let (outside, past) = (top + up, center - up);
     let clear = |p: &Pos2| bounds.contains(*p) && p.distance(center) >= ROTATE_REACH - 1e-3;
-    [outside, past, clamp(outside), clamp(past)].into_iter().find(clear).unwrap_or_else(|| clamp(outside))
+    if let Some(p) = [outside, past, clamp(outside), clamp(past)].into_iter().find(clear) {
+        return p;
+    }
+    // None of those is clear of the center: take the point nearest the clamped outward one that is
+    // inside the view and the reach from the center. It lies on the circle of the reach around the
+    // center or on a side of the view, so the candidates are the clamped point moved out along its
+    // direction from the center, the circle's crossings with each side, the nearest point of each
+    // side and the corners.
+    let want = clamp(outside);
+    let reach_on = |gap: f32| (ROTATE_REACH * ROTATE_REACH - gap * gap).max(0.0).sqrt();
+    let mut spots = vec![r.left_top(), r.right_top(), r.left_bottom(), r.right_bottom()];
+    let d = want - center;
+    if d.length() > 1e-3 {
+        spots.push(center + d.normalized() * ROTATE_REACH);
+    }
+    for x in [r.min.x, r.max.x] {
+        let h = reach_on(x - center.x);
+        spots.extend([pos2(x, center.y - h), pos2(x, center.y + h), pos2(x, want.y)]);
+    }
+    for y in [r.min.y, r.max.y] {
+        let w = reach_on(y - center.y);
+        spots.extend([pos2(center.x - w, y), pos2(center.x + w, y), pos2(want.x, y)]);
+    }
+    spots.into_iter().map(clamp).filter(clear).min_by(|a, b| a.distance(want).total_cmp(&b.distance(want))).unwrap_or(want)
 }
 
 /// The middle of the top edge of an item with `corners` on the canvas, on the screen.
@@ -969,6 +992,16 @@ mod tests {
         let short = Rect::from_min_size(pos2(0.0, 0.0), vec2(800.0, 37.0));
         let h = rotate_handle(top, pos2(400.0, 30.0), 0.0, short);
         assert!(short.contains(h) && h.distance(pos2(400.0, 30.0)) >= ROTATE_REACH - 1e-3, "{h:?}");
+        // An item turned 45 degrees near the view's top-left corner has both handle positions
+        // outside the view, and neither clamped position is clear of the center. The handle still
+        // goes to a point in the view the reach from the center, next to the clamped outward one.
+        let center = pos2(10.0, 10.0);
+        let top = center + vec2(1.0, -1.0) * (5.0 / 2f32.sqrt());
+        let h = rotate_handle(top, center, 45.0, bounds);
+        assert!(bounds.shrink(HANDLE).contains(h), "{h:?}");
+        assert!(h.distance(center) >= ROTATE_REACH - 1e-3, "{h:?}");
+        let along = (ROTATE_REACH.powi(2) - (10.0 - HANDLE).powi(2)).sqrt();
+        assert!(h.distance(pos2(10.0 + along, HANDLE)) < 1e-2, "{h:?}");
     }
 
     #[test]
