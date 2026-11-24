@@ -15,7 +15,7 @@ use studiocraft_model::services::{self, SERVICES, Service};
 use studiocraft_model::{Destination, KeyRef, ReconnectSettings, StreamSettings};
 use studiocraft_plugin::{Cause, DestinationState, DestinationStatus, Failure};
 use studiocraft_studio::OutputKind;
-use studiocraft_studio::diagnose::{Check, CheckState, Diagnosis, Evidence, Outcome, Verdict};
+use studiocraft_studio::diagnose::{Check, CheckState, Diagnosis, Evidence, Handshake, Outcome, Verdict};
 use studiocraft_studio::ingests::{self, IngestServer, ListState};
 
 use crate::i18n::Msg;
@@ -297,14 +297,20 @@ pub(crate) struct View<'a> {
 /// What a check of a destination found, in the interface language.
 pub(crate) fn verdict_msg(d: &Diagnosis) -> Msg {
     let (template, mut args) = d.message();
-    if let Some(c) = d.reason {
-        for (k, v) in &mut args {
-            if *k == "reason" {
-                *v = cause_text(c).to_string();
-            }
+    for (k, v) in &mut args {
+        match (*k, d.reason, &d.handshake) {
+            ("reason", Some(c), _) => *v = cause_text(c).to_string(),
+            ("detail", _, Some(h)) => *v = handshake_text(h),
+            _ => {}
         }
     }
     Msg::new(template, args)
+}
+
+/// What a port answered to the RTMP handshake, in the interface language.
+pub(crate) fn handshake_text(h: &Handshake) -> String {
+    let (template, args) = h.message();
+    Msg::new(template, args).shown()
 }
 
 /// What one evidence line checked, in the interface language.
@@ -316,6 +322,7 @@ pub(crate) fn check_text(c: Check) -> &'static str {
         Check::Lookup => tl!("Name lookup of"),
         Check::Connect => tl!("Connection to"),
         Check::SecureConnect => tl!("Secure connection to"),
+        Check::Handshake => tl!("Stream server handshake with"),
         Check::Connect443 => tl!("Secure connection on port 443 to"),
         Check::IngestList => tl!("The service's list of ingest servers"),
         Check::OtherIngest => tl!("Secure connection to the service's ingest server"),
@@ -330,6 +337,7 @@ pub(crate) fn outcome_text(o: Outcome) -> &'static str {
         Outcome::Failed(c) => cause_text(c),
         Outcome::Set => tl!("set"),
         Outcome::Problem => tl!("reports a problem"),
+        Outcome::NotRtmp => tl!("answers, but not as a stream server"),
         Outcome::Unknown => tl!("this computer could not say"),
         Outcome::Unfinished => tl!("not finished in time"),
     }
@@ -337,7 +345,9 @@ pub(crate) fn outcome_text(o: Outcome) -> &'static str {
 
 /// One evidence line of a check, in the interface language.
 pub(crate) fn evidence_text(e: &Evidence) -> String {
-    let args = [("check", check_text(e.check)), ("target", e.target.as_str()), ("outcome", outcome_text(e.outcome)), ("detail", e.detail.as_str())];
+    let answered = e.handshake.as_ref().map(handshake_text);
+    let detail = answered.as_deref().unwrap_or(e.detail.as_str());
+    let args = [("check", check_text(e.check)), ("target", e.target.as_str()), ("outcome", outcome_text(e.outcome)), ("detail", detail)];
     let template = match (e.target.is_empty(), e.detail.is_empty()) {
         (true, true) => tl!("{check}: {outcome}"),
         (true, false) => tl!("{check}: {outcome} ({detail})"),

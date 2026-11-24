@@ -26,6 +26,14 @@ commands is fit, filled or stretched again, and any other source keeps its place
 the canvas ([`canvas.relayout`](control-protocol.md#canvasrelayout)). Moving, resizing, rotating
 or cropping a source ends its fit, fill or stretch.
 
+Flip Horizontal and Flip Vertical, in the same menu, mirror the source's picture inside its box,
+left to right or top to bottom. The box keeps its place, size and rotation, so a fit, filled or
+stretched source stays that way, and a source can be flipped before it shows a picture. Each flip
+is one undo step, and flipping again turns the picture back. A crop still cuts the source's own
+edges, so the part cropped from a source's left edge is missing at the right of its flipped picture.
+The flips are saved with the scene collection and set with `item.transform`'s `flip_horizontal`
+and `flip_vertical`.
+
 ### Built-in sources
 
 | Source | What it captures | Systems |
@@ -523,7 +531,8 @@ network can reach on the way to the destination's server and shows one verdict, 
 server did not answer for {host}" or "{host} answers on port 443 but not on port {port}". What the
 check found opens the list of every step with its outcome. The check runs its steps at the same
 time and reports after at most 20 s; a step still running then is listed as unfinished. Each
-connection, secure handshake and fetch may take 5 s, and the name lookup 10 s. The steps are:
+connection, secure handshake, RTMP handshake and fetch may take 5 s, and the name lookup 10 s. The
+steps are:
 
 - The check asks the system whether it has a route to any address and to each of the server's
   addresses. This sends nothing.
@@ -531,9 +540,16 @@ connection, secure handshake and fetch may take 5 s, and the name lookup 10 s. T
   by name only. The check itself uses no proxy.
 - It looks the server's name up again.
 - It opens a TCP connection to up to four of the server's addresses on the destination's port and,
-  for `rtmps://`, completes the secure handshake, which sends the server's host name. It then closes
-  the connection. It sends no stream key, no RTMP data and no part of the address after the host.
-- When the port is not 443, it does the same with a secure handshake on port 443 of those addresses.
+  for `rtmps://`, completes the secure handshake, which sends the server's host name. Over each
+  connection that opens it runs the RTMP handshake: it sends C0 and C1, reads S0 and S1, sends C2
+  and reads S2. It then closes the connection. It sends no `connect` or `publish` command, no stream
+  key and no part of the address after the host. A port that takes the connection is reported as
+  not answering as a stream server when, at every address that connected, it answered the RTMP
+  handshake with other data, closed the connection or sent nothing within 5 s. One address that
+  completes the handshake gives another verdict, and so does a handshake still running when the
+  check reports.
+- When the port is not 443, it opens a TCP connection with a secure handshake on port 443 of those
+  addresses, and sends no RTMP data there.
 - For a destination set up for a streaming service that publishes a list of its ingest servers and
   a status summary, it fetches both over HTTPS, following no redirect, looks two of the service's
   other ingest servers up and makes a secure connection to each on port 443. It reads at most
@@ -679,6 +695,14 @@ A stream tests only the H.264 candidates in this list, and skips every other can
   built-in encoder.
 
 The compositor converts the program to the encoders' frame format on the GPU.
+
+On Windows, a Display capture source captures with desktop duplication into textures that the
+compositor opens on its Direct3D 12 device, so the picture is not copied through CPU memory. The
+source copies the picture through CPU memory instead when the compositor draws with another
+backend (Vulkan, or the software adapter), when the display belongs to another graphics adapter
+than the compositor's, when the compositor cannot open the textures, for a rotated display, and
+when desktop duplication does not give 8-bit BGRA pictures. Staged windows sources and window
+capture always copy through CPU memory.
 
 The compositor can also draw a small picture of each of up to 16 scenes, for scene lists. Each
 picture fits a 256 × 144 box by default, keeps the canvas's aspect ratio, and is redrawn at most 4

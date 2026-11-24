@@ -32,6 +32,7 @@ craft-gpu-device = { path = "crates/craft-gpu-device" }
 craft-gpu-yuv = { path = "crates/craft-gpu-yuv" }
 craft-hwenc = { path = "crates/craft-hwenc" }
 craft-hwenc-native = { path = "crates/craft-hwenc-native" }
+craft-gpu-interop = { path = "crates/craft-gpu-interop" }
 craft-app-audio = { path = "crates/craft-app-audio" }
 craft-transitions = { path = "crates/craft-transitions" }
 craft-flv = { path = "crates/craft-flv" }

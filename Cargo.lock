@@ -1589,6 +1589,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-gpu-interop"
+version = "0.1.0"
+dependencies = [
+ "criterion",
+ "pollster 0.4.0",
+ "wgpu",
+ "windows 0.62.2",
+]
+
+[[package]]
 name = "craft-gpu-yuv"
 version = "0.1.0"
 dependencies = [
@@ -6573,6 +6583,7 @@ dependencies = [
  "ashpd",
  "comedy",
  "cpal",
+ "craft-gpu-interop",
  "crossbeam-queue",
  "futures-channel",
  "futures-util",
@@ -6596,6 +6607,7 @@ name = "studiocraft-plugin"
 version = "0.1.0-alpha.2"
 dependencies = [
  "craft-ease",
+ "craft-gpu-interop",
  "serde_json",
  "studiocraft-media",
  "studiocraft-model",
@@ -6608,6 +6620,7 @@ version = "0.1.0-alpha.2"
 dependencies = [
  "bytemuck",
  "craft-gpu-device",
+ "craft-gpu-interop",
  "craft-gpu-yuv",
  "craft-transitions",
  "criterion",
@@ -6632,6 +6645,7 @@ dependencies = [
  "craft-color",
  "craft-color-transform",
  "craft-font-catalog",
+ "craft-gpu-interop",
  "craft-image-codecs",
  "craft-media",
  "craft-speech",

@@ -60,6 +60,10 @@ pub enum VideoContent {
     Frame(PooledFrame),
     /// A solid color, `[r, g, b, a]`, of a size (drawn by the GPU; no pixels move).
     Solid { rgba: [u8; 4], width: u32, height: u32 },
+    /// A captured picture that stays on the GPU: a texture shared by the capture's device. The
+    /// compositor draws it opaque, or records on its ring why it cannot, and the source then
+    /// publishes frames from memory instead.
+    Shared(craft_gpu_interop::SharedFrame),
     /// Nothing (the source is not ready, or lost its device).
     Empty,
 }
@@ -93,6 +97,7 @@ impl VideoOut {
         let size = match &content {
             VideoContent::Frame(f) => (f.width, f.height),
             VideoContent::Solid { width, height, .. } => (*width, *height),
+            VideoContent::Shared(f) => (f.width(), f.height()),
             // Nothing is shown, so there is no size.
             VideoContent::Empty => (0, 0),
         };

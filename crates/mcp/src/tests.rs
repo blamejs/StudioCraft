@@ -232,6 +232,11 @@ fn source_add_with_an_unknown_kind_is_a_tool_error() {
     let doc = ok_json(&call(&mut s, "doc_inspect", json!({})));
     let items = doc["collection"]["scenes"][0]["items"].as_array().unwrap();
     assert!(items.iter().any(|i| i["transform"]["rotation"] == json!(15.0)), "{doc}");
+    ok_json(&call(&mut s, "item_transform", json!({"item": "Backdrop", "transform": {"flip_horizontal": true}})));
+    let doc = ok_json(&call(&mut s, "doc_inspect", json!({})));
+    let items = doc["collection"]["scenes"][0]["items"].as_array().unwrap();
+    assert!(items.iter().any(|i| i["transform"]["flip_horizontal"] == json!(true) && i["transform"]["flip_vertical"] == json!(false)), "{doc}");
+    error_text(&call(&mut s, "item_transform", json!({"item": "Backdrop", "transform": {"flip_vertical": 1}})));
     ok_json(&call(&mut s, "item_transform", json!({"item": "Backdrop", "transform": {}, "fit": "fill"})));
     let doc = ok_json(&call(&mut s, "doc_inspect", json!({})));
     assert!(doc["collection"]["scenes"][0]["items"].as_array().unwrap().iter().any(|i| i["fit"] == json!("fill")), "{doc}");

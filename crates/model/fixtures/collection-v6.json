@@ -1,0 +1,79 @@
+{
+  "format": "studiocraft.scene-collection",
+  "version": 6,
+  "data": {
+    "name": "Fixture",
+    "scenes": [
+      {
+        "id": 1,
+        "name": "Main",
+        "items": [
+          {
+            "id": 5,
+            "source": 3,
+            "transform": {
+              "position": { "x": 0, "y": 0 },
+              "scale": { "x": 1, "y": 1 },
+              "rotation": 0,
+              "crop": { "left": 0, "top": 0, "right": 0, "bottom": 0 },
+              "flip_horizontal": false,
+              "flip_vertical": false
+            },
+            "visible": true,
+            "locked": true,
+            "fit": "fill"
+          },
+          {
+            "id": 6,
+            "source": 4,
+            "transform": {
+              "position": { "x": 40, "y": 600 },
+              "scale": { "x": 1, "y": 1 },
+              "rotation": 15,
+              "crop": { "left": 0, "top": 0, "right": 0, "bottom": 0 },
+              "flip_horizontal": true,
+              "flip_vertical": false
+            },
+            "visible": true,
+            "locked": false
+          }
+        ]
+      },
+      { "id": 2, "name": "Break", "items": [] }
+    ],
+    "sources": [
+      {
+        "id": 3,
+        "kind": "color",
+        "kind_version": 1,
+        "name": "Background",
+        "settings": { "color": "#203040ff", "width": 1280, "height": 720 },
+        "filters": [ { "id": 9, "kind": "color_adjust", "kind_version": 1, "name": "Warmer", "enabled": true, "settings": { "brightness": 0.1 } } ],
+        "audio": { "gain": 1.0, "muted": false, "sync_offset_ms": 0, "monitor": "off", "record_track": null }
+      },
+      {
+        "id": 4,
+        "kind": "text",
+        "kind_version": 1,
+        "name": "Title",
+        "settings": { "text": "Starting soon", "size": 48, "color": "#ffffffff" },
+        "filters": [],
+        "audio": { "gain": 1.0, "muted": false, "sync_offset_ms": 0, "monitor": "off", "record_track": false }
+      },
+      {
+        "id": 7,
+        "kind": "audio_input_capture",
+        "kind_version": 1,
+        "name": "Microphone",
+        "settings": { "device": "" },
+        "filters": [],
+        "audio": { "gain": 0.5, "muted": true, "sync_offset_ms": 250, "monitor": "monitor_only", "record_track": true }
+      }
+    ],
+    "global_audio": [7],
+    "program_scene": 1,
+    "preview_scene": 2,
+    "transition": { "kind": "fade", "duration_ms": 300, "settings": {} },
+    "next_id": 10
+  }
+}
