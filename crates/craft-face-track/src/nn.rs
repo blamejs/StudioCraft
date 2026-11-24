@@ -108,6 +108,15 @@ fn dense_block<const R: usize>(x: &[&[f32]; R], wt: &[f32], b: &[f32], out: usiz
     }
 }
 
+/// The input position that window cell `k` of output position `o` reads (`stride` apart, `pad`
+/// zero cells before the input), or `None` when it falls in the padding or past an input of `n`.
+/// The position is worked out in a wider type, so a large stride or padding skips the cell
+/// instead of overflowing.
+pub(crate) fn tap(o: usize, stride: usize, k: usize, pad: usize, n: usize) -> Option<usize> {
+    let at = (o as u128).checked_mul(stride as u128)?.checked_add(k as u128)?.checked_sub(pad as u128)?;
+    usize::try_from(at).ok().filter(|&i| i < n)
+}
+
 /// A `ks×ks` convolution (any stride, one group) on `h×w×inp` → `oh×ow×out`: the patches of every
 /// output pixel are gathered into a patch matrix, which a dense layer multiplies by the weights.
 #[derive(Clone, Debug, Default)]
@@ -141,9 +150,9 @@ impl Conv {
             row.fill(0.0);
             for ox in 0..ow {
                 for ky in 0..self.ks {
-                    let Some(iy) = (oy * self.stride + ky).checked_sub(pad[0]).filter(|&v| v < h) else { continue };
+                    let Some(iy) = tap(oy, self.stride, ky, pad[0], h) else { continue };
                     for kx in 0..self.ks {
-                        let Some(ix) = (ox * self.stride + kx).checked_sub(pad[1]).filter(|&v| v < w) else { continue };
+                        let Some(ix) = tap(ox, self.stride, kx, pad[1], w) else { continue };
                         let src = (iy * w + ix) * self.inp;
                         let dst = ox * kk + (ky * self.ks + kx) * self.inp;
                         if let (Some(d), Some(s)) = (row.get_mut(dst..dst + self.inp), x.get(src..src + self.inp)) {
@@ -183,9 +192,9 @@ impl Depthwise {
             for (ox, out) in row.chunks_exact_mut(c).enumerate() {
                 out.copy_from_slice(&self.b[..c]);
                 for ky in 0..ks {
-                    let Some(iy) = (oy * self.stride + ky).checked_sub(pad[0]).filter(|&v| v < h) else { continue };
+                    let Some(iy) = tap(oy, self.stride, ky, pad[0], h) else { continue };
                     for kx in 0..ks {
-                        let Some(ix) = (ox * self.stride + kx).checked_sub(pad[1]).filter(|&v| v < w) else { continue };
+                        let Some(ix) = tap(ox, self.stride, kx, pad[1], w) else { continue };
                         let at = (iy * w + ix) * c;
                         let tap = (ky * ks + kx) * c;
                         let (Some(src), Some(tap)) = (x.get(at..at + c), self.w.get(tap..tap + c)) else { continue };
@@ -297,6 +306,27 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// A stride and padding near `usize::MAX` skip the window cells they put outside the input,
+    /// and the cells inside it still count.
+    #[test]
+    fn huge_strides_and_padding_skip_cells_outside_the_input() {
+        let pool = Pool::single();
+        // A 2×2 filter over one pixel of one channel: output column 0 reads nothing, and output
+        // column 1 reads the pixel through the filter's first cell only.
+        let conv = Conv { wt: vec![1.0, 2.0, 3.0, 4.0], b: vec![0.5], inp: 1, out: 1, ks: 2, stride: usize::MAX };
+        let mut patch = vec![0.0; conv.patch_len(1, 2).unwrap()];
+        let mut y = vec![0.0; 2];
+        conv.forward(&[10.0], [1, 1], [1, 2], [0, usize::MAX], &mut patch, &mut y, &pool);
+        assert_eq!(y, [0.5, 10.5]);
+        let d = Depthwise { w: vec![1.0, 2.0, 3.0, 4.0], b: vec![0.5], c: 1, ks: 2, stride: usize::MAX };
+        let mut y = vec![0.0; 2];
+        d.forward(&[10.0], [1, 1], [1, 2], [0, usize::MAX], &mut y, &pool);
+        assert_eq!(y, [0.5, 10.5]);
+        assert_eq!(tap(1, usize::MAX, 0, usize::MAX, 1), Some(0));
+        assert_eq!(tap(1, usize::MAX, 1, usize::MAX, 1), None);
+        assert_eq!(tap(0, 1, 0, 1, 4), None);
     }
 
     #[test]

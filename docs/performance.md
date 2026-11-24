@@ -325,8 +325,9 @@ TCP bench.
 Measured on 2026-11-24 on Linux (AMD EPYC 9R14), release build. `cargo bench -p craft-face-track
 --bench tracker` with `CRAFT_FACE_LANDMARKER` set to the Face Landmarker bundle runs the models on
 a 1280 × 720 picture. The detector reads the whole picture and the mesh a 420-pixel crop of it. A
-followed picture is one crop and mesh run and the head pose fit, which is the work the tracker
-does for each picture while it follows a face.
+followed picture is one crop and mesh run and the head pose fit. The tracker also works out the
+expression weights, smooths them and fills its output for each followed picture; the bench does
+not measure that part.
 
 | Bench | Median | Range (95%) |
 | --- | --- | --- |
@@ -337,8 +338,9 @@ does for each picture while it follows a face.
 | `mesh_2_threads` | 23.08 ms | 22.50 to 23.68 ms |
 | `followed_picture_2_threads` | 21.52 ms | 21.22 to 21.82 ms |
 
-At 30 fps a picture arrives every 33.3 ms, and a followed picture takes 21.5 ms on 2 threads, so
-the tracker keeps up at 30 fps on this host with 11.8 ms to spare. A picture in which the detector
+At 30 fps a picture arrives every 33.3 ms. The crop, mesh and pose fit of a followed picture take
+21.5 ms on 2 threads, which leaves 11.8 ms for the expression weights, the smoothing and the
+output. A picture in which the detector
 checks a weakly held face takes about 26 ms. A search, which runs while no face is followed, takes
 the detector and two mesh runs, about 49 ms. The second thread saves 1 ms on a followed picture.
 `tests/no_alloc.rs` counts

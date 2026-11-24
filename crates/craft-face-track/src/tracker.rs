@@ -236,7 +236,12 @@ impl Tracker {
         if self.mesh.presence < self.options.weak_presence && time - self.last_detect >= self.options.redetect_every {
             self.recheck(frame, time)?;
         }
-        self.report(time, out);
+        if !self.report(time, out) {
+            // A mesh the pose cannot be fitted to is not reported as a face.
+            out.found = false;
+            self.follow = None;
+            self.filters.reset();
+        }
         Ok(())
     }
 
@@ -296,48 +301,60 @@ impl Tracker {
         Ok(())
     }
 
-    /// Fill `out` from the current mesh: the pose, the expressions and the smoothed points.
-    fn report(&mut self, time: f64, out: &mut TrackFrame) {
+    /// Fill `out` from the current mesh; whether the pose could be fitted to it.
+    fn report(&mut self, time: f64, out: &mut TrackFrame) -> bool {
         let bundle = self.landmarker.bundle();
-        let (canonical, basis) = (&bundle.canonical, &bundle.basis);
-        let points = &self.mesh.points;
-        if let Some(f) = fit(canonical, basis, points) {
-            let pose = HeadPose::from_fit(&f, canonical, basis, points);
-            measure(points, &f, &self.neutral, self.mesh.tongue, &mut out.expressions);
-            let fl = &mut self.filters;
-            let rotation = fl.rotation.filter(pose.rotation, time);
-            let mut p = pose;
-            p.rotation = rotation;
-            let r = crate::pose::matrix(rotation.map(f64::from));
-            let [yaw, pitch, roll] = crate::pose::angles(&r);
-            p.yaw = yaw.to_degrees() as f32;
-            p.pitch = pitch.to_degrees() as f32;
-            p.roll = roll.to_degrees() as f32;
-            for (k, v) in p.center.iter_mut().enumerate() {
-                if let Some(f) = fl.position.get_mut(k) {
-                    *v = f.filter(f64::from(*v), time) as f32;
-                }
-            }
-            if let Some(f) = fl.position.get_mut(3) {
-                p.scale = f.filter(f64::from(p.scale), time) as f32;
-            }
-            out.pose = p;
-            for s in Blendshape::ALL {
-                if let Some(f) = fl.expressions.get_mut(s.index()) {
-                    let w = f.filter(f64::from(out.expressions.get(s)), time) as f32;
-                    out.expressions.set(s, w);
-                }
-            }
-        }
-        out.points.clear();
-        for (p, f) in points.iter().zip(self.filters.points.iter_mut()) {
-            out.points.push([
-                f[0].filter(f64::from(p[0]), time) as f32,
-                f[1].filter(f64::from(p[1]), time) as f32,
-                f[2].filter(f64::from(p[2]), time) as f32,
-            ]);
+        report(&mut self.filters, &bundle.canonical, &bundle.basis, &self.neutral, &self.mesh, time, out)
+    }
+}
+
+/// Fill `out` from `mesh`: the pose, the expressions and the smoothed points. Returns false, and
+/// leaves `out` and the filters as they were, when the pose cannot be fitted to the mesh.
+fn report(
+    filters: &mut Filters,
+    canonical: &[[f32; 3]],
+    basis: &[(usize, f32)],
+    neutral: &Measures,
+    mesh: &Mesh,
+    time: f64,
+    out: &mut TrackFrame,
+) -> bool {
+    let points = &mesh.points;
+    let Some(f) = fit(canonical, basis, points) else { return false };
+    let pose = HeadPose::from_fit(&f, canonical, basis, points);
+    measure(points, &f, neutral, mesh.tongue, &mut out.expressions);
+    let rotation = filters.rotation.filter(pose.rotation, time);
+    let mut p = pose;
+    p.rotation = rotation;
+    let r = crate::pose::matrix(rotation.map(f64::from));
+    let [yaw, pitch, roll] = crate::pose::angles(&r);
+    p.yaw = yaw.to_degrees() as f32;
+    p.pitch = pitch.to_degrees() as f32;
+    p.roll = roll.to_degrees() as f32;
+    for (k, v) in p.center.iter_mut().enumerate() {
+        if let Some(f) = filters.position.get_mut(k) {
+            *v = f.filter(f64::from(*v), time) as f32;
         }
     }
+    if let Some(f) = filters.position.get_mut(3) {
+        p.scale = f.filter(f64::from(p.scale), time) as f32;
+    }
+    out.pose = p;
+    for s in Blendshape::ALL {
+        if let Some(f) = filters.expressions.get_mut(s.index()) {
+            let w = f.filter(f64::from(out.expressions.get(s)), time) as f32;
+            out.expressions.set(s, w);
+        }
+    }
+    out.points.clear();
+    for (p, f) in points.iter().zip(filters.points.iter_mut()) {
+        out.points.push([
+            f[0].filter(f64::from(p[0]), time) as f32,
+            f[1].filter(f64::from(p[1]), time) as f32,
+            f[2].filter(f64::from(p[2]), time) as f32,
+        ]);
+    }
+    true
 }
 
 #[cfg(test)]
@@ -355,6 +372,23 @@ mod tests {
         ] {
             assert!(bad.check().is_err(), "{bad:?}");
         }
+    }
+
+    /// A mesh the pose cannot be fitted to leaves the frame as it was, not the last pose with new
+    /// points.
+    #[test]
+    fn an_unfitted_mesh_is_not_reported() {
+        let canonical = [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]];
+        let basis = [(0, 1.0), (1, 1.0), (2, 1.0)];
+        let mut mesh = Mesh::new();
+        mesh.points.extend([[5.0, 5.0, 0.0]; 3]);
+        mesh.presence = 0.9;
+        assert!(fit(&canonical, &basis, &mesh.points).is_none());
+        let mut filters = Filters::new(Smoothing::default());
+        let mut out = TrackFrame::new();
+        out.points.push([1.0, 2.0, 3.0]);
+        assert!(!report(&mut filters, &canonical, &basis, &Measures::default(), &mesh, 0.0, &mut out));
+        assert_eq!(out.points, vec![[1.0, 2.0, 3.0]]);
     }
 
     #[test]

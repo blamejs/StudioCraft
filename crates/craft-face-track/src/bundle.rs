@@ -10,6 +10,7 @@
 //! The bundle's other members are not read. Every count and offset in the archive and in the
 //! geometry message is checked before it is used.
 
+use std::io::Read;
 use std::path::Path;
 
 use crate::landmarker::{CANONICAL_POINTS, DET_SIZE, MESH_POINTS, MESH_SIZE};
@@ -39,13 +40,23 @@ pub struct Bundle {
 }
 
 impl Bundle {
-    /// Read the bundle file at `path`, after checking its size.
+    /// Read the bundle file at `path`, after checking its size. The read stops one byte past
+    /// [`MAX_BUNDLE_BYTES`], so a file that grows after the check is refused without being read
+    /// whole.
     pub fn open(path: &Path) -> Result<Bundle> {
-        let len = std::fs::metadata(path).map_err(|e| Error::Bundle(format!("{}: {e}", path.display())))?.len();
+        let fail = |e: std::io::Error| Error::Bundle(format!("{}: {e}", path.display()));
+        let too_big =
+            |len: u64| Error::Bundle(format!("{} is {len} bytes, more than the {MAX_BUNDLE_BYTES} a model bundle may have", path.display()));
+        let file = std::fs::File::open(path).map_err(fail)?;
+        let len = file.metadata().map_err(fail)?.len();
         if len > MAX_BUNDLE_BYTES {
-            return Err(Error::Bundle(format!("{} is {len} bytes, more than the {MAX_BUNDLE_BYTES} a model bundle may have", path.display())));
+            return Err(too_big(len));
         }
-        let bytes = std::fs::read(path).map_err(|e| Error::Bundle(format!("{}: {e}", path.display())))?;
+        let mut bytes = Vec::with_capacity(usize::try_from(len).unwrap_or(0));
+        file.take(MAX_BUNDLE_BYTES + 1).read_to_end(&mut bytes).map_err(fail)?;
+        if bytes.len() as u64 > MAX_BUNDLE_BYTES {
+            return Err(too_big(bytes.len() as u64));
+        }
         Bundle::from_task(&bytes)
     }
 
@@ -58,14 +69,17 @@ impl Bundle {
         let mesh = Model::read(stored_member(bytes, MESH)?)?;
         let anchors = crate::landmarker::ANCHORS;
         let count = |m: &Model, k: usize| m.output(k).map(|o| o.0.iter().product::<usize>());
-        if detector.input_shape(0) != Some(&[1, DET_SIZE, DET_SIZE, 3][..])
+        // Each model takes the one picture the tracker gives it.
+        if detector.inputs() != 1
+            || detector.input_shape(0) != Some(&[1, DET_SIZE, DET_SIZE, 3][..])
             || detector.outputs() != 2
             || detector.output(0).map(|o| o.0) != Some(&[1, anchors, 16][..])
             || count(&detector, 1) != Some(anchors)
         {
             return Err(Error::Bundle(format!("{DETECTOR} is not the face detector this tracker runs")));
         }
-        if mesh.input_shape(0) != Some(&[1, MESH_SIZE, MESH_SIZE, 3][..])
+        if mesh.inputs() != 1
+            || mesh.input_shape(0) != Some(&[1, MESH_SIZE, MESH_SIZE, 3][..])
             || mesh.outputs() != 3
             || count(&mesh, 0) != Some(MESH_POINTS * 3)
             || count(&mesh, 1) != Some(1)
@@ -115,10 +129,16 @@ fn stored<'a>(zip: &'a [u8], name: &str) -> std::result::Result<&'a [u8], String
     const EOCD: u32 = 0x0605_4b50;
     const CENTRAL: u32 = 0x0201_4b50;
     const LOCAL: u32 = 0x0403_4b50;
-    // The end record is in the last 22 bytes plus a comment of at most 65,535 bytes.
+    // The end record is in the last 22 bytes plus a comment of at most 65,535 bytes. A comment
+    // may hold the record's signature too: the record is the candidate whose comment ends the
+    // file and whose directory ends before it.
     let start = zip.len().saturating_sub(22 + 0xffff);
-    let end =
-        (start..zip.len().saturating_sub(21)).rev().find(|&p| u32_at(zip, p) == Some(EOCD as usize)).ok_or("the bundle is not a zip archive")?;
+    let is_end = |p: usize| {
+        u32_at(zip, p) == Some(EOCD as usize)
+            && u16_at(zip, p + 20).is_some_and(|c| p + 22 + c == zip.len())
+            && u32_at(zip, p + 12).zip(u32_at(zip, p + 16)).is_some_and(|(size, at)| at.checked_add(size).is_some_and(|e| e <= p))
+    };
+    let end = (start..zip.len().saturating_sub(21)).rev().find(|&p| is_end(p)).ok_or("the bundle is not a zip archive")?;
     let count = u16_at(zip, end + 10).ok_or("truncated archive")?;
     let mut at = u32_at(zip, end + 16).ok_or("truncated archive")?;
     if count > MAX_MEMBERS {
@@ -432,6 +452,34 @@ mod tests {
         let z = zip(&[(GEOMETRY, &geometry_message(&points(), true, &[(4, 1.0)]))]);
         let e = Bundle::from_task(&z).unwrap_err().to_string();
         assert!(e.contains(DETECTOR), "{e}");
+    }
+
+    /// A comment that holds the end record's signature does not hide the real record.
+    #[test]
+    fn an_end_signature_in_the_comment_is_skipped() {
+        let mut z = zip(&[("a.txt", b"alpha")]);
+        // The comment: a record signature whose own comment would run past the end of the file.
+        let mut comment = 0x0605_4b50u32.to_le_bytes().to_vec();
+        comment.extend([0; 16]);
+        comment.extend(100u16.to_le_bytes());
+        let n = z.len();
+        z[n - 2..].copy_from_slice(&(comment.len() as u16).to_le_bytes());
+        z.extend(&comment);
+        assert_eq!(stored_member(&z, "a.txt").unwrap(), b"alpha");
+    }
+
+    /// A detector that takes a second input is not the detector the tracker runs: the tracker
+    /// gives it one picture.
+    #[test]
+    fn models_take_one_input() {
+        use crate::tflite::tests::model;
+        let (d, a) = (DET_SIZE as i32, crate::landmarker::ANCHORS as i32);
+        let detector =
+            model(vec![], vec![(vec![1, d, d, 3], 0, None), (vec![1, a, 16], 0, None), (vec![1, a, 1], 0, None)], vec![], vec![0, 1, 2], vec![1, 2]);
+        // Both models are read before either is checked.
+        let z = zip(&[(DETECTOR, &detector), (MESH, &detector)]);
+        let e = Bundle::from_task(&z).unwrap_err().to_string();
+        assert!(e.contains("is not the face detector"), "{e}");
     }
 
     #[test]

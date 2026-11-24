@@ -80,6 +80,12 @@ pub(crate) fn angles(r: &M3) -> [f64; 3] {
 
 /// The eigenvector of the largest eigenvalue of a symmetric 4×4 matrix (cyclic Jacobi).
 fn top_eigenvector(mut a: [[f64; 4]; 4]) -> [f64; 4] {
+    // Scaled to a largest entry of 1, so the stop test below is relative to the matrix: weights
+    // scaled alike give the same eigenvector.
+    let big = a.iter().flatten().fold(0.0f64, |m, v| m.max(v.abs()));
+    if big > 0.0 && big.is_finite() {
+        a = a.map(|row| row.map(|v| v / big));
+    }
     let mut v = [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]];
     for _ in 0..32 {
         let off: f64 = (0..4).flat_map(|i| (0..4).filter(move |&j| j != i).map(move |j| (i, j))).map(|(i, j)| a[i][j] * a[i][j]).sum();
@@ -137,6 +143,27 @@ impl Fit {
     }
 }
 
+/// Whether the weighted `points` (in the fit's frame through `frame`), less their weighted center
+/// `center`, reach out in two independent directions. Points on one line leave the rotation about
+/// that line undetermined.
+fn spans_a_plane(points: &[[f32; 3]], basis: &[(usize, f32)], center: V3, frame: fn([f32; 3]) -> V3) -> bool {
+    let mut m = [[0.0f64; 3]; 3];
+    for &(i, w) in basis {
+        let Some(p) = points.get(i) else { return false };
+        let d = sub(frame(*p), center);
+        for a in 0..3 {
+            for b in 0..3 {
+                m[a][b] += w as f64 * d[a] * d[b];
+            }
+        }
+    }
+    let trace = m[0][0] + m[1][1] + m[2][2];
+    // The 2×2 principal minors add up to the products of the eigenvalues in pairs, which are all
+    // zero for points on a line.
+    let minors = m[0][0] * m[1][1] - m[0][1] * m[0][1] + m[0][0] * m[2][2] - m[0][2] * m[0][2] + m[1][1] * m[2][2] - m[1][2] * m[1][2];
+    trace > 0.0 && minors > 1e-12 * trace * trace
+}
+
 /// The weighted similarity transform carrying `canonical` onto `points` (picture pixels), over the
 /// `basis` points and weights. `None` when the points are too few, degenerate or not numbers.
 pub(crate) fn fit(canonical: &[[f32; 3]], basis: &[(usize, f32)], points: &[[f32; 3]]) -> Option<Fit> {
@@ -174,6 +201,9 @@ pub(crate) fn fit(canonical: &[[f32; 3]], basis: &[(usize, f32)], points: &[[f32
         }
     }
     if spread.is_nan() || spread <= 0.0 || s.iter().flatten().any(|v| !v.is_finite()) {
+        return None;
+    }
+    if !spans_a_plane(canonical, basis, cc, |c| [c[0] as f64, c[1] as f64, c[2] as f64]) || !spans_a_plane(points, basis, pc, to_fit_frame) {
         return None;
     }
     let [[sxx, sxy, sxz], [syx, syy, syz], [szx, szy, szz]] = s;
@@ -359,6 +389,32 @@ pub(crate) mod tests {
                 + r[0][2] * (r[1][0] * r[2][1] - r[1][1] * r[2][0]);
             assert!((det - 1.0).abs() < 1e-4, "{det}");
         }
+    }
+
+    /// Multiplying every weight by one factor, however small, gives the same pose.
+    #[test]
+    fn scaling_every_weight_alike_keeps_the_pose() {
+        let axes = vec![[1.0, 0.0, 0.0], [-1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, -1.0, 0.0], [0.0, 0.0, 1.0], [0.0, 0.0, -1.0]];
+        let pts = posed(&axes, [90.0, 0.0, 0.0], 1.0, [0.0; 3]);
+        for w in [1.0f32, 1e-20] {
+            let b: Vec<(usize, f32)> = (0..axes.len()).map(|i| (i, w)).collect();
+            let p = HeadPose::of(&axes, &b, &pts).unwrap();
+            assert!((p.yaw - 90.0).abs() < 1e-2 && (p.scale - 1.0).abs() < 1e-4, "weight {w}: {p:?}");
+        }
+    }
+
+    /// Weighted points on one line do not fix a rotation about it; three points in a plane do.
+    #[test]
+    fn points_on_a_line_give_no_pose() {
+        let mut c = cloud();
+        c[0] = [-1.0, 0.0, 0.0];
+        c[1] = [1.0, 0.0, 0.0];
+        c[2] = [0.0, 1.0, 0.0];
+        let line = [(0, 1.0), (1, 1.0), (5, 0.0)];
+        assert!(HeadPose::of(&c, &line, &posed(&c, [0.0; 3], 1.0, [0.0; 3])).is_none());
+        let plane = [(0, 1.0), (1, 1.0), (2, 1.0)];
+        let p = HeadPose::of(&c, &plane, &posed(&c, [20.0, 0.0, 0.0], 2.0, [0.0; 3])).unwrap();
+        assert!((p.yaw - 20.0).abs() < 1e-2 && (p.scale - 2.0).abs() < 1e-3, "{p:?}");
     }
 
     #[test]
