@@ -85,10 +85,15 @@ impl Grab for Display {
 
 impl Grab for Window {
     fn open(target: &str) -> Result<Self, PluginError> {
-        Window::open(target).map_err(|e| PluginError::Unavailable(e.to_string()))
+        let mut w = Window::open(target).map_err(|e| PluginError::Unavailable(e.to_string()))?;
+        w.share_on_gpu();
+        Ok(w)
     }
     fn grab(&mut self, frame: &mut studiocraft_media::video::VideoFrame) -> Grabbed {
         Window::grab(self, frame).into()
+    }
+    fn grab_shared(&mut self) -> SharedGrab {
+        Window::grab_shared(self)
     }
 }
 

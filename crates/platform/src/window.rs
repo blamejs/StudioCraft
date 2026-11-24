@@ -2,10 +2,15 @@
 //!
 //! A window is stored in settings as its program name and title. When the exact window is gone
 //! (the program was restarted), capture picks the first window of the same program.
+//!
+//! On Windows, [`WindowCapture::share_on_gpu`] captures the window with Windows.Graphics.Capture
+//! into textures shared with the compositor; the picture is copied through memory when it cannot.
 
+use craft_gpu_interop::WindowCapture as GpuWindow;
 use studiocraft_media::video::VideoFrame;
 
 use crate::PlatformError;
+use crate::display::{SharedGrab, Step, step};
 
 /// A window the system reports.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -51,11 +56,41 @@ pub fn best_match(list: &[WindowInfo], want: &WindowInfo) -> Option<usize> {
 /// A window being captured.
 pub struct WindowCapture {
     inner: imp::Capture,
+    /// The capture into textures shared with the compositor, while it runs.
+    gpu: Option<GpuWindow>,
 }
 
 impl WindowCapture {
     pub fn open(key: &str) -> Result<WindowCapture, PlatformError> {
-        Ok(WindowCapture { inner: imp::Capture::open(&WindowInfo::parse_key(key))? })
+        Ok(WindowCapture { inner: imp::Capture::open(&WindowInfo::parse_key(key))?, gpu: None })
+    }
+
+    /// Capture into textures shared with the compositor where the system allows it (Windows, with
+    /// window capture into textures and shared fences). Returns whether the GPU capture runs;
+    /// elsewhere it does not, and [`WindowCapture::grab_shared`] returns [`SharedGrab::Memory`].
+    pub fn share_on_gpu(&mut self) -> bool {
+        if self.gpu.is_none() {
+            self.gpu = self.inner.gpu_target().and_then(|(window, display)| GpuWindow::open(window, &display).ok());
+        }
+        self.gpu.is_some()
+    }
+
+    /// The newest picture in a shared texture, without waiting. While the window is minimized the
+    /// last picture stays. Once the compositor has reported that it cannot take the shared
+    /// textures, or the GPU capture fails, this returns [`SharedGrab::Memory`] from then on.
+    pub fn grab_shared(&mut self) -> SharedGrab {
+        let Some(gpu) = &mut self.gpu else { return SharedGrab::Memory };
+        match step(gpu.grab()) {
+            Step::Give(g) => g,
+            Step::Reopen => {
+                self.gpu = None;
+                if self.share_on_gpu() { SharedGrab::Unchanged } else { SharedGrab::Memory }
+            }
+            Step::Stop => {
+                self.gpu = None;
+                SharedGrab::Memory
+            }
+        }
     }
 
     /// The window's current picture into `frame` (RGBA). Minimized windows return an error. On
@@ -107,7 +142,27 @@ mod imp {
             let img = self.window.capture_image().map_err(PlatformError::failed)?;
             fill(frame, img.width(), img.height(), img.as_raw())
         }
+
+        /// The window's handle and the device name of the display it is on, for the capture into
+        /// shared textures.
+        #[cfg(windows)]
+        pub fn gpu_target(&self) -> Option<(isize, String)> {
+            let display = self.window.current_monitor().ok()?.name().ok()?;
+            Some((super::handle(self.window.id().ok()?), display))
+        }
+
+        #[cfg(target_os = "macos")]
+        pub fn gpu_target(&self) -> Option<(isize, String)> {
+            None
+        }
     }
+}
+
+/// A window handle from the low 32 bits xcap reports. On 64-bit Windows a window handle is a
+/// 32-bit value extended with its sign bit, so the low bits name the window.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn handle(id: u32) -> isize {
+    id as i32 as isize
 }
 
 /// On Linux the desktop's picker chooses the window, so the list is empty and every key opens the
@@ -134,6 +189,10 @@ mod imp {
         pub fn grab(&mut self, frame: &mut VideoFrame) -> Result<(), PlatformError> {
             self.0.grab(frame)
         }
+
+        pub fn gpu_target(&self) -> Option<(isize, String)> {
+            None
+        }
     }
 }
 
@@ -158,12 +217,33 @@ mod imp {
         pub fn grab(&mut self, _frame: &mut VideoFrame) -> Result<(), PlatformError> {
             Err(PlatformError::Unsupported)
         }
+
+        pub fn gpu_target(&self) -> Option<(isize, String)> {
+            None
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_window_handle_keeps_its_sign_bit() {
+        assert_eq!(handle(0x0001_02a4), 0x0001_02a4);
+        assert_eq!(handle(0xffff_fffe), -2, "the high bits of a 64-bit handle repeat the sign bit");
+    }
+
+    #[test]
+    fn without_a_gpu_capture_window_pictures_are_copied_through_memory() {
+        // Build machines without a desktop have no window to capture.
+        let Some(first) = windows().into_iter().next() else { return };
+        let Ok(mut cap) = WindowCapture::open(&first.key()) else { return };
+        assert!(matches!(cap.grab_shared(), SharedGrab::Memory), "nothing shared before share_on_gpu");
+        if !cap.share_on_gpu() {
+            assert!(matches!(cap.grab_shared(), SharedGrab::Memory));
+        }
+    }
 
     fn w(app: &str, title: &str) -> WindowInfo {
         WindowInfo { app: app.into(), title: title.into() }

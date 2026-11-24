@@ -48,6 +48,9 @@ pub struct SharedRing {
     width: u32,
     height: u32,
     adapter: AdapterId,
+    /// Whether the compositor keeps the pictures' alpha (a window's) instead of drawing them
+    /// opaque (a display's).
+    alpha: bool,
     /// 0 while the frames may stay on the GPU, else a [`Fallback`] code.
     fallback: AtomicU8,
     /// Held open for the ring's life; only the importer reads them.
@@ -63,6 +66,7 @@ impl std::fmt::Debug for SharedRing {
             .field("width", &self.width)
             .field("height", &self.height)
             .field("adapter", &self.adapter)
+            .field("alpha", &self.alpha)
             .field("fallback", &self.fallback())
             .finish()
     }
@@ -70,8 +74,8 @@ impl std::fmt::Debug for SharedRing {
 
 impl SharedRing {
     #[cfg(windows)]
-    pub(crate) fn new(width: u32, height: u32, adapter: AdapterId, handles: crate::dxgi_ffi::Handles) -> SharedRing {
-        SharedRing { id: NEXT_RING.fetch_add(1, Ordering::Relaxed), width, height, adapter, fallback: AtomicU8::new(0), handles }
+    pub(crate) fn new(width: u32, height: u32, adapter: AdapterId, alpha: bool, handles: crate::dxgi_ffi::Handles) -> SharedRing {
+        SharedRing { id: NEXT_RING.fetch_add(1, Ordering::Relaxed), width, height, adapter, alpha, fallback: AtomicU8::new(0), handles }
     }
 
     /// A ring without textures, which no device can import: its frames go through the fallback.
@@ -82,6 +86,7 @@ impl SharedRing {
             width,
             height,
             adapter: AdapterId(0),
+            alpha: false,
             fallback: AtomicU8::new(0),
             #[cfg(windows)]
             handles: crate::dxgi_ffi::Handles::none(),
@@ -114,6 +119,12 @@ impl SharedRing {
     /// The adapter whose device holds the textures.
     pub fn adapter(&self) -> AdapterId {
         self.adapter
+    }
+
+    /// Whether the pictures are drawn with their own alpha: true for a window's, false for a
+    /// display's, which are drawn opaque.
+    pub fn keeps_alpha(&self) -> bool {
+        self.alpha
     }
 
     /// Why the compositor cannot take this ring's frames on the GPU, once it has said so.

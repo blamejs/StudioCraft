@@ -161,6 +161,191 @@ fn an_adapter_id_from_vulkan_is_the_one_windows_reports() {
 #[test]
 fn elsewhere_than_windows_the_capture_reports_the_fallback() {
     assert_eq!(Duplication::open("display").err(), Some(CaptureError::Fallback(Fallback::Unsupported)));
+    assert_eq!(WindowCapture::open(1, "display").err(), Some(CaptureError::Fallback(Fallback::Unsupported)));
+}
+
+mod window {
+    use std::collections::VecDeque;
+
+    use super::*;
+    use crate::window_capture::{Capture, MAX_SIDE, Plan, Step, Target, open_error, plan, sides};
+
+    struct Picture {
+        content: (i32, i32),
+        size: (u32, u32),
+    }
+
+    fn picture(w: u32, h: u32) -> Picture {
+        Picture { content: (w as i32, h as i32), size: (w, h) }
+    }
+
+    /// The system side of a window capture, without a system: pictures are queued by the test.
+    struct Fake {
+        alive: bool,
+        pictures: VecDeque<Picture>,
+        pool: (i32, i32),
+        released: u64,
+        rings: Vec<(u32, u32)>,
+        resized: Vec<(i32, i32)>,
+        copies: Vec<(usize, u64, (u32, u32))>,
+    }
+
+    impl Fake {
+        fn new(w: i32, h: i32) -> Fake {
+            Fake { alive: true, pictures: VecDeque::new(), pool: (w, h), released: 0, rings: Vec::new(), resized: Vec::new(), copies: Vec::new() }
+        }
+    }
+
+    impl Target for Fake {
+        type Picture = Picture;
+        fn alive(&self) -> bool {
+            self.alive
+        }
+        fn next(&mut self) -> Result<Option<Picture>, CaptureError> {
+            // The newest picture wins, as the system's frame pool hands out the newest one.
+            let newest = self.pictures.pop_back();
+            self.pictures.clear();
+            Ok(newest)
+        }
+        fn sizes(p: &Picture) -> ((i32, i32), (u32, u32)) {
+            (p.content, p.size)
+        }
+        fn pool_size(&self) -> (i32, i32) {
+            self.pool
+        }
+        fn resize_pool(&mut self, width: i32, height: i32) -> Result<(), CaptureError> {
+            self.pool = (width, height);
+            self.resized.push((width, height));
+            Ok(())
+        }
+        fn new_ring(&mut self, width: u32, height: u32) -> Result<std::sync::Arc<SharedRing>, CaptureError> {
+            self.rings.push((width, height));
+            Ok(SharedRing::detached(width, height))
+        }
+        fn released(&self) -> u64 {
+            self.released
+        }
+        fn copy(&mut self, p: Picture, slot: usize, ready: u64) -> Result<(), CaptureError> {
+            self.copies.push((slot, ready, p.size));
+            Ok(())
+        }
+    }
+
+    fn shared(g: Result<Grab, CaptureError>) -> SharedFrame {
+        match g {
+            Ok(Grab::Frame(f)) => f,
+            other => panic!("expected a frame, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn an_older_windows_or_a_refused_window_falls_back_and_a_closed_one_is_looked_for_again() {
+        const E_NOINTERFACE: i32 = 0x8000_4002_u32 as i32;
+        const REGDB_E_CLASSNOTREG: i32 = 0x8004_0154_u32 as i32;
+        const E_ACCESSDENIED: i32 = 0x8007_0005_u32 as i32;
+        const E_INVALIDARG: i32 = 0x8007_0057_u32 as i32;
+        const INVALID_WINDOW: i32 = 0x8007_0578_u32 as i32;
+        const DEVICE_REMOVED: i32 = 0x887A_0005_u32 as i32;
+        let unsupported = CaptureError::Fallback(Fallback::Unsupported);
+        let refused = CaptureError::Fallback(Fallback::Refused);
+        // An older Windows: no capture classes, or a pool or session interface it does not have.
+        assert_eq!(open_error(Step::Support, REGDB_E_CLASSNOTREG, ""), unsupported);
+        assert_eq!(open_error(Step::Support, E_INVALIDARG, ""), unsupported);
+        assert_eq!(open_error(Step::Item, REGDB_E_CLASSNOTREG, ""), unsupported);
+        assert_eq!(open_error(Step::Pool, E_NOINTERFACE, ""), unsupported);
+        // A window the system does not let be captured.
+        assert_eq!(open_error(Step::Item, E_ACCESSDENIED, ""), refused);
+        assert_eq!(open_error(Step::Item, E_INVALIDARG, ""), refused);
+        assert_eq!(open_error(Step::Session, E_ACCESSDENIED, ""), refused);
+        // A window that closed before it was opened, and a device that went away.
+        assert!(matches!(open_error(Step::Item, INVALID_WINDOW, "gone"), CaptureError::Lost(m) if m.contains("gone")));
+        assert!(matches!(open_error(Step::Pool, DEVICE_REMOVED, ""), CaptureError::Failed(_)));
+        assert!(matches!(open_error(Step::Device, E_INVALIDARG, ""), CaptureError::Failed(_)));
+    }
+
+    #[test]
+    fn a_window_ring_on_another_adapter_or_that_failed_to_import_sends_the_capture_back_to_memory() {
+        for reason in [Fallback::OtherAdapter, Fallback::ImportFailed, Fallback::UnsupportedBackend] {
+            let mut capture = Capture::new(Fake::new(4, 2)).unwrap();
+            capture.ring().refuse(reason);
+            assert_eq!(capture.grab(Instant::now()).err(), Some(CaptureError::Fallback(reason)));
+        }
+        // The importer's adapter check is the one the display capture uses.
+        let window = AdapterId::from_parts(3, 0);
+        assert_eq!(check_import(Backend::Dx12, window, Some(AdapterId::from_parts(4, 0))), Err(Fallback::OtherAdapter));
+    }
+
+    #[test]
+    fn a_window_picture_is_copied_into_the_ring_and_a_closed_window_is_lost() {
+        let mut capture = Capture::new(Fake::new(4, 2)).unwrap();
+        let now = Instant::now();
+        assert!(matches!(capture.grab(now), Ok(Grab::Unchanged)), "no picture yet");
+        capture.target.pictures.push_back(picture(4, 2));
+        let f = shared(capture.grab(now));
+        assert_eq!((f.slot(), f.ready(), f.width(), f.height()), (0, 1, 4, 2));
+        assert_eq!(capture.target.copies, vec![(0, 1, (4, 2))]);
+        assert!(matches!(capture.grab(now), Ok(Grab::Unchanged)), "an unchanged window gives nothing");
+        capture.target.alive = false;
+        assert!(matches!(capture.grab(now), Err(CaptureError::Lost(_))));
+    }
+
+    #[test]
+    fn a_resized_window_gets_buffers_and_then_a_ring_of_its_new_size() {
+        let mut capture = Capture::new(Fake::new(4, 2)).unwrap();
+        let now = Instant::now();
+        let first = capture.ring().id();
+        // The window grew: the picture in the old buffer holds only part of it and is dropped.
+        capture.target.pictures.push_back(Picture { content: (8, 6), size: (4, 2) });
+        assert!(matches!(capture.grab(now), Ok(Grab::Unchanged)));
+        assert_eq!(capture.target.resized, vec![(8, 6)]);
+        assert!(capture.target.copies.is_empty());
+        // The next picture is in a buffer of the new size and goes into a new ring of that size.
+        capture.target.pictures.push_back(picture(8, 6));
+        let f = shared(capture.grab(now));
+        assert_eq!((f.width(), f.height(), f.ready()), (8, 6, 1));
+        assert_ne!(f.ring().id(), first);
+        assert_eq!(capture.target.rings, vec![(4, 2), (8, 6)]);
+    }
+
+    #[test]
+    fn a_minimized_or_oversized_window_gives_no_picture() {
+        let mut capture = Capture::new(Fake::new(4, 2)).unwrap();
+        let now = Instant::now();
+        capture.target.pictures.push_back(Picture { content: (0, 0), size: (4, 2) });
+        assert!(matches!(capture.grab(now), Ok(Grab::Unchanged)));
+        assert!(capture.target.resized.is_empty() && capture.target.copies.is_empty(), "a minimized window keeps its buffers");
+        let big = MAX_SIDE as i32 + 1;
+        capture.target.pictures.push_back(Picture { content: (big, 2), size: (4, 2) });
+        assert!(matches!(capture.grab(now), Err(CaptureError::Failed(_))), "no shared texture holds it");
+        assert!(matches!(sides(0, 5), Err(CaptureError::Lost(_))));
+        assert!(matches!(sides(-1, 5), Err(CaptureError::Lost(_))));
+        assert_eq!(sides(MAX_SIDE as i32, 1).ok(), Some((MAX_SIDE, 1)));
+        assert!(Capture::new(Fake::new(0, 0)).is_err(), "a window with no area opens no ring");
+        assert_eq!(plan((4, 2), (4, 2), (4, 2), (4, 2)).ok(), Some(Plan::Copy { new_ring: false }));
+        assert_eq!(plan((4, 2), (0, 2), (4, 2), (4, 2)).ok(), Some(Plan::Skip));
+    }
+
+    #[test]
+    fn a_late_release_leaves_the_newest_picture_held_and_the_capture_goes_on() {
+        let mut capture = Capture::new(Fake::new(4, 2)).unwrap();
+        let now = Instant::now();
+        for ready in 1..=SLOTS as u64 {
+            capture.target.pictures.push_back(picture(4, 2));
+            assert_eq!(shared(capture.grab(now)).ready(), ready);
+        }
+        // The compositor has released none of them: the capture returns at once and keeps the
+        // newest picture, and a newer one replaces it.
+        capture.target.pictures.push_back(picture(4, 2));
+        assert!(matches!(capture.grab(now), Ok(Grab::Unchanged)));
+        capture.target.pictures.push_back(Picture { content: (4, 2), size: (4, 2) });
+        assert!(matches!(capture.grab(now), Ok(Grab::Unchanged)));
+        assert_eq!(capture.target.copies.len(), SLOTS);
+        // Once the first texture is released, the held picture is copied without a new one.
+        capture.target.released = 1;
+        let f = shared(capture.grab(now));
+        assert_eq!((f.slot(), f.ready()), (0, SLOTS as u64 + 1));
+        assert!(matches!(capture.grab(now), Ok(Grab::Unchanged)), "the held picture is copied once");
+    }
 }
 
 fn exported(ring: &std::sync::Arc<ExportRing>, slot: usize, ready: u64) -> ExportFrame {
@@ -409,6 +594,47 @@ mod gpu {
         for (i, (got, want)) in out.chunks(4).zip(texels.chunks(4)).enumerate() {
             assert_eq!(&got[..3], &want[..3], "texel {i} keeps its color");
             assert_eq!(got[3], 255, "texel {i} is opaque");
+        }
+    }
+
+    #[test]
+    fn a_window_picture_keeps_its_alpha_and_a_display_picture_does_not() {
+        assert!(!SharedRing::detached(4, 2).keeps_alpha(), "a display's ring is drawn opaque");
+        let Some((device, queue)) = device() else { return };
+        let src = texture(&device, 64, 1, wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST);
+        let dst = texture(&device, 64, 1, wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC);
+        // Premultiplied texels: opaque, half covered, and one with no coverage.
+        let mut texels = Vec::new();
+        let mut want = Vec::new();
+        for i in 0..64u8 {
+            let alpha: u8 = match i {
+                0 => 0,
+                _ if i % 2 == 0 => 255,
+                _ => 128,
+            };
+            let straight = if alpha == 0 { [0, 0, 0] } else { [i.wrapping_mul(4), 255 - i, i.wrapping_mul(3)] };
+            let pre = straight.map(|c| ((u32::from(c) * u32::from(alpha) + 127) / 255) as u8);
+            texels.extend([pre[0], pre[1], pre[2], alpha]);
+            want.push([straight[0], straight[1], straight[2], alpha]);
+        }
+        queue.write_texture(
+            src.as_image_copy(),
+            &texels,
+            wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(256), rows_per_image: Some(1) },
+            wgpu::Extent3d { width: 64, height: 1, depth_or_array_layers: 1 },
+        );
+        let mut opaque = Opaque::new(&device);
+        let bind = opaque.bind(&device, &src.create_view(&Default::default()));
+        let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+        opaque.draw_keeping_alpha(&device, &mut enc, &bind, &dst.create_view(&Default::default()), wgpu::TextureFormat::Bgra8Unorm);
+        queue.submit([enc.finish()]);
+        let out = read(&device, &queue, &dst);
+        for (i, (got, want)) in out.chunks(4).zip(&want).enumerate() {
+            assert_eq!(got[3], want[3], "texel {i} keeps its alpha");
+            for c in 0..3 {
+                // Undoing the multiplication of an 8-bit value is exact to within 2 steps.
+                assert!(got[c].abs_diff(want[c]) <= 2, "texel {i} has straight color: {got:?}, want {want:?}");
+            }
         }
     }
 
