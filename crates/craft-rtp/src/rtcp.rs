@@ -390,9 +390,9 @@ pub fn write_bye(out: &mut Vec<u8>, sources: &[u32], reason: Option<&str>) -> Re
         if let Some(r) = reason {
             out.push(r.len() as u8);
             out.extend_from_slice(r.as_bytes());
-            while out.len() % 4 != 0 {
-                out.push(0);
-            }
+            // The reason field starts on a word boundary of the packet; pad it to the next one.
+            let pad = (4 - (1 + r.len()) % 4) % 4;
+            out.resize(out.len() + pad, 0);
         }
     })
 }

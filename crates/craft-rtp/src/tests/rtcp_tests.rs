@@ -89,6 +89,13 @@ fn picture_loss_indication_and_bye() {
 }
 
 #[test]
+fn bye_padding_counts_from_the_packet_start() {
+    let mut out = vec![7];
+    write_bye(&mut out, &[1], Some("x")).unwrap();
+    assert_eq!(out, [7, 0x81, 203, 0, 2, 0, 0, 0, 1, 1, b'x', 0, 0]);
+}
+
+#[test]
 fn compound_packets_are_read_in_order_and_other_types_pass_through() {
     let mut out = Vec::new();
     write_receiver_report(&mut out, 1, &[]).unwrap();

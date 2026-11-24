@@ -89,9 +89,14 @@ fn fu_a(nal: &[u8], size: usize) -> Vec<Vec<u8>> {
         .collect()
 }
 
+/// An IDR slice of 51 bytes whose slice header starts at macroblock 0.
+fn long_idr() -> Vec<u8> {
+    [0x65, 0x88].into_iter().chain(2..=50).collect()
+}
+
 #[test]
 fn h264_fu_a_fragments_are_joined() {
-    let nal: Vec<u8> = [0x65].into_iter().chain(1..=50).collect();
+    let nal = long_idr();
     let parts = fu_a(&nal, 16);
     assert_eq!(parts.len(), 4);
     let mut d = Depacketizer::new(Codec::H264).unwrap();
@@ -103,7 +108,7 @@ fn h264_fu_a_fragments_are_joined() {
 
 #[test]
 fn h264_a_lost_middle_fragment_drops_the_access_unit_until_the_next_key_frame() {
-    let nal: Vec<u8> = [0x65].into_iter().chain(1..=50).collect();
+    let nal = long_idr();
     let parts = fu_a(&nal, 16);
     let mut d = Depacketizer::new(Codec::H264).unwrap();
     run(&mut d, &[(1, true, IDR)]);
@@ -116,7 +121,8 @@ fn h264_a_lost_middle_fragment_drops_the_access_unit_until_the_next_key_frame() 
     assert!(d.wants_key_frame());
     let (frames, _) = run(&mut d, &[(4, true, IDR)]);
     assert_eq!(frames.len(), 1);
-    assert_eq!(d.stats().dropped, 3);
+    // The damaged access unit at 2 and the slice at 3, each counted once.
+    assert_eq!(d.stats().dropped, 2);
 
     // Without a gap report, a fragment run that starts without its first fragment is dropped too.
     let mut d = Depacketizer::new(Codec::H264).unwrap();
@@ -319,4 +325,108 @@ fn aac_payloads_that_do_not_read_are_refused() {
     assert!(matches!(Depacketizer::new(Codec::Aac(bad)), Err(Error::BadInput(_))));
     let bad = AacConfig { frame_samples: 0, ..AacConfig::HBR };
     assert!(matches!(Depacketizer::new(Codec::Aac(bad)), Err(Error::BadInput(_))));
+}
+
+#[test]
+fn h264_a_broken_frame_asks_for_a_key_frame_at_once() {
+    let mut d = Depacketizer::new(Codec::H264).unwrap();
+    run(&mut d, &[(1, true, IDR)]);
+    assert!(!d.wants_key_frame());
+    let (_, errors) = run(&mut d, &[(2, false, &[])]);
+    assert_eq!(errors, [Error::Truncated("the H.264 payload header")]);
+    assert!(d.wants_key_frame());
+}
+
+/// The second slice of an IDR picture: `first_mb_in_slice` is 1 (`010`).
+const IDR_SECOND_SLICE: &[u8] = &[0x65, 0x40, 0x11];
+
+#[test]
+fn h264_after_a_gap_an_idr_without_its_first_slice_is_dropped() {
+    let mut d = Depacketizer::new(Codec::H264).unwrap();
+    run(&mut d, &[(1, true, IDR)]);
+    // The first slice of the next access unit was lost; only its second slice arrives.
+    d.lost();
+    let (frames, _) = run(&mut d, &[(2, true, IDR_SECOND_SLICE)]);
+    assert_eq!(frames, []);
+    assert!(d.wants_key_frame());
+    // A whole two-slice IDR restores decoding.
+    let (frames, _) = run(&mut d, &[(3, false, IDR), (3, true, IDR_SECOND_SLICE)]);
+    assert_eq!(frames, [Got { timestamp: 3, key: true, data: annexb(&[IDR, IDR_SECOND_SLICE]) }]);
+    assert!(!d.wants_key_frame());
+
+    // A gap inside an access unit drops the rest of it, counted once.
+    let mut d = Depacketizer::new(Codec::H264).unwrap();
+    run(&mut d, &[(1, true, IDR), (2, false, IDR)]);
+    d.lost();
+    let (frames, _) = run(&mut d, &[(2, true, IDR)]);
+    assert_eq!(frames, []);
+    assert!(d.wants_key_frame());
+    assert_eq!(d.stats().dropped, 1);
+}
+
+#[test]
+fn h264_stap_a_refuses_nested_packetization_units() {
+    let mut d = Depacketizer::new(Codec::H264).unwrap();
+    let nested = [0x78, 0, 1, 0x41];
+    let mut stap = vec![0x78];
+    for nal in [IDR, &nested[..]] {
+        stap.extend_from_slice(&(nal.len() as u16).to_be_bytes());
+        stap.extend_from_slice(nal);
+    }
+    let (frames, errors) = run(&mut d, &[(0, true, &stap)]);
+    assert_eq!(frames, []);
+    assert_eq!(errors, [Error::Invalid("an STAP-A holds a NAL unit of a packetization type")]);
+}
+
+#[test]
+fn h264_fu_a_fragments_must_continue_one_nal_unit() {
+    let parts = fu_a(&long_idr(), 16);
+    let mut d = Depacketizer::new(Codec::H264).unwrap();
+    // An end fragment of a non-IDR slice after the start of an IDR slice.
+    let end = [0x5C, 0x40 | 1, 9, 9];
+    let (frames, errors) = run(&mut d, &[(1, false, &parts[0]), (1, true, &end)]);
+    assert_eq!(frames, []);
+    assert_eq!(errors, [Error::Invalid("a FU-A fragment does not continue the NAL unit before it")]);
+    // A start fragment that carries an aggregation packet.
+    let (frames, errors) = run(&mut d, &[(2, false, &[0x7C, 0x80 | 24, 0, 1]), (2, true, &[0x7C, 0x40 | 24, 0x65])]);
+    assert_eq!(frames, []);
+    assert_eq!(errors, [Error::Invalid("a FU-A fragment carries a NAL unit of a packetization type")]);
+}
+
+#[test]
+fn opus_payloads_over_the_limit_are_dropped() {
+    let mut d = Depacketizer::with_max_frame(Codec::Opus, 4).unwrap();
+    let (frames, errors) = run(&mut d, &[(0, true, &[1, 2, 3, 4, 5]), (960, true, &[1, 2, 3, 4])]);
+    assert_eq!(errors, [Error::TooLarge { size: 5, limit: 4 }]);
+    assert_eq!(frames.len(), 1);
+    assert_eq!(d.stats().dropped, 1);
+}
+
+#[test]
+fn aac_units_that_do_not_read_count_as_dropped() {
+    let mut d = Depacketizer::new(Codec::Aac(AacConfig::HBR)).unwrap();
+    let (_, errors) = run(&mut d, &[(0, true, &aac_hbr(&[&[1, 2]], Some(5)))]);
+    assert_eq!(errors.len(), 1);
+    assert_eq!((d.stats().errors, d.stats().dropped), (1, 1));
+}
+
+#[test]
+fn aac_the_last_fragment_has_the_marker_bit() {
+    let mut d = Depacketizer::new(Codec::Aac(AacConfig::HBR)).unwrap();
+    let a = aac_hbr(&[&[1, 2]], Some(4));
+    let b = aac_hbr(&[&[3, 4]], Some(4));
+    let (frames, errors) = run(&mut d, &[(0, false, &a), (0, false, &b)]);
+    assert_eq!(frames, []);
+    assert_eq!(errors, [Error::Invalid("the last AAC fragment does not have the marker bit")]);
+    let (frames, errors) = run(&mut d, &[(1024, false, &a), (1024, true, &b)]);
+    assert_eq!(errors, []);
+    assert_eq!(frames, [Got { timestamp: 1024, key: true, data: vec![1, 2, 3, 4] }]);
+}
+
+#[test]
+fn aac_complete_units_over_the_limit_are_dropped() {
+    let mut d = Depacketizer::with_max_frame(Codec::Aac(AacConfig::HBR), 2).unwrap();
+    let (frames, errors) = run(&mut d, &[(0, true, &aac_hbr(&[&[1], &[1, 2, 3]], None))]);
+    assert_eq!(frames, []);
+    assert_eq!(errors, [Error::TooLarge { size: 3, limit: 2 }]);
 }

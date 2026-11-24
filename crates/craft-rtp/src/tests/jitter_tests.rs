@@ -170,6 +170,38 @@ fn the_byte_limit_drops_the_oldest_packets() {
 }
 
 #[test]
+fn the_byte_limit_holds_for_first_and_restart_packets() {
+    let mut jb = JitterBuffer::new(Config { max_bytes: 1000, ..Config::new(90_000) }).unwrap();
+    let big = [0u8; 1400];
+    assert_eq!(jb.push(&Packet::new(96, 1, 0, 7, false, &big), Duration::ZERO), Push::Stored);
+    assert_eq!((jb.held(), jb.bytes(), jb.stats().dropped), (0, 0, 1));
+    // Two packets in sequence far from the last make the buffer start again.
+    assert_eq!(jb.push(&Packet::new(96, 30_000, 0, 7, false, &big), ms(1)), Push::Stray);
+    assert_eq!(jb.push(&Packet::new(96, 30_001, 0, 7, false, &big), ms(2)), Push::Restarted);
+    assert_eq!((jb.held(), jb.bytes(), jb.stats().dropped), (0, 0, 2));
+}
+
+#[test]
+fn held_duplicates_count_as_received_in_the_report() {
+    let mut jb = buffer();
+    for s in [1, 1, 3] {
+        jb.push(&pkt(s, 0), Duration::ZERO);
+    }
+    let r = jb.report_block(9, None, ms(1)).unwrap();
+    assert_eq!((r.cumulative_lost, r.fraction_lost), (0, 0));
+}
+
+#[test]
+fn transit_differences_wrap() {
+    // A 1 kHz clock: the same timestamp 1 ms apart is a one-tick change across the 32-bit wrap
+    // of the transit time.
+    let mut jb = JitterBuffer::new(Config::new(1000)).unwrap();
+    jb.push(&pkt(1, 0x8000_0001), Duration::ZERO);
+    jb.push(&pkt(2, 0x8000_0001), ms(1));
+    assert_eq!(jb.stats().jitter, 0);
+}
+
+#[test]
 fn the_span_limit_drops_packets_nobody_took() {
     let mut jb = JitterBuffer::new(Config { max_span: ms(100), ..Config::new(90_000) }).unwrap();
     jb.push(&pkt(1, 0), Duration::ZERO);

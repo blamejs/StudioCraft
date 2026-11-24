@@ -57,7 +57,8 @@ the stream's sender reports. A report that differs from the mapping by more than
   one is asked for once.
 - `report_block(ssrc, last_sr, now)` fills a receiver report block: the fraction lost since the
   last call, the cumulative loss, the extended highest sequence number, the jitter, and the last
-  sender report's time and the delay since it arrived (RFC 3550 A.3).
+  sender report's time and the delay since it arrived (RFC 3550 A.3). Late and duplicate packets
+  count as received, as RFC 3550 section 6.4.1 asks.
 
 The delay is 60 ms at first. Once 16 packets have been measured it is four times the inter-arrival
 jitter estimate (RFC 3550 section 6.4.1, kept as in A.8), between 40 and 150 ms. The buffer holds
@@ -81,9 +82,13 @@ calls `emit` with each frame it completes. `lost()` takes a gap from the jitter 
 
 A video frame ends at the packet with the marker bit, or when a packet with another timestamp
 arrives. A video frame with any part lost or unreadable is dropped, and video then waits for the
-next key frame; `wants_key_frame` is `true` until it comes, for a picture loss indication. Video
-starts by waiting for a key frame. A frame over 8 MiB (`MAX_FRAME`, or the limit passed to
-`with_max_frame`) is dropped.
+next key frame; `wants_key_frame` is `true` from the packet that breaks the frame until the key
+frame comes, for a picture loss indication. Video starts by waiting for a key frame. After `lost()`
+the frame being built keeps its timestamp, so the packets of it that still arrive are dropped with
+it and it counts once. While video waits, an H.264 key frame whose first slice does not start at
+macroblock 0 (`first_mb_in_slice`) lost its first slices and is dropped too. A frame over 8 MiB
+(`MAX_FRAME`, or the limit passed to `with_max_frame`) is dropped, Opus packets and AAC units
+included.
 
 ## Checks and errors
 
@@ -99,12 +104,15 @@ an empty NACK.
 
 The depacketizers refuse an empty payload, a set forbidden bit, a reserved NAL unit type, the
 interleaved H.264 modes (STAP-B, MTAP and FU-B), a FU-A fragment with both its start and end bits
-set, an STAP-A unit of size 0 or one that runs past the packet, a VP8 descriptor or PictureID that
-runs past the payload, AU-headers that are not a whole number of headers, an AAC unit of size 0,
-units that do not fill their packet exactly, a unit longer than its packet that has the marker
-bit (so no fragment follows), interleaved AAC units, and AAC fragments that do not continue the
-unit before them. A refused payload drops the frame it belongs to, and the next
-payload is read as usual.
+set, an STAP-A unit of size 0 or one that runs past the packet, an STAP-A unit or FU-A fragment
+that carries a STAP, MTAP or FU (RFC 6184 sections 5.7 and 5.8), a FU-A fragment whose NAL unit
+header differs from the start fragment's, a VP8 descriptor or PictureID that runs past the payload,
+AU-headers that are not a whole number of headers, an AAC unit of size 0, units that do not fill
+their packet exactly, a unit longer than its packet that has the marker bit (so no fragment
+follows), interleaved AAC units, AAC fragments that do not continue the unit before them, a last
+AAC fragment without the marker bit (RFC 3640 section 3.1), and the rest of an AAC unit whose
+earlier fragment was lost. A refused payload drops the frame it belongs to and counts it in
+`dropped` once, and the next payload is read as usual.
 
 ## Cost
 

@@ -201,8 +201,10 @@ proptest! {
         aggregate in any::<bool>(),
     ) {
         let mut units = units;
-        // The first access unit holds an IDR picture, so video starts with it.
+        // The first access unit holds an IDR picture whose first slice starts at macroblock 0, so
+        // video starts with it.
         units[0][0][0] = (units[0][0][0] & 0xE0) | 5;
+        units[0][0][1] |= 0x80;
         let mut d = Depacketizer::new(Codec::H264).unwrap();
         let mut got: Vec<Vec<u8>> = Vec::new();
         for (i, nals) in units.iter().enumerate() {

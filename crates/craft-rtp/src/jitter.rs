@@ -248,6 +248,7 @@ impl JitterBuffer {
         if !self.started {
             self.start_at(i64::from(packet.sequence));
             self.store(self.head, packet, now);
+            self.enforce_limits(now);
             return Push::Stored;
         }
         let u = packet.sequence.wrapping_sub(self.highest as u16);
@@ -257,6 +258,7 @@ impl JitterBuffer {
             if self.bad_seq == Some(packet.sequence) {
                 self.restart(i64::from(packet.sequence));
                 self.store(self.head, packet, now);
+                self.enforce_limits(now);
                 return Push::Restarted;
             }
             self.bad_seq = Some(packet.sequence.wrapping_add(1));
@@ -278,6 +280,8 @@ impl JitterBuffer {
         }
         if matches!(self.slot(ext), Some(Slot::Full(_))) {
             self.stats.duplicates += 1;
+            // RFC 3550 section 6.4.1: the received count of a report includes duplicates.
+            self.received_since_base += 1;
             return Push::Duplicate;
         }
         self.store(ext, packet, now);
@@ -508,7 +512,8 @@ impl JitterBuffer {
         let arrival = (now.as_nanos() * rate / 1_000_000_000) as u32;
         let transit = i64::from(arrival.wrapping_sub(timestamp) as i32);
         if let Some(last) = self.last_transit {
-            let d = (transit - last).unsigned_abs().min(u64::from(self.config.clock_rate)) as u32;
+            // Transit times are 32-bit RTP clock values, so their difference wraps.
+            let d = (transit as i32).wrapping_sub(last as i32).unsigned_abs().min(self.config.clock_rate);
             self.jitter_q4 = self.jitter_q4.saturating_add(d).saturating_sub(self.jitter_q4.saturating_add(8) >> 4);
             self.samples = self.samples.saturating_add(1);
         }

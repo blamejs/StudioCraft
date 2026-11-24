@@ -94,6 +94,10 @@ pub struct Depacketizer {
     need_key: bool,
     /// H.264: a FU-A fragment run is open. VP8: the frame's first partition began.
     open: bool,
+    /// H.264: the NAL unit header of the open FU-A fragment run.
+    fu_header: u8,
+    /// H.264: whether the frame's first slice has a `first_mb_in_slice` of 0, once a slice came.
+    first_slice: Option<bool>,
     /// AAC: the size of the access unit whose fragments are being joined.
     aac_size: Option<usize>,
     stats: DepacketizerStats,
@@ -126,6 +130,8 @@ impl Depacketizer {
             broken: false,
             need_key: codec.is_video(),
             open: false,
+            fu_header: 0,
+            first_slice: None,
             aac_size: None,
             stats: DepacketizerStats::default(),
         })
@@ -143,7 +149,11 @@ impl Depacketizer {
         let result = match self.codec {
             Codec::Opus => {
                 if payload.is_empty() {
+                    self.stats.dropped += 1;
                     Err(Error::Invalid("an Opus packet is empty"))
+                } else if payload.len() > self.max_frame {
+                    self.stats.dropped += 1;
+                    Err(Error::TooLarge { size: payload.len(), limit: self.max_frame })
                 } else {
                     self.stats.frames += 1;
                     emit(Frame { timestamp, key: true, data: payload });
@@ -160,6 +170,11 @@ impl Depacketizer {
                 if r.is_err() {
                     self.broken = true;
                 }
+                if self.broken {
+                    // Asked for now, so a caller that checks after each packet can ask for a key
+                    // frame before the frame ends.
+                    self.need_key = true;
+                }
                 if marker {
                     self.finish(&mut emit);
                 }
@@ -173,17 +188,20 @@ impl Depacketizer {
     }
 
     /// Takes a gap in the stream: the frame being built is dropped, and video waits for the next
-    /// key frame.
+    /// key frame. The frame's timestamp is kept, so its remaining packets are dropped with it and
+    /// it is counted once, when it ends.
     pub fn lost(&mut self) {
         if self.codec.is_video() {
-            if !self.buf.is_empty() || self.timestamp.is_some() {
-                self.stats.dropped += 1;
-            }
             self.need_key = true;
         } else if self.aac_size.is_some() {
             self.stats.dropped += 1;
         }
+        let timestamp = self.timestamp;
         self.reset();
+        if timestamp.is_some() {
+            self.timestamp = timestamp;
+            self.broken = true;
+        }
     }
 
     /// `true` while video waits for a key frame.
@@ -202,11 +220,13 @@ impl Depacketizer {
         self.key = false;
         self.broken = false;
         self.open = false;
+        self.first_slice = None;
         self.aac_size = None;
     }
 
     /// Ends the video frame being built and gives it out unless it is broken or video waits for a
-    /// key frame and this is not one.
+    /// key frame and this is not one. While video waits, an H.264 key frame whose first slice does
+    /// not start at macroblock 0 lost its start and is dropped too.
     fn finish(&mut self, emit: &mut impl FnMut(Frame<'_>)) {
         let Some(timestamp) = self.timestamp else { return };
         // A fragmented H.264 NAL unit that never ended, or a VP8 frame whose start never came.
@@ -219,7 +239,8 @@ impl Depacketizer {
         if self.broken {
             self.need_key = true;
         }
-        if self.broken || self.buf.is_empty() || (self.need_key && !self.key) {
+        let starts = self.codec != Codec::H264 || self.first_slice == Some(true);
+        if self.broken || self.buf.is_empty() || (self.need_key && !(self.key && starts)) {
             self.stats.dropped += 1;
         } else {
             self.need_key = false;
@@ -245,10 +266,23 @@ impl Depacketizer {
         if header & 0x80 != 0 {
             return Err(Error::Invalid("an H.264 NAL unit has the forbidden bit set"));
         }
-        if header & 0x1F == 5 {
+        self.saw_nal(header, nal.get(1).copied());
+        self.append(&[&START_CODE, nal])
+    }
+
+    /// Notes a NAL unit with `header` whose next byte is `next`: an IDR slice makes the frame a
+    /// key frame, and the first slice says whether the frame starts at its first macroblock.
+    fn saw_nal(&mut self, header: u8, next: Option<u8>) {
+        let nal_type = header & 0x1F;
+        if nal_type == 5 {
             self.key = true;
         }
-        self.append(&[&START_CODE, nal])
+        // Coded slices and slice data partition A start with the slice header, whose first field,
+        // first_mb_in_slice, is an Exp-Golomb code: 0 is the single bit 1 (H.264 sections 7.3.3
+        // and 9.1).
+        if matches!(nal_type, 1 | 2 | 5) && self.first_slice.is_none() {
+            self.first_slice = Some(next.is_some_and(|b| b & 0x80 != 0));
+        }
     }
 
     fn push_h264(&mut self, p: &[u8]) -> Result<(), Error> {
@@ -281,6 +315,11 @@ impl Depacketizer {
                         return Err(Error::Invalid("an STAP-A NAL unit size is 0"));
                     }
                     let nal = p.get(at + 2..at + 2 + size).ok_or(Error::Truncated("an STAP-A NAL unit"))?;
+                    // RFC 6184 section 5.7: an aggregation packet holds no aggregation packet or
+                    // fragmentation unit.
+                    if !matches!(nal.first().map(|h| h & 0x1F), Some(1..=23)) {
+                        return Err(Error::Invalid("an STAP-A holds a NAL unit of a packetization type"));
+                    }
                     self.append_nal(nal)?;
                     at += 2 + size;
                 }
@@ -295,19 +334,27 @@ impl Depacketizer {
                     return Err(Error::Invalid("a FU-A fragment has both the start and end bits set"));
                 }
                 let data = p.get(2..).unwrap_or(&[]);
+                // The header of the NAL unit the fragment belongs to.
+                let header = (indicator & 0xE0) | (fu & 0x1F);
                 if start {
                     if self.open {
                         self.broken = true;
                     }
-                    let header = (indicator & 0xE0) | (fu & 0x1F);
-                    if header & 0x1F == 5 {
-                        self.key = true;
+                    // RFC 6184 section 5.8: an aggregation packet or FU is not fragmented.
+                    if !(1..=23).contains(&(header & 0x1F)) {
+                        self.open = false;
+                        return Err(Error::Invalid("a FU-A fragment carries a NAL unit of a packetization type"));
                     }
+                    self.saw_nal(header, data.first().copied());
                     self.append(&[&START_CODE, &[header], data])?;
+                    self.fu_header = header;
                     self.open = true;
                 } else if !self.open {
                     // The start fragment was lost: the NAL unit cannot be rebuilt.
                     self.broken = true;
+                } else if header != self.fu_header {
+                    self.open = false;
+                    return Err(Error::Invalid("a FU-A fragment does not continue the NAL unit before it"));
                 } else {
                     self.append(&[data])?;
                     if end {
@@ -361,13 +408,23 @@ impl Depacketizer {
     }
 
     fn push_aac(&mut self, c: AacConfig, timestamp: u32, marker: bool, p: &[u8], emit: &mut impl FnMut(Frame<'_>)) -> Result<(), Error> {
-        if self.aac_size.is_some() && self.timestamp != Some(timestamp) {
-            // A fragmented unit whose last fragment never came.
-            self.stats.dropped += 1;
+        if self.timestamp.is_some_and(|t| t != timestamp) {
+            // A fragmented unit whose last fragment never came, or one a gap cut off.
+            if self.aac_size.is_some() {
+                self.stats.dropped += 1;
+            }
             self.reset();
         }
+        if self.broken {
+            // The rest of a fragmented unit that a gap cut off; `lost` counted the unit.
+            if marker {
+                self.reset();
+            }
+            return Err(Error::Invalid("an AAC fragment belongs to an access unit that was lost"));
+        }
         let r = self.read_aac(c, timestamp, marker, p, emit);
-        if r.is_err() && self.aac_size.is_some() {
+        if r.is_err() {
+            // The unit being joined, or the first unit the packet holds, is dropped once.
             self.stats.dropped += 1;
             self.reset();
         }
@@ -398,6 +455,10 @@ impl Depacketizer {
             }
             self.append(&[data])?;
             if self.buf.len() == size {
+                // RFC 3640 section 3.1: the final fragment of an access unit has the M bit set.
+                if !marker {
+                    return Err(Error::Invalid("the last AAC fragment does not have the marker bit"));
+                }
                 self.stats.frames += 1;
                 emit(Frame { timestamp, key: true, data: &self.buf });
                 self.reset();
@@ -417,11 +478,11 @@ impl Depacketizer {
             if size == 0 {
                 return Err(Error::Invalid("an AAC access unit size is 0"));
             }
+            if size > self.max_frame {
+                return Err(Error::TooLarge { size, limit: self.max_frame });
+            }
             let rest = data.len() - at;
             if units == 1 && size > rest {
-                if size > self.max_frame {
-                    return Err(Error::TooLarge { size, limit: self.max_frame });
-                }
                 if marker {
                     return Err(Error::Invalid("an AAC access unit is longer than its packet"));
                 }
