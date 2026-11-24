@@ -135,6 +135,9 @@
 	Windows Media Foundation H.264 (built in)	Windows Media Foundation H.264（内置）
 	Windows Media Foundation HEVC (built in)	Windows Media Foundation HEVC（内置）
 	Windows Media Foundation AV1 (built in)	Windows Media Foundation AV1（内置）
+	AMD AMF H.264 (built in)	AMD AMF H.264（内置）
+	AMD AMF HEVC (built in)	AMD AMF HEVC（内置）
+	AMD AMF AV1 (built in)	AMD AMF AV1（内置）
 	Apple VideoToolbox H.264 (built in)	Apple VideoToolbox H.264（内置）
 	Apple VideoToolbox HEVC (built in)	Apple VideoToolbox HEVC（内置）
 	VA-API H.264 (built in)	VA-API H.264（内置）

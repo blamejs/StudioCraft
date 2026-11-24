@@ -1850,14 +1850,17 @@ mod tests {
         assert_eq!(built_in_twin(("vaapi_h264".into(), Some(run("vaapi_h264")), None)).0, "vaapi_native_h264");
         assert_eq!(built_in_twin(("vaapi_hevc".into(), Some(run("vaapi_hevc")), None)).0, "vaapi_native_hevc");
         assert_eq!(built_in_twin(("vaapi_av1".into(), Some(run("vaapi_av1")), None)).0, "vaapi_native_av1");
-        assert_eq!(built_in_twin(("amf_h264".into(), Some(run("amf_h264")), None)).0, "amf_h264", "no built-in twin");
+        assert_eq!(built_in_twin(("amf_h264".into(), Some(run("amf_h264")), None)).0, "amf_native_h264");
+        assert_eq!(built_in_twin(("amf_hevc".into(), Some(run("amf_hevc")), None)).0, "amf_native_hevc");
+        assert_eq!(built_in_twin(("amf_av1".into(), Some(run("amf_av1")), None)).0, "amf_native_av1");
+        assert_eq!(built_in_twin(("qsv_h264".into(), Some(run("qsv_h264")), None)).0, "qsv_h264", "no built-in twin");
         assert_eq!(built_in_twin(("x264".into(), None, None)).0, "x264");
 
         // The ffmpeg program does not exist: only the in-process test can say anything else.
         let ffmpeg = FfmpegProber::new("missing-ffmpeg-for-the-test", Vec::new());
         let p = BuiltInFirst { ffmpeg, in_process_only: false, size: (1920, 1080), fps: (30, 1), rate: RateControl::Quality(23) };
         let nvenc = craft_hwenc::candidate("nvenc_h264").unwrap();
-        let amf = craft_hwenc::candidate("amf_h264").unwrap();
+        let qsv = craft_hwenc::candidate("qsv_h264").unwrap();
         match p.probe(nvenc, Input::Nv12, &Cancel::new()) {
             Outcome::Works => {}
             Outcome::NoDevice(why) => assert!(why.starts_with("NVIDIA NVENC H.264 (built in) cannot run on this system"), "{why}"),
@@ -1887,13 +1890,21 @@ mod tests {
             other => panic!("{other:?}"),
         }
         assert_eq!(p.runs_in(vaapi), Path::new(IN_PROCESS));
-        // AMF is tested in ffmpeg; a missing ffmpeg does not stop the tests before NVENC.
-        assert!(matches!(p.probe(amf, Input::Nv12, &Cancel::new()), Outcome::NoDevice(why) if why.contains("was not found")));
+        // So is AMF.
+        let amf = craft_hwenc::candidate("amf_av1").unwrap();
+        match p.probe(amf, Input::Nv12, &Cancel::new()) {
+            Outcome::Works => {}
+            Outcome::NoDevice(why) => assert!(why.starts_with("AMD AMF AV1 (built in) cannot "), "{why}"),
+            other => panic!("{other:?}"),
+        }
+        assert_eq!(p.runs_in(amf), Path::new(IN_PROCESS));
+        // Quick Sync is tested in ffmpeg; a missing ffmpeg does not stop the tests before NVENC.
+        assert!(matches!(p.probe(qsv, Input::Nv12, &Cancel::new()), Outcome::NoDevice(why) if why.contains("was not found")));
         let canceled = Cancel::new();
         canceled.cancel();
         assert_eq!(p.probe(nvenc, Input::Nv12, &canceled), Outcome::Canceled);
         assert_ne!(p.args(nvenc, Input::Nv12), p.ffmpeg.args(nvenc, Input::Nv12), "kept apart in the cache");
-        assert_eq!(p.args(amf, Input::Nv12), p.ffmpeg.args(amf, Input::Nv12));
+        assert_eq!(p.args(qsv, Input::Nv12), p.ffmpeg.args(qsv, Input::Nv12));
         let ffmpeg = FfmpegProber::new("missing-ffmpeg-for-the-test", Vec::new());
         let at_60 = BuiltInFirst { ffmpeg, in_process_only: false, size: (1920, 1080), fps: (60, 1), rate: RateControl::Quality(23) };
         assert_ne!(at_60.args(nvenc, Input::Nv12), p.args(nvenc, Input::Nv12), "another frame rate is tested again");
@@ -1902,7 +1913,7 @@ mod tests {
         let hevc = craft_hwenc::candidate("vaapi_hevc").unwrap();
         assert_ne!(at_720p.args(hevc, Input::Nv12), p.args(hevc, Input::Nv12), "another size is tested again");
         // A failure of the built-in encoder while it records does not stop ffmpeg's NVENC.
-        assert_eq!((p.runs_in(nvenc), p.runs_in(amf)), (Path::new(IN_PROCESS), p.program()));
+        assert_eq!((p.runs_in(nvenc), p.runs_in(qsv)), (Path::new(IN_PROCESS), p.program()));
         let cache = ProbeCache::new();
         cache.mark_failed(p.runs_in(nvenc), nvenc, "lost its last frames");
         assert!(matches!(cache.get(&p, nvenc, Input::Nv12), Some(Outcome::Failed(_))));

@@ -51,6 +51,9 @@ pub fn register_all(reg: &mut Registry) -> Result<(), PluginError> {
     reg.register_encoder(Arc::new(studiocraft_encode::MediaFoundation::H264))?;
     reg.register_encoder(Arc::new(studiocraft_encode::MediaFoundation::HEVC))?;
     reg.register_encoder(Arc::new(studiocraft_encode::MediaFoundation::AV1))?;
+    reg.register_encoder(Arc::new(studiocraft_encode::Amf::H264))?;
+    reg.register_encoder(Arc::new(studiocraft_encode::Amf::HEVC))?;
+    reg.register_encoder(Arc::new(studiocraft_encode::Amf::AV1))?;
     reg.register_encoder(Arc::new(studiocraft_encode::VideoToolbox::H264))?;
     reg.register_encoder(Arc::new(studiocraft_encode::VideoToolbox::HEVC))?;
     reg.register_encoder(Arc::new(studiocraft_encode::VaApi::H264))?;

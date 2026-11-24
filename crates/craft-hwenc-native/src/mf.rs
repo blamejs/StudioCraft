@@ -94,8 +94,8 @@ pub(crate) fn set_types(codec: Codec) -> &'static [(u8, &'static str)] {
 
 /// The track of the encoder's `header` and the record a container stores: the parameter sets of
 /// an Annex B header with the `avcC` or `hvcC` record made of them, or an AV1 sequence header with
-/// its `av1C` record.
-fn track_of(cfg: &Config, header: &[u8]) -> Result<(Track, Vec<u8>), Error> {
+/// its `av1C` record. The AMF encoders use it too.
+pub(crate) fn track_of(cfg: &Config, header: &[u8]) -> Result<(Track, Vec<u8>), Error> {
     if cfg.codec == Codec::Av1 {
         let stream = av1_stream(header)?;
         let record = stream.record().to_vec();
@@ -134,20 +134,25 @@ fn is_keyframe(codec: Codec, data: &[u8]) -> bool {
 
 /// The frames of one stream between the encoder and its packets: the Media Foundation time each
 /// frame goes in at, and the timestamp and parameter sets (AV1: sequence header) each packet must
-/// come out with.
-struct Track {
+/// come out with. The AMF encoders, whose clock also counts 100 ns units, use it too.
+pub(crate) struct Track {
     codec: Codec,
     fps: (u32, u32),
     sets: Vec<Vec<u8>>,
     av1: Option<av1::Stream>,
     frames: u64,
     /// Frames sent and not returned, oldest first: their Media Foundation time and timestamp.
-    pending: VecDeque<(i64, i64)>,
+    pub(crate) pending: VecDeque<(i64, i64)>,
 }
 
 impl Track {
-    fn new(codec: Codec, fps: (u32, u32), sets: Vec<Vec<u8>>) -> Track {
+    pub(crate) fn new(codec: Codec, fps: (u32, u32), sets: Vec<Vec<u8>>) -> Track {
         Track { codec, fps, sets, av1: None, frames: 0, pending: VecDeque::new() }
+    }
+
+    /// The codec of the stream.
+    pub(crate) fn codec(&self) -> Codec {
+        self.codec
     }
 
     fn av1(fps: (u32, u32), stream: av1::Stream) -> Track {
@@ -161,7 +166,7 @@ impl Track {
     }
 
     /// The time and duration the next frame goes in with, remembered with its timestamp `pts`.
-    fn send(&mut self, pts: i64) -> (i64, i64) {
+    pub(crate) fn send(&mut self, pts: i64) -> (i64, i64) {
         let (time, next) = (self.time_of(self.frames), self.time_of(self.frames.saturating_add(1)));
         self.frames = self.frames.saturating_add(1);
         self.pending.push_back((time, pts));
@@ -170,7 +175,7 @@ impl Track {
 
     /// The packet of one output sample. A sample at a later time than the oldest frame sent means
     /// the encoder dropped the frames before it; a sample at an earlier time is out of order.
-    fn packet(&mut self, o: Output) -> Result<Packet, Error> {
+    pub(crate) fn packet(&mut self, o: Output) -> Result<Packet, Error> {
         let pts = loop {
             let Some((time, pts)) = self.pending.pop_front() else {
                 return Err(Error::Failed("the encoder returned more frames than it was given".into()));
@@ -208,7 +213,7 @@ impl Track {
 
     /// Check that the `header` of a new output type holds the parameter sets (AV1: the sequence
     /// header) the container record was made of.
-    fn same_sets(&self, header: &[u8]) -> Result<(), Error> {
+    pub(crate) fn same_sets(&self, header: &[u8]) -> Result<(), Error> {
         if let Some(stream) = &self.av1 {
             return match av1_stream(header) {
                 Ok(s) if s.same_sequence_header(stream) => Ok(()),
@@ -313,12 +318,23 @@ impl Encoder {
     }
 }
 
+/// One gray NV12 frame of `cfg`'s size, allocated fallibly: an 8192 × 8192 frame needs 96 MiB.
+/// The AMF encoders use it too.
+pub(crate) fn gray_frame(cfg: &Config) -> Result<Vec<u8>, Error> {
+    let luma = (cfg.width as usize).saturating_mul(cfg.height as usize);
+    let size = luma.saturating_add(luma / 2);
+    let mut gray = Vec::new();
+    gray.try_reserve_exact(size).map_err(|e| Error::Failed(format!("no memory for a {}x{} frame: {e}", cfg.width, cfg.height)))?;
+    gray.resize(luma, 16u8);
+    gray.resize(size, 128u8);
+    Ok(gray)
+}
+
 /// The output of one gray frame from a separate instance of the encoder for `cfg`: the parameter
 /// sets of an encoder whose output type carries none.
 fn first_frame(cfg: &Config, p: &Params) -> Result<Vec<u8>, Error> {
     let mut t = Transform::open(p)?;
-    let (w, h) = (cfg.width as usize, cfg.height as usize);
-    let gray = [vec![16u8; w * h], vec![128u8; w * h / 2]].concat();
+    let gray = gray_frame(cfg)?;
     let (time, duration) = Track::new(cfg.codec, cfg.fps, Vec::new()).send(0);
     let mut out = Vec::new();
     t.encode(&gray, time, duration, &mut out).map_err(Error::Failed)?;

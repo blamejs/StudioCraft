@@ -4,6 +4,7 @@
 //!   Linux, from frames in memory or, on Windows, from Direct3D 11 textures.
 //! - [`mf`] encodes H.264, HEVC and AV1 with the hardware encoders that Windows Media Foundation
 //!   lists.
+//! - [`amf`] encodes H.264, HEVC and AV1 on AMD GPUs through AMF, on Windows.
 //! - [`vt`] encodes H.264 and HEVC with the hardware encoders of macOS VideoToolbox.
 //! - [`vaapi`] encodes H.264, HEVC and AV1 with the VA-API hardware encoders on 64-bit Linux.
 //! - [`annexb`] splits Annex B byte streams into NAL units and writes the 4-byte length-prefixed
@@ -20,6 +21,9 @@
 
 #![deny(unsafe_op_in_unsafe_fn)]
 
+pub mod amf;
+#[allow(unsafe_code)]
+mod amf_ffi;
 pub mod annexb;
 pub mod av1;
 pub mod avc;
@@ -45,7 +49,7 @@ pub use hdr::{Color, ContentLight, MasteringDisplay};
 pub enum Codec {
     H264,
     Hevc,
-    /// AV1 Main profile. NVENC, Media Foundation and VA-API encode it; VideoToolbox returns
+    /// AV1 Main profile. NVENC, Media Foundation, AMF and VA-API encode it; VideoToolbox returns
     /// [`Error::Unsupported`].
     Av1,
 }

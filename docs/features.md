@@ -267,6 +267,7 @@ Settings › Stream show the chosen encoder's settings, such as the x264 and NVE
 | Hardware (set in Settings › Video) | MKV, MP4 and MOV, and streams, with the hardware encoder set in Settings › Video › Hardware acceleration | Yes, except for the built-in encoders below and for streams | All |
 | NVIDIA NVENC H.264, HEVC and AV1 (built in) | MKV, through the NVIDIA driver | No | Windows and 64-bit Linux |
 | Windows Media Foundation H.264, HEVC and AV1 (built in) | MKV, with the hardware encoders Media Foundation lists | No | Windows |
+| AMD AMF H.264, HEVC and AV1 (built in) | MKV, through AMD's AMF runtime | No | Windows |
 | Apple VideoToolbox H.264 and HEVC (built in) | MKV, with the VideoToolbox hardware encoders | No | macOS |
 | VA-API H.264, HEVC and AV1 (built in) | MKV, with the VA-API hardware encoders through libva | No | 64-bit Linux |
 
@@ -648,6 +649,9 @@ A stream tests only the H.264 candidates in this list, and skips every other can
   64-bit Linux. AV1 needs a GPU whose encoder writes AV1.
 - Windows Media Foundation H.264, HEVC and AV1 (built in) run the hardware encoders Media
   Foundation lists, on Windows. AV1 is 8-bit.
+- AMD AMF H.264, HEVC and AV1 (built in) run AMD's hardware encoders through the AMF runtime that
+  AMD's graphics driver installs, on Windows. AV1 is 8-bit and needs a GPU whose encoder writes
+  AV1.
 - Apple VideoToolbox H.264 and HEVC (built in) run the VideoToolbox hardware encoders, on macOS.
 - VA-API H.264, HEVC and AV1 (built in) run the VA-API hardware encoders through libva, on 64-bit
   Linux. VA-API H.264, HEVC or AV1 chosen by name is tested the same way, and then records with
