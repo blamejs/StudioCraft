@@ -5,6 +5,10 @@
 //!   thread hands each packet, in decoding order, to [`Publish`], which shares the packet once
 //!   ([`craft_packet::PacketPool`]) and offers it to every destination ([`craft_packet::Fanout`]).
 //!   Offering a packet never waits for a network.
+//! - When the job has a caption feed, [`Publish`] takes the phrases waiting in it before each
+//!   video packet, without waiting, and puts the CEA-608 roll-up caption pairs due for that
+//!   picture into the packet as an SEI message ([`craft_closed_captions`]), before its first
+//!   slice. Platforms that read captions embedded in H.264 show them as closed captions.
 //! - Each destination that sends has a thread of its own. The thread connects
 //!   ([`craft_rtmp::Publisher`]), sends `onMetaData` and the H.264 and AAC sequence headers, and
 //!   then sends the packets from the next keyframe on, timed from that keyframe. Its ring holds
@@ -48,6 +52,8 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
+use craft_closed_captions::sei::{self, Codec};
+use craft_closed_captions::{Config as CaptionConfig, MAX_PAIRS_PER_FRAME, RollUp};
 use craft_flv::{Body, MAX_COMPOSITION_TIME, MIN_COMPOSITION_TIME, Metadata};
 use craft_media::matroska::TrackSpec;
 use craft_packet::{
@@ -1257,6 +1263,40 @@ fn send_packet(p: &mut Publisher, packet: &SharedPacket, zero: i64) -> Result<()
     p.send_flv(timestamp, &checked)
 }
 
+/// Closed captions for the stream's pictures: finished phrases from the job's feed, as CEA-608
+/// roll-up captions in an SEI message on each H.264 access unit that has pairs due. Streams have
+/// no B-frames, so packets come in the order their pictures are shown.
+struct Captions {
+    feed: Arc<Fifo<String>>,
+    roll: RollUp,
+    pairs: Vec<[u8; 2]>,
+    nal: Vec<u8>,
+}
+
+impl Captions {
+    /// Captions for a stream at `fps_num / fps_den`; the phrases already waiting are left out.
+    fn new(feed: Arc<Fifo<String>>, fps_num: u32, fps_den: u32) -> Result<Captions, PluginError> {
+        while feed.pop().is_some() {}
+        let roll = RollUp::new(fps_num, fps_den, CaptionConfig::default()).map_err(|e| PluginError::Failed(format!("closed captions: {e}")))?;
+        Ok(Captions { feed, roll, pairs: Vec::with_capacity(MAX_PAIRS_PER_FRAME), nal: Vec::new() })
+    }
+
+    /// Put this picture's caption pairs into `au`, a length-prefixed access unit. An access unit
+    /// with no picture is sent as it was, and its pairs are lost.
+    fn add(&mut self, au: &mut Vec<u8>) {
+        while let Some(text) = self.feed.pop() {
+            self.roll.push(&text);
+        }
+        self.roll.frame(&mut self.pairs);
+        if self.pairs.is_empty() {
+            return;
+        }
+        self.nal.clear();
+        sei::sei_nal(Codec::H264, &self.pairs, &mut self.nal);
+        let _ = sei::insert_sei(Codec::H264, au, &self.nal);
+    }
+}
+
 /// The third thread's sink: each packet is shared and offered to every destination.
 struct Publish {
     fanout: Fanout,
@@ -1266,6 +1306,7 @@ struct Publish {
     refused: Arc<AtomicU64>,
     /// A video packet could not be shared, so video waits for the next keyframe.
     video_gap: bool,
+    captions: Option<Captions>,
 }
 
 impl Sink for Publish {
@@ -1278,6 +1319,9 @@ impl Sink for Publish {
         }
         let info = if video { Info::video(item.pts_ns, item.dts_ns, item.keyframe) } else { Info::audio(item.pts_ns) };
         let mut data = item.data;
+        if video && let Some(c) = &mut self.captions {
+            c.add(&mut data);
+        }
         match self.fanout.share(&mut self.pool, &mut data, info) {
             Ok(packet) => {
                 self.video_gap &= !video;
@@ -1364,9 +1408,13 @@ impl Streaming {
         let refused = Arc::new(AtomicU64::new(0));
         let mut headers = None;
         let sink_refused = Arc::clone(&refused);
+        let captions = match &job.captions {
+            Some(feed) => Some(Captions::new(Arc::clone(feed), v.fps_num, v.fps_den)?),
+            None => None,
+        };
         let open = |tracks: Vec<TrackSpec>| -> Result<Box<dyn Sink>, PluginError> {
             headers = Some(Headers::new(job, kbps, &tracks)?);
-            Ok(Box::new(Publish { fanout, pool, refused: sink_refused, video_gap: false }))
+            Ok(Box::new(Publish { fanout, pool, refused: sink_refused, video_gap: false, captions }))
         };
         let native = Native::start_with(job, open, PacketQueue::new(QUEUE_BYTES, QUEUE_SPAN_NS), DISK_WAIT)?;
         let Some(headers) = headers else {

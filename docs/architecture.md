@@ -26,6 +26,7 @@ crate in the same layer. `cargo xtask layers` checks this against the table in
 | L0 | `craft-hwenc-native` | Hardware encoders called through their drivers: NVENC H.264 and HEVC from NV12 or P010 frames on Windows (Direct3D 11) and 64-bit Linux (CUDA), the Windows Media Foundation, macOS VideoToolbox and Linux VA-API hardware H.264 and HEVC encoders from NV12 frames, the Annex B helpers, and the `avcC` and `hvcC` records. Its private `nvenc_ffi`, `mf_ffi`, `vt_ffi` and `vaapi_ffi` modules are the only code that calls the drivers. It depends on no StudioCraft crate. |
 | L0 | `craft-app-audio` | Per-application audio: the running applications that have audio, kept current by one discovery thread, a lock-free peak meter for each, and the capture of one application's audio as 48 kHz stereo `f32` with backoff, stall detection and a limit of 32 captures. Windows build 20348 and later capture through WASAPI process loopback, and Linux through PipeWire links from the application's playback streams to a capture stream; other systems report it as unsupported. It depends on no StudioCraft crate. |
 | L0 | `craft-speech` | Speech to text: the catalog of Whisper models with their pinned URLs, sizes and SHA-256 sums, their download and check, Whisper on the CPU with word times (feature `whisper`), voice detection, conversion to mono 16 kHz, and live captioning that turns a stream of audio into partial and finished phrases. It depends on no StudioCraft crate. |
+| L0 | `craft-closed-captions` | Closed captions in a live H.264 or HEVC stream: phrases of text to CEA-608 roll-up byte pairs paced at the field 1 rate, ATSC A/53 `cc_data` in a `user_data_registered_itu_t_t35` SEI NAL unit put before an access unit's first picture, and the reader of the same SEI. It uses the 608 character sets of `craft-captions` and depends on no StudioCraft crate. |
 | L1 | `studiocraft-plugin` | The `Source`, `Filter`, `Transition`, `Encoder` and `Output` traits and the `Registry` they are registered in. |
 | L1 | `craft-rtmp` | A blocking RTMP and RTMPS publish client on `std::net`: the handshake, chunking, the `connect`, `createStream`, `publish` and `deleteStream` commands, acknowledgements, and a timeout on every step, with the stream key kept out of errors and `Debug` output. It sends `craft-flv` bodies, starts no threads, and is built for native targets only. It depends on no StudioCraft crate. |
 | L1 | `craft-transitions` | The Cut, Fade, Fade through color and Swipe transitions: each one's WGSL blend, the values its shader reads, its ease from `craft-ease`, the gains of the old and new audio, and the same blend on the CPU, with typed parameters that carry a version for apps that save them. It depends on no StudioCraft crate. |
@@ -53,6 +54,7 @@ build for `wasm32-unknown-unknown`:
 - `craft-scopes`
 - `craft-ease`
 - `craft-transitions`
+- `craft-closed-captions`
 
 ## Threads and data flow
 

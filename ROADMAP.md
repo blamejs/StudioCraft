@@ -130,10 +130,11 @@ description in [docs/features.md](docs/features.md).
 10. **Raw and on-demand recordings.** A recording will be written twice: a raw copy for editing,
     with its tracks kept apart, and a copy that matches the stream for posting as a video on
     demand.
-11. **Live captions.** Speech from an audio source or the mix will be turned into text on the
+11. **Live captions (partly done).** Speech in the program audio is turned into text on the
     computer while a recording or the stream runs. A Live Captions source shows the text on the
-    program, or on the preview only, the stream carries it as closed captions, and `.srt` and
-    `.vtt` files are written beside the recording.
+    program, the stream carries it as closed captions, and `.srt`, `.vtt` and `.txt` files are
+    written beside the recording ([Live captions](docs/features.md#live-captions)). Captions of one
+    audio source instead of the mix, and captions on the preview only, are still to be built.
 12. **Canvas size from the display (partly done).** Moves and resizes snap to the canvas, its safe
     areas and other items, Settings › Video sets the canvas to a chosen display's size and the
     output to a share of the canvas, and scenes are laid out again when the canvas size changes.
