@@ -563,3 +563,5 @@ menu	Transform	変形
 	Custom	カスタム
 	Fill Screen	画面を埋める
 @msg	The scenes could not be laid out for the new canvas: {error}	新しいキャンバスにシーンを配置できませんでした: {error}
+	Filter delay	フィルターの遅延
+	The audio filters on this source delay its sound by {frames} samples at 48 kHz	このソースの音声フィルターは、音を 48 kHz で {frames} サンプル遅らせます
