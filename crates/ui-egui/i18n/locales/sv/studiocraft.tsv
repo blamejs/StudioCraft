@@ -637,3 +637,33 @@ menu	Transform	Transformera
 	Move Under the Canvas	Flytta under arbetsytan
 	Resize the column	Ändra kolumnens bredd
 	Place Dock	Placera panel
+	Health	Status
+	Destinations	Mål
+	Streaming…	Strömning…
+	{live} of {count} live	{live} av {count} live
+	Not streaming	Ingen strömning
+	Live · sending the pause screen	Live · skickar pausskärmen
+	Encoder	Kodare
+	Frames are late or skipped	Bildrutor är sena eller hoppas över
+	No frames late or skipped	Inga sena eller överhoppade bildrutor
+	Tracks	Spår
+	Files	Filer
+	{mb} MB	{mb} MB
+	Disk free	Ledigt utrymme
+	{gb} GB	{gb} GB
+	Audio lost	Förlorat ljud
+	{lost} s	{lost} s
+	Loading…	Läser in…
+	Live captions	Livetextning
+	Program loudness	Programmets ljudstyrka
+	No program audio yet	Inget programljud ännu
+	Below the target band	Under målintervallet
+	Above the target band	Över målintervallet
+	In the target band	Inom målintervallet
+	Short-term	Korttid
+	Integrated	Integrerad
+	True peak	Sann topp
+	Target band	Målintervall
+	{value} LUFS	{value} LUFS
+	{value} dBTP	{value} dBTP
+	{low} to {high} LUFS	{low} till {high} LUFS

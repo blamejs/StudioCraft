@@ -624,3 +624,33 @@ menu	Transform	التحويل
 	Move Under the Canvas	نقل أسفل لوحة الرسم
 	Resize the column	تغيير عرض العمود
 	Place Dock	وضع اللوحة
+	Health	الحالة
+	Destinations	الوجهات
+	Streaming…	البث…
+	{live} of {count} live	{live} من {count} على الهواء
+	Not streaming	لا يوجد بث
+	Live · sending the pause screen	على الهواء · ترسل شاشة الإيقاف المؤقت
+	Encoder	المرمّز
+	Frames are late or skipped	إطارات متأخرة أو متخطاة
+	No frames late or skipped	لا إطارات متأخرة أو متخطاة
+	Tracks	المسارات
+	Files	الملفات
+	{mb} MB	{mb} ميغابايت
+	Disk free	المساحة الحرة
+	{gb} GB	{gb} غيغابايت
+	Audio lost	الصوت المفقود
+	{lost} s	{lost} ث
+	Loading…	جارٍ التحميل…
+	Live captions	الترجمة المباشرة
+	Program loudness	علوّ صوت البرنامج
+	No program audio yet	لا صوت في البرنامج بعد
+	Below the target band	أدنى من النطاق المستهدف
+	Above the target band	أعلى من النطاق المستهدف
+	In the target band	ضمن النطاق المستهدف
+	Short-term	قصير المدى
+	Integrated	المتكامل
+	True peak	الذروة الحقيقية
+	Target band	النطاق المستهدف
+	{value} LUFS	{value} LUFS
+	{value} dBTP	{value} dBTP
+	{low} to {high} LUFS	{low} إلى {high} LUFS

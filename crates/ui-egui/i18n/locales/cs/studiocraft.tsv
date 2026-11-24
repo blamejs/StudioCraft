@@ -637,3 +637,33 @@ menu	Transform	Transformace
 	Move Under the Canvas	Přesunout pod plátno
 	Resize the column	Změnit šířku sloupce
 	Place Dock	Umístit panel
+	Health	Stav
+	Destinations	Cíle
+	Streaming…	Streamování…
+	{live} of {count} live	{live} z {count} živě
+	Not streaming	Nestreamuje se
+	Live · sending the pause screen	Živě · posílá obrazovku pauzy
+	Encoder	Kodér
+	Frames are late or skipped	Snímky se zpožďují nebo vynechávají
+	No frames late or skipped	Žádné zpožděné ani vynechané snímky
+	Tracks	Stopy
+	Files	Soubory
+	{mb} MB	{mb} MB
+	Disk free	Volné místo
+	{gb} GB	{gb} GB
+	Audio lost	Ztracený zvuk
+	{lost} s	{lost} s
+	Loading…	Načítání…
+	Live captions	Živé titulky
+	Program loudness	Hlasitost programu
+	No program audio yet	Zatím žádný zvuk programu
+	Below the target band	Pod cílovým rozsahem
+	Above the target band	Nad cílovým rozsahem
+	In the target band	V cílovém rozsahu
+	Short-term	Krátkodobá
+	Integrated	Integrovaná
+	True peak	Skutečná špička
+	Target band	Cílový rozsah
+	{value} LUFS	{value} LUFS
+	{value} dBTP	{value} dBTP
+	{low} to {high} LUFS	{low} až {high} LUFS

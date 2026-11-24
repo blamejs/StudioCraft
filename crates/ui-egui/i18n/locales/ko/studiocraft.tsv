@@ -636,3 +636,33 @@ menu	Transform	변형
 	Move Under the Canvas	캔버스 아래로 이동
 	Resize the column	열 너비 조절
 	Place Dock	도크 배치
+	Health	상태
+	Destinations	대상
+	Streaming…	스트리밍…
+	{live} of {count} live	{count}개 중 {live}개 라이브
+	Not streaming	스트리밍 안 함
+	Live · sending the pause screen	라이브 · 일시 정지 화면 전송 중
+	Encoder	인코더
+	Frames are late or skipped	늦거나 건너뛴 프레임이 있습니다
+	No frames late or skipped	늦거나 건너뛴 프레임 없음
+	Tracks	트랙
+	Files	파일
+	{mb} MB	{mb} MB
+	Disk free	여유 공간
+	{gb} GB	{gb} GB
+	Audio lost	손실된 오디오
+	{lost} s	{lost}초
+	Loading…	불러오는 중…
+	Live captions	실시간 자막
+	Program loudness	프로그램 라우드니스
+	No program audio yet	아직 프로그램 오디오 없음
+	Below the target band	목표 범위보다 낮음
+	Above the target band	목표 범위보다 높음
+	In the target band	목표 범위 안
+	Short-term	단기
+	Integrated	통합
+	True peak	트루 피크
+	Target band	목표 범위
+	{value} LUFS	{value} LUFS
+	{value} dBTP	{value} dBTP
+	{low} to {high} LUFS	{low}~{high} LUFS

@@ -632,3 +632,33 @@ menu	Transform	Trasforma
 	Move Under the Canvas	Sposta sotto l'area di lavoro
 	Resize the column	Ridimensiona la colonna
 	Place Dock	Posiziona pannello
+	Health	Stato
+	Destinations	Destinazioni
+	Streaming…	Streaming…
+	{live} of {count} live	{live} di {count} in diretta
+	Not streaming	Nessuno streaming
+	Live · sending the pause screen	In diretta · invia la schermata di pausa
+	Encoder	Encoder
+	Frames are late or skipped	Fotogrammi in ritardo o saltati
+	No frames late or skipped	Nessun fotogramma in ritardo o saltato
+	Tracks	Tracce
+	Files	File
+	{mb} MB	{mb} MB
+	Disk free	Spazio libero
+	{gb} GB	{gb} GB
+	Audio lost	Audio perso
+	{lost} s	{lost} s
+	Loading…	Caricamento…
+	Live captions	Sottotitoli in diretta
+	Program loudness	Loudness del programma
+	No program audio yet	Ancora nessun audio del programma
+	Below the target band	Sotto la fascia obiettivo
+	Above the target band	Sopra la fascia obiettivo
+	In the target band	Nella fascia obiettivo
+	Short-term	Breve termine
+	Integrated	Integrata
+	True peak	Picco reale
+	Target band	Fascia obiettivo
+	{value} LUFS	{value} LUFS
+	{value} dBTP	{value} dBTP
+	{low} to {high} LUFS	Da {low} a {high} LUFS

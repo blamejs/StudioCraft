@@ -210,8 +210,8 @@ clipped at full scale. The `source.volume` command takes a linear `gain` from 0 
 changes nothing. The mixer also measures the final mix's loudness (momentary,
 short-term, integrated, loudness range and true peak). Each profile keeps a loudness target band,
 −18 to −14 LUFS by default (StudioCraft's own value). The `audio.loudness` command and the MCP
-tool `audio_loudness` report the readings with the band. The window does not show these readings
-yet.
+tool `audio_loudness` report the readings with the band, and the [Health dock](#health-dock)
+shows them.
 
 A source's Properties window sets two more audio options:
 
@@ -257,6 +257,33 @@ as the Audio Mixer's fader, and a mute button. Its settings menu opens the
 source's Properties… (sync offset and monitoring) and Filters…. The dock is hidden in a new
 layout. On a system that cannot capture one application's audio, the dock lists the microphones
 and says why no applications are listed.
+
+### Health dock
+
+Docks › Health shows a dock with the state of the outputs and the program audio, one section under
+another. The Live layout shows it in the right column, and it is hidden in a new layout.
+
+- **Pause screen**: shown while the program is paused, with the pause banner's text and its +1 min
+  and Resume buttons.
+- **Destinations**: "{live} of {count} live" while the stream runs, and a line for each of the
+  profile's destinations with its state as the Streaming window shows it. While the program is
+  paused, a live destination reads "Live · sending the pause screen". While the stream runs, a
+  destination it sends to has Stop while it sends or tries to and Start otherwise. Streaming… opens
+  the Streaming window.
+- **Encoder**: the frame times and counts of the Stats window, and the state and size of a running
+  recording and stream. The section warns while any frame was drawn late or skipped by an encoder.
+- **Audio tracks**: the status bar's audio tracks item while it shows, and for the newest take its
+  number of tracks, the size of its files, the free space on its disk and the seconds of audio lost
+  while the disk was slow. Open Last Audio Tracks in Editor is enabled once a take has finished.
+- **Replay buffer**: its state and size, Save Replay while it runs, and Start or Stop.
+- **Live captions**: their state, and Start or Stop. There is no button while they finish after a
+  stop.
+- **Program loudness**: the short-term loudness, whether it is below, in or above the profile's
+  loudness target band, the integrated loudness, the highest true peak and the band. A bar from -40 to 0 LUFS shows the band and marks the short-term loudness. Before the
+  program has audio, the section reads "No program audio yet".
+
+The dock reads every value from counters the outputs and the mixer already keep, and draws again
+at least four times a second while it is shown.
 
 ## Recording
 
@@ -738,13 +765,13 @@ menu bar's overflow menu. In a right-to-left interface the row is mirrored. Dock
 
 ### Docks
 
-Scenes, Sources and Audio Mixer sit in a strip under the preview, and Application Audio joins them
-when Docks › Application Audio shows it. Each dock has a 28-point header
+Scenes, Sources and Audio Mixer sit in a strip under the preview, and Application Audio and Health
+join them when Docks › Application Audio and Docks › Health show them. Each dock has a 28-point header
 with the title at its start and the dock's actions at its end, and no footer. When the dock is
 narrow, the header keeps its actions and shortens the title. 1-point dividers separate the docks.
 
 The strip is 200 points tall, or 30% of the window's height when that is less, and never under 120
-points. Scenes, Sources, Audio Mixer and Application Audio start 300, 340, 400 and 360 points wide
+points. Scenes, Sources, Audio Mixer, Application Audio and Health start 300, 340, 400, 360 and 300 points wide
 ([MECHANICS.md](../MECHANICS.md#editing)), and the last shown dock takes the rest. No dock is
 narrower than 200 points while the window has room.
 
@@ -769,8 +796,8 @@ it. The menu also offers Undock.
 An undocked dock is drawn in a window of its own inside the main window, with a title bar above the
 dock's header. You drag the window by its title bar and resize it from any edge or corner. A resize
 from the left or top edge moves that edge, and the window keeps its new place. A dock without a saved
-place opens centered in the main window; Sources, Audio Mixer and Application Audio open 24, 48 and
-72 points further down and to the right, as far as the main window has room. Its starting and smallest sizes are in [MECHANICS.md](../MECHANICS.md#editing). When
+place opens centered in the main window; Sources, Audio Mixer, Application Audio and Health open 24,
+48, 72 and 96 points further down and to the right, as far as the main window has room. Its starting and smallest sizes are in [MECHANICS.md](../MECHANICS.md#editing). When
 the main window is smaller, StudioCraft draws the undocked dock further in without changing its saved
 place or size. A right-click on the dock's title offers Dock in the Strip, which puts the dock under
 the canvas, also when it was undocked from a column.
@@ -813,7 +840,8 @@ replaces that layout. At most 32 layouts are kept, and a settings file with more
 Docks › Layouts also lists four built-in layouts, above the saved ones:
 
 - **Set up**: Scenes and Sources in a 256-point left column, and Audio Mixer under the preview.
-- **Live**: Sources and Audio Mixer in a 268-point left column, and Scenes under the preview.
+- **Live**: Sources and Audio Mixer in a 268-point left column, Scenes under the preview, and the
+  [Health dock](#health-dock) in a 292-point right column.
 - **Review**: Scenes in a 256-point left column, and Audio Mixer and Application Audio under the
   preview, with Sources hidden.
 - **Classic**: every dock in the strip, as Reset Docks leaves them.

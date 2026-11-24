@@ -636,3 +636,33 @@ menu	Transform	变换
 	Move Under the Canvas	移到画布下方
 	Resize the column	调整栏宽
 	Place Dock	放置停靠面板
+	Health	运行状况
+	Destinations	推流目标
+	Streaming…	推流…
+	{live} of {count} live	{count} 个中 {live} 个直播中
+	Not streaming	未推流
+	Live · sending the pause screen	直播中 · 正在发送暂停画面
+	Encoder	编码器
+	Frames are late or skipped	有帧延迟或被跳过
+	No frames late or skipped	没有延迟或跳过的帧
+	Tracks	音轨
+	Files	文件
+	{mb} MB	{mb} MB
+	Disk free	可用空间
+	{gb} GB	{gb} GB
+	Audio lost	丢失的音频
+	{lost} s	{lost} 秒
+	Loading…	正在加载…
+	Live captions	实时字幕
+	Program loudness	节目响度
+	No program audio yet	尚无节目音频
+	Below the target band	低于目标范围
+	Above the target band	高于目标范围
+	In the target band	在目标范围内
+	Short-term	短期
+	Integrated	综合
+	True peak	真峰值
+	Target band	目标范围
+	{value} LUFS	{value} LUFS
+	{value} dBTP	{value} dBTP
+	{low} to {high} LUFS	{low} 至 {high} LUFS

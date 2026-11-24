@@ -636,3 +636,33 @@ menu	Transform	変形
 	Move Under the Canvas	キャンバスの下へ移動
 	Resize the column	列の幅を変更
 	Place Dock	ドックを配置
+	Health	状態
+	Destinations	配信先
+	Streaming…	配信…
+	{live} of {count} live	{count} 件中 {live} 件がライブ
+	Not streaming	配信していません
+	Live · sending the pause screen	ライブ · 一時停止画面を送信中
+	Encoder	エンコーダー
+	Frames are late or skipped	フレームの遅れまたはスキップがあります
+	No frames late or skipped	フレームの遅れやスキップはありません
+	Tracks	トラック
+	Files	ファイル
+	{mb} MB	{mb} MB
+	Disk free	空き容量
+	{gb} GB	{gb} GB
+	Audio lost	失われた音声
+	{lost} s	{lost} 秒
+	Loading…	読み込み中…
+	Live captions	ライブ字幕
+	Program loudness	プログラムのラウドネス
+	No program audio yet	プログラムの音声はまだありません
+	Below the target band	目標範囲より低い
+	Above the target band	目標範囲より高い
+	In the target band	目標範囲内
+	Short-term	短期
+	Integrated	統合
+	True peak	トゥルーピーク
+	Target band	目標範囲
+	{value} LUFS	{value} LUFS
+	{value} dBTP	{value} dBTP
+	{low} to {high} LUFS	{low}～{high} LUFS
