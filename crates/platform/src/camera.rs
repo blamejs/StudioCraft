@@ -742,26 +742,170 @@ mod imp {
             .collect())
     }
 
-    /// Whether the V4L2 node `index` sends pictures: a camera also has nodes that carry only
-    /// metadata. Asking does not disturb a camera that is streaming.
+    /// The cameras last listed as sending pictures; never more than the system lists.
     #[cfg(target_os = "linux")]
-    fn captures(index: &CameraIndex) -> bool {
+    static SENT: std::sync::Mutex<Vec<CameraInfo>> = std::sync::Mutex::new(Vec::new());
+
+    /// Whether the V4L2 node `index` of `camera` sends pictures: a camera also has nodes that
+    /// carry only metadata. Asking does not disturb a camera that is streaming. A busy node
+    /// that is not listed for that reason is added to `held`.
+    #[cfg(target_os = "linux")]
+    fn captures(camera: &CameraInfo, index: &CameraIndex, held: &std::cell::RefCell<Vec<CameraInfo>>) -> bool {
         let Ok(i) = index.as_index() else { return false };
         let Ok(i) = usize::try_from(i) else { return false };
-        v4l::Device::new(i).and_then(|d| d.query_caps()).is_ok_and(|c| c.capabilities.contains(v4l::capability::Flags::VIDEO_CAPTURE))
+        let probe = v4l::Device::new(i).and_then(|d| d.query_caps()).map(|c| c.capabilities.contains(v4l::capability::Flags::VIDEO_CAPTURE));
+        let busy = matches!(&probe, Err(e) if e.kind() == std::io::ErrorKind::ResourceBusy);
+        let starting = STARTING.lock().is_ok_and(|s| s.contains(camera));
+        let listed = SENT.lock().is_ok_and(|mut sent| probed(&mut sent, starting, camera, probe));
+        if busy && !listed {
+            held.borrow_mut().push(camera.clone());
+        }
+        listed
+    }
+
+    /// Adds to `sending` each camera of `held`, busy nodes never listed, of a device that no
+    /// camera in `sending` belongs to: a camera that another program held before this app
+    /// listed it. A busy node of a device that has a node sending pictures carries only
+    /// metadata, and is left out. Of the busy nodes of one device, the node with the lowest
+    /// index within the device is listed: the driver numbers the picture node first. `device`
+    /// names the device a node belongs to and the node's index; a node of an unknown device is
+    /// listed.
+    #[cfg(target_os = "linux")]
+    pub(super) fn with_held(
+        sending: &mut Vec<CameraInfo>,
+        mut held: Vec<CameraInfo>,
+        device: impl Fn(&CameraInfo) -> Option<(std::path::PathBuf, u32)>,
+    ) {
+        held.sort_by_key(|c| device(c).map_or(u32::MAX, |(_, index)| index));
+        for camera in held {
+            let of = device(&camera);
+            let same = |c: &CameraInfo| matches!((&of, device(c)), (Some((a, _)), Some((b, _))) if *a == b);
+            if !sending.iter().any(same) {
+                sending.push(camera);
+            }
+        }
+    }
+
+    /// The device the V4L2 node of `camera`, whose id is its `/dev` path, belongs to, and the
+    /// node's index within the device, from sysfs.
+    #[cfg(target_os = "linux")]
+    fn device_of(camera: &CameraInfo) -> Option<(std::path::PathBuf, u32)> {
+        let node = std::path::Path::new("/sys/class/video4linux").join(std::path::Path::new(&camera.id).file_name()?);
+        let device = std::fs::canonicalize(node.join("device")).ok()?;
+        let index = std::fs::read_to_string(node.join("index")).ok().and_then(|i| i.trim().parse().ok()).unwrap_or(u32::MAX);
+        Some((device, index))
+    }
+
+    /// Whether `camera` is listed, from whether its node sends pictures or the error opening or
+    /// asking it, `sent`, the cameras last listed as sending pictures, and `starting`, whether
+    /// this app is starting the camera's stream. A camera whose node another program holds so
+    /// that it cannot be opened stays listed when it was listed before, and a source opens it
+    /// again every 2 s until that program lets it go. A busy node that was never listed is not
+    /// listed here, unless this app is starting its stream; [`with_held`] decides on it.
+    #[cfg(target_os = "linux")]
+    pub(super) fn probed(sent: &mut Vec<CameraInfo>, starting: bool, camera: &CameraInfo, probe: std::io::Result<bool>) -> bool {
+        let known = sent.iter().position(|c| c == camera);
+        match (probe, known) {
+            (Ok(true), _) => true,
+            (Err(e), known) if e.kind() == std::io::ErrorKind::ResourceBusy && (known.is_some() || starting) => true,
+            (_, Some(at)) => {
+                sent.swap_remove(at);
+                false
+            }
+            (_, None) => false,
+        }
+    }
+
+    /// Keep in `sent` the cameras `sending` lists, which include the cameras this app streams,
+    /// and drop the cameras the system no longer lists in `present`.
+    #[cfg(target_os = "linux")]
+    pub(super) fn remember(sent: &mut Vec<CameraInfo>, present: &[CameraInfo], sending: &[CameraInfo]) {
+        sent.retain(|c| present.contains(c));
+        for c in sending {
+            if !sent.contains(c) {
+                sent.push(c.clone());
+            }
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    fn listed_sending(present: &[CameraInfo], sending: &[CameraInfo]) {
+        if let Ok(mut sent) = SENT.lock() {
+            remember(&mut sent, present, sending);
+        }
+    }
+
+    /// The cameras whose streams this app is starting, once for each start in progress.
+    #[cfg(target_os = "linux")]
+    static STARTING: std::sync::Mutex<Vec<CameraInfo>> = std::sync::Mutex::new(Vec::new());
+
+    /// A start of `camera`'s stream in progress, so a listing that finds its node busy while the
+    /// stream starts keeps it listed. Dropping it, also when the start panicked, ends the start.
+    #[cfg(target_os = "linux")]
+    struct Starting(CameraInfo);
+
+    #[cfg(target_os = "linux")]
+    impl Starting {
+        fn new(camera: CameraInfo) -> Self {
+            if let Ok(mut starting) = STARTING.lock() {
+                starting.push(camera.clone());
+            }
+            Self(camera)
+        }
+
+        /// Records the camera as sending pictures once its stream started.
+        fn started(&self) {
+            if let Ok(mut sent) = SENT.lock() {
+                streams(&mut sent, &self.0);
+            }
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    impl Drop for Starting {
+        fn drop(&mut self) {
+            if let Ok(mut starting) = STARTING.lock()
+                && let Some(at) = starting.iter().position(|c| *c == self.0)
+            {
+                starting.swap_remove(at);
+            }
+        }
+    }
+
+    /// Adds `camera`, a camera whose stream this app started, to `sent` once.
+    #[cfg(target_os = "linux")]
+    pub(super) fn streams(sent: &mut Vec<CameraInfo>, camera: &CameraInfo) {
+        if !sent.contains(camera) {
+            sent.push(camera.clone());
+        }
     }
 
     #[cfg(not(target_os = "linux"))]
-    fn captures(_index: &CameraIndex) -> bool {
+    fn captures(_camera: &CameraInfo, _index: &CameraIndex, _held: &std::cell::RefCell<Vec<CameraInfo>>) -> bool {
         true
     }
 
+    #[cfg(not(target_os = "linux"))]
+    fn with_held(_sending: &mut [CameraInfo], _held: Vec<CameraInfo>, _device: impl Fn(&CameraInfo) -> Option<(std::path::PathBuf, u32)>) {}
+
+    #[cfg(not(target_os = "linux"))]
+    fn device_of(_camera: &CameraInfo) -> Option<(std::path::PathBuf, u32)> {
+        None
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    fn listed_sending(_present: &[CameraInfo], _sending: &[CameraInfo]) {}
+
     fn index_of(camera: &CameraInfo) -> Result<CameraIndex, PlatformError> {
+        found(camera).map(|(_, index)| index)
+    }
+
+    /// The listed camera that best matches `camera`, with its index.
+    fn found(camera: &CameraInfo) -> Result<(CameraInfo, CameraIndex), PlatformError> {
         let list = listed()?;
         let infos: Vec<CameraInfo> = list.iter().map(|(c, _)| c.clone()).collect();
         best_match(&infos, camera)
             .and_then(|i| list.into_iter().nth(i))
-            .map(|(_, index)| index)
             .ok_or_else(|| PlatformError::NotFound(format!("the camera \u{201c}{}\u{201d}", camera.name)))
     }
 
@@ -828,7 +972,16 @@ mod imp {
 
     impl CameraBackend for System {
         fn cameras(&self) -> Result<Vec<CameraInfo>, PlatformError> {
-            on_com_thread(|| Ok(super::sending(listed()?, captures)))
+            on_com_thread(|| {
+                let listed = listed()?;
+                let present: Vec<CameraInfo> = listed.iter().map(|(c, _)| c.clone()).collect();
+                let held = std::cell::RefCell::new(Vec::new());
+                let mut sending = super::sending(listed.into_iter().map(|(c, i)| (c.clone(), (c, i))).collect(), |(c, i)| captures(c, i, &held));
+                // Only nodes that answered are remembered as sending pictures.
+                listed_sending(&present, &sending);
+                with_held(&mut sending, held.into_inner(), device_of);
+                Ok(sending)
+            })
         }
 
         fn formats(&self, camera: &CameraInfo) -> Result<Vec<CameraFormat>, PlatformError> {
@@ -841,23 +994,35 @@ mod imp {
             guarded(|| {
                 #[cfg(windows)]
                 let com = com()?;
-                let index = index_of(camera)?;
+                let (chosen, index) = found(camera)?;
                 #[cfg(target_os = "linux")]
-                if format.pixel == CameraPixel::Gray {
-                    let node = node(&index).ok_or_else(|| PlatformError::Failed("the camera could not be opened".into()))?;
-                    return crate::camera_gray::open(node, format);
+                let starting = Starting::new(chosen);
+                #[cfg(not(target_os = "linux"))]
+                let _ = chosen;
+                let start = move || {
+                    #[cfg(target_os = "linux")]
+                    if format.pixel == CameraPixel::Gray {
+                        let node = node(&index).ok_or_else(|| PlatformError::Failed("the camera could not be opened".into()))?;
+                        return crate::camera_gray::open(node, format);
+                    }
+                    let exact = nokhwa::utils::CameraFormat::new_from(format.width, format.height, encoding(format.pixel), format.fps);
+                    let mut cam = opened(index.clone(), RequestedFormatType::Exact(exact))?;
+                    cam.open_stream().map_err(|e| failed("the camera could not start", e))?;
+                    Ok(Box::new(Stream {
+                        format: ours(&cam.camera_format()),
+                        layout: layout(&index),
+                        cam,
+                        rows: Vec::new(),
+                        #[cfg(windows)]
+                        _com: com,
+                    }) as Box<dyn CameraStream>)
+                };
+                let started = start();
+                #[cfg(target_os = "linux")]
+                if started.is_ok() {
+                    starting.started();
                 }
-                let exact = nokhwa::utils::CameraFormat::new_from(format.width, format.height, encoding(format.pixel), format.fps);
-                let mut cam = opened(index.clone(), RequestedFormatType::Exact(exact))?;
-                cam.open_stream().map_err(|e| failed("the camera could not start", e))?;
-                Ok(Box::new(Stream {
-                    format: ours(&cam.camera_format()),
-                    layout: layout(&index),
-                    cam,
-                    rows: Vec::new(),
-                    #[cfg(windows)]
-                    _com: com,
-                }) as Box<dyn CameraStream>)
+                started
             })
         }
     }
@@ -1513,6 +1678,78 @@ mod tests {
         let listed = vec![(camera.clone(), false), (idle.clone(), false)];
         assert_eq!(sending(listed, |answers| *answers), vec![camera.clone()]);
         assert_eq!(sending(vec![(idle.clone(), true)], |answers| *answers), vec![idle], "a camera that answers is listed");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_camera_node_another_program_holds_stays_listed() {
+        use std::io::{Error, ErrorKind};
+        let busy = || Err(Error::from(ErrorKind::ResourceBusy));
+        let (camera, other) = (cam("Desk", "/dev/video0"), cam("Desk", "/dev/video1"));
+        let present = [camera.clone(), other.clone()];
+        let only = std::slice::from_ref(&camera);
+        let mut sent = Vec::new();
+        assert!(!imp::probed(&mut sent, false, &camera, busy()), "a busy node never listed");
+        assert!(!imp::probed(&mut sent, false, &other, Ok(false)), "a node that carries only metadata");
+        assert!(imp::probed(&mut sent, false, &camera, Ok(true)));
+        imp::remember(&mut sent, &present, only);
+        assert!(imp::probed(&mut sent, false, &camera, busy()), "held by another program");
+        assert!(!imp::probed(&mut sent, false, &other, busy()), "the camera's other node is not listed");
+        assert!(!imp::probed(&mut sent, false, &camera, Err(Error::from(ErrorKind::NotFound))), "removed");
+        assert!(!imp::probed(&mut sent, false, &camera, busy()), "a camera whose node is gone is forgotten");
+        imp::remember(&mut sent, &present, only);
+        assert!(!imp::probed(&mut sent, false, &camera, Err(Error::from(ErrorKind::PermissionDenied))), "cannot be opened by this user");
+        assert!(sent.is_empty());
+        // A camera this app streams is listed without being asked, and is kept.
+        imp::remember(&mut sent, &present, only);
+        imp::remember(&mut sent, &present, only);
+        assert_eq!(sent, only, "kept once");
+        imp::remember(&mut sent, std::slice::from_ref(&other), &[]);
+        assert!(sent.is_empty(), "a camera the system no longer lists is forgotten");
+        assert!(!imp::probed(&mut sent, false, &camera, busy()));
+        // A camera whose stream this app is starting is listed while its node is busy, and is
+        // not kept as sending pictures for that.
+        assert!(imp::probed(&mut sent, true, &camera, busy()), "busy with this app's own stream");
+        assert!(sent.is_empty());
+        assert!(!imp::probed(&mut sent, true, &camera, Err(Error::from(ErrorKind::NotFound))));
+        // A camera whose stream started is recorded once.
+        imp::streams(&mut sent, &camera);
+        imp::streams(&mut sent, &camera);
+        assert_eq!(sent, only, "recorded once");
+        assert!(imp::probed(&mut sent, false, &camera, busy()));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_camera_another_program_held_before_any_listing_is_listed() {
+        use std::path::PathBuf;
+        let (desk, desk_data, room) = (cam("Desk", "/dev/video0"), cam("Desk", "/dev/video1"), cam("Room", "/dev/video2"));
+        // A second camera of the same name, on another port.
+        let (desk2, desk2_data) = (cam("Desk", "/dev/video4"), cam("Desk", "/dev/video5"));
+        let device = |c: &CameraInfo| match c.id.as_str() {
+            "/dev/video0" => Some((PathBuf::from("/sys/usb1/1-1:1.0"), 0)),
+            "/dev/video1" => Some((PathBuf::from("/sys/usb1/1-1:1.0"), 1)),
+            "/dev/video4" => Some((PathBuf::from("/sys/usb1/1-2:1.0"), 0)),
+            "/dev/video5" => Some((PathBuf::from("/sys/usb1/1-2:1.0"), 1)),
+            _ => None,
+        };
+        // Both nodes of Desk are busy: its picture node is listed, once, whichever the system
+        // lists first.
+        let mut sending = vec![room.clone()];
+        imp::with_held(&mut sending, vec![desk_data.clone(), desk.clone()], device);
+        assert_eq!(sending, [room.clone(), desk.clone()]);
+        // Desk sends pictures from one node: its busy node carries only metadata. The other
+        // Desk camera, held by another program, is listed.
+        let mut sending = vec![desk.clone(), room.clone()];
+        imp::with_held(&mut sending, vec![desk_data.clone(), desk2.clone(), desk2_data], device);
+        assert_eq!(sending, [desk.clone(), room.clone(), desk2]);
+        // A node of an unknown device is listed.
+        let mut sending = vec![desk.clone()];
+        imp::with_held(&mut sending, vec![desk_data.clone(), room.clone()], |_: &CameraInfo| None);
+        assert_eq!(sending, [desk, desk_data, room]);
+        let mut sending = Vec::new();
+        imp::with_held(&mut sending, Vec::new(), device);
+        assert!(sending.is_empty());
     }
 
     /// A camera, `slow`, whose format read waits until the test lets it finish; other cameras
