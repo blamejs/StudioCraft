@@ -998,6 +998,37 @@ fn a_request_without_a_rate_draws_once() {
 }
 
 #[test]
+fn a_thumbnail_drawn_once_waits_for_a_shared_picture_still_being_copied() {
+    let mut c = noop_compositor(32, 18);
+    let v = solid([255, 0, 0, 255], 32, 18);
+    c.set_thumbnails(thumbnails(vec![one_item_scene(1, &v)], 0.0));
+    c.frame(ms(5000), &AtomicU64::new(0));
+    assert_eq!(c.thumbnails_due(ms(6000)).1, 0, "drawn once");
+    // The source's shared picture was still being copied when the slot was drawn.
+    let ring = craft_gpu_interop::SharedRing::detached(2, 2);
+    let st = c.sources.get_mut(&SourceId(1)).unwrap();
+    st.shared.get_or_insert_with(Default::default).offer(craft_gpu_interop::SharedFrame::new(ring, 0, 1).unwrap());
+    c.thumbnails_drawn(&[0], ms(6000));
+    assert_eq!(c.thumbnails_due(ms(7000)), ([0, 0], 1), "the slot is drawn again");
+    // The picture was drawn: the slot is done.
+    c.sources.get_mut(&SourceId(1)).unwrap().shared.as_mut().unwrap().clear();
+    c.thumbnails_drawn(&[0], ms(7000));
+    assert_eq!(c.thumbnails_due(ms(8000)).1, 0);
+}
+
+#[test]
+fn a_shared_picture_is_drawn_into_the_view_made_with_the_texture() {
+    let c = noop_compositor(8, 8);
+    let format = wgpu::TextureFormat::Bgra8Unorm;
+    let mut slot = None;
+    let first = shared_target(&c.gpu.device, &c.pipes, &mut slot, (4, 4), format);
+    assert_eq!(shared_target(&c.gpu.device, &c.pipes, &mut slot, (4, 4), format), first, "no view per frame");
+    let resized = shared_target(&c.gpu.device, &c.pipes, &mut slot, (8, 4), format);
+    assert_ne!(resized, first, "a new size makes a new texture and view");
+    assert_eq!(slot.map(|t| t.view), Some(resized));
+}
+
+#[test]
 fn a_removed_or_empty_request_stops_drawing() {
     let mut c = noop_compositor(32, 18);
     let v = solid([255, 0, 0, 255], 32, 18);

@@ -196,6 +196,8 @@ struct Target {
 /// A source's texture on the GPU.
 struct Tex {
     texture: wgpu::Texture,
+    /// The texture's whole view, which a shared capture is drawn into.
+    view: wgpu::TextureView,
     bind: wgpu::BindGroup,
     width: u32,
     height: u32,
@@ -566,8 +568,9 @@ impl Compositor {
         let format = wgpu::TextureFormat::Rgba8Unorm;
         let usage = wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST;
         let texture = texture(device, "filter picture", image.width(), image.height(), format, usage, &[]);
-        let bind = tex_bind(device, &self.pipes, &texture.create_view(&wgpu::TextureViewDescriptor::default()));
-        let tex = Tex { texture, bind, width: image.width(), height: image.height(), format };
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let bind = tex_bind(device, &self.pipes, &view);
+        let tex = Tex { texture, view, bind, width: image.width(), height: image.height(), format };
         // Premultiplied, so the linear filter does not mix the color of transparent pixels in.
         let mut rgba = image.rgba().to_vec();
         premultiply(&mut rgba);
@@ -768,14 +771,8 @@ impl Compositor {
         if let Some(i) = qi {
             self.views.preview.publish(i);
         }
-        if let (Some(_), Some(pool)) = (&thumbs, &self.thumb_pool) {
-            for &s in picks {
-                if let Some(ring) = pool.views.slots.get(s) {
-                    ring.publish(ring.latest().map_or(0, |i| (i + 1) % RING_LEN));
-                    self.thumb_last[s] = Some(now);
-                    self.thumb_fresh[s] = false;
-                }
-            }
+        if thumbs.is_some() {
+            self.thumbnails_drawn(picks, now);
         }
         for (n, copied) in [(&mut self.nv12, copied), (&mut self.scope_nv12, scope_copied)] {
             if copied && let Some(n) = n {
@@ -845,8 +842,7 @@ impl Compositor {
         // The texture is made or replaced only for a picture that is ready, so the last picture
         // stays while the capture's copy runs or when the device cannot take it.
         let slot = &mut st.tex;
-        let target =
-            |_w, _h| Some(ensure_tex(device, pipes, slot, size.0, size.1, format).texture.create_view(&wgpu::TextureViewDescriptor::default()));
+        let target = |_w, _h| Some(shared_target(device, pipes, slot, size, format));
         match importer.draw(device, queue, format, target) {
             Ok(craft_gpu_interop::Drawn::Frame { width, height }) => {
                 st.native = (width, height);
@@ -912,6 +908,20 @@ impl Compositor {
         let Some(i) = pool.views.slots.get(slot).and_then(Ring::latest) else { return Ok(None) };
         let target = pool.targets.get(slot).and_then(|t| t.get(i)).ok_or_else(|| RenderError::Device("no thumbnail picture".into()))?;
         read_rgba(&self.gpu, &target.texture, pool.views.width, pool.views.height).map(Some)
+    }
+
+    /// Record that this frame drew the thumbnail slots `picks` at `now`. A slot whose scene has a
+    /// shared picture still waiting for its copy stays due for a request that draws once, so the
+    /// slot is drawn again when the picture is ready.
+    fn thumbnails_drawn(&mut self, picks: &[usize], now: Tick) {
+        let (Some(req), Some(pool)) = (&self.thumbs, &self.thumb_pool) else { return };
+        for &s in picks {
+            if let Some(ring) = pool.views.slots.get(s) {
+                ring.publish(ring.latest().map_or(0, |i| (i + 1) % RING_LEN));
+                self.thumb_last[s] = Some(now);
+                self.thumb_fresh[s] = req.drawn().get(s).is_some_and(|scene| waits_for_shared(&self.sources, scene));
+            }
+        }
     }
 
     /// The thumbnail slots this frame draws, at most [`THUMBNAILS_PER_FRAME`], oldest first. A
@@ -1295,9 +1305,21 @@ fn ensure_tex<'t>(device: &wgpu::Device, pipes: &Pipes, slot: &'t mut Option<Tex
         // Uploads copy into the texture; a shared capture is drawn into it.
         let usage = wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::RENDER_ATTACHMENT;
         let texture = texture(device, "source", w, h, format, usage, &[]);
-        let bind = tex_bind(device, pipes, &texture.create_view(&wgpu::TextureViewDescriptor::default()));
-        Tex { texture, bind, width: w, height: h, format }
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let bind = tex_bind(device, pipes, &view);
+        Tex { texture, view, bind, width: w, height: h, format }
     })
+}
+
+/// The view a shared picture of `size` is drawn into: the view of the source's texture, which
+/// is made only when the texture is.
+fn shared_target(device: &wgpu::Device, pipes: &Pipes, slot: &mut Option<Tex>, size: (u32, u32), format: wgpu::TextureFormat) -> wgpu::TextureView {
+    ensure_tex(device, pipes, slot, size.0, size.1, format).view.clone()
+}
+
+/// Whether a source of `scene` has a shared picture still waiting for its copy.
+fn waits_for_shared(sources: &HashMap<SourceId, SourceTex>, scene: &SceneDesc) -> bool {
+    scene.items.iter().any(|i| sources.get(&i.source).and_then(|s| s.shared.as_ref()).is_some_and(|s| s.pending().is_some()))
 }
 
 /// A shared picture's size, when it is not empty and fits the device's textures.

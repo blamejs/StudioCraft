@@ -31,8 +31,11 @@ ready fence with the frame's value. The compositor reads the ready fence's compl
 draws the frame only once the value has been reached. It does not queue a wait on the GPU, so a
 capture device that stops answering does not stall the compositor's queue. After the draw, the
 compositor's queue signals the released fence with the same value, and the capture side writes that
-texture again. A texture the compositor never releases is written again after `RECLAIM` (500 ms).
-When every texture is still being read, the capture keeps the acquired desktop picture and copies
+texture again. A texture the compositor has not started to read after `RECLAIM` (500 ms) is taken
+back and written again, and the compositor then skips that frame. A texture whose draw the
+compositor has submitted is written again only after the released fence passes its value. When the
+compositor gets a newer frame while an older one's copy has finished and the newer one's has not, it
+draws the older one first. When every texture is still being read, the capture keeps the acquired desktop picture and copies
 it on a later grab.
 
 ## Limits and failures
