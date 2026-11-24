@@ -268,7 +268,7 @@ Settings › Stream show the chosen encoder's settings, such as the x264 and NVE
 | NVIDIA NVENC H.264 and HEVC (built in) | MKV, through the NVIDIA driver | No | Windows and 64-bit Linux |
 | Windows Media Foundation H.264 and HEVC (built in) | MKV, with the hardware encoders Media Foundation lists | No | Windows |
 | Apple VideoToolbox H.264 and HEVC (built in) | MKV, with the VideoToolbox hardware encoders | No | macOS |
-| VA-API H.264 and HEVC (built in) | MKV, with the VA-API hardware encoders through libva | No | 64-bit Linux |
+| VA-API H.264, HEVC and AV1 (built in) | MKV, with the VA-API hardware encoders through libva | No | 64-bit Linux |
 
 H.264 (built in) uses StudioCraft's own H.264 and AAC encoders. The Hardware encoder uses the
 built-in hardware encoders for MKV recordings, and the built-in hardware H.264 encoders for streams,
@@ -645,9 +645,10 @@ A stream tests only the H.264 candidates in this list, and skips every other can
 - Windows Media Foundation H.264 and HEVC (built in) run the hardware encoders Media Foundation
   lists, on Windows.
 - Apple VideoToolbox H.264 and HEVC (built in) run the VideoToolbox hardware encoders, on macOS.
-- VA-API H.264 and HEVC (built in) run the VA-API hardware encoders through libva, on 64-bit
-  Linux. VA-API H.264 or HEVC chosen by name is tested the same way, and then records with the
-  built-in encoder.
+- VA-API H.264, HEVC and AV1 (built in) run the VA-API hardware encoders through libva, on 64-bit
+  Linux. VA-API H.264, HEVC or AV1 chosen by name is tested the same way, and then records with
+  the built-in encoder. VA-API AV1 needs a driver that takes the sequence and frame headers from
+  StudioCraft.
 
 The compositor converts the program to the encoders' frame format on the GPU.
 

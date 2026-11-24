@@ -26,6 +26,7 @@ use std::sync::OnceLock;
 use libloading::Library;
 
 use super::abi::{self, VABufferID, VAConfigAttrib, VAImage, VAImageFormat, VASurfaceID};
+use super::av1::{self, Tiles, Tools};
 use super::{
     Blocks, Control, DEPTH, OpenError, Params, Picture, RECON, SYNC_TIMEOUT_NS, Slots, Tag, Waited, coded_bytes, coded_size, control, copy_nv12,
     frame_rate_buffer, h264_picture, h264_sequence, h264_slice, hevc_blocks, hevc_picture, hevc_sequence, hevc_slice, no_session, nominal_bitrate,
@@ -37,8 +38,13 @@ use crate::Codec;
 /// from 1 to 14.
 const MAX_ENTRYPOINTS: usize = 256;
 
-/// Why an AV1 session does not open.
-const NO_AV1: &str = "this crate's VA-API encoder writes H.264 and HEVC only";
+/// The packed headers an AV1 session writes: the sequence header and frame header OBUs.
+const AV1_PACKED: u32 = abi::VA_ENC_PACKED_HEADER_SEQUENCE | abi::VA_ENC_PACKED_HEADER_PICTURE;
+
+/// The most parameter buffers one picture sends: for an AV1 key frame, the sequence parameters,
+/// two rate control buffers, the frame rate, the packed sequence header (two buffers), the picture
+/// parameters, the packed frame header (two buffers) and the tile group.
+const MAX_BUFFERS: usize = 10;
 
 /// The libva entry points (the libraries stay loaded for the life of the process).
 struct Api {
@@ -78,9 +84,17 @@ struct Api {
 
 static API: OnceLock<Result<Api, String>> = OnceLock::new();
 
-/// For H.264 and HEVC: why no render node has an encoder for the codec, once every node's driver
-/// initialized and listed none.
-static NO_ENCODER: [OnceLock<String>; 2] = [OnceLock::new(), OnceLock::new()];
+/// For H.264, HEVC and AV1: why no render node has an encoder for the codec, once every node's
+/// driver initialized and listed none.
+static NO_ENCODER: [OnceLock<String>; 3] = [OnceLock::new(), OnceLock::new(), OnceLock::new()];
+
+fn codec_name(codec: Codec) -> &'static str {
+    match codec {
+        Codec::H264 => "H.264",
+        Codec::Hevc => "HEVC",
+        Codec::Av1 => "AV1",
+    }
+}
 
 fn api() -> Result<&'static Api, String> {
     API.get_or_init(load).as_ref().map_err(Clone::clone)
@@ -268,14 +282,14 @@ impl Display {
     }
 
     /// The first profile and encode entry point of the driver that takes `p`, with its rate
-    /// control and block sizes. A driver without any encode entry point for the codec is
-    /// `NoEncoder`; one whose encoders all refuse `p` is `Unsupported`; one whose entry points
+    /// control and block sizes or AV1 tools. A driver without any encode entry point for the codec
+    /// is `NoEncoder`; one whose encoders all refuse `p` is `Unsupported`; one whose entry points
     /// could not be listed is `NoDevice`.
     fn choose(&self, p: &Params) -> Result<Choice, OpenError> {
         let profiles: &[abi::VAProfile] = match p.codec {
             Codec::H264 => &[abi::VAProfileH264High, abi::VAProfileH264Main, abi::VAProfileH264ConstrainedBaseline],
             Codec::Hevc => &[abi::VAProfileHEVCMain],
-            Codec::Av1 => return Err(OpenError::Unsupported(NO_AV1.into())),
+            Codec::Av1 => &[abi::VAProfileAV1Profile0],
         };
         let mut why = None;
         let mut unlisted = None;
@@ -297,7 +311,7 @@ impl Display {
                 }
             }
         }
-        let codec = if p.codec == Codec::H264 { "H.264" } else { "HEVC" };
+        let codec = codec_name(p.codec);
         Err(match (why, unlisted) {
             (Some(why), _) => OpenError::Unsupported(format!("{}: {why}", self.name)),
             (None, Some(e)) => OpenError::NoDevice(format!("{}: {e}", self.name)),
@@ -329,8 +343,28 @@ impl Display {
         if p.codec == Codec::Hevc && (w % min != 0 || h % min != 0) {
             return Err(format!("{w}x{h}: the HEVC encoder takes widths and heights that are multiples of {min}"));
         }
+        let tools = if p.codec == Codec::Av1 { Some(self.av1_tools(p, profile, entry)?) } else { None };
         let ctl = control(p.rate, rc, nominal_bitrate(p))?;
-        Ok(Choice { profile, entry, ctl, blocks })
+        Ok(Choice { profile, entry, ctl, blocks, tools })
+    }
+
+    /// The AV1 tools of `profile` and `entry` for `p`: the driver must take packed sequence and
+    /// frame headers, and as many tiles as the frame needs.
+    fn av1_tools(&self, p: &Params, profile: abi::VAProfile, entry: abi::VAEntrypoint) -> Result<Tools, String> {
+        let mut attrs =
+            [abi::VAConfigAttribEncPackedHeaders, abi::VAConfigAttribEncAV1, abi::VAConfigAttribEncAV1Ext1, abi::VAConfigAttribEncAV1Ext2]
+                .map(|type_| VAConfigAttrib { type_, value: 0 });
+        self.attributes(profile, entry, &mut attrs)?;
+        let [packed, features, ext1, ext2] = attrs.map(|a| a.value);
+        if packed == abi::VA_ATTRIB_NOT_SUPPORTED || packed & AV1_PACKED != AV1_PACKED {
+            return Err("the AV1 encoder takes no packed sequence and frame headers".into());
+        }
+        let tools = av1::tools(features, ext1, ext2)?;
+        let tiles = Tiles::of(p.width, p.height).count();
+        if tiles > tools.max_tiles {
+            return Err(format!("{}x{}: the AV1 encoder codes at most {} tiles and the frame needs {tiles}", p.width, p.height, tools.max_tiles));
+        }
+        Ok(tools)
     }
 }
 
@@ -353,6 +387,17 @@ struct Choice {
     entry: abi::VAEntrypoint,
     ctl: Control,
     blocks: Blocks,
+    /// For AV1.
+    tools: Option<Tools>,
+}
+
+/// What an AV1 session writes into every frame: its level, its tiles, the driver's tools and
+/// the sequence header OBU.
+struct Av1 {
+    level: u8,
+    tiles: Tiles,
+    tools: Tools,
+    sequence: Vec<u8>,
 }
 
 /// How frames get into the input surfaces.
@@ -377,8 +422,10 @@ pub(crate) struct Session {
     coded: Vec<VABufferID>,
     choice: Choice,
     p: Params,
-    /// Macroblocks (H.264) or coding tree blocks (HEVC) in a picture.
+    /// Macroblocks (H.264), coding tree blocks (HEVC) or tiles (AV1) in a picture.
     units: u32,
+    /// For AV1.
+    av1: Option<Av1>,
     upload: Upload,
     /// The frames in flight. Once stalled ([`Slots::stall`]), no later read or drop waits either.
     slots: Slots,
@@ -398,11 +445,12 @@ impl Session {
     /// node's driver lists no encoder for the codec, later calls return that answer without
     /// initializing the drivers again.
     pub(crate) fn open(p: &Params) -> Result<Session, OpenError> {
-        if p.codec == Codec::Av1 {
-            return Err(OpenError::Unsupported(NO_AV1.into()));
-        }
         let api = api().map_err(OpenError::NoDevice)?;
-        let none = &NO_ENCODER[usize::from(p.codec == Codec::Hevc)];
+        let none = &NO_ENCODER[match p.codec {
+            Codec::H264 => 0,
+            Codec::Hevc => 1,
+            Codec::Av1 => 2,
+        }];
         if let Some(why) = none.get() {
             return Err(OpenError::NoEncoder(why.clone()));
         }
@@ -428,15 +476,24 @@ impl Session {
         let mut attrs = [
             VAConfigAttrib { type_: abi::VAConfigAttribRTFormat, value: abi::VA_RT_FORMAT_YUV420 },
             VAConfigAttrib { type_: abi::VAConfigAttribRateControl, value: choice.ctl.mode() },
+            VAConfigAttrib { type_: abi::VAConfigAttribEncPackedHeaders, value: AV1_PACKED },
         ];
+        // The packed headers attribute goes to AV1 configurations only.
+        let count: c_int = if choice.tools.is_some() { 3 } else { 2 };
         let mut config = abi::VA_INVALID_ID;
-        // SAFETY: `dpy` is initialized; `attrs` holds 2 live attributes and `config` is a live output.
-        let st = unsafe { (api.create_config)(dpy, choice.profile, choice.entry, attrs.as_mut_ptr(), 2, &mut config) };
+        // SAFETY: `dpy` is initialized; `attrs` holds at least `count` live attributes and `config`
+        // is a live output.
+        let st = unsafe { (api.create_config)(dpy, choice.profile, choice.entry, attrs.as_mut_ptr(), count, &mut config) };
         display.check(st, "vaCreateConfig").map_err(|e| fail(st, e))?;
         let (cw, ch) = coded_size(p.codec, p.width, p.height);
-        let units = match p.codec {
-            Codec::H264 => (cw / 16) * (ch / 16),
-            Codec::Hevc | Codec::Av1 => p.width.div_ceil(1 << choice.blocks.ctb) * p.height.div_ceil(1 << choice.blocks.ctb),
+        let av1 = choice.tools.map(|tools| {
+            let level = av1::level(p.width, p.height, p.fps, choice.ctl.bits_per_second());
+            Av1 { level, tiles: Tiles::of(p.width, p.height), tools, sequence: av1::sequence_header(p.width, p.height, level) }
+        });
+        let units = match (p.codec, &av1) {
+            (Codec::H264, _) => (cw / 16) * (ch / 16),
+            (Codec::Av1, Some(a)) => a.tiles.count(),
+            (Codec::Hevc | Codec::Av1, _) => p.width.div_ceil(1 << choice.blocks.ctb) * p.height.div_ceil(1 << choice.blocks.ctb),
         };
         // From here on `Drop` releases what was made.
         let mut s = Session {
@@ -448,6 +505,7 @@ impl Session {
             choice,
             p: *p,
             units,
+            av1,
             upload: Upload::Unknown,
             slots: Slots::new(),
             frames: 0,
@@ -485,6 +543,12 @@ impl Session {
         self.slots.full()
     }
 
+    /// The sequence header OBU an AV1 session writes before every key frame; empty for H.264 and
+    /// HEVC, whose drivers write the parameter sets.
+    pub(crate) fn sequence_obu(&self) -> &[u8] {
+        self.av1.as_ref().map_or(&[], |a| &a.sequence)
+    }
+
     /// Copy the NV12 `frame` into the next free slot's surface and submit it as `pic`, tagged
     /// `tag`. The GPU encodes it while the caller goes on; [`Session::collect`] reads it.
     pub(crate) fn submit(&mut self, frame: &[u8], pic: &Picture, tag: Tag) -> Result<(), String> {
@@ -497,7 +561,7 @@ impl Session {
         let n = self.frames as usize;
         let (write, read) = recon_slots(n);
         let (recon, reference) = (self.surfaces[DEPTH + write], self.surfaces[DEPTH + read]);
-        let mut ids = [abi::VA_INVALID_ID; 6];
+        let mut ids = [abi::VA_INVALID_ID; MAX_BUFFERS];
         let mut made = 0;
         let mut begun = false;
         let sent = self.picture(pic, input, recon, reference, self.coded[slot], &mut ids, &mut made, &mut begun);
@@ -528,23 +592,22 @@ impl Session {
         recon: VASurfaceID,
         reference: VASurfaceID,
         coded: VABufferID,
-        ids: &mut [VABufferID; 6],
+        ids: &mut [VABufferID; MAX_BUFFERS],
         made: &mut usize,
         begun: &mut bool,
     ) -> Result<(), String> {
-        if self.p.codec == Codec::Av1 {
-            return Err(NO_AV1.into());
-        }
         let ctl = self.choice.ctl;
         let mut push = |id: Result<VABufferID, String>| -> Result<(), String> {
-            ids[*made] = id?;
+            let slot = ids.get_mut(*made).ok_or("too many parameter buffers for one picture")?;
+            *slot = id?;
             *made += 1;
             Ok(())
         };
         if pic.idr {
-            match self.p.codec {
-                Codec::H264 => push(self.value(abi::VAEncSequenceParameterBufferType, &h264_sequence(&self.p, self.choice.profile, ctl)))?,
-                Codec::Hevc | Codec::Av1 => {
+            match (self.p.codec, &self.av1) {
+                (Codec::H264, _) => push(self.value(abi::VAEncSequenceParameterBufferType, &h264_sequence(&self.p, self.choice.profile, ctl)))?,
+                (Codec::Av1, Some(a)) => push(self.value(abi::VAEncSequenceParameterBufferType, &av1::av1_sequence(&self.p, a.level, ctl)))?,
+                (Codec::Hevc | Codec::Av1, _) => {
                     push(self.value(abi::VAEncSequenceParameterBufferType, &hevc_sequence(&self.p, self.choice.blocks, ctl)))?
                 }
             }
@@ -553,14 +616,27 @@ impl Session {
                 push(self.value(abi::VAEncMiscParameterBufferType, &hrd))?;
             }
             push(self.value(abi::VAEncMiscParameterBufferType, &frame_rate_buffer(self.p.fps)))?;
+            if let Some(a) = &self.av1 {
+                push(self.value(abi::VAEncPackedHeaderParameterBufferType, &av1::packed_header(abi::VAEncPackedHeaderSequence, a.sequence.len())))?;
+                push(self.bytes(abi::VAEncPackedHeaderDataBufferType, &a.sequence))?;
+            }
         }
-        match self.p.codec {
-            Codec::H264 => {
+        match (self.p.codec, &self.av1) {
+            (Codec::H264, _) => {
                 let profile = self.choice.profile;
                 push(self.value(abi::VAEncPictureParameterBufferType, &h264_picture(pic, profile, ctl, recon, reference, coded)))?;
                 push(self.value(abi::VAEncSliceParameterBufferType, &h264_slice(pic, self.units, reference)))?;
             }
-            Codec::Hevc | Codec::Av1 => {
+            (Codec::Av1, Some(a)) => {
+                let header = av1::frame_header(&a.tiles, &a.tools, pic, ctl);
+                let params = av1::av1_picture(&self.p, &a.tiles, &a.tools, pic, ctl, &header, recon, reference, coded);
+                push(self.value(abi::VAEncPictureParameterBufferType, &params))?;
+                push(self.value(abi::VAEncPackedHeaderParameterBufferType, &av1::packed_header(abi::VAEncPackedHeaderPicture, header.obu.len())))?;
+                push(self.bytes(abi::VAEncPackedHeaderDataBufferType, &header.obu))?;
+                push(self.value(abi::VAEncSliceParameterBufferType, &av1::av1_tile_group(&a.tiles)))?;
+            }
+            (Codec::Av1, None) => return Err("an AV1 session without its AV1 settings".into()),
+            (Codec::Hevc, _) => {
                 push(self.value(abi::VAEncPictureParameterBufferType, &hevc_picture(pic, ctl, recon, reference, coded)))?;
                 push(self.value(abi::VAEncSliceParameterBufferType, &hevc_slice(pic, self.units, reference)))?;
             }
@@ -588,6 +664,18 @@ impl Session {
         let data = (value as *const T).cast::<c_void>().cast_mut();
         // SAFETY: `data` is `size` readable bytes of a `repr(C)` parameter structure; libva copies
         // them into the new buffer and never writes through the pointer.
+        let st = unsafe { (self.display.api.create_buffer)(self.display.dpy, self.context, ty, size, 1, data, &mut id) };
+        self.display.check(st, "vaCreateBuffer")?;
+        Ok(id)
+    }
+
+    /// A data buffer of `ty` holding a copy of `bytes`.
+    fn bytes(&self, ty: abi::VABufferType, bytes: &[u8]) -> Result<VABufferID, String> {
+        let size = c_uint::try_from(bytes.len()).map_err(|_| "a data buffer too large")?;
+        let mut id = abi::VA_INVALID_ID;
+        let data = bytes.as_ptr().cast::<c_void>().cast_mut();
+        // SAFETY: `data` is `size` readable bytes; libva copies them into the new buffer and never
+        // writes through the pointer.
         let st = unsafe { (self.display.api.create_buffer)(self.display.dpy, self.context, ty, size, 1, data, &mut id) };
         self.display.check(st, "vaCreateBuffer")?;
         Ok(id)

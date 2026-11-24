@@ -139,6 +139,7 @@
 	Apple VideoToolbox HEVC (built in)	Apple VideoToolbox HEVC（內建）
 	VA-API H.264 (built in)	VA-API H.264（內建）
 	VA-API HEVC (built in)	VA-API HEVC（內建）
+	VA-API AV1 (built in)	VA-API AV1（內建）
 	Height	高度
 	Help	說明
 	Hide	隱藏

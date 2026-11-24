@@ -1,22 +1,27 @@
-//! The VA-API hardware H.264 and HEVC encoders on 64-bit Linux (Intel's and Mesa's drivers among
-//! others). Frames go in as NV12 in system memory and come out as 4-byte length-prefixed samples,
-//! with the parameter sets in the `avcC` or `hvcC` record ([`Encoder::codec_private`]). AV1 is
-//! [`Error::Unsupported`].
+//! The VA-API hardware H.264, HEVC and AV1 encoders on 64-bit Linux (Intel's and Mesa's drivers
+//! among others). Frames go in as NV12 in system memory. H.264 and HEVC come out as 4-byte
+//! length-prefixed samples, with the parameter sets in the `avcC` or `hvcC` record
+//! ([`Encoder::codec_private`]). AV1 comes out as samples of OBUs that carry their sizes, with
+//! the sequence header in the `av1C` record.
 //!
 //! - The encoder runs on the first `/dev/dri/renderD*` node, in number order, whose driver has an
-//!   encode entry point for the codec: H.264 High, Main or Constrained Baseline, HEVC Main.
+//!   encode entry point for the codec: H.264 High, Main or Constrained Baseline, HEVC Main, AV1
+//!   Main. An AV1 driver must take the sequence and frame headers from this crate (packed
+//!   headers); `vaapi_ffi::av1` lists what the AV1 stream uses.
 //! - Quality mode is constant QP at the level. A driver without constant QP gets a variable
 //!   bitrate of a tenth of a bit per pixel per frame instead. Bitrate mode is constant bitrate with
 //!   a one-second buffer. A driver without constant bitrate does not open for it.
-//! - Every picture is an IDR picture or a P picture that refers to the picture before it, so there
-//!   are no B-frames and each packet's decoding time is its presentation time.
+//! - Every picture is an IDR picture (an AV1 key frame) or a P picture (an AV1 inter frame) that
+//!   refers to the picture before it, so there are no B-frames and each packet's decoding time is
+//!   its presentation time.
 //! - HEVC takes widths and heights that are multiples of the driver's smallest coding block
 //!   (8 × 8 unless the driver lists another).
-//! - A stream whose picture size or picture rate is more than level 6.2 of the codec allows is
-//!   refused before VA-API is called.
-//! - The driver writes the parameter sets, so [`Encoder::new`] encodes one gray frame first and
-//!   takes them from its output; the stream that follows starts again at an IDR picture. A
-//!   picture whose parameter sets differ from the record is an error.
+//! - A stream whose picture size or picture rate is more than the codec's highest level allows
+//!   (level 6.2 for H.264 and HEVC, 6.3 for AV1) is refused before VA-API is called.
+//! - [`Encoder::new`] encodes one gray frame first and takes the parameter sets or the sequence
+//!   header from its output; the stream that follows starts again at an IDR picture. An AV1
+//!   driver that writes no sequence header gets the record of the one this crate wrote. A picture
+//!   whose parameter sets or sequence header differ from the record is an error.
 //!
 //! Up to four frames are in flight: [`Encoder::encode`] copies a frame into a free surface and
 //! submits it, and reads the oldest frame's coded data only when every surface is taken. Reading
@@ -26,7 +31,7 @@
 
 use crate::mf::set_types;
 use crate::vaapi_ffi::{self, OpenError, Params, Picture, Session};
-use crate::{Codec, annexb, avc, hevc};
+use crate::{Codec, annexb, av1, avc, hevc};
 pub use crate::{Color, Config, Error, Input, Packet, Rate};
 
 impl From<OpenError> for Error {
@@ -78,15 +83,12 @@ fn params(cfg: &Config) -> Params {
 /// The widest and tallest frame this crate sends to a VA-API encoder.
 const MAX_SIDE: u32 = 8192;
 
-/// Why an AV1 stream does not open.
-const NO_AV1: &str = "this crate's VA-API encoder writes H.264 and HEVC only";
+/// Why AV1 has no Annex B packets or parameter sets.
+const NO_ANNEX_B: &str = "AV1 is not written in Annex B";
 
 /// Check `cfg` without VA-API: sizes, frame rate, rate and input.
 fn check(cfg: &Config) -> Result<(), Error> {
     let bad = |e: String| Err(Error::Unsupported(e));
-    if cfg.codec == Codec::Av1 {
-        return bad(NO_AV1.into());
-    }
     let (w, h) = (cfg.width, cfg.height);
     if w == 0 || h == 0 || w % 2 != 0 || h % 2 != 0 {
         return bad(format!("{w}x{h}: the encoder needs even, nonzero dimensions"));
@@ -98,8 +100,12 @@ fn check(cfg: &Config) -> Result<(), Error> {
         return bad(format!("the frame rate {}/{} is not a rate", cfg.fps.0, cfg.fps.1));
     }
     if !vaapi_ffi::fits_a_level(cfg.codec, w, h, cfg.fps) {
-        let codec = if cfg.codec == Codec::H264 { "H.264" } else { "HEVC" };
-        return bad(format!("{w}x{h} at {}/{} frames per second is more than {codec} level 6.2 allows", cfg.fps.0, cfg.fps.1));
+        let (codec, level) = match cfg.codec {
+            Codec::H264 => ("H.264", "6.2"),
+            Codec::Hevc => ("HEVC", "6.2"),
+            Codec::Av1 => ("AV1", "6.3"),
+        };
+        return bad(format!("{w}x{h} at {}/{} frames per second is more than {codec} level {level} allows", cfg.fps.0, cfg.fps.1));
     }
     if cfg.input != Input::Nv12 {
         return bad("the VA-API encoders take NV12 frames only".into());
@@ -148,7 +154,7 @@ fn record_of(cfg: &Config, sets: &[Vec<u8>]) -> Result<Vec<u8>, Error> {
     match (cfg.codec, sets) {
         (Codec::H264, [sps, pps]) => avc::avcc(sps, pps),
         (Codec::Hevc, [vps, sps, pps]) => hevc::hvcc(vps, sps, pps, (cfg.width, cfg.height), 8),
-        (Codec::Av1, _) => Err(NO_AV1.into()),
+        (Codec::Av1, _) => Err(NO_ANNEX_B.into()),
         _ => Err("the encoder returned no parameter sets".into()),
     }
     .map_err(Error::Failed)
@@ -156,10 +162,11 @@ fn record_of(cfg: &Config, sets: &[Vec<u8>]) -> Result<Vec<u8>, Error> {
 
 /// The packet of one coded picture, `data` in Annex B, that went in with `pts` as an IDR picture
 /// when `idr` is set. Its parameter sets must be `sets` (SPS and PPS, or VPS, SPS and PPS), the
-/// ones in the record; the packet goes out without them. [`Encoder`] makes each packet with it.
+/// ones in the record; the packet goes out without them. [`Encoder`] makes each H.264 and HEVC
+/// packet with it; AV1 is [`Error::Unsupported`] here.
 pub fn packet(codec: Codec, sets: &[Vec<u8>], data: &[u8], pts: i64, idr: bool) -> Result<Packet, Error> {
     if codec == Codec::Av1 {
-        return Err(Error::Unsupported(NO_AV1.into()));
+        return Err(Error::Unsupported(NO_ANNEX_B.into()));
     }
     let types = set_types(codec);
     let mut keyframe = false;
@@ -193,12 +200,31 @@ pub fn packet(codec: Codec, sets: &[Vec<u8>], data: &[u8], pts: i64, idr: bool) 
     Ok(Packet { data: out, pts, keyframe })
 }
 
+/// The AV1 stream of the gray frame's temporal unit `data`, or of `ours`, the sequence header OBU
+/// the session wrote, when the driver wrote none into `data`.
+fn av1_stream(data: &[u8], ours: &[u8]) -> Result<av1::Stream, Error> {
+    let written = av1::obus(data).map_err(Error::Failed)?.iter().any(|o| o.kind == av1::OBU_SEQUENCE_HEADER);
+    av1::Stream::new(if written { data } else { ours }, 8).map_err(Error::Failed)
+}
+
+/// The packet of the AV1 temporal unit `data` of `stream` that went in with `pts` as a key frame
+/// when `idr` is set.
+fn av1_packet(stream: &av1::Stream, data: &[u8], pts: i64, idr: bool) -> Result<Packet, Error> {
+    let (data, keyframe) = stream.sample(data).map_err(Error::Failed)?;
+    if idr && !keyframe {
+        return Err(Error::Failed("the encoder wrote no key frame where one was asked for".into()));
+    }
+    Ok(Packet { data, pts, keyframe })
+}
+
 /// A VA-API hardware encoder.
 pub struct Encoder {
     session: Session,
     cfg: Config,
     record: Vec<u8>,
     sets: Vec<Vec<u8>>,
+    /// For AV1.
+    av1: Option<av1::Stream>,
     gop: Gop,
     /// The coded data of the frame being read, kept between frames so reading allocates nothing.
     coded: Vec<u8>,
@@ -225,13 +251,18 @@ impl Encoder {
         if session.collect(&mut coded).map_err(Error::Failed)?.is_none() {
             return Err(Error::Failed("the encoder returned no frame".into()));
         }
-        let sets = annexb::parameter_sets(cfg.codec, &coded, set_types(cfg.codec)).map_err(Error::Failed)?;
-        let record = record_of(cfg, &sets)?;
+        let (record, sets, av1) = if cfg.codec == Codec::Av1 {
+            let stream = av1_stream(&coded, session.sequence_obu())?;
+            (stream.record().to_vec(), Vec::new(), Some(stream))
+        } else {
+            let sets = annexb::parameter_sets(cfg.codec, &coded, set_types(cfg.codec)).map_err(Error::Failed)?;
+            (record_of(cfg, &sets)?, sets, None)
+        };
         gop.restart();
-        Ok(Encoder { session, cfg: *cfg, record, sets, gop, coded })
+        Ok(Encoder { session, cfg: *cfg, record, sets, av1, gop, coded })
     }
 
-    /// The `avcC` (H.264) or `hvcC` (HEVC) record a container stores with the track.
+    /// The `avcC` (H.264), `hvcC` (HEVC) or `av1C` (AV1) record a container stores with the track.
     pub fn codec_private(&self) -> &[u8] {
         &self.record
     }
@@ -274,7 +305,10 @@ impl Encoder {
     fn take(&mut self, packets: &mut Vec<Packet>) -> Result<bool, Error> {
         self.coded.clear();
         let Some((pts, idr)) = self.session.collect(&mut self.coded).map_err(Error::Failed)? else { return Ok(false) };
-        packets.push(packet(self.cfg.codec, &self.sets, &self.coded, pts, idr)?);
+        packets.push(match &self.av1 {
+            Some(stream) => av1_packet(stream, &self.coded, pts, idr)?,
+            None => packet(self.cfg.codec, &self.sets, &self.coded, pts, idr)?,
+        });
         Ok(true)
     }
 }
@@ -309,10 +343,11 @@ mod tests {
     fn configurations_the_encoder_cannot_take_are_refused_before_va_api() {
         let ok = cfg(Codec::Hevc);
         assert_eq!(check(&ok), Ok(()));
-        for largest in [(Codec::Hevc, (60, 1)), (Codec::H264, (120, 1))] {
+        for largest in [(Codec::Hevc, (60, 1)), (Codec::H264, (120, 1)), (Codec::Av1, (120, 1))] {
             let c = Config { codec: largest.0, width: 7680, height: 4320, fps: largest.1, ..ok };
-            assert_eq!(check(&c), Ok(()), "{c:?} fits level 6.2");
+            assert_eq!(check(&c), Ok(()), "{c:?} fits the highest level");
         }
+        assert_eq!(check(&Config { codec: Codec::Av1, width: 8192, height: 4352, fps: (120, 1), ..ok }), Ok(()), "AV1 level 6.3");
         for bad in [
             Config { width: 255, ..ok },
             Config { height: 0, ..ok },
@@ -331,13 +366,50 @@ mod tests {
             Config { rate: Rate::Quality(52), ..ok },
             Config { rate: Rate::Cbr(0), ..ok },
             Config { rate: Rate::Cbr(u32::MAX / 1000 + 1), ..ok },
-            Config { codec: Codec::Av1, ..ok },
+            Config { codec: Codec::Av1, width: 8192, height: 4352, fps: (121, 1), ..ok },
+            Config { codec: Codec::Av1, width: 8192, height: 8192, ..ok },
+            Config { codec: Codec::Av1, width: 255, ..ok },
+            Config { codec: Codec::Av1, input: Input::P010, ..ok },
         ] {
             assert!(matches!(check(&bad), Err(Error::Unsupported(_))), "{bad:?}");
             assert!(matches!(Encoder::new(&bad), Err(Error::Unsupported(_))), "{bad:?} reached VA-API");
         }
-        assert!(matches!(available(Codec::Av1), Err(Error::NoDevice(_) | Error::Unsupported(_))));
-        assert!(matches!(packet(Codec::Av1, &[], &[0x12, 0], 0, true), Err(Error::Unsupported(_))));
+        let over = check(&Config { codec: Codec::Av1, width: 7680, height: 4320, fps: (130, 1), ..ok });
+        assert!(matches!(&over, Err(Error::Unsupported(why)) if why.contains("AV1 level 6.3")), "{over:?}");
+        assert!(matches!(packet(Codec::Av1, &[], &[0x12, 0], 0, true), Err(Error::Unsupported(_))), "AV1 has no Annex B packets");
+    }
+
+    #[test]
+    fn av1_packets_carry_the_sizes_and_keep_the_sequence_header_in_the_record() {
+        let ours = vaapi_ffi::av1::sequence_header(256, 144, 0);
+        let tiles = vaapi_ffi::av1::Tiles::of(256, 144);
+        let tools = vaapi_ffi::av1::tools(VA_ATTRIB_NOT_SUPPORTED, VA_ATTRIB_NOT_SUPPORTED, VA_ATTRIB_NOT_SUPPORTED).unwrap();
+        let key = vaapi_ffi::av1::frame_header(&tiles, &tools, &Picture { idr: true, order: 0, idr_id: 0 }, Control::Cqp(23)).obu;
+        let inter = vaapi_ffi::av1::frame_header(&tiles, &tools, &Picture { idr: false, order: 1, idr_id: 0 }, Control::Cqp(23)).obu;
+        // A tile group OBU of three bytes.
+        let tile_group = [(4 << 3) | 0x02, 3, 0xaa, 0xbb, 0xcc];
+        let delimiter = [0x12, 0];
+
+        // A driver that writes the sequence header, as most do, and one that writes none.
+        let frame = [&key[..], &tile_group[..]].concat();
+        let written = [&delimiter[..], &ours[..], &frame[..]].concat();
+        let stream = av1_stream(&written, &[]).unwrap();
+        assert_eq!(stream.record(), av1_stream(&frame, &ours).unwrap().record());
+        assert_eq!(stream.sequence_header().max_width, 256);
+        assert!(av1_stream(&frame, &[]).is_err(), "no sequence header anywhere");
+
+        let k = av1_packet(&stream, &written, 7, true).unwrap();
+        assert_eq!((k.pts, k.keyframe), (7, true));
+        // The delimiter is left out, and the frame header's 4-byte size becomes 1 byte.
+        let short_key = [&key[..1], &[(key.len() - 5) as u8][..], &key[5..]].concat();
+        assert_eq!(k.data, [&ours[..], &short_key[..], &tile_group[..]].concat());
+        let later = [&inter[..], &tile_group[..]].concat();
+        let p = av1_packet(&stream, &later, 8, false).unwrap();
+        assert_eq!((p.pts, p.keyframe), (8, false));
+        assert!(av1_packet(&stream, &later, 9, true).is_err(), "no key frame where one was asked for");
+        let other = vaapi_ffi::av1::sequence_header(256, 144, 4);
+        assert!(av1_packet(&stream, &[&other[..], &frame[..]].concat(), 10, true).is_err(), "a changed sequence header");
+        assert!(av1_packet(&stream, &delimiter, 11, false).is_err(), "no picture data");
     }
 
     #[test]
@@ -651,7 +723,7 @@ mod tests {
         // Off 64-bit Linux, and on a system without libva or a driver with an encoder, opening is
         // a `NoDevice` or `Unsupported` error, never a panic; with one, it opens and writes its
         // record.
-        for codec in [Codec::H264, Codec::Hevc] {
+        for codec in [Codec::H264, Codec::Hevc, Codec::Av1] {
             match Encoder::new(&cfg(codec)) {
                 Ok(e) => assert!(!e.codec_private().is_empty()),
                 Err(Error::NoDevice(why) | Error::Unsupported(why) | Error::Busy(why)) => assert!(!why.is_empty()),
@@ -669,7 +741,7 @@ mod tests {
 
     #[test]
     fn an_encoder_round_trips_frames_when_a_hardware_encoder_is_present() {
-        for codec in [Codec::H264, Codec::Hevc] {
+        for codec in [Codec::H264, Codec::Hevc, Codec::Av1] {
             let Ok(mut e) = Encoder::new(&Config { keyint: 4, ..cfg(codec) }) else { continue };
             let frame = vec![128u8; Input::Nv12.frame_bytes(256, 144)];
             let mut packets = Vec::new();

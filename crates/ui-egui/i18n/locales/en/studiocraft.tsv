@@ -254,6 +254,7 @@
 	Apple VideoToolbox HEVC (built in)	Apple VideoToolbox HEVC (built in)
 	VA-API H.264 (built in)	VA-API H.264 (built in)
 	VA-API HEVC (built in)	VA-API HEVC (built in)
+	VA-API AV1 (built in)	VA-API AV1 (built in)
 	OK	OK
 	Opacity (%)	Opacity (%)
 	Open above (dB)	Open above (dB)

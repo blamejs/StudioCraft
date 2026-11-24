@@ -1842,6 +1842,7 @@ mod tests {
         assert_eq!(built_in_twin(("vt_hevc".into(), Some(run("vt_hevc")), None)).0, "vt_native_hevc");
         assert_eq!(built_in_twin(("vaapi_h264".into(), Some(run("vaapi_h264")), None)).0, "vaapi_native_h264");
         assert_eq!(built_in_twin(("vaapi_hevc".into(), Some(run("vaapi_hevc")), None)).0, "vaapi_native_hevc");
+        assert_eq!(built_in_twin(("vaapi_av1".into(), Some(run("vaapi_av1")), None)).0, "vaapi_native_av1");
         assert_eq!(built_in_twin(("amf_h264".into(), Some(run("amf_h264")), None)).0, "amf_h264", "no built-in twin");
         assert_eq!(built_in_twin(("x264".into(), None, None)).0, "x264");
 
