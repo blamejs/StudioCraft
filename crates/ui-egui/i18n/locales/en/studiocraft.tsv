@@ -14,6 +14,7 @@
 	Add a source	Add a source
 	Add Destination	Add Destination
 	Add Scene	Add Scene
+	Add the Camera's Microphone	Add the Camera's Microphone
 	Add Stream Destination	Add Stream Destination
 	Alignment	Alignment
 	Alpha mask (alpha channel)	Alpha mask (alpha channel)
@@ -622,6 +623,10 @@
 @msg	Exported the scene collection to {path}	Exported the scene collection to {path}
 @msg	Imported the scene collection `{name}`	Imported the scene collection `{name}`
 @msg	No file dialog could be shown: {error}	No file dialog could be shown: {error}
+@msg	No microphone of the camera in {source} was found	No microphone of the camera in {source} was found
+@msg	The search for the camera's microphone could not start	The search for the camera's microphone could not start
+@msg	{source} already plays in every scene	{source} already plays in every scene
+@msg	{source} is already in this scene	{source} is already in this scene
 @msg	Recording saved to {path}	Recording saved to {path}
 @msg	Replay saved to {path}	Replay saved to {path}
 @msg	Lost the connection to {name}; reconnecting	Lost the connection to {name}; reconnecting

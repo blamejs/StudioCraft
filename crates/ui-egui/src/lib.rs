@@ -8,6 +8,7 @@
 #[macro_use]
 pub mod i18n;
 pub mod app_icon;
+mod camera_mic;
 pub mod commands;
 mod control;
 pub mod credits;
@@ -79,6 +80,8 @@ pub(crate) enum Act {
     AddSource {
         kind: String,
     },
+    /// Add the microphone of the camera source's camera to the scene being edited.
+    AddCameraMicrophone(SourceId),
     /// End the current drag in the undo history.
     Seal,
     /// Hold `key` for this session under `name` for the stream destinations that use it; an
@@ -263,6 +266,10 @@ pub struct StudioApp {
     /// The profile whose canvas could not take a followed display's size because the profile
     /// could not be saved, with that size and the store's count of profile saves at the time.
     followed_unsaved: Option<(String, (u32, u32), u64)>,
+    /// Finds a camera's own microphone.
+    find_camera_mic: camera_mic::Finder,
+    /// The search for a camera source's microphone that Add the Camera's Microphone started.
+    camera_mic: Option<camera_mic::Search>,
 }
 
 impl StudioApp {
@@ -371,6 +378,8 @@ impl StudioApp {
             ticked_in_logic: false,
             displays: follow::Watch::new(Arc::new(studiocraft_platform::display::displays)),
             followed_unsaved: None,
+            find_camera_mic: camera_mic::system(),
+            camera_mic: None,
         };
         if new_collection {
             app.collection_on_disk = app.save_collection();
@@ -1362,6 +1371,8 @@ impl StudioApp {
         self.properties.clear();
         self.filters.clear();
         self.renaming = None;
+        // A camera's microphone found for the earlier collection is not added to this one.
+        self.camera_mic = None;
         self.store.update(|p| p.collection = name);
     }
 
@@ -1446,6 +1457,15 @@ impl StudioApp {
                 {
                     self.open_properties(SourceId(source));
                 }
+            }
+            Act::AddCameraMicrophone(source) => {
+                let asked = camera_mic::Asked::new(self.studio.collection(), source, self.studio.engine().edit_scene());
+                // A search still running is replaced, and its answer is not used.
+                self.camera_mic = camera_mic::Search::start(&self.find_camera_mic, asked);
+                if self.camera_mic.is_none() {
+                    self.notify(tmsg!("The search for the camera's microphone could not start"), true);
+                }
+                ctx.request_repaint();
             }
             Act::Seal => self.studio.seal_history(),
             Act::HoldStreamKey { name, key } => self.studio.hold_stream_key(&name, &key),
@@ -1631,12 +1651,14 @@ impl StudioApp {
         }
         let selected = ev.select.unwrap_or(self.selected);
         let sel = selected.and_then(|id| self.studio.collection().scene(self.studio.engine().edit_scene())?.item(id)).map(|it| (it.id, it.source));
-        let name = sel.and_then(|(_, s)| self.studio.collection().source(s)).map(|s| s.name.clone()).unwrap_or_default();
+        let src = sel.and_then(|(_, s)| self.studio.collection().source(s));
+        let name = src.map(|s| s.name.clone()).unwrap_or_default();
+        let camera = src.is_some_and(|s| s.kind == camera_mic::CAMERA);
         let renaming = &mut self.renaming;
         let studio = &self.studio;
         resp.context_menu(|ui| {
             if let Some((item, source)) = sel {
-                docks::item_menu(ui, item, source, &name, renaming, acts);
+                docks::item_menu(ui, item, source, &name, camera, renaming, acts);
                 ui.separator();
             }
             ui.menu_button(tl!("Add"), |ui| {
@@ -2357,6 +2379,26 @@ impl StudioApp {
             self.notify(Msg::new(n.template, n.args), n.error);
         }
         self.watch_window_gpu(ctx);
+        self.camera_mic_found(ctx);
+    }
+
+    /// Once the search for a camera's microphone has ended, add the microphone to the scene that
+    /// was being edited when it started, or say why it was not added. The window does not wait
+    /// for the search.
+    fn camera_mic_found(&mut self, ctx: &egui::Context) {
+        let Some(search) = &self.camera_mic else { return };
+        let Some((asked, found)) = search.ended() else {
+            ctx.request_repaint_after(Duration::from_millis(100));
+            return;
+        };
+        self.camera_mic = None;
+        match camera_mic::then(self.studio.collection(), &asked, found.as_ref()) {
+            Some(camera_mic::Then::Run(id, params)) => {
+                let _ = self.perform(ctx, &CommandRef::with_params(id, params));
+            }
+            Some(camera_mic::Then::Say(msg, error)) => self.notify(msg, error),
+            None => {}
+        }
     }
 
     /// Before the frame: the studio ticks, and a close request waits for confirmation while an
