@@ -190,18 +190,18 @@ impl Imported {
         unsafe { self.ready.GetCompletedValue() }
     }
 
-    /// Record, into `encoder`, that texture `slot` passes from the capture side to this queue
-    /// before the draw that reads it, and back after.
-    pub(crate) fn acquire(&self, encoder: &mut wgpu::CommandEncoder, slot: usize) {
-        self.barrier(encoder, slot, true);
+    /// The commands that pass texture `slot` from the capture side to this queue before the draw
+    /// that reads it, and back after.
+    pub(crate) fn acquire(&self, device: &wgpu::Device, slot: usize) -> Option<wgpu::CommandBuffer> {
+        self.barrier(device, slot, true)
     }
 
-    pub(crate) fn hand_back(&self, encoder: &mut wgpu::CommandEncoder, slot: usize) {
-        self.barrier(encoder, slot, false);
+    pub(crate) fn hand_back(&self, device: &wgpu::Device, slot: usize) -> Option<wgpu::CommandBuffer> {
+        self.barrier(device, slot, false)
     }
 
-    fn barrier(&self, encoder: &mut wgpu::CommandEncoder, slot: usize, acquire: bool) {
-        let Some(&image) = self.images.get(slot) else { return };
+    fn barrier(&self, wgpu_device: &wgpu::Device, slot: usize, acquire: bool) -> Option<wgpu::CommandBuffer> {
+        let &image = self.images.get(slot)?;
         let (from, to) = if acquire { (vk::QUEUE_FAMILY_EXTERNAL, self.family) } else { (self.family, vk::QUEUE_FAMILY_EXTERNAL) };
         let (src_access, dst_access) =
             if acquire { (vk::AccessFlags::empty(), vk::AccessFlags::SHADER_READ) } else { (vk::AccessFlags::SHADER_READ, vk::AccessFlags::empty()) };
@@ -230,18 +230,10 @@ impl Imported {
                 base_array_layer: 0,
                 layer_count: 1,
             });
-        let device = &self.device;
-        // SAFETY: the encoder belongs to the device the image was made on. Between the two
-        // barriers the image is in `SHADER_READ_ONLY_OPTIMAL`, the layout wgpu tracks for it, and
-        // outside them the capture side owns it in `GENERAL`, a layout that keeps its contents.
-        // Recording a barrier leaves the encoder usable.
-        unsafe {
-            encoder.as_hal_mut::<wgpu::hal::api::Vulkan, _, _>(|hal| {
-                if let Some(hal) = hal {
-                    device.cmd_pipeline_barrier(hal.raw_handle(), src_stage, dst_stage, vk::DependencyFlags::empty(), &[], &[], &[barrier]);
-                }
-            })
-        };
+        // Between the two barriers the image is in `SHADER_READ_ONLY_OPTIMAL`, the layout wgpu
+        // tracks for it, and outside them the capture side owns it in `GENERAL`, a layout that
+        // keeps its contents.
+        Some(barriers(wgpu_device, &self.device, src_stage, dst_stage, &[barrier]))
     }
 
     /// Hand the texture of the frame with value `value` back to the capture side once the work
@@ -279,6 +271,29 @@ impl Imported {
             }
         }
     }
+}
+
+/// A command buffer that holds only `images`' barriers. wgpu does not let an encoder that recorded
+/// raw commands record its own, so the barriers go in a command buffer of their own, submitted
+/// next to wgpu's.
+pub(crate) fn barriers(
+    wgpu_device: &wgpu::Device,
+    device: &ash::Device,
+    src_stage: vk::PipelineStageFlags,
+    dst_stage: vk::PipelineStageFlags,
+    images: &[vk::ImageMemoryBarrier<'_>],
+) -> wgpu::CommandBuffer {
+    let mut encoder = wgpu_device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("shared texture barriers") });
+    // SAFETY: the encoder belongs to `wgpu_device`, whose Vulkan device is `device`, and the
+    // images are images of that device. The encoder records nothing but these barriers.
+    unsafe {
+        encoder.as_hal_mut::<wgpu::hal::api::Vulkan, _, _>(|hal| {
+            if let Some(hal) = hal {
+                device.cmd_pipeline_barrier(hal.raw_handle(), src_stage, dst_stage, vk::DependencyFlags::empty(), &[], &[], images);
+            }
+        })
+    };
+    encoder.finish()
 }
 
 impl Drop for Imported {

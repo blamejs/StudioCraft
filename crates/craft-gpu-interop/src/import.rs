@@ -239,11 +239,13 @@ impl Importer {
             release(opened, frame.ready())?;
             return Ok(Drawn::Idle);
         };
+        // wgpu does not let one encoder take both its own commands and raw ones, so the barriers
+        // that pass the texture between the two sides are command buffers of their own.
+        let before = acquire(opened, device, frame.slot());
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("shared capture") });
-        acquire(opened, &mut encoder, frame.slot());
         opaque.draw(device, &mut encoder, bind, &target, format);
-        hand_back(opened, &mut encoder, frame.slot());
-        queue.submit([encoder.finish()]);
+        let after = hand_back(opened, device, frame.slot());
+        queue.submit(before.into_iter().chain([encoder.finish()]).chain(after));
         if let Err(reason) = release(opened, frame.ready()) {
             ring.refuse(reason);
             self.opened = None;
@@ -273,29 +275,35 @@ fn open(_device: &wgpu::Device, _queue: &wgpu::Queue, _ring: &crate::ring::Share
     Err(Fallback::Unsupported)
 }
 
-/// Record, before the draw that reads texture `slot`, that the texture passes to the compositor's
-/// queue. Only a Vulkan device records anything.
+/// The commands, submitted before the draw that reads texture `slot`, that pass the texture to the
+/// compositor's queue. Only a Vulkan device has any.
 #[cfg(windows)]
-fn acquire(opened: &Opened, encoder: &mut wgpu::CommandEncoder, slot: usize) {
-    if let Raw::Vulkan(r) = &opened.raw {
-        r.acquire(encoder, slot);
+fn acquire(opened: &Opened, device: &wgpu::Device, slot: usize) -> Option<wgpu::CommandBuffer> {
+    match &opened.raw {
+        Raw::Vulkan(r) => r.acquire(device, slot),
+        Raw::Dx12(_) => None,
     }
 }
 
 #[cfg(not(windows))]
-fn acquire(_opened: &Opened, _encoder: &mut wgpu::CommandEncoder, _slot: usize) {}
+fn acquire(_opened: &Opened, _device: &wgpu::Device, _slot: usize) -> Option<wgpu::CommandBuffer> {
+    None
+}
 
-/// Record, after the draw that read texture `slot`, that the texture passes back to the capture
-/// side. Only a Vulkan device records anything.
+/// The commands, submitted after the draw that read texture `slot`, that pass the texture back to
+/// the capture side. Only a Vulkan device has any.
 #[cfg(windows)]
-fn hand_back(opened: &Opened, encoder: &mut wgpu::CommandEncoder, slot: usize) {
-    if let Raw::Vulkan(r) = &opened.raw {
-        r.hand_back(encoder, slot);
+fn hand_back(opened: &Opened, device: &wgpu::Device, slot: usize) -> Option<wgpu::CommandBuffer> {
+    match &opened.raw {
+        Raw::Vulkan(r) => r.hand_back(device, slot),
+        Raw::Dx12(_) => None,
     }
 }
 
 #[cfg(not(windows))]
-fn hand_back(_opened: &Opened, _encoder: &mut wgpu::CommandEncoder, _slot: usize) {}
+fn hand_back(_opened: &Opened, _device: &wgpu::Device, _slot: usize) -> Option<wgpu::CommandBuffer> {
+    None
+}
 
 #[cfg(windows)]
 fn completed(opened: &Opened) -> u64 {

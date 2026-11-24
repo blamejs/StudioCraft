@@ -38,8 +38,10 @@ frame's value, and the importer copies the semaphore's value to the released fen
 its next `draw` or `poll`, without waiting. A frame that is not drawn is handed back the same way.
 When an import is closed while its last draw still runs, the released fence gets that draw's
 value and the semaphore is destroyed once the queue has finished the work, and closing the import
-does not wait. Each Vulkan draw records a barrier that takes the texture from the external
-queue family before it reads the texture, and one that hands it back after. A texture the
+does not wait. Each Vulkan draw submits a barrier that takes the texture from the external
+queue family before it reads the texture, and one that hands it back after. Each barrier is a
+command buffer of its own, because wgpu does not let one encoder record both its own commands and
+raw Vulkan commands. A texture the
 compositor never releases is written again after `RECLAIM` (500 ms).
 When every texture is still being read, the capture keeps the acquired desktop picture and copies
 it on a later grab.
