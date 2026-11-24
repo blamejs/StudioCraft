@@ -428,16 +428,16 @@
 	Hardware acceleration	Hardwarová akcelerace
 	Power saving	Úspora energie
 	Software (slower)	Softwarově (pomalejší)
-	Compact (small files)	Kompaktní (malé soubory)
+	Compact	Kompaktní
 	Duplicate Profile	Duplikovat profil
 	Duplicate Scene Collection	Duplikovat kolekci scén
-	Lossless (very large files)	Bezeztrátová (velmi velké soubory)
+	Lossless	Bezeztrátová
 	Move Down	Posunout dolů
 	Move to Bottom	Přesunout na konec
 	Move to Top	Přesunout na začátek
 	Move Up	Posunout nahoru
 	New Scene Collection	Nová kolekce scén
-	Pristine (large files)	Bezchybná (velké soubory)
+	Pristine	Bezchybná
 	Rename Profile	Přejmenovat profil
 	Rename Scene Collection	Přejmenovat kolekci scén
 	Unlock	Odemknout
@@ -491,6 +491,12 @@ menu	Transform	Transformace
 	Audio tracks write this source to a WAV file of its own (Settings › Output › Audio tracks)	Zvukové stopy zapisují tento zdroj do samostatného souboru WAV (Nastavení › Výstup › Zvukové stopy)
 	Audio tracks	Zvukové stopy
 	Write each recorded source and the program mix to its own WAV file	Zapisovat každý nahrávaný zdroj a mix programu do samostatného souboru WAV
+	Smaller files for long sessions	Menší soubory pro dlouhé relace
+	A good fit for most recordings	Vhodná pro většinu nahrávek
+	Almost no loss, for editing later	Téměř bez ztráty, pro pozdější úpravy
+	No loss at all, in very large files	Zcela bez ztráty, ve velmi velkých souborech
+	Advanced options	Pokročilé možnosti
+	ffmpeg program, write buffer, file size, audio editor	program ffmpeg, vyrovnávací paměť zápisu, velikost souboru, zvukový editor
 	Write them while	Zapisovat, když
 	Include the program mix	Zahrnout mix programu
 	Write buffer	Vyrovnávací paměť zápisu

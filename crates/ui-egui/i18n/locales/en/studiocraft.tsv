@@ -76,7 +76,7 @@
 	Color correction	Color correction
 	Color key	Color key
 	Community	Community
-	Compact (small files)	Compact (small files)
+	Compact	Compact
 	Compressor	Compressor
 	Connecting	Connecting
 	Contrast	Contrast
@@ -198,7 +198,7 @@
 	Lock Preview	Lock Preview
 	Longest wait	Longest wait
 	Loop	Loop
-	Lossless (very large files)	Lossless (very large files)
+	Lossless	Lossless
 	Low (dB)	Low (dB)
 	Maximize	Maximize
 	MB	MB
@@ -286,7 +286,7 @@
 	Presets	Presets
 	Preview: {name}	Preview: {name}
 	Primary display	Primary display
-	Pristine (large files)	Pristine (large files)
+	Pristine	Pristine
 	Profile	Profile
 	Program	Program
 	Program: {name}	Program: {name}
@@ -731,6 +731,12 @@ menu	Transform	Transform
 	Audio tracks write this source to a WAV file of its own (Settings › Output › Audio tracks)	Audio tracks write this source to a WAV file of its own (Settings › Output › Audio tracks)
 	Audio tracks	Audio tracks
 	Write each recorded source and the program mix to its own WAV file	Write each recorded source and the program mix to its own WAV file
+	Smaller files for long sessions	Smaller files for long sessions
+	A good fit for most recordings	A good fit for most recordings
+	Almost no loss, for editing later	Almost no loss, for editing later
+	No loss at all, in very large files	No loss at all, in very large files
+	Advanced options	Advanced options
+	ffmpeg program, write buffer, file size, audio editor	ffmpeg program, write buffer, file size, audio editor
 	Write them while	Write them while
 	Include the program mix	Include the program mix
 	Write buffer	Write buffer

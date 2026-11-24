@@ -418,16 +418,16 @@
 	Hardware acceleration	Hardwareversnelling
 	Power saving	Energiebesparing
 	Software (slower)	Software (langzamer)
-	Compact (small files)	Compact (kleine bestanden)
+	Compact	Compact
 	Duplicate Profile	Profiel dupliceren
 	Duplicate Scene Collection	Scèneverzameling dupliceren
-	Lossless (very large files)	Verliesvrij (zeer grote bestanden)
+	Lossless	Verliesvrij
 	Move Down	Omlaag
 	Move to Bottom	Helemaal omlaag
 	Move to Top	Helemaal omhoog
 	Move Up	Omhoog
 	New Scene Collection	Nieuwe scèneverzameling
-	Pristine (large files)	Onberispelijk (grote bestanden)
+	Pristine	Onberispelijk
 	Rename Profile	Naam van profiel wijzigen
 	Rename Scene Collection	Naam van scèneverzameling wijzigen
 	Unlock	Ontgrendelen
@@ -481,6 +481,12 @@ menu	Transform	Transformeren
 	Audio tracks write this source to a WAV file of its own (Settings › Output › Audio tracks)	Audiosporen schrijven deze bron naar een eigen WAV-bestand (Instellingen › Uitvoer › Audiosporen)
 	Audio tracks	Audiosporen
 	Write each recorded source and the program mix to its own WAV file	Elke opgenomen bron en de programmamix naar een eigen WAV-bestand schrijven
+	Smaller files for long sessions	Kleinere bestanden voor lange sessies
+	A good fit for most recordings	Geschikt voor de meeste opnamen
+	Almost no loss, for editing later	Bijna verliesvrij, om later te bewerken
+	No loss at all, in very large files	Helemaal zonder verlies, in zeer grote bestanden
+	Advanced options	Geavanceerde opties
+	ffmpeg program, write buffer, file size, audio editor	ffmpeg-programma, schrijfbuffer, bestandsgrootte, audio-editor
 	Write them while	Schrijven terwijl
 	Include the program mix	Programmamix meenemen
 	Write buffer	Schrijfbuffer

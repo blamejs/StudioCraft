@@ -60,7 +60,7 @@
 	Color correction	تصحيح الألوان
 	Color key	مفتاح اللون
 	Community	المجتمع
-	Compact (small files)	مضغوط (ملفات صغيرة)
+	Compact	مضغوط
 	Compressor	الضاغط
 	Contrast	التباين
 	could not connect to the PipeWire sound server	تعذّر الاتصال بخادم الصوت PipeWire
@@ -172,7 +172,7 @@
 	Lock (it can't be moved in the preview)	قفل (لا يمكن تحريكه في المعاينة)
 	Lock Preview	قفل المعاينة
 	Loop	تكرار التشغيل
-	Lossless (very large files)	بلا فقد (ملفات كبيرة جدًا)
+	Lossless	بلا فقد
 	Low (dB)	الترددات المنخفضة (ديسيبل)
 	Maximize	تكبير
 	Media file	ملف وسائط
@@ -231,7 +231,7 @@
 	Presets	الإعدادات المسبقة
 	Preview: {name}	المعاينة: {name}
 	Primary display	الشاشة الرئيسية
-	Pristine (large files)	نقي (ملفات كبيرة)
+	Pristine	نقي
 	Profile	ملف التعريف
 	Program: {name}	الإخراج النهائي: {name}
 	Properties	الخصائص
@@ -479,6 +479,12 @@ menu	Transform	التحويل
 	Audio tracks write this source to a WAV file of its own (Settings › Output › Audio tracks)	تكتب المسارات الصوتية هذا المصدر في ملف WAV خاص به (الإعدادات › الإخراج › المسارات الصوتية)
 	Audio tracks	المسارات الصوتية
 	Write each recorded source and the program mix to its own WAV file	كتابة كل مصدر مسجَّل ومزيج البرنامج في ملف WAV خاص به
+	Smaller files for long sessions	ملفات أصغر للجلسات الطويلة
+	A good fit for most recordings	مناسبة لمعظم التسجيلات
+	Almost no loss, for editing later	فقد شبه معدوم، للتحرير لاحقًا
+	No loss at all, in very large files	بلا أي فقد، في ملفات كبيرة جدًا
+	Advanced options	خيارات متقدمة
+	ffmpeg program, write buffer, file size, audio editor	برنامج ffmpeg، مخزن الكتابة المؤقت، حجم الملف، محرر الصوت
 	Write them while	كتابتها عند
 	Include the program mix	تضمين مزيج البرنامج
 	Write buffer	مخزن الكتابة المؤقت

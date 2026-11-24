@@ -60,7 +60,7 @@
 	Color correction	תיקון צבע
 	Color key	מפתח צבע
 	Community	קהילה
-	Compact (small files)	דחוס (קבצים קטנים)
+	Compact	דחוס
 	Compressor	מדחס
 	Contrast	ניגודיות
 	could not connect to the PipeWire sound server	לא ניתן להתחבר לשרת הקול PipeWire
@@ -172,7 +172,7 @@
 	Lock (it can't be moved in the preview)	נעילה (לא ניתן להזיז אותו בתצוגה המקדימה)
 	Lock Preview	נעילת התצוגה המקדימה
 	Loop	לולאה
-	Lossless (very large files)	ללא אובדן (קבצים גדולים מאוד)
+	Lossless	ללא אובדן
 	Low (dB)	תדרים נמוכים (dB)
 	Maximize	הגדלה
 	Media file	קובץ מדיה
@@ -231,7 +231,7 @@
 	Presets	הגדרות מראש
 	Preview: {name}	תצוגה מקדימה: {name}
 	Primary display	המסך הראשי
-	Pristine (large files)	איכות מרבית (קבצים גדולים)
+	Pristine	איכות מרבית
 	Profile	פרופיל
 	Program: {name}	פלט סופי: {name}
 	Properties	מאפיינים
@@ -472,6 +472,12 @@ menu	Transform	שינוי צורה
 	Audio tracks write this source to a WAV file of its own (Settings › Output › Audio tracks)	רצועות השמע כותבות מקור זה לקובץ WAV משלו (הגדרות › פלט › רצועות שמע)
 	Audio tracks	רצועות שמע
 	Write each recorded source and the program mix to its own WAV file	כתיבת כל מקור מוקלט ומיקס התוכנית לקובץ WAV משלו
+	Smaller files for long sessions	קבצים קטנים יותר להפעלות ארוכות
+	A good fit for most recordings	מתאימה לרוב ההקלטות
+	Almost no loss, for editing later	כמעט ללא אובדן, לעריכה בהמשך
+	No loss at all, in very large files	ללא אובדן כלל, בקבצים גדולים מאוד
+	Advanced options	אפשרויות מתקדמות
+	ffmpeg program, write buffer, file size, audio editor	תוכנית ffmpeg, מאגר כתיבה, גודל קובץ, עורך שמע
 	Write them while	מתי לכתוב
 	Include the program mix	כולל מיקס התוכנית
 	Write buffer	מאגר כתיבה

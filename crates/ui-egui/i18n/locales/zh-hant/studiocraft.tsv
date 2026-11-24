@@ -428,16 +428,16 @@
 	Hardware acceleration	硬體加速
 	Power saving	省電
 	Software (slower)	軟體（較慢）
-	Compact (small files)	精簡（檔案較小）
+	Compact	精簡
 	Duplicate Profile	複製設定檔
 	Duplicate Scene Collection	複製場景集合
-	Lossless (very large files)	無損（檔案非常大）
+	Lossless	無損
 	Move Down	下移
 	Move to Bottom	移到最下面
 	Move to Top	移到最上面
 	Move Up	上移
 	New Scene Collection	新增場景集合
-	Pristine (large files)	極高品質（檔案較大）
+	Pristine	極高品質
 	Rename Profile	重新命名設定檔
 	Rename Scene Collection	重新命名場景集合
 	Unlock	解除鎖定
@@ -491,6 +491,12 @@ menu	Transform	變形
 	Audio tracks write this source to a WAV file of its own (Settings › Output › Audio tracks)	音訊軌道會將此來源寫入獨立的 WAV 檔案（設定 › 輸出 › 音訊軌道）
 	Audio tracks	音訊軌道
 	Write each recorded source and the program mix to its own WAV file	將每個錄製的來源與節目混音分別寫入獨立的 WAV 檔案
+	Smaller files for long sessions	檔案較小，適合長時間錄製
+	A good fit for most recordings	適合大多數錄製
+	Almost no loss, for editing later	幾乎無損，便於後期編輯
+	No loss at all, in very large files	完全無損，檔案非常大
+	Advanced options	進階選項
+	ffmpeg program, write buffer, file size, audio editor	ffmpeg 程式、寫入緩衝區、檔案大小、音訊編輯器
 	Write them while	寫入時機
 	Include the program mix	包含節目混音
 	Write buffer	寫入緩衝區

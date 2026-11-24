@@ -293,6 +293,11 @@ The software encoder runs x264 with `-qp 0`, and NVENC through `ffmpeg` runs wit
 `-tune lossless`. A Lossless recording also stores its audio without loss, as FLAC in an MKV file
 and as ALAC in an MP4 or MOV file. The other levels encode the audio as AAC.
 
+Settings › Output shows the four levels as cards, each with a short description. A click or an
+arrow key chooses one. The ffmpeg program, the audio tracks' write buffer and file size, and the
+audio editor are under Advanced options at the end of the page, which is closed when Settings
+opens. When the ffmpeg program cannot be read, the reason shows under the video encoder.
+
 StudioCraft writes recordings to the folder set in Settings › Output. When that setting is empty,
 it uses your Videos folder, then your home folder when the system has no Videos folder, and then
 the folder StudioCraft was started in. It names each file `YYYY-MM-DD HH-MM-SS.<ext>`. File › Show
@@ -423,8 +428,8 @@ full session cannot be written, for example on a full disk, the take stops with 
 left unfinished, and a repair of the take writes the session.
 
 Settings › Output › Audio tracks › After a take sets what happens when a take's files are complete:
-Nothing (the default), Show the folder, or Open in the audio editor. Audio editor sets the editor's
-program; when it is empty, `soundcraft` on the `PATH` is used. When the editor cannot be found or
+Nothing (the default), Show the folder, or Open in the audio editor. Audio editor, under Settings ›
+Output › Advanced options, sets the editor's program; when it is empty, `soundcraft` on the `PATH` is used. When the editor cannot be found or
 started, the take's folder opens instead and a notice gives the reason. A take that ends
 because the next one starts (a recording that starts or stops during a stream) opens nothing, and so
 does a take whose files are complete only after a newer take has opened. Takes that the app finds

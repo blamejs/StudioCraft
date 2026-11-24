@@ -422,16 +422,16 @@
 @msg	The hardware encoder tests could not run: {error}	无法运行硬件编码器测试：{error}
 @msg	{encoder} stopped working; the next start tries another encoder	{encoder} 已停止工作；下次开始时将尝试其他编码器
 	{program} did not report its version	{program} 未报告其版本
-	Compact (small files)	紧凑（文件较小）
+	Compact	紧凑
 	Duplicate Profile	复制配置文件
 	Duplicate Scene Collection	复制场景集合
-	Lossless (very large files)	无损（文件非常大）
+	Lossless	无损
 	Move Down	下移
 	Move to Bottom	移到底部
 	Move to Top	移到顶部
 	Move Up	上移
 	New Scene Collection	新建场景集合
-	Pristine (large files)	极高质量（文件较大）
+	Pristine	极高质量
 	Rename Profile	重命名配置文件
 	Rename Scene Collection	重命名场景集合
 	Unlock	解锁
@@ -491,6 +491,12 @@ menu	Transform	变换
 	Audio tracks write this source to a WAV file of its own (Settings › Output › Audio tracks)	音频轨道将此来源写入单独的 WAV 文件（设置 › 输出 › 音频轨道）
 	Audio tracks	音频轨道
 	Write each recorded source and the program mix to its own WAV file	将每个录制的来源和节目混音分别写入单独的 WAV 文件
+	Smaller files for long sessions	文件较小，适合长时间录制
+	A good fit for most recordings	适合大多数录制
+	Almost no loss, for editing later	几乎无损，便于后期编辑
+	No loss at all, in very large files	完全无损，文件非常大
+	Advanced options	高级选项
+	ffmpeg program, write buffer, file size, audio editor	ffmpeg 程序、写入缓冲区、文件大小、音频编辑器
 	Write them while	写入时机
 	Include the program mix	包括节目混音
 	Write buffer	写入缓冲区

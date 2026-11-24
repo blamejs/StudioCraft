@@ -427,16 +427,16 @@
 	Hardware acceleration	Przyspieszenie sprzętowe
 	Power saving	Oszczędzanie energii
 	Software (slower)	Programowo (wolniej)
-	Compact (small files)	Kompaktowa (małe pliki)
+	Compact	Kompaktowa
 	Duplicate Profile	Duplikuj profil
 	Duplicate Scene Collection	Duplikuj kolekcję scen
-	Lossless (very large files)	Bezstratna (bardzo duże pliki)
+	Lossless	Bezstratna
 	Move Down	Przenieś w dół
 	Move to Bottom	Przenieś na dół
 	Move to Top	Przenieś na górę
 	Move Up	Przenieś w górę
 	New Scene Collection	Nowa kolekcja scen
-	Pristine (large files)	Nieskazitelna (duże pliki)
+	Pristine	Nieskazitelna
 	Rename Profile	Zmień nazwę profilu
 	Rename Scene Collection	Zmień nazwę kolekcji scen
 	Unlock	Odblokuj
@@ -490,6 +490,12 @@ menu	Transform	Przekształć
 	Audio tracks write this source to a WAV file of its own (Settings › Output › Audio tracks)	Ścieżki audio zapisują to źródło w osobnym pliku WAV (Ustawienia › Wyjście › Ścieżki audio)
 	Audio tracks	Ścieżki audio
 	Write each recorded source and the program mix to its own WAV file	Zapisuj każde nagrywane źródło i miks programu w osobnym pliku WAV
+	Smaller files for long sessions	Mniejsze pliki na długie sesje
+	A good fit for most recordings	Dobra dla większości nagrań
+	Almost no loss, for editing later	Prawie bez strat, do późniejszej edycji
+	No loss at all, in very large files	Zupełnie bez strat, w bardzo dużych plikach
+	Advanced options	Opcje zaawansowane
+	ffmpeg program, write buffer, file size, audio editor	program ffmpeg, bufor zapisu, rozmiar pliku, edytor audio
 	Write them while	Zapisuj, gdy
 	Include the program mix	Dołącz miks programu
 	Write buffer	Bufor zapisu

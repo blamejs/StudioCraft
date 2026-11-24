@@ -422,16 +422,16 @@
 @msg	The hardware encoder tests could not run: {error}	하드웨어 인코더 테스트를 실행할 수 없습니다: {error}
 @msg	{encoder} stopped working; the next start tries another encoder	{encoder}이(가) 작동을 멈췄습니다. 다음 시작 때 다른 인코더를 시도합니다
 	{program} did not report its version	{program}이(가) 버전을 알려 주지 않았습니다
-	Compact (small files)	컴팩트 (작은 파일)
+	Compact	컴팩트
 	Duplicate Profile	프로필 복제
 	Duplicate Scene Collection	장면 모음 복제
-	Lossless (very large files)	무손실 (매우 큰 파일)
+	Lossless	무손실
 	Move Down	아래로 이동
 	Move to Bottom	맨 아래로 이동
 	Move to Top	맨 위로 이동
 	Move Up	위로 이동
 	New Scene Collection	새 장면 모음
-	Pristine (large files)	최고 품질 (큰 파일)
+	Pristine	최고 품질
 	Rename Profile	프로필 이름 바꾸기
 	Rename Scene Collection	장면 모음 이름 바꾸기
 	Unlock	잠금 해제
@@ -491,6 +491,12 @@ menu	Transform	변형
 	Audio tracks write this source to a WAV file of its own (Settings › Output › Audio tracks)	오디오 트랙은 이 소스를 별도의 WAV 파일에 기록합니다(설정 › 출력 › 오디오 트랙)
 	Audio tracks	오디오 트랙
 	Write each recorded source and the program mix to its own WAV file	녹음되는 각 소스와 프로그램 믹스를 각각 별도의 WAV 파일에 기록
+	Smaller files for long sessions	긴 세션을 위한 작은 파일
+	A good fit for most recordings	대부분의 녹화에 적합
+	Almost no loss, for editing later	거의 손실 없음, 나중에 편집할 때
+	No loss at all, in very large files	손실 전혀 없음, 매우 큰 파일
+	Advanced options	고급 옵션
+	ffmpeg program, write buffer, file size, audio editor	ffmpeg 프로그램, 쓰기 버퍼, 파일 크기, 오디오 편집기
 	Write them while	기록 시점
 	Include the program mix	프로그램 믹스 포함
 	Write buffer	쓰기 버퍼

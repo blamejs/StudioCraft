@@ -437,16 +437,16 @@
 	Hardware acceleration	Accélération matérielle
 	Power saving	Économie d'énergie
 	Software (slower)	Logiciel (plus lent)
-	Compact (small files)	Compacte (petits fichiers)
+	Compact	Compacte
 	Duplicate Profile	Dupliquer le profil
 	Duplicate Scene Collection	Dupliquer la collection de scènes
-	Lossless (very large files)	Sans perte (fichiers très volumineux)
+	Lossless	Sans perte
 	Move Down	Descendre
 	Move to Bottom	Placer en bas
 	Move to Top	Placer en haut
 	Move Up	Monter
 	New Scene Collection	Nouvelle collection de scènes
-	Pristine (large files)	Impeccable (fichiers volumineux)
+	Pristine	Impeccable
 	Rename Profile	Renommer le profil
 	Rename Scene Collection	Renommer la collection de scènes
 	Unlock	Déverrouiller
@@ -500,6 +500,12 @@ menu	Transform	Transformer
 	Audio tracks write this source to a WAV file of its own (Settings › Output › Audio tracks)	Les pistes audio écrivent cette source dans son propre fichier WAV (Paramètres › Sortie › Pistes audio)
 	Audio tracks	Pistes audio
 	Write each recorded source and the program mix to its own WAV file	Écrire chaque source enregistrée et le mixage du programme dans son propre fichier WAV
+	Smaller files for long sessions	Fichiers plus petits pour les longues sessions
+	A good fit for most recordings	Convient à la plupart des enregistrements
+	Almost no loss, for editing later	Presque sans perte, pour un montage ultérieur
+	No loss at all, in very large files	Aucune perte, dans des fichiers très volumineux
+	Advanced options	Options avancées
+	ffmpeg program, write buffer, file size, audio editor	programme ffmpeg, tampon d'écriture, taille de fichier, éditeur audio
 	Write them while	Les écrire quand
 	Include the program mix	Inclure le mixage du programme
 	Write buffer	Tampon d'écriture
