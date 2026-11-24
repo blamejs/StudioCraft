@@ -5,10 +5,13 @@
 //! and leaving `/dev` on Linux. After each notice the thread lists the cameras again and, when the
 //! list changed, publishes it with a new generation. Readers take the generation from an atomic,
 //! so a source thread can look at it every frame, and take the list when the generation changed.
+//! Taking the list does not wait for the watch's thread.
 //! macOS and the other systems have no watch: there the cameras are found by listing them again.
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, OnceLock, Weak};
+use std::sync::{Arc, OnceLock, Weak};
+
+use arc_swap::ArcSwapOption;
 
 use crate::PlatformError;
 use crate::camera::{CameraBackend, CameraInfo};
@@ -31,7 +34,7 @@ pub struct Watch {
     /// Changes each time `list` does.
     generation: AtomicU64,
     /// The cameras; `None` until they are first listed, and after a listing failed.
-    list: Mutex<Option<Arc<[CameraInfo]>>>,
+    list: ArcSwapOption<Vec<CameraInfo>>,
     /// Counts the notices the thread has handled, a listing done for each.
     handled: AtomicU64,
     /// Counts the handled notices that can include a camera unplugged.
@@ -47,13 +50,13 @@ impl Watch {
     }
 
     /// The cameras the system lists: `None` while they have not been listed yet, while a listing
-    /// failed, and once the notices stop. The lock is held elsewhere only to compare and replace
-    /// the list, so this does not wait on the system.
-    pub fn cameras(&self) -> Option<Arc<[CameraInfo]>> {
+    /// failed, and once the notices stop. This does not wait on the system or on the watch's
+    /// thread.
+    pub fn cameras(&self) -> Option<Arc<Vec<CameraInfo>>> {
         if !self.live() {
             return None;
         }
-        self.list.lock().ok().and_then(|list| list.clone())
+        self.list.load_full()
     }
 
     /// Whether notices arrive.
@@ -72,11 +75,11 @@ impl Watch {
         self.unplugs.load(Ordering::Acquire)
     }
 
-    /// Publish `listed`, with a new generation when it differs from the list before.
+    /// Publish `listed`, with a new generation when it differs from the list before. Only the
+    /// watch's thread publishes.
     fn publish(&self, listed: Option<Vec<CameraInfo>>) {
-        let Ok(mut list) = self.list.lock() else { return };
-        if list.as_deref() != listed.as_deref() {
-            *list = listed.map(Arc::from);
+        if self.list.load().as_deref() != listed.as_ref() {
+            self.list.store(listed.map(Arc::new));
             self.generation.fetch_add(1, Ordering::AcqRel);
         }
     }
@@ -91,7 +94,7 @@ where
 {
     let watch = Arc::new(Watch {
         generation: AtomicU64::new(0),
-        list: Mutex::new(None),
+        list: ArcSwapOption::empty(),
         handled: AtomicU64::new(0),
         unplugs: AtomicU64::new(0),
         live: AtomicBool::new(true),
@@ -129,9 +132,7 @@ impl Drop for Ended {
     fn drop(&mut self) {
         if let Some(watch) = self.0.upgrade() {
             // A reader that sees the new generation finds no list.
-            if let Ok(mut list) = watch.list.lock() {
-                *list = None;
-            }
+            watch.list.store(None);
             watch.generation.fetch_add(1, Ordering::AcqRel);
             watch.live.store(false, Ordering::Release);
         }
@@ -363,7 +364,7 @@ mod imp {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::mpsc;
+    use std::sync::{Mutex, mpsc};
 
     use super::*;
     use crate::camera::{CameraFormat, CameraStream};
@@ -453,7 +454,7 @@ mod tests {
         let plugs = Plugs::new(vec![cam("Desk", "1")]);
         let (w, tell) = watched(&plugs);
         let first = w.generation();
-        assert_eq!(w.cameras().as_deref(), Some(&[cam("Desk", "1")][..]), "listed once the notices are set up");
+        assert_eq!(w.cameras().as_deref(), Some(&vec![cam("Desk", "1")]), "listed once the notices are set up");
         plugs.set(Ok(vec![cam("Desk", "1"), cam("Room", "2")]));
         notice(&w, &tell);
         assert_ne!(w.generation(), first, "plugged in");
@@ -464,14 +465,14 @@ mod tests {
         plugs.set(Ok(vec![cam("Room", "2")]));
         notice(&w, &tell);
         assert_ne!(w.generation(), both, "unplugged");
-        assert_eq!(w.cameras().as_deref(), Some(&[cam("Room", "2")][..]));
+        assert_eq!(w.cameras().as_deref(), Some(&vec![cam("Room", "2")]));
     }
 
     #[test]
     fn a_failed_listing_makes_the_list_unknown_until_it_works_again() {
         let plugs = Plugs::new(Vec::new());
         let (w, tell) = watched(&plugs);
-        assert_eq!(w.cameras().as_deref(), Some(&[][..]), "no camera is a known list");
+        assert_eq!(w.cameras().as_deref(), Some(&Vec::new()), "no camera is a known list");
         plugs.set(Err(PlatformError::Failed("the cameras could not be listed".into())));
         notice(&w, &tell);
         assert_eq!(w.cameras(), None);

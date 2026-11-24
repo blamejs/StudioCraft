@@ -212,7 +212,8 @@ video capture devices (its added, removed and updated events), and inotify on `/
 named `video…` that are created, removed or given new permissions. After each notice the thread
 lists the cameras again; notices that arrive together give one listing. When the list changed, it
 replaces the published list and adds one to a generation counter. A camera source reads that
-counter, an atomic, at every frame, and reads the list only when the counter changed. When the list
+counter, an atomic, at every frame, and reads the list only when the counter changed. The list is
+held in an `ArcSwapOption`, so reading it does not wait for the thread. When the list
 no longer holds the camera its capture opened, the source drops the capture and clears the picture,
 even when another camera with the same name is still listed. The source then opens a listed camera
 that matches its setting at the next frame. When no listed camera matches, it reports "the camera is
@@ -220,7 +221,7 @@ not connected" and does not try to open one until a matching camera is plugged i
 the next frame. A camera unplugged and plugged in again before the thread lists the cameras
 leaves the list unchanged, so the thread also counts the notices that can mean a camera was
 unplugged: a removed device on Windows, and on Linux a removed `video…` node or notices lost to a
-full queue. When that count changed since the source last opened its camera, a source whose
+full queue. When that count changed since just before the source last opened its camera, a source whose
 capture failed opens the camera again at the next frame instead of after 2 s, once for each change.
 The Properties window's device stamp
 hashes the published list instead of listing the cameras. When the notices cannot be set up or

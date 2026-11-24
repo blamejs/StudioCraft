@@ -11,6 +11,8 @@ studiocraft-media.workspace = true
 thiserror.workspace = true
 # Frames from capture threads to the source thread.
 crossbeam-queue.workspace = true
+# The camera list the camera watch publishes, read without a lock.
+arc-swap.workspace = true
 zune-jpeg.workspace = true
 
 # Capture uses xcap (displays, windows) and cpal (audio devices, and output loopback through WASAPI
