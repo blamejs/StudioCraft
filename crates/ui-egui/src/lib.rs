@@ -1020,7 +1020,7 @@ impl StudioApp {
             }
             "view.status_bar" => return Ok(self.toggle_pref(|p| &mut p.status_bar)),
             "view.lock_preview" => return Ok(self.toggle_pref(|p| &mut p.lock_preview)),
-            id if matches!(id, "view.streaming" | "stream.reconnect_set" | "stream.diagnose" | "stream.check_service_set")
+            id if matches!(id, "view.streaming" | "stream.reconnect_set" | "stream.diagnose" | "stream.check_service_set" | "stream.retry_now")
                 || id.starts_with("stream.destination") =>
             {
                 return self.streaming_command(cmd);

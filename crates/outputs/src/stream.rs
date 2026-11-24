@@ -38,6 +38,10 @@
 //! - A failure of one destination stops neither the other destinations nor the encoders. The
 //!   stream fails when every destination has failed.
 //! - A destination can be stopped and started again while the stream runs.
+//! - A destination that waits to try again, or waits for the network, reports when its next try
+//!   starts ([`DestinationState::next_try`]), and Try Now ([`OutputInstance::retry_destination`])
+//!   starts that try at once, without a route too. Unlike a stop and start, the try counts toward
+//!   the failed tries in a row.
 //!
 //! No log line, error or status of this module holds a stream key: the keys go to
 //! [`craft_rtmp::Config`] and nowhere else, and that crate keeps them out of its errors.
@@ -382,6 +386,19 @@ impl Counts {
     }
 }
 
+/// When a destination's next try starts while it waits to try again.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum NextTry {
+    /// It does not wait to try again.
+    None,
+    /// At this time of the system's clock.
+    At(Instant),
+    /// At this time of the stream's clock ([`Seams::clock`]), while it waits for the network.
+    Clocked(Instant),
+    /// When a route to the server returns, while it waits for the network.
+    Route,
+}
+
 /// A destination and what its thread reports.
 struct Dest {
     target: Target,
@@ -419,6 +436,11 @@ struct Dest {
     /// Whether its latest check is still wanted, shared with that check while it waits for a
     /// place; cleared with `checked`.
     wanted: Mutex<Arc<Mutex<bool>>>,
+    /// When its next try starts while it waits to try again.
+    next: Mutex<NextTry>,
+    /// Asks the thread to end its wait and try at once. It is set with `next` locked, only while
+    /// the thread waits, and cleared with `next` locked as the try starts.
+    try_now: AtomicBool,
     /// Asks the thread to close the connection and end.
     stop: AtomicBool,
     /// The thread runs and has not decided to end. It is changed with `thread` locked, so a start
@@ -448,6 +470,8 @@ impl Dest {
             recovered: AtomicU32::new(0),
             checked: Arc::new(AtomicBool::new(false)),
             wanted: Mutex::new(Arc::new(Mutex::new(false))),
+            next: Mutex::new(NextTry::None),
+            try_now: AtomicBool::new(false),
             stop: AtomicBool::new(false),
             alive: AtomicBool::new(false),
             thread: Mutex::new(None),
@@ -487,7 +511,42 @@ impl Dest {
         if *status == DestinationStatus::Live {
             self.uncheck();
         }
+        // Only a destination that waits to try again has a next try.
+        if !matches!(*status, DestinationStatus::Retrying { .. } | DestinationStatus::WaitingForNetwork { .. }) {
+            *lock(&self.next) = NextTry::None;
+        }
         drop(status);
+        self.touch();
+    }
+
+    /// Sets when the next try starts, before the status that shows the wait is set.
+    fn wait_until(&self, next: NextTry) {
+        *lock(&self.next) = next;
+    }
+
+    /// Ends the wait before the next try, so the try starts at once; whether it was waiting.
+    fn try_now(&self) -> bool {
+        let next = lock(&self.next);
+        if *next == NextTry::None {
+            return false;
+        }
+        self.try_now.store(true, Ordering::SeqCst);
+        drop(next);
+        self.wake();
+        true
+    }
+
+    /// Whether Try Now asked the thread to end its wait.
+    fn trying_now(&self) -> bool {
+        self.try_now.load(Ordering::SeqCst)
+    }
+
+    /// The wait is over and the try starts: there is no next try until it fails.
+    fn begin_try(&self) {
+        let mut next = lock(&self.next);
+        *next = NextTry::None;
+        self.try_now.store(false, Ordering::SeqCst);
+        drop(next);
         self.touch();
     }
 
@@ -555,14 +614,24 @@ impl Dest {
         self.alive.store(false, Ordering::SeqCst);
     }
 
-    fn state(&self) -> DestinationState {
+    fn state(&self, hub: &Hub) -> DestinationState {
+        let status = self.status();
+        // Read after the status, which is set after the next try, so a waiting status has its time.
+        let next_try = match *lock(&self.next) {
+            NextTry::At(at) => Some(at.saturating_duration_since(Instant::now())),
+            NextTry::Clocked(at) => Some(at.saturating_duration_since(hub.seams.clock.now())),
+            NextTry::None | NextTry::Route => None,
+        };
+        let waiting = matches!(status, DestinationStatus::Retrying { .. } | DestinationStatus::WaitingForNetwork { .. });
         DestinationState {
             id: self.target.id.clone(),
             target: self.shown(),
-            status: self.status(),
+            status,
             bytes: self.bytes.load(Ordering::Relaxed),
             dropped: self.dropped.load(Ordering::Relaxed),
             reconnects: self.reconnects.load(Ordering::Relaxed),
+            next_try: next_try.filter(|_| waiting),
+            max_tries: hub.timing.max_tries,
         }
     }
 }
@@ -783,12 +852,12 @@ fn fail(hub: &Hub, d: &Dest, f: Failure) {
     d.fail(f);
 }
 
-/// Waits `delay`, or less when the destination is stopped or started again or the stream ends.
-fn wait(hub: &Hub, d: &Dest, delay: Duration) {
-    let deadline = Instant::now() + delay;
+/// Waits until `deadline`, or less when the destination is stopped or started again, Try Now ends
+/// the wait, or the stream ends.
+fn wait(hub: &Hub, d: &Dest, deadline: Instant) {
     loop {
         let now = Instant::now();
-        if d.stopping() || d.restarted.load(Ordering::SeqCst) || hub.control.is_ended() || now >= deadline {
+        if d.stopping() || d.restarted.load(Ordering::SeqCst) || d.trying_now() || hub.control.is_ended() || now >= deadline {
             return;
         }
         std::thread::park_timeout(deadline - now);
@@ -859,6 +928,7 @@ fn wait_for_network(hub: &Arc<Hub>, d: &Arc<Dest>, failures: &mut u32, last: &Fa
     let mut since = start;
     d.net_up.store(false, Ordering::SeqCst);
     let watched = watch_network(hub, d);
+    d.wait_until(until.and_then(|u| start.checked_add(u)).map_or(NextTry::Route, NextTry::Clocked));
     d.set(DestinationStatus::WaitingForNetwork { attempt: failures.saturating_add(1), failure: last.clone() });
     let ended = loop {
         if d.stopping() || hub.control.is_ended() {
@@ -867,6 +937,10 @@ fn wait_for_network(hub: &Arc<Hub>, d: &Arc<Dest>, failures: &mut u32, last: &Fa
         // Started again while it waits: it tries at once, as after the wait before a try.
         if d.restarted.load(Ordering::SeqCst) {
             break NetWait::Restarted;
+        }
+        // Try Now: it tries at once, without a route, as the next of its tries.
+        if d.trying_now() {
+            break NetWait::Up;
         }
         // Without a route thread, the destination checks for itself.
         if d.net_up.load(Ordering::SeqCst) || (!watched && gate(hub, d, last) == Gate::Open) {
@@ -1077,21 +1151,28 @@ fn run(hub: &Arc<Hub>, d: &Arc<Dest>) {
             // With no route, the wait for the network takes the place of the wait before the try.
             let mut route = gate(hub, d, &failure);
             if route == Gate::Open {
+                // The next try is set before the status that shows the wait.
+                let at = Instant::now() + delay;
+                d.wait_until(NextTry::At(at));
                 d.set(DestinationStatus::Retrying { attempt: failures.saturating_add(1), failure: failure.clone() });
-                wait(hub, d, delay);
+                wait(hub, d, at);
                 // Checked again right before the try: the route may have gone during the wait.
                 route = match gate(hub, d, &failure) {
                     Gate::Closed => Gate::Closed,
                     Gate::Open | Gate::NoDefault => Gate::Open,
                 };
             }
-            if route != Gate::Open && !d.stopping() && !d.restarted.load(Ordering::SeqCst) && !hub.control.is_ended() {
+            // Try Now tries at once, also without a route.
+            if route != Gate::Open && !d.stopping() && !d.restarted.load(Ordering::SeqCst) && !d.trying_now() && !hub.control.is_ended() {
                 let until = (route == Gate::NoDefault).then_some(delay);
                 match wait_for_network(hub, d, &mut failures, &failure, until) {
                     NetWait::Up => {
+                        let at = Instant::now() + refusal_left(&hub.timing, refused_at, Instant::now());
+                        d.wait_until(NextTry::At(at));
                         d.set(DestinationStatus::Retrying { attempt: failures.saturating_add(1), failure });
-                        // A route that returns soon after a refused `publish` does not cut its wait.
-                        wait(hub, d, refusal_left(&hub.timing, refused_at, Instant::now()));
+                        // A route that returns soon after a refused `publish` does not cut its wait;
+                        // Try Now does.
+                        wait(hub, d, at);
                     }
                     NetWait::Restarted | NetWait::Stopped => {}
                     NetWait::GaveUp(f) => return fail(hub, d, f),
@@ -1101,6 +1182,7 @@ fn run(hub: &Arc<Hub>, d: &Arc<Dest>) {
         if d.ends(hub) {
             return;
         }
+        d.begin_try();
         // Started again while it waited: the try is shown as a first one.
         if d.restarted.load(Ordering::SeqCst) || !matches!(d.status(), DestinationStatus::Retrying { .. }) {
             d.set(DestinationStatus::Connecting);
@@ -1518,7 +1600,7 @@ impl OutputInstance for Streaming {
     }
 
     fn destinations(&self) -> Vec<DestinationState> {
-        self.hub.dests.iter().map(|d| d.state()).collect()
+        self.hub.dests.iter().map(|d| d.state(&self.hub)).collect()
     }
 
     fn reconnects(&self) -> u64 {
@@ -1553,6 +1635,14 @@ impl OutputInstance for Streaming {
             checks.cancel(&auto.profile, id);
         }
         Ok(())
+    }
+
+    fn retry_destination(&self, id: &str) -> Result<bool, PluginError> {
+        let d = self.hub.find(id)?;
+        if self.stopped || self.hub.control.is_ended() {
+            return Err(PluginError::Failed("the stream is ending".into()));
+        }
+        Ok(d.try_now())
     }
 }
 

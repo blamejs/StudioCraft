@@ -470,8 +470,13 @@
 	Tries before giving up	Tries before giving up
 	Transition settings	Transition settings
 	Transition to Program	Transition to Program
-	Trying again (try {attempt}): {error}	Trying again (try {attempt}): {error}
-	Waiting for the network (try {attempt}): {error}	Waiting for the network (try {attempt}): {error}
+	Trying again (try {attempt} of {max}): {error}	Trying again (try {attempt} of {max}): {error}
+	Waiting for the network (try {attempt} of {max}): {error}	Waiting for the network (try {attempt} of {max}): {error}
+	Next try in {seconds} s	Next try in {seconds} s
+	Next try when a network route to the server returns	Next try when a network route to the server returns
+	Try Now	Try Now
+	Start the next try at once. It counts toward the tries as one at the usual time does.	Start the next try at once. It counts toward the tries as one at the usual time does.
+	Try Stream Destination Now	Try Stream Destination Now
 	Check Connection	Check Connection
 	Asks this computer whether it has a route to the server, looks the server's name up, and connects to the server on its port and on port 443, with a secure connection where the address uses one. For a service that publishes them, it also reads the service's list of ingest servers and status summary and connects to two of its other ingest servers. It sends no stream key and nothing of the address after the server's name. Each server it contacts sees this computer's address, and a secure connection sends the server's name unencrypted.	Asks this computer whether it has a route to the server, looks the server's name up, and connects to the server on its port and on port 443, with a secure connection where the address uses one. For a service that publishes them, it also reads the service's list of ingest servers and status summary and connects to two of its other ingest servers. It sends no stream key and nothing of the address after the server's name. Each server it contacts sees this computer's address, and a secure connection sends the server's name unencrypted.
 	Set a server for this destination first	Set a server for this destination first
