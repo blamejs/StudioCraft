@@ -573,3 +573,5 @@ menu	Transform	Перетворення
 	{percent}% ({width} × {height})	{percent} % ({width} × {height})
 	Fill Screen	Заповнити екран
 @msg	The scenes could not be laid out for the new canvas: {error}	Не вдалося розташувати сцени для нового полотна: {error}
+	Filter delay	Затримка фільтрів
+	The audio filters on this source delay its sound by {frames} samples at 48 kHz	Аудіофільтри цього джерела затримують його звук на {frames} семплів при 48 кГц

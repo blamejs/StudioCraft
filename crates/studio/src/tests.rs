@@ -352,6 +352,24 @@ fn filter_meter_reads_a_compressor_and_is_null_for_a_filter_without_a_meter() {
 }
 
 #[test]
+fn the_state_reports_how_long_each_source_s_audio_filters_delay_it() {
+    let mut s = headless();
+    let (out, _) = s.run("source.add", &json!({"kind": "audio_input", "name": "Mic"})).unwrap();
+    let mic = out["source"].as_u64().unwrap_or_else(|| panic!("{out}"));
+    let latency = |s: &Studio| s.state_json()["filter_latency"].clone();
+    assert_eq!(latency(&s), json!({}), "no filter delays anything");
+    let (out, _) = s.run("filter.add", &json!({"source": "Mic", "kind": "limiter"})).unwrap();
+    let limiter = out["filter"].as_u64().unwrap_or_else(|| panic!("{out}"));
+    s.run("filter.add", &json!({"source": "Mic", "kind": "gain"})).unwrap();
+    assert_eq!(latency(&s), json!({mic.to_string(): {"frames": 248, "ms": 5.2}}));
+    assert_eq!(s.filter_latency_frames(SourceId(mic)), 248);
+    s.run("filter.enable", &json!({"source": "Mic", "filter": limiter, "enabled": false})).unwrap();
+    assert_eq!(latency(&s), json!({}), "a disabled filter does not run");
+    assert_eq!(s.filter_latency_frames(SourceId(mic)), 0);
+    assert_eq!([latency_ms(0), latency_ms(480), latency_ms(1)], [0.0, 10.0, 0.0]);
+}
+
+#[test]
 fn interface_commands_come_back_as_actions() {
     let mut s = headless();
     assert_eq!(s.run("app.settings", &json!({})).unwrap().1, Some(UiAction::OpenSettings));
