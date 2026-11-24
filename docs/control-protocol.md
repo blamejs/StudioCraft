@@ -636,7 +636,9 @@ an error when the program is not paused. It returns what `pause.status` returns.
 `{"paused": false}`, or `paused: true` with `since_ms` (the time paused), `countdown` (`null`
 without one, else `total_s`, `remaining_ms`, `at_zero` and `reached`), `media`, `media_error`
 (why the picture or video is not showing, or `null`) and `text_error` (why the countdown text is not
-showing, or `null`).
+showing, or `null`). It also returns the settings the running pause uses: `text`, `zero_text`,
+`anchor`, `size_pct`, `fit`, `background` and `mute_scene`, in the forms `pause.start` takes. Each is
+the value given to `pause.start` for this pause, or the profile's setting when none was given.
 
 None of these commands changes the scene collection or adds an undo step.
 

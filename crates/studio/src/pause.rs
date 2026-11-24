@@ -183,9 +183,10 @@ impl PauseState {
         })
     }
 
-    /// The state `pause.status` reports, with the errors of the picture or video and of the
-    /// countdown text.
+    /// The state `pause.status` reports, with the settings this pause uses and the errors of the
+    /// picture or video and of the countdown text.
     pub fn json(&self, now_ms: u64, media_error: Option<&str>, text_error: Option<&str>) -> Value {
+        let s = &self.settings;
         let countdown = self.deadline_ms.map(|_| {
             json!({
                 "total_s": self.total_s,
@@ -198,9 +199,16 @@ impl PauseState {
             "paused": true,
             "since_ms": now_ms.saturating_sub(self.since_ms),
             "countdown": countdown,
-            "media": self.settings.media,
+            "media": s.media,
             "media_error": media_error,
             "text_error": text_error,
+            "text": s.text,
+            "zero_text": s.zero_text,
+            "anchor": s.anchor.id(),
+            "size_pct": s.size_pct,
+            "fit": s.fit,
+            "background": s.background,
+            "mute_scene": s.mute_scene,
         })
     }
 }
