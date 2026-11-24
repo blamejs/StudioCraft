@@ -226,9 +226,9 @@ struct Stopping {
     /// Whether the user was already told the output failed while it ran.
     failed: bool,
     handle: JoinHandle<Result<(), PluginError>>,
-    /// Where the stop thread puts the state of a stream's copy, and whether the copy's failure
-    /// was already shown while the stream ran.
-    copy: Option<(CopySlot, bool)>,
+    /// Where the stop thread puts the state of a stream's copy, whether the copy's failure was
+    /// already shown while the stream ran, and the stream's number ([`Outputs::streams`]).
+    copy: Option<(CopySlot, bool, u64)>,
 }
 
 /// A replay being written to its file.
@@ -295,6 +295,9 @@ pub(crate) struct Outputs {
     copy_noticed: bool,
     /// The state of the last stream's copy once that stream has ended, for [`Outputs::stream_copy`].
     last_copy: Option<StreamCopyState>,
+    /// How many streams have started; the last one's number. Only the copy of that stream
+    /// becomes [`Outputs::last_copy`] when its stop finishes.
+    streams: u64,
 }
 
 /// Where a stop thread puts the state of the stream's copy once the stream has ended.
@@ -527,12 +530,12 @@ impl Outputs {
         let a = self.active.remove(&kind)?;
         let target = if kind == OutputKind::Streaming { a.instance.target() } else { a.target.clone() };
         let before = a.instance.stream_copy();
-        let copy = before.is_some().then(|| (CopySlot::default(), std::mem::take(&mut self.copy_noticed)));
+        let copy = before.is_some().then(|| (CopySlot::default(), std::mem::take(&mut self.copy_noticed), self.streams));
         if before.is_some() {
             // Shown while the copy finishes, until the stop's state replaces it.
             self.last_copy = before;
         }
-        let slot = copy.as_ref().map(|(s, _)| Arc::clone(s));
+        let slot = copy.as_ref().map(|(s, _, _)| Arc::clone(s));
         // The instance stays reachable here, so it can be stopped on this thread when no thread
         // can be started for it.
         let cell = Arc::new(Mutex::new(Some(a.instance)));
@@ -545,7 +548,7 @@ impl Outputs {
             Ok(handle) => self.stopping.push(Stopping { kind, target, failed, handle, copy }),
             Err(e) => {
                 log::error!("no thread to finish the {}: {e}", kind.noun());
-                let slot = copy.as_ref().map(|(s, _)| s);
+                let slot = copy.as_ref().map(|(s, _, _)| s);
                 let r = match cell.lock() {
                     Ok(mut i) => i.take().map_or(Ok(()), |mut i| stop_instance(i.as_mut(), slot)),
                     Err(_) => Err(PluginError::Unavailable("the output was lost".into())),
@@ -628,13 +631,23 @@ impl Outputs {
     }
 
     /// Keep the state a stop thread put in `copy`'s slot as the last stream's copy, and its
-    /// notice.
-    fn take_copy(&mut self, copy: Option<(CopySlot, bool)>) -> Option<Notice> {
-        let (slot, noticed) = copy?;
+    /// notice. The state of a stream that a newer stream followed is not kept.
+    fn take_copy(&mut self, copy: Option<(CopySlot, bool, u64)>) -> Option<Notice> {
+        let (slot, noticed, stream) = copy?;
         let state = slot.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take()?;
         let notice = copy_notice(&state, noticed);
-        self.last_copy = Some(state);
+        if stream == self.streams {
+            self.last_copy = Some(state);
+        }
         notice
+    }
+
+    /// Note that a stream starts: it has no copy failure shown yet, and no earlier stream's copy
+    /// is shown as its own.
+    fn stream_started(&mut self) {
+        self.copy_noticed = false;
+        self.last_copy = None;
+        self.streams += 1;
     }
 
     /// The copy of the running stream, or else of the last stream that ended, when it had one.
@@ -1712,8 +1725,7 @@ impl Studio {
         self.mixer.send(MixerCmd::AddOutput { id, queue: instance.audio() });
         let target = instance.target();
         if kind == OutputKind::Streaming {
-            self.outputs.copy_noticed = false;
-            self.outputs.last_copy = None;
+            self.outputs.stream_started();
         }
         self.outputs.active.insert(kind, Active { id, instance, stats, started: Instant::now(), start, target, hardware });
         if let Some(key) = check_key {
@@ -2535,7 +2547,7 @@ mod tests {
             target: String::new(),
             hardware: None,
         };
-        o.copy_noticed = false;
+        o.stream_started();
         o.active.insert(OutputKind::Streaming, active);
         failure
     }
@@ -2589,6 +2601,23 @@ mod tests {
         drop(release);
         let _ = notices_until_idle(&mut o);
         assert_eq!(o.stream_copy(), Some(saved), "the stop's state replaces it");
+    }
+
+    #[test]
+    fn an_older_streams_stop_does_not_show_its_copy_as_the_newer_streams() {
+        let path = PathBuf::from("/videos/Stream 2026-11-23 10-00-00.mkv");
+        let mut o = Outputs::default();
+        let saved = StreamCopyState { path: path.clone(), bytes: 9, finished: true, ..StreamCopyState::default() };
+        let (release, gate) = std::sync::mpsc::channel::<()>();
+        let _ = copying_gated(&mut o, saved, Some(gate));
+        assert!(o.stop(OutputKind::Streaming, false).is_some());
+        // A stream without a copy starts and ends while the first one's stop still waits.
+        o.stream_started();
+        assert_eq!(o.stream_copy(), None);
+        drop(release);
+        let texts = notices_until_idle(&mut o);
+        assert_eq!(texts[1], (format!("Stream copy saved to {}", path.display()), false), "the older copy's notice still shows");
+        assert_eq!(o.stream_copy(), None, "the newer stream had no copy");
     }
 
     #[test]
