@@ -78,6 +78,9 @@ struct Instance<C: Camera> {
     /// closed or the capture has not chosen yet, one that matches the setting. `None` when the
     /// watch does not know.
     listed: Option<bool>,
+    /// Whether `listed` was read for the camera the open capture chose. Until the capture has
+    /// chosen, `listed` is read again at every frame where it then has.
+    by_choice: bool,
     /// The watch's count of unplug notices just before the camera was last opened or tried at
     /// once, so a notice that arrives while the camera opens counts after it.
     unplugs: Option<u64>,
@@ -95,6 +98,7 @@ impl<C: Camera> Instance<C> {
             watch: C::watch(),
             seen: None,
             listed: None,
+            by_choice: false,
             unplugs: None,
         };
         i.set(s, now);
@@ -102,18 +106,24 @@ impl<C: Camera> Instance<C> {
     }
 
     /// Read again whether the watch lists the camera, when the cameras changed since the last
-    /// read or `seen` was cleared. Otherwise only an atomic is read. Gives whether a closed source
-    /// just found a camera that matches its setting listed. An open capture's camera that is
-    /// unplugged counts as not listed even when another camera matches the setting.
+    /// read or `seen` was cleared, and when an open capture has chosen its camera since the last
+    /// read. Otherwise only an atomic is read. Gives whether a closed source just found a camera
+    /// that matches its setting listed. An open capture's camera that is unplugged counts as not
+    /// listed even when another camera matches the setting.
     fn look(&mut self) -> bool {
         let Some(watch) = &self.watch else { return false };
         let generation = watch.generation();
-        if self.seen == Some(generation) {
+        let chosen = match &self.cap {
+            Some(cap) if self.seen != Some(generation) || !self.by_choice => C::camera(cap),
+            _ => None,
+        };
+        if self.seen == Some(generation) && (self.by_choice || chosen.is_none()) {
             return false;
         }
         self.seen = Some(generation);
+        self.by_choice = chosen.is_some();
         let before = self.listed;
-        self.listed = watch.cameras().map(|list| match self.cap.as_ref().and_then(C::camera) {
+        self.listed = watch.cameras().map(|list| match chosen {
             Some(chosen) => list.contains(&chosen),
             None => best_match(&list, &CameraInfo::parse_key(&self.device)).is_some(),
         });
@@ -339,6 +349,8 @@ mod tests {
         static WATCH: RefCell<Option<Arc<Watch>>> = const { RefCell::new(None) };
         /// What happens while the next camera opens.
         static WHILE_OPENING: RefCell<Option<Box<dyn FnOnce()>>> = const { RefCell::new(None) };
+        /// Set while the open cameras' capture threads have not said which camera they chose.
+        static UNCHOSEN: RefCell<bool> = const { RefCell::new(false) };
     }
 
     fn script(steps: Vec<Result<(), PlatformError>>) {
@@ -369,6 +381,9 @@ mod tests {
             Ok(Scripted { chosen })
         }
         fn camera(&self) -> Option<CameraInfo> {
+            if UNCHOSEN.with(|u| *u.borrow()) {
+                return None;
+            }
             self.chosen.clone()
         }
         fn grab(&mut self, frame: &mut VideoFrame) -> Result<(), PlatformError> {
@@ -763,6 +778,23 @@ mod tests {
         system.plug(vec![CameraInfo { name: "Desk".into(), id: "7".into() }, desk()]);
         assert_eq!(c.produce_at(&io, t + Duration::from_millis(2)), Ok(()));
         assert_eq!(opened().len(), before + 1);
+    }
+
+    #[test]
+    fn a_camera_unplugged_before_its_capture_says_it_chose_it_closes_once_it_does() {
+        let spare = CameraInfo { name: "Desk".into(), id: "7".into() };
+        let system = System::new(vec![desk(), spare.clone()]);
+        let io = SourceIo::new(MasterClock::new());
+        let t = Instant::now();
+        UNCHOSEN.with(|u| *u.borrow_mut() = true);
+        script(vec![Ok(()), Ok(())]);
+        let mut c = Instance::<Scripted>::new(&settings(), t);
+        c.produce_at(&io, t).unwrap();
+        system.plug(vec![spare]);
+        assert_eq!(c.produce_at(&io, t), Ok(()), "the setting still matches the other camera of that name");
+        UNCHOSEN.with(|u| *u.borrow_mut() = false);
+        let not_connected = Err(PluginError::Unavailable("the camera is not connected".into()));
+        assert_eq!(c.produce_at(&io, t + Duration::from_millis(1)), not_connected, "the camera the capture chose is gone");
     }
 
     #[test]
