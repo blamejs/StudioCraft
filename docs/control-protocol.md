@@ -854,7 +854,7 @@ Video, from `video.canvas_from_display`, or by switching to a profile with anoth
 
 - An item with a fit mode is placed by that mode on the new canvas: `fit` shows the whole source
   inside the canvas, `fill` covers the canvas, and `stretch` makes the source the canvas's size.
-  The crop is kept and the rotation becomes 0. Fit to Screen, Fill Screen and Stretch to Screen
+  The crop and the flips are kept and the rotation becomes 0. Fit to Screen, Fill Screen and Stretch to Screen
   set the mode, and so does `item.transform` with `fit`. An `item.transform` without `fit` clears
   it.
 - Any other item keeps its center at the same place in proportion to the canvas. Its size is

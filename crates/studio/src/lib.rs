@@ -1549,9 +1549,9 @@ impl Studio {
     /// Place the items with a fit mode whose sources showed nothing at the last canvas change,
     /// once those sources show a picture: by their mode on the current canvas, as one undo step.
     /// An item is placed only while the undo step of that change's layout is in effect and the
-    /// item still has its mode and the transform that change gave it. An undo that takes that
-    /// layout back, or a later edit, leaves it where it is; a redo, or an undo that brings back a
-    /// removed item, makes it wait again. Once the layout step can no longer be undone or redone
+    /// item still has its mode and the transform that change gave it, apart from its flips. An
+    /// undo that takes that layout back, or a later edit, leaves it where it is; a redo, or an
+    /// undo that brings back a removed item, makes it wait again. Once the layout step can no longer be undone or redone
     /// (a new edit after its undo, or the oldest steps dropped), nothing waits.
     fn place_fit_later(&mut self) {
         // This runs every frame. Until a waiting source starts to show a picture, its picture
@@ -1577,6 +1577,8 @@ impl Studio {
         {
             return;
         }
+        // A flip leaves the item's box and its fit mode as they are, so it does not end the wait.
+        let unflipped = |t: Transform| Transform { flip_horizontal: false, flip_vertical: false, ..t };
         let c = self.engine.collection();
         let waiting: Vec<&FitLater> = self
             .fit_later
@@ -1585,7 +1587,7 @@ impl Studio {
                 c.scenes
                     .iter()
                     .flat_map(|s| &s.items)
-                    .any(|i| i.id == w.item && i.source == w.source && i.fit == Some(w.fit) && i.transform == w.transform)
+                    .any(|i| i.id == w.item && i.source == w.source && i.fit == Some(w.fit) && unflipped(i.transform) == unflipped(w.transform))
             })
             .collect();
         let mut sources: Vec<SourceId> = waiting.iter().map(|w| w.source).collect();

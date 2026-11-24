@@ -768,6 +768,44 @@ fn a_filled_source_that_shows_nothing_at_a_canvas_change_fills_it_once_it_shows_
 }
 
 #[test]
+fn a_filled_source_flipped_while_it_waits_for_a_picture_still_fills_the_new_canvas() {
+    let mut s = headless();
+    let r = s.run("source.add", &json!({"kind": "color", "name": "Back", "settings": {"width": 400, "height": 300}})).unwrap();
+    let item = r.0["item"].clone();
+    let source = s.collection().scenes[0].items[0].source;
+    let (tx, rx) = std::sync::mpsc::sync_channel(1);
+    assert!(s.notify_source_shown(source, tx));
+    rx.recv().unwrap();
+    let native = s.source_size(source).unwrap();
+    s.run("item.transform", &json!({"item": item, "transform": studiocraft_model::Transform::fill(native, (1920, 1080)), "fit": "fill"})).unwrap();
+    let video = Arc::clone(&s.sources.io(source).unwrap().video);
+    video.publish(studiocraft_plugin::VideoContent::Empty);
+    let mut p = s.profile().clone();
+    (p.video.base_width, p.video.base_height) = (1080, 1920);
+    s.set_profile(p).unwrap();
+    s.seal_history();
+    // The flip keeps the fit mode, so the item still waits to fill the new canvas.
+    let at = |s: &Studio| s.collection().scenes[0].items[0].transform;
+    let flipped = studiocraft_model::Transform { flip_horizontal: true, ..at(&s) };
+    s.run("item.transform", &json!({"item": item, "transform": flipped, "fit": "fill"})).unwrap();
+    video.publish(studiocraft_plugin::VideoContent::Solid { rgba: [0; 4], width: 400, height: 300 });
+    s.tick();
+    let want = studiocraft_model::Transform { flip_horizontal: true, ..studiocraft_model::Transform::fill(native, (1080, 1920)) };
+    assert_eq!(at(&s), want);
+    // A move made while it waits still leaves it where it is.
+    video.publish(studiocraft_plugin::VideoContent::Empty);
+    let mut p = s.profile().clone();
+    (p.video.base_width, p.video.base_height) = (1920, 1080);
+    s.set_profile(p).unwrap();
+    s.seal_history();
+    let moved = studiocraft_model::Transform { position: studiocraft_model::Vec2::new(5.0, 5.0), flip_vertical: true, ..at(&s) };
+    s.run("item.transform", &json!({"item": item, "transform": moved, "fit": "fill"})).unwrap();
+    video.publish(studiocraft_plugin::VideoContent::Solid { rgba: [0; 4], width: 400, height: 300 });
+    s.tick();
+    assert_eq!(at(&s), moved);
+}
+
+#[test]
 fn restoring_a_profile_also_takes_back_placements_of_items_that_waited() {
     let mut s = headless();
     let r = s.run("source.add", &json!({"kind": "color", "name": "Back", "settings": {"width": 400, "height": 300}})).unwrap();

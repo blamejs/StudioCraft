@@ -991,6 +991,16 @@ impl StudioApp {
         Ok(r.0)
     }
 
+    /// Mirror the selected item's picture. The box stays where it is, so the item keeps its fit
+    /// mode, and a source that has not shown a picture yet can be flipped.
+    fn selection_flip(&mut self, f: impl FnOnce(Transform) -> Transform) -> Result<Value, Msg> {
+        let (item, _, t) = self.selection().ok_or_else(|| tmsg!("select a source first"))?;
+        let fit = self.studio.collection().scene(self.studio.engine().edit_scene()).and_then(|s| s.item(item)).and_then(|it| it.fit);
+        let r = self.studio.run("item.transform", &json!({"item": item, "transform": f(t), "fit": fit})).map_err(|e| e.to_string())?;
+        self.studio.seal_history();
+        Ok(r.0)
+    }
+
     fn ui_command(&mut self, ctx: &egui::Context, cmd: &CommandRef) -> Result<Value, Msg> {
         match cmd.id.as_str() {
             "file.show_recordings" => {
@@ -1219,6 +1229,8 @@ impl StudioApp {
             "selection.reset" => return self.selection_transform(|_, _, _| Transform::default()),
             "selection.rotate_cw" => return self.selection_transform(|t, _, _| Transform { rotation: t.rotation + 90.0, ..t }.sanitized()),
             "selection.rotate_ccw" => return self.selection_transform(|t, _, _| Transform { rotation: t.rotation + 270.0, ..t }.sanitized()),
+            "selection.flip_horizontal" => return self.selection_flip(|t| Transform { flip_horizontal: !t.flip_horizontal, ..t }),
+            "selection.flip_vertical" => return self.selection_flip(|t| Transform { flip_vertical: !t.flip_vertical, ..t }),
             "app.about" => self.about = true,
             "pause.settings" => {
                 self.open_settings(Tab::Stream);
