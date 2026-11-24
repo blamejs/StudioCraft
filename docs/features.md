@@ -656,10 +656,22 @@ shortcuts in Settings › Hotkeys.
 
 The Pause button sits after Go Live on the menu row. A click on it pauses with the profile's settings.
 While paused, it is filled amber and reads Resume with the time left, or with the time paused when
-there is no countdown, and a click resumes. Its arrow opens a menu: Pause for 1, 2, 5, 10 or 15
-Minutes and Pause Without a Countdown pause with that countdown (while paused, they start the
-countdown again from now), and Pause Screen Settings… opens Settings at the Stream tab with the
-keyboard focus in the Pause screen section. The `pause.settings` window command does the same.
+there is no countdown, and a click resumes.
+
+The button's arrow, or Alt+Down while the button has the keyboard focus, opens the Pause the
+program popover, and a second click on the arrow closes it. The popover starts from the profile's
+pause screen settings, or while paused from the running pause's settings. It has duration chips for 1, 2, 5, 10 and 15 minutes and None, a Length
+field that takes minutes (`10`), `m:ss` or `h:mm:ss` up to 12:00:00, the text size, one of nine
+positions, and the countdown text, which must hold `{time}` exactly once; an error under a field
+keeps the pause from starting. Choose… picks a picture or video, No media clears it, and Fit and
+Background set how it is sized and the color under it. The popover also chooses whether the
+screen stays or the program resumes at zero, and whether the scene's audio is muted while paused.
+Pause for m:ss, or Pause Without a Countdown for None, runs `pause.start` with every choice, and
+the choices apply to that pause only. While paused, it starts the countdown again from now. The
+left and right arrow keys move between the durations, Enter starts the pause, and Esc or Cancel
+closes the popover and gives the keyboard focus back to the Pause button. Pause Screen Settings…
+opens Settings at the Stream tab with the keyboard focus in the Pause screen section. The
+`pause.settings` window command does the same.
 
 While paused, an amber banner above the program reads "Paused. Viewers see the pause screen." with
 the time left ("Back in 4:32."), the time paused ("Paused for 2:10.") or "The countdown ended.", and
@@ -680,7 +692,9 @@ background, the countdown and its text, what happens at zero, the text at zero, 
 sits, its size as a share of the canvas height, its font, color and outline, and whether the
 program audio is muted. The defaults are listed in
 [MECHANICS.md](../MECHANICS.md#recording-and-streaming). Changes apply from the next pause.
-`pause.start` can give a pause its own picture or video, countdown and choice at zero.
+`pause.start` can give a pause its own picture or video and how it is sized, background, countdown
+and its text, choice at zero and text at zero, text position and size, and whether the program
+audio is muted. The profile keeps its settings.
 
 While the program audio is muted, every source the program hears fades out with the transition and
 fades back in when the program resumes. Monitoring and each source's own audio track keep the
@@ -763,7 +777,7 @@ has a contrast of at least 3:1 against the track.
 
 The menu row is 32 points tall. It holds the menu titles at the start of the row, and at the end
 a Set up and Live switch, the transition picker with its duration, Record and Go Live with
-their timers, and the Pause button with its menu arrow ([Pause screen](#pause-screen)). When the
+their timers, and the Pause button with the arrow that opens its setup popover ([Pause screen](#pause-screen)). When the
 row is too narrow, the transition picker moves behind an icon button first, then Record, Go Live and
 Pause leave out their labels and keep the glyph and timer, and last the menu titles move into the
 menu bar's overflow menu. In a right-to-left interface the row is mirrored. Docks › Output Controls and Docks › Transition Controls show and hide the two groups.

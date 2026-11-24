@@ -951,11 +951,29 @@ menu	Transform	Transform
 	Resume, {time} left	Resume, {time} left
 	Resume, paused for {time}	Resume, paused for {time}
 	Pause options	Pause options
-	Pause for 1 Minute	Pause for 1 Minute
-	Pause for 2 Minutes	Pause for 2 Minutes
-	Pause for 5 Minutes	Pause for 5 Minutes
-	Pause for 10 Minutes	Pause for 10 Minutes
-	Pause for 15 Minutes	Pause for 15 Minutes
+	Pause the program	Pause the program
+	Countdown length	Countdown length
+	1 min	1 min
+	2 min	2 min
+	5 min	5 min
+	10 min	10 min
+	15 min	15 min
+	Length	Length
+	Type a length like 5:00, up to 12:00:00	Type a length like 5:00, up to 12:00:00
+	Position	Position
+	Choose…	Choose…
+	No media	No media
+	A video loops.	A video loops.
+	Choose a picture or video file	Choose a picture or video file
+	Fit	Fit
+	Fill	Fill
+	Stretch	Stretch
+	Type a color like #101014	Type a color like #101014
+	When the countdown reaches zero	When the countdown reaches zero
+	Keep the screen and show "{text}"	Keep the screen and show "{text}"
+	Mute the scene's audio while paused	Mute the scene's audio while paused
+	The stream and the recording keep running and show the pause screen.	The stream and the recording keep running and show the pause screen.
+	Pause for {time}	Pause for {time}
 	Pause Without a Countdown	Pause Without a Countdown
 	Pause Screen Settings…	Pause Screen Settings…
 	+1 min	+1 min

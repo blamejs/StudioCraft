@@ -1,6 +1,7 @@
 //! The top row of the window: the menu titles on the left and the output bar on the right, with
 //! the Set up and Live switch, the transition picker and its duration, the Record and Go Live
-//! buttons with their timers, and the Pause button with its menu arrow.
+//! buttons with their timers, and the Pause button with the arrow that opens the Pause setup
+//! popover ([`crate::pause_setup`]).
 //!
 //! When the row is too narrow, the controls give up room in this order: the transition picker
 //! and its duration move behind one icon button that opens them in a panel, then Record, Go Live
@@ -8,10 +9,9 @@
 //! menu titles move into the menu bar's overflow menu.
 
 use craft_behavior::fit::{FitItem, FitKeep, fit_items};
-use craft_keymap::CommandRef;
 use craft_menu::{MenuBar, MenuBarUi};
 use craft_ui::contract::Tracked;
-use egui::{Rect, TextStyle, Ui, pos2, vec2};
+use egui::{Key, Modifiers, Rect, TextStyle, Ui, pos2, vec2};
 use serde_json::{Value, json};
 use studiocraft_model::SettingsSchema;
 use studiocraft_studio::{OutputKind, OutputState, Studio};
@@ -19,6 +19,7 @@ use studiocraft_studio::{OutputKind, OutputState, Studio};
 use crate::icons::{self, Icon};
 use crate::kit::onair::{Glyph, MenuArrow, OnAirButton, OnAirState, OnAirStyle};
 use crate::kit::segmented::{Segmented, SegmentedStyle};
+use crate::pause_setup::{self, PauseSetup};
 use crate::{Act, StudioApp, forms, i18n, theme};
 
 /// The space between groups of the bar.
@@ -273,21 +274,6 @@ pub fn pause_glyph(f: &Face) -> Glyph {
     if f.state == OnAirState::Running { Glyph::Resume } else { Glyph::Pause }
 }
 
-/// The countdowns the Pause button's menu offers, in minutes.
-pub const PAUSE_MINUTES: [u32; 5] = [1, 2, 5, 10, 15];
-
-/// The entries of the Pause button's menu, in English, with the command each runs: a pause for each
-/// of [`PAUSE_MINUTES`], a pause without a countdown, and Pause Screen Settings…. While paused, the
-/// first six start the countdown again from now.
-pub fn pause_menu() -> Vec<(&'static str, CommandRef)> {
-    let labels = ["Pause for 1 Minute", "Pause for 2 Minutes", "Pause for 5 Minutes", "Pause for 10 Minutes", "Pause for 15 Minutes"];
-    let mut menu: Vec<(&'static str, CommandRef)> =
-        labels.into_iter().zip(PAUSE_MINUTES).map(|(l, m)| (l, CommandRef::with_params("pause.start", json!({"countdown_s": m * 60})))).collect();
-    menu.push(("Pause Without a Countdown", CommandRef::with_params("pause.start", json!({"countdown_s": 0}))));
-    menu.push(("Pause Screen Settings…", CommandRef::new("pause.settings")));
-    menu
-}
-
 /// The button for `f`.
 fn button<'a>(f: &'a Face, glyph: Glyph, style: &'a OnAirStyle) -> OnAirButton<'a> {
     OnAirButton::new(glyph, f.state, &f.label, &f.name, style).timer(f.timer.as_deref())
@@ -525,22 +511,56 @@ impl StudioApp {
                     }
                 }
                 gap(ui, GROUP_GAP);
-                let r = button(&pause, pause_glyph, &air_style).joined(true).compact(fit.compact).show(ui).on_hover_text(&pause.tip);
-                parts.push(("pause", r.rect));
-                if r.clicked() {
+                let face = button(&pause, pause_glyph, &air_style).joined(true).compact(fit.compact).show(ui).on_hover_text(&pause.tip);
+                parts.push(("pause", face.rect));
+                if face.clicked() {
                     acts.push(Act::run("pause.toggle", json!({})));
                 }
                 let r = arrow.show(ui).on_hover_text(arrow_name);
                 parts.push(("pause_menu", r.rect));
-                // The menu opens under the arrow's reading-start edge.
-                let below = if i18n::is_rtl(ui) { egui::RectAlign::BOTTOM_START.flipped_x() } else { egui::RectAlign::BOTTOM_START };
-                egui::Popup::menu(&r).align(below).show(|ui| {
-                    for (label, cmd) in pause_menu() {
-                        if ui.button(i18n::command_label(&cmd.id, label)).clicked() {
-                            acts.push(Act::Run(cmd));
-                        }
+                // The arrow, or Alt+Down on the button, opens the Pause setup popover; a second click
+                // on the arrow closes it.
+                let alt_down = (face.has_focus() || r.has_focus()) && ui.input_mut(|i| i.consume_key(Modifiers::ALT, Key::ArrowDown));
+                if alt_down || (r.clicked() && self.pause_setup.is_none()) {
+                    self.pause_setup_openings = self.pause_setup_openings.wrapping_add(1);
+                    let extensions = studiocraft_studio::pause_media_extensions(studio.registry());
+                    // While paused, the popover starts from the running pause's settings, so a new
+                    // countdown keeps that pause's other choices.
+                    let from = studio.pause_settings().unwrap_or(&studio.profile().pause);
+                    self.pause_setup = Some(PauseSetup::new(from, extensions, self.pause_setup_openings));
+                } else if r.clicked() {
+                    self.pause_setup = None;
+                }
+                if let Some(setup) = &mut self.pause_setup {
+                    // The popover's reading-end edge lines up with the arrow's, under it.
+                    let below = if i18n::is_rtl(ui) { egui::RectAlign::BOTTOM_END.flipped_x() } else { egui::RectAlign::BOTTOM_END };
+                    let mut open = true;
+                    let mut out = pause_setup::Outcome::default();
+                    egui::Popup::from_response(&r)
+                        .open_bool(&mut open)
+                        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+                        .align(below)
+                        .accessible_name(tl!("Pause the program"))
+                        .show(|ui| out = setup.show(ui, &seg_style));
+                    if out.choose_media {
+                        acts.push(Act::BrowsePauseMedia(setup.opening));
                     }
-                });
+                    if let Some(cmd) = out.start {
+                        acts.push(Act::Run(cmd));
+                        open = false;
+                    }
+                    if out.settings {
+                        acts.push(Act::run("pause.settings", json!({})));
+                        open = false;
+                    }
+                    if out.cancel {
+                        ui.memory_mut(|m| m.request_focus(face.id));
+                        open = false;
+                    }
+                    if !open {
+                        self.pause_setup = None;
+                    }
+                }
             }
         });
         self.output_bar.fit = Some(fit);
@@ -675,27 +695,6 @@ mod tests {
         let open = pause_face(Some(None), Some(130_400));
         assert_eq!((open.label.as_str(), open.timer.as_deref()), ("Resume", Some("2:10")), "the time paused without a countdown");
         assert_eq!(open.name, "Resume, paused for 2:10");
-    }
-
-    #[test]
-    fn the_pause_menu_offers_five_countdowns_none_and_the_settings() {
-        let menu = pause_menu();
-        let seconds: Vec<Option<u64>> = menu.iter().filter(|(_, c)| c.id == "pause.start").map(|(_, c)| c.params["countdown_s"].as_u64()).collect();
-        assert_eq!(seconds, [Some(60), Some(120), Some(300), Some(600), Some(900), Some(0)]);
-        let labels: Vec<&str> = menu.iter().map(|(l, _)| *l).collect();
-        assert_eq!(
-            labels,
-            [
-                "Pause for 1 Minute",
-                "Pause for 2 Minutes",
-                "Pause for 5 Minutes",
-                "Pause for 10 Minutes",
-                "Pause for 15 Minutes",
-                "Pause Without a Countdown",
-                "Pause Screen Settings…"
-            ]
-        );
-        assert_eq!(menu.last().map(|(_, c)| c.clone()), Some(CommandRef::new("pause.settings")));
     }
 
     #[test]

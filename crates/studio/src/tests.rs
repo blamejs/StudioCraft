@@ -2615,6 +2615,47 @@ mod pause_screen {
     }
 
     #[test]
+    fn every_pause_screen_setting_can_be_given_for_one_pause() {
+        use studiocraft_model::PauseAnchor;
+        let mut s = headless();
+        s.run("transition.set", &json!({"kind": "cut"})).unwrap();
+        s.transition = None;
+        let before = s.profile().pause.clone();
+        assert!(before.mute_scene, "the default profile holds the scene's audio");
+        let given = json!({
+            "text": "On air in {time}", "zero_text": "Starting now", "anchor": "top_left", "size_pct": 12,
+            "fit": "fill", "background": "#20304080", "mute_scene": false
+        });
+        s.run("pause.start", &given).unwrap();
+        let Some(p) = &s.pause else { panic!("the program is paused") };
+        let set = p.settings.clone();
+        assert_eq!((set.text.as_str(), set.zero_text.as_str()), ("On air in {time}", "Starting now"));
+        assert_eq!((set.anchor, set.size_pct, set.fit, set.background.as_str()), (PauseAnchor::TopLeft, 12, FitMode::Fill, "#20304080"));
+        assert!(!set.mute_scene);
+        assert_eq!(s.pause_layers.as_ref().map(|l| l.look.clone()), Some(set), "the screen is drawn with the given values");
+        assert!(s.hold_fade.is_none(), "the scene's audio is not held");
+        assert_eq!(s.profile().pause, before, "the profile keeps its settings");
+
+        // While paused, a given value applies at once, and the scene's audio fades out over the
+        // collection's transition length.
+        s.run("transition.set", &json!({"kind": "fade"})).unwrap();
+        let ms = s.engine().collection().transition.duration_ms;
+        assert!(ms > 0);
+        s.run("pause.start", &json!({"mute_scene": true, "anchor": "center"})).unwrap();
+        assert!(s.transition.is_none(), "no new transition while paused");
+        let Some(h) = s.hold_fade else { panic!("the scene's audio fades out") };
+        assert!(h.down && h.ms == ms, "{h:?}");
+        assert_eq!(s.pause_layers.as_ref().map(|l| l.look.anchor), Some(PauseAnchor::Center));
+        assert_eq!(s.pause.as_ref().map(|p| p.settings.text.as_str()), Some("On air in {time}"), "the values not given stay");
+        // The value the pause already has starts no new fade.
+        s.run("pause.start", &json!({"mute_scene": true})).unwrap();
+        assert_eq!(s.hold_fade.map(|h| h.start), Some(h.start));
+        s.run("pause.stop", &json!({})).unwrap();
+        assert!(s.hold_fade.is_some_and(|h| !h.down), "resuming brings the scene's audio back");
+        assert_eq!(s.profile().pause, before);
+    }
+
+    #[test]
     fn a_scene_switch_while_paused_changes_what_resuming_shows() {
         let (mut s, _) = with_a_scene_source();
         s.run("pause.start", &json!({})).unwrap();
