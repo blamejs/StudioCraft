@@ -730,11 +730,97 @@ fn a_frame_answers_waiting_captures() {
     assert!(shared.captures.push(CaptureRequest { view: View::Program, reply: program_tx }).is_ok());
     assert!(shared.captures.push(CaptureRequest { view: View::Preview, reply: preview_tx }).is_ok());
     c.run(&shared, Tick(0));
+    // A frame drawn while the picture is read back does not change it.
+    let green = solid([0, 255, 0, 255], 32, 16);
+    shared.plan.publish(Arc::new(Plan { program: SceneDesc { items: vec![item(2, &green, Transform::default())] }, ..Plan::default() }));
+    c.run(&shared, ms(33));
+    c.finish(&shared.readback_lost);
     let shot = program_rx.try_recv().unwrap().unwrap();
     assert_eq!((shot.width, shot.height, shot.rgba.len()), (32, 16, 32 * 16 * 4));
     assert!(close(pixel(&shot.rgba, 32, 16, 8), [255, 0, 0, 255]));
     assert!(preview_rx.try_recv().unwrap().is_err(), "no preview outside studio mode");
     assert!(shared.captures.is_empty());
+}
+
+#[test]
+fn a_frame_does_not_wait_for_a_capture_to_be_read_back() {
+    let mut c = noop_compositor(32, 16);
+    let shared = RenderShared::default();
+    let (tx, rx) = std::sync::mpsc::sync_channel(1);
+    assert!(shared.captures.push(CaptureRequest { view: View::Program, reply: tx }).is_ok());
+    c.run(&shared, Tick(0));
+    assert_eq!(rx.try_recv().err(), Some(std::sync::mpsc::TryRecvError::Empty), "the frame returned before the picture was read back");
+    // The next frames are drawn while the read-back is outstanding.
+    c.run(&shared, ms(33));
+    c.run(&shared, ms(66));
+    assert_eq!(c.frame_no, 3);
+    c.finish(&shared.readback_lost);
+    assert!(rx.try_recv().is_ok(), "the capture is answered");
+}
+
+#[test]
+fn a_read_back_that_does_not_report_holds_its_slot_until_it_times_out() {
+    use std::sync::mpsc::TryRecvError;
+    let mut c = noop_compositor(32, 16);
+    let shared = RenderShared::default();
+    let mut answers = Vec::new();
+    let mut ask = |shared: &RenderShared| {
+        let (tx, rx) = std::sync::mpsc::sync_channel(1);
+        let queued = shared.captures.push(CaptureRequest { view: View::Program, reply: tx }).is_ok();
+        if queued {
+            answers.push(rx);
+        }
+        queued
+    };
+    for _ in 0..CAPTURE_SLOTS {
+        assert!(ask(&shared));
+    }
+    c.run(&shared, Tick(0));
+    assert_eq!(c.reads.len(), CAPTURE_SLOTS);
+    // Mappings that have not reported back: no callback holds these states.
+    for read in &mut c.reads {
+        read.state = Arc::new(AtomicU8::new(READ_PENDING));
+    }
+    // While every slot is being read back, new requests stay queued and the queue fills.
+    for _ in 0..CAPTURE_SLOTS {
+        assert!(ask(&shared));
+    }
+    c.run(&shared, ms(33));
+    assert_eq!(shared.captures.len(), CAPTURE_SLOTS);
+    assert!(!ask(&shared), "a full queue refuses the request");
+    assert!(answers.iter().all(|rx| rx.try_recv().err() == Some(TryRecvError::Empty)));
+    // Past the wait, counted from the frame at 33 ms, the stuck read-backs are answered with an
+    // error, and the queued requests copy their pictures.
+    c.run(&shared, tick_of(MAP_WAIT + std::time::Duration::from_millis(33)));
+    for rx in &answers[..CAPTURE_SLOTS] {
+        let err = rx.try_recv().unwrap().unwrap_err();
+        assert!(err.to_string().contains("could not be read back"), "{err}");
+    }
+    assert!(shared.captures.is_empty());
+    assert_eq!(c.reads.len(), CAPTURE_SLOTS);
+    c.finish(&shared.readback_lost);
+    assert!(c.reads.is_empty());
+    assert!(answers[CAPTURE_SLOTS..].iter().all(|rx| rx.try_recv().is_ok()), "the queued captures are answered");
+}
+
+#[test]
+fn the_read_back_wait_starts_after_the_frame_that_copied_the_picture() {
+    use std::sync::mpsc::TryRecvError;
+    let mut c = noop_compositor(32, 16);
+    let shared = RenderShared::default();
+    let (tx, rx) = std::sync::mpsc::sync_channel(1);
+    assert!(shared.captures.push(CaptureRequest { view: View::Program, reply: tx }).is_ok());
+    c.run(&shared, Tick(0));
+    for read in &mut c.reads {
+        read.state = Arc::new(AtomicU8::new(READ_PENDING));
+    }
+    // The frame stamped 0 submitted its copy late, so the next frame comes a whole wait after
+    // that stamp. The wait starts at that next frame.
+    c.run(&shared, tick_of(MAP_WAIT));
+    assert_eq!(rx.try_recv().err(), Some(TryRecvError::Empty), "the read-back still has its whole wait");
+    c.run(&shared, tick_of(MAP_WAIT * 2));
+    let err = rx.try_recv().unwrap().unwrap_err();
+    assert!(err.to_string().contains("could not be read back"), "{err}");
 }
 
 #[test]

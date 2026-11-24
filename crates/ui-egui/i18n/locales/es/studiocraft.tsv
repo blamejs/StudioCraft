@@ -566,3 +566,5 @@ menu	Transform	Transformar
 	Custom	Personalizado
 	Fill Screen	Llenar la pantalla
 @msg	The scenes could not be laid out for the new canvas: {error}	No se pudieron reorganizar las escenas para el nuevo lienzo: {error}
+	Filter delay	Retardo de los filtros
+	The audio filters on this source delay its sound by {frames} samples at 48 kHz	Los filtros de audio de esta fuente retrasan su sonido {frames} muestras a 48 kHz

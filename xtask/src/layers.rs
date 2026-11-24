@@ -27,6 +27,7 @@ pub const TABLE: &[(&str, Class)] = &[
     ("craft-hwenc-native", Class::Layer(0)),
     ("craft-app-audio", Class::Layer(0)),
     ("craft-speech", Class::Layer(0)),
+    ("craft-closed-captions", Class::Layer(0)),
     ("plugin", Class::Layer(1)),
     ("craft-rtmp", Class::Layer(1)),
     ("craft-transitions", Class::Layer(1)),

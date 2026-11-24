@@ -35,8 +35,9 @@ enum Plan {
 enum Seen {
     /// The publish command, with the stream's name.
     Publish(String),
-    /// An audio or video message: video or not, its first two bytes, and its timestamp.
-    Media { video: bool, head: [u8; 2], timestamp: u32 },
+    /// An audio or video message: video or not, its first two bytes, its timestamp, and the
+    /// closed-caption pairs of a video message's SEI.
+    Media { video: bool, head: [u8; 2], timestamp: u32, captions: Vec<[u8; 2]> },
     /// The connection ended.
     Closed,
 }
@@ -159,7 +160,13 @@ impl Conn {
             let video = m.header.type_id == msg_type::VIDEO;
             if video || m.header.type_id == msg_type::AUDIO {
                 let head = [m.payload.first().copied().unwrap_or(0), m.payload.get(1).copied().unwrap_or(0)];
-                let _ = seen.send(Seen::Media { video, head, timestamp: m.header.timestamp });
+                // A video tag's NAL units follow its five bytes of frame type, packet type and
+                // composition time.
+                let captions = match m.payload.get(5..) {
+                    Some(au) if video && head[1] == 1 => sei::read_sei(Codec::H264, au),
+                    _ => Vec::new(),
+                };
+                let _ = seen.send(Seen::Media { video, head, timestamp: m.header.timestamp, captions });
                 media += 1;
                 if matches!(plan, Plan::DropAfter(n) if media >= n) {
                     return Ok(());
@@ -923,7 +930,7 @@ fn after_a_video_packet_is_left_out_video_waits_for_a_keyframe() {
         StreamRates { video_packets_per_second: 30, audio_packets_per_second: 47, bits_per_second: 1_000_000, ticks_per_second: 1_000_000_000 };
     let mut rx = control.subscribe(RingConfig::for_stream(&rates, RING_SECONDS)).unwrap();
     let refused = Arc::new(AtomicU64::new(0));
-    let mut sink = Publish { fanout, pool: PacketPool::new(16, 0).unwrap(), refused: Arc::clone(&refused), video_gap: false };
+    let mut sink = Publish { fanout, pool: PacketPool::new(16, 0).unwrap(), refused: Arc::clone(&refused), video_gap: false, captions: None };
     let item = |track, at: i64, keyframe, data: Vec<u8>| Item { track, order_ns: at, pts_ns: at, dts_ns: at, keyframe, data };
     let mut write = |i: Item| sink.write(i).unwrap();
     write(item(Track::Video, 0, true, vec![1]));
@@ -1711,4 +1718,68 @@ fn a_stream_without_failures_checks_nothing_and_a_refused_stream_is_checked_at_o
     assert!(out.stop().is_err());
     diagnose::tests::until_checks(&checks, |c| (c.running() == 0).then_some(()));
     assert_eq!(checks_run(&fake), 1);
+}
+
+/// What a CEA-608 decoder shows after the caption pairs of `video`, one message per frame.
+fn captions_shown(video: &[Vec<[u8; 2]>]) -> String {
+    let pairs = video.iter().enumerate().flat_map(|(f, p)| p.iter().map(move |p| (f as i64, p[0], p[1])));
+    craft_captions::scc::decode_pairs(pairs, craft_captions::FrameRate::FPS_29_97).last().map(|c| c.text.clone()).unwrap_or_default()
+}
+
+#[test]
+fn finished_phrases_go_out_as_closed_captions_and_a_late_phrase_holds_nothing_up() {
+    let (url, seen) = server(vec![Plan::Accept]);
+    let mut job = job(RateControl::Bitrate { kbps: 400, keyframe_s: 1 });
+    let phrases = Arc::new(Fifo::new(8));
+    job.captions = Some(Arc::clone(&phrases));
+    let mut out = Streaming::start_timed(&job, vec![target("a", &url, "k")], quick()).unwrap();
+    let feed = Feed::new(&out);
+    // No phrase comes for a while, and the stream goes on without it.
+    let video = |m: Vec<Seen>| -> Vec<Vec<[u8; 2]>> {
+        m.into_iter()
+            .filter_map(|s| match s {
+                Seen::Media { video: true, head: [_, 1], captions, .. } => Some(captions),
+                _ => None,
+            })
+            .collect()
+    };
+    let before = video(media(&seen, 60));
+    assert!(before.len() >= 5, "{}", before.len());
+    assert!(before.iter().all(Vec::is_empty), "{before:?}");
+    phrases.push("hello from the stream".to_string());
+    let mut after = Vec::new();
+    for _ in 0..2000 {
+        after.extend(video(media(&seen, 1)));
+        if captions_shown(&after) == "hello from the stream" {
+            break;
+        }
+    }
+    assert_eq!(captions_shown(&after), "hello from the stream");
+    drop(feed);
+    out.stop().unwrap();
+    until_closed(&seen);
+}
+
+#[test]
+fn phrases_from_before_the_stream_are_not_sent() {
+    let phrases = Arc::new(Fifo::new(8));
+    phrases.push("said before the stream started".to_string());
+    let mut c = Captions::new(Arc::clone(&phrases), 30, 1).unwrap();
+    assert!(phrases.is_empty());
+    let slice = [0, 0, 0, 2, 0x65, 0x88];
+    let mut au = slice.to_vec();
+    c.add(&mut au);
+    assert_eq!(au, slice, "nothing was due, so the access unit is unchanged");
+    // A phrase given after the start goes out with the next picture.
+    phrases.push("now".to_string());
+    c.add(&mut au);
+    assert!(!sei::read_sei(Codec::H264, &au).is_empty());
+    assert!(au.ends_with(&slice), "the SEI goes before the slice");
+}
+
+#[test]
+fn a_stream_at_a_frame_rate_of_zero_is_refused_with_captions() {
+    let phrases = Arc::new(Fifo::new(8));
+    let Err(e) = Captions::new(phrases, 0, 1) else { panic!("a zero frame rate was taken") };
+    assert!(e.to_string().contains("frame rate"), "{e}");
 }

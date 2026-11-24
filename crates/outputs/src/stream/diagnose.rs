@@ -1088,7 +1088,7 @@ impl Results {
 
 /// The host of an `rtmp://` or `rtmps://` address, lowercased; `None` when it has none or holds
 /// anything but letters, digits, dots and hyphens.
-fn host_of(url: &str) -> Option<String> {
+pub(crate) fn host_of(url: &str) -> Option<String> {
     let rest = url.strip_prefix("rtmps://").or_else(|| url.strip_prefix("rtmp://"))?;
     let end = rest.find(['/', ':', '?', '#']).unwrap_or(rest.len());
     let host = rest.get(..end)?;
@@ -1097,7 +1097,7 @@ fn host_of(url: &str) -> Option<String> {
 }
 
 /// The most entries of an ingest list read.
-const MAX_INGESTS: usize = 512;
+pub(crate) const MAX_INGESTS: usize = 512;
 
 /// Up to [`OTHER_INGESTS`] hosts of the ingest list `body` other than `host`: those available, in
 /// the order of their priority (lowest first) and then of the list, each once.

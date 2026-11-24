@@ -564,3 +564,5 @@ menu	Transform	Transformera
 	{percent}% ({width} × {height})	{percent} % ({width} × {height})
 	Fill Screen	Fyll skärmen
 @msg	The scenes could not be laid out for the new canvas: {error}	Scenerna kunde inte ordnas för den nya arbetsytan: {error}
+	Filter delay	Filterfördröjning
+	The audio filters on this source delay its sound by {frames} samples at 48 kHz	Ljudfiltren på den här källan fördröjer ljudet med {frames} sampel vid 48 kHz

@@ -40,7 +40,7 @@ jobs:
     permissions:
       contents: read
       pull-requests: read
-    uses: storytold/craft-common-actions/.github/workflows/refresh-contributors.yml@ddb472330fe7eff2c5a77ffb551bf119a868f3d3
+    uses: storytold/craft-common-actions/.github/workflows/refresh-contributors.yml@778230c1a2cf245cdde9436d759f1c552f7f1d50
 
   release:
     needs: credits
@@ -48,13 +48,13 @@ jobs:
     permissions:
       contents: write
       packages: write
-    # Pinned to craft-common-actions main at 2026-11-23T04:18Z; move the pin to take later changes.
+    # Pinned to craft-common-actions main at 2026-11-23T23:33Z; move the pin to take later changes.
     # Each build job runs actions/rust-channel, which installs the toolchain a rust-toolchain.toml
     # names. The repository has none, so the jobs install the stable toolchain. The pin covers the
     # workflow file only: the shared workflow calls its own actions (rust-channel,
     # import-signing-key, sign-rpms, draft-release and others) at @main. Its linux and flatpak jobs
     # import LINUX_SIGNING_KEY in the job that builds and packages the app.
-    uses: storytold/craft-common-actions/.github/workflows/release.yml@ddb472330fe7eff2c5a77ffb551bf119a868f3d3
+    uses: storytold/craft-common-actions/.github/workflows/release.yml@778230c1a2cf245cdde9436d759f1c552f7f1d50
     with:
       dry-run: ${{ github.event_name == 'schedule' || inputs.dry-run == true }}
       app-name: studiocraft
@@ -144,7 +144,7 @@ jobs:
           cat SHA3-512SUMS.txt
       - name: Import the Linux signing key
         id: key
-        uses: storytold/craft-common-actions/actions/import-signing-key@ddb472330fe7eff2c5a77ffb551bf119a868f3d3
+        uses: storytold/craft-common-actions/actions/import-signing-key@778230c1a2cf245cdde9436d759f1c552f7f1d50
         with:
           key: ${{ github.ref == 'refs/heads/release' && secrets.LINUX_SIGNING_KEY || '' }}
       - name: Sign SHA3-512SUMS.txt

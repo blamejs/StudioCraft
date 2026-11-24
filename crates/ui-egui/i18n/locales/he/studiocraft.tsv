@@ -544,3 +544,5 @@ menu	Transform	שינוי צורה
 	Custom	מותאם אישית
 	Fill Screen	מילוי המסך
 @msg	The scenes could not be laid out for the new canvas: {error}	לא ניתן היה לסדר את הסצנות למשטח החדש: {error}
+	Filter delay	השהיית המסננים
+	The audio filters on this source delay its sound by {frames} samples at 48 kHz	מסנני השמע של מקור זה משהים את הצליל שלו ב-{frames} דגימות ב-48 קילוהרץ
