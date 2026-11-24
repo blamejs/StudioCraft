@@ -303,7 +303,8 @@ fn level(v: f64, unit: &str) -> String {
 }
 
 /// The program loudness section: the short-term loudness against the profile's target band, the
-/// integrated loudness and the highest true peak, and the bar.
+/// integrated loudness and the highest true peak, and the bar. The target band shows the bounds
+/// exactly as the profile stores them, the same values the status compares against.
 fn loudness(f: &Facts) -> Section {
     let (low, high) = (f.target.low_lufs, f.target.high_lufs);
     let short = f.loudness.short_term_lufs;
@@ -322,10 +323,7 @@ fn loudness(f: &Facts) -> Section {
         Line::new(tl!("Short-term"), level(short, lufs)).tone(tone),
         Line::new(tl!("Integrated"), level(f.loudness.integrated_lufs, lufs)),
         Line::new(tl!("True peak"), level(f.loudness.true_peak_dbtp, tl!("{value} dBTP"))),
-        Line::new(
-            tl!("Target band"),
-            craft_i18n::fmt(tl!("{low} to {high} LUFS"), &[("low", &format!("{low:.0}")), ("high", &format!("{high:.0}"))]),
-        ),
+        Line::new(tl!("Target band"), craft_i18n::fmt(tl!("{low} to {high} LUFS"), &[("low", &low.to_string()), ("high", &high.to_string())])),
     ];
     s.band = Some(Band { value: short.is_finite().then_some(short), low, high });
     s
@@ -679,6 +677,10 @@ mod tests {
         assert_eq!(lines[3], ("Target band".to_string(), "-18 to -14 LUFS".to_string()));
         f.target = LoudnessTarget { low_lufs: -24.0, high_lufs: -22.0 };
         assert_eq!(judged(&f).0, "Above the target band", "the profile's own band");
+        f.target = LoudnessTarget { low_lufs: -18.4, high_lufs: -14.45 };
+        f.loudness = reading(-18.2);
+        let band = loudness(&f).lines[3].value.clone();
+        assert_eq!((judged(&f).0, band.as_str()), ("In the target band".to_string(), "-18.4 to -14.45 LUFS"), "fractional bounds");
     }
 
     #[test]
