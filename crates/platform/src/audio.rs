@@ -6,7 +6,7 @@
 
 use std::any::Any;
 use std::panic::{AssertUnwindSafe, catch_unwind};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::{Receiver, SyncSender, TrySendError, sync_channel};
 use std::sync::{Arc, OnceLock};
 
@@ -82,6 +82,12 @@ pub trait AudioSink: Send + Sync {
     /// this returns; [`Playing::started`] and [`Playing::open_error`] say when it has started or
     /// why it could not.
     fn play(&self, id: &str, fill: Fill, on_error: OnError) -> Result<Box<dyn Playing>, PlatformError>;
+
+    /// Whether a [`AudioSink::play`] now would return [`PlatformError::Busy`]. Other threads can
+    /// queue opens in the meantime, so `play` can still return it.
+    fn busy(&self) -> bool {
+        false
+    }
 }
 
 /// An output device that is playing or opening; dropping it stops the device.
@@ -108,6 +114,10 @@ pub struct SystemSink;
 impl AudioSink for SystemSink {
     fn play(&self, id: &str, fill: Fill, on_error: OnError) -> Result<Box<dyn Playing>, PlatformError> {
         Ok(Box::new(AudioPlayback::open(id, fill, on_error)?))
+    }
+
+    fn busy(&self) -> bool {
+        DEVICES.get().is_some_and(|d| d.requests.full())
     }
 }
 
@@ -148,18 +158,48 @@ struct Slot {
     dropped: AtomicBool,
 }
 
+/// The sending side of the device thread's queue, with a count of the requests in it.
+#[derive(Clone)]
+struct Requests {
+    tx: SyncSender<Request>,
+    /// Requests sent and not yet taken by the device thread.
+    queued: Arc<AtomicUsize>,
+}
+
+impl Requests {
+    fn try_send(&self, request: Request) -> Result<(), TrySendError<Request>> {
+        // Counted before the send, so the device thread never takes a request it has not counted.
+        self.queued.fetch_add(1, Ordering::AcqRel);
+        let sent = self.tx.try_send(request);
+        if sent.is_err() {
+            self.queued.fetch_sub(1, Ordering::AcqRel);
+        }
+        sent
+    }
+
+    /// Whether the queue is full, so an open now would be refused as busy.
+    fn full(&self) -> bool {
+        self.queued.load(Ordering::Acquire) >= REQUESTS_QUEUED
+    }
+}
+
 /// The thread that opens, holds and closes the output streams, one request at a time. A stream
 /// whose handle was dropped closes before the next stream opens. Each handle holds a sender of the
 /// queue, so the thread keeps running while any playback is open.
 struct Devices {
-    requests: SyncSender<Request>,
+    requests: Requests,
 }
 
 impl Devices {
     fn spawn() -> Result<Devices, PlatformError> {
-        let (requests, rx) = sync_channel(REQUESTS_QUEUED);
-        std::thread::Builder::new().name("audio monitor".into()).spawn(move || serve(&rx)).map_err(|e| PlatformError::Failed(e.to_string()))?;
-        Ok(Devices { requests })
+        let (tx, rx) = sync_channel(REQUESTS_QUEUED);
+        let queued = Arc::new(AtomicUsize::new(0));
+        let taken = Arc::clone(&queued);
+        std::thread::Builder::new()
+            .name("audio monitor".into())
+            .spawn(move || serve(&rx, &taken))
+            .map_err(|e| PlatformError::Failed(e.to_string()))?;
+        Ok(Devices { requests: Requests { tx, queued } })
     }
 
     /// Queue the open of a stream and return its handle at once.
@@ -167,7 +207,7 @@ impl Devices {
         let slot = Arc::new(Slot::default());
         match self.requests.try_send(Request::Open { open, fill, on_error, slot: Pending(Arc::clone(&slot)) }) {
             Ok(()) => Ok(AudioPlayback { slot, requests: self.requests.clone() }),
-            Err(TrySendError::Full(_)) => Err(PlatformError::Failed("the audio device is busy".into())),
+            Err(TrySendError::Full(_)) => Err(PlatformError::Busy),
             Err(TrySendError::Disconnected(_)) => Err(PlatformError::Failed("the audio device thread stopped".into())),
         }
     }
@@ -178,9 +218,10 @@ impl Devices {
 /// or a request is dropped ends only that step, so the thread and the streams that have started
 /// keep running. Before each request, the streams whose handles were dropped are closed, again
 /// until a pass finds none, so a handle dropped while another stream closes is closed too.
-fn serve(requests: &Receiver<Request>) {
+fn serve(requests: &Receiver<Request>, queued: &AtomicUsize) {
     let mut streams: Vec<(Pending, Box<dyn Any>)> = Vec::new();
     while let Ok(request) = requests.recv() {
+        queued.fetch_sub(1, Ordering::AcqRel);
         loop {
             let before = streams.len();
             discard(catch_unwind(AssertUnwindSafe(|| streams.retain(|(slot, _)| !slot.0.dropped.load(Ordering::Acquire)))));
@@ -245,7 +286,7 @@ fn shared_devices() -> Result<&'static Devices, PlatformError> {
 /// the stream on that thread, without waiting for it.
 pub struct AudioPlayback {
     slot: Arc<Slot>,
-    requests: SyncSender<Request>,
+    requests: Requests,
 }
 
 impl AudioPlayback {
@@ -624,7 +665,8 @@ mod tests {
         began.recv().unwrap();
         let queued: Vec<AudioPlayback> = (0..REQUESTS_QUEUED).map(|_| play(&devices, opening(|| Ok(((), STEREO_48K)))).unwrap()).collect();
         let busy = play(&devices, opening(|| Ok(((), STEREO_48K))));
-        assert_eq!(busy.err(), Some(PlatformError::Failed("the audio device is busy".into())));
+        assert_eq!(busy.err(), Some(PlatformError::Busy));
+        assert!(devices.requests.full(), "a full queue is reported before an open is tried");
         release.send(Ok(STEREO_48K)).unwrap();
         for p in &queued {
             while !p.started() {
@@ -632,6 +674,7 @@ mod tests {
             }
         }
         assert!(first.started());
+        assert!(!devices.requests.full(), "the queue has room once the device thread has taken the opens");
     }
 
     #[test]
