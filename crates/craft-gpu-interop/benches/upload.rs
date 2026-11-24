@@ -100,11 +100,13 @@ fn plane(device: &wgpu::Device, format: wgpu::TextureFormat, w: u32, h: u32) -> 
 /// A `w × h` NV12 frame to an encoder: read back through memory, and copied into an export ring.
 fn bench_encode(c: &mut Criterion, device: &wgpu::Device, queue: &wgpu::Queue, label: &str, w: u32, h: u32) {
     let planes = [plane(device, wgpu::TextureFormat::R8Unorm, w, h), plane(device, wgpu::TextureFormat::Rg8Unorm, w / 2, h / 2)];
-    // Rows of 1920 and 3840 bytes are multiples of 256, as a texture-to-buffer copy needs.
-    let luma = u64::from(w) * u64::from(h);
+    // Both planes have rows of `w` bytes. A texture-to-buffer copy needs each row in the buffer to
+    // start on a multiple of 256 bytes, so a 1920-byte row is padded to 2048.
+    let stride = w.next_multiple_of(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
+    let luma = u64::from(stride) * u64::from(h);
     let buffer = device.create_buffer(&wgpu::BufferDescriptor {
         label: None,
-        size: luma + luma / 2,
+        size: luma + u64::from(stride) * u64::from(h / 2),
         usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
         mapped_at_creation: false,
     });
@@ -113,7 +115,7 @@ fn bench_encode(c: &mut Criterion, device: &wgpu::Device, queue: &wgpu::Queue, l
             texture.as_image_copy(),
             wgpu::TexelCopyBufferInfo {
                 buffer: &buffer,
-                layout: wgpu::TexelCopyBufferLayout { offset, bytes_per_row: Some(w), rows_per_image: Some(rows) },
+                layout: wgpu::TexelCopyBufferLayout { offset, bytes_per_row: Some(stride), rows_per_image: Some(rows) },
             },
             texture.size(),
         );
