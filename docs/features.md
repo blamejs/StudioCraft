@@ -421,6 +421,14 @@ A recording that ran while captions ran gets caption files beside it: `<recordin
 was recognized gets no caption files. A file of that name that already
 exists is not replaced. Start or Stop Live Captions can be given a shortcut in Settings › Hotkeys.
 
+While captions run, the stream also carries each finished phrase as closed captions, which viewers
+of platforms that read captions embedded in the video can turn on and off. The captions are
+CEA-608 roll-up captions on channel 1, three rows at the bottom of the picture, sent as
+CEA-708 caption data in an SEI message of the H.264 stream (ITU-T H.264 D.1.6, ATSC A/53 Part 4).
+A phrase goes out within about a second of being finished, at most 32 characters to a row, and the
+captions are erased 8 seconds after the last phrase. Characters that 608 captions cannot show are
+left out. Recordings do not carry closed captions; they get the caption files.
+
 ## Streaming
 
 StudioCraft streams to Real-Time Messaging Protocol (RTMP and RTMPS) servers at a constant
