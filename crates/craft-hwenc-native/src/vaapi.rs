@@ -17,11 +17,15 @@
 //! - HEVC takes widths and heights that are multiples of the driver's smallest coding block
 //!   (8 × 8 unless the driver lists another).
 //! - A stream whose picture size or picture rate is more than the codec's highest level allows
-//!   (level 6.2 for H.264 and HEVC, 6.3 for AV1) is refused before VA-API is called.
+//!   (level 6.2 for H.264 and HEVC, 6.3 for AV1) is refused before VA-API is called. So are an AV1
+//!   stream above 300 frames a second, below 16 pixels a side, or at a constant bitrate above
+//!   160,000 kbit/s, the most AV1 Main tier allows.
 //! - [`Encoder::new`] encodes one gray frame first and takes the parameter sets or the sequence
 //!   header from its output; the stream that follows starts again at an IDR picture. An AV1
-//!   driver that writes no sequence header gets the record of the one this crate wrote. A picture
-//!   whose parameter sets or sequence header differ from the record is an error.
+//!   driver that writes no sequence header gets the record of the one this crate wrote, and a
+//!   gray frame that is not a key frame with its coded tiles is an error. A picture whose
+//!   parameter sets or sequence header differ from the record is an error. Every AV1 key frame
+//!   packet carries the sequence header OBU.
 //!
 //! Up to four frames are in flight: [`Encoder::encode`] copies a frame into a free surface and
 //! submits it, and reads the oldest frame's coded data only when every surface is taken. Reading
@@ -83,6 +87,9 @@ fn params(cfg: &Config) -> Params {
 /// The widest and tallest frame this crate sends to a VA-API encoder.
 const MAX_SIDE: u32 = 8192;
 
+/// The highest AV1 bitrate, in kbit/s: level 6.3's Main tier limit.
+const AV1_MAX_KBPS: u32 = vaapi_ffi::av1::MAX_MAIN_BPS / 1000;
+
 /// Why AV1 has no Annex B packets or parameter sets.
 const NO_ANNEX_B: &str = "AV1 is not written in Annex B";
 
@@ -95,6 +102,10 @@ fn check(cfg: &Config) -> Result<(), Error> {
     }
     if w > MAX_SIDE || h > MAX_SIDE {
         return bad(format!("{w}x{h}: the encoders take at most {MAX_SIDE} pixels a side"));
+    }
+    let min = vaapi_ffi::av1::MIN_SIDE;
+    if cfg.codec == Codec::Av1 && (w < min || h < min) {
+        return bad(format!("{w}x{h}: the AV1 encoder takes at least {min} pixels a side"));
     }
     if cfg.fps.0 == 0 || cfg.fps.1 == 0 {
         return bad(format!("the frame rate {}/{} is not a rate", cfg.fps.0, cfg.fps.1));
@@ -117,6 +128,9 @@ fn check(cfg: &Config) -> Result<(), Error> {
         Rate::Quality(q) if !(1..=51).contains(&q) => bad(format!("the quality level {q} is outside 1 to 51")),
         Rate::Cbr(0) => bad("a bitrate of 0 kbit/s".into()),
         Rate::Cbr(kbps) if kbps > u32::MAX / 1000 => bad(format!("a bitrate of {kbps} kbit/s")),
+        Rate::Cbr(kbps) if cfg.codec == Codec::Av1 && kbps > AV1_MAX_KBPS => {
+            bad(format!("a bitrate of {kbps} kbit/s is more than AV1 Main tier allows ({AV1_MAX_KBPS} kbit/s)"))
+        }
         _ => Ok(()),
     }
 }
@@ -201,18 +215,34 @@ pub fn packet(codec: Codec, sets: &[Vec<u8>], data: &[u8], pts: i64, idr: bool) 
 }
 
 /// The AV1 stream of the gray frame's temporal unit `data`, or of `ours`, the sequence header OBU
-/// the session wrote, when the driver wrote none into `data`.
+/// the session wrote, when the driver wrote none into `data`. `data` must be a key frame with its
+/// coded tiles.
 fn av1_stream(data: &[u8], ours: &[u8]) -> Result<av1::Stream, Error> {
     let written = av1::obus(data).map_err(Error::Failed)?.iter().any(|o| o.kind == av1::OBU_SEQUENCE_HEADER);
-    av1::Stream::new(if written { data } else { ours }, 8).map_err(Error::Failed)
+    let stream = av1::Stream::new(if written { data } else { ours }, 8).map_err(Error::Failed)?;
+    av1_packet(&stream, data, 0, true)?;
+    Ok(stream)
 }
 
 /// The packet of the AV1 temporal unit `data` of `stream` that went in with `pts` as a key frame
-/// when `idr` is set.
+/// when `idr` is set. The unit must hold coded tiles: a frame OBU or a tile group OBU. A key
+/// frame packet starts with the stream's sequence header OBU when the driver wrote none.
 fn av1_packet(stream: &av1::Stream, data: &[u8], pts: i64, idr: bool) -> Result<Packet, Error> {
     let (data, keyframe) = stream.sample(data).map_err(Error::Failed)?;
     if idr && !keyframe {
         return Err(Error::Failed("the encoder wrote no key frame where one was asked for".into()));
+    }
+    let (tiles, sequence) = av1::obus(&data).map_err(Error::Failed)?.iter().fold((false, false), |(tiles, sequence), o| {
+        (tiles || matches!(o.kind, av1::OBU_FRAME | av1::OBU_TILE_GROUP), sequence || o.kind == av1::OBU_SEQUENCE_HEADER)
+    });
+    if !tiles {
+        return Err(Error::Failed("the encoder wrote a frame header without its coded tiles".into()));
+    }
+    if keyframe && !sequence {
+        let mut with = Vec::with_capacity(data.len().saturating_add(32));
+        stream.write_sequence_header(&mut with);
+        with.extend_from_slice(&data);
+        return Ok(Packet { data: with, pts, keyframe });
     }
     Ok(Packet { data, pts, keyframe })
 }
@@ -348,6 +378,16 @@ mod tests {
             assert_eq!(check(&c), Ok(()), "{c:?} fits the highest level");
         }
         assert_eq!(check(&Config { codec: Codec::Av1, width: 8192, height: 4352, fps: (120, 1), ..ok }), Ok(()), "AV1 level 6.3");
+        let av1 = cfg(Codec::Av1);
+        for fits in [
+            Config { width: 16, height: 16, ..av1 },
+            Config { width: 160, height: 120, fps: (300, 1), ..av1 },
+            Config { rate: Rate::Cbr(160_000), ..av1 },
+            Config { rate: Rate::Cbr(160_001), ..ok },
+            Config { width: 14, ..ok },
+        ] {
+            assert_eq!(check(&fits), Ok(()), "{fits:?}");
+        }
         for bad in [
             Config { width: 255, ..ok },
             Config { height: 0, ..ok },
@@ -370,6 +410,10 @@ mod tests {
             Config { codec: Codec::Av1, width: 8192, height: 8192, ..ok },
             Config { codec: Codec::Av1, width: 255, ..ok },
             Config { codec: Codec::Av1, input: Input::P010, ..ok },
+            Config { width: 14, ..av1 },
+            Config { height: 14, ..av1 },
+            Config { width: 160, height: 120, fps: (301, 1), ..av1 },
+            Config { rate: Rate::Cbr(160_001), ..av1 },
         ] {
             assert!(matches!(check(&bad), Err(Error::Unsupported(_))), "{bad:?}");
             assert!(matches!(Encoder::new(&bad), Err(Error::Unsupported(_))), "{bad:?} reached VA-API");
@@ -382,7 +426,7 @@ mod tests {
     #[test]
     fn av1_packets_carry_the_sizes_and_keep_the_sequence_header_in_the_record() {
         let ours = vaapi_ffi::av1::sequence_header(256, 144, 0);
-        let tiles = vaapi_ffi::av1::Tiles::of(256, 144);
+        let tiles = vaapi_ffi::av1::Tiles::of(256, 144, (30, 1)).unwrap();
         let tools = vaapi_ffi::av1::tools(VA_ATTRIB_NOT_SUPPORTED, VA_ATTRIB_NOT_SUPPORTED, VA_ATTRIB_NOT_SUPPORTED).unwrap();
         let key = vaapi_ffi::av1::frame_header(&tiles, &tools, &Picture { idr: true, order: 0, idr_id: 0 }, Control::Cqp(23)).obu;
         let inter = vaapi_ffi::av1::frame_header(&tiles, &tools, &Picture { idr: false, order: 1, idr_id: 0 }, Control::Cqp(23)).obu;
@@ -410,6 +454,32 @@ mod tests {
         let other = vaapi_ffi::av1::sequence_header(256, 144, 4);
         assert!(av1_packet(&stream, &[&other[..], &frame[..]].concat(), 10, true).is_err(), "a changed sequence header");
         assert!(av1_packet(&stream, &delimiter, 11, false).is_err(), "no picture data");
+
+        // A key frame the driver wrote without the sequence header gets the stream's.
+        let bare = av1_packet(&stream, &[&delimiter[..], &frame[..]].concat(), 12, true).unwrap();
+        assert_eq!((bare.keyframe, bare.data), (true, k.data.clone()));
+        assert_eq!(p.data, [&inter[..1], &[(inter.len() - 5) as u8][..], &inter[5..], &tile_group[..]].concat(), "inter frames stay as written");
+        // A frame header without its tile group is no coded picture.
+        assert!(av1_packet(&stream, &[&ours[..], &key[..]].concat(), 13, true).is_err(), "a key frame header alone");
+        assert!(av1_packet(&stream, &key, 13, true).is_err(), "a key frame header alone, without the sequence header");
+        assert!(av1_packet(&stream, &inter, 13, false).is_err(), "an inter frame header alone");
+        let combined = [&ours[..], &[(6 << 3) | 0x02, 3][..], &key[5..8]].concat();
+        let c = av1_packet(&stream, &combined, 14, true).unwrap();
+        assert_eq!((c.keyframe, c.data), (true, combined), "a frame OBU holds its tiles");
+    }
+
+    #[test]
+    fn the_gray_frame_must_be_a_key_frame_with_its_tiles() {
+        let ours = vaapi_ffi::av1::sequence_header(256, 144, 0);
+        let tiles = vaapi_ffi::av1::Tiles::of(256, 144, (30, 1)).unwrap();
+        let tools = vaapi_ffi::av1::tools(VA_ATTRIB_NOT_SUPPORTED, VA_ATTRIB_NOT_SUPPORTED, VA_ATTRIB_NOT_SUPPORTED).unwrap();
+        let inter = vaapi_ffi::av1::frame_header(&tiles, &tools, &Picture { idr: false, order: 1, idr_id: 0 }, Control::Cqp(23)).obu;
+        let key = vaapi_ffi::av1::frame_header(&tiles, &tools, &Picture { idr: true, order: 0, idr_id: 0 }, Control::Cqp(23)).obu;
+        let tile_group = [(4 << 3) | 0x02, 3, 0xaa, 0xbb, 0xcc];
+        assert!(av1_stream(&[&ours[..], &inter[..], &tile_group[..]].concat(), &ours).is_err(), "an inter frame");
+        assert!(av1_stream(&ours, &ours).is_err(), "a sequence header alone");
+        assert!(av1_stream(&[&ours[..], &key[..]].concat(), &ours).is_err(), "a key frame header without its tiles");
+        assert!(av1_stream(&[&key[..], &tile_group[..]].concat(), &ours).is_ok(), "a key frame without the sequence header takes ours");
     }
 
     #[test]

@@ -360,7 +360,7 @@ impl Display {
             return Err("the AV1 encoder takes no packed sequence and frame headers".into());
         }
         let tools = av1::tools(features, ext1, ext2)?;
-        let tiles = Tiles::of(p.width, p.height).count();
+        let tiles = av1_tiles(p)?.count();
         if tiles > tools.max_tiles {
             return Err(format!("{}x{}: the AV1 encoder codes at most {} tiles and the frame needs {tiles}", p.width, p.height, tools.max_tiles));
         }
@@ -389,6 +389,13 @@ struct Choice {
     blocks: Blocks,
     /// For AV1.
     tools: Option<Tools>,
+}
+
+/// The tiles of an AV1 stream of `p`, or why none keep within the level limits.
+fn av1_tiles(p: &Params) -> Result<Tiles, String> {
+    Tiles::of(p.width, p.height, p.fps).ok_or_else(|| {
+        format!("{}x{} at {}/{} frames per second: no grid of AV1 tiles keeps within the level limits", p.width, p.height, p.fps.0, p.fps.1)
+    })
 }
 
 /// What an AV1 session writes into every frame: its level, its tiles, the driver's tools and
@@ -473,6 +480,14 @@ impl Session {
         let (api, dpy) = (display.api, display.dpy);
         let name = display.name.clone();
         let fail = |st: abi::VAStatus, e: String| open_error(st, format!("{name}: {e}"), OpenError::Unsupported);
+        let av1 = match choice.tools {
+            Some(tools) => {
+                let level = av1::level(p.width, p.height, p.fps, choice.ctl.bits_per_second());
+                let tiles = av1_tiles(p).map_err(|e| OpenError::Unsupported(format!("{name}: {e}")))?;
+                Some(Av1 { level, tiles, tools, sequence: av1::sequence_header(p.width, p.height, level) })
+            }
+            None => None,
+        };
         let mut attrs = [
             VAConfigAttrib { type_: abi::VAConfigAttribRTFormat, value: abi::VA_RT_FORMAT_YUV420 },
             VAConfigAttrib { type_: abi::VAConfigAttribRateControl, value: choice.ctl.mode() },
@@ -486,10 +501,6 @@ impl Session {
         let st = unsafe { (api.create_config)(dpy, choice.profile, choice.entry, attrs.as_mut_ptr(), count, &mut config) };
         display.check(st, "vaCreateConfig").map_err(|e| fail(st, e))?;
         let (cw, ch) = coded_size(p.codec, p.width, p.height);
-        let av1 = choice.tools.map(|tools| {
-            let level = av1::level(p.width, p.height, p.fps, choice.ctl.bits_per_second());
-            Av1 { level, tiles: Tiles::of(p.width, p.height), tools, sequence: av1::sequence_header(p.width, p.height, level) }
-        });
         let units = match (p.codec, &av1) {
             (Codec::H264, _) => (cw / 16) * (ch / 16),
             (Codec::Av1, Some(a)) => a.tiles.count(),

@@ -12,8 +12,8 @@
 //!   intra, intra edge filtering, compound prediction, warped and global motion, palette, intra
 //!   block copy, segmentation, quantizer matrices and delta quantizers. A driver that requires one
 //!   of the tools does not open.
-//! - Tiles are uniform and as few as the frame size allows (at most 4096 pixels wide and 4096 ×
-//!   2304 pixels in area).
+//! - Tiles are uniform and as few as the frame size and frame rate allow: each at most 4096
+//!   pixels wide, at most 4096 × 2304 pixels in area and at most 588,251,136 pixels a second.
 //! - The quality level `q` (1 to 51) is the base quantizer index 5 × `q`, at most 255, which is
 //!   this crate's own mapping. The deblocking level is the quantizer index divided by 6 (rounded),
 //!   at most 63, for every plane and direction: also this crate's own choice. Under rate control
@@ -39,47 +39,62 @@ pub(crate) const TX_MODE_LARGEST: u8 = 1;
 pub(crate) const TX_MODE_SELECT: u8 = 2;
 
 /// Rows of AV1 Annex A.3's level tables: `seq_level_idx`, MaxPicSize, MaxHSize, MaxVSize,
-/// MaxDisplayRate and MainMbps in bit/s. Levels 5.3 and 6.3 differ from 5.2 and 6.2 only in
-/// MaxDecodeRate.
-const LEVELS: [(u8, u64, u32, u32, u64, u64); 14] = [
-    (0, 147_456, 2048, 1152, 4_423_680, 1_500_000),
-    (1, 278_784, 2816, 1584, 8_363_520, 3_000_000),
-    (4, 665_856, 4352, 2448, 19_975_680, 6_000_000),
-    (5, 1_065_024, 5504, 3096, 31_950_720, 10_000_000),
-    (8, 2_359_296, 6144, 3456, 70_778_880, 12_000_000),
-    (9, 2_359_296, 6144, 3456, 141_557_760, 20_000_000),
-    (12, 8_912_896, 8192, 4352, 267_386_880, 30_000_000),
-    (13, 8_912_896, 8192, 4352, 534_773_760, 40_000_000),
-    (14, 8_912_896, 8192, 4352, 1_069_547_520, 60_000_000),
-    (15, 8_912_896, 8192, 4352, 1_069_547_520, 60_000_000),
-    (16, 35_651_584, 16384, 8704, 1_069_547_520, 60_000_000),
-    (17, 35_651_584, 16384, 8704, 2_139_095_040, 100_000_000),
-    (18, 35_651_584, 16384, 8704, 4_278_190_080, 160_000_000),
-    (19, 35_651_584, 16384, 8704, 4_278_190_080, 160_000_000),
+/// MaxDisplayRate, MaxHeaderRate and MainMbps in bit/s. Levels 5.3 and 6.3 differ from 5.2 and
+/// 6.2 only in MaxDecodeRate.
+const LEVELS: [(u8, u64, u32, u32, u64, u64, u64); 14] = [
+    (0, 147_456, 2048, 1152, 4_423_680, 150, 1_500_000),
+    (1, 278_784, 2816, 1584, 8_363_520, 150, 3_000_000),
+    (4, 665_856, 4352, 2448, 19_975_680, 150, 6_000_000),
+    (5, 1_065_024, 5504, 3096, 31_950_720, 150, 10_000_000),
+    (8, 2_359_296, 6144, 3456, 70_778_880, 300, 12_000_000),
+    (9, 2_359_296, 6144, 3456, 141_557_760, 300, 20_000_000),
+    (12, 8_912_896, 8192, 4352, 267_386_880, 300, 30_000_000),
+    (13, 8_912_896, 8192, 4352, 534_773_760, 300, 40_000_000),
+    (14, 8_912_896, 8192, 4352, 1_069_547_520, 300, 60_000_000),
+    (15, 8_912_896, 8192, 4352, 1_069_547_520, 300, 60_000_000),
+    (16, 35_651_584, 16384, 8704, 1_069_547_520, 300, 60_000_000),
+    (17, 35_651_584, 16384, 8704, 2_139_095_040, 300, 100_000_000),
+    (18, 35_651_584, 16384, 8704, 4_278_190_080, 300, 160_000_000),
+    (19, 35_651_584, 16384, 8704, 4_278_190_080, 300, 160_000_000),
 ];
 
 /// The highest bitrate a Main tier level allows: level 6.3's 160 Mbit/s.
 pub(crate) const MAX_MAIN_BPS: u32 = 160_000_000;
+
+/// The narrowest and shortest frame the AV1 encoder takes, in pixels.
+pub(crate) const MIN_SIDE: u32 = 16;
 
 /// Luma samples a second of a `width` × `height` stream at `fps`.
 fn display_rate(width: u32, height: u32, fps: (u32, u32)) -> u64 {
     (u64::from(width) * u64::from(height)).saturating_mul(u64::from(fps.0)).div_ceil(u64::from(fps.1.max(1)))
 }
 
+/// Whether `fps`, one frame header a frame, is at most `most` frame headers a second.
+fn headers_fit(fps: (u32, u32), most: u64) -> bool {
+    u64::from(fps.0) <= most.saturating_mul(u64::from(fps.1.max(1)))
+}
+
 /// The `seq_level_idx` of a `width` × `height` stream at `fps` and `bps`: the lowest level whose
-/// picture size, picture width and height, display rate and Main tier bitrate take it, else 6.3.
+/// picture size, picture width and height, display rate, frame header rate and Main tier bitrate
+/// take it, else 6.3.
 pub(crate) fn level(width: u32, height: u32, fps: (u32, u32), bps: u32) -> u8 {
     let (size, rate) = (u64::from(width) * u64::from(height), display_rate(width, height, fps));
     LEVELS
         .iter()
-        .find(|&&(_, pic, w, h, display, mbps)| size <= pic && width <= w && height <= h && rate <= display && u64::from(bps) <= mbps)
+        .find(|&&(_, pic, w, h, display, headers, mbps)| {
+            size <= pic && width <= w && height <= h && rate <= display && headers_fit(fps, headers) && u64::from(bps) <= mbps
+        })
         .map_or(19, |&(level, ..)| level)
 }
 
 /// Whether a `width` × `height` stream at `fps` fits level 6.3, the highest level.
 pub(crate) fn fits_a_level(width: u32, height: u32, fps: (u32, u32)) -> bool {
-    let (_, pic, w, h, display, _) = LEVELS[LEVELS.len() - 1];
-    u64::from(width) * u64::from(height) <= pic && width <= w && height <= h && display_rate(width, height, fps) <= display
+    let (_, pic, w, h, display, headers, _) = LEVELS[LEVELS.len() - 1];
+    u64::from(width) * u64::from(height) <= pic
+        && width <= w
+        && height <= h
+        && display_rate(width, height, fps) <= display
+        && headers_fit(fps, headers)
 }
 
 /// What the driver's AV1 attributes let a stream use.
@@ -136,7 +151,15 @@ fn tile_log2(blk: u32, target: u32) -> u8 {
     k
 }
 
-/// The tiles of a frame: uniform, with the fewest the frame size allows (AV1 5.9.15).
+/// The most luma samples one tile may hold, `MAX_TILE_AREA` (AV1 3).
+const MAX_TILE_AREA: u64 = 4096 * 2304;
+
+/// The most luma samples one tile may code a second in a stream without temporal layers (AV1
+/// Annex A.3: `MaxTileSizeInLumaSamples` × `NumFrameHeadersSec`).
+const MAX_TILE_RATE: u64 = 588_251_136;
+
+/// The tiles of a frame: uniform, with the fewest that keep every tile within the size and rate
+/// limits (AV1 5.9.15 and Annex A.3).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Tiles {
     /// Superblocks across and down the frame.
@@ -144,8 +167,12 @@ pub(crate) struct Tiles {
     pub sb_rows: u32,
     pub cols_log2: u8,
     pub rows_log2: u8,
-    /// `maxLog2TileCols` and `maxLog2TileRows`: below these an `increment_tile_*_log2` bit is
-    /// coded.
+    /// `minLog2TileCols` and `minLog2TileRows`: from these an `increment_tile_*_log2` bit of 1
+    /// is coded for each step up to `cols_log2` and `rows_log2`.
+    pub min_cols_log2: u8,
+    pub min_rows_log2: u8,
+    /// `maxLog2TileCols` and `maxLog2TileRows`: below these an `increment_tile_*_log2` bit of 0
+    /// ends the steps.
     pub max_cols_log2: u8,
     pub max_rows_log2: u8,
     /// Superblocks across each tile but the last column, and down each tile but the last row.
@@ -157,31 +184,51 @@ pub(crate) struct Tiles {
 }
 
 impl Tiles {
-    pub(crate) fn of(width: u32, height: u32) -> Tiles {
+    /// The tiles of a `width` × `height` frame at `fps`: the first uniform grid whose largest
+    /// tile is at most 4096 pixels wide, holds at most [`MAX_TILE_AREA`] luma samples and codes at
+    /// most [`MAX_TILE_RATE`] luma samples a second. Grids are tried by `cols_log2 + rows_log2`,
+    /// smallest first, then by `cols_log2`, smallest first. `None` when no uniform grid keeps
+    /// within the limits.
+    pub(crate) fn of(width: u32, height: u32, fps: (u32, u32)) -> Option<Tiles> {
         let (mi_cols, mi_rows) = (2 * (width.div_ceil(8)), 2 * (height.div_ceil(8)));
         let (sb_cols, sb_rows) = (mi_cols.div_ceil(16), mi_rows.div_ceil(16));
         // MAX_TILE_WIDTH and MAX_TILE_AREA in 64 × 64 superblocks, MAX_TILE_COLS and MAX_TILE_ROWS.
-        let (max_width_sb, max_area_sb) = (4096 >> 6, (4096 * 2304) >> 12);
+        let (max_width_sb, max_area_sb) = (4096 >> 6, (MAX_TILE_AREA >> 12) as u32);
         let min_cols_log2 = tile_log2(max_width_sb, sb_cols);
         let max_cols_log2 = tile_log2(1, sb_cols.min(64));
         let max_rows_log2 = tile_log2(1, sb_rows.min(64));
         let min_tiles_log2 = min_cols_log2.max(tile_log2(max_area_sb, sb_rows.saturating_mul(sb_cols)));
-        let cols_log2 = min_cols_log2;
-        let width_sb = (sb_cols + (1 << cols_log2) - 1) >> cols_log2;
-        let rows_log2 = min_tiles_log2.saturating_sub(cols_log2);
-        let height_sb = (sb_rows + (1 << rows_log2) - 1) >> rows_log2;
-        Tiles {
-            sb_cols,
-            sb_rows,
-            cols_log2,
-            rows_log2,
-            max_cols_log2,
-            max_rows_log2,
-            width_sb,
-            height_sb,
-            cols: sb_cols.div_ceil(width_sb.max(1)),
-            rows: sb_rows.div_ceil(height_sb.max(1)),
+        for total in min_tiles_log2..=max_cols_log2 + max_rows_log2 {
+            for cols_log2 in min_cols_log2..=total.min(max_cols_log2) {
+                let rows_log2 = total - cols_log2;
+                if rows_log2 > max_rows_log2 {
+                    continue;
+                }
+                let width_sb = (sb_cols + (1 << cols_log2) - 1) >> cols_log2;
+                let height_sb = (sb_rows + (1 << rows_log2) - 1) >> rows_log2;
+                // The first tile is the largest; a frame smaller than a superblock keeps its size.
+                let samples = u64::from((width_sb * 64).min(width)) * u64::from((height_sb * 64).min(height));
+                let per_second = samples.saturating_mul(u64::from(fps.0));
+                if width_sb > max_width_sb || samples > MAX_TILE_AREA || per_second > MAX_TILE_RATE.saturating_mul(u64::from(fps.1.max(1))) {
+                    continue;
+                }
+                return Some(Tiles {
+                    sb_cols,
+                    sb_rows,
+                    cols_log2,
+                    rows_log2,
+                    min_cols_log2,
+                    min_rows_log2: min_tiles_log2.saturating_sub(cols_log2),
+                    max_cols_log2,
+                    max_rows_log2,
+                    width_sb,
+                    height_sb,
+                    cols: sb_cols.div_ceil(width_sb.max(1)),
+                    rows: sb_rows.div_ceil(height_sb.max(1)),
+                });
+            }
         }
+        None
     }
 
     pub(crate) fn count(&self) -> u32 {
@@ -347,8 +394,14 @@ pub(crate) fn frame_header(tiles: &Tiles, tools: &Tools, pic: &Picture, ctl: Con
     w.write_bit(false); // disable_frame_end_update_cdf
     // tile_info()
     w.write_bit(true); // uniform_tile_spacing_flag
+    for _ in tiles.min_cols_log2..tiles.cols_log2 {
+        w.write_bit(true); // increment_tile_cols_log2
+    }
     if tiles.cols_log2 < tiles.max_cols_log2 {
         w.write_bit(false); // increment_tile_cols_log2
+    }
+    for _ in tiles.min_rows_log2..tiles.rows_log2 {
+        w.write_bit(true); // increment_tile_rows_log2
     }
     if tiles.rows_log2 < tiles.max_rows_log2 {
         w.write_bit(false); // increment_tile_rows_log2
@@ -546,6 +599,11 @@ mod tests {
         Params { codec: crate::Codec::Av1, width, height, fps: (30, 1), rate: Rate::Quality(23), gop: 60 }
     }
 
+    /// The tiles of a `width` × `height` frame at 30 frames per second.
+    fn tiles(width: u32, height: u32) -> Tiles {
+        Tiles::of(width, height, (30, 1)).unwrap()
+    }
+
     const DEFAULT: Tools = Tools { tx_mode: TX_MODE_SELECT, filter: SWITCHABLE, tile_size_bytes: 4, obu_size_bytes: 4, max_tiles: u32::MAX };
 
     /// The fields of a frame header this crate writes, read from AV1 5.9 by a reader of its own,
@@ -691,7 +749,7 @@ mod tests {
 
     #[test]
     fn frame_headers_read_back_with_the_offsets_the_driver_rewrites() {
-        let tiles = Tiles::of(256, 144);
+        let tiles = self::tiles(256, 144);
         let key = frame_header(&tiles, &DEFAULT, &Picture { idr: true, order: 0, idr_id: 0 }, Control::Cqp(23));
         // Worked out bit by bit from AV1 5.9: a shown key frame, base_q_idx 115, deblocking level
         // 19 in all four fields, TX_MODE_SELECT, with a 4-byte obu_size of 8.
@@ -712,12 +770,21 @@ mod tests {
         // Four tiles, one filter, TX_MODE_LARGEST, 2-byte OBU sizes, rate control and a wrapped
         // order hint.
         let tools = Tools { tx_mode: TX_MODE_LARGEST, filter: 1, tile_size_bytes: 2, obu_size_bytes: 2, max_tiles: 64 };
-        let tiles = Tiles::of(7680, 4320);
+        let tiles = self::tiles(7680, 4320);
         let h = frame_header(&tiles, &tools, &Picture { idr: false, order: 300, idr_id: 0 }, Control::Cbr(20_000_000));
         let r = read(&h.obu, (120, 68));
         assert_eq!((r.order_hint, r.filter, r.tile_log2, r.base_q_idx, r.levels, r.tx_mode_select), (44, Some(1), (1, 1), 130, vec![22; 4], false));
         assert_eq!(r.at, (h.qindex_bit as usize, h.loop_filter_bit as usize, h.bits as usize));
         assert_eq!(h.obu.len(), 3 + (h.bits as usize - 24).div_ceil(8));
+
+        // Past the syntax's fewest tiles, the increment bits step up to the grid the session uses.
+        for (width, height, fps, log2) in [(7680, 4320, (120, 1), (1, 2)), (4032, 4672, (30, 1), (0, 2)), (3840, 2160, (120, 1), (0, 1))] {
+            let tiles = Tiles::of(width, height, fps).unwrap();
+            let h = frame_header(&tiles, &DEFAULT, &Picture { idr: true, order: 0, idr_id: 0 }, Control::Cqp(23));
+            let r = read(&h.obu, (tiles.sb_cols, tiles.sb_rows));
+            assert_eq!((r.tile_log2, (u32::from(tiles.cols_log2), u32::from(tiles.rows_log2))), (log2, log2), "{width}x{height} at {fps:?}");
+            assert_eq!(r.at, (h.qindex_bit as usize, h.loop_filter_bit as usize, h.bits as usize));
+        }
     }
 
     #[test]
@@ -736,27 +803,46 @@ mod tests {
         assert!(!fits_a_level(8192, 8192, (1, 1)));
         assert!(!fits_a_level(16386, 2, (1, 1)), "past MaxHSize");
         assert!(fits_a_level(7680, 4320, (120, 1)) && !fits_a_level(7680, 4320, (130, 1)));
+        // Levels 2.0 to 3.1 take 150 frame headers a second and the others 300.
+        assert_eq!(level(160, 120, (30, 1), 0), 0, "2.0");
+        assert_eq!(level(160, 120, (150, 1), 0), 0, "150 frame headers a second");
+        assert_eq!(level(160, 120, (200, 1), 0), 8, "200 frame headers a second need 4.0");
+        assert_eq!(level(160, 120, (300_001, 2000), 0), 8, "a rate just above 150");
+        assert!(fits_a_level(160, 120, (300, 1)) && !fits_a_level(160, 120, (301, 1)));
+        assert!(!fits_a_level(160, 120, (300_001, 1000)), "a rate just above 300");
         assert_eq!(super::super::nominal_bitrate(&Params { width: 4096, height: 4096, fps: (240, 1), ..p(4096, 4096) }), MAX_MAIN_BPS);
     }
 
     #[test]
     fn tiles_are_uniform_and_as_few_as_the_size_allows() {
-        let one = Tiles::of(1920, 1080);
+        let one = tiles(1920, 1080);
         assert_eq!((one.sb_cols, one.sb_rows, one.cols, one.rows, one.max_cols_log2, one.max_rows_log2), (30, 17, 1, 1, 5, 5));
-        let t = Tiles::of(4096, 2304);
+        let t = tiles(4096, 2304);
         assert_eq!((t.cols, t.rows), (1, 1), "MAX_TILE_WIDTH and MAX_TILE_AREA exactly");
-        let wide = Tiles::of(4160, 64);
+        let wide = tiles(4160, 64);
         assert_eq!((wide.cols_log2, wide.cols, wide.width_sb, wide.rows), (1, 2, 33, 1));
-        let tall = Tiles::of(4096, 2368);
+        let tall = tiles(4096, 2368);
         assert_eq!((tall.cols, tall.rows_log2, tall.rows), (1, 1, 2), "past MAX_TILE_AREA the frame splits in rows");
-        let t = Tiles::of(7680, 4320);
+        let t = tiles(7680, 4320);
         assert_eq!((t.cols_log2, t.rows_log2, t.cols, t.rows, t.width_sb, t.height_sb, t.count()), (1, 1, 2, 2, 60, 34, 4));
         let (w, h) = t.sizes();
         assert_eq!((&w[..3], &h[..3]), (&[59, 59, 0][..], &[33, 33, 0][..]));
-        let (w, _) = Tiles::of(4160, 64).sizes();
+        let (w, _) = tiles(4160, 64).sizes();
         assert_eq!(&w[..3], &[32, 31, 0], "the last column takes the rest");
-        let tiny = Tiles::of(2, 2);
+        let tiny = tiles(2, 2);
         assert_eq!((tiny.sb_cols, tiny.sb_rows, tiny.count(), tiny.max_cols_log2), (1, 1, 1, 0));
+
+        // Two rows of 37 superblocks make 4032 × 2368 tiles, past MAX_TILE_AREA: four rows of 19.
+        let rounded = tiles(4032, 4672);
+        assert_eq!((rounded.cols_log2, rounded.rows_log2, rounded.min_rows_log2, rounded.height_sb, rounded.count()), (0, 2, 1, 19, 4));
+        // At 120 frames per second a tile codes at most 4,902,092 luma samples a frame.
+        assert_eq!(Tiles::of(3840, 2160, (60, 1)).map(|t| t.count()), Some(1), "8,294,400 samples at 60 frames per second");
+        let fast = Tiles::of(3840, 2160, (120, 1)).unwrap();
+        assert_eq!((fast.cols_log2, fast.rows_log2, fast.height_sb, fast.count()), (0, 1, 17, 2));
+        let big = Tiles::of(7680, 4320, (120, 1)).unwrap();
+        assert_eq!((big.cols_log2, big.rows_log2, big.width_sb, big.height_sb, big.count()), (1, 2, 60, 17, 8));
+        assert_eq!(Tiles::of(7680, 4320, (60, 1)).map(|t| t.count()), Some(4), "3840 × 2176 at 60 frames per second fits");
+        assert_eq!(Tiles::of(16, 16, (u32::MAX, 1)), None, "one superblock coded faster than any tile may be");
     }
 
     #[test]
@@ -788,7 +874,7 @@ mod tests {
         assert_eq!((seq.seq_fields, seq.order_hint_bits_minus_1), (1 << 8 | 1 << 17 | 1 << 18, 7), "order hints, 4:2:0");
         assert_eq!(av1_sequence(&params, 9, Control::Cbr(6_000_000)).bits_per_second, 6_000_000);
 
-        let tiles = Tiles::of(1920, 1080);
+        let tiles = self::tiles(1920, 1080);
         let key_pic = Picture { idr: true, order: 0, idr_id: 0 };
         let header = frame_header(&tiles, &DEFAULT, &key_pic, Control::Cqp(23));
         let key = av1_picture(&params, &tiles, &DEFAULT, &key_pic, Control::Cqp(23), &header, 10, 9, 5);
@@ -816,7 +902,7 @@ mod tests {
         );
         assert_eq!((inter.byte_offset_frame_hdr_obu_size, inter.size_in_bits_frame_hdr_obu), (1, header.bits));
 
-        let t = Tiles::of(7680, 4320);
+        let t = self::tiles(7680, 4320);
         assert_eq!((av1_tile_group(&t).tg_start, av1_tile_group(&t).tg_end), (0, 3));
         assert_eq!(packed_header(VAEncPackedHeaderPicture, 13), VAEncPackedHeaderParameterBuffer { type_: 2, bit_length: 104, ..Default::default() });
         assert_eq!((base_qindex(Control::Cqp(51)), base_qindex(Control::Cqp(1)), filter_level(255), filter_level(2)), (255, 5, 43, 0));

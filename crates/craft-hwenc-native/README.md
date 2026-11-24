@@ -27,7 +27,7 @@ through the `objc2-video-toolbox`, `objc2-core-media`, `objc2-core-video` and
 | `vt::Encoder` | This runs the hardware H.264 High and HEVC Main encoders of macOS VideoToolbox, from NV12 frames. It has the same `Config`, `encode`, `flush` and `codec_private` as NVENC. A session that VideoToolbox reports as software is not used. Quality is `(100 - 2 × level) / 100`. Bitrate is constant on macOS 13 and later, and otherwise an average bitrate with a one-second ceiling. It uses no B-frames and BT.709 limited range. |
 | `vt::available(codec)` | It reports whether VideoToolbox opens a hardware encoder that writes `codec`. |
 | `vaapi::Encoder` | This runs the VA-API hardware H.264 (High, Main or Constrained Baseline), HEVC Main and AV1 Main (8-bit) encoders on 64-bit Linux (`libva.so.2`, `libva-drm.so.2`), from NV12 frames. It uses the first `/dev/dri/renderD*` node whose driver encodes the codec. It has the same `Config`, `encode`, `flush` and `codec_private` as NVENC. Quality is a constant QP at the level, or a variable bitrate where the driver has no constant QP. Constant bitrate uses a one-second buffer. It writes IDR and P pictures only, and HEVC sizes are multiples of the driver's smallest coding block. |
-| `vaapi::Encoder` for AV1 | The crate writes the sequence header and frame header OBUs and passes them to the driver as packed headers, so the driver must accept packed sequence and picture headers. The stream is BT.709 limited range with 64 × 64 superblocks, 8-bit order hints and uniform tiles, as few as the frame size allows. Every frame is shown, a key frame or an inter frame that refers to the frame before it, and each frame starts from the default probabilities. CDEF, loop restoration, superres, compound and warped prediction, palette, intra block copy, segmentation and delta quantizers are off; a driver that requires one of them does not open. The quality level `q` is base quantizer index `5 × q` (at most 255), and the deblocking level is the quantizer index divided by 6, rounded, at most 63. The packets are OBUs with their sizes and without temporal delimiters, as from NVENC. |
+| `vaapi::Encoder` for AV1 | The crate writes the sequence header and frame header OBUs and passes them to the driver as packed headers, so the driver must accept packed sequence and picture headers. The stream is BT.709 limited range with 64 × 64 superblocks, 8-bit order hints and uniform tiles, as few as the frame size and frame rate allow. Every frame is shown, a key frame or an inter frame that refers to the frame before it, and each frame starts from the default probabilities. CDEF, loop restoration, superres, compound and warped prediction, palette, intra block copy, segmentation and delta quantizers are off; a driver that requires one of them does not open. The quality level `q` is base quantizer index `5 × q` (at most 255), and the deblocking level is the quantizer index divided by 6, rounded, at most 63. The packets are OBUs with their sizes and without temporal delimiters, as from NVENC. |
 | `vaapi::available(codec)` | It reports whether a VA-API driver opens an encoder that writes `codec`. |
 | `vaapi::copy_nv12`, `vaapi::packet` | These are the two passes the VA-API encoder makes over each frame on the CPU: `copy_nv12` copies the frame into a surface's pitched planes, and `packet` turns the coded picture into a packet. |
 | `annexb::nals`, `to_length_prefixed`, `parameter_sets` | `nals` splits an Annex B stream into network abstraction layer (NAL) units. `to_length_prefixed` writes a sample without parameter sets or delimiters, and `parameter_sets` returns the parameter sets. |
@@ -112,9 +112,13 @@ encoder is present; the copy bench writes into heap memory, not a mapped surface
   returns it for AV1 with `Color::Hlg` or `Color::Pq`.
 - `vaapi::Encoder::new` returns `Error::Unsupported` for AV1 when the driver does not accept packed
   sequence and picture headers, requires a coding tool the stream turns off, codes only 4 × 4
-  transforms, or allows fewer tiles than the frame needs, and for a stream above level 6.3.
+  transforms, or allows fewer tiles than the frame needs. It also returns it for an AV1 stream above
+  level 6.3, above 300 frames a second, below 16 pixels a side, or at a constant bitrate above
+  160,000 kbit/s.
 - An AV1 stream whose sequence header changes, or is not Main 4:2:0 at the requested bit depth, is
-  an `Error::Failed`.
+  an `Error::Failed`. So is a VA-API AV1 packet without coded tiles, and a gray first frame that is
+  not a key frame. A VA-API AV1 key frame packet carries the sequence header OBU even when the
+  driver leaves it out.
 
 ## Tests
 
