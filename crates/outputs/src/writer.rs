@@ -275,14 +275,29 @@ impl<'a> Gather<'a> {
     /// The time of the next set of blocks, or `None` while it waits for more. With `ending` (no
     /// more blocks will come), whatever is held is ready.
     pub(crate) fn ready(&mut self, ending: bool) -> Option<Tick> {
+        self.refill();
+        self.settle(ending)
+    }
+
+    /// Moves the next block of each queue into its empty held slot.
+    fn refill(&mut self) {
         for (q, h) in self.queues.iter().zip(&mut self.held) {
             if h.is_none() {
                 *h = q.pop();
             }
         }
+    }
+
+    /// [`Gather::ready`] after its first [`Gather::refill`]. When a queue has a later block waiting,
+    /// the empty slots are filled again first, so a block pushed after the first fill joins its set
+    /// instead of being written as silence and then as a second set at the same time.
+    fn settle(&mut self, ending: bool) -> Option<Tick> {
+        let behind = self.queues.iter().zip(&self.held).any(|(q, h)| h.is_some() && !q.is_empty());
+        if behind {
+            self.refill();
+        }
         let at = self.held.iter().flatten().map(|b| b.pts).min()?;
         let complete = self.held.iter().all(Option::is_some);
-        let behind = self.queues.iter().zip(&self.held).any(|(q, h)| h.is_some() && !q.is_empty());
         (complete || behind || ending).then_some(at)
     }
 
@@ -1040,6 +1055,24 @@ mod tests {
         assert_eq!(gather.ready(true), Some(Tick(12)), "at the end, what is held is written");
         gather.done(Tick(12));
         assert_eq!(gather.ready(true), None);
+    }
+
+    #[test]
+    fn a_block_pushed_after_the_first_fill_joins_its_set() {
+        let pool = studiocraft_media::audio::block_pool();
+        let queues = audio_queues(2);
+        let mut gather = Gather::new(&queues);
+        queues[0].push(block_of(&pool, 0.5, Tick(10)));
+        // The first fill takes the first track's block; the second track has none yet.
+        gather.refill();
+        // Before the check runs, the mixer sends the second track's block for the same time and
+        // the first track's next block.
+        queues[1].push(block_of(&pool, 0.25, Tick(10)));
+        queues[0].push(block_of(&pool, 0.5, Tick(11)));
+        assert_eq!(gather.settle(false), Some(Tick(10)));
+        assert!(gather.block(1, Tick(10)).is_some(), "the second track's block is in the set");
+        gather.done(Tick(10));
+        assert_eq!(gather.ready(true), Some(Tick(11)), "the next set is the next time, not Tick(10) again");
     }
 
     #[test]

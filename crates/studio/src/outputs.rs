@@ -762,6 +762,14 @@ struct Plan {
     tracks: Vec<usize>,
 }
 
+/// An error when `planned` is a recording that writes no audio track.
+fn check_tracks(planned: &Plan, kind: OutputKind) -> Result<(), StudioError> {
+    if kind == OutputKind::Recording && planned.tracks.is_empty() {
+        return Err(StudioError::Output("choose at least one audio track to record in the profile's output.recording_tracks setting".into()));
+    }
+    Ok(())
+}
+
 /// How profile `p` starts the output `kind`.
 fn plan(p: &Profile, kind: OutputKind) -> Plan {
     match kind {
@@ -1497,9 +1505,7 @@ impl Studio {
             return Err(StudioError::Output("nothing can be recorded or streamed without the graphics device".into()));
         }
         let mut planned = plan(&self.profile, kind);
-        if kind == OutputKind::Recording && planned.tracks.is_empty() {
-            return Err(StudioError::Output("choose at least one audio track to record in Settings › Output".into()));
-        }
+        check_tracks(&planned, kind)?;
         // The key the stream's automatic checks are kept under, recorded once the stream starts.
         let mut check_key = None;
         if kind == OutputKind::Streaming {
@@ -2425,6 +2431,20 @@ mod tests {
         assert_eq!(streams(&p, OutputKind::Recording), (vec![1, 2, 5], named), "in track order, each named");
         for kind in [OutputKind::Streaming, OutputKind::Replay] {
             assert_eq!(streams(&p, kind), (vec![], vec![]), "{kind:?} takes the program mix");
+        }
+    }
+
+    #[test]
+    fn a_recording_without_tracks_names_the_profile_setting() {
+        let mut p = Profile::default();
+        assert!(check_tracks(&plan(&p, OutputKind::Recording), OutputKind::Recording).is_ok());
+        p.output.recording_tracks = MixTracks::from_bits(0);
+        let Err(StudioError::Output(m)) = check_tracks(&plan(&p, OutputKind::Recording), OutputKind::Recording) else {
+            panic!("a recording without tracks started")
+        };
+        assert!(m.contains("output.recording_tracks"), "{m}");
+        for kind in [OutputKind::Streaming, OutputKind::Replay] {
+            assert!(check_tracks(&plan(&p, kind), kind).is_ok(), "{kind:?} takes the program mix");
         }
     }
 
