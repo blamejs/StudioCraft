@@ -167,7 +167,7 @@ compressor, limiter and a three-band equalizer.
 | Image mask | Uses a picture file as an alpha mask (from its brightness or its alpha) or blends it with the source (multiply, add or subtract). The picture is stretched over the source or centered at its own size, and the filter then applies a color and an opacity. |
 | Scroll | Moves a source's picture at a horizontal and a vertical speed in pixels per second. The picture repeats (Loop) or moves out once, in an area whose width and height can be limited. |
 | Sharpen | Makes edges crisper by a Sharpness from 0 to 1. |
-| Gain, noise gate, compressor, limiter and equalizer | Change the level and tone of a source's audio. The noise gate, compressor and limiter report how far they turn the audio down through [`filter.meter`](control-protocol.md#filtermeter). |
+| Gain, noise gate, compressor, limiter and equalizer | Change the level and tone of a source's audio. The noise gate, compressor and limiter report how far they turn the audio down through [`filter.meter`](control-protocol.md#filtermeter). The limiter delays the audio by 248 samples (5.2 ms) at 48 kHz; the other four do not delay it. |
 
 [MECHANICS.md](../MECHANICS.md#video) lists each filter's default values and limits.
 
@@ -204,6 +204,11 @@ A source's Properties window sets two more audio options:
 - **Sync offset** delays the source's audio by 0 to 5000 ms to line it up with its picture.
 - **Monitoring** is off, monitor only, or monitor and output. With monitor only, you hear the
   source, and recordings and streams leave it out.
+
+The window also shows the source's **Filter delay**: how long the audio filters the mixer runs on
+the source delay its audio, in milliseconds, with the number of samples at 48 kHz in its tooltip.
+Disabled filters and filters whose settings were refused are not counted. The MCP tool
+`source_audio` and `document.inspect` report the same delay.
 
 Monitored sources play on the device chosen in Settings › Audio. Monitoring works on Windows and
 macOS.
@@ -416,6 +421,14 @@ A recording that ran while captions ran gets caption files beside it: `<recordin
 was recognized gets no caption files. A file of that name that already
 exists is not replaced. Start or Stop Live Captions can be given a shortcut in Settings › Hotkeys.
 
+While captions run, the stream also carries each finished phrase as closed captions, which viewers
+of platforms that read captions embedded in the video can turn on and off. The captions are
+CEA-608 roll-up captions on channel 1, three rows at the bottom of the picture, sent as
+CEA-708 caption data in an SEI message of the H.264 stream (ITU-T H.264 D.1.6, ATSC A/53 Part 4).
+A phrase goes out within about a second of being finished, at most 32 characters to a row, and the
+captions are erased 8 seconds after the last phrase. Characters that 608 captions cannot show are
+left out. Recordings do not carry closed captions; they get the caption files.
+
 ## Streaming
 
 StudioCraft streams to Real-Time Messaging Protocol (RTMP and RTMPS) servers at a constant
@@ -536,7 +549,13 @@ The first destination uses the profile's stream key; the others have no key of t
 is chosen, so the profile's key is not sent to another service. A service that documents one ingest
 server for every account fills in that server. For the other services the details link to the
 service's page that shows the account's server and key. Edit opens a destination's service, name,
-server and key source. Choosing another service replaces a server that is empty or that is one of
+server and key source. For a service that publishes a list of its ingest servers, List Servers in
+the details fetches that list over HTTPS, following no redirect and using no proxy, reading at most
+256 KiB within 5 s, and sends no stream key. The service sees this computer's address. Ingest server
+then offers the servers of the list, at most 128, with the service's default first and the others
+in the order of their priority; choosing one puts its address in the server field. A typed server is
+kept until a server of the list is chosen. The list is kept for the session, and one that could not
+be read can be fetched again. Choosing another service replaces a server that is empty or that is one of
 the services' documented servers, and keeps any other server. A service without a shared server leaves the server
 empty, and a destination saved for it without a server is turned off. The server field hides its text until Show is pressed. A row
 shows the service it streams to, and the row and the details show a service's logo only where the

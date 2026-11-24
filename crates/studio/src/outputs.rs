@@ -934,6 +934,7 @@ impl Plan {
             ffmpeg,
             stats,
             start,
+            captions: None,
         }
     }
 }
@@ -1639,7 +1640,11 @@ impl Studio {
         let stats = Arc::new(EncoderStats::default());
         let video = VideoFormat { width: v.output_width, height: v.output_height, fps_num: v.fps_num, fps_den: v.fps_den, pixel: PixelFormat::Nv12 };
         let start = self.clock.now();
-        let job = planned.job(encoder, video, program, Arc::clone(&stats), start);
+        let mut job = planned.job(encoder, video, program, Arc::clone(&stats), start);
+        if kind == OutputKind::Streaming {
+            // Phrases live captions finish while the stream runs go out as closed captions.
+            job.captions = Some(self.caption_feed());
+        }
         let output = registry.output(planned.output_id)?;
         let mut settings = planned.settings;
         let reserved = match kind {
