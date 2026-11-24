@@ -32,8 +32,8 @@ impl Duplication {
             return Ok(Grab::Unchanged);
         }
         // Every texture is still being read: the picture stays held and is copied next time.
-        let Some(slot) = self.slots.pick(self.output.released(), now) else { return Ok(Grab::Unchanged) };
-        let Some(ready) = self.slots.fill(slot, now) else { return Err(CaptureError::Lost("the fence values ran out".into())) };
+        let Some(slot) = self.slots.pick(&self.ring, self.output.released(), now) else { return Ok(Grab::Unchanged) };
+        let Some(ready) = self.slots.fill(&self.ring, slot, now) else { return Err(CaptureError::Lost("the fence values ran out".into())) };
         self.output.copy_held(slot, ready)?;
         SharedFrame::new(Arc::clone(&self.ring), slot, ready)
             .map(Grab::Frame)
