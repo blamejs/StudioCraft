@@ -6,9 +6,10 @@
 //! channels, without allocating or locking. The player waits for [`PRIME_BLOCKS`] blocks before it
 //! plays, and plays silence when the queue runs dry until it holds that many again.
 //!
-//! [`Monitor`] opens the device while a source is monitored and closes it when none is. A device
-//! that fails to open, or that fails or disappears while it plays, is reported; monitoring stops
-//! and the mixer and the outputs carry on. The same device is not tried again until the
+//! [`Monitor`] opens the device while a source is monitored and closes it when none is. The sink
+//! opens and closes the device on a thread of its own, so the studio's tick does not wait for the
+//! device. A device that fails to open, or that fails or disappears while it plays, is reported on
+//! a later tick; monitoring stops and the mixer and the outputs carry on. The same device is not tried again until the
 //! monitoring device setting or the set of monitored sources changes.
 
 use std::sync::Arc;
@@ -132,14 +133,14 @@ impl Monitor {
         Monitor { sink, playing: None, device: String::new(), errors: Arc::new(Fifo::new(ERRORS_KEPT)), failed: None }
     }
 
-    /// Whether a device is playing.
+    /// Whether a device has started and is playing.
     pub(crate) fn playing(&self) -> bool {
-        self.playing.is_some()
+        self.playing.as_ref().is_some_and(|p| p.started())
     }
 
-    /// The playing device's format.
+    /// The playing device's format, once it has started.
     pub(crate) fn format(&self) -> Option<Format> {
-        self.playing.as_ref().map(|p| p.format())
+        self.playing.as_ref().filter(|p| p.started()).map(|p| p.format())
     }
 
     /// Play on another sink from now on; the device is opened again on the next [`Monitor::sync`].
@@ -190,8 +191,15 @@ impl Monitor {
         }
     }
 
-    /// Stop monitoring when the playing device reported an error.
+    /// Stop monitoring when the device could not open, or when the playing device reported an
+    /// error.
     pub(crate) fn poll(&mut self, mixer: &Mixer, notices: &mut Vec<Notice>) {
+        if let Some(e) = self.playing.as_ref().and_then(|p| p.open_error()).map(str::to_owned) {
+            self.stop(mixer);
+            self.failed = Some(self.device.clone());
+            notices.push(Notice::new("Audio monitoring could not start: {error}", vec![("error", e)], true));
+            return;
+        }
         let Some(first) = self.errors.pop() else { return };
         while self.errors.pop().is_some() {}
         if self.playing.is_some() {
@@ -204,7 +212,11 @@ impl Monitor {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::{Mutex, OnceLock};
+
     use studiocraft_media::audio::{BLOCK_FRAMES, BLOCK_SAMPLES, block_pool};
+    use studiocraft_platform::PlatformError;
+    use studiocraft_platform::audio::{Fill, OnError};
 
     use super::*;
 
@@ -292,6 +304,89 @@ mod tests {
         let mut odd = vec![9.0; 3];
         p.fill(&mut odd, Format { rate: 0, channels: 0 });
         assert!(odd.iter().all(|s| s.is_finite()), "a device format of zeros does not divide by zero");
+    }
+
+    /// How a held device's open ended: `None` while it is still opening.
+    type Opened = Arc<OnceLock<Result<(), String>>>;
+
+    /// A sink whose devices stay opening until the test sets how each open ended.
+    #[derive(Default)]
+    struct HeldSink {
+        opened: Mutex<Vec<Opened>>,
+    }
+
+    impl HeldSink {
+        fn count(&self) -> usize {
+            self.opened.lock().unwrap().len()
+        }
+
+        fn last(&self) -> Opened {
+            Arc::clone(self.opened.lock().unwrap().last().unwrap())
+        }
+    }
+
+    struct HeldPlaying(Opened);
+
+    impl Playing for HeldPlaying {
+        fn format(&self) -> Format {
+            STEREO_48K
+        }
+
+        fn started(&self) -> bool {
+            self.0.get().is_some_and(|r| r.is_ok())
+        }
+
+        fn open_error(&self) -> Option<&str> {
+            self.0.get().and_then(|r| r.as_ref().err()).map(String::as_str)
+        }
+    }
+
+    impl AudioSink for HeldSink {
+        fn play(&self, _: &str, _: Fill, _: OnError) -> Result<Box<dyn Playing>, PlatformError> {
+            let opened = Arc::new(OnceLock::new());
+            self.opened.lock().unwrap().push(Arc::clone(&opened));
+            Ok(Box::new(HeldPlaying(opened)))
+        }
+    }
+
+    fn held() -> (Monitor, Arc<HeldSink>, Mixer) {
+        let sink = Arc::new(HeldSink::default());
+        (Monitor::new(Arc::clone(&sink) as Arc<dyn AudioSink>), sink, Mixer::detached())
+    }
+
+    #[test]
+    fn a_device_still_opening_is_not_playing_until_it_starts() {
+        let (mut m, sink, mixer) = held();
+        let mut notices = Vec::new();
+        m.sync(true, "default", &mixer, &mut notices);
+        assert_eq!(sink.count(), 1, "sync returns while the device opens");
+        assert_eq!((m.playing(), m.format()), (false, None));
+        m.poll(&mixer, &mut notices);
+        m.sync(true, "default", &mixer, &mut notices);
+        assert!(notices.is_empty(), "a device still opening is not an error");
+        assert_eq!(sink.count(), 1, "a device still opening is not opened again");
+        sink.last().set(Ok(())).unwrap();
+        assert_eq!((m.playing(), m.format()), (true, Some(STEREO_48K)));
+        m.sync(false, "default", &mixer, &mut notices);
+        assert!(!m.playing());
+    }
+
+    #[test]
+    fn a_device_that_fails_while_opening_is_reported_as_not_started() {
+        let (mut m, sink, mixer) = held();
+        let mut notices = Vec::new();
+        m.sync(true, "default", &mixer, &mut notices);
+        sink.last().set(Err("the device is busy".into())).unwrap();
+        m.poll(&mixer, &mut notices);
+        let texts: Vec<String> = notices.iter().filter(|n| n.error).map(|n| n.text()).collect();
+        assert_eq!(texts, ["Audio monitoring could not start: the device is busy"]);
+        assert!(!m.playing());
+        m.poll(&mixer, &mut notices);
+        m.sync(true, "default", &mixer, &mut notices);
+        assert_eq!((notices.len(), sink.count()), (1, 1), "the failed device is reported once and not tried again");
+        m.sync(false, "default", &mixer, &mut notices);
+        m.sync(true, "default", &mixer, &mut notices);
+        assert_eq!(sink.count(), 2, "turning monitoring off and on tries again");
     }
 
     #[test]
