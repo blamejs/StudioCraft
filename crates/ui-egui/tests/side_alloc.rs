@@ -12,7 +12,7 @@ static GLOBAL: &StatsAlloc<System> = &INSTRUMENTED_SYSTEM;
 
 #[test]
 fn comparing_the_docks_with_the_built_in_layouts_does_not_allocate() {
-    let docks = [Docks::default(), Docks { order: [1, 0, 3, 2], ..Docks::default() }];
+    let docks = [Docks::default(), Docks { order: [1, 0, 3, 2, 4], ..Docks::default() }];
     let mut alike = 0;
     let region = Region::new(GLOBAL);
     for d in &docks {

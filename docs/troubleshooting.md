@@ -9,7 +9,7 @@ bold label is the symptom or the message the app shows.
 found".** MP4 and MOV recordings, recordings at the Lossless quality level, and
 recordings with x264 or an `ffmpeg` hardware encoder run in a separately installed `ffmpeg`, Media
 file sources play files other than Ogg Vorbis at 8 to 192 kHz through it, and StudioCraft could not find it. Install `ffmpeg` so that it is on the `PATH`, or set its location
-in Settings › Output › ffmpeg program. Tools › Available Encoders lists the encoders the installed
+in Settings › Output › Advanced options › ffmpeg program. Tools › Available Encoders lists the encoders the installed
 `ffmpeg` offers, and says when `ffmpeg` was not found. To record without `ffmpeg`, set the Video
 encoder in Settings › Output to H.264 (built in) and record MKV files.
 
@@ -172,8 +172,11 @@ and the rest of the app keeps running.
 
 **"the camera is already open in another format".** Another camera source opened the same camera
 first, in a different format. The camera stays in that format while any source shows it, and this
-source shows the picture in that format. Set this source to the format the camera is open in, or
-remove every source of that camera and add them again with the format you want.
+source shows the picture in that format. Set this source to the format the camera is open in. To
+change the format for every source of that camera, remove them all, then add one source, set its
+format in Properties and wait for its picture before you add the others. A new source opens with
+the default settings, so two sources added before either is set each keep the other in the old
+format.
 
 **"the camera is still closing".** A capture of the same camera is still ending. The source tries
 again on its own.

@@ -55,6 +55,7 @@ pub const UI_COMMANDS: &[(&str, &str)] = &[
     ("dock.sources", "Sources"),
     ("dock.mixer", "Audio Mixer"),
     ("dock.app_audio", "Application Audio"),
+    ("dock.health", "Health"),
     ("dock.controls", "Output Controls"),
     ("dock.transitions", "Transition Controls"),
     ("dock.move", "Move Dock"),
@@ -201,11 +202,13 @@ pub fn ui_params(id: &str) -> &'static str {
             "enabled?: boolean, first_delay_s?: integer (1 to 60), max_delay_s?: integer (first_delay_s to 600), max_tries?: integer (1 to 100)"
         }
         "dock.move" => {
-            "dock: string (scenes, sources, mixer or app_audio), to: string (left or up for the dock before it in its region, right or down for the one after it)"
+            "dock: string (scenes, sources, mixer, app_audio or health), to: string (left or up for the dock before it in its region, right or down for the one after it)"
         }
-        "dock.float" => "dock: string (scenes, sources, mixer or app_audio), floating: boolean (true for a window of its own, false for the strip)",
+        "dock.float" => {
+            "dock: string (scenes, sources, mixer, app_audio or health), floating: boolean (true for a window of its own, false for the strip)"
+        }
         "dock.region" => {
-            "dock: string (scenes, sources, mixer or app_audio), region: string (left or right for the column beside the canvas, bottom for the strip under it; a dock in a window of its own is docked there)"
+            "dock: string (scenes, sources, mixer, app_audio or health), region: string (left or right for the column beside the canvas, bottom for the strip under it; a dock in a window of its own is docked there)"
         }
         "dock.layout_save" => "name?: string (without it the window asks for one; the built-in layouts' names are refused)",
         "dock.layout_apply" => "name: string (a saved layout, or a built-in one: Set up, Live, Review or Classic)",
@@ -507,6 +510,7 @@ pub fn menu_bar(s: &MenuState) -> MenuBar {
             check("dock.sources", "Sources"),
             check("dock.mixer", "Audio Mixer"),
             check("dock.app_audio", "Application Audio"),
+            check("dock.health", "Health"),
             // The two groups of the output bar: Edit and Studio, Record and Go Live; and the
             // transition picker with its duration.
             check("dock.controls", "Output Controls"),
@@ -679,6 +683,7 @@ mod tests {
                     check("dock.sources", "Sources"),
                     check("dock.mixer", "Audio Mixer"),
                     check("dock.app_audio", "Application Audio"),
+                    check("dock.health", "Health"),
                     check("dock.controls", "Output Controls"),
                     check("dock.transitions", "Transition Controls"),
                     plain("dock.layout_save", "Save Dock Layout…"),

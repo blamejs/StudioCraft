@@ -197,6 +197,8 @@
 	No filters yet.	Ainda não há filtros.
 	No graphics device: the preview is off	Nenhum dispositivo gráfico: a prévia está desativada
 	No sources in this scene. Add one with +.	Esta cena não tem fontes. Adicione uma com +.
+	Heard in every scene	Ouvido em todas as cenas
+	No window	Sem janela
 	Noise gate	Noise gate
 	None	Nenhum
 	not in this ffmpeg	ausente neste ffmpeg
@@ -425,16 +427,16 @@
 	Hardware acceleration	Aceleração de hardware
 	Power saving	Economia de energia
 	Software (slower)	Software (mais lento)
-	Compact (small files)	Compacta (arquivos pequenos)
+	Compact	Compacta
 	Duplicate Profile	Duplicar perfil
 	Duplicate Scene Collection	Duplicar coleção de cenas
-	Lossless (very large files)	Sem perdas (arquivos muito grandes)
+	Lossless	Sem perdas
 	Move Down	Descer
 	Move to Bottom	Mover para o fim
 	Move to Top	Mover para o início
 	Move Up	Subir
 	New Scene Collection	Nova coleção de cenas
-	Pristine (large files)	Impecável (arquivos grandes)
+	Pristine	Impecável
 	Rename Profile	Renomear perfil
 	Rename Scene Collection	Renomear coleção de cenas
 	Unlock	Desbloquear
@@ -488,6 +490,12 @@ menu	Transform	Transformar
 	Audio tracks write this source to a WAV file of its own (Settings › Output › Audio tracks)	As faixas de áudio gravam esta fonte em um arquivo WAV próprio (Configurações › Saída › Faixas de áudio)
 	Audio tracks	Faixas de áudio
 	Write each recorded source and the program mix to its own WAV file	Gravar cada fonte gravada e a mixagem do programa em um arquivo WAV próprio
+	Smaller files for long sessions	Arquivos menores para sessões longas
+	A good fit for most recordings	Boa para a maioria das gravações
+	Almost no loss, for editing later	Quase sem perdas, para editar depois
+	No loss at all, in very large files	Nenhuma perda, em arquivos muito grandes
+	Advanced options	Opções avançadas
+	ffmpeg program, write buffer, file size, audio editor	programa ffmpeg, buffer de gravação, tamanho do arquivo, editor de áudio
 	Write them while	Gravá-las enquanto
 	Include the program mix	Incluir a mixagem do programa
 	Write buffer	Buffer de gravação
@@ -633,3 +641,33 @@ menu	Transform	Transformar
 	Move Under the Canvas	Mover para baixo da tela de pintura
 	Resize the column	Redimensionar a coluna
 	Place Dock	Posicionar painel
+	Health	Estado
+	Destinations	Destinos
+	Streaming…	Transmissão…
+	{live} of {count} live	{live} de {count} ao vivo
+	Not streaming	Sem transmissão
+	Live · sending the pause screen	Ao vivo · enviando a tela de pausa
+	Encoder	Codificador
+	Frames are late or skipped	Há quadros atrasados ou pulados
+	No frames late or skipped	Nenhum quadro atrasado ou pulado
+	Tracks	Faixas
+	Files	Arquivos
+	{mb} MB	{mb} MB
+	Disk free	Espaço livre
+	{gb} GB	{gb} GB
+	Audio lost	Áudio perdido
+	{lost} s	{lost} s
+	Loading…	Carregando…
+	Live captions	Legendas ao vivo
+	Program loudness	Loudness do programa
+	No program audio yet	Ainda sem áudio do programa
+	Below the target band	Abaixo da faixa-alvo
+	Above the target band	Acima da faixa-alvo
+	In the target band	Dentro da faixa-alvo
+	Short-term	Curto prazo
+	Integrated	Integrada
+	True peak	Pico real
+	Target band	Faixa-alvo
+	{value} LUFS	{value} LUFS
+	{value} dBTP	{value} dBTP
+	{low} to {high} LUFS	{low} a {high} LUFS

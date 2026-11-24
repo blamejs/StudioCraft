@@ -16,6 +16,7 @@ mod follow;
 pub mod fonts;
 mod forms;
 pub mod hardware;
+mod health;
 mod icons;
 pub mod kit;
 mod logos;
@@ -309,6 +310,8 @@ pub struct StudioApp {
     /// Counts the dock windows' resets this session. It is part of their ids, so a window opened
     /// after a reset keeps nothing from the old one.
     dock_window_gen: u32,
+    /// What the Health dock drew last, for `ui.inspect`.
+    health_seen: health::Seen,
     /// Where the dock strip was drawn last.
     dock_strip: Option<egui::Rect>,
     /// Where the left and right columns were drawn last.
@@ -447,6 +450,7 @@ impl StudioApp {
             floating_rects: Vec::new(),
             dock_window_rect: [None; store::DOCK_COUNT],
             dock_window_gen: 0,
+            health_seen: health::Seen::default(),
             dock_strip: None,
             dock_columns: [None; 2],
             docks_collapsed: false,
@@ -1377,6 +1381,7 @@ impl StudioApp {
             "dock.sources" => return Ok(self.toggle_pref(|p| &mut p.docks.sources)),
             "dock.mixer" => return Ok(self.toggle_pref(|p| &mut p.docks.mixer)),
             "dock.app_audio" => return Ok(self.toggle_pref(|p| &mut p.docks.app_audio)),
+            "dock.health" => return Ok(self.toggle_pref(|p| &mut p.docks.health)),
             "dock.transitions" => return Ok(self.toggle_pref(|p| &mut p.docks.transitions)),
             "dock.controls" => return Ok(self.toggle_pref(|p| &mut p.docks.controls)),
             "dock.move" => {
@@ -2335,6 +2340,7 @@ impl StudioApp {
         self.dock_rects.clear();
         self.dock_strip = None;
         self.dock_columns = [None; 2];
+        self.health_seen = health::Seen::default();
         let now = Instant::now();
         let dt = self.last_frame.map_or(0.0, |t| now.duration_since(t).as_secs_f32());
         self.last_frame = Some(now);
@@ -2370,6 +2376,7 @@ impl StudioApp {
             keymap: &self.keymap,
             pictures: &self.scene_pictures,
             grid: self.store.prefs().scene_grid,
+            health: &mut self.health_seen,
         };
         let studio = &self.studio;
         let rects = &mut self.dock_rects;
@@ -2478,11 +2485,12 @@ impl StudioApp {
         let new_columns = [new_left.filter(|w| *w != column_widths[0]), new_right.filter(|w| *w != column_widths[1])];
         if new_widths.is_some() || new_height.is_some_and(|h| h != height) || new_columns.iter().any(Option::is_some) {
             self.store.update(|p| {
-                if let Some([a, b, c, e]) = new_widths {
+                if let Some([a, b, c, e, h]) = new_widths {
                     p.docks.scenes_width = a;
                     p.docks.sources_width = b;
                     p.docks.mixer_width = c;
                     p.docks.app_audio_width = e;
+                    p.docks.health_width = h;
                 }
                 if let Some(h) = new_height {
                     p.docks.height = h;
@@ -2500,6 +2508,7 @@ impl StudioApp {
             0 => docks::scenes(ui, studio, st, acts),
             1 => docks::sources(ui, studio, st, acts),
             3 => docks::app_audio(ui, studio, st, acts),
+            4 => health::dock(ui, studio, st, acts),
             _ => docks::mixer(ui, studio, st, acts),
         }
     }
@@ -2523,6 +2532,7 @@ impl StudioApp {
             keymap: &self.keymap,
             pictures: &self.scene_pictures,
             grid: self.store.prefs().scene_grid,
+            health: &mut self.health_seen,
         };
         let studio = &self.studio;
         let mut changed: Vec<(usize, [f32; 2], [f32; 2])> = Vec::new();
@@ -2545,12 +2555,7 @@ impl StudioApp {
                 .limits(SizeLimits::at_least(least))
                 .sized(Sizing::Fill)
                 .actions([])
-                .show_group(ui, |ui, _| match i {
-                    0 => docks::scenes(ui, studio, &mut st, acts),
-                    1 => docks::sources(ui, studio, &mut st, acts),
-                    3 => docks::app_audio(ui, studio, &mut st, acts),
-                    _ => docks::mixer(ui, studio, &mut st, acts),
-                });
+                .show_group(ui, |ui, _| Self::draw_dock(i, ui, studio, &mut st, acts));
             let window = shown.output.response.rect;
             // The place and size are saved when a move or resize ends; while it runs, the window
             // shows at the rect it reported. A canceled one saves nothing. A resize keeps the saved
@@ -3028,7 +3033,7 @@ impl eframe::App for StudioApp {
 }
 
 /// The state of a recording or stream in the interface language.
-fn output_status(o: &studiocraft_studio::OutputState) -> String {
+pub(crate) fn output_status(o: &studiocraft_studio::OutputState) -> String {
     use studiocraft_plugin::OutputStatus;
     match (&o.status, o.stopping) {
         (_, true) => tl!("Stopping…").to_string(),
@@ -3067,7 +3072,7 @@ fn pause_item(paused: Option<Option<u64>>, for_ms: Option<u64>) -> Option<(Strin
 /// hover text. It shows while a take runs or finishes, and after a take stopped early while the
 /// recording or the stream that started it still runs.
 /// `source_limit` says that sources set to record were left out by the limit on tracks at once.
-fn tracks_item(s: &studiocraft_studio::AudioTracksStatus, outputs_run: bool, source_limit: bool) -> Option<(String, bool, String)> {
+pub(crate) fn tracks_item(s: &studiocraft_studio::AudioTracksStatus, outputs_run: bool, source_limit: bool) -> Option<(String, bool, String)> {
     use studiocraft_studio::AudioTracksState as S;
     let t = s.seconds() as u64;
     let clock = format!("{:02}:{:02}:{:02}", t / 3600, (t / 60) % 60, t % 60);

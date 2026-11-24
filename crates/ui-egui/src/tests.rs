@@ -1227,6 +1227,35 @@ fn the_application_audio_dock_is_hidden_until_the_docks_menu_shows_it() {
     assert!(!docks(&mut a).contains(&json!("app_audio")));
 }
 
+#[test]
+fn the_health_dock_is_hidden_until_the_docks_menu_shows_it_and_its_buttons_run_commands() {
+    let mut a = app();
+    let ctx = crate::test_context();
+    let docks = |a: &mut StudioApp| -> Vec<Value> {
+        a.ui_inspect(&ctx)["docks"].as_array().cloned().unwrap_or_default().into_iter().map(|d| d["dock"].clone()).collect()
+    };
+    frame(&mut a, &ctx, vec![]);
+    assert!(!docks(&mut a).contains(&json!("health")));
+    assert_eq!(a.ui_inspect(&ctx)["health"], Value::Null, "nothing is reported while it is hidden");
+    assert_eq!(a.item_state("dock.health").checked, Some(false));
+    assert_eq!(run(&mut a, &ctx, "dock.health", json!({})).unwrap(), json!({"on": true}));
+    for _ in 0..2 {
+        frame(&mut a, &ctx, vec![]);
+    }
+    assert_eq!(a.item_state("dock.health").checked, Some(true));
+    assert_eq!(docks(&mut a), [json!("scenes"), json!("sources"), json!("mixer"), json!("health")]);
+    let health = a.ui_inspect(&ctx)["health"].clone();
+    let section = |key: &str| health["sections"].as_array().and_then(|s| s.iter().find(|s| s["section"] == json!(key)).cloned());
+    assert_eq!(section("captions").map(|s| s["status"].clone()), Some(json!("Off")));
+    assert_eq!(section("loudness").map(|s| s["status"].clone()), Some(json!("No program audio yet")));
+    let buttons = section("replay").map(|s| s["buttons"].clone()).unwrap_or_default();
+    assert_eq!(buttons[1]["command"], json!("replay.toggle"));
+    assert_eq!(buttons[0]["enabled"], json!(false), "Save Replay waits for the replay buffer");
+    assert_eq!(run(&mut a, &ctx, "dock.health", json!({})).unwrap(), json!({"on": false}));
+    frame(&mut a, &ctx, vec![]);
+    assert!(!docks(&mut a).contains(&json!("health")));
+}
+
 fn rect_of(v: &Value) -> egui::Rect {
     let f = |k: &str| v[k].as_f64().unwrap_or(f64::NAN) as f32;
     egui::Rect::from_min_size(egui::pos2(f("x"), f("y")), egui::vec2(f("width"), f("height")))
@@ -1496,8 +1525,8 @@ fn dock_move_rearranges_the_strip_and_reset_puts_it_back() {
     let size = egui::vec2(1280.0, 800.0);
     frame_at(&mut a, &ctx, size);
     let r = run(&mut a, &ctx, "dock.move", json!({"dock": "mixer", "to": "left"})).unwrap();
-    // The order lists every dock, the hidden Application Audio dock included.
-    assert_eq!(r, json!({"moved": true, "order": ["scenes", "mixer", "sources", "app_audio"]}));
+    // The order lists every dock, the hidden Application Audio and Health docks included.
+    assert_eq!(r, json!({"moved": true, "order": ["scenes", "mixer", "sources", "app_audio", "health"]}));
     frame_at(&mut a, &ctx, size);
     assert_eq!(dock_order(&a, &ctx), ["scenes", "mixer", "sources"]);
     let widths: Vec<f32> = a.ui_inspect(&ctx)["docks"].as_array().unwrap_or(&Vec::new()).iter().map(|d| rect_of(&d["rect"]).width()).collect();
@@ -1538,7 +1567,8 @@ fn a_right_click_on_a_dock_title_opens_the_dock_menu() {
     let title = rect_of(&v["docks"][1]["title"]);
     let body = rect_of(&v["docks"][1]["rect"]);
     assert!(title.width() > 0.0 && body.contains(title.center()), "{title:?} in {body:?}");
-    for events in right_click(egui::pos2(body.center().x, body.bottom() - 10.0)) {
+    // The scene has no items, so the room under the header holds no row.
+    for events in right_click(egui::pos2(body.center().x, title.bottom() + 20.0)) {
         frame_with(&mut a, &ctx, size, events);
     }
     assert!(!egui::Popup::is_any_open(&ctx), "a right-click below the header opens no dock menu");
@@ -1682,6 +1712,11 @@ fn the_built_in_layouts_put_docks_beside_the_canvas_and_classic_is_the_reset_str
     let v = a.ui_inspect(&ctx);
     assert_eq!((drawn_in(&v, "left"), drawn_in(&v, "bottom")), (vec!["sources".into(), "mixer".into()], vec!["scenes".into()]));
     assert_eq!(rect_of(&v["dock_columns"]["left"]["rect"]).width(), 269.0);
+    assert_eq!(drawn_in(&v, "right"), vec!["health".to_string()], "Live shows Health in the right column");
+    let right = rect_of(&v["dock_columns"]["right"]["rect"]);
+    assert_eq!((right.right(), right.width()), (1280.0, 293.0), "292 points and the 1 point line");
+    let titles: Vec<&str> = v["health"]["sections"].as_array().map(|s| s.iter().filter_map(|s| s["title"].as_str()).collect()).unwrap_or_default();
+    assert_eq!(titles, ["Destinations", "Encoder", "Audio tracks", "Replay buffer", "Live captions", "Program loudness"]);
 
     run(&mut a, &ctx, "dock.layout_apply", json!({"name": "Review"})).unwrap();
     frame_at(&mut a, &ctx, size);
@@ -2530,7 +2565,7 @@ fn rename_in_an_audio_mixer_channel_menu_renames_a_global_audio_source_in_the_na
     click_at(&mut a, &ctx, size, rename.center());
     let what = a.naming.as_ref().map(|n| n.what);
     let Some(Named::RenameSource(source)) = what else { panic!("Rename opened no name prompt: {what:?}") };
-    assert!(global.contains(&source), "the channel is a global audio source, which the Sources dock does not list");
+    assert!(global.contains(&source), "the channel is a global audio source");
     assert_eq!(a.ui_inspect(&ctx)["dialogs"]["prompt"]["title"], json!("Rename Source"));
     let name_of = |a: &StudioApp, id: SourceId| a.studio().collection().source(id).map(|s| s.name.clone());
     let other = global.iter().copied().find(|id| *id != source).and_then(|id| name_of(&a, id)).unwrap_or_default();
@@ -2540,6 +2575,69 @@ fn rename_in_an_audio_mixer_channel_menu_renames_a_global_audio_source_in_the_na
     assert_eq!(name_of(&a, source).as_deref(), Some("Speakers"));
     run(&mut a, &ctx, "edit.undo", json!({})).unwrap();
     assert_ne!(name_of(&a, source).as_deref(), Some("Speakers"), "Edit › Undo puts the old name back");
+}
+
+/// The bounds of the nodes named `name` in `tree` whose center lies in `area`.
+fn named_in(tree: &craft_ui::testing::access::AccessTree, name: &str, area: egui::Rect) -> Vec<egui::Rect> {
+    tree.keys()
+        .into_iter()
+        .filter(|k| tree.name_of(*k) == Some(name))
+        .filter_map(|k| tree.bounds_of(k))
+        .filter(|r| area.contains(r.center()))
+        .collect()
+}
+
+#[test]
+fn the_sources_dock_lists_the_global_audio_sources_under_their_heading_and_a_row_menu_renames_one() {
+    let mut a = app();
+    let ctx = crate::test_context();
+    let size = egui::vec2(1280.0, 800.0);
+    run(&mut a, &ctx, "source.add", json!({"kind": "color", "name": "Back"})).unwrap();
+    for _ in 0..2 {
+        frame_at(&mut a, &ctx, size);
+    }
+    let v = a.ui_inspect(&ctx);
+    let Some(dock) = v["docks"].as_array().and_then(|d| d.iter().find(|d| d["dock"] == json!("sources"))).map(|d| rect_of(&d["rect"])) else {
+        panic!("no Sources dock in {v}")
+    };
+    let tree = frame_tree(&mut a, &ctx, size, vec![]);
+    let c = a.studio().collection();
+    let global: Vec<(SourceId, String)> = c.global_audio.iter().filter_map(|id| c.source(*id)).map(|s| (s.id, s.name.clone())).collect();
+    assert_eq!(global.len(), 2, "a new collection has two global audio sources");
+    let Some(back) = named_in(&tree, "Back", dock).first().copied() else { panic!("no Back row in the Sources dock") };
+    let heading = named_in(&tree, "Heard in every scene", dock);
+    assert!(!heading.is_empty(), "the group has its heading");
+    let mut rows = Vec::new();
+    for (_, name) in &global {
+        let Some(row) = named_in(&tree, name, dock).first().copied() else { panic!("no `{name}` row in the Sources dock") };
+        assert!(row.top() >= back.bottom(), "`{name}` is listed under the scene's items: {row:?} {back:?}");
+        assert!(heading.iter().any(|h| h.top() <= row.top()), "`{name}` is under the heading: {heading:?} {row:?}");
+        assert!(dock.contains_rect(row), "`{name}` fits in the dock: {row:?} {dock:?}");
+        rows.push(row);
+    }
+    let (mic, _) = &global[1];
+    for events in right_click(rows[1].center()) {
+        frame_with(&mut a, &ctx, size, events);
+    }
+    let tree = frame_tree(&mut a, &ctx, size, vec![]);
+    for row in ["Properties…", "Filters…"] {
+        assert!(named(&tree, row).is_some(), "the row's menu has {row}");
+    }
+    let Some((rename, false)) = named(&tree, "Rename") else { panic!("the row's menu has no Rename row") };
+    click_at(&mut a, &ctx, size, rename.center());
+    let what = a.naming.as_ref().map(|n| n.what);
+    assert!(matches!(what, Some(Named::RenameSource(s)) if s == *mic), "Rename asks for a new name for the row's source: {what:?}");
+}
+
+#[test]
+fn every_built_in_source_type_has_its_own_type_icon() {
+    let a = app();
+    let kinds: Vec<String> = a.studio().registry().sources().iter().map(|p| p.id().to_string()).collect();
+    assert!(kinds.len() >= 10, "{kinds:?}");
+    for kind in kinds {
+        let src: studiocraft_model::SourceConfig = serde_json::from_value(json!({"id": 1, "kind": kind, "name": "S"})).unwrap();
+        assert_ne!(crate::docks::source_icon(&src), crate::docks::SourceIcon::Set("square"), "{kind} has its own icon");
+    }
 }
 
 #[test]
