@@ -557,13 +557,30 @@ it on each request and when it exits.
 
 ### `pause.*`
 
-`pause.start` takes `{"media"?, "countdown_s"?, "at_zero"?}` and shows the pause screen in the
-program with the scene collection's transition. Each value given replaces its profile setting for
-this pause only: `media` is a picture or video file (`""` for none), `countdown_s` is 0 to 43,200
-seconds (0 for no countdown) and `at_zero` is `keep` or `resume`. A `null` value, a file type that
-is not a picture or video, a path longer than 4,096 bytes or holding a NUL character, and a value
-out of range are errors. While paused, the values given apply at once without a new transition,
-and a given `countdown_s` starts the countdown again. It returns what `pause.status` returns.
+`pause.start` takes `{"media"?, "countdown_s"?, "text"?, "zero_text"?, "at_zero"?, "anchor"?,
+"size_pct"?, "fit"?, "background"?, "mute_scene"?}` and shows the pause screen in the program with
+the scene collection's transition. Each value given replaces its profile setting for this pause
+only:
+
+| Param | Value |
+|-------|-------|
+| `media` | A picture or video file, `""` for none. |
+| `countdown_s` | 0 to 43,200 seconds, 0 for no countdown. |
+| `text` | The countdown text, at most 200 characters with exactly one `{time}`. |
+| `zero_text` | The text shown in place of the countdown at zero, at most 200 characters. |
+| `at_zero` | `keep` or `resume`. |
+| `anchor` | Where the text sits: `top_left`, `top_center`, `top_right`, `middle_left`, `center`, `middle_right`, `bottom_left`, `bottom_center` or `bottom_right`. |
+| `size_pct` | The text's height, 2 to 15 percent of the canvas height. |
+| `fit` | How the picture or video is sized to the canvas: `fit`, `fill` or `stretch`. |
+| `background` | The color under the picture or video, `#rrggbb` or `#rrggbbaa`. |
+| `mute_scene` | `true` fades the program mix out while paused, `false` keeps it. |
+
+A `null` value, a value of the wrong type, a file type that is not a picture or video, a path
+longer than 4,096 bytes or holding a NUL character, a name that is not one of the listed ones, and
+a value out of range are errors. While paused, the values given apply at once without a new
+transition, and a given `countdown_s` starts the countdown again. A changed `mute_scene` fades the
+program mix out or back in over the scene collection's transition length. It returns what
+`pause.status` returns.
 
 `pause.stop` takes no params and shows the program scene again with the scene collection's
 transition. It is an error when the program is not paused. `pause.toggle` pauses with the profile's
