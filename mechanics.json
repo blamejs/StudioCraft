@@ -165,6 +165,8 @@
     {"name": "pause screen mutes the program audio", "group": "output", "value": true, "code": "model::profile::PauseSettings", "estimated": true},
     {"name": "snap distance", "group": "editing", "value": 8, "unit": "screen points", "code": "ui-egui::preview::SNAP_POINTS", "estimated": true},
     {"name": "Alt turns snapping off", "group": "editing", "value": true, "code": "ui-egui::preview::Editor::show", "estimated": true},
+    {"name": "rotate handle step", "group": "editing", "value": 15, "unit": "degrees", "code": "ui-egui::preview::ROTATE_STEP", "estimated": true},
+    {"name": "rotate handle distance from the top edge", "group": "editing", "value": 22, "unit": "screen points", "code": "ui-egui::preview::ROTATE_REACH", "estimated": true},
     {"name": "undo steps kept", "group": "editing", "value": 200, "code": "engine::history::LIMIT", "estimated": true},
     {"name": "undo merge window", "group": "editing", "value": 750, "unit": "ms", "code": "engine::history::COALESCE", "estimated": true},
     {"name": "scene shortcuts", "group": "controls", "value": "Ctrl+1 to Ctrl+9", "code": "ui-egui::commands::SCENE_HOTKEYS", "estimated": true},
