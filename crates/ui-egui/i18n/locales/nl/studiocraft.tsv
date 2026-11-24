@@ -105,6 +105,8 @@
 	Filters…	Filters…
 	Finishing Recording…	Opname afronden…
 	Fit to Screen	Aanpassen aan scherm
+	Flip Horizontal	Horizontaal spiegelen
+	Flip Vertical	Verticaal spiegelen
 	Font	Lettertype
 	Font family	Lettertypefamilie
 	Format	Indeling
@@ -553,3 +555,5 @@ menu	Transform	Transformeren
 	Custom	Aangepast
 	Fill Screen	Scherm vullen
 @msg	The scenes could not be laid out for the new canvas: {error}	De scènes konden niet voor het nieuwe canvas worden ingedeeld: {error}
+	Filter delay	Filtervertraging
+	The audio filters on this source delay its sound by {frames} samples at 48 kHz	De audiofilters van deze bron vertragen het geluid met {frames} samples bij 48 kHz

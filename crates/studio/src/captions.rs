@@ -9,7 +9,8 @@
 //! - The recognizer loads the speech model, then gives the buffered audio to a
 //!   [`LiveCaptioner`]. Its partial phrases and finished phrases go to the [`CaptionBoard`] the
 //!   Live Captions sources draw, and each finished phrase is kept as a cue timed on the studio
-//!   clock.
+//!   clock. Each finished phrase also goes to the caption feed ([`STREAM_PHRASES`] at most wait),
+//!   which a running stream sends as closed captions; the recognizer never waits for the stream.
 //!
 //! `captions.stop` removes the queue. The recognizer finishes what it was given, ends the open
 //! phrase and stops. A recording that ran while captions ran gets caption files beside it when
@@ -46,6 +47,8 @@ const QUEUE_BLOCKS: usize = 64;
 pub(crate) const BUFFER_SECONDS: u64 = 60;
 /// Cues kept for caption files; older ones are dropped first.
 const MAX_CUES: usize = 20_000;
+/// Finished phrases the caption feed holds for a stream; a full feed drops its oldest.
+pub(crate) const STREAM_PHRASES: usize = 64;
 /// How long after a recording stops its caption files wait for its last phrase.
 const SIDECAR_WAIT: Duration = Duration::from_secs(30);
 /// How long closing the studio waits for the recognizer to finish the audio it holds.
@@ -263,8 +266,8 @@ fn sample_tick(base: Tick, n: u64) -> Tick {
     base.saturating_add(Tick::from_units(i64::try_from(n).unwrap_or(i64::MAX), i64::from(craft_speech::SAMPLE_RATE)))
 }
 
-/// Pass the captioner's events to the board and the cues.
-fn publish(events: Vec<LiveEvent>, base: Tick, board: &CaptionBoard, shared: &Shared, now: Tick) {
+/// Pass the captioner's events to the board, the stream's caption feed and the cues.
+fn publish(events: Vec<LiveEvent>, base: Tick, board: &CaptionBoard, feed: &Fifo<String>, shared: &Shared, now: Tick) {
     for e in events {
         match e {
             LiveEvent::Partial { text, .. } => board.set_partial(&text, now),
@@ -273,6 +276,7 @@ fn publish(events: Vec<LiveEvent>, base: Tick, board: &CaptionBoard, shared: &Sh
                 if p.text.trim().is_empty() {
                     continue;
                 }
+                feed.push(p.text.clone());
                 let mut cues = shared.cues.lock().unwrap_or_else(|e| e.into_inner());
                 cues.push_back(craft_captions::Cue {
                     start: sample_tick(base, p.start),
@@ -294,6 +298,7 @@ struct RecognizeJob {
     model: String,
     language: Option<String>,
     board: Arc<CaptionBoard>,
+    feed: Arc<Fifo<String>>,
     clock: studiocraft_media::clock::MasterClock,
 }
 
@@ -319,7 +324,7 @@ fn recognize_loop(job: RecognizeJob, shared: Arc<Shared>) {
             if chunks.is_empty() {
                 if read_all {
                     let events = captioner.flush()?;
-                    publish(events, base, &job.board, &shared, job.clock.now());
+                    publish(events, base, &job.board, &job.feed, &shared, job.clock.now());
                     return Ok(());
                 }
                 std::thread::sleep(IDLE);
@@ -330,7 +335,7 @@ fn recognize_loop(job: RecognizeJob, shared: Arc<Shared>) {
                     Chunk::Audio(a) => captioner.push(&a)?,
                     Chunk::Gap(n) => captioner.gap(n)?,
                 };
-                publish(events, base, &job.board, &shared, job.clock.now());
+                publish(events, base, &job.board, &job.feed, &shared, job.clock.now());
                 shared.final_until.store(sample_tick(base, captioner.finalized_until()).0, Ordering::Release);
             }
         }
@@ -486,6 +491,8 @@ fn valid_language(l: &str) -> bool {
 
 pub(crate) struct Captions {
     board: Arc<CaptionBoard>,
+    /// Finished phrases for the stream, kept for every run.
+    feed: Arc<Fifo<String>>,
     models_dir: PathBuf,
     loader: Loader,
     /// Set when [`Studio::set_caption_loader`] gave the loader.
@@ -511,6 +518,7 @@ impl Captions {
     pub(crate) fn new(board: Arc<CaptionBoard>) -> Self {
         Captions {
             board,
+            feed: Arc::new(Fifo::new(STREAM_PHRASES)),
             models_dir: default_models_dir(),
             loader: speech_loader(),
             own_loader: false,
@@ -584,6 +592,11 @@ impl Studio {
         Arc::clone(&self.captions.board)
     }
 
+    /// The queue of finished phrases a stream sends as closed captions.
+    pub fn caption_feed(&self) -> Arc<Fifo<String>> {
+        Arc::clone(&self.captions.feed)
+    }
+
     /// The model and language of the first Live Captions source in the collection.
     fn caption_source_settings(&self) -> (Option<String>, Option<String>) {
         let source = self.engine.collection().sources.iter().find(|s| s.kind == CAPTIONS_ID);
@@ -630,6 +643,7 @@ impl Studio {
             model: model.clone(),
             language: (language != "auto").then(|| language.clone()),
             board: Arc::clone(&self.captions.board),
+            feed: Arc::clone(&self.captions.feed),
             clock: self.clock,
         };
         let spawn = |name: &str, f: Box<dyn FnOnce() + Send>| std::thread::Builder::new().name(name.into()).spawn(f);
@@ -1072,12 +1086,14 @@ mod tests {
         s.buffer.lock().unwrap().push(Chunk::Audio(audio));
         *s.base.lock().unwrap() = Some(t(10_000));
         s.read_all.store(true, Ordering::Release);
+        let feed = Arc::new(Fifo::new(STREAM_PHRASES));
         let job = RecognizeJob {
             loader: Arc::new(|_: &Path, _: &str| Ok(Arc::new(Hello) as Arc<dyn Transcriber>)),
             models_dir: PathBuf::new(),
             model: "test".into(),
             language: None,
             board: Arc::clone(&board),
+            feed: Arc::clone(&feed),
             clock: studiocraft_media::clock::MasterClock::new(),
         };
         recognize_loop(job, Arc::clone(&s));
@@ -1085,6 +1101,8 @@ mod tests {
         let cues: Vec<_> = s.cues.lock().unwrap().iter().cloned().collect();
         assert_eq!(cues.len(), 1);
         assert_eq!(cues[0].text, "hello");
+        // The finished phrase also waits for a stream to send it.
+        assert_eq!((feed.pop().as_deref(), feed.pop()), (Some("hello"), None));
         // The voice runs from 11 s to 12.5 s on the studio clock.
         assert!(cues[0].start.0 >= t(10_600).0 && cues[0].start.0 <= t(11_000).0, "{:?}", cues[0].start);
         assert!(cues[0].end.0 >= t(12_400).0 && cues[0].end.0 <= t(13_000).0, "{:?}", cues[0].end);
@@ -1126,6 +1144,7 @@ mod tests {
             model: "test".into(),
             language: None,
             board: Arc::clone(&board),
+            feed: Arc::new(Fifo::new(STREAM_PHRASES)),
             clock: studiocraft_media::clock::MasterClock::new(),
         };
         recognize_loop(job, Arc::clone(&s));
@@ -1145,6 +1164,7 @@ mod tests {
             model: "whisper-tiny".into(),
             language: None,
             board: Arc::new(CaptionBoard::new()),
+            feed: Arc::new(Fifo::new(STREAM_PHRASES)),
             clock: studiocraft_media::clock::MasterClock::new(),
         };
         recognize_loop(job, Arc::clone(&s));

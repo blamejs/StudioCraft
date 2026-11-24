@@ -107,6 +107,8 @@
 	Filters…	Filtry…
 	Finishing Recording…	Dokončování nahrávky…
 	Fit to Screen	Přizpůsobit obrazovce
+	Flip Horizontal	Převrátit vodorovně
+	Flip Vertical	Převrátit svisle
 	Font	Písmo
 	Font family	Rodina písma
 	Format	Formát
@@ -564,3 +566,5 @@ menu	Transform	Transformace
 	{percent}% ({width} × {height})	{percent} % ({width} × {height})
 	Fill Screen	Vyplnit obrazovku
 @msg	The scenes could not be laid out for the new canvas: {error}	Scény nešlo rozmístit pro nové plátno: {error}
+	Filter delay	Zpoždění filtrů
+	The audio filters on this source delay its sound by {frames} samples at 48 kHz	Zvukové filtry tohoto zdroje zpožďují jeho zvuk o {frames} vzorků při 48 kHz

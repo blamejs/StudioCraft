@@ -1,0 +1,56 @@
+[package]
+name = "craft-gpu-interop"
+description = "Captured frames shared on the GPU: Windows desktop duplication into a ring of shared Direct3D 11 textures with shared fences, imported into a wgpu Direct3D 12 device, with the reasons a caller falls back to a CPU copy"
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+publish = false
+
+# One of the crates `cargo xtask unsafe` lets opt in to unsafe code (AGENTS.md 0.3): only the
+# `dxgi_ffi` and `d3d12_ffi` modules allow it, and every unsafe block carries a SAFETY comment.
+[lints.rust]
+unsafe_code = "deny"
+unsafe_op_in_unsafe_fn = "deny"
+
+[lints.clippy]
+dbg_macro = "warn"
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+todo = "deny"
+unimplemented = "deny"
+unreachable = "deny"
+too_many_arguments = "allow"
+type_complexity = "allow"
+undocumented_unsafe_blocks = "deny"
+
+[features]
+# The importer: shared textures into a wgpu device, and the opaque copy into the caller's texture.
+wgpu = ["dep:wgpu"]
+
+[dependencies]
+wgpu = { version = "30", optional = true }
+
+# Windows: DXGI desktop duplication on a Direct3D 11 device, and the Direct3D 12 side of the
+# import. The version is the one wgpu-hal 30 uses, so its Direct3D 12 types are the same types.
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Direct3D",
+    "Win32_Graphics_Direct3D11",
+    "Win32_Graphics_Direct3D12",
+    "Win32_Graphics_Dxgi",
+    "Win32_Graphics_Dxgi_Common",
+    "Win32_Graphics_Gdi",
+    "Win32_Security",
+] }
+
+[dev-dependencies]
+wgpu = "30"
+pollster = "0.4"
+criterion = { version = "0.8", default-features = false, features = ["cargo_bench_support"] }
+
+[[bench]]
+name = "upload"
+harness = false
+required-features = ["wgpu"]

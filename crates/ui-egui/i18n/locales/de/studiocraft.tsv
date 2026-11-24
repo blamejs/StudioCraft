@@ -103,6 +103,8 @@
 	Filters…	Filter…
 	Finishing Recording…	Aufnahme wird abgeschlossen…
 	Fit to Screen	An den Bildschirm anpassen
+	Flip Horizontal	Horizontal spiegeln
+	Flip Vertical	Vertikal spiegeln
 	Font	Schrift
 	Font family	Schriftfamilie
 	Format	Format
@@ -547,3 +549,5 @@ menu	Transform	Transformieren
 	{percent}% ({width} × {height})	{percent} % ({width} × {height})
 	Fill Screen	Bildschirm füllen
 @msg	The scenes could not be laid out for the new canvas: {error}	Die Szenen konnten nicht für die neue Leinwand angeordnet werden: {error}
+	Filter delay	Filterverzögerung
+	The audio filters on this source delay its sound by {frames} samples at 48 kHz	Die Audiofilter dieser Quelle verzögern ihren Ton um {frames} Samples bei 48 kHz

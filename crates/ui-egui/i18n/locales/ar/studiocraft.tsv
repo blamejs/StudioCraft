@@ -110,6 +110,8 @@
 	Filters…	المرشحات…
 	Finishing Recording…	جارٍ إنهاء التسجيل…
 	Fit to Screen	ملاءمة الشاشة
+	Flip Horizontal	قلب أفقي
+	Flip Vertical	قلب عمودي
 	Font	الخط
 	Font family	عائلة الخط
 	Format	التنسيق
@@ -551,3 +553,5 @@ menu	Transform	التحويل
 	Custom	مخصص
 	Fill Screen	ملء الشاشة
 @msg	The scenes could not be laid out for the new canvas: {error}	تعذّر ترتيب المشاهد للوحة الجديدة: {error}
+	Filter delay	تأخير المرشحات
+	The audio filters on this source delay its sound by {frames} samples at 48 kHz	تؤخر مرشحات الصوت في هذا المصدر صوته بمقدار {frames} عينة عند 48 كيلوهرتز

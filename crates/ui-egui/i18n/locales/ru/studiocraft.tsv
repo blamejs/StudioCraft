@@ -107,6 +107,8 @@
 	Filters…	Фильтры…
 	Finishing Recording…	Завершение записи…
 	Fit to Screen	Вписать в экран
+	Flip Horizontal	Отразить по горизонтали
+	Flip Vertical	Отразить по вертикали
 	Font	Шрифт
 	Font family	Семейство шрифтов
 	Format	Формат
@@ -573,3 +575,5 @@ menu	Transform	Преобразование
 	{percent}% ({width} × {height})	{percent} % ({width} × {height})
 	Fill Screen	Заполнить экран
 @msg	The scenes could not be laid out for the new canvas: {error}	Не удалось расположить сцены для нового холста: {error}
+	Filter delay	Задержка фильтров
+	The audio filters on this source delay its sound by {frames} samples at 48 kHz	Аудиофильтры этого источника задерживают его звук на {frames} сэмплов при 48 кГц

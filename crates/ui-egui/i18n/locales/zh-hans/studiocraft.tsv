@@ -107,6 +107,8 @@
 	Filters…	滤镜…
 	Finishing Recording…	正在完成录制…
 	Fit to Screen	适应屏幕
+	Flip Horizontal	水平翻转
+	Flip Vertical	垂直翻转
 	Font	字体
 	Font family	字体系列
 	Format	格式
@@ -563,3 +565,5 @@ menu	Transform	变换
 	Custom	自定义
 	Fill Screen	填满屏幕
 @msg	The scenes could not be laid out for the new canvas: {error}	无法为新画布排列场景：{error}
+	Filter delay	滤镜延迟
+	The audio filters on this source delay its sound by {frames} samples at 48 kHz	此来源的音频滤镜使其声音延迟 {frames} 个采样（48 kHz）

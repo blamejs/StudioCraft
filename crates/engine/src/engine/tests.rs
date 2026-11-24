@@ -656,16 +656,56 @@ fn pause_commands_are_handed_to_the_app_with_checked_values() {
     let mut e = engine();
     let rev = e.revision();
     for (id, params, action) in [
-        ("pause.start", json!({}), RuntimeAction::PauseStart { media: None, countdown_s: None, at_zero: None }),
+        ("pause.start", json!({}), RuntimeAction::PauseStart(PauseValues::default())),
         (
             "pause.start",
             json!({"media": "", "countdown_s": 0, "at_zero": "keep"}),
-            RuntimeAction::PauseStart { media: Some(String::new()), countdown_s: Some(0), at_zero: Some(PauseAtZero::Keep) },
+            RuntimeAction::PauseStart(PauseValues {
+                media: Some(String::new()),
+                countdown_s: Some(0),
+                at_zero: Some(PauseAtZero::Keep),
+                ..PauseValues::default()
+            }),
         ),
         (
             "pause.start",
             json!({"media": "C:/break.png", "countdown_s": 43_200, "at_zero": "resume"}),
-            RuntimeAction::PauseStart { media: Some("C:/break.png".into()), countdown_s: Some(43_200), at_zero: Some(PauseAtZero::Resume) },
+            RuntimeAction::PauseStart(PauseValues {
+                media: Some("C:/break.png".into()),
+                countdown_s: Some(43_200),
+                at_zero: Some(PauseAtZero::Resume),
+                ..PauseValues::default()
+            }),
+        ),
+        (
+            "pause.start",
+            json!({
+                "text": "Back at {time}", "zero_text": "", "anchor": "top_right", "size_pct": 2, "fit": "stretch",
+                "background": "#00000000", "mute_scene": false
+            }),
+            RuntimeAction::PauseStart(PauseValues {
+                text: Some("Back at {time}".into()),
+                zero_text: Some(String::new()),
+                anchor: Some(PauseAnchor::TopRight),
+                size_pct: Some(2),
+                fit: Some(FitMode::Stretch),
+                background: Some("#00000000".into()),
+                mute_scene: Some(false),
+                ..PauseValues::default()
+            }),
+        ),
+        (
+            "pause.start",
+            json!({"text": "{time}", "anchor": "center", "size_pct": 15, "fit": "fill", "background": "#ff8000", "mute_scene": true}),
+            RuntimeAction::PauseStart(PauseValues {
+                text: Some("{time}".into()),
+                anchor: Some(PauseAnchor::Center),
+                size_pct: Some(15),
+                fit: Some(FitMode::Fill),
+                background: Some("#ff8000".into()),
+                mute_scene: Some(true),
+                ..PauseValues::default()
+            }),
         ),
         ("pause.stop", json!({}), RuntimeAction::PauseStop),
         ("pause.toggle", json!({}), RuntimeAction::PauseToggle),
@@ -690,11 +730,43 @@ fn pause_commands_are_handed_to_the_app_with_checked_values() {
         ("pause.start", json!({"media": 5})),
         ("pause.start", json!({"media": "a\u{0}b.png"})),
         ("pause.start", json!({"meda": "x.png"})),
+        ("pause.start", json!({"text": "Back soon"})),
+        ("pause.start", json!({"text": "{time} or {time}"})),
+        ("pause.start", json!({"text": format!("{}{{time}}", "x".repeat(195))})),
+        ("pause.start", json!({"text": null})),
+        ("pause.start", json!({"zero_text": "x".repeat(201)})),
+        ("pause.start", json!({"zero_text": 1})),
+        ("pause.start", json!({"anchor": "middle"})),
+        ("pause.start", json!({"anchor": "Center"})),
+        ("pause.start", json!({"anchor": ""})),
+        ("pause.start", json!({"size_pct": 1})),
+        ("pause.start", json!({"size_pct": 16})),
+        ("pause.start", json!({"size_pct": 6.5})),
+        ("pause.start", json!({"fit": "contain"})),
+        ("pause.start", json!({"fit": "Fit"})),
+        ("pause.start", json!({"background": "red"})),
+        ("pause.start", json!({"background": "#12345"})),
+        ("pause.start", json!({"background": ""})),
+        ("pause.start", json!({"mute_scene": "yes"})),
+        ("pause.start", json!({"mute_scene": 1})),
+        ("pause.start", json!({"mute_scene": null})),
         ("pause.extend", json!({"seconds": 0})),
         ("pause.extend", json!({"seconds": 43_201})),
         ("pause.extend", json!({})),
     ] {
         assert!(run(&mut e, id, bad.clone()).is_err(), "{id} {bad}");
+    }
+    // Each error names the parameter and what it must be.
+    for (bad, words) in [
+        (json!({"size_pct": 16}), ["size_pct", "2 to 15"]),
+        (json!({"anchor": "middle"}), ["anchor", "bottom_center"]),
+        (json!({"fit": "contain"}), ["fit", "stretch"]),
+        (json!({"background": "red"}), ["background", "#rrggbbaa"]),
+        (json!({"text": "Back soon"}), ["countdown text", "{time}"]),
+        (json!({"zero_text": "x".repeat(201)}), ["text at zero", "200"]),
+    ] {
+        let err = run(&mut e, "pause.start", bad.clone()).map(|_| ()).unwrap_err().to_string();
+        assert!(words.iter().all(|w| err.contains(w)), "{bad}: {err}");
     }
 }
 

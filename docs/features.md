@@ -26,6 +26,14 @@ commands is fit, filled or stretched again, and any other source keeps its place
 the canvas ([`canvas.relayout`](control-protocol.md#canvasrelayout)). Moving, resizing, rotating
 or cropping a source ends its fit, fill or stretch.
 
+Flip Horizontal and Flip Vertical, in the same menu, mirror the source's picture inside its box,
+left to right or top to bottom. The box keeps its place, size and rotation, so a fit, filled or
+stretched source stays that way, and a source can be flipped before it shows a picture. Each flip
+is one undo step, and flipping again turns the picture back. A crop still cuts the source's own
+edges, so the part cropped from a source's left edge is missing at the right of its flipped picture.
+The flips are saved with the scene collection and set with `item.transform`'s `flip_horizontal`
+and `flip_vertical`.
+
 ### Built-in sources
 
 | Source | What it captures | Systems |
@@ -167,7 +175,7 @@ compressor, limiter and a three-band equalizer.
 | Image mask | Uses a picture file as an alpha mask (from its brightness or its alpha) or blends it with the source (multiply, add or subtract). The picture is stretched over the source or centered at its own size, and the filter then applies a color and an opacity. |
 | Scroll | Moves a source's picture at a horizontal and a vertical speed in pixels per second. The picture repeats (Loop) or moves out once, in an area whose width and height can be limited. |
 | Sharpen | Makes edges crisper by a Sharpness from 0 to 1. |
-| Gain, noise gate, compressor, limiter and equalizer | Change the level and tone of a source's audio. The noise gate, compressor and limiter report how far they turn the audio down through [`filter.meter`](control-protocol.md#filtermeter). |
+| Gain, noise gate, compressor, limiter and equalizer | Change the level and tone of a source's audio. The noise gate, compressor and limiter report how far they turn the audio down through [`filter.meter`](control-protocol.md#filtermeter). The limiter delays the audio by 248 samples (5.2 ms) at 48 kHz; the other four do not delay it. |
 
 [MECHANICS.md](../MECHANICS.md#video) lists each filter's default values and limits.
 
@@ -205,8 +213,21 @@ A source's Properties window sets two more audio options:
 - **Monitoring** is off, monitor only, or monitor and output. With monitor only, you hear the
   source, and recordings and streams leave it out.
 
+The window also shows the source's **Filter delay**: how long the audio filters the mixer runs on
+the source delay its audio, in milliseconds, with the number of samples at 48 kHz in its tooltip.
+Disabled filters and filters whose settings were refused are not counted. The MCP tool
+`source_audio` and `document.inspect` report the same delay.
+
 Monitored sources play on the device chosen in Settings › Audio. Monitoring works on Windows and
 macOS.
+
+Audio input capture and audio output capture stay in step with the mix when the device's clock
+runs a little fast or slow. Each of these sources keeps about 53 ms of audio waiting for the mixer
+(2.5 blocks of 1024 samples at 48 kHz). To hold that amount, it makes up to 0.1% more or fewer
+samples from the device's audio, and changes that amount by at most 20 parts per million per
+second. When the mixer starts reading the source, the source adds silence or drops its oldest
+audio to start at that amount. While the mixer does not read the source, the source keeps the
+rate it had.
 
 ### Application Audio dock
 
@@ -416,6 +437,14 @@ A recording that ran while captions ran gets caption files beside it: `<recordin
 was recognized gets no caption files. A file of that name that already
 exists is not replaced. Start or Stop Live Captions can be given a shortcut in Settings › Hotkeys.
 
+While captions run, the stream also carries each finished phrase as closed captions, which viewers
+of platforms that read captions embedded in the video can turn on and off. The captions are
+CEA-608 roll-up captions on channel 1, three rows at the bottom of the picture, sent as
+CEA-708 caption data in an SEI message of the H.264 stream (ITU-T H.264 D.1.6, ATSC A/53 Part 4).
+A phrase goes out within about a second of being finished, at most 32 characters to a row, and the
+captions are erased 8 seconds after the last phrase. Characters that 608 captions cannot show are
+left out. Recordings do not carry closed captions; they get the caption files.
+
 ### Face tracking model
 
 Face tracking uses the Face Landmarker model (3.6 MiB, Apache-2.0), which StudioCraft does not
@@ -512,7 +541,8 @@ network can reach on the way to the destination's server and shows one verdict, 
 server did not answer for {host}" or "{host} answers on port 443 but not on port {port}". What the
 check found opens the list of every step with its outcome. The check runs its steps at the same
 time and reports after at most 20 s; a step still running then is listed as unfinished. Each
-connection, secure handshake and fetch may take 5 s, and the name lookup 10 s. The steps are:
+connection, secure handshake, RTMP handshake and fetch may take 5 s, and the name lookup 10 s. The
+steps are:
 
 - The check asks the system whether it has a route to any address and to each of the server's
   addresses. This sends nothing.
@@ -520,9 +550,16 @@ connection, secure handshake and fetch may take 5 s, and the name lookup 10 s. T
   by name only. The check itself uses no proxy.
 - It looks the server's name up again.
 - It opens a TCP connection to up to four of the server's addresses on the destination's port and,
-  for `rtmps://`, completes the secure handshake, which sends the server's host name. It then closes
-  the connection. It sends no stream key, no RTMP data and no part of the address after the host.
-- When the port is not 443, it does the same with a secure handshake on port 443 of those addresses.
+  for `rtmps://`, completes the secure handshake, which sends the server's host name. Over each
+  connection that opens it runs the RTMP handshake: it sends C0 and C1, reads S0 and S1, sends C2
+  and reads S2. It then closes the connection. It sends no `connect` or `publish` command, no stream
+  key and no part of the address after the host. A port that takes the connection is reported as
+  not answering as a stream server when, at every address that connected, it answered the RTMP
+  handshake with other data, closed the connection or sent nothing within 5 s. One address that
+  completes the handshake gives another verdict, and so does a handshake still running when the
+  check reports.
+- When the port is not 443, it opens a TCP connection with a secure handshake on port 443 of those
+  addresses, and sends no RTMP data there.
 - For a destination set up for a streaming service that publishes a list of its ingest servers and
   a status summary, it fetches both over HTTPS, following no redirect, looks two of the service's
   other ingest servers up and makes a secure connection to each on port 443. It reads at most
@@ -546,7 +583,13 @@ The first destination uses the profile's stream key; the others have no key of t
 is chosen, so the profile's key is not sent to another service. A service that documents one ingest
 server for every account fills in that server. For the other services the details link to the
 service's page that shows the account's server and key. Edit opens a destination's service, name,
-server and key source. Choosing another service replaces a server that is empty or that is one of
+server and key source. For a service that publishes a list of its ingest servers, List Servers in
+the details fetches that list over HTTPS, following no redirect and using no proxy, reading at most
+256 KiB within 5 s, and sends no stream key. The service sees this computer's address. Ingest server
+then offers the servers of the list, at most 128, with the service's default first and the others
+in the order of their priority; choosing one puts its address in the server field. A typed server is
+kept until a server of the list is chosen. The list is kept for the session, and one that could not
+be read can be fetched again. Choosing another service replaces a server that is empty or that is one of
 the services' documented servers, and keeps any other server. A service without a shared server leaves the server
 empty, and a destination saved for it without a server is turned off. The server field hides its text until Show is pressed. A row
 shows the service it streams to, and the row and the details show a service's logo only where the
@@ -602,7 +645,9 @@ background, the countdown and its text, what happens at zero, the text at zero, 
 sits, its size as a share of the canvas height, its font, color and outline, and whether the
 program audio is muted. The defaults are listed in
 [MECHANICS.md](../MECHANICS.md#recording-and-streaming). Changes apply from the next pause.
-`pause.start` can give a pause its own picture or video, countdown and choice at zero.
+`pause.start` can give a pause its own picture or video and how it is sized, background, countdown
+and its text, choice at zero and text at zero, text position and size, and whether the program
+audio is muted. The profile keeps its settings.
 
 While the program audio is muted, every source the program hears fades out with the transition and
 fades back in when the program resumes. Monitoring and each source's own audio track keep the
@@ -660,6 +705,14 @@ A stream tests only the H.264 candidates in this list, and skips every other can
   built-in encoder.
 
 The compositor converts the program to the encoders' frame format on the GPU.
+
+On Windows, a Display capture source captures with desktop duplication into textures that the
+compositor opens on its Direct3D 12 device, so the picture is not copied through CPU memory. The
+source copies the picture through CPU memory instead when the compositor draws with another
+backend (Vulkan, or the software adapter), when the display belongs to another graphics adapter
+than the compositor's, when the compositor cannot open the textures, for a rotated display, and
+when desktop duplication does not give 8-bit BGRA pictures. Staged windows sources and window
+capture always copy through CPU memory.
 
 The compositor can also draw a small picture of each of up to 16 scenes, for scene lists. Each
 picture fits a 256 × 144 box by default, keeps the canvas's aspect ratio, and is redrawn at most 4

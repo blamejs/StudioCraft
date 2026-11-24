@@ -98,6 +98,42 @@ fn frames_are_scaled_and_cropped() {
 }
 
 #[test]
+fn flips_mirror_the_picture_inside_the_box() {
+    let Some(mut c) = compositor(20, 20) else { return };
+    // Red, green on the top row; blue, white below.
+    let v = frame(&[[255, 0, 0, 255], [0, 255, 0, 255], [0, 0, 255, 255], [255, 255, 255, 255]], 2, 2);
+    let (red, green, blue, white) = ([255, 0, 0, 255], [0, 255, 0, 255], [0, 0, 255, 255], [255, 255, 255, 255]);
+    let cases = [
+        ((false, false), [red, green, blue, white]),
+        ((true, false), [green, red, white, blue]),
+        ((false, true), [blue, white, red, green]),
+        ((true, true), [white, blue, green, red]),
+    ];
+    for ((h, v_flip), want) in cases {
+        let t = Transform { scale: Vec2::new(10.0, 10.0), flip_horizontal: h, flip_vertical: v_flip, ..Transform::default() };
+        let px = draw(&mut c, Plan { program: SceneDesc { items: vec![item(1, &v, t)] }, ..Plan::default() }, Tick(0));
+        // Pixels near the outer edges, where the filter stays inside one texel.
+        let got = [pixel(&px, 20, 2, 2), pixel(&px, 20, 17, 2), pixel(&px, 20, 2, 17), pixel(&px, 20, 17, 17)];
+        assert!(got.iter().zip(want).all(|(g, w)| close(*g, w)), "flip ({h}, {v_flip}): {got:?}");
+    }
+}
+
+#[test]
+fn a_flip_mirrors_what_the_crop_leaves() {
+    let Some(mut c) = compositor(40, 10) else { return };
+    // Red, green, blue, white; cropping two from the left leaves blue and white, which the flip
+    // swaps. The crop's edge is the source's left edge, before the flip.
+    let v = frame(&[[255, 0, 0, 255], [0, 255, 0, 255], [0, 0, 255, 255], [255, 255, 255, 255]], 4, 1);
+    let t = Transform { scale: Vec2::new(20.0, 10.0), crop: Crop { left: 2, ..Crop::default() }, flip_horizontal: true, ..Transform::default() };
+    let px = draw(&mut c, Plan { program: SceneDesc { items: vec![item(1, &v, t)] }, ..Plan::default() }, Tick(0));
+    assert!(close(pixel(&px, 40, 5, 5), [255, 255, 255, 255]), "{:?}", pixel(&px, 40, 5, 5));
+    assert!(close(pixel(&px, 40, 35, 5), [0, 0, 255, 255]), "{:?}", pixel(&px, 40, 35, 5));
+    // The crop's edge is at the right after the flip: the green that the crop removed does not
+    // blend into it.
+    assert!(close(pixel(&px, 40, 39, 5), [0, 0, 255, 255]), "{:?}", pixel(&px, 40, 39, 5));
+}
+
+#[test]
 fn the_last_frame_stays_until_a_new_one_arrives() {
     let Some(mut c) = compositor(16, 16) else { return };
     let v = frame(&[[0, 255, 0, 255]; 4], 2, 2);
@@ -106,6 +142,41 @@ fn the_last_frame_stays_until_a_new_one_arrives() {
     draw(&mut c, plan.clone(), Tick(0));
     let px = draw(&mut c, plan, Tick(1));
     assert!(close(pixel(&px, 16, 8, 8), [0, 255, 0, 255]));
+}
+
+#[test]
+fn a_shared_capture_the_device_cannot_take_falls_back_and_the_program_goes_on() {
+    let Some(mut c) = compositor(16, 16) else { return };
+    let v = frame(&[[0, 255, 0, 255]; 4], 2, 2);
+    let t = Transform { scale: Vec2::new(8.0, 8.0), ..Transform::default() };
+    let plan = Plan { program: SceneDesc { items: vec![item(1, &v, t)] }, ..Plan::default() };
+    draw(&mut c, plan.clone(), Tick(0));
+    // A shared picture from a ring no device can open: the reason is recorded on the ring, and
+    // the last picture from memory stays on screen.
+    let ring = craft_gpu_interop::SharedRing::detached(2, 2);
+    v.publish(VideoContent::Shared(craft_gpu_interop::SharedFrame::new(Arc::clone(&ring), 0, 1).unwrap()));
+    let px = draw(&mut c, plan.clone(), Tick(1));
+    assert!(ring.fallback().is_some(), "the capture is told to copy through memory");
+    assert!(close(pixel(&px, 16, 8, 8), [0, 255, 0, 255]));
+    // The next picture from memory is drawn as before.
+    let mut f = v.frame();
+    assert!(f.reshape(2, 2, PixelFormat::Rgba8));
+    f.data.as_chunks_mut::<4>().0.iter_mut().for_each(|p| *p = [255, 0, 0, 255]);
+    v.publish(VideoContent::Frame(f));
+    let px = draw(&mut c, plan, Tick(2));
+    assert!(close(pixel(&px, 16, 8, 8), [255, 0, 0, 255]));
+}
+
+#[test]
+fn a_shared_capture_of_no_size_is_refused() {
+    let Some(mut c) = compositor(8, 8) else { return };
+    let v = Arc::new(VideoOut::default());
+    let ring = craft_gpu_interop::SharedRing::detached(0, 0);
+    v.publish(VideoContent::Shared(craft_gpu_interop::SharedFrame::new(Arc::clone(&ring), 0, 1).unwrap()));
+    let plan = Plan { program: SceneDesc { items: vec![item(1, &v, at(0.0, 0.0))] }, ..Plan::default() };
+    let px = draw(&mut c, plan, Tick(0));
+    assert_eq!(ring.fallback(), Some(craft_gpu_interop::Fallback::Format));
+    assert!(close(pixel(&px, 8, 4, 4), [0, 0, 0, 255]));
 }
 
 #[test]
@@ -730,11 +801,97 @@ fn a_frame_answers_waiting_captures() {
     assert!(shared.captures.push(CaptureRequest { view: View::Program, reply: program_tx }).is_ok());
     assert!(shared.captures.push(CaptureRequest { view: View::Preview, reply: preview_tx }).is_ok());
     c.run(&shared, Tick(0));
+    // A frame drawn while the picture is read back does not change it.
+    let green = solid([0, 255, 0, 255], 32, 16);
+    shared.plan.publish(Arc::new(Plan { program: SceneDesc { items: vec![item(2, &green, Transform::default())] }, ..Plan::default() }));
+    c.run(&shared, ms(33));
+    c.finish(&shared.readback_lost);
     let shot = program_rx.try_recv().unwrap().unwrap();
     assert_eq!((shot.width, shot.height, shot.rgba.len()), (32, 16, 32 * 16 * 4));
     assert!(close(pixel(&shot.rgba, 32, 16, 8), [255, 0, 0, 255]));
     assert!(preview_rx.try_recv().unwrap().is_err(), "no preview outside studio mode");
     assert!(shared.captures.is_empty());
+}
+
+#[test]
+fn a_frame_does_not_wait_for_a_capture_to_be_read_back() {
+    let mut c = noop_compositor(32, 16);
+    let shared = RenderShared::default();
+    let (tx, rx) = std::sync::mpsc::sync_channel(1);
+    assert!(shared.captures.push(CaptureRequest { view: View::Program, reply: tx }).is_ok());
+    c.run(&shared, Tick(0));
+    assert_eq!(rx.try_recv().err(), Some(std::sync::mpsc::TryRecvError::Empty), "the frame returned before the picture was read back");
+    // The next frames are drawn while the read-back is outstanding.
+    c.run(&shared, ms(33));
+    c.run(&shared, ms(66));
+    assert_eq!(c.frame_no, 3);
+    c.finish(&shared.readback_lost);
+    assert!(rx.try_recv().is_ok(), "the capture is answered");
+}
+
+#[test]
+fn a_read_back_that_does_not_report_holds_its_slot_until_it_times_out() {
+    use std::sync::mpsc::TryRecvError;
+    let mut c = noop_compositor(32, 16);
+    let shared = RenderShared::default();
+    let mut answers = Vec::new();
+    let mut ask = |shared: &RenderShared| {
+        let (tx, rx) = std::sync::mpsc::sync_channel(1);
+        let queued = shared.captures.push(CaptureRequest { view: View::Program, reply: tx }).is_ok();
+        if queued {
+            answers.push(rx);
+        }
+        queued
+    };
+    for _ in 0..CAPTURE_SLOTS {
+        assert!(ask(&shared));
+    }
+    c.run(&shared, Tick(0));
+    assert_eq!(c.reads.len(), CAPTURE_SLOTS);
+    // Mappings that have not reported back: no callback holds these states.
+    for read in &mut c.reads {
+        read.state = Arc::new(AtomicU8::new(READ_PENDING));
+    }
+    // While every slot is being read back, new requests stay queued and the queue fills.
+    for _ in 0..CAPTURE_SLOTS {
+        assert!(ask(&shared));
+    }
+    c.run(&shared, ms(33));
+    assert_eq!(shared.captures.len(), CAPTURE_SLOTS);
+    assert!(!ask(&shared), "a full queue refuses the request");
+    assert!(answers.iter().all(|rx| rx.try_recv().err() == Some(TryRecvError::Empty)));
+    // Past the wait, counted from the frame at 33 ms, the stuck read-backs are answered with an
+    // error, and the queued requests copy their pictures.
+    c.run(&shared, tick_of(MAP_WAIT + std::time::Duration::from_millis(33)));
+    for rx in &answers[..CAPTURE_SLOTS] {
+        let err = rx.try_recv().unwrap().unwrap_err();
+        assert!(err.to_string().contains("could not be read back"), "{err}");
+    }
+    assert!(shared.captures.is_empty());
+    assert_eq!(c.reads.len(), CAPTURE_SLOTS);
+    c.finish(&shared.readback_lost);
+    assert!(c.reads.is_empty());
+    assert!(answers[CAPTURE_SLOTS..].iter().all(|rx| rx.try_recv().is_ok()), "the queued captures are answered");
+}
+
+#[test]
+fn the_read_back_wait_starts_after_the_frame_that_copied_the_picture() {
+    use std::sync::mpsc::TryRecvError;
+    let mut c = noop_compositor(32, 16);
+    let shared = RenderShared::default();
+    let (tx, rx) = std::sync::mpsc::sync_channel(1);
+    assert!(shared.captures.push(CaptureRequest { view: View::Program, reply: tx }).is_ok());
+    c.run(&shared, Tick(0));
+    for read in &mut c.reads {
+        read.state = Arc::new(AtomicU8::new(READ_PENDING));
+    }
+    // The frame stamped 0 submitted its copy late, so the next frame comes a whole wait after
+    // that stamp. The wait starts at that next frame.
+    c.run(&shared, tick_of(MAP_WAIT));
+    assert_eq!(rx.try_recv().err(), Some(TryRecvError::Empty), "the read-back still has its whole wait");
+    c.run(&shared, tick_of(MAP_WAIT * 2));
+    let err = rx.try_recv().unwrap().unwrap_err();
+    assert!(err.to_string().contains("could not be read back"), "{err}");
 }
 
 #[test]
@@ -960,6 +1117,37 @@ fn a_request_without_a_rate_draws_once() {
         }
         assert_eq!(drawn(&c)[0], after, "fps {fps} draws only once");
     }
+}
+
+#[test]
+fn a_thumbnail_drawn_once_waits_for_a_shared_picture_still_being_copied() {
+    let mut c = noop_compositor(32, 18);
+    let v = solid([255, 0, 0, 255], 32, 18);
+    c.set_thumbnails(thumbnails(vec![one_item_scene(1, &v)], 0.0));
+    c.frame(ms(5000), &AtomicU64::new(0));
+    assert_eq!(c.thumbnails_due(ms(6000)).1, 0, "drawn once");
+    // The source's shared picture was still being copied when the slot was drawn.
+    let ring = craft_gpu_interop::SharedRing::detached(2, 2);
+    let st = c.sources.get_mut(&SourceId(1)).unwrap();
+    st.shared.get_or_insert_with(Default::default).offer(craft_gpu_interop::SharedFrame::new(ring, 0, 1).unwrap());
+    c.thumbnails_drawn(&[0], ms(6000));
+    assert_eq!(c.thumbnails_due(ms(7000)), ([0, 0], 1), "the slot is drawn again");
+    // The picture was drawn: the slot is done.
+    c.sources.get_mut(&SourceId(1)).unwrap().shared.as_mut().unwrap().clear();
+    c.thumbnails_drawn(&[0], ms(7000));
+    assert_eq!(c.thumbnails_due(ms(8000)).1, 0);
+}
+
+#[test]
+fn a_shared_picture_is_drawn_into_the_view_made_with_the_texture() {
+    let c = noop_compositor(8, 8);
+    let format = wgpu::TextureFormat::Bgra8Unorm;
+    let mut slot = None;
+    let first = shared_target(&c.gpu.device, &c.pipes, &mut slot, (4, 4), format);
+    assert_eq!(shared_target(&c.gpu.device, &c.pipes, &mut slot, (4, 4), format), first, "no view per frame");
+    let resized = shared_target(&c.gpu.device, &c.pipes, &mut slot, (8, 4), format);
+    assert_ne!(resized, first, "a new size makes a new texture and view");
+    assert_eq!(slot.map(|t| t.view), Some(resized));
 }
 
 #[test]

@@ -107,6 +107,8 @@
 	Filters…	Filtry…
 	Finishing Recording…	Kończenie nagrywania…
 	Fit to Screen	Dopasuj do ekranu
+	Flip Horizontal	Odbij w poziomie
+	Flip Vertical	Odbij w pionie
 	Font	Czcionka
 	Font family	Rodzina czcionek
 	Format	Format
@@ -562,3 +564,5 @@ menu	Transform	Przekształć
 	Custom	Niestandardowy
 	Fill Screen	Wypełnij ekran
 @msg	The scenes could not be laid out for the new canvas: {error}	Nie udało się rozmieścić scen dla nowego płótna: {error}
+	Filter delay	Opóźnienie filtrów
+	The audio filters on this source delay its sound by {frames} samples at 48 kHz	Filtry audio tego źródła opóźniają jego dźwięk o {frames} próbek przy 48 kHz
