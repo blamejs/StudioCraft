@@ -108,8 +108,8 @@ answer for {host}" or "The server name {host} could not be looked up: {detail}".
 server's name failed. Check the spelling of the server address, and the network's DNS settings.
 
 **"The server refused the stream; check the stream key and the server address".** The server takes
-connections, and the destination's last failure was a refusal of the stream. Check the stream key
-and the part of the server address after the host.
+connections and does not fail the RTMP handshake, and the destination's last failure was a refusal
+of the stream. Check the stream key and the part of the server address after the host.
 
 **"The secure connection to {host} was not accepted ({reason}). ..."** The certificate check of the
 `rtmps://` server failed. Check the server address and the computer's clock. A network that
@@ -117,6 +117,15 @@ inspects secure connections can also cause this.
 
 **"{service} reports a problem with {component}: {status}. This server may also be affected".** The
 service's status summary reports a problem. Wait for the service to resolve it.
+
+**"{host} takes a connection on port {port}, but does not answer as a stream server: {detail}.
+..."** The secure form says "takes a secure connection". Something on the server's port accepted
+the connection, and at no address that connected did it complete the RTMP handshake: it answered
+with other data (a web server, for example), closed the connection, or sent nothing within 5 s.
+{detail} says which. Check the host and the port in the server address against the service's
+instructions. If they are right, the service's stream server may not be working, or a proxy or
+firewall on this network may be taking the connection in the server's place. Try again later, or
+from another network.
 
 **"{host} cannot be reached from this network, but {other} can".** No address of the server
 connected or refused the connection, and another ingest server of the same service connected.

@@ -20,6 +20,7 @@ fn timed_out(addr: SocketAddr) -> craft_rtmp::Error {
 type LookupFn = dyn Fn(&str, u16) -> io::Result<Vec<SocketAddr>> + Send + Sync;
 type ReachFn = dyn Fn(&str, SocketAddr, bool) -> Result<(), craft_rtmp::Error> + Send + Sync;
 type FetchFn = dyn Fn(&str) -> Result<Vec<u8>, String> + Send + Sync;
+type AnswerFn = dyn Fn(&str, SocketAddr) -> craft_rtmp::Answer + Send + Sync;
 
 /// Probes that answer as a test sets them, and record every call.
 pub(crate) struct Fake {
@@ -28,12 +29,15 @@ pub(crate) struct Fake {
     pub(crate) proxies: Vec<&'static str>,
     pub(crate) lookup: Box<LookupFn>,
     pub(crate) reach: Box<ReachFn>,
+    /// What a port that `reach` lets connect answers to the RTMP handshake.
+    pub(crate) answer: Box<AnswerFn>,
     pub(crate) fetch: Box<FetchFn>,
     pub(crate) calls: Mutex<Vec<String>>,
 }
 
 impl Fake {
-    /// Every route is there, a name looks up to one address, and every connection succeeds.
+    /// Every route is there, a name looks up to one address, every connection succeeds and every
+    /// port completes the RTMP handshake.
     pub(crate) fn new() -> Fake {
         Fake {
             default_route: Route::Selected,
@@ -41,6 +45,7 @@ impl Fake {
             proxies: Vec::new(),
             lookup: Box::new(|_, port| Ok(vec![at(1, port)])),
             reach: Box::new(|_, _, _| Ok(())),
+            answer: Box::new(|_, _| craft_rtmp::Answer::Rtmp),
             fetch: Box::new(|url| Err(format!("{url} is not set up"))),
             calls: Mutex::new(Vec::new()),
         }
@@ -77,6 +82,12 @@ impl Probes for Fake {
     fn reach(&self, host: &str, addr: SocketAddr, tls: bool, _timeout: Duration) -> Result<(), craft_rtmp::Error> {
         self.note(format!("reach {host} {addr} {tls}"));
         (self.reach)(host, addr, tls)
+    }
+
+    fn handshake(&self, host: &str, addr: SocketAddr, tls: bool, _timeout: Duration) -> Result<craft_rtmp::Answer, craft_rtmp::Error> {
+        self.note(format!("handshake {host} {addr} {tls}"));
+        (self.reach)(host, addr, tls)?;
+        Ok((self.answer)(host, addr))
     }
 
     fn fetch(&self, url: &str, _limit: u64) -> Result<Vec<u8>, String> {
@@ -196,7 +207,9 @@ fn a_check_contacts_only_the_server_and_never_sends_the_key() {
     assert_eq!((d.host.as_str(), d.port, d.tls), ("ingest.example", 1935, false));
     assert_eq!(d.english(), "ingest.example answers on port 443 but not on port 1935. This network or the server may be blocking port 1935");
     let calls = fake.calls();
-    for want in ["route any", "lookup ingest.example 1935", "reach ingest.example 192.0.2.1:1935 false", "reach ingest.example 192.0.2.1:443 true"] {
+    for want in
+        ["route any", "lookup ingest.example 1935", "handshake ingest.example 192.0.2.1:1935 false", "reach ingest.example 192.0.2.1:443 true"]
+    {
         assert!(calls.iter().any(|c| c == want), "{want} is missing from {calls:?}");
     }
     assert!(calls.iter().all(|c| !c.contains("secret") && !c.contains("hidden") && !c.starts_with("fetch")), "{calls:?}");
@@ -213,6 +226,34 @@ fn a_check_contacts_only_the_server_and_never_sends_the_key() {
         ]
     );
     assert!(d.evidence.iter().all(|e| !e.detail.contains("secret")), "{:?}", d.evidence);
+    until_checks(&checks, |c| (c.running() == 0).then_some(()));
+}
+
+#[test]
+fn a_port_that_connects_but_does_not_answer_as_a_stream_server_is_reported() {
+    let mut fake = Fake::new();
+    fake.answer = Box::new(|_, _| craft_rtmp::Answer::NotRtmp(b'H'));
+    let (checks, fake) = checks_with(fake, TestClock::new());
+    checks.start(Subject { last: Some(Failure::new(Cause::ClosedDuringSetup, "closed")), ..subject("rtmps://ingest.example/app/key") }).unwrap();
+    let d = done(&checks, "a");
+    assert_eq!(d.verdict, Verdict::NotStreamServer, "{d:?}");
+    assert_eq!(d.detail, "the server's first byte is 0x48, where an RTMP server sends its version, 0x03");
+    let calls = fake.calls();
+    // The handshake runs on the destination's own port only; port 443 gets the secure connection.
+    assert!(calls.iter().any(|c| c == "handshake ingest.example 192.0.2.1:443 true"), "{calls:?}");
+    assert!(calls.iter().all(|c| !c.starts_with("reach ingest.example")), "{calls:?}");
+    let seen: Vec<(Check, &str, Outcome)> = d.evidence.iter().map(|e| (e.check, e.target.as_str(), e.outcome)).collect();
+    assert!(seen.contains(&(Check::SecureConnect, "192.0.2.1:443", Outcome::Ok)), "{seen:?}");
+    assert!(seen.contains(&(Check::Handshake, "192.0.2.1:443", Outcome::NotRtmp)), "{seen:?}");
+    until_checks(&checks, |c| (c.running() == 0).then_some(()));
+    // A server that completes the handshake is reachable, and the line says so.
+    let mut fake = Fake::new();
+    fake.answer = Box::new(|_, _| craft_rtmp::Answer::Rtmp);
+    let (checks, _fake) = checks_with(fake, TestClock::new());
+    checks.start(subject("rtmp://ingest.example/app")).unwrap();
+    let d = done(&checks, "a");
+    assert_eq!(d.verdict, Verdict::Reachable, "{d:?}");
+    assert!(d.evidence.iter().any(|e| (e.check, e.outcome) == (Check::Handshake, Outcome::Ok)), "{:?}", d.evidence);
     until_checks(&checks, |c| (c.running() == 0).then_some(()));
 }
 
@@ -315,6 +356,8 @@ fn steps_still_running_at_the_deadline_are_reported_unfinished() {
     assert_eq!(d.verdict, Verdict::Unknown, "{d:?}");
     let connect = d.evidence.iter().find(|e| e.check == Check::SecureConnect).map(|e| e.outcome);
     assert_eq!(connect, Some(Outcome::Unfinished), "{:?}", d.evidence);
+    // The handshake of a connection that had not opened is not listed.
+    assert!(d.evidence.iter().all(|e| e.check != Check::Handshake), "{:?}", d.evidence);
     drop(release);
     until_checks(&checks, |c| (c.running() == 0).then_some(()));
 }
@@ -584,6 +627,9 @@ fn each_verdict_follows_from_its_evidence() {
     let mut r = results(Some(failed(Cause::TimedOut)));
     r.status = Step::Done(Ok(problem.clone()));
     cases.push((r, None, Some("Svc"), Verdict::ServiceReportsProblem));
+    let mut r = results(ok.clone());
+    r.answers = vec![(at(1, 1935), Step::Done(Spoke::NotRtmp("the first byte".into())))];
+    cases.push((r, None, None, Verdict::NotStreamServer));
     let mut r = results(Some(failed(Cause::TimedOut)));
     r.others = vec![("b.example".into(), Step::Done(failed(Cause::TimedOut))), ("c.example".into(), Step::Done(Ok(())))];
     cases.push((r, None, Some("Svc"), Verdict::IngestNotAnsweringOtherDoes));
@@ -646,13 +692,39 @@ fn each_verdict_follows_from_its_evidence() {
     let mut r = results(Some(Ok(())));
     r.port.push((at(2, 1935), Step::Done(failed(Cause::CertificateExpired))));
     assert_eq!(decide("h.example", 1935, true, None, None, &r).verdict, Verdict::Reachable);
+    // A port that does not answer as a stream server: a refusal of the stream before is not
+    // reported as a refusal now, and the message names the port and what it answered.
+    let mut r = results(Some(Ok(())));
+    let closed = Failure::new(Cause::ClosedDuringSetup, "the server closed the connection after 0 of the 3073 bytes of its handshake");
+    r.answers = vec![(at(1, 1935), Step::Done(Spoke::Failed(closed.clone())))];
+    let d = decide("h.example", 1935, false, None, Some(&rejected), &r);
+    assert_eq!(d.verdict, Verdict::NotStreamServer, "{d:?}");
+    assert_eq!(
+        d.english(),
+        "h.example takes a connection on port 1935, but does not answer as a stream server: the server closed the connection after 0 of the \
+         3073 bytes of its handshake. The server address or port may be wrong, the stream server behind it may not be working, or something on \
+         this network may be answering in its place"
+    );
+    let handshake: Vec<(Check, &str, Outcome)> =
+        d.evidence.iter().filter(|e| e.check == Check::Handshake).map(|e| (e.check, e.target.as_str(), e.outcome)).collect();
+    assert_eq!(handshake, [(Check::Handshake, "192.0.2.1:1935", Outcome::Failed(Cause::ClosedDuringSetup))]);
+    // One address that completes the handshake is enough.
+    r.port.push((at(2, 1935), Step::Done(Ok(()))));
+    r.answers.push((at(2, 1935), Step::Done(Spoke::Rtmp)));
+    assert_eq!(decide("h.example", 1935, false, None, Some(&rejected), &r).verdict, Verdict::Rejected);
+    assert_eq!(decide("h.example", 1935, false, None, None, &r).verdict, Verdict::Reachable);
+    // A handshake that was not run (the connection did not open) adds no evidence line.
+    let mut r = results(Some(failed(Cause::TimedOut)));
+    r.answers = vec![(at(1, 1935), Step::NotRun)];
+    assert!(decide("h.example", 1935, false, None, None, &r).evidence.iter().all(|e| e.check != Check::Handshake));
     // Every step of the longest check is listed, the status summary last.
     let mut r = results(Some(failed(Cause::TimedOut)));
     r.proxies = PROXY_VARIABLES.to_vec();
     let addrs: Vec<SocketAddr> = (1..=4).map(|i| at(i, 1935)).collect();
     r.lookup = Step::Done(Ok(addrs.clone()));
     r.routes = addrs.iter().map(|a| (*a, Route::Selected)).collect();
-    r.port = addrs.iter().map(|a| (*a, Step::Done(failed(Cause::TimedOut)))).collect();
+    r.port = addrs.iter().map(|a| (*a, Step::Done(Ok(())))).collect();
+    r.answers = addrs.iter().map(|a| (*a, Step::Done(Spoke::NotRtmp("the first byte".into())))).collect();
     r.port443 = addrs.iter().map(|a| (SocketAddr::new(a.ip(), 443), Step::Done(failed(Cause::TimedOut)))).collect();
     r.ingests = Step::Done(Ok(vec!["b.example".into(), "c.example".into()]));
     r.others = vec![("b.example".into(), Step::Done(failed(Cause::TimedOut))), ("c.example".into(), Step::Done(failed(Cause::TimedOut)))];
@@ -669,12 +741,14 @@ fn each_verdict_follows_from_its_evidence() {
         "{}",
         d.english()
     );
-    let d = decide("h.example", 1935, true, Some("Svc"), Some(&lost), &cases[13].0);
+    let d = decide("h.example", 1935, true, Some("Svc"), Some(&lost), &cases[14].0);
     assert_eq!(
         d.english(),
         "A secure connection to h.example on port 1935 succeeds; the failure came after that, while the stream was set up or sent: the connection was lost"
     );
-    assert_eq!(templates().len(), 17, "two verdicts have a second message without TLS");
+    let d = decide("h.example", 1935, true, None, None, &cases[7].0);
+    assert!(d.english().starts_with("h.example takes a secure connection on port 1935, but does not answer as a stream server: the first byte. "));
+    assert_eq!(templates().len(), 19, "three verdicts have a second message without TLS");
 }
 
 #[test]

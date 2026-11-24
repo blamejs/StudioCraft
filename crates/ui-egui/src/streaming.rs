@@ -311,6 +311,7 @@ pub(crate) fn check_text(c: Check) -> &'static str {
         Check::Lookup => tl!("Name lookup of"),
         Check::Connect => tl!("Connection to"),
         Check::SecureConnect => tl!("Secure connection to"),
+        Check::Handshake => tl!("Stream server handshake with"),
         Check::Connect443 => tl!("Secure connection on port 443 to"),
         Check::IngestList => tl!("The service's list of ingest servers"),
         Check::OtherIngest => tl!("Secure connection to the service's ingest server"),
@@ -325,6 +326,7 @@ pub(crate) fn outcome_text(o: Outcome) -> &'static str {
         Outcome::Failed(c) => cause_text(c),
         Outcome::Set => tl!("set"),
         Outcome::Problem => tl!("reports a problem"),
+        Outcome::NotRtmp => tl!("answers, but not as a stream server"),
         Outcome::Unknown => tl!("this computer could not say"),
         Outcome::Unfinished => tl!("not finished in time"),
     }

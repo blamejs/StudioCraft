@@ -773,6 +773,99 @@ fn reach_reports_a_closed_port_and_sends_nothing_to_an_open_one() {
     assert!(matches!(crate::reach(&zero, open), Err(Error::BadConfig(_))));
 }
 
+fn addr_of(url: &str) -> SocketAddr {
+    url.trim_start_matches("rtmps://").trim_start_matches("rtmp://").trim_end_matches("/live").parse().unwrap()
+}
+
+#[test]
+fn reach_rtmp_runs_the_handshake_and_sends_no_command() {
+    let (url, server) = spawn(|stream| {
+        let mut c = Conn::new(stream);
+        c.handshake().unwrap();
+        // What the client sends after C2, up to its close.
+        let mut rest = Vec::new();
+        c.s.read_to_end(&mut rest).unwrap();
+        rest
+    });
+    let answer = crate::reach_rtmp(&crate::Reach::new("127.0.0.1", false), addr_of(&url)).unwrap();
+    assert!(matches!(answer, crate::Answer::Rtmp), "{answer:?}");
+    assert!(server.join().unwrap().is_empty(), "no command and no key follow the handshake");
+    // A refused connection is an error, as for `reach`.
+    let closed = closed_port();
+    let e = crate::reach_rtmp(&crate::Reach::new("127.0.0.1", false), closed).unwrap_err();
+    assert!(matches!(&e, Error::Connect(tried) if tried.len() == 1), "{e:?}");
+    let mut zero = crate::Reach::new("127.0.0.1", false);
+    zero.handshake_timeout = Duration::ZERO;
+    assert!(matches!(crate::reach_rtmp(&zero, closed), Err(Error::BadConfig(_))));
+}
+
+#[test]
+fn reach_rtmp_tells_a_port_that_is_not_an_rtmp_server() {
+    // A web server reads the request and answers with an HTTP error, then closes.
+    let (url, server) = spawn(|mut s: TcpStream| {
+        let mut c0c1 = [0u8; 1537];
+        s.read_exact(&mut c0c1).unwrap();
+        s.write_all(b"HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n").unwrap();
+    });
+    let answer = crate::reach_rtmp(&crate::Reach::new("127.0.0.1", false), addr_of(&url)).unwrap();
+    assert!(matches!(answer, crate::Answer::NotRtmp(b'H')), "{answer:?}");
+    server.join().unwrap();
+    // A server that answers with another RTMP version.
+    let (url, server) = spawn(|stream| Conn::new(stream).handshake_with_version(6).is_err());
+    let answer = crate::reach_rtmp(&crate::Reach::new("127.0.0.1", false), addr_of(&url)).unwrap();
+    assert!(matches!(answer, crate::Answer::NotRtmp(6)), "{answer:?}");
+    assert!(server.join().unwrap(), "the client sent no C2 after the wrong version");
+    // A server that closes without a byte.
+    let (url, server) = spawn(|mut s: TcpStream| {
+        let mut c0c1 = [0u8; 1537];
+        s.read_exact(&mut c0c1).unwrap();
+    });
+    let answer = crate::reach_rtmp(&crate::Reach::new("127.0.0.1", false), addr_of(&url)).unwrap();
+    assert!(matches!(answer, crate::Answer::Closed { received: 0 }), "{answer:?}");
+    server.join().unwrap();
+}
+
+#[test]
+fn reach_rtmp_reports_a_server_that_does_not_answer_within_the_timeout() {
+    // The server reads C0 and C1 and sends nothing back, until the client closes.
+    let (url, server) = spawn(|mut s: TcpStream| {
+        let mut c0c1 = [0u8; 1537];
+        s.read_exact(&mut c0c1).unwrap();
+        let mut rest = Vec::new();
+        let _ = s.read_to_end(&mut rest);
+        rest.len()
+    });
+    // The write of C0 and C1 sees the real time; every later look at the clock is past the
+    // handshake timeout, so the read of S0 and S1 times out at once.
+    let start = Instant::now();
+    let mut looks = 0;
+    set_test_clock(Some(Box::new(move || {
+        looks += 1;
+        if looks == 1 { start } else { start + Duration::from_secs(3600) }
+    })));
+    let result = crate::reach_rtmp(&crate::Reach::new("127.0.0.1", false), addr_of(&url));
+    set_test_clock(None);
+    let answer = result.unwrap();
+    assert!(matches!(answer, crate::Answer::NoAnswer { received: 0 }), "{answer:?}");
+    assert_eq!(server.join().unwrap(), 0, "the client sent nothing after C0 and C1");
+}
+
+#[cfg(feature = "rtmps")]
+#[test]
+fn reach_rtmp_runs_the_handshake_over_tls() {
+    let (url, root, server) = spawn_tls(|mut c| {
+        c.handshake().unwrap();
+        let mut rest = Vec::new();
+        c.s.read_to_end(&mut rest).map(|_| rest).map_err(|e| e.kind())
+    });
+    let mut r = crate::Reach::new("127.0.0.1", true);
+    r.tls_roots = TlsRoots::Only(vec![root]);
+    let answer = crate::reach_rtmp(&r, addr_of(&url)).unwrap();
+    assert!(matches!(answer, crate::Answer::Rtmp), "{answer:?}");
+    // The client ended the session with close_notify after C2, and sent nothing else.
+    assert_eq!(server.join().unwrap(), Ok(Vec::new()));
+}
+
 #[cfg(feature = "rtmps")]
 #[test]
 fn reach_completes_the_tls_handshake_without_rtmp_bytes() {

@@ -13,9 +13,11 @@
 //! 2. Looks the server's name up again, waiting at most [`super::LOOKUP_WAIT`].
 //! 3. Opens a TCP connection to each of up to [`craft_rtmp::MAX_ADDRESSES`] of the server's
 //!    addresses on the destination's port and, for `rtmps://`, completes the TLS handshake, which
-//!    sends the host name in clear; then closes it ([`craft_rtmp::reach`]). No RTMP bytes, no
-//!    stream key and no part of the address after the host are sent.
-//! 4. When the port is not 443: the same on port 443 of the same addresses.
+//!    sends the host name in clear. Over each connection that opens it runs the RTMP handshake
+//!    (C0 and C1 out, S0 and S1 in, C2 out, S2 in), then closes it ([`craft_rtmp::reach_rtmp`]).
+//!    No RTMP command, no stream key and no part of the address after the host are sent.
+//! 4. When the port is not 443: a TCP connection and TLS handshake on port 443 of the same
+//!    addresses ([`craft_rtmp::reach`]), with no RTMP bytes.
 //! 5. For a service that publishes them, and only when the check is asked for or the profile's
 //!    `check_service` is on: fetches the service's list of ingest servers and connects to two of
 //!    the others on port 443 with TLS, and fetches the service's status summary. The fetches
@@ -43,15 +45,15 @@ use super::{ALL_LOOKUPS, Clock, LOOKUP_WAIT, MAX_ALL_LOOKUPS, SystemClock, lock,
 
 /// The longest a check takes before it reports, StudioCraft's own value.
 pub const CHECK_TIME: Duration = Duration::from_secs(20);
-/// How long one TCP connection, one TLS handshake or one fetch of a check may take, StudioCraft's
-/// own value.
+/// How long one TCP connection, one TLS handshake, one RTMP handshake or one fetch of a check may
+/// take, StudioCraft's own value.
 pub const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 /// The most checks that run at once in the process.
 pub const MAX_CHECKS: u32 = 4;
 /// The most evidence lines a check has: the route to any address, the proxy variables, the
-/// lookup, a route, a connection and a connection on port 443 for each address tried, the list of
-/// ingest servers, the other ingest servers and the status summary.
-pub const MAX_EVIDENCE: usize = 1 + PROXY_VARIABLES.len() + 1 + 3 * craft_rtmp::MAX_ADDRESSES + 1 + OTHER_INGESTS + 1;
+/// lookup, a route, a connection, an RTMP handshake and a connection on port 443 for each address
+/// tried, the list of ingest servers, the other ingest servers and the status summary.
+pub const MAX_EVIDENCE: usize = 1 + PROXY_VARIABLES.len() + 1 + 4 * craft_rtmp::MAX_ADDRESSES + 1 + OTHER_INGESTS + 1;
 /// The largest list of ingest servers read, in bytes.
 pub const INGEST_LIST_LIMIT: u64 = 256 * 1024;
 /// The largest status summary read, in bytes.
@@ -85,6 +87,9 @@ pub enum Verdict {
     CertificateNotAccepted,
     /// The service's status summary reports a problem.
     ServiceReportsProblem,
+    /// The server's port takes the connection (and the TLS handshake for `rtmps://`), and no
+    /// address that connected completes the RTMP handshake.
+    NotStreamServer,
     /// No address of the server connects, and another ingest server of the service does.
     IngestNotAnsweringOtherDoes,
     /// The server's port timed out, and port 443 of the same server connects.
@@ -106,7 +111,7 @@ pub enum Verdict {
 
 impl Verdict {
     /// Every verdict, in the order they are decided.
-    pub const ALL: [Verdict; 15] = [
+    pub const ALL: [Verdict; 16] = [
         Verdict::NoNetwork,
         Verdict::NameNotFound,
         Verdict::DnsNoAnswer,
@@ -114,6 +119,7 @@ impl Verdict {
         Verdict::Rejected,
         Verdict::CertificateNotAccepted,
         Verdict::ServiceReportsProblem,
+        Verdict::NotStreamServer,
         Verdict::IngestNotAnsweringOtherDoes,
         Verdict::PortNotAnswering443Does,
         Verdict::Refused,
@@ -134,6 +140,7 @@ impl Verdict {
             Verdict::Rejected => "rejected",
             Verdict::CertificateNotAccepted => "certificate_not_accepted",
             Verdict::ServiceReportsProblem => "service_reports_problem",
+            Verdict::NotStreamServer => "not_stream_server",
             Verdict::IngestNotAnsweringOtherDoes => "ingest_not_answering_other_does",
             Verdict::PortNotAnswering443Does => "port_not_answering_443_does",
             Verdict::Refused => "refused",
@@ -161,6 +168,8 @@ pub enum Check {
     Connect,
     /// A TCP connection and TLS handshake to the server's port.
     SecureConnect,
+    /// The RTMP handshake over a connection to the server's port.
+    Handshake,
     /// A TCP connection and TLS handshake to port 443 of the server.
     Connect443,
     /// The service's list of ingest servers.
@@ -181,6 +190,7 @@ impl Check {
             Check::Lookup => "lookup",
             Check::Connect => "connect",
             Check::SecureConnect => "secure_connect",
+            Check::Handshake => "rtmp_handshake",
             Check::Connect443 => "connect_443",
             Check::IngestList => "ingest_list",
             Check::OtherIngest => "other_ingest",
@@ -200,6 +210,8 @@ pub enum Outcome {
     Set,
     /// The service's status summary reports a problem.
     Problem,
+    /// The server's port answered the RTMP handshake with something else.
+    NotRtmp,
     /// The system could not say.
     Unknown,
     /// It had not finished when the check reported.
@@ -207,14 +219,15 @@ pub enum Outcome {
 }
 
 impl Outcome {
-    /// The stable id the control channel uses: `ok`, `set`, `problem`, `unknown`, `unfinished`,
-    /// or the id of the cause of a failure.
+    /// The stable id the control channel uses: `ok`, `set`, `problem`, `not_rtmp`, `unknown`,
+    /// `unfinished`, or the id of the cause of a failure.
     pub fn id(self) -> &'static str {
         match self {
             Outcome::Ok => "ok",
             Outcome::Failed(c) => c.id(),
             Outcome::Set => "set",
             Outcome::Problem => "problem",
+            Outcome::NotRtmp => "not_rtmp",
             Outcome::Unknown => "unknown",
             Outcome::Unfinished => "unfinished",
         }
@@ -282,6 +295,16 @@ impl Diagnosis {
             Verdict::ServiceReportsProblem => (
                 "{service} reports a problem with {component}: {status}. This server may also be affected",
                 vec![service, ("component", self.component.clone().unwrap_or_default()), ("status", self.status.clone().unwrap_or_default())],
+            ),
+            Verdict::NotStreamServer if self.tls => (
+                "{host} takes a secure connection on port {port}, but does not answer as a stream server: {detail}. The server address or port may \
+                 be wrong, the stream server behind it may not be working, or something on this network may be answering in its place",
+                vec![host, port, ("detail", self.detail.clone())],
+            ),
+            Verdict::NotStreamServer => (
+                "{host} takes a connection on port {port}, but does not answer as a stream server: {detail}. The server address or port may be \
+                 wrong, the stream server behind it may not be working, or something on this network may be answering in its place",
+                vec![host, port, ("detail", self.detail.clone())],
             ),
             Verdict::IngestNotAnsweringOtherDoes => {
                 ("{host} cannot be reached from this network, but {other} can", vec![host, ("other", self.other.clone().unwrap_or_default())])
@@ -441,6 +464,8 @@ pub(crate) trait Probes: Send + Sync {
     /// A TCP connection to `addr`, and a TLS handshake for `host` over it with `tls`, each within
     /// `timeout`.
     fn reach(&self, host: &str, addr: SocketAddr, tls: bool, timeout: Duration) -> Result<(), craft_rtmp::Error>;
+    /// The same connection as [`Probes::reach`], then the RTMP handshake over it within `timeout`.
+    fn handshake(&self, host: &str, addr: SocketAddr, tls: bool, timeout: Duration) -> Result<craft_rtmp::Answer, craft_rtmp::Error>;
     /// The body of `url`, at most `limit` bytes, with no redirect followed and no proxy.
     fn fetch(&self, url: &str, limit: u64) -> Result<Vec<u8>, String>;
 }
@@ -466,6 +491,14 @@ impl Probes for System {
         r.connect_timeout = timeout;
         r.tls_timeout = timeout;
         craft_rtmp::reach(&r, addr)
+    }
+
+    fn handshake(&self, host: &str, addr: SocketAddr, tls: bool, timeout: Duration) -> Result<craft_rtmp::Answer, craft_rtmp::Error> {
+        let mut r = craft_rtmp::Reach::new(host, tls);
+        r.connect_timeout = timeout;
+        r.tls_timeout = timeout;
+        r.handshake_timeout = timeout;
+        craft_rtmp::reach_rtmp(&r, addr)
     }
 
     fn fetch(&self, url: &str, limit: u64) -> Result<Vec<u8>, String> {
@@ -851,7 +884,12 @@ impl Checks {
                     }
                 }
                 Ok(Msg::Lookup(..)) => {}
-                Ok(Msg::Port(i, out)) => set(&mut r.port, i, out),
+                Ok(Msg::Port(i, out, answer)) => {
+                    set(&mut r.port, i, out);
+                    if let (Some(a), Some((_, step))) = (answer, r.answers.get_mut(i)) {
+                        *step = Step::Done(a);
+                    }
+                }
                 Ok(Msg::Port443(i, out)) => set(&mut r.port443, i, out),
                 Ok(Msg::Other(i, out)) => set(&mut r.others, i, out),
                 Ok(Msg::Ingests(body)) => {
@@ -890,7 +928,9 @@ impl Checks {
         for (i, a) in tried.iter().enumerate() {
             r.routes.push((*a, self.probes.route(&[*a])));
             r.port.push((*a, Step::Unfinished));
-            if !job.reach(host, *a, tls, move |out| Msg::Port(i, out)) {
+            // Known only once the connection has opened, from the same thread.
+            r.answers.push((*a, Step::NotRun));
+            if !job.port(host, *a, tls, i) {
                 set(&mut r.port, i, Err(Failure::new(Cause::Other, "no thread for the check")));
             }
             if port != 443 {
@@ -936,7 +976,9 @@ fn set<K>(list: &mut [(K, Step<Result<(), Failure>>)], i: usize, out: Result<(),
 /// What a step's thread reports.
 enum Msg {
     Lookup(std::io::Result<Vec<SocketAddr>>, Instant),
-    Port(usize, Result<(), Failure>),
+    /// The connection to the `usize`th address, and what it answered to the RTMP handshake when
+    /// it opened.
+    Port(usize, Result<(), Failure>, Option<Spoke>),
     Port443(usize, Result<(), Failure>),
     Other(usize, Result<(), Failure>),
     Ingests(Result<Vec<u8>, String>),
@@ -988,6 +1030,16 @@ impl Job {
     fn reach(&self, host: &str, addr: SocketAddr, tls: bool, msg: impl FnOnce(Result<(), Failure>) -> Msg + Send + 'static) -> bool {
         let name = host.to_string();
         self.spawn(move |p, _| msg(p.reach(&name, addr, tls, PROBE_TIMEOUT).map_err(|e| super::failure(&e, false))))
+    }
+
+    /// Connects to the destination's port at `addr` and runs the RTMP handshake, as step `i` of
+    /// the port.
+    fn port(&self, host: &str, addr: SocketAddr, tls: bool, i: usize) -> bool {
+        let name = host.to_string();
+        self.spawn(move |p, _| match p.handshake(&name, addr, tls, PROBE_TIMEOUT) {
+            Ok(answer) => Msg::Port(i, Ok(()), Some(Spoke::of(answer))),
+            Err(e) => Msg::Port(i, Err(super::failure(&e, false)), None),
+        })
     }
 
     fn fetch<T>(&self, url: &'static str, limit: u64, msg: fn(Result<Vec<u8>, String>) -> Msg) -> Step<Result<T, String>> {
@@ -1050,6 +1102,48 @@ impl<T> Step<T> {
     }
 }
 
+/// The bytes of S0, S1 and S2, which a server sends in the RTMP handshake.
+const SERVER_HANDSHAKE: u64 = 1 + 2 * 1536;
+
+/// What the destination's port answered to the RTMP handshake.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum Spoke {
+    /// It completed the handshake.
+    Rtmp,
+    /// It answered with something that is not an RTMP handshake, described in English.
+    NotRtmp(String),
+    /// It closed the connection, did not answer in time or failed otherwise.
+    Failed(Failure),
+}
+
+impl Spoke {
+    fn of(answer: craft_rtmp::Answer) -> Spoke {
+        use craft_rtmp::Answer as A;
+        match answer {
+            A::Rtmp => Spoke::Rtmp,
+            A::NotRtmp(b) => Spoke::NotRtmp(format!("the server's first byte is 0x{b:02X}, where an RTMP server sends its version, 0x03")),
+            A::Closed { received } => Spoke::Failed(Failure::new(
+                Cause::ClosedDuringSetup,
+                format!("the server closed the connection after {received} of the {SERVER_HANDSHAKE} bytes of its handshake"),
+            )),
+            A::NoAnswer { received } => Spoke::Failed(Failure::new(
+                Cause::SetupTimedOut,
+                format!("the server sent {received} of the {SERVER_HANDSHAKE} bytes of its handshake within {} s", PROBE_TIMEOUT.as_secs()),
+            )),
+            A::Failed(e) => Spoke::Failed(Failure::new(Cause::Other, format!("the handshake failed: {e}"))),
+        }
+    }
+
+    /// The English description of an answer that is not a completed handshake.
+    fn detail(&self) -> Option<&str> {
+        match self {
+            Spoke::Rtmp => None,
+            Spoke::NotRtmp(d) => Some(d),
+            Spoke::Failed(f) => Some(&f.detail),
+        }
+    }
+}
+
 /// What the service's status summary says.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct Status {
@@ -1069,6 +1163,9 @@ pub(crate) struct Results {
     pub(crate) lookup: Step<Result<Vec<SocketAddr>, Failure>>,
     pub(crate) routes: Vec<(SocketAddr, Route)>,
     pub(crate) port: Vec<(SocketAddr, Step<Result<(), Failure>>)>,
+    /// What each address of `port` answered to the RTMP handshake; not run until its connection
+    /// opened.
+    pub(crate) answers: Vec<(SocketAddr, Step<Spoke>)>,
     pub(crate) port443: Vec<(SocketAddr, Step<Result<(), Failure>>)>,
     pub(crate) ingests: Step<Result<Vec<String>, String>>,
     pub(crate) others: Vec<(String, Step<Result<(), Failure>>)>,
@@ -1176,6 +1273,16 @@ pub(crate) fn decide(host: &str, port: u16, tls: bool, service: Option<&str>, la
     // lookup's error does not say whether a DNS server was reached: only Windows reports a code,
     // and other systems report text that is not read.
     let no_route = r.default_route == Some(Route::None) && r.routes.iter().all(|(_, route)| *route == Route::None);
+    // The port took a connection, and no address that connected completed the RTMP handshake:
+    // the first other answer, when there is one.
+    let not_spoken = if r.answers.iter().any(|(_, s)| matches!(s, Step::Done(Spoke::Rtmp))) {
+        None
+    } else {
+        r.answers.iter().find_map(|(_, s)| match s {
+            Step::Done(spoke) => spoke.detail(),
+            _ => None,
+        })
+    };
     let other_ok = r.others.iter().find(|(_, s)| ok(s)).map(|(h, _)| h.clone());
     let status_problem = match &r.status {
         Step::Done(Ok(s)) if s.problem => Some(s.clone()),
@@ -1192,7 +1299,7 @@ pub(crate) fn decide(host: &str, port: u16, tls: bool, service: Option<&str>, la
         }
     } else if r.lookup.unfinished() {
         Verdict::DnsNoAnswer
-    } else if any_ok && last.is_some_and(|f| matches!(f.cause, Cause::RejectedConnect | Cause::RejectedPublish)) {
+    } else if any_ok && not_spoken.is_none() && last.is_some_and(|f| matches!(f.cause, Cause::RejectedConnect | Cause::RejectedPublish)) {
         Verdict::Rejected
     } else if let Some(c) = port_causes.iter().copied().find(|c| tls && !any_ok && is_certificate(*c)) {
         d.reason = Some(c);
@@ -1201,6 +1308,9 @@ pub(crate) fn decide(host: &str, port: u16, tls: bool, service: Option<&str>, la
         d.component = Some(if s.component.is_empty() { service.unwrap_or_default().to_string() } else { s.component });
         d.status = Some(s.status);
         Verdict::ServiceReportsProblem
+    } else if any_ok && let Some(detail) = not_spoken {
+        d.detail = detail.to_string();
+        Verdict::NotStreamServer
     } else if unreached && let Some(other) = other_ok {
         d.other = Some(other);
         Verdict::IngestNotAnsweringOtherDoes
@@ -1292,6 +1402,16 @@ fn evidence(host: &str, port: u16, tls: bool, r: &Results) -> Vec<Evidence> {
         if let Some(o) = step_outcome(s) {
             push(connect, SocketAddr::new(a.ip(), port).to_string(), o);
         }
+    }
+    for (a, s) in &r.answers {
+        let o = match s {
+            Step::NotRun => continue,
+            Step::Unfinished => (Outcome::Unfinished, String::new()),
+            Step::Done(Spoke::Rtmp) => (Outcome::Ok, String::new()),
+            Step::Done(Spoke::NotRtmp(d)) => (Outcome::NotRtmp, d.clone()),
+            Step::Done(Spoke::Failed(f)) => (Outcome::Failed(f.cause), f.detail.clone()),
+        };
+        push(Check::Handshake, SocketAddr::new(a.ip(), port).to_string(), o);
     }
     for (a, s) in &r.port443 {
         if let Some(o) = step_outcome(s) {

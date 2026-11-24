@@ -270,7 +270,7 @@ impl Publisher {
     fn handshake(&mut self) -> Result<(), Error> {
         let started = self.started;
         let elapsed = || started.elapsed().as_millis() as u32;
-        let mut counted = Counted { inner: &mut self.transport, read: 0, written: 0 };
+        let mut counted = Counted { inner: &mut self.transport, read: 0, written: 0, first: None };
         let result = handshake::client(&mut counted, elapsed);
         let (read, written) = (counted.read, counted.written);
         self.bytes_sent += written;
@@ -281,7 +281,7 @@ impl Publisher {
             Ok(()) => Ok(()),
             Err(HandshakeError::Read(e)) => Err(read_error(e, "handshake")),
             Err(HandshakeError::Write(e)) => Err(read_error(e, "handshake")),
-            Err(HandshakeError::Rtmp(e)) => Err(e),
+            Err(HandshakeError::Version(_)) => Err(Error::Protocol("the server chose an RTMP version other than 3")),
         }
     }
 
@@ -702,7 +702,7 @@ pub(crate) fn candidates(addrs: &[SocketAddr]) -> Vec<SocketAddr> {
     out
 }
 
-/// What [`reach`] connects to, and how long each step may take.
+/// What [`reach`] and [`reach_rtmp`] connect to, and how long each step may take.
 #[derive(Clone, Debug)]
 pub struct Reach {
     /// The server's host name. TLS checks the server's certificate against it, and the TLS
@@ -714,6 +714,9 @@ pub struct Reach {
     pub connect_timeout: Duration,
     /// How long the TLS handshake may take.
     pub tls_timeout: Duration,
+    /// How long the RTMP handshake of [`reach_rtmp`] may take, counted from the end of the TLS
+    /// handshake (or of the TCP connection without TLS).
+    pub handshake_timeout: Duration,
     /// Which certificates the server's certificate must chain to.
     #[cfg(feature = "rtmps")]
     pub tls_roots: TlsRoots,
@@ -721,17 +724,79 @@ pub struct Reach {
 
 impl Reach {
     /// A check of `host`, with a TLS handshake when `tls` is set, the default connect timeout
-    /// (10 s), the default setup timeout (15 s) for the handshake and the system's trust store.
+    /// (10 s), the default setup timeout (15 s) for each handshake and the system's trust store.
     pub fn new(host: &str, tls: bool) -> Reach {
         Reach {
             host: host.to_owned(),
             tls,
             connect_timeout: DEFAULT_CONNECT_TIMEOUT,
             tls_timeout: DEFAULT_SETUP_TIMEOUT,
+            handshake_timeout: DEFAULT_SETUP_TIMEOUT,
             #[cfg(feature = "rtmps")]
             tls_roots: TlsRoots::Platform,
         }
     }
+
+    fn check(&self) -> Result<(), Error> {
+        if [self.connect_timeout, self.tls_timeout, self.handshake_timeout].iter().any(|t| t.is_zero() || *t > MAX_TIMEOUT) {
+            return Err(Error::BadConfig("every timeout must be longer than 0 and at most 24 hours"));
+        }
+        #[cfg(not(feature = "rtmps"))]
+        if self.tls {
+            return Err(Error::BadConfig("rtmps:// needs the rtmps feature"));
+        }
+        Ok(())
+    }
+
+    /// Opens the TCP connection to `addr` and, with [`Reach::tls`], completes the TLS handshake.
+    /// Returns the connection and the end of the TLS handshake's timeout.
+    fn open(&self, addr: SocketAddr) -> Result<(Transport, Instant), Error> {
+        let socket = TcpStream::connect_timeout(&addr, self.connect_timeout).map_err(|e| Error::Connect(vec![(addr, e)]))?;
+        let deadline = Instant::now() + self.tls_timeout;
+        #[cfg(feature = "rtmps")]
+        if self.tls {
+            let sock = Socket::new(socket, Some(deadline));
+            return start_tls(sock, &self.host, &self.tls_roots).map(|t| (t, deadline));
+        }
+        Ok((Transport::Tcp(Socket::new(socket, None)), deadline))
+    }
+
+    /// Ends what [`Reach::open`] opened: a TLS session as [`end_tls`] does, by `deadline`, and a
+    /// plain connection by closing it.
+    fn close(&self, t: Transport, deadline: Instant) {
+        #[cfg(feature = "rtmps")]
+        if self.tls {
+            end_tls(t, deadline);
+            return;
+        }
+        let _ = deadline;
+        drop(t);
+    }
+}
+
+/// What the port [`reach_rtmp`] connected to answered to the RTMP handshake.
+#[derive(Debug)]
+pub enum Answer {
+    /// The server completed the handshake: S0 with version 3, then S1 and S2.
+    Rtmp,
+    /// The server's first byte is not RTMP version 3, so what answers on the port is not a server
+    /// this crate can publish to. Holds that byte: an HTTP server's answer, for example, starts with
+    /// `H` (0x48).
+    NotRtmp(u8),
+    /// The server closed or reset the connection before the handshake finished, after sending
+    /// `received` bytes of S0, S1 and S2 (3073 in all).
+    Closed {
+        /// The bytes the server had sent.
+        received: u64,
+    },
+    /// The handshake timeout ran out after the server had sent `received` bytes of S0, S1 and S2,
+    /// or while it did not read C0 and C1.
+    NoAnswer {
+        /// The bytes the server had sent.
+        received: u64,
+    },
+    /// Reading or writing failed for another reason.
+    Failed(io::Error),
 }
 
 /// Opens a TCP connection to `addr` and, with [`Reach::tls`], completes a TLS handshake over it,
@@ -741,22 +806,42 @@ impl Reach {
 /// refused or timed-out connection is [`Error::Connect`] with `addr`, and a failed handshake is
 /// [`Error::Tls`], [`Error::Timeout`] or [`Error::Closed`], as for [`Publisher::connect`].
 pub fn reach(r: &Reach, addr: SocketAddr) -> Result<(), Error> {
-    if [r.connect_timeout, r.tls_timeout].iter().any(|t| t.is_zero() || *t > MAX_TIMEOUT) {
-        return Err(Error::BadConfig("every timeout must be longer than 0 and at most 24 hours"));
-    }
-    #[cfg(not(feature = "rtmps"))]
-    if r.tls {
-        return Err(Error::BadConfig("rtmps:// needs the rtmps feature"));
-    }
-    let socket = TcpStream::connect_timeout(&addr, r.connect_timeout).map_err(|e| Error::Connect(vec![(addr, e)]))?;
-    #[cfg(feature = "rtmps")]
-    if r.tls {
-        let deadline = Instant::now() + r.tls_timeout;
-        let sock = Socket::new(socket, Some(deadline));
-        return start_tls(sock, &r.host, &r.tls_roots).map(|t| end_tls(t, deadline));
-    }
-    drop(socket);
+    r.check()?;
+    let (t, deadline) = r.open(addr)?;
+    r.close(t, deadline);
     Ok(())
+}
+
+/// Connects to `addr` as [`reach`] does, then runs the client's side of the RTMP handshake (C0
+/// and C1, then S0 and S1 are read, C2 is sent and S2 is read) within [`Reach::handshake_timeout`],
+/// and closes the connection as [`reach`] does. It sends no command, no stream key and nothing of
+/// the address after the host: the server never gets a `connect` or a `publish`. A failure before
+/// the handshake is an [`Error`] as for [`reach`]; once the connection is open, what the server
+/// did is the [`Answer`].
+pub fn reach_rtmp(r: &Reach, addr: SocketAddr) -> Result<Answer, Error> {
+    r.check()?;
+    let (mut t, _) = r.open(addr)?;
+    let started = Instant::now();
+    let deadline = started + r.handshake_timeout;
+    t.set_deadline(Some(deadline));
+    let mut counted = Counted { inner: &mut t, read: 0, written: 0, first: None };
+    let result = handshake::client(&mut counted, || started.elapsed().as_millis() as u32);
+    let (received, first) = (counted.read, counted.first);
+    let answer = match (first, result) {
+        // A first byte that is not 3 answers the question, however the rest ended.
+        (Some(b), _) if b != handshake::VERSION => Answer::NotRtmp(b),
+        (_, Ok(())) => Answer::Rtmp,
+        (_, Err(HandshakeError::Version(b))) => Answer::NotRtmp(b),
+        (_, Err(HandshakeError::Read(e) | HandshakeError::Write(e))) => match e.kind() {
+            io::ErrorKind::TimedOut | io::ErrorKind::WouldBlock => Answer::NoAnswer { received },
+            io::ErrorKind::UnexpectedEof | io::ErrorKind::ConnectionReset | io::ErrorKind::ConnectionAborted | io::ErrorKind::BrokenPipe => {
+                Answer::Closed { received }
+            }
+            _ => Answer::Failed(e),
+        },
+    };
+    r.close(t, deadline);
+    Ok(answer)
 }
 
 /// How long [`reach`] waits, after its close_notify, for the server to close its side.
@@ -847,16 +932,20 @@ fn start_tls(mut sock: Socket, host: &str, tls_roots: &TlsRoots) -> Result<Trans
     Ok(Transport::Tls(Box::new(rustls::StreamOwned::new(conn, sock))))
 }
 
-/// Counts the bytes that pass through, for the handshake.
+/// Counts the bytes that pass through, for the handshake, and keeps the first byte read.
 struct Counted<'a> {
     inner: &'a mut Transport,
     read: u64,
     written: u64,
+    first: Option<u8>,
 }
 
 impl io::Read for Counted<'_> {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         let n = self.inner.read_blocking(buf)?;
+        if self.first.is_none() && n > 0 {
+            self.first = buf.first().copied();
+        }
         self.read += n as u64;
         Ok(n)
     }

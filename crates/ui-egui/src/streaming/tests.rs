@@ -884,8 +884,22 @@ fn a_certificate_verdict_names_the_reason_in_the_interface_language() {
     assert_eq!(verdict_msg(&d).english(), d.english(), "the window's reason is the same English text");
     assert!(d.english().contains("(the server's certificate has expired)"), "{}", d.english());
     let texts: std::collections::HashSet<&str> =
-        [Outcome::Ok, Outcome::Set, Outcome::Problem, Outcome::Unknown, Outcome::Unfinished].into_iter().map(outcome_text).collect();
-    assert_eq!(texts.len(), 5, "every outcome has its own text");
+        [Outcome::Ok, Outcome::Set, Outcome::Problem, Outcome::NotRtmp, Outcome::Unknown, Outcome::Unfinished]
+            .into_iter()
+            .map(outcome_text)
+            .collect();
+    assert_eq!(texts.len(), 6, "every outcome has its own text");
+    let handshake = Evidence {
+        check: Check::Handshake,
+        target: "192.0.2.1:1935".into(),
+        outcome: Outcome::NotRtmp,
+        detail: "the server's first byte is 0x48, where an RTMP server sends its version, 0x03".into(),
+    };
+    assert_eq!(
+        evidence_text(&handshake),
+        "Stream server handshake with 192.0.2.1:1935: answers, but not as a stream server (the server's first byte is 0x48, where an RTMP server \
+         sends its version, 0x03)"
+    );
 }
 
 #[test]
@@ -894,7 +908,7 @@ fn every_check_message_has_an_english_row() {
     let rows: std::collections::HashSet<(&str, &str)> =
         en.lines().filter_map(|l| l.split('\t').collect::<Vec<_>>().get(..2).map(|c| (c[0], c[1]))).collect();
     let templates = studiocraft_studio::diagnose::templates();
-    assert_eq!(templates.len(), 17);
+    assert_eq!(templates.len(), 19);
     let missing: Vec<String> = templates.iter().filter(|t| !rows.contains(&("@msg", **t))).map(|t| format!("@msg\t{t}\t{t}")).collect();
     assert!(missing.is_empty(), "check messages with no @msg row:\n{}", missing.join("\n"));
 }
