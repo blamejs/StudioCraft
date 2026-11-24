@@ -584,6 +584,13 @@ window cannot read, and a stream that fails to start, are shown as the reason th
 started. After a start, the window shows "The stream is starting" until the stream runs, fails or
 stops.
 
+The Pause screen row, under Go Live to N, has Pause, which runs `pause.start` with the profile's
+settings, and +1 min, which runs `pause.extend` with 60 s and is off while the program is not
+paused. While paused, Pause reads Resume and runs `pause.stop`, and the row shows the time left
+("4:32 left"), "The countdown ended" at zero, or the time paused without a countdown ("Paused for
+2:10"). Each destination that is live reads "Live · sending the pause screen" while paused
+([Pause screen](#pause-screen)).
+
 ### Pause screen
 
 File › Pause Program shows the pause screen in the program in place of the program scene, with

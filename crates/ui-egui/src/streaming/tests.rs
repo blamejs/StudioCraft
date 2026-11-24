@@ -22,18 +22,20 @@ fn ids(a: &StudioApp) -> Vec<String> {
 }
 
 /// What the window shows: the settings, whether a stream runs and the state of its destinations,
-/// the session keys held, and the connection checks.
+/// the session keys held, the connection checks, and the pause.
 struct Shown {
     stream: StreamSettings,
     running: bool,
     live: Vec<DestinationState>,
     held: Vec<String>,
     checks: Vec<(String, CheckState)>,
+    paused: Option<Option<u64>>,
+    paused_for: Option<u64>,
 }
 
 impl Shown {
     fn of(stream: StreamSettings) -> Shown {
-        Shown { stream, running: false, live: Vec::new(), held: Vec::new(), checks: Vec::new() }
+        Shown { stream, running: false, live: Vec::new(), held: Vec::new(), checks: Vec::new(), paused: None, paused_for: None }
     }
 }
 
@@ -53,7 +55,15 @@ impl Window {
             let (acts, panel) = (Rc::clone(&acts), Rc::clone(&panel));
             Fixture::new(move |ui| {
                 let held = |name: &str| shown.held.iter().any(|h| h == name);
-                let view = View { stream: &shown.stream, running: shown.running, live: &shown.live, held: &held, checks: &shown.checks };
+                let view = View {
+                    stream: &shown.stream,
+                    running: shown.running,
+                    live: &shown.live,
+                    held: &held,
+                    checks: &shown.checks,
+                    paused: shown.paused,
+                    paused_for: shown.paused_for,
+                };
                 show(ui, &view, &mut panel.borrow_mut(), &mut acts.borrow_mut());
             })
         };
@@ -668,7 +678,7 @@ fn a_failure_is_listed_with_its_cause_and_addresses() {
         ])
     );
     // The row names the cause, and its hover holds the error and each address.
-    assert_eq!(status_text(&d, true, Some(&retrying)).0, "Trying again (try 2): the server did not answer in time");
+    assert_eq!(status_text(&d, true, Some(&retrying), false).0, "Trying again (try 2): the server did not answer in time");
     let detail = status_detail(true, Some(&retrying)).unwrap();
     assert_eq!(
         detail,
@@ -700,10 +710,105 @@ fn a_destination_waiting_for_the_network_says_so() {
     assert_eq!((v["attempt"].clone(), v["cause"].clone()), (json!(3), json!("lookup_failed")));
     assert_eq!(v["error"], json!(failure.detail));
     assert_eq!(
-        status_text(&d, true, Some(&waiting)),
+        status_text(&d, true, Some(&waiting), false),
         ("Waiting for the network (try 3): the server's name could not be looked up".into(), Tone::Warn)
     );
     assert_eq!(status_detail(true, Some(&waiting)).as_deref(), Some("the server's name did not resolve: no network"));
+}
+
+#[test]
+fn the_pause_row_pauses_resumes_and_adds_a_minute() {
+    let click = |w: &mut Window, label: &str| {
+        let Some(button) = w.f.by_label(label) else { panic!("no {label}: {:?}", w.texts()) };
+        w.f.click(&button).frame(Vec::new());
+    };
+    let ran = |w: &Window| -> Vec<(String, Value)> {
+        w.acts.borrow().iter().filter_map(|a| if let Act::Run(c) = a { Some((c.id.clone(), c.params.clone())) } else { None }).collect()
+    };
+    // Not paused: Pause pauses with the profile's settings, and +1 min is off and says why.
+    let mut w = Window::new(Shown::of(StreamSettings::default()), StreamingPanel::default());
+    let texts = w.texts();
+    assert!(texts.iter().any(|t| t == "Pause screen") && !texts.iter().any(|t| t == "Resume"), "{texts:?}");
+    assert!(w.disabled("+1 min"));
+    let more = w.f.by_label("+1 min").map(|t| t.node);
+    assert_eq!(more.and_then(|k| w.f.tree().description_of(k)), Some("The program is not paused"));
+    assert!(ran(&w).is_empty(), "drawing does nothing");
+    click(&mut w, "+1 min");
+    assert!(ran(&w).is_empty(), "+1 min that is off runs nothing");
+    click(&mut w, "Pause");
+    assert_eq!(ran(&w), [("pause.start".to_string(), json!({}))]);
+    // Paused with a countdown: the time left, Resume and +1 min.
+    let counting = Shown { paused: Some(Some(272_000)), paused_for: Some(28_000), ..Shown::of(StreamSettings::default()) };
+    let mut w = Window::new(counting, StreamingPanel::default());
+    let texts = w.texts();
+    assert!(texts.iter().any(|t| t == "4:32 left") && !texts.iter().any(|t| t == "Pause"), "{texts:?}");
+    assert!(!w.disabled("+1 min"));
+    click(&mut w, "+1 min");
+    click(&mut w, "Resume");
+    assert_eq!(ran(&w), [("pause.extend".to_string(), json!({"seconds": 60})), ("pause.stop".to_string(), json!({}))]);
+    // Without a countdown the row shows the time paused, and at zero that the countdown ended.
+    let open = Shown { paused: Some(None), paused_for: Some(130_400), ..Shown::of(StreamSettings::default()) };
+    let texts = Window::new(open, StreamingPanel::default()).texts();
+    assert!(texts.iter().any(|t| t == "Paused for 2:10"), "{texts:?}");
+    let zero = Shown { paused: Some(Some(0)), paused_for: Some(300_000), ..Shown::of(StreamSettings::default()) };
+    let texts = Window::new(zero, StreamingPanel::default()).texts();
+    assert!(texts.iter().any(|t| t == "The countdown ended"), "{texts:?}");
+    assert_eq!(pause_time(None, Some(5_000)), None, "nothing while not paused");
+    assert_eq!(pause_time(Some(Some(3_723_000)), None).as_deref(), Some("1:02:03 left"));
+    assert_eq!(pause_time(Some(None), None).as_deref(), Some("Paused for 0:00"));
+}
+
+#[test]
+fn a_live_destination_says_it_sends_the_pause_screen_while_paused() {
+    let stream = StreamSettings { destinations: vec![turned("a", true), turned("b", true), turned("c", true)], ..StreamSettings::default() };
+    let live = vec![
+        state("a", DestinationStatus::Live),
+        state("b", DestinationStatus::Retrying { attempt: 2, failure: Failure::new(Cause::Lost, "the server closed the connection") }),
+        state("c", DestinationStatus::Connecting),
+    ];
+    let paused = Shown { running: true, live: live.clone(), paused: Some(Some(60_000)), paused_for: Some(0), ..Shown::of(stream.clone()) };
+    let texts = Window::new(paused, StreamingPanel::default()).texts();
+    assert_eq!(texts.iter().filter(|t| *t == "Live · sending the pause screen").count(), 1, "{texts:?}");
+    assert!(!texts.iter().any(|t| t == "Live"), "{texts:?}");
+    assert!(texts.iter().any(|t| t == "Trying again (try 2): the connection was lost"), "a destination that is not live keeps its status");
+    assert!(texts.iter().any(|t| t == "Connecting"), "{texts:?}");
+    let shown = Window::new(Shown { running: true, live, ..Shown::of(stream) }, StreamingPanel::default()).texts();
+    assert!(shown.iter().any(|t| t == "Live") && !shown.iter().any(|t| t.contains("pause screen")), "{shown:?}");
+    assert_eq!(status_text(&turned("a", true), true, Some(&state("a", DestinationStatus::Live)), true).1, Tone::Good);
+}
+
+#[test]
+fn the_window_shows_the_studios_pause() {
+    let mut a = app();
+    let ctx = crate::test_context();
+    let painted = |a: &mut StudioApp| -> Vec<String> {
+        fn walk(shape: &egui::Shape, texts: &mut Vec<String>) {
+            match shape {
+                egui::Shape::Text(t) => texts.push(t.galley.text().to_string()),
+                egui::Shape::Vec(v) => v.iter().for_each(|s| walk(s, texts)),
+                _ => {}
+            }
+        }
+        let mut texts = Vec::new();
+        // A new window lays itself out unseen in its first frame, so the texts are of the second.
+        for _ in 0..2 {
+            let raw =
+                egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1600.0, 1000.0))), ..Default::default() };
+            a.before_input(&ctx);
+            let mut out = ctx.run_ui(raw, |ui| a.frame(ui));
+            out.textures_delta.clear();
+            texts.clear();
+            out.shapes.iter().for_each(|c| walk(&c.shape, &mut texts));
+        }
+        texts
+    };
+    run(&mut a, &ctx, "view.streaming", json!({})).unwrap();
+    assert!(!painted(&mut a).iter().any(|t| t.ends_with(" left")), "nothing counts down before the pause");
+    run(&mut a, &ctx, "pause.start", json!({"countdown_s": 120})).unwrap();
+    let texts = painted(&mut a);
+    assert!(texts.iter().any(|t| t == "2:00 left" || t == "1:59 left"), "{texts:?}");
+    run(&mut a, &ctx, "pause.stop", json!({})).unwrap();
+    assert!(!painted(&mut a).iter().any(|t| t.ends_with(" left")), "the row stops counting at Resume");
 }
 
 #[test]
