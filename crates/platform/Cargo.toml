@@ -23,6 +23,8 @@ cpal.workspace = true
 [target.'cfg(windows)'.dependencies]
 nokhwa = { workspace = true, features = ["input-msmf"] }
 comedy.workspace = true
+# The device watcher that reports cameras plugged in or out.
+windows = { version = "0.62", features = ["Devices_Enumeration", "Foundation"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 nokhwa = { workspace = true, features = ["input-avfoundation"] }
@@ -41,6 +43,8 @@ futures-util.workspace = true
 pollster.workspace = true
 nokhwa = { workspace = true, features = ["input-v4l"] }
 v4l.workspace = true
+# inotify on /dev, which reports V4L2 nodes plugged in or out.
+rustix = { workspace = true, features = ["fs"] }
 wayland-client.workspace = true
 x11rb.workspace = true
 

@@ -330,6 +330,7 @@
 	the audio stream failed	音声ストリームでエラーが発生しました
 	the camera capture could not start	カメラキャプチャを開始できませんでした
 	the camera is already open in another format	カメラは既に別の形式で開かれています
+	the camera is not connected	カメラが接続されていません
 	the camera is still closing	カメラはまだ終了処理中です
 	the camera offers no format StudioCraft reads	このカメラには StudioCraft が対応する映像形式がありません
 	the camera sends frames that cannot be read	カメラから読み取れないフレームが送られています

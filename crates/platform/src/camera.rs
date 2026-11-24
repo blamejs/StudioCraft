@@ -8,6 +8,8 @@
 //!
 //! A camera is stored in settings as its name and the system's id for it ([`CameraInfo::key`]).
 //! When that exact camera is gone, capture opens the first camera with the same name.
+//!
+//! On Windows and Linux a [`Watch`] tells when a camera is plugged in or out ([`watch`]).
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -18,6 +20,8 @@ use studiocraft_media::video::VideoFrame;
 use crate::PlatformError;
 use crate::camera_frames::Converter;
 use crate::screen_frames::{FrameSlot, State};
+
+pub use crate::camera_watch::{CameraEvents, Watch, watch, watch_with};
 
 /// A camera the system reports.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -360,6 +364,8 @@ struct Reader {
     wanted: Option<CameraFormat>,
     /// The capture the reader joined, set once it has.
     capture: OnceLock<Arc<Shared>>,
+    /// The listed camera the capture thread chose for this reader, set once it has.
+    camera: OnceLock<CameraInfo>,
     /// Whether the reader waited for a camera that was opening.
     #[cfg(test)]
     waited: AtomicBool,
@@ -441,6 +447,7 @@ impl CameraCapture {
             error: Mutex::new(None),
             wanted: format,
             capture: OnceLock::new(),
+            camera: OnceLock::new(),
             #[cfg(test)]
             waited: AtomicBool::new(false),
         });
@@ -480,6 +487,12 @@ impl CameraCapture {
         let open = *self.reader.capture.get()?.format.get()?;
         self.reader.wanted.filter(|w| *w != open).map(|_| open)
     }
+
+    /// The camera the capture chose from the system's list, once its thread has listed the
+    /// cameras: the camera that is unplugged when this one is no longer listed.
+    pub fn camera(&self) -> Option<&CameraInfo> {
+        self.reader.camera.get()
+    }
 }
 
 impl Drop for CameraCapture {
@@ -504,6 +517,7 @@ fn run(backend: &dyn CameraBackend, want: &CameraInfo, reader: &Arc<Reader>) -> 
     let camera = best_match(&list, want).and_then(|i| list.get(i)).ok_or_else(|| {
         PlatformError::NotFound(if want.name.is_empty() { "a camera".into() } else { format!("the camera \u{201c}{}\u{201d}", want.name) })
     })?;
+    let _ = reader.camera.set(camera.clone());
     let capturing = match Capturing::reserve(camera.key(), reader)? {
         Reserved::Joined | Reserved::Dropped => return Ok(()),
         Reserved::Owner(c) => c,
@@ -1147,6 +1161,26 @@ mod tests {
             std::thread::yield_now();
         }
         assert_eq!(fake.opened.lock().unwrap().as_slice(), &[(fake.list[0].clone(), HD)], "the first camera, at its default format");
+        assert_eq!(c.camera(), Some(&fake.list[0]), "the capture names the camera it chose");
+    }
+
+    #[test]
+    fn a_capture_names_the_listed_camera_it_chose() {
+        let (_tx, rx) = mpsc::channel();
+        let fake = Arc::new(Fake::new(rx));
+        // Asked for by name only, as a saved camera whose id changed.
+        let c = CameraCapture::open_with(fake.clone(), &cam("Room", "replugged").key(), None).unwrap();
+        // The camera is chosen before it is opened.
+        while fake.opened.lock().unwrap().is_empty() {
+            std::thread::yield_now();
+        }
+        assert_eq!(c.camera(), Some(&fake.list[1]));
+        let mut gone = CameraCapture::open_with(fake, &cam("Gone", "9").key(), None).unwrap();
+        let mut f = VideoFrame::default();
+        while gone.grab(&mut f) == Err(PlatformError::Waiting) {
+            std::thread::yield_now();
+        }
+        assert_eq!(gone.camera(), None, "no listed camera matched");
     }
 
     fn failure(fake: Fake, key: &str, format: Option<CameraFormat>) -> PlatformError {

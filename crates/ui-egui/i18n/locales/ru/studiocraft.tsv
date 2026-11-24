@@ -330,6 +330,7 @@
 	the audio stream failed	сбой аудиопотока
 	the camera capture could not start	не удалось начать захват с камеры
 	the camera is already open in another format	камера уже открыта в другом формате
+	the camera is not connected	камера не подключена
 	the camera is still closing	камера ещё закрывается
 	the camera offers no format StudioCraft reads	камера не поддерживает ни одного формата, с которым работает StudioCraft
 	the camera sends frames that cannot be read	камера присылает кадры, которые не удаётся прочитать

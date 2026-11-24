@@ -321,6 +321,7 @@
 	the audio stream failed	de audiostroom is mislukt
 	the camera capture could not start	de camera-opname kon niet starten
 	the camera is already open in another format	de camera is al geopend in een ander formaat
+	the camera is not connected	de camera is niet aangesloten
 	the camera is still closing	de camera wordt nog gesloten
 	the camera offers no format StudioCraft reads	de camera biedt geen formaat dat StudioCraft kan lezen
 	the camera sends frames that cannot be read	de camera stuurt beelden die niet kunnen worden gelezen

@@ -327,6 +327,7 @@
 	the audio stream failed	il flusso audio non è riuscito
 	the camera capture could not start	impossibile avviare la cattura della fotocamera
 	the camera is already open in another format	la fotocamera è già aperta in un altro formato
+	the camera is not connected	la fotocamera non è collegata
 	the camera is still closing	la fotocamera si sta ancora chiudendo
 	the camera offers no format StudioCraft reads	la fotocamera non offre nessun formato che StudioCraft sa leggere
 	the camera sends frames that cannot be read	la fotocamera invia fotogrammi illeggibili
