@@ -69,6 +69,7 @@ use studiocraft_plugin::{
 use crate::native::{DISK_WAIT, Item, Native, PacketQueue, QUEUE_BYTES, QUEUE_SPAN_NS, Sink, Track};
 
 pub mod diagnose;
+pub mod ingests;
 
 /// Seconds of the stream each destination's ring holds.
 pub const RING_SECONDS: u32 = 4;
