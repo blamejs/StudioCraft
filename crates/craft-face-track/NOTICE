@@ -1,0 +1,21 @@
+craft-face-track
+Copyright (c) 2026 The Craft contributors.
+Licensed under the MIT License or the Apache License, Version 2.0, at your option
+(LICENSE-MIT and LICENSE-APACHE at the repository root).
+
+This crate contains code from the following project, under the same licenses:
+
+EffectCraft (https://github.com/storytold/effectcraft), crates/segment at commit
+7e2d0256209974ffb92a29d8bdb6f2a49078f51f: the TensorFlow Lite reader and its load-time budgets
+(from src/tflite.rs and src/tflite/, into src/tflite.rs and its tests), the dense, convolution and
+depthwise kernels (from src/nn.rs, into src/nn.rs), the rotated crop (from src/face.rs, into
+src/frame.rs), the detector's anchors, weighted non-maximum suppression and face crop and the mesh
+point numbers of the eyes, brows and mouth (from src/mediapipe.rs, into src/landmarker.rs and
+src/expressions.rs), and the stored zip member reader and half-float decoding (from src/pt.rs,
+into src/bundle.rs and src/tflite.rs).
+Copyright (c) 2026 ArtCraft Team and the EffectCraft contributors.
+Licensed under the MIT License or the Apache License, Version 2.0, at your option.
+
+The Face Landmarker model bundle (face_landmarker.task) is not part of this crate. The app
+downloads it or the user installs it; it is published by Google under the Apache License,
+Version 2.0.
