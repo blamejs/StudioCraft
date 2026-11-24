@@ -70,6 +70,17 @@ pub const UPDATE_APP: craft_update::app::App = craft_update::app::App {
     ..craft_update::app::App::new(APP_ID, APP_NAME, "Recording and live streaming", "blamejs/StudioCraft")
 };
 
+/// How a session starts: normally, in Safe Mode (no source runs and remote control is off until
+/// the user leaves it), or asking which, after the last session ended without closing or when how
+/// it ended could not be checked.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SafeStart {
+    #[default]
+    Normal,
+    Safe,
+    Ask,
+}
+
 /// Something the docks, menus or preview asked for.
 pub(crate) enum Act {
     Run(CommandRef),
@@ -212,6 +223,9 @@ pub struct StudioApp {
     /// The Scopes window's feed and thread while it is open.
     scopes: Option<scopes::Scopes>,
     confirm_exit: bool,
+    /// The last session ended without closing, or how it ended could not be checked: the window
+    /// asks whether to stay in Safe Mode.
+    crash_prompt: bool,
     exit_confirmed: bool,
     /// A close was canceled because the scene collection could not be saved; the next one goes ahead.
     close_despite_failed_save: bool,
@@ -268,7 +282,13 @@ pub struct StudioApp {
 impl StudioApp {
     /// Open the collection and profile used last (or new ones), and start the studio on the
     /// window's graphics device.
-    pub fn boot(mut store: Store, render: Option<egui_wgpu::RenderState>, problems: Vec<String>) -> StudioApp {
+    pub fn boot(store: Store, render: Option<egui_wgpu::RenderState>, problems: Vec<String>) -> StudioApp {
+        StudioApp::boot_with(store, render, problems, SafeStart::Normal)
+    }
+
+    /// [`StudioApp::boot`], starting as `start` says. In Safe Mode, and while the window asks
+    /// about it, no source runs.
+    pub fn boot_with(mut store: Store, render: Option<egui_wgpu::RenderState>, problems: Vec<String>, start: SafeStart) -> StudioApp {
         studiocraft_platform::display::prefetch();
         let ffmpeg = Arc::new(RwLock::new(String::new()));
         let captions = Arc::new(CaptionBoard::new());
@@ -309,7 +329,10 @@ impl StudioApp {
             }
         };
         let gpu = render.as_ref().map(|rs| Gpu::new(rs.device.clone(), rs.queue.clone()).with_adapter(Candidate::of(&rs.adapter, None)));
-        let mut studio = Studio::new(gpu, collection, profile, Arc::new(registry), ffmpeg, captions);
+        let mut studio = match start {
+            SafeStart::Normal => Studio::new(gpu, collection, profile, Arc::new(registry), ffmpeg, captions),
+            SafeStart::Safe | SafeStart::Ask => Studio::new_in_safe_mode(gpu, collection, profile, Arc::new(registry), ffmpeg, captions),
+        };
         studio.keep_hardware_tests_in(store.dir().map(|d| d.join(studiocraft_studio::HARDWARE_TESTS_FILE)));
         store.update(|p| {
             p.profile = studio.profile().name.clone();
@@ -344,6 +367,7 @@ impl StudioApp {
             encoders_ffmpeg: None,
             scopes: None,
             confirm_exit: false,
+            crash_prompt: start == SafeStart::Ask,
             exit_confirmed: false,
             close_despite_failed_save: false,
             collection_on_disk: true,
@@ -391,6 +415,26 @@ impl StudioApp {
 
     pub fn store(&self) -> &Store {
         &self.store
+    }
+
+    /// Whether the session is in Safe Mode, including while the window asks whether to stay in
+    /// it. The control channel starts only once it is off.
+    pub fn safe_mode(&self) -> bool {
+        self.studio.safe_mode()
+    }
+
+    /// Leave Safe Mode: the sources start. Nothing happens outside Safe Mode.
+    pub fn leave_safe_mode(&mut self) {
+        self.crash_prompt = false;
+        if self.studio.safe_mode() {
+            self.studio.leave_safe_mode();
+            self.notify(tmsg!("Safe Mode is off: the sources have started"), false);
+        }
+    }
+
+    /// Say in the status bar that the control server held back by Safe Mode could not start.
+    pub fn control_failed(&mut self, error: String) {
+        self.notify(tmsg!("Remote control could not start: {error}", error = error), true);
     }
 
     /// Draw the window frame with these window buttons (the menu strip becomes the title bar), or
@@ -680,6 +724,8 @@ impl StudioApp {
                     "about_open": self.about,
                     "licenses_open": self.licenses.is_some(),
                     "updates_open": self.updates.window_open || self.updates.updater.prompt_open(),
+                    "safe_mode": self.studio.safe_mode(),
+                    "crash_prompt": self.crash_prompt,
                     "docks": p.docks,
                     "stats": p.stats,
                     "scopes": {
@@ -1562,7 +1608,7 @@ impl StudioApp {
         self.notices.retain(|(n, at)| {
             n.error && now.duration_since(*at) < Duration::from_secs(NOTICE_S * 3) || now.duration_since(*at) < Duration::from_secs(NOTICE_S)
         });
-        let modal = self.prompt.is_some() || self.confirm_exit || self.settings.is_some();
+        let modal = self.prompt.is_some() || self.confirm_exit || self.crash_prompt || self.settings.is_some();
         if !modal {
             let typing = ctx.egui_wants_keyboard_input();
             let active = Active { panel: None, contexts: &[], typing };
@@ -1579,8 +1625,11 @@ impl StudioApp {
     /// the window frame.
     fn menu(&mut self, ui: &mut Ui, acts: &mut Vec<Act>) {
         let laid = self.laid_menu();
-        let gate =
-            Gate { modal: self.prompt.is_some() || self.confirm_exit, recording_shortcut: false, text_editing: ui.ctx().egui_wants_keyboard_input() };
+        let gate = Gate {
+            modal: self.prompt.is_some() || self.confirm_exit || self.crash_prompt,
+            recording_shortcut: false,
+            text_editing: ui.ctx().egui_wants_keyboard_input(),
+        };
         let style = theme::bar_style(ui.style(), &theme::sizes(ui.ctx()));
         let clicked = match self.title_bar.clone() {
             Some(layout) => title_bar::strip(ui, &layout, |ui, room| self.top_row(ui, room, &laid, gate, style, acts)),
@@ -2323,6 +2372,51 @@ impl StudioApp {
                 None => {}
             }
         }
+
+        if self.crash_prompt {
+            let mut leave = None;
+            egui::Modal::new(egui::Id::unique("crash-prompt")).show(ctx, |ui| {
+                ui.heading(tl!("StudioCraft may not have closed properly"));
+                ui.label(tl!(
+                    "The last session ended without closing, or StudioCraft could not check how it ended. Safe Mode opens your scenes without starting any source and keeps remote control off."
+                ));
+                ui.horizontal(|ui| {
+                    if ui.button(tl!("Start in Safe Mode")).clicked() || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                        leave = Some(false);
+                    }
+                    if ui.button(tl!("Start Normally")).clicked() {
+                        leave = Some(true);
+                    }
+                });
+            });
+            match leave {
+                Some(true) => self.leave_safe_mode(),
+                Some(false) => self.crash_prompt = false,
+                None => {}
+            }
+        }
+    }
+
+    /// The Safe Mode notice under the top row, with the button that leaves it.
+    fn safe_mode_banner(&mut self, ui: &mut Ui) {
+        if !self.studio.safe_mode() || self.crash_prompt {
+            return;
+        }
+        let palette = theme::palette(ui.ctx());
+        let mut leave = false;
+        egui::Panel::top("safe-mode")
+            .show_separator_line(false)
+            .frame(egui::Frame::NONE.fill(palette.raised).inner_margin(egui::Margin::symmetric(8, 4)))
+            .show(ui, |ui| {
+                craft_ui::direction::horizontal(ui, |ui| {
+                    ui.strong(tl!("Safe Mode"));
+                    ui.label(tl!("No source is running and remote control is off. Leave Safe Mode to start them."));
+                    leave = ui.button(tl!("Leave Safe Mode")).clicked();
+                });
+            });
+        if leave {
+            self.leave_safe_mode();
+        }
     }
 
     /// Draw one frame of the whole window.
@@ -2348,6 +2442,7 @@ impl StudioApp {
         let row = top.response.rect;
         ui.painter().hline(row.x_range(), row.bottom() - 0.5, egui::Stroke::new(1.0, theme::palette(&ctx).line));
         self.output_bar.rect = Some(row);
+        self.safe_mode_banner(ui);
         self.status_bar(ui);
         self.docks(ui, &mut acts);
         let background = theme::palette(&ctx).background;

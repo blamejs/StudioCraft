@@ -65,6 +65,61 @@ fn boots_with_a_default_collection_and_profile() {
     assert_eq!(hud["collection"]["global_audio"].as_array().map(Vec::len), Some(2));
 }
 
+/// Whether `source` runs: only a running source takes a channel for its first picture.
+fn running(a: &StudioApp, source: SourceId) -> bool {
+    let (tx, _rx) = std::sync::mpsc::sync_channel(1);
+    a.studio().notify_source_shown(source, tx)
+}
+
+#[test]
+fn safe_mode_runs_no_source_until_the_banner_leaves_it() {
+    let mut a = StudioApp::boot_with(Store::memory(), None, Vec::new(), SafeStart::Safe);
+    let ctx = egui::Context::default();
+    let sources: Vec<SourceId> = a.studio().collection().sources.iter().map(|s| s.id).collect();
+    assert!(!sources.is_empty());
+    frame(&mut a, &ctx, vec![]);
+    assert!(a.safe_mode());
+    assert_eq!(a.hud()["ui"]["safe_mode"], json!(true));
+    assert_eq!(a.hud()["ui"]["crash_prompt"], json!(false), "--safe-mode does not ask");
+    assert!(sources.iter().all(|s| !running(&a, *s)));
+    a.leave_safe_mode();
+    assert!(!a.safe_mode());
+    assert!(sources.iter().all(|s| running(&a, *s)), "every source starts");
+    frame(&mut a, &ctx, vec![]);
+    assert_eq!(a.hud()["ui"]["safe_mode"], json!(false));
+}
+
+#[test]
+fn after_an_unclean_shutdown_the_window_asks_and_esc_keeps_safe_mode() {
+    let mut a = StudioApp::boot_with(Store::memory(), None, Vec::new(), SafeStart::Ask);
+    let ctx = egui::Context::default();
+    let source = a.studio().collection().sources.first().map(|s| s.id).unwrap();
+    frame(&mut a, &ctx, vec![]);
+    assert_eq!(a.hud()["ui"]["crash_prompt"], json!(true));
+    assert!(a.safe_mode());
+    assert!(!running(&a, source), "no source runs while the window asks");
+    frame(&mut a, &ctx, press(Key::Escape, Modifiers::NONE));
+    assert_eq!(a.hud()["ui"]["crash_prompt"], json!(false));
+    assert!(a.safe_mode(), "Esc starts in Safe Mode");
+    assert!(!running(&a, source));
+
+    // Start Normally leaves Safe Mode at once.
+    let mut b = StudioApp::boot_with(Store::memory(), None, Vec::new(), SafeStart::Ask);
+    frame(&mut b, &ctx, vec![]);
+    b.leave_safe_mode();
+    assert_eq!(b.hud()["ui"]["crash_prompt"], json!(false));
+    assert!(!b.safe_mode());
+}
+
+#[test]
+fn a_normal_start_is_not_in_safe_mode() {
+    let a = app();
+    assert!(!a.safe_mode());
+    assert_eq!(a.hud()["ui"]["safe_mode"], json!(false));
+    let source = a.studio().collection().sources.first().map(|s| s.id).unwrap();
+    assert!(running(&a, source));
+}
+
 #[test]
 fn frames_draw_in_both_modes() {
     let mut a = app();

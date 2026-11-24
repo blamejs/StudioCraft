@@ -819,6 +819,23 @@ shows the license texts.
 The app icon is the window icon, the picture in the update prompt, and the icon of the menu entry
 the updater writes beside an AppImage.
 
+### Safe Mode
+
+In Safe Mode the scene collection opens and can be edited, but no source runs: no camera,
+display, window, audio device, media file or network source is opened. The control server that
+`--control <port>` asks for does not start, so neither `studiocraft-cli send` nor the MCP server
+connected with `--connect` can reach the app. A banner under the menu row says that Safe Mode is
+on. Leave Safe Mode in the banner starts the sources and the control server.
+
+While StudioCraft runs, it keeps a file of its own in the `sessions` folder of its settings folder
+and removes it when it closes. When such a file is still there at the next start and no running
+copy of StudioCraft holds it, a session ended without closing (a crash, a forced quit or a power
+loss). The window then asks whether to start in Safe Mode or normally; Esc picks Safe Mode, Start Normally
+leaves it, and until the answer no source runs. The window also asks when the `sessions` folder or a file in it
+can't be read, or when this session's file can't be written, and the status bar gives the reason.
+`studiocraft --safe-mode` starts in Safe Mode without asking. Sessions
+started with `--no-prefs`, `--screenshot` or `--self-test` keep no marker.
+
 ## Hotkeys
 
 Settings › Hotkeys lists every command that can take a shortcut and changes its shortcuts. Type
@@ -874,7 +891,7 @@ studiocraft-cli mcp --connect 9876
 ### Command-line options
 
 ```text
-studiocraft [--config-dir <dir> | --no-prefs] [--control <port>]
+studiocraft [--config-dir <dir> | --no-prefs] [--safe-mode] [--control <port>]
 studiocraft --screenshot <file.png>
 studiocraft --self-test <file.json>
 studiocraft --version
@@ -884,6 +901,7 @@ studiocraft --version
 | --- | --- |
 | `--config-dir <dir>` | Keeps settings, scene collections and profiles in `<dir>`. |
 | `--no-prefs` | Keeps everything in memory, and reads and writes no settings. |
+| `--safe-mode` | Starts in [Safe Mode](#safe-mode): no source runs and the control server does not start until Safe Mode is left. |
 | `--control <port>` | Accepts control requests on `127.0.0.1:<port>`. |
 | `--screenshot <file>` | Draws about 120 frames, saves the window as a PNG and exits. |
 | `--self-test <file>` | Runs a short scripted session and writes its steps as JSON. |

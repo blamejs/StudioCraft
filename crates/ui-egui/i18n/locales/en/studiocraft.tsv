@@ -181,6 +181,7 @@
 	Key for this session	Key for this session
 	Keyframe interval	Keyframe interval
 	Language	Language
+	Leave Safe Mode	Leave Safe Mode
 	Left	Left
 	Licenses	Licenses
 	Limit height	Limit height
@@ -237,6 +238,7 @@
 	No key is held for this session yet	No key is held for this session yet
 	No separate key; a key at the end of the server address is used	No separate key; a key at the end of the server address is used
 	No server set	No server set
+	No source is running and remote control is off. Leave Safe Mode to start them.	No source is running and remote control is off. Leave Safe Mode to start them.
 	No sources in this scene. Add one with +.	No sources in this scene. Add one with +.
 	Noise gate	Noise gate
 	None	None
@@ -305,6 +307,7 @@
 	Redo	Redo
 	Refresh Lists	Refresh Lists
 	Release (ms)	Release (ms)
+	Remote control could not start: {error}	Remote control could not start: {error}
 	Remove	Remove
 	Remove Dock Layout	Remove Dock Layout
 	Remove Layout	Remove Layout
@@ -336,6 +339,8 @@
 	Rotate 90° Counterclockwise	Rotate 90° Counterclockwise
 	Running	Running
 	s	s
+	Safe Mode	Safe Mode
+	Safe Mode is off: the sources have started	Safe Mode is off: the sources have started
 	Saturation	Saturation
 	Save	Save
 	Save Dock Layout	Save Dock Layout
@@ -374,6 +379,8 @@
 	Sources set to monitoring in their Properties window play on this device.	Sources set to monitoring in their Properties window play on this device.
 	Speed	Speed
 	Start	Start
+	Start in Safe Mode	Start in Safe Mode
+	Start Normally	Start Normally
 	Start or Stop Recording	Start or Stop Recording
 	Start or Stop Replay Buffer	Start or Stop Replay Buffer
 	Start or Stop Streaming	Start or Stop Streaming
@@ -409,6 +416,7 @@
 	Studio	Studio
 	Studio Mode	Studio Mode
 	StudioCraft is available under either license, at your option.	StudioCraft is available under either license, at your option.
+	StudioCraft may not have closed properly	StudioCraft may not have closed properly
 	superfast	superfast
 	Swipe	Swipe
 	Switch at once	Switch at once
@@ -438,6 +446,7 @@
 	the DNS server did not answer for the server's name	the DNS server did not answer for the server's name
 	earlier lookups of server names have not finished	earlier lookups of server names have not finished
 	The interface fonts Inter and JetBrains Mono are under the SIL Open Font License 1.1.	The interface fonts Inter and JetBrains Mono are under the SIL Open Font License 1.1.
+	The last session ended without closing, or StudioCraft could not check how it ended. Safe Mode opens your scenes without starting any source and keeps remote control off.	The last session ended without closing, or StudioCraft could not check how it ended. Safe Mode opens your scenes without starting any source and keeps remote control off.
 	The licenses of the third-party crates StudioCraft uses are checked by `cargo xtask licenses`.	The licenses of the third-party crates StudioCraft uses are checked by `cargo xtask licenses`.
 	The profile's stream key	The profile's stream key
 	The scope could not be computed: {error}	The scope could not be computed: {error}

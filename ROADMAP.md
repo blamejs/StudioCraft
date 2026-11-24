@@ -71,6 +71,7 @@ description in [docs/features.md](docs/features.md).
 - Help › Check for Updates…, the check at start and the step that finishes installing a downloaded update on Windows run through `craft-update` ([Help and updates](docs/features.md#help-and-updates)).
 - Help › About StudioCraft shows the credits, with a choice of username, display name or real name, and the license texts ([Help and updates](docs/features.md#help-and-updates)).
 - The app icon in `assets/app-icon` is the window icon, the picture in the update prompt and the icon of the AppImage menu entry ([Help and updates](docs/features.md#help-and-updates)).
+- After a session that ended without closing, the next start offers Safe Mode, and `--safe-mode` starts in it: no source runs and remote control is off until Leave Safe Mode is clicked ([Safe Mode](docs/features.md#safe-mode)).
 
 ### Hotkeys
 
