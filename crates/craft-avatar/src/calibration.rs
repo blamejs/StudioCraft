@@ -57,8 +57,8 @@ impl Calibration {
 
     /// `f` measured from the neutral pose. The rotation is the one that turns the neutral head
     /// into the frame's head, the translation is the offset from the neutral position, and a
-    /// weight `w` with neutral value `n` becomes `(w − n) / (1 − n)`, within 0 to 1. A frame
-    /// without a face is returned unchanged.
+    /// weight `w` with neutral value `n` becomes `(w − n) / (1 − n)`, within 0 to 1. An offset
+    /// too large for an `f32` becomes 0. A frame without a face is returned unchanged.
     pub fn apply(&self, f: &TrackFrame) -> TrackFrame {
         if !f.present {
             return *f;
@@ -70,12 +70,13 @@ impl Calibration {
             // `w` is at most 1, so `n` is below 1 whenever `w` is above it.
             *out = if w > n { clamp01((w - n) / (1.0 - n)) } else { 0.0 };
         }
+        let translation = f.translation - self.translation;
         TrackFrame {
             time: f.time,
             present: true,
             weights,
             rotation: (f.rotation * self.rotation.conjugate()).normalized(),
-            translation: f.translation - self.translation,
+            translation: if translation.is_finite() { translation } else { Vec3::ZERO },
         }
     }
 }

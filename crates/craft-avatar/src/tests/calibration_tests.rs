@@ -121,6 +121,14 @@ fn a_neutral_near_full_weight_still_reaches_full_weight() {
 }
 
 #[test]
+fn an_offset_too_large_to_hold_reads_as_no_offset() {
+    let cal = Calibration { translation: Vec3::new(-3e38, 0.0, 0.0), ..Calibration::default() };
+    assert!(cal.is_valid());
+    let f = TrackFrame { present: true, translation: Vec3::new(3e38, 0.01, 0.0), ..TrackFrame::default() };
+    assert_eq!(cal.apply(&f).translation, Vec3::ZERO);
+}
+
+#[test]
 fn opposite_signs_of_one_rotation_average_to_it() {
     let mut c = Calibrator::new(1.0).unwrap();
     let q = Quat::from_yaw_pitch_roll(30.0, 0.0, 0.0);
