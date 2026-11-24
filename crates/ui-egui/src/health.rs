@@ -187,10 +187,7 @@ fn destinations(f: &Facts) -> Section {
     let paused = f.paused.is_some();
     for d in f.destinations {
         let live = f.live.iter().find(|s| s.id == d.id);
-        let (mut value, tone) = crate::streaming::status_text(d, running, live);
-        if running && paused && live.is_some_and(|s| matches!(s.status, DestinationStatus::Live)) {
-            value = tl!("Live · sending the pause screen").to_string();
-        }
+        let (value, tone) = crate::streaming::status_text(d, running, live, paused);
         let button = live.filter(|_| running).map(|l| {
             let params = json!({"id": d.id});
             if crate::streaming::sending(l) {
