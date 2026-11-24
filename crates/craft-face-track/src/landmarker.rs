@@ -186,6 +186,24 @@ fn bounds(points: impl Iterator<Item = [f32; 2]>) -> [f32; 4] {
     })
 }
 
+/// The detection of anchor `a` from its 16 regressor values `r`, in the picture pixels of `roi`.
+/// `None` when the box or a keypoint is not a finite number: merged with the detections it
+/// overlaps, it would make their average not a number too.
+fn candidate(r: &[f32], a: [f32; 2], roi: &Roi, score: f32) -> Option<Detection> {
+    let s = DET_SIZE as f32;
+    let r = r.get(..16)?;
+    let (cx, cy, bw, bh) = (r[0] / s + a[0], r[1] / s + a[1], r[2] / s, r[3] / s);
+    let to = |u: f32, v: f32| roi.to_frame(u, v);
+    let corners =
+        [to(cx - bw / 2.0, cy - bh / 2.0), to(cx + bw / 2.0, cy - bh / 2.0), to(cx - bw / 2.0, cy + bh / 2.0), to(cx + bw / 2.0, cy + bh / 2.0)];
+    let mut keypoints = [[0.0f32; 2]; 6];
+    for (k, p) in keypoints.iter_mut().enumerate() {
+        *p = to(r[4 + 2 * k] / s + a[0], r[5 + 2 * k] / s + a[1]);
+    }
+    // The corners are checked, not only their bounds: `min` and `max` pass over a NaN.
+    corners.iter().chain(&keypoints).flatten().all(|v| v.is_finite()).then(|| Detection { bbox: bounds(corners.into_iter()), keypoints, score })
+}
+
 pub(crate) fn sigmoid(x: f32) -> f32 {
     1.0 / (1.0 + (-x.clamp(-100.0, 100.0)).exp())
 }
@@ -245,7 +263,6 @@ impl Landmarker {
         let (Some(reg), Some(cls)) = (model.output_values(&self.det_ws, 0), model.output_values(&self.det_ws, 1)) else {
             return Err(Error::Model("the face detector gave no output".into()));
         };
-        let s = DET_SIZE as f32;
         self.candidates.clear();
         for (i, a) in self.anchors.iter().enumerate() {
             let (Some(r), Some(&c)) = (reg.get(i * 16..i * 16 + 16), cls.get(i)) else { break };
@@ -253,19 +270,9 @@ impl Landmarker {
             if score < MIN_SCORE || !score.is_finite() {
                 continue;
             }
-            let (cx, cy, bw, bh) = (r[0] / s + a[0], r[1] / s + a[1], r[2] / s, r[3] / s);
-            let to = |u: f32, v: f32| roi.to_frame(u, v);
-            let corners = [
-                to(cx - bw / 2.0, cy - bh / 2.0),
-                to(cx + bw / 2.0, cy - bh / 2.0),
-                to(cx - bw / 2.0, cy + bh / 2.0),
-                to(cx + bw / 2.0, cy + bh / 2.0),
-            ];
-            let mut keypoints = [[0.0f32; 2]; 6];
-            for (k, p) in keypoints.iter_mut().enumerate() {
-                *p = to(r[4 + 2 * k] / s + a[0], r[5 + 2 * k] / s + a[1]);
+            if let Some(d) = candidate(r, *a, roi, score) {
+                self.candidates.push(d);
             }
-            self.candidates.push(Detection { bbox: bounds(corners.into_iter()), keypoints, score });
         }
         weighted_nms(&mut self.candidates, &mut self.used, &mut self.detections);
         Ok(&self.detections)
@@ -347,6 +354,24 @@ mod tests {
         assert_eq!(nms(vec![z, z]).len(), 2);
         let n = Detection { bbox: [0.0; 4], keypoints: [[0.0; 2]; 6], score: f32::NAN };
         assert_eq!(nms(vec![n, z, d]).len(), 3);
+    }
+
+    /// A candidate with a keypoint that is not a number is dropped, so it does not spoil the
+    /// valid detection it overlaps.
+    #[test]
+    fn candidates_with_bad_geometry_are_dropped() {
+        let roi = Roi { center: [64.0, 64.0], size: 128.0, angle: 0.0 };
+        let good: Vec<f32> = [0.0, 0.0, 20.0, 20.0].into_iter().chain([1.0; 12]).collect();
+        let a = [0.5, 0.5];
+        let d = candidate(&good, a, &roi, 0.9).unwrap();
+        assert!((d.bbox[0] - 54.0).abs() < 1e-4 && (d.bbox[2] - 74.0).abs() < 1e-4, "{:?}", d.bbox);
+        let mut eye = good.clone();
+        eye[5] = f32::NAN;
+        assert!(candidate(&eye, a, &roi, 0.9).is_none());
+        let mut width = good.clone();
+        width[2] = f32::INFINITY;
+        assert!(candidate(&width, a, &roi, 0.9).is_none());
+        assert!(candidate(&good[..15], a, &roi, 0.9).is_none());
     }
 
     #[test]

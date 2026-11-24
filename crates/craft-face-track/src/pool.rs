@@ -70,23 +70,25 @@ impl Pool {
     }
 
     /// Call `f(i, chunk)` for every `chunk`-long piece `i` of `y` (the last may be shorter),
-    /// across the workers when `work` (about the values touched) is large enough. Call it only
-    /// inside [`Pool::install`], so the pieces run on this pool and not on another one.
+    /// across the workers when `work` (about the values touched) is large enough. The pieces run on
+    /// this pool's workers also when the caller is not inside [`Pool::install`]; small work runs on
+    /// the caller's thread.
     pub(crate) fn chunks(&self, y: &mut [f32], chunk: usize, work: usize, f: impl Fn(usize, &mut [f32]) + Send + Sync) {
         if chunk == 0 || y.is_empty() {
             return;
         }
         let pieces = y.len().div_ceil(chunk);
-        if self.workers.is_none() || pieces < 2 || work < 2 * MIN_TASK_WORK {
+        let Some(workers) = self.workers.as_ref().filter(|_| pieces >= 2 && work >= 2 * MIN_TASK_WORK) else {
             for (i, c) in y.chunks_mut(chunk).enumerate() {
                 f(i, c);
             }
             return;
-        }
+        };
         // Pieces per task, so each task covers at least `MIN_TASK_WORK`.
         let per_piece = (work / pieces).max(1);
         let min_len = MIN_TASK_WORK.div_ceil(per_piece).max(1);
-        y.par_chunks_mut(chunk).with_min_len(min_len).enumerate().for_each(|(i, c)| f(i, c));
+        // Inside `install` this runs at once on the current worker.
+        workers.install(|| y.par_chunks_mut(chunk).with_min_len(min_len).enumerate().for_each(|(i, c)| f(i, c)));
     }
 }
 
@@ -115,6 +117,22 @@ mod tests {
             });
             assert!(y.iter().enumerate().all(|(k, v)| *v == k as f32), "{pool:?}");
         }
+    }
+
+    /// A kernel called outside `install` still runs its pieces on the pool's workers, not on
+    /// rayon's global pool.
+    #[test]
+    fn chunks_run_on_the_pool_without_install() {
+        let pool = Pool::new(2).unwrap();
+        let seen = std::sync::Mutex::new(std::collections::HashSet::new());
+        let mut y = vec![0.0f32; 1 << 18];
+        pool.chunks(&mut y, 1 << 12, 1 << 24, |_, c| {
+            seen.lock().unwrap().insert(std::thread::current().name().map(str::to_owned));
+            c.fill(1.0);
+        });
+        assert!(y.iter().all(|v| *v == 1.0));
+        let seen = seen.into_inner().unwrap();
+        assert!(seen.iter().all(|n| n.as_deref().is_some_and(|n| n.starts_with("face-track-"))), "{seen:?}");
     }
 
     /// Two trackers on two threads share one pool's workers: both finish, and no more threads

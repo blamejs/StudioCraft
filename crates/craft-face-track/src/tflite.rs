@@ -19,8 +19,9 @@
 //! reads its tensor has run. [`Model::run_into`] then runs the model without allocating.
 
 use std::collections::BTreeSet;
+use std::sync::atomic::{AtomicU64, Ordering};
 
-use crate::nn::{Conv, Depthwise, Linear};
+use crate::nn::{Conv, Depthwise, Linear, tap};
 use crate::pool::Pool;
 use crate::{Error, Result};
 
@@ -265,9 +266,15 @@ struct Step {
     output: usize,
 }
 
+/// The identity the next loaded model takes (0 is no model's).
+static NEXT_MODEL: AtomicU64 = AtomicU64::new(1);
+
 /// A loaded model, ready to run (batch of one, static shapes).
 #[derive(Clone, Debug)]
 pub struct Model {
+    /// The model's identity, which its workspaces carry. A clone keeps it: the clone is the same
+    /// model.
+    id: u64,
     shapes: Vec<Vec<usize>>,
     /// Values per tensor.
     sizes: Vec<usize>,
@@ -286,9 +293,13 @@ pub struct Model {
 }
 
 /// The buffers one run of a [`Model`] uses, sized at load. A workspace belongs to the model that
-/// made it; running another model on it is an error.
+/// made it: running another model on it is an error, and another model reads no output from it.
 #[derive(Clone, Debug, Default)]
 pub struct Workspace {
+    /// The identity of the model that made the workspace.
+    owner: u64,
+    /// Whether the last run on the workspace finished.
+    ran: bool,
     slots: Vec<Vec<f32>>,
     scratch: Vec<f32>,
 }
@@ -354,7 +365,7 @@ impl Model {
 
     /// The buffers a run of this model needs, sized for it.
     pub fn workspace(&self) -> Workspace {
-        Workspace { slots: self.slot_len.iter().map(|&n| vec![0.0; n]).collect(), scratch: vec![0.0; self.scratch] }
+        Workspace { owner: self.id, ran: false, slots: self.slot_len.iter().map(|&n| vec![0.0; n]).collect(), scratch: vec![0.0; self.scratch] }
     }
 
     /// Floats a workspace of this model holds.
@@ -373,6 +384,11 @@ impl Model {
         Some((self.shapes.get(i)?.as_slice(), self.names.get(i)?.as_str()))
     }
 
+    /// How many inputs the model takes.
+    pub fn inputs(&self) -> usize {
+        self.inputs.len()
+    }
+
     /// How many outputs the model has.
     pub fn outputs(&self) -> usize {
         self.outputs.len()
@@ -381,17 +397,25 @@ impl Model {
     /// Run the model on its inputs (row-major, NHWC) in `ws`, on `pool`'s threads. Read the
     /// results with [`Model::output_values`]. Does not allocate.
     pub fn run_into(&self, ws: &mut Workspace, inputs: &[&[f32]], pool: &Pool) -> Result<()> {
-        if ws.slots.len() != self.slot_len.len()
+        if ws.owner != self.id
+            || ws.slots.len() != self.slot_len.len()
             || ws.slots.iter().zip(&self.slot_len).any(|(s, &n)| s.len() != n)
             || ws.scratch.len() != self.scratch
         {
             return Err(Error::Model("the workspace belongs to another model".into()));
         }
-        pool.install(|| self.run_steps(ws, inputs, pool)).map_err(Error::Model)
+        ws.ran = false;
+        pool.install(|| self.run_steps(ws, inputs, pool)).map_err(Error::Model)?;
+        ws.ran = true;
+        Ok(())
     }
 
-    /// Output `k` of the last [`Model::run_into`] on `ws`.
+    /// Output `k` of the last [`Model::run_into`] on `ws`. `None` when `ws` belongs to another
+    /// model or its last run did not finish.
     pub fn output_values<'a>(&'a self, ws: &'a Workspace, k: usize) -> Option<&'a [f32]> {
+        if ws.owner != self.id || !ws.ran {
+            return None;
+        }
         let &id = self.outputs.get(k)?;
         let n = *self.sizes.get(id)?;
         match self.slot.get(id).copied().flatten() {
@@ -601,6 +625,13 @@ fn read(bytes: &[u8]) -> Res<Model> {
     let mut consts = 0usize;
     let mut meta = 0usize;
     for (i, t) in tensors.iter().enumerate() {
+        // Names and shapes are copied per tensor: bound them in all, by their lengths, before
+        // either is copied.
+        let (shape_len, name_len) = (fb.vector(*t, 0)?.1, fb.vector(*t, 3)?.1);
+        meta = meta.saturating_add(name_len).saturating_add(shape_len.saturating_mul(8));
+        if meta > MAX_META {
+            return Err("the model's tensor metadata is too large".into());
+        }
         let shape: Vec<usize> = fb
             .ints(*t, 0)?
             .into_iter()
@@ -609,11 +640,6 @@ fn read(bytes: &[u8]) -> Res<Model> {
         let ty = fb.byte(*t, 1, FLOAT32)?;
         let buf = fb.int(*t, 2, 0)? as u32 as usize;
         let name = fb.string(*t, 3)?;
-        // Names and shapes are copied per tensor: bound them in all.
-        meta = meta.saturating_add(name.len()).saturating_add(shape.len().saturating_mul(8));
-        if meta > MAX_META {
-            return Err("the model's tensor metadata is too large".into());
-        }
         names.push(name);
         // Every size computed from shapes later stays in range, even a product of some of the
         // dimensions (a zero dimension does not let the others grow without bound).
@@ -661,6 +687,13 @@ fn read(bytes: &[u8]) -> Res<Model> {
     let inputs = fb.ints_at_most(g, 1, MAX_GRAPH_IO, "graph inputs")?.into_iter().map(|i| index(i, n)).collect::<Res<Vec<_>>>()?;
     let outputs = fb.ints_at_most(g, 2, MAX_GRAPH_IO, "graph outputs")?.into_iter().map(|i| index(i, n)).collect::<Res<Vec<_>>>()?;
     let mut steps = vec![];
+    // The tensors earlier operators read and wrote, in graph order. A folded DEQUANTIZE gives its
+    // output a value at load, so its reads and writes are checked here; `plan` checks the steps.
+    let mut read_before = vec![false; n];
+    let mut written = vec![false; n];
+    for &i in &inputs {
+        written[i] = true;
+    }
     for o in fb.tables_at_most(g, 3, MAX_OPERATORS, "operators")? {
         let code = *codes.get(fb.int(o, 0, 0)? as u32 as usize).ok_or("bad operator code")?;
         let outs = fb.ints_at_most(o, 2, 1, "outputs of one operator")?;
@@ -679,6 +712,12 @@ fn read(bytes: &[u8]) -> Res<Model> {
             && let Some(i) = ins.first().copied().flatten()
             && let Some(len) = floats[i].as_ref().map(Vec::len)
         {
+            if read_before[output] {
+                return Err("an operator reads a tensor before it is computed".into());
+            }
+            if written[output] || floats[output].is_some() || ints[output].is_some() {
+                return Err("an operator writes a tensor that already has a value".into());
+            }
             // The folded constant is what the graph outputs and the workspace count: it must be
             // the declared size.
             if sizes[output] != len {
@@ -686,6 +725,8 @@ fn read(bytes: &[u8]) -> Res<Model> {
             }
             spend(len)?;
             floats[output] = floats[i].clone();
+            read_before[i] = true;
+            written[output] = true;
             continue;
         }
         let opts = fb.table(o, 4)?;
@@ -701,7 +742,8 @@ fn read(bytes: &[u8]) -> Res<Model> {
         let bias = |count: usize| -> Res<Vec<f32>> {
             spend(count)?;
             match ins.get(2).copied().flatten() {
-                Some(id) => floats[id].clone().filter(|b| b.len() == count).ok_or_else(|| format!("{}: bad bias", names[output])),
+                // The length is checked before the constant is copied.
+                Some(id) => floats[id].as_ref().filter(|b| b.len() == count).cloned().ok_or_else(|| format!("{}: bad bias", names[output])),
                 None => Ok(vec![0.0; count]),
             }
         };
@@ -798,12 +840,20 @@ fn read(bytes: &[u8]) -> Res<Model> {
             }
             op::ADD => {
                 runtime.push(input(1)?);
-                same_size(0)?;
-                same_size(1).map_err(|_| format!("{}: broadcasting ADD is not supported", names[output]))?;
+                // Both inputs have the output's shape: matching sizes are not enough, since `[2, 1]`
+                // and `[1, 2]` would broadcast to `[2, 2]`.
+                if in_shape(0)? != out_shape || in_shape(1)? != out_shape {
+                    return Err(format!("{}: broadcasting ADD is not supported", names[output]));
+                }
                 Op::Add(Act::from(opt_byte(0, 0)?)?)
             }
             op::PAD => {
-                let p = ints[input(1)?].clone().ok_or("PAD: paddings must be constant")?;
+                let p = ints[input(1)?].as_ref().ok_or("PAD: paddings must be constant")?;
+                // Two values per input dimension, checked before they are copied.
+                let x = in_shape(0)?;
+                if x.len() > MAX_PAD_RANK || p.len() != 2 * x.len() {
+                    return Err(format!("{}: the padding disagrees with the output shape", names[output]));
+                }
                 let pads = p
                     .as_chunks::<2>()
                     .0
@@ -811,9 +861,8 @@ fn read(bytes: &[u8]) -> Res<Model> {
                     .map(|c| Ok([usize::try_from(c[0]).map_err(|_| "bad pad")?, usize::try_from(c[1]).map_err(|_| "bad pad")?]))
                     .collect::<Res<Vec<_>>>()?;
                 // The padded shape is the declared one (so it is as bounded as any tensor).
-                let x = in_shape(0)?;
                 let padded = x.iter().zip(&pads).map(|(d, p)| d.checked_add(p[0])?.checked_add(p[1])).collect::<Option<Vec<_>>>();
-                if pads.len() != x.len() || pads.len() > MAX_PAD_RANK || padded.as_ref() != Some(&out_shape) {
+                if padded.as_ref() != Some(&out_shape) {
                     return Err(format!("{}: the padding disagrees with the output shape", names[output]));
                 }
                 Op::Pad(pads)
@@ -868,10 +917,14 @@ fn read(bytes: &[u8]) -> Res<Model> {
             }
             c => return Err(format!("operator {c} is not supported")),
         };
+        for &i in ins.iter().flatten() {
+            read_before[i] = true;
+        }
+        written[output] = true;
         steps.push(Step { op, inputs: runtime, output });
     }
     let (slot, slot_len) = plan(&steps, &inputs, &outputs, &sizes, &floats)?;
-    let model = Model { shapes, sizes, names, consts: floats, steps, inputs, outputs, slot, slot_len, scratch: 0 };
+    let model = Model { id: 0, shapes, sizes, names, consts: floats, steps, inputs, outputs, slot, slot_len, scratch: 0 };
     let c = model.cost().ok_or("the model is too expensive to run")?;
     let over = [
         (c.kernel > MAX_KERNEL as u64, "a kernel is too large"),
@@ -884,7 +937,7 @@ fn read(bytes: &[u8]) -> Res<Model> {
         return Err((*why).to_string());
     }
     let scratch = usize::try_from(c.scratch).map_err(|_| "an operator's working space is too large")?;
-    Ok(Model { scratch, ..model })
+    Ok(Model { id: NEXT_MODEL.fetch_add(1, Ordering::Relaxed), scratch, ..model })
 }
 
 /// Which workspace slot holds each tensor, and each slot's size. Graph inputs get a slot each;
@@ -966,9 +1019,9 @@ fn max_pool(x: &[f32], [h, w]: [usize; 2], c: usize, [oh, ow]: [usize; 2], k: [u
             let Some(out) = y.get_mut((oy * ow + ox) * c..(oy * ow + ox + 1) * c) else { return };
             out.fill(f32::NEG_INFINITY);
             for ky in 0..k[0] {
-                let Some(iy) = (oy * s[0] + ky).checked_sub(pad[0]).filter(|&v| v < h) else { continue };
+                let Some(iy) = tap(oy, s[0], ky, pad[0], h) else { continue };
                 for kx in 0..k[1] {
-                    let Some(ix) = (ox * s[1] + kx).checked_sub(pad[1]).filter(|&v| v < w) else { continue };
+                    let Some(ix) = tap(ox, s[1], kx, pad[1], w) else { continue };
                     let Some(src) = x.get((iy * w + ix) * c..(iy * w + ix + 1) * c) else { continue };
                     for (o, v) in out.iter_mut().zip(src) {
                         *o = o.max(*v);
@@ -981,8 +1034,15 @@ fn max_pool(x: &[f32], [h, w]: [usize; 2], c: usize, [oh, ow]: [usize; 2], k: [u
 
 /// Zero padding of a row-major tensor of shape `shape` into `y` (sized for the padded shape).
 fn pad(x: &[f32], shape: &[usize], pads: &[[usize; 2]], y: &mut [f32]) {
-    y.fill(0.0);
     let rank = shape.len().min(pads.len());
+    if rank == 0 {
+        // A scalar has nothing to pad: the output is the input.
+        if let (Some(o), Some(v)) = (y.first_mut(), x.first()) {
+            *o = *v;
+        }
+        return;
+    }
+    y.fill(0.0);
     let Some(&inner) = shape.get(rank.wrapping_sub(1)) else { return };
     if inner == 0 {
         return;
@@ -1017,4 +1077,4 @@ fn pad(x: &[f32], shape: &[usize], pads: &[[usize; 2]], y: &mut [f32]) {
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

@@ -70,7 +70,7 @@ fn damaged_files_are_errors_not_panics() {
 }
 
 /// A FlatBuffer value, to build small models in tests.
-enum V {
+pub(crate) enum V {
     Int(i32),
     Byte(u8),
     Table(Vec<(usize, V)>),
@@ -140,12 +140,12 @@ fn put(b: &mut Vec<u8>, v: &V) -> usize {
 }
 
 /// A tensor: shape, type and its constant data (`Some(k)`: buffer `k` of the model's).
-type T = (Vec<i32>, u8, Option<usize>);
+pub(crate) type T = (Vec<i32>, u8, Option<usize>);
 /// An operator: code, inputs, outputs and its options' fields.
-type O = (i32, Vec<i32>, Vec<i32>, Vec<(usize, V)>);
+pub(crate) type O = (i32, Vec<i32>, Vec<i32>, Vec<(usize, V)>);
 
 /// A `.tflite` file with one graph.
-fn model(bufs: Vec<Vec<u8>>, tensors: Vec<T>, ops: Vec<O>, inputs: Vec<i32>, outputs: Vec<i32>) -> Vec<u8> {
+pub(crate) fn model(bufs: Vec<Vec<u8>>, tensors: Vec<T>, ops: Vec<O>, inputs: Vec<i32>, outputs: Vec<i32>) -> Vec<u8> {
     let ts = tensors
         .into_iter()
         .enumerate()
@@ -604,6 +604,133 @@ fn free_slots_are_reused_or_grown() {
     assert_eq!(out[0], [relu.as_slice(), &[0.0, 1.0]].concat());
     assert_eq!(out[1], vec![0.0, 1.0]);
     assert_eq!(out[2], x.iter().map(|v| v.max(0.0)).collect::<Vec<_>>());
+}
+
+/// Two models with the same buffer layout do not share workspaces, and a workspace gives no
+/// output until a run on it finishes.
+#[test]
+fn workspaces_belong_to_one_model() {
+    let one = |code| {
+        Model::read(&model(
+            vec![],
+            vec![(vec![1, 3], FLOAT32, None), (vec![1, 3], FLOAT32, None)],
+            vec![(code, vec![0], vec![1], vec![])],
+            vec![0],
+            vec![1],
+        ))
+        .unwrap()
+    };
+    let (relu, logistic) = (one(op::RELU), one(op::LOGISTIC));
+    assert_eq!(relu.slot_len, logistic.slot_len);
+    let pool = Pool::single();
+    let mut ws = relu.workspace();
+    assert!(relu.output_values(&ws, 0).is_none(), "no run yet");
+    relu.run_into(&mut ws, &[&[-1.0, 0.0, 2.0]], &pool).unwrap();
+    assert_eq!(relu.output_values(&ws, 0).unwrap(), &[0.0, 0.0, 2.0]);
+    assert!(logistic.output_values(&ws, 0).is_none());
+    assert!(logistic.run_into(&mut ws, &[&[0.0; 3]], &pool).is_err());
+    // A clone is the same model.
+    assert_eq!(relu.clone().output_values(&ws, 0).unwrap(), &[0.0, 0.0, 2.0]);
+    // A run that fails leaves no output to read.
+    assert!(relu.run_into(&mut ws, &[&[0.0; 2]], &pool).is_err());
+    assert!(relu.output_values(&ws, 0).is_none());
+    assert!(relu.run_into(&mut Workspace::default(), &[&[0.0; 3]], &pool).is_err());
+}
+
+/// A folded DEQUANTIZE is checked in graph order: no operator reads its output earlier, and
+/// nothing else writes it.
+#[test]
+fn folded_dequantizes_keep_graph_order() {
+    // 1.0 and -2.0 as half floats.
+    let half = vec![0x00, 0x3c, 0x00, 0xc0];
+    let t = |buf| (vec![1, 2], if buf == Some(0) { FLOAT16 } else { FLOAT32 }, buf);
+    let early = model(
+        vec![half.clone()],
+        vec![t(Some(0)), t(None), t(None)],
+        vec![(op::RELU, vec![1], vec![2], vec![]), (op::DEQUANTIZE, vec![0], vec![1], vec![])],
+        vec![],
+        vec![2],
+    );
+    refused(&early, "before it is computed");
+    let twice = model(
+        vec![half.clone()],
+        vec![t(Some(0)), t(None)],
+        vec![(op::DEQUANTIZE, vec![0], vec![1], vec![]), (op::DEQUANTIZE, vec![0], vec![1], vec![])],
+        vec![],
+        vec![1],
+    );
+    refused(&twice, "already has a value");
+    let over_step = model(
+        vec![half.clone()],
+        vec![t(Some(0)), t(None), t(None)],
+        vec![(op::RELU, vec![2], vec![1], vec![]), (op::DEQUANTIZE, vec![0], vec![1], vec![])],
+        vec![2],
+        vec![1],
+    );
+    refused(&over_step, "already has a value");
+    let ok = model(
+        vec![half],
+        vec![t(Some(0)), t(None), t(None)],
+        vec![(op::DEQUANTIZE, vec![0], vec![1], vec![]), (op::RELU, vec![1], vec![2], vec![])],
+        vec![],
+        vec![2],
+    );
+    assert_eq!(Model::read(&ok).unwrap().run(&[]).unwrap(), vec![vec![1.0, 0.0]]);
+}
+
+/// A tensor's metadata is bounded by the lengths its vectors declare, before its dimensions are
+/// read.
+#[test]
+fn tensor_metadata_is_bounded_before_it_is_read() {
+    // Four million dynamic dimensions: refused for their number, before any is converted.
+    let m = model(vec![], vec![(vec![-1; 1 << 22], FLOAT32, None)], vec![], vec![], vec![]);
+    refused(&m, "metadata is too large");
+}
+
+/// ADD takes inputs of the output's shape only, not inputs whose sizes happen to match.
+#[test]
+fn add_inputs_have_the_output_shape() {
+    let m = model(
+        vec![],
+        vec![(vec![2, 1], FLOAT32, None), (vec![1, 2], FLOAT32, None), (vec![2, 1], FLOAT32, None)],
+        vec![(op::ADD, vec![0, 1], vec![2], vec![])],
+        vec![0, 1],
+        vec![2],
+    );
+    refused(&m, "broadcasting ADD");
+}
+
+/// PAD takes exactly two values per input dimension, and a scalar pads to itself.
+#[test]
+fn pad_values_match_the_input_rank() {
+    let pads = |v: Vec<i32>| v.into_iter().flat_map(i32::to_le_bytes).collect();
+    let extra = model(
+        vec![pads(vec![0, 0, 7])],
+        vec![(vec![1], FLOAT32, None), (vec![3], INT32, Some(0)), (vec![1], FLOAT32, None)],
+        vec![(op::PAD, vec![0, 1], vec![2], vec![])],
+        vec![0],
+        vec![2],
+    );
+    refused(&extra, "padding disagrees");
+    let ok = model(
+        vec![pads(vec![1, 0])],
+        vec![(vec![1], FLOAT32, None), (vec![1, 2], INT32, Some(0)), (vec![2], FLOAT32, None)],
+        vec![(op::PAD, vec![0, 1], vec![2], vec![])],
+        vec![0],
+        vec![2],
+    );
+    assert_eq!(Model::read(&ok).unwrap().run(&[&[3.0]]).unwrap(), vec![vec![0.0, 3.0]]);
+    let mut y = [0.0];
+    pad(&[7.0], &[], &[], &mut y);
+    assert_eq!(y, [7.0]);
+}
+
+/// A pooling stride and padding near `usize::MAX` skip the window cells outside the input.
+#[test]
+fn huge_pool_strides_skip_cells_outside_the_input() {
+    let mut y = [0.0; 2];
+    max_pool(&[5.0], [1, 1], 1, [1, 2], [2, 2], [usize::MAX; 2], [0, usize::MAX], &mut y);
+    assert_eq!(y, [f32::NEG_INFINITY, 5.0]);
 }
 
 #[test]

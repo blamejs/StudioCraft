@@ -1,7 +1,8 @@
 //! The face models' run times on one and two threads: the detector (a search), the mesh (one
-//! followed picture) and a whole followed picture's work (crop, mesh and pose fit). Following at
-//! 30 fps needs the followed picture under 33 ms. It needs the Face Landmarker bundle at
-//! `$CRAFT_FACE_LANDMARKER` and does nothing without it.
+//! followed picture) and the crop, mesh and pose fit of a followed picture. The expression
+//! weights, their smoothing and the filled output that `Tracker::track` adds for each picture are
+//! not measured. It needs the Face Landmarker bundle at `$CRAFT_FACE_LANDMARKER` and does nothing
+//! without it.
 
 use std::path::PathBuf;
 use std::sync::Arc;
