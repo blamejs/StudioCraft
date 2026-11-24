@@ -13,7 +13,13 @@ the action safe area (3.5% in from each canvas edge) or the title safe area (5% 
 center line of another visible source, and a line shows what it snapped to. A move snaps on each
 axis. A corner drag snaps the edges it moves and keeps the aspect ratio: the edge closer to its
 line snaps and the other edge follows the ratio. With Shift held the corner drag changes the ratio
-and each edge snaps on its own. Holding Alt (Option on macOS) turns snapping off. One drag is one
+and each edge snaps on its own. With Ctrl (Command on macOS) held the corner drag resizes the
+source around its center: the opposite corner moves by the same amount, either edge on an axis
+can snap, and the edge across from it moves to match. Ctrl and Shift together resize around the
+center and change the ratio. The round handle above the middle of the selected source's top edge
+rotates the source around its center, in steps of 15 degrees. When the source's top edge is at the
+edge of the preview, the handle moves inside the preview, just below the source's center. Holding
+Alt (Option on macOS) turns snapping off, and the rotate handle then turns the source by any angle. One drag is one
 undo step. You can lock a source so it can't be moved, or lock the whole preview. Each scene item can be
 shown or hidden, and every change can be undone.
 
@@ -25,6 +31,14 @@ out for the new size in one undo step: a source that was fit, filled or stretche
 commands is fit, filled or stretched again, and any other source keeps its place in proportion to
 the canvas ([`canvas.relayout`](control-protocol.md#canvasrelayout)). Moving, resizing, rotating
 or cropping a source ends its fit, fill or stretch.
+
+Flip Horizontal and Flip Vertical, in the same menu, mirror the source's picture inside its box,
+left to right or top to bottom. The box keeps its place, size and rotation, so a fit, filled or
+stretched source stays that way, and a source can be flipped before it shows a picture. Each flip
+is one undo step, and flipping again turns the picture back. A crop still cuts the source's own
+edges, so the part cropped from a source's left edge is missing at the right of its flipped picture.
+The flips are saved with the scene collection and set with `item.transform`'s `flip_horizontal`
+and `flip_vertical`.
 
 ### Built-in sources
 
@@ -297,7 +311,7 @@ Settings › Stream show the chosen encoder's settings, such as the x264 and NVE
 | NVIDIA NVENC H.264 and HEVC (built in) | MKV, through the NVIDIA driver | No | Windows and 64-bit Linux |
 | Windows Media Foundation H.264 and HEVC (built in) | MKV, with the hardware encoders Media Foundation lists | No | Windows |
 | Apple VideoToolbox H.264 and HEVC (built in) | MKV, with the VideoToolbox hardware encoders | No | macOS |
-| VA-API H.264 and HEVC (built in) | MKV, with the VA-API hardware encoders through libva | No | 64-bit Linux |
+| VA-API H.264, HEVC and AV1 (built in) | MKV, with the VA-API hardware encoders through libva | No | 64-bit Linux |
 
 H.264 (built in) uses StudioCraft's own H.264 and AAC encoders. The Hardware encoder uses the
 built-in hardware encoders for MKV recordings, and the built-in hardware H.264 encoders for streams,
@@ -539,7 +553,8 @@ network can reach on the way to the destination's server and shows one verdict, 
 server did not answer for {host}" or "{host} answers on port 443 but not on port {port}". What the
 check found opens the list of every step with its outcome. The check runs its steps at the same
 time and reports after at most 20 s; a step still running then is listed as unfinished. Each
-connection, secure handshake and fetch may take 5 s, and the name lookup 10 s. The steps are:
+connection, secure handshake, RTMP handshake and fetch may take 5 s, and the name lookup 10 s. The
+steps are:
 
 - The check asks the system whether it has a route to any address and to each of the server's
   addresses. This sends nothing.
@@ -547,9 +562,16 @@ connection, secure handshake and fetch may take 5 s, and the name lookup 10 s. T
   by name only. The check itself uses no proxy.
 - It looks the server's name up again.
 - It opens a TCP connection to up to four of the server's addresses on the destination's port and,
-  for `rtmps://`, completes the secure handshake, which sends the server's host name. It then closes
-  the connection. It sends no stream key, no RTMP data and no part of the address after the host.
-- When the port is not 443, it does the same with a secure handshake on port 443 of those addresses.
+  for `rtmps://`, completes the secure handshake, which sends the server's host name. Over each
+  connection that opens it runs the RTMP handshake: it sends C0 and C1, reads S0 and S1, sends C2
+  and reads S2. It then closes the connection. It sends no `connect` or `publish` command, no stream
+  key and no part of the address after the host. A port that takes the connection is reported as
+  not answering as a stream server when, at every address that connected, it answered the RTMP
+  handshake with other data, closed the connection or sent nothing within 5 s. One address that
+  completes the handshake gives another verdict, and so does a handshake still running when the
+  check reports.
+- When the port is not 443, it opens a TCP connection with a secure handshake on port 443 of those
+  addresses, and sends no RTMP data there.
 - For a destination set up for a streaming service that publishes a list of its ingest servers and
   a status summary, it fetches both over HTTPS, following no redirect, looks two of the service's
   other ingest servers up and makes a secure connection to each on port 443. It reads at most
@@ -690,11 +712,20 @@ A stream tests only the H.264 candidates in this list, and skips every other can
 - Windows Media Foundation H.264 and HEVC (built in) run the hardware encoders Media Foundation
   lists, on Windows.
 - Apple VideoToolbox H.264 and HEVC (built in) run the VideoToolbox hardware encoders, on macOS.
-- VA-API H.264 and HEVC (built in) run the VA-API hardware encoders through libva, on 64-bit
-  Linux. VA-API H.264 or HEVC chosen by name is tested the same way, and then records with the
-  built-in encoder.
+- VA-API H.264, HEVC and AV1 (built in) run the VA-API hardware encoders through libva, on 64-bit
+  Linux. VA-API H.264, HEVC or AV1 chosen by name is tested the same way, and then records with
+  the built-in encoder. VA-API AV1 needs a driver that takes the sequence and frame headers from
+  StudioCraft.
 
 The compositor converts the program to the encoders' frame format on the GPU.
+
+On Windows, a Display capture source captures with desktop duplication into textures that the
+compositor opens on its Direct3D 12 device, so the picture is not copied through CPU memory. The
+source copies the picture through CPU memory instead when the compositor draws with another
+backend (Vulkan, or the software adapter), when the display belongs to another graphics adapter
+than the compositor's, when the compositor cannot open the textures, for a rotated display, and
+when desktop duplication does not give 8-bit BGRA pictures. Staged windows sources and window
+capture always copy through CPU memory.
 
 The compositor can also draw a small picture of each of up to 16 scenes, for scene lists. Each
 picture fits a 256 × 144 box by default, keeps the canvas's aspect ratio, and is redrawn at most 4
@@ -811,6 +842,23 @@ shows the license texts.
 The app icon is the window icon, the picture in the update prompt, and the icon of the menu entry
 the updater writes beside an AppImage.
 
+### Safe Mode
+
+In Safe Mode the scene collection opens and can be edited, but no source runs: no camera,
+display, window, audio device, media file or network source is opened. The control server that
+`--control <port>` asks for does not start, so neither `studiocraft-cli send` nor the MCP server
+connected with `--connect` can reach the app. A banner under the menu row says that Safe Mode is
+on. Leave Safe Mode in the banner starts the sources and the control server.
+
+While StudioCraft runs, it keeps a file of its own in the `sessions` folder of its settings folder
+and removes it when it closes. When such a file is still there at the next start and no running
+copy of StudioCraft holds it, a session ended without closing (a crash, a forced quit or a power
+loss). The window then asks whether to start in Safe Mode or normally; Esc picks Safe Mode, Start Normally
+leaves it, and until the answer no source runs. The window also asks when the `sessions` folder or a file in it
+can't be read, or when this session's file can't be written, and the status bar gives the reason.
+`studiocraft --safe-mode` starts in Safe Mode without asking. Sessions
+started with `--no-prefs`, `--screenshot` or `--self-test` keep no marker.
+
 ## Hotkeys
 
 Settings › Hotkeys lists every command that can take a shortcut and changes its shortcuts. Type
@@ -866,7 +914,7 @@ studiocraft-cli mcp --connect 9876
 ### Command-line options
 
 ```text
-studiocraft [--config-dir <dir> | --no-prefs] [--control <port>]
+studiocraft [--config-dir <dir> | --no-prefs] [--safe-mode] [--control <port>]
 studiocraft --screenshot <file.png>
 studiocraft --self-test <file.json>
 studiocraft --version
@@ -876,6 +924,7 @@ studiocraft --version
 | --- | --- |
 | `--config-dir <dir>` | Keeps settings, scene collections and profiles in `<dir>`. |
 | `--no-prefs` | Keeps everything in memory, and reads and writes no settings. |
+| `--safe-mode` | Starts in [Safe Mode](#safe-mode): no source runs and the control server does not start until Safe Mode is left. |
 | `--control <port>` | Accepts control requests on `127.0.0.1:<port>`. |
 | `--screenshot <file>` | Draws about 120 frames, saves the window as a PNG and exits. |
 | `--self-test <file>` | Runs a short scripted session and writes its steps as JSON. |

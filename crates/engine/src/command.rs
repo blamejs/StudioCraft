@@ -834,7 +834,12 @@ const SPECS: &[CommandSpec] = &[
     spec("item.remove", "Remove Source from Scene", "item: id or source name, scene?", Undo::Undoable),
     spec("item.duplicate", "Duplicate Source", "item: id or source name, scene?", Undo::Undoable),
     spec("item.move", "Move Source", "item, scene?, to: up|down|top|bottom|{to: index}", Undo::Undoable),
-    spec("item.transform", "Transform Source", "item, scene?, transform: {position, size, rotation, crop}, fit?: fit|fill|stretch", Undo::Undoable),
+    spec(
+        "item.transform",
+        "Transform Source",
+        "item, scene?, transform: {position, scale, rotation, crop, flip_horizontal, flip_vertical}, fit?: fit|fill|stretch",
+        Undo::Undoable,
+    ),
     spec("item.visible", "Show or Hide Source", "item, scene?, visible: bool", Undo::Undoable),
     spec("item.lock", "Lock Source", "item, scene?, locked: bool", Undo::Undoable),
     spec(

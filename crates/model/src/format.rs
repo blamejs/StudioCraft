@@ -45,8 +45,8 @@ pub struct FileFormat {
 /// Scene collections.
 pub const COLLECTION: FileFormat = FileFormat {
     name: "studiocraft.scene-collection",
-    version: 6,
-    migrations: &[collection_v1_to_v2, collection_v2_to_v3, collection_v3_to_v4, collection_v4_to_v5, collection_v5_to_v6],
+    version: 7,
+    migrations: &[collection_v1_to_v2, collection_v2_to_v3, collection_v3_to_v4, collection_v4_to_v5, collection_v5_to_v6, collection_v6_to_v7],
 };
 
 /// Collection version 1 to 2: each source's audio has a sync offset (`sync_offset_ms`), 0 for the
@@ -112,9 +112,29 @@ fn collection_v4_to_v5(data: &mut Value) -> Result<(), String> {
     Ok(())
 }
 
-/// Collection version 5 to 6: each source's audio goes to a set of mix tracks (`mix_tracks`, a
-/// list of track numbers); every track, `[1, 2, 3, 4, 5, 6]`, for the sources of an older file.
+/// Collection version 5 to 6: each scene item's transform says whether the picture is mirrored
+/// left to right (`flip_horizontal`) and top to bottom (`flip_vertical`); neither for the items of
+/// an older file.
 fn collection_v5_to_v6(data: &mut Value) -> Result<(), String> {
+    let data = data.as_object_mut().ok_or("the collection is not an object")?;
+    if let Some(Value::Array(scenes)) = data.get_mut("scenes") {
+        for scene in scenes.iter_mut().filter_map(Value::as_object_mut) {
+            if let Some(Value::Array(items)) = scene.get_mut("items") {
+                for item in items.iter_mut().filter_map(Value::as_object_mut) {
+                    if let Some(Value::Object(t)) = item.get_mut("transform") {
+                        t.entry("flip_horizontal").or_insert(Value::Bool(false));
+                        t.entry("flip_vertical").or_insert(Value::Bool(false));
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Collection version 6 to 7: each source's audio goes to a set of mix tracks (`mix_tracks`, a
+/// list of track numbers); every track, `[1, 2, 3, 4, 5, 6]`, for the sources of an older file.
+fn collection_v6_to_v7(data: &mut Value) -> Result<(), String> {
     let data = data.as_object_mut().ok_or("the collection is not an object")?;
     if let Some(Value::Array(sources)) = data.get_mut("sources") {
         for source in sources.iter_mut().filter_map(Value::as_object_mut) {
@@ -432,6 +452,7 @@ mod tests {
         (4, include_str!("../fixtures/collection-v4.json")),
         (5, include_str!("../fixtures/collection-v5.json")),
         (6, include_str!("../fixtures/collection-v6.json")),
+        (7, include_str!("../fixtures/collection-v7.json")),
     ];
     const PROFILE_FIXTURES: &[(u32, &str)] = &[
         (1, include_str!("../fixtures/profile-v1.json")),
@@ -628,6 +649,30 @@ mod tests {
     }
 
     #[test]
+    fn collections_keep_each_item_flip() {
+        let flips = |text: &str| -> Vec<(bool, bool)> {
+            let c = read_collection(text, "Scene").unwrap();
+            c.scenes[0].items.iter().map(|i| (i.transform.flip_horizontal, i.transform.flip_vertical)).collect()
+        };
+        for (v, text) in &COLLECTION_FIXTURES[..5] {
+            assert_eq!(flips(text), [(false, false); 2], "version {v} has no flips");
+        }
+        let (_, v6) = COLLECTION_FIXTURES[5];
+        assert_eq!(flips(v6), [(false, false), (true, false)]);
+        let c = read_collection(v6, "Scene").unwrap();
+        assert_eq!(read_collection(&write_collection(&c).unwrap(), "Scene").unwrap(), c);
+        // The migration writes both flags into an older file's transforms and leaves an item
+        // without one as it is.
+        let mut data = json!({"scenes": [{"items": [{"transform": {"rotation": 15}}, {"id": 2}]}]});
+        collection_v5_to_v6(&mut data).unwrap();
+        assert_eq!(data["scenes"][0]["items"][0]["transform"], json!({"rotation": 15, "flip_horizontal": false, "flip_vertical": false}));
+        assert_eq!(data["scenes"][0]["items"][1], json!({"id": 2}));
+        let wrong = v6.replace("\"flip_horizontal\": true", "\"flip_horizontal\": \"yes\"");
+        assert_ne!(wrong, v6);
+        assert!(matches!(read_collection(&wrong, "Scene"), Err(FormatError::Data(_))), "a flip that is not a boolean refuses the file");
+    }
+
+    #[test]
     fn profiles_keep_the_audio_tracks_settings_and_bring_sizes_into_range() {
         for (v, text) in &PROFILE_FIXTURES[..5] {
             let p = read_profile(text).unwrap();
@@ -807,12 +852,12 @@ mod tests {
     #[test]
     fn collections_keep_each_source_mix_tracks_and_refuse_bad_lists() {
         use crate::MixTracks;
-        for (v, text) in &COLLECTION_FIXTURES[..5] {
+        for (v, text) in &COLLECTION_FIXTURES[..6] {
             let c = read_collection(text, "Scene").unwrap();
             assert!(c.sources.iter().all(|s| s.audio.mix_tracks == MixTracks::ALL), "version {v} sends every source to every track");
         }
-        let (_, v6) = COLLECTION_FIXTURES[5];
-        let c = read_collection(v6, "Scene").unwrap();
+        let (_, v7) = COLLECTION_FIXTURES[6];
+        let c = read_collection(v7, "Scene").unwrap();
         let tracks = |name: &str| c.source_by_name(name).map(|s| s.audio.mix_tracks.numbers().collect::<Vec<_>>());
         assert_eq!(tracks("Background"), Some(vec![1, 2, 3, 4, 5, 6]));
         assert_eq!(tracks("Title"), Some(vec![]), "a source can be on no track");
@@ -821,11 +866,11 @@ mod tests {
         assert_eq!(read_collection(&written, "Scene").unwrap(), c);
         assert_eq!(serde_json::to_value(MixTracks::from_bits(0b101)).unwrap(), serde_json::json!([1, 3]), "tracks are written as a list");
         for bad in ["[1, 7]", "[0]", "[3, 3]", "[1.5]", "\"1\"", "[-1]", "[1, 2, 3, 4, 5, 6, 1]"] {
-            let text = v6.replace("\"mix_tracks\": [1, 3]", &format!("\"mix_tracks\": {bad}"));
-            assert_ne!(text, v6);
+            let text = v7.replace("\"mix_tracks\": [1, 3]", &format!("\"mix_tracks\": {bad}"));
+            assert_ne!(text, v7);
             assert!(matches!(read_collection(&text, "Scene"), Err(FormatError::Data(_))), "{bad} refuses the file");
         }
-        let omitted = v6.replace(", \"mix_tracks\": [1, 3]", "");
+        let omitted = v7.replace(", \"mix_tracks\": [1, 3]", "");
         assert_eq!(read_collection(&omitted, "Scene").unwrap().source_by_name("Microphone").map(|s| s.audio.mix_tracks), Some(MixTracks::ALL));
     }
 

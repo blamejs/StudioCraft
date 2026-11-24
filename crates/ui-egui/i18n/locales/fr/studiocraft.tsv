@@ -108,6 +108,8 @@
 	Filters…	Filtres…
 	Finishing Recording…	Fin de l'enregistrement…
 	Fit to Screen	Ajuster à l'écran
+	Flip Horizontal	Retourner horizontalement
+	Flip Vertical	Retourner verticalement
 	Font	Police
 	Font family	Famille de police
 	Format	Format
@@ -140,6 +142,7 @@
 	Apple VideoToolbox HEVC (built in)	Apple VideoToolbox HEVC (intégré)
 	VA-API H.264 (built in)	VA-API H.264 (intégré)
 	VA-API HEVC (built in)	VA-API HEVC (intégré)
+	VA-API AV1 (built in)	VA-API AV1 (intégré)
 	Height	Hauteur
 	Help	Aide
 	Hide	Masquer

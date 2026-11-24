@@ -5,6 +5,10 @@
 
 #![cfg_attr(not(target_os = "windows"), allow(dead_code))]
 
+use std::sync::{Arc, Weak};
+
+use crossbeam_queue::ArrayQueue;
+
 use crate::{Codec, Rate};
 
 #[cfg(target_os = "windows")]
@@ -104,6 +108,55 @@ pub(crate) fn output_size(asked: u32, width: u32, height: u32) -> Result<u32, St
         return Err(format!("the encoder asks for {asked}-byte output buffers, more than {limit} bytes"));
     }
     Ok(asked.max(frame).max(1 << 20))
+}
+
+/// How many released input samples one encoder keeps for later frames.
+pub(crate) const FREE_INPUTS: usize = 4;
+
+/// A bounded set of free values that are lent out and given back from any thread, such as the
+/// input samples an encoder releases on its own threads.
+///
+/// [`Recycler::take`] returns a free value, or `None` at once without waiting. A [`Returner`]
+/// gives a value back without a lock or an allocation. A value given back while the recycler
+/// holds `capacity` free values, or after the recycler is dropped, is dropped.
+pub(crate) struct Recycler<T> {
+    free: Arc<ArrayQueue<T>>,
+}
+
+/// Gives values back to a [`Recycler`] from any thread.
+pub(crate) struct Returner<T> {
+    free: Weak<ArrayQueue<T>>,
+}
+
+impl<T> Recycler<T> {
+    /// A recycler that holds at most `capacity` free values (at least 1).
+    pub(crate) fn new(capacity: usize) -> Recycler<T> {
+        Recycler { free: Arc::new(ArrayQueue::new(capacity.max(1))) }
+    }
+
+    /// A free value, or `None` when none has been given back.
+    pub(crate) fn take(&self) -> Option<T> {
+        self.free.pop()
+    }
+
+    /// A handle that gives values back to this recycler.
+    pub(crate) fn returner(&self) -> Returner<T> {
+        Returner { free: Arc::downgrade(&self.free) }
+    }
+}
+
+impl<T> Returner<T> {
+    /// Give `value` back. It returns `false`, and `value` is dropped, when the recycler is full or
+    /// has been dropped.
+    pub(crate) fn give_back(&self, value: T) -> bool {
+        self.free.upgrade().is_some_and(|free| free.push(value).is_ok())
+    }
+}
+
+impl<T> Clone for Returner<T> {
+    fn clone(&self) -> Returner<T> {
+        Returner { free: self.free.clone() }
+    }
 }
 
 /// Why no encoder MFT opened.
