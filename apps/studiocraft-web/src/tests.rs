@@ -326,3 +326,109 @@ fn a_new_collection_has_one_scene_and_no_history() {
     assert!(v.items.is_empty() && v.sources.is_empty() && v.undo.is_none() && !v.changed);
     assert_eq!(e.saved().unwrap().file_name, "Untitled.json");
 }
+
+#[test]
+fn focus_follows_its_row_after_the_list_is_drawn_again() {
+    // A moved row keeps the focus wherever it went.
+    assert_eq!(refocus_row(7, 0, &[3, 7, 9]), Some(1));
+    // A removed row passes it to the row now in its place, or to the last row.
+    assert_eq!(refocus_row(7, 1, &[3, 9]), Some(1));
+    assert_eq!(refocus_row(9, 2, &[3, 7]), Some(1));
+    assert_eq!(refocus_row(3, 0, &[]), None);
+}
+
+#[test]
+fn the_source_add_to_scene_places_stays_selected() {
+    let mut e = opened();
+    let sources = e.view().sources;
+    let title = sources.iter().find(|s| s.name == "Title").unwrap().id;
+    assert_ne!(sources[0].id, title);
+    e.apply(Action::PlaceSource(title)).unwrap();
+    // The list is drawn again after the edit, and Title stays selected for the next placement.
+    assert_eq!(kept_source(Some(title), &e.view().sources), Some(title));
+    // A source that is gone, or no selection, selects the first source.
+    assert_eq!(kept_source(Some(SourceId(9999)), &e.view().sources), Some(sources[0].id));
+    assert_eq!(kept_source(None, &e.view().sources), Some(sources[0].id));
+    assert_eq!(kept_source(Some(title), &[]), None);
+}
+
+/// The English rows: (context, source text).
+fn english_rows() -> std::collections::BTreeSet<(String, String)> {
+    include_str!("../../../crates/ui-egui/i18n/locales/en/studiocraft.tsv")
+        .lines()
+        .filter(|l| !l.is_empty() && !l.starts_with('#'))
+        .filter_map(|l| {
+            let mut c = l.split('\t');
+            Some((c.next()?.to_string(), c.next()?.to_string()))
+        })
+        .collect()
+}
+
+/// Every literal the page looks up with `tl(` or `tmsg(`: its file and line, the context of its
+/// row, and its text. Comment lines and test code are left out. A literal with a `\` escape
+/// fails the test, since the scan does not read escapes.
+fn looked_up() -> Vec<(String, String, String)> {
+    let mut found = Vec::new();
+    for (file, text) in [("page.rs", include_str!("page.rs")), ("lib.rs", include_str!("lib.rs"))] {
+        for (n, line) in text.lines().take_while(|l| *l != "#[cfg(test)]").enumerate() {
+            if line.trim_start().starts_with("//") {
+                continue;
+            }
+            for (call, context) in [("tl(\"", ""), ("tmsg(\"", "@msg")] {
+                for (at, _) in line.match_indices(call) {
+                    // `tl(` at the end of another name is not a lookup.
+                    if line[..at].ends_with(|c: char| c.is_alphanumeric() || c == '_') {
+                        continue;
+                    }
+                    let rest = &line[at + call.len()..];
+                    let end = rest.find('"').unwrap_or_else(|| panic!("{file}:{}: the literal does not end on its line", n + 1));
+                    let literal = &rest[..end];
+                    assert!(!literal.contains('\\'), "{file}:{}: write the text without escapes", n + 1);
+                    found.push((format!("{file}:{}", n + 1), context.to_string(), literal.to_string()));
+                }
+            }
+        }
+    }
+    found
+}
+
+#[test]
+fn every_string_the_page_shows_has_an_english_row() {
+    let found = looked_up();
+    assert!(found.len() > 30, "found only {} lookups; the scan is broken", found.len());
+    assert!(found.iter().any(|f| f.1 == "@msg"), "no tmsg( lookup found");
+    let en = english_rows();
+    let missing: Vec<String> =
+        found.iter().filter(|(_, c, s)| !en.contains(&(c.clone(), s.clone()))).map(|(at, c, s)| format!("{at}: {c}\t{s}\t{s}")).collect();
+    assert!(missing.is_empty(), "lookups with no row in crates/ui-egui/i18n/locales/en/studiocraft.tsv:\n{}", missing.join("\n"));
+}
+
+#[test]
+fn every_locale_of_the_app_is_built_into_the_page() {
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../crates/ui-egui/i18n/locales");
+    let mut on_disk: Vec<String> = std::fs::read_dir(&dir)
+        .unwrap()
+        .flatten()
+        .filter(|e| e.path().join("studiocraft.tsv").is_file())
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .filter(|c| c != "en")
+        .collect();
+    on_disk.sort();
+    let built_in: Vec<&str> = i18n::CATALOGS.iter().map(|c| c.0).collect();
+    assert_eq!(built_in, on_disk);
+    assert!(i18n::I18N.check_all().is_empty(), "{:?}", i18n::I18N.check_all());
+    assert_eq!(i18n::I18N.languages().len(), i18n::languages().len());
+}
+
+#[test]
+fn the_page_shows_a_language_with_a_row_and_english_without_one() {
+    let de = i18n::I18N.from_code("de").unwrap();
+    i18n::set_lang(de);
+    let scenes = i18n::tl("Scenes").to_string();
+    let error = EditorError::TooLarge { bytes: 20, max: 10 }.shown();
+    i18n::set_lang(craft_i18n::Lang::EN);
+    assert_eq!(scenes, "Szenen");
+    // Without a German row the message shows in English, with its values.
+    assert!(error.starts_with("the file is ") && error.contains("20") && error.contains("10"), "{error}");
+    assert_eq!(i18n::tl("Scenes"), "Scenes");
+}

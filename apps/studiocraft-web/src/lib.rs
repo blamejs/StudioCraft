@@ -11,8 +11,11 @@
 //! The editor does no I/O and never waits. The page reads a chosen file on its own and hands the
 //! bytes over with [`Editor::finish_open`]; the collection stays editable until they arrive, and
 //! the bytes of an open that a newer one replaced are dropped. On `wasm32` the binary in
-//! `src/main.rs` draws the page in `index.html` and offers the saved text as a download.
+//! `src/main.rs` draws the page in `index.html` and offers the saved text as a download. The page
+//! shows its text in the browser's language through [`i18n`].
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
+
+pub mod i18n;
 
 use std::sync::Arc;
 
@@ -44,6 +47,21 @@ pub enum EditorError {
     File(#[from] FormatError),
     #[error("{0}")]
     Edit(#[from] EngineError),
+}
+
+impl EditorError {
+    /// The error in the page's language. Errors from a file's format and from a command show
+    /// their English text.
+    pub fn shown(&self) -> String {
+        match self {
+            EditorError::TooLarge { bytes, max } => i18n::tmsg(
+                "the file is {bytes} bytes; a scene collection file can be at most {max} bytes",
+                &[("bytes", bytes.to_string().as_str()), ("max", max.to_string().as_str())],
+            ),
+            EditorError::NotText => i18n::tmsg("the file is not UTF-8 text", &[]),
+            other => other.to_string(),
+        }
+    }
 }
 
 /// One edit, as the page's buttons ask for it. Scene items act in the listed scene.
@@ -344,6 +362,19 @@ pub fn parse(bytes: &[u8]) -> Result<SceneCollection, EditorError> {
     Editor::check_size(u64::try_from(bytes.len()).unwrap_or(u64::MAX))?;
     let text = std::str::from_utf8(bytes).map_err(|_| EditorError::NotText)?;
     Ok(read_collection(text, DEFAULT_SCENE)?)
+}
+
+/// The row of a redrawn list that takes the keyboard focus a control in row `row`, at `index`,
+/// had: that row when the list still has it, else the row now at `index`, or the last row.
+/// `None` when the list is empty.
+pub fn refocus_row(row: u64, index: usize, rows: &[u64]) -> Option<usize> {
+    rows.iter().position(|r| *r == row).or_else(|| rows.len().checked_sub(1).map(|last| index.min(last)))
+}
+
+/// The source Add to Scene places after the list of sources is drawn again: `selected` when the
+/// collection still has it, else the first source.
+pub fn kept_source(selected: Option<SourceId>, sources: &[SourceRow]) -> Option<SourceId> {
+    selected.filter(|s| sources.iter().any(|r| r.id == *s)).or_else(|| sources.first().map(|r| r.id))
 }
 
 /// A download file name for a collection called `name`: the name with the characters file

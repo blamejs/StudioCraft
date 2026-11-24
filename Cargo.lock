@@ -6729,6 +6729,7 @@ dependencies = [
 name = "studiocraft-web"
 version = "0.1.0-alpha.2"
 dependencies = [
+ "craft-i18n",
  "js-sys",
  "serde_json",
  "studiocraft-engine",

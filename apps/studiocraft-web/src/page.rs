@@ -1,12 +1,14 @@
 //! The page: one click handler for every button (each names its action in `data-action` and the
 //! scene, source or scene item in `data-id`), the file picker, the download, and the lists drawn
-//! again from [`Editor::view`] after every change. Names are set as text, never as markup.
+//! again from [`Editor::view`] after every change. Names are set as text, never as markup. Every
+//! label and message is looked up with [`tl`] or [`tmsg`] in the browser's language.
 
 use std::cell::RefCell;
 use std::rc::Rc;
 
 use studiocraft_engine::Move;
 use studiocraft_model::{ItemId, SceneId, SourceId};
+use studiocraft_web::i18n::{self, I18N, tl, tmsg};
 use studiocraft_web::{Action, Editor, OpenTicket, View};
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::{JsCast, JsValue};
@@ -31,6 +33,8 @@ type Shared = Rc<RefCell<Page>>;
 
 pub fn start() {
     let Some(doc) = web_sys::window().and_then(|w| w.document()) else { return };
+    i18n::set_lang(I18N.system_lang());
+    label_page(&doc);
     let page = Rc::new(RefCell::new(Page { editor: Editor::new(), doc: doc.clone(), status: Status::Clear, download: None }));
 
     let p = Rc::clone(&page);
@@ -49,6 +53,40 @@ pub fn start() {
         });
     }
     render(&page.borrow());
+}
+
+/// Put the labels of `index.html` in the page's language, and set the page's language and
+/// direction.
+fn label_page(doc: &Document) {
+    let lang = i18n::lang();
+    if let Some(root) = doc.document_element() {
+        let _ = root.set_attribute("lang", I18N.code(lang));
+        let _ = root.set_attribute("dir", if I18N.rtl(lang) { "rtl" } else { "ltr" });
+    }
+    doc.set_title(tl("StudioCraft scene collection editor"));
+    for (selector, text) in [
+        ("[data-action=\"new\"]", tl("New")),
+        ("[data-action=\"open\"]", tl("Open…")),
+        ("[data-action=\"save\"]", tl("Save")),
+        ("#undo", tl("Undo")),
+        ("#redo", tl("Redo")),
+        ("#scenes-title", tl("Scenes")),
+        ("[data-action=\"add-scene\"]", tl("Add Scene")),
+        ("#place-source", tl("Add to Scene")),
+    ] {
+        if let Ok(Some(e)) = doc.query_selector(selector) {
+            e.set_text_content(Some(text));
+        }
+    }
+    for (id, attribute, text) in [
+        ("scene-name", "placeholder", tl("New scene name")),
+        ("scene-name", "aria-label", tl("New scene name")),
+        ("place", "aria-label", tl("Source to place in this scene")),
+    ] {
+        if let Some(e) = doc.get_element_by_id(id) {
+            let _ = e.set_attribute(attribute, text);
+        }
+    }
 }
 
 /// Call `f` for each `event` on `target` for as long as the page is open.
@@ -76,7 +114,7 @@ fn on_click(page: &Shared, e: &Event) {
     let Ok(mut p) = page.try_borrow_mut() else { return };
     let edit = match action.as_str() {
         "new" => {
-            if p.editor.changed() && !confirm("Discard the unsaved changes and start a new collection?") {
+            if p.editor.changed() && !confirm(&tmsg("Discard the unsaved changes and start a new collection?", &[])) {
                 return;
             }
             p.editor.new_collection();
@@ -107,7 +145,7 @@ fn on_click(page: &Shared, e: &Event) {
                     }
                     Status::Clear
                 }
-                Err(e) => Status::Error(e.to_string()),
+                Err(e) => Status::Error(e.shown()),
             };
             None
         }
@@ -117,7 +155,7 @@ fn on_click(page: &Shared, e: &Event) {
         "scene-remove" => Some(Action::RemoveScene(SceneId(id))),
         "scene-rename" => {
             let current = p.editor.collection().scene(SceneId(id)).map(|s| s.name.clone()).unwrap_or_default();
-            ask("Scene name", &current).map(|name| Action::RenameScene(SceneId(id), name))
+            ask(tl("Scene name"), &current).map(|name| Action::RenameScene(SceneId(id), name))
         }
         "place-source" => {
             let picked = by_id::<HtmlSelectElement>(&p.doc, "place").map(|s| s.value()).and_then(|v| v.parse::<u64>().ok());
@@ -125,7 +163,7 @@ fn on_click(page: &Shared, e: &Event) {
         }
         "source-rename" => {
             let current = p.editor.collection().source(SourceId(id)).map(|s| s.name.clone()).unwrap_or_default();
-            ask("Source name", &current).map(|name| Action::RenameSource(SourceId(id), name))
+            ask(tl("Source name"), &current).map(|name| Action::RenameSource(SourceId(id), name))
         }
         "item-up" => Some(Action::MoveItem(ItemId(id), Move::Up)),
         "item-down" => Some(Action::MoveItem(ItemId(id), Move::Down)),
@@ -135,7 +173,7 @@ fn on_click(page: &Shared, e: &Event) {
     if let Some(edit) = edit {
         p.status = match p.editor.apply(edit) {
             Ok(()) => Status::Clear,
-            Err(e) => Status::Error(e.to_string()),
+            Err(e) => Status::Error(e.shown()),
         };
     }
     render(&p);
@@ -165,11 +203,11 @@ fn on_file(page: &Shared) {
     // `size` is a whole number of bytes; a negative or too large value saturates.
     if let Err(e) = Editor::check_size(file.size() as u64) {
         p.editor.cancel_open(ticket);
-        p.status = Status::Error(format!("{name} could not be opened: {e}"));
+        p.status = Status::Error(tmsg("{name} could not be opened: {error}", &[("name", name.as_str()), ("error", e.shown().as_str())]));
         render(&p);
         return;
     }
-    p.status = Status::Info(format!("Opening {name}\u{2026}"));
+    p.status = Status::Info(tmsg("Opening {name}…", &[("name", name.as_str())]));
     render(&p);
     drop(p);
     let page = Rc::clone(page);
@@ -190,9 +228,9 @@ fn finish(page: &Shared, ticket: OpenTicket, name: &str, read: Result<Vec<u8>, S
     if !p.editor.open_pending(ticket) {
         return;
     }
-    let parsed = read
-        .map_err(|e| format!("{name} could not be read: {e}"))
-        .and_then(|bytes| studiocraft_web::parse(&bytes).map_err(|e| format!("{name} could not be opened: {e}")));
+    let parsed = read.map_err(|e| tmsg("{name} could not be read: {error}", &[("name", name), ("error", e.as_str())])).and_then(|bytes| {
+        studiocraft_web::parse(&bytes).map_err(|e| tmsg("{name} could not be opened: {error}", &[("name", name), ("error", e.shown().as_str())]))
+    });
     p.status = match parsed {
         Err(e) => {
             p.editor.cancel_open(ticket);
@@ -200,20 +238,22 @@ fn finish(page: &Shared, ticket: OpenTicket, name: &str, read: Result<Vec<u8>, S
         }
         // Unsaved changes, made before the open or while the file was read, are replaced only
         // when the user agrees.
-        Ok(_) if p.editor.changed() && !confirm(&format!("Discard the unsaved changes and open {name}?")) => {
+        Ok(_) if p.editor.changed() && !confirm(&tmsg("Discard the unsaved changes and open {name}?", &[("name", name)])) => {
             p.editor.cancel_open(ticket);
-            Status::Info(format!("{name} was not opened"))
+            Status::Info(tmsg("{name} was not opened", &[("name", name)]))
         }
         Ok(collection) => {
             p.editor.finish_open_with(ticket, collection);
-            Status::Info(format!("Opened {name}"))
+            Status::Info(tmsg("Opened {name}", &[("name", name)]))
         }
     };
     render(&p);
 }
 
 fn js_text(v: &JsValue) -> String {
-    v.as_string().or_else(|| js_sys::JSON::stringify(v).ok().and_then(|s| s.as_string())).unwrap_or_else(|| "the browser gave no reason".into())
+    v.as_string()
+        .or_else(|| js_sys::JSON::stringify(v).ok().and_then(|s| s.as_string()))
+        .unwrap_or_else(|| tl("the browser gave no reason").to_string())
 }
 
 /// Offer the collection as a download, and count it as saved once the download is offered.
@@ -221,7 +261,7 @@ fn save(p: &mut Page) {
     let saved = match p.editor.saved() {
         Ok(s) => s,
         Err(e) => {
-            p.status = Status::Error(format!("The collection could not be saved: {e}"));
+            p.status = Status::Error(tmsg("The collection could not be saved: {error}", &[("error", e.shown().as_str())]));
             return;
         }
     };
@@ -231,9 +271,9 @@ fn save(p: &mut Page) {
                 let _ = Url::revoke_object_url(&old);
             }
             p.editor.mark_saved();
-            p.status = Status::Info(format!("Saved {}", saved.file_name));
+            p.status = Status::Info(tmsg("Saved {name}", &[("name", saved.file_name.as_str())]));
         }
-        Err(e) => p.status = Status::Error(format!("The collection could not be saved: {}", js_text(&e))),
+        Err(e) => p.status = Status::Error(tmsg("The collection could not be saved: {error}", &[("error", js_text(&e).as_str())])),
     }
 }
 
@@ -251,11 +291,64 @@ fn download(doc: &Document, file_name: &str, text: &str) -> Result<String, JsVal
     Ok(url)
 }
 
+/// A control in a row of the Scenes or Sources list that had the keyboard focus before the list
+/// was drawn again.
+struct Focus {
+    /// The id of the list: `scenes` or `items`.
+    list: String,
+    /// The scene or scene item of the control's row.
+    row: u64,
+    /// Where the row was in the list.
+    index: usize,
+    action: String,
+}
+
+/// The focused control when it is in a row of `list_ids`.
+fn focused(doc: &Document, list_ids: &[&str]) -> Option<Focus> {
+    let active = doc.active_element()?;
+    let action = active.get_attribute("data-action")?;
+    let row = active.closest("li[data-row]").ok().flatten()?;
+    let list = row.parent_element()?.id();
+    if !list_ids.contains(&list.as_str()) {
+        return None;
+    }
+    let id = row.get_attribute("data-row")?.parse().ok()?;
+    let mut index = 0;
+    let mut before = row.previous_element_sibling();
+    while let Some(b) = before {
+        index += 1;
+        before = b.previous_element_sibling();
+    }
+    Some(Focus { list, row: id, index, action })
+}
+
+/// Give the keyboard focus back after the list `focus` names was drawn again with `rows`: to the
+/// same control when its row is still listed, else to the first control of a nearby row, else to
+/// the field below the list.
+fn refocus(doc: &Document, focus: &Focus, rows: &[u64]) {
+    let Some(list) = doc.get_element_by_id(&focus.list) else { return };
+    // Actions are this page's own names; anything else is not put into a selector.
+    let action_ok = focus.action.chars().all(|c| c.is_ascii_lowercase() || c == '-');
+    let target = studiocraft_web::refocus_row(focus.row, focus.index, rows)
+        .and_then(|i| rows.get(i))
+        .and_then(|id| list.query_selector(&format!("li[data-row=\"{id}\"]")).ok().flatten().map(|row| (*id, row)))
+        .and_then(|(id, row)| {
+            let same =
+                (id == focus.row && action_ok).then(|| row.query_selector(&format!("[data-action=\"{}\"]", focus.action)).ok().flatten()).flatten();
+            same.or_else(|| row.query_selector("button").ok().flatten())
+        })
+        .or_else(|| doc.get_element_by_id(if focus.list == "scenes" { "scene-name" } else { "place" }));
+    if let Some(t) = target.and_then(|t| t.dyn_into::<HtmlElement>().ok()) {
+        let _ = t.focus();
+    }
+}
+
 fn render(p: &Page) {
     let v = p.editor.view();
     let doc = &p.doc;
+    let focus = focused(doc, &["scenes", "items"]);
     set_text(doc, "collection-name", &v.collection);
-    set_text(doc, "changed", if v.changed { "Unsaved changes" } else { "" });
+    set_text(doc, "changed", if v.changed { tl("Unsaved changes") } else { "" });
     let (text, class) = match &p.status {
         Status::Clear => ("", "status"),
         Status::Info(t) => (t.as_str(), "status"),
@@ -265,18 +358,22 @@ fn render(p: &Page) {
     if let Some(s) = doc.get_element_by_id("status") {
         s.set_class_name(class);
     }
-    step_button(doc, "undo", "Undo", v.undo);
-    step_button(doc, "redo", "Redo", v.redo);
+    step_button(doc, "undo", v.undo.map(|l| tmsg("Undo {step}", &[("step", tl(l))])));
+    step_button(doc, "redo", v.redo.map(|l| tmsg("Redo {step}", &[("step", tl(l))])));
     if let Some(list) = doc.get_element_by_id("scenes") {
         let _ = scene_rows(doc, &list, &v);
     }
     let listed = v.scenes.iter().find(|s| s.listed).map(|s| s.name.as_str()).unwrap_or_default();
-    set_text(doc, "listed-scene", listed);
+    set_text(doc, "sources-title", &tmsg("Sources in {scene}", &[("scene", listed)]));
     if let Some(list) = doc.get_element_by_id("items") {
         let _ = item_rows(doc, &list, &v);
     }
-    if let Some(select) = doc.get_element_by_id("place") {
+    if let Some(select) = by_id::<HtmlSelectElement>(doc, "place") {
         let _ = source_options(doc, &select, &v);
+    }
+    if let Some(f) = focus {
+        let rows: Vec<u64> = if f.list == "scenes" { v.scenes.iter().map(|s| s.id.0).collect() } else { v.items.iter().map(|i| i.item.0).collect() };
+        refocus(doc, &f, &rows);
     }
 }
 
@@ -286,12 +383,13 @@ fn set_text(doc: &Document, id: &str, text: &str) {
     }
 }
 
-fn step_button(doc: &Document, id: &str, verb: &str, label: Option<&str>) {
+/// Turn the Undo or Redo button on with `title`, naming the step, or off without one.
+fn step_button(doc: &Document, id: &str, title: Option<String>) {
     let Some(b) = doc.get_element_by_id(id) else { return };
-    match label {
-        Some(l) => {
+    match title {
+        Some(t) => {
             let _ = b.remove_attribute("disabled");
-            let _ = b.set_attribute("title", &format!("{verb} {l}"));
+            let _ = b.set_attribute("title", &t);
         }
         None => {
             let _ = b.set_attribute("disabled", "");
@@ -314,6 +412,7 @@ fn scene_rows(doc: &Document, list: &Element, v: &View) -> Result<(), JsValue> {
     for s in &v.scenes {
         let row = doc.create_element("li")?;
         row.set_class_name(if s.listed { "listed" } else { "" });
+        row.set_attribute("data-row", &s.id.0.to_string())?;
         let name = button(doc, &s.name, "list-scene", s.id.0)?;
         name.set_class_name("name");
         if s.listed {
@@ -323,10 +422,10 @@ fn scene_rows(doc: &Document, list: &Element, v: &View) -> Result<(), JsValue> {
         if s.program {
             let badge = doc.create_element("span")?;
             badge.set_class_name("badge");
-            badge.set_text_content(Some("Program"));
+            badge.set_text_content(Some(tl("Program")));
             row.append_child(&badge)?;
         }
-        for (text, action) in [("Up", "scene-up"), ("Down", "scene-down"), ("Rename", "scene-rename"), ("Remove", "scene-remove")] {
+        for (text, action) in [(tl("Up"), "scene-up"), (tl("Down"), "scene-down"), (tl("Rename"), "scene-rename"), (tl("Remove"), "scene-remove")] {
             let b = button(doc, text, action, s.id.0)?;
             row.append_child(&b)?;
         }
@@ -339,6 +438,7 @@ fn item_rows(doc: &Document, list: &Element, v: &View) -> Result<(), JsValue> {
     list.set_inner_html("");
     for i in &v.items {
         let row = doc.create_element("li")?;
+        row.set_attribute("data-row", &i.item.0.to_string())?;
         let name = doc.create_element("span")?;
         name.set_class_name(if i.visible { "name" } else { "name hidden" });
         name.set_text_content(Some(&i.name));
@@ -347,24 +447,30 @@ fn item_rows(doc: &Document, list: &Element, v: &View) -> Result<(), JsValue> {
         kind.set_class_name("kind");
         kind.set_text_content(Some(&i.kind));
         row.append_child(&kind)?;
-        for (text, action) in [("Up", "item-up"), ("Down", "item-down"), ("Remove", "item-remove")] {
+        for (text, action) in [(tl("Up"), "item-up"), (tl("Down"), "item-down"), (tl("Remove"), "item-remove")] {
             let b = button(doc, text, action, i.item.0)?;
             row.append_child(&b)?;
         }
-        let rename = button(doc, "Rename", "source-rename", i.source.0)?;
+        let rename = button(doc, tl("Rename"), "source-rename", i.source.0)?;
         row.append_child(&rename)?;
         list.append_child(&row)?;
     }
     Ok(())
 }
 
-fn source_options(doc: &Document, select: &Element, v: &View) -> Result<(), JsValue> {
+/// Fill the Add to Scene list, keeping the source it had selected when the collection still has
+/// it.
+fn source_options(doc: &Document, select: &HtmlSelectElement, v: &View) -> Result<(), JsValue> {
+    let selected = select.value().parse::<u64>().ok().map(SourceId);
     select.set_inner_html("");
     for s in &v.sources {
         let option = doc.create_element("option")?;
         option.set_attribute("value", &s.id.0.to_string())?;
         option.set_text_content(Some(&s.name));
         select.append_child(&option)?;
+    }
+    if let Some(keep) = studiocraft_web::kept_source(selected, &v.sources) {
+        select.set_value(&keep.0.to_string());
     }
     if let Some(b) = doc.get_element_by_id("place-source") {
         if v.sources.is_empty() { b.set_attribute("disabled", "")? } else { b.remove_attribute("disabled")? }
