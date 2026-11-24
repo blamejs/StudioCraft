@@ -141,6 +141,7 @@
 	Apple VideoToolbox HEVC (built in)	Apple VideoToolbox HEVC (vestavěný)
 	VA-API H.264 (built in)	VA-API H.264 (vestavěný)
 	VA-API HEVC (built in)	VA-API HEVC (vestavěný)
+	VA-API AV1 (built in)	VA-API AV1 (vestavěný)
 	Height	Výška
 	Help	Nápověda
 	Hide	Skrýt

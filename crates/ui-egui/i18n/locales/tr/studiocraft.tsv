@@ -141,6 +141,7 @@
 	Apple VideoToolbox HEVC (built in)	Apple VideoToolbox HEVC (yerleşik)
 	VA-API H.264 (built in)	VA-API H.264 (yerleşik)
 	VA-API HEVC (built in)	VA-API HEVC (yerleşik)
+	VA-API AV1 (built in)	VA-API AV1 (yerleşik)
 	Height	Yükseklik
 	Help	Yardım
 	Hide	Gizle
