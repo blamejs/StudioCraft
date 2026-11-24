@@ -1322,6 +1322,72 @@ fn selection_commands_need_a_selection() {
 }
 
 #[test]
+fn flips_mirror_the_selection_keep_its_fit_and_undo_one_at_a_time() {
+    let mut a = app();
+    let ctx = egui::Context::default();
+    assert!(run(&mut a, &ctx, "selection.flip_horizontal", json!({})).is_err(), "a flip needs a selection");
+    run(&mut a, &ctx, "source.add", json!({"kind": "color", "name": "Back", "settings": {"width": 400, "height": 300}})).unwrap();
+    let source = a.studio().collection().scenes[0].items[0].source;
+    wait_shown(&a, source);
+    run(&mut a, &ctx, "selection.fill", json!({})).unwrap_or_else(|e| panic!("{e}"));
+    let filled = a.studio().collection().scenes[0].items[0].transform;
+    let at = |a: &StudioApp| {
+        let it = &a.studio().collection().scenes[0].items[0];
+        (it.transform.flip_horizontal, it.transform.flip_vertical, it.fit)
+    };
+    let fill = Some(studiocraft_model::FitMode::Fill);
+    run(&mut a, &ctx, "selection.flip_horizontal", json!({})).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(at(&a), (true, false, fill), "the item keeps its fit mode");
+    run(&mut a, &ctx, "selection.flip_vertical", json!({})).unwrap();
+    assert_eq!(at(&a), (true, true, fill));
+    let t = a.studio().collection().scenes[0].items[0].transform;
+    assert_eq!(Transform { flip_horizontal: false, flip_vertical: false, ..t }, filled, "the box does not move");
+    run(&mut a, &ctx, "selection.flip_horizontal", json!({})).unwrap();
+    assert_eq!(at(&a), (false, true, fill), "a second flip takes the first back");
+    // Each flip is its own undo step.
+    run(&mut a, &ctx, "edit.undo", json!({})).unwrap();
+    assert_eq!(at(&a), (true, true, fill));
+    run(&mut a, &ctx, "edit.undo", json!({})).unwrap();
+    assert_eq!(at(&a), (true, false, fill));
+    run(&mut a, &ctx, "edit.undo", json!({})).unwrap();
+    assert_eq!(at(&a), (false, false, fill));
+    // A source that has not shown a picture can be flipped; a locked item cannot.
+    run(&mut a, &ctx, "source.add", json!({"kind": "image", "name": "No file yet"})).unwrap();
+    let blank = a.studio().collection().scenes[0].items[1].clone();
+    assert_eq!(a.studio().source_size(blank.source), None);
+    run(&mut a, &ctx, "selection.flip_vertical", json!({})).unwrap_or_else(|e| panic!("{e}"));
+    assert!(a.studio().collection().scenes[0].items[1].transform.flip_vertical);
+    run(&mut a, &ctx, "item.lock", json!({"item": blank.id, "locked": true})).unwrap();
+    assert!(run(&mut a, &ctx, "selection.flip_vertical", json!({})).is_err(), "a locked item stays as it is");
+    assert!(a.studio().collection().scenes[0].items[1].transform.flip_vertical);
+}
+
+#[test]
+fn selection_commands_start_their_own_undo_step_after_a_transform() {
+    let mut a = app();
+    let ctx = egui::Context::default();
+    run(&mut a, &ctx, "source.add", json!({"kind": "color", "name": "Back", "settings": {"width": 400, "height": 300}})).unwrap();
+    let item = a.studio().collection().scenes[0].items[0].id;
+    let source = a.studio().collection().scenes[0].items[0].source;
+    wait_shown(&a, source);
+    let t = |a: &StudioApp| a.studio().collection().scenes[0].items[0].transform;
+    let start = t(&a);
+    // An item.transform that nothing sealed is followed at once by each selection command.
+    for id in ["selection.flip_horizontal", "selection.rotate_cw"] {
+        let mut moved = start;
+        moved.position.x += 100.0;
+        run(&mut a, &ctx, "item.transform", json!({"item": item, "transform": moved})).unwrap();
+        assert_eq!(t(&a), moved);
+        run(&mut a, &ctx, id, json!({})).unwrap_or_else(|e| panic!("{e}"));
+        assert_ne!(t(&a), moved, "{id} changes the item");
+        run(&mut a, &ctx, "edit.undo", json!({})).unwrap();
+        assert_eq!(t(&a), moved, "one undo takes back {id} alone");
+        run(&mut a, &ctx, "edit.undo", json!({})).unwrap();
+        assert_eq!(t(&a), start);
+    }
+}
+
+#[test]
 fn adding_a_source_opens_its_properties() {
     let mut a = app();
     let ctx = egui::Context::default();

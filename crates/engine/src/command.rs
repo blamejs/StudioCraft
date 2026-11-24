@@ -6,7 +6,7 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use studiocraft_model::{FilterId, FitMode, ItemId, PauseAtZero, SceneId, Settings, SourceId, Transform};
+use studiocraft_model::{FilterId, FitMode, ItemId, PauseAnchor, PauseAtZero, PauseSettings, SceneId, Settings, SourceId, Transform};
 
 /// A scene by id or by name.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -154,11 +154,7 @@ pub enum RuntimeAction {
     },
     /// Show the pause screen on the program, with the profile's settings and, for this pause only,
     /// each given value in place of its setting. While paused, apply the given values.
-    PauseStart {
-        media: Option<String>,
-        countdown_s: Option<u32>,
-        at_zero: Option<PauseAtZero>,
-    },
+    PauseStart(PauseValues),
     /// Show the program scene again.
     PauseStop,
     /// Pause with the profile's settings when not paused, else resume.
@@ -176,6 +172,56 @@ pub enum RuntimeAction {
     },
     OpenSettings,
     Exit,
+}
+
+/// The pause screen settings `pause.start` gives for one pause, each checked. A `None` keeps the
+/// setting the pause has: the profile's when it starts, or the running pause's own.
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+pub struct PauseValues {
+    pub media: Option<String>,
+    pub countdown_s: Option<u32>,
+    pub text: Option<String>,
+    pub zero_text: Option<String>,
+    pub at_zero: Option<PauseAtZero>,
+    pub anchor: Option<PauseAnchor>,
+    pub size_pct: Option<u32>,
+    pub fit: Option<FitMode>,
+    pub background: Option<String>,
+    pub mute_scene: Option<bool>,
+}
+
+impl PauseValues {
+    /// `s` with each given value in place of its setting. The countdown is left alone, since a
+    /// new countdown also restarts its time.
+    pub fn apply_to(&self, s: &mut PauseSettings) {
+        if let Some(m) = &self.media {
+            s.media.clone_from(m);
+        }
+        if let Some(t) = &self.text {
+            s.text.clone_from(t);
+        }
+        if let Some(t) = &self.zero_text {
+            s.zero_text.clone_from(t);
+        }
+        if let Some(z) = self.at_zero {
+            s.at_zero = z;
+        }
+        if let Some(a) = self.anchor {
+            s.anchor = a;
+        }
+        if let Some(p) = self.size_pct {
+            s.size_pct = p;
+        }
+        if let Some(f) = self.fit {
+            s.fit = f;
+        }
+        if let Some(b) = &self.background {
+            s.background.clone_from(b);
+        }
+        if let Some(m) = self.mute_scene {
+            s.mute_scene = m;
+        }
+    }
 }
 
 /// Every action.
@@ -488,8 +534,12 @@ pub enum Command {
     RetestHardwareEncoders {},
     /// Show the pause screen on the program, and on every recording, stream and replay buffer.
     /// Each value given replaces its profile setting for this pause only: `media` a picture or
-    /// video file (`""` for none), `countdown_s` the countdown in seconds (0 for none), `at_zero`
-    /// `keep` or `resume`. While paused, the given values apply without a new transition.
+    /// video file (`""` for none), `countdown_s` the countdown in seconds (0 for none), `text` the
+    /// countdown text with one `{time}`, `zero_text` the text at zero, `at_zero` `keep` or
+    /// `resume`, `anchor` where the text sits, `size_pct` the text's height in percent of the
+    /// canvas, `fit` how the media is sized, `background` the color under it, and `mute_scene`
+    /// whether the program mix fades out. While paused, the given values apply without a new
+    /// transition.
     #[serde(rename = "pause.start")]
     PauseStart {
         #[serde(default, deserialize_with = "given_string", skip_serializing_if = "Option::is_none")]
@@ -497,7 +547,21 @@ pub enum Command {
         #[serde(default, deserialize_with = "given_u32", skip_serializing_if = "Option::is_none")]
         countdown_s: Option<u32>,
         #[serde(default, deserialize_with = "given_string", skip_serializing_if = "Option::is_none")]
+        text: Option<String>,
+        #[serde(default, deserialize_with = "given_string", skip_serializing_if = "Option::is_none")]
+        zero_text: Option<String>,
+        #[serde(default, deserialize_with = "given_string", skip_serializing_if = "Option::is_none")]
         at_zero: Option<String>,
+        #[serde(default, deserialize_with = "given_string", skip_serializing_if = "Option::is_none")]
+        anchor: Option<String>,
+        #[serde(default, deserialize_with = "given_u32", skip_serializing_if = "Option::is_none")]
+        size_pct: Option<u32>,
+        #[serde(default, deserialize_with = "given_string", skip_serializing_if = "Option::is_none")]
+        fit: Option<String>,
+        #[serde(default, deserialize_with = "given_string", skip_serializing_if = "Option::is_none")]
+        background: Option<String>,
+        #[serde(default, deserialize_with = "given_bool", skip_serializing_if = "Option::is_none")]
+        mute_scene: Option<bool>,
     },
     /// Show the program scene again, with the collection's transition.
     #[serde(rename = "pause.stop")]
@@ -562,6 +626,11 @@ fn given_string<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<String>
 /// A parameter that may be left out but, when given, is a whole number: `null` is refused.
 fn given_u32<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<u32>, D::Error> {
     u32::deserialize(d).map(Some)
+}
+
+/// A parameter that may be left out but, when given, is `true` or `false`: `null` is refused.
+fn given_bool<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<bool>, D::Error> {
+    bool::deserialize(d).map(Some)
 }
 
 /// A parameter that may be left out but, when given, is a number: `null` is refused.
@@ -773,7 +842,12 @@ const SPECS: &[CommandSpec] = &[
     spec("item.remove", "Remove Source from Scene", "item: id or source name, scene?", Undo::Undoable),
     spec("item.duplicate", "Duplicate Source", "item: id or source name, scene?", Undo::Undoable),
     spec("item.move", "Move Source", "item, scene?, to: up|down|top|bottom|{to: index}", Undo::Undoable),
-    spec("item.transform", "Transform Source", "item, scene?, transform: {position, size, rotation, crop}, fit?: fit|fill|stretch", Undo::Undoable),
+    spec(
+        "item.transform",
+        "Transform Source",
+        "item, scene?, transform: {position, scale, rotation, crop, flip_horizontal, flip_vertical}, fit?: fit|fill|stretch",
+        Undo::Undoable,
+    ),
     spec("item.visible", "Show or Hide Source", "item, scene?, visible: bool", Undo::Undoable),
     spec("item.lock", "Lock Source", "item, scene?, locked: bool", Undo::Undoable),
     spec(
@@ -833,7 +907,9 @@ const SPECS: &[CommandSpec] = &[
     spec(
         "pause.start",
         "Pause Program",
-        "media?: picture or video path, \"\" for none, countdown_s?: 0..43200, at_zero?: keep|resume",
+        "media?: picture or video path, \"\" for none, countdown_s?: 0..43200, text?: countdown text with one {time}, zero_text?: \
+         text at zero, at_zero?: keep|resume, anchor?: top_left|top_center|top_right|middle_left|center|middle_right|bottom_left|\
+         bottom_center|bottom_right, size_pct?: 2..15, fit?: fit|fill|stretch, background?: #rrggbbaa, mute_scene?: true|false",
         Undo::NotUndoable,
     ),
     spec("pause.stop", "Resume Program", "", Undo::NotUndoable),
@@ -894,8 +970,30 @@ mod tests {
             Command::CaptionsDownloadCancel {},
             Command::AppAudioLanes {},
             Command::AppAudioRoute { app: "player.exe".into(), routed: true },
-            Command::PauseStart { media: None, countdown_s: None, at_zero: None },
-            Command::PauseStart { media: Some("break.png".into()), countdown_s: Some(600), at_zero: Some("resume".into()) },
+            Command::PauseStart {
+                media: None,
+                countdown_s: None,
+                text: None,
+                zero_text: None,
+                at_zero: None,
+                anchor: None,
+                size_pct: None,
+                fit: None,
+                background: None,
+                mute_scene: None,
+            },
+            Command::PauseStart {
+                media: Some("break.png".into()),
+                countdown_s: Some(600),
+                text: Some("Back in {time}".into()),
+                zero_text: Some(String::new()),
+                at_zero: Some("resume".into()),
+                anchor: Some("top_left".into()),
+                size_pct: Some(8),
+                fit: Some("fill".into()),
+                background: Some("#000000ff".into()),
+                mute_scene: Some(false),
+            },
             Command::PauseStop {},
             Command::PauseToggle {},
             Command::PauseExtend { seconds: 60 },

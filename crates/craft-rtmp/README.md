@@ -32,6 +32,14 @@ License: MIT OR Apache-2.0.
   followed by `onMetaData` script data. `Publisher::send` sends raw message parts.
 - `Publisher::close` sends `deleteStream` with the stream ID, sends a TLS close_notify for
   `rtmps://`, and shuts down the connection's write side.
+- `reach` takes a `Reach` (`Reach::new(host, tls)`) and an address, opens the TCP connection,
+  runs the TLS handshake for `rtmps://`, and closes the connection without any RTMP bytes.
+  `reach_rtmp` also runs the RTMP handshake (C0 and C1, S0 and S1, C2, S2) within
+  `Reach::handshake_timeout` (15 s) and returns an `Answer`: `Rtmp` when the handshake completed,
+  `NotRtmp` with the server's first byte when it is not version 3, `Closed` or `NoAnswer` with the
+  bytes the server had sent, or `Failed`. It sends no command and no stream key. Its `opened`
+  callback runs once the connection (and the TLS handshake) has succeeded, before the RTMP
+  handshake starts.
 - `ChunkWriter::write_message` picks the smallest chunk header the specification allows: type 0
   for a new chunk stream, a new message stream or a timestamp that goes back; type 1 when the
   length or message type changes; type 2 when only the delta changes; and type 3 when the delta
