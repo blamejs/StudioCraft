@@ -377,7 +377,7 @@ impl Mixer {
             taps: Arc::new(Fifo::new(1)),
             retired: Arc::new(Fifo::new(RETIRED_LISTS)),
             retired_taps: Arc::new(Fifo::new(RETIRED_LISTS)),
-            retired_filters: Arc::new(Fifo::new(RETIRED_LISTS)),
+            retired_filters: Arc::new(Fifo::new(RETIRED_FILTERS)),
             taps_applied: Arc::new(AtomicU64::new(0)),
             sent: AtomicU64::new(0),
             master: Arc::new(Levels::default()),
@@ -464,11 +464,20 @@ struct Input {
 /// Commands other than fader moves that can wait for the mixer.
 const CONTROL_QUEUE: usize = 1024;
 
-/// Replaced input lists, tap sets and filter instances held for the sending thread to free. The
-/// sender frees them before each command it sends, and each command retires at most one of each,
+/// Replaced input lists and tap sets held for the sending thread to free. The sender frees them
+/// before each command it sends, and each command retires at most one of each,
 /// so no more can wait than the commands the control queue holds plus the one the mixer is
 /// applying, and none is freed on the mixer thread.
 const RETIRED_LISTS: usize = CONTROL_QUEUE + 1;
+
+/// Replaced filters the inputs hold to crossfade from, all inputs together. A filter replaced
+/// while this many wait goes back at once, without a crossfade.
+const FADING_FILTERS: usize = CONTROL_QUEUE;
+
+/// Replaced filter instances held for the sending thread to free: the ones the commands since the
+/// sender last freed retire, as for [`RETIRED_LISTS`], plus the ones that were still crossfading
+/// then and go back on the next block.
+const RETIRED_FILTERS: usize = RETIRED_LISTS + FADING_FILTERS;
 
 /// Outputs the mixer holds room for without allocating.
 const OUTPUT_ROOM: usize = 8;
@@ -522,7 +531,7 @@ impl MixState {
             mix: vec![0.0; BLOCK_SAMPLES],
             silence: vec![0.0; BLOCK_SAMPLES],
             crossfade: vec![0.0; BLOCK_SAMPLES],
-            retired_filters: Arc::new(Fifo::new(RETIRED_LISTS)),
+            retired_filters: Arc::new(Fifo::new(RETIRED_FILTERS)),
             monitor_mix: vec![0.0; BLOCK_SAMPLES],
             monitor_out: None,
             fade_step: 1.0,
@@ -594,6 +603,7 @@ impl MixState {
                 }
             }
             MixerCmd::ReplaceFilter { source, index, instance } => {
+                let waiting: usize = self.inputs.iter().map(|i| i.fading.len()).sum();
                 let Some(input) = self.inputs.iter_mut().find(|i| i.cfg.source == source) else {
                     self.retired_filters.push(instance);
                     return;
@@ -605,7 +615,7 @@ impl MixState {
                 let old = std::mem::replace(slot, instance);
                 // A filter replaced again before a block was mixed: the instance in between was
                 // never heard, and the output still crossfades from the one that was.
-                if input.fading.iter().any(|(i, _)| *i == index) || input.fading.len() == input.fading.capacity() {
+                if input.fading.iter().any(|(i, _)| *i == index) || input.fading.len() == input.fading.capacity() || waiting >= FADING_FILTERS {
                     self.retired_filters.push(old);
                 } else {
                     input.fading.push((index, old));
@@ -1229,6 +1239,45 @@ mod tests {
         feed(&a, 0.8);
         m.tick(Tick(1));
         assert!(mixed(&out).iter().all(|s| (s - 0.8).abs() < 1e-6));
+    }
+
+    /// The room kept for the sending thread counts the filters waiting to crossfade: with the most
+    /// of them waiting and a full control queue of replacements behind them, the mixer thread
+    /// still frees no filter.
+    #[test]
+    fn filters_waiting_to_crossfade_fit_beside_a_full_control_queue() {
+        let mixer = Mixer::detached();
+        let mut m = MixState::new(Arc::new(Levels::default()));
+        m.retired_filters = Arc::clone(&mixer.retired_filters);
+        let dropped = Arc::new(AtomicBool::new(false));
+        let scale = || -> Box<dyn FilterInstance> { Box::new(Scale(1.0, Arc::clone(&dropped))) };
+        let a = Arc::new(AudioOut::default());
+        let (mut ia, _) = input(1, &a, 1.0, true);
+        ia.filters = (0..=FADING_FILTERS).map(|_| scale()).collect();
+        mixer.send(MixerCmd::Inputs(vec![ia]));
+        drain(&mixer.taps, &mixer.control, &mixer.gains, &mut m);
+        // Each filter is replaced once, a control queue at a time.
+        let places: Vec<usize> = (0..=FADING_FILTERS).collect();
+        for batch in places.chunks(CONTROL_QUEUE) {
+            for &index in batch {
+                mixer.send(MixerCmd::ReplaceFilter { source: SourceId(1), index, instance: scale() });
+            }
+            drain(&mixer.taps, &mixer.control, &mixer.gains, &mut m);
+        }
+        assert_eq!(m.inputs[0].fading.len(), FADING_FILTERS, "the replacement past the limit does not wait");
+        // Replacements of a filter that already waits go back at once.
+        for _ in 0..CONTROL_QUEUE {
+            mixer.send(MixerCmd::ReplaceFilter { source: SourceId(1), index: 0, instance: scale() });
+        }
+        // The sends freed what the mixer had handed back; from here on only the mixer runs.
+        dropped.store(false, Ordering::Relaxed);
+        drain(&mixer.taps, &mixer.control, &mixer.gains, &mut m);
+        feed(&a, 0.5);
+        m.tick(Tick(0));
+        assert_eq!(mixer.retired_filters.dropped(), 0, "the queue of retired filters overflowed");
+        assert!(!dropped.load(Ordering::Relaxed), "the mixer thread freed a filter");
+        mixer.free_retired();
+        assert!(dropped.load(Ordering::Relaxed), "the sender frees them");
     }
 
     /// Push `blocks` blocks of a 1 kHz tone with `peak`, the same on both channels, through `m`.
