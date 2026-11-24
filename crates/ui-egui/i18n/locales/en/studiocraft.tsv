@@ -958,6 +958,10 @@ menu	Transform	Transform
 	Paused. Viewers see the pause screen. The countdown ended.	Paused. Viewers see the pause screen. The countdown ended.
 	Paused for {time}. Viewers see the pause screen.	Paused for {time}. Viewers see the pause screen.
 	The program resumed	The program resumed
+	{time} left	{time} left
+	The countdown ended	The countdown ended
+	The program is not paused	The program is not paused
+	Live · sending the pause screen	Live · sending the pause screen
 @msg	The program is paused	The program is paused
 @msg	The program resumed	The program resumed
 @msg	The countdown ended	The countdown ended

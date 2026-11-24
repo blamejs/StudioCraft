@@ -4,7 +4,8 @@
 //! what it is doing. A row of service tiles adds a destination. Each change runs one of the
 //! window's `stream.destination*` commands. Check Connection runs `stream.diagnose` and shows
 //! what the check found under the destination. Go Live to N, at the top, runs `golive.check`,
-//! lists each problem with a button for its fix, and runs `stream.start` when there is none.
+//! lists each problem with a button for its fix, and runs `stream.start` when there is none. The
+//! Pause screen row under it pauses and resumes the program and shows the time left.
 
 use std::time::{Duration, Instant, UNIX_EPOCH};
 
@@ -44,6 +45,8 @@ pub const MAX_SERVER: usize = 4096;
 const CHECK_REPAINT: Duration = Duration::from_millis(250);
 /// How often the window looks again at a Go-live check that waits for the free space.
 const GO_LIVE_REPAINT: Duration = Duration::from_millis(15);
+/// How often the window is drawn again while the program is paused.
+const PAUSE_REPAINT: Duration = Duration::from_millis(250);
 
 /// What the Streaming window keeps between frames: the destination whose details are open, with
 /// the text typed into them.
@@ -328,11 +331,13 @@ fn panel_key_source(key: &KeyRef) -> String {
 
 /// What destination `d` is doing, in the interface language, and the tone of its line (`Neutral`
 /// for the plain text color): from `live` while the stream runs, otherwise whether starting the
-/// stream sends to it.
-pub(crate) fn status_text(d: &Destination, running: bool, live: Option<&DestinationState>) -> (String, Tone) {
+/// stream sends to it. A live destination says it sends the pause screen while the program is
+/// `paused`.
+pub(crate) fn status_text(d: &Destination, running: bool, live: Option<&DestinationState>, paused: bool) -> (String, Tone) {
     match (running, live) {
         (true, Some(s)) => match &s.status {
             DestinationStatus::Connecting => (tl!("Connecting").to_string(), Tone::Neutral),
+            DestinationStatus::Live if paused => (tl!("Live · sending the pause screen").to_string(), Tone::Good),
             DestinationStatus::Live => (tl!("Live").to_string(), Tone::Good),
             DestinationStatus::Retrying { attempt, failure } => (
                 craft_i18n::fmt(
@@ -421,6 +426,11 @@ pub(crate) struct View<'a> {
     pub(crate) held: &'a dyn Fn(&str) -> bool,
     /// The connection check of each destination that has had one in this session, by id.
     pub(crate) checks: &'a [(String, CheckState)],
+    /// While the program is paused, the countdown's time left in milliseconds (`None` without a
+    /// countdown); `None` while it is not paused.
+    pub(crate) paused: Option<Option<u64>>,
+    /// How long the program has been paused, in milliseconds.
+    pub(crate) paused_for: Option<u64>,
 }
 
 /// What a check of a destination found, in the interface language.
@@ -506,6 +516,7 @@ fn listed_check(state: &CheckState) -> Value {
 /// The Streaming window's contents.
 pub(crate) fn show(ui: &mut Ui, view: &View, panel: &mut StreamingPanel, acts: &mut Vec<Act>) {
     go_live_row(ui, view, panel);
+    pause_row(ui, view, acts);
     if let Some(tab) = panel.golive.as_ref().and_then(|check| go_live_result(ui, check, acts)) {
         panel.open_settings = Some(tab);
     }
@@ -556,6 +567,49 @@ fn go_live_row(ui: &mut Ui, view: &View, panel: &mut StreamingPanel) {
         if checking {
             let _ = Spinner::new().show(ui);
             let _ = Text::new(tl!("Running the Go-live check…")).shade(Shade::Muted).show(ui);
+        }
+    });
+}
+
+/// The time the Pause screen row shows while the program is paused: the countdown's time left,
+/// "The countdown ended" at zero, or the time paused without a countdown. `paused` and `for_ms`
+/// are as in [`View`]. `None` while the program is not paused.
+pub(crate) fn pause_time(paused: Option<Option<u64>>, for_ms: Option<u64>) -> Option<String> {
+    Some(match paused? {
+        Some(0) => tl!("The countdown ended").to_string(),
+        Some(ms) => craft_i18n::fmt(tl!("{time} left"), &[("time", &studiocraft_studio::countdown_text(ms))]),
+        None => craft_i18n::fmt(tl!("Paused for {time}"), &[("time", &studiocraft_studio::paused_text(for_ms.unwrap_or(0)))]),
+    })
+}
+
+/// The Pause screen row: Pause (`pause.start` with the profile's settings), or Resume
+/// (`pause.stop`) with the time left or the time paused while the program is paused, and +1 min
+/// (`pause.extend`), which is off while the program is not paused.
+fn pause_row(ui: &mut Ui, view: &View, acts: &mut Vec<Act>) {
+    let time = pause_time(view.paused, view.paused_for);
+    let _ = Row::new().show(ui, |ui, _| {
+        let _ = Text::new(tl!("Pause screen")).role(TypeRole::BodyStrong).show(ui);
+        let (label, tip, act) = if time.is_some() {
+            (tl!("Resume"), tid!("pause.stop", "Resume Program"), Act::run("pause.stop", json!({})))
+        } else {
+            (tl!("Pause"), tid!("pause.start", "Pause Program"), Act::run("pause.start", json!({})))
+        };
+        if Button::new(label).tooltip(TooltipSpec::new(tip)).id_salt("pause").show(ui).clicked() {
+            acts.push(act);
+        }
+        if let Some(time) = &time {
+            let _ = Text::new(time.clone()).tone(Tone::Warn).show(ui);
+        }
+        // While the program is not paused, +1 min is off and says why.
+        let tip = if time.is_some() {
+            TooltipSpec::new(tid!("pause.extend", "Add a Minute to the Pause"))
+        } else {
+            let reason = tl!("The program is not paused");
+            TooltipSpec::new(reason).disabled_text(reason)
+        };
+        let more = Button::new(tl!("+1 min")).enabled(time.is_some()).tooltip(tip).id_salt("pause-extend");
+        if more.show(ui).clicked() {
+            acts.push(Act::run("pause.extend", json!({"seconds": 60})));
         }
     });
 }
@@ -792,7 +846,7 @@ fn row(ui: &mut Ui, view: &View, d: &Destination, live: Option<&DestinationState
     {
         let _ = Text::new(tl!("No key is held for this session yet")).role(TypeRole::Caption).tone(Tone::Warn).show(ui);
     }
-    let (text, tone) = status_text(d, view.running, live);
+    let (text, tone) = status_text(d, view.running, live, view.paused.is_some());
     let mut status = toned(Text::new(text), tone);
     if let Some(detail) = status_detail(view.running, live) {
         status = status.tooltip(TooltipSpec::new(detail));
@@ -1595,8 +1649,14 @@ impl StudioApp {
             ui.ctx().request_repaint_after(CHECK_REPAINT);
         }
         let studio = &self.studio;
+        let paused = studio.paused();
+        // The window draws again within a quarter second while paused, so the time it shows stays current.
+        if paused.is_some() {
+            ui.ctx().request_repaint_after(PAUSE_REPAINT);
+        }
         let held = |name: &str| studio.stream_key_held(name);
-        let view = View { stream: &studio.profile().stream, running, live: &live, held: &held, checks: &checks };
+        let view =
+            View { stream: &studio.profile().stream, running, live: &live, held: &held, checks: &checks, paused, paused_for: studio.paused_for_ms() };
         let mut open = true;
         if let Some(panel) = &mut self.streaming {
             let title = tid!("view.streaming", "Streaming");
