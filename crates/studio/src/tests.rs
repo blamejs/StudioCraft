@@ -1902,12 +1902,37 @@ mod audio_tracks {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// The running take's `Audio Files` folder, once its disk thread has made it.
+    fn take_files(s: &mut Studio) -> std::path::PathBuf {
+        let mut spins = 0u64;
+        loop {
+            if let Some(files) = s.audio_tracks_take().and_then(|t| t.dir()) {
+                return files.to_path_buf();
+            }
+            spins += 1;
+            assert!(spins < 50_000_000, "the take never made its folder");
+            s.tick();
+            std::thread::yield_now();
+        }
+    }
+
     #[test]
     fn a_streams_take_is_named_after_its_copy() {
+        a_streams_take_is_named_after_its_copy_when(true);
+    }
+
+    #[test]
+    fn a_take_started_during_a_stream_is_named_after_its_copy() {
+        a_streams_take_is_named_after_its_copy_when(false);
+    }
+
+    /// A stream with a copy runs, with audio tracks on from its start (`at_start`) or turned on
+    /// while it runs: the take is named after the copy.
+    fn a_streams_take_is_named_after_its_copy_when(at_start: bool) {
         use studiocraft_model::{Destination, KeyRef};
         // Only a broken build waits this long for a connection that should come at once.
         const GUARD: Duration = Duration::from_secs(60);
-        let dir = std::env::temp_dir().join(format!("studiocraft-tracks-copy-name-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("studiocraft-tracks-copy-name-{at_start}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         // The names of the next two minutes are taken, so the copy's name has a number.
@@ -1921,7 +1946,7 @@ mod audio_tracks {
         let incoming = connections(l);
         let mut p = small_profile();
         p.output.folder = dir.to_string_lossy().into_owned();
-        p.audio_tracks.enabled = true;
+        p.audio_tracks.enabled = at_start;
         p.audio_tracks.when = AudioTracksWhen::Streaming;
         p.audio_tracks.buffer_mib = 16;
         p.stream.key = "profile-key".into();
@@ -1935,8 +1960,16 @@ mod audio_tracks {
         let copy = s.outputs.stream_copy().expect("the stream has a copy").path;
         let stem = copy.file_stem().unwrap().to_string_lossy().into_owned();
         assert!(stem.starts_with("Stream ") && stem.ends_with(" (2)"), "{stem}");
+        if !at_start {
+            assert!(s.audio_tracks_take().is_none());
+            let mut p = s.profile().clone();
+            p.audio_tracks.enabled = true;
+            s.set_profile(p).unwrap();
+            s.tick();
+        }
         armed(&mut s);
-        assert!(dir.join(format!("{stem} Audio")).is_dir(), "the take has the copy's name");
+        // The take's disk thread makes its folder after the take is ready.
+        assert_eq!(take_files(&mut s), dir.join(format!("{stem} Audio")).join("Audio Files"), "the take has the copy's name");
         drop(conn);
         s.stop_output(OutputKind::Streaming);
         while s.output(OutputKind::Streaming).is_some() {
