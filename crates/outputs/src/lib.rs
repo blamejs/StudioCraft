@@ -119,6 +119,12 @@ impl OutputInstance for Running {
             Backend::Native(n) => n.audio(),
         }
     }
+    fn audio_streams(&self) -> Vec<Arc<Fifo<PooledBlock>>> {
+        match &self.backend {
+            Backend::Ffmpeg(w) => w.audio_streams(),
+            Backend::Native(n) => n.audio_streams(),
+        }
+    }
     fn status(&self) -> OutputStatus {
         match &self.backend {
             Backend::Ffmpeg(w) => w.status(),

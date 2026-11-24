@@ -7,6 +7,11 @@
 //! the output rate, samples at 48 kHz), so the writer threads keep the counts in step with the
 //! master clock: a missing frame is filled by repeating the previous one, a late frame is
 //! dropped, and a gap in the audio is filled with silence.
+//!
+//! A recording of several mix tracks sends them on the same audio pipe, interleaved: two channels
+//! for each track, in the job's order ([`OutputJob::audio_streams`]). ffmpeg splits them into one
+//! stereo audio stream for each track. The writer joins the tracks' blocks by their time
+//! ([`Gather`]), and writes silence for a track that has no block at that time.
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::Path;
@@ -229,10 +234,83 @@ impl Shared {
     }
 }
 
+/// Most audio streams one recording writes: one for each mix track.
+pub const MAX_AUDIO_STREAMS: usize = studiocraft_model::MIX_TRACKS;
+
+/// How many audio streams `job` writes: one for each name, and one when it names none.
+pub(crate) fn audio_stream_count(job: &OutputJob) -> Result<usize, PluginError> {
+    match job.audio_streams.len() {
+        0 => Ok(1),
+        n if n <= MAX_AUDIO_STREAMS => Ok(n),
+        n => Err(PluginError::Failed(format!("a recording can write at most {MAX_AUDIO_STREAMS} audio tracks, not {n}"))),
+    }
+}
+
+/// An audio queue for each of `n` streams, at least one.
+pub(crate) fn audio_queues(n: usize) -> Vec<Arc<Fifo<PooledBlock>>> {
+    (0..n.max(1)).map(|_| Arc::new(Fifo::new(256))).collect()
+}
+
+/// The first of `queues`, which [`audio_queues`] never leaves empty.
+pub(crate) fn first_queue(queues: &[Arc<Fifo<PooledBlock>>]) -> Arc<Fifo<PooledBlock>> {
+    queues.first().map_or_else(|| Arc::new(Fifo::new(1)), Arc::clone)
+}
+
+/// Joins the blocks of several audio queues that the mixer fills in the same pass, by their time.
+///
+/// The mixer stamps the blocks it sends in one pass with the same time. A set of blocks is ready
+/// when every queue has given its block, or when a queue without one is behind: another queue has
+/// a later block waiting, so the missing block was dropped. With one queue, each block is ready as
+/// it comes.
+pub(crate) struct Gather<'a> {
+    queues: &'a [Arc<Fifo<PooledBlock>>],
+    held: Vec<Option<PooledBlock>>,
+}
+
+impl<'a> Gather<'a> {
+    pub(crate) fn new(queues: &'a [Arc<Fifo<PooledBlock>>]) -> Self {
+        Gather { queues, held: queues.iter().map(|_| None).collect() }
+    }
+
+    /// The time of the next set of blocks, or `None` while it waits for more. With `ending` (no
+    /// more blocks will come), whatever is held is ready.
+    pub(crate) fn ready(&mut self, ending: bool) -> Option<Tick> {
+        for (q, h) in self.queues.iter().zip(&mut self.held) {
+            if h.is_none() {
+                *h = q.pop();
+            }
+        }
+        let at = self.held.iter().flatten().map(|b| b.pts).min()?;
+        let complete = self.held.iter().all(Option::is_some);
+        let behind = self.queues.iter().zip(&self.held).any(|(q, h)| h.is_some() && !q.is_empty());
+        (complete || behind || ending).then_some(at)
+    }
+
+    /// The block of queue `i` at `at`, if it has one.
+    pub(crate) fn block(&self, i: usize, at: Tick) -> Option<&PooledBlock> {
+        self.held.get(i).and_then(Option::as_ref).filter(|b| b.pts == at)
+    }
+
+    /// The sample frames of the set at `at`: the longest of its blocks.
+    pub(crate) fn frames(&self, at: Tick) -> usize {
+        (0..self.held.len()).filter_map(|i| self.block(i, at)).map(|b| b.samples.len() / CHANNELS).max().unwrap_or(0)
+    }
+
+    /// Let go of the blocks of the set at `at`.
+    pub(crate) fn done(&mut self, at: Tick) {
+        for h in &mut self.held {
+            if h.as_ref().is_some_and(|b| b.pts == at) {
+                *h = None;
+            }
+        }
+    }
+}
+
 /// A running ffmpeg with its writer threads.
 pub struct Writer {
     video: Arc<Fifo<Arc<PooledFrame>>>,
-    audio: Arc<Fifo<PooledBlock>>,
+    /// One queue for each audio stream; the first is [`Writer::audio`].
+    audio: Vec<Arc<Fifo<PooledBlock>>>,
     shared: Arc<Shared>,
     child: Mutex<Child>,
     threads: Vec<JoinHandle<()>>,
@@ -241,17 +319,37 @@ pub struct Writer {
 }
 
 /// The arguments before the codec options: both inputs and the stream mapping. Video comes on
-/// ffmpeg's standard input and audio on the pipe given to it as its standard output.
+/// ffmpeg's standard input and audio on the pipe given to it as its standard output. With several
+/// audio streams, the pipe carries two channels for each, which ffmpeg splits into one stereo
+/// stream each, titled with the stream's name.
 pub fn input_args(job: &OutputJob) -> Vec<String> {
     let v = job.video;
+    let streams = audio_stream_count(job).unwrap_or(1);
     let mut a: Vec<String> =
         ["-hide_banner", "-nostdin", "-y", "-loglevel", "error", "-progress", "pipe:2", "-stats_period", "0.5"].map(String::from).to_vec();
     a.extend(["-f", "rawvideo", "-pix_fmt", PixelFormat::Nv12.ffmpeg_name()].map(String::from));
     a.extend(["-video_size".into(), format!("{}x{}", v.width, v.height), "-framerate".into(), format!("{}/{}", v.fps_num, v.fps_den.max(1))]);
     a.extend(["-thread_queue_size", "64", "-i", "pipe:0"].map(String::from));
-    a.extend(["-f".into(), "f32le".into(), "-ar".into(), job.sample_rate.to_string(), "-ac".into(), CHANNELS.to_string()]);
+    a.extend(["-f".into(), "f32le".into(), "-ar".into(), job.sample_rate.to_string(), "-ac".into(), (CHANNELS * streams).to_string()]);
     a.extend(["-thread_queue_size", "64", "-i", "pipe:1"].map(String::from));
-    a.extend(["-map", "0:v:0", "-map", "1:a:0"].map(String::from));
+    a.extend(["-map", "0:v:0"].map(String::from));
+    if streams == 1 {
+        a.extend(["-map", "1:a:0"].map(String::from));
+    } else {
+        let labels: String = (0..streams).map(|k| format!("[s{k}]")).collect();
+        let mut graph = format!("[1:a]asplit={streams}{labels}");
+        for k in 0..streams {
+            let (l, r) = (k * CHANNELS, k * CHANNELS + 1);
+            graph.push_str(&format!(";[s{k}]pan=stereo|c0=c{l}|c1=c{r}[a{k}]"));
+        }
+        a.extend(["-filter_complex".to_string(), graph]);
+        for k in 0..streams {
+            a.extend(["-map".to_string(), format!("[a{k}]")]);
+        }
+    }
+    for (k, name) in job.audio_streams.iter().enumerate().filter(|(_, n)| !n.is_empty()) {
+        a.extend([format!("-metadata:s:a:{k}"), format!("title={name}")]);
+    }
     a
 }
 
@@ -264,6 +362,7 @@ impl Writer {
     /// Start ffmpeg with `codec_args` (video then audio) and `output_args` (container and
     /// destination). `secret` (a stream key) is replaced by `***` in every line ffmpeg reports.
     pub fn start(job: &OutputJob, codec_args: &[String], output_args: &[String], secret: &str) -> Result<Writer, PluginError> {
+        let streams = audio_stream_count(job)?;
         if !Path::new(&job.ffmpeg).is_file() {
             return Err(PluginError::Unavailable(format!("ffmpeg was not found at {}", job.ffmpeg.display())));
         }
@@ -283,7 +382,7 @@ impl Writer {
 
         let fps = f64::from(job.video.fps_num) / f64::from(job.video.fps_den.max(1));
         let video = Arc::new(Fifo::new((fps.ceil() as usize).clamp(8, 240)));
-        let audio = Arc::new(Fifo::new(256));
+        let audio = audio_queues(streams);
         let timeline = Timeline::noting(Arc::clone(&job.stats));
         let shared = Arc::new(Shared { secret: secret.to_string(), timeline, ..Shared::default() });
         let mut threads = Vec::new();
@@ -294,7 +393,7 @@ impl Writer {
         let started = spawn("encoder video", Box::new(move || write_video(stdin, &q, &sh, &st, start, fps, frame_bytes)));
         let started = started.and_then(|t| {
             threads.push(t);
-            let (q, sh) = (Arc::clone(&audio), Arc::clone(&shared));
+            let (q, sh) = (audio.clone(), Arc::clone(&shared));
             spawn("encoder audio", Box::new(move || write_audio(audio_pipe, &q, &sh, start)))
         });
         let started = started.and_then(|t| {
@@ -318,7 +417,12 @@ impl Writer {
     }
 
     pub fn audio(&self) -> Arc<Fifo<PooledBlock>> {
-        Arc::clone(&self.audio)
+        first_queue(&self.audio)
+    }
+
+    /// A queue for each audio stream, in the job's order.
+    pub fn audio_streams(&self) -> Vec<Arc<Fifo<PooledBlock>>> {
+        self.audio.clone()
     }
 
     pub fn status(&self) -> OutputStatus {
@@ -554,40 +658,53 @@ fn write_video(mut stdin: impl Write, q: &Fifo<Arc<PooledFrame>>, shared: &Share
     // Dropping stdin ends ffmpeg's video input.
 }
 
-/// Writes the audio blocks to `sink`, the write end of ffmpeg's audio pipe, until a stop.
-fn write_audio(mut sink: impl Write, q: &Fifo<PooledBlock>, shared: &Shared, start: Tick) {
+/// Writes the audio blocks of `queues` to `sink`, the write end of ffmpeg's audio pipe, until a
+/// stop: each sample frame holds the two channels of every queue in turn.
+fn write_audio(mut sink: impl Write, queues: &[Arc<Fifo<PooledBlock>>], shared: &Shared, start: Tick) {
     let rate = f64::from(SAMPLE_RATE);
+    let streams = queues.len().max(1);
     let mut written: i64 = 0;
-    let mut bytes: Vec<u8> = Vec::with_capacity(BLOCK_FRAMES * CHANNELS * 4);
-    let silence = vec![0u8; BLOCK_FRAMES * CHANNELS * 4];
+    let mut bytes: Vec<u8> = Vec::with_capacity(BLOCK_FRAMES * CHANNELS * streams * 4);
+    let silence = vec![0u8; BLOCK_FRAMES * CHANNELS * streams * 4];
+    let mut gather = Gather::new(queues);
     loop {
-        let Some(block) = q.pop() else {
-            if shared.stop.load(Ordering::Relaxed) {
+        // Read before the queues: blocks queued before the stop are still written.
+        let stopping = shared.stop.load(Ordering::Relaxed);
+        let Some(at) = gather.ready(stopping) else {
+            if stopping {
                 break;
             }
             std::thread::sleep(IDLE);
             continue;
         };
-        let Some(secs) = seconds_since(start, block.pts) else { continue };
-        let frames = (block.samples.len() / CHANNELS) as i64;
-        let Some(mut gap) = audio_step(secs, written, frames, rate, &shared.timeline) else { continue };
+        let frames = gather.frames(at);
+        bytes.clear();
+        for f in 0..frames {
+            for i in 0..streams {
+                let samples = gather.block(i, at).map(|b| &b.samples[..]).unwrap_or(&[]);
+                for c in 0..CHANNELS {
+                    bytes.extend(samples.get(f * CHANNELS + c).copied().unwrap_or(0.0).to_le_bytes());
+                }
+            }
+        }
+        gather.done(at);
+        let Some(secs) = seconds_since(start, at) else { continue };
+        let Some(mut gap) = audio_step(secs, written, frames as i64, rate, &shared.timeline) else { continue };
         while gap > 0 {
-            let frames = gap.min(BLOCK_FRAMES as i64) as usize;
-            if sink.write_all(&silence[..frames * CHANNELS * 4]).is_err() {
+            let n = gap.min(BLOCK_FRAMES as i64) as usize;
+            if sink.write_all(&silence[..n * CHANNELS * streams * 4]).is_err() {
                 shared.fail_pipe("ffmpeg stopped reading audio".into());
                 return;
             }
-            written += frames as i64;
-            gap -= frames as i64;
+            written += n as i64;
+            gap -= n as i64;
         }
-        bytes.clear();
-        bytes.extend(block.samples.iter().flat_map(|s| s.to_le_bytes()));
         if sink.write_all(&bytes).is_err() {
             shared.fail_pipe("ffmpeg stopped reading audio".into());
             return;
         }
         shared.started.store(true, Ordering::Relaxed);
-        written += (block.samples.len() / CHANNELS) as i64;
+        written += frames as i64;
     }
     // Dropping the write end ends ffmpeg's audio input.
     let _ = sink.flush();
@@ -808,6 +925,7 @@ mod tests {
             video_encoder_settings: studiocraft_plugin::Settings::new(),
             rate: studiocraft_plugin::RateControl::Bitrate { kbps: 500, keyframe_s: 2 },
             audio_bitrate_kbps: 128,
+            audio_streams: Vec::new(),
             ffmpeg: "ffmpeg".into(),
             stats: Arc::new(EncoderStats::default()),
             start: Tick(0),
@@ -816,12 +934,32 @@ mod tests {
         let inputs: Vec<&str> = args.windows(2).filter(|w| w[0] == "-i").map(|w| w[1].as_str()).collect();
         assert_eq!(inputs, ["pipe:0", "pipe:1"]);
         assert!(!args.iter().any(|a| a.contains("tcp:") || a.contains("udp:") || a.contains("127.0.0.1")), "{args:?}");
+        let maps: Vec<&str> = args.windows(2).filter(|w| w[0] == "-map").map(|w| w[1].as_str()).collect();
+        assert_eq!(maps, ["0:v:0", "1:a:0"], "one audio stream is mapped as it comes");
+        assert!(!args.iter().any(|a| a == "-filter_complex" || a.starts_with("-metadata")), "{args:?}");
+
+        // Three tracks come as six channels on the same pipe and leave as three stereo streams.
+        let tracks = OutputJob { audio_streams: ["Track 1", "Track 2", "Track 5"].map(String::from).to_vec(), ..job.clone() };
+        let args = input_args(&tracks);
+        let inputs: Vec<&str> = args.windows(2).filter(|w| w[0] == "-i").map(|w| w[1].as_str()).collect();
+        assert_eq!(inputs, ["pipe:0", "pipe:1"], "still one pipe for the sound");
+        let after = |flag: &str| args.windows(2).filter(|w| w[0] == flag).map(|w| w[1].clone()).collect::<Vec<_>>();
+        assert_eq!(after("-ac"), ["6"]);
+        assert_eq!(
+            after("-filter_complex"),
+            ["[1:a]asplit=3[s0][s1][s2];[s0]pan=stereo|c0=c0|c1=c1[a0];[s1]pan=stereo|c0=c2|c1=c3[a1];[s2]pan=stereo|c0=c4|c1=c5[a2]"]
+        );
+        assert_eq!(after("-map"), ["0:v:0", "[a0]", "[a1]", "[a2]"]);
+        assert_eq!(after("-metadata:s:a:2"), ["title=Track 5"]);
+
+        let many = OutputJob { audio_streams: vec!["x".into(); MAX_AUDIO_STREAMS + 1], ..job };
+        assert!(Writer::start(&many, &[], &[], "").is_err(), "more streams than there are mix tracks are refused");
     }
 
     #[test]
     fn audio_is_written_to_the_pipe_it_is_given() {
         let shared = Shared::default();
-        let q = Fifo::new(4);
+        let q = Arc::new(Fifo::new(4));
         let blocks = studiocraft_media::audio::block_pool();
         let mut block = blocks.take();
         block.samples.clear();
@@ -830,17 +968,85 @@ mod tests {
         q.push(block);
         shared.stop.store(true, Ordering::Relaxed);
         let mut sink = Vec::new();
-        write_audio(&mut sink, &q, &shared, Tick(0));
+        write_audio(&mut sink, &[q], &shared, Tick(0));
         assert_eq!(sink.len(), BLOCK_FRAMES * CHANNELS * 4);
         assert_eq!(sink[4..8], 1.0f32.to_le_bytes());
         assert!(shared.started.load(Ordering::Relaxed));
+    }
+
+    /// A block of `value` stamped `pts`.
+    fn block_of(pool: &Arc<studiocraft_media::audio::AudioPool>, value: f32, pts: Tick) -> PooledBlock {
+        let mut b = pool.take();
+        b.samples.clear();
+        b.samples.resize(BLOCK_FRAMES * CHANNELS, value);
+        b.pts = pts;
+        b
+    }
+
+    /// The `(left, right)` pairs of the first sample frame of each block of `streams` interleaved
+    /// streams in `bytes`.
+    fn first_frames(bytes: &[u8], streams: usize) -> Vec<Vec<f32>> {
+        let frame = streams * CHANNELS * 4;
+        let block = BLOCK_FRAMES * frame;
+        bytes.chunks(block).map(|b| b[..frame].chunks(4).map(|s| f32::from_le_bytes([s[0], s[1], s[2], s[3]])).collect()).collect()
+    }
+
+    #[test]
+    fn tracks_are_interleaved_by_time_and_a_dropped_block_is_written_as_silence() {
+        let shared = Shared::default();
+        let pool = studiocraft_media::audio::block_pool();
+        let queues = audio_queues(3);
+        let tick = |n: i64| {
+            studiocraft_media::clock::tick_of(Duration::from_nanos((n as u64) * 1_000_000_000 * BLOCK_FRAMES as u64 / u64::from(SAMPLE_RATE)))
+        };
+        // Block 0 reaches every track; track 2 (the second queue) lost block 1 and has block 2.
+        for (q, values) in queues.iter().zip([[0.1, 0.2, 0.3], [0.4, f32::NAN, 0.6], [0.7, 0.8, 0.9]]) {
+            for (n, v) in values.into_iter().enumerate() {
+                if !v.is_nan() {
+                    q.push(block_of(&pool, v, tick(n as i64)));
+                }
+            }
+        }
+        shared.stop.store(true, Ordering::Relaxed);
+        let mut sink = Vec::new();
+        write_audio(&mut sink, &queues, &shared, Tick(0));
+        assert_eq!(sink.len(), 3 * BLOCK_FRAMES * 3 * CHANNELS * 4, "three blocks of three stereo tracks");
+        assert_eq!(
+            first_frames(&sink, 3),
+            [vec![0.1, 0.1, 0.4, 0.4, 0.7, 0.7], vec![0.2, 0.2, 0.0, 0.0, 0.8, 0.8], vec![0.3, 0.3, 0.6, 0.6, 0.9, 0.9]]
+        );
+    }
+
+    #[test]
+    fn a_track_still_to_come_is_waited_for_and_a_set_waits_for_no_later_one() {
+        let pool = studiocraft_media::audio::block_pool();
+        let queues = audio_queues(2);
+        let mut gather = Gather::new(&queues);
+        assert_eq!(gather.ready(false), None, "nothing has come");
+        queues[0].push(block_of(&pool, 0.5, Tick(10)));
+        assert_eq!(gather.ready(false), None, "the second track's block for the same time is still to come");
+        queues[1].push(block_of(&pool, 0.25, Tick(10)));
+        assert_eq!(gather.ready(false), Some(Tick(10)));
+        assert_eq!(gather.frames(Tick(10)), BLOCK_FRAMES);
+        gather.done(Tick(10));
+        // The first track runs on while the second sends nothing: once a later block waits behind
+        // the one held, the held one goes alone.
+        queues[0].push(block_of(&pool, 0.5, Tick(11)));
+        assert_eq!(gather.ready(false), None);
+        queues[0].push(block_of(&pool, 0.5, Tick(12)));
+        assert_eq!(gather.ready(false), Some(Tick(11)));
+        assert!(gather.block(1, Tick(11)).is_none(), "the second track is silent there");
+        gather.done(Tick(11));
+        assert_eq!(gather.ready(true), Some(Tick(12)), "at the end, what is held is written");
+        gather.done(Tick(12));
+        assert_eq!(gather.ready(true), None);
     }
 
     #[test]
     fn the_time_the_sound_writer_skips_is_counted_for_the_studio() {
         let stats = Arc::new(EncoderStats::default());
         let shared = Shared { timeline: Timeline::noting(Arc::clone(&stats)), ..Shared::default() };
-        let q = Fifo::new(4);
+        let q = Arc::new(Fifo::new(4));
         let blocks = studiocraft_media::audio::block_pool();
         for ms in [0u64, 20_000] {
             let mut block = blocks.take();
@@ -850,7 +1056,7 @@ mod tests {
             q.push(block);
         }
         shared.stop.store(true, Ordering::Relaxed);
-        write_audio(std::io::sink(), &q, &shared, Tick(0));
+        write_audio(std::io::sink(), &[q], &shared, Tick(0));
         // With no picture written, 5 s of the 20 s gap are filled and the other 15 s skipped.
         let skipped = stats.skipped_ns.load(Ordering::Relaxed);
         assert!((shared.skipped() - skipped as f64 / 1e9).abs() < 1e-9);

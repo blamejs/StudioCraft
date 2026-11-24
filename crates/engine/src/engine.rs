@@ -793,6 +793,15 @@ impl Engine {
                 }
                 Ok((Value::Null, None))
             }
+            Command::SourceMixTracks { source, tracks } => {
+                let id = self.source_id(&source)?;
+                let s = c.source_mut(id).ok_or_else(|| EngineError::NoSource(id.to_string()))?;
+                if self.registry.source(&s.kind).is_ok_and(|p| !p.caps().audio) {
+                    return Err(EngineError::Invalid(format!("`{}` has no audio", s.name)));
+                }
+                s.audio.mix_tracks = tracks;
+                Ok((Value::Null, None))
+            }
             Command::SourceMute { source, muted } => {
                 let id = self.source_id(&source)?;
                 if let Some(s) = c.source_mut(id) {

@@ -122,6 +122,45 @@ fn containers_follow_the_extension() {
 }
 
 #[test]
+fn an_ffmpeg_recording_of_several_mix_tracks_has_an_audio_stream_for_each() {
+    let Ok(program) = ffmpeg::locate("") else { return };
+    for ext in ["mkv", "mp4"] {
+        let dir = temp_dir(&format!("tracks-{ext}"));
+        let file = dir.join(format!("take.{ext}"));
+        let mut j = job(program.clone(), RateControl::Quality(23));
+        j.audio_streams = ["Track 1", "Track 2", "Track 4"].map(String::from).to_vec();
+        let mut out = Recording.start(&Settings::new().with("path", file.to_string_lossy().as_ref()), j).unwrap();
+        assert_eq!(out.audio_streams().len(), 3);
+        // Only the first track gets blocks; the others are written as silence beside it.
+        feed(out.as_ref(), 1.0);
+        let r = out.stop();
+        let decodes = |map: &str| {
+            ffmpeg::command(&program)
+                .args(["-hide_banner", "-v", "error", "-i"])
+                .arg(&file)
+                .args(["-map", map, "-f", "null", "-"])
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .is_ok_and(|s| s.success())
+        };
+        let streams: Vec<bool> = ["0:a:0", "0:a:1", "0:a:2", "0:a:3"].into_iter().map(decodes).collect();
+        let names = (ext == "mkv").then(|| {
+            let bytes = std::fs::read(&file).unwrap();
+            let d = craft_media::matroska::Demuxer::from_slice(&bytes).unwrap();
+            d.tracks().iter().filter(|t| t.codec_id.starts_with("A_")).map(|t| t.name.clone()).collect::<Vec<_>>()
+        });
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(r.is_ok(), "{ext}: {r:?}");
+        assert_eq!(streams, [true, true, true, false], "{ext}: three audio streams");
+        if let Some(names) = names {
+            assert_eq!(names, ["Track 1", "Track 2", "Track 4"], "each stream is titled with its track");
+        }
+    }
+}
+
+#[test]
 fn lossless_recordings_keep_lossless_audio_in_every_container() {
     assert_eq!(lossless_audio_codec("matroska"), "flac");
     assert_eq!(lossless_audio_codec("mp4"), "alac");
@@ -150,6 +189,7 @@ fn job(program: PathBuf, rate: RateControl) -> OutputJob {
         video_encoder_settings: Settings::new().with("preset", "ultrafast"),
         rate,
         audio_bitrate_kbps: 128,
+        audio_streams: Vec::new(),
         ffmpeg: program,
         stats: Arc::new(EncoderStats::default()),
         start: Tick(0),

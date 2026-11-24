@@ -31,6 +31,7 @@ description in [docs/features.md](docs/features.md).
 - The Application Audio dock lists the microphones and the running applications that have audio as lanes with live meters, and routes an application into the program in every scene, together with the microphone ([Application Audio dock](docs/features.md#application-audio-dock)).
 - The mixer measures the final mix's loudness, and `audio.loudness` reports it with the profile's loudness target; the window does not show the readings yet ([Audio](docs/features.md#audio)).
 - Audio monitoring works on Windows and macOS, with each source off, monitor only or monitor and output ([Audio](docs/features.md#audio)).
+- Each source is assigned to any of six mix tracks with `source.mix_tracks`, and a recording writes each track in its profile's `output.recording_tracks` as its own audio stream, in the built-in MKV writer and through `ffmpeg`; the window does not set either yet ([Audio](docs/features.md#audio), [Recording](docs/features.md#recording)).
 
 ### Recording
 
@@ -109,8 +110,10 @@ description in [docs/features.md](docs/features.md).
    Audio dock lists microphones and running applications as lanes with live meters, grays a lane
    the program does not hear, and routes an application into every scene
    ([Application Audio dock](docs/features.md#application-audio-dock)). Each lane has volume with up to
-   +20 dB of boost, mute, filters, a sync offset and monitoring. Track assignment is still to be
-   built.
+   +20 dB of boost, mute, filters, a sync offset and monitoring. The mixer assigns each source to
+   mix tracks 1 to 6 and a recording writes the profile's tracks as separate audio streams
+   ([Audio](docs/features.md#audio)); the lanes, the Audio Mixer dock and Settings › Output do not
+   show the assignment yet.
 6. **Application audio on macOS and Linux (partly done).** Linux lists the applications that
    have PipeWire playback streams and captures one by linking its streams to a capture stream
    ([Application audio capture](docs/features.md#application-audio-capture)). Linux shows no

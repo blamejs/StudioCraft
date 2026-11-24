@@ -6,7 +6,7 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use studiocraft_model::{FilterId, FitMode, ItemId, PauseAtZero, SceneId, Settings, SourceId, Transform};
+use studiocraft_model::{FilterId, FitMode, ItemId, MixTracks, PauseAtZero, SceneId, Settings, SourceId, Transform};
 
 /// A scene by id or by name.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -254,6 +254,9 @@ pub enum Command {
     /// Whether audio tracks record the source to a file of its own.
     #[serde(rename = "source.set_record_track")]
     SourceSetRecordTrack { source: SourceRef, on: bool },
+    /// The mix tracks the source's audio goes to, as track numbers 1 to 6.
+    #[serde(rename = "source.mix_tracks")]
+    SourceMixTracks { source: SourceRef, tracks: MixTracks },
     /// Present the window or display staged in slot `index` (1 is the first) of a Staged windows
     /// source, or of every one whose slot is not empty when `source` is absent.
     #[serde(rename = "present.window")]
@@ -624,6 +627,7 @@ impl Command {
             Command::SourceSyncOffset { .. } => "source.sync_offset",
             Command::SourceMonitor { .. } => "source.monitor",
             Command::SourceSetRecordTrack { .. } => "source.set_record_track",
+            Command::SourceMixTracks { .. } => "source.mix_tracks",
             Command::PresentWindow { .. } => "present.window",
             Command::PresentNext { .. } => "present.next",
             Command::PresentPrevious { .. } => "present.previous",
@@ -749,6 +753,7 @@ const SPECS: &[CommandSpec] = &[
     spec("source.sync_offset", "Set Sync Offset", "source: id or name, ms: 0..5000 milliseconds the audio is delayed", Undo::Undoable),
     spec("source.monitor", "Audio Monitoring", "source: id or name, mode: off|monitor_only|monitor_and_output", Undo::Undoable),
     spec("source.set_record_track", "Record as Its Own Track", "source: id or name, on: bool", Undo::Undoable),
+    spec("source.mix_tracks", "Mix Tracks", "source: id or name, tracks: list of track numbers 1 to 6, [] for none", Undo::Undoable),
     spec(
         "present.window",
         "Present Staged Window",

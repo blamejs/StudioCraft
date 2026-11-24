@@ -208,6 +208,14 @@ A source's Properties window sets two more audio options:
 Monitored sources play on the device chosen in Settings › Audio. Monitoring works on Windows and
 macOS.
 
+The mixer also makes six mix tracks, numbered 1 to 6. Each source with audio is assigned to any
+of them, and a new source goes to all six. A track holds the sources assigned to it at their
+volume, mute and monitoring settings, and it is clipped at full scale like the program mix. The
+`source.mix_tracks` command assigns a source; the Settings window and the Audio Mixer dock do not
+show the assignment yet. A recording writes the tracks listed in its profile's
+`output.recording_tracks`, each as its own stereo audio stream (see [Recording](#recording)).
+Streams and the replay buffer always take the program mix.
+
 ### Application Audio dock
 
 Docks › Application Audio shows a dock that lists a lane for each audio input source, then a lane
@@ -249,6 +257,14 @@ The Lossless level encodes the video frames without compression loss and writes 
 The software encoder runs x264 with `-qp 0`, and NVENC through `ffmpeg` runs with
 `-tune lossless`. A Lossless recording also stores its audio without loss, as FLAC in an MKV file
 and as ALAC in an MP4 or MOV file. The other levels encode the audio as AAC.
+
+A recording writes one audio stream for each [mix track](#audio) in the profile's
+`output.recording_tracks`, a list of track numbers from 1 to 6 that is `[1]` by default. With one
+track the file has one unnamed audio stream. With several, the streams follow the track order and
+are titled `Track 1`, `Track 2` and so on. The built-in MKV writer and recordings through `ffmpeg`
+both write them. A track that misses a block of sound is written as silence for that block, so
+every stream keeps the same length. A recording with an empty list does not start, and the status
+bar gives the reason.
 
 StudioCraft writes recordings to the folder set in Settings › Output. When that setting is empty,
 it uses your Videos folder, then your home folder when the system has no Videos folder, and then

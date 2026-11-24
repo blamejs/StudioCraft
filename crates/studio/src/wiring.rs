@@ -7,7 +7,7 @@ use studiocraft_engine::host::SourceSet;
 use studiocraft_engine::mixer::{MixInput, MixerCmd};
 use studiocraft_media::Tick;
 use studiocraft_media::mix::Levels;
-use studiocraft_model::{FilterId, MonitorMode, SceneCollection, SceneId, Settings, SourceId};
+use studiocraft_model::{FilterId, MixTracks, MonitorMode, SceneCollection, SceneId, Settings, SourceId};
 use studiocraft_plugin::{AudioOut, FilterInstance, FilterMeter, FilterTarget, Reframe, Registry};
 use studiocraft_render::{ItemDesc, Plan, SceneDesc, ThumbnailRequest, TransitionDesc};
 
@@ -68,6 +68,7 @@ pub(crate) struct Wiring {
     gains: HashMap<SourceId, (f32, bool)>,
     offsets: HashMap<SourceId, u32>,
     modes: HashMap<SourceId, MonitorMode>,
+    mix_tracks: HashMap<SourceId, MixTracks>,
 }
 
 impl Wiring {
@@ -209,6 +210,7 @@ impl Wiring {
         let gains: HashMap<SourceId, (f32, bool)> = audio_sources.iter().map(|(s, _)| (s.id, (s.audio.gain, s.audio.muted))).collect();
         let offsets: HashMap<SourceId, u32> = audio_sources.iter().map(|(s, _)| (s.id, s.audio.sync_offset_ms)).collect();
         let modes: HashMap<SourceId, MonitorMode> = audio_sources.iter().map(|(s, _)| (s.id, s.audio.monitor)).collect();
+        let mix_tracks: HashMap<SourceId, MixTracks> = audio_sources.iter().map(|(s, _)| (s.id, s.audio.mix_tracks)).collect();
         levels.retain(|id, _| gains.contains_key(id));
 
         if self.mix.as_ref() == Some(&key) {
@@ -223,9 +225,16 @@ impl Wiring {
             cmds.extend(
                 modes.iter().filter(|(id, m)| self.modes.get(id) != Some(m)).map(|(id, mode)| MixerCmd::Monitor { source: *id, mode: *mode }),
             );
+            cmds.extend(
+                mix_tracks
+                    .iter()
+                    .filter(|(id, t)| self.mix_tracks.get(id) != Some(t))
+                    .map(|(id, tracks)| MixerCmd::MixTracks { source: *id, tracks: *tracks }),
+            );
             self.gains = gains;
             self.offsets = offsets;
             self.modes = modes;
+            self.mix_tracks = mix_tracks;
             return (!cmds.is_empty()).then_some(cmds);
         }
 
@@ -255,6 +264,7 @@ impl Wiring {
                 filters,
                 sync_offset_ms: s.audio.sync_offset_ms,
                 monitor: s.audio.monitor,
+                mix_tracks: s.audio.mix_tracks,
             });
         }
         self.mix = Some(key);
@@ -262,6 +272,7 @@ impl Wiring {
         self.gains = gains;
         self.offsets = offsets;
         self.modes = modes;
+        self.mix_tracks = mix_tracks;
         Some(vec![MixerCmd::Inputs(inputs)])
     }
 
@@ -339,6 +350,28 @@ mod tests {
         let cmds = wiring.mixer_inputs(&c, &registry, &sources, &mut levels, &mut notices).unwrap_or_default();
         assert!(
             matches!(cmds.as_slice(), [MixerCmd::Monitor { source, mode: MonitorMode::MonitorAndOutput }] if *source == mic),
+            "{} commands",
+            cmds.len()
+        );
+        assert!(wiring.mixer_inputs(&c, &registry, &sources, &mut levels, &mut notices).is_none(), "nothing changed");
+    }
+
+    #[test]
+    fn changed_mix_tracks_reach_the_mixer_without_a_new_input_list() {
+        let registry = builtin_registry(&Arc::new(RwLock::new(String::new())), &Arc::new(CaptionBoard::new())).unwrap();
+        let mut sources = SourceSet::new(MasterClock::new());
+        let (mut wiring, mut levels, mut notices) = (Wiring::default(), HashMap::new(), Vec::new());
+        let mut c = default_collection("Test");
+        sources.sync(&c, &registry);
+        let mic = c.global_audio.first().copied().unwrap_or_else(|| panic!("the default collection has global audio"));
+        c.source_mut(mic).unwrap().audio.mix_tracks = MixTracks::from_bits(0b10);
+        let Some(cmds) = wiring.mixer_inputs(&c, &registry, &sources, &mut levels, &mut notices) else { panic!("no inputs") };
+        let [MixerCmd::Inputs(inputs)] = cmds.as_slice() else { panic!("{} commands", cmds.len()) };
+        assert_eq!(inputs.iter().find(|i| i.source == mic).map(|i| i.mix_tracks), Some(MixTracks::from_bits(0b10)));
+        c.source_mut(mic).unwrap().audio.mix_tracks = MixTracks::FIRST;
+        let cmds = wiring.mixer_inputs(&c, &registry, &sources, &mut levels, &mut notices).unwrap_or_default();
+        assert!(
+            matches!(cmds.as_slice(), [MixerCmd::MixTracks { source, tracks }] if *source == mic && *tracks == MixTracks::FIRST),
             "{} commands",
             cmds.len()
         );
