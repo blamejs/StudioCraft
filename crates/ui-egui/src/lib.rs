@@ -21,6 +21,7 @@ mod icons;
 pub mod kit;
 mod logos;
 mod output_bar;
+mod palette;
 mod pause_banner;
 mod pause_setup;
 pub mod placement;
@@ -269,6 +270,8 @@ pub struct StudioApp {
     /// question, the update prompt and the result of Help › Check for Updates show on it.
     window_dialogs: Option<WindowDialogs>,
     about: bool,
+    /// The command palette, with the commands it lists while it is open.
+    palette: palette::Palette,
     /// How the About window's Credits list names people.
     credit_names: credits::NameMode,
     /// The Licenses window, with the license it shows.
@@ -433,6 +436,7 @@ impl StudioApp {
             naming: None,
             window_dialogs: None,
             about: false,
+            palette: palette::Palette::default(),
             credit_names: credits::NameMode::default(),
             licenses: None,
             encoders: None,
@@ -1591,6 +1595,13 @@ impl StudioApp {
             "selection.rotate_cw" => return self.selection_transform(|t, _, _| Transform { rotation: t.rotation + 90.0, ..t }.sanitized()),
             "selection.rotate_ccw" => return self.selection_transform(|t, _, _| Transform { rotation: t.rotation + 270.0, ..t }.sanitized()),
             "app.about" => self.about = true,
+            "app.command_palette" => {
+                if self.modal_open() {
+                    return Err(tmsg!("`{command}` cannot run now", command = "app.command_palette"));
+                }
+                self.open_palette();
+                return Ok(json!({"open": true, "commands": self.palette.entries().len()}));
+            }
             "app.language" => return self.language_command(cmd),
             "pause.settings" => {
                 self.open_settings(Tab::Stream);
@@ -2814,6 +2825,8 @@ impl StudioApp {
         self.streaming_window(ui, &mut acts);
         self.encoders_window(ui);
         self.scopes_window(ui, &mut acts);
+        self.refresh_palette();
+        self.palette.show(ui);
         // An update never starts while a recording, stream or replay buffer runs.
         let idle = !self.outputs_running();
         match updates_ui::show(&mut self.updates, self.window_dialogs.as_ref(), &ctx, idle) {
