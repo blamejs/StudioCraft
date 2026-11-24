@@ -314,7 +314,13 @@ fn next_packet(b: &[u8]) -> Result<(Rtcp<'_>, &[u8]), Error> {
                     }
                     Rtcp::Nack { sender_ssrc, media_ssrc, lost: Lost { fci, bit: 0 } }
                 }
-                (PSFB, 1) => Rtcp::Pli { sender_ssrc, media_ssrc },
+                (PSFB, 1) => {
+                    // RFC 4585 section 6.3.1: a PLI carries no feedback control information.
+                    if !fci.is_empty() {
+                        return Err(Error::Invalid("a picture loss indication carries no feedback data"));
+                    }
+                    Rtcp::Pli { sender_ssrc, media_ssrc }
+                }
                 _ => Rtcp::Other { packet_type, count, body },
             }
         }
@@ -399,32 +405,47 @@ pub fn write_bye(out: &mut Vec<u8>, sources: &[u32], reason: Option<&str>) -> Re
 
 /// Appends a generic NACK from `sender_ssrc` asking `media_ssrc` for the `lost` sequence numbers.
 /// Each entry covers a packet id and the 16 that follow it, so numbers in increasing order (with
-/// wrap-around) take the fewest entries. An empty list is refused.
+/// wrap-around) take the fewest entries. An empty list is refused, and so is a list that needs
+/// more entries than one packet holds, before anything is written.
 pub fn write_nack(out: &mut Vec<u8>, sender_ssrc: u32, media_ssrc: u32, lost: &[u16]) -> Result<(), Error> {
     if lost.is_empty() {
         return Err(Error::BadInput("a NACK asks for at least one packet"));
     }
+    let mut entries = 0usize;
+    nack_entries(lost, |_, _| entries += 1);
+    // The header, the two SSRCs and 4 bytes per entry, checked before anything is written.
+    let size = 12 + entries * 4;
+    let limit = (usize::from(u16::MAX) + 1) * 4;
+    if size > limit {
+        return Err(Error::TooLarge { size, limit });
+    }
     write_packet(out, 1, RTPFB, |out| {
         out.extend_from_slice(&sender_ssrc.to_be_bytes());
         out.extend_from_slice(&media_ssrc.to_be_bytes());
-        let mut entry: Option<(u16, u16)> = None;
-        for &seq in lost {
-            if let Some((pid, blp)) = entry.as_mut() {
-                let d = seq.wrapping_sub(*pid);
-                if (1..=16).contains(&d) {
-                    *blp |= 1 << (d - 1);
-                    continue;
-                }
-                out.extend_from_slice(&pid.to_be_bytes());
-                out.extend_from_slice(&blp.to_be_bytes());
-            }
-            entry = Some((seq, 0));
-        }
-        if let Some((pid, blp)) = entry {
+        nack_entries(lost, |pid, blp| {
             out.extend_from_slice(&pid.to_be_bytes());
             out.extend_from_slice(&blp.to_be_bytes());
-        }
+        });
     })
+}
+
+/// Calls `entry` with the packet id and bitmask of each generic NACK entry for `lost`.
+fn nack_entries(lost: &[u16], mut entry: impl FnMut(u16, u16)) {
+    let mut open: Option<(u16, u16)> = None;
+    for &seq in lost {
+        if let Some((pid, blp)) = open.as_mut() {
+            let d = seq.wrapping_sub(*pid);
+            if (1..=16).contains(&d) {
+                *blp |= 1 << (d - 1);
+                continue;
+            }
+            entry(*pid, *blp);
+        }
+        open = Some((seq, 0));
+    }
+    if let Some((pid, blp)) = open {
+        entry(pid, blp);
+    }
 }
 
 /// Appends a picture loss indication from `sender_ssrc` to `media_ssrc`.

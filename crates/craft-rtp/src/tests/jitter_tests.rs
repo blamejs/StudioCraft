@@ -87,6 +87,20 @@ fn a_missing_packet_is_waited_for_then_given_up() {
 }
 
 #[test]
+fn a_missing_packet_is_waited_for_from_the_first_later_packet_to_arrive() {
+    let mut jb = buffer();
+    jb.push(&pkt(1, 0), Duration::ZERO);
+    assert_eq!(drain(&mut jb, ms(60)), [Out::P(1)]);
+    // Packet 4 arrives before packet 3, and packet 2 never does.
+    jb.push(&pkt(4, 0), ms(61));
+    jb.push(&pkt(3, 0), ms(100));
+    assert_eq!(jb.next_wake(), Some(ms(121)));
+    assert_eq!(drain(&mut jb, ms(120)), []);
+    assert_eq!(drain(&mut jb, ms(121)), [Out::Gap(1)]);
+    assert_eq!(drain(&mut jb, ms(161)), [Out::P(3), Out::P(4)]);
+}
+
+#[test]
 fn a_packet_that_fills_the_gap_in_time_is_released_in_order() {
     let mut jb = buffer();
     jb.push(&pkt(1, 0), Duration::ZERO);

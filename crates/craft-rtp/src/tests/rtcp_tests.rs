@@ -72,6 +72,25 @@ fn nack_groups_lost_packets_into_entries_of_17() {
 }
 
 #[test]
+fn a_nack_too_large_for_one_packet_is_refused_before_it_is_written() {
+    // Numbers that alternate far apart take one entry each: 65534 entries, one over the limit.
+    let lost: Vec<u16> = (0..65_534u32).map(|i| if i % 2 == 0 { 0 } else { 1000 }).collect();
+    let mut out = Vec::new();
+    assert_eq!(write_nack(&mut out, 1, 2, &lost), Err(Error::TooLarge { size: 12 + 65_534 * 4, limit: 262_144 }));
+    assert_eq!(out.capacity(), 0);
+    // One entry fewer fits.
+    write_nack(&mut out, 1, 2, &lost[..65_533]).unwrap();
+    assert_eq!(out.len(), 262_144);
+}
+
+#[test]
+fn a_picture_loss_indication_with_feedback_data_is_refused() {
+    let pli = [0x81, 206, 0, 3, 0, 0, 0, 3, 0, 0, 0, 4, 0, 0, 0, 0];
+    let items = all(&pli);
+    assert!(matches!(items.first(), Some(Err(Error::Invalid(_)))), "{items:?}");
+}
+
+#[test]
 fn picture_loss_indication_and_bye() {
     let mut out = Vec::new();
     write_pli(&mut out, 3, 4).unwrap();

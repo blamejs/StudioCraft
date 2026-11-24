@@ -319,7 +319,7 @@ impl JitterBuffer {
             Some(Slot::Full(h)) if now >= h.arrival.saturating_add(delay) => {}
             Some(Slot::Full(_)) => return None,
             _ => {
-                let (next, arrival) = self.next_held()?;
+                let (next, arrival) = self.next_held_earliest()?;
                 if now < arrival.saturating_add(delay) {
                     return None;
                 }
@@ -364,7 +364,7 @@ impl JitterBuffer {
         }
         let arrival = match self.slot(self.head) {
             Some(Slot::Full(h)) => h.arrival,
-            _ => self.next_held()?.1,
+            _ => self.next_held_earliest()?.1,
         };
         Some(arrival.saturating_add(self.delay))
     }
@@ -474,6 +474,22 @@ impl JitterBuffer {
             Some(Slot::Full(h)) => Some((ext, h.arrival)),
             _ => None,
         })
+    }
+
+    /// The first held packet after the head, and the earliest arrival of the packets held after
+    /// the head: a missing packet at the head is waited for from the first packet after it to
+    /// arrive, which may be later in sequence than the first one held.
+    fn next_held_earliest(&self) -> Option<(i64, Duration)> {
+        let mut next = None;
+        for ext in self.head..=self.highest {
+            if let Some(Slot::Full(h)) = self.slot(ext) {
+                next = match next {
+                    None => Some((ext, h.arrival)),
+                    Some((first, arrival)) => Some((first, h.arrival.min(arrival))),
+                };
+            }
+        }
+        next
     }
 
     fn start_at(&mut self, ext: i64) {
