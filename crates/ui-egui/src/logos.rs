@@ -3,12 +3,16 @@
 //!
 //! A logo is drawn only as its service's guidelines allow (`ASSETS.md`): whole, on a white tile,
 //! with clear space around it, and never smaller than the least size the guidelines give. When a
-//! destination's row is too small for that at the display's scale, the row shows a plain tile and
-//! the destination's details show the logo at its full size.
+//! destination's row is too small for that at the display's scale, the row shows the service's
+//! badge and the destination's details show the logo at its full size. A service without a logo
+//! StudioCraft may show has a badge everywhere: the first letter of its name on a tile tinted
+//! from the theme, in a tone of its own.
 
 use std::collections::BTreeMap;
 
-use egui::{Color32, CornerRadius, Rect, Stroke, StrokeKind, TextureHandle, Ui, pos2, vec2};
+use craft_theme::{Oklch, Rgba, ensure_contrast, over};
+use egui::{Align2, Color32, CornerRadius, FontId, Rect, Stroke, StrokeKind, TextureHandle, Ui, pos2, vec2};
+use studiocraft_model::services::{self, SERVICES, Service};
 
 use crate::kit::corner;
 use crate::theme;
@@ -33,12 +37,17 @@ pub(crate) struct TileStyle {
     pub(crate) focus: Stroke,
     /// The space around a service tile's logo and name, in points.
     pub(crate) pad: f32,
+    /// The color a badge's tone starts from: the soft accent over the panel.
+    pub(crate) tint: Rgba,
+    /// The color of a badge's letter before it is moved to read on the badge: the body text.
+    pub(crate) ink: Rgba,
 }
 
 impl TileStyle {
     /// The style from the tokens of the window's root scope: the border line, the secondary
     /// control fills and text colors, the muted text color, the control and surface radii, the
-    /// caption size, the focus ring and the regular padding.
+    /// caption size, the focus ring, the regular padding, the soft accent over the panel and the
+    /// body text.
     pub(crate) fn of(ctx: &egui::Context) -> TileStyle {
         theme::with_root(ctx, |cx| {
             let t = &cx.tokens;
@@ -56,9 +65,56 @@ impl TileStyle {
                 caption: t.typography.caption.size,
                 focus: cx.focus_look().stroke,
                 pad: t.space.pad.regular,
+                tint: over(Rgba::from(theme::color(cx, t.color.accent.soft)), Rgba::from(theme::color(cx, t.color.surface.panel))),
+                ink: Rgba::from(theme::color(cx, t.color.text.normal)),
             }
         })
     }
+
+    /// The fill and letter colors of the badge of the service `id`.
+    pub(crate) fn badge(&self, id: &str) -> (Color32, Color32) {
+        let (fill, letter) = badge_tone(self.tint, self.ink, id);
+        (egui_color(fill), egui_color(letter))
+    }
+}
+
+/// The least contrast of a badge's letter on its fill (WCAG AA for text).
+const BADGE_TEXT_MIN: f64 = 4.5;
+/// The least and most OKLCH chroma of a badge's fill, so each tone stays a tint.
+const BADGE_CHROMA: (f64, f64) = (0.04, 0.09);
+/// The hue step between the badges of services next to each other in [`SERVICES`], in degrees.
+const GOLDEN_ANGLE: f64 = 137.507_764;
+
+/// The fill and letter colors of the badge of the service `id`: `tint` at its own lightness, its
+/// chroma held to [`BADGE_CHROMA`] and its hue turned by [`hue_turn`], and `ink` moved only as far
+/// as it needs to reach [`BADGE_TEXT_MIN`] on that fill.
+fn badge_tone(tint: Rgba, ink: Rgba, id: &str) -> (Rgba, Rgba) {
+    let base = tint.to_oklch();
+    let fill = Oklch { l: base.l, c: base.c.clamp(BADGE_CHROMA.0, BADGE_CHROMA.1), h: (base.h + hue_turn(id)).rem_euclid(360.0) }.to_rgba();
+    (fill, ensure_contrast(ink, fill, BADGE_TEXT_MIN))
+}
+
+/// How far the badge of the service `id` turns the tint's hue, in degrees: a golden-angle step
+/// per place in [`SERVICES`], so services next to each other differ most, and a hash of the id
+/// for a service this version does not list.
+fn hue_turn(id: &str) -> f64 {
+    match SERVICES.iter().position(|s| s.id == id) {
+        Some(i) => (i as f64 * GOLDEN_ANGLE).rem_euclid(360.0),
+        // FNV-1a, so the same id gets the same tone in every build.
+        None => (id.bytes().fold(0x811c_9dc5_u32, |h, b| (h ^ u32::from(b)).wrapping_mul(0x0100_0193)) % 360) as f64,
+    }
+}
+
+/// The letter a badge shows: the first letter or digit of `name`, in upper case; empty when the
+/// name has none.
+pub(crate) fn monogram(name: &str) -> String {
+    name.chars().find(|c| c.is_alphanumeric()).map(|c| c.to_uppercase().collect()).unwrap_or_default()
+}
+
+/// `c` as egui paints it.
+fn egui_color(c: Rgba) -> Color32 {
+    let [r, g, b, a] = c.0;
+    Color32::from_rgba_unmultiplied(r, g, b, a)
 }
 
 /// A service logo file and the rules its guidelines set for drawing it.
@@ -107,8 +163,9 @@ pub const LOGOS: &[Logo] = &[
 
 /// The height of the tile in a destination's row, in points.
 pub const ROW_TILE: f32 = 28.0;
-/// The least height of the logo tile in a destination's details, in points.
-const HEADER_TILE: f32 = 72.0;
+/// The least height of the logo tile in a destination's details, and the side of a badge there,
+/// in points.
+pub(crate) const HEADER_TILE: f32 = 72.0;
 /// The largest side a logo texture is decoded at, in pixels.
 const MAX_TEXTURE: u32 = 1024;
 
@@ -232,8 +289,13 @@ impl Logos {
         painter.image(texture, r, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
     }
 
-    /// Paint the plain tile of a destination without a logo it can show here.
-    pub(crate) fn paint_plain(ui: &Ui, tile: Rect, s: &TileStyle, radius: u8) {
+    /// Paint the tile of a destination without a logo it can show here: the badge of the service
+    /// `service` when it is one of [`SERVICES`], and a plain tile for a custom server.
+    pub(crate) fn paint_plain(ui: &Ui, tile: Rect, service: &str, s: &TileStyle, radius: u8) {
+        if let Some(svc) = services::service(service) {
+            Logos::paint_badge(ui, tile, svc, s, radius);
+            return;
+        }
         let painter = ui.painter();
         painter.rect_filled(tile, CornerRadius::same(radius), s.fill);
         // A broadcast mark: a dot inside two rings.
@@ -242,6 +304,17 @@ impl Logos {
         painter.circle_filled(c, unit, s.mark);
         painter.circle_stroke(c, unit * 2.4, Stroke::new(1.5, s.mark));
         painter.circle_stroke(c, unit * 3.8, Stroke::new(1.5, s.mark.gamma_multiply(0.6)));
+    }
+
+    /// Paint the badge of `svc` in `tile`: its tone with the border line, and the first letter of
+    /// its name centered at half the tile's height.
+    pub(crate) fn paint_badge(ui: &Ui, tile: Rect, svc: &Service, s: &TileStyle, radius: u8) {
+        let painter = ui.painter();
+        let (fill, letter) = s.badge(svc.id);
+        painter.rect_filled(tile, CornerRadius::same(radius), fill);
+        painter.rect_stroke(tile, CornerRadius::same(radius), Stroke::new(1.0, s.line), StrokeKind::Inside);
+        let font = FontId::new(tile.height() * 0.5, crate::fonts::semibold());
+        painter.text(tile.center(), Align2::CENTER_CENTER, monogram(svc.name), font, letter);
     }
 }
 
@@ -296,5 +369,99 @@ mod tests {
             }
         }
         assert_eq!(youtube.header_tile(1.0), 187.0);
+    }
+
+    /// The smallest distance between two of `hues` around the color wheel, in degrees.
+    fn least_gap(hues: &[f64]) -> f64 {
+        let mut least = 360.0_f64;
+        for (i, a) in hues.iter().enumerate() {
+            for b in &hues[i + 1..] {
+                let d = (a - b).rem_euclid(360.0);
+                least = least.min(d.min(360.0 - d));
+            }
+        }
+        least
+    }
+
+    #[test]
+    fn a_badge_shows_the_first_letter_of_the_service_name() {
+        let letters: Vec<(&str, String)> = ["kick", "x", "linkedin", "tiktok"]
+            .iter()
+            .map(|id| {
+                let Some(svc) = services::service(id) else { panic!("no {id} preset") };
+                (svc.id, monogram(svc.name))
+            })
+            .collect();
+        assert_eq!(letters, [("kick", "K".to_string()), ("x", "X".into()), ("linkedin", "L".into()), ("tiktok", "T".into())]);
+        for svc in SERVICES {
+            assert_eq!(monogram(svc.name).chars().count(), 1, "{}", svc.id);
+        }
+        assert_eq!(monogram(""), "");
+        assert_eq!(monogram("  -- "), "");
+        assert_eq!(monogram(" (9) lives"), "9");
+        assert_eq!(monogram("élan"), "É");
+        assert_eq!(monogram("ßtream"), "SS", "a letter whose upper case is two letters keeps both");
+    }
+
+    #[test]
+    fn each_service_has_a_tone_of_its_own_that_its_letter_reads_on() {
+        let turns: Vec<f64> = SERVICES.iter().map(|s| hue_turn(s.id)).collect();
+        assert!(least_gap(&turns) >= 30.0, "{turns:?}");
+        for (a, b) in SERVICES.iter().zip(SERVICES.iter().skip(1)) {
+            let d = (hue_turn(a.id) - hue_turn(b.id)).rem_euclid(360.0);
+            assert!(d.min(360.0 - d) >= 90.0, "{} and {} stand next to each other", a.id, b.id);
+        }
+        // A service this version does not list gets the same tone every time.
+        assert_eq!(hue_turn("future"), hue_turn("future"));
+        assert!((0.0..360.0).contains(&hue_turn("future")) && (0.0..360.0).contains(&hue_turn("")));
+        // Light and dark tints, a grey one and a loud one: every fill stays a tint, and every
+        // letter reaches the text minimum on its fill.
+        let tints = [Rgba::rgb(0xe6, 0xee, 0xfb), Rgba::rgb(0x1f, 0x2d, 0x45), Rgba::rgb(0x80, 0x80, 0x80), Rgba::rgb(0xff, 0x00, 0x40)];
+        let inks = [Rgba::rgb(0x1a, 0x1a, 0x1a), Rgba::rgb(0xf2, 0xf2, 0xf2), Rgba::rgb(0x80, 0x80, 0x80)];
+        for tint in tints {
+            for ink in inks {
+                let mut hues = Vec::new();
+                for svc in SERVICES {
+                    let (fill, letter) = badge_tone(tint, ink, svc.id);
+                    let f = fill.to_oklch();
+                    assert!(f.c <= BADGE_CHROMA.1 + 0.005, "{} on {tint:?}: chroma {}", svc.id, f.c);
+                    assert!((f.l - tint.to_oklch().l).abs() < 0.02, "{} keeps the tint's lightness", svc.id);
+                    let ratio = craft_theme::contrast_ratio(letter, fill);
+                    assert!(ratio >= BADGE_TEXT_MIN, "{} on {tint:?} with {ink:?}: {ratio:.2}:1", svc.id);
+                    hues.push(f.h);
+                }
+                assert!(least_gap(&hues) >= 25.0, "{tint:?}: {hues:?}");
+            }
+        }
+        // A letter that already reads on the fill is kept as it is.
+        let (fill, letter) = badge_tone(tints[0], inks[0], "kick");
+        assert!(craft_theme::contrast_ratio(inks[0], fill) >= BADGE_TEXT_MIN);
+        assert_eq!(letter, inks[0]);
+    }
+
+    #[test]
+    fn the_badges_take_their_tones_from_both_suite_modes() {
+        use craft_theme::Mode;
+        use craft_ui::runtime::frame::FrameInput;
+        let mut seen = Vec::new();
+        for mode in [Mode::Light, Mode::Dark] {
+            let ctx = crate::test_context();
+            craft_ui::shell::embed::before_input(&ctx, |_| FrameInput::new(crate::theme::root_env().mode(mode)));
+            let mut style = None;
+            let mut out = ctx.run_ui(egui::RawInput::default(), |ui| style = Some(TileStyle::of(ui.ctx())));
+            out.textures_delta.clear();
+            let Some(style) = style else { panic!("the frame did not run") };
+            let badges: Vec<(Color32, Color32)> = SERVICES.iter().map(|s| style.badge(s.id)).collect();
+            for (svc, (fill, letter)) in SERVICES.iter().zip(&badges) {
+                let ratio = craft_theme::contrast_ratio(Rgba::from(*letter), Rgba::from(*fill));
+                assert!(ratio >= BADGE_TEXT_MIN, "{mode:?}: {} is {ratio:.2}:1", svc.id);
+                assert_eq!(fill.a(), 255, "{mode:?}: {} is opaque", svc.id);
+            }
+            for (i, a) in badges.iter().enumerate() {
+                assert!(badges[i + 1..].iter().all(|b| b.0 != a.0), "{mode:?}: {} shares its tone", SERVICES[i].id);
+            }
+            seen.push(badges[0].0);
+        }
+        assert_ne!(seen[0], seen[1], "each mode tints its badges from its own theme");
     }
 }
