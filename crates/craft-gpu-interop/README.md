@@ -41,9 +41,12 @@ value and the semaphore is destroyed once the queue has finished the work, and c
 does not wait. Each Vulkan draw submits a barrier that takes the texture from the external
 queue family before it reads the texture, and one that hands it back after. Each barrier is a
 command buffer of its own, because wgpu does not let one encoder record both its own commands and
-raw Vulkan commands. A texture the
-compositor never releases is written again after `RECLAIM` (500 ms).
-When every texture is still being read, the capture keeps the acquired desktop picture and copies
+raw Vulkan commands. A texture the compositor has not started to read after `RECLAIM` (500 ms)
+is taken back and written again, and the compositor then skips that frame. A texture whose draw
+the compositor has submitted is written again only after the released fence passes its value. When
+the compositor gets a newer frame while an older one's copy has finished and the newer one's has
+not, it draws the older one first. When every texture is still being read, the capture keeps the
+acquired desktop picture and copies
 it on a later grab.
 
 ## Limits and failures
