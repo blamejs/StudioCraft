@@ -137,6 +137,15 @@ impl ExpressionName {
     pub fn group(&self) -> Option<Group> {
         self.preset().and_then(Preset::group)
     }
+
+    /// Whether the name reads back as itself: false for a custom name spelled like a preset,
+    /// which [`ExpressionName::parse`] turns into the preset. VRM 1.0 does not allow such names.
+    pub fn is_canonical(&self) -> bool {
+        match self {
+            ExpressionName::Preset(_) => true,
+            ExpressionName::Custom(s) => Preset::from_name(s).is_none(),
+        }
+    }
 }
 
 impl Serialize for ExpressionName {
@@ -256,6 +265,9 @@ impl Expression {
 /// - Each expression in the group is multiplied by the factor. A binary one is set to 0 when
 ///   the factor is below 1.
 ///
+/// All three factors come from the clamped and binary weights, before any group is held back,
+/// so an expression that another group's factor turns off still holds back its own targets.
+///
 /// Custom expressions are never held back; they may hold back the preset groups. `weights`
 /// shorter than `expressions` is handled for the expressions it covers. It does not allocate.
 pub fn apply_overrides(expressions: &[Expression], weights: &mut [f32]) {
@@ -264,7 +276,9 @@ pub fn apply_overrides(expressions: &[Expression], weights: &mut [f32]) {
         let v = crate::vocab::clamp01(*w);
         *w = if e.is_binary { if v > 0.5 { 1.0 } else { 0.0 } } else { v };
     }
-    for g in [Group::Mouth, Group::Blink, Group::LookAt] {
+    // Every factor is taken from the weights above before any group is held back.
+    let groups = [Group::Mouth, Group::Blink, Group::LookAt];
+    let factors = groups.map(|g| {
         let mut blocked = false;
         let mut blend = 0.0f32;
         for (e, &w) in expressions.iter().zip(weights.iter()).take(n) {
@@ -277,7 +291,9 @@ pub fn apply_overrides(expressions: &[Expression], weights: &mut [f32]) {
                 Override::Blend => blend += w,
             }
         }
-        let factor = if blocked { 0.0 } else { 1.0 - blend.clamp(0.0, 1.0) };
+        if blocked { 0.0 } else { 1.0 - blend.clamp(0.0, 1.0) }
+    });
+    for (g, factor) in groups.into_iter().zip(factors) {
         if factor >= 1.0 {
             continue;
         }

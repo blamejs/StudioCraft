@@ -162,12 +162,16 @@ impl Rule {
         if v <= self.threshold {
             return 0.0;
         }
-        let span = (1.0 - self.threshold).max(1e-3);
-        clamp01((v - self.threshold) / span * self.gain)
+        // A valid rule's threshold is below 1, so the span is above 0. For a rule that skipped
+        // validation, a span of 0 gives infinity or NaN, which `clamp01` turns into 1 or 0.
+        clamp01((v - self.threshold) / (1.0 - self.threshold) * self.gain)
     }
 
     fn validate(&self) -> Result<(), AvatarError> {
         let name = self.expression.as_str();
+        if !self.expression.is_canonical() {
+            return Err(AvatarError::Invalid(format!("the rule for {name} has a custom name that is a preset's name")));
+        }
         if !(0.0..1.0).contains(&self.threshold) {
             return Err(AvatarError::Invalid(format!("the rule for {name} has a threshold outside 0 to 1")));
         }

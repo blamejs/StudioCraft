@@ -653,6 +653,9 @@ impl Model {
             if name.is_empty() || name.len() > crate::expression::MAX_NAME_BYTES {
                 return Err(bad(format!("expression {i} has a name of {} bytes", name.len())));
             }
+            if !e.name.is_canonical() {
+                return Err(bad(format!("the custom expression {name} has a preset's name")));
+            }
             if self.expressions[..i].iter().any(|o| o.name == e.name) {
                 return Err(bad(format!("the expression {name} appears twice")));
             }
@@ -668,6 +671,9 @@ impl Model {
                 }
                 if !b.weight.is_finite() {
                     return Err(bad(format!("the expression {name} has a weight that is not finite")));
+                }
+                if !(0.0..=1.0).contains(&b.weight) {
+                    return Err(bad(format!("the expression {name} has a morph weight outside 0 to 1")));
                 }
             }
             for b in &e.colors {
@@ -685,19 +691,23 @@ impl Model {
     }
 }
 
-/// The world transform of node `i` from local transforms `local`, by walking up its parents.
-/// `None` when an index is out of range.
-pub(crate) fn world_of(model: &Model, local: &[Transform], i: usize) -> Option<Transform> {
-    let mut t = *local.get(i)?;
-    let mut at = model.nodes.get(i)?.parent;
-    let mut steps = 0usize;
-    while let Some(p) = at {
-        steps += 1;
-        if steps > model.nodes.len() {
+/// The world transform of node `i` from local transforms `local`, composed from the root down
+/// as [`Model::world_into`] composes it. `path` holds the node and its ancestors while it runs;
+/// with a capacity of the node count it does not allocate. `None` when an index is out of range.
+pub(crate) fn world_of(model: &Model, local: &[Transform], i: usize, path: &mut Vec<usize>) -> Option<Transform> {
+    path.clear();
+    let mut at = Some(i);
+    while let Some(n) = at {
+        if path.len() > model.nodes.len() {
             return None;
         }
-        t = t.then(local.get(p)?);
-        at = model.nodes.get(p)?.parent;
+        path.push(n);
+        at = model.nodes.get(n)?.parent;
+    }
+    let mut nodes = path.iter().rev();
+    let mut t = *local.get(*nodes.next()?)?;
+    for &n in nodes {
+        t = local.get(n)?.then(&t);
     }
     Some(t)
 }

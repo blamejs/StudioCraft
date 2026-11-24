@@ -146,11 +146,18 @@ impl Quat {
     }
 
     /// The yaw, pitch and roll of [`Quat::from_yaw_pitch_roll`], in degrees. Pitch is within ±90.
+    /// At a pitch of ±90 yaw and roll turn about the same axis; there the roll is 0 and the yaw
+    /// carries the whole turn.
     pub fn to_yaw_pitch_roll(self) -> (f32, f32, f32) {
         let q = self.normalized();
         let (x, y, z, w) = (q.x, q.y, q.z, q.w);
         let sp = (2.0 * (w * x - y * z)).clamp(-1.0, 1.0);
         let pitch = sp.asin();
+        if sp.abs() >= 1.0 - 1e-7 {
+            // With the pitch at ±90 the matrix's first column is (cos yaw, 0, −sin yaw).
+            let yaw = (2.0 * (w * y - x * z)).atan2(1.0 - 2.0 * (y * y + z * z));
+            return (yaw.to_degrees(), pitch.to_degrees(), 0.0);
+        }
         let yaw = (2.0 * (w * y + x * z)).atan2(1.0 - 2.0 * (x * x + y * y));
         let roll = (2.0 * (w * z + x * y)).atan2(1.0 - 2.0 * (x * x + z * z));
         (yaw.to_degrees(), pitch.to_degrees(), roll.to_degrees())

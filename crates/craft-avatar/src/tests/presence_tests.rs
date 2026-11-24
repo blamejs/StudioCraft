@@ -40,6 +40,30 @@ fn a_found_face_eases_back() {
 }
 
 #[test]
+fn a_face_found_after_the_hold_ran_out_does_not_depend_on_the_steps_between() {
+    // Lost at 10 s: the hold ends at 10.5 and the fade at 11.5. A face found at 12 starts from
+    // the idle pose whether or not the caller stepped while it was lost.
+    let mut direct = tracking();
+    direct.step(10.0, false);
+    let mut stepped = tracking();
+    stepped.step(10.0, false);
+    stepped.step(12.0, false);
+    assert_eq!(direct.step(12.0, true), stepped.step(12.0, true));
+    assert_eq!(direct.factor(), 0.0);
+    assert_eq!(direct.state(), PresenceState::Returning);
+    // Found during the fade: it returns from the faded value.
+    let mut mid = tracking();
+    mid.step(10.0, false);
+    let found = mid.step(11.0, true);
+    assert!(close(found, 0.5, 1e-6), "{found}");
+    // Found within the hold: still fully tracked.
+    let mut held = tracking();
+    held.step(10.0, false);
+    assert_eq!(held.step(10.3, true), 1.0);
+    assert_eq!(held.state(), PresenceState::Tracking);
+}
+
+#[test]
 fn a_face_found_during_the_fade_returns_from_where_it_was() {
     let mut p = tracking();
     p.step(10.0, false);

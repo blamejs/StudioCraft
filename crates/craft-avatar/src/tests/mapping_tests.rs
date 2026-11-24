@@ -90,6 +90,10 @@ fn threshold_and_gain_shape_the_output() {
     assert_eq!(r.shape(0.5), 0.0);
     assert!(close(r.shape(0.6), 0.4, 1e-6));
     assert_eq!(r.shape(0.9), 1.0);
+    // A threshold just under 1 still reaches full weight at full input.
+    let high = Rule { threshold: 0.9999, ..Rule::new(ExpressionName::parse("aa"), Formula::single(Blendshape::JawOpen)) };
+    assert!(Mapping { rules: vec![high.clone()] }.validate().is_ok());
+    assert_eq!(high.shape(1.0), 1.0);
     let f = Formula::of(Combine::Max, &[Blendshape::JawOpen, Blendshape::MouthFunnel]);
     assert_eq!(f.eval(&weights(&[(Blendshape::JawOpen, 0.2), (Blendshape::MouthFunnel, 0.7)])), 0.7);
     let f = Formula::of(Combine::Min, &[Blendshape::JawOpen, Blendshape::MouthFunnel]);
@@ -107,6 +111,8 @@ fn bad_rules_are_refused() {
         Rule { threshold: -0.1, ..base.clone() },
         Rule { formula: Formula::of(Combine::Average, &[]), ..base.clone() },
         Rule { formula: Formula::of(Combine::Average, &[Blendshape::JawOpen; 9]), ..base.clone() },
+        // A custom name spelled like a preset would read back as the preset.
+        Rule { expression: ExpressionName::Custom("aa".into()), ..base.clone() },
     ];
     for r in bad {
         let m = Mapping { rules: vec![r.clone()] };

@@ -74,6 +74,19 @@ fn binary_expressions_are_all_or_nothing() {
 }
 
 #[test]
+fn every_group_factor_comes_from_the_weights_before_any_hold_back() {
+    // happy blocks the mouth and aa blocks the blink: aa still blocks the blink although happy
+    // turns aa itself off.
+    let mut aa = e("aa");
+    aa.override_blink = Override::Block;
+    let mut happy = e("happy");
+    happy.override_mouth = Override::Block;
+    let mut w = [1.0, 1.0, 1.0];
+    apply_overrides(&[aa, happy, e("blink")], &mut w);
+    assert_eq!(w, [0.0, 1.0, 0.0]);
+}
+
+#[test]
 fn an_expression_does_not_hold_back_its_own_group() {
     let mut aa = e("aa");
     aa.override_mouth = Override::Block;

@@ -186,6 +186,64 @@ fn the_drawn_tail_follows_the_simulated_tail_under_an_uneven_scale() {
 }
 
 #[test]
+fn a_still_chain_under_an_uneven_scale_and_a_turn_stays_at_rest() {
+    // A root scaled along X, a node rolled 45 degrees under it, and a chain below that: the
+    // simulation must place the chain where the drawn pose has it, so with no forces it stays.
+    let mut m = Model::default();
+    m.nodes.push(Node::new("root", None, Transform { scale: Vec3::new(2.0, 1.0, 1.0), ..Transform::IDENTITY }));
+    m.nodes.push(Node::new("p", Some(0), Transform { rotation: Quat::from_axis_angle(Vec3::Z, std::f32::consts::FRAC_PI_4), ..Transform::IDENTITY }));
+    m.nodes.push(Node::new("c", Some(1), at(0.2, 0.0, 0.0)));
+    m.nodes.push(Node::new("d", Some(2), at(0.2, 0.0, 0.0)));
+    let joints = [2, 3].iter().map(|&n| SpringJoint { stiffness: 0.0, drag: 1.0, ..SpringJoint::new(n) }).collect();
+    m.springs.springs.push(Spring { name: "tail".into(), joints, collider_groups: Vec::new() });
+    m.validate(&Limits::default()).unwrap();
+    let rest = m.rest_world()[3].translation;
+    let (sim, local) = run(&m, 1.0, 60.0);
+    let tail = sim.tails().next().unwrap();
+    assert!((tail - rest).length() < 1e-4, "simulated {tail:?} rest {rest:?}");
+    assert!(local[2].rotation.angle_to(m.nodes[2].rest.rotation) < 0.01, "{:?}", local[2].rotation);
+}
+
+#[test]
+fn a_tail_pushed_out_of_a_capsule_lands_outside_it() {
+    // A part of length 1 along +X, lying inside a capsule along the same line.
+    let mut m = Model::default();
+    m.nodes.push(Node::new("root", None, Transform::IDENTITY));
+    m.nodes.push(Node::new("a", Some(0), Transform::IDENTITY));
+    m.nodes.push(Node::new("b", Some(1), at(1.0, 0.0, 0.0)));
+    let joints = (1..=2).map(|n| SpringJoint { stiffness: 0.0, drag: 1.0, ..SpringJoint::new(n) }).collect();
+    m.springs.springs.push(Spring { name: "tail".into(), joints, collider_groups: vec![0] });
+    m.springs.colliders.push(Collider { node: 0, shape: ColliderShape::Capsule { offset: Vec3::ZERO, tail: Vec3::new(2.0, 0.0, 0.0), radius: 0.8 } });
+    m.springs.groups.push(ColliderGroup { name: "capsule".into(), colliders: vec![0] });
+    m.validate(&Limits::default()).unwrap();
+    let mut sim = SpringSim::new(&m);
+    let mut local = m.rest_local();
+    sim.step(&m, &mut local, 1.0 / 60.0);
+    let t = sim.tails().next().unwrap();
+    let from_axis = Vec3::new(0.0, t.y, t.z).length();
+    assert!(from_axis >= 0.8 - 1e-3, "the tail at {t:?} is inside the capsule");
+    assert!(close(t.length(), 1.0, 1e-4), "{t:?}");
+}
+
+#[test]
+fn chains_that_share_a_skipped_node_are_refused() {
+    // root, a, b, c, d, each below the one before: the chain from a to c skips b, which the
+    // chain from b to d moves.
+    let mut m = Model::default();
+    m.nodes.push(Node::new("root", None, Transform::IDENTITY));
+    for (i, name) in ["a", "b", "c", "d"].iter().enumerate() {
+        m.nodes.push(Node::new(name, Some(i), at(0.1, 0.0, 0.0)));
+    }
+    let chain =
+        |nodes: [usize; 2]| Spring { name: "s".into(), joints: nodes.iter().map(|&n| SpringJoint::new(n)).collect(), collider_groups: Vec::new() };
+    m.springs.springs = vec![chain([1, 3]), chain([2, 4])];
+    assert!(m.validate(&Limits::default()).is_err());
+    // A chain that starts where another one ends is fine.
+    m.springs.springs = vec![chain([1, 2]), chain([2, 4])];
+    m.validate(&Limits::default()).unwrap();
+}
+
+#[test]
 fn too_many_spring_chains_are_refused() {
     let mut m = chain(1.0, 1.0, 0.5);
     for i in 0..3 {

@@ -90,6 +90,37 @@ fn too_few_faces_or_a_bad_time_is_refused() {
 }
 
 #[test]
+fn the_calibration_time_starts_at_the_first_frame_even_without_a_face() {
+    let mut c = Calibrator::new(1.0).unwrap();
+    for i in 0..40 {
+        c.push(&TrackFrame { time: f64::from(i) / 30.0, ..TrackFrame::default() });
+    }
+    assert!(c.done(40.0 / 30.0));
+    assert_eq!(c.frames(), 0);
+    assert_eq!(c.finish(), Err(CalibrationError::NoFace));
+    // Frames with a face that arrive after the time has run out are not counted.
+    c.push(&frame(1.5, 0.0, 0.0, 0.0));
+    assert_eq!(c.frames(), 0);
+}
+
+#[test]
+fn a_neutral_near_full_weight_still_reaches_full_weight() {
+    let mut cal = Calibration::default();
+    cal.weights.set(Blendshape::MouthSmileLeft, 0.98);
+    cal.weights.set(Blendshape::MouthSmileRight, 1.0);
+    assert!(cal.is_valid());
+    let mut f = TrackFrame { present: true, ..TrackFrame::default() };
+    f.weights.set(Blendshape::MouthSmileLeft, 1.0);
+    f.weights.set(Blendshape::MouthSmileRight, 1.0);
+    let full = cal.apply(&f);
+    assert_eq!(full.weights.get(Blendshape::MouthSmileLeft), 1.0);
+    // A neutral already at 1 leaves nothing above it.
+    assert_eq!(full.weights.get(Blendshape::MouthSmileRight), 0.0);
+    f.weights.set(Blendshape::MouthSmileLeft, 0.99);
+    assert!(close(cal.apply(&f).weights.get(Blendshape::MouthSmileLeft), 0.5, 1e-3));
+}
+
+#[test]
 fn opposite_signs_of_one_rotation_average_to_it() {
     let mut c = Calibrator::new(1.0).unwrap();
     let q = Quat::from_yaw_pitch_roll(30.0, 0.0, 0.0);

@@ -66,8 +66,9 @@ impl Calibration {
         let f = f.sanitized();
         let mut weights = Weights::default();
         for (i, out) in weights.0.iter_mut().enumerate() {
-            let n = self.weights.0[i];
-            *out = clamp01((f.weights.0[i] - n) / (1.0 - n).max(0.05));
+            let (w, n) = (f.weights.0[i], self.weights.0[i]);
+            // `w` is at most 1, so `n` is below 1 whenever `w` is above it.
+            *out = if w > n { clamp01((w - n) / (1.0 - n)) } else { 0.0 };
         }
         TrackFrame {
             time: f.time,
@@ -100,18 +101,19 @@ impl Calibrator {
         Ok(Calibrator { seconds, start: None, frames: 0, rotation: [0.0; 4], first: Quat::IDENTITY, translation: [0.0; 3], weights: [0.0; 52] })
     }
 
-    /// Adds a frame. Frames without a face, and frames after the calibration time, are not
-    /// counted. Rotations are averaged on the side of the first frame's rotation, so `q` and
+    /// Adds a frame. The calibration time starts at the first frame with a finite time, with a
+    /// face or without one. Frames without a face, and frames after the calibration time, are
+    /// not counted. Rotations are averaged on the side of the first frame's rotation, so `q` and
     /// `−q` (the same rotation) add up.
     pub fn push(&mut self, f: &TrackFrame) {
-        if !f.present || !f.time.is_finite() || self.done(f.time) {
+        if !f.time.is_finite() {
+            return;
+        }
+        let start = *self.start.get_or_insert(f.time);
+        if !f.present || f.time < start || self.done(f.time) {
             return;
         }
         let f = f.sanitized();
-        let start = *self.start.get_or_insert(f.time);
-        if f.time < start {
-            return;
-        }
         if self.frames == 0 {
             self.first = f.rotation;
         }

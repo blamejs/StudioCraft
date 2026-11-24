@@ -124,6 +124,17 @@ impl Presence {
             _ => now,
         };
         self.last = Some(now);
+        // A face found while the pose is held or fading first brings the lost-face timeline up
+        // to `now`, so the result does not depend on how often the caller stepped meanwhile.
+        if face && matches!(self.phase, Phase::Holding { .. } | Phase::Leaving { .. }) {
+            self.settle(now, false);
+        }
+        self.settle(now, face);
+        self.factor = self.value(now);
+        self.factor
+    }
+
+    fn settle(&mut self, now: f64, face: bool) {
         // Each pass either settles or moves to a later phase, so three passes cover a long step
         // from holding through leaving to idle.
         for _ in 0..3 {
@@ -133,8 +144,6 @@ impl Presence {
             }
             self.phase = next;
         }
-        self.factor = self.value(now);
-        self.factor
     }
 
     fn progress(&self, now: f64, since: f64, length: f64) -> f64 {

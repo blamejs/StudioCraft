@@ -183,13 +183,14 @@ impl Animator {
                 *w += rest * idle.blink;
             }
         }
+        // The tracked gaze goes through the range maps first; the mapped pose is then mixed
+        // with the idle pose (eyes ahead, no look expression) by the tracked share.
         let (yaw, pitch) = gaze(&self.last.weights);
-        let (yaw, pitch) = (yaw * k, pitch * k);
         match self.look_at.kind {
             LookAtKind::Bone => {
                 let (l, r) = self.look_at.eye_rotations(yaw, pitch);
-                p.left_eye = l;
-                p.right_eye = r;
+                p.left_eye = Quat::IDENTITY.nlerp(l, k);
+                p.right_eye = Quat::IDENTITY.nlerp(r, k);
             }
             LookAtKind::Expression => {
                 p.left_eye = Quat::IDENTITY;
@@ -197,7 +198,7 @@ impl Animator {
                 let w = self.look_at.expression_weights(yaw, pitch);
                 for (slot, v) in self.looks.iter().zip([w.up, w.down, w.left, w.right]) {
                     if let Some(e) = slot.and_then(|i| p.expressions.get_mut(i)) {
-                        *e = v;
+                        *e = v * k;
                     }
                 }
             }

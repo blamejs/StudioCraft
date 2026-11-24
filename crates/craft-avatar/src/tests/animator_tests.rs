@@ -190,6 +190,39 @@ fn look_expressions_follow_the_gaze() {
 }
 
 #[test]
+fn a_saturated_gaze_fades_with_the_tracked_share() {
+    let looking_left = |t: f64| {
+        let mut f = face(t, 0.0);
+        f.weights.set(Blendshape::EyeLookOutLeft, 1.0);
+        f.weights.set(Blendshape::EyeLookInRight, 1.0);
+        f
+    };
+    // Tracked until 2 s, lost at 2 s: held to 2.5 s and halfway through the fade at 3 s.
+    let half_tracked = |m: &Model| {
+        let mut a = Animator::new(m, AnimatorSettings { mirror: false, ..still() }, 1).unwrap();
+        run(&mut a, 0.0, 2.0, |t| Some(looking_left(t)));
+        a.step(Some(&TrackFrame { time: 2.0, ..TrackFrame::default() }), 2.0);
+        a.step(None, 3.0);
+        assert!(close(a.pose().tracked, 0.5, 1e-6), "{}", a.pose().tracked);
+        a
+    };
+    // The 30-degree gaze is past the 15-degree map, so at full tracking it is at full weight,
+    // and at half tracking it is at half.
+    let mut m = humanoid();
+    m.look_at.kind = LookAtKind::Expression;
+    m.look_at.horizontal_outer = RangeMap::new(15.0, 1.0);
+    m.expressions.push(Expression::new(ExpressionName::Preset(Preset::LookLeft)));
+    let a = half_tracked(&m);
+    assert!(close(a.pose().expressions[3], 0.5, 1e-5), "{:?}", a.pose().expressions);
+    // Eye bones turn half as far as the tracked gaze turns them.
+    let mut m = humanoid();
+    m.look_at.horizontal_outer = RangeMap::new(15.0, 10.0);
+    let a = half_tracked(&m);
+    let (yaw, _, _) = a.pose().left_eye.to_yaw_pitch_roll();
+    assert!(close(yaw, 5.0, 0.01), "{yaw}");
+}
+
+#[test]
 fn bad_settings_are_refused() {
     let m = humanoid();
     let bad = [

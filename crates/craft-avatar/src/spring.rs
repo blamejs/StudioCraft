@@ -18,6 +18,8 @@ use crate::model::{Limits, Model, world_of};
 pub const STEP_SECONDS: f64 = 1.0 / 60.0;
 /// Most steps one call runs; a longer gap is dropped.
 pub const MAX_STEPS: u32 = 8;
+/// Most times one collider moves a tail out along the part's circle in one step.
+const COLLIDER_PASSES: usize = 8;
 
 /// A collider's shape, in its node's space.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -137,13 +139,24 @@ impl SpringBones {
                 if j > 0 && !is_ancestor(model, s.joints[j - 1].node, joint.node) {
                     return Err(bad(format!("spring {i} joint {j} is not below the joint before it")));
                 }
-                // The end joint of a chain may also start nothing, so only joints that move a
-                // tail are checked against other chains.
-                if j + 1 < s.joints.len() {
-                    if seen.contains(&joint.node) {
+            }
+            // Every node from the chain's first joint down to its end joint's parent moves with
+            // the chain, the nodes it skips included. The end joint may also start another
+            // chain, so it is not counted.
+            let first = seen.len();
+            for pair in s.joints.windows(2) {
+                let mut at = model.nodes.get(pair[1].node).and_then(|n| n.parent);
+                while let Some(n) = at {
+                    if seen[..first].contains(&n) {
                         return Err(bad(format!("spring {i} moves a node that another chain moves")));
                     }
-                    seen.push(joint.node);
+                    if !seen[first..].contains(&n) {
+                        seen.push(n);
+                    }
+                    if n == pair[0].node {
+                        break;
+                    }
+                    at = model.nodes.get(n).and_then(|n| n.parent);
                 }
             }
         }
@@ -171,6 +184,8 @@ pub struct SpringSim {
     /// For each chain: its joint range and its colliders.
     chains: Vec<(usize, usize, Vec<usize>)>,
     pending: f64,
+    /// Room for one node and its ancestors, for [`world_of`].
+    path: Vec<usize>,
 }
 
 impl SpringSim {
@@ -213,13 +228,13 @@ impl SpringSim {
             }
             chains.push((start, joints.len(), colliders));
         }
-        SpringSim { joints, chains, pending: 0.0 }
+        SpringSim { joints, chains, pending: 0.0, path: Vec::with_capacity(model.nodes.len() + 1) }
     }
 
     /// Puts every tail where the pose `local` places it, at rest.
     pub fn reset(&mut self, model: &Model, local: &[Transform]) {
         for j in &mut self.joints {
-            if let Some(w) = world_of(model, local, j.tail_node) {
+            if let Some(w) = world_of(model, local, j.tail_node, &mut self.path) {
                 j.prev = w.translation;
                 j.current = w.translation;
             }
@@ -250,11 +265,15 @@ impl SpringSim {
                 if j.length <= 1e-6 {
                     continue;
                 }
-                let Some(head) = world_of(model, local, j.node) else {
+                let Some(head) = world_of(model, local, j.node, &mut self.path) else {
                     continue;
                 };
-                let parent_rot =
-                    model.nodes.get(j.node).and_then(|n| n.parent).and_then(|p| world_of(model, local, p)).map_or(Quat::IDENTITY, |t| t.rotation);
+                let parent_rot = model
+                    .nodes
+                    .get(j.node)
+                    .and_then(|n| n.parent)
+                    .and_then(|p| world_of(model, local, p, &mut self.path))
+                    .map_or(Quat::IDENTITY, |t| t.rotation);
                 let p = j.props;
                 let rest_dir = (parent_rot * j.rest).rotate(j.axis);
                 let gravity = p.gravity_dir.normalized().unwrap_or(Vec3::ZERO);
@@ -265,19 +284,24 @@ impl SpringSim {
                     let Some(c) = model.springs.colliders.get(*c) else {
                         continue;
                     };
-                    let Some(cw) = world_of(model, local, c.node) else {
+                    let Some(cw) = world_of(model, local, c.node, &mut self.path) else {
                         continue;
                     };
-                    let (center, radius) = match c.shape {
-                        ColliderShape::Sphere { offset, radius } => (cw.apply(offset), radius),
+                    // The collider's point nearest `at`: a sphere's center, or the nearest point
+                    // on a capsule's segment.
+                    let (a, ab, radius) = match c.shape {
+                        ColliderShape::Sphere { offset, radius } => (cw.apply(offset), Vec3::ZERO, radius),
                         ColliderShape::Capsule { offset, tail, radius } => {
-                            let (a, b) = (cw.apply(offset), cw.apply(tail));
-                            let ab = b - a;
-                            let len2 = ab.length_squared();
-                            let t = if len2 > 1e-12 { ((next - a).dot(ab) / len2).clamp(0.0, 1.0) } else { 0.0 };
-                            (a + ab * t, radius)
+                            let a = cw.apply(offset);
+                            (a, cw.apply(tail) - a, radius)
                         }
                     };
+                    let nearest = |at: Vec3| {
+                        let len2 = ab.length_squared();
+                        let t = if len2 > 1e-12 { ((at - a).dot(ab) / len2).clamp(0.0, 1.0) } else { 0.0 };
+                        a + ab * t
+                    };
+                    let center = nearest(next);
                     // A collider stays round: under an uneven scale its radius takes the largest axis.
                     let scale = cw.scale.x.abs().max(cw.scale.y.abs()).max(cw.scale.z.abs());
                     let reach = radius * scale + p.hit_radius;
@@ -289,7 +313,13 @@ impl SpringSim {
                         let side = bone.cross(Vec3::Y).normalized().or(bone.cross(Vec3::X).normalized()).unwrap_or(Vec3::X);
                         let dir = delta.normalized().unwrap_or(side);
                         next = keep_length(next - dir * distance);
-                        if (next - center).length() < reach {
+                        // A capsule's nearest point moves as the tail moves, so the correction is
+                        // repeated against the new nearest point.
+                        for _ in 0..COLLIDER_PASSES {
+                            let center = nearest(next);
+                            if (next - center).length() >= reach {
+                                break;
+                            }
                             next = outside_on_reach(head.translation, j.length, center, reach, next, side);
                         }
                     }

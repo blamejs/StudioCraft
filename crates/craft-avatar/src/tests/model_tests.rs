@@ -169,6 +169,14 @@ fn expression_problems_are_refused() {
     refused(|m| m.expressions[0].colors.push(ColorBind { material: 0, target: ColorTarget::Color, value: [1.0; 4] }), "material color bind");
     refused(|m| m.expressions[0].textures.push(TextureBind { material: 0, scale: [1.0; 2], offset: [0.0; 2] }), "texture bind");
     refused(|m| m.expressions[2].name = ExpressionName::Custom(String::new()), "0 bytes");
+    refused(|m| m.expressions[2].name = ExpressionName::Custom("ih".into()), "preset");
+    refused(|m| m.expressions[0].morphs[0].weight = -0.1, "outside 0 to 1");
+    refused(|m| m.expressions[0].morphs[0].weight = 1.5, "outside 0 to 1");
+    let mut ends = humanoid();
+    ends.expressions[0].morphs[0].weight = 0.0;
+    ends.expressions[1].morphs[0].weight = 1.0;
+    ends.expressions[2].name = ExpressionName::Custom("Happy".into());
+    check(&ends).unwrap();
     refused(|m| m.first_person.push((0, FirstPerson::ThirdPersonOnly)), "has no mesh");
     let mut m = humanoid();
     m.materials.push(Material { base_color: [1.0, f32::NAN, 1.0, 1.0], ..Material::default() });

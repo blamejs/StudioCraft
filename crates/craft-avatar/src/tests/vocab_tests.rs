@@ -51,6 +51,22 @@ fn a_mirrored_frame_swaps_shapes_and_turns_the_other_way() {
 }
 
 #[test]
+fn yaw_pitch_and_roll_at_straight_up_or_down_give_back_the_rotation() {
+    // At a pitch of ±90 degrees yaw and roll turn about the same axis; the angles read back
+    // must still make the same rotation.
+    let mut cases = vec![Quat::new(0.5, 0.5, -0.5, 0.5)];
+    for (yaw, pitch, roll) in [(30.0, -90.0, 20.0), (-40.0, 90.0, 10.0), (0.0, 90.0, 0.0), (120.0, -90.0, -60.0)] {
+        cases.push(Quat::from_yaw_pitch_roll(yaw, pitch, roll));
+    }
+    for q in cases {
+        let (y, p, r) = q.to_yaw_pitch_roll();
+        let back = Quat::from_yaw_pitch_roll(y, p, r);
+        assert!(back.angle_to(q) < 0.05, "{q:?} read as {y} {p} {r}");
+        assert!(close(p.abs(), 90.0, 0.1), "{p}");
+    }
+}
+
+#[test]
 fn weights_are_kept_in_range() {
     let mut w = Weights::default();
     w.set(Blendshape::JawOpen, 1.5);
