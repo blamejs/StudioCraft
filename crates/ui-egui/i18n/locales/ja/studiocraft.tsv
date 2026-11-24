@@ -426,16 +426,16 @@
 	Hardware acceleration	ハードウェアアクセラレーション
 	Power saving	省電力
 	Software (slower)	ソフトウェア (低速)
-	Compact (small files)	コンパクト (小さいファイル)
+	Compact	コンパクト
 	Duplicate Profile	プロファイルを複製
 	Duplicate Scene Collection	シーンコレクションを複製
-	Lossless (very large files)	ロスレス (非常に大きいファイル)
+	Lossless	ロスレス
 	Move Down	下へ移動
 	Move to Bottom	最後へ移動
 	Move to Top	先頭へ移動
 	Move Up	上へ移動
 	New Scene Collection	新しいシーンコレクション
-	Pristine (large files)	最高品質 (大きいファイル)
+	Pristine	最高品質
 	Rename Profile	プロファイル名を変更
 	Rename Scene Collection	シーンコレクション名を変更
 	Unlock	ロックを解除
@@ -489,6 +489,12 @@ menu	Transform	変形
 	Audio tracks write this source to a WAV file of its own (Settings › Output › Audio tracks)	オーディオトラックはこのソースを専用の WAV ファイルに書き出します (設定 › 出力 › オーディオトラック)
 	Audio tracks	オーディオトラック
 	Write each recorded source and the program mix to its own WAV file	録音する各ソースとプログラムミックスをそれぞれ専用の WAV ファイルに書き出す
+	Smaller files for long sessions	長時間の収録向けの小さいファイル
+	A good fit for most recordings	ほとんどの録画に適した品質
+	Almost no loss, for editing later	ほぼ劣化なし、後で編集する場合に
+	No loss at all, in very large files	劣化なし、非常に大きいファイル
+	Advanced options	詳細オプション
+	ffmpeg program, write buffer, file size, audio editor	ffmpeg プログラム、書き込みバッファー、ファイルサイズ、オーディオエディター
 	Write them while	書き出すタイミング
 	Include the program mix	プログラムミックスを含める
 	Write buffer	書き込みバッファー

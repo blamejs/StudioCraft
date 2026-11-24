@@ -435,16 +435,16 @@
 	Hardware acceleration	Аппаратное ускорение
 	Power saving	Энергосбережение
 	Software (slower)	Программно (медленнее)
-	Compact (small files)	Компактное (маленькие файлы)
+	Compact	Компактное
 	Duplicate Profile	Дублировать профиль
 	Duplicate Scene Collection	Дублировать коллекцию сцен
-	Lossless (very large files)	Без потерь (очень большие файлы)
+	Lossless	Без потерь
 	Move Down	Переместить вниз
 	Move to Bottom	Переместить в конец
 	Move to Top	Переместить в начало
 	Move Up	Переместить вверх
 	New Scene Collection	Новая коллекция сцен
-	Pristine (large files)	Безупречное (большие файлы)
+	Pristine	Безупречное
 	Rename Profile	Переименовать профиль
 	Rename Scene Collection	Переименовать коллекцию сцен
 	Unlock	Разблокировать
@@ -498,6 +498,12 @@ menu	Transform	Преобразование
 	Audio tracks write this source to a WAV file of its own (Settings › Output › Audio tracks)	Звуковые дорожки записывают этот источник в отдельный файл WAV («Настройки › Вывод › Звуковые дорожки»)
 	Audio tracks	Звуковые дорожки
 	Write each recorded source and the program mix to its own WAV file	Записывать каждый записываемый источник и микс программы в отдельный файл WAV
+	Smaller files for long sessions	Файлы поменьше для долгих сессий
+	A good fit for most recordings	Подходит для большинства записей
+	Almost no loss, for editing later	Почти без потерь, для последующего монтажа
+	No loss at all, in very large files	Совсем без потерь, в очень больших файлах
+	Advanced options	Дополнительные параметры
+	ffmpeg program, write buffer, file size, audio editor	программа ffmpeg, буфер записи, размер файла, звуковой редактор
 	Write them while	Записывать, когда
 	Include the program mix	Включать микс программы
 	Write buffer	Буфер записи
