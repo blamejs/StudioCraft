@@ -924,9 +924,9 @@ impl SettingsWindow {
             }
             ui.label(tl!("Hardware encoder"));
             ui.vertical(|ui| {
-                craft_ui::ComboBox::from_id_salt("hardware-encoder").selected_text(hardware_encoder_label(encoder)).width(320.0).show_ui(ui, |ui| {
+                craft_ui::ComboBox::from_id_salt("hardware-encoder").selected_text(hardware_choice_label(encoder, offered)).width(320.0).show_ui(ui, |ui| {
                     for id in hardware_encoder_choices(offered, encoder) {
-                        let text = hardware_encoder_label(&id);
+                        let text = hardware_choice_label(&id, offered);
                         ui.selectable_value(encoder, id, text);
                     }
                 });
@@ -1066,6 +1066,18 @@ fn hardware_encoder_label(id: &str) -> String {
         craft_hwenc::Preference::Auto => tl!("Automatic (the first that passes a test)").to_string(),
         craft_hwenc::Preference::Software => tl!("Software only").to_string(),
         craft_hwenc::Preference::Named(id) => craft_hwenc::candidate(&id).map_or(id, |c| tl!(c.name).to_string()),
+    }
+}
+
+/// The shown name of a Hardware encoder choice, with "(not in this ffmpeg)" after a hardware
+/// encoder that the ffmpeg program's list `offered` does not hold.
+fn hardware_choice_label(id: &str, offered: &[String]) -> String {
+    let name = hardware_encoder_label(id);
+    match craft_hwenc::candidate(id) {
+        Some(c) if !offered.is_empty() && !offered.iter().any(|o| o == c.ffmpeg_codec) => {
+            craft_i18n::fmt(tl!("{encoder} (not in this ffmpeg)"), &[("encoder", &name)])
+        }
+        _ => name,
     }
 }
 
@@ -1321,6 +1333,14 @@ mod tests {
         assert_eq!(saved.last().map(String::as_str), Some("qsv_av1_gone"), "the saved choice stays selectable");
         assert_eq!(hardware_encoder_label("qsv_av1_gone"), "qsv_av1_gone");
         assert_eq!(hardware_encoder_label("nvenc_h264"), tl!("NVIDIA NVENC H.264"));
+        // A built-in encoder that ffmpeg does not list is marked: MP4, MOV and Lossless recordings
+        // run in ffmpeg.
+        let no_av1 = ["libx264".to_string(), "h264_mf".to_string()];
+        let missing = craft_i18n::fmt(tl!("{encoder} (not in this ffmpeg)"), &[("encoder", tl!("Windows Media Foundation AV1"))]);
+        assert_eq!(hardware_choice_label("mf_av1", &no_av1), missing);
+        assert_eq!(hardware_choice_label("mf_h264", &no_av1), tl!("Windows Media Foundation H.264"));
+        assert_eq!(hardware_choice_label("mf_av1", &[]), tl!("Windows Media Foundation AV1"), "an unread list marks nothing");
+        assert_eq!(hardware_choice_label("auto", &no_av1), hardware_encoder_label("auto"));
     }
 
     #[test]

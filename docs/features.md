@@ -617,7 +617,9 @@ again on a new device, and after 3 losses in 10 minutes it draws in software.
 **Hardware encoder** picks the encoder that recordings and streams use when their encoder is
 Hardware: Automatic, Software only, or one of the listed hardware encoders. The list holds this
 system's built-in hardware encoders and the hardware encoders the `ffmpeg` program lists, or
-every hardware encoder of this system when the `ffmpeg` list cannot be read. Software only uses
+every hardware encoder of this system when the `ffmpeg` list cannot be read. A built-in encoder
+that `ffmpeg` does not list is marked "(not in this ffmpeg)": it records MKV files, and an MP4,
+MOV or Lossless recording cannot use it. Software only uses
 x264 without testing the hardware encoders. Automatic tests each candidate with a one-frame
 encode, in an order set by the graphics adapter's vendor, and uses x264 when none works, or
 H.264 (built in) for a stream. One test stops after 5 s, and the tests of one start stop after
