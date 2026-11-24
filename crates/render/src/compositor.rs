@@ -119,8 +119,9 @@ struct CaptureRead {
     height: u32,
     /// Set by the mapping's callback.
     state: Arc<AtomicU8>,
-    /// The frame that copied the picture.
-    copied: Tick,
+    /// The first frame after the copy was submitted that found it still being read back. The
+    /// 5 s wait for the read-back starts at that frame.
+    pending_since: Option<Tick>,
 }
 
 impl CaptureRead {
@@ -707,13 +708,13 @@ impl Compositor {
         {
             shared.thumbnail_views.publish(views);
         }
-        self.copy_captures(now);
+        self.copy_captures();
     }
 
     /// Copy the newest picture of each waiting capture into a buffer of its own and start
     /// mapping the buffers, without waiting. A preview capture before a preview was drawn is
     /// answered with an error at once.
-    fn copy_captures(&mut self, now: Tick) {
+    fn copy_captures(&mut self) {
         if self.waiting.is_empty() {
             return;
         }
@@ -741,7 +742,7 @@ impl Compositor {
             });
             copy_to_buffer(enc, &target.texture, &buffer, row, width, height);
             let state = Arc::new(AtomicU8::new(READ_PENDING));
-            self.reads.push(CaptureRead { reply: req.reply, buffer, row, width, height, state, copied: now });
+            self.reads.push(CaptureRead { reply: req.reply, buffer, row, width, height, state, pending_since: None });
         }
         let Some(enc) = enc else { return };
         self.gpu.queue.submit([enc.finish()]);
@@ -753,21 +754,26 @@ impl Compositor {
     }
 
     /// Answer every capture whose copy has been read back, or could not be. With `now`, a copy
-    /// still being read back after [`MAP_WAIT`] is answered with an error; without it, every copy
-    /// still being read back is.
+    /// still being read back [`MAP_WAIT`] after the first frame that found it pending is answered
+    /// with an error; without it, every copy still being read back is.
     fn answer_captures(&mut self, now: Option<Tick>) {
         if self.reads.is_empty() {
             return;
         }
         self.gpu.poll();
         let wait = tick_of(MAP_WAIT).0;
-        self.reads.retain(|read| {
-            let answer = match read.state.load(Ordering::Acquire) {
-                READ_MAPPED => read.picture(),
+        self.reads.retain_mut(|read| {
+            let state = read.state.load(Ordering::Acquire);
+            if state == READ_PENDING
+                && let Some(now) = now
+            {
+                let since = *read.pending_since.get_or_insert(now);
                 // A clock that went back also ends the wait.
-                READ_PENDING if now.is_some_and(|now| (0..wait).contains(&now.0.saturating_sub(read.copied.0))) => return true,
-                _ => Err(RenderError::Device("the picture could not be read back".into())),
-            };
+                if (0..wait).contains(&now.0.saturating_sub(since.0)) {
+                    return true;
+                }
+            }
+            let answer = if state == READ_MAPPED { read.picture() } else { Err(RenderError::Device("the picture could not be read back".into())) };
             // A caller that gave up has dropped its receiver; nothing waits for the answer.
             let _ = read.reply.try_send(answer);
             false

@@ -789,9 +789,9 @@ fn a_read_back_that_does_not_report_holds_its_slot_until_it_times_out() {
     assert_eq!(shared.captures.len(), CAPTURE_SLOTS);
     assert!(!ask(&shared), "a full queue refuses the request");
     assert!(answers.iter().all(|rx| rx.try_recv().err() == Some(TryRecvError::Empty)));
-    // Past the wait the stuck read-backs are answered with an error, and the queued requests copy
-    // their pictures.
-    c.run(&shared, tick_of(MAP_WAIT));
+    // Past the wait, counted from the frame at 33 ms, the stuck read-backs are answered with an
+    // error, and the queued requests copy their pictures.
+    c.run(&shared, tick_of(MAP_WAIT + std::time::Duration::from_millis(33)));
     for rx in &answers[..CAPTURE_SLOTS] {
         let err = rx.try_recv().unwrap().unwrap_err();
         assert!(err.to_string().contains("could not be read back"), "{err}");
@@ -801,6 +801,26 @@ fn a_read_back_that_does_not_report_holds_its_slot_until_it_times_out() {
     c.finish(&shared.readback_lost);
     assert!(c.reads.is_empty());
     assert!(answers[CAPTURE_SLOTS..].iter().all(|rx| rx.try_recv().is_ok()), "the queued captures are answered");
+}
+
+#[test]
+fn the_read_back_wait_starts_after_the_frame_that_copied_the_picture() {
+    use std::sync::mpsc::TryRecvError;
+    let mut c = noop_compositor(32, 16);
+    let shared = RenderShared::default();
+    let (tx, rx) = std::sync::mpsc::sync_channel(1);
+    assert!(shared.captures.push(CaptureRequest { view: View::Program, reply: tx }).is_ok());
+    c.run(&shared, Tick(0));
+    for read in &mut c.reads {
+        read.state = Arc::new(AtomicU8::new(READ_PENDING));
+    }
+    // The frame stamped 0 submitted its copy late, so the next frame comes a whole wait after
+    // that stamp. The wait starts at that next frame.
+    c.run(&shared, tick_of(MAP_WAIT));
+    assert_eq!(rx.try_recv().err(), Some(TryRecvError::Empty), "the read-back still has its whole wait");
+    c.run(&shared, tick_of(MAP_WAIT * 2));
+    let err = rx.try_recv().unwrap().unwrap_err();
+    assert!(err.to_string().contains("could not be read back"), "{err}");
 }
 
 #[test]
