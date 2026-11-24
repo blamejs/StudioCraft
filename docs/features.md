@@ -725,7 +725,7 @@ Set up applies the built-in Set up layout and, after Live, turns studio mode bac
 was when Live was chosen. When studio mode was turned off on Live and Live is chosen again, Set up
 leaves it off. Opening another scene collection turns studio mode off, and Set up then leaves it
 off. The switch keeps Docks › Output Controls and Docks › Transition Controls
-as they are, so the transition picker and the Pause button stay on the row on both sides. A side
+as they are. A group that is shown stays on the row on both sides, and a hidden group stays hidden. A side
 shows as selected while the docks are shown, placed and undocked as its layout has them, and for
 Live while studio mode is on; dock sizes do not count. Otherwise neither side is selected, as on
 the first start with every dock under the preview, and a click on either one applies it. Starting

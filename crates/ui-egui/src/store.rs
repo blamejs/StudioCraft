@@ -334,10 +334,12 @@ impl Docks {
         self.is_shown(i) && !self.is_floating(i)
     }
 
-    /// Whether `other` shows the same docks as these, in the same order and regions, with the same
-    /// ones in windows of their own. Sizes and the two groups of the menu row are not compared.
+    /// Whether `other` shows the same docks as these, in the same regions, with the same ones in
+    /// windows of their own, and draws the same docks in the same order in every region, with the
+    /// columns collapsed into the strip and without. Hidden docks' places in the order, sizes and
+    /// the two groups of the menu row are not compared.
     pub fn arranged_like(&self, other: &Docks) -> bool {
-        self.order() == other.order()
+        Region::ALL.into_iter().all(|r| self.shown_in(r, false) == other.shown_in(r, false) && self.shown_in(r, true) == other.shown_in(r, true))
             && (0..DOCK_COUNT)
                 .filter_map(|i| u8::try_from(i).ok())
                 .all(|i| self.is_shown(i) == other.is_shown(i) && self.is_floating(i) == other.is_floating(i) && self.region(i) == other.region(i))
@@ -1514,6 +1516,15 @@ mod tests {
         assert_eq!(crate::strip::height(800.0, 744.0, d.height), 200.0);
         assert_eq!(crate::strip::widths(1280.0, &[0, 1, 2], d.widths()), [300.0, 340.0, 638.0]);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn docks_are_arranged_alike_when_every_region_draws_the_same_docks_in_the_same_order() {
+        let live = built_in_layout("Live").map(|l| l.docks).unwrap_or_default();
+        let with = |order: [u8; DOCK_COUNT]| Docks { order, ..live };
+        assert!(live.arranged_like(&with([0, 1, 3, 2])), "a hidden dock's place in the order is not drawn");
+        assert!(!live.arranged_like(&with([0, 2, 1, 3])), "Sources and the Audio Mixer swapped in the left column");
+        assert!(!live.arranged_like(&with([1, 0, 2, 3])), "the collapsed strip draws Sources before Scenes");
     }
 
     #[test]
