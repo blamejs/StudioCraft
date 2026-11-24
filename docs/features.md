@@ -146,7 +146,7 @@ The camera source behaves as follows:
 | A camera is plugged in or out while the Properties window is open | The lists update within about 3 seconds. |
 | A saved camera is not plugged in | The camera shows as "(not connected)". |
 | The source's camera is unplugged on Windows or Linux | The source clears its picture at once, and the Properties window reports "the camera is not connected". The source does not try to open the camera while the system does not list it. |
-| The source's camera is plugged in on Windows or Linux | The source opens it at once. |
+| The source's camera is plugged in on Windows or Linux | The source opens it at once. A camera unplugged and plugged in again so quickly that the system's list does not change is opened again as soon as its old stream fails. |
 | The camera is missing, in use by another program, unplugged, or sends nothing for 5 seconds | The Properties window reports it, and the source opens the camera again every 2 seconds. On Windows and Linux, a camera the system does not list is opened when it is plugged in instead. |
 | Several camera sources show the same camera | Every source shows the camera's pictures, and the camera is opened once. It stays in the format of the source that opened it first. A source that chose another format shows the picture in the format the camera is already open in, and its Properties window notes that the camera is already open in another format. The go-live check does not count that note as a problem. The camera closes when the last of these sources is removed. |
 | A camera is listed for the first time on macOS | The system asks for camera access. |

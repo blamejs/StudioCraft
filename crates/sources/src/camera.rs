@@ -78,6 +78,8 @@ struct Instance<C: Camera> {
     /// closed or the capture has not chosen yet, one that matches the setting. `None` when the
     /// watch does not know.
     listed: Option<bool>,
+    /// The watch's count of unplug notices when the camera was last opened or tried at once.
+    unplugs: Option<u64>,
 }
 
 impl<C: Camera> Instance<C> {
@@ -92,6 +94,7 @@ impl<C: Camera> Instance<C> {
             watch: C::watch(),
             seen: None,
             listed: None,
+            unplugs: None,
         };
         i.set(s, now);
         i
@@ -122,6 +125,17 @@ impl<C: Camera> Instance<C> {
         self.cap = Some(c);
         self.error = None;
         self.seen = None;
+        self.unplugs = self.watch.as_ref().map(|w| w.unplugs());
+    }
+
+    /// Whether a camera may have been unplugged since the camera was last opened or tried at
+    /// once. A camera unplugged and plugged in again before the system lists the cameras leaves
+    /// the list as it was, so a closed camera is then tried at once, one time for each such
+    /// notice.
+    fn unplugged_since(&mut self) -> bool {
+        let Some(now) = self.watch.as_ref().map(|w| w.unplugs()) else { return false };
+        let before = self.unplugs.replace(now);
+        before.is_some_and(|before| before != now)
     }
 
     /// Take the settings and open the camera they name.
@@ -132,6 +146,7 @@ impl<C: Camera> Instance<C> {
         self.last_frame = now;
         self.seen = None;
         self.listed = None;
+        self.unplugs = self.watch.as_ref().map(|w| w.unplugs());
         self.look();
         if self.listed == Some(false) {
             self.cap = None;
@@ -175,6 +190,9 @@ impl<C: Camera> Instance<C> {
             return Err(self.error.clone().unwrap_or_else(|| PluginError::Unavailable(NOT_CONNECTED.into())));
         }
         if self.cap.is_none() {
+            if self.unplugged_since() {
+                self.retry_at = now;
+            }
             if now < self.retry_at {
                 return Err(self.error.clone().unwrap_or_else(|| PluginError::Unavailable("waiting to open the camera again".into())));
             }
@@ -379,12 +397,17 @@ mod tests {
         }
     }
 
-    /// The system's notices of cameras plugged in or out; dropping the sender ends them.
-    struct Told(mpsc::Receiver<()>);
+    /// The system's notices of cameras plugged in or out, each saying whether it can include a
+    /// camera unplugged; dropping the sender ends them.
+    struct Told(mpsc::Receiver<bool>, bool);
 
     impl CameraEvents for Told {
         fn wait(&mut self) -> Result<(), PlatformError> {
-            self.0.recv().map_err(|_| PlatformError::Failed("stopped".into()))
+            self.1 = self.0.recv().map_err(|_| PlatformError::Failed("stopped".into()))?;
+            Ok(())
+        }
+        fn unplugged(&mut self) -> bool {
+            self.1
         }
     }
 
@@ -393,7 +416,7 @@ mod tests {
     struct System {
         plugs: Arc<Plugs>,
         watch: Arc<Watch>,
-        tell: mpsc::Sender<()>,
+        tell: mpsc::Sender<bool>,
     }
 
     impl System {
@@ -401,7 +424,7 @@ mod tests {
             let plugs = Arc::new(Plugs(Mutex::new(Some(list))));
             let (tell, told) = mpsc::channel();
             let backend: Arc<dyn CameraBackend> = plugs.clone();
-            let watch = camera::watch_with(backend, move || Ok(Box::new(Told(told)) as Box<dyn CameraEvents>));
+            let watch = camera::watch_with(backend, move || Ok(Box::new(Told(told, false)) as Box<dyn CameraEvents>));
             while watch.generation() == 0 {
                 std::thread::yield_now();
             }
@@ -418,8 +441,18 @@ mod tests {
         /// handled the notice.
         fn list(&self, list: Option<Vec<CameraInfo>>) {
             *self.plugs.0.lock().unwrap() = list;
+            self.notice(false);
+        }
+
+        /// Report a camera unplugged and plugged in again before the cameras are listed, which
+        /// leaves the list as it was, and wait until the watch has handled the notice.
+        fn replug(&self) {
+            self.notice(true);
+        }
+
+        fn notice(&self, unplugged: bool) {
             let before = self.watch.handled();
-            self.tell.send(()).unwrap();
+            self.tell.send(unplugged).unwrap();
             while self.watch.handled() == before {
                 std::thread::yield_now();
             }
@@ -611,6 +644,31 @@ mod tests {
         c.produce_at(&io, back).unwrap();
         assert_eq!(opened().len(), before + 1, "opened at the next frame, without waiting for the next try");
         assert!(matches!(io.video.take(), Some(VideoContent::Frame(_))));
+    }
+
+    #[test]
+    fn a_camera_unplugged_and_plugged_in_again_before_it_is_listed_opens_at_once() {
+        let system = System::new(vec![desk()]);
+        let io = SourceIo::new(MasterClock::new());
+        let t = Instant::now();
+        script(vec![Ok(()), Err(PlatformError::Failed("the camera stopped (unplugged)".into()))]);
+        let mut c = Instance::<Scripted>::new(&settings(), t);
+        c.produce_at(&io, t).unwrap();
+        system.replug();
+        let gone = t + Duration::from_millis(10);
+        assert_eq!(c.produce_at(&io, gone), Err(PluginError::Failed("the camera stopped (unplugged)".into())));
+        let before = opened().len();
+        script(vec![Ok(())]);
+        c.produce_at(&io, gone + Duration::from_millis(10)).unwrap();
+        assert_eq!(opened().len(), before + 1, "opened at the next frame, without waiting for the next try");
+        assert!(matches!(io.video.take(), Some(VideoContent::Frame(_))));
+        // One notice gives one try at once; a camera that keeps failing waits for the next try.
+        script(vec![Err(PlatformError::Failed("the camera stopped".into()))]);
+        let failed = gone + Duration::from_millis(20);
+        assert!(c.produce_at(&io, failed).is_err());
+        let after = opened().len();
+        assert!(c.produce_at(&io, failed + Duration::from_millis(10)).is_err());
+        assert_eq!(opened().len(), after, "not tried again before the next try");
     }
 
     #[test]

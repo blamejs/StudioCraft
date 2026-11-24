@@ -217,7 +217,12 @@ no longer holds the camera its capture opened, the source drops the capture and 
 even when another camera with the same name is still listed. The source then opens a listed camera
 that matches its setting at the next frame. When no listed camera matches, it reports "the camera is
 not connected" and does not try to open one until a matching camera is plugged in, which it opens at
-the next frame. The Properties window's device stamp
+the next frame. A camera unplugged and plugged in again before the thread lists the cameras
+leaves the list unchanged, so the thread also counts the notices that can mean a camera was
+unplugged: a removed device on Windows, and on Linux a removed `video…` node or notices lost to a
+full queue. When that count changed since the source last opened its camera, a source whose
+capture failed opens the camera again at the next frame instead of after 2 s, once for each change.
+The Properties window's device stamp
 hashes the published list instead of listing the cameras. When the notices cannot be set up or
 stop, the watch publishes no list, and the sources and the Properties window list and reopen
 cameras on their timers as on macOS.
