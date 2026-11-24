@@ -18,6 +18,7 @@ mod outputs;
 mod pause;
 mod recording_markers;
 mod recordings;
+pub mod session_marker;
 mod wiring;
 
 use std::collections::HashMap;
@@ -313,6 +314,8 @@ pub struct Studio {
     engine: Engine,
     clock: MasterClock,
     sources: SourceSet,
+    /// Safe Mode: no source runs until [`Studio::leave_safe_mode`].
+    safe_mode: bool,
     mixer: Mixer,
     /// Meter levels of each audio source, kept across mixer rebuilds.
     levels: HashMap<SourceId, Arc<Levels>>,
@@ -447,6 +450,31 @@ impl Studio {
         ffmpeg: FfmpegSetting,
         captions: Arc<CaptionBoard>,
     ) -> Studio {
+        Studio::start(gpu, collection, profile, registry, ffmpeg, captions, false)
+    }
+
+    /// The same studio in Safe Mode: the collection opens and can be edited, and no source runs
+    /// (no device, file, capture or network source is opened) until [`Studio::leave_safe_mode`].
+    pub fn new_in_safe_mode(
+        gpu: Option<Gpu>,
+        collection: SceneCollection,
+        profile: Profile,
+        registry: Arc<Registry>,
+        ffmpeg: FfmpegSetting,
+        captions: Arc<CaptionBoard>,
+    ) -> Studio {
+        Studio::start(gpu, collection, profile, registry, ffmpeg, captions, true)
+    }
+
+    fn start(
+        gpu: Option<Gpu>,
+        collection: SceneCollection,
+        profile: Profile,
+        registry: Arc<Registry>,
+        ffmpeg: FfmpegSetting,
+        captions: Arc<CaptionBoard>,
+        safe_mode: bool,
+    ) -> Studio {
         let clock = MasterClock::new();
         if let Ok(mut f) = ffmpeg.write() {
             f.clone_from(&profile.output.ffmpeg_path);
@@ -468,6 +496,7 @@ impl Studio {
             engine: Engine::new(collection, registry),
             clock,
             sources: SourceSet::new(clock),
+            safe_mode,
             mixer,
             levels: HashMap::new(),
             gpu,
@@ -518,6 +547,18 @@ impl Studio {
 
     pub fn engine(&self) -> &Engine {
         &self.engine
+    }
+
+    /// Whether the studio is in Safe Mode, with no source running.
+    pub fn safe_mode(&self) -> bool {
+        self.safe_mode
+    }
+
+    /// Leave Safe Mode: the collection's sources start. Nothing happens outside Safe Mode.
+    pub fn leave_safe_mode(&mut self) {
+        if std::mem::take(&mut self.safe_mode) {
+            self.refresh();
+        }
     }
 
     pub fn collection(&self) -> &SceneCollection {
@@ -796,7 +837,8 @@ impl Studio {
     fn refresh(&mut self) {
         self.seen_revision = self.engine.revision();
         let c = self.engine.collection();
-        for (id, problem) in self.sources.sync(c, self.engine.registry()) {
+        let failed = if self.safe_mode { Vec::new() } else { self.sources.sync(c, self.engine.registry()) };
+        for (id, problem) in failed {
             let name = c.source(id).map_or_else(|| id.to_string(), |s| s.name.clone());
             self.notices.push(Notice::new("{name}: {problem}", vec![("name", name), ("problem", problem.to_string())], true));
         }
@@ -852,7 +894,9 @@ impl Studio {
     fn sync_monitor(&mut self) {
         let c = self.engine.collection();
         let registry = self.engine.registry();
-        let wanted = c.sources.iter().any(|s| s.audio.monitor.monitored() && registry.source(&s.kind).is_ok_and(|p| p.caps().audio));
+        // Safe Mode opens no device, the monitoring device included.
+        let wanted =
+            !self.safe_mode && c.sources.iter().any(|s| s.audio.monitor.monitored() && registry.source(&s.kind).is_ok_and(|p| p.caps().audio));
         self.monitor.sync(wanted, &self.profile.audio.monitoring_device, &self.mixer, &mut self.notices);
     }
 
@@ -1067,6 +1111,10 @@ impl Studio {
 
     /// Pause the program, or while paused apply the given values ([`Command::PauseStart`]).
     fn start_pause(&mut self, media: Option<String>, countdown_s: Option<u32>, at_zero: Option<PauseAtZero>) -> Result<Value, StudioError> {
+        // The pause screen's picture or video is a source too.
+        if self.safe_mode {
+            return Err(StudioError::Engine(EngineError::Invalid("the pause screen can't start in Safe Mode; leave Safe Mode first".into())));
+        }
         if let Some(m) = media.as_deref().filter(|m| !m.is_empty()) {
             pause::media_kind(self.engine.registry(), m).map_err(|e| StudioError::Engine(EngineError::Invalid(e)))?;
         }
