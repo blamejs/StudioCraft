@@ -384,6 +384,13 @@ impl Engine {
                 Ok(Outcome::runtime(RuntimeAction::MarkerAdd { name }))
             }
             Command::MarkerList {} => Ok(Outcome::runtime(RuntimeAction::MarkerList)),
+            Command::MarkerRename { index, name } => {
+                if index == 0 {
+                    return Err(EngineError::Invalid("a marker's index counts from 1".into()));
+                }
+                check_marker_name(Some(&name))?;
+                Ok(Outcome::runtime(RuntimeAction::MarkerRename { index, name }))
+            }
             Command::RetestHardwareEncoders {} => Ok(Outcome::runtime(RuntimeAction::RetestHardwareEncoders)),
             Command::FilterMeter { source, filter } => {
                 let id = self.source_id(&source)?;

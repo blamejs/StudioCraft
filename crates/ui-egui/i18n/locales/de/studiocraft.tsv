@@ -327,7 +327,7 @@
 	the audio stream ended	der Audiostream wurde beendet
 	the audio stream failed	der Audiostream ist fehlgeschlagen
 	the camera capture could not start	die Kameraaufnahme konnte nicht starten
-	the camera is in use by another camera source	die Kamera wird von einer anderen Kameraquelle verwendet
+	the camera is already open in another format	die Kamera ist bereits in einem anderen Format geöffnet
 	the camera is still closing	die Kamera wird noch geschlossen
 	the camera offers no format StudioCraft reads	die Kamera bietet kein Format an, das StudioCraft lesen kann
 	the camera sends frames that cannot be read	die Kamera sendet Bilder, die nicht gelesen werden können

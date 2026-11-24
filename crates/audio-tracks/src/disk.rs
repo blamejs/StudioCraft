@@ -19,7 +19,7 @@ use crossbeam_queue::ArrayQueue;
 
 use crate::collect::{Chunk, Dropout, ToDisk};
 use crate::journal::{Journal, Line};
-use crate::markers::MarkerQueue;
+use crate::markers::{Entry, MarkerQueue};
 use crate::wav::{self, FRAME_BYTES};
 
 /// Silence written for a gap, a piece at a time.
@@ -531,12 +531,33 @@ impl Writer {
             self.journal.write(&line).map_err(Failure::io)?;
             self.keep(line);
         }
-        while let Some(m) = self.markers.as_ref().and_then(|q| q.pop()) {
-            let line = Line::Marker { at: m.at, name: m.name };
-            self.journal.write(&line).map_err(Failure::io)?;
-            self.keep(line);
+        while let Some(entry) = self.markers.as_ref().and_then(|q| q.pop()) {
+            match entry {
+                Entry::Add(m) => {
+                    let line = Line::Marker { at: m.at, name: m.name, number: Some(m.number) };
+                    self.journal.write(&line).map_err(Failure::io)?;
+                    self.keep(line);
+                }
+                Entry::Rename { number, name } => {
+                    self.journal.write(&Line::Rename { number, name: name.clone() }).map_err(Failure::io)?;
+                    self.rename_kept(number, name);
+                }
+            }
         }
         Ok(())
+    }
+
+    /// Give the marker `number` kept for the session the name `name`, so the lines kept for the
+    /// session stay as many as before. A marker past the session's limit is not kept, and its
+    /// rename changes nothing.
+    fn rename_kept(&mut self, number: u64, name: String) {
+        let kept = self.session_lines.iter_mut().rev().find_map(|l| match l {
+            Line::Marker { name: old, number: Some(n), .. } if *n == number => Some(old),
+            _ => None,
+        });
+        if let Some(kept) = kept {
+            *kept = name;
+        }
     }
 
     /// Note the reason in the journal and close the files with their headers, after a failure.

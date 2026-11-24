@@ -522,6 +522,8 @@ pub fn sources(ui: &mut Ui, studio: &Studio, st: &mut DockState, acts: &mut Vec<
             if let Some(e) = studio.source_error(src.id) {
                 let error = crate::i18n::Msg::plain(e).shown();
                 row = row.trailing_icon(IconSpec::svg(IconId::new("warning")), error.clone()).trailing_tone(Tone::Warn).tooltip(error);
+            } else if let Some(n) = studio.source_notice(src.id) {
+                row = row.tooltip(crate::i18n::Msg::plain(n).shown());
             }
             row
         });

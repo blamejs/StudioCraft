@@ -344,7 +344,7 @@
 	the audio stream ended	le flux audio s'est terminé
 	the audio stream failed	le flux audio a échoué
 	the camera capture could not start	la capture de la caméra n'a pas pu démarrer
-	the camera is in use by another camera source	la caméra est utilisée par une autre source de caméra
+	the camera is already open in another format	la caméra est déjà ouverte dans un autre format
 	the camera is still closing	la caméra est encore en cours de fermeture
 	the camera offers no format StudioCraft reads	la caméra ne propose aucun format que StudioCraft sait lire
 	the camera sends frames that cannot be read	la caméra envoie des images illisibles

@@ -38,7 +38,7 @@ fn day_take() -> (Vec<Line>, Vec<(String, u64)>) {
             segment += 1;
         }
     }
-    lines.extend((0..1000u64).map(|n| Line::Marker { at: n * (DAY_FRAMES / 1000), name: format!("Marker {n}") }));
+    lines.extend((0..1000u64).map(|n| Line::Marker { at: n * (DAY_FRAMES / 1000), name: format!("Marker {n}"), number: Some(n + 1) }));
     lines.extend((0..100u64).map(|n| Line::Dropout { track: (n % 9) as usize, at: n * 863_999, frames: 1024 }));
     (lines, lens)
 }

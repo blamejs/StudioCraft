@@ -19,7 +19,6 @@ crate in the same layer. `cargo xtask layers` checks this against the table in
 | L0 | `studiocraft-media` | The master clock, frame pacing, video frame and audio block types, buffer pools, bounded lock-free queues, mixing and level meters. |
 | L0 | `craft-flv` | FLV tags for H.264 and AAC: the file header, `onMetaData`, the AVC and AAC sequence headers, video and audio tags with composition time, the AMF0 values of script data and RTMP commands, and a tag reader. Its tag bodies are also RTMP message bodies. It depends on no StudioCraft crate. |
 | L0 | `craft-scopes` | Video scope math: the waveform, parade, histogram and vectorscopes of a borrowed RGBA8 or NV12 frame, their numeric summaries and trace images. It depends on no StudioCraft crate. |
-| L0 | `craft-audio-dsp` | Audio DSP shared with the other Craft apps: the `AudioEffect` trait and its effects, the BS.1770 / EBU R128 loudness meter, panning, test signals and resampling. It depends on no StudioCraft crate. |
 | L0 | `craft-ease` | Easing curves, keyed tracks, constant-speed Bezier motion paths and damped springs. It depends on no StudioCraft crate. |
 | L0 | `craft-gpu-device` | Choosing and opening a wgpu device: the user's adapter choice, corrections for drivers that crash, a software fallback, a capability report, and device health with recovery after a device loss. It depends on no StudioCraft crate. |
 | L0 | `craft-gpu-yuv` | RGBA to NV12, P010 and I420 on the GPU with scaling, in BT.601, BT.709 and BT.2020 at limited or full range, and the same conversion on the CPU. It depends on no StudioCraft crate. |
@@ -52,7 +51,6 @@ build for `wasm32-unknown-unknown`:
 - `studiocraft-plugin`
 - `craft-flv`
 - `craft-scopes`
-- `craft-audio-dsp`
 - `craft-ease`
 - `craft-transitions`
 
@@ -71,7 +69,7 @@ gives no value for that column.
 | Application audio discovery | System notifications and commands | A command queue of 16 (`craft_app_audio::discovery::COMMANDS`); the list is one `Arc<AppList>` slot, and the meters are 64 atomic rows | A full command queue drops the command; a new list replaces the old one | A scan every 1 s, and at most every 250 ms after notifications; meter reads 30 times a second while a caller asks for them |
 | Application audio capture | The system's packets, waited for 200 ms at a time | Buffers sized for the largest packet so far (250 ms to start, 2 s at most); a feed keeps at most 32 blocks per call (`plugin::source::AUDIO_QUEUE_BLOCKS`) | Blocks past 32 in one call drop the oldest and are counted | 3.77 µs to turn a 10 ms packet into blocks, without allocating |
 | Screen capture (Linux) | The PipeWire stream | `FrameSlot`: the newest frame and up to 2 spares | A newer frame replaces a frame the source has not taken | One copy of the picture |
-| Camera capture | The camera library | `FrameSlot`: the newest frame and up to 2 spares | A newer frame replaces a frame the source has not taken; a frame that cannot be converted goes back to the spares | One conversion of the picture |
+| Camera capture (one thread per camera, shared by its readers) | The camera library | `FrameSlot` for each reader: the newest frame and up to 2 spares | A newer frame replaces a frame the reader has not taken; a frame that cannot be converted goes back to the spares | One conversion of the picture, and one copy of it for each reader after the first |
 | Mixer | One 1024-frame block from every audible source | 4 blocks per source; each output's audio queue holds 256 blocks | The oldest source blocks beyond 4 are dropped | No allocation; the delay lines are allocated with the input list |
 | Monitoring | The monitoring mix | 4 blocks, and playback waits for 2 | | No allocation or lock |
 | Compositor | The master clock's frame ticks | A ring of 3 GPU textures | | No allocation in the steady state |
@@ -90,7 +88,9 @@ gives no value for that column.
 ### Source threads
 
 Each source runs on its own thread (`engine::host`). It publishes video frames into a `VideoOut`
-slot and audio blocks into a bounded lock-free queue.
+slot and audio blocks into a bounded lock-free queue. After each call into the source, the thread
+stores its error, and the note a working source gives (`SourceInstance::notice`). The Properties
+window shows the note, and the go-live check counts only errors.
 
 ### Audio capture threads
 
@@ -166,12 +166,13 @@ and follows a resize with the next buffer.
 ### Camera capture
 
 A camera source (`sources::camera`) opens a `platform::camera::CameraCapture`, which starts a
-thread of its own. The camera handle stays on that thread.
+thread of its own. The camera handle stays on the thread that opened the camera.
 
 **Opening.** The thread lists the cameras and picks the saved one: the same name and system id,
 then the same id unless it is a Linux device node, then the same name. It reads the camera's
 formats and opens it through the `nokhwa` crate: Media Foundation on Windows, AVFoundation on macOS
-and V4L2 on Linux. On Linux only the V4L2 nodes that can capture video are listed. On Windows every
+and V4L2 on Linux. On Linux only the V4L2 nodes that can capture video are listed, and a camera
+that a capture of the app streams stays listed without being asked again. On Windows every
 thread that uses Media Foundation sets up COM (`comedy`). Each capture thread sets up COM for its
 stream's life, and each camera list or format read runs on a short-lived thread that sets it up.
 
@@ -204,11 +205,24 @@ frame included) clears the picture and is reported to the source. The source ope
 again after 2 s while the rest of the app keeps running. A camera source whose camera is unplugged
 keeps opening it every 2 seconds and resumes when it returns.
 
-**Stopping and sharing a camera.** Dropping the capture sets a stop flag. The thread sees it after
-its current frame, stops the stream and ends. A camera is reserved for one capture thread at a
-time, so a second camera source showing the same camera reports "the camera is in use by another
-camera source". A thread can wait on a camera that sends nothing. Until it ends, a new capture of
-that camera fails with "the camera is still closing" and the source tries again.
+**Sharing a camera.** One capture thread streams each camera, and every `CameraCapture` of that
+camera is a reader of it with a `FrameSlot` of its own. The thread converts each frame once into a
+spare frame of the first reader, copies the picture into a spare frame of each other reader, and
+publishes them. A capture opened for a camera that another capture streams finds it in the app's
+list of open cameras, joins it, and its own thread ends. A capture that arrives while the camera is
+still opening waits for it and joins once it streams. When that open fails, or the capture that
+was opening it is dropped first, the waiting capture opens the camera itself. A capture dropped
+before its camera opens does not open it. The camera stays in the format the first capture opened
+it in. A capture that asked for another format reads the format the camera is open in, and the
+camera source polls at that format's frame rate and gives the note "the camera is already open in
+another format" while it shows the picture. A failed stream
+fails every reader, and each source opens the camera again after 2 s: the first to do so opens it,
+and the others join.
+
+**Stopping.** Dropping a capture removes its reader. When the last reader of a camera is dropped,
+the thread sees a stop flag after its current frame, stops the stream and ends. A thread can wait
+on a camera that sends nothing. Until it ends, a new capture of a camera that streamed fails with
+"the camera is still closing" and the source tries again.
 
 **Format lists.** The source's settings schema depends on its settings (`Plugin::schema_for`), and
 the Format list holds the formats of the chosen camera. On macOS the formats are read from the
@@ -542,6 +556,7 @@ nothing and always open at that size.
 | Font lookup for text sources | `craft-font-catalog` |
 | Picture decoding for image sources | `craft-image-codecs` |
 | White balance by temperature and tint for the color correction filter | `craft-color-transform` |
+| Audio filter effects and the program loudness meter | `craft-audio-dsp` |
 | Frame-rate and tick arithmetic | `craft-time` |
 | Control channel framing and session tokens | `craft-control-protocol` |
 | JSON-RPC framing for the MCP server | `craft-jsonrpc` |
