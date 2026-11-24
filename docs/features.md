@@ -208,6 +208,14 @@ A source's Properties window sets two more audio options:
 Monitored sources play on the device chosen in Settings › Audio. Monitoring works on Windows and
 macOS.
 
+Audio input capture and audio output capture stay in step with the mix when the device's clock
+runs a little fast or slow. Each of these sources keeps about 53 ms of audio waiting for the mixer
+(2.5 blocks of 1024 samples at 48 kHz). To hold that amount, it makes up to 0.1% more or fewer
+samples from the device's audio, and changes that amount by at most 20 parts per million per
+second. When the mixer starts reading the source, the source adds silence or drops its oldest
+audio to start at that amount. While the mixer does not read the source, the source keeps the
+rate it had.
+
 ### Application Audio dock
 
 Docks › Application Audio shows a dock that lists a lane for each audio input source, then a lane
