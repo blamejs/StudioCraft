@@ -51,6 +51,7 @@ impl Studio {
             ffmpeg: PathBuf::new(),
             stats: Arc::clone(&stats),
             start: self.clock.now(),
+            captions: None,
         };
         let instance = output.start(&Settings::new(), job)?;
         let target = instance.target();
