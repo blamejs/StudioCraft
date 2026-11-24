@@ -5,9 +5,10 @@
 //! stereo, and PipeWire converts each device's own format to it.
 
 use std::any::Any;
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, SyncSender, TrySendError, sync_channel};
-use std::sync::{Arc, Mutex, OnceLock, PoisonError};
+use std::sync::{Arc, OnceLock};
 
 use crate::PlatformError;
 
@@ -148,38 +149,17 @@ struct Slot {
 }
 
 /// The thread that opens, holds and closes the output streams, one request at a time. A stream
-/// whose handle was dropped closes before the next stream opens.
+/// whose handle was dropped closes before the next stream opens. Each handle holds a sender of the
+/// queue, so the thread keeps running while any playback is open.
 struct Devices {
     requests: SyncSender<Request>,
-    /// Cleared when the thread ends.
-    running: Arc<AtomicBool>,
-}
-
-/// Clears [`Devices::running`] when the device thread ends, also when it panics.
-struct Running(Arc<AtomicBool>);
-
-impl Drop for Running {
-    fn drop(&mut self) {
-        self.0.store(false, Ordering::Release);
-    }
 }
 
 impl Devices {
     fn spawn() -> Result<Devices, PlatformError> {
         let (requests, rx) = sync_channel(REQUESTS_QUEUED);
-        let running = Arc::new(AtomicBool::new(true));
-        let guard = Running(Arc::clone(&running));
-        std::thread::Builder::new()
-            .name("audio monitor".into())
-            .spawn(move || {
-                // Dropped in reverse order: the queue closes, and its waiting opens are told, before
-                // the thread is marked as ended.
-                let _guard = guard;
-                let rx = rx;
-                serve(&rx);
-            })
-            .map_err(|e| PlatformError::Failed(e.to_string()))?;
-        Ok(Devices { requests, running })
+        std::thread::Builder::new().name("audio monitor".into()).spawn(move || serve(&rx)).map_err(|e| PlatformError::Failed(e.to_string()))?;
+        Ok(Devices { requests })
     }
 
     /// Queue the open of a stream and return its handle at once.
@@ -194,30 +174,55 @@ impl Devices {
 }
 
 /// Serve requests until every sender is gone. A stream stays on this thread from its open to its
-/// close.
+/// close. A panic while a stream opens fails only that playback, and a panic while a stream closes
+/// or a request is dropped ends only that step, so the thread and the streams that have started
+/// keep running.
 fn serve(requests: &Receiver<Request>) {
     let mut streams: Vec<(Pending, Box<dyn Any>)> = Vec::new();
     while let Ok(request) = requests.recv() {
-        streams.retain(|(slot, _)| !slot.0.dropped.load(Ordering::Acquire));
-        let Request::Open { open, fill, on_error, slot } = request else { continue };
-        // A handle dropped before its turn needs no device.
-        if slot.0.dropped.load(Ordering::Acquire) {
-            continue;
+        let _ = catch_unwind(AssertUnwindSafe(|| streams.retain(|(slot, _)| !slot.0.dropped.load(Ordering::Acquire))));
+        let _ = catch_unwind(AssertUnwindSafe(|| serve_one(&mut streams, request)));
+    }
+}
+
+/// Open the stream of one request, unless its handle is already gone.
+fn serve_one(streams: &mut Vec<(Pending, Box<dyn Any>)>, request: Request) {
+    let Request::Open { open, fill, on_error, slot } = request else { return };
+    // A handle dropped before its turn needs no device.
+    if slot.0.dropped.load(Ordering::Acquire) {
+        return;
+    }
+    match catch_unwind(AssertUnwindSafe(|| open(fill, on_error))) {
+        Ok(Ok((stream, format))) => {
+            let _ = slot.0.started.set(Ok(format));
+            streams.push((slot, stream));
         }
-        match open(fill, on_error) {
-            Ok((stream, format)) => {
-                let _ = slot.0.started.set(Ok(format));
-                streams.push((slot, stream));
-            }
-            Err(e) => {
-                let _ = slot.0.started.set(Err(e.to_string()));
-            }
+        Ok(Err(e)) => {
+            let _ = slot.0.started.set(Err(e.to_string()));
+        }
+        Err(_) => {
+            let _ = slot.0.started.set(Err(OPEN_FAILED.into()));
         }
     }
 }
 
-/// The device thread for the system's devices, started on the first open and again if it ended.
-static DEVICES: Mutex<Option<Devices>> = Mutex::new(None);
+/// Why a playback whose open panicked on the device thread could not start.
+const OPEN_FAILED: &str = "the audio device failed while opening";
+
+/// The device thread for the system's devices, started on the first open. The queue's sender
+/// stored here is never dropped, so the thread runs until the process ends.
+static DEVICES: OnceLock<Devices> = OnceLock::new();
+
+/// The shared device thread, started by the first open. Reading it is one atomic load. Callers
+/// that race to start it each start a thread; the first one stored is kept, and the others end when
+/// their queues are dropped. No lock is held while a thread starts.
+fn shared_devices() -> Result<&'static Devices, PlatformError> {
+    if let Some(d) = DEVICES.get() {
+        return Ok(d);
+    }
+    let _ = DEVICES.set(Devices::spawn()?);
+    DEVICES.get().ok_or_else(|| PlatformError::Failed("the audio device thread stopped".into()))
+}
 
 /// Playback on an output device. The device opens and its stream lives on a device thread, so
 /// opening returns at once and the handle can move between threads. Dropping the handle closes
@@ -236,12 +241,7 @@ impl AudioPlayback {
         let open: OpenStream = Box::new(move |fill, on_error| {
             imp::Playback::open(&id, fill, on_error).map(|(stream, format)| (Box::new(stream) as Box<dyn Any>, format))
         });
-        let mut devices = DEVICES.lock().unwrap_or_else(PoisonError::into_inner);
-        if !devices.as_ref().is_some_and(|d| d.running.load(Ordering::Acquire)) {
-            *devices = Some(Devices::spawn()?);
-        }
-        let Some(d) = devices.as_ref() else { return Err(PlatformError::Failed("the audio device thread stopped".into())) };
-        d.play(open, fill, on_error)
+        shared_devices()?.play(open, fill, on_error)
     }
 }
 
@@ -619,8 +619,13 @@ mod tests {
     }
 
     #[test]
-    fn playbacks_waiting_on_a_device_thread_that_stopped_report_it() {
+    fn an_open_that_panics_fails_only_its_own_playback() {
         let devices = Devices::spawn().unwrap();
+        let (kept, release, _began, kept_dropped) = held_open(&devices);
+        release.send(Ok(STEREO_48K)).unwrap();
+        while !kept.started() {
+            std::thread::yield_now();
+        }
         let (release_tx, release_rx) = sync_channel::<()>(0);
         let (began_tx, began_rx) = sync_channel(1);
         let crashing = play(
@@ -635,17 +640,79 @@ mod tests {
         began_rx.recv().unwrap();
         let queued = play(&devices, opening(|| Ok(((), STEREO_48K)))).unwrap();
         release_tx.send(()).unwrap();
-        for p in [&crashing, &queued] {
-            while p.open_error().is_none() {
-                std::thread::yield_now();
-            }
-            assert_eq!((p.started(), p.open_error()), (false, Some("the audio device thread stopped")));
-        }
-        while devices.running.load(Ordering::Acquire) {
+        while crashing.open_error().is_none() {
             std::thread::yield_now();
         }
-        let after = play(&devices, opening(|| Ok(((), STEREO_48K))));
-        assert_eq!(after.err(), Some(PlatformError::Failed("the audio device thread stopped".into())));
+        assert_eq!((crashing.started(), crashing.open_error()), (false, Some(OPEN_FAILED)));
+        while !queued.started() && queued.open_error().is_none() {
+            std::thread::yield_now();
+        }
+        assert_eq!((queued.started(), queued.open_error()), (true, None), "the open queued behind it still runs");
+        assert!(kept.started());
+        assert!(kept_dropped.try_recv().is_err(), "the stream that had started was closed");
+        let after = play(&devices, opening(|| Ok(((), STEREO_48K)))).unwrap();
+        while !after.started() {
+            std::thread::yield_now();
+        }
+        drop(kept);
+        kept_dropped.recv().unwrap();
+    }
+
+    /// Panics when it is dropped.
+    struct PanicOnDrop;
+
+    impl Drop for PanicOnDrop {
+        fn drop(&mut self) {
+            panic!("the device driver crashed while closing");
+        }
+    }
+
+    #[test]
+    fn a_panic_while_a_skipped_request_is_dropped_leaves_the_other_streams_open() {
+        let devices = Devices::spawn().unwrap();
+        let (kept, release, began, kept_dropped) = held_open(&devices);
+        began.recv().unwrap();
+        let crashes_on_drop = PanicOnDrop;
+        let fill: Fill = Box::new(move |_, _| {
+            let _ = &crashes_on_drop;
+        });
+        let skipped = devices.play(opening(|| Ok(((), STEREO_48K))), fill, Box::new(|_| {})).unwrap();
+        drop(skipped);
+        let after = play(&devices, opening(|| Ok(((), STEREO_48K)))).unwrap();
+        release.send(Ok(STEREO_48K)).unwrap();
+        while !after.started() && after.open_error().is_none() {
+            std::thread::yield_now();
+        }
+        assert_eq!((after.started(), after.open_error()), (true, None));
+        assert!(kept_dropped.try_recv().is_err(), "the stream that had started was closed");
+        drop(kept);
+        kept_dropped.recv().unwrap();
+    }
+
+    #[test]
+    fn a_panic_while_a_stream_closes_leaves_the_other_streams_open() {
+        let devices = Devices::spawn().unwrap();
+        let (kept, release, _began, kept_dropped) = held_open(&devices);
+        release.send(Ok(STEREO_48K)).unwrap();
+        let crashing = play(&devices, opening(|| Ok((PanicOnDrop, STEREO_48K)))).unwrap();
+        while !crashing.started() {
+            std::thread::yield_now();
+        }
+        drop(crashing);
+        let after = play(&devices, opening(|| Ok(((), STEREO_48K)))).unwrap();
+        while !after.started() {
+            std::thread::yield_now();
+        }
+        assert!(kept_dropped.try_recv().is_err(), "the stream that had started was closed");
+        drop(kept);
+        kept_dropped.recv().unwrap();
+    }
+
+    #[test]
+    fn every_system_playback_shares_one_device_thread() {
+        let first = std::thread::spawn(shared_devices);
+        let second = shared_devices().unwrap();
+        assert!(std::ptr::eq(first.join().unwrap().unwrap(), second));
     }
 
     #[test]
