@@ -376,7 +376,7 @@ mod tests {
         assert_eq!(io.video.size(), Some((8, 4)));
         c.produce(&io).unwrap();
         assert!(io.video.take().is_none(), "an unchanged screen publishes nothing");
-        f.ring().refuse(craft_gpu_interop::Fallback::NotDx12);
+        f.ring().refuse(craft_gpu_interop::Fallback::UnsupportedBackend);
         c.produce(&io).unwrap();
         assert!(matches!(io.video.take(), Some(VideoContent::Frame(_))), "the picture is copied through memory");
     }

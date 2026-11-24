@@ -25,6 +25,17 @@ impl AdapterId {
     pub fn from_parts(low: u32, high: i32) -> AdapterId {
         AdapterId((u64::from(high as u32) << 32) | u64::from(low))
     }
+
+    /// The low and high parts, as Windows takes them.
+    pub fn parts(self) -> (u32, i32) {
+        (self.0 as u32, (self.0 >> 32) as u32 as i32)
+    }
+
+    /// The identifier from the 8 bytes Vulkan reports as a device's `deviceLUID`: the low part
+    /// first, each part in little-endian order.
+    pub fn from_luid_bytes(bytes: [u8; 8]) -> AdapterId {
+        AdapterId(u64::from_le_bytes(bytes))
+    }
 }
 
 static NEXT_RING: AtomicU64 = AtomicU64::new(1);
@@ -75,6 +86,16 @@ impl SharedRing {
             #[cfg(windows)]
             handles: crate::dxgi_ffi::Handles::none(),
         })
+    }
+
+    /// A ring without textures whose frames come from `adapter`.
+    #[cfg(all(test, windows, feature = "wgpu"))]
+    pub(crate) fn detached_on(width: u32, height: u32, adapter: AdapterId) -> Arc<SharedRing> {
+        let mut ring = SharedRing::detached(width, height);
+        if let Some(r) = Arc::get_mut(&mut ring) {
+            r.adapter = adapter;
+        }
+        ring
     }
 
     /// Unique in the process; a capture opened again makes a new ring.

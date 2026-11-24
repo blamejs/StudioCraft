@@ -75,10 +75,16 @@ pub struct Gpu {
 }
 
 /// The device studiocraft opens: its own label, and the adapter's own limits, so an adapter with
-/// lower limits than wgpu's defaults (an older or software one) still opens.
+/// lower limits than wgpu's defaults (an older or software one) still opens. A Vulkan device on
+/// Windows also opens shared textures when the driver can, for a display capture that stays on the
+/// GPU.
 #[cfg(not(target_arch = "wasm32"))]
-const REQUEST: Request<'static> =
-    Request { label: Some("studiocraft"), required_features: wgpu::Features::empty(), optional_features: wgpu::Features::empty(), limits: None };
+const REQUEST: Request<'static> = Request {
+    label: Some("studiocraft"),
+    required_features: wgpu::Features::empty(),
+    optional_features: wgpu::Features::VULKAN_EXTERNAL_MEMORY_WIN32,
+    limits: None,
+};
 
 impl Gpu {
     /// A device without a window (tests, benchmarks, the command-line tool), on the automatic

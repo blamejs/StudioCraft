@@ -7,15 +7,20 @@
 //! that marks the copy as done.
 //!
 //! With the `wgpu` feature, an [`Importer`] opens the ring's textures and fences on a wgpu
-//! Direct3D 12 device and draws the frame into the caller's texture with alpha set to 1. It never
-//! waits: a frame whose copy has not finished stays pending, and the next call tries again. After
-//! the draw it signals the ring's released fence on its queue, which tells the capture side that
-//! the texture may be written again.
+//! Direct3D 12 or Vulkan device and draws the frame into the caller's texture with alpha set to 1.
+//! It never waits: a frame whose copy has not finished stays pending, and the next call tries
+//! again. After the draw it signals the ring's released fence, which tells the capture side that
+//! the texture may be written again. On Direct3D 12 the queue signals the fence. On Vulkan the
+//! textures are opened through `VK_KHR_external_memory_win32` and the fences on a Direct3D 12
+//! device of the same adapter. A timeline semaphore signaled by the queue tells the importer when
+//! the draw has finished, and the importer then sets the released fence from the CPU.
 //!
 //! When the frame cannot stay on the GPU, the importer records a [`Fallback`] on the ring. The
 //! capture side reads it with [`SharedRing::fallback`] and goes back to a CPU copy. The reasons are
-//! a compositor that is not on Direct3D 12, a compositor on another adapter than the display, an
-//! import that failed, and a system without shared fences. Elsewhere than Windows the crate builds,
+//! a compositor on neither Direct3D 12 nor Vulkan, a compositor on another adapter than the
+//! display, a Vulkan device without `VK_KHR_external_memory_win32` or timeline semaphores, an
+//! import that failed, and a
+//! system without shared fences. Elsewhere than Windows the crate builds,
 //! [`Duplication::open`] returns [`Fallback::Unsupported`], and an import reports the same.
 //!
 //! The system calls are in private modules with `unsafe` allowed; every item this crate exports
@@ -36,6 +41,9 @@ mod d3d12_ffi;
 #[cfg(windows)]
 #[allow(unsafe_code)]
 mod dxgi_ffi;
+#[cfg(all(windows, feature = "wgpu"))]
+#[allow(unsafe_code)]
+mod vulkan_ffi;
 
 #[cfg(test)]
 mod tests;

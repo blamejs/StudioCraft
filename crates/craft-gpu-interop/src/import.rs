@@ -145,7 +145,15 @@ struct Opened {
     ring: u64,
     binds: Vec<wgpu::BindGroup>,
     #[cfg(windows)]
-    raw: crate::d3d12_ffi::Imported,
+    raw: Raw,
+}
+
+/// A ring's textures and fences on a Direct3D 12 or a Vulkan device.
+#[cfg(windows)]
+enum Raw {
+    Dx12(crate::d3d12_ffi::Imported),
+    /// Boxed: it holds the device's function table.
+    Vulkan(Box<crate::vulkan_ffi::Imported>),
 }
 
 /// Shared frames of one source, drawn into the caller's texture. It opens a ring on first use
@@ -177,6 +185,15 @@ impl Importer {
         self.handoff.clear();
     }
 
+    /// Hand the textures whose draws have finished back to the capture side, without waiting.
+    /// A compositor calls it on each frame on which it does not call [`Importer::draw`]; only a
+    /// Vulkan import has anything to do.
+    pub fn poll(&self) {
+        if let Some(opened) = &self.opened {
+            poll(opened);
+        }
+    }
+
     /// Draw the waiting frame and submit it on `queue`, without waiting for the GPU. `target` is
     /// called only once the frame is ready, with its width and height, and returns the view to
     /// draw into: a render attachment of that size in `format`. `None` skips the frame. A frame
@@ -190,7 +207,10 @@ impl Importer {
         format: wgpu::TextureFormat,
         target: impl FnOnce(u32, u32) -> Option<wgpu::TextureView>,
     ) -> Result<Drawn, Fallback> {
-        let Some(frame) = self.handoff.pending() else { return Ok(Drawn::Idle) };
+        let Some(frame) = self.handoff.pending() else {
+            self.poll();
+            return Ok(Drawn::Idle);
+        };
         let ring = std::sync::Arc::clone(frame.ring());
         if let Some(reason) = ring.fallback() {
             self.handoff.clear();
@@ -198,7 +218,7 @@ impl Importer {
         }
         if self.opened.as_ref().is_none_or(|o| o.ring != ring.id()) {
             self.opened = None;
-            match open(device, &ring, self.opaque.get_or_insert_with(|| Opaque::new(device))) {
+            match open(device, queue, &ring, self.opaque.get_or_insert_with(|| Opaque::new(device))) {
                 Ok(o) => self.opened = Some(o),
                 Err(reason) => {
                     ring.refuse(reason);
@@ -220,7 +240,9 @@ impl Importer {
             return Ok(Drawn::Idle);
         };
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("shared capture") });
+        acquire(opened, &mut encoder, frame.slot());
         opaque.draw(device, &mut encoder, bind, &target, format);
+        hand_back(opened, &mut encoder, frame.slot());
         queue.submit([encoder.finish()]);
         if let Err(reason) = release(opened, frame.ready()) {
             ring.refuse(reason);
@@ -231,21 +253,56 @@ impl Importer {
     }
 }
 
+/// Open `ring` on `device`: on Direct3D 12, else on Vulkan.
 #[cfg(windows)]
-fn open(device: &wgpu::Device, ring: &crate::ring::SharedRing, opaque: &Opaque) -> Result<Opened, Fallback> {
-    let raw = crate::d3d12_ffi::import(device, ring)?;
-    let binds = raw.textures.iter().map(|t| opaque.bind(device, &t.create_view(&wgpu::TextureViewDescriptor::default()))).collect();
+fn open(device: &wgpu::Device, queue: &wgpu::Queue, ring: &crate::ring::SharedRing, opaque: &Opaque) -> Result<Opened, Fallback> {
+    let raw = match crate::d3d12_ffi::import(device, ring) {
+        Err(Fallback::UnsupportedBackend) => Raw::Vulkan(Box::new(crate::vulkan_ffi::import(device, queue, ring)?)),
+        imported => Raw::Dx12(imported?),
+    };
+    let textures = match &raw {
+        Raw::Dx12(r) => &r.textures,
+        Raw::Vulkan(r) => &r.textures,
+    };
+    let binds = textures.iter().map(|t| opaque.bind(device, &t.create_view(&wgpu::TextureViewDescriptor::default()))).collect();
     Ok(Opened { ring: ring.id(), binds, raw })
 }
 
 #[cfg(not(windows))]
-fn open(_device: &wgpu::Device, _ring: &crate::ring::SharedRing, _opaque: &Opaque) -> Result<Opened, Fallback> {
+fn open(_device: &wgpu::Device, _queue: &wgpu::Queue, _ring: &crate::ring::SharedRing, _opaque: &Opaque) -> Result<Opened, Fallback> {
     Err(Fallback::Unsupported)
 }
 
+/// Record, before the draw that reads texture `slot`, that the texture passes to the compositor's
+/// queue. Only a Vulkan device records anything.
+#[cfg(windows)]
+fn acquire(opened: &Opened, encoder: &mut wgpu::CommandEncoder, slot: usize) {
+    if let Raw::Vulkan(r) = &opened.raw {
+        r.acquire(encoder, slot);
+    }
+}
+
+#[cfg(not(windows))]
+fn acquire(_opened: &Opened, _encoder: &mut wgpu::CommandEncoder, _slot: usize) {}
+
+/// Record, after the draw that read texture `slot`, that the texture passes back to the capture
+/// side. Only a Vulkan device records anything.
+#[cfg(windows)]
+fn hand_back(opened: &Opened, encoder: &mut wgpu::CommandEncoder, slot: usize) {
+    if let Raw::Vulkan(r) = &opened.raw {
+        r.hand_back(encoder, slot);
+    }
+}
+
+#[cfg(not(windows))]
+fn hand_back(_opened: &Opened, _encoder: &mut wgpu::CommandEncoder, _slot: usize) {}
+
 #[cfg(windows)]
 fn completed(opened: &Opened) -> u64 {
-    opened.raw.completed()
+    match &opened.raw {
+        Raw::Dx12(r) => r.completed(),
+        Raw::Vulkan(r) => r.completed(),
+    }
 }
 
 #[cfg(not(windows))]
@@ -254,8 +311,26 @@ fn completed(_opened: &Opened) -> u64 {
 }
 
 #[cfg(windows)]
+fn poll(opened: &Opened) {
+    if let Raw::Vulkan(r) = &opened.raw {
+        r.poll();
+    }
+}
+
+#[cfg(not(windows))]
+fn poll(_opened: &Opened) {}
+
+/// Hand the texture of the frame with ready value `value`, drawn or skipped, back to the capture
+/// side after the work already submitted to the compositor's queue.
+#[cfg(windows)]
 fn release(opened: &Opened, value: u64) -> Result<(), Fallback> {
-    opened.raw.release(value)
+    match &opened.raw {
+        Raw::Dx12(r) => r.release(value),
+        Raw::Vulkan(r) => {
+            r.release(value);
+            Ok(())
+        }
+    }
 }
 
 #[cfg(not(windows))]
