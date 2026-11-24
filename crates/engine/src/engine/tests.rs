@@ -626,6 +626,32 @@ fn a_session_marker_is_handed_to_the_app_with_a_checked_name() {
 }
 
 #[test]
+fn a_marker_rename_is_handed_to_the_app_with_a_checked_index_and_name() {
+    let mut e = engine();
+    let longest = "é".repeat(crate::engine::MAX_MARKER_NAME_CHARS);
+    let o = run(&mut e, "marker.rename", json!({"index": 3, "name": longest})).unwrap();
+    assert_eq!(o.runtime, Some(RuntimeAction::MarkerRename { index: 3, name: longest }));
+    assert!(!o.changed);
+    let too_long = "x".repeat(crate::engine::MAX_MARKER_NAME_CHARS + 1);
+    for bad in [
+        json!({"index": 1}),
+        json!({"name": "Goal"}),
+        json!({"index": 0, "name": "Goal"}),
+        json!({"index": -1, "name": "Goal"}),
+        json!({"index": 1.5, "name": "Goal"}),
+        json!({"index": "1", "name": "Goal"}),
+        json!({"index": 1, "name": ""}),
+        json!({"index": 1, "name": "   "}),
+        json!({"index": 1, "name": too_long}),
+        json!({"index": 1, "name": "a\nb"}),
+        json!({"index": 1, "name": null}),
+        json!({"index": 1, "name": "Goal", "extra": true}),
+    ] {
+        assert!(run(&mut e, "marker.rename", bad.clone()).is_err(), "{bad}");
+    }
+}
+
+#[test]
 fn pause_commands_are_handed_to_the_app_with_checked_values() {
     let mut e = engine();
     let rev = e.revision();
@@ -1637,6 +1663,7 @@ fn every_spec_is_reachable() {
             "transition.settings" => json!({"settings": {}}),
             "app_audio.route" => json!({"app": "player.exe", "routed": true}),
             "pause.extend" => json!({"seconds": 60}),
+            "marker.rename" => json!({"index": 1, "name": "x"}),
             _ => json!({}),
         };
         let c = Command::from_parts(s.id, &params).unwrap_or_else(|e| panic!("{e}"));

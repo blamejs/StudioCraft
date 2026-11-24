@@ -1514,7 +1514,8 @@ dependencies = [
 
 [[package]]
 name = "craft-audio-dsp"
-version = "0.1.0-alpha.2"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=40525262403fbdeb3c0a27e22eafbda8799247bb#40525262403fbdeb3c0a27e22eafbda8799247bb"
 
 [[package]]
 name = "craft-behavior"

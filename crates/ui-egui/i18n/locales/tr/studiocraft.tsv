@@ -340,7 +340,7 @@
 	the audio stream ended	ses akışı sona erdi
 	the audio stream failed	ses akışında hata oluştu
 	the camera capture could not start	kamera yakalama başlatılamadı
-	the camera is in use by another camera source	kamera başka bir kamera kaynağı tarafından kullanılıyor
+	the camera is already open in another format	kamera zaten başka bir biçimde açık
 	the camera is still closing	kamera hâlâ kapanıyor
 	the camera offers no format StudioCraft reads	kamera StudioCraft'ın okuyabildiği bir biçim sunmuyor
 	the camera sends frames that cannot be read	kamera okunamayan kareler gönderiyor
