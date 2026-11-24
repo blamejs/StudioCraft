@@ -70,7 +70,7 @@ pub struct AvatarPose {
     pub right_eye: Quat,
     /// One weight per expression of the model, in its order, overrides applied.
     pub expressions: Vec<f32>,
-    /// 0 (breathed out) to 1 (breathed in).
+    /// 0 (breathed out) to 1 (breathed in), scaled by the idle share like the other idle motions.
     pub breath: f32,
     /// The share of the tracked pose, 0 to 1; the rest is the idle pose.
     pub tracked: f32,
@@ -169,7 +169,7 @@ impl Animator {
         let p = &mut self.pose;
         p.tracked = k;
         p.state = self.presence.state();
-        p.breath = idle.breath;
+        p.breath = idle.breath * rest;
         let idle_head = Quat::from_yaw_pitch_roll(idle.yaw, idle.pitch, idle.roll);
         p.head = idle_head.nlerp(self.last.rotation, k);
         p.lean = self.last.translation * k;

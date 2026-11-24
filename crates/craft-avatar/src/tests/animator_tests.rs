@@ -190,6 +190,22 @@ fn look_expressions_follow_the_gaze() {
 }
 
 #[test]
+fn breathing_shows_only_in_the_idle_share() {
+    let m = humanoid();
+    let s = AnimatorSettings { mirror: false, idle: IdleMotion { breathing: true, blinking: false, sway: false }, ..still() };
+    let mut a = Animator::new(&m, s, 1).unwrap();
+    run(&mut a, 0.0, 1.0, |t| Some(face(t, 0.0)));
+    assert_eq!(a.pose().tracked, 1.0);
+    // Halfway through a breath the idle breath is fully in.
+    assert_eq!(a.step(Some(&face(BREATH_SECONDS / 2.0, 0.0)), BREATH_SECONDS / 2.0).breath, 0.0);
+    a.step(Some(&TrackFrame { time: 3.0, ..TrackFrame::default() }), 3.0);
+    let t = BREATH_SECONDS * 2.5;
+    let p = a.step(None, t);
+    assert_eq!(p.tracked, 0.0);
+    assert!(close(p.breath, 1.0, 1e-6), "{}", p.breath);
+}
+
+#[test]
 fn a_saturated_gaze_fades_with_the_tracked_share() {
     let looking_left = |t: f64| {
         let mut f = face(t, 0.0);
