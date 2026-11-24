@@ -158,7 +158,7 @@ The camera source behaves as follows:
 | A camera is plugged in or out while the Properties window is open | The lists update within about 3 seconds. |
 | A saved camera is not plugged in | The camera shows as "(not connected)". |
 | The camera is missing, in use by another program, unplugged, or sends nothing for 5 seconds | The Properties window reports it, and the source opens the camera again every 2 seconds. |
-| A second camera source shows the same camera | One camera shows in one camera source at a time. The second source reports that the camera is in use by another camera source. |
+| Several camera sources show the same camera | Every source shows the camera's pictures, and the camera is opened once. It stays in the format of the source that opened it first. A source that chose another format shows the picture in the format the camera is already open in, and its Properties window notes that the camera is already open in another format. The go-live check does not count that note as a problem. The camera closes when the last of these sources is removed. |
 | A camera is listed for the first time on macOS | The system asks for camera access. |
 
 [docs/architecture.md](architecture.md#camera-capture) describes how the capture thread opens,
@@ -331,6 +331,14 @@ own limit). When one output does not keep a marker, for example because 1,024 ma
 to be written to the take, the reply names the cause and the other output keeps it. `marker.list`
 lists the session's markers, and after the session ends it lists that session's markers until the
 next session starts ([`marker.add` and `marker.list`](control-protocol.md#markeradd-and-markerlist)).
+
+The `marker.rename` command renames one of the session's markers in the recording and the take of
+audio tracks, while they run and after they have ended. While an output runs, the new name goes
+into the file it writes at its end: the recording's timeline, and the take's session file, which
+repair after a crash writes with the new name too. After an output has ended, its timeline or
+session file is written again with the new name, through a temporary file and a rename. When one output cannot take the new name, for example because its file
+was changed in another app, the reply names the cause and the other output keeps the new name
+([`marker.rename`](control-protocol.md#markerrename)).
 
 ### Replay buffer
 

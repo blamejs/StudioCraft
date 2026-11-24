@@ -342,7 +342,7 @@
 	the audio stream ended	오디오 스트림이 끝났습니다
 	the audio stream failed	오디오 스트림에 오류가 발생했습니다
 	the camera capture could not start	카메라 캡처를 시작할 수 없습니다
-	the camera is in use by another camera source	카메라를 다른 카메라 소스가 사용하고 있습니다
+	the camera is already open in another format	카메라가 이미 다른 형식으로 열려 있습니다
 	the camera is still closing	카메라를 아직 닫는 중입니다
 	the camera offers no format StudioCraft reads	이 카메라에는 StudioCraft가 지원하는 영상 형식이 없습니다
 	the camera sends frames that cannot be read	카메라가 보내는 프레임을 읽을 수 없습니다

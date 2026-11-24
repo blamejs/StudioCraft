@@ -517,7 +517,8 @@ pub fn sources(ui: &mut Ui, studio: &Studio, st: &mut DockState, acts: &mut Vec<
         .show_items(&mut body, &source, &mut |_, icx| {
             let (it, src) = rows[icx.at];
             let error = studio.source_error(src.id).map(|e| crate::i18n::Msg::plain(e).shown());
-            source_row(it, src, error).cells(icx.cells()).state(icx.row.clone())
+            let notice = studio.source_notice(src.id).map(|n| crate::i18n::Msg::plain(n).shown());
+            source_row(it, src, error, notice).cells(icx.cells()).state(icx.row.clone())
         });
     if let Some(mut group) = group {
         heard_group(&mut group, &heard, st, acts);
@@ -630,8 +631,9 @@ pub(crate) fn source_icon(src: &SourceConfig) -> SourceIcon {
 /// A scene item's row in the Sources dock: the source's type icon and name, then the eye and lock
 /// toggles. A hidden item's name is muted. A source with an `error` (in the interface language)
 /// shows it in the row's tooltip: a window capture shows a warning icon in place of its type icon
-/// and reads "No window" at the end, and another source shows a warning icon at the end.
-fn source_row<'a>(it: &SceneItem, src: &SourceConfig, error: Option<String>) -> ListRow<'a> {
+/// and reads "No window" at the end, and another source shows a warning icon at the end. A source
+/// without an error shows its `notice`, if it has one, in the row's tooltip.
+fn source_row<'a>(it: &SceneItem, src: &SourceConfig, error: Option<String>, notice: Option<String>) -> ListRow<'a> {
     let eye = if it.visible { "Hide" } else { "Show" };
     let lock = if it.locked { "Unlock" } else { "Lock (it can't be moved in the preview)" };
     let mut row = ListRow::new(src.name.clone())
@@ -648,7 +650,10 @@ fn source_row<'a>(it: &SceneItem, src: &SourceConfig, error: Option<String>) -> 
             .trailing_named(tl!("No window").to_string(), error.clone())
             .tooltip(error),
         Some(error) => row.trailing_icon(IconSpec::svg(IconId::new("warning")), error.clone()).trailing_tone(Tone::Warn).tooltip(error),
-        None => row,
+        None => match notice {
+            Some(notice) => row.tooltip(notice),
+            None => row,
+        },
     }
 }
 
@@ -1288,7 +1293,7 @@ mod tests {
                 let source = keyed(&keys, |k| *k);
                 List::<usize>::new("rows".to_string()).show_items(ui, &source, &mut |_, icx| {
                     let (src, error) = &sources[icx.at];
-                    source_row(item, src, error.map(str::to_string)).state(icx.row.clone())
+                    source_row(item, src, error.map(str::to_string), None).state(icx.row.clone())
                 });
             });
             out.textures_delta.clear();

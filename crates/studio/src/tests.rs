@@ -381,6 +381,8 @@ fn recording_needs_the_graphics_device() {
     assert_eq!(e.to_string(), "neither a recording nor a take of audio tracks is running");
     let (v, _) = s.run("marker.list", &json!({})).unwrap();
     assert_eq!(v, json!({"running": false, "markers": []}));
+    let e = s.run("marker.rename", &json!({"index": 1, "name": "Goal"})).unwrap_err();
+    assert_eq!(e.to_string(), "there is no marker 1: the session holds no markers");
 }
 
 #[test]
@@ -2103,6 +2105,60 @@ mod audio_tracks {
             s.tick();
             std::thread::yield_now();
         }
+        drop(s);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_session_marker_is_renamed_in_the_take_while_it_runs_and_after_it_ended() {
+        let (mut s, dir) = studio("session-marker-rename", true);
+        s.test_streaming = true;
+        s.tick();
+        armed(&mut s);
+        s.run("marker.add", &json!({"name": "Goal"})).unwrap();
+        s.run("marker.add", &json!({"name": "Save"})).unwrap();
+        let (v, _) = s.run("marker.rename", &json!({"index": 1, "name": "Kickoff"})).unwrap();
+        assert_eq!((v["index"].clone(), v["name"].clone(), v["recording"].clone()), (json!(1), json!("Kickoff"), json!(null)));
+        assert!(v["audio_tracks"]["seconds"].as_f64().is_some(), "{v}");
+        let e = s.run("marker.rename", &json!({"index": 3, "name": "Late"})).unwrap_err().to_string();
+        assert_eq!(e, "there is no marker 3: the session holds markers 1 to 2");
+        let (v, _) = s.run("marker.rename", &json!({"index": 2, "name": "Save"})).unwrap();
+        assert!(v["audio_tracks"]["seconds"].as_f64().is_some(), "a running take keeps the name it has: {v}");
+        s.test_streaming = false;
+        s.tick();
+        let mut spins = 0u64;
+        while !s.audio_tracks.finishing.is_empty() {
+            spins += 1;
+            assert!(spins < 200_000_000, "the take never finished");
+            s.tick();
+            std::thread::yield_now();
+        }
+        let session = s.state_json()["audio_tracks"]["last_session"].as_str().map(std::path::PathBuf::from).unwrap();
+        let names = |p: &std::path::Path| {
+            let v: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(p).unwrap()).unwrap();
+            v["markers"].as_array().unwrap().iter().map(|m| m["name"].as_str().unwrap().to_string()).collect::<Vec<_>>()
+        };
+        assert_eq!(names(&session), ["Kickoff", "Save"], "the session the take wrote has the new name");
+        // After the take, the session file is written again with the new name.
+        let (v, _) = s.run("marker.rename", &json!({"index": 2, "name": "Final save"})).unwrap();
+        assert_eq!(v["name"], json!("Final save"));
+        assert_eq!(names(&session), ["Kickoff", "Final save"]);
+        let (list, _) = s.run("marker.list", &json!({})).unwrap();
+        let listed: Vec<&str> = list["markers"].as_array().unwrap().iter().map(|m| m["name"].as_str().unwrap()).collect();
+        assert_eq!(listed, ["Kickoff", "Final save"]);
+        // The marker was renamed in the audio editor: the take reports it, and the marker keeps
+        // its name.
+        let text = std::fs::read_to_string(&session).unwrap().replace("\"Final save\"", "\"Edited\"");
+        std::fs::write(&session, text).unwrap();
+        let e = s.run("marker.rename", &json!({"index": 2, "name": "Again"})).unwrap_err().to_string();
+        assert!(e.starts_with("the marker was not renamed (the audio tracks: the session file could not be written again"), "{e}");
+        let (list, _) = s.run("marker.list", &json!({})).unwrap();
+        assert_eq!(list["markers"][1]["name"], json!("Final save"), "a rename no output made keeps the old name");
+        // A rename to the name the marker has is checked against the file too.
+        let edited = std::fs::read(&session).unwrap();
+        let e = s.run("marker.rename", &json!({"index": 2, "name": "Final save"})).unwrap_err().to_string();
+        assert!(e.starts_with("the marker was not renamed (the audio tracks: the session file could not be written again"), "{e}");
+        assert_eq!(std::fs::read(&session).unwrap(), edited, "the edited file is left as it is");
         drop(s);
         let _ = std::fs::remove_dir_all(&dir);
     }

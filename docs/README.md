@@ -34,8 +34,6 @@ This page lists StudioCraft's documentation, grouped by what you want to do.
 
 Each shared crate in `crates/` has a README that describes it for use in other apps:
 
-- [craft-audio-dsp](../crates/craft-audio-dsp/README.md) holds audio effects, the loudness meter
-  and resampling.
 - [craft-ease](../crates/craft-ease/README.md) holds easing curves, keyed tracks, motion paths and
   springs.
 - [craft-flv](../crates/craft-flv/README.md) writes and reads FLV tags and AMF0 values.

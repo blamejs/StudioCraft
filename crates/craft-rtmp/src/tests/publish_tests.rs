@@ -776,13 +776,14 @@ fn reach_reports_a_closed_port_and_sends_nothing_to_an_open_one() {
 #[cfg(feature = "rtmps")]
 #[test]
 fn reach_completes_the_tls_handshake_without_rtmp_bytes() {
-    // The server reads for the RTMP handshake after the TLS one, and gets nothing.
-    let (url, root, server) = spawn_tls(|mut c| c.handshake().map(drop).map_err(|e| e.kind()));
+    // The server reads for the RTMP handshake after the TLS one, and gets no bytes: the client ends
+    // the session with close_notify (a read of 0 bytes), not a bare TCP close or a reset.
+    let (url, root, server) = spawn_tls(|mut c| c.s.read(&mut [0u8; 1]).map_err(|e| e.kind()));
     let addr: SocketAddr = url.trim_start_matches("rtmps://").trim_end_matches("/live").parse().unwrap();
     let mut r = crate::Reach::new("127.0.0.1", true);
     r.tls_roots = TlsRoots::Only(vec![root]);
     crate::reach(&r, addr).unwrap();
-    assert_eq!(server.join().unwrap(), Err(io::ErrorKind::UnexpectedEof));
+    assert_eq!(server.join().unwrap(), Ok(0));
     // A certificate the client does not trust keeps its kind.
     let (url, _root, server) = spawn_tls(|mut c| c.handshake().is_err());
     let addr: SocketAddr = url.trim_start_matches("rtmps://").trim_end_matches("/live").parse().unwrap();
