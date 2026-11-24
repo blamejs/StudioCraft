@@ -502,6 +502,14 @@
 	When a destination fails three tries in a row or gives up, StudioCraft checks its server's name, route and port once. With this on, that check also reads the service's list of ingest servers and status summary and connects to two of its other ingest servers, so those hosts see this computer's address. Check Connection in the Streaming window always contacts them.	When a destination fails three tries in a row or gives up, StudioCraft checks its server's name, route and port once. With this on, that check also reads the service's list of ingest servers and status summary and connects to two of its other ingest servers, so those hosts see this computer's address. Check Connection in the Streaming window always contacts them.
 	Check Stream Destination Connection	Check Stream Destination Connection
 	Change Connection Checks After a Failure	Change Connection Checks After a Failure
+	List a Service's Ingest Servers	List a Service's Ingest Servers
+	Ingest server	Ingest server
+	List Servers	List Servers
+	Reads the service's list of its ingest servers from the service's site, which sees this computer's address. It sends no stream key.	Reads the service's list of its ingest servers from the service's site, which sees this computer's address. It sends no stream key.
+	Choose a server	Choose a server
+	Typed server	Typed server
+	Reading the list of servers…	Reading the list of servers…
+	The list could not be read: {error}	The list could not be read: {error}
 	Type	Type
 	Type shortcuts such as Ctrl+1 or Shift+F5; separate several with commas.	Type shortcuts such as Ctrl+1 or Shift+F5; separate several with commas.
 	ultrafast	ultrafast
@@ -755,6 +763,7 @@ menu	Transform	Transform
 @msg	`{command}`: `held_name` goes with `key`: `held`	`{command}`: `held_name` goes with `key`: `held`
 @msg	`{command}`: `held_name` is 1 to {max} bytes	`{command}`: `held_name` is 1 to {max} bytes
 @msg	`{command}`: `service` is empty or one of {ids}, not `{service}`	`{command}`: `service` is empty or one of {ids}, not `{service}`
+@msg	`{command}`: `service` is a service that publishes a list of its ingest servers ({ids}), not `{service}`	`{command}`: `service` is a service that publishes a list of its ingest servers ({ids}), not `{service}`
 @msg	a profile holds at most {max} stream destinations	a profile holds at most {max} stream destinations
 @msg	there is no stream destination `{id}`	there is no stream destination `{id}`
 @msg	stop the stream destination `{id}` before removing it	stop the stream destination `{id}` before removing it

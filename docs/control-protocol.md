@@ -755,6 +755,17 @@ connects to two of its other ingest servers. It returns `{"changed", "check_serv
 that changes nothing does not save the profile. It is off by default. A missing `enabled`, or one
 that is not a boolean, is an error.
 
+`stream.ingest_servers` takes `{"service"}`, the id of a streaming service that publishes a list
+of its ingest servers, and starts fetching that list, as List Servers in the Streaming
+window does. It returns at once with `{"service", "state"}`. `state` is `loading` while the list is
+fetched, `ready` with `servers` once it was read, and `failed` with `error`, in English, when it
+could not be fetched or read. Each of `servers` is `{"name", "server"}`, with the address the
+service gives without the stream key, at most 128. The service's default server comes first and the
+others follow in the order of their priority. A list that was read is kept for the session, and a
+call then returns it without fetching it again; a list that could not be read is fetched again by
+the next call. A missing `service`, one that is not a string, and a service that publishes no list
+are errors. The call changes no destination.
+
 A destination that has been checked at its current server and service in this session has
 `diagnosis`. While the check runs it is
 `{"state": "running", "automatic"}`, and when it has finished it is `{"state": "done", "automatic",
