@@ -1398,11 +1398,19 @@ fn long_switcher_names_leave_the_readouts_whole_in_the_narrowest_window() {
     };
     let (fps, dropped) = (member(" fps  "), member("dropped "));
     assert!(bar.contains_rect(fps) && bar.contains_rect(dropped), "{fps:?} {dropped:?} in {bar:?}");
-    let drawn = status_switchers_drawn(&tree);
-    assert!(!drawn.is_empty(), "the switchers are drawn");
-    for (name, _, r) in &drawn {
-        let shown = r.intersect(bar);
-        assert!(!shown.intersects(fps) && !shown.intersects(dropped), "{name} at {r:?} covers {fps:?} or {dropped:?}");
+    // The switchers are collected wherever they are drawn, so one pushed out of the bar fails below.
+    let mut drawn: Vec<(String, egui::Rect)> = tree
+        .with_role(craft_ui::contract::Role::COMBO_BOX)
+        .into_iter()
+        .filter_map(|k| Some((tree.name_of(k)?.to_string(), tree.bounds_of(k)?)))
+        .filter(|(name, _)| ["Profile", "Collection", "Layout"].contains(&name.as_str()))
+        .collect();
+    drawn.sort_by(|a, b| a.1.left().total_cmp(&b.1.left()));
+    let names: Vec<&str> = drawn.iter().map(|(n, _)| n.as_str()).collect();
+    assert_eq!(names, ["Profile", "Collection", "Layout"], "{drawn:?}");
+    for (name, r) in &drawn {
+        assert!(bar.contains_rect(*r), "{name} at {r:?} is outside {bar:?}");
+        assert!(!r.intersects(fps) && !r.intersects(dropped), "{name} at {r:?} covers {fps:?} or {dropped:?}");
         assert!(r.width() < 300.0, "{name} is {} points wide", r.width());
     }
 }
