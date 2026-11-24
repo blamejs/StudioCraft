@@ -46,6 +46,9 @@ windows = { version = "0.62", features = [
     "Win32_System_Ole",
     "Win32_System_Variant",
 ] }
+# The `#[implement]` macro, which writes the callback that takes back released input samples, names
+# this crate in the code it writes.
+windows-core = "0.62"
 
 # 64-bit Linux: `libnvidia-encode.so.1` and `libcuda.so.1` for NVENC, and `libva.so.2` and
 # `libva-drm.so.2` for VA-API, are loaded at run time, so building needs no NVIDIA or libva
