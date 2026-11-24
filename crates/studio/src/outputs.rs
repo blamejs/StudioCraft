@@ -1838,6 +1838,7 @@ mod tests {
         assert_eq!(built_in_twin(("nvenc_av1".into(), Some(run("nvenc_av1")), None)).0, "nvenc_native_av1");
         assert_eq!(built_in_twin(("mf_h264".into(), Some(run("mf_h264")), None)).0, "mf_native_h264");
         assert_eq!(built_in_twin(("mf_hevc".into(), Some(run("mf_hevc")), None)).0, "mf_native_hevc");
+        assert_eq!(built_in_twin(("mf_av1".into(), Some(run("mf_av1")), None)).0, "mf_native_av1");
         assert_eq!(built_in_twin(("vt_h264".into(), Some(run("vt_h264")), None)).0, "vt_native_h264");
         assert_eq!(built_in_twin(("vt_hevc".into(), Some(run("vt_hevc")), None)).0, "vt_native_hevc");
         assert_eq!(built_in_twin(("vaapi_h264".into(), Some(run("vaapi_h264")), None)).0, "vaapi_native_h264");
