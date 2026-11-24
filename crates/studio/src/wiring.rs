@@ -65,6 +65,9 @@ pub(crate) struct Wiring {
     /// The gain-reduction handles of the audio filters in the mixer's inputs, by source and
     /// filter; replaced with the inputs.
     meters: HashMap<(SourceId, FilterId), FilterMeter>,
+    /// The sample frames the audio filters in the mixer's inputs delay each source by, in total;
+    /// replaced with the inputs. A source whose filters add no delay has no entry.
+    latencies: HashMap<SourceId, usize>,
     gains: HashMap<SourceId, (f32, bool)>,
     offsets: HashMap<SourceId, u32>,
     modes: HashMap<SourceId, MonitorMode>,
@@ -240,6 +243,7 @@ impl Wiring {
 
         let mut inputs = Vec::new();
         let mut meters = HashMap::new();
+        let mut latencies = HashMap::new();
         for (k, (s, audio)) in key.iter().zip(&audio_sources) {
             let mut filters = Vec::new();
             for (id, kind, settings) in &k.filters {
@@ -247,6 +251,10 @@ impl Wiring {
                     Ok(f) => {
                         if let Some(m) = f.meter() {
                             meters.insert((s.id, *id), m);
+                        }
+                        if f.latency_frames() > 0 {
+                            let total: &mut usize = latencies.entry(s.id).or_default();
+                            *total = total.saturating_add(f.latency_frames());
                         }
                         filters.push(f);
                     }
@@ -269,6 +277,7 @@ impl Wiring {
         }
         self.mix = Some(key);
         self.meters = meters;
+        self.latencies = latencies;
         self.gains = gains;
         self.offsets = offsets;
         self.modes = modes;
@@ -281,6 +290,17 @@ impl Wiring {
     /// that is not running, settings it refused) or the filter has no meter.
     pub(crate) fn filter_meter(&self, source: SourceId, filter: FilterId) -> Option<f32> {
         self.meters.get(&(source, filter)).map(FilterMeter::get)
+    }
+
+    /// The sample frames the audio filters the mixer runs on `source` delay its audio by, in
+    /// total: 0 for a source the mixer does not run or whose filters add no delay.
+    pub(crate) fn filter_latency(&self, source: SourceId) -> usize {
+        self.latencies.get(&source).copied().unwrap_or(0)
+    }
+
+    /// Each source whose running audio filters delay its audio, with that delay in sample frames.
+    pub(crate) fn filter_latencies(&self) -> impl Iterator<Item = (SourceId, usize)> + '_ {
+        self.latencies.iter().map(|(id, frames)| (*id, *frames))
     }
 }
 
@@ -445,6 +465,50 @@ mod tests {
         assert_eq!(wiring.filter_meter(mic, FilterId(901)), None);
         assert_eq!(wiring.filter_meter(mic, FilterId(904)), None);
         assert!(notices.is_empty(), "{} notices", notices.len());
+    }
+
+    /// A source's filter latency is the sum of the delays of the audio filters the mixer runs on
+    /// it: disabled filters, video filters and settings a filter refused add nothing.
+    #[test]
+    fn the_filter_latency_adds_up_the_running_audio_filters() {
+        use studiocraft_model::FilterConfig;
+        let registry = builtin_registry(&Arc::new(RwLock::new(String::new())), &Arc::new(CaptionBoard::new())).unwrap();
+        let mut sources = SourceSet::new(MasterClock::new());
+        let (mut wiring, mut levels, mut notices) = (Wiring::default(), HashMap::new(), Vec::new());
+        let mut c = default_collection("Test");
+        let mic = c.global_audio.first().copied().unwrap_or_else(|| panic!("the default collection has global audio"));
+        let filter = |n: u64, kind: &str, enabled: bool, settings: Settings| FilterConfig {
+            id: FilterId(900 + n),
+            kind: kind.into(),
+            kind_version: 1,
+            name: format!("{kind} {n}"),
+            enabled,
+            settings,
+        };
+        let limiter = registry.filter("limiter").and_then(|f| f.create(&Settings::new())).map(|f| f.latency_frames()).unwrap();
+        assert!(limiter > 0);
+        c.source_mut(mic).unwrap().filters = vec![
+            filter(1, "limiter", true, Settings::new()),
+            filter(2, "compressor", true, Settings::new()),
+            filter(3, "limiter", true, Settings::new().with("ceiling_db", -3.0)),
+            filter(4, "limiter", false, Settings::new()),
+            filter(5, "limiter", true, Settings::new().with("ceiling_db", "loud")),
+            filter(6, "crop_pad", true, Settings::new()),
+        ];
+        sources.sync(&c, &registry);
+        assert_eq!(wiring.filter_latency(mic), 0, "no inputs yet");
+        assert!(wiring.mixer_inputs(&c, &registry, &sources, &mut levels, &mut notices).is_some());
+        assert_eq!(wiring.filter_latency(mic), 2 * limiter, "two running limiters");
+        assert_eq!(notices.len(), 1, "the refused settings");
+        assert_eq!(wiring.filter_latency(SourceId(123_456)), 0, "another source");
+        assert!(wiring.mixer_inputs(&c, &registry, &sources, &mut levels, &mut notices).is_none(), "nothing changed");
+        assert_eq!(wiring.filter_latency(mic), 2 * limiter, "unchanged inputs keep their latency");
+        c.source_mut(mic).unwrap().filters[0].enabled = false;
+        assert!(wiring.mixer_inputs(&c, &registry, &sources, &mut levels, &mut notices).is_some());
+        assert_eq!(wiring.filter_latency(mic), limiter);
+        c.source_mut(mic).unwrap().filters.retain(|f| f.kind != "limiter" || !f.enabled);
+        assert!(wiring.mixer_inputs(&c, &registry, &sources, &mut levels, &mut notices).is_some());
+        assert_eq!(wiring.filter_latency(mic), 0, "no filter adds a delay");
     }
 
     /// A source's size follows its enabled crop and pad filters in order, and a disabled one or

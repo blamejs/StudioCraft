@@ -410,6 +410,16 @@ pub fn scope_size(canvas: (u32, u32), max_w: u32, max_h: u32) -> (u32, u32) {
     (even(w), even(h))
 }
 
+/// `frames` sample frames at the mixer's sample rate, in milliseconds rounded to 0.1 ms.
+pub fn latency_ms(frames: usize) -> f64 {
+    (frames as f64 * 1000.0 / f64::from(studiocraft_media::audio::SAMPLE_RATE) * 10.0).round() / 10.0
+}
+
+/// `{"frames", "ms"}`, a delay of `frames` sample frames as the state reports it.
+fn latency_json(frames: usize) -> Value {
+    json!({"frames": frames, "ms": latency_ms(frames)})
+}
+
 /// What `audio.loudness` reports: the readings of `reading`, each `null` while it is −∞ (silence,
 /// or too little of the program since the start or a reset), and the band of `target`.
 fn loudness_json(reading: &LoudnessReading, target: &LoudnessTarget) -> Value {
@@ -1159,6 +1169,13 @@ impl Studio {
         self.wiring.filter_meter(source, filter).map_or(Value::Null, |db| json!({"gain_reduction_db": (f64::from(db) * 100.0).round() / 100.0}))
     }
 
+    /// The sample frames, at the mixer's 48 kHz, that the audio filters the mixer runs on `source`
+    /// delay its audio by, in total: 0 for a source the mixer does not run or whose filters add no
+    /// delay.
+    pub fn filter_latency_frames(&self, source: SourceId) -> usize {
+        self.wiring.filter_latency(source)
+    }
+
     /// Whether the program is paused, since when, and the countdown.
     pub fn pause_json(&self) -> Value {
         let layers = self.pause_layers.as_ref();
@@ -1637,6 +1654,9 @@ impl Studio {
             o.insert("audio_tracks".into(), self.audio_tracks_json());
             o.insert("captions".into(), self.captions_json());
             o.insert("pause".into(), self.pause_json());
+            let latencies: serde_json::Map<String, Value> =
+                self.wiring.filter_latencies().map(|(id, frames)| (id.0.to_string(), latency_json(frames))).collect();
+            o.insert("filter_latency".into(), Value::Object(latencies));
             o.insert(
                 "stats".into(),
                 json!({

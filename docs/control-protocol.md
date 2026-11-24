@@ -334,6 +334,12 @@ plays the source on the monitoring device and leaves it out of recordings and st
 `document.inspect` reports `monitoring` with the profile's `device`, whether it is `playing`, and
 the device's `rate` and `channels` while it plays.
 
+`document.inspect` also reports `filter_latency`: for each source whose running audio filters
+delay its audio, keyed by the source's id, `{"frames", "ms"}`, the delay in sample frames at
+48 kHz and in milliseconds rounded to 0.1 ms. A source whose filters add no delay, and a source
+the mixer does not run, is not listed. Disabled filters and filters whose settings were refused
+are not counted. The limiter is the only built-in filter that delays its audio, by 248 frames.
+
 ### `source.mix_tracks`
 
 `source.mix_tracks` takes `{"source", "tracks"}` and assigns the source's audio to the mix tracks

@@ -167,7 +167,7 @@ compressor, limiter and a three-band equalizer.
 | Image mask | Uses a picture file as an alpha mask (from its brightness or its alpha) or blends it with the source (multiply, add or subtract). The picture is stretched over the source or centered at its own size, and the filter then applies a color and an opacity. |
 | Scroll | Moves a source's picture at a horizontal and a vertical speed in pixels per second. The picture repeats (Loop) or moves out once, in an area whose width and height can be limited. |
 | Sharpen | Makes edges crisper by a Sharpness from 0 to 1. |
-| Gain, noise gate, compressor, limiter and equalizer | Change the level and tone of a source's audio. The noise gate, compressor and limiter report how far they turn the audio down through [`filter.meter`](control-protocol.md#filtermeter). |
+| Gain, noise gate, compressor, limiter and equalizer | Change the level and tone of a source's audio. The noise gate, compressor and limiter report how far they turn the audio down through [`filter.meter`](control-protocol.md#filtermeter). The limiter delays the audio by 248 samples (5.2 ms) at 48 kHz; the other four do not delay it. |
 
 [MECHANICS.md](../MECHANICS.md#video) lists each filter's default values and limits.
 
@@ -204,6 +204,11 @@ A source's Properties window sets two more audio options:
 - **Sync offset** delays the source's audio by 0 to 5000 ms to line it up with its picture.
 - **Monitoring** is off, monitor only, or monitor and output. With monitor only, you hear the
   source, and recordings and streams leave it out.
+
+The window also shows the source's **Filter delay**: how long the audio filters the mixer runs on
+the source delay its audio, in milliseconds, with the number of samples at 48 kHz in its tooltip.
+Disabled filters and filters whose settings were refused are not counted. The MCP tool
+`source_audio` and `document.inspect` report the same delay.
 
 Monitored sources play on the device chosen in Settings › Audio. Monitoring works on Windows and
 macOS.
