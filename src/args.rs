@@ -6,6 +6,7 @@ use std::path::PathBuf;
 pub struct Args {
     pub config_dir: Option<PathBuf>,
     pub no_prefs: bool,
+    pub safe_mode: bool,
     pub control: Option<u16>,
     pub screenshot: Option<PathBuf>,
     pub self_test: Option<PathBuf>,
@@ -42,11 +43,16 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Action, String> {
             Some((n, v)) if n.starts_with("--") => (n.to_string(), Some(v.to_string())),
             _ => (arg.clone(), None),
         };
+        // A switch such as `--no-prefs` takes no value: `--no-prefs=false` is refused, not read as on.
+        if inline.is_some() && matches!(name.as_str(), "--version" | "--help" | "--no-prefs" | "--safe-mode") {
+            return Err(format!("{name} takes no value"));
+        }
         let mut next = |name: &str| value(name, inline.clone().or_else(|| it.next()));
         match name.as_str() {
             "--version" | "-V" => return Ok(Action::Version),
             "--help" | "-h" => return Ok(Action::Help),
             "--no-prefs" => a.no_prefs = true,
+            "--safe-mode" => a.safe_mode = true,
             "--config-dir" => {
                 let v = next("--config-dir")?;
                 once(&mut a.config_dir, "--config-dir", PathBuf::from(v))?;
@@ -90,6 +96,10 @@ mod tests {
         assert_eq!(a.control, Some(7070));
         assert_eq!(a.screenshot, Some(PathBuf::from("shot.png")));
         assert_eq!(a.config_dir, Some(PathBuf::from("cfg")));
+        assert!(!a.safe_mode);
+        let Ok(Action::Run(a)) = p(&["--safe-mode", "--control", "7070"]) else { panic!() };
+        assert!(a.safe_mode);
+        assert_eq!(a.control, Some(7070), "the port is kept for when Safe Mode is left");
     }
 
     #[test]
@@ -101,5 +111,8 @@ mod tests {
         assert!(p(&["--self-test", "a", "--self-test", "b"]).is_err());
         assert!(p(&["--no-prefs", "--config-dir", "x"]).is_err());
         assert!(p(&["--frobnicate"]).is_err());
+        assert!(p(&["--safe-mode=yes"]).is_err(), "the switch takes no value");
+        assert!(p(&["--no-prefs=false"]).is_err());
+        assert!(p(&["--version=2"]).is_err());
     }
 }

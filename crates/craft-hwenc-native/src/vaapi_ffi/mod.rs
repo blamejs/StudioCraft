@@ -8,6 +8,7 @@
 pub(crate) mod abi;
 #[cfg(test)]
 mod abi_tests;
+pub(crate) mod av1;
 #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
 mod session;
 
@@ -241,15 +242,16 @@ pub(crate) fn bitrate_bps(kbps: u32) -> u32 {
 }
 
 /// A tenth of a bit per pixel per frame: the variable bitrate quality mode runs at when the driver
-/// has no constant QP. It is at most the level 6.2 bitrate every profile the encoder writes takes:
-/// 800 Mbit/s for H.264 (Table A-1's MaxBR) and 240 Mbit/s for HEVC Main tier (Table A.9).
+/// has no constant QP. It is at most the bitrate of the highest level every profile the encoder
+/// writes takes: 800 Mbit/s for H.264 level 6.2 (Table A-1's MaxBR), 240 Mbit/s for HEVC level 6.2
+/// Main tier (Table A.9) and 160 Mbit/s for AV1 level 6.3 Main tier (Annex A.3).
 pub(crate) fn nominal_bitrate(p: &Params) -> u32 {
     let pixels = u64::from(p.width) * u64::from(p.height);
     let bps = pixels.saturating_mul(u64::from(p.fps.0)) / u64::from(p.fps.1.max(1)) / 10;
     let most: u64 = match p.codec {
         Codec::H264 => 800_000_000,
-        // AV1 never opens here (`vaapi::check` refuses it).
-        Codec::Hevc | Codec::Av1 => 240_000_000,
+        Codec::Hevc => 240_000_000,
+        Codec::Av1 => u64::from(av1::MAX_MAIN_BPS),
     };
     u32::try_from(bps.min(most)).unwrap_or(u32::MAX).max(1)
 }
@@ -350,9 +352,10 @@ pub(crate) fn hevc_level(width: u32, height: u32, fps: (u32, u32), bps: u32) -> 
     LEVELS.iter().find(|&&(_, mps, msr, br)| ps <= mps && sr <= msr && u64::from(bps) <= br * 1000).map_or(186, |&(level, ..)| level)
 }
 
-/// Whether a `width` × `height` stream at `fps` fits level 6.2, the highest level the encoder
-/// writes: Rec. ITU-T H.264 Table A-1's MaxFS and MaxMBPS (in macroblocks of the coded size), or
-/// Rec. ITU-T H.265 Table A.8's MaxLumaPs and MaxLumaSr.
+/// Whether a `width` × `height` stream at `fps` fits the highest level the encoder writes: Rec.
+/// ITU-T H.264 Table A-1's MaxFS and MaxMBPS at level 6.2 (in macroblocks of the coded size), Rec.
+/// ITU-T H.265 Table A.8's MaxLumaPs and MaxLumaSr at level 6.2, or AV1 Annex A.3's MaxPicSize,
+/// MaxHSize, MaxVSize and MaxDisplayRate at level 6.3.
 pub(crate) fn fits_a_level(codec: Codec, width: u32, height: u32, fps: (u32, u32)) -> bool {
     let per_second = |n: u64| n.saturating_mul(u64::from(fps.0)).div_ceil(u64::from(fps.1.max(1)));
     match codec {
@@ -365,7 +368,7 @@ pub(crate) fn fits_a_level(codec: Codec, width: u32, height: u32, fps: (u32, u32
             let samples = u64::from(width) * u64::from(height);
             samples <= 35_651_584 && per_second(samples) <= 4_278_190_080
         }
-        Codec::Av1 => false,
+        Codec::Av1 => av1::fits_a_level(width, height, fps),
     }
 }
 
@@ -420,7 +423,8 @@ pub(crate) fn segment_error(status: u32) -> Option<&'static str> {
 }
 
 /// The size a session's surfaces are made at: the picture rounded up to whole macroblocks for
-/// H.264, the picture itself for HEVC (whose size is a multiple of its smallest coding block).
+/// H.264, the picture itself for HEVC (whose size is a multiple of its smallest coding block) and
+/// AV1 (whose frame header gives the size).
 pub(crate) fn coded_size(codec: Codec, width: u32, height: u32) -> (u32, u32) {
     match codec {
         Codec::H264 => (width.div_ceil(16) * 16, height.div_ceil(16) * 16),
@@ -806,6 +810,9 @@ mod none {
             Err(OpenError::NoDevice(WHY.into()))
         }
         pub(crate) fn full(&self) -> bool {
+            match *self {}
+        }
+        pub(crate) fn sequence_obu(&self) -> &[u8] {
             match *self {}
         }
         pub(crate) fn submit(&mut self, _: &[u8], _: &Picture, _: Tag) -> Result<(), String> {

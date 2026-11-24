@@ -17,6 +17,12 @@ carry the session token from the `STUDIOCRAFT_CONTROL_TOKEN` environment variabl
 started with (64 hexadecimal characters). The app does not start when `--control` is given without
 a valid token.
 
+In [Safe Mode](features.md#safe-mode), from `--safe-mode` or after a session that ended without
+closing, the app checks the token at start but does not listen on the port. It starts listening
+when the user leaves Safe Mode: Leave Safe Mode in the banner, or Start Normally when the window
+asks after an unclean shutdown. When the port can't be used then, the status
+bar shows the error and the app keeps running without the control channel.
+
 In a POSIX shell, make a token and start the app with it:
 
 ```sh
