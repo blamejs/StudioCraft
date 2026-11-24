@@ -101,6 +101,16 @@ fn a_missing_packet_is_waited_for_from_the_first_later_packet_to_arrive() {
 }
 
 #[test]
+fn next_wake_is_zero_once_a_packet_is_due() {
+    let mut jb = buffer();
+    jb.push(&pkt(1, 0), Duration::ZERO);
+    assert_eq!(jb.next_wake(), Some(ms(60)));
+    // The buffer's clock passes the packet's time without a pop.
+    jb.push(&pkt(1, 0), ms(100));
+    assert_eq!(jb.next_wake(), Some(Duration::ZERO));
+}
+
+#[test]
 fn a_packet_that_fills_the_gap_in_time_is_released_in_order() {
     let mut jb = buffer();
     jb.push(&pkt(1, 0), Duration::ZERO);

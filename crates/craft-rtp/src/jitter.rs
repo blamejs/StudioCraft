@@ -366,7 +366,8 @@ impl JitterBuffer {
             Some(Slot::Full(h)) => h.arrival,
             _ => self.next_held_earliest()?.1,
         };
-        Some(arrival.saturating_add(self.delay))
+        let at = arrival.saturating_add(self.delay);
+        Some(if at <= self.now { Duration::ZERO } else { at })
     }
 
     /// Appends to `out` the sequence numbers, oldest first, that are missing between the oldest
