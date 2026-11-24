@@ -819,15 +819,23 @@ fn diagnosis(verdict: Verdict, automatic: bool) -> Diagnosis {
         status: None,
         reason: None,
         detail: String::new(),
+        handshake: None,
         evidence: vec![
-            Evidence { check: Check::DefaultRoute, target: String::new(), outcome: Outcome::Ok, detail: String::new() },
+            Evidence { check: Check::DefaultRoute, target: String::new(), outcome: Outcome::Ok, detail: String::new(), handshake: None },
             Evidence {
                 check: Check::Connect,
                 target: "192.0.2.1:1935".into(),
                 outcome: Outcome::Failed(Cause::TimedOut),
                 detail: "timed out".into(),
+                handshake: None,
             },
-            Evidence { check: Check::Connect443, target: "192.0.2.1:443".into(), outcome: Outcome::Unfinished, detail: String::new() },
+            Evidence {
+                check: Check::Connect443,
+                target: "192.0.2.1:443".into(),
+                outcome: Outcome::Unfinished,
+                detail: String::new(),
+                handshake: None,
+            },
         ],
         at: UNIX_EPOCH + Duration::from_millis(1_700_000_000_123),
         automatic,
@@ -889,16 +897,27 @@ fn a_certificate_verdict_names_the_reason_in_the_interface_language() {
             .map(outcome_text)
             .collect();
     assert_eq!(texts.len(), 6, "every outcome has its own text");
+    // What the port answered to the handshake is shown from its own template, which the window
+    // translates, and not from the English text the control channel gets.
     let handshake = Evidence {
         check: Check::Handshake,
         target: "192.0.2.1:1935".into(),
         outcome: Outcome::NotRtmp,
-        detail: "the server's first byte is 0x48, where an RTMP server sends its version, 0x03".into(),
+        detail: "English text".into(),
+        handshake: Some(Handshake::NotRtmp(0x48)),
     };
     assert_eq!(
         evidence_text(&handshake),
         "Stream server handshake with 192.0.2.1:1935: answers, but not as a stream server (the server's first byte is 0x48, where an RTMP server \
          sends its version, 0x03)"
+    );
+    let d =
+        Diagnosis { detail: "English text".into(), handshake: Some(Handshake::Closed { received: 7 }), ..diagnosis(Verdict::NotStreamServer, false) };
+    assert_eq!(
+        verdict_msg(&d).english(),
+        "ingest.example takes a connection on port 1935, but does not answer as a stream server: the server closed the connection after 7 of \
+         the 3073 bytes of its handshake. The server address or port may be wrong, the stream server behind it may not be working, or something \
+         on this network may be answering in its place"
     );
 }
 
@@ -908,7 +927,7 @@ fn every_check_message_has_an_english_row() {
     let rows: std::collections::HashSet<(&str, &str)> =
         en.lines().filter_map(|l| l.split('\t').collect::<Vec<_>>().get(..2).map(|c| (c[0], c[1]))).collect();
     let templates = studiocraft_studio::diagnose::templates();
-    assert_eq!(templates.len(), 19);
+    assert_eq!(templates.len(), 23);
     let missing: Vec<String> = templates.iter().filter(|t| !rows.contains(&("@msg", **t))).map(|t| format!("@msg\t{t}\t{t}")).collect();
     assert!(missing.is_empty(), "check messages with no @msg row:\n{}", missing.join("\n"));
 }

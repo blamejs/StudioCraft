@@ -774,7 +774,7 @@ system or the server reported, in English.
 | `rejected` | The server takes connections and does not fail the RTMP handshake, and the last failure was a refusal of `connect` or `publish`. |
 | `certificate_not_accepted` | The secure handshake refused the `rtmps://` server's certificate. |
 | `service_reports_problem` | The service's status summary reports a problem. |
-| `not_stream_server` | The server's port takes the connection (and the secure handshake for `rtmps://`), and no address that connected completed the RTMP handshake. `args.detail` says what the port did instead. |
+| `not_stream_server` | The server's port takes the connection (and the secure handshake for `rtmps://`), and every address that connected finished the RTMP handshake without completing it. `args.detail` says what the port did instead. |
 | `ingest_not_answering_other_does` | No address of the server connected or refused the connection, and another ingest server of the service connected. |
 | `port_not_answering_443_does` | The server's port timed out, and port 443 of the same addresses connected. |
 | `refused` | An address of the server refused the TCP connection. |

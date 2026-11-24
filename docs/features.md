@@ -514,10 +514,11 @@ steps are:
   for `rtmps://`, completes the secure handshake, which sends the server's host name. Over each
   connection that opens it runs the RTMP handshake: it sends C0 and C1, reads S0 and S1, sends C2
   and reads S2. It then closes the connection. It sends no `connect` or `publish` command, no stream
-  key and no part of the address after the host. A port that takes the connection and then answers
-  with something other than an RTMP handshake, closes the connection or sends nothing within 5 s is
-  reported as not answering as a stream server when no connected address completes the RTMP
-  handshake; one address that completes it gives another verdict.
+  key and no part of the address after the host. A port that takes the connection is reported as
+  not answering as a stream server when, at every address that connected, it answered the RTMP
+  handshake with other data, closed the connection or sent nothing within 5 s. One address that
+  completes the handshake gives another verdict, and so does a handshake still running when the
+  check reports.
 - When the port is not 443, it opens a TCP connection with a secure handshake on port 443 of those
   addresses, and sends no RTMP data there.
 - For a destination set up for a streaming service that publishes a list of its ingest servers and

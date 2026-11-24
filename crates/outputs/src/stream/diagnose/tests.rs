@@ -21,11 +21,14 @@ type LookupFn = dyn Fn(&str, u16) -> io::Result<Vec<SocketAddr>> + Send + Sync;
 type ReachFn = dyn Fn(&str, SocketAddr, bool) -> Result<(), craft_rtmp::Error> + Send + Sync;
 type FetchFn = dyn Fn(&str) -> Result<Vec<u8>, String> + Send + Sync;
 type AnswerFn = dyn Fn(&str, SocketAddr) -> craft_rtmp::Answer + Send + Sync;
+type RouteFn = dyn Fn(&[SocketAddr]) + Send + Sync;
 
 /// Probes that answer as a test sets them, and record every call.
 pub(crate) struct Fake {
     pub(crate) default_route: Route,
     pub(crate) route: Route,
+    /// Runs on the check's thread before the route to an address is looked up.
+    pub(crate) before_route: Box<RouteFn>,
     pub(crate) proxies: Vec<&'static str>,
     pub(crate) lookup: Box<LookupFn>,
     pub(crate) reach: Box<ReachFn>,
@@ -42,6 +45,7 @@ impl Fake {
         Fake {
             default_route: Route::Selected,
             route: Route::Selected,
+            before_route: Box::new(|_| {}),
             proxies: Vec::new(),
             lookup: Box::new(|_, port| Ok(vec![at(1, port)])),
             reach: Box::new(|_, _, _| Ok(())),
@@ -67,6 +71,7 @@ impl Probes for Fake {
             return self.default_route;
         }
         self.note(format!("route {addrs:?}"));
+        (self.before_route)(addrs);
         self.route
     }
 
@@ -399,6 +404,92 @@ fn a_connection_that_opened_is_reported_while_its_rtmp_handshake_runs() {
 }
 
 #[test]
+fn a_connection_that_opened_before_the_deadline_is_reported_when_the_check_is_late_to_read_it() {
+    let (started, wait_start) = mpsc::channel();
+    let (release, hold) = mpsc::channel::<()>();
+    let hold = Mutex::new(hold);
+    let (go_on, routes_wait) = mpsc::channel::<()>();
+    let routes_wait = Mutex::new(routes_wait);
+    let mut fake = Fake::new();
+    fake.lookup = Box::new(|_, port| Ok(vec![at(1, port), at(2, port)]));
+    // The check's thread is still taking the addresses when the first connection opens and the
+    // deadline passes.
+    fake.before_route = Box::new(move |addrs| {
+        if addrs == [at(2, 443)] {
+            let _ = lock(&routes_wait).recv();
+        }
+    });
+    fake.answer = Box::new(move |_, addr| {
+        if addr == at(1, 443) {
+            let _ = started.send(());
+        }
+        let _ = lock(&hold).recv();
+        craft_rtmp::Answer::NoAnswer { received: 0 }
+    });
+    let clock = TestClock::new();
+    let (checks, _fake) = checks_with(fake, Arc::clone(&clock));
+    checks.start(subject("rtmps://late.example/app")).unwrap();
+    wait_start.recv_timeout(GUARD).unwrap();
+    clock.advance(CHECK_TIME);
+    go_on.send(()).unwrap();
+    let d = done(&checks, "a");
+    let line = |check: Check| d.evidence.iter().find(|e| e.check == check && e.target == "192.0.2.1:443").map(|e| e.outcome);
+    assert_eq!(line(Check::SecureConnect), Some(Outcome::Ok), "{:?}", d.evidence);
+    assert_eq!(line(Check::Handshake), Some(Outcome::Unfinished), "{:?}", d.evidence);
+    drop(release);
+    until_checks(&checks, |c| (c.running() == 0).then_some(()));
+}
+
+#[test]
+fn a_connection_that_opened_after_the_deadline_is_not_reported_when_the_check_is_late_to_read_it() {
+    let (started, wait_start) = mpsc::channel();
+    let (release, hold) = mpsc::channel::<()>();
+    let hold = Mutex::new(hold);
+    let (connect, connect_wait) = mpsc::channel::<()>();
+    let connect_wait = Mutex::new(connect_wait);
+    let (go_on, routes_wait) = mpsc::channel::<()>();
+    let routes_wait = Mutex::new(routes_wait);
+    let (routing, wait_routing) = mpsc::channel();
+    let routing = Mutex::new(routing);
+    let mut fake = Fake::new();
+    fake.lookup = Box::new(|_, port| Ok(vec![at(1, port), at(2, port)]));
+    fake.before_route = Box::new(move |addrs| {
+        if addrs == [at(2, 443)] {
+            let _ = lock(&routing).send(());
+            let _ = lock(&routes_wait).recv();
+        }
+    });
+    // The first connection opens only once the deadline has passed.
+    fake.reach = Box::new(move |_, addr, _| {
+        if addr == at(1, 443) {
+            let _ = lock(&connect_wait).recv();
+        }
+        Ok(())
+    });
+    fake.answer = Box::new(move |_, addr| {
+        if addr == at(1, 443) {
+            let _ = started.send(());
+        }
+        let _ = lock(&hold).recv();
+        craft_rtmp::Answer::NoAnswer { received: 0 }
+    });
+    let clock = TestClock::new();
+    let (checks, _fake) = checks_with(fake, Arc::clone(&clock));
+    checks.start(subject("rtmps://late.example/app")).unwrap();
+    wait_routing.recv_timeout(GUARD).unwrap();
+    clock.advance(CHECK_TIME);
+    connect.send(()).unwrap();
+    wait_start.recv_timeout(GUARD).unwrap();
+    go_on.send(()).unwrap();
+    let d = done(&checks, "a");
+    let line = |check: Check| d.evidence.iter().find(|e| e.check == check && e.target == "192.0.2.1:443").map(|e| e.outcome);
+    assert_eq!(line(Check::SecureConnect), Some(Outcome::Unfinished), "{:?}", d.evidence);
+    assert_eq!(line(Check::Handshake), None, "{:?}", d.evidence);
+    drop(release);
+    until_checks(&checks, |c| (c.running() == 0).then_some(()));
+}
+
+#[test]
 fn one_check_runs_per_destination_and_at_most_four_in_all() {
     let (release, hold) = mpsc::channel::<()>();
     let (started, wait_start) = mpsc::channel();
@@ -664,7 +755,7 @@ fn each_verdict_follows_from_its_evidence() {
     r.status = Step::Done(Ok(problem.clone()));
     cases.push((r, None, Some("Svc"), Verdict::ServiceReportsProblem));
     let mut r = results(ok.clone());
-    r.answers = vec![(at(1, 1935), Step::Done(Spoke::NotRtmp("the first byte".into())))];
+    r.answers = vec![(at(1, 1935), Step::Done(Spoke::Other(Handshake::NotRtmp(b'H'))))];
     cases.push((r, None, None, Verdict::NotStreamServer));
     let mut r = results(Some(failed(Cause::TimedOut)));
     r.others = vec![("b.example".into(), Step::Done(failed(Cause::TimedOut))), ("c.example".into(), Step::Done(Ok(())))];
@@ -731,10 +822,10 @@ fn each_verdict_follows_from_its_evidence() {
     // A port that does not answer as a stream server: a refusal of the stream before is not
     // reported as a refusal now, and the message names the port and what it answered.
     let mut r = results(Some(Ok(())));
-    let closed = Failure::new(Cause::ClosedDuringSetup, "the server closed the connection after 0 of the 3073 bytes of its handshake");
-    r.answers = vec![(at(1, 1935), Step::Done(Spoke::Failed(closed.clone())))];
+    r.answers = vec![(at(1, 1935), Step::Done(Spoke::Other(Handshake::Closed { received: 0 })))];
     let d = decide("h.example", 1935, false, None, Some(&rejected), &r);
     assert_eq!(d.verdict, Verdict::NotStreamServer, "{d:?}");
+    assert_eq!(d.handshake, Some(Handshake::Closed { received: 0 }), "the window translates what the port answered");
     assert_eq!(
         d.english(),
         "h.example takes a connection on port 1935, but does not answer as a stream server: the server closed the connection after 0 of the \
@@ -744,6 +835,17 @@ fn each_verdict_follows_from_its_evidence() {
     let handshake: Vec<(Check, &str, Outcome)> =
         d.evidence.iter().filter(|e| e.check == Check::Handshake).map(|e| (e.check, e.target.as_str(), e.outcome)).collect();
     assert_eq!(handshake, [(Check::Handshake, "192.0.2.1:1935", Outcome::Failed(Cause::ClosedDuringSetup))]);
+    let lines: Vec<Option<Handshake>> = d.evidence.iter().filter(|e| e.check == Check::Handshake).map(|e| e.handshake.clone()).collect();
+    assert_eq!(lines, [Some(Handshake::Closed { received: 0 })]);
+    // A handshake still running at the deadline on another address that connected may yet
+    // complete, so the port is not one that does not answer as a stream server.
+    let mut running = results(Some(Ok(())));
+    running.port.push((at(2, 1935), Step::Done(Ok(()))));
+    running.answers = vec![(at(1, 1935), Step::Done(Spoke::Other(Handshake::NotRtmp(b'H')))), (at(2, 1935), Step::Unfinished)];
+    let d = decide("h.example", 1935, false, None, None, &running);
+    assert_eq!((d.verdict, d.handshake), (Verdict::Reachable, None));
+    running.answers.reverse();
+    assert_eq!(decide("h.example", 1935, false, None, None, &running).verdict, Verdict::Reachable);
     // One address that completes the handshake is enough.
     r.port.push((at(2, 1935), Step::Done(Ok(()))));
     r.answers.push((at(2, 1935), Step::Done(Spoke::Rtmp)));
@@ -760,7 +862,7 @@ fn each_verdict_follows_from_its_evidence() {
     r.lookup = Step::Done(Ok(addrs.clone()));
     r.routes = addrs.iter().map(|a| (*a, Route::Selected)).collect();
     r.port = addrs.iter().map(|a| (*a, Step::Done(Ok(())))).collect();
-    r.answers = addrs.iter().map(|a| (*a, Step::Done(Spoke::NotRtmp("the first byte".into())))).collect();
+    r.answers = addrs.iter().map(|a| (*a, Step::Done(Spoke::Other(Handshake::NotRtmp(b'H'))))).collect();
     r.port443 = addrs.iter().map(|a| (SocketAddr::new(a.ip(), 443), Step::Done(failed(Cause::TimedOut)))).collect();
     r.ingests = Step::Done(Ok(vec!["b.example".into(), "c.example".into()]));
     r.others = vec![("b.example".into(), Step::Done(failed(Cause::TimedOut))), ("c.example".into(), Step::Done(failed(Cause::TimedOut)))];
@@ -783,8 +885,11 @@ fn each_verdict_follows_from_its_evidence() {
         "A secure connection to h.example on port 1935 succeeds; the failure came after that, while the stream was set up or sent: the connection was lost"
     );
     let d = decide("h.example", 1935, true, None, None, &cases[7].0);
-    assert!(d.english().starts_with("h.example takes a secure connection on port 1935, but does not answer as a stream server: the first byte. "));
-    assert_eq!(templates().len(), 19, "three verdicts have a second message without TLS");
+    assert!(d.english().starts_with(
+        "h.example takes a secure connection on port 1935, but does not answer as a stream server: the server's first byte is 0x48, where an \
+         RTMP server sends its version, 0x03. "
+    ));
+    assert_eq!(templates().len(), 23, "three verdicts have a second message without TLS, and four handshake answers have one each");
 }
 
 #[test]

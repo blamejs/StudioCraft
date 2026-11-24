@@ -120,7 +120,7 @@ service's status summary reports a problem. Wait for the service to resolve it.
 
 **"{host} takes a connection on port {port}, but does not answer as a stream server: {detail}.
 ..."** The secure form says "takes a secure connection". Something on the server's port accepted
-the connection, and at no address that connected did it complete the RTMP handshake: it answered
+the connection, and at every address that connected it failed the RTMP handshake: it answered
 with other data (a web server, for example), closed the connection, or sent nothing within 5 s.
 {detail} says which. Check the host and the port in the server address against the service's
 instructions. If they are right, the service's stream server may not be working, or a proxy or
