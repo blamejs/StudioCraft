@@ -3764,19 +3764,64 @@ fn the_pause_button_pauses_and_the_banner_adds_a_minute_and_resumes() {
 }
 
 #[test]
-fn the_pause_menu_starts_a_countdown_and_opens_the_pause_screen_settings() {
+fn the_pause_arrow_opens_the_setup_popover_that_starts_one_pause() {
     let mut a = app();
     let ctx = crate::test_context();
-    for (_, cmd) in crate::output_bar::pause_menu().into_iter().filter(|(_, c)| c.id == "pause.start") {
-        a.perform(&ctx, &cmd).unwrap();
-        let want = cmd.params["countdown_s"].as_u64().unwrap_or(u64::MAX) * 1000;
-        match a.studio().paused() {
-            Some(Some(left)) => assert!(left <= want && left + 2_000 >= want, "{cmd:?}: {left}"),
-            Some(None) => assert_eq!(want, 0, "{cmd:?}"),
-            None => panic!("{cmd:?} did not pause"),
-        }
+    let size = egui::vec2(1280.0, 800.0);
+    for _ in 0..2 {
+        frame(&mut a, &ctx, vec![]);
     }
+    let Some((_, [l, t, r, b])) = bar_parts(&a, &ctx).into_iter().find(|(n, _)| n == "pause_menu") else { panic!("no Pause arrow") };
+    let arrow = egui::pos2((l + r) / 2.0, (t + b) / 2.0);
+    click_at(&mut a, &ctx, size, arrow);
+    assert!(a.pause_setup.is_some(), "the arrow opens the popover");
+    assert!(a.studio().paused().is_none(), "opening it does not pause");
+    // The focus starts on the 5 min chip; two left arrows pick 1 min, and Enter starts a one-minute
+    // pause. The profile keeps its own length and position.
+    if let Some(s) = a.pause_setup.as_mut() {
+        s.anchor = studiocraft_model::PauseAnchor::TopLeft;
+    }
+    frame(&mut a, &ctx, press(Key::ArrowLeft, Modifiers::NONE));
+    frame(&mut a, &ctx, press(Key::ArrowLeft, Modifiers::NONE));
+    assert_eq!(a.pause_setup.as_ref().map(|s| s.countdown_s), Some(60), "the arrows picked 1 min");
+    frame(&mut a, &ctx, press(Key::Enter, Modifiers::NONE));
+    match a.studio().paused() {
+        Some(Some(left)) => assert!(left <= 60_000 && left + 2_000 >= 60_000, "{left}"),
+        other => panic!("Enter did not start a one-minute pause: {other:?}"),
+    }
+    assert!(a.pause_setup.is_none(), "the popover closed");
+    assert_eq!(a.studio().profile().pause.countdown_s, 300, "the settings apply to that pause only");
+    assert_eq!(a.studio().profile().pause.anchor, studiocraft_model::PauseAnchor::BottomCenter);
+    // While paused, the popover starts from the running pause's choices.
+    frame(&mut a, &ctx, vec![]);
+    let Some((_, [l, t, r, b])) = bar_parts(&a, &ctx).into_iter().find(|(n, _)| n == "pause_menu") else { panic!("no Pause arrow while paused") };
+    let paused_arrow = egui::pos2((l + r) / 2.0, (t + b) / 2.0);
+    click_at(&mut a, &ctx, size, paused_arrow);
+    let from = a.pause_setup.as_ref().map(|s| (s.countdown_s, s.anchor));
+    assert_eq!(from, Some((60, studiocraft_model::PauseAnchor::TopLeft)), "the popover took the running pause's settings");
+    click_at(&mut a, &ctx, size, paused_arrow);
+    assert!(a.pause_setup.is_none());
     run(&mut a, &ctx, "pause.stop", json!({})).unwrap();
+    // Esc closes the popover and the Pause button takes the keyboard focus, so Alt+Down opens it again.
+    click_at(&mut a, &ctx, size, arrow);
+    assert!(a.pause_setup.is_some());
+    frame(&mut a, &ctx, press(Key::Escape, Modifiers::NONE));
+    frame(&mut a, &ctx, vec![]);
+    assert!(a.pause_setup.is_none(), "Esc closed the popover");
+    assert!(a.studio().paused().is_none(), "Esc did not pause");
+    assert!(ctx.memory(|m| m.focused()).is_some(), "the Pause button has the keyboard focus");
+    frame(&mut a, &ctx, press(Key::ArrowDown, Modifiers::ALT));
+    assert!(a.pause_setup.is_some(), "Alt+Down on the Pause button opens the popover");
+    // A file dialog answer meant for an earlier opening is dropped; one for this opening is taken.
+    let opening = a.pause_setup.as_ref().map_or(0, |s| s.opening);
+    a.pause_media_picked(opening - 1, std::path::Path::new("old.png"));
+    assert_eq!(a.pause_setup.as_ref().map(|s| s.media.as_str()), Some(""), "the earlier opening's answer was dropped");
+    a.pause_media_picked(opening, std::path::Path::new("new.png"));
+    assert_eq!(a.pause_setup.as_ref().map(|s| s.media.as_str()), Some("new.png"));
+    // A second click on the arrow closes it.
+    click_at(&mut a, &ctx, size, arrow);
+    assert!(a.pause_setup.is_none(), "a second click on the arrow closes the popover");
+    assert!(a.studio().paused().is_none());
     run(&mut a, &ctx, "pause.settings", json!({})).unwrap();
     let Some(w) = &a.settings else { panic!("Settings did not open") };
     assert_eq!(w.tab(), Tab::Stream);

@@ -1,4 +1,4 @@
-//! A segmented control: two to four joined segments in one track, exactly one of them selected.
+//! A segmented control: two or more joined segments in one track, exactly one of them selected.
 //!
 //! The track has a 1-point outline; the selected segment has the selection fill, a 1-point
 //! border and the full text color, and the others use the muted text color. Each segment is its
@@ -158,7 +158,12 @@ impl<'a> Segmented<'a> {
                     None
                 };
                 if let Some(to) = to {
-                    ui.memory_mut(|m| m.request_focus(self.id.with(to)));
+                    // The arrow key is the control's: the window's own arrow-key focus move for
+                    // this frame is dropped, so the focus stays on the segment the key selects.
+                    ui.memory_mut(|m| {
+                        m.request_focus(self.id.with(to));
+                        m.move_focus(egui::FocusDirection::None);
+                    });
                     if to != self.selected {
                         changed = Some(to);
                     }
@@ -256,6 +261,34 @@ mod tests {
         assert_eq!(ctx.memory(|m| m.focused()), Some(Id::unique("mode").with(1usize)), "focus follows the choice");
         assert_eq!(run(&ctx, key(Key::ArrowRight), 1).0.changed, None, "the last segment has no right neighbor");
         assert_eq!(run(&ctx, key(Key::ArrowLeft), 1).0.changed, Some(0));
+    }
+
+    #[test]
+    fn an_arrow_key_leaves_the_focus_on_the_segment_it_selects() {
+        let ctx = egui::Context::default();
+        let st = style();
+        let labels = ["1", "2", "3", "4"];
+        let frame = |events: Vec<Event>, selected: usize| {
+            let raw = RawInput { events, screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(400.0, 100.0))), ..RawInput::default() };
+            let mut changed = None;
+            let mut full = ctx.run_ui(raw, |ui| {
+                ui.horizontal(|ui| {
+                    changed = Segmented::new(Id::unique("four"), &labels, selected, &st).show(ui).changed;
+                    let _ = ui.button("After");
+                });
+            });
+            full.textures_delta.clear();
+            changed
+        };
+        frame(vec![], 1);
+        ctx.memory_mut(|m| m.request_focus(Id::unique("four").with(1usize)));
+        frame(vec![], 1);
+        let key = |k| vec![Event::Key { key: k, physical_key: Some(k), pressed: true, repeat: false, modifiers: Modifiers::NONE }];
+        assert_eq!(frame(key(Key::ArrowRight), 1), Some(2));
+        assert_eq!(ctx.memory(|m| m.focused()), Some(Id::unique("four").with(2usize)), "the focus did not move on past the choice");
+        assert_eq!(frame(key(Key::ArrowLeft), 2), Some(1));
+        assert_eq!(frame(key(Key::ArrowLeft), 1), Some(0), "the keys in a row walk one segment at a time");
+        assert_eq!(ctx.memory(|m| m.focused()), Some(Id::unique("four").with(0usize)));
     }
 
     #[test]

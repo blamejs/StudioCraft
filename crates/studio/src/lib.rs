@@ -1209,6 +1209,11 @@ impl Studio {
         self.pause.as_ref().map(|p| now.saturating_sub(p.since_ms))
     }
 
+    /// The running pause's settings: the profile's, with the ones `pause.start` gave it.
+    pub fn pause_settings(&self) -> Option<&studiocraft_model::PauseSettings> {
+        self.pause.as_ref().map(|p| &p.settings)
+    }
+
     /// Once per interface frame while the pause screen runs: the countdown's zero step, the text
     /// when its whole seconds change, a new canvas, a media error, and new placements once the
     /// media and the text show something. The threads of a pause that ended stop once the

@@ -628,8 +628,9 @@ fn every_label_chosen_at_run_time_has_an_english_row() {
     labels.extend(
         [studiocraft_model::FitMode::Fit, studiocraft_model::FitMode::Fill, studiocraft_model::FitMode::Stretch].map(crate::settings::fit_label),
     );
-    // The entries of the Pause button's menu.
-    labels.extend(crate::output_bar::pause_menu().into_iter().map(|(l, _)| l));
+    // The duration chips and the fits of the Pause setup popover.
+    labels.extend(crate::pause_setup::DURATION_LABELS);
+    labels.extend(crate::pause_setup::FITS.map(|(_, l)| l));
     // The Stream key cards of the Streaming window.
     labels.extend(crate::streaming::KeyChoice::ALL.map(crate::streaming::KeyChoice::label));
     labels.extend(crate::streaming::KeyChoice::ALL.map(crate::streaming::KeyChoice::description));

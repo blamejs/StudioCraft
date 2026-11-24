@@ -21,6 +21,7 @@ pub mod kit;
 mod logos;
 mod output_bar;
 mod pause_banner;
+mod pause_setup;
 pub mod placement;
 mod preview;
 mod scopes;
@@ -118,6 +119,9 @@ pub(crate) enum Act {
     },
     /// Open a public web page in the browser.
     OpenUrl(String),
+    /// Ask for the picture or video of the Pause setup popover in a file dialog; the number is the
+    /// popover's [`pause_setup::PauseSetup::opening`].
+    BrowsePauseMedia(u64),
 }
 
 impl Act {
@@ -136,6 +140,7 @@ pub(crate) enum Rename {
 enum Then {
     SourcePath { source: SourceId, key: String },
     Settings(Pick),
+    PauseSetupMedia(u64),
     ImportCollection,
     ExportCollection,
 }
@@ -319,6 +324,10 @@ pub struct StudioApp {
     output_bar: output_bar::Drawn,
     /// The paused banner above the program, and the resume announcement after it.
     pause_banner: pause_banner::State,
+    /// The Pause setup popover's choices while it is open.
+    pause_setup: Option<pause_setup::PauseSetup>,
+    /// How many times the Pause setup popover has opened.
+    pause_setup_openings: u64,
     /// Help › Check for Updates, the check at start and the update prompt.
     updates: updates_ui::Runtime,
     /// The interface language [`Self::install_fonts`] last built the fonts for; `None` until it
@@ -449,6 +458,8 @@ impl StudioApp {
             docks_body_width: None,
             output_bar: output_bar::Drawn::default(),
             pause_banner: pause_banner::State::default(),
+            pause_setup: None,
+            pause_setup_openings: 0,
             updates: updates_ui::Runtime::default(),
             fonts_for: None,
             host: Arc::clone(&host),
@@ -1892,6 +1903,24 @@ impl StudioApp {
                     self.notify(e.to_string(), true);
                 }
             }
+            Act::BrowsePauseMedia(opening) => {
+                let b = Browse {
+                    key: String::new(),
+                    mode: studiocraft_model::PathMode::OpenFile,
+                    filter_name: tl!("Pictures and videos").to_string(),
+                    extensions: studiocraft_studio::pause_media_extensions(self.studio.registry()),
+                };
+                self.browse(b, Then::PauseSetupMedia(opening));
+            }
+        }
+    }
+
+    /// The file dialog's answer for the opening `opening` of the Pause setup popover. The dialog
+    /// does not hold up the window, so that popover may have closed, or closed and opened again,
+    /// by the time it answers; then the answer is dropped.
+    fn pause_media_picked(&mut self, opening: u64, path: &std::path::Path) {
+        if let Some(s) = self.pause_setup.as_mut().filter(|s| s.opening == opening) {
+            s.media = path.to_string_lossy().into_owned();
         }
     }
 
@@ -1935,6 +1964,7 @@ impl StudioApp {
                         w.picked(pick, &path);
                     }
                 }
+                Then::PauseSetupMedia(opening) => self.pause_media_picked(opening, &path),
                 Then::ImportCollection => {
                     let _ = self.perform(ctx, &CommandRef::with_params("collection.import", json!({"path": path.to_string_lossy()})));
                 }
