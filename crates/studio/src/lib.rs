@@ -31,16 +31,14 @@ use studiocraft_engine::command::MAX_SOURCE_SIDE;
 use studiocraft_engine::host::SourceSet;
 use studiocraft_engine::mixer::{LoudnessReading, Mixer, MixerCmd};
 use studiocraft_engine::scheduler::Scheduler;
-use studiocraft_engine::{CanvasSize, Command, Engine, EngineError, RuntimeAction, SourceSize};
+use studiocraft_engine::{CanvasSize, Command, Engine, EngineError, PauseValues, RuntimeAction, SourceSize};
 use studiocraft_media::clock::{MasterClock, duration_of, tick_of};
 use studiocraft_media::mix::{BlockLevels, Levels};
 use studiocraft_media::queue::Fifo;
 use studiocraft_media::stats::{EncoderStats, RenderStats, Snapshot};
 use studiocraft_media::video::PooledFrame;
 use studiocraft_media::{FrameRate, Tick};
-use studiocraft_model::{
-    FilterId, FitMode, ItemId, LoudnessTarget, PauseAtZero, Profile, SceneCollection, SceneId, Settings, SourceId, Transform, VideoSettings,
-};
+use studiocraft_model::{FilterId, FitMode, ItemId, LoudnessTarget, Profile, SceneCollection, SceneId, Settings, SourceId, Transform, VideoSettings};
 use studiocraft_plugin::{PluginError, Registry};
 use studiocraft_render::device::{Recovery, RecoveryPolicy};
 use studiocraft_render::{CanvasViews, CaptureRequest, Compositor, Gpu, RenderShared, ThumbnailRequest, ThumbnailViews};
@@ -591,14 +589,14 @@ impl Studio {
                 RuntimeAction::CaptionsDownloadCancel => self.cancel_speech_model_download(),
                 RuntimeAction::RetestHardwareEncoders => self.retest_hardware_encoders()?,
                 RuntimeAction::FilterMeter { source, filter } => result = self.filter_meter_json(source, filter),
-                RuntimeAction::PauseStart { media, countdown_s, at_zero } => result = self.start_pause(media, countdown_s, at_zero)?,
+                RuntimeAction::PauseStart(values) => result = self.start_pause(values)?,
                 RuntimeAction::PauseStop => self.stop_pause()?,
                 RuntimeAction::PauseToggle => {
                     if self.pause.is_some() {
                         self.stop_pause()?;
                         result = self.pause_json();
                     } else {
-                        result = self.start_pause(None, None, None)?;
+                        result = self.start_pause(PauseValues::default())?;
                     }
                 }
                 RuntimeAction::PauseExtend { seconds } => result = self.extend_pause(seconds)?,
@@ -1057,39 +1055,54 @@ impl Studio {
         if let Some(on) = hold {
             // The program audio goes the rest of its way from where it is now, and ends its fade
             // when the picture ends its transition.
-            let level = self.hold_fade.map_or(1.0, |h| h.level(now));
-            let distance = if on { level } else { 1.0 - level };
-            let fade = if self.transition.is_some() { turned_fade_ms(ms, distance, 1.0 - q) } else { 0 };
-            self.hold_fade = Some(HoldFade { start: now, from: level, down: on, ms: fade });
-            self.mixer.send(MixerCmd::FadeMs(fade));
-            self.mixer.send(MixerCmd::Hold(on));
+            let running = self.transition.is_some();
+            self.hold_scene_audio(on, |distance| if running { turned_fade_ms(ms, distance, 1.0 - q) } else { 0 });
         }
     }
 
+    /// Fade the program mix out (`on`) or back in, from the level it has now. `fade` gives the
+    /// fade's length for the whole range from the share of the range still to go.
+    fn hold_scene_audio(&mut self, on: bool, fade: impl FnOnce(f64) -> u32) {
+        let now = self.clock.now();
+        let level = self.hold_fade.map_or(1.0, |h| h.level(now));
+        let distance = if on { level } else { 1.0 - level };
+        let fade = fade(distance);
+        self.hold_fade = Some(HoldFade { start: now, from: level, down: on, ms: fade });
+        self.mixer.send(MixerCmd::FadeMs(fade));
+        self.mixer.send(MixerCmd::Hold(on));
+    }
+
     /// Pause the program, or while paused apply the given values ([`Command::PauseStart`]).
-    fn start_pause(&mut self, media: Option<String>, countdown_s: Option<u32>, at_zero: Option<PauseAtZero>) -> Result<Value, StudioError> {
-        if let Some(m) = media.as_deref().filter(|m| !m.is_empty()) {
+    fn start_pause(&mut self, values: PauseValues) -> Result<Value, StudioError> {
+        if let Some(m) = values.media.as_deref().filter(|m| !m.is_empty()) {
             pause::media_kind(self.engine.registry(), m).map_err(|e| StudioError::Engine(EngineError::Invalid(e)))?;
         }
         let now_ms = self.now_ms();
         let canvas = self.canvas();
         if let Some(state) = &mut self.pause {
-            if let Some(s) = countdown_s {
+            if let Some(s) = values.countdown_s {
                 state.set_countdown(now_ms, s);
             }
-            if let Some(z) = at_zero {
-                state.settings.at_zero = z;
-            }
-            if let Some(m) = media {
-                state.settings.media = m;
-                if let Some(l) = &mut self.pause_layers {
-                    let mut problems = Vec::new();
-                    l.set_media(self.engine.registry(), self.clock, &state.settings.media, &mut problems);
-                    l.look.clone_from(&state.settings);
-                    for p in problems {
-                        self.notices.push(Notice::new(pause::MEDIA_NOTICE, vec![("error", p)], true));
-                    }
+            let held = state.settings.mute_scene;
+            values.apply_to(&mut state.settings);
+            let hold = state.settings.mute_scene;
+            if values.media.is_some()
+                && let Some(l) = &mut self.pause_layers
+            {
+                let mut problems = Vec::new();
+                l.set_media(self.engine.registry(), self.clock, &state.settings.media, &mut problems);
+                l.look.clone_from(&state.settings);
+                for p in problems {
+                    self.notices.push(Notice::new(pause::MEDIA_NOTICE, vec![("error", p)], true));
                 }
+            }
+            if hold != held {
+                // The program mix fades out or back in over the collection's transition length,
+                // as it does when a pause starts or ends.
+                let t = &self.engine.collection().transition;
+                let instant = self.engine.registry().transition(&t.kind).map_or(true, |p| p.instant());
+                let ms = if instant { 0 } else { t.duration_ms };
+                self.hold_scene_audio(hold, |distance| turned_fade_ms(ms, distance, 1.0));
             }
             self.pause_seen = None;
             self.tick_pause();
@@ -1097,14 +1110,9 @@ impl Studio {
             return Ok(self.pause_json());
         }
         let mut settings = self.profile.pause.clone().sanitized();
-        if let Some(m) = media {
-            settings.media = m;
-        }
-        if let Some(z) = at_zero {
-            settings.at_zero = z;
-        }
+        values.apply_to(&mut settings);
         let mut state = pause::PauseState::new(now_ms, settings);
-        if let Some(s) = countdown_s {
+        if let Some(s) = values.countdown_s {
             state.set_countdown(now_ms, s);
         }
         // The layers of a pause whose fade back still runs keep drawing; only what changed starts

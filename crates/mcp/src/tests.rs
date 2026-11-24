@@ -501,6 +501,24 @@ fn the_pause_tools_pause_and_resume_the_program() {
     assert!(error_text(&call(&mut s, "pause_start", json!({"countdown_s": 43_201}))).contains("43200"));
     assert!(error_text(&call(&mut s, "pause_start", json!({"at_zero": "later"}))).contains("at_zero"));
     assert!(error_text(&call(&mut s, "pause_start", json!({"media": "song.mp3"}))).contains("picture or video"));
+    // The look of the pause screen and the scene's audio can be given too, and each is checked.
+    for (key, bad, word) in [
+        ("text", json!("Back soon"), "{time}"),
+        ("zero_text", json!("x".repeat(201)), "text at zero"),
+        ("anchor", json!("middle"), "anchor"),
+        ("size_pct", json!(16), "size_pct"),
+        ("fit", json!("contain"), "fit"),
+        ("background", json!("red"), "background"),
+        ("mute_scene", json!("yes"), "boolean"),
+    ] {
+        let err = error_text(&call(&mut s, "pause_start", json!({key: bad})));
+        assert!(err.contains(word), "{key}: {err}");
+    }
+    let given = json!({
+        "text": "Live in {time}", "zero_text": "Now", "anchor": "top_right", "size_pct": 10, "fit": "stretch",
+        "background": "#000000", "mute_scene": false
+    });
+    assert_eq!(ok_json(&call(&mut s, "pause_start", given))["paused"], json!(true));
     assert_eq!(ok_json(&call(&mut s, "pause_stop", json!({}))), json!({"paused": false}));
     assert!(error_text(&call(&mut s, "pause_stop", json!({}))).contains("not paused"));
 }
