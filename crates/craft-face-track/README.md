@@ -37,7 +37,10 @@ The interpreter runs the float operators these models use: `CONV_2D`, `DEPTHWISE
 `MAX_POOL_2D`, `ADD`, `PAD`, `CONCATENATION`, `RESHAPE`, `RELU`, `RELU6`, `PRELU`, `LOGISTIC` and
 `DEQUANTIZE` of float16 weights. Other operators, quantized tensors and dilated convolutions are a
 load error. A model is also refused at load when one run would need more memory, multiply-adds or
-values written than fixed limits allow. Each tensor gets a slot in a `Workspace` sized at load, and
+values written than fixed limits allow, or when it lists more than 65,536 tensors, 16,384
+operators, 131,072 buffers, 256 operator codes, or 64 graph inputs or outputs. Each operator must
+have exactly one output and the number of inputs its kind takes; a `CONCATENATION` joins at most
+64 parts. Each tensor gets a slot in a `Workspace` sized at load, and
 a slot is reused once the tensors read from it are done, so a run does not allocate.
 
 ## Tracking

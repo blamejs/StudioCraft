@@ -8,12 +8,17 @@
 //!
 //! A model is refused at load when running it would take more than a fixed budget: memory (each
 //! tensor, the buffers of one run, one operator's working space, the weights), work (multiply-adds,
-//! values written) or kernel size. Every one is worked out from the static shapes with checked
-//! arithmetic, so a small hostile file can neither exhaust memory nor keep a run busy for minutes.
+//! values written, with loops over zero-size dimensions counted as steps) or kernel size. Every one
+//! is worked out from the static shapes with checked arithmetic, so a small hostile file can neither
+//! exhaust memory nor keep a run busy for minutes. The counts of tensors, operators, buffers,
+//! operator codes, graph inputs and outputs, and the inputs of each operator are bounded too, and
+//! checked before those lists are read.
 //!
 //! Every value a run computes lives in a [`Workspace`] whose buffers are sized at load:
 //! [`Model::workspace`] gives each tensor a slot, and a slot is reused once every operator that
 //! reads its tensor has run. [`Model::run_into`] then runs the model without allocating.
+
+use std::collections::BTreeSet;
 
 use crate::nn::{Conv, Depthwise, Linear};
 use crate::pool::Pool;
@@ -87,6 +92,22 @@ impl<'a> Fb<'a> {
         }
         Ok((v + 4, n))
     }
+    /// A vector field's length, refused above `max` (before anything is read from it).
+    fn len_at_most(&self, t: Table, id: usize, max: usize, what: &str) -> Res<usize> {
+        let n = self.vector(t, id)?.1;
+        if n > max {
+            return Err(format!("the model has too many {what}"));
+        }
+        Ok(n)
+    }
+    fn tables_at_most(&self, t: Table, id: usize, max: usize, what: &str) -> Res<Vec<Table>> {
+        self.len_at_most(t, id, max, what)?;
+        self.tables(t, id)
+    }
+    fn ints_at_most(&self, t: Table, id: usize, max: usize, what: &str) -> Res<Vec<i32>> {
+        self.len_at_most(t, id, max, what)?;
+        self.ints(t, id)
+    }
     fn tables(&self, t: Table, id: usize) -> Res<Vec<Table>> {
         let (at, n) = self.vector(t, id)?;
         (0..n).map(|i| self.deref(at + 4 * i).map(Table)).collect()
@@ -119,6 +140,21 @@ mod op {
     pub const PRELU: i32 = 54;
 }
 
+/// The fewest and most inputs operator `code` takes (optional inputs count, as -1), or `None`
+/// when the operator is not supported.
+fn arity(code: i32) -> Option<(usize, usize)> {
+    Some(match code {
+        op::ADD | op::PAD | op::PRELU => (2, 2),
+        op::CONCATENATION => (1, MAX_CONCAT_INPUTS),
+        // The bias is optional.
+        op::CONV_2D | op::DEPTHWISE_CONV_2D => (2, 3),
+        // The new shape may come as a second input.
+        op::RESHAPE => (1, 2),
+        op::DEQUANTIZE | op::LOGISTIC | op::MAX_POOL_2D | op::RELU | op::RELU6 => (1, 1),
+        _ => return None,
+    })
+}
+
 /// The most values a tensor may hold.
 const MAX_TENSOR: usize = 1 << 28;
 /// The widest convolution or pooling window side.
@@ -139,6 +175,18 @@ const MAX_META: usize = 1 << 24;
 /// The most constant values decoded and laid out at load (a weight shared by several tensors or
 /// operators counts once per use).
 const MAX_CONSTS: usize = 1 << 27;
+/// The most tensors a graph may have.
+const MAX_TENSORS: usize = 1 << 16;
+/// The most operators a graph may have.
+const MAX_OPERATORS: usize = 1 << 14;
+/// The most data buffers a model may list.
+const MAX_BUFFERS: usize = 1 << 17;
+/// The most operator codes a model may list.
+const MAX_CODES: usize = 256;
+/// The most inputs, and the most outputs, a graph may have.
+const MAX_GRAPH_IO: usize = 64;
+/// The most parts one `CONCATENATION` may join.
+const MAX_CONCAT_INPUTS: usize = 64;
 
 /// Tensor types (`TensorType`).
 const FLOAT32: u8 = 0;
@@ -197,8 +245,10 @@ enum Op {
     Add(Act),
     /// Constant padding (zeros), per dimension (before, after).
     Pad(Vec<[usize; 2]>),
+    /// `outer` rows, each the inputs' chunks (values from the axis on) in turn.
     Concat {
-        axis: usize,
+        outer: usize,
+        chunks: Vec<usize>,
         act: Act,
     },
     Reshape,
@@ -430,12 +480,10 @@ impl Model {
                 a.apply(y);
             }
             Op::Pad(p) => pad(x, xs, p, y),
-            Op::Concat { axis, act } => {
-                let outer: usize = ys.get(..*axis).ok_or("CONCATENATION: bad axis")?.iter().product();
+            Op::Concat { outer, chunks, act } => {
                 let mut at = 0;
-                for o in 0..outer {
-                    for &id in &s.inputs {
-                        let chunk: usize = self.shapes[id].get(*axis..).ok_or("CONCATENATION: bad axis")?.iter().product();
+                for o in 0..*outer {
+                    for (&id, &chunk) in s.inputs.iter().zip(chunks) {
                         let part = self.value(slots, id)?.get(o * chunk..(o + 1) * chunk).ok_or("CONCATENATION: bad input")?;
                         y.get_mut(at..at + chunk).ok_or("CONCATENATION: bad output")?.copy_from_slice(part);
                         at += chunk;
@@ -473,7 +521,7 @@ impl Model {
             let (xs, ys) = (self.shapes.get(x)?, self.shapes.get(s.output)?);
             let dim = |sh: &[usize], d: usize| sh.get(d).copied().unwrap_or(1) as u64;
             let (h, w, oh, ow) = (dim(xs, 1), dim(xs, 2), dim(ys, 1), dim(ys, 2));
-            let out = *self.sizes.get(s.output)? as u64;
+            let mut out = *self.sizes.get(s.output)? as u64;
             let macs = match &s.op {
                 Op::Pointwise(l, _) => h.checked_mul(w)?.checked_mul(l.inp as u64)?.checked_mul(l.out as u64)?,
                 Op::Conv(cv, ..) => {
@@ -488,9 +536,17 @@ impl Model {
                     c.kernel = c.kernel.max(ks);
                     oh.checked_mul(ow)?.checked_mul(d.c as u64)?.checked_mul(ks)?.checked_mul(ks)?
                 }
+                // Every window cell of every output pixel, counted once per pixel over zero
+                // channels.
                 Op::MaxPool { k, .. } => {
                     c.kernel = c.kernel.max(k[0].max(k[1]) as u64);
-                    out.checked_mul(k[0] as u64)?.checked_mul(k[1] as u64)?
+                    let channels = dim(ys, 3).max(1);
+                    oh.checked_mul(ow)?.checked_mul(channels)?.checked_mul(k[0] as u64)?.checked_mul(k[1] as u64)?
+                }
+                // One copy per part and outer row, counted also when it copies no values.
+                Op::Concat { outer, chunks, .. } => {
+                    out = out.checked_add((*outer as u64).checked_mul(chunks.len() as u64)?)?;
+                    0
                 }
                 _ => 0,
             };
@@ -520,11 +576,19 @@ struct Cost {
 fn read(bytes: &[u8]) -> Res<Model> {
     let fb = Fb(bytes);
     let root = fb.root()?;
-    let codes: Vec<i32> = fb.tables(root, 1)?.into_iter().map(|c| Ok(fb.int(c, 3, 0)?.max(fb.byte(c, 0, 0)? as i8 as i32))).collect::<Res<_>>()?;
-    let buffers = fb.tables(root, 4)?;
-    let graphs = fb.tables(root, 2)?;
-    let g = *graphs.first().ok_or("the model has no graph")?;
-    let tensors = fb.tables(g, 0)?;
+    let codes: Vec<i32> = fb
+        .tables_at_most(root, 1, MAX_CODES, "operator codes")?
+        .into_iter()
+        .map(|c| Ok(fb.int(c, 3, 0)?.max(fb.byte(c, 0, 0)? as i8 as i32)))
+        .collect::<Res<_>>()?;
+    let buffers = fb.tables_at_most(root, 4, MAX_BUFFERS, "buffers")?;
+    // Only the first graph runs.
+    let (graphs, n_graphs) = fb.vector(root, 2)?;
+    if n_graphs == 0 {
+        return Err("the model has no graph".into());
+    }
+    let g = Table(fb.deref(graphs)?);
+    let tensors = fb.tables_at_most(g, 0, MAX_TENSORS, "tensors")?;
     let n = tensors.len();
     let mut shapes = Vec::with_capacity(n);
     let mut sizes = Vec::with_capacity(n);
@@ -594,15 +658,22 @@ fn read(bytes: &[u8]) -> Res<Model> {
         consts.set(consts.get().checked_add(values).filter(|&c| c <= MAX_CONSTS).ok_or("the model's weights are too large")?);
         Ok(())
     };
-    let inputs = fb.ints(g, 1)?.into_iter().map(|i| index(i, n)).collect::<Res<Vec<_>>>()?;
-    let outputs = fb.ints(g, 2)?.into_iter().map(|i| index(i, n)).collect::<Res<Vec<_>>>()?;
+    let inputs = fb.ints_at_most(g, 1, MAX_GRAPH_IO, "graph inputs")?.into_iter().map(|i| index(i, n)).collect::<Res<Vec<_>>>()?;
+    let outputs = fb.ints_at_most(g, 2, MAX_GRAPH_IO, "graph outputs")?.into_iter().map(|i| index(i, n)).collect::<Res<Vec<_>>>()?;
     let mut steps = vec![];
-    for o in fb.tables(g, 3)? {
+    for o in fb.tables_at_most(g, 3, MAX_OPERATORS, "operators")? {
         let code = *codes.get(fb.int(o, 0, 0)? as u32 as usize).ok_or("bad operator code")?;
+        let outs = fb.ints_at_most(o, 2, 1, "outputs of one operator")?;
+        let output = index(*outs.first().ok_or("an operator has no output")?, n)?;
+        // Each operator takes a fixed range of inputs, counted before they are read.
+        let (lo, hi) = arity(code).ok_or_else(|| format!("operator {code} is not supported"))?;
+        let count = fb.vector(o, 1)?.1;
+        if count < lo || count > hi {
+            let takes = if lo == hi { format!("{lo}") } else { format!("{lo} to {hi}") };
+            return Err(format!("{}: operator {code} takes {takes} inputs, not {count}", names[output]));
+        }
         // Optional inputs are -1.
         let ins: Vec<Option<usize>> = fb.ints(o, 1)?.into_iter().map(|i| if i < 0 { Ok(None) } else { index(i, n).map(Some) }).collect::<Res<_>>()?;
-        let outs = fb.ints(o, 2)?;
-        let output = index(*outs.first().ok_or("an operator has no output")?, n)?;
         // Float16 weights: fold their DEQUANTIZE.
         if code == op::DEQUANTIZE
             && let Some(i) = ins.first().copied().flatten()
@@ -766,7 +837,9 @@ fn read(bytes: &[u8]) -> Res<Model> {
                 if out_shape.get(axis) != Some(&along) {
                     return Err(format!("{}: the parts disagree with the output shape", names[output]));
                 }
-                Op::Concat { axis, act: Act::from(opt_byte(1, 0)?)? }
+                let outer = out_shape[..axis].iter().product();
+                let chunks = runtime.iter().map(|&id| shapes[id][axis..].iter().product()).collect();
+                Op::Concat { outer, chunks, act: Act::from(opt_byte(1, 0)?)? }
             }
             op::RESHAPE => {
                 same_size(0)?;
@@ -826,27 +899,35 @@ fn plan(steps: &[Step], inputs: &[usize], outputs: &[usize], sizes: &[usize], co
             last_use[i] = Some(k);
         }
     }
+    let mut is_output = vec![false; n];
+    for &o in outputs {
+        is_output[o] = true;
+    }
     let mut slot: Vec<Option<usize>> = vec![None; n];
     let mut len: Vec<usize> = vec![];
-    let mut free: Vec<usize> = vec![];
-    let take = |len: &mut Vec<usize>, free: &mut Vec<usize>, need: usize| -> usize {
-        let fit = free.iter().enumerate().filter(|(_, s)| len[**s] >= need).min_by_key(|(_, s)| len[**s]).map(|(k, _)| k);
-        let pick = fit.or_else(|| free.iter().enumerate().max_by_key(|(_, s)| len[**s]).map(|(k, _)| k));
+    // Free slots ordered by (size, slot), and whether each slot is free.
+    let mut free: BTreeSet<(usize, usize)> = BTreeSet::new();
+    let mut is_free: Vec<bool> = vec![];
+    let take = |len: &mut Vec<usize>, free: &mut BTreeSet<(usize, usize)>, is_free: &mut Vec<bool>, need: usize| -> usize {
+        let pick = free.range((need, 0)..).next().or_else(|| free.last()).copied();
         match pick {
-            Some(k) => {
-                let s = free.swap_remove(k);
+            Some(e) => {
+                free.remove(&e);
+                let s = e.1;
+                is_free[s] = false;
                 len[s] = len[s].max(need);
                 s
             }
             None => {
                 len.push(need);
+                is_free.push(false);
                 len.len() - 1
             }
         }
     };
     for &i in inputs {
         if slot[i].is_none() {
-            slot[i] = Some(take(&mut len, &mut free, sizes[i]));
+            slot[i] = Some(take(&mut len, &mut free, &mut is_free, sizes[i]));
         }
     }
     for (k, s) in steps.iter().enumerate() {
@@ -858,14 +939,15 @@ fn plan(steps: &[Step], inputs: &[usize], outputs: &[usize], sizes: &[usize], co
         if slot[s.output].is_some() || consts[s.output].is_some() {
             return Err("an operator writes a tensor that already has a value".into());
         }
-        slot[s.output] = Some(take(&mut len, &mut free, sizes[s.output]));
+        slot[s.output] = Some(take(&mut len, &mut free, &mut is_free, sizes[s.output]));
         for &i in &s.inputs {
             if last_use[i] == Some(k)
-                && !outputs.contains(&i)
+                && !is_output[i]
                 && let Some(si) = slot[i]
-                && !free.contains(&si)
+                && !is_free[si]
             {
-                free.push(si);
+                is_free[si] = true;
+                free.insert((len[si], si));
             }
         }
     }

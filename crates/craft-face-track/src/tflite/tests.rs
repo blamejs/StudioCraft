@@ -478,6 +478,134 @@ fn shared_weights_count_once_per_use() {
     refused(&m, "weights are too large");
 }
 
+/// A tiny float tensor.
+fn tiny() -> T {
+    (vec![1, 1], FLOAT32, None)
+}
+
+#[test]
+fn tensor_counts_are_bounded() {
+    let m = model(vec![], (0..=MAX_TENSORS).map(|_| tiny()).collect(), vec![], vec![], vec![]);
+    refused(&m, "too many tensors");
+}
+
+#[test]
+fn operator_counts_are_bounded() {
+    // A chain of RELUs over one value each: every step is cheap, but there are too many.
+    let n = MAX_OPERATORS as i32 + 1;
+    let m = model(vec![], (0..=n).map(|_| tiny()).collect(), (0..n).map(|i| (op::RELU, vec![i], vec![i + 1], vec![])).collect(), vec![0], vec![n]);
+    refused(&m, "too many operators");
+}
+
+#[test]
+fn operator_code_lists_are_bounded() {
+    let n = MAX_CODES as i32 + 1;
+    let m = model(vec![], vec![tiny(), tiny()], (0..n).map(|c| (1000 + c, vec![0], vec![1], vec![])).collect(), vec![0], vec![1]);
+    refused(&m, "too many operator codes");
+}
+
+#[test]
+fn buffer_counts_are_bounded() {
+    let m = model(vec![vec![]; MAX_BUFFERS], vec![tiny()], vec![], vec![0], vec![0]);
+    refused(&m, "too many buffers");
+}
+
+#[test]
+fn graph_inputs_and_outputs_are_bounded() {
+    let n = MAX_GRAPH_IO as i32 + 1;
+    let ins = model(vec![], (0..n).map(|_| tiny()).collect(), vec![], (0..n).collect(), vec![0]);
+    refused(&ins, "too many graph inputs");
+    let outs = model(vec![], (0..n).map(|_| tiny()).collect(), vec![], (0..n).collect::<Vec<_>>()[..1].to_vec(), (0..n).collect());
+    refused(&outs, "too many graph outputs");
+}
+
+#[test]
+fn operators_take_their_exact_input_and_output_counts() {
+    // Extra inputs would be ignored by the kernel but still planned and kept alive.
+    let extra = model(vec![], vec![tiny(), tiny()], vec![(op::RELU, vec![0; 2000], vec![1], vec![])], vec![0], vec![1]);
+    refused(&extra, "inputs, not 2000");
+    let add = model(vec![], vec![tiny(), tiny()], vec![(op::ADD, vec![0], vec![1], vec![])], vec![0], vec![1]);
+    refused(&add, "inputs, not 1");
+    let two_out = model(vec![], vec![tiny(), tiny(), tiny()], vec![(op::RELU, vec![0], vec![1, 2], vec![])], vec![0], vec![1]);
+    refused(&two_out, "too many outputs of one operator");
+    // Zero-size parts pass the shape check in any number.
+    let parts = (MAX_CONCAT_INPUTS + 1) as i32;
+    let concat = model(
+        vec![],
+        vec![(vec![1, 0], FLOAT32, None), (vec![1, 0], FLOAT32, None)],
+        vec![(op::CONCATENATION, vec![0; parts as usize], vec![1], vec![(0, V::Int(1))])],
+        vec![0],
+        vec![1],
+    );
+    refused(&concat, &format!("inputs, not {parts}"));
+}
+
+/// A pool over zero channels writes nothing but still walks every window.
+#[test]
+fn zero_channel_pools_count_their_window_steps() {
+    let s = 1 << 14;
+    let mut opts = window_opts(0, 1);
+    opts.extend([(3, V::Int(32)), (4, V::Int(32))]);
+    let m = model(
+        vec![],
+        vec![(vec![1, s, s, 0], FLOAT32, None), (vec![1, s, s, 0], FLOAT32, None)],
+        vec![(op::MAX_POOL_2D, vec![0], vec![1], opts)],
+        vec![0],
+        vec![1],
+    );
+    refused(&m, "too many multiply-adds");
+}
+
+/// Zero-size parts copy nothing, but the copy loop still runs once per part and outer row.
+#[test]
+fn zero_size_concatenations_count_their_copies() {
+    let rows = 1 << 27;
+    let m = model(
+        vec![],
+        vec![(vec![rows, 0], FLOAT32, None), (vec![rows, 0], FLOAT32, None)],
+        vec![(op::CONCATENATION, vec![0; MAX_CONCAT_INPUTS], vec![1], vec![(0, V::Int(1))])],
+        vec![0],
+        vec![1],
+    );
+    refused(&m, "too much work");
+}
+
+#[test]
+fn free_slots_are_reused_or_grown() {
+    // Inputs take slots 0 (8) and 1 (2); the RELUs take new slots 2 (8) and 3 (2). Slot 1 is
+    // freed after its last read and grown to 10 for the concatenation; slot 2 is then free and
+    // fits the next RELU; the last RELU finds only slot 3 free and grows it to 8.
+    let m = model(
+        vec![],
+        vec![
+            (vec![1, 8], FLOAT32, None),
+            (vec![1, 2], FLOAT32, None),
+            (vec![1, 8], FLOAT32, None),
+            (vec![1, 2], FLOAT32, None),
+            (vec![1, 10], FLOAT32, None),
+            (vec![1, 2], FLOAT32, None),
+            (vec![1, 8], FLOAT32, None),
+        ],
+        vec![
+            (op::RELU, vec![0], vec![2], vec![]),
+            (op::RELU, vec![1], vec![3], vec![]),
+            (op::CONCATENATION, vec![2, 3], vec![4], vec![(0, V::Int(1))]),
+            (op::RELU, vec![3], vec![5], vec![]),
+            (op::RELU, vec![0], vec![6], vec![]),
+        ],
+        vec![0, 1],
+        vec![4, 5, 6],
+    );
+    let m = Model::read(&m).unwrap();
+    assert_eq!(m.slot_len, vec![8, 10, 8, 8]);
+    let x: Vec<f32> = (0..8).map(|v| v as f32 - 4.0).collect();
+    let out = m.run(&[&x, &[-1.0, 1.0]]).unwrap();
+    let relu: Vec<f32> = x.iter().map(|v| v.max(0.0)).collect();
+    assert_eq!(out[0], [relu.as_slice(), &[0.0, 1.0]].concat());
+    assert_eq!(out[1], vec![0.0, 1.0]);
+    assert_eq!(out[2], x.iter().map(|v| v.max(0.0)).collect::<Vec<_>>());
+}
+
 #[test]
 fn half_floats_decode() {
     assert_eq!(half_to_f32(0x3c00), 1.0);
