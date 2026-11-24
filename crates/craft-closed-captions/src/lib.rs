@@ -208,7 +208,11 @@ impl RollUp {
             }
         }
         while self.credit >= self.cost {
-            let Some(p) = self.next_pair() else { break };
+            let Some(p) = self.next_pair() else {
+                // Nothing to send: whole slots are not saved for later text, only the fraction.
+                self.credit %= self.cost;
+                break;
+            };
             out.push(p);
             self.credit -= self.cost;
         }

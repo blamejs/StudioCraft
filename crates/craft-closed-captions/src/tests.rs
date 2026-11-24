@@ -131,6 +131,18 @@ fn a_frame_without_text_carries_nothing() {
 }
 
 #[test]
+fn text_after_a_silence_goes_out_at_the_field_1_rate() {
+    for (num, den, most) in [(30_000, 1001, 1), (60, 1, 1), (10, 1, 3)] {
+        let mut r = RollUp::new(num, den, Config { clear_after_ms: 0, ..Config::default() }).unwrap();
+        assert!(run(&mut r, 0, 31).is_empty());
+        r.push("hi");
+        let mut pairs = Vec::new();
+        r.frame(&mut pairs);
+        assert!(pairs.len() <= most, "{num}/{den}: {} pairs after the silence", pairs.len());
+    }
+}
+
+#[test]
 fn captions_are_erased_after_a_silence() {
     let mut r = roll(Config { clear_after_ms: 1000, ..Config::default() });
     r.push("gone soon");
