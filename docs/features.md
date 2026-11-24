@@ -416,6 +416,16 @@ A recording that ran while captions ran gets caption files beside it: `<recordin
 was recognized gets no caption files. A file of that name that already
 exists is not replaced. Start or Stop Live Captions can be given a shortcut in Settings › Hotkeys.
 
+### Face tracking model
+
+Face tracking uses the Face Landmarker model (3.6 MiB, Apache-2.0), which StudioCraft does not
+ship. `avatar.model_download` downloads it once into the same models folder, as
+`face-landmarker/face_landmarker.task`, and `avatar.model_install` copies in a file the user
+already has. Either way the file is checked against its pinned size and SHA-256 sum before it
+is used, and a file that fails the check is deleted. Both run in the background, can be stopped
+with `avatar.model_download_cancel`, and end with a status message. `avatar.models` lists the model
+and whether it is installed.
+
 ## Streaming
 
 StudioCraft streams to Real-Time Messaging Protocol (RTMP and RTMPS) servers at a constant

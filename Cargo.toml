@@ -38,6 +38,7 @@ craft-flv = { path = "crates/craft-flv" }
 craft-packet = { path = "crates/craft-packet" }
 craft-rtmp = { path = "crates/craft-rtmp" }
 craft-speech = { path = "crates/craft-speech" }
+craft-face-track = { path = "crates/craft-face-track" }
 
 # foundation
 thiserror = "2"
