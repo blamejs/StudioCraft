@@ -55,6 +55,7 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
+use arc_swap::ArcSwap;
 use craft_flv::{Body, MAX_COMPOSITION_TIME, MIN_COMPOSITION_TIME, Metadata};
 use craft_media::matroska::TrackSpec;
 use craft_packet::{
@@ -392,8 +393,8 @@ impl Counts {
     }
 }
 
-/// What a destination sends with. The server and the key are kept under one lock, so a
-/// connection never pairs the key of one setup with the server of another.
+/// What a destination sends with. A change replaces the whole setup at once, so a connection
+/// never pairs the key of one setup with the server of another.
 #[derive(Clone)]
 struct Setup {
     /// The server it sends to: the target's, or one given when it was started again.
@@ -409,8 +410,9 @@ struct Dest {
     target: Target,
     /// The stream's counts, shared by its destinations.
     counts: Arc<Counts>,
-    /// The server, stream key and service it sends with, read and changed together.
-    setup: Mutex<Setup>,
+    /// The server, stream key and service it sends with, read without a lock and replaced
+    /// together.
+    setup: ArcSwap<Setup>,
     status: Mutex<DestinationStatus>,
     /// How many times the status was set, with a signal for each.
     changes: Mutex<u64>,
@@ -455,7 +457,7 @@ struct Dest {
 impl Dest {
     fn new(target: Target, counts: Arc<Counts>, service: Option<&'static Service>) -> Dest {
         Dest {
-            setup: Mutex::new(Setup { server: target.server.clone(), key: target.key.clone(), service }),
+            setup: ArcSwap::from_pointee(Setup { server: target.server.clone(), key: target.key.clone(), service }),
             target,
             counts,
             status: Mutex::new(DestinationStatus::Stopped),
@@ -482,7 +484,7 @@ impl Dest {
 
     /// The target with its server now and `key` as its stream key.
     fn with_key(&self, key: &str) -> Target {
-        self.with(&lock(&self.setup).server, key)
+        self.with(&self.setup.load().server, key)
     }
 
     /// The target with `server` and `key`.
@@ -491,8 +493,8 @@ impl Dest {
     }
 
     /// Its setup now: the server, key and service from one change.
-    fn setup(&self) -> Setup {
-        lock(&self.setup).clone()
+    fn setup(&self) -> Arc<Setup> {
+        self.setup.load_full()
     }
 
     /// The target with its server and key now, both from one setup.
@@ -809,11 +811,13 @@ fn spawn(hub: &Arc<Hub>, d: &Arc<Dest>, key: Option<&str>, server: Option<(&str,
 
 /// Gives `d` `key` as its stream key when given, and `server` as its server and service when
 /// given. Says whether its server or key changed; the service is used only by its connection
-/// checks, so a connection does not close for it. The key, server and service change under one
-/// lock, so no reader sees some of them changed and not the others.
+/// checks, so a connection does not close for it. The key, server and service are published as
+/// one new setup, so no reader sees some of them changed and not the others. Only `spawn` calls
+/// it, with `thread` locked, so no other change comes between the read and the publish.
 fn set_up(d: &Dest, key: Option<&str>, server: Option<(&str, Option<&'static Service>)>) -> bool {
+    let mut now = Setup::clone(&d.setup.load());
     let mut changed = false;
-    let mut now = lock(&d.setup);
+    let mut moved = false;
     if let Some(key) = key {
         changed |= now.key != key;
         now.key = key.to_string();
@@ -821,14 +825,20 @@ fn set_up(d: &Dest, key: Option<&str>, server: Option<(&str, Option<&'static Ser
     if let Some((server, service)) = server {
         if now.server != server {
             now.server = server.to_string();
-            // The addresses of the server it sent to before are not this one's.
-            lock(&d.addrs).clear();
-            d.fixed.store(false, Ordering::SeqCst);
-            changed = true;
+            moved = true;
         }
         now.service = service;
     }
-    changed
+    d.setup.store(Arc::new(now));
+    if moved {
+        // The addresses of the server it sent to before are not this one's. They are cleared
+        // after the new server is published, so a lookup of the old server that `connect` keeps
+        // either sees the new server and drops its addresses, or is cleared here.
+        let mut addrs = lock(&d.addrs);
+        addrs.clear();
+        d.fixed.store(false, Ordering::SeqCst);
+    }
+    changed | moved
 }
 
 /// Errors that a try again cannot fix: the address, the key or a setting is not valid, the
@@ -935,12 +945,12 @@ fn check_after(hub: &Hub, d: &Dest, f: &Failure) {
         wanted
     };
     let id = &d.target.id;
-    let Setup { server, service, .. } = d.setup();
+    let setup = d.setup();
     let subject = diagnose::Subject {
         profile: auto.profile.clone(),
         id: id.clone(),
-        server,
-        service,
+        server: setup.server.clone(),
+        service: setup.service,
         last: Some(f.clone()),
         service_hosts: auto.service_hosts,
         automatic: true,
@@ -1149,10 +1159,12 @@ fn connect(hub: &Hub, d: &Arc<Dest>) -> Result<Publisher, Missed> {
     let addrs = lookup(hub, d, c.endpoint.host(), c.endpoint.port())?;
     {
         // Kept only while the server is the one looked up: a server given during the lookup has
-        // its addresses cleared by `set_up`, and they stay clear until its own lookup.
-        let now = lock(&d.setup);
-        if now.server == setup.server {
-            lock(&d.addrs).clone_from(&addrs);
+        // its addresses cleared by `set_up`, and they stay clear until its own lookup. The server
+        // is read with the addresses locked, and `set_up` publishes a new one before it clears
+        // them with them locked, so a clearing is never undone here.
+        let mut kept = lock(&d.addrs);
+        if d.setup.load().server == setup.server {
+            kept.clone_from(&addrs);
             d.fixed.store(c.endpoint.host().parse::<std::net::IpAddr>().is_ok(), Ordering::SeqCst);
         }
     }

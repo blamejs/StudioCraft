@@ -694,7 +694,7 @@ fn a_destination_is_added_and_moved_to_another_server_while_the_stream_runs() {
     out.start_destination_as(&setup("b", "http://127.0.0.1/live", "")).unwrap();
     let dest = out.hub.find("b").unwrap();
     let now = dest.setup();
-    assert_eq!((now.server, now.key), (b.clone(), "kb".to_string()));
+    assert_eq!((now.server.as_str(), now.key.as_str()), (b.as_str(), "kb"));
     // Stopped, it starts again at its new server with its new key, while the other goes on.
     out.stop_destination("b").unwrap();
     until_closed(&seen_b);
