@@ -1363,6 +1363,31 @@ fn flips_mirror_the_selection_keep_its_fit_and_undo_one_at_a_time() {
 }
 
 #[test]
+fn selection_commands_start_their_own_undo_step_after_a_transform() {
+    let mut a = app();
+    let ctx = egui::Context::default();
+    run(&mut a, &ctx, "source.add", json!({"kind": "color", "name": "Back", "settings": {"width": 400, "height": 300}})).unwrap();
+    let item = a.studio().collection().scenes[0].items[0].id;
+    let source = a.studio().collection().scenes[0].items[0].source;
+    wait_shown(&a, source);
+    let t = |a: &StudioApp| a.studio().collection().scenes[0].items[0].transform;
+    let start = t(&a);
+    // An item.transform that nothing sealed is followed at once by each selection command.
+    for id in ["selection.flip_horizontal", "selection.rotate_cw"] {
+        let mut moved = start;
+        moved.position.x += 100.0;
+        run(&mut a, &ctx, "item.transform", json!({"item": item, "transform": moved})).unwrap();
+        assert_eq!(t(&a), moved);
+        run(&mut a, &ctx, id, json!({})).unwrap_or_else(|e| panic!("{e}"));
+        assert_ne!(t(&a), moved, "{id} changes the item");
+        run(&mut a, &ctx, "edit.undo", json!({})).unwrap();
+        assert_eq!(t(&a), moved, "one undo takes back {id} alone");
+        run(&mut a, &ctx, "edit.undo", json!({})).unwrap();
+        assert_eq!(t(&a), start);
+    }
+}
+
+#[test]
 fn adding_a_source_opens_its_properties() {
     let mut a = app();
     let ctx = egui::Context::default();

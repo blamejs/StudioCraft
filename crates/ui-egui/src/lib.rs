@@ -986,6 +986,7 @@ impl StudioApp {
         let canvas = self.studio.canvas();
         // The command refuses values out of range; a fit or a nudge stops at the limits instead.
         let t = f(t, native, canvas).sanitized();
+        self.studio.seal_history();
         let r = self.studio.run("item.transform", &json!({"item": item, "transform": t, "fit": fit})).map_err(|e| e.to_string())?;
         self.studio.seal_history();
         Ok(r.0)
@@ -996,6 +997,7 @@ impl StudioApp {
     fn selection_flip(&mut self, f: impl FnOnce(Transform) -> Transform) -> Result<Value, Msg> {
         let (item, _, t) = self.selection().ok_or_else(|| tmsg!("select a source first"))?;
         let fit = self.studio.collection().scene(self.studio.engine().edit_scene()).and_then(|s| s.item(item)).and_then(|it| it.fit);
+        self.studio.seal_history();
         let r = self.studio.run("item.transform", &json!({"item": item, "transform": f(t), "fit": fit})).map_err(|e| e.to_string())?;
         self.studio.seal_history();
         Ok(r.0)
