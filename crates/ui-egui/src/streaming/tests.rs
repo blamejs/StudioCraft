@@ -1049,6 +1049,38 @@ fn every_tile_is_off_when_the_profile_holds_its_most_destinations() {
     }
 }
 
+#[test]
+fn a_service_without_a_logo_it_can_show_has_its_badge_on_its_tile_row_and_details() {
+    let count = |texts: &[String], letter: &str| texts.iter().filter(|t| *t == letter).count();
+    // The add row: one service's logo fits a tile, two logos do not, and the other four services
+    // have none, so six tiles show a badge; the badge of the service named "X" stands over its name.
+    let w = Window::new(Shown::of(StreamSettings::default()), StreamingPanel::default());
+    let texts = w.texts();
+    for letter in ["Y", "F", "K", "L", "T"] {
+        assert_eq!(count(&texts, letter), 1, "{letter} in {texts:?}");
+    }
+    assert_eq!(count(&texts, "X"), 2, "{texts:?}");
+    assert_eq!(count(&texts, "C"), 0, "a custom server has the plain tile: {texts:?}");
+    // A destination for the "kick" preset shows the badge on its row and, with its details open,
+    // in their header, which links to the service's page about streaming.
+    let kick = preset("kick");
+    let d = Destination { id: "main".into(), service: "kick".into(), ..Destination::default() };
+    let shown = |d: &Destination| Shown::of(StreamSettings { destinations: vec![d.clone()], ..StreamSettings::default() });
+    let w = Window::new(shown(&d), StreamingPanel::default());
+    assert_eq!(count(&w.texts(), "K"), 2, "the add tile and the row: {:?}", w.texts());
+    let mut w = Window::new(shown(&d), StreamingPanel { editing: Some(Edit::of(&d)), ..StreamingPanel::default() });
+    assert_eq!(count(&w.texts(), "K"), 3, "the add tile, the row and the details: {:?}", w.texts());
+    let hint = craft_i18n::fmt(tl!("Where {service} shows your server and key"), &[("service", kick.name)]);
+    let Some(link) = w.f.by_label(&hint) else { panic!("no link named {hint}: {:?}", w.texts()) };
+    assert!(link.rect.width() >= HEADER_TILE && link.rect.height() >= HEADER_TILE, "{:?}", link.rect);
+    w.f.click(&link).frame(Vec::new());
+    assert!(matches!(w.acts.borrow().as_slice(), [Act::OpenUrl(url)] if url.as_str() == kick.source), "{:?}", w.acts.borrow().len());
+    // A destination for a custom server has no tile on its row and no header in its details.
+    let custom = Destination { id: "own".into(), server: "rtmp://own.example/app".into(), ..Destination::default() };
+    let w = Window::new(shown(&custom), StreamingPanel { editing: Some(Edit::of(&custom)), ..StreamingPanel::default() });
+    assert_eq!(count(&w.texts(), "K"), 1, "only the add tile: {:?}", w.texts());
+}
+
 /// A finished check of `host` with `verdict`, which ran by itself when `automatic`.
 fn diagnosis(verdict: Verdict, automatic: bool) -> Diagnosis {
     Diagnosis {

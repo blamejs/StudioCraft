@@ -541,7 +541,8 @@ change to the rest of the address keeps it.
 Add Destination is a row of tiles under the count of destinations: one for each of seven streaming
 services, in the order of the services list, and one for a custom server. A click on a tile adds a
 destination for it, up to 16, and no menu opens over the destinations. Each tile shows the service's
-logo under the same rules as a row, and a plain tile otherwise, over the service's name. A screen
+logo under the same rules as a row, and the service's badge otherwise, over the service's name. The
+custom server tile shows a plain broadcast mark. A screen
 reader reads each tile as the destination it adds. While the profile holds 16 destinations every
 tile is turned off, and its tooltip gives the limit. The first destination uses the profile's stream key; the others have no key of their own until one
 is chosen, so the profile's key is not sent to another service. A service that documents one ingest
@@ -558,7 +559,12 @@ card, and the arrow keys choose the card before or after the focused one. Screen
 button with its text as the description. The cards stand side by side when the details are wide enough, and one
 above the other otherwise. A row
 shows the service it streams to, and the row and the details show a service's logo only where the
-service publishes one for this use, at no less than the size its guidelines allow (`ASSETS.md`). Save closes the details once the change is made; a change that is refused
+service publishes one for this use, at no less than the size its guidelines allow (`ASSETS.md`).
+Where a service's logo is not shown, the row and the details show its badge instead: the first
+letter of the service's name on a tile tinted from the theme's soft accent, with a hue of its own
+for each service. The letter keeps a contrast of at least 4.5:1 with the tile, in light and dark
+themes. The badge in the details is 72 points square and links to the service's page about
+streaming, as the logo does. Save closes the details once the change is made; a change that is refused
 leaves them open with what was typed. A destination whose key is held for the session has a field for that key:
 Hold keeps the typed key in memory for this session and Forget drops it. Remove deletes a
 destination; one that is sending must be stopped first. Each change is saved in the profile; a change
