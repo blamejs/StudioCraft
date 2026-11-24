@@ -186,7 +186,8 @@ pub(crate) struct Tiles {
 impl Tiles {
     /// The tiles of a `width` × `height` frame at `fps`: the first uniform grid whose largest
     /// tile is at most 4096 pixels wide, holds at most [`MAX_TILE_AREA`] luma samples and codes at
-    /// most [`MAX_TILE_RATE`] luma samples a second. Grids are tried by `cols_log2 + rows_log2`,
+    /// most [`MAX_TILE_RATE`] luma samples a second, counting whole 4 × 4 blocks, and whose last
+    /// column and row keep at least 8 pixels of the frame. Grids are tried by `cols_log2 + rows_log2`,
     /// smallest first, then by `cols_log2`, smallest first. `None` when no uniform grid keeps
     /// within the limits.
     pub(crate) fn of(width: u32, height: u32, fps: (u32, u32)) -> Option<Tiles> {
@@ -206,10 +207,18 @@ impl Tiles {
                 }
                 let width_sb = (sb_cols + (1 << cols_log2) - 1) >> cols_log2;
                 let height_sb = (sb_rows + (1 << rows_log2) - 1) >> rows_log2;
-                // The first tile is the largest; a frame smaller than a superblock keeps its size.
-                let samples = u64::from((width_sb * 64).min(width)) * u64::from((height_sb * 64).min(height));
+                // The first tile is the largest. Its size counts whole 4 × 4 blocks (`TileWidth` and
+                // `TileHeight`), so a frame smaller than a superblock keeps its size rounded up to 8.
+                let samples = (u64::from(width_sb) * 64).min(u64::from(mi_cols) * 4) * (u64::from(height_sb) * 64).min(u64::from(mi_rows) * 4);
                 let per_second = samples.saturating_mul(u64::from(fps.0));
                 if width_sb > max_width_sb || samples > MAX_TILE_AREA || per_second > MAX_TILE_RATE.saturating_mul(u64::from(fps.1.max(1))) {
+                    continue;
+                }
+                // The last column and row keep at least 8 pixels of the frame (`CroppedTileWidth` and
+                // `CroppedTileHeight`). A frame narrower than 8 pixels has one tile and is not split.
+                let (cols, rows) = (sb_cols.div_ceil(width_sb.max(1)), sb_rows.div_ceil(height_sb.max(1)));
+                let cropped = |size: u32, each: u32, n: u32| u64::from(size).saturating_sub(u64::from(n.saturating_sub(1)) * u64::from(each) * 64);
+                if cropped(width, width_sb, cols) < u64::from(width.min(8)) || cropped(height, height_sb, rows) < u64::from(height.min(8)) {
                     continue;
                 }
                 return Some(Tiles {
@@ -223,8 +232,8 @@ impl Tiles {
                     max_rows_log2,
                     width_sb,
                     height_sb,
-                    cols: sb_cols.div_ceil(width_sb.max(1)),
-                    rows: sb_rows.div_ceil(height_sb.max(1)),
+                    cols,
+                    rows,
                 });
             }
         }
@@ -843,6 +852,14 @@ mod tests {
         assert_eq!((big.cols_log2, big.rows_log2, big.width_sb, big.height_sb, big.count()), (1, 2, 60, 17, 8));
         assert_eq!(Tiles::of(7680, 4320, (60, 1)).map(|t| t.count()), Some(4), "3840 × 2176 at 60 frames per second fits");
         assert_eq!(Tiles::of(16, 16, (u32::MAX, 1)), None, "one superblock coded faster than any tile may be");
+        // A tile's size counts whole 4 × 4 blocks: 3826 pixels code as 3832, and two rows of
+        // 3832 × 1280 at 120 frames per second pass the rate limit.
+        let blocks = Tiles::of(3826, 2554, (120, 1)).unwrap();
+        assert_eq!((blocks.cols_log2, blocks.rows_log2, blocks.height_sb, blocks.count()), (0, 2, 10, 4));
+        // Eight rows of 7 superblocks leave the bottom row 2 pixels of the frame: two columns of
+        // four rows instead.
+        let edge = Tiles::of(4096, 3138, (240, 1)).unwrap();
+        assert_eq!((edge.cols_log2, edge.rows_log2, edge.width_sb, edge.height_sb, edge.count()), (1, 2, 32, 13, 8));
     }
 
     #[test]
