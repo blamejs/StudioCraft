@@ -1659,9 +1659,9 @@ impl StudioApp {
     pub(crate) fn shown_side(&self) -> Option<output_bar::Side> {
         let docks = self.store.prefs().docks;
         let studio_mode = self.studio.engine().studio_mode();
-        output_bar::Side::ALL.into_iter().find(|s| {
-            (*s == output_bar::Side::SetUp || studio_mode) && store::built_in_layout(s.layout()).is_some_and(|l| l.docks.arranged_like(&docks))
-        })
+        output_bar::Side::ALL
+            .into_iter()
+            .find(|s| (*s == output_bar::Side::SetUp || studio_mode) && store::built_in_docks(s.layout()).is_some_and(|d| d.arranged_like(&docks)))
     }
 
     /// Switch to `side`. Live applies the Live layout and turns Studio Mode on; Set up applies the

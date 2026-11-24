@@ -339,7 +339,7 @@ impl Docks {
     /// columns collapsed into the strip and without. Hidden docks' places in the order, sizes and
     /// the two groups of the menu row are not compared.
     pub fn arranged_like(&self, other: &Docks) -> bool {
-        Region::ALL.into_iter().all(|r| self.shown_in(r, false) == other.shown_in(r, false) && self.shown_in(r, true) == other.shown_in(r, true))
+        Region::ALL.into_iter().all(|r| [false, true].into_iter().all(|c| self.drawn_in(r, c).eq(other.drawn_in(r, c))))
             && (0..DOCK_COUNT)
                 .filter_map(|i| u8::try_from(i).ok())
                 .all(|i| self.is_shown(i) == other.is_shown(i) && self.is_floating(i) == other.is_floating(i) && self.region(i) == other.region(i))
@@ -367,7 +367,12 @@ impl Docks {
     /// The docked docks drawn in `region`, in order (left to right under the canvas, top to bottom
     /// in a column). While the columns are `collapsed`, every docked dock is drawn under the canvas.
     pub fn shown_in(&self, region: Region, collapsed: bool) -> Vec<u8> {
-        self.order().into_iter().filter(|i| self.is_docked(*i) && self.drawn_region(*i, collapsed) == region).collect()
+        self.drawn_in(region, collapsed).collect()
+    }
+
+    /// The docks [`Self::shown_in`] lists, without collecting them.
+    fn drawn_in(&self, region: Region, collapsed: bool) -> impl Iterator<Item = u8> + '_ {
+        self.order().into_iter().filter(move |i| self.is_docked(*i) && self.drawn_region(*i, collapsed) == region)
     }
 
     /// The docks shown in windows of their own, in the strip's order.
@@ -464,15 +469,22 @@ const LIVE_COLUMN: f32 = 268.0;
 /// Every built-in layout keeps the transition and output controls shown and no dock floating.
 pub fn built_in_layout(name: &str) -> Option<DockLayout> {
     let k = BUILT_IN_LAYOUTS.iter().position(|n| n.eq_ignore_ascii_case(name))?;
+    let docks = built_in_docks(name)?;
+    Some(DockLayout { name: BUILT_IN_LAYOUTS.get(k).copied().unwrap_or_default().to_string(), docks })
+}
+
+/// The docks of the built-in layout named `name`, ignoring case, without allocating
+/// ([`built_in_layout`] lists the layouts).
+pub fn built_in_docks(name: &str) -> Option<Docks> {
+    let k = BUILT_IN_LAYOUTS.iter().position(|n| n.eq_ignore_ascii_case(name))?;
     let (bottom, left) = (Region::Bottom.code(), Region::Left.code());
     let classic = Docks::default();
-    let docks = match k {
+    Some(match k {
         0 => Docks { region: [left, left, bottom, bottom], left_width: SET_UP_COLUMN, ..classic },
         1 => Docks { region: [bottom, left, left, bottom], left_width: LIVE_COLUMN, ..classic },
         2 => Docks { sources: false, app_audio: true, region: [left, left, bottom, bottom], left_width: SET_UP_COLUMN, ..classic },
         _ => classic,
-    };
-    Some(DockLayout { name: BUILT_IN_LAYOUTS.get(k).copied().unwrap_or_default().to_string(), docks })
+    })
 }
 
 /// Whether `name` is a built-in layout's name, ignoring case.
