@@ -484,6 +484,7 @@
 	Name lookup of	Name lookup of
 	Connection to	Connection to
 	Secure connection to	Secure connection to
+	Stream server handshake with	Stream server handshake with
 	Secure connection on port 443 to	Secure connection on port 443 to
 	The service's list of ingest servers	The service's list of ingest servers
 	Secure connection to the service's ingest server	Secure connection to the service's ingest server
@@ -491,6 +492,7 @@
 	works	works
 	set	set
 	reports a problem	reports a problem
+	answers, but not as a stream server	answers, but not as a stream server
 	this computer could not say	this computer could not say
 	not finished in time	not finished in time
 	{check}: {outcome}	{check}: {outcome}
@@ -632,6 +634,12 @@
 @msg	The server refused the stream; check the stream key and the server address	The server refused the stream; check the stream key and the server address
 @msg	The secure connection to {host} was not accepted ({reason}). The server address may be wrong, the server's certificate may be faulty, this computer's clock may be wrong, or something on this network may be intercepting secure connections	The secure connection to {host} was not accepted ({reason}). The server address may be wrong, the server's certificate may be faulty, this computer's clock may be wrong, or something on this network may be intercepting secure connections
 @msg	{service} reports a problem with {component}: {status}. This server may also be affected	{service} reports a problem with {component}: {status}. This server may also be affected
+@msg	{host} takes a secure connection on port {port}, but does not answer as a stream server: {detail}. The server address or port may be wrong, the stream server behind it may not be working, or something on this network may be answering in its place	{host} takes a secure connection on port {port}, but does not answer as a stream server: {detail}. The server address or port may be wrong, the stream server behind it may not be working, or something on this network may be answering in its place
+@msg	{host} takes a connection on port {port}, but does not answer as a stream server: {detail}. The server address or port may be wrong, the stream server behind it may not be working, or something on this network may be answering in its place	{host} takes a connection on port {port}, but does not answer as a stream server: {detail}. The server address or port may be wrong, the stream server behind it may not be working, or something on this network may be answering in its place
+@msg	the server's first byte is {byte}, where an RTMP server sends its version, 0x03	the server's first byte is {byte}, where an RTMP server sends its version, 0x03
+@msg	the server closed the connection after {received} of the {expected} bytes of its handshake	the server closed the connection after {received} of the {expected} bytes of its handshake
+@msg	the server sent {received} of the {expected} bytes of its handshake within {seconds} s	the server sent {received} of the {expected} bytes of its handshake within {seconds} s
+@msg	the handshake failed: {error}	the handshake failed: {error}
 @msg	{host} cannot be reached from this network, but {other} can	{host} cannot be reached from this network, but {other} can
 @msg	{host} answers on port 443 but not on port {port}. This network or the server may be blocking port {port}	{host} answers on port 443 but not on port {port}. This network or the server may be blocking port {port}
 @msg	{host} refused the connection on port {port}; nothing on that server accepts connections on that port	{host} refused the connection on port {port}; nothing on that server accepts connections on that port
