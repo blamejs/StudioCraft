@@ -380,6 +380,9 @@ pub fn kept_source(selected: Option<SourceId>, sources: &[SourceRow]) -> Option<
 /// A download file name for a collection called `name`: the name with the characters file
 /// systems refuse replaced by `_`, without leading or trailing spaces and dots, at most
 /// [`MAX_FILE_STEM`] characters, with `.json`. A name that leaves nothing gives `Untitled.json`.
+/// A name whose part before the first `.` is a Windows device name (`CON`, `PRN`, `AUX`, `NUL`,
+/// `COM1` to `COM9`, `LPT1` to `LPT9`, and `COM` or `LPT` with `¹`, `²` or `³`, in any case)
+/// gets a leading `_`, within the same length.
 pub fn file_name(name: &str) -> String {
     let stem: String = name
         .chars()
@@ -387,7 +390,17 @@ pub fn file_name(name: &str) -> String {
         .take(MAX_FILE_STEM)
         .collect();
     let stem = stem.trim_matches(|c: char| c == '.' || c.is_whitespace());
-    format!("{}.json", if stem.is_empty() { DEFAULT_COLLECTION } else { stem })
+    if stem.is_empty() {
+        return format!("{DEFAULT_COLLECTION}.json");
+    }
+    let base = stem.split('.').next().unwrap_or_default().trim_end().to_ascii_uppercase();
+    const PORTS: [&str; 12] = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "¹", "²", "³"];
+    let port = base.strip_prefix("COM").or_else(|| base.strip_prefix("LPT")).is_some_and(|n| PORTS.contains(&n));
+    if !(port || matches!(base.as_str(), "CON" | "PRN" | "AUX" | "NUL")) {
+        return format!("{stem}.json");
+    }
+    let kept: String = stem.chars().take(MAX_FILE_STEM - 1).collect();
+    format!("_{}.json", kept.trim_end_matches(|c: char| c == '.' || c.is_whitespace()))
 }
 
 #[cfg(test)]

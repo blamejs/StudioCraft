@@ -815,8 +815,12 @@ command, with the same names and limits, and Undo and Redo step through the edit
 each change is its own undo step.
 
 Save downloads the collection as `<name>.json` in the current format, which Scene Collection ›
-Import… reads. Characters that file systems refuse become `_` in the file name. New, opening a
+Import… reads. Characters that file systems refuse become `_` in the file name, and a name that
+Windows reserves for a device, such as `CON` or `COM1`, gets a leading `_`. New, opening a
 file and leaving the page ask first when the collection has unsaved changes.
+
+The page shows its labels and messages in the browser's preferred language when the app has a
+translation for it, from the app's own catalogs, and in English otherwise.
 
 To build and serve the editor, add the target and `trunk` once, then run `trunk serve` in
 `apps/studiocraft-web`:

@@ -313,6 +313,21 @@ fn download_names_keep_only_characters_file_systems_take() {
     assert_eq!(file_name("Stream 日本語"), "Stream 日本語.json");
     let long = "x".repeat(300);
     assert_eq!(file_name(&long), format!("{}.json", "x".repeat(MAX_FILE_STEM)));
+    // Windows device names are reserved with any extension and in any case.
+    assert_eq!(file_name("CON"), "_CON.json");
+    assert_eq!(file_name("nul"), "_nul.json");
+    assert_eq!(file_name("Com1"), "_Com1.json");
+    assert_eq!(file_name("lpt9.show"), "_lpt9.show.json");
+    assert_eq!(file_name("aux "), "_aux.json");
+    assert_eq!(file_name("Console"), "Console.json");
+    assert_eq!(file_name("COM10"), "COM10.json");
+    assert_eq!(file_name("com²"), "_com².json");
+    assert_eq!(file_name("LPT³.x"), "_LPT³.x.json");
+    // The leading `_` stays within the length limit.
+    let reserved = format!("CON.{}", "a".repeat(200));
+    let named = file_name(&reserved);
+    assert_eq!(named.chars().count(), MAX_FILE_STEM + ".json".len());
+    assert!(named.starts_with("_CON.aaa"), "{named}");
 }
 
 #[test]
