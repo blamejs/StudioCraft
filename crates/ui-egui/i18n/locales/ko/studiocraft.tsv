@@ -476,6 +476,12 @@
 menu	Transform	변형
 	Record as its own track	별도 트랙으로 녹음
 	Audio tracks write this source to a WAV file of its own (Settings › Output › Audio tracks)	오디오 트랙은 이 소스를 별도의 WAV 파일에 기록합니다(설정 › 출력 › 오디오 트랙)
+	Balance	밸런스
+	Moves this source between the left and right channels; double-click to center it	이 소스를 왼쪽과 오른쪽 채널 사이에서 이동합니다. 두 번 클릭하면 가운데로 돌아갑니다
+	{percent}% left	왼쪽 {percent}%
+	{percent}% right	오른쪽 {percent}%
+	Downmix to mono	모노로 다운믹스
+	Plays the average of this source's left and right channels on both	이 소스의 왼쪽과 오른쪽 채널 평균을 양쪽에서 재생합니다
 	Audio tracks	오디오 트랙
 	Write each recorded source and the program mix to its own WAV file	녹음되는 각 소스와 프로그램 믹스를 각각 별도의 WAV 파일에 기록
 	Write them while	기록 시점

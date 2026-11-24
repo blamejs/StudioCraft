@@ -476,6 +476,12 @@
 menu	Transform	变换
 	Record as its own track	录制为单独音轨
 	Audio tracks write this source to a WAV file of its own (Settings › Output › Audio tracks)	音频轨道将此来源写入单独的 WAV 文件（设置 › 输出 › 音频轨道）
+	Balance	平衡
+	Moves this source between the left and right channels; double-click to center it	在左右声道之间移动此来源；双击使其居中
+	{percent}% left	左 {percent}%
+	{percent}% right	右 {percent}%
+	Downmix to mono	缩混为单声道
+	Plays the average of this source's left and right channels on both	在两个声道上播放此来源左右声道的平均值
 	Audio tracks	音频轨道
 	Write each recorded source and the program mix to its own WAV file	将每个录制的来源和节目混音分别写入单独的 WAV 文件
 	Write them while	写入时机

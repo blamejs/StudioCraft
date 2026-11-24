@@ -32,6 +32,7 @@ description in [docs/features.md](docs/features.md).
 - The mixer measures the final mix's loudness, and `audio.loudness` reports it with the profile's loudness target; the window does not show the readings yet ([Audio](docs/features.md#audio)).
 - Audio monitoring works on Windows and macOS, with each source off, monitor only or monitor and output ([Audio](docs/features.md#audio)).
 - Each source is assigned to any of six mix tracks with `source.mix_tracks`, and a recording writes each track in its profile's `output.recording_tracks` as its own audio stream, in the built-in MKV writer and through `ffmpeg`; the window does not set either yet ([Audio](docs/features.md#audio), [Recording](docs/features.md#recording)).
+- Each source has a balance between the left and right channels and can be downmixed to mono, from its Properties window or with `source.balance` and `source.mono` ([Audio](docs/features.md#audio)).
 
 ### Recording
 

@@ -485,6 +485,12 @@
 menu	Transform	Преобразование
 	Record as its own track	Записывать отдельной дорожкой
 	Audio tracks write this source to a WAV file of its own (Settings › Output › Audio tracks)	Звуковые дорожки записывают этот источник в отдельный файл WAV («Настройки › Вывод › Звуковые дорожки»)
+	Balance	Баланс
+	Moves this source between the left and right channels; double-click to center it	Смещает этот источник между левым и правым каналами; двойной щелчок возвращает его в центр
+	{percent}% left	{percent}% влево
+	{percent}% right	{percent}% вправо
+	Downmix to mono	Свести в моно
+	Plays the average of this source's left and right channels on both	Воспроизводит среднее левого и правого каналов этого источника в обоих
 	Audio tracks	Звуковые дорожки
 	Write each recorded source and the program mix to its own WAV file	Записывать каждый записываемый источник и микс программы в отдельный файл WAV
 	Write them while	Записывать, когда

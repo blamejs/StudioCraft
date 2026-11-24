@@ -485,6 +485,12 @@
 menu	Transform	Перетворення
 	Record as its own track	Записувати окремою доріжкою
 	Audio tracks write this source to a WAV file of its own (Settings › Output › Audio tracks)	Звукові доріжки записують це джерело в окремий файл WAV («Налаштування › Вивід › Звукові доріжки»)
+	Balance	Баланс
+	Moves this source between the left and right channels; double-click to center it	Зміщує це джерело між лівим і правим каналами; подвійне клацання повертає його в центр
+	{percent}% left	{percent}% ліворуч
+	{percent}% right	{percent}% праворуч
+	Downmix to mono	Звести в моно
+	Plays the average of this source's left and right channels on both	Відтворює середнє лівого й правого каналів цього джерела в обох
 	Audio tracks	Звукові доріжки
 	Write each recorded source and the program mix to its own WAV file	Записувати кожне джерело, що записується, і мікс програми в окремий файл WAV
 	Write them while	Записувати, коли

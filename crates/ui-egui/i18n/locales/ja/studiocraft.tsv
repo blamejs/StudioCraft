@@ -476,6 +476,12 @@
 menu	Transform	変形
 	Record as its own track	独立したトラックとして録音
 	Audio tracks write this source to a WAV file of its own (Settings › Output › Audio tracks)	オーディオトラックはこのソースを専用の WAV ファイルに書き出します (設定 › 出力 › オーディオトラック)
+	Balance	バランス
+	Moves this source between the left and right channels; double-click to center it	このソースを左右のチャンネルの間で動かします。ダブルクリックで中央に戻します
+	{percent}% left	左 {percent}%
+	{percent}% right	右 {percent}%
+	Downmix to mono	モノラルにダウンミックス
+	Plays the average of this source's left and right channels on both	このソースの左右チャンネルの平均を両方で再生します
 	Audio tracks	オーディオトラック
 	Write each recorded source and the program mix to its own WAV file	録音する各ソースとプログラムミックスをそれぞれ専用の WAV ファイルに書き出す
 	Write them while	書き出すタイミング

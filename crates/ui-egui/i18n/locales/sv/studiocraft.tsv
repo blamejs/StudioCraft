@@ -476,6 +476,12 @@
 menu	Transform	Transformera
 	Record as its own track	Spela in som eget spår
 	Audio tracks write this source to a WAV file of its own (Settings › Output › Audio tracks)	Ljudspår skriver den här källan till en egen WAV-fil (Inställningar › Utdata › Ljudspår)
+	Balance	Balans
+	Moves this source between the left and right channels; double-click to center it	Flyttar den här källan mellan vänster och höger kanal; dubbelklicka för att centrera den
+	{percent}% left	{percent} % vänster
+	{percent}% right	{percent} % höger
+	Downmix to mono	Mixa ned till mono
+	Plays the average of this source's left and right channels on both	Spelar medelvärdet av källans vänstra och högra kanal i båda
 	Audio tracks	Ljudspår
 	Write each recorded source and the program mix to its own WAV file	Skriv varje inspelad källa och programmixen till en egen WAV-fil
 	Write them while	Skriv dem medan

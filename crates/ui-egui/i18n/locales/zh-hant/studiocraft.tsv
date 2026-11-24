@@ -476,6 +476,12 @@
 menu	Transform	變形
 	Record as its own track	錄製為獨立音軌
 	Audio tracks write this source to a WAV file of its own (Settings › Output › Audio tracks)	音訊軌道會將此來源寫入獨立的 WAV 檔案（設定 › 輸出 › 音訊軌道）
+	Balance	平衡
+	Moves this source between the left and right channels; double-click to center it	在左右聲道之間移動此來源；按兩下使其置中
+	{percent}% left	左 {percent}%
+	{percent}% right	右 {percent}%
+	Downmix to mono	縮混為單聲道
+	Plays the average of this source's left and right channels on both	在兩個聲道上播放此來源左右聲道的平均值
 	Audio tracks	音訊軌道
 	Write each recorded source and the program mix to its own WAV file	將每個錄製的來源與節目混音分別寫入獨立的 WAV 檔案
 	Write them while	寫入時機

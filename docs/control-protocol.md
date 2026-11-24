@@ -84,7 +84,7 @@ The message is in English. The window's status bar shows it as well, in the inte
 when the language's catalog has the message.
 [Commands with their own parameters](#commands-with-their-own-parameters) describes `app.info`,
 `app.links`, `app.check_updates`, `plugin.list`, `source.schema`, `source.sync_offset`,
-`source.monitor`, `source.mix_tracks`, `audio.loudness`, `source.set_record_track`, the `present.*` commands, `audio_tracks.status`, `audio_tracks.repair`,
+`source.monitor`, `source.mix_tracks`, `source.balance`, `source.mono`, `audio.loudness`, `source.set_record_track`, the `present.*` commands, `audio_tracks.status`, `audio_tracks.repair`,
 `audio_tracks.open_last`, `audio_tracks.marker`, `record.marker`, `marker.add`, `marker.list`, `marker.rename`, `recordings.list`, the `captions.*` commands, the
 `dock.layout_*` commands, `golive.check`, `video.displays`, `video.canvas_from_display` and `canvas.relayout`.
 
@@ -339,6 +339,18 @@ delay its audio, keyed by the source's id, `{"frames", "ms"}`, the delay in samp
 48 kHz and in milliseconds rounded to 0.1 ms. A source whose filters add no delay, and a source
 the mixer does not run, is not listed. Disabled filters and filters whose settings were refused
 are not counted. The limiter is the only built-in filter that delays its audio, by 248 frames.
+
+### `source.balance` and `source.mono`
+
+`source.balance` takes `{"source", "balance"}`, where `balance` is a number from -1 (fully left)
+to 1 (fully right) and 0 is the center. Above 0 the left channel is scaled by `1 - balance`, and
+below 0 the right channel by `1 + balance`. A value outside that range, a value that is not a
+number, or a source without audio is an error and changes nothing. Moves of the same source's
+balance in a row make one undo step. `source.mono` takes `{"source", "on"}`; with `on` true the
+mixer plays the average of the source's two channels on both, before the balance. Giving either
+command the value the source already has is no change and adds no undo step. The scene
+collection saves them as `audio.balance` and `audio.mono`; a new source is centered and in
+stereo, and a saved balance outside -1 to 1 is read as the nearer end.
 
 ### `source.mix_tracks`
 

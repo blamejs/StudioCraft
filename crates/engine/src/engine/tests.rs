@@ -812,6 +812,59 @@ fn a_source_is_assigned_to_mix_tracks() {
 }
 
 #[test]
+fn a_source_has_a_balance_and_can_be_turned_to_mono() {
+    let mut e = engine();
+    run(&mut e, "source.add", json!({"kind": "mic", "name": "Mic"})).unwrap();
+    let audio = |e: &Engine| e.collection().source_by_name("Mic").map(|s| (s.audio.balance, s.audio.mono));
+    assert_eq!(audio(&e), Some((0.0, false)), "a new source is centered and in stereo");
+    run(&mut e, "source.balance", json!({"source": "Mic", "balance": -0.5})).unwrap();
+    assert_eq!(audio(&e), Some((-0.5, false)));
+    assert_eq!(e.undo_label(), Some("Audio Balance"));
+    // A slider's moves on one source make one undo step.
+    run(&mut e, "source.balance", json!({"source": "Mic", "balance": 1})).unwrap();
+    run(&mut e, "source.balance", json!({"source": "Mic", "balance": -1})).unwrap();
+    assert_eq!(audio(&e), Some((-1.0, false)), "both ends are accepted");
+    let rev = e.revision();
+    assert!(!run(&mut e, "source.balance", json!({"source": "Mic", "balance": -1})).unwrap().changed, "the same balance is no change");
+    assert_eq!(e.revision(), rev);
+    for bad in [
+        json!({"source": "Mic"}),
+        json!({"source": "Mic", "balance": 1.01}),
+        json!({"source": "Mic", "balance": -1.01}),
+        json!({"source": "Mic", "balance": 1e300}),
+        json!({"source": "Mic", "balance": "left"}),
+        json!({"source": "Mic", "balance": null}),
+    ] {
+        assert!(run(&mut e, "source.balance", bad.clone()).is_err(), "{bad}");
+        assert_eq!(audio(&e), Some((-1.0, false)), "{bad} changes nothing");
+    }
+    let mic = SourceRef::Name("Mic".into());
+    for bad in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+        let err = e.execute(C::SourceBalance { source: mic.clone(), balance: bad }).unwrap_err();
+        assert!(matches!(&err, EngineError::Invalid(m) if m == "the balance must be a number from -1 (left) to 1 (right)"), "{bad}: {err:?}");
+    }
+    run(&mut e, "source.mono", json!({"source": "Mic", "on": true})).unwrap();
+    assert_eq!(audio(&e), Some((-1.0, true)));
+    assert_eq!(e.undo_label(), Some("Downmix to Mono"));
+    assert!(!run(&mut e, "source.mono", json!({"source": "Mic", "on": true})).unwrap().changed, "the same setting is no change");
+    for bad in [json!({"source": "Mic"}), json!({"source": "Mic", "on": 1}), json!({"source": "Mic", "on": "yes"})] {
+        assert!(run(&mut e, "source.mono", bad.clone()).is_err(), "{bad}");
+    }
+    run(&mut e, "edit.undo", json!({})).unwrap();
+    assert_eq!(audio(&e), Some((-1.0, false)), "mono is one undo step");
+    run(&mut e, "edit.undo", json!({})).unwrap();
+    assert_eq!(audio(&e), Some((0.0, false)), "the balance moves were one undo step");
+    run(&mut e, "source.balance", json!({"source": "Mic", "balance": -0.0})).unwrap();
+    assert!(audio(&e).is_some_and(|(b, _)| b.is_sign_positive()), "the center is saved as 0");
+    add_color(&mut e, "Video");
+    for (id, params) in [("source.balance", json!({"source": "Video", "balance": 0.5})), ("source.mono", json!({"source": "Video", "on": true}))] {
+        assert!(matches!(run(&mut e, id, params), Err(EngineError::Invalid(m)) if m.contains("no audio")), "{id}");
+    }
+    assert!(matches!(run(&mut e, "source.balance", json!({"source": "ghost", "balance": 0})), Err(EngineError::NoSource(_))));
+    assert!(matches!(run(&mut e, "source.mono", json!({"source": "ghost", "on": true})), Err(EngineError::NoSource(_))));
+}
+
+#[test]
 fn link_and_info_queries_change_nothing() {
     let mut e = engine();
     run(&mut e, "scene.add", json!({"name": "Second"})).unwrap();
@@ -1681,6 +1734,8 @@ fn every_spec_is_reachable() {
             "source.monitor" => json!({"source": 1, "mode": "monitor_only"}),
             "source.set_record_track" => json!({"source": 1, "on": true}),
             "source.mix_tracks" => json!({"source": 1, "tracks": [1, 2]}),
+            "source.balance" => json!({"source": 1, "balance": -0.5}),
+            "source.mono" => json!({"source": 1, "on": true}),
             "present.window" => json!({"index": 1}),
             "audio_tracks.repair" => json!({"folder": "x"}),
             "item.remove" | "item.duplicate" => json!({"item": 1}),
