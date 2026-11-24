@@ -19,6 +19,16 @@ source shows a dashed outline and no handles. The snap lines and the locked outl
 colors from the window's light or dark mode. Each scene item can be
 shown or hidden, and every change can be undone.
 
+The Sources dock lists the scene's items, the top item first. Each row shows an icon for the
+source's type before its name; a color source's icon shows its color. The eye and lock buttons at
+the end of the row show or hide the item and lock or unlock it, and a hidden item's name is drawn
+muted. A source that cannot draw shows a warning icon, and its tooltip gives the reason. A window
+capture whose window cannot be captured shows the warning icon in place of its type icon and reads
+"No window". Under the scene's items, a "Heard in every scene" group lists the global audio sources
+(see [Audio](#audio)), which include the applications routed from the Application Audio dock. The
+group takes at most half the dock's height. A double-click on one of its rows opens the source's
+Properties, and a right-click opens a menu with Properties…, Filters… and Rename.
+
 The Transform menu (in Edit and in a source's context menu) has Fit to Screen, which shows the
 whole source in the canvas at its aspect ratio; Fill Screen, which covers the canvas at the
 source's aspect ratio and leaves the parts past the canvas edges out of the picture; and Stretch to
@@ -193,8 +203,7 @@ sound on Windows and Linux only.
 The Audio Mixer dock shows peak and RMS meters with peak hold, a volume fader in dB, and a mute
 button for every audible source. A muted source's mute button shows the muted speaker on a
 warning-colored fill. The settings button at the end of each channel opens a menu with Properties…,
-Filters… and Rename. Rename asks for the new name in a prompt, so it also renames a global audio
-source that the Sources dock does not list. The fader runs from silence to +20 dB of boost (StudioCraft's own
+Filters… and Rename. Rename asks for the new name in a prompt. The fader runs from silence to +20 dB of boost (StudioCraft's own
 limit), with a mark at 0 dB. A boosted source is louder than its input, and the final mix is still
 clipped at full scale. The `source.volume` command takes a linear `gain` from 0 to 10, where 1 is
 0 dB and 10 is +20 dB; a value outside that range, or one that is not a number, is an error and

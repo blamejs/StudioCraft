@@ -13,7 +13,7 @@ use std::hash::Hash;
 use craft_behavior::{ColumnKey, ColumnWidth, EditEvent, IconId, Selection, SelectionChange, keyed};
 use craft_keymap::{CommandRef, Keymap};
 use craft_theme::variant::{Emphasis, Tone};
-use craft_theme::{CustomVariant, Tokens, Variant, VariantLook};
+use craft_theme::{CustomVariant, Srgba, Tokens, Variant, VariantLook};
 use craft_ui::buttons::IconButton;
 use craft_ui::buttons::icon_button::IconButtonStyleKey;
 use craft_ui::choice::Checkbox;
@@ -23,7 +23,7 @@ use craft_ui::contract::{
     request_rename,
 };
 use craft_ui::display::{Divider, Elide, Shade, Text};
-use craft_ui::list::{List, ListRow, ToggleCell};
+use craft_ui::list::{List, ListRow, RowInk, ToggleCell};
 use craft_ui::menu::{Menu, MenuItem};
 use craft_ui::primitives::IconSpec;
 use craft_ui::runtime::env::Label;
@@ -39,7 +39,7 @@ use studiocraft_model::{ItemId, SceneId, SceneItem, SourceConfig, SourceId};
 use studiocraft_studio::Studio;
 
 use crate::commands::{SCENE_HEADER, SCENE_HOTKEYS, SCENE_LIST_VIEW, SOURCE_HEADER};
-use crate::icons::Speaker;
+use crate::icons::{SourceGlyph, Speaker};
 use crate::kit::scene_tile::{AddTile, SceneTile, TileMarks, TileStyle};
 use crate::kit::tokens::{MeterColors, paint};
 use crate::theme;
@@ -54,6 +54,8 @@ pub struct DockLists {
     scene_menu: Option<SceneId>,
     /// The scene item whose row a right-click asked a menu for.
     item_menu: Option<ItemId>,
+    /// The global audio source whose row in the Sources dock a right-click asked a menu for.
+    heard_menu: Option<SourceId>,
     /// The scenes whose tiles the grid showed this frame, at most
     /// [`MAX_THUMBNAIL_SCENES`], in the order they were drawn; `None` when no grid was drawn.
     pictures: Option<Vec<SceneId>>,
@@ -79,6 +81,7 @@ impl DockLists {
     pub fn collection_opened(&mut self) {
         self.scene_menu = None;
         self.item_menu = None;
+        self.heard_menu = None;
         self.collections_opened = self.collections_opened.wrapping_add(1);
     }
 }
@@ -502,7 +505,8 @@ pub fn sources(ui: &mut Ui, studio: &Studio, st: &mut DockState, acts: &mut Vec<
         ColumnSpec::new(NAME, Label::Empty, ColumnWidth::fill(1.0)),
     ];
     let mut selection = Selection::new(st.selected.into_iter().collect(), st.selected, st.selected);
-    let mut body = list_body(ui);
+    let heard: Vec<&SourceConfig> = c.global_audio.iter().filter_map(|id| c.source(*id)).collect();
+    let (mut body, group) = split_body(ui, heard.len());
     let shown = List::<ItemId>::new(tl!("Sources").to_string())
         .select(SelectMode::Single)
         .selection(Bind::bound(&mut selection))
@@ -512,21 +516,13 @@ pub fn sources(ui: &mut Ui, studio: &Studio, st: &mut DockState, acts: &mut Vec<
         .empty(tl!("No sources in this scene. Add one with +.").to_string())
         .show_items(&mut body, &source, &mut |_, icx| {
             let (it, src) = rows[icx.at];
-            let eye = if it.visible { "Hide" } else { "Show" };
-            let lock = if it.locked { "Unlock" } else { "Lock (it can't be moved in the preview)" };
-            let mut row = ListRow::new(src.name.clone())
-                .cells(icx.cells())
-                .state(icx.row.clone())
-                .toggle(ToggleCell::eye(EYE, it.visible).tooltip(tl!(eye).to_string()))
-                .toggle(ToggleCell::lock(LOCK, it.locked).tooltip(tl!(lock).to_string()));
-            if let Some(e) = studio.source_error(src.id) {
-                let error = crate::i18n::Msg::plain(e).shown();
-                row = row.trailing_icon(IconSpec::svg(IconId::new("warning")), error.clone()).trailing_tone(Tone::Warn).tooltip(error);
-            } else if let Some(n) = studio.source_notice(src.id) {
-                row = row.tooltip(crate::i18n::Msg::plain(n).shown());
-            }
-            row
+            let error = studio.source_error(src.id).map(|e| crate::i18n::Msg::plain(e).shown());
+            let notice = studio.source_notice(src.id).map(|n| crate::i18n::Msg::plain(n).shown());
+            source_row(it, src, error, notice).cells(icx.cells()).state(icx.row.clone())
         });
+    if let Some(mut group) = group {
+        heard_group(&mut group, &heard, st, acts);
+    }
     let list = shown.response.id;
     let item = |id: ItemId| rows.iter().find(|(it, _)| it.id == id).copied();
     // A sweep and its commit can report the same cell in one frame: each cell changes once.
@@ -582,6 +578,154 @@ pub fn sources(ui: &mut Ui, studio: &Studio, st: &mut DockState, acts: &mut Vec<
         *st.renaming = None;
     }
     drawn
+}
+
+/// The kind of the window capture source.
+const WINDOW_CAPTURE: &str = "window_capture";
+
+/// The color a color source draws when its setting cannot be read.
+const COLOR_FALLBACK: [u8; 4] = [208, 208, 208, 255];
+
+/// The type icon before a source's name in the Sources dock.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SourceIcon {
+    /// An icon of the framework's icon set, by name.
+    Set(&'static str),
+    /// A glyph StudioCraft draws.
+    Glyph(SourceGlyph),
+    /// A swatch of the source's color.
+    Swatch([u8; 4]),
+}
+
+impl SourceIcon {
+    fn spec(self) -> IconSpec<'static> {
+        match self {
+            SourceIcon::Set(name) => IconSpec::svg(IconId::new(name)),
+            SourceIcon::Glyph(glyph) => IconSpec::glyph(glyph.glyph()),
+            SourceIcon::Swatch([r, g, b, a]) => {
+                let unit = |v: u8| f32::from(v) / 255.0;
+                IconSpec::swatch(Srgba { r: unit(r), g: unit(g), b: unit(b), a: unit(a) })
+            }
+        }
+    }
+}
+
+/// The type icon of `src`, from its kind. A color source shows its color, and a kind StudioCraft
+/// does not know shows a square.
+pub(crate) fn source_icon(src: &SourceConfig) -> SourceIcon {
+    match src.kind.as_str() {
+        "display_capture" => SourceIcon::Set("monitor"),
+        WINDOW_CAPTURE | "staged_windows" | "app_audio" => SourceIcon::Set("app_window"),
+        "image" => SourceIcon::Set("image"),
+        "text" => SourceIcon::Set("text"),
+        "color" => SourceIcon::Swatch(src.settings.color("color").unwrap_or(COLOR_FALLBACK)),
+        "camera" => SourceIcon::Glyph(SourceGlyph::Camera),
+        "media" => SourceIcon::Glyph(SourceGlyph::Film),
+        "audio_input" => SourceIcon::Glyph(SourceGlyph::Microphone),
+        "audio_output" => SourceIcon::Glyph(SourceGlyph::Speaker),
+        "captions" => SourceIcon::Glyph(SourceGlyph::Captions),
+        _ => SourceIcon::Set("square"),
+    }
+}
+
+/// A scene item's row in the Sources dock: the source's type icon and name, then the eye and lock
+/// toggles. A hidden item's name is muted. A source with an `error` (in the interface language)
+/// shows it in the row's tooltip: a window capture shows a warning icon in place of its type icon
+/// and reads "No window" at the end, and another source shows a warning icon at the end. A source
+/// without an error shows its `notice`, if it has one, in the row's tooltip.
+fn source_row<'a>(it: &SceneItem, src: &SourceConfig, error: Option<String>, notice: Option<String>) -> ListRow<'a> {
+    let eye = if it.visible { "Hide" } else { "Show" };
+    let lock = if it.locked { "Unlock" } else { "Lock (it can't be moved in the preview)" };
+    let mut row = ListRow::new(src.name.clone())
+        .icon(source_icon(src).spec())
+        .toggle(ToggleCell::eye(EYE, it.visible).tooltip(tl!(eye).to_string()))
+        .toggle(ToggleCell::lock(LOCK, it.locked).tooltip(tl!(lock).to_string()));
+    if !it.visible {
+        row = row.ink(RowInk::Muted);
+    }
+    match error {
+        Some(error) if src.kind == WINDOW_CAPTURE => row
+            .icon(IconSpec::svg(IconId::new("warning")))
+            .tone(Tone::Warn)
+            .trailing_named(tl!("No window").to_string(), error.clone())
+            .tooltip(error),
+        Some(error) => row.trailing_icon(IconSpec::svg(IconId::new("warning")), error.clone()).trailing_tone(Tone::Warn).tooltip(error),
+        None => match notice {
+            Some(notice) => row.tooltip(notice),
+            None => row,
+        },
+    }
+}
+
+/// The Sources dock's body in two parts: the room for the scene's items, and under it, when there
+/// are `heard` global audio sources, the room for their group (a heading and a row for each), which
+/// takes at most half the body.
+fn split_body(ui: &mut Ui, heard: usize) -> (Ui, Option<Ui>) {
+    fn part(body: &mut Ui, rect: Rect, clip: Rect, salt: &str) -> Ui {
+        let layout = crate::i18n::column(body);
+        let mut part = body.new_child(egui::UiBuilder::new().id_salt(salt).max_rect(rect).layout(layout));
+        part.set_clip_rect(rect.intersect(clip));
+        part
+    }
+    let mut body = list_body(ui);
+    let all = body.max_rect();
+    let clip = body.clip_rect();
+    let row = theme::with_root(ui.ctx(), |cx| cx.control().height);
+    let want = if heard == 0 { 0.0 } else { row * heard.saturating_add(1) as f32 };
+    let split = (all.bottom() - want.min(all.height() * 0.5)).max(all.top());
+    let items = part(&mut body, Rect::from_min_max(all.min, pos2(all.right(), split)), clip, "items");
+    let group = (heard > 0).then(|| part(&mut body, Rect::from_min_max(pos2(all.left(), split), all.max), clip, "heard"));
+    (items, group)
+}
+
+/// A row of the Sources dock's group of global audio sources: its heading, or a source.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum HeardRow {
+    Heading,
+    Source(SourceId),
+}
+
+/// The Sources dock's group of the global audio sources, which every scene records: a heading,
+/// then a row for each source with its type icon and name. A double-click or Enter on a row opens
+/// the source's Properties, and a right-click opens a menu with Properties…, Filters… and Rename.
+fn heard_group(ui: &mut Ui, heard: &[&SourceConfig], st: &mut DockState, acts: &mut Vec<Act>) {
+    let rows: Vec<(HeardRow, Option<&SourceConfig>)> =
+        std::iter::once((HeardRow::Heading, None)).chain(heard.iter().map(|s| (HeardRow::Source(s.id), Some(*s)))).collect();
+    let title = tl!("Heard in every scene");
+    let source = keyed(&rows, |(key, _)| *key).with_text(|(_, src)| match src {
+        Some(src) => Cow::Borrowed(src.name.as_str()),
+        None => Cow::Owned(title.to_string()),
+    });
+    let shown = List::<HeardRow>::new(title.to_string()).select(SelectMode::None).show_items(ui, &source, &mut |_, icx| match rows.get(icx.at) {
+        Some((_, Some(src))) => ListRow::new(src.name.clone()).icon(source_icon(src).spec()).state(icx.row.clone()),
+        _ => ListRow::new(title.to_string()).heading().role(TypeRole::Caption).ink(RowInk::Muted).state(icx.row.clone()),
+    });
+    for event in shown.events {
+        match event {
+            CollectionEvent::Activate(HeardRow::Source(id)) => acts.push(Act::Properties(id)),
+            CollectionEvent::ContextMenu(request) => {
+                st.lists.heard_menu = match request.key {
+                    HeardRow::Source(id) => Some(id),
+                    HeardRow::Heading => None,
+                }
+            }
+            CollectionEvent::EmptyContextMenu { .. } => st.lists.heard_menu = None,
+            _ => {}
+        }
+    }
+    let Some(src) = st.lists.heard_menu.and_then(|id| heard.iter().find(|s| s.id == id)) else { return };
+    Menu::context(src.name.clone(), &shown.response).show(ui, |ui, _| {
+        let row = |ui: &mut Ui, label: &str| MenuItem::new(label.to_string()).show(ui).ran;
+        if row(ui, tid!("selection.properties", "Properties…")) {
+            acts.push(Act::Properties(src.id));
+        }
+        if row(ui, tid!("selection.filters", "Filters…")) {
+            acts.push(Act::Filters(src.id));
+        }
+        if row(ui, tl!("Rename")) {
+            acts.push(Act::Rename(src.id));
+        }
+    });
 }
 
 /// The rows of a scene item's context menu (Sources dock and preview), inside a menu body. A row
@@ -1081,6 +1225,97 @@ pub fn app_audio(ui: &mut Ui, studio: &Studio, st: &mut DockState, acts: &mut Ve
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn source_of(kind: &str, settings: serde_json::Value) -> SourceConfig {
+        serde_json::from_value(json!({"id": 2, "kind": kind, "name": "Slides", "settings": settings})).unwrap()
+    }
+
+    fn item_of(visible: bool) -> SceneItem {
+        serde_json::from_value(json!({"id": 1, "source": 2, "visible": visible})).unwrap()
+    }
+
+    #[test]
+    fn each_source_kind_has_its_type_icon_and_a_color_source_shows_its_color() {
+        for (kind, icon) in [
+            ("display_capture", SourceIcon::Set("monitor")),
+            ("window_capture", SourceIcon::Set("app_window")),
+            ("staged_windows", SourceIcon::Set("app_window")),
+            ("app_audio", SourceIcon::Set("app_window")),
+            ("image", SourceIcon::Set("image")),
+            ("text", SourceIcon::Set("text")),
+            ("camera", SourceIcon::Glyph(SourceGlyph::Camera)),
+            ("media", SourceIcon::Glyph(SourceGlyph::Film)),
+            ("audio_input", SourceIcon::Glyph(SourceGlyph::Microphone)),
+            ("audio_output", SourceIcon::Glyph(SourceGlyph::Speaker)),
+            ("captions", SourceIcon::Glyph(SourceGlyph::Captions)),
+            ("a-kind-from-a-newer-version", SourceIcon::Set("square")),
+            ("", SourceIcon::Set("square")),
+        ] {
+            assert_eq!(source_icon(&source_of(kind, json!({}))), icon, "{kind}");
+        }
+        assert_eq!(source_icon(&source_of("color", json!({"color": "#ff000080"}))), SourceIcon::Swatch([255, 0, 0, 128]));
+        for unreadable in [json!({}), json!({"color": "red"}), json!({"color": 7}), json!({"color": "#12"})] {
+            assert_eq!(source_icon(&source_of("color", unreadable.clone())), SourceIcon::Swatch(COLOR_FALLBACK), "{unreadable}");
+        }
+    }
+
+    #[test]
+    fn every_type_icon_from_the_icon_set_is_in_the_set() {
+        for name in ["monitor", "app_window", "image", "text", "square", "warning"] {
+            assert!(craft_ui::primitives::has_icon(&IconId::new(name)), "{name}");
+        }
+    }
+
+    /// Every text a frame paints.
+    fn texts(out: &egui::FullOutput) -> Vec<String> {
+        fn walk(shape: &egui::Shape, found: &mut Vec<String>) {
+            match shape {
+                egui::Shape::Text(t) => found.push(t.galley.text().to_string()),
+                egui::Shape::Vec(v) => v.iter().for_each(|s| walk(s, found)),
+                _ => {}
+            }
+        }
+        let mut found = Vec::new();
+        out.shapes.iter().for_each(|c| walk(&c.shape, &mut found));
+        found
+    }
+
+    /// The texts of a list of rows of `item` for `sources`, each with its error.
+    fn row_texts(item: &SceneItem, sources: &[(SourceConfig, Option<&str>)]) -> Vec<String> {
+        let ctx = crate::test_context();
+        let screen = Rect::from_min_size(pos2(0.0, 0.0), vec2(320.0, 200.0));
+        let keys: Vec<usize> = (0..sources.len()).collect();
+        let mut shown = Vec::new();
+        // The second frame draws the rows the first one measured.
+        for _ in 0..2 {
+            let raw = egui::RawInput { screen_rect: Some(screen), ..egui::RawInput::default() };
+            let mut out = ctx.run_ui(raw, |ui| {
+                let source = keyed(&keys, |k| *k);
+                List::<usize>::new("rows".to_string()).show_items(ui, &source, &mut |_, icx| {
+                    let (src, error) = &sources[icx.at];
+                    source_row(item, src, error.map(str::to_string), None).state(icx.row.clone())
+                });
+            });
+            out.textures_delta.clear();
+            shown = texts(&out);
+        }
+        shown
+    }
+
+    #[test]
+    fn a_window_capture_with_an_error_reads_no_window_and_another_source_does_not() {
+        let item = item_of(true);
+        let window = (source_of("window_capture", json!({})), Some("the window is closed"));
+        let image = (source_of("image", json!({})), Some("the file is missing"));
+        let fine = (source_of("window_capture", json!({})), None);
+        let shown = row_texts(&item, &[window]);
+        assert!(shown.iter().any(|t| t == "No window"), "{shown:?}");
+        for quiet in [image, fine] {
+            let shown = row_texts(&item, &[quiet]);
+            assert!(shown.iter().any(|t| t == "Slides"), "the row is drawn: {shown:?}");
+            assert!(!shown.iter().any(|t| t == "No window"), "{shown:?}");
+        }
+    }
 
     /// Every filled rectangle a frame draws, with its fill.
     fn fills(out: &egui::FullOutput) -> Vec<Color32> {
