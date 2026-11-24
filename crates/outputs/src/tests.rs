@@ -63,6 +63,23 @@ fn out_of_range_settings_are_refused() {
 }
 
 #[test]
+fn a_stream_copy_is_an_mkv_file_or_none() {
+    assert_eq!(stream_copy(&Settings::new()), Ok(None));
+    assert_eq!(stream_copy(&Settings::new().with("copy", "")), Ok(None));
+    assert_eq!(stream_copy(&Settings::new().with("copy", serde_json::Value::Null)), Ok(None));
+    assert_eq!(stream_copy(&Settings::new().with("copy", "/v/Stream 1.MKV")), Ok(Some(PathBuf::from("/v/Stream 1.MKV"))));
+    for (bad, says) in [
+        (serde_json::json!("/v/Stream.mp4"), "is not one"),
+        (serde_json::json!("/v/Stream"), "does not end in .mkv"),
+        (serde_json::json!(7), "not a file name"),
+        (serde_json::json!({"path": "/v/a.mkv"}), "not a file name"),
+    ] {
+        let Err(e) = stream_copy(&Settings::new().with("copy", bad.clone())) else { panic!("{bad} was taken") };
+        assert!(e.to_string().contains(says), "{bad}: {e}");
+    }
+}
+
+#[test]
 fn a_stream_needs_an_h264_encoder() {
     use studiocraft_plugin::Encoder;
     let streamable: Vec<&str> = encoders::all().iter().filter(|e| e.streams()).map(|e| e.id()).collect();

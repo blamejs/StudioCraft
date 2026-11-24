@@ -544,6 +544,25 @@ impl SettingsWindow {
         Self::reconnect(ui, &mut s.reconnect);
         ui.add_space(12.0);
         Self::connection_check(ui, &mut s.check_service);
+        ui.add_space(12.0);
+        Self::stream_copy(ui, &mut s.save_copy);
+    }
+
+    /// The Copy of the stream section of the Stream tab: whether the stream also writes what it
+    /// sends to a file.
+    fn stream_copy(ui: &mut Ui, save_copy: &mut bool) {
+        ui.label(RichText::new(tl!("Copy of the stream")).strong());
+        ui.add_space(4.0);
+        ui.checkbox(save_copy, tl!("Save a copy of the stream for posting as a video"));
+        ui.label(
+            RichText::new(tl!(
+                "The stream also writes the same pictures and sound it sends to an MKV file in the recording folder, named Stream and the \
+                 date and time it started. The copy uses no extra encoder. For editing, record audio tracks too: each source's sound is \
+                 then kept in a file of its own. If the disk falls behind, the copy leaves out a few seconds and the stream goes on."
+            ))
+            .small()
+            .weak(),
+        );
     }
 
     /// The Connection check section of the Stream tab: whether the check that runs after a

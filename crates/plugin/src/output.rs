@@ -102,6 +102,27 @@ pub trait OutputInstance: Send {
     fn stop_destination(&self, id: &str) -> Result<(), PluginError> {
         Err(PluginError::Unavailable(format!("this output has no destination `{id}`")))
     }
+    /// The file a stream writes a copy of what it sends to, when it was started with one; `None`
+    /// for other outputs.
+    fn stream_copy(&self) -> Option<StreamCopyState> {
+        None
+    }
+}
+
+/// The copy of a stream written to a file: the same encoded video and sound the destinations get.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct StreamCopyState {
+    /// The file.
+    pub path: PathBuf,
+    /// Bytes written to the file so far.
+    pub bytes: u64,
+    /// Packets the file did not get because the disk fell behind: the copy then waits for the next
+    /// keyframe.
+    pub lost_packets: u64,
+    /// Whether the file was finished after the stream ended.
+    pub finished: bool,
+    /// Why the copy stopped, when it did; the stream goes on without it.
+    pub failure: Option<String>,
 }
 
 /// How many destinations of a stream are live and how many wait to try again.

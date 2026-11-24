@@ -558,6 +558,28 @@ chose, is a problem. Live captions that are off are a problem only when a Live C
 in the scene collection. The window does not show the check yet
 ([Control protocol](control-protocol.md#golivecheck)).
 
+### Copy of the stream
+
+With "Save a copy of the stream for posting as a video" checked in Settings › Stream, a stream also
+writes the same encoded pictures and sound it sends to an MKV file in the recording folder, named
+`Stream <date> <time>.mkv` after the time it started. The copy runs no encoder of its own. It
+starts at the stream's first keyframe, its times count from 0, and it keeps the stream's video and
+sound tracks. It is off by default, and a running stream keeps the setting it started with
+(`stream.save_copy_set`).
+
+For editing, turn on [Audio tracks](#audio-tracks) as well. A stream's take then keeps each
+source's sound in a WAV file of its own beside the copy, in `Stream <date> <time> Audio`, and
+`recordings.list` lists the take as the copy's.
+
+The copy reads the stream's packets from a buffer of its own that holds up to 4 seconds, and the
+encoders and destinations do not wait for it. When the disk falls further behind than that, the
+copy leaves out packets up to the next keyframe and counts them. A file that cannot be made or
+written stops the copy, keeps what was written, and shows a notice once, and the stream goes on.
+When the stream stops, StudioCraft writes what the buffer holds and finishes the file, for up to 20
+seconds; after that the file plays up to the last part written. A notice names the file when it is
+finished, with the packets left out when there were any. A stream with a copy can have at most 63
+destinations.
+
 ### Pause screen
 
 File › Pause Program shows the pause screen in the program in place of the program scene, with

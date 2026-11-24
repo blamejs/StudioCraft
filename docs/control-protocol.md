@@ -482,8 +482,8 @@ the new name are errors; the marker then keeps its name.
 
 `recordings.list` takes no params and lists what the recording folder holds, newest first: each
 `.mkv`, `.mp4` and `.mov` file with its marker timeline and its take of audio tracks, each saved
-replay (`Replay <date and time>.mkv`), and each take of audio tracks that has no recording file,
-such as a stream's take. The folder is scanned on a background thread. The command returns at once
+replay (`Replay <date and time>.mkv`), each copy of a stream (`Stream <date and time>.mkv`), and
+each take of audio tracks that has no recording file, such as a stream's take. The folder is scanned on a background thread. The command returns at once
 with the last finished scan and starts a new scan when none runs, so the first call returns an
 empty list with `scanning` true, and a later call returns that scan. It returns
 `{"folder", "scanning", "scanned_unix_ms", "recordings", "unreadable", "more", "timed_out"}`:
@@ -499,11 +499,13 @@ empty list with `scanning` true, and a later call returns that scan. It returns
 | `timed_out` | `true` when the scan stopped looking at files after 5 seconds; the takes are not listed then. |
 
 Each entry of `recordings` has `name` (the file's name without its extension, or the take's name),
-`kind` (`recording`, `replay` or `audio_tracks` for a take without a recording file),
-`started_unix_ms`, `file`, `format` (`mkv`, `mp4` or `mov`), `bytes`, `modified_unix_ms`,
+`kind` (`recording`, `replay`, `stream_copy` or `audio_tracks` for a take without a recording
+file), `started_unix_ms`, `file`, `format` (`mkv`, `mp4` or `mov`), `bytes`, `modified_unix_ms`,
 `timeline` and `audio_tracks`; fields that do not apply are `null`. `started_unix_ms` is the date
 and time in the file's name read as local time, else the take's start. The list is sorted by it, or
-by `modified_unix_ms` when it is `null`. A recording's `timeline` is `<name>.otio` beside it, and
+by `modified_unix_ms` when it is `null`. A replay has no `timeline` or `audio_tracks`. A stream's
+copy is matched to a take as a recording is, so the take of the stream it was made from, which has
+its name, is its `audio_tracks`. A recording's `timeline` is `<name>.otio` beside it, and
 its `audio_tracks` is the take in `<name> Audio`. When that name was taken, the timeline or take
 named `<name> (N)` can belong to it instead, unless a recording has that name. Of these, a
 recording takes the take that started nearest its start, and the timeline last changed nearest its
@@ -645,8 +647,13 @@ or add an undo step. A parameter is an error.
 `view.streaming` opens the Streaming window, or closes it when it is open, and returns `{"on"}`.
 
 `stream.destinations` takes no parameters and returns `{"destinations", "running", "max",
-"reconnect", "check_service"}`, and `running_reconnect` while a stream of this profile runs.
-`check_service` is the profile's setting of `stream.check_service_set`. `reconnect` holds the
+"reconnect", "check_service", "save_copy", "copy"}`, and `running_reconnect` while a stream of this
+profile runs. `check_service` is the profile's setting of `stream.check_service_set` and
+`save_copy` its setting of `stream.save_copy_set`. `copy` is the copy of the running stream, or
+else of the last stream that ended, `{"file", "bytes", "lost_packets", "finished", "error"}`, or
+`null` when that stream saved none. `lost_packets` counts the packets the copy left out while the
+disk fell behind, `finished` is whether the file was finished after the stream ended, and `error`
+is why the copy stopped, or `null`. `document.inspect`'s `streaming` entry has the same `copy`. `reconnect` holds the
 profile's automatic reconnect settings and `running_reconnect` the ones the running stream started
 with, each `{"enabled", "first_delay_s", "max_delay_s", "max_tries"}` (see `stream.reconnect_set`).
 `max` is 16. Each destination is `{"id", "name", "enabled", "service", "server", "key", "status"}`,
@@ -754,6 +761,12 @@ a destination fails also fetches the service's list of ingest servers and status
 connects to two of its other ingest servers. It returns `{"changed", "check_service"}`, and a call
 that changes nothing does not save the profile. It is off by default. A missing `enabled`, or one
 that is not a boolean, is an error.
+
+`stream.save_copy_set` takes `{"enabled"}` and sets whether the next stream also writes what it
+sends to `Stream <date and time>.mkv` in the recording folder ([Copy of the
+stream](features.md#copy-of-the-stream)). It returns `{"changed", "save_copy"}`, and a call that
+changes nothing does not save the profile. A running stream keeps the setting it started with. It
+is off by default. A missing `enabled`, or one that is not a boolean, is an error.
 
 A destination that has been checked at its current server and service in this session has
 `diagnosis`. While the check runs it is

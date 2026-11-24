@@ -7,7 +7,7 @@ use craft_flv::amf0::{self, Value};
 use craft_rtmp::{ChunkReader, ChunkWriter, MAX_MESSAGE, Message, MessageHeader, csid, msg_type, user_control};
 
 use super::*;
-use crate::native::tests::{Feeder, job};
+use crate::native::tests::{Feeder, decode, job, packets, temp_file};
 
 /// The size of the handshake's C1, C2, S1 and S2 packets.
 const PACKET: usize = 1536;
@@ -1711,4 +1711,151 @@ fn a_stream_without_failures_checks_nothing_and_a_refused_stream_is_checked_at_o
     assert!(out.stop().is_err());
     diagnose::tests::until_checks(&checks, |c| (c.running() == 0).then_some(()));
     assert_eq!(checks_run(&fake), 1);
+}
+
+/// The media messages `rx` sees until the connection ends, after those already taken.
+fn rest_of_media(rx: &mpsc::Receiver<Seen>, mut got: Vec<Seen>) -> Vec<Seen> {
+    loop {
+        match next(rx) {
+            m @ Seen::Media { .. } => got.push(m),
+            Seen::Closed => return got,
+            Seen::Publish(_) => {}
+        }
+    }
+}
+
+/// The timestamps of the coded audio or video messages in `m`, leaving out the sequence headers.
+fn coded(m: &[Seen], want_video: bool) -> Vec<u32> {
+    m.iter()
+        .filter_map(|s| match s {
+            Seen::Media { video, head, timestamp } if *video == want_video && head[1] == 1 => Some(*timestamp),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn the_copy_holds_the_pictures_and_sound_the_destination_got() {
+    let path = temp_file("stream-copy");
+    let (url, seen) = server(vec![Plan::Accept]);
+    let job = job(RateControl::Bitrate { kbps: 400, keyframe_s: 1 });
+    let mut out = Streaming::start_copying(&job, vec![target("a", &url, "k")], quick(), path.clone(), copy::create(&path)).unwrap();
+    until(&out, "a", |d| d.status == DestinationStatus::Live);
+    // 1.5 s of media fits in the rings, so neither the destination nor the copy loses a packet.
+    let frames = Feeder::default().feed(&out.video(), &out.audio(), 1.5);
+    out.stop().unwrap();
+    let sent = rest_of_media(&seen, Vec::new());
+    let state = out.stream_copy().unwrap();
+    let file = std::fs::read(&path).unwrap();
+    let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    assert!(state.finished && state.failure.is_none() && state.lost_packets == 0, "{state:?}");
+    assert_eq!((state.path.as_path(), state.bytes), (path.as_path(), file.len() as u64));
+    let (tracks, [video, audio]) = packets(&file);
+    assert_eq!((tracks[0].codec_id.as_str(), tracks[1].codec_id.as_str()), ("V_MPEG4/ISO/AVC", "A_AAC"));
+    assert_eq!(tracks[1].codec_delay_ns, 0, "the copy starts after the encoder's delay");
+    assert_eq!(video.len(), coded(&sent, true).len(), "every picture the destination got");
+    assert_eq!(video.len() as u64, frames);
+    assert!(video[0].1, "the copy starts with a keyframe");
+    let mut shown: Vec<i64> = video.iter().map(|v| v.0).collect();
+    shown.sort_unstable();
+    assert!(shown[0] >= 0 && shown.windows(2).all(|w| w[1] - w[0] == 100_000_000), "one picture every 100 ms: {shown:?}");
+    assert_eq!(decode(&tracks[0].codec_private, &video).len(), video.len(), "every picture decodes");
+    // The sound is the destination's, at the same times (the file keeps milliseconds).
+    let ms: Vec<i64> = audio.iter().map(|a| a.0.div_euclid(NS_PER_MS)).collect();
+    let flv: Vec<i64> = coded(&sent, false).into_iter().map(i64::from).collect();
+    assert_eq!(ms.len(), flv.len());
+    assert!(ms.iter().zip(&flv).all(|(a, b)| a.abs_diff(*b) <= 1), "{ms:?} {flv:?}");
+}
+
+/// A file whose first write waits until its gate's sender is dropped.
+struct Gated {
+    file: std::fs::File,
+    gate: Option<mpsc::Receiver<()>>,
+}
+
+impl Write for Gated {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        if let Some(gate) = self.gate.take() {
+            let _ = gate.recv();
+        }
+        self.file.write(buf)
+    }
+    fn flush(&mut self) -> io::Result<()> {
+        self.file.flush()
+    }
+}
+
+impl std::io::Seek for Gated {
+    fn seek(&mut self, to: std::io::SeekFrom) -> io::Result<u64> {
+        self.file.seek(to)
+    }
+}
+
+#[test]
+fn a_copy_whose_disk_stalls_holds_back_neither_the_stream_nor_the_destination() {
+    let path = temp_file("stream-copy-stall");
+    let (url, seen) = server(vec![Plan::Accept]);
+    let (release, gate) = mpsc::channel::<()>();
+    let file = std::fs::File::create(&path).unwrap();
+    let open: copy::Open = Box::new(move || Ok(Box::new(Gated { file, gate: Some(gate) }) as Box<dyn copy::CopyFile>));
+    let job = job(RateControl::Bitrate { kbps: 400, keyframe_s: 1 });
+    let mut out = Streaming::start_copying(&job, vec![target("a", &url, "k")], quick(), path.clone(), open).unwrap();
+    let feed = Feed::new(&out);
+    assert_eq!(next(&seen), Seen::Publish("k".into()));
+    // The copy's first write waits the whole time the destination gets these.
+    starts_with_headers_and_a_keyframe(&media(&seen, 60));
+    let stalled = out.stream_copy().unwrap();
+    assert_eq!((stalled.bytes, stalled.finished, stalled.failure.as_deref()), (0, false, None), "{stalled:?}");
+    assert!(matches!(out.status(), OutputStatus::Running), "{:?}", out.status());
+    drop(release);
+    drop(feed);
+    out.stop().unwrap();
+    until_closed(&seen);
+    let state = out.stream_copy().unwrap();
+    let bytes = std::fs::read(&path).unwrap();
+    let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    assert!(state.finished && state.failure.is_none(), "{state:?}");
+    let (_, [video, _]) = packets(&bytes);
+    assert!(video.first().is_some_and(|v| v.1), "after the packets it lost, the copy goes on from a keyframe");
+}
+
+#[test]
+fn a_copy_that_cannot_be_written_stops_alone() {
+    let (url, seen) = server(vec![Plan::Accept]);
+    let open: copy::Open = Box::new(|| Err(io::Error::new(io::ErrorKind::PermissionDenied, "the folder is read-only")));
+    let job = job(RateControl::Bitrate { kbps: 400, keyframe_s: 1 });
+    let mut out = Streaming::start_copying(&job, vec![target("a", &url, "k")], quick(), "/videos/Stream.mkv".into(), open).unwrap();
+    let feed = Feed::new(&out);
+    assert_eq!(next(&seen), Seen::Publish("k".into()));
+    media(&seen, 30);
+    // The copy fails on its own thread; GUARD only ends a test that would otherwise hang.
+    let waited = Instant::now();
+    let state = loop {
+        let s = out.stream_copy().unwrap();
+        if s.failure.is_some() {
+            break s;
+        }
+        assert!(waited.elapsed() < GUARD, "the copy never failed: {s:?}");
+        std::thread::yield_now();
+    };
+    let failure = state.failure.unwrap_or_default();
+    assert!(failure.contains("could not be written") && failure.contains("read-only"), "{failure}");
+    assert!(!state.finished);
+    assert_eq!(until(&out, "a", |_| true).status, DestinationStatus::Live);
+    drop(feed);
+    out.stop().unwrap();
+    until_closed(&seen);
+}
+
+#[test]
+fn a_stream_with_a_copy_leaves_a_subscription_for_it() {
+    let job = job(RateControl::Bitrate { kbps: 400, keyframe_s: 1 });
+    let targets: Vec<Target> = (0..MAX_SUBSCRIBERS).map(|i| target(&format!("d{i}"), "rtmp://127.0.0.1:1/live", "k")).collect();
+    let open: copy::Open = Box::new(|| Err(io::Error::other("not opened")));
+    let e = Streaming::start_copying(&job, targets.clone(), quick(), "/videos/Stream.mkv".into(), open).err().unwrap();
+    assert!(e.to_string().contains(&format!("at most {} destinations", MAX_SUBSCRIBERS - 1)), "{e}");
+    let open: copy::Open = Box::new(|| Err(io::Error::other("not opened")));
+    let mut out = Streaming::start_copying(&job, targets[1..].to_vec(), quick(), "/videos/Stream.mkv".into(), open).unwrap();
+    assert!(out.stream_copy().is_some_and(|c| c.failure.is_none_or(|f| f.contains("not opened"))));
+    let _ = out.stop();
 }

@@ -502,6 +502,10 @@
 	When a destination fails three tries in a row or gives up, StudioCraft checks its server's name, route and port once. With this on, that check also reads the service's list of ingest servers and status summary and connects to two of its other ingest servers, so those hosts see this computer's address. Check Connection in the Streaming window always contacts them.	When a destination fails three tries in a row or gives up, StudioCraft checks its server's name, route and port once. With this on, that check also reads the service's list of ingest servers and status summary and connects to two of its other ingest servers, so those hosts see this computer's address. Check Connection in the Streaming window always contacts them.
 	Check Stream Destination Connection	Check Stream Destination Connection
 	Change Connection Checks After a Failure	Change Connection Checks After a Failure
+	Change Saving a Copy of the Stream	Change Saving a Copy of the Stream
+	Copy of the stream	Copy of the stream
+	Save a copy of the stream for posting as a video	Save a copy of the stream for posting as a video
+	The stream also writes the same pictures and sound it sends to an MKV file in the recording folder, named Stream and the date and time it started. The copy uses no extra encoder. For editing, record audio tracks too: each source's sound is then kept in a file of its own. If the disk falls behind, the copy leaves out a few seconds and the stream goes on.	The stream also writes the same pictures and sound it sends to an MKV file in the recording folder, named Stream and the date and time it started. The copy uses no extra encoder. For editing, record audio tracks too: each source's sound is then kept in a file of its own. If the disk falls behind, the copy leaves out a few seconds and the stream goes on.
 	Type	Type
 	Type shortcuts such as Ctrl+1 or Shift+F5; separate several with commas.	Type shortcuts such as Ctrl+1 or Shift+F5; separate several with commas.
 	ultrafast	ultrafast
@@ -653,6 +657,11 @@
 @msg	The stream could not be finished: {error}	The stream could not be finished: {error}
 @msg	The stream ended	The stream ended
 @msg	The stream stopped: {error}	The stream stopped: {error}
+@msg	Stream copy saved to {path}	Stream copy saved to {path}
+@msg	Stream copy saved to {path}; {packets} packets were left out while the disk fell behind	Stream copy saved to {path}; {packets} packets were left out while the disk fell behind
+@msg	The stream's copy could not be finished: {error}	The stream's copy could not be finished: {error}
+@msg	The stream's copy stopped; the stream goes on: {error}	The stream's copy stopped; the stream goes on: {error}
+@msg	The stream starts without a copy: no file could be made in {folder}: {error}	The stream starts without a copy: no file could be made in {folder}: {error}
 @msg	ffmpeg at {path} was not found	ffmpeg at {path} was not found
 menu	Transform	Transform
 	Record as its own track	Record as its own track

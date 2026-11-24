@@ -45,6 +45,7 @@ pub const UI_COMMANDS: &[(&str, &str)] = &[
     ("stream.reconnect_set", "Change Automatic Reconnect"),
     ("stream.diagnose", "Check Stream Destination Connection"),
     ("stream.check_service_set", "Change Connection Checks After a Failure"),
+    ("stream.save_copy_set", "Change Saving a Copy of the Stream"),
     ("dock.scenes", "Scenes"),
     ("dock.sources", "Sources"),
     ("dock.mixer", "Audio Mixer"),
@@ -112,6 +113,7 @@ pub fn ui_params(id: &str) -> &'static str {
         "stream.check_service_set" => {
             "enabled: boolean (whether the check after a failure also reads the service's list of ingest servers and status summary and connects to two of its other ingest servers)"
         }
+        "stream.save_copy_set" => "enabled: boolean (whether the next stream also writes what it sends to an MKV file in the recording folder)",
         "stream.reconnect_set" => {
             "enabled?: boolean, first_delay_s?: integer (1 to 60), max_delay_s?: integer (first_delay_s to 600), max_tries?: integer (1 to 100)"
         }
