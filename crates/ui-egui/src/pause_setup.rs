@@ -18,6 +18,12 @@ pub const DURATIONS: [u32; 6] = [60, 120, 300, 600, 900, 0];
 /// The labels of [`DURATIONS`], in English.
 pub const DURATION_LABELS: [&str; 6] = ["1 min", "2 min", "5 min", "10 min", "15 min", "None"];
 
+/// The height, in points, kept for the buttons under the fields and the popover's frame and margins.
+const FOOTER_ROOM: f32 = 80.0;
+
+/// The fields' least height, in points, in a window too short for more.
+const MIN_FORM_HEIGHT: f32 = 120.0;
+
 /// The ways the picture or video can be sized to the canvas, with their labels in English.
 pub const FITS: [(FitMode, &str); 3] = [(FitMode::Fit, "Fit"), (FitMode::Fill, "Fill"), (FitMode::Stretch, "Stretch")];
 
@@ -227,19 +233,72 @@ impl PauseSetup {
     }
 
     /// Draw the popover's contents. The left and right arrow keys move between the durations
-    /// while one has the keyboard focus, Enter starts the pause unless a button has the focus,
-    /// and Esc cancels.
+    /// while one has the keyboard focus, Enter starts the pause while a duration or a field of
+    /// the popover has the focus, or nothing has it, and Esc cancels. The fields scroll when the
+    /// window is shorter than they are, and the buttons stay under them.
     pub fn show(&mut self, ui: &mut Ui, durations: &SegmentedStyle) -> Outcome {
         let mut out = Outcome::default();
         let mut buttons: Vec<Id> = Vec::new();
+        let mut fields: Vec<Id> = Vec::new();
         ui.set_width(360.0);
         ui.strong(tl!("Pause the program"));
         ui.add_space(6.0);
 
+        // The room left for the fields between the title and the window's bottom edge once the
+        // buttons and the popover's frame fit, so a popover opened under its anchor ends on screen.
+        let height = (ui.ctx().content_rect().bottom() - ui.min_rect().bottom() - FOOTER_ROOM).max(MIN_FORM_HEIGHT);
+        egui::ScrollArea::vertical()
+            .id_salt("pause-setup-form")
+            .max_height(height)
+            .auto_shrink([false, true])
+            .show(ui, |ui| self.form(ui, durations, &mut buttons, &mut fields, &mut out));
+        ui.separator();
+
+        let command = self.command();
+        let mut start = false;
+        ui.horizontal(|ui| {
+            let r = ui.button(tl!("Pause Screen Settings…"));
+            buttons.push(r.id);
+            if r.clicked() {
+                out.settings = true;
+            }
+            ui.with_layout(crate::i18n::trailing(ui), |ui| {
+                let r = ui.add_enabled(command.is_some(), egui::Button::new(self.start_label()));
+                buttons.push(r.id);
+                start |= r.clicked();
+                let r = ui.button(tl!("Cancel"));
+                buttons.push(r.id);
+                if r.clicked() {
+                    out.cancel = true;
+                }
+            });
+        });
+
+        // Enter on a button clicks that button. Enter on a duration or a field of the popover, or
+        // with no focus (a single-line field gives up the focus on Enter), starts the pause. Enter
+        // on a widget outside the popover, such as the Pause button, belongs to that widget.
+        let focused = ui.memory(|m| m.focused());
+        if focused.is_none_or(|f| fields.contains(&f)) && ui.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Enter)) {
+            start = true;
+        }
+        if ui.input(|i| i.key_pressed(Key::Escape)) {
+            out.cancel = true;
+        }
+        if start && !out.cancel {
+            out.start = command;
+        }
+        out
+    }
+
+    /// Draw the popover's fields, from the countdown's length to the audio choice. `buttons`
+    /// collects the ids of the buttons, which take Enter themselves, and `fields` the ids of the
+    /// durations and text fields, where Enter starts the pause.
+    fn form(&mut self, ui: &mut Ui, durations: &SegmentedStyle, buttons: &mut Vec<Id>, fields: &mut Vec<Id>, out: &mut Outcome) {
         ui.label(tl!("Countdown length"));
         let labels: Vec<&str> = DURATION_LABELS.iter().map(|l| tl!(l)).collect();
         let selected = self.duration().unwrap_or(DURATIONS.len());
         let seg = Segmented::new(Id::unique("pause-setup-durations"), &labels, selected, durations).show(ui);
+        fields.extend(seg.segments.iter().map(|s| s.id));
         if let Some(i) = seg.changed {
             self.choose(i);
         }
@@ -257,6 +316,7 @@ impl PauseSetup {
             ui.vertical(|ui| {
                 let mut length = self.length.clone();
                 let r = ui.add(egui::TextEdit::singleline(&mut length).id(Self::length_id()).char_limit(12).desired_width(80.0));
+                fields.push(r.id);
                 if focus_length {
                     r.request_focus();
                 }
@@ -269,7 +329,8 @@ impl PauseSetup {
             });
             ui.end_row();
             ui.label(tl!("Size"));
-            ui.add(egui::DragValue::new(&mut self.size_pct).range(PauseSettings::SIZE_PCT).suffix(format!(" {}", tl!("% of the canvas height"))));
+            let size = egui::DragValue::new(&mut self.size_pct).range(PauseSettings::SIZE_PCT).suffix(format!(" {}", tl!("% of the canvas height")));
+            fields.push(ui.add(size).id);
             ui.end_row();
             ui.label(tl!("Position"));
             egui::Grid::new("pause-setup-anchor").num_columns(3).spacing([2.0, 2.0]).show(ui, |ui| {
@@ -287,7 +348,7 @@ impl PauseSetup {
             ui.end_row();
             ui.label(tl!("Text"));
             ui.vertical(|ui| {
-                ui.add(egui::TextEdit::singleline(&mut self.text).char_limit(PauseSettings::MAX_TEXT).desired_width(240.0));
+                fields.push(ui.add(egui::TextEdit::singleline(&mut self.text).char_limit(PauseSettings::MAX_TEXT).desired_width(240.0)).id);
                 match PauseSettings::check_text(&self.text) {
                     Err(e) => {
                         ui.colored_label(ui.visuals().error_fg_color, Msg::plain(e.as_str()).shown());
@@ -303,7 +364,9 @@ impl PauseSetup {
 
         ui.label(tl!("Picture or video"));
         ui.horizontal(|ui| {
-            ui.add(egui::TextEdit::singleline(&mut self.media).hint_text(tl!("None")).char_limit(PauseSettings::MAX_MEDIA_PATH).desired_width(200.0));
+            let media =
+                egui::TextEdit::singleline(&mut self.media).hint_text(tl!("None")).char_limit(PauseSettings::MAX_MEDIA_PATH).desired_width(200.0);
+            fields.push(ui.add(media).id);
             let r = ui.button(tl!("Choose…"));
             buttons.push(r.id);
             if r.clicked() {
@@ -339,7 +402,7 @@ impl PauseSetup {
                         ui.painter().rect_filled(rect, 3.0, egui::Color32::from_rgba_unmultiplied(r, g, b, a));
                     }
                     ui.painter().rect_stroke(rect, 3.0, ui.visuals().widgets.noninteractive.bg_stroke, egui::StrokeKind::Inside);
-                    ui.add(egui::TextEdit::singleline(&mut self.background).char_limit(9).desired_width(90.0));
+                    fields.push(ui.add(egui::TextEdit::singleline(&mut self.background).char_limit(9).desired_width(90.0)).id);
                 });
                 if studiocraft_model::settings::parse_color(&self.background).is_none() {
                     ui.colored_label(ui.visuals().error_fg_color, tl!("Type a color like #101014"));
@@ -358,40 +421,6 @@ impl PauseSetup {
         let r = ui.checkbox(&mut self.mute_scene, tl!("Mute the scene's audio while paused"));
         buttons.push(r.id);
         ui.label(RichText::new(tl!("The stream and the recording keep running and show the pause screen.")).small().weak());
-        ui.separator();
-
-        let command = self.command();
-        let mut start = false;
-        ui.horizontal(|ui| {
-            let r = ui.button(tl!("Pause Screen Settings…"));
-            buttons.push(r.id);
-            if r.clicked() {
-                out.settings = true;
-            }
-            ui.with_layout(crate::i18n::trailing(ui), |ui| {
-                let r = ui.add_enabled(command.is_some(), egui::Button::new(self.start_label()));
-                buttons.push(r.id);
-                start |= r.clicked();
-                let r = ui.button(tl!("Cancel"));
-                buttons.push(r.id);
-                if r.clicked() {
-                    out.cancel = true;
-                }
-            });
-        });
-
-        // Enter on a button clicks that button; elsewhere in the popover it starts the pause.
-        let focused = ui.memory(|m| m.focused());
-        if !focused.is_some_and(|f| buttons.contains(&f)) && ui.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Enter)) {
-            start = true;
-        }
-        if ui.input(|i| i.key_pressed(Key::Escape)) {
-            out.cancel = true;
-        }
-        if start && !out.cancel {
-            out.start = command;
-        }
-        out
     }
 }
 
@@ -543,5 +572,47 @@ mod tests {
         s.text = "Back soon".into();
         let out = run(&ctx, &mut s, key(Key::Enter));
         assert_eq!(out.start, None, "the text has no {{time}}");
+    }
+
+    #[test]
+    fn enter_on_a_widget_outside_the_popover_does_not_start_the_pause() {
+        let ctx = crate::test_context();
+        let st = crate::theme::with_root(&ctx, SegmentedStyle::new);
+        let mut s = open(&defaults());
+        let outside = Id::unique("pause-face");
+        let mut out = Outcome::default();
+        for events in [vec![], vec![], key(Key::Enter)] {
+            let raw = RawInput { events, screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(800.0, 800.0))), ..RawInput::default() };
+            let mut full = ctx.run_ui(raw, |ui| {
+                let r = ui.push_id(outside, |ui| ui.button("Pause")).inner;
+                r.request_focus();
+                out = s.show(ui, &st);
+            });
+            full.textures_delta.clear();
+        }
+        assert!(ctx.memory(|m| m.focused()).is_some_and(|f| f != PauseSetup::duration_id(2)), "a widget outside the popover has the focus");
+        assert_eq!(out.start, None, "Enter belongs to the focused widget outside the popover");
+    }
+
+    #[test]
+    fn a_short_window_scrolls_the_form_and_keeps_the_buttons_on_screen() {
+        let ctx = crate::test_context();
+        let st = crate::theme::with_root(&ctx, SegmentedStyle::new);
+        // The popover at the window's top, and in its own area lower down, as under its anchor.
+        for (top, window) in [(0.0, 300.0), (150.0, 400.0)] {
+            let mut s = open(&defaults());
+            let mut bottom = 0.0;
+            for _ in 0..2 {
+                let raw = RawInput { screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(800.0, window))), ..RawInput::default() };
+                let mut full = ctx.run_ui(raw, |ui| {
+                    egui::Area::new(Id::unique("pause-setup-test-area")).fixed_pos(pos2(0.0, top)).constrain(false).show(ui.ctx(), |ui| {
+                        s.show(ui, &st);
+                        bottom = ui.min_rect().bottom();
+                    });
+                });
+                full.textures_delta.clear();
+            }
+            assert!(bottom <= window, "the popover opened at {top} ends at {bottom}, below a {window}-point window");
+        }
     }
 }
