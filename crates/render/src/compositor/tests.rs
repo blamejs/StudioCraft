@@ -98,6 +98,42 @@ fn frames_are_scaled_and_cropped() {
 }
 
 #[test]
+fn flips_mirror_the_picture_inside_the_box() {
+    let Some(mut c) = compositor(20, 20) else { return };
+    // Red, green on the top row; blue, white below.
+    let v = frame(&[[255, 0, 0, 255], [0, 255, 0, 255], [0, 0, 255, 255], [255, 255, 255, 255]], 2, 2);
+    let (red, green, blue, white) = ([255, 0, 0, 255], [0, 255, 0, 255], [0, 0, 255, 255], [255, 255, 255, 255]);
+    let cases = [
+        ((false, false), [red, green, blue, white]),
+        ((true, false), [green, red, white, blue]),
+        ((false, true), [blue, white, red, green]),
+        ((true, true), [white, blue, green, red]),
+    ];
+    for ((h, v_flip), want) in cases {
+        let t = Transform { scale: Vec2::new(10.0, 10.0), flip_horizontal: h, flip_vertical: v_flip, ..Transform::default() };
+        let px = draw(&mut c, Plan { program: SceneDesc { items: vec![item(1, &v, t)] }, ..Plan::default() }, Tick(0));
+        // Pixels near the outer edges, where the filter stays inside one texel.
+        let got = [pixel(&px, 20, 2, 2), pixel(&px, 20, 17, 2), pixel(&px, 20, 2, 17), pixel(&px, 20, 17, 17)];
+        assert!(got.iter().zip(want).all(|(g, w)| close(*g, w)), "flip ({h}, {v_flip}): {got:?}");
+    }
+}
+
+#[test]
+fn a_flip_mirrors_what_the_crop_leaves() {
+    let Some(mut c) = compositor(40, 10) else { return };
+    // Red, green, blue, white; cropping two from the left leaves blue and white, which the flip
+    // swaps. The crop's edge is the source's left edge, before the flip.
+    let v = frame(&[[255, 0, 0, 255], [0, 255, 0, 255], [0, 0, 255, 255], [255, 255, 255, 255]], 4, 1);
+    let t = Transform { scale: Vec2::new(20.0, 10.0), crop: Crop { left: 2, ..Crop::default() }, flip_horizontal: true, ..Transform::default() };
+    let px = draw(&mut c, Plan { program: SceneDesc { items: vec![item(1, &v, t)] }, ..Plan::default() }, Tick(0));
+    assert!(close(pixel(&px, 40, 5, 5), [255, 255, 255, 255]), "{:?}", pixel(&px, 40, 5, 5));
+    assert!(close(pixel(&px, 40, 35, 5), [0, 0, 255, 255]), "{:?}", pixel(&px, 40, 35, 5));
+    // The crop's edge is at the right after the flip: the green that the crop removed does not
+    // blend into it.
+    assert!(close(pixel(&px, 40, 39, 5), [0, 0, 255, 255]), "{:?}", pixel(&px, 40, 39, 5));
+}
+
+#[test]
 fn the_last_frame_stays_until_a_new_one_arrives() {
     let Some(mut c) = compositor(16, 16) else { return };
     let v = frame(&[[0, 255, 0, 255]; 4], 2, 2);

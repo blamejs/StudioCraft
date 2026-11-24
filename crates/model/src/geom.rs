@@ -53,8 +53,12 @@ pub const MIN_SCALE: f32 = 0.001;
 pub const MAX_SCALE: f32 = 1000.0;
 
 /// Where and how a scene item is drawn: the top-left corner of its unrotated box, its scale,
-/// its clockwise rotation in degrees around the box's center, and the crop applied to the
-/// source first.
+/// its clockwise rotation in degrees around the box's center, the crop applied to the source
+/// first, and whether the picture is mirrored inside the box.
+///
+/// A flip mirrors the cropped picture inside the item's box: `flip_horizontal` swaps its left and
+/// right, `flip_vertical` its top and bottom. The box, its rotation and the crop stay as they are,
+/// and the crop's edges are the source's own edges, before the flip.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Transform {
@@ -62,11 +66,13 @@ pub struct Transform {
     pub scale: Vec2,
     pub rotation: f32,
     pub crop: Crop,
+    pub flip_horizontal: bool,
+    pub flip_vertical: bool,
 }
 
 impl Default for Transform {
     fn default() -> Self {
-        Self { position: Vec2::ZERO, scale: Vec2::ONE, rotation: 0.0, crop: Crop::default() }
+        Self { position: Vec2::ZERO, scale: Vec2::ONE, rotation: 0.0, crop: Crop::default(), flip_horizontal: false, flip_vertical: false }
     }
 }
 
@@ -99,6 +105,8 @@ impl Transform {
             scale: Vec2::new(clamp_scale(self.scale.x), clamp_scale(self.scale.y)),
             rotation,
             crop: self.crop,
+            flip_horizontal: self.flip_horizontal,
+            flip_vertical: self.flip_vertical,
         }
     }
 
@@ -221,14 +229,15 @@ pub enum FitMode {
 }
 
 impl FitMode {
-    /// `t` placed on a `canvas` by this mode for a source of `native` size. The crop stays; the
-    /// rotation becomes 0. A source that needs a scale past the limits is drawn at the limit,
-    /// centered on the canvas.
+    /// `t` placed on a `canvas` by this mode for a source of `native` size. The crop and the
+    /// flips stay; the rotation becomes 0. A source that needs a scale past the limits is drawn
+    /// at the limit, centered on the canvas.
     pub fn place(self, t: Transform, native: (u32, u32), canvas: (u32, u32)) -> Transform {
         let cropped = t.crop.apply(native.0, native.1);
+        let keep = |placed: Transform| Transform { crop: t.crop, flip_horizontal: t.flip_horizontal, flip_vertical: t.flip_vertical, ..placed };
         match self {
-            FitMode::Fit => Transform { crop: t.crop, ..Transform::fit(cropped, canvas) }.sanitized(),
-            FitMode::Fill => Transform { crop: t.crop, ..Transform::fill(cropped, canvas) }.sanitized(),
+            FitMode::Fit => keep(Transform::fit(cropped, canvas)).sanitized(),
+            FitMode::Fill => keep(Transform::fill(cropped, canvas)).sanitized(),
             FitMode::Stretch => {
                 let size = Vec2::new(canvas.0.max(1) as f32, canvas.1.max(1) as f32);
                 let t = Transform { position: Vec2::ZERO, rotation: 0.0, ..t }.with_size(native, size);
@@ -254,11 +263,38 @@ mod tests {
 
     #[test]
     fn sanitizing_clamps_and_wraps() {
-        let t = Transform { position: Vec2::new(f32::NAN, -1e9), scale: Vec2::new(0.0, f32::INFINITY), rotation: -90.0, crop: Crop::default() }
+        let t = Transform { position: Vec2::new(f32::NAN, -1e9), scale: Vec2::new(0.0, f32::INFINITY), rotation: -90.0, ..Transform::default() }
             .sanitized();
         assert_eq!(t.position, Vec2::new(0.0, -MAX_EXTENT));
         assert_eq!(t.scale, Vec2::new(MIN_SCALE, 1.0));
         assert_eq!(t.rotation, 270.0);
+    }
+
+    #[test]
+    fn flips_stay_through_sanitizing_fit_modes_and_relayout() {
+        let crop = Crop { left: 10, ..Crop::default() };
+        let t = Transform { crop, flip_horizontal: true, flip_vertical: true, ..Transform::default() };
+        let flips = |t: Transform| (t.flip_horizontal, t.flip_vertical);
+        assert_eq!(flips(t.sanitized()), (true, true));
+        for mode in [FitMode::Fit, FitMode::Fill, FitMode::Stretch] {
+            let placed = mode.place(t, (200, 100), (1920, 1080));
+            assert_eq!((flips(placed), placed.crop), ((true, true), crop), "{mode:?}");
+            assert_eq!(flips(placed.relayout(Some(mode), Some((200, 100)), (1920, 1080), (1080, 1920))), (true, true), "{mode:?}");
+        }
+        assert_eq!(flips(t.relayout(None, Some((200, 100)), (1920, 1080), (1280, 720))), (true, true));
+        assert_eq!(flips(t.relayout(None, None, (1920, 1080), (1280, 720))), (true, true));
+        // The box does not move or change size.
+        let plain = Transform { crop, ..Transform::default() };
+        assert_eq!(t.corners((200, 100)), plain.corners((200, 100)));
+    }
+
+    #[test]
+    fn a_transform_saved_without_flips_reads_unflipped() {
+        let t: Transform = serde_json::from_value(serde_json::json!({"position": {"x": 4.0, "y": 2.0}})).unwrap();
+        assert!(!t.flip_horizontal && !t.flip_vertical, "{t:?}");
+        let saved = serde_json::to_value(Transform { flip_vertical: true, ..Transform::default() }).unwrap();
+        assert_eq!((saved["flip_horizontal"].clone(), saved["flip_vertical"].clone()), (serde_json::json!(false), serde_json::json!(true)));
+        assert!(serde_json::from_value::<Transform>(serde_json::json!({"flip_horizontal": "yes"})).is_err());
     }
 
     #[test]
@@ -323,7 +359,7 @@ mod tests {
     #[test]
     fn relayout_keeps_other_items_in_proportion_and_goes_back() {
         let n = (200, 100);
-        let t = Transform { position: Vec2::new(100.0, 50.0), scale: Vec2::new(2.0, 1.0), rotation: 30.0, crop: Crop::default() };
+        let t = Transform { position: Vec2::new(100.0, 50.0), scale: Vec2::new(2.0, 1.0), rotation: 30.0, ..Transform::default() };
         let r = t.relayout(None, Some(n), (1920, 1080), (3840, 2160));
         assert!(close(r.center(n), Vec2::new(600.0, 200.0)) && close(r.size(n), Vec2::new(800.0, 200.0)), "{r:?}");
         assert_eq!(r.rotation, 30.0);

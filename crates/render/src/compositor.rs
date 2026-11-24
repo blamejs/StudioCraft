@@ -12,7 +12,7 @@ use studiocraft_media::Tick;
 use studiocraft_media::clock::{duration_of, tick_of};
 use studiocraft_media::queue::{Fifo, Latest};
 use studiocraft_media::video::PixelFormat;
-use studiocraft_model::{Crop, SourceId, Vec2};
+use studiocraft_model::{Crop, SourceId, Transform, Vec2};
 use studiocraft_plugin::{EffectImage, VIDEO_EFFECT_PARAMS, VideoContent, VideoEffect, VideoOut};
 
 use crate::nv12::{EncodeTarget, Nv12};
@@ -1228,6 +1228,14 @@ fn crop_uv(crop: Crop, (w, h): (u32, u32)) -> [f32; 4] {
     [u0, v0, (u0 + cw as f32 / wf).min(1.0), (v0 + ch as f32 / hf).min(1.0)]
 }
 
+/// The texture rectangle `uv` mirrored by `t`'s flips: a flip swaps the rectangle's sides, so the
+/// item's corners sample the other edge. The item shader clamps to the rectangle either way round.
+fn flip_uv(t: &Transform, [u0, v0, u1, v1]: [f32; 4]) -> [f32; 4] {
+    let (u0, u1) = if t.flip_horizontal { (u1, u0) } else { (u0, u1) };
+    let (v0, v1) = if t.flip_vertical { (v1, v0) } else { (v0, v1) };
+    [u0, v0, u1, v1]
+}
+
 /// Draw a scene's items bottom to top over black.
 fn draw_scene(ctx: &Ctx<'_>, uniforms: &mut Uniforms, enc: &mut wgpu::CommandEncoder, view: &wgpu::TextureView, scene: &SceneDesc) {
     let mut pass = begin(enc, view, Some(wgpu::Color::BLACK));
@@ -1262,6 +1270,7 @@ fn draw_scene(ctx: &Ctx<'_>, uniforms: &mut Uniforms, enc: &mut wgpu::CommandEnc
         }
         let t = item.transform.sanitized();
         let [c0, c1, c2, c3] = t.corners(size).map(clip);
+        let uv = flip_uv(&t, uv);
         let slot = [c0[0], c0[1], c1[0], c1[1], c2[0], c2[1], c3[0], c3[1], uv[0], uv[1], uv[2], uv[3], straight, 1.0, 0.0, 0.0];
         let off = uniforms.push(&slot);
         pass.set_bind_group(0, &uniforms.bind, &[off]);

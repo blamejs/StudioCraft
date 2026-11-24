@@ -26,6 +26,14 @@ commands is fit, filled or stretched again, and any other source keeps its place
 the canvas ([`canvas.relayout`](control-protocol.md#canvasrelayout)). Moving, resizing, rotating
 or cropping a source ends its fit, fill or stretch.
 
+Flip Horizontal and Flip Vertical, in the same menu, mirror the source's picture inside its box,
+left to right or top to bottom. The box keeps its place, size and rotation, so a fit, filled or
+stretched source stays that way, and a source can be flipped before it shows a picture. Each flip
+is one undo step, and flipping again turns the picture back. A crop still cuts the source's own
+edges, so the part cropped from a source's left edge is missing at the right of its flipped picture.
+The flips are saved with the scene collection and set with `item.transform`'s `flip_horizontal`
+and `flip_vertical`.
+
 ### Built-in sources
 
 | Source | What it captures | Systems |
