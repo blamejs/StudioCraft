@@ -671,7 +671,7 @@ where `service` is the id of the streaming service it is set up for or empty for
 `key` is `profile`, `held` or `none` and `server` shows a user name and password before the host, a
 key at the end of the address, and any query, as dots. A destination whose key is held adds `held_name` and `held`, whether a key is held
 under that name now. `status` is `idle` while no stream runs, `not_in_stream` for a destination
-added after the stream started, and otherwise `connecting`, `live`, `retrying`,
+added after the stream started and not started since, and otherwise `connecting`, `live`, `retrying`,
 `waiting_for_network` (this computer has no network route to the server, and the try starts when
 one returns), `stopped` or `failed`. While the stream runs a destination also has `bytes`,
 `dropped` and `reconnects`; a `retrying` or `waiting_for_network` one has `attempt`, `error` and
@@ -737,7 +737,11 @@ changes.
 or trying to is not removed until it is stopped.
 
 `stream.destination_start` and `stream.destination_stop` take `{"id"}` and start or stop sending to
-that destination of the running stream; the others go on. They return `{"id", "on"}`.
+that destination of the running stream; the others go on. They return `{"id", "on"}`. A start of a
+destination added to the profile after the stream started adds it to the running stream. A start of
+a destination that is not sending, or that was stopped and has not closed its connection yet, uses
+its server, key and service as the profile has them now; one that is sending keeps the ones it
+started with and needs no held key.
 
 These are errors: a missing or unknown `id`, a 17th destination, a `name` over 128 characters, a
 `server` over 4096 bytes, a `name` or `server` with a control character, a `server` with a user

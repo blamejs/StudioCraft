@@ -507,7 +507,12 @@ did not answer. On Windows a lookup failure also says whether the DNS server ans
 does not exist or did not answer; on macOS and Linux a lookup the system answers with an error
 reports only that the lookup failed. Start and
 Stop send to one destination or stop sending to it while the others go on. A destination added
-after the stream started is sent to from the next start, and so are changes to a server or a key.
+after the stream started shows "Not in this stream yet", and Start sends to it at once, from the
+stream's next keyframe, without restarting the stream. A destination that is not sending starts
+with its server and key as they are set when Start is pressed. One that is sending keeps the server
+and key it started with until it is stopped and started again; started again before its connection
+closed, it closes that connection and connects with the new ones. While a stream started with another
+profile runs, the destinations of the profile in use are sent to from the next start.
 
 Check Connection, under each destination of the Streaming window, checks what this computer's
 network can reach on the way to the destination's server and shows one verdict, such as "The DNS

@@ -668,9 +668,146 @@ fn one_destination_stops_and_starts_while_the_other_goes_on() {
     assert!(out.start_destination("b", None).is_err(), "a stopped stream starts no destination");
 }
 
+fn setup(id: &str, server: &str, key: &str) -> DestinationSetup {
+    DestinationSetup { id: id.into(), server: server.into(), key: key.into(), service: String::new() }
+}
+
+#[test]
+fn a_destination_is_added_and_moved_to_another_server_while_the_stream_runs() {
+    let (a, seen_a) = server(vec![Plan::Accept]);
+    let (b, seen_b) = server(vec![Plan::Accept]);
+    let (c, seen_c) = server(vec![Plan::Accept]);
+    let job = job(RateControl::Bitrate { kbps: 400, keyframe_s: 1 });
+    let mut out = Streaming::start_timed(&job, vec![target("a", &a, "k")], quick()).unwrap();
+    let feed = Feed::new(&out);
+    media(&seen_a, 5);
+    // A destination the stream was not started with is added, and sends from a keyframe on.
+    out.start_destination_as(&DestinationSetup { service: "twitch".into(), ..setup("b", &b, "kb") }).unwrap();
+    assert_eq!(next(&seen_b), Seen::Publish("kb".into()));
+    starts_with_headers_and_a_keyframe(&media(&seen_b, 3));
+    let ids: Vec<String> = out.destinations().into_iter().map(|d| d.id).collect();
+    assert_eq!(ids, ["a", "b"], "an added destination follows those the stream started with");
+    assert_eq!(lock(&out.hub.find("b").unwrap().service).map(|s| s.id), Some("twitch"));
+    assert_eq!(out.target(), format!("{a}, {b}"));
+    // One that is sending keeps its server and key, so a setup it does not use is not checked.
+    out.start_destination_as(&setup("b", &c, "kc")).unwrap();
+    out.start_destination_as(&setup("b", "http://127.0.0.1/live", "")).unwrap();
+    let dest = out.hub.find("b").unwrap();
+    assert_eq!((lock(&dest.server).clone(), lock(&dest.key).clone()), (b.clone(), "kb".to_string()));
+    // Stopped, it starts again at its new server with its new key, while the other goes on.
+    out.stop_destination("b").unwrap();
+    until_closed(&seen_b);
+    until(&out, "b", |d| d.status == DestinationStatus::Stopped);
+    out.start_destination_as(&setup("b", &c, "kc")).unwrap();
+    assert_eq!(next(&seen_c), Seen::Publish("kc".into()));
+    starts_with_headers_and_a_keyframe(&media(&seen_c, 3));
+    assert_eq!(out.target(), format!("{a}, {c}"));
+    assert_eq!(*lock(&dest.service), None, "it takes the service it is set up for now");
+    media(&seen_a, 5);
+    // A setup that is not valid is refused and adds nothing.
+    assert!(out.start_destination_as(&setup("d", "http://127.0.0.1/live", "k")).is_err());
+    assert!(out.start_destination_as(&setup("d", &c, "")).is_err(), "no key and no name at the end of the address");
+    assert!(out.start_destination_as(&setup("", &c, "k")).is_err());
+    assert_eq!(out.destinations().len(), 2);
+    drop(feed);
+    out.stop().unwrap();
+    until_closed(&seen_a);
+    until_closed(&seen_c);
+    assert!(out.start_destination_as(&setup("e", &c, "k")).is_err(), "a stopped stream adds no destination");
+}
+
+#[test]
+fn a_destination_started_again_before_its_stop_ended_it_takes_the_new_setup() {
+    // The old server takes the stream, or refuses it, which alone would end the destination.
+    for plan in [Plan::Accept, Plan::Refuse] {
+        let (a, seen_a) = server(vec![Plan::Accept]);
+        let (held, accepted, go, seen_held) = held_server_as(plan);
+        let (c, seen_c) = server(vec![Plan::Accept]);
+        let job = job(RateControl::Bitrate { kbps: 400, keyframe_s: 1 });
+        let mut out = Streaming::start_timed(&job, vec![target("a", &a, "k")], quick()).unwrap();
+        let feed = Feed::new(&out);
+        media(&seen_a, 3);
+        assert!(out.start_destination_as(&setup("b", &held, "kb")).unwrap(), "an added destination takes its setup");
+        accepted.recv_timeout(GUARD).unwrap();
+        out.stop_destination("b").unwrap();
+        // The thread is still inside the connect, so the stop has not ended it yet.
+        assert_eq!(until(&out, "b", |_| true).status, DestinationStatus::Connecting);
+        assert!(out.start_destination_as(&setup("b", &c, "kc")).unwrap(), "one asked to stop takes the new setup");
+        go.send(true).unwrap();
+        // The connection made with the old setup closes before anything is sent on it, and the
+        // next one goes to the new server with the new key.
+        assert_eq!(next(&seen_held), Seen::Publish("kb".into()));
+        assert_eq!(next(&seen_held), Seen::Closed, "{plan:?}");
+        assert_eq!(next(&seen_c), Seen::Publish("kc".into()), "{plan:?}");
+        starts_with_headers_and_a_keyframe(&media(&seen_c, 3));
+        assert_eq!(out.target(), format!("{a}, {c}"));
+        assert!(!out.start_destination_as(&setup("b", &held, "kb")).unwrap(), "one that is sending keeps its setup");
+        drop(feed);
+        out.stop().unwrap();
+        until_closed(&seen_a);
+        until_closed(&seen_c);
+    }
+}
+
+#[test]
+fn an_added_destination_takes_the_place_of_one_that_ended_when_the_list_is_full() {
+    let (a, seen_a) = server(vec![Plan::Accept]);
+    let job = job(RateControl::Bitrate { kbps: 400, keyframe_s: 1 });
+    let mut out = Streaming::start_timed(&job, vec![target("a", &a, "k")], quick()).unwrap();
+    let feed = Feed::new(&out);
+    media(&seen_a, 3);
+    // Each added one has its connect command refused and fails, except d5, which loses its first
+    // connection, makes it again and is stopped. The refusals come from this test's own server,
+    // so a port another test frees and binds again takes none of these connections.
+    let (refusing, _refused) = server(vec![Plan::RefuseConnect; 2 * MAX_SUBSCRIBERS]);
+    let (five, seen_five) = server(vec![Plan::DropAfter(2), Plan::Accept, Plan::Accept]);
+    for i in 1..MAX_SUBSCRIBERS {
+        let id = format!("d{i}");
+        if i == 5 {
+            out.start_destination_as(&setup(&id, &five, "k")).unwrap();
+            until(&out, &id, |d| d.reconnects == 1 && d.status == DestinationStatus::Live);
+            out.stop_destination(&id).unwrap();
+            until(&out, &id, |d| d.status == DestinationStatus::Stopped);
+            continue;
+        }
+        out.start_destination_as(&setup(&id, &refusing, "k")).unwrap();
+        until(&out, &id, |d| matches!(d.status, DestinationStatus::Failed(_)));
+    }
+    assert_eq!(out.destinations().len(), MAX_SUBSCRIBERS);
+    let bytes = out.destinations().into_iter().find(|d| d.id == "d5").map(|d| d.bytes).unwrap();
+    assert_eq!(out.reconnects(), 1);
+    // The one stopped by request gives its place before the failed ones, and the stream's sums
+    // keep its counts.
+    out.start_destination_as(&setup("new", &refusing, "k")).unwrap();
+    let ids: Vec<String> = out.destinations().into_iter().map(|d| d.id).collect();
+    assert_eq!(ids.len(), MAX_SUBSCRIBERS);
+    assert_eq!(ids.get(5).map(String::as_str), Some("new"), "{ids:?}");
+    assert_eq!(out.reconnects(), 1);
+    until(&out, "new", |d| matches!(d.status, DestinationStatus::Failed(_)));
+    // Then the first that failed. Added again under its id, d5 goes on from its counts.
+    out.start_destination_as(&setup("d5", &five, "k")).unwrap();
+    let ids: Vec<String> = out.destinations().into_iter().map(|d| d.id).collect();
+    assert_eq!(ids.get(1).map(String::as_str), Some("d5"), "{ids:?}");
+    assert!(ids.iter().any(|i| i == "a"), "a destination that sends keeps its place");
+    let d = until(&out, "d5", |d| d.status == DestinationStatus::Live);
+    assert_eq!(d.reconnects, 1, "{d:?}");
+    assert!(d.bytes >= bytes, "{d:?}");
+    assert_eq!(out.reconnects(), 1, "each connection made again is counted once");
+    media(&seen_a, 3);
+    drop(seen_five);
+    drop(feed);
+    out.stop().unwrap();
+    until_closed(&seen_a);
+}
+
 /// A loopback server that takes one connection, says when it has it, and answers nothing until
 /// `go` tells it what to do: `true` runs [`Plan::Accept`], `false` drops the connection.
 fn held_server() -> (String, mpsc::Receiver<()>, mpsc::Sender<bool>, mpsc::Receiver<Seen>) {
+    held_server_as(Plan::Accept)
+}
+
+/// [`held_server`], with `true` running `plan`.
+fn held_server_as(plan: Plan) -> (String, mpsc::Receiver<()>, mpsc::Sender<bool>, mpsc::Receiver<Seen>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();
     let (accepted_tx, accepted) = mpsc::channel();
@@ -681,7 +818,7 @@ fn held_server() -> (String, mpsc::Receiver<()>, mpsc::Sender<bool>, mpsc::Recei
         let _ = accepted_tx.send(());
         let mut c = Conn { s, reader: ChunkReader::new(MAX_MESSAGE), writer: ChunkWriter::new() };
         if go_rx.recv_timeout(GUARD) == Ok(true) {
-            let _ = c.run(Plan::Accept, &tx);
+            let _ = c.run(plan, &tx);
         }
         drop(c);
         let _ = tx.send(Seen::Closed);

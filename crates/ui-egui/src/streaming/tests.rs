@@ -541,7 +541,7 @@ fn each_destination_shows_its_own_status() {
         state("c", DestinationStatus::Retrying { attempt: 3, failure: Failure::new(Cause::Lost, "the server closed the connection") }),
     ];
     let held = |_: &str| false;
-    let view = View { stream: &stream, running: true, live: &live, held: &held, checks: &[] };
+    let view = View { stream: &stream, running: true, own: true, live: &live, held: &held, checks: &[] };
     let mut panel = StreamingPanel::default();
     let mut acts = Vec::new();
     let texts = drawn(|ui| show(ui, &view, &mut panel, &mut acts));
@@ -552,7 +552,8 @@ fn each_destination_shows_its_own_status() {
         "Failed: the server refused the stream; check the stream key",
         "Live",
         "Trying again (try 3): the connection was lost",
-        "Not in this stream; it is sent to from the next start",
+        "Not in this stream yet; Start sends to it now",
+        "A destination that is sending keeps its server and key until it is stopped and started again.",
         "rtmp://a.example/live/•••",
         "No key is held for this session yet",
         "4 of 16 destinations",
@@ -560,12 +561,19 @@ fn each_destination_shows_its_own_status() {
         assert!(texts.iter().any(|t| t == want), "{want} in {texts:?}");
     }
     assert!(!texts.iter().any(|t| t.contains("hidden-a")), "{texts:?}");
-    // A failed destination offers Start, and the others that are sending offer Stop.
-    assert_eq!(texts.iter().filter(|t| *t == "Start").count(), 1, "{texts:?}");
+    // A failed destination and one added after the stream started offer Start, and the others
+    // that are sending offer Stop.
+    assert_eq!(texts.iter().filter(|t| *t == "Start").count(), 2, "{texts:?}");
     assert_eq!(texts.iter().filter(|t| *t == "Stop").count(), 2, "{texts:?}");
     assert!(acts.is_empty(), "drawing does nothing");
+    // While a stream of another profile runs, nothing here starts or stops it.
+    let view = View { stream: &stream, running: true, own: false, live: &[], held: &held, checks: &[] };
+    let texts = drawn(|ui| show(ui, &view, &mut panel, &mut acts));
+    assert_eq!(texts.iter().filter(|t| *t == "Not in this stream; it is sent to from the next start").count(), 4, "{texts:?}");
+    assert!(texts.iter().any(|t| t == "Server and key changes are used from the next start of the stream."), "{texts:?}");
+    assert!(!texts.iter().any(|t| t == "Start" || t == "Stop"), "{texts:?}");
     // Without a stream each destination says whether starting the stream sends to it.
-    let view = View { stream: &stream, running: false, live: &[], held: &held, checks: &[] };
+    let view = View { stream: &stream, running: false, own: false, live: &[], held: &held, checks: &[] };
     let texts = drawn(|ui| show(ui, &view, &mut panel, &mut acts));
     assert_eq!(texts.iter().filter(|t| *t == "Sent to when the stream starts").count(), 3, "{texts:?}");
     assert_eq!(texts.iter().filter(|t| *t == "Off").count(), 1, "{texts:?}");
@@ -655,7 +663,7 @@ fn open_details_save_what_was_typed() {
     // The details of a destination are drawn with its fields, and the server field hides its text.
     let stream = StreamSettings { destinations: vec![d.clone()], ..StreamSettings::default() };
     let held = |n: &str| n == "night";
-    let view = View { stream: &stream, running: false, live: &[], held: &held, checks: &[] };
+    let view = View { stream: &stream, running: false, own: false, live: &[], held: &held, checks: &[] };
     let mut panel = StreamingPanel { editing: Some(Edit::of(&d)), ..StreamingPanel::default() };
     let mut acts = Vec::new();
     let texts = drawn(|ui| show(ui, &view, &mut panel, &mut acts));
@@ -669,7 +677,7 @@ fn open_details_save_what_was_typed() {
     // A key at the end of the address is hidden in the list and in the field.
     let d = Destination { id: "c".into(), server: "rtmp://c.example/live/secret-c".into(), ..Destination::default() };
     let stream = StreamSettings { destinations: vec![d.clone()], ..StreamSettings::default() };
-    let view = View { stream: &stream, running: false, live: &[], held: &held, checks: &[] };
+    let view = View { stream: &stream, running: false, own: false, live: &[], held: &held, checks: &[] };
     let mut panel = StreamingPanel { editing: Some(Edit::of(&d)), ..StreamingPanel::default() };
     let texts = drawn(|ui| show(ui, &view, &mut panel, &mut acts));
     assert!(!texts.iter().any(|t| t.contains("secret-c")), "{texts:?}");
@@ -794,7 +802,7 @@ fn the_details_change_the_server_with_the_service_and_link_to_its_page() {
     let d = Destination { id: "main".into(), service: "kick".into(), ..Destination::default() };
     let stream = StreamSettings { destinations: vec![d.clone()], ..StreamSettings::default() };
     let held = |_: &str| false;
-    let view = View { stream: &stream, running: false, live: &[], held: &held, checks: &[] };
+    let view = View { stream: &stream, running: false, own: false, live: &[], held: &held, checks: &[] };
     let mut panel = StreamingPanel { editing: Some(Edit::of(&d)), ..StreamingPanel::default() };
     let mut acts = Vec::new();
     let texts = drawn(|ui| show(ui, &view, &mut panel, &mut acts));
@@ -863,7 +871,7 @@ fn a_check_is_listed_and_shown_under_its_destination() {
     let stream = StreamSettings { destinations: vec![dest.clone()], ..StreamSettings::default() };
     let held = |_: &str| false;
     let checks = vec![("main".to_string(), CheckState::Done(Box::new(d.clone())))];
-    let view = View { stream: &stream, running: false, live: &[], held: &held, checks: &checks };
+    let view = View { stream: &stream, running: false, own: false, live: &[], held: &held, checks: &checks };
     let mut acts = Vec::new();
     let texts = drawn(|ui| show(ui, &view, &mut StreamingPanel::default(), &mut acts));
     for want in [d.english().as_str(), "Checked by itself after the destination failed", "What the check found", "Check Connection"] {
@@ -871,7 +879,7 @@ fn a_check_is_listed_and_shown_under_its_destination() {
     }
     // While a check runs, the window says so.
     let checks = vec![("main".to_string(), CheckState::Running { automatic: false })];
-    let view = View { stream: &stream, running: false, live: &[], held: &held, checks: &checks };
+    let view = View { stream: &stream, running: false, own: false, live: &[], held: &held, checks: &checks };
     let texts = drawn(|ui| show(ui, &view, &mut StreamingPanel::default(), &mut acts));
     assert!(texts.iter().any(|t| t == "Checking the connection…"), "{texts:?}");
     assert!(texts.iter().all(|t| *t != d.english()), "{texts:?}");

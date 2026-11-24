@@ -37,7 +37,9 @@
 //!   connection is checked once ([`diagnose`]) until it goes live again or is started again.
 //! - A failure of one destination stops neither the other destinations nor the encoders. The
 //!   stream fails when every destination has failed.
-//! - A destination can be stopped and started again while the stream runs.
+//! - A destination can be stopped and started again while the stream runs. A destination the
+//!   stream was not started with can be added and started while it runs, and one that is not
+//!   sending can be started with another server, key or service; it sends from the next keyframe.
 //! - A stream started with a copy also writes the packets the destinations get to a Matroska
 //!   file ([`copy`]). The copy takes one of the [`MAX_SUBSCRIBERS`] subscriptions, and its
 //!   failure stops neither the destinations nor the encoders.
@@ -45,6 +47,7 @@
 //! No log line, error or status of this module holds a stream key: the keys go to
 //! [`craft_rtmp::Config`] and nowhere else, and that crate keeps them out of its errors.
 
+use std::collections::VecDeque;
 use std::fmt;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
@@ -66,8 +69,8 @@ use studiocraft_model::ReconnectSettings;
 use studiocraft_model::services::Service;
 use studiocraft_platform::net::Route;
 use studiocraft_plugin::{
-    AddressOutcome, Cause, DestinationCounts, DestinationState, DestinationStatus, EncoderKind, Failure, OutputInstance, OutputJob, OutputStatus,
-    PluginError, RateControl, StreamCopyState,
+    AddressOutcome, Cause, DestinationCounts, DestinationSetup, DestinationState, DestinationStatus, EncoderKind, Failure, OutputInstance, OutputJob,
+    OutputStatus, PluginError, RateControl, StreamCopyState,
 };
 
 use crate::native::{DISK_WAIT, Item, Native, PacketQueue, QUEUE_BYTES, QUEUE_SPAN_NS, Sink, Track};
@@ -394,8 +397,12 @@ struct Dest {
     target: Target,
     /// The stream's counts, shared by its destinations.
     counts: Arc<Counts>,
+    /// The server it sends to: the target's, or one given when it was started again.
+    server: Mutex<String>,
     /// The stream key it sends with: the target's, or one given when it was started again.
     key: Mutex<String>,
+    /// The streaming service it is set up for, for its automatic connection checks.
+    service: Mutex<Option<&'static Service>>,
     status: Mutex<DestinationStatus>,
     /// How many times the status was set, with a signal for each.
     changes: Mutex<u64>,
@@ -408,6 +415,9 @@ struct Dest {
     /// It was started again while its thread still ran; the thread's next try is a first one, and
     /// its failed tries are counted from none.
     restarted: AtomicBool,
+    /// It was started again with another server or key while its thread still ran: the
+    /// connection made or being made before that closes, and the next one uses the new setup.
+    renew: AtomicBool,
     /// Lookups of the server's name whose threads have not ended.
     lookups: AtomicU32,
     /// The server's addresses from the last lookup that answered; empty before one.
@@ -435,9 +445,11 @@ struct Dest {
 }
 
 impl Dest {
-    fn new(target: Target, counts: Arc<Counts>) -> Dest {
+    fn new(target: Target, counts: Arc<Counts>, service: Option<&'static Service>) -> Dest {
         Dest {
+            server: Mutex::new(target.server.clone()),
             key: Mutex::new(target.key.clone()),
+            service: Mutex::new(service),
             target,
             counts,
             status: Mutex::new(DestinationStatus::Stopped),
@@ -447,6 +459,7 @@ impl Dest {
             dropped: AtomicU64::new(0),
             reconnects: AtomicU32::new(0),
             restarted: AtomicBool::new(false),
+            renew: AtomicBool::new(false),
             lookups: AtomicU32::new(0),
             addrs: Mutex::new(Vec::new()),
             fixed: AtomicBool::new(false),
@@ -461,9 +474,14 @@ impl Dest {
         }
     }
 
-    /// The target with `key` as its stream key.
+    /// The target with its server now and `key` as its stream key.
     fn with_key(&self, key: &str) -> Target {
-        Target { key: key.to_string(), ..self.target.clone() }
+        self.with(&lock(&self.server), key)
+    }
+
+    /// The target with `server` and `key`.
+    fn with(&self, server: &str, key: &str) -> Target {
+        Target { id: self.target.id.clone(), server: server.to_string(), key: key.to_string(), enabled: self.target.enabled }
     }
 
     fn config(&self) -> Result<Config, craft_rtmp::Error> {
@@ -593,11 +611,63 @@ struct Hub {
     ring: RingConfig,
     timing: Timing,
     seams: Seams,
-    dests: Vec<Arc<Dest>>,
+    /// The destinations it was started with, in order, then those added while it runs. At most
+    /// [`MAX_SUBSCRIBERS`].
+    dests: Mutex<Vec<Arc<Dest>>>,
+    /// What the destinations that gave their place to added ones had sent and made again.
+    left: Mutex<Left>,
     counts: Arc<Counts>,
     net: NetWatch,
     /// Where the automatic connection checks run, and what they need; `None` turns them off.
     auto: Option<(Arc<diagnose::Checks>, AutoCheck)>,
+}
+
+/// The counts of destinations no longer in a stream's list, so neither the stream's sums nor the
+/// counts of one added again under its id go down.
+#[derive(Default)]
+struct Left {
+    /// The last [`MAX_SUBSCRIBERS`] that left, oldest first, each by id.
+    each: VecDeque<(String, Totals)>,
+    /// Those that left before them, summed.
+    older: Totals,
+}
+
+/// What a destination sent and lost, and how often it made its connection again.
+#[derive(Clone, Copy, Default)]
+struct Totals {
+    bytes: u64,
+    dropped: u64,
+    reconnects: u64,
+    recovered: u64,
+}
+
+impl Totals {
+    fn of(d: &Dest) -> Totals {
+        Totals {
+            bytes: d.bytes.load(Ordering::Relaxed),
+            dropped: d.dropped.load(Ordering::Relaxed),
+            reconnects: u64::from(d.reconnects.load(Ordering::Relaxed)),
+            recovered: u64::from(d.recovered.load(Ordering::SeqCst)),
+        }
+    }
+
+    fn add(&mut self, o: Totals) {
+        self.bytes = self.bytes.saturating_add(o.bytes);
+        self.dropped = self.dropped.saturating_add(o.dropped);
+        self.reconnects = self.reconnects.saturating_add(o.reconnects);
+        self.recovered = self.recovered.saturating_add(o.recovered);
+    }
+}
+
+impl Left {
+    /// Everything that left, summed.
+    fn sum(&self) -> Totals {
+        let mut t = self.older;
+        for (_, each) in &self.each {
+            t.add(*each);
+        }
+        t
+    }
 }
 
 /// The destinations of a stream that wait for the network, and its route thread.
@@ -610,35 +680,94 @@ struct NetWatch {
 }
 
 impl Hub {
-    fn find(&self, id: &str) -> Result<&Arc<Dest>, PluginError> {
-        self.dests.iter().find(|d| d.target.id == id).ok_or_else(|| PluginError::Failed(format!("the stream has no destination `{id}`")))
+    fn find(&self, id: &str) -> Result<Arc<Dest>, PluginError> {
+        lock(&self.dests)
+            .iter()
+            .find(|d| d.target.id == id)
+            .cloned()
+            .ok_or_else(|| PluginError::Failed(format!("the stream has no destination `{id}`")))
+    }
+
+    /// The destination `id`, added when the stream has none of that id. When the stream already
+    /// has [`MAX_SUBSCRIBERS`] destinations, an added one takes the place of one whose thread has
+    /// ended, a stopped one before a failed one; with none, it is an error.
+    fn find_or_add(&self, id: &str, service: Option<&'static Service>) -> Result<Arc<Dest>, PluginError> {
+        let mut dests = lock(&self.dests);
+        if let Some(d) = dests.iter().find(|d| d.target.id == id) {
+            return Ok(Arc::clone(d));
+        }
+        let ended = |stopped: bool| move |o: &Arc<Dest>| !o.running() && (o.status() == DestinationStatus::Stopped) == stopped;
+        let place = if dests.len() < MAX_SUBSCRIBERS {
+            None
+        } else {
+            match dests.iter().position(ended(true)).or_else(|| dests.iter().position(ended(false))) {
+                Some(i) => Some(i),
+                None => return Err(PluginError::Failed(format!("a stream can have at most {MAX_SUBSCRIBERS} destinations"))),
+            }
+        };
+        let target = Target { id: id.to_string(), server: String::new(), key: String::new(), enabled: true };
+        let d = Arc::new(Dest::new(target, Arc::clone(&self.counts), service));
+        // Changed with the list held, so a sum read with it held counts each destination once.
+        let mut left = lock(&self.left);
+        // One that left under this id goes on from its counts.
+        if let Some(i) = left.each.iter().position(|(i, _)| i == id)
+            && let Some((_, t)) = left.each.remove(i)
+        {
+            d.bytes.store(t.bytes, Ordering::Relaxed);
+            d.dropped.store(t.dropped, Ordering::Relaxed);
+            d.reconnects.store(u32::try_from(t.reconnects).unwrap_or(u32::MAX), Ordering::Relaxed);
+            d.recovered.store(u32::try_from(t.recovered).unwrap_or(u32::MAX), Ordering::SeqCst);
+        }
+        let Some(i) = place else {
+            dests.push(Arc::clone(&d));
+            return Ok(d);
+        };
+        let old = std::mem::replace(&mut dests[i], Arc::clone(&d));
+        left.each.push_back((old.target.id.clone(), Totals::of(&old)));
+        if left.each.len() > MAX_SUBSCRIBERS
+            && let Some((_, t)) = left.each.pop_front()
+        {
+            left.older.add(t);
+        }
+        drop(left);
+        drop(dests);
+        if let Some(t) = lock(&old.thread).take() {
+            let _ = t.join();
+        }
+        Ok(d)
     }
 }
 
-/// Start the thread of `d`, with `key` as its stream key when given, unless it is running; a
-/// running thread keeps its key.
-fn spawn(hub: &Arc<Hub>, d: &Arc<Dest>, key: Option<&str>) -> Result<(), PluginError> {
+/// Start the thread of `d`, unless it is running, with `key` as its stream key when given, and
+/// with `server` as its server and service when given. A running thread keeps its server and key,
+/// unless it was asked to stop and has not ended yet. Says whether `d` took `key` and `server`:
+/// not when its thread was sending.
+fn spawn(hub: &Arc<Hub>, d: &Arc<Dest>, key: Option<&str>, server: Option<(&str, Option<&'static Service>)>) -> Result<bool, PluginError> {
     let mut slot = lock(&d.thread);
     if d.running() {
         // Asked to stop and started again before the thread decided to end: it goes on, and
-        // tries at once. A start of one that was not asked to stop changes nothing.
-        if d.stop.swap(false, Ordering::SeqCst) {
-            d.restarted.store(true, Ordering::SeqCst);
-            // A check that waits for a place from before the stop is dropped.
-            d.uncheck();
-            if let Some(t) = slot.as_ref() {
-                t.thread().unpark();
-            }
+        // tries at once, with the new setup when it has one. A start of one that was not asked
+        // to stop changes nothing.
+        if !d.stop.swap(false, Ordering::SeqCst) {
+            return Ok(false);
         }
-        return Ok(());
+        if set_up(d, key, server) {
+            d.renew.store(true, Ordering::SeqCst);
+        }
+        d.restarted.store(true, Ordering::SeqCst);
+        // A check that waits for a place from before the stop is dropped.
+        d.uncheck();
+        if let Some(t) = slot.as_ref() {
+            t.thread().unpark();
+        }
+        return Ok(true);
     }
     if let Some(t) = slot.take() {
         // The thread has decided to end, so it ends without waiting for anything.
         let _ = t.join();
     }
-    if let Some(key) = key {
-        *lock(&d.key) = key.to_string();
-    }
+    set_up(d, key, server);
+    d.renew.store(false, Ordering::SeqCst);
     d.stop.store(false, Ordering::SeqCst);
     d.uncheck();
     d.alive.store(true, Ordering::SeqCst);
@@ -647,7 +776,7 @@ fn spawn(hub: &Arc<Hub>, d: &Arc<Dest>, key: Option<&str>) -> Result<(), PluginE
     match std::thread::Builder::new().name("stream destination".into()).spawn(move || run(&h, &dd)) {
         Ok(t) => {
             *slot = Some(t);
-            Ok(())
+            Ok(true)
         }
         Err(e) => {
             let message = format!("no thread for the destination: {e}");
@@ -656,6 +785,31 @@ fn spawn(hub: &Arc<Hub>, d: &Arc<Dest>, key: Option<&str>) -> Result<(), PluginE
             Err(PluginError::Failed(message))
         }
     }
+}
+
+/// Gives `d` `key` as its stream key when given, and `server` as its server and service when
+/// given. Says whether its server or key changed; the service is used only by its connection
+/// checks, so a connection does not close for it.
+fn set_up(d: &Dest, key: Option<&str>, server: Option<(&str, Option<&'static Service>)>) -> bool {
+    let mut changed = false;
+    if let Some(key) = key {
+        let mut now = lock(&d.key);
+        changed |= *now != key;
+        *now = key.to_string();
+    }
+    if let Some((server, service)) = server {
+        let mut now = lock(&d.server);
+        if *now != server {
+            *now = server.to_string();
+            // The addresses of the server it sent to before are not this one's.
+            lock(&d.addrs).clear();
+            d.fixed.store(false, Ordering::SeqCst);
+            changed = true;
+        }
+        drop(now);
+        *lock(&d.service) = service;
+    }
+    changed
 }
 
 /// Errors that a try again cannot fix: the address, the key or a setting is not valid, the
@@ -762,11 +916,11 @@ fn check_after(hub: &Hub, d: &Dest, f: &Failure) {
         wanted
     };
     let id = &d.target.id;
-    let service = auto.services.iter().find(|(i, _)| i == id).map(|(_, s)| *s);
+    let service = *lock(&d.service);
     let subject = diagnose::Subject {
         profile: auto.profile.clone(),
         id: id.clone(),
-        server: d.target.server.clone(),
+        server: lock(&d.server).clone(),
         service,
         last: Some(f.clone()),
         service_hosts: auto.service_hosts,
@@ -1112,6 +1266,9 @@ fn run(hub: &Arc<Hub>, d: &Arc<Dest>) {
         if d.restarted.load(Ordering::SeqCst) || !matches!(d.status(), DestinationStatus::Retrying { .. }) {
             d.set(DestinationStatus::Connecting);
         }
+        // Cleared before the connect reads the setup, so a new setup given from here on closes
+        // this connection.
+        d.renew.store(false, Ordering::SeqCst);
         let connected = connect(hub, d);
         // Started again while it waited or connected: this try's answer is that of a first try, and
         // the tries after it are counted from none, and a later failure may be checked again.
@@ -1124,6 +1281,9 @@ fn run(hub: &Arc<Hub>, d: &Arc<Dest>) {
             // Stopped while it connected: the next turn ends the thread.
             Err(_) if d.stopping() || hub.control.is_ended() => continue,
             Err(Missed::Stopped) => continue,
+            // Given a new setup while it connected: the old one's error is not this one's, and the
+            // next turn connects with the new one at once.
+            Err(_) if d.renew.load(Ordering::SeqCst) => continue,
             Err(Missed::Rtmp(e)) if is_final(&e) && !(is_publish_refusal(&e) && after_loss && refusals < REFUSED_RETRIES) => {
                 return fail(hub, d, failure(&e, false));
             }
@@ -1149,8 +1309,9 @@ fn run(hub: &Arc<Hub>, d: &Arc<Dest>) {
         };
         // The server took `publish`.
         (after_loss, refusals) = (false, 0);
-        // Stopped while it connected: the next turn ends the thread without sending.
-        if d.stopping() || hub.control.is_ended() {
+        // Stopped while it connected: the next turn ends the thread without sending. Given a new
+        // setup while it connected: the next turn connects with it.
+        if d.stopping() || hub.control.is_ended() || d.renew.load(Ordering::SeqCst) {
             let _ = publisher.close();
             continue;
         }
@@ -1162,6 +1323,9 @@ fn run(hub: &Arc<Hub>, d: &Arc<Dest>) {
         // The connection ends whichever way sending ended; a lost one may not take the close.
         let _ = publisher.close();
         match end {
+            // Given a new setup while it sent: however the old connection ended, the next turn
+            // connects with the new one.
+            _ if d.renew.load(Ordering::SeqCst) => {}
             // Unless it was started again meanwhile, the next turn ends the thread.
             End::Done => {}
             End::Failed(e) => return fail(hub, d, e),
@@ -1217,7 +1381,8 @@ fn send_all(hub: &Hub, d: &Dest, p: &mut Publisher, rx: &mut Receiver) -> End {
     d.set(DestinationStatus::Live);
     let mut zero = None;
     loop {
-        if d.stopping() {
+        // Stopped, or given a new setup: the next turn ends the thread or connects with it.
+        if d.stopping() || d.renew.load(Ordering::SeqCst) {
             return End::Done;
         }
         let sent = match rx.recv_timeout(RECV_WAIT) {
@@ -1437,16 +1602,46 @@ impl Streaming {
             (None, _) => None,
         };
         let counts = Arc::new(Counts::default());
-        let dests = targets.into_iter().map(|t| Arc::new(Dest::new(t, Arc::clone(&counts)))).collect();
-        let hub = Arc::new(Hub { control, headers, ring, timing, seams, dests, counts, net: NetWatch::default(), auto });
+        let service = |id: &str| auto.as_ref().and_then(|(_, a)| a.services.iter().find(|(i, _)| i == id).map(|(_, s)| *s));
+        let dests: Vec<Arc<Dest>> = targets
+            .into_iter()
+            .map(|t| {
+                let service = service(&t.id);
+                Arc::new(Dest::new(t, Arc::clone(&counts), service))
+            })
+            .collect();
+        let hub = Arc::new(Hub {
+            control,
+            headers,
+            ring,
+            timing,
+            seams,
+            dests: Mutex::new(dests.clone()),
+            left: Mutex::default(),
+            counts,
+            net: NetWatch::default(),
+            auto,
+        });
         let mut s = Streaming { native, hub, stats: Arc::clone(&job.stats), refused, copy, stopped: false };
-        for d in s.hub.dests.iter().filter(|d| d.target.enabled) {
-            if let Err(e) = spawn(&s.hub, d, None) {
+        for d in dests.iter().filter(|d| d.target.enabled) {
+            if let Err(e) = spawn(&s.hub, d, None, None) {
                 let _ = s.stop();
                 return Err(e);
             }
         }
         Ok(s)
+    }
+
+    /// Whether one more destination can send: each destination that sends or tries to, and the
+    /// copy, takes one of the [`MAX_SUBSCRIBERS`] subscriptions.
+    fn room(&self) -> Result<(), PluginError> {
+        let copy = usize::from(self.copy.is_some());
+        let taken = lock(&self.hub.dests).iter().filter(|o| o.running()).count() + copy;
+        if taken >= MAX_SUBSCRIBERS {
+            let most = MAX_SUBSCRIBERS - copy;
+            return Err(PluginError::Failed(format!("a stream can send to at most {most} destinations at once")));
+        }
+        Ok(())
     }
 
     /// Packets no destination got because the shared pool was full.
@@ -1457,14 +1652,16 @@ impl Streaming {
     /// Wait for the destinations to send what their rings hold and close, then ask those still
     /// running to end.
     fn close_destinations(&self) {
-        for d in &self.hub.dests {
+        // The stream is ending, so no destination is added from here on.
+        let dests = lock(&self.hub.dests).clone();
+        for d in &dests {
             d.wake();
         }
         let deadline = Instant::now() + self.hub.timing.close;
-        while self.hub.dests.iter().any(|d| d.running()) && Instant::now() < deadline {
+        while dests.iter().any(|d| d.running()) && Instant::now() < deadline {
             std::thread::sleep(Duration::from_millis(10));
         }
-        for d in &self.hub.dests {
+        for d in &dests {
             if d.running() {
                 // A thread in the middle of a connect ends when the connect returns.
                 d.ask_stop();
@@ -1514,7 +1711,9 @@ impl OutputInstance for Streaming {
     }
 
     fn status(&self) -> OutputStatus {
-        let total = self.hub.dests.iter().map(|d| d.bytes.load(Ordering::Relaxed)).fold(0u64, u64::saturating_add);
+        let dests = lock(&self.hub.dests);
+        let left = lock(&self.hub.left).sum().bytes;
+        let total = dests.iter().map(|d| d.bytes.load(Ordering::Relaxed)).fold(left, u64::saturating_add);
         self.stats.bytes.store(total, Ordering::Relaxed);
         let s = self.native.status();
         if !matches!(s, OutputStatus::Starting | OutputStatus::Running) {
@@ -1523,14 +1722,12 @@ impl OutputInstance for Streaming {
         // The stream fails once a destination has failed and none is sending or trying to. While
         // one sends or tries, the check reads each status in place, without copying.
         let quiet = |st: &DestinationStatus| matches!(st, DestinationStatus::Failed(_) | DestinationStatus::Stopped);
-        if self.hub.dests.iter().any(|d| !quiet(&lock(&d.status))) {
+        if dests.iter().any(|d| !quiet(&lock(&d.status))) {
             return s;
         }
-        let states: Vec<DestinationStatus> = self.hub.dests.iter().map(|d| d.status()).collect();
+        let states: Vec<DestinationStatus> = dests.iter().map(|d| d.status()).collect();
         let active = states.iter().any(|st| !matches!(st, DestinationStatus::Failed(_) | DestinationStatus::Stopped));
-        let failed: Vec<(&str, &str)> = self
-            .hub
-            .dests
+        let failed: Vec<(&str, &str)> = dests
             .iter()
             .zip(&states)
             .filter_map(|(d, st)| match st {
@@ -1541,18 +1738,18 @@ impl OutputInstance for Streaming {
         if active || failed.is_empty() {
             return s;
         }
-        if let ([(_, e)], 1) = (failed.as_slice(), self.hub.dests.len()) {
+        if let ([(_, e)], 1) = (failed.as_slice(), dests.len()) {
             return OutputStatus::Failed((*e).to_string());
         }
         let each: Vec<String> = failed.iter().map(|(id, e)| format!("{id}: {e}")).collect();
-        let lead = if failed.len() == self.hub.dests.len() { "every destination failed" } else { "no destination is sending" };
+        let lead = if failed.len() == dests.len() { "every destination failed" } else { "no destination is sending" };
         OutputStatus::Failed(format!("{lead} ({})", each.join("; ")))
     }
 
     /// The addresses of the destinations that send or try to, as status shows them.
     fn target(&self) -> String {
         let quiet = |d: &Dest| matches!(*lock(&d.status), DestinationStatus::Stopped | DestinationStatus::Failed(_));
-        let on: Vec<String> = self.hub.dests.iter().filter(|d| !quiet(d)).map(|d| d.shown()).collect();
+        let on: Vec<String> = lock(&self.hub.dests).iter().filter(|d| !quiet(d)).map(|d| d.shown()).collect();
         on.join(", ")
     }
 
@@ -1578,7 +1775,7 @@ impl OutputInstance for Streaming {
         // A thread asked to stop starts no check, so one started while the stream stopped is
         // canceled here too.
         if let Some((checks, auto)) = &self.hub.auto {
-            for d in self.hub.dests.iter().filter(|d| !matches!(d.status(), DestinationStatus::Failed(_))) {
+            for d in lock(&self.hub.dests).iter().filter(|d| !matches!(d.status(), DestinationStatus::Failed(_))) {
                 checks.cancel(&auto.profile, &d.target.id);
             }
         }
@@ -1587,7 +1784,7 @@ impl OutputInstance for Streaming {
     }
 
     fn destinations(&self) -> Vec<DestinationState> {
-        self.hub.dests.iter().map(|d| d.state()).collect()
+        lock(&self.hub.dests).iter().map(|d| d.state()).collect()
     }
 
     fn stream_copy(&self) -> Option<StreamCopyState> {
@@ -1595,7 +1792,9 @@ impl OutputInstance for Streaming {
     }
 
     fn reconnects(&self) -> u64 {
-        self.hub.dests.iter().map(|d| u64::from(d.reconnects.load(Ordering::Relaxed))).sum()
+        let dests = lock(&self.hub.dests);
+        let left = lock(&self.hub.left).sum().reconnects;
+        dests.iter().map(|d| u64::from(d.reconnects.load(Ordering::Relaxed))).fold(left, u64::saturating_add)
     }
 
     fn destination_counts(&self) -> DestinationCounts {
@@ -1604,7 +1803,9 @@ impl OutputInstance for Streaming {
     }
 
     fn recoveries(&self) -> u64 {
-        self.hub.dests.iter().map(|d| u64::from(d.recovered.load(Ordering::SeqCst))).sum()
+        let dests = lock(&self.hub.dests);
+        let left = lock(&self.hub.left).sum().recovered;
+        dests.iter().map(|d| u64::from(d.recovered.load(Ordering::SeqCst))).fold(left, u64::saturating_add)
     }
 
     fn start_destination(&self, id: &str, key: Option<&str>) -> Result<(), PluginError> {
@@ -1617,7 +1818,39 @@ impl OutputInstance for Streaming {
             Some(key) => d.with_key(key).config().map_err(bad)?,
             None => d.config().map_err(bad)?,
         };
-        spawn(&self.hub, d, key)
+        if !d.running() {
+            self.room()?;
+        }
+        spawn(&self.hub, &d, key, None).map(|_| ())
+    }
+
+    fn start_destination_as(&self, setup: &DestinationSetup) -> Result<bool, PluginError> {
+        let id = setup.id.as_str();
+        if self.stopped || self.hub.control.is_ended() {
+            return Err(PluginError::Failed("the stream is ending".into()));
+        }
+        if id.is_empty() {
+            return Err(PluginError::Failed("the destination has no id".into()));
+        }
+        let found = self.hub.find(id).ok();
+        if let Some(d) = found.as_ref().filter(|d| d.running() && !d.stopping()) {
+            // It keeps the server and key it sends with, so `setup` is not used. A stop asked for
+            // since is canceled, and it goes on with them too.
+            return spawn(&self.hub, d, None, None).map(|_| false);
+        }
+        let target = Target { id: id.to_string(), server: setup.server.clone(), key: setup.key.clone(), enabled: true };
+        target.config().map_err(|e| PluginError::Failed(format!("destination `{id}`: {e}")))?;
+        let service = studiocraft_model::services::service(&setup.service);
+        // One asked to stop whose thread has not ended still holds its subscription, and starts
+        // again with `setup`.
+        if !found.as_ref().is_some_and(|d| d.running()) {
+            self.room()?;
+        }
+        let d = match found {
+            Some(d) => d,
+            None => self.hub.find_or_add(id, service)?,
+        };
+        spawn(&self.hub, &d, Some(&target.key), Some((&target.server, service)))
     }
 
     fn stop_destination(&self, id: &str) -> Result<(), PluginError> {
@@ -1626,6 +1859,10 @@ impl OutputInstance for Streaming {
             checks.cancel(&auto.profile, id);
         }
         Ok(())
+    }
+
+    fn destination_sending(&self, id: &str) -> bool {
+        self.hub.find(id).is_ok_and(|d| d.running() && !d.stopping())
     }
 }
 

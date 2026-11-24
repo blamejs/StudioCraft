@@ -98,6 +98,20 @@ pub trait OutputInstance: Send {
         let _ = key;
         Err(PluginError::Unavailable(format!("this output has no destination `{id}`")))
     }
+    /// Start sending to the destination `setup.id` of a running stream, at its server and with
+    /// its key as `setup` gives them now. A destination the stream was not started with is added
+    /// to it. One that is not sending, or was asked to stop and has not stopped yet, takes the
+    /// server, key and service of `setup` first. Starting one that is already sending does
+    /// nothing, and it keeps its server and key. Returns whether the destination took `setup`.
+    fn start_destination_as(&self, setup: &DestinationSetup) -> Result<bool, PluginError> {
+        Err(PluginError::Unavailable(format!("this output has no destination `{}`", setup.id)))
+    }
+    /// Whether the destination `id` of a running stream sends or tries to and was not asked to
+    /// stop, so a start of it would keep its server and key.
+    fn destination_sending(&self, id: &str) -> bool {
+        let _ = id;
+        false
+    }
     /// Stop sending to the destination `id` of a running stream; the others go on.
     fn stop_destination(&self, id: &str) -> Result<(), PluginError> {
         Err(PluginError::Unavailable(format!("this output has no destination `{id}`")))
@@ -106,6 +120,25 @@ pub trait OutputInstance: Send {
     /// for other outputs.
     fn stream_copy(&self) -> Option<StreamCopyState> {
         None
+    }
+}
+
+/// A destination of a stream as it is set up now, for [`OutputInstance::start_destination_as`].
+#[derive(Clone, PartialEq, Eq)]
+pub struct DestinationSetup {
+    pub id: String,
+    /// `rtmp://host/app` or `rtmps://host/app`.
+    pub server: String,
+    /// The stream key; empty when the server's address ends with the stream's name.
+    pub key: String,
+    /// The id of the streaming service it is set up for; empty for none.
+    pub service: String,
+}
+
+impl std::fmt::Debug for DestinationSetup {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let key = if self.key.is_empty() { "" } else { "<redacted>" };
+        f.debug_struct("DestinationSetup").field("id", &self.id).field("key", &key).field("service", &self.service).finish_non_exhaustive()
     }
 }
 

@@ -554,6 +554,62 @@ fn a_running_streams_destinations_start_and_stop_one_at_a_time() {
 }
 
 #[test]
+fn a_destination_added_or_changed_while_the_stream_runs_starts_without_a_restart() {
+    use studiocraft_model::{Destination, KeyRef};
+    use studiocraft_plugin::DestinationStatus;
+    // Only a broken build waits this long for a connection that should come at once.
+    const GUARD: Duration = Duration::from_secs(60);
+    let listen = || {
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("rtmp://127.0.0.1:{}/live", l.local_addr().unwrap().port());
+        (url, connections(l))
+    };
+    let ((a_url, a), (b_url, b), (c_url, c)) = (listen(), listen(), listen());
+    let mut p = small_profile();
+    p.stream.key = "profile-key".into();
+    p.stream.destinations = vec![Destination { id: "a".into(), server: a_url, key: KeyRef::Profile, ..Destination::default() }];
+    let mut s = studio_with(Some(noop_gpu()), SceneCollection::new("Test", "Scene"), p);
+    s.start_output(OutputKind::Streaming).unwrap();
+    let a_conn = a.recv_timeout(GUARD).expect("the destination connects at the start");
+    let status = |s: &Studio, id: &str| s.stream_destinations().into_iter().find(|d| d.id == id).map(|d| d.status);
+    // A destination added to the profile after the stream started joins it.
+    let mut p = s.profile().clone();
+    p.stream.destinations.push(Destination { id: "b".into(), server: b_url.clone(), key: KeyRef::Held("b".into()), ..Destination::default() });
+    s.set_profile(p).unwrap();
+    assert_eq!(status(&s, "b"), None, "an added destination is not sent to until it is started");
+    let Err(e) = s.set_stream_destination("b", true) else { panic!("started without its held key") };
+    assert!(e.to_string().contains("the stream key `b` for destination `b` is not set for this session"), "{e}");
+    assert_eq!(status(&s, "b"), None, "a destination that could not start is not added");
+    s.hold_stream_key("b", "held");
+    // Its server changed in the profile before Start: it is sent to at the new one.
+    let mut p = s.profile().clone();
+    p.stream.destinations[1].server = c_url;
+    s.set_profile(p).unwrap();
+    s.set_stream_destination("b", true).unwrap();
+    let c_conn = c.recv_timeout(GUARD).expect("the added destination connects to its server as it is now");
+    assert!(b.try_recv().is_err(), "the server it had before is not tried");
+    let ids: Vec<String> = s.stream_destinations().into_iter().map(|d| d.id).collect();
+    assert_eq!(ids, ["a", "b"]);
+    // A start of one that is sending does nothing, so it keeps its server and needs no key of the
+    // profile.
+    let mut p = s.profile().clone();
+    p.stream.destinations[1].key = KeyRef::Held("not-held".into());
+    p.stream.destinations[1].server = b_url;
+    s.set_profile(p).unwrap();
+    s.set_stream_destination("b", true).unwrap();
+    assert!(b.try_recv().is_err(), "one that is sending keeps its server");
+    assert!(!matches!(status(&s, "a"), Some(DestinationStatus::Stopped | DestinationStatus::Failed(_))), "the other destination goes on");
+    // Under another profile, only the stream's own destinations start.
+    let mut other = s.profile().clone();
+    other.name = "Other".into();
+    other.stream.destinations.push(Destination { id: "x".into(), server: "rtmp://127.0.0.1:1/live".into(), ..Destination::default() });
+    s.set_profile(other).unwrap();
+    assert!(s.set_stream_destination("x", true).is_err());
+    drop((a_conn, c_conn));
+    s.stop_output(OutputKind::Streaming);
+}
+
+#[test]
 fn a_streams_automatic_check_follows_its_profile_and_ends_with_it() {
     use studiocraft_model::{Destination, KeyRef};
     // Only a broken build waits this long for a connection that should come at once.

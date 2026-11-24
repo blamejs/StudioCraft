@@ -29,8 +29,8 @@ pub use filter::{
     VideoEffect,
 };
 pub use output::{
-    AddressOutcome, Cause, DestinationCounts, DestinationState, DestinationStatus, Failure, Output, OutputInstance, OutputJob, OutputStatus,
-    ReplayClip, StreamCopyState, VideoFormat,
+    AddressOutcome, Cause, DestinationCounts, DestinationSetup, DestinationState, DestinationStatus, Failure, Output, OutputInstance, OutputJob,
+    OutputStatus, ReplayClip, StreamCopyState, VideoFormat,
 };
 pub use registry::Registry;
 pub use source::{AUDIO_QUEUE_BLOCKS, AudioOut, Pace, Source, SourceCaps, SourceInstance, SourceIo, VideoContent, VideoOut};

@@ -281,6 +281,9 @@ pub(crate) struct View<'a> {
     pub(crate) stream: &'a StreamSettings,
     /// Whether a stream runs.
     pub(crate) running: bool,
+    /// Whether the running stream was started with the profile in use, so its destinations can
+    /// be started and stopped here.
+    pub(crate) own: bool,
     /// The destinations of the running stream.
     pub(crate) live: &'a [DestinationState],
     /// Whether a key is held for this session under a name.
@@ -396,7 +399,9 @@ pub(crate) fn show(ui: &mut Ui, view: &View, panel: &mut StreamingPanel, acts: &
     if count == 0 {
         ui.weak(tl!("No destinations yet. Add one to stream to it."));
     }
-    if view.running {
+    if view.running && view.own {
+        ui.weak(tl!("A destination that is sending keeps its server and key until it is stopped and started again."));
+    } else if view.running {
         ui.weak(tl!("Server and key changes are used from the next start of the stream."));
     }
     ui.separator();
@@ -459,6 +464,9 @@ fn row(
                 } else if ui.button(tl!("Start")).clicked() {
                     acts.push(Act::run("stream.destination_start", json!({"id": d.id})));
                 }
+            } else if view.running && view.own && ui.button(tl!("Start")).clicked() {
+                // A destination added after the stream started joins it.
+                acts.push(Act::run("stream.destination_start", json!({"id": d.id})));
             }
         });
     });
@@ -473,7 +481,11 @@ fn row(
     {
         ui.colored_label(palette.warn, RichText::new(tl!("No key is held for this session yet")).small());
     }
-    let (text, tone) = status_text(d, view.running, live);
+    let (text, tone) = if view.running && view.own && live.is_none() {
+        (tl!("Not in this stream yet; Start sends to it now").to_string(), Tone::Plain)
+    } else {
+        status_text(d, view.running, live)
+    };
     let color = match tone {
         Tone::Plain => ui.visuals().text_color(),
         Tone::Good => palette.good,
@@ -1203,7 +1215,8 @@ impl StudioApp {
         }
         let studio = &self.studio;
         let held = |name: &str| studio.stream_key_held(name);
-        let view = View { stream: &studio.profile().stream, running, live: &live, held: &held, checks: &checks };
+        let own = studio.stream_profile() == Some(studio.profile().name.as_str());
+        let view = View { stream: &studio.profile().stream, running, own, live: &live, held: &held, checks: &checks };
         let mut open = true;
         if let Some(panel) = &mut self.streaming {
             egui::Window::new(tid!("view.streaming", "Streaming"))

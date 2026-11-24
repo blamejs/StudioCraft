@@ -240,6 +240,7 @@
 	None	None
 	None (a key at the end of the server address)	None (a key at the end of the server address)
 	Not in this stream; it is sent to from the next start	Not in this stream; it is sent to from the next start
+	Not in this stream yet; Start sends to it now	Not in this stream yet; Start sends to it now
 	Off	Off
 	not in this ffmpeg	not in this ffmpeg
 	NVIDIA NVENC H.264	NVIDIA NVENC H.264
@@ -351,6 +352,7 @@
 	Sent to when the stream starts	Sent to when the stream starts
 	Server	Server
 	Server and key changes are used from the next start of the stream.	Server and key changes are used from the next start of the stream.
+	A destination that is sending keeps its server and key until it is stopped and started again.	A destination that is sending keeps its server and key until it is stopped and started again.
 	Session key name	Session key name
 	Set for each session as {name} and never saved; a key typed here is saved in this profile	Set for each session as {name} and never saved; a key typed here is saved in this profile
 	Settings	Settings

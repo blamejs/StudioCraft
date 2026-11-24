@@ -25,8 +25,8 @@ use studiocraft_outputs::replay::MAX_SAVES;
 use studiocraft_outputs::stream::diagnose;
 use studiocraft_platform::ffmpeg;
 use studiocraft_plugin::{
-    Availability, DestinationCounts, DestinationState, DestinationStatus, Encoder, EncoderEnv, EncoderKind, OutputInstance, OutputJob, OutputStatus,
-    PluginError, RateControl, StreamCopyState, VideoFormat, VideoParams,
+    Availability, DestinationCounts, DestinationSetup, DestinationState, DestinationStatus, Encoder, EncoderEnv, EncoderKind, OutputInstance,
+    OutputJob, OutputStatus, PluginError, RateControl, StreamCopyState, VideoFormat, VideoParams,
 };
 
 use crate::{Notice, Studio, StudioError};
@@ -1414,13 +1414,52 @@ impl Studio {
     }
 
     /// Start (`on`) or stop sending to the destination `id` of the running stream; the other
-    /// destinations go on.
+    /// destinations go on. While the stream's own profile is in use, a destination added to it
+    /// after the stream started joins the stream, and one that is not sending starts with its
+    /// server and key as they are now.
     pub fn set_stream_destination(&mut self, id: &str, on: bool) -> Result<(), StudioError> {
+        if on {
+            // A destination added to a full stream takes the place of one that ended, so the lost
+            // connections of the destinations are seen while each is still listed.
+            self.outputs.watch_reconnects();
+        }
         let Some(a) = self.outputs.active.get(&OutputKind::Streaming) else {
             return Err(StudioError::Output("the stream is not running".into()));
         };
         if !on {
             return Ok(a.instance.stop_destination(id)?);
+        }
+        // While the profile the stream started with is in use, a destination starts as the profile
+        // has it now: one added since joins the stream, and one that is not sending takes its
+        // server, key and service as they are now.
+        let own = self.outputs.stream_profile.as_deref() == Some(self.profile.name.as_str());
+        if let Some(d) = self.profile.stream.destinations.iter().find(|d| own && d.id == id) {
+            let Some(key) = crate::golive::destination_key(&self.profile, &self.outputs.held_keys, d) else {
+                // One that is sending keeps its server and key, so it needs none of the profile's.
+                // A key that is not held is otherwise an error, also for one asked to stop.
+                if a.instance.destination_sending(id) {
+                    return Ok(a.instance.start_destination(id, None)?);
+                }
+                let name = match &d.key {
+                    KeyRef::Held(name) => name.as_str(),
+                    _ => "",
+                };
+                return Err(StudioError::Output(format!("the stream key `{name}` for destination `{id}` is not set for this session")));
+            };
+            let setup =
+                DestinationSetup { id: id.to_string(), server: d.server.trim().to_string(), key: key.to_string(), service: d.service.clone() };
+            let (source, server, name, print) = (d.key.clone(), d.server.clone(), d.name.trim().to_string(), crate::golive::print(&d.server, key));
+            // One that is sending keeps its server and key, and its record. One asked to stop that
+            // has not stopped yet still shows as sending, and takes the profile's setup.
+            if !a.instance.start_destination_as(&setup)? {
+                return Ok(());
+            }
+            // It took the profile's setup now, and is recorded as it started.
+            self.outputs.stream_keys.insert(id.to_string(), source);
+            self.outputs.stream_servers.insert(id.to_string(), server);
+            self.outputs.stream_names.insert(id.to_string(), name);
+            self.outputs.stream_prints.insert(id.to_string(), print);
+            return Ok(());
         }
         // A held key is looked up again, so one held after the stream started is used. Where a
         // key comes from is what it was when the stream started.
