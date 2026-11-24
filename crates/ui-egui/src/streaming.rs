@@ -2,20 +2,22 @@
 //! off setting, the streaming service it is set up for with the service's logo where the service
 //! allows it, its server with the key hidden, where its key comes from and, while the stream runs,
 //! what it is doing. Each change runs one of the window's `stream.destination*` commands. Check
-//! Connection runs `stream.diagnose` and shows what the check found under the destination. A
-//! destination that waits to try again shows when its next try starts, and Try Now runs
-//! `stream.retry_now`.
+//! Connection runs `stream.diagnose` and shows what the check found under the destination. For a
+//! service that publishes a list of its ingest servers, List Servers runs `stream.ingest_servers`
+//! and the details then offer the servers of that list. A destination that waits to try again
+//! shows when its next try starts, and Try Now runs `stream.retry_now`.
 
 use std::time::{Duration, UNIX_EPOCH};
 
 use egui::{RichText, Role, Sense, Ui, WidgetInfo, vec2};
 use serde_json::{Value, json};
 use studiocraft_model::profile::{MAX_DESTINATION_ID, MAX_DESTINATIONS, PRIMARY_DESTINATION};
-use studiocraft_model::services::{self, SERVICES};
+use studiocraft_model::services::{self, SERVICES, Service};
 use studiocraft_model::{Destination, KeyRef, ReconnectSettings, StreamSettings};
 use studiocraft_plugin::{Cause, DestinationState, DestinationStatus, Failure};
 use studiocraft_studio::OutputKind;
 use studiocraft_studio::diagnose::{Check, CheckState, Diagnosis, Evidence, Outcome, Verdict};
+use studiocraft_studio::ingests::{self, IngestServer, ListState};
 
 use crate::i18n::Msg;
 use crate::kit::tokens::Palette;
@@ -318,6 +320,8 @@ pub(crate) struct View<'a> {
     pub(crate) held: &'a dyn Fn(&str) -> bool,
     /// The connection check of each destination that has had one in this session, by id.
     pub(crate) checks: &'a [(String, CheckState)],
+    /// The list of ingest servers of each service whose list has been asked for, by service id.
+    pub(crate) ingests: &'a [(&'static str, ListState)],
 }
 
 /// What a check of a destination found, in the interface language.
@@ -588,6 +592,72 @@ fn details_logo(ui: &mut Ui, e: &Edit, logos: &mut Logos, acts: &mut Vec<Act>) {
     ui.add_space(l.header_gap(tile));
 }
 
+/// The servers the details offer for `svc` from its list `list`: the service's documented server
+/// first, named Default, when the list does not hold it, then the list's servers in its order.
+fn ingest_choices<'a>(svc: &'static Service, list: &'a [IngestServer]) -> impl Iterator<Item = (&'a str, &'a str)> {
+    let default = svc.server.filter(|server| !list.iter().any(|s| s.server == *server)).map(|server| (tl!("Default"), server));
+    default.into_iter().chain(list.iter().map(|s| (s.name.as_str(), s.server.as_str())))
+}
+
+/// The choice of one of the ingest servers `svc` publishes, which sets the server of `e`; a typed
+/// server is kept until a server of the list is chosen. Until the list is read, List Servers asks
+/// for it.
+fn ingest_choice(ui: &mut Ui, e: &mut Edit, svc: &'static Service, state: Option<&ListState>, acts: &mut Vec<Act>) {
+    let list_button = |ui: &mut Ui, acts: &mut Vec<Act>| {
+        let button = ui.button(tl!("List Servers")).on_hover_text(tl!(
+            "Reads the service's list of its ingest servers from the service's site, which sees this computer's address. It sends no stream key."
+        ));
+        if button.clicked() {
+            acts.push(Act::run("stream.ingest_servers", json!({"service": svc.id, "retry": true})));
+        }
+    };
+    match state {
+        Some(ListState::Ready(list)) => {
+            let current = e.server.trim();
+            let chosen = ingest_choices(svc, list).find(|(_, server)| *server == current).map(|(name, _)| name.to_string());
+            let typed = if current.is_empty() { tl!("Choose a server") } else { tl!("Typed server") };
+            let shown = chosen.unwrap_or_else(|| typed.to_string());
+            let mut pick = None;
+            craft_ui::ComboBox::from_id_salt("destination-ingest").selected_text(shown).width(260.0).show_ui(ui, |ui| {
+                for (name, server) in ingest_choices(svc, list) {
+                    if ui.selectable_label(server == current, name).on_hover_text(server).clicked() {
+                        pick = Some(server.to_string());
+                    }
+                }
+            });
+            if let Some(server) = pick {
+                e.server = server;
+            }
+        }
+        Some(ListState::Loading) => {
+            ui.horizontal(|ui| {
+                ui.spinner();
+                ui.weak(tl!("Reading the list of servers…"));
+            });
+        }
+        Some(ListState::Failed(error)) => {
+            ui.vertical(|ui| {
+                list_button(ui, acts);
+                let text = craft_i18n::fmt(tl!("The list could not be read: {error}"), &[("error", error)]);
+                ui.colored_label(theme::palette(ui.ctx()).warn, RichText::new(text).small());
+            });
+        }
+        None => list_button(ui, acts),
+    }
+}
+
+/// A service's list of ingest servers as `stream.ingest_servers` returns it.
+fn listed_ingests(svc: &Service, state: &ListState) -> Value {
+    match state {
+        ListState::Loading => json!({"service": svc.id, "state": "loading"}),
+        ListState::Ready(list) => {
+            let servers: Vec<Value> = list.iter().map(|s| json!({"name": s.name, "server": s.server})).collect();
+            json!({"service": svc.id, "state": "ready", "servers": servers})
+        }
+        ListState::Failed(error) => json!({"service": svc.id, "state": "failed", "error": error}),
+    }
+}
+
 /// The open details of a destination; whether they closed.
 fn details(ui: &mut Ui, e: &mut Edit, view: &View, logos: &mut Logos, acts: &mut Vec<Act>) -> bool {
     let mut close = false;
@@ -638,6 +708,13 @@ fn details(ui: &mut Ui, e: &mut Edit, view: &View, logos: &mut Logos, acts: &mut
                 }
             });
             ui.end_row();
+            // A service that publishes a list of its ingest servers offers them once it is read.
+            if let Some(svc) = preset.filter(|svc| svc.ingests.is_some()) {
+                ui.label(tl!("Ingest server"));
+                let state = view.ingests.iter().find(|(id, _)| *id == svc.id).map(|(_, s)| s);
+                ingest_choice(ui, e, svc, state, acts);
+                ui.end_row();
+            }
             ui.label(tl!("Stream key"));
             craft_ui::ComboBox::from_id_salt("key-choice").selected_text(tl!(e.key.label())).show_ui(ui, |ui| {
                 for c in KeyChoice::ALL {
@@ -1079,6 +1156,21 @@ impl StudioApp {
                 self.studio.check_stream_destination(&id).map_err(|e| e.to_string())?;
                 Ok(json!({"id": id, "started": true}))
             }
+            "stream.ingest_servers" => {
+                let id = opt_str(cmd, "service")?.ok_or_else(|| tmsg!("`{command}` needs `{key}`", command = cmd.id, key = "service"))?;
+                let Some(svc) = services::service(id).filter(|svc| svc.ingests.is_some()) else {
+                    let ids: Vec<&str> = SERVICES.iter().filter(|svc| svc.ingests.is_some()).map(|svc| svc.id).collect();
+                    return Err(tmsg!(
+                        "`{command}`: `service` is a service that publishes a list of its ingest servers ({ids}), not `{service}`",
+                        command = cmd.id,
+                        ids = ids.join(", "),
+                        service = id
+                    ));
+                };
+                let retry = opt_bool(cmd, "retry")?.unwrap_or(false);
+                let state = ingests::lists().request(svc, retry, || {}).map_err(Msg::plain)?;
+                Ok(listed_ingests(svc, &state))
+            }
             "stream.destination_add" => {
                 let name = name_param(cmd)?;
                 let service = service_param(cmd, None)?.unwrap_or_default();
@@ -1219,8 +1311,12 @@ impl StudioApp {
         let running = self.stream_running();
         let live = self.live_destinations();
         let checks = self.destination_checks();
-        // A check reports from its own thread, so the window looks again while one runs.
-        if checks.iter().any(|(_, c)| matches!(c, CheckState::Running { .. })) {
+        // A check reports from its own thread, and so does the fetch of a list of ingest servers,
+        // so the window looks again while one runs.
+        let lists = ingests::lists();
+        let ingests: Vec<(&'static str, ListState)> =
+            SERVICES.iter().filter(|svc| svc.ingests.is_some()).filter_map(|svc| lists.state(svc.id).map(|s| (svc.id, s))).collect();
+        if checks.iter().any(|(_, c)| matches!(c, CheckState::Running { .. })) || ingests.iter().any(|(_, s)| *s == ListState::Loading) {
             ctx.request_repaint_after(CHECK_REPAINT);
         }
         // A countdown to a destination's next try is drawn again as its seconds change.
@@ -1229,7 +1325,7 @@ impl StudioApp {
         }
         let studio = &self.studio;
         let held = |name: &str| studio.stream_key_held(name);
-        let view = View { stream: &studio.profile().stream, running, live: &live, held: &held, checks: &checks };
+        let view = View { stream: &studio.profile().stream, running, live: &live, held: &held, checks: &checks, ingests: &ingests };
         let mut open = true;
         if let Some(panel) = &mut self.streaming {
             egui::Window::new(tid!("view.streaming", "Streaming"))

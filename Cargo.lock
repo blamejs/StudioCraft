@@ -1474,6 +1474,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-closed-captions"
+version = "0.1.0-alpha.2"
+dependencies = [
+ "craft-captions",
+]
+
+[[package]]
 name = "craft-cms"
 version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=1c137fea600666d77eceabbfa3bdd0aef67d5fbd#1c137fea600666d77eceabbfa3bdd0aef67d5fbd"
@@ -6539,6 +6546,8 @@ name = "studiocraft-outputs"
 version = "0.1.0-alpha.2"
 dependencies = [
  "craft-audio",
+ "craft-captions",
+ "craft-closed-captions",
  "craft-flv",
  "craft-hwenc",
  "craft-media",

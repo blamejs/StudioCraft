@@ -38,6 +38,9 @@ pub struct OutputJob {
     pub stats: Arc<EncoderStats>,
     /// The master-clock time the output starts at: earlier frames and audio are not written.
     pub start: Tick,
+    /// Finished caption phrases for a stream to carry as closed captions; `None` sends none.
+    /// Phrases already in the queue when the stream starts are discarded.
+    pub captions: Option<Arc<Fifo<String>>>,
 }
 
 /// An output type.
