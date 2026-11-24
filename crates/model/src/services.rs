@@ -4,7 +4,8 @@
 //!
 //! Each server comes from the page in [`Service::source`]. A service that publishes a list of its
 //! ingest servers or a status summary in a machine-readable form has their addresses here too,
-//! for the connection check. The names are the services' own
+//! for the connection check and, for the list, the Streaming window's choice of ingest server.
+//! The names are the services' own
 //! (AGENTS.md 1.3), and the window shows a service's logo only where the service allows it
 //! (AGENTS.md 1.2, `ASSETS.md`).
 
@@ -24,7 +25,8 @@ pub struct Service {
     /// key are shown.
     pub source: &'static str,
     /// The service's machine-readable list of its ingest servers, which a connection check reads
-    /// to try another of them; `None` when the service publishes none.
+    /// to try another of them and the Streaming window offers as a choice of server; `None` when
+    /// the service publishes none.
     pub ingests: Option<&'static str>,
     /// The service's machine-readable status summary, which a connection check reads; `None` when
     /// the service publishes none.

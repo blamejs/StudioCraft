@@ -2,13 +2,14 @@
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::SyncSender;
+use std::time::Instant;
 
 use craft_gpu_yuv::{Conversion, Converter, Format, Matrix, Range};
 use crossbeam_queue::ArrayQueue;
 use studiocraft_media::Tick;
-use studiocraft_media::clock::duration_of;
+use studiocraft_media::clock::{duration_of, tick_of};
 use studiocraft_media::queue::{Fifo, Latest};
 use studiocraft_media::video::PixelFormat;
 use studiocraft_model::{Crop, SourceId, Vec2};
@@ -47,7 +48,8 @@ pub struct RenderShared {
     pub scope_skipped: AtomicU64,
     /// Shader and device errors for the interface to show.
     pub errors: Fifo<RenderError>,
-    /// Still captures waiting for the next frame. A full queue refuses new requests.
+    /// Still captures waiting for the next frame. A full queue refuses new requests. While
+    /// [`CAPTURE_SLOTS`] pictures are being read back, the compositor leaves new requests here.
     pub captures: ArrayQueue<CaptureRequest>,
     /// Start, change or stop drawing small pictures of scenes.
     pub thumbnails: Latest<Option<Arc<ThumbnailRequest>>>,
@@ -96,10 +98,43 @@ pub struct Capture {
     pub rgba: Vec<u8>,
 }
 
-/// A request for a still picture, answered after the next frame is drawn.
+/// A request for a still picture. The next frame copies its picture, and a later frame answers
+/// once the GPU has read the copy back. A copy not read back within 5 s is answered with an error.
 pub struct CaptureRequest {
     pub view: View,
     pub reply: SyncSender<Result<Capture, RenderError>>,
+}
+
+const READ_PENDING: u8 = 0;
+const READ_MAPPED: u8 = 1;
+const READ_FAILED: u8 = 2;
+
+/// A still capture copied into a buffer whose mapping has not been answered yet.
+struct CaptureRead {
+    reply: SyncSender<Result<Capture, RenderError>>,
+    buffer: wgpu::Buffer,
+    /// The padded length of one row in `buffer`.
+    row: u32,
+    width: u32,
+    height: u32,
+    /// Set by the mapping's callback.
+    state: Arc<AtomicU8>,
+    /// The first frame after the copy was submitted that found it still being read back. The
+    /// 5 s wait for the read-back starts at that frame.
+    pending_since: Option<Tick>,
+}
+
+impl CaptureRead {
+    /// The mapped picture as tightly packed RGBA with straight alpha.
+    fn picture(&self) -> Result<Capture, RenderError> {
+        let view = self.buffer.get_mapped_range(..).map_err(|e| RenderError::Device(e.to_string()))?;
+        let mut rgba = Vec::with_capacity(self.width as usize * self.height as usize * 4);
+        for r in view.chunks(self.row as usize).take(self.height as usize) {
+            rgba.extend_from_slice(r.get(..(self.width * 4) as usize).unwrap_or_default());
+        }
+        unpremultiply(&mut rgba);
+        Ok(Capture { width: self.width, height: self.height, rgba })
+    }
 }
 
 /// Convert straight-alpha RGBA to premultiplied alpha in place, rounding to the nearest value.
@@ -347,8 +382,10 @@ pub struct Compositor {
     scope_skipped: AtomicU64,
     frame_no: u64,
     errors: Vec<RenderError>,
-    /// Captures asked for before this frame's plan was taken: they are answered with this frame.
+    /// Captures asked for before this frame's plan was taken: this frame copies their pictures.
     waiting: Vec<CaptureRequest>,
+    /// Captures whose copies are being read back, at most [`CAPTURE_SLOTS`].
+    reads: Vec<CaptureRead>,
     /// The scenes drawn as small pictures, if any.
     thumbs: Option<Arc<ThumbnailRequest>>,
     thumb_pool: Option<ThumbPool>,
@@ -422,6 +459,7 @@ impl Compositor {
             frame_no: 0,
             errors: Vec::new(),
             waiting: Vec::with_capacity(CAPTURE_SLOTS),
+            reads: Vec::with_capacity(CAPTURE_SLOTS),
             thumbs: None,
             thumb_pool: None,
             thumb_generation: 0,
@@ -613,16 +651,24 @@ impl Compositor {
 
     /// Apply what the app published, then draw a frame. On a lost device nothing is applied or
     /// drawn, and every capture is answered with the loss.
+    ///
+    /// Still captures do not make the frame wait: this frame copies the pictures of the captures
+    /// asked for before it, and a later frame answers each one once its copy has been read back.
     pub fn run(&mut self, shared: &RenderShared, now: Tick) {
         if let Some(why) = self.gpu.lost() {
             while let Some(req) = shared.captures.pop() {
                 self.waiting.push(req);
             }
+            let lost = || Err(RenderError::Device(format!("the graphics device was lost: {why}")));
             for req in self.waiting.drain(..) {
-                let _ = req.reply.try_send(Err(RenderError::Device(format!("the graphics device was lost: {why}"))));
+                let _ = req.reply.try_send(lost());
+            }
+            for read in self.reads.drain(..) {
+                let _ = read.reply.try_send(lost());
             }
             return;
         }
+        self.answer_captures(Some(now));
         let thumb_generation = self.thumb_generation;
         if let Some((w, h)) = shared.canvas.take() {
             let generation = self.generation;
@@ -638,8 +684,11 @@ impl Compositor {
             self.set_scope(s);
         }
         // A capture asked for after the plan is taken waits for the next frame, so it shows every
-        // change published before it was asked for.
-        while let Some(req) = shared.captures.pop() {
+        // change published before it was asked for. While every read-back slot is taken, requests
+        // stay in the queue, which then refuses new ones.
+        while self.reads.len() + self.waiting.len() < CAPTURE_SLOTS
+            && let Some(req) = shared.captures.pop()
+        {
             self.waiting.push(req);
         }
         if let Some(p) = shared.plan.take() {
@@ -659,15 +708,80 @@ impl Compositor {
         {
             shared.thumbnail_views.publish(views);
         }
-        let mut waiting = std::mem::take(&mut self.waiting);
-        for req in waiting.drain(..) {
-            // A caller that gave up has dropped its receiver; nothing waits for the answer.
-            let _ = req.reply.try_send(self.capture(req.view));
-        }
-        self.waiting = waiting;
+        self.copy_captures();
     }
 
-    /// The newest picture of `view` with straight alpha. Waits for the GPU.
+    /// Copy the newest picture of each waiting capture into a buffer of its own and start
+    /// mapping the buffers, without waiting. A preview capture before a preview was drawn is
+    /// answered with an error at once.
+    fn copy_captures(&mut self) {
+        if self.waiting.is_empty() {
+            return;
+        }
+        let (width, height) = (self.width, self.height);
+        let row = (width * 4).div_ceil(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT) * wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
+        let first = self.reads.len();
+        let mut enc = None;
+        for req in self.waiting.drain(..) {
+            let target = match req.view {
+                View::Program => self.program.get(self.views.program.latest().unwrap_or(0)),
+                View::Preview => self.views.preview.latest().and_then(|i| self.preview.get(i)),
+            };
+            let Some(target) = target else {
+                // A caller that gave up has dropped its receiver; nothing waits for the answer.
+                let _ = req.reply.try_send(Err(RenderError::Device("no preview picture has been drawn".into())));
+                continue;
+            };
+            let enc =
+                enc.get_or_insert_with(|| self.gpu.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("still capture") }));
+            let buffer = self.gpu.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("still capture"),
+                size: u64::from(row) * u64::from(height),
+                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                mapped_at_creation: false,
+            });
+            copy_to_buffer(enc, &target.texture, &buffer, row, width, height);
+            let state = Arc::new(AtomicU8::new(READ_PENDING));
+            self.reads.push(CaptureRead { reply: req.reply, buffer, row, width, height, state, pending_since: None });
+        }
+        let Some(enc) = enc else { return };
+        self.gpu.queue.submit([enc.finish()]);
+        for read in &self.reads[first..] {
+            let state = Arc::clone(&read.state);
+            read.buffer
+                .map_async(wgpu::MapMode::Read, .., move |r| state.store(if r.is_ok() { READ_MAPPED } else { READ_FAILED }, Ordering::Release));
+        }
+    }
+
+    /// Answer every capture whose copy has been read back, or could not be. With `now`, a copy
+    /// still being read back [`MAP_WAIT`] after the first frame that found it pending is answered
+    /// with an error; without it, every copy still being read back is.
+    fn answer_captures(&mut self, now: Option<Tick>) {
+        if self.reads.is_empty() {
+            return;
+        }
+        self.gpu.poll();
+        let wait = tick_of(MAP_WAIT).0;
+        self.reads.retain_mut(|read| {
+            let state = read.state.load(Ordering::Acquire);
+            if state == READ_PENDING
+                && let Some(now) = now
+            {
+                let since = *read.pending_since.get_or_insert(now);
+                // A clock that went back also ends the wait.
+                if (0..wait).contains(&now.0.saturating_sub(since.0)) {
+                    return true;
+                }
+            }
+            let answer = if state == READ_MAPPED { read.picture() } else { Err(RenderError::Device("the picture could not be read back".into())) };
+            // A caller that gave up has dropped its receiver; nothing waits for the answer.
+            let _ = read.reply.try_send(answer);
+            false
+        });
+    }
+
+    /// The newest picture of `view` with straight alpha. Waits for the GPU, so the frame thread
+    /// answers [`RenderShared::captures`] without it.
     pub fn capture(&self, view: View) -> Result<Capture, RenderError> {
         if let Some(why) = self.gpu.lost() {
             return Err(RenderError::Device(format!("the graphics device was lost: {why}")));
@@ -904,15 +1018,20 @@ impl Compositor {
     }
 
     /// Wait until the GPU has finished every frame submitted so far and every read-back's
-    /// callback has run, and hand finished read-backs to the encoders. Another thread polling the
-    /// same device (the window) may run a callback after the GPU wait returns; this waits for it
-    /// for at most `MAP_WAIT`.
+    /// callback has run, hand finished read-backs to the encoders and answer every still capture.
+    /// Another thread polling the same device (the window) may run a callback after the GPU wait
+    /// returns; this waits for it for at most `MAP_WAIT`. Not for the frame loop.
     pub fn finish(&mut self, readback_lost: &AtomicU64) {
         if self.gpu.wait().is_ok() {
             for n in [&self.nv12, &self.scope_nv12].into_iter().flatten() {
                 n.wait_mapped(MAP_WAIT);
             }
+            let deadline = Instant::now() + MAP_WAIT;
+            while self.reads.iter().any(|r| r.state.load(Ordering::Acquire) == READ_PENDING) && Instant::now() < deadline {
+                std::thread::yield_now();
+            }
         }
+        self.answer_captures(None);
         if let Some(n) = &mut self.nv12 {
             n.collect(readback_lost);
         }
@@ -969,6 +1088,18 @@ fn convert(n: &mut Nv12, converter: &Converter, enc: &mut wgpu::CommandEncoder, 
     true
 }
 
+/// Record a copy of `texture` into `buffer`, `row` bytes per row.
+fn copy_to_buffer(enc: &mut wgpu::CommandEncoder, texture: &wgpu::Texture, buffer: &wgpu::Buffer, row: u32, width: u32, height: u32) {
+    enc.copy_texture_to_buffer(
+        wgpu::TexelCopyTextureInfo { texture, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
+        wgpu::TexelCopyBufferInfo {
+            buffer,
+            layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(row), rows_per_image: Some(height) },
+        },
+        wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+    );
+}
+
 fn read_rgba(gpu: &Gpu, texture: &wgpu::Texture, width: u32, height: u32) -> Result<Vec<u8>, RenderError> {
     let row = (width * 4).div_ceil(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT) * wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
     let buffer = gpu.device.create_buffer(&wgpu::BufferDescriptor {
@@ -978,14 +1109,7 @@ fn read_rgba(gpu: &Gpu, texture: &wgpu::Texture, width: u32, height: u32) -> Res
         mapped_at_creation: false,
     });
     let mut enc = gpu.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("program read-back") });
-    enc.copy_texture_to_buffer(
-        wgpu::TexelCopyTextureInfo { texture, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
-        wgpu::TexelCopyBufferInfo {
-            buffer: &buffer,
-            layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(row), rows_per_image: Some(height) },
-        },
-        wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
-    );
+    copy_to_buffer(&mut enc, texture, &buffer, row, width, height);
     gpu.queue.submit([enc.finish()]);
     let (tx, rx) = std::sync::mpsc::sync_channel(1);
     buffer.map_async(wgpu::MapMode::Read, .., move |r| {

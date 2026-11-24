@@ -334,6 +334,12 @@ plays the source on the monitoring device and leaves it out of recordings and st
 `document.inspect` reports `monitoring` with the profile's `device`, whether it is `playing`, and
 the device's `rate` and `channels` while it plays.
 
+`document.inspect` also reports `filter_latency`: for each source whose running audio filters
+delay its audio, keyed by the source's id, `{"frames", "ms"}`, the delay in sample frames at
+48 kHz and in milliseconds rounded to 0.1 ms. A source whose filters add no delay, and a source
+the mixer does not run, is not listed. Disabled filters and filters whose settings were refused
+are not counted. The limiter is the only built-in filter that delays its audio, by 248 frames.
+
 ### `filter.meter`
 
 `filter.meter` takes `{"source", "filter"}`, where `source` is a source's id or name and `filter`
@@ -557,13 +563,30 @@ it on each request and when it exits.
 
 ### `pause.*`
 
-`pause.start` takes `{"media"?, "countdown_s"?, "at_zero"?}` and shows the pause screen in the
-program with the scene collection's transition. Each value given replaces its profile setting for
-this pause only: `media` is a picture or video file (`""` for none), `countdown_s` is 0 to 43,200
-seconds (0 for no countdown) and `at_zero` is `keep` or `resume`. A `null` value, a file type that
-is not a picture or video, a path longer than 4,096 bytes or holding a NUL character, and a value
-out of range are errors. While paused, the values given apply at once without a new transition,
-and a given `countdown_s` starts the countdown again. It returns what `pause.status` returns.
+`pause.start` takes `{"media"?, "countdown_s"?, "text"?, "zero_text"?, "at_zero"?, "anchor"?,
+"size_pct"?, "fit"?, "background"?, "mute_scene"?}` and shows the pause screen in the program with
+the scene collection's transition. Each value given replaces its profile setting for this pause
+only:
+
+| Param | Value |
+|-------|-------|
+| `media` | A picture or video file, `""` for none. |
+| `countdown_s` | 0 to 43,200 seconds, 0 for no countdown. |
+| `text` | The countdown text, at most 200 characters with exactly one `{time}`. |
+| `zero_text` | The text shown in place of the countdown at zero, at most 200 characters. |
+| `at_zero` | `keep` or `resume`. |
+| `anchor` | Where the text sits: `top_left`, `top_center`, `top_right`, `middle_left`, `center`, `middle_right`, `bottom_left`, `bottom_center` or `bottom_right`. |
+| `size_pct` | The text's height, 2 to 15 percent of the canvas height. |
+| `fit` | How the picture or video is sized to the canvas: `fit`, `fill` or `stretch`. |
+| `background` | The color under the picture or video, `#rrggbb` or `#rrggbbaa`. |
+| `mute_scene` | `true` fades the program mix out while paused, `false` keeps it. |
+
+A `null` value, a value of the wrong type, a file type that is not a picture or video, a path
+longer than 4,096 bytes or holding a NUL character, a name that is not one of the listed ones, and
+a value out of range are errors. While paused, the values given apply at once without a new
+transition, and a given `countdown_s` starts the countdown again. A changed `mute_scene` fades the
+program mix out or back in over the scene collection's transition length. It returns what
+`pause.status` returns.
 
 `pause.stop` takes no params and shows the program scene again with the scene collection's
 transition. It is an error when the program is not paused. `pause.toggle` pauses with the profile's
@@ -754,6 +777,19 @@ a destination fails also fetches the service's list of ingest servers and status
 connects to two of its other ingest servers. It returns `{"changed", "check_service"}`, and a call
 that changes nothing does not save the profile. It is off by default. A missing `enabled`, or one
 that is not a boolean, is an error.
+
+`stream.ingest_servers` takes `{"service", "retry"?}`, the id of a streaming service that publishes
+a list of its ingest servers, and starts fetching that list, as List Servers in the Streaming
+window does. It returns at once with `{"service", "state"}`. `state` is `loading` while the list is
+fetched, `ready` with `servers` once it was read, and `failed` with `error`, in English, when it
+could not be fetched or read. Each of `servers` is `{"name", "server"}`, with the address the
+service gives without the stream key, at most 128. The service's default server comes first and the
+others follow in the order of their priority. A list that was read is kept for the session, and a
+call then returns it without fetching it again. A list that could not be read is returned as
+`failed` by the next call, and is fetched again only by a call with `"retry": true`; `retry` is
+false when it is left out, and has no effect on a list that is loading or was read. A missing
+`service`, one that is not a string, a `retry` that is not a boolean, and a service that publishes
+no list are errors. The call changes no destination.
 
 A destination that has been checked at its current server and service in this session has
 `diagnosis`. While the check runs it is

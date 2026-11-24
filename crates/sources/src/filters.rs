@@ -299,6 +299,9 @@ impl FilterInstance for DspFilter {
     fn meter(&self) -> Option<FilterMeter> {
         self.meter.clone()
     }
+    fn latency_frames(&self) -> usize {
+        self.fx.latency()
+    }
 }
 
 /// The most settings one `DspFilter` has.
@@ -1236,6 +1239,20 @@ mod tests {
             assert!(f.create(&f.schema().defaults()).unwrap().meter().is_none(), "{}", f.id());
         }
         assert!(ColorCorrection.create(&ColorCorrection.schema().defaults()).unwrap().meter().is_none());
+    }
+
+    #[test]
+    fn the_limiter_reports_the_delay_it_adds_and_other_filters_report_none() {
+        // `the_limiter_delays_its_source_by_248_samples` shows where its output lands.
+        let mut lim = Limiter.create(&Limiter.schema().defaults()).unwrap();
+        assert_eq!(lim.latency_frames(), 248);
+        lim.update(&Limiter.schema().defaults().with("ceiling_db", -6.0)).unwrap();
+        assert_eq!(lim.latency_frames(), 248, "the delay does not follow the settings");
+        let none: [&dyn Filter; 4] = [&Gain, &NoiseGate, &Compressor, &Equalizer];
+        for f in none {
+            assert_eq!(f.create(&f.schema().defaults()).unwrap().latency_frames(), 0, "{}", f.id());
+        }
+        assert_eq!(ColorCorrection.create(&ColorCorrection.schema().defaults()).unwrap().latency_frames(), 0);
     }
 
     #[test]

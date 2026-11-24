@@ -573,3 +573,5 @@ menu	Transform	Transformer
 	{percent}% ({width} × {height})	{percent} % ({width} × {height})
 	Fill Screen	Remplir l'écran
 @msg	The scenes could not be laid out for the new canvas: {error}	Les scènes n'ont pas pu être disposées pour le nouveau canevas : {error}
+	Filter delay	Délai des filtres
+	The audio filters on this source delay its sound by {frames} samples at 48 kHz	Les filtres audio de cette source retardent son son de {frames} échantillons à 48 kHz

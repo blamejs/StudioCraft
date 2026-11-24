@@ -46,6 +46,10 @@ pub fn block_pool() -> Arc<AudioPool> {
     Pool::new(64, || AudioBlock { samples: vec![0.0; BLOCK_SAMPLES], pts: Tick(0) })
 }
 
+/// The furthest [`Reblocker::set_ratio`] moves the conversion from the device's stated rate: 1000
+/// parts per million.
+pub const MAX_RATIO_OFFSET: f64 = 0.001;
+
 /// Turns device chunks of any size, channel count and rate into 48 kHz stereo blocks.
 ///
 /// Rate conversion is linear interpolation: enough for speech and monitoring, below what a
@@ -55,6 +59,9 @@ pub struct Reblocker {
     in_channels: usize,
     /// Position of the next output sample between input frames `prev` and `cur`.
     phase: f64,
+    /// Input frames per output frame at the device's stated rate.
+    base_step: f64,
+    ratio: f64,
     step: f64,
     prev: [f32; 2],
     cur: [f32; 2],
@@ -66,11 +73,14 @@ impl Reblocker {
     /// For a device at `in_rate` Hz with `in_channels` channels (both at least 1).
     pub fn new(in_rate: u32, in_channels: usize) -> Self {
         let in_rate = in_rate.max(1);
+        let base_step = f64::from(in_rate) / f64::from(SAMPLE_RATE);
         Self {
             in_rate,
             in_channels: in_channels.max(1),
             phase: 0.0,
-            step: f64::from(in_rate) / f64::from(SAMPLE_RATE),
+            base_step,
+            ratio: 1.0,
+            step: base_step,
             prev: [0.0; 2],
             cur: [0.0; 2],
             have_cur: false,
@@ -80,6 +90,25 @@ impl Reblocker {
 
     pub fn input_rate(&self) -> u32 {
         self.in_rate
+    }
+
+    /// Make `ratio` times as many output frames from each input frame as the device's stated rate
+    /// gives, so that a device whose clock runs fast or slow keeps pace with the mix. A ratio below
+    /// 1 suits a fast device. The ratio is kept within 1 ± [`MAX_RATIO_OFFSET`], and a value that
+    /// is not a number sets it back to 1.
+    pub fn set_ratio(&mut self, ratio: f64) {
+        self.ratio = if ratio.is_finite() { ratio.clamp(1.0 - MAX_RATIO_OFFSET, 1.0 + MAX_RATIO_OFFSET) } else { 1.0 };
+        self.step = self.base_step / self.ratio;
+    }
+
+    /// The ratio [`Reblocker::set_ratio`] last set: 1 until then.
+    pub fn ratio(&self) -> f64 {
+        self.ratio
+    }
+
+    /// Output frames made but not yet sent in a block.
+    pub fn pending_frames(&self) -> usize {
+        self.block.len() / CHANNELS
     }
 
     /// Feed interleaved device samples; `emit` gets each completed block (a slice of
@@ -158,6 +187,39 @@ mod tests {
         let frames = out.len() * BLOCK_FRAMES;
         assert!((47_000..=48_000).contains(&frames), "{frames}");
         assert!(out.iter().flatten().all(|s| (*s - 0.25).abs() < 1e-6));
+    }
+
+    /// Output frames made from `seconds` of stereo input at 48 kHz with `ratio` set.
+    fn frames_made(ratio: f64, seconds: usize) -> usize {
+        let mut r = Reblocker::new(48_000, 2);
+        r.set_ratio(ratio);
+        let input = vec![0.5f32; 48_000 * 2 * seconds];
+        let n = blocks(&mut r, &input).len();
+        n * BLOCK_FRAMES + r.pending_frames()
+    }
+
+    #[test]
+    fn a_ratio_makes_that_many_more_or_fewer_frames() {
+        // Ten seconds of input: 480,000 frames, less the frame the reblocker holds back.
+        assert_eq!(frames_made(1.0, 10), 479_999);
+        assert!(frames_made(1.0005, 10).abs_diff(480_240) <= 2, "{}", frames_made(1.0005, 10));
+        assert!(frames_made(0.9995, 10).abs_diff(479_760) <= 2, "{}", frames_made(0.9995, 10));
+    }
+
+    #[test]
+    fn a_ratio_is_kept_within_its_limit_and_one_that_is_not_a_number_resets_it() {
+        let mut r = Reblocker::new(44_100, 2);
+        assert_eq!(r.ratio(), 1.0);
+        r.set_ratio(1.5);
+        assert_eq!(r.ratio(), 1.0 + MAX_RATIO_OFFSET);
+        r.set_ratio(-3.0);
+        assert_eq!(r.ratio(), 1.0 - MAX_RATIO_OFFSET);
+        r.set_ratio(f64::NAN);
+        assert_eq!(r.ratio(), 1.0);
+        r.set_ratio(f64::INFINITY);
+        assert_eq!(r.ratio(), 1.0);
+        // Ten seconds at the upper limit make 0.1% more than at the stated rate.
+        assert!(frames_made(2.0, 10).abs_diff(480_480) <= 2, "{}", frames_made(2.0, 10));
     }
 
     #[test]

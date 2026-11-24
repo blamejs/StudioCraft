@@ -352,6 +352,24 @@ fn filter_meter_reads_a_compressor_and_is_null_for_a_filter_without_a_meter() {
 }
 
 #[test]
+fn the_state_reports_how_long_each_source_s_audio_filters_delay_it() {
+    let mut s = headless();
+    let (out, _) = s.run("source.add", &json!({"kind": "audio_input", "name": "Mic"})).unwrap();
+    let mic = out["source"].as_u64().unwrap_or_else(|| panic!("{out}"));
+    let latency = |s: &Studio| s.state_json()["filter_latency"].clone();
+    assert_eq!(latency(&s), json!({}), "no filter delays anything");
+    let (out, _) = s.run("filter.add", &json!({"source": "Mic", "kind": "limiter"})).unwrap();
+    let limiter = out["filter"].as_u64().unwrap_or_else(|| panic!("{out}"));
+    s.run("filter.add", &json!({"source": "Mic", "kind": "gain"})).unwrap();
+    assert_eq!(latency(&s), json!({mic.to_string(): {"frames": 248, "ms": 5.2}}));
+    assert_eq!(s.filter_latency_frames(SourceId(mic)), 248);
+    s.run("filter.enable", &json!({"source": "Mic", "filter": limiter, "enabled": false})).unwrap();
+    assert_eq!(latency(&s), json!({}), "a disabled filter does not run");
+    assert_eq!(s.filter_latency_frames(SourceId(mic)), 0);
+    assert_eq!([latency_ms(0), latency_ms(480), latency_ms(1)], [0.0, 10.0, 0.0]);
+}
+
+#[test]
 fn interface_commands_come_back_as_actions() {
     let mut s = headless();
     assert_eq!(s.run("app.settings", &json!({})).unwrap().1, Some(UiAction::OpenSettings));
@@ -2584,6 +2602,47 @@ mod pause_screen {
         assert_eq!(status["countdown"]["at_zero"], json!("resume"));
         let (status, _) = s.run("pause.extend", &json!({"seconds": 60})).unwrap();
         assert_eq!(status["countdown"]["total_s"], json!(90));
+    }
+
+    #[test]
+    fn every_pause_screen_setting_can_be_given_for_one_pause() {
+        use studiocraft_model::PauseAnchor;
+        let mut s = headless();
+        s.run("transition.set", &json!({"kind": "cut"})).unwrap();
+        s.transition = None;
+        let before = s.profile().pause.clone();
+        assert!(before.mute_scene, "the default profile holds the scene's audio");
+        let given = json!({
+            "text": "On air in {time}", "zero_text": "Starting now", "anchor": "top_left", "size_pct": 12,
+            "fit": "fill", "background": "#20304080", "mute_scene": false
+        });
+        s.run("pause.start", &given).unwrap();
+        let Some(p) = &s.pause else { panic!("the program is paused") };
+        let set = p.settings.clone();
+        assert_eq!((set.text.as_str(), set.zero_text.as_str()), ("On air in {time}", "Starting now"));
+        assert_eq!((set.anchor, set.size_pct, set.fit, set.background.as_str()), (PauseAnchor::TopLeft, 12, FitMode::Fill, "#20304080"));
+        assert!(!set.mute_scene);
+        assert_eq!(s.pause_layers.as_ref().map(|l| l.look.clone()), Some(set), "the screen is drawn with the given values");
+        assert!(s.hold_fade.is_none(), "the scene's audio is not held");
+        assert_eq!(s.profile().pause, before, "the profile keeps its settings");
+
+        // While paused, a given value applies at once, and the scene's audio fades out over the
+        // collection's transition length.
+        s.run("transition.set", &json!({"kind": "fade"})).unwrap();
+        let ms = s.engine().collection().transition.duration_ms;
+        assert!(ms > 0);
+        s.run("pause.start", &json!({"mute_scene": true, "anchor": "center"})).unwrap();
+        assert!(s.transition.is_none(), "no new transition while paused");
+        let Some(h) = s.hold_fade else { panic!("the scene's audio fades out") };
+        assert!(h.down && h.ms == ms, "{h:?}");
+        assert_eq!(s.pause_layers.as_ref().map(|l| l.look.anchor), Some(PauseAnchor::Center));
+        assert_eq!(s.pause.as_ref().map(|p| p.settings.text.as_str()), Some("On air in {time}"), "the values not given stay");
+        // The value the pause already has starts no new fade.
+        s.run("pause.start", &json!({"mute_scene": true})).unwrap();
+        assert_eq!(s.hold_fade.map(|h| h.start), Some(h.start));
+        s.run("pause.stop", &json!({})).unwrap();
+        assert!(s.hold_fade.is_some_and(|h| !h.down), "resuming brings the scene's audio back");
+        assert_eq!(s.profile().pause, before);
     }
 
     #[test]
