@@ -465,7 +465,15 @@ pub(crate) trait Probes: Send + Sync {
     /// `timeout`.
     fn reach(&self, host: &str, addr: SocketAddr, tls: bool, timeout: Duration) -> Result<(), craft_rtmp::Error>;
     /// The same connection as [`Probes::reach`], then the RTMP handshake over it within `timeout`.
-    fn handshake(&self, host: &str, addr: SocketAddr, tls: bool, timeout: Duration) -> Result<craft_rtmp::Answer, craft_rtmp::Error>;
+    /// `opened` is called when the connection has opened, before the RTMP handshake.
+    fn handshake(
+        &self,
+        host: &str,
+        addr: SocketAddr,
+        tls: bool,
+        timeout: Duration,
+        opened: &dyn Fn(),
+    ) -> Result<craft_rtmp::Answer, craft_rtmp::Error>;
     /// The body of `url`, at most `limit` bytes, with no redirect followed and no proxy.
     fn fetch(&self, url: &str, limit: u64) -> Result<Vec<u8>, String>;
 }
@@ -493,12 +501,19 @@ impl Probes for System {
         craft_rtmp::reach(&r, addr)
     }
 
-    fn handshake(&self, host: &str, addr: SocketAddr, tls: bool, timeout: Duration) -> Result<craft_rtmp::Answer, craft_rtmp::Error> {
+    fn handshake(
+        &self,
+        host: &str,
+        addr: SocketAddr,
+        tls: bool,
+        timeout: Duration,
+        opened: &dyn Fn(),
+    ) -> Result<craft_rtmp::Answer, craft_rtmp::Error> {
         let mut r = craft_rtmp::Reach::new(host, tls);
         r.connect_timeout = timeout;
         r.tls_timeout = timeout;
         r.handshake_timeout = timeout;
-        craft_rtmp::reach_rtmp(&r, addr)
+        craft_rtmp::reach_rtmp(&r, addr, opened)
     }
 
     fn fetch(&self, url: &str, limit: u64) -> Result<Vec<u8>, String> {
@@ -884,6 +899,12 @@ impl Checks {
                     }
                 }
                 Ok(Msg::Lookup(..)) => {}
+                Ok(Msg::Opened(i)) => {
+                    set(&mut r.port, i, Ok(()));
+                    if let Some((_, step @ Step::NotRun)) = r.answers.get_mut(i) {
+                        *step = Step::Unfinished;
+                    }
+                }
                 Ok(Msg::Port(i, out, answer)) => {
                     set(&mut r.port, i, out);
                     if let (Some(a), Some((_, step))) = (answer, r.answers.get_mut(i)) {
@@ -976,6 +997,8 @@ fn set<K>(list: &mut [(K, Step<Result<(), Failure>>)], i: usize, out: Result<(),
 /// What a step's thread reports.
 enum Msg {
     Lookup(std::io::Result<Vec<SocketAddr>>, Instant),
+    /// The connection to the `usize`th address opened, and its RTMP handshake started.
+    Opened(usize),
     /// The connection to the `usize`th address, and what it answered to the RTMP handshake when
     /// it opened.
     Port(usize, Result<(), Failure>, Option<Spoke>),
@@ -1033,12 +1056,20 @@ impl Job {
     }
 
     /// Connects to the destination's port at `addr` and runs the RTMP handshake, as step `i` of
-    /// the port.
+    /// the port. The connection is reported as soon as it opens, so a check that reports during
+    /// the handshake lists the connection and an unfinished handshake.
     fn port(&self, host: &str, addr: SocketAddr, tls: bool, i: usize) -> bool {
         let name = host.to_string();
-        self.spawn(move |p, _| match p.handshake(&name, addr, tls, PROBE_TIMEOUT) {
-            Ok(answer) => Msg::Port(i, Ok(()), Some(Spoke::of(answer))),
-            Err(e) => Msg::Port(i, Err(super::failure(&e, false)), None),
+        let tx = self.tx.clone();
+        self.spawn(move |p, _| {
+            // The send fails when the check stopped waiting.
+            let opened = || {
+                let _ = tx.send(Msg::Opened(i));
+            };
+            match p.handshake(&name, addr, tls, PROBE_TIMEOUT, &opened) {
+                Ok(answer) => Msg::Port(i, Ok(()), Some(Spoke::of(answer))),
+                Err(e) => Msg::Port(i, Err(super::failure(&e, false)), None),
+            }
         })
     }
 
@@ -1179,6 +1210,7 @@ impl Results {
             || self.ingests.unfinished()
             || self.status.unfinished()
             || self.port.iter().chain(&self.port443).any(|(_, s)| s.unfinished())
+            || self.answers.iter().any(|(_, s)| s.unfinished())
             || self.others.iter().any(|(_, s)| s.unfinished())
     }
 }

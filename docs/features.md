@@ -516,7 +516,8 @@ steps are:
   and reads S2. It then closes the connection. It sends no `connect` or `publish` command, no stream
   key and no part of the address after the host. A port that takes the connection and then answers
   with something other than an RTMP handshake, closes the connection or sends nothing within 5 s is
-  reported as not answering as a stream server.
+  reported as not answering as a stream server when no connected address completes the RTMP
+  handshake; one address that completes it gives another verdict.
 - When the port is not 443, it opens a TCP connection with a secure handshake on port 443 of those
   addresses, and sends no RTMP data there.
 - For a destination set up for a streaming service that publishes a list of its ingest servers and

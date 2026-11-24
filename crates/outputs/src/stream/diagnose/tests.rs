@@ -84,9 +84,17 @@ impl Probes for Fake {
         (self.reach)(host, addr, tls)
     }
 
-    fn handshake(&self, host: &str, addr: SocketAddr, tls: bool, _timeout: Duration) -> Result<craft_rtmp::Answer, craft_rtmp::Error> {
+    fn handshake(
+        &self,
+        host: &str,
+        addr: SocketAddr,
+        tls: bool,
+        _timeout: Duration,
+        opened: &dyn Fn(),
+    ) -> Result<craft_rtmp::Answer, craft_rtmp::Error> {
         self.note(format!("handshake {host} {addr} {tls}"));
         (self.reach)(host, addr, tls)?;
+        opened();
         Ok((self.answer)(host, addr))
     }
 
@@ -358,6 +366,34 @@ fn steps_still_running_at_the_deadline_are_reported_unfinished() {
     assert_eq!(connect, Some(Outcome::Unfinished), "{:?}", d.evidence);
     // The handshake of a connection that had not opened is not listed.
     assert!(d.evidence.iter().all(|e| e.check != Check::Handshake), "{:?}", d.evidence);
+    drop(release);
+    until_checks(&checks, |c| (c.running() == 0).then_some(()));
+}
+
+#[test]
+fn a_connection_that_opened_is_reported_while_its_rtmp_handshake_runs() {
+    let (started, wait_start) = mpsc::channel();
+    let (release, hold) = mpsc::channel::<()>();
+    let hold = Mutex::new(hold);
+    let mut fake = Fake::new();
+    // The secure connection opens, and the server says nothing to the RTMP handshake until the
+    // check has reported.
+    fake.answer = Box::new(move |_, _| {
+        let _ = started.send(());
+        let _ = lock(&hold).recv();
+        craft_rtmp::Answer::NoAnswer { received: 0 }
+    });
+    let clock = TestClock::new();
+    let (checks, _fake) = checks_with(fake, Arc::clone(&clock));
+    checks.start(subject("rtmps://silent.example/app")).unwrap();
+    wait_start.recv_timeout(GUARD).unwrap();
+    clock.advance(CHECK_TIME);
+    let d = done(&checks, "a");
+    let outcome = |check: Check| d.evidence.iter().find(|e| e.check == check).map(|e| e.outcome);
+    assert_eq!(outcome(Check::SecureConnect), Some(Outcome::Ok), "{:?}", d.evidence);
+    assert_eq!(outcome(Check::Handshake), Some(Outcome::Unfinished), "{:?}", d.evidence);
+    // The port took the connection and has not refused the handshake.
+    assert_eq!(d.verdict, Verdict::Reachable, "{d:?}");
     drop(release);
     until_checks(&checks, |c| (c.running() == 0).then_some(()));
 }

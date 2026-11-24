@@ -787,16 +787,19 @@ fn reach_rtmp_runs_the_handshake_and_sends_no_command() {
         c.s.read_to_end(&mut rest).unwrap();
         rest
     });
-    let answer = crate::reach_rtmp(&crate::Reach::new("127.0.0.1", false), addr_of(&url)).unwrap();
+    let opened = std::cell::Cell::new(0);
+    let answer = crate::reach_rtmp(&crate::Reach::new("127.0.0.1", false), addr_of(&url), || opened.set(opened.get() + 1)).unwrap();
     assert!(matches!(answer, crate::Answer::Rtmp), "{answer:?}");
+    assert_eq!(opened.get(), 1, "the open connection is reported once, before the handshake's answer");
     assert!(server.join().unwrap().is_empty(), "no command and no key follow the handshake");
-    // A refused connection is an error, as for `reach`.
+    // A refused connection is an error, as for `reach`, and is not reported as open.
     let closed = closed_port();
-    let e = crate::reach_rtmp(&crate::Reach::new("127.0.0.1", false), closed).unwrap_err();
+    let e = crate::reach_rtmp(&crate::Reach::new("127.0.0.1", false), closed, || opened.set(opened.get() + 1)).unwrap_err();
     assert!(matches!(&e, Error::Connect(tried) if tried.len() == 1), "{e:?}");
+    assert_eq!(opened.get(), 1);
     let mut zero = crate::Reach::new("127.0.0.1", false);
     zero.handshake_timeout = Duration::ZERO;
-    assert!(matches!(crate::reach_rtmp(&zero, closed), Err(Error::BadConfig(_))));
+    assert!(matches!(crate::reach_rtmp(&zero, closed, || {}), Err(Error::BadConfig(_))));
 }
 
 #[test]
@@ -807,12 +810,12 @@ fn reach_rtmp_tells_a_port_that_is_not_an_rtmp_server() {
         s.read_exact(&mut c0c1).unwrap();
         s.write_all(b"HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n").unwrap();
     });
-    let answer = crate::reach_rtmp(&crate::Reach::new("127.0.0.1", false), addr_of(&url)).unwrap();
+    let answer = crate::reach_rtmp(&crate::Reach::new("127.0.0.1", false), addr_of(&url), || {}).unwrap();
     assert!(matches!(answer, crate::Answer::NotRtmp(b'H')), "{answer:?}");
     server.join().unwrap();
     // A server that answers with another RTMP version.
     let (url, server) = spawn(|stream| Conn::new(stream).handshake_with_version(6).is_err());
-    let answer = crate::reach_rtmp(&crate::Reach::new("127.0.0.1", false), addr_of(&url)).unwrap();
+    let answer = crate::reach_rtmp(&crate::Reach::new("127.0.0.1", false), addr_of(&url), || {}).unwrap();
     assert!(matches!(answer, crate::Answer::NotRtmp(6)), "{answer:?}");
     assert!(server.join().unwrap(), "the client sent no C2 after the wrong version");
     // A server that closes without a byte.
@@ -820,7 +823,7 @@ fn reach_rtmp_tells_a_port_that_is_not_an_rtmp_server() {
         let mut c0c1 = [0u8; 1537];
         s.read_exact(&mut c0c1).unwrap();
     });
-    let answer = crate::reach_rtmp(&crate::Reach::new("127.0.0.1", false), addr_of(&url)).unwrap();
+    let answer = crate::reach_rtmp(&crate::Reach::new("127.0.0.1", false), addr_of(&url), || {}).unwrap();
     assert!(matches!(answer, crate::Answer::Closed { received: 0 }), "{answer:?}");
     server.join().unwrap();
 }
@@ -843,7 +846,7 @@ fn reach_rtmp_reports_a_server_that_does_not_answer_within_the_timeout() {
         looks += 1;
         if looks == 1 { start } else { start + Duration::from_secs(3600) }
     })));
-    let result = crate::reach_rtmp(&crate::Reach::new("127.0.0.1", false), addr_of(&url));
+    let result = crate::reach_rtmp(&crate::Reach::new("127.0.0.1", false), addr_of(&url), || {});
     set_test_clock(None);
     let answer = result.unwrap();
     assert!(matches!(answer, crate::Answer::NoAnswer { received: 0 }), "{answer:?}");
@@ -860,7 +863,7 @@ fn reach_rtmp_runs_the_handshake_over_tls() {
     });
     let mut r = crate::Reach::new("127.0.0.1", true);
     r.tls_roots = TlsRoots::Only(vec![root]);
-    let answer = crate::reach_rtmp(&r, addr_of(&url)).unwrap();
+    let answer = crate::reach_rtmp(&r, addr_of(&url), || {}).unwrap();
     assert!(matches!(answer, crate::Answer::Rtmp), "{answer:?}");
     // The client ended the session with close_notify after C2, and sent nothing else.
     assert_eq!(server.join().unwrap(), Ok(Vec::new()));

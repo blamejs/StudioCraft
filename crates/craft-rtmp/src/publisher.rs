@@ -817,10 +817,13 @@ pub fn reach(r: &Reach, addr: SocketAddr) -> Result<(), Error> {
 /// and closes the connection as [`reach`] does. It sends no command, no stream key and nothing of
 /// the address after the host: the server never gets a `connect` or a `publish`. A failure before
 /// the handshake is an [`Error`] as for [`reach`]; once the connection is open, what the server
-/// did is the [`Answer`].
-pub fn reach_rtmp(r: &Reach, addr: SocketAddr) -> Result<Answer, Error> {
+/// did is the [`Answer`]. `opened` is called once the TCP connection (and the TLS handshake with
+/// [`Reach::tls`]) has succeeded, before the first RTMP byte is sent; it is not called when the
+/// connection fails.
+pub fn reach_rtmp(r: &Reach, addr: SocketAddr, opened: impl FnOnce()) -> Result<Answer, Error> {
     r.check()?;
     let (mut t, _) = r.open(addr)?;
+    opened();
     let started = Instant::now();
     let deadline = started + r.handshake_timeout;
     t.set_deadline(Some(deadline));
