@@ -98,6 +98,9 @@ pub struct Depacketizer {
     fu_header: u8,
     /// H.264: whether the frame's first slice has a `first_mb_in_slice` of 0, once a slice came.
     first_slice: Option<bool>,
+    /// H.264: the open FU-A fragment run is the frame's first slice and none of its body bytes
+    /// has come yet.
+    slice_pending: bool,
     /// AAC: the size of the access unit whose fragments are being joined.
     aac_size: Option<usize>,
     stats: DepacketizerStats,
@@ -132,6 +135,7 @@ impl Depacketizer {
             open: false,
             fu_header: 0,
             first_slice: None,
+            slice_pending: false,
             aac_size: None,
             stats: DepacketizerStats::default(),
         })
@@ -221,6 +225,7 @@ impl Depacketizer {
         self.broken = false;
         self.open = false;
         self.first_slice = None;
+        self.slice_pending = false;
         self.aac_size = None;
     }
 
@@ -266,22 +271,27 @@ impl Depacketizer {
         if header & 0x80 != 0 {
             return Err(Error::Invalid("an H.264 NAL unit has the forbidden bit set"));
         }
-        self.saw_nal(header, nal.get(1).copied());
+        self.saw_nal(header, nal.get(1).copied(), false);
         self.append(&[&START_CODE, nal])
     }
 
     /// Notes a NAL unit with `header` whose next byte is `next`: an IDR slice makes the frame a
-    /// key frame, and the first slice says whether the frame starts at its first macroblock.
-    fn saw_nal(&mut self, header: u8, next: Option<u8>) {
+    /// key frame, and the first slice says whether the frame starts at its first macroblock. With
+    /// `wait`, a first slice without a next byte leaves that open until a later fragment brings one.
+    fn saw_nal(&mut self, header: u8, next: Option<u8>, wait: bool) {
         let nal_type = header & 0x1F;
         if nal_type == 5 {
             self.key = true;
         }
+        self.slice_pending = false;
         // Coded slices and slice data partition A start with the slice header, whose first field,
         // first_mb_in_slice, is an Exp-Golomb code: 0 is the single bit 1 (H.264 sections 7.3.3
         // and 9.1).
         if matches!(nal_type, 1 | 2 | 5) && self.first_slice.is_none() {
-            self.first_slice = Some(next.is_some_and(|b| b & 0x80 != 0));
+            match next {
+                None if wait => self.slice_pending = true,
+                _ => self.first_slice = Some(next.is_some_and(|b| b & 0x80 != 0)),
+            }
         }
     }
 
@@ -345,7 +355,9 @@ impl Depacketizer {
                         self.open = false;
                         return Err(Error::Invalid("a FU-A fragment carries a NAL unit of a packetization type"));
                     }
-                    self.saw_nal(header, data.first().copied());
+                    // RFC 6184 section 5.8 allows a FU payload of no bytes, so the slice header
+                    // may come in a later fragment.
+                    self.saw_nal(header, data.first().copied(), true);
                     self.append(&[&START_CODE, &[header], data])?;
                     self.fu_header = header;
                     self.open = true;
@@ -357,6 +369,16 @@ impl Depacketizer {
                     return Err(Error::Invalid("a FU-A fragment does not continue the NAL unit before it"));
                 } else {
                     self.append(&[data])?;
+                    if self.slice_pending {
+                        if let Some(&b) = data.first() {
+                            self.first_slice = Some(b & 0x80 != 0);
+                            self.slice_pending = false;
+                        } else if end {
+                            // A slice with no slice header does not start the frame.
+                            self.first_slice = Some(false);
+                            self.slice_pending = false;
+                        }
+                    }
                     if end {
                         self.open = false;
                     }

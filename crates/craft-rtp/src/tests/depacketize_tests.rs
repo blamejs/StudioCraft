@@ -394,6 +394,30 @@ fn h264_fu_a_fragments_must_continue_one_nal_unit() {
 }
 
 #[test]
+fn h264_an_empty_fu_a_start_fragment_takes_the_first_slice_from_the_next_fragment() {
+    // RFC 6184 section 5.8 allows a FU payload of no bytes. The slice header comes in the next
+    // fragment.
+    let mut d = Depacketizer::new(Codec::H264).unwrap();
+    let (frames, errors) = run(&mut d, &[(1, false, &[0x7C, 0x85]), (1, true, &[0x7C, 0x45, 0x88, 0x84, 0x21])]);
+    assert_eq!(errors, []);
+    assert_eq!(frames, [Got { timestamp: 1, key: true, data: annexb(&[IDR]) }]);
+    assert!(!d.wants_key_frame());
+
+    // A first slice whose header, read from the later fragment, does not start at macroblock 0.
+    let mut d = Depacketizer::new(Codec::H264).unwrap();
+    let (frames, _) = run(&mut d, &[(1, false, &[0x7C, 0x85]), (1, false, &[0x7C, 0x45, 0x40, 0x11]), (1, true, IDR)]);
+    assert_eq!(frames, []);
+    assert!(d.wants_key_frame());
+
+    // A fragment run with no body byte at all does not start the frame, and the slice after it
+    // does not decide for it.
+    let mut d = Depacketizer::new(Codec::H264).unwrap();
+    let (frames, _) = run(&mut d, &[(1, false, &[0x7C, 0x85]), (1, false, &[0x7C, 0x45]), (1, true, IDR)]);
+    assert_eq!(frames, []);
+    assert!(d.wants_key_frame());
+}
+
+#[test]
 fn opus_payloads_over_the_limit_are_dropped() {
     let mut d = Depacketizer::with_max_frame(Codec::Opus, 4).unwrap();
     let (frames, errors) = run(&mut d, &[(0, true, &[1, 2, 3, 4, 5]), (960, true, &[1, 2, 3, 4])]);
