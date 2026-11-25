@@ -11,6 +11,7 @@ use craft_hwenc::{
     Budget, Cancel, Candidate, Choice, Clock, Error as HwError, FfmpegProber, Fingerprint, Input, Loaded, Os, Outcome, Preference, ProbeCache,
     Prober, SystemClock, Target, Vendor,
 };
+use crossbeam_queue::ArrayQueue;
 use studiocraft_encode::SessionError;
 use studiocraft_encode::h264::RECORDING_KEYFRAME_S;
 use studiocraft_encode::hardware::{self, Hardware};
@@ -313,14 +314,20 @@ pub(crate) struct Outputs {
     streams: u64,
 }
 
-/// Where a stop thread puts the state of the stream's copy once the stream has ended.
-type CopySlot = Arc<Mutex<Option<StreamCopyState>>>;
+/// Where a stop thread puts the state of the stream's copy once the stream has ended: a queue
+/// that holds one state.
+type CopySlot = Arc<ArrayQueue<StreamCopyState>>;
+
+/// An empty [`CopySlot`].
+fn copy_slot() -> CopySlot {
+    Arc::new(ArrayQueue::new(1))
+}
 
 /// Stop `instance`, then put the state of its stream's copy in `slot`.
 fn stop_instance(instance: &mut dyn OutputInstance, slot: Option<&CopySlot>) -> Result<(), PluginError> {
     let r = instance.stop();
-    if let Some(slot) = slot {
-        *slot.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = instance.stream_copy();
+    if let Some((slot, state)) = slot.zip(instance.stream_copy()) {
+        slot.force_push(state);
     }
     r
 }
@@ -548,7 +555,7 @@ impl Outputs {
         }
         let before = a.instance.stream_copy();
         let copy_path = before.as_ref().map(|c| c.path.clone());
-        let copy = before.is_some().then(|| (CopySlot::default(), std::mem::take(&mut self.copy_noticed), self.streams));
+        let copy = before.is_some().then(|| (copy_slot(), std::mem::take(&mut self.copy_noticed), self.streams));
         if before.is_some() {
             // Shown while the copy finishes, until the stop's state replaces it.
             self.last_copy = before;
@@ -657,7 +664,7 @@ impl Outputs {
     /// notice. The state of a stream that a newer stream followed is not kept.
     fn take_copy(&mut self, copy: Option<(CopySlot, bool, u64)>) -> Option<Notice> {
         let (slot, noticed, stream) = copy?;
-        let state = slot.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take()?;
+        let state = slot.pop()?;
         let notice = copy_notice(&state, noticed);
         self.note_copy_ended(state, stream == self.streams);
         notice
@@ -2770,7 +2777,7 @@ pub(crate) mod tests {
             let _ = wait.recv();
             Ok(())
         });
-        let copy = Some((CopySlot::default(), false, o.streams));
+        let copy = Some((copy_slot(), false, o.streams));
         o.stopping.push(Stopping { kind: OutputKind::Streaming, target: String::new(), failed: false, handle, copy, copy_path: Some(other.clone()) });
         assert_eq!((o.copy_ended(&third), o.copy_ended(&other)), (Some(true), None));
         release.send(()).unwrap();

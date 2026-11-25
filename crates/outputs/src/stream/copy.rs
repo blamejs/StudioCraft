@@ -16,7 +16,8 @@
 //!   When it falls behind near the stream's end, the file ends before the stream's last frame,
 //!   and [`StreamCopyState::last_video_ns`] says where.
 //! - A file that cannot be created or written stops the copy and keeps what was written. A file
-//!   that already holds data when the copy opens it is not written to. The stream goes on.
+//!   that already holds data when the copy opens it is not written to, nor is a link put in
+//!   place of the file. The stream goes on.
 //! - When the stream ends, the thread writes what its ring holds and finishes the file. A stop
 //!   waits up to its limit for that, then leaves the file unfinished, and it may not play. A file
 //!   that opens after that gets nothing written to it. The copy then counts as not finished, even
@@ -57,11 +58,31 @@ fn lost(s: &Stats) -> u64 {
 
 /// The file at `path`, written through a 1 MiB buffer: the empty file reserved for the copy, or a
 /// new one when none is there. A file that already holds data is left as it is, and the copy fails.
+/// A link in the last name of the path is not followed: on Unix it is refused, and on Windows the
+/// reparse point itself is opened and refused unless it is a file.
 pub(crate) fn create(path: &Path) -> Open {
     let path = path.to_path_buf();
     Box::new(move || {
-        let file = OpenOptions::new().write(true).create(true).truncate(false).open(&path)?;
-        if file.metadata()?.len() != 0 {
+        let mut options = OpenOptions::new();
+        options.write(true).create(true).truncate(false);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.custom_flags(libc::O_NOFOLLOW);
+        }
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::OpenOptionsExt;
+            // FILE_FLAG_OPEN_REPARSE_POINT: the link itself is opened, and refused below.
+            options.custom_flags(0x0020_0000);
+        }
+        let file = options.open(&path)?;
+        let meta = file.metadata()?;
+        // std reports a name-surrogate reparse point as a link, not a file.
+        if !meta.is_file() {
+            return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, format!("{} is not a file", path.display())));
+        }
+        if meta.len() != 0 {
             return Err(std::io::Error::new(std::io::ErrorKind::AlreadyExists, format!("{} already holds data", path.display())));
         }
         Ok(Box::new(BufWriter::with_capacity(1 << 20, file)) as Box<dyn CopyFile>)

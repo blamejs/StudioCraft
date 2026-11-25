@@ -33,6 +33,8 @@ image.workspace = true
 craft-speech = { workspace = true, features = ["whisper", "download"] }
 # Caption files written beside a recording.
 craft-captions.workspace = true
+# The state of a stream's copy, handed from the thread that stops the stream.
+crossbeam-queue.workspace = true
 
 [dev-dependencies]
 # The noop backend opens devices without a GPU in the device-loss tests.
