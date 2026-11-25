@@ -177,7 +177,8 @@ impl StreamCopy {
     }
 
     /// Wait up to `wait` for the copy to write what its ring holds and finish the file, once the
-    /// stream's packets have ended; then leave a file that is not finished as it is.
+    /// stream's packets have ended; then leave a file that is not finished as it is. A thread that
+    /// panicked is a failure of the copy.
     pub(crate) fn finish(&mut self, wait: Duration) {
         let Some(t) = self.thread.take() else { return };
         let deadline = Instant::now() + wait;
@@ -185,7 +186,9 @@ impl StreamCopy {
             std::thread::sleep(FINISH_POLL);
         }
         if t.is_finished() {
-            let _ = t.join();
+            if t.join().is_err() {
+                self.shared.fail("the copy of the stream stopped unexpectedly; the file may not play".into());
+            }
             return;
         }
         // The copy is either finished or abandoned, whichever its state reaches first.

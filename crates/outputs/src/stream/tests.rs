@@ -2189,6 +2189,20 @@ fn a_copy_that_a_stop_left_unfinished_stays_unfinished() {
 }
 
 #[test]
+fn a_copy_whose_thread_panicked_is_a_failure() {
+    let dir = TestDir::new("stream-copy-panic");
+    let path = dir.file();
+    let open: copy::Open = Box::new(|| panic!("the copy's thread panicked"));
+    let (fanout, rx, tracks) = copy_feed();
+    let mut c = copy::StreamCopy::start(path, open, tracks, rx);
+    drop(fanout);
+    c.finish(Duration::from_secs(60));
+    let state = c.state();
+    assert!(!state.finished, "{state:?}");
+    assert!(state.failure.as_deref().is_some_and(|f| f.contains("stopped unexpectedly")), "{state:?}");
+}
+
+#[test]
 fn a_copy_needs_the_keyframe_interval_of_a_recording() {
     let (url, seen) = server(vec![Plan::Accept]);
     let opened = Arc::new(AtomicBool::new(false));

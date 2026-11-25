@@ -2066,6 +2066,17 @@ mod audio_tracks {
         }
     }
 
+    /// Tick until the stream has finished stopping.
+    fn stream_stopped(s: &mut Studio) {
+        let mut spins = 0u64;
+        while s.output(OutputKind::Streaming).is_some() {
+            spins += 1;
+            assert!(spins < 200_000_000, "the stream never finished stopping");
+            s.tick();
+            std::thread::yield_now();
+        }
+    }
+
     #[test]
     fn a_streams_take_is_named_after_its_copy() {
         a_streams_take_is_named_after_its_copy_when(true);
@@ -2106,10 +2117,7 @@ mod audio_tracks {
         assert!(files.is_empty(), "no file was reserved for the copy: {files:?}");
         drop(conn);
         s.stop_output(OutputKind::Streaming);
-        while s.output(OutputKind::Streaming).is_some() {
-            s.tick();
-            std::thread::yield_now();
-        }
+        stream_stopped(&mut s);
         drop(s);
     }
 
@@ -2160,10 +2168,7 @@ mod audio_tracks {
         assert_eq!(take_files(&mut s), dir.join(format!("{stem} Audio")).join("Audio Files"), "the take has the copy's name");
         drop(conn);
         s.stop_output(OutputKind::Streaming);
-        while s.output(OutputKind::Streaming).is_some() {
-            s.tick();
-            std::thread::yield_now();
-        }
+        stream_stopped(&mut s);
         s.finish_audio_tracks_blocking();
         drop(s);
     }
