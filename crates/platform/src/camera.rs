@@ -629,7 +629,11 @@ fn copy_picture(from: &VideoFrame, to: &mut VideoFrame) {
 #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
 mod imp {
     use std::borrow::Cow;
+    #[cfg(target_os = "linux")]
+    use std::sync::Arc;
 
+    #[cfg(target_os = "linux")]
+    use arc_swap::ArcSwapOption;
     use nokhwa::Camera;
     use nokhwa::utils::{ApiBackend, CameraIndex, FrameFormat, RequestedFormat, RequestedFormatType};
 
@@ -751,7 +755,26 @@ mod imp {
 
     /// The cameras last listed as sending pictures; never more than the system lists.
     #[cfg(target_os = "linux")]
-    static SENT: std::sync::Mutex<Vec<CameraInfo>> = std::sync::Mutex::new(Vec::new());
+    static SENT: ArcSwapOption<Vec<CameraInfo>> = ArcSwapOption::const_empty();
+
+    /// Replaces the list in `set` with a copy that `f` changed, and returns what `f` returned.
+    /// When another thread changes the list at the same time, `f` runs again on its result.
+    #[cfg(target_os = "linux")]
+    fn change<R: Default>(set: &ArcSwapOption<Vec<CameraInfo>>, mut f: impl FnMut(&mut Vec<CameraInfo>) -> R) -> R {
+        let mut out = R::default();
+        set.rcu(|now| {
+            let mut list = now.as_deref().cloned().unwrap_or_default();
+            out = f(&mut list);
+            Some(Arc::new(list))
+        });
+        out
+    }
+
+    /// Whether `set` holds `camera`.
+    #[cfg(target_os = "linux")]
+    fn holds(set: &ArcSwapOption<Vec<CameraInfo>>, camera: &CameraInfo) -> bool {
+        set.load().as_deref().is_some_and(|list| list.contains(camera))
+    }
 
     /// Whether the V4L2 node `index` of `camera` sends pictures: a camera also has nodes that
     /// carry only metadata. Asking does not disturb a camera that is streaming. A busy node
@@ -762,8 +785,9 @@ mod imp {
         let Ok(i) = usize::try_from(i) else { return false };
         let probe = v4l::Device::new(i).and_then(|d| d.query_caps()).map(|c| c.capabilities.contains(v4l::capability::Flags::VIDEO_CAPTURE));
         let busy = matches!(&probe, Err(e) if e.kind() == std::io::ErrorKind::ResourceBusy);
-        let starting = STARTING.lock().is_ok_and(|s| s.contains(camera));
-        let listed = SENT.lock().is_ok_and(|mut sent| probed(&mut sent, starting, camera, probe));
+        let starting = holds(&STARTING, camera);
+        let probe = probe.map_err(|e| e.kind());
+        let listed = change(&SENT, |sent| probed(sent, starting, camera, probe.map_err(std::io::Error::from)));
         if busy && !listed {
             held.borrow_mut().push(camera.clone());
         }
@@ -837,45 +861,51 @@ mod imp {
 
     #[cfg(target_os = "linux")]
     fn listed_sending(present: &[CameraInfo], sending: &[CameraInfo]) {
-        if let Ok(mut sent) = SENT.lock() {
-            remember(&mut sent, present, sending);
-        }
+        change(&SENT, |sent| remember(sent, present, sending));
     }
 
     /// The cameras whose streams this app is starting, once for each start in progress.
     #[cfg(target_os = "linux")]
-    static STARTING: std::sync::Mutex<Vec<CameraInfo>> = std::sync::Mutex::new(Vec::new());
+    static STARTING: ArcSwapOption<Vec<CameraInfo>> = ArcSwapOption::const_empty();
 
     /// A start of `camera`'s stream in progress, so a listing that finds its node busy while the
     /// stream starts keeps it listed. Dropping it, also when the start panicked, ends the start.
     #[cfg(target_os = "linux")]
-    struct Starting(CameraInfo);
+    pub(super) struct Starting(CameraInfo);
+
+    /// What a capture thread reads of the cameras' bookkeeping, held until it is dropped.
+    #[cfg(all(test, target_os = "linux"))]
+    pub(super) fn hold_bookkeeping() -> impl Sized {
+        (SENT.load(), STARTING.load())
+    }
+
+    /// Whether `camera` is being started, and whether it is recorded as sending pictures.
+    #[cfg(all(test, target_os = "linux"))]
+    pub(super) fn bookkeeping(camera: &CameraInfo) -> (bool, bool) {
+        (holds(&STARTING, camera), holds(&SENT, camera))
+    }
 
     #[cfg(target_os = "linux")]
     impl Starting {
-        fn new(camera: CameraInfo) -> Self {
-            if let Ok(mut starting) = STARTING.lock() {
-                starting.push(camera.clone());
-            }
+        pub(super) fn new(camera: CameraInfo) -> Self {
+            change(&STARTING, |starting| starting.push(camera.clone()));
             Self(camera)
         }
 
         /// Records the camera as sending pictures once its stream started.
-        fn started(&self) {
-            if let Ok(mut sent) = SENT.lock() {
-                streams(&mut sent, &self.0);
-            }
+        pub(super) fn started(&self) {
+            change(&SENT, |sent| streams(sent, &self.0));
         }
     }
 
     #[cfg(target_os = "linux")]
     impl Drop for Starting {
         fn drop(&mut self) {
-            if let Ok(mut starting) = STARTING.lock()
-                && let Some(at) = starting.iter().position(|c| *c == self.0)
-            {
-                starting.swap_remove(at);
-            }
+            change(&STARTING, |starting| {
+                if let Some(at) = starting.iter().position(|c| *c == self.0) {
+                    starting.swap_remove(at);
+                }
+            });
         }
     }
 
@@ -1741,6 +1771,22 @@ mod tests {
         imp::streams(&mut sent, &camera);
         assert_eq!(sent, only, "recorded once");
         assert!(imp::probed(&mut sent, false, &camera, busy()));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_capture_thread_that_panicked_leaves_the_camera_bookkeeping_working() {
+        let camera = cam("Panicked", "/dev/video-bookkeeping-test");
+        let holder = std::thread::spawn(|| {
+            let _held = imp::hold_bookkeeping();
+            panic!("a capture thread stops while it reads the bookkeeping");
+        });
+        assert!(holder.join().is_err());
+        let starting = imp::Starting::new(camera.clone());
+        assert_eq!(imp::bookkeeping(&camera), (true, false), "kept listed while its stream starts");
+        starting.started();
+        drop(starting);
+        assert_eq!(imp::bookkeeping(&camera), (false, true), "recorded as sending pictures once it started");
     }
 
     #[cfg(target_os = "linux")]
