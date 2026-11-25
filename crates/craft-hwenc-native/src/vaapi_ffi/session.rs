@@ -27,9 +27,9 @@ use libloading::Library;
 
 use super::abi::{self, VABufferID, VAConfigAttrib, VAImage, VAImageFormat, VASurfaceID};
 use super::{
-    Blocks, Control, DEPTH, OpenError, Params, Picture, RECON, SYNC_TIMEOUT_NS, Slots, Tag, Waited, coded_bytes, coded_size, control, copy_nv12,
-    frame_rate_buffer, h264_picture, h264_sequence, h264_slice, hevc_blocks, hevc_picture, hevc_sequence, hevc_slice, no_session, nominal_bitrate,
-    open_error, rate_buffers, recon_slots, segment_error, waited,
+    Blocks, Control, DEPTH, IMPORTS, OpenError, Params, Picture, PrimeFrame, RECON, SYNC_TIMEOUT_NS, Slots, Tag, Waited, coded_bytes, coded_size,
+    control, copy_nv12, frame_rate_buffer, h264_picture, h264_sequence, h264_slice, hevc_blocks, hevc_picture, hevc_sequence, hevc_slice,
+    import_size, no_session, nominal_bitrate, open_error, prime_descriptor, rate_buffers, recon_slots, segment_error, waited,
 };
 use crate::Codec;
 
@@ -159,21 +159,7 @@ extern "C" fn on_error(_user: *mut c_void, message: *const c_char) {
 /// The `/dev/dri/renderD*` nodes in number order; none without `/dev/dri`, and an error when it
 /// cannot be read.
 fn render_nodes() -> Result<Vec<String>, String> {
-    let dir = match std::fs::read_dir("/dev/dri") {
-        Ok(dir) => dir,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(e) => return Err(format!("/dev/dri: {e}")),
-    };
-    let mut nodes: Vec<(u32, String)> = dir
-        .flatten()
-        .filter_map(|e| {
-            let name = e.file_name().into_string().ok()?;
-            let n = name.strip_prefix("renderD")?.parse().ok()?;
-            Some((n, format!("/dev/dri/{name}")))
-        })
-        .collect();
-    nodes.sort();
-    Ok(nodes.into_iter().map(|(_, path)| path).collect())
+    Ok(super::render_nodes()?.into_iter().map(|(path, _)| path).collect())
 }
 
 /// An initialized VA display on a DRM render node.
@@ -386,6 +372,10 @@ pub(crate) struct Session {
     frames: u64,
     /// Whether waits go through `vaSyncSurface2`: until the driver says it does not have it.
     bounded: bool,
+    /// The input surface of the frame in each slot: the slot's own surface, or an imported one.
+    inputs: [VASurfaceID; DEPTH],
+    /// Surfaces imported from DMA-BUFs ([`Session::import`]), under their key.
+    imported: [VASurfaceID; IMPORTS],
 }
 
 // SAFETY: a VA display and its objects are not tied to the thread that made them (va.h,
@@ -421,6 +411,17 @@ impl Session {
         Err(why)
     }
 
+    /// Open an encoder for `p` on the render node `path` only.
+    pub(crate) fn open_on(p: &Params, path: &str) -> Result<Session, OpenError> {
+        if p.codec == Codec::Av1 {
+            return Err(OpenError::Unsupported(NO_AV1.into()));
+        }
+        let api = api().map_err(OpenError::NoDevice)?;
+        let display = Display::open(api, path).map_err(OpenError::NoDevice)?;
+        let choice = display.choose(p)?;
+        Session::on(display, choice, p)
+    }
+
     fn on(display: Display, choice: Choice, p: &Params) -> Result<Session, OpenError> {
         let (api, dpy) = (display.api, display.dpy);
         let name = display.name.clone();
@@ -452,6 +453,8 @@ impl Session {
             slots: Slots::new(),
             frames: 0,
             bounded: api.sync_surface2.is_some(),
+            inputs: [abi::VA_INVALID_SURFACE; DEPTH],
+            imported: [abi::VA_INVALID_SURFACE; IMPORTS],
         };
         let mut surfaces = vec![abi::VA_INVALID_SURFACE; DEPTH + RECON];
         // SAFETY: `surfaces` has room for DEPTH + RECON ids; no attributes are passed (null, 0).
@@ -485,6 +488,70 @@ impl Session {
         self.slots.full()
     }
 
+    /// How many frames are in flight.
+    pub(crate) fn in_flight(&self) -> usize {
+        self.slots.len()
+    }
+
+    /// Import the NV12 image in the DMA-BUF `fd`, laid out as `frame` says and at least the
+    /// session's coded size (its size rounded up to 16 for H.264), as the input surface under `key`
+    /// (below [`IMPORTS`]). libva takes its own reference to
+    /// the buffer, so `fd` may be closed afterward. A key already imported is an error.
+    pub(crate) fn import(&mut self, key: usize, fd: c_int, frame: &PrimeFrame) -> Result<(), String> {
+        let at = self.imported.get(key).copied().ok_or_else(|| format!("no import slot {key}"))?;
+        if at != abi::VA_INVALID_SURFACE {
+            return Err(format!("import slot {key} already holds a surface"));
+        }
+        // The surface has the buffer's image size, which must hold the coded size of the session's
+        // own surfaces and context, padded rows and columns included.
+        let (cw, ch) = import_size(&self.p, frame)?;
+        let mut desc = prime_descriptor(fd, cw, ch, frame)?;
+        let mut attrs = [
+            abi::VASurfaceAttrib {
+                type_: abi::VASurfaceAttribMemoryType,
+                flags: abi::VA_SURFACE_ATTRIB_SETTABLE,
+                value: abi::VAGenericValue {
+                    type_: abi::VAGenericValueTypeInteger,
+                    value: abi::VAGenericValueUnion { i: abi::VA_SURFACE_ATTRIB_MEM_TYPE_DRM_PRIME_2 as i32 },
+                },
+            },
+            abi::VASurfaceAttrib {
+                type_: abi::VASurfaceAttribExternalBufferDescriptor,
+                flags: abi::VA_SURFACE_ATTRIB_SETTABLE,
+                value: abi::VAGenericValue {
+                    type_: abi::VAGenericValueTypePointer,
+                    value: abi::VAGenericValueUnion { p: (&raw mut desc).cast::<c_void>() },
+                },
+            },
+        ];
+        let mut surface = abi::VA_INVALID_SURFACE;
+        let (api, dpy) = (self.display.api, self.display.dpy);
+        // SAFETY: `dpy` is initialized; `surface` has room for the one id; `attrs` holds 2 live
+        // attributes, the second pointing to `desc`, which lives until the call returns. The
+        // descriptor names `fd`, an open DMA-BUF the caller keeps open for the call, and planes
+        // that `prime_descriptor` checked lie inside its size.
+        let st = unsafe {
+            (api.create_surfaces)(dpy, abi::VA_RT_FORMAT_YUV420, cw, ch, &mut surface, 1, attrs.as_mut_ptr().cast::<c_void>(), attrs.len() as c_uint)
+        };
+        self.display.check(st, "vaCreateSurfaces (DMA-BUF)")?;
+        self.imported[key] = surface;
+        Ok(())
+    }
+
+    /// Whether a surface was imported under `key`.
+    pub(crate) fn imported(&self, key: usize) -> bool {
+        self.imported.get(key).is_some_and(|&s| s != abi::VA_INVALID_SURFACE)
+    }
+
+    /// Submit the surface imported under `key` as `pic`, tagged `tag`, without copying it. The
+    /// caller must not change the picture in the buffer until [`Session::collect`] has returned its
+    /// frame.
+    pub(crate) fn submit_imported(&mut self, key: usize, pic: &Picture, tag: Tag) -> Result<(), String> {
+        let input =
+            self.imported.get(key).copied().filter(|&s| s != abi::VA_INVALID_SURFACE).ok_or_else(|| format!("nothing was imported as {key}"))?;
+        self.encode_from(input, pic, tag)
+    }
+
     /// Copy the NV12 `frame` into the next free slot's surface and submit it as `pic`, tagged
     /// `tag`. The GPU encodes it while the caller goes on; [`Session::collect`] reads it.
     pub(crate) fn submit(&mut self, frame: &[u8], pic: &Picture, tag: Tag) -> Result<(), String> {
@@ -494,6 +561,15 @@ impl Session {
         let slot = self.slots.free().ok_or("every frame slot of the encoder is in use")?;
         let input = self.surfaces[slot];
         self.copy_in(frame, input)?;
+        self.encode_from(input, pic, tag)
+    }
+
+    /// Submit `input` as `pic` in the next free slot, tagged `tag`.
+    fn encode_from(&mut self, input: VASurfaceID, pic: &Picture, tag: Tag) -> Result<(), String> {
+        if self.slots.stalled() {
+            return Err("an earlier frame failed on the GPU".into());
+        }
+        let slot = self.slots.free().ok_or("every frame slot of the encoder is in use")?;
         let n = self.frames as usize;
         let (write, read) = recon_slots(n);
         let (recon, reference) = (self.surfaces[DEPTH + write], self.surfaces[DEPTH + read]);
@@ -514,6 +590,7 @@ impl Session {
         }
         sent?;
         self.slots.push(tag)?;
+        self.inputs[slot] = input;
         self.frames += 1;
         Ok(())
     }
@@ -690,7 +767,7 @@ impl Session {
     /// after an error the next call reads the next frame.
     pub(crate) fn collect(&mut self, out: &mut Vec<u8>) -> Result<Option<Tag>, String> {
         let Some((slot, tag)) = self.slots.pop() else { return Ok(None) };
-        self.wait(self.surfaces[slot])?;
+        self.wait(self.inputs[slot])?;
         let (api, dpy) = (self.display.api, self.display.dpy);
         let coded = self.coded[slot];
         let mut ptr: *mut c_void = std::ptr::null_mut();
@@ -746,7 +823,7 @@ impl Drop for Session {
         // slots the GPU may still use them, so the session's objects and its display are left in
         // place instead.
         while let Some((slot, _)) = self.slots.pop() {
-            if self.wait(self.surfaces[slot]).is_err() {
+            if self.wait(self.inputs[slot]).is_err() {
                 break;
             }
         }
@@ -770,6 +847,9 @@ impl Drop for Session {
             }
             if !self.surfaces.is_empty() {
                 (api.destroy_surfaces)(dpy, self.surfaces.as_mut_ptr(), self.surfaces.len() as c_int);
+            }
+            for surface in self.imported.iter_mut().filter(|s| **s != abi::VA_INVALID_SURFACE) {
+                (api.destroy_surfaces)(dpy, surface, 1);
             }
             if self.config != abi::VA_INVALID_ID {
                 (api.destroy_config)(dpy, self.config);

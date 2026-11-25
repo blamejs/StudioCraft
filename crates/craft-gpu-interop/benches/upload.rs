@@ -9,7 +9,10 @@
 //! The other direction hands an NV12 program frame (an R8 luma and an RG8 chroma plane) to an
 //! encoder: read back into a mapped buffer, as the compositor does without an export ring, and
 //! copied into an export ring's texture, which runs only where [`Exporter::open`] succeeds
-//! (Windows on Direct3D 12, or Vulkan with the shared-memory extension).
+//! (Windows on Direct3D 12, or Vulkan with the shared-memory extension; Linux on Vulkan with the
+//! DMA-BUF and DRM format modifier extensions, where the ring's images are DMA-BUFs a VA-API
+//! encoder imports). Comparing `NV12 read-back` with `NV12 export ring copy` at a size gives what
+//! the GPU path saves per frame before the encoder.
 //!
 //! On Linux the display sizes also run `DMA-BUF import`: a linear BGRX DMA-BUF made over ordinary
 //! memory through `/dev/udmabuf`, handed to the importer as a screen-cast buffer and drawn into the
@@ -25,8 +28,14 @@ const BACKENDS: [(&str, wgpu::Backends); 2] = [(" dx12", wgpu::Backends::DX12), 
 #[cfg(not(windows))]
 const BACKENDS: [(&str, wgpu::Backends); 1] = [("", wgpu::Backends::PRIMARY)];
 
+/// The features an export ring needs on the measured device, where the adapter has them.
+#[cfg(target_os = "linux")]
+const EXPORT_FEATURES: wgpu::Features = wgpu::Features::VULKAN_EXTERNAL_MEMORY_DMA_BUF;
+#[cfg(not(target_os = "linux"))]
+const EXPORT_FEATURES: wgpu::Features = wgpu::Features::empty();
+
 fn device(backends: wgpu::Backends) -> Option<(wgpu::Device, wgpu::Queue)> {
-    device_with(backends, wgpu::Features::empty())
+    device_with(backends, EXPORT_FEATURES)
 }
 
 /// A device on `backends` with those of `features` its adapter has.

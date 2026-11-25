@@ -673,6 +673,18 @@ the shared textures cannot be opened or a copy fails, when NVENC cannot open a s
 adapter or fails on a frame, and when NVENC holds every shared texture without writing a packet.
 Recordings and streams do not use the shared textures yet; they read the frames back.
 
+On Linux, the compositor can copy each converted frame into NV12 images on its Vulkan device whose
+memory it exports as DMA-BUFs, and VA-API H.264 and HEVC (built in) can import those buffers as
+input surfaces on the same GPU's render node and encode from them, so the frame is not read back
+into CPU memory. This needs a compositor on Vulkan with `VK_KHR_external_memory_fd`,
+`VK_EXT_external_memory_dma_buf`, `VK_EXT_image_drm_format_modifier` and Vulkan 1.2 timeline
+semaphores. The compositor reads the frames back through CPU memory instead when it draws with
+another backend, when its Vulkan driver lacks any of those, when the driver has no memory layout in
+which it can export an NV12 image of the output size, when VA-API cannot open an encoder on the
+render node of the compositor's GPU, when the VA-API driver cannot import a buffer, and when the
+encoder fails on a frame. Recordings and streams do not use these buffers yet; they read the frames
+back.
+
 On Windows, a Display capture source captures with desktop duplication into textures that the
 compositor opens on its Direct3D 12 or Vulkan device, so the picture is not copied through CPU
 memory. On Vulkan the graphics driver must support `VK_KHR_external_memory_win32` and Vulkan 1.2

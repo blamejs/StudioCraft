@@ -2,17 +2,26 @@
 //! NV12 textures, the frames that name one of them, and the encoder side's queue of frames.
 
 use std::collections::VecDeque;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
+use std::sync::{Arc, OnceLock, Weak};
 
 use crate::fallback::Fallback;
 use crate::ring::{AdapterId, SLOTS};
 
 static NEXT_EXPORT: AtomicU64 = AtomicU64::new(1);
 
+/// The compositor's count of finished copies, which a ring without a shared ready fence reads
+/// without waiting: on Linux, a timeline semaphore of the compositor's device.
+pub(crate) trait ReadyCounter: Send + Sync {
+    /// The newest frame value whose copy has finished, or `None` when it cannot be read now.
+    fn reached(&self) -> Option<u64>;
+}
+
 /// The NV12 textures and fences one encoder reads the compositor's program frames from. On
 /// Windows they live on a Direct3D 11 device of the compositor's adapter, the device a hardware
 /// encoder opens its session on, and are shared through NT handles with the compositor's device.
+/// On Linux they are NV12 images of the compositor's Vulkan device, shared as DMA-BUFs
+/// ([`ExportRing::buffer`]).
 pub struct ExportRing {
     id: u64,
     width: u32,
@@ -20,11 +29,121 @@ pub struct ExportRing {
     adapter: AdapterId,
     /// 0 while the frames may stay on the GPU, else a [`Fallback`] code.
     fallback: AtomicU8,
-    /// A detached ring's fence values, which [`ExportRing::set_ready`] sets.
+    /// A detached ring's fence values, which [`ExportRing::set_ready`] sets. A Linux ring keeps
+    /// the newest value its counter has reached here, and the released value set by the encoder.
     detached_ready: AtomicU64,
     detached_released: AtomicU64,
+    /// The counter [`ExportRing::ready`] reads, while the compositor side that owns it exists.
+    counter: OnceLock<Weak<dyn ReadyCounter>>,
     #[cfg(windows)]
     pub(crate) nv12: Option<crate::dxgi_ffi::Nv12Ring>,
+    #[cfg(target_os = "linux")]
+    pub(crate) dmabuf: Option<DmabufBuffers>,
+}
+
+/// The DMA-BUF buffers of a Linux export ring, one per slot, and the DRM render node of the device
+/// that made them.
+#[cfg(target_os = "linux")]
+pub(crate) struct DmabufBuffers {
+    pub(crate) buffers: Vec<ExportBuffer>,
+    pub(crate) render_node: Option<u64>,
+}
+
+/// One NV12 picture of a Linux export ring, shared as a DMA-BUF: a single memory object of `size`
+/// bytes in the memory layout `modifier`, its luma plane at `offsets[0]` with rows `pitches[0]`
+/// bytes apart, and its interleaved chroma plane at `offsets[1]` with rows `pitches[1]` apart.
+/// The image is [`ExportRing::padded_size`], the ring's size rounded up to whole 16 x 16 blocks,
+/// so an encoder that codes such blocks reads every row and column of them from the buffer. The
+/// picture is at its top left, and each copy fills the padding with the picture's last column and
+/// row.
+#[cfg(target_os = "linux")]
+#[derive(Debug)]
+pub struct ExportBuffer {
+    fd: std::os::fd::OwnedFd,
+    size: u64,
+    modifier: u64,
+    offsets: [u32; 2],
+    pitches: [u32; 2],
+    image: (u32, u32),
+}
+
+#[cfg(target_os = "linux")]
+impl ExportBuffer {
+    /// A buffer of the DMA-BUF `fd` holding a `width` x `height` NV12 image, or `None` when its two
+    /// planes do not hold such an image inside `size` bytes ([`nv12_planes_fit`]).
+    #[cfg_attr(not(feature = "wgpu"), allow(dead_code))]
+    pub(crate) fn new(
+        fd: std::os::fd::OwnedFd,
+        size: u64,
+        modifier: u64,
+        offsets: [u32; 2],
+        pitches: [u32; 2],
+        (width, height): (u32, u32),
+    ) -> Option<ExportBuffer> {
+        nv12_planes_fit(width, height, size, offsets, pitches, modifier == crate::dmabuf::MOD_LINEAR).then_some(ExportBuffer {
+            fd,
+            size,
+            modifier,
+            offsets,
+            pitches,
+            image: (width, height),
+        })
+    }
+
+    /// The width and height of the NV12 image in the buffer: [`ExportRing::padded_size`] of the
+    /// ring's size.
+    pub fn image_size(&self) -> (u32, u32) {
+        self.image
+    }
+
+    /// The DMA-BUF's descriptor, which stays the ring's. An encoder that imports the buffer takes
+    /// its own reference through it.
+    pub fn fd(&self) -> std::os::fd::BorrowedFd<'_> {
+        use std::os::fd::AsFd;
+        self.fd.as_fd()
+    }
+
+    /// The size of the memory object in bytes.
+    pub fn size(&self) -> u64 {
+        self.size
+    }
+
+    /// The DRM format modifier of the picture's memory layout.
+    pub fn modifier(&self) -> u64 {
+        self.modifier
+    }
+
+    /// Where the luma and chroma planes start, in bytes.
+    pub fn offsets(&self) -> [u32; 2] {
+        self.offsets
+    }
+
+    /// The distance between two rows of the luma and chroma planes, in bytes.
+    pub fn pitches(&self) -> [u32; 2] {
+        self.pitches
+    }
+}
+
+/// The Linux device number (`dev_t`, as `st_rdev` reports it) of the device `major`:`minor`, in
+/// glibc's and musl's encoding: the low 8 bits of the minor number, the low 12 bits of the major
+/// number, then the rest of the minor number and the rest of the major number.
+#[cfg_attr(not(all(target_os = "linux", feature = "wgpu")), allow(dead_code))]
+pub(crate) fn dev_number(major: u32, minor: u32) -> u64 {
+    let (major, minor) = (u64::from(major), u64::from(minor));
+    ((major & 0xffff_f000) << 32) | ((major & 0x0fff) << 8) | ((minor & 0xffff_ff00) << 12) | (minor & 0xff)
+}
+
+/// Whether a `width` x `height` NV12 picture fits `size` bytes with its luma plane at `offsets[0]`
+/// and its chroma plane (half as many rows of the same width) at `offsets[1]`, rows `pitches`
+/// bytes apart, without the sizes overflowing. In a linear layout (`linear`) each row must hold
+/// the picture's width; in a tiled one the driver lays the rows out and only the sums are checked.
+pub fn nv12_planes_fit(width: u32, height: u32, size: u64, offsets: [u32; 2], pitches: [u32; 2], linear: bool) -> bool {
+    if width == 0 || height == 0 || pitches.contains(&0) || (linear && pitches.iter().any(|&p| p < width)) {
+        return false;
+    }
+    let end = |offset: u32, pitch: u32, rows: u32| u64::from(pitch).checked_mul(u64::from(rows)).and_then(|n| n.checked_add(u64::from(offset)));
+    let (Some(luma), Some(chroma)) = (end(offsets[0], pitches[0], height), end(offsets[1], pitches[1], height.div_ceil(2))) else { return false };
+    luma <= size && chroma <= size
 }
 
 impl std::fmt::Debug for ExportRing {
@@ -70,9 +189,44 @@ impl ExportRing {
             fallback: AtomicU8::new(0),
             detached_ready: AtomicU64::new(0),
             detached_released: AtomicU64::new(0),
+            counter: OnceLock::new(),
             #[cfg(windows)]
             nv12: None,
+            #[cfg(target_os = "linux")]
+            dmabuf: None,
         }
+    }
+
+    /// A Linux ring of the DMA-BUF `buffers`, one per slot, made on `adapter`, whose device has the
+    /// DRM render node `render_node`.
+    #[cfg(target_os = "linux")]
+    #[cfg_attr(not(feature = "wgpu"), allow(dead_code))]
+    pub(crate) fn of_dmabufs(adapter: AdapterId, width: u32, height: u32, buffers: Vec<ExportBuffer>, render_node: Option<u64>) -> ExportRing {
+        let mut ring = ExportRing::new(width, height, adapter);
+        ring.dmabuf = Some(DmabufBuffers { buffers, render_node });
+        ring
+    }
+
+    /// Read the ready value from `counter` while it exists. A ring takes one counter; a later one
+    /// is ignored.
+    #[cfg_attr(not(all(target_os = "linux", feature = "wgpu")), allow(dead_code))]
+    pub(crate) fn count_ready_with(&self, counter: Weak<dyn ReadyCounter>) {
+        let _ = self.counter.set(counter);
+    }
+
+    /// The DMA-BUF of `slot` on Linux. `None` for a ring of another kind, a detached ring, or a
+    /// slot outside the ring.
+    #[cfg(target_os = "linux")]
+    pub fn buffer(&self, slot: usize) -> Option<&ExportBuffer> {
+        self.dmabuf.as_ref()?.buffers.get(slot)
+    }
+
+    /// On Linux, the device number (`st_rdev`) of the DRM render node of the device that made the
+    /// ring's DMA-BUFs, for an encoder to open the same GPU. `None` when the driver does not report
+    /// it, or for a ring without DMA-BUFs.
+    #[cfg(target_os = "linux")]
+    pub fn render_node(&self) -> Option<u64> {
+        self.dmabuf.as_ref()?.render_node
     }
 
     /// A ring without textures, which no device opens and no encoder reads: its fences are two
@@ -83,6 +237,12 @@ impl ExportRing {
     }
 
     /// Unique in the process; a ring opened again is a new ring.
+    /// The size of a Linux export ring's images: the ring's size rounded up to multiples of 16,
+    /// or `None` when that does not fit in a `u32`.
+    pub fn padded_size(width: u32, height: u32) -> Option<(u32, u32)> {
+        Some((width.checked_next_multiple_of(16)?, height.checked_next_multiple_of(16)?))
+    }
+
     pub fn id(&self) -> u64 {
         self.id
     }
@@ -116,6 +276,9 @@ impl ExportRing {
         #[cfg(windows)]
         if let Some(nv12) = &self.nv12 {
             return nv12.ready();
+        }
+        if let Some(reached) = self.counter.get().and_then(Weak::upgrade).and_then(|c| c.reached()) {
+            return self.detached_ready.fetch_max(reached, Ordering::AcqRel).max(reached);
         }
         self.detached_ready.load(Ordering::Acquire)
     }
@@ -330,6 +493,9 @@ pub struct Exporter {
     scratch: Option<Vec<wgpu::Texture>>,
     #[cfg(windows)]
     raw: Raw,
+    /// Boxed: it holds the device's function tables.
+    #[cfg(target_os = "linux")]
+    raw: Box<crate::dmabuf_ffi::Exported>,
 }
 
 #[cfg(all(feature = "wgpu", windows))]
@@ -389,16 +555,24 @@ pub fn device_backend(device: &wgpu::Device) -> (crate::Backend, Option<AdapterI
             return (crate::Backend::Vulkan { external_memory, timeline }, adapter);
         }
     }
+    #[cfg(target_os = "linux")]
+    if let Some((adapter, timeline, dmabuf)) = crate::dmabuf_ffi::export_backend(device) {
+        return (crate::Backend::Vulkan { external_memory: dmabuf, timeline }, adapter);
+    }
     let _ = device;
     (crate::Backend::Other, None)
 }
 
 #[cfg(feature = "wgpu")]
 impl Exporter {
-    /// An export ring of `width × height` on the adapter of `device`, opened on that device. The
-    /// device must run on Direct3D 12, or on Vulkan with `VK_KHR_external_memory_win32` and
-    /// timeline semaphores; the reason is returned otherwise. Elsewhere than Windows it returns
-    /// [`Fallback::Unsupported`].
+    /// An export ring of `width × height` on the adapter of `device`, opened on that device. On
+    /// Windows the device must run on Direct3D 12, or on Vulkan with
+    /// `VK_KHR_external_memory_win32` and timeline semaphores. On Linux it must run on Vulkan 1.2
+    /// with timeline semaphores, `VK_KHR_external_memory_fd`, `VK_EXT_external_memory_dma_buf` and
+    /// `VK_EXT_image_drm_format_modifier` (wgpu's `Features::VULKAN_EXTERNAL_MEMORY_DMA_BUF`), and
+    /// export an NV12 image of that size in a memory layout of two planes
+    /// ([`check_dmabuf_export`](crate::check_dmabuf_export)). The reason is returned otherwise.
+    /// Elsewhere it returns [`Fallback::Unsupported`].
     pub fn open(device: &wgpu::Device, queue: &wgpu::Queue, width: u32, height: u32) -> Result<Exporter, Fallback> {
         let (backend, compositor) = device_backend(device);
         #[cfg(windows)]
@@ -411,7 +585,16 @@ impl Exporter {
             };
             Ok(Exporter { ring, slots: crate::ring::SlotTable::default(), scratch: None, raw })
         }
-        #[cfg(not(windows))]
+        #[cfg(target_os = "linux")]
+        {
+            if width == 0 || height == 0 || !width.is_multiple_of(2) || !height.is_multiple_of(2) {
+                return Err(Fallback::ImportFailed);
+            }
+            crate::fallback::check_export(backend, compositor)?;
+            let (ring, raw) = crate::dmabuf_ffi::export(device, queue, width, height)?;
+            Ok(Exporter { ring, slots: crate::ring::SlotTable::default(), scratch: None, raw: Box::new(raw) })
+        }
+        #[cfg(not(any(windows, target_os = "linux")))]
         {
             let _ = (backend, compositor, queue);
             ExportRing::open(AdapterId(0), width, height).map(|ring| Exporter { ring, slots: crate::ring::SlotTable::default(), scratch: None })
@@ -470,7 +653,12 @@ impl Exporter {
             Raw::Dx12(r) => r.copy(device, planes, slot),
             Raw::Vulkan(r) => r.copy(planes, slot),
         };
-        #[cfg(not(windows))]
+        #[cfg(target_os = "linux")]
+        let commands = {
+            let _ = device;
+            self.raw.copy(planes, slot)
+        };
+        #[cfg(not(any(windows, target_os = "linux")))]
         let commands: Result<wgpu::CommandBuffer, Fallback> = {
             let _ = (device, planes);
             Err(Fallback::Unsupported)
@@ -494,18 +682,26 @@ impl Exporter {
                 Ok(())
             }
         };
-        #[cfg(not(windows))]
+        #[cfg(target_os = "linux")]
+        let signaled: Result<(), Fallback> = {
+            self.raw.signal(ticket.ready);
+            Ok(())
+        };
+        #[cfg(not(any(windows, target_os = "linux")))]
         let signaled: Result<(), Fallback> = Err(Fallback::Unsupported);
         signaled.inspect_err(|&reason| self.ring.refuse(reason))?;
         ExportFrame::new(Arc::clone(&self.ring), ticket.slot, ticket.ready).ok_or(Fallback::ImportFailed)
     }
 
     /// Copy the values the compositor's queue has reached to the ready fence, without waiting.
-    /// Only a Vulkan export has anything to do; [`Exporter::copy`] also calls it.
+    /// Only a Vulkan export has anything to do; [`Exporter::copy`] also calls it. A Linux ring's
+    /// encoder also reads the queue's value itself ([`ExportRing::ready`]).
     pub fn poll(&self) {
         #[cfg(windows)]
         if let Raw::Vulkan(r) = &self.raw {
             r.poll();
         }
+        #[cfg(target_os = "linux")]
+        self.raw.poll();
     }
 }

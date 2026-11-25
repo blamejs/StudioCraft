@@ -12,6 +12,8 @@ builds for every target, WebAssembly included, and holds the types both sides ex
 It also hands the compositor's NV12 program frames to a hardware encoder in the other direction:
 an export ring of shared NV12 textures and two fences on a Direct3D 11 device of the compositor's
 adapter, written by the compositor's wgpu Direct3D 12 or Vulkan device and read by the encoder.
+On Linux the export ring's images are NV12 images on the compositor's Vulkan device whose memory
+is exported as DMA-BUFs, for a VA-API encoder on the same GPU's render node.
 
 Only the private `dxgi_ffi` and `wgc_ffi` (capture side), `d3d12_ffi` and `vulkan_ffi`
 (compositor side), `dmabuf_ffi` (Linux, both sides) and `pw_hold_ffi` (Linux, capture side, with the
@@ -42,9 +44,12 @@ system calls through `libc`, and PipeWire's buffer queue through the `pipewire` 
 | `Importer` (`wgpu` feature) | It opens a ring on the compositor's device, takes the waiting frame once its copy is done, draws it into the caller's texture and signals the released fence. `Importer::poll` hands back finished textures on a frame without a draw. |
 | `Opaque` (`wgpu` feature) | It copies one texture into another of the same size with alpha set to 1 (`draw`), or with each texel's alpha kept and its premultiplied color made straight (`draw_keeping_alpha`). |
 | `ExportRing::open(adapter, width, height)` | It makes `SLOTS` (3) shared NV12 textures and two shared fences on a Direct3D 11 device of that adapter, the device an encoder opens its session on (`device`, `texture`). Both sides must be even and not zero (`Fallback::ImportFailed`); elsewhere than Windows it returns `Fallback::Unsupported`. `ExportRing::detached` makes a ring without textures for tests. |
+| `ExportRing::buffer(slot)`, `ExportRing::render_node()` (Linux) | They return the ring's `ExportBuffer` of a slot (the DMA-BUF descriptor, its size, its DRM format modifier, and the offset and row pitch of each plane) and the device number of the compositor GPU's DRM render node, for an encoder to import the buffers on that node. Each image is the ring's size rounded up to multiples of 16 (`ExportRing::padded_size`), with the picture at its top left, so an H.264 encoder reads its padded rows from the buffer; each copy fills the padding with the picture's last column and row. A ring made elsewhere has neither. |
+| `nv12_planes_fit(width, height, size, offsets, pitches, linear)` | It says whether an NV12 picture's two planes lie inside a buffer of `size` bytes, with rows at least the picture's width in a linear layout. |
 | `ExportFrame` | It names one texture of an export ring and the ready fence value at which the copy into it is done. |
 | `Feed` | It is the encoder side's queue: `offer` adds a frame, `take_ready` returns the oldest frame once its copy is done, `out(packets)` hands back the textures of that many of the oldest frames being encoded (one packet per picture), `drain` forgets every frame and hands back the textures whose copies have finished, `copy_running` says whether the oldest waiting frame's copy is still running, and `stalled` says whether every texture is held while nothing is left to encode. |
 | `check_export(backend, compositor)` | It returns the adapter to make the export ring on, or the `Fallback`: a backend other than Direct3D 12 and Vulkan, an adapter the driver does not report, or a Vulkan device without `VK_KHR_external_memory_win32` or timeline semaphores. |
+| `check_dmabuf_export(backend, compositor, modifiers)` | It returns the adapter of a Linux export ring, or the `Fallback`: the reasons of `check_export` with the DMA-BUF extensions in place of `VK_KHR_external_memory_win32`, then `Modifier` when the device has no DRM format modifier in which it can export an NV12 image of the ring's size. |
 | `Exporter` (`wgpu` feature) | It opens an export ring on the compositor's device. `reserve` makes one-texel textures of the planes' formats outside the frame loop, `prepare` records a one-texel copy from each plane into them so the planes end in the copy-source state, `copy` records the copy of a frame's luma and chroma planes (8-bit one- and two-channel) into a free texture as a command buffer of its own, and `submitted` sets the ready fence after that submission and returns the `ExportFrame`. |
 
 ## Synchronization
@@ -98,6 +103,17 @@ in the `GENERAL` layout after them. A texture is written again only once the enc
 it, however long that takes, and when every texture is still being encoded the frame is not
 exported. One encoder session reads each export ring.
 
+On Linux the export ring has no fences. After each copy an empty submission signals a timeline
+semaphore of the exporter's own with the frame's value, and `ExportRing::ready` reads the
+semaphore's value from the CPU without waiting, from either side, for as long as the exporter
+exists; after that the ring keeps the last value. VA-API takes no fence with a picture, so the
+encoder side encodes a frame only once that value has been reached. The images have two memory
+planes in a DRM format modifier the driver lists for NV12 with transfer writes and exportable
+memory, and dedicated memory of their own. The copies take each image from the external queue
+family and hand it back in the `GENERAL` layout, as on Windows. When the exporter is dropped while
+a copy still runs, its images and the semaphore are destroyed once the queue has finished the
+work, without waiting.
+
 ## Limits and failures
 
 - `Duplication::open` returns `Fallback::Rotated` for a rotated output, `Fallback::Format` when
@@ -119,6 +135,13 @@ exported. One encoder session reads each export ring.
   records `Fallback::NoEncoder` on the ring, and `Exporter::copy` then returns it. The caller reads
   the frames back through CPU memory instead. `ExportRing::release` also records
   `Fallback::NoEncoder` when the released fence's signal cannot be queued.
+- On Linux `Exporter::open` returns `Fallback::UnsupportedBackend` for a device not on Vulkan,
+  `Fallback::MissingExtension` for a device created without wgpu's
+  `Features::VULKAN_EXTERNAL_MEMORY_DMA_BUF` or without timeline semaphores, `Fallback::Modifier`
+  when no format modifier fits, and `Fallback::ImportFailed` when an image, its memory or its
+  descriptor cannot be made. A VA-API encoder that cannot import a buffer records
+  `Fallback::ImportFailed` on the ring, and one that cannot open on the ring's render node records
+  `Fallback::NoEncoder`.
 - The desktop's alpha channel is not reliable, so `Importer` draws a display's picture with
   alpha 1. A window's ring has `SharedRing::keeps_alpha` set: its picture keeps its alpha, and
   its color, which the system delivers multiplied by alpha, is divided by alpha.

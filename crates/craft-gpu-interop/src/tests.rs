@@ -732,6 +732,92 @@ fn an_export_needs_a_known_compositor_adapter_and_a_backend_that_shares_textures
 }
 
 #[test]
+fn a_dmabuf_export_needs_vulkan_the_extensions_timeline_semaphores_and_a_modifier() {
+    let a = AdapterId::from_parts(7, 0);
+    let with = Backend::Vulkan { external_memory: true, timeline: true };
+    let linear = [MOD_LINEAR];
+    assert_eq!(check_dmabuf_export(with, Some(a), &linear), Ok(a));
+    assert_eq!(check_dmabuf_export(Backend::Other, Some(a), &linear), Err(Fallback::UnsupportedBackend));
+    assert_eq!(check_dmabuf_export(Backend::Vulkan { external_memory: false, timeline: true }, Some(a), &linear), Err(Fallback::MissingExtension));
+    assert_eq!(check_dmabuf_export(Backend::Vulkan { external_memory: true, timeline: false }, Some(a), &linear), Err(Fallback::MissingExtension));
+    assert_eq!(check_dmabuf_export(with, None, &linear), Err(Fallback::OtherAdapter), "a driver that does not report its device");
+    assert_eq!(check_dmabuf_export(with, Some(a), &[]), Err(Fallback::Modifier), "no modifier the device can export the picture in");
+    assert_eq!(check_dmabuf_export(Backend::Other, Some(a), &[]), Err(Fallback::UnsupportedBackend), "the backend is checked first");
+}
+
+#[test]
+fn an_nv12_picture_fits_its_buffer_only_with_rows_and_planes_inside_it() {
+    // A 64 x 2 picture: two luma rows of 64 bytes, then one chroma row.
+    assert!(nv12_planes_fit(64, 2, 192, [0, 128], [64, 64], true));
+    assert!(nv12_planes_fit(64, 2, 4096, [0, 2048], [256, 256], true), "padded rows");
+    assert!(!nv12_planes_fit(64, 2, 191, [0, 128], [64, 64], true), "the chroma row ends past the buffer");
+    assert!(!nv12_planes_fit(64, 2, 192, [0, 128], [63, 64], true), "a linear row shorter than the picture");
+    assert!(nv12_planes_fit(64, 2, 192, [0, 128], [32, 64], false), "a tiled layout's pitch is the driver's");
+    assert!(!nv12_planes_fit(64, 2, 192, [0, 128], [0, 64], false), "a pitch of 0");
+    assert!(!nv12_planes_fit(0, 2, 192, [0, 128], [64, 64], true));
+    assert!(!nv12_planes_fit(64, 0, 192, [0, 128], [64, 64], true));
+    assert!(!nv12_planes_fit(64, 2, 192, [0, u32::MAX], [64, 64], true), "a chroma plane past the end");
+    assert!(nv12_planes_fit(u32::MAX, u32::MAX, u64::MAX, [u32::MAX; 2], [u32::MAX; 2], true), "the largest values do not overflow");
+    assert!(nv12_planes_fit(4, 3, 64, [0, 32], [4, 4], true), "an odd height rounds the chroma rows up");
+    assert!(!nv12_planes_fit(4, 3, 39, [0, 32], [4, 4], true));
+}
+
+#[test]
+fn a_linux_export_image_holds_whole_16_pixel_blocks() {
+    assert_eq!(ExportRing::padded_size(1920, 1080), Some((1920, 1088)));
+    assert_eq!(ExportRing::padded_size(1280, 720), Some((1280, 720)));
+    assert_eq!(ExportRing::padded_size(2, 2), Some((16, 16)));
+    assert_eq!(ExportRing::padded_size(u32::MAX - 1, 2), None, "no overflow");
+}
+
+#[test]
+fn a_device_number_is_the_one_the_c_library_makes() {
+    // /dev/dri/renderD128 is 226:128.
+    assert_eq!(crate::export::dev_number(226, 128), 0xe280);
+    assert_eq!(crate::export::dev_number(226, 0), 226 << 8);
+    assert_eq!(crate::export::dev_number(0x1000, 0), 0x1000 << 32, "the high bits of a major number");
+    assert_eq!(crate::export::dev_number(0, 0x100), 0x100 << 12, "the high bits of a minor number");
+    assert_eq!(crate::export::dev_number(u32::MAX, u32::MAX), u64::MAX, "every bit has its place");
+}
+
+struct Counter(std::sync::atomic::AtomicU64, std::sync::atomic::AtomicBool);
+
+impl crate::export::ReadyCounter for Counter {
+    fn reached(&self) -> Option<u64> {
+        let readable = self.1.load(std::sync::atomic::Ordering::Acquire);
+        readable.then(|| self.0.load(std::sync::atomic::Ordering::Acquire))
+    }
+}
+
+#[test]
+fn a_ring_reads_its_counter_while_it_exists_and_keeps_the_last_value() {
+    use std::sync::atomic::Ordering;
+    let ring = ExportRing::detached(64, 2);
+    let counter = std::sync::Arc::new(Counter(0.into(), true.into()));
+    let weak: std::sync::Weak<Counter> = std::sync::Arc::downgrade(&counter);
+    ring.count_ready_with(weak);
+    let late = exported(&ring, 0, 2);
+    assert!(!late.is_ready(), "the copy is still running");
+    counter.0.store(2, Ordering::Release);
+    assert!(late.is_ready(), "the encoder side reads the counter without the compositor");
+    // A counter that cannot be read now leaves the value it last gave.
+    counter.1.store(false, Ordering::Release);
+    assert_eq!(ring.ready(), 2);
+    counter.1.store(true, Ordering::Release);
+    counter.0.store(5, Ordering::Release);
+    assert_eq!(ring.ready(), 5);
+    ring.set_ready(4);
+    assert_eq!(ring.ready(), 5, "the value only grows");
+    // A second counter is ignored.
+    let other = std::sync::Arc::new(Counter(9.into(), true.into()));
+    let weak: std::sync::Weak<Counter> = std::sync::Arc::downgrade(&other);
+    ring.count_ready_with(weak);
+    assert_eq!(ring.ready(), 5);
+    drop(counter);
+    assert_eq!(ring.ready(), 5, "the value stays once the compositor side is gone");
+}
+
+#[test]
 fn an_export_ring_needs_even_sides() {
     let a = AdapterId::from_parts(7, 0);
     for (w, h) in [(0, 2), (2, 0), (3, 2), (2, 3), (u32::MAX, 2)] {
@@ -1177,7 +1263,7 @@ mod gpu {
         assert_eq!(ring.fallback(), Some(Fallback::ImportFailed));
     }
 
-    #[cfg(not(windows))]
+    #[cfg(not(any(windows, target_os = "linux")))]
     #[test]
     fn elsewhere_than_windows_an_export_reports_the_fallback() {
         let _gpu = serial();
@@ -1185,6 +1271,132 @@ mod gpu {
         assert_eq!(device_backend(&device), (Backend::Other, None));
         assert_eq!(Exporter::open(&device, &queue, 64, 2).err(), Some(Fallback::Unsupported));
         assert_eq!(Exporter::open(&device, &queue, 63, 2).err(), Some(Fallback::ImportFailed));
+    }
+
+    /// A compositor that runs on neither Direct3D 12 nor Vulkan exports nothing, for the backend;
+    /// odd sides are refused first.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_linux_compositor_not_on_vulkan_exports_nothing() {
+        let _gpu = serial();
+        let Some((device, queue)) = device_on(wgpu::Backends::NOOP, wgpu::Features::empty()) else { return };
+        assert_eq!(device_backend(&device), (Backend::Other, None));
+        assert!(crate::dmabuf_ffi::export_backend(&device).is_none());
+        assert_eq!(Exporter::open(&device, &queue, 64, 2).err(), Some(Fallback::UnsupportedBackend));
+        assert_eq!(Exporter::open(&device, &queue, 63, 2).err(), Some(Fallback::ImportFailed));
+    }
+
+    /// On a Vulkan device opened without the DMA-BUF feature the reason is the extension. With it,
+    /// the ring opens with three DMA-BUFs whose planes hold the picture, a copy goes into a free
+    /// image and its frame becomes ready once the queue has finished, without the compositor
+    /// polling; or the reason the driver cannot export comes back.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_linux_vulkan_compositor_exports_dmabufs_or_says_why_not() {
+        let _gpu = serial();
+        let Some((plain, plain_queue)) = device_on(wgpu::Backends::VULKAN, wgpu::Features::empty()) else { return };
+        if let (Backend::Vulkan { external_memory: false, .. }, _) = device_backend(&plain) {
+            assert_eq!(Exporter::open(&plain, &plain_queue, 64, 2).err(), Some(Fallback::MissingExtension));
+        }
+        let Some((device, queue)) = device_on(wgpu::Backends::VULKAN, wgpu::Features::VULKAN_EXTERNAL_MEMORY_DMA_BUF) else { return };
+        let (backend, adapter) = device_backend(&device);
+        let mut exporter = match Exporter::open(&device, &queue, 64, 2) {
+            Ok(e) => e,
+            Err(reason) => {
+                let expected = check_export(backend, adapter).err().unwrap_or(Fallback::Modifier);
+                assert!(reason == expected || reason == Fallback::ImportFailed, "{reason:?} for {backend:?}");
+                eprintln!("the Vulkan driver cannot export NV12 DMA-BUFs ({reason}): the rest of this test is skipped");
+                return;
+            }
+        };
+        let ring = std::sync::Arc::clone(exporter.ring());
+        for slot in 0..SLOTS {
+            let buffer = ring.buffer(slot).expect("a buffer in every slot");
+            // The images hold whole 16 x 16 blocks.
+            assert_eq!(buffer.image_size(), (64, 16));
+            assert!(nv12_planes_fit(64, 16, buffer.size(), buffer.offsets(), buffer.pitches(), buffer.modifier() == MOD_LINEAR));
+            assert!(crate::dmabuf_ffi::is_dmabuf(buffer.fd()));
+        }
+        assert!(ring.buffer(SLOTS).is_none());
+        let plane = |format, w, h| texture_of(&device, format, w, h);
+        let planes = [plane(wgpu::TextureFormat::R8Unorm, 64, 2), plane(wgpu::TextureFormat::Rg8Unorm, 32, 1)];
+        let mut encoder = device.create_command_encoder(&Default::default());
+        exporter.prepare(&device, &mut encoder, &planes);
+        let (commands, ticket) = exporter.copy(&device, &planes, Instant::now()).unwrap().unwrap();
+        queue.submit([encoder.finish(), commands]);
+        let frame = exporter.submitted(ticket).unwrap();
+        assert_eq!((frame.width(), frame.height(), frame.ready()), (64, 2, 1));
+        device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+        assert!(frame.is_ready(), "the encoder side reads the semaphore itself");
+        // The encoder refused the session: later frames come back with its reason.
+        ring.refuse(Fallback::NoEncoder);
+        assert_eq!(exporter.copy(&device, &planes, Instant::now()).err(), Some(Fallback::NoEncoder));
+        // The ring outlives the export and keeps the last value.
+        drop(exporter);
+        device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+        assert_eq!(ring.ready(), 1);
+    }
+
+    #[cfg(target_os = "linux")]
+    fn texture_of(device: &wgpu::Device, format: wgpu::TextureFormat, w: u32, h: u32) -> wgpu::Texture {
+        device.create_texture(&wgpu::TextureDescriptor {
+            label: None,
+            size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format,
+            usage: wgpu::TextureUsages::COPY_SRC | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        })
+    }
+
+    /// Each padded texel of a plane is written once, from the nearest texel of the picture's edge,
+    /// and nothing is read outside the picture.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn the_padding_of_a_linux_export_image_repeats_the_pictures_edge() {
+        use ash::vk;
+        for (src, dst) in
+            [((1920u32, 1080u32), (1920u32, 1088u32)), ((960, 540), (960, 544)), ((2, 2), (16, 16)), ((30, 8), (32, 16)), ((64, 16), (64, 16))]
+        {
+            let regions = crate::dmabuf_ffi::padding_regions(src, dst, vk::ImageAspectFlags::PLANE_1);
+            let mut written = std::collections::HashMap::new();
+            for r in &regions {
+                assert_eq!(r.dst_subresource.aspect_mask, vk::ImageAspectFlags::PLANE_1);
+                assert_eq!(r.src_subresource.aspect_mask, vk::ImageAspectFlags::COLOR);
+                for dy in 0..r.extent.height {
+                    for dx in 0..r.extent.width {
+                        let (sx, sy) = (r.src_offset.x as u32 + dx, r.src_offset.y as u32 + dy);
+                        let (x, y) = (r.dst_offset.x as u32 + dx, r.dst_offset.y as u32 + dy);
+                        assert!(sx < src.0 && sy < src.1, "{src:?}: a read outside the picture");
+                        assert!(x < dst.0 && y < dst.1, "{dst:?}: a write outside the plane");
+                        assert!(x >= src.0 || y >= src.1, "{src:?}: a write into the picture");
+                        assert_eq!((sx, sy), (x.min(src.0 - 1), y.min(src.1 - 1)), "the nearest edge texel");
+                        assert!(written.insert((x, y), ()).is_none(), "a texel written twice");
+                    }
+                }
+            }
+            assert_eq!(written.len() as u32, dst.0 * dst.1 - src.0 * src.1, "{src:?} in {dst:?}");
+        }
+        assert!(crate::dmabuf_ffi::padding_regions((0, 0), (16, 16), vk::ImageAspectFlags::PLANE_0).is_empty());
+    }
+
+    /// The Linux export image is one non-disjoint NV12 image too, so its barriers name the color
+    /// aspect and cover both planes.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn the_linux_export_ownership_barriers_name_the_color_aspect_of_the_whole_image() {
+        use ash::vk;
+        let [acquire, hand_back] = crate::dmabuf_ffi::export_barriers(vk::Image::null(), 3);
+        for barrier in [acquire, hand_back] {
+            assert_eq!(barrier.subresource_range.aspect_mask, vk::ImageAspectFlags::COLOR);
+            assert_eq!((barrier.subresource_range.level_count, barrier.subresource_range.layer_count), (1, 1));
+        }
+        assert_eq!((acquire.src_queue_family_index, acquire.dst_queue_family_index), (vk::QUEUE_FAMILY_EXTERNAL, 3));
+        assert_eq!((acquire.old_layout, acquire.new_layout), (vk::ImageLayout::UNDEFINED, vk::ImageLayout::TRANSFER_DST_OPTIMAL));
+        assert_eq!((hand_back.src_queue_family_index, hand_back.dst_queue_family_index), (3, vk::QUEUE_FAMILY_EXTERNAL));
+        assert_eq!((hand_back.old_layout, hand_back.new_layout), (vk::ImageLayout::TRANSFER_DST_OPTIMAL, vk::ImageLayout::GENERAL));
     }
 
     /// On a Windows device that can share textures, the export ring opens and a frame's planes are

@@ -171,3 +171,24 @@ fn rate_control_and_coded_buffers_match_va_h() {
         assert_eq!(offset_of!(VACodedBufferSegment, next), 24);
     }
 }
+
+#[test]
+fn surface_import_structures_match_va_h_and_va_drmcommon_h() {
+    assert_eq!(size_of::<VADRMPRIMEObject>(), 16);
+    assert_eq!(offset_of!(VADRMPRIMEObject, drm_format_modifier), 8);
+    assert_eq!(size_of::<VADRMPRIMELayer>(), 56);
+    assert_eq!(offset_of!(VADRMPRIMELayer, offset), 24);
+    assert_eq!(offset_of!(VADRMPRIMELayer, pitch), 40);
+    type T = VADRMPRIMESurfaceDescriptor;
+    assert_eq!(size_of::<T>(), 312);
+    assert_eq!(offset_of!(T, objects), 16);
+    assert_eq!(offset_of!(T, num_layers), 80);
+    assert_eq!(offset_of!(T, layers), 84);
+    #[cfg(target_pointer_width = "64")]
+    {
+        assert_eq!(size_of::<VAGenericValue>(), 16);
+        assert_eq!(offset_of!(VAGenericValue, value), 8);
+        assert_eq!(size_of::<VASurfaceAttrib>(), 24);
+        assert_eq!(offset_of!(VASurfaceAttrib, value), 8);
+    }
+}

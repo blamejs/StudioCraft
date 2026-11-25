@@ -18,7 +18,44 @@ pub(crate) use session::{Session, driver};
 
 use abi::*;
 
+pub(crate) use crate::vaapi::PrimeFrame;
 use crate::{Codec, Rate};
+
+/// The `/dev/dri/renderD*` nodes in number order, each with its device number (`st_rdev`); none
+/// without `/dev/dri`, and an error when it cannot be read.
+pub(crate) fn render_nodes() -> Result<Vec<(String, u64)>, String> {
+    let dir = match std::fs::read_dir("/dev/dri") {
+        Ok(dir) => dir,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => return Err(format!("/dev/dri: {e}")),
+    };
+    let mut nodes: Vec<(u32, String, u64)> = dir
+        .flatten()
+        .filter_map(|e| {
+            let name = e.file_name().into_string().ok()?;
+            let n = name.strip_prefix("renderD")?.parse().ok()?;
+            let path = format!("/dev/dri/{name}");
+            Some((n, path.clone(), device_number(&path)))
+        })
+        .collect();
+    nodes.sort();
+    Ok(nodes.into_iter().map(|(_, path, dev)| (path, dev)).collect())
+}
+
+/// The device number of the device file at `path`; 0 where it cannot be read or the system has
+/// none.
+fn device_number(path: &str) -> u64 {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        std::fs::metadata(path).map_or(0, |m| m.rdev())
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+        0
+    }
+}
 
 /// Frames a session holds between going in and their coded data being read: each has its own
 /// input surface and coded buffer.
@@ -67,6 +104,11 @@ impl Slots {
     /// Whether every slot holds a frame.
     pub(crate) fn full(&self) -> bool {
         self.count >= DEPTH
+    }
+
+    /// How many frames are in the slots.
+    pub(crate) fn len(&self) -> usize {
+        self.count
     }
 
     /// The slot the next frame goes into, if one is free and the slots are not stalled.
@@ -787,9 +829,62 @@ pub(crate) fn copy_nv12(
     Ok(())
 }
 
+/// Input surfaces a session imports from DMA-BUFs, each under its own key.
+pub(crate) const IMPORTS: usize = 8;
+
+/// The descriptor `vaCreateSurfaces` imports `frame`, an NV12 picture of `width` x `height` in the
+/// DMA-BUF `fd`, from: one memory object and one NV12 layer with its two planes. A picture whose
+/// planes do not lie inside the buffer, or whose linear rows are shorter than the picture, is an
+/// error before VA-API is called.
+pub(crate) fn prime_descriptor(fd: std::ffi::c_int, width: u32, height: u32, frame: &PrimeFrame) -> Result<VADRMPRIMESurfaceDescriptor, String> {
+    let bad = |why: &str| Err(format!("a DMA-BUF that {why} is not an NV12 picture of {width}x{height}"));
+    if fd < 0 {
+        return bad("has no descriptor");
+    }
+    let Ok(size) = u32::try_from(frame.size) else { return bad("is larger than 4 GiB") };
+    if width == 0 || height == 0 || frame.pitches.contains(&0) {
+        return bad("has an empty plane");
+    }
+    if frame.modifier == DRM_FORMAT_MOD_LINEAR && frame.pitches.iter().any(|&p| p < width) {
+        return bad("has rows shorter than the picture");
+    }
+    let end = |offset: u32, pitch: u32, rows: u32| u64::from(pitch) * u64::from(rows) + u64::from(offset);
+    if end(frame.offsets[0], frame.pitches[0], height) > frame.size || end(frame.offsets[1], frame.pitches[1], height.div_ceil(2)) > frame.size {
+        return bad("ends before its planes do");
+    }
+    let mut desc = VADRMPRIMESurfaceDescriptor { fourcc: VA_FOURCC_NV12, width, height, num_objects: 1, num_layers: 1, ..Default::default() };
+    desc.objects[0] = VADRMPRIMEObject { fd, size, drm_format_modifier: frame.modifier };
+    desc.layers[0] = VADRMPRIMELayer {
+        drm_format: DRM_FORMAT_NV12,
+        num_planes: 2,
+        object_index: [0; 4],
+        offset: [frame.offsets[0], frame.offsets[1], 0, 0],
+        pitch: [frame.pitches[0], frame.pitches[1], 0, 0],
+    };
+    Ok(desc)
+}
+
+/// The size of the surface a session for `p` imports `frame` as: the image's own size, which must
+/// hold the session's coded size, padded rows and columns included.
+pub(crate) fn import_size(p: &Params, frame: &PrimeFrame) -> Result<(u32, u32), String> {
+    let (cw, ch) = coded_size(p.codec, p.width, p.height);
+    if frame.width < cw || frame.height < ch {
+        return Err(format!("a DMA-BUF image of {}x{} is smaller than the coded size {cw}x{ch}", frame.width, frame.height));
+    }
+    Ok((frame.width, frame.height))
+}
+
+/// `drm_fourcc.h`'s linear layout modifier.
+pub(crate) const DRM_FORMAT_MOD_LINEAR: u64 = 0;
+
+/// The render node among `nodes` (its path and its device number) whose device number is `dev`.
+pub(crate) fn node_with(dev: u64, nodes: impl IntoIterator<Item = (String, u64)>) -> Option<String> {
+    nodes.into_iter().find(|&(_, d)| d == dev).map(|(path, _)| path)
+}
+
 #[cfg(not(all(target_os = "linux", target_pointer_width = "64")))]
 mod none {
-    use super::{OpenError, Params, Picture, Tag};
+    use super::{OpenError, Params, Picture, PrimeFrame, Tag};
 
     const WHY: &str = "VA-API runs on 64-bit Linux only";
 
@@ -805,10 +900,25 @@ mod none {
         pub(crate) fn open(_: &Params) -> Result<Session, OpenError> {
             Err(OpenError::NoDevice(WHY.into()))
         }
+        pub(crate) fn open_on(_: &Params, _: &str) -> Result<Session, OpenError> {
+            Err(OpenError::NoDevice(WHY.into()))
+        }
         pub(crate) fn full(&self) -> bool {
             match *self {}
         }
+        pub(crate) fn in_flight(&self) -> usize {
+            match *self {}
+        }
         pub(crate) fn submit(&mut self, _: &[u8], _: &Picture, _: Tag) -> Result<(), String> {
+            match *self {}
+        }
+        pub(crate) fn import(&mut self, _: usize, _: std::ffi::c_int, _: &PrimeFrame) -> Result<(), String> {
+            match *self {}
+        }
+        pub(crate) fn imported(&self, _: usize) -> bool {
+            match *self {}
+        }
+        pub(crate) fn submit_imported(&mut self, _: usize, _: &Picture, _: Tag) -> Result<(), String> {
             match *self {}
         }
         pub(crate) fn collect(&mut self, _: &mut Vec<u8>) -> Result<Option<Tag>, String> {

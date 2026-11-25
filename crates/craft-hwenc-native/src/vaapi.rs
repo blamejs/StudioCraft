@@ -23,6 +23,12 @@
 //! is the one call that waits for the GPU, and it waits for a frame submitted three frames before.
 //! With libva 2.9 or later and a driver that has `vaSyncSurface2`, a frame the GPU has not
 //! finished after two seconds is an error.
+//!
+//! Frames can also stay on the GPU: [`Encoder::on_render_node`] opens the encoder on the render
+//! node of the device that made them, [`Encoder::import`] imports an NV12 DMA-BUF as an input
+//! surface (`VA_SURFACE_ATTRIB_MEM_TYPE_DRM_PRIME_2`, one object and one layer of two planes), and
+//! [`Encoder::encode_surface`] encodes it without a copy, with at most [`SURFACE_DEPTH`] pictures
+//! in flight.
 
 use crate::mf::set_types;
 use crate::vaapi_ffi::{self, OpenError, Params, Picture, Session};
@@ -193,6 +199,33 @@ pub fn packet(codec: Codec, sets: &[Vec<u8>], data: &[u8], pts: i64, idr: bool) 
     Ok(Packet { data: out, pts, keyframe })
 }
 
+/// How an NV12 picture lies in a DMA-BUF that [`Encoder::import`] takes: the width and height of
+/// the image in it, the buffer's size, the DRM format modifier of its layout, and the offset and
+/// row pitch of its luma and chroma planes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PrimeFrame {
+    pub width: u32,
+    pub height: u32,
+    pub size: u64,
+    pub modifier: u64,
+    pub offsets: [u32; 2],
+    pub pitches: [u32; 2],
+}
+
+/// Pictures in DMA-BUFs ([`Encoder::encode_surface`]) in flight at a time. The caller's buffers
+/// stay with the encoder until their packets come out, so this is fewer than the three buffers of
+/// a graphics export ring, and the compositor always has one to write.
+pub const SURFACE_DEPTH: usize = 2;
+
+/// Keys [`Encoder::import`] takes: 0 up to this.
+pub const IMPORT_KEYS: usize = vaapi_ffi::IMPORTS;
+
+/// The `/dev/dri/renderD*` node whose device number (`st_rdev`) is `dev`.
+pub fn render_node_with(dev: u64) -> Result<String, Error> {
+    let nodes = vaapi_ffi::render_nodes().map_err(Error::NoDevice)?;
+    vaapi_ffi::node_with(dev, nodes).ok_or_else(|| Error::NoDevice(format!("no render node is the device {:#x}", dev)))
+}
+
 /// A VA-API hardware encoder.
 pub struct Encoder {
     session: Session,
@@ -208,7 +241,20 @@ impl Encoder {
     /// Open an encoder for `cfg`, or say why this system cannot run it.
     pub fn new(cfg: &Config) -> Result<Encoder, Error> {
         check(cfg)?;
-        let mut session = Session::open(&params(cfg))?;
+        let session = Session::open(&params(cfg))?;
+        Encoder::start(cfg, session)
+    }
+
+    /// Open an encoder for `cfg` on the render node whose device number (`st_rdev`) is `dev`
+    /// only: the GPU whose DMA-BUFs it imports. No such node is [`Error::NoDevice`].
+    pub fn on_render_node(cfg: &Config, dev: u64) -> Result<Encoder, Error> {
+        check(cfg)?;
+        let node = render_node_with(dev)?;
+        let session = Session::open_on(&params(cfg), &node)?;
+        Encoder::start(cfg, session)
+    }
+
+    fn start(cfg: &Config, mut session: Session) -> Result<Encoder, Error> {
         let mut gop = Gop::new(cfg.keyint);
         // The gray frame and the buffer for its coded data are allocated fallibly: an 8192 × 8192
         // stream needs 96 MiB for each.
@@ -257,6 +303,44 @@ impl Encoder {
         }
         let pic = self.gop.next();
         self.session.submit(frame, &pic, (pts, pic.idr)).map_err(Error::Failed)?;
+        Ok(packets)
+    }
+
+    /// Import the NV12 picture in the DMA-BUF `fd`, laid out as `frame` says, under `key` (below
+    /// [`IMPORT_KEYS`]) for [`Encoder::encode_surface`]. The image in the buffer holds the picture
+    /// at its top left and is at least the coded size: for H.264 the configured size rounded up to
+    /// multiples of 16, for HEVC the configured size. The surface has the image's size. libva holds its
+    /// own reference to the buffer afterward, so the caller may close `fd`; it must not free the
+    /// memory while the encoder exists. A layout whose planes do not fit the buffer, a key already
+    /// imported and a driver that refuses the buffer are errors.
+    pub fn import(&mut self, key: usize, fd: i32, frame: &PrimeFrame) -> Result<(), Error> {
+        self.session.import(key, fd, frame).map_err(Error::Failed)
+    }
+
+    /// Whether a buffer was imported under `key`.
+    pub fn imported(&self, key: usize) -> bool {
+        self.session.imported(key)
+    }
+
+    /// Encode the picture in the buffer imported under `key` with the timestamp `pts`, which must
+    /// not be negative, without copying it. Returns the packets that came out, oldest first, one per
+    /// picture in the order they went in. At most [`SURFACE_DEPTH`] pictures are in flight: once a
+    /// picture's packet has come out, the encoder no longer reads its buffer.
+    pub fn encode_surface(&mut self, key: usize, pts: i64) -> Result<Vec<Packet>, Error> {
+        if pts < 0 {
+            return Err(Error::Failed(format!("the timestamp {pts} is negative")));
+        }
+        if !self.session.imported(key) {
+            return Err(Error::Failed(format!("nothing was imported under {key}")));
+        }
+        let mut packets = Vec::new();
+        while self.session.in_flight() >= SURFACE_DEPTH || self.session.full() {
+            if !self.take(&mut packets)? {
+                break;
+            }
+        }
+        let pic = self.gop.next();
+        self.session.submit_imported(key, &pic, (pts, pic.idr)).map_err(Error::Failed)?;
         Ok(packets)
     }
 
@@ -682,5 +766,78 @@ mod tests {
             assert!(e.encode(&frame[1..], 10).is_err(), "a short frame");
             assert!(e.encode(&frame, -1).is_err(), "a negative timestamp");
         }
+    }
+
+    fn linear(width: u32, height: u32) -> PrimeFrame {
+        let luma = width * height;
+        PrimeFrame { width, height, size: u64::from(luma + luma / 2), modifier: 0, offsets: [0, luma], pitches: [width, width] }
+    }
+
+    #[test]
+    fn a_dmabuf_is_described_as_one_object_with_one_nv12_layer_of_two_planes() {
+        let frame = PrimeFrame { modifier: 0x0100_0000_0000_0001, ..linear(256, 144) };
+        let d = crate::vaapi_ffi::prime_descriptor(9, 256, 144, &frame).unwrap();
+        assert_eq!((d.fourcc, d.width, d.height, d.num_objects, d.num_layers), (VA_FOURCC_NV12, 256, 144, 1, 1));
+        assert_eq!(d.objects[0], VADRMPRIMEObject { fd: 9, size: 256 * 144 * 3 / 2, drm_format_modifier: 0x0100_0000_0000_0001 });
+        assert_eq!(d.objects[1], VADRMPRIMEObject::default(), "the other objects are empty");
+        let layer = d.layers[0];
+        assert_eq!((layer.drm_format, layer.num_planes, layer.object_index), (DRM_FORMAT_NV12, 2, [0; 4]));
+        assert_eq!((layer.offset, layer.pitch), ([0, 256 * 144, 0, 0], [256, 256, 0, 0]));
+    }
+
+    #[test]
+    fn a_dmabuf_whose_planes_do_not_fit_is_refused_before_va_api() {
+        let ok = linear(256, 144);
+        let d = |fd, w, h, f: PrimeFrame| crate::vaapi_ffi::prime_descriptor(fd, w, h, &f);
+        assert!(d(3, 256, 144, ok).is_ok());
+        assert!(d(-1, 256, 144, ok).is_err(), "no descriptor");
+        assert!(d(3, 0, 144, ok).is_err(), "an empty picture");
+        assert!(d(3, 256, 144, PrimeFrame { size: ok.size - 1, ..ok }).is_err(), "the chroma plane ends past the buffer");
+        assert!(d(3, 256, 144, PrimeFrame { pitches: [255, 256], ..ok }).is_err(), "linear rows shorter than the picture");
+        assert!(d(3, 256, 144, PrimeFrame { pitches: [0, 256], modifier: 7, ..ok }).is_err(), "a pitch of 0");
+        assert!(d(3, 256, 144, PrimeFrame { pitches: [128, 128], modifier: 7, ..ok }).is_ok(), "a tiled pitch is the driver's");
+        assert!(d(3, 256, 144, PrimeFrame { offsets: [0, u32::MAX], ..ok }).is_err(), "a plane past the end");
+        assert!(d(3, 256, 144, PrimeFrame { size: 1 << 32, ..ok }).is_err(), "a buffer libva cannot describe");
+        assert!(d(3, u32::MAX, u32::MAX, PrimeFrame { size: u64::from(u32::MAX), pitches: [u32::MAX; 2], ..ok }).is_err(), "no overflow");
+    }
+
+    #[test]
+    fn an_h264_import_needs_a_buffer_that_holds_the_coded_size() {
+        let (cw, ch) = crate::vaapi_ffi::coded_size(Codec::H264, 1920, 1080);
+        assert_eq!((cw, ch), (1920, 1088));
+        assert!(crate::vaapi_ffi::prime_descriptor(3, cw, ch, &linear(1920, 1080)).is_err(), "the padded rows are not in the buffer");
+        assert!(crate::vaapi_ffi::prime_descriptor(3, cw, ch, &linear(1920, 1088)).is_ok());
+        assert_eq!(crate::vaapi_ffi::coded_size(Codec::Hevc, 1920, 1080), (1920, 1080));
+        // The surface has the image's size, at least the coded size of either codec.
+        let import = |codec, frame: PrimeFrame| crate::vaapi_ffi::import_size(&p(codec, 1920, 1080, (30, 1)), &frame);
+        assert_eq!(import(Codec::H264, linear(1920, 1088)), Ok((1920, 1088)));
+        assert!(import(Codec::H264, linear(1920, 1080)).is_err(), "an image without the padded rows");
+        assert_eq!(import(Codec::Hevc, linear(1920, 1088)), Ok((1920, 1088)), "a padded image keeps its size");
+        assert_eq!(import(Codec::Hevc, linear(1920, 1080)), Ok((1920, 1080)));
+        assert!(import(Codec::Hevc, linear(1918, 1080)).is_err());
+    }
+
+    #[test]
+    fn the_encoder_for_a_dmabuf_runs_on_the_render_node_of_its_device() {
+        let nodes = vec![("/dev/dri/renderD128".to_string(), 0xe280), ("/dev/dri/renderD129".to_string(), 0xe281)];
+        assert_eq!(crate::vaapi_ffi::node_with(0xe281, nodes.clone()).as_deref(), Some("/dev/dri/renderD129"));
+        assert_eq!(crate::vaapi_ffi::node_with(0xe282, nodes), None);
+        assert_eq!(crate::vaapi_ffi::node_with(0xe280, Vec::new()), None);
+        // No device has the number 0 here, so no encoder opens on it; a configuration the encoder
+        // cannot take is refused first.
+        assert!(matches!(render_node_with(0), Err(Error::NoDevice(_))));
+        assert!(matches!(Encoder::on_render_node(&cfg(Codec::H264), 0), Err(Error::NoDevice(_))));
+        assert!(matches!(Encoder::on_render_node(&Config { width: 255, ..cfg(Codec::H264) }, 0), Err(Error::Unsupported(_))));
+    }
+
+    #[test]
+    fn an_encoder_takes_only_buffers_it_imported_when_a_hardware_encoder_is_present() {
+        let Ok(mut e) = Encoder::new(&cfg(Codec::H264)) else { return };
+        assert!(!e.imported(0));
+        assert!(matches!(e.encode_surface(0, 0), Err(Error::Failed(_))), "nothing imported");
+        assert!(matches!(e.encode_surface(0, -1), Err(Error::Failed(_))), "a negative timestamp");
+        assert!(e.import(IMPORT_KEYS, 3, &linear(256, 144)).is_err(), "a key past the end");
+        assert!(e.import(0, -1, &linear(256, 144)).is_err(), "no descriptor");
+        assert!(!e.imported(0));
     }
 }

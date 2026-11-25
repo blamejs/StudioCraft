@@ -28,6 +28,7 @@ through the `objc2-video-toolbox`, `objc2-core-media`, `objc2-core-video` and
 | `vt::available(codec)` | It reports whether VideoToolbox opens a hardware encoder that writes `codec`. |
 | `vaapi::Encoder` | This runs the VA-API hardware H.264 (High, Main or Constrained Baseline) and HEVC Main encoders on 64-bit Linux (`libva.so.2`, `libva-drm.so.2`), from NV12 frames. It uses the first `/dev/dri/renderD*` node whose driver encodes the codec. It has the same `Config`, `encode`, `flush` and `codec_private` as NVENC. Quality is a constant QP at the level, or a variable bitrate where the driver has no constant QP. Constant bitrate uses a one-second buffer. It writes IDR and P pictures only, and HEVC sizes are multiples of the driver's smallest coding block. |
 | `vaapi::available(codec)` | It reports whether a VA-API driver opens an encoder that writes `codec`. |
+| `vaapi::Encoder::on_render_node`, `import`, `encode_surface` | `on_render_node(cfg, dev)` opens the encoder on the render node whose device number is `dev` only. `import(key, fd, frame)` imports an NV12 picture in a DMA-BUF, described by a `PrimeFrame` (size, DRM format modifier, plane offsets and pitches), as an input surface under a key below `IMPORT_KEYS`. `encode_surface(key, pts)` encodes it without a copy, with at most `SURFACE_DEPTH` (2) pictures in flight. |
 | `vaapi::copy_nv12`, `vaapi::packet` | These are the two passes the VA-API encoder makes over each frame on the CPU: `copy_nv12` copies the frame into a surface's pitched planes, and `packet` turns the coded picture into a packet. |
 | `annexb::nals`, `to_length_prefixed`, `parameter_sets` | `nals` splits an Annex B stream into network abstraction layer (NAL) units. `to_length_prefixed` writes a sample without parameter sets or delimiters, and `parameter_sets` returns the parameter sets. |
 | `avc::avcc`, `hevc::hvcc` | These build the decoder configuration records of ISO/IEC 14496-15 and check them against the stream that was asked for. |
@@ -84,6 +85,24 @@ picture is still inside the encoder is refused with an error; keep a texture unc
 packet with its timestamp has come out. A texture of another size, format or device is an error,
 and so is a call to `encode` on a texture encoder or to `encode_texture` on one opened with
 `Encoder::new`. The encoder opened with `on_d3d11` creates no input buffers in system memory.
+
+On Linux, frames that are already on the GPU go in as DMA-BUFs of the device whose render node the
+encoder opened on:
+
+```rust
+let mut enc = vaapi::Encoder::on_render_node(&cfg, render_node)?;
+enc.import(0, fd, &PrimeFrame { width, height, size, modifier, offsets, pitches })?;
+for packet in enc.encode_surface(0, pts)? {
+    write(packet);
+}
+```
+
+libva holds its own reference to an imported buffer, so the caller may close the descriptor.
+`width` and `height` are the size of the image in the buffer, with the picture at its top left.
+For H.264 the image must be at least the configured size rounded up to multiples of 16, and for
+HEVC at least the configured size. A smaller image, or a buffer whose planes do not fit its size,
+is refused before libva is called. Keep the picture in a
+buffer unchanged until the packet with its timestamp has come out.
 
 `vaapi::Encoder` keeps up to four frames in flight, each in its own surface and coded buffer.
 `encode` copies the frame into a free surface and submits it, and waits for the GPU only when all

@@ -1,5 +1,6 @@
 // The declarations in this file are transcribed from libva's `va/va.h`, `va/va_enc_h264.h`,
-// `va/va_enc_hevc.h` and `va/va_drm.h` (libva 2.22.0), which carry this notice:
+// `va/va_enc_hevc.h`, `va/va_drm.h` and `va/va_drmcommon.h` (libva 2.22.0), which carry this
+// notice:
 //
 // Copyright (c) 2007-2009 Intel Corporation. All Rights Reserved.
 //
@@ -116,6 +117,77 @@ pub const VA_PICTURE_H264_SHORT_TERM_REFERENCE: u32 = 0x0000_0008;
 pub const VA_PICTURE_HEVC_INVALID: u32 = 0x0000_0001;
 
 pub const VA_FOURCC_NV12: u32 = 0x3231_564E;
+/// `drm_fourcc.h`'s NV12, the layer format of an imported NV12 DMA-BUF; the same four characters.
+pub const DRM_FORMAT_NV12: u32 = 0x3231_564E;
+
+pub type VASurfaceAttribType = c_int;
+pub const VASurfaceAttribMemoryType: VASurfaceAttribType = 6;
+pub const VASurfaceAttribExternalBufferDescriptor: VASurfaceAttribType = 7;
+/// `VASurfaceAttrib::flags`: the attribute is set by the caller.
+pub const VA_SURFACE_ATTRIB_SETTABLE: u32 = 0x0000_0002;
+pub const VAGenericValueTypeInteger: c_int = 1;
+pub const VAGenericValueTypePointer: c_int = 3;
+/// `va_drmcommon.h`: memory described by a [`VADRMPRIMESurfaceDescriptor`].
+pub const VA_SURFACE_ATTRIB_MEM_TYPE_DRM_PRIME_2: u32 = 0x4000_0000;
+
+/// The value of a [`VASurfaceAttrib`]: an `int32_t`, a `float`, a pointer or a function pointer,
+/// of which this crate uses the integer and the pointer.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub union VAGenericValueUnion {
+    pub i: i32,
+    pub p: *mut c_void,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct VAGenericValue {
+    pub type_: c_int,
+    pub value: VAGenericValueUnion,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct VASurfaceAttrib {
+    pub type_: VASurfaceAttribType,
+    pub flags: u32,
+    pub value: VAGenericValue,
+}
+
+/// One memory object of a [`VADRMPRIMESurfaceDescriptor`]: a DMA-BUF descriptor, its size, and
+/// the DRM format modifier of its layout.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct VADRMPRIMEObject {
+    pub fd: c_int,
+    pub size: u32,
+    pub drm_format_modifier: u64,
+}
+
+/// One layer of a [`VADRMPRIMESurfaceDescriptor`]: its DRM format and where each of its planes is.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct VADRMPRIMELayer {
+    pub drm_format: u32,
+    pub num_planes: u32,
+    pub object_index: [u32; 4],
+    pub offset: [u32; 4],
+    pub pitch: [u32; 4],
+}
+
+/// `va_drmcommon.h`: a surface made of DMA-BUF objects, as `vaCreateSurfaces` imports it with
+/// [`VA_SURFACE_ATTRIB_MEM_TYPE_DRM_PRIME_2`].
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct VADRMPRIMESurfaceDescriptor {
+    pub fourcc: u32,
+    pub width: u32,
+    pub height: u32,
+    pub num_objects: u32,
+    pub objects: [VADRMPRIMEObject; 4],
+    pub num_layers: u32,
+    pub layers: [VADRMPRIMELayer; 4],
+}
 
 pub const VA_PADDING_LOW: usize = 4;
 pub const VA_PADDING_MEDIUM: usize = 8;
@@ -483,8 +555,8 @@ pub type vaCreateConfig = unsafe extern "C" fn(
     config_id: *mut VAConfigID,
 ) -> VAStatus;
 pub type vaDestroyConfig = unsafe extern "C" fn(dpy: VADisplay, config_id: VAConfigID) -> VAStatus;
-/// The last two arguments are `VASurfaceAttrib *attrib_list, unsigned int num_attribs`; this
-/// crate passes none, so the attribute structure is not declared.
+/// The last two arguments are `VASurfaceAttrib *attrib_list, unsigned int num_attribs`: none for
+/// the session's own surfaces, and a [`VASurfaceAttrib`] list naming a DMA-BUF for an imported one.
 pub type vaCreateSurfaces = unsafe extern "C" fn(
     dpy: VADisplay,
     format: c_uint,

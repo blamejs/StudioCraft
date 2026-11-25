@@ -7,7 +7,8 @@
 //! skipped and counted, so a slow read-back never stalls compositing.
 //!
 //! A hardware encoder on the compositor's adapter can take the frames on the GPU instead: the
-//! planes are copied into an export ring's NV12 textures (`craft-gpu-interop`), and the one
+//! planes are copied into an export ring's NV12 textures (`craft-gpu-interop`; on Linux, Vulkan
+//! images whose memory is exported as DMA-BUFs for a VA-API encoder), and the one
 //! encoder queue of [`Nv12::set_export`] gets a [`GpuFrame`]. The read-back then runs only for the queues of the
 //! [`EncodeTarget`]. When the ring cannot be opened, or a copy or the encoder fails, the reason is
 //! kept, the export stops, and the read-back runs again.
@@ -416,8 +417,11 @@ mod tests {
                 assert_eq!(n.fallback, None);
             }
             Err(reason) => {
-                #[cfg(not(windows))]
+                #[cfg(not(any(windows, target_os = "linux")))]
                 assert_eq!(reason, Fallback::Unsupported);
+                // On Linux a device that cannot export DMA-BUFs gives its own reason.
+                #[cfg(target_os = "linux")]
+                assert_ne!(reason, Fallback::Unsupported);
                 assert_eq!(n.fallback, Some(reason));
                 assert!(!n.exporting());
                 assert!(n.reads_back(), "the read-back carries the frames instead");

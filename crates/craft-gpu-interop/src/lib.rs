@@ -51,6 +51,16 @@
 //! cannot open a session on the adapter records [`Fallback::NoEncoder`] on the ring; the
 //! compositor then reads its frames back through CPU memory.
 //!
+//! On Linux the [`Exporter`] makes the ring's three NV12 images on the compositor's Vulkan device,
+//! in a DRM format modifier of two memory planes, and exports their memory as DMA-BUFs
+//! ([`ExportRing::buffer`]) with the device's DRM render node ([`ExportRing::render_node`]), for a
+//! VA-API encoder to import on the same GPU. A submission after each copy signals a timeline
+//! semaphore, which [`ExportRing::ready`] reads without waiting. [`check_dmabuf_export`] gives the
+//! reasons the frames go through memory instead: a compositor not on Vulkan, a device without
+//! timeline semaphores or without `VK_KHR_external_memory_fd`, `VK_EXT_external_memory_dma_buf` and
+//! `VK_EXT_image_drm_format_modifier`, or no modifier in which the device can export the picture
+//! ([`Fallback::Modifier`]).
+//!
 //! The system calls are in private modules with `unsafe` allowed; every item this crate exports
 //! is safe.
 
@@ -96,10 +106,12 @@ pub use dmabuf::{
 };
 #[cfg(target_os = "linux")]
 pub use dmabuf::{DmabufPlane, DmabufStream};
-pub use export::{ExportFrame, ExportRing, Feed};
+#[cfg(target_os = "linux")]
+pub use export::ExportBuffer;
+pub use export::{ExportFrame, ExportRing, Feed, nv12_planes_fit};
 #[cfg(feature = "wgpu")]
 pub use export::{Exporter, Ticket, device_backend};
-pub use fallback::{Backend, Fallback, check_export, check_import};
+pub use fallback::{Backend, Fallback, check_dmabuf_export, check_export, check_import};
 #[cfg(feature = "wgpu")]
 pub use import::{Drawn, Importer, Opaque};
 #[cfg(all(target_os = "linux", feature = "pipewire"))]

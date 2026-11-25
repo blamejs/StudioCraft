@@ -129,9 +129,11 @@ adapter, with the same limits:
 The same bench times how a 1080p and a 4K NV12 frame (an R8 and an RG8 plane) reach an encoder:
 `NV12 read-back`, copied into a buffer that is then mapped, and `NV12 export ring copy`, copied
 into an export ring's shared NV12 texture. Each iteration waits until the GPU has finished. The
-export ring case runs only on Windows, on Direct3D 12 or on Vulkan with
-`VK_KHR_external_memory_win32`; elsewhere the bench prints why it was skipped. Neither case has
-been measured on Windows hardware yet.
+export ring case runs on Windows, on Direct3D 12 or on Vulkan with
+`VK_KHR_external_memory_win32`, and on Linux on Vulkan with `VK_KHR_external_memory_fd`,
+`VK_EXT_external_memory_dma_buf` and `VK_EXT_image_drm_format_modifier`, where the ring's images
+are DMA-BUFs in a format modifier the driver can export; elsewhere the bench prints why it was
+skipped. Neither case has been measured on Windows or Linux hardware yet.
 
 On Linux the bench also times `DMA-BUF import 1080p` and `DMA-BUF import 4k`: a linear BGRX
 DMA-BUF that the bench makes over ordinary memory through `/dev/udmabuf`, handed to the importer

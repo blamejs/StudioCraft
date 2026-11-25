@@ -30,7 +30,9 @@ pub enum Fallback {
     /// does not accept, or a capture the system or the person refused).
     Refused,
     /// The compositor's device cannot read the captured buffers' pixel format with their memory
-    /// layout (their DRM format modifier), or a buffer's layout does not match the stream's.
+    /// layout (their DRM format modifier), or a buffer's layout does not match the stream's. For
+    /// program frames on Linux: the device cannot make an NV12 image of the ring's size that it
+    /// can share as a DMA-BUF in any memory layout.
     Modifier,
 }
 
@@ -80,7 +82,7 @@ impl std::fmt::Display for Fallback {
             Fallback::MissingExtension => "the compositor's Vulkan device cannot open shared textures",
             Fallback::NoEncoder => "the hardware encoder cannot run on the compositor's graphics adapter",
             Fallback::Refused => "the system does not let this window be captured into textures",
-            Fallback::Modifier => "the compositor's device cannot read the captured picture's memory layout",
+            Fallback::Modifier => "the compositor's device cannot share the picture in a memory layout the other side reads",
         })
     }
 }
@@ -125,4 +127,17 @@ pub fn check_export(backend: Backend, compositor: Option<AdapterId>) -> Result<A
         return Err(if backend == Backend::Other { Fallback::UnsupportedBackend } else { Fallback::OtherAdapter });
     };
     check_import(backend, adapter, Some(adapter)).map(|()| adapter)
+}
+
+/// The adapter a Linux [`crate::ExportRing`] of DMA-BUF buffers for a compositor on `backend` and
+/// `compositor` is made on. The checks of [`check_export`] come first, with `external_memory`
+/// meaning `VK_EXT_external_memory_dma_buf` and `VK_EXT_image_drm_format_modifier`; then
+/// `modifiers`, the DRM format modifiers the device can export an NV12 image of the ring's size
+/// with, must not be empty ([`Fallback::Modifier`]).
+pub fn check_dmabuf_export(backend: Backend, compositor: Option<AdapterId>, modifiers: &[u64]) -> Result<AdapterId, Fallback> {
+    let adapter = check_export(backend, compositor)?;
+    if modifiers.is_empty() {
+        return Err(Fallback::Modifier);
+    }
+    Ok(adapter)
 }
