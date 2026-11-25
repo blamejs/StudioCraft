@@ -6,7 +6,9 @@
 //!   ([`crate::writer`]): a late frame is dropped, and a gap is filled by repeating the previous
 //!   frame. It encodes the frames with the built-in video encoder's session.
 //! - The audio thread places the mixer's blocks the same way, fills gaps with silence, and
-//!   encodes AAC.
+//!   encodes AAC. A recording of several mix tracks writes one AAC track for each; the thread
+//!   joins the tracks' blocks by their time ([`crate::writer::Gather`]) and encodes a track that
+//!   has no block at that time as silence, so every track keeps the same timeline.
 //! - The file thread writes the packets of both streams to the file in time order. A packet of
 //!   one stream waits until the other stream has a packet at the same time or later, or has
 //!   ended. When one encoder falls more than [`MAX_LAG_NS`] nanoseconds behind the other, the
@@ -48,7 +50,7 @@ use studiocraft_media::stats::EncoderStats;
 use studiocraft_media::video::{PixelFormat, PooledFrame};
 use studiocraft_plugin::{Codec, OutputJob, OutputStatus, Packet, PluginError, RateControl, VideoParams, VideoSession};
 
-use crate::writer::{FINISH_TIMEOUT, IDLE, Timeline, audio_step, seconds_since, video_step};
+use crate::writer::{FINISH_TIMEOUT, Gather, IDLE, Timeline, audio_queues, audio_step, audio_stream_count, first_queue, seconds_since, video_step};
 
 /// Most bytes of packets waiting for the file thread.
 pub const QUEUE_BYTES: usize = 64 << 20;
@@ -63,7 +65,7 @@ pub(crate) const END_GRACE: Duration = Duration::from_secs(2);
 pub const MAX_LAG_NS: i64 = 10_000_000_000;
 const NS: i128 = 1_000_000_000;
 
-/// The file's tracks, in the order the file lists them.
+/// The kinds of the file's tracks: the video track comes first, then the audio tracks.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Track {
     Video = 0,
@@ -73,6 +75,8 @@ pub(crate) enum Track {
 /// One packet on its way to the file.
 pub(crate) struct Item {
     pub(crate) track: Track,
+    /// Which audio track a sound packet belongs to, 0 for the first; 0 for video.
+    pub(crate) audio: usize,
     /// When the packet is written relative to the other track: its decoding time, or for a
     /// video keyframe its presentation time.
     pub(crate) order_ns: i64,
@@ -81,6 +85,16 @@ pub(crate) struct Item {
     pub(crate) dts_ns: i64,
     pub(crate) keyframe: bool,
     pub(crate) data: Vec<u8>,
+}
+
+impl Item {
+    /// The packet's track in the file: 0 for video, then 1 for each audio track in order.
+    pub(crate) fn file_track(&self) -> usize {
+        match self.track {
+            Track::Video => 0,
+            Track::Audio => 1 + self.audio,
+        }
+    }
 }
 
 /// Where the third thread puts the packets, in file order: a Matroska file, or the replay
@@ -100,7 +114,7 @@ struct FileSink(Mux);
 impl Sink for FileSink {
     fn write(&mut self, item: Item) -> Result<(), String> {
         self.0
-            .write_frame(item.track as usize, item.pts_ns, item.keyframe, &item.data, None)
+            .write_frame(item.file_track(), item.pts_ns, item.keyframe, &item.data, None)
             .map_err(|e| format!("the recording could not be written: {e}"))
     }
     fn finish(self: Box<Self>) -> Result<(), String> {
@@ -316,7 +330,8 @@ fn samples_ns(n: i64) -> i64 {
 }
 
 /// The file's tracks: H.264, HEVC or AV1 video (`record` is its `avcC`, `hvcC` or `av1C` record,
-/// as the encoder's codec is) and AAC audio.
+/// as the encoder's codec is), then an AAC audio track for each of the job's audio streams, named
+/// as the job names them.
 pub(crate) fn tracks(job: &OutputJob, record: Vec<u8>, aac: &AacSession) -> Vec<TrackSpec> {
     let v = job.video;
     let codec_id = match job.video_encoder.codec() {
@@ -335,7 +350,13 @@ pub(crate) fn tracks(job: &OutputJob, record: Vec<u8>, aac: &AacSession) -> Vec<
     audio.codec_private = aac.audio_specific_config();
     audio.audio = Some((f64::from(SAMPLE_RATE), CHANNELS as u64, None));
     audio.codec_delay_ns = u64::try_from(samples_ns(i64::from(aac.priming_samples()))).unwrap_or(0);
-    vec![video, audio]
+    let mut list = vec![video];
+    if job.audio_streams.is_empty() {
+        list.push(audio);
+    } else {
+        list.extend(job.audio_streams.iter().map(|name| TrackSpec { name: (!name.is_empty()).then(|| name.clone()), ..audio.clone() }));
+    }
+    list
 }
 
 /// Why the encoders of a [`Native`] failed, read without holding it.
@@ -351,7 +372,8 @@ impl FailureWatch {
 /// A recording through the built-in encoders.
 pub struct Native {
     video: Arc<Fifo<Arc<PooledFrame>>>,
-    audio: Arc<Fifo<PooledBlock>>,
+    /// One queue for each audio track; the first is [`Native::audio`].
+    audio: Vec<Arc<Fifo<PooledBlock>>>,
     shared: Arc<Shared>,
     /// The video, audio and file threads.
     threads: Vec<JoinHandle<()>>,
@@ -400,14 +422,16 @@ impl Native {
         if v.pixel != PixelFormat::Nv12 {
             return Err(PluginError::Failed("the built-in encoders take NV12 frames".into()));
         }
+        let streams = audio_stream_count(job)?;
         let params = VideoParams { width: v.width, height: v.height, fps_num: v.fps_num, fps_den: v.fps_den, rate: job.rate };
         let session = job.video_encoder.open(&job.video_encoder_settings, &params)?;
-        let aac = AacSession::new(job.audio_bitrate_kbps)?;
-        let sink = open(tracks(job, session.codec_private(), &aac))?;
+        let aac = (0..streams).map(|_| AacSession::new(job.audio_bitrate_kbps)).collect::<Result<Vec<_>, _>>()?;
+        let first = aac.first().ok_or_else(|| PluginError::Failed("the recording has no audio encoder".into()))?;
+        let sink = open(tracks(job, session.codec_private(), first))?;
 
         let fps = f64::from(v.fps_num) / f64::from(v.fps_den.max(1));
         let video = Arc::new(Fifo::new((fps.ceil() as usize).clamp(8, 240)));
-        let audio = Arc::new(Fifo::new(256));
+        let audio = audio_queues(streams);
         let shared = Arc::new(Shared { timeline: Timeline::noting(Arc::clone(&job.stats)), ..Shared::new(packets, disk_wait) });
         let frame_bytes = PixelFormat::Nv12.frame_bytes(v.width, v.height).unwrap_or(0);
         let spawn = |name: &str, f: Box<dyn FnOnce() + Send>| std::thread::Builder::new().name(name.into()).spawn(f).map_err(PluginError::failed);
@@ -416,7 +440,7 @@ impl Native {
         let started = spawn("encoder video", Box::new(move || encode_video(session, &q, &sh, &st, start, rate, frame_bytes)));
         let started = started.and_then(|t| {
             threads.push(t);
-            let (q, sh) = (Arc::clone(&audio), Arc::clone(&shared));
+            let (q, sh) = (audio.clone(), Arc::clone(&shared));
             spawn("encoder audio", Box::new(move || encode_audio(aac, &q, &sh, start)))
         });
         let started = started.and_then(|t| {
@@ -445,7 +469,12 @@ impl Native {
     }
 
     pub fn audio(&self) -> Arc<Fifo<PooledBlock>> {
-        Arc::clone(&self.audio)
+        first_queue(&self.audio)
+    }
+
+    /// A queue for each audio track, in the job's order.
+    pub fn audio_streams(&self) -> Vec<Arc<Fifo<PooledBlock>>> {
+        self.audio.clone()
     }
 
     pub fn status(&self) -> OutputStatus {
@@ -554,6 +583,7 @@ fn send_video(out: &mut Vec<Packet>, shared: &Shared, rate: (u32, u32), last: &m
         let order = video_order(&p, last);
         let item = Item {
             track: Track::Video,
+            audio: 0,
             order_ns: frames_ns(order, rate.0, rate.1),
             pts_ns: frames_ns(p.pts, rate.0, rate.1),
             dts_ns: frames_ns(p.dts, rate.0, rate.1),
@@ -623,52 +653,89 @@ fn encode_video(
     send_video(&mut out, shared, rate, &mut order);
 }
 
-fn encode_audio(mut session: AacSession, q: &Fifo<PooledBlock>, shared: &Shared, start: Tick) {
+/// Encode `frames` sample frames of silence, a block at a time.
+fn encode_silence(session: &mut AacSession, mut frames: usize, silence: &[f32], out: &mut Vec<Vec<u8>>) {
+    while frames > 0 {
+        let n = frames.min(BLOCK_FRAMES);
+        session.encode(silence.get(..n * CHANNELS).unwrap_or(silence), out);
+        frames -= n;
+    }
+}
+
+/// One audio track's encoder, and the packets it has made.
+struct AudioTrack {
+    session: AacSession,
+    /// Access units handed to the file thread so far.
+    units: i64,
+    out: Vec<Vec<u8>>,
+}
+
+/// Hand the packets the tracks' encoders made to the file thread, merged by time: the earliest
+/// packet of any track goes first, and packets of the same time go in track order. `false` when
+/// the recording cannot go on.
+fn send_audio(tracks: &mut [AudioTrack], delay_ns: i64, shared: &Shared) -> bool {
+    let mut made: Vec<VecDeque<Vec<u8>>> = tracks.iter_mut().map(|t| VecDeque::from(std::mem::take(&mut t.out))).collect();
+    loop {
+        // Every access unit holds 1024 samples, so the track that has handed over the fewest
+        // units has the earliest packet.
+        let next = tracks.iter().zip(&made).enumerate().filter(|(_, (_, m))| !m.is_empty()).min_by_key(|(i, (t, _))| (t.units, *i));
+        let Some((index, _)) = next else { return true };
+        let (Some(t), Some(data)) = (tracks.get_mut(index), made.get_mut(index).and_then(VecDeque::pop_front)) else { return true };
+        // The first units are the encoder's delay.
+        let at = samples_ns(t.units * 1024) - delay_ns;
+        t.units += 1;
+        if !shared.send(Item { track: Track::Audio, audio: index, order_ns: at, pts_ns: at, dts_ns: at, keyframe: true, data }) {
+            return false;
+        }
+    }
+}
+
+fn encode_audio(sessions: Vec<AacSession>, queues: &[Arc<Fifo<PooledBlock>>], shared: &Shared, start: Tick) {
     let _producing = Producing(shared, Track::Audio);
     let rate = f64::from(SAMPLE_RATE);
-    let delay_ns = samples_ns(i64::from(session.priming_samples()));
+    let delay_ns = sessions.first().map_or(0, |s| samples_ns(i64::from(s.priming_samples())));
     let silence = vec![0f32; BLOCK_FRAMES * CHANNELS];
-    let (mut written, mut units) = (0i64, 0i64);
-    let mut out: Vec<Vec<u8>> = Vec::new();
-    // Every access unit holds 1024 samples; the first ones are the encoder's delay.
-    let mut send = |out: &mut Vec<Vec<u8>>| {
-        for data in out.drain(..) {
-            let at = samples_ns(units * 1024) - delay_ns;
-            units += 1;
-            if !shared.send(Item { track: Track::Audio, order_ns: at, pts_ns: at, dts_ns: at, keyframe: true, data }) {
-                return false;
-            }
-        }
-        true
-    };
+    let mut written = 0i64;
+    let mut tracks: Vec<AudioTrack> = sessions.into_iter().map(|session| AudioTrack { session, units: 0, out: Vec::new() }).collect();
+    let mut gather = Gather::new(queues);
+    // Each track's packets go to the file thread after every track has taken the same block of
+    // time, merged by time, so the packets of all tracks arrive in time order.
     loop {
         if shared.halted() {
             return;
         }
-        let Some(block) = q.pop() else {
-            if shared.ending() {
+        let ending = shared.ending();
+        let Some(at) = gather.ready(ending) else {
+            if ending {
                 break;
             }
             std::thread::sleep(IDLE);
             continue;
         };
-        let Some(secs) = seconds_since(start, block.pts) else { continue };
-        let frames = (block.samples.len() / CHANNELS) as i64;
-        let Some(mut gap) = audio_step(secs, written, frames, rate, &shared.timeline) else { continue };
-        while gap > 0 {
-            let n = gap.min(BLOCK_FRAMES as i64);
-            session.encode(&silence[..n as usize * CHANNELS], &mut out);
-            written += n;
-            gap -= n;
+        let frames = gather.frames(at);
+        let placed = seconds_since(start, at).and_then(|secs| audio_step(secs, written, frames as i64, rate, &shared.timeline));
+        let Some(gap) = placed else {
+            gather.done(at);
+            continue;
+        };
+        for (i, t) in tracks.iter_mut().enumerate() {
+            encode_silence(&mut t.session, usize::try_from(gap).unwrap_or(0), &silence, &mut t.out);
+            match gather.block(i, at) {
+                Some(b) if b.samples.len() == frames * CHANNELS => t.session.encode(&b.samples, &mut t.out),
+                // A track without a block at this time, or with a shorter one, is silent there.
+                _ => encode_silence(&mut t.session, frames, &silence, &mut t.out),
+            }
         }
-        session.encode(&block.samples, &mut out);
-        written += frames;
-        if !send(&mut out) {
+        gather.done(at);
+        written += gap + frames as i64;
+        if !send_audio(&mut tracks, delay_ns, shared) {
             return;
         }
     }
-    session.flush(&mut out);
-    send(&mut out);
+    for t in &mut tracks {
+        t.session.flush(&mut t.out);
+    }
+    send_audio(&mut tracks, delay_ns, shared);
 }
 
 /// The next packet to write from `pending` (video, then audio): the one with the earlier

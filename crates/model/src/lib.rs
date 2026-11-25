@@ -15,7 +15,9 @@ pub mod services;
 pub mod settings;
 pub mod staged;
 
-pub use collection::{AudioState, FilterConfig, MonitorMode, Scene, SceneCollection, SceneItem, SourceConfig, TransitionConfig};
+pub use collection::{
+    AudioState, FilterConfig, MIX_TRACKS, MixTracks, MonitorMode, Scene, SceneCollection, SceneItem, SourceConfig, TransitionConfig,
+};
 pub use format::FormatError;
 pub use geom::{Crop, FitMode, Transform, Vec2};
 pub use ids::{FilterId, ItemId, SceneId, SourceId};

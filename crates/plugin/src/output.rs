@@ -33,6 +33,10 @@ pub struct OutputJob {
     pub video_encoder_settings: Settings,
     pub rate: RateControl,
     pub audio_bitrate_kbps: u32,
+    /// The name of each audio stream a recording writes, in order, such as `Track 1`; one
+    /// unnamed stream when empty. Outputs that write one stream (the stream and the replay
+    /// buffer) leave it empty. [`OutputInstance::audio_streams`] gives a queue for each.
+    pub audio_streams: Vec<String>,
     /// The ffmpeg program to run.
     pub ffmpeg: PathBuf,
     pub stats: Arc<EncoderStats>,
@@ -80,6 +84,12 @@ pub enum OutputStatus {
 pub trait OutputInstance: Send {
     fn video(&self) -> Arc<Fifo<Arc<PooledFrame>>>;
     fn audio(&self) -> Arc<Fifo<PooledBlock>>;
+    /// A queue for each audio stream the output writes, in the order of
+    /// [`OutputJob::audio_streams`]; the first is [`OutputInstance::audio`]. An output that
+    /// writes one stream returns that one.
+    fn audio_streams(&self) -> Vec<Arc<Fifo<PooledBlock>>> {
+        vec![self.audio()]
+    }
     fn status(&self) -> OutputStatus;
     /// Where it writes: a file path, or the server without the key.
     fn target(&self) -> String;
@@ -192,6 +202,11 @@ pub struct StreamCopyState {
     /// packet the copy got, so this is above 0 when the disk fell behind before the copy got the
     /// stream's first packets.
     pub start_ns: u64,
+    /// Nanoseconds from the stream's first frame to the presentation time of the latest video
+    /// frame the file holds, counted as [`StreamCopyState::start_ns`] is; `None` until the file
+    /// holds a video frame. A copy that lost the stream's last packets ends before the stream's
+    /// last frame.
+    pub last_video_ns: Option<u64>,
     /// Whether the file was finished after the stream ended.
     pub finished: bool,
     /// Why the copy stopped, when it did; the stream goes on without it.

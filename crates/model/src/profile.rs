@@ -228,6 +228,9 @@ pub struct OutputSettings {
     /// hardware encoder that passes a one-frame test, else x264), `software`, or a hardware
     /// encoder's plug-in id.
     pub hardware_encoder: String,
+    /// The mix tracks a recording writes, each as an audio stream of its own, lowest track first;
+    /// track 1 alone by default.
+    pub recording_tracks: crate::MixTracks,
 }
 
 impl Default for OutputSettings {
@@ -240,6 +243,7 @@ impl Default for OutputSettings {
             encoder_settings: BTreeMap::new(),
             ffmpeg_path: String::new(),
             hardware_encoder: "auto".into(),
+            recording_tracks: crate::MixTracks::FIRST,
         }
     }
 }

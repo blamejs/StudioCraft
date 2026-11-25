@@ -979,7 +979,7 @@ impl SettingsWindow {
             ui.end_row();
         });
         ui.add_space(8.0);
-        ui.weak(tl!("Video settings can't change while recording, streaming or running the replay buffer."));
+        ui.weak(tl!("Video settings can't change while recording, streaming or running the replay buffer or the virtual camera."));
         ui.add_space(12.0);
         self.hardware(ui);
     }
