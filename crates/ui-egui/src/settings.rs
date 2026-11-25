@@ -565,12 +565,8 @@ impl SettingsWindow {
             .small()
             .weak(),
         );
-        let encoders: Vec<(String, String)> = listed_encoders(registry, offered, true)
-            .into_iter()
-            .filter(|(e, _)| e.id() != HARDWARE)
-            .map(|(e, _)| (e.id().to_string(), tl!(e.name()).to_string()))
-            .collect();
-        let name_of = |id: &str| encoders.iter().find(|(e, _)| e == id).map_or_else(|| id.to_string(), |(_, n)| n.clone());
+        let encoders = destination_encoder_list(registry, offered);
+        let name_of = |id: &str| encoders.iter().find(|(e, _, _)| e == id).map_or_else(|| id.to_string(), |(_, n, _)| n.clone());
         let stream_bitrate = s.video_bitrate();
         egui::Grid::new("destination-encoders").num_columns(3).spacing([12.0, 6.0]).show(ui, |ui| {
             for (i, d) in s.destinations.iter_mut().enumerate() {
@@ -578,8 +574,13 @@ impl SettingsWindow {
                 let shown = if d.video_encoder.is_empty() { tl!("The stream's encoder").to_string() } else { name_of(&d.video_encoder) };
                 craft_ui::ComboBox::from_id_salt(("destination-encoder", i)).selected_text(shown).width(220.0).show_ui(ui, |ui| {
                     ui.selectable_value(&mut d.video_encoder, String::new(), tl!("The stream's encoder"));
-                    for (id, name) in &encoders {
-                        ui.selectable_value(&mut d.video_encoder, id.clone(), name.as_str());
+                    for (id, name, available) in &encoders {
+                        let text = if *available {
+                            name.clone()
+                        } else {
+                            craft_i18n::fmt(tl!("{encoder} (not in this ffmpeg)"), &[("encoder", name.as_str())])
+                        };
+                        ui.add_enabled_ui(*available, |ui| ui.selectable_value(&mut d.video_encoder, id.clone(), text));
                     }
                 });
                 ui.horizontal(|ui| {
@@ -1173,6 +1174,16 @@ fn listed_encoders<'a>(registry: &'a Registry, offered: &[String], streaming: bo
         .collect()
 }
 
+/// The video encoders a destination can choose besides the stream's: the stream's list without
+/// the hardware choice, each with its name and whether it can start.
+fn destination_encoder_list(registry: &Registry, offered: &[String]) -> Vec<(String, String, bool)> {
+    listed_encoders(registry, offered, true)
+        .into_iter()
+        .filter(|(e, _)| e.id() != HARDWARE)
+        .map(|(e, available)| (e.id().to_string(), tl!(e.name()).to_string(), available))
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1192,6 +1203,40 @@ mod tests {
         assert!(!streaming.iter().any(|(id, _)| *id == "nvenc_native_hevc"), "a stream carries H.264: {streaming:?}");
         // Without an ffmpeg program the built-in encoder can still record.
         assert!(listed_encoders(registry, &[], false).iter().any(|(e, ok)| e.id() == "h264" && *ok));
+    }
+
+    #[test]
+    fn a_destination_cannot_choose_an_encoder_that_cannot_start() {
+        struct Missing;
+        impl studiocraft_plugin::Plugin for Missing {
+            fn id(&self) -> &'static str {
+                "missing"
+            }
+            fn name(&self) -> &'static str {
+                "Missing"
+            }
+            fn schema(&self) -> studiocraft_plugin::SettingsSchema {
+                studiocraft_plugin::SettingsSchema::default()
+            }
+        }
+        impl studiocraft_plugin::Encoder for Missing {
+            fn codec(&self) -> studiocraft_plugin::Codec {
+                studiocraft_plugin::Codec::H264
+            }
+            fn availability(&self, _: &EncoderEnv) -> Availability {
+                Availability::NotInFfmpeg
+            }
+        }
+        let app = crate::StudioApp::boot(crate::store::Store::memory(), None, Vec::new());
+        let mut registry = Registry::new();
+        for e in app.studio().registry().encoders() {
+            registry.register_encoder(e.clone()).unwrap();
+        }
+        registry.register_encoder(std::sync::Arc::new(Missing)).unwrap();
+        let list = destination_encoder_list(&registry, &[]);
+        assert!(list.iter().any(|(id, _, ok)| id == "h264" && *ok), "{list:?}");
+        assert!(list.iter().any(|(id, _, ok)| id == "missing" && !*ok), "{list:?}");
+        assert!(!list.iter().any(|(id, _, _)| id == HARDWARE), "{list:?}");
     }
 
     #[test]
