@@ -3,6 +3,7 @@
 //! - [`display`]: list displays and capture one.
 //! - [`window`]: list windows and capture one.
 //! - [`camera`]: list cameras and their formats and capture one.
+//! - [`camera_audio`]: find the audio input that is a camera's own microphone.
 //! - [`audio`]: list audio devices and capture an input or, on Windows and Linux, what an output
 //!   plays.
 //! - [`ffmpeg`]: find the ffmpeg program recordings, streams and media sources run.
@@ -18,6 +19,7 @@
 
 pub mod audio;
 pub mod camera;
+pub mod camera_audio;
 mod camera_frames;
 #[cfg(target_os = "linux")]
 mod camera_gray;
