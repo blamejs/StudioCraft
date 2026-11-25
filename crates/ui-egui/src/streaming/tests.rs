@@ -354,6 +354,19 @@ fn a_new_destination_does_not_take_an_id_the_running_stream_uses() {
 }
 
 #[test]
+fn a_new_destination_finds_a_free_id_while_the_running_stream_keeps_many_removed_ones() {
+    let state =
+        |id: &str| DestinationState { id: id.into(), target: String::new(), status: DestinationStatus::Stopped, bytes: 0, dropped: 0, reconnects: 0 };
+    // The stream keeps up to 64 destinations, removed ones included.
+    let live: Vec<_> = (2..=65).map(|n| state(&format!("destination-{n}"))).collect();
+    let dest = |id: &str| Destination { id: id.into(), ..Destination::default() };
+    let s = StreamSettings { destinations: vec![dest("main"), dest("destination"), dest("destination-66")], ..StreamSettings::default() };
+    let id = new_id(&s, &live);
+    assert!(s.destination(&id).is_none() && !live.iter().any(|d| d.id == id), "`{id}` is in use");
+    assert_eq!(id, "destination-67");
+}
+
+#[test]
 fn a_change_reaches_only_its_own_destination_in_an_open_settings_draft() {
     let mut a = app();
     let ctx = egui::Context::default();

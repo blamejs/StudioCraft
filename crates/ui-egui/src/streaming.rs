@@ -817,13 +817,17 @@ fn listed_reconnect(r: &ReconnectSettings) -> Value {
 
 /// An id no destination uses, and that the running stream (`live`) does not use either, so a new
 /// destination is never started as one that was removed: `main` for the first one, otherwise
-/// the first free `destination-N`.
+/// the first free `destination-N`. The running stream keeps destinations that were removed, up
+/// to its own limit, so the search covers one more name than the profile and the stream use
+/// together.
 fn new_id(s: &StreamSettings, live: &[DestinationState]) -> String {
     let free = |id: &str| s.destination(id).is_none() && !live.iter().any(|d| d.id == id);
     if s.destinations.is_empty() && free(PRIMARY_DESTINATION) {
         return PRIMARY_DESTINATION.to_string();
     }
-    (2..=2 * MAX_DESTINATIONS + 1).map(|n| format!("destination-{n}")).find(|id| free(id)).unwrap_or_else(|| "destination".to_string())
+    let used = s.destinations.len().saturating_add(live.len());
+    let name = |n: usize| format!("destination-{n}");
+    (2..).take(used.saturating_add(1)).map(name).find(|id| free(id)).unwrap_or_else(|| name(used.saturating_add(2)))
 }
 
 /// A destination as `stream.destinations` lists it.
