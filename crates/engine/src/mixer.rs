@@ -2,7 +2,8 @@
 //!
 //! Once per block (1024 frames at 48 kHz, every 21.3 ms) on the master clock, the mixer takes
 //! one block from each input's queue, delays it by the input's sync offset, runs the input's
-//! audio filters, applies its volume, mute and transition fade, adds it to the mix and publishes
+//! audio filters, turns it to mono and applies its balance when the input is set to, applies its
+//! volume, mute and transition fade, adds it to the mix and publishes
 //! the input's levels. The clipped mix goes to every output's queue, stamped with the block's
 //! time.
 //!
@@ -41,8 +42,8 @@
 //! the stems then add up to more than the held mix. The program's tap gets the clipped mix the outputs get. Tap sets are built on the sending
 //! thread and handed back to it when replaced, and without one each input costs one check.
 
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, PoisonError};
 
 use craft_audio_dsp::LoudnessMeter;
 use studiocraft_media::audio::{AudioPool, BLOCK_FRAMES, BLOCK_SAMPLES, CHANNELS, PooledBlock, SAMPLE_RATE, block_pool, block_rate};
@@ -116,6 +117,10 @@ pub struct MixInput {
     pub monitor: MonitorMode,
     /// The mix tracks the input goes to, when it is heard in the program.
     pub mix_tracks: MixTracks,
+    /// Where the input sits between the left (−1) and right (1) channels; 0 leaves both alone.
+    pub balance: f32,
+    /// Whether the input's two channels are mixed into one, played on both.
+    pub mono: bool,
 }
 
 /// The taps of one take of audio tracks: the program's, and those of the inputs recorded to
@@ -167,6 +172,12 @@ pub enum MixerCmd {
         source: SourceId,
         tracks: MixTracks,
     },
+    /// A source's balance or its downmix to mono changed.
+    Channels {
+        source: SourceId,
+        balance: f32,
+        mono: bool,
+    },
     /// Where the monitoring mix goes, or `None` to stop making it.
     MonitorOutput(Option<Arc<Fifo<PooledBlock>>>),
     /// How long inputs take to fade in or out when the program scene changes, in milliseconds.
@@ -211,6 +222,7 @@ impl From<MixerCmd> for Cmd {
                 list.into_iter()
                     .map(|cfg| Input {
                         delay_frames: offset_frames(cfg.sync_offset_ms),
+                        channels: Arc::new(AtomicU64::new(pack_channels(cfg.balance, cfg.mono))),
                         fading: Vec::with_capacity(cfg.filters.len()),
                         cfg,
                         fade: 0.0,
@@ -227,6 +239,17 @@ impl From<MixerCmd> for Cmd {
 
 /// Commands numbered in the order they were sent.
 type CmdQueue = Fifo<(u64, Cmd)>;
+
+/// An input's balance and mono in one atomic word: the balance's bits, and the mono bit above
+/// them.
+fn pack_channels(balance: f32, mono: bool) -> u64 {
+    u64::from(balance.to_bits()) | (u64::from(mono) << 32)
+}
+
+/// The balance and mono [`pack_channels`] packed.
+fn unpack_channels(bits: u64) -> (f32, bool) {
+    (f32::from_bits(bits as u32), (bits >> 32) & 1 == 1)
+}
 
 /// Input lists the mixer replaced, freed by the sending thread.
 type Retired = Fifo<Vec<Input>>;
@@ -355,8 +378,12 @@ impl Loudness {
 pub struct Mixer {
     /// Fader moves. A full queue drops the oldest: a later move of the same fader follows.
     gains: Arc<CmdQueue>,
+    /// Each input's balance and mono, by source, for every input list not yet freed. A balance or
+    /// mono change is stored straight into the inputs' words, which the mixer reads every block,
+    /// so no queue can drop it. Only the sending thread uses the list itself.
+    channels: Mutex<Vec<(SourceId, Arc<AtomicU64>)>>,
     /// Everything else: inputs, outputs and the fade time. These are few, and none is dropped
-    /// for a burst of fader moves.
+    /// for a burst of fader moves or balance changes.
     control: Arc<CmdQueue>,
     /// The latest tap set, which replaces one the mixer has not applied yet. It is kept apart
     /// from `control`, so a burst of other commands can never drop the removal of the taps.
@@ -393,6 +420,7 @@ impl Mixer {
     pub fn detached() -> Mixer {
         Mixer {
             gains: Arc::new(Fifo::new(256)),
+            channels: Mutex::new(Vec::new()),
             control: Arc::new(Fifo::new(CONTROL_QUEUE)),
             taps: Arc::new(Fifo::new(1)),
             retired: Arc::new(Fifo::new(RETIRED_LISTS)),
@@ -414,8 +442,29 @@ impl Mixer {
         let n = self.sent.fetch_add(1, Ordering::Relaxed) + 1;
         match cmd {
             MixerCmd::Gain { .. } => self.gains.push((n, cmd.into())),
+            // Stored into the inputs of every list not yet freed: the one in use and any still
+            // waiting, so a list sent before the change takes it and one sent after keeps its own
+            // values.
+            MixerCmd::Channels { source, balance, mono } => {
+                let bits = pack_channels(balance, mono);
+                let mut channels = self.channels.lock().unwrap_or_else(PoisonError::into_inner);
+                // A word only this list holds belongs to an input list that was freed.
+                channels.retain(|(_, word)| Arc::strong_count(word) > 1);
+                for (_, word) in channels.iter().filter(|(s, _)| *s == source) {
+                    word.store(bits, Ordering::Relaxed);
+                }
+            }
             // A set the mixer has not applied yet is replaced, and freed here.
             MixerCmd::Taps { .. } => self.taps.push((n, cmd.into())),
+            MixerCmd::Inputs(_) => {
+                let cmd = Cmd::from(cmd);
+                if let Cmd::Inputs(list) = &cmd {
+                    let mut channels = self.channels.lock().unwrap_or_else(PoisonError::into_inner);
+                    channels.retain(|(_, word)| Arc::strong_count(word) > 1);
+                    channels.extend(list.iter().map(|i| (i.cfg.source, Arc::clone(&i.channels))));
+                }
+                self.control.push((n, cmd));
+            }
             _ => self.control.push((n, cmd.into())),
         }
     }
@@ -443,10 +492,11 @@ impl Mixer {
     /// them: no more fader moves than the fader queue holds, and no more other commands than the
     /// control queue holds. A full queue drops its oldest command, so a later push drops one of
     /// `cmds` only when they are more than their queue holds. Tap sets are not counted: the latest
-    /// replaces the one before.
+    /// replaces the one before. Balance and mono changes are not counted either: they go into no
+    /// queue.
     pub fn fits(&self, cmds: &[MixerCmd]) -> bool {
         let gains = cmds.iter().filter(|c| matches!(c, MixerCmd::Gain { .. })).count();
-        let control = cmds.iter().filter(|c| !matches!(c, MixerCmd::Gain { .. } | MixerCmd::Taps { .. })).count();
+        let control = cmds.iter().filter(|c| !matches!(c, MixerCmd::Gain { .. } | MixerCmd::Taps { .. } | MixerCmd::Channels { .. })).count();
         gains <= self.gains.capacity() && control <= self.control.capacity()
     }
 
@@ -489,6 +539,8 @@ struct Input {
     delay: Delay,
     /// The sync offset in frames.
     delay_frames: usize,
+    /// The balance and mono in use ([`pack_channels`]), which [`Mixer::send`] changes in place.
+    channels: Arc<AtomicU64>,
     /// Frames of silence the delay line has taken since the source's last block. While it is
     /// below the offset, the line still holds audio to play; while it is below the line's length,
     /// the line still holds audio that a longer offset would read.
@@ -690,6 +742,11 @@ impl MixState {
                     i.cfg.mix_tracks = tracks;
                 }
             }
+            MixerCmd::Channels { source, balance, mono } => {
+                for i in self.inputs.iter_mut().filter(|i| i.cfg.source == source) {
+                    i.channels.store(pack_channels(balance, mono), Ordering::Relaxed);
+                }
+            }
             MixerCmd::AddOutput { id, queue } => {
                 self.outputs.retain(|o| !(o.id == id && o.track.is_none()));
                 self.outputs.push(OutputQueue { id, track: None, queue });
@@ -796,6 +853,8 @@ impl MixState {
                 }
             }
             retire_fading(&mut input.fading, &self.retired_filters);
+            let (balance, mono) = unpack_channels(input.channels.load(Ordering::Relaxed));
+            balance_and_mono(samples, balance, mono);
             let gain = input.cfg.gain * input.fade;
             let heard = !input.cfg.muted && input.fade > 0.0;
             if heard && monitoring && input.cfg.monitor.monitored() {
@@ -883,6 +942,29 @@ impl MixState {
             };
             send_block(&self.pool, &self.outputs, &o.queue, mix, pts);
         }
+    }
+}
+
+/// Turn `block`'s interleaved stereo frames to mono when `mono` is set, each channel becoming the
+/// average of the two, and then apply `balance`: above 0 the left channel is scaled by
+/// `1 - balance`, below 0 the right channel by `1 + balance`, so the center leaves both at full
+/// level and either end silences the other side. A balance that is not a number counts as the
+/// center, and one past an end as that end.
+fn balance_and_mono(block: &mut [f32], balance: f32, mono: bool) {
+    let balance = if balance.is_finite() { balance.clamp(-1.0, 1.0) } else { 0.0 };
+    if !mono && balance == 0.0 {
+        return;
+    }
+    let (left, right) = if balance > 0.0 { (1.0 - balance, 1.0) } else { (1.0, 1.0 + balance) };
+    for frame in block.as_chunks_mut::<CHANNELS>().0 {
+        let [l, r, ..] = frame;
+        if mono {
+            let m = (*l + *r) * 0.5;
+            *l = m;
+            *r = m;
+        }
+        *l *= left;
+        *r *= right;
     }
 }
 
@@ -978,9 +1060,67 @@ mod tests {
                 sync_offset_ms: 0,
                 monitor: MonitorMode::Off,
                 mix_tracks: MixTracks::ALL,
+                balance: 0.0,
+                mono: false,
             },
             levels,
         )
+    }
+
+    /// Push one block whose left channel is `left` and right channel `right` to `a`.
+    fn feed_stereo(a: &AudioOut, left: f32, right: f32) {
+        let mut b = a.block();
+        b.samples.clear();
+        for _ in 0..BLOCK_FRAMES {
+            b.samples.extend_from_slice(&[left, right]);
+        }
+        a.push(b);
+    }
+
+    /// The left and right samples of the first frame of the next block on `q`.
+    fn first_frame(q: &Fifo<PooledBlock>) -> (f32, f32) {
+        let b = q.pop().unwrap_or_else(|| panic!("no block"));
+        (b.samples[0], b.samples[1])
+    }
+
+    #[test]
+    fn balance_and_mono_shape_an_input_before_the_program_the_tracks_and_the_monitor() {
+        let close2 = |got: (f32, f32), want: (f32, f32)| (got.0 - want.0).abs() < 1e-6 && (got.1 - want.1).abs() < 1e-6;
+        let a = Arc::new(AudioOut::default());
+        let (mut i, levels) = input(1, &a, 0.5, true);
+        i.balance = 0.5;
+        i.monitor = MonitorMode::MonitorAndOutput;
+        let (mut m, out, monitor) = monitored(vec![i]);
+        let track = take_track(&mut m, 2, 2);
+        // Toward the right, the left channel is lowered and the right keeps its level; the gain
+        // applies after.
+        feed_stereo(&a, 0.8, 0.4);
+        m.tick(Tick(0));
+        let want = (0.8 * 0.5 * 0.5, 0.4 * 0.5);
+        for (name, got) in [("program", first_frame(&out)), ("track", first_frame(&track)), ("monitor", first_frame(&monitor))] {
+            assert!(close2(got, want), "{name}: {got:?}");
+        }
+        assert!((levels.load().peak[0] - 0.2).abs() < 1e-6, "the meter reads the balanced left channel: {:?}", levels.load().peak);
+        // Mono averages the channels first, then the balance applies; the change needs no new list.
+        m.apply(MixerCmd::Channels { source: SourceId(1), balance: -1.0, mono: true });
+        feed_stereo(&a, 0.8, 0.4);
+        m.tick(Tick(1));
+        let got = first_frame(&out);
+        assert!(close2(got, (0.6 * 0.5, 0.0)), "fully left silences the right: {got:?}");
+        drop((track.pop(), monitor.pop()));
+        m.apply(MixerCmd::Channels { source: SourceId(1), balance: 0.0, mono: true });
+        feed_stereo(&a, 1.0, -1.0);
+        m.tick(Tick(2));
+        assert!(close2(first_frame(&out), (0.0, 0.0)), "opposite channels cancel in mono");
+        // A balance that is not a number counts as the center; one past an end as that end.
+        let mut block = vec![0.8, 0.4, 0.8, 0.4];
+        balance_and_mono(&mut block, f32::NAN, false);
+        assert_eq!(block, [0.8, 0.4, 0.8, 0.4]);
+        balance_and_mono(&mut block, 7.0, false);
+        assert_eq!(block, [0.0, 0.4, 0.0, 0.4]);
+        let mut odd = vec![0.8, 0.4, 0.3];
+        balance_and_mono(&mut odd, 0.0, true);
+        assert!(close2((odd[0], odd[1]), (0.6, 0.6)) && odd[2] == 0.3, "a trailing half frame is left alone: {odd:?}");
     }
 
     fn feed(a: &AudioOut, value: f32) {
@@ -1307,6 +1447,105 @@ mod tests {
     }
 
     #[test]
+    fn balance_and_mono_changes_do_not_push_out_an_output_or_undo_a_newer_input_list() {
+        let mut mixer = Mixer::detached();
+        let mut m = MixState::new(Arc::new(Levels::default()));
+        let a = Arc::new(AudioOut::default());
+        let out = Arc::new(Fifo::new(8));
+        mixer.send(MixerCmd::AddOutput { id: 1, queue: Arc::clone(&out) });
+        for _ in 0..=CONTROL_QUEUE {
+            mixer.send(MixerCmd::Channels { source: SourceId(1), balance: -1.0, mono: true });
+        }
+        // The input list sent after the changes carries the newer balance and mono.
+        mixer.send(MixerCmd::Inputs(vec![input(1, &a, 1.0, true).0]));
+        drain(&mixer.taps, &mixer.control, &mixer.gains, &mut m);
+        feed(&a, 0.5);
+        m.tick(Tick(1));
+        let block = out.pop();
+        assert!(
+            block.is_some_and(|b| (b.samples[0] - 0.5).abs() < 1e-6 && (b.samples[1] - 0.5).abs() < 1e-6),
+            "the output is registered and both channels keep the input list's balance"
+        );
+    }
+
+    #[test]
+    fn a_burst_of_fader_moves_does_not_drop_a_balance_change_or_the_reverse() {
+        let mut mixer = Mixer::detached();
+        let mut m = MixState::new(Arc::new(Levels::default()));
+        let a = Arc::new(AudioOut::default());
+        let out = Arc::new(Fifo::new(8));
+        mixer.send(MixerCmd::AddOutput { id: 1, queue: Arc::clone(&out) });
+        mixer.send(MixerCmd::Inputs(vec![input(1, &a, 1.0, true).0]));
+        mixer.send(MixerCmd::Channels { source: SourceId(1), balance: -1.0, mono: false });
+        for _ in 0..1000 {
+            mixer.send(MixerCmd::Gain { source: SourceId(1), gain: 0.5, muted: false });
+        }
+        drain(&mixer.taps, &mixer.control, &mixer.gains, &mut m);
+        feed(&a, 0.8);
+        m.tick(Tick(1));
+        let got = first_frame(&out);
+        assert!((got.0 - 0.4).abs() < 1e-6 && got.1.abs() < 1e-6, "the balance survives the fader moves: {got:?}");
+        mixer.send(MixerCmd::Gain { source: SourceId(1), gain: 0.25, muted: false });
+        for _ in 0..1000 {
+            mixer.send(MixerCmd::Channels { source: SourceId(1), balance: 1.0, mono: false });
+        }
+        drain(&mixer.taps, &mixer.control, &mixer.gains, &mut m);
+        feed(&a, 0.8);
+        m.tick(Tick(2));
+        let got = first_frame(&out);
+        assert!(got.0.abs() < 1e-6 && (got.1 - 0.2).abs() < 1e-6, "the gain survives the balance changes: {got:?}");
+    }
+
+    #[test]
+    fn a_balance_change_reaches_the_list_in_use_when_a_newer_list_was_dropped() {
+        let mut mixer = Mixer::detached();
+        let mut m = MixState::new(Arc::new(Levels::default()));
+        let a = Arc::new(AudioOut::default());
+        let out = Arc::new(Fifo::new(8));
+        mixer.send(MixerCmd::AddOutput { id: 1, queue: Arc::clone(&out) });
+        mixer.send(MixerCmd::Inputs(vec![input(1, &a, 1.0, true).0]));
+        drain(&mixer.taps, &mixer.control, &mixer.gains, &mut m);
+        // A newer list is pushed out of the full control queue before the mixer reads it.
+        mixer.send(MixerCmd::Inputs(vec![input(1, &a, 1.0, true).0]));
+        for _ in 0..CONTROL_QUEUE {
+            mixer.send(MixerCmd::FadeMs(300));
+        }
+        mixer.send(MixerCmd::Channels { source: SourceId(1), balance: -1.0, mono: false });
+        drain(&mixer.taps, &mixer.control, &mixer.gains, &mut m);
+        feed(&a, 0.4);
+        m.tick(Tick(1));
+        let got = first_frame(&out);
+        assert!((got.0 - 0.4).abs() < 1e-6 && got.1.abs() < 1e-6, "the list in use takes the change: {got:?}");
+    }
+
+    #[test]
+    fn a_burst_of_balance_changes_of_other_sources_keeps_the_latest_change_of_each() {
+        let mut mixer = Mixer::detached();
+        let mut m = MixState::new(Arc::new(Levels::default()));
+        let a = Arc::new(AudioOut::default());
+        let b = Arc::new(AudioOut::default());
+        let out = Arc::new(Fifo::new(8));
+        mixer.send(MixerCmd::AddOutput { id: 1, queue: Arc::clone(&out) });
+        mixer.send(MixerCmd::Inputs(vec![input(1, &a, 1.0, true).0, input(2, &b, 1.0, true).0]));
+        mixer.send(MixerCmd::Channels { source: SourceId(1), balance: -1.0, mono: false });
+        // More sources change than any queue of commands holds, source 2 many times.
+        for k in 3..2000 {
+            mixer.send(MixerCmd::Channels { source: SourceId(k), balance: 0.5, mono: false });
+            mixer.send(MixerCmd::Channels { source: SourceId(2), balance: if k % 2 == 0 { 0.5 } else { 1.0 }, mono: false });
+        }
+        drain(&mixer.taps, &mixer.control, &mixer.gains, &mut m);
+        feed(&a, 0.4);
+        m.tick(Tick(1));
+        let got = first_frame(&out);
+        assert!((got.0 - 0.4).abs() < 1e-6 && got.1.abs() < 1e-6, "source 1 stays fully left: {got:?}");
+        // Source 2's last change, fully right, also applied.
+        feed(&b, 0.4);
+        m.tick(Tick(2));
+        let got = first_frame(&out);
+        assert!(got.0.abs() < 1e-6 && (got.1 - 0.4).abs() < 1e-6, "source 2 ends fully right: {got:?}");
+    }
+
+    #[test]
     fn replaced_input_lists_are_freed_by_the_sender() {
         let mut mixer = Mixer::detached();
         let mut m = MixState::new(Arc::new(Levels::default()));
@@ -1574,6 +1813,15 @@ mod tests {
         assert!(!mixer.fits(&moves(gains + 1).collect::<Vec<_>>()));
         assert!(!mixer.fits(&holds(CONTROL_QUEUE + 1).collect::<Vec<_>>()));
         assert!(mixer.fits(&[]));
+    }
+
+    /// Balance and mono changes go into no queue, so any number of them fits.
+    #[test]
+    fn balance_and_mono_changes_fit_in_any_number() {
+        let mixer = Mixer::detached();
+        let changes: Vec<_> = (0..CONTROL_QUEUE * 2).map(|_| MixerCmd::Channels { source: SourceId(1), balance: 0.5, mono: true }).collect();
+        assert!(mixer.fits(&changes));
+        assert!(mixer.fits(&changes.into_iter().chain((0..CONTROL_QUEUE).map(|_| MixerCmd::Hold(false))).collect::<Vec<_>>()));
     }
 
     /// The input lists a send that races the mixer leaves behind all go back to the sending thread.

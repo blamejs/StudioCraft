@@ -701,6 +701,12 @@
 menu	Transform	Transform
 	Record as its own track	Record as its own track
 	Audio tracks write this source to a WAV file of its own (Settings › Output › Audio tracks)	Audio tracks write this source to a WAV file of its own (Settings › Output › Audio tracks)
+	Balance	Balance
+	Moves this source between the left and right channels; double-click to center it	Moves this source between the left and right channels; double-click to center it
+	{percent}% left	{percent}% left
+	{percent}% right	{percent}% right
+	Downmix to mono	Downmix to mono
+	Plays the average of this source's left and right channels on both	Plays the average of this source's left and right channels on both
 	Audio tracks	Audio tracks
 	Write each recorded source and the program mix to its own WAV file	Write each recorded source and the program mix to its own WAV file
 	Write them while	Write them while

@@ -479,6 +479,12 @@
 menu	Transform	Transformar
 	Record as its own track	Gravar como faixa própria
 	Audio tracks write this source to a WAV file of its own (Settings › Output › Audio tracks)	As faixas de áudio gravam esta fonte em um arquivo WAV próprio (Configurações › Saída › Faixas de áudio)
+	Balance	Balanço
+	Moves this source between the left and right channels; double-click to center it	Move esta fonte entre os canais esquerdo e direito; clique duas vezes para centralizá-la
+	{percent}% left	{percent}% à esquerda
+	{percent}% right	{percent}% à direita
+	Downmix to mono	Mixar para mono
+	Plays the average of this source's left and right channels on both	Reproduz a média dos canais esquerdo e direito desta fonte em ambos
 	Audio tracks	Faixas de áudio
 	Write each recorded source and the program mix to its own WAV file	Gravar cada fonte gravada e a mixagem do programa em um arquivo WAV próprio
 	Write them while	Gravá-las enquanto

@@ -481,6 +481,12 @@
 menu	Transform	Dönüştür
 	Record as its own track	Ayrı bir parça olarak kaydet
 	Audio tracks write this source to a WAV file of its own (Settings › Output › Audio tracks)	Ses parçaları bu kaynağı kendi WAV dosyasına yazar (Ayarlar › Çıkış › Ses parçaları)
+	Balance	Denge
+	Moves this source between the left and right channels; double-click to center it	Bu kaynağı sol ve sağ kanal arasında kaydırır; ortalamak için çift tıklayın
+	{percent}% left	%{percent} sol
+	{percent}% right	%{percent} sağ
+	Downmix to mono	Monoya indirge
+	Plays the average of this source's left and right channels on both	Bu kaynağın sol ve sağ kanallarının ortalamasını her ikisinde çalar
 	Audio tracks	Ses parçaları
 	Write each recorded source and the program mix to its own WAV file	Kaydedilen her kaynağı ve program miksini kendi WAV dosyasına yaz
 	Write them while	Şu sırada yaz

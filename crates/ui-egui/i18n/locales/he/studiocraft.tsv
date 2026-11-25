@@ -461,6 +461,12 @@
 menu	Transform	שינוי צורה
 	Record as its own track	הקלטה כרצועה נפרדת
 	Audio tracks write this source to a WAV file of its own (Settings › Output › Audio tracks)	רצועות השמע כותבות מקור זה לקובץ WAV משלו (הגדרות › פלט › רצועות שמע)
+	Balance	איזון
+	Moves this source between the left and right channels; double-click to center it	מזיז מקור זה בין הערוץ השמאלי לימני; לחיצה כפולה ממרכזת אותו
+	{percent}% left	{percent}% שמאלה
+	{percent}% right	{percent}% ימינה
+	Downmix to mono	מיזוג למונו
+	Plays the average of this source's left and right channels on both	מנגן את הממוצע של הערוץ השמאלי והימני של מקור זה בשניהם
 	Audio tracks	רצועות שמע
 	Write each recorded source and the program mix to its own WAV file	כתיבת כל מקור מוקלט ומיקס התוכנית לקובץ WAV משלו
 	Write them while	מתי לכתוב

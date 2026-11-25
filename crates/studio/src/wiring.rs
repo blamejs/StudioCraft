@@ -81,6 +81,8 @@ pub(crate) struct Wiring {
     offsets: HashMap<SourceId, u32>,
     modes: HashMap<SourceId, MonitorMode>,
     mix_tracks: HashMap<SourceId, MixTracks>,
+    /// Each source's balance and whether it is turned to mono.
+    channels: HashMap<SourceId, (f32, bool)>,
     /// The mixer's count of dropped control commands at the last [`Wiring::mixer_dropped`].
     control_dropped: u64,
 }
@@ -237,8 +239,9 @@ impl Wiring {
     /// Mixer commands that bring it in line with the collection: a new set of inputs when the
     /// sources, the list of their running filters or the program scene changed. Otherwise each
     /// filter with new settings is built again with them and replaces its running instance, which
-    /// the mixer crossfades into, and volume, mute, sync offset and monitoring changes follow.
-    /// Settings a running filter refuses leave it running with its last ones, with a notice.
+    /// the mixer crossfades into, and volume, mute, sync offset, monitoring, mix track, balance and
+    /// mono changes follow. Settings a running filter refuses leave it running with its last ones,
+    /// with a notice.
     pub(crate) fn mixer_inputs(
         &mut self,
         c: &SceneCollection,
@@ -273,6 +276,7 @@ impl Wiring {
         let offsets: HashMap<SourceId, u32> = audio_sources.iter().map(|(s, _)| (s.id, s.audio.sync_offset_ms)).collect();
         let modes: HashMap<SourceId, MonitorMode> = audio_sources.iter().map(|(s, _)| (s.id, s.audio.monitor)).collect();
         let mix_tracks: HashMap<SourceId, MixTracks> = audio_sources.iter().map(|(s, _)| (s.id, s.audio.mix_tracks)).collect();
+        let channels: HashMap<SourceId, (f32, bool)> = audio_sources.iter().map(|(s, _)| (s.id, (s.audio.balance, s.audio.mono))).collect();
         levels.retain(|id, _| gains.contains_key(id));
 
         if let Some(changed) = self.settings_changes(&key) {
@@ -321,11 +325,17 @@ impl Wiring {
                     .filter(|(id, t)| self.mix_tracks.get(id) != Some(t))
                     .map(|(id, tracks)| MixerCmd::MixTracks { source: *id, tracks: *tracks }),
             );
+            cmds.extend(channels.iter().filter(|(id, c)| self.channels.get(id) != Some(c)).map(|(id, (balance, mono))| MixerCmd::Channels {
+                source: *id,
+                balance: *balance,
+                mono: *mono,
+            }));
             self.mix = Some(key);
             self.gains = gains;
             self.offsets = offsets;
             self.modes = modes;
             self.mix_tracks = mix_tracks;
+            self.channels = channels;
             return (!cmds.is_empty()).then_some(cmds);
         }
 
@@ -371,6 +381,8 @@ impl Wiring {
                 sync_offset_ms: s.audio.sync_offset_ms,
                 monitor: s.audio.monitor,
                 mix_tracks: s.audio.mix_tracks,
+                balance: s.audio.balance,
+                mono: s.audio.mono,
             });
         }
         self.mix = Some(key);
@@ -382,6 +394,7 @@ impl Wiring {
         self.offsets = offsets;
         self.modes = modes;
         self.mix_tracks = mix_tracks;
+        self.channels = channels;
         Some(vec![MixerCmd::Inputs(inputs)])
     }
 
@@ -520,6 +533,28 @@ mod tests {
         let cmds = wiring.mixer_inputs(&c, &registry, &sources, &mut levels, &mut notices).unwrap_or_default();
         assert!(
             matches!(cmds.as_slice(), [MixerCmd::MixTracks { source, tracks }] if *source == mic && *tracks == MixTracks::FIRST),
+            "{} commands",
+            cmds.len()
+        );
+        assert!(wiring.mixer_inputs(&c, &registry, &sources, &mut levels, &mut notices).is_none(), "nothing changed");
+    }
+
+    #[test]
+    fn a_changed_balance_or_mono_reaches_the_mixer_without_a_new_input_list() {
+        let registry = builtin_registry(&Arc::new(RwLock::new(String::new())), &Arc::new(CaptionBoard::new())).unwrap();
+        let mut sources = SourceSet::new(MasterClock::new());
+        let (mut wiring, mut levels, mut notices) = (Wiring::default(), HashMap::new(), Vec::new());
+        let mut c = default_collection("Test");
+        sources.sync(&c, &registry);
+        let mic = c.global_audio.first().copied().unwrap_or_else(|| panic!("the default collection has global audio"));
+        c.source_mut(mic).unwrap().audio.balance = -0.5;
+        let Some(cmds) = wiring.mixer_inputs(&c, &registry, &sources, &mut levels, &mut notices) else { panic!("no inputs") };
+        let [MixerCmd::Inputs(inputs)] = cmds.as_slice() else { panic!("{} commands", cmds.len()) };
+        assert_eq!(inputs.iter().find(|i| i.source == mic).map(|i| (i.balance, i.mono)), Some((-0.5, false)));
+        c.source_mut(mic).unwrap().audio.mono = true;
+        let cmds = wiring.mixer_inputs(&c, &registry, &sources, &mut levels, &mut notices).unwrap_or_default();
+        assert!(
+            matches!(cmds.as_slice(), [MixerCmd::Channels { source, balance, mono: true }] if *source == mic && *balance == -0.5),
             "{} commands",
             cmds.len()
         );

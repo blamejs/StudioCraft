@@ -470,6 +470,12 @@
 menu	Transform	Transformeren
 	Record as its own track	Als eigen spoor opnemen
 	Audio tracks write this source to a WAV file of its own (Settings › Output › Audio tracks)	Audiosporen schrijven deze bron naar een eigen WAV-bestand (Instellingen › Uitvoer › Audiosporen)
+	Balance	Balans
+	Moves this source between the left and right channels; double-click to center it	Verplaatst deze bron tussen het linker- en rechterkanaal; dubbelklik om haar te centreren
+	{percent}% left	{percent}% links
+	{percent}% right	{percent}% rechts
+	Downmix to mono	Naar mono mixen
+	Plays the average of this source's left and right channels on both	Speelt het gemiddelde van het linker- en rechterkanaal van deze bron op beide af
 	Audio tracks	Audiosporen
 	Write each recorded source and the program mix to its own WAV file	Elke opgenomen bron en de programmamix naar een eigen WAV-bestand schrijven
 	Write them while	Schrijven terwijl
