@@ -444,6 +444,41 @@ fn audio_tracks_writes_are_held_to_the_write_roots() {
 }
 
 #[test]
+fn a_stream_copy_is_held_to_the_write_roots() {
+    let dir = root_folders("copy-roots");
+    let roots = Roots::new(&[dir.join("in")], &[dir.join("out")]).unwrap();
+    let mut h = Headless::with_options(None, ServerOptions { allow_streaming: true, roots: Some(roots) }).unwrap();
+    let mut profile = h.studio().profile().clone();
+    profile.output.folder = text_of(&dir.join("outside"));
+    profile.audio_tracks.enabled = false;
+    profile.stream.save_copy = true;
+    profile.stream.keyframe_interval_s = 2;
+    h.studio_mut().set_profile(profile).unwrap();
+    let mut s = Server::new(Box::new(h)).unwrap();
+    for (tool, args) in [("stream_start", json!({})), ("command_run", json!({"id": "stream.start"})), ("command_run", json!({"id": "stream.toggle"}))]
+    {
+        let text = error_text(&call(&mut s, tool, args.clone()));
+        assert!(text.contains("outside the write roots"), "{tool} {args}: {text}");
+    }
+    let copies = std::fs::read_dir(dir.join("outside")).unwrap().flatten().filter(|e| e.path().extension().is_some_and(|x| x == "mkv")).count();
+    assert_eq!(copies, 0, "no copy is made outside the write roots");
+    // A keyframe interval longer than a recording's starts the stream without a copy, so the
+    // recording folder is not checked.
+    let roots = Roots::new(&[dir.join("in")], &[dir.join("out")]).unwrap();
+    let mut h = Headless::with_options(None, ServerOptions { allow_streaming: true, roots: Some(roots) }).unwrap();
+    let mut profile = h.studio().profile().clone();
+    profile.output.folder = text_of(&dir.join("outside"));
+    profile.audio_tracks.enabled = false;
+    profile.stream.save_copy = true;
+    profile.stream.keyframe_interval_s = 4;
+    h.studio_mut().set_profile(profile).unwrap();
+    let mut s = Server::new(Box::new(h)).unwrap();
+    let text = error_text(&call(&mut s, "stream_start", json!({})));
+    assert!(!text.contains("outside the write roots"), "{text}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn audio_tracks_open_last_is_held_to_the_read_roots() {
     let dir = root_folders("tracks-open-roots");
     // A take that made its own folder, cut short before its first file: its repair writes a

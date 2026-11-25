@@ -814,6 +814,12 @@ pub fn stream_copy_path(folder: &Path) -> std::io::Result<PathBuf> {
     named_path(folder, crate::recordings::STREAM_COPY_PREFIX, "mkv")
 }
 
+/// Whether a stream started with `p` writes a copy to the recording folder: a copy is on, and the
+/// stream's keyframe interval is no longer than a recording's.
+pub fn stream_saves_copy(p: &Profile) -> bool {
+    p.stream.save_copy && p.stream.keyframe_interval_s.clamp(1, 20) <= RECORDING_KEYFRAME_S
+}
+
 fn named_path(folder: &Path, prefix: &str, extension: &str) -> std::io::Result<PathBuf> {
     std::fs::create_dir_all(folder)?;
     let stamp = format!("{prefix}{}", chrono::Local::now().format("%Y-%m-%d %H-%M-%S"));
