@@ -13,7 +13,13 @@ the action safe area (3.5% in from each canvas edge) or the title safe area (5% 
 center line of another visible source, and a line shows what it snapped to. A move snaps on each
 axis. A corner drag snaps the edges it moves and keeps the aspect ratio: the edge closer to its
 line snaps and the other edge follows the ratio. With Shift held the corner drag changes the ratio
-and each edge snaps on its own. Holding Alt (Option on macOS) turns snapping off. One drag is one
+and each edge snaps on its own. With Ctrl (Command on macOS) held the corner drag resizes the
+source around its center: the opposite corner moves by the same amount, either edge on an axis
+can snap, and the edge across from it moves to match. Ctrl and Shift together resize around the
+center and change the ratio. The round handle above the middle of the selected source's top edge
+rotates the source around its center, in steps of 15 degrees. When the source's top edge is at the
+edge of the preview, the handle moves inside the preview, just below the source's center. Holding
+Alt (Option on macOS) turns snapping off, and the rotate handle then turns the source by any angle. One drag is one
 undo step. You can lock a source so it can't be moved, or lock the whole preview. Each scene item can be
 shown or hidden, and every change can be undone.
 
@@ -289,7 +295,7 @@ Settings › Stream show the chosen encoder's settings, such as the x264 and NVE
 | NVIDIA NVENC H.264 and HEVC (built in) | MKV, through the NVIDIA driver | No | Windows and 64-bit Linux |
 | Windows Media Foundation H.264 and HEVC (built in) | MKV, with the hardware encoders Media Foundation lists | No | Windows |
 | Apple VideoToolbox H.264 and HEVC (built in) | MKV, with the VideoToolbox hardware encoders | No | macOS |
-| VA-API H.264 and HEVC (built in) | MKV, with the VA-API hardware encoders through libva | No | 64-bit Linux |
+| VA-API H.264, HEVC and AV1 (built in) | MKV, with the VA-API hardware encoders through libva | No | 64-bit Linux |
 
 H.264 (built in) uses StudioCraft's own H.264 and AAC encoders. The Hardware encoder uses the
 built-in hardware encoders for MKV recordings, and the built-in hardware H.264 encoders for streams,
@@ -702,9 +708,10 @@ A stream tests only the H.264 candidates in this list, and skips every other can
 - Windows Media Foundation H.264 and HEVC (built in) run the hardware encoders Media Foundation
   lists, on Windows.
 - Apple VideoToolbox H.264 and HEVC (built in) run the VideoToolbox hardware encoders, on macOS.
-- VA-API H.264 and HEVC (built in) run the VA-API hardware encoders through libva, on 64-bit
-  Linux. VA-API H.264 or HEVC chosen by name is tested the same way, and then records with the
-  built-in encoder.
+- VA-API H.264, HEVC and AV1 (built in) run the VA-API hardware encoders through libva, on 64-bit
+  Linux. VA-API H.264, HEVC or AV1 chosen by name is tested the same way, and then records with
+  the built-in encoder. VA-API AV1 needs a driver that takes the sequence and frame headers from
+  StudioCraft.
 
 The compositor converts the program to the encoders' frame format on the GPU.
 
@@ -831,6 +838,23 @@ shows the license texts.
 The app icon is the window icon, the picture in the update prompt, and the icon of the menu entry
 the updater writes beside an AppImage.
 
+### Safe Mode
+
+In Safe Mode the scene collection opens and can be edited, but no source runs: no camera,
+display, window, audio device, media file or network source is opened. The control server that
+`--control <port>` asks for does not start, so neither `studiocraft-cli send` nor the MCP server
+connected with `--connect` can reach the app. A banner under the menu row says that Safe Mode is
+on. Leave Safe Mode in the banner starts the sources and the control server.
+
+While StudioCraft runs, it keeps a file of its own in the `sessions` folder of its settings folder
+and removes it when it closes. When such a file is still there at the next start and no running
+copy of StudioCraft holds it, a session ended without closing (a crash, a forced quit or a power
+loss). The window then asks whether to start in Safe Mode or normally; Esc picks Safe Mode, Start Normally
+leaves it, and until the answer no source runs. The window also asks when the `sessions` folder or a file in it
+can't be read, or when this session's file can't be written, and the status bar gives the reason.
+`studiocraft --safe-mode` starts in Safe Mode without asking. Sessions
+started with `--no-prefs`, `--screenshot` or `--self-test` keep no marker.
+
 ## Hotkeys
 
 Settings › Hotkeys lists every command that can take a shortcut and changes its shortcuts. Type
@@ -886,7 +910,7 @@ studiocraft-cli mcp --connect 9876
 ### Command-line options
 
 ```text
-studiocraft [--config-dir <dir> | --no-prefs] [--control <port>]
+studiocraft [--config-dir <dir> | --no-prefs] [--safe-mode] [--control <port>]
 studiocraft --screenshot <file.png>
 studiocraft --self-test <file.json>
 studiocraft --version
@@ -896,6 +920,7 @@ studiocraft --version
 | --- | --- |
 | `--config-dir <dir>` | Keeps settings, scene collections and profiles in `<dir>`. |
 | `--no-prefs` | Keeps everything in memory, and reads and writes no settings. |
+| `--safe-mode` | Starts in [Safe Mode](#safe-mode): no source runs and the control server does not start until Safe Mode is left. |
 | `--control <port>` | Accepts control requests on `127.0.0.1:<port>`. |
 | `--screenshot <file>` | Draws about 120 frames, saves the window as a PNG and exits. |
 | `--self-test <file>` | Runs a short scripted session and writes its steps as JSON. |

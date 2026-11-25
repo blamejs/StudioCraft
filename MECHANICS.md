@@ -157,6 +157,8 @@ field to `false` in `mechanics.json`.
 | Value | Setting | Code | Source |
 | --- | --- | --- | --- |
 | Snap distance | 8 screen points (Alt turns it off) | `ui-egui::preview::SNAP_POINTS` | estimated |
+| Rotate handle step | 15 degrees (Alt turns it off) | `ui-egui::preview::ROTATE_STEP` | estimated |
+| Rotate handle distance from the top edge | 22 screen points | `ui-egui::preview::ROTATE_REACH` | estimated |
 | Undo steps kept | 200 | `engine::history::LIMIT` | estimated |
 | Changes merged into one undo step | Same key within 750 ms | `engine::history::COALESCE` | estimated |
 | Scene shortcuts | Ctrl+1 to Ctrl+9 | `ui-egui::commands::SCENE_HOTKEYS` | estimated |
