@@ -17,7 +17,7 @@ use studiocraft_plugin::{EffectImage, VIDEO_EFFECT_PARAMS, VideoContent, VideoEf
 
 use craft_gpu_interop::Fallback;
 
-use crate::nv12::{EncodeTarget, GpuFrame, Nv12};
+use crate::nv12::{EncodeTarget, GpuFrame, GpuSink, Nv12};
 use crate::plan::{ItemDesc, MAX_THUMBNAILS, Plan, SceneDesc, ThumbnailRequest};
 use crate::{CANVAS_FORMAT, CANVAS_VIEW_FORMAT, Gpu, RenderError, shaders};
 
@@ -41,8 +41,9 @@ pub struct RenderShared {
     /// Start, change or stop converting frames for encoders.
     pub encode: Latest<Option<EncodeTarget>>,
     /// Start, change or stop handing the encoder's frames to this queue on the GPU. A queue for a
-    /// session of a new size is published after that size in [`RenderShared::encode`].
-    pub encode_gpu: Latest<Option<Arc<Fifo<GpuFrame>>>>,
+    /// session of a new size is published after that size in [`RenderShared::encode`]. A queue is
+    /// used only while the converter's output size is the size it was published for.
+    pub encode_gpu: Latest<Option<GpuSink>>,
     /// Start, change or stop the small NV12 copy of the program that the scopes read.
     pub scope: Latest<Option<EncodeTarget>>,
     /// New canvas textures for the interface, published after a resize.
@@ -679,6 +680,18 @@ impl Compositor {
         self.apply_export();
     }
 
+    /// Apply `sink` from [`RenderShared::encode_gpu`]: `None` stops the export, and a queue goes
+    /// to [`Compositor::set_encode_gpu`] only when the converter's output size is its size.
+    fn take_encode_gpu(&mut self, sink: Option<GpuSink>) {
+        let size = self.nv12.as_ref().map(|n| (n.width, n.height));
+        match sink {
+            Some(sink) if !sink.fits(size) => {
+                log::debug!("an encoder queue for {}x{} is not used by a converter of {size:?}", sink.width, sink.height);
+            }
+            sink => self.set_encode_gpu(sink.map(|s| s.queue)),
+        }
+    }
+
     fn apply_export(&mut self) {
         let Some(n) = &mut self.nv12 else { return };
         if n.fallback.is_some() {
@@ -741,14 +754,15 @@ impl Compositor {
                 shared.views.publish(self.views());
             }
         }
-        // The queue is taken before the target: a queue published after a new size is then
-        // applied after that size, never to the converter of the size before.
+        // The queue is taken before the target, so a queue published after a new size is applied
+        // after that size. A target and a queue published between the two takes can still pair an
+        // older queue with the newer size, so a queue is applied only to a converter of its size.
         let sink = shared.encode_gpu.take();
         if let Some(e) = shared.encode.take() {
             self.set_encode(e);
         }
         if let Some(sink) = sink {
-            self.set_encode_gpu(sink);
+            self.take_encode_gpu(sink);
         }
         if let Some(s) = shared.scope.take() {
             self.set_scope(s);

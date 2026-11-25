@@ -32,7 +32,7 @@ use craft_gpu_device::{Candidate, DeviceHealth, Fault};
 use craft_gpu_device::{Notice, OpenError, Preference, Request};
 
 pub use compositor::{CAPTURE_SLOTS, CanvasViews, Capture, CaptureRequest, Compositor, RenderShared, Ring, ThumbnailViews, View, unpremultiply};
-pub use nv12::{EncodeTarget, GpuFrame};
+pub use nv12::{EncodeTarget, GpuFrame, GpuSink};
 pub use plan::{
     ItemDesc, MAX_THUMBNAIL_FPS, MAX_THUMBNAIL_SIDE, MAX_THUMBNAILS, MIN_THUMBNAIL_SIDE, Plan, SceneDesc, ThumbnailRequest, TransitionDesc,
 };

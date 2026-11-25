@@ -41,6 +41,23 @@ pub struct GpuFrame {
     pub pts: Tick,
 }
 
+/// The queue of one encoder session on the GPU, and the output size that session was opened for:
+/// the size of the [`EncodeTarget`] published before it.
+#[derive(Clone)]
+pub struct GpuSink {
+    pub width: u32,
+    pub height: u32,
+    pub queue: Arc<Fifo<GpuFrame>>,
+}
+
+impl GpuSink {
+    /// Whether the session reads frames of `size`, the converter's output size (`None` while no
+    /// frames are converted).
+    pub fn fits(&self, size: Option<(u32, u32)>) -> bool {
+        size == Some((self.width, self.height))
+    }
+}
+
 /// The export of the frames to the GPU queues, while it runs.
 struct Export {
     exporter: Exporter,
