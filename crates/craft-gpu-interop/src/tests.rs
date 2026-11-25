@@ -785,6 +785,7 @@ fn an_nv12_picture_fits_its_buffer_only_with_rows_and_planes_inside_it() {
     assert!(!nv12_planes_fit(4, 4, 24, [0, 16], [4, 4], [1, 1], true), "no reported plane holds a row");
     assert!(!nv12_planes_fit(4, 4, 24, [0, 16], [4, 4], [16, 7], true), "the chroma plane holds 7 of its 8 bytes");
     assert!(nv12_planes_fit(4, 4, 24, [0, 16], [4, 4], [16, 8], true));
+    assert!(nv12_planes_fit(4, 2, 20, [0, 16], [8, 8], [12, 4], true), "a last row without padding after it");
     assert!(nv12_planes_fit(3, 3, 22, [0, 12], [4, 4], [11, 8], true), "the last row needs only its pixels");
     // A 3-pixel row has two chroma pairs: 4 bytes, past a 3-byte pitch.
     assert!(!nv12_planes_fit(3, 2, 9, [0, 6], [3, 3], [6, 3], true), "an odd width needs a whole chroma pair");

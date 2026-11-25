@@ -1067,6 +1067,9 @@ mod tests {
         // Linear rows must lie inside their plane's reported bytes, not only inside the buffer.
         assert!(d(3, 256, 144, PrimeFrame { plane_sizes: [1, 1], ..ok }).is_err(), "no reported plane holds a row");
         assert!(d(3, 256, 144, PrimeFrame { plane_sizes: [36864, 18431], ..ok }).is_err(), "the chroma plane is one byte short");
+        // The last row needs only its own bytes, not a whole pitch after it.
+        let short = PrimeFrame { size: 20, offsets: [0, 16], pitches: [8, 8], plane_sizes: [12, 4], ..ok };
+        assert!(d(3, 4, 2, short).is_ok(), "a last row without padding after it");
     }
 
     /// A tiled plane's extent is the size the exporting driver reports, not pitch x rows.
