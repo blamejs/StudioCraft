@@ -97,7 +97,11 @@ impl Nvenc {
             };
             let core = Core::on_d3d11(&cfg, &device).map_err(|e| self.error(e))?;
             LAST_TEST.opened(self.codec);
-            Ok(NvencSession { core, name: self.name(), shared: Some(Shared { ring: std::sync::Arc::clone(ring), feed: Feed::default() }) })
+            Ok(NvencSession {
+                core,
+                name: self.name(),
+                shared: Some(Shared { ring: std::sync::Arc::clone(ring), feed: Feed::default(), failed: None }),
+            })
         }
         #[cfg(not(target_os = "windows"))]
         {
@@ -200,6 +204,9 @@ pub struct NvencSession {
 struct Shared {
     ring: std::sync::Arc<ExportRing>,
     feed: Feed,
+    /// The first failure to encode a frame of the ring. No frame is submitted after it, and the
+    /// flush reports it, since the frame the encoder could not read is lost.
+    failed: Option<String>,
 }
 
 impl NvencSession {
@@ -213,6 +220,9 @@ impl NvencSession {
     #[cfg(target_os = "windows")]
     fn encode_ready(&mut self, out: &mut Vec<Packet>) -> Result<(), PluginError> {
         let Some(shared) = &mut self.shared else { return Ok(()) };
+        if let Some(e) = &shared.failed {
+            return Err(PluginError::Failed(e.clone()));
+        }
         if shared.ring.fallback() == Some(Fallback::DeviceRemoved) {
             return Err(PluginError::Failed(format!("{} stopped: {}", self.name, Fallback::DeviceRemoved)));
         }
@@ -226,7 +236,9 @@ impl NvencSession {
                 Err(e) => {
                     // The compositor reads its frames back through memory again.
                     shared.ring.refuse(Fallback::NoEncoder);
-                    return Err(PluginError::Failed(format!("{} stopped: {e}", self.name)));
+                    let e = format!("{} stopped: {e}", self.name);
+                    shared.failed = Some(e.clone());
+                    return Err(PluginError::Failed(e));
                 }
             };
             // The encoder gives one packet per picture, in the order it took them.
@@ -288,11 +300,14 @@ impl VideoSession for NvencSession {
     fn flush(&mut self, out: &mut Vec<Packet>) -> Result<(), PluginError> {
         let mut failed = self.encode_ready(out).err();
         // The last frames' copies are usually still running on the compositor's queue when the
-        // output stops: give them up to `FLUSH_WAIT` to finish so they are encoded. After a
-        // failure no more frames are submitted.
+        // output stops: give them up to `FLUSH_WAIT` to finish so they are encoded. A frame whose
+        // copy finished after the last try is tried again at once; the loop sleeps only while a
+        // copy runs. After a failure no more frames are submitted.
         let until = std::time::Instant::now() + FLUSH_WAIT;
-        while failed.is_none() && self.shared.as_ref().is_some_and(|s| s.feed.copy_running()) && std::time::Instant::now() < until {
-            std::thread::sleep(std::time::Duration::from_millis(1));
+        while failed.is_none() && self.shared.as_ref().is_some_and(|s| s.feed.waiting() > 0) && std::time::Instant::now() < until {
+            if self.shared.as_ref().is_some_and(|s| s.feed.copy_running()) {
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
             failed = self.encode_ready(out).err();
         }
         // The encoder is drained after a failure too: a packet it already read comes out here.

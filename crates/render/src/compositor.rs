@@ -691,9 +691,10 @@ impl Compositor {
     }
 
     /// Why the encoders' frames go through memory instead of staying on the GPU, once the export
-    /// has been asked for and could not run or stopped.
+    /// has been asked for and could not run or stopped, including a reason the running export's
+    /// ring recorded after the last frame was drawn.
     pub fn export_fallback(&self) -> Option<Fallback> {
-        self.nv12.as_ref().and_then(|n| n.fallback)
+        self.nv12.as_ref().and_then(Nv12::export_fallback)
     }
 
     /// Start, change or stop the scopes' NV12 copy of the program.

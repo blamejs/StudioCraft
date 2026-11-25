@@ -32,9 +32,9 @@ through the `windows` crate's bindings, Vulkan through `ash`, and wgpu through `
 | `Opaque` (`wgpu` feature) | It copies one texture into another of the same size with alpha set to 1 (`draw`), or with each texel's alpha kept and its premultiplied color made straight (`draw_keeping_alpha`). |
 | `ExportRing::open(adapter, width, height)` | It makes `SLOTS` (3) shared NV12 textures and two shared fences on a Direct3D 11 device of that adapter, the device an encoder opens its session on (`device`, `texture`). Both sides must be even and not zero (`Fallback::ImportFailed`); elsewhere than Windows it returns `Fallback::Unsupported`. `ExportRing::detached` makes a ring without textures for tests. |
 | `ExportFrame` | It names one texture of an export ring and the ready fence value at which the copy into it is done. |
-| `Feed` | It is the encoder side's queue: `offer` adds a frame, `take_ready` returns the oldest frame once its copy is done, `out(packets)` hands back the textures of that many of the oldest frames being encoded (one packet per picture), `drain` forgets every frame and hands back the textures whose copies have finished, `copy_running` says whether the oldest waiting frame's copy is still running, and `stalled` says whether every texture is held while nothing is left to encode. |
+| `Feed` | It is the encoder side's queue: `offer` adds a frame, `take_ready` returns the oldest frame once its copy is done, `out(packets)` hands back the textures of that many of the oldest frames being encoded (one packet per picture), `drain` forgets every frame and hands back the textures whose copies have finished (the ring keeps the newest frame whose copy still runs, and `ExportRing::reclaim` hands its texture back once that copy has finished), `copy_running` says whether the oldest waiting frame's copy is still running, and `stalled` says whether every texture is held while nothing is left to encode. |
 | `check_export(backend, compositor)` | It returns the adapter to make the export ring on, or the `Fallback`: a backend other than Direct3D 12 and Vulkan, an adapter the driver does not report, or a Vulkan device without `VK_KHR_external_memory_win32` or timeline semaphores. |
-| `Exporter` (`wgpu` feature) | It opens an export ring on the compositor's device. `reserve` makes one-texel textures of the planes' formats outside the frame loop, `prepare` records a one-texel copy from each plane into them so the planes end in the copy-source state, `copy` records the copy of a frame's luma and chroma planes (8-bit one- and two-channel) into a free texture as a command buffer of its own, and `submitted` sets the ready fence after that submission and returns the `ExportFrame`. |
+| `Exporter` (`wgpu` feature) | It opens an export ring on the compositor's device. `reserve` makes one-texel textures of the planes' formats outside the frame loop, `prepare` records a one-texel copy from each plane into them so the planes end in the copy-source state, `copy` records the copy of a frame's luma and chroma planes (8-bit one- and two-channel) into a free texture as a command buffer of its own, and `submitted` sets the ready fence after that submission and returns the `ExportFrame`. `copy` refuses planes other than a luma plane of the ring's size and a chroma plane of half of it with `Fallback::ImportFailed`. The `Ticket` that `copy` returns keeps the ring's textures open on the compositor's device until it is dropped, even after the `Exporter` is dropped. |
 
 ## Synchronization
 
@@ -68,7 +68,9 @@ exporter's next `copy` or `poll`. The encoder side reads the ready fence's compl
 encodes a frame only once the value has been reached; a frame whose copy is late stays in the
 `Feed`. Once the frame's packet is out, the encoder's Direct3D 11 context signals the released
 fence with the frame's value, and the compositor writes that texture again. When an encoder stops,
-only the textures whose copies have finished are handed back. Neither side
+only the textures whose copies have finished are handed back; the textures whose copies were still
+running go back on the compositor's next `copy` after those copies finish. A new encoder session
+on the same ring does not take a frame whose release is queued or still to come. Neither side
 queues a wait on the GPU. wgpu cannot write NV12 textures, so the export ring's textures stay
 wgpu-hal textures and the copies are raw commands in a command buffer of their own. On Vulkan that
 command buffer takes the image from the external queue family before the copies and hands it back
@@ -99,7 +101,13 @@ exported. One encoder session reads each export ring.
   `Fallback::NoEncoder` when the released fence's signal cannot be queued, and a Vulkan export
   records `Fallback::ImportFailed` when it cannot set the ready fence. When the device that holds
   the export ring has been removed, `ExportRing::ready` and `released` return 0 and record
-  `Fallback::DeviceRemoved`; no frame then counts as ready and no texture as handed back.
+  `Fallback::DeviceRemoved`; no frame then counts as ready and no texture as handed back. The
+  importer records `Fallback::DeviceRemoved` the same way when the device that holds a captured
+  ring's fences on the compositor's side has been removed, and a Vulkan import records
+  `Fallback::ImportFailed` when it cannot set the released fence.
+- On Vulkan a shared texture opens only when the driver reports that it imports a Direct3D 11
+  texture as an image of that format and usage, and its memory goes in a device-local type that
+  both the image and the texture's handle allow.
 - The desktop's alpha channel is not reliable, so `Importer` draws a display's picture with
   alpha 1. A window's ring has `SharedRing::keeps_alpha` set: its picture keeps its alpha, and
   its color, which the system delivers multiplied by alpha, is divided by alpha.

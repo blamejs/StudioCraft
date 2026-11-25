@@ -27,8 +27,8 @@ pub enum Fallback {
     /// The system does not let this window be captured into textures (a window the capture API
     /// does not accept, or a capture the system or the person refused).
     Refused,
-    /// The graphics device that holds the export ring was removed or reset, so its fences no
-    /// longer say which frames are done.
+    /// The graphics device that holds the export ring, or the fences of a captured ring on the
+    /// compositor's side, was removed or reset, so the fences no longer say which frames are done.
     DeviceRemoved,
 }
 
@@ -75,10 +75,10 @@ impl std::fmt::Display for Fallback {
             Fallback::Unsupported => "this system cannot share captured textures between devices",
             Fallback::Format => "the desktop is not in 8-bit color",
             Fallback::Rotated => "the display is rotated",
-            Fallback::MissingExtension => "the compositor's Vulkan device cannot open shared Windows textures",
+            Fallback::MissingExtension => "the compositor's Vulkan device cannot open shared Windows textures or has no timeline semaphores",
             Fallback::NoEncoder => "the hardware encoder cannot run on the compositor's graphics adapter",
             Fallback::Refused => "the system does not let this window be captured into textures",
-            Fallback::DeviceRemoved => "the graphics device that holds the encoder's frames was removed or reset",
+            Fallback::DeviceRemoved => "the graphics device that holds the shared frames was removed or reset",
         })
     }
 }
@@ -140,4 +140,13 @@ pub(crate) fn open_all<H: Copy, T, E>(handles: &[H], mut open: impl FnMut(H) -> 
         }
     }
     Ok(opened)
+}
+
+/// The first memory type that both the image's mask `image` and the imported handle's mask
+/// `handle` allow (bit `i` of a mask is type `i`) and that `device_local`, one entry per type in
+/// order, marks as device-local. `None` when no type is in both masks.
+#[cfg_attr(not(all(windows, feature = "wgpu")), allow(dead_code))]
+pub(crate) fn memory_type(image: u32, handle: u32, device_local: impl IntoIterator<Item = bool>) -> Option<u32> {
+    let allowed = image & handle;
+    (0..u32::BITS).zip(device_local).find(|&(i, local)| local && allowed & (1 << i) != 0).map(|(i, _)| i)
 }

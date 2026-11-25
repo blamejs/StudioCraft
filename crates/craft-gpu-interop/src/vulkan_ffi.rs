@@ -134,11 +134,12 @@ pub(crate) fn import(device: &wgpu::Device, queue: &wgpu::Queue, ring: &SharedRi
         let raw = open_all(
             &ring.handles.textures,
             |handle| {
-                // SAFETY: the device has `VULKAN_EXTERNAL_MEMORY_WIN32`, `handle` is an open NT
-                // handle of a single-sampled 2D BGRA8 texture of `size` with one mip level, as the
-                // capture side created it, and `ring` keeps it open. The import does not take the
-                // handle.
-                unsafe { hal.texture_from_d3d11_shared_handle(handle, &hal_desc) }.map_err(|_| Fallback::ImportFailed)
+                // SAFETY: the device has `VULKAN_EXTERNAL_MEMORY_WIN32` and runs Vulkan 1.1 or later
+                // (`check_import` passed), `handle` is an open NT handle of a single-sampled 2D
+                // BGRA8 texture of `size` with one mip level, as the capture side created it, and
+                // `ring` keeps it open; `hal_desc` describes it, only sampled. The import does not
+                // take the handle, and a failed import leaves nothing behind.
+                unsafe { import_d3d11(&hal, handle, &hal_desc, BGRA) }
             },
             |texture| {
                 // SAFETY: `texture` was made on this device, nothing else holds it, and no
@@ -170,10 +171,9 @@ pub(crate) fn import(device: &wgpu::Device, queue: &wgpu::Queue, ring: &SharedRi
 }
 
 impl Imported {
-    /// The ready fence's value now, without waiting. It also hands back the textures whose draws
-    /// have finished.
+    /// The ready fence's value now, without waiting; [`REMOVED`](crate::export::REMOVED) once the
+    /// device that holds the fence has been removed.
     pub(crate) fn completed(&self) -> u64 {
-        self.poll();
         // SAFETY: `ready` is a valid fence; reading its completed value does not wait.
         unsafe { self.ready.GetCompletedValue() }
     }
@@ -229,9 +229,11 @@ impl Imported {
         self.released.after_submitted(value);
     }
 
-    /// Copy the value the queue has reached to the released fence, without waiting.
-    pub(crate) fn poll(&self) {
-        self.released.poll();
+    /// Copy the value the queue has reached to the released fence, without waiting. Returns false
+    /// when the semaphore's value could not be read or the released fence could not be set: the
+    /// device was lost, removed or out of memory, so the textures would not go back.
+    pub(crate) fn poll(&self) -> bool {
+        self.released.poll()
     }
 }
 
@@ -343,8 +345,8 @@ impl Timeline {
     }
 
     /// Copy the value the queue has signaled on the semaphore to the fence, without waiting.
-    /// Returns false when the semaphore's value could not be read or the fence could not be set;
-    /// the next call tries again.
+    /// Returns false when the semaphore's value could not be read or the fence could not be set.
+    /// Both calls fail only for a lost or removed device or for lack of memory.
     fn poll(&self) -> bool {
         // SAFETY: `semaphore` is a timeline semaphore of this device, which runs Vulkan 1.2.
         let Ok(done) = (unsafe { self.device.get_semaphore_counter_value(self.semaphore) }) else { return false };
@@ -367,8 +369,17 @@ impl Drop for Timeline {
         let target = if unsubmitted { self.submitted.load(Ordering::Acquire) } else { self.queued.load(Ordering::Acquire) };
         self.poll();
         // SAFETY: `semaphore` is a timeline semaphore of this device, which runs Vulkan 1.2.
-        let done = unsafe { self.device.get_semaphore_counter_value(self.semaphore) }.is_ok_and(|done| done >= target);
-        if done {
+        let reached = unsafe { self.device.get_semaphore_counter_value(self.semaphore) }.ok().filter(|&done| done >= target);
+        if let Some(done) = reached {
+            // The value read here, not the one `poll` read before it, says the work has finished:
+            // the fence gets it before the semaphore goes.
+            // SAFETY: `fence` is a valid fence; reading and setting its value from the CPU does
+            // not wait. It is only raised, so a value set later by another side is kept.
+            unsafe {
+                if self.fence.GetCompletedValue() < done {
+                    let _ = self.fence.Signal(done);
+                }
+            }
             // SAFETY: no submission still signals the semaphore: the one not submitted was taken
             // off the list, and the submitted ones have finished.
             unsafe { self.device.destroy_semaphore(self.semaphore, None) };
@@ -438,10 +449,12 @@ pub(crate) fn export(device: &wgpu::Device, queue: &wgpu::Queue, ring: &ExportRi
         // device's function table, and it is dropped before the function returns.
         let Some(hal) = (unsafe { device.as_hal::<wgpu::hal::api::Vulkan>() }) else { return Err(Fallback::UnsupportedBackend) };
         for &handle in &nv12.handles.textures {
-            // SAFETY: the device has `VULKAN_EXTERNAL_MEMORY_WIN32`, `handle` is an open NT handle
-            // of a single-sampled 2D NV12 texture of `size` with one mip level, as the encoder side
-            // created it, and `ring` keeps it open. The import does not take the handle.
-            match unsafe { import_nv12(&hal, handle, &hal_desc) } {
+            // SAFETY: the device has `VULKAN_EXTERNAL_MEMORY_WIN32` and runs Vulkan 1.1 or later
+            // (`check_import` passed), `handle` is an open NT handle of a single-sampled 2D NV12
+            // texture of `size` with one mip level, as the encoder side created it, and `ring`
+            // keeps it open; `hal_desc` describes it as a copy destination. The import does not
+            // take the handle.
+            match unsafe { import_d3d11(&hal, handle, &hal_desc, NV12) } {
                 Ok(texture) => textures.push(texture),
                 Err(_) => {
                     use wgpu::hal::Device as _;
@@ -475,53 +488,104 @@ pub(crate) fn export(device: &wgpu::Device, queue: &wgpu::Queue, ring: &ExportRi
     Ok(Exported { textures: Some(textures), images, family, device: vk_device, wgpu_device: device.clone(), queue: queue.clone(), ready })
 }
 
-/// Open the shared NV12 texture `handle` as an image of `hal` with dedicated memory bound to it,
-/// as wgpu-hal's `texture_from_d3d11_shared_handle` does, except that a failed allocation or bind
-/// destroys the image and frees the memory it made.
+/// The format, flags and usage an image opened from a shared Direct3D 11 texture is made with:
+/// the ones wgpu-hal gives a texture of the same wgpu format and usage.
+#[derive(Clone, Copy)]
+struct Shape {
+    format: vk::Format,
+    flags: vk::ImageCreateFlags,
+    usage: vk::ImageUsageFlags,
+}
+
+/// A capture ring's BGRA8 texture, only sampled.
+const BGRA: Shape = Shape { format: vk::Format::B8G8R8A8_UNORM, flags: vk::ImageCreateFlags::empty(), usage: vk::ImageUsageFlags::SAMPLED };
+
+/// An export ring's NV12 texture, only a copy destination: wgpu-hal gives a multi-planar format
+/// these flags.
+const NV12: Shape = Shape {
+    format: vk::Format::G8_B8R8_2PLANE_420_UNORM,
+    flags: vk::ImageCreateFlags::from_raw(vk::ImageCreateFlags::MUTABLE_FORMAT.as_raw() | vk::ImageCreateFlags::EXTENDED_USAGE.as_raw()),
+    usage: vk::ImageUsageFlags::TRANSFER_DST,
+};
+
+/// Open the shared texture `handle` as an image of `hal` made as `shape`, with dedicated memory
+/// bound to it, as wgpu-hal's `texture_from_d3d11_shared_handle` does, except that: the driver
+/// must report that it imports a Direct3D 11 texture as such an image; the memory type is one the
+/// handle allows as well as the image; and a failed allocation or bind destroys the image and
+/// frees the memory it made.
 ///
 /// # Safety
 ///
-/// `hal` has `VULKAN_EXTERNAL_MEMORY_WIN32`, and `handle` is an open NT handle of a
-/// single-sampled 2D NV12 texture of `desc`'s size with one mip level, which stays open for the
-/// call. `desc` describes an NV12 texture used only as a copy destination.
-unsafe fn import_nv12(
+/// `hal` has `VULKAN_EXTERNAL_MEMORY_WIN32` and runs Vulkan 1.1 or later, and `handle` is an open
+/// NT handle of a single-sampled 2D texture of `desc`'s size with one mip level, in the format of
+/// `shape`, which stays open for the call. `desc` describes that texture with the usage of
+/// `shape`.
+unsafe fn import_d3d11(
     hal: &wgpu::hal::vulkan::Device,
     handle: HANDLE,
     desc: &wgpu::hal::TextureDescriptor,
+    shape: Shape,
 ) -> Result<wgpu::hal::vulkan::Texture, Fallback> {
     let device = hal.raw_device();
-    let mut external = vk::ExternalMemoryImageCreateInfo::default().handle_types(vk::ExternalMemoryHandleTypeFlags::D3D11_TEXTURE);
-    // The flags, format and usage wgpu-hal gives a multi-planar copy destination.
+    let instance = hal.shared_instance().raw_instance();
+    let kind = vk::ExternalMemoryHandleTypeFlags::D3D11_TEXTURE;
+    let mut external_info = vk::PhysicalDeviceExternalImageFormatInfo::default().handle_type(kind);
+    let format_info = vk::PhysicalDeviceImageFormatInfo2::default()
+        .format(shape.format)
+        .ty(vk::ImageType::TYPE_2D)
+        .tiling(vk::ImageTiling::OPTIMAL)
+        .usage(shape.usage)
+        .flags(shape.flags)
+        .push_next(&mut external_info);
+    let mut external_properties = vk::ExternalImageFormatProperties::default();
+    {
+        let mut properties = vk::ImageFormatProperties2::default().push_next(&mut external_properties);
+        // SAFETY: the physical device belongs to this instance, which runs Vulkan 1.1 or later;
+        // the call only reads `format_info` and fills `properties` and the structure chained to
+        // it, and both chains live for the call.
+        unsafe { instance.get_physical_device_image_format_properties2(hal.raw_physical_device(), &format_info, &mut properties) }
+            .map_err(|_| Fallback::ImportFailed)?;
+    }
+    let memory = external_properties.external_memory_properties;
+    if !memory.external_memory_features.contains(vk::ExternalMemoryFeatureFlags::IMPORTABLE) || !memory.compatible_handle_types.contains(kind) {
+        return Err(Fallback::ImportFailed);
+    }
+    let mut handle_properties = vk::MemoryWin32HandlePropertiesKHR::default();
+    // SAFETY: the device was opened with `VK_KHR_external_memory_win32`, whose functions this
+    // loads; `handle` is an open NT handle of a Direct3D 11 texture, and the call only fills
+    // `handle_properties`.
+    unsafe {
+        ash::khr::external_memory_win32::Device::new(instance, device).get_memory_win32_handle_properties(kind, handle.0 as _, &mut handle_properties)
+    }
+    .map_err(|_| Fallback::ImportFailed)?;
+    let mut external = vk::ExternalMemoryImageCreateInfo::default().handle_types(kind);
     let info = vk::ImageCreateInfo::default()
-        .flags(vk::ImageCreateFlags::MUTABLE_FORMAT | vk::ImageCreateFlags::EXTENDED_USAGE)
+        .flags(shape.flags)
         .image_type(vk::ImageType::TYPE_2D)
-        .format(vk::Format::G8_B8R8_2PLANE_420_UNORM)
+        .format(shape.format)
         .extent(vk::Extent3D { width: desc.size.width, height: desc.size.height, depth: 1 })
         .mip_levels(1)
         .array_layers(1)
         .samples(vk::SampleCountFlags::TYPE_1)
         .tiling(vk::ImageTiling::OPTIMAL)
-        .usage(vk::ImageUsageFlags::TRANSFER_DST)
+        .usage(shape.usage)
         .sharing_mode(vk::SharingMode::EXCLUSIVE)
         .initial_layout(vk::ImageLayout::UNDEFINED)
         .push_next(&mut external);
-    // SAFETY: `info` describes a valid 2D image for an external D3D11 texture, and its chain lives
-    // for the call.
+    // SAFETY: `info` describes a 2D image for an external Direct3D 11 texture with the format,
+    // flags and usage the driver reported it imports, and its chain lives for the call.
     let image = unsafe { device.create_image(&info, None) }.map_err(|_| Fallback::ImportFailed)?;
     // SAFETY: `image` is an image of `device` without memory.
     let requirements = unsafe { device.get_image_memory_requirements(image) };
     // SAFETY: the physical device is the one `device` was created from.
-    let properties = unsafe { hal.shared_instance().raw_instance().get_physical_device_memory_properties(hal.raw_physical_device()) };
-    let index = properties
-        .memory_types_as_slice()
-        .iter()
-        .enumerate()
-        .position(|(i, ty)| requirements.memory_type_bits & (1 << i) != 0 && ty.property_flags.contains(vk::MemoryPropertyFlags::DEVICE_LOCAL));
+    let properties = unsafe { instance.get_physical_device_memory_properties(hal.raw_physical_device()) };
+    let local = properties.memory_types_as_slice().iter().map(|ty| ty.property_flags.contains(vk::MemoryPropertyFlags::DEVICE_LOCAL));
+    let index = crate::fallback::memory_type(requirements.memory_type_bits, handle_properties.memory_type_bits, local);
     let destroy_image = || {
         // SAFETY: `image` is an image of `device` that nothing has used or bound memory to.
         unsafe { device.destroy_image(image, None) };
     };
-    let Some(index) = index.and_then(|i| u32::try_from(i).ok()) else {
+    let Some(index) = index else {
         destroy_image();
         return Err(Fallback::ImportFailed);
     };
@@ -579,9 +643,9 @@ impl Exported {
         Ok(raw_commands(&self.wgpu_device, "program to encoder", |cmd| {
             // SAFETY: `cmd` is a command buffer of `device` being recorded. The plane images are
             // images of the device in `TRANSFER_SRC_OPTIMAL`, `dst` is an NV12 image of the device,
-            // and each region lies inside both images: the luma plane is the NV12 image's size and
-            // the chroma plane half of it, as the caller made them. The barriers move `dst` from
-            // the encoder side to this queue and back around the copies.
+            // and each region lies inside both images: `Exporter::copy` refuses planes unless the
+            // luma plane is the NV12 image's size and the chroma plane half of it. The barriers
+            // move `dst` from the encoder side to this queue and back around the copies.
             unsafe {
                 device.cmd_pipeline_barrier(
                     cmd,

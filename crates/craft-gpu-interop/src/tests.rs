@@ -649,6 +649,94 @@ fn a_frame_given_again_is_refused_while_it_waits_and_after_its_texture_went_back
 }
 
 #[test]
+fn a_session_on_a_ring_refuses_a_frame_whose_release_is_queued_but_not_finished() {
+    let ring = ExportRing::detached(64, 2);
+    ring.hold_releases.store(true, std::sync::atomic::Ordering::Release);
+    ring.set_ready(2);
+    let mut feed = Feed::default();
+    for value in 1..=2 {
+        assert!(feed.offer(exported(&ring, value as usize - 1, value), value as i64).is_none());
+        assert!(feed.take_ready().is_some());
+    }
+    assert_eq!(feed.out(2), 2);
+    assert_eq!(ring.released(), 0, "the release is queued and has not run");
+    // A replacement session gets a copy of frame 2: its texture may be written again any moment.
+    let mut next = Feed::default();
+    assert!(!next.accepts(&exported(&ring, 1, 2)));
+    assert_eq!(next.offer(exported(&ring, 1, 2), 2).map(|f| f.ready()), Some(2));
+    assert!(next.accepts(&exported(&ring, 2, 3)));
+    ring.finish_releases();
+    assert_eq!(ring.released(), 2);
+}
+
+#[test]
+fn a_stopped_encoders_textures_go_back_once_their_copies_finish() {
+    let ring = ExportRing::detached(64, 2);
+    let mut feed = Feed::default();
+    for value in 1..=SLOTS as u64 {
+        assert!(feed.offer(exported(&ring, value as usize - 1, value), value as i64).is_none());
+    }
+    // Every copy is still running when the encoder stops.
+    assert_eq!(feed.drain(), SLOTS);
+    assert_eq!(ring.released(), 0, "a texture being written is not handed back");
+    assert_eq!(ring.handed_back(), SLOTS as u64, "no later session takes those frames");
+    ring.reclaim();
+    assert_eq!(ring.released(), 0, "the copies have not finished");
+    ring.set_ready(SLOTS as u64 - 1);
+    ring.reclaim();
+    assert_eq!(ring.released(), 0, "the newest copy has not finished");
+    // Every copy finished: the compositor gets the whole ring back.
+    ring.set_ready(SLOTS as u64);
+    ring.reclaim();
+    assert_eq!(ring.released(), SLOTS as u64);
+    let mut slots = SlotTable::default();
+    for _ in 0..SLOTS {
+        let slot = slots.pick_released(0).unwrap();
+        slots.fill_released(slot, Instant::now()).unwrap();
+    }
+    assert!(slots.pick_released(ring.released()).is_some());
+}
+
+#[test]
+fn a_removed_device_on_the_compositors_side_counts_no_captured_frame_as_done() {
+    let ring = SharedRing::detached(64, 2);
+    assert_eq!(ring.completed(7), 7);
+    assert_eq!(ring.fallback(), None, "an ordinary fence value is kept");
+    assert_eq!(ring.completed(export::REMOVED), 0);
+    assert_eq!(ring.fallback(), Some(Fallback::DeviceRemoved));
+    let mut handoff = Handoff::default();
+    handoff.offer(frame(&ring, 0, 1));
+    assert!(handoff.take_ready(ring.completed(export::REMOVED)).is_none());
+}
+
+#[test]
+fn an_imported_handle_gets_a_memory_type_both_it_and_the_image_allow() {
+    use crate::fallback::memory_type;
+    // The image allows types 0 and 1, the handle only type 1.
+    assert_eq!(memory_type(0b11, 0b10, [true, true]), Some(1));
+    assert_eq!(memory_type(0b11, 0b11, [true, true]), Some(0));
+    // Only device-local types count.
+    assert_eq!(memory_type(0b111, 0b111, [false, false, true]), Some(2));
+    assert_eq!(memory_type(0b01, 0b10, [true, true]), None, "no type is in both masks");
+    assert_eq!(memory_type(0b10, 0b10, [true]), None, "a type the device does not list");
+}
+
+#[test]
+fn the_export_copy_needs_a_luma_plane_of_the_rings_size_and_a_chroma_plane_of_half() {
+    use crate::export::planes_fit;
+    assert!(planes_fit(64, 2, (64, 2), (32, 1)));
+    assert!(!planes_fit(64, 2, (128, 2), (32, 1)), "a luma plane wider than the ring");
+    assert!(!planes_fit(64, 2, (64, 2), (64, 2)), "a chroma plane of the full size");
+    assert!(!planes_fit(64, 2, (64, 4), (32, 2)));
+}
+
+#[test]
+fn a_vulkan_device_without_external_memory_or_timeline_semaphores_says_which_is_needed() {
+    let message = Fallback::MissingExtension.to_string();
+    assert!(message.contains("shared Windows textures") && message.contains("timeline semaphores"), "{message}");
+}
+
+#[test]
 fn packets_hand_back_frames_by_count_even_when_two_frames_share_a_time() {
     let ring = ExportRing::detached(64, 2);
     let mut feed = Feed::default();
@@ -858,7 +946,12 @@ mod gpu {
         let mut exporter = match Exporter::open(&device, &queue, 64, 2) {
             Ok(e) => e,
             Err(reason) => {
-                assert!(check_export(backend, adapter).is_err() || matches!(reason, Fallback::Unsupported | Fallback::ImportFailed));
+                // The preflight's reason when it fails; otherwise only opening the ring's
+                // resources can fail.
+                match check_export(backend, adapter) {
+                    Err(expected) => assert_eq!(reason, expected),
+                    Ok(_) => assert!(matches!(reason, Fallback::Unsupported | Fallback::ImportFailed), "{reason:?}"),
+                }
                 return;
             }
         };

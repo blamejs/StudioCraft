@@ -146,9 +146,20 @@ fn bench_encode(c: &mut Criterion, device: &wgpu::Device, queue: &wgpu::Queue, l
             copy(&mut enc, &planes[0], 0, h);
             copy(&mut enc, &planes[1], luma, h / 2);
             queue.submit([enc.finish()]);
-            buffer.map_async(wgpu::MapMode::Read, .., |_| {});
-            let _ = device.poll(wgpu::PollType::wait_indefinitely());
-            if let Ok(view) = buffer.get_mapped_range(..) {
+            // A failed mapping, wait or read fails the case instead of counting as a read-back.
+            let (sent, mapped) = std::sync::mpsc::channel();
+            buffer.map_async(wgpu::MapMode::Read, .., move |r| {
+                let _ = sent.send(r);
+            });
+            if let Err(e) = device.poll(wgpu::PollType::wait_indefinitely()) {
+                panic!("the NV12 read-back for {label} did not finish: {e:?}");
+            }
+            match mapped.try_recv() {
+                Ok(Ok(())) => {}
+                other => panic!("the NV12 read-back for {label} was not mapped: {other:?}"),
+            }
+            {
+                let view = buffer.get_mapped_range(..).unwrap_or_else(|e| panic!("the NV12 read-back for {label} could not be read: {e:?}"));
                 std::hint::black_box(view.len());
             }
             buffer.unmap();

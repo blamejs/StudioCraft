@@ -27,6 +27,14 @@ pub struct ExportRing {
     /// A detached ring's fence values, which [`ExportRing::set_ready`] sets.
     detached_ready: AtomicU64,
     detached_released: AtomicU64,
+    /// The highest value a detached ring was asked to release.
+    detached_queued: AtomicU64,
+    /// Set in tests while a detached ring's releases stay queued instead of completing.
+    #[cfg(test)]
+    pub(crate) hold_releases: AtomicBool,
+    /// The newest frame of an encoder that stopped while its copy was still running, whose texture
+    /// goes back once that copy has finished; 0 when there is none.
+    abandoned: AtomicU64,
     #[cfg(windows)]
     pub(crate) nv12: Option<crate::dxgi_ffi::Nv12Ring>,
 }
@@ -74,6 +82,10 @@ impl ExportRing {
             fallback: AtomicU8::new(0),
             detached_ready: AtomicU64::new(0),
             detached_released: AtomicU64::new(0),
+            detached_queued: AtomicU64::new(0),
+            #[cfg(test)]
+            hold_releases: AtomicBool::new(false),
+            abandoned: AtomicU64::new(0),
             #[cfg(windows)]
             nv12: None,
         }
@@ -171,7 +183,51 @@ impl ExportRing {
             }
             return;
         }
+        self.detached_queued.fetch_max(value, Ordering::AcqRel);
+        #[cfg(test)]
+        if self.hold_releases.load(Ordering::Acquire) {
+            return;
+        }
         self.detached_released.fetch_max(value, Ordering::AcqRel);
+    }
+
+    /// A detached ring's queued releases, completed now (tests).
+    #[cfg(test)]
+    pub(crate) fn finish_releases(&self) {
+        self.detached_released.fetch_max(self.detached_queued.load(Ordering::Acquire), Ordering::AcqRel);
+    }
+
+    /// The newest frame whose texture has gone back to the compositor, or is about to: the released
+    /// fence's value, a release queued but not yet run, and the newest frame of an encoder that
+    /// stopped during its copy. An encoder session must not take a frame at or below it, since the
+    /// compositor may write its texture again.
+    pub fn handed_back(&self) -> u64 {
+        #[cfg(windows)]
+        let queued = match &self.nv12 {
+            Some(nv12) => nv12.queued(),
+            None => self.detached_queued.load(Ordering::Acquire),
+        };
+        #[cfg(not(windows))]
+        let queued = self.detached_queued.load(Ordering::Acquire);
+        self.released().max(queued).max(self.abandoned.load(Ordering::Acquire))
+    }
+
+    /// Record that an encoder stopped while the copy of the frame with value `value` was still
+    /// running, so its texture goes back once the copy has finished ([`ExportRing::reclaim`]).
+    pub(crate) fn abandon(&self, value: u64) {
+        self.abandoned.fetch_max(value, Ordering::AcqRel);
+    }
+
+    /// Hand back the textures of a stopped encoder's frames whose copies have finished since it
+    /// stopped. Without it a ring whose every texture held such a frame would stay full. The
+    /// compositor calls it before it looks for a free texture.
+    pub fn reclaim(&self) {
+        let abandoned = self.abandoned.load(Ordering::Acquire);
+        if abandoned == 0 || self.ready() < abandoned {
+            return;
+        }
+        self.release(abandoned);
+        let _ = self.abandoned.compare_exchange(abandoned, 0, Ordering::AcqRel, Ordering::Acquire);
     }
 
     /// The Direct3D 11 device that holds the textures, which an encoder opens its session on.
@@ -235,6 +291,11 @@ impl ReleaseGate {
                 return queued;
             }
         }
+    }
+
+    /// The highest value asked for so far, from any thread, signaled or about to be.
+    pub(crate) fn asked(&self) -> u64 {
+        self.wanted.load(Ordering::SeqCst)
     }
 }
 
@@ -306,9 +367,10 @@ impl Feed {
     /// Whether [`Feed::offer`] queues `frame`. The compositor gives each frame a ready value
     /// above every earlier one, so a frame whose value is not above the newest frame offered or
     /// handed back is a copy of a frame already given: its texture may hold a newer picture, and
-    /// it is refused.
+    /// it is refused. A session on a ring read before also counts the releases that session
+    /// queued and has not finished ([`ExportRing::handed_back`]).
     pub fn accepts(&self, frame: &ExportFrame) -> bool {
-        let handed = if self.handed == 0 { frame.ring.released() } else { self.handed };
+        let handed = if self.handed == 0 { frame.ring.handed_back() } else { self.handed };
         frame.ready > self.offered.max(handed)
     }
 
@@ -324,7 +386,7 @@ impl Feed {
         }
         if self.handed == 0 {
             // A ring another session read before: its frames up to here went back already.
-            self.handed = frame.ring.released();
+            self.handed = frame.ring.handed_back();
         }
         self.offered = frame.ready;
         self.waiting.push_back((frame, pts));
@@ -360,19 +422,25 @@ impl Feed {
 
     /// Forget every frame, waiting or being read, for an encoder that stops, and hand back the
     /// textures whose copies have finished. A texture whose copy is still running is not handed
-    /// back, since the compositor would write it again during the copy; a later frame's release
-    /// covers it. Returns how many waiting frames were not encoded.
+    /// back, since the compositor would write it again during the copy: the ring keeps the newest
+    /// such frame, and the compositor hands its texture back once the copy has finished
+    /// ([`ExportRing::reclaim`]). Returns how many waiting frames were not encoded.
     pub fn drain(&mut self) -> usize {
         let unencoded = self.waiting.len();
         let mut done: Option<&ExportFrame> = None;
+        let mut running: Option<&ExportFrame> = None;
         for (frame, _) in self.reading.iter().chain(self.waiting.iter()) {
-            if frame.is_ready() && done.is_none_or(|d| frame.ready > d.ready) {
-                done = Some(frame);
+            let newest = if frame.is_ready() { &mut done } else { &mut running };
+            if newest.is_none_or(|d| frame.ready > d.ready) {
+                *newest = Some(frame);
             }
         }
         if let Some(frame) = done {
             frame.ring.release(frame.ready);
             self.handed = self.handed.max(frame.ready);
+        }
+        if let Some(frame) = running.filter(|r| done.is_none_or(|d| r.ready > d.ready)) {
+            frame.ring.abandon(frame.ready);
         }
         self.reading.clear();
         self.waiting.clear();
@@ -414,8 +482,10 @@ pub struct Exporter {
     slots: crate::ring::SlotTable,
     /// One-texel textures of the planes' formats that [`Exporter::prepare`] copies into.
     scratch: Option<Vec<wgpu::Texture>>,
+    /// Shared with every [`Ticket`], so the ring's textures stay open on the compositor's device
+    /// until the last copy recorded into them has been submitted.
     #[cfg(windows)]
-    raw: Raw,
+    raw: Arc<Raw>,
 }
 
 #[cfg(all(feature = "wgpu", windows))]
@@ -453,13 +523,30 @@ pub(crate) fn scratch_for(device: &wgpu::Device, planes: &[wgpu::Texture], kept:
 }
 
 /// A copy recorded by [`Exporter::copy`], to hand to [`Exporter::submitted`] once its command
-/// buffer has been submitted.
+/// buffer has been submitted. It keeps the ring's textures open on the compositor's device, even
+/// after the [`Exporter`] is dropped, so drop it only after the command buffer has been submitted
+/// or dropped.
 #[cfg(feature = "wgpu")]
-#[derive(Debug)]
 #[must_use = "the frame is only handed to the encoder by `Exporter::submitted`"]
 pub struct Ticket {
     slot: usize,
     ready: u64,
+    #[cfg(windows)]
+    _textures: Arc<Raw>,
+}
+
+#[cfg(feature = "wgpu")]
+impl std::fmt::Debug for Ticket {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Ticket").field("slot", &self.slot).field("ready", &self.ready).finish()
+    }
+}
+
+/// Whether `luma` and `chroma`, the sizes of a frame's planes, are a `width × height` luma plane
+/// and a chroma plane of half that, the sizes the copy into an export ring's textures needs.
+#[cfg_attr(not(feature = "wgpu"), allow(dead_code))]
+pub(crate) fn planes_fit(width: u32, height: u32, luma: (u32, u32), chroma: (u32, u32)) -> bool {
+    luma == (width, height) && chroma == (width / 2, height / 2)
 }
 
 /// The graphics API and adapter of `device`, as [`check_export`](crate::check_export) takes them.
@@ -495,7 +582,7 @@ impl Exporter {
                 crate::Backend::Dx12 => Raw::Dx12(crate::d3d12_ffi::export(device, queue, &ring)?),
                 _ => Raw::Vulkan(Box::new(crate::vulkan_ffi::export(device, queue, &ring)?)),
             };
-            Ok(Exporter { ring, slots: crate::ring::SlotTable::default(), scratch: None, raw })
+            Ok(Exporter { ring, slots: crate::ring::SlotTable::default(), scratch: None, raw: Arc::new(raw) })
         }
         #[cfg(not(windows))]
         {
@@ -537,7 +624,8 @@ impl Exporter {
     /// [`Exporter::prepare`] was the caller's last use of them, in a command buffer submitted
     /// before the one returned. Returns the command buffer to submit and its ticket, or
     /// `None` when every texture is still being encoded (the frame is not exported). Returns the
-    /// reason, also recorded on the ring, when the frames cannot stay on the GPU.
+    /// reason, also recorded on the ring, when the frames cannot stay on the GPU. Planes of other
+    /// sizes than the ring's luma and chroma planes are refused with [`Fallback::ImportFailed`].
     pub fn copy(
         &mut self,
         device: &wgpu::Device,
@@ -545,16 +633,22 @@ impl Exporter {
         now: std::time::Instant,
     ) -> Result<Option<(wgpu::CommandBuffer, Ticket)>, Fallback> {
         self.poll();
+        self.ring.reclaim();
         // Reading the released fence records the fallback of a removed device.
         let released = self.ring.released();
         if let Some(reason) = self.ring.fallback() {
             return Err(reason);
         }
+        let size = |t: &wgpu::Texture| (t.width(), t.height());
+        if !matches!(planes, [luma, chroma] if planes_fit(self.ring.width(), self.ring.height(), size(luma), size(chroma))) {
+            self.ring.refuse(Fallback::ImportFailed);
+            return Err(Fallback::ImportFailed);
+        }
         // An encoder may hold a picture for longer than `RECLAIM`, so a texture is written again
         // only once the encoder has released it.
         let Some(slot) = self.slots.pick_released(released) else { return Ok(None) };
         #[cfg(windows)]
-        let commands = match &self.raw {
+        let commands = match &*self.raw {
             Raw::Dx12(r) => r.copy(device, planes, slot),
             Raw::Vulkan(r) => r.copy(planes, slot),
         };
@@ -568,14 +662,20 @@ impl Exporter {
             self.ring.refuse(Fallback::ImportFailed);
             return Err(Fallback::ImportFailed);
         };
-        Ok(Some((commands, Ticket { slot, ready })))
+        let ticket = Ticket {
+            slot,
+            ready,
+            #[cfg(windows)]
+            _textures: Arc::clone(&self.raw),
+        };
+        Ok(Some((commands, ticket)))
     }
 
     /// The frame of `ticket`, once its command buffer has been submitted: the ready fence is set
     /// after the copy, and the frame is what an encoder session takes.
     pub fn submitted(&mut self, ticket: Ticket) -> Result<ExportFrame, Fallback> {
         #[cfg(windows)]
-        let signaled = match &self.raw {
+        let signaled = match &*self.raw {
             Raw::Dx12(r) => r.signal(ticket.ready),
             Raw::Vulkan(r) => {
                 r.signal(ticket.ready);
@@ -594,7 +694,7 @@ impl Exporter {
     /// export records it when its signal fails.
     pub fn poll(&self) {
         #[cfg(windows)]
-        if let Raw::Vulkan(r) = &self.raw
+        if let Raw::Vulkan(r) = &*self.raw
             && !r.poll()
         {
             self.ring.refuse(Fallback::ImportFailed);

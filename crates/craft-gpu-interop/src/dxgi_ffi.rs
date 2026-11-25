@@ -443,6 +443,11 @@ impl Nv12Ring {
         unsafe { self.released.GetCompletedValue() }
     }
 
+    /// The highest value asked of [`Nv12Ring::release`], queued on the device or about to be.
+    pub(crate) fn queued(&self) -> u64 {
+        self.gate.asked()
+    }
+
     /// Set the released fence to `value` once the work already queued on the device has run. The
     /// encoder calls it after the packet of the frame has come out, when the texture has been
     /// read. A value not above the highest one queued so far is not signaled, so the fence never
