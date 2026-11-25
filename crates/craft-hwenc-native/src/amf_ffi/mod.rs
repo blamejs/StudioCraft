@@ -335,7 +335,7 @@ pub(crate) fn waiter() -> impl FnMut(bool) -> bool {
 }
 
 /// Every output that is ready, appended to `out`, without waiting; whether there was one.
-fn collect_ready(e: &mut impl Engine, out: &mut Vec<Output>) -> Result<bool, String> {
+pub(crate) fn collect_ready(e: &mut impl Engine, out: &mut Vec<Output>) -> Result<bool, String> {
     let mut got = false;
     loop {
         match e.poll()? {
@@ -349,10 +349,11 @@ fn collect_ready(e: &mut impl Engine, out: &mut Vec<Output>) -> Result<bool, Str
     }
 }
 
-/// Submit one frame and collect the outputs that are ready. The call pauses (through `wait`) only
-/// while the encoder's input queue is full and no output is ready, and every retry counts toward
-/// the wait limit; an output that is late comes out with a later call.
-pub(crate) fn encode(
+/// Submit one frame, collecting the outputs that come out while the encoder's input queue is full.
+/// The call pauses (through `wait`) only while the queue is full and no output is ready, and every
+/// retry counts toward the wait limit. It returns once the encoder has taken the frame; an error
+/// means the encoder did not take it.
+pub(crate) fn submit(
     e: &mut impl Engine,
     frame: &[u8],
     time: i64,
@@ -366,6 +367,20 @@ pub(crate) fn encode(
             return Err(format!("the encoder took no frame for {} seconds", WAIT_LIMIT.as_secs()));
         }
     }
+    Ok(())
+}
+
+/// Submit one frame ([`submit`]) and collect the outputs that are ready after the encoder took it.
+/// An output that is late comes out with a later call.
+pub(crate) fn encode(
+    e: &mut impl Engine,
+    frame: &[u8],
+    time: i64,
+    duration: i64,
+    out: &mut Vec<Output>,
+    wait: &mut impl FnMut(bool) -> bool,
+) -> Result<(), String> {
+    submit(e, frame, time, duration, out, wait)?;
     collect_ready(e, out).map(drop)
 }
 

@@ -172,7 +172,8 @@ fn flush_on(engine: &mut impl Engine, track: &mut Track, unchecked: &mut bool, w
 }
 
 /// Send one frame with the timestamp `pts` to `engine` and return the packets that came out. A
-/// frame the encoder did not take is not waited for.
+/// frame the encoder did not take is not waited for. A frame it took stays expected when
+/// collecting the outputs after it fails, so its output can come out with a later call.
 fn encode_on(
     engine: &mut impl Engine,
     track: &mut Track,
@@ -183,10 +184,11 @@ fn encode_on(
 ) -> Result<Vec<Packet>, Error> {
     let (time, duration) = track.send(pts);
     let mut outputs = Vec::new();
-    let sent = amf_ffi::encode(engine, frame, time, duration, &mut outputs, wait);
+    let sent = amf_ffi::submit(engine, frame, time, duration, &mut outputs, wait);
     if sent.is_err() {
         track.pending.pop_back();
     }
+    let sent = sent.and_then(|()| amf_ffi::collect_ready(engine, &mut outputs).map(drop));
     let packets = packets(track, unchecked, outputs)?;
     sent.map_err(Error::Failed)?;
     Ok(packets)
@@ -472,6 +474,49 @@ mod tests {
         failing.submits.push_back(Err("SubmitInput failed (AMF_FAIL)".into()));
         assert!(encode_on(&mut failing, &mut track, &mut false, &[], 2, &mut |_| true).is_err());
         assert!(track.pending.is_empty());
+    }
+
+    /// A scripted encoder whose first `fails` polls are errors.
+    struct PollFails {
+        script: Script,
+        fails: usize,
+    }
+
+    impl Engine for PollFails {
+        fn submit(&mut self, f: &[u8], t: i64, d: i64) -> Result<Submitted, String> {
+            self.script.submit(f, t, d)
+        }
+        fn poll(&mut self) -> Result<Polled, String> {
+            if self.fails > 0 {
+                self.fails -= 1;
+                return Err("QueryOutput failed (AMF_FAIL)".into());
+            }
+            self.script.poll()
+        }
+        fn drain(&mut self) -> Result<Submitted, String> {
+            self.script.drain()
+        }
+    }
+
+    #[test]
+    fn a_frame_the_encoder_took_keeps_its_timestamp_when_collecting_fails() {
+        let mut e = PollFails { script: Script::default(), fails: 1 };
+        let mut track = h264_track();
+        let r = encode_on(&mut e, &mut track, &mut false, &[], 0, &mut |_| true);
+        assert!(matches!(&r, Err(Error::Failed(why)) if why.contains("QueryOutput")), "{r:?}");
+        assert_eq!(track.pending.len(), 1, "the encoder took the frame, so its output is still expected");
+        // The frame's output comes out with the next call, with its own timestamp.
+        let time = e.script.taken[0];
+        e.script.polls.push_back(out(&KEY, time));
+        let late = encode_on(&mut e, &mut track, &mut false, &[], 1, &mut |_| true).unwrap();
+        assert_eq!(late.iter().map(|p| (p.pts, p.keyframe)).collect::<Vec<_>>(), [(0, true)]);
+        // A poll that fails while the input queue is full ends the call before the encoder took
+        // the frame, so the frame is not expected back.
+        let mut full = PollFails { script: Script::default(), fails: 1 };
+        full.script.submits.push_back(Ok(Submitted::Full));
+        let mut track = h264_track();
+        assert!(encode_on(&mut full, &mut track, &mut false, &[], 0, &mut |_| true).is_err());
+        assert!(full.script.taken.is_empty() && track.pending.is_empty());
     }
 
     #[test]
