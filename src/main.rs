@@ -1,12 +1,17 @@
 //! StudioCraft desktop app.
 //!
-//! Usage: `studiocraft [--config-dir <dir> | --no-prefs] [--control <port>]`,
+//! Usage: `studiocraft [--config-dir <dir> | --no-prefs] [--safe-mode] [--control <port>]`,
 //! `studiocraft --screenshot <file.png>`, `studiocraft --self-test <file.json>`,
 //! `studiocraft --version`, `studiocraft --help`.
 //!
 //! `--control <port>` starts a JSON-lines control server on `127.0.0.1:<port>`; every request
 //! carries the token in `STUDIOCRAFT_CONTROL_TOKEN` (64 hexadecimal characters). See
 //! `docs/control-protocol.md`.
+//!
+//! `--safe-mode` starts with no source running and the control server not started, until the
+//! user leaves Safe Mode in the window. A start after a session that ended without closing (its
+//! marker in the settings folder's `sessions` folder was left behind) asks whether to start in
+//! Safe Mode, and so does a start that cannot read that folder or write its own marker.
 //!
 //! `--screenshot` draws about 120 frames, saves the window's picture and exits; `--self-test`
 //! drives the window through a short script and writes what happened. Both open the window
@@ -24,18 +29,50 @@ use std::sync::{Arc, OnceLock};
 
 use craft_settings::Location;
 use studiocraft_render::device::{Notice, Preference};
+use studiocraft_studio::session_marker::{Previous, SessionMarker};
 use studiocraft_ui_egui::hardware;
 use studiocraft_ui_egui::store::Store;
-use studiocraft_ui_egui::{APP_NAME, BUNDLE_ID, StudioApp};
+use studiocraft_ui_egui::{APP_NAME, BUNDLE_ID, SafeStart, StudioApp};
 
 use crate::args::{Action, Args};
+
+/// End the session after the window and the studio have closed: remove its marker for a clean
+/// end, or with `keep_unclean` leave it in place, so that the next start still finds a session
+/// that did not close.
+fn end_session(marker: Option<SessionMarker>, keep_unclean: bool) {
+    match marker {
+        Some(m) if !keep_unclean => {
+            if let Err(e) = m.finish() {
+                log::warn!("the session marker could not be removed: {e}");
+            }
+        }
+        _ => {}
+    }
+}
 
 struct Shell {
     app: StudioApp,
     harness: Option<harness::Harness>,
     control: Option<control::Control>,
+    /// The `--control` port while Safe Mode keeps the control server from starting.
+    held_control: Option<u16>,
     /// The command line, to start the app again with after its graphics device was lost.
     relaunch_args: Vec<std::ffi::OsString>,
+}
+
+impl Shell {
+    /// Start the control server held back by Safe Mode once Safe Mode is off.
+    fn start_held_control(&mut self) {
+        if self.app.safe_mode() {
+            return;
+        }
+        if let Some(port) = self.held_control.take() {
+            match control::Control::start(port) {
+                Ok(c) => self.control = Some(c),
+                Err(e) => self.app.control_failed(e),
+            }
+        }
+    }
 }
 
 impl eframe::App for Shell {
@@ -49,6 +86,7 @@ impl eframe::App for Shell {
     }
 
     fn logic(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+        self.start_held_control();
         if let Some(c) = &mut self.control {
             c.serve(ctx, &mut self.app);
         }
@@ -65,7 +103,12 @@ impl eframe::App for Shell {
     fn on_exit(&mut self) {
         eframe::App::on_exit(&mut self.app);
         if self.app.relaunch_requested() {
-            match std::env::current_exe().and_then(|exe| std::process::Command::new(exe).args(&self.relaunch_args).spawn()) {
+            // The new copy starts in Safe Mode when this session is in it, and not when it was left.
+            let mut args: Vec<&std::ffi::OsStr> = self.relaunch_args.iter().map(|a| a.as_os_str()).filter(|a| *a != "--safe-mode").collect();
+            if self.app.safe_mode() {
+                args.push(std::ffi::OsStr::new("--safe-mode"));
+            }
+            match std::env::current_exe().and_then(|exe| std::process::Command::new(exe).args(args).spawn()) {
                 Ok(_) => log::warn!("the graphics device was lost; StudioCraft starts again"),
                 Err(e) => eprintln!("studiocraft: the graphics device was lost, and StudioCraft could not start again: {e}"),
             }
@@ -76,7 +119,7 @@ impl eframe::App for Shell {
 const HELP: &str = "StudioCraft: record and stream scenes.
 
 Usage:
-  studiocraft [--config-dir <dir> | --no-prefs] [--control <port>]
+  studiocraft [--config-dir <dir> | --no-prefs] [--safe-mode] [--control <port>]
   studiocraft --screenshot <file.png>
   studiocraft --self-test <file.json>
   studiocraft --version
@@ -84,6 +127,8 @@ Usage:
 Options:
   --config-dir <dir>      keep settings, scene collections and profiles in <dir>
   --no-prefs              keep everything in memory; nothing is read or written
+  --safe-mode             start with no source running and remote control off, until
+                          Leave Safe Mode is clicked in the window
   --control <port>        accept control requests on 127.0.0.1:<port>; requests carry the
                           token in STUDIOCRAFT_CONTROL_TOKEN (64 hexadecimal characters)
   --screenshot <file>     draw about 120 frames, save the window as a PNG and exit
@@ -103,11 +148,46 @@ fn run(args: Args, raw: Vec<std::ffi::OsString>) -> Result<(), String> {
     } else {
         Location::Auto
     };
-    let control = match args.control {
-        Some(port) => Some(control::Control::start(port)?),
-        None => None,
+    let (store, mut problems) = Store::open(location.clone());
+    // Settings kept in memory have no folder for a marker, and scripted runs keep their settings
+    // in memory.
+    let (marker, previous) = match store.dir() {
+        Some(dir) => {
+            let (m, previous, found) = SessionMarker::start(dir);
+            problems.extend(found);
+            (m, previous)
+        }
+        None => (None, Previous::Clean),
     };
-    let (store, problems) = Store::open(location.clone());
+    let start = if args.safe_mode {
+        SafeStart::Safe
+    } else if previous == Previous::Unclean {
+        SafeStart::Ask
+    } else {
+        SafeStart::Normal
+    };
+    // A session that stops before its window opens did not run: the marker it took over from a
+    // session that did not close stays for the start that follows.
+    let unclean = previous == Previous::Unclean;
+    // In Safe Mode the control server starts when Safe Mode is left; a missing or bad token is
+    // still reported now.
+    let (control, held_control) = match args.control {
+        Some(port) if start != SafeStart::Normal => {
+            if let Err(e) = control::token() {
+                end_session(marker, unclean);
+                return Err(e);
+            }
+            (None, Some(port))
+        }
+        Some(port) => match control::Control::start(port) {
+            Ok(c) => (Some(c), None),
+            Err(e) => {
+                end_session(marker, unclean);
+                return Err(e);
+            }
+        },
+        None => (None, None),
+    };
     let buttons = titlebar::decide(store.prefs().system_title_bar);
     let mut viewport = egui::ViewportBuilder::default()
         .with_title(APP_NAME)
@@ -147,7 +227,7 @@ fn run(args: Args, raw: Vec<std::ffi::OsString>) -> Result<(), String> {
         options,
         Box::new(move |cc| {
             studiocraft_ui_egui::theme::install(&cc.egui_ctx);
-            let mut app = StudioApp::boot(store, cc.wgpu_render_state.clone(), problems);
+            let mut app = StudioApp::boot_with(store, cc.wgpu_render_state.clone(), problems, start);
             // After boot, which sets the interface language from the saved settings.
             app.install_fonts(&cc.egui_ctx);
             app.set_update_checks(update_checks);
@@ -158,9 +238,12 @@ fn run(args: Args, raw: Vec<std::ffi::OsString>) -> Result<(), String> {
             let fell_back = (software_once && !picked.contains(&Notice::NoSoftwareAdapter)).then_some(Notice::SoftwareOnly);
             let notices = after_losses.iter().chain(&fell_back).chain(picked).map(hardware::notice_msg).collect();
             app.set_window_gpu(adapter, notices, may_relaunch);
-            Ok(Box::new(Shell { app, harness, control, relaunch_args: raw }))
+            Ok(Box::new(Shell { app, harness, control, held_control, relaunch_args: raw }))
         }),
     );
+    // The window and the studio have closed, outputs included. A window that could not open did
+    // not run a session.
+    end_session(marker, opened.is_err() && unclean);
     // A process has one window event loop, so another adapter is tried by starting again: a
     // choice other than Automatic becomes Automatic (with the losses forgotten, so it would not
     // stop every later start), Automatic is followed by one run in software, and that run is not

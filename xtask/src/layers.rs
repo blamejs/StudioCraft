@@ -27,9 +27,12 @@ pub const TABLE: &[(&str, Class)] = &[
     ("craft-gpu-interop", Class::Layer(0)),
     ("craft-app-audio", Class::Layer(0)),
     ("craft-speech", Class::Layer(0)),
+    ("craft-closed-captions", Class::Layer(0)),
+    ("craft-face-track", Class::Layer(0)),
     ("plugin", Class::Layer(1)),
     ("craft-rtmp", Class::Layer(1)),
     ("craft-transitions", Class::Layer(1)),
+    ("craft-avatar", Class::Layer(1)),
     ("engine", Class::Layer(2)),
     ("render", Class::Layer(2)),
     ("platform", Class::Layer(2)),
@@ -43,6 +46,7 @@ pub const TABLE: &[(&str, Class)] = &[
     // Apps and tooling.
     ("studiocraft", Class::Exempt),
     ("cli", Class::Exempt),
+    ("web", Class::Exempt),
     ("xtask", Class::Exempt),
 ];
 

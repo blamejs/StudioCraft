@@ -1,11 +1,12 @@
 //! Camera capture.
 
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use studiocraft_media::video::VideoFrame;
 use studiocraft_model::{ChoiceOption, Field, FieldKind, Settings, SettingsSchema};
 use studiocraft_platform::PlatformError;
-use studiocraft_platform::camera::{self, CameraCapture, CameraFormat, CameraInfo, best_match};
+use studiocraft_platform::camera::{self, CameraCapture, CameraFormat, CameraInfo, Watch, best_match};
 use studiocraft_plugin::{Pace, Plugin, PluginError, Source, SourceCaps, SourceInstance, SourceIo, VideoContent};
 
 /// How long a camera that failed waits before it is opened again.
@@ -28,9 +29,19 @@ trait Camera: Sized {
     fn grab(&mut self, frame: &mut VideoFrame) -> Result<(), PlatformError>;
     /// The format the camera is open in, when it differs from the one asked for.
     fn other_format(&self) -> Option<CameraFormat>;
+    /// What tells when a camera is plugged in or out, where the system reports it.
+    fn watch() -> Option<Arc<Watch>>;
+    /// The listed camera the capture chose, once it has.
+    fn camera(&self) -> Option<CameraInfo>;
 }
 
 impl Camera for CameraCapture {
+    fn watch() -> Option<Arc<Watch>> {
+        camera::watch()
+    }
+    fn camera(&self) -> Option<CameraInfo> {
+        CameraCapture::camera(self).cloned()
+    }
     fn open(device: &str, format: Option<CameraFormat>) -> Result<Self, PlatformError> {
         CameraCapture::open(device, format)
     }
@@ -46,7 +57,11 @@ impl Camera for CameraCapture {
 /// source opened the camera first, and both show it in that format. The source keeps working.
 const SHARED_FORMAT: &str = "the camera is already open in another format";
 
-/// A camera that is opened again while it fails.
+/// Why the source shows nothing while the system does not list its camera.
+const NOT_CONNECTED: &str = "the camera is not connected";
+
+/// A camera that is opened again while it fails. Where the system reports cameras plugged in or
+/// out, an unplugged camera is closed at once and opened when it is plugged in again.
 struct Instance<C: Camera> {
     device: String,
     format: Option<CameraFormat>,
@@ -56,13 +71,81 @@ struct Instance<C: Camera> {
     last_frame: Instant,
     /// Why the camera is closed, reported until it opens again.
     error: Option<PluginError>,
+    watch: Option<Arc<Watch>>,
+    /// The watch's generation `listed` was read at; `None` to read it again.
+    seen: Option<u64>,
+    /// Whether the watch lists the camera: the one the open capture chose, or while the camera is
+    /// closed or the capture has not chosen yet, one that matches the setting. `None` when the
+    /// watch does not know.
+    listed: Option<bool>,
+    /// Whether `listed` was read for the camera the open capture chose. Until the capture has
+    /// chosen, `listed` is read again at every frame where it then has.
+    by_choice: bool,
+    /// The watch's count of unplug notices just before the camera was last opened or tried at
+    /// once, so a notice that arrives while the camera opens counts after it.
+    unplugs: Option<u64>,
 }
 
 impl<C: Camera> Instance<C> {
     fn new(s: &Settings, now: Instant) -> Self {
-        let mut i = Instance { device: String::new(), format: None, cap: None, retry_at: now, last_frame: now, error: None };
+        let mut i = Instance {
+            device: String::new(),
+            format: None,
+            cap: None,
+            retry_at: now,
+            last_frame: now,
+            error: None,
+            watch: C::watch(),
+            seen: None,
+            listed: None,
+            by_choice: false,
+            unplugs: None,
+        };
         i.set(s, now);
         i
+    }
+
+    /// Read again whether the watch lists the camera, when the cameras changed since the last
+    /// read or `seen` was cleared, and when an open capture has chosen its camera since the last
+    /// read. Otherwise only an atomic is read. Gives whether a closed source just found a camera
+    /// that matches its setting listed. An open capture's camera that is unplugged counts as not
+    /// listed even when another camera matches the setting.
+    fn look(&mut self) -> bool {
+        let Some(watch) = &self.watch else { return false };
+        let generation = watch.generation();
+        let chosen = match &self.cap {
+            Some(cap) if self.seen != Some(generation) || !self.by_choice => C::camera(cap),
+            _ => None,
+        };
+        if self.seen == Some(generation) && (self.by_choice || chosen.is_none()) {
+            return false;
+        }
+        self.seen = Some(generation);
+        self.by_choice = chosen.is_some();
+        let before = self.listed;
+        self.listed = watch.cameras().map(|list| match chosen {
+            Some(chosen) => list.contains(&chosen),
+            None => best_match(&list, &CameraInfo::parse_key(&self.device)).is_some(),
+        });
+        // A list that was not known in between does not hide that the camera came back.
+        self.cap.is_none() && before != Some(true) && self.listed == Some(true)
+    }
+
+    /// The camera opened; the next frame reads the watch again.
+    fn opened(&mut self, c: C) {
+        self.cap = Some(c);
+        self.error = None;
+        self.seen = None;
+    }
+
+    /// Whether a camera may have been unplugged since the camera was last opened or tried at
+    /// once. A camera unplugged and plugged in again before the system lists the cameras leaves
+    /// the list as it was, so a closed camera is then tried at once, one time for each such
+    /// notice.
+    fn unplugged_since(&mut self) -> bool {
+        let Some(now) = self.watch.as_ref().map(|w| w.unplugs()) else { return false };
+        let before = self.unplugs.replace(now);
+        before.is_some_and(|before| before != now)
     }
 
     /// Take the settings and open the camera they name.
@@ -71,11 +154,17 @@ impl<C: Camera> Instance<C> {
         self.format = format_of(s);
         self.retry_at = now + REOPEN;
         self.last_frame = now;
+        self.seen = None;
+        self.listed = None;
+        self.unplugs = self.watch.as_ref().map(|w| w.unplugs());
+        self.look();
+        if self.listed == Some(false) {
+            self.cap = None;
+            self.error = Some(PluginError::Unavailable(NOT_CONNECTED.into()));
+            return;
+        }
         match C::open(&self.device, self.format) {
-            Ok(c) => {
-                self.cap = Some(c);
-                self.error = None;
-            }
+            Ok(c) => self.opened(c),
             Err(e) => {
                 self.cap = None;
                 self.error = Some(PluginError::Unavailable(e.to_string()));
@@ -85,6 +174,8 @@ impl<C: Camera> Instance<C> {
 
     fn lost(&mut self, io: &SourceIo, now: Instant, e: PluginError) -> Result<(), PluginError> {
         self.cap = None;
+        // Closed, the source looks for any camera that matches the setting.
+        self.seen = None;
         self.retry_at = now + REOPEN;
         self.error = Some(e.clone());
         // The last picture of a camera that went away is not kept on screen.
@@ -93,16 +184,33 @@ impl<C: Camera> Instance<C> {
     }
 
     fn produce_at(&mut self, io: &SourceIo, now: Instant) -> Result<(), PluginError> {
+        if self.look() {
+            // Plugged in again: open it now rather than at the next try.
+            self.retry_at = now;
+        }
+        if self.listed == Some(false) {
+            // Unplugged: closed at once, and not tried again until the system lists it. A closed
+            // camera's picture was cleared when it closed.
+            if self.cap.is_some() {
+                return self.lost(io, now, PluginError::Unavailable(NOT_CONNECTED.into()));
+            }
+            if !matches!(&self.error, Some(PluginError::Unavailable(why)) if why == NOT_CONNECTED) {
+                self.error = Some(PluginError::Unavailable(NOT_CONNECTED.into()));
+            }
+            return Err(self.error.clone().unwrap_or_else(|| PluginError::Unavailable(NOT_CONNECTED.into())));
+        }
         if self.cap.is_none() {
+            if self.unplugged_since() {
+                self.retry_at = now;
+            }
             if now < self.retry_at {
                 return Err(self.error.clone().unwrap_or_else(|| PluginError::Unavailable("waiting to open the camera again".into())));
             }
             self.retry_at = now + REOPEN;
             match C::open(&self.device, self.format) {
                 Ok(c) => {
-                    self.cap = Some(c);
+                    self.opened(c);
                     self.last_frame = now;
-                    self.error = None;
                 }
                 Err(e) => return self.lost(io, now, PluginError::Unavailable(e.to_string())),
             }
@@ -180,14 +288,32 @@ impl Plugin for CameraSource {
     }
     /// The formats listed are those of the camera `settings` choose.
     fn schema_for(&self, settings: &Settings) -> SettingsSchema {
-        let list = camera::cameras();
+        let list = watched_cameras(camera::watch().as_deref(), camera::cameras);
         let want = CameraInfo::parse_key(settings.str("device").unwrap_or_default());
         let formats = best_match(&list, &want).and_then(|i| list.get(i)).map(camera::formats).unwrap_or_default();
         schema(&list, &formats)
     }
     /// Changes when a camera is plugged in or out. Listing the cameras does not open them.
     fn lists_stamp(&self) -> Option<u64> {
-        Some(stamp(&camera::cameras()))
+        Some(watched_stamp(camera::watch().as_deref(), camera::cameras))
+    }
+}
+
+/// [`stamp`] of the cameras `watch` lists, or of the ones `list` gives where the watch does not
+/// know them. A known list is read without asking the system.
+fn watched_stamp(watch: Option<&Watch>, list: impl FnOnce() -> Vec<CameraInfo>) -> u64 {
+    match watch.and_then(Watch::cameras) {
+        Some(watched) => stamp(&watched),
+        None => stamp(&list()),
+    }
+}
+
+/// The cameras `watch` lists, or the ones `list` gives where the watch does not know them: the
+/// list [`watched_stamp`] stamps, so the Properties window shows the list its stamp is for.
+fn watched_cameras(watch: Option<&Watch>, list: impl FnOnce() -> Vec<CameraInfo>) -> Vec<CameraInfo> {
+    match watch.and_then(Watch::cameras) {
+        Some(watched) => watched.as_ref().clone(),
+        None => list(),
     }
 }
 
@@ -213,10 +339,11 @@ impl Source for CameraSource {
 #[cfg(test)]
 mod tests {
     use std::cell::RefCell;
+    use std::sync::{Mutex, mpsc};
 
     use studiocraft_media::clock::MasterClock;
     use studiocraft_media::video::PixelFormat;
-    use studiocraft_platform::camera::CameraPixel;
+    use studiocraft_platform::camera::{CameraBackend, CameraEvents, CameraPixel, CameraStream};
 
     use super::*;
 
@@ -227,6 +354,12 @@ mod tests {
         static OPEN_FAILS: RefCell<bool> = const { RefCell::new(false) };
         /// The format another source opened the camera in.
         static OTHER: RefCell<Option<CameraFormat>> = const { RefCell::new(None) };
+        /// What tells the sources of this test when a camera is plugged in or out.
+        static WATCH: RefCell<Option<Arc<Watch>>> = const { RefCell::new(None) };
+        /// What happens while the next camera opens.
+        static WHILE_OPENING: RefCell<Option<Box<dyn FnOnce()>>> = const { RefCell::new(None) };
+        /// Set while the open cameras' capture threads have not said which camera they chose.
+        static UNCHOSEN: RefCell<bool> = const { RefCell::new(false) };
     }
 
     fn script(steps: Vec<Result<(), PlatformError>>) {
@@ -238,12 +371,29 @@ mod tests {
     }
 
     /// A camera that plays the script; an empty script gives unchanged pictures.
-    struct Scripted;
+    struct Scripted {
+        /// The camera of the test's watch it chose, as a capture's thread chooses one.
+        chosen: Option<CameraInfo>,
+    }
 
     impl Camera for Scripted {
         fn open(device: &str, format: Option<CameraFormat>) -> Result<Self, PlatformError> {
             OPENED.with(|o| o.borrow_mut().push((device.to_string(), format)));
-            if OPEN_FAILS.with(|f| *f.borrow()) { Err(PlatformError::Failed("the camera could not be opened (in use)".into())) } else { Ok(Scripted) }
+            if OPEN_FAILS.with(|f| *f.borrow()) {
+                return Err(PlatformError::Failed("the camera could not be opened (in use)".into()));
+            }
+            if let Some(meanwhile) = WHILE_OPENING.with(|w| w.borrow_mut().take()) {
+                meanwhile();
+            }
+            let list = Self::watch().and_then(|w| w.cameras());
+            let chosen = list.and_then(|list| best_match(&list, &CameraInfo::parse_key(device)).and_then(|i| list.get(i)).cloned());
+            Ok(Scripted { chosen })
+        }
+        fn camera(&self) -> Option<CameraInfo> {
+            if UNCHOSEN.with(|u| *u.borrow()) {
+                return None;
+            }
+            self.chosen.clone()
         }
         fn grab(&mut self, frame: &mut VideoFrame) -> Result<(), PlatformError> {
             let step = SCRIPT.with(|s| s.borrow_mut().pop()).unwrap_or(Err(PlatformError::Unchanged));
@@ -255,6 +405,116 @@ mod tests {
         fn other_format(&self) -> Option<CameraFormat> {
             OTHER.with(|o| *o.borrow())
         }
+        fn watch() -> Option<Arc<Watch>> {
+            WATCH.with(|w| w.borrow().clone())
+        }
+    }
+
+    /// The cameras a test plugs in and out, as the system lists them; `None` when they cannot be
+    /// listed.
+    struct Plugs(Mutex<Option<Vec<CameraInfo>>>);
+
+    impl CameraBackend for Plugs {
+        fn cameras(&self) -> Result<Vec<CameraInfo>, PlatformError> {
+            self.0.lock().unwrap().clone().ok_or(PlatformError::Failed("the cameras could not be listed".into()))
+        }
+        fn formats(&self, _camera: &CameraInfo) -> Result<Vec<CameraFormat>, PlatformError> {
+            Err(PlatformError::Unsupported)
+        }
+        fn open(&self, _camera: &CameraInfo, _format: CameraFormat) -> Result<Box<dyn CameraStream>, PlatformError> {
+            Err(PlatformError::Unsupported)
+        }
+    }
+
+    /// The system's notices of cameras plugged in or out, each saying whether it can include a
+    /// camera unplugged; dropping the sender ends them.
+    struct Told(mpsc::Receiver<bool>, bool);
+
+    impl CameraEvents for Told {
+        fn wait(&mut self) -> Result<(), PlatformError> {
+            self.1 = self.0.recv().map_err(|_| PlatformError::Failed("stopped".into()))?;
+            Ok(())
+        }
+        fn unplugged(&mut self) -> bool {
+            self.1
+        }
+    }
+
+    /// A system that reports cameras plugged in or out, with `list` plugged in. The sources this
+    /// test makes use it.
+    struct System {
+        plugs: Arc<Plugs>,
+        watch: Arc<Watch>,
+        tell: mpsc::Sender<bool>,
+    }
+
+    impl System {
+        fn new(list: Vec<CameraInfo>) -> System {
+            let plugs = Arc::new(Plugs(Mutex::new(Some(list))));
+            let (tell, told) = mpsc::channel();
+            let backend: Arc<dyn CameraBackend> = plugs.clone();
+            let watch = camera::watch_with(backend, move || Ok(Box::new(Told(told, false)) as Box<dyn CameraEvents>));
+            while watch.generation() == 0 {
+                std::thread::yield_now();
+            }
+            WATCH.with(|w| *w.borrow_mut() = Some(Arc::clone(&watch)));
+            System { plugs, watch, tell }
+        }
+
+        /// Plug in `list` and wait until the watch has handled the notice.
+        fn plug(&self, list: Vec<CameraInfo>) {
+            self.list(Some(list));
+        }
+
+        /// Make the next listing give `list`, or fail for `None`, and wait until the watch has
+        /// handled the notice.
+        fn list(&self, list: Option<Vec<CameraInfo>>) {
+            *self.plugs.0.lock().unwrap() = list;
+            self.notice(false);
+        }
+
+        /// Report a camera unplugged and plugged in again before the cameras are listed, which
+        /// leaves the list as it was, and wait until the watch has handled the notice.
+        fn replug(&self) {
+            self.notice(true);
+        }
+
+        /// What [`System::replug`] does, for a test to run while a camera opens.
+        fn replugger(&self) -> impl FnOnce() + 'static {
+            let (watch, tell) = (Arc::clone(&self.watch), self.tell.clone());
+            move || notify(&watch, &tell, true)
+        }
+
+        fn notice(&self, unplugged: bool) {
+            notify(&self.watch, &self.tell, unplugged);
+        }
+
+        /// End the notices and wait until the watch has stopped.
+        fn stop(&mut self) {
+            self.tell = mpsc::channel().0;
+            while self.watch.live() {
+                std::thread::yield_now();
+            }
+        }
+    }
+
+    impl Drop for System {
+        fn drop(&mut self) {
+            WATCH.with(|w| *w.borrow_mut() = None);
+        }
+    }
+
+    /// Send `watch` a notice and wait until it has handled it.
+    fn notify(watch: &Watch, tell: &mpsc::Sender<bool>, unplugged: bool) {
+        let before = watch.handled();
+        tell.send(unplugged).unwrap();
+        while watch.handled() == before {
+            std::thread::yield_now();
+        }
+    }
+
+    fn desk() -> CameraInfo {
+        CameraInfo { name: "Desk".into(), id: "1".into() }
     }
 
     const HD: CameraFormat = CameraFormat { width: 1280, height: 720, fps: 30, pixel: CameraPixel::Mjpeg };
@@ -398,6 +658,226 @@ mod tests {
         assert_ne!(both, stamp(std::slice::from_ref(&desk)), "one unplugged");
         assert_ne!(stamp(&[]), stamp(std::slice::from_ref(&desk)), "the first plugged in");
         assert_ne!(both, stamp(&[desk, CameraInfo { name: "Room".into(), id: "3".into() }]), "another camera of the same name");
+    }
+
+    #[test]
+    fn an_unplugged_camera_closes_at_once_and_opens_as_soon_as_it_is_plugged_in() {
+        let system = System::new(vec![desk()]);
+        let io = SourceIo::new(MasterClock::new());
+        let t = Instant::now();
+        script(vec![Ok(())]);
+        let mut c = Instance::<Scripted>::new(&settings(), t);
+        c.produce_at(&io, t).unwrap();
+        assert!(matches!(io.video.take(), Some(VideoContent::Frame(_))));
+        system.plug(Vec::new());
+        let gone = t + Duration::from_millis(10);
+        let not_connected = Err(PluginError::Unavailable("the camera is not connected".into()));
+        assert_eq!(c.produce_at(&io, gone), not_connected, "closed at the next frame, well before the 5 s with no picture");
+        assert!(c.cap.is_none());
+        assert!(matches!(io.video.take(), Some(VideoContent::Empty)), "the last picture is cleared");
+        let before = opened().len();
+        assert_eq!(c.produce_at(&io, gone + REOPEN + REOPEN), not_connected, "the reason stays shown");
+        assert_eq!(opened().len(), before, "a camera the system does not list is not tried every 2 s");
+        system.plug(vec![desk()]);
+        script(vec![Ok(())]);
+        let back = gone + REOPEN + REOPEN + Duration::from_millis(10);
+        c.produce_at(&io, back).unwrap();
+        assert_eq!(opened().len(), before + 1, "opened at the next frame, without waiting for the next try");
+        assert!(matches!(io.video.take(), Some(VideoContent::Frame(_))));
+    }
+
+    #[test]
+    fn a_camera_unplugged_and_plugged_in_again_before_it_is_listed_opens_at_once() {
+        let system = System::new(vec![desk()]);
+        let io = SourceIo::new(MasterClock::new());
+        let t = Instant::now();
+        script(vec![Ok(()), Err(PlatformError::Failed("the camera stopped (unplugged)".into()))]);
+        let mut c = Instance::<Scripted>::new(&settings(), t);
+        c.produce_at(&io, t).unwrap();
+        system.replug();
+        let gone = t + Duration::from_millis(10);
+        assert_eq!(c.produce_at(&io, gone), Err(PluginError::Failed("the camera stopped (unplugged)".into())));
+        let before = opened().len();
+        script(vec![Ok(())]);
+        c.produce_at(&io, gone + Duration::from_millis(10)).unwrap();
+        assert_eq!(opened().len(), before + 1, "opened at the next frame, without waiting for the next try");
+        assert!(matches!(io.video.take(), Some(VideoContent::Frame(_))));
+        // One notice gives one try at once; a camera that keeps failing waits for the next try.
+        script(vec![Err(PlatformError::Failed("the camera stopped".into()))]);
+        let failed = gone + Duration::from_millis(20);
+        assert!(c.produce_at(&io, failed).is_err());
+        let after = opened().len();
+        assert!(c.produce_at(&io, failed + Duration::from_millis(10)).is_err());
+        assert_eq!(opened().len(), after, "not tried again before the next try");
+    }
+
+    #[test]
+    fn a_camera_unplugged_and_plugged_in_again_while_it_opens_opens_again_at_once() {
+        let system = System::new(vec![desk()]);
+        let io = SourceIo::new(MasterClock::new());
+        let t = Instant::now();
+        WHILE_OPENING.with(|w| *w.borrow_mut() = Some(Box::new(system.replugger())));
+        script(vec![Err(PlatformError::Failed("the camera stopped (unplugged)".into()))]);
+        let mut c = Instance::<Scripted>::new(&settings(), t);
+        assert_eq!(c.produce_at(&io, t), Err(PluginError::Failed("the camera stopped (unplugged)".into())));
+        let before = opened().len();
+        script(vec![Ok(())]);
+        c.produce_at(&io, t + Duration::from_millis(10)).unwrap();
+        assert_eq!(opened().len(), before + 1, "opened at the next frame, without waiting for the next try");
+    }
+
+    #[test]
+    fn a_new_device_opens_when_the_old_camera_was_unplugged_before_the_next_frame() {
+        let room = CameraInfo { name: "Room".into(), id: "2".into() };
+        let system = System::new(vec![desk(), room.clone()]);
+        let io = SourceIo::new(MasterClock::new());
+        let t = Instant::now();
+        script(vec![Ok(())]);
+        let mut c = Instance::<Scripted>::new(&settings(), t);
+        c.produce_at(&io, t).unwrap();
+        let _ = io.video.take();
+        system.plug(vec![room]);
+        c.update(&settings().with("device", "Room\u{1f}2"), &io).unwrap();
+        assert_eq!(opened().last(), Some(&("Room\u{1f}2".to_string(), Some(HD))), "the listed camera the setting names opens");
+        script(vec![Ok(())]);
+        c.produce_at(&io, t + Duration::from_millis(1)).unwrap();
+        assert!(matches!(io.video.take(), Some(VideoContent::Frame(_))));
+    }
+
+    #[test]
+    fn a_camera_plugged_in_after_a_failed_listing_opens_at_once() {
+        let system = System::new(vec![desk()]);
+        let io = SourceIo::new(MasterClock::new());
+        let t = Instant::now();
+        script(vec![Ok(())]);
+        let mut c = Instance::<Scripted>::new(&settings(), t);
+        c.produce_at(&io, t).unwrap();
+        system.plug(Vec::new());
+        assert!(c.produce_at(&io, t).is_err());
+        system.list(None);
+        let before = opened().len();
+        assert!(c.produce_at(&io, t + Duration::from_millis(1)).is_err(), "waits for the next try while the list is not known");
+        assert_eq!(opened().len(), before);
+        system.plug(vec![desk()]);
+        script(vec![Ok(())]);
+        c.produce_at(&io, t + Duration::from_millis(2)).unwrap();
+        assert_eq!(opened().len(), before + 1, "opened at the next frame once the list holds it again");
+    }
+
+    #[test]
+    fn an_unplugged_camera_is_closed_while_another_camera_of_its_name_stays() {
+        let spare = CameraInfo { name: "Desk".into(), id: "7".into() };
+        let system = System::new(vec![desk(), spare.clone()]);
+        let io = SourceIo::new(MasterClock::new());
+        let t = Instant::now();
+        script(vec![Ok(())]);
+        let mut c = Instance::<Scripted>::new(&settings(), t);
+        c.produce_at(&io, t).unwrap();
+        let _ = io.video.take();
+        system.plug(vec![spare]);
+        let not_connected = Err(PluginError::Unavailable("the camera is not connected".into()));
+        assert_eq!(c.produce_at(&io, t), not_connected, "the camera the source showed is gone");
+        assert!(matches!(io.video.take(), Some(VideoContent::Empty)));
+        let before = opened().len();
+        script(vec![Ok(())]);
+        c.produce_at(&io, t + Duration::from_millis(1)).unwrap();
+        assert_eq!(opened().len(), before + 1, "the other camera of that name opens at the next frame");
+        assert!(matches!(io.video.take(), Some(VideoContent::Frame(_))));
+        // A camera plugged in that the setting would also match leaves the open camera alone.
+        system.plug(vec![CameraInfo { name: "Desk".into(), id: "7".into() }, desk()]);
+        assert_eq!(c.produce_at(&io, t + Duration::from_millis(2)), Ok(()));
+        assert_eq!(opened().len(), before + 1);
+    }
+
+    #[test]
+    fn a_camera_unplugged_before_its_capture_says_it_chose_it_closes_once_it_does() {
+        let spare = CameraInfo { name: "Desk".into(), id: "7".into() };
+        let system = System::new(vec![desk(), spare.clone()]);
+        let io = SourceIo::new(MasterClock::new());
+        let t = Instant::now();
+        UNCHOSEN.with(|u| *u.borrow_mut() = true);
+        script(vec![Ok(()), Ok(())]);
+        let mut c = Instance::<Scripted>::new(&settings(), t);
+        c.produce_at(&io, t).unwrap();
+        system.plug(vec![spare]);
+        assert_eq!(c.produce_at(&io, t), Ok(()), "the setting still matches the other camera of that name");
+        UNCHOSEN.with(|u| *u.borrow_mut() = false);
+        let not_connected = Err(PluginError::Unavailable("the camera is not connected".into()));
+        assert_eq!(c.produce_at(&io, t + Duration::from_millis(1)), not_connected, "the camera the capture chose is gone");
+    }
+
+    #[test]
+    fn a_failed_listing_does_not_change_which_camera_an_open_source_shows() {
+        let room = CameraInfo { name: "Room".into(), id: "2".into() };
+        let system = System::new(vec![desk(), room.clone()]);
+        let io = SourceIo::new(MasterClock::new());
+        let t = Instant::now();
+        script(vec![Ok(())]);
+        let mut c = Instance::<Scripted>::new(&Settings::new(), t);
+        c.produce_at(&io, t).unwrap();
+        let _ = io.video.take();
+        system.list(None);
+        assert_eq!(c.produce_at(&io, t), Ok(()), "a list that is not known closes nothing");
+        // Listed again with another camera first, which Default would choose now.
+        system.plug(vec![room.clone(), desk()]);
+        assert_eq!(c.produce_at(&io, t), Ok(()));
+        system.plug(vec![room]);
+        assert_eq!(c.produce_at(&io, t), Err(PluginError::Unavailable("the camera is not connected".into())), "the camera it showed is gone");
+    }
+
+    #[test]
+    fn a_camera_plugged_in_while_its_source_waits_to_try_again_opens_at_once() {
+        let system = System::new(Vec::new());
+        let io = SourceIo::new(MasterClock::new());
+        let t = Instant::now();
+        let before = opened().len();
+        let mut c = Instance::<Scripted>::new(&settings(), t);
+        assert_eq!(opened().len(), before, "a saved camera that is not plugged in is not opened");
+        assert_eq!(c.produce_at(&io, t), Err(PluginError::Unavailable("the camera is not connected".into())));
+        // Another camera changes nothing for this source.
+        system.plug(vec![CameraInfo { name: "Room".into(), id: "2".into() }]);
+        assert_eq!(c.produce_at(&io, t), Err(PluginError::Unavailable("the camera is not connected".into())));
+        assert_eq!(opened().len(), before);
+        system.plug(vec![desk()]);
+        script(vec![Ok(())]);
+        c.produce_at(&io, t + Duration::from_millis(1)).unwrap();
+        assert_eq!(opened().len(), before + 1);
+        assert!(matches!(io.video.take(), Some(VideoContent::Frame(_))));
+    }
+
+    #[test]
+    fn a_source_whose_camera_notices_stop_opens_the_camera_every_2_seconds() {
+        let mut system = System::new(Vec::new());
+        let io = SourceIo::new(MasterClock::new());
+        let t = Instant::now();
+        let mut c = Instance::<Scripted>::new(&settings(), t);
+        let before = opened().len();
+        system.stop();
+        assert!(c.produce_at(&io, t).is_err());
+        assert_eq!(opened().len(), before, "not before the next try");
+        script(vec![Ok(())]);
+        c.produce_at(&io, t + REOPEN).unwrap();
+        assert_eq!(opened().len(), before + 1, "tried again on the timer, as where the system sends no notices");
+    }
+
+    #[test]
+    fn the_lists_stamp_reads_a_known_list_without_asking_the_system() {
+        let system = System::new(vec![desk()]);
+        let asked = || -> Vec<CameraInfo> { panic!("the system was asked") };
+        assert_eq!(watched_stamp(Some(&system.watch), asked), stamp(&[desk()]));
+        system.plug(Vec::new());
+        assert_eq!(watched_stamp(Some(&system.watch), asked), stamp(&[]), "unplugged");
+        assert_eq!(watched_stamp(None, || vec![desk()]), stamp(&[desk()]), "without a watch the system is asked");
+    }
+
+    #[test]
+    fn the_properties_list_is_the_list_its_stamp_is_for() {
+        let system = System::new(vec![desk()]);
+        let failed = || -> Vec<CameraInfo> { Vec::new() };
+        let shown = watched_cameras(Some(&system.watch), failed);
+        assert_eq!(shown, vec![desk()], "a failed listing does not empty a list the watch knows");
+        assert_eq!(stamp(&shown), watched_stamp(Some(&system.watch), failed));
+        assert_eq!(watched_cameras(None, || vec![desk()]), vec![desk()], "without a watch the system is asked");
     }
 
     #[test]

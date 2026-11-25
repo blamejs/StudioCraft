@@ -1464,6 +1464,17 @@ version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=1c137fea600666d77eceabbfa3bdd0aef67d5fbd#1c137fea600666d77eceabbfa3bdd0aef67d5fbd"
 
 [[package]]
+name = "craft-avatar"
+version = "0.1.0-alpha.2"
+dependencies = [
+ "craft-ease",
+ "serde",
+ "serde_json",
+ "stats_alloc",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "craft-captions"
 version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=1c137fea600666d77eceabbfa3bdd0aef67d5fbd#1c137fea600666d77eceabbfa3bdd0aef67d5fbd"
@@ -1471,6 +1482,13 @@ dependencies = [
  "craft-timeline",
  "craft-xml",
  "thiserror 2.0.21",
+]
+
+[[package]]
+name = "craft-closed-captions"
+version = "0.1.0-alpha.2"
+dependencies = [
+ "craft-captions",
 ]
 
 [[package]]
@@ -1536,6 +1554,16 @@ version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "craft-face-track"
+version = "0.1.0-alpha.2"
+dependencies = [
+ "criterion",
+ "rayon",
+ "stats_alloc",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -1621,6 +1649,7 @@ dependencies = [
  "objc2-core-video",
  "objc2-video-toolbox",
  "windows 0.62.2",
+ "windows-core 0.62.2",
 ]
 
 [[package]]
@@ -6553,6 +6582,8 @@ name = "studiocraft-outputs"
 version = "0.1.0-alpha.2"
 dependencies = [
  "craft-audio",
+ "craft-captions",
+ "craft-closed-captions",
  "craft-flv",
  "craft-hwenc",
  "craft-media",
@@ -6575,6 +6606,7 @@ dependencies = [
 name = "studiocraft-platform"
 version = "0.1.0-alpha.2"
 dependencies = [
+ "arc-swap",
  "ashpd",
  "comedy",
  "cpal",
@@ -6587,11 +6619,13 @@ dependencies = [
  "nokhwa-bindings-macos",
  "pipewire",
  "pollster 0.4.0",
+ "rustix 1.1.6",
  "serde_json",
  "studiocraft-media",
  "thiserror 2.0.21",
  "v4l",
  "wayland-client",
+ "windows 0.62.2",
  "x11rb",
  "xcap",
  "zune-jpeg",
@@ -6718,6 +6752,22 @@ dependencies = [
  "studiocraft-render",
  "studiocraft-studio",
  "wgpu",
+]
+
+[[package]]
+name = "studiocraft-web"
+version = "0.1.0-alpha.2"
+dependencies = [
+ "craft-i18n",
+ "js-sys",
+ "serde_json",
+ "studiocraft-engine",
+ "studiocraft-model",
+ "studiocraft-plugin",
+ "thiserror 2.0.21",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
 ]
 
 [[package]]

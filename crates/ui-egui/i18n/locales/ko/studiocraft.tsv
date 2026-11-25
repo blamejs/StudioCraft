@@ -107,6 +107,8 @@
 	Filters…	필터…
 	Finishing Recording…	녹화 마무리 중…
 	Fit to Screen	화면에 맞추기
+	Flip Horizontal	좌우 반전
+	Flip Vertical	상하 반전
 	Font	글꼴
 	Font family	글꼴 계열
 	Format	형식
@@ -139,6 +141,7 @@
 	Apple VideoToolbox HEVC (built in)	Apple VideoToolbox HEVC (내장)
 	VA-API H.264 (built in)	VA-API H.264 (내장)
 	VA-API HEVC (built in)	VA-API HEVC (내장)
+	VA-API AV1 (built in)	VA-API AV1 (내장)
 	Height	높이
 	Help	도움말
 	Hide	숨기기
@@ -330,6 +333,7 @@
 	the audio stream failed	오디오 스트림에 오류가 발생했습니다
 	the camera capture could not start	카메라 캡처를 시작할 수 없습니다
 	the camera is already open in another format	카메라가 이미 다른 형식으로 열려 있습니다
+	the camera is not connected	카메라가 연결되어 있지 않습니다
 	the camera is still closing	카메라를 아직 닫는 중입니다
 	the camera offers no format StudioCraft reads	이 카메라에는 StudioCraft가 지원하는 영상 형식이 없습니다
 	the camera sends frames that cannot be read	카메라가 보내는 프레임을 읽을 수 없습니다
@@ -563,3 +567,5 @@ menu	Transform	변형
 	Custom	사용자 지정
 	Fill Screen	화면 채우기
 @msg	The scenes could not be laid out for the new canvas: {error}	새 캔버스에 맞게 장면을 배치할 수 없습니다: {error}
+	Filter delay	필터 지연
+	The audio filters on this source delay its sound by {frames} samples at 48 kHz	이 소스의 오디오 필터가 소리를 48kHz에서 {frames}샘플만큼 지연시킵니다

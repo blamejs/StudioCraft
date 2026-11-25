@@ -232,6 +232,11 @@ fn source_add_with_an_unknown_kind_is_a_tool_error() {
     let doc = ok_json(&call(&mut s, "doc_inspect", json!({})));
     let items = doc["collection"]["scenes"][0]["items"].as_array().unwrap();
     assert!(items.iter().any(|i| i["transform"]["rotation"] == json!(15.0)), "{doc}");
+    ok_json(&call(&mut s, "item_transform", json!({"item": "Backdrop", "transform": {"flip_horizontal": true}})));
+    let doc = ok_json(&call(&mut s, "doc_inspect", json!({})));
+    let items = doc["collection"]["scenes"][0]["items"].as_array().unwrap();
+    assert!(items.iter().any(|i| i["transform"]["flip_horizontal"] == json!(true) && i["transform"]["flip_vertical"] == json!(false)), "{doc}");
+    error_text(&call(&mut s, "item_transform", json!({"item": "Backdrop", "transform": {"flip_vertical": 1}})));
     ok_json(&call(&mut s, "item_transform", json!({"item": "Backdrop", "transform": {}, "fit": "fill"})));
     let doc = ok_json(&call(&mut s, "doc_inspect", json!({})));
     assert!(doc["collection"]["scenes"][0]["items"].as_array().unwrap().iter().any(|i| i["fit"] == json!("fill")), "{doc}");
@@ -306,6 +311,31 @@ fn source_audio_sets_the_sync_offset() {
     error_text(&call(&mut s, "source_audio", json!({"source": "ghost", "sync_offset_ms": 10})));
     error_text(&call(&mut s, "source_audio", json!({"source": "ghost"})));
     error_text(&call(&mut s, "source_audio", json!({"source": true})));
+}
+
+#[test]
+fn source_audio_reports_how_long_the_source_s_filters_delay_it() {
+    let mut s = server();
+    let latency = |s: &mut Server| {
+        let read = ok_json(&call(s, "source_audio", json!({"source": "Microphone"})));
+        (read["filter_latency_frames"].clone(), read["filter_latency_ms"].clone())
+    };
+    assert_eq!(latency(&mut s), (json!(0), json!(0)), "no filters");
+    let add = |s: &mut Server, kind: &str| {
+        let out = ok_json(&call(s, "command_run", json!({"id": "filter.add", "params": {"source": "Microphone", "kind": kind}})));
+        out["filter"].as_u64().unwrap_or_else(|| panic!("{out}"))
+    };
+    add(&mut s, "compressor");
+    assert_eq!(latency(&mut s), (json!(0), json!(0)), "a compressor does not delay the audio");
+    let limiter = add(&mut s, "limiter");
+    assert_eq!(latency(&mut s), (json!(248), json!(5.2)));
+    add(&mut s, "limiter");
+    assert_eq!(latency(&mut s), (json!(496), json!(10.3)), "two limiters");
+    ok_json(&call(&mut s, "command_run", json!({"id": "filter.remove", "params": {"source": "Microphone", "filter": limiter}})));
+    assert_eq!(latency(&mut s), (json!(248), json!(5.2)));
+    // Another audio source is not delayed by the microphone's filters.
+    let other = ok_json(&call(&mut s, "source_audio", json!({"source": "Desktop audio"})));
+    assert_eq!(other["filter_latency_frames"], json!(0), "{other}");
 }
 
 /// A sink with no devices, so the tests play nothing.
@@ -476,6 +506,24 @@ fn the_pause_tools_pause_and_resume_the_program() {
     assert!(error_text(&call(&mut s, "pause_start", json!({"countdown_s": 43_201}))).contains("43200"));
     assert!(error_text(&call(&mut s, "pause_start", json!({"at_zero": "later"}))).contains("at_zero"));
     assert!(error_text(&call(&mut s, "pause_start", json!({"media": "song.mp3"}))).contains("picture or video"));
+    // The look of the pause screen and the scene's audio can be given too, and each is checked.
+    for (key, bad, word) in [
+        ("text", json!("Back soon"), "{time}"),
+        ("zero_text", json!("x".repeat(201)), "text at zero"),
+        ("anchor", json!("middle"), "anchor"),
+        ("size_pct", json!(16), "size_pct"),
+        ("fit", json!("contain"), "fit"),
+        ("background", json!("red"), "background"),
+        ("mute_scene", json!("yes"), "boolean"),
+    ] {
+        let err = error_text(&call(&mut s, "pause_start", json!({key: bad})));
+        assert!(err.contains(word), "{key}: {err}");
+    }
+    let given = json!({
+        "text": "Live in {time}", "zero_text": "Now", "anchor": "top_right", "size_pct": 10, "fit": "stretch",
+        "background": "#000000", "mute_scene": false
+    });
+    assert_eq!(ok_json(&call(&mut s, "pause_start", given))["paused"], json!(true));
     assert_eq!(ok_json(&call(&mut s, "pause_stop", json!({}))), json!({"paused": false}));
     assert!(error_text(&call(&mut s, "pause_stop", json!({}))).contains("not paused"));
 }

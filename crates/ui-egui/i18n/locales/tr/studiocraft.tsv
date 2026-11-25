@@ -107,6 +107,8 @@
 	Filters…	Filtreler…
 	Finishing Recording…	Kayıt Tamamlanıyor…
 	Fit to Screen	Ekrana Sığdır
+	Flip Horizontal	Yatay Çevir
+	Flip Vertical	Dikey Çevir
 	Font	Yazı tipi
 	Font family	Yazı tipi ailesi
 	Format	Biçim
@@ -139,6 +141,7 @@
 	Apple VideoToolbox HEVC (built in)	Apple VideoToolbox HEVC (yerleşik)
 	VA-API H.264 (built in)	VA-API H.264 (yerleşik)
 	VA-API HEVC (built in)	VA-API HEVC (yerleşik)
+	VA-API AV1 (built in)	VA-API AV1 (yerleşik)
 	Height	Yükseklik
 	Help	Yardım
 	Hide	Gizle
@@ -330,6 +333,7 @@
 	the audio stream failed	ses akışında hata oluştu
 	the camera capture could not start	kamera yakalama başlatılamadı
 	the camera is already open in another format	kamera zaten başka bir biçimde açık
+	the camera is not connected	kamera bağlı değil
 	the camera is still closing	kamera hâlâ kapanıyor
 	the camera offers no format StudioCraft reads	kamera StudioCraft'ın okuyabildiği bir biçim sunmuyor
 	the camera sends frames that cannot be read	kamera okunamayan kareler gönderiyor
@@ -565,3 +569,5 @@ menu	Transform	Dönüştür
 	{percent}% ({width} × {height})	%{percent} ({width} × {height})
 	Fill Screen	Ekranı Doldur
 @msg	The scenes could not be laid out for the new canvas: {error}	Sahneler yeni tuvale göre yerleştirilemedi: {error}
+	Filter delay	Filtre gecikmesi
+	The audio filters on this source delay its sound by {frames} samples at 48 kHz	Bu kaynağın ses filtreleri sesini 48 kHz'de {frames} örnek geciktirir

@@ -1,7 +1,9 @@
 //! The sizes and field offsets of every structure `abi.rs` declares, as GCC lays them out from
 //! libva 2.22.0's headers on x86-64 Linux (`sizeof` and `offsetof` of each). The structures hold
 //! no pointers except `VACodedBufferSegment`, whose numbers are for 64-bit targets, where the
-//! session code runs.
+//! session code runs. The AV1 and packed header numbers were taken with MSVC on x86-64 from the
+//! same headers. Those structures hold no pointers, and each of their bit-field unions is one
+//! value of the union's field type, which both compilers lay out alike.
 
 use std::mem::{offset_of, size_of};
 
@@ -151,6 +153,112 @@ fn hevc_slice_parameters_match_va_enc_hevc_h() {
     assert_eq!(offset_of!(T, slice_fields), 1040);
     assert_eq!(offset_of!(T, pred_weight_table_bit_offset), 1044);
     assert_eq!(offset_of!(T, va_reserved), 1052);
+}
+
+#[test]
+fn packed_header_parameters_match_va_h() {
+    type T = VAEncPackedHeaderParameterBuffer;
+    assert_eq!(size_of::<T>(), 28);
+    assert_eq!(offset_of!(T, bit_length), 4);
+    assert_eq!(offset_of!(T, has_emulation_bytes), 8);
+    assert_eq!(offset_of!(T, va_reserved), 12);
+}
+
+#[test]
+fn av1_sequence_parameters_match_va_enc_av1_h() {
+    type T = VAEncSequenceParameterBufferAV1;
+    assert_eq!(size_of::<T>(), 88);
+    assert_eq!(offset_of!(T, seq_level_idx), 1);
+    assert_eq!(offset_of!(T, seq_tier), 2);
+    assert_eq!(offset_of!(T, hierarchical_flag), 3);
+    assert_eq!(offset_of!(T, intra_period), 4);
+    assert_eq!(offset_of!(T, ip_period), 8);
+    assert_eq!(offset_of!(T, bits_per_second), 12);
+    assert_eq!(offset_of!(T, seq_fields), 16);
+    assert_eq!(offset_of!(T, order_hint_bits_minus_1), 20);
+    assert_eq!(offset_of!(T, va_reserved), 24);
+}
+
+#[test]
+fn av1_picture_parameters_match_va_enc_av1_h() {
+    assert_eq!(size_of::<VAEncSegParamAV1>(), 156);
+    assert_eq!(offset_of!(VAEncSegParamAV1, segment_number), 1);
+    assert_eq!(offset_of!(VAEncSegParamAV1, feature_data), 2);
+    assert_eq!(offset_of!(VAEncSegParamAV1, feature_mask), 130);
+    assert_eq!(offset_of!(VAEncSegParamAV1, va_reserved), 140);
+    assert_eq!(size_of::<VAEncWarpedMotionParamsAV1>(), 56);
+    assert_eq!(offset_of!(VAEncWarpedMotionParamsAV1, wmmat), 4);
+    assert_eq!(offset_of!(VAEncWarpedMotionParamsAV1, invalid), 36);
+    assert_eq!(offset_of!(VAEncWarpedMotionParamsAV1, va_reserved), 40);
+
+    type T = VAEncPictureParameterBufferAV1;
+    assert_eq!(size_of::<T>(), 1032);
+    let offsets = [
+        (offset_of!(T, frame_height_minus_1), 2),
+        (offset_of!(T, reconstructed_frame), 4),
+        (offset_of!(T, coded_buf), 8),
+        (offset_of!(T, reference_frames), 12),
+        (offset_of!(T, ref_frame_idx), 44),
+        (offset_of!(T, hierarchical_level_plus1), 51),
+        (offset_of!(T, primary_ref_frame), 52),
+        (offset_of!(T, order_hint), 53),
+        (offset_of!(T, refresh_frame_flags), 54),
+        (offset_of!(T, reserved8bits1), 55),
+        (offset_of!(T, ref_frame_ctrl_l0), 56),
+        (offset_of!(T, ref_frame_ctrl_l1), 60),
+        (offset_of!(T, picture_flags), 64),
+        (offset_of!(T, seg_id_block_size), 68),
+        (offset_of!(T, num_tile_groups_minus1), 69),
+        (offset_of!(T, temporal_id), 70),
+        (offset_of!(T, filter_level), 71),
+        (offset_of!(T, filter_level_u), 73),
+        (offset_of!(T, filter_level_v), 74),
+        (offset_of!(T, loop_filter_flags), 75),
+        (offset_of!(T, superres_scale_denominator), 76),
+        (offset_of!(T, interpolation_filter), 77),
+        (offset_of!(T, ref_deltas), 78),
+        (offset_of!(T, mode_deltas), 86),
+        (offset_of!(T, base_qindex), 88),
+        (offset_of!(T, y_dc_delta_q), 89),
+        (offset_of!(T, v_ac_delta_q), 93),
+        (offset_of!(T, min_base_qindex), 94),
+        (offset_of!(T, max_base_qindex), 95),
+        (offset_of!(T, qmatrix_flags), 96),
+        (offset_of!(T, reserved16bits1), 98),
+        (offset_of!(T, mode_control_flags), 100),
+        (offset_of!(T, segments), 104),
+        (offset_of!(T, tile_cols), 260),
+        (offset_of!(T, tile_rows), 261),
+        (offset_of!(T, reserved16bits2), 262),
+        (offset_of!(T, width_in_sbs_minus_1), 264),
+        (offset_of!(T, height_in_sbs_minus_1), 390),
+        (offset_of!(T, context_update_tile_id), 516),
+        (offset_of!(T, cdef_damping_minus_3), 518),
+        (offset_of!(T, cdef_bits), 519),
+        (offset_of!(T, cdef_y_strengths), 520),
+        (offset_of!(T, cdef_uv_strengths), 528),
+        (offset_of!(T, loop_restoration_flags), 536),
+        (offset_of!(T, wm), 540),
+        (offset_of!(T, bit_offset_qindex), 932),
+        (offset_of!(T, bit_offset_segmentation), 936),
+        (offset_of!(T, bit_offset_loopfilter_params), 940),
+        (offset_of!(T, bit_offset_cdef_params), 944),
+        (offset_of!(T, size_in_bits_cdef_params), 948),
+        (offset_of!(T, byte_offset_frame_hdr_obu_size), 952),
+        (offset_of!(T, size_in_bits_frame_hdr_obu), 956),
+        (offset_of!(T, tile_group_obu_hdr_info), 960),
+        (offset_of!(T, number_skip_frames), 961),
+        (offset_of!(T, reserved16bits3), 962),
+        (offset_of!(T, skip_frames_reduced_size), 964),
+        (offset_of!(T, va_reserved), 968),
+    ];
+    for (i, (got, want)) in offsets.into_iter().enumerate() {
+        assert_eq!(got, want, "field {i} of the list");
+    }
+
+    assert_eq!(size_of::<VAEncTileGroupBufferAV1>(), 20);
+    assert_eq!(offset_of!(VAEncTileGroupBufferAV1, tg_end), 1);
+    assert_eq!(offset_of!(VAEncTileGroupBufferAV1, va_reserved), 4);
 }
 
 #[test]

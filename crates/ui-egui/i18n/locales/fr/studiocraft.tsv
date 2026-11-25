@@ -108,6 +108,8 @@
 	Filters…	Filtres…
 	Finishing Recording…	Fin de l'enregistrement…
 	Fit to Screen	Ajuster à l'écran
+	Flip Horizontal	Retourner horizontalement
+	Flip Vertical	Retourner verticalement
 	Font	Police
 	Font family	Famille de police
 	Format	Format
@@ -140,6 +142,7 @@
 	Apple VideoToolbox HEVC (built in)	Apple VideoToolbox HEVC (intégré)
 	VA-API H.264 (built in)	VA-API H.264 (intégré)
 	VA-API HEVC (built in)	VA-API HEVC (intégré)
+	VA-API AV1 (built in)	VA-API AV1 (intégré)
 	Height	Hauteur
 	Help	Aide
 	Hide	Masquer
@@ -334,6 +337,7 @@
 	the audio stream failed	le flux audio a échoué
 	the camera capture could not start	la capture de la caméra n'a pas pu démarrer
 	the camera is already open in another format	la caméra est déjà ouverte dans un autre format
+	the camera is not connected	la caméra n'est pas connectée
 	the camera is still closing	la caméra est encore en cours de fermeture
 	the camera offers no format StudioCraft reads	la caméra ne propose aucun format que StudioCraft sait lire
 	the camera sends frames that cannot be read	la caméra envoie des images illisibles
@@ -573,3 +577,5 @@ menu	Transform	Transformer
 	{percent}% ({width} × {height})	{percent} % ({width} × {height})
 	Fill Screen	Remplir l'écran
 @msg	The scenes could not be laid out for the new canvas: {error}	Les scènes n'ont pas pu être disposées pour le nouveau canevas : {error}
+	Filter delay	Délai des filtres
+	The audio filters on this source delay its sound by {frames} samples at 48 kHz	Les filtres audio de cette source retardent son son de {frames} échantillons à 48 kHz

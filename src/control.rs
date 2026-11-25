@@ -72,13 +72,19 @@ fn answer(r: Result<Value, String>) -> Value {
     r.map_or_else(err, ok)
 }
 
+/// The session token from the environment, when it is valid.
+pub fn token() -> Result<String, String> {
+    let token = std::env::var(TOKEN_ENV).map_err(|_| format!("--control needs the session token in {TOKEN_ENV}"))?;
+    if !craft_control_protocol::valid_token(&token) {
+        return Err(format!("{TOKEN_ENV} must be 64 hexadecimal characters"));
+    }
+    Ok(token)
+}
+
 impl Control {
     /// Listen on `127.0.0.1:port`.
     pub fn start(port: u16) -> Result<Control, String> {
-        let token = std::env::var(TOKEN_ENV).map_err(|_| format!("--control needs the session token in {TOKEN_ENV}"))?;
-        if !craft_control_protocol::valid_token(&token) {
-            return Err(format!("{TOKEN_ENV} must be 64 hexadecimal characters"));
-        }
+        let token = token()?;
         let listener = TcpListener::bind(("127.0.0.1", port)).map_err(|e| format!("port {port} can't be used for control: {e}"))?;
         let (tx, requests) = sync_channel::<Request>(64);
         let open = Arc::new(AtomicUsize::new(0));

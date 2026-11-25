@@ -107,6 +107,8 @@
 	Filters…	フィルター…
 	Finishing Recording…	録画の終了処理中…
 	Fit to Screen	画面に合わせる
+	Flip Horizontal	左右反転
+	Flip Vertical	上下反転
 	Font	フォント
 	Font family	フォントファミリー
 	Format	形式
@@ -139,6 +141,7 @@
 	Apple VideoToolbox HEVC (built in)	Apple VideoToolbox HEVC (内蔵)
 	VA-API H.264 (built in)	VA-API H.264 (内蔵)
 	VA-API HEVC (built in)	VA-API HEVC (内蔵)
+	VA-API AV1 (built in)	VA-API AV1 (内蔵)
 	Height	高さ
 	Help	ヘルプ
 	Hide	非表示
@@ -330,6 +333,7 @@
 	the audio stream failed	音声ストリームでエラーが発生しました
 	the camera capture could not start	カメラキャプチャを開始できませんでした
 	the camera is already open in another format	カメラは既に別の形式で開かれています
+	the camera is not connected	カメラが接続されていません
 	the camera is still closing	カメラはまだ終了処理中です
 	the camera offers no format StudioCraft reads	このカメラには StudioCraft が対応する映像形式がありません
 	the camera sends frames that cannot be read	カメラから読み取れないフレームが送られています
@@ -563,3 +567,5 @@ menu	Transform	変形
 	Custom	カスタム
 	Fill Screen	画面を埋める
 @msg	The scenes could not be laid out for the new canvas: {error}	新しいキャンバスにシーンを配置できませんでした: {error}
+	Filter delay	フィルターの遅延
+	The audio filters on this source delay its sound by {frames} samples at 48 kHz	このソースの音声フィルターは、音を 48 kHz で {frames} サンプル遅らせます

@@ -1,6 +1,6 @@
 // The declarations in this file are transcribed from libva's `va/va.h`, `va/va_enc_h264.h`,
-// `va/va_enc_hevc.h`, `va/va_drm.h` and `va/va_drmcommon.h` (libva 2.22.0), which carry this
-// notice:
+// `va/va_enc_hevc.h`, `va/va_enc_av1.h`, `va/va_drm.h` and `va/va_drmcommon.h` (libva 2.22.0),
+// which carry this notice (`va_enc_av1.h` with "Copyright (c) 2021 Intel Corporation"):
 //
 // Copyright (c) 2007-2009 Intel Corporation. All Rights Reserved.
 //
@@ -25,7 +25,8 @@
 // SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 //! The parts of VA-API this crate uses, as `libva.so.2` and `libva-drm.so.2` expect them: the
-//! H.264 and HEVC encode parameter buffers, the rate control buffers, the coded buffer segments,
+//! H.264, HEVC and AV1 encode parameter buffers, the packed header buffers, the rate control
+//! buffers, the coded buffer segments,
 //! the image structures frames are copied through, and the entry points. The sizes and field
 //! offsets are checked against a C compiler's by `abi_tests.rs`.
 //!
@@ -76,17 +77,39 @@ pub const VAProfileH264Main: VAProfile = 6;
 pub const VAProfileH264High: VAProfile = 7;
 pub const VAProfileH264ConstrainedBaseline: VAProfile = 13;
 pub const VAProfileHEVCMain: VAProfile = 17;
+pub const VAProfileAV1Profile0: VAProfile = 32;
 
 pub const VAEntrypointEncSlice: VAEntrypoint = 6;
 pub const VAEntrypointEncSliceLP: VAEntrypoint = 8;
 
 pub const VAConfigAttribRTFormat: VAConfigAttribType = 0;
 pub const VAConfigAttribRateControl: VAConfigAttribType = 5;
+pub const VAConfigAttribEncPackedHeaders: VAConfigAttribType = 10;
 pub const VAConfigAttribMaxPictureWidth: VAConfigAttribType = 18;
 pub const VAConfigAttribMaxPictureHeight: VAConfigAttribType = 19;
 pub const VAConfigAttribEncHEVCBlockSizes: VAConfigAttribType = 51;
+/// `VAConfigAttribValEncAV1`: fourteen 2-bit fields, one per coding tool, each a `VA_FEATURE_*`.
+pub const VAConfigAttribEncAV1: VAConfigAttribType = 52;
+/// `VAConfigAttribValEncAV1Ext1`: `interpolation_filter` (bits 0 to 4, one per filter, bit 4 for
+/// switchable), then the segmentation fields.
+pub const VAConfigAttribEncAV1Ext1: VAConfigAttribType = 53;
+/// `VAConfigAttribValEncAV1Ext2`: `tile_size_bytes_minus1` (bits 0 and 1),
+/// `obu_size_bytes_minus1` (bits 2 and 3), `tx_mode_support` (bits 4 to 6: ONLY_4X4,
+/// TX_MODE_LARGEST, TX_MODE_SELECT) and `max_tile_num_minus1` (bits 7 to 19).
+pub const VAConfigAttribEncAV1Ext2: VAConfigAttribType = 54;
 /// The value of an attribute the driver does not have.
 pub const VA_ATTRIB_NOT_SUPPORTED: u32 = 0x8000_0000;
+/// A `VAConfigAttribEncAV1` field value: the driver needs the tool turned on.
+pub const VA_FEATURE_REQUIRED: u32 = 2;
+
+/// `VAConfigAttribEncPackedHeaders` bits: the application writes the sequence header OBU and the
+/// frame header OBU.
+pub const VA_ENC_PACKED_HEADER_SEQUENCE: u32 = 0x0000_0001;
+pub const VA_ENC_PACKED_HEADER_PICTURE: u32 = 0x0000_0002;
+/// `VAEncPackedHeaderParameterBuffer::type_`: `VAEncPackedHeaderSequence`, which for AV1 holds a
+/// whole `sequence_header_obu()`, and `VAEncPackedHeaderPicture`, a whole `frame_header_obu()`.
+pub const VAEncPackedHeaderSequence: u32 = 1;
+pub const VAEncPackedHeaderPicture: u32 = 2;
 
 pub const VA_RT_FORMAT_YUV420: c_uint = 0x0000_0001;
 
@@ -100,7 +123,10 @@ pub const VA_PROGRESSIVE: c_int = 0x1;
 pub const VAEncCodedBufferType: VABufferType = 21;
 pub const VAEncSequenceParameterBufferType: VABufferType = 22;
 pub const VAEncPictureParameterBufferType: VABufferType = 23;
+/// For AV1 this buffer type carries a `VAEncTileGroupBufferAV1`.
 pub const VAEncSliceParameterBufferType: VABufferType = 24;
+pub const VAEncPackedHeaderParameterBufferType: VABufferType = 25;
+pub const VAEncPackedHeaderDataBufferType: VABufferType = 26;
 pub const VAEncMiscParameterBufferType: VABufferType = 27;
 
 pub const VAEncMiscParameterTypeFrameRate: VAEncMiscParameterType = 0;
@@ -466,6 +492,133 @@ pub struct VAEncSliceParameterBufferHEVC {
     pub pred_weight_table_bit_offset: u32,
     pub pred_weight_table_bit_length: u32,
     pub va_reserved: [u32; VA_PADDING_MEDIUM - 2],
+}
+
+/// `VAEncPackedHeaderParameterBuffer`: the type and length in bits of the header in the data
+/// buffer that follows it.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct VAEncPackedHeaderParameterBuffer {
+    pub type_: u32,
+    pub bit_length: u32,
+    pub has_emulation_bytes: u8,
+    pub va_reserved: [u32; VA_PADDING_LOW],
+}
+
+/// `VAEncSequenceParameterBufferAV1`; `seq_fields` is a bit-field union.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct VAEncSequenceParameterBufferAV1 {
+    pub seq_profile: u8,
+    pub seq_level_idx: u8,
+    pub seq_tier: u8,
+    pub hierarchical_flag: u8,
+    pub intra_period: u32,
+    pub ip_period: u32,
+    pub bits_per_second: u32,
+    pub seq_fields: u32,
+    pub order_hint_bits_minus_1: u8,
+    pub va_reserved: [u32; VA_PADDING_HIGH],
+}
+
+/// `VAEncSegParamAV1`; `seg_flags` is a bit-field union.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct VAEncSegParamAV1 {
+    pub seg_flags: u8,
+    pub segment_number: u8,
+    pub feature_data: [[i16; 8]; 8],
+    pub feature_mask: [u8; 8],
+    pub va_reserved: [u32; VA_PADDING_LOW],
+}
+
+/// `VAEncWarpedMotionParamsAV1`; `wmtype` is a `VAEncTransformationTypeAV1` (a C enum: `int`).
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct VAEncWarpedMotionParamsAV1 {
+    pub wmtype: c_int,
+    pub wmmat: [i32; 8],
+    pub invalid: u8,
+    pub va_reserved: [u32; VA_PADDING_LOW],
+}
+
+/// `VAEncPictureParameterBufferAV1`. `ref_frame_ctrl_l0` and `ref_frame_ctrl_l1`
+/// (`VARefFrameCtrlAV1`), `picture_flags`, `loop_filter_flags`, `qmatrix_flags`,
+/// `mode_control_flags`, `loop_restoration_flags` and `tile_group_obu_hdr_info` are bit-field
+/// unions.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct VAEncPictureParameterBufferAV1 {
+    pub frame_width_minus_1: u16,
+    pub frame_height_minus_1: u16,
+    pub reconstructed_frame: VASurfaceID,
+    pub coded_buf: VABufferID,
+    pub reference_frames: [VASurfaceID; 8],
+    pub ref_frame_idx: [u8; 7],
+    pub hierarchical_level_plus1: u8,
+    pub primary_ref_frame: u8,
+    pub order_hint: u8,
+    pub refresh_frame_flags: u8,
+    pub reserved8bits1: u8,
+    pub ref_frame_ctrl_l0: u32,
+    pub ref_frame_ctrl_l1: u32,
+    pub picture_flags: u32,
+    pub seg_id_block_size: u8,
+    pub num_tile_groups_minus1: u8,
+    pub temporal_id: u8,
+    pub filter_level: [u8; 2],
+    pub filter_level_u: u8,
+    pub filter_level_v: u8,
+    pub loop_filter_flags: u8,
+    pub superres_scale_denominator: u8,
+    pub interpolation_filter: u8,
+    pub ref_deltas: [i8; 8],
+    pub mode_deltas: [i8; 2],
+    pub base_qindex: u8,
+    pub y_dc_delta_q: i8,
+    pub u_dc_delta_q: i8,
+    pub u_ac_delta_q: i8,
+    pub v_dc_delta_q: i8,
+    pub v_ac_delta_q: i8,
+    pub min_base_qindex: u8,
+    pub max_base_qindex: u8,
+    pub qmatrix_flags: u16,
+    pub reserved16bits1: u16,
+    pub mode_control_flags: u32,
+    pub segments: VAEncSegParamAV1,
+    pub tile_cols: u8,
+    pub tile_rows: u8,
+    pub reserved16bits2: u16,
+    pub width_in_sbs_minus_1: [u16; 63],
+    pub height_in_sbs_minus_1: [u16; 63],
+    pub context_update_tile_id: u16,
+    pub cdef_damping_minus_3: u8,
+    pub cdef_bits: u8,
+    pub cdef_y_strengths: [u8; 8],
+    pub cdef_uv_strengths: [u8; 8],
+    pub loop_restoration_flags: u16,
+    pub wm: [VAEncWarpedMotionParamsAV1; 7],
+    pub bit_offset_qindex: u32,
+    pub bit_offset_segmentation: u32,
+    pub bit_offset_loopfilter_params: u32,
+    pub bit_offset_cdef_params: u32,
+    pub size_in_bits_cdef_params: u32,
+    pub byte_offset_frame_hdr_obu_size: u32,
+    pub size_in_bits_frame_hdr_obu: u32,
+    pub tile_group_obu_hdr_info: u8,
+    pub number_skip_frames: u8,
+    pub reserved16bits3: u16,
+    pub skip_frames_reduced_size: i32,
+    pub va_reserved: [u32; VA_PADDING_HIGH],
+}
+
+/// `VAEncTileGroupBufferAV1`: the first and last tile of a tile group, in raster order.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct VAEncTileGroupBufferAV1 {
+    pub tg_start: u8,
+    pub tg_end: u8,
+    pub va_reserved: [u32; VA_PADDING_LOW],
 }
 
 /// `VAEncMiscParameterRateControl`; `rc_flags` is a bit-field union.
