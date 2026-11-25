@@ -619,6 +619,18 @@ fn a_removed_device_counts_no_frame_as_done_and_records_why() {
     assert_ne!(slots.pick_released(ring.completed(export::REMOVED)), Some(slot));
 }
 
+/// Once the queue has finished, a fence is raised only to the value its semaphore was read at:
+/// a short or unread value leaves the later frames not done and says the work did not finish.
+#[test]
+fn a_fence_is_raised_only_to_the_value_its_semaphore_reached() {
+    let mut raised = Vec::new();
+    assert!(export::settle(Some(3), 3, |v| raised.push(v)));
+    assert!(export::settle(Some(4), 3, |v| raised.push(v)));
+    assert!(!export::settle(Some(2), 3, |v| raised.push(v)), "a device lost before the last signal");
+    assert!(!export::settle(None, 3, |v| raised.push(v)), "a value that could not be read");
+    assert_eq!(raised, [3, 4, 2]);
+}
+
 #[test]
 fn a_frame_given_again_is_refused_while_it_waits_and_after_its_texture_went_back() {
     let ring = ExportRing::detached(64, 2);

@@ -101,7 +101,10 @@ exported. One encoder session reads each export ring.
   `Fallback::NoEncoder` when the released fence's signal cannot be queued, and a Vulkan export
   records `Fallback::ImportFailed` when it cannot set the ready fence. When the device that holds
   the export ring has been removed, `ExportRing::ready` and `released` return 0 and record
-  `Fallback::DeviceRemoved`; no frame then counts as ready and no texture as handed back. The
+  `Fallback::DeviceRemoved`; no frame then counts as ready and no texture as handed back. When a
+  Vulkan export is dropped while copies still run, the ready fence is raised only to the value the
+  compositor's semaphore reached once its queue has finished, and the ring records
+  `Fallback::DeviceRemoved` when that value is short of the last copy or cannot be read. The
   importer records `Fallback::DeviceRemoved` the same way when the device that holds a captured
   ring's fences on the compositor's side has been removed, and a Vulkan import records
   `Fallback::ImportFailed` when it cannot set the released fence.

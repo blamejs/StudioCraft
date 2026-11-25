@@ -12,6 +12,7 @@
 //! and hands it back after. The export works the same way the other way around: a submission after
 //! a copy signals a timeline semaphore, and its value is copied to the export ring's ready fence.
 
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use ash::vk;
@@ -166,7 +167,7 @@ pub(crate) fn import(device: &wgpu::Device, queue: &wgpu::Queue, ring: &SharedRi
         let image = unsafe { texture.as_hal::<wgpu::hal::api::Vulkan>().map(|t| t.raw_handle()) };
         images.push(image.ok_or(Fallback::ImportFailed)?);
     }
-    let released = Timeline::new(vk_device.clone(), queue.clone(), released)?;
+    let released = Timeline::new(vk_device.clone(), queue.clone(), released, None)?;
     Ok(Imported { textures, images, family, device: vk_device, ready, released })
 }
 
@@ -299,12 +300,15 @@ struct Timeline {
     submitted: AtomicU64,
     /// The newest value set on `fence`.
     signaled: AtomicU64,
+    /// The export ring whose ready fence `fence` is: it records [`Fallback::DeviceRemoved`] when
+    /// the work submitted before the semaphore is dropped is not seen to finish.
+    ring: Option<Arc<ExportRing>>,
 }
 
 impl Timeline {
     /// A semaphore of `device` that starts at `fence`'s value. The device must have timeline
-    /// semaphores.
-    fn new(device: ash::Device, queue: wgpu::Queue, fence: ID3D12Fence) -> Result<Timeline, Fallback> {
+    /// semaphores. `ring` is the export ring whose ready fence `fence` is, if any.
+    fn new(device: ash::Device, queue: wgpu::Queue, fence: ID3D12Fence, ring: Option<Arc<ExportRing>>) -> Result<Timeline, Fallback> {
         // SAFETY: the fence is valid; reading its completed value does not wait.
         let start = unsafe { fence.GetCompletedValue() };
         let mut kind = vk::SemaphoreTypeCreateInfo::default().semaphore_type(vk::SemaphoreType::TIMELINE).initial_value(start);
@@ -319,6 +323,7 @@ impl Timeline {
             queued: AtomicU64::new(start),
             submitted: AtomicU64::new(start),
             signaled: AtomicU64::new(start),
+            ring,
         })
     }
 
@@ -386,15 +391,23 @@ impl Drop for Timeline {
             return;
         }
         // Work still runs: once the queue has finished the work submitted so far, the fence gets
-        // the last value and the semaphore is destroyed, without waiting here.
-        let (device, semaphore, fence) = (self.device.clone(), self.semaphore, self.fence.clone());
+        // the value the semaphore reached and the semaphore is destroyed, without waiting here.
+        // wgpu also runs the callback when the device is lost, so the value is read, not assumed.
+        let (device, semaphore, fence, ring) = (self.device.clone(), self.semaphore, self.fence.clone(), self.ring.take());
         self.queue.on_submitted_work_done(move || {
-            // SAFETY: `fence` is a valid fence; reading and setting its value from the CPU does
-            // not wait. It is only raised, so a value set later by another side is kept.
-            unsafe {
-                if fence.GetCompletedValue() < target {
-                    let _ = fence.Signal(target);
+            // SAFETY: as in `poll`; the semaphore is destroyed only below.
+            let reached = unsafe { device.get_semaphore_counter_value(semaphore) }.ok();
+            let finished = crate::export::settle(reached, target, |done| {
+                // SAFETY: `fence` is a valid fence; reading and setting its value from the CPU does
+                // not wait. It is only raised, so a value set later by another side is kept.
+                unsafe {
+                    if fence.GetCompletedValue() < done {
+                        let _ = fence.Signal(done);
+                    }
                 }
+            });
+            if !finished && let Some(ring) = ring {
+                ring.refuse(Fallback::DeviceRemoved);
             }
             // SAFETY: every submission that signals the semaphore was made before this callback was
             // registered, so all of them have finished, and nothing uses it afterward.
@@ -421,7 +434,7 @@ pub(crate) struct Exported {
 
 /// Open `ring`'s textures and ready fence on `device`. Returns [`Fallback::UnsupportedBackend`]
 /// when the device does not run on Vulkan.
-pub(crate) fn export(device: &wgpu::Device, queue: &wgpu::Queue, ring: &ExportRing) -> Result<Exported, Fallback> {
+pub(crate) fn export(device: &wgpu::Device, queue: &wgpu::Queue, ring: &Arc<ExportRing>) -> Result<Exported, Fallback> {
     let Some((compositor, timeline)) = adapter(device) else { return Err(Fallback::UnsupportedBackend) };
     let external_memory = device.features().contains(wgpu::Features::VULKAN_EXTERNAL_MEMORY_WIN32);
     check_import(Backend::Vulkan { external_memory, timeline }, ring.adapter(), compositor)?;
@@ -470,7 +483,7 @@ pub(crate) fn export(device: &wgpu::Device, queue: &wgpu::Queue, ring: &ExportRi
     };
     // SAFETY: the image handles stay owned by the wgpu-hal textures, which outlive their use.
     let images = textures.iter().map(|t| unsafe { t.raw_handle() }).collect();
-    let ready = match Timeline::new(vk_device.clone(), queue.clone(), ready) {
+    let ready = match Timeline::new(vk_device.clone(), queue.clone(), ready, Some(Arc::clone(ring))) {
         Ok(ready) => ready,
         Err(reason) => {
             // SAFETY: the guard is only used to destroy the textures, which no command has used

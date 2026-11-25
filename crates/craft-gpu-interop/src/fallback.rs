@@ -29,6 +29,8 @@ pub enum Fallback {
     Refused,
     /// The graphics device that holds the export ring, or the fences of a captured ring on the
     /// compositor's side, was removed or reset, so the fences no longer say which frames are done.
+    /// Also recorded when a Vulkan compositor's export stops before the copies it submitted are
+    /// seen to finish.
     DeviceRemoved,
 }
 

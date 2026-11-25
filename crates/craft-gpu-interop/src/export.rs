@@ -14,6 +14,18 @@ static NEXT_EXPORT: AtomicU64 = AtomicU64::new(1);
 #[cfg_attr(not(windows), allow(dead_code))]
 pub(crate) const REMOVED: u64 = u64::MAX;
 
+/// Raise a fence through `raise` to `reached`, the value a timeline semaphore was read at once the
+/// queue had finished the work submitted before it (`None` when it could not be read), and never
+/// to `target`, the newest value that work signals: a lost device also finishes the work, without
+/// signaling it. Returns whether the semaphore reached `target`.
+#[cfg_attr(not(all(windows, feature = "wgpu")), allow(dead_code))]
+pub(crate) fn settle(reached: Option<u64>, target: u64, raise: impl FnOnce(u64)) -> bool {
+    if let Some(done) = reached {
+        raise(done);
+    }
+    reached.is_some_and(|done| done >= target)
+}
+
 /// The NV12 textures and fences one encoder reads the compositor's program frames from. On
 /// Windows they live on a Direct3D 11 device of the compositor's adapter, the device a hardware
 /// encoder opens its session on, and are shared through NT handles with the compositor's device.
