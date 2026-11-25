@@ -1,5 +1,5 @@
 //! The top row of the window: the menu titles on the left and the output bar on the right, with
-//! the Edit and Studio switch, the transition picker and its duration, the Record and Go Live
+//! the Set up and Live switch, the transition picker and its duration, the Record and Go Live
 //! buttons with their timers, and the Pause button with the arrow that opens the Pause setup
 //! popover ([`crate::pause_setup`]).
 //!
@@ -50,10 +50,43 @@ impl Place {
     }
 }
 
+/// The side of the Set up and Live switch. Each side applies the built-in layout of its name.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Side {
+    /// The Set up layout, with Studio Mode as it was before Live was chosen.
+    SetUp,
+    /// The Live layout, with Studio Mode on.
+    Live,
+}
+
+impl Side {
+    pub const ALL: [Side; 2] = [Side::SetUp, Side::Live];
+
+    /// The name `view.side` takes and `ui.inspect` reports.
+    pub fn name(self) -> &'static str {
+        match self {
+            Side::SetUp => "set_up",
+            Side::Live => "live",
+        }
+    }
+
+    pub fn parse(name: &str) -> Option<Side> {
+        Side::ALL.into_iter().find(|s| s.name() == name)
+    }
+
+    /// The English name of the built-in layout the side applies, which is also its label.
+    pub fn layout(self) -> &'static str {
+        match self {
+            Side::SetUp => "Set up",
+            Side::Live => "Live",
+        }
+    }
+}
+
 /// The widths of the bar's groups in points. A group that Docks hides has width 0.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Widths {
-    /// The Edit and Studio switch.
+    /// The Set up and Live switch.
     pub mode: f32,
     /// The transition picker, its duration and its settings button.
     pub transitions: f32,
@@ -357,9 +390,12 @@ impl StudioApp {
             (t.size.control.md, t.size.length.number.md, SegmentedStyle::new(cx), OnAirStyle::new(cx, theme::timer_font(cx)))
         });
         let square = vec2(control, control);
-        let modes = [tl!("Edit"), tl!("Studio")];
-        let studio_mode = usize::from(studio.engine().studio_mode());
-        let segmented = Segmented::new(egui::Id::unique("output-bar-mode"), &modes, studio_mode, &seg_style);
+        // In the order of `Side::ALL`. Neither is selected while neither side is in force, and a
+        // click on either one then applies it.
+        let sides = [tl!("Set up"), tl!("Live")];
+        let shown = self.shown_side();
+        let side = Side::ALL.iter().position(|s| Some(*s) == shown).unwrap_or(Side::ALL.len());
+        let segmented = Segmented::new(egui::Id::unique("output-bar-mode"), &sides, side, &seg_style).group(tl!("Layout"));
         let record = face(OutputKind::Recording, studio.output(OutputKind::Recording).as_ref());
         let live = face(OutputKind::Streaming, studio.output(OutputKind::Streaming).as_ref());
         let pause = pause_face(studio.paused(), studio.paused_for_ms());
@@ -417,8 +453,8 @@ impl StudioApp {
                 gap(ui, GROUP_GAP);
                 let r = segmented.show(ui);
                 parts.push(("mode", r.rect));
-                if r.changed.is_some() {
-                    acts.push(Act::run("studio.toggle", json!({})));
+                if let Some(side) = r.changed.and_then(|i| Side::ALL.get(i)) {
+                    acts.push(Act::run("view.side", json!({"side": side.name()})));
                 }
             }
             match fit.transitions {

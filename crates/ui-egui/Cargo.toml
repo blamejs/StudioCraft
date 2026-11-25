@@ -63,3 +63,5 @@ wgpu = { workspace = true, features = ["noop"] }
 pollster = { workspace = true }
 # `craft_ui::testing::Fixture` drives the menu bar with the pointer and keys in the menu tests.
 craft-ui = { workspace = true, features = ["testing"] }
+# Counts allocations in `tests/side_alloc.rs`.
+stats_alloc = { workspace = true }

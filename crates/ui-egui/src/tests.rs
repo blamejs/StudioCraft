@@ -2352,15 +2352,167 @@ fn the_output_bar_runs_the_output_commands() {
         let b = |pressed| Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: Modifiers::NONE };
         vec![Event::PointerMoved(at), b(true), b(false)]
     };
-    // The Studio segment turns Studio Mode on, and the Edit segment turns it off again.
+    let region = |name: &str| store::built_in_layout(name).map(|l| l.docks.region);
+    // Every dock under the canvas is neither side's layout, so neither segment is selected.
+    assert_eq!(a.ui_inspect(&ctx)["side"], Value::Null);
+    // The Live segment applies the Live layout and turns Studio Mode on, and the Set up segment
+    // applies the Set up layout and turns it off again.
     let p = mode(&a);
     frame(&mut a, &ctx, click(egui::pos2(p[2] - 4.0, (p[1] + p[3]) / 2.0)));
     frame(&mut a, &ctx, vec![]);
-    assert!(a.studio().engine().studio_mode(), "a click on Studio turns Studio Mode on");
+    assert_eq!(a.ui_inspect(&ctx)["side"], json!("live"));
+    assert!(a.studio().engine().studio_mode(), "a click on Live turns Studio Mode on");
+    assert_eq!(Some(a.store().prefs().docks.region), region("Live"));
     let p = mode(&a);
     frame(&mut a, &ctx, click(egui::pos2(p[0] + 4.0, (p[1] + p[3]) / 2.0)));
     frame(&mut a, &ctx, vec![]);
-    assert!(!a.studio().engine().studio_mode(), "a click on Edit turns it off");
+    assert_eq!(a.ui_inspect(&ctx)["side"], json!("set_up"));
+    assert!(!a.studio().engine().studio_mode(), "a click on Set up turns it off");
+    assert_eq!(Some(a.store().prefs().docks.region), region("Set up"));
+    // Turned off elsewhere on Live, Studio Mode leaves Live out of force, and a click on Live
+    // turns it on again.
+    let p = mode(&a);
+    frame(&mut a, &ctx, click(egui::pos2(p[2] - 4.0, (p[1] + p[3]) / 2.0)));
+    frame(&mut a, &ctx, vec![]);
+    run(&mut a, &ctx, "studio.toggle", json!({})).unwrap();
+    frame(&mut a, &ctx, vec![]);
+    assert_eq!(a.ui_inspect(&ctx)["side"], Value::Null);
+    let p = mode(&a);
+    frame(&mut a, &ctx, click(egui::pos2(p[2] - 4.0, (p[1] + p[3]) / 2.0)));
+    frame(&mut a, &ctx, vec![]);
+    assert_eq!(a.ui_inspect(&ctx)["side"], json!("live"));
+    assert!(a.studio().engine().studio_mode());
+}
+
+#[test]
+fn set_up_puts_studio_mode_back_as_it_was_before_live() {
+    let mut a = app();
+    let ctx = crate::test_context();
+    let on = |a: &StudioApp| a.studio().engine().studio_mode();
+    // Studio Mode on before Live stays on after Set up.
+    run(&mut a, &ctx, "studio.toggle", json!({})).unwrap();
+    assert_eq!(run(&mut a, &ctx, "view.side", json!({"side": "live"})), Ok(json!({"side": "live", "changed": true, "studio_mode": true})));
+    assert!(on(&a));
+    assert_eq!(run(&mut a, &ctx, "view.side", json!({"side": "set_up"})), Ok(json!({"side": "set_up", "changed": true, "studio_mode": true})));
+    assert!(on(&a), "Studio Mode was on before Live");
+    // Off before Live, and turned off again while on Live: Set up leaves it off.
+    run(&mut a, &ctx, "studio.toggle", json!({})).unwrap();
+    run(&mut a, &ctx, "view.side", json!({"side": "live"})).unwrap();
+    assert!(on(&a));
+    run(&mut a, &ctx, "studio.toggle", json!({})).unwrap();
+    run(&mut a, &ctx, "view.side", json!({"side": "set_up"})).unwrap();
+    assert!(!on(&a));
+    // Turned on while on Set up after Live: Live again remembers it as on.
+    run(&mut a, &ctx, "studio.toggle", json!({})).unwrap();
+    run(&mut a, &ctx, "view.side", json!({"side": "live"})).unwrap();
+    run(&mut a, &ctx, "view.side", json!({"side": "set_up"})).unwrap();
+    assert!(on(&a));
+    // Set up chosen again without Live in between leaves Studio Mode as it is.
+    assert_eq!(run(&mut a, &ctx, "view.side", json!({"side": "set_up"})), Ok(json!({"side": "set_up", "changed": false, "studio_mode": true})));
+    run(&mut a, &ctx, "studio.toggle", json!({})).unwrap();
+    assert_eq!(run(&mut a, &ctx, "view.side", json!({"side": "set_up"})), Ok(json!({"side": "set_up", "changed": false, "studio_mode": false})));
+    assert!(!on(&a));
+    // Set up put in force by Docks › Layouts after Live is in force already: choosing it keeps
+    // Studio Mode on.
+    run(&mut a, &ctx, "view.side", json!({"side": "live"})).unwrap();
+    run(&mut a, &ctx, "dock.layout_apply", json!({"name": "Set up"})).unwrap();
+    assert_eq!(run(&mut a, &ctx, "view.side", json!({"side": "set_up"})), Ok(json!({"side": "set_up", "changed": false, "studio_mode": true})));
+    assert!(on(&a));
+    // Another collection opens with Studio Mode off, and Set up after it leaves it off.
+    run(&mut a, &ctx, "view.side", json!({"side": "live"})).unwrap();
+    a.load_collection(default_collection("Other"));
+    assert!(!on(&a));
+    run(&mut a, &ctx, "view.side", json!({"side": "set_up"})).unwrap();
+    assert!(!on(&a), "the mode kept before Live belonged to the other collection");
+    // On before Live, turned off on Live, and Live chosen again: Set up leaves it off.
+    run(&mut a, &ctx, "studio.toggle", json!({})).unwrap();
+    run(&mut a, &ctx, "view.side", json!({"side": "live"})).unwrap();
+    run(&mut a, &ctx, "studio.toggle", json!({})).unwrap();
+    run(&mut a, &ctx, "view.side", json!({"side": "live"})).unwrap();
+    run(&mut a, &ctx, "view.side", json!({"side": "set_up"})).unwrap();
+    assert!(!on(&a), "Studio Mode was off when Live was last chosen");
+    // Off before Live, a dock moved on Live, and Live chosen again: Set up turns it off.
+    run(&mut a, &ctx, "view.side", json!({"side": "live"})).unwrap();
+    run(&mut a, &ctx, "dock.region", json!({"dock": "scenes", "region": "right"})).unwrap();
+    run(&mut a, &ctx, "view.side", json!({"side": "live"})).unwrap();
+    run(&mut a, &ctx, "view.side", json!({"side": "set_up"})).unwrap();
+    assert!(!on(&a), "Studio Mode was off before the first Live");
+    // Off before Live, Set up put in force by Docks › Layouts with Studio Mode on, and Live chosen
+    // from it: Set up keeps the mode Live was chosen in.
+    run(&mut a, &ctx, "view.side", json!({"side": "live"})).unwrap();
+    run(&mut a, &ctx, "dock.layout_apply", json!({"name": "Set up"})).unwrap();
+    assert!(on(&a));
+    run(&mut a, &ctx, "view.side", json!({"side": "live"})).unwrap();
+    run(&mut a, &ctx, "view.side", json!({"side": "set_up"})).unwrap();
+    assert!(on(&a), "Studio Mode was on when Live was chosen from Set up");
+    frame(&mut a, &ctx, vec![]);
+}
+
+#[test]
+fn live_chosen_again_after_studio_mode_went_off_and_on_keeps_the_mode_it_is_chosen_in() {
+    let mut a = app();
+    let ctx = crate::test_context();
+    let on = |a: &StudioApp| a.studio().engine().studio_mode();
+    // Off before Live, turned off and on again on Live, a dock moved, and Live chosen again with
+    // Studio Mode on: Set up leaves it on.
+    run(&mut a, &ctx, "view.side", json!({"side": "live"})).unwrap();
+    assert!(on(&a));
+    run(&mut a, &ctx, "studio.toggle", json!({})).unwrap();
+    run(&mut a, &ctx, "studio.toggle", json!({})).unwrap();
+    run(&mut a, &ctx, "dock.region", json!({"dock": "scenes", "region": "right"})).unwrap();
+    run(&mut a, &ctx, "view.side", json!({"side": "live"})).unwrap();
+    run(&mut a, &ctx, "view.side", json!({"side": "set_up"})).unwrap();
+    assert!(on(&a), "Studio Mode was on when Live was last chosen");
+    // Off before Live and on without a break through a moved dock: Live chosen again keeps the
+    // mode from before the first Live, and Set up turns it off.
+    run(&mut a, &ctx, "studio.toggle", json!({})).unwrap();
+    assert!(!on(&a));
+    run(&mut a, &ctx, "view.side", json!({"side": "live"})).unwrap();
+    run(&mut a, &ctx, "dock.region", json!({"dock": "scenes", "region": "right"})).unwrap();
+    run(&mut a, &ctx, "view.side", json!({"side": "live"})).unwrap();
+    run(&mut a, &ctx, "view.side", json!({"side": "set_up"})).unwrap();
+    assert!(!on(&a), "Studio Mode was off before the first Live");
+    // Off before Live, turned off and on again on Live, and Live chosen again while it is still in
+    // force: Set up leaves it on.
+    run(&mut a, &ctx, "view.side", json!({"side": "live"})).unwrap();
+    run(&mut a, &ctx, "studio.toggle", json!({})).unwrap();
+    run(&mut a, &ctx, "studio.toggle", json!({})).unwrap();
+    let again = run(&mut a, &ctx, "view.side", json!({"side": "live"})).unwrap();
+    assert_eq!(again["changed"], json!(false));
+    run(&mut a, &ctx, "view.side", json!({"side": "set_up"})).unwrap();
+    assert!(on(&a), "Studio Mode was on when Live was chosen again while in force");
+}
+
+#[test]
+fn view_side_keeps_the_shown_side_and_the_bar_groups_and_refuses_unknown_sides() {
+    let mut a = app();
+    let ctx = crate::test_context();
+    // Docks › Transition Controls off stays off on both sides.
+    run(&mut a, &ctx, "dock.transitions", json!({})).unwrap();
+    run(&mut a, &ctx, "view.side", json!({"side": "live"})).unwrap();
+    assert!(!a.store().prefs().docks.transitions);
+    assert!(a.store().prefs().docks.controls);
+    // Choosing the side that is in force changes nothing, and keeps the docks' sizes.
+    a.store.update(|p| {
+        p.docks.height = 150.0;
+        p.docks.left_width = 300.0;
+    });
+    let sized = a.store().prefs().docks;
+    assert_eq!(run(&mut a, &ctx, "view.side", json!({"side": "live"})), Ok(json!({"side": "live", "changed": false, "studio_mode": true})));
+    assert_eq!(a.store().prefs().docks, sized);
+    // A dock moved on Live takes Live out of force, and Live puts it back.
+    run(&mut a, &ctx, "dock.region", json!({"dock": "scenes", "region": "right"})).unwrap();
+    assert_eq!(a.ui_inspect(&ctx)["side"], Value::Null);
+    assert_eq!(run(&mut a, &ctx, "view.side", json!({"side": "live"})), Ok(json!({"side": "live", "changed": true, "studio_mode": true})));
+    assert_eq!(Some(a.store().prefs().docks.region), store::built_in_layout("Live").map(|l| l.docks.region));
+    for bad in [json!({"side": "Live"}), json!({"side": "setup"}), json!({"side": 1}), json!({})] {
+        assert!(run(&mut a, &ctx, "view.side", bad.clone()).is_err(), "{bad}");
+    }
+    assert_eq!(a.ui_inspect(&ctx)["side"], json!("live"), "a refused side changes nothing");
+    assert!(a.studio().engine().studio_mode());
+    run(&mut a, &ctx, "view.side", json!({"side": "set_up"})).unwrap();
+    assert!(!a.store().prefs().docks.transitions);
+    frame(&mut a, &ctx, vec![]);
 }
 
 #[test]

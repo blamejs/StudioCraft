@@ -7353,6 +7353,7 @@ dependencies = [
  "pollster 0.4.0",
  "serde",
  "serde_json",
+ "stats_alloc",
  "studiocraft-audio-tracks",
  "studiocraft-engine",
  "studiocraft-media",

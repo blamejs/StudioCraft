@@ -340,6 +340,18 @@ impl Docks {
         self.is_shown(i) && !self.is_floating(i)
     }
 
+    /// Whether `other` shows the same docks as these, in the same regions, with the same ones in
+    /// windows of their own, and draws the same docks in the same order in every region, with the
+    /// columns collapsed into the strip and without. Hidden docks' places in the order, regions and
+    /// window flags, sizes and the two groups of the menu row are not compared.
+    pub fn arranged_like(&self, other: &Docks) -> bool {
+        Region::ALL.into_iter().all(|r| [false, true].into_iter().all(|c| self.drawn_in(r, c).eq(other.drawn_in(r, c))))
+            && (0..DOCK_COUNT).filter_map(|i| u8::try_from(i).ok()).all(|i| {
+                self.is_shown(i) == other.is_shown(i)
+                    && (!self.is_shown(i) || (self.is_floating(i) == other.is_floating(i) && self.region(i) == other.region(i)))
+            })
+    }
+
     /// The region dock `i` sits in while it is docked.
     pub fn region(&self, i: u8) -> Region {
         self.region.get(usize::from(i)).copied().map_or(Region::Bottom, Region::from_code)
@@ -362,7 +374,12 @@ impl Docks {
     /// The docked docks drawn in `region`, in order (left to right under the canvas, top to bottom
     /// in a column). While the columns are `collapsed`, every docked dock is drawn under the canvas.
     pub fn shown_in(&self, region: Region, collapsed: bool) -> Vec<u8> {
-        self.order().into_iter().filter(|i| self.is_docked(*i) && self.drawn_region(*i, collapsed) == region).collect()
+        self.drawn_in(region, collapsed).collect()
+    }
+
+    /// The docks [`Self::shown_in`] lists, without collecting them.
+    fn drawn_in(&self, region: Region, collapsed: bool) -> impl Iterator<Item = u8> + '_ {
+        self.order().into_iter().filter(move |i| self.is_docked(*i) && self.drawn_region(*i, collapsed) == region)
     }
 
     /// The docks shown in windows of their own, in the strip's order.
@@ -462,15 +479,22 @@ const LIVE_RAIL: f32 = 292.0;
 /// Every built-in layout keeps the transition and output controls shown and no dock floating.
 pub fn built_in_layout(name: &str) -> Option<DockLayout> {
     let k = BUILT_IN_LAYOUTS.iter().position(|n| n.eq_ignore_ascii_case(name))?;
+    let docks = built_in_docks(name)?;
+    Some(DockLayout { name: BUILT_IN_LAYOUTS.get(k).copied().unwrap_or_default().to_string(), docks })
+}
+
+/// The docks of the built-in layout named `name`, ignoring case, without allocating
+/// ([`built_in_layout`] lists the layouts).
+pub fn built_in_docks(name: &str) -> Option<Docks> {
+    let k = BUILT_IN_LAYOUTS.iter().position(|n| n.eq_ignore_ascii_case(name))?;
     let (bottom, left, right) = (Region::Bottom.code(), Region::Left.code(), Region::Right.code());
     let classic = Docks::default();
-    let docks = match k {
+    Some(match k {
         0 => Docks { region: [left, left, bottom, bottom, bottom], left_width: SET_UP_COLUMN, ..classic },
         1 => Docks { health: true, region: [bottom, left, left, bottom, right], left_width: LIVE_COLUMN, right_width: LIVE_RAIL, ..classic },
         2 => Docks { sources: false, app_audio: true, region: [left, left, bottom, bottom, bottom], left_width: SET_UP_COLUMN, ..classic },
         _ => classic,
-    };
-    Some(DockLayout { name: BUILT_IN_LAYOUTS.get(k).copied().unwrap_or_default().to_string(), docks })
+    })
 }
 
 /// Whether `name` is a built-in layout's name, ignoring case.
@@ -1550,6 +1574,31 @@ mod tests {
         assert_eq!(crate::strip::height(800.0, 744.0, d.height), 200.0);
         assert_eq!(crate::strip::widths(1280.0, &[0, 1, 2], d.widths()), [300.0, 340.0, 638.0]);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn docks_are_arranged_alike_when_every_region_draws_the_same_docks_in_the_same_order() {
+        let live = built_in_layout("Live").map(|l| l.docks).unwrap_or_default();
+        let with = |order: [u8; DOCK_COUNT]| Docks { order, ..live };
+        assert!(live.arranged_like(&with([0, 1, 3, 2, 4])), "a hidden dock's place in the order is not drawn");
+        assert!(!live.arranged_like(&with([0, 2, 1, 3, 4])), "Sources and the Audio Mixer swapped in the left column");
+        assert!(!live.arranged_like(&with([1, 0, 2, 3, 4])), "the collapsed strip draws Sources before Scenes");
+    }
+
+    #[test]
+    fn a_hidden_docks_saved_region_and_window_do_not_change_the_arrangement() {
+        let live = built_in_layout("Live").map(|l| l.docks).unwrap_or_default();
+        assert!(!live.app_audio, "Application Audio is hidden in Live");
+        let mut moved = live;
+        assert!(moved.set_region(3, Region::Right));
+        moved.floating[3] = true;
+        assert!(live.arranged_like(&moved), "Application Audio is hidden, so where it would go is not drawn");
+        let mut shown = moved;
+        shown.app_audio = true;
+        assert!(!live.arranged_like(&shown), "a dock that is shown in one and hidden in the other");
+        let mut floating = live;
+        floating.floating[1] = true;
+        assert!(!live.arranged_like(&floating), "Sources in a window of its own");
     }
 
     #[test]

@@ -7,7 +7,9 @@
 //! keys select the neighbor of the focused one.
 
 use craft_ui::style::StyleCx;
-use egui::{Color32, CornerRadius, FontId, Id, Key, Modifiers, Rect, Response, Role, Sense, Stroke, StrokeKind, Ui, WidgetInfo, pos2, vec2};
+use egui::{
+    Color32, CornerRadius, FontId, Id, Key, Modifiers, Rect, Response, Role, Sense, Stroke, StrokeKind, Ui, UiBuilder, WidgetInfo, pos2, vec2,
+};
 
 use super::corner;
 
@@ -76,16 +78,24 @@ pub struct Segmented<'a> {
     selected: usize,
     style: &'a SegmentedStyle,
     enabled: bool,
+    group: Option<&'a str>,
 }
 
 impl<'a> Segmented<'a> {
     /// `selected` past the last label selects none of them.
     pub fn new(id: Id, labels: &'a [&'a str], selected: usize, style: &'a SegmentedStyle) -> Segmented<'a> {
-        Segmented { id, labels, selected, style, enabled: true }
+        Segmented { id, labels, selected, style, enabled: true, group: None }
     }
 
     pub fn enabled(mut self, enabled: bool) -> Segmented<'a> {
         self.enabled = enabled;
+        self
+    }
+
+    /// The name screen readers announce for the track, as a group of radio buttons; already
+    /// translated.
+    pub fn group(mut self, name: &'a str) -> Segmented<'a> {
+        self.group = Some(name);
         self
     }
 
@@ -107,7 +117,14 @@ impl<'a> Segmented<'a> {
         let s = self.style;
         let widths = self.segment_widths(ui);
         let total: f32 = widths.iter().sum();
-        let (rect, _) = ui.allocate_exact_size(vec2(total, s.height), Sense::hover());
+        let (rect, track) = ui.allocate_exact_size(vec2(total, s.height), Sense::hover());
+        // With a group name, the segments are registered in a child of the track, so screen
+        // readers find them inside the named group.
+        let group = self.group.map(|name| {
+            track.widget_info(|| WidgetInfo::labeled(Role::RadioGroup, self.enabled, name));
+            ui.new_child(UiBuilder::new().max_rect(rect).accessibility_parent(track.id))
+        });
+        let segment_ui: &Ui = group.as_ref().unwrap_or(&*ui);
         let radius = CornerRadius::same(s.radius);
         let painter = ui.painter_at(rect.expand(1.0));
         painter.rect_filled(rect, radius, s.track);
@@ -121,7 +138,7 @@ impl<'a> Segmented<'a> {
             let seg = Rect::from_min_max(pos2(x, rect.top()), pos2(x + w, rect.bottom()));
             x += w;
             let sense = if self.enabled { Sense::click() } else { Sense::hover() };
-            let r = ui.interact(seg, self.id.with(i), sense);
+            let r = segment_ui.interact(seg, self.id.with(i), sense);
             let selected = i == self.selected;
             r.widget_info(|| WidgetInfo::selected(Role::RadioButton, self.enabled, selected, *label));
             // The outer corners of the end segments follow the track's.
@@ -328,5 +345,33 @@ mod tests {
         });
         out.textures_delta.clear();
         assert_eq!(changed, None);
+    }
+
+    #[test]
+    fn screen_readers_hear_the_track_as_a_named_group_of_radio_buttons() {
+        let ctx = egui::Context::default();
+        ctx.enable_accesskit();
+        let st = style();
+        let raw = RawInput { screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(400.0, 100.0))), ..RawInput::default() };
+        let mut full = ctx.run_ui(raw, |ui| {
+            let _ = Segmented::new(Id::unique("g"), &["Set up", "Live"], 1, &st).group("Layout").show(ui);
+        });
+        full.textures_delta.clear();
+        let Some(update) = full.platform_output.accesskit_update else { panic!("no accessibility tree") };
+        let groups: Vec<_> = update.nodes.iter().filter(|(_, n)| n.role() == Role::RadioGroup).collect();
+        let [(group, node)] = groups.as_slice() else { panic!("one group: {groups:?}") };
+        assert_eq!(node.label(), Some("Layout"));
+        // The buttons are the group's descendants.
+        let mut inside = Vec::new();
+        let mut open = vec![*group];
+        while let Some(id) = open.pop() {
+            let Some((_, n)) = update.nodes.iter().find(|(i, _)| *i == id) else { continue };
+            if n.role() == Role::RadioButton {
+                inside.extend(n.label());
+            }
+            open.extend(n.children().iter().copied());
+        }
+        inside.sort_unstable();
+        assert_eq!(inside, ["Live", "Set up"]);
     }
 }
