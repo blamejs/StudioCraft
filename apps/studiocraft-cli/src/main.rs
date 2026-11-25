@@ -23,11 +23,12 @@ usage:
                      ui.inspect, ui.menu.list, ui.menu.invoke, ui.click, ui.drag, ui.key, ui.type,
                      ui.screenshot and app.quit
   studiocraft-cli mcp [--read-root <dir>]... [--write-root <dir>]... [--allow-streaming]
-                      [--collection <file>]
+                      [--allow-virtual-camera] [--collection <file>]
                      an MCP server on standard input and output with its own studio and no window.
                      --collection opens <file> before serving; the roots keep its file reads and
                      writes inside those folders (each flag may be given more than once);
-                     --allow-streaming lets it start a stream
+                     --allow-streaming lets it start a stream; --allow-virtual-camera lets it
+                     start the virtual camera
   studiocraft-cli mcp --connect <port>
                      an MCP server on standard input and output that controls the app started
                      with `studiocraft --control <port>`. `mcp <port>` is read as
@@ -263,7 +264,15 @@ mod tests {
         for method in ["engine.execute", "engine.commands", "document.inspect", "render.preview", "ui.inspect", "ui.screenshot", "app.quit"] {
             assert!(USAGE.contains(method), "{method}");
         }
-        for option in ["--connect <port>", "--read-root <dir>", "--write-root <dir>", "--allow-streaming", "--collection <file>", "`mcp <port>`"] {
+        for option in [
+            "--connect <port>",
+            "--read-root <dir>",
+            "--write-root <dir>",
+            "--allow-streaming",
+            "--allow-virtual-camera",
+            "--collection <file>",
+            "`mcp <port>`",
+        ] {
             assert!(USAGE.contains(option), "{option}");
         }
     }

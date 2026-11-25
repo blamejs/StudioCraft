@@ -44,7 +44,7 @@ crate in the same layer. `cargo xtask layers` checks this against the table in
 | L3 | `studiocraft-outputs` | Recording through an ffmpeg process, Matroska recording through the built-in encoders, streaming through the built-in encoders to several RTMP and RTMPS destinations, the virtual camera, and the video encoders. |
 | L4 | `studiocraft-studio` | The running studio: sources, mixer, compositor, transitions, outputs and live captions behind one command interface. |
 | L5 | `studiocraft-ui-egui` | The window: menus, preview, docks, properties, filters and settings. |
-| L5 | `studiocraft-mcp` | The MCP server: its tools, resources, resource templates, prompts and completions, a studio in the same process without a window (with its file roots and streaming gate), and the control channel client that sends calls to the app. |
+| L5 | `studiocraft-mcp` | The MCP server: its tools, resources, resource templates, prompts and completions, a studio in the same process without a window (with its file roots and its streaming and virtual camera gates), and the control channel client that sends calls to the app. |
 | app | `studiocraft` | The desktop binary, its control channel and the screenshot and self-test harness. |
 | app | `studiocraft-cli` | `send` for one control request, `mcp` for the MCP server on standard input and output (headless, or `--connect <port>` to the app), `check` for scene collection files and `bench` for the timing run. |
 | app | `studiocraft-web` | The browser editor for scene collection files: an `Editor` that runs the engine's scene and source commands on an opened file, and the page in `index.html` that draws it, reads the picked file and offers the edited collection as a download. |
