@@ -577,6 +577,33 @@ fn a_session_on_a_ring_read_before_counts_only_its_own_frames() {
 }
 
 #[test]
+fn a_release_while_another_is_signaling_returns_at_once_and_its_value_is_signaled() {
+    let gate = export::ReleaseGate::default();
+    let mut signaled = Vec::new();
+    let held = gate.release(5, |value| {
+        if signaled.is_empty() {
+            // A second thread releases while this call holds the gate; it must not wait for it.
+            let other = std::thread::scope(|s| s.spawn(|| gate.release(9, |_| panic!("only the caller that holds the gate signals"))).join());
+            assert!(matches!(other, Ok(true)), "the second release returns without signaling");
+        }
+        signaled.push(value);
+        true
+    });
+    assert!(held);
+    assert_eq!(signaled, [5, 9], "the holder signals the value left while it was signaling");
+    // A value not above the highest one signaled is not signaled again.
+    assert!(gate.release(7, |_| panic!("the fence never goes back")));
+    // A signal that cannot be queued is reported, and the next release tries the value again.
+    assert!(!gate.release(12, |_| false));
+    let mut again = Vec::new();
+    assert!(gate.release(10, |value| {
+        again.push(value);
+        true
+    }));
+    assert_eq!(again, [12]);
+}
+
+#[test]
 fn a_removed_device_counts_no_frame_as_done_and_records_why() {
     let ring = ExportRing::detached(64, 2);
     assert_eq!(ring.completed(7), 7);

@@ -3,7 +3,7 @@
 
 use std::collections::VecDeque;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
 
 use crate::fallback::Fallback;
 use crate::ring::{AdapterId, SLOTS};
@@ -185,6 +185,56 @@ impl ExportRing {
     #[cfg(windows)]
     pub fn texture(&self, slot: usize) -> Option<windows::Win32::Graphics::Direct3D11::ID3D11Texture2D> {
         self.nv12.as_ref()?.texture(slot).cloned()
+    }
+}
+
+/// The released fence's values, handed to a signal that only one thread may run at a time without
+/// a lock. A caller that finds another one signaling leaves its value for that caller to signal and
+/// returns at once.
+#[derive(Debug, Default)]
+#[cfg_attr(not(windows), allow(dead_code))]
+pub(crate) struct ReleaseGate {
+    /// The highest value asked for.
+    wanted: AtomicU64,
+    /// The highest value signaled. A signal still queued is not in the fence's completed value yet.
+    queued: AtomicU64,
+    /// Set while one caller runs `signal`.
+    busy: AtomicBool,
+}
+
+#[cfg_attr(not(windows), allow(dead_code))]
+impl ReleaseGate {
+    /// Ask for the fence to reach `value`. A value not above the highest one signaled so far is not
+    /// signaled, so the fence never goes back. The caller that holds the gate runs `signal` with the
+    /// highest value asked for, again while a higher one arrives, and returns whether every signal
+    /// it ran was queued; a caller that finds the gate held returns `true` without waiting.
+    pub(crate) fn release(&self, value: u64, mut signal: impl FnMut(u64) -> bool) -> bool {
+        // `wanted` and `busy` are written and read in one total order (SeqCst): a caller that finds
+        // the gate held asked for its value before the holder opens the gate, so the holder's check
+        // after opening it sees that value.
+        self.wanted.fetch_max(value, Ordering::SeqCst);
+        loop {
+            if self.busy.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst).is_err() {
+                return true;
+            }
+            let mut queued = true;
+            loop {
+                let wanted = self.wanted.load(Ordering::SeqCst);
+                if wanted <= self.queued.load(Ordering::Relaxed) {
+                    break;
+                }
+                if !signal(wanted) {
+                    queued = false;
+                    break;
+                }
+                self.queued.store(wanted, Ordering::Relaxed);
+            }
+            self.busy.store(false, Ordering::SeqCst);
+            // A value asked for after the last check and before the gate opened is signaled here.
+            if !queued || self.wanted.load(Ordering::SeqCst) <= self.queued.load(Ordering::Relaxed) {
+                return queued;
+            }
+        }
     }
 }
 
