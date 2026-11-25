@@ -2,7 +2,8 @@
 //!
 //! Once per block (1024 frames at 48 kHz, every 21.3 ms) on the master clock, the mixer takes
 //! one block from each input's queue, delays it by the input's sync offset, runs the input's
-//! audio filters, applies its volume, mute and transition fade, adds it to the mix and publishes
+//! audio filters, turns it to mono and applies its balance when the input is set to, applies its
+//! volume, mute and transition fade, adds it to the mix and publishes
 //! the input's levels. The clipped mix goes to every output's queue, stamped with the block's
 //! time.
 //!
@@ -111,6 +112,10 @@ pub struct MixInput {
     pub monitor: MonitorMode,
     /// The mix tracks the input goes to, when it is heard in the program.
     pub mix_tracks: MixTracks,
+    /// Where the input sits between the left (−1) and right (1) channels; 0 leaves both alone.
+    pub balance: f32,
+    /// Whether the input's two channels are mixed into one, played on both.
+    pub mono: bool,
 }
 
 /// The taps of one take of audio tracks: the program's, and those of the inputs recorded to
@@ -151,6 +156,12 @@ pub enum MixerCmd {
     MixTracks {
         source: SourceId,
         tracks: MixTracks,
+    },
+    /// A source's balance or its downmix to mono changed.
+    Channels {
+        source: SourceId,
+        balance: f32,
+        mono: bool,
     },
     /// Where the monitoring mix goes, or `None` to stop making it.
     MonitorOutput(Option<Arc<Fifo<PooledBlock>>>),
@@ -605,6 +616,12 @@ impl MixState {
                     i.cfg.mix_tracks = tracks;
                 }
             }
+            MixerCmd::Channels { source, balance, mono } => {
+                for i in self.inputs.iter_mut().filter(|i| i.cfg.source == source) {
+                    i.cfg.balance = balance;
+                    i.cfg.mono = mono;
+                }
+            }
             MixerCmd::AddOutput { id, queue } => {
                 self.outputs.retain(|o| !(o.id == id && o.track.is_none()));
                 self.outputs.push(OutputQueue { id, track: None, queue });
@@ -699,6 +716,7 @@ impl MixState {
             for f in &mut input.cfg.filters {
                 f.process_audio(samples);
             }
+            balance_and_mono(samples, input.cfg.balance, input.cfg.mono);
             let gain = input.cfg.gain * input.fade;
             let heard = !input.cfg.muted && input.fade > 0.0;
             if heard && monitoring && input.cfg.monitor.monitored() {
@@ -789,6 +807,29 @@ impl MixState {
     }
 }
 
+/// Turn `block`'s interleaved stereo frames to mono when `mono` is set, each channel becoming the
+/// average of the two, and then apply `balance`: above 0 the left channel is scaled by
+/// `1 - balance`, below 0 the right channel by `1 + balance`, so the center leaves both at full
+/// level and either end silences the other side. A balance that is not a number counts as the
+/// center, and one past an end as that end.
+fn balance_and_mono(block: &mut [f32], balance: f32, mono: bool) {
+    let balance = if balance.is_finite() { balance.clamp(-1.0, 1.0) } else { 0.0 };
+    if !mono && balance == 0.0 {
+        return;
+    }
+    let (left, right) = if balance > 0.0 { (1.0 - balance, 1.0) } else { (1.0, 1.0 + balance) };
+    for frame in block.as_chunks_mut::<CHANNELS>().0 {
+        let [l, r, ..] = frame;
+        if mono {
+            let m = (*l + *r) * 0.5;
+            *l = m;
+            *r = m;
+        }
+        *l *= left;
+        *r *= right;
+    }
+}
+
 /// Add `input * gain` to `out`, sample by sample, as far as the shorter of the two goes.
 fn add_into(out: &mut [f32], input: &[f32], gain: f32) {
     let gain = if gain.is_finite() { gain.max(0.0) } else { 0.0 };
@@ -857,9 +898,67 @@ mod tests {
                 sync_offset_ms: 0,
                 monitor: MonitorMode::Off,
                 mix_tracks: MixTracks::ALL,
+                balance: 0.0,
+                mono: false,
             },
             levels,
         )
+    }
+
+    /// Push one block whose left channel is `left` and right channel `right` to `a`.
+    fn feed_stereo(a: &AudioOut, left: f32, right: f32) {
+        let mut b = a.block();
+        b.samples.clear();
+        for _ in 0..BLOCK_FRAMES {
+            b.samples.extend_from_slice(&[left, right]);
+        }
+        a.push(b);
+    }
+
+    /// The left and right samples of the first frame of the next block on `q`.
+    fn first_frame(q: &Fifo<PooledBlock>) -> (f32, f32) {
+        let b = q.pop().unwrap_or_else(|| panic!("no block"));
+        (b.samples[0], b.samples[1])
+    }
+
+    #[test]
+    fn balance_and_mono_shape_an_input_before_the_program_the_tracks_and_the_monitor() {
+        let close2 = |got: (f32, f32), want: (f32, f32)| (got.0 - want.0).abs() < 1e-6 && (got.1 - want.1).abs() < 1e-6;
+        let a = Arc::new(AudioOut::default());
+        let (mut i, levels) = input(1, &a, 0.5, true);
+        i.balance = 0.5;
+        i.monitor = MonitorMode::MonitorAndOutput;
+        let (mut m, out, monitor) = monitored(vec![i]);
+        let track = take_track(&mut m, 2, 2);
+        // Toward the right, the left channel is lowered and the right keeps its level; the gain
+        // applies after.
+        feed_stereo(&a, 0.8, 0.4);
+        m.tick(Tick(0));
+        let want = (0.8 * 0.5 * 0.5, 0.4 * 0.5);
+        for (name, got) in [("program", first_frame(&out)), ("track", first_frame(&track)), ("monitor", first_frame(&monitor))] {
+            assert!(close2(got, want), "{name}: {got:?}");
+        }
+        assert!((levels.load().peak[0] - 0.2).abs() < 1e-6, "the meter reads the balanced left channel: {:?}", levels.load().peak);
+        // Mono averages the channels first, then the balance applies; the change needs no new list.
+        m.apply(MixerCmd::Channels { source: SourceId(1), balance: -1.0, mono: true });
+        feed_stereo(&a, 0.8, 0.4);
+        m.tick(Tick(1));
+        let got = first_frame(&out);
+        assert!(close2(got, (0.6 * 0.5, 0.0)), "fully left silences the right: {got:?}");
+        drop((track.pop(), monitor.pop()));
+        m.apply(MixerCmd::Channels { source: SourceId(1), balance: 0.0, mono: true });
+        feed_stereo(&a, 1.0, -1.0);
+        m.tick(Tick(2));
+        assert!(close2(first_frame(&out), (0.0, 0.0)), "opposite channels cancel in mono");
+        // A balance that is not a number counts as the center; one past an end as that end.
+        let mut block = vec![0.8, 0.4, 0.8, 0.4];
+        balance_and_mono(&mut block, f32::NAN, false);
+        assert_eq!(block, [0.8, 0.4, 0.8, 0.4]);
+        balance_and_mono(&mut block, 7.0, false);
+        assert_eq!(block, [0.0, 0.4, 0.0, 0.4]);
+        let mut odd = vec![0.8, 0.4, 0.3];
+        balance_and_mono(&mut odd, 0.0, true);
+        assert!(close2((odd[0], odd[1]), (0.6, 0.6)) && odd[2] == 0.3, "a trailing half frame is left alone: {odd:?}");
     }
 
     fn feed(a: &AudioOut, value: f32) {

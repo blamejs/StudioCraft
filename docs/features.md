@@ -213,11 +213,21 @@ short-term, integrated, loudness range and true peak). Each profile keeps a loud
 tool `audio_loudness` report the readings with the band. The window does not show these readings
 yet.
 
-A source's Properties window sets two more audio options:
+A source's Properties window sets four more audio options:
 
 - **Sync offset** delays the source's audio by 0 to 5000 ms to line it up with its picture.
 - **Monitoring** is off, monitor only, or monitor and output. With monitor only, you hear the
   source, and recordings and streams leave it out.
+- **Balance** moves the source between the left and right channels, from fully left to fully
+  right; the label beside the slider shows how far, as a percentage. In the center both
+  channels keep their level. Toward the right the left channel is lowered, at 50% right to
+  half its level, and fully right it is silent; toward the left the right channel is lowered
+  the same way. Double-clicking the slider centers it.
+- **Downmix to mono** plays the average of the source's left and right channels on both. The
+  mixer mixes the channels down first and then applies the balance.
+
+The mixer applies the balance and the downmix after the source's audio filters and before its
+volume, so the source's meters, the program, the mix tracks and monitoring all hear the result.
 
 The window also shows the source's **Filter delay**: how long the audio filters the mixer runs on
 the source delay its audio, in milliseconds, with the number of samples at 48 kHz in its tooltip.

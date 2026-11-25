@@ -45,8 +45,16 @@ pub struct FileFormat {
 /// Scene collections.
 pub const COLLECTION: FileFormat = FileFormat {
     name: "studiocraft.scene-collection",
-    version: 7,
-    migrations: &[collection_v1_to_v2, collection_v2_to_v3, collection_v3_to_v4, collection_v4_to_v5, collection_v5_to_v6, collection_v6_to_v7],
+    version: 8,
+    migrations: &[
+        collection_v1_to_v2,
+        collection_v2_to_v3,
+        collection_v3_to_v4,
+        collection_v4_to_v5,
+        collection_v5_to_v6,
+        collection_v6_to_v7,
+        collection_v7_to_v8,
+    ],
 };
 
 /// Collection version 1 to 2: each source's audio has a sync offset (`sync_offset_ms`), 0 for the
@@ -141,6 +149,23 @@ fn collection_v6_to_v7(data: &mut Value) -> Result<(), String> {
             let audio = source.entry("audio").or_insert_with(|| json!({}));
             if let Value::Object(a) = audio {
                 a.entry("mix_tracks").or_insert_with(|| json!([1, 2, 3, 4, 5, 6]));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Collection version 7 to 8: each source's audio has a balance (`balance`, −1 left to 1 right)
+/// and can be turned to mono (`mono`); centered, `0`, and stereo, `false`, for the sources of an
+/// older file.
+fn collection_v7_to_v8(data: &mut Value) -> Result<(), String> {
+    let data = data.as_object_mut().ok_or("the collection is not an object")?;
+    if let Some(Value::Array(sources)) = data.get_mut("sources") {
+        for source in sources.iter_mut().filter_map(Value::as_object_mut) {
+            let audio = source.entry("audio").or_insert_with(|| json!({}));
+            if let Value::Object(a) = audio {
+                a.entry("balance").or_insert_with(|| json!(0.0));
+                a.entry("mono").or_insert(Value::Bool(false));
             }
         }
     }
@@ -453,6 +478,7 @@ mod tests {
         (5, include_str!("../fixtures/collection-v5.json")),
         (6, include_str!("../fixtures/collection-v6.json")),
         (7, include_str!("../fixtures/collection-v7.json")),
+        (8, include_str!("../fixtures/collection-v8.json")),
     ];
     const PROFILE_FIXTURES: &[(u32, &str)] = &[
         (1, include_str!("../fixtures/profile-v1.json")),
@@ -872,6 +898,42 @@ mod tests {
         }
         let omitted = v7.replace(", \"mix_tracks\": [1, 3]", "");
         assert_eq!(read_collection(&omitted, "Scene").unwrap().source_by_name("Microphone").map(|s| s.audio.mix_tracks), Some(MixTracks::ALL));
+    }
+
+    #[test]
+    fn collections_keep_each_source_balance_and_mono() {
+        for (v, text) in &COLLECTION_FIXTURES[..7] {
+            let c = read_collection(text, "Scene").unwrap();
+            assert!(c.sources.iter().all(|s| s.audio.balance == 0.0 && !s.audio.mono), "version {v} keeps every source centered and in stereo");
+        }
+        let (_, v8) = COLLECTION_FIXTURES[7];
+        let c = read_collection(v8, "Scene").unwrap();
+        let audio = |c: &crate::SceneCollection, name: &str| c.source_by_name(name).map(|s| (s.audio.balance, s.audio.mono));
+        assert_eq!(audio(&c, "Background"), Some((0.0, false)));
+        assert_eq!(audio(&c, "Title"), Some((1.0, false)));
+        assert_eq!(audio(&c, "Microphone"), Some((-0.25, true)));
+        assert_eq!(c.source_by_name("Microphone").map(|s| s.audio.mix_tracks.numbers().collect::<Vec<_>>()), Some(vec![1, 3]), "the rest is kept");
+        let written = write_collection(&c).unwrap();
+        assert_eq!(read_collection(&written, "Scene").unwrap(), c);
+        // A balance past either end is brought back to that end, and one that is not a number
+        // goes back to the center.
+        for (bad, want) in [("5", 1.0), ("-7", -1.0), ("1e300", 0.0)] {
+            let text = v8.replace("\"balance\": -0.25", &format!("\"balance\": {bad}"));
+            assert_ne!(text, v8);
+            assert_eq!(audio(&read_collection(&text, "Scene").unwrap(), "Microphone"), Some((want, true)), "{bad}");
+        }
+        for bad in [
+            "\"balance\": \"left\", \"mono\": true",
+            "\"balance\": null, \"mono\": true",
+            "\"balance\": -0.25, \"mono\": 1",
+            "\"balance\": -0.25, \"mono\": \"yes\"",
+        ] {
+            let text = v8.replace("\"balance\": -0.25, \"mono\": true", bad);
+            assert_ne!(text, v8);
+            assert!(matches!(read_collection(&text, "Scene"), Err(FormatError::Data(_))), "{bad} refuses the file");
+        }
+        let omitted = v8.replace(", \"balance\": -0.25, \"mono\": true", "");
+        assert_eq!(audio(&read_collection(&omitted, "Scene").unwrap(), "Microphone"), Some((0.0, false)));
     }
 
     #[test]

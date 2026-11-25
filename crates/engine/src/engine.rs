@@ -832,6 +832,29 @@ impl Engine {
                 s.audio.mix_tracks = tracks;
                 Ok((Value::Null, None))
             }
+            Command::SourceBalance { source, balance } => {
+                use studiocraft_model::collection::MAX_BALANCE;
+                let id = self.source_id(&source)?;
+                let s = c.source_mut(id).ok_or_else(|| EngineError::NoSource(id.to_string()))?;
+                if self.registry.source(&s.kind).is_ok_and(|p| !p.caps().audio) {
+                    return Err(EngineError::Invalid(format!("`{}` has no audio", s.name)));
+                }
+                if !balance.is_finite() || !(-MAX_BALANCE..=MAX_BALANCE).contains(&balance) {
+                    return Err(EngineError::Invalid(format!("the balance must be a number from -{MAX_BALANCE} (left) to {MAX_BALANCE} (right)")));
+                }
+                // -0 is the center, saved as 0.
+                s.audio.balance = balance + 0.0;
+                Ok((Value::Null, Some(format!("source.balance:{id}"))))
+            }
+            Command::SourceMono { source, on } => {
+                let id = self.source_id(&source)?;
+                let s = c.source_mut(id).ok_or_else(|| EngineError::NoSource(id.to_string()))?;
+                if self.registry.source(&s.kind).is_ok_and(|p| !p.caps().audio) {
+                    return Err(EngineError::Invalid(format!("`{}` has no audio", s.name)));
+                }
+                s.audio.mono = on;
+                Ok((Value::Null, None))
+            }
             Command::SourceMute { source, muted } => {
                 let id = self.source_id(&source)?;
                 if let Some(s) = c.source_mut(id) {

@@ -478,6 +478,12 @@
 menu	Transform	Przekształć
 	Record as its own track	Nagrywaj jako osobną ścieżkę
 	Audio tracks write this source to a WAV file of its own (Settings › Output › Audio tracks)	Ścieżki audio zapisują to źródło w osobnym pliku WAV (Ustawienia › Wyjście › Ścieżki audio)
+	Balance	Balans
+	Moves this source between the left and right channels; double-click to center it	Przesuwa to źródło między lewym a prawym kanałem; kliknij dwukrotnie, aby je wyśrodkować
+	{percent}% left	{percent}% w lewo
+	{percent}% right	{percent}% w prawo
+	Downmix to mono	Zmiksuj do mono
+	Plays the average of this source's left and right channels on both	Odtwarza średnią lewego i prawego kanału tego źródła w obu
 	Audio tracks	Ścieżki audio
 	Write each recorded source and the program mix to its own WAV file	Zapisuj każde nagrywane źródło i miks programu w osobnym pliku WAV
 	Write them while	Zapisuj, gdy
