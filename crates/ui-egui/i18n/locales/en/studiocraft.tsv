@@ -535,6 +535,7 @@
 	The stream's encoder, {encoder}: no destination	The stream's encoder, {encoder}: no destination
 	The stream's encoder, {encoder}: {destinations}	The stream's encoder, {encoder}: {destinations}
 	Own encoder, {encoder}: {destinations}	Own encoder, {encoder}: {destinations}
+	These are the profile's encoders. A destination that is sending keeps the encoder it started with until it is stopped and started again.	These are the profile's encoders. A destination that is sending keeps the encoder it started with until it is stopped and started again.
 	Video encoders	Video encoders
 	List a Service's Ingest Servers	List a Service's Ingest Servers
 	Ingest server	Ingest server

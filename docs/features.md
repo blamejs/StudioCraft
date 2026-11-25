@@ -636,7 +636,9 @@ By default every destination sends what the stream's video encoder makes. In the
 encoders section of Settings › Stream, a destination can choose a video encoder of its own and a
 video bitrate of its own (100 to 200000 kbps). The section lists which destinations share which
 encoder, and the Streaming window shows the same list while any destination has an encoder of its
-own. A destination whose encoder and bitrate are the stream's shares the stream's encoder.
+own. While the stream runs, the window's list shows the profile's encoders, and a destination that
+is sending keeps the encoder it started with until it is stopped and started again. A destination
+whose encoder and bitrate are the stream's shares the stream's encoder.
 Destinations that choose the same encoder and bitrate share one encoder of their own, which uses
 the encoder's settings from Settings › Stream. Every encoder encodes the same frames at the stream's
 picture size, frame rate and keyframe interval, with its own AAC sound at the stream's audio

@@ -456,17 +456,23 @@ pub(crate) fn show(ui: &mut Ui, view: &View, panel: &mut StreamingPanel, acts: &
             ui.push_id(("destination", &d.id), |ui| row(ui, view, d, live, panel, acts, palette));
             ui.separator();
         }
-        encoders(ui, view.stream);
+        encoders(ui, view.stream, view.running);
     });
 }
 
-/// Which destinations share which video encoder, when one runs an encoder of its own.
-fn encoders(ui: &mut Ui, s: &StreamSettings) {
+/// Which destinations share which video encoder, when one runs an encoder of its own. While the
+/// stream `running`, it says the list is the profile's.
+fn encoders(ui: &mut Ui, s: &StreamSettings, running: bool) {
     let groups = s.encoder_groups();
     if groups.len() < 2 {
         return;
     }
     ui.label(RichText::new(tl!("Video encoders")).strong());
+    if running {
+        ui.weak(tl!(
+            "These are the profile's encoders. A destination that is sending keeps the encoder it started with until it is stopped and started again."
+        ));
+    }
     let name = |id: &str| {
         s.destination(id).map_or_else(|| id.to_string(), |d| if d.name.trim().is_empty() { d.id.clone() } else { d.name.trim().to_string() })
     };

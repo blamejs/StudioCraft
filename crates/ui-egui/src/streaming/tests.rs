@@ -195,6 +195,15 @@ fn a_destination_gets_its_own_encoder_and_the_list_says_which_share_one() {
     let mut panel = StreamingPanel::default();
     let texts = drawn(|ui| show(ui, &view, &mut panel, &mut Vec::new()));
     assert!(texts.iter().any(|t| t == "Own encoder, h264 at 1500 kbps: Low"), "{texts:?}");
+    let keeps =
+        "These are the profile's encoders. A destination that is sending keeps the encoder it started with until it is stopped and started again.";
+    assert!(!texts.iter().any(|t| t == keeps), "{texts:?}");
+    // While the stream runs, the list is the profile's, which a sending destination may not use yet.
+    for own in [true, false] {
+        let view = View { stream: &a.studio.profile().stream, running: true, own, live: &[], held: &|_| false, checks: &[], ingests: &[] };
+        let texts = drawn(|ui| show(ui, &view, &mut panel, &mut Vec::new()));
+        assert!(texts.iter().any(|t| t == keeps), "{texts:?}");
+    }
 }
 
 #[test]
