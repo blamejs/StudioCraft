@@ -775,6 +775,17 @@ fn huge_pool_strides_skip_cells_outside_the_input() {
     assert_eq!(y, [f32::NEG_INFINITY, 5.0]);
 }
 
+/// A pool with no output columns returns at once instead of walking its output rows, since the
+/// load-time cost counts no window steps for it.
+#[test]
+fn empty_output_pools_walk_no_rows() {
+    let mut y: [f32; 0] = [];
+    // The sizes come from a model at run time. Without the early return, an unoptimized build
+    // walks all of these rows.
+    let (rows, cols) = std::hint::black_box((usize::MAX, 0));
+    max_pool(&[], [rows, cols], 1, [rows, cols], [1, 1], [1, 1], [0, 0], &mut y);
+}
+
 #[test]
 fn half_floats_decode() {
     assert_eq!(half_to_f32(0x3c00), 1.0);

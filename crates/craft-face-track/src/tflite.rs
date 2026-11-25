@@ -1022,6 +1022,10 @@ fn plan(steps: &[Step], inputs: &[usize], outputs: &[usize], sizes: &[usize], co
 
 /// Max pooling over `k` windows into `y`; window cells outside the input are ignored.
 fn max_pool(x: &[f32], [h, w]: [usize; 2], c: usize, [oh, ow]: [usize; 2], k: [usize; 2], s: [usize; 2], pad: [usize; 2], y: &mut [f32]) {
+    // An empty output has nothing to write, and its load-time cost counts no window steps.
+    if y.is_empty() {
+        return;
+    }
     for oy in 0..oh {
         for ox in 0..ow {
             let Some(out) = y.get_mut((oy * ow + ox) * c..(oy * ow + ox + 1) * c) else { return };
