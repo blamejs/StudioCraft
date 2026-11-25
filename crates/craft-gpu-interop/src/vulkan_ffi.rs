@@ -21,7 +21,7 @@ use windows::Win32::Graphics::Direct3D12::{D3D12CreateDevice, ID3D12Device, ID3D
 use windows::Win32::Graphics::Dxgi::{CreateDXGIFactory1, IDXGIAdapter1, IDXGIFactory4};
 
 use crate::export::ExportRing;
-use crate::fallback::{Backend, Fallback, check_import};
+use crate::fallback::{Backend, Fallback, check_import, open_all};
 use crate::ring::{AdapterId, SharedRing};
 
 /// A ring opened on one Vulkan device: its textures as wgpu textures, and its two fences.
@@ -126,19 +126,27 @@ pub(crate) fn import(device: &wgpu::Device, queue: &wgpu::Queue, ring: &SharedRi
         memory_flags: wgpu::hal::MemoryFlags::empty(),
         view_formats: Vec::new(),
     };
-    let mut raw = Vec::with_capacity(ring.handles.textures.len());
-    let (vk_device, family) = {
-        // SAFETY: the guard is only used to create images, bind memory to them and clone the
-        // device's function table, and it is dropped before the images are handed to wgpu.
+    let (raw, vk_device, family) = {
+        // SAFETY: the guard is only used to create images, bind memory to them, destroy them after
+        // a failed import and clone the device's function table, and it is dropped before the
+        // images are handed to wgpu.
         let Some(hal) = (unsafe { device.as_hal::<wgpu::hal::api::Vulkan>() }) else { return Err(Fallback::UnsupportedBackend) };
-        for &handle in &ring.handles.textures {
-            // SAFETY: the device has `VULKAN_EXTERNAL_MEMORY_WIN32`, `handle` is an open NT handle
-            // of a single-sampled 2D BGRA8 texture of `size` with one mip level, as the capture
-            // side created it, and `ring` keeps it open. The import does not take the handle.
-            let texture = unsafe { hal.texture_from_d3d11_shared_handle(handle, &hal_desc) }.map_err(|_| Fallback::ImportFailed)?;
-            raw.push(texture);
-        }
-        (hal.raw_device().clone(), hal.queue_family_index())
+        let raw = open_all(
+            &ring.handles.textures,
+            |handle| {
+                // SAFETY: the device has `VULKAN_EXTERNAL_MEMORY_WIN32`, `handle` is an open NT
+                // handle of a single-sampled 2D BGRA8 texture of `size` with one mip level, as the
+                // capture side created it, and `ring` keeps it open. The import does not take the
+                // handle.
+                unsafe { hal.texture_from_d3d11_shared_handle(handle, &hal_desc) }.map_err(|_| Fallback::ImportFailed)
+            },
+            |texture| {
+                // SAFETY: `texture` was made on this device, nothing else holds it, and no
+                // submission uses it. A wgpu-hal texture is not freed when it is dropped.
+                unsafe { wgpu::hal::Device::destroy_texture(&*hal, texture) }
+            },
+        )?;
+        (raw, hal.raw_device().clone(), hal.queue_family_index())
     };
     let textures: Vec<wgpu::Texture> = raw
         .into_iter()

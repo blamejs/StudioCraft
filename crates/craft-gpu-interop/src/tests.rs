@@ -192,6 +192,22 @@ fn a_vulkan_import_needs_the_display_adapter_the_external_memory_extension_and_t
 }
 
 #[test]
+fn a_failed_open_destroys_the_resources_opened_before_it() {
+    let mut destroyed = Vec::new();
+    let result = crate::fallback::open_all(&[1, 2, 3], |h| if h == 3 { Err(Fallback::ImportFailed) } else { Ok(h * 10) }, |r| destroyed.push(r));
+    assert_eq!(result, Err(Fallback::ImportFailed));
+    assert_eq!(destroyed, [10, 20], "both textures opened before the failure are destroyed");
+
+    let mut destroyed = Vec::new();
+    let result = crate::fallback::open_all(&[1, 2, 3], |h| Ok::<_, Fallback>(h * 10), |r| destroyed.push(r));
+    assert_eq!(result, Ok(vec![10, 20, 30]));
+    assert!(destroyed.is_empty(), "nothing is destroyed when every open succeeds");
+
+    let result = crate::fallback::open_all(&[1], |_| Err::<u32, _>(Fallback::ImportFailed), |_| panic!("nothing was opened"));
+    assert_eq!(result, Err(Fallback::ImportFailed));
+}
+
+#[test]
 fn an_adapter_id_keeps_both_parts() {
     assert_eq!(AdapterId::from_parts(1, 2).0, (2 << 32) | 1);
     assert_eq!(AdapterId::from_parts(u32::MAX, -1).0, u64::MAX);

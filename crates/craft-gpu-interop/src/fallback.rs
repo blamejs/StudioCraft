@@ -124,3 +124,20 @@ pub fn check_export(backend: Backend, compositor: Option<AdapterId>) -> Result<A
     };
     check_import(backend, adapter, Some(adapter)).map(|()| adapter)
 }
+
+/// Open each of `handles` with `open`, in order. When one fails, every resource opened before it
+/// is passed to `destroy`, and the failure is returned.
+#[cfg_attr(not(all(windows, feature = "wgpu")), allow(dead_code))]
+pub(crate) fn open_all<H: Copy, T, E>(handles: &[H], mut open: impl FnMut(H) -> Result<T, E>, destroy: impl FnMut(T)) -> Result<Vec<T>, E> {
+    let mut opened = Vec::with_capacity(handles.len());
+    for &handle in handles {
+        match open(handle) {
+            Ok(resource) => opened.push(resource),
+            Err(e) => {
+                opened.into_iter().for_each(destroy);
+                return Err(e);
+            }
+        }
+    }
+    Ok(opened)
+}
