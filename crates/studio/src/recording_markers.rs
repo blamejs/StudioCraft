@@ -205,6 +205,11 @@ impl MarkerWatch {
         }
     }
 
+    /// Whether the watched output writes the file at `recording`.
+    fn watches(&self, recording: &Path) -> bool {
+        self.recording.as_ref().is_some_and(|w| w.recording == recording)
+    }
+
     /// The opening [`MarkerWatch::set_opening`] gave the watched output; 0 without one.
     fn opening(&self) -> Tick {
         self.recording.as_ref().map_or(Tick(0), |w| w.opening)
@@ -913,7 +918,7 @@ impl Studio {
     /// time in the recording, or in the copy without a recording, and what each output did.
     pub(crate) fn add_recording_marker(&mut self, name: Option<String>) -> Result<Value, StudioError> {
         self.sync_recording_markers();
-        self.note_copy_opening();
+        self.note_stream_copy();
         let now = self.clock.now();
         let rm = &mut self.recording_markers;
         mark_recording_and_copy(&mut rm.watch, &mut rm.stream, now, name.as_deref()).map_err(StudioError::Output)
@@ -921,9 +926,10 @@ impl Studio {
 
     /// Give the watch of the running stream's copy, and the session's markers in the copies of
     /// streams that ran and that run, the part of the stream before each copy's file starts, so
-    /// each marker reports its time in the file. It reads the stream's state, so it runs for a
-    /// marker command, not each frame.
-    fn note_copy_opening(&mut self) {
+    /// each marker reports its time in the file. A running copy that has failed since the last
+    /// poll takes no more markers. It reads the stream's state, so it runs for a marker command,
+    /// not each frame.
+    fn note_stream_copy(&mut self) {
         for copy in self.recording_markers.session.copy_files() {
             if let Some(start_ns) = self.outputs.copy_start(&copy) {
                 self.recording_markers.session.copy_opened(&copy, tick_of(Duration::from_nanos(start_ns)).seconds());
@@ -933,6 +939,14 @@ impl Studio {
         let opening = tick_of(Duration::from_nanos(c.start_ns));
         self.recording_markers.stream.set_opening(&c.path, opening);
         self.recording_markers.session.copy_opened(&c.path, opening.seconds());
+        if let Some(cause) = c.failure.as_deref()
+            && self.recording_markers.stream.watches(&c.path)
+            && self.recording_markers.stream.takes_markers()
+        {
+            self.recording_markers.stream.fail(cause);
+            // A failed copy no longer keeps the session running.
+            self.sync_recording_markers();
+        }
     }
 
     /// Whether File › Add Recording Marker has an output to mark: a running recording, or a
@@ -946,7 +960,7 @@ impl Studio {
     /// marker. An output that does not keep it is reported, and the others keep it.
     pub(crate) fn add_marker(&mut self, name: Option<String>) -> Result<Value, StudioError> {
         self.sync_recording_markers();
-        self.note_copy_opening();
+        self.note_stream_copy();
         let now = self.clock.now();
         let next = self.recording_markers.session.next(name).map_err(StudioError::Output)?;
         let (recording, in_recording) = self.recording_markers.watch.mark(now, &next.1);
@@ -964,7 +978,7 @@ impl Studio {
     /// new name. An output that already gives the marker that name is not written again.
     pub(crate) fn rename_marker(&mut self, index: usize, name: String) -> Result<Value, StudioError> {
         self.sync_recording_markers();
-        self.note_copy_opening();
+        self.note_stream_copy();
         let m = self.recording_markers.session.get(index).map_err(StudioError::Output)?.clone();
         let mut rename_in = |held: &Option<InRecording>, kept: Option<f64>| match (held, kept) {
             (Some(r), Some(seconds)) => match self.rename_recording_marker(r, &name) {
@@ -1021,7 +1035,7 @@ impl Studio {
     /// `marker.list`.
     pub(crate) fn marker_list(&mut self) -> Value {
         self.sync_recording_markers();
-        self.note_copy_opening();
+        self.note_stream_copy();
         self.recording_markers.session.json()
     }
 
@@ -1663,6 +1677,23 @@ mod tests {
         *failure.lock().unwrap() = Some("the folder is gone".into());
         assert_eq!(studio.add_recording_marker(None).unwrap_err().to_string(), "the stream's copy failed: the folder is gone");
         assert!(!studio.can_add_recording_marker());
+    }
+
+    #[test]
+    fn a_marker_command_sees_a_copy_that_failed_since_the_last_poll() {
+        let dir = tempfile::tempdir().unwrap();
+        let copy = dir.path().join("Stream 2026-11-23 10-00-00.mkv");
+        let (mut studio, failure) = streaming_with_failing_copy(&copy, 30, false);
+        studio.sync_recording_markers();
+        studio.add_marker(Some("Goal".into())).unwrap();
+        *failure.lock().unwrap() = Some("the disk is full".into());
+        // No poll yet: the command reads the copy's own state, and the session ends with the copy.
+        assert_eq!(studio.marker_list()["running"], json!(false));
+        assert_eq!(studio.add_recording_marker(None).unwrap_err().to_string(), "the stream's copy failed: the disk is full");
+        // The failed copy ends the session, as it does once the outputs are polled.
+        assert_eq!(studio.add_marker(None).unwrap_err().to_string(), NO_SESSION);
+        assert!(!studio.can_add_recording_marker());
+        stop_stream(&mut studio);
     }
 
     #[test]
