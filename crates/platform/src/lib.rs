@@ -53,6 +53,9 @@ pub enum PlatformError {
     /// open it again until its settings change.
     #[error("{0}")]
     Stopped(String),
+    /// The device is still busy with earlier requests. The same request can succeed later.
+    #[error("the audio device is busy")]
+    Busy,
 }
 
 #[cfg(any(windows, target_os = "macos"))]

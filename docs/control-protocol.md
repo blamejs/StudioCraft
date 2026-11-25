@@ -693,8 +693,13 @@ under that name now. `status` is `idle` while no stream runs, `not_in_stream` fo
 added after the stream started, and otherwise `connecting`, `live`, `retrying`,
 `waiting_for_network` (this computer has no network route to the server, and the try starts when
 one returns), `stopped` or `failed`. While the stream runs a destination also has `bytes`,
-`dropped` and `reconnects`; a `retrying` or `waiting_for_network` one has `attempt`, `error` and
-`cause` (of the last failure), and a `failed` one has `error` and `cause`.
+`dropped` and `reconnects`; a `retrying` or `waiting_for_network` one has `attempt`, `max_tries`,
+`next_try_ms`, `error` and `cause` (of the last failure), and a `failed` one has `error` and `cause`.
+`attempt` is the number of the next try and `max_tries` the failed tries in a row the running
+stream allows, so the tries left, the next one included, are `max_tries - attempt + 1`.
+`next_try_ms` is the time in milliseconds until the next try starts. It is `null` while a try runs,
+and for a `waiting_for_network` destination whose server is given as an IP address, which tries
+when a route to the server returns.
 `error` is the connection's own English text. `cause` is one of these ids:
 
 | `cause` | Meaning |
@@ -758,13 +763,20 @@ or trying to is not removed until it is stopped.
 `stream.destination_start` and `stream.destination_stop` take `{"id"}` and start or stop sending to
 that destination of the running stream; the others go on. They return `{"id", "on"}`.
 
+`stream.retry_now` takes `{"id"}` and starts the next try of that destination of the running stream
+at once, as Try Now in the Streaming window does, when it is `retrying` and waits for its next try or
+is `waiting_for_network`; a destination waiting for the network tries without a route. It returns
+`{"id", "started"}`, where `started` is `false` for a destination that was not waiting, which it
+leaves as it is. Unlike a stop and start, the try counts toward the failed tries in a row.
+
 These are errors: a missing or unknown `id`, a 17th destination, a `name` over 128 characters, a
 `server` over 4096 bytes, a `name` or `server` with a control character, a `server` with a user
 name or password before the host (`rtmp://user:pass@host/app`), a `key` other than
 `profile`, `held` or `none`, `held_name` without `key` `held` or outside 1 to 64 bytes, a `service`
 that is not empty and is not a streaming service id, a parameter
-of the wrong type, a start or stop while no stream runs or while the running stream was started with
-another profile, and a start of a destination whose held key is not set. While a stream of another
+of the wrong type, a start, stop or `stream.retry_now` while no stream runs or while the running
+stream was started with another profile, a `stream.retry_now` of a destination that is not in the
+running stream, and a start of a destination whose held key is not set. While a stream of another
 profile runs, each destination's `status` is `not_in_stream`. Each change is saved in the profile, and an open Settings window shows the new
 destinations. Keys held for the session are set in the Streaming window only and are not command
 parameters.

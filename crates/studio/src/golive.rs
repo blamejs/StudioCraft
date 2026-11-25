@@ -603,7 +603,7 @@ mod tests {
     }
 
     fn state(id: &str, status: DestinationStatus) -> DestinationState {
-        DestinationState { id: id.into(), target: String::new(), status, bytes: 0, dropped: 0, reconnects: 0 }
+        DestinationState { id: id.into(), target: String::new(), status, bytes: 0, dropped: 0, reconnects: 0, next_try: None, max_tries: 10 }
     }
 
     struct Fixture {

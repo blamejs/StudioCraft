@@ -529,7 +529,11 @@ tried (at most four) with its own outcome. A lookup with no answer within 10 s s
 did not answer. On Windows a lookup failure also says whether the DNS server answered that the name
 does not exist or did not answer; on macOS and Linux a lookup the system answers with an error
 reports only that the lookup failed. Start and
-Stop send to one destination or stop sending to it while the others go on. A destination added
+Stop send to one destination or stop sending to it while the others go on. A destination that
+waits to try again shows its try number out of the tries it has, such as "try 3 of 10", and when
+the next try starts, as a countdown in seconds, or "when a network route to the server returns" for
+a server given as an IP address that has no route. Try Now starts that try at once, without a route
+too; unlike Stop and Start, the try counts toward the tries. A destination added
 after the stream started is sent to from the next start, and so are changes to a server or a key.
 
 Check Connection, under each destination of the Streaming window, checks what this computer's
@@ -833,6 +837,42 @@ status bar start at the right, and egui's submenus, scroll bars and collapsing h
 A profile is a set of stream and output settings, and a scene collection is a set of scenes. You
 can keep several of each and switch between them from the menu bar. Scene Collection › Import…
 and Export… read and write a scene collection as a file.
+
+### Scene collections in the browser
+
+The browser editor in `apps/studiocraft-web` edits a scene collection file without the app. Open…
+reads a file of any version the app imports, up to 16 MiB (16,777,216 bytes), and refuses a
+larger file before reading it. The page stays usable while the file is read. Picking another file or New before the
+read ends drops the first file.
+
+The Scenes list adds, renames, reorders and removes scenes, and a click on a scene lists its
+sources, the top of the picture first. The Sources list reorders a scene's sources, renames a
+source in every scene that shows it, and removes a source from the scene. Add to Scene places a
+source that another scene shows. A removed scene or source takes with it the sources that no
+other scene shows, as in the app. New sources are added in the app. Each edit runs the app's
+command, with the same names and limits, and Undo and Redo step through the edits. In the browser
+each change is its own undo step.
+
+Save downloads the collection as `<name>.json` in the current format, which Scene Collection ›
+Import… reads. Characters that file systems refuse become `_` in the file name, and a name that
+Windows reserves for a device, such as `CON` or `COM1`, gets a leading `_`. New, opening a
+file and leaving the page ask first when the collection has unsaved changes.
+
+The page shows its labels and messages in the browser's preferred language when the app has a
+translation for it, from the app's own catalogs, and in English otherwise.
+
+To build and serve the editor, add the target and `trunk` once, then run `trunk serve` in
+`apps/studiocraft-web`:
+
+```sh
+rustup target add wasm32-unknown-unknown
+cargo install trunk --locked
+cd apps/studiocraft-web
+trunk serve
+```
+
+The editor opens on http://127.0.0.1:8770. `trunk build --release` writes the page to
+`target/web`.
 
 ### Stats and scopes
 

@@ -2,6 +2,7 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Duration;
 
 use studiocraft_media::Tick;
 use studiocraft_media::audio::PooledBlock;
@@ -103,6 +104,13 @@ pub trait OutputInstance: Send {
     }
     /// Stop sending to the destination `id` of a running stream; the others go on.
     fn stop_destination(&self, id: &str) -> Result<(), PluginError> {
+        Err(PluginError::Unavailable(format!("this output has no destination `{id}`")))
+    }
+    /// Start the next try of the destination `id` of a running stream at once, when it waits to
+    /// try again or waits for the network. The try counts toward its failed tries in a row as a
+    /// try at the usual time does. Returns whether it was waiting; one that is connecting, live,
+    /// trying, stopped or failed is left as it is.
+    fn retry_destination(&self, id: &str) -> Result<bool, PluginError> {
         Err(PluginError::Unavailable(format!("this output has no destination `{id}`")))
     }
     /// The file a stream writes a copy of what it sends to, when it was started with one; `None`
@@ -293,6 +301,13 @@ pub struct DestinationState {
     pub dropped: u64,
     /// Connections lost and made again.
     pub reconnects: u32,
+    /// While it waits to try again: how long until its next try starts. `None` otherwise, while
+    /// the try runs, and while it waits for the network with no time set, when the try starts
+    /// once a route to the server returns.
+    pub next_try: Option<Duration>,
+    /// The failed tries in a row the stream allows before a destination gives up; 0 for outputs
+    /// that are not streams.
+    pub max_tries: u32,
 }
 
 /// The video and sound a replay buffer held when it was asked for them. Writing the clip does not
