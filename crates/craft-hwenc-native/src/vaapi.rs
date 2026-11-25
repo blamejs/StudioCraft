@@ -142,6 +142,7 @@ fn check(cfg: &Config) -> Result<(), Error> {
 }
 
 /// The pictures of a stream: an IDR picture every `keyint` pictures and P pictures between.
+#[derive(Clone, Copy)]
 struct Gop {
     keyint: u32,
     since_idr: u32,
@@ -160,6 +161,15 @@ impl Gop {
             self.restart();
         }
         pic
+    }
+
+    /// Pass the next picture to `send`, and move past it only when `send` succeeds: a picture the
+    /// driver refuses is offered again on the next call.
+    fn submit<E>(&mut self, send: impl FnOnce(&Picture) -> Result<(), E>) -> Result<(), E> {
+        let mut after = *self;
+        send(&after.next())?;
+        *self = after;
+        Ok(())
     }
 
     /// Make the next picture an IDR picture with a number its neighbor does not have.
@@ -362,8 +372,8 @@ impl Encoder {
         if self.session.full() {
             self.take(&mut packets)?;
         }
-        let pic = self.gop.next();
-        self.session.submit(frame, &pic, (pts, pic.idr)).map_err(Error::Failed)?;
+        let session = &mut self.session;
+        self.gop.submit(|pic| session.submit(frame, pic, (pts, pic.idr))).map_err(Error::Failed)?;
         Ok(packets)
     }
 
@@ -400,8 +410,8 @@ impl Encoder {
                 break;
             }
         }
-        let pic = self.gop.next();
-        self.session.submit_imported(key, &pic, (pts, pic.idr)).map_err(Error::Failed)?;
+        let session = &mut self.session;
+        self.gop.submit(|pic| session.submit_imported(key, pic, (pts, pic.idr))).map_err(Error::Failed)?;
         Ok(packets)
     }
 
@@ -582,6 +592,26 @@ mod tests {
         assert!(first.idr && first.order == 0 && first.idr_id != gray.idr_id, "the stream starts again at a new IDR picture");
         let mut every = Gop::new(0);
         assert!((0..3).all(|_| every.next().idr), "an interval of 0 or 1 makes every picture an IDR picture");
+    }
+
+    /// A picture the driver refuses does not use up its place in the stream: the next try gets
+    /// the same picture.
+    #[test]
+    fn a_refused_picture_is_offered_again() {
+        let mut g = Gop::new(60);
+        let refused = g.submit(|_| Err::<(), _>("refused"));
+        assert_eq!(refused, Err("refused"));
+        let mut sent = Vec::new();
+        for _ in 0..2 {
+            assert_eq!(
+                g.submit(|pic| {
+                    sent.push((pic.idr, pic.order));
+                    Ok::<_, ()>(())
+                }),
+                Ok(())
+            );
+        }
+        assert_eq!(sent, [(true, 0), (false, 1)], "the first picture is still the IDR picture");
     }
 
     #[test]

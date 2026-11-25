@@ -185,7 +185,8 @@ pub(crate) struct Tiles {
 
 impl Tiles {
     /// The tiles of a `width` × `height` frame at `fps`: the first uniform grid whose largest
-    /// tile is at most 4096 pixels wide, holds at most [`MAX_TILE_AREA`] luma samples and codes at
+    /// tile is at most 4096 pixels wide, spans at most 2,304 superblocks, holds at most
+    /// [`MAX_TILE_AREA`] luma samples and codes at
     /// most [`MAX_TILE_RATE`] luma samples a second, counting whole 4 × 4 blocks, and whose last
     /// column and row keep at least 8 pixels of the frame. Grids are tried by `cols_log2 + rows_log2`,
     /// smallest first, then by `cols_log2`, smallest first. `None` when no uniform grid keeps
@@ -211,7 +212,14 @@ impl Tiles {
                 // `TileHeight`), so a frame smaller than a superblock keeps its size rounded up to 8.
                 let samples = (u64::from(width_sb) * 64).min(u64::from(mi_cols) * 4) * (u64::from(height_sb) * 64).min(u64::from(mi_rows) * 4);
                 let per_second = samples.saturating_mul(u64::from(fps.0));
-                if width_sb > max_width_sb || samples > MAX_TILE_AREA || per_second > MAX_TILE_RATE.saturating_mul(u64::from(fps.1.max(1))) {
+                // `tileWidthSb * tileHeightSb` is at most `maxTileAreaSb` (the tile_info
+                // semantics), counted before the frame's edge crops the tile.
+                let area_sb = u64::from(width_sb) * u64::from(height_sb);
+                if width_sb > max_width_sb
+                    || area_sb > u64::from(max_area_sb)
+                    || samples > MAX_TILE_AREA
+                    || per_second > MAX_TILE_RATE.saturating_mul(u64::from(fps.1.max(1)))
+                {
                     continue;
                 }
                 // The last column and row keep at least 8 pixels of the frame (`CroppedTileWidth` and
@@ -844,6 +852,10 @@ mod tests {
         // Two rows of 37 superblocks make 4032 × 2368 tiles, past MAX_TILE_AREA: four rows of 19.
         let rounded = tiles(4032, 4672);
         assert_eq!((rounded.cols_log2, rounded.rows_log2, rounded.min_rows_log2, rounded.height_sb, rounded.count()), (0, 2, 1, 19, 4));
+        // Two rows of 63 × 37 superblocks hold 3984 × 2368 = 9,434,112 samples, inside
+        // MAX_TILE_AREA, but 2,331 superblocks, past the 2,304 a uniform tile may span: four rows.
+        let cropped = tiles(3984, 4672);
+        assert_eq!((cropped.cols_log2, cropped.rows_log2, cropped.width_sb, cropped.height_sb, cropped.count()), (0, 2, 63, 19, 4));
         // At 120 frames per second a tile codes at most 4,902,092 luma samples a frame.
         assert_eq!(Tiles::of(3840, 2160, (60, 1)).map(|t| t.count()), Some(1), "8,294,400 samples at 60 frames per second");
         let fast = Tiles::of(3840, 2160, (120, 1)).unwrap();
